@@ -148,16 +148,17 @@ void RawDecodeOp::Apply(std::shared_ptr<ImageBuffer> input) {
       }
       ctx.dng_warp_rectilinear_present_ = dng_metadata.warp_rectilinear.has_value();
 
-      RawProcessor processor{params_, raw_processor->imgdata.rawdata, *raw_processor, ctx,
-                             dng_metadata.default_crop.data(), dng_metadata.warp_rectilinear};
+      auto processor = std::make_unique<RawProcessor>(
+          params_, raw_processor->imgdata.rawdata, *raw_processor, ctx,
+          dng_metadata.default_crop.data(), dng_metadata.warp_rectilinear);
 
       const auto   process_start = ProfileClock::now();
       throw_if_cancelled();
-      output                     = processor.Process();
+      output                     = processor->Process();
       AppendProfileMs(deferred_log, "RAW CPU processor.Process",
                       ProfileClock::now() - process_start);
       throw_if_cancelled();
-      latest_runtime_context_ = processor.GetRuntimeColorContext();
+      latest_runtime_context_ = processor->GetRuntimeColorContext();
       raw_processor->recycle();
       break;
     }

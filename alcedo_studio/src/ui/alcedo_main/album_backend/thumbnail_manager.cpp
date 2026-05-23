@@ -245,7 +245,8 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
               if (buffer->cpu_data_valid_) {
                 QImage image = album_util::MatRgba32fToQImageCopy(buffer->GetCPUData());
                 if (!image.isNull()) {
-                  const int scaled_max_edge = static_cast<int>(std::max<uint32_t>(1, maxEdge));
+                  const int raw_max_edge = static_cast<int>(std::max<uint32_t>(1, maxEdge));
+                  const int scaled_max_edge = std::min(raw_max_edge, 1024);
                   QImage scaled = image.scaled(scaled_max_edge, scaled_max_edge, Qt::KeepAspectRatio,
                                                Qt::SmoothTransformation);
                   dataUrl = album_util::DataUrlFromImage(scaled);
@@ -323,6 +324,14 @@ void ThumbnailManager::UpdateThumbnailState(sl_element_id_t elementId, const QSt
 bool ThumbnailManager::IsThumbnailPinned(sl_element_id_t elementId) const {
   const auto it = thumbnail_pins_.find(elementId);
   return it != thumbnail_pins_.end() && it->second.ref_count_ > 0;
+}
+
+uint32_t ThumbnailManager::GetPinnedMaxEdge(sl_element_id_t elementId) const {
+  const auto it = thumbnail_pins_.find(elementId);
+  if (it == thumbnail_pins_.end()) {
+    return 1024;
+  }
+  return static_cast<uint32_t>(it->second.resolution_);
 }
 
 void ThumbnailManager::RemoveThumbnailState(sl_element_id_t elementId, image_id_t imageId) {

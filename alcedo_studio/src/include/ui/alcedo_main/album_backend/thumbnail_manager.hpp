@@ -31,6 +31,7 @@ class ThumbnailManager {
   void UpdateThumbnailState(sl_element_id_t elementId, const QString& dataUrl, bool loading,
                             bool missingSource);
   [[nodiscard]] bool IsThumbnailPinned(sl_element_id_t elementId) const;
+  [[nodiscard]] uint32_t GetPinnedMaxEdge(sl_element_id_t elementId) const;
   void               RemoveThumbnailState(sl_element_id_t elementId, image_id_t imageId);
   void               ReleaseVisibleThumbnailPins();
 

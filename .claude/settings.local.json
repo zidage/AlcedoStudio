@@ -73,7 +73,9 @@
       "Bash(cmd //c \"D:\\\\Projects\\\\pu-erh_lab\\\\build\\\\build_test3.cmd\")",
       "Bash(cmd //c \"D:\\\\Projects\\\\pu-erh_lab\\\\build\\\\run_test.cmd\")",
       "Bash(cmd //c \"D:\\\\Projects\\\\pu-erh_lab\\\\build\\\\build_test4.cmd\")",
-      "Bash(taskkill //f //im ThumbnailServiceTest.exe)"
+      "Bash(taskkill //f //im ThumbnailServiceTest.exe)",
+      "PowerShell(cmd /c 'scripts\\\\msvc_env.cmd --build --preset win_debug --parallel 4 2>&1')",
+      "PowerShell(Get-Content \"D:\\\\Projects\\\\pu-erh_lab\\\\alcedo_studio\\\\src\\\\ui\\\\alcedo_main\\\\album_backend\\\\editor_controller.cpp\" | Select-Object -Index \\(121, 122, 123\\) | ForEach-Object { $_ -replace ' ', '.' })"
     ]
   }
 }

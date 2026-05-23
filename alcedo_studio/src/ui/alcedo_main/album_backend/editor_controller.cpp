@@ -113,6 +113,11 @@ void EditorController::OpenEditor(sl_element_id_t elementId, image_id_t imageId)
       proj->GetImagePoolService()->SyncWithStorage();
       proj->SaveProject(backend_.project_handler_.meta_path());
 
+      // Release the editor's pipeline reference before the thumbnail request so that
+      // LoadPipeline inside RequestThumbnail sees a clean unpinned entry and
+      // re-initializes execution stages from a consistent state.
+      editor_pipeline_guard_.reset();
+
       const auto& tsvc = backend_.project_handler_.thumbnail_service();
       if (tsvc) {
         try {
@@ -120,7 +125,8 @@ void EditorController::OpenEditor(sl_element_id_t elementId, image_id_t imageId)
         } catch (...) {
         }
         if (backend_.thumb_.IsThumbnailPinned(elementId)) {
-          backend_.thumb_.RequestThumbnail(elementId, imageId);
+          const uint32_t maxEdge = backend_.thumb_.GetPinnedMaxEdge(elementId);
+          backend_.thumb_.RequestThumbnail(elementId, imageId, maxEdge);
         } else {
           backend_.thumb_.UpdateThumbnailState(elementId, QString(), false, false);
         }
@@ -573,7 +579,8 @@ void EditorController::FinalizeEditorSession(bool persistChanges) {
     } catch (...) {
     }
     if (backend_.thumb_.IsThumbnailPinned(finishedElement)) {
-      backend_.thumb_.RequestThumbnail(finishedElement, finishedImage);
+      const uint32_t maxEdge = backend_.thumb_.GetPinnedMaxEdge(finishedElement);
+      backend_.thumb_.RequestThumbnail(finishedElement, finishedImage, maxEdge);
     } else {
       backend_.thumb_.UpdateThumbnailState(finishedElement, QString(), false, false);
     }

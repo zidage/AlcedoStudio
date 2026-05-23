@@ -23,8 +23,8 @@ Item {
     // ── Zoom control ──────────────────────────────────────────────────
     // zoomLevel maps to column counts: 2, 3, 4, 5, 6, 8, 11, 14
     readonly property var zoomColumns: [2, 3, 4, 5, 6, 8, 11, 14]
-    // resolution tiers per zoom level (max edge px): 2048, 1024, 1024, 512, 512, 256, 256, 256
-    readonly property var zoomResolutionEdges: [2048, 1024, 1024, 512, 512, 256, 256, 256]
+    // resolution tiers per zoom level (max edge px)
+    readonly property var zoomResolutionEdges: [1024, 1024, 1024, 512, 512, 256, 256, 256]
     readonly property int zoomLevelCount: zoomColumns.length
     property int zoomLevel: 4  // default: 6 columns
 
