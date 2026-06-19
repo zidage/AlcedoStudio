@@ -127,6 +127,10 @@ auto EditorAdjustmentSession::HasPipeline() const -> bool {
   return dependencies_.pipeline_guard && dependencies_.pipeline_guard->pipeline_;
 }
 
+auto EditorAdjustmentSession::Pipeline() const -> CPUPipelineExecutor* {
+  return HasPipeline() ? dependencies_.pipeline_guard->pipeline_.get() : nullptr;
+}
+
 void EditorAdjustmentSession::ScheduleQualityPreview() const {
   if (callbacks_.schedule_quality_preview) {
     callbacks_.schedule_quality_preview();

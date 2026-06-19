@@ -136,7 +136,7 @@ void RawDecodePanelWidget::PreviewRawField(AdjustmentField field) {
   }
   deps_.session->Preview(AdjustmentPreview{
       .field  = field,
-      .params = RawPipelineAdapter::ParamsFor(field, raw_state_),
+      .params = RawPipelineAdapter::ParamsFor(field, raw_state_, deps_.session->Pipeline()),
       .policy = PreviewPolicy::FastViewport,
   });
 }
@@ -158,8 +158,9 @@ void RawDecodePanelWidget::CommitRawField(AdjustmentField field) {
 
   deps_.session->Commit(AdjustmentCommit{
       .field      = field,
-      .old_params = RawPipelineAdapter::ParamsFor(field, committed_raw_state_),
-      .new_params = RawPipelineAdapter::ParamsFor(field, raw_state_),
+      .old_params = RawPipelineAdapter::ParamsFor(field, committed_raw_state_,
+                                                  deps_.session->Pipeline()),
+      .new_params = RawPipelineAdapter::ParamsFor(field, raw_state_, deps_.session->Pipeline()),
   });
   PullCommittedRawStateFromDialog();
   RequestPipelineRender();

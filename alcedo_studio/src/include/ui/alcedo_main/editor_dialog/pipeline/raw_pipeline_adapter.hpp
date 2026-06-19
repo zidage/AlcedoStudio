@@ -29,6 +29,11 @@ struct RawPipelineAdapter {
     legacy.lens_calib_enabled_         = state.lens_calib_enabled_;
     legacy.lens_override_make_         = state.lens_override_make_;
     legacy.lens_override_model_        = state.lens_override_model_;
+    // Pass the live executor so ParamsForField(RawDecode) reads the resolved
+    // accelerator backend (e.g. "cuda") from the current operator params. With
+    // exec==nullptr it falls back to MakeDefaultRawDecodeParams() whose generic
+    // "gpu" re-resolves to a different backend (Auto prefers OpenCL over CUDA),
+    // silently flipping the decode backend on every RawDecode commit.
     return pipeline_io::ParamsForField(field, legacy, exec);
   }
 

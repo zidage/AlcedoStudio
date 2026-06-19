@@ -61,6 +61,11 @@ class EditorAdjustmentSession {
   auto ParamsForField(AdjustmentField field, const AdjustmentState& state) const -> nlohmann::json;
   auto FieldChanged(AdjustmentField field) const -> bool;
 
+  // Accessor used by panels that need to build raw decode params preserving the
+  // executor's resolved accelerator backend (e.g. CUDA) instead of the generic
+  // "gpu" default, which would otherwise re-resolve to a different backend.
+  auto Pipeline() const -> CPUPipelineExecutor*;
+
  private:
   auto                             HasPipeline() const -> bool;
   void                             ScheduleQualityPreview() const;
