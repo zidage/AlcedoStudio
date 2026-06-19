@@ -195,6 +195,16 @@ __global__ void FilmGrainDatasheetScaleProbeKernel(float signal, float* out_scal
   out_scales[channel]   = CUDA::FilmGrainDatasheetGranularityScale(signal, channel);
 }
 
+__global__ void FilmGrainDyeCloudProbeKernel(float4 transmittance, float4 layer_coverage,
+                                             float strength, float* out_values) {
+  const float4 result = CUDA::FilmGrainApplyDyeClouds(transmittance, layer_coverage, strength);
+  if (threadIdx.x == 0) {
+    out_values[0] = result.x;
+    out_values[1] = result.y;
+    out_values[2] = result.z;
+  }
+}
+
 auto ReadDatasheetScales(float signal) -> std::array<float, 3> {
   std::array<float, 3> scales = {};
   float*              dev_scales = nullptr;
@@ -204,6 +214,27 @@ auto ReadDatasheetScales(float signal) -> std::array<float, 3> {
   cudaMemcpy(scales.data(), dev_scales, sizeof(float) * scales.size(), cudaMemcpyDeviceToHost);
   cudaFree(dev_scales);
   return scales;
+}
+
+auto ReadDyeCloudValues(float red_transmittance, float green_transmittance,
+                        float blue_transmittance, float red_coverage, float green_coverage,
+                        float blue_coverage, float strength) -> std::array<float, 3> {
+  std::array<float, 3> values = {};
+  float*              dev_values = nullptr;
+  cudaMalloc(&dev_values, sizeof(float) * values.size());
+  FilmGrainDyeCloudProbeKernel<<<1, 1>>>(
+      make_float4(red_transmittance, green_transmittance, blue_transmittance, 1.0f),
+      make_float4(red_coverage, green_coverage, blue_coverage, 1.0f), strength, dev_values);
+  cudaDeviceSynchronize();
+  cudaMemcpy(values.data(), dev_values, sizeof(float) * values.size(), cudaMemcpyDeviceToHost);
+  cudaFree(dev_values);
+  return values;
+}
+
+auto ReadDyeCloudValues(float transmittance, float layer_coverage,
+                        float strength) -> std::array<float, 3> {
+  return ReadDyeCloudValues(transmittance, transmittance, transmittance, layer_coverage,
+                            layer_coverage, layer_coverage, strength);
 }
 
 }  // namespace
@@ -229,6 +260,82 @@ TEST(FilmGrainCudaStageTest, DatasheetGranularityScaleFollowsNegativeFilmShape) 
     EXPECT_GT(lower_mids[channel], highlights[channel]);
     EXPECT_GT(shadows[channel], highlights[channel]);
     EXPECT_TRUE(std::isfinite(lower_mids[channel]));
+  }
+}
+
+TEST(FilmGrainCudaStageTest, PositiveDyeDensityPerturbationAttenuatesColorRecords) {
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "No CUDA device available.";
+  }
+
+  constexpr float kTransmittance = 0.50f;
+  constexpr float kStrength      = 0.20f;
+
+  const auto thicker_dye = ReadDyeCloudValues(kTransmittance, 0.75f, kStrength);
+  const auto thinner_dye = ReadDyeCloudValues(kTransmittance, 0.25f, kStrength);
+
+  for (int channel = 0; channel < 3; ++channel) {
+    EXPECT_LT(thicker_dye[channel], kTransmittance);
+    EXPECT_GT(thinner_dye[channel], kTransmittance);
+    EXPECT_TRUE(std::isfinite(thicker_dye[channel]));
+    EXPECT_TRUE(std::isfinite(thinner_dye[channel]));
+  }
+}
+
+TEST(FilmGrainCudaStageTest, SingleDyeLayerPerturbationKeepsNeutralDensityComponent) {
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "No CUDA device available.";
+  }
+
+  constexpr float kTransmittance = 0.50f;
+  constexpr float kStrength      = 0.20f;
+
+  const auto red_layer_spike =
+      ReadDyeCloudValues(kTransmittance, kTransmittance, kTransmittance, 0.75f, 0.50f, 0.50f,
+                         kStrength);
+
+  EXPECT_LT(red_layer_spike[0], kTransmittance);
+  EXPECT_LT(red_layer_spike[1], kTransmittance);
+  EXPECT_LT(red_layer_spike[2], kTransmittance);
+  EXPECT_LT(red_layer_spike[0], red_layer_spike[1]);
+  EXPECT_LT(red_layer_spike[0], red_layer_spike[2]);
+}
+
+TEST(FilmGrainCudaStageTest, HighlightBrighteningIsCompressed) {
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "No CUDA device available.";
+  }
+
+  constexpr float kStrength = 0.20f;
+
+  const auto midtone_thin_dye = ReadDyeCloudValues(0.50f, 0.25f, kStrength);
+  const auto highlight_thin_dye = ReadDyeCloudValues(0.94f, 0.70f, kStrength);
+
+  for (int channel = 0; channel < 3; ++channel) {
+    const float midtone_lift = midtone_thin_dye[channel] - 0.50f;
+    const float highlight_lift = highlight_thin_dye[channel] - 0.94f;
+    EXPECT_GT(midtone_lift, 0.0f);
+    EXPECT_GT(highlight_lift, 0.0f);
+    EXPECT_LT(highlight_lift, midtone_lift * 0.35f);
+  }
+}
+
+TEST(FilmGrainCudaStageTest, HighlightMixedDyeErrorsDoNotCreateBrightCyanSpeckles) {
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "No CUDA device available.";
+  }
+
+  constexpr float kHighlight = 0.94f;
+  constexpr float kStrength  = 0.20f;
+
+  const auto cyan_prone_highlight =
+      ReadDyeCloudValues(kHighlight, kHighlight, kHighlight, 1.0f, 0.70f, 0.70f, kStrength);
+
+  EXPECT_LT(cyan_prone_highlight[1] - cyan_prone_highlight[0], 0.01f);
+  EXPECT_LT(cyan_prone_highlight[2] - cyan_prone_highlight[0], 0.01f);
+  for (int channel = 0; channel < 3; ++channel) {
+    EXPECT_LT(cyan_prone_highlight[channel], 0.955f);
+    EXPECT_TRUE(std::isfinite(cyan_prone_highlight[channel]));
   }
 }
 

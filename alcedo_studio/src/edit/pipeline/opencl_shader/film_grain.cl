@@ -83,6 +83,70 @@ static inline float opencl_film_grain_datasheet_granularity_scale(float signal, 
   return clamp(sigma / 0.0075f, 0.55f, 2.15f);
 }
 
+static inline float opencl_film_grain_dye_density_error(float transmittance,
+                                                        float layer_coverage,
+                                                        int channel) {
+  const float expected_coverage = clamp(transmittance, 0.0f, 1.0f);
+  return (layer_coverage - expected_coverage) *
+         opencl_film_grain_datasheet_granularity_scale(transmittance, channel);
+}
+
+static inline float opencl_film_grain_apply_dye_density(float transmittance,
+                                                        float density_error,
+                                                        float strength) {
+  return transmittance - transmittance * strength * density_error;
+}
+
+static inline float opencl_film_grain_smoothstep(float edge0, float edge1, float value) {
+  const float t = clamp((value - edge0) / fmax(edge1 - edge0, 1.0e-6f), 0.0f, 1.0f);
+  return t * t * (3.0f - 2.0f * t);
+}
+
+static inline float opencl_film_grain_compress_highlight_brightening(float density_error,
+                                                                     float highlight_weight) {
+  const float brighten_scale = opencl_film_grain_lerp(1.0f, 0.12f, highlight_weight);
+  return density_error < 0.0f ? density_error * brighten_scale : density_error;
+}
+
+static inline float4 opencl_film_grain_apply_dye_clouds(float4 transmittance,
+                                                        float4 layer_coverage,
+                                                        float strength) {
+  const float color_dye_chroma = 0.68f;
+  const float dye_density_boost = 1.35f;
+  const float highlight_dye_chroma = 0.18f;
+
+  const float red_density =
+      opencl_film_grain_dye_density_error(transmittance.x, layer_coverage.x, 0);
+  const float green_density =
+      opencl_film_grain_dye_density_error(transmittance.y, layer_coverage.y, 1);
+  const float blue_density =
+      opencl_film_grain_dye_density_error(transmittance.z, layer_coverage.z, 2);
+  const float neutral_density = (red_density + green_density + blue_density) * (1.0f / 3.0f);
+  const float highlight_signal =
+      (clamp(transmittance.x, 0.0f, 1.0f) + clamp(transmittance.y, 0.0f, 1.0f) +
+       clamp(transmittance.z, 0.0f, 1.0f)) *
+      (1.0f / 3.0f);
+  const float highlight_weight = opencl_film_grain_smoothstep(0.72f, 0.96f, highlight_signal);
+  const float color_chroma =
+      opencl_film_grain_lerp(color_dye_chroma, highlight_dye_chroma, highlight_weight);
+
+  const float red_balanced = opencl_film_grain_compress_highlight_brightening(
+      neutral_density + color_chroma * (red_density - neutral_density), highlight_weight);
+  const float green_balanced = opencl_film_grain_compress_highlight_brightening(
+      neutral_density + color_chroma * (green_density - neutral_density), highlight_weight);
+  const float blue_balanced = opencl_film_grain_compress_highlight_brightening(
+      neutral_density + color_chroma * (blue_density - neutral_density), highlight_weight);
+  const float boosted_strength = strength * dye_density_boost;
+
+  return (float4)(opencl_film_grain_apply_dye_density(transmittance.x, red_balanced,
+                                                      boosted_strength),
+                  opencl_film_grain_apply_dye_density(transmittance.y, green_balanced,
+                                                      boosted_strength),
+                  opencl_film_grain_apply_dye_density(transmittance.z, blue_balanced,
+                                                      boosted_strength),
+                  transmittance.w);
+}
+
 static inline float opencl_film_grain_sample(float probability,
                                              int ref_x,
                                              int ref_y,
@@ -173,15 +237,7 @@ static inline float4 opencl_apply_film_grain(float4 px, float4 blur,
     return px;
   }
 
-  const float red_strength =
-      params->amount_ * opencl_film_grain_datasheet_granularity_scale(px.x, 0);
-  const float green_strength =
-      params->amount_ * opencl_film_grain_datasheet_granularity_scale(px.y, 1);
-  const float blue_strength =
-      params->amount_ * opencl_film_grain_datasheet_granularity_scale(px.z, 2);
-  return (float4)(px.x + red_strength * (blur.x - px.x),
-                  px.y + green_strength * (blur.y - px.y),
-                  px.z + blue_strength * (blur.z - px.z), px.w);
+  return opencl_film_grain_apply_dye_clouds(px, blur, params->amount_);
 }
 
 #endif  // ALCEDO_OPENCL_EDIT_PIPELINE_FILM_GRAIN_CL

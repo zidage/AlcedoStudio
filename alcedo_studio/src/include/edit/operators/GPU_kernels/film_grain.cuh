@@ -109,6 +109,66 @@ GPU_FUNC float FilmGrainDatasheetGranularityScale(float signal, int channel) {
   return fminf(fmaxf(sigma / kReferenceSigmaD, 0.55f), 2.15f);
 }
 
+GPU_FUNC float FilmGrainDyeDensityError(float transmittance, float layer_coverage, int channel) {
+  const float expected_coverage = FilmGrainClampProbability(transmittance);
+  const float density_error     =
+      (layer_coverage - expected_coverage) * FilmGrainDatasheetGranularityScale(transmittance,
+                                                                                channel);
+  return density_error;
+}
+
+GPU_FUNC float FilmGrainApplyDyeDensity(float transmittance, float density_error, float strength) {
+  return transmittance - transmittance * strength * density_error;
+}
+
+GPU_FUNC float FilmGrainSmoothstep(float edge0, float edge1, float value) {
+  const float t = fminf(fmaxf((value - edge0) / fmaxf(edge1 - edge0, 1.0e-6f), 0.0f), 1.0f);
+  return t * t * (3.0f - 2.0f * t);
+}
+
+GPU_FUNC float FilmGrainCompressHighlightBrightening(float density_error, float highlight_weight) {
+  const float brighten_scale = FilmGrainLerp(1.0f, 0.12f, highlight_weight);
+  return density_error < 0.0f ? density_error * brighten_scale : density_error;
+}
+
+GPU_FUNC float4 FilmGrainApplyDyeClouds(float4 transmittance, float4 layer_coverage,
+                                        float strength) {
+  constexpr float kColorDyeChroma = 0.68f;
+  constexpr float kDyeDensityBoost = 1.35f;
+  constexpr float kHighlightDyeChroma = 0.18f;
+
+  const float red_density =
+      FilmGrainDyeDensityError(transmittance.x, layer_coverage.x, 0);
+  const float green_density =
+      FilmGrainDyeDensityError(transmittance.y, layer_coverage.y, 1);
+  const float blue_density =
+      FilmGrainDyeDensityError(transmittance.z, layer_coverage.z, 2);
+  const float neutral_density = (red_density + green_density + blue_density) * (1.0f / 3.0f);
+  const float highlight_signal =
+      (FilmGrainClampProbability(transmittance.x) + FilmGrainClampProbability(transmittance.y) +
+       FilmGrainClampProbability(transmittance.z)) *
+      (1.0f / 3.0f);
+  const float highlight_weight = FilmGrainSmoothstep(0.72f, 0.96f, highlight_signal);
+  const float color_chroma =
+      FilmGrainLerp(kColorDyeChroma, kHighlightDyeChroma, highlight_weight);
+
+  const float red_balanced =
+      FilmGrainCompressHighlightBrightening(
+          neutral_density + color_chroma * (red_density - neutral_density), highlight_weight);
+  const float green_balanced =
+      FilmGrainCompressHighlightBrightening(
+          neutral_density + color_chroma * (green_density - neutral_density), highlight_weight);
+  const float blue_balanced =
+      FilmGrainCompressHighlightBrightening(
+          neutral_density + color_chroma * (blue_density - neutral_density), highlight_weight);
+  const float boosted_strength = strength * kDyeDensityBoost;
+
+  return make_float4(FilmGrainApplyDyeDensity(transmittance.x, red_balanced, boosted_strength),
+                     FilmGrainApplyDyeDensity(transmittance.y, green_balanced, boosted_strength),
+                     FilmGrainApplyDyeDensity(transmittance.z, blue_balanced, boosted_strength),
+                     transmittance.w);
+}
+
 GPU_FUNC float FilmGrainSample(float probability, int ref_x, int ref_y, int channel,
                                std::uint64_t seed) {
   const std::uint64_t stream =
@@ -215,12 +275,7 @@ struct GPU_FilmGrainApplyVerticalKernel : GPUNeighborOpTag {
 
     const float4 original = dst[offset];
     const float4 blurred  = FilmGrainBlurVertical(x, y, src, width, height, pitch_elems);
-    const float red_strength   = strength * FilmGrainDatasheetGranularityScale(original.x, 0);
-    const float green_strength = strength * FilmGrainDatasheetGranularityScale(original.y, 1);
-    const float blue_strength  = strength * FilmGrainDatasheetGranularityScale(original.z, 2);
-    dst[offset] = make_float4(original.x + red_strength * (blurred.x - original.x),
-                              original.y + green_strength * (blurred.y - original.y),
-                              original.z + blue_strength * (blurred.z - original.z), original.w);
+    dst[offset] = FilmGrainApplyDyeClouds(original, blurred, strength);
   }
 };
 
