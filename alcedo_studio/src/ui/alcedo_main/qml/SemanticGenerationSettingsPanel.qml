@@ -30,8 +30,49 @@ ColumnLayout {
                                              ? semanticController.modelDownloadRunning
                                                || semanticController.modelActivationRunning
                                              : false
+    readonly property bool modelDownloadRunning: hasController ? semanticController.modelDownloadRunning : false
+    readonly property bool modelActivationRunning: hasController ? semanticController.modelActivationRunning : false
     readonly property string activeModelName: hasController ? semanticController.activeModelDisplayName : qsTr("No active model")
     readonly property string activeModelKey: hasController ? semanticController.activeModelKey : ""
+    readonly property string selectedModelSizeLabel: hasController ? semanticController.selectedModelSizeLabel : ""
+    readonly property bool selectedModelInstalled: hasController ? semanticController.selectedModelInstalled : false
+    readonly property bool selectedModelActive: hasController ? semanticController.selectedModelActive : false
+    readonly property string modelDownloadPhase: hasController ? semanticController.modelDownloadPhase : ""
+    readonly property int modelDownloadProgress: hasController ? semanticController.modelDownloadProgress : 0
+    readonly property real modelDownloadBytesDone: hasController ? semanticController.modelDownloadBytesDone : 0
+    readonly property real modelDownloadBytesTotal: hasController ? semanticController.modelDownloadBytesTotal : 0
+    readonly property int modelDownloadFilesDone: hasController ? semanticController.modelDownloadFilesDone : 0
+    readonly property int modelDownloadFilesTotal: hasController ? semanticController.modelDownloadFilesTotal : 0
+    readonly property string modelDownloadCurrentFile: hasController ? semanticController.modelDownloadCurrentFile : ""
+    readonly property string modelDownloadBytesLabel: hasController ? semanticController.modelDownloadBytesLabel : ""
+    readonly property string modelDownloadSpeedLabel: hasController ? semanticController.modelDownloadSpeedLabel : ""
+    readonly property string modelDownloadEtaLabel: hasController ? semanticController.modelDownloadEtaLabel : ""
+    // The controller's status text (errors, paths, completion messages). Shown
+    // as a muted detail line inside the status card only when nothing is busy,
+    // so the card stays the single source of model status.
+    readonly property string modelDownloadStatusDetail: hasController ? semanticController.modelDownloadStatusText : ""
+    readonly property string selectedModelDisplayName: {
+        if (!panel.hasController) {
+            return ""
+        }
+        const options = panel.semanticController.modelProfileOptions
+        const id = panel.semanticController.selectedModelProfileId
+        for (let i = 0; i < options.length; ++i) {
+            if (options[i].profileId === id) {
+                return options[i].label
+            }
+        }
+        return ""
+    }
+    // True while the worker is in a phase that hasn't started moving bytes yet
+    // (or is finalizing), so the progress bar shows indeterminate motion.
+    readonly property bool modelDownloadIndeterminate: panel.modelTaskRunning
+        && (panel.modelActivationRunning
+            || panel.modelDownloadPhase === "preparing"
+            || panel.modelDownloadPhase === "promoting"
+            || panel.modelDownloadPhase === "cancelled"
+            || panel.modelDownloadProgress <= 0)
+
     readonly property int progressTotal: hasController ? semanticController.total : 0
     readonly property int progressCompleted: hasController
                                            ? semanticController.embedded
@@ -336,64 +377,6 @@ ColumnLayout {
             Layout.fillWidth: true
             spacing: 16
 
-            ColumnLayout {
-                Layout.fillWidth: true
-                spacing: 8
-
-                Label {
-                    text: qsTr("Active model")
-                    color: panel.textColor
-                    font.pixelSize: 15
-                    font.weight: 600
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 58
-                    radius: 8
-                    color: Qt.rgba(1, 1, 1, 0.10)
-                    border.width: 1
-                    border.color: Qt.rgba(panel.secondaryAccent.r,
-                                          panel.secondaryAccent.g,
-                                          panel.secondaryAccent.b,
-                                          0.22)
-
-                    ColumnLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: 14
-                        anchors.rightMargin: 14
-                        anchors.topMargin: 8
-                        anchors.bottomMargin: 8
-                        spacing: 2
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: panel.activeModelName
-                            color: panel.textColor
-                            font.pixelSize: 14
-                            font.weight: 800
-                            elide: Text.ElideRight
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: panel.activeModelKey.length > 0
-                                  ? panel.activeModelKey
-                                  : qsTr("Generated labels are hidden until a model is activated.")
-                            color: panel.mutedTextColor
-                            font.family: panel.dataFontFamily
-                            font.pixelSize: 11
-                            elide: Text.ElideMiddle
-                        }
-                    }
-                }
-            }
-        }
-
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 16
-
             Label {
                 Layout.preferredWidth: 180
                 text: qsTr("Model")
@@ -420,6 +403,10 @@ ColumnLayout {
                     }
                 }
             }
+        }
+
+        ModelStatusCard {
+            Layout.fillWidth: true
         }
 
         RowLayout {
@@ -543,80 +530,53 @@ ColumnLayout {
             }
         }
 
-        ColumnLayout {
+        RowLayout {
             Layout.fillWidth: true
-            spacing: 8
+            spacing: 12
 
-            Label {
-                Layout.fillWidth: true
-                text: panel.hasController ? panel.semanticController.modelDownloadStatusText : ""
-                color: panel.mutedTextColor
-                font.pixelSize: 13
-                font.weight: 500
-                wrapMode: Text.WordWrap
-                lineHeight: 1.25
+            Button {
+                Layout.preferredHeight: 42
+                text: qsTr("Check")
+                enabled: panel.hasController && !panel.modelTaskRunning
+                Material.foreground: panel.textColor
+                onClicked: panel.semanticController.RefreshSelectedModelStatus()
             }
 
-            ProgressBar {
-                visible: panel.hasController && panel.modelTaskRunning
-                Layout.fillWidth: true
-                Layout.preferredHeight: 8
-                from: 0
-                to: 100
-                value: panel.hasController ? panel.semanticController.modelDownloadProgress : 0
-                indeterminate: panel.hasController
-                               && panel.modelTaskRunning
-                               && panel.semanticController.modelDownloadProgress <= 0
-            }
-
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 12
-
-                Button {
-                    Layout.preferredHeight: 42
-                    text: qsTr("Check")
-                    enabled: panel.hasController && !panel.modelTaskRunning
-                    Material.foreground: panel.textColor
-                    onClicked: panel.semanticController.RefreshSelectedModelStatus()
-                }
-
-                Button {
-                    Layout.preferredHeight: 42
-                    text: panel.hasController && panel.semanticController.modelDownloadRunning
-                          ? qsTr("Cancel")
-                          : qsTr("Download")
-                    enabled: panel.hasController && !panel.semanticController.modelActivationRunning
-                    Material.foreground: panel.textColor
-                    onClicked: {
-                        if (panel.semanticController.modelDownloadRunning) {
-                            panel.semanticController.CancelSelectedModelDownload()
-                        } else {
-                            panel.semanticController.StartSelectedModelDownload()
-                        }
+            Button {
+                Layout.preferredHeight: 42
+                text: panel.modelDownloadRunning
+                      ? qsTr("Cancel")
+                      : qsTr("Download")
+                enabled: panel.hasController && !panel.modelActivationRunning
+                Material.foreground: panel.textColor
+                onClicked: {
+                    if (panel.modelDownloadRunning) {
+                        panel.semanticController.CancelSelectedModelDownload()
+                    } else {
+                        panel.semanticController.StartSelectedModelDownload()
                     }
                 }
-
-                Button {
-                    Layout.preferredHeight: 42
-                    text: qsTr("Delete")
-                    enabled: panel.hasController && !panel.modelTaskRunning
-                    Material.foreground: panel.dangerColor
-                    onClicked: panel.semanticController.DeleteSelectedModel()
-                }
-
-                Button {
-                    Layout.preferredHeight: 42
-                    text: qsTr("Activate")
-                    enabled: panel.hasController
-                             && !panel.semanticController.modelDownloadRunning
-                             && !panel.semanticController.modelActivationRunning
-                    Material.foreground: panel.textColor
-                    onClicked: panel.semanticController.ActivateSelectedModel()
-                }
-
-                Item { Layout.fillWidth: true }
             }
+
+            Button {
+                Layout.preferredHeight: 42
+                text: qsTr("Delete")
+                enabled: panel.hasController && !panel.modelTaskRunning
+                Material.foreground: panel.dangerColor
+                onClicked: panel.semanticController.DeleteSelectedModel()
+            }
+
+            Button {
+                Layout.preferredHeight: 42
+                text: qsTr("Activate")
+                enabled: panel.hasController
+                         && !panel.modelDownloadRunning
+                         && !panel.modelActivationRunning
+                Material.foreground: panel.textColor
+                onClicked: panel.semanticController.ActivateSelectedModel()
+            }
+
+            Item { Layout.fillWidth: true }
         }
     }
 
@@ -711,6 +671,234 @@ ColumnLayout {
                 font.pixelSize: 18
                 font.weight: 700
                 elide: Text.ElideRight
+            }
+        }
+    }
+
+    component ModelStatusCard: Rectangle {
+        id: card
+
+        readonly property bool downloading: panel.modelDownloadRunning
+        readonly property bool activating: panel.modelActivationRunning
+        readonly property bool busy: card.downloading || card.activating
+        readonly property bool isActive: panel.selectedModelActive
+        readonly property bool isInstalled: panel.selectedModelInstalled
+        // Green when the selected model is the active one; muted when merely
+        // downloaded; danger red when not present locally. Accent while busy.
+        readonly property color statusColor: card.busy
+                                             ? panel.primaryAccent
+                                             : (card.isActive
+                                                ? "#5BB37A"
+                                                : (card.isInstalled
+                                                   ? panel.mutedTextColor
+                                                   : panel.dangerColor))
+        readonly property string statusText: {
+            if (card.activating) {
+                return qsTr("Activating…")
+            }
+            if (card.downloading) {
+                return qsTr("Downloading %1%").arg(panel.modelDownloadProgress)
+            }
+            if (card.isActive) {
+                return qsTr("Active")
+            }
+            if (card.isInstalled) {
+                return qsTr("Installed · not active")
+            }
+            return qsTr("Not downloaded")
+        }
+        // Current file basename, shown while downloading so the card tells the
+        // user *what* is coming down — replaces the old standalone status line.
+        readonly property string currentFileName: {
+            const f = panel.modelDownloadCurrentFile
+            if (f.length === 0) {
+                return ""
+            }
+            const slash = f.lastIndexOf("/")
+            return slash >= 0 ? f.substring(slash + 1) : f
+        }
+
+        Layout.fillWidth: true
+        implicitHeight: inner.implicitHeight + 28
+        radius: 10
+        color: Qt.rgba(1, 1, 1, 0.08)
+        border.width: 1
+        border.color: Qt.rgba(card.statusColor.r, card.statusColor.g, card.statusColor.b, 0.35)
+
+        ColumnLayout {
+            id: inner
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.margins: 14
+            spacing: 8
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Rectangle {
+                    Layout.preferredWidth: 9
+                    Layout.preferredHeight: 9
+                    radius: 5
+                    color: card.statusColor
+                    opacity: card.busy ? dotPulse.opacity : 1.0
+                }
+
+                Label {
+                    text: card.statusText
+                    color: panel.textColor
+                    font.pixelSize: 14
+                    font.weight: 800
+                }
+
+                Item { Layout.fillWidth: true }
+
+                // Total size on the right. Hidden while busy because the
+                // progress row below already shows "done / total".
+                Label {
+                    visible: !card.busy && panel.selectedModelSizeLabel.length > 0
+                    text: panel.selectedModelSizeLabel
+                    color: panel.mutedTextColor
+                    font.family: panel.dataFontFamily
+                    font.pixelSize: 13
+                    font.weight: 700
+                }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                visible: panel.selectedModelDisplayName.length > 0
+                text: panel.selectedModelDisplayName
+                color: panel.textColor
+                font.pixelSize: 15
+                font.weight: 800
+                elide: Text.ElideRight
+            }
+
+            // Live progress: bar + byte count + current file. Shown only while
+            // a download or activation is running.
+            ColumnLayout {
+                Layout.fillWidth: true
+                visible: card.busy
+                spacing: 5
+
+                ProgressBar {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 8
+                    from: 0
+                    to: 100
+                    value: panel.modelDownloadProgress
+                    indeterminate: panel.modelDownloadIndeterminate
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 12
+
+                    Label {
+                        text: {
+                            if (panel.modelActivationRunning) {
+                                return qsTr("Preparing model runtime…")
+                            }
+                            return panel.modelDownloadBytesLabel
+                        }
+                        color: panel.mutedTextColor
+                        font.family: panel.dataFontFamily
+                        font.pixelSize: 12
+                        font.weight: 600
+                    }
+
+                    Item { Layout.fillWidth: true }
+
+                    Label {
+                        visible: panel.modelDownloadFilesTotal > 0
+                                 && !panel.modelActivationRunning
+                        text: qsTr("File %1 / %2").arg(panel.modelDownloadFilesDone)
+                              .arg(panel.modelDownloadFilesTotal)
+                        color: panel.mutedTextColor
+                        font.family: panel.dataFontFamily
+                        font.pixelSize: 12
+                        font.weight: 500
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+                    // Speed + ETA, shown only while actually downloading (not
+                    // during activation). Both are pre-formatted in C++.
+                    Label {
+                        visible: card.downloading
+                                 && panel.modelDownloadSpeedLabel.length > 0
+                        text: panel.modelDownloadSpeedLabel
+                        color: panel.mutedTextColor
+                        font.family: panel.dataFontFamily
+                        font.pixelSize: 12
+                        font.weight: 600
+                    }
+
+                    Label {
+                        visible: card.downloading
+                                 && panel.modelDownloadSpeedLabel.length > 0
+                                 && panel.modelDownloadEtaLabel.length > 0
+                        text: "·"
+                        color: panel.mutedTextColor
+                        font.pixelSize: 12
+                        font.weight: 500
+                    }
+
+                    Label {
+                        visible: card.downloading
+                                 && panel.modelDownloadEtaLabel.length > 0
+                        text: panel.modelDownloadEtaLabel
+                        color: panel.mutedTextColor
+                        font.family: panel.dataFontFamily
+                        font.pixelSize: 12
+                        font.weight: 500
+                    }
+
+                    Item { Layout.fillWidth: true }
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    visible: card.downloading && card.currentFileName.length > 0
+                    text: qsTr("↓ %1").arg(card.currentFileName)
+                    color: panel.mutedTextColor
+                    font.family: panel.dataFontFamily
+                    font.pixelSize: 12
+                    font.weight: 500
+                    elide: Text.ElideMiddle
+                }
+            }
+
+            // When idle, surface the controller's status text (errors, install
+            // path, "not checked", etc.) as a single muted detail line so the
+            // card remains the one place model state is reported.
+            Label {
+                Layout.fillWidth: true
+                visible: !card.busy && panel.modelDownloadStatusDetail.length > 0
+                text: panel.modelDownloadStatusDetail
+                color: panel.mutedTextColor
+                font.pixelSize: 12
+                font.weight: 500
+                wrapMode: Text.WordWrap
+                lineHeight: 1.25
+                elide: Text.ElideRight
+            }
+        }
+
+        // Subtle pulse on the status dot while busy, so the card reads as
+        // "live" even when a mirror stalls for a second or two.
+        QtObject {
+            id: dotPulse
+            property real opacity: 1.0
+            SequentialAnimation on opacity {
+                running: card.busy
+                loops: Animation.Infinite
+                NumberAnimation { to: 0.35; duration: 700; easing.type: Easing.InOutSine }
+                NumberAnimation { to: 1.0; duration: 700; easing.type: Easing.InOutSine }
             }
         }
     }

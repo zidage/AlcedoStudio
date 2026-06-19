@@ -18,6 +18,7 @@
 #include <QUrl>
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <limits>
 #include <string>
@@ -502,6 +503,52 @@ auto DownloadProgressPercent(const alcedo::ModelDownloadProgress& progress) -> i
       std::min<uint64_t>(100, (progress.bytes_downloaded * 100) / progress.bytes_total));
 }
 
+// "280 MB / 1.54 GB" — pre-formatted in C++ so the QML binding reads a plain
+// string property instead of calling a Q_INVOKABLE from inside a binding (which
+// is fragile w.r.t. JS-number -> quint64 argument conversion).
+auto FormatBytesLabel(quint64 done, quint64 total) -> QString {
+  const QLocale locale;
+  if (total == 0) {
+    return {};
+  }
+  return locale.formattedDataSize(static_cast<qint64>(done), 1, QLocale::DataSizeBase1000)
+         + QStringLiteral(" / ")
+         + locale.formattedDataSize(static_cast<qint64>(total), 1, QLocale::DataSizeBase1000);
+}
+
+// "2.3 MB/s" — formatted off an exponentially-smoothed byte rate so the number
+// doesn't jitter on every 250 ms aria2 poll.
+auto FormatSpeedLabel(double bytes_per_sec) -> QString {
+  if (!(bytes_per_sec > 0) || !std::isfinite(bytes_per_sec)) {
+    return {};
+  }
+  const QLocale locale;
+  return locale.formattedDataSize(static_cast<qint64>(std::round(bytes_per_sec)), 1,
+                                  QLocale::DataSizeBase1000)
+         + QStringLiteral("/s");
+}
+
+// "~2m 30s left" from a remaining-seconds estimate.
+auto FormatEtaLabel(double seconds) -> QString {
+  if (!(seconds > 0) || !std::isfinite(seconds) || seconds > 24 * 3600) {
+    return {};
+  }
+  const int total = static_cast<int>(std::round(seconds));
+  if (total <= 0) {
+    return {};
+  }
+  const int h = total / 3600;
+  const int m = (total % 3600) / 60;
+  const int s = total % 60;
+  if (h > 0) {
+    return QStringLiteral("~%1h %2m left").arg(h).arg(m);
+  }
+  if (m > 0) {
+    return QStringLiteral("~%1m %2s left").arg(m).arg(s);
+  }
+  return QStringLiteral("~%1s left").arg(s);
+}
+
 auto ItemsNeedingSemanticGeneration(const std::vector<SemanticGenerationItem>& items,
                                     SemanticStorageController&                 semantic,
                                     const std::string& model_key, bool force_regenerate)
@@ -558,8 +605,18 @@ SemanticGenerationController::SemanticGenerationController(AlbumBackend& backend
 
   connect(&backend_.model_download_service_, &alcedo::ModelDownloadService::ProgressChanged, this,
           [this](const alcedo::ModelDownloadProgress& progress) {
-            model_download_progress_ = DownloadProgressPercent(progress);
-            const QString message    = QString::fromStdString(progress.message);
+            model_download_progress_       = DownloadProgressPercent(progress);
+            model_download_phase_          = QString::fromStdString(progress.phase);
+            model_download_current_file_   = QString::fromStdString(progress.current_file);
+            model_download_bytes_done_     = progress.bytes_downloaded;
+            model_download_bytes_total_    = progress.bytes_total;
+            model_download_bytes_label_    = FormatBytesLabel(
+                static_cast<quint64>(progress.bytes_downloaded),
+                static_cast<quint64>(progress.bytes_total));
+            model_download_files_done_     = static_cast<int>(progress.files_completed);
+            model_download_files_total_    = static_cast<int>(progress.files_total);
+            UpdateDownloadSpeed(progress);
+            const QString message          = QString::fromStdString(progress.message);
             model_download_status_text_ =
                 message.isEmpty() ? PL_TEXT("Downloading model... %1%", model_download_progress_)
                                   : PL_TEXT("%1 (%2%)", message, model_download_progress_);
@@ -570,13 +627,26 @@ SemanticGenerationController::SemanticGenerationController(AlbumBackend& backend
             model_download_running_ = false;
             if (ok) {
               model_download_progress_    = 100;
+              model_download_phase_       = QStringLiteral("installed");
+              model_download_current_file_.clear();
+              model_download_bytes_done_  = model_download_bytes_total_;
+              model_download_bytes_label_ =
+                  FormatBytesLabel(model_download_bytes_total_, model_download_bytes_total_);
+              model_download_files_done_  = model_download_files_total_;
               model_download_status_text_ = PL_TEXT("Model download complete.");
             } else {
               model_download_progress_    = 0;
+              model_download_phase_       = QStringLiteral("failed");
+              model_download_current_file_.clear();
               model_download_status_text_ = error.isEmpty()
                                                 ? PL_TEXT("Model download failed.")
                                                 : PL_TEXT("Model download failed: %1", error);
             }
+            model_download_speed_label_.clear();
+            model_download_eta_label_.clear();
+            download_speed_ema_    = 0.0;
+            download_speed_primed_ = false;
+            RecomputeSelectedModelState();
             emit StateChanged();
           });
 }
@@ -628,6 +698,93 @@ QVariantList SemanticGenerationController::ModelProfileOptions() const {
     options.push_back(entry);
   }
   return options;
+}
+
+QString SemanticGenerationController::SelectedModelSizeLabel() const {
+  const auto  profile_id = SelectedModelProfileId();
+  const auto* profile    = FindSemanticProfile(profile_id.toStdString());
+  if (profile == nullptr) {
+    return {};
+  }
+  const quint64 total = ProfileTotalBytes(*profile);
+  if (total == 0) {
+    return {};
+  }
+  return QString(QChar(0x2248)) + QStringLiteral(" ")
+         + QLocale().formattedDataSize(static_cast<qint64>(total), 1, QLocale::DataSizeBase1000);
+}
+
+void SemanticGenerationController::RecomputeSelectedModelState() {
+  const auto  profile_id = SelectedModelProfileId();
+  const auto* profile    = FindSemanticProfile(profile_id.toStdString());
+
+  // Installed: local files present and validate against the catalog checksums.
+  bool installed = false;
+  if (profile != nullptr) {
+    const auto root  = ModelRootForProfile(profile_id, ModelDownloadDirectory());
+    const auto error = ValidateLocalCatalogModelProfile(*profile, root);
+    installed        = !error.has_value();
+  }
+  selected_model_installed_ = installed;
+
+  // Active: the project's active-model record points at the selected profile,
+  // AND the files are still on disk. Deleting the model files deactivates it in
+  // the UI even though the storage record lingers, so the card never claims a
+  // model is active after it has been removed.
+  const QString active_profile = ActiveModelProfileId();
+  selected_model_active_ =
+      installed && !active_profile.isEmpty()
+      && active_profile == NormalizedProfileId(profile_id);
+}
+
+void SemanticGenerationController::UpdateDownloadSpeed(
+    const alcedo::ModelDownloadProgress& progress) {
+  // Only the "downloading" phase moves bytes across the wire; reused/validated
+  // ticks add whole staged files instantly and would otherwise report absurd
+  // multi-GB/s spikes. While not downloading we drop the labels (the EMA is
+  // kept so it resumes smoothly) and force a re-prime on the next real tick.
+  if (progress.phase != "downloading") {
+    model_download_speed_label_.clear();
+    model_download_eta_label_.clear();
+    download_speed_primed_ = false;
+    return;
+  }
+
+  const auto now      = std::chrono::steady_clock::now();
+  const auto bytes_now = static_cast<quint64>(progress.bytes_downloaded);
+
+  if (!download_speed_primed_) {
+    download_sample_bytes_ = bytes_now;
+    download_sample_time_  = now;
+    download_speed_primed_ = true;
+  } else {
+    const double dt = std::chrono::duration<double>(now - download_sample_time_).count();
+    if (dt > 0.05) {
+      const double instant = static_cast<double>(bytes_now - download_sample_bytes_) / dt;
+      // A zero delta (mirror stall) is skipped rather than folded into the
+      // average, so a pause shows the last good rate instead of decaying to 0
+      // and flickering the label. The baseline still advances so the resume
+      // doesn't produce a one-shot spike.
+      if (instant > 0) {
+        constexpr double kAlpha = 0.3;
+        download_speed_ema_ = download_speed_ema_ == 0.0
+                                  ? instant
+                                  : (kAlpha * instant + (1.0 - kAlpha) * download_speed_ema_);
+      }
+      download_sample_bytes_ = bytes_now;
+      download_sample_time_  = now;
+    }
+  }
+
+  if (download_speed_ema_ > 0 && progress.bytes_total > 0) {
+    model_download_speed_label_ = FormatSpeedLabel(download_speed_ema_);
+    const auto done = std::min<quint64>(bytes_now, progress.bytes_total);
+    const double remaining = static_cast<double>(progress.bytes_total - done);
+    model_download_eta_label_ = FormatEtaLabel(remaining / download_speed_ema_);
+  } else {
+    model_download_speed_label_.clear();
+    model_download_eta_label_.clear();
+  }
 }
 
 QString SemanticGenerationController::SelectedModelProfileId() const {
@@ -698,6 +855,18 @@ void SemanticGenerationController::SetSelectedModelProfileId(const QString& prof
   QSettings{}.setValue(QLatin1String(kSemanticModelProfileKey), NormalizedProfileId(profileId));
   model_download_status_text_ = PL_TEXT("Model status has not been checked.");
   model_download_progress_    = 0;
+  model_download_phase_       = {};
+  model_download_current_file_.clear();
+  model_download_bytes_done_  = 0;
+  model_download_bytes_total_ = 0;
+  model_download_bytes_label_.clear();
+  model_download_speed_label_.clear();
+  model_download_eta_label_.clear();
+  download_speed_ema_    = 0.0;
+  download_speed_primed_ = false;
+  model_download_files_done_  = 0;
+  model_download_files_total_ = 0;
+  RecomputeSelectedModelState();
   emit StateChanged();
 }
 
@@ -733,6 +902,7 @@ void SemanticGenerationController::ResetModelDownloadDirectory() {
 void SemanticGenerationController::RefreshSelectedModelStatus() {
   const auto  profile_id = SelectedModelProfileId();
   const auto* profile    = FindSemanticProfile(profile_id.toStdString());
+  RecomputeSelectedModelState();
   if (profile == nullptr) {
     model_download_progress_    = 0;
     model_download_status_text_ = PL_TEXT("Unknown semantic model profile: %1", profile_id);
@@ -769,8 +939,25 @@ void SemanticGenerationController::StartSelectedModelDownload() {
     return;
   }
 
+  // Seed the totals from the catalog so the card can show the full size before
+  // the worker's first progress tick lands.
+  const auto* profile       = FindSemanticProfile(profile_id.toStdString());
+  const quint64 total_bytes = profile != nullptr ? ProfileTotalBytes(*profile) : 0;
   model_download_running_     = true;
   model_download_progress_    = 0;
+  model_download_phase_       = QStringLiteral("preparing");
+  model_download_current_file_.clear();
+  model_download_bytes_done_  = 0;
+  model_download_bytes_label_ =
+      FormatBytesLabel(0, static_cast<quint64>(total_bytes));
+  model_download_bytes_total_ = total_bytes;
+  model_download_speed_label_.clear();
+  model_download_eta_label_.clear();
+  download_speed_ema_    = 0.0;
+  download_speed_primed_ = false;
+  model_download_files_done_  = 0;
+  model_download_files_total_ = profile != nullptr ? static_cast<int>(profile->assets.size()) : 0;
+  selected_model_installed_   = false;
   model_download_status_text_ = PL_TEXT("Model download queued from %1", EffectiveModelEndpoint());
   emit StateChanged();
 }
@@ -783,11 +970,21 @@ void SemanticGenerationController::CancelSelectedModelDownload() {
     // No active worker will emit Finished; clear local state immediately.
     model_download_running_     = false;
     model_download_progress_    = 0;
+    model_download_phase_       = QStringLiteral("cancelled");
+    model_download_current_file_.clear();
+    model_download_bytes_done_  = 0;
+    model_download_bytes_label_.clear();
+    model_download_speed_label_.clear();
+    model_download_eta_label_.clear();
+    download_speed_ema_    = 0.0;
+    download_speed_primed_ = false;
     model_download_status_text_ = PL_TEXT("Model download cancelled.");
     emit StateChanged();
     return;
   }
   backend_.model_download_service_.CancelDownload();
+  model_download_phase_       = QStringLiteral("cancelled");
+  model_download_current_file_.clear();
   model_download_status_text_ = PL_TEXT("Cancelling model download...");
   emit StateChanged();
 }
@@ -806,7 +1003,19 @@ void SemanticGenerationController::DeleteSelectedModel() {
   if (!ec && std::filesystem::exists(root, ec)) {
     std::filesystem::remove_all(root, ec);
   }
-  model_download_progress_ = 0;
+  model_download_progress_    = 0;
+  model_download_phase_       = {};
+  model_download_current_file_.clear();
+  model_download_bytes_done_  = 0;
+  model_download_bytes_total_ = 0;
+  model_download_bytes_label_.clear();
+  model_download_speed_label_.clear();
+  model_download_eta_label_.clear();
+  download_speed_ema_    = 0.0;
+  download_speed_primed_ = false;
+  model_download_files_done_  = 0;
+  model_download_files_total_ = 0;
+  RecomputeSelectedModelState();
   if (!ec) {
     model_download_status_text_ = PL_TEXT("Model files deleted.");
   } else {
@@ -889,6 +1098,7 @@ void SemanticGenerationController::ActivateSelectedModel() {
                              ? PL_TEXT("%1 is active for this project. Label prompts are ready.",
                                        self->ActiveModelDisplayName())
                              : PL_TEXT("%1 is active for this project.", self->ActiveModelDisplayName());
+              self->RecomputeSelectedModelState();
               self->RefreshAlbumSummary();
               self->backend_.ReloadCurrentFolder();
             } else {

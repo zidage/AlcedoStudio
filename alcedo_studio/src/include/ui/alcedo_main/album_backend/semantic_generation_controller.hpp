@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QString>
 #include <QVariantList>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -56,6 +57,18 @@ class SemanticGenerationController final : public QObject {
   Q_PROPERTY(bool modelDownloadRunning READ ModelDownloadRunning NOTIFY StateChanged)
   Q_PROPERTY(bool modelActivationRunning READ ModelActivationRunning NOTIFY StateChanged)
   Q_PROPERTY(int modelDownloadProgress READ ModelDownloadProgress NOTIFY StateChanged)
+  Q_PROPERTY(QString modelDownloadPhase READ ModelDownloadPhase NOTIFY StateChanged)
+  Q_PROPERTY(QString modelDownloadCurrentFile READ ModelDownloadCurrentFile NOTIFY StateChanged)
+  Q_PROPERTY(quint64 modelDownloadBytesDone READ ModelDownloadBytesDone NOTIFY StateChanged)
+  Q_PROPERTY(quint64 modelDownloadBytesTotal READ ModelDownloadBytesTotal NOTIFY StateChanged)
+  Q_PROPERTY(QString modelDownloadBytesLabel READ ModelDownloadBytesLabel NOTIFY StateChanged)
+  Q_PROPERTY(QString modelDownloadSpeedLabel READ ModelDownloadSpeedLabel NOTIFY StateChanged)
+  Q_PROPERTY(QString modelDownloadEtaLabel READ ModelDownloadEtaLabel NOTIFY StateChanged)
+  Q_PROPERTY(int modelDownloadFilesDone READ ModelDownloadFilesDone NOTIFY StateChanged)
+  Q_PROPERTY(int modelDownloadFilesTotal READ ModelDownloadFilesTotal NOTIFY StateChanged)
+  Q_PROPERTY(QString selectedModelSizeLabel READ SelectedModelSizeLabel NOTIFY StateChanged)
+  Q_PROPERTY(bool selectedModelInstalled READ SelectedModelInstalled NOTIFY StateChanged)
+  Q_PROPERTY(bool selectedModelActive READ SelectedModelActive NOTIFY StateChanged)
 
  public:
   explicit SemanticGenerationController(AlbumBackend& backend, QObject* parent = nullptr);
@@ -87,6 +100,18 @@ class SemanticGenerationController final : public QObject {
   bool             ModelDownloadRunning() const { return model_download_running_; }
   bool             ModelActivationRunning() const { return model_activation_running_; }
   int              ModelDownloadProgress() const { return model_download_progress_; }
+  QString          ModelDownloadPhase() const { return model_download_phase_; }
+  QString          ModelDownloadCurrentFile() const { return model_download_current_file_; }
+  quint64          ModelDownloadBytesDone() const { return model_download_bytes_done_; }
+  quint64          ModelDownloadBytesTotal() const { return model_download_bytes_total_; }
+  QString          ModelDownloadBytesLabel() const { return model_download_bytes_label_; }
+  QString          ModelDownloadSpeedLabel() const { return model_download_speed_label_; }
+  QString          ModelDownloadEtaLabel() const { return model_download_eta_label_; }
+  int              ModelDownloadFilesDone() const { return model_download_files_done_; }
+  int              ModelDownloadFilesTotal() const { return model_download_files_total_; }
+  QString          SelectedModelSizeLabel() const;
+  bool             SelectedModelInstalled() const { return selected_model_installed_; }
+  bool             SelectedModelActive() const { return selected_model_active_; }
 
   Q_INVOKABLE void StartPendingGeneration(bool forceRegenerate = false);
   Q_INVOKABLE void SkipPendingGeneration(bool rememberChoice = false);
@@ -122,6 +147,13 @@ class SemanticGenerationController final : public QObject {
   void Finish(std::vector<SemanticGenerationItemResult> results);
   void ClearPrompt();
   void ResetCounters();
+  // Recomputes selected_model_installed_ / selected_model_active_ from disk and
+  // the active-model record. Does not emit StateChanged; callers emit.
+  void RecomputeSelectedModelState();
+  // Updates the EMA download speed + ETA labels from a progress tick. Only
+  // advances the average while phase == "downloading"; clears the labels (but
+  // keeps the EMA) otherwise so inter-asset gaps don't flicker.
+  void UpdateDownloadSpeed(const alcedo::ModelDownloadProgress& progress);
   [[nodiscard]] auto RuntimeOptionsForProfile(const QString& profileId, bool profileRoot) const
       -> SemanticRuntimeOptions;
 
@@ -136,6 +168,24 @@ class SemanticGenerationController final : public QObject {
   bool                                         model_download_running_   = false;
   bool                                         model_activation_running_ = false;
   int                                          model_download_progress_  = 0;
+  QString                                      model_download_phase_{};
+  QString                                      model_download_current_file_{};
+  quint64                                      model_download_bytes_done_   = 0;
+  quint64                                      model_download_bytes_total_   = 0;
+  QString                                      model_download_bytes_label_{};
+  QString                                      model_download_speed_label_{};
+  QString                                      model_download_eta_label_{};
+  int                                          model_download_files_done_   = 0;
+  int                                          model_download_files_total_   = 0;
+  // EMA download-speed tracking. Sampled in the ProgressChanged handler only
+  // while phase == "downloading"; the baseline is re-primed whenever download
+  // resumes so inter-asset validation gaps don't produce spikes.
+  std::chrono::steady_clock::time_point        download_sample_time_{};
+  quint64                                      download_sample_bytes_ = 0;
+  double                                       download_speed_ema_    = 0.0;
+  bool                                         download_speed_primed_ = false;
+  bool                                         selected_model_installed_ = false;
+  bool                                         selected_model_active_    = false;
   bool                                         prompt_pending_           = false;
   bool                                         running_                  = false;
   int                                          total_                    = 0;
