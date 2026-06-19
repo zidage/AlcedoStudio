@@ -114,15 +114,6 @@ class IEditViewerRenderTargetSurface {
     (void)width;
     (void)height;
   }
-  // Records the frame size the render thread is about to write, so that a
-  // subsequent mapResourceForWrite() can atomically decline to map when the
-  // render target is not yet sized for this frame. This lets the render thread
-  // skip presenting a frame instead of blocking on the UI thread to resize the
-  // target (which would deadlock against UI-thread render_lock_ acquirers).
-  virtual void setExpectedWriteSize(int width, int height) {
-    (void)width;
-    (void)height;
-  }
   virtual auto mapResourceForWrite(
       FrameMemoryDomain preferred_domain = FrameMemoryDomain::CudaDevice) -> FrameWriteMapping {
     (void)preferred_domain;

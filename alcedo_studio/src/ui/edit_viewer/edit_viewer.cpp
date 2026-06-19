@@ -230,15 +230,8 @@ QtEditViewer::QtEditViewer(QWidget* parent) : QWidget(parent) {
 
   connect(this, &QtEditViewer::RequestUpdate, this, &QtEditViewer::HandleQueuedUpdate,
           Qt::QueuedConnection);
-  // Resize the present target via a non-blocking queued connection. The render
-  // thread emits RequestResize while holding render_lock_; a blocking
-  // connection would deadlock it against UI threads that synchronously acquire
-  // render_lock_ (EditorAdjustmentSession::Commit, EditorFrameManager). Instead
-  // the render skips presenting a frame whose target is not yet sized (see
-  // RhiEditViewerSurface::mapResourceForWrite) and the coordinator replays it
-  // after RenderTargetReady fires.
   connect(this, &QtEditViewer::RequestResize, this, &QtEditViewer::OnResizeSurface,
-          Qt::QueuedConnection);
+          Qt::BlockingQueuedConnection);
 
   zoom_animation_ = new QVariantAnimation(this);
   zoom_animation_->setDuration(kZoomAnimationDurationMs);
@@ -395,16 +388,8 @@ void QtEditViewer::ClearExpectedDetailToken() {
 }
 
 void QtEditViewer::EnsureSize(int width, int height) {
-  // Record the frame size the render thread is producing and reset the
-  // per-frame delivery flag. Both are render-thread-local (EnsureSize and the
-  // following MapResourceForWrite run consecutively on this thread).
-  ensure_width_  = width;
-  ensure_height_ = height;
-  frame_delivered_.store(false, std::memory_order_release);
-  sink_engaged_.store(true, std::memory_order_release);
 #if defined(HAVE_CUDA) || defined(HAVE_OPENCL)
   if (render_target_surface_ && render_target_surface_->supportsDirectGpuPresent()) {
-    render_target_surface_->setExpectedWriteSize(width, height);
     const auto decision = render_target_surface_->prepareRenderTarget(width, height);
     if (decision.need_resize) {
       emit RequestResize(width, height);
@@ -415,6 +400,9 @@ void QtEditViewer::EnsureSize(int width, int height) {
   if (decision.need_resize) {
     emit RequestResize(width, height);
   }
+#else
+  (void)width;
+  (void)height;
 #endif
 }
 
@@ -448,7 +436,6 @@ void QtEditViewer::UnmapResource() {
 }
 
 void QtEditViewer::NotifyFrameReady() {
-  frame_delivered_.store(true, std::memory_order_release);
 #if defined(HAVE_CUDA) || defined(HAVE_OPENCL)
   if (render_target_surface_ && render_target_surface_->supportsDirectGpuPresent()) {
     render_target_surface_->notifyFrameReady();
@@ -463,7 +450,6 @@ void QtEditViewer::NotifyFrameReady() {
 }
 
 void QtEditViewer::SubmitHostFrame(const ViewerFrame& frame) {
-  frame_delivered_.store(true, std::memory_order_release);
   {
     std::lock_guard<std::mutex> lock(host_frame_mutex_);
     ViewerFrame                 submitted_frame = frame;
@@ -485,7 +471,6 @@ void QtEditViewer::SubmitHostFrame(const ViewerFrame& frame) {
 
 #ifdef HAVE_METAL
 void QtEditViewer::SubmitMetalFrame(const ViewerMetalFrame& frame) {
-  frame_delivered_.store(true, std::memory_order_release);
   {
     std::lock_guard<std::mutex> lock(host_frame_mutex_);
     ViewerMetalFrame            submitted_frame = frame;
@@ -503,17 +488,6 @@ void QtEditViewer::SubmitMetalFrame(const ViewerMetalFrame& frame) {
   emit RequestUpdate();
 }
 #endif
-
-auto QtEditViewer::ConsumeFrameDelivered() -> bool {
-  // Consume (clear) both flags so a failed render cannot leave a stale engaged
-  // flag that poisons a subsequent CPU-only render's classification.
-  const bool engaged  = sink_engaged_.exchange(false, std::memory_order_acq_rel);
-  const bool delivered = frame_delivered_.exchange(false, std::memory_order_acq_rel);
-  // Renders that never touched the present sink (CPU-only fallback path) are
-  // not subject to skip-detection: treat them as delivered so the coordinator
-  // neither stashes a spurious replay nor skips the post-delivery state machine.
-  return engaged ? delivered : true;
-}
 
 auto QtEditViewer::GetWidth() const -> int {
 #if defined(HAVE_CUDA) || defined(HAVE_OPENCL)

@@ -348,11 +348,6 @@ struct RhiEditViewerSurface::PlatformState {
   int                                active_idx                     = 0;
   int                                write_idx                      = 1;
   int                                render_target_idx              = 0;
-  // Frame size the render thread expects to write; set via setExpectedWriteSize
-  // and checked under mutex in mapResourceForWrite so a not-yet-resized target
-  // is declined atomically (no blocking hop to the UI thread).
-  int                                expected_write_width           = 0;
-  int                                expected_write_height          = 0;
   int                                mapped_slot_idx                = -1;
   int                                ready_slot_idx                 = -1;
   bool                               supports_direct_present        = false;
@@ -1543,20 +1538,6 @@ void RhiEditViewerSurface::commitRenderTargetResize(int slot_index, int width, i
 #endif
 }
 
-void RhiEditViewerSurface::setExpectedWriteSize(int width, int height) {
-#if defined(Q_OS_WIN) && (defined(HAVE_CUDA) || defined(HAVE_OPENCL))
-  if (!supportsDirectGpuPresent()) {
-    return;
-  }
-  std::lock_guard<std::mutex> lock(platform_state_->mutex);
-  platform_state_->expected_write_width  = width;
-  platform_state_->expected_write_height = height;
-#else
-  (void)width;
-  (void)height;
-#endif
-}
-
 auto RhiEditViewerSurface::mapResourceForWrite(FrameMemoryDomain preferred_domain)
     -> FrameWriteMapping {
 #if defined(Q_OS_WIN) && (defined(HAVE_CUDA) || defined(HAVE_OPENCL))
@@ -1580,21 +1561,6 @@ auto RhiEditViewerSurface::mapResourceForWrite(FrameMemoryDomain preferred_domai
     return {};
   }
   auto& slot = platform_state_->targets[platform_state_->render_target_idx];
-
-  // Decline to map when the present target is not yet sized for the frame the
-  // render thread is producing. Returning an empty mapping here makes the GPU
-  // pipeline skip presenting this frame instead of synchronously resizing the
-  // target via a BlockingQueuedConnection (which would deadlock the render
-  // thread against UI threads waiting on render_lock_). The UI thread resizes
-  // the target asynchronously and the coordinator replays the skipped request.
-  const int expected_w = platform_state_->expected_write_width;
-  const int expected_h = platform_state_->expected_write_height;
-  if (expected_w > 0 && expected_h > 0 &&
-      (slot.width != expected_w || slot.height != expected_h ||
-       !HasDirectPresentResource(slot, platform_state_->backend))) {
-    platform_state_->mutex.unlock();
-    return {};
-  }
 
   if (preferred_domain == FrameMemoryDomain::OpenClDevice) {
 #ifdef HAVE_OPENCL

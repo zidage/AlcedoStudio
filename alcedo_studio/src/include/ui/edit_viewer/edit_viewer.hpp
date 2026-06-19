@@ -10,7 +10,6 @@
 #include <QVariantAnimation>
 #include <QWidget>
 
-#include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -80,13 +79,6 @@ class QtEditViewer : public QWidget, public alcedo::IFrameSink {
   void    SetHistogramFrameExpected(bool expected_fast_preview);
   void    SetHistogramUpdateIntervalMs(int interval_ms);
   auto    SupportsHistogram() const -> bool;
-
-  // Consumes and clears the per-frame "frame delivered" flag. Returns whether a
-  // frame was actually presented (via NotifyFrameReady / SubmitHostFrame /
-  // SubmitMetalFrame) since the last EnsureSize. The render coordinator uses
-  // this to detect a skipped presentation (render target not yet sized) and
-  // replay the request once the target has been resized.
-  auto    ConsumeFrameDelivered() -> bool;
 
  signals:
   void RequestUpdate();
@@ -177,21 +169,5 @@ class QtEditViewer : public QWidget, public alcedo::IFrameSink {
   std::uint64_t            expected_detail_generation_ = 0;
   std::uint64_t            expected_detail_serial_ = 0;
   mutable std::mutex       host_frame_mutex_{};
-
-  // Frame size requested by the render thread in the most recent EnsureSize
-  // call. Accessed only on the render thread (EnsureSize -> MapResourceForWrite
-  // are consecutive calls on the same thread), so no synchronization needed.
-  int                      ensure_width_  = 0;
-  int                      ensure_height_ = 0;
-  // Set false in EnsureSize (start of a frame) and true when a frame is actually
-  // delivered (NotifyFrameReady / SubmitHostFrame / SubmitMetalFrame). Read and
-  // cleared by the render coordinator after the render completes to detect a
-  // skipped presentation.
-  std::atomic<bool>        frame_delivered_{false};
-  // Set true in EnsureSize to mark that the present sink was engaged for this
-  // frame (GPU/CUDA/OpenCL/Metal paths). CPU-only renders never call EnsureSize,
-  // so this stays false; ConsumeFrameDelivered then treats them as delivered so
-  // they are not misclassified as a skipped presentation.
-  std::atomic<bool>        sink_engaged_{false};
 };
 };  // namespace alcedo
