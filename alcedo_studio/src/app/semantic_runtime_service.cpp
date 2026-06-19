@@ -12,6 +12,7 @@
 #include <QMetaObject>
 #include <QTcpServer>
 #include <QThread>
+#include <QStringList>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -20,6 +21,7 @@
 #include <vector>
 
 #include "semantic.grpc.pb.h"
+#include "utils/diagnostics/app_logging.hpp"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -119,6 +121,35 @@ auto DefaultRuntimeModelRoot() -> std::filesystem::path {
 
 auto DeadlineFromNow(std::chrono::milliseconds timeout) -> std::chrono::system_clock::time_point {
   return std::chrono::system_clock::now() + timeout;
+}
+
+auto SummarizeTextRequests(const std::vector<SemanticTextEmbeddingRequest>& requests,
+                           size_t max_items = 12) -> QString {
+  QStringList parts;
+  const size_t count = std::min(requests.size(), max_items);
+  for (size_t i = 0; i < count; ++i) {
+    parts << QString::fromStdString(requests[i].request_id);
+  }
+  if (requests.size() > max_items) {
+    parts << QStringLiteral("...");
+  }
+  return parts.join(QLatin1Char(','));
+}
+
+auto SummarizeImageRequests(const std::vector<SemanticImageEmbeddingRequest>& requests,
+                            size_t max_items = 12) -> QString {
+  QStringList parts;
+  const size_t count = std::min(requests.size(), max_items);
+  for (size_t i = 0; i < count; ++i) {
+    parts << QStringLiteral("%1/%2/%3B")
+                 .arg(QString::fromStdString(requests[i].request_id),
+                      QString::fromStdString(requests[i].format_hint))
+                 .arg(static_cast<qulonglong>(requests[i].rgba8_image.size()));
+  }
+  if (requests.size() > max_items) {
+    parts << QStringLiteral("...");
+  }
+  return parts.join(QLatin1Char(','));
 }
 
 auto GrpcErrorMessage(const grpc::Status& status) -> std::string {
@@ -501,6 +532,12 @@ auto GrpcSemanticRuntimeClient::EmbedText(const std::string& endpoint,
 auto GrpcSemanticRuntimeClient::EmbedTextBatch(
     const std::string& endpoint, const std::vector<SemanticTextEmbeddingRequest>& requests,
     std::chrono::milliseconds timeout) -> std::vector<SemanticEmbeddingResult> {
+  diag::TraceScope trace(diag::semanticRpcLog(), QStringLiteral("semantic.rpc.embed_text_batch"),
+                         QStringLiteral("endpoint=%1 count=%2 timeout_ms=%3 ids=%4")
+                             .arg(QString::fromStdString(endpoint))
+                             .arg(static_cast<qulonglong>(requests.size()))
+                             .arg(timeout.count())
+                             .arg(SummarizeTextRequests(requests)));
   auto                channel = grpc::CreateChannel(endpoint, grpc::InsecureChannelCredentials());
   auto                stub    = semantic::SemanticService::NewStub(channel);
 
@@ -518,6 +555,11 @@ auto GrpcSemanticRuntimeClient::EmbedTextBatch(
   const auto                           status = stub->EmbedTextBatch(&context, request, &response);
   std::vector<SemanticEmbeddingResult> results;
   if (!status.ok()) {
+    qCWarning(diag::semanticRpcLog).noquote()
+        << QStringLiteral("semantic.rpc.embed_text_batch.failed endpoint=%1 count=%2 error=%3")
+               .arg(QString::fromStdString(endpoint))
+               .arg(static_cast<qulonglong>(requests.size()))
+               .arg(QString::fromStdString(GrpcErrorMessage(status)));
     results.reserve(requests.size());
     for (const auto& input : requests) {
       SemanticEmbeddingResult result;
@@ -533,6 +575,10 @@ auto GrpcSemanticRuntimeClient::EmbedTextBatch(
   for (const auto& item : response.items()) {
     results.push_back(ToEmbeddingResult(item));
   }
+  qCInfo(diag::semanticRpcLog).noquote()
+      << QStringLiteral("semantic.rpc.embed_text_batch.response endpoint=%1 count=%2")
+             .arg(QString::fromStdString(endpoint))
+             .arg(static_cast<qulonglong>(results.size()));
   return results;
 }
 
@@ -567,6 +613,12 @@ auto GrpcSemanticRuntimeClient::EmbedImageBatch(const std::string&              
                                                 std::vector<SemanticImageEmbeddingRequest> requests,
                                                 std::chrono::milliseconds                  timeout)
     -> std::vector<SemanticEmbeddingResult> {
+  diag::TraceScope trace(diag::semanticRpcLog(), QStringLiteral("semantic.rpc.embed_image_batch"),
+                         QStringLiteral("endpoint=%1 count=%2 timeout_ms=%3 ids=%4")
+                             .arg(QString::fromStdString(endpoint))
+                             .arg(static_cast<qulonglong>(requests.size()))
+                             .arg(timeout.count())
+                             .arg(SummarizeImageRequests(requests)));
   auto                channel = grpc::CreateChannel(endpoint, grpc::InsecureChannelCredentials());
   auto                stub    = semantic::SemanticService::NewStub(channel);
 
@@ -586,6 +638,11 @@ auto GrpcSemanticRuntimeClient::EmbedImageBatch(const std::string&              
   const auto                           status = stub->EmbedImageBatch(&context, request, &response);
   std::vector<SemanticEmbeddingResult> results;
   if (!status.ok()) {
+    qCWarning(diag::semanticRpcLog).noquote()
+        << QStringLiteral("semantic.rpc.embed_image_batch.failed endpoint=%1 count=%2 error=%3")
+               .arg(QString::fromStdString(endpoint))
+               .arg(static_cast<qulonglong>(requests.size()))
+               .arg(QString::fromStdString(GrpcErrorMessage(status)));
     results.reserve(requests.size());
     for (const auto& input : requests) {
       SemanticEmbeddingResult result;
@@ -601,6 +658,10 @@ auto GrpcSemanticRuntimeClient::EmbedImageBatch(const std::string&              
   for (const auto& item : response.items()) {
     results.push_back(ToEmbeddingResult(item));
   }
+  qCInfo(diag::semanticRpcLog).noquote()
+      << QStringLiteral("semantic.rpc.embed_image_batch.response endpoint=%1 count=%2")
+             .arg(QString::fromStdString(endpoint))
+             .arg(static_cast<qulonglong>(results.size()));
   return results;
 }
 
@@ -668,6 +729,14 @@ auto SemanticRuntimeService::StartAndWait(const SemanticRuntimeOptions& options)
               "Semantic runtime binary was not found: " + options_.runtime_binary.string());
     return false;
   }
+  qCInfo(diag::semanticLog).noquote()
+      << QStringLiteral("semantic.runtime.start binary=%1 endpoint=%2 model_id=%3 revision=%4 "
+                        "model_root=%5 device=%6")
+             .arg(QString::fromStdString(options_.runtime_binary.string()),
+                  QString::fromStdString(endpoint_), QString::fromStdString(options_.model_id),
+                  QString::fromStdString(options_.revision),
+                  QString::fromStdString(options_.model_root.string()),
+                  QString::fromStdString(options_.device));
   SetStatus(SemanticRuntimeState::kStarting, SemanticRuntimeIssue::kNone,
             "Starting semantic runtime");
   process_.setProgram(QString::fromStdString(options_.runtime_binary.string()));
@@ -681,6 +750,10 @@ auto SemanticRuntimeService::StartAndWait(const SemanticRuntimeOptions& options)
     return false;
   }
   status_.process_id = static_cast<int64_t>(process_.processId());
+  qCInfo(diag::semanticLog).noquote()
+      << QStringLiteral("semantic.runtime.started pid=%1 endpoint=%2")
+             .arg(status_.process_id)
+             .arg(QString::fromStdString(endpoint_));
   AttachChildTreeCleanup();
 
   return WaitForReadiness();
@@ -700,6 +773,10 @@ void SemanticRuntimeService::Stop() {
 
   SetStatus(SemanticRuntimeState::kStopping, SemanticRuntimeIssue::kNone,
             "Stopping semantic runtime");
+  qCInfo(diag::semanticLog).noquote()
+      << QStringLiteral("semantic.runtime.stop pid=%1 endpoint=%2")
+             .arg(status_.process_id)
+             .arg(QString::fromStdString(endpoint_));
   process_.terminate();
   if (!process_.waitForFinished(static_cast<int>(options_.graceful_stop_timeout.count()))) {
     process_.kill();
@@ -880,15 +957,29 @@ void SemanticRuntimeService::SetStatus(SemanticRuntimeState state, SemanticRunti
   status_.issue    = issue;
   status_.message  = std::move(message);
   status_.endpoint = endpoint_;
+  qCInfo(diag::semanticLog).noquote()
+      << QStringLiteral("semantic.runtime.status state=%1 issue=%2 endpoint=%3 message=%4")
+             .arg(QString::fromLatin1(ToString(state)), QString::fromLatin1(ToString(issue)),
+                  QString::fromStdString(endpoint_), QString::fromStdString(status_.message));
   emit statusChanged();
 }
 
 void SemanticRuntimeService::AppendStdout(const QByteArray& bytes) {
   TailAppend(&status_.stdout_tail, bytes);
+  const QString text = QString::fromUtf8(bytes).trimmed();
+  if (!text.isEmpty()) {
+    qCInfo(diag::semanticLog).noquote()
+        << QStringLiteral("semantic.runtime.stdout %1").arg(text.left(1000));
+  }
 }
 
 void SemanticRuntimeService::AppendStderr(const QByteArray& bytes) {
   TailAppend(&status_.stderr_tail, bytes);
+  const QString text = QString::fromUtf8(bytes).trimmed();
+  if (!text.isEmpty()) {
+    qCWarning(diag::semanticLog).noquote()
+        << QStringLiteral("semantic.runtime.stderr %1").arg(text.left(1000));
+  }
 }
 
 void SemanticRuntimeService::RefreshProcessExit() {

@@ -30,12 +30,17 @@ void EditorRenderCoordinator::AdvancePreviewGeneration() {
   latest_quality_base_generation_ready_ = 0;
   pending_fast_preview_request_.reset();
   pending_quality_base_render_request_.reset();
+  pending_resize_replay_.reset();
+  resize_replay_attempts_                  = 0;
   detail_preview_waiting_for_quality_base_ = false;
   if (quality_preview_timer_ && quality_preview_timer_->isActive()) {
     quality_preview_timer_->stop();
   }
   if (fast_preview_submit_timer_ && fast_preview_submit_timer_->isActive()) {
     fast_preview_submit_timer_->stop();
+  }
+  if (resize_replay_timer_ && resize_replay_timer_->isActive()) {
+    resize_replay_timer_->stop();
   }
   InvalidateDetailPreviewState();
 }
@@ -322,13 +327,36 @@ void EditorRenderCoordinator::OnRenderFinished(bool render_succeeded) {
     }
   }
 
-  if (render_succeeded) {
-    if (auto* viewer = CurrentViewer()) {
+  // A succeeded render may still have skipped presenting because the present
+  // target was not yet sized for this frame (the render thread declines to map
+  // a not-ready target instead of blocking on the UI thread). Detect that via
+  // the viewer's per-frame delivery flag and stash the request for replay once
+  // the target has been resized (OnRenderTargetReady). The flag is consumed
+  // unconditionally so a failed render cannot leave a stale value that would
+  // misclassify the next (possibly CPU-only) render as skipped.
+  auto* viewer      = CurrentViewer();
+  const bool frame_delivered = viewer ? viewer->ConsumeFrameDelivered() : true;
+  if (render_succeeded && finished_request.has_value() && !frame_delivered) {
+    // Presentation was skipped because the present target was not yet sized.
+    // The target resize happens asynchronously on the UI thread and may have
+    // already completed by now; retry shortly via a debounce timer so we don't
+    // orphan the replay depending on a resize-completion signal that could
+    // fire before this stash exists. (Attempts are NOT reset here — that would
+    // defeat the runaway cap; they reset only on a successful delivery or a new
+    // edit via AdvancePreviewGeneration.)
+    pending_resize_replay_ = finished_request;
+    EnsureResizeReplayTimer();
+  } else if (frame_delivered) {
+    resize_replay_attempts_ = 0;
+  }
+
+  if (render_succeeded && frame_delivered) {
+    if (viewer) {
       viewer->SyncPendingFrameStateForScheduling();
     }
   }
 
-  if (render_succeeded && finished_request.has_value() &&
+  if (render_succeeded && frame_delivered && finished_request.has_value() &&
       finished_request->state_.type_ == RenderType::QUALITY_BASE_PREVIEW &&
       finished_request->frame_metadata_.preview_generation == preview_generation_) {
     latest_quality_base_generation_ready_ = preview_generation_;
@@ -340,10 +368,10 @@ void EditorRenderCoordinator::OnRenderFinished(bool render_succeeded) {
     }
   }
 
-  if (render_succeeded && finished_request.has_value() &&
+  if (render_succeeded && frame_delivered && finished_request.has_value() &&
       finished_request->state_.type_ == RenderType::DETAIL_ROI_PREVIEW &&
       finished_request->frame_metadata_.preview_generation == preview_generation_) {
-    if (auto* viewer = CurrentViewer()) {
+    if (viewer) {
       viewer->SetExpectedDetailToken(finished_request->frame_metadata_.preview_generation,
                                      finished_request->frame_metadata_.detail_serial);
     }
@@ -354,6 +382,72 @@ void EditorRenderCoordinator::OnRenderFinished(bool render_succeeded) {
     StartNext();
   } else if (poll_timer_ && poll_timer_->isActive()) {
     poll_timer_->stop();
+  }
+}
+
+void EditorRenderCoordinator::EnsureResizeReplayTimer() {
+  if (!resize_replay_timer_) {
+    resize_replay_timer_ = new QTimer(dependencies_.timer_parent);
+    resize_replay_timer_->setSingleShot(true);
+    QObject::connect(resize_replay_timer_, &QTimer::timeout, dependencies_.timer_parent,
+                     [this]() { OnResizeReplayTick(); });
+  }
+  if (!resize_replay_timer_->isActive()) {
+    resize_replay_timer_->start(kResizeReplayIntervalMs);
+  }
+}
+
+void EditorRenderCoordinator::OnResizeReplayTick() {
+  if (!pending_resize_replay_.has_value()) {
+    resize_replay_attempts_ = 0;
+    return;
+  }
+  if (resize_replay_attempts_ >= kMaxResizeReplayAttempts) {
+    // Give up: the present target never became ready. Drop the replay so we
+    // don't spin forever; a subsequent user interaction will re-render.
+    pending_resize_replay_.reset();
+    resize_replay_attempts_ = 0;
+    return;
+  }
+  const PendingRenderRequest request = *pending_resize_replay_;
+  pending_resize_replay_.reset();
+  ++resize_replay_attempts_;
+  // Don't clobber a fresher pending request of the same type (e.g. a
+  // bump_generation=false render requested after the skip). If one is already
+  // queued, let it render instead; drop the replay.
+  bool enqueued = false;
+  switch (request.state_.type_) {
+    case RenderType::FAST_PREVIEW:
+      if (!pending_fast_preview_request_.has_value()) {
+        pending_fast_preview_request_ = request;
+        enqueued = true;
+      }
+      break;
+    case RenderType::QUALITY_BASE_PREVIEW:
+      if (!pending_quality_base_render_request_.has_value()) {
+        pending_quality_base_render_request_ = request;
+        enqueued = true;
+      }
+      break;
+    case RenderType::DETAIL_ROI_PREVIEW:
+      if (!pending_detail_render_request_.has_value()) {
+        pending_detail_render_request_ = request;
+        enqueued = true;
+      }
+      break;
+    default:
+      if (!pending_quality_base_render_request_.has_value()) {
+        pending_quality_base_render_request_ = request;
+        enqueued = true;
+      }
+      break;
+  }
+  if (!enqueued) {
+    resize_replay_attempts_ = 0;
+    return;
+  }
+  if (!inflight_) {
+    StartNext();
   }
 }
 

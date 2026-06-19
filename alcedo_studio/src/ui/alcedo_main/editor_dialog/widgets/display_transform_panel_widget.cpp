@@ -14,8 +14,22 @@
 #include "ui/alcedo_main/editor_dialog/dialog_internal.hpp"
 #include "ui/alcedo_main/editor_dialog/pipeline/display_transform_pipeline_adapter.hpp"
 #include "ui/alcedo_main/editor_dialog/session/editor_adjustment_session.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
+namespace {
+
+auto OdtMethodName(ColorUtils::ODTMethod method) -> QString {
+  switch (method) {
+    case ColorUtils::ODTMethod::ACES_2_0:
+      return QStringLiteral("aces_2_0");
+    case ColorUtils::ODTMethod::OPEN_DRT:
+      return QStringLiteral("open_drt");
+  }
+  return QStringLiteral("unknown");
+}
+
+}  // namespace
 
 DisplayTransformPanelWidget::DisplayTransformPanelWidget(QWidget* parent)
     : AdjustmentPanelWidget(parent) {}
@@ -59,6 +73,9 @@ void DisplayTransformPanelWidget::RegisterSliderReset(QSlider*              slid
 
 void DisplayTransformPanelWidget::RequestPipelineRender() {
   if (callbacks_.request_render) {
+    qCInfo(diag::editorLog).noquote()
+        << QStringLiteral("editor.drt.request_render method=%1")
+               .arg(OdtMethodName(display_state_.odt_.method_));
     callbacks_.request_render();
   }
 }
@@ -95,6 +112,10 @@ void DisplayTransformPanelWidget::PullCommittedDisplayTransformStateFromDialog()
 }
 
 void DisplayTransformPanelWidget::PreviewOdtField() {
+  diag::TraceScope trace(diag::editorLog(), QStringLiteral("editor.drt.preview"),
+                         QStringLiteral("method=%1 peak=%2")
+                             .arg(OdtMethodName(display_state_.odt_.method_))
+                             .arg(display_state_.odt_.peak_luminance_, 0, 'f', 1));
   SanitizeOdtStateForUi(display_state_.odt_);
   ProjectDisplayTransformStateToDialog();
   RequestPipelineRender();
@@ -109,6 +130,10 @@ void DisplayTransformPanelWidget::PreviewOdtField() {
 }
 
 void DisplayTransformPanelWidget::CommitOdtField() {
+  diag::TraceScope trace(diag::editorLog(), QStringLiteral("editor.drt.commit"),
+                         QStringLiteral("method=%1 peak=%2")
+                             .arg(OdtMethodName(display_state_.odt_.method_))
+                             .arg(display_state_.odt_.peak_luminance_, 0, 'f', 1));
   SanitizeOdtStateForUi(display_state_.odt_);
   ProjectDisplayTransformStateToDialog();
   if (!deps_.session) {
@@ -116,8 +141,12 @@ void DisplayTransformPanelWidget::CommitOdtField() {
     return;
   }
 
-  if (!DisplayTransformPipelineAdapter::FieldChanged(AdjustmentField::Odt, display_state_,
-                                                     committed_display_state_)) {
+  const bool changed = DisplayTransformPipelineAdapter::FieldChanged(
+      AdjustmentField::Odt, display_state_, committed_display_state_);
+  qCInfo(diag::editorLog).noquote()
+      << QStringLiteral("editor.drt.commit.changed value=%1")
+             .arg(changed ? QStringLiteral("true") : QStringLiteral("false"));
+  if (!changed) {
     deps_.session->Commit(AdjustmentField::Odt);
     PullCommittedDisplayTransformStateFromDialog();
     return;
@@ -596,12 +625,16 @@ void DisplayTransformPanelWidget::Build() {
     }
 
     QObject::connect(odt_aces_method_card_, &QPushButton::clicked, frame, [this]() {
+      qCInfo(diag::editorLog).noquote()
+          << QStringLiteral("editor.drt.method.clicked method=aces_2_0");
       display_state_.odt_.method_ = ColorUtils::ODTMethod::ACES_2_0;
       RefreshOdtMethodUi();
       PreviewOdtField();
       CommitOdtField();
     });
     QObject::connect(odt_open_drt_method_card_, &QPushButton::clicked, frame, [this]() {
+      qCInfo(diag::editorLog).noquote()
+          << QStringLiteral("editor.drt.method.clicked method=open_drt");
       display_state_.odt_.method_ = ColorUtils::ODTMethod::OPEN_DRT;
       RefreshOdtMethodUi();
       PreviewOdtField();
@@ -994,6 +1027,9 @@ void DisplayTransformPanelWidget::Build() {
 }
 
 void DisplayTransformPanelWidget::RefreshOdtMethodUi() {
+  diag::TraceScope trace(diag::editorLog(), QStringLiteral("editor.drt.refresh_method_ui"),
+                         QStringLiteral("method=%1")
+                             .arg(OdtMethodName(display_state_.odt_.method_)));
   const bool    aces_active     = display_state_.odt_.method_ == ColorUtils::ODTMethod::ACES_2_0;
   const bool    open_drt_active = display_state_.odt_.method_ == ColorUtils::ODTMethod::OPEN_DRT;
 
@@ -1113,6 +1149,9 @@ void DisplayTransformPanelWidget::MarkOpenDrtTonescalePresetCustomForEditing() {
 }
 
 void DisplayTransformPanelWidget::SyncControlsFromDialogState() {
+  diag::TraceScope trace(diag::editorLog(), QStringLiteral("editor.drt.sync_controls"),
+                         QStringLiteral("method=%1")
+                             .arg(OdtMethodName(display_state_.odt_.method_)));
   PullDisplayTransformStateFromDialog();
   PullCommittedDisplayTransformStateFromDialog();
   ProjectDisplayTransformStateToDialog();

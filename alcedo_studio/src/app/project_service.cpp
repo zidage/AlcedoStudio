@@ -24,6 +24,7 @@
 #include "app/model_asset_catalog.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_package_service.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 #include "utils/string/convert.hpp"
 #include "uuid.h"
 
@@ -189,6 +190,12 @@ class ProjectSemanticSearchProvider final : public SemanticSearchProvider {
 
   [[nodiscard]] auto Search(sl_element_id_t folder_id, const std::wstring& query, size_t offset,
                             size_t limit) const -> std::vector<FuzzySearchMatch> override {
+    diag::TraceScope trace(diag::semanticLog(), QStringLiteral("semantic.search.provider"),
+                           QStringLiteral("folder_id=%1 query_chars=%2 offset=%3 limit=%4")
+                               .arg(static_cast<qulonglong>(folder_id))
+                               .arg(static_cast<qulonglong>(query.size()))
+                               .arg(static_cast<qulonglong>(offset))
+                               .arg(static_cast<qulonglong>(limit)));
     if (query.empty() || limit == 0) {
       return {};
     }
@@ -249,6 +256,10 @@ class ProjectSemanticSearchProvider final : public SemanticSearchProvider {
     const SemanticRuntimeSearchSession session(runtime);
     const auto                         request_id = MakeSemanticSearchRequestId(folder_id, query);
     const auto                         text       = conv::ToBytes(query);
+    qCInfo(diag::semanticLog).noquote()
+        << QStringLiteral("semantic.search.embedding.request request_id=%1 model_key=%2")
+               .arg(QString::fromStdString(request_id),
+                    QString::fromStdString(active_model->model_key_));
     const auto                         embedding =
         runtime->EmbedText(request_id, text, EmbeddingTimeoutForModel(*active_model));
     if (const auto validation =
@@ -269,6 +280,10 @@ class ProjectSemanticSearchProvider final : public SemanticSearchProvider {
       out.push_back(FuzzySearchMatch{
           .file_id_ = row.file_id_, .image_id_ = row.image_id_, .file_name_ = row.file_name_});
     }
+    qCInfo(diag::semanticLog).noquote()
+        << QStringLiteral("semantic.search.provider.result request_id=%1 count=%2")
+               .arg(QString::fromStdString(request_id))
+               .arg(static_cast<qulonglong>(out.size()));
     return out;
   }
 

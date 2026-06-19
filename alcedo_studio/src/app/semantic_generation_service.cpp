@@ -13,17 +13,51 @@
 #include <numeric>
 #include <opencv2/imgproc.hpp>
 #include <optional>
+#include <QStringList>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
 #include <unordered_map>
 #include <utility>
 
+#include "utils/diagnostics/app_logging.hpp"
+
 namespace alcedo {
 namespace {
 
 auto MakeRequestId(const SemanticGenerationItem& item) -> std::string {
   return "semantic-image-" + std::to_string(item.element_id) + "-" + std::to_string(item.image_id);
+}
+
+auto SummarizeItemIds(const std::vector<SemanticGenerationItem>& items,
+                      size_t                                    max_items = 12) -> QString {
+  QStringList parts;
+  const size_t count = std::min(items.size(), max_items);
+  for (size_t i = 0; i < count; ++i) {
+    parts << QStringLiteral("%1:%2")
+                 .arg(static_cast<qulonglong>(items[i].element_id))
+                 .arg(static_cast<qulonglong>(items[i].image_id));
+  }
+  if (items.size() > max_items) {
+    parts << QStringLiteral("...");
+  }
+  return parts.join(QLatin1Char(','));
+}
+
+auto SummarizeInputIds(const std::vector<SemanticImageEmbeddingInput>& inputs,
+                       size_t max_items = 12) -> QString {
+  QStringList parts;
+  const size_t count = std::min(inputs.size(), max_items);
+  for (size_t i = 0; i < count; ++i) {
+    parts << QStringLiteral("%1:%2/%3")
+                 .arg(static_cast<qulonglong>(inputs[i].item.element_id))
+                 .arg(static_cast<qulonglong>(inputs[i].item.image_id))
+                 .arg(QString::fromStdString(inputs[i].request_id));
+  }
+  if (inputs.size() > max_items) {
+    parts << QStringLiteral("...");
+  }
+  return parts.join(QLatin1Char(','));
 }
 
 void DispatchProgress(const std::shared_ptr<SemanticGenerationJob>& job,
@@ -182,6 +216,10 @@ auto ValidateFiniteNonZeroVector(const std::vector<float>& embedding, uint32_t e
 auto EnsureCachedLabelPrototypes(const SemanticGenerationPersistenceOptions&           persistence,
                                  const std::shared_ptr<ISemanticImageEmbeddingClient>& client,
                                  std::chrono::milliseconds timeout, std::string* error) -> bool {
+  diag::TraceScope trace(diag::semanticLog(), QStringLiteral("semantic.label_prototypes.ensure"),
+                         QStringLiteral("model_key=%1 prompt_config=%2")
+                             .arg(QString::fromStdString(persistence.model_key),
+                                  QString::fromStdString(persistence.prompt_config_hash)));
   if (!persistence.storage_controller) {
     if (error) {
       *error = "semantic storage controller is not available";
@@ -207,6 +245,11 @@ auto EnsureCachedLabelPrototypes(const SemanticGenerationPersistenceOptions&    
 
   const auto prototype_count = persistence.storage_controller->CountLabelPrototypes(
       persistence.model_key, persistence.prompt_config_hash);
+  qCInfo(diag::semanticLog).noquote()
+      << QStringLiteral("semantic.label_prototypes.counts model_key=%1 queries=%2 cached=%3")
+             .arg(QString::fromStdString(persistence.model_key))
+             .arg(static_cast<qulonglong>(query_count))
+             .arg(static_cast<qulonglong>(prototype_count));
   if (prototype_count >= query_count) {
     return true;
   }
@@ -236,7 +279,15 @@ auto EnsureCachedLabelPrototypes(const SemanticGenerationPersistenceOptions&    
       });
     }
 
+    qCInfo(diag::semanticLog).noquote()
+        << QStringLiteral("semantic.label_prototypes.embedding.request offset=%1 count=%2")
+               .arg(static_cast<qulonglong>(offset))
+               .arg(static_cast<qulonglong>(requests.size()));
     auto batch_results = client->EmbedTextBatch(requests, timeout);
+    qCInfo(diag::semanticLog).noquote()
+        << QStringLiteral("semantic.label_prototypes.embedding.response offset=%1 count=%2")
+               .arg(static_cast<qulonglong>(offset))
+               .arg(static_cast<qulonglong>(batch_results.size()));
     std::unordered_map<std::string, SemanticEmbeddingResult> by_request_id;
     by_request_id.reserve(batch_results.size());
     for (auto& result : batch_results) {
@@ -817,6 +868,13 @@ auto SemanticGenerationService::StartGeneration(std::vector<SemanticGenerationIt
         RunJob(job, items, options, std::move(on_progress), std::move(on_finished),
                            std::move(thumbnail_provider), std::move(embedding_client));
       });
+  qCInfo(diag::semanticLog).noquote()
+      << QStringLiteral(
+             "semantic.generation.start total=%1 thumbnail_batch=%2 embedding_batch=%3 force=%4")
+             .arg(static_cast<qulonglong>(job->SnapshotProgress().total))
+             .arg(static_cast<qulonglong>(options.thumbnail_batch_size))
+             .arg(static_cast<qulonglong>(options.embedding_batch_size))
+             .arg(options.force_regenerate ? QStringLiteral("true") : QStringLiteral("false"));
   job->SetWorkerThread(std::move(worker));
 
   return job;
@@ -1025,15 +1083,29 @@ void SemanticGenerationService::RunJob(
       assignment.top_score_count_             = options.persistence->top_score_count;
 
       std::string persist_error;
+      qCInfo(diag::semanticDbLog).noquote()
+          << QStringLiteral("semantic.db.embedding.persist.request count=%1 ids=%2 model_key=%3")
+                 .arg(static_cast<qulonglong>(persist_records.size()))
+                 .arg(SummarizeInputIds(inputs))
+                 .arg(QString::fromStdString(options.persistence->model_key));
       if (!options.persistence->storage_controller->UpsertImageEmbeddingsAndAssignLabels(
               persist_records, assignment, &assigned_labels, &persist_error)) {
         const std::string message =
             persist_error.empty() ? "semantic persistence failed" : std::move(persist_error);
+        qCWarning(diag::semanticDbLog).noquote()
+            << QStringLiteral("semantic.db.embedding.persist.failed count=%1 error=%2")
+                   .arg(static_cast<qulonglong>(persist_records.size()))
+                   .arg(QString::fromStdString(message));
         for (const size_t index : persist_indices) {
           item_results[index].status = SemanticGenerationItemStatus::kError;
           item_results[index].error  = message;
         }
         persist_indices.clear();
+      } else {
+        qCInfo(diag::semanticDbLog).noquote()
+            << QStringLiteral("semantic.db.embedding.persist.ok count=%1 labels=%2")
+                   .arg(static_cast<qulonglong>(persist_records.size()))
+                   .arg(static_cast<qulonglong>(assigned_labels.size()));
       }
     }
 
@@ -1055,6 +1127,17 @@ void SemanticGenerationService::RunJob(
     }
 
     for (auto& item_result : item_results) {
+      qCInfo(diag::semanticLog).noquote()
+          << QStringLiteral(
+                 "semantic.embedding.item file_id=%1 image_id=%2 request_id=%3 status=%4 "
+                 "label=%5 score=%6 error=%7")
+                 .arg(static_cast<qulonglong>(item_result.item.element_id))
+                 .arg(static_cast<qulonglong>(item_result.item.image_id))
+                 .arg(QString::fromStdString(item_result.request_id))
+                 .arg(QString::fromLatin1(ToString(item_result.status)))
+                 .arg(QString::fromStdString(item_result.label))
+                 .arg(item_result.label_score, 0, 'f', 4)
+                 .arg(QString::fromStdString(item_result.error));
       switch (item_result.status) {
         case SemanticGenerationItemStatus::kEmbedded:
           job->UpdateProgress(
@@ -1153,6 +1236,11 @@ void SemanticGenerationService::RunJob(
     });
     DispatchProgress(job, on_progress);
 
+    qCInfo(diag::semanticLog).noquote()
+        << QStringLiteral("semantic.embedding.request count=%1 ids=%2")
+               .arg(static_cast<qulonglong>(batch_count))
+               .arg(SummarizeInputIds(pending_batch));
+
     auto promise = std::make_shared<std::promise<std::vector<SemanticImageEmbeddingBatchResult>>>();
     auto future  = promise->get_future();
     auto inputs_for_result_mapping = strip_embedding_inputs_for_result_mapping(pending_batch);
@@ -1196,6 +1284,10 @@ void SemanticGenerationService::RunJob(
 
     auto thumbnail_results = WaitForThumbnailBatch(job, thumbnail_provider, thumbnail_chunk,
                                                    options.thumbnail_resolution);
+    qCInfo(diag::semanticLog).noquote()
+        << QStringLiteral("semantic.thumbnail.batch.ready count=%1 ids=%2")
+               .arg(static_cast<qulonglong>(thumbnail_chunk.size()))
+               .arg(SummarizeItemIds(thumbnail_chunk));
 
     for (size_t i = 0; i < thumbnail_chunk.size(); ++i) {
       const auto& item             = thumbnail_chunk[i];

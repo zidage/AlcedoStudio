@@ -6,6 +6,7 @@
 
 #include <duckdb.h>
 
+#include <QStringList>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -24,6 +25,7 @@
 
 #include "storage/controller/sleeve/element_controller.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -58,6 +60,21 @@ auto             SqlString(const std::string& value) -> std::string {
   }
   out.push_back('\'');
   return out;
+}
+
+auto SummarizeEmbeddingRecords(std::span<const SemanticImageEmbeddingRecord> records,
+                               size_t max_items = 16) -> QString {
+  QStringList parts;
+  const size_t count = std::min(records.size(), max_items);
+  for (size_t i = 0; i < count; ++i) {
+    parts << QStringLiteral("%1:%2")
+                 .arg(static_cast<qulonglong>(records[i].file_id_))
+                 .arg(static_cast<qulonglong>(records[i].image_id_));
+  }
+  if (records.size() > max_items) {
+    parts << QStringLiteral("...");
+  }
+  return parts.join(QLatin1Char(','));
 }
 
 auto SqlNullableString(const std::string& value) -> std::string {
@@ -1168,6 +1185,11 @@ auto SemanticStorageController::UpsertImageEmbeddingAndAssignLabel(
     const SemanticImageEmbeddingRecord&   record,
     const SemanticLabelAssignmentOptions& assignment_options,
     SemanticImageLabelRecord* assigned_label, std::string* error) const -> bool {
+  diag::TraceScope trace(diag::semanticDbLog(), QStringLiteral("semantic.db.embedding.upsert_one"),
+                         QStringLiteral("file_id=%1 image_id=%2 model_key=%3")
+                             .arg(static_cast<qulonglong>(record.file_id_))
+                             .arg(static_cast<qulonglong>(record.image_id_))
+                             .arg(QString::fromStdString(record.model_key_)));
   if (record.file_id_ == 0) {
     SetError(error, "Semantic embedding file id is zero.");
     return false;
@@ -1213,6 +1235,13 @@ auto SemanticStorageController::UpsertImageEmbeddingAndAssignLabel(
   if (!RunQuery(guard_.conn_, "COMMIT;", error)) {
     return false;
   }
+  qCInfo(diag::semanticDbLog).noquote()
+      << QStringLiteral("semantic.db.embedding.upsert_one.ok file_id=%1 image_id=%2 label=%3 "
+                        "score=%4")
+             .arg(static_cast<qulonglong>(record.file_id_))
+             .arg(static_cast<qulonglong>(record.image_id_))
+             .arg(QString::fromStdString(label->label_))
+             .arg(label->score_, 0, 'f', 4);
   if (assigned_label) {
     *assigned_label = std::move(*label);
   }
@@ -1229,6 +1258,10 @@ auto SemanticStorageController::UpsertImageEmbeddingsAndAssignLabels(
   if (records.empty()) {
     return true;
   }
+  diag::TraceScope trace(diag::semanticDbLog(), QStringLiteral("semantic.db.embedding.upsert_batch"),
+                         QStringLiteral("count=%1 ids=%2")
+                             .arg(static_cast<qulonglong>(records.size()))
+                             .arg(SummarizeEmbeddingRecords(records)));
   if (assignment_options.prompt_config_hash_.empty()) {
     SetError(error, "Semantic label assignment prompt config hash is empty.");
     return false;
@@ -1312,6 +1345,11 @@ auto SemanticStorageController::UpsertImageEmbeddingsAndAssignLabels(
     return false;
   }
 
+  qCInfo(diag::semanticDbLog).noquote()
+      << QStringLiteral("semantic.db.embedding.upsert_batch.ok count=%1 labels=%2 model_key=%3")
+             .arg(static_cast<qulonglong>(records.size()))
+             .arg(static_cast<qulonglong>(labels.size()))
+             .arg(QString::fromStdString(model_key));
   if (assigned_labels) {
     *assigned_labels = std::move(labels);
   }
@@ -1631,6 +1669,13 @@ auto SemanticStorageController::GetImageLabelForFile(sl_element_id_t    file_id,
 auto SemanticStorageController::SearchImageEmbeddings(
     sl_element_id_t folder_id, const std::string& model_key, std::span<const float> query_embedding,
     size_t offset, size_t limit, std::string* error) const -> std::vector<SemanticRankedFile> {
+  diag::TraceScope trace(diag::semanticDbLog(), QStringLiteral("semantic.db.search"),
+                         QStringLiteral("folder_id=%1 model_key=%2 offset=%3 limit=%4 dim=%5")
+                             .arg(static_cast<qulonglong>(folder_id))
+                             .arg(QString::fromStdString(model_key))
+                             .arg(static_cast<qulonglong>(offset))
+                             .arg(static_cast<qulonglong>(limit))
+                             .arg(static_cast<qulonglong>(query_embedding.size())));
   std::vector<SemanticRankedFile> out;
   if (limit == 0) {
     return out;
@@ -1700,7 +1745,18 @@ auto SemanticStorageController::SearchImageEmbeddings(
   }
 
   duckdb_destroy_result(&result);
-  return FilterAndPageSemanticCandidates(std::move(candidates), offset, limit);
+  const auto raw_count = candidates.size();
+  auto       page      = FilterAndPageSemanticCandidates(std::move(candidates), offset, limit);
+  qCInfo(diag::semanticDbLog).noquote()
+      << QStringLiteral("semantic.db.search.result folder_id=%1 model_key=%2 raw_candidates=%3 "
+                        "page_count=%4 offset=%5 limit=%6")
+             .arg(static_cast<qulonglong>(folder_id))
+             .arg(QString::fromStdString(model_key))
+             .arg(static_cast<qulonglong>(raw_count))
+             .arg(static_cast<qulonglong>(page.size()))
+             .arg(static_cast<qulonglong>(offset))
+             .arg(static_cast<qulonglong>(limit));
+  return page;
 }
 
 auto SemanticStorageController::EnsureVectorSearchIndex(const std::string& model_key,

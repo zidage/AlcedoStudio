@@ -78,11 +78,23 @@ class EditorRenderCoordinator {
   void PollInflight();
   void StartNext();
   void OnRenderFinished(bool render_succeeded);
+  // Re-enqueues a preview request whose presentation was skipped because the
+  // present target was not yet sized. Fired on a short debounce timer so the UI
+  // thread has a chance to finish the asynchronous render-target resize first;
+  // this is robust to whether the resize completed before or after the render
+  // finished (a signal-only trigger would orphan the replay when the resize
+  // completed first).
+  void EnsureResizeReplayTimer();
+  void OnResizeReplayTick();
 
  private:
   static constexpr std::chrono::milliseconds kQualityPreviewDebounceInterval =
       controllers::render::kQualityPreviewDebounceInterval;
   static constexpr std::chrono::milliseconds kViewportDetailDebounceInterval{120};
+  // Debounce before retrying a skipped (present-target-not-ready) render, and
+  // the cap on retries to avoid a runaway loop if the target never becomes ready.
+  static constexpr int kResizeReplayIntervalMs   = 16;
+  static constexpr int kMaxResizeReplayAttempts  = 12;
 
   auto                                       CurrentViewer() const -> QtEditViewer*;
   auto                                       CurrentSpinner() const -> SpinnerWidget*;
@@ -95,6 +107,8 @@ class EditorRenderCoordinator {
   QTimer*                                    detail_preview_timer_                    = nullptr;
   QTimer*                                    quality_preview_timer_                   = nullptr;
   QTimer*                                    fast_preview_submit_timer_               = nullptr;
+  QTimer*                                    resize_replay_timer_                     = nullptr;
+  int                                        resize_replay_attempts_                  = 0;
   bool                                       inflight_                                = false;
   bool                                       detail_preview_waiting_for_quality_base_ = false;
 
@@ -103,6 +117,10 @@ class EditorRenderCoordinator {
   std::optional<PendingRenderRequest>                      pending_fast_preview_request_{};
   std::optional<PendingRenderRequest>                      pending_quality_base_render_request_{};
   std::optional<PendingRenderRequest>                      pending_detail_render_request_{};
+  // A preview request whose presentation was skipped because the present target
+  // was not yet sized. Held until OnRenderTargetReady() replays it. Cleared by
+  // AdvancePreviewGeneration() so stale requests are not replayed after edits.
+  std::optional<PendingRenderRequest>                      pending_resize_replay_{};
 
   std::chrono::steady_clock::time_point                    last_fast_preview_submit_time_{};
   std::uint64_t                                            preview_generation_ = 0;

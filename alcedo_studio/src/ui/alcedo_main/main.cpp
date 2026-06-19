@@ -27,6 +27,7 @@
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/alcedo_main/language_manager.hpp"
 #include "edit/operators/operator_registeration.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 #ifdef HAVE_OPENCL
 #include "opencl/opencl_runtime.hpp"
 #endif
@@ -142,15 +143,18 @@ int main(int argc, char* argv[]) {
   Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::error);
 
   QApplication app(argc, argv);
+  QCoreApplication::setOrganizationName(QStringLiteral("Alcedo"));
+  QCoreApplication::setOrganizationDomain(QStringLiteral("alcedo.app"));
+  QCoreApplication::setApplicationName(QStringLiteral("Alcedo"));
+  const QString log_path = alcedo::diag::InitializeApplicationLogging();
+  qCInfo(alcedo::diag::appLog).noquote()
+      << QStringLiteral("app.start log_path=%1").arg(log_path);
   app.setWindowIcon(QIcon(QStringLiteral(":/ICON/alcedo_icon.png")));
   {
     QFont default_font = app.font();
     default_font.setStyleStrategy(QFont::PreferAntialias);
     app.setFont(default_font);
   }
-  QCoreApplication::setOrganizationName(QStringLiteral("Alcedo"));
-  QCoreApplication::setOrganizationDomain(QStringLiteral("alcedo.app"));
-  QCoreApplication::setApplicationName(QStringLiteral("Alcedo"));
   alcedo::ui::AppTheme::RegisterFonts();
   if (const auto arg = FindArgValue(argc, argv, "--font"); arg.has_value()) {
     alcedo::ui::AppTheme::TryRegisterUiFontOverride(QString::fromUtf8(arg->data(), arg->size()));
@@ -187,5 +191,8 @@ int main(int argc, char* argv[]) {
 
   engine.loadFromModule("Alcedo.Main", "Main");
 
-  return app.exec();
+  const int exit_code = app.exec();
+  qCInfo(alcedo::diag::appLog) << "app.exit code=" << exit_code;
+  alcedo::diag::ShutdownApplicationLogging();
+  return exit_code;
 }

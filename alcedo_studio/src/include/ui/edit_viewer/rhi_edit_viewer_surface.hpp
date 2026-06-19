@@ -160,6 +160,7 @@ class RhiEditViewerSurface final : public QRhiWidget,
   auto supportsDirectCudaPresent() const -> bool override;
   auto prepareRenderTarget(int width, int height) -> EditViewerRenderTargetResizeDecision override;
   void commitRenderTargetResize(int slot_index, int width, int height) override;
+  void setExpectedWriteSize(int width, int height) override;
   auto mapResourceForWrite(
       FrameMemoryDomain preferred_domain = FrameMemoryDomain::CudaDevice) -> FrameWriteMapping override;
   void unmapResource() override;

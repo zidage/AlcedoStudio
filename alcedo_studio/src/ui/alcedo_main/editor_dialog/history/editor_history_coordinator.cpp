@@ -12,6 +12,7 @@
 
 #include "ui/alcedo_main/editor_dialog/controllers/history_controller.hpp"
 #include "ui/alcedo_main/i18n.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
 
@@ -63,12 +64,19 @@ auto EditorHistoryCoordinator::ReconstructPipelineParamsForVersion(Version& vers
 
 auto EditorHistoryCoordinator::ReloadUiStateFromPipeline(bool reset_to_defaults_if_missing)
     -> bool {
+  diag::TraceScope trace(diag::editorLog(), QStringLiteral("editor.history.reload_ui_state"),
+                         QStringLiteral("reset_defaults=%1")
+                             .arg(reset_to_defaults_if_missing ? QStringLiteral("true")
+                                                               : QStringLiteral("false")));
   return callbacks_.reload_ui_state_from_pipeline
              ? callbacks_.reload_ui_state_from_pipeline(reset_to_defaults_if_missing)
              : false;
 }
 
 auto EditorHistoryCoordinator::ApplyPipelineParamsToEditor(const nlohmann::json& params) -> bool {
+  diag::TraceScope trace(diag::editorLog(), QStringLiteral("editor.history.apply_pipeline_params"),
+                         QStringLiteral("json_bytes=%1")
+                             .arg(static_cast<qulonglong>(params.dump().size())));
   if (!dependencies_.pipeline_guard || !dependencies_.pipeline_guard->pipeline_) {
     return false;
   }
@@ -85,6 +93,9 @@ auto EditorHistoryCoordinator::ApplyPipelineParamsToEditor(const nlohmann::json&
 
 auto EditorHistoryCoordinator::ReloadEditorFromHistoryVersion(Version& version, QString* error)
     -> bool {
+  diag::TraceScope trace(diag::editorLog(), QStringLiteral("editor.history.reload_version"),
+                         QStringLiteral("version_id=%1")
+                             .arg(QString::fromStdString(version.GetVersionID().ToString())));
   const auto selected_params = ReconstructPipelineParamsForVersion(version);
   if (!selected_params.has_value()) {
     if (error) {
@@ -110,6 +121,8 @@ void EditorHistoryCoordinator::CheckoutSelectedVersion(QListWidgetItem* item) {
 }
 
 void EditorHistoryCoordinator::CheckoutVersionById(const QString& version_id) {
+  diag::TraceScope trace(diag::editorLog(), QStringLiteral("editor.history.checkout"),
+                         QStringLiteral("version_id=%1").arg(version_id));
   versioning::ResolvedVersionSelection selection{};
   QString                              selection_error;
   if (!versioning::ResolveVersionId(version_id, dependencies_.history_guard, &selection,
@@ -166,6 +179,9 @@ void EditorHistoryCoordinator::RenameVersionById(const QString& version_id) {
 }
 
 void EditorHistoryCoordinator::UndoLastTransaction() {
+  diag::TraceScope trace(diag::editorLog(), QStringLiteral("editor.history.undo"),
+                         QStringLiteral("element_id=%1")
+                             .arg(static_cast<qulonglong>(dependencies_.element_id)));
   if (!dependencies_.pipeline_guard || !dependencies_.pipeline_guard->pipeline_) {
     return;
   }
@@ -192,6 +208,9 @@ void EditorHistoryCoordinator::UndoLastTransaction() {
 }
 
 void EditorHistoryCoordinator::MoveCursorTo(size_t target_cursor) {
+  diag::TraceScope trace(diag::editorLog(), QStringLiteral("editor.history.move_cursor"),
+                         QStringLiteral("target_cursor=%1")
+                             .arg(static_cast<qulonglong>(target_cursor)));
   const auto move_result =
       versioning::MoveCursorTo(working_version_, target_cursor, dependencies_.pipeline_guard);
   if (!move_result.error.isEmpty()) {
@@ -212,6 +231,9 @@ void EditorHistoryCoordinator::MoveCursorTo(size_t target_cursor) {
 }
 
 void EditorHistoryCoordinator::UpdateVersionUi() {
+  diag::TraceScope trace(diag::editorLog(), QStringLiteral("editor.history.update_version_ui"),
+                         QStringLiteral("element_id=%1")
+                             .arg(static_cast<qulonglong>(dependencies_.element_id)));
   versioning::PersistWorkingVersion(dependencies_.history_service, dependencies_.history_guard,
                                     working_version_, dependencies_.pipeline_guard);
   versioning::UpdateVersionUi(ui_, ui_callbacks_, working_version_, dependencies_.history_guard,
@@ -219,6 +241,9 @@ void EditorHistoryCoordinator::UpdateVersionUi() {
 }
 
 void EditorHistoryCoordinator::CreateVersion() {
+  diag::TraceScope trace(diag::editorLog(), QStringLiteral("editor.history.create_version"),
+                         QStringLiteral("element_id=%1")
+                             .arg(static_cast<qulonglong>(dependencies_.element_id)));
   if (!dependencies_.history_service || !dependencies_.history_guard ||
       !dependencies_.history_guard->history_) {
     return;
