@@ -59,6 +59,7 @@ class EditorRenderCoordinator {
 
   void EnsureQualityPreviewTimer();
   void EnsureDetailPreviewTimer();
+  void RequestQualityPreviewRenderFromPipeline(bool apply_state = false);
   void TriggerQualityPreviewRenderFromPipeline();
   void ScheduleQualityPreviewRenderFromPipeline();
   void ScheduleDetailPreviewRenderFromViewport();

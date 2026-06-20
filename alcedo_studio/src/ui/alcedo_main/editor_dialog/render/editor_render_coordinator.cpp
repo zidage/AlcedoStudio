@@ -117,7 +117,7 @@ void EditorRenderCoordinator::MaybeScheduleDetailPreviewRenderFromViewport() {
   ScheduleDetailPreviewRenderFromViewport();
 }
 
-void EditorRenderCoordinator::TriggerQualityPreviewRenderFromPipeline() {
+void EditorRenderCoordinator::RequestQualityPreviewRenderFromPipeline(bool apply_state) {
   if (!dependencies_.state) {
     return;
   }
@@ -128,8 +128,12 @@ void EditorRenderCoordinator::TriggerQualityPreviewRenderFromPipeline() {
   AdjustmentState snapshot = *dependencies_.state;
   snapshot.type_           = RenderType::QUALITY_BASE_PREVIEW;
   EnqueueRenderRequest(snapshot, BuildPreviewMetadata(snapshot.type_),
-                       /*apply_state=*/false,
+                       apply_state,
                        /*use_viewport_region=*/false);
+}
+
+void EditorRenderCoordinator::TriggerQualityPreviewRenderFromPipeline() {
+  RequestQualityPreviewRenderFromPipeline(/*apply_state=*/false);
 }
 
 void EditorRenderCoordinator::ScheduleQualityPreviewRenderFromPipeline() {

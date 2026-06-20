@@ -5,13 +5,162 @@
 #include "ui/alcedo_main/editor_dialog/session/editor_adjustment_session.hpp"
 
 #include <exception>
-#include <mutex>
+#include <optional>
+#include <string>
 #include <utility>
 
 #include "edit/history/edit_transaction.hpp"
+#include "edit/operators/operator_factory.hpp"
 #include "ui/alcedo_main/editor_dialog/modules/pipeline_io.hpp"
 
 namespace alcedo::ui {
+namespace {
+
+auto StageExportName(PipelineStageName stage) -> std::string {
+  switch (stage) {
+    case PipelineStageName::Image_Loading:
+      return "Image Loading";
+    case PipelineStageName::To_WorkingSpace:
+      return "To Working Space";
+    case PipelineStageName::Basic_Adjustment:
+      return "Basic Adjustment";
+    case PipelineStageName::Color_Adjustment:
+      return "Color Adjustment";
+    case PipelineStageName::Detail_Adjustment:
+      return "Detail Adjustment";
+    case PipelineStageName::Output_Transform:
+      return "Output Transform";
+    case PipelineStageName::Geometry_Adjustment:
+      return "Geometry Adjustment";
+    case PipelineStageName::Merged_Stage:
+      return "Merged Stage";
+    case PipelineStageName::Stage_Count:
+      break;
+  }
+  return "Unknown Stage";
+}
+
+auto OperatorScriptName(OperatorType op_type, const nlohmann::json& params) -> std::string {
+  if (auto op = OperatorFactory::Instance().Create(op_type, params); op) {
+    return op->GetScriptName();
+  }
+
+  switch (op_type) {
+    case OperatorType::RAW_DECODE:
+      return "raw_decode";
+    case OperatorType::CROP_ROTATE:
+      return "crop_rotate";
+    case OperatorType::EXPOSURE:
+      return "exposure";
+    case OperatorType::CONTRAST:
+      return "contrast";
+    case OperatorType::WHITE:
+      return "white";
+    case OperatorType::BLACK:
+      return "black";
+    case OperatorType::SHADOWS:
+      return "shadows";
+    case OperatorType::HIGHLIGHTS:
+      return "highlights";
+    case OperatorType::CURVE:
+      return "curve";
+    case OperatorType::HLS:
+      return "HLS";
+    case OperatorType::SATURATION:
+      return "saturation";
+    case OperatorType::LMT:
+      return "ocio_lmt";
+    case OperatorType::ODT:
+      return "odt";
+    case OperatorType::CLARITY:
+      return "clarity";
+    case OperatorType::SHARPEN:
+      return "sharpen";
+    case OperatorType::COLOR_WHEEL:
+      return "color_wheel";
+    case OperatorType::LENS_CALIBRATION:
+      return "lens_calib";
+    case OperatorType::COLOR_TEMP:
+      return "color_temp";
+    case OperatorType::FILM_GRAIN:
+      return "film_grain";
+    case OperatorType::HALATION:
+      return "halation";
+    default:
+      break;
+  }
+  return OperatorTypeToString(op_type);
+}
+
+auto IsLutPathEmpty(const nlohmann::json& params) -> bool {
+  if (!params.is_object() || !params.contains("ocio_lmt")) {
+    return true;
+  }
+  try {
+    return params.at("ocio_lmt").get<std::string>().empty();
+  } catch (...) {
+    return true;
+  }
+}
+
+auto ExtractEmbeddedEnabled(const nlohmann::json& params) -> std::optional<bool> {
+  if (!params.is_object()) {
+    return std::nullopt;
+  }
+  if (params.contains("enabled") && params.at("enabled").is_boolean()) {
+    return params.at("enabled").get<bool>();
+  }
+  if (params.size() == 1) {
+    const auto& value = params.begin().value();
+    if (value.is_object() && value.contains("enabled") && value.at("enabled").is_boolean()) {
+      return value.at("enabled").get<bool>();
+    }
+  }
+  return std::nullopt;
+}
+
+auto ResolveEnabledForParams(OperatorType op_type, const nlohmann::json& params,
+                             bool requested_enabled) -> bool {
+  if (!requested_enabled) {
+    return false;
+  }
+  if (op_type == OperatorType::LMT) {
+    return !IsLutPathEmpty(params);
+  }
+  if (const auto embedded_enabled = ExtractEmbeddedEnabled(params); embedded_enabled.has_value()) {
+    return *embedded_enabled;
+  }
+  return true;
+}
+
+auto ApplyOperatorParamsToMaterializedHead(const WorkingVersion& working_version,
+                                           PipelineStageName stage_name, OperatorType op_type,
+                                           const nlohmann::json& params, bool enabled)
+    -> std::optional<nlohmann::json> {
+  auto head = working_version.GetHeadPipelineParams();
+  if (!head.has_value() || !head->is_object()) {
+    return std::nullopt;
+  }
+
+  const std::string stage_export_name = StageExportName(stage_name);
+  auto&             stage_wrapper     = (*head)[stage_export_name];
+  if (!stage_wrapper.is_object()) {
+    stage_wrapper = nlohmann::json::object();
+  }
+  auto& stage_ops = stage_wrapper[stage_export_name];
+  if (!stage_ops.is_object()) {
+    stage_ops = nlohmann::json::object();
+  }
+
+  stage_ops[OperatorScriptName(op_type, params)] = {
+      {"type", static_cast<int>(op_type)},
+      {"enable", ResolveEnabledForParams(op_type, params, enabled)},
+      {"params", params},
+  };
+  return head;
+}
+
+}  // namespace
 
 EditorAdjustmentSession::EditorAdjustmentSession(Dependencies dependencies, Callbacks callbacks)
     : dependencies_(std::move(dependencies)), callbacks_(std::move(callbacks)) {}
@@ -24,8 +173,8 @@ auto EditorAdjustmentSession::Commit(AdjustmentField field) -> CommitResult {
 
 auto EditorAdjustmentSession::Commit(const AdjustmentCommit& commit) -> CommitResult {
   if (commit.policy != CommitPolicy::AppendTransaction || !FieldChanged(commit.field) ||
-      !HasPipeline() || dependencies_.working_version == nullptr ||
-      dependencies_.state == nullptr || dependencies_.committed_state == nullptr) {
+      dependencies_.working_version == nullptr || dependencies_.state == nullptr ||
+      dependencies_.committed_state == nullptr) {
     ScheduleQualityPreview();
     return {.status = CommitStatus::UnchangedOrUnavailable};
   }
@@ -36,26 +185,21 @@ auto EditorAdjustmentSession::Commit(const AdjustmentCommit& commit) -> CommitRe
   const auto before_params =
       commit.old_params.value_or(ParamsForField(commit.field, *dependencies_.committed_state));
 
-  auto                  exec  = dependencies_.pipeline_guard->pipeline_;
-  auto&                 stage = exec->GetStage(stage_name);
-  const auto            op    = stage.GetOperator(op_type);
   const TransactionType tx_type =
-      (op.has_value() && op.value() != nullptr) ? TransactionType::_EDIT : TransactionType::_ADD;
-  const bool      before_enabled = !before_params.is_null();
+      !before_params.is_null() ? TransactionType::_EDIT : TransactionType::_ADD;
+  const bool before_enabled = !before_params.is_null();
 
   EditTransaction tx{tx_type, op_type, stage_name, before_params, new_params, before_enabled, true};
-  try {
-    std::unique_lock<std::mutex> render_guard(exec->GetRenderLock());
-    (void)tx.ApplyForward(*exec);
-    dependencies_.working_version->SetHeadPipelineParams(exec->ExportPipelineParams());
-  } catch (const std::exception& e) {
-    return {.status = CommitStatus::Failed, .error = QString::fromUtf8(e.what())};
-  } catch (...) {
-    return {.status = CommitStatus::Failed};
+  if (auto head_params = ApplyOperatorParamsToMaterializedHead(
+          *dependencies_.working_version, stage_name, op_type, new_params, true);
+      head_params.has_value()) {
+    dependencies_.working_version->SetHeadPipelineParams(*head_params);
   }
 
   dependencies_.working_version->AppendEditTransaction(std::move(tx));
-  dependencies_.pipeline_guard->dirty_ = true;
+  if (dependencies_.pipeline_guard) {
+    dependencies_.pipeline_guard->dirty_ = true;
+  }
 
   CopyFieldState(commit.field, *dependencies_.state, *dependencies_.committed_state);
   if (commit.field == AdjustmentField::CropRotate &&

@@ -150,7 +150,8 @@ EditorDialog::EditorDialog(std::shared_ptr<ImagePoolService>       image_pool,
           .schedule_quality_preview =
               [this]() {
                 if (render_coordinator_) {
-                  render_coordinator_->ScheduleQualityPreviewRenderFromPipeline();
+                  render_coordinator_->RequestQualityPreviewRenderFromPipeline(
+                      /*apply_state=*/true);
                 }
               },
           .schedule_detail_preview_from_viewport =

@@ -240,8 +240,18 @@ void PersistWorkingVersion(const std::shared_ptr<EditHistoryMgmtService>& histor
                            const std::shared_ptr<EditHistoryGuard>& history_guard,
                            const WorkingVersion& working_version,
                            const std::shared_ptr<PipelineGuard>& pipeline_guard) {
-  if (!history_service || !history_guard || !history_guard->history_ || !pipeline_guard ||
-      !pipeline_guard->pipeline_ || !working_version.HasVersion()) {
+  if (!history_service || !history_guard || !history_guard->history_ ||
+      !working_version.HasVersion()) {
+    return;
+  }
+
+  if (const auto head_params = working_version.GetHeadPipelineParams(); head_params.has_value()) {
+    history_service->UpdateVersion(history_guard, working_version.GetVersionID(), working_version,
+                                   *head_params);
+    return;
+  }
+
+  if (!pipeline_guard || !pipeline_guard->pipeline_) {
     return;
   }
   history_service->UpdateVersion(history_guard, working_version.GetVersionID(), working_version,
