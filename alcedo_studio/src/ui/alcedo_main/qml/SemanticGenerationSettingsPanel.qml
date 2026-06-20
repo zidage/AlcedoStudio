@@ -8,6 +8,7 @@ ColumnLayout {
     id: panel
 
     property var semanticController: null
+    property var downloadController: null
     property string importPreference: "ask"
     property color primaryAccent: "#457B9D"
     property color secondaryAccent: "#9FC7D8"
@@ -22,41 +23,40 @@ ColumnLayout {
     signal messageRequested(string message)
 
     readonly property bool hasController: semanticController !== null
+    readonly property bool hasDownloadController: downloadController !== null
     readonly property int albumTotalCount: hasController ? semanticController.albumTotalCount : 0
     readonly property int albumLabeledCount: hasController ? semanticController.albumLabeledCount : 0
     readonly property int albumUnlabeledCount: hasController ? semanticController.albumUnlabeledCount : 0
     readonly property bool generationRunning: hasController ? semanticController.running : false
-    readonly property bool modelTaskRunning: hasController
-                                             ? semanticController.modelDownloadRunning
-                                               || semanticController.modelActivationRunning
-                                             : false
-    readonly property bool modelDownloadRunning: hasController ? semanticController.modelDownloadRunning : false
+    readonly property bool modelTaskRunning: (hasDownloadController && downloadController.modelDownloadRunning)
+                                             || (hasController && semanticController.modelActivationRunning)
+    readonly property bool modelDownloadRunning: hasDownloadController ? downloadController.modelDownloadRunning : false
     readonly property bool modelActivationRunning: hasController ? semanticController.modelActivationRunning : false
     readonly property string activeModelName: hasController ? semanticController.activeModelDisplayName : qsTr("No active model")
     readonly property string activeModelKey: hasController ? semanticController.activeModelKey : ""
-    readonly property string selectedModelSizeLabel: hasController ? semanticController.selectedModelSizeLabel : ""
-    readonly property bool selectedModelInstalled: hasController ? semanticController.selectedModelInstalled : false
+    readonly property string selectedModelSizeLabel: hasDownloadController ? downloadController.selectedModelSizeLabel : ""
+    readonly property bool selectedModelInstalled: hasDownloadController ? downloadController.selectedModelInstalled : false
     readonly property bool selectedModelActive: hasController ? semanticController.selectedModelActive : false
-    readonly property string modelDownloadPhase: hasController ? semanticController.modelDownloadPhase : ""
-    readonly property int modelDownloadProgress: hasController ? semanticController.modelDownloadProgress : 0
-    readonly property real modelDownloadBytesDone: hasController ? semanticController.modelDownloadBytesDone : 0
-    readonly property real modelDownloadBytesTotal: hasController ? semanticController.modelDownloadBytesTotal : 0
-    readonly property int modelDownloadFilesDone: hasController ? semanticController.modelDownloadFilesDone : 0
-    readonly property int modelDownloadFilesTotal: hasController ? semanticController.modelDownloadFilesTotal : 0
-    readonly property string modelDownloadCurrentFile: hasController ? semanticController.modelDownloadCurrentFile : ""
-    readonly property string modelDownloadBytesLabel: hasController ? semanticController.modelDownloadBytesLabel : ""
-    readonly property string modelDownloadSpeedLabel: hasController ? semanticController.modelDownloadSpeedLabel : ""
-    readonly property string modelDownloadEtaLabel: hasController ? semanticController.modelDownloadEtaLabel : ""
+    readonly property string modelDownloadPhase: hasDownloadController ? downloadController.modelDownloadPhase : ""
+    readonly property int modelDownloadProgress: hasDownloadController ? downloadController.modelDownloadProgress : 0
+    readonly property real modelDownloadBytesDone: hasDownloadController ? downloadController.modelDownloadBytesDone : 0
+    readonly property real modelDownloadBytesTotal: hasDownloadController ? downloadController.modelDownloadBytesTotal : 0
+    readonly property int modelDownloadFilesDone: hasDownloadController ? downloadController.modelDownloadFilesDone : 0
+    readonly property int modelDownloadFilesTotal: hasDownloadController ? downloadController.modelDownloadFilesTotal : 0
+    readonly property string modelDownloadCurrentFile: hasDownloadController ? downloadController.modelDownloadCurrentFile : ""
+    readonly property string modelDownloadBytesLabel: hasDownloadController ? downloadController.modelDownloadBytesLabel : ""
+    readonly property string modelDownloadSpeedLabel: hasDownloadController ? downloadController.modelDownloadSpeedLabel : ""
+    readonly property string modelDownloadEtaLabel: hasDownloadController ? downloadController.modelDownloadEtaLabel : ""
     // The controller's status text (errors, paths, completion messages). Shown
     // as a muted detail line inside the status card only when nothing is busy,
     // so the card stays the single source of model status.
-    readonly property string modelDownloadStatusDetail: hasController ? semanticController.modelDownloadStatusText : ""
+    readonly property string modelDownloadStatusDetail: hasDownloadController ? downloadController.modelDownloadStatusText : ""
     readonly property string selectedModelDisplayName: {
-        if (!panel.hasController) {
+        if (!panel.hasDownloadController) {
             return ""
         }
-        const options = panel.semanticController.modelProfileOptions
-        const id = panel.semanticController.selectedModelProfileId
+        const options = panel.downloadController.modelProfileOptions
+        const id = panel.downloadController.selectedModelProfileId
         for (let i = 0; i < options.length; ++i) {
             if (options[i].profileId === id) {
                 return options[i].label
@@ -152,10 +152,10 @@ ColumnLayout {
     }
 
     function modelProfileIndex(profileId) {
-        if (!panel.hasController) {
+        if (!panel.hasDownloadController) {
             return 0
         }
-        const options = panel.semanticController.modelProfileOptions
+        const options = panel.downloadController.modelProfileOptions
         for (let i = 0; i < options.length; ++i) {
             if (options[i].profileId === profileId) {
                 return i
@@ -194,8 +194,8 @@ ColumnLayout {
         id: modelFolderDialog
         title: qsTr("Select Model Download Folder")
         onAccepted: {
-            if (panel.hasController) {
-                panel.semanticController.SetModelDownloadDirectory(selectedFolder.toString())
+            if (panel.hasDownloadController) {
+                panel.downloadController.SetModelDownloadDirectory(selectedFolder.toString())
             }
         }
     }
@@ -203,14 +203,24 @@ ColumnLayout {
     Component.onCompleted: {
         if (panel.hasController) {
             panel.semanticController.RefreshAlbumSummary()
-            panel.semanticController.RefreshSelectedModelStatus()
+        }
+        if (panel.hasDownloadController) {
+            panel.downloadController.RefreshSelectedModelStatus()
         }
     }
 
     onSemanticControllerChanged: {
         if (panel.hasController) {
             panel.semanticController.RefreshAlbumSummary()
-            panel.semanticController.RefreshSelectedModelStatus()
+        }
+        if (panel.hasDownloadController) {
+            panel.downloadController.RefreshSelectedModelStatus()
+        }
+    }
+
+    onDownloadControllerChanged: {
+        if (panel.hasDownloadController) {
+            panel.downloadController.RefreshSelectedModelStatus()
         }
     }
 
@@ -389,17 +399,17 @@ ColumnLayout {
                 id: modelBox
                 Layout.fillWidth: true
                 Layout.preferredHeight: 44
-                enabled: panel.hasController && !panel.modelTaskRunning
-                model: panel.hasController ? panel.semanticController.modelProfileOptions : []
+                enabled: panel.hasDownloadController && !panel.modelTaskRunning
+                model: panel.hasDownloadController ? panel.downloadController.modelProfileOptions : []
                 textRole: "label"
-                currentIndex: panel.hasController
-                              ? panel.modelProfileIndex(panel.semanticController.selectedModelProfileId)
+                currentIndex: panel.hasDownloadController
+                              ? panel.modelProfileIndex(panel.downloadController.selectedModelProfileId)
                               : 0
                 onActivated: function(index) {
                     const item = model[index]
-                    if (item && panel.hasController) {
-                        panel.semanticController.SetSelectedModelProfileId(item.profileId)
-                        panel.semanticController.RefreshSelectedModelStatus()
+                    if (item && panel.hasDownloadController) {
+                        panel.downloadController.SetSelectedModelProfileId(item.profileId)
+                        panel.downloadController.RefreshSelectedModelStatus()
                     }
                 }
             }
@@ -436,7 +446,7 @@ ColumnLayout {
                         anchors.fill: parent
                         anchors.leftMargin: 14
                         anchors.rightMargin: 14
-                        text: panel.hasController ? panel.semanticController.modelDownloadDirectory : ""
+                        text: panel.hasDownloadController ? panel.downloadController.modelDownloadDirectory : ""
                         elide: Text.ElideMiddle
                         verticalAlignment: Text.AlignVCenter
                         color: panel.textColor
@@ -497,19 +507,19 @@ ColumnLayout {
                 id: endpointBox
                 Layout.preferredWidth: 210
                 Layout.preferredHeight: 44
-                enabled: panel.hasController && !panel.modelTaskRunning
+                enabled: panel.hasDownloadController && !panel.modelTaskRunning
                 model: [
                     qsTr("HF Mirror"),
                     qsTr("Hugging Face"),
                     qsTr("Sufy CDN"),
                     qsTr("Custom")
                 ]
-                currentIndex: panel.hasController
-                              ? panel.endpointPresetIndex(panel.semanticController.modelEndpointPreset)
+                currentIndex: panel.hasDownloadController
+                              ? panel.endpointPresetIndex(panel.downloadController.modelEndpointPreset)
                               : 0
                 onActivated: function(index) {
-                    if (panel.hasController) {
-                        panel.semanticController.SetModelEndpointPreset(panel.endpointPresetForIndex(index))
+                    if (panel.hasDownloadController) {
+                        panel.downloadController.SetModelEndpointPreset(panel.endpointPresetForIndex(index))
                     }
                 }
             }
@@ -517,14 +527,14 @@ ColumnLayout {
             TextField {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 44
-                visible: panel.hasController && panel.semanticController.modelEndpointPreset === "custom"
-                enabled: panel.hasController && !panel.modelTaskRunning
-                text: panel.hasController ? panel.semanticController.customModelEndpoint : ""
+                visible: panel.hasDownloadController && panel.downloadController.modelEndpointPreset === "custom"
+                enabled: panel.hasDownloadController && !panel.modelTaskRunning
+                text: panel.hasDownloadController ? panel.downloadController.customModelEndpoint : ""
                 placeholderText: qsTr("https://example.com")
                 color: panel.textColor
                 onEditingFinished: {
-                    if (panel.hasController) {
-                        panel.semanticController.SetCustomModelEndpoint(text)
+                    if (panel.hasDownloadController) {
+                        panel.downloadController.SetCustomModelEndpoint(text)
                     }
                 }
             }
@@ -537,9 +547,9 @@ ColumnLayout {
             Button {
                 Layout.preferredHeight: 42
                 text: qsTr("Check")
-                enabled: panel.hasController && !panel.modelTaskRunning
+                enabled: panel.hasDownloadController && !panel.modelTaskRunning
                 Material.foreground: panel.textColor
-                onClicked: panel.semanticController.RefreshSelectedModelStatus()
+                onClicked: panel.downloadController.RefreshSelectedModelStatus()
             }
 
             Button {
@@ -547,13 +557,13 @@ ColumnLayout {
                 text: panel.modelDownloadRunning
                       ? qsTr("Cancel")
                       : qsTr("Download")
-                enabled: panel.hasController && !panel.modelActivationRunning
+                enabled: panel.hasDownloadController && !panel.modelActivationRunning
                 Material.foreground: panel.textColor
                 onClicked: {
                     if (panel.modelDownloadRunning) {
-                        panel.semanticController.CancelSelectedModelDownload()
+                        panel.downloadController.CancelSelectedModelDownload()
                     } else {
-                        panel.semanticController.StartSelectedModelDownload()
+                        panel.downloadController.StartSelectedModelDownload()
                     }
                 }
             }
@@ -561,9 +571,9 @@ ColumnLayout {
             Button {
                 Layout.preferredHeight: 42
                 text: qsTr("Delete")
-                enabled: panel.hasController && !panel.modelTaskRunning
+                enabled: panel.hasDownloadController && !panel.modelTaskRunning
                 Material.foreground: panel.dangerColor
-                onClicked: panel.semanticController.DeleteSelectedModel()
+                onClicked: panel.downloadController.DeleteSelectedModel()
             }
 
             Button {

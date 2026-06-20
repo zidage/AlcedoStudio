@@ -27,7 +27,7 @@
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
 #include "sleeve/storage_service.hpp"
-#include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
+#include "ui/alcedo_main/album_backend/model_download_controller.hpp"
 
 namespace alcedo::ui::test {
 namespace {

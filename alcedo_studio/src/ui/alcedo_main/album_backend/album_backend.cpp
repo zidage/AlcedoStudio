@@ -227,6 +227,7 @@ AlbumBackend::AlbumBackend(QObject* parent)
       image_ctrl_(*this),
       stats_(*this),
       search_(*this),
+      model_download_controller_(*this),
       semantic_generation_(*this),
       import_export_(*this),
       nikon_he_recovery_(*this),

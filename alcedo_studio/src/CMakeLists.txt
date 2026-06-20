@@ -1140,6 +1140,7 @@ add_library(AlbumBackendLib STATIC
     ui/alcedo_main/album_backend/stats_engine.cpp
     ui/alcedo_main/album_backend/search_controller.cpp
     ui/alcedo_main/album_backend/semantic_generation_controller.cpp
+    ui/alcedo_main/album_backend/model_download_controller.cpp
     ui/alcedo_main/album_backend/import_export.cpp
     ui/alcedo_main/album_backend/nikon_he_recovery_controller.cpp
     ui/alcedo_main/album_backend/editor_controller.cpp
@@ -1155,6 +1156,7 @@ add_library(AlbumBackendLib STATIC
     include/ui/alcedo_main/album_backend/stats_engine.hpp
     include/ui/alcedo_main/album_backend/search_controller.hpp
     include/ui/alcedo_main/album_backend/semantic_generation_controller.hpp
+    include/ui/alcedo_main/album_backend/model_download_controller.hpp
     include/ui/alcedo_main/album_backend/import_export.hpp
     include/ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp
     include/ui/alcedo_main/album_backend/nikon_he_recovery_types.hpp

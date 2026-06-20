@@ -25,6 +25,7 @@
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/image_controller.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
+#include "ui/alcedo_main/album_backend/model_download_controller.hpp"
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_types.hpp"
 #include "ui/alcedo_main/album_backend/project_handler.hpp"
@@ -41,6 +42,7 @@ class AlbumBackend final : public QObject {
   Q_PROPERTY(QVariantList thumbnails READ Thumbnails NOTIFY ThumbnailsChanged)
   Q_PROPERTY(QObject* thumbnailModel READ ThumbnailModel CONSTANT)
   Q_PROPERTY(QObject* adjustmentTransferController READ AdjustmentTransferControllerObject CONSTANT)
+  Q_PROPERTY(QObject* modelDownloadController READ ModelDownloadControllerObject CONSTANT)
   Q_PROPERTY(QObject* semanticGenerationController READ SemanticGenerationControllerObject CONSTANT)
   Q_PROPERTY(QVariantList folders READ Folders NOTIFY FoldersChanged)
   Q_PROPERTY(uint currentFolderId READ CurrentFolderId NOTIFY FolderSelectionChanged)
@@ -135,6 +137,7 @@ class AlbumBackend final : public QObject {
   QVariantList Thumbnails() const;
   QObject*     ThumbnailModel() { return &thumbnail_model_; }
   QObject*     AdjustmentTransferControllerObject() { return &adjustment_transfer_; }
+  QObject*     ModelDownloadControllerObject() { return &model_download_controller_; }
   QObject*     SemanticGenerationControllerObject() { return &semantic_generation_; }
   QVariantList Folders() const { return folder_ctrl_.folders(); }
   uint CurrentFolderId() const { return static_cast<uint>(folder_ctrl_.current_folder_id()); }
@@ -331,6 +334,7 @@ class AlbumBackend final : public QObject {
   friend class ImageController;
   friend class StatsEngine;
   friend class SearchController;
+  friend class ModelDownloadController;
   friend class SemanticGenerationController;
   friend class ImportExportHandler;
   friend class NikonHeRecoveryController;
@@ -378,6 +382,7 @@ class AlbumBackend final : public QObject {
   StatsEngine                  stats_;
   SearchController             search_;
   alcedo::ModelDownloadService model_download_service_;
+  ModelDownloadController      model_download_controller_;
   SemanticGenerationController semantic_generation_;
   ImportExportHandler          import_export_;
   NikonHeRecoveryController    nikon_he_recovery_;

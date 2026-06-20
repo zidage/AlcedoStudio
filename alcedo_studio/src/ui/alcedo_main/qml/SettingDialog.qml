@@ -735,6 +735,7 @@ Dialog {
                                     Layout.rightMargin: 34
                                     Layout.bottomMargin: 26
                                     semanticController: albumBackend.semanticGenerationController
+                                    downloadController: albumBackend.modelDownloadController
                                     importPreference: dialog.pendingSemanticImportPreference
                                     primaryAccent: dialog.primaryAccent
                                     secondaryAccent: dialog.secondaryAccent
