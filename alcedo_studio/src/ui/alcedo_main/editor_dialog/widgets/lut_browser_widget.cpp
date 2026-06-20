@@ -19,10 +19,14 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QScrollBar>
+#include <QSettings>
+#include <QSignalBlocker>
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QVariant>
 #include <algorithm>
+#include <functional>
+#include <utility>
 
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/alcedo_main/editor_dialog/widgets/history_cards.hpp"
@@ -31,17 +35,62 @@
 namespace alcedo::ui {
 namespace {
 
-constexpr int kListIconSize   = 14;
-constexpr int kCheckBadgeSize = 14;
-constexpr int kRowHeight      = 32;
+constexpr int  kListIconSize          = 14;
+constexpr int  kCheckBadgeSize        = 14;
+constexpr int  kRowHeight             = 34;
+constexpr char kFavoriteSettingsKey[] = "editor/lut_browser/favorite_paths";
+
+auto           SettingsPathForEntry(const lut_catalog::LutCatalogEntry& entry) -> QString {
+  return QString::fromStdString(entry.path_).trimmed();
+}
+
+auto CanFavoriteEntry(const lut_catalog::LutCatalogEntry& entry) -> bool {
+  return !SettingsPathForEntry(entry).isEmpty() &&
+         (entry.kind_ == lut_catalog::LutCatalogEntryKind::File ||
+          entry.kind_ == lut_catalog::LutCatalogEntryKind::MissingCurrent);
+}
 
 auto BuildLutEntriesListStyle() -> QString {
-  return AppTheme::EditorListWidgetStyle() +
-         QStringLiteral("QListWidget {"
-                        "  background: transparent;"
-                        "  border: none;"
-                        "}"
-                        "QListWidget::item { border: none; }");
+  const auto& theme = AppTheme::Instance();
+  return QStringLiteral(
+             "QListWidget {"
+             "  background: transparent;"
+             "  border: none;"
+             "  padding: 0px;"
+             "}"
+             "QListWidget::item {"
+             "  border: none;"
+             "  padding: 0px;"
+             "}"
+             "QListWidget::item:selected {"
+             "  background: transparent;"
+             "}"
+             "QScrollBar:vertical {"
+             "  background: transparent;"
+             "  width: 6px;"
+             "  margin: 4px 1px 4px 0px;"
+             "}"
+             "QScrollBar::handle:vertical {"
+             "  background: %1;"
+             "  border-radius: 3px;"
+             "  min-height: 24px;"
+             "}"
+             "QScrollBar::handle:vertical:hover,"
+             "QScrollBar::handle:vertical:pressed {"
+             "  background: %2;"
+             "}"
+             "QScrollBar::add-line:vertical,"
+             "QScrollBar::sub-line:vertical {"
+             "  height: 0px;"
+             "}"
+             "QScrollBar::add-page:vertical,"
+             "QScrollBar::sub-page:vertical {"
+             "  background: transparent;"
+             "}")
+      .arg(QColor(theme.textMutedColor().red(), theme.textMutedColor().green(),
+                  theme.textMutedColor().blue(), 132)
+               .name(QColor::HexArgb),
+           theme.accentColor().name(QColor::HexRgb));
 }
 
 auto BuildSearchEditStyle() -> QString {
@@ -62,8 +111,7 @@ auto BuildSearchEditStyle() -> QString {
              "  background: rgba(0, 0, 0, 0.2);"
              "  border: 1px solid %4;"
              "}")
-      .arg(theme.textColor().name(QColor::HexRgb),
-           theme.accentColor().name(QColor::HexRgb),
+      .arg(theme.textColor().name(QColor::HexRgb), theme.accentColor().name(QColor::HexRgb),
            theme.bgCanvasColor().name(QColor::HexRgb),
            QColor(theme.accentColor().red(), theme.accentColor().green(),
                   theme.accentColor().blue(), 200)
@@ -71,19 +119,64 @@ auto BuildSearchEditStyle() -> QString {
 }
 
 auto BuildIconToolButtonStyle() -> QString {
+  const auto& theme = AppTheme::Instance();
   return QStringLiteral(
-      "QToolButton {"
-      "  background: rgba(255, 255, 255, 0.04);"
-      "  border-radius: 6px;"
-      "  padding: 0px;"
-      "}"
-      "QToolButton:hover {"
-      "  background: rgba(255, 255, 255, 0.08);"
-      "}"
-      "QToolButton:pressed {"
-      "  background: rgba(255, 255, 255, 0.12);"
-      "}"
-      "QToolButton::menu-indicator { image: none; width: 0px; }");
+             "QToolButton {"
+             "  background: rgba(255, 255, 255, 0.04);"
+             "  color: %1;"
+             "  border-radius: 6px;"
+             "  padding: 0px;"
+             "}"
+             "QToolButton:hover {"
+             "  background: rgba(255, 255, 255, 0.08);"
+             "}"
+             "QToolButton:pressed {"
+             "  background: rgba(255, 255, 255, 0.12);"
+             "}"
+             "QToolButton::menu-indicator { image: none; width: 0px; }")
+      .arg(theme.textColor().name(QColor::HexRgb));
+}
+
+auto BuildFilterButtonStyle(bool active) -> QString {
+  const auto& theme = AppTheme::Instance();
+  if (active) {
+    return QStringLiteral(
+               "QToolButton {"
+               "  color: %1;"
+               "  background: %2;"
+               "  border: 1px solid %3;"
+               "  border-radius: 6px;"
+               "  padding: 0px;"
+               "}"
+               "QToolButton:hover {"
+               "  background: %4;"
+               "}")
+        .arg(theme.bgCanvasColor().name(QColor::HexRgb),
+             QColor(theme.accentColor().red(), theme.accentColor().green(),
+                    theme.accentColor().blue(), 224)
+                 .name(QColor::HexArgb),
+             QColor(theme.accentColor().red(), theme.accentColor().green(),
+                    theme.accentColor().blue(), 170)
+                 .name(QColor::HexArgb),
+             theme.accentSecondaryColor().name(QColor::HexRgb));
+  }
+
+  return QStringLiteral(
+             "QToolButton {"
+             "  color: %1;"
+             "  background: transparent;"
+             "  border: 1px solid transparent;"
+             "  border-radius: 6px;"
+             "  padding: 0px;"
+             "}"
+             "QToolButton:hover {"
+             "  color: %2;"
+             "  background: %3;"
+             "}")
+      .arg(theme.textMutedColor().name(QColor::HexRgb), theme.textColor().name(QColor::HexRgb),
+           QColor(theme.hoverColor().red(), theme.hoverColor().green(), theme.hoverColor().blue(),
+                  210)
+               .name(QColor::HexArgb));
 }
 
 auto EntryMatchesSearchToken(const lut_catalog::LutCatalogEntry& entry, const QString& token)
@@ -141,6 +234,57 @@ auto BuildTypeBadgeText(const lut_catalog::LutCatalogEntry& entry) -> QString {
   return {};
 }
 
+class FavoriteStarButton final : public QToolButton {
+ public:
+  explicit FavoriteStarButton(QWidget* parent = nullptr) : QToolButton(parent) {
+    setCheckable(true);
+    setFixedSize(22, 22);
+    setCursor(Qt::PointingHandCursor);
+    setFocusPolicy(Qt::NoFocus);
+    setStyleSheet(QStringLiteral("QToolButton { background: transparent; border: none; }"));
+  }
+
+ protected:
+  void paintEvent(QPaintEvent*) override {
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    const auto& theme = AppTheme::Instance();
+    if (underMouse() && isEnabled()) {
+      p.setPen(Qt::NoPen);
+      p.setBrush(QColor(theme.hoverColor().red(), theme.hoverColor().green(),
+                        theme.hoverColor().blue(), 210));
+      p.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 5, 5);
+    }
+
+    QPainterPath star;
+    star.moveTo(11.0, 3.3);
+    star.lineTo(13.55, 8.45);
+    star.lineTo(19.25, 9.25);
+    star.lineTo(15.1, 13.25);
+    star.lineTo(16.1, 18.95);
+    star.lineTo(11.0, 16.25);
+    star.lineTo(5.9, 18.95);
+    star.lineTo(6.9, 13.25);
+    star.lineTo(2.75, 9.25);
+    star.lineTo(8.45, 8.45);
+    star.closeSubpath();
+
+    // Warm gold reads as "favorited" without fighting the accent-colored selection
+    // border, and stays legible against the dark panel background.
+    const QColor active_color = QColor(0xF5, 0xC5, 0x18);
+    QColor       idle_color   = theme.textMutedColor();
+    idle_color.setAlpha(isEnabled() ? 185 : 80);
+
+    QPen pen(isChecked() ? active_color : idle_color);
+    pen.setWidthF(1.6);
+    pen.setJoinStyle(Qt::RoundJoin);
+    p.setPen(pen);
+    p.setBrush(isChecked() ? QBrush(active_color) : Qt::NoBrush);
+    p.drawPath(star);
+  }
+};
+
 class CheckBadge final : public QWidget {
  public:
   explicit CheckBadge(QWidget* parent = nullptr) : QWidget(parent) {
@@ -177,15 +321,22 @@ class LutEntryItemWidget final : public QFrame {
  public:
   explicit LutEntryItemWidget(QWidget* parent = nullptr) : QFrame(parent) {
     auto* layout = new QHBoxLayout(this);
-    layout->setContentsMargins(8, 4, 8, 4);
-    layout->setSpacing(6);
+    layout->setContentsMargins(6, 2, 8, 2);
+    layout->setSpacing(5);
+
+    favorite_btn_ = new FavoriteStarButton(this);
+    QObject::connect(favorite_btn_, &QToolButton::clicked, this, [this]() {
+      if (favorite_path_.isEmpty() || !favorite_toggled_) {
+        return;
+      }
+      favorite_toggled_(favorite_path_);
+    });
 
     icon_label_ = new QLabel(this);
     icon_label_->setFixedSize(kListIconSize, kListIconSize);
     icon_label_->setAlignment(Qt::AlignCenter);
     icon_label_->setPixmap(
-        QIcon(QStringLiteral(":/panel_icons/box.svg"))
-            .pixmap(kListIconSize, kListIconSize));
+        QIcon(QStringLiteral(":/panel_icons/box.svg")).pixmap(kListIconSize, kListIconSize));
 
     title_label_ = new ElidedLabel({}, this);
     title_label_->setStyleSheet(AppTheme::EditorLabelStyle(AppTheme::Instance().textColor()));
@@ -195,8 +346,7 @@ class LutEntryItemWidget final : public QFrame {
     type_label_->hide();
 
     size_label_ = new QLabel(this);
-    size_label_->setStyleSheet(
-        AppTheme::EditorLabelStyle(AppTheme::Instance().textMutedColor()));
+    size_label_->setStyleSheet(AppTheme::EditorLabelStyle(AppTheme::Instance().textMutedColor()));
     AppTheme::MarkFontRole(size_label_, AppTheme::FontRole::DataCaption);
 
     status_label_ = MakePillLabel({}, this);
@@ -205,6 +355,7 @@ class LutEntryItemWidget final : public QFrame {
     check_badge_ = new CheckBadge(this);
     check_badge_->hide();
 
+    layout->addWidget(favorite_btn_, 0, Qt::AlignVCenter);
     layout->addWidget(icon_label_, 0, Qt::AlignVCenter);
     layout->addWidget(title_label_, 1, Qt::AlignVCenter);
     layout->addWidget(status_label_, 0, Qt::AlignVCenter);
@@ -213,8 +364,21 @@ class LutEntryItemWidget final : public QFrame {
     layout->addWidget(check_badge_, 0, Qt::AlignVCenter);
   }
 
-  void Bind(const lut_catalog::LutCatalogEntry& entry) {
-    entry_ = entry;
+  void Bind(const lut_catalog::LutCatalogEntry& entry, bool is_favorite,
+            std::function<void(const QString&)> favorite_toggled) {
+    entry_                  = entry;
+    favorite_toggled_       = std::move(favorite_toggled);
+    favorite_path_          = SettingsPathForEntry(entry);
+
+    const bool can_favorite = CanFavoriteEntry(entry);
+    favorite_btn_->setVisible(can_favorite);
+    favorite_btn_->setEnabled(can_favorite);
+    favorite_btn_->setToolTip(is_favorite ? Tr("Remove from favorites") : Tr("Add to favorites"));
+    {
+      const QSignalBlocker blocker(favorite_btn_);
+      favorite_btn_->setChecked(is_favorite);
+    }
+
     title_label_->SetRawText(entry.display_name_);
 
     const QString type_text = BuildTypeBadgeText(entry);
@@ -229,25 +393,26 @@ class LutEntryItemWidget final : public QFrame {
     status_label_->setText(entry.status_text_);
 
     if (entry.kind_ == lut_catalog::LutCatalogEntryKind::MissingCurrent) {
-      status_label_->setStyleSheet(QStringLiteral("QLabel {"
-                                                  "  color: #E5A040;"
-                                                  "  background: rgba(229, 160, 64, 0.12);"
-                                                  "  border: 1px solid rgba(229, 160, 64, 0.3);"
-                                                  "  border-radius: 4px;"
-                                                  "  padding: 2px 8px;"
-                                                  "}"));
+      status_label_->setStyleSheet(
+          QStringLiteral("QLabel {"
+                         "  color: #E5A040;"
+                         "  background: rgba(229, 160, 64, 0.12);"
+                         "  border: 1px solid rgba(229, 160, 64, 0.3);"
+                         "  border-radius: 4px;"
+                         "  padding: 2px 8px;"
+                         "}"));
     } else if (!entry.valid_) {
-      status_label_->setStyleSheet(QStringLiteral("QLabel {"
-                                                  "  color: #E05C5C;"
-                                                  "  background: rgba(224, 92, 92, 0.12);"
-                                                  "  border: 1px solid rgba(224, 92, 92, 0.3);"
-                                                  "  border-radius: 4px;"
-                                                  "  padding: 2px 8px;"
-                                                  "}"));
+      status_label_->setStyleSheet(
+          QStringLiteral("QLabel {"
+                         "  color: #E05C5C;"
+                         "  background: rgba(224, 92, 92, 0.12);"
+                         "  border: 1px solid rgba(224, 92, 92, 0.3);"
+                         "  border-radius: 4px;"
+                         "  padding: 2px 8px;"
+                         "}"));
     }
 
-    icon_label_->setVisible(entry.kind_ == lut_catalog::LutCatalogEntryKind::File ||
-                            entry.kind_ == lut_catalog::LutCatalogEntryKind::MissingCurrent);
+    icon_label_->setVisible(false);
     icon_label_->setStyleSheet(QStringLiteral("QLabel { background: transparent; }"));
 
     SetSelected(false);
@@ -256,53 +421,67 @@ class LutEntryItemWidget final : public QFrame {
   void SetSelected(bool selected) {
     const auto& theme = AppTheme::Instance();
 
-    QString border_color = QStringLiteral("transparent");
-    QString background   = QStringLiteral("transparent");
-    QString title_color  = theme.textColor().name(QColor::HexRgb);
-    QString size_color   = theme.textMutedColor().name(QColor::HexRgb);
+    selected_ = selected && entry_.selectable_;
+
+    // No fill on selection — only the painted outline (see paintEvent) marks the
+    // active row, so text keeps its normal color instead of inverting against a
+    // tinted background.
+    QString title_color = theme.textColor().name(QColor::HexRgb);
+    QString size_color  = theme.textMutedColor().name(QColor::HexRgb);
 
     if (!entry_.valid_) {
       title_color = theme.textMutedColor().name(QColor::HexRgb);
       size_color  = theme.dividerColor().name(QColor::HexRgb);
     }
 
-    if (selected && entry_.selectable_) {
-      border_color = QColor(theme.accentColor().red(), theme.accentColor().green(),
-                            theme.accentColor().blue(), 160)
-                         .name(QColor::HexArgb);
-      background  = theme.selectedTintColor().name(QColor::HexArgb);
-      title_color = theme.textColor().name(QColor::HexRgb);
-    }
-
-    setStyleSheet(QStringLiteral("QFrame {"
-                                 "  background: %1;"
-                                 "  border: 1px solid %2;"
-                                 "  border-radius: 10px;"
-                                 "}"
-                                 "QFrame:hover {"
-                                 "  background: rgba(255, 255, 255, 0.05);"
-                                 "}"
-                                 "QLabel { border: none; background: transparent; }")
-                      .arg(background, border_color));
-
     title_label_->setStyleSheet(AppTheme::EditorLabelStyle(QColor(title_color)));
     size_label_->setStyleSheet(AppTheme::EditorLabelStyle(QColor(size_color)));
 
-    check_badge_->setVisible(selected && entry_.selectable_ && entry_.valid_);
+    check_badge_->setVisible(false);
+    update();
+  }
+
+ protected:
+  void paintEvent(QPaintEvent*) override {
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    // Subtle hover wash; lighter when the row is already outlined so the
+    // selection border stays the dominant signal.
+    if (underMouse() && isEnabled()) {
+      p.setPen(Qt::NoPen);
+      p.setBrush(QColor(255, 255, 255, selected_ ? 14 : 22));
+      p.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), 6, 6);
+    }
+
+    if (selected_) {
+      const auto& theme = AppTheme::Instance();
+      QColor      c     = theme.accentColor();
+      c.setAlpha(215);
+      QPen pen(c);
+      pen.setWidthF(1.4);
+      p.setPen(pen);
+      p.setBrush(Qt::NoBrush);
+      p.drawRoundedRect(QRectF(rect()).adjusted(0.7, 0.7, -0.7, -0.7), 6, 6);
+    }
   }
 
  private:
-  lut_catalog::LutCatalogEntry entry_{};
-  QLabel*                      icon_label_   = nullptr;
-  ElidedLabel*                 title_label_  = nullptr;
-  QLabel*                      type_label_   = nullptr;
-  QLabel*                      size_label_   = nullptr;
-  QLabel*                      status_label_ = nullptr;
-  CheckBadge*                  check_badge_  = nullptr;
+  lut_catalog::LutCatalogEntry        entry_{};
+  bool                                selected_ = false;
+  QString                             favorite_path_{};
+  std::function<void(const QString&)> favorite_toggled_{};
+  FavoriteStarButton*                 favorite_btn_ = nullptr;
+  QLabel*                             icon_label_   = nullptr;
+  ElidedLabel*                        title_label_  = nullptr;
+  QLabel*                             type_label_   = nullptr;
+  QLabel*                             size_label_   = nullptr;
+  QLabel*                             status_label_ = nullptr;
+  CheckBadge*                         check_badge_  = nullptr;
 };
 
-auto MakeIconToolButton(QWidget* parent, const QString& icon_path,
-                        const QString& tooltip) -> QToolButton* {
+auto MakeIconToolButton(QWidget* parent, const QString& icon_path, const QString& tooltip)
+    -> QToolButton* {
   auto* btn = new QToolButton(parent);
   btn->setFixedSize(26, 26);
   btn->setIcon(QIcon(icon_path));
@@ -316,25 +495,28 @@ auto MakeIconToolButton(QWidget* parent, const QString& icon_path,
 }  // namespace
 
 LutBrowserWidget::LutBrowserWidget(QWidget* parent) : QWidget(parent) {
+  LoadFavoriteSettings();
+
   const auto& theme = AppTheme::Instance();
   setObjectName(QStringLiteral("LutBrowserCard"));
   setMinimumHeight(380);
   setAttribute(Qt::WA_StyledBackground, true);
   setStyleSheet(QStringLiteral("QWidget#LutBrowserCard {"
                                "  background: %1;"
+                               "  border: 1px solid %2;"
                                "  border-radius: %3px;"
                                "}")
                     .arg(QColor(theme.bgPanelColor().red(), theme.bgPanelColor().green(),
-                                theme.bgPanelColor().blue(), 210)
+                                theme.bgPanelColor().blue(), 220)
                              .name(QColor::HexArgb),
                          QColor(theme.glassStrokeColor().red(), theme.glassStrokeColor().green(),
                                 theme.glassStrokeColor().blue(), 140)
-                             .name(QColor::HexArgb))
-                    .arg(theme.panelRadius()));
+                             .name(QColor::HexArgb),
+                         QString::number(theme.panelRadius())));
 
   auto* root = new QVBoxLayout(this);
-  root->setContentsMargins(10, 8, 10, 8);
-  root->setSpacing(6);
+  root->setContentsMargins(8, 8, 8, 8);
+  root->setSpacing(7);
 
   auto* search_row    = new QWidget(this);
   auto* search_layout = new QHBoxLayout(search_row);
@@ -366,16 +548,16 @@ LutBrowserWidget::LutBrowserWidget(QWidget* parent) : QWidget(parent) {
 
   search_layout->addWidget(search_edit_host, 1);
 
-  sort_btn_   = MakeIconToolButton(search_row, QStringLiteral(":/panel_icons/sort.svg"),
-                                   Tr("Sort options"));
+  sort_btn_ =
+      MakeIconToolButton(search_row, QStringLiteral(":/panel_icons/sort.svg"), Tr("Sort options"));
   folder_btn_ = MakeIconToolButton(search_row, QStringLiteral(":/panel_icons/folder-open.svg"),
                                    Tr("Open LUT folder"));
   sort_btn_->setPopupMode(QToolButton::InstantPopup);
 
-  auto* sort_menu          = new QMenu(sort_btn_);
-  auto* sort_field_group   = new QActionGroup(sort_menu);
-  sort_field_name_action_  = sort_menu->addAction(QString{});
-  sort_field_time_action_  = sort_menu->addAction(QString{});
+  auto* sort_menu         = new QMenu(sort_btn_);
+  auto* sort_field_group  = new QActionGroup(sort_menu);
+  sort_field_name_action_ = sort_menu->addAction(QString{});
+  sort_field_time_action_ = sort_menu->addAction(QString{});
   sort_field_name_action_->setCheckable(true);
   sort_field_time_action_->setCheckable(true);
   sort_field_name_action_->setData(static_cast<int>(SortField::Name));
@@ -411,24 +593,75 @@ LutBrowserWidget::LutBrowserWidget(QWidget* parent) : QWidget(parent) {
   divider->setFrameShape(QFrame::HLine);
   divider->setFrameShadow(QFrame::Plain);
   divider->setFixedHeight(1);
-  divider->setStyleSheet(
-      QStringLiteral("QFrame { background: %1; border: none; }")
-          .arg(QColor(AppTheme::Instance().dividerColor().red(),
-                      AppTheme::Instance().dividerColor().green(),
-                      AppTheme::Instance().dividerColor().blue(), 120)
-                   .name(QColor::HexArgb)));
+  divider->setStyleSheet(QStringLiteral("QFrame { background: %1; border: none; }")
+                             .arg(QColor(AppTheme::Instance().dividerColor().red(),
+                                         AppTheme::Instance().dividerColor().green(),
+                                         AppTheme::Instance().dividerColor().blue(), 120)
+                                      .name(QColor::HexArgb)));
   root->addWidget(divider, 0);
 
-  entries_list_ = new QListWidget(this);
-  entries_list_->setSpacing(4);
+  auto* browser_body = new QWidget(this);
+  auto* body_layout  = new QHBoxLayout(browser_body);
+  body_layout->setContentsMargins(0, 0, 0, 0);
+  body_layout->setSpacing(8);
+
+  auto* filter_rail = new QWidget(browser_body);
+  filter_rail->setObjectName(QStringLiteral("LutFilterRail"));
+  filter_rail->setFixedWidth(44);
+  filter_rail->setStyleSheet(
+      QStringLiteral("QWidget#LutFilterRail {"
+                     "  background: %1;"
+                     "  border: none;"
+                     "  border-radius: 8px;"
+                     "}")
+          .arg(QColor(theme.bgCanvasColor().red(), theme.bgCanvasColor().green(),
+                      theme.bgCanvasColor().blue(), 160)
+                   .name(QColor::HexArgb)));
+  auto* filter_layout = new QVBoxLayout(filter_rail);
+  filter_layout->setContentsMargins(5, 5, 5, 5);
+  filter_layout->setSpacing(5);
+
+  favorites_filter_btn_ = new QToolButton(filter_rail);
+  favorites_filter_btn_->setText(QString::fromUtf8("\xE2\x98\x85"));
+  favorites_filter_btn_->setCheckable(true);
+  favorites_filter_btn_->setFixedSize(32, 32);
+  favorites_filter_btn_->setCursor(Qt::PointingHandCursor);
+  favorites_filter_btn_->setFocusPolicy(Qt::NoFocus);
+  AppTheme::MarkFontRole(favorites_filter_btn_, AppTheme::FontRole::DataBodyStrong);
+
+  all_filter_btn_ = new QToolButton(filter_rail);
+  all_filter_btn_->setText(QStringLiteral("ALL"));
+  all_filter_btn_->setCheckable(true);
+  all_filter_btn_->setFixedSize(32, 32);
+  all_filter_btn_->setCursor(Qt::PointingHandCursor);
+  all_filter_btn_->setFocusPolicy(Qt::NoFocus);
+  AppTheme::MarkFontRole(all_filter_btn_, AppTheme::FontRole::DataCaption);
+
+  QObject::connect(favorites_filter_btn_, &QToolButton::clicked, this,
+                   [this]() { SetEntryFilter(EntryFilter::Favorites); });
+  QObject::connect(all_filter_btn_, &QToolButton::clicked, this,
+                   [this]() { SetEntryFilter(EntryFilter::All); });
+
+  filter_layout->addWidget(favorites_filter_btn_, 0, Qt::AlignHCenter);
+  filter_layout->addWidget(all_filter_btn_, 0, Qt::AlignHCenter);
+  filter_layout->addStretch(1);
+  body_layout->addWidget(filter_rail, 0);
+
+  auto* entries_panel  = new QWidget(browser_body);
+  auto* entries_layout = new QVBoxLayout(entries_panel);
+  entries_layout->setContentsMargins(0, 0, 0, 0);
+  entries_layout->setSpacing(5);
+
+  entries_list_ = new QListWidget(entries_panel);
+  entries_list_->setSpacing(2);
   entries_list_->setSelectionMode(QAbstractItemView::SingleSelection);
   entries_list_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
   entries_list_->setFocusPolicy(Qt::NoFocus);
   entries_list_->setStyleSheet(BuildLutEntriesListStyle());
   entries_list_->setFrameShape(QFrame::NoFrame);
-  root->addWidget(entries_list_, 1);
+  entries_layout->addWidget(entries_list_, 1);
 
-  auto* summary_row    = new QWidget(this);
+  auto* summary_row    = new QWidget(entries_panel);
   auto* summary_layout = new QHBoxLayout(summary_row);
   summary_layout->setContentsMargins(2, 0, 2, 0);
   summary_layout->setSpacing(6);
@@ -440,15 +673,17 @@ LutBrowserWidget::LutBrowserWidget(QWidget* parent) : QWidget(parent) {
 
   summary_layout->addWidget(search_summary_label_, 0);
   summary_layout->addStretch(1);
-  root->addWidget(summary_row, 0);
+  entries_layout->addWidget(summary_row, 0);
 
-  status_label_ = new QLabel(this);
+  status_label_ = new QLabel(entries_panel);
   status_label_->setWordWrap(true);
-  status_label_->setStyleSheet(
-      AppTheme::EditorLabelStyle(AppTheme::Instance().textMutedColor()));
+  status_label_->setStyleSheet(AppTheme::EditorLabelStyle(AppTheme::Instance().textMutedColor()));
   AppTheme::MarkFontRole(status_label_, AppTheme::FontRole::DataCaption);
   status_label_->hide();
-  root->addWidget(status_label_, 0);
+  entries_layout->addWidget(status_label_, 0);
+
+  body_layout->addWidget(entries_panel, 1);
+  root->addWidget(browser_body, 1);
 
   QObject::connect(search_edit_, &QLineEdit::textChanged, this, [this](const QString&) {
     const QString selected_path = entries_list_ && entries_list_->currentItem()
@@ -528,6 +763,13 @@ void LutBrowserWidget::RetranslateUi() {
   if (sort_btn_) {
     sort_btn_->setToolTip(Tr("Sort options"));
   }
+  if (favorites_filter_btn_) {
+    favorites_filter_btn_->setToolTip(Tr("Favorites"));
+  }
+  if (all_filter_btn_) {
+    all_filter_btn_->setToolTip(Tr("All LUTs"));
+  }
+  RefreshFilterButtonStyles();
   UpdateSearchResultSummary();
 }
 
@@ -558,8 +800,7 @@ void LutBrowserWidget::SetDirectoryInfo(const QString& directory_text, const QSt
 }
 
 void LutBrowserWidget::SetEntries(const std::vector<lut_catalog::LutCatalogEntry>& entries,
-                                  const QString& selected_path,
-                                  bool           preserve_scroll_position) {
+                                  const QString& selected_path, bool preserve_scroll_position) {
   source_entries_ = entries;
   RebuildVisibleEntries(selected_path, preserve_scroll_position);
 }
@@ -623,6 +864,9 @@ void LutBrowserWidget::RebuildVisibleEntries(const QString& preferred_selected_p
     if (!EntryMatchesSearchToken(entry, token)) {
       continue;
     }
+    if (active_filter_ == EntryFilter::Favorites && !IsFavoriteEntry(entry)) {
+      continue;
+    }
     if (entry.kind_ == lut_catalog::LutCatalogEntryKind::File) {
       file_entries.push_back(entry);
       continue;
@@ -677,7 +921,8 @@ void LutBrowserWidget::RebuildVisibleEntries(const QString& preferred_selected_p
     item->setData(Qt::UserRole, QString::fromStdString(entry.path_));
 
     auto* row_widget = new LutEntryItemWidget(entries_list_);
-    row_widget->Bind(entry);
+    row_widget->Bind(entry, IsFavoriteEntry(entry),
+                     [this](const QString& path) { ToggleFavoritePath(path); });
     entries_list_->setItemWidget(item, row_widget);
 
     if (!preferred_selected_path.isEmpty() &&
@@ -722,7 +967,22 @@ void LutBrowserWidget::UpdateSearchResultSummary() {
                                      [](const lut_catalog::LutCatalogEntry& entry) {
                                        return entry.kind_ == lut_catalog::LutCatalogEntryKind::File;
                                      }));
-  const bool has_search = search_edit_ && !search_edit_->text().trimmed().isEmpty();
+  const int  favorite_file_count = static_cast<int>(std::count_if(
+      source_entries_.begin(), source_entries_.end(),
+      [this](const lut_catalog::LutCatalogEntry& entry) {
+        return entry.kind_ == lut_catalog::LutCatalogEntryKind::File && IsFavoriteEntry(entry);
+      }));
+  const bool has_search          = search_edit_ && !search_edit_->text().trimmed().isEmpty();
+
+  if (active_filter_ == EntryFilter::Favorites) {
+    if (!has_search) {
+      search_summary_label_->setText(Tr("%1 Favorites").arg(favorite_file_count));
+      return;
+    }
+    search_summary_label_->setText(
+        Tr("%1/%2 Favorites").arg(visible_file_count).arg(favorite_file_count));
+    return;
+  }
 
   if (!has_search) {
     search_summary_label_->setText(Tr("%1 Available").arg(total_file_count));
@@ -744,6 +1004,88 @@ auto LutBrowserWidget::CurrentSortOrder() const -> SortOrder {
     return SortOrder::Descending;
   }
   return SortOrder::Ascending;
+}
+
+void LutBrowserWidget::SetEntryFilter(EntryFilter filter) {
+  if (active_filter_ == filter) {
+    RefreshFilterButtonStyles();
+    return;
+  }
+
+  const QString selected_path = entries_list_ && entries_list_->currentItem()
+                                    ? entries_list_->currentItem()->data(Qt::UserRole).toString()
+                                    : QString{};
+  active_filter_              = filter;
+  RefreshFilterButtonStyles();
+  RebuildVisibleEntries(selected_path, true);
+}
+
+void LutBrowserWidget::RefreshFilterButtonStyles() {
+  if (favorites_filter_btn_) {
+    const bool           active = active_filter_ == EntryFilter::Favorites;
+    const QSignalBlocker blocker(favorites_filter_btn_);
+    favorites_filter_btn_->setChecked(active);
+    favorites_filter_btn_->setStyleSheet(BuildFilterButtonStyle(active));
+  }
+  if (all_filter_btn_) {
+    const bool           active = active_filter_ == EntryFilter::All;
+    const QSignalBlocker blocker(all_filter_btn_);
+    all_filter_btn_->setChecked(active);
+    all_filter_btn_->setStyleSheet(BuildFilterButtonStyle(active));
+  }
+}
+
+void LutBrowserWidget::LoadFavoriteSettings() {
+  favorite_lut_paths_.clear();
+
+  const QStringList values =
+      QSettings().value(QString::fromLatin1(kFavoriteSettingsKey)).toStringList();
+  for (const QString& value : values) {
+    const QString path = value.trimmed();
+    if (!path.isEmpty()) {
+      favorite_lut_paths_.insert(path);
+    }
+  }
+}
+
+void LutBrowserWidget::SaveFavoriteSettings() const {
+  QStringList values;
+  values.reserve(favorite_lut_paths_.size());
+  for (const QString& path : favorite_lut_paths_) {
+    if (!path.trimmed().isEmpty()) {
+      values.push_back(path);
+    }
+  }
+  values.sort(Qt::CaseInsensitive);
+  QSettings().setValue(QString::fromLatin1(kFavoriteSettingsKey), values);
+}
+
+auto LutBrowserWidget::IsFavoritePath(const QString& path) const -> bool {
+  return !path.trimmed().isEmpty() && favorite_lut_paths_.contains(path.trimmed());
+}
+
+auto LutBrowserWidget::IsFavoriteEntry(const lut_catalog::LutCatalogEntry& entry) const -> bool {
+  return CanFavoriteEntry(entry) && IsFavoritePath(SettingsPathForEntry(entry));
+}
+
+void LutBrowserWidget::ToggleFavoritePath(const QString& path) {
+  const QString normalized_path = path.trimmed();
+  if (normalized_path.isEmpty()) {
+    return;
+  }
+
+  if (favorite_lut_paths_.contains(normalized_path)) {
+    favorite_lut_paths_.remove(normalized_path);
+  } else {
+    favorite_lut_paths_.insert(normalized_path);
+  }
+  SaveFavoriteSettings();
+
+  const QString selected_path = entries_list_ && entries_list_->currentItem()
+                                    ? entries_list_->currentItem()->data(Qt::UserRole).toString()
+                                    : QString{};
+  RebuildVisibleEntries(selected_path, true);
+  RefreshFilterButtonStyles();
 }
 
 void LutBrowserWidget::RefreshSelectionStyles() {
