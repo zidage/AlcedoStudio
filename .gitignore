@@ -1075,6 +1075,9 @@ alcedo_studio/src/third_party/*
 !alcedo_studio/src/third_party/cmake/
 !alcedo_studio/src/third_party/cmake/FindGLIB2.cmake
 !alcedo_studio/src/third_party/libultrahdr/
+!alcedo_studio/src/third_party/libraw
+!alcedo_studio/src/third_party/libraw/
+!alcedo_studio/src/third_party/libraw/**
 !alcedo_studio/src/third_party/protobuf/
 !alcedo_studio/src/third_party/grpc/
 !alcedo_studio/src/third_party/include/

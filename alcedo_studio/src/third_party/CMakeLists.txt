@@ -1,3 +1,98 @@
+set(PUERHLAB_LIBRAW_SOURCE_DIR
+    "${CMAKE_CURRENT_SOURCE_DIR}/libraw"
+    CACHE PATH
+    "Path to the bundled LibRaw source checkout.")
+option(PUERHLAB_USE_BUNDLED_LIBRAW
+    "Build the bundled LibRaw checkout instead of a system LibRaw package."
+    ON)
+
+set(PUERHLAB_LIBRAW_AVAILABLE OFF)
+if(PUERHLAB_USE_BUNDLED_LIBRAW
+   AND EXISTS "${PUERHLAB_LIBRAW_SOURCE_DIR}/libraw/libraw.h"
+   AND EXISTS "${PUERHLAB_LIBRAW_SOURCE_DIR}/src/libraw_c_api.cpp")
+    find_package(Threads REQUIRED)
+
+    file(GLOB_RECURSE PUERHLAB_LIBRAW_SOURCES CONFIGURE_DEPENDS
+        "${PUERHLAB_LIBRAW_SOURCE_DIR}/src/*.cpp")
+    list(FILTER PUERHLAB_LIBRAW_SOURCES EXCLUDE REGEX
+        ".*/src/(preprocessing/preprocessing_ph|postprocessing/postprocessing_ph|write/write_ph)\\.cpp$")
+
+    add_library(puerhlab_libraw STATIC ${PUERHLAB_LIBRAW_SOURCES})
+    set_target_properties(puerhlab_libraw PROPERTIES
+        AUTOMOC OFF
+        AUTOUIC OFF
+        AUTORCC OFF)
+    target_include_directories(puerhlab_libraw
+        SYSTEM
+        PUBLIC
+            "${PUERHLAB_LIBRAW_SOURCE_DIR}")
+    target_link_libraries(puerhlab_libraw PUBLIC Threads::Threads)
+    target_compile_options(puerhlab_libraw PRIVATE
+        $<$<CXX_COMPILER_ID:MSVC>:/w>
+        $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-w>)
+    if(WIN32)
+        target_compile_definitions(puerhlab_libraw PUBLIC LIBRAW_NODLL)
+    endif()
+
+    if(NOT TARGET libraw::raw_r)
+        add_library(libraw::raw_r ALIAS puerhlab_libraw)
+    endif()
+    set(PUERHLAB_LIBRAW_AVAILABLE ON)
+else()
+    if(PUERHLAB_USE_BUNDLED_LIBRAW)
+        message(WARNING
+            "Bundled LibRaw source was not found at ${PUERHLAB_LIBRAW_SOURCE_DIR}. "
+            "Run `git submodule update --init --recursive alcedo_studio/src/third_party/libraw` "
+            "and re-configure. Falling back to a system LibRaw package.")
+    endif()
+
+    if(WIN32)
+        find_package(libraw CONFIG REQUIRED)
+    else()
+        find_path(LIBRAW_INC NAMES libraw/libraw.h PATHS ${ALCEDO_INCLUDE_HINTS})
+        find_library(LIBRAW_LIB NAMES raw_r raw libraw PATHS ${ALCEDO_LIBRARY_HINTS})
+        if(LIBRAW_INC AND LIBRAW_LIB)
+            add_library(libraw::raw_r SHARED IMPORTED)
+            set_target_properties(libraw::raw_r PROPERTIES
+                IMPORTED_LOCATION "${LIBRAW_LIB}"
+                INTERFACE_INCLUDE_DIRECTORIES "${LIBRAW_INC}"
+            )
+        else()
+            message(FATAL_ERROR
+                "LibRaw not found. Initialize the bundled LibRaw submodule, install LibRaw, "
+                "or set CMAKE_PREFIX_PATH to its prefix.")
+        endif()
+    endif()
+endif()
+
+if(TARGET libraw::raw AND NOT TARGET libraw::raw_r)
+    get_target_property(_puerhlab_libraw_raw_alias_target libraw::raw ALIASED_TARGET)
+    if(_puerhlab_libraw_raw_alias_target)
+        add_library(libraw::raw_r ALIAS "${_puerhlab_libraw_raw_alias_target}")
+    else()
+        add_library(libraw::raw_r ALIAS libraw::raw)
+    endif()
+elseif(TARGET libraw::raw_r AND NOT TARGET libraw::raw)
+    get_target_property(_puerhlab_libraw_raw_r_alias_target libraw::raw_r ALIASED_TARGET)
+    if(_puerhlab_libraw_raw_r_alias_target)
+        add_library(libraw::raw ALIAS "${_puerhlab_libraw_raw_r_alias_target}")
+    else()
+        add_library(libraw::raw ALIAS libraw::raw_r)
+    endif()
+endif()
+
+if(TARGET libraw::raw_r AND NOT TARGET LibRaw)
+    get_target_property(_puerhlab_libraw_raw_r_alias_target libraw::raw_r ALIASED_TARGET)
+    if(_puerhlab_libraw_raw_r_alias_target)
+        add_library(LibRaw ALIAS "${_puerhlab_libraw_raw_r_alias_target}")
+    else()
+        add_library(LibRaw ALIAS libraw::raw_r)
+    endif()
+endif()
+
+set(PUERHLAB_LIBRAW_AVAILABLE "${PUERHLAB_LIBRAW_AVAILABLE}" CACHE INTERNAL
+    "Whether the bundled LibRaw checkout is being built.")
+
 set(PUERHLAB_LENSFUN_SOURCE_DIR
     "${CMAKE_CURRENT_SOURCE_DIR}/lensfun"
     CACHE PATH

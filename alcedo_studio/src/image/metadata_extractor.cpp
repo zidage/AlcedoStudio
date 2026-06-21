@@ -87,33 +87,11 @@ auto IsNikonCamera(const std::string& make, const std::string& model) -> bool {
   return ContainsCaseInsensitive(make, "nikon") || ContainsCaseInsensitive(model, "nikon");
 }
 
-constexpr uint16_t kNikonHeCompression  = 13;
-constexpr uint16_t kNikonHeStarCompression = 14;
-
-auto IsUnsupportedNikonHeCompression(const uint16_t nef_compression) -> bool {
-  return nef_compression == kNikonHeCompression || nef_compression == kNikonHeStarCompression;
-}
-
 auto IsDngExtension(const std::filesystem::path& path) -> bool {
   std::string ext = path.extension().string();
   std::transform(ext.begin(), ext.end(), ext.begin(),
                  [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   return ext == ".dng";
-}
-
-auto IsNefExtension(const std::filesystem::path& path) -> bool {
-  std::string ext = path.extension().string();
-  std::transform(ext.begin(), ext.end(), ext.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return ext == ".nef";
-}
-
-auto BuildUnsupportedNikonHeMessage(const image_path_t& image_path,
-                                    const uint16_t      nef_compression) -> std::string {
-  std::ostringstream oss;
-  oss << "Unsupported Nikon HE/HE* raw detected: " << image_path.string()
-      << " (NEFCompression=" << nef_compression << ")";
-  return oss.str();
 }
 
 auto ResolveCropFactorHint(float focal_mm, float focal_35mm_mm) -> float {
@@ -1647,23 +1625,8 @@ auto MetadataExtractor::ExtractRawMetadata_ToImage(const image_path_t& image_pat
     return false;
   }
 
-  const auto nef_compression = raw_processor->imgdata.makernotes.nikon.NEFCompression;
-  if (IsNefExtension(image_path) && IsUnsupportedNikonHeCompression(nef_compression)) {
-    throw MetadataExtractionError(
-        ImportErrorCode::UNSUPPORTED_NIKON_HE_RAW, image_path,
-        BuildUnsupportedNikonHeMessage(image_path, nef_compression), nef_compression);
-  }
-
   ret = libraw_guard::Unpack(*raw_processor);
   if (ret != LIBRAW_SUCCESS) {
-    if (IsNefExtension(image_path) && ret == LIBRAW_FILE_UNSUPPORTED &&
-        IsUnsupportedNikonHeCompression(raw_processor->imgdata.makernotes.nikon.NEFCompression)) {
-      throw MetadataExtractionError(
-          ImportErrorCode::UNSUPPORTED_NIKON_HE_RAW, image_path,
-          BuildUnsupportedNikonHeMessage(
-              image_path, raw_processor->imgdata.makernotes.nikon.NEFCompression),
-          raw_processor->imgdata.makernotes.nikon.NEFCompression);
-    }
     std::cerr << "MetadataExtractor: libraw unpack failed for '"
               << image_path.string() << "' (error " << ret << ")" << std::endl;
     raw_processor->recycle();

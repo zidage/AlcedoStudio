@@ -16,6 +16,10 @@
 	path = alcedo_studio/src/third_party/libultrahdr
 	url = https://github.com/zidage/libultrahdr.git
 	branch = alcedo-v1.4.0-dither
+[submodule "alcedo_studio/src/third_party/libraw"]
+	path = alcedo_studio/src/third_party/libraw
+	url = https://github.com/zidage/LibRaw.git
+	branch = codex/merge-pr-825-826
 [submodule "alcedo_studio/third_party/dawn"]
 	path = alcedo_studio/third_party/dawn
 	url = https://dawn.googlesource.com/dawn

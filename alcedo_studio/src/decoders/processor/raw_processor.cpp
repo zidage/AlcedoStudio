@@ -292,9 +292,6 @@ auto DescribeUnsupportedRawInput(LibRaw& raw_processor, const RawInputKind input
   if (idata.filters == 1U) {
     return "non-2x2 tiled CFA layouts are not supported.";
   }
-  if (idata.filters == 9U) {
-    return "X-Trans CFA layouts are not supported.";
-  }
   if (input_kind == RawInputKind::Unsupported) {
     return "no supported raw image plane was provided by LibRaw.";
   }

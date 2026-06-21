@@ -440,33 +440,6 @@ else()
   endif()
 endif()
 
-# LibRaw
-if (WIN32)
-    find_package(libraw CONFIG REQUIRED)
-else()
-    find_path(LIBRAW_INC NAMES libraw/libraw.h PATHS ${ALCEDO_INCLUDE_HINTS})
-    find_library(LIBRAW_LIB NAMES raw_r raw libraw PATHS ${ALCEDO_LIBRARY_HINTS})
-    if(LIBRAW_INC AND LIBRAW_LIB)
-        add_library(libraw::raw_r SHARED IMPORTED)
-        set_target_properties(libraw::raw_r PROPERTIES
-            IMPORTED_LOCATION "${LIBRAW_LIB}"
-            INTERFACE_INCLUDE_DIRECTORIES "${LIBRAW_INC}"
-        )
-    else()
-        message(FATAL_ERROR "LibRaw not found. Install via Homebrew (libraw) or set CMAKE_PREFIX_PATH to its prefix.")
-    endif()
-endif()
-
-if(TARGET libraw::raw AND NOT TARGET libraw::raw_r)
-    add_library(libraw::raw_r ALIAS libraw::raw)
-elseif(TARGET libraw::raw_r AND NOT TARGET libraw::raw)
-    add_library(libraw::raw ALIAS libraw::raw_r)
-endif()
-
-if(TARGET libraw::raw_r AND NOT TARGET LibRaw)
-    add_library(LibRaw ALIAS libraw::raw_r)
-endif()
-
 # DuckDB API
 if (WIN32)
     find_path(DUCKDB_INC NAMES duckdb.h PATHS ${ALCEDO_INCLUDE_HINTS})
