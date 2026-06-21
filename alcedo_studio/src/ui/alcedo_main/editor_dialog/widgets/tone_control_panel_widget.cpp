@@ -23,6 +23,7 @@
 #include "ui/alcedo_main/editor_dialog/modules/color_temp.hpp"
 #include "ui/alcedo_main/editor_dialog/modules/curve.hpp"
 #include "ui/alcedo_main/editor_dialog/session/editor_adjustment_session.hpp"
+#include "ui/alcedo_main/editor_dialog/widgets/collapsible_section_widget.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 
 namespace alcedo::ui {
@@ -30,7 +31,6 @@ namespace {
 
 constexpr char kLocalizedTextProperty[]      = "puerhlabI18nText";
 constexpr char kLocalizedTextUpperProperty[] = "puerhlabI18nTextUpper";
-constexpr char kLocalizedToolTipProperty[]   = "puerhlabI18nToolTip";
 constexpr int  kWheelSliderSettledMs         = 180;
 
 void           SetLocalizedText(QObject* object, const char* source, bool uppercase = false) {
@@ -48,15 +48,6 @@ void           SetLocalizedText(QObject* object, const char* source, bool upperc
   } else if (auto* button = qobject_cast<QPushButton*>(object)) {
     button->setText(text);
   }
-}
-
-void SetLocalizedToolTip(QWidget* widget, const char* source) {
-  if (!widget || source == nullptr) {
-    return;
-  }
-  widget->setProperty(kLocalizedToolTipProperty, source);
-  widget->setToolTip(Tr(source));
-  widget->setAccessibleName(Tr(source));
 }
 
 auto NewLocalizedLabel(const char* source, QWidget* parent, bool uppercase = false) -> QLabel* {
@@ -514,45 +505,25 @@ void ToneControlPanelWidget::Build() {
 
 namespace {
 
-void AddSection(QWidget* parent, QVBoxLayout& layout, const char* title_source,
-                const char* subtitle_source) {
-  auto* frame = new QWidget(parent);
-  auto* v     = new QVBoxLayout(frame);
-  v->setContentsMargins(0, 8, 0, 2);
-  v->setSpacing(4);
+auto AddSection(QWidget* parent, QVBoxLayout& layout, const char* title_source,
+                const char* subtitle_source) -> QVBoxLayout* {
+  CollapsibleSectionWidget::Options options;
+  options.title_source    = title_source;
+  options.subtitle_source = subtitle_source;
+  options.chrome          = CollapsibleSectionWidget::Chrome::Divider;
 
-  auto* header_row    = new QWidget(frame);
-  auto* header_layout = new QHBoxLayout(header_row);
-  header_layout->setContentsMargins(0, 0, 0, 0);
-  header_layout->setSpacing(6);
-
-  auto* t = NewLocalizedLabel(title_source, header_row, true);
-  t->setObjectName("EditorSectionTitle");
-  t->setStyleSheet(AppTheme::EditorLabelStyle(AppTheme::Instance().textMutedColor()));
-  AppTheme::MarkFontRole(t, AppTheme::FontRole::UiOverline);
-  if (subtitle_source != nullptr && subtitle_source[0] != '\0') {
-    SetLocalizedToolTip(t, subtitle_source);
-  }
-  header_layout->addWidget(t, 0);
-  header_layout->addStretch(1);
-
-  auto* divider = new QFrame(frame);
-  divider->setFrameShape(QFrame::HLine);
-  divider->setFixedHeight(1);
-  divider->setStyleSheet(
-      QStringLiteral("QFrame { background: %1; border: none; }")
-          .arg(WithAlpha(AppTheme::Instance().dividerColor(), 110).name(QColor::HexArgb)));
-
-  v->addWidget(header_row, 0);
-  v->addWidget(divider, 0);
-  layout.insertWidget(layout.count() - 1, frame, 0);
+  auto* section           = new CollapsibleSectionWidget(options, parent);
+  layout.insertWidget(layout.count() - 1, section, 0);
+  return section->ContentLayout();
 }
 
 }  // namespace
 
 void ToneControlPanelWidget::BuildToneSection() {
-  auto*         parent_widget = this;
-  auto&         layout        = *deps_.panel_layout;
+  auto* parent_widget = this;
+  auto& layout        = *deps_.panel_layout;
+  auto* section_layout =
+      AddSection(parent_widget, layout, "Tone", "Primary tonal shaping controls.");
 
   const QString value_chip_style =
       QStringLiteral(
@@ -640,11 +611,9 @@ void ToneControlPanelWidget::BuildToneSection() {
     row_layout->addWidget(head_row, 0);
     row_layout->addWidget(slider, 0);
 
-    layout.insertWidget(layout.count() - 1, row);
+    section_layout->addWidget(row, 0);
     return slider;
   };
-
-  AddSection(parent_widget, layout, "Tone", "Primary tonal shaping controls.");
 
   exposure_slider_ = add_slider(
       "Exposure", -1000, 1000, static_cast<int>(std::lround(tone_state_.exposure_ * 100.0f)),
@@ -742,14 +711,13 @@ void ToneControlPanelWidget::BuildToneSection() {
 }
 
 void ToneControlPanelWidget::BuildToneCurveSection() {
-  auto* parent_widget = this;
-  auto& layout        = *deps_.panel_layout;
+  auto* parent_widget  = this;
+  auto& layout         = *deps_.panel_layout;
+  auto* section_layout = AddSection(parent_widget, layout, "Tone Curve",
+                                    "Smooth tone curve mapped from input [0, 1] to output [0, 1].");
 
-  AddSection(parent_widget, layout, "Tone Curve",
-             "Smooth tone curve mapped from input [0, 1] to output [0, 1].");
-
-  auto* frame    = new QFrame(parent_widget);
-  auto* v_layout = new QVBoxLayout(frame);
+  auto* frame          = new QFrame(parent_widget);
+  auto* v_layout       = new QVBoxLayout(frame);
   v_layout->setContentsMargins(0, 0, 0, 0);
   v_layout->setSpacing(4);
 
@@ -795,12 +763,14 @@ void ToneControlPanelWidget::BuildToneCurveSection() {
   v_layout->addWidget(curve_widget_, 1);
   v_layout->addWidget(actions_row, 0);
 
-  layout.insertWidget(layout.count() - 1, frame);
+  section_layout->addWidget(frame, 0);
 }
 
 void ToneControlPanelWidget::BuildColorSection() {
-  auto*         parent_widget = this;
-  auto&         layout        = *deps_.panel_layout;
+  auto* parent_widget = this;
+  auto& layout        = *deps_.panel_layout;
+  auto* section_layout =
+      AddSection(parent_widget, layout, "Color", "Color balance and saturation.");
 
   const QString value_chip_style =
       QStringLiteral(
@@ -843,7 +813,7 @@ void ToneControlPanelWidget::BuildColorSection() {
     row_layout->addWidget(label, 1);
     row_layout->addWidget(combo, 0, Qt::AlignRight | Qt::AlignVCenter);
 
-    layout.insertWidget(layout.count() - 1, row);
+    section_layout->addWidget(row, 0);
     return combo;
   };
 
@@ -923,11 +893,9 @@ void ToneControlPanelWidget::BuildColorSection() {
     row_layout->addWidget(head_row, 0);
     row_layout->addWidget(slider, 0);
 
-    layout.insertWidget(layout.count() - 1, row);
+    section_layout->addWidget(row, 0);
     return slider;
   };
-
-  AddSection(parent_widget, layout, "Color", "Color balance and saturation.");
 
   saturation_slider_ = add_slider(
       "Saturation", -100, 100, static_cast<int>(std::lround(tone_state_.saturation_)),
@@ -1089,14 +1057,16 @@ void ToneControlPanelWidget::BuildColorSection() {
       "  border-radius: 8px;"
       "  padding: 6px 8px;"
       "}");
-  layout.insertWidget(layout.count() - 1, color_temp_unsupported_label_);
+  section_layout->addWidget(color_temp_unsupported_label_, 0);
   color_temp_unsupported_label_->setVisible(
       dialog_state_ptr ? !dialog_state_ptr->color_temp_supported_ : false);
 }
 
 void ToneControlPanelWidget::BuildDetailSection() {
-  auto*         parent_widget = this;
-  auto&         layout        = *deps_.panel_layout;
+  auto* parent_widget = this;
+  auto& layout        = *deps_.panel_layout;
+  auto* section_layout =
+      AddSection(parent_widget, layout, "Detail", "Micro-contrast and sharpen controls.");
 
   const QString value_chip_style =
       QStringLiteral(
@@ -1179,11 +1149,9 @@ void ToneControlPanelWidget::BuildDetailSection() {
     row_layout->addWidget(head_row, 0);
     row_layout->addWidget(slider, 0);
 
-    layout.insertWidget(layout.count() - 1, row);
+    section_layout->addWidget(row, 0);
     return slider;
   };
-
-  AddSection(parent_widget, layout, "Detail", "Micro-contrast and sharpen controls.");
 
   sharpen_slider_ = add_slider(
       "Sharpen", -100, 100, static_cast<int>(std::lround(tone_state_.sharpen_)),

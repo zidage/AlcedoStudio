@@ -4,7 +4,6 @@
 
 #include "ui/alcedo_main/editor_dialog/widgets/raw_decode_panel_widget.hpp"
 
-#include <QFrame>
 #include <QHBoxLayout>
 #include <QPushButton>
 #include <QSizePolicy>
@@ -15,6 +14,7 @@
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/alcedo_main/editor_dialog/pipeline/raw_pipeline_adapter.hpp"
 #include "ui/alcedo_main/editor_dialog/session/editor_adjustment_session.hpp"
+#include "ui/alcedo_main/editor_dialog/widgets/collapsible_section_widget.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 
 namespace alcedo::ui {
@@ -54,23 +54,19 @@ auto NewLocalizedCheckBox(const char* source, QWidget* parent) -> QCheckBox* {
   return check_box;
 }
 
-auto AddRawSection(QWidget* parent, QVBoxLayout& layout, const char* title_source,
-                   const char* subtitle_source) -> QVBoxLayout* {
-  auto* frame = new QFrame(parent);
-  frame->setObjectName("EditorSection");
-  auto* v = new QVBoxLayout(frame);
-  v->setContentsMargins(12, 10, 12, 10);
-  v->setSpacing(8);
+auto AddRawSection(QWidget* parent, QVBoxLayout& layout, const char* title_source) -> QVBoxLayout* {
+  CollapsibleSectionWidget::Options options;
+  options.title_source    = title_source;
+  options.uppercase_title = false;
+  options.chrome          = CollapsibleSectionWidget::Chrome::Card;
+  options.root_margins    = QMargins(12, 10, 12, 10);
+  options.content_margins = QMargins(0, 2, 0, 0);
+  options.root_spacing    = 8;
+  options.content_spacing = 8;
 
-  auto* title = NewLocalizedLabel(title_source, frame);
-  title->setObjectName("EditorSectionTitle");
-  auto* subtitle = NewLocalizedLabel(subtitle_source, frame);
-  subtitle->setObjectName("EditorSectionSub");
-  subtitle->setWordWrap(true);
-  v->addWidget(title, 0);
-  v->addWidget(subtitle, 0);
-  layout.insertWidget(layout.count() - 1, frame);
-  return v;
+  auto* section           = new CollapsibleSectionWidget(options, parent);
+  layout.insertWidget(layout.count() - 1, section);
+  return section->ContentLayout();
 }
 
 }  // namespace
@@ -157,9 +153,9 @@ void RawDecodePanelWidget::CommitRawField(AdjustmentField field) {
   }
 
   deps_.session->Commit(AdjustmentCommit{
-      .field      = field,
-      .old_params = RawPipelineAdapter::ParamsFor(field, committed_raw_state_,
-                                                  deps_.session->Pipeline()),
+      .field = field,
+      .old_params =
+          RawPipelineAdapter::ParamsFor(field, committed_raw_state_, deps_.session->Pipeline()),
       .new_params = RawPipelineAdapter::ParamsFor(field, raw_state_, deps_.session->Pipeline()),
   });
   PullCommittedRawStateFromDialog();
@@ -187,9 +183,7 @@ void RawDecodePanelWidget::BuildDecodeSection() {
     return;
   }
 
-  auto* decode_layout = AddRawSection(
-      this, *deps_.panel_layout, "RAW Decode",
-      "Configure RAW decode options. These settings are shared with thumbnail rendering.");
+  auto* decode_layout = AddRawSection(this, *deps_.panel_layout, "RAW Decode");
 
   raw_highlights_reconstruct_checkbox_ =
       NewLocalizedCheckBox("Enable Highlight Reconstruction", this);
@@ -212,9 +206,7 @@ void RawDecodePanelWidget::BuildLensSection() {
     return;
   }
 
-  auto* lens_layout = AddRawSection(
-      this, *deps_.panel_layout, "Lens Calibration",
-      "Enable correction and optionally override lens metadata with catalog entries.");
+  auto* lens_layout            = AddRawSection(this, *deps_.panel_layout, "Lens Calibration");
 
   lens_calib_enabled_checkbox_ = NewLocalizedCheckBox("Enable Lens Calibration", this);
   lens_calib_enabled_checkbox_->setChecked(raw_state_.lens_calib_enabled_);

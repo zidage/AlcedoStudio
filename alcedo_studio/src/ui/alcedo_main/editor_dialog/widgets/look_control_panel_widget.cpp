@@ -8,7 +8,6 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QDesktopServices>
-#include <QFrame>
 #include <QHBoxLayout>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -28,6 +27,7 @@
 #include "ui/alcedo_main/editor_dialog/modules/hls.hpp"
 #include "ui/alcedo_main/editor_dialog/pipeline/look_pipeline_adapter.hpp"
 #include "ui/alcedo_main/editor_dialog/session/editor_adjustment_session.hpp"
+#include "ui/alcedo_main/editor_dialog/widgets/collapsible_section_widget.hpp"
 #include "ui/alcedo_main/editor_dialog/widgets/lut_browser_widget.hpp"
 #include "ui/alcedo_main/editor_dialog/widgets/trackball.hpp"
 #include "ui/alcedo_main/i18n.hpp"
@@ -54,15 +54,6 @@ void           SetLocalizedText(QObject* object, const char* source, bool upperc
   } else if (auto* button = qobject_cast<QPushButton*>(object)) {
     button->setText(text);
   }
-}
-
-void SetLocalizedToolTip(QWidget* widget, const char* source) {
-  if (!widget || source == nullptr) {
-    return;
-  }
-  widget->setProperty(kLocalizedToolTipProperty, source);
-  widget->setToolTip(Tr(source));
-  widget->setAccessibleName(Tr(source));
 }
 
 auto NewLocalizedLabel(const char* source, QWidget* parent, bool uppercase = false) -> QLabel* {
@@ -104,37 +95,14 @@ auto HlsCandidateColor(float hue_degrees) -> QColor { return hls::CandidateColor
 
 auto MakeLookSection(QWidget* parent, QVBoxLayout& layout, const char* title_source,
                      const char* subtitle_source) -> QVBoxLayout* {
-  auto* frame = new QWidget(parent);
-  auto* v     = new QVBoxLayout(frame);
-  v->setContentsMargins(0, 8, 0, 2);
-  v->setSpacing(4);
+  CollapsibleSectionWidget::Options options;
+  options.title_source    = title_source;
+  options.subtitle_source = subtitle_source;
+  options.chrome          = CollapsibleSectionWidget::Chrome::Divider;
 
-  auto* header_row    = new QWidget(frame);
-  auto* header_layout = new QHBoxLayout(header_row);
-  header_layout->setContentsMargins(0, 0, 0, 0);
-  header_layout->setSpacing(6);
-
-  auto* title = NewLocalizedLabel(title_source, header_row, true);
-  title->setObjectName("EditorSectionTitle");
-  title->setStyleSheet(AppTheme::EditorLabelStyle(AppTheme::Instance().textMutedColor()));
-  AppTheme::MarkFontRole(title, AppTheme::FontRole::UiOverline);
-  if (subtitle_source != nullptr && subtitle_source[0] != '\0') {
-    SetLocalizedToolTip(title, subtitle_source);
-  }
-  header_layout->addWidget(title, 0);
-  header_layout->addStretch(1);
-
-  auto* divider = new QFrame(frame);
-  divider->setFrameShape(QFrame::HLine);
-  divider->setFixedHeight(1);
-  divider->setStyleSheet(
-      QStringLiteral("QFrame { background: %1; border: none; }")
-          .arg(WithAlpha(AppTheme::Instance().dividerColor(), 110).name(QColor::HexArgb)));
-
-  v->addWidget(header_row, 0);
-  v->addWidget(divider, 0);
-  layout.insertWidget(layout.count() - 1, frame, 0);
-  return v;
+  auto* section           = new CollapsibleSectionWidget(options, parent);
+  layout.insertWidget(layout.count() - 1, section, 0);
+  return section->ContentLayout();
 }
 
 }  // namespace
@@ -345,9 +313,9 @@ void LookControlPanelWidget::BuildLutSection() {
   if (!layout_) {
     return;
   }
-  MakeLookSection(this, *layout_, "LUT", "Browse and apply look-up tables.");
-  lut_browser_widget_ = new LutBrowserWidget(this);
-  layout_->insertWidget(layout_->count() - 1, lut_browser_widget_, 0);
+  auto* section_layout = MakeLookSection(this, *layout_, "LUT", "Browse and apply look-up tables.");
+  lut_browser_widget_  = new LutBrowserWidget(this);
+  section_layout->addWidget(lut_browser_widget_, 0);
 
   QObject::connect(lut_browser_widget_, &LutBrowserWidget::RefreshRequested, this,
                    [this]() { RefreshLutBrowserUi(true); });
@@ -382,7 +350,8 @@ void LookControlPanelWidget::BuildHlsSection() {
     return;
   }
 
-  MakeLookSection(this, *layout_, "HSL / Color", "Per-hue lightness and chroma adjustments.");
+  auto* section_layout =
+      MakeLookSection(this, *layout_, "HSL / Color", "Per-hue lightness and chroma adjustments.");
   auto* frame = new QWidget(this);
   auto* v     = new QVBoxLayout(frame);
   v->setContentsMargins(0, 0, 0, 0);
@@ -419,15 +388,15 @@ void LookControlPanelWidget::BuildHlsSection() {
   }
   swatch_row_layout->addStretch();
   v->addWidget(swatch_row, 0);
-  layout_->insertWidget(layout_->count() - 1, frame, 0);
+  section_layout->addWidget(frame, 0);
 
   const QString value_chip_style =
       QStringLiteral("QLabel { color: %1; background: transparent; border: none; padding: 0; }")
           .arg(AppTheme::Instance().textMutedColor().name(QColor::HexRgb));
 
-  auto add_slider = [this, value_chip_style](const char* name_source, int min, int max, int value,
-                                             auto&& on_change, auto&& on_release, auto&& on_reset,
-                                             auto&& formatter) {
+  auto add_slider = [this, section_layout, value_chip_style](
+                        const char* name_source, int min, int max, int value, auto&& on_change,
+                        auto&& on_release, auto&& on_reset, auto&& formatter) {
     auto* name_label = NewLocalizedLabel(name_source, this);
     name_label->setStyleSheet(AppTheme::EditorLabelStyle(AppTheme::Instance().textColor()));
     AppTheme::MarkFontRole(name_label, AppTheme::FontRole::UiCaption);
@@ -486,7 +455,7 @@ void LookControlPanelWidget::BuildHlsSection() {
     row_layout->addWidget(head_row, 0);
     row_layout->addWidget(slider, 0);
 
-    layout_->insertWidget(layout_->count() - 1, row, 0);
+    section_layout->addWidget(row, 0);
     return slider;
   };
 
@@ -523,8 +492,7 @@ void LookControlPanelWidget::BuildHlsSection() {
       [](int v) { return QString::number(v, 'f', 0); });
 
   hls_saturation_adjust_slider_ = add_slider(
-      "Chroma", -100, 100,
-      static_cast<int>(std::lround(look_state_.hls_saturation_adjust_)),
+      "Chroma", -100, 100, static_cast<int>(std::lround(look_state_.hls_saturation_adjust_)),
       [this](int v) {
         look_state_.hls_saturation_adjust_ =
             std::clamp(static_cast<float>(v), hls::kAdjUiMin, hls::kAdjUiMax);
@@ -562,9 +530,10 @@ void LookControlPanelWidget::BuildCdlSection() {
     return;
   }
 
-  MakeLookSection(this, *layout_, "Color Wheels", "CDL: Lift / Gamma / Gain with master offset.");
+  auto* section_layout = MakeLookSection(this, *layout_, "Color Wheels",
+                                         "CDL: Lift / Gamma / Gain with master offset.");
 
-  auto* wheel_frame = new QWidget(this);
+  auto* wheel_frame    = new QWidget(this);
   wheel_frame->setMinimumWidth(0);
   wheel_frame->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
 
@@ -683,7 +652,7 @@ void LookControlPanelWidget::BuildCdlSection() {
   bottom_row_layout->addWidget(gain_unit, 1);
   wheel_layout->addWidget(bottom_row, 0);
 
-  layout_->insertWidget(layout_->count() - 1, wheel_frame, 0);
+  section_layout->addWidget(wheel_frame, 0);
   RefreshCdlOffsetLabels();
 }
 

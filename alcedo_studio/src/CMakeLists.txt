@@ -1235,6 +1235,7 @@ if(ALCEDO_REAL_WIDGET_EDITOR)
         ui/alcedo_main/editor_dialog/scope/scope_plot_widgets.cpp
         ui/alcedo_main/editor_dialog/scope/scope_renderer.cpp
         ui/alcedo_main/editor_dialog/widgets/display_transform_panel_widget.cpp
+        ui/alcedo_main/editor_dialog/widgets/collapsible_section_widget.cpp
         ui/alcedo_main/editor_dialog/widgets/editor_control_panel_widget.cpp
         ui/alcedo_main/editor_dialog/widgets/editor_viewer_pane.cpp
         ui/alcedo_main/editor_dialog/widgets/geometry_panel_widget.cpp
@@ -1292,6 +1293,7 @@ if(ALCEDO_REAL_WIDGET_EDITOR)
         include/ui/alcedo_main/editor_dialog/scope/scope_plot_widgets.hpp
         include/ui/alcedo_main/editor_dialog/scope/scope_renderer.hpp
         include/ui/alcedo_main/editor_dialog/widgets/display_transform_panel_widget.hpp
+        include/ui/alcedo_main/editor_dialog/widgets/collapsible_section_widget.hpp
         include/ui/alcedo_main/editor_dialog/widgets/editor_control_panel_widget.hpp
         include/ui/alcedo_main/editor_dialog/widgets/editor_viewer_pane.hpp
         include/ui/alcedo_main/editor_dialog/widgets/geometry_panel_widget.hpp
