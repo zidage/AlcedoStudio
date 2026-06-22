@@ -95,3 +95,4 @@ These façade services are the **only** API surface the UI layer may call. They 
 - **C++ standard**: C++20 with AVX/AVX2 SIMD flags.
 - **Naming convention** (clang-tidy enforced): private members use a trailing `_` suffix; public/protected members do not.
 - **32-bit float pipeline**: All internal image processing operates in 32-bit float; output rendering uses ACES 2.0 with optional CUBE LUT.
+- **DuckDB ownership rule**: DuckDB connections must be requested from `DBController` at the operation boundary. Storage controllers must not own long-lived `duckdb_connection` / `ConnectionGuard` instances, including `SemanticStorageController`; this keeps connection lifetime, transaction scope, and cross-controller serialization explicit.

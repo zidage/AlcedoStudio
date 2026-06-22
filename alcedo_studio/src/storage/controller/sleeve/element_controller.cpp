@@ -158,6 +158,7 @@ ElementController::ElementController(ConnectionGuard&& guard)
  * @param element
  */
 void ElementController::AddElement(const std::shared_ptr<SleeveElement> element) {
+  auto db_lock = guard_.Lock();
   InsertElementRows(element);
   element->sync_flag_ = SyncFlag::SYNCED;
 }
@@ -184,6 +185,7 @@ void ElementController::AddElements(std::span<const std::shared_ptr<SleeveElemen
   if (elements.empty()) {
     return;
   }
+  auto db_lock = guard_.Lock();
   duckorm::begin_transaction(guard_.conn_);
   try {
     for (const auto& element : elements) {
@@ -206,10 +208,12 @@ void ElementController::AddElements(std::span<const std::shared_ptr<SleeveElemen
  * @param content_id
  */
 void ElementController::AddFolderContent(sl_element_id_t folder_id, sl_element_id_t content_id) {
+  auto db_lock = guard_.Lock();
   folder_service_.Insert({folder_id, content_id});
 }
 
 void ElementController::RemoveFolderContent(sl_element_id_t folder_id, sl_element_id_t content_id) {
+  auto db_lock = guard_.Lock();
   folder_service_.RemoveFolderContent(folder_id, content_id);
 }
 
@@ -220,7 +224,8 @@ void ElementController::RemoveFolderContent(sl_element_id_t folder_id, sl_elemen
  * @return std::shared_ptr<SleeveElement>
  */
 auto ElementController::GetElementById(const sl_element_id_t id) -> std::shared_ptr<SleeveElement> {
-  auto result = element_service_.GetElementById(id);
+  auto db_lock = guard_.Lock();
+  auto result  = element_service_.GetElementById(id);
   if (result->type_ == ElementType::FILE) {
     auto file = std::static_pointer_cast<SleeveFile>(result);
     try {
@@ -243,6 +248,7 @@ auto ElementController::GetElementById(const sl_element_id_t id) -> std::shared_
  */
 auto ElementController::GetFolderContent(const sl_element_id_t folder_id)
     -> std::vector<sl_element_id_t> {
+  auto db_lock = guard_.Lock();
   return folder_service_.GetFolderContent(folder_id);
 }
 
@@ -252,9 +258,13 @@ auto ElementController::GetFolderContent(const sl_element_id_t folder_id)
  *
  * @param id
  */
-void ElementController::RemoveElement(const sl_element_id_t id) { element_service_.RemoveById(id); }
+void ElementController::RemoveElement(const sl_element_id_t id) {
+  auto db_lock = guard_.Lock();
+  element_service_.RemoveById(id);
+}
 
 void ElementController::RemoveElement(const std::shared_ptr<SleeveElement> element) {
+  auto db_lock = guard_.Lock();
   if (element->type_ == ElementType::FILE) {
     auto file = std::static_pointer_cast<SleeveFile>(element);
     DeleteSemanticRowsForFiles(guard_.conn_,
@@ -274,6 +284,7 @@ void ElementController::RemoveElements(std::span<const std::shared_ptr<SleeveEle
   if (elements.empty()) {
     return;
   }
+  auto                         db_lock = guard_.Lock();
 
   std::vector<sl_element_id_t> file_ids;
   std::vector<sl_element_id_t> folder_ids;
@@ -318,6 +329,7 @@ void ElementController::RemoveElements(std::span<const std::shared_ptr<SleeveEle
  * @param element
  */
 void ElementController::UpdateElement(const std::shared_ptr<SleeveElement> element) {
+  auto db_lock = guard_.Lock();
   UpdateElementRows(element);
   element->sync_flag_ = SyncFlag::SYNCED;
 }
@@ -343,6 +355,7 @@ void ElementController::UpdateElements(std::span<const std::shared_ptr<SleeveEle
   if (elements.empty()) {
     return;
   }
+  auto db_lock = guard_.Lock();
   duckorm::begin_transaction(guard_.conn_);
   try {
     for (const auto& element : elements) {
@@ -361,6 +374,7 @@ void ElementController::UpdateElements(std::span<const std::shared_ptr<SleeveEle
 auto ElementController::GetElementsInFolderByFilter(const std::shared_ptr<FilterCombo> filter,
                                                     const sl_element_id_t              folder_id)
     -> std::vector<std::shared_ptr<SleeveElement>> {
+  auto       db_lock    = guard_.Lock();
   const auto where      = FilterSQLCompiler::Compile(filter->GetRoot());
   const auto scope      = BuildScopedFileQuery(folder_id, where);
   const auto sql        = std::format("SELECT e.* {};", scope.from_where_);
@@ -371,6 +385,7 @@ auto ElementController::GetElementsInFolderByFilter(const std::shared_ptr<Filter
 auto ElementController::GetElementIdsInFolderByFilter(const std::shared_ptr<FilterCombo> filter,
                                                       const sl_element_id_t              folder_id)
     -> std::vector<sl_element_id_t> {
+  auto       db_lock    = guard_.Lock();
   const auto where      = FilterSQLCompiler::Compile(filter->GetRoot());
   const auto scope      = BuildScopedFileQuery(folder_id, where);
   const auto sql        = std::format("SELECT e.id {};", scope.from_where_);
@@ -382,6 +397,7 @@ auto ElementController::BuildFolderStats(sl_element_id_t                    fold
                                          const std::optional<std::wstring>& extra_filter_where,
                                          const std::string& active_semantic_model_key)
     -> FolderStatsView {
+  auto            db_lock = guard_.Lock();
   FolderStatsView out;
 
   const auto      base_query = BuildScopedFileQuery(folder_id, extra_filter_where);
@@ -437,12 +453,14 @@ auto ElementController::BuildFolderStats(sl_element_id_t                    fold
 
 auto ElementController::ListFilesInFolder(sl_element_id_t folder_id) const
     -> std::vector<FileListEntry> {
+  auto db_lock = guard_.Lock();
   return ListFilesInFolderPage(folder_id, 0, 0);
 }
 
 auto ElementController::ListFilesInFolderPage(
     sl_element_id_t folder_id, size_t offset, size_t limit,
     const std::optional<std::wstring>& extra_filter_where) const -> std::vector<FileListEntry> {
+  auto                       db_lock = guard_.Lock();
   std::vector<FileListEntry> out;
   const auto                 scope = BuildScopedFileQuery(folder_id, extra_filter_where);
   auto                       sql =
@@ -478,7 +496,8 @@ auto ElementController::ListFilesInFolderPage(
 auto ElementController::CountFilesInFolder(
     sl_element_id_t folder_id, const std::optional<std::wstring>& extra_filter_where) const
     -> size_t {
-  const auto scope = BuildScopedFileQuery(folder_id, extra_filter_where);
+  auto       db_lock = guard_.Lock();
+  const auto scope   = BuildScopedFileQuery(folder_id, extra_filter_where);
   return static_cast<size_t>(
       RunScalarInt64(guard_.conn_, std::format("SELECT COUNT(*) {}", scope.from_where_)));
 }
@@ -486,6 +505,7 @@ auto ElementController::CountFilesInFolder(
 auto ElementController::ListFilteredFileIds(
     sl_element_id_t folder_id, const std::optional<std::wstring>& extra_filter_where) const
     -> std::vector<sl_element_id_t> {
+  auto                         db_lock = guard_.Lock();
   std::vector<sl_element_id_t> out;
   const auto                   scope = BuildScopedFileQuery(folder_id, extra_filter_where);
   const auto                   sql = std::format("SELECT e.id {} ORDER BY e.id", scope.from_where_);
@@ -508,40 +528,48 @@ auto ElementController::ListFilteredFileIds(
 
 auto ElementController::GetPipelineByElementId(const sl_element_id_t element_id)
     -> std::shared_ptr<CPUPipelineExecutor> {
+  auto db_lock = guard_.Lock();
   return pipeline_service_.GetPipelineParamByFileId(element_id);
 }
 
 auto ElementController::UpdatePipelineByElementId(
     const sl_element_id_t element_id, const std::shared_ptr<CPUPipelineExecutor> pipeline) -> void {
+  auto db_lock = guard_.Lock();
   pipeline_service_.UpdatePipelineParamByFileId(element_id, pipeline);
 }
 
 auto ElementController::RemovePipelineByElementId(const sl_element_id_t element_id) -> void {
+  auto db_lock = guard_.Lock();
   pipeline_service_.RemoveById(element_id);
 }
 
 auto ElementController::RemovePipelinesByElementIds(std::span<const sl_element_id_t> element_ids)
     -> void {
+  auto db_lock = guard_.Lock();
   pipeline_service_.RemoveByIds(element_ids);
 }
 
 auto ElementController::GetEditHistoryByFileId(const sl_element_id_t file_id)
     -> std::shared_ptr<EditHistory> {
+  auto db_lock = guard_.Lock();
   return history_service_.GetEditHistoryByFileId(file_id);
 }
 
 auto ElementController::UpdateEditHistoryByFileId(const sl_element_id_t              file_id,
                                                   const std::shared_ptr<EditHistory> history)
     -> void {
+  auto db_lock = guard_.Lock();
   history_service_.Update(history, file_id);
 }
 
 auto ElementController::RemoveEditHistoryByFileId(const sl_element_id_t file_id) -> void {
+  auto db_lock = guard_.Lock();
   history_service_.RemoveById(file_id);
 }
 
 auto ElementController::RemoveEditHistoriesByFileIds(std::span<const sl_element_id_t> file_ids)
     -> void {
+  auto db_lock = guard_.Lock();
   history_service_.RemoveByIds(file_ids);
 }
 

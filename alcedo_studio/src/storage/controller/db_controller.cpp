@@ -8,6 +8,8 @@
 #include <utf8.h>
 
 #include <iterator>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
 
 #include "storage/controller/semantic/semantic_label_config.hpp"
@@ -36,7 +38,8 @@ auto SqlString(const std::string& value) -> std::string {
  *
  * @param db_path
  */
-DBController::DBController(file_path_t& db_path) : db_path_(db_path), initialized_(false) {
+DBController::DBController(file_path_t& db_path)
+    : db_lock_(std::make_shared<std::recursive_mutex>()), db_path_(db_path), initialized_(false) {
   if (std::filesystem::exists(db_path)) {
     initialized_ = true;
   }
@@ -55,7 +58,7 @@ DBController::~DBController() { duckdb_close(&db_); }
  * @return ConnectionGuard
  */
 auto DBController::GetConnectionGuard() -> ConnectionGuard {
-  ConnectionGuard guard{{}};
+  ConnectionGuard guard{{}, db_lock_};
 
   if (duckdb_connect(db_, &guard.conn_) != DuckDBSuccess) {
     throw std::runtime_error("DB cannot be connected");
@@ -78,7 +81,8 @@ void DBController::InitializeDB() {
   }
 
   // SQL query to create the tables
-  auto          guard = GetConnectionGuard();
+  auto          guard   = GetConnectionGuard();
+  auto          db_lock = guard.Lock();
   duckdb_result result;
   if (initialized_) {
     if (duckdb_query(guard.conn_, semantic_table_query, &result) != DuckDBSuccess) {

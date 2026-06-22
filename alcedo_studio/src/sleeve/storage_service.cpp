@@ -68,7 +68,7 @@ StorageService::StorageService(std::filesystem::path db_path)
     : db_ctrl_(db_path),
       el_ctrl_(db_ctrl_.GetConnectionGuard()),
       img_ctrl_(db_ctrl_.GetConnectionGuard()),
-      semantic_ctrl_(db_ctrl_.GetConnectionGuard()) {}
+      semantic_ctrl_(db_ctrl_) {}
 
 auto StorageService::GetElementController() -> ElementController& { return el_ctrl_; }
 

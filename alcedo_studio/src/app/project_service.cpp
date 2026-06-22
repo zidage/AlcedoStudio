@@ -363,6 +363,7 @@ auto MakeSemanticRuntimeService() -> std::shared_ptr<SemanticRuntimeService> {
 // load failure. Use data_fingerprint (L3) for semantic verification.
 auto ComputeProjectDataSummary(StorageService& storage_service) -> nlohmann::json {
   auto guard       = storage_service.GetDBController().GetConnectionGuard();
+  auto db_lock     = guard.Lock();
 
   auto query_int64 = [&](const std::string& sql) -> std::optional<int64_t> {
     duckdb_result result;

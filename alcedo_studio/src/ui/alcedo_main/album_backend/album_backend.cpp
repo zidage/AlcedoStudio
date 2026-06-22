@@ -1118,8 +1118,8 @@ void AlbumBackend::ReloadFolderTree(const std::filesystem::path& preferredFolder
 }
 
 void AlbumBackend::ReloadCurrentFolder() {
-  stats_.RebuildThumbnailView();
   stats_.RefreshStats();
+  stats_.RebuildThumbnailView();
 }
 
 bool AlbumBackend::LoadThumbnailWindow(const std::optional<std::wstring>& filterWhere, bool reset) {

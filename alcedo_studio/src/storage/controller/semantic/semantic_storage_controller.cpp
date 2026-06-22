@@ -64,7 +64,7 @@ auto             SqlString(const std::string& value) -> std::string {
 
 auto SummarizeEmbeddingRecords(std::span<const SemanticImageEmbeddingRecord> records,
                                size_t max_items = 16) -> QString {
-  QStringList parts;
+  QStringList  parts;
   const size_t count = std::min(records.size(), max_items);
   for (size_t i = 0; i < count; ++i) {
     parts << QStringLiteral("%1:%2")
@@ -75,10 +75,6 @@ auto SummarizeEmbeddingRecords(std::span<const SemanticImageEmbeddingRecord> rec
     parts << QStringLiteral("...");
   }
   return parts.join(QLatin1Char(','));
-}
-
-auto SqlNullableString(const std::string& value) -> std::string {
-  return value.empty() ? "NULL" : SqlString(value);
 }
 
 auto JsonString(const std::string& value) -> std::string {
@@ -208,7 +204,7 @@ auto ElbowLabelKeepCount(const std::vector<std::pair<std::string, double>>& scor
   }
   const double cutoff = ElbowScoreCutoffCore(score_values);
 
-  size_t keep = 0;
+  size_t       keep   = 0;
   for (const auto& [label, score] : scores) {
     (void)label;
     if (score >= cutoff) {
@@ -399,6 +395,16 @@ auto ScalarInt64(duckdb_connection conn, const std::string& sql) -> std::optiona
   return value;
 }
 
+auto ModelEmbeddingDim(duckdb_connection conn, const std::string& model_key) -> std::optional<int> {
+  const auto value = ScalarInt64(conn, std::format("SELECT embedding_dim FROM SemanticModel "
+                                                  "WHERE model_key = {};",
+                                                  SqlString(model_key)));
+  if (!value.has_value()) {
+    return std::nullopt;
+  }
+  return static_cast<int>(*value);
+}
+
 auto ScalarString(duckdb_connection conn, const std::string& sql) -> std::string {
   duckdb_result result;
   if (duckdb_query(conn, sql.c_str(), &result) != DuckDBSuccess) {
@@ -564,7 +570,7 @@ auto BuildAssignedLabel(sl_element_id_t file_id, const std::string& model_key,
     label.second_label_ = std::string{};
     label.second_score_ = std::nullopt;
   }
-  label.margin_ = scores[0].second - second_score;
+  label.margin_    = scores[0].second - second_score;
   label.confident_ = label.score_ >= assignment_options.confidence_score_threshold_ &&
                      label.margin_ >= assignment_options.confidence_margin_threshold_;
   label.top_scores_json_ = MakeTopScoresJson(scores, keep);
@@ -587,14 +593,14 @@ auto QueryAssignedLabel(duckdb_connection conn, const SemanticImageEmbeddingReco
   // Rank enough prototypes for the elbow to find a knee; the display cap is applied
   // later in BuildAssignedLabel, not here.
   const auto result_limit = kSemanticLabelCandidatePoolSize;
-  const auto sql = std::format(
+  const auto sql          = std::format(
       "SELECT lp.label, array_inner_product(lp.embedding, se.embedding) AS score "
-      "FROM {} lp "
-      "JOIN {} se ON se.model_key = lp.model_key "
-      "AND se.file_id = {} AND se.image_id = {} "
-      "WHERE lp.model_key = {} AND lp.prompt_config_hash = {} "
-      "AND se.status = 'ready' AND se.error IS NULL "
-      "ORDER BY score DESC, lp.label LIMIT {};",
+               "FROM {} lp "
+               "JOIN {} se ON se.model_key = lp.model_key "
+               "AND se.file_id = {} AND se.image_id = {} "
+               "WHERE lp.model_key = {} AND lp.prompt_config_hash = {} "
+               "AND se.status = 'ready' AND se.error IS NULL "
+               "ORDER BY score DESC, lp.label LIMIT {};",
       LabelPrototypeTableName(model_dim), ImageEmbeddingTableName(model_dim), record.file_id_,
       record.image_id_, SqlString(record.model_key_),
       SqlString(assignment_options.prompt_config_hash_), result_limit);
@@ -851,19 +857,19 @@ auto QueryAssignedLabelsBatch(duckdb_connection                             conn
   // Rank enough prototypes for the elbow to find a knee; the display cap is applied
   // later in BuildAssignedLabel, not here.
   const auto result_limit = kSemanticLabelCandidatePoolSize;
-  const auto sql = std::format(
+  const auto sql          = std::format(
       "WITH scored AS ("
-      "SELECT se.file_id AS file_id, lp.label AS label, "
-      "array_inner_product(lp.embedding, se.embedding) AS score "
-      "FROM {} se "
-      "JOIN {} lp ON lp.model_key = se.model_key "
-      "AND lp.prompt_config_hash = {} "
-      "WHERE se.model_key = {} AND se.status = 'ready' AND se.error IS NULL "
-      "AND se.file_id IN ({})"
-      ") SELECT file_id, label, score FROM ("
-      "SELECT file_id, label, score, "
-      "ROW_NUMBER() OVER (PARTITION BY file_id ORDER BY score DESC, label) AS rn "
-      "FROM scored) ranked WHERE rn <= {} ORDER BY file_id, rn;",
+               "SELECT se.file_id AS file_id, lp.label AS label, "
+               "array_inner_product(lp.embedding, se.embedding) AS score "
+               "FROM {} se "
+               "JOIN {} lp ON lp.model_key = se.model_key "
+               "AND lp.prompt_config_hash = {} "
+               "WHERE se.model_key = {} AND se.status = 'ready' AND se.error IS NULL "
+               "AND se.file_id IN ({})"
+               ") SELECT file_id, label, score FROM ("
+               "SELECT file_id, label, score, "
+               "ROW_NUMBER() OVER (PARTITION BY file_id ORDER BY score DESC, label) AS rn "
+               "FROM scored) ranked WHERE rn <= {} ORDER BY file_id, rn;",
       ImageEmbeddingTableName(model_dim), LabelPrototypeTableName(model_dim),
       SqlString(assignment_options.prompt_config_hash_), SqlString(model_key), id_list,
       result_limit);
@@ -938,11 +944,12 @@ auto QueryAssignedLabelsBatch(duckdb_connection                             conn
 }
 }  // namespace
 
-SemanticStorageController::SemanticStorageController(ConnectionGuard&& guard)
-    : guard_(std::move(guard)) {}
+SemanticStorageController::SemanticStorageController(DBController& db_ctrl) : db_ctrl_(db_ctrl) {}
 
 auto SemanticStorageController::UpsertModel(const SemanticModelRecord& model,
                                             std::string*               error) const -> bool {
+  auto guard   = db_ctrl_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
   if (model.model_key_.empty()) {
     SetError(error, "Semantic model key is empty.");
     return false;
@@ -962,39 +969,38 @@ auto SemanticStorageController::UpsertModel(const SemanticModelRecord& model,
   }
 
   if (!model.active_) {
-    return UpsertSemanticModel(guard_.conn_, model, error);
+    return UpsertSemanticModel(guard.conn_, model, error);
   }
-  if (!RunQuery(guard_.conn_, "BEGIN TRANSACTION;", error)) {
+  if (!RunQuery(guard.conn_, "BEGIN TRANSACTION;", error)) {
     return false;
   }
-  if (!RunQuery(guard_.conn_, "UPDATE SemanticModel SET active = FALSE;", error) ||
-      !UpsertSemanticModel(guard_.conn_, model, error)) {
+  if (!RunQuery(guard.conn_, "UPDATE SemanticModel SET active = FALSE;", error) ||
+      !UpsertSemanticModel(guard.conn_, model, error)) {
     std::string rollback_error;
-    RunQuery(guard_.conn_, "ROLLBACK;", &rollback_error);
+    RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
     return false;
   }
-  return RunQuery(guard_.conn_, "COMMIT;", error);
+  return RunQuery(guard.conn_, "COMMIT;", error);
 }
 
 auto SemanticStorageController::HasModel(const std::string& model_key) const -> bool {
-  return GetModelEmbeddingDim(model_key).has_value();
+  auto guard   = db_ctrl_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  return ModelEmbeddingDim(guard.conn_, model_key).has_value();
 }
 
 auto SemanticStorageController::GetModelEmbeddingDim(const std::string& model_key) const
     -> std::optional<int> {
-  const auto value =
-      ScalarInt64(guard_.conn_, std::format("SELECT embedding_dim FROM SemanticModel "
-                                            "WHERE model_key = {};",
-                                            SqlString(model_key)));
-  if (!value.has_value()) {
-    return std::nullopt;
-  }
-  return static_cast<int>(*value);
+  auto guard   = db_ctrl_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  return ModelEmbeddingDim(guard.conn_, model_key);
 }
 
 auto SemanticStorageController::GetModelSupportedTextLanguagesJson(
     const std::string& model_key) const -> std::string {
-  return ScalarString(guard_.conn_,
+  auto guard   = db_ctrl_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
+  return ScalarString(guard.conn_,
                       std::format("SELECT supported_text_languages_json FROM SemanticModel "
                                   "WHERE model_key = {};",
                                   SqlString(model_key)));
@@ -1002,15 +1008,17 @@ auto SemanticStorageController::GetModelSupportedTextLanguagesJson(
 
 auto SemanticStorageController::GetModel(const std::string& model_key, std::string* error) const
     -> std::optional<SemanticModelRecord> {
-  const auto sql = std::format(
+  auto       guard   = db_ctrl_.GetConnectionGuard();
+  auto       db_lock = guard.Lock();
+  const auto sql     = std::format(
       "SELECT model_key, model_id, revision, embedding_dim, image_size, "
-      "engine_id, profile_id, supported_text_languages_json, prompt_config_hash, "
-      "asset_manifest_json, active "
-      "FROM SemanticModel WHERE model_key = {} LIMIT 1;",
+          "engine_id, profile_id, supported_text_languages_json, prompt_config_hash, "
+          "asset_manifest_json, active "
+          "FROM SemanticModel WHERE model_key = {} LIMIT 1;",
       SqlString(model_key));
 
   duckdb_result result;
-  if (duckdb_query(guard_.conn_, sql.c_str(), &result) != DuckDBSuccess) {
+  if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
     const char* raw_error = duckdb_result_error(&result);
     SetError(error, raw_error ? raw_error : "DuckDB semantic model query failed.");
     duckdb_destroy_result(&result);
@@ -1058,12 +1066,14 @@ auto SemanticStorageController::ActiveModel(std::string* error) const
 }
 
 auto SemanticStorageController::ActiveModelKey() const -> std::string {
+  auto       guard   = db_ctrl_.GetConnectionGuard();
+  auto       db_lock = guard.Lock();
   const auto sql =
       "SELECT model_key FROM SemanticModel WHERE active = TRUE "
       "ORDER BY created_at DESC, model_key DESC LIMIT 1;";
 
   duckdb_result result;
-  if (duckdb_query(guard_.conn_, sql, &result) != DuckDBSuccess) {
+  if (duckdb_query(guard.conn_, sql, &result) != DuckDBSuccess) {
     duckdb_destroy_result(&result);
     return {};
   }
@@ -1082,6 +1092,8 @@ auto SemanticStorageController::ActiveModelKey() const -> std::string {
 
 auto SemanticStorageController::SetActiveModelKey(const std::string& model_key,
                                                   std::string*       error) const -> bool {
+  auto guard   = db_ctrl_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
   if (model_key.empty()) {
     SetError(error, "Semantic model key is empty.");
     return false;
@@ -1090,27 +1102,29 @@ auto SemanticStorageController::SetActiveModelKey(const std::string& model_key,
     SetError(error, "Semantic model is not registered.");
     return false;
   }
-  if (!RunQuery(guard_.conn_, "BEGIN TRANSACTION;", error)) {
+  if (!RunQuery(guard.conn_, "BEGIN TRANSACTION;", error)) {
     return false;
   }
-  if (!RunQuery(guard_.conn_, "UPDATE SemanticModel SET active = FALSE;", error) ||
-      !RunQuery(guard_.conn_,
+  if (!RunQuery(guard.conn_, "UPDATE SemanticModel SET active = FALSE;", error) ||
+      !RunQuery(guard.conn_,
                 std::format("UPDATE SemanticModel SET active = TRUE WHERE model_key = {};",
                             SqlString(model_key)),
                 error)) {
     std::string rollback_error;
-    RunQuery(guard_.conn_, "ROLLBACK;", &rollback_error);
+    RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
     return false;
   }
-  return RunQuery(guard_.conn_, "COMMIT;", error);
+  return RunQuery(guard.conn_, "COMMIT;", error);
 }
 
 auto SemanticStorageController::LatestModelKey() const -> std::string {
+  auto       guard   = db_ctrl_.GetConnectionGuard();
+  auto       db_lock = guard.Lock();
   const auto sql =
       "SELECT model_key FROM SemanticModel ORDER BY created_at DESC, model_key DESC LIMIT 1;";
 
   duckdb_result result;
-  if (duckdb_query(guard_.conn_, sql, &result) != DuckDBSuccess) {
+  if (duckdb_query(guard.conn_, sql, &result) != DuckDBSuccess) {
     duckdb_destroy_result(&result);
     return {};
   }
@@ -1135,6 +1149,8 @@ auto SemanticStorageController::UpsertImageEmbedding(const SemanticImageEmbeddin
 auto SemanticStorageController::UpsertImageEmbeddingWithLabel(
     const SemanticImageEmbeddingRecord& record, const SemanticImageLabelRecord* label,
     std::string* error) const -> bool {
+  auto guard   = db_ctrl_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
   if (record.file_id_ == 0) {
     SetError(error, "Semantic embedding file id is zero.");
     return false;
@@ -1143,7 +1159,7 @@ auto SemanticStorageController::UpsertImageEmbeddingWithLabel(
     SetError(error, "Semantic embedding model key is empty.");
     return false;
   }
-  const auto model_dim = GetModelEmbeddingDim(record.model_key_);
+  const auto model_dim = ModelEmbeddingDim(guard.conn_, record.model_key_);
   if (!model_dim.has_value()) {
     SetError(error, "Semantic model is not registered.");
     return false;
@@ -1161,30 +1177,32 @@ auto SemanticStorageController::UpsertImageEmbeddingWithLabel(
   const auto delete_label_sql =
       std::format("DELETE FROM SemanticImageLabel WHERE file_id = {} AND model_key = {};",
                   record.file_id_, SqlString(record.model_key_));
-  if (!RunQuery(guard_.conn_, "BEGIN TRANSACTION;", error)) {
+  if (!RunQuery(guard.conn_, "BEGIN TRANSACTION;", error)) {
     return false;
   }
-  if (!RunQuery(guard_.conn_, delete_sql, error) ||
-      !RunQuery(guard_.conn_, delete_label_sql, error) ||
-      !InsertReadyImageEmbedding(guard_.conn_, record, *model_dim, error)) {
+  if (!RunQuery(guard.conn_, delete_sql, error) ||
+      !RunQuery(guard.conn_, delete_label_sql, error) ||
+      !InsertReadyImageEmbedding(guard.conn_, record, *model_dim, error)) {
     std::string rollback_error;
-    RunQuery(guard_.conn_, "ROLLBACK;", &rollback_error);
+    RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
     return false;
   }
   if (label) {
-    if (!InsertSemanticLabel(guard_.conn_, *label, error)) {
+    if (!InsertSemanticLabel(guard.conn_, *label, error)) {
       std::string rollback_error;
-      RunQuery(guard_.conn_, "ROLLBACK;", &rollback_error);
+      RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
       return false;
     }
   }
-  return RunQuery(guard_.conn_, "COMMIT;", error);
+  return RunQuery(guard.conn_, "COMMIT;", error);
 }
 
 auto SemanticStorageController::UpsertImageEmbeddingAndAssignLabel(
     const SemanticImageEmbeddingRecord&   record,
     const SemanticLabelAssignmentOptions& assignment_options,
     SemanticImageLabelRecord* assigned_label, std::string* error) const -> bool {
+  auto             guard   = db_ctrl_.GetConnectionGuard();
+  auto             db_lock = guard.Lock();
   diag::TraceScope trace(diag::semanticDbLog(), QStringLiteral("semantic.db.embedding.upsert_one"),
                          QStringLiteral("file_id=%1 image_id=%2 model_key=%3")
                              .arg(static_cast<qulonglong>(record.file_id_))
@@ -1198,7 +1216,7 @@ auto SemanticStorageController::UpsertImageEmbeddingAndAssignLabel(
     SetError(error, "Semantic embedding model key is empty.");
     return false;
   }
-  const auto model_dim = GetModelEmbeddingDim(record.model_key_);
+  const auto model_dim = ModelEmbeddingDim(guard.conn_, record.model_key_);
   if (!model_dim.has_value()) {
     SetError(error, "Semantic model is not registered.");
     return false;
@@ -1213,31 +1231,32 @@ auto SemanticStorageController::UpsertImageEmbeddingAndAssignLabel(
   const auto delete_label_sql =
       std::format("DELETE FROM SemanticImageLabel WHERE file_id = {} AND model_key = {};",
                   record.file_id_, SqlString(record.model_key_));
-  if (!RunQuery(guard_.conn_, "BEGIN TRANSACTION;", error)) {
+  if (!RunQuery(guard.conn_, "BEGIN TRANSACTION;", error)) {
     return false;
   }
-  if (!RunQuery(guard_.conn_, delete_sql, error) ||
-      !RunQuery(guard_.conn_, delete_label_sql, error) ||
-      !InsertReadyImageEmbedding(guard_.conn_, record, *model_dim, error)) {
+  if (!RunQuery(guard.conn_, delete_sql, error) ||
+      !RunQuery(guard.conn_, delete_label_sql, error) ||
+      !InsertReadyImageEmbedding(guard.conn_, record, *model_dim, error)) {
     std::string rollback_error;
-    RunQuery(guard_.conn_, "ROLLBACK;", &rollback_error);
+    RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
     return false;
   }
 
-  auto label = QueryAssignedLabel(guard_.conn_, record, *model_dim, assignment_options, error);
+  auto label = QueryAssignedLabel(guard.conn_, record, *model_dim, assignment_options, error);
   if (!label.has_value() || !ValidateLabel(record, &*label, error) ||
-      !InsertSemanticLabel(guard_.conn_, *label, error)) {
+      !InsertSemanticLabel(guard.conn_, *label, error)) {
     std::string rollback_error;
-    RunQuery(guard_.conn_, "ROLLBACK;", &rollback_error);
+    RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
     return false;
   }
 
-  if (!RunQuery(guard_.conn_, "COMMIT;", error)) {
+  if (!RunQuery(guard.conn_, "COMMIT;", error)) {
     return false;
   }
   qCInfo(diag::semanticDbLog).noquote()
-      << QStringLiteral("semantic.db.embedding.upsert_one.ok file_id=%1 image_id=%2 label=%3 "
-                        "score=%4")
+      << QStringLiteral(
+             "semantic.db.embedding.upsert_one.ok file_id=%1 image_id=%2 label=%3 "
+             "score=%4")
              .arg(static_cast<qulonglong>(record.file_id_))
              .arg(static_cast<qulonglong>(record.image_id_))
              .arg(QString::fromStdString(label->label_))
@@ -1252,13 +1271,16 @@ auto SemanticStorageController::UpsertImageEmbeddingsAndAssignLabels(
     std::span<const SemanticImageEmbeddingRecord> records,
     const SemanticLabelAssignmentOptions&         assignment_options,
     std::vector<SemanticImageLabelRecord>* assigned_labels, std::string* error) const -> bool {
+  auto guard   = db_ctrl_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
   if (assigned_labels) {
     assigned_labels->clear();
   }
   if (records.empty()) {
     return true;
   }
-  diag::TraceScope trace(diag::semanticDbLog(), QStringLiteral("semantic.db.embedding.upsert_batch"),
+  diag::TraceScope trace(diag::semanticDbLog(),
+                         QStringLiteral("semantic.db.embedding.upsert_batch"),
                          QStringLiteral("count=%1 ids=%2")
                              .arg(static_cast<qulonglong>(records.size()))
                              .arg(SummarizeEmbeddingRecords(records)));
@@ -1277,7 +1299,7 @@ auto SemanticStorageController::UpsertImageEmbeddingsAndAssignLabels(
     SetError(error, "Semantic embedding model key is empty.");
     return false;
   }
-  const auto model_dim = GetModelEmbeddingDim(model_key);
+  const auto model_dim = ModelEmbeddingDim(guard.conn_, model_key);
   if (!model_dim.has_value()) {
     SetError(error, "Semantic model is not registered.");
     return false;
@@ -1296,12 +1318,12 @@ auto SemanticStorageController::UpsertImageEmbeddingsAndAssignLabels(
     }
   }
 
-  if (!RunQuery(guard_.conn_, "BEGIN TRANSACTION;", error)) {
+  if (!RunQuery(guard.conn_, "BEGIN TRANSACTION;", error)) {
     return false;
   }
   auto rollback = [&]() {
     std::string rollback_error;
-    RunQuery(guard_.conn_, "ROLLBACK;", &rollback_error);
+    RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
   };
 
   std::string id_list;
@@ -1317,15 +1339,15 @@ auto SemanticStorageController::UpsertImageEmbeddingsAndAssignLabels(
   const auto delete_label_sql =
       std::format("DELETE FROM SemanticImageLabel WHERE model_key = {} AND file_id IN ({});",
                   SqlString(model_key), id_list);
-  if (!RunQuery(guard_.conn_, delete_embedding_sql, error) ||
-      !RunQuery(guard_.conn_, delete_label_sql, error) ||
-      !AppendImageEmbeddingRows(guard_.conn_, records, *model_dim, error)) {
+  if (!RunQuery(guard.conn_, delete_embedding_sql, error) ||
+      !RunQuery(guard.conn_, delete_label_sql, error) ||
+      !AppendImageEmbeddingRows(guard.conn_, records, *model_dim, error)) {
     rollback();
     return false;
   }
 
   std::vector<SemanticImageLabelRecord> labels;
-  if (!QueryAssignedLabelsBatch(guard_.conn_, records, model_key, *model_dim, assignment_options,
+  if (!QueryAssignedLabelsBatch(guard.conn_, records, model_key, *model_dim, assignment_options,
                                 labels, error)) {
     rollback();
     return false;
@@ -1336,11 +1358,11 @@ auto SemanticStorageController::UpsertImageEmbeddingsAndAssignLabels(
       return false;
     }
   }
-  if (!AppendSemanticLabelRows(guard_.conn_, labels, error)) {
+  if (!AppendSemanticLabelRows(guard.conn_, labels, error)) {
     rollback();
     return false;
   }
-  if (!RunQuery(guard_.conn_, "COMMIT;", error)) {
+  if (!RunQuery(guard.conn_, "COMMIT;", error)) {
     rollback();
     return false;
   }
@@ -1358,6 +1380,8 @@ auto SemanticStorageController::UpsertImageEmbeddingsAndAssignLabels(
 
 auto SemanticStorageController::UpsertLabelPrototype(const SemanticLabelPrototypeRecord& record,
                                                      std::string* error) const -> bool {
+  auto guard   = db_ctrl_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
   if (record.model_key_.empty()) {
     SetError(error, "Semantic label prototype model key is empty.");
     return false;
@@ -1370,7 +1394,7 @@ auto SemanticStorageController::UpsertLabelPrototype(const SemanticLabelPrototyp
     SetError(error, "Semantic label prototype prompt config hash is empty.");
     return false;
   }
-  const auto model_dim = GetModelEmbeddingDim(record.model_key_);
+  const auto model_dim = ModelEmbeddingDim(guard.conn_, record.model_key_);
   if (!model_dim.has_value()) {
     SetError(error, "Semantic model is not registered.");
     return false;
@@ -1379,69 +1403,105 @@ auto SemanticStorageController::UpsertLabelPrototype(const SemanticLabelPrototyp
     return false;
   }
 
-  return UpsertLabelPrototypePrepared(guard_.conn_, record, *model_dim, error);
+  return UpsertLabelPrototypePrepared(guard.conn_, record, *model_dim, error);
 }
 
 auto SemanticStorageController::UpsertLabelPrototypes(
     std::span<const SemanticLabelPrototypeRecord> records, std::string* error) const -> bool {
+  auto guard   = db_ctrl_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
   if (records.empty()) {
     return true;
   }
-  if (!RunQuery(guard_.conn_, "BEGIN TRANSACTION;", error)) {
+  if (!RunQuery(guard.conn_, "BEGIN TRANSACTION;", error)) {
     return false;
   }
   for (const auto& record : records) {
-    if (!UpsertLabelPrototype(record, error)) {
+    if (record.model_key_.empty()) {
+      SetError(error, "Semantic label prototype model key is empty.");
       std::string rollback_error;
-      RunQuery(guard_.conn_, "ROLLBACK;", &rollback_error);
+      RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
+      return false;
+    }
+    if (record.label_.empty()) {
+      SetError(error, "Semantic label prototype label is empty.");
+      std::string rollback_error;
+      RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
+      return false;
+    }
+    if (record.prompt_config_hash_.empty()) {
+      SetError(error, "Semantic label prototype prompt config hash is empty.");
+      std::string rollback_error;
+      RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
+      return false;
+    }
+    const auto model_dim = ModelEmbeddingDim(guard.conn_, record.model_key_);
+    if (!model_dim.has_value()) {
+      SetError(error, "Semantic model is not registered.");
+      std::string rollback_error;
+      RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
+      return false;
+    }
+    if (!ValidateEmbedding(record.embedding_, *model_dim, error) ||
+        !UpsertLabelPrototypePrepared(guard.conn_, record, *model_dim, error)) {
+      std::string rollback_error;
+      RunQuery(guard.conn_, "ROLLBACK;", &rollback_error);
       return false;
     }
   }
-  return RunQuery(guard_.conn_, "COMMIT;", error);
+  return RunQuery(guard.conn_, "COMMIT;", error);
 }
 
 void SemanticStorageController::DeleteImageEmbeddingsForFiles(
     std::span<const sl_element_id_t> file_ids) const {
+  auto guard   = db_ctrl_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
   if (file_ids.empty()) {
     return;
   }
   const auto ids = IdList(file_ids);
-  RunQuery(guard_.conn_,
+  RunQuery(guard.conn_,
            std::format("DELETE FROM SemanticImageEmbedding WHERE file_id IN ({});", ids));
-  RunQuery(guard_.conn_,
+  RunQuery(guard.conn_,
            std::format("DELETE FROM SemanticImageEmbedding768 WHERE file_id IN ({});", ids));
-  RunQuery(guard_.conn_, std::format("DELETE FROM SemanticImageLabel WHERE file_id IN ({});", ids));
+  RunQuery(guard.conn_, std::format("DELETE FROM SemanticImageLabel WHERE file_id IN ({});", ids));
 }
 
 auto SemanticStorageController::CountImageEmbeddings(const std::string& model_key) const -> size_t {
-  const auto model_dim = GetModelEmbeddingDim(model_key);
+  auto       guard     = db_ctrl_.GetConnectionGuard();
+  auto       db_lock   = guard.Lock();
+  const auto model_dim = ModelEmbeddingDim(guard.conn_, model_key);
   if (!model_dim.has_value()) {
     return 0;
   }
   const auto count = ScalarInt64(
-      guard_.conn_, std::format("SELECT COUNT(*) FROM {} WHERE model_key = {};",
-                                ImageEmbeddingTableName(*model_dim), SqlString(model_key)));
+      guard.conn_, std::format("SELECT COUNT(*) FROM {} WHERE model_key = {};",
+                               ImageEmbeddingTableName(*model_dim), SqlString(model_key)));
   return count.has_value() ? static_cast<size_t>(*count) : 0U;
 }
 
 auto SemanticStorageController::CountImageEmbeddingsForFile(sl_element_id_t    file_id,
                                                             const std::string& model_key) const
     -> size_t {
-  const auto model_dim = GetModelEmbeddingDim(model_key);
+  auto       guard     = db_ctrl_.GetConnectionGuard();
+  auto       db_lock   = guard.Lock();
+  const auto model_dim = ModelEmbeddingDim(guard.conn_, model_key);
   if (!model_dim.has_value()) {
     return 0;
   }
-  const auto count = ScalarInt64(guard_.conn_, std::format("SELECT COUNT(*) FROM {} "
-                                                           "WHERE file_id = {} AND model_key = {};",
-                                                           ImageEmbeddingTableName(*model_dim),
-                                                           file_id, SqlString(model_key)));
+  const auto count = ScalarInt64(
+      guard.conn_, std::format("SELECT COUNT(*) FROM {} "
+                               "WHERE file_id = {} AND model_key = {};",
+                               ImageEmbeddingTableName(*model_dim), file_id, SqlString(model_key)));
   return count.has_value() ? static_cast<size_t>(*count) : 0U;
 }
 
 auto SemanticStorageController::HasReadyImageEmbedding(sl_element_id_t file_id, image_id_t image_id,
                                                        const std::string& model_key,
                                                        bool require_label) const -> bool {
-  const auto model_dim = GetModelEmbeddingDim(model_key);
+  auto       guard     = db_ctrl_.GetConnectionGuard();
+  auto       db_lock   = guard.Lock();
+  const auto model_dim = ModelEmbeddingDim(guard.conn_, model_key);
   if (!model_dim.has_value()) {
     return false;
   }
@@ -1461,30 +1521,33 @@ auto SemanticStorageController::HasReadyImageEmbedding(sl_element_id_t file_id, 
   }
   sql += ";";
 
-  const auto count = ScalarInt64(guard_.conn_, sql);
+  const auto count = ScalarInt64(guard.conn_, sql);
   return count.has_value() && *count > 0;
 }
 
 auto SemanticStorageController::CountImageLabelsForFile(sl_element_id_t    file_id,
                                                         const std::string& model_key) const
     -> size_t {
-  const auto count =
-      ScalarInt64(guard_.conn_, std::format("SELECT COUNT(*) FROM SemanticImageLabel "
-                                            "WHERE file_id = {} AND model_key = {};",
-                                            file_id, SqlString(model_key)));
+  auto       guard   = db_ctrl_.GetConnectionGuard();
+  auto       db_lock = guard.Lock();
+  const auto count = ScalarInt64(guard.conn_, std::format("SELECT COUNT(*) FROM SemanticImageLabel "
+                                                          "WHERE file_id = {} AND model_key = {};",
+                                                          file_id, SqlString(model_key)));
   return count.has_value() ? static_cast<size_t>(*count) : 0U;
 }
 
 auto SemanticStorageController::CountImageLabelsInFolder(sl_element_id_t    folder_id,
                                                          const std::string& model_key) const
     -> size_t {
+  auto guard   = db_ctrl_.GetConnectionGuard();
+  auto db_lock = guard.Lock();
   if (model_key.empty()) {
     return 0;
   }
 
   const auto scope = BuildScopedFileQuery(folder_id);
   const auto count = ScalarInt64(
-      guard_.conn_,
+      guard.conn_,
       std::format("SELECT COUNT(*) FROM SemanticImageLabel sl "
                   "JOIN (SELECT e.id AS file_id {}) scoped ON scoped.file_id = sl.file_id "
                   "WHERE sl.model_key = {} AND sl.label IS NOT NULL AND sl.label <> '';",
@@ -1495,30 +1558,35 @@ auto SemanticStorageController::CountImageLabelsInFolder(sl_element_id_t    fold
 auto SemanticStorageController::CountLabelPrototypes(const std::string& model_key,
                                                      const std::string& prompt_config_hash) const
     -> size_t {
-  const auto model_dim = GetModelEmbeddingDim(model_key);
+  auto       guard     = db_ctrl_.GetConnectionGuard();
+  auto       db_lock   = guard.Lock();
+  const auto model_dim = ModelEmbeddingDim(guard.conn_, model_key);
   if (!model_dim.has_value()) {
     return 0;
   }
   const auto count =
-      ScalarInt64(guard_.conn_, std::format("SELECT COUNT(*) FROM {} "
-                                            "WHERE model_key = {} AND prompt_config_hash = {};",
-                                            LabelPrototypeTableName(*model_dim),
-                                            SqlString(model_key), SqlString(prompt_config_hash)));
+      ScalarInt64(guard.conn_, std::format("SELECT COUNT(*) FROM {} "
+                                           "WHERE model_key = {} AND prompt_config_hash = {};",
+                                           LabelPrototypeTableName(*model_dim),
+                                           SqlString(model_key), SqlString(prompt_config_hash)));
   return count.has_value() ? static_cast<size_t>(*count) : 0U;
 }
 
 auto SemanticStorageController::CountLabelQueries(const std::string& prompt_config_hash) const
     -> size_t {
-  const auto count =
-      ScalarInt64(guard_.conn_, std::format("SELECT COUNT(*) FROM SemanticLabelQuery "
-                                            "WHERE prompt_config_hash = {};",
-                                            SqlString(prompt_config_hash)));
+  auto       guard   = db_ctrl_.GetConnectionGuard();
+  auto       db_lock = guard.Lock();
+  const auto count = ScalarInt64(guard.conn_, std::format("SELECT COUNT(*) FROM SemanticLabelQuery "
+                                                          "WHERE prompt_config_hash = {};",
+                                                          SqlString(prompt_config_hash)));
   return count.has_value() ? static_cast<size_t>(*count) : 0U;
 }
 
 auto SemanticStorageController::ListLabelQueries(const std::string& prompt_config_hash,
                                                  std::string*       error) const
     -> std::vector<SemanticLabelQueryRecord> {
+  auto                                  guard   = db_ctrl_.GetConnectionGuard();
+  auto                                  db_lock = guard.Lock();
   std::vector<SemanticLabelQueryRecord> out;
   const auto                            sql = std::format(
       "SELECT prompt_config_hash, label, query_text FROM SemanticLabelQuery "
@@ -1526,7 +1594,7 @@ auto SemanticStorageController::ListLabelQueries(const std::string& prompt_confi
       SqlString(prompt_config_hash));
 
   duckdb_result result;
-  if (duckdb_query(guard_.conn_, sql.c_str(), &result) != DuckDBSuccess) {
+  if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
     const char* raw_error = duckdb_result_error(&result);
     SetError(error, raw_error ? raw_error : "DuckDB semantic label query list failed.");
     duckdb_destroy_result(&result);
@@ -1560,8 +1628,10 @@ auto SemanticStorageController::LoadLabelPrototypes(const std::string& model_key
                                                     const std::string& prompt_config_hash,
                                                     std::string*       error) const
     -> std::vector<SemanticGenerationLabelPrototype> {
+  auto                                          guard   = db_ctrl_.GetConnectionGuard();
+  auto                                          db_lock = guard.Lock();
   std::vector<SemanticGenerationLabelPrototype> out;
-  const auto                                    model_dim = GetModelEmbeddingDim(model_key);
+  const auto                                    model_dim = ModelEmbeddingDim(guard.conn_, model_key);
   if (!model_dim.has_value()) {
     SetError(error, "Semantic model is not registered.");
     return out;
@@ -1583,7 +1653,7 @@ auto SemanticStorageController::LoadLabelPrototypes(const std::string& model_key
       SqlString(prompt_config_hash));
 
   duckdb_result result;
-  if (duckdb_query(guard_.conn_, sql.c_str(), &result) != DuckDBSuccess) {
+  if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
     const char* raw_error = duckdb_result_error(&result);
     SetError(error, raw_error ? raw_error : "DuckDB semantic label prototype query failed.");
     duckdb_destroy_result(&result);
@@ -1614,14 +1684,16 @@ auto SemanticStorageController::GetImageLabelForFile(sl_element_id_t    file_id,
                                                      const std::string& model_key,
                                                      std::string*       error) const
     -> std::optional<SemanticImageLabelRecord> {
-  const auto sql = std::format(
+  auto       guard   = db_ctrl_.GetConnectionGuard();
+  auto       db_lock = guard.Lock();
+  const auto sql     = std::format(
       "SELECT file_id, model_key, label, score, second_label, second_score, "
-      "margin, confident, top_scores "
-      "FROM SemanticImageLabel WHERE file_id = {} AND model_key = {};",
+          "margin, confident, top_scores "
+          "FROM SemanticImageLabel WHERE file_id = {} AND model_key = {};",
       file_id, SqlString(model_key));
 
   duckdb_result result;
-  if (duckdb_query(guard_.conn_, sql.c_str(), &result) != DuckDBSuccess) {
+  if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
     const char* raw_error = duckdb_result_error(&result);
     SetError(error, raw_error ? raw_error : "DuckDB semantic label query failed.");
     duckdb_destroy_result(&result);
@@ -1669,18 +1741,20 @@ auto SemanticStorageController::GetImageLabelForFile(sl_element_id_t    file_id,
 auto SemanticStorageController::SearchImageEmbeddings(
     sl_element_id_t folder_id, const std::string& model_key, std::span<const float> query_embedding,
     size_t offset, size_t limit, std::string* error) const -> std::vector<SemanticRankedFile> {
-  diag::TraceScope trace(diag::semanticDbLog(), QStringLiteral("semantic.db.search"),
-                         QStringLiteral("folder_id=%1 model_key=%2 offset=%3 limit=%4 dim=%5")
-                             .arg(static_cast<qulonglong>(folder_id))
-                             .arg(QString::fromStdString(model_key))
-                             .arg(static_cast<qulonglong>(offset))
-                             .arg(static_cast<qulonglong>(limit))
-                             .arg(static_cast<qulonglong>(query_embedding.size())));
+  auto                            guard   = db_ctrl_.GetConnectionGuard();
+  auto                            db_lock = guard.Lock();
+  diag::TraceScope                trace(diag::semanticDbLog(), QStringLiteral("semantic.db.search"),
+                                        QStringLiteral("folder_id=%1 model_key=%2 offset=%3 limit=%4 dim=%5")
+                                            .arg(static_cast<qulonglong>(folder_id))
+                                            .arg(QString::fromStdString(model_key))
+                                            .arg(static_cast<qulonglong>(offset))
+                                            .arg(static_cast<qulonglong>(limit))
+                                            .arg(static_cast<qulonglong>(query_embedding.size())));
   std::vector<SemanticRankedFile> out;
   if (limit == 0) {
     return out;
   }
-  const auto model_dim = GetModelEmbeddingDim(model_key);
+  const auto model_dim = ModelEmbeddingDim(guard.conn_, model_key);
   if (!model_dim.has_value()) {
     SetError(error, "Semantic model is not registered.");
     return out;
@@ -1721,7 +1795,7 @@ auto SemanticStorageController::SearchImageEmbeddings(
       query_literal, candidate_limit, scope.from_where_);
 
   duckdb_result result;
-  if (duckdb_query(guard_.conn_, sql.c_str(), &result) != DuckDBSuccess) {
+  if (duckdb_query(guard.conn_, sql.c_str(), &result) != DuckDBSuccess) {
     const char* raw_error = duckdb_result_error(&result);
     SetError(error, raw_error ? raw_error : "DuckDB semantic search failed.");
     duckdb_destroy_result(&result);
@@ -1748,8 +1822,9 @@ auto SemanticStorageController::SearchImageEmbeddings(
   const auto raw_count = candidates.size();
   auto       page      = FilterAndPageSemanticCandidates(std::move(candidates), offset, limit);
   qCInfo(diag::semanticDbLog).noquote()
-      << QStringLiteral("semantic.db.search.result folder_id=%1 model_key=%2 raw_candidates=%3 "
-                        "page_count=%4 offset=%5 limit=%6")
+      << QStringLiteral(
+             "semantic.db.search.result folder_id=%1 model_key=%2 raw_candidates=%3 "
+             "page_count=%4 offset=%5 limit=%6")
              .arg(static_cast<qulonglong>(folder_id))
              .arg(QString::fromStdString(model_key))
              .arg(static_cast<qulonglong>(raw_count))
@@ -1761,7 +1836,9 @@ auto SemanticStorageController::SearchImageEmbeddings(
 
 auto SemanticStorageController::EnsureVectorSearchIndex(const std::string& model_key,
                                                         std::string*       error) const -> bool {
-  const auto model_dim = GetModelEmbeddingDim(model_key);
+  auto       guard     = db_ctrl_.GetConnectionGuard();
+  auto       db_lock   = guard.Lock();
+  const auto model_dim = ModelEmbeddingDim(guard.conn_, model_key);
   if (!model_dim.has_value()) {
     SetError(error, "Semantic model is not registered.");
     return false;
@@ -1771,14 +1848,14 @@ auto SemanticStorageController::EnsureVectorSearchIndex(const std::string& model
                                 *model_dim));
     return false;
   }
-  if (!LoadVssExtension(guard_.conn_, error)) {
+  if (!LoadVssExtension(guard.conn_, error)) {
     return false;
   }
-  if (!RunQuery(guard_.conn_, "SET hnsw_enable_experimental_persistence = true;", error)) {
+  if (!RunQuery(guard.conn_, "SET hnsw_enable_experimental_persistence = true;", error)) {
     return false;
   }
   return RunQuery(
-      guard_.conn_,
+      guard.conn_,
       std::format("CREATE INDEX IF NOT EXISTS {} "
                   "ON {} USING HNSW (embedding);",
                   ImageEmbeddingIndexName(*model_dim), ImageEmbeddingTableName(*model_dim)),

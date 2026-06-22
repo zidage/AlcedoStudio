@@ -7,7 +7,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use apple_cf::cv::CVPixelBuffer;
+use apple_cf::cv::{CVPixelBuffer, CVPixelBufferLockFlags};
 use coreml::{
     BatchProvider, ComputeUnits, FeatureProvider, Model, ModelConfiguration, MultiArray,
     MultiArrayScalar,
@@ -226,17 +226,8 @@ impl CoreMlClipEngine {
     }
 
     fn forward_single_image_embedding(&self, rgb: &RgbImage) -> Result<Vec<f32>> {
-        let mut bgra = self.prepare_bgra_image(rgb)?;
-        let pixel_buffer = unsafe {
-            CVPixelBuffer::create_with_bytes(
-                self.image_size,
-                self.image_size,
-                BGRA_PIXEL_FORMAT,
-                bgra.as_mut_ptr().cast(),
-                self.image_size * 4,
-            )
-        }
-        .map_err(|status| anyhow::anyhow!("failed to create CoreML pixel buffer: {status}"))?;
+        let bgra = self.prepare_bgra_image(rgb)?;
+        let pixel_buffer = self.make_owned_bgra_pixel_buffer(&bgra)?;
 
         let mut inputs = FeatureProvider::new();
         inputs
@@ -251,6 +242,51 @@ impl CoreMlClipEngine {
             .predict(&inputs)
             .map_err(|e| anyhow::anyhow!("failed to run image CoreML model: {e}"))?;
         self.extract_embedding(&outputs, "image")
+    }
+
+    fn make_owned_bgra_pixel_buffer(&self, bgra: &[u8]) -> Result<CVPixelBuffer> {
+        let expected_len = self.image_size * self.image_size * 4;
+        if bgra.len() != expected_len {
+            bail!(
+                "CoreML image buffer length mismatch: expected {}, got {}",
+                expected_len,
+                bgra.len()
+            );
+        }
+
+        let pixel_buffer = CVPixelBuffer::create(self.image_size, self.image_size, BGRA_PIXEL_FORMAT)
+            .map_err(|status| anyhow::anyhow!("failed to allocate CoreML pixel buffer: {status}"))?;
+        {
+            let mut guard = pixel_buffer
+                .lock(CVPixelBufferLockFlags::NONE)
+                .map_err(|status| anyhow::anyhow!("failed to lock CoreML pixel buffer: {status}"))?;
+            let bytes_per_row = guard.bytes_per_row();
+            let dst = guard
+                .as_slice_mut()
+                .ok_or_else(|| anyhow::anyhow!("CoreML pixel buffer is not writable"))?;
+            let src_row_bytes = self.image_size * 4;
+            if bytes_per_row < src_row_bytes {
+                bail!(
+                    "CoreML pixel buffer row stride {} is smaller than expected {}",
+                    bytes_per_row,
+                    src_row_bytes
+                );
+            }
+            if dst.len() < bytes_per_row * self.image_size {
+                bail!(
+                    "CoreML pixel buffer data length {} is smaller than expected {}",
+                    dst.len(),
+                    bytes_per_row * self.image_size
+                );
+            }
+            for row in 0..self.image_size {
+                let src_start = row * src_row_bytes;
+                let dst_start = row * bytes_per_row;
+                dst[dst_start..dst_start + src_row_bytes]
+                    .copy_from_slice(&bgra[src_start..src_start + src_row_bytes]);
+            }
+        }
+        Ok(pixel_buffer)
     }
 
     fn prepare_bgra_image(&self, rgb: &RgbImage) -> Result<Vec<u8>> {

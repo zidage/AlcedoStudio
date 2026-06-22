@@ -40,6 +40,7 @@ void ImageController::CaptureImagePool(std::shared_ptr<ImagePoolManager> image_p
         [img, &converted_params]() { converted_params.push_r(ImageService::ToParams(img)); });
   }
 
+  auto db_lock = guard_.Lock();
   for (size_t i = 0; i < pool.size(); ++i) {
     auto result = converted_params.pop_r();
     service_.InsertParams(result);
@@ -51,9 +52,13 @@ void ImageController::CaptureImagePool(std::shared_ptr<ImagePoolManager> image_p
  *
  * @param image
  */
-void ImageController::AddImage(std::shared_ptr<Image> image) { service_.Insert(image); }
+void ImageController::AddImage(std::shared_ptr<Image> image) {
+  auto db_lock = guard_.Lock();
+  service_.Insert(image);
+}
 
 void ImageController::AddImages(std::span<const std::shared_ptr<Image>> images) {
+  auto db_lock = guard_.Lock();
   service_.InsertBatch(images);
 }
 
@@ -62,9 +67,13 @@ void ImageController::AddImages(std::span<const std::shared_ptr<Image>> images) 
  *
  * @param remove_id
  */
-void ImageController::RemoveImageById(uint32_t remove_id) { service_.RemoveById(remove_id); }
+void ImageController::RemoveImageById(uint32_t remove_id) {
+  auto db_lock = guard_.Lock();
+  service_.RemoveById(remove_id);
+}
 
 void ImageController::RemoveImagesByIds(std::span<const image_id_t> remove_ids) {
+  auto db_lock = guard_.Lock();
   service_.RemoveByIds(remove_ids);
 }
 
@@ -74,6 +83,7 @@ void ImageController::RemoveImagesByIds(std::span<const image_id_t> remove_ids) 
  * @param type
  */
 void ImageController::RemoveImageByType(ImageType type) {
+  auto db_lock = guard_.Lock();
   service_.RemoveByClause(std::format("type={}", static_cast<uint32_t>(type)));
 }
 
@@ -83,15 +93,18 @@ void ImageController::RemoveImageByType(ImageType type) {
  * @param path
  */
 void ImageController::RemoveImageByPath(const std::wstring& path) {
+  auto db_lock = guard_.Lock();
   service_.RemoveByClause(std::format("image_path={}", conv::ToBytes(path)));
 }
 
 void ImageController::UpdateImage(const std::shared_ptr<Image> image) {
+  auto db_lock = guard_.Lock();
   service_.Update(image, image->image_id_);
 }
 
 void ImageController::UpdateImages(
     std::span<const std::pair<image_id_t, std::shared_ptr<Image>>> updates) {
+  auto db_lock = guard_.Lock();
   service_.UpdateBatch(updates);
 }
 
@@ -102,7 +115,8 @@ void ImageController::UpdateImages(
  * @return std::shared_ptr<Image>
  */
 auto ImageController::GetImageById(image_id_t id) -> std::shared_ptr<Image> {
-  auto result = service_.GetImageById(id);
+  auto db_lock = guard_.Lock();
+  auto result  = service_.GetImageById(id);
   // Assume the id is unique
   if (result.empty()) {
     return nullptr;
@@ -119,6 +133,7 @@ auto ImageController::GetImageById(image_id_t id) -> std::shared_ptr<Image> {
  * @return std::vector<std::shared_ptr<Image>>
  */
 auto ImageController::GetImageByType(ImageType type) -> std::vector<std::shared_ptr<Image>> {
+  auto db_lock = guard_.Lock();
   return service_.GetImageByType(type);
 }
 
@@ -130,6 +145,7 @@ auto ImageController::GetImageByType(ImageType type) -> std::vector<std::shared_
  */
 auto ImageController::GetImageByName(const std::wstring& name)
     -> std::vector<std::shared_ptr<Image>> {
+  auto db_lock = guard_.Lock();
   return service_.GetImageByName(name);
 }
 
@@ -141,6 +157,7 @@ auto ImageController::GetImageByName(const std::wstring& name)
  */
 auto ImageController::GetImageByPath(const std::filesystem::path path)
     -> std::vector<std::shared_ptr<Image>> {
+  auto db_lock = guard_.Lock();
   return service_.GetImageByPath(path);
 }
 };  // namespace alcedo

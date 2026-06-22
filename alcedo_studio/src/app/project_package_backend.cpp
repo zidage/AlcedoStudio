@@ -609,6 +609,7 @@ auto CreateLiveDbSnapshot(const std::shared_ptr<ProjectService>& project,
 
     auto& db_ctrl = storage->GetDBController();
     auto  guard   = db_ctrl.GetConnectionGuard();
+    auto  db_lock = guard.Lock();
 
     std::error_code ec;
     std::filesystem::remove(snapshotPath, ec);

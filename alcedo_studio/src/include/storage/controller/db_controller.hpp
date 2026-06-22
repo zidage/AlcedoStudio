@@ -8,6 +8,8 @@
 
 #include <codecvt>
 #include <filesystem>
+#include <memory>
+#include <mutex>
 #include <string>
 
 #include "controller_types.hpp"
@@ -17,13 +19,14 @@
 namespace alcedo {
 class DBController {
  private:
-  duckdb_database              db_;
+  duckdb_database                       db_;
+  std::shared_ptr<std::recursive_mutex> db_lock_;
 
-  file_path_t                  db_path_;
+  file_path_t                           db_path_;
 
-  bool                         initialized_;
+  bool                                  initialized_;
 
-  constexpr static const char* init_table_query =
+  constexpr static const char*          init_table_query =
       "CREATE TABLE Sleeve (id BIGINT PRIMARY KEY);"
       "CREATE TABLE Image (id BIGINT PRIMARY KEY, image_path TEXT, file_name TEXT, type INTEGER, "
       "metadata JSON);"

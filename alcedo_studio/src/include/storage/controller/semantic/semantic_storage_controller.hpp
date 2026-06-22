@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "storage/controller/controller_types.hpp"
+#include "storage/controller/db_controller.hpp"
 #include "storage/controller/semantic/semantic_label_config.hpp"
 #include "type/type.hpp"
 
@@ -81,10 +81,10 @@ struct SemanticRankedFile {
 
 class SemanticStorageController {
  private:
-  ConnectionGuard guard_;
+  DBController& db_ctrl_;
 
  public:
-  explicit SemanticStorageController(ConnectionGuard&& guard);
+  explicit SemanticStorageController(DBController& db_ctrl);
 
   [[nodiscard]] auto UpsertModel(const SemanticModelRecord& model,
                                  std::string*               error = nullptr) const -> bool;
