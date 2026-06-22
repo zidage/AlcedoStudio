@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use crate::config::AppConfig;
 use crate::service::embedding::{EmbeddingEngine, EngineModelInfo, UnavailableEmbeddingEngine};
-use crate::service::model_assets::{REQUIRED_EMBEDDING_DIMENSION, find_profile};
+use crate::service::model_assets::{
+    InferenceBackend, REQUIRED_EMBEDDING_DIMENSION, ensure_profile_supported, find_profile,
+};
 use crate::service::ort_clip::OrtClipEngine;
 use tracing::warn;
 
@@ -23,9 +25,10 @@ pub fn build_semantic_engine(config: &AppConfig) -> Arc<dyn EmbeddingEngine> {
 
 fn build_available_semantic_engine(config: &AppConfig) -> anyhow::Result<Arc<dyn EmbeddingEngine>> {
     let profile = find_profile(&config.semantic.model_id)?;
-    match profile.engine_profile_id {
-        "siglip2-coreml-native" => build_coreml_semantic_engine(config),
-        _ => Ok(Arc::new(OrtClipEngine::new(&config.semantic)?)),
+    ensure_profile_supported(profile)?;
+    match profile.inference_backend {
+        InferenceBackend::NativeCoreMl => build_coreml_semantic_engine(config),
+        InferenceBackend::OnnxRuntime => Ok(Arc::new(OrtClipEngine::new(&config.semantic)?)),
     }
 }
 

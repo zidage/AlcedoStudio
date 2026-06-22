@@ -48,6 +48,7 @@ auto                  BuildProfiles() -> std::vector<ModelProfileSpec> {
   mobileclip.model_id                   = kMobileClipModelId;
   mobileclip.revision                   = kMobileClipRevision;
   mobileclip.engine_profile_id          = "mobileclip2-openclip";
+  mobileclip.inference_backend          = ModelInferenceBackend::kOnnxRuntime;
   mobileclip.language                   = ModelLanguage::kEn;
   mobileclip.embedding_dimension        = kSemanticRequiredEmbeddingDimension;
   mobileclip.native_embedding_dimension = kSemanticRequiredEmbeddingDimension;
@@ -77,6 +78,7 @@ auto                  BuildProfiles() -> std::vector<ModelProfileSpec> {
   jina.model_id                   = kJinaClipRepo;
   jina.revision                   = kJinaClipRevision;
   jina.engine_profile_id          = kJinaClipEngineProfileId;
+  jina.inference_backend          = ModelInferenceBackend::kOnnxRuntime;
   jina.language                   = ModelLanguage::kMultilingual;
   jina.embedding_dimension        = kSemanticRequiredEmbeddingDimension;
   jina.native_embedding_dimension = 1024;
@@ -105,6 +107,7 @@ auto                  BuildProfiles() -> std::vector<ModelProfileSpec> {
   siglip.model_id                   = kSiglip2Repo;
   siglip.revision                   = kSiglip2Revision;
   siglip.engine_profile_id          = "siglip2-openclip";
+  siglip.inference_backend          = ModelInferenceBackend::kOnnxRuntime;
   siglip.language                   = ModelLanguage::kMultilingual;
   siglip.embedding_dimension        = kSemanticSiglip2EmbeddingDimension;
   siglip.native_embedding_dimension = kSemanticSiglip2EmbeddingDimension;
@@ -137,6 +140,7 @@ auto                  BuildProfiles() -> std::vector<ModelProfileSpec> {
   siglip_coreml.model_id                   = kSiglip2CoreMlRepo;
   siglip_coreml.revision                   = kSiglip2CoreMlRevision;
   siglip_coreml.engine_profile_id          = "siglip2-coreml-native";
+  siglip_coreml.inference_backend          = ModelInferenceBackend::kNativeCoreMl;
   siglip_coreml.language                   = ModelLanguage::kMultilingual;
   siglip_coreml.embedding_dimension        = kSemanticSiglip2EmbeddingDimension;
   siglip_coreml.native_embedding_dimension = kSemanticSiglip2EmbeddingDimension;
@@ -211,8 +215,40 @@ auto ToString(ModelLanguage language) -> const char* {
   return "multilingual";
 }
 
+auto ToString(ModelInferenceBackend backend) -> const char* {
+  switch (backend) {
+    case ModelInferenceBackend::kOnnxRuntime:
+      return "onnx_runtime";
+    case ModelInferenceBackend::kNativeCoreMl:
+      return "native_coreml";
+  }
+  return "onnx_runtime";
+}
+
+auto IsModelProfileSupportedOnCurrentPlatform(const ModelProfileSpec& profile) -> bool {
+  switch (profile.inference_backend) {
+    case ModelInferenceBackend::kOnnxRuntime:
+      return true;
+    case ModelInferenceBackend::kNativeCoreMl:
+#ifdef Q_OS_MACOS
+      return true;
+#else
+      return false;
+#endif
+  }
+  return false;
+}
+
 auto SemanticModelProfiles() -> const std::vector<ModelProfileSpec>& {
-  static const std::vector<ModelProfileSpec> kProfiles = BuildProfiles();
+  static const std::vector<ModelProfileSpec> kProfiles = [] {
+    std::vector<ModelProfileSpec> profiles;
+    for (const auto& profile : BuildProfiles()) {
+      if (IsModelProfileSupportedOnCurrentPlatform(profile)) {
+        profiles.push_back(profile);
+      }
+    }
+    return profiles;
+  }();
   return kProfiles;
 }
 

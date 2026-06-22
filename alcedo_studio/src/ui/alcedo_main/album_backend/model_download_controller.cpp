@@ -507,6 +507,8 @@ QVariantList ModelDownloadController::ModelProfileOptions() const {
     entry.insert(QStringLiteral("label"), QString::fromLatin1(profile.display_name));
     entry.insert(QStringLiteral("modelId"), QString::fromLatin1(profile.model_id));
     entry.insert(QStringLiteral("revision"), QString::fromLatin1(profile.revision));
+    entry.insert(QStringLiteral("inferenceBackend"),
+                 QString::fromLatin1(ToString(profile.inference_backend)));
     entry.insert(QStringLiteral("language"), QString::fromLatin1(ToString(profile.language)));
     entry.insert(QStringLiteral("imageSize"), static_cast<int>(profile.image_size));
     entry.insert(QStringLiteral("nativeEmbeddingDim"),
