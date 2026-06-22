@@ -5,6 +5,9 @@ set(PUERHLAB_LIBRAW_SOURCE_DIR
 option(PUERHLAB_USE_BUNDLED_LIBRAW
     "Build the bundled LibRaw checkout instead of a system LibRaw package."
     ON)
+option(PUERHLAB_REQUIRE_BUNDLED_LIBRAW
+    "Fail configuration when PUERHLAB_USE_BUNDLED_LIBRAW is ON but the bundled LibRaw checkout is missing."
+    ${WIN32})
 
 set(PUERHLAB_LIBRAW_AVAILABLE OFF)
 if(PUERHLAB_USE_BUNDLED_LIBRAW
@@ -31,7 +34,9 @@ if(PUERHLAB_USE_BUNDLED_LIBRAW
         $<$<CXX_COMPILER_ID:MSVC>:/w>
         $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-w>)
     if(WIN32)
-        target_compile_definitions(puerhlab_libraw PUBLIC LIBRAW_NODLL)
+        target_compile_definitions(puerhlab_libraw
+            PUBLIC LIBRAW_NODLL
+            PRIVATE LIBRAW_BUILDLIB)
     endif()
 
     if(NOT TARGET libraw::raw_r)
@@ -40,10 +45,16 @@ if(PUERHLAB_USE_BUNDLED_LIBRAW
     set(PUERHLAB_LIBRAW_AVAILABLE ON)
 else()
     if(PUERHLAB_USE_BUNDLED_LIBRAW)
-        message(WARNING
+        set(_puerhlab_libraw_missing_message
             "Bundled LibRaw source was not found at ${PUERHLAB_LIBRAW_SOURCE_DIR}. "
             "Run `git submodule update --init --recursive alcedo_studio/src/third_party/libraw` "
-            "and re-configure. Falling back to a system LibRaw package.")
+            "and re-configure.")
+        if(PUERHLAB_REQUIRE_BUNDLED_LIBRAW)
+            message(FATAL_ERROR "${_puerhlab_libraw_missing_message}")
+        else()
+            message(WARNING
+                "${_puerhlab_libraw_missing_message} Falling back to a system LibRaw package.")
+        endif()
     endif()
 
     if(WIN32)

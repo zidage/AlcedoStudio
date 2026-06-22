@@ -46,6 +46,11 @@ if [[ ! -e "alcedo_studio/src/third_party/libultrahdr/third_party/image_io/inclu
   git submodule update --init --recursive --depth 1 "alcedo_studio/src/third_party/libultrahdr"
 fi
 
+if [[ ! -e "alcedo_studio/src/third_party/libraw/libraw/libraw.h" ]]; then
+  git submodule sync -- "alcedo_studio/src/third_party/libraw"
+  git submodule update --init --recursive --depth 1 "alcedo_studio/src/third_party/libraw"
+fi
+
 # The CI preset forces PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF=ON, so gRPC and protobuf
 # are consumed from Homebrew (brew install grpc protobuf in the workflow) and the
 # bundled source submodules are never built. Skip the recursive grpc/protobuf

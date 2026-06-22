@@ -15,7 +15,9 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
         "ALCEDO_BUILD_TESTS": "ON",
-        "ALCEDO_BUILD_TESTS_BY_DEFAULT": "ON"
+        "ALCEDO_BUILD_TESTS_BY_DEFAULT": "ON",
+        "PUERHLAB_USE_BUNDLED_LIBRAW": "ON",
+        "PUERHLAB_REQUIRE_BUNDLED_LIBRAW": "ON"
       }
     },
     {
@@ -29,7 +31,9 @@
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
         "CMAKE_INSTALL_PREFIX": "${sourceDir}/build/install",
         "ALCEDO_BUILD_TESTS": "OFF",
-        "ALCEDO_ENABLE_WEBGPU": "OFF"
+        "ALCEDO_ENABLE_WEBGPU": "OFF",
+        "PUERHLAB_USE_BUNDLED_LIBRAW": "ON",
+        "PUERHLAB_REQUIRE_BUNDLED_LIBRAW": "ON"
       }
     },
     {
@@ -43,7 +47,9 @@
         "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/vcpkg/scripts/buildsystems/vcpkg.cmake",
         "ALCEDO_BUILD_TESTS": "ON",
         "ALCEDO_BUILD_TESTS_BY_DEFAULT": "ON",
-        "ALCEDO_BUILD_DEMO_TARGETS": "ON"
+        "ALCEDO_BUILD_DEMO_TARGETS": "ON",
+        "PUERHLAB_USE_BUNDLED_LIBRAW": "ON",
+        "PUERHLAB_REQUIRE_BUNDLED_LIBRAW": "ON"
       }
     },
     {
@@ -119,6 +125,8 @@
         "ALCEDO_BUILD_CI_TESTS": "ON",
         "ALCEDO_MACOS_BUNDLE": "OFF",
         "ALCEDO_GENERATE_QMLTYPES": "OFF",
+        "PUERHLAB_USE_BUNDLED_LIBRAW": "ON",
+        "PUERHLAB_REQUIRE_BUNDLED_LIBRAW": "ON",
         "PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF": "ON",
         "CMAKE_OSX_DEPLOYMENT_TARGET": "13.3"
       }
