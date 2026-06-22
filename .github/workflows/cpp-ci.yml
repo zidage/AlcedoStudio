@@ -37,7 +37,7 @@ jobs:
           brew update
           # grpc + protobuf: required by the semantic search proto codegen under
           # PUERHLAB_USE_SYSTEM_GRPC_PROTOBUF=ON (see alcedo_studio/src/third_party/CMakeLists.txt).
-          brew install cmake ninja qt opencv opencolorio duckdb exiv2 glib libraw little-cms2 highway openimageio pkg-config xxhash eigen libomp grpc protobuf
+          brew install cmake ninja qt opencv opencolorio duckdb exiv2 glib little-cms2 highway openimageio pkg-config xxhash eigen libomp grpc protobuf
 
       - name: Pre-install DuckDB VSS extension
         # Semantic search needs DuckDB's `vss` extension. On a fresh runner the
