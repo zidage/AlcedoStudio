@@ -24,6 +24,7 @@
 #include <duckdb.h>
 #include <json.hpp>
 
+#include "app/model_asset_catalog.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
 #include "sleeve/storage_service.hpp"
@@ -33,6 +34,26 @@ namespace alcedo::ui::test {
 namespace {
 
 using ProjectTests = AlbumBackendTestFixture;
+
+TEST(ModelAssetCatalogTests, NativeCoreMlProfileIsOnlyAvailableOnMacos) {
+  const auto has_coreml = std::any_of(
+      SemanticModelProfiles().begin(), SemanticModelProfiles().end(), [](const auto& profile) {
+        return std::string{profile.profile_id} == "siglip2-base-256-coreml-macos" &&
+               profile.inference_backend == ModelInferenceBackend::kNativeCoreMl;
+      });
+
+#ifdef __APPLE__
+  EXPECT_TRUE(has_coreml);
+  EXPECT_NE(FindSemanticProfile("siglip2-base-256-coreml-macos"), nullptr);
+#else
+  EXPECT_FALSE(has_coreml);
+  EXPECT_EQ(FindSemanticProfile("siglip2-base-256-coreml-macos"), nullptr);
+#endif
+
+  EXPECT_NE(FindSemanticProfile("mobileclip2-s2-en"), nullptr);
+  EXPECT_NE(FindSemanticProfile("jina-clip-v2-int8-multilingual"), nullptr);
+  EXPECT_NE(FindSemanticProfile("siglip2-b32-256-multilingual"), nullptr);
+}
 
 auto FindPackedProjectPath(const std::filesystem::path& dir)
     -> std::optional<std::filesystem::path> {

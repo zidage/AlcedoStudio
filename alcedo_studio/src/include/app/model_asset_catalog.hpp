@@ -44,6 +44,10 @@ enum class ModelLanguage : uint8_t { kEn, kZh, kMultilingual };
 
 auto ToString(ModelLanguage language) -> const char*;
 
+enum class ModelInferenceBackend : uint8_t { kOnnxRuntime, kNativeCoreMl };
+
+auto ToString(ModelInferenceBackend backend) -> const char*;
+
 struct ModelAssetSpec {
   ModelAssetRole role;
   const char*    repo_id;
@@ -60,6 +64,7 @@ struct ModelProfileSpec {
   const char*                 model_id;
   const char*                 revision;
   const char*                 engine_profile_id;
+  ModelInferenceBackend       inference_backend;
   ModelLanguage               language;
   uint32_t                    embedding_dimension        = 0;
   uint32_t                    native_embedding_dimension = 0;
@@ -75,6 +80,10 @@ auto SemanticModelProfiles() -> const std::vector<ModelProfileSpec>&;
 
 // Looks up a profile by profile_id or model_id. Returns nullptr if unknown.
 auto FindSemanticProfile(const std::string& profile_or_model_id) -> const ModelProfileSpec*;
+
+// Whether a profile can run in this build's native inference stack. ONNX Runtime
+// profiles are cross-platform; native CoreML profiles are macOS-only.
+auto IsModelProfileSupportedOnCurrentPlatform(const ModelProfileSpec& profile) -> bool;
 
 auto ProfileTotalBytes(const ModelProfileSpec& profile) -> uint64_t;
 

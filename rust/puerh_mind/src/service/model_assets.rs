@@ -76,6 +76,29 @@ impl ModelLanguage {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InferenceBackend {
+    OnnxRuntime,
+    NativeCoreMl,
+}
+
+impl InferenceBackend {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InferenceBackend::OnnxRuntime => "onnx_runtime",
+            InferenceBackend::NativeCoreMl => "native_coreml",
+        }
+    }
+
+    pub fn is_supported_on_current_platform(self) -> bool {
+        match self {
+            InferenceBackend::OnnxRuntime => true,
+            InferenceBackend::NativeCoreMl => cfg!(target_os = "macos"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ModelAssetSpec {
     pub role: AssetRole,
@@ -94,6 +117,7 @@ pub struct ModelProfileSpec {
     pub model_id: &'static str,
     pub revision: &'static str,
     pub engine_profile_id: &'static str,
+    pub inference_backend: InferenceBackend,
     pub language: ModelLanguage,
     pub embedding_dimension: u32,
     pub native_embedding_dimension: u32,
@@ -378,6 +402,7 @@ pub const MODEL_PROFILES: &[ModelProfileSpec] = &[
         model_id: MOBILECLIP2_ONNX_MODEL_ID,
         revision: MOBILECLIP2_ONNX_REVISION,
         engine_profile_id: "mobileclip2-openclip",
+        inference_backend: InferenceBackend::OnnxRuntime,
         language: ModelLanguage::En,
         embedding_dimension: REQUIRED_EMBEDDING_DIMENSION,
         native_embedding_dimension: REQUIRED_EMBEDDING_DIMENSION,
@@ -391,6 +416,7 @@ pub const MODEL_PROFILES: &[ModelProfileSpec] = &[
         model_id: JINA_CLIP_REPO,
         revision: JINA_CLIP_REVISION,
         engine_profile_id: JINA_CLIP_ENGINE_PROFILE_ID,
+        inference_backend: InferenceBackend::OnnxRuntime,
         language: ModelLanguage::Multilingual,
         embedding_dimension: REQUIRED_EMBEDDING_DIMENSION,
         native_embedding_dimension: 1024,
@@ -404,6 +430,7 @@ pub const MODEL_PROFILES: &[ModelProfileSpec] = &[
         model_id: SIGLIP2_B32_REPO,
         revision: SIGLIP2_B32_REVISION,
         engine_profile_id: "siglip2-openclip",
+        inference_backend: InferenceBackend::OnnxRuntime,
         language: ModelLanguage::Multilingual,
         embedding_dimension: 768,
         native_embedding_dimension: 768,
@@ -417,6 +444,7 @@ pub const MODEL_PROFILES: &[ModelProfileSpec] = &[
         model_id: SIGLIP2_COREML_REPO,
         revision: SIGLIP2_COREML_REVISION,
         engine_profile_id: "siglip2-coreml-native",
+        inference_backend: InferenceBackend::NativeCoreMl,
         language: ModelLanguage::Multilingual,
         embedding_dimension: 768,
         native_embedding_dimension: 768,
@@ -488,6 +516,24 @@ pub fn find_profile(profile_id: &str) -> anyhow::Result<&'static ModelProfileSpe
         .ok_or_else(|| anyhow::anyhow!("unknown semantic model profile {profile_id:?}"))
 }
 
+pub fn supported_model_profiles() -> impl Iterator<Item = &'static ModelProfileSpec> {
+    MODEL_PROFILES
+        .iter()
+        .filter(|profile| profile.inference_backend.is_supported_on_current_platform())
+}
+
+pub fn ensure_profile_supported(profile: &ModelProfileSpec) -> anyhow::Result<()> {
+    if profile.inference_backend.is_supported_on_current_platform() {
+        return Ok(());
+    }
+    bail!(
+        "semantic model profile {} uses {} inference, which is not supported on {}",
+        profile.profile_id,
+        profile.inference_backend.as_str(),
+        current_platform_name()
+    );
+}
+
 pub fn find_profile_asset(
     profile: &ModelProfileSpec,
     role: AssetRole,
@@ -519,7 +565,9 @@ pub fn profile_status(
     profile: &'static ModelProfileSpec,
     root: impl AsRef<Path>,
 ) -> ModelProfileStatus {
-    match validate_profile_assets(profile, root.as_ref()) {
+    match ensure_profile_supported(profile)
+        .and_then(|_| validate_profile_assets(profile, root.as_ref()))
+    {
         Ok(()) => ModelProfileStatus {
             profile,
             model_root: root.as_ref().to_path_buf(),
@@ -536,8 +584,7 @@ pub fn profile_status(
 }
 
 pub fn list_profiles(root: Option<&Path>) -> Vec<ModelProfileStatus> {
-    MODEL_PROFILES
-        .iter()
+    supported_model_profiles()
         .map(|profile| {
             let model_root = root
                 .map(|base| base.join(profile.profile_id))
@@ -559,6 +606,7 @@ pub fn validate_model_profile(
     root: impl AsRef<Path>,
 ) -> anyhow::Result<ResolvedModelManifest> {
     let profile = find_profile(profile_id)?;
+    ensure_profile_supported(profile)?;
     validate_profile_assets(profile, root.as_ref())?;
     let manifest = resolved_manifest(profile, root.as_ref());
     let manifest_path = root.as_ref().join(RESOLVED_MANIFEST_FILE);
@@ -609,6 +657,18 @@ fn validate_profile_dimension(profile: &ModelProfileSpec) -> anyhow::Result<()> 
         );
     }
     Ok(())
+}
+
+fn current_platform_name() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "macOS"
+    } else if cfg!(target_os = "windows") {
+        "Windows"
+    } else if cfg!(target_os = "linux") {
+        "Linux"
+    } else {
+        "this platform"
+    }
 }
 
 fn validate_profile_assets(profile: &ModelProfileSpec, root: &Path) -> anyhow::Result<()> {
@@ -770,6 +830,7 @@ mod tests {
         let jina = find_profile("jina-clip-v2-int8-multilingual").expect("jina profile exists");
         assert_eq!(jina.native_embedding_dimension, 1024);
         assert_eq!(jina.embedding_dimension, 512);
+        assert_eq!(jina.inference_backend, InferenceBackend::OnnxRuntime);
         assert_eq!(
             jina.embedding_transform,
             "matryoshka_truncate_then_l2_normalize"
@@ -778,13 +839,37 @@ mod tests {
         assert_eq!(siglip.native_embedding_dimension, 768);
         assert_eq!(siglip.embedding_dimension, 768);
         assert_eq!(siglip.engine_profile_id, "siglip2-openclip");
+        assert_eq!(siglip.inference_backend, InferenceBackend::OnnxRuntime);
 
         let siglip_coreml =
             find_profile(SIGLIP2_COREML_PROFILE).expect("siglip coreml profile exists");
         assert_eq!(siglip_coreml.native_embedding_dimension, 768);
         assert_eq!(siglip_coreml.embedding_dimension, 768);
         assert_eq!(siglip_coreml.engine_profile_id, "siglip2-coreml-native");
+        assert_eq!(
+            siglip_coreml.inference_backend,
+            InferenceBackend::NativeCoreMl
+        );
         assert_eq!(siglip_coreml.embedding_transform, "l2_normalize");
+    }
+
+    #[test]
+    fn supported_profile_list_filters_native_coreml_off_non_macos() {
+        let supported: Vec<_> = supported_model_profiles().collect();
+        assert!(
+            supported
+                .iter()
+                .all(|profile| profile.inference_backend.is_supported_on_current_platform())
+        );
+
+        let has_coreml = supported
+            .iter()
+            .any(|profile| profile.profile_id == SIGLIP2_COREML_PROFILE);
+        if cfg!(target_os = "macos") {
+            assert!(has_coreml);
+        } else {
+            assert!(!has_coreml);
+        }
     }
 
     #[test]
@@ -800,9 +885,19 @@ mod tests {
     fn profile_listing_reports_missing_models_without_downloading() {
         let root = unique_temp_root("alcedo-mind-profile-list");
         let profiles = list_profiles(Some(&root));
-        assert_eq!(profiles.len(), MODEL_PROFILES.len());
+        assert_eq!(profiles.len(), supported_model_profiles().count());
         assert!(profiles.iter().all(|profile| !profile.installed));
         assert!(!root.exists());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn validate_native_coreml_profile_fails_on_non_macos() {
+        let root = unique_temp_root("alcedo-mind-coreml-unsupported");
+        let err = validate_model_profile(SIGLIP2_COREML_PROFILE, &root)
+            .expect_err("native CoreML profile should not validate off macOS");
+        assert!(err.to_string().contains("native_coreml"));
+        assert!(err.to_string().contains(current_platform_name()));
     }
 
     #[test]
