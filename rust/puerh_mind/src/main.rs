@@ -24,7 +24,7 @@ fn main() -> anyhow::Result<()> {
 fn run_server() -> anyhow::Result<()> {
     logging::init_logging();
     let config = config::AppConfig::load()?;
-    let semantic_engine = service::registry::build_semantic_engine(&config);
+    let semantic_engine = service::inference::build_semantic_engine(&config);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

@@ -22,5 +22,10 @@ tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
 ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "download-binaries", "copy-dylibs", "api-24", "tls-rustls", "directml", "coreml"] }
 sha2 = "0.10"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+apple-cf = "0.9.3"
+coreml = "0.3.5"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
 [build-dependencies]
 tonic-prost-build = "0.14"

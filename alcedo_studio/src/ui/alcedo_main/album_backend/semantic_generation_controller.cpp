@@ -43,9 +43,12 @@ constexpr auto   kSemanticPreferenceNever               = "never";
 constexpr auto   kSemanticRuntimeStartupTimeout         = 60s;
 constexpr auto   kJinaClipProfileId                     = "jina-clip-v2-int8-multilingual";
 constexpr auto   kSiglip2ProfileId                      = "siglip2-b32-256-multilingual";
+constexpr auto   kSiglip2CoreMlProfileId                = "siglip2-base-256-coreml-macos";
 constexpr size_t kMobileClipBatchSize                   = 64;
 constexpr size_t kJinaClipBatchSize                     = 4;
 constexpr size_t kSiglip2BatchSize                      = 8;
+constexpr size_t kCoreMlImageBatchSize                  = 1;
+constexpr size_t kCoreMlTextBatchSize                   = 8;
 
 auto             SemanticModelKeyFromInfo(const SemanticRuntimeModelInfo& info) -> std::string {
   if (info.revision.empty()) {
@@ -112,6 +115,9 @@ auto EmbeddingBatchSizeForProfile(const SemanticRuntimeModelInfo& info) -> size_
   if (profile_id == kJinaClipProfileId) {
     return kJinaClipBatchSize;
   }
+  if (profile_id == kSiglip2CoreMlProfileId) {
+    return kCoreMlImageBatchSize;
+  }
   if (profile_id == kSiglip2ProfileId) {
     return kSiglip2BatchSize;
   }
@@ -119,6 +125,10 @@ auto EmbeddingBatchSizeForProfile(const SemanticRuntimeModelInfo& info) -> size_
 }
 
 auto LabelPrototypeBatchSizeForProfile(const SemanticRuntimeModelInfo& info) -> size_t {
+  const auto profile_id = info.profile_id.empty() ? info.model_id : info.profile_id;
+  if (profile_id == kSiglip2CoreMlProfileId) {
+    return kCoreMlTextBatchSize;
+  }
   return EmbeddingBatchSizeForProfile(info);
 }
 
@@ -131,6 +141,9 @@ auto LabelPrototypeBatchSizeForProfile(const SemanticResolvedModelManifest& mani
 auto EmbeddingTimeoutForProfile(const SemanticRuntimeModelInfo& info) -> std::chrono::milliseconds {
   const auto profile_id = info.profile_id.empty() ? info.model_id : info.profile_id;
   if (profile_id == kJinaClipProfileId) {
+    return 120s;
+  }
+  if (profile_id == kSiglip2CoreMlProfileId) {
     return 120s;
   }
   if (profile_id == kSiglip2ProfileId) {
@@ -167,24 +180,6 @@ auto ItemsNeedingSemanticGeneration(const std::vector<SemanticGenerationItem>& i
 }
 
 }  // namespace
-
-class SemanticRuntimeSessionGuard final {
- public:
-  explicit SemanticRuntimeSessionGuard(std::shared_ptr<SemanticRuntimeService> runtime)
-      : runtime_(std::move(runtime)) {}
-
-  ~SemanticRuntimeSessionGuard() {
-    if (runtime_) {
-      runtime_->Stop();
-    }
-  }
-
-  SemanticRuntimeSessionGuard(const SemanticRuntimeSessionGuard&)            = delete;
-  SemanticRuntimeSessionGuard& operator=(const SemanticRuntimeSessionGuard&) = delete;
-
- private:
-  std::shared_ptr<SemanticRuntimeService> runtime_;
-};
 
 SemanticGenerationController::SemanticGenerationController(AlbumBackend& backend, QObject* parent)
     : QObject(parent), backend_(backend) {
@@ -416,7 +411,6 @@ void SemanticGenerationController::ActivateSelectedModel() {
         return;
       }
 
-      auto runtime_session = std::make_shared<SemanticRuntimeSessionGuard>(runtime);
       auto embedder        = std::make_shared<SemanticRuntimeImageEmbeddingClient>(runtime);
       SemanticGenerationPersistenceOptions persistence;
       persistence.storage_controller         = &semantic;
@@ -724,8 +718,6 @@ void SemanticGenerationController::ContinueGenerationForItems(bool forceRegenera
     }
   }
 
-  auto              runtime_session = std::make_shared<SemanticRuntimeSessionGuard>(runtime);
-
   auto&             semantic        = project->GetStorageService()->GetSemanticStorageController();
   const std::string model_key       = SemanticModelKeyFromInfo(*runtime_status.model_info);
   const auto        label_language  = ModelLabelLanguage(*runtime_status.model_info);
@@ -821,7 +813,6 @@ void SemanticGenerationController::ContinueGenerationForItems(bool forceRegenera
             Qt::QueuedConnection);
       });
 
-  runtime_session_ = std::move(runtime_session);
   job_             = std::move(job);
 }
 
@@ -862,7 +853,6 @@ void SemanticGenerationController::UpdateProgress(const SemanticGenerationProgre
 void SemanticGenerationController::Finish(std::vector<SemanticGenerationItemResult> results) {
   running_ = false;
   job_.reset();
-  runtime_session_.reset();
   pending_items_.clear();
   prompt_pending_ = false;
 

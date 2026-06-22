@@ -67,6 +67,9 @@ class ImportJob {
   // Cancellation toke observed by implementation
   std::atomic<bool>          canceled_{false};
   std::atomic<bool>          cancelation_acked_{false};
+  std::atomic<bool>          submission_closed_{false};
+  std::atomic<uint32_t>      metadata_tasks_submitted_{0};
+  std::atomic<uint32_t>      metadata_tasks_finished_{0};
 
   ProgressCallback           on_progress_{};
   FinishedCallback           on_finished_{};

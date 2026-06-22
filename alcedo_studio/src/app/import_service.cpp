@@ -35,6 +35,18 @@ static void SetImportResult(std::shared_ptr<ImportJob> job, uint32_t requested, 
   }
 }
 
+static void TryFinishImportJob(const std::shared_ptr<ImportJob>&      job,
+                               const std::shared_ptr<ImportProgress>& progress) {
+  if (!job || !progress || !job->submission_closed_.load()) {
+    return;
+  }
+  if (job->metadata_tasks_finished_.load() != job->metadata_tasks_submitted_.load()) {
+    return;
+  }
+  SetImportResult(job, progress->total_, progress->metadata_done_.load(),
+                  progress->failed_.load());
+}
+
 auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
                                        const image_path_t& dest, const ImportOptions& options,
                                        std::shared_ptr<ImportJob> job)
@@ -54,8 +66,6 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
     SetImportResult(job, 0, 0, 0);
     return job;
   }
-
-  bool any_threadpool_submission = false;
 
   for (const auto& image_path : paths) {
     if (job && job->IsCancelled()) {
@@ -118,27 +128,38 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
 
     auto image_handler_ptr =
         std::make_shared<ImagePoolManager::PinnedImageHandle>(std::move(image_handler));
-    auto  image_ptr = image_handler_ptr->Get();
+    auto image_ptr = image_handler_ptr->Get();
     image_ptr->image_path_ = image_path;
     image_ptr->image_name_ = file_name;
     // TODO: Parse image type for future use
 
     // Link the image to the SleeveFile
     sleeve_file->SetImage(image_ptr);
-      progress_ptr->placeholders_created_.fetch_add(1);
+    progress_ptr->placeholders_created_.fetch_add(1);
     if (import_log) {
-      import_log->AddPlaceholder(image_ptr->image_id_, sleeve_file->element_id_,
-                                 file_name, image_path);
+      import_log->AddPlaceholder(image_ptr->image_id_, sleeve_file->element_id_, file_name,
+                                 image_path);
     }
 
-    any_threadpool_submission = true;
+    if (job) {
+      job->metadata_tasks_submitted_.fetch_add(1);
+    }
 
     // Submit the metadata extraction task to thread pool
-    thread_pool_.Submit([image_handler_ptr, image_ptr, image_path, progress_ptr, job,
-                         import_log]() {
-      if (job && job->IsCancelationAcked()) {
+    thread_pool_.Submit([image_handler_ptr, progress_ptr, job, import_log]() {
+      auto image_ptr = image_handler_ptr ? image_handler_ptr->Get() : nullptr;
+      if (!image_ptr) {
+        progress_ptr->failed_.fetch_add(1);
+        if (job && job->on_progress_) {
+          job->on_progress_(*progress_ptr);
+        }
+        if (job) {
+          job->metadata_tasks_finished_.fetch_add(1);
+        }
+        TryFinishImportJob(job, progress_ptr);
         return;
       }
+
       // Extract metadata
       try {
         MetadataExtractor::ExtractEXIF_ToImage(image_ptr->image_path_, *image_ptr);
@@ -171,21 +192,28 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
         job->on_progress_(*progress_ptr);
       }
 
-      if (progress_ptr->metadata_done_.load() + progress_ptr->failed_.load() >=
-              progress_ptr->total_ ||
-          (job && job->IsCancelled())) {
-        // Job finished
-        SetImportResult(job, progress_ptr->total_, progress_ptr->metadata_done_.load(),
-                        progress_ptr->failed_.load());
+      if (job) {
+        job->metadata_tasks_finished_.fetch_add(1);
       }
+      TryFinishImportJob(job, progress_ptr);
     });
   }
 
-  if (!any_threadpool_submission) {
-    // No valid submissions, immediately finish
-    SetImportResult(job, progress_ptr->total_, progress_ptr->metadata_done_.load(),
-                    progress_ptr->failed_.load());
+  if (job) {
+    if (job->IsCancelled()) {
+      const auto accounted =
+          progress_ptr->metadata_done_.load() + progress_ptr->failed_.load() +
+          (job->metadata_tasks_submitted_.load() - job->metadata_tasks_finished_.load());
+      if (accounted < progress_ptr->total_) {
+        progress_ptr->failed_.fetch_add(progress_ptr->total_ - accounted);
+        if (job->on_progress_) {
+          job->on_progress_(*progress_ptr);
+        }
+      }
+    }
+    job->submission_closed_.store(true);
   }
+  TryFinishImportJob(job, progress_ptr);
   return job;
 }
 

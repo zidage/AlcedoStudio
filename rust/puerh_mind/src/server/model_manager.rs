@@ -245,7 +245,10 @@ mod tests {
             .expect("list should succeed")
             .into_inner();
 
-        assert_eq!(response.profiles.len(), 3);
+        assert_eq!(
+            response.profiles.len(),
+            crate::service::model_assets::MODEL_PROFILES.len()
+        );
         assert!(
             response
                 .profiles
@@ -262,6 +265,17 @@ mod tests {
                 .iter()
                 .any(|profile| profile.language == "multilingual"
                     && profile.profile_id == "siglip2-b32-256-multilingual"
+                    && profile.embedding_dimension == 768
+                    && profile.native_embedding_dimension == 768
+                    && profile.embedding_transform == "l2_normalize")
+        );
+        assert!(
+            response
+                .profiles
+                .iter()
+                .any(|profile| profile.language == "multilingual"
+                    && profile.profile_id == "siglip2-base-256-coreml-macos"
+                    && profile.engine_profile_id == "siglip2-coreml-native"
                     && profile.embedding_dimension == 768
                     && profile.native_embedding_dimension == 768
                     && profile.embedding_transform == "l2_normalize")

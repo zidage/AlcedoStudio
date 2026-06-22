@@ -23,11 +23,15 @@ pub const SUPPORTED_EMBEDDING_DIMENSIONS: &[u32] = &[512, 768];
 pub enum AssetRole {
     TextModel,
     VisionModel,
+    CoreMlTextModel,
+    CoreMlVisionModel,
     MultimodalModel,
     OnnxConfig,
     ModelConfig,
+    CoreMlManifest,
     PreprocessConfig,
     Tokenizer,
+    TokenizerArchive,
     TokenizerConfig,
     Vocab,
     SpecialTokens,
@@ -38,11 +42,15 @@ impl AssetRole {
         match self {
             AssetRole::TextModel => "text_model",
             AssetRole::VisionModel => "vision_model",
+            AssetRole::CoreMlTextModel => "coreml_text_model",
+            AssetRole::CoreMlVisionModel => "coreml_vision_model",
             AssetRole::MultimodalModel => "multimodal_model",
             AssetRole::OnnxConfig => "onnx_config",
             AssetRole::ModelConfig => "model_config",
+            AssetRole::CoreMlManifest => "coreml_manifest",
             AssetRole::PreprocessConfig => "preprocess_config",
             AssetRole::Tokenizer => "tokenizer",
+            AssetRole::TokenizerArchive => "tokenizer_archive",
             AssetRole::TokenizerConfig => "tokenizer_config",
             AssetRole::Vocab => "vocab",
             AssetRole::SpecialTokens => "special_tokens",
@@ -320,6 +328,49 @@ const SIGLIP2_B32_ASSETS: &[ModelAssetSpec] = &[
     },
 ];
 
+const SIGLIP2_COREML_REPO: &str = "zidage/siglip2-base-coreml-macos";
+const SIGLIP2_COREML_REVISION: &str = "5419f7d827b15c5d7e6e0fe947c25620e1c24a7e";
+const SIGLIP2_COREML_PROFILE: &str = "siglip2-base-256-coreml-macos";
+
+const SIGLIP2_COREML_ASSETS: &[ModelAssetSpec] = &[
+    ModelAssetSpec {
+        role: AssetRole::CoreMlVisionModel,
+        repo_id: SIGLIP2_COREML_REPO,
+        revision: SIGLIP2_COREML_REVISION,
+        remote_path: "ImageEncoder.mlmodelc.zip",
+        local_path: "ImageEncoder.mlmodelc.zip",
+        size_bytes: 91_698_362,
+        sha256: Some("f3255dad62bda6c50021b4eac3bf764423dd52b198005480273e800faa1babb8"),
+    },
+    ModelAssetSpec {
+        role: AssetRole::CoreMlTextModel,
+        repo_id: SIGLIP2_COREML_REPO,
+        revision: SIGLIP2_COREML_REVISION,
+        remote_path: "TextEncoder.mlmodelc.zip",
+        local_path: "TextEncoder.mlmodelc.zip",
+        size_bytes: 258_591_067,
+        sha256: Some("ba64d0cac0695b5c0cd18c898382a5455ed74ac666c27421ee94047a3561a72e"),
+    },
+    ModelAssetSpec {
+        role: AssetRole::TokenizerArchive,
+        repo_id: SIGLIP2_COREML_REPO,
+        revision: SIGLIP2_COREML_REVISION,
+        remote_path: "tokenizer.zip",
+        local_path: "tokenizer.zip",
+        size_bytes: 5_460_173,
+        sha256: Some("c37f2a8e8555d8561109564c4f60ee962b0072abddcfcfd599d321469d6d1ef5"),
+    },
+    ModelAssetSpec {
+        role: AssetRole::CoreMlManifest,
+        repo_id: SIGLIP2_COREML_REPO,
+        revision: SIGLIP2_COREML_REVISION,
+        remote_path: "manifest.json",
+        local_path: "manifest.json",
+        size_bytes: 669,
+        sha256: Some("5dd52b1bb33595d78da3377f6f974c2f195fc628a2554f9d09c232bfd35fb397"),
+    },
+];
+
 pub const MODEL_PROFILES: &[ModelProfileSpec] = &[
     ModelProfileSpec {
         profile_id: MOBILECLIP2_ONNX_PROFILE,
@@ -359,6 +410,19 @@ pub const MODEL_PROFILES: &[ModelProfileSpec] = &[
         image_size: 256,
         embedding_transform: "l2_normalize",
         assets: SIGLIP2_B32_ASSETS,
+    },
+    ModelProfileSpec {
+        profile_id: SIGLIP2_COREML_PROFILE,
+        display_name: "SigLIP2 Base CoreML macOS",
+        model_id: SIGLIP2_COREML_REPO,
+        revision: SIGLIP2_COREML_REVISION,
+        engine_profile_id: "siglip2-coreml-native",
+        language: ModelLanguage::Multilingual,
+        embedding_dimension: 768,
+        native_embedding_dimension: 768,
+        image_size: 256,
+        embedding_transform: "l2_normalize",
+        assets: SIGLIP2_COREML_ASSETS,
     },
 ];
 
@@ -714,6 +778,13 @@ mod tests {
         assert_eq!(siglip.native_embedding_dimension, 768);
         assert_eq!(siglip.embedding_dimension, 768);
         assert_eq!(siglip.engine_profile_id, "siglip2-openclip");
+
+        let siglip_coreml =
+            find_profile(SIGLIP2_COREML_PROFILE).expect("siglip coreml profile exists");
+        assert_eq!(siglip_coreml.native_embedding_dimension, 768);
+        assert_eq!(siglip_coreml.embedding_dimension, 768);
+        assert_eq!(siglip_coreml.engine_profile_id, "siglip2-coreml-native");
+        assert_eq!(siglip_coreml.embedding_transform, "l2_normalize");
     }
 
     #[test]

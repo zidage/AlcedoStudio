@@ -17,7 +17,6 @@
 namespace alcedo::ui {
 
 class AlbumBackend;
-class SemanticRuntimeSessionGuard;
 
 // Drives semantic (AI content) label generation and model activation. Owns the
 // generation pipeline state (progress, prompt, album summary) and the
@@ -104,7 +103,6 @@ class SemanticGenerationController final : public QObject {
 
   AlbumBackend&                                backend_;
   std::vector<SemanticGenerationItem>          pending_items_{};
-  std::shared_ptr<SemanticRuntimeSessionGuard> runtime_session_{};
   std::shared_ptr<SemanticGenerationJob>       job_{};
   i18n::LocalizedText                          status_text_{};
   i18n::LocalizedText                          album_summary_text_{};

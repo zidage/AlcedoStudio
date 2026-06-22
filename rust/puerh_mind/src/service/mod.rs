@@ -1,4 +1,7 @@
+#[cfg(target_os = "macos")]
+pub mod coreml_clip;
 pub mod embedding;
+pub mod inference;
 pub mod model_adapters;
 pub mod registry;
 

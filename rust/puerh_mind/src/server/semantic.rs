@@ -125,7 +125,8 @@ impl SemanticServiceImpl {
                     }
                 }
 
-                Self::process_image_batch(engine.as_ref(), batch);
+                let engine = engine.clone();
+                tokio::task::spawn_blocking(move || Self::process_image_batch(engine, batch));
             }
         });
 
@@ -183,7 +184,7 @@ impl SemanticServiceImpl {
         }
     }
 
-    fn process_image_batch(engine: &dyn EmbeddingEngine, batch: Vec<PendingImageRequest>) {
+    fn process_image_batch(engine: Arc<dyn EmbeddingEngine>, batch: Vec<PendingImageRequest>) {
         let batch_len = batch.len();
         let mut requests = Vec::with_capacity(batch_len);
         let mut images = Vec::with_capacity(batch_len);
@@ -277,9 +278,11 @@ impl SemanticService for SemanticServiceImpl {
 
         self.validate_text_request(&req)?;
 
-        let embedding = self
-            .engine
-            .embed_text(&req.text)
+        let engine = self.engine.clone();
+        let text = req.text;
+        let embedding = tokio::task::spawn_blocking(move || engine.embed_text(&text))
+            .await
+            .map_err(|err| Status::internal(format!("text embedding task failed: {err}")))?
             .map_err(|e| Status::internal(format!("failed to embed text: {e}")))?;
         Self::validate_embedding(&embedding)?;
         let dimension = embedding.len() as u32;
@@ -337,8 +340,15 @@ impl SemanticService for SemanticServiceImpl {
         }
 
         if !valid_texts.is_empty() {
-            let text_refs = valid_texts.iter().map(String::as_str).collect::<Vec<_>>();
-            match self.engine.embed_texts(&text_refs) {
+            let engine = self.engine.clone();
+            let embedding_result = tokio::task::spawn_blocking(move || {
+                let text_refs = valid_texts.iter().map(String::as_str).collect::<Vec<_>>();
+                engine.embed_texts(&text_refs)
+            })
+            .await
+            .map_err(|err| Status::internal(format!("text batch embedding task failed: {err}")))?;
+
+            match embedding_result {
                 Ok(embeddings) if embeddings.len() == valid_requests.len() => {
                     for ((slot, request_id, model_name, item_start), embedding) in
                         valid_requests.into_iter().zip(embeddings)
@@ -463,7 +473,15 @@ impl SemanticService for SemanticServiceImpl {
         }
 
         if !images.is_empty() {
-            match self.engine.embed_images(&images) {
+            let engine = self.engine.clone();
+            let embedding_result =
+                tokio::task::spawn_blocking(move || engine.embed_images(&images))
+                    .await
+                    .map_err(|err| {
+                        Status::internal(format!("image batch embedding task failed: {err}"))
+                    })?;
+
+            match embedding_result {
                 Ok(embeddings) if embeddings.len() == valid_requests.len() => {
                     for ((slot, request_id, model_name, item_start), embedding) in
                         valid_requests.into_iter().zip(embeddings)

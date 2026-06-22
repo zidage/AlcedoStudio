@@ -1059,12 +1059,16 @@ if(APPLE AND ALCEDO_MACOS_BUNDLE AND TARGET ${ALCEDO_MAIN_BIN})
             "set(_alcedo_app_path \"\${CMAKE_INSTALL_PREFIX}/${ALCEDO_MACOS_BUNDLE_NAME}.app\")
              set(_alcedo_fw_dir \"\${_alcedo_app_path}/Contents/Frameworks\")
              set(_alcedo_main_bin \"\${_alcedo_app_path}/Contents/MacOS/${ALCEDO_MACOS_BUNDLE_NAME}\")
+             set(_alcedo_mind_bin \"\${_alcedo_app_path}/Contents/MacOS/alcedo_mind\")
 
              if(NOT EXISTS \"\${_alcedo_main_bin}\")
                  message(FATAL_ERROR \"macOS bundle executable not found: \${_alcedo_main_bin}\")
              endif()
 
              set(_alcedo_macho_files \"\${_alcedo_main_bin}\")
+             if(EXISTS \"\${_alcedo_mind_bin}\")
+                 list(APPEND _alcedo_macho_files \"\${_alcedo_mind_bin}\")
+             endif()
              file(GLOB_RECURSE _alcedo_bundle_dylibs
                  \"\${_alcedo_app_path}/Contents/Frameworks/*.dylib\"
                  \"\${_alcedo_app_path}/Contents/PlugIns/*.dylib\"
@@ -1119,6 +1123,17 @@ if(APPLE AND ALCEDO_MACOS_BUNDLE AND TARGET ${ALCEDO_MAIN_BIN})
                      set(_rel \"\${CMAKE_MATCH_1}\")
                      if(EXISTS \"\${_alcedo_fw_dir}/\${_rel}\")
                          return()
+                     endif()
+                     if(\"\${_rel}\" MATCHES \"^libswift.*\\\\.dylib$\")
+                         execute_process(
+                             COMMAND /usr/bin/otool -l \"\${_owner}\"
+                             RESULT_VARIABLE _alcedo_owner_rpath_result
+                             OUTPUT_VARIABLE _alcedo_owner_rpath_output
+                             ERROR_QUIET)
+                         if(_alcedo_owner_rpath_result EQUAL 0 AND
+                            _alcedo_owner_rpath_output MATCHES \"path /usr/lib/swift \\\\(offset\")
+                             return()
+                         endif()
                      endif()
                      list(APPEND _alcedo_missing_rpath_deps
                          \"\${_owner} -> \${_dep}\")
