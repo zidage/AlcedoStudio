@@ -168,11 +168,18 @@ if(ALCEDO_CUDA_ENABLED)
   set_target_properties(CudaPrngTest PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
   gtest_discover_tests(CudaPrngTest TEST_PREFIX "CudaPrngTest.")
 
-  # Forward-only CNN / ML operator suite (ReLU, Conv2d, …).
+  # Forward-only CNN / ML operator suite (ReLU, Mul, structural ops, Conv2d, …).
   add_executable(MlOpsTest
     ml_ops/relu_test.cu
     ml_ops/device_buffer_test.cu
     ml_ops/workspace_test.cu
+    ml_ops/mul_test.cu
+    ml_ops/concat_test.cu
+    ml_ops/slice_test.cu
+    ml_ops/crop_test.cu
+    ml_ops/layout_test.cu
+    ml_ops/structural_compose_test.cu
+    ml_ops/conv2d_test.cu
   )
   target_include_directories(MlOpsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(MlOpsTest PRIVATE GTest::gtest_main CudaUtils CUDA::cudart

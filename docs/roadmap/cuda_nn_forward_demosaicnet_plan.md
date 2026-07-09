@@ -2,9 +2,9 @@
 
 Date: 2026-07-09
 
-Status: Phase 0 complete (ReLU + `DeviceTensor` + `DeviceBuffer` +
-`WorkspacePool` + `MlOpsTest` on `feature/xtrans_improve`). Remaining phases are
-ready for implementation by the next agent.
+Status: Phase 2 complete (Conv2d + bias / fused ConvBiasRelu with 1×1, 2×2 s=2,
+and 3×3 s=1 specialized paths; pure cudart, no cuBLAS/cuDNN). Phases 0–1 remain
+done. Next: Phase 3 ConvTranspose2d (Bayer unpack).
 
 This document is the handoff plan for a **forward-only, CNN-focused CUDA
 inference mini-framework** under `alcedo_studio/src/cuda/nn/`, sufficient to run
@@ -266,15 +266,13 @@ Do **not** fuse across the Bayer split/mul boundary until tests lock numerics.
 
 Priority order for implementation:
 
-1. **1×1 Conv** → pure GEMM (`cublasSgemm` or a tiny hand-written GEMM for small
-   M). Shape: `(N*H*W) × Cin` × `Cin × Cout`.
+1. **1×1 Conv** → hand-written tiled GEMM (cudart only; **no cuBLAS** — packaging
+   ships only `cudart64_*.dll`). Shape: `(N*H*W) × Cin` × `Cin × Cout`.
 2. **2×2 stride-2 pack** (`pack_mosaick`) → specialized kernel (tiny K, high
    bandwidth). Do not go through general im2col.
-3. **3×3 valid, s=1, C≈64** → primary hot path. Prefer:
-   - implicit GEMM / tiled shared-memory convolution, **or**
-   - im2col into workspace + `cublasSgemm`,
-   whichever is simpler to land correctly first; then optimize.
-   Winograd F(2×2,3×3) is optional Phase 2+ if profiling shows conv dominates.
+3. **3×3 valid, s=1, C≈64** → primary hot path via direct kernel with filter in
+   shared memory. Optional later: im2col + custom GEMM or Winograd F(2×2,3×3)
+   if profiling shows conv dominates (still without cuBLAS/cuDNN).
 4. **ConvTranspose 2×2 s=2 groups=3** → specialized depthwise-ish upsample
    kernel (12→3 with groups=3 is cheap; do not use a general transpose path).
 5. **Bias** → fused into epilogue of the same kernel (do not launch a second
@@ -282,10 +280,8 @@ Priority order for implementation:
 
 **Dependency policy:**
 
-- `CUDA::cudart` required (already).
-- `CUDA::cublas` allowed for GEMM if it simplifies 1×1 / im2col paths; link only
-  when used.
-- **Do not** require cuDNN for the first complete demosaicnet path.
+- `CUDA::cudart` required (already) — **only** CUDA runtime DLL in the install.
+- **Do not** link cuBLAS or cuDNN (would pull extra DLLs beyond `cudart64`).
 - No Torch / ONNX Runtime.
 
 ### 3.4 Workspace / memory
@@ -337,9 +333,9 @@ numerical tests.
 
 **Exit:** existing ReLU tests still pass; buffer/pool unit tests added.
 
-### Phase 1 — Elementwise + structural ops
+### Phase 1 — Elementwise + structural ops  ✅ (done)
 
-**Implement:**
+**Done:**
 
 | Op | Files | Acceptance |
 |----|-------|------------|
@@ -351,52 +347,32 @@ numerical tests.
 
 **Tests (`tests/ml_ops/`):**
 
-- Correctness vs CPU reference for each op (odd sizes, multi-batch N=1 first).
-- Concat + crop used together as in Bayer/XTrans skip path.
-- Layout convert round-trip max error 0 on finite inputs.
-- Bandwidth smoke for Mul (same style as ReLU).
+- [x] Correctness vs CPU reference for each op (odd sizes, multi-batch).
+- [x] Concat + crop composition (Bayer/XTrans skip) in `structural_compose_test.cu`.
+- [x] Layout convert round-trip max error 0 on finite inputs.
+- [x] Bandwidth smoke for Mul (and Concat / layout pack).
 
 **Exit:** all new tests in `MlOpsTest` green.
 
-### Phase 2 — Conv2d + bias (+ fuse ReLU)
+### Phase 2 — Conv2d + bias (+ fuse ReLU)  ✅ (done)
 
-**Implement:**
+**Done:**
 
-- Generic API:
+| Item | Location |
+|------|----------|
+| `Conv2dParams` + output-size helpers | `include/cuda/nn/conv2d.hpp` |
+| `Conv2d` / `Conv2dBiasRelu` | `cuda/nn/conv2d.cu` |
+| Specialized paths | 1×1 tiled GEMM-style; 2×2 s=2 pack; 3×3 s=1 smem filter; generic direct fallback |
+| Dependency policy | **cudart only** (no cuBLAS / cuDNN DLLs) |
+| Tests | `tests/ml_ops/conv2d_test.cu` |
 
-  ```cpp
-  struct Conv2dParams {
-    int in_channels, out_channels;
-    int kH, kW, sH, sW, padH, padW;  // pad always 0 for demosaicnet
-    int dilation = 1;
-    int groups = 1;
-    const float* weight;  // OIHW device
-    const float* bias;    // optional, length out_channels
-  };
+**Acceptance (green on `feature/xtrans_improve`):**
 
-  void Conv2d(const DeviceTensor& in, DeviceTensor& out,
-              const Conv2dParams& p, cudaStream_t stream);
-  void Conv2dBiasRelu(...);  // fused epilogue
-  ```
-
-- Specialized fast paths:
-  1. `k=1,s=1` GEMM
-  2. `k=2,s=2,pad=0` (pack)
-  3. `k=3,s=1,pad=0` main path
-- Output spatial size formula (validate in tests):
-
-  ```text
-  H_out = floor((H + 2*padH - d*(kH-1) - 1) / sH) + 1
-  ```
-
-**Tests:**
-
-- Compare against a simple CPU conv reference (small shapes).
-- Layer-level tests loading real weights:
-  - `pack_mosaick`, `conv1`, `output` (1×1), `post_conv1` (6→64 and 67→64).
-- Fused vs unfused `Conv+Bias+ReLU` bitwise or near-equality.
-- Performance: 3×3, C=64, H=W=512, report ms and GFLOPs/s; fail only on
-  catastrophic regressions (set a soft floor after first measurement on CI GPU).
+- [x] CPU reference match for 1×1, 3×3 valid, 2×2 s=2, multi-batch/odd spatial.
+- [x] Real weights: `pack_mosaick`, `conv1` (+ReLU), `output` 1×1, `post_conv1` Bayer 6→64 and XTrans 67→64.
+- [x] Fused `Conv2dBiasRelu` vs unfused Conv+ReLU near-equality.
+- [x] Workspace arg accepted; hot path performs no `cudaMalloc` / no bump alloc.
+- [x] Perf smoke 3×3 C=64 H=W=512 (soft floor only).
 
 **Exit:** conv unit tests green; no `cudaMalloc` inside hot path when workspace
 is provided.
@@ -513,8 +489,8 @@ If starting immediately, execute in this order:
    - `tests/ml_ops/relu_test.cu`
    - demosaicnet `modules.py` forward (linked in §2)
 2. **Phase 0 cleanup:** promote `DeviceBuffer` + `WorkspacePool`. ✅
-3. **Phase 1:** Mul, Concat, Slice, CenterCrop, layout convert + tests.
-4. **Phase 2:** Conv2dBias / Conv2dBiasRelu with 1×1 and 3×3 paths + tests
+3. **Phase 1:** Mul, Concat, Slice, CenterCrop, layout convert + tests. ✅
+4. **Phase 2:** ✅ Conv2dBias / Conv2dBiasRelu with 1×1 / 2×2s2 / 3×3 paths + tests
    against CPU and against real layer weights.
 5. **Phase 3:** specialized `unpack_mosaick` transpose.
 6. **Phase 4:** safetensors + full Bayer/XTrans runners + golden tests.
@@ -540,7 +516,8 @@ look “plausible” but is useless.
   ```
 
 - Link: `GTest::gtest_main`, `CudaUtils`, `CUDA::cudart`, OpenCV as today.
-  Add `CUDA::cublas` when GEMM is introduced.
+  **Do not** add `CUDA::cublas` / cuDNN — install packaging ships only
+  `cudart64_*.dll` for CUDA. 1×1 GEMM is hand-written in `conv2d.cu`.
 - Guard with `ALCEDO_CUDA_ENABLED` (already).
 - Model path: either
   `ALCEDO_DEMOASICNET_MODEL_DIR` compile definition pointing at

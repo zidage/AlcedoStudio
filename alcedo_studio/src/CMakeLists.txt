@@ -122,6 +122,12 @@ if(ALCEDO_CUDA_ENABLED)
         SOURCES
             cuda/prng.cu
             cuda/nn/relu.cu
+            cuda/nn/mul.cu
+            cuda/nn/concat.cu
+            cuda/nn/slice.cu
+            cuda/nn/crop.cu
+            cuda/nn/layout.cu
+            cuda/nn/conv2d.cu
         PUBLIC_DEPS
             CUDA::cudart
             ${ALCEDO_OPENCV_CORE_DEPS}
