@@ -169,7 +169,11 @@ if(ALCEDO_CUDA_ENABLED)
   gtest_discover_tests(CudaPrngTest TEST_PREFIX "CudaPrngTest.")
 
   # Forward-only CNN / ML operator suite (ReLU, Conv2d, …).
-  add_executable(MlOpsTest ml_ops/relu_test.cu)
+  add_executable(MlOpsTest
+    ml_ops/relu_test.cu
+    ml_ops/device_buffer_test.cu
+    ml_ops/workspace_test.cu
+  )
   target_include_directories(MlOpsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(MlOpsTest PRIVATE GTest::gtest_main CudaUtils CUDA::cudart
                         ${ALCEDO_TEST_OPENCV_MIN_DEPS})

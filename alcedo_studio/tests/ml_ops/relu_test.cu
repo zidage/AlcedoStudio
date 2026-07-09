@@ -16,6 +16,7 @@
 #include <opencv2/core.hpp>
 #include <opencv2/core/cuda.hpp>
 
+#include "cuda/nn/device_buffer.hpp"
 #include "cuda/nn/relu.hpp"
 #include "cuda/nn/tensor.hpp"
 
@@ -27,63 +28,9 @@ auto HasCudaDevice() -> bool {
   return ::cudaGetDeviceCount(&count) == cudaSuccess && count > 0;
 }
 
+// Local alias so existing tests stay compact; storage lives in cuda::nn.
 template <typename T>
-class DeviceBuffer {
- public:
-  explicit DeviceBuffer(std::size_t count) : count_(count) {
-    if (count_ == 0) {
-      return;
-    }
-    const auto status = ::cudaMalloc(&ptr_, sizeof(T) * count_);
-    if (status != cudaSuccess) {
-      throw std::runtime_error(cudaGetErrorString(status));
-    }
-  }
-
-  DeviceBuffer(const DeviceBuffer&)            = delete;
-  DeviceBuffer& operator=(const DeviceBuffer&) = delete;
-
-  ~DeviceBuffer() {
-    if (ptr_ != nullptr) {
-      ::cudaFree(ptr_);
-    }
-  }
-
-  auto get() -> T* { return ptr_; }
-  auto get() const -> const T* { return ptr_; }
-  auto size() const -> std::size_t { return count_; }
-
-  void Upload(const std::vector<T>& host) {
-    if (host.size() != count_) {
-      throw std::runtime_error("DeviceBuffer::Upload size mismatch");
-    }
-    if (count_ == 0) {
-      return;
-    }
-    const auto status =
-        ::cudaMemcpy(ptr_, host.data(), sizeof(T) * count_, cudaMemcpyHostToDevice);
-    if (status != cudaSuccess) {
-      throw std::runtime_error(cudaGetErrorString(status));
-    }
-  }
-
-  auto Download() const -> std::vector<T> {
-    std::vector<T> host(count_);
-    if (count_ == 0) {
-      return host;
-    }
-    const auto status =
-        ::cudaMemcpy(host.data(), ptr_, sizeof(T) * count_, cudaMemcpyDeviceToHost);
-    if (status != cudaSuccess) {
-      throw std::runtime_error(cudaGetErrorString(status));
-    }
-    return host;
-  }
-
- private:
-  T*          ptr_   = nullptr;
-  std::size_t count_ = 0;
-};
+using DeviceBuffer = cuda::nn::DeviceBuffer<T>;
 
 auto CpuRelu(const std::vector<float>& input) -> std::vector<float> {
   std::vector<float> out(input.size());

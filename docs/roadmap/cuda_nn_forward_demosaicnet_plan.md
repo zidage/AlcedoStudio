@@ -2,9 +2,9 @@
 
 Date: 2026-07-09
 
-Status: Phase 0 partial (ReLU + `DeviceTensor` + `MlOpsTest` landed on
-`feature/xtrans_improve`). Remaining phases are ready for implementation by the
-next agent.
+Status: Phase 0 complete (ReLU + `DeviceTensor` + `DeviceBuffer` +
+`WorkspacePool` + `MlOpsTest` on `feature/xtrans_improve`). Remaining phases are
+ready for implementation by the next agent.
 
 This document is the handoff plan for a **forward-only, CNN-focused CUDA
 inference mini-framework** under `alcedo_studio/src/cuda/nn/`, sufficient to run
@@ -39,14 +39,16 @@ dependencies for this path:
 - A small in-tree forward runtime keeps GPLv3 auditability and avoids another
   large runtime in the install package.
 
-### 1.2 What already landed (Phase 0 partial)
+### 1.2 What already landed (Phase 0)
 
 | Item | Location |
 |------|----------|
 | `DeviceTensor` (non-owning, rank ≤ 8, f32, strides) | `include/cuda/nn/tensor.hpp` |
 | Launch / error helpers | `include/cuda/nn/common.hpp` |
+| `DeviceBuffer` (RAII `cudaMalloc` / upload / download) | `include/cuda/nn/device_buffer.hpp` |
+| `WorkspacePool` + `WorkspaceScope` (bump allocator) | `include/cuda/nn/workspace.hpp` |
 | Optimized ReLU (float4 + strided + pitched GpuMat) | `include/cuda/nn/relu.hpp`, `cuda/nn/relu.cu` |
-| Test suite scaffold | `tests/ml_ops/relu_test.cu`, CMake target `MlOpsTest` |
+| Test suite scaffold | `tests/ml_ops/{relu,device_buffer,workspace}_test.cu`, CMake target `MlOpsTest` |
 | Linked into | `CudaUtils` library |
 
 Measured ReLU contiguous bandwidth on the author’s machine: ~220–250 GB/s
@@ -323,18 +325,15 @@ Work **phase by phase**. Each phase ends with green `MlOpsTest` (and any new
 binaries). Do not start pipeline wiring before Phase 4 model runners pass
 numerical tests.
 
-### Phase 0 — Core tensor + ReLU  ✅ (partial, done)
+### Phase 0 — Core tensor + ReLU  ✅ (done)
 
 **Done:**
 
 - [x] `DeviceTensor`, ReLU, GpuMat overloads, `MlOpsTest` correctness + bandwidth.
-
-**Still do if missing before Phase 1:**
-
-- [ ] `DeviceBuffer` owning wrapper (RAII `cudaMalloc`/`Free`, upload/download)
-      under `include/cuda/nn/device_buffer.hpp` (tests currently roll their own;
-      promote to library).
-- [ ] `WorkspacePool` skeleton (even if only used by later ops).
+- [x] `DeviceBuffer` owning wrapper (RAII `cudaMalloc`/`Free`, upload/download)
+      under `include/cuda/nn/device_buffer.hpp` (tests use the library type).
+- [x] `WorkspacePool` + `WorkspaceScope` bump allocator skeleton under
+      `include/cuda/nn/workspace.hpp` (unit tests + ReLU smoke via workspace tensor).
 
 **Exit:** existing ReLU tests still pass; buffer/pool unit tests added.
 
@@ -513,7 +512,7 @@ If starting immediately, execute in this order:
    - `cuda/nn/relu.cu`
    - `tests/ml_ops/relu_test.cu`
    - demosaicnet `modules.py` forward (linked in §2)
-2. **Phase 0 cleanup:** promote `DeviceBuffer` + `WorkspacePool`.
+2. **Phase 0 cleanup:** promote `DeviceBuffer` + `WorkspacePool`. ✅
 3. **Phase 1:** Mul, Concat, Slice, CenterCrop, layout convert + tests.
 4. **Phase 2:** Conv2dBias / Conv2dBiasRelu with 1×1 and 3×3 paths + tests
    against CPU and against real layer weights.
