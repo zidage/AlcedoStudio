@@ -180,6 +180,7 @@ if(ALCEDO_CUDA_ENABLED)
     ml_ops/layout_test.cu
     ml_ops/structural_compose_test.cu
     ml_ops/conv2d_test.cu
+    ml_ops/conv_transpose2d_test.cu
   )
   target_include_directories(MlOpsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(MlOpsTest PRIVATE GTest::gtest_main CudaUtils CUDA::cudart

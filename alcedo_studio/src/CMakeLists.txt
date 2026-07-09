@@ -128,6 +128,7 @@ if(ALCEDO_CUDA_ENABLED)
             cuda/nn/crop.cu
             cuda/nn/layout.cu
             cuda/nn/conv2d.cu
+            cuda/nn/conv_transpose2d.cu
         PUBLIC_DEPS
             CUDA::cudart
             ${ALCEDO_OPENCV_CORE_DEPS}

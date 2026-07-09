@@ -2,9 +2,9 @@
 
 Date: 2026-07-09
 
-Status: Phase 2 complete (Conv2d + bias / fused ConvBiasRelu with 1×1, 2×2 s=2,
-and 3×3 s=1 specialized paths; pure cudart, no cuBLAS/cuDNN). Phases 0–1 remain
-done. Next: Phase 3 ConvTranspose2d (Bayer unpack).
+Status: Phase 3 complete (ConvTranspose2d with specialized unpack_mosaick
+12→3 k=2 s=2 groups=3 path + generic grouped gather fallback; pure cudart).
+Phases 0–2 remain done. Next: Phase 4 safetensors + model runners.
 
 This document is the handoff plan for a **forward-only, CNN-focused CUDA
 inference mini-framework** under `alcedo_studio/src/cuda/nn/`, sufficient to run
@@ -377,23 +377,27 @@ numerical tests.
 **Exit:** conv unit tests green; no `cudaMalloc` inside hot path when workspace
 is provided.
 
-### Phase 3 — ConvTranspose2d (Bayer unpack)
+### Phase 3 — ConvTranspose2d (Bayer unpack)  ✅ (done)
 
-**Implement:**
+**Done:**
 
-- API parallel to Conv2d.
-- **Required specialization:** `in=12, out=3, k=2, s=2, groups=3` matching
-  `unpack_mosaick`.
-- Output size (PyTorch default `output_padding=0`):
+| Item | Location |
+|------|----------|
+| `ConvTranspose2dParams` + output-size helpers | `include/cuda/nn/conv_transpose2d.hpp` |
+| `ConvTranspose2d` | `cuda/nn/conv_transpose2d.cu` |
+| Specialized path | unpack_mosaick: 12→3, k=2, s=2, groups=3 (one-input gather) |
+| Generic fallback | grouped gather for other k/s/pad/groups |
+| Weight layout | PyTorch ConvTranspose2d: `[Cin, Cout/groups, kH, kW]` |
+| Tests | `tests/ml_ops/conv_transpose2d_test.cu` |
 
-  ```text
-  H_out = (H - 1)*sH - 2*padH + d*(kH-1) + output_padding + 1
-  ```
+**Acceptance:**
 
-**Tests:**
-
-- CPU reference for grouped transpose on tiny tensors.
-- Load `unpack_mosaick` weights; compare one forward block.
+- [x] CPU reference match for grouped tiny tensors and groups=1.
+- [x] Specialized unpack shape (12→3) multi-batch / odd spatial.
+- [x] Real weights: `unpack_mosaick` from `bayer.safetensors`.
+- [x] Workspace arg accepted; hot path performs no `cudaMalloc` / no bump alloc.
+- [x] Output size formula matches PyTorch default (`output_padding=0` → 2× for k=s=2).
+- [x] Perf smoke unpack_mosaick 12→3 H=W=512→1024 (soft floor only).
 
 **Exit:** green tests; used only by Bayer runner later.
 
@@ -492,7 +496,7 @@ If starting immediately, execute in this order:
 3. **Phase 1:** Mul, Concat, Slice, CenterCrop, layout convert + tests. ✅
 4. **Phase 2:** ✅ Conv2dBias / Conv2dBiasRelu with 1×1 / 2×2s2 / 3×3 paths + tests
    against CPU and against real layer weights.
-5. **Phase 3:** specialized `unpack_mosaick` transpose.
+5. **Phase 3:** specialized `unpack_mosaick` transpose. ✅
 6. **Phase 4:** safetensors + full Bayer/XTrans runners + golden tests.
 7. **Phase 5:** GpuMat pipeline entry + tiling.
 8. **Phase 6:** profile-driven optimization.
