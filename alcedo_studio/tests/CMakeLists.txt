@@ -168,6 +168,14 @@ if(ALCEDO_CUDA_ENABLED)
   set_target_properties(CudaPrngTest PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
   gtest_discover_tests(CudaPrngTest TEST_PREFIX "CudaPrngTest.")
 
+  # Forward-only CNN / ML operator suite (ReLU, Conv2d, …).
+  add_executable(MlOpsTest ml_ops/relu_test.cu)
+  target_include_directories(MlOpsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(MlOpsTest PRIVATE GTest::gtest_main CudaUtils CUDA::cudart
+                        ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+  set_target_properties(MlOpsTest PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+  gtest_discover_tests(MlOpsTest TEST_PREFIX "MlOpsTest.")
+
   if(WIN32)
     add_executable(D3DCudaInteropUtilsTest ui/d3d_cuda_interop_utils_test.cpp)
     target_include_directories(D3DCudaInteropUtilsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
@@ -1117,6 +1125,7 @@ alcedo_assign_test_category(raw ALCEDO_BUILD_RAW_TESTS alcedo_tests_raw
 
 alcedo_assign_test_category(gpu ALCEDO_BUILD_GPU_TESTS alcedo_tests_gpu
   CudaPrngTest
+  MlOpsTest
   CudaImageGeometryOpsTest
   D3DCudaInteropUtilsTest
   CudaRawOpsTest

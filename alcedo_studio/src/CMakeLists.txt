@@ -119,8 +119,12 @@ def_library(CudaDriverRequirements
 
 if(ALCEDO_CUDA_ENABLED)
     def_library(CudaUtils
-        SOURCES cuda/prng.cu
-        PUBLIC_DEPS CUDA::cudart
+        SOURCES
+            cuda/prng.cu
+            cuda/nn/relu.cu
+        PUBLIC_DEPS
+            CUDA::cudart
+            ${ALCEDO_OPENCV_CORE_DEPS}
     )
     set_target_properties(CudaUtils PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
     target_compile_definitions(CudaUtils PUBLIC HAVE_CUDA)
