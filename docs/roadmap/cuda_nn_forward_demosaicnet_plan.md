@@ -4,22 +4,29 @@ Date: 2026-07-09
 
 Status: Phase 3 complete (ConvTranspose2d with specialized unpack_mosaick
 12→3 k=2 s=2 groups=3 path + generic grouped gather fallback; pure cudart).
-Phases 0–3 remain done. Next: Phase 4 generic safetensors IO, then a
-**RAW-scoped, lazy-loaded** DemosaicNet submodule (Phases 5–8). A separate
-architectural track (§3.10) records how `WorkspacePool` generalizes beyond NN
-to the rest of the image pipeline.
+Phases 0–3 remain done. Next: Phase 4 safetensors → host DTO (no graph), then
+**hard-coded** Bayer/XTrans modules with CRTP `LoadWeights` + lazy cache
+(Phases 5–8). A separate architectural track (§3.10) records how
+`WorkspacePool` generalizes beyond NN to the rest of the image pipeline.
 
 This document is the handoff plan for:
 
 1. A **forward-only, CNN-focused CUDA inference mini-framework** under
-   `alcedo_studio/src/cuda/nn/` (generic primitives, IO, **workspace**).
-2. A **domain-specific DemosaicNet submodule** that lives only under the RAW
-   processor module—not as a peer of `OpenClContext` / `MetalContext`.
+   `alcedo_studio/src/cuda/nn/` (generic primitives, safetensors **DTO** IO,
+   **workspace**).
+2. A **domain-specific, hard-coded DemosaicNet demosaic module** under the RAW
+   processor—not a runtime graph assembler, not a peer of `OpenClContext` /
+   `MetalContext`. Topology is fixed in C++ (Bayer / XTrans as specialized
+   modules); safetensors only supplies weight tensors via a unified DTO.
 3. A **lazy model cache** (load on first user choice of NN demosaic; reuse for
    the rest of the process / later edit sessions) for immutable device weights.
 4. A clear separation between **ephemeral scratch** (`WorkspacePool`) and
    **long-lived domain state** (weights)—and a note on migrating the rest of the
    pipeline’s scattered scratch RAII toward the same idea later.
+
+**Non-design (explicit):** do **not** parse safetensors into a dynamic operator
+graph, layer list, or “network builder” at runtime. That is not the product
+architecture.
 
 Bundled weights:
 
@@ -155,20 +162,19 @@ Namespace: `alcedo::cuda::nn`.
 Library: keep growing `CudaUtils` until it becomes large enough to split
 (`CudaNn`); do not create a second CUDA static lib without need.
 
-**Domain DemosaicNet submodule** (RAW-only; not a platform GPU service):
+**Domain DemosaicNet submodule** (RAW-only; hard-coded demosaic modules):
 
 ```text
 alcedo_studio/src/include/decoders/processor/nn/
-  demosaicnet_cache.hpp        # lazy model cache (NOT a device context)
-  demosaicnet_weights.hpp      # immutable device weight pack + manifests
-  demosaicnet_bayer.hpp        # Bayer graph runner (views weights)
-  demosaicnet_xtrans.hpp       # XTrans graph runner (views weights)
+  demosaicnet_cache.hpp        # lazy cache of hard-coded module instances
+  demosaicnet_module.hpp       # CRTP base: LoadWeights(SafetensorsTensorMap DTO)
+  demosaicnet_bayer.hpp        # BayerDemosaicNet : fixed topology + device weights
+  demosaicnet_xtrans.hpp       # XTransDemosaicNet : fixed topology + device weights
   demosaicnet_mosaic.hpp       # CFA → 3ch demosaicnet mosaic pack helpers
 
 alcedo_studio/src/decoders/processor/nn/
   demosaicnet_cache.cpp
-  demosaicnet_weights.cpp
-  demosaicnet_bayer.cu
+  demosaicnet_bayer.cu         # hard-coded Forward + LoadWeights impl
   demosaicnet_xtrans.cu
   demosaicnet_mosaic.cu
 
@@ -181,15 +187,15 @@ alcedo_studio/src/decoders/processor/operators/gpu/
 
 Namespace sketch: keep under `alcedo` / decoder-local types consistent with
 existing `CUDA::RcdWorkspace` style. Prefer names that read as **model cache /
-weights / forward**, never as `*Context` that could be confused with
+hard-coded module / forward**, never as `*Context` that could be confused with
 `OpenClContext` / `MetalContext`.
 
 **Naming ban for implementers:** do **not** introduce
 `DemosaicNetContext` as a process-global device-manager peer. Prefer:
 
-- `DemosaicNetModelCache` / `DemosaicNetWeightCache` — long-lived weight store
-- `DemosaicNetBayerWeights` / `…XTransWeights` — immutable packs
-- `BayerDemosaicNetForward` — pure graph function
+- `DemosaicNetModelCache` — lazy cache of loaded module instances
+- `BayerDemosaicNet` / `XTransDemosaicNet` — hard-coded modules (CRTP)
+- `SafetensorsTensorMap` (or similar) — unified host DTO from the parser
 
 ---
 
@@ -302,10 +308,10 @@ return out
 | 6 | **Concat** (channel) | Both | Bayer 3+3→6; XTrans 3+64→67. |
 | 7 | **CenterCrop** (spatial) | Both | `_crop_like`. |
 | 8 | **Layout convert** | Boundary | HWC `GpuMat` ↔ NCHW tensor (and optional planar pack). |
-| 9 | **Safetensors load** | Both | Host parse → device weight buffers (lazy, once per variant). |
+| 9 | **Safetensors → DTO** | Both | Host parse to a unified tensor map; **no** graph build. |
 | 10 | **Workspace allocator** | Both | Scratch tensors; no per-layer `cudaMalloc` in steady state. |
-| 11 | **Model runners** | Both | Domain Bayer / XTrans forward under RAW `nn/`. |
-| 12 | **Lazy model cache** | Both | RAW-scoped; not a platform GPU context. |
+| 11 | **Hard-coded modules** | Both | Compile-time Bayer / XTrans topology; `LoadWeights(DTO)` via CRTP. |
+| 12 | **Lazy model cache** | Both | RAW-scoped cache of loaded modules; not a platform GPU context. |
 
 Optional later (not required for bit-accuracy vs demosaicnet, but useful):
 
@@ -337,10 +343,11 @@ Do **not** fuse across the Bayer split/mul boundary until tests lock numerics.
 |------|------------------|------|----------|----------------------|
 | **Platform GPU context** | `OpenClContext`, `MetalContext`, `OpenClProgramLibrary` | Device, queue, program compile | Process | **Out of scope.** DemosaicNet does not become one of these. |
 | **Generic scratch / workspace** | new `WorkspacePool`; eventually could cover launcher work/temp, LLF levels | Ephemeral device bytes + byte accounting | Frame / session / lease | **Shared idea**, first used by NN; broader migration is §3.10 |
-| **Domain model cache** | planned `DemosaicNetModelCache` | Immutable weights only | Lazy → process (until unload) | **Yes — RAW-scoped only** |
+| **Hard-coded NN module** | planned `BayerDemosaicNet` / `XTransDemosaicNet` | Fixed topology + device weight slots | Module instance (cached lazy) | **Yes — specialized demosaic, not a graph IR** |
+| **Domain model cache** | planned `DemosaicNetModelCache` | Loaded module instances | Lazy → process (until unload) | **Yes — RAW-scoped only** |
 | **Operator-local workspace structs** | `RcdWorkspace`, `HighlightWorkspace`, LLF pyramids | Typed temps for one algorithm | Call / stage | Legacy pattern; do not invent another for NN |
 
-**DemosaicNet is fold (B): domain-scoped.**  
+**DemosaicNet is fold (B): domain-scoped hard-coded demosaic modules.**  
 **WorkspacePool is fold (A): the necessary “some context” for scratch**—but it
 is an **allocator**, not a device manager, and it must not be named or
 documented as “the DemosaicNet context.”
@@ -351,9 +358,9 @@ documented as “the DemosaicNet context.”
 ┌──────────────────────────────────────────────────────────────────────┐
 │  Product trigger (editor / RawParams)                                │
 │    User selects DemosaicNet  →  first decode that needs it           │
-│    lazy EnsureLoaded(Bayer|XTrans)  →  weights stay for process      │
+│    lazy EnsureLoaded(Bayer|XTrans)  →  module stays for process      │
 └───────────────────────────────┬──────────────────────────────────────┘
-                                │ shared immutable weights (after first load)
+                                │ shared hard-coded module (after first load)
 ┌───────────────────────────────▼──────────────────────────────────────┐
 │  RAW stage (per image / per worker)                                  │
 │    RawProcessor::ProcessCuda*  →  CUDA::DemosaicNet*(GpuMat, …)      │
@@ -362,19 +369,122 @@ documented as “the DemosaicNet context.”
                                 │
 ┌───────────────────────────────▼──────────────────────────────────────┐
 │  Domain submodule  decoders/processor/nn/   (RAW only)               │
-│    DemosaicNetModelCache   lazy weight cache (not a GPU backend)     │
-│    DemosaicNet*Weights     device buffers + manifests                │
-│    Bayer / XTrans Forward  graph only; view weights                  │
-│    mosaic pack             CFA → 3ch demosaicnet input               │
-│    [future] OpenCL/Metal   same domain API, other backends           │
+│    DemosaicNetModelCache     lazy cache of module instances          │
+│    CRTP NnWeightModule       LoadWeights(SafetensorsTensorMap)       │
+│    BayerDemosaicNet          HARD-CODED topology + Forward           │
+│    XTransDemosaicNet         HARD-CODED topology + Forward           │
+│    mosaic pack               CFA → 3ch demosaicnet input             │
+│    [future] OpenCL/Metal     same modules, other backends            │
 └───────────────────────────────┬──────────────────────────────────────┘
-                                │
+                                │ LoadWeights consumes DTO only
 ┌───────────────────────────────▼──────────────────────────────────────┐
 │  Generic  cuda/nn                                                    │
 │    ops: relu, conv2d, conv_transpose2d, mul, concat, crop, layout    │
-│    DeviceTensor, DeviceBuffer, WorkspacePool, safetensors IO         │
+│    DeviceTensor, DeviceBuffer, WorkspacePool                         │
+│    safetensors parser → SafetensorsTensorMap (host DTO, no graph)    │
 └──────────────────────────────────────────────────────────────────────┘
 ```
+
+### 3.2.1 Hard-coded modules + safetensors DTO + CRTP (authoritative)
+
+**Intent:** DemosaicNet is a **special demosaic algorithm** with a fixed graph,
+written out in C++ the same way RCD is a fixed algorithm—not an interpreter for
+arbitrary CNN graphs.
+
+| Piece | Responsibility | Does **not** do |
+|-------|----------------|-----------------|
+| Safetensors parser (`cuda/nn`) | File → unified host **DTO** (`SafetensorsTensorMap`: name → dtype, shape, bytes) | Build layers, infer topology, allocate device graphs |
+| CRTP base (`NnWeightModule<Derived>` or similar) | Unified `LoadWeights(const SafetensorsTensorMap&)` entry; optional helpers (`RequireF32(key, shape)`, upload slot) | Own demosaic policy or CFA knowledge |
+| `BayerDemosaicNet` / `XTransDemosaicNet` | **Compile-time** topology (member weight buffers + hard-coded `Forward`); derived `LoadWeights` maps **known keys** into **known slots** | Runtime assembly from key set; dynamic depth/width |
+| Model cache | Lazy construct + `LoadWeights` once per variant; hold the module instance | Parse files every decode |
+
+**DTO sketch** (host-only, generic; lives next to safetensors parser):
+
+```text
+struct SafetensorsTensor {
+  std::string name;
+  // dtype: F32 for v1; reject others or store enum
+  std::vector<std::int64_t> shape;
+  std::vector<float> data;          // contiguous host payload (F32)
+  // optional: data_offsets metadata if zero-copy mmap later
+};
+
+// Unified DTO handed to every hard-coded module.
+using SafetensorsTensorMap = std::unordered_map<std::string, SafetensorsTensor>;
+// or a small class with At(key), Require(key, shape), etc.
+```
+
+**CRTP sketch** (domain or thin generic helper—prefer domain header if the base
+is only used by demosaic modules; keep helpers that are pure DTO→buffer in
+`cuda/nn` if reusable):
+
+```text
+// Derived hard-codes topology. Base only standardizes weight ingestion.
+template <typename Derived>
+class NnWeightModule {
+ public:
+  // Unified entry: parser DTO in → device weight slots filled by Derived.
+  void LoadWeights(const SafetensorsTensorMap& tensors, cudaStream_t stream = nullptr) {
+    static_cast<Derived*>(this)->LoadWeightsImpl(tensors, stream);
+    loaded_ = true;
+  }
+
+  [[nodiscard]] auto weights_loaded() const -> bool { return loaded_; }
+
+ protected:
+  // Shared helpers available to Derived::LoadWeightsImpl:
+  //   RequireTensor(map, key, expected_shape) -> const SafetensorsTensor&
+  //   UploadTo(DeviceBuffer&, const SafetensorsTensor&, stream)
+  bool loaded_ = false;
+};
+
+class BayerDemosaicNet : public NnWeightModule<BayerDemosaicNet> {
+ public:
+  void LoadWeightsImpl(const SafetensorsTensorMap& t, cudaStream_t stream);
+  void Forward(DeviceTensor in, DeviceTensor out, WorkspacePool& ws,
+               cudaStream_t stream) const;
+
+ private:
+  // Fixed slots — not a vector<Layer>.
+  DeviceBuffer pack_w_, pack_b_;
+  DeviceBuffer conv_w_[15], conv_b_[15];   // or explicit conv1..conv15 members
+  DeviceBuffer residual_w_, residual_b_;
+  DeviceBuffer unpack_w_, unpack_b_;
+  DeviceBuffer post_w_, post_b_;
+  DeviceBuffer output_w_, output_b_;
+};
+
+class XTransDemosaicNet : public NnWeightModule<XTransDemosaicNet> { ... };
+```
+
+**`LoadWeightsImpl` contract (per derived module):**
+
+1. Require every key listed in §2.1 or §2.2 with exact F32 shapes.
+2. Reject missing / extra-critical / wrong-shape tensors with a clear error
+   (extra unknown keys may be ignored).
+3. Upload into the fixed `DeviceBuffer` slots (stream-aware H2D).
+4. **Never** resize the graph, change depth/width, or allocate a “layer list”
+   from the file. If the file does not match the hard-coded module, load fails.
+
+**`Forward` contract:** straight-line code calling `cuda::nn` ops in the order
+of §2.1 / §2.2—same spirit as writing out RCD stages. No interpreter loop over
+a runtime graph IR.
+
+**Why CRTP (not virtual base for v1):**
+
+- Zero overhead on the load path; derived can keep non-virtual `Forward` and
+  concrete weight members without vtable on the hot path.
+- Shared `LoadWeights` entry + `RequireTensor` / upload helpers without forcing
+  a polymorphic container of “any network.”
+- If a third hard-coded RAW NN appears later, it reuses the same DTO + CRTP
+  load pattern without inventing a graph runtime.
+
+**Anti-patterns (forbidden):**
+
+- `vector<unique_ptr<Layer>>` built by scanning safetensors keys.
+- ONNX-style “execute graph from file” for demosaicnet.
+- Storing only a blob of weights without named fixed slots mapped at load.
+- Generic “model zoo runner” in `cuda/nn` that demosaic plugs into as data.
 
 ### 3.3 Tensor policy
 
@@ -412,10 +522,9 @@ Priority order for implementation:
 | Resource | Owner | Lifetime | Concurrent use |
 |----------|-------|----------|----------------|
 | Safetensors on disk | install / `config/models` | N/A | read-only |
-| Host parse of tensors | transient during lazy load | first use of that variant | single-threaded load under mutex |
-| **Device weight buffers** | **`DemosaicNetModelCache` (RAW module)** | **lazy → process** | **immutable after load; many readers OK** |
-| Layer descriptors | weight pack | same as weights | immutable |
-| Graph forward | free functions / stateless runners | N/A | reentrant |
+| Host DTO (`SafetensorsTensorMap`) | transient during lazy load | first use of that variant | single-threaded load under mutex |
+| **Hard-coded module + device weight slots** | **`BayerDemosaicNet` / `XTransDemosaicNet` inside model cache** | **lazy → process** | **immutable after load; many readers OK** |
+| Graph topology | C++ source of the module (`Forward` body) | compile-time | reentrant |
 | **`WorkspacePool` activations** | **caller (RawProcessor path / test)** | frame / tile | **not shared across concurrent forwards** |
 | `cudaStream` | caller | per `Process()` | one stream per concurrent job |
 | CFA pack temps | workspace or call-local GpuMats | frame | same as workspace |
@@ -437,12 +546,14 @@ Priority order for implementation:
 - Activations dominate peak VRAM; they must be reclaimable without unloading
   weights (same spirit as `ReleasePreviewGpuScratch` vs keeping LUTs).
 
-**Rule:** the model cache **never** mutates weights after load. Forward is a pure
-function of `(weights, input, stream, workspace)`.
+**Rule:** after `LoadWeights`, the module’s weight slots are immutable for
+Forward. Forward is a pure function of `(module weights, input, stream,
+workspace)`. Topology never comes from the file.
 
 ### 3.6 Lazy model cache API (RAW-scoped design target)
 
 Not a platform device context. A small domain service owned by the RAW module.
+It caches **hard-coded module instances**, not a graph IR.
 
 ```text
 // Sketch only — names may adjust to local style.
@@ -456,44 +567,39 @@ struct DemosaicNetLoadOptions {
 
 class DemosaicNetModelCache {
  public:
-  // Module-local singleton or process-static is fine; do not market it as
-  // “GPU backend context.” Prefer free functions + static cache if that reads
-  // clearer next to CUDA::RcdWorkspace style.
   static auto Instance() -> DemosaicNetModelCache&;
 
-  // Lazy: no-op if already loaded. Thread-safe. Loads only the requested variant.
+  // Lazy: no-op if already loaded. Thread-safe. Per variant:
+  //   1) Parse safetensors → SafetensorsTensorMap (DTO)
+  //   2) Construct BayerDemosaicNet / XTransDemosaicNet (empty slots)
+  //   3) module.LoadWeights(dto)  // CRTP; fills fixed slots
   auto EnsureLoaded(DemosaicNetVariant variant,
                     const DemosaicNetLoadOptions& options = {}) -> bool;
 
   [[nodiscard]] auto IsLoaded(DemosaicNetVariant) const -> bool;
   [[nodiscard]] auto LastError() const -> std::string;
-  [[nodiscard]] auto ResidentWeightBytes() const -> std::size_t;  // owned accounting
+  [[nodiscard]] auto ResidentWeightBytes() const -> std::size_t;
 
-  [[nodiscard]] auto BayerWeights() const -> const DemosaicNetBayerWeights&;
-  [[nodiscard]] auto XTransWeights() const -> const DemosaicNetXTransWeights&;
-
-  // Optional: free weights under memory pressure (product can call later).
-  // void Unload(DemosaicNetVariant);
-  // void UnloadAll();
+  [[nodiscard]] auto Bayer() const -> const BayerDemosaicNet&;
+  [[nodiscard]] auto XTrans() const -> const XTransDemosaicNet&;
 };
 ```
 
-Runner sketch (domain module; **does not own weights**, **does not load files**):
+Load path (canonical):
 
 ```text
-void BayerDemosaicNetForward(const DemosaicNetBayerWeights& w,
-                             DeviceTensor in,   // NCHW mosaic
-                             DeviceTensor out,  // NCHW RGB
-                             WorkspacePool& workspace,
-                             cudaStream_t stream);
-
-void XTransDemosaicNetForward(...);
+path = model_dir / "bayer.safetensors"
+dto  = cuda::nn::LoadSafetensors(path)          // Phase 4: host DTO only
+auto module = std::make_unique<BayerDemosaicNet>();
+module->LoadWeights(dto, stream);               // Phase 5: CRTP → fixed slots
+cache.Store(std::move(module));
+// later: cache.Bayer().Forward(in, out, workspace, stream);  // hard-coded graph
 ```
 
 GpuMat operator sketch (RAW pipeline edge):
 
 ```text
-// Ensures the needed variant is loaded (lazy), then runs forward.
+// Ensures the needed variant is loaded (lazy), then module.Forward(...).
 // Never fopen's safetensors from RawProcessor ctor.
 bool CUDA::DemosaicNetBayer(const cv::cuda::GpuMat& cfa_or_mosaic,
                             cv::cuda::GpuMat& rgb_out,
@@ -511,6 +617,7 @@ bool CUDA::DemosaicNetBayer(const cv::cuda::GpuMat& cfa_or_mosaic,
 - Putting CFA / LibRaw / demosaic policy into `cuda/nn`.
 - Stuffing a process-global mutable `WorkspacePool` into the model cache without
   a lease protocol.
+- Assembling a runtime layer graph from the DTO key list.
 
 ### 3.7 When to load (product lifecycle)
 
@@ -628,14 +735,17 @@ for NN that makes future unification harder.
 
 ### 3.12 Future OpenCL / Metal demosaicnet
 
-Domain API (`EnsureLoaded`, weights view, Forward, GpuMat-ish edge) should be
-**backend-agnostic at the RAW policy layer**. v1 implements CUDA only. Later:
+Domain API (`EnsureLoaded`, hard-coded module `Forward`, GpuMat-ish edge) should
+be **backend-agnostic at the RAW policy layer**. Topology remains hard-coded per
+backend (or shared host orchestration with backend kernels). v1 is CUDA only.
+Later:
 
-- Same safetensors + host manifests.
-- Backend-specific device weight upload and kernels.
+- Same safetensors → same host DTO; same CRTP `LoadWeights` key tables.
+- Backend-specific device weight storage and kernels.
 - Same lazy cache policy (load on first use of that backend+variant).
 - Do **not** hang this off `OpenClContext` as “another program”; treat it as RAW
   domain state that *uses* the platform context for device/queue access.
+- Still **no** runtime graph assembly on any backend.
 
 ---
 
@@ -687,72 +797,126 @@ provided.
 
 **Exit:** green tests; used only by Bayer runner later.
 
-### Phase 4 — Generic safetensors IO (`cuda/nn` only)
+### Phase 4 — Safetensors parser → unified host DTO (`cuda/nn` only)
 
-**Scope boundary:** host/device **file format** support only. No DemosaicNet
-graph, no RAW model cache, no pipeline migration.
+**Scope boundary:** file format → **host DTO** only. No demosaic topology, no
+runtime graph, no RAW module types, no pipeline migration.
+
+**Design rule for this phase:** the output of Phase 4 is a bag of named host
+tensors (`SafetensorsTensorMap`). It is **not** a network. Hard-coded modules
+in Phase 5 consume that DTO via CRTP `LoadWeights`.
 
 **Implement:**
 
 1. **Safetensors reader** (header JSON + raw tensor blobs), little-endian F32.
    - Minimal in-tree parser (header size `uint64` + JSON + data offset).
-   - Host tensors by key: dtype, shape, contiguous `float` bytes.
-2. **Shape / dtype validation helpers** (generic).
-3. **Device upload helper:** host tensor → `DeviceBuffer` / `DeviceTensor`
-   (stream-aware).
-4. **Deduplicate** ad-hoc parsers in `conv2d_test.cu` /
+   - API: `LoadSafetensors(path) -> SafetensorsTensorMap` (or equivalent DTO
+     type with `find` / `at` / iteration).
+2. **Per-tensor record:** name, dtype, shape, contiguous host `float` payload
+   (v1: require F32; clear error on other dtypes).
+3. **Lookup helpers** (generic, for CRTP loaders later):
+   - `Find(map, key)`, `Require(map, key, expected_shape)` → const ref or throw.
+   - Shape compare utility.
+4. **Optional thin upload helper** (may live here or next to `DeviceBuffer`):
+   host tensor → `DeviceBuffer` H2D (stream-aware). Used by Phase 5
+   `LoadWeightsImpl`; not a “build model” API.
+5. **Deduplicate** ad-hoc parsers in `conv2d_test.cu` /
    `conv_transpose2d_test.cu` if cheap in the same PR.
 
 **Files:**
 
 ```text
-include/cuda/nn/safetensors.hpp
+include/cuda/nn/safetensors.hpp      # DTO + LoadSafetensors + Require helpers
 cuda/nn/safetensors.cpp
 ```
 
-**Tests:** load both real models’ keys/shapes; reject corrupt files; upload
-round-trip bit-identical.
+**DTO API sketch:**
 
-**Exit:** library loads packaged tensors without domain semantics. `MlOpsTest`
-green.
+```text
+struct SafetensorsTensor {
+  std::string name;
+  enum class Dtype { F32 /* extend later */ } dtype;
+  std::vector<std::int64_t> shape;
+  std::vector<float> data;
+  [[nodiscard]] auto numel() const -> std::size_t;
+};
 
-**Non-goals:** model forward, model cache, GpuMat demosaic, pipeline scratch
-migration.
+class SafetensorsTensorMap {
+ public:
+  [[nodiscard]] auto contains(std::string_view key) const -> bool;
+  [[nodiscard]] auto at(std::string_view key) const -> const SafetensorsTensor&;
+  // iteration over entries...
+};
 
-### Phase 5 — Domain runners + lazy model cache (`decoders/processor/nn`)
+[[nodiscard]] auto LoadSafetensors(const std::filesystem::path& path)
+    -> SafetensorsTensorMap;
 
-**Scope boundary:** DemosaicNet as a **RAW-owned neural submodule**. Uses
-Phase 1–4 primitives. Still no full `RawProcessor` product wiring (Phase 6).
+[[nodiscard]] auto RequireF32Tensor(const SafetensorsTensorMap& map,
+                                    std::string_view key,
+                                    std::initializer_list<std::int64_t> shape)
+    -> const SafetensorsTensor&;
+```
+
+**Tests:**
+
+- Load both real files; assert keys needed by §2.1 / §2.2 **exist** with expected
+  shapes (table-driven checks—still not “building” a network).
+- Reject truncated file / bad header / non-F32.
+- `RequireF32Tensor` fails on wrong shape.
+- Optional: H2D upload helper bit-identical round-trip for one tensor.
+
+**Exit:** any caller can obtain a unified DTO from disk without domain
+knowledge. `MlOpsTest` green.
+
+**Non-goals for Phase 4:**
+
+- Model forward / hard-coded demosaic modules.
+- CRTP base (Phase 5).
+- Lazy model cache.
+- Runtime graph assembly (forever non-goal).
+- GpuMat demosaic / pipeline scratch migration.
+
+### Phase 5 — Hard-coded modules (CRTP LoadWeights) + lazy cache
+
+**Scope boundary:** DemosaicNet as a **RAW-owned, hard-coded demosaic NN**.
+Uses Phase 1–4 ops + DTO. Still no full `RawProcessor` product wiring (Phase 6).
 
 **Implement:**
 
-1. **`DemosaicNetBayerWeights` / `DemosaicNetXTransWeights`**
-   - Own device buffers; immutable after construction.
-   - Built from Phase 4 reader + one H2D pass.
-2. **`DemosaicNetModelCache`** (lazy, RAW-scoped)
-   - `EnsureLoaded(variant)` — **only** load path; mutex / call_once per variant.
-   - `IsLoaded` / `ResidentWeightBytes` / weight accessors.
+1. **CRTP base** `NnWeightModule<Derived>` (or domain-local name)
+   - Public `LoadWeights(const SafetensorsTensorMap&, cudaStream_t)`.
+   - Dispatches to `Derived::LoadWeightsImpl`.
+   - Optional shared helpers wrapping `RequireF32Tensor` + `DeviceBuffer` upload.
+2. **`BayerDemosaicNet` / `XTransDemosaicNet`**
+   - **Fixed** member weight slots (`DeviceBuffer` / views for each known key).
+   - `LoadWeightsImpl`: map §2 keys → slots; fail on mismatch; **no** dynamic
+     layer list.
+   - `Forward(in, out, workspace, stream)`: straight-line §2.1 / §2.2 using
+     `cuda::nn` ops (compile-time topology).
+3. **`DemosaicNetModelCache`** (lazy, RAW-scoped)
+   - `EnsureLoaded(variant)`:
+     parse file → DTO → construct module → `LoadWeights(dto)` → store.
+   - `Bayer()` / `XTrans()` return `const` module refs.
+   - Cold by default; mutex / call_once per variant.
    - **Does not** own a process-global inference `WorkspacePool` in v1.
-   - **Does not** load at construction of the cache object (cold by default).
-3. **Runners** Bayer / XTrans Forward
-   - Graph as §2.1 / §2.2; signature: const weights + workspace + stream.
 4. **Peak workspace estimator** (H,W / tile) → `Reserve` before forward.
 5. **CMake:** link into RAW / existing CUDA targets; headers under
    `include/decoders/processor/nn/`.
 
 **Tests:**
 
-- Cold cache: `IsLoaded == false` until `EnsureLoaded` or first forward path.
-- Lazy load both variants independently (Bayer load must not force XTrans).
-- End-to-end forward vs reference (Python dump preferred; tiny CPU graph
-  fallback for 32×32).
+- Cold cache until `EnsureLoaded`.
+- Independent lazy load of Bayer vs XTrans.
+- `LoadWeights` rejects wrong-shape DTO (mutated test map).
+- End-to-end `Forward` vs reference (Python dump preferred; tiny CPU ref for
+  32×32 fallback).
 - Golden: fixed seed mosaic stats / corner pixels.
-- **No reload:** two sequential forwards → identical weight device pointers.
-- **Concurrency smoke:** two threads, two `WorkspacePool`s, shared cache, small
-  tensors; both succeed.
+- **No reload:** two sequential forwards → same module instance / same weight
+  device pointers.
+- **Concurrency smoke:** two threads, two workspaces, shared loaded module.
 
-**Exit:** forwards match reference; cache is lazy and RAW-scoped; no platform
-“context” type; domain code under `decoders/processor/nn/`.
+**Exit:** hard-coded Bayer/XTrans match reference; weights enter only via DTO +
+CRTP `LoadWeights`; cache is lazy and RAW-scoped; **no** runtime graph builder.
 
 ### Phase 6 — RAW GpuMat entry + product selection + lazy trigger
 
@@ -840,9 +1004,9 @@ of RCD/highlight in the same PR as the first golden forward.
      (`EnsurePyramidBuffers`), `cuda_debayer_rcd.hpp` (`RcdWorkspace`),
      `cuda_highlight_reconstruct.hpp` (`HighlightWorkspace`)
 2. **Phase 0–3:** already done.
-3. **Phase 4:** generic safetensors in `cuda/nn`.
-4. **Phase 5:** domain weight packs + **lazy** `DemosaicNetModelCache` + runners
-   + goldens + no-reload / dual-workspace concurrency smoke.
+3. **Phase 4:** safetensors → `SafetensorsTensorMap` DTO in `cuda/nn` (no graph).
+4. **Phase 5:** CRTP `LoadWeights` + hard-coded Bayer/XTrans modules + lazy
+   cache + goldens + no-reload / dual-workspace concurrency smoke.
 5. **Phase 6:** GpuMat entry + RawParams + **lazy trigger** (no backend boot
    load); thumbnails Classical.
 6. **Phase 7:** tiling + workspace policy.
@@ -895,7 +1059,8 @@ context.
 10. GPLv3 license headers.
 11. **Lazy load once per variant** via model cache; never in `RawProcessor` ctor;
     never at unconditional app boot.
-12. **Immutable shared weights; private workspaces** for concurrency.
+12. **Immutable shared weights after LoadWeights; private workspaces** for
+    concurrency.
 13. Thumbnails / parallel decode default to **Classical**.
 14. Fail soft to Classical if load fails.
 15. Do **not** name domain types `*Context` in a way that confuses them with
@@ -903,6 +1068,10 @@ context.
 16. Prefer **owned byte counters** (`ResidentWeightBytes`,
     `WorkspacePool::capacity_bytes`) over inventing another `cudaMemGetInfo`-only
     diagnostic for this subsystem.
+17. **Hard-code topology** in C++ modules; safetensors is **weights only**
+    (DTO → CRTP `LoadWeights`). Never assemble a runtime op graph from the file.
+18. Prefer **CRTP** for the unified weight-load entry so each specialized module
+    keeps concrete slots and a non-virtual hot-path `Forward`.
 
 ---
 
@@ -921,17 +1090,20 @@ context.
 - Big-bang rewrite of all pipeline scratch into `WorkspacePool` inside the first
   demosaicnet PR (tracked as Phase 9 / §3.10).
 - Process-global mutable activation workspace without a lease protocol.
+- **Runtime network / graph assembly** from safetensors (layer lists, dynamic
+  depth/width, “execute whatever is in the file”).
 
 ---
 
 ## 9. Acceptance criteria for “DemosaicNet path done”
 
-1. Bayer and XTrans models **lazy-load once per variant** into a RAW-scoped
-   model cache and run entirely on CUDA.
+1. Bayer and XTrans are **hard-coded modules** that **lazy-load once per
+   variant** (DTO → CRTP `LoadWeights`) into a RAW-scoped cache and run on CUDA.
 2. Forwards match a frozen reference within test tolerances.
-3. `MlOpsTest` covers primitives in §2.3, lazy load, and no-reload behavior.
+3. `MlOpsTest` covers primitives in §2.3, DTO parse, lazy load, shape-reject on
+   load, and no-reload behavior.
 4. Domain code lives under `decoders/processor/nn/` (+ GpuMat operator); generic
-   ops stay in `cuda/nn/`.
+   ops + safetensors DTO stay in `cuda/nn/`.
 5. GpuMat in → GpuMat out with no mandatory host intermediate.
 6. Steady-state forward does not `cudaMalloc` after workspace reserve.
 7. Concurrent forwards with distinct workspaces are defined and smoke-tested.
@@ -954,7 +1126,8 @@ bar.
 | XTrans weights | `alcedo_studio/src/config/models/xtrans.safetensors` |
 | Generic NN headers | `alcedo_studio/src/include/cuda/nn/` |
 | Generic NN sources | `alcedo_studio/src/cuda/nn/` |
-| Domain NN (planned) | `include/decoders/processor/nn/`, `decoders/processor/nn/` |
+| Domain NN (planned) | `include/decoders/processor/nn/` (CRTP modules + cache) |
+| Safetensors DTO (planned) | `include/cuda/nn/safetensors.hpp` |
 | GpuMat demosaic op (planned) | `decoders/processor/operators/gpu/cuda_demosaicnet.*` |
 | Tests | `alcedo_studio/tests/ml_ops/` |
 | PyTorch modules | https://github.com/mgharbi/demosaicnet/blob/master/demosaicnet/modules.py |
@@ -973,8 +1146,8 @@ bar.
 1. DeviceBuffer + WorkspacePool + Mul/Concat/Crop/Slice/Layout  ✅  
 2. Conv2d (+ fused Bias/ReLU) + layer weight tests  ✅  
 3. ConvTranspose2d unpack specialization  ✅  
-4. **Generic safetensors IO in `cuda/nn` + tests** (Phase 4)  
-5. **Domain weight packs + lazy model cache + Bayer/XTrans runners + goldens**
+4. **Safetensors → DTO in `cuda/nn` + tests** (Phase 4)  
+5. **CRTP LoadWeights + hard-coded Bayer/XTrans + lazy cache + goldens**
    (Phase 5)  
 6. **GpuMat entry + RawParams + lazy trigger (no boot load)** (Phase 6)  
 7. **Tiling + workspace policy** (Phase 7)  
@@ -991,13 +1164,16 @@ per-processor weight reload or a fake platform “context.”
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Where does DemosaicNet live? | `decoders/processor/nn/` only | Domain demosaic; will grow OpenCL/Metal; not a platform GPU service |
-| Analogy to OpenCL/Metal context? | **No** | Those manage device/queue/programs; this only caches domain weights |
+| Analogy to OpenCL/Metal context? | **No** | Those manage device/queue/programs; this only caches hard-coded modules |
+| Topology source | **Hard-coded C++ modules** (`Forward` body + fixed weight slots) | Specialized demosaic algorithm, not a graph runtime |
+| Safetensors role | **Weights DTO only** (`SafetensorsTensorMap`) | Parser stays generic; never builds a network |
+| Weight ingestion API | **CRTP** `NnWeightModule` + `LoadWeights(DTO)` | Unified load entry; concrete slots; no vtable on hot path |
 | Weight load policy | **Lazy** on first NN use | Users who never enable NN pay nothing at boot; still reuse after first load |
 | Weight lifetime after load | Process (until optional Unload) | Avoid reload across images / edit sessions |
 | Who owns activations? | Caller `WorkspacePool` | Pool is not thread-safe; activations reclaimable without unloading weights |
-| Who owns weights? | RAW model cache | Shared, immutable, concurrent readers OK |
+| Who owns weights? | Hard-coded module instance in RAW model cache | Shared, immutable after load, concurrent readers OK |
 | Thumbnail NN? | No by default | Parallel thumb path stays Classical |
 | Is “some context” still needed? | Yes — as **workspace/scratch discipline**, not as DemosaicNet-as-context | Inventory of scattered RAII scratch (§1.3); `WorkspacePool` is the seed |
 | Pipeline scratch unification | Separate Phase 9 track | Do not block demosaicnet goldens on big-bang migration |
 | VRAM observability | Prefer owned byte counters; `cudaMemGetInfo` residual only | Matches how free VRAM is logged today but adds subsystem truth |
-| Safetensors code location | Generic parse in `cuda/nn`; domain manifests at weight-pack load | Parser reusable; shape tables domain-specific |
+| Safetensors code location | Generic DTO parse in `cuda/nn`; key/shape tables inside each module’s `LoadWeightsImpl` | Parser reusable; manifests stay with the hard-coded module |
