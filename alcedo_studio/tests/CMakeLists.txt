@@ -181,9 +181,10 @@ if(ALCEDO_CUDA_ENABLED)
     ml_ops/structural_compose_test.cu
     ml_ops/conv2d_test.cu
     ml_ops/conv_transpose2d_test.cu
+    ml_ops/safetensors_test.cpp
   )
   target_include_directories(MlOpsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-  target_link_libraries(MlOpsTest PRIVATE GTest::gtest_main CudaUtils CUDA::cudart
+  target_link_libraries(MlOpsTest PRIVATE GTest::gtest_main CudaUtils CUDA::cudart JSON
                         ${ALCEDO_TEST_OPENCV_MIN_DEPS})
   set_target_properties(MlOpsTest PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
   gtest_discover_tests(MlOpsTest TEST_PREFIX "MlOpsTest.")

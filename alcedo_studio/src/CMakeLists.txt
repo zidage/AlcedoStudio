@@ -129,9 +129,12 @@ if(ALCEDO_CUDA_ENABLED)
             cuda/nn/layout.cu
             cuda/nn/conv2d.cu
             cuda/nn/conv_transpose2d.cu
+            cuda/nn/safetensors.cpp
         PUBLIC_DEPS
             CUDA::cudart
             ${ALCEDO_OPENCV_CORE_DEPS}
+        PRIVATE_DEPS
+            JSON
     )
     set_target_properties(CudaUtils PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
     target_compile_definitions(CudaUtils PUBLIC HAVE_CUDA)

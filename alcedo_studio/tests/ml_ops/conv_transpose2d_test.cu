@@ -10,16 +10,15 @@
 #include <fstream>
 #include <iostream>
 #include <random>
-#include <sstream>
 #include <stdexcept>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include <cuda_runtime.h>
 
 #include "cuda/nn/conv_transpose2d.hpp"
 #include "cuda/nn/device_buffer.hpp"
+#include "cuda/nn/safetensors.hpp"
 #include "cuda/nn/tensor.hpp"
 #include "cuda/nn/workspace.hpp"
 
@@ -130,124 +129,6 @@ auto CpuConvTranspose2d(const std::vector<float>& input, const std::vector<float
     }
   }
   return out;
-}
-
-// Minimal safetensors F32 tensor loader (same approach as conv2d_test).
-struct HostTensor {
-  std::vector<std::int64_t> shape;
-  std::vector<float>        data;
-};
-
-auto JsonFindObjectValue(const std::string& json, const std::string& key) -> std::string {
-  const std::string needle = "\"" + key + "\"";
-  const auto        pos    = json.find(needle);
-  if (pos == std::string::npos) {
-    throw std::runtime_error("safetensors: key not found: " + key);
-  }
-  auto colon = json.find(':', pos + needle.size());
-  if (colon == std::string::npos) {
-    throw std::runtime_error("safetensors: malformed entry for " + key);
-  }
-  auto brace = json.find('{', colon);
-  if (brace == std::string::npos) {
-    throw std::runtime_error("safetensors: expected object for " + key);
-  }
-  int  depth = 0;
-  auto i     = brace;
-  for (; i < json.size(); ++i) {
-    if (json[i] == '{') {
-      ++depth;
-    } else if (json[i] == '}') {
-      --depth;
-      if (depth == 0) {
-        return json.substr(brace, i - brace + 1);
-      }
-    }
-  }
-  throw std::runtime_error("safetensors: unclosed object for " + key);
-}
-
-auto JsonExtractShape(const std::string& obj) -> std::vector<std::int64_t> {
-  const auto sp = obj.find("\"shape\"");
-  if (sp == std::string::npos) {
-    throw std::runtime_error("safetensors: missing shape");
-  }
-  const auto lb = obj.find('[', sp);
-  const auto rb = obj.find(']', lb);
-  if (lb == std::string::npos || rb == std::string::npos) {
-    throw std::runtime_error("safetensors: bad shape array");
-  }
-  std::vector<std::int64_t> shape;
-  std::stringstream         ss(obj.substr(lb + 1, rb - lb - 1));
-  std::string               tok;
-  while (std::getline(ss, tok, ',')) {
-    const auto b = tok.find_first_not_of(" \t\r\n");
-    const auto e = tok.find_last_not_of(" \t\r\n");
-    if (b == std::string::npos) {
-      continue;
-    }
-    shape.push_back(std::stoll(tok.substr(b, e - b + 1)));
-  }
-  return shape;
-}
-
-auto JsonExtractOffsets(const std::string& obj) -> std::pair<std::uint64_t, std::uint64_t> {
-  const auto sp = obj.find("\"data_offsets\"");
-  if (sp == std::string::npos) {
-    throw std::runtime_error("safetensors: missing data_offsets");
-  }
-  const auto lb = obj.find('[', sp);
-  const auto rb = obj.find(']', lb);
-  if (lb == std::string::npos || rb == std::string::npos) {
-    throw std::runtime_error("safetensors: bad data_offsets");
-  }
-  std::stringstream ss2(obj.substr(lb + 1, rb - lb - 1));
-  std::uint64_t     start = 0;
-  std::uint64_t     end   = 0;
-  char              comma = 0;
-  ss2 >> start >> comma >> end;
-  return {start, end};
-}
-
-auto LoadSafetensorsF32(const std::string& path, const std::string& tensor_name) -> HostTensor {
-  std::ifstream in(path, std::ios::binary);
-  if (!in) {
-    throw std::runtime_error("cannot open safetensors: " + path);
-  }
-  std::uint64_t header_len = 0;
-  in.read(reinterpret_cast<char*>(&header_len), sizeof(header_len));
-  if (!in || header_len == 0 || header_len > (1ull << 28)) {
-    throw std::runtime_error("bad safetensors header_len");
-  }
-  std::string header(static_cast<std::size_t>(header_len), '\0');
-  in.read(header.data(), static_cast<std::streamsize>(header_len));
-  if (!in) {
-    throw std::runtime_error("failed reading safetensors header");
-  }
-
-  const std::string obj = JsonFindObjectValue(header, tensor_name);
-  if (obj.find("F32") == std::string::npos) {
-    throw std::runtime_error("tensor is not F32: " + tensor_name);
-  }
-  HostTensor t;
-  t.shape                 = JsonExtractShape(obj);
-  const auto [off0, off1] = JsonExtractOffsets(obj);
-  if (off1 < off0) {
-    throw std::runtime_error("bad offsets for " + tensor_name);
-  }
-  const std::size_t nbytes = static_cast<std::size_t>(off1 - off0);
-  if (nbytes % sizeof(float) != 0) {
-    throw std::runtime_error("tensor byte size not multiple of 4: " + tensor_name);
-  }
-  t.data.resize(nbytes / sizeof(float));
-
-  const auto data_base = static_cast<std::streamoff>(sizeof(std::uint64_t) + header_len);
-  in.seekg(data_base + static_cast<std::streamoff>(off0));
-  in.read(reinterpret_cast<char*>(t.data.data()), static_cast<std::streamsize>(nbytes));
-  if (!in) {
-    throw std::runtime_error("failed reading tensor data: " + tensor_name);
-  }
-  return t;
 }
 
 auto FindModelPath(const char* filename) -> std::string {
@@ -437,21 +318,15 @@ TEST_F(MlOpsConvTranspose2dTest, RealWeightUnpackMosaick) {
   if (path.empty()) {
     GTEST_SKIP() << "bayer.safetensors not found";
   }
-  HostTensor w;
-  HostTensor b;
+  cuda::nn::SafetensorsTensorMap map;
   try {
-    w = LoadSafetensorsF32(path, "unpack_mosaick.weight");
-    b = LoadSafetensorsF32(path, "unpack_mosaick.bias");
+    map = cuda::nn::LoadSafetensors(path);
   } catch (const std::exception& e) {
     GTEST_SKIP() << "failed to load unpack_mosaick: " << e.what();
   }
   // PyTorch ConvTranspose2d weight: [Cin, Cout/groups, kH, kW] = [12, 1, 2, 2]
-  ASSERT_EQ(w.shape.size(), 4u);
-  EXPECT_EQ(w.shape[0], 12);
-  EXPECT_EQ(w.shape[1], 1);
-  EXPECT_EQ(w.shape[2], 2);
-  EXPECT_EQ(w.shape[3], 2);
-  ASSERT_EQ(b.data.size(), 3u);
+  const auto& w = cuda::nn::RequireF32Tensor(map, "unpack_mosaick.weight", {12, 1, 2, 2});
+  const auto& b = cuda::nn::RequireF32Tensor(map, "unpack_mosaick.bias", {3});
 
   constexpr int N = 1, Cin = 12, Cout = 3, H = 16, W = 20;
   constexpr int groups = 3;

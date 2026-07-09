@@ -2,11 +2,11 @@
 
 Date: 2026-07-09
 
-Status: Phase 3 complete (ConvTranspose2d with specialized unpack_mosaick
-12→3 k=2 s=2 groups=3 path + generic grouped gather fallback; pure cudart).
-Phases 0–3 remain done. Next: Phase 4 safetensors → host DTO (no graph), then
-**hard-coded** Bayer/XTrans modules with CRTP `LoadWeights` + lazy cache
-(Phases 5–8). A separate architectural track (§3.10) records how
+Status: Phase 4 complete (safetensors → host `SafetensorsTensorMap` DTO via
+nlohmann::json; `RequireF32Tensor` + H2D upload helpers; real bayer/xtrans
+shape tables + negative fixtures in `safetensors_test.cpp`). Phases 0–4 done.
+Next: Phase 5 **hard-coded** Bayer/XTrans modules with CRTP `LoadWeights` +
+lazy cache (Phases 5–8). A separate architectural track (§3.10) records how
 `WorkspacePool` generalizes beyond NN to the rest of the image pipeline.
 
 This document is the handoff plan for:
@@ -71,6 +71,7 @@ dependencies for this path:
 | ReLU, Mul, Concat, Slice, CenterCrop, layout convert | `include/cuda/nn/*`, `cuda/nn/*` |
 | `Conv2d` / `Conv2dBiasRelu` (1×1, 2×2 s=2, 3×3 s=1, generic) | `conv2d.hpp` / `conv2d.cu` |
 | `ConvTranspose2d` (unpack_mosaick specialization + generic) | `conv_transpose2d.hpp` / `.cu` |
+| Safetensors → host DTO (`SafetensorsTensorMap`) | `safetensors.hpp` / `safetensors.cpp` |
 | Test suite | `tests/ml_ops/*`, CMake target `MlOpsTest` |
 | Linked into | `CudaUtils` library |
 
@@ -797,7 +798,11 @@ provided.
 
 **Exit:** green tests; used only by Bayer runner later.
 
-### Phase 4 — Safetensors parser → unified host DTO (`cuda/nn` only)
+### Phase 4 — Safetensors parser → unified host DTO (`cuda/nn` only)  ✅ (done)
+
+**Done:** `LoadSafetensors` → `SafetensorsTensorMap` (nlohmann::json header);
+`RequireF32Tensor` / `UploadToDevice` / `UploadTo`; real-model shape tables +
+synthetic negative tests; conv2d/conv_transpose real-weight tests use the DTO.
 
 **Scope boundary:** file format → **host DTO** only. No demosaic topology, no
 runtime graph, no RAW module types, no pipeline migration.
