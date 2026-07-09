@@ -168,7 +168,8 @@ if(ALCEDO_CUDA_ENABLED)
   set_target_properties(CudaPrngTest PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
   gtest_discover_tests(CudaPrngTest TEST_PREFIX "CudaPrngTest.")
 
-  # Forward-only CNN / ML operator suite (ReLU, Mul, structural ops, Conv2d, …).
+  # Forward-only CNN / ML operator suite (ReLU, Mul, structural ops, Conv2d, …)
+  # plus hard-coded DemosaicNet modules + lazy cache (Phase 5).
   add_executable(MlOpsTest
     ml_ops/relu_test.cu
     ml_ops/device_buffer_test.cu
@@ -182,11 +183,15 @@ if(ALCEDO_CUDA_ENABLED)
     ml_ops/conv2d_test.cu
     ml_ops/conv_transpose2d_test.cu
     ml_ops/safetensors_test.cpp
+    ml_ops/demosaicnet_module_test.cu
   )
   target_include_directories(MlOpsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-  target_link_libraries(MlOpsTest PRIVATE GTest::gtest_main CudaUtils CUDA::cudart JSON
-                        ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+  target_link_libraries(MlOpsTest PRIVATE GTest::gtest_main CudaUtils DemosaicNet
+                        CUDA::cudart JSON ${ALCEDO_TEST_OPENCV_MIN_DEPS})
   set_target_properties(MlOpsTest PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+  target_compile_definitions(MlOpsTest PRIVATE
+      ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+  )
   gtest_discover_tests(MlOpsTest TEST_PREFIX "MlOpsTest.")
 
   if(WIN32)

@@ -2,12 +2,13 @@
 
 Date: 2026-07-09
 
-Status: Phase 4 complete (safetensors → host `SafetensorsTensorMap` DTO via
-nlohmann::json; `RequireF32Tensor` + H2D upload helpers; real bayer/xtrans
-shape tables + negative fixtures in `safetensors_test.cpp`). Phases 0–4 done.
-Next: Phase 5 **hard-coded** Bayer/XTrans modules with CRTP `LoadWeights` +
-lazy cache (Phases 5–8). A separate architectural track (§3.10) records how
-`WorkspacePool` generalizes beyond NN to the rest of the image pipeline.
+Status: Phase 5 complete (hard-coded `BayerDemosaicNet` / `XTransDemosaicNet`
+with CRTP `LoadWeights`, lazy `DemosaicNetModelCache`, peak workspace
+estimators, PyTorch golden forwards in `demosaicnet_module_test.cu`; library
+target `DemosaicNet`). Phases 0–5 done. Next: Phase 6 GpuMat RAW entry +
+product selection + lazy trigger. A separate architectural track (§3.10)
+records how `WorkspacePool` generalizes beyond NN to the rest of the image
+pipeline.
 
 This document is the handoff plan for:
 
@@ -881,47 +882,37 @@ knowledge. `MlOpsTest` green.
 - Runtime graph assembly (forever non-goal).
 - GpuMat demosaic / pipeline scratch migration.
 
-### Phase 5 — Hard-coded modules (CRTP LoadWeights) + lazy cache
+### Phase 5 — Hard-coded modules (CRTP LoadWeights) + lazy cache  ✅ (done)
 
 **Scope boundary:** DemosaicNet as a **RAW-owned, hard-coded demosaic NN**.
 Uses Phase 1–4 ops + DTO. Still no full `RawProcessor` product wiring (Phase 6).
 
-**Implement:**
+**Done:**
 
-1. **CRTP base** `NnWeightModule<Derived>` (or domain-local name)
+1. **CRTP base** `NnWeightModule<Derived>` — `include/decoders/processor/nn/demosaicnet_module.hpp`
    - Public `LoadWeights(const SafetensorsTensorMap&, cudaStream_t)`.
    - Dispatches to `Derived::LoadWeightsImpl`.
-   - Optional shared helpers wrapping `RequireF32Tensor` + `DeviceBuffer` upload.
+   - Shared `RequireUpload` helper (`RequireF32Tensor` + `UploadToDevice`).
 2. **`BayerDemosaicNet` / `XTransDemosaicNet`**
-   - **Fixed** member weight slots (`DeviceBuffer` / views for each known key).
-   - `LoadWeightsImpl`: map §2 keys → slots; fail on mismatch; **no** dynamic
-     layer list.
-   - `Forward(in, out, workspace, stream)`: straight-line §2.1 / §2.2 using
-     `cuda::nn` ops (compile-time topology).
-3. **`DemosaicNetModelCache`** (lazy, RAW-scoped)
-   - `EnsureLoaded(variant)`:
-     parse file → DTO → construct module → `LoadWeights(dto)` → store.
-   - `Bayer()` / `XTrans()` return `const` module refs.
-   - Cold by default; mutex / call_once per variant.
-   - **Does not** own a process-global inference `WorkspacePool` in v1.
-4. **Peak workspace estimator** (H,W / tile) → `Reserve` before forward.
-5. **CMake:** link into RAW / existing CUDA targets; headers under
+   - Fixed `DeviceBufferF32` weight slots; `LoadWeightsImpl` maps §2.1 / §2.2 keys.
+   - Straight-line `Forward` (Conv2dBiasRelu / Mul / Split / Concat / Crop /
+     ConvTranspose); caller-owned `WorkspacePool`.
+   - `EstimateWorkspaceBytes(H,W,N)` + spatial helpers (`H_out = H - 62` Bayer,
+     `H - 24` XTrans).
+3. **`DemosaicNetModelCache`** — lazy, mutex, cold by default; independent
+   Bayer/XTrans load; `Unload` for tests; model dir via options / env /
+   `ALCEDO_DEMOASICNET_MODEL_DIR` / source defaults.
+4. **CMake target `DemosaicNet`** (links `CudaUtils` only). Placed next to the
+   Raw Processor wrapper in CMake — consumer is **`raw_processor_cuda.cpp` /
+   RawProcessor CUDA backend**, **not** `RawProcessorOp` (classical op facade).
+   Phase 5 does **not** link `DemosaicNet` into `RawProcessor`. Headers under
    `include/decoders/processor/nn/`.
+5. **Tests** in `tests/ml_ops/demosaicnet_module_test.cu` + PyTorch goldens under
+   `tests/ml_ops/goldens/` (all Phase 5 filters green).
 
-**Tests:**
-
-- Cold cache until `EnsureLoaded`.
-- Independent lazy load of Bayer vs XTrans.
-- `LoadWeights` rejects wrong-shape DTO (mutated test map).
-- End-to-end `Forward` vs reference (Python dump preferred; tiny CPU ref for
-  32×32 fallback).
-- Golden: fixed seed mosaic stats / corner pixels.
-- **No reload:** two sequential forwards → same module instance / same weight
-  device pointers.
-- **Concurrency smoke:** two threads, two workspaces, shared loaded module.
-
-**Exit:** hard-coded Bayer/XTrans match reference; weights enter only via DTO +
-CRTP `LoadWeights`; cache is lazy and RAW-scoped; **no** runtime graph builder.
+**Exit:** hard-coded Bayer/XTrans match PyTorch reference (≤1e-4); weights enter
+only via DTO + CRTP `LoadWeights`; cache is lazy and RAW-scoped; **no** runtime
+graph builder; **no** `RawProcessor` product wiring yet.
 
 ### Phase 6 — RAW GpuMat entry + product selection + lazy trigger
 
@@ -930,10 +921,12 @@ CRTP `LoadWeights`; cache is lazy and RAW-scoped; **no** runtime graph builder.
 - GpuMat CFA/mosaic → RGB entry for RAW demosaic stage.
 - Classical remains default; NN is opt-in.
 - Load triggers only when NN path is actually taken.
+- Wire **`DemosaicNet` into the RawProcessor CUDA backend** (`raw_processor_cuda.cpp`),
+  not into `RawProcessorOp`.
 
 **Implement:**
 
-1. `cuda_demosaicnet.hpp/.cu`:
+1. `cuda_demosaicnet.hpp/.cu` (or equivalent under processor CUDA path):
    - CFA → demosaicnet 3ch mosaic (pattern phase; document training convention).
    - `EnsureLoaded` for needed variant, then Forward + layout convert.
 2. `RawParams` demosaic mode, e.g.
@@ -943,8 +936,10 @@ CRTP `LoadWeights`; cache is lazy and RAW-scoped; **no** runtime graph builder.
    - decode policy allows it (recommend FULL / high quality only;
      **thumbnails stay Classical**), **and**
    - `EnsureLoaded` succeeds (else Classical fallback).
-4. **No** app-main / image-backend eager init hook for weights.
-5. Even dimensions / crop policy for odd RAW sizes.
+4. CMake: `target_link_libraries(RawProcessor PRIVATE DemosaicNet)` (or CUDA-only
+   equivalent) — **never** fold DemosaicNet into `RawProcessorOp`.
+5. **No** app-main / image-backend eager init hook for weights.
+6. Even dimensions / crop policy for odd RAW sizes.
 
 **Tests:**
 
