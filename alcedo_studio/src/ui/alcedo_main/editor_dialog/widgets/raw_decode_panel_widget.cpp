@@ -97,6 +97,7 @@ void RawDecodePanelWidget::ProjectRawStateToDialog() {
     return;
   }
   auto& s                       = *deps_.dialog_state;
+  s.raw_demosaic_method_        = raw_state_.raw_demosaic_method_;
   s.raw_highlights_reconstruct_ = raw_state_.raw_highlights_reconstruct_;
   s.lens_calib_enabled_         = raw_state_.lens_calib_enabled_;
   s.lens_override_make_         = raw_state_.lens_override_make_;
@@ -108,6 +109,7 @@ void RawDecodePanelWidget::PullRawStateFromDialog() {
     return;
   }
   const auto& s                          = *deps_.dialog_state;
+  raw_state_.raw_demosaic_method_        = s.raw_demosaic_method_;
   raw_state_.raw_highlights_reconstruct_ = s.raw_highlights_reconstruct_;
   raw_state_.lens_calib_enabled_         = s.lens_calib_enabled_;
   raw_state_.lens_override_make_         = s.lens_override_make_;
@@ -119,6 +121,7 @@ void RawDecodePanelWidget::PullCommittedRawStateFromDialog() {
     return;
   }
   const auto& s                                    = *deps_.dialog_committed_state;
+  committed_raw_state_.raw_demosaic_method_        = s.raw_demosaic_method_;
   committed_raw_state_.raw_highlights_reconstruct_ = s.raw_highlights_reconstruct_;
   committed_raw_state_.lens_calib_enabled_         = s.lens_calib_enabled_;
   committed_raw_state_.lens_override_make_         = s.lens_override_make_;
@@ -183,7 +186,35 @@ void RawDecodePanelWidget::BuildDecodeSection() {
     return;
   }
 
-  auto* decode_layout = AddRawSection(this, *deps_.panel_layout, "RAW Decode");
+  auto* decode_layout     = AddRawSection(this, *deps_.panel_layout, "RAW Decode");
+
+  auto* method_row        = new QWidget(this);
+  auto* method_row_layout = new QHBoxLayout(method_row);
+  method_row_layout->setContentsMargins(0, 0, 0, 0);
+  method_row_layout->setSpacing(8);
+
+  auto* method_label = NewLocalizedLabel("Method", method_row);
+  method_label->setStyleSheet(AppTheme::EditorLabelStyle(AppTheme::Instance().textColor()));
+  AppTheme::MarkFontRole(method_label, AppTheme::FontRole::UiCaption);
+
+  raw_demosaic_method_combo_ = new QComboBox(method_row);
+  raw_demosaic_method_combo_->setMinimumWidth(0);
+  raw_demosaic_method_combo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  raw_demosaic_method_combo_->setStyleSheet(AppTheme::EditorComboBoxStyle());
+  QObject::connect(raw_demosaic_method_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                   this, [this](int index) {
+                     if (IsSyncing() || !raw_demosaic_method_combo_ || index < 0) {
+                       return;
+                     }
+                     raw_state_.raw_demosaic_method_ = static_cast<RawDemosaicMethodSelection>(
+                         raw_demosaic_method_combo_->itemData(index).toInt());
+                     PreviewRawField(AdjustmentField::RawDecode);
+                     CommitRawField(AdjustmentField::RawDecode);
+                   });
+  method_row_layout->addWidget(method_label, 0);
+  method_row_layout->addWidget(raw_demosaic_method_combo_, 1);
+  decode_layout->addWidget(method_row, 0);
+  RefreshDemosaicMethodComboFromState();
 
   raw_highlights_reconstruct_checkbox_ =
       NewLocalizedCheckBox("Enable Highlight Reconstruction", this);
@@ -199,6 +230,25 @@ void RawDecodePanelWidget::BuildDecodeSection() {
                      CommitRawField(AdjustmentField::RawDecode);
                    });
   decode_layout->addWidget(raw_highlights_reconstruct_checkbox_, 0);
+}
+
+void RawDecodePanelWidget::RefreshDemosaicMethodComboFromState() {
+  if (!raw_demosaic_method_combo_) {
+    return;
+  }
+  const bool prev_sync = local_syncing_;
+  local_syncing_       = true;
+  raw_demosaic_method_combo_->clear();
+  raw_demosaic_method_combo_->addItem(Tr("Default"),
+                                      static_cast<int>(RawDemosaicMethodSelection::Default));
+  raw_demosaic_method_combo_->addItem(Tr("Legacy"),
+                                      static_cast<int>(RawDemosaicMethodSelection::Legacy));
+  raw_demosaic_method_combo_->addItem(Tr("Neural Engine"),
+                                      static_cast<int>(RawDemosaicMethodSelection::NeuralEngine));
+  int selected =
+      raw_demosaic_method_combo_->findData(static_cast<int>(raw_state_.raw_demosaic_method_));
+  raw_demosaic_method_combo_->setCurrentIndex(std::max(0, selected));
+  local_syncing_ = prev_sync;
 }
 
 void RawDecodePanelWidget::BuildLensSection() {
@@ -396,6 +446,7 @@ void RawDecodePanelWidget::SyncControlsFromDialogState() {
 
   const bool prev_sync = local_syncing_;
   local_syncing_       = true;
+  RefreshDemosaicMethodComboFromState();
   if (raw_highlights_reconstruct_checkbox_) {
     raw_highlights_reconstruct_checkbox_->setChecked(raw_state_.raw_highlights_reconstruct_);
   }
@@ -406,7 +457,10 @@ void RawDecodePanelWidget::SyncControlsFromDialogState() {
   RefreshLensComboFromState();
 }
 
-void RawDecodePanelWidget::RetranslateUi() { RefreshLensComboFromState(); }
+void RawDecodePanelWidget::RetranslateUi() {
+  RefreshDemosaicMethodComboFromState();
+  RefreshLensComboFromState();
+}
 
 void RawDecodePanelWidget::LoadFromPipeline() {
   if (callbacks_.load_from_pipeline) {
@@ -416,6 +470,8 @@ void RawDecodePanelWidget::LoadFromPipeline() {
       committed_raw_state_ = *loaded_state;
       ProjectRawStateToDialog();
       if (deps_.dialog_committed_state) {
+        deps_.dialog_committed_state->raw_demosaic_method_ =
+            committed_raw_state_.raw_demosaic_method_;
         deps_.dialog_committed_state->raw_highlights_reconstruct_ =
             committed_raw_state_.raw_highlights_reconstruct_;
         deps_.dialog_committed_state->lens_calib_enabled_ =

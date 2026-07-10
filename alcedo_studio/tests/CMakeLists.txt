@@ -203,7 +203,8 @@ if(ALCEDO_CUDA_ENABLED)
 
   add_executable(CudaRawOpsTest raw/cuda_raw_ops_test.cpp)
   target_include_directories(CudaRawOpsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-  target_link_libraries(CudaRawOpsTest PRIVATE GTest::gtest_main RawProcessorOp ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+  target_link_libraries(CudaRawOpsTest PRIVATE GTest::gtest_main RawProcessor RawProcessorOp
+                                               ${ALCEDO_TEST_OPENCV_MIN_DEPS})
   gtest_discover_tests(CudaRawOpsTest TEST_PREFIX "CudaRawOpsTest.")
 endif()
 

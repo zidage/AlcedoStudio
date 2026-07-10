@@ -1,14 +1,23 @@
 # CUDA CNN Forward Framework + DemosaicNet Plan
 
 Date: 2026-07-09
+Updated: 2026-07-10
 
-Status: Phase 5 complete (hard-coded `BayerDemosaicNet` / `XTransDemosaicNet`
-with CRTP `LoadWeights`, lazy `DemosaicNetModelCache`, peak workspace
-estimators, PyTorch golden forwards in `demosaicnet_module_test.cu`; library
-target `DemosaicNet`). Phases 0–5 done. Next: Phase 6 GpuMat RAW entry +
-product selection + lazy trigger. A separate architectural track (§3.10)
-records how `WorkspacePool` generalizes beyond NN to the rest of the image
-pipeline.
+Status: Phases 0–5 done (generic CNN ops, safetensors DTO, hard-coded Bayer/XTrans
+modules, lazy cache, goldens). Phase 6 **product wiring is landed** (GpuMat CFA
+entry, `RawDemosaicMethod`, lazy trigger, Legacy fallback, FULL-only NN policy)
+but **Phase 6 is not closed**. Remaining work, in order:
+
+1. **6b — Neural Engine preprocess** (required for correct real RAW): CFA
+   **phase-align** to the training origin + **gamma 1/2.2 in / 2.2 out**. White
+   balance is **not** part of this step — `ToLinearRef` already applies it.
+2. **6c — Tiling** via existing CUDA tile path (`ProcessCudaTiled` /
+   `BuildTileJobs`); Neural Engine defaults to tiled mode (not long-edge
+   routing).
+
+Phase 7 keeps workspace policy / parallel readiness. A separate architectural
+track (§3.10) records how `WorkspacePool` generalizes beyond NN to the rest of
+the image pipeline.
 
 This document is the handoff plan for:
 
@@ -678,12 +687,14 @@ Concurrency rules:
 - `used_bytes()` / `capacity_bytes()` enable **owned** VRAM accounting without
   calling `cudaMemGetInfo`.
 
-For full-resolution RAW, **tile** the image (Phase 7):
+For full-resolution RAW Neural path (**Phase 6**):
 
-- Tile spatial size so peak activations fit a budget (512² / 1024² — profile).
-- Valid conv stacks need halo = receptive-field border, **or** overlapping
-  tiles + output crop. Document the scheme in code + tests.
-- Bayer pack requires even tile dims.
+1. **Preprocess (6b):** after `ToLinearRef` (which already did WB), CFA
+   phase-align to training origin + gamma 1/2.2 in; after the network, gamma
+   2.2 out back to linear camera RGB. When HLR is on, **no** `Clamp01` (needs
+   values `> 1`); when HLR is off, `Clamp01` is expected (same as today).
+2. **Tile (6c):** reuse the existing CUDA full-frame vs tiled split with a
+   demosaic-specific RF halo — not a greenfield scheduler. See Phase 6.
 
 Peak weight VRAM is tiny; peak **activation** VRAM dominates.
 
@@ -755,8 +766,10 @@ Later:
 
 Work **phase by phase**. Each phase ends with green `MlOpsTest` (and any new
 binaries). Do not start RAW pipeline wiring before Phase 5 model runners pass
-numerical tests. Do not claim “ready for product” before Phase 6 GpuMat entry
-exists. Do **not** block Phase 4–6 on full pipeline workspace migration (§3.10).
+numerical tests. Do not claim “ready for product full-res” before Phase 6b preprocess
+(phase-align + gamma) and Phase 6c tiling (reuse existing CUDA tile path) are
+both in. Do **not** block Phase 4–6 on full pipeline workspace migration
+(§3.10).
 
 ### Phase 0 — Core tensor + ReLU  ✅ (done)
 
@@ -780,7 +793,8 @@ exists. Do **not** block Phase 4–6 on full pipeline workspace migration (§3.1
 | `CenterCropSpatial` | `crop.hpp` / `crop.cu` | exact demosaicnet `_crop_like` |
 | `PackHwcToNchw` / `UnpackNchwToHwc` | `layout.hpp` / `layout.cu` | GpuMat CV_32FC3 ↔ NCHW |
 
-**Tests:** correctness, structural compose, layout round-trip, bandwidth smoke. ✅
+**Tests:** correctness, structural compose, layout round-trip, elementwise
+bandwidth floor. ✅
 
 **Exit:** all new tests in `MlOpsTest` green.
 
@@ -885,7 +899,8 @@ knowledge. `MlOpsTest` green.
 ### Phase 5 — Hard-coded modules (CRTP LoadWeights) + lazy cache  ✅ (done)
 
 **Scope boundary:** DemosaicNet as a **RAW-owned, hard-coded demosaic NN**.
-Uses Phase 1–4 ops + DTO. Still no full `RawProcessor` product wiring (Phase 6).
+Uses Phase 1–4 ops + DTO. Product GpuMat wiring landed in Phase 6a; this phase
+owns the modules, cache, and golden / shape contracts.
 
 **Done:**
 
@@ -902,69 +917,350 @@ Uses Phase 1–4 ops + DTO. Still no full `RawProcessor` product wiring (Phase 6
 3. **`DemosaicNetModelCache`** — lazy, mutex, cold by default; independent
    Bayer/XTrans load; `Unload` for tests; model dir via options / env /
    `ALCEDO_DEMOASICNET_MODEL_DIR` / source defaults.
-4. **CMake target `DemosaicNet`** (links `CudaUtils` only). Placed next to the
-   Raw Processor wrapper in CMake — consumer is **`raw_processor_cuda.cpp` /
-   RawProcessor CUDA backend**, **not** `RawProcessorOp` (classical op facade).
-   Phase 5 does **not** link `DemosaicNet` into `RawProcessor`. Headers under
-   `include/decoders/processor/nn/`.
+4. **CMake target `DemosaicNet`** (links `CudaUtils` only). Consumer is the
+   RawProcessor CUDA backend (`raw_processor_cuda.cpp` / `cuda_demosaicnet.*`),
+   **not** `RawProcessorOp`. Headers under `include/decoders/processor/nn/`.
 5. **Tests** in `tests/ml_ops/demosaicnet_module_test.cu` + PyTorch goldens under
    `tests/ml_ops/goldens/` (all Phase 5 filters green).
 
-**Exit:** hard-coded Bayer/XTrans match PyTorch reference (≤1e-4); weights enter
-only via DTO + CRTP `LoadWeights`; cache is lazy and RAW-scoped; **no** runtime
-graph builder; **no** `RawProcessor` product wiring yet.
+**Exit (met):** hard-coded Bayer/XTrans match PyTorch reference (≤1e-4); weights
+enter only via DTO + CRTP `LoadWeights`; cache is lazy and RAW-scoped; **no**
+runtime graph builder.
 
-### Phase 6 — RAW GpuMat entry + product selection + lazy trigger
+### Phase 6 — RAW product entry + Neural preprocess + tiling (redesigned)
 
-**Goals:**
+Phase 6 has three layers. **6a is done.** Active work is **6b then 6c**:
 
-- GpuMat CFA/mosaic → RGB entry for RAW demosaic stage.
-- Classical remains default; NN is opt-in.
-- Load triggers only when NN path is actually taken.
-- Wire **`DemosaicNet` into the RawProcessor CUDA backend** (`raw_processor_cuda.cpp`),
-  not into `RawProcessorOp`.
+| Layer | Status | Focus |
+|-------|--------|--------|
+| **6a** | ✅ | GpuMat entry, Method selection, lazy load, Legacy fallback |
+| **6b** | ⏳ **first** | Neural Engine **preprocess**: CFA phase-align + gamma 1/2.2 in / 2.2 out |
+| **6c** | ⏳ after 6b | Tiling via existing CUDA tile path; Neural Engine defaults to tiled |
 
-**Implement:**
+Do **not** invent a second tile scheduler inside `cuda/nn`. Preprocess lives on
+the RAW Neural path (around `DemosaicWithNeuralEngine` / `raw_processor_cuda`),
+not in generic `cuda/nn` ops.
 
-1. `cuda_demosaicnet.hpp/.cu` (or equivalent under processor CUDA path):
-   - CFA → demosaicnet 3ch mosaic (pattern phase; document training convention).
-   - `EnsureLoaded` for needed variant, then Forward + layout convert.
-2. `RawParams` demosaic mode, e.g.
-   `enum class RawDemosaicMethod { Classical, DemosaicNet };` default Classical.
-3. Branch in `raw_processor_cuda.cpp` only when:
-   - method is DemosaicNet, **and**
-   - decode policy allows it (recommend FULL / high quality only;
-     **thumbnails stay Classical**), **and**
-   - `EnsureLoaded` succeeds (else Classical fallback).
-4. CMake: `target_link_libraries(RawProcessor PRIVATE DemosaicNet)` (or CUDA-only
-   equivalent) — **never** fold DemosaicNet into `RawProcessorOp`.
-5. **No** app-main / image-backend eager init hook for weights.
-6. Even dimensions / crop policy for odd RAW sizes.
+#### 6a — GpuMat entry + product selection + lazy trigger  ✅ (landed)
 
-**Tests:**
+**Goals (met):**
 
-- Smoke on real RAW from `tests/resources` (GPU only).
-- Flag off → Classical behavior unchanged; cache stays cold.
-- Flag on first time → load once; second image reuses pointers.
-- Load failure → Classical fallback.
-- Optional PSNR vs classical (not a hard gate).
+- GpuMat CFA → RGB entry for the RAW demosaic stage
+  (`cuda_demosaicnet.hpp` / `.cu` → `DemosaicWithNeuralEngine`).
+- Product names: **Legacy** and **Neural Engine**
+  (`RawDemosaicMethod { Default, Legacy, NeuralEngine }`).
+- `Default` → Bayer Legacy, X-Trans Neural Engine.
+- Any decode resolution other than `FULL` → Legacy (thumbnails never NN).
+- Load only when the NN path is actually taken; load failure → Legacy.
+- Wired into `raw_processor_cuda.cpp` only (not `RawProcessorOp`).
+- Odd Bayer dims: drop trailing row/column to keep 2×2 pack phase.
 
-**Exit:** documented GpuMat API; `RawProcessor` never opens safetensors in its
-constructor; first NN use pays load cost once.
+**Existing real-RAW tests (patch-level, purpose-named — not “smoke”):**
 
-### Phase 7 — Tiling, workspace policy, parallel readiness
+| Test | Purpose | Fixture |
+|------|---------|---------|
+| `NeuralEngineDemosaicsRealBayerRawPatchToValidRgb` | Real Bayer CFA 64×64 patch → CV_32FC3 valid-conv size | `raw/camera/nikon/d800e/Nikon-D800e-raw-00002.nef` |
+| `RawProcessorDefaultXTransLoadsNeuralEngineOnRealRawPatch` | Default X-Trans on real RAF patch loads cache + CUDA RGBA | `raw/camera/fuji/xt5/DSCF2074.RAF` |
+| `RawProcessorNeuralLoadFailureFallsBackToLegacyAndKeepsCacheCold` | Missing model dir → Legacy path, cache stays cold | same Nikon NEF patch |
+| Synthetic shape / cache-reuse tests in `cuda_raw_ops_test.cpp` | border math, weight pointer reuse, load failure | synthetic GpuMat |
 
-Only after Phase 5–6 correctness:
+**Gap after 6a:**
 
-1. Tile + halo policy for large full-res frames; document RF math.
-2. Steady-state: `Reserve(peak_for_tile)`; zero `cudaMalloc` in hot loop.
-3. Optional: small free-list of workspaces for concurrent NN (mutex on
+1. No **CFA phase-align** to the model’s training origin — pack uses camera
+   phase as-is; pretrained weights expect fixed origin (GRBG / X-Trans 6×6).
+2. No **gamma encode/decode** around the network — model was trained on
+   sRGB-ish (γ≈2.2) mosaics; pipeline CFA after `ToLinearRef` is linear.
+3. Tests are **small patches**, not full camera frames.
+4. Neural Engine **forces FullFrame**; `ProcessCudaTiled` never calls NN.
+
+#### 6b — Neural Engine preprocess (CFA phase-align + gamma)  ⏳ **do first**
+
+Reference: external `demosaicnet_caffe/pytorch/raw_pipeline.py`
+(`_find_align_shift`, `np.power(..., 1/2.2)` before model, `np.power(..., 2.2)`
+after). Alcedo maps that onto the **existing** CUDA RAW order; it does **not**
+re-implement white balance.
+
+##### Neural path data order (product)
+
+```text
+upload / downsample
+    → ToLinearRef          # black subtract, normalize, as-shot WB  ← already done
+    → CFA phase-align      # crop (sy,sx) so origin matches training CFA   [6b]
+    → gamma encode         # x^(1/2.2) on linear CFA                       [6b]
+    → (tile loop)          # 6c: copy halo tile / reflect-pad as needed
+    → PackCfaMosaic + DemosaicNet Forward
+    → gamma decode         # x^2.2 → linear camera RGB                     [6b]
+    → active/border crop, inverse cam mul, pack RGBA, geo  (unchanged after)
+```
+
+**Explicitly out of 6b:**
+
+- White balance / `cam_mul` gains on the mosaic — already applied inside
+  `ToLinearRef`. Do **not** multiply CFA by WB again (reference Python does WB
+  before gamma only because it lacks Alcedo’s `ToLinearRef`).
+- Camera→sRGB / ACES filmic / EXIF orientation — stay downstream of demosaic
+  (existing pack + edit pipeline).
+- Unconditional range clamp of CFA/RGB when **highlight reconstruction is
+  enabled** — see HLR / clamp policy below.
+
+##### CFA phase-align
+
+Training origins (from demosaicnet / `raw_pipeline.py`):
+
+| Variant | Period | Origin pattern at (0,0) |
+|---------|--------|-------------------------|
+| Bayer | 2 | **GRBG** — `[[G,R],[B,G]]` (rawpy indices 1,0 / 2,1) |
+| X-Trans | 6 | Fixed 6×6 from `XTransMosaickLayer` / `XTRANS_TARGET` |
+
+Algorithm (host, once per decode; same as `_find_align_shift`):
+
+1. Read the camera CFA phase from `RawCfaPattern` (already on `RawProcessor`).
+2. Search cyclic shifts `(sy, sx)` in `[0, period)` such that cropping the CFA by
+   that shift makes the origin match the training target (compare R/G/B only;
+   collapse dual-green if needed).
+3. If no pure cyclic shift matches (rotated/reflected CFA) → **fail soft to
+   Legacy** (same policy as load failure); log the reason.
+4. Crop the linear CFA GpuMat to `[sy:, sx:]`, then trim to a multiple of
+   `period` on both axes. Update the effective `RawCfaPattern` so that after
+   crop, origin is the training pattern (or pass a fixed “model pattern” into
+   pack and stop using the unaligned camera phase).
+5. Geometry bookkeeping: phase crop shifts the active-area / default-crop
+   origin by `(sx, sy)`. Fold into existing crop helpers
+   (`BuildBorderLossDecodeCropRect` / decode crop) so output framing stays
+   consistent with Legacy for the same sensor crop (minus NN border loss).
+
+Tile path (6c) runs **after** global phase-align: tile origins are relative to
+the aligned CFA, so Bayer even / X-Trans mod-6 alignment is w.r.t. the model
+origin. `ShiftBayerPattern` / X-Trans equivalent still applies per tile for
+pack phase when the tile’s top-left is not (0,0) of the aligned image—or pack
+with the fixed model pattern and absolute coordinates mod period.
+
+##### Gamma encode / decode
+
+Model expects approximately display-encoded mosaics; Alcedo’s post-`ToLinearRef`
+CFA is scene-linear (WB’d).
+
+| Step | Op | Domain |
+|------|-----|--------|
+| Encode (before pack/forward) | `y = sign-preserving x^(1/2.2)` | per CFA sample, single-channel |
+| Decode (after forward, on RGB) | `x = sign-preserving y^2.2` | per RGB channel |
+
+**When HLR is enabled, values above 1.0 must pass through the power curve
+without being saturated to 1** (only the gamma is applied). Highlights after WB
+often exceed 1.0; they must still be present after demosaic for highlight
+reconstruction.
+
+Suggested signed power (does not saturate to `[0,1]` by itself):
+
+```text
+pow_signed(x, g) = copysign(pow(abs(x), g), x)   # abs(x)==0 → 0
+```
+
+Implementation notes:
+
+- Small CUDA elementwise kernel on GpuMat; stream-aware; no host round-trip.
+- Apply encode **after** phase-align crop, **before** mosaic pack / tiles.
+- Apply decode **after** NN RGB output, **before** inverse cam mul / pack RGBA
+  **and before** highlight reconstruction (when HLR is on).
+- Do **not** put gamma into the hard-coded network `Forward` itself—keep it as
+  demosaic-stage sandwich so goldens that feed already-encoded mosaics stay
+  valid (module tests keep raw mosaic→RGB; product path owns the sandwich).
+- Gamma kernels themselves must **not** hard-clip to `[0,1]`; product-level
+  `Clamp01` is a separate, intentional policy gated by HLR (below).
+
+##### `Clamp01` vs highlight reconstruction (intentional product policy)
+
+This is **not** debt. Match the existing full-frame Neural / Legacy pattern:
+
+| `highlights_reconstruct_` | Pre-demosaic `Clamp01` on CFA | Rationale |
+|---------------------------|-------------------------------|-----------|
+| **true** (HLR on) | **Skip** | HLR needs over-range samples (`> 1` after WB) |
+| **false** (HLR off) | **Apply** `Clamp01` | Expected when reconstruct is disabled |
+
+Same rule for full-frame and tiled Neural branches. Keep today’s Neural full-frame
+behavior:
+
+```cpp
+if (!params_.highlights_reconstruct_) {
+  CUDA::Clamp01(gpu_img, &stream);
+}
+// then phase-align / gamma / DemosaicWithNeuralEngine ...
+```
+
+**Still forbidden when HLR is on:**
+
+- `Clamp01` (or equivalent) on CFA before demosaic
+- `Clamp01` / saturate on RGB after demosaic before highlight stats / correction
+- Gamma encode/decode that internally saturates to `[0,1]` (would defeat HLR
+  even if the product clamp is skipped)
+- Reference-style `np.clip(R, 0.0, 1.0)` after the network on the HLR-on path
+
+**When HLR is off:** product `Clamp01` is required/expected; do not “fix” it.
+
+##### Where the code lives
+
+Suggested placement (names flexible):
+
+```text
+include/decoders/processor/nn/demosaicnet_preprocess.hpp
+decoders/processor/nn/demosaicnet_preprocess.cu   # or .cpp + small .cu
+  - FindCfaAlignShift(pattern) → optional (sy,sx)
+  - ApplyCfaPhaseAlign(GpuMat& cfa, pattern, sy, sx) → updated pattern / sizes
+  - GammaEncodeCfa / GammaDecodeRgb (GpuMat, stream)
+```
+
+Call sites: `ProcessCudaFullFrame` Neural branch and (later) `ProcessCudaTiled`
+Neural branch — **one helper** used by both, e.g.
+`PrepareNeuralEngineCfa(...)` / `FinishNeuralEngineRgb(...)`.
+
+##### 6b tests (purpose-named)
+
+| Test (suggested name) | Asserts |
+|----------------------|---------|
+| `FindCfaAlignShift_MatchesGrbgOriginForCommonBayerPhases` | All four Bayer phases map to a unique (sy,sx) yielding GRBG |
+| `FindCfaAlignShift_MatchesXTransTrainingOrigin` | Real Fuji pattern (or synthetic X-Trans) aligns to target 6×6 |
+| `FindCfaAlignShift_UnsupportedRotationFailsSoft` | Impossible CFA → nullopt / Legacy path |
+| `NeuralEngineGammaEncodeDecode_RoundTripsLinearRgb` | encode→decode ≈ identity on positive linear patches, **including values > 1** (gamma alone does not saturate) |
+| `NeuralEngineGammaEncodeDecode_PreservesOverRangeHighlights` | input 1.5 / 2.0 / 4.0 stay > 1 through encode→decode (no hard clip inside gamma) |
+| `NeuralEnginePath_SkipsClamp01WhenHighlightsReconstruct` | Neural + HLR on: over-range CFA/RGB can exceed 1 after preprocess/demosaic |
+| `NeuralEnginePath_AppliesClamp01WhenHighlightsReconstructOff` | Neural + HLR off: CFA is clamped to `[0,1]` before demosaic (expected product behavior) |
+| `NeuralEnginePhaseAlignAndGamma_OnRealBayerRawPatch` | Real NEF patch: after `ToLinearRef` + align + γ-in → NN → γ-out produces finite CV_32FC3; origin pattern is GRBG |
+| `NeuralEnginePhaseAlignAndGamma_OnRealXTransRawPatch` | Same for Fuji RAF / X-Trans |
+
+Fixtures:
+`tests/resources/sample_images/raw/camera/nikon/...`, `.../fuji/xt5/...`.
+
+##### 6b exit
+
+- [ ] Phase-align implemented; training origin documented in code.
+- [ ] Gamma 1/2.2 in / 2.2 out on the Neural path only (Legacy unchanged).
+- [ ] WB **not** reapplied; depends on `ToLinearRef` only.
+- [ ] `Clamp01` only when `highlights_reconstruct_ == false`; HLR-on path
+      preserves over-range (gamma must not hard-clip to 1).
+- [ ] Full-frame Neural path uses preprocess (tiling not required to close 6b).
+- [ ] Purpose-named unit + real-RAW patch tests green.
+
+#### 6c — Neural Engine tiling via existing CUDA tile path  ⏳ (after 6b)
+
+**Design rule:** extend what already works for high-res RCD; do not redesign
+tiling from scratch. Preprocess (6b) is **global** before the tile loop (or
+applied consistently per tile if that proves simpler—prefer once globally so
+phase crop is shared).
+
+##### Existing infrastructure (reuse)
+
+| Piece | Location | Role today |
+|-------|----------|------------|
+| `CudaExecutionMode::{FullFrame,Tiled}` | `raw_processor_internal.hpp` | Mode enum |
+| `SelectCudaExecutionMode` | `raw_processor.cpp` | Routes Legacy Bayer by long-edge > `kCudaTileThresholdLongEdge` (9000); **Neural Engine forced FullFrame** |
+| `kCudaTileInnerSize` / `kCudaTileHaloSize` | same header | 1024 inner, 16 halo (RCD-sized) |
+| `CudaTileJob` + `BuildTileJobs` | `raw_processor_cuda.cpp` | Grid of `source_rect` / `inner_rect_in_tile` / `output_rect` |
+| `ShiftBayerPattern` | same | CFA phase at tile origin |
+| `ProcessCudaTiled` | same | Upload → downsample → `ToLinearRef` → per-tile RCD → assemble → geo → pack |
+| `SetCudaExecutionModeOverrideForTesting` | `raw_processor.cpp` | Force mode in tests |
+| `DemosaicWithNeuralEngine` | `cuda_demosaicnet.cu` | Single CFA GpuMat → RGB (valid-conv shrink) |
+
+##### Routing policy (product)
+
+| Condition | Mode |
+|-----------|------|
+| Resolved method **Neural Engine** + CUDA + `FULL` | **Always `Tiled`** — not long-edge routing |
+| Resolved method **Legacy** + Bayer + long edge > 9000 | `Tiled` (unchanged) |
+| Legacy + smaller / non-Bayer / non-CUDA | `FullFrame` (unchanged) |
+| Neural Engine + non-`FULL` | Never selected (already forced Legacy in resolve) |
+
+Rationale: NN activation cost is high even below 9K long edge; tile-by-default
+is the product default when the user (or X-Trans Default) picks Neural Engine.
+
+##### Halo / geometry (document in code + tests)
+
+Valid-convolution spatial loss (already on the modules):
+
+- Bayer: `kSpatialLoss = 62` → **border = 31**
+- X-Trans: `kSpatialLoss = 24` → **border = 12**
+- RCD Legacy: halo 16 + crop radius 4 (keep as-is)
+
+**Do not** reuse `kCudaTileHaloSize = 16` for Neural Engine. Parameterize the
+job builder:
+
+```text
+BuildTileJobs(active_rect, full_size, inner_size, halo)
+```
+
+Suggested defaults:
+
+- `inner_size`: keep **1024** (match existing CUDA tiles; profile later in Phase 8).
+- `halo` for Neural Engine: **`source_border`** (31 Bayer / 12 X-Trans) so a full
+  halo tile’s NN output size equals the inner rect (no second crop math).
+- Edge tiles: prefer **reflect-pad** the (already phase-aligned, gamma-encoded)
+  CFA tile to a full halo before `DemosaicWithNeuralEngine` (matches
+  demosaicnet `_run_tiles` / `raw_pipeline.py`).
+
+CFA constraints after 6b global align:
+
+- Bayer: even source dims relative to aligned origin.
+- X-Trans: period-6 relative to aligned origin; unlock X-Trans for Neural
+  Engine tiled (Default X-Trans is Neural Engine).
+
+##### Implementation shape (recommended)
+
+1. Land **6b preprocess** on full-frame Neural first (correctness without tiles).
+2. **Generalize** `BuildTileJobs` → `inner_size` + `halo`.
+3. **`SelectCudaExecutionMode`:** Neural Engine → `Tiled` (drop FullFrame force);
+   allow X-Trans + Neural into tiled mode.
+4. **`ProcessCudaTiled` Neural branch:**
+   `ToLinearRef` → **phase-align + γ-encode (once)** → tile loop
+   (copy/pad → `DemosaicWithNeuralEngine` with model-phase pattern;
+   pre-demosaic `Clamp01` only if HLR off, same as full-frame) → assemble
+   → **γ-decode once on full RGB** (or per-tile before assemble; once is
+   cheaper; gamma itself never saturates to 1) → HLR / inverse cam mul / pack /
+   geo.
+5. **Workspace:** one `WorkspacePool` per tiled pass; `Reserve` once; reset
+   between tiles; zero `cudaMalloc` after reserve.
+6. Keep full-frame Neural (with 6b preprocess) for tests / override / tiny frames.
+7. Still no app-boot weight load.
+
+##### 6c tests (purpose-named; real fixtures under `raw/camera/`)
+
+| Test (suggested name) | Asserts |
+|----------------------|---------|
+| `SelectCudaExecutionMode_NeuralEngineDefaultsToTiled` | Neural Engine → `Tiled` regardless of long edge |
+| `SelectCudaExecutionMode_LegacyStillUsesLongEdgeThreshold` | Legacy Bayer still thresholds at 9000 |
+| `ProcessCudaTiled_NeuralEngineBayerAssemblesActiveAreaFromRealRaw` | Real Bayer RAW active area → CUDA RGBA; cache loaded once; preprocess applied |
+| `ProcessCudaTiled_NeuralEngineMatchesFullFrameOnOverlappingTiles` | Tiled vs full-frame interior agreement (both with 6b preprocess) |
+| `ProcessCudaTiled_NeuralEngineXTransRealRawLoadsAndAssembles` | Real Fuji RAF tiled Neural path |
+| `ProcessCudaTiled_NeuralEngineReservesWorkspaceOncePerPass` | Pool capacity stable across tiles |
+
+Fixtures: `tests/resources/sample_images/raw/camera/...`. Heap-allocate LibRaw.
+
+##### Exit criteria for Phase 6 (all of 6a–6c)
+
+- [x] GpuMat API + Method selection + lazy load + Legacy fallback (6a).
+- [ ] CFA phase-align to training origin; unsupported CFA → Legacy (6b).
+- [ ] Gamma 1/2.2 in / 2.2 out on Neural path only; **no** second WB (6b).
+- [ ] Neural `Clamp01` gated by HLR: skip when reconstruct on, apply when off (6b).
+- [ ] Neural Engine **defaults to tiled** CUDA execution (6c).
+- [ ] `ProcessCudaTiled` runs Neural Engine with RF-correct halo; Bayer + X-Trans (6c).
+- [ ] At least one **full active-area** real Bayer RAW and one real X-Trans RAW
+      test (purpose-named) green on CUDA (6c; preprocess required).
+- [ ] Tiled vs full-frame agreement on an interior region (both with preprocess).
+- [ ] Steady-state: workspace reserved once per decode; no per-tile
+      `cudaMalloc` after reserve.
+- [ ] Thumbnails / non-`FULL` never enter NN or NN workspace.
+
+### Phase 7 — Workspace policy + parallel readiness
+
+Only after Phase 6 preprocess + tiling correctness:
+
+1. Steady-state polish: owned VRAM counters (`ResidentWeightBytes`, pool
+   `capacity_bytes` / `used_bytes`) in debug logs; `cudaMemGetInfo` residual only.
+2. Optional: small free-list of workspaces for concurrent NN (mutex on
    borrow/return only)—**not** on the model cache hot path.
-4. Confirm thumbnails never touch NN workspace.
-5. Expose `ResidentWeightBytes` + workspace capacity in debug logs (prefer owned
-   counters over sole reliance on `cudaMemGetInfo`).
+3. Confirm multi-image concurrent decode does not share one `WorkspacePool`
+   across threads.
+4. Confirm thumbnails never touch NN workspace (regression guard).
 
-**Exit:** large-image path documented; concurrent NN safe by construction.
+**Exit:** concurrent NN safe by construction; observability is owned-bytes first.
 
 ### Phase 8 — Optimization pass (after correctness)
 
@@ -1004,14 +1300,19 @@ of RCD/highlight in the same PR as the first golden forward.
      (`EnsurePyramidBuffers`), `cuda_debayer_rcd.hpp` (`RcdWorkspace`),
      `cuda_highlight_reconstruct.hpp` (`HighlightWorkspace`)
 2. **Phase 0–3:** already done.
-3. **Phase 4:** safetensors → `SafetensorsTensorMap` DTO in `cuda/nn` (no graph).
+3. **Phase 4:** safetensors → `SafetensorsTensorMap` DTO in `cuda/nn` (no graph). ✅
 4. **Phase 5:** CRTP `LoadWeights` + hard-coded Bayer/XTrans modules + lazy
-   cache + goldens + no-reload / dual-workspace concurrency smoke.
-5. **Phase 6:** GpuMat entry + RawParams + **lazy trigger** (no backend boot
-   load); thumbnails Classical.
-6. **Phase 7:** tiling + workspace policy.
-7. **Phase 8:** profile-driven optimization.
-8. **Phase 9 (optional):** broader workspace migration when prioritized.
+   cache + goldens + no-reload / dual-workspace concurrency. ✅
+5. **Phase 6a:** GpuMat entry + RawParams + lazy trigger (no backend boot load);
+   thumbnails Classical. ✅
+6. **Phase 6b (active first):** Neural preprocess — CFA phase-align to training
+   origin + gamma 1/2.2 in / 2.2 out after `ToLinearRef` (WB already done; do
+   not re-WB; `Clamp01` only when HLR off). Real-RAW patch tests purpose-named.
+7. **Phase 6c:** Neural Engine tiling via existing `ProcessCudaTiled` /
+   `BuildTileJobs`; default tiled for Neural Engine; full active-area RAW tests.
+8. **Phase 7:** workspace policy + parallel readiness.
+9. **Phase 8:** profile-driven optimization.
+10. **Phase 9 (optional):** broader workspace migration when prioritized.
 
 Do **not** skip golden tests. Wrong pad/crop/group looks “plausible” but is
 useless.
@@ -1027,12 +1328,20 @@ context.
 ## 6. Testing and CMake conventions
 
 - Primary suite: **`MlOpsTest`** for ops, safetensors, model cache, goldens.
-- RAW smoke after Phase 6: `tests/raw/` if that matches existing CUDA RAW tests.
+- RAW product / tiling tests: **`CudaRawOpsTest`** and related targets under
+  `alcedo_studio/tests/raw/` (fixtures in
+  `tests/resources/sample_images/raw/camera/...`).
+- **No “smoke” tests.** Every test name and comment must state the contract
+  (see `Agents.md` test-naming ban). Prefer real camera RAW over synthetic CFA
+  when the claim is “works on real RAW.”
 - Build:
 
   ```bat
   cmd /c scripts\msvc_env.cmd --build --preset win_debug --target MlOpsTest --parallel 4
   build\debug\alcedo_studio\tests\MlOpsTest.exe
+
+  cmd /c scripts\msvc_env.cmd --build --preset win_debug --target CudaRawOpsTest --parallel 4
+  build\debug\alcedo_studio\tests\CudaRawOpsTest.exe --gtest_filter=*NeuralEngine*
   ```
 
 - Link: `GTest::gtest_main`, `CudaUtils`, `CUDA::cudart`, OpenCV; domain tests
@@ -1041,6 +1350,7 @@ context.
 - Guard with `ALCEDO_CUDA_ENABLED` / `HAVE_CUDA`.
 - Model path: `ALCEDO_DEMOASICNET_MODEL_DIR` and/or POST_BUILD copy; same helper
   for tests and production lazy load.
+- LibRaw in tests: heap-allocate (`std::make_unique<LibRaw>()`).
 
 ---
 
@@ -1063,6 +1373,15 @@ context.
     concurrency.
 13. Thumbnails / parallel decode default to **Classical**.
 14. Fail soft to Classical if load fails.
+14b. Neural Engine on CUDA FULL **defaults to tiled** via existing
+    `ProcessCudaTiled` (parameterized halo = RF border); do not force FullFrame
+    and do not invent a parallel NN tile scheduler.
+14c. Neural path **must** CFA phase-align to training origin and apply gamma
+    1/2.2 encode / 2.2 decode around the network after `ToLinearRef`. Do **not**
+    re-apply white balance; do not put gamma inside hard-coded `Forward`.
+14d. Neural path `Clamp01` is **gated by** `highlights_reconstruct_`: skip when
+    HLR is on (over-range required); **apply when HLR is off** (expected).
+    Gamma kernels must not hard-clip to `[0,1]` themselves.
 15. Do **not** name domain types `*Context` in a way that confuses them with
     OpenCL/Metal device contexts.
 16. Prefer **owned byte counters** (`ResidentWeightBytes`,
@@ -1082,7 +1401,7 @@ context.
 - Arbitrary activations / Normalizations / Attention.
 - FP16 / TF32 mixed precision (possible later; not required for v1).
 - Shipping PyTorch or Python at runtime.
-- Replacing classical demosaic as the default until quality/perf gates pass.
+- Replacing Legacy demosaic as the Bayer default until quality/perf gates pass.
 - Reloading or cloning full weight packs per `RawProcessor`.
 - Putting CFA / LibRaw concerns into `cuda/nn`.
 - Modeling DemosaicNet as a peer of `OpenClContext` / `MetalContext`.
@@ -1106,12 +1425,19 @@ context.
    ops + safetensors DTO stay in `cuda/nn/`.
 5. GpuMat in → GpuMat out with no mandatory host intermediate.
 6. Steady-state forward does not `cudaMalloc` after workspace reserve.
-7. Concurrent forwards with distinct workspaces are defined and smoke-tested.
-8. Tile + halo policy documented (Phase 7).
-9. `RawProcessor` construction does not touch weight files; cold cache until
-   first NN use.
-10. Users who never select NN demosaic do not pay model load cost at app start.
-11. Interactive latency for a ≤1K-edge tile recorded after Phase 6/8 profile.
+7. Concurrent forwards with distinct workspaces are defined and tested.
+8. Neural path applies **CFA phase-align** + **gamma 1/2.2 in / 2.2 out** after
+   `ToLinearRef` (Phase 6b); WB is not reapplied; `Clamp01` only when HLR is
+   off (when HLR is on, over-range samples are preserved).
+9. Tile + halo policy documented and implemented by **reusing**
+   `ProcessCudaTiled` / `BuildTileJobs` (Phase 6c); Neural Engine defaults to
+   tiled mode.
+10. `RawProcessor` construction does not touch weight files; cold cache until
+    first NN use.
+11. Users who never select NN demosaic do not pay model load cost at app start.
+12. Interactive latency for a ≤1K-edge tile recorded after Phase 6/8 profile.
+13. At least one full active-area real Bayer RAW and one real X-Trans RAW
+    demosaic test (purpose-named) pass on CUDA.
 
 Phase 9 (pipeline-wide workspace migration) is **not** part of this acceptance
 bar.
@@ -1137,6 +1463,11 @@ bar.
 | RCD / highlight workspaces | `operators/gpu/cuda_debayer_rcd.hpp`, `cuda_highlight_reconstruct.hpp` |
 | Preview scratch reclaim | `pipeline_cpu.hpp` `ReleasePreviewGpuScratch`, `cuda_preview_vram_reclamation_test.cu` |
 | RAW CUDA demosaic call sites | `decoders/processor/raw_processor_cuda.cpp` |
+| CUDA tile mode selection | `raw_processor.cpp` `SelectCudaExecutionMode` |
+| CUDA tile jobs / RCD tiled path | `raw_processor_cuda.cpp` `BuildTileJobs` / `ProcessCudaTiled` |
+| Real camera RAW fixtures | `tests/resources/sample_images/raw/camera/` |
+| Reference preprocess + tile (external) | `demosaicnet_caffe/pytorch/raw_pipeline.py` (phase-align, gamma in/out, `_run_tiles`; WB maps to Alcedo `ToLinearRef`) |
+| Neural preprocess (planned 6b) | `decoders/processor/nn/demosaicnet_preprocess.*` |
 | Workspace non-thread-safety | `include/cuda/nn/workspace.hpp` |
 
 ---
@@ -1148,11 +1479,15 @@ bar.
 3. ConvTranspose2d unpack specialization  ✅  
 4. **Safetensors → DTO in `cuda/nn` + tests** (Phase 4)  
 5. **CRTP LoadWeights + hard-coded Bayer/XTrans + lazy cache + goldens**
-   (Phase 5)  
-6. **GpuMat entry + RawParams + lazy trigger (no boot load)** (Phase 6)  
-7. **Tiling + workspace policy** (Phase 7)  
-8. **Perf pass** (Phase 8)  
-9. **Optional:** pipeline workspace migration PR series (Phase 9 / §3.10)
+   (Phase 5) ✅  
+6. **GpuMat entry + RawParams + lazy trigger (no boot load)** (Phase 6a) ✅  
+7. **Neural preprocess: CFA phase-align + gamma 1/2.2 in / 2.2 out** (Phase 6b;
+   WB already in `ToLinearRef`)  
+8. **Neural Engine tiling via existing CUDA tile path + full-res RAW tests**
+   (Phase 6c)  
+9. **Workspace policy + parallel readiness** (Phase 7)  
+10. **Perf pass** (Phase 8)  
+11. **Optional:** pipeline workspace migration PR series (Phase 9 / §3.10)
 
 Each demosaicnet PR must leave `MlOpsTest` green and must not reintroduce
 per-processor weight reload or a fake platform “context.”
@@ -1173,6 +1508,12 @@ per-processor weight reload or a fake platform “context.”
 | Who owns activations? | Caller `WorkspacePool` | Pool is not thread-safe; activations reclaimable without unloading weights |
 | Who owns weights? | Hard-coded module instance in RAW model cache | Shared, immutable after load, concurrent readers OK |
 | Thumbnail NN? | No by default | Parallel thumb path stays Classical |
+| Neural Engine tile routing? | **Always tiled** on CUDA FULL (not long-edge threshold) | Activation VRAM dominates; reuse `ProcessCudaTiled` with RF halo |
+| Tile implementation? | Extend existing `BuildTileJobs` / `ProcessCudaTiled` | Do not invent a second NN-only tile scheduler |
+| Neural preprocess (Phase 6b)? | **CFA phase-align + γ 1/2.2 in / 2.2 out** after `ToLinearRef` | Matches demosaicnet training domain; required before full-res quality claims |
+| White balance on Neural path? | **Only via `ToLinearRef`** | Do not re-apply cam_mul/WB before the network (Python reference does WB only because it has no `ToLinearRef`) |
+| Range clamp on Neural path? | **`Clamp01` iff HLR off** (same as current full-frame Neural) | HLR needs `> 1`; with reconstruct disabled, clamp is the intended product path |
+| Preprocess vs tiling order? | **6b preprocess first, then 6c tiling** | Correct domain on full-frame, then scale with existing tiles |
 | Is “some context” still needed? | Yes — as **workspace/scratch discipline**, not as DemosaicNet-as-context | Inventory of scattered RAII scratch (§1.3); `WorkspacePool` is the seed |
 | Pipeline scratch unification | Separate Phase 9 track | Do not block demosaicnet goldens on big-bang migration |
 | VRAM observability | Prefer owned byte counters; `cudaMemGetInfo` residual only | Matches how free VRAM is logged today but adds subsystem truth |

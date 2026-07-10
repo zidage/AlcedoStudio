@@ -135,30 +135,52 @@ inline auto BuildDecodeCropRect(const libraw_image_sizes_t& sizes, const ushort 
   return BuildDefaultCropRect(sizes, default_crop, image_size, DecodeResScaleDivisor(decode_res));
 }
 
+inline auto BuildBorderLossDecodeCropRect(const libraw_image_sizes_t& sizes,
+                                          const ushort default_crop[4], const cv::Size& output_size,
+                                          const DecodeRes decode_res, const int source_border)
+    -> cv::Rect {
+  if (source_border <= 0) {
+    return BuildDecodeCropRect(sizes, default_crop, output_size, decode_res);
+  }
+
+  const cv::Size source_size(output_size.width + 2 * source_border,
+                             output_size.height + 2 * source_border);
+  const cv::Rect source_crop = BuildDecodeCropRect(sizes, default_crop, source_size, decode_res);
+
+  // Border-losing demosaicers (RCD and the valid-convolution Neural Engine) remove an equal
+  // source border on every edge. Inset LibRaw's selected crop before mapping to output space.
+  const int      left        = std::clamp(source_crop.x, 0, output_size.width);
+  const int      top         = std::clamp(source_crop.y, 0, output_size.height);
+  const int      right =
+      std::clamp(source_crop.x + source_crop.width - 2 * source_border, left, output_size.width);
+  const int bottom =
+      std::clamp(source_crop.y + source_crop.height - 2 * source_border, top, output_size.height);
+
+  if (right <= left || bottom <= top) {
+    throw std::runtime_error("RawProcessor: decode crop is too small for demosaic border.");
+  }
+  return {left, top, right - left, bottom - top};
+}
+
 inline auto BuildRcdDecodeCropRect(const libraw_image_sizes_t& sizes, const ushort default_crop[4],
                                    const cv::Size& rcd_output_size, const DecodeRes decode_res,
                                    const int rcd_radius = kRcdDebayerCropRadius) -> cv::Rect {
-  if (rcd_radius <= 0) {
-    return BuildDecodeCropRect(sizes, default_crop, rcd_output_size, decode_res);
+  return BuildBorderLossDecodeCropRect(sizes, default_crop, rcd_output_size, decode_res,
+                                       rcd_radius);
+}
+
+inline auto ResolveRawDemosaicMethod(const RawParams& params, const RawCfaKind cfa_kind)
+    -> RawDemosaicMethod {
+  // Thumbnail/preview decodes must remain on the low-cost legacy path even when the user
+  // explicitly selected Neural Engine for full-resolution editing.
+  if (params.decode_res_ != DecodeRes::FULL) {
+    return RawDemosaicMethod::Legacy;
   }
-
-  const cv::Size source_size(rcd_output_size.width + 2 * rcd_radius,
-                             rcd_output_size.height + 2 * rcd_radius);
-  const cv::Rect source_crop = BuildDecodeCropRect(sizes, default_crop, source_size, decode_res);
-
-  // GPU RCD removes a radius-wide border and maps source (radius, radius) to output (0, 0).
-  // Inset LibRaw's chosen image crop by the same radius before translating it to post-RCD space.
-  const int      left        = std::clamp(source_crop.x, 0, rcd_output_size.width);
-  const int      top         = std::clamp(source_crop.y, 0, rcd_output_size.height);
-  const int      right =
-      std::clamp(source_crop.x + source_crop.width - 2 * rcd_radius, left, rcd_output_size.width);
-  const int bottom =
-      std::clamp(source_crop.y + source_crop.height - 2 * rcd_radius, top, rcd_output_size.height);
-
-  if (right <= left || bottom <= top) {
-    throw std::runtime_error("RawProcessor: decode crop is too small for RCD radius.");
+  if (params.demosaic_method_ != RawDemosaicMethod::Default) {
+    return params.demosaic_method_;
   }
-  return {left, top, right - left, bottom - top};
+  return cfa_kind == RawCfaKind::XTrans6x6 ? RawDemosaicMethod::NeuralEngine
+                                           : RawDemosaicMethod::Legacy;
 }
 
 inline auto IsFullImageRect(const cv::Rect& rect, const cv::Size& image_size) -> bool {

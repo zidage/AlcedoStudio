@@ -7,13 +7,14 @@
 #include <libraw/libraw.h>
 
 #include <cstdint>
-#include <optional>
 #include <opencv2/core/types.hpp>
+#include <optional>
 #include <string>
 
 #include "decoders/decoder_scheduler.hpp"
 #include "decoders/dng_default_crop.hpp"
 #include "decoders/processor/raw_color_context.hpp"
+#include "decoders/processor/raw_demosaic_method.hpp"
 #include "decoders/processor/raw_processor_pattern.hpp"
 #include "image/image_buffer.hpp"
 #include "operators/cpu/raw_proc_utils.hpp"
@@ -34,10 +35,11 @@ inline auto IsRawGpuBackend(const RawGpuBackend backend) -> bool {
 }
 
 struct RawParams {
-  RawGpuBackend gpu_backend_            = RawGpuBackend::CPU;
-  bool          highlights_reconstruct_ = false;
-  bool          use_camera_wb_          = true;
-  uint32_t      user_wb_ = 6500;  // If user wants to set a specific white balance temperature
+  RawGpuBackend     gpu_backend_            = RawGpuBackend::CPU;
+  RawDemosaicMethod demosaic_method_        = RawDemosaicMethod::Default;
+  bool              highlights_reconstruct_ = false;
+  bool              use_camera_wb_          = true;
+  uint32_t          user_wb_ = 6500;  // If user wants to set a specific white balance temperature
   CPU::LightSourceType user_light_source_ =
       CPU::LightSourceType::UNKNOWN;  // If user wants to use a preset light source as the wb
 
@@ -46,20 +48,20 @@ struct RawParams {
 
 class RawProcessor {
  private:
-  ImageBuffer             process_buffer_;
-  RawParams               params_;
-  RawRuntimeColorContext  runtime_color_context_;
-  RawCfaPattern           cfa_pattern_;
-  RawInputKind            input_kind_                  = RawInputKind::Unsupported;
-  int                     gpu_input_downsample_passes_ = 0;
-  ushort                  default_crop_[4]             = {};
-  std::optional<dng::WarpRectilinear> dng_warp_rectilinear_ = std::nullopt;
+  ImageBuffer                         process_buffer_;
+  RawParams                           params_;
+  RawRuntimeColorContext              runtime_color_context_;
+  RawCfaPattern                       cfa_pattern_;
+  RawInputKind                        input_kind_                  = RawInputKind::Unsupported;
+  int                                 gpu_input_downsample_passes_ = 0;
+  ushort                              default_crop_[4]             = {};
+  std::optional<dng::WarpRectilinear> dng_warp_rectilinear_        = std::nullopt;
 
-  const libraw_rawdata_t& raw_data_;
-  LibRaw&                 raw_processor_;
+  const libraw_rawdata_t&             raw_data_;
+  LibRaw&                             raw_processor_;
 
-  void                    SetDecodeRes(int already_done_passes = 0);
-  auto                    ProcessGpu() -> ImageBuffer;
+  void                                SetDecodeRes(int already_done_passes = 0);
+  auto                                ProcessGpu() -> ImageBuffer;
 #ifdef HAVE_CUDA
   auto ProcessCuda() -> ImageBuffer;
   auto ProcessCudaFullFrame() -> ImageBuffer;

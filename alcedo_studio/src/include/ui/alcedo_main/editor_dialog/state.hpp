@@ -22,6 +22,7 @@
 #include "ui/alcedo_main/editor_dialog/modules/curve.hpp"
 #include "ui/alcedo_main/editor_dialog/modules/geometry.hpp"
 #include "ui/alcedo_main/editor_dialog/modules/hls.hpp"
+#include "ui/alcedo_main/editor_dialog/state/raw_demosaic_method_selection.hpp"
 
 namespace alcedo::ui {
 
@@ -106,10 +107,11 @@ struct OdtState {
 // ---------------------------------------------------------------------------
 
 struct AdjustmentState {
-  float                exposure_                   = pipeline_defaults::kCleanBaselineExposure;
-  float                contrast_                   = 0.0f;
-  float                saturation_                 = pipeline_defaults::kCleanBaselineSaturation;
-  bool                 raw_highlights_reconstruct_ = true;
+  float                      exposure_            = pipeline_defaults::kCleanBaselineExposure;
+  float                      contrast_            = 0.0f;
+  float                      saturation_          = pipeline_defaults::kCleanBaselineSaturation;
+  RawDemosaicMethodSelection raw_demosaic_method_ = RawDemosaicMethodSelection::Default;
+  bool                       raw_highlights_reconstruct_ = true;
   bool                 lens_calib_enabled_ = pipeline_defaults::kCleanBaselineLensCalibEnabled;
   std::string          lens_override_make_{};
   std::string          lens_override_model_{};

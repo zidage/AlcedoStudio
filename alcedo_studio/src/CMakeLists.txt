@@ -737,10 +737,8 @@ if(ALCEDO_OPENCL_ENABLED)
     list(APPEND RAW_PROCESSOR_BACKEND_SRCS decoders/processor/raw_processor_opencl.cpp)
 endif()
 
-# Hard-coded DemosaicNet modules + lazy model cache (Phase 5).
-# Owned by the RAW CUDA backend path (raw_processor_cuda.cpp / future
-# cuda_demosaicnet entry), NOT by RawProcessorOp (classical op facade only).
-# Phase 5: standalone library + MlOpsTest. Do not link into RawProcessor yet.
+# Hard-coded DemosaicNet modules + lazy model cache. Owned by the RAW CUDA backend path
+# (raw_processor_cuda.cpp / cuda_demosaicnet.cu), NOT by RawProcessorOp (legacy op facade only).
 if(ALCEDO_CUDA_ENABLED)
     def_library(DemosaicNet
         SOURCES
@@ -755,6 +753,16 @@ if(ALCEDO_CUDA_ENABLED)
     target_compile_definitions(DemosaicNet PRIVATE
         ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config/models"
     )
+
+    def_library(CudaDemosaicNetEntry
+        SOURCES
+            decoders/processor/operators/gpu/cuda_demosaicnet.cu
+        PUBLIC_DEPS
+            DemosaicNet
+            libraw::raw_r
+    )
+    set_target_properties(CudaDemosaicNetEntry PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+    target_compile_definitions(CudaDemosaicNetEntry PUBLIC HAVE_CUDA)
 endif()
 
 def_library(RawProcessor
@@ -762,8 +770,9 @@ def_library(RawProcessor
     PUBLIC_DEPS Image libraw::raw_r Exiv2 RawProcessorOp
     PRIVATE_DEPS opencv_imgproc AcceleratorBackend
 )
-# Intentionally NOT linking DemosaicNet into RawProcessor here (Phase 5).
-# Phase 6 will private-link DemosaicNet for the CUDA backend only.
+if(ALCEDO_CUDA_ENABLED)
+    target_link_libraries(RawProcessor PRIVATE CudaDemosaicNetEntry)
+endif()
 if(ALCEDO_OPENCL_ENABLED)
     target_link_libraries(RawProcessor PRIVATE OpenClGeometryUtils)
 endif()

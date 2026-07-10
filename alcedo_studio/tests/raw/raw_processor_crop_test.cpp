@@ -132,5 +132,47 @@ TEST(RawProcessorCropTest, RcdDecodeCropUsesDownsampledRcdRadius) {
   EXPECT_EQ(crop, cv::Rect(0, 0, 3681, 2454));
 }
 
+TEST(RawProcessorCropTest, DefaultDemosaicUsesLegacyForBayerAndNeuralEngineForXTrans) {
+  RawParams params;
+  params.decode_res_      = DecodeRes::FULL;
+  params.demosaic_method_ = RawDemosaicMethod::Default;
+
+  EXPECT_EQ(ResolveRawDemosaicMethod(params, RawCfaKind::Bayer2x2), RawDemosaicMethod::Legacy);
+  EXPECT_EQ(ResolveRawDemosaicMethod(params, RawCfaKind::XTrans6x6),
+            RawDemosaicMethod::NeuralEngine);
+}
+
+TEST(RawProcessorCropTest, ReducedResolutionAlwaysUsesLegacyDemosaic) {
+  RawParams params;
+  params.demosaic_method_ = RawDemosaicMethod::NeuralEngine;
+
+  for (const DecodeRes decode_res : {DecodeRes::HALF, DecodeRes::QUARTER, DecodeRes::EIGHTH}) {
+    params.decode_res_ = decode_res;
+    EXPECT_EQ(ResolveRawDemosaicMethod(params, RawCfaKind::Bayer2x2), RawDemosaicMethod::Legacy);
+    EXPECT_EQ(ResolveRawDemosaicMethod(params, RawCfaKind::XTrans6x6), RawDemosaicMethod::Legacy);
+  }
+}
+
+TEST(RawProcessorCropTest, ExplicitFullResolutionDemosaicChoiceIsHonored) {
+  RawParams params;
+  params.decode_res_      = DecodeRes::FULL;
+  params.demosaic_method_ = RawDemosaicMethod::Legacy;
+  EXPECT_EQ(ResolveRawDemosaicMethod(params, RawCfaKind::XTrans6x6), RawDemosaicMethod::Legacy);
+
+  params.demosaic_method_ = RawDemosaicMethod::NeuralEngine;
+  EXPECT_EQ(ResolveRawDemosaicMethod(params, RawCfaKind::Bayer2x2),
+            RawDemosaicMethod::NeuralEngine);
+}
+
+TEST(RawProcessorCropTest, NeuralBorderCropUsesValidConvolutionLoss) {
+  const libraw_image_sizes_t sizes      = MakeFullActiveSizes(100, 80);
+  const ushort               no_crop[4] = {};
+
+  const cv::Rect             crop =
+      BuildBorderLossDecodeCropRect(sizes, no_crop, cv::Size(38, 18), DecodeRes::FULL, 31);
+
+  EXPECT_EQ(crop, cv::Rect(0, 0, 38, 18));
+}
+
 }  // namespace
 }  // namespace alcedo::detail
