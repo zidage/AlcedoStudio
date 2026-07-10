@@ -20,6 +20,7 @@
 #include "decoders/processor/operators/gpu/cuda_demosaicnet.hpp"
 #include "decoders/processor/operators/gpu/cuda_highlight_reconstruct.hpp"
 #include "decoders/processor/raw_processor.hpp"
+#include "decoders/processor/raw_processor_internal.hpp"
 
 namespace alcedo {
 namespace {
@@ -468,15 +469,15 @@ TEST(CudaRawOpsTest, RawProcessorDefaultXTransLoadsNeuralEngineOnRealRawPatch) {
   RawRuntimeColorContext context;
   const ushort           no_crop[4] = {};
 
-  const RawCfaPattern pattern = ReadLibRawCfaPattern(*raw);
-  const auto          shift   = FindCfaAlignShift(pattern);
+  const RawCfaPattern    pattern    = ReadLibRawCfaPattern(*raw);
+  const auto             shift      = FindCfaAlignShift(pattern);
   ASSERT_TRUE(shift.has_value());
-  const int aligned_h = (kPatch - shift->sy) - ((kPatch - shift->sy) % 6);
-  const int aligned_w = (kPatch - shift->sx) - ((kPatch - shift->sx) % 6);
-  const int expected  = aligned_h - XTransDemosaicNet::kSpatialLoss;
+  const int aligned_h  = (kPatch - shift->sy) - ((kPatch - shift->sy) % 6);
+  const int aligned_w  = (kPatch - shift->sx) - ((kPatch - shift->sx) % 6);
+  const int expected   = aligned_h - XTransDemosaicNet::kSpatialLoss;
   const int expected_w = aligned_w - XTransDemosaicNet::kSpatialLoss;
 
-  auto& cache = DemosaicNetModelCache::Instance();
+  auto&     cache      = DemosaicNetModelCache::Instance();
   cache.Unload(DemosaicNetVariant::XTrans);
   ASSERT_FALSE(cache.IsLoaded(DemosaicNetVariant::XTrans));
 
@@ -571,8 +572,8 @@ TEST(CudaRawOpsTest, FindCfaAlignShift_MatchesXTransTrainingOrigin) {
   pattern.kind           = RawCfaKind::XTrans6x6;
   pattern.xtrans_pattern = DemosaicNetTrainingXTransPattern();
   // Shift the training pattern by a known cyclic offset and recover it.
-  constexpr int kSy = 2;
-  constexpr int kSx = 3;
+  constexpr int kSy      = 2;
+  constexpr int kSx      = 3;
   RawCfaPattern shifted;
   shifted.kind = RawCfaKind::XTrans6x6;
   for (int y = 0; y < 6; ++y) {
@@ -594,7 +595,7 @@ TEST(CudaRawOpsTest, FindCfaAlignShift_MatchesXTransTrainingOrigin) {
 TEST(CudaRawOpsTest, FindCfaAlignShift_UnsupportedRotationFailsSoft) {
   // Mirror of GRBG is not a cyclic shift of GRBG → nullopt (product falls back to Legacy).
   RawCfaPattern pattern;
-  pattern.kind = RawCfaKind::Bayer2x2;
+  pattern.kind                    = RawCfaKind::Bayer2x2;
   // Horizontal mirror of GRBG (G R / B G) → (R G / G B) is actually RGGB which *is* a shift.
   // Use a non-Bayer permutation: R R / B B (no greens) — not cyclic-equivalent to GRBG.
   pattern.bayer_pattern.rgb_fc[0] = 0;
@@ -618,8 +619,8 @@ TEST(CudaRawOpsTest, NeuralEngineGammaEncodeDecode_RoundTripsLinearRgb) {
   cv::Mat host(8, 8, CV_32FC3);
   for (int y = 0; y < host.rows; ++y) {
     for (int x = 0; x < host.cols; ++x) {
-      host.at<cv::Vec3f>(y, x) =
-          cv::Vec3f(0.02F + 0.01F * static_cast<float>(x), 0.5F, 1.25F + 0.05F * static_cast<float>(y));
+      host.at<cv::Vec3f>(y, x) = cv::Vec3f(0.02F + 0.01F * static_cast<float>(x), 0.5F,
+                                           1.25F + 0.05F * static_cast<float>(y));
     }
   }
   cv::cuda::GpuMat gpu(host);
@@ -652,7 +653,7 @@ TEST(CudaRawOpsTest, NeuralEngineGammaEncodeDecode_PreservesOverRangeHighlights)
 
   const float values[] = {1.5F, 2.0F, 4.0F};
   for (const float v : values) {
-    cv::Mat host(4, 4, CV_32FC1, cv::Scalar(v));
+    cv::Mat          host(4, 4, CV_32FC1, cv::Scalar(v));
     cv::cuda::GpuMat gpu(host);
     GammaEncodeGpuMat(gpu);
     GammaDecodeGpuMat(gpu);
@@ -674,7 +675,7 @@ TEST(CudaRawOpsTest, NeuralEnginePath_SkipsClamp01WhenHighlightsReconstruct) {
   }
 
   // Over-range linear CFA must survive preprocess when HLR is on (product path skips Clamp01).
-  cv::Mat cfa(64, 64, CV_32FC1, cv::Scalar(1.75F));
+  cv::Mat          cfa(64, 64, CV_32FC1, cv::Scalar(1.75F));
   cv::cuda::GpuMat gpu_cfa(cfa);
   RawCfaPattern    pattern;
   pattern.kind          = RawCfaKind::Bayer2x2;
@@ -701,7 +702,7 @@ TEST(CudaRawOpsTest, NeuralEnginePath_AppliesClamp01WhenHighlightsReconstructOff
     GTEST_SKIP() << "CUDA device is unavailable in this environment.";
   }
 
-  cv::Mat cfa(64, 64, CV_32FC1, cv::Scalar(1.75F));
+  cv::Mat          cfa(64, 64, CV_32FC1, cv::Scalar(1.75F));
   cv::cuda::GpuMat gpu_cfa(cfa);
   // Product order for HLR-off: Clamp01 then prepare.
   CUDA::Clamp01(gpu_cfa);
@@ -831,6 +832,158 @@ TEST(CudaRawOpsTest, NeuralEnginePhaseAlignAndGamma_OnRealXTransRawPatch) {
       }
     }
   }
+  raw->recycle();
+#endif
+}
+
+TEST(CudaRawOpsTest, ProcessCudaTiled_NeuralEngineMatchesFullFrameOnOverlappingTiles) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA is not enabled in this build.";
+#else
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
+  }
+
+  const std::filesystem::path raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "camera" /
+                                         "nikon" / "d800e" / "Nikon-D800e-raw-00002.nef";
+  ASSERT_TRUE(std::filesystem::exists(raw_path)) << raw_path.string();
+  auto raw = std::make_unique<LibRaw>();
+  ASSERT_EQ(raw->open_file(raw_path.string().c_str()), LIBRAW_SUCCESS);
+  ASSERT_EQ(raw->unpack(), LIBRAW_SUCCESS);
+
+  constexpr int    kPatch = 1152;  // Crosses the 1024-pixel Neural Engine tile boundary.
+  cv::Mat          patch;
+  libraw_rawdata_t patch_data = MakeRawPatchData(*raw, patch, kPatch);
+  RawParams        params;
+  params.gpu_backend_            = RawGpuBackend::CUDA;
+  params.demosaic_method_        = RawDemosaicMethod::NeuralEngine;
+  params.highlights_reconstruct_ = false;
+  params.decode_res_             = DecodeRes::FULL;
+  RawRuntimeColorContext context;
+  const ushort           no_crop[4] = {};
+
+  detail::SetCudaExecutionModeOverrideForTesting(detail::CudaExecutionMode::FullFrame);
+  RawProcessor full_processor(params, patch_data, *raw, context, no_crop);
+  ImageBuffer  full = full_processor.Process();
+  cv::Mat      full_host;
+  full.GetCUDAImage().download(full_host);
+
+  detail::SetCudaExecutionModeOverrideForTesting(detail::CudaExecutionMode::Tiled);
+  RawProcessor tiled_processor(params, patch_data, *raw, context, no_crop);
+  ImageBuffer  tiled = tiled_processor.Process();
+  detail::SetCudaExecutionModeOverrideForTesting(std::nullopt);
+  cv::Mat tiled_host;
+  tiled.GetCUDAImage().download(tiled_host);
+
+  ASSERT_EQ(tiled_host.size(), full_host.size());
+  ASSERT_EQ(tiled_host.type(), full_host.type());
+  double max_abs = 0.0;
+  for (int y = 0; y < full_host.rows; ++y) {
+    for (int x = 0; x < full_host.cols; ++x) {
+      const cv::Vec4f a = full_host.at<cv::Vec4f>(y, x);
+      const cv::Vec4f b = tiled_host.at<cv::Vec4f>(y, x);
+      for (int c = 0; c < 4; ++c) {
+        max_abs = std::max(max_abs, static_cast<double>(std::abs(a[c] - b[c])));
+      }
+    }
+  }
+  EXPECT_LT(max_abs, 2e-5);
+  raw->recycle();
+#endif
+}
+
+TEST(CudaRawOpsTest, ProcessCudaTiled_NeuralEngineBayerAssemblesActiveAreaFromRealRaw) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA is not enabled in this build.";
+#else
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
+  }
+
+  const std::filesystem::path raw_path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "camera" /
+                                         "nikon" / "d800e" / "Nikon-D800e-raw-00002.nef";
+  ASSERT_TRUE(std::filesystem::exists(raw_path)) << raw_path.string();
+  auto raw = std::make_unique<LibRaw>();
+  ASSERT_EQ(raw->open_file(raw_path.string().c_str()), LIBRAW_SUCCESS);
+  ASSERT_EQ(raw->unpack(), LIBRAW_SUCCESS);
+
+  RawParams params;
+  params.gpu_backend_            = RawGpuBackend::CUDA;
+  params.demosaic_method_        = RawDemosaicMethod::NeuralEngine;
+  params.highlights_reconstruct_ = false;
+  params.decode_res_             = DecodeRes::FULL;
+  RawRuntimeColorContext context;
+  const ushort           no_crop[4] = {};
+  const RawCfaPattern    pattern    = ReadLibRawCfaPattern(*raw);
+  const auto             shift      = FindCfaAlignShift(pattern);
+  ASSERT_TRUE(shift.has_value());
+  const int aligned_h =
+      raw->imgdata.sizes.raw_height - shift->sy - ((raw->imgdata.sizes.raw_height - shift->sy) % 2);
+  const int aligned_w =
+      raw->imgdata.sizes.raw_width - shift->sx - ((raw->imgdata.sizes.raw_width - shift->sx) % 2);
+  const cv::Size network_output(aligned_w - BayerDemosaicNet::kSpatialLoss,
+                                aligned_h - BayerDemosaicNet::kSpatialLoss);
+  const cv::Rect expected_crop = detail::BuildNeuralEngineDecodeCropRect(
+      raw->imgdata.sizes, no_crop,
+      cv::Size(raw->imgdata.sizes.raw_width, raw->imgdata.sizes.raw_height), network_output,
+      DecodeRes::FULL, BayerDemosaicNet::kSpatialLoss / 2, shift->sx, shift->sy);
+
+  RawProcessor processor(params, raw->imgdata.rawdata, *raw, context, no_crop);
+  ImageBuffer  output = processor.Process();
+  ASSERT_TRUE(output.gpu_data_valid_);
+  EXPECT_EQ(output.GetGPUBackend(), GpuBackendKind::CUDA);
+  EXPECT_EQ(output.GetCUDAImage().type(), CV_32FC4);
+  EXPECT_EQ(output.GetCUDAImage().size(), expected_crop.size());
+  raw->recycle();
+#endif
+}
+
+TEST(CudaRawOpsTest, ProcessCudaTiled_NeuralEngineXTransRealRawLoadsAndAssembles) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA is not enabled in this build.";
+#else
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
+  }
+
+  const std::filesystem::path raw_path =
+      std::filesystem::path(TEST_IMG_PATH) / "raw" / "camera" / "fuji" / "xt5" / "DSCF2074.RAF";
+  ASSERT_TRUE(std::filesystem::exists(raw_path)) << raw_path.string();
+  auto raw = std::make_unique<LibRaw>();
+  ASSERT_EQ(raw->open_file(raw_path.string().c_str()), LIBRAW_SUCCESS);
+  ASSERT_EQ(raw->unpack(), LIBRAW_SUCCESS);
+
+  RawParams params;
+  params.gpu_backend_            = RawGpuBackend::CUDA;
+  params.demosaic_method_        = RawDemosaicMethod::NeuralEngine;
+  params.highlights_reconstruct_ = false;
+  params.decode_res_             = DecodeRes::FULL;
+  RawRuntimeColorContext context;
+  const ushort           no_crop[4] = {};
+  const RawCfaPattern    pattern    = ReadLibRawCfaPattern(*raw);
+  ASSERT_EQ(pattern.kind, RawCfaKind::XTrans6x6);
+  const auto shift = FindCfaAlignShift(pattern);
+  ASSERT_TRUE(shift.has_value());
+  const int aligned_h =
+      raw->imgdata.sizes.raw_height - shift->sy - ((raw->imgdata.sizes.raw_height - shift->sy) % 6);
+  const int aligned_w =
+      raw->imgdata.sizes.raw_width - shift->sx - ((raw->imgdata.sizes.raw_width - shift->sx) % 6);
+  const cv::Size network_output(aligned_w - XTransDemosaicNet::kSpatialLoss,
+                                aligned_h - XTransDemosaicNet::kSpatialLoss);
+  const cv::Rect expected_crop = detail::BuildNeuralEngineDecodeCropRect(
+      raw->imgdata.sizes, no_crop,
+      cv::Size(raw->imgdata.sizes.raw_width, raw->imgdata.sizes.raw_height), network_output,
+      DecodeRes::FULL, XTransDemosaicNet::kSpatialLoss / 2, shift->sx, shift->sy);
+
+  auto& cache = DemosaicNetModelCache::Instance();
+  cache.Unload(DemosaicNetVariant::XTrans);
+  RawProcessor processor(params, raw->imgdata.rawdata, *raw, context, no_crop);
+  ImageBuffer  output = processor.Process();
+  ASSERT_TRUE(cache.IsLoaded(DemosaicNetVariant::XTrans));
+  ASSERT_TRUE(output.gpu_data_valid_);
+  EXPECT_EQ(output.GetGPUBackend(), GpuBackendKind::CUDA);
+  EXPECT_EQ(output.GetCUDAImage().type(), CV_32FC4);
+  EXPECT_EQ(output.GetCUDAImage().size(), expected_crop.size());
   raw->recycle();
 #endif
 }

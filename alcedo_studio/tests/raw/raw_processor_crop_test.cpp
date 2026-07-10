@@ -164,6 +164,37 @@ TEST(RawProcessorCropTest, ExplicitFullResolutionDemosaicChoiceIsHonored) {
             RawDemosaicMethod::NeuralEngine);
 }
 
+TEST(RawProcessorCropTest, SelectCudaExecutionMode_NeuralEngineDefaultsToTiled) {
+  RawParams params;
+  params.gpu_backend_     = RawGpuBackend::CUDA;
+  params.decode_res_      = DecodeRes::FULL;
+  params.demosaic_method_ = RawDemosaicMethod::NeuralEngine;
+
+  RawCfaPattern bayer;
+  bayer.kind = RawCfaKind::Bayer2x2;
+  EXPECT_EQ(SelectCudaExecutionMode(params, bayer, cv::Rect(0, 0, 128, 96)),
+            CudaExecutionMode::Tiled);
+
+  RawCfaPattern xtrans;
+  xtrans.kind = RawCfaKind::XTrans6x6;
+  EXPECT_EQ(SelectCudaExecutionMode(params, xtrans, cv::Rect(0, 0, 128, 96)),
+            CudaExecutionMode::Tiled);
+}
+
+TEST(RawProcessorCropTest, SelectCudaExecutionMode_LegacyStillUsesLongEdgeThreshold) {
+  RawParams params;
+  params.gpu_backend_     = RawGpuBackend::CUDA;
+  params.decode_res_      = DecodeRes::FULL;
+  params.demosaic_method_ = RawDemosaicMethod::Legacy;
+  RawCfaPattern bayer;
+  bayer.kind = RawCfaKind::Bayer2x2;
+
+  EXPECT_EQ(SelectCudaExecutionMode(params, bayer, cv::Rect(0, 0, 8999, 3000)),
+            CudaExecutionMode::FullFrame);
+  EXPECT_EQ(SelectCudaExecutionMode(params, bayer, cv::Rect(0, 0, 9001, 3000)),
+            CudaExecutionMode::Tiled);
+}
+
 TEST(RawProcessorCropTest, NeuralBorderCropUsesValidConvolutionLoss) {
   const libraw_image_sizes_t sizes      = MakeFullActiveSizes(100, 80);
   const ushort               no_crop[4] = {};

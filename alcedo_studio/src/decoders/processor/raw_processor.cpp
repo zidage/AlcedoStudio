@@ -307,12 +307,15 @@ auto SelectCudaExecutionMode(const RawParams& params, const RawCfaPattern& cfa_p
     return *g_cuda_execution_mode_override;
   }
   if ((params.gpu_backend_ != RawGpuBackend::GPU && params.gpu_backend_ != RawGpuBackend::CUDA) ||
-      cfa_pattern.kind != RawCfaKind::Bayer2x2) {
+      (cfa_pattern.kind != RawCfaKind::Bayer2x2 && cfa_pattern.kind != RawCfaKind::XTrans6x6)) {
     return CudaExecutionMode::FullFrame;
   }
   if (ResolveRawDemosaicMethod(params, cfa_pattern.kind) == RawDemosaicMethod::NeuralEngine) {
-    // Temporary: product wiring is full-frame only. Phase 6b flips this to Tiled by default
-    // and reuses ProcessCudaTiled with RF-sized halo (see cuda_nn_forward_demosaicnet_plan.md).
+    // Neural activations dominate VRAM even for modest images. Its tiled path uses the model's
+    // valid-convolution receptive-field border rather than the Legacy RCD halo.
+    return CudaExecutionMode::Tiled;
+  }
+  if (cfa_pattern.kind != RawCfaKind::Bayer2x2) {
     return CudaExecutionMode::FullFrame;
   }
 
