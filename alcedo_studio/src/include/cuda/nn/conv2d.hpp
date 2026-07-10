@@ -62,9 +62,16 @@ struct Conv2dParams {
 // Conv2d (+ optional bias). Input and output must be contiguous rank-4 NCHW.
 // Output spatial size must match Conv2dOutputHeight/Width.
 //
-// `workspace` is reserved for scratch-backed paths (e.g. im2col). Current kernels
-// are direct / implicit and do not allocate; when a non-null workspace is passed,
-// the hot path still performs no cudaMalloc (steady-state requirement).
+// Dispatch (cudart only — no cuBLAS / cuDNN):
+//   - 1×1 s=1 pad=0: tiled GEMM-style (spatial × Cout tiles, Cin strip SMEM)
+//   - 2×2 s=2 pad=0: specialized pack_mosaick kernel
+//   - 3×3 s=1 pad=0: multi-Cout tiled direct conv (input apron + weight SMEM,
+//     register-blocked Cout) — demosaicnet primary hot path
+//   - other shapes: generic direct fallback
+//
+// `workspace` is reserved for scratch-backed paths (e.g. im2col / Winograd).
+// Current kernels are direct / implicit and do not allocate; when a non-null
+// workspace is passed, the hot path still performs no cudaMalloc.
 void Conv2d(const DeviceTensor& input, DeviceTensor& output, const Conv2dParams& params,
             cudaStream_t stream = nullptr, WorkspacePool* workspace = nullptr);
 

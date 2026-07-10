@@ -496,10 +496,80 @@ TEST_F(MlOpsConv2dTest, PerfThreeByThreeC64_512) {
   std::cout << "[Conv2d perf] 3x3 C=64 H=W=512: " << ms_per << " ms/iter, " << gflops
             << " GFLOP/s\n";
 
-  // Soft floor: even a naive kernel on a modern GPU should beat 0.5 GFLOP/s.
-  // Catastrophic only if something is serializing host-side or launching wrong.
-  EXPECT_GT(gflops, 0.5);
-  EXPECT_LT(ms_per, 5000.0);  // 5s/iter would mean something is very wrong
+  // Soft floor for the multi-Cout tiled 3×3 path (Phase 8).
+  // Pre-overhaul (one Cout/block, weights-only SMEM) was tens of GFLOP/s and
+  // ~0.4 s per 64→64 layer at ~1024 spatial. Release tiled path targets TFLOP/s.
+  // Keep floors loose enough for CI / laptop GPUs, tight enough to catch the
+  // old naive path or a host-side serialization bug.
+  EXPECT_GT(gflops, 50.0);
+  EXPECT_LT(ms_per, 200.0);
+}
+
+// Matches the X-Trans / Bayer tile spatial scale used in Phase 6c profiling.
+TEST_F(MlOpsConv2dTest, PerfThreeByThreeC64_1024) {
+  constexpr int N = 1, Cin = 64, Cout = 64, H = 1024, W = 1024;
+  const int     Ho = cuda::nn::Conv2dOutputSize(H, 0, 1, 3, 1);
+  const int     Wo = cuda::nn::Conv2dOutputSize(W, 0, 1, 3, 1);
+  const std::size_t in_n  = static_cast<std::size_t>(N) * Cin * H * W;
+  const std::size_t w_n   = static_cast<std::size_t>(Cout) * Cin * 9;
+  const std::size_t out_n = static_cast<std::size_t>(N) * Cout * Ho * Wo;
+
+  const auto hin = MakePattern(in_n, 93);
+  const auto hw  = MakePattern(w_n, 94);
+  const auto hb  = MakePattern(static_cast<std::size_t>(Cout), 95);
+
+  cuda::nn::DeviceBufferF32 d_in(in_n);
+  cuda::nn::DeviceBufferF32 d_w(w_n);
+  cuda::nn::DeviceBufferF32 d_b(static_cast<std::size_t>(Cout));
+  cuda::nn::DeviceBufferF32 d_out(out_n);
+  d_in.Upload(hin);
+  d_w.Upload(hw);
+  d_b.Upload(hb);
+
+  auto tin  = d_in.AsTensor({N, Cin, H, W});
+  auto tout = d_out.AsTensor({N, Cout, Ho, Wo});
+
+  cuda::nn::Conv2dParams p;
+  p.in_channels  = Cin;
+  p.out_channels = Cout;
+  p.kH = p.kW = 3;
+  p.sH = p.sW = 1;
+  p.weight    = d_w.get();
+  p.bias      = d_b.get();
+
+  for (int i = 0; i < 2; ++i) {
+    cuda::nn::Conv2dBiasRelu(tin, tout, p);
+  }
+  ASSERT_EQ(::cudaDeviceSynchronize(), cudaSuccess);
+
+  cudaEvent_t start{};
+  cudaEvent_t stop{};
+  ASSERT_EQ(::cudaEventCreate(&start), cudaSuccess);
+  ASSERT_EQ(::cudaEventCreate(&stop), cudaSuccess);
+
+  constexpr int kIters = 5;
+  ASSERT_EQ(::cudaEventRecord(start), cudaSuccess);
+  for (int i = 0; i < kIters; ++i) {
+    cuda::nn::Conv2dBiasRelu(tin, tout, p);
+  }
+  ASSERT_EQ(::cudaEventRecord(stop), cudaSuccess);
+  ASSERT_EQ(::cudaEventSynchronize(stop), cudaSuccess);
+
+  float ms_total = 0.0f;
+  ASSERT_EQ(::cudaEventElapsedTime(&ms_total, start, stop), cudaSuccess);
+  ::cudaEventDestroy(start);
+  ::cudaEventDestroy(stop);
+
+  const double ms_per = static_cast<double>(ms_total) / kIters;
+  const double flops  = 2.0 * N * Cout * Ho * Wo * Cin * 3.0 * 3.0;
+  const double gflops = (flops / (ms_per * 1e-3)) / 1e9;
+
+  std::cout << "[Conv2d perf] 3x3 C=64 H=W=1024: " << ms_per << " ms/iter, " << gflops
+            << " GFLOP/s\n";
+
+  // Pre-overhaul baseline at this scale was ~400–470 ms/layer.
+  EXPECT_GT(gflops, 50.0);
+  EXPECT_LT(ms_per, 400.0);
 }
 
 }  // namespace alcedo
