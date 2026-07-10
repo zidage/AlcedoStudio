@@ -162,6 +162,34 @@ inline auto BuildBorderLossDecodeCropRect(const libraw_image_sizes_t& sizes,
   return {left, top, right - left, bottom - top};
 }
 
+// Neural Engine may phase-crop the CFA by (sx, sy) before demosaic. Map LibRaw's default crop
+// (original full-CFA coordinates) into the valid-convolution RGB output of the aligned buffer.
+inline auto BuildNeuralEngineDecodeCropRect(const libraw_image_sizes_t& sizes,
+                                            const ushort default_crop[4],
+                                            const cv::Size& original_cfa_size,
+                                            const cv::Size& rgb_output_size,
+                                            const DecodeRes decode_res, const int source_border,
+                                            const int phase_shift_x, const int phase_shift_y)
+    -> cv::Rect {
+  const cv::Rect original_crop =
+      BuildDecodeCropRect(sizes, default_crop, original_cfa_size, decode_res);
+
+  // Map original CFA coords → phase-aligned CFA coords → NN RGB coords (equal border on all edges).
+  const int left = std::clamp(original_crop.x - phase_shift_x - source_border, 0, rgb_output_size.width);
+  const int top =
+      std::clamp(original_crop.y - phase_shift_y - source_border, 0, rgb_output_size.height);
+  const int right = std::clamp(original_crop.x + original_crop.width - phase_shift_x - source_border,
+                               left, rgb_output_size.width);
+  const int bottom =
+      std::clamp(original_crop.y + original_crop.height - phase_shift_y - source_border, top,
+                 rgb_output_size.height);
+
+  if (right <= left || bottom <= top) {
+    throw std::runtime_error("RawProcessor: Neural Engine decode crop is empty after phase-align.");
+  }
+  return {left, top, right - left, bottom - top};
+}
+
 inline auto BuildRcdDecodeCropRect(const libraw_image_sizes_t& sizes, const ushort default_crop[4],
                                    const cv::Size& rcd_output_size, const DecodeRes decode_res,
                                    const int rcd_radius = kRcdDebayerCropRadius) -> cv::Rect {

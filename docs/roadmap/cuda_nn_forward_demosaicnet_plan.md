@@ -4,13 +4,11 @@ Date: 2026-07-09
 Updated: 2026-07-10
 
 Status: Phases 0–5 done (generic CNN ops, safetensors DTO, hard-coded Bayer/XTrans
-modules, lazy cache, goldens). Phase 6 **product wiring is landed** (GpuMat CFA
-entry, `RawDemosaicMethod`, lazy trigger, Legacy fallback, FULL-only NN policy)
-but **Phase 6 is not closed**. Remaining work, in order:
+modules, lazy cache, goldens). Phase 6a + **6b landed**. Remaining for Phase 6:
 
-1. **6b — Neural Engine preprocess** (required for correct real RAW): CFA
-   **phase-align** to the training origin + **gamma 1/2.2 in / 2.2 out**. White
-   balance is **not** part of this step — `ToLinearRef` already applies it.
+1. ~~**6b — Neural Engine preprocess**~~ ✅ CFA phase-align to training origin +
+   gamma 1/2.2 in / 2.2 out after `ToLinearRef` (no second WB); `Clamp01` only
+   when HLR off.
 2. **6c — Tiling** via existing CUDA tile path (`ProcessCudaTiled` /
    `BuildTileJobs`); Neural Engine defaults to tiled mode (not long-edge
    routing).
@@ -929,13 +927,13 @@ runtime graph builder.
 
 ### Phase 6 — RAW product entry + Neural preprocess + tiling (redesigned)
 
-Phase 6 has three layers. **6a is done.** Active work is **6b then 6c**:
+Phase 6 has three layers. **6a + 6b are done.** Active work is **6c**:
 
 | Layer | Status | Focus |
 |-------|--------|--------|
 | **6a** | ✅ | GpuMat entry, Method selection, lazy load, Legacy fallback |
-| **6b** | ⏳ **first** | Neural Engine **preprocess**: CFA phase-align + gamma 1/2.2 in / 2.2 out |
-| **6c** | ⏳ after 6b | Tiling via existing CUDA tile path; Neural Engine defaults to tiled |
+| **6b** | ✅ | Neural Engine **preprocess**: CFA phase-align + gamma 1/2.2 in / 2.2 out |
+| **6c** | ⏳ **next** | Tiling via existing CUDA tile path; Neural Engine defaults to tiled |
 
 Do **not** invent a second tile scheduler inside `cuda/nn`. Preprocess lives on
 the RAW Neural path (around `DemosaicWithNeuralEngine` / `raw_processor_cuda`),
@@ -973,12 +971,33 @@ not in generic `cuda/nn` ops.
 3. Tests are **small patches**, not full camera frames.
 4. Neural Engine **forces FullFrame**; `ProcessCudaTiled` never calls NN.
 
-#### 6b — Neural Engine preprocess (CFA phase-align + gamma)  ⏳ **do first**
+#### 6b — Neural Engine preprocess (CFA phase-align + gamma)  ✅ (done)
 
-Reference: external `demosaicnet_caffe/pytorch/raw_pipeline.py`
-(`_find_align_shift`, `np.power(..., 1/2.2)` before model, `np.power(..., 2.2)`
-after). Alcedo maps that onto the **existing** CUDA RAW order; it does **not**
-re-implement white balance.
+##### Python reference tree (read this first)
+
+External repo (not a submodule of pu-erh_lab). On the author’s machine:
+
+```text
+D:\Projects\deepjoint_demosiacing\demosaicnet_caffe\
+```
+
+| Path | What to copy / match |
+|------|----------------------|
+| `...\pytorch\raw_pipeline.py` | **Primary product pipeline reference**: CFA phase-align (`_find_align_shift`, `BAYER_TARGET` GRBG, `XTRANS_TARGET`), black/normalize, as-shot WB (→ Alcedo `ToLinearRef`), **gamma `1/2.2` in / `2.2` out**, pad + tiled demosaic, then camera→sRGB/filmic (downstream of demosaic in Alcedo) |
+| `...\pytorch\infer.py` | Mosaic pack (`_make_mosaic` / `_bayer_mosaic` / `_xtrans_mosaic`), **tile loop** (`_run_tiles`, `_model_crop`), noise-model hooks |
+| `...\pytorch\model.py` | PyTorch DemosaicNet topology (already mirrored in hard-coded C++ modules) |
+| `...\pytorch\raw_color.py` | Camera→sRGB / filmic helpers (Alcedo already has color path after demosaic; do not re-port unless comparing outputs) |
+| `...\demosaicnet\layers.py` | Original layer definitions (X-Trans 6×6 masks, Bayer pack conventions) |
+| `...\demosaicnet\models.py` | Original network defs |
+| `...\pytorch\bayer.pt` / `xtrans.pt` | PyTorch weights (Alcedo ships `config/models/*.safetensors` converted from these) |
+
+Upstream public project (architecture only; Alcedo weights + local caffe port above are the practical refs):
+
+- https://github.com/mgharbi/demosaicnet
+- https://groups.csail.mit.edu/graphics/demosaicnet/
+
+Alcedo maps `raw_pipeline.py` onto the **existing** CUDA RAW order; it does **not**
+re-implement white balance (`ToLinearRef` already did it).
 
 ##### Neural path data order (product)
 
@@ -1132,13 +1151,14 @@ Fixtures:
 
 ##### 6b exit
 
-- [ ] Phase-align implemented; training origin documented in code.
-- [ ] Gamma 1/2.2 in / 2.2 out on the Neural path only (Legacy unchanged).
-- [ ] WB **not** reapplied; depends on `ToLinearRef` only.
-- [ ] `Clamp01` only when `highlights_reconstruct_ == false`; HLR-on path
+- [x] Phase-align implemented; training origin documented in code
+      (`demosaicnet_preprocess.hpp`: GRBG + X-Trans 6×6 targets, `FindCfaAlignShift`).
+- [x] Gamma 1/2.2 in / 2.2 out on the Neural path only (Legacy unchanged).
+- [x] WB **not** reapplied; depends on `ToLinearRef` only.
+- [x] `Clamp01` only when `highlights_reconstruct_ == false`; HLR-on path
       preserves over-range (gamma must not hard-clip to 1).
-- [ ] Full-frame Neural path uses preprocess (tiling not required to close 6b).
-- [ ] Purpose-named unit + real-RAW patch tests green.
+- [x] Full-frame Neural path uses preprocess (tiling not required to close 6b).
+- [x] Purpose-named unit + real-RAW patch tests green.
 
 #### 6c — Neural Engine tiling via existing CUDA tile path  ⏳ (after 6b)
 
@@ -1236,9 +1256,9 @@ Fixtures: `tests/resources/sample_images/raw/camera/...`. Heap-allocate LibRaw.
 ##### Exit criteria for Phase 6 (all of 6a–6c)
 
 - [x] GpuMat API + Method selection + lazy load + Legacy fallback (6a).
-- [ ] CFA phase-align to training origin; unsupported CFA → Legacy (6b).
-- [ ] Gamma 1/2.2 in / 2.2 out on Neural path only; **no** second WB (6b).
-- [ ] Neural `Clamp01` gated by HLR: skip when reconstruct on, apply when off (6b).
+- [x] CFA phase-align to training origin; unsupported CFA → Legacy (6b).
+- [x] Gamma 1/2.2 in / 2.2 out on Neural path only; **no** second WB (6b).
+- [x] Neural `Clamp01` gated by HLR: skip when reconstruct on, apply when off (6b).
 - [ ] Neural Engine **defaults to tiled** CUDA execution (6c).
 - [ ] `ProcessCudaTiled` runs Neural Engine with RF-correct halo; Bayer + X-Trans (6c).
 - [ ] At least one **full active-area** real Bayer RAW and one real X-Trans RAW
@@ -1294,21 +1314,25 @@ of RCD/highlight in the same PR as the first golden forward.
    - `include/cuda/nn/{tensor,relu,common,workspace,device_buffer}.hpp`
    - `cuda/nn/{relu,conv2d,conv_transpose2d}.cu`
    - `tests/ml_ops/*` (safetensors scrapers in conv tests)
-   - demosaicnet `modules.py` forward
+   - demosaicnet `modules.py` forward (upstream) + hard-coded C++ modules
    - `raw_processor.hpp` + `raw_processor_cuda.cpp`
    - Scratch inventory samples: `gpu_scheduler.cuh`, `tone_mapping.cuh`
      (`EnsurePyramidBuffers`), `cuda_debayer_rcd.hpp` (`RcdWorkspace`),
      `cuda_highlight_reconstruct.hpp` (`HighlightWorkspace`)
+   - **Python product reference (Phase 6b/6c):**
+     `D:\Projects\deepjoint_demosiacing\demosaicnet_caffe\pytorch\raw_pipeline.py`
+     (phase-align, gamma, full RAW flow),
+     `...\pytorch\infer.py` (`_make_mosaic`, `_run_tiles`),
+     `...\pytorch\model.py`, `...\demosaicnet\layers.py`
 2. **Phase 0–3:** already done.
 3. **Phase 4:** safetensors → `SafetensorsTensorMap` DTO in `cuda/nn` (no graph). ✅
 4. **Phase 5:** CRTP `LoadWeights` + hard-coded Bayer/XTrans modules + lazy
    cache + goldens + no-reload / dual-workspace concurrency. ✅
 5. **Phase 6a:** GpuMat entry + RawParams + lazy trigger (no backend boot load);
    thumbnails Classical. ✅
-6. **Phase 6b (active first):** Neural preprocess — CFA phase-align to training
-   origin + gamma 1/2.2 in / 2.2 out after `ToLinearRef` (WB already done; do
-   not re-WB; `Clamp01` only when HLR off). Real-RAW patch tests purpose-named.
-7. **Phase 6c:** Neural Engine tiling via existing `ProcessCudaTiled` /
+6. **Phase 6b:** ✅ Neural preprocess — CFA phase-align + gamma 1/2.2 in / 2.2 out
+   after `ToLinearRef` (`demosaicnet_preprocess.*`, wired in `ProcessCudaFullFrame`).
+7. **Phase 6c (next):** Neural Engine tiling via existing `ProcessCudaTiled` /
    `BuildTileJobs`; default tiled for Neural Engine; full active-area RAW tests.
 8. **Phase 7:** workspace policy + parallel readiness.
 9. **Phase 8:** profile-driven optimization.
@@ -1466,7 +1490,12 @@ bar.
 | CUDA tile mode selection | `raw_processor.cpp` `SelectCudaExecutionMode` |
 | CUDA tile jobs / RCD tiled path | `raw_processor_cuda.cpp` `BuildTileJobs` / `ProcessCudaTiled` |
 | Real camera RAW fixtures | `tests/resources/sample_images/raw/camera/` |
-| Reference preprocess + tile (external) | `demosaicnet_caffe/pytorch/raw_pipeline.py` (phase-align, gamma in/out, `_run_tiles`; WB maps to Alcedo `ToLinearRef`) |
+| Python ref root (external) | `D:\Projects\deepjoint_demosiacing\demosaicnet_caffe\` |
+| Python product pipeline | `...\pytorch\raw_pipeline.py` — phase-align, gamma in/out, tile; WB → Alcedo `ToLinearRef` |
+| Python mosaic + tiles | `...\pytorch\infer.py` — `_make_mosaic`, `_run_tiles`, `_model_crop` |
+| Python model | `...\pytorch\model.py` |
+| Python color (post-demosaic) | `...\pytorch\raw_color.py` |
+| Original layers / nets | `...\demosaicnet\layers.py`, `...\demosaicnet\models.py` |
 | Neural preprocess (planned 6b) | `decoders/processor/nn/demosaicnet_preprocess.*` |
 | Workspace non-thread-safety | `include/cuda/nn/workspace.hpp` |
 

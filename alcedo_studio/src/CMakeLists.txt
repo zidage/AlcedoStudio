@@ -754,9 +754,12 @@ if(ALCEDO_CUDA_ENABLED)
         ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config/models"
     )
 
+    # Product-path Neural preprocess (phase-align + gamma) + GpuMat demosaic entry.
+    # Stays on CudaDemosaicNetEntry (not generic DemosaicNet modules) so LibRaw CFA types link.
     def_library(CudaDemosaicNetEntry
         SOURCES
             decoders/processor/operators/gpu/cuda_demosaicnet.cu
+            decoders/processor/nn/demosaicnet_preprocess.cu
         PUBLIC_DEPS
             DemosaicNet
             libraw::raw_r

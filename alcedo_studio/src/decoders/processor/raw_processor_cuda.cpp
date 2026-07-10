@@ -17,6 +17,7 @@
 
 #include "decoders/processor/operators/gpu/cuda_color_space_conv.hpp"
 #include "decoders/processor/operators/gpu/cuda_debayer_rcd.hpp"
+#include "decoders/processor/nn/demosaicnet_preprocess.hpp"
 #include "decoders/processor/operators/gpu/cuda_demosaicnet.hpp"
 #include "decoders/processor/operators/gpu/cuda_dng_warp.hpp"
 #include "decoders/processor/operators/gpu/cuda_downsample.hpp"
@@ -235,64 +236,78 @@ auto RawProcessor::ProcessCudaFullFrame() -> ImageBuffer {
   const RawDemosaicMethod demosaic_method =
       detail::ResolveRawDemosaicMethod(params_, cfa_pattern_.kind);
   if (demosaic_method == RawDemosaicMethod::NeuralEngine) {
+    // HLR-on: keep over-range CFA samples. HLR-off: product Clamp01 before NN preprocess.
     if (!params_.highlights_reconstruct_) {
       const auto stage_clamp_start = ProfileClock::now();
       CUDA::Clamp01(gpu_img, &stream);
       LogCudaProfileStep(stream, "RAW CUDA FullFrame clamp", stage_clamp_start);
     }
 
-    const auto       stage_neural_start = ProfileClock::now();
-    cv::cuda::GpuMat neural_rgb;
-    const auto       neural_result =
-        CUDA::DemosaicWithNeuralEngine(gpu_img, cfa_pattern_, neural_rgb, &stream);
-    if (neural_result.succeeded) {
-      gpu_img = std::move(neural_rgb);
-      LogCpuProfileStep("RAW CUDA FullFrame Neural Engine demosaic", stage_neural_start);
+    const auto            stage_neural_start = ProfileClock::now();
+    const cv::Size        original_cfa_size  = gpu_img.size();
+    cv::cuda::GpuMat      neural_cfa;
+    const NeuralEngineCfaPrep prep =
+        PrepareNeuralEngineCfa(gpu_img, cfa_pattern_, neural_cfa, &stream);
+    if (!prep.succeeded) {
+      AppendDeferredLog("RAW CUDA Neural Engine preprocess unavailable; using Legacy: " +
+                        prep.error);
+    } else {
+      cv::cuda::GpuMat neural_rgb;
+      const auto       neural_result =
+          CUDA::DemosaicWithNeuralEngine(neural_cfa, prep.aligned_pattern, neural_rgb, &stream);
+      if (!neural_result.succeeded) {
+        AppendDeferredLog("RAW CUDA Neural Engine unavailable; using Legacy: " +
+                          neural_result.error);
+      } else {
+        // Gamma decode back to linear camera RGB before crop / inverse cam-mul / HLR.
+        FinishNeuralEngineRgb(neural_rgb, &stream);
+        gpu_img = std::move(neural_rgb);
+        LogCpuProfileStep("RAW CUDA FullFrame Neural Engine demosaic", stage_neural_start);
 
-      const cv::Rect crop_rect =
-          detail::BuildBorderLossDecodeCropRect(raw_data_.sizes, default_crop_, gpu_img.size(),
-                                                params_.decode_res_, neural_result.source_border);
-      if (!detail::IsFullImageRect(crop_rect, gpu_img.size())) {
-        gpu_img = gpu_img(crop_rect);
-      }
+        const cv::Rect crop_rect = detail::BuildNeuralEngineDecodeCropRect(
+            raw_data_.sizes, default_crop_, original_cfa_size, gpu_img.size(), params_.decode_res_,
+            neural_result.source_border, prep.shift.sx, prep.shift.sy);
+        if (!detail::IsFullImageRect(crop_rect, gpu_img.size())) {
+          gpu_img = gpu_img(crop_rect);
+        }
 
-      if (params_.highlights_reconstruct_) {
-        CUDA::HighlightCorrection   correction = CUDA::BuildHighlightCorrection(raw_processor_);
-        CUDA::HighlightAccumulation accumulation;
-        CUDA::AccumulateHighlightStats(gpu_img, correction, cv::Rect{}, highlight_workspace,
-                                       accumulation, &stream);
-        CUDA::FinalizeHighlightCorrection(accumulation, correction);
+        if (params_.highlights_reconstruct_) {
+          CUDA::HighlightCorrection   correction = CUDA::BuildHighlightCorrection(raw_processor_);
+          CUDA::HighlightAccumulation accumulation;
+          CUDA::AccumulateHighlightStats(gpu_img, correction, cv::Rect{}, highlight_workspace,
+                                         accumulation, &stream);
+          CUDA::FinalizeHighlightCorrection(accumulation, correction);
 
-        if (dng_warp_rectilinear_.has_value()) {
-          CUDA::ApplyHighlightCorrectionAndPackRGBA(gpu_img, output_rgba, correction,
-                                                    raw_data_.color.cam_mul, &highlight_workspace,
-                                                    &stream);
+          if (dng_warp_rectilinear_.has_value()) {
+            CUDA::ApplyHighlightCorrectionAndPackRGBA(gpu_img, output_rgba, correction,
+                                                      raw_data_.color.cam_mul, &highlight_workspace,
+                                                      &stream);
+            CUDA::ApplyDngWarpRectilinear(output_rgba, *dng_warp_rectilinear_, &stream);
+            runtime_color_context_.dng_warp_rectilinear_applied_ = true;
+            ApplyCudaGeometricCorrections(output_rgba, raw_data_.sizes.flip, &stream);
+          } else {
+            CUDA::ApplyHighlightCorrectionAndPackRGBAOriented(
+                gpu_img, output_rgba, correction, raw_data_.color.cam_mul, raw_data_.sizes.flip,
+                &highlight_workspace, &stream);
+          }
+        } else if (dng_warp_rectilinear_.has_value()) {
+          CUDA::ApplyInverseCamMulAndPackRGBA(gpu_img, output_rgba, raw_data_.color.cam_mul,
+                                              &stream);
           CUDA::ApplyDngWarpRectilinear(output_rgba, *dng_warp_rectilinear_, &stream);
           runtime_color_context_.dng_warp_rectilinear_applied_ = true;
           ApplyCudaGeometricCorrections(output_rgba, raw_data_.sizes.flip, &stream);
         } else {
-          CUDA::ApplyHighlightCorrectionAndPackRGBAOriented(
-              gpu_img, output_rgba, correction, raw_data_.color.cam_mul, raw_data_.sizes.flip,
-              &highlight_workspace, &stream);
+          CUDA::ApplyInverseCamMulAndPackRGBAOriented(gpu_img, output_rgba, raw_data_.color.cam_mul,
+                                                      raw_data_.sizes.flip, &stream);
         }
-      } else if (dng_warp_rectilinear_.has_value()) {
-        CUDA::ApplyInverseCamMulAndPackRGBA(gpu_img, output_rgba, raw_data_.color.cam_mul, &stream);
-        CUDA::ApplyDngWarpRectilinear(output_rgba, *dng_warp_rectilinear_, &stream);
-        runtime_color_context_.dng_warp_rectilinear_applied_ = true;
-        ApplyCudaGeometricCorrections(output_rgba, raw_data_.sizes.flip, &stream);
-      } else {
-        CUDA::ApplyInverseCamMulAndPackRGBAOriented(gpu_img, output_rgba, raw_data_.color.cam_mul,
-                                                    raw_data_.sizes.flip, &stream);
+        stream.waitForCompletion();
+
+        runtime_color_context_.output_in_camera_space_ = true;
+        process_buffer_                                = {std::move(output_rgba)};
+        PrintProfileMs("RAW CUDA FullFrame", ProfileClock::now() - full_frame_start);
+        return {std::move(process_buffer_)};
       }
-      stream.waitForCompletion();
-
-      runtime_color_context_.output_in_camera_space_ = true;
-      process_buffer_                                = {std::move(output_rgba)};
-      PrintProfileMs("RAW CUDA FullFrame", ProfileClock::now() - full_frame_start);
-      return {std::move(process_buffer_)};
     }
-
-    AppendDeferredLog("RAW CUDA Neural Engine unavailable; using Legacy: " + neural_result.error);
   }
 
   if (cfa_pattern_.kind == RawCfaKind::Bayer2x2 && params_.highlights_reconstruct_) {
