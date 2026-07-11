@@ -81,21 +81,31 @@ void RunModel(const Model& model, const cuda::nn::DeviceTensor& input,
   model.Forward(input, output, workspace, stream);
 }
 
-void ReserveWorkspace(NeuralDemosaicWorkspace& workspace, const DemosaicNetVariant variant,
-                      const int height, const int width, const std::size_t input_numel,
-                      const std::size_t output_numel) {
-  if (workspace.input_buffer().size() < input_numel) {
-    workspace.input_buffer() = cuda::nn::DeviceBufferF32(input_numel);
+}  // namespace
+
+void NeuralDemosaicWorkspace::EnsureCapacity(const DemosaicNetVariant variant, const int height,
+                                             const int width, const std::size_t input_numel,
+                                             const std::size_t output_numel) {
+  bool grew = false;
+
+  if (input_buffer_.size() < input_numel) {
+    input_buffer_ = cuda::nn::DeviceBufferF32(input_numel);
+    grew          = true;
   }
-  if (workspace.output_buffer().size() < output_numel) {
-    workspace.output_buffer() = cuda::nn::DeviceBufferF32(output_numel);
+  if (output_buffer_.size() < output_numel) {
+    output_buffer_ = cuda::nn::DeviceBufferF32(output_numel);
+    grew           = true;
   }
 
   const std::size_t activation_bytes =
       variant == DemosaicNetVariant::Bayer
           ? BayerDemosaicNet::EstimateWorkspaceBytes(height, width, 1)
           : XTransDemosaicNet::EstimateWorkspaceBytes(height, width, 1);
-  workspace.activation_workspace().Reserve(activation_bytes);
+  const std::size_t prev_activation = activation_workspace_.capacity_bytes();
+  activation_workspace_.Reserve(activation_bytes);
+  if (activation_workspace_.capacity_bytes() > prev_activation) {
+    grew = true;
+  }
 
   const int output_height =
       height - (variant == DemosaicNetVariant::Bayer ? BayerDemosaicNet::kSpatialLoss
@@ -103,10 +113,29 @@ void ReserveWorkspace(NeuralDemosaicWorkspace& workspace, const DemosaicNetVaria
   const int output_width =
       width - (variant == DemosaicNetVariant::Bayer ? BayerDemosaicNet::kSpatialLoss
                                                     : XTransDemosaicNet::kSpatialLoss);
-  workspace.rgb_buffer().create(output_height, output_width, CV_32FC3);
+  const int prev_rows = rgb_buffer_.rows;
+  const int prev_cols = rgb_buffer_.cols;
+  const int prev_type = rgb_buffer_.type();
+  rgb_buffer_.create(output_height, output_width, CV_32FC3);
+  if (rgb_buffer_.rows != prev_rows || rgb_buffer_.cols != prev_cols || prev_type != CV_32FC3) {
+    // OpenCV may reuse a larger allocation for equal-or-smaller shapes; treat any
+    // first create or geometric change as a generation event for the harness.
+    grew = true;
+  }
+
+  if (grew) {
+    ++allocation_generation_;
+  }
 }
 
-}  // namespace
+auto NeuralDemosaicWorkspace::OwnedDeviceBytes() const -> std::size_t {
+  std::size_t total = activation_workspace_.capacity_bytes() + input_buffer_.bytes() +
+                      output_buffer_.bytes();
+  if (!rgb_buffer_.empty()) {
+    total += static_cast<std::size_t>(rgb_buffer_.rows) * static_cast<std::size_t>(rgb_buffer_.step);
+  }
+  return total;
+}
 
 void CopyReflectPaddedCfa(const cv::cuda::GpuMat& source, const cv::Rect& source_rect,
                           cv::cuda::GpuMat& destination, cv::cuda::Stream* stream) {
@@ -174,7 +203,7 @@ auto DemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPattern& 
     NeuralDemosaicWorkspace  local_workspace;
     NeuralDemosaicWorkspace& workspace =
         options.workspace == nullptr ? local_workspace : *options.workspace;
-    ReserveWorkspace(workspace, variant, height, width, input_numel, output_numel);
+    workspace.EnsureCapacity(variant, height, width, input_numel, output_numel);
     auto input_tensor =
         cuda::nn::DeviceTensor::Contiguous(workspace.input_buffer().data(), {1, 3, height, width});
     auto output_tensor = cuda::nn::DeviceTensor::Contiguous(workspace.output_buffer().data(),

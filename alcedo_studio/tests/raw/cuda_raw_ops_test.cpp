@@ -892,6 +892,44 @@ TEST(CudaRawOpsTest, ProcessCudaTiled_NeuralEngineMatchesFullFrameOnOverlappingT
 #endif
 }
 
+// Purpose: after the first (largest) tile reserves NeuralDemosaicWorkspace capacity,
+// subsequent same-shape forwards must not bump allocation_generation (Phase 8.1 contract).
+TEST(CudaRawOpsTest, NeuralEngineWorkspaceAllocationGenerationStableAfterWarmup) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA is not enabled in this build.";
+#else
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
+  }
+
+  constexpr int kInput  = 1086;  // 1024 + Bayer border 31*2
+  constexpr int kOutput = 1024;
+  cv::Mat       cfa(kInput, kInput, CV_32FC1);
+  cv::randu(cfa, 0.0F, 1.0F);
+  cv::cuda::GpuMat            gpu_cfa(cfa);
+  cv::cuda::GpuMat            rgb;
+  RawCfaPattern               pattern = DemosaicNetTrainingPattern(RawCfaKind::Bayer2x2);
+  DemosaicNetModelCache       cache;
+  CUDA::NeuralDemosaicWorkspace workspace;
+  CUDA::NeuralDemosaicOptions   options;
+  options.model_cache = &cache;
+  options.workspace   = &workspace;
+
+  const auto first = CUDA::DemosaicWithNeuralEngine(gpu_cfa, pattern, rgb, nullptr, options);
+  ASSERT_TRUE(first.succeeded) << first.error;
+  ASSERT_EQ(rgb.size(), cv::Size(kOutput, kOutput));
+  const std::uint64_t gen_after_warmup = workspace.allocation_generation();
+  ASSERT_GT(gen_after_warmup, 0u);
+
+  for (int i = 0; i < 3; ++i) {
+    const auto again = CUDA::DemosaicWithNeuralEngine(gpu_cfa, pattern, rgb, nullptr, options);
+    ASSERT_TRUE(again.succeeded) << again.error;
+    EXPECT_EQ(workspace.allocation_generation(), gen_after_warmup) << "iteration " << i;
+  }
+  EXPECT_GT(workspace.OwnedDeviceBytes(), 0u);
+#endif
+}
+
 TEST(CudaRawOpsTest, ProcessCudaTiled_NeuralEngineBayerAssemblesActiveAreaFromRealRaw) {
 #ifndef HAVE_CUDA
   GTEST_SKIP() << "CUDA is not enabled in this build.";

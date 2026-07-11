@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <opencv2/core/cuda.hpp>
 #include <string>
 
@@ -18,6 +20,9 @@ namespace alcedo::CUDA {
 // the caller rather than the model cache: weights are immutable and shared, while
 // activations, NCHW boundary buffers, and the HWC tile output are stream-local.
 // Not thread-safe; use one instance for each concurrent CUDA decode.
+//
+// `allocation_generation()` increments whenever an owned device allocation grows.
+// After warm-up, timed hot-path iterations must keep the generation constant.
 class NeuralDemosaicWorkspace {
  public:
   NeuralDemosaicWorkspace()                                          = default;
@@ -34,11 +39,25 @@ class NeuralDemosaicWorkspace {
   }
   [[nodiscard]] auto rgb_buffer() noexcept -> cv::cuda::GpuMat& { return rgb_buffer_; }
 
+  // Grow-only reservation for a single forward of the given CFA spatial size.
+  // Increments `allocation_generation()` when any owned capacity actually grows.
+  void EnsureCapacity(DemosaicNetVariant variant, int height, int width, std::size_t input_numel,
+                      std::size_t output_numel);
+
+  [[nodiscard]] auto allocation_generation() const noexcept -> std::uint64_t {
+    return allocation_generation_;
+  }
+
+  // Best-effort sum of owned device bytes (activation pool + NCHW buffers + RGB tile).
+  // Treat as residual observability; do not use as a substitute for generation checks.
+  [[nodiscard]] auto OwnedDeviceBytes() const -> std::size_t;
+
  private:
   cuda::nn::WorkspacePool   activation_workspace_;
   cuda::nn::DeviceBufferF32 input_buffer_;
   cuda::nn::DeviceBufferF32 output_buffer_;
   cv::cuda::GpuMat          rgb_buffer_;
+  std::uint64_t             allocation_generation_ = 0;
 };
 
 struct NeuralDemosaicOptions {

@@ -1,21 +1,24 @@
 # CUDA CNN Forward Framework + DemosaicNet Plan
 
 Date: 2026-07-09
-Updated: 2026-07-10
+Updated: 2026-07-11
 
-Status: Phases 0–5 done (generic CNN ops, safetensors DTO, hard-coded Bayer/XTrans
-modules, lazy cache, goldens). Phase 6a + **6b landed**. Remaining for Phase 6:
+Status: Phases 0–6c landed (generic CNN ops, hard-coded Bayer/XTrans modules,
+lazy cache, goldens, Neural preprocess, and full-active-area tiled CUDA decode).
+Phase 8.1 landed (DemosaicNetPerfHarness + NeuralDemosaicWorkspace allocation
+generation counters). Phase 8 is advanced ahead of Phase 7 because full-frame
+throughput is now the product blocker. The current multi-Cout tiled Conv2d reduced measured Release
+Neural tile assembly on the reference machine to approximately 2.83 s for the
+Nikon D800e Bayer fixture and 9.52 s for the Fuji X-T5 X-Trans fixture, but the
+Phase 8's primary objective is to bring full-frame Neural throughput as close as
+practical to Legacy on the same workload. A 100 ms full-frame result is a
+stretch goal and a useful roofline reference, not a release/completion gate.
 
-1. ~~**6b — Neural Engine preprocess**~~ ✅ CFA phase-align to training origin +
-   gamma 1/2.2 in / 2.2 out after `ToLinearRef` (no second WB); `Clamp01` only
-   when HLR off.
-2. **6c — Tiling** via existing CUDA tile path (`ProcessCudaTiled` /
-   `BuildTileJobs`); Neural Engine defaults to tiled mode (not long-edge
-   routing).
-
-Phase 7 keeps workspace policy / parallel readiness. A separate architectural
-track (§3.10) records how `WorkspacePool` generalizes beyond NN to the rest of
-the image pipeline.
+Phase 7 keeps the broader workspace policy / multi-image readiness work. The
+bounded per-decode lanes required for Phase 8 tile concurrency are specified in
+Phase 8 and do not imply a process-global mutable NN workspace. A separate
+architectural track (§3.10) records how `WorkspacePool` generalizes beyond NN
+to the rest of the image pipeline.
 
 This document is the handoff plan for:
 
@@ -1259,14 +1262,14 @@ Fixtures: `tests/resources/sample_images/raw/camera/...`. Heap-allocate LibRaw.
 - [x] CFA phase-align to training origin; unsupported CFA → Legacy (6b).
 - [x] Gamma 1/2.2 in / 2.2 out on Neural path only; **no** second WB (6b).
 - [x] Neural `Clamp01` gated by HLR: skip when reconstruct on, apply when off (6b).
-- [ ] Neural Engine **defaults to tiled** CUDA execution (6c).
-- [ ] `ProcessCudaTiled` runs Neural Engine with RF-correct halo; Bayer + X-Trans (6c).
-- [ ] At least one **full active-area** real Bayer RAW and one real X-Trans RAW
+- [x] Neural Engine **defaults to tiled** CUDA execution (6c).
+- [x] `ProcessCudaTiled` runs Neural Engine with RF-correct halo; Bayer + X-Trans (6c).
+- [x] At least one **full active-area** real Bayer RAW and one real X-Trans RAW
       test (purpose-named) green on CUDA (6c; preprocess required).
-- [ ] Tiled vs full-frame agreement on an interior region (both with preprocess).
-- [ ] Steady-state: workspace reserved once per decode; no per-tile
+- [x] Tiled vs full-frame agreement on an interior region (both with preprocess).
+- [x] Steady-state: workspace reserved once per decode; no per-tile
       `cudaMalloc` after reserve.
-- [ ] Thumbnails / non-`FULL` never enter NN or NN workspace.
+- [x] Thumbnails / non-`FULL` never enter NN or NN workspace.
 
 ### Phase 7 — Workspace policy + parallel readiness
 
@@ -1282,14 +1285,386 @@ Only after Phase 6 preprocess + tiling correctness:
 
 **Exit:** concurrent NN safe by construction; observability is owned-bytes first.
 
-### Phase 8 — Optimization pass (after correctness)
+### Phase 8 — Full-frame throughput parity (advanced)
 
-1. Nsight Compute: top kernels.
-2. Fuse `ConvBiasRelu` everywhere applicable.
-3. Tune tile size / workspace reuse.
-4. Winograd / better 3×3 only if conv dominates.
-5. Optional friendlier device weight layout (still lazy-load from safetensors).
-6. Record ≤1K-edge interactive latency numbers in this doc or a follow-up note.
+Phase 8 is no longer a single-tile micro-optimization pass. Its primary score is
+the Neural/Legacy throughput ratio for a **full active-area RAW** on the same
+GPU, fixture, and pipeline configuration. The engineering objective is to drive
+that ratio toward 1.0 without weakening correctness or image quality. A 100 ms
+full-frame result is retained as an ambitious stretch target, not a hard gate.
+Single-tile latency remains a diagnostic metric, not the product metric.
+
+#### 8.0 Performance contract
+
+##### Primary fixtures
+
+| Variant | Required real RAW fixture | Current Release Neural tile assembly (2026-07-11) |
+|---------|---------------------------|----------------------------------------------------|
+| Bayer | `raw/camera/nikon/d800e/Nikon-D800e-raw-00002.nef` | ~2.83 s |
+| X-Trans | `raw/camera/fuji/xt5/DSCF2074.RAF` | ~9.52 s |
+
+The benchmark must also support additional Bayer and X-Trans fixtures, but the
+two rows above are the stable comparison pair and may not be silently replaced
+when numbers regress.
+
+##### Timed scope
+
+The primary `full_process_hot_ms` interval is:
+
+```text
+already-unpacked LibRaw CFA
+  -> RawProcessor CUDA FULL path
+  -> ToLinearRef / Neural preprocess or Legacy equivalent
+  -> full active-area demosaic
+  -> RGB tile assembly
+  -> gamma decode (Neural only)
+  -> identical HLR / inverse cam-mul / RGBA pack configuration
+  -> completed CUDA output
+```
+
+File IO and `LibRaw::unpack()` are outside the interval. Model parsing and first
+weight upload are reported separately as `cold_load_ms`; they are outside the
+hot-path SLO because weights are process-lifetime cached. The timed hot pass
+must include all method-specific preprocessing and synchronization needed to
+hand a completed full image to the next pipeline stage.
+
+##### Performance objectives and non-negotiable correctness gates
+
+For both primary fixtures, on the declared reference GPU/driver:
+
+1. The primary optimization score is `neural_p50_ms / legacy_p50_ms`, followed
+   by the p95 ratio. The target is <=1.10; a miss does not by itself block
+   release, but the measured gap and roofline explanation must be recorded.
+2. Report absolute p50/p95 and progress toward the 100 ms stretch target; do not
+   turn 100 ms into a flaky CI assertion.
+3. Use at least 20 measured runs and report variance/outliers rather than
+   selecting the fastest run.
+4. Output correctness remains within the existing frozen FP32/golden tolerances;
+   a precision change needs its own explicitly approved tolerance and quality
+   evidence.
+5. No device allocation grows during measured iterations after warm-up.
+6. The output dimensions, active-area mapping, CFA phase, gamma sandwich, HLR
+   behavior, and lazy model-cache behavior remain unchanged.
+
+Legacy and Neural must be run in the same process, alternating method order per
+iteration to reduce clock/temperature bias. The benchmark records GPU name,
+compute capability, driver/runtime versions, power state where available,
+fixture dimensions, active pixels, tile count, tile size, lane count, and git
+commit. `Legacy` means the traditional demosaic selected for that exact Bayer
+or X-Trans RAW through the same `RawProcessor` entrypoint and with the same
+post-demosaic output configuration; it is not a synthetic Conv-only baseline.
+
+#### 8.1 Dedicated benchmark harness (land first) ✅
+
+Add a standalone CUDA performance executable rather than putting hard timing
+assertions in the ordinary correctness suites:
+
+```text
+alcedo_studio/tests/perf/demosaicnet_perf_harness.cpp
+alcedo_studio/tests/perf/demosaicnet_perf_metrics.hpp
+alcedo_studio/tests/perf/demosaicnet_perf_metrics.cpp
+CMake target: DemosaicNetPerfHarness
+```
+
+The harness links `RawProcessor`, `CudaDemosaicNetEntry`, `DemosaicNet`,
+`CudaUtils`, LibRaw, OpenCV CUDA, and `CUDA::cudart`. Do not add Google Benchmark
+or another runtime dependency: the harness needs deterministic control over
+warm-up, streams, fixtures, and JSON output. It is built in Release only for
+authoritative numbers.
+
+Required CLI:
+
+```bat
+build\release\alcedo_studio\tests\DemosaicNetPerfHarness.exe ^
+  --fixture bayer|xtrans|all ^
+  --method legacy|neural|both ^
+  --mode full|tile|conv ^
+  --warmup 3 --iterations 20 ^
+  --tile-size 1024 --lanes 1 ^
+  --output build/perf/demosaicnet.json
+```
+
+Required modes:
+
+| Mode | Purpose | Primary measurement |
+|------|---------|---------------------|
+| `full` | Primary product measurement; full active-area real RAW | wall-clock + CUDA completion, Neural vs Legacy |
+| `tile` | Fixed-shape runner diagnosis | Bayer input 1086² -> output 1024²; X-Trans input 1048² -> output 1024² |
+| `conv` | Kernel tuning without RAW setup | exact layer shapes from both hard-coded modules |
+
+Harness rules:
+
+1. Open/unpack the RAW once, outside timed iterations.
+2. Run one correctness pass before timing; abort the benchmark on shape,
+   finite-value, CFA-phase, or reference mismatch.
+3. Warm the model cache, CUDA context, workspaces, GpuMat buffers, and graph
+   objects before measured iterations.
+4. Use CUDA events for device-stage intervals and `steady_clock` for the full
+   product interval. Do not insert per-layer synchronizations in normal timing
+   mode.
+5. Report min, median, p90, p95, max, standard deviation, active megapixels per
+   second, tiles per second, and Neural/Legacy ratios.
+6. Emit machine-readable JSON plus a compact console table. Performance
+   artifacts live under `build/perf/` and are not committed.
+7. Add owned allocation-generation counters to `NeuralDemosaicWorkspace`; the
+   generation must remain constant throughout measured iterations. Continue to
+   treat `cudaMemGetInfo` as residual observability, not an ownership counter.
+8. Provide `--profile-ranges` to add named ranges for preprocess, pack,
+   each hard-coded layer, structural ops, unpack, assemble, and postprocess.
+   CUDA-event timing must work even when Nsight performance-counter permission
+   is unavailable.
+
+The harness is not part of default `ctest`. Add an opt-in CMake option such as
+`ALCEDO_ENABLE_GPU_PERF_TESTS`; dedicated benchmark machines may register the
+full-mode command with the `performance` label and alert on regressions against
+the recorded Neural/Legacy ratios. Timing is not part of default correctness CI.
+
+Build command:
+
+```bat
+cmd /c scripts\msvc_env.cmd --build --preset win_release --target DemosaicNetPerfHarness --parallel 4
+```
+
+#### 8.2 Feasibility and roofline gate (before more kernel work)
+
+The 100 ms stretch target and Legacy-parity objective are full-frame, so the
+harness must compute exact operation counts for the actual tile jobs, including
+halo duplication. For every Conv2d:
+
+```text
+FLOPs = 2 * N * Cout * Hout * Wout * Cin * kH * kW
+```
+
+Report total full-frame FLOPs, bytes read/written, effective TFLOP/s, effective
+bandwidth, the TFLOP/s required to match Legacy, and the TFLOP/s required to
+reach the 100 ms stretch result. Compare those requirements with the declared
+GPU's sustained FP32 and Tensor Core capabilities, not only marketing peak
+numbers.
+
+This is a decision gate:
+
+1. If the measured/roofline evidence says the fixed FP32 topology can materially
+   close the Legacy ratio, continue with the FP32 direct-kernel track.
+2. If FP32 is bounded far above Legacy, explicitly evaluate FP16/BF16/TF32
+   Tensor Core execution with FP32 accumulation and/or a distilled topology.
+   Tile concurrency alone is not accepted as a feasibility argument because it
+   does not reduce total work on one GPU.
+3. Any mixed-precision or topology change must run the frozen golden suite plus
+   full-image quality comparisons before it can become the product default.
+
+The runtime graph remains hard-coded. A distilled/retrained model may change
+the fixed Bayer or X-Trans topology and bundled weights, but it must not
+introduce runtime graph assembly.
+
+#### 8.3 Remove the per-tile synchronization barrier
+
+`DemosaicWithNeuralEngine` currently waits for its stream before returning.
+That makes `ProcessCudaTiled` serial by construction and prevents useful overlap
+even when independent tile work exists.
+
+Split the API into:
+
+1. `EnqueueDemosaicWithNeuralEngine(...)` — validates, ensures the already-warm
+   module, enqueues pack/forward/unpack, and returns without synchronizing.
+2. A synchronous wrapper retained for simple callers and correctness tests.
+
+The async contract must document that CFA input, output GpuMat, workspace, and
+stream stay alive until the caller's completion event fires. `ProcessCudaTiled`
+must enqueue the copy from the lane's reusable RGB buffer into the disjoint
+final-output ROI on the same stream before reusing that buffer.
+
+Tests:
+
+- `NeuralEngineAsyncBayerMatchesSynchronousForward`
+- `NeuralEngineAsyncXTransMatchesSynchronousForward`
+- `NeuralEngineAsyncForwardKeepsBuffersAliveUntilCompletionEvent`
+- `NeuralEngineTimedPassDoesNotGrowWorkspaceAfterWarmup`
+
+#### 8.4 Bounded parallel tile lanes
+
+Tiles are mathematically independent after global phase-align/gamma encode and
+write disjoint final-output rectangles, so they may be processed concurrently.
+Concurrency is implemented as a bounded set of lanes, not a shared workspace:
+
+```text
+NeuralTileLane
+  cv::cuda::Stream
+  NeuralDemosaicWorkspace
+  fixed-size padded CFA GpuMat
+  fixed-size RGB GpuMat
+  completion event
+```
+
+Rules:
+
+1. Load and validate the model once before creating/enqueuing lanes; all lanes
+   read the same immutable weights.
+2. Each lane owns exactly one stream and one workspace. Never share a
+   `WorkspacePool` across lanes or threads.
+3. Enqueue jobs round-robin or from a bounded ready queue. One host thread is
+   sufficient initially; add host threads only if the harness proves enqueue
+   latency is material.
+4. Test lane counts `1, 2, 3, 4, 6, 8`. Select the best measured count per GPU
+   capability/variant; do not hard-code four streams as universally optimal.
+5. Compute owned VRAM before choosing a lane count:
+   resident weights + full output + preprocess buffer + per-lane input/output
+   buffers + per-lane workspace + safety headroom. Fall back to fewer lanes,
+   never to allocation failure.
+6. After all lane events complete, run gamma decode and global HLR/color/pack
+   stages once on the assembled full RGB.
+
+Parallel streams are an experiment with a hard measurement gate. The current
+3×3 grid may already occupy all SMs; in that case extra lanes can only hide
+kernel tails and launch gaps and must not be expected to scale linearly.
+
+Correctness/regression tests:
+
+- `ProcessCudaParallelTiles_BayerMatchesSingleLaneFullActiveArea`
+- `ProcessCudaParallelTiles_XTransMatchesSingleLaneFullActiveArea`
+- `ProcessCudaParallelTiles_WritesEachOutputPixelExactlyOnce`
+- `ProcessCudaParallelTiles_UsesDistinctWorkspacePerLane`
+- `ProcessCudaParallelTiles_HighlightReconstructMatchesSingleLane`
+- `ProcessCudaParallelTiles_ThumbnailsNeverCreateNeuralLanes`
+
+Run under CUDA memcheck/racecheck where available. Heap-allocate every LibRaw
+processor in these tests.
+
+#### 8.5 CUDA Graph replay for fixed tile shapes
+
+Phase 6c deliberately reflect-pads to fixed tile input shapes. Exploit that by
+capturing one graph per variant per lane after weights and buffers are stable:
+
+```text
+fixed CFA lane buffer
+  -> mosaic pack
+  -> hard-coded Forward kernels
+  -> NCHW-to-HWC unpack
+  -> fixed RGB lane buffer
+```
+
+Keep the source-to-lane copy and lane-output-to-final-ROI copy outside the graph
+initially; their addresses/ROI sizes vary, while the CNN graph uses stable
+pointers. Measure graph launch overhead and WDDM scheduling variance against
+normal stream enqueue. Only retain the graph path if full-frame p50 and p95
+improve without increasing VRAM materially.
+
+Tests:
+
+- `NeuralEngineGraphReplayBayerMatchesStreamForward`
+- `NeuralEngineGraphReplayXTransMatchesStreamForward`
+- `NeuralEngineGraphReplayDoesNotAllocateAfterCapture`
+
+#### 8.6 Kernel optimization order
+
+Current Release layer samples after the first multi-Cout tiled Conv2d change:
+
+| Shape family | Measured layer time |
+|--------------|---------------------|
+| Bayer 64->64 3×3 at ~530² | ~3.4–4.8 ms |
+| Bayer 64->128 3×3 at ~515² | ~7.2 ms |
+| X-Trans 64->64 3×3 at ~1040² | ~13.5–15.8 ms |
+| X-Trans 67->64 post 3×3 at ~1026² | ~15.6 ms |
+| 64->3 output 1×1 at 1024² | ~2.2–2.9 ms |
+
+The remaining order is:
+
+1. **3×3 compile-time tile search.** Benchmark shape-specialized variants of
+   `(OH_TILE, OW_TILE, COUT_TILE, CIN_TILE)`, including the current
+   `(8,16,32,8)` and candidates using `COUT_TILE` 16/32 and `CIN_TILE` 8/16.
+   Record registers/thread, shared bytes/block, achieved occupancy, eligible
+   warps, bank conflicts, global-load efficiency, and kernel time. Choose a
+   small fixed dispatch table by shape family; do not runtime-autotune in the
+   product path.
+2. **Shared-memory/global-load cleanup.** Test vectorized apron loads where
+   alignment permits, bank-conflict-free layouts, and cooperative load mappings
+   that reduce inactive threads on edge tiles.
+3. **Weight prepack at lazy load.** If profiling shows weight-load inefficiency,
+   upload a kernel-friendly packed layout once when the hard-coded module loads.
+   Safetensors remains the DTO/source layout; product forward uses the packed
+   immutable device copy.
+4. **1×1 and structural ops only after 3×3.** The current 1×1 output is a few
+   milliseconds per tile; Mul/Concat/Crop/pack/unpack are lower priority unless
+   the post-3×3 profile promotes them above 10% of full-frame time.
+5. **Winograd F(2×2,3×3) or implicit GEMM.** Prototype only after the direct
+   tile search plateaus. Require golden agreement and full-frame improvement,
+   not a microbenchmark-only win.
+6. **Tensor Core path when demanded by the roofline gate.** Prefer FP16/BF16 or
+   TF32 inputs with FP32 accumulation and a hard-coded layout. Keep an FP32
+   fallback. Mixed precision is accepted only with frozen golden, real RAW
+   image-difference, and highlight-range evidence.
+7. **Model/topology reduction if hardware math remains insufficient.** Distill
+   depth/width separately for Bayer and X-Trans, regenerate frozen references,
+   and keep the resulting topology explicit in C++. Treat this as a measured
+   quality/performance trade, not as an automatic requirement to satisfy 100 ms.
+
+Do not spend Phase 8 on fusing `ConvBiasRelu`: it is already the default path.
+Do not introduce cuDNN/TensorRT as a hard product dependency without a separate
+architecture decision.
+
+#### 8.7 Measurement matrix and stopping rules
+
+Every optimization candidate is evaluated with this matrix:
+
+| Axis | Values |
+|------|--------|
+| Variant | Bayer, X-Trans |
+| Method | Legacy, Neural |
+| Scope | conv, 1K tile, full active-area |
+| Lanes | 1, 2, 3, 4, 6, 8 where VRAM permits |
+| Precision | FP32; gated candidate precision |
+| HLR | off (primary), on (regression/secondary timing) |
+| Iteration | 3 warm-up, >=20 measured |
+
+Stopping rules:
+
+1. Reject any candidate that fails correctness, increases p95, grows measured
+   allocations, or wins only on one variant while materially regressing the
+   other without a shape-specific dispatch.
+2. Keep a change only when full-frame p50 improves by >=5% or it is a necessary
+   dependency for a measured later win.
+3. If direct FP32 + async lanes + graphs remains more than 2× slower than
+   Legacy and roofline says FP32 cannot close the gap, stop low-value FP32
+   micro-tuning and evaluate the Tensor Core/topology track.
+4. Never infer full-frame success by multiplying a single-tile number; always
+   run the full fixtures because lane saturation, WDDM scheduling, clocks, and
+   edge-tile shapes affect p95.
+
+#### 8.8 Implementation slices
+
+1. Land `DemosaicNetPerfHarness` with Legacy/Neural full-frame comparison,
+   device metadata, JSON schema, allocation-generation checks, and current
+   baselines.
+2. Land exact FLOP/byte accounting and roofline report; record the precision /
+   topology decision for Legacy parity and the 100 ms stretch target.
+3. Split async enqueue from the synchronous wrapper; keep all correctness tests
+   green.
+4. Add bounded per-lane streams/workspaces and the single-lane vs multi-lane
+   full-active-area tests.
+5. Add optional CUDA Graph replay and retain it only on measured full-frame win.
+6. Tune/select the FP32 3×3 kernels using the harness and named profile ranges.
+7. If required by the roofline decision, add the gated Tensor Core path and/or
+   distilled hard-coded topology with new frozen references.
+8. Run the complete measurement matrix and publish the final JSON summary in a
+   follow-up roadmap note or checked-in results document (not raw build output).
+
+##### Phase 8 exit criteria
+
+- [ ] Bayer and X-Trans full-active-area Legacy baselines and Neural/Legacy p50
+      and p95 ratios are recorded on the same runs/hardware.
+- [ ] The best measured Bayer and X-Trans ratios are reported against the <=1.10
+      objective; any remaining gap has a roofline/kernel explanation.
+- [ ] Absolute p50/p95 and progress toward the 100 ms stretch target are
+      reported without making 100 ms a completion gate.
+- [ ] Correctness/golden/full-RAW tests pass for the selected precision path.
+- [ ] Best lane count is measured, bounded by owned VRAM, and safe by
+      construction (one stream/workspace per lane).
+- [ ] No per-tile synchronization remains in the async product path.
+- [ ] No allocation-generation change occurs during timed hot iterations.
+- [ ] Async lanes, CUDA Graph replay, FP32 tile variants, and the gated
+      precision/topology track have each been measured or rejected with data;
+      no known >=5% full-frame win remains untested.
+- [ ] Full benchmark command, device metadata, commit, and JSON summary are
+      recorded and reproducible.
 
 ### Phase 9 — Optional / separate: pipeline workspace migration (track §3.10)
 
@@ -1332,10 +1707,12 @@ of RCD/highlight in the same PR as the first golden forward.
    thumbnails Classical. ✅
 6. **Phase 6b:** ✅ Neural preprocess — CFA phase-align + gamma 1/2.2 in / 2.2 out
    after `ToLinearRef` (`demosaicnet_preprocess.*`, wired in `ProcessCudaFullFrame`).
-7. **Phase 6c (next):** Neural Engine tiling via existing `ProcessCudaTiled` /
-   `BuildTileJobs`; default tiled for Neural Engine; full active-area RAW tests.
+7. **Phase 6c:** Neural Engine tiling via existing `ProcessCudaTiled` /
+   `BuildTileJobs`; default tiled for Neural Engine; full active-area RAW tests. ✅
 8. **Phase 7:** workspace policy + parallel readiness.
-9. **Phase 8:** profile-driven optimization.
+9. **Phase 8:** full-frame Legacy-parity optimization with a 100 ms stretch
+   target (advanced; detailed harness, roofline, async lanes, graphs, and kernel
+   gates above).
 10. **Phase 9 (optional):** broader workspace migration when prioritized.
 
 Do **not** skip golden tests. Wrong pad/crop/group looks “plausible” but is
