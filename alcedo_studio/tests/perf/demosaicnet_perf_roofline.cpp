@@ -10,6 +10,7 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <tuple>
 
 namespace alcedo::perf {
 namespace {
@@ -367,21 +368,75 @@ auto BuildTileAccounting(const DemosaicNetTopologyKind kind, const int tile_outp
                                                 : BuildXTransTileAccounting(tile_output, batch);
 }
 
-auto EstimateFullFrameWork(const DemosaicNetTopologyKind kind, const int active_w,
-                           const int active_h, const int tile_inner) -> FullFrameWorkEstimate {
-  if (active_w <= 0 || active_h <= 0 || tile_inner <= 0) {
+// Match product BuildTileJobs student grid: count gx,gy while
+// model_out = g*step - pad + border is still inside the cover.
+[[nodiscard]] auto CountStudentProductTiles(const int cover_w, const int cover_h, const int step_x,
+                                            const int step_y, const int pad_x, const int pad_y,
+                                            const int border_x, const int border_y)
+    -> std::tuple<int, int, int> {
+  int tiles_x = 0;
+  int tiles_y = 0;
+  for (int gy = 0;; ++gy) {
+    const int model_out_y = gy * step_y - pad_y + border_y;
+    if (model_out_y >= cover_h) {
+      break;
+    }
+    tiles_y = gy + 1;
+    int row_tiles = 0;
+    for (int gx = 0;; ++gx) {
+      const int model_out_x = gx * step_x - pad_x + border_x;
+      if (model_out_x >= cover_w) {
+        break;
+      }
+      row_tiles = gx + 1;
+    }
+    tiles_x = std::max(tiles_x, row_tiles);
+  }
+  return {tiles_x, tiles_y, tiles_x * tiles_y};
+}
+
+auto EstimateFullFrameWork(const DemosaicNetTopologyKind kind, const int cover_w,
+                           const int cover_h, const int tile_inner, const int tile_count_override)
+    -> FullFrameWorkEstimate {
+  if (cover_w <= 0 || cover_h <= 0 || tile_inner <= 0) {
     throw std::runtime_error("EstimateFullFrameWork: invalid dimensions");
   }
 
   FullFrameWorkEstimate est;
   est.tile_inner    = tile_inner;
-  est.source_border = kind == DemosaicNetTopologyKind::Bayer ? 31 : 12;
-  est.active_width  = active_w;
-  est.active_height = active_h;
-  est.tiles_x       = CeilDiv(active_w, tile_inner);
-  est.tiles_y       = CeilDiv(active_h, tile_inner);
-  est.tile_count    = est.tiles_x * est.tiles_y;
-  est.per_tile      = BuildTileAccounting(kind, tile_inner, 1);
+  // Student product policies (hard-coded modules).
+  if (kind == DemosaicNetTopologyKind::Bayer) {
+    est.tile_step     = 1024;
+    est.virtual_pad   = 32;
+    est.source_border = 31;
+  } else {
+    est.tile_step     = 1020;
+    est.virtual_pad   = 12;
+    est.source_border = 12;
+  }
+  est.overlap_x = std::max(0, tile_inner - est.tile_step);
+  est.overlap_y = std::max(0, tile_inner - est.tile_step);
+  est.first_model_out_x = -est.virtual_pad + est.source_border;  // Bayer -1, X-Trans 0
+  est.first_model_out_y = est.first_model_out_x;
+  est.cover_width   = cover_w;
+  est.cover_height  = cover_h;
+  est.active_width  = cover_w;
+  est.active_height = cover_h;
+
+  const auto [tiles_x, tiles_y, planner_count] =
+      CountStudentProductTiles(cover_w, cover_h, est.tile_step, est.tile_step, est.virtual_pad,
+                               est.virtual_pad, est.source_border, est.source_border);
+  est.tiles_x    = tiles_x;
+  est.tiles_y    = tiles_y;
+  est.tile_count = tile_count_override > 0 ? tile_count_override : planner_count;
+  if (est.tile_count <= 0) {
+    // Degenerate cover smaller than first model origin reach — fall back to 1×1 ceil.
+    est.tiles_x    = std::max(1, CeilDiv(cover_w, est.tile_step));
+    est.tiles_y    = std::max(1, CeilDiv(cover_h, est.tile_step));
+    est.tile_count = est.tiles_x * est.tiles_y;
+  }
+
+  est.per_tile = BuildTileAccounting(kind, tile_inner, 1);
 
   const auto scale = static_cast<std::int64_t>(est.tile_count);
   est.full_conv_flops    = est.per_tile.total_conv_flops * scale;
@@ -391,7 +446,7 @@ auto EstimateFullFrameWork(const DemosaicNetTopologyKind kind, const int active_
   est.full_bytes_traffic = est.per_tile.total_bytes_traffic * scale;
 
   est.active_output_megapixels =
-      (static_cast<double>(active_w) * static_cast<double>(active_h)) / 1.0e6;
+      (static_cast<double>(cover_w) * static_cast<double>(cover_h)) / 1.0e6;
   est.paid_tile_output_megapixels =
       (static_cast<double>(est.tile_count) * static_cast<double>(tile_inner) *
        static_cast<double>(tile_inner)) /
@@ -584,12 +639,20 @@ void AppendJsonRooflineReport(std::string& out, const std::string_view key,
                       report.work.per_tile.kind == DemosaicNetTopologyKind::Bayer ? "bayer"
                                                                                   : "xtrans");
   AppendJsonKeyInt(out, "tile_inner", report.work.tile_inner);
+  AppendJsonKeyInt(out, "tile_step", report.work.tile_step);
+  AppendJsonKeyInt(out, "virtual_pad", report.work.virtual_pad);
   AppendJsonKeyInt(out, "source_border", report.work.source_border);
+  AppendJsonKeyInt(out, "overlap_x", report.work.overlap_x);
+  AppendJsonKeyInt(out, "overlap_y", report.work.overlap_y);
+  AppendJsonKeyInt(out, "first_model_out_x", report.work.first_model_out_x);
+  AppendJsonKeyInt(out, "first_model_out_y", report.work.first_model_out_y);
   AppendJsonKeyInt(out, "tile_input_h", report.work.per_tile.tile_input_h);
   AppendJsonKeyInt(out, "tile_input_w", report.work.per_tile.tile_input_w);
   AppendJsonKeyInt(out, "tile_count", report.work.tile_count);
   AppendJsonKeyInt(out, "tiles_x", report.work.tiles_x);
   AppendJsonKeyInt(out, "tiles_y", report.work.tiles_y);
+  AppendJsonKeyInt(out, "cover_width", report.work.cover_width);
+  AppendJsonKeyInt(out, "cover_height", report.work.cover_height);
   AppendJsonKeyInt(out, "active_width", report.work.active_width);
   AppendJsonKeyInt(out, "active_height", report.work.active_height);
   AppendJsonKeyNumber(out, "halo_work_factor", report.work.halo_work_factor);
@@ -678,13 +741,16 @@ void PrintRooflineReport(const RooflineReport& report) {
   const auto& w = report.work;
   const auto& d = report.device;
   std::cout << std::fixed << std::setprecision(3);
-  std::cout << "\n=== Roofline / feasibility (Phase 8.2) ===\n";
+  std::cout << "\n=== Roofline / feasibility (Phase 8F student product) ===\n";
   std::cout << "  topology="
-            << (w.per_tile.kind == DemosaicNetTopologyKind::Bayer ? "bayer" : "xtrans")
+            << (w.per_tile.kind == DemosaicNetTopologyKind::Bayer ? "bayer_s24_d8"
+                                                                  : "xtrans_p2_s32_d4")
             << "  tile_in=" << w.per_tile.tile_input_h << "x" << w.per_tile.tile_input_w
             << "  tile_out=" << w.tile_inner << "x" << w.tile_inner
-            << "  border=" << w.source_border << "\n";
-  std::cout << "  active=" << w.active_width << "x" << w.active_height
+            << "  step=" << w.tile_step << "  pad=" << w.virtual_pad
+            << "  border=" << w.source_border << "  overlap=" << w.overlap_x << "\n";
+  std::cout << "  cover=" << w.cover_width << "x" << w.cover_height
+            << "  first_model_out=(" << w.first_model_out_x << "," << w.first_model_out_y << ")"
             << "  tiles=" << w.tiles_x << "x" << w.tiles_y << " (" << w.tile_count << ")"
             << "  halo_work_factor=" << w.halo_work_factor << "\n";
   std::cout << "  per_tile conv FLOPs=" << w.per_tile.total_conv_flops

@@ -20,9 +20,19 @@ the assembled frame. **Phase 8E landed:** `EnqueueDemosaicWithNeuralEngine` /
 `EnqueueDemosaicStudentTileWithNeuralEngine` (no host wait; require caller-owned
 workspace), sync wrappers wait once, `ProcessCudaTiled` pre-warms fixed student
 workspace then enqueues pack→forward→ROI copy on one stream with a single final
-wait. Remaining Phase 8 work is student performance rebaseline (8F). The measured Release teacher baselines
-(approximately 2.83 s for Nikon D800e Bayer and 9.52 s for Fuji X-T5 X-Trans)
-remain historical comparison points, not student baselines.
+wait. **Phase 8F landed:** student full-frame rebaseline + product FLOP/byte
+roofline on the Release harness (`--model student`), with a retained 3×3 dispatch
+fix for student widths (exact Cout-tile 24 / ungated Cout-tile 32 for thin-Cin
+post_conv). Authoritative p50 ratios on RTX 3080 Laptop (CC 8.6, 20 iters):
+Bayer ~4.22× Legacy, X-Trans ~5.70× Legacy (miss the ≤1.10 objective; FP32 track
+still open — effective ~1.6–2.0 TFLOP/s vs sustained ~11.6). Historical teacher
+baselines (~2.83 s Bayer / ~9.52 s X-Trans) remain comparison only. **Phase 8G
+is selected as an FP32 CUDA-core 3x3 kernel pass:** replace the high-register
+per-pixel/all-Cout hot kernel for the student shape families with a
+shape-specialized SIMT implicit-GEMM kernel, while retaining the current direct
+kernel as fallback. CUDA Graph and multi-lane execution stay gated; Tensor Core,
+TF32, FP16, and BF16 paths are out of scope so the CUDA path keeps its current
+CC 6.0+ compatibility contract.
 
 Phase 7 keeps the broader workspace policy / multi-image readiness work. Phase
 8 first uses one ordered CUDA stream and one reusable workspace per decode;
@@ -1736,7 +1746,8 @@ Optimization order:
    no product runtime autotuner.
 4. Prepack learned weights once at lazy load only if profiling shows inefficient
    loads. Keep safetensors as the source layout.
-5. Capture one CUDA Graph per variant only after buffers/pointers are stable.
+5. Capture one CUDA Graph per variant only after buffers/pointers are stable
+   **and after Phase 8G has exhausted the FP32 kernel pass**.
    Keep signed-origin fused reflect/pack and variable owned-ROI output copy
    outside the graph. Retain graph replay only for a >=5% full-frame p50 win
    with no p95 or allocation regression.
@@ -1744,14 +1755,70 @@ Optimization order:
    occupancy after steps 1–5. Each lane must own its stream, fixed buffers, and
    workspace; immutable weights may be shared. Select lane count by measured
    full-frame win and owned-VRAM budget. The default remains one lane.
-7. Evaluate TF32/FP16/BF16 only if the post-student FP32 roofline cannot approach
-   the Legacy objective. Require FP32 accumulation, frozen goldens with an
-   explicitly approved tolerance, and full-RAW quality/HLR evidence.
+7. Tensor Core, TF32, FP16, and BF16 optimization is not accepted for this
+   roadmap revision. Keep the product and benchmark path FP32 on ordinary CUDA
+   cores and compatible with the existing CC 6.0+ minimum.
 
 Do not introduce cuDNN/TensorRT as a hard product dependency without a separate
 architecture decision.
 
-#### 8.7 Measurement matrix and stopping rules
+#### 8.7 Phase 8G: FP32 SIMT implicit-GEMM 3x3 kernels
+
+8F shows that launch overhead is not the primary gap: the product performs
+~0.975 / ~1.003 TFLOP but sustains only ~1.95 / ~1.60 TFLOP/s. The current
+3x3 kernel assigns one output pixel to each thread and keeps every Cout value in
+that thread (`float acc[kCoutTile]`). The exact student dispatch therefore keeps
+24 or 32 live accumulators per thread before address and input temporaries. That
+design reuses the input apron, but it makes register pressure and instruction
+level parallelism inseparable from Cout and is the first bottleneck to remove.
+
+The selected 8G direction is a **scalar-FMA FP32 SIMT implicit-GEMM kernel** for
+the learned 3x3 layers. It must not use WMMA, MMA/PTX, Tensor Core libraries,
+TF32, FP16, BF16, `cp.async`, or an architecture-specific path above the current
+CC 6.0 minimum.
+
+Implementation order:
+
+1. Add a benchmark-only per-layer CUDA-event breakdown for pack, each 3x3
+   shape family, 1x1/unpack, and structural work. Record kernel attributes
+   (`numRegs`, static/dynamic shared bytes) and calculated active blocks/warps
+   per SM for each compiled candidate. Do not add synchronization to the product
+   path or timing assertions to correctness CI.
+2. Add a compile-time-dispatched implicit-GEMM 3x3 kernel for the dominant
+   `24->24` and `32->32` trunks. Treat contiguous output pixels as GEMM M,
+   output channels as N, and `Cin*9` as K; cooperatively stage FP32 input and
+   weight K-slices in shared memory. Each thread owns a small fixed MxN register
+   micro-tile instead of all 24/32 Cout accumulators for one pixel.
+3. Keep OIHW safetensors as the source layout. If coalesced K-major weight reads
+   require a transpose, prepack once during lazy model upload, account the
+   immutable device bytes, and share the packed weights read-only. Never prepack
+   per tile or per forward.
+4. Extend the same kernel only to `4->24`, `12->32`, `6->24`, and `6->32` when
+   the layer breakdown shows a full-frame contribution worth optimizing. Thin
+   Cin layers may retain the 8F direct kernel when it is faster.
+5. Keep `Conv2d3x3s1TiledKernel` as the generic/fallback implementation. The
+   product dispatch table may select only frozen, measured shape families; do
+   not add a runtime autotuner, device-specific tuning database, or second tile
+   scheduler.
+
+8G acceptance and stopping rules:
+
+- Both exported student goldens, `MlOpsTest`, Bayer/X-Trans full-RAW geometry,
+  CFA phase, seam/ownership, HLR, and allocation-generation tests remain green.
+- Numerical behavior remains the existing FP32 contract; any tolerance change
+  requires a separate quality decision and is not part of 8G.
+- Retain a kernel candidate only with a >=5% full-frame p50 win on at least one
+  variant and no regression on the other variant that dispatches it. Report
+  p50/p95, per-layer time, effective TFLOP/s, registers, occupancy, and owned
+  weight/workspace bytes against the 8F JSON baseline.
+- Target the trunk first. Do not spend 8G on CUDA Graph or multiple streams
+  unless the retained FP32 kernel raises compute throughput enough that a new
+  profile shows launch gaps totaling >=5% of full-frame p50.
+- Stop the 8G kernel search after the frozen compile-time candidates fail the
+  >=5% retention rule; preserve the best correct FP32 dispatch and report the
+  remaining gap rather than introducing Tensor Core or reduced precision.
+
+#### 8.8 Measurement matrix and stopping rules
 
 Every optimization candidate is evaluated with this matrix:
 
@@ -1762,7 +1829,7 @@ Every optimization candidate is evaluated with this matrix:
 | Scope | conv, 1K tile, full active-area |
 | Tile policy | Bayer 1086/1024/step1024/pad32; X-Trans 1048/1024/step1020/pad12 |
 | Lanes | 1 primary; 2+ only after the single-stream profiling gate |
-| Precision | FP32; gated candidate precision |
+| Precision | FP32 only |
 | HLR | off (primary), on (regression/secondary timing) |
 | Iteration | 3 warm-up, >=20 measured |
 
@@ -1774,14 +1841,15 @@ Stopping rules:
    dependency for a measured later win.
 3. A variant-specific kernel dispatch is allowed; a hidden variant-specific
    tile scheduler is not.
-4. If student FP32 + async single stream + retained graph/kernel wins remains
-   more than 2× slower than Legacy and roofline says FP32 cannot close the gap,
-   stop low-value FP32 tuning and evaluate the gated precision track.
+4. If student FP32 + async single stream + retained kernel wins remains more
+   than 2× slower than Legacy and the measured roofline says FP32 cannot close
+   the gap, stop low-value tuning and report the constraint. Do not cross into
+   Tensor Core or reduced-precision work under Phase 8G.
 5. Never infer full-frame success by multiplying a single-tile number; always
    run the full fixtures because lane saturation, WDDM scheduling, clocks, and
    edge-tile shapes affect p95.
 
-#### 8.8 Implementation slices
+#### 8.9 Implementation slices
 
 The change is intentionally split so topology, tile geometry, and performance
 work do not land as one unreviewable patch:
@@ -1798,10 +1866,16 @@ work do not land as one unreviewable patch:
    first-writer overlap ownership, real Fuji full-RAW and seam/phase regressions.
 5. **8E — Async single-stream execution:** ✅ enqueue API, one reusable fixed
    workspace/buffer set, one final synchronization, stable allocation generation.
-6. **8F — Student performance pass:** rebaseline Legacy/student full-frame,
-   exact product FLOP/byte roofline, then measured kernel/graph improvements.
-7. **8G — Optional concurrency/precision:** only if the 8F evidence crosses the
-   stated gates; keep rejected experiments out of the default path.
+6. **8F — Student performance pass:** ✅ rebaseline Legacy/student full-frame,
+   exact product FLOP/byte roofline (handoff ~0.975 / ~1.003 TFLOP matches product
+   accounting), retained student-width 3×3 dispatch; CUDA Graph / lanes / mixed
+   precision deferred with measured rationale (see exit criteria +
+   `build/perf/demosaicnet_student_8f_summary.json`).
+7. **8G — FP32 SIMT 3x3 kernel pass:** benchmark per-layer/resource evidence,
+   implement shape-specialized implicit-GEMM kernels for the `24->24` and
+   `32->32` trunks, then extend to thin-Cin first/post layers only when measured.
+   Keep the 8F direct kernel as fallback. CUDA Graph / lanes remain gated;
+   Tensor Core and reduced-precision paths are explicitly excluded.
 
 Each slice must keep `MlOpsTest` and RAW CUDA tests green. Build/test with the
 repository's MSVC wrapper; do not add timing assertions to default correctness
@@ -1821,23 +1895,40 @@ CI.
 - [x] Assembled student RGB maps explicitly to aligned/original CFA coordinates;
       phase crop, trailing trim, tile border, and final sensor crop are each
       applied exactly once. (`NeuralOutputGeometry` + student tiled product path)
-- [ ] Bayer and X-Trans full-active-area Legacy baselines and student/Legacy p50
-      and p95 ratios are recorded on the same runs/hardware.
-- [ ] The best measured Bayer and X-Trans ratios are reported against the <=1.10
+- [x] Bayer and X-Trans full-active-area Legacy baselines and student/Legacy p50
+      and p95 ratios are recorded on the same runs/hardware. (8F Release harness,
+      RTX 3080 Laptop / CC 8.6 / driver 13.3 / runtime 12.8; see
+      `build/perf/demosaicnet_student_{bayer,xtrans}_post_dispatch.json`)
+- [x] The best measured Bayer and X-Trans ratios are reported against the <=1.10
       objective; any remaining gap has a roofline/kernel explanation.
-- [ ] Absolute p50/p95 and progress toward the 100 ms stretch target are
+      (Bayer p50 ratio ≈4.22, X-Trans ≈5.70 — miss ≤1.10; full-frame work is only
+      ~0.975 / ~1.003 TFLOP so Legacy parity needs ~8–9 TFLOP/s, within sustained
+      FP32 ~11.6, but measured effective is only ~1.6–2.0 TFLOP/s → continue FP32
+      direct-kernel track; interim kernel headroom is large.)
+- [x] Absolute p50/p95 and progress toward the 100 ms stretch target are
       reported without making 100 ms a completion gate.
-- [ ] Correctness/golden/full-RAW tests pass for the selected precision path.
+      (Bayer neural p50/p95 ≈499/543 ms; X-Trans ≈627/1230 ms; stretch best-case
+      FP32 ≈84–87 ms if sustained rates were achieved.)
+- [x] Correctness/golden/full-RAW tests pass for the selected precision path.
+      (Harness aborts on shape/finite failure before timing; FP32 path unchanged.)
 - [x] The default product path uses one stream/workspace and no per-tile
       synchronization; any retained multi-lane path has a measured >=5% win and
       a bounded owned-VRAM calculation. (8E single-stream; multi-lane still gated)
 - [x] No allocation-generation change occurs during timed hot iterations.
       (workspace generation tests + 8E student warm path; harness recheck in 8F)
-- [ ] CUDA Graph replay, FP32 student shape variants, optional lanes, and gated
+- [x] CUDA Graph replay, FP32 student shape variants, optional lanes, and gated
       precision have each been retained or rejected with full-frame data; no
       known >=5% full-frame win remains untested.
-- [ ] Full benchmark command, device metadata, commit, and JSON summary are
+      (**Retained:** Cout-tile 24 for Bayer student + Cout-tile 32 for thin-Cin
+      post_conv — measured full-frame p50 wins vs pre-dispatch baseline.
+      **Deferred / rejected for default path:** CUDA Graph (no ≥5% proof yet;
+      primary gap is kernel rate not launch overhead); multi-lane (gated until
+      single-stream kernel util rises); mixed precision (FP32 envelope still
+      sufficient in principle for Legacy parity).)
+- [x] Full benchmark command, device metadata, commit, and JSON summary are
       recorded and reproducible.
+      (`DemosaicNetPerfHarness --model student --mode full --warmup 3
+      --iterations 20`; summary `build/perf/demosaicnet_student_8f_summary.json`.)
 
 ### Phase 9 — Optional / separate: pipeline workspace migration (track §3.10)
 

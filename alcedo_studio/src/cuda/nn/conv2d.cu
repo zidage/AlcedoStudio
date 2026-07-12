@@ -557,19 +557,22 @@ void LaunchConv2d(const DeviceTensor& input, DeviceTensor& output, const Conv2dP
   }
 
   if (is_3x3s1) {
-    // Primary demosaicnet path: multi-Cout tiled direct conv.
-    // Prefer the larger Cout tile when Cout is large enough to fill it (64/128).
-    // For thin layers (Cout < 16) the smaller tile avoids wasted partial work.
-    if (Cout >= 32 && Cin >= 16) {
-      // Hot path: 64→64, 64→128, etc.
+    // Multi-Cout tiled direct conv. Dispatch by Cout tile so student shapes fill
+    // blocks exactly: bayer_s24_d8 (Cout=24), xtrans_p2_s32_d4 (Cout=32), and
+    // residual teacher-sized layers (Cout>=32). Cin is always reduced in kCinTile
+    // strips — do not gate the Cout tile on Cin (post_conv is 6→24/32).
+    if (Cout >= 32) {
+      // X-Trans trunk 32→32 / post 6→32, and any wider nets.
       LaunchConv2d3x3Tiled</*OH=*/8, /*OW=*/16, /*Cout=*/32, /*Cin=*/8>(
           in_ptr, w_ptr, b_ptr, out_ptr, N, Cin, Cout, H, W, Ho, Wo, add_bias, do_relu, stream);
+    } else if (Cout >= 24) {
+      // Bayer student trunk 24→24 and post 6→24: one exact Cout tile (was 16+partial).
+      LaunchConv2d3x3Tiled</*OH=*/8, /*OW=*/16, /*Cout=*/24, /*Cin=*/8>(
+          in_ptr, w_ptr, b_ptr, out_ptr, N, Cin, Cout, H, W, Ho, Wo, add_bias, do_relu, stream);
     } else if (Cout >= 16) {
-      // Medium: post_conv (6→64 / 67→64), conv1 (4→64)
       LaunchConv2d3x3Tiled</*OH=*/8, /*OW=*/16, /*Cout=*/16, /*Cin=*/8>(
           in_ptr, w_ptr, b_ptr, out_ptr, N, Cin, Cout, H, W, Ho, Wo, add_bias, do_relu, stream);
     } else {
-      // Thin Cout (rare for demosaicnet 3×3): smaller cout tile
       LaunchConv2d3x3Tiled</*OH=*/8, /*OW=*/16, /*Cout=*/8, /*Cin=*/8>(
           in_ptr, w_ptr, b_ptr, out_ptr, N, Cin, Cout, H, W, Ho, Wo, add_bias, do_relu, stream);
     }

@@ -2,13 +2,13 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Phase 8.1: standalone DemosaicNet / Neural Engine performance harness.
+// Phase 8.1 + 8F: standalone DemosaicNet / Neural Engine performance harness.
 // Not a correctness suite — opt-in via ALCEDO_ENABLE_GPU_PERF_TESTS for ctest.
 //
 // Authoritative numbers: build Release and run:
 //   build\release\alcedo_studio\tests\DemosaicNetPerfHarness.exe ^
 //     --fixture bayer|xtrans|all --method legacy|neural|both --mode full|tile|conv ^
-//     --warmup 3 --iterations 20 --tile-size 1024 --lanes 1 ^
+//     --model student --warmup 3 --iterations 20 --tile-size 1024 --lanes 1 ^
 //     --output build/perf/demosaicnet.json
 
 #include <cuda_runtime.h>
@@ -43,6 +43,7 @@
 #include "cuda/nn/device_buffer.hpp"
 #include "cuda/nn/tensor.hpp"
 #include "cuda/nn/workspace.hpp"
+#include "decoders/processor/cuda_tile_jobs.hpp"
 #include "decoders/processor/nn/demosaicnet_bayer.hpp"
 #include "decoders/processor/nn/demosaicnet_cache.hpp"
 #include "decoders/processor/nn/demosaicnet_preprocess.hpp"
@@ -52,6 +53,7 @@
 #include "decoders/processor/raw_processor_internal.hpp"
 #include "decoders/processor/raw_processor_pattern.hpp"
 #include "demosaicnet_perf_metrics.hpp"
+#include "demosaicnet_perf_roofline.hpp"
 #include "image/image_buffer.hpp"
 
 #ifndef ALCEDO_GIT_COMMIT
@@ -68,6 +70,9 @@ namespace perf = alcedo::perf;
 enum class FixtureKind { Bayer, XTrans };
 enum class MethodKind { Legacy, Neural, Both };
 enum class ModeKind { Full, Tile, Conv };
+// Phase 8F: product path only ships the distilled students; keep the flag for
+// harness JSON identity and to reject obsolete teacher requests explicitly.
+enum class ModelKind { Student };
 
 struct HarnessConfig {
   FixtureKind fixture          = FixtureKind::Bayer;
@@ -75,6 +80,7 @@ struct HarnessConfig {
   bool        run_xtrans       = false;
   MethodKind  method           = MethodKind::Both;
   ModeKind    mode             = ModeKind::Full;
+  ModelKind   model            = ModelKind::Student;
   int         warmup           = 3;
   int         iterations       = 20;
   int         tile_size        = 1024;
@@ -110,9 +116,10 @@ void PrintUsage(const char* argv0) {
       << "  --fixture bayer|xtrans|all     Primary fixtures (default: bayer)\n"
       << "  --method legacy|neural|both    Method under test (default: both)\n"
       << "  --mode full|tile|conv          Measurement mode (default: full)\n"
+      << "  --model student                Hard-coded product topology (default; only value)\n"
       << "  --warmup N                     Warm-up iterations (default: 3)\n"
       << "  --iterations N                 Measured iterations (default: 20)\n"
-      << "  --tile-size N                  Inner tile edge for tile/conv (default: 1024)\n"
+      << "  --tile-size N                  Export tile output edge for tile/conv (default: 1024)\n"
       << "  --lanes N                      Recorded lane count (default: 1; multi-lane later)\n"
       << "  --profile-ranges               Named CUDA-event ranges (tile/conv)\n"
       << "  --output path.json             Write machine-readable JSON\n"
@@ -171,6 +178,16 @@ void PrintUsage(const char* argv0) {
         cfg.mode = ModeKind::Conv;
       } else {
         throw std::runtime_error("unknown --mode " + v);
+      }
+    } else if (arg == "--model") {
+      const auto v = need("--model");
+      if (v == "student") {
+        cfg.model = ModelKind::Student;
+      } else if (v == "teacher") {
+        throw std::runtime_error(
+            "--model teacher is retired; Phase 8 product path is --model student only");
+      } else {
+        throw std::runtime_error("unknown --model " + v + " (expected student)");
       }
     } else if (arg == "--warmup") {
       cfg.warmup = std::stoi(need("--warmup"));
@@ -261,6 +278,86 @@ void PrintUsage(const char* argv0) {
   return processor.Process();
 }
 
+struct ProductTilePlanSummary {
+  int aligned_width      = 0;
+  int aligned_height     = 0;
+  int phase_sx           = 0;
+  int phase_sy           = 0;
+  int tile_count         = 0;
+  int tiles_x            = 0;
+  int tiles_y            = 0;
+  int tile_input         = 0;
+  int tile_output        = 0;
+  int tile_step          = 0;
+  int virtual_pad        = 0;
+  int output_border      = 0;
+  int overlap_x          = 0;
+  int first_model_out_x  = 0;
+  int first_model_out_y  = 0;
+  int first_input_origin_x = 0;
+  int first_input_origin_y = 0;
+  std::string architecture;
+};
+
+[[nodiscard]] auto SummarizeStudentProductJobs(LibRaw& raw, const FixtureKind kind)
+    -> ProductTilePlanSummary {
+  ProductTilePlanSummary s;
+  const RawCfaPattern camera = ReadLibRawCfaPattern(raw);
+  const auto          shift  = FindCfaAlignShift(camera);
+  s.phase_sx                 = shift.has_value() ? shift->sx : 0;
+  s.phase_sy                 = shift.has_value() ? shift->sy : 0;
+
+  // Product ProcessCudaTiled covers the full uploaded CFA (raw dims), after phase crop + period
+  // trim — not only the LibRaw visible crop. Match that for FLOP / tile accounting.
+  const int raw_w  = static_cast<int>(raw.imgdata.sizes.raw_width);
+  const int raw_h  = static_cast<int>(raw.imgdata.sizes.raw_height);
+  const int period = CfaPeriod(camera.kind);
+  const int avail_w = raw_w - s.phase_sx;
+  const int avail_h = raw_h - s.phase_sy;
+  s.aligned_width  = avail_w - (avail_w % period);
+  s.aligned_height = avail_h - (avail_h % period);
+
+  const detail::CudaTilePolicy policy = kind == FixtureKind::Bayer
+                                            ? detail::MakeBayerStudentTilePolicy()
+                                            : detail::MakeXTransStudentTilePolicy();
+  s.tile_input    = policy.input_tile.width;
+  s.tile_output   = policy.output_tile.width;
+  s.tile_step     = policy.step.width;
+  s.virtual_pad   = policy.virtual_pad.x;
+  s.output_border = policy.output_border.x;
+  s.overlap_x     = std::max(0, s.tile_output - s.tile_step);
+  s.first_model_out_x = -s.virtual_pad + s.output_border;
+  s.first_model_out_y = s.first_model_out_x;
+  s.architecture =
+      kind == FixtureKind::Bayer ? BayerDemosaicNet::kArchitecture : XTransDemosaicNet::kArchitecture;
+
+  if (s.aligned_width < period || s.aligned_height < period) {
+    return s;
+  }
+  const cv::Rect cover(0, 0, s.aligned_width, s.aligned_height);
+  const auto     jobs =
+      detail::BuildTileJobs(cover, cv::Size(s.aligned_width, s.aligned_height), policy);
+  s.tile_count = static_cast<int>(jobs.size());
+  if (!jobs.empty()) {
+    s.first_input_origin_x = jobs.front().input_origin.x;
+    s.first_input_origin_y = jobs.front().input_origin.y;
+  }
+  // Recover grid extents from destinations / step.
+  int max_gx = 0;
+  int max_gy = 0;
+  for (const auto& job : jobs) {
+    const int gx =
+        (job.input_origin.x + s.virtual_pad - cover.x) / std::max(1, s.tile_step);
+    const int gy =
+        (job.input_origin.y + s.virtual_pad - cover.y) / std::max(1, s.tile_step);
+    max_gx = std::max(max_gx, gx);
+    max_gy = std::max(max_gy, gy);
+  }
+  s.tiles_x = max_gx + 1;
+  s.tiles_y = max_gy + 1;
+  return s;
+}
+
 struct FullFixtureResult {
   std::string   fixture_name;
   std::string   fixture_path;
@@ -272,6 +369,7 @@ struct FullFixtureResult {
   int           tile_count          = 0;
   int           tile_size           = 0;
   int           lanes               = 1;
+  ProductTilePlanSummary product_plan;
   double           cold_load_ms        = 0.0;
   perf::TimingStats legacy_stats;
   perf::TimingStats neural_stats;
@@ -282,19 +380,12 @@ struct FullFixtureResult {
   bool          allocation_stable    = true;
   std::size_t   free_bytes_after     = 0;
   std::size_t   total_bytes_after    = 0;
+  perf::RooflineReport roofline;
+  bool                 has_roofline = false;
 };
 
-[[nodiscard]] auto EstimateTileCount(const int active_w, const int active_h, const int tile_inner)
-    -> int {
-  if (active_w <= 0 || active_h <= 0 || tile_inner <= 0) {
-    return 0;
-  }
-  const int tiles_x = (active_w + tile_inner - 1) / tile_inner;
-  const int tiles_y = (active_h + tile_inner - 1) / tile_inner;
-  return tiles_x * tiles_y;
-}
-
-auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> FullFixtureResult {
+auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
+                 const perf::DeviceInfo& device) -> FullFixtureResult {
   FullFixtureResult result;
   result.fixture_name = fixture.name;
   result.fixture_path = fixture.path.string();
@@ -309,8 +400,8 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> FullFi
   result.active_megapixels =
       (static_cast<double>(result.active_width) * static_cast<double>(result.active_height)) /
       1.0e6;
-  result.tile_count =
-      EstimateTileCount(result.active_width, result.active_height, cfg.tile_size);
+  result.product_plan = SummarizeStudentProductJobs(*raw, fixture.kind);
+  result.tile_count   = result.product_plan.tile_count;
 
   const bool want_legacy = cfg.method == MethodKind::Legacy || cfg.method == MethodKind::Both;
   const bool want_neural = cfg.method == MethodKind::Neural || cfg.method == MethodKind::Both;
@@ -394,6 +485,21 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> FullFi
   cudaMemGetInfo(&free_b, &total_b);
   result.free_bytes_after  = free_b;
   result.total_bytes_after = total_b;
+
+  // Exact product FLOP / traffic roofline on the student grid that ProcessCudaTiled runs.
+  const auto topology = fixture.kind == FixtureKind::Bayer ? perf::DemosaicNetTopologyKind::Bayer
+                                                           : perf::DemosaicNetTopologyKind::XTrans;
+  const int cover_w = result.product_plan.aligned_width > 0 ? result.product_plan.aligned_width
+                                                            : result.active_width;
+  const int cover_h = result.product_plan.aligned_height > 0 ? result.product_plan.aligned_height
+                                                            : result.active_height;
+  const auto work = perf::EstimateFullFrameWork(topology, cover_w, cover_h, cfg.tile_size,
+                                                result.product_plan.tile_count);
+  const auto envelope = perf::EstimateDeviceComputeEnvelope(device);
+  result.roofline =
+      perf::BuildRooflineReport(work, envelope, result.neural_stats.median_ms,
+                                result.legacy_stats.median_ms, /*stretch_target_ms=*/100.0);
+  result.has_roofline = true;
   return result;
 }
 
@@ -427,13 +533,17 @@ auto RunTileMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> TileFi
   TileFixtureResult result;
   result.fixture_name = fixture.name;
 
-  const int border =
-      fixture.kind == FixtureKind::Bayer ? BayerDemosaicNet::kSpatialLoss / 2
-                                         : XTransDemosaicNet::kSpatialLoss / 2;
-  const int input_size  = cfg.tile_size + 2 * border;
-  const int output_size = cfg.tile_size;
-  result.input_size     = input_size;
-  result.output_size    = output_size;
+  // Fixed export-tile shapes (student product contract), not generic border=spatial/2.
+  const int input_size =
+      fixture.kind == FixtureKind::Bayer ? BayerDemosaicNet::kTileInput : XTransDemosaicNet::kTileInput;
+  const int output_size = fixture.kind == FixtureKind::Bayer ? BayerDemosaicNet::kTileOutput
+                                                             : XTransDemosaicNet::kTileOutput;
+  if (cfg.tile_size != output_size) {
+    std::cerr << "note: --tile-size " << cfg.tile_size << " ignored for student tile mode; using "
+              << input_size << "->" << output_size << " export contract\n";
+  }
+  result.input_size  = input_size;
+  result.output_size = output_size;
 
   RawCfaPattern pattern = DemosaicNetTrainingPattern(
       fixture.kind == FixtureKind::Bayer ? RawCfaKind::Bayer2x2 : RawCfaKind::XTrans6x6);
@@ -717,12 +827,29 @@ void AppendFullJson(std::string& out, const FullFixtureResult& r, const bool tra
   out += "{";
   perf::AppendJsonKeyString(out, "fixture", r.fixture_name);
   perf::AppendJsonKeyString(out, "path", r.fixture_path);
+  perf::AppendJsonKeyString(out, "architecture", r.product_plan.architecture);
   perf::AppendJsonKeyInt(out, "raw_width", r.raw_width);
   perf::AppendJsonKeyInt(out, "raw_height", r.raw_height);
   perf::AppendJsonKeyInt(out, "active_width", r.active_width);
   perf::AppendJsonKeyInt(out, "active_height", r.active_height);
   perf::AppendJsonKeyNumber(out, "active_megapixels", r.active_megapixels);
-  perf::AppendJsonKeyInt(out, "tile_count_est", r.tile_count);
+  perf::AppendJsonKeyInt(out, "aligned_cover_width", r.product_plan.aligned_width);
+  perf::AppendJsonKeyInt(out, "aligned_cover_height", r.product_plan.aligned_height);
+  perf::AppendJsonKeyInt(out, "phase_sx", r.product_plan.phase_sx);
+  perf::AppendJsonKeyInt(out, "phase_sy", r.product_plan.phase_sy);
+  perf::AppendJsonKeyInt(out, "tile_count", r.tile_count);
+  perf::AppendJsonKeyInt(out, "tiles_x", r.product_plan.tiles_x);
+  perf::AppendJsonKeyInt(out, "tiles_y", r.product_plan.tiles_y);
+  perf::AppendJsonKeyInt(out, "tile_input", r.product_plan.tile_input);
+  perf::AppendJsonKeyInt(out, "tile_output", r.product_plan.tile_output);
+  perf::AppendJsonKeyInt(out, "tile_step", r.product_plan.tile_step);
+  perf::AppendJsonKeyInt(out, "virtual_pad", r.product_plan.virtual_pad);
+  perf::AppendJsonKeyInt(out, "output_border", r.product_plan.output_border);
+  perf::AppendJsonKeyInt(out, "overlap_x", r.product_plan.overlap_x);
+  perf::AppendJsonKeyInt(out, "first_model_out_x", r.product_plan.first_model_out_x);
+  perf::AppendJsonKeyInt(out, "first_model_out_y", r.product_plan.first_model_out_y);
+  perf::AppendJsonKeyInt(out, "first_input_origin_x", r.product_plan.first_input_origin_x);
+  perf::AppendJsonKeyInt(out, "first_input_origin_y", r.product_plan.first_input_origin_y);
   perf::AppendJsonKeyInt(out, "tile_size", r.tile_size);
   perf::AppendJsonKeyInt(out, "lanes", r.lanes);
   perf::AppendJsonKeyNumber(out, "cold_load_ms", r.cold_load_ms);
@@ -747,7 +874,10 @@ void AppendFullJson(std::string& out, const FullFixtureResult& r, const bool tra
   perf::AppendJsonKeyInt(out, "cuda_free_bytes_after",
                          static_cast<std::int64_t>(r.free_bytes_after));
   perf::AppendJsonKeyInt(out, "cuda_total_bytes", static_cast<std::int64_t>(r.total_bytes_after),
-                         false);
+                         r.has_roofline);
+  if (r.has_roofline) {
+    perf::AppendJsonRooflineReport(out, "roofline", r.roofline, false);
+  }
   out += trailing ? "}," : "}";
 }
 
@@ -796,6 +926,8 @@ int main(int argc, char** argv) {
     perf::AppendJsonKeyInt(json, "warmup", cfg.warmup);
     perf::AppendJsonKeyInt(json, "iterations", cfg.iterations);
     perf::AppendJsonKeyBool(json, "profile_ranges", cfg.profile_ranges);
+    perf::AppendJsonKeyString(json, "model",
+                              cfg.model == ModelKind::Student ? "student" : "unknown");
 
     const char* mode_str = cfg.mode == ModeKind::Full   ? "full"
                            : cfg.mode == ModeKind::Tile ? "tile"
@@ -805,13 +937,27 @@ int main(int argc, char** argv) {
     if (cfg.mode == ModeKind::Full) {
       json += "\"fixtures\":[";
       for (std::size_t i = 0; i < fixtures.size(); ++i) {
-        const auto r = RunFullMode(fixtures[i], cfg);
-        std::cout << "\n--- full / " << r.fixture_name << " ---\n";
+        const auto r = RunFullMode(fixtures[i], cfg, device);
+        std::cout << "\n--- full / " << r.fixture_name << " / student "
+                  << r.product_plan.architecture << " ---\n";
         std::cout << "  raw " << r.raw_width << "x" << r.raw_height << "  active "
                   << r.active_width << "x" << r.active_height << " ("
                   << std::setprecision(3) << r.active_megapixels << " MP)\n";
-        std::cout << "  estimated tiles=" << r.tile_count << "  cold_load_ms=" << r.cold_load_ms
-                  << "\n";
+        std::cout << "  product cover " << r.product_plan.aligned_width << "x"
+                  << r.product_plan.aligned_height << "  phase=(" << r.product_plan.phase_sx
+                  << "," << r.product_plan.phase_sy << ")"
+                  << "  jobs=" << r.tile_count << " (" << r.product_plan.tiles_x << "x"
+                  << r.product_plan.tiles_y << ")\n";
+        std::cout << "  policy in=" << r.product_plan.tile_input
+                  << " out=" << r.product_plan.tile_output << " step=" << r.product_plan.tile_step
+                  << " pad=" << r.product_plan.virtual_pad
+                  << " border=" << r.product_plan.output_border
+                  << " overlap=" << r.product_plan.overlap_x
+                  << " first_model_out=(" << r.product_plan.first_model_out_x << ","
+                  << r.product_plan.first_model_out_y << ")"
+                  << " first_origin=(" << r.product_plan.first_input_origin_x << ","
+                  << r.product_plan.first_input_origin_y << ")\n";
+        std::cout << "  cold_load_ms=" << r.cold_load_ms << "\n";
         if (r.legacy_stats.count > 0) {
           perf::PrintTimingTable("Legacy full_process_hot_ms", r.legacy_stats,
                                  r.active_megapixels, r.tile_count);
@@ -827,7 +973,15 @@ int main(int argc, char** argv) {
                     << (r.neural_stats.median_ms / r.legacy_stats.median_ms)
                     << "  p95 ratio=" << (r.neural_stats.p95_ms / r.legacy_stats.p95_ms) << "\n";
           std::cout << "  stretch 100ms progress neural_p50=" << r.neural_stats.median_ms
-                    << " ms\n";
+                    << " ms  (target 100 ms, not a gate)\n";
+          std::cout << "  objective <=1.10: "
+                    << ((r.neural_stats.median_ms / r.legacy_stats.median_ms) <= 1.10
+                            ? "MET"
+                            : "miss — see roofline")
+                    << "\n";
+        }
+        if (r.has_roofline) {
+          perf::PrintRooflineReport(r.roofline);
         }
         AppendFullJson(json, r, i + 1 < fixtures.size());
       }

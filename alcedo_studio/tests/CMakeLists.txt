@@ -227,6 +227,7 @@ if(ALCEDO_CUDA_ENABLED)
   add_executable(DemosaicNetPerfHarness
     perf/demosaicnet_perf_harness.cpp
     perf/demosaicnet_perf_metrics.cpp
+    perf/demosaicnet_perf_roofline.cpp
   )
   target_include_directories(DemosaicNetPerfHarness PRIVATE
     ${ALCEDO_INCLUDE_DIR}

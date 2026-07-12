@@ -72,24 +72,34 @@ struct TopologyAccounting {
 
 // Full-frame scale of one fixed-shape tile graph (product reflect-pads edge
 // tiles to the same input size, so every job pays the full tile FLOP budget).
+// Dimensions are the *aligned CFA cover* that BuildTileJobs schedules over
+// (product neural path), not the LibRaw visible crop alone.
 struct FullFrameWorkEstimate {
   TopologyAccounting per_tile;
-  int                tile_inner     = 0;
-  int                source_border  = 0;
-  int                active_width   = 0;
+  int                tile_inner     = 0;   // owned/export output edge (1024)
+  int                tile_step      = 0;   // Bayer 1024 / X-Trans 1020
+  int                virtual_pad    = 0;   // Bayer 32 / X-Trans 12
+  int                source_border  = 0;   // Bayer 31 / X-Trans 12 (tile-local)
+  int                cover_width    = 0;   // aligned CFA / assembled RGB size
+  int                cover_height   = 0;
+  int                active_width   = 0;   // alias of cover_* (JSON compatibility)
   int                active_height  = 0;
   int                tiles_x        = 0;
   int                tiles_y        = 0;
   int                tile_count     = 0;
+  int                overlap_x      = 0;   // max(0, output - step)  (X-Trans: 4)
+  int                overlap_y      = 0;
+  int                first_model_out_x = 0;  // Bayer: -1; X-Trans: 0
+  int                first_model_out_y = 0;
   std::int64_t       full_conv_flops    = 0;
   std::int64_t       full_all_flops     = 0;
   std::int64_t       full_bytes_read    = 0;
   std::int64_t       full_bytes_written = 0;
   std::int64_t       full_bytes_traffic = 0;
-  // Unique active output pixels vs work paid (halo + edge-pad duplication).
+  // Unique cover output pixels vs work paid (halo + inter-tile overlap).
   double             active_output_megapixels = 0.0;
   double             paid_tile_output_megapixels = 0.0;  // tile_count * tile_out^2
-  double             halo_work_factor = 1.0;  // paid / active ( >= 1 )
+  double             halo_work_factor = 1.0;  // paid / cover ( >= 1 )
 };
 
 // Device capability envelope used as the Phase 8.2 decision reference.
@@ -172,9 +182,13 @@ struct RooflineReport {
 [[nodiscard]] auto BuildTileAccounting(DemosaicNetTopologyKind kind, int tile_output,
                                        int batch = 1) -> TopologyAccounting;
 
-// tile_count = ceil(active_w/inner) * ceil(active_h/inner); every tile pays full FLOPs.
-[[nodiscard]] auto EstimateFullFrameWork(DemosaicNetTopologyKind kind, int active_w, int active_h,
-                                         int tile_inner) -> FullFrameWorkEstimate;
+// Product student grid: Bayer pad32/border31/step1024, X-Trans pad12/border12/step1020.
+// `cover_w/h` is the aligned CFA size scheduled by BuildTileJobs. Every job pays full
+// fixed-shape tile FLOPs (edge tiles are virtually reflect-padded to kTileInput).
+// Optional explicit tile_count overrides the product planner count (tests/harness).
+[[nodiscard]] auto EstimateFullFrameWork(DemosaicNetTopologyKind kind, int cover_w, int cover_h,
+                                         int tile_inner = 1024, int tile_count_override = -1)
+    -> FullFrameWorkEstimate;
 
 [[nodiscard]] auto EstimateDeviceComputeEnvelope(const DeviceInfo& info) -> DeviceComputeEnvelope;
 
