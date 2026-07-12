@@ -20,8 +20,20 @@
 namespace alcedo::CUDA {
 namespace {
 
+// Host-side wait counter for Phase 8E tests (Enqueue paths never touch this).
+std::uint64_t g_neural_engine_host_sync_count = 0;
+
 auto GetCudaStream(cv::cuda::Stream* stream) -> cudaStream_t {
   return stream == nullptr ? nullptr : cv::cuda::StreamAccessor::getStream(*stream);
+}
+
+void WaitForNeuralEngineCompletion(cv::cuda::Stream* stream, const char* sync_label) {
+  ++g_neural_engine_host_sync_count;
+  if (stream == nullptr) {
+    cuda::nn::CheckCuda(cudaDeviceSynchronize(), sync_label);
+  } else {
+    stream->waitForCompletion();
+  }
 }
 
 __global__ void PackCfaMosaicKernel(const cv::cuda::PtrStepSz<float> cfa, float* mosaic,
@@ -201,11 +213,22 @@ void PackReflectPaddedCfaTile(const cv::cuda::GpuMat& aligned_cfa, const cv::Poi
   cuda::nn::CheckCuda(cudaGetLastError(), "PackReflectPaddedCfaTileKernel launch");
 }
 
-auto DemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPattern& pattern,
-                              cv::cuda::GpuMat& rgb, cv::cuda::Stream* stream,
-                              const NeuralDemosaicOptions& options) -> NeuralDemosaicResult {
+void ResetNeuralEngineHostSyncCountForTest() { g_neural_engine_host_sync_count = 0; }
+
+auto NeuralEngineHostSyncCountForTest() noexcept -> std::uint64_t {
+  return g_neural_engine_host_sync_count;
+}
+
+auto EnqueueDemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPattern& pattern,
+                                     cv::cuda::GpuMat& rgb, cv::cuda::Stream* stream,
+                                     const NeuralDemosaicOptions& options) -> NeuralDemosaicResult {
   NeuralDemosaicResult result;
   try {
+    if (options.workspace == nullptr) {
+      result.error = "EnqueueDemosaicWithNeuralEngine requires options.workspace "
+                     "(async buffers must outlive enqueued work)";
+      return result;
+    }
     if (cfa.empty() || cfa.type() != CV_32FC1) {
       throw std::runtime_error("Neural Engine requires a non-empty CV_32FC1 CFA image");
     }
@@ -248,7 +271,7 @@ auto DemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPattern& 
     result.source_border = (height - output_height) / 2;
     const std::size_t output_numel = static_cast<std::size_t>(3) * output_height * output_width;
 
-    const cudaStream_t cuda_stream   = GetCudaStream(stream);
+    const cudaStream_t cuda_stream = GetCudaStream(stream);
 
     DemosaicNetModelCache& cache =
         options.model_cache == nullptr ? DemosaicNetModelCache::Instance() : *options.model_cache;
@@ -262,9 +285,7 @@ auto DemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPattern& 
       return result;
     }
 
-    NeuralDemosaicWorkspace  local_workspace;
-    NeuralDemosaicWorkspace& workspace =
-        options.workspace == nullptr ? local_workspace : *options.workspace;
+    NeuralDemosaicWorkspace& workspace = *options.workspace;
     workspace.EnsureCapacity(variant, height, width, input_numel, output_numel);
     auto input_tensor =
         cuda::nn::DeviceTensor::Contiguous(workspace.input_buffer().data(), {1, 3, height, width});
@@ -282,12 +303,8 @@ auto DemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPattern& 
 
     cv::cuda::GpuMat& neural_rgb = workspace.rgb_buffer();
     cuda::nn::UnpackNchwToHwc(output_tensor, neural_rgb, cuda_stream);
-    if (stream == nullptr) {
-      cuda::nn::CheckCuda(cudaDeviceSynchronize(), "DemosaicWithNeuralEngine sync");
-    } else {
-      stream->waitForCompletion();
-    }
-    rgb              = options.workspace == nullptr ? std::move(neural_rgb) : neural_rgb;
+    // No host wait: caller owns workspace for the lifetime of enqueued work.
+    rgb              = neural_rgb;
     result.succeeded = true;
     result.error.clear();
     return result;
@@ -297,14 +314,46 @@ auto DemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPattern& 
   }
 }
 
-auto DemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_cfa,
-                                         const cv::Point input_origin,
-                                         const RawCfaPattern& training_pattern,
-                                         cv::cuda::GpuMat& rgb, cv::cuda::Stream* stream,
-                                         const NeuralDemosaicOptions& options)
+auto DemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPattern& pattern,
+                              cv::cuda::GpuMat& rgb, cv::cuda::Stream* stream,
+                              const NeuralDemosaicOptions& options) -> NeuralDemosaicResult {
+  NeuralDemosaicWorkspace  local_workspace;
+  NeuralDemosaicOptions    opts = options;
+  if (opts.workspace == nullptr) {
+    opts.workspace = &local_workspace;
+  }
+  const auto result = EnqueueDemosaicWithNeuralEngine(cfa, pattern, rgb, stream, opts);
+  if (!result.succeeded) {
+    return result;
+  }
+  try {
+    WaitForNeuralEngineCompletion(stream, "DemosaicWithNeuralEngine sync");
+  } catch (const std::exception& e) {
+    NeuralDemosaicResult failed;
+    failed.error = e.what();
+    return failed;
+  }
+  // When the caller did not supply a workspace, transfer RGB ownership out of the local one
+  // (GpuMat is refcounted; move keeps a unique owner after local_workspace dies).
+  if (options.workspace == nullptr) {
+    rgb = std::move(local_workspace.rgb_buffer());
+  }
+  return result;
+}
+
+auto EnqueueDemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_cfa,
+                                                const cv::Point input_origin,
+                                                const RawCfaPattern& training_pattern,
+                                                cv::cuda::GpuMat& rgb, cv::cuda::Stream* stream,
+                                                const NeuralDemosaicOptions& options)
     -> NeuralDemosaicResult {
   NeuralDemosaicResult result;
   try {
+    if (options.workspace == nullptr) {
+      result.error = "EnqueueDemosaicStudentTileWithNeuralEngine requires options.workspace "
+                     "(async buffers must outlive enqueued work)";
+      return result;
+    }
     if (aligned_cfa.empty() || aligned_cfa.type() != CV_32FC1) {
       throw std::runtime_error("Student tile Neural Engine requires non-empty CV_32FC1 CFA");
     }
@@ -338,9 +387,7 @@ auto DemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_cfa,
       return result;
     }
 
-    NeuralDemosaicWorkspace  local_workspace;
-    NeuralDemosaicWorkspace& workspace =
-        options.workspace == nullptr ? local_workspace : *options.workspace;
+    NeuralDemosaicWorkspace& workspace = *options.workspace;
     workspace.EnsureCapacity(variant, tile_h, tile_w, input_numel, output_numel);
 
     auto input_tensor =
@@ -361,13 +408,9 @@ auto DemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_cfa,
 
     cv::cuda::GpuMat& neural_rgb = workspace.rgb_buffer();
     cuda::nn::UnpackNchwToHwc(output_tensor, neural_rgb, cuda_stream);
-    if (stream == nullptr) {
-      cuda::nn::CheckCuda(cudaDeviceSynchronize(), "DemosaicStudentTileWithNeuralEngine sync");
-    }
     // Product tiled path reuses workspace RGB without a per-tile stream wait; stream
-    // ordering serializes pack → forward → unpack → ROI copy. Null-stream callers still
-    // synchronized above.
-    rgb              = options.workspace == nullptr ? std::move(neural_rgb) : neural_rgb;
+    // ordering serializes pack → forward → unpack → ROI copy.
+    rgb              = neural_rgb;
     result.succeeded = true;
     result.error.clear();
     return result;
@@ -375,6 +418,36 @@ auto DemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_cfa,
     result.error = e.what();
     return result;
   }
+}
+
+auto DemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_cfa,
+                                         const cv::Point input_origin,
+                                         const RawCfaPattern& training_pattern,
+                                         cv::cuda::GpuMat& rgb, cv::cuda::Stream* stream,
+                                         const NeuralDemosaicOptions& options)
+    -> NeuralDemosaicResult {
+  NeuralDemosaicWorkspace  local_workspace;
+  NeuralDemosaicOptions    opts = options;
+  if (opts.workspace == nullptr) {
+    opts.workspace = &local_workspace;
+  }
+  const auto result =
+      EnqueueDemosaicStudentTileWithNeuralEngine(aligned_cfa, input_origin, training_pattern, rgb,
+                                                 stream, opts);
+  if (!result.succeeded) {
+    return result;
+  }
+  try {
+    WaitForNeuralEngineCompletion(stream, "DemosaicStudentTileWithNeuralEngine sync");
+  } catch (const std::exception& e) {
+    NeuralDemosaicResult failed;
+    failed.error = e.what();
+    return failed;
+  }
+  if (options.workspace == nullptr) {
+    rgb = std::move(local_workspace.rgb_buffer());
+  }
+  return result;
 }
 
 }  // namespace alcedo::CUDA

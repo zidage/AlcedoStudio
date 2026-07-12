@@ -1141,6 +1141,296 @@ TEST(CudaRawOpsTest, NeuralEngineWorkspaceAllocationGenerationStableAfterWarmup)
 #endif
 }
 
+namespace {
+
+void ExpectRgbMatsNear(const cv::Mat& a, const cv::Mat& b, const float abs_tol = 1e-5F) {
+  ASSERT_EQ(a.type(), CV_32FC3);
+  ASSERT_EQ(b.type(), CV_32FC3);
+  ASSERT_EQ(a.size(), b.size());
+  for (int y = 0; y < a.rows; ++y) {
+    const auto* row_a = a.ptr<cv::Vec3f>(y);
+    const auto* row_b = b.ptr<cv::Vec3f>(y);
+    for (int x = 0; x < a.cols; ++x) {
+      for (int c = 0; c < 3; ++c) {
+        EXPECT_NEAR(row_a[x][c], row_b[x][c], abs_tol) << "pixel " << x << "," << y << " c=" << c;
+      }
+    }
+  }
+}
+
+}  // namespace
+
+// Purpose: Phase 8E — Enqueue + one host wait matches the synchronous Bayer student forward
+// bit-for-bit within FP32 noise (same weights, same workspace shape).
+TEST(CudaRawOpsTest, NeuralEngineAsyncBayerStudentMatchesSynchronousForward) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA is not enabled in this build.";
+#else
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
+  }
+
+  constexpr int kInput = BayerDemosaicNet::kTileInput;
+  cv::Mat       host(kInput, kInput, CV_32FC1);
+  for (int y = 0; y < kInput; ++y) {
+    for (int x = 0; x < kInput; ++x) {
+      host.at<float>(y, x) = static_cast<float>((y * 13 + x * 29) % 251) / 251.0F;
+    }
+  }
+  cv::cuda::GpuMat        gpu_cfa(host);
+  const RawCfaPattern     pattern = DemosaicNetTrainingPattern(RawCfaKind::Bayer2x2);
+  DemosaicNetModelCache   cache;
+  CUDA::NeuralDemosaicOptions options;
+  options.model_cache = &cache;
+
+  CUDA::NeuralDemosaicWorkspace sync_ws;
+  options.workspace = &sync_ws;
+  cv::cuda::GpuMat sync_rgb;
+  const auto       sync_result =
+      CUDA::DemosaicWithNeuralEngine(gpu_cfa, pattern, sync_rgb, nullptr, options);
+  ASSERT_TRUE(sync_result.succeeded) << sync_result.error;
+
+  CUDA::NeuralDemosaicWorkspace async_ws;
+  options.workspace = &async_ws;
+  cv::cuda::Stream stream;
+  cv::cuda::GpuMat async_rgb;
+  CUDA::ResetNeuralEngineHostSyncCountForTest();
+  const auto async_result =
+      CUDA::EnqueueDemosaicWithNeuralEngine(gpu_cfa, pattern, async_rgb, &stream, options);
+  ASSERT_TRUE(async_result.succeeded) << async_result.error;
+  EXPECT_EQ(CUDA::NeuralEngineHostSyncCountForTest(), 0u)
+      << "Enqueue must not host-synchronize";
+  stream.waitForCompletion();
+
+  cv::Mat host_sync;
+  cv::Mat host_async;
+  sync_rgb.download(host_sync);
+  async_rgb.download(host_async);
+  ASSERT_EQ(host_sync.size(), cv::Size(BayerDemosaicNet::kTileOutput, BayerDemosaicNet::kTileOutput));
+  ExpectRgbMatsNear(host_sync, host_async);
+#endif
+}
+
+// Purpose: Phase 8E — Enqueue + one host wait matches the synchronous X-Trans student forward.
+TEST(CudaRawOpsTest, NeuralEngineAsyncXTransStudentMatchesSynchronousForward) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA is not enabled in this build.";
+#else
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
+  }
+
+  constexpr int kInput = XTransDemosaicNet::kTileInput;
+  cv::Mat       host(kInput, kInput, CV_32FC1);
+  for (int y = 0; y < kInput; ++y) {
+    for (int x = 0; x < kInput; ++x) {
+      host.at<float>(y, x) = static_cast<float>((y * 17 + x * 23) % 241) / 241.0F;
+    }
+  }
+  cv::cuda::GpuMat        gpu_cfa(host);
+  const RawCfaPattern     pattern = DemosaicNetTrainingPattern(RawCfaKind::XTrans6x6);
+  DemosaicNetModelCache   cache;
+  CUDA::NeuralDemosaicOptions options;
+  options.model_cache = &cache;
+
+  CUDA::NeuralDemosaicWorkspace sync_ws;
+  options.workspace = &sync_ws;
+  cv::cuda::GpuMat sync_rgb;
+  const auto       sync_result =
+      CUDA::DemosaicWithNeuralEngine(gpu_cfa, pattern, sync_rgb, nullptr, options);
+  ASSERT_TRUE(sync_result.succeeded) << sync_result.error;
+
+  CUDA::NeuralDemosaicWorkspace async_ws;
+  options.workspace = &async_ws;
+  cv::cuda::Stream stream;
+  cv::cuda::GpuMat async_rgb;
+  CUDA::ResetNeuralEngineHostSyncCountForTest();
+  const auto async_result =
+      CUDA::EnqueueDemosaicWithNeuralEngine(gpu_cfa, pattern, async_rgb, &stream, options);
+  ASSERT_TRUE(async_result.succeeded) << async_result.error;
+  EXPECT_EQ(CUDA::NeuralEngineHostSyncCountForTest(), 0u);
+  stream.waitForCompletion();
+
+  cv::Mat host_sync;
+  cv::Mat host_async;
+  sync_rgb.download(host_sync);
+  async_rgb.download(host_async);
+  ASSERT_EQ(host_sync.size(),
+            cv::Size(XTransDemosaicNet::kTileOutput, XTransDemosaicNet::kTileOutput));
+  ExpectRgbMatsNear(host_sync, host_async);
+#endif
+}
+
+// Purpose: Phase 8E product loop — one stream, one fixed workspace, enqueue pack/forward/unpack
+// then owned ROI copy for every job; single wait after all tiles; no mid-loop buffer growth.
+TEST(CudaRawOpsTest, ProcessCudaTiled_StudentSingleStreamReusesBuffersAfterQueuedRoiCopy) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA is not enabled in this build.";
+#else
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
+  }
+
+  constexpr int kW = 2048;
+  constexpr int kH = 1024;
+  cv::Mat       host(kH, kW, CV_32FC1);
+  for (int y = 0; y < kH; ++y) {
+    for (int x = 0; x < kW; ++x) {
+      host.at<float>(y, x) = static_cast<float>((y * 31 + x * 17) % 251) / 251.0F;
+    }
+  }
+  cv::cuda::GpuMat             gpu_cfa(host);
+  const RawCfaPattern          pattern = DemosaicNetTrainingPattern(RawCfaKind::Bayer2x2);
+  const detail::CudaTilePolicy policy  = detail::MakeBayerStudentTilePolicy();
+  const auto jobs =
+      detail::BuildTileJobs(cv::Rect(0, 0, kW, kH), cv::Size(kW, kH), policy);
+  ASSERT_GE(jobs.size(), 2u);
+
+  cv::cuda::Stream              stream;
+  cv::cuda::GpuMat              assembled(kH, kW, CV_32FC3);
+  assembled.setTo(cv::Scalar(0, 0, 0), stream);
+  cv::cuda::GpuMat              tile_rgb;
+  DemosaicNetModelCache         cache;
+  CUDA::NeuralDemosaicWorkspace workspace;
+  CUDA::NeuralDemosaicOptions   options;
+  options.model_cache = &cache;
+  options.workspace   = &workspace;
+
+  // Warm fixed student shape before the first tile enqueue (product contract).
+  workspace.EnsureCapacity(
+      DemosaicNetVariant::Bayer, BayerDemosaicNet::kTileInput, BayerDemosaicNet::kTileInput,
+      static_cast<std::size_t>(3) * BayerDemosaicNet::kTileInput * BayerDemosaicNet::kTileInput,
+      static_cast<std::size_t>(3) * BayerDemosaicNet::kTileOutput * BayerDemosaicNet::kTileOutput);
+  ASSERT_TRUE(cache.EnsureLoaded(DemosaicNetVariant::Bayer, {})) << cache.LastError();
+  const std::uint64_t gen_after_warm = workspace.allocation_generation();
+  ASSERT_GT(gen_after_warm, 0u);
+
+  CUDA::ResetNeuralEngineHostSyncCountForTest();
+  for (const auto& job : jobs) {
+    const auto result = CUDA::EnqueueDemosaicStudentTileWithNeuralEngine(
+        gpu_cfa, job.input_origin, pattern, tile_rgb, &stream, options);
+    ASSERT_TRUE(result.succeeded) << result.error;
+    EXPECT_EQ(workspace.allocation_generation(), gen_after_warm);
+    tile_rgb(job.model_output_roi).copyTo(assembled(job.destination_roi), stream);
+  }
+  EXPECT_EQ(CUDA::NeuralEngineHostSyncCountForTest(), 0u)
+      << "student tile Enqueue path must not host-synchronize mid-loop";
+  // One final product-boundary wait (mirrors ProcessCudaTiled).
+  stream.waitForCompletion();
+
+  cv::Mat host_rgb;
+  assembled.download(host_rgb);
+  ASSERT_EQ(host_rgb.size(), cv::Size(kW, kH));
+  for (int y = 0; y < kH; y += 64) {
+    for (int x = 0; x < kW; x += 64) {
+      const cv::Vec3f p = host_rgb.at<cv::Vec3f>(y, x);
+      for (int c = 0; c < 3; ++c) {
+        EXPECT_TRUE(std::isfinite(p[c]));
+      }
+    }
+  }
+#endif
+}
+
+// Purpose: Phase 8E — after EnsureCapacity for the fixed student tile shape, repeated
+// Enqueue student tiles must not bump allocation_generation.
+TEST(CudaRawOpsTest, NeuralEngineStudentWorkspaceGenerationStableAfterWarmup) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA is not enabled in this build.";
+#else
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
+  }
+
+  constexpr int kAligned = 2048;
+  cv::Mat       host(kAligned, kAligned, CV_32FC1);
+  cv::randu(host, 0.05F, 0.95F);
+  cv::cuda::GpuMat             gpu_cfa(host);
+  const RawCfaPattern          pattern = DemosaicNetTrainingPattern(RawCfaKind::Bayer2x2);
+  const detail::CudaTilePolicy policy  = detail::MakeBayerStudentTilePolicy();
+  const auto jobs =
+      detail::BuildTileJobs(cv::Rect(0, 0, kAligned, kAligned), cv::Size(kAligned, kAligned),
+                            policy);
+  ASSERT_FALSE(jobs.empty());
+
+  DemosaicNetModelCache         cache;
+  CUDA::NeuralDemosaicWorkspace workspace;
+  CUDA::NeuralDemosaicOptions   options;
+  options.model_cache = &cache;
+  options.workspace   = &workspace;
+  workspace.EnsureCapacity(
+      DemosaicNetVariant::Bayer, BayerDemosaicNet::kTileInput, BayerDemosaicNet::kTileInput,
+      static_cast<std::size_t>(3) * BayerDemosaicNet::kTileInput * BayerDemosaicNet::kTileInput,
+      static_cast<std::size_t>(3) * BayerDemosaicNet::kTileOutput * BayerDemosaicNet::kTileOutput);
+  ASSERT_TRUE(cache.EnsureLoaded(DemosaicNetVariant::Bayer, {})) << cache.LastError();
+  const std::uint64_t gen = workspace.allocation_generation();
+  ASSERT_GT(gen, 0u);
+
+  cv::cuda::Stream stream;
+  cv::cuda::GpuMat tile_rgb;
+  for (std::size_t i = 0; i < std::min<std::size_t>(jobs.size(), 4); ++i) {
+    const auto result = CUDA::EnqueueDemosaicStudentTileWithNeuralEngine(
+        gpu_cfa, jobs[i].input_origin, pattern, tile_rgb, &stream, options);
+    ASSERT_TRUE(result.succeeded) << result.error;
+    EXPECT_EQ(workspace.allocation_generation(), gen) << "tile " << i;
+  }
+  stream.waitForCompletion();
+#endif
+}
+
+// Purpose: Phase 8E — synchronous wrappers perform exactly one host wait per call;
+// Enqueue performs zero. A multi-tile timed-style pass uses only Enqueue (no wrapper waits).
+TEST(CudaRawOpsTest, NeuralEngineStudentTimedPassHasOneFinalSynchronization) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA is not enabled in this build.";
+#else
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
+  }
+
+  constexpr int kInput = BayerDemosaicNet::kTileInput;
+  cv::Mat       host(kInput, kInput, CV_32FC1);
+  cv::randu(host, 0.0F, 1.0F);
+  cv::cuda::GpuMat      gpu_cfa(host);
+  const RawCfaPattern   pattern = DemosaicNetTrainingPattern(RawCfaKind::Bayer2x2);
+  DemosaicNetModelCache cache;
+  CUDA::NeuralDemosaicWorkspace workspace;
+  CUDA::NeuralDemosaicOptions   options;
+  options.model_cache = &cache;
+  options.workspace   = &workspace;
+
+  // Warm once outside the measured-style pass.
+  {
+    cv::cuda::GpuMat warm_rgb;
+    ASSERT_TRUE(
+        CUDA::DemosaicWithNeuralEngine(gpu_cfa, pattern, warm_rgb, nullptr, options).succeeded);
+  }
+  const std::uint64_t gen = workspace.allocation_generation();
+
+  CUDA::ResetNeuralEngineHostSyncCountForTest();
+  cv::cuda::GpuMat sync_rgb;
+  ASSERT_TRUE(
+      CUDA::DemosaicWithNeuralEngine(gpu_cfa, pattern, sync_rgb, nullptr, options).succeeded);
+  EXPECT_EQ(CUDA::NeuralEngineHostSyncCountForTest(), 1u);
+  EXPECT_EQ(workspace.allocation_generation(), gen);
+
+  CUDA::ResetNeuralEngineHostSyncCountForTest();
+  cv::cuda::Stream stream;
+  cv::cuda::GpuMat async_rgb;
+  for (int i = 0; i < 3; ++i) {
+    ASSERT_TRUE(CUDA::EnqueueDemosaicWithNeuralEngine(gpu_cfa, pattern, async_rgb, &stream, options)
+                    .succeeded);
+  }
+  EXPECT_EQ(CUDA::NeuralEngineHostSyncCountForTest(), 0u)
+      << "Enqueue path must not host-synchronize during a multi-tile timed pass";
+  EXPECT_EQ(workspace.allocation_generation(), gen);
+  // Single final product-boundary synchronization.
+  stream.waitForCompletion();
+  EXPECT_EQ(CUDA::NeuralEngineHostSyncCountForTest(), 0u)
+      << "product wait is outside the Neural Engine wrappers";
+#endif
+}
+
 TEST(CudaRawOpsTest, ProcessCudaTiled_NeuralEngineBayerAssemblesActiveAreaFromRealRaw) {
 #ifndef HAVE_CUDA
   GTEST_SKIP() << "CUDA is not enabled in this build.";

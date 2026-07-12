@@ -104,9 +104,19 @@ struct NeuralDemosaicResult {
 // dimensions drop the trailing row/column so the 2x2 pack remains phase-aligned.
 //
 // Failure is soft: `rgb` is left untouched and the caller can run Legacy demosaic instead.
+// Synchronous wrapper: enqueues then waits so `rgb` is complete when this returns.
 auto DemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPattern& pattern,
                               cv::cuda::GpuMat& rgb, cv::cuda::Stream* stream = nullptr,
                               const NeuralDemosaicOptions& options = {}) -> NeuralDemosaicResult;
+
+// Asynchronous full-frame / free-size Neural Engine forward (Phase 8E).
+// Requires `options.workspace` (caller owns input/activation/RGB buffers for the lifetime of
+// enqueued work). Lazy-loads weights on first use. Enqueues pack → forward → unpack and
+// returns without host/device synchronization. Soft-fail leaves `rgb` untouched.
+auto EnqueueDemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPattern& pattern,
+                                     cv::cuda::GpuMat& rgb, cv::cuda::Stream* stream = nullptr,
+                                     const NeuralDemosaicOptions& options = {})
+    -> NeuralDemosaicResult;
 
 // Product student tile: fused virtual-pad pack + fixed-shape student forward + HWC unpack.
 // Always uses the bundled student tile shapes (Bayer 1086→1024, X-Trans 1048→1024).
@@ -114,11 +124,29 @@ auto DemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPattern& 
 // `input_origin` is signed in the aligned CFA lattice (may be negative under virtual pad).
 // On success, `rgb` references the workspace HWC buffer (1024²) when `options.workspace` is set;
 // otherwise `rgb` owns a copy. Soft-fail leaves `rgb` untouched.
+// Synchronous wrapper: enqueues then waits so `rgb` is complete when this returns.
 auto DemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_cfa,
                                          cv::Point input_origin,
                                          const RawCfaPattern& training_pattern,
                                          cv::cuda::GpuMat& rgb, cv::cuda::Stream* stream = nullptr,
                                          const NeuralDemosaicOptions& options = {})
     -> NeuralDemosaicResult;
+
+// Asynchronous student tile forward (Phase 8E). Same contract as
+// DemosaicStudentTileWithNeuralEngine but never synchronizes. Requires
+// `options.workspace`. Product tiled decode enqueues pack → forward → unpack → ROI copy
+// per job on one stream, then waits once at the product completion boundary.
+auto EnqueueDemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_cfa,
+                                                cv::Point input_origin,
+                                                const RawCfaPattern& training_pattern,
+                                                cv::cuda::GpuMat& rgb,
+                                                cv::cuda::Stream* stream = nullptr,
+                                                const NeuralDemosaicOptions& options = {})
+    -> NeuralDemosaicResult;
+
+// Test/observability: host-side waits performed by the synchronous Neural Engine wrappers
+// (not by Enqueue*). Reset to 0 before a timed/async assertion pass.
+void ResetNeuralEngineHostSyncCountForTest();
+[[nodiscard]] auto NeuralEngineHostSyncCountForTest() noexcept -> std::uint64_t;
 
 }  // namespace alcedo::CUDA

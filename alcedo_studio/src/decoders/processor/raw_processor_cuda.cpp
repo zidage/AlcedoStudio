@@ -11,6 +11,7 @@
 #include <chrono>
 #include <iostream>
 #include <opencv2/core/cuda.hpp>
+#include <opencv2/core/cuda_stream_accessor.hpp>
 #include <sstream>
 #include <stdexcept>
 #include <vector>
@@ -427,9 +428,9 @@ auto RawProcessor::ProcessCudaTiled() -> ImageBuffer {
         neural_tiled_error = "Neural Engine tiled input is empty";
       } else {
         try {
-          const detail::CudaTilePolicy policy = cfa_pattern_.kind == RawCfaKind::Bayer2x2
-                                                    ? detail::MakeBayerStudentTilePolicy()
-                                                    : detail::MakeXTransStudentTilePolicy();
+          const bool is_bayer = cfa_pattern_.kind == RawCfaKind::Bayer2x2;
+          const detail::CudaTilePolicy policy = is_bayer ? detail::MakeBayerStudentTilePolicy()
+                                                         : detail::MakeXTransStudentTilePolicy();
           const cv::Rect neural_active_rect(0, 0, neural_cfa.cols, neural_cfa.rows);
           const auto     jobs = BuildTileJobs(neural_active_rect, neural_cfa.size(), policy);
 
@@ -439,10 +440,37 @@ auto RawProcessor::ProcessCudaTiled() -> ImageBuffer {
           CUDA::NeuralDemosaicOptions   neural_options;
           neural_options.workspace = &neural_workspace;
 
+          // Phase 8E: warm model + fixed student workspace before the first tile enqueue.
+          // After this point, no cudaMalloc / GpuMat::create growth is expected on the hot path.
+          const DemosaicNetVariant variant =
+              is_bayer ? DemosaicNetVariant::Bayer : DemosaicNetVariant::XTrans;
+          const int tile_h =
+              is_bayer ? BayerDemosaicNet::kTileInput : XTransDemosaicNet::kTileInput;
+          const int tile_w = tile_h;
+          const int out_h =
+              is_bayer ? BayerDemosaicNet::kTileOutput : XTransDemosaicNet::kTileOutput;
+          const int out_w = out_h;
+          {
+            DemosaicNetModelCache& cache = DemosaicNetModelCache::Instance();
+            DemosaicNetLoadOptions load_options;
+            load_options.stream = cv::cuda::StreamAccessor::getStream(stream);
+            if (!cache.EnsureLoaded(variant, load_options)) {
+              throw std::runtime_error(cache.LastError());
+            }
+            neural_workspace.EnsureCapacity(
+                variant, tile_h, tile_w,
+                static_cast<std::size_t>(3) * static_cast<std::size_t>(tile_h) *
+                    static_cast<std::size_t>(tile_w),
+                static_cast<std::size_t>(3) * static_cast<std::size_t>(out_h) *
+                    static_cast<std::size_t>(out_w));
+          }
+
           bool         tile_ok            = true;
           const auto   stage_neural_start = ProfileClock::now();
           for (const auto& job : jobs) {
-            const auto result = CUDA::DemosaicStudentTileWithNeuralEngine(
+            // Single stream: pack → forward → unpack → owned ROI copy are ordered by the
+            // stream; one NeuralDemosaicWorkspace is reused without per-tile host waits.
+            const auto result = CUDA::EnqueueDemosaicStudentTileWithNeuralEngine(
                 neural_cfa, job.input_origin, prep.aligned_pattern, tile_rgb, &stream,
                 neural_options);
             if (!result.succeeded) {

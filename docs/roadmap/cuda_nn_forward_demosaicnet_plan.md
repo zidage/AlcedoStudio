@@ -16,8 +16,11 @@ student pad32/step1020/ownership planner tests. **Product `ProcessCudaTiled`
 uses student virtual-pad policies** (Bayer pad32/border31/step1024, X-Trans
 pad12/border12/step1020), fused `DemosaicStudentTileWithNeuralEngine`, first-writer
 ROI assembly, and `NeuralOutputGeometry` so tile border is not re-subtracted from
-the assembled frame. Remaining Phase 8 work is async single-stream (8E) and
-student performance rebaseline (8F). The measured Release teacher baselines
+the assembled frame. **Phase 8E landed:** `EnqueueDemosaicWithNeuralEngine` /
+`EnqueueDemosaicStudentTileWithNeuralEngine` (no host wait; require caller-owned
+workspace), sync wrappers wait once, `ProcessCudaTiled` pre-warms fixed student
+workspace then enqueues pack→forward→ROI copy on one stream with a single final
+wait. Remaining Phase 8 work is student performance rebaseline (8F). The measured Release teacher baselines
 (approximately 2.83 s for Nikon D800e Bayer and 9.52 s for Fuji X-T5 X-Trans)
 remain historical comparison points, not student baselines.
 
@@ -1669,7 +1672,7 @@ test as required by repository policy.
 product path with the student topology, exact geometry, and deterministic tile
 ownership.
 
-#### 8.5 One asynchronous stream before parallel lanes
+#### 8.5 One asynchronous stream before parallel lanes  ✅
 
 `DemosaicWithNeuralEngine` currently synchronizes every call. Remove that
 barrier, but keep the first implementation deliberately single-stream and
@@ -1793,7 +1796,7 @@ work do not land as one unreviewable patch:
    geometry, real Nikon full-RAW and seam/phase regressions.
 4. **8D — X-Trans product integration:** ✅ pad12/border12/step1020, four-pixel
    first-writer overlap ownership, real Fuji full-RAW and seam/phase regressions.
-5. **8E — Async single-stream execution:** enqueue API, one reusable fixed
+5. **8E — Async single-stream execution:** ✅ enqueue API, one reusable fixed
    workspace/buffer set, one final synchronization, stable allocation generation.
 6. **8F — Student performance pass:** rebaseline Legacy/student full-frame,
    exact product FLOP/byte roofline, then measured kernel/graph improvements.
@@ -1825,10 +1828,11 @@ CI.
 - [ ] Absolute p50/p95 and progress toward the 100 ms stretch target are
       reported without making 100 ms a completion gate.
 - [ ] Correctness/golden/full-RAW tests pass for the selected precision path.
-- [ ] The default product path uses one stream/workspace and no per-tile
+- [x] The default product path uses one stream/workspace and no per-tile
       synchronization; any retained multi-lane path has a measured >=5% win and
-      a bounded owned-VRAM calculation.
-- [ ] No allocation-generation change occurs during timed hot iterations.
+      a bounded owned-VRAM calculation. (8E single-stream; multi-lane still gated)
+- [x] No allocation-generation change occurs during timed hot iterations.
+      (workspace generation tests + 8E student warm path; harness recheck in 8F)
 - [ ] CUDA Graph replay, FP32 student shape variants, optional lanes, and gated
       precision have each been retained or rejected with full-frame data; no
       known >=5% full-frame win remains untested.
