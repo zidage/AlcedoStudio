@@ -297,4 +297,84 @@ auto DemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPattern& 
   }
 }
 
+auto DemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_cfa,
+                                         const cv::Point input_origin,
+                                         const RawCfaPattern& training_pattern,
+                                         cv::cuda::GpuMat& rgb, cv::cuda::Stream* stream,
+                                         const NeuralDemosaicOptions& options)
+    -> NeuralDemosaicResult {
+  NeuralDemosaicResult result;
+  try {
+    if (aligned_cfa.empty() || aligned_cfa.type() != CV_32FC1) {
+      throw std::runtime_error("Student tile Neural Engine requires non-empty CV_32FC1 CFA");
+    }
+
+    const bool is_xtrans = training_pattern.kind == RawCfaKind::XTrans6x6;
+    const int  tile_h    = is_xtrans ? XTransDemosaicNet::kTileInput : BayerDemosaicNet::kTileInput;
+    const int  tile_w    = tile_h;
+    const int  out_h = is_xtrans ? XTransDemosaicNet::kTileOutput : BayerDemosaicNet::kTileOutput;
+    const int  out_w = out_h;
+    result.source_border =
+        is_xtrans ? XTransDemosaicNet::kTileBorder : BayerDemosaicNet::kTileBorder;
+
+    const int period = is_xtrans ? XTransDemosaicNet::kCfaPeriod : BayerDemosaicNet::kCfaPeriod;
+    if ((input_origin.x % period) != 0 || (input_origin.y % period) != 0) {
+      throw std::runtime_error(
+          "Student tile input origin is not CFA-period aligned (phase-unsafe)");
+    }
+
+    const std::size_t input_numel  = static_cast<std::size_t>(3) * tile_h * tile_w;
+    const std::size_t output_numel = static_cast<std::size_t>(3) * out_h * out_w;
+    const cudaStream_t cuda_stream = GetCudaStream(stream);
+
+    DemosaicNetModelCache& cache =
+        options.model_cache == nullptr ? DemosaicNetModelCache::Instance() : *options.model_cache;
+    DemosaicNetLoadOptions load_options = options.load_options;
+    load_options.stream                 = cuda_stream;
+    const DemosaicNetVariant variant =
+        is_xtrans ? DemosaicNetVariant::XTrans : DemosaicNetVariant::Bayer;
+    if (!cache.EnsureLoaded(variant, load_options)) {
+      result.error = cache.LastError();
+      return result;
+    }
+
+    NeuralDemosaicWorkspace  local_workspace;
+    NeuralDemosaicWorkspace& workspace =
+        options.workspace == nullptr ? local_workspace : *options.workspace;
+    workspace.EnsureCapacity(variant, tile_h, tile_w, input_numel, output_numel);
+
+    auto input_tensor =
+        cuda::nn::DeviceTensor::Contiguous(workspace.input_buffer().data(), {1, 3, tile_h, tile_w});
+    auto output_tensor =
+        cuda::nn::DeviceTensor::Contiguous(workspace.output_buffer().data(), {1, 3, out_h, out_w});
+
+    PackReflectPaddedCfaTile(aligned_cfa, input_origin, training_pattern, input_tensor, tile_h,
+                             tile_w, stream);
+
+    if (variant == DemosaicNetVariant::Bayer) {
+      RunModel(cache.Bayer(), input_tensor, output_tensor, workspace.activation_workspace(),
+               cuda_stream);
+    } else {
+      RunModel(cache.XTrans(), input_tensor, output_tensor, workspace.activation_workspace(),
+               cuda_stream);
+    }
+
+    cv::cuda::GpuMat& neural_rgb = workspace.rgb_buffer();
+    cuda::nn::UnpackNchwToHwc(output_tensor, neural_rgb, cuda_stream);
+    if (stream == nullptr) {
+      cuda::nn::CheckCuda(cudaDeviceSynchronize(), "DemosaicStudentTileWithNeuralEngine sync");
+    }
+    // Product tiled path reuses workspace RGB without a per-tile stream wait; stream
+    // ordering serializes pack → forward → unpack → ROI copy. Null-stream callers still
+    // synchronized above.
+    rgb              = options.workspace == nullptr ? std::move(neural_rgb) : neural_rgb;
+    result.succeeded = true;
+    result.error.clear();
+    return result;
+  } catch (const std::exception& e) {
+    result.error = e.what();
+    return result;
+  }
+}
+
 }  // namespace alcedo::CUDA

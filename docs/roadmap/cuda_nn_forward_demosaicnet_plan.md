@@ -7,14 +7,17 @@ Status: Phases 0–6c landed for the teacher modules (generic CNN ops, hard-code
 Bayer/XTrans modules, lazy cache, goldens, Neural preprocess, and
 full-active-area tiled CUDA decode).
 Phase 8.1 landed (DemosaicNetPerfHarness + NeuralDemosaicWorkspace allocation
-generation counters). **Phase 8A–8B landed:** hard-coded student forwards
+generation counters). **Phase 8A–8D landed:** hard-coded student forwards
 (`bayer_s24_d8` / `xtrans_p2_s32_d4`) load bundled student safetensors with full
 metadata + fixed one-hot pack/unpack checks and pass exported 1086→1024 /
 1048→1024 goldens; shared `CudaTilePolicy` / `BuildTileJobs` plus
 `PackReflectPaddedCfaTile` are in place with Legacy geometry regression and
-student pad32/step1020/ownership planner tests. Product routing still uses the
-interim export-border tile assembly (Phase 8C/8D wire student virtual-pad
-geometry into `ProcessCudaTiled`). The measured Release teacher baselines
+student pad32/step1020/ownership planner tests. **Product `ProcessCudaTiled`
+uses student virtual-pad policies** (Bayer pad32/border31/step1024, X-Trans
+pad12/border12/step1020), fused `DemosaicStudentTileWithNeuralEngine`, first-writer
+ROI assembly, and `NeuralOutputGeometry` so tile border is not re-subtracted from
+the assembled frame. Remaining Phase 8 work is async single-stream (8E) and
+student performance rebaseline (8F). The measured Release teacher baselines
 (approximately 2.83 s for Nikon D800e Bayer and 9.52 s for Fuji X-T5 X-Trans)
 remain historical comparison points, not student baselines.
 
@@ -1786,9 +1789,9 @@ work do not land as one unreviewable patch:
 2. **8B — Shared tile policy:** ✅ generalize `CudaTileJob/BuildTileJobs`, add
    signed-origin fused reflect/pack and disjoint ownership ROIs, and prove Legacy
    jobs are unchanged with CPU planner tests.
-3. **8C — Bayer product integration:** pad32/border31/step1024, explicit output
+3. **8C — Bayer product integration:** ✅ pad32/border31/step1024, explicit output
    geometry, real Nikon full-RAW and seam/phase regressions.
-4. **8D — X-Trans product integration:** pad12/border12/step1020, four-pixel
+4. **8D — X-Trans product integration:** ✅ pad12/border12/step1020, four-pixel
    first-writer overlap ownership, real Fuji full-RAW and seam/phase regressions.
 5. **8E — Async single-stream execution:** enqueue API, one reusable fixed
    workspace/buffer set, one final synchronization, stable allocation generation.
@@ -1812,9 +1815,9 @@ CI.
 - [x] X-Trans uses pad12/border12/step1020, every tile input is mod-6 aligned,
       and the four-pixel overlap has deterministic first-writer ownership.
       (8B policy+tests; product wiring in 8D)
-- [ ] Assembled student RGB maps explicitly to aligned/original CFA coordinates;
+- [x] Assembled student RGB maps explicitly to aligned/original CFA coordinates;
       phase crop, trailing trim, tile border, and final sensor crop are each
-      applied exactly once.
+      applied exactly once. (`NeuralOutputGeometry` + student tiled product path)
 - [ ] Bayer and X-Trans full-active-area Legacy baselines and student/Legacy p50
       and p95 ratios are recorded on the same runs/hardware.
 - [ ] The best measured Bayer and X-Trans ratios are reported against the <=1.10

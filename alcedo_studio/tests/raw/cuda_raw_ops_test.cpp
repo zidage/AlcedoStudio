@@ -8,13 +8,17 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <vector>
 #include <opencv2/core.hpp>
 #include <opencv2/core/cuda.hpp>
 
+#include "decoders/processor/cuda_tile_jobs.hpp"
+#include "decoders/processor/nn/demosaicnet_bayer.hpp"
 #include "decoders/processor/nn/demosaicnet_preprocess.hpp"
 #include "decoders/processor/nn/demosaicnet_xtrans.hpp"
 #include "decoders/processor/operators/gpu/cuda_demosaicnet.hpp"
@@ -329,9 +333,10 @@ TEST(CudaRawOpsTest, NeuralEngineBayerTrimsOddTrailingEdgesAndReusesCachedWeight
 
   const auto first = CUDA::DemosaicWithNeuralEngine(gpu_cfa, pattern, first_rgb, nullptr, options);
   ASSERT_TRUE(first.succeeded) << first.error;
-  ASSERT_EQ(first.source_border, 31);
+  // Odd 65×67 → even 64×66; student natural shrink H-34 → 30×32 (border 17).
+  ASSERT_EQ(first.source_border, BayerDemosaicNet::kNaturalSpatialLoss / 2);
   ASSERT_EQ(first_rgb.type(), CV_32FC3);
-  EXPECT_EQ(first_rgb.size(), cv::Size(4, 2));
+  EXPECT_EQ(first_rgb.size(), cv::Size(32, 30));
   const float* weight_ptr = cache.Bayer().PackWeightDevicePtr();
   ASSERT_NE(weight_ptr, nullptr);
 
@@ -396,14 +401,15 @@ TEST(CudaRawOpsTest, NeuralEngineXTransProducesExpectedValidConvolutionShape) {
   const auto result   = CUDA::DemosaicWithNeuralEngine(gpu_cfa, pattern, rgb, nullptr, options);
 
   ASSERT_TRUE(result.succeeded) << result.error;
-  EXPECT_EQ(result.source_border, 12);
+  // 48×50 even → natural X-Trans shrink H-18 → 30×32 (border 9).
+  EXPECT_EQ(result.source_border, XTransDemosaicNet::kNaturalSpatialLoss / 2);
   EXPECT_EQ(rgb.type(), CV_32FC3);
-  EXPECT_EQ(rgb.size(), cv::Size(26, 24));
+  EXPECT_EQ(rgb.size(), cv::Size(32, 30));
 #endif
 }
 
 // Purpose: load a real Bayer camera RAW, take a 64×64 CFA patch, and verify Neural
-// Engine demosaics it to CV_32FC3 with the valid-convolution output size (border 31).
+// Engine demosaics it to CV_32FC3 with the student natural valid-convolution size.
 TEST(CudaRawOpsTest, NeuralEngineDemosaicsRealBayerRawPatchToValidRgb) {
 #ifndef HAVE_CUDA
   GTEST_SKIP() << "CUDA is not enabled in this build.";
@@ -436,7 +442,8 @@ TEST(CudaRawOpsTest, NeuralEngineDemosaicsRealBayerRawPatchToValidRgb) {
 
   ASSERT_TRUE(result.succeeded) << result.error;
   EXPECT_EQ(rgb.type(), CV_32FC3);
-  EXPECT_EQ(rgb.size(), cv::Size(2, 2));
+  // Student natural: 64 - 34 = 30 on both axes.
+  EXPECT_EQ(rgb.size(), cv::Size(30, 30));
   raw->recycle();
 #endif
 }
@@ -469,15 +476,18 @@ TEST(CudaRawOpsTest, RawProcessorDefaultXTransLoadsNeuralEngineOnRealRawPatch) {
   RawRuntimeColorContext context;
   const ushort           no_crop[4] = {};
 
-  const RawCfaPattern    pattern    = ReadLibRawCfaPattern(*raw);
-  const auto             shift      = FindCfaAlignShift(pattern);
+  const RawCfaPattern pattern = ReadLibRawCfaPattern(*raw);
+  const auto          shift   = FindCfaAlignShift(pattern);
   ASSERT_TRUE(shift.has_value());
-  const int aligned_h  = (kPatch - shift->sy) - ((kPatch - shift->sy) % 6);
-  const int aligned_w  = (kPatch - shift->sx) - ((kPatch - shift->sx) % 6);
-  const int expected   = aligned_h - XTransDemosaicNet::kSpatialLoss;
-  const int expected_w = aligned_w - XTransDemosaicNet::kSpatialLoss;
+  const int aligned_h = (kPatch - shift->sy) - ((kPatch - shift->sy) % 6);
+  const int aligned_w = (kPatch - shift->sx) - ((kPatch - shift->sx) % 6);
+  // Product student tiling restores same-size aligned RGB; sensor crop maps once.
+  const detail::NeuralOutputGeometry geometry = detail::MakeStudentTiledNeuralOutputGeometry(
+      shift->sx, shift->sy, cv::Size(aligned_w, aligned_h));
+  const cv::Rect expected_crop = detail::BuildNeuralEngineDecodeCropRect(
+      patch_data.sizes, no_crop, cv::Size(kPatch, kPatch), DecodeRes::FULL, geometry);
 
-  auto&     cache      = DemosaicNetModelCache::Instance();
+  auto& cache = DemosaicNetModelCache::Instance();
   cache.Unload(DemosaicNetVariant::XTrans);
   ASSERT_FALSE(cache.IsLoaded(DemosaicNetVariant::XTrans));
 
@@ -488,7 +498,7 @@ TEST(CudaRawOpsTest, RawProcessorDefaultXTransLoadsNeuralEngineOnRealRawPatch) {
   ASSERT_TRUE(output.gpu_data_valid_);
   EXPECT_EQ(output.GetGPUBackend(), GpuBackendKind::CUDA);
   EXPECT_EQ(output.GetCUDAImage().type(), CV_32FC4);
-  EXPECT_EQ(output.GetCUDAImage().size(), cv::Size(expected_w, expected));
+  EXPECT_EQ(output.GetCUDAImage().size(), expected_crop.size());
   raw->recycle();
 #endif
 }
@@ -836,7 +846,9 @@ TEST(CudaRawOpsTest, NeuralEnginePhaseAlignAndGamma_OnRealXTransRawPatch) {
 #endif
 }
 
-TEST(CudaRawOpsTest, ProcessCudaTiled_NeuralEngineMatchesFullFrameOnOverlappingTiles) {
+// Purpose: Bayer student planner + product tile entry preserve pad32 phase (mod-2
+// origins, GRBG training pattern) and first model-output origin at -1.
+TEST(CudaRawOpsTest, ProcessCudaTiled_BayerStudentPad32PreservesGrbgOrigin) {
 #ifndef HAVE_CUDA
   GTEST_SKIP() << "CUDA is not enabled in this build.";
 #else
@@ -844,11 +856,250 @@ TEST(CudaRawOpsTest, ProcessCudaTiled_NeuralEngineMatchesFullFrameOnOverlappingT
     GTEST_SKIP() << "CUDA device is unavailable in this environment.";
   }
 
-  // Phase 8A/8B: student full-frame uses natural shrink (H-34) while the interim
-  // product tiled path still uses export border (31) tiles. Exact match returns in
-  // Phase 8C when ProcessCudaTiled adopts the student virtual-pad policy.
-  GTEST_SKIP() << "Deferred to Phase 8C student product tiling (full-frame natural vs "
-                  "export-border tile assembly diverge for bayer_s24_d8).";
+  constexpr int kAligned = 2048;  // two step-1024 tiles on each axis
+  cv::Mat       host(kAligned, kAligned, CV_32FC1);
+  cv::randu(host, 0.05F, 0.95F);
+  cv::cuda::GpuMat            gpu_cfa(host);
+  const RawCfaPattern         pattern = DemosaicNetTrainingPattern(RawCfaKind::Bayer2x2);
+  const detail::CudaTilePolicy policy = detail::MakeBayerStudentTilePolicy();
+  ASSERT_EQ(policy.virtual_pad.x, 32);
+  ASSERT_EQ(policy.output_border.x, 31);
+  ASSERT_EQ(policy.step.width, 1024);
+
+  const auto jobs =
+      detail::BuildTileJobs(cv::Rect(0, 0, kAligned, kAligned), cv::Size(kAligned, kAligned),
+                            policy);
+  ASSERT_FALSE(jobs.empty());
+  for (const auto& job : jobs) {
+    EXPECT_EQ(job.input_origin.x % 2, 0);
+    EXPECT_EQ(job.input_origin.y % 2, 0);
+  }
+  // First grid origin: input = -pad; model output origin in assembled coords = -1
+  // (clipped so destination starts at 0 with one discarded leading column/row).
+  EXPECT_EQ(jobs.front().input_origin, cv::Point(-32, -32));
+  EXPECT_EQ(jobs.front().destination_roi.tl(), cv::Point(0, 0));
+  EXPECT_EQ(jobs.front().model_output_roi.tl(), cv::Point(1, 1));
+
+  DemosaicNetModelCache         cache;
+  CUDA::NeuralDemosaicWorkspace workspace;
+  CUDA::NeuralDemosaicOptions   options;
+  options.model_cache = &cache;
+  options.workspace   = &workspace;
+  cv::cuda::GpuMat tile_rgb;
+  const auto       result = CUDA::DemosaicStudentTileWithNeuralEngine(
+      gpu_cfa, jobs.front().input_origin, pattern, tile_rgb, nullptr, options);
+  ASSERT_TRUE(result.succeeded) << result.error;
+  EXPECT_EQ(result.source_border, 31);
+  EXPECT_EQ(tile_rgb.size(), cv::Size(1024, 1024));
+  EXPECT_EQ(pattern.bayer_pattern.rgb_fc[0], 1);  // GRBG green
+  EXPECT_EQ(pattern.bayer_pattern.rgb_fc[1], 0);  // red
+#endif
+}
+
+// Purpose: two Bayer tiles across the step-1024 boundary assemble without holes or
+// double-writes; interior strip is finite.
+TEST(CudaRawOpsTest, ProcessCudaTiled_BayerStudentMatchesReferenceAcross1024Boundary) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA is not enabled in this build.";
+#else
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
+  }
+
+  constexpr int kW = 2048;
+  constexpr int kH = 1024;
+  cv::Mat       host(kH, kW, CV_32FC1);
+  for (int y = 0; y < kH; ++y) {
+    for (int x = 0; x < kW; ++x) {
+      host.at<float>(y, x) = static_cast<float>((y * 31 + x * 17) % 251) / 251.0F;
+    }
+  }
+  cv::cuda::GpuMat             gpu_cfa(host);
+  const RawCfaPattern          pattern = DemosaicNetTrainingPattern(RawCfaKind::Bayer2x2);
+  const detail::CudaTilePolicy policy  = detail::MakeBayerStudentTilePolicy();
+  const auto jobs =
+      detail::BuildTileJobs(cv::Rect(0, 0, kW, kH), cv::Size(kW, kH), policy);
+
+  cv::cuda::GpuMat assembled(kH, kW, CV_32FC3);
+  assembled.setTo(cv::Scalar(0, 0, 0));
+  cv::cuda::GpuMat              tile_rgb;
+  DemosaicNetModelCache         cache;
+  CUDA::NeuralDemosaicWorkspace workspace;
+  CUDA::NeuralDemosaicOptions   options;
+  options.model_cache = &cache;
+  options.workspace   = &workspace;
+
+  std::vector<std::uint8_t> coverage(static_cast<std::size_t>(kW) * static_cast<std::size_t>(kH),
+                                     0);
+  for (const auto& job : jobs) {
+    const auto result = CUDA::DemosaicStudentTileWithNeuralEngine(
+        gpu_cfa, job.input_origin, pattern, tile_rgb, nullptr, options);
+    ASSERT_TRUE(result.succeeded) << result.error;
+    tile_rgb(job.model_output_roi).copyTo(assembled(job.destination_roi));
+    for (int y = job.destination_roi.y; y < job.destination_roi.y + job.destination_roi.height;
+         ++y) {
+      for (int x = job.destination_roi.x; x < job.destination_roi.x + job.destination_roi.width;
+           ++x) {
+        const std::size_t idx =
+            static_cast<std::size_t>(y) * static_cast<std::size_t>(kW) + static_cast<std::size_t>(x);
+        ASSERT_EQ(coverage[idx], 0) << "double write at " << x << "," << y;
+        coverage[idx] = 1;
+      }
+    }
+  }
+  for (const auto v : coverage) {
+    ASSERT_EQ(v, 1);
+  }
+
+  cv::Mat host_rgb;
+  assembled.download(host_rgb);
+  // Seam strip around x=1024 (Bayer has no inter-tile overlap; abutting edges).
+  for (int y = 0; y < kH; ++y) {
+    for (int x = 1020; x < 1028 && x < kW; ++x) {
+      const cv::Vec3f p = host_rgb.at<cv::Vec3f>(y, x);
+      for (int c = 0; c < 3; ++c) {
+        EXPECT_TRUE(std::isfinite(p[c])) << "seam " << x << "," << y << " c=" << c;
+      }
+    }
+  }
+#endif
+}
+
+// Purpose: X-Trans step-1020 first-writer ownership covers every pixel once across the
+// four-pixel overlap band.
+TEST(CudaRawOpsTest, ProcessCudaTiled_XTransStudentOverlapHasNoUnwrittenOrDoubleWrittenPixels) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA is not enabled in this build.";
+#else
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
+  }
+
+  // Two tiles on X: step 1020, output 1024 → cover width 2040 (period-6).
+  constexpr int kW = 2040;
+  constexpr int kH = 1020;
+  cv::Mat       host(kH, kW, CV_32FC1);
+  cv::randu(host, 0.05F, 0.95F);
+  cv::cuda::GpuMat             gpu_cfa(host);
+  const RawCfaPattern          pattern = DemosaicNetTrainingPattern(RawCfaKind::XTrans6x6);
+  const detail::CudaTilePolicy policy  = detail::MakeXTransStudentTilePolicy();
+  ASSERT_EQ(policy.step.width, 1020);
+  ASSERT_EQ(policy.virtual_pad.x, 12);
+  const auto jobs =
+      detail::BuildTileJobs(cv::Rect(0, 0, kW, kH), cv::Size(kW, kH), policy);
+
+  // Second tile on X must discard four leading columns.
+  bool found_overlap_discard = false;
+  for (const auto& job : jobs) {
+    if (job.destination_roi.x > 0) {
+      EXPECT_EQ(job.model_output_roi.x, 4);
+      found_overlap_discard = true;
+    }
+  }
+  EXPECT_TRUE(found_overlap_discard);
+
+  cv::cuda::GpuMat assembled(kH, kW, CV_32FC3);
+  assembled.setTo(cv::Scalar(-1, -1, -1));
+  cv::cuda::GpuMat              tile_rgb;
+  DemosaicNetModelCache         cache;
+  CUDA::NeuralDemosaicWorkspace workspace;
+  CUDA::NeuralDemosaicOptions   options;
+  options.model_cache = &cache;
+  options.workspace   = &workspace;
+
+  std::vector<std::uint8_t> coverage(static_cast<std::size_t>(kW) * static_cast<std::size_t>(kH),
+                                     0);
+  for (const auto& job : jobs) {
+    EXPECT_EQ(job.input_origin.x % 6, 0);
+    EXPECT_EQ(job.input_origin.y % 6, 0);
+    const auto result = CUDA::DemosaicStudentTileWithNeuralEngine(
+        gpu_cfa, job.input_origin, pattern, tile_rgb, nullptr, options);
+    ASSERT_TRUE(result.succeeded) << result.error;
+    EXPECT_EQ(result.source_border, 12);
+    tile_rgb(job.model_output_roi).copyTo(assembled(job.destination_roi));
+    for (int y = job.destination_roi.y; y < job.destination_roi.y + job.destination_roi.height;
+         ++y) {
+      for (int x = job.destination_roi.x; x < job.destination_roi.x + job.destination_roi.width;
+           ++x) {
+        const std::size_t idx =
+            static_cast<std::size_t>(y) * static_cast<std::size_t>(kW) + static_cast<std::size_t>(x);
+        ASSERT_EQ(coverage[idx], 0) << "double write at " << x << "," << y;
+        coverage[idx] = 1;
+      }
+    }
+  }
+  for (const auto v : coverage) {
+    ASSERT_EQ(v, 1);
+  }
+
+  cv::Mat host_rgb;
+  assembled.download(host_rgb);
+  // Overlap band around x=1020..1023 is written exactly once (first writer). Network
+  // values may be slightly negative; the unwritten sentinel is exactly -1.
+  for (int y = 0; y < kH; ++y) {
+    for (int x = 1016; x < 1028 && x < kW; ++x) {
+      const cv::Vec3f p = host_rgb.at<cv::Vec3f>(y, x);
+      for (int c = 0; c < 3; ++c) {
+        EXPECT_TRUE(std::isfinite(p[c]));
+        EXPECT_NE(p[c], -1.0F) << "unwritten sentinel at " << x << "," << y;
+      }
+    }
+  }
+#endif
+}
+
+// Purpose: X-Trans student tiles across the 1020 boundary produce a full assembled frame
+// of aligned size with finite values (product geometry contract).
+TEST(CudaRawOpsTest, ProcessCudaTiled_XTransStudentMatchesReferenceAcross1020Boundary) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA is not enabled in this build.";
+#else
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
+  }
+
+  // One row of tiles across the step-1020 boundary (two tiles) is enough for the seam.
+  constexpr int kW = 2040;
+  constexpr int kH = 1020;
+  cv::Mat       host(kH, kW, CV_32FC1);
+  for (int y = 0; y < kH; ++y) {
+    for (int x = 0; x < kW; ++x) {
+      host.at<float>(y, x) = static_cast<float>((y * 19 + x * 23) % 241) / 241.0F;
+    }
+  }
+  cv::cuda::GpuMat             gpu_cfa(host);
+  const RawCfaPattern          pattern = DemosaicNetTrainingPattern(RawCfaKind::XTrans6x6);
+  const detail::CudaTilePolicy policy  = detail::MakeXTransStudentTilePolicy();
+  const auto jobs =
+      detail::BuildTileJobs(cv::Rect(0, 0, kW, kH), cv::Size(kW, kH), policy);
+
+  cv::cuda::GpuMat assembled(kH, kW, CV_32FC3);
+  assembled.setTo(cv::Scalar(0, 0, 0));
+  cv::cuda::GpuMat              tile_rgb;
+  DemosaicNetModelCache         cache;
+  CUDA::NeuralDemosaicWorkspace workspace;
+  CUDA::NeuralDemosaicOptions   options;
+  options.model_cache = &cache;
+  options.workspace   = &workspace;
+
+  for (const auto& job : jobs) {
+    const auto result = CUDA::DemosaicStudentTileWithNeuralEngine(
+        gpu_cfa, job.input_origin, pattern, tile_rgb, nullptr, options);
+    ASSERT_TRUE(result.succeeded) << result.error;
+    tile_rgb(job.model_output_roi).copyTo(assembled(job.destination_roi));
+  }
+
+  cv::Mat host_rgb;
+  assembled.download(host_rgb);
+  ASSERT_EQ(host_rgb.size(), cv::Size(kW, kH));
+  for (int y = 0; y < kH; ++y) {
+    for (int x = 1016; x < 1028; ++x) {
+      const cv::Vec3f p = host_rgb.at<cv::Vec3f>(y, x);
+      for (int c = 0; c < 3; ++c) {
+        EXPECT_TRUE(std::isfinite(p[c]));
+      }
+    }
+  }
 #endif
 }
 
@@ -919,14 +1170,13 @@ TEST(CudaRawOpsTest, ProcessCudaTiled_NeuralEngineBayerAssemblesActiveAreaFromRe
       raw->imgdata.sizes.raw_height - shift->sy - ((raw->imgdata.sizes.raw_height - shift->sy) % 2);
   const int aligned_w =
       raw->imgdata.sizes.raw_width - shift->sx - ((raw->imgdata.sizes.raw_width - shift->sx) % 2);
-  // Large fixtures take the tiled product path. Until Phase 8C wires the student
-  // virtual-pad policy, tiling still shrinks by the export tile border (kSpatialLoss/2).
-  const int      source_border = BayerDemosaicNet::kSpatialLoss / 2;
-  const cv::Size network_output(aligned_w - 2 * source_border, aligned_h - 2 * source_border);
+  // Student virtual-pad tiling restores same-size aligned RGB; sensor crop maps once.
+  const detail::NeuralOutputGeometry geometry = detail::MakeStudentTiledNeuralOutputGeometry(
+      shift->sx, shift->sy, cv::Size(aligned_w, aligned_h));
   const cv::Rect expected_crop = detail::BuildNeuralEngineDecodeCropRect(
       raw->imgdata.sizes, no_crop,
-      cv::Size(raw->imgdata.sizes.raw_width, raw->imgdata.sizes.raw_height), network_output,
-      DecodeRes::FULL, source_border, shift->sx, shift->sy);
+      cv::Size(raw->imgdata.sizes.raw_width, raw->imgdata.sizes.raw_height), DecodeRes::FULL,
+      geometry);
 
   RawProcessor processor(params, raw->imgdata.rawdata, *raw, context, no_crop);
   ImageBuffer  output = processor.Process();
@@ -968,13 +1218,13 @@ TEST(CudaRawOpsTest, ProcessCudaTiled_NeuralEngineXTransRealRawLoadsAndAssembles
       raw->imgdata.sizes.raw_height - shift->sy - ((raw->imgdata.sizes.raw_height - shift->sy) % 6);
   const int aligned_w =
       raw->imgdata.sizes.raw_width - shift->sx - ((raw->imgdata.sizes.raw_width - shift->sx) % 6);
-  // Fuji full RAW is tiled; interim product still uses export border shrink.
-  const int      source_border = XTransDemosaicNet::kSpatialLoss / 2;
-  const cv::Size network_output(aligned_w - 2 * source_border, aligned_h - 2 * source_border);
+  // Fuji full RAW is student-tiled with pad12/step1020; assembled RGB matches aligned size.
+  const detail::NeuralOutputGeometry geometry = detail::MakeStudentTiledNeuralOutputGeometry(
+      shift->sx, shift->sy, cv::Size(aligned_w, aligned_h));
   const cv::Rect expected_crop = detail::BuildNeuralEngineDecodeCropRect(
       raw->imgdata.sizes, no_crop,
-      cv::Size(raw->imgdata.sizes.raw_width, raw->imgdata.sizes.raw_height), network_output,
-      DecodeRes::FULL, source_border, shift->sx, shift->sy);
+      cv::Size(raw->imgdata.sizes.raw_width, raw->imgdata.sizes.raw_height), DecodeRes::FULL,
+      geometry);
 
   auto& cache = DemosaicNetModelCache::Instance();
   cache.Unload(DemosaicNetVariant::XTrans);

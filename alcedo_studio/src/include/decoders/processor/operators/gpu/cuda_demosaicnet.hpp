@@ -108,4 +108,17 @@ auto DemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPattern& 
                               cv::cuda::GpuMat& rgb, cv::cuda::Stream* stream = nullptr,
                               const NeuralDemosaicOptions& options = {}) -> NeuralDemosaicResult;
 
+// Product student tile: fused virtual-pad pack + fixed-shape student forward + HWC unpack.
+// Always uses the bundled student tile shapes (Bayer 1086→1024, X-Trans 1048→1024).
+// `training_pattern` must be the phase-aligned training origin (from PrepareNeuralEngineCfa).
+// `input_origin` is signed in the aligned CFA lattice (may be negative under virtual pad).
+// On success, `rgb` references the workspace HWC buffer (1024²) when `options.workspace` is set;
+// otherwise `rgb` owns a copy. Soft-fail leaves `rgb` untouched.
+auto DemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_cfa,
+                                         cv::Point input_origin,
+                                         const RawCfaPattern& training_pattern,
+                                         cv::cuda::GpuMat& rgb, cv::cuda::Stream* stream = nullptr,
+                                         const NeuralDemosaicOptions& options = {})
+    -> NeuralDemosaicResult;
+
 }  // namespace alcedo::CUDA

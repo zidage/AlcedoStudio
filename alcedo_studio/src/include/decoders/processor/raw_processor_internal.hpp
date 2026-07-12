@@ -162,8 +162,70 @@ inline auto BuildBorderLossDecodeCropRect(const libraw_image_sizes_t& sizes,
   return {left, top, right - left, bottom - top};
 }
 
-// Neural Engine may phase-crop the CFA by (sx, sy) before demosaic. Map LibRaw's default crop
-// (original full-CFA coordinates) into the valid-convolution RGB output of the aligned buffer.
+// Explicit Neural RGB ↔ CFA coordinate map. Phase crop, trailing period trim, tile
+// border, and final sensor crop are separate transforms; do not collapse them into one
+// `source_border` integer.
+//
+// Student tiled path (virtual pad): assembled RGB is same-size as aligned CFA, so
+//   output_origin_in_aligned = (0, 0). Tile-local `output_border` is not subtracted again.
+// Full-frame natural path: valid-convolution shrink places
+//   output_origin_in_aligned = (border, border) with output_size = aligned - 2*border.
+struct NeuralOutputGeometry {
+  cv::Point aligned_origin_in_original;  // phase crop (sx, sy) applied once to original CFA
+  cv::Point output_origin_in_aligned;    // where RGB (0,0) sits in the aligned lattice
+  cv::Size  output_size;                 // assembled RGB size
+};
+
+[[nodiscard]] inline auto MakeStudentTiledNeuralOutputGeometry(const int phase_shift_x,
+                                                               const int phase_shift_y,
+                                                               const cv::Size& aligned_size)
+    -> NeuralOutputGeometry {
+  return {cv::Point(phase_shift_x, phase_shift_y), cv::Point(0, 0), aligned_size};
+}
+
+[[nodiscard]] inline auto MakeNaturalShrinkNeuralOutputGeometry(const int phase_shift_x,
+                                                                const int phase_shift_y,
+                                                                const cv::Size& aligned_size,
+                                                                const int source_border)
+    -> NeuralOutputGeometry {
+  return {cv::Point(phase_shift_x, phase_shift_y), cv::Point(source_border, source_border),
+          cv::Size(std::max(0, aligned_size.width - 2 * source_border),
+                   std::max(0, aligned_size.height - 2 * source_border))};
+}
+
+// Map LibRaw's default/active crop from original CFA space through NeuralOutputGeometry.
+inline auto BuildNeuralEngineDecodeCropRect(const libraw_image_sizes_t& sizes,
+                                            const ushort default_crop[4],
+                                            const cv::Size& original_cfa_size,
+                                            const DecodeRes decode_res,
+                                            const NeuralOutputGeometry& geometry) -> cv::Rect {
+  const cv::Rect original_crop =
+      BuildDecodeCropRect(sizes, default_crop, original_cfa_size, decode_res);
+
+  // original → aligned (subtract phase once) → RGB (subtract output origin once).
+  const int left = std::clamp(original_crop.x - geometry.aligned_origin_in_original.x -
+                                  geometry.output_origin_in_aligned.x,
+                              0, geometry.output_size.width);
+  const int top = std::clamp(original_crop.y - geometry.aligned_origin_in_original.y -
+                                 geometry.output_origin_in_aligned.y,
+                             0, geometry.output_size.height);
+  const int right =
+      std::clamp(original_crop.x + original_crop.width - geometry.aligned_origin_in_original.x -
+                     geometry.output_origin_in_aligned.x,
+                 left, geometry.output_size.width);
+  const int bottom =
+      std::clamp(original_crop.y + original_crop.height - geometry.aligned_origin_in_original.y -
+                     geometry.output_origin_in_aligned.y,
+                 top, geometry.output_size.height);
+
+  if (right <= left || bottom <= top) {
+    throw std::runtime_error("RawProcessor: Neural Engine decode crop is empty after phase-align.");
+  }
+  return {left, top, right - left, bottom - top};
+}
+
+// Adapter for callers that still pass a single equal border + precomputed RGB size
+// (full-frame natural path, tests). Prefer NeuralOutputGeometry for new code.
 inline auto BuildNeuralEngineDecodeCropRect(const libraw_image_sizes_t& sizes,
                                             const ushort default_crop[4],
                                             const cv::Size& original_cfa_size,
@@ -171,23 +233,12 @@ inline auto BuildNeuralEngineDecodeCropRect(const libraw_image_sizes_t& sizes,
                                             const DecodeRes decode_res, const int source_border,
                                             const int phase_shift_x, const int phase_shift_y)
     -> cv::Rect {
-  const cv::Rect original_crop =
-      BuildDecodeCropRect(sizes, default_crop, original_cfa_size, decode_res);
-
-  // Map original CFA coords → phase-aligned CFA coords → NN RGB coords (equal border on all edges).
-  const int left = std::clamp(original_crop.x - phase_shift_x - source_border, 0, rgb_output_size.width);
-  const int top =
-      std::clamp(original_crop.y - phase_shift_y - source_border, 0, rgb_output_size.height);
-  const int right = std::clamp(original_crop.x + original_crop.width - phase_shift_x - source_border,
-                               left, rgb_output_size.width);
-  const int bottom =
-      std::clamp(original_crop.y + original_crop.height - phase_shift_y - source_border, top,
-                 rgb_output_size.height);
-
-  if (right <= left || bottom <= top) {
-    throw std::runtime_error("RawProcessor: Neural Engine decode crop is empty after phase-align.");
-  }
-  return {left, top, right - left, bottom - top};
+  NeuralOutputGeometry geometry;
+  geometry.aligned_origin_in_original = {phase_shift_x, phase_shift_y};
+  geometry.output_origin_in_aligned   = {source_border, source_border};
+  geometry.output_size                = rgb_output_size;
+  return BuildNeuralEngineDecodeCropRect(sizes, default_crop, original_cfa_size, decode_res,
+                                         geometry);
 }
 
 inline auto BuildRcdDecodeCropRect(const libraw_image_sizes_t& sizes, const ushort default_crop[4],

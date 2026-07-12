@@ -48,8 +48,8 @@ class BayerDemosaicNet : public NnWeightModule<BayerDemosaicNet> {
   // Natural valid-conv shrink before optional export center-crop:
   //   H - 2*pack_factor*depth - 2  = H - 34
   static constexpr int kNaturalSpatialLoss = 2 * kPackFactor * kDepth + 2;
-  // Export shrink on the fixed training tile (1086 → 1024). Product tile paths
-  // that still key off a single integer use this until Phase 8C geometry lands.
+  // Export shrink on the fixed training tile (1086 → 1024). Product tiling uses
+  // kTilePad / kTileBorder / NeuralOutputGeometry instead of this single integer.
   static constexpr int kSpatialLoss = kTileInput - kTileOutput;  // 62
   // Smallest even spatial size that yields a positive natural output.
   static constexpr int kMinSpatial = kNaturalSpatialLoss + 2;  // 36

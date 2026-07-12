@@ -159,27 +159,6 @@ auto ShiftBayerPattern(const BayerPattern2x2& pattern, const int y_offset, const
   return shifted;
 }
 
-auto ShiftRawCfaPattern(const RawCfaPattern& pattern, const int y_offset, const int x_offset)
-    -> RawCfaPattern {
-  RawCfaPattern shifted;
-  shifted.kind     = pattern.kind;
-  const int period = pattern.kind == RawCfaKind::XTrans6x6 ? 6 : 2;
-  for (int y = 0; y < period; ++y) {
-    for (int x = 0; x < period; ++x) {
-      if (pattern.kind == RawCfaKind::XTrans6x6) {
-        const int idx                      = XTransCellIndex(y, x);
-        shifted.xtrans_pattern.raw_fc[idx] = RawColorAt(pattern, y + y_offset, x + x_offset);
-        shifted.xtrans_pattern.rgb_fc[idx] = RgbColorAt(pattern, y + y_offset, x + x_offset);
-      } else {
-        const int idx                     = BayerCellIndex(y, x);
-        shifted.bayer_pattern.raw_fc[idx] = RawColorAt(pattern, y + y_offset, x + x_offset);
-        shifted.bayer_pattern.rgb_fc[idx] = RgbColorAt(pattern, y + y_offset, x + x_offset);
-      }
-    }
-  }
-  return shifted;
-}
-
 void ApplyCudaGeometricCorrections(cv::cuda::GpuMat& gpu_img, const int flip,
                                    cv::cuda::Stream* stream) {
   switch (flip) {
@@ -255,9 +234,12 @@ auto RawProcessor::ProcessCudaFullFrame() -> ImageBuffer {
         gpu_img = std::move(neural_rgb);
         LogCpuProfileStep("RAW CUDA FullFrame Neural Engine demosaic", stage_neural_start);
 
+        // Full-frame path keeps natural valid-convolution shrink (no virtual pad).
+        const detail::NeuralOutputGeometry geometry =
+            detail::MakeNaturalShrinkNeuralOutputGeometry(
+                prep.shift.sx, prep.shift.sy, neural_cfa.size(), neural_result.source_border);
         const cv::Rect crop_rect = detail::BuildNeuralEngineDecodeCropRect(
-            raw_data_.sizes, default_crop_, original_cfa_size, gpu_img.size(), params_.decode_res_,
-            neural_result.source_border, prep.shift.sx, prep.shift.sy);
+            raw_data_.sizes, default_crop_, original_cfa_size, params_.decode_res_, geometry);
         if (!detail::IsFullImageRect(crop_rect, gpu_img.size())) {
           gpu_img = gpu_img(crop_rect);
         }
@@ -437,99 +419,104 @@ auto RawProcessor::ProcessCudaTiled() -> ImageBuffer {
     cv::cuda::GpuMat          neural_cfa;
     const NeuralEngineCfaPrep prep =
         PrepareNeuralEngineCfa(linear_raw, cfa_pattern_, neural_cfa, &stream);
+    std::string neural_tiled_error;
     if (prep.succeeded) {
-      const int      source_border = cfa_pattern_.kind == RawCfaKind::Bayer2x2
-                                         ? BayerDemosaicNet::kSpatialLoss / 2
-                                         : XTransDemosaicNet::kSpatialLoss / 2;
-      const cv::Size neural_output_size(neural_cfa.cols - 2 * source_border,
-                                        neural_cfa.rows - 2 * source_border);
-      if (neural_output_size.width <= 0 || neural_output_size.height <= 0) {
-        throw std::runtime_error("RawProcessor: Neural Engine tiled input is too small.");
-      }
-
-      // This active rect is expressed in aligned-CFA coordinates. A tile's source includes
-      // exactly one receptive-field border on each side, so its valid NN output is its inner
-      // rect. Fixed-size reflect-padded edge tiles keep all workspace allocations stable.
-      const cv::Rect   neural_active_rect(source_border, source_border, neural_output_size.width,
-                                          neural_output_size.height);
-      const auto       jobs = BuildTileJobs(neural_active_rect, neural_cfa.size(),
-                                            detail::kCudaTileInnerSize, source_border);
-      const cv::Size   tile_input_size(detail::kCudaTileInnerSize + 2 * source_border,
-                                       detail::kCudaTileInnerSize + 2 * source_border);
-      cv::cuda::GpuMat tile_cfa(tile_input_size, CV_32FC1);
-      cv::cuda::GpuMat output_rgb(neural_output_size, CV_32FC3);
-      cv::cuda::GpuMat tile_rgb;
-      CUDA::NeuralDemosaicWorkspace neural_workspace;
-      CUDA::NeuralDemosaicOptions   neural_options;
-      neural_options.workspace      = &neural_workspace;
-
-      const auto stage_neural_start = ProfileClock::now();
-      for (const auto& job : jobs) {
-        CUDA::CopyReflectPaddedCfa(neural_cfa, job.source_rect, tile_cfa, &stream);
-        const RawCfaPattern tile_pattern =
-            ShiftRawCfaPattern(prep.aligned_pattern, job.source_rect.y, job.source_rect.x);
-        const auto result = CUDA::DemosaicWithNeuralEngine(tile_cfa, tile_pattern, tile_rgb,
-                                                           &stream, neural_options);
-        if (!result.succeeded) {
-          throw std::runtime_error("RawProcessor: Neural Engine tiled forward failed: " +
-                                   result.error);
-        }
-        tile_rgb(cv::Rect(0, 0, job.output_rect.width, job.output_rect.height))
-            .copyTo(output_rgb(job.output_rect), stream);
-      }
-      FinishNeuralEngineRgb(output_rgb, &stream);
-      LogCudaProfileStep(stream, "RAW CUDA Tiled Neural Engine tile assembly", stage_neural_start);
-
-      const cv::Rect crop_rect = detail::BuildNeuralEngineDecodeCropRect(
-          raw_data_.sizes, default_crop_, original_cfa_size, output_rgb.size(), params_.decode_res_,
-          source_border, prep.shift.sx, prep.shift.sy);
-      if (!detail::IsFullImageRect(crop_rect, output_rgb.size())) {
-        output_rgb = output_rgb(crop_rect);
-      }
-
-      cv::cuda::GpuMat output_rgba;
-      if (params_.highlights_reconstruct_) {
-        CUDA::HighlightCorrection   correction = CUDA::BuildHighlightCorrection(raw_processor_);
-        CUDA::HighlightAccumulation accumulation;
-        CUDA::AccumulateHighlightStats(output_rgb, correction, cv::Rect{}, highlight_workspace,
-                                       accumulation, &stream);
-        CUDA::FinalizeHighlightCorrection(accumulation, correction);
-        if (dng_warp_rectilinear_.has_value()) {
-          CUDA::ApplyHighlightCorrectionAndPackRGBA(output_rgb, output_rgba, correction,
-                                                    raw_data_.color.cam_mul, &highlight_workspace,
-                                                    &stream);
-          CUDA::ApplyDngWarpRectilinear(output_rgba, *dng_warp_rectilinear_, &stream);
-          runtime_color_context_.dng_warp_rectilinear_applied_ = true;
-          ApplyCudaGeometricCorrections(output_rgba, raw_data_.sizes.flip, &stream);
-        } else {
-          CUDA::ApplyHighlightCorrectionAndPackRGBAOriented(
-              output_rgb, output_rgba, correction, raw_data_.color.cam_mul, raw_data_.sizes.flip,
-              &highlight_workspace, &stream);
-        }
-      } else if (dng_warp_rectilinear_.has_value()) {
-        CUDA::ApplyInverseCamMulAndPackRGBA(output_rgb, output_rgba, raw_data_.color.cam_mul,
-                                            &stream);
-        CUDA::ApplyDngWarpRectilinear(output_rgba, *dng_warp_rectilinear_, &stream);
-        runtime_color_context_.dng_warp_rectilinear_applied_ = true;
-        ApplyCudaGeometricCorrections(output_rgba, raw_data_.sizes.flip, &stream);
+      // Student virtual-pad tiling: cover the full aligned CFA. Period-aligned pad restores
+      // same-size RGB; tile-local border is not subtracted from the assembled frame again.
+      if (neural_cfa.cols < 1 || neural_cfa.rows < 1) {
+        neural_tiled_error = "Neural Engine tiled input is empty";
       } else {
-        CUDA::ApplyInverseCamMulAndPackRGBAOriented(
-            output_rgb, output_rgba, raw_data_.color.cam_mul, raw_data_.sizes.flip, &stream);
+        try {
+          const detail::CudaTilePolicy policy = cfa_pattern_.kind == RawCfaKind::Bayer2x2
+                                                    ? detail::MakeBayerStudentTilePolicy()
+                                                    : detail::MakeXTransStudentTilePolicy();
+          const cv::Rect neural_active_rect(0, 0, neural_cfa.cols, neural_cfa.rows);
+          const auto     jobs = BuildTileJobs(neural_active_rect, neural_cfa.size(), policy);
+
+          cv::cuda::GpuMat              output_rgb(neural_cfa.size(), CV_32FC3);
+          cv::cuda::GpuMat              tile_rgb;
+          CUDA::NeuralDemosaicWorkspace neural_workspace;
+          CUDA::NeuralDemosaicOptions   neural_options;
+          neural_options.workspace = &neural_workspace;
+
+          bool         tile_ok            = true;
+          const auto   stage_neural_start = ProfileClock::now();
+          for (const auto& job : jobs) {
+            const auto result = CUDA::DemosaicStudentTileWithNeuralEngine(
+                neural_cfa, job.input_origin, prep.aligned_pattern, tile_rgb, &stream,
+                neural_options);
+            if (!result.succeeded) {
+              neural_tiled_error = result.error;
+              tile_ok            = false;
+              break;
+            }
+            // First-writer ownership: copy only the disjoint model_output_roi.
+            tile_rgb(job.model_output_roi).copyTo(output_rgb(job.destination_roi), stream);
+          }
+          if (tile_ok) {
+            FinishNeuralEngineRgb(output_rgb, &stream);
+            LogCudaProfileStep(stream, "RAW CUDA Tiled Neural Engine tile assembly",
+                               stage_neural_start);
+
+            const detail::NeuralOutputGeometry geometry =
+                detail::MakeStudentTiledNeuralOutputGeometry(prep.shift.sx, prep.shift.sy,
+                                                             neural_cfa.size());
+            const cv::Rect crop_rect = detail::BuildNeuralEngineDecodeCropRect(
+                raw_data_.sizes, default_crop_, original_cfa_size, params_.decode_res_, geometry);
+            if (!detail::IsFullImageRect(crop_rect, output_rgb.size())) {
+              output_rgb = output_rgb(crop_rect);
+            }
+
+            cv::cuda::GpuMat output_rgba;
+            if (params_.highlights_reconstruct_) {
+              CUDA::HighlightCorrection   correction =
+                  CUDA::BuildHighlightCorrection(raw_processor_);
+              CUDA::HighlightAccumulation accumulation;
+              CUDA::AccumulateHighlightStats(output_rgb, correction, cv::Rect{},
+                                             highlight_workspace, accumulation, &stream);
+              CUDA::FinalizeHighlightCorrection(accumulation, correction);
+              if (dng_warp_rectilinear_.has_value()) {
+                CUDA::ApplyHighlightCorrectionAndPackRGBA(
+                    output_rgb, output_rgba, correction, raw_data_.color.cam_mul,
+                    &highlight_workspace, &stream);
+                CUDA::ApplyDngWarpRectilinear(output_rgba, *dng_warp_rectilinear_, &stream);
+                runtime_color_context_.dng_warp_rectilinear_applied_ = true;
+                ApplyCudaGeometricCorrections(output_rgba, raw_data_.sizes.flip, &stream);
+              } else {
+                CUDA::ApplyHighlightCorrectionAndPackRGBAOriented(
+                    output_rgb, output_rgba, correction, raw_data_.color.cam_mul,
+                    raw_data_.sizes.flip, &highlight_workspace, &stream);
+              }
+            } else if (dng_warp_rectilinear_.has_value()) {
+              CUDA::ApplyInverseCamMulAndPackRGBA(output_rgb, output_rgba, raw_data_.color.cam_mul,
+                                                  &stream);
+              CUDA::ApplyDngWarpRectilinear(output_rgba, *dng_warp_rectilinear_, &stream);
+              runtime_color_context_.dng_warp_rectilinear_applied_ = true;
+              ApplyCudaGeometricCorrections(output_rgba, raw_data_.sizes.flip, &stream);
+            } else {
+              CUDA::ApplyInverseCamMulAndPackRGBAOriented(
+                  output_rgb, output_rgba, raw_data_.color.cam_mul, raw_data_.sizes.flip, &stream);
+            }
+            stream.waitForCompletion();
+            runtime_color_context_.output_in_camera_space_ = true;
+            process_buffer_                                = {std::move(output_rgba)};
+            PrintProfileMs("RAW CUDA Tiled", ProfileClock::now() - tiled_start);
+            return {std::move(process_buffer_)};
+          }
+        } catch (const std::exception& e) {
+          neural_tiled_error = e.what();
+        }
       }
-      stream.waitForCompletion();
-      runtime_color_context_.output_in_camera_space_ = true;
-      process_buffer_                                = {std::move(output_rgba)};
-      PrintProfileMs("RAW CUDA Tiled", ProfileClock::now() - tiled_start);
-      return {std::move(process_buffer_)};
+    } else {
+      neural_tiled_error = prep.error;
     }
 
-    // Preserve the product's soft-failure behavior. Bayer can continue through the Legacy
-    // tiled branch below. X-Trans has no Legacy tile runner, so execute its existing full-frame
-    // reference interpolation from the still-linear source buffer.
+    // Soft-fail: model load / forward / preprocess errors fall through to Legacy.
+    // Bayer continues via the Legacy tiled branch below. X-Trans has no Legacy tile runner,
+    // so use the existing full-frame reference interpolation from the still-linear buffer.
     if (cfa_pattern_.kind == RawCfaKind::XTrans6x6) {
       AppendDeferredLog(
-          "RAW CUDA Tiled Neural Engine preprocess unavailable; using Legacy X-Trans: " +
-          prep.error);
+          "RAW CUDA Tiled Neural Engine unavailable; using Legacy X-Trans: " + neural_tiled_error);
       CUDA::Clamp01(linear_raw, &stream);
       const int passes = params_.decode_res_ == DecodeRes::FULL ? 3 : 1;
       stream.waitForCompletion();
@@ -556,8 +543,8 @@ auto RawProcessor::ProcessCudaTiled() -> ImageBuffer {
       PrintProfileMs("RAW CUDA Tiled", ProfileClock::now() - tiled_start);
       return {std::move(process_buffer_)};
     }
-    AppendDeferredLog("RAW CUDA Tiled Neural Engine preprocess unavailable; using Legacy: " +
-                      prep.error);
+    AppendDeferredLog("RAW CUDA Tiled Neural Engine unavailable; using Legacy: " +
+                      neural_tiled_error);
   }
 
   const auto     stage_jobs_start = ProfileClock::now();
