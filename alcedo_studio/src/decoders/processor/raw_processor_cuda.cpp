@@ -15,6 +15,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "decoders/processor/cuda_tile_jobs.hpp"
 #include "decoders/processor/nn/demosaicnet_preprocess.hpp"
 #include "decoders/processor/operators/gpu/cuda_color_space_conv.hpp"
 #include "decoders/processor/operators/gpu/cuda_debayer_rcd.hpp"
@@ -134,11 +135,8 @@ void NormalizeDecodeResForGpu(const cv::Size& image_size, RawParams& params) {
   }
 }
 
-struct CudaTileJob {
-  cv::Rect source_rect;
-  cv::Rect inner_rect_in_tile;
-  cv::Rect output_rect;
-};
+using detail::BuildTileJobs;
+using detail::CudaTileJob;
 
 auto ShiftRect(const cv::Rect& rect, const int dx, const int dy) -> cv::Rect {
   return {rect.x + dx, rect.y + dy, rect.width, rect.height};
@@ -159,35 +157,6 @@ auto ShiftBayerPattern(const BayerPattern2x2& pattern, const int y_offset, const
     }
   }
   return shifted;
-}
-
-auto BuildTileJobs(const cv::Rect& active_rect, const cv::Size& full_size, const int inner_size,
-                   const int halo) -> std::vector<CudaTileJob> {
-  if (inner_size <= 0 || halo < 0) {
-    throw std::runtime_error("RawProcessor: CUDA tile dimensions are invalid.");
-  }
-  std::vector<CudaTileJob> jobs;
-  for (int y = 0; y < active_rect.height; y += inner_size) {
-    const int inner_h = std::min(inner_size, active_rect.height - y);
-    for (int x = 0; x < active_rect.width; x += inner_size) {
-      const int      inner_w = std::min(inner_size, active_rect.width - x);
-
-      const cv::Rect inner_abs(active_rect.x + x, active_rect.y + y, inner_w, inner_h);
-      const int      src_x = std::max(0, inner_abs.x - halo);
-      const int      src_y = std::max(0, inner_abs.y - halo);
-      const int      src_r = std::min(full_size.width, inner_abs.x + inner_abs.width + halo);
-      const int      src_b = std::min(full_size.height, inner_abs.y + inner_abs.height + halo);
-
-      const cv::Rect source_rect(src_x, src_y, src_r - src_x, src_b - src_y);
-      jobs.push_back({
-          .source_rect        = source_rect,
-          .inner_rect_in_tile = cv::Rect(inner_abs.x - source_rect.x, inner_abs.y - source_rect.y,
-                                         inner_abs.width, inner_abs.height),
-          .output_rect        = cv::Rect(x, y, inner_abs.width, inner_abs.height),
-      });
-    }
-  }
-  return jobs;
 }
 
 auto ShiftRawCfaPattern(const RawCfaPattern& pattern, const int y_offset, const int x_offset)

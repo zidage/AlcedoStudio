@@ -4,31 +4,30 @@
 
 #include "decoders/processor/nn/demosaicnet_bayer.hpp"
 
-#include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "cuda/nn/common.hpp"
 #include "cuda/nn/concat.hpp"
 #include "cuda/nn/conv2d.hpp"
 #include "cuda/nn/conv_transpose2d.hpp"
 #include "cuda/nn/crop.hpp"
-#include "cuda/nn/mul.hpp"
-#include "cuda/nn/slice.hpp"
 
 namespace alcedo {
 namespace {
 
+using cuda::nn::CenterCropLike;
+using cuda::nn::CenterCropSpatial;
 using cuda::nn::ConcatChannels;
 using cuda::nn::Conv2d;
 using cuda::nn::Conv2dBiasRelu;
 using cuda::nn::Conv2dParams;
 using cuda::nn::ConvTranspose2d;
 using cuda::nn::ConvTranspose2dParams;
-using cuda::nn::CenterCropLike;
 using cuda::nn::DeviceTensor;
-using cuda::nn::Mul;
-using cuda::nn::SplitChannelsView;
 using cuda::nn::WorkspacePool;
 
 [[nodiscard]] auto AlignUp(std::size_t value, std::size_t alignment) -> std::size_t {
@@ -58,32 +57,108 @@ void RequireContiguousNchw3(const DeviceTensor& t, const char* what) {
   }
 }
 
+void RequireMetadata(const cuda::nn::SafetensorsTensorMap& tensors, std::string_view key,
+                     std::string_view expected) {
+  const auto actual = tensors.metadata(key);
+  if (actual != expected) {
+    throw std::runtime_error("BayerDemosaicNet: metadata '" + std::string(key) + "' expected '" +
+                             std::string(expected) + "', got '" + std::string(actual) + "'");
+  }
+}
+
+// Fixed collapse-colors pack: out_i = py*2+px sums all input colors at that sub-pixel.
+[[nodiscard]] auto ExpectedBayerPackWeight() -> std::vector<float> {
+  // shape [4, 3, 2, 2]
+  std::vector<float> w(4 * 3 * 2 * 2, 0.0f);
+  for (int py = 0; py < 2; ++py) {
+    for (int px = 0; px < 2; ++px) {
+      const int out_i = py * 2 + px;
+      for (int c = 0; c < 3; ++c) {
+        // layout [Cout, Cin, kH, kW]
+        w[((out_i * 3 + c) * 2 + py) * 2 + px] = 1.0f;
+      }
+    }
+  }
+  return w;
+}
+
+// Fixed grouped unpack: residual channels g*4:(g+1)*4 → RGB sub-pixels.
+[[nodiscard]] auto ExpectedUnpackWeight() -> std::vector<float> {
+  // shape [12, 1, 2, 2]
+  std::vector<float> w(12 * 1 * 2 * 2, 0.0f);
+  for (int g = 0; g < 3; ++g) {
+    for (int py = 0; py < 2; ++py) {
+      for (int px = 0; px < 2; ++px) {
+        const int in_i = g * 4 + py * 2 + px;
+        w[(in_i * 2 + py) * 2 + px] = 1.0f;
+      }
+    }
+  }
+  return w;
+}
+
+void RequireExactHostWeight(const cuda::nn::SafetensorsTensor& host,
+                            const std::vector<float>& expected, std::string_view key) {
+  if (host.data.size() != expected.size()) {
+    throw std::runtime_error("BayerDemosaicNet: fixed weight size mismatch for " +
+                             std::string(key));
+  }
+  for (std::size_t i = 0; i < expected.size(); ++i) {
+    if (std::fabs(host.data[i] - expected[i]) > 0.0f) {
+      throw std::runtime_error("BayerDemosaicNet: fixed one-hot mismatch for " + std::string(key) +
+                               " at index " + std::to_string(i));
+    }
+  }
+}
+
 }  // namespace
 
 void BayerDemosaicNet::LoadWeightsImpl(const cuda::nn::SafetensorsTensorMap& tensors,
                                        cudaStream_t stream) {
-  // Fixed key → slot map (§2.1). No dynamic layer list.
-  RequireUpload(tensors, "pack_mosaick.weight", {4, 3, 2, 2}, pack_w_, stream);
-  RequireUpload(tensors, "pack_mosaick.bias", {4}, pack_b_, stream);
+  // Full student identity (Phase 8A): reject teacher/other architectures.
+  RequireMetadata(tensors, "format", "demosaicnet-pytorch-state_dict");
+  RequireMetadata(tensors, "architecture", kArchitecture);
+  RequireMetadata(tensors, "architecture_version", "1");
+  RequireMetadata(tensors, "variant", "bayer");
+  RequireMetadata(tensors, "cfa_period", "2");
+  RequireMetadata(tensors, "pack_factor", "2");
+  RequireMetadata(tensors, "tile_input", "1086");
+  RequireMetadata(tensors, "tile_output", "1024");
+  RequireMetadata(tensors, "tile_border", "31");
+  RequireMetadata(tensors, "tile_pad", "32");
+  RequireMetadata(tensors, "tile_step", "1024");
+  RequireMetadata(tensors, "checkpoint_sha256",
+                  "f00fb0e4f4a49e32344ffb0add583bee98c7d5dbfda6c593b5b066d08f9de69f");
 
-  RequireUpload(tensors, "conv1.weight", {64, 4, 3, 3}, conv_w_[0], stream);
-  RequireUpload(tensors, "conv1.bias", {64}, conv_b_[0], stream);
-  for (int i = 2; i <= 14; ++i) {
-    const std::string wk = "conv" + std::to_string(i) + ".weight";
-    const std::string bk = "conv" + std::to_string(i) + ".bias";
-    RequireUpload(tensors, wk, {64, 64, 3, 3}, conv_w_[i - 1], stream);
-    RequireUpload(tensors, bk, {64}, conv_b_[i - 1], stream);
+  // Fixed pack / unpack (bias-free).
+  {
+    const auto& pack =
+        cuda::nn::RequireF32Tensor(tensors, "pack.weight", {kPackOutCh, 3, kPackFactor, kPackFactor});
+    RequireExactHostWeight(pack, ExpectedBayerPackWeight(), "pack.weight");
+    pack_w_ = cuda::nn::UploadToDevice(pack, stream);
   }
-  RequireUpload(tensors, "conv15.weight", {128, 64, 3, 3}, conv_w_[14], stream);
-  RequireUpload(tensors, "conv15.bias", {128}, conv_b_[14], stream);
+  {
+    const auto& unpack =
+        cuda::nn::RequireF32Tensor(tensors, "unpack.weight", {kResidualCh, 1, kPackFactor, kPackFactor});
+    RequireExactHostWeight(unpack, ExpectedUnpackWeight(), "unpack.weight");
+    unpack_w_ = cuda::nn::UploadToDevice(unpack, stream);
+  }
 
-  RequireUpload(tensors, "residual.weight", {12, 64, 1, 1}, residual_w_, stream);
-  RequireUpload(tensors, "residual.bias", {12}, residual_b_, stream);
-  RequireUpload(tensors, "unpack_mosaick.weight", {12, 1, 2, 2}, unpack_w_, stream);
-  RequireUpload(tensors, "unpack_mosaick.bias", {3}, unpack_b_, stream);
-  RequireUpload(tensors, "post_conv1.weight", {64, 6, 3, 3}, post_w_, stream);
-  RequireUpload(tensors, "post_conv1.bias", {64}, post_b_, stream);
-  RequireUpload(tensors, "output.weight", {3, 64, 1, 1}, output_w_, stream);
+  // Trunk: first 4→24, then 24→24 × (depth-1).
+  RequireUpload(tensors, "trunk.0.weight", {kWidth, kPackOutCh, 3, 3}, trunk_w_[0], stream);
+  RequireUpload(tensors, "trunk.0.bias", {kWidth}, trunk_b_[0], stream);
+  for (int i = 1; i < kDepth; ++i) {
+    const std::string wk = "trunk." + std::to_string(i) + ".weight";
+    const std::string bk = "trunk." + std::to_string(i) + ".bias";
+    RequireUpload(tensors, wk, {kWidth, kWidth, 3, 3}, trunk_w_[i], stream);
+    RequireUpload(tensors, bk, {kWidth}, trunk_b_[i], stream);
+  }
+
+  RequireUpload(tensors, "residual.weight", {kResidualCh, kWidth, 1, 1}, residual_w_, stream);
+  RequireUpload(tensors, "residual.bias", {kResidualCh}, residual_b_, stream);
+  RequireUpload(tensors, "post_conv.weight", {kWidth, 6, 3, 3}, post_w_, stream);
+  RequireUpload(tensors, "post_conv.bias", {kWidth}, post_b_, stream);
+  RequireUpload(tensors, "output.weight", {3, kWidth, 1, 1}, output_w_, stream);
   RequireUpload(tensors, "output.bias", {3}, output_b_, stream);
 
   if (stream != nullptr) {
@@ -93,17 +168,15 @@ void BayerDemosaicNet::LoadWeightsImpl(const cuda::nn::SafetensorsTensorMap& ten
 
 auto BayerDemosaicNet::ResidentWeightBytes() const -> std::size_t {
   std::size_t total = 0;
-  auto add = [&](const cuda::nn::DeviceBufferF32& b) { total += b.bytes(); };
+  auto        add   = [&](const cuda::nn::DeviceBufferF32& b) { total += b.bytes(); };
   add(pack_w_);
-  add(pack_b_);
   for (int i = 0; i < kDepth; ++i) {
-    add(conv_w_[i]);
-    add(conv_b_[i]);
+    add(trunk_w_[i]);
+    add(trunk_b_[i]);
   }
   add(residual_w_);
   add(residual_b_);
   add(unpack_w_);
-  add(unpack_b_);
   add(post_w_);
   add(post_b_);
   add(output_w_);
@@ -115,39 +188,38 @@ auto BayerDemosaicNet::EstimateWorkspaceBytes(int input_h, int input_w, int batc
   if (batch < 1 || input_h < kMinSpatial || input_w < kMinSpatial) {
     return 0;
   }
-  if ((input_h % 2) != 0 || (input_w % 2) != 0) {
+  if ((input_h % kPackFactor) != 0 || (input_w % kPackFactor) != 0) {
     return 0;
   }
 
-  // Match current Forward: bump allocations are not rewound mid-graph, so peak
-  // is the sum of all intermediate tensors (output is caller-owned).
-  const std::int64_t N  = batch;
+  const std::int64_t N     = batch;
   std::size_t        total = 0;
 
-  const std::int64_t ph = input_h / 2;
-  const std::int64_t pw = input_w / 2;
-  total += TensorBytes(N, 4, ph, pw);  // pack
+  const std::int64_t ph = input_h / kPackFactor;
+  const std::int64_t pw = input_w / kPackFactor;
+  total += TensorBytes(N, kPackOutCh, ph, pw);
 
   std::int64_t ch = ph;
   std::int64_t cw = pw;
   for (int i = 0; i < kDepth; ++i) {
     const std::int64_t oh = ch - 2;
     const std::int64_t ow = cw - 2;
-    const std::int64_t oc = (i == kDepth - 1) ? 128 : 64;
-    total += TensorBytes(N, oc, oh, ow);
+    total += TensorBytes(N, kWidth, oh, ow);
     ch = oh;
     cw = ow;
   }
-  total += TensorBytes(N, 64, ch, cw);  // filtered
-  total += TensorBytes(N, 12, ch, cw);  // residual
-  const std::int64_t uh = ch * 2;
-  const std::int64_t uw = cw * 2;
-  total += TensorBytes(N, 3, uh, uw);   // up
-  total += TensorBytes(N, 3, uh, uw);   // cropped
-  total += TensorBytes(N, 6, uh, uw);   // cat
-  total += TensorBytes(N, 64, uh - 2, uw - 2);  // post
+  total += TensorBytes(N, kResidualCh, ch, cw);  // residual
+  const std::int64_t uh = ch * kPackFactor;
+  const std::int64_t uw = cw * kPackFactor;
+  total += TensorBytes(N, 3, uh, uw);  // unpack RGB
+  total += TensorBytes(N, 3, uh, uw);  // cropped mosaick
+  total += TensorBytes(N, 6, uh, uw);  // concat
+  const std::int64_t natural_h = uh - 2;
+  const std::int64_t natural_w = uw - 2;
+  total += TensorBytes(N, kWidth, natural_h, natural_w);  // post
+  // Natural RGB before optional export crop (caller owns final output).
+  total += TensorBytes(N, 3, natural_h, natural_w);
 
-  // Headroom for alignment fragmentation across many bump allocs.
   return total + (256 * 1024);
 }
 
@@ -165,15 +237,15 @@ void BayerDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
   if (N < 1) {
     throw std::runtime_error("BayerDemosaicNet::Forward: invalid batch");
   }
-  if ((H % 2) != 0 || (W % 2) != 0) {
-    throw std::runtime_error("BayerDemosaicNet::Forward: H and W must be even");
+  if ((H % kPackFactor) != 0 || (W % kPackFactor) != 0) {
+    throw std::runtime_error("BayerDemosaicNet::Forward: H and W must be divisible by pack factor");
   }
   if (H < kMinSpatial || W < kMinSpatial) {
-    throw std::runtime_error("BayerDemosaicNet::Forward: spatial size below minimum (64)");
+    throw std::runtime_error("BayerDemosaicNet::Forward: spatial size below minimum");
   }
 
-  const int out_h = OutputHeight(H);
-  const int out_w = OutputWidth(W);
+  const int out_h = OutputHeight(H, W);
+  const int out_w = OutputWidth(W, H);
   if (output.shape[0] != N || output.shape[2] != out_h || output.shape[3] != out_w) {
     throw std::runtime_error("BayerDemosaicNet::Forward: output shape mismatch");
   }
@@ -184,99 +256,78 @@ void BayerDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
     workspace.Reserve(need);
   }
 
-  // --- low-res branch: pack_mosaick ---
-  const int ph = H / 2;
-  const int pw = W / 2;
+  // pack: fixed 3→4, k=2 s=2, no bias
+  const int ph = H / kPackFactor;
+  const int pw = W / kPackFactor;
   DeviceTensor cur = workspace.AllocateTensor(
-      {static_cast<std::int64_t>(N), 4, static_cast<std::int64_t>(ph),
+      {static_cast<std::int64_t>(N), kPackOutCh, static_cast<std::int64_t>(ph),
        static_cast<std::int64_t>(pw)});
   {
     Conv2dParams p;
     p.in_channels  = 3;
-    p.out_channels = 4;
-    p.kH = p.kW = 2;
-    p.sH = p.sW = 2;
+    p.out_channels = kPackOutCh;
+    p.kH = p.kW = kPackFactor;
+    p.sH = p.sW = kPackFactor;
     p.weight    = pack_w_.get();
-    p.bias      = pack_b_.get();
+    p.bias      = nullptr;
     Conv2d(input, cur, p, stream, &workspace);
   }
 
-  // conv1..conv15 with fused ReLU (valid 3×3)
+  // trunk: depth × valid 3×3 + ReLU
   for (int i = 0; i < kDepth; ++i) {
-    const int cin  = static_cast<int>(cur.shape[1]);
-    const int cout = (i == kDepth - 1) ? 128 : 64;
-    const int oh   = static_cast<int>(cur.shape[2]) - 2;
-    const int ow   = static_cast<int>(cur.shape[3]) - 2;
+    const int cin = static_cast<int>(cur.shape[1]);
+    const int oh  = static_cast<int>(cur.shape[2]) - 2;
+    const int ow  = static_cast<int>(cur.shape[3]) - 2;
     if (oh < 1 || ow < 1) {
-      throw std::runtime_error("BayerDemosaicNet::Forward: spatial collapsed in main processor");
+      throw std::runtime_error("BayerDemosaicNet::Forward: spatial collapsed in trunk");
     }
-
-    // Rewind previous activation after next is produced: allocate next first.
-    const std::size_t mark = workspace.used_bytes();
-    DeviceTensor next = workspace.AllocateTensor({static_cast<std::int64_t>(N),
-                                                  static_cast<std::int64_t>(cout),
+    DeviceTensor next = workspace.AllocateTensor({static_cast<std::int64_t>(N), kWidth,
                                                   static_cast<std::int64_t>(oh),
                                                   static_cast<std::int64_t>(ow)});
     Conv2dParams p;
     p.in_channels  = cin;
-    p.out_channels = cout;
+    p.out_channels = kWidth;
     p.kH = p.kW = 3;
     p.sH = p.sW = 1;
-    p.weight    = conv_w_[i].get();
-    p.bias      = conv_b_[i].get();
+    p.weight    = trunk_w_[i].get();
+    p.bias      = trunk_b_[i].get();
     Conv2dBiasRelu(cur, next, p, stream, &workspace);
-
-    // Compact: copy next to the mark (overwrite previous cur storage region).
-    // Simpler and correct for peak: leave next live and drop conceptual prev
-    // by only tracking next as cur (bump pool still holds both until Reset).
-    // For steady-state peak control we rewind to mark and re-allocate next
-    // size then memcpy — but that adds a D2D copy every layer. Prefer keeping
-    // both in the bump allocator; EstimateWorkspaceBytes accounts for it.
     cur = next;
-    (void)mark;
   }
 
-  // filters ⊙ masks
-  auto [filters, masks] = SplitChannelsView(cur, 64);
   const int mh = static_cast<int>(cur.shape[2]);
   const int mw = static_cast<int>(cur.shape[3]);
-  DeviceTensor filtered = workspace.AllocateTensor(
-      {static_cast<std::int64_t>(N), 64, static_cast<std::int64_t>(mh),
-       static_cast<std::int64_t>(mw)});
-  Mul(filters, masks, filtered, stream);
-
   DeviceTensor residual = workspace.AllocateTensor(
-      {static_cast<std::int64_t>(N), 12, static_cast<std::int64_t>(mh),
+      {static_cast<std::int64_t>(N), kResidualCh, static_cast<std::int64_t>(mh),
        static_cast<std::int64_t>(mw)});
   {
     Conv2dParams p;
-    p.in_channels  = 64;
-    p.out_channels = 12;
+    p.in_channels  = kWidth;
+    p.out_channels = kResidualCh;
     p.kH = p.kW = 1;
     p.sH = p.sW = 1;
     p.weight    = residual_w_.get();
     p.bias      = residual_b_.get();
-    Conv2d(filtered, residual, p, stream, &workspace);
+    Conv2d(cur, residual, p, stream, &workspace);
   }
 
-  const int uh = mh * 2;
-  const int uw = mw * 2;
+  const int uh = mh * kPackFactor;
+  const int uw = mw * kPackFactor;
   DeviceTensor up = workspace.AllocateTensor({static_cast<std::int64_t>(N), 3,
                                               static_cast<std::int64_t>(uh),
                                               static_cast<std::int64_t>(uw)});
   {
     ConvTranspose2dParams p;
-    p.in_channels  = 12;
+    p.in_channels  = kResidualCh;
     p.out_channels = 3;
-    p.kH = p.kW = 2;
-    p.sH = p.sW = 2;
+    p.kH = p.kW = kPackFactor;
+    p.sH = p.sW = kPackFactor;
     p.groups    = 3;
     p.weight    = unpack_w_.get();
-    p.bias      = unpack_b_.get();
+    p.bias      = nullptr;
     ConvTranspose2d(residual, up, p, stream, &workspace);
   }
 
-  // --- full-res branch ---
   DeviceTensor cropped = workspace.AllocateTensor({static_cast<std::int64_t>(N), 3,
                                                    static_cast<std::int64_t>(uh),
                                                    static_cast<std::int64_t>(uw)});
@@ -287,13 +338,15 @@ void BayerDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
                                                static_cast<std::int64_t>(uw)});
   ConcatChannels(cropped, up, cat, stream);
 
-  DeviceTensor y = workspace.AllocateTensor({static_cast<std::int64_t>(N), 64,
-                                             static_cast<std::int64_t>(out_h),
-                                             static_cast<std::int64_t>(out_w)});
+  const int natural_h = uh - 2;
+  const int natural_w = uw - 2;
+  DeviceTensor y = workspace.AllocateTensor({static_cast<std::int64_t>(N), kWidth,
+                                             static_cast<std::int64_t>(natural_h),
+                                             static_cast<std::int64_t>(natural_w)});
   {
     Conv2dParams p;
     p.in_channels  = 6;
-    p.out_channels = 64;
+    p.out_channels = kWidth;
     p.kH = p.kW = 3;
     p.sH = p.sW = 1;
     p.weight    = post_w_.get();
@@ -301,15 +354,30 @@ void BayerDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
     Conv2dBiasRelu(cat, y, p, stream, &workspace);
   }
 
-  {
+  if (out_h == natural_h && out_w == natural_w) {
     Conv2dParams p;
-    p.in_channels  = 64;
+    p.in_channels  = kWidth;
     p.out_channels = 3;
     p.kH = p.kW = 1;
     p.sH = p.sW = 1;
     p.weight    = output_w_.get();
     p.bias      = output_b_.get();
     Conv2d(y, output, p, stream, &workspace);
+  } else {
+    DeviceTensor natural_rgb = workspace.AllocateTensor(
+        {static_cast<std::int64_t>(N), 3, static_cast<std::int64_t>(natural_h),
+         static_cast<std::int64_t>(natural_w)});
+    {
+      Conv2dParams p;
+      p.in_channels  = kWidth;
+      p.out_channels = 3;
+      p.kH = p.kW = 1;
+      p.sH = p.sW = 1;
+      p.weight    = output_w_.get();
+      p.bias      = output_b_.get();
+      Conv2d(y, natural_rgb, p, stream, &workspace);
+    }
+    CenterCropSpatial(natural_rgb, output, out_h, out_w, stream);
   }
 }
 

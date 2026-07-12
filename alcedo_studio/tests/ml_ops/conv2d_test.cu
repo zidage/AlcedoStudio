@@ -335,21 +335,21 @@ TEST_F(MlOpsConv2dTest, RealWeightPackMosaick) {
   try {
     map = cuda::nn::LoadSafetensors(path);
   } catch (const std::exception& e) {
-    GTEST_SKIP() << "failed to load pack_mosaick: " << e.what();
+    GTEST_SKIP() << "failed to load pack.weight: " << e.what();
   }
-  const auto& w = cuda::nn::RequireF32Tensor(map, "pack_mosaick.weight", {4, 3, 2, 2});
-  const auto& b = cuda::nn::RequireF32Tensor(map, "pack_mosaick.bias", {4});
+  // Student pack is bias-free fixed one-hot.
+  const auto& w = cuda::nn::RequireF32Tensor(map, "pack.weight", {4, 3, 2, 2});
 
   constexpr int N = 1, Cin = 3, Cout = 4, H = 32, W = 32;
   const auto    hin = MakePattern(static_cast<std::size_t>(N * Cin * H * W), 60);
   const auto expected =
-      CpuConv2d(hin, w.data, &b.data, N, Cin, Cout, H, W, 2, 2, 2, 2, 0, 0, 1, false);
+      CpuConv2d(hin, w.data, nullptr, N, Cin, Cout, H, W, 2, 2, 2, 2, 0, 0, 1, false);
   const auto actual =
-      RunGpuConv(hin, w.data, &b.data, N, Cin, Cout, H, W, 2, 2, 2, 2, 0, 0, false, nullptr);
+      RunGpuConv(hin, w.data, nullptr, N, Cin, Cout, H, W, 2, 2, 2, 2, 0, 0, false, nullptr);
   ExpectVectorsNear(actual, expected, 5e-5f);
 }
 
-TEST_F(MlOpsConv2dTest, RealWeightConv1AndOutput1x1) {
+TEST_F(MlOpsConv2dTest, RealWeightTrunk0AndOutput1x1) {
   const std::string path = FindModelPath("bayer.safetensors");
   if (path.empty()) {
     GTEST_SKIP() << "bayer.safetensors not found";
@@ -360,23 +360,23 @@ TEST_F(MlOpsConv2dTest, RealWeightConv1AndOutput1x1) {
   } catch (const std::exception& e) {
     GTEST_SKIP() << "failed to load bayer weights: " << e.what();
   }
-  const auto& conv1_w = cuda::nn::RequireF32Tensor(map, "conv1.weight", {64, 4, 3, 3});
-  const auto& conv1_b = cuda::nn::RequireF32Tensor(map, "conv1.bias", {64});
-  const auto& out_w   = cuda::nn::RequireF32Tensor(map, "output.weight", {3, 64, 1, 1});
-  const auto& out_b   = cuda::nn::RequireF32Tensor(map, "output.bias", {3});
+  const auto& trunk0_w = cuda::nn::RequireF32Tensor(map, "trunk.0.weight", {24, 4, 3, 3});
+  const auto& trunk0_b = cuda::nn::RequireF32Tensor(map, "trunk.0.bias", {24});
+  const auto& out_w    = cuda::nn::RequireF32Tensor(map, "output.weight", {3, 24, 1, 1});
+  const auto& out_b    = cuda::nn::RequireF32Tensor(map, "output.bias", {3});
 
   {
-    constexpr int N = 1, Cin = 4, Cout = 64, H = 20, W = 20;
+    constexpr int N = 1, Cin = 4, Cout = 24, H = 20, W = 20;
     const auto    hin = MakePattern(static_cast<std::size_t>(N * Cin * H * W), 70);
-    const auto expected =
-        CpuConv2d(hin, conv1_w.data, &conv1_b.data, N, Cin, Cout, H, W, 3, 3, 1, 1, 0, 0, 1, true);
-    const auto actual = RunGpuConv(hin, conv1_w.data, &conv1_b.data, N, Cin, Cout, H, W, 3, 3, 1, 1,
-                                   0, 0, true, nullptr);
+    const auto expected = CpuConv2d(hin, trunk0_w.data, &trunk0_b.data, N, Cin, Cout, H, W, 3, 3, 1,
+                                    1, 0, 0, 1, true);
+    const auto actual = RunGpuConv(hin, trunk0_w.data, &trunk0_b.data, N, Cin, Cout, H, W, 3, 3, 1,
+                                   1, 0, 0, true, nullptr);
     ExpectVectorsNear(actual, expected, 1e-4f);
   }
 
   {
-    constexpr int N = 1, Cin = 64, Cout = 3, H = 17, W = 19;
+    constexpr int N = 1, Cin = 24, Cout = 3, H = 17, W = 19;
     const auto    hin = MakePattern(static_cast<std::size_t>(N * Cin * H * W), 71);
     const auto expected =
         CpuConv2d(hin, out_w.data, &out_b.data, N, Cin, Cout, H, W, 1, 1, 1, 1, 0, 0, 1, false);
@@ -386,8 +386,8 @@ TEST_F(MlOpsConv2dTest, RealWeightConv1AndOutput1x1) {
   }
 }
 
-TEST_F(MlOpsConv2dTest, RealWeightPostConv1BayerAndXtrans) {
-  // post_conv1 Bayer: 6→64 k=3; XTrans: 67→64 k=3
+TEST_F(MlOpsConv2dTest, RealWeightPostConvBayerAndXtrans) {
+  // Student post_conv: Bayer 6→24; X-Trans 6→32
   {
     const std::string path = FindModelPath("bayer.safetensors");
     if (path.empty()) {
@@ -399,9 +399,9 @@ TEST_F(MlOpsConv2dTest, RealWeightPostConv1BayerAndXtrans) {
     } catch (const std::exception& e) {
       GTEST_SKIP() << e.what();
     }
-    const auto& w = cuda::nn::RequireF32Tensor(map, "post_conv1.weight", {64, 6, 3, 3});
-    const auto& b = cuda::nn::RequireF32Tensor(map, "post_conv1.bias", {64});
-    constexpr int N = 1, Cin = 6, Cout = 64, H = 18, W = 18;
+    const auto& w = cuda::nn::RequireF32Tensor(map, "post_conv.weight", {24, 6, 3, 3});
+    const auto& b = cuda::nn::RequireF32Tensor(map, "post_conv.bias", {24});
+    constexpr int N = 1, Cin = 6, Cout = 24, H = 18, W = 18;
     const auto    hin = MakePattern(static_cast<std::size_t>(N * Cin * H * W), 80);
     const auto expected =
         CpuConv2d(hin, w.data, &b.data, N, Cin, Cout, H, W, 3, 3, 1, 1, 0, 0, 1, true);
@@ -420,9 +420,9 @@ TEST_F(MlOpsConv2dTest, RealWeightPostConv1BayerAndXtrans) {
     } catch (const std::exception& e) {
       GTEST_SKIP() << e.what();
     }
-    const auto& w = cuda::nn::RequireF32Tensor(map, "post_conv1.weight", {64, 67, 3, 3});
-    const auto& b = cuda::nn::RequireF32Tensor(map, "post_conv1.bias", {64});
-    constexpr int N = 1, Cin = 67, Cout = 64, H = 16, W = 16;
+    const auto& w = cuda::nn::RequireF32Tensor(map, "post_conv.weight", {32, 6, 3, 3});
+    const auto& b = cuda::nn::RequireF32Tensor(map, "post_conv.bias", {32});
+    constexpr int N = 1, Cin = 6, Cout = 32, H = 16, W = 16;
     const auto    hin = MakePattern(static_cast<std::size_t>(N * Cin * H * W), 81);
     const auto expected =
         CpuConv2d(hin, w.data, &b.data, N, Cin, Cout, H, W, 3, 3, 1, 1, 0, 0, 1, true);

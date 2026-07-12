@@ -17,33 +17,73 @@
 
 namespace alcedo {
 
-// Hard-coded Bayer DemosaicNet (depth=15, width=64). Topology matches
-// demosaicnet BayerDemosaick / bayer.safetensors — not a runtime graph.
+// Hard-coded Bayer student DemosaicNet (`bayer_s24_d8`). Topology matches
+// student_handoff/bayer_architecture.md and bundled bayer.safetensors — not a
+// runtime graph.
 //
-// Input:  contiguous NCHW f32 mosaic [N, 3, H, W], H and W even, H,W >= 64.
-// Output: contiguous NCHW f32 RGB    [N, 3, H-62, W-62].
+// Input:  contiguous NCHW f32 mosaic [N, 3, H, W], H and W even, H,W >= kMinSpatial.
+// Output: contiguous NCHW f32 RGB    [N, 3, Oh, Ow] where
+//   - exact tile (H=W=kTileInput) → center-cropped export kTileOutput
+//   - otherwise → natural size H - kNaturalSpatialLoss
 //
 // Weights are immutable after LoadWeights. Forward is a pure function of
 // (weights, input, workspace, stream). Caller owns the WorkspacePool.
 class BayerDemosaicNet : public NnWeightModule<BayerDemosaicNet> {
  public:
-  static constexpr int kDepth       = 15;
-  static constexpr int kWidth       = 64;
-  static constexpr int kMinSpatial  = 64;  // even; yields 2×2 RGB
-  static constexpr int kSpatialLoss = 62;  // H_out = H_in - kSpatialLoss
+  static constexpr const char* kArchitecture = "bayer_s24_d8";
+  static constexpr int         kDepth        = 8;
+  static constexpr int         kWidth        = 24;
+  static constexpr int         kPackFactor   = 2;
+  static constexpr int         kPackOutCh    = 4;   // collapse-colors 2×2
+  static constexpr int         kResidualCh   = 12;  // 3 * pack_factor^2
+
+  // Tile / CFA contract (product tiling + export goldens).
+  static constexpr int kTileInput  = 1086;
+  static constexpr int kTileOutput = 1024;
+  static constexpr int kTileBorder = 31;  // (input - output) / 2
+  static constexpr int kTilePad    = 32;  // period-aligned virtual pad (NOT 31)
+  static constexpr int kTileStep   = 1024;
+  static constexpr int kCfaPeriod  = 2;
+
+  // Natural valid-conv shrink before optional export center-crop:
+  //   H - 2*pack_factor*depth - 2  = H - 34
+  static constexpr int kNaturalSpatialLoss = 2 * kPackFactor * kDepth + 2;
+  // Export shrink on the fixed training tile (1086 → 1024). Product tile paths
+  // that still key off a single integer use this until Phase 8C geometry lands.
+  static constexpr int kSpatialLoss = kTileInput - kTileOutput;  // 62
+  // Smallest even spatial size that yields a positive natural output.
+  static constexpr int kMinSpatial = kNaturalSpatialLoss + 2;  // 36
 
   BayerDemosaicNet() = default;
 
   void LoadWeightsImpl(const cuda::nn::SafetensorsTensorMap& tensors,
                        cudaStream_t stream = nullptr);
 
-  // Straight-line §2.1 forward. `output` must be pre-sized to OutputShape.
+  // Straight-line student forward. `output` must be pre-sized to OutputShape.
   void Forward(const cuda::nn::DeviceTensor& input, cuda::nn::DeviceTensor& output,
                cuda::nn::WorkspacePool& workspace, cudaStream_t stream = nullptr) const;
 
-  // Spatial helpers (N and C fixed for demosaicnet).
-  [[nodiscard]] static auto OutputHeight(int input_h) -> int { return input_h - kSpatialLoss; }
-  [[nodiscard]] static auto OutputWidth(int input_w) -> int { return input_w - kSpatialLoss; }
+  // Spatial helpers matching student_models.StudentDemosaicNet.output_size.
+  [[nodiscard]] static auto NaturalOutputHeight(int input_h) -> int {
+    return input_h - kNaturalSpatialLoss;
+  }
+  [[nodiscard]] static auto NaturalOutputWidth(int input_w) -> int {
+    return input_w - kNaturalSpatialLoss;
+  }
+  [[nodiscard]] static auto OutputHeight(int input_h, int input_w = -1) -> int {
+    const int w = input_w < 0 ? input_h : input_w;
+    if (input_h == kTileInput && w == kTileInput) {
+      return kTileOutput;
+    }
+    return NaturalOutputHeight(input_h);
+  }
+  [[nodiscard]] static auto OutputWidth(int input_w, int input_h = -1) -> int {
+    const int h = input_h < 0 ? input_w : input_h;
+    if (h == kTileInput && input_w == kTileInput) {
+      return kTileOutput;
+    }
+    return NaturalOutputWidth(input_w);
+  }
 
   // Peak activation workspace for one Forward (does not include weight VRAM).
   [[nodiscard]] static auto EstimateWorkspaceBytes(int input_h, int input_w, int batch = 1)
@@ -57,14 +97,12 @@ class BayerDemosaicNet : public NnWeightModule<BayerDemosaicNet> {
   [[nodiscard]] auto OutputWeightDevicePtr() const -> const float* { return output_w_.get(); }
 
  private:
-  cuda::nn::DeviceBufferF32 pack_w_;
-  cuda::nn::DeviceBufferF32 pack_b_;
-  cuda::nn::DeviceBufferF32 conv_w_[kDepth];
-  cuda::nn::DeviceBufferF32 conv_b_[kDepth];
+  cuda::nn::DeviceBufferF32 pack_w_;  // fixed, no bias
+  cuda::nn::DeviceBufferF32 trunk_w_[kDepth];
+  cuda::nn::DeviceBufferF32 trunk_b_[kDepth];
   cuda::nn::DeviceBufferF32 residual_w_;
   cuda::nn::DeviceBufferF32 residual_b_;
-  cuda::nn::DeviceBufferF32 unpack_w_;
-  cuda::nn::DeviceBufferF32 unpack_b_;
+  cuda::nn::DeviceBufferF32 unpack_w_;  // fixed, no bias
   cuda::nn::DeviceBufferF32 post_w_;
   cuda::nn::DeviceBufferF32 post_b_;
   cuda::nn::DeviceBufferF32 output_w_;

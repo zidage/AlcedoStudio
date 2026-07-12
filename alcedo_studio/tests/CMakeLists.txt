@@ -186,6 +186,7 @@ if(ALCEDO_CUDA_ENABLED)
     ml_ops/conv_transpose2d_test.cu
     ml_ops/safetensors_test.cpp
     ml_ops/demosaicnet_module_test.cu
+    ml_ops/cuda_tile_jobs_test.cpp
   )
   target_include_directories(MlOpsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(MlOpsTest PRIVATE GTest::gtest_main CudaUtils DemosaicNet

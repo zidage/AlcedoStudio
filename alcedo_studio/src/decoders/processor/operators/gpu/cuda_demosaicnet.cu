@@ -81,6 +81,30 @@ void RunModel(const Model& model, const cuda::nn::DeviceTensor& input,
   model.Forward(input, output, workspace, stream);
 }
 
+// Fused reflect + sparse NCHW pack. Phase is taken from the reflected *source*
+// coordinate so color-preserving X-Trans space-to-depth packs match the handoff.
+__global__ void PackReflectPaddedCfaTileKernel(const cv::cuda::PtrStepSz<float> cfa,
+                                               float* mosaic, const int origin_x,
+                                               const int origin_y, const int tile_h,
+                                               const int tile_w, const RawCfaPattern pattern) {
+  const int x = blockIdx.x * blockDim.x + threadIdx.x;
+  const int y = blockIdx.y * blockDim.y + threadIdx.y;
+  if (x >= tile_w || y >= tile_h) {
+    return;
+  }
+
+  const int   src_x = Reflect101(origin_x + x, cfa.cols);
+  const int   src_y = Reflect101(origin_y + y, cfa.rows);
+  const int   color = RgbColorAt(pattern, src_y, src_x);
+  const float value = cfa(src_y, src_x);
+
+  const std::int64_t pixel = static_cast<std::int64_t>(y) * tile_w + x;
+  const std::int64_t plane = static_cast<std::int64_t>(tile_h) * tile_w;
+  mosaic[pixel]             = color == 0 ? value : 0.0F;
+  mosaic[plane + pixel]     = color == 1 ? value : 0.0F;
+  mosaic[2 * plane + pixel] = color == 2 ? value : 0.0F;
+}
+
 }  // namespace
 
 void NeuralDemosaicWorkspace::EnsureCapacity(const DemosaicNetVariant variant, const int height,
@@ -107,12 +131,12 @@ void NeuralDemosaicWorkspace::EnsureCapacity(const DemosaicNetVariant variant, c
     grew = true;
   }
 
-  const int output_height =
-      height - (variant == DemosaicNetVariant::Bayer ? BayerDemosaicNet::kSpatialLoss
-                                                     : XTransDemosaicNet::kSpatialLoss);
-  const int output_width =
-      width - (variant == DemosaicNetVariant::Bayer ? BayerDemosaicNet::kSpatialLoss
-                                                    : XTransDemosaicNet::kSpatialLoss);
+  const int output_height = variant == DemosaicNetVariant::Bayer
+                                ? BayerDemosaicNet::OutputHeight(height, width)
+                                : XTransDemosaicNet::OutputHeight(height, width);
+  const int output_width = variant == DemosaicNetVariant::Bayer
+                               ? BayerDemosaicNet::OutputWidth(width, height)
+                               : XTransDemosaicNet::OutputWidth(width, height);
   const int prev_rows = rgb_buffer_.rows;
   const int prev_cols = rgb_buffer_.cols;
   const int prev_type = rgb_buffer_.type();
@@ -151,6 +175,32 @@ void CopyReflectPaddedCfa(const cv::cuda::GpuMat& source, const cv::Rect& source
   cuda::nn::CheckCuda(cudaGetLastError(), "CopyReflectPaddedCfaKernel launch");
 }
 
+void PackReflectPaddedCfaTile(const cv::cuda::GpuMat& aligned_cfa, const cv::Point input_origin,
+                              const RawCfaPattern& training_pattern,
+                              cuda::nn::DeviceTensor& input_tensor, const int tile_h,
+                              const int tile_w, cv::cuda::Stream* stream) {
+  if (aligned_cfa.empty() || aligned_cfa.type() != CV_32FC1) {
+    throw std::runtime_error("PackReflectPaddedCfaTile requires non-empty CV_32FC1 CFA");
+  }
+  if (tile_h <= 0 || tile_w <= 0) {
+    throw std::runtime_error("PackReflectPaddedCfaTile: invalid tile size");
+  }
+  if (input_tensor.rank != 4 || input_tensor.data == nullptr || !input_tensor.IsContiguous()) {
+    throw std::runtime_error("PackReflectPaddedCfaTile: input_tensor must be contiguous NCHW");
+  }
+  if (input_tensor.shape[0] != 1 || input_tensor.shape[1] != 3 ||
+      input_tensor.shape[2] != tile_h || input_tensor.shape[3] != tile_w) {
+    throw std::runtime_error("PackReflectPaddedCfaTile: input_tensor shape must be [1,3,H,W]");
+  }
+
+  const dim3 block(16, 16);
+  const dim3 grid((tile_w + block.x - 1) / block.x, (tile_h + block.y - 1) / block.y);
+  PackReflectPaddedCfaTileKernel<<<grid, block, 0, GetCudaStream(stream)>>>(
+      aligned_cfa, input_tensor.data, input_origin.x, input_origin.y, tile_h, tile_w,
+      training_pattern);
+  cuda::nn::CheckCuda(cudaGetLastError(), "PackReflectPaddedCfaTileKernel launch");
+}
+
 auto DemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPattern& pattern,
                               cv::cuda::GpuMat& rgb, cv::cuda::Stream* stream,
                               const NeuralDemosaicOptions& options) -> NeuralDemosaicResult {
@@ -162,29 +212,41 @@ auto DemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPattern& 
 
     cv::cuda::GpuMat model_input = cfa;
     if (pattern.kind == RawCfaKind::Bayer2x2) {
-      // The Bayer model starts with a phase-sensitive 2x2/stride-2 pack. Preserve the top-left
-      // CFA phase and discard only an unmatched trailing row or column.
+      // The Bayer student starts with a phase-sensitive 2x2/stride-2 pack. Preserve the
+      // top-left CFA phase and discard only an unmatched trailing row or column.
       const int even_width  = cfa.cols & ~1;
       const int even_height = cfa.rows & ~1;
       if (even_width < BayerDemosaicNet::kMinSpatial ||
           even_height < BayerDemosaicNet::kMinSpatial) {
-        throw std::runtime_error("Neural Engine Bayer input is smaller than 64x64");
+        throw std::runtime_error("Neural Engine Bayer input is smaller than student minimum");
       }
-      model_input          = cfa(cv::Rect(0, 0, even_width, even_height));
-      result.source_border = BayerDemosaicNet::kSpatialLoss / 2;
+      model_input = cfa(cv::Rect(0, 0, even_width, even_height));
     } else {
-      if (cfa.cols < XTransDemosaicNet::kMinSpatial || cfa.rows < XTransDemosaicNet::kMinSpatial) {
-        throw std::runtime_error("Neural Engine X-Trans input is smaller than 26x26");
+      const int even_width  = cfa.cols & ~1;
+      const int even_height = cfa.rows & ~1;
+      if (even_width < XTransDemosaicNet::kMinSpatial ||
+          even_height < XTransDemosaicNet::kMinSpatial) {
+        throw std::runtime_error("Neural Engine X-Trans input is smaller than student minimum");
       }
-      result.source_border = XTransDemosaicNet::kSpatialLoss / 2;
+      // Space-to-depth pack requires pack_factor-aligned spatial size.
+      model_input = cfa(cv::Rect(0, 0, even_width, even_height));
     }
 
-    const int          height        = model_input.rows;
-    const int          width         = model_input.cols;
-    const std::size_t  input_numel   = static_cast<std::size_t>(3) * height * width;
-    const int          output_height = height - 2 * result.source_border;
-    const int          output_width  = width - 2 * result.source_border;
-    const std::size_t  output_numel  = static_cast<std::size_t>(3) * output_height * output_width;
+    const int         height        = model_input.rows;
+    const int         width         = model_input.cols;
+    const std::size_t input_numel   = static_cast<std::size_t>(3) * height * width;
+    const int         output_height =
+        pattern.kind == RawCfaKind::Bayer2x2 ? BayerDemosaicNet::OutputHeight(height, width)
+                                             : XTransDemosaicNet::OutputHeight(height, width);
+    const int output_width =
+        pattern.kind == RawCfaKind::Bayer2x2 ? BayerDemosaicNet::OutputWidth(width, height)
+                                             : XTransDemosaicNet::OutputWidth(width, height);
+    if (output_height <= 0 || output_width <= 0) {
+      throw std::runtime_error("Neural Engine input produces empty RGB output");
+    }
+    // Symmetric border used by crop mappers (exact for even natural/export shrink).
+    result.source_border = (height - output_height) / 2;
+    const std::size_t output_numel = static_cast<std::size_t>(3) * output_height * output_width;
 
     const cudaStream_t cuda_stream   = GetCudaStream(stream);
 

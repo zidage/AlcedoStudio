@@ -147,14 +147,27 @@ TEST_F(MlOpsDemosaicNetTest, BayerLoadWeightsAndRejectWrongShape) {
 
   // Mutate a weight shape and expect RequireF32Tensor / LoadWeights to fail.
   auto bad = map;
-  auto mutated = bad.at("conv1.weight");
-  mutated.shape = {64, 5, 3, 3};  // wrong Cin
+  auto mutated = bad.at("trunk.0.weight");
+  mutated.shape = {24, 5, 3, 3};  // wrong Cin
   mutated.data.assign(mutated.numel(), 0.0f);
   bad.Insert(std::move(mutated));
 
   BayerDemosaicNet bad_net;
   EXPECT_THROW(bad_net.LoadWeights(bad), std::runtime_error);
   EXPECT_FALSE(bad_net.weights_loaded());
+}
+
+TEST_F(MlOpsDemosaicNetTest, BayerLoadWeightsRejectsWrongArchitectureMetadata) {
+  const auto model_dir = FindModelDir();
+  if (model_dir.empty()) {
+    GTEST_SKIP() << "model dir not found";
+  }
+  auto map = cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors");
+  auto meta = map.metadata();
+  meta["architecture"] = "teacher_bayer_d15";
+  map.SetMetadata(std::move(meta));
+  BayerDemosaicNet net;
+  EXPECT_THROW(net.LoadWeights(map), std::runtime_error);
 }
 
 TEST_F(MlOpsDemosaicNetTest, XTransLoadWeightsAndRejectWrongShape) {
@@ -170,8 +183,8 @@ TEST_F(MlOpsDemosaicNetTest, XTransLoadWeightsAndRejectWrongShape) {
   EXPECT_GT(net.ResidentWeightBytes(), 0u);
 
   auto bad = map;
-  auto mutated = bad.at("post_conv1.weight");
-  mutated.shape = {64, 66, 3, 3};  // wrong Cin (must be 67)
+  auto mutated = bad.at("post_conv.weight");
+  mutated.shape = {32, 5, 3, 3};  // wrong Cin (must be 6)
   mutated.data.assign(mutated.numel(), 0.0f);
   bad.Insert(std::move(mutated));
 
@@ -228,18 +241,17 @@ TEST_F(MlOpsDemosaicNetTest, CacheNoReloadSameWeightPointers) {
   const float* w0 = m1.PackWeightDevicePtr();
   const float* w1 = m1.OutputWeightDevicePtr();
 
-  // Two sequential forwards must not reload weights.
+  // Two sequential forwards must not reload weights (natural-size student tile).
   constexpr int H = 64, W = 64, N = 1;
+  const int     Oh = BayerDemosaicNet::OutputHeight(H, W);
+  const int     Ow = BayerDemosaicNet::OutputWidth(W, H);
   const auto    hin = MakePattern(static_cast<std::size_t>(N * 3 * H * W), 7);
   cuda::nn::DeviceBufferF32 d_in(hin.size());
   d_in.Upload(hin);
-  cuda::nn::DeviceBufferF32 d_out(
-      static_cast<std::size_t>(N) * 3 * BayerDemosaicNet::OutputHeight(H) *
-      BayerDemosaicNet::OutputWidth(W));
+  cuda::nn::DeviceBufferF32 d_out(static_cast<std::size_t>(N) * 3 * Oh * Ow);
 
   auto tin  = d_in.AsTensor({N, 3, H, W});
-  auto tout = d_out.AsTensor(
-      {N, 3, BayerDemosaicNet::OutputHeight(H), BayerDemosaicNet::OutputWidth(W)});
+  auto tout = d_out.AsTensor({N, 3, Oh, Ow});
 
   cuda::nn::WorkspacePool ws;
   ws.Reserve(BayerDemosaicNet::EstimateWorkspaceBytes(H, W, N));
@@ -257,25 +269,27 @@ TEST_F(MlOpsDemosaicNetTest, CacheNoReloadSameWeightPointers) {
 }
 
 // ---------------------------------------------------------------------------
-// Golden forward (PyTorch reference dumps)
+// Golden forward (exported student tile fixtures: 1086→1024 / 1048→1024)
 // ---------------------------------------------------------------------------
 
-TEST_F(MlOpsDemosaicNetTest, BayerForwardMatchesPyTorchGolden) {
+TEST_F(MlOpsDemosaicNetTest, BayerStudentForwardMatchesExportedGolden00) {
   const auto model_dir = FindModelDir();
-  const auto in_path   = FindGolden("bayer_64_in.bin");
-  const auto out_path  = FindGolden("bayer_64_out.bin");
+  const auto in_path   = FindGolden("bayer_input_00.bin");
+  const auto out_path  = FindGolden("bayer_output_00.bin");
   if (model_dir.empty() || in_path.empty() || out_path.empty()) {
-    GTEST_SKIP() << "models or goldens not found";
+    GTEST_SKIP() << "models or student goldens not found";
   }
 
-  constexpr int N = 1, H = 64, W = 64;
-  constexpr int Oh = 2, Ow = 2;
+  constexpr int N = 1;
+  constexpr int H = BayerDemosaicNet::kTileInput;
+  constexpr int W = BayerDemosaicNet::kTileInput;
+  constexpr int Oh = BayerDemosaicNet::kTileOutput;
+  constexpr int Ow = BayerDemosaicNet::kTileOutput;
   const auto    hin      = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
   const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
 
-  auto map = cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors");
   BayerDemosaicNet net;
-  net.LoadWeights(map);
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors"));
 
   cuda::nn::DeviceBufferF32 d_in(hin.size());
   d_in.Upload(hin);
@@ -291,22 +305,53 @@ TEST_F(MlOpsDemosaicNetTest, BayerForwardMatchesPyTorchGolden) {
   ExpectVectorsNear(d_out.Download(), expected, 1e-4f);
 }
 
-TEST_F(MlOpsDemosaicNetTest, XTransForwardMatchesPyTorchGolden) {
+TEST_F(MlOpsDemosaicNetTest, BayerStudentForwardMatchesExportedGolden01) {
   const auto model_dir = FindModelDir();
-  const auto in_path   = FindGolden("xtrans_48_in.bin");
-  const auto out_path  = FindGolden("xtrans_48_out.bin");
+  const auto in_path   = FindGolden("bayer_input_01.bin");
+  const auto out_path  = FindGolden("bayer_output_01.bin");
   if (model_dir.empty() || in_path.empty() || out_path.empty()) {
-    GTEST_SKIP() << "models or goldens not found";
+    GTEST_SKIP() << "models or student goldens not found";
   }
 
-  constexpr int N = 1, H = 48, W = 48;
-  constexpr int Oh = 24, Ow = 24;
+  constexpr int N = 1;
+  constexpr int H = BayerDemosaicNet::kTileInput;
+  constexpr int W = BayerDemosaicNet::kTileInput;
+  constexpr int Oh = BayerDemosaicNet::kTileOutput;
+  constexpr int Ow = BayerDemosaicNet::kTileOutput;
   const auto    hin      = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
   const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
 
-  auto map = cuda::nn::LoadSafetensors(model_dir / "xtrans.safetensors");
+  BayerDemosaicNet net;
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors"));
+  cuda::nn::DeviceBufferF32 d_in(hin.size());
+  d_in.Upload(hin);
+  cuda::nn::DeviceBufferF32 d_out(expected.size());
+  auto tin  = d_in.AsTensor({N, 3, H, W});
+  auto tout = d_out.AsTensor({N, 3, Oh, Ow});
+  cuda::nn::WorkspacePool ws(BayerDemosaicNet::EstimateWorkspaceBytes(H, W, N));
+  net.Forward(tin, tout, ws);
+  ASSERT_EQ(::cudaDeviceSynchronize(), cudaSuccess);
+  ExpectVectorsNear(d_out.Download(), expected, 1e-4f);
+}
+
+TEST_F(MlOpsDemosaicNetTest, XTransStudentForwardMatchesExportedGolden00) {
+  const auto model_dir = FindModelDir();
+  const auto in_path   = FindGolden("xtrans_input_00.bin");
+  const auto out_path  = FindGolden("xtrans_output_00.bin");
+  if (model_dir.empty() || in_path.empty() || out_path.empty()) {
+    GTEST_SKIP() << "models or student goldens not found";
+  }
+
+  constexpr int N = 1;
+  constexpr int H = XTransDemosaicNet::kTileInput;
+  constexpr int W = XTransDemosaicNet::kTileInput;
+  constexpr int Oh = XTransDemosaicNet::kTileOutput;
+  constexpr int Ow = XTransDemosaicNet::kTileOutput;
+  const auto    hin      = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
+  const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
+
   XTransDemosaicNet net;
-  net.LoadWeights(map);
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "xtrans.safetensors"));
 
   cuda::nn::DeviceBufferF32 d_in(hin.size());
   d_in.Upload(hin);
@@ -322,36 +367,74 @@ TEST_F(MlOpsDemosaicNetTest, XTransForwardMatchesPyTorchGolden) {
   ExpectVectorsNear(d_out.Download(), expected, 1e-4f);
 }
 
-TEST_F(MlOpsDemosaicNetTest, BayerGoldenCornerPixelsAndStats) {
-  // Locked expected values from PyTorch seed=12345, H=W=64 (full out is 2×2×3).
+TEST_F(MlOpsDemosaicNetTest, XTransStudentForwardMatchesExportedGolden01) {
   const auto model_dir = FindModelDir();
-  const auto in_path   = FindGolden("bayer_64_in.bin");
-  if (model_dir.empty() || in_path.empty()) {
-    GTEST_SKIP() << "models or goldens not found";
+  const auto in_path   = FindGolden("xtrans_input_01.bin");
+  const auto out_path  = FindGolden("xtrans_output_01.bin");
+  if (model_dir.empty() || in_path.empty() || out_path.empty()) {
+    GTEST_SKIP() << "models or student goldens not found";
   }
 
-  constexpr int N = 1, H = 64, W = 64;
-  const auto    hin = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
+  constexpr int N = 1;
+  constexpr int H = XTransDemosaicNet::kTileInput;
+  constexpr int W = XTransDemosaicNet::kTileInput;
+  constexpr int Oh = XTransDemosaicNet::kTileOutput;
+  constexpr int Ow = XTransDemosaicNet::kTileOutput;
+  const auto    hin      = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
+  const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
+
+  XTransDemosaicNet net;
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "xtrans.safetensors"));
+  cuda::nn::DeviceBufferF32 d_in(hin.size());
+  d_in.Upload(hin);
+  cuda::nn::DeviceBufferF32 d_out(expected.size());
+  auto tin  = d_in.AsTensor({N, 3, H, W});
+  auto tout = d_out.AsTensor({N, 3, Oh, Ow});
+  cuda::nn::WorkspacePool ws(XTransDemosaicNet::EstimateWorkspaceBytes(H, W, N));
+  net.Forward(tin, tout, ws);
+  ASSERT_EQ(::cudaDeviceSynchronize(), cudaSuccess);
+  ExpectVectorsNear(d_out.Download(), expected, 1e-4f);
+}
+
+TEST_F(MlOpsDemosaicNetTest, BayerStudentGoldenCornerPixelsFinite) {
+  const auto model_dir = FindModelDir();
+  const auto in_path   = FindGolden("bayer_input_00.bin");
+  const auto out_path  = FindGolden("bayer_output_00.bin");
+  if (model_dir.empty() || in_path.empty() || out_path.empty()) {
+    GTEST_SKIP() << "models or student goldens not found";
+  }
+
+  constexpr int N = 1;
+  constexpr int H = BayerDemosaicNet::kTileInput;
+  constexpr int W = BayerDemosaicNet::kTileInput;
+  constexpr int Oh = BayerDemosaicNet::kTileOutput;
+  constexpr int Ow = BayerDemosaicNet::kTileOutput;
+  const auto    hin      = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
+  const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
   BayerDemosaicNet net;
   net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors"));
 
   cuda::nn::DeviceBufferF32 d_in(hin.size());
   d_in.Upload(hin);
-  cuda::nn::DeviceBufferF32 d_out(12);
+  cuda::nn::DeviceBufferF32 d_out(expected.size());
   auto tin  = d_in.AsTensor({N, 3, H, W});
-  auto tout = d_out.AsTensor({N, 3, 2, 2});
+  auto tout = d_out.AsTensor({N, 3, Oh, Ow});
   cuda::nn::WorkspacePool ws(BayerDemosaicNet::EstimateWorkspaceBytes(H, W, N));
   net.Forward(tin, tout, ws);
   ASSERT_EQ(::cudaDeviceSynchronize(), cudaSuccess);
   const auto out = d_out.Download();
 
-  // Corner RGB at (0,0) and (1,1)
-  EXPECT_NEAR(out[0], 2.05449295f, 1e-4f);
-  EXPECT_NEAR(out[4], 1.08356583f, 1e-4f);
-  EXPECT_NEAR(out[8], 1.52744353f, 1e-4f);
-  EXPECT_NEAR(out[3], 2.26219130f, 1e-4f);
-  EXPECT_NEAR(out[7], 0.53580523f, 1e-4f);
-  EXPECT_NEAR(out[11], 1.59372783f, 1e-4f);
+  // Corners of each RGB plane (NCHW): plane c starts at c * Oh * Ow.
+  const auto plane = Oh * Ow;
+  EXPECT_NEAR(out[0], expected[0], 1e-4f);
+  EXPECT_NEAR(out[plane - 1], expected[plane - 1], 1e-4f);
+  EXPECT_NEAR(out[plane], expected[plane], 1e-4f);
+  EXPECT_NEAR(out[2 * plane - 1], expected[2 * plane - 1], 1e-4f);
+  EXPECT_NEAR(out[2 * plane], expected[2 * plane], 1e-4f);
+  EXPECT_NEAR(out[3 * plane - 1], expected[3 * plane - 1], 1e-4f);
+  for (float v : out) {
+    EXPECT_TRUE(std::isfinite(v));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -372,6 +455,8 @@ TEST_F(MlOpsDemosaicNetTest, ConcurrentForwardsSharedWeights) {
   const float*            pack_w = net.PackWeightDevicePtr();
 
   constexpr int H = 64, W = 64, N = 1;
+  const int     Oh = BayerDemosaicNet::OutputHeight(H, W);
+  const int     Ow = BayerDemosaicNet::OutputWidth(W, H);
   const auto    hin = MakePattern(static_cast<std::size_t>(N * 3 * H * W), 99);
   std::atomic<int> ok{0};
   std::atomic<int> fail{0};
@@ -380,12 +465,9 @@ TEST_F(MlOpsDemosaicNetTest, ConcurrentForwardsSharedWeights) {
     try {
       cuda::nn::DeviceBufferF32 d_in(hin.size());
       d_in.Upload(hin);
-      cuda::nn::DeviceBufferF32 d_out(
-          static_cast<std::size_t>(N) * 3 * BayerDemosaicNet::OutputHeight(H) *
-          BayerDemosaicNet::OutputWidth(W));
+      cuda::nn::DeviceBufferF32 d_out(static_cast<std::size_t>(N) * 3 * Oh * Ow);
       auto tin  = d_in.AsTensor({N, 3, H, W});
-      auto tout = d_out.AsTensor(
-          {N, 3, BayerDemosaicNet::OutputHeight(H), BayerDemosaicNet::OutputWidth(W)});
+      auto tout = d_out.AsTensor({N, 3, Oh, Ow});
 
       cuda::nn::WorkspacePool ws;
       ws.Reserve(BayerDemosaicNet::EstimateWorkspaceBytes(H, W, N));
@@ -416,10 +498,20 @@ TEST_F(MlOpsDemosaicNetTest, ConcurrentForwardsSharedWeights) {
 }
 
 TEST_F(MlOpsDemosaicNetTest, OutputShapeHelpers) {
-  EXPECT_EQ(BayerDemosaicNet::OutputHeight(64), 2);
-  EXPECT_EQ(BayerDemosaicNet::OutputWidth(128), 66);
-  EXPECT_EQ(XTransDemosaicNet::OutputHeight(48), 24);
-  EXPECT_EQ(XTransDemosaicNet::OutputWidth(26), 2);
+  // Natural size for non-tile inputs.
+  EXPECT_EQ(BayerDemosaicNet::OutputHeight(64, 64), 64 - BayerDemosaicNet::kNaturalSpatialLoss);
+  EXPECT_EQ(BayerDemosaicNet::OutputWidth(128, 64), 128 - BayerDemosaicNet::kNaturalSpatialLoss);
+  EXPECT_EQ(XTransDemosaicNet::OutputHeight(48, 48), 48 - XTransDemosaicNet::kNaturalSpatialLoss);
+  EXPECT_EQ(XTransDemosaicNet::OutputWidth(26, 48), 26 - XTransDemosaicNet::kNaturalSpatialLoss);
+  // Export tile contract.
+  EXPECT_EQ(BayerDemosaicNet::OutputHeight(BayerDemosaicNet::kTileInput,
+                                           BayerDemosaicNet::kTileInput),
+            BayerDemosaicNet::kTileOutput);
+  EXPECT_EQ(XTransDemosaicNet::OutputHeight(XTransDemosaicNet::kTileInput,
+                                            XTransDemosaicNet::kTileInput),
+            XTransDemosaicNet::kTileOutput);
+  EXPECT_EQ(BayerDemosaicNet::kTilePad, 32);
+  EXPECT_EQ(XTransDemosaicNet::kTileStep, 1020);
   EXPECT_GT(BayerDemosaicNet::EstimateWorkspaceBytes(64, 64, 1), 0u);
   EXPECT_GT(XTransDemosaicNet::EstimateWorkspaceBytes(48, 48, 1), 0u);
 }

@@ -1,0 +1,143 @@
+{
+  "architecture": "xtrans_p2_s32_d4",
+  "architecture_md": "pytorch/handoff/xtrans_architecture.md",
+  "architecture_md_sha256": "18e28ca392ab0e13440b96a656cf1df6f4aa562c669e8ae3f14b3004ab911271",
+  "checkpoint": "pytorch/runs/iterations/xtrans_aggressive_all_v4_handoff/checkpoints/best.pt",
+  "checkpoint_sha256": "f985ba64404a4ef9e4662d4f556d184de1e47127ab046f7140fa4b614f4c7546",
+  "cost": {
+    "budget_status": "within_exploratory",
+    "full_frame_flops": 1003204177920,
+    "full_frame_tflop": 1.00320417792,
+    "n_tiles": 48,
+    "tile_flops": 20900087040
+  },
+  "export_git_commit": "336cadec9c0d18e24c0a2df49b7cd3e7eb69cabb",
+  "exported_at": "2026-07-12T13:22:19.511442+00:00",
+  "fp32_weight_bytes": 134716,
+  "golden": {
+    "dtype": "float32",
+    "format": "demosaicnet-fp32-golden-v1",
+    "manifest_path": "xtrans_golden_manifest.json",
+    "manifest_sha256": "36bd4996225d5de3ca847592fa15f66be41d7ed7e9ba4d383efd961d5f65225b",
+    "n": 2,
+    "patches": [
+      {
+        "index": 0,
+        "input_file": "xtrans_input_00.pt",
+        "input_sha256": "e385108dd4616708bf06415be967cd77ea2c1bf63be42dba930ec32fc0c01d94",
+        "input_shape": [
+          1,
+          3,
+          1048,
+          1048
+        ],
+        "output_file": "xtrans_output_00.pt",
+        "output_sha256": "e4963d6aadcf0da0439c81ea9d9959e7feb7ae5295be28ef6c0929cc62c509f5",
+        "output_shape": [
+          1,
+          3,
+          1024,
+          1024
+        ],
+        "seed": 20260712
+      },
+      {
+        "index": 1,
+        "input_file": "xtrans_input_01.pt",
+        "input_sha256": "07b6375093556c655753ba4287a6dd06b9986363b1c24cdef46a3019c77afa1b",
+        "input_shape": [
+          1,
+          3,
+          1048,
+          1048
+        ],
+        "output_file": "xtrans_output_01.pt",
+        "output_sha256": "182294bf9b6f0b3fc324e0c460f0cd88e59665fe6553bb1ab279aecfc17baa50",
+        "output_shape": [
+          1,
+          3,
+          1024,
+          1024
+        ],
+        "seed": 20260712
+      }
+    ],
+    "seed": 20260712,
+    "variant": "xtrans"
+  },
+  "metadata": {
+    "architecture": "xtrans_p2_s32_d4",
+    "architecture_version": "1",
+    "cfa_period": "6",
+    "checkpoint_sha256": "f985ba64404a4ef9e4662d4f556d184de1e47127ab046f7140fa4b614f4c7546",
+    "format": "demosaicnet-pytorch-state_dict",
+    "pack_factor": "2",
+    "phase": "7",
+    "source_zip_sha256": "dc795eff57033e488e91cd46ba69336923f86b60a7ad65ec15bc765d904d8bc0",
+    "teacher_sha256": "4bde95e316bcb1915a0f85ac9ca897d025b84e7eac443e31cc72877713a19a0b",
+    "tile_border": "12",
+    "tile_input": "1048",
+    "tile_output": "1024",
+    "tile_pad": "12",
+    "tile_step": "1020",
+    "training_commit": "unknown",
+    "variant": "xtrans"
+  },
+  "n_tensors": 16,
+  "parameter_count": 33679,
+  "safetensors": "pytorch/handoff/xtrans_student.safetensors",
+  "safetensors_bytes": 136516,
+  "safetensors_sha256": "021358ac2c2c4ef0dc982acc015956f45f53d9ea69cc1c2055c5409619448ca3",
+  "selection": "pytorch/selected/xtrans_phase7_aggressive_v4_selection.json",
+  "tiling": {
+    "border": 12,
+    "input_tile": 1048,
+    "output_tile": 1024,
+    "pad": 12,
+    "period": 6,
+    "step": 1020
+  },
+  "trainable_parameter_count": 33487,
+  "variant": "xtrans",
+  "verify": {
+    "architecture": "xtrans_p2_s32_d4",
+    "errors": [],
+    "golden": [
+      {
+        "index": 0,
+        "match": true,
+        "max_abs_diff": 0.0
+      },
+      {
+        "index": 1,
+        "match": true,
+        "max_abs_diff": 0.0
+      }
+    ],
+    "max_state_abs_diff": 0.0,
+    "metadata": {
+      "architecture": "xtrans_p2_s32_d4",
+      "architecture_version": "1",
+      "cfa_period": "6",
+      "checkpoint_sha256": "f985ba64404a4ef9e4662d4f556d184de1e47127ab046f7140fa4b614f4c7546",
+      "format": "demosaicnet-pytorch-state_dict",
+      "pack_factor": "2",
+      "phase": "7",
+      "source_zip_sha256": "dc795eff57033e488e91cd46ba69336923f86b60a7ad65ec15bc765d904d8bc0",
+      "teacher_sha256": "4bde95e316bcb1915a0f85ac9ca897d025b84e7eac443e31cc72877713a19a0b",
+      "tile_border": "12",
+      "tile_input": "1048",
+      "tile_output": "1024",
+      "tile_pad": "12",
+      "tile_step": "1020",
+      "training_commit": "unknown",
+      "variant": "xtrans"
+    },
+    "n_tensors": 16,
+    "ok": true,
+    "path": "D:\\Projects\\deepjoint_demosiacing\\demosaicnet_caffe\\pytorch\\handoff\\xtrans_student.safetensors",
+    "path_rel": "pytorch/handoff/xtrans_student.safetensors",
+    "sha256": "021358ac2c2c4ef0dc982acc015956f45f53d9ea69cc1c2055c5409619448ca3",
+    "variant": "xtrans"
+  }
+}

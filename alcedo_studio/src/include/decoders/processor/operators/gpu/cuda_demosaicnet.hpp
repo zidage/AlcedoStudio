@@ -10,6 +10,7 @@
 #include <string>
 
 #include "cuda/nn/device_buffer.hpp"
+#include "cuda/nn/tensor.hpp"
 #include "cuda/nn/workspace.hpp"
 #include "decoders/processor/nn/demosaicnet_cache.hpp"
 #include "decoders/processor/raw_processor_pattern.hpp"
@@ -75,6 +76,21 @@ struct NeuralDemosaicOptions {
 // tiles the same fixed shape as interior Neural Engine tiles.
 void CopyReflectPaddedCfa(const cv::cuda::GpuMat& source, const cv::Rect& source_rect,
                           cv::cuda::GpuMat& destination, cv::cuda::Stream* stream = nullptr);
+
+// Fused student tile pack: for each pixel of a fixed input tile with signed origin
+// in the aligned CFA lattice, reflect-pad (OpenCV/NumPy reflect101), read the scalar
+// CFA sample, place it in the RGB plane of the *reflected source* coordinate's CFA
+// phase, and write contiguous NCHW [1,3,H,W]. Matches “pack full sparse mosaic,
+// reflect-pad, then slice” without materializing either intermediate.
+//
+// `aligned_cfa` is the phase-aligned, period-trimmed linear CFA (CV_32FC1).
+// `training_pattern` is the fixed training CFA pattern at the aligned origin (0,0).
+// `input_origin` may be negative (virtual pad). `input_tensor` must be contiguous
+// NCHW f32 with shape [1,3,tile_h,tile_w].
+void PackReflectPaddedCfaTile(const cv::cuda::GpuMat& aligned_cfa, cv::Point input_origin,
+                              const RawCfaPattern& training_pattern,
+                              cuda::nn::DeviceTensor& input_tensor, int tile_h, int tile_w,
+                              cv::cuda::Stream* stream = nullptr);
 
 struct NeuralDemosaicResult {
   bool        succeeded     = false;

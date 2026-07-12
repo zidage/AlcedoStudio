@@ -322,20 +322,19 @@ TEST_F(MlOpsConvTranspose2dTest, RealWeightUnpackMosaick) {
   try {
     map = cuda::nn::LoadSafetensors(path);
   } catch (const std::exception& e) {
-    GTEST_SKIP() << "failed to load unpack_mosaick: " << e.what();
+    GTEST_SKIP() << "failed to load unpack.weight: " << e.what();
   }
-  // PyTorch ConvTranspose2d weight: [Cin, Cout/groups, kH, kW] = [12, 1, 2, 2]
-  const auto& w = cuda::nn::RequireF32Tensor(map, "unpack_mosaick.weight", {12, 1, 2, 2});
-  const auto& b = cuda::nn::RequireF32Tensor(map, "unpack_mosaick.bias", {3});
+  // Student unpack is bias-free fixed one-hot: [Cin, Cout/groups, kH, kW] = [12, 1, 2, 2]
+  const auto& w = cuda::nn::RequireF32Tensor(map, "unpack.weight", {12, 1, 2, 2});
 
   constexpr int N = 1, Cin = 12, Cout = 3, H = 16, W = 20;
   constexpr int groups = 3;
   const auto    hin = MakePattern(static_cast<std::size_t>(N * Cin * H * W), 150);
 
   const auto expected =
-      CpuConvTranspose2d(hin, w.data, &b.data, N, Cin, Cout, H, W, 2, 2, 2, 2, 0, 0, 1, groups, 0,
+      CpuConvTranspose2d(hin, w.data, nullptr, N, Cin, Cout, H, W, 2, 2, 2, 2, 0, 0, 1, groups, 0,
                          0);
-  const auto actual = RunGpuConvTranspose(hin, w.data, &b.data, N, Cin, Cout, H, W, 2, 2, 2, 2, 0,
+  const auto actual = RunGpuConvTranspose(hin, w.data, nullptr, N, Cin, Cout, H, W, 2, 2, 2, 2, 0,
                                           0, 1, groups, 0, 0, nullptr);
   ExpectVectorsNear(actual, expected, 5e-5f);
 }

@@ -543,48 +543,54 @@ struct ConvLayer {
 };
 
 [[nodiscard]] auto BuildBayerConvLayers(const int tile_out) -> std::vector<ConvLayer> {
-  const int hin = tile_out + BayerDemosaicNet::kSpatialLoss;
+  // Student bayer_s24_d8 shapes at the export tile contract.
+  const int hin = (tile_out == BayerDemosaicNet::kTileOutput) ? BayerDemosaicNet::kTileInput
+                                                              : tile_out + BayerDemosaicNet::kNaturalSpatialLoss;
   const int win = hin;
-  const int ph  = hin / 2;
-  const int pw  = win / 2;
+  const int ph  = hin / BayerDemosaicNet::kPackFactor;
+  const int pw  = win / BayerDemosaicNet::kPackFactor;
   std::vector<ConvLayer> layers;
-  layers.push_back({"pack_mosaick", 3, 4, 2, 2, hin, win, false});
+  layers.push_back({"pack", 3, 4, 2, 2, hin, win, false});
   int h = ph;
   int w = pw;
-  layers.push_back({"conv1", 4, 64, 3, 1, h, w, true});
+  layers.push_back({"trunk_1", 4, 24, 3, 1, h, w, true});
   h -= 2;
   w -= 2;
-  for (int i = 2; i <= 14; ++i) {
-    layers.push_back({"conv" + std::to_string(i), 64, 64, 3, 1, h, w, true});
+  for (int i = 2; i <= BayerDemosaicNet::kDepth; ++i) {
+    layers.push_back({"trunk_" + std::to_string(i), 24, 24, 3, 1, h, w, true});
     h -= 2;
     w -= 2;
   }
-  layers.push_back({"conv15", 64, 128, 3, 1, h, w, true});
-  h -= 2;
-  w -= 2;
-  // residual uses 64-channel filtered tensor (slice of 128); spatial is post-conv15
-  layers.push_back({"residual", 64, 12, 1, 1, h, w, false});
+  layers.push_back({"residual", 24, 12, 1, 1, h, w, false});
   const int uh = h * 2;
   const int uw = w * 2;
-  layers.push_back({"post_conv1", 6, 64, 3, 1, uh, uw, true});
-  layers.push_back({"output", 64, 3, 1, 1, uh - 2, uw - 2, false});
+  layers.push_back({"post_conv", 6, 24, 3, 1, uh, uw, true});
+  layers.push_back({"output", 24, 3, 1, 1, uh - 2, uw - 2, false});
   return layers;
 }
 
 [[nodiscard]] auto BuildXTransConvLayers(const int tile_out) -> std::vector<ConvLayer> {
-  const int hin = tile_out + XTransDemosaicNet::kSpatialLoss;
+  // Student xtrans_p2_s32_d4 shapes at the export tile contract.
+  const int hin = (tile_out == XTransDemosaicNet::kTileOutput) ? XTransDemosaicNet::kTileInput
+                                                               : tile_out + XTransDemosaicNet::kNaturalSpatialLoss;
   const int win = hin;
   std::vector<ConvLayer> layers;
-  int h = hin;
-  int w = win;
-  for (int i = 1; i <= 11; ++i) {
-    const int cin = (i == 1) ? 3 : 64;
-    layers.push_back({"conv" + std::to_string(i), cin, 64, 3, 1, h, w, true});
+  layers.push_back({"pack", 3, 12, 2, 2, hin, win, false});
+  int h = hin / XTransDemosaicNet::kPackFactor;
+  int w = win / XTransDemosaicNet::kPackFactor;
+  layers.push_back({"trunk_1", 12, 32, 3, 1, h, w, true});
+  h -= 2;
+  w -= 2;
+  for (int i = 2; i <= XTransDemosaicNet::kDepth; ++i) {
+    layers.push_back({"trunk_" + std::to_string(i), 32, 32, 3, 1, h, w, true});
     h -= 2;
     w -= 2;
   }
-  layers.push_back({"post_conv1", 67, 64, 3, 1, h, w, true});
-  layers.push_back({"output", 64, 3, 1, 1, h - 2, w - 2, false});
+  layers.push_back({"residual", 32, 12, 1, 1, h, w, false});
+  const int uh = h * 2;
+  const int uw = w * 2;
+  layers.push_back({"post_conv", 6, 32, 3, 1, uh, uw, true});
+  layers.push_back({"output", 32, 3, 1, 1, uh - 2, uw - 2, false});
   return layers;
 }
 

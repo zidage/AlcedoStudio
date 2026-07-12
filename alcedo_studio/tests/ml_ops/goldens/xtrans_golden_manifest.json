@@ -1,0 +1,49 @@
+{
+  "dtype": "float32",
+  "format": "demosaicnet-fp32-golden-v1",
+  "n": 2,
+  "patches": [
+    {
+      "index": 0,
+      "input_file": "xtrans_input_00.pt",
+      "input_sha256": "e385108dd4616708bf06415be967cd77ea2c1bf63be42dba930ec32fc0c01d94",
+      "input_shape": [
+        1,
+        3,
+        1048,
+        1048
+      ],
+      "output_file": "xtrans_output_00.pt",
+      "output_sha256": "e4963d6aadcf0da0439c81ea9d9959e7feb7ae5295be28ef6c0929cc62c509f5",
+      "output_shape": [
+        1,
+        3,
+        1024,
+        1024
+      ],
+      "seed": 20260712
+    },
+    {
+      "index": 1,
+      "input_file": "xtrans_input_01.pt",
+      "input_sha256": "07b6375093556c655753ba4287a6dd06b9986363b1c24cdef46a3019c77afa1b",
+      "input_shape": [
+        1,
+        3,
+        1048,
+        1048
+      ],
+      "output_file": "xtrans_output_01.pt",
+      "output_sha256": "182294bf9b6f0b3fc324e0c460f0cd88e59665fe6553bb1ab279aecfc17baa50",
+      "output_shape": [
+        1,
+        3,
+        1024,
+        1024
+      ],
+      "seed": 20260712
+    }
+  ],
+  "seed": 20260712,
+  "variant": "xtrans"
+}

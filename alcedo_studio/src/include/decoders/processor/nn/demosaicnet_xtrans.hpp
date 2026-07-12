@@ -17,20 +17,40 @@
 
 namespace alcedo {
 
-// Hard-coded X-Trans DemosaicNet (depth=11, width=64). Topology matches
-// demosaicnet XTransDemosaick / xtrans.safetensors — not a runtime graph.
+// Hard-coded X-Trans student DemosaicNet (`xtrans_p2_s32_d4`). Topology matches
+// student_handoff/xtrans_architecture.md and bundled xtrans.safetensors — not a
+// runtime graph.
 //
-// Input:  contiguous NCHW f32 mosaic [N, 3, H, W], H,W >= 26 (for positive out).
-// Output: contiguous NCHW f32 RGB    [N, 3, H-24, W-24].
+// Input:  contiguous NCHW f32 mosaic [N, 3, H, W], H,W >= kMinSpatial, divisible by
+//         pack_factor (2).
+// Output: contiguous NCHW f32 RGB [N, 3, Oh, Ow] where
+//   - exact tile (H=W=kTileInput) → center-cropped export kTileOutput
+//   - otherwise → natural size H - kNaturalSpatialLoss
 //
-// No pack / residual / transpose branch — full resolution throughout the main
-// stack, then crop+concat full-res residual path.
+// Uses space-to-depth pack (3→12), residual 1×1 → 12, grouped unpack → RGB,
+// then mosaick skip + post conv (unlike the full-res teacher trunk).
 class XTransDemosaicNet : public NnWeightModule<XTransDemosaicNet> {
  public:
-  static constexpr int kDepth       = 11;
-  static constexpr int kWidth       = 64;
-  static constexpr int kMinSpatial  = 26;
-  static constexpr int kSpatialLoss = 24;  // H_out = H_in - kSpatialLoss
+  static constexpr const char* kArchitecture = "xtrans_p2_s32_d4";
+  static constexpr int         kDepth        = 4;
+  static constexpr int         kWidth        = 32;
+  static constexpr int         kPackFactor   = 2;
+  static constexpr int         kPackOutCh    = 12;  // space-to-depth 3*2*2
+  static constexpr int         kResidualCh   = 12;
+
+  // Tile / CFA contract (product tiling + export goldens).
+  static constexpr int kTileInput  = 1048;
+  static constexpr int kTileOutput = 1024;
+  static constexpr int kTileBorder = 12;
+  static constexpr int kTilePad    = 12;
+  static constexpr int kTileStep   = 1020;  // 1024 % 6 != 0 → period-safe step
+  static constexpr int kCfaPeriod  = 6;
+
+  // Natural valid-conv shrink: H - 2*pack_factor*depth - 2 = H - 18
+  static constexpr int kNaturalSpatialLoss = 2 * kPackFactor * kDepth + 2;
+  // Export shrink on the fixed training tile (1048 → 1024).
+  static constexpr int kSpatialLoss = kTileInput - kTileOutput;  // 24
+  static constexpr int kMinSpatial  = kNaturalSpatialLoss + 2;   // 20
 
   XTransDemosaicNet() = default;
 
@@ -40,20 +60,42 @@ class XTransDemosaicNet : public NnWeightModule<XTransDemosaicNet> {
   void Forward(const cuda::nn::DeviceTensor& input, cuda::nn::DeviceTensor& output,
                cuda::nn::WorkspacePool& workspace, cudaStream_t stream = nullptr) const;
 
-  [[nodiscard]] static auto OutputHeight(int input_h) -> int { return input_h - kSpatialLoss; }
-  [[nodiscard]] static auto OutputWidth(int input_w) -> int { return input_w - kSpatialLoss; }
+  [[nodiscard]] static auto NaturalOutputHeight(int input_h) -> int {
+    return input_h - kNaturalSpatialLoss;
+  }
+  [[nodiscard]] static auto NaturalOutputWidth(int input_w) -> int {
+    return input_w - kNaturalSpatialLoss;
+  }
+  [[nodiscard]] static auto OutputHeight(int input_h, int input_w = -1) -> int {
+    const int w = input_w < 0 ? input_h : input_w;
+    if (input_h == kTileInput && w == kTileInput) {
+      return kTileOutput;
+    }
+    return NaturalOutputHeight(input_h);
+  }
+  [[nodiscard]] static auto OutputWidth(int input_w, int input_h = -1) -> int {
+    const int h = input_h < 0 ? input_w : input_h;
+    if (h == kTileInput && input_w == kTileInput) {
+      return kTileOutput;
+    }
+    return NaturalOutputWidth(input_w);
+  }
 
   [[nodiscard]] static auto EstimateWorkspaceBytes(int input_h, int input_w, int batch = 1)
       -> std::size_t;
 
   [[nodiscard]] auto ResidentWeightBytes() const -> std::size_t;
 
-  [[nodiscard]] auto Conv1WeightDevicePtr() const -> const float* { return conv_w_[0].get(); }
+  [[nodiscard]] auto PackWeightDevicePtr() const -> const float* { return pack_w_.get(); }
   [[nodiscard]] auto OutputWeightDevicePtr() const -> const float* { return output_w_.get(); }
 
  private:
-  cuda::nn::DeviceBufferF32 conv_w_[kDepth];
-  cuda::nn::DeviceBufferF32 conv_b_[kDepth];
+  cuda::nn::DeviceBufferF32 pack_w_;  // fixed, no bias
+  cuda::nn::DeviceBufferF32 trunk_w_[kDepth];
+  cuda::nn::DeviceBufferF32 trunk_b_[kDepth];
+  cuda::nn::DeviceBufferF32 residual_w_;
+  cuda::nn::DeviceBufferF32 residual_b_;
+  cuda::nn::DeviceBufferF32 unpack_w_;  // fixed, no bias
   cuda::nn::DeviceBufferF32 post_w_;
   cuda::nn::DeviceBufferF32 post_b_;
   cuda::nn::DeviceBufferF32 output_w_;

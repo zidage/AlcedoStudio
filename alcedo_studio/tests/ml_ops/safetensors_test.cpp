@@ -68,7 +68,7 @@ void WriteSafetensorsFile(const fs::path& path, const nlohmann::json& header,
   ASSERT_TRUE(out) << "failed writing safetensors fixture: " << path;
 }
 
-// Authoritative shapes from docs/roadmap/cuda_nn_forward_demosaicnet_plan.md §2.1 / §2.2.
+// Authoritative student shapes: bayer_s24_d8 / xtrans_p2_s32_d4 (Phase 8A).
 void ExpectKeyShape(const cuda::nn::SafetensorsTensorMap& map, const char* key,
                     std::initializer_list<std::int64_t> shape) {
   ASSERT_TRUE(map.contains(key)) << "missing key: " << key;
@@ -83,40 +83,40 @@ void ExpectKeyShape(const cuda::nn::SafetensorsTensorMap& map, const char* key,
 }
 
 void ExpectBayerShapeTable(const cuda::nn::SafetensorsTensorMap& map) {
-  ExpectKeyShape(map, "pack_mosaick.weight", {4, 3, 2, 2});
-  ExpectKeyShape(map, "pack_mosaick.bias", {4});
-  ExpectKeyShape(map, "conv1.weight", {64, 4, 3, 3});
-  ExpectKeyShape(map, "conv1.bias", {64});
-  for (int i = 2; i <= 14; ++i) {
-    const std::string w = "conv" + std::to_string(i) + ".weight";
-    const std::string b = "conv" + std::to_string(i) + ".bias";
-    ExpectKeyShape(map, w.c_str(), {64, 64, 3, 3});
-    ExpectKeyShape(map, b.c_str(), {64});
+  ExpectKeyShape(map, "pack.weight", {4, 3, 2, 2});
+  ExpectKeyShape(map, "trunk.0.weight", {24, 4, 3, 3});
+  ExpectKeyShape(map, "trunk.0.bias", {24});
+  for (int i = 1; i < 8; ++i) {
+    const std::string w = "trunk." + std::to_string(i) + ".weight";
+    const std::string b = "trunk." + std::to_string(i) + ".bias";
+    ExpectKeyShape(map, w.c_str(), {24, 24, 3, 3});
+    ExpectKeyShape(map, b.c_str(), {24});
   }
-  ExpectKeyShape(map, "conv15.weight", {128, 64, 3, 3});
-  ExpectKeyShape(map, "conv15.bias", {128});
-  ExpectKeyShape(map, "residual.weight", {12, 64, 1, 1});
+  ExpectKeyShape(map, "residual.weight", {12, 24, 1, 1});
   ExpectKeyShape(map, "residual.bias", {12});
-  ExpectKeyShape(map, "unpack_mosaick.weight", {12, 1, 2, 2});
-  ExpectKeyShape(map, "unpack_mosaick.bias", {3});
-  ExpectKeyShape(map, "post_conv1.weight", {64, 6, 3, 3});
-  ExpectKeyShape(map, "post_conv1.bias", {64});
-  ExpectKeyShape(map, "output.weight", {3, 64, 1, 1});
+  ExpectKeyShape(map, "unpack.weight", {12, 1, 2, 2});
+  ExpectKeyShape(map, "post_conv.weight", {24, 6, 3, 3});
+  ExpectKeyShape(map, "post_conv.bias", {24});
+  ExpectKeyShape(map, "output.weight", {3, 24, 1, 1});
   ExpectKeyShape(map, "output.bias", {3});
 }
 
 void ExpectXtransShapeTable(const cuda::nn::SafetensorsTensorMap& map) {
-  ExpectKeyShape(map, "conv1.weight", {64, 3, 3, 3});
-  ExpectKeyShape(map, "conv1.bias", {64});
-  for (int i = 2; i <= 11; ++i) {
-    const std::string w = "conv" + std::to_string(i) + ".weight";
-    const std::string b = "conv" + std::to_string(i) + ".bias";
-    ExpectKeyShape(map, w.c_str(), {64, 64, 3, 3});
-    ExpectKeyShape(map, b.c_str(), {64});
+  ExpectKeyShape(map, "pack.weight", {12, 3, 2, 2});
+  ExpectKeyShape(map, "trunk.0.weight", {32, 12, 3, 3});
+  ExpectKeyShape(map, "trunk.0.bias", {32});
+  for (int i = 1; i < 4; ++i) {
+    const std::string w = "trunk." + std::to_string(i) + ".weight";
+    const std::string b = "trunk." + std::to_string(i) + ".bias";
+    ExpectKeyShape(map, w.c_str(), {32, 32, 3, 3});
+    ExpectKeyShape(map, b.c_str(), {32});
   }
-  ExpectKeyShape(map, "post_conv1.weight", {64, 67, 3, 3});
-  ExpectKeyShape(map, "post_conv1.bias", {64});
-  ExpectKeyShape(map, "output.weight", {3, 64, 1, 1});
+  ExpectKeyShape(map, "residual.weight", {12, 32, 1, 1});
+  ExpectKeyShape(map, "residual.bias", {12});
+  ExpectKeyShape(map, "unpack.weight", {12, 1, 2, 2});
+  ExpectKeyShape(map, "post_conv.weight", {32, 6, 3, 3});
+  ExpectKeyShape(map, "post_conv.bias", {32});
+  ExpectKeyShape(map, "output.weight", {3, 32, 1, 1});
   ExpectKeyShape(map, "output.bias", {3});
 }
 
@@ -137,9 +137,13 @@ TEST(MlOpsSafetensorsTest, LoadRealBayerWeightsShapesAndMetadata) {
 
   EXPECT_EQ(map.metadata("format"), "demosaicnet-pytorch-state_dict");
   EXPECT_EQ(map.metadata("variant"), "bayer");
+  EXPECT_EQ(map.metadata("architecture"), "bayer_s24_d8");
+  EXPECT_EQ(map.metadata("tile_pad"), "32");
+  EXPECT_EQ(map.metadata("tile_border"), "31");
+  EXPECT_EQ(map.metadata("tile_step"), "1024");
 
-  // 20 weight + 20 bias keys (§2.1).
-  EXPECT_EQ(map.size(), 40u);
+  // Student Bayer: 12 weight + 12 bias = 24 tensors (pack/unpack bias-free).
+  EXPECT_EQ(map.size(), 24u);
   ExpectBayerShapeTable(map);
 
   // Iteration covers every stored tensor name.
@@ -151,12 +155,12 @@ TEST(MlOpsSafetensorsTest, LoadRealBayerWeightsShapesAndMetadata) {
   }
   EXPECT_EQ(seen, map.size());
 
-  // Bayer-only keys must exist; XTrans-only input width must not.
-  EXPECT_TRUE(map.contains("pack_mosaick.weight"));
-  EXPECT_TRUE(map.contains("unpack_mosaick.weight"));
+  EXPECT_TRUE(map.contains("pack.weight"));
+  EXPECT_TRUE(map.contains("unpack.weight"));
   EXPECT_TRUE(map.contains("residual.weight"));
-  // post_conv1 is 6→64 for Bayer, not 67.
-  EXPECT_TRUE(cuda::nn::ShapesEqual(map.at("post_conv1.weight").shape, {64, 6, 3, 3}));
+  EXPECT_FALSE(map.contains("pack.bias"));
+  EXPECT_FALSE(map.contains("unpack.bias"));
+  EXPECT_TRUE(cuda::nn::ShapesEqual(map.at("post_conv.weight").shape, {24, 6, 3, 3}));
 }
 
 TEST(MlOpsSafetensorsTest, LoadRealXtransWeightsShapesAndMetadata) {
@@ -170,16 +174,19 @@ TEST(MlOpsSafetensorsTest, LoadRealXtransWeightsShapesAndMetadata) {
 
   EXPECT_EQ(map.metadata("format"), "demosaicnet-pytorch-state_dict");
   EXPECT_EQ(map.metadata("variant"), "xtrans");
+  EXPECT_EQ(map.metadata("architecture"), "xtrans_p2_s32_d4");
+  EXPECT_EQ(map.metadata("tile_pad"), "12");
+  EXPECT_EQ(map.metadata("tile_step"), "1020");
 
-  // 13 weight + 13 bias keys (§2.2).
-  EXPECT_EQ(map.size(), 26u);
+  // Student X-Trans: 8 weight + 8 bias = 16 tensors.
+  EXPECT_EQ(map.size(), 16u);
   ExpectXtransShapeTable(map);
 
-  EXPECT_FALSE(map.contains("pack_mosaick.weight"));
-  EXPECT_FALSE(map.contains("unpack_mosaick.weight"));
-  EXPECT_FALSE(map.contains("residual.weight"));
-  EXPECT_TRUE(cuda::nn::ShapesEqual(map.at("post_conv1.weight").shape, {64, 67, 3, 3}));
-  EXPECT_TRUE(cuda::nn::ShapesEqual(map.at("conv1.weight").shape, {64, 3, 3, 3}));
+  EXPECT_TRUE(map.contains("pack.weight"));
+  EXPECT_TRUE(map.contains("unpack.weight"));
+  EXPECT_TRUE(map.contains("residual.weight"));
+  EXPECT_TRUE(cuda::nn::ShapesEqual(map.at("post_conv.weight").shape, {32, 6, 3, 3}));
+  EXPECT_TRUE(cuda::nn::ShapesEqual(map.at("trunk.0.weight").shape, {32, 12, 3, 3}));
 }
 
 TEST(MlOpsSafetensorsTest, RealBayerTensorPayloadIsNonTrivial) {
@@ -189,10 +196,10 @@ TEST(MlOpsSafetensorsTest, RealBayerTensorPayloadIsNonTrivial) {
     GTEST_SKIP() << "bayer.safetensors not found";
   }
   const auto map = cuda::nn::LoadSafetensors(path);
-  const auto& w  = map.at("pack_mosaick.weight");
+  const auto& w  = map.at("pack.weight");
   ASSERT_EQ(w.data.size(), 4u * 3u * 2u * 2u);
 
-  // At least one non-zero weight (pretrained demosaicnet is not all zeros).
+  // Fixed one-hot pack has non-zeros; learned trunk weights are non-trivial too.
   bool any_nonzero = false;
   for (float v : w.data) {
     if (v != 0.0f) {
@@ -202,10 +209,9 @@ TEST(MlOpsSafetensorsTest, RealBayerTensorPayloadIsNonTrivial) {
   }
   EXPECT_TRUE(any_nonzero);
 
-  // bias length matches out-channels.
-  EXPECT_EQ(map.at("pack_mosaick.bias").data.size(), 4u);
-  EXPECT_EQ(map.at("unpack_mosaick.bias").data.size(), 3u);
-  EXPECT_EQ(map.at("conv15.bias").data.size(), 128u);
+  EXPECT_EQ(map.at("trunk.0.bias").data.size(), 24u);
+  EXPECT_EQ(map.at("output.bias").data.size(), 3u);
+  EXPECT_EQ(map.at("residual.bias").data.size(), 12u);
 }
 
 // ---------------------------------------------------------------------------
@@ -228,11 +234,9 @@ TEST(MlOpsSafetensorsTest, RequireF32TensorFailsOnWrongShape) {
   }
   const auto map = cuda::nn::LoadSafetensors(path);
   // Real shape is [4, 3, 2, 2].
-  EXPECT_THROW(cuda::nn::RequireF32Tensor(map, "pack_mosaick.weight", {4, 3, 3, 3}),
-               std::runtime_error);
-  EXPECT_THROW(cuda::nn::RequireF32Tensor(map, "pack_mosaick.weight", {4, 3, 2}),
-               std::runtime_error);
-  EXPECT_NO_THROW(cuda::nn::RequireF32Tensor(map, "pack_mosaick.weight", {4, 3, 2, 2}));
+  EXPECT_THROW(cuda::nn::RequireF32Tensor(map, "pack.weight", {4, 3, 3, 3}), std::runtime_error);
+  EXPECT_THROW(cuda::nn::RequireF32Tensor(map, "pack.weight", {4, 3, 2}), std::runtime_error);
+  EXPECT_NO_THROW(cuda::nn::RequireF32Tensor(map, "pack.weight", {4, 3, 2, 2}));
 }
 
 TEST(MlOpsSafetensorsTest, FindAndAtBehavior) {
@@ -267,7 +271,7 @@ TEST_F(MlOpsSafetensorsCudaTest, UploadToDeviceRoundTripRealTensor) {
     GTEST_SKIP() << "bayer.safetensors not found";
   }
   const auto  map = cuda::nn::LoadSafetensors(path);
-  const auto& t   = cuda::nn::RequireF32Tensor(map, "residual.weight", {12, 64, 1, 1});
+  const auto& t   = cuda::nn::RequireF32Tensor(map, "residual.weight", {12, 24, 1, 1});
 
   auto device = cuda::nn::UploadToDevice(t);
   ASSERT_EQ(device.size(), t.data.size());

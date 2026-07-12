@@ -1,0 +1,321 @@
+{
+  "alcedo_copy_list": [
+    "pytorch/handoff/bayer_student.safetensors",
+    "pytorch/handoff/bayer_architecture.md",
+    "pytorch/handoff/xtrans_student.safetensors",
+    "pytorch/handoff/xtrans_architecture.md",
+    "pytorch/handoff/golden/"
+  ],
+  "alcedo_notes": "## Alcedo migration checklist (do not modify Alcedo from this repo)\n\nCopy into the Alcedo tree (exact destinations are product-owned; names below\nmatch the existing Neural Engine layout conventions):\n\n| Handoff artifact | Suggested Alcedo destination / use |\n|---|---|\n| `bayer_student.safetensors` | Neural weight store / loader for Bayer student |\n| `xtrans_student.safetensors` | Neural weight store / loader for X-Trans student |\n| `bayer_architecture.md` | Source for hard-coded Bayer forward + constants |\n| `xtrans_architecture.md` | Source for hard-coded X-Trans forward + constants |\n| `golden/` | Unit-test vectors for C++/CUDA bit-exact / tight-tol checks |\n\nExpected module / constant changes (hard-code from the architecture manifests;\ndo **not** interpret safetensors metadata as a dynamic graph):\n\n1. **Topology / op graph**\n   - Replace full teacher DemosaicNet stack with the student ordered forward\n     (fixed pack Conv2d \u2192 trunk Conv3\u00d73/ReLU \u00d7 depth \u2192 residual 1\u00d71 \u2192\n     fixed unpack ConvTranspose2d groups=3 \u2192 concat mosaic skip \u2192\n     post Conv3\u00d73/ReLU \u2192 1\u00d71 RGB \u2192 center crop 1024).\n   - Bayer pack collapses colors (`out_ch = pack_factor\u00b2 = 4`).\n   - X-Trans pack is space-to-depth (`out_ch = 3 * pack_factor\u00b2 = 12` for p2).\n   - Keep pack/unpack weights fixed (one-hot); they are still exported so the\n     loader can memcpy them or assert equality against compile-time constants.\n\n2. **Tile contracts**\n   - Bayer: input 1086 \u2192 export 1024; X-Trans: input 1048 \u2192 export 1024.\n   - Full-frame tiling must use Phase 6 CFA-phase-safe constants:\n     - Bayer: period=2, border=31, **pad=32**, step=1024.\n     - X-Trans: period=6, border=12, pad=12, step=**1020**.\n   - **Forbidden:** Bayer reflect pad = 31 (phase flip \u2192 green cast on teacher\n     and invalid student evaluation). See\n     `pytorch/reports/phase6_full_raw_validation.md`.\n\n3. **Operators required (existing CUDA set)**\n   - FP32 Conv2d + bias + ReLU (valid, no padding on learned convs).\n   - Fixed-weight stride pack Conv2d and grouped ConvTranspose2d unpack.\n   - Center crop, channel concat, reflect pad for full-frame context only.\n   - No BatchNorm, LayerNorm, attention, or dynamic control flow.\n\n4. **Weight layout**\n   - Contiguous little-endian float32, PyTorch NCHW / ConvTranspose layout\n     (`[out,in,kh,kw]` and `[in, out/groups, kh, kw]`).\n   - Load by state_dict key names listed in the architecture manifest.\n\n5. **Golden tests**\n   - Load `golden/<variant>_input_*.pt` / `*_output_*.pt` and require tight\n     agreement with the hard-coded forward (bit-exact preferred on CPU ref;\n     device may use a documented ULP/abs tol).",
+  "exported_at": "2026-07-12T13:22:19.570325+00:00",
+  "format": "demosaicnet-fp32-phase7-export-v1",
+  "git_commit": "336cadec9c0d18e24c0a2df49b7cd3e7eb69cabb",
+  "tiling_contracts": {
+    "bayer": {
+      "border": 31,
+      "input_tile": 1086,
+      "output_tile": 1024,
+      "pad": 32,
+      "period": 2,
+      "step": 1024
+    },
+    "xtrans": {
+      "border": 12,
+      "input_tile": 1048,
+      "output_tile": 1024,
+      "pad": 12,
+      "period": 6,
+      "step": 1020
+    }
+  },
+  "variants": {
+    "bayer": {
+      "architecture": "bayer_s24_d8",
+      "architecture_md": "pytorch/handoff/bayer_architecture.md",
+      "architecture_md_sha256": "164550480048836abf34e973773b59f1284de96e02ef7ab3d5fd36c763c612cf",
+      "checkpoint": "pytorch/runs/phase45_handoff/phase4/bayer_s24_d8/checkpoints/best.pt",
+      "checkpoint_sha256": "f00fb0e4f4a49e32344ffb0add583bee98c7d5dbfda6c593b5b066d08f9de69f",
+      "cost": {
+        "budget_status": "within_preferred",
+        "full_frame_flops": 974713551360,
+        "full_frame_tflop": 0.97471355136,
+        "n_tiles": 40,
+        "tile_flops": 24367838784
+      },
+      "export_git_commit": "336cadec9c0d18e24c0a2df49b7cd3e7eb69cabb",
+      "export_report": "pytorch/handoff/bayer_export_report.json",
+      "export_report_sha256": "cceda8194c6378e1268ef6ea5cc9f8cb36435221463ccd27bb743c076e842983",
+      "exported_at": "2026-07-12T13:22:18.568268+00:00",
+      "fp32_weight_bytes": 156540,
+      "golden": {
+        "dtype": "float32",
+        "format": "demosaicnet-fp32-golden-v1",
+        "manifest_path": "bayer_golden_manifest.json",
+        "manifest_sha256": "2d168e0d6d40b1bf4a8a833866a9926a31b85075f00e26cdaf91cb6057f773fd",
+        "n": 2,
+        "patches": [
+          {
+            "index": 0,
+            "input_file": "bayer_input_00.pt",
+            "input_sha256": "ea32bb08d81c436262b7917ad975f5e3b8d4aa50be7ede83861cbcab4a60a175",
+            "input_shape": [
+              1,
+              3,
+              1086,
+              1086
+            ],
+            "output_file": "bayer_output_00.pt",
+            "output_sha256": "32d0a9f46c06e25881a601a88f108b17be686cb6049a56b55dd5874ea98780fc",
+            "output_shape": [
+              1,
+              3,
+              1024,
+              1024
+            ],
+            "seed": 20260712
+          },
+          {
+            "index": 1,
+            "input_file": "bayer_input_01.pt",
+            "input_sha256": "983fce71e467b8452196c9a25b396c404ed3263181300df8e7364a15d76bbd40",
+            "input_shape": [
+              1,
+              3,
+              1086,
+              1086
+            ],
+            "output_file": "bayer_output_01.pt",
+            "output_sha256": "ee6774650d6c037f2d3b0b24f9effbc3458a1432f0f78cf1156df7d5491780da",
+            "output_shape": [
+              1,
+              3,
+              1024,
+              1024
+            ],
+            "seed": 20260712
+          }
+        ],
+        "seed": 20260712,
+        "variant": "bayer"
+      },
+      "metadata": {
+        "architecture": "bayer_s24_d8",
+        "architecture_version": "1",
+        "cfa_period": "2",
+        "checkpoint_sha256": "f00fb0e4f4a49e32344ffb0add583bee98c7d5dbfda6c593b5b066d08f9de69f",
+        "format": "demosaicnet-pytorch-state_dict",
+        "pack_factor": "2",
+        "phase": "6",
+        "teacher_sha256": "02be9ed3238c6761114e75d2b059fe66019292277627d04b38d1a1b91375c2d5",
+        "tile_border": "31",
+        "tile_input": "1086",
+        "tile_output": "1024",
+        "tile_pad": "32",
+        "tile_step": "1024",
+        "training_commit": "unknown",
+        "variant": "bayer"
+      },
+      "n_tensors": 24,
+      "parameter_count": 39135,
+      "safetensors": "pytorch/handoff/bayer_student.safetensors",
+      "safetensors_bytes": 158868,
+      "safetensors_sha256": "c2cd167aa87500add9a7343f840b27699a8e50f075f1f74d09e4322a463c079d",
+      "selection": "pytorch/selected/bayer_selection.json",
+      "tiling": {
+        "border": 31,
+        "input_tile": 1086,
+        "output_tile": 1024,
+        "pad": 32,
+        "period": 2,
+        "step": 1024
+      },
+      "trainable_parameter_count": 39039,
+      "variant": "bayer",
+      "verify": {
+        "architecture": "bayer_s24_d8",
+        "errors": [],
+        "golden": [
+          {
+            "index": 0,
+            "match": true,
+            "max_abs_diff": 0.0
+          },
+          {
+            "index": 1,
+            "match": true,
+            "max_abs_diff": 0.0
+          }
+        ],
+        "max_state_abs_diff": 0.0,
+        "metadata": {
+          "architecture": "bayer_s24_d8",
+          "architecture_version": "1",
+          "cfa_period": "2",
+          "checkpoint_sha256": "f00fb0e4f4a49e32344ffb0add583bee98c7d5dbfda6c593b5b066d08f9de69f",
+          "format": "demosaicnet-pytorch-state_dict",
+          "pack_factor": "2",
+          "phase": "6",
+          "teacher_sha256": "02be9ed3238c6761114e75d2b059fe66019292277627d04b38d1a1b91375c2d5",
+          "tile_border": "31",
+          "tile_input": "1086",
+          "tile_output": "1024",
+          "tile_pad": "32",
+          "tile_step": "1024",
+          "training_commit": "unknown",
+          "variant": "bayer"
+        },
+        "n_tensors": 24,
+        "ok": true,
+        "path": "D:\\Projects\\deepjoint_demosiacing\\demosaicnet_caffe\\pytorch\\handoff\\bayer_student.safetensors",
+        "path_rel": "pytorch/handoff/bayer_student.safetensors",
+        "sha256": "c2cd167aa87500add9a7343f840b27699a8e50f075f1f74d09e4322a463c079d",
+        "variant": "bayer"
+      }
+    },
+    "xtrans": {
+      "architecture": "xtrans_p2_s32_d4",
+      "architecture_md": "pytorch/handoff/xtrans_architecture.md",
+      "architecture_md_sha256": "18e28ca392ab0e13440b96a656cf1df6f4aa562c669e8ae3f14b3004ab911271",
+      "checkpoint": "pytorch/runs/iterations/xtrans_aggressive_all_v4_handoff/checkpoints/best.pt",
+      "checkpoint_sha256": "f985ba64404a4ef9e4662d4f556d184de1e47127ab046f7140fa4b614f4c7546",
+      "cost": {
+        "budget_status": "within_exploratory",
+        "full_frame_flops": 1003204177920,
+        "full_frame_tflop": 1.00320417792,
+        "n_tiles": 48,
+        "tile_flops": 20900087040
+      },
+      "export_git_commit": "336cadec9c0d18e24c0a2df49b7cd3e7eb69cabb",
+      "export_report": "pytorch/handoff/xtrans_export_report.json",
+      "export_report_sha256": "d9ba78b1fdca4affc91d7b45ce949bf8724b41df3659527afe4912e6e31fcc7f",
+      "exported_at": "2026-07-12T13:22:19.511442+00:00",
+      "fp32_weight_bytes": 134716,
+      "golden": {
+        "dtype": "float32",
+        "format": "demosaicnet-fp32-golden-v1",
+        "manifest_path": "xtrans_golden_manifest.json",
+        "manifest_sha256": "36bd4996225d5de3ca847592fa15f66be41d7ed7e9ba4d383efd961d5f65225b",
+        "n": 2,
+        "patches": [
+          {
+            "index": 0,
+            "input_file": "xtrans_input_00.pt",
+            "input_sha256": "e385108dd4616708bf06415be967cd77ea2c1bf63be42dba930ec32fc0c01d94",
+            "input_shape": [
+              1,
+              3,
+              1048,
+              1048
+            ],
+            "output_file": "xtrans_output_00.pt",
+            "output_sha256": "e4963d6aadcf0da0439c81ea9d9959e7feb7ae5295be28ef6c0929cc62c509f5",
+            "output_shape": [
+              1,
+              3,
+              1024,
+              1024
+            ],
+            "seed": 20260712
+          },
+          {
+            "index": 1,
+            "input_file": "xtrans_input_01.pt",
+            "input_sha256": "07b6375093556c655753ba4287a6dd06b9986363b1c24cdef46a3019c77afa1b",
+            "input_shape": [
+              1,
+              3,
+              1048,
+              1048
+            ],
+            "output_file": "xtrans_output_01.pt",
+            "output_sha256": "182294bf9b6f0b3fc324e0c460f0cd88e59665fe6553bb1ab279aecfc17baa50",
+            "output_shape": [
+              1,
+              3,
+              1024,
+              1024
+            ],
+            "seed": 20260712
+          }
+        ],
+        "seed": 20260712,
+        "variant": "xtrans"
+      },
+      "metadata": {
+        "architecture": "xtrans_p2_s32_d4",
+        "architecture_version": "1",
+        "cfa_period": "6",
+        "checkpoint_sha256": "f985ba64404a4ef9e4662d4f556d184de1e47127ab046f7140fa4b614f4c7546",
+        "format": "demosaicnet-pytorch-state_dict",
+        "pack_factor": "2",
+        "phase": "7",
+        "source_zip_sha256": "dc795eff57033e488e91cd46ba69336923f86b60a7ad65ec15bc765d904d8bc0",
+        "teacher_sha256": "4bde95e316bcb1915a0f85ac9ca897d025b84e7eac443e31cc72877713a19a0b",
+        "tile_border": "12",
+        "tile_input": "1048",
+        "tile_output": "1024",
+        "tile_pad": "12",
+        "tile_step": "1020",
+        "training_commit": "unknown",
+        "variant": "xtrans"
+      },
+      "n_tensors": 16,
+      "parameter_count": 33679,
+      "safetensors": "pytorch/handoff/xtrans_student.safetensors",
+      "safetensors_bytes": 136516,
+      "safetensors_sha256": "021358ac2c2c4ef0dc982acc015956f45f53d9ea69cc1c2055c5409619448ca3",
+      "selection": "pytorch/selected/xtrans_phase7_aggressive_v4_selection.json",
+      "tiling": {
+        "border": 12,
+        "input_tile": 1048,
+        "output_tile": 1024,
+        "pad": 12,
+        "period": 6,
+        "step": 1020
+      },
+      "trainable_parameter_count": 33487,
+      "variant": "xtrans",
+      "verify": {
+        "architecture": "xtrans_p2_s32_d4",
+        "errors": [],
+        "golden": [
+          {
+            "index": 0,
+            "match": true,
+            "max_abs_diff": 0.0
+          },
+          {
+            "index": 1,
+            "match": true,
+            "max_abs_diff": 0.0
+          }
+        ],
+        "max_state_abs_diff": 0.0,
+        "metadata": {
+          "architecture": "xtrans_p2_s32_d4",
+          "architecture_version": "1",
+          "cfa_period": "6",
+          "checkpoint_sha256": "f985ba64404a4ef9e4662d4f556d184de1e47127ab046f7140fa4b614f4c7546",
+          "format": "demosaicnet-pytorch-state_dict",
+          "pack_factor": "2",
+          "phase": "7",
+          "source_zip_sha256": "dc795eff57033e488e91cd46ba69336923f86b60a7ad65ec15bc765d904d8bc0",
+          "teacher_sha256": "4bde95e316bcb1915a0f85ac9ca897d025b84e7eac443e31cc72877713a19a0b",
+          "tile_border": "12",
+          "tile_input": "1048",
+          "tile_output": "1024",
+          "tile_pad": "12",
+          "tile_step": "1020",
+          "training_commit": "unknown",
+          "variant": "xtrans"
+        },
+        "n_tensors": 16,
+        "ok": true,
+        "path": "D:\\Projects\\deepjoint_demosiacing\\demosaicnet_caffe\\pytorch\\handoff\\xtrans_student.safetensors",
+        "path_rel": "pytorch/handoff/xtrans_student.safetensors",
+        "sha256": "021358ac2c2c4ef0dc982acc015956f45f53d9ea69cc1c2055c5409619448ca3",
+        "variant": "xtrans"
+      }
+    }
+  }
+}
