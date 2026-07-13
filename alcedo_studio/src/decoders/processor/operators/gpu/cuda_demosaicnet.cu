@@ -7,16 +7,12 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
-#include <type_traits>
 #include <opencv2/core/cuda_stream_accessor.hpp>
 #include <opencv2/core/cuda_types.hpp>
 #include <stdexcept>
 
 #include "cuda/nn/common.hpp"
 #include "cuda/nn/device_buffer.hpp"
-#include "cuda/nn/fused_post_output.hpp"
-#include "cuda/nn/layout.hpp"
 #include "cuda/nn/tensor.hpp"
 #include "cuda/nn/workspace.hpp"
 #include "decoders/processor/cuda_tile_jobs.hpp"
@@ -26,65 +22,6 @@
 #include "decoders/processor/operators/gpu/cuda_demosaicnet.hpp"
 
 namespace alcedo::CUDA {
-
-NeuralDemosaicForwardGraph::~NeuralDemosaicForwardGraph() { Invalidate(); }
-
-void NeuralDemosaicForwardGraph::Invalidate() noexcept {
-  if (exec_ != nullptr) {
-    (void)cudaGraphExecDestroy(exec_);
-    exec_ = nullptr;
-  }
-  key_            = NeuralForwardGraphKey{};
-  capture_failed_ = false;
-}
-
-void NeuralDemosaicForwardGraph::InvalidateIfKeyMismatch(
-    const NeuralForwardGraphKey& key) noexcept {
-  if (exec_ != nullptr && !key_.Matches(key)) {
-    Invalidate();
-  } else if (capture_failed_ && !key_.Matches(key)) {
-    // Allow a retry when geometry/weights change after a prior sticky failure.
-    capture_failed_ = false;
-    key_            = NeuralForwardGraphKey{};
-  }
-}
-
-auto NeuralDemosaicForwardGraph::TryLaunch(const NeuralForwardGraphKey& key,
-                                           const cudaStream_t stream) -> bool {
-  if (exec_ == nullptr || stream == nullptr || !key_.Matches(key)) {
-    return false;
-  }
-  const cudaError_t err = cudaGraphLaunch(exec_, stream);
-  if (err != cudaSuccess) {
-    // Runtime launch failure: drop the executable and force ordinary path.
-    Invalidate();
-    capture_failed_ = true;
-    (void)cudaGetLastError();
-    return false;
-  }
-  ++launch_count_;
-  return true;
-}
-
-void NeuralDemosaicForwardGraph::AbortCapture(const cudaStream_t stream) noexcept {
-  if (stream == nullptr) {
-    return;
-  }
-  cudaStreamCaptureStatus status = cudaStreamCaptureStatusNone;
-  if (cudaStreamIsCapturing(stream, &status) != cudaSuccess) {
-    (void)cudaGetLastError();
-    return;
-  }
-  if (status == cudaStreamCaptureStatusActive) {
-    cudaGraph_t discarded = nullptr;
-    if (cudaStreamEndCapture(stream, &discarded) == cudaSuccess && discarded != nullptr) {
-      (void)cudaGraphDestroy(discarded);
-    } else {
-      (void)cudaGetLastError();
-    }
-  }
-}
-
 namespace {
 
 // Host-side wait counter for Phase 8E tests (Enqueue paths never touch this).
@@ -152,95 +89,14 @@ void PackCfaMosaic(const cv::cuda::GpuMat& cfa, cuda::nn::DeviceTensor& mosaic,
 }
 
 template <typename Model>
-void RunModelOrdinary(const Model& model, const cuda::nn::DeviceTensor& input,
-                      cuda::nn::DeviceTensor& output, cuda::nn::WorkspacePool& workspace,
-                      const cudaStream_t stream) {
-  const bool fuse = cuda::nn::FusedPostOutputEnabled();
-  workspace.Reserve(Model::EstimateWorkspaceBytes(static_cast<int>(input.shape[2]),
-                                                  static_cast<int>(input.shape[3]), 1, fuse));
-  model.Forward(input, output, workspace, stream, /*force_ordinary_tail=*/!fuse);
-}
-
-// P4-D compatibility escape hatch. Persistent NHWC is the retained product
-// path; set this only to diagnose or fall back to the ordinary NCHW forward.
-[[nodiscard]] auto EnvDisablesPersistentNhwc() -> bool {
-  const char* value = std::getenv("ALCEDO_DEMOASICNET_DISABLE_PERSISTENT_NHWC");
-  return value != nullptr && value[0] != '\0' && value[0] != '0';
-}
-
-template <typename Model>
 void RunModelHwc(const Model& model, const cuda::nn::DeviceTensor& input, cv::cuda::GpuMat& rgb,
                  cuda::nn::WorkspacePool& workspace, const cudaStream_t stream,
                  const bool apply_gamma_decode) {
   workspace.Reserve(Model::EstimateWorkspaceBytes(static_cast<int>(input.shape[2]),
-                                                  static_cast<int>(input.shape[3]), 1,
-                                                  /*fuse_post_output=*/true));
-  if (!EnvDisablesPersistentNhwc()) {
-    model.ForwardHwcChannelsLast(input, reinterpret_cast<float*>(rgb.ptr()),
-                                 static_cast<std::size_t>(rgb.step), workspace, stream,
-                                 apply_gamma_decode);
-  } else {
-    model.ForwardHwc(input, reinterpret_cast<float*>(rgb.ptr()),
-                     static_cast<std::size_t>(rgb.step), workspace, stream, apply_gamma_decode);
-  }
-}
-
-// Harness / experiment escape hatch: force ordinary launches without rebuilding options.
-[[nodiscard]] auto EnvDisablesCudaGraph() -> bool {
-  const char* value = std::getenv("ALCEDO_DEMOASICNET_DISABLE_CUDA_GRAPH");
-  return value != nullptr && value[0] != '\0' && value[0] != '0';
-}
-
-// P3: fixed-shape model forward only (pack/unpack stay ordinary stream work).
-// Falls back to ordinary launches when graph is disabled, stream is null,
-// profiler ranges are active, or capture/runtime fails.
-template <typename Model>
-void RunModel(const Model& model, const cuda::nn::DeviceTensor& input,
-              cuda::nn::DeviceTensor& output, NeuralDemosaicWorkspace& neural_workspace,
-              const bool enable_cuda_graph, const std::uint64_t weight_generation,
-              const cudaStream_t stream) {
-  auto ordinary = [&]() {
-    RunModelOrdinary(model, input, output, neural_workspace.activation_workspace(), stream);
-  };
-
-  if (!enable_cuda_graph || EnvDisablesCudaGraph() || stream == nullptr ||
-      ActiveDemosaicNetProfiler() != nullptr) {
-    ordinary();
-    return;
-  }
-
-  int device = -1;
-  if (cudaGetDevice(&device) != cudaSuccess) {
-    ordinary();
-    return;
-  }
-
-  NeuralForwardGraphKey key;
-  key.variant =
-      std::is_same_v<Model, BayerDemosaicNet> ? DemosaicNetVariant::Bayer : DemosaicNetVariant::XTrans;
-  key.device              = device;
-  key.input_h             = static_cast<int>(input.shape[2]);
-  key.input_w             = static_cast<int>(input.shape[3]);
-  key.output_h            = static_cast<int>(output.shape[2]);
-  key.output_w            = static_cast<int>(output.shape[3]);
-  key.input_data          = input.data;
-  key.output_data         = output.data;
-  key.activation_base     = neural_workspace.activation_workspace().base();
-  key.activation_capacity = neural_workspace.activation_workspace().capacity_bytes();
-  key.pack_weight         = model.PackWeightDevicePtr();
-  key.output_weight       = model.OutputWeightDevicePtr();
-  key.weight_generation   = weight_generation;
-
-  NeuralDemosaicForwardGraph& graph = neural_workspace.forward_graph();
-  graph.InvalidateIfKeyMismatch(key);
-  if (graph.TryLaunch(key, stream)) {
-    return;
-  }
-  if (graph.capture_failed()) {
-    ordinary();
-    return;
-  }
-  graph.Capture(key, stream, ordinary);
+                                                  static_cast<int>(input.shape[3]), 1));
+  model.ForwardHwcChannelsLast(input, reinterpret_cast<float*>(rgb.ptr()),
+                               static_cast<std::size_t>(rgb.step), workspace, stream,
+                               apply_gamma_decode);
 }
 
 // Fused reflect + sparse NCHW pack. Phase is taken from the reflected *source*
@@ -270,29 +126,18 @@ __global__ void PackReflectPaddedCfaTileKernel(const cv::cuda::PtrStepSz<float> 
 }  // namespace
 
 void NeuralDemosaicWorkspace::EnsureCapacity(const DemosaicNetVariant variant, const int height,
-                                             const int width, const std::size_t input_numel,
-                                             const std::size_t output_numel) {
+                                             const int width, const std::size_t input_numel) {
   bool grew = false;
-
-  const float* prev_input_data  = input_buffer_.data();
-  const float* prev_output_data = output_buffer_.data();
-  void*        prev_act_base    = activation_workspace_.base();
-  const std::size_t prev_act_cap = activation_workspace_.capacity_bytes();
 
   if (input_buffer_.size() < input_numel) {
     input_buffer_ = cuda::nn::DeviceBufferF32(input_numel);
     grew          = true;
   }
-  if (output_buffer_.size() < output_numel) {
-    output_buffer_ = cuda::nn::DeviceBufferF32(output_numel);
-    grew           = true;
-  }
 
-  const bool        fuse_tail = cuda::nn::FusedPostOutputEnabled();
   const std::size_t activation_bytes =
       variant == DemosaicNetVariant::Bayer
-          ? BayerDemosaicNet::EstimateWorkspaceBytes(height, width, 1, fuse_tail)
-          : XTransDemosaicNet::EstimateWorkspaceBytes(height, width, 1, fuse_tail);
+          ? BayerDemosaicNet::EstimateWorkspaceBytes(height, width, 1)
+          : XTransDemosaicNet::EstimateWorkspaceBytes(height, width, 1);
   const std::size_t prev_activation = activation_workspace_.capacity_bytes();
   activation_workspace_.Reserve(activation_bytes);
   if (activation_workspace_.capacity_bytes() > prev_activation) {
@@ -305,7 +150,7 @@ void NeuralDemosaicWorkspace::EnsureCapacity(const DemosaicNetVariant variant, c
   const int output_width = variant == DemosaicNetVariant::Bayer
                                ? BayerDemosaicNet::OutputWidth(width, height)
                                : XTransDemosaicNet::OutputWidth(width, height);
-  // Grow-only RGB capacity (P4-B ragged edges reuse the max 1K workspace without
+  // Grow-only RGB capacity (ragged edges reuse the max 1K workspace without
   // shrinking/reallocating when a boundary job is smaller than an interior job).
   const int prev_rows = rgb_buffer_.rows;
   const int prev_cols = rgb_buffer_.cols;
@@ -323,18 +168,10 @@ void NeuralDemosaicWorkspace::EnsureCapacity(const DemosaicNetVariant variant, c
   if (grew) {
     ++allocation_generation_;
   }
-
-  // P3: any pointer/capacity change that a captured graph may bake in invalidates it.
-  if (input_buffer_.data() != prev_input_data || output_buffer_.data() != prev_output_data ||
-      activation_workspace_.base() != prev_act_base ||
-      activation_workspace_.capacity_bytes() != prev_act_cap) {
-    forward_graph_.Invalidate();
-  }
 }
 
 auto NeuralDemosaicWorkspace::OwnedDeviceBytes() const -> std::size_t {
-  std::size_t total = activation_workspace_.capacity_bytes() + input_buffer_.bytes() +
-                      output_buffer_.bytes();
+  std::size_t total = activation_workspace_.capacity_bytes() + input_buffer_.bytes();
   if (!rgb_buffer_.empty()) {
     total += static_cast<std::size_t>(rgb_buffer_.rows) * static_cast<std::size_t>(rgb_buffer_.step);
   }
@@ -423,9 +260,9 @@ auto EnqueueDemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPa
       model_input = cfa(cv::Rect(0, 0, even_width, even_height));
     }
 
-    const int         height        = model_input.rows;
-    const int         width         = model_input.cols;
-    const std::size_t input_numel   = static_cast<std::size_t>(3) * height * width;
+    const int         height      = model_input.rows;
+    const int         width       = model_input.cols;
+    const std::size_t input_numel = static_cast<std::size_t>(3) * height * width;
     const int         output_height =
         pattern.kind == RawCfaKind::Bayer2x2 ? BayerDemosaicNet::OutputHeight(height, width)
                                              : XTransDemosaicNet::OutputHeight(height, width);
@@ -437,7 +274,6 @@ auto EnqueueDemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPa
     }
     // Symmetric border used by crop mappers (exact for even natural/export shrink).
     result.source_border = (height - output_height) / 2;
-    const std::size_t output_numel = static_cast<std::size_t>(3) * output_height * output_width;
 
     const cudaStream_t cuda_stream = GetCudaStream(stream);
 
@@ -454,38 +290,21 @@ auto EnqueueDemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPa
     }
 
     NeuralDemosaicWorkspace& workspace = *options.workspace;
-    workspace.EnsureCapacity(variant, height, width, input_numel, output_numel);
+    workspace.EnsureCapacity(variant, height, width, input_numel);
     auto input_tensor =
         cuda::nn::DeviceTensor::Contiguous(workspace.input_buffer().data(), {1, 3, height, width});
-    auto output_tensor = cuda::nn::DeviceTensor::Contiguous(workspace.output_buffer().data(),
-                                                            {1, 3, output_height, output_width});
     PackCfaMosaic(model_input, input_tensor, pattern, cuda_stream);
 
     cv::cuda::GpuMat& neural_rgb = workspace.rgb_buffer();
-    // P4-A: product default writes gamma-encoded HWC via fused tail, then
-    // FinishNeuralEngineRgb applies gamma decode on the assembled frame when
-    // the epilogue did not. Tile product path folds gamma into ForwardHwc.
     // Free-size path keeps gamma outside (FinishNeuralEngineRgb) so callers that
     // only demosaic a patch without the RAW finish still see network-space RGB
-    // when they skip Finish. Use ForwardHwc without gamma here, then unpack is
-    // skipped; Finish still gamma-decodes.
-    if (cuda::nn::FusedPostOutputEnabled()) {
-      if (variant == DemosaicNetVariant::Bayer) {
-        RunModelHwc(cache.Bayer(), input_tensor, neural_rgb, workspace.activation_workspace(),
-                    cuda_stream, /*apply_gamma_decode=*/false);
-      } else {
-        RunModelHwc(cache.XTrans(), input_tensor, neural_rgb, workspace.activation_workspace(),
-                    cuda_stream, /*apply_gamma_decode=*/false);
-      }
+    // when they skip Finish.
+    if (variant == DemosaicNetVariant::Bayer) {
+      RunModelHwc(cache.Bayer(), input_tensor, neural_rgb, workspace.activation_workspace(),
+                  cuda_stream, /*apply_gamma_decode=*/false);
     } else {
-      if (variant == DemosaicNetVariant::Bayer) {
-        RunModel(cache.Bayer(), input_tensor, output_tensor, workspace, options.enable_cuda_graph,
-                 cache.WeightGeneration(variant), cuda_stream);
-      } else {
-        RunModel(cache.XTrans(), input_tensor, output_tensor, workspace, options.enable_cuda_graph,
-                 cache.WeightGeneration(variant), cuda_stream);
-      }
-      cuda::nn::UnpackNchwToHwc(output_tensor, neural_rgb, cuda_stream);
+      RunModelHwc(cache.XTrans(), input_tensor, neural_rgb, workspace.activation_workspace(),
+                  cuda_stream, /*apply_gamma_decode=*/false);
     }
     // No host wait: caller owns workspace for the lifetime of enqueued work.
     rgb              = neural_rgb;
@@ -543,28 +362,8 @@ auto EnqueueDemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_
     }
 
     const bool is_xtrans = training_pattern.kind == RawCfaKind::XTrans6x6;
-    // P4-C: rectangular owned (w,h) take precedence; else square edge / 1K control.
-    const int owned_w = [&]() {
-      if (options.student_owned_tile_w > 0 && options.student_owned_tile_h > 0) {
-        return options.student_owned_tile_w;
-      }
-      if (options.student_owned_tile_edge > 0) {
-        return options.student_owned_tile_edge;
-      }
-      return is_xtrans ? XTransDemosaicNet::kTileOutput : BayerDemosaicNet::kTileOutput;
-    }();
-    const int owned_h = [&]() {
-      if (options.student_owned_tile_w > 0 && options.student_owned_tile_h > 0) {
-        return options.student_owned_tile_h;
-      }
-      if (options.student_owned_tile_edge > 0) {
-        return options.student_owned_tile_edge;
-      }
-      return is_xtrans ? XTransDemosaicNet::kTileOutput : BayerDemosaicNet::kTileOutput;
-    }();
     const detail::CudaTilePolicy policy =
-        is_xtrans ? detail::MakeXTransStudentTilePolicy(owned_w, owned_h)
-                  : detail::MakeBayerStudentTilePolicy(owned_w, owned_h);
+        is_xtrans ? detail::MakeXTransStudentTilePolicy() : detail::MakeBayerStudentTilePolicy();
     const int tile_h = policy.input_tile.height;
     const int tile_w = policy.input_tile.width;
     const int out_h  = policy.output_tile.height;
@@ -578,7 +377,6 @@ auto EnqueueDemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_
     }
 
     const std::size_t input_numel  = static_cast<std::size_t>(3) * tile_h * tile_w;
-    const std::size_t output_numel = static_cast<std::size_t>(3) * out_h * out_w;
     const cudaStream_t cuda_stream = GetCudaStream(stream);
 
     DemosaicNetModelCache& cache =
@@ -593,12 +391,10 @@ auto EnqueueDemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_
     }
 
     NeuralDemosaicWorkspace& workspace = *options.workspace;
-    workspace.EnsureCapacity(variant, tile_h, tile_w, input_numel, output_numel);
+    workspace.EnsureCapacity(variant, tile_h, tile_w, input_numel);
 
     auto input_tensor =
         cuda::nn::DeviceTensor::Contiguous(workspace.input_buffer().data(), {1, 3, tile_h, tile_w});
-    auto output_tensor =
-        cuda::nn::DeviceTensor::Contiguous(workspace.output_buffer().data(), {1, 3, out_h, out_w});
 
     DemosaicNetProfiler* profiler = ActiveDemosaicNetProfiler();
     if (profiler != nullptr) {
@@ -612,43 +408,21 @@ auto EnqueueDemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_
     }
 
     cv::cuda::GpuMat& neural_rgb = workspace.rgb_buffer();
-    // P4-B: capacity may be larger than this job's owned export (ragged edges).
+    // Capacity may be larger than this job's owned export (ragged edges).
     // Forward writes only the active out_h×out_w region using the full row pitch.
     if (neural_rgb.rows < out_h || neural_rgb.cols < out_w) {
       throw std::runtime_error("Student tile RGB buffer smaller than owned export");
     }
     cv::cuda::GpuMat tile_rgb_view = neural_rgb(cv::Rect(0, 0, out_w, out_h));
-    // P4-A product default: fused post/output/gamma → pitched HWC.
-    // CUDA Graph (P3 experiment) still captures NCHW Forward only — when graph is
-    // requested, retain ordinary NCHW + unpack; gamma stays in FinishNeuralEngineRgb.
-    const bool use_fused_hwc =
-        cuda::nn::FusedPostOutputEnabled() && !options.enable_cuda_graph;
-    if (use_fused_hwc) {
-      if (variant == DemosaicNetVariant::Bayer) {
-        RunModelHwc(cache.Bayer(), input_tensor, tile_rgb_view, workspace.activation_workspace(),
-                    cuda_stream, /*apply_gamma_decode=*/true);
-      } else {
-        RunModelHwc(cache.XTrans(), input_tensor, tile_rgb_view, workspace.activation_workspace(),
-                    cuda_stream, /*apply_gamma_decode=*/true);
-      }
+    if (variant == DemosaicNetVariant::Bayer) {
+      RunModelHwc(cache.Bayer(), input_tensor, tile_rgb_view, workspace.activation_workspace(),
+                  cuda_stream, /*apply_gamma_decode=*/true);
     } else {
-      if (variant == DemosaicNetVariant::Bayer) {
-        RunModel(cache.Bayer(), input_tensor, output_tensor, workspace, options.enable_cuda_graph,
-                 cache.WeightGeneration(variant), cuda_stream);
-      } else {
-        RunModel(cache.XTrans(), input_tensor, output_tensor, workspace, options.enable_cuda_graph,
-                 cache.WeightGeneration(variant), cuda_stream);
-      }
-      if (profiler != nullptr) {
-        profiler->BeginRange(DemosaicNetProfileRange::NchwHwcUnpack, cuda_stream);
-      }
-      cuda::nn::UnpackNchwToHwc(output_tensor, tile_rgb_view, cuda_stream);
-      if (profiler != nullptr) {
-        profiler->EndRange(DemosaicNetProfileRange::NchwHwcUnpack, cuda_stream);
-      }
+      RunModelHwc(cache.XTrans(), input_tensor, tile_rgb_view, workspace.activation_workspace(),
+                  cuda_stream, /*apply_gamma_decode=*/true);
     }
     // Product tiled path reuses workspace RGB without a per-tile stream wait; stream
-    // ordering serializes pack → forward → (unpack) → ROI copy.
+    // ordering serializes pack → forward → ROI copy.
     // Return the job-sized view so model_output_roi is relative to owned_w×owned_h.
     rgb              = tile_rgb_view;
     result.succeeded = true;

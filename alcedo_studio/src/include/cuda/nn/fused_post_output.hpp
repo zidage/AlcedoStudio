@@ -9,11 +9,9 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "cuda/nn/tensor.hpp"
-
 namespace alcedo::cuda::nn {
 
-// P4-A: fuse student post 3×3 (6 → width) + bias + ReLU + output 1×1 (width → 3)
+// Fuse student post 3×3 (6 → width) + bias + ReLU + output 1×1 (width → 3)
 // + optional bias + optional signed gamma decode, without materializing the
 // width-channel post activation.
 //
@@ -26,7 +24,7 @@ namespace alcedo::cuda::nn {
 //                      are contiguous (host transforms once from OIHW [3,width,1,1])
 //   output_bias:  [3] (required)
 //
-// Spatial: valid 3×3 on cat [N,6,H,W] yields natural (H-2)×(W-2). Callers may
+// Spatial: valid 3×3 on cat [N,H,W,6] yields natural (H-2)×(W-2). Callers may
 // request a center crop by setting out_h/out_w smaller than natural and the
 // kernel only evaluates those export pixels.
 
@@ -43,25 +41,11 @@ struct FusedPostOutputParams {
 // `dst` must hold width * 3 floats.
 void PrepackOutputWeightsCio(const float* src_oihw, int width, float* dst);
 
-// Fused tail → contiguous NCHW RGB [N,3,out_h,out_w]. Center-crops when
-// out_h/out_w are smaller than natural valid size.
-void FusedPostOutputToNchw(const DeviceTensor& cat, DeviceTensor& rgb,
-                           const FusedPostOutputParams& params, cudaStream_t stream = nullptr);
-
-// Fused tail → pitched HWC RGB (N=1 only). `rgb_hwc` is row-major float3 with
-// `step_bytes` row pitch (OpenCV GpuMat step). Shape is out_h × out_w.
-void FusedPostOutputToHwc(const DeviceTensor& cat, float* rgb_hwc, std::size_t step_bytes,
-                          int out_h, int out_w, const FusedPostOutputParams& params,
-                          cudaStream_t stream = nullptr);
-
 // Persistent channels-last tail. `cat_nhwc` is contiguous [N,H,W,6]; output is
 // pitched HWC RGB. Post/output weights use the same OIHW/CIO layouts as above.
 void FusedPostOutputNhwcToHwc(const float* cat_nhwc, int batch, int cat_h, int cat_w,
                               float* rgb_hwc, std::size_t step_bytes, int out_h, int out_w,
                               const FusedPostOutputParams& params,
                               cudaStream_t stream = nullptr);
-
-// Runtime escape hatch for A/B measurement (env ALCEDO_DEMOASICNET_DISABLE_FUSED_TAIL).
-[[nodiscard]] auto FusedPostOutputEnabled() -> bool;
 
 }  // namespace alcedo::cuda::nn

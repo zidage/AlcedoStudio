@@ -65,6 +65,18 @@ repaired path is opt-in through `Conv2dParams::winograd_f22_weight` and harness
 `--conv-winograd`, so it cannot silently change normal dispatch. See
 `build/perf/demosaicnet_student_8g_{direct_recheck,winograd_repaired}_conv.json`.
 
+**Post-P4-D production decision (2026-07-13):** persistent FP32 NHWC is retained
+for the complete product forward: Bayer uses the in-tree C=24 NHWC trunk,
+X-Trans uses the CUTLASS C=32 trunk, and both use the NHWC residual/structural
+path plus fused pitched-HWC tail. The next mandatory phase is **P5 production
+consolidation**, specified in
+[`cuda_demosaicnet_performance_next.md` §11](cuda_demosaicnet_performance_next.md).
+P5 deletes rejected experiments rather than leaving them queryable. Therefore
+all earlier statements in this document that Winograd, implicit-GEMM, CUDA
+Graph, multi-lane, ragged/rectangular/strip/large-tile, or ordinary-NCHW neural
+paths “stay in-tree”, “remain queryable”, or are kept for remeasurement are
+historical results and are superseded by the P5 deletion inventory.
+
 Phase 7 keeps the broader workspace policy / multi-image readiness work. Phase
 8 first uses one ordered CUDA stream and one reusable workspace per decode;
 multi-stream lanes are optional only if full-frame profiling proves that the
@@ -2143,6 +2155,11 @@ of RCD/highlight in the same PR as the first golden forward.
    existing CUDA tile planner for pad32/step1024 Bayer and pad12/step1020
    X-Trans, make the single-stream loop asynchronous, then rebaseline/optimize.
 10. **Phase 9 (optional):** broader workspace migration when prioritized.
+11. **P5 production consolidation (next):** before any new optimization, execute
+    the deletion inventory in `cuda_demosaicnet_performance_next.md` §11. Leave
+    fixed 1024 single-stream persistent NHWC as the only neural execution path;
+    remove experiment flags/assets/tests and neural-to-neural fallbacks; retain
+    only failure recovery to Classical/Legacy.
 
 Do **not** skip golden tests. Wrong pad/crop/group looks “plausible” but is
 useless.
@@ -2270,6 +2287,10 @@ context.
 12. Interactive latency for a ≤1K-edge tile recorded after Phase 6/8 profile.
 13. At least one full active-area real Bayer RAW and one real X-Trans RAW
     demosaic test (purpose-named) pass on CUDA.
+14. Production cleanup leaves no runtime/harness selector for a rejected neural
+    implementation. Original safetensors are the only model assets; shipping
+    weights are prepacked once at lazy load; the sole fallback is high-level
+    Neural failure to Classical/Legacy.
 
 Phase 9 (pipeline-wide workspace migration) is **not** part of this acceptance
 bar.

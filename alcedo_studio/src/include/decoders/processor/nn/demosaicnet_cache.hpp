@@ -62,11 +62,6 @@ class DemosaicNetModelCache {
   [[nodiscard]] auto Bayer() const -> const BayerDemosaicNet&;
   [[nodiscard]] auto XTrans() const -> const XTransDemosaicNet&;
 
-  // Monotonic generation bumped on every successful load (and unload). CUDA may
-  // recycle device addresses after free, so weight pointer identity alone is not
-  // enough to invalidate a captured forward graph after reload.
-  [[nodiscard]] auto WeightGeneration(DemosaicNetVariant variant) const -> std::uint64_t;
-
   // Drop a variant (or all). Intended for tests / optional VRAM reclaim.
   void Unload(DemosaicNetVariant variant);
   void UnloadAll();
@@ -79,12 +74,10 @@ class DemosaicNetModelCache {
   auto LoadVariantLocked(DemosaicNetVariant variant, const DemosaicNetLoadOptions& options)
       -> bool;
 
-  mutable std::mutex                  mutex_;
-  std::unique_ptr<BayerDemosaicNet>   bayer_;
-  std::unique_ptr<XTransDemosaicNet>  xtrans_;
-  std::uint64_t                       bayer_generation_  = 0;
-  std::uint64_t                       xtrans_generation_ = 0;
-  std::string                         last_error_;
+  mutable std::mutex                 mutex_;
+  std::unique_ptr<BayerDemosaicNet>  bayer_;
+  std::unique_ptr<XTransDemosaicNet> xtrans_;
+  std::string                        last_error_;
 };
 
 }  // namespace alcedo

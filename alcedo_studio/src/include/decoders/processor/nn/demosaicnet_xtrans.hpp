@@ -23,7 +23,7 @@ namespace alcedo {
 //
 // Input:  contiguous NCHW f32 mosaic [N, 3, H, W], H,W >= kMinSpatial, divisible by
 //         pack_factor (2).
-// Output: contiguous NCHW f32 RGB [N, 3, Oh, Ow] where
+// Output: pitched HWC RGB via ForwardHwcChannelsLast, where
 //   - product tile H=owned_h+2*kTileBorder, W=owned_w+2*kTileBorder with each
 //     owned axis >= kMinProductOwned → center-cropped export (owned_h, owned_w)
 //     (retains 1K export context: 1048→1024, …; rectangular/strip tiles use the
@@ -60,15 +60,8 @@ class XTransDemosaicNet : public NnWeightModule<XTransDemosaicNet> {
   void LoadWeightsImpl(const cuda::nn::SafetensorsTensorMap& tensors,
                        cudaStream_t stream = nullptr);
 
-  void Forward(const cuda::nn::DeviceTensor& input, cuda::nn::DeviceTensor& output,
-               cuda::nn::WorkspacePool& workspace, cudaStream_t stream = nullptr,
-               bool force_ordinary_tail = false) const;
-
-  // Product HWC entry (P4-A): fused post/output/(optional gamma) into pitched HWC.
-  void ForwardHwc(const cuda::nn::DeviceTensor& input, float* rgb_hwc, std::size_t rgb_step_bytes,
-                  cuda::nn::WorkspacePool& workspace, cudaStream_t stream = nullptr,
-                  bool apply_gamma_decode = true) const;
-
+  // Product path: pack → trunk0 NCHW → persistent NHWC CUTLASS trunk → residual/
+  // structural → fused post/output/(optional gamma) into pitched HWC RGB.
   void ForwardHwcChannelsLast(const cuda::nn::DeviceTensor& input, float* rgb_hwc,
                               std::size_t rgb_step_bytes, cuda::nn::WorkspacePool& workspace,
                               cudaStream_t stream = nullptr,
@@ -113,32 +106,28 @@ class XTransDemosaicNet : public NnWeightModule<XTransDemosaicNet> {
     return NaturalOutputWidth(input_w);
   }
 
-  // Peak-live activation workspace for one Forward (P1 slot reuse; not sum-of-all
-  // intermediates). Does not include weight VRAM. Default matches product fused tail.
-  [[nodiscard]] static auto EstimateWorkspaceBytes(int input_h, int input_w, int batch = 1,
-                                                   bool fuse_post_output = true) -> std::size_t;
+  // Peak-live activation workspace for one ForwardHwcChannelsLast (fused tail).
+  // Does not include weight VRAM.
+  [[nodiscard]] static auto EstimateWorkspaceBytes(int input_h, int input_w, int batch = 1)
+      -> std::size_t;
 
   [[nodiscard]] auto ResidentWeightBytes() const -> std::size_t;
 
   [[nodiscard]] auto PackWeightDevicePtr() const -> const float* { return pack_w_.get(); }
-  [[nodiscard]] auto OutputWeightDevicePtr() const -> const float* { return output_w_.get(); }
   [[nodiscard]] auto OutputWeightCioDevicePtr() const -> const float* {
     return output_w_cio_.get();
   }
 
  private:
   cuda::nn::DeviceBufferF32 pack_w_;  // fixed, no bias
-  cuda::nn::DeviceBufferF32 trunk_w_[kDepth];
-  // CUTLASS KRSC prepack for the persistent NHWC square trunk (layers 1..3).
+  // First unequal trunk layer stays NCHW (12→32); later square layers are CUTLASS KRSC.
+  cuda::nn::DeviceBufferF32 trunk0_w_;
   cuda::nn::DeviceBufferF32 trunk_w_nhwc_[kDepth];
   cuda::nn::DeviceBufferF32 trunk_b_[kDepth];
-  cuda::nn::DeviceBufferF32 residual_w_;
   cuda::nn::DeviceBufferF32 residual_w_nhwc_;  // prepacked [width,12]
   cuda::nn::DeviceBufferF32 residual_b_;
-  cuda::nn::DeviceBufferF32 unpack_w_;  // fixed, no bias
   cuda::nn::DeviceBufferF32 post_w_;
   cuda::nn::DeviceBufferF32 post_b_;
-  cuda::nn::DeviceBufferF32 output_w_;      // OIHW [3,width,1,1] for ordinary path
   cuda::nn::DeviceBufferF32 output_w_cio_;  // prepacked [width,3] for fused tail
   cuda::nn::DeviceBufferF32 output_b_;
 };

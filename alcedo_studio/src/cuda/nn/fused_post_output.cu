@@ -4,7 +4,6 @@
 
 #include "cuda/nn/fused_post_output.hpp"
 
-#include <cstdlib>
 #include <stdexcept>
 #include <string>
 
@@ -29,15 +28,13 @@ __device__ __forceinline__ auto PowSignedDevice(const float x, const float g) ->
 // kPostCout holds every post channel in registers (24 Bayer / 32 X-Trans).
 // Cin is fixed at 6 and loaded as one strip. Grid covers the *export* spatial
 // size; crop_y/crop_x map export pixels onto the natural valid grid.
-template <int kPostCout, bool kCatNhwc>
-__global__ void FusedPostOutputKernel(const float* __restrict__ cat,
-                                      const float* __restrict__ post_w,
-                                      const float* __restrict__ post_b,
-                                      const float* __restrict__ out_w_cio,
-                                      const float* __restrict__ out_b, float* __restrict__ rgb,
-                                      int N, int H, int W, int out_h, int out_w, int crop_y,
-                                      int crop_x, int write_hwc, std::size_t hwc_step_floats,
-                                      int apply_gamma) {
+// Cat is contiguous NHWC [N,H,W,6]; RGB write is pitched HWC float3.
+template <int kPostCout>
+__global__ void FusedPostOutputNhwcToHwcKernel(
+    const float* __restrict__ cat, const float* __restrict__ post_w,
+    const float* __restrict__ post_b, const float* __restrict__ out_w_cio,
+    const float* __restrict__ out_b, float* __restrict__ rgb, int N, int H, int W, int out_h,
+    int out_w, int crop_y, int crop_x, std::size_t hwc_step_floats, int apply_gamma) {
   constexpr int kInH     = kOhTile + 2;
   constexpr int kInW     = kOwTile + 2;
   constexpr int kInArea  = kInH * kInW;
@@ -67,7 +64,6 @@ __global__ void FusedPostOutputKernel(const float* __restrict__ cat,
   const bool pixel_valid = (n < N) && (oy < out_h) && (ox < out_w);
 
   const std::int64_t in_stride_n = static_cast<std::int64_t>(kPostCin) * H * W;
-  const std::int64_t in_stride_c = static_cast<std::int64_t>(H) * W;
   const std::int64_t w_stride_co = static_cast<std::int64_t>(kPostCin) * 9;
 
   const float* in_n = cat + static_cast<std::int64_t>(n) * in_stride_n;
@@ -76,10 +72,10 @@ __global__ void FusedPostOutputKernel(const float* __restrict__ cat,
   const int cat_y0 = oy0 + crop_y;
   const int cat_x0 = ox0 + crop_x;
 
-  // ---- Cooperative load: full Cin=6 input apron ----
+  // ---- Cooperative load: full Cin=6 input apron (NHWC) ----
   for (int load = tid; load < kPostCin * kInArea; load += kThreads) {
-    const int lci = kCatNhwc ? load % kPostCin : load / kInArea;
-    const int rem = kCatNhwc ? load / kPostCin : load - lci * kInArea;
+    const int lci = load % kPostCin;
+    const int rem = load / kPostCin;
     const int lh  = rem / kInW;
     const int lw  = rem - lh * kInW;
 
@@ -88,12 +84,7 @@ __global__ void FusedPostOutputKernel(const float* __restrict__ cat,
 
     float v = 0.0F;
     if (lci < kPostCin && gh >= 0 && gh < H && gw >= 0 && gw < W) {
-      if constexpr (kCatNhwc) {
-        v = in_n[(static_cast<std::int64_t>(gh) * W + gw) * kPostCin + lci];
-      } else {
-        v = in_n[static_cast<std::int64_t>(lci) * in_stride_c +
-                 static_cast<std::int64_t>(gh) * W + gw];
-      }
+      v = in_n[(static_cast<std::int64_t>(gh) * W + gw) * kPostCin + lci];
     }
     const int shared_index = lci * kInArea + rem;
     in_s[shared_index] = v;
@@ -176,99 +167,12 @@ __global__ void FusedPostOutputKernel(const float* __restrict__ cat,
       }
     }
 
-    if (write_hwc != 0) {
-      // N=1 product tile: pitched HWC float3.
-      float* row = rgb + static_cast<std::int64_t>(oy) * hwc_step_floats +
-                   static_cast<std::int64_t>(ox) * kRgbCout;
-      row[0] = rgb_v[0];
-      row[1] = rgb_v[1];
-      row[2] = rgb_v[2];
-    } else {
-      const std::int64_t plane = static_cast<std::int64_t>(out_h) * out_w;
-      const std::int64_t pix =
-          static_cast<std::int64_t>(n) * kRgbCout * plane + static_cast<std::int64_t>(oy) * out_w +
-          ox;
-      rgb[pix]                  = rgb_v[0];
-      rgb[pix + plane]          = rgb_v[1];
-      rgb[pix + 2 * plane]      = rgb_v[2];
-    }
+    float* row = rgb + static_cast<std::int64_t>(oy) * hwc_step_floats +
+                 static_cast<std::int64_t>(ox) * kRgbCout;
+    row[0] = rgb_v[0];
+    row[1] = rgb_v[1];
+    row[2] = rgb_v[2];
   }
-}
-
-void ValidateCatAndParams(const DeviceTensor& cat, const FusedPostOutputParams& params,
-                          const int out_h, const int out_w, const char* what) {
-  if (cat.rank != 4 || cat.data == nullptr || !cat.IsContiguous()) {
-    throw std::runtime_error(std::string(what) + ": cat must be contiguous NCHW");
-  }
-  if (cat.shape[1] != kPostCin) {
-    throw std::runtime_error(std::string(what) + ": cat must have 6 channels");
-  }
-  if (params.post_channels != 24 && params.post_channels != 32) {
-    throw std::runtime_error(std::string(what) + ": post_channels must be 24 or 32");
-  }
-  if (params.post_weight == nullptr || params.post_bias == nullptr ||
-      params.output_weight_cio == nullptr || params.output_bias == nullptr) {
-    throw std::runtime_error(std::string(what) + ": null weight/bias pointer");
-  }
-  const int H = static_cast<int>(cat.shape[2]);
-  const int W = static_cast<int>(cat.shape[3]);
-  if (H < 3 || W < 3) {
-    throw std::runtime_error(std::string(what) + ": cat spatial too small for 3x3");
-  }
-  const int natural_h = H - 2;
-  const int natural_w = W - 2;
-  if (out_h < 1 || out_w < 1 || out_h > natural_h || out_w > natural_w) {
-    throw std::runtime_error(std::string(what) + ": invalid output spatial size");
-  }
-  if (((natural_h - out_h) & 1) != 0 || ((natural_w - out_w) & 1) != 0) {
-    throw std::runtime_error(std::string(what) + ": non-centered crop (parity)");
-  }
-}
-
-template <bool kCatNhwc>
-void LaunchFusedRaw(const float* cat, const int N, const int H, const int W, float* rgb,
-                    const int out_h, const int out_w, const std::size_t hwc_step_floats,
-                    const int write_hwc, const FusedPostOutputParams& params,
-                    const cudaStream_t stream) {
-  const int natural_h = H - 2;
-  const int natural_w = W - 2;
-  const int crop_y    = (natural_h - out_h) / 2;
-  const int crop_x    = (natural_w - out_w) / 2;
-  const int apply_g   = params.apply_gamma_decode ? 1 : 0;
-
-  constexpr int kInH    = kOhTile + 2;
-  constexpr int kInW    = kOwTile + 2;
-  const int     smem_24 = static_cast<int>((kPostCin * kInH * kInW + 24 * kPostCin * 9) *
-                                       sizeof(float));
-  const int     smem_32 = static_cast<int>((kPostCin * kInH * kInW + 32 * kPostCin * 9) *
-                                       sizeof(float));
-
-  dim3 block(kOwTile, kOhTile);
-  dim3 grid((out_w + kOwTile - 1) / kOwTile, (out_h + kOhTile - 1) / kOhTile,
-            static_cast<unsigned>(N));
-  if (grid.x == 0 || grid.y == 0 || grid.z == 0) {
-    return;
-  }
-
-  if (params.post_channels == 24) {
-    FusedPostOutputKernel<24, kCatNhwc><<<grid, block, smem_24, stream>>>(
-        cat, params.post_weight, params.post_bias, params.output_weight_cio, params.output_bias, rgb,
-        N, H, W, out_h, out_w, crop_y, crop_x, write_hwc, hwc_step_floats, apply_g);
-  } else {
-    FusedPostOutputKernel<32, kCatNhwc><<<grid, block, smem_32, stream>>>(
-        cat, params.post_weight, params.post_bias, params.output_weight_cio, params.output_bias, rgb,
-        N, H, W, out_h, out_w, crop_y, crop_x, write_hwc, hwc_step_floats, apply_g);
-  }
-  CheckCuda(cudaGetLastError(), "FusedPostOutputKernel launch");
-}
-
-void LaunchFused(const DeviceTensor& cat, float* rgb, const int out_h, const int out_w,
-                 const std::size_t hwc_step_floats, const int write_hwc,
-                 const FusedPostOutputParams& params, const cudaStream_t stream) {
-  ValidateCatAndParams(cat, params, out_h, out_w, "FusedPostOutput");
-  LaunchFusedRaw<false>(cat.data, static_cast<int>(cat.shape[0]), static_cast<int>(cat.shape[2]),
-                        static_cast<int>(cat.shape[3]), rgb, out_h, out_w, hwc_step_floats,
-                        write_hwc, params, stream);
 }
 
 }  // namespace
@@ -285,35 +189,6 @@ void PrepackOutputWeightsCio(const float* src_oihw, const int width, float* dst)
                    static_cast<std::size_t>(co)];
     }
   }
-}
-
-void FusedPostOutputToNchw(const DeviceTensor& cat, DeviceTensor& rgb,
-                           const FusedPostOutputParams& params, const cudaStream_t stream) {
-  if (rgb.rank != 4 || rgb.data == nullptr || !rgb.IsContiguous()) {
-    throw std::runtime_error("FusedPostOutputToNchw: rgb must be contiguous NCHW");
-  }
-  if (rgb.shape[0] != cat.shape[0] || rgb.shape[1] != kRgbCout) {
-    throw std::runtime_error("FusedPostOutputToNchw: rgb shape must be [N,3,H,W]");
-  }
-  LaunchFused(cat, rgb.data, static_cast<int>(rgb.shape[2]), static_cast<int>(rgb.shape[3]),
-              /*hwc_step_floats=*/0, /*write_hwc=*/0, params, stream);
-}
-
-void FusedPostOutputToHwc(const DeviceTensor& cat, float* rgb_hwc, const std::size_t step_bytes,
-                          const int out_h, const int out_w, const FusedPostOutputParams& params,
-                          const cudaStream_t stream) {
-  if (rgb_hwc == nullptr) {
-    throw std::runtime_error("FusedPostOutputToHwc: null rgb pointer");
-  }
-  if (cat.shape[0] != 1) {
-    throw std::runtime_error("FusedPostOutputToHwc: only N=1 is supported");
-  }
-  if (step_bytes < static_cast<std::size_t>(out_w) * kRgbCout * sizeof(float) ||
-      (step_bytes % sizeof(float)) != 0) {
-    throw std::runtime_error("FusedPostOutputToHwc: invalid row pitch");
-  }
-  LaunchFused(cat, rgb_hwc, out_h, out_w, step_bytes / sizeof(float), /*write_hwc=*/1, params,
-              stream);
 }
 
 void FusedPostOutputNhwcToHwc(const float* cat_nhwc, const int batch, const int cat_h,
@@ -340,19 +215,36 @@ void FusedPostOutputNhwcToHwc(const float* cat_nhwc, const int batch, const int 
       (step_bytes % sizeof(float)) != 0) {
     throw std::runtime_error("FusedPostOutputNhwcToHwc: invalid row pitch");
   }
-  LaunchFusedRaw<true>(cat_nhwc, batch, cat_h, cat_w, rgb_hwc, out_h, out_w,
-                       step_bytes / sizeof(float), /*write_hwc=*/1, params, stream);
-}
 
-auto FusedPostOutputEnabled() -> bool {
-  static const bool enabled = [] {
-    const char* value = std::getenv("ALCEDO_DEMOASICNET_DISABLE_FUSED_TAIL");
-    if (value != nullptr && value[0] != '\0' && value[0] != '0') {
-      return false;
-    }
-    return true;
-  }();
-  return enabled;
+  const int crop_y  = (natural_h - out_h) / 2;
+  const int crop_x  = (natural_w - out_w) / 2;
+  const int apply_g = params.apply_gamma_decode ? 1 : 0;
+  const std::size_t hwc_step_floats = step_bytes / sizeof(float);
+
+  constexpr int kInH    = kOhTile + 2;
+  constexpr int kInW    = kOwTile + 2;
+  const int     smem_24 = static_cast<int>((kPostCin * kInH * kInW + 24 * kPostCin * 9) *
+                                       sizeof(float));
+  const int     smem_32 = static_cast<int>((kPostCin * kInH * kInW + 32 * kPostCin * 9) *
+                                       sizeof(float));
+
+  dim3 block(kOwTile, kOhTile);
+  dim3 grid((out_w + kOwTile - 1) / kOwTile, (out_h + kOhTile - 1) / kOhTile,
+            static_cast<unsigned>(batch));
+  if (grid.x == 0 || grid.y == 0 || grid.z == 0) {
+    return;
+  }
+
+  if (params.post_channels == 24) {
+    FusedPostOutputNhwcToHwcKernel<24><<<grid, block, smem_24, stream>>>(
+        cat_nhwc, params.post_weight, params.post_bias, params.output_weight_cio, params.output_bias,
+        rgb_hwc, batch, cat_h, cat_w, out_h, out_w, crop_y, crop_x, hwc_step_floats, apply_g);
+  } else {
+    FusedPostOutputNhwcToHwcKernel<32><<<grid, block, smem_32, stream>>>(
+        cat_nhwc, params.post_weight, params.post_bias, params.output_weight_cio, params.output_bias,
+        rgb_hwc, batch, cat_h, cat_w, out_h, out_w, crop_y, crop_x, hwc_step_floats, apply_g);
+  }
+  CheckCuda(cudaGetLastError(), "FusedPostOutputNhwcToHwcKernel launch");
 }
 
 }  // namespace alcedo::cuda::nn

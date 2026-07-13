@@ -145,8 +145,8 @@ auto FindModelPath(const char* filename) -> std::string {
 
 auto RunGpuConv(const std::vector<float>& h_in, const std::vector<float>& h_w,
                 const std::vector<float>* h_b, int N, int Cin, int Cout, int H, int W, int kH,
-                int kW, int sH, int sW, int padH, int padW, bool relu, cuda::nn::WorkspacePool* ws,
-                bool use_winograd = false) -> std::vector<float> {
+                int kW, int sH, int sW, int padH, int padW, bool relu, cuda::nn::WorkspacePool* ws)
+    -> std::vector<float> {
   const int                 Ho    = cuda::nn::Conv2dOutputSize(H, padH, 1, kH, sH);
   const int                 Wo    = cuda::nn::Conv2dOutputSize(W, padW, 1, kW, sW);
   const std::size_t         in_n  = static_cast<std::size_t>(N) * Cin * H * W;
@@ -155,19 +155,9 @@ auto RunGpuConv(const std::vector<float>& h_in, const std::vector<float>& h_w,
 
   cuda::nn::DeviceBufferF32 d_in(in_n);
   cuda::nn::DeviceBufferF32 d_w(w_n);
-  cuda::nn::DeviceBufferF32 d_winograd;
   cuda::nn::DeviceBufferF32 d_out(out_n);
   d_in.Upload(h_in);
   d_w.Upload(h_w);
-  if (use_winograd) {
-    if (kH != 3 || kW != 3 || Cin != Cout || (Cin != 24 && Cin != 32)) {
-      throw std::runtime_error("RunGpuConv: invalid Winograd test shape");
-    }
-    std::vector<float> transformed(static_cast<std::size_t>(Cout) * Cin * 16);
-    cuda::nn::TransformConv2d3x3WeightsWinogradF22(h_w.data(), Cin, Cout, transformed.data());
-    d_winograd = cuda::nn::DeviceBufferF32(transformed.size());
-    d_winograd.Upload(transformed);
-  }
 
   cuda::nn::DeviceBufferF32 d_b;
   if (h_b != nullptr) {
@@ -175,23 +165,22 @@ auto RunGpuConv(const std::vector<float>& h_in, const std::vector<float>& h_w,
     d_b.Upload(*h_b);
   }
 
-  auto                   tin  = d_in.AsTensor({N, Cin, H, W});
-  auto                   tout = d_out.AsTensor({N, Cout, Ho, Wo});
+  auto tin  = d_in.AsTensor({N, Cin, H, W});
+  auto tout = d_out.AsTensor({N, Cout, Ho, Wo});
 
   cuda::nn::Conv2dParams p;
-  p.in_channels         = Cin;
-  p.out_channels        = Cout;
-  p.kH                  = kH;
-  p.kW                  = kW;
-  p.sH                  = sH;
-  p.sW                  = sW;
-  p.padH                = padH;
-  p.padW                = padW;
-  p.dilation            = 1;
-  p.groups              = 1;
-  p.weight              = d_w.get();
-  p.winograd_f22_weight = d_winograd.get();
-  p.bias                = h_b != nullptr ? d_b.get() : nullptr;
+  p.in_channels  = Cin;
+  p.out_channels = Cout;
+  p.kH           = kH;
+  p.kW           = kW;
+  p.sH           = sH;
+  p.sW           = sW;
+  p.padH         = padH;
+  p.padW         = padW;
+  p.dilation     = 1;
+  p.groups       = 1;
+  p.weight       = d_w.get();
+  p.bias         = h_b != nullptr ? d_b.get() : nullptr;
 
   if (relu) {
     cuda::nn::Conv2dBiasRelu(tin, tout, p, nullptr, ws);
@@ -254,9 +243,9 @@ auto RunGpuNhwcTrunk(const std::vector<float>& h_in_nchw, const std::vector<floa
   return NhwcToNchw(d_out.Download(), 1, channels, H - 2, W - 2);
 }
 
-auto RunGpuCutlassNhwcTrunk(const std::vector<float>& h_in_nchw,
-                            const std::vector<float>& h_w, const std::vector<float>& h_b,
-                            const int channels, const int H, const int W) -> std::vector<float> {
+auto RunGpuCutlassNhwcTrunk(const std::vector<float>& h_in_nchw, const std::vector<float>& h_w,
+                            const std::vector<float>& h_b, const int channels, const int H,
+                            const int W) -> std::vector<float> {
   const auto         h_in_nhwc = NchwToNhwc(h_in_nchw, 1, channels, H, W);
   std::vector<float> h_w_krsc(static_cast<std::size_t>(channels) * channels * 9);
   cuda::nn::TransformConv2d3x3WeightsCutlassKrsc(h_w.data(), channels, h_w_krsc.data());
@@ -268,8 +257,8 @@ auto RunGpuCutlassNhwcTrunk(const std::vector<float>& h_in_nchw,
   d_in.Upload(h_in_nhwc);
   d_w.Upload(h_w_krsc);
   d_b.Upload(h_b);
-  cuda::nn::Conv2d3x3NhwcCutlassBiasRelu(d_in.data(), d_out.data(), d_w.data(), d_b.data(), 1, H,
-                                         W, channels);
+  cuda::nn::Conv2d3x3NhwcCutlassBiasRelu(d_in.data(), d_out.data(), d_w.data(), d_b.data(), 1, H, W,
+                                         channels);
   EXPECT_EQ(::cudaDeviceSynchronize(), cudaSuccess);
   return NhwcToNchw(d_out.Download(), 1, channels, H - 2, W - 2);
 }
@@ -307,21 +296,17 @@ TEST_F(MlOpsConv2dTest, OneByOneMatchesCpu) {
   ExpectVectorsNear(actual, expected, 1e-5f);
 }
 
-TEST_F(MlOpsConv2dTest, ChannelsLastSquareStudentTrunksMatchNchwReference) {
-  constexpr int H = 19;
-  constexpr int W = 23;
-  for (const int channels : {24, 32}) {
-    const auto hin = MakePattern(static_cast<std::size_t>(channels) * H * W,
-                                 static_cast<std::uint32_t>(900 + channels));
-    const auto hw  = MakePattern(static_cast<std::size_t>(channels) * channels * 9,
-                                 static_cast<std::uint32_t>(1000 + channels));
-    const auto hb  = MakePattern(static_cast<std::size_t>(channels),
-                                 static_cast<std::uint32_t>(1100 + channels));
-    const auto expected =
-        CpuConv2d(hin, hw, &hb, 1, channels, channels, H, W, 3, 3, 1, 1, 0, 0, 1, true);
-    const auto actual = RunGpuNhwcTrunk(hin, hw, hb, channels, H, W);
-    ExpectVectorsNear(actual, expected, 2e-4F);
-  }
+TEST_F(MlOpsConv2dTest, ChannelsLastBayerC24TrunkMatchesNchwReference) {
+  constexpr int H        = 19;
+  constexpr int W        = 23;
+  constexpr int channels = 24;
+  const auto    hin      = MakePattern(static_cast<std::size_t>(channels) * H * W, 924);
+  const auto    hw       = MakePattern(static_cast<std::size_t>(channels) * channels * 9, 1024);
+  const auto    hb       = MakePattern(static_cast<std::size_t>(channels), 1124);
+  const auto    expected =
+      CpuConv2d(hin, hw, &hb, 1, channels, channels, H, W, 3, 3, 1, 1, 0, 0, 1, true);
+  const auto actual = RunGpuNhwcTrunk(hin, hw, hb, channels, H, W);
+  ExpectVectorsNear(actual, expected, 2e-4F);
 }
 
 TEST_F(MlOpsConv2dTest, CutlassChannelsLastC32TrunkMatchesNchwReference) {
@@ -372,9 +357,6 @@ TEST_F(MlOpsConv2dTest, ThreeByThreeValidMatchesCpu) {
   ExpectVectorsNear(actual, expected, 2e-5f);
 }
 
-// Phase 8G+: square student trunks keep the 8F direct product path after
-// Winograd F(2×2,3×3) failed the full-frame retention rule. Winograd remains
-// queryable as candidate_* for re-measurement.
 TEST_F(MlOpsConv2dTest, StudentTrunk24ProductDirectMatchesCpu) {
   constexpr int                 N = 1, Cin = 24, Cout = 24, H = 41, W = 37;
   const auto                    hin = MakePattern(static_cast<std::size_t>(N * Cin * H * W), 110);
@@ -385,13 +367,9 @@ TEST_F(MlOpsConv2dTest, StudentTrunk24ProductDirectMatchesCpu) {
   ASSERT_TRUE(cuda::nn::QueryConv2d3x3KernelInfo(Cin, Cout, &info));
   EXPECT_STREQ(info.name, "direct_tiled_24");
   EXPECT_GT(info.num_regs, 0);
-  EXPECT_STREQ(info.candidate_name, "winograd_f22_24");
-  EXPECT_GT(info.candidate_num_regs, 0);
-  EXPECT_EQ(info.candidate_threads_per_block, 192);
 
   const auto expected = CpuConv2d(hin, hw, &hb, N, Cin, Cout, H, W, 3, 3, 1, 1, 0, 0, 1, true);
   const auto actual = RunGpuConv(hin, hw, &hb, N, Cin, Cout, H, W, 3, 3, 1, 1, 0, 0, true, nullptr);
-  // FP32 contract unchanged; K=216 accumulation.
   ExpectVectorsNear(actual, expected, 2e-4f);
 }
 
@@ -405,18 +383,12 @@ TEST_F(MlOpsConv2dTest, StudentTrunk32ProductDirectMatchesCpu) {
   ASSERT_TRUE(cuda::nn::QueryConv2d3x3KernelInfo(Cin, Cout, &info));
   EXPECT_STREQ(info.name, "direct_tiled_32");
   EXPECT_GT(info.num_regs, 0);
-  EXPECT_STREQ(info.candidate_name, "winograd_f22_32");
-  EXPECT_GT(info.candidate_num_regs, 0);
-  EXPECT_EQ(info.candidate_threads_per_block, 256);
 
   const auto expected = CpuConv2d(hin, hw, &hb, N, Cin, Cout, H, W, 3, 3, 1, 1, 0, 0, 1, true);
   const auto actual = RunGpuConv(hin, hw, &hb, N, Cin, Cout, H, W, 3, 3, 1, 1, 0, 0, true, nullptr);
   ExpectVectorsNear(actual, expected, 3e-4f);
 }
 
-// Force-dispatch path: when Winograd was product-selected for measurement the
-// even-spatial pure-Winograd case matched CPU. After retention fail the product
-// path is direct again; keep a CPU match on the product path for even shapes.
 TEST_F(MlOpsConv2dTest, StudentTrunk24EvenSpatialProductDirectMatchesCpu) {
   constexpr int N = 1, Cin = 24, Cout = 24, H = 34, W = 34;
   const auto    hin      = MakePattern(static_cast<std::size_t>(N * Cin * H * W), 140);
@@ -428,39 +400,14 @@ TEST_F(MlOpsConv2dTest, StudentTrunk24EvenSpatialProductDirectMatchesCpu) {
   ExpectVectorsNear(actual, expected, 2e-4f);
 }
 
-TEST_F(MlOpsConv2dTest, PrepackedWinogradTrunk24MatchesCpuAcrossPartialEdgeTiles) {
-  constexpr int N = 1, Cin = 24, Cout = 24, H = 41, W = 37;
-  const auto    hin      = MakePattern(static_cast<std::size_t>(N * Cin * H * W), 150);
-  const auto    hw       = MakePattern(static_cast<std::size_t>(Cout * Cin * 9), 151);
-  const auto    hb       = MakePattern(static_cast<std::size_t>(Cout), 152);
-  const auto    expected = CpuConv2d(hin, hw, &hb, N, Cin, Cout, H, W, 3, 3, 1, 1, 0, 0, 1, true);
-  const auto    actual =
-      RunGpuConv(hin, hw, &hb, N, Cin, Cout, H, W, 3, 3, 1, 1, 0, 0, true, nullptr, true);
-  ExpectVectorsNear(actual, expected, 4e-4f);
-}
-
-TEST_F(MlOpsConv2dTest, PrepackedWinogradTrunk32MatchesCpuAcrossPartialEdgeTiles) {
-  constexpr int N = 1, Cin = 32, Cout = 32, H = 35, W = 33;
-  const auto    hin      = MakePattern(static_cast<std::size_t>(N * Cin * H * W), 160);
-  const auto    hw       = MakePattern(static_cast<std::size_t>(Cout * Cin * 9), 161);
-  const auto    hb       = MakePattern(static_cast<std::size_t>(Cout), 162);
-  const auto    expected = CpuConv2d(hin, hw, &hb, N, Cin, Cout, H, W, 3, 3, 1, 1, 0, 0, 1, false);
-  const auto    actual =
-      RunGpuConv(hin, hw, &hb, N, Cin, Cout, H, W, 3, 3, 1, 1, 0, 0, false, nullptr, true);
-  ExpectVectorsNear(actual, expected, 5e-4f);
-}
-
 TEST_F(MlOpsConv2dTest, ThinCinPostConvKeepsDirectTiledFallback) {
-  // post_conv 6→24/32 has no square-trunk candidate; product is direct-tiled.
   cuda::nn::Conv2d3x3KernelInfo bayer{};
   ASSERT_TRUE(cuda::nn::QueryConv2d3x3KernelInfo(6, 24, &bayer));
   EXPECT_STREQ(bayer.name, "direct_tiled_24");
-  EXPECT_EQ(bayer.candidate_name, nullptr);
 
   cuda::nn::Conv2d3x3KernelInfo xtrans{};
   ASSERT_TRUE(cuda::nn::QueryConv2d3x3KernelInfo(6, 32, &xtrans));
   EXPECT_STREQ(xtrans.name, "direct_tiled_32");
-  EXPECT_EQ(xtrans.candidate_name, nullptr);
 
   constexpr int N = 1, Cin = 6, Cout = 24, H = 19, W = 17;
   const auto    hin      = MakePattern(static_cast<std::size_t>(N * Cin * H * W), 130);
@@ -541,11 +488,8 @@ TEST_F(MlOpsConv2dTest, FusedBiasReluMatchesUnfused) {
   cuda::nn::Conv2dBiasRelu(tin, tfused, p);
   ASSERT_EQ(::cudaDeviceSynchronize(), cudaSuccess);
 
-  // Fused vs unfused: near-equality (same math order within kernel may differ slightly
-  // from separate launches only if kernels differ — here both use same 3×3 path).
   ExpectVectorsNear(d_fused.Download(), d_unfused.Download(), 1e-6f);
 
-  // Also vs CPU
   const auto expected = CpuConv2d(hin, hw, &hb, N, Cin, Cout, H, W, 3, 3, 1, 1, 0, 0, 1, true);
   ExpectVectorsNear(d_fused.Download(), expected, 5e-5f);
 }
@@ -691,8 +635,8 @@ TEST_F(MlOpsConv2dTest, PerfThreeByThreeC64_512) {
   d_w.Upload(hw);
   d_b.Upload(hb);
 
-  auto                   tin  = d_in.AsTensor({N, Cin, H, W});
-  auto                   tout = d_out.AsTensor({N, Cout, Ho, Wo});
+  auto tin  = d_in.AsTensor({N, Cin, H, W});
+  auto tout = d_out.AsTensor({N, Cout, Ho, Wo});
 
   cuda::nn::Conv2dParams p;
   p.in_channels  = Cin;
@@ -734,11 +678,6 @@ TEST_F(MlOpsConv2dTest, PerfThreeByThreeC64_512) {
   std::cout << "[Conv2d perf] 3x3 C=64 H=W=512: " << ms_per << " ms/iter, " << gflops
             << " GFLOP/s\n";
 
-  // Soft floor for the multi-Cout tiled 3×3 path (Phase 8).
-  // Pre-overhaul (one Cout/block, weights-only SMEM) was tens of GFLOP/s and
-  // ~0.4 s per 64→64 layer at ~1024 spatial. Release tiled path targets TFLOP/s.
-  // Keep floors loose enough for CI / laptop GPUs, tight enough to catch the
-  // old naive path or a host-side serialization bug.
   EXPECT_GT(gflops, 50.0);
   EXPECT_LT(ms_per, 200.0);
 }
@@ -764,8 +703,8 @@ TEST_F(MlOpsConv2dTest, PerfThreeByThreeC64_1024) {
   d_w.Upload(hw);
   d_b.Upload(hb);
 
-  auto                   tin  = d_in.AsTensor({N, Cin, H, W});
-  auto                   tout = d_out.AsTensor({N, Cout, Ho, Wo});
+  auto tin  = d_in.AsTensor({N, Cin, H, W});
+  auto tout = d_out.AsTensor({N, Cout, Ho, Wo});
 
   cuda::nn::Conv2dParams p;
   p.in_channels  = Cin;
@@ -805,7 +744,6 @@ TEST_F(MlOpsConv2dTest, PerfThreeByThreeC64_1024) {
   std::cout << "[Conv2d perf] 3x3 C=64 H=W=1024: " << ms_per << " ms/iter, " << gflops
             << " GFLOP/s\n";
 
-  // Pre-overhaul baseline at this scale was ~400–470 ms/layer.
   EXPECT_GT(gflops, 50.0);
   EXPECT_LT(ms_per, 400.0);
 }

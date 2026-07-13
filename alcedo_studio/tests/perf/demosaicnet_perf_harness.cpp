@@ -2,14 +2,13 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Phase 8.1 + 8F: standalone DemosaicNet / Neural Engine performance harness.
+// Standalone DemosaicNet / Neural Engine performance harness.
 // Not a correctness suite — opt-in via ALCEDO_ENABLE_GPU_PERF_TESTS for ctest.
 //
 // Authoritative numbers: build Release and run:
 //   build\release\alcedo_studio\tests\DemosaicNetPerfHarness.exe ^
 //     --fixture bayer|xtrans|all --method legacy|neural|both --mode full|tile|conv ^
-//     --model student --warmup 3 --iterations 20 --tile-size 1024 --lanes 1 ^
-//     --output build/perf/demosaicnet.json
+//     --warmup 3 --iterations 20 --output build/perf/demosaicnet.json
 
 #include <cuda_runtime.h>
 #include <libraw/libraw.h>
@@ -71,41 +70,21 @@ namespace perf = alcedo::perf;
 enum class FixtureKind { Bayer, XTrans };
 enum class MethodKind { Legacy, Neural, Both };
 enum class ModeKind { Full, Tile, Conv };
-// Phase 8F: product path only ships the distilled students; keep the flag for
-// harness JSON identity and to reject obsolete teacher requests explicitly.
-enum class ModelKind { Student };
+
+// Product path ships fixed 1024 owned student tiles only.
+constexpr int kProductOwned = 1024;
 
 struct HarnessConfig {
-  FixtureKind        fixture            = FixtureKind::Bayer;
-  bool               run_bayer          = true;
-  bool               run_xtrans         = false;
-  MethodKind         method             = MethodKind::Both;
-  ModeKind           mode               = ModeKind::Full;
-  ModelKind          model              = ModelKind::Student;
-  int                warmup             = 3;
-  int                iterations         = 20;
-  int                tile_size          = 1024;  // square owned edge (default / --tile-size)
-  int                tile_w             = 0;     // rectangular owned width (0 → tile_size)
-  int                tile_h             = 0;     // rectangular owned height (0 → tile_size)
-  int                strip_height       = 0;     // >0 → full-width strip of this owned height
-  int                lanes              = 1;
-  bool               profile_ranges     = false;
-  bool               conv_winograd      = false;
-  bool               conv_channels_last = false;  // P4-D isolated NHWC trunk gate only
-  bool               conv_cutlass       = false;  // BSD CUTLASS FP32 NHWC candidate
-  bool               ragged_edges = false;  // P4-B: rectangular boundary jobs (vs paid 1024 tails)
-  fs::path           output_json;
-  fs::path           fixture_override;
-
-  // Resolved owned shape after parse (strip fills width at plan time from cover).
-  [[nodiscard]] auto OwnedW() const -> int { return tile_w > 0 ? tile_w : tile_size; }
-  [[nodiscard]] auto OwnedH() const -> int {
-    if (strip_height > 0) {
-      return strip_height;
-    }
-    return tile_h > 0 ? tile_h : tile_size;
-  }
-  [[nodiscard]] auto IsFullWidthStrip() const -> bool { return strip_height > 0; }
+  FixtureKind fixture    = FixtureKind::Bayer;
+  bool        run_bayer  = true;
+  bool        run_xtrans = false;
+  MethodKind  method     = MethodKind::Both;
+  ModeKind    mode       = ModeKind::Full;
+  int         warmup     = 3;
+  int         iterations = 20;
+  bool        profile_ranges = false;
+  fs::path    output_json;
+  fs::path    fixture_override;
 };
 
 struct FixtureSpec {
@@ -134,24 +113,15 @@ void PrintUsage(const char* argv0) {
       << "  --fixture bayer|xtrans|all     Primary fixtures (default: bayer)\n"
       << "  --method legacy|neural|both    Method under test (default: both)\n"
       << "  --mode full|tile|conv          Measurement mode (default: full)\n"
-      << "  --model student                Hard-coded product topology (default; only value)\n"
       << "  --warmup N                     Warm-up iterations (default: 3)\n"
       << "  --iterations N                 Measured iterations (default: 20)\n"
-      << "  --tile-size N                  Square owned-output edge (even, >=256; default 1024; "
-         "P2 candidates 512/1024/1536/2048/3072)\n"
-      << "  --tile-width N                 Rectangular owned width (P4-C; with --tile-height)\n"
-      << "  --tile-height N                Rectangular owned height (P4-C; with --tile-width)\n"
-      << "  --strip-height N               Full-width owned strip height (P4-C; 128/256/512)\n"
-      << "  --lanes N                      Concurrent streams/workspaces in tile mode (default: "
-         "1)\n"
-      << "  --profile-ranges               Named CUDA-event ranges (full/tile; P0 breakdown)\n"
-      << "  --conv-winograd                Conv mode: benchmark prepacked F(2x2,3x3) trunks\n"
-      << "  --conv-channels-last           Conv mode: benchmark isolated NHWC 24/32 trunks (P4-D)\n"
-      << "  --conv-cutlass                Conv mode: benchmark CUTLASS FP32 NHWC trunks\n"
-      << "  --ragged-edges                 P4-B: ragged right/bottom owned tiles (vs fixed 1024)\n"
+      << "  --profile-ranges               Named CUDA-event ranges (full/tile)\n"
       << "  --output path.json             Write machine-readable JSON\n"
       << "  --raw path                     Override fixture RAW path (single fixture)\n"
-      << "  --help                         Show this help\n";
+      << "  --help                         Show this help\n"
+      << "\n"
+      << "Product path only: student models, fixed 1024 owned tiles, single stream.\n"
+      << "Conv mode benchmarks shipping dispatch (Bayer C=24 NHWC / X-Trans C=32 CUTLASS).\n";
 }
 
 [[nodiscard]] auto ParseArgs(const int argc, char** argv) -> HarnessConfig {
@@ -206,82 +176,28 @@ void PrintUsage(const char* argv0) {
       } else {
         throw std::runtime_error("unknown --mode " + v);
       }
-    } else if (arg == "--model") {
-      const auto v = need("--model");
-      if (v == "student") {
-        cfg.model = ModelKind::Student;
-      } else if (v == "teacher") {
-        throw std::runtime_error(
-            "--model teacher is retired; Phase 8 product path is --model student only");
-      } else {
-        throw std::runtime_error("unknown --model " + v + " (expected student)");
-      }
     } else if (arg == "--warmup") {
       cfg.warmup = std::stoi(need("--warmup"));
     } else if (arg == "--iterations") {
       cfg.iterations = std::stoi(need("--iterations"));
-    } else if (arg == "--tile-size") {
-      cfg.tile_size = std::stoi(need("--tile-size"));
-    } else if (arg == "--tile-width") {
-      cfg.tile_w = std::stoi(need("--tile-width"));
-    } else if (arg == "--tile-height") {
-      cfg.tile_h = std::stoi(need("--tile-height"));
-    } else if (arg == "--strip-height") {
-      cfg.strip_height = std::stoi(need("--strip-height"));
-    } else if (arg == "--lanes") {
-      cfg.lanes = std::stoi(need("--lanes"));
     } else if (arg == "--profile-ranges") {
       cfg.profile_ranges = true;
-    } else if (arg == "--conv-winograd") {
-      cfg.conv_winograd = true;
-    } else if (arg == "--conv-channels-last") {
-      cfg.conv_channels_last = true;
-    } else if (arg == "--conv-cutlass") {
-      cfg.conv_cutlass = true;
-    } else if (arg == "--ragged-edges") {
-      cfg.ragged_edges = true;
     } else if (arg == "--output") {
       cfg.output_json = need("--output");
     } else if (arg == "--raw") {
       cfg.fixture_override = need("--raw");
+    } else if (arg == "--model" || arg == "--tile-size" || arg == "--tile-width" ||
+               arg == "--tile-height" || arg == "--strip-height" || arg == "--lanes" ||
+               arg == "--conv-winograd" || arg == "--conv-channels-last" ||
+               arg == "--conv-cutlass" || arg == "--ragged-edges") {
+      throw std::runtime_error(std::string(arg) +
+                               " is retired; product harness uses student / 1024 / single lane only");
     } else {
       throw std::runtime_error("unknown argument " + std::string(arg));
     }
   }
   if (cfg.warmup < 0 || cfg.iterations < 1) {
     throw std::runtime_error("--warmup must be >= 0 and --iterations must be >= 1");
-  }
-  if (cfg.lanes < 1) {
-    throw std::runtime_error("--lanes must be >= 1");
-  }
-  if (cfg.tile_size < detail::kStudentMinOwnedTileEdge) {
-    throw std::runtime_error("--tile-size must be >= 256 (experimental minimum owned edge)");
-  }
-  if ((cfg.tile_size % 2) != 0) {
-    throw std::runtime_error("--tile-size must be even (Bayer CFA period / pack alignment)");
-  }
-  if ((cfg.tile_w > 0) != (cfg.tile_h > 0)) {
-    throw std::runtime_error("--tile-width and --tile-height must be set together");
-  }
-  if (cfg.tile_w > 0) {
-    if (cfg.tile_w < detail::kStudentMinOwnedRectAxis ||
-        cfg.tile_h < detail::kStudentMinOwnedRectAxis) {
-      throw std::runtime_error("--tile-width/height must be >= 128");
-    }
-    if ((cfg.tile_w % 2) != 0 || (cfg.tile_h % 2) != 0) {
-      throw std::runtime_error("--tile-width/height must be even (pack alignment)");
-    }
-  }
-  if (cfg.strip_height > 0) {
-    if (cfg.strip_height < detail::kStudentMinOwnedRectAxis) {
-      throw std::runtime_error("--strip-height must be >= 128");
-    }
-    if ((cfg.strip_height % 2) != 0) {
-      throw std::runtime_error("--strip-height must be even (pack alignment)");
-    }
-    if (cfg.tile_w > 0 || cfg.tile_h > 0) {
-      throw std::runtime_error("--strip-height cannot be combined with --tile-width/height");
-    }
   }
   return cfg;
 }
@@ -362,7 +278,6 @@ struct ProductTilePlanSummary {
   int          tile_output_h        = 0;
   int          tile_step_x          = 0;
   int          tile_step_y          = 0;
-  // Historical square aliases (width axis).
   int          tile_input           = 0;
   int          tile_output          = 0;
   int          tile_step            = 0;
@@ -378,9 +293,7 @@ struct ProductTilePlanSummary {
   std::string  architecture;
 };
 
-[[nodiscard]] auto SummarizeStudentProductJobs(LibRaw& raw, const FixtureKind kind,
-                                               const int owned_w, const int owned_h,
-                                               const bool ragged_edges = false)
+[[nodiscard]] auto SummarizeStudentProductJobs(LibRaw& raw, const FixtureKind kind)
     -> ProductTilePlanSummary {
   ProductTilePlanSummary s;
   const RawCfaPattern    camera = ReadLibRawCfaPattern(raw);
@@ -388,23 +301,17 @@ struct ProductTilePlanSummary {
   s.phase_sx                    = shift.has_value() ? shift->sx : 0;
   s.phase_sy                    = shift.has_value() ? shift->sy : 0;
 
-  // Product ProcessCudaTiled covers the full uploaded CFA (raw dims), after phase crop + period
-  // trim — not only the LibRaw visible crop. Match that for FLOP / tile accounting.
-  const int raw_w               = static_cast<int>(raw.imgdata.sizes.raw_width);
-  const int raw_h               = static_cast<int>(raw.imgdata.sizes.raw_height);
-  const int period              = CfaPeriod(camera.kind);
-  const int avail_w             = raw_w - s.phase_sx;
-  const int avail_h             = raw_h - s.phase_sy;
-  s.aligned_width               = avail_w - (avail_w % period);
-  s.aligned_height              = avail_h - (avail_h % period);
+  const int raw_w   = static_cast<int>(raw.imgdata.sizes.raw_width);
+  const int raw_h   = static_cast<int>(raw.imgdata.sizes.raw_height);
+  const int period  = CfaPeriod(camera.kind);
+  const int avail_w = raw_w - s.phase_sx;
+  const int avail_h = raw_h - s.phase_sy;
+  s.aligned_width   = avail_w - (avail_w % period);
+  s.aligned_height  = avail_h - (avail_h % period);
 
-  // Honor ragged flag for this summary only (restore previous state afterward).
-  const bool prev_ragged        = detail::StudentRaggedEdgeTilesEnabled();
-  detail::SetStudentRaggedEdgeTilesEnabled(ragged_edges);
   const detail::CudaTilePolicy policy = kind == FixtureKind::Bayer
-                                            ? detail::MakeBayerStudentTilePolicy(owned_w, owned_h)
-                                            : detail::MakeXTransStudentTilePolicy(owned_w, owned_h);
-  detail::SetStudentRaggedEdgeTilesEnabled(prev_ragged);
+                                            ? detail::MakeBayerStudentTilePolicy()
+                                            : detail::MakeXTransStudentTilePolicy();
 
   s.tile_input_w      = policy.input_tile.width;
   s.tile_input_h      = policy.input_tile.height;
@@ -435,8 +342,6 @@ struct ProductTilePlanSummary {
     s.first_input_origin_x = jobs.front().input_origin.x;
     s.first_input_origin_y = jobs.front().input_origin.y;
   }
-  // Recover grid extents from destinations / step. Paid pixels use per-job owned
-  // sizes (P4-B ragged) rather than tile_count * max_owned^2.
   int max_gx = 0;
   int max_gy = 0;
   for (const auto& job : jobs) {
@@ -453,17 +358,6 @@ struct ProductTilePlanSummary {
   return s;
 }
 
-[[nodiscard]] auto ResolveOwnedShape(const HarnessConfig& cfg, const int aligned_cover_w)
-    -> detail::StudentOwnedTileShape {
-  if (cfg.IsFullWidthStrip()) {
-    if (aligned_cover_w < detail::kStudentMinOwnedRectAxis) {
-      throw std::runtime_error("full-width strip: aligned cover width too small");
-    }
-    return detail::StudentOwnedTileShape{aligned_cover_w, cfg.strip_height};
-  }
-  return detail::StudentOwnedTileShape{cfg.OwnedW(), cfg.OwnedH()};
-}
-
 struct FullFixtureResult {
   std::string            fixture_name;
   std::string            fixture_path;
@@ -473,24 +367,18 @@ struct FullFixtureResult {
   int                    active_height     = 0;
   double                 active_megapixels = 0.0;
   int                    tile_count        = 0;
-  int                    tile_size         = 0;
-  int                    tile_owned_w      = 0;
-  int                    tile_owned_h      = 0;
-  int                    lanes             = 1;
+  int                    tile_owned_w      = kProductOwned;
+  int                    tile_owned_h      = kProductOwned;
   ProductTilePlanSummary product_plan;
   double                 cold_load_ms = 0.0;
   perf::TimingStats      legacy_stats;
   perf::TimingStats      neural_stats;
   cv::Size               legacy_out_size;
   cv::Size               neural_out_size;
-  std::uint64_t          allocation_gen_start = 0;
-  std::uint64_t          allocation_gen_end   = 0;
-  bool                   allocation_stable    = true;
-  std::size_t            free_bytes_after     = 0;
-  std::size_t            total_bytes_after    = 0;
+  std::size_t            free_bytes_after  = 0;
+  std::size_t            total_bytes_after = 0;
   perf::RooflineReport   roofline;
   bool                   has_roofline = false;
-  // P0 --profile-ranges body (object fields only; empty when disabled).
   std::string            profile_json;
 };
 
@@ -499,8 +387,8 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
   FullFixtureResult result;
   result.fixture_name  = fixture.name;
   result.fixture_path  = fixture.path.string();
-  result.tile_size     = cfg.tile_size;
-  result.lanes         = cfg.lanes;
+  result.tile_owned_w  = kProductOwned;
+  result.tile_owned_h  = kProductOwned;
 
   auto raw             = OpenUnpackedRaw(fixture.path);
   result.raw_width     = raw->imgdata.sizes.raw_width;
@@ -511,34 +399,12 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
       (static_cast<double>(result.active_width) * static_cast<double>(result.active_height)) /
       1.0e6;
 
-  // Resolve cover first so full-width strips can use aligned width as owned_w.
-  const ProductTilePlanSummary cover_probe =
-      SummarizeStudentProductJobs(*raw, fixture.kind, /*owned_w=*/1024, /*owned_h=*/1024,
-                                  /*ragged_edges=*/false);
-  const detail::StudentOwnedTileShape shape = ResolveOwnedShape(cfg, cover_probe.aligned_width);
-  result.tile_owned_w                       = shape.width;
-  result.tile_owned_h                       = shape.height;
-  result.product_plan =
-      SummarizeStudentProductJobs(*raw, fixture.kind, shape.width, shape.height, cfg.ragged_edges);
-  result.tile_count      = result.product_plan.tile_count;
+  result.product_plan = SummarizeStudentProductJobs(*raw, fixture.kind);
+  result.tile_count   = result.product_plan.tile_count;
 
   const bool want_legacy = cfg.method == MethodKind::Legacy || cfg.method == MethodKind::Both;
   const bool want_neural = cfg.method == MethodKind::Neural || cfg.method == MethodKind::Both;
 
-  // Force the harness-selected product tile shape into ProcessCudaTiled.
-  detail::SetStudentProductTileShapeOverride(shape.width, shape.height);
-  // P4-B: ragged edge tiles (boundary jobs use actual owned extents).
-  const bool prev_ragged = detail::StudentRaggedEdgeTilesEnabled();
-  detail::SetStudentRaggedEdgeTilesEnabled(cfg.ragged_edges);
-  struct OverrideReset {
-    bool prev_ragged_flag = false;
-    ~OverrideReset() {
-      detail::SetStudentProductTileShapeOverride(0, 0);
-      detail::SetStudentRaggedEdgeTilesEnabled(prev_ragged_flag);
-    }
-  } override_reset{prev_ragged};
-
-  // Correctness pass before timing.
   if (want_legacy) {
     result.legacy_out_size =
         ValidateRgbaOutput(RunFullProcess(*raw, RawDemosaicMethod::Legacy), "legacy correctness");
@@ -555,7 +421,6 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
         RunFullProcess(*raw, RawDemosaicMethod::NeuralEngine), "neural correctness");
   }
 
-  // Warm-up (models, CUDA context, workspaces).
   for (int i = 0; i < cfg.warmup; ++i) {
     if (want_legacy) {
       (void)RunFullProcess(*raw, RawDemosaicMethod::Legacy);
@@ -571,7 +436,6 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
   legacy_samples.reserve(static_cast<std::size_t>(cfg.iterations));
   neural_samples.reserve(static_cast<std::size_t>(cfg.iterations));
 
-  // Alternate method order per iteration to reduce clock/temperature bias.
   for (int i = 0; i < cfg.iterations; ++i) {
     const bool legacy_first = (i % 2) == 0;
     auto       run_legacy   = [&] {
@@ -611,7 +475,6 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
   result.legacy_stats = perf::ComputeTimingStats(std::move(legacy_samples));
   result.neural_stats = perf::ComputeTimingStats(std::move(neural_samples));
 
-  // P0: dedicated profiled pass (does not replace hot-path wall samples above).
   if (cfg.profile_ranges && want_neural) {
     DemosaicNetProfiler profiler;
     profiler.CaptureTelemetryBefore();
@@ -631,7 +494,6 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
   result.free_bytes_after  = free_b;
   result.total_bytes_after = total_b;
 
-  // Exact product FLOP / traffic roofline on the student grid that ProcessCudaTiled runs.
   const auto topology = fixture.kind == FixtureKind::Bayer ? perf::DemosaicNetTopologyKind::Bayer
                                                            : perf::DemosaicNetTopologyKind::XTrans;
   const int  cover_w  = result.product_plan.aligned_width > 0 ? result.product_plan.aligned_width
@@ -639,8 +501,8 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
   const int  cover_h  = result.product_plan.aligned_height > 0 ? result.product_plan.aligned_height
                                                                : result.active_height;
   const auto work =
-      perf::EstimateFullFrameWork(topology, cover_w, cover_h, result.tile_owned_w,
-                                  result.tile_owned_h, result.product_plan.tile_count);
+      perf::EstimateFullFrameWork(topology, cover_w, cover_h, kProductOwned, kProductOwned,
+                                  result.product_plan.tile_count);
   const auto envelope = perf::EstimateDeviceComputeEnvelope(device);
   result.roofline =
       perf::BuildRooflineReport(work, envelope, result.neural_stats.median_ms,
@@ -651,13 +513,12 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
 
 struct TileFixtureResult {
   std::string       fixture_name;
-  int               input_size   = 0;  // historical: input width
-  int               output_size  = 0;  // historical: output width
+  int               input_size   = 0;
+  int               output_size  = 0;
   int               input_w      = 0;
   int               input_h      = 0;
   int               output_w     = 0;
   int               output_h     = 0;
-  int               lanes        = 1;
   double            cold_load_ms = 0.0;
   perf::TimingStats wall_stats;
   perf::TimingStats cuda_stats;
@@ -665,15 +526,7 @@ struct TileFixtureResult {
   std::uint64_t     allocation_gen_end   = 0;
   std::size_t       owned_device_bytes   = 0;
   bool              allocation_stable    = true;
-  std::string       profile_json;  // optional named ranges object body
-};
-
-struct TileLane {
-  cv::cuda::Stream                      stream;
-  cv::cuda::GpuMat                      rgb;
-  CUDA::NeuralDemosaicWorkspace         workspace;
-  CUDA::NeuralDemosaicOptions           options;
-  std::unique_ptr<perf::CudaEventRange> range = std::make_unique<perf::CudaEventRange>();
+  std::string       profile_json;
 };
 
 [[nodiscard]] auto MakeSyntheticCfa(const int height, const int width, const unsigned seed)
@@ -694,36 +547,28 @@ auto RunTileMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> TileFi
   TileFixtureResult result;
   result.fixture_name = fixture.name;
 
-  // Product owned-output shape → student input/export contract (P2/P4-C).
-  // Strip mode in tile microbench uses owned_w = max(1024, OwnedH()*8) as a stand-in
-  // full-width class when no RAW cover is available (constant-area / aspect experiments
-  // should pass --tile-width/--tile-height explicitly).
-  const int owned_w = cfg.IsFullWidthStrip() ? std::max(1024, cfg.strip_height * 8) : cfg.OwnedW();
-  const int owned_h = cfg.OwnedH();
   const detail::CudaTilePolicy policy   = fixture.kind == FixtureKind::Bayer
-                                              ? detail::MakeBayerStudentTilePolicy(owned_w, owned_h)
-                                              : detail::MakeXTransStudentTilePolicy(owned_w, owned_h);
+                                              ? detail::MakeBayerStudentTilePolicy()
+                                              : detail::MakeXTransStudentTilePolicy();
   const int                    input_w  = policy.input_tile.width;
   const int                    input_h  = policy.input_tile.height;
   const int                    output_w = policy.output_tile.width;
   const int                    output_h = policy.output_tile.height;
-  result.input_size                     = input_w;  // historical field: report width
+  result.input_size                     = input_w;
   result.output_size                    = output_w;
   result.input_w                        = input_w;
   result.input_h                        = input_h;
   result.output_w                       = output_w;
   result.output_h                       = output_h;
-  result.lanes                          = cfg.lanes;
 
-  RawCfaPattern pattern                 = DemosaicNetTrainingPattern(
+  RawCfaPattern pattern = DemosaicNetTrainingPattern(
       fixture.kind == FixtureKind::Bayer ? RawCfaKind::Bayer2x2 : RawCfaKind::XTrans6x6);
 
   const unsigned   seed     = fixture.kind == FixtureKind::Bayer ? 0xBA5E11u : 0x7A511u;
   cv::Mat          host_cfa = MakeSyntheticCfa(input_h, input_w, seed);
-
   cv::cuda::GpuMat gpu_cfa(host_cfa);
 
-  auto&            cache = DemosaicNetModelCache::Instance();
+  auto& cache = DemosaicNetModelCache::Instance();
   cache.Unload(fixture.variant);
   const auto cold_start = Clock::now();
   if (!cache.EnsureLoaded(fixture.variant)) {
@@ -731,92 +576,59 @@ auto RunTileMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> TileFi
   }
   result.cold_load_ms = ElapsedMs(cold_start);
 
-  std::vector<std::unique_ptr<TileLane>> lanes;
-  lanes.reserve(static_cast<std::size_t>(cfg.lanes));
-  for (int lane_index = 0; lane_index < cfg.lanes; ++lane_index) {
-    auto lane                             = std::make_unique<TileLane>();
-    lane->options.workspace               = &lane->workspace;
-    lane->options.model_cache             = &cache;
-    lane->options.student_owned_tile_w    = owned_w;
-    lane->options.student_owned_tile_h    = owned_h;
-    lane->options.student_owned_tile_edge = (owned_w == owned_h) ? owned_w : 0;
-    lanes.push_back(std::move(lane));
-  }
+  cv::cuda::Stream              stream;
+  cv::cuda::GpuMat              rgb;
+  CUDA::NeuralDemosaicWorkspace workspace;
+  CUDA::NeuralDemosaicOptions   options;
+  options.workspace   = &workspace;
+  options.model_cache = &cache;
+  perf::CudaEventRange          range;
 
-  auto enqueue_lane = [&](TileLane& lane, const char* phase) {
-    const auto result = CUDA::EnqueueDemosaicStudentTileWithNeuralEngine(
-        gpu_cfa, cv::Point(0, 0), pattern, lane.rgb, &lane.stream, lane.options);
-    if (!result.succeeded) {
-      throw std::runtime_error(std::string("tile ") + phase + " failed: " + result.error);
+  auto enqueue = [&](const char* phase) {
+    const auto r = CUDA::EnqueueDemosaicStudentTileWithNeuralEngine(
+        gpu_cfa, cv::Point(0, 0), pattern, rgb, &stream, options);
+    if (!r.succeeded) {
+      throw std::runtime_error(std::string("tile ") + phase + " failed: " + r.error);
     }
   };
 
-  auto wait_all_lanes = [&] {
-    for (auto& lane : lanes) {
-      lane->stream.waitForCompletion();
-    }
-  };
-
-  for (auto& lane : lanes) {
-    enqueue_lane(*lane, "correctness enqueue");
-  }
-  wait_all_lanes();
-  for (auto& lane : lanes) {
-    if (lane->rgb.rows != output_h || lane->rgb.cols != output_w || lane->rgb.type() != CV_32FC3) {
-      throw std::runtime_error("tile correctness shape mismatch");
-    }
+  enqueue("correctness enqueue");
+  stream.waitForCompletion();
+  if (rgb.rows != output_h || rgb.cols != output_w || rgb.type() != CV_32FC3) {
+    throw std::runtime_error("tile correctness shape mismatch");
   }
   cv::Mat reference_rgb;
-  lanes.front()->rgb.download(reference_rgb);
+  rgb.download(reference_rgb);
   if (!std::isfinite(reference_rgb.at<cv::Vec3f>(0, 0)[0])) {
     throw std::runtime_error("tile correctness non-finite");
   }
-  for (std::size_t lane_index = 1; lane_index < lanes.size(); ++lane_index) {
-    cv::Mat lane_rgb;
-    lanes[lane_index]->rgb.download(lane_rgb);
-    const double max_abs = cv::norm(reference_rgb, lane_rgb, cv::NORM_INF);
-    if (max_abs > 1e-6) {
-      throw std::runtime_error("concurrent tile lanes produced different RGB output");
-    }
-  }
 
   for (int i = 0; i < cfg.warmup; ++i) {
-    for (auto& lane : lanes) {
-      enqueue_lane(*lane, "warm-up enqueue");
-    }
-    wait_all_lanes();
+    enqueue("warm-up enqueue");
+    stream.waitForCompletion();
   }
   cuda::nn::CheckCuda(cudaDeviceSynchronize(), "tile warm-up sync");
 
-  for (const auto& lane : lanes) {
-    result.allocation_gen_start += lane->workspace.allocation_generation();
-  }
+  result.allocation_gen_start = workspace.allocation_generation();
   std::vector<double> wall_samples;
   std::vector<double> cuda_samples;
   wall_samples.reserve(static_cast<std::size_t>(cfg.iterations));
   cuda_samples.reserve(static_cast<std::size_t>(cfg.iterations));
 
   for (int i = 0; i < cfg.iterations; ++i) {
-    const auto t0 = Clock::now();
-    for (auto& lane : lanes) {
-      const cudaStream_t stream = cv::cuda::StreamAccessor::getStream(lane->stream);
-      lane->range->RecordStart(stream);
-      enqueue_lane(*lane, "timed enqueue");
-      lane->range->RecordStop(stream);
-    }
-    double max_cuda_ms = 0.0;
-    for (auto& lane : lanes) {
-      max_cuda_ms = std::max(max_cuda_ms, static_cast<double>(lane->range->ElapsedMs()));
-    }
+    const auto       t0     = Clock::now();
+    const cudaStream_t cs   = cv::cuda::StreamAccessor::getStream(stream);
+    range.RecordStart(cs);
+    enqueue("timed enqueue");
+    range.RecordStop(cs);
+    const double cuda_ms = static_cast<double>(range.ElapsedMs());
     const double wall_ms = ElapsedMs(t0);
     wall_samples.push_back(wall_ms);
-    cuda_samples.push_back(max_cuda_ms);
+    cuda_samples.push_back(cuda_ms);
   }
-  for (const auto& lane : lanes) {
-    result.allocation_gen_end += lane->workspace.allocation_generation();
-    result.owned_device_bytes += lane->workspace.OwnedDeviceBytes();
-  }
-  result.allocation_stable = result.allocation_gen_start == result.allocation_gen_end;
+  result.allocation_gen_end  = workspace.allocation_generation();
+  result.owned_device_bytes  = workspace.OwnedDeviceBytes();
+  result.allocation_stable   = result.allocation_gen_start == result.allocation_gen_end;
   if (!result.allocation_stable) {
     throw std::runtime_error(
         "NeuralDemosaicWorkspace allocation_generation changed during timed "
@@ -827,24 +639,22 @@ auto RunTileMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> TileFi
   result.cuda_stats = perf::ComputeTimingStats(std::move(cuda_samples));
 
   if (cfg.profile_ranges) {
-    // Single-lane detailed P0 ranges (lanes>1 still report max-lane batch only for cuda_stats).
     DemosaicNetProfiler profiler;
     profiler.CaptureTelemetryBefore();
     {
       DemosaicNetProfilerScope scope(&profiler);
-      auto&                    lane   = *lanes.front();
-      const cudaStream_t       stream = cv::cuda::StreamAccessor::getStream(lane.stream);
-      profiler.BeginFrame(stream);
-      enqueue_lane(lane, "profile enqueue");
-      profiler.EndFrame(stream);
+      const cudaStream_t       cs = cv::cuda::StreamAccessor::getStream(stream);
+      profiler.BeginFrame(cs);
+      enqueue("profile enqueue");
+      profiler.EndFrame(cs);
       profiler.BeginHostStreamWait();
-      lane.stream.waitForCompletion();
+      stream.waitForCompletion();
       profiler.EndHostStreamWait();
-      profiler.SetWorkspaceBytes(lane.workspace.activation_workspace().capacity_bytes(),
-                                 lane.workspace.OwnedDeviceBytes());
+      profiler.SetWorkspaceBytes(workspace.activation_workspace().capacity_bytes(),
+                                 workspace.OwnedDeviceBytes());
       const bool is_xtrans = fixture.kind == FixtureKind::XTrans;
       const int  launches  = StudentTileKernelLaunchCount(is_xtrans);
-      // Tile mode has no product ROI copy; entry+model only (subtract ROI launch).
+      // Tile mode has no product ROI copy; entry+model only.
       profiler.SetKernelLaunchCounts(launches - 1, launches - 1);
     }
     profiler.CaptureTelemetryAfter();
@@ -866,9 +676,9 @@ struct ConvLayer {
   bool        bias_relu = true;
 };
 
-[[nodiscard]] auto BuildBayerConvLayers(const int tile_out) -> std::vector<ConvLayer> {
-  // Student bayer_s24_d8 product shapes: input = owned + 2*border31.
-  const int              hin = tile_out + 2 * BayerDemosaicNet::kTileBorder;
+// Shipping product-tile geometry (fixed 1024 owned).
+[[nodiscard]] auto BuildBayerConvLayers() -> std::vector<ConvLayer> {
+  const int              hin = kProductOwned + 2 * BayerDemosaicNet::kTileBorder;
   const int              win = hin;
   const int              ph  = hin / BayerDemosaicNet::kPackFactor;
   const int              pw  = win / BayerDemosaicNet::kPackFactor;
@@ -892,9 +702,8 @@ struct ConvLayer {
   return layers;
 }
 
-[[nodiscard]] auto BuildXTransConvLayers(const int tile_out) -> std::vector<ConvLayer> {
-  // Student xtrans_p2_s32_d4 product shapes: input = owned + 2*border12.
-  const int              hin = tile_out + 2 * XTransDemosaicNet::kTileBorder;
+[[nodiscard]] auto BuildXTransConvLayers() -> std::vector<ConvLayer> {
+  const int              hin = kProductOwned + 2 * XTransDemosaicNet::kTileBorder;
   const int              win = hin;
   std::vector<ConvLayer> layers;
   layers.push_back({"pack", 3, 12, 2, 2, hin, win, false});
@@ -933,10 +742,6 @@ struct ConvLayerResult {
   int               kernel_threads_per_block  = 0;
   int               kernel_dynamic_smem_bytes = 0;
   int               kernel_static_smem_bytes  = 0;
-  std::string       candidate_kernel_name;
-  int               candidate_num_regs           = 0;
-  int               candidate_threads_per_block  = 0;
-  int               candidate_dynamic_smem_bytes = 0;
   perf::TimingStats cuda_stats;
 };
 
@@ -959,13 +764,15 @@ struct ConvFixtureResult {
   return nhwc;
 }
 
+// Shipping dispatch only: Bayer equal C=24 → in-tree NHWC; X-Trans equal C=32 → CUTLASS.
+// Pack / first unequal trunk / residual / post / output use ordinary NCHW Conv2d.
 auto RunConvMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> ConvFixtureResult {
   ConvFixtureResult result;
   result.fixture_name = fixture.name;
-  const auto   layers = fixture.kind == FixtureKind::Bayer ? BuildBayerConvLayers(cfg.tile_size)
-                                                           : BuildXTransConvLayers(cfg.tile_size);
+  const auto layers =
+      fixture.kind == FixtureKind::Bayer ? BuildBayerConvLayers() : BuildXTransConvLayers();
 
-  std::mt19937 rng(42);
+  std::mt19937                          rng(42);
   std::uniform_real_distribution<float> dist(-0.05F, 0.05F);
 
   for (const auto& layer : layers) {
@@ -979,22 +786,21 @@ auto RunConvMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> ConvFi
     const std::size_t out_numel = static_cast<std::size_t>(layer.cout) * out_h * out_w;
     const std::size_t w_numel =
         static_cast<std::size_t>(layer.cout) * layer.cin * layer.k * layer.k;
-    // Retained hybrid candidate: the in-tree float4 kernel wins at C=24; CUTLASS wins at C=32.
-    const bool cutlass_trunk = cfg.conv_cutlass && layer.k == 3 && layer.s == 1 &&
-                               layer.cin == layer.cout && layer.cin == 32;
-    const bool nhwc_trunk = (cfg.conv_channels_last || cfg.conv_cutlass) && layer.k == 3 &&
-                            layer.s == 1 && layer.cin == layer.cout &&
-                            (layer.cin == 24 || layer.cin == 32);
+
+    // Product equal-width 3×3 trunks only.
+    const bool cutlass_trunk = layer.k == 3 && layer.s == 1 && layer.cin == layer.cout &&
+                               layer.cin == 32;
+    const bool nhwc_trunk = layer.k == 3 && layer.s == 1 && layer.cin == layer.cout &&
+                            layer.cin == 24;
 
     cuda::nn::DeviceBufferF32 in_buf(in_numel);
     cuda::nn::DeviceBufferF32 out_buf(out_numel);
     cuda::nn::DeviceBufferF32 w_buf(w_numel);
-    cuda::nn::DeviceBufferF32 winograd_w_buf;
     cuda::nn::DeviceBufferF32 b_buf(static_cast<std::size_t>(layer.cout));
 
-    std::vector<float>        host_w(w_numel);
-    std::vector<float>        host_b(static_cast<std::size_t>(layer.cout));
-    std::vector<float>        host_in(in_numel);
+    std::vector<float> host_w(w_numel);
+    std::vector<float> host_b(static_cast<std::size_t>(layer.cout));
+    std::vector<float> host_in(in_numel);
     for (auto& v : host_w) {
       v = dist(rng);
     }
@@ -1004,28 +810,19 @@ auto RunConvMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> ConvFi
     for (auto& v : host_in) {
       v = dist(rng) + 0.5F;
     }
-    if (nhwc_trunk) {
-      std::vector<float> nhwc_weights(w_numel);
+    if (cutlass_trunk || nhwc_trunk) {
+      std::vector<float> packed_w(w_numel);
       if (cutlass_trunk) {
-        cuda::nn::TransformConv2d3x3WeightsCutlassKrsc(host_w.data(), layer.cin,
-                                                       nhwc_weights.data());
+        cuda::nn::TransformConv2d3x3WeightsCutlassKrsc(host_w.data(), layer.cin, packed_w.data());
       } else {
         cuda::nn::TransformConv2d3x3WeightsNhwc(host_w.data(), layer.cin, layer.cout,
-                                                nhwc_weights.data());
+                                                packed_w.data());
       }
-      w_buf.Upload(nhwc_weights);
+      w_buf.Upload(packed_w);
       in_buf.Upload(NchwToNhwc(host_in, layer.cin, layer.in_h, layer.in_w));
     } else {
       w_buf.Upload(host_w);
       in_buf.Upload(host_in);
-    }
-    if (cfg.conv_winograd && layer.k == 3 && layer.s == 1 && layer.cin == layer.cout &&
-        (layer.cin == 24 || layer.cin == 32)) {
-      std::vector<float> transformed(static_cast<std::size_t>(layer.cout) * layer.cin * 16);
-      cuda::nn::TransformConv2d3x3WeightsWinogradF22(host_w.data(), layer.cin, layer.cout,
-                                                     transformed.data());
-      winograd_w_buf = cuda::nn::DeviceBufferF32(transformed.size());
-      winograd_w_buf.Upload(transformed);
     }
     b_buf.Upload(host_b);
 
@@ -1038,19 +835,17 @@ auto RunConvMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> ConvFi
     params.in_channels  = layer.cin;
     params.out_channels = layer.cout;
     params.kH = params.kW = layer.k;
-    params.sH = params.sW      = layer.s;
-    params.weight              = w_buf.data();
-    params.winograd_f22_weight = winograd_w_buf.data();
-    params.bias                = b_buf.data();
+    params.sH = params.sW = layer.s;
+    params.weight         = w_buf.data();
+    params.bias           = b_buf.data();
 
-    auto launch                = [&] {
+    auto launch = [&] {
       if (cutlass_trunk) {
-        cuda::nn::Conv2d3x3NhwcCutlassBiasRelu(
-            in_buf.data(), out_buf.data(), w_buf.data(), b_buf.data(), 1, layer.in_h, layer.in_w,
-            layer.cin);
+        cuda::nn::Conv2d3x3NhwcCutlassBiasRelu(in_buf.data(), out_buf.data(), w_buf.data(),
+                                               b_buf.data(), 1, layer.in_h, layer.in_w, layer.cin);
       } else if (nhwc_trunk) {
         cuda::nn::Conv2d3x3NhwcBiasRelu(in_buf.data(), out_buf.data(), w_buf.data(), b_buf.data(),
-                                                       1, layer.in_h, layer.in_w, layer.cin);
+                                        1, layer.in_h, layer.in_w, layer.cin);
       } else if (layer.bias_relu) {
         cuda::nn::Conv2dBiasRelu(in_tensor, out_tensor, params, nullptr, nullptr);
       } else {
@@ -1083,7 +878,6 @@ auto RunConvMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> ConvFi
     lr.s     = layer.s;
     lr.out_h = out_h;
     lr.out_w = out_w;
-    // FLOPs = 2 * N * Cout * Hout * Wout * Cin * kH * kW
     lr.flops =
         2.0 * static_cast<double>(layer.cout) * out_h * out_w * layer.cin * layer.k * layer.k;
     lr.cuda_stats = perf::ComputeTimingStats(std::move(samples));
@@ -1091,31 +885,17 @@ auto RunConvMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> ConvFi
       lr.gflops = (lr.flops / (lr.cuda_stats.median_ms * 1e-3)) / 1e9;
     }
     if (cutlass_trunk) {
-      lr.kernel_name = "cutlass_simt_sfprop_128x32_32";
+      lr.kernel_name = "cutlass_simt_sfprop_c32";
     } else if (nhwc_trunk) {
-      cuda::nn::Conv2d3x3KernelInfo kinfo{};
-      if (cuda::nn::QueryConv2d3x3NhwcKernelInfo(layer.cin, &kinfo)) {
-        lr.kernel_name               = kinfo.name != nullptr ? kinfo.name : "";
-        lr.kernel_num_regs           = kinfo.num_regs;
-        lr.kernel_threads_per_block  = kinfo.threads_per_block;
-        lr.kernel_dynamic_smem_bytes = kinfo.dynamic_smem_bytes;
-        lr.kernel_static_smem_bytes  = kinfo.static_smem_bytes;
-      }
+      lr.kernel_name = "nhwc_direct_c24";
     } else if (layer.k == 3 && layer.s == 1) {
       cuda::nn::Conv2d3x3KernelInfo kinfo{};
-      if (cuda::nn::QueryConv2d3x3KernelInfo(layer.cin, layer.cout, &kinfo,
-                                             winograd_w_buf.data() != nullptr)) {
+      if (cuda::nn::QueryConv2d3x3KernelInfo(layer.cin, layer.cout, &kinfo)) {
         lr.kernel_name               = kinfo.name != nullptr ? kinfo.name : "";
         lr.kernel_num_regs           = kinfo.num_regs;
         lr.kernel_threads_per_block  = kinfo.threads_per_block;
         lr.kernel_dynamic_smem_bytes = kinfo.dynamic_smem_bytes;
         lr.kernel_static_smem_bytes  = kinfo.static_smem_bytes;
-        if (kinfo.candidate_name != nullptr) {
-          lr.candidate_kernel_name        = kinfo.candidate_name;
-          lr.candidate_num_regs           = kinfo.candidate_num_regs;
-          lr.candidate_threads_per_block  = kinfo.candidate_threads_per_block;
-          lr.candidate_dynamic_smem_bytes = kinfo.candidate_dynamic_smem_bytes;
-        }
       }
     }
     result.layers.push_back(std::move(lr));
@@ -1169,10 +949,8 @@ void AppendFullJson(std::string& out, const FullFixtureResult& r, const bool tra
   perf::AppendJsonKeyInt(out, "first_input_origin_y", r.product_plan.first_input_origin_y);
   perf::AppendJsonKeyInt(out, "paid_output_pixels",
                          static_cast<std::int64_t>(r.product_plan.paid_output_pixels));
-  perf::AppendJsonKeyInt(out, "tile_size", r.tile_size);
   perf::AppendJsonKeyInt(out, "tile_owned_w", r.tile_owned_w);
   perf::AppendJsonKeyInt(out, "tile_owned_h", r.tile_owned_h);
-  perf::AppendJsonKeyInt(out, "lanes", r.lanes);
   perf::AppendJsonKeyNumber(out, "cold_load_ms", r.cold_load_ms);
   if (r.legacy_stats.count > 0) {
     perf::AppendJsonTimingStats(out, "legacy_full_process_hot_ms", r.legacy_stats);
@@ -1248,19 +1026,11 @@ int main(int argc, char** argv) {
                               perf::FormatCudaVersion(device.driver_version));
     perf::AppendJsonKeyString(json, "runtime_version",
                               perf::FormatCudaVersion(device.runtime_version));
-    perf::AppendJsonKeyInt(json, "lanes", cfg.lanes);
-    perf::AppendJsonKeyInt(json, "tile_size", cfg.tile_size);
-    perf::AppendJsonKeyInt(json, "tile_width", cfg.tile_w > 0 ? cfg.tile_w : cfg.tile_size);
-    perf::AppendJsonKeyInt(json, "tile_height", cfg.tile_h > 0 ? cfg.tile_h : cfg.tile_size);
-    perf::AppendJsonKeyInt(json, "strip_height", cfg.strip_height);
+    perf::AppendJsonKeyInt(json, "tile_owned", kProductOwned);
     perf::AppendJsonKeyInt(json, "warmup", cfg.warmup);
     perf::AppendJsonKeyInt(json, "iterations", cfg.iterations);
     perf::AppendJsonKeyBool(json, "profile_ranges", cfg.profile_ranges);
-    perf::AppendJsonKeyBool(json, "conv_channels_last", cfg.conv_channels_last);
-    perf::AppendJsonKeyBool(json, "conv_cutlass", cfg.conv_cutlass);
-    perf::AppendJsonKeyBool(json, "ragged_edges", cfg.ragged_edges);
-    perf::AppendJsonKeyString(json, "model",
-                              cfg.model == ModelKind::Student ? "student" : "unknown");
+    perf::AppendJsonKeyString(json, "model", "student");
 
     const char* mode_str = cfg.mode == ModeKind::Full   ? "full"
                            : cfg.mode == ModeKind::Tile ? "tile"
@@ -1287,10 +1057,7 @@ int main(int argc, char** argv) {
                   << r.product_plan.tile_step_y << " pad=" << r.product_plan.virtual_pad
                   << " border=" << r.product_plan.output_border
                   << " overlap=" << r.product_plan.overlap_x << "x" << r.product_plan.overlap_y
-                  << " first_model_out=(" << r.product_plan.first_model_out_x << ","
-                  << r.product_plan.first_model_out_y << ")"
-                  << " first_origin=(" << r.product_plan.first_input_origin_x << ","
-                  << r.product_plan.first_input_origin_y << ")\n";
+                  << "\n";
         std::cout << "  owned=" << r.tile_owned_w << "x" << r.tile_owned_h
                   << " paid_output_px=" << r.product_plan.paid_output_pixels << "\n";
         std::cout << "  cold_load_ms=" << r.cold_load_ms << "\n";
@@ -1307,19 +1074,12 @@ int main(int argc, char** argv) {
           std::cout << std::fixed << std::setprecision(3) << "  neural/legacy p50 ratio="
                     << (r.neural_stats.median_ms / r.legacy_stats.median_ms)
                     << "  p95 ratio=" << (r.neural_stats.p95_ms / r.legacy_stats.p95_ms) << "\n";
-          std::cout << "  stretch 100ms progress neural_p50=" << r.neural_stats.median_ms
-                    << " ms  (target 100 ms, not a gate)\n";
-          std::cout << "  objective <=1.10: "
-                    << ((r.neural_stats.median_ms / r.legacy_stats.median_ms) <= 1.10
-                            ? "MET"
-                            : "miss — see roofline")
-                    << "\n";
         }
         if (r.has_roofline) {
           perf::PrintRooflineReport(r.roofline);
         }
         if (!r.profile_json.empty()) {
-          std::cout << "\n  --- P0 profile-ranges ---\n";
+          std::cout << "\n  --- profile-ranges ---\n";
           std::cout << "  " << r.profile_json << "\n";
         }
         AppendFullJson(json, r, i + 1 < fixtures.size());
@@ -1331,17 +1091,20 @@ int main(int argc, char** argv) {
         const auto r = RunTileMode(fixtures[i], cfg);
         std::cout << "\n--- tile / " << r.fixture_name << "  input " << r.input_w << "x"
                   << r.input_h << " -> " << r.output_w << "x" << r.output_h << " ---\n";
-        std::cout << "  cold_load_ms=" << r.cold_load_ms << "  lanes=" << r.lanes
+        std::cout << "  cold_load_ms=" << r.cold_load_ms
                   << "  allocation_generation=" << r.allocation_gen_end << "  owned_device_mib="
                   << (static_cast<double>(r.owned_device_bytes) / (1024.0 * 1024.0))
                   << "  stable=" << (r.allocation_stable ? "yes" : "no") << "\n";
-        perf::PrintTimingTable("Tile batch wall_ms", r.wall_stats, 0.0, r.lanes);
-        perf::PrintTimingTable("Tile max-lane cuda_ms", r.cuda_stats, 0.0, r.lanes);
+        perf::PrintTimingTable("Tile wall_ms", r.wall_stats, 0.0, 1);
+        perf::PrintTimingTable("Tile cuda_ms", r.cuda_stats, 0.0, 1);
         json += "{";
         perf::AppendJsonKeyString(json, "fixture", r.fixture_name);
         perf::AppendJsonKeyInt(json, "input_size", r.input_size);
         perf::AppendJsonKeyInt(json, "output_size", r.output_size);
-        perf::AppendJsonKeyInt(json, "lanes", r.lanes);
+        perf::AppendJsonKeyInt(json, "input_w", r.input_w);
+        perf::AppendJsonKeyInt(json, "input_h", r.input_h);
+        perf::AppendJsonKeyInt(json, "output_w", r.output_w);
+        perf::AppendJsonKeyInt(json, "output_h", r.output_h);
         perf::AppendJsonKeyNumber(json, "cold_load_ms", r.cold_load_ms);
         perf::AppendJsonKeyInt(json, "allocation_generation",
                                static_cast<std::int64_t>(r.allocation_gen_end));
@@ -1362,7 +1125,7 @@ int main(int argc, char** argv) {
       json += "\"fixtures\":[";
       for (std::size_t fi = 0; fi < fixtures.size(); ++fi) {
         const auto r = RunConvMode(fixtures[fi], cfg);
-        std::cout << "\n--- conv / " << r.fixture_name << " ---\n";
+        std::cout << "\n--- conv / " << r.fixture_name << " (shipping dispatch) ---\n";
         json += "{";
         perf::AppendJsonKeyString(json, "fixture", r.fixture_name);
         json += "\"layers\":[";
@@ -1374,14 +1137,7 @@ int main(int argc, char** argv) {
                     << std::setprecision(3) << layer.cuda_stats.median_ms << " ms"
                     << "  " << std::setprecision(1) << layer.gflops << " GFLOP/s";
           if (!layer.kernel_name.empty()) {
-            std::cout << "  kernel=" << layer.kernel_name << " regs=" << layer.kernel_num_regs
-                      << " thr=" << layer.kernel_threads_per_block
-                      << " dyn_smem=" << layer.kernel_dynamic_smem_bytes;
-          }
-          if (!layer.candidate_kernel_name.empty()) {
-            std::cout << "  cand=" << layer.candidate_kernel_name
-                      << " regs=" << layer.candidate_num_regs
-                      << " thr=" << layer.candidate_threads_per_block;
+            std::cout << "  kernel=" << layer.kernel_name;
           }
           std::cout << "\n";
           json += "{";
@@ -1398,21 +1154,15 @@ int main(int argc, char** argv) {
           perf::AppendJsonKeyNumber(json, "gflops", layer.gflops);
           if (!layer.kernel_name.empty()) {
             perf::AppendJsonKeyString(json, "kernel", layer.kernel_name);
-            perf::AppendJsonKeyInt(json, "kernel_num_regs", layer.kernel_num_regs);
-            perf::AppendJsonKeyInt(json, "kernel_threads_per_block",
-                                   layer.kernel_threads_per_block);
-            perf::AppendJsonKeyInt(json, "kernel_dynamic_smem_bytes",
-                                   layer.kernel_dynamic_smem_bytes);
-            perf::AppendJsonKeyInt(json, "kernel_static_smem_bytes",
-                                   layer.kernel_static_smem_bytes);
-          }
-          if (!layer.candidate_kernel_name.empty()) {
-            perf::AppendJsonKeyString(json, "candidate_kernel", layer.candidate_kernel_name);
-            perf::AppendJsonKeyInt(json, "candidate_num_regs", layer.candidate_num_regs);
-            perf::AppendJsonKeyInt(json, "candidate_threads_per_block",
-                                   layer.candidate_threads_per_block);
-            perf::AppendJsonKeyInt(json, "candidate_dynamic_smem_bytes",
-                                   layer.candidate_dynamic_smem_bytes);
+            if (layer.kernel_num_regs > 0) {
+              perf::AppendJsonKeyInt(json, "kernel_num_regs", layer.kernel_num_regs);
+              perf::AppendJsonKeyInt(json, "kernel_threads_per_block",
+                                     layer.kernel_threads_per_block);
+              perf::AppendJsonKeyInt(json, "kernel_dynamic_smem_bytes",
+                                     layer.kernel_dynamic_smem_bytes);
+              perf::AppendJsonKeyInt(json, "kernel_static_smem_bytes",
+                                     layer.kernel_static_smem_bytes);
+            }
           }
           perf::AppendJsonTimingStats(json, "cuda_ms", layer.cuda_stats, false);
           json += (li + 1 < r.layers.size()) ? "}," : "}";

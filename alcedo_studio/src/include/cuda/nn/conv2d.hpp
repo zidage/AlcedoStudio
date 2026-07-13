@@ -27,36 +27,22 @@ namespace alcedo::cuda::nn {
 // Implementation is pure CUDA Runtime (cudart only). No cuBLAS / cuDNN link —
 // packaging ships only cudart64_*.dll for CUDA.
 struct Conv2dParams {
-  int          in_channels         = 0;
-  int          out_channels        = 0;
-  int          kH                  = 1;
-  int          kW                  = 1;
-  int          sH                  = 1;
-  int          sW                  = 1;
-  int          padH                = 0;
-  int          padW                = 0;
-  int          dilation            = 1;  // isotropic; same for H and W
-  int          groups              = 1;
-  const float* weight              = nullptr;  // OIHW device pointer
-  // Optional pre-transformed F(2x2,3x3) weights, laid out [Cout,Cin,16].
-  // When present for an exact 24->24 or 32->32 valid 3x3 student trunk,
-  // dispatch uses the Winograd path. The OIHW pointer remains required for
-  // validation/fallback and for callers that do not opt into prepacking.
-  const float* winograd_f22_weight = nullptr;
-  const float* bias                = nullptr;  // optional, length out_channels
+  int          in_channels  = 0;
+  int          out_channels = 0;
+  int          kH           = 1;
+  int          kW           = 1;
+  int          sH           = 1;
+  int          sW           = 1;
+  int          padH         = 0;
+  int          padW         = 0;
+  int          dilation     = 1;  // isotropic; same for H and W
+  int          groups       = 1;
+  const float* weight       = nullptr;  // OIHW device pointer
+  const float* bias         = nullptr;  // optional, length out_channels
 };
 
-// Host-side one-time weight prepack for Winograd F(2x2,3x3).
-// `dst` must hold out_channels * in_channels * 16 floats. This is intentionally
-// separate from Conv2d so immutable model weights are transformed at load time,
-// never once per spatial block or forward.
-void TransformConv2d3x3WeightsWinogradF22(const float* src_oihw, int in_channels, int out_channels,
-                                          float* dst);
-
-// Benchmark-only channels-last 3x3 path for the P4-D gate. Input and output
-// are persistent NHWC buffers; weights are prepacked once from OIHW into
-// [Cin, 3, 3, Cout]. It deliberately supports only the square 24/32 student
-// trunks so no production NCHW call site can select it accidentally.
+// Host-side one-time weight prepack for the Bayer persistent-NHWC 3×3 trunk.
+// Input OIHW → [Cin, 3, 3, Cout]. Supports C=24 only (X-Trans C=32 uses CUTLASS KRSC).
 void TransformConv2d3x3WeightsNhwc(const float* src_oihw, int in_channels, int out_channels,
                                    float* dst_ckco);
 void Conv2d3x3NhwcBiasRelu(const float* input_nhwc, float* output_nhwc, const float* weight_ckco,
@@ -88,9 +74,7 @@ void Conv2d3x3NhwcBiasRelu(const float* input_nhwc, float* output_nhwc, const fl
 //   - 1×1 s=1 pad=0: tiled GEMM-style (spatial × Cout tiles, Cin strip SMEM);
 //     exact small-Cout kernels for student residual/output (Cout 12 / 3)
 //   - 2×2 s=2 pad=0: specialized pack_mosaick kernel
-//   - 3×3 s=1 pad=0: multi-Cout tiled direct (input apron + weight SMEM) for
-//     all student shapes. Phase 8G/8G+ candidates (implicit-GEMM, Winograd
-//     F(2×2,3×3)) were measured and not retained; they remain queryable.
+//   - 3×3 s=1 pad=0: multi-Cout tiled direct (input apron + weight SMEM)
 //   - other shapes: generic direct fallback
 //
 // `workspace` is reserved for scratch-backed multi-pass paths. Current product
@@ -103,33 +87,21 @@ void Conv2d(const DeviceTensor& input, DeviceTensor& output, const Conv2dParams&
 void Conv2dBiasRelu(const DeviceTensor& input, DeviceTensor& output, const Conv2dParams& params,
                     cudaStream_t stream = nullptr, WorkspacePool* workspace = nullptr);
 
-// Benchmark-only: describe the 3×3 s=1 kernel family that LaunchConv2d would
-// select for the given channel shape (product path). Does not launch work or
-// synchronize. Returns false when the shape would not use a specialized 3×3
-// path. Alternate candidate attributes (Winograd F(2×2,3×3)) are exposed when
-// a square student trunk has a non-product experimental kernel still linked.
+// Describe the 3×3 s=1 product kernel family LaunchConv2d would select for the
+// given channel shape. Does not launch work or synchronize. Returns false when
+// the shape would not use a specialized 3×3 path.
 struct Conv2d3x3KernelInfo {
-  const char* name                         = nullptr;  // product path, e.g. "direct_tiled_24"
-  int         cin                          = 0;
-  int         cout                         = 0;
-  int         num_regs                     = 0;
-  int         static_smem_bytes            = 0;
-  int         max_dynamic_smem_bytes       = 0;
-  int         max_threads_per_block        = 0;
-  int         threads_per_block            = 0;
-  int         dynamic_smem_bytes           = 0;
-  // Non-null when an alternate square-trunk candidate is still compiled in.
-  const char* candidate_name               = nullptr;
-  int         candidate_num_regs           = 0;
-  int         candidate_threads_per_block  = 0;
-  int         candidate_dynamic_smem_bytes = 0;
+  const char* name                   = nullptr;  // product path, e.g. "direct_tiled_24"
+  int         cin                    = 0;
+  int         cout                   = 0;
+  int         num_regs               = 0;
+  int         static_smem_bytes      = 0;
+  int         max_dynamic_smem_bytes = 0;
+  int         max_threads_per_block  = 0;
+  int         threads_per_block      = 0;
+  int         dynamic_smem_bytes     = 0;
 };
 
-[[nodiscard]] auto QueryConv2d3x3KernelInfo(int cin, int cout, Conv2d3x3KernelInfo* out,
-                                            bool has_prepacked_winograd = false) -> bool;
-
-// Benchmark-only attributes for the P4-D channels-last kernel. This is kept
-// separate from QueryConv2d3x3KernelInfo because NHWC is not a product dispatch.
-[[nodiscard]] auto QueryConv2d3x3NhwcKernelInfo(int channels, Conv2d3x3KernelInfo* out) -> bool;
+[[nodiscard]] auto QueryConv2d3x3KernelInfo(int cin, int cout, Conv2d3x3KernelInfo* out) -> bool;
 
 }  // namespace alcedo::cuda::nn

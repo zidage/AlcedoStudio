@@ -8,14 +8,10 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
 
 #include "cuda/nn/common.hpp"
-#include "cuda/nn/concat.hpp"
 #include "cuda/nn/conv2d.hpp"
-#include "cuda/nn/conv_transpose2d.hpp"
-#include "cuda/nn/crop.hpp"
 #include "cuda/nn/demosaicnet_nhwc.hpp"
 #include "cuda/nn/fused_post_output.hpp"
 #include "cuda/nn/layout.hpp"
@@ -25,14 +21,9 @@
 namespace alcedo {
 namespace {
 
-using cuda::nn::CenterCropLike;
-using cuda::nn::CenterCropSpatial;
-using cuda::nn::ConcatChannels;
 using cuda::nn::Conv2d;
 using cuda::nn::Conv2dBiasRelu;
 using cuda::nn::Conv2dParams;
-using cuda::nn::ConvTranspose2d;
-using cuda::nn::ConvTranspose2dParams;
 using cuda::nn::DeviceTensor;
 using cuda::nn::WorkspacePool;
 
@@ -131,7 +122,8 @@ void BayerDemosaicNet::LoadWeightsImpl(const cuda::nn::SafetensorsTensorMap& ten
   RequireMetadata(tensors, "checkpoint_sha256",
                   "f00fb0e4f4a49e32344ffb0add583bee98c7d5dbfda6c593b5b066d08f9de69f");
 
-  // Fixed pack / unpack (bias-free).
+  // Fixed pack (bias-free). Validate unpack structural one-hots without storing them —
+  // the NHWC path fuses unpack into DemosaicNetUnpackCropConcatNhwc.
   {
     const auto& pack =
         cuda::nn::RequireF32Tensor(tensors, "pack.weight", {kPackOutCh, 3, kPackFactor, kPackFactor});
@@ -142,24 +134,22 @@ void BayerDemosaicNet::LoadWeightsImpl(const cuda::nn::SafetensorsTensorMap& ten
     const auto& unpack =
         cuda::nn::RequireF32Tensor(tensors, "unpack.weight", {kResidualCh, 1, kPackFactor, kPackFactor});
     RequireExactHostWeight(unpack, ExpectedUnpackWeight(), "unpack.weight");
-    unpack_w_ = cuda::nn::UploadToDevice(unpack, stream);
   }
 
-  // Trunk: first 4→24, then 24→24 × (depth-1).
-  RequireUpload(tensors, "trunk.0.weight", {kWidth, kPackOutCh, 3, 3}, trunk_w_[0], stream);
+  // Trunk: first 4→24 NCHW; square 24→24 layers derive NHWC CKCO at load time.
+  RequireUpload(tensors, "trunk.0.weight", {kWidth, kPackOutCh, 3, 3}, trunk0_w_, stream);
   RequireUpload(tensors, "trunk.0.bias", {kWidth}, trunk_b_[0], stream);
   for (int i = 1; i < kDepth; ++i) {
     const std::string wk = "trunk." + std::to_string(i) + ".weight";
     const std::string bk = "trunk." + std::to_string(i) + ".bias";
-    RequireUpload(tensors, wk, {kWidth, kWidth, 3, 3}, trunk_w_[i], stream);
-    const auto& nhwc_weight =
-        cuda::nn::RequireF32Tensor(tensors, "trunk." + std::to_string(i) + ".nhwc_weight",
-                                    {kWidth, 3, 3, kWidth});
-    trunk_w_nhwc_[i] = cuda::nn::UploadToDevice(nhwc_weight, stream);
+    const auto& weight = cuda::nn::RequireF32Tensor(tensors, wk, {kWidth, kWidth, 3, 3});
+    std::vector<float> ckco(weight.data.size());
+    cuda::nn::TransformConv2d3x3WeightsNhwc(weight.data.data(), kWidth, kWidth, ckco.data());
+    trunk_w_nhwc_[i] = cuda::nn::DeviceBufferF32(ckco.size());
+    trunk_w_nhwc_[i].Upload(ckco, stream);
     RequireUpload(tensors, bk, {kWidth}, trunk_b_[i], stream);
   }
 
-  RequireUpload(tensors, "residual.weight", {kResidualCh, kWidth, 1, 1}, residual_w_, stream);
   {
     const auto& weight = cuda::nn::RequireF32Tensor(
         tensors, "residual.weight", {kResidualCh, kWidth, 1, 1});
@@ -171,9 +161,7 @@ void BayerDemosaicNet::LoadWeightsImpl(const cuda::nn::SafetensorsTensorMap& ten
   RequireUpload(tensors, "residual.bias", {kResidualCh}, residual_b_, stream);
   RequireUpload(tensors, "post_conv.weight", {kWidth, 6, 3, 3}, post_w_, stream);
   RequireUpload(tensors, "post_conv.bias", {kWidth}, post_b_, stream);
-  RequireUpload(tensors, "output.weight", {3, kWidth, 1, 1}, output_w_, stream);
   RequireUpload(tensors, "output.bias", {3}, output_b_, stream);
-  // P4-A: immutable CIO prepack for fused post+output (once at load, never per-forward).
   {
     const auto& out_w =
         cuda::nn::RequireF32Tensor(tensors, "output.weight", {3, kWidth, 1, 1});
@@ -192,25 +180,21 @@ auto BayerDemosaicNet::ResidentWeightBytes() const -> std::size_t {
   std::size_t total = 0;
   auto        add   = [&](const cuda::nn::DeviceBufferF32& b) { total += b.bytes(); };
   add(pack_w_);
+  add(trunk0_w_);
   for (int i = 0; i < kDepth; ++i) {
-    add(trunk_w_[i]);
     add(trunk_w_nhwc_[i]);
     add(trunk_b_[i]);
   }
-  add(residual_w_);
   add(residual_w_nhwc_);
   add(residual_b_);
-  add(unpack_w_);
   add(post_w_);
   add(post_b_);
-  add(output_w_);
   add(output_w_cio_);
   add(output_b_);
   return total;
 }
 
-auto BayerDemosaicNet::EstimateWorkspaceBytes(int input_h, int input_w, int batch,
-                                              bool fuse_post_output) -> std::size_t {
+auto BayerDemosaicNet::EstimateWorkspaceBytes(int input_h, int input_w, int batch) -> std::size_t {
   if (batch < 1 || input_h < kMinSpatial || input_w < kMinSpatial) {
     return 0;
   }
@@ -218,378 +202,9 @@ auto BayerDemosaicNet::EstimateWorkspaceBytes(int input_h, int input_w, int batc
     return 0;
   }
   return demosaicnet_slots::ComputePeakLiveSlots(input_h, input_w, batch, kPackOutCh, kWidth,
-                                                 kResidualCh, kDepth, kPackFactor, fuse_post_output)
+                                                 kResidualCh, kDepth, kPackFactor,
+                                                 /*fuse_post_output=*/true)
       .estimate_bytes;
-}
-
-void BayerDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
-                               WorkspacePool& workspace, cudaStream_t stream,
-                               bool force_ordinary_tail) const {
-  if (!weights_loaded()) {
-    throw std::runtime_error("BayerDemosaicNet::Forward: weights not loaded");
-  }
-  RequireContiguousNchw3(input, "BayerDemosaicNet::Forward input");
-  RequireContiguousNchw3(output, "BayerDemosaicNet::Forward output");
-
-  const int N = static_cast<int>(input.shape[0]);
-  const int H = static_cast<int>(input.shape[2]);
-  const int W = static_cast<int>(input.shape[3]);
-  if (N < 1) {
-    throw std::runtime_error("BayerDemosaicNet::Forward: invalid batch");
-  }
-  if ((H % kPackFactor) != 0 || (W % kPackFactor) != 0) {
-    throw std::runtime_error("BayerDemosaicNet::Forward: H and W must be divisible by pack factor");
-  }
-  if (H < kMinSpatial || W < kMinSpatial) {
-    throw std::runtime_error("BayerDemosaicNet::Forward: spatial size below minimum");
-  }
-
-  const int out_h = OutputHeight(H, W);
-  const int out_w = OutputWidth(W, H);
-  if (output.shape[0] != N || output.shape[2] != out_h || output.shape[3] != out_w) {
-    throw std::runtime_error("BayerDemosaicNet::Forward: output shape mismatch");
-  }
-
-  const bool use_fused =
-      !force_ordinary_tail && cuda::nn::FusedPostOutputEnabled() && output_w_cio_.get() != nullptr;
-  const demosaicnet_slots::PeakLiveSlots slots = demosaicnet_slots::ComputePeakLiveSlots(
-      H, W, N, kPackOutCh, kWidth, kResidualCh, kDepth, kPackFactor, use_fused);
-  if (slots.estimate_bytes == 0) {
-    throw std::runtime_error("BayerDemosaicNet::Forward: invalid peak-live slot geometry");
-  }
-
-  workspace.Reset();
-  if (workspace.capacity_bytes() < slots.estimate_bytes) {
-    workspace.Reserve(slots.estimate_bytes);
-  }
-
-  // Fixed liveness slots (P1 / P4-A). Views only — no per-layer bump growth.
-  float* slot_a =
-      static_cast<float*>(workspace.Allocate(slots.trunk_slot_bytes));
-  float* slot_b =
-      static_cast<float*>(workspace.Allocate(slots.trunk_slot_bytes));
-  float* slot_structural =
-      static_cast<float*>(workspace.Allocate(slots.structural_slot_bytes));
-  float* slot_post = nullptr;
-  if (!use_fused) {
-    slot_post = static_cast<float*>(workspace.Allocate(slots.post_slot_bytes));
-  }
-  if (slot_a == nullptr || slot_b == nullptr || slot_structural == nullptr ||
-      (!use_fused && slot_post == nullptr)) {
-    throw std::runtime_error("BayerDemosaicNet::Forward: failed to allocate activation slots");
-  }
-
-  DemosaicNetProfiler* profiler = ActiveDemosaicNetProfiler();
-
-  const std::int64_t n64 = N;
-  const std::int64_t ph  = slots.pack_h;
-  const std::int64_t pw  = slots.pack_w;
-  const std::int64_t mh  = slots.mosaic_h;
-  const std::int64_t mw  = slots.mosaic_w;
-  const std::int64_t uh  = slots.unpack_h;
-  const std::int64_t uw  = slots.unpack_w;
-  const std::int64_t nh  = slots.natural_h;
-  const std::int64_t nw  = slots.natural_w;
-
-  // pack → slot A
-  float*       cur_base  = slot_a;
-  float*       next_base = slot_b;
-  DeviceTensor cur       = ViewNchw(cur_base, n64, kPackOutCh, ph, pw);
-  {
-    if (profiler != nullptr) {
-      profiler->BeginRange(DemosaicNetProfileRange::PackConv, stream);
-    }
-    Conv2dParams p;
-    p.in_channels  = 3;
-    p.out_channels = kPackOutCh;
-    p.kH = p.kW = kPackFactor;
-    p.sH = p.sW = kPackFactor;
-    p.weight    = pack_w_.get();
-    p.bias      = nullptr;
-    Conv2d(input, cur, p, stream, &workspace);
-    if (profiler != nullptr) {
-      profiler->EndRange(DemosaicNetProfileRange::PackConv, stream);
-    }
-  }
-
-  // trunk: ping-pong A/B (previous layer dies when next completes on the stream)
-  for (int i = 0; i < kDepth; ++i) {
-    const int cin = static_cast<int>(cur.shape[1]);
-    const int oh  = static_cast<int>(cur.shape[2]) - 2;
-    const int ow  = static_cast<int>(cur.shape[3]) - 2;
-    if (oh < 1 || ow < 1) {
-      throw std::runtime_error("BayerDemosaicNet::Forward: spatial collapsed in trunk");
-    }
-    DeviceTensor next = ViewNchw(next_base, n64, kWidth, oh, ow);
-    if (profiler != nullptr) {
-      profiler->BeginTrunkLayer(i, stream);
-    }
-    Conv2dParams p;
-    p.in_channels  = cin;
-    p.out_channels = kWidth;
-    p.kH = p.kW = 3;
-    p.sH = p.sW = 1;
-    p.weight    = trunk_w_[i].get();
-    p.bias      = trunk_b_[i].get();
-    Conv2dBiasRelu(cur, next, p, stream, &workspace);
-    if (profiler != nullptr) {
-      profiler->EndTrunkLayer(i, stream);
-    }
-    cur = next;
-    std::swap(cur_base, next_base);
-  }
-
-  // residual → inactive trunk slot (next_base); final trunk stays in cur_base until residual done
-  if (profiler != nullptr) {
-    profiler->BeginRange(DemosaicNetProfileRange::ResidualUnpackCropConcat, stream);
-  }
-  DeviceTensor residual = ViewNchw(next_base, n64, kResidualCh, mh, mw);
-  {
-    Conv2dParams p;
-    p.in_channels  = kWidth;
-    p.out_channels = kResidualCh;
-    p.kH = p.kW = 1;
-    p.sH = p.sW = 1;
-    p.weight    = residual_w_.get();
-    p.bias      = residual_b_.get();
-    Conv2d(cur, residual, p, stream, &workspace);
-  }
-
-  // unpack → dead trunk slot (cur_base); residual still live in next_base
-  DeviceTensor up = ViewNchw(cur_base, n64, 3, uh, uw);
-  {
-    ConvTranspose2dParams p;
-    p.in_channels  = kResidualCh;
-    p.out_channels = 3;
-    p.kH = p.kW = kPackFactor;
-    p.sH = p.sW = kPackFactor;
-    p.groups    = 3;
-    p.weight    = unpack_w_.get();
-    p.bias      = nullptr;
-    ConvTranspose2d(residual, up, p, stream, &workspace);
-  }
-
-  // cropped mosaick → structural; concat → inactive (residual dead after unpack)
-  DeviceTensor cropped = ViewNchw(slot_structural, n64, 3, uh, uw);
-  CenterCropLike(input, up, cropped, stream);
-
-  DeviceTensor cat = ViewNchw(next_base, n64, 6, uh, uw);
-  ConcatChannels(cropped, up, cat, stream);
-  if (profiler != nullptr) {
-    profiler->EndRange(DemosaicNetProfileRange::ResidualUnpackCropConcat, stream);
-  }
-
-  if (profiler != nullptr) {
-    profiler->BeginRange(DemosaicNetProfileRange::PostOutput, stream);
-  }
-  if (use_fused) {
-    cuda::nn::FusedPostOutputParams fp;
-    fp.post_channels       = kWidth;
-    fp.post_weight         = post_w_.get();
-    fp.post_bias           = post_b_.get();
-    fp.output_weight_cio   = output_w_cio_.get();
-    fp.output_bias         = output_b_.get();
-    fp.apply_gamma_decode  = false;
-    cuda::nn::FusedPostOutputToNchw(cat, output, fp, stream);
-  } else {
-    DeviceTensor y = ViewNchw(slot_post, n64, kWidth, nh, nw);
-    {
-      Conv2dParams p;
-      p.in_channels  = 6;
-      p.out_channels = kWidth;
-      p.kH = p.kW = 3;
-      p.sH = p.sW = 1;
-      p.weight    = post_w_.get();
-      p.bias      = post_b_.get();
-      Conv2dBiasRelu(cat, y, p, stream, &workspace);
-    }
-
-    if (out_h == static_cast<int>(nh) && out_w == static_cast<int>(nw)) {
-      Conv2dParams p;
-      p.in_channels  = kWidth;
-      p.out_channels = 3;
-      p.kH = p.kW = 1;
-      p.sH = p.sW = 1;
-      p.weight    = output_w_.get();
-      p.bias      = output_b_.get();
-      Conv2d(y, output, p, stream, &workspace);
-    } else {
-      // Reuse structural (cropped/concat inputs are dead after post begins reading cat).
-      DeviceTensor natural_rgb = ViewNchw(slot_structural, n64, 3, nh, nw);
-      {
-        Conv2dParams p;
-        p.in_channels  = kWidth;
-        p.out_channels = 3;
-        p.kH = p.kW = 1;
-        p.sH = p.sW = 1;
-        p.weight    = output_w_.get();
-        p.bias      = output_b_.get();
-        Conv2d(y, natural_rgb, p, stream, &workspace);
-      }
-      CenterCropSpatial(natural_rgb, output, out_h, out_w, stream);
-    }
-  }
-  if (profiler != nullptr) {
-    profiler->EndRange(DemosaicNetProfileRange::PostOutput, stream);
-  }
-}
-
-void BayerDemosaicNet::ForwardHwc(const DeviceTensor& input, float* rgb_hwc,
-                                  const std::size_t rgb_step_bytes, WorkspacePool& workspace,
-                                  cudaStream_t stream, const bool apply_gamma_decode) const {
-  if (!weights_loaded()) {
-    throw std::runtime_error("BayerDemosaicNet::ForwardHwc: weights not loaded");
-  }
-  if (rgb_hwc == nullptr) {
-    throw std::runtime_error("BayerDemosaicNet::ForwardHwc: null rgb pointer");
-  }
-  if (output_w_cio_.get() == nullptr) {
-    throw std::runtime_error("BayerDemosaicNet::ForwardHwc: fused CIO weights missing");
-  }
-  RequireContiguousNchw3(input, "BayerDemosaicNet::ForwardHwc input");
-
-  const int N = static_cast<int>(input.shape[0]);
-  const int H = static_cast<int>(input.shape[2]);
-  const int W = static_cast<int>(input.shape[3]);
-  if (N != 1) {
-    throw std::runtime_error("BayerDemosaicNet::ForwardHwc: only N=1 is supported");
-  }
-  if ((H % kPackFactor) != 0 || (W % kPackFactor) != 0) {
-    throw std::runtime_error("BayerDemosaicNet::ForwardHwc: H/W must be divisible by pack factor");
-  }
-  if (H < kMinSpatial || W < kMinSpatial) {
-    throw std::runtime_error("BayerDemosaicNet::ForwardHwc: spatial size below minimum");
-  }
-
-  const int out_h = OutputHeight(H, W);
-  const int out_w = OutputWidth(W, H);
-
-  const demosaicnet_slots::PeakLiveSlots slots = demosaicnet_slots::ComputePeakLiveSlots(
-      H, W, N, kPackOutCh, kWidth, kResidualCh, kDepth, kPackFactor, /*fuse_post_output=*/true);
-  if (slots.estimate_bytes == 0) {
-    throw std::runtime_error("BayerDemosaicNet::ForwardHwc: invalid peak-live slot geometry");
-  }
-
-  workspace.Reset();
-  if (workspace.capacity_bytes() < slots.estimate_bytes) {
-    workspace.Reserve(slots.estimate_bytes);
-  }
-
-  float* slot_a = static_cast<float*>(workspace.Allocate(slots.trunk_slot_bytes));
-  float* slot_b = static_cast<float*>(workspace.Allocate(slots.trunk_slot_bytes));
-  float* slot_structural =
-      static_cast<float*>(workspace.Allocate(slots.structural_slot_bytes));
-  if (slot_a == nullptr || slot_b == nullptr || slot_structural == nullptr) {
-    throw std::runtime_error("BayerDemosaicNet::ForwardHwc: failed to allocate activation slots");
-  }
-
-  DemosaicNetProfiler* profiler = ActiveDemosaicNetProfiler();
-
-  const std::int64_t n64 = N;
-  const std::int64_t ph  = slots.pack_h;
-  const std::int64_t pw  = slots.pack_w;
-  const std::int64_t mh  = slots.mosaic_h;
-  const std::int64_t mw  = slots.mosaic_w;
-  const std::int64_t uh  = slots.unpack_h;
-  const std::int64_t uw  = slots.unpack_w;
-
-  float*       cur_base  = slot_a;
-  float*       next_base = slot_b;
-  DeviceTensor cur       = ViewNchw(cur_base, n64, kPackOutCh, ph, pw);
-  {
-    if (profiler != nullptr) {
-      profiler->BeginRange(DemosaicNetProfileRange::PackConv, stream);
-    }
-    Conv2dParams p;
-    p.in_channels  = 3;
-    p.out_channels = kPackOutCh;
-    p.kH = p.kW = kPackFactor;
-    p.sH = p.sW = kPackFactor;
-    p.weight    = pack_w_.get();
-    p.bias      = nullptr;
-    Conv2d(input, cur, p, stream, &workspace);
-    if (profiler != nullptr) {
-      profiler->EndRange(DemosaicNetProfileRange::PackConv, stream);
-    }
-  }
-
-  for (int i = 0; i < kDepth; ++i) {
-    const int cin = static_cast<int>(cur.shape[1]);
-    const int oh  = static_cast<int>(cur.shape[2]) - 2;
-    const int ow  = static_cast<int>(cur.shape[3]) - 2;
-    if (oh < 1 || ow < 1) {
-      throw std::runtime_error("BayerDemosaicNet::ForwardHwc: spatial collapsed in trunk");
-    }
-    DeviceTensor next = ViewNchw(next_base, n64, kWidth, oh, ow);
-    if (profiler != nullptr) {
-      profiler->BeginTrunkLayer(i, stream);
-    }
-    Conv2dParams p;
-    p.in_channels  = cin;
-    p.out_channels = kWidth;
-    p.kH = p.kW = 3;
-    p.sH = p.sW = 1;
-    p.weight    = trunk_w_[i].get();
-    p.bias      = trunk_b_[i].get();
-    Conv2dBiasRelu(cur, next, p, stream, &workspace);
-    if (profiler != nullptr) {
-      profiler->EndTrunkLayer(i, stream);
-    }
-    cur = next;
-    std::swap(cur_base, next_base);
-  }
-
-  if (profiler != nullptr) {
-    profiler->BeginRange(DemosaicNetProfileRange::ResidualUnpackCropConcat, stream);
-  }
-  DeviceTensor residual = ViewNchw(next_base, n64, kResidualCh, mh, mw);
-  {
-    Conv2dParams p;
-    p.in_channels  = kWidth;
-    p.out_channels = kResidualCh;
-    p.kH = p.kW = 1;
-    p.sH = p.sW = 1;
-    p.weight    = residual_w_.get();
-    p.bias      = residual_b_.get();
-    Conv2d(cur, residual, p, stream, &workspace);
-  }
-
-  DeviceTensor up = ViewNchw(cur_base, n64, 3, uh, uw);
-  {
-    ConvTranspose2dParams p;
-    p.in_channels  = kResidualCh;
-    p.out_channels = 3;
-    p.kH = p.kW = kPackFactor;
-    p.sH = p.sW = kPackFactor;
-    p.groups    = 3;
-    p.weight    = unpack_w_.get();
-    p.bias      = nullptr;
-    ConvTranspose2d(residual, up, p, stream, &workspace);
-  }
-
-  DeviceTensor cropped = ViewNchw(slot_structural, n64, 3, uh, uw);
-  CenterCropLike(input, up, cropped, stream);
-
-  DeviceTensor cat = ViewNchw(next_base, n64, 6, uh, uw);
-  ConcatChannels(cropped, up, cat, stream);
-  if (profiler != nullptr) {
-    profiler->EndRange(DemosaicNetProfileRange::ResidualUnpackCropConcat, stream);
-  }
-
-  if (profiler != nullptr) {
-    profiler->BeginRange(DemosaicNetProfileRange::PostOutput, stream);
-  }
-  cuda::nn::FusedPostOutputParams fp;
-  fp.post_channels      = kWidth;
-  fp.post_weight        = post_w_.get();
-  fp.post_bias          = post_b_.get();
-  fp.output_weight_cio  = output_w_cio_.get();
-  fp.output_bias        = output_b_.get();
-  fp.apply_gamma_decode = apply_gamma_decode;
-  cuda::nn::FusedPostOutputToHwc(cat, rgb_hwc, rgb_step_bytes, out_h, out_w, fp, stream);
-  if (profiler != nullptr) {
-    profiler->EndRange(DemosaicNetProfileRange::PostOutput, stream);
-  }
 }
 
 void BayerDemosaicNet::ForwardHwcChannelsLast(
@@ -655,7 +270,7 @@ void BayerDemosaicNet::ForwardHwcChannelsLast(
   }
 
   // The unequal-width first trunk remains on the retained NCHW direct kernel.
-  // Its dead packed-input slot is the destination of the graph's only layout conversion.
+  // Its dead packed-input slot is the destination of the single NCHW→NHWC conversion.
   int cur_h = ph - 2;
   int cur_w = pw - 2;
   DeviceTensor first_nchw = ViewNchw(slot_b, n64, kWidth, cur_h, cur_w);
@@ -668,7 +283,7 @@ void BayerDemosaicNet::ForwardHwcChannelsLast(
     p.out_channels = kWidth;
     p.kH = p.kW = 3;
     p.sH = p.sW = 1;
-    p.weight    = trunk_w_[0].get();
+    p.weight    = trunk0_w_.get();
     p.bias      = trunk_b_[0].get();
     Conv2dBiasRelu(packed, first_nchw, p, stream, &workspace);
   }

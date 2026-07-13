@@ -429,11 +429,10 @@ auto EstimateFullFrameWork(const DemosaicNetTopologyKind kind, const int cover_w
   est.tile_inner   = owned_w;  // historical field: report width; see paid pixels for area
   est.tile_owned_w = owned_w;
   est.tile_owned_h = owned_h;
-  // Student product policies derived from the requested owned-output shape (P2/P4-C).
-  const detail::CudaTilePolicy policy =
-      kind == DemosaicNetTopologyKind::Bayer
-          ? detail::MakeBayerStudentTilePolicy(owned_w, owned_h)
-          : detail::MakeXTransStudentTilePolicy(owned_w, owned_h);
+  // Product student policies are fixed 1024 owned (zero-arg makers only).
+  const detail::CudaTilePolicy policy = kind == DemosaicNetTopologyKind::Bayer
+                                            ? detail::MakeBayerStudentTilePolicy()
+                                            : detail::MakeXTransStudentTilePolicy();
   est.tile_step_x     = policy.step.width;
   est.tile_step_y     = policy.step.height;
   est.tile_step       = policy.step.width;  // historical alias (X)

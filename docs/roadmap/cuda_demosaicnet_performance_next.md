@@ -13,8 +13,10 @@ fused post/output/gamma tail **retained** as product default. **P4-B complete**
 but full-frame p50 regresses). **P4-C complete** (see §8.3) — rectangular /
 full-width strip tiling **rejected** for product default. **P4-D complete and
 retained** (see §8.4) — the complete persistent channels-last FP32 path is now
-the product default for Bayer and X-Trans; ordinary NCHW remains an explicit
-compatibility fallback.
+the product default for Bayer and X-Trans. **P5 production cleanup complete**
+(see §11.10): rejected experiments, dispatch switches, and neural-to-neural
+fallbacks deleted; shipping path is fixed **1024 + persistent NHWC + fused HWC
+tail** with product soft-fail only to Classical/Legacy.
 
 ## 1. Objective and current baseline
 
@@ -1199,11 +1201,11 @@ all tiles, HLR, orientation, and float4 packing have been enqueued. The profiler
 uses event synchronization only while finalizing already-completed samples.
 The per-tile product loop calls the asynchronous enqueue API and never waits.
 
-**Verdict: retain persistent NHWC as the product default.** Set
-`ALCEDO_DEMOASICNET_DISABLE_PERSISTENT_NHWC=1` to select the ordinary NCHW
-compatibility path for diagnosis or fallback. The 100 ms stretch goal is not
-met; the next evidence-backed work must attack total convolution throughput or
-paid tile work rather than add another activation-layout conversion.
+**Verdict: retain persistent NHWC as the product default.** The temporary
+`ALCEDO_DEMOASICNET_DISABLE_PERSISTENT_NHWC=1` A/B escape hatch and its ordinary
+NCHW implementation are scheduled for deletion in P5; historical JSON is the
+record of that comparison. The 100 ms stretch goal is not met; optimization may
+resume only after production cleanup establishes one unambiguous baseline.
 
 Artifacts:
 
@@ -1220,17 +1222,21 @@ Artifacts:
 
 ### 8.5 Required P4 correctness coverage
 
-Add concrete regression tests (the exact suite may use equivalent established
-naming) for:
+After P5, correctness must cover only shipping contracts, not deleted
+c
 
-- `FusedPostOutputMatchesUnfusedStudentForward`;
-- `FusedStudentHwcOutputMatchesOrdinaryNchwUnpack`;
-- `RaggedStudentTilesPreserveInteriorAndBoundaryPixels`;
-- `RectangularStudentTilesPreserveCfaPhaseAndFirstWriterOwnership`;
-- `ChannelsLastStudentForwardMatchesNchwWithinFp32Tolerance`;
-- allocation generation remains constant after warm-up for every retained path;
-- existing real Bayer/X-Trans RAW goldens, crop/orientation, HLR-off/on, and
-  fallback behavior.
+- Bayer and X-Trans persistent-NHWC forwards match their exported FP32 goldens;
+- fixed Bayer 1086->1024 and X-Trans 1048->1024 tile geometry preserves CFA
+  phase, overlap ownership, seams, and final HWC/gamma semantics;
+- allocation generation remains constant after warm-up;
+- existing real Bayer/X-Trans RAW goldens, crop/orientation, and HLR-off/on pass;
+- model/preprocess/forward failure falls back to Classical/Legacy without using
+  another neural layout or convolution implementation.
+
+Delete tests whose only assertion is that a rejected path still works: CUDA
+Graph capture/replay, Winograd, implicit-GEMM candidate attributes, ragged
+edges, rectangular/strip tiles, multi-lane execution, fused-vs-unfused tail,
+and persistent-NHWC-vs-ordinary-NCHW comparisons.
 
 Do not weaken a golden tolerance to retain a performance candidate. If an
 operation-order change requires a new tolerance, document its measured max/mean
@@ -1260,14 +1266,311 @@ Execute in this order:
 6. P4-A fused tail;
 7. P4-B ragged edge tiles on the retained P4-A result;
 8. P4-C rectangular/full-width strips on the retained A-B result;
-9. P4-D persistent channels-last only after its isolated kernels pass.
+9. P4-D persistent channels-last only after its isolated kernels pass;
+10. P5 delete all rejected/superseded implementations and freeze one product
+    path before starting another optimization track.
 
 Stop a candidate immediately when it breaks correctness, cannot clear its
 microbenchmark prerequisite, exceeds its VRAM budget, or loses the full-frame
 retention gate. Preserve the best correct product path after every slice.
 
-P0–P4-D are complete (P4-A and P4-D retained; P2/P3/P4-B/P4-C rejected). The
-retained product path is square **1024 + persistent NHWC + fused HWC tail**,
-with ordinary NCHW available only as the compatibility fallback. Continue the
-same handoff discipline so every retained improvement has an attributable
-artifact and fallback.
+P0–P5 are complete (P4-A and P4-D retained; P2/P3/P4-B/P4-C rejected; P5 deleted
+the rejected implementations). The retained product path is square **1024 +
+persistent NHWC + fused HWC tail**. Only a hard failure of that path may fall
+back to Classical/Legacy.
+
+## 11. Phase P5 — production consolidation and experiment deletion
+
+P5 is deletion work, not another benchmark candidate. Historical source code is
+not required for reproducibility: the roadmap, pinned commits, and JSON artifacts
+already record rejected results. Do not preserve dead code behind a macro,
+environment variable, harness flag, or `if (false)` branch.
+
+### 11.1 Shipping path that must remain
+
+The final CUDA Neural path is exactly:
+
+1. fixed 1024-owned single-stream tile scheduling;
+2. reflect/phase-aware CFA pack and the unequal first NCHW convolution;
+3. one NCHW-to-NHWC transition into the two-slot activation ping-pong;
+4. Bayer 24-channel in-tree NHWC trunks and X-Trans 32-channel CUTLASS trunks;
+5. NHWC residual 1x1 plus fused unpack/crop/concat;
+6. NHWC fused post/output/gamma writing pitched HWC;
+7. ROI assembly, HLR/orientation, float4 packing, and one final stream wait.
+
+Keep these implementation APIs (renaming the two model entrypoints to the
+unqualified product name is encouraged after old overloads are removed):
+
+- `BayerDemosaicNet::ForwardHwcChannelsLast`;
+- `XTransDemosaicNet::ForwardHwcChannelsLast`;
+- `TransformConv2d3x3WeightsNhwc` and the **C=24 only**
+  `Conv2d3x3NhwcBiasRelu` instantiation;
+- `TransformConv2d3x3WeightsCutlassKrsc` and
+  `Conv2d3x3NhwcCutlassBiasRelu` for **C=32**;
+- `TransformDemosaicNetResidualWeightsNhwc`,
+  `DemosaicNetResidual1x1Nhwc`, and
+  `DemosaicNetUnpackCropConcatNhwc`;
+- `FusedPostOutputNhwcToHwc`;
+- `PackReflectPaddedCfaTile`, the fixed student `BuildTileJobs` contract,
+  `WorkspacePool`, lazy model cache, profiler ranges, async enqueue APIs, and
+  synchronous convenience wrappers.
+
+CUTLASS and its BSD-3-Clause notice remain required because the selected
+X-Trans product trunk calls it. Generic `cuda/nn` primitives used outside the
+DemosaicNet product call graph are not cleanup targets merely because the final
+model does not call them.
+
+### 11.2 File and logical-module removal map
+
+| Area | Files/modules | P5 action |
+|------|---------------|-----------|
+| Convolution candidates | `cuda/nn/conv2d.cu`, `include/cuda/nn/conv2d.hpp` | delete Winograd, implicit-GEMM, small-Cout NCHW, in-tree C=32 NHWC, and candidate-query code; retain generic direct ops needed by pack/first trunk and C=24 NHWC |
+| Selected X-Trans trunk | `cuda/nn/cutlass_conv2d.cu/.hpp`, CUTLASS submodule | retain and remove “candidate” naming/comments; this is production |
+| Model forwards | `demosaicnet_bayer.cu/.hpp`, `demosaicnet_xtrans.cu/.hpp` | delete ordinary NCHW and old NCHW-to-HWC forwards; retain one persistent-NHWC HWC entrypoint per variant |
+| Tail/structure | `fused_post_output.cu/.hpp`, `demosaicnet_nhwc.cu/.hpp` | delete NCHW/unfused switches; retain NHWC residual, structural compose, and fused HWC tail |
+| Runtime orchestration | `cuda_demosaicnet.cu/.hpp` | delete Graph, alternate-forward dispatch, tile-size options, and output tensor fallback |
+| Workspace/cache | `NeuralDemosaicWorkspace`, `demosaicnet_cache.cpp/.hpp`, activation-slot helpers | delete graph state, output buffer, weight generation, and ordinary-tail slot accounting |
+| Tile planner | `cuda_tile_jobs.hpp` | delete large/rectangular/strip/ragged selection; retain fixed Bayer/X-Trans policies and shared Legacy job coverage |
+| Product entry | `raw_processor_cuda.cpp` | replace selection/retry branches with one fixed policy; retain high-level Neural-to-Classical/Legacy soft failure |
+| Benchmark | `demosaicnet_perf_harness.cpp` | delete every rejected algorithm/shape/lane selector; retain fixed-path full/tile/profile measurement |
+| Tests | `conv2d_test.cu`, `demosaicnet_module_test.cu`, `cuda_tile_jobs_test.cpp`, `cuda_raw_ops_test.cpp` | delete rejected-path tests and rewrite goldens to exercise the selected product forward directly |
+| Offline assets | `scripts/prepack_demosaicnet_nhwc.py`, `bayer_nhwc.safetensors`, `xtrans_nhwc.safetensors` | delete entire files; original safetensors plus load-time prepack are authoritative |
+
+### 11.3 Delete rejected convolution implementations
+
+Remove the following from `cuda/nn/conv2d.cu`, `include/cuda/nn/conv2d.hpp`,
+their tests, and the perf harness:
+
+- `Conv2dParams::winograd_f22_weight`;
+- `WinogradFilterTransform3x3`, `WinogradInputTransform4x4`,
+  `WinogradOutputTransform4x4`, `Conv2d3x3s1WinogradF22Kernel`,
+  `LaunchConv2d3x3WinogradF22`, `WinogradF22SmemBytes`, and
+  `TransformConv2d3x3WeightsWinogradF22`;
+- `Conv2d3x3s1ImplicitGemmKernel`, `LaunchConv2d3x3ImplicitGemm`, and all
+  `kIg*` candidate constants/attribute queries;
+- `Conv2d3x3KernelInfo::candidate_*`, the `has_prepacked_winograd` query input,
+  and benchmark-only `QueryConv2d3x3NhwcKernelInfo`; remove
+  `QueryConv2d3x3KernelInfo` entirely if no retained profiler consumes its
+  selected-kernel fields after harness simplification;
+- the in-tree **C=32** `Conv2d3x3s1NhwcTiledKernel` dispatch/measurement branch;
+  X-Trans ships CUTLASS, while the in-tree NHWC kernel remains only for C=24;
+- `Conv2d1x1SmallCoutKernel<3|12>` and its dispatch/tests once the ordinary
+  NCHW model forward is gone; the shipping residual/output use NHWC residual and
+  the fused HWC tail instead.
+
+Do not replace these with a generic candidate registry or compile-time option.
+
+### 11.4 Delete alternate neural forwards and CUDA Graph
+
+Remove the complete ordinary-NCHW neural execution path:
+
+- `EnvDisablesPersistentNhwc` and
+  `ALCEDO_DEMOASICNET_DISABLE_PERSISTENT_NHWC`;
+- `FusedPostOutputEnabled` and
+  `ALCEDO_DEMOASICNET_DISABLE_FUSED_TAIL`;
+- `BayerDemosaicNet::Forward`, `BayerDemosaicNet::ForwardHwc`,
+  `XTransDemosaicNet::Forward`, and `XTransDemosaicNet::ForwardHwc`;
+- every `force_ordinary_tail` parameter/branch;
+- NCHW `FusedPostOutputToHwc` and the NCHW specialization/branch inside the
+  fused post/output kernel;
+- `RunModelOrdinary`, the graph-aware `RunModel`, output-tensor unpack branches,
+  and all `FinishNeuralEngineRgb` calls that exist only because the selected
+  tile epilogue might be disabled;
+- the `fuse_post_output` workspace-estimate switch, ordinary post slot, and
+  tests comparing fused output to an unfused path.
+
+Delete CUDA Graph as one unit:
+
+- `NeuralForwardGraphKey` and `NeuralDemosaicForwardGraph`, including capture,
+  replay, invalidation, counters, and abort handling;
+- `NeuralDemosaicWorkspace::forward_graph_` and accessors;
+- `NeuralDemosaicOptions::enable_cuda_graph`, `EnvDisablesCudaGraph`, and
+  `ALCEDO_DEMOASICNET_DISABLE_CUDA_GRAPH`;
+- `DemosaicNetModelCache::WeightGeneration` and its generation state, which
+  exists only to invalidate graph pointers;
+- all graph-only tests from `demosaicnet_module_test.cu`.
+
+After these deletions, `RunModelHwc` must call the selected channels-last model
+entrypoint unconditionally.
+
+### 11.5 Delete rejected tile shapes, ragged scheduling, and multi-lane code
+
+Reduce `cuda_tile_jobs.hpp` to the fixed product policies plus shared Legacy
+job scheduling. Delete:
+
+- `StudentRaggedEdgeTilesEnabled`, `SetStudentRaggedEdgeTilesEnabled`,
+  `kStudentRaggedMinOwnedTail`, `SplitRaggedPair`, the policy
+  `ragged_edge_tiles` field, and ragged partition branches;
+- `kStudentProductTileEdges`, `kStudentProductRetainedTileEdges`,
+  `kStudentStripOwnedHeights`, `kStudentMinOwnedTileEdge`, and
+  `kStudentMinOwnedRectAxis` when no fixed-policy validation uses them;
+- `StudentOwnedTileShape`, `StudentProductTileShapeOverride`,
+  `Set/GetStudentProductTileShapeOverride`, `SelectStudentProductTileShape`,
+  VRAM-budget estimation/selection helpers, and smaller-tile retry lists;
+- rectangular `MakeBayerStudentTilePolicy(w,h)` /
+  `MakeXTransStudentTilePolicy(w,h)` overloads and
+  `MakeBayerStudentStripPolicy` / `MakeXTransStudentStripPolicy`;
+- `NeuralDemosaicOptions::student_owned_tile_edge`,
+  `student_owned_tile_w`, and `student_owned_tile_h`.
+
+In `RawProcessor::ProcessCudaTiled`, replace `cudaMemGetInfo`, `selected`,
+`try_warm_tile`, retained-edge retries, and per-job option rewrites with one
+fixed policy and one `EnsureCapacity` call. Workspace reservation failure must
+fall through to Classical/Legacy; it must not try another neural tile shape.
+
+Delete the corresponding ragged/rectangular/strip/large-tile tests. Preserve
+the fixed Bayer/X-Trans CFA phase, destination coverage, X-Trans first-writer
+overlap, seam, and real-RAW tests.
+
+The product remains one stream/workspace. Remove the harness-only lane vector,
+per-lane streams/workspaces, `wait_all_lanes`, cross-lane output comparison, and
+all lane-count JSON fields/tests.
+
+### 11.6 Simplify the performance harness
+
+Keep the harness only as a regression tool for the selected product path:
+fixture/raw selection, warm-up/iteration counts, full/tile scopes, JSON output,
+and `--profile-ranges` may remain. Profiling changes measurement only and does
+not select another algorithm.
+
+Delete these CLI options, config fields, parser/help text, JSON fields, and
+their controlled branches:
+
+- `--model` (student is the only model);
+- `--tile-size`, `--tile-width`, `--tile-height`, and `--strip-height`;
+- `--ragged-edges`;
+- `--lanes`;
+- `--conv-winograd`;
+- `--conv-channels-last`;
+- `--conv-cutlass`.
+
+`--mode conv` may remain only if it benchmarks the fixed shipping dispatch:
+Bayer C=24 in-tree NHWC, X-Trans C=32 CUTLASS, and the actual pack/post kernels.
+It must not contain an algorithm selector or compile/link rejected kernels.
+
+### 11.7 Delete redundant assets, weights, and workspace storage
+
+Return to the original bundled `bayer.safetensors` and `xtrans.safetensors` as
+the only model assets. Prepack shipping layouts once during lazy load:
+
+- change `DemosaicNetModelCache::VariantFileName` and model-directory probes
+  back to the original filenames;
+- in Bayer load, derive CKCO from `trunk.i.weight` with
+  `TransformConv2d3x3WeightsNhwc`; do not require `trunk.i.nhwc_weight`;
+- X-Trans continues deriving CUTLASS KRSC from original OIHW;
+- delete `scripts/prepack_demosaicnet_nhwc.py`,
+  `bayer_nhwc.safetensors`, and `xtrans_nhwc.safetensors`;
+- update tests and packaging to reference only the original assets.
+
+Once ordinary NCHW forward is removed, stop uploading/storing device weights
+used only by it: Bayer/X-Trans equal-width `trunk_w_` entries, `unpack_w_`,
+`residual_w_`, and `output_w_`. Keep the pack weight, unequal first-trunk
+weight, NHWC/KRSC trunk weights, biases, NHWC residual weight, post weight, and
+CIO output weight. Update `ResidentWeightBytes` accordingly.
+
+Remove `NeuralDemosaicWorkspace::output_buffer_`, its accessor, `output_numel`,
+and related allocation accounting after every output-tensor fallback branch is
+gone. Keep the packed input buffer, activation pool, and pitched HWC RGB buffer.
+
+### 11.8 The only fallback that remains
+
+Retain the existing high-level soft failure from Neural to Classical/Legacy
+when model resolution/load, metadata validation, device allocation, preprocess,
+or the selected forward fails. This is required product error handling.
+
+Do not retain any of the following as a “fallback”:
+
+- ordinary NCHW DemosaicNet;
+- unfused post/output;
+- CUDA Graph ordinary replay/capture fallback;
+- smaller, larger, ragged, rectangular, or strip neural tiles;
+- alternate convolution algorithms;
+- a second neural weight asset.
+
+### 11.9 Execution order and completion gate
+
+Apply the cleanup in reviewable deletion slices, keeping the selected path
+buildable after each slice:
+
+1. simplify harness/tests so rejected code no longer has callers;
+2. delete Graph and alternate NCHW/fused-tail runtime branches;
+3. freeze fixed tile policies and delete ragged/rectangular/multi-lane code;
+4. delete Winograd/implicit-GEMM/in-tree-C32/small-Cout candidates;
+5. return to original safetensors, remove redundant device storage/assets, and
+   update CMake/install wiring;
+6. run correctness and performance gates, then remove any newly exposed dead
+   includes, helpers, comments, and documentation claims.
+
+P5 is complete only when:
+
+- repository search finds no deleted CLI flags, environment variables,
+  candidate symbols, `_nhwc.safetensors`, or prepack script references;
+- Release builds through `scripts/msvc_env.cmd` for `RawProcessor`, `MlOpsTest`,
+  `CudaRawOpsTest`, and `DemosaicNetPerfHarness`;
+- selected model goldens, fixed tile planner, async/sync, allocation stability,
+  real Bayer/X-Trans RAW, HLR, crop/orientation, and Classical/Legacy soft-fail
+  tests pass;
+- the simplified harness executes one Bayer and one X-Trans full/tile run with
+  no algorithm-selection flags;
+- matched-state p50 does not regress by more than 5%, p95 remains within the
+  common gate, allocation generation stays constant, and owned VRAM does not
+  increase relative to the P4-D artifacts;
+- the shipping call graph contains one neural forward, one tile policy per CFA
+  family, one convolution choice per retained shape, and one product-level
+  fallback to Classical/Legacy.
+
+### 11.10 P5 results (2026-07-13)
+
+Production consolidation landed. Historical rejected results remain in this
+roadmap and in `build/perf/*` JSON; source no longer carries alternate neural
+paths.
+
+#### Deleted
+
+| Area | Removed |
+|------|---------|
+| CUDA Graph | `NeuralForwardGraphKey`, `NeuralDemosaicForwardGraph`, workspace graph state, `enable_cuda_graph`, `ALCEDO_DEMOASICNET_DISABLE_CUDA_GRAPH`, graph tests |
+| Ordinary NCHW | `Forward` / `ForwardHwc`, `force_ordinary_tail`, `ALCEDO_DEMOASICNET_DISABLE_PERSISTENT_NHWC`, NCHW fused-tail kernels, `FusedPostOutputEnabled` |
+| Tile experiments | ragged edges, rectangular/strip policies, VRAM auto-select/retry, multi-lane harness |
+| Convolution candidates | Winograd F(2×2,3×3), implicit-GEMM, in-tree C=32 NHWC, candidate query fields |
+| Assets | `bayer_nhwc.safetensors`, `xtrans_nhwc.safetensors`, `scripts/prepack_demosaicnet_nhwc.py` |
+| Device storage | ordinary equal-width `trunk_w_`, `residual_w_`, `unpack_w_`, `output_w_` OIHW, workspace `output_buffer_` |
+
+#### Shipping path (only)
+
+1. Fixed 1024-owned single-stream tiles (`MakeBayerStudentTilePolicy()` /
+   `MakeXTransStudentTilePolicy()`).
+2. Reflect/phase CFA pack + unequal first NCHW trunk.
+3. One NCHW→NHWC transition; Bayer C=24 in-tree NHWC trunks; X-Trans C=32 CUTLASS.
+4. NHWC residual + fused unpack/crop/concat + `FusedPostOutputNhwcToHwc`.
+5. ROI assembly + HLR/orientation + float4 pack + one final stream wait.
+6. Soft-fail only to Classical/Legacy on neural failure.
+
+Weights load from original `bayer.safetensors` / `xtrans.safetensors`; NHWC/KRSC
+and CIO layouts are derived once at load time.
+
+#### Verification
+
+- Release build: `RawProcessor`, `MlOpsTest`, `CudaRawOpsTest`,
+  `DemosaicNetPerfHarness` via `scripts/msvc_env.cmd --preset win_release`.
+- `MlOpsTest` demosaic/conv/tile filter: **46/46 pass** (goldens via
+  `ForwardHwcChannelsLast`, fixed tile planner).
+- `CudaRawOpsTest` neural/student filter: **26/26 pass** (real RAW, async,
+  allocation stability, load→Legacy soft-fail).
+- Simplified harness (no algorithm flags):
+
+```bat
+build\release\alcedo_studio\tests\DemosaicNetPerfHarness.exe ^
+  --fixture all --method neural --mode full --warmup 1 --iterations 3 ^
+  --output build/perf/demosaicnet_p5_cleanup_gate.json
+```
+
+| Variant | p50 ms (3-iter gate) | jobs | vs P4-D retained ~376 / ~412 |
+|---------|---------------------:|-----:|------------------------------|
+| Bayer D800e | ~301 | 40 | no regression (well under +5%) |
+| X-Trans XT5 | ~321 | 48 | no regression (well under +5%) |
+
+Artifact: `build/perf/demosaicnet_p5_cleanup_gate.json`.
+
+**Verdict: P5 complete.** The product neural path is unambiguous; further
+optimization may resume against this single baseline.
