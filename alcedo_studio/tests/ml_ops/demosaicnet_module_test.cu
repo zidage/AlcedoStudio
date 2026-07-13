@@ -21,6 +21,7 @@
 #include <cuda_runtime.h>
 #include <opencv2/core.hpp>
 #include <opencv2/core/cuda.hpp>
+#include <opencv2/core/cuda_stream_accessor.hpp>
 
 #include "cuda/nn/device_buffer.hpp"
 #include "cuda/nn/safetensors.hpp"
@@ -735,6 +736,468 @@ TEST_F(MlOpsDemosaicNetTest, StudentForwardRepeatedRunsKeepAllocationGenerationS
     EXPECT_EQ(workspace.allocation_generation(), gen_after_warmup) << "iteration " << i;
     EXPECT_EQ(workspace.OwnedDeviceBytes(), owned_after_warmup) << "iteration " << i;
   }
+}
+
+// ---------------------------------------------------------------------------
+// P3 — CUDA Graph launch amortization (fixed-shape model forward)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+auto DownloadGpuMatRgb(const cv::cuda::GpuMat& rgb) -> std::vector<float> {
+  cv::Mat host;
+  rgb.download(host);
+  EXPECT_EQ(host.type(), CV_32FC3);
+  std::vector<float> out(static_cast<std::size_t>(host.rows) * host.cols * 3);
+  if (host.isContinuous()) {
+    std::memcpy(out.data(), host.ptr<float>(), out.size() * sizeof(float));
+  } else {
+    for (int y = 0; y < host.rows; ++y) {
+      std::memcpy(out.data() + static_cast<std::size_t>(y) * host.cols * 3, host.ptr<float>(y),
+                  static_cast<std::size_t>(host.cols) * 3 * sizeof(float));
+    }
+  }
+  return out;
+}
+
+auto MakeStudentTileCfa(const int edge) -> cv::cuda::GpuMat {
+  cv::Mat host(edge, edge, CV_32FC1);
+  cv::randu(host, 0.05F, 0.95F);
+  return cv::cuda::GpuMat(host);
+}
+
+auto BuildForwardGraphKey(const DemosaicNetVariant variant, const int device, const int H,
+                          const int W, const int Oh, const int Ow,
+                          CUDA::NeuralDemosaicWorkspace& workspace, const float* pack_w,
+                          const float* out_w,
+                          const std::uint64_t weight_generation = 1) -> CUDA::NeuralForwardGraphKey {
+  CUDA::NeuralForwardGraphKey key;
+  key.variant             = variant;
+  key.device              = device;
+  key.input_h             = H;
+  key.input_w             = W;
+  key.output_h            = Oh;
+  key.output_w            = Ow;
+  key.input_data          = workspace.input_buffer().data();
+  key.output_data         = workspace.output_buffer().data();
+  key.activation_base     = workspace.activation_workspace().base();
+  key.activation_capacity = workspace.activation_workspace().capacity_bytes();
+  key.pack_weight         = pack_w;
+  key.output_weight       = out_w;
+  key.weight_generation   = weight_generation;
+  return key;
+}
+
+}  // namespace
+
+TEST_F(MlOpsDemosaicNetTest, GraphAndOrdinaryStudentTileMatchBayer) {
+  const auto model_dir = FindModelDir();
+  if (model_dir.empty()) {
+    GTEST_SKIP() << "model dir not found";
+  }
+
+  constexpr int kOwned = BayerDemosaicNet::kTileOutput;
+  const int     kCfa   = BayerDemosaicNet::kTileInput;  // sufficient canvas for one virtual-pad tile
+  auto          cfa    = MakeStudentTileCfa(kCfa + 64);
+  const RawCfaPattern pattern = DemosaicNetTrainingPattern(RawCfaKind::Bayer2x2);
+  DemosaicNetModelCache  cache;
+  DemosaicNetLoadOptions load_opts;
+  load_opts.model_dir = model_dir;
+
+  CUDA::NeuralDemosaicWorkspace ws_ord;
+  CUDA::NeuralDemosaicWorkspace ws_graph;
+  CUDA::NeuralDemosaicOptions   opt_ord;
+  opt_ord.model_cache        = &cache;
+  opt_ord.load_options       = load_opts;
+  opt_ord.workspace          = &ws_ord;
+  opt_ord.student_owned_tile_edge = kOwned;
+  opt_ord.enable_cuda_graph  = false;
+
+  CUDA::NeuralDemosaicOptions opt_graph = opt_ord;
+  opt_graph.workspace                   = &ws_graph;
+  opt_graph.enable_cuda_graph           = true;
+
+  cv::cuda::Stream stream;
+  cv::cuda::GpuMat rgb_ord;
+  cv::cuda::GpuMat rgb_graph;
+  const cv::Point  origin(0, 0);
+
+  const auto r0 = CUDA::DemosaicStudentTileWithNeuralEngine(cfa, origin, pattern, rgb_ord, &stream,
+                                                            opt_ord);
+  ASSERT_TRUE(r0.succeeded) << r0.error;
+  const auto ordinary = DownloadGpuMatRgb(rgb_ord);
+
+  // Capture + first forward.
+  const auto r1 = CUDA::DemosaicStudentTileWithNeuralEngine(cfa, origin, pattern, rgb_graph,
+                                                            &stream, opt_graph);
+  ASSERT_TRUE(r1.succeeded) << r1.error;
+  ASSERT_TRUE(ws_graph.forward_graph().ready()) << "expected successful CUDA Graph capture";
+  EXPECT_EQ(ws_graph.forward_graph().capture_count(), 1u);
+  ExpectVectorsNear(DownloadGpuMatRgb(rgb_graph), ordinary, 1e-4f);
+
+  // Replay.
+  const auto r2 = CUDA::DemosaicStudentTileWithNeuralEngine(cfa, origin, pattern, rgb_graph,
+                                                            &stream, opt_graph);
+  ASSERT_TRUE(r2.succeeded) << r2.error;
+  EXPECT_EQ(ws_graph.forward_graph().launch_count(), 1u);
+  ExpectVectorsNear(DownloadGpuMatRgb(rgb_graph), ordinary, 1e-4f);
+}
+
+TEST_F(MlOpsDemosaicNetTest, GraphAndOrdinaryStudentTileMatchXTrans) {
+  const auto model_dir = FindModelDir();
+  if (model_dir.empty()) {
+    GTEST_SKIP() << "model dir not found";
+  }
+
+  constexpr int kOwned = XTransDemosaicNet::kTileOutput;
+  auto          cfa    = MakeStudentTileCfa(XTransDemosaicNet::kTileInput + 64);
+  const RawCfaPattern pattern = DemosaicNetTrainingPattern(RawCfaKind::XTrans6x6);
+  DemosaicNetModelCache  cache;
+  DemosaicNetLoadOptions load_opts;
+  load_opts.model_dir = model_dir;
+
+  CUDA::NeuralDemosaicWorkspace ws_ord;
+  CUDA::NeuralDemosaicWorkspace ws_graph;
+  CUDA::NeuralDemosaicOptions   opt_ord;
+  opt_ord.model_cache             = &cache;
+  opt_ord.load_options            = load_opts;
+  opt_ord.workspace               = &ws_ord;
+  opt_ord.student_owned_tile_edge = kOwned;
+  opt_ord.enable_cuda_graph       = false;
+
+  CUDA::NeuralDemosaicOptions opt_graph = opt_ord;
+  opt_graph.workspace                   = &ws_graph;
+  opt_graph.enable_cuda_graph           = true;
+
+  cv::cuda::Stream stream;
+  cv::cuda::GpuMat rgb_ord;
+  cv::cuda::GpuMat rgb_graph;
+  const cv::Point  origin(0, 0);
+
+  const auto r0 = CUDA::DemosaicStudentTileWithNeuralEngine(cfa, origin, pattern, rgb_ord, &stream,
+                                                            opt_ord);
+  ASSERT_TRUE(r0.succeeded) << r0.error;
+  const auto ordinary = DownloadGpuMatRgb(rgb_ord);
+
+  const auto r1 = CUDA::DemosaicStudentTileWithNeuralEngine(cfa, origin, pattern, rgb_graph,
+                                                            &stream, opt_graph);
+  ASSERT_TRUE(r1.succeeded) << r1.error;
+  ASSERT_TRUE(ws_graph.forward_graph().ready());
+  ExpectVectorsNear(DownloadGpuMatRgb(rgb_graph), ordinary, 1e-4f);
+
+  const auto r2 = CUDA::DemosaicStudentTileWithNeuralEngine(cfa, origin, pattern, rgb_graph,
+                                                            &stream, opt_graph);
+  ASSERT_TRUE(r2.succeeded) << r2.error;
+  EXPECT_GE(ws_graph.forward_graph().launch_count(), 1u);
+  ExpectVectorsNear(DownloadGpuMatRgb(rgb_graph), ordinary, 1e-4f);
+}
+
+TEST_F(MlOpsDemosaicNetTest, GraphReplayPreservesExportedBayerGolden) {
+  const auto model_dir = FindModelDir();
+  const auto in_path   = FindGolden("bayer_input_00.bin");
+  const auto out_path  = FindGolden("bayer_output_00.bin");
+  if (model_dir.empty() || in_path.empty() || out_path.empty()) {
+    GTEST_SKIP() << "models or student goldens not found";
+  }
+
+  constexpr int N  = 1;
+  constexpr int H  = BayerDemosaicNet::kTileInput;
+  constexpr int W  = BayerDemosaicNet::kTileInput;
+  constexpr int Oh = BayerDemosaicNet::kTileOutput;
+  constexpr int Ow = BayerDemosaicNet::kTileOutput;
+  const auto    hin      = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
+  const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
+
+  BayerDemosaicNet net;
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors"));
+
+  CUDA::NeuralDemosaicWorkspace workspace;
+  workspace.EnsureCapacity(DemosaicNetVariant::Bayer, H, W,
+                           static_cast<std::size_t>(N * 3 * H * W),
+                           static_cast<std::size_t>(N * 3 * Oh * Ow));
+  ASSERT_EQ(::cudaMemcpy(workspace.input_buffer().data(), hin.data(), hin.size() * sizeof(float),
+                         cudaMemcpyHostToDevice),
+            cudaSuccess);
+
+  auto tin  = cuda::nn::DeviceTensor::Contiguous(workspace.input_buffer().data(), {N, 3, H, W});
+  auto tout = cuda::nn::DeviceTensor::Contiguous(workspace.output_buffer().data(), {N, 3, Oh, Ow});
+
+  int device = 0;
+  ASSERT_EQ(::cudaGetDevice(&device), cudaSuccess);
+  cv::cuda::Stream stream;
+  const cudaStream_t cuda_stream = cv::cuda::StreamAccessor::getStream(stream);
+
+  const auto key = BuildForwardGraphKey(DemosaicNetVariant::Bayer, device, H, W, Oh, Ow, workspace,
+                                        net.PackWeightDevicePtr(), net.OutputWeightDevicePtr());
+  auto& graph = workspace.forward_graph();
+  auto ordinary = [&]() {
+    net.Forward(tin, tout, workspace.activation_workspace(), cuda_stream);
+  };
+  graph.Capture(key, cuda_stream, ordinary);
+  stream.waitForCompletion();
+  ASSERT_TRUE(graph.ready());
+  ExpectVectorsNear(workspace.output_buffer().Download(), expected, 1e-4f);
+
+  // Scrub output then replay.
+  ASSERT_EQ(::cudaMemsetAsync(workspace.output_buffer().data(), 0,
+                              workspace.output_buffer().bytes(), cuda_stream),
+            cudaSuccess);
+  ASSERT_TRUE(graph.TryLaunch(key, cuda_stream));
+  stream.waitForCompletion();
+  ExpectVectorsNear(workspace.output_buffer().Download(), expected, 1e-4f);
+  EXPECT_EQ(graph.launch_count(), 1u);
+  EXPECT_EQ(graph.capture_count(), 1u);
+}
+
+TEST_F(MlOpsDemosaicNetTest, GraphReplayPreservesExportedXTransGolden) {
+  const auto model_dir = FindModelDir();
+  const auto in_path   = FindGolden("xtrans_input_00.bin");
+  const auto out_path  = FindGolden("xtrans_output_00.bin");
+  if (model_dir.empty() || in_path.empty() || out_path.empty()) {
+    GTEST_SKIP() << "models or student goldens not found";
+  }
+
+  constexpr int N  = 1;
+  constexpr int H  = XTransDemosaicNet::kTileInput;
+  constexpr int W  = XTransDemosaicNet::kTileInput;
+  constexpr int Oh = XTransDemosaicNet::kTileOutput;
+  constexpr int Ow = XTransDemosaicNet::kTileOutput;
+  const auto    hin      = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
+  const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
+
+  XTransDemosaicNet net;
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "xtrans.safetensors"));
+
+  CUDA::NeuralDemosaicWorkspace workspace;
+  workspace.EnsureCapacity(DemosaicNetVariant::XTrans, H, W,
+                           static_cast<std::size_t>(N * 3 * H * W),
+                           static_cast<std::size_t>(N * 3 * Oh * Ow));
+  ASSERT_EQ(::cudaMemcpy(workspace.input_buffer().data(), hin.data(), hin.size() * sizeof(float),
+                         cudaMemcpyHostToDevice),
+            cudaSuccess);
+
+  auto tin  = cuda::nn::DeviceTensor::Contiguous(workspace.input_buffer().data(), {N, 3, H, W});
+  auto tout = cuda::nn::DeviceTensor::Contiguous(workspace.output_buffer().data(), {N, 3, Oh, Ow});
+
+  int device = 0;
+  ASSERT_EQ(::cudaGetDevice(&device), cudaSuccess);
+  cv::cuda::Stream stream;
+  const cudaStream_t cuda_stream = cv::cuda::StreamAccessor::getStream(stream);
+  const auto key = BuildForwardGraphKey(DemosaicNetVariant::XTrans, device, H, W, Oh, Ow, workspace,
+                                        net.PackWeightDevicePtr(), net.OutputWeightDevicePtr());
+  auto& graph = workspace.forward_graph();
+  graph.Capture(key, cuda_stream, [&]() {
+    net.Forward(tin, tout, workspace.activation_workspace(), cuda_stream);
+  });
+  stream.waitForCompletion();
+  ASSERT_TRUE(graph.ready());
+  ExpectVectorsNear(workspace.output_buffer().Download(), expected, 1e-4f);
+
+  ASSERT_EQ(::cudaMemsetAsync(workspace.output_buffer().data(), 0,
+                              workspace.output_buffer().bytes(), cuda_stream),
+            cudaSuccess);
+  ASSERT_TRUE(graph.TryLaunch(key, cuda_stream));
+  stream.waitForCompletion();
+  ExpectVectorsNear(workspace.output_buffer().Download(), expected, 1e-4f);
+}
+
+TEST_F(MlOpsDemosaicNetTest, ModelReloadInvalidatesCapturedWeightPointers) {
+  const auto model_dir = FindModelDir();
+  if (model_dir.empty()) {
+    GTEST_SKIP() << "model dir not found";
+  }
+
+  constexpr int kOwned = BayerDemosaicNet::kTileOutput;
+  auto          cfa    = MakeStudentTileCfa(BayerDemosaicNet::kTileInput + 64);
+  const RawCfaPattern pattern = DemosaicNetTrainingPattern(RawCfaKind::Bayer2x2);
+  DemosaicNetModelCache  cache;
+  DemosaicNetLoadOptions load_opts;
+  load_opts.model_dir = model_dir;
+
+  CUDA::NeuralDemosaicWorkspace workspace;
+  CUDA::NeuralDemosaicOptions   options;
+  options.model_cache             = &cache;
+  options.load_options            = load_opts;
+  options.workspace               = &workspace;
+  options.student_owned_tile_edge = kOwned;
+  options.enable_cuda_graph       = true;  // P3 path under test (product default is off)
+
+  cv::cuda::Stream stream;
+  cv::cuda::GpuMat rgb;
+  const cv::Point  origin(0, 0);
+
+  ASSERT_TRUE(CUDA::DemosaicStudentTileWithNeuralEngine(cfa, origin, pattern, rgb, &stream, options)
+                  .succeeded);
+  ASSERT_TRUE(workspace.forward_graph().ready());
+  const auto gen_before = cache.WeightGeneration(DemosaicNetVariant::Bayer);
+  const auto captures0  = workspace.forward_graph().capture_count();
+  const auto key_gen0   = workspace.forward_graph().key().weight_generation;
+  EXPECT_EQ(key_gen0, gen_before);
+
+  cache.Unload(DemosaicNetVariant::Bayer);
+  ASSERT_TRUE(cache.EnsureLoaded(DemosaicNetVariant::Bayer, load_opts));
+  const auto gen_after = cache.WeightGeneration(DemosaicNetVariant::Bayer);
+  ASSERT_NE(gen_before, gen_after);
+
+  // Product path keys on weight generation: mismatch invalidates + recaptures even
+  // when CUDA recycles the same device addresses for the reloaded weights.
+  ASSERT_TRUE(CUDA::DemosaicStudentTileWithNeuralEngine(cfa, origin, pattern, rgb, &stream, options)
+                  .succeeded);
+  EXPECT_TRUE(workspace.forward_graph().ready());
+  EXPECT_EQ(workspace.forward_graph().capture_count(), captures0 + 1);
+  EXPECT_EQ(workspace.forward_graph().key().weight_generation, gen_after);
+}
+
+TEST_F(MlOpsDemosaicNetTest, WorkspaceGrowthInvalidatesCapturedActivationPointers) {
+  const auto model_dir = FindModelDir();
+  if (model_dir.empty()) {
+    GTEST_SKIP() << "model dir not found";
+  }
+
+  constexpr int H  = 64;
+  constexpr int W  = 64;
+  const int     Oh = BayerDemosaicNet::OutputHeight(H, W);
+  const int     Ow = BayerDemosaicNet::OutputWidth(W, H);
+
+  BayerDemosaicNet net;
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors"));
+
+  CUDA::NeuralDemosaicWorkspace workspace;
+  workspace.EnsureCapacity(DemosaicNetVariant::Bayer, H, W,
+                           static_cast<std::size_t>(3 * H * W),
+                           static_cast<std::size_t>(3 * Oh * Ow));
+
+  int device = 0;
+  ASSERT_EQ(::cudaGetDevice(&device), cudaSuccess);
+  cv::cuda::Stream stream;
+  const cudaStream_t cuda_stream = cv::cuda::StreamAccessor::getStream(stream);
+
+  auto tin  = cuda::nn::DeviceTensor::Contiguous(workspace.input_buffer().data(), {1, 3, H, W});
+  auto tout = cuda::nn::DeviceTensor::Contiguous(workspace.output_buffer().data(), {1, 3, Oh, Ow});
+  const auto key = BuildForwardGraphKey(DemosaicNetVariant::Bayer, device, H, W, Oh, Ow, workspace,
+                                        net.PackWeightDevicePtr(), net.OutputWeightDevicePtr());
+  workspace.forward_graph().Capture(key, cuda_stream, [&]() {
+    net.Forward(tin, tout, workspace.activation_workspace(), cuda_stream);
+  });
+  stream.waitForCompletion();
+  ASSERT_TRUE(workspace.forward_graph().ready());
+
+  // Forward leaves bump allocations live; rewind before growth (product EnsureCapacity
+  // runs with empty bump after each tile's host-side Reset at the next Forward, but a
+  // graph-only capture leaves the bump advanced until Reset).
+  workspace.activation_workspace().Reset();
+
+  // Grow activation (and possibly I/O) beyond the captured tile.
+  constexpr int H2  = BayerDemosaicNet::kTileInput;
+  constexpr int W2  = BayerDemosaicNet::kTileInput;
+  constexpr int Oh2 = BayerDemosaicNet::kTileOutput;
+  constexpr int Ow2 = BayerDemosaicNet::kTileOutput;
+  workspace.EnsureCapacity(DemosaicNetVariant::Bayer, H2, W2,
+                           static_cast<std::size_t>(3 * H2 * W2),
+                           static_cast<std::size_t>(3 * Oh2 * Ow2));
+  EXPECT_FALSE(workspace.forward_graph().ready())
+      << "workspace growth must drop the captured graph before pointers go stale";
+}
+
+TEST_F(MlOpsDemosaicNetTest, GraphReplayDoesNotChangeAllocationGeneration) {
+  const auto model_dir = FindModelDir();
+  if (model_dir.empty()) {
+    GTEST_SKIP() << "model dir not found";
+  }
+
+  constexpr int kOwned = BayerDemosaicNet::kTileOutput;
+  auto          cfa    = MakeStudentTileCfa(BayerDemosaicNet::kTileInput + 64);
+  const RawCfaPattern pattern = DemosaicNetTrainingPattern(RawCfaKind::Bayer2x2);
+  DemosaicNetModelCache  cache;
+  DemosaicNetLoadOptions load_opts;
+  load_opts.model_dir = model_dir;
+
+  CUDA::NeuralDemosaicWorkspace workspace;
+  CUDA::NeuralDemosaicOptions   options;
+  options.model_cache             = &cache;
+  options.load_options            = load_opts;
+  options.workspace               = &workspace;
+  options.student_owned_tile_edge = kOwned;
+  options.enable_cuda_graph       = true;
+
+  cv::cuda::Stream stream;
+  cv::cuda::GpuMat rgb;
+  const cv::Point  origin(0, 0);
+
+  ASSERT_TRUE(CUDA::DemosaicStudentTileWithNeuralEngine(cfa, origin, pattern, rgb, &stream, options)
+                  .succeeded);
+  ASSERT_TRUE(workspace.forward_graph().ready());
+  const std::uint64_t gen = workspace.allocation_generation();
+  const std::size_t owned = workspace.OwnedDeviceBytes();
+
+  for (int i = 0; i < 8; ++i) {
+    ASSERT_TRUE(
+        CUDA::DemosaicStudentTileWithNeuralEngine(cfa, origin, pattern, rgb, &stream, options)
+            .succeeded)
+        << "iteration " << i;
+    EXPECT_EQ(workspace.allocation_generation(), gen) << "iteration " << i;
+    EXPECT_EQ(workspace.OwnedDeviceBytes(), owned) << "iteration " << i;
+  }
+  EXPECT_GE(workspace.forward_graph().launch_count(), 8u);
+  EXPECT_EQ(workspace.forward_graph().capture_count(), 1u);
+}
+
+TEST_F(MlOpsDemosaicNetTest, TwoWorkspacesOwnIndependentGraphExecutables) {
+  const auto model_dir = FindModelDir();
+  if (model_dir.empty()) {
+    GTEST_SKIP() << "model dir not found";
+  }
+
+  constexpr int kOwned = BayerDemosaicNet::kTileOutput;
+  auto          cfa    = MakeStudentTileCfa(BayerDemosaicNet::kTileInput + 64);
+  const RawCfaPattern pattern = DemosaicNetTrainingPattern(RawCfaKind::Bayer2x2);
+  DemosaicNetModelCache  cache;
+  DemosaicNetLoadOptions load_opts;
+  load_opts.model_dir = model_dir;
+
+  CUDA::NeuralDemosaicWorkspace ws_a;
+  CUDA::NeuralDemosaicWorkspace ws_b;
+  CUDA::NeuralDemosaicOptions   opt_a;
+  opt_a.model_cache             = &cache;
+  opt_a.load_options            = load_opts;
+  opt_a.workspace               = &ws_a;
+  opt_a.student_owned_tile_edge = kOwned;
+  opt_a.enable_cuda_graph       = true;
+  CUDA::NeuralDemosaicOptions opt_b = opt_a;
+  opt_b.workspace                   = &ws_b;
+
+  cv::cuda::Stream stream_a;
+  cv::cuda::Stream stream_b;
+  cv::cuda::GpuMat rgb_a;
+  cv::cuda::GpuMat rgb_b;
+  const cv::Point  origin(0, 0);
+
+  ASSERT_TRUE(
+      CUDA::DemosaicStudentTileWithNeuralEngine(cfa, origin, pattern, rgb_a, &stream_a, opt_a)
+          .succeeded);
+  ASSERT_TRUE(
+      CUDA::DemosaicStudentTileWithNeuralEngine(cfa, origin, pattern, rgb_b, &stream_b, opt_b)
+          .succeeded);
+  ASSERT_TRUE(ws_a.forward_graph().ready());
+  ASSERT_TRUE(ws_b.forward_graph().ready());
+  // Distinct executables: independent launch counters and activation bases.
+  EXPECT_NE(ws_a.activation_workspace().base(), ws_b.activation_workspace().base());
+  EXPECT_NE(ws_a.forward_graph().key().activation_base, ws_b.forward_graph().key().activation_base);
+
+  ASSERT_TRUE(
+      CUDA::DemosaicStudentTileWithNeuralEngine(cfa, origin, pattern, rgb_a, &stream_a, opt_a)
+          .succeeded);
+  ASSERT_TRUE(
+      CUDA::DemosaicStudentTileWithNeuralEngine(cfa, origin, pattern, rgb_b, &stream_b, opt_b)
+          .succeeded);
+  EXPECT_EQ(ws_a.forward_graph().launch_count(), 1u);
+  EXPECT_EQ(ws_b.forward_graph().launch_count(), 1u);
+  EXPECT_EQ(ws_a.forward_graph().capture_count(), 1u);
+  EXPECT_EQ(ws_b.forward_graph().capture_count(), 1u);
+
+  const auto ha = DownloadGpuMatRgb(rgb_a);
+  const auto hb = DownloadGpuMatRgb(rgb_b);
+  ExpectVectorsNear(ha, hb, 1e-4f);
 }
 
 }  // namespace alcedo

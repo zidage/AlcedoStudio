@@ -6,6 +6,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <type_traits>
 #include <opencv2/core/cuda_stream_accessor.hpp>
 #include <opencv2/core/cuda_types.hpp>
 #include <stdexcept>
@@ -16,10 +18,71 @@
 #include "cuda/nn/tensor.hpp"
 #include "cuda/nn/workspace.hpp"
 #include "decoders/processor/cuda_tile_jobs.hpp"
+#include "decoders/processor/nn/demosaicnet_bayer.hpp"
 #include "decoders/processor/nn/demosaicnet_profiler.hpp"
+#include "decoders/processor/nn/demosaicnet_xtrans.hpp"
 #include "decoders/processor/operators/gpu/cuda_demosaicnet.hpp"
 
 namespace alcedo::CUDA {
+
+NeuralDemosaicForwardGraph::~NeuralDemosaicForwardGraph() { Invalidate(); }
+
+void NeuralDemosaicForwardGraph::Invalidate() noexcept {
+  if (exec_ != nullptr) {
+    (void)cudaGraphExecDestroy(exec_);
+    exec_ = nullptr;
+  }
+  key_            = NeuralForwardGraphKey{};
+  capture_failed_ = false;
+}
+
+void NeuralDemosaicForwardGraph::InvalidateIfKeyMismatch(
+    const NeuralForwardGraphKey& key) noexcept {
+  if (exec_ != nullptr && !key_.Matches(key)) {
+    Invalidate();
+  } else if (capture_failed_ && !key_.Matches(key)) {
+    // Allow a retry when geometry/weights change after a prior sticky failure.
+    capture_failed_ = false;
+    key_            = NeuralForwardGraphKey{};
+  }
+}
+
+auto NeuralDemosaicForwardGraph::TryLaunch(const NeuralForwardGraphKey& key,
+                                           const cudaStream_t stream) -> bool {
+  if (exec_ == nullptr || stream == nullptr || !key_.Matches(key)) {
+    return false;
+  }
+  const cudaError_t err = cudaGraphLaunch(exec_, stream);
+  if (err != cudaSuccess) {
+    // Runtime launch failure: drop the executable and force ordinary path.
+    Invalidate();
+    capture_failed_ = true;
+    (void)cudaGetLastError();
+    return false;
+  }
+  ++launch_count_;
+  return true;
+}
+
+void NeuralDemosaicForwardGraph::AbortCapture(const cudaStream_t stream) noexcept {
+  if (stream == nullptr) {
+    return;
+  }
+  cudaStreamCaptureStatus status = cudaStreamCaptureStatusNone;
+  if (cudaStreamIsCapturing(stream, &status) != cudaSuccess) {
+    (void)cudaGetLastError();
+    return;
+  }
+  if (status == cudaStreamCaptureStatusActive) {
+    cudaGraph_t discarded = nullptr;
+    if (cudaStreamEndCapture(stream, &discarded) == cudaSuccess && discarded != nullptr) {
+      (void)cudaGraphDestroy(discarded);
+    } else {
+      (void)cudaGetLastError();
+    }
+  }
+}
+
 namespace {
 
 // Host-side wait counter for Phase 8E tests (Enqueue paths never touch this).
@@ -87,12 +150,70 @@ void PackCfaMosaic(const cv::cuda::GpuMat& cfa, cuda::nn::DeviceTensor& mosaic,
 }
 
 template <typename Model>
-void RunModel(const Model& model, const cuda::nn::DeviceTensor& input,
-              cuda::nn::DeviceTensor& output, cuda::nn::WorkspacePool& workspace,
-              const cudaStream_t stream) {
+void RunModelOrdinary(const Model& model, const cuda::nn::DeviceTensor& input,
+                      cuda::nn::DeviceTensor& output, cuda::nn::WorkspacePool& workspace,
+                      const cudaStream_t stream) {
   workspace.Reserve(Model::EstimateWorkspaceBytes(static_cast<int>(input.shape[2]),
                                                   static_cast<int>(input.shape[3]), 1));
   model.Forward(input, output, workspace, stream);
+}
+
+// Harness / experiment escape hatch: force ordinary launches without rebuilding options.
+[[nodiscard]] auto EnvDisablesCudaGraph() -> bool {
+  const char* value = std::getenv("ALCEDO_DEMOASICNET_DISABLE_CUDA_GRAPH");
+  return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
+
+// P3: fixed-shape model forward only (pack/unpack stay ordinary stream work).
+// Falls back to ordinary launches when graph is disabled, stream is null,
+// profiler ranges are active, or capture/runtime fails.
+template <typename Model>
+void RunModel(const Model& model, const cuda::nn::DeviceTensor& input,
+              cuda::nn::DeviceTensor& output, NeuralDemosaicWorkspace& neural_workspace,
+              const bool enable_cuda_graph, const std::uint64_t weight_generation,
+              const cudaStream_t stream) {
+  auto ordinary = [&]() {
+    RunModelOrdinary(model, input, output, neural_workspace.activation_workspace(), stream);
+  };
+
+  if (!enable_cuda_graph || EnvDisablesCudaGraph() || stream == nullptr ||
+      ActiveDemosaicNetProfiler() != nullptr) {
+    ordinary();
+    return;
+  }
+
+  int device = -1;
+  if (cudaGetDevice(&device) != cudaSuccess) {
+    ordinary();
+    return;
+  }
+
+  NeuralForwardGraphKey key;
+  key.variant =
+      std::is_same_v<Model, BayerDemosaicNet> ? DemosaicNetVariant::Bayer : DemosaicNetVariant::XTrans;
+  key.device              = device;
+  key.input_h             = static_cast<int>(input.shape[2]);
+  key.input_w             = static_cast<int>(input.shape[3]);
+  key.output_h            = static_cast<int>(output.shape[2]);
+  key.output_w            = static_cast<int>(output.shape[3]);
+  key.input_data          = input.data;
+  key.output_data         = output.data;
+  key.activation_base     = neural_workspace.activation_workspace().base();
+  key.activation_capacity = neural_workspace.activation_workspace().capacity_bytes();
+  key.pack_weight         = model.PackWeightDevicePtr();
+  key.output_weight       = model.OutputWeightDevicePtr();
+  key.weight_generation   = weight_generation;
+
+  NeuralDemosaicForwardGraph& graph = neural_workspace.forward_graph();
+  graph.InvalidateIfKeyMismatch(key);
+  if (graph.TryLaunch(key, stream)) {
+    return;
+  }
+  if (graph.capture_failed()) {
+    ordinary();
+    return;
+  }
+  graph.Capture(key, stream, ordinary);
 }
 
 // Fused reflect + sparse NCHW pack. Phase is taken from the reflected *source*
@@ -125,6 +246,11 @@ void NeuralDemosaicWorkspace::EnsureCapacity(const DemosaicNetVariant variant, c
                                              const int width, const std::size_t input_numel,
                                              const std::size_t output_numel) {
   bool grew = false;
+
+  const float* prev_input_data  = input_buffer_.data();
+  const float* prev_output_data = output_buffer_.data();
+  void*        prev_act_base    = activation_workspace_.base();
+  const std::size_t prev_act_cap = activation_workspace_.capacity_bytes();
 
   if (input_buffer_.size() < input_numel) {
     input_buffer_ = cuda::nn::DeviceBufferF32(input_numel);
@@ -163,6 +289,13 @@ void NeuralDemosaicWorkspace::EnsureCapacity(const DemosaicNetVariant variant, c
 
   if (grew) {
     ++allocation_generation_;
+  }
+
+  // P3: any pointer/capacity change that a captured graph may bake in invalidates it.
+  if (input_buffer_.data() != prev_input_data || output_buffer_.data() != prev_output_data ||
+      activation_workspace_.base() != prev_act_base ||
+      activation_workspace_.capacity_bytes() != prev_act_cap) {
+    forward_graph_.Invalidate();
   }
 }
 
@@ -296,11 +429,11 @@ auto EnqueueDemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPa
     PackCfaMosaic(model_input, input_tensor, pattern, cuda_stream);
 
     if (variant == DemosaicNetVariant::Bayer) {
-      RunModel(cache.Bayer(), input_tensor, output_tensor, workspace.activation_workspace(),
-               cuda_stream);
+      RunModel(cache.Bayer(), input_tensor, output_tensor, workspace, options.enable_cuda_graph,
+               cache.WeightGeneration(variant), cuda_stream);
     } else {
-      RunModel(cache.XTrans(), input_tensor, output_tensor, workspace.activation_workspace(),
-               cuda_stream);
+      RunModel(cache.XTrans(), input_tensor, output_tensor, workspace, options.enable_cuda_graph,
+               cache.WeightGeneration(variant), cuda_stream);
     }
 
     cv::cuda::GpuMat& neural_rgb = workspace.rgb_buffer();
@@ -415,11 +548,11 @@ auto EnqueueDemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_
     }
 
     if (variant == DemosaicNetVariant::Bayer) {
-      RunModel(cache.Bayer(), input_tensor, output_tensor, workspace.activation_workspace(),
-               cuda_stream);
+      RunModel(cache.Bayer(), input_tensor, output_tensor, workspace, options.enable_cuda_graph,
+               cache.WeightGeneration(variant), cuda_stream);
     } else {
-      RunModel(cache.XTrans(), input_tensor, output_tensor, workspace.activation_workspace(),
-               cuda_stream);
+      RunModel(cache.XTrans(), input_tensor, output_tensor, workspace, options.enable_cuda_graph,
+               cache.WeightGeneration(variant), cuda_stream);
     }
 
     cv::cuda::GpuMat& neural_rgb = workspace.rgb_buffer();

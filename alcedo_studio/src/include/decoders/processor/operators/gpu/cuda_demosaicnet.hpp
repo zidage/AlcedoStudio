@@ -9,6 +9,8 @@
 #include <opencv2/core/cuda.hpp>
 #include <string>
 
+#include <cuda_runtime.h>
+
 #include "cuda/nn/device_buffer.hpp"
 #include "cuda/nn/tensor.hpp"
 #include "cuda/nn/workspace.hpp"
@@ -16,6 +18,138 @@
 #include "decoders/processor/raw_processor_pattern.hpp"
 
 namespace alcedo::CUDA {
+
+// Identity for a captured fixed-shape model forward (P3). Pointers are baked into
+// the graph executable; any change requires Invalidate + recapture.
+struct NeuralForwardGraphKey {
+  DemosaicNetVariant variant             = DemosaicNetVariant::Bayer;
+  int                device              = -1;
+  int                input_h             = 0;
+  int                input_w             = 0;
+  int                output_h            = 0;
+  int                output_w            = 0;
+  const float*       input_data          = nullptr;
+  float*             output_data         = nullptr;
+  void*              activation_base     = nullptr;
+  std::size_t        activation_capacity = 0;
+  const float*       pack_weight         = nullptr;
+  const float*       output_weight       = nullptr;
+  // From DemosaicNetModelCache::WeightGeneration — survives CUDA address reuse.
+  std::uint64_t      weight_generation   = 0;
+
+  [[nodiscard]] auto Matches(const NeuralForwardGraphKey& other) const noexcept -> bool {
+    return variant == other.variant && device == other.device && input_h == other.input_h &&
+           input_w == other.input_w && output_h == other.output_h && output_w == other.output_w &&
+           input_data == other.input_data && output_data == other.output_data &&
+           activation_base == other.activation_base &&
+           activation_capacity == other.activation_capacity &&
+           pack_weight == other.pack_weight && output_weight == other.output_weight &&
+           weight_generation == other.weight_generation;
+  }
+};
+
+// Caller-owned CUDA Graph executable for one stable student model forward.
+// Not process-global; one instance per NeuralDemosaicWorkspace. Capture excludes
+// pack/unpack/ROI. Unsupported capture/runtime falls back to ordinary launches.
+class NeuralDemosaicForwardGraph {
+ public:
+  NeuralDemosaicForwardGraph() = default;
+  ~NeuralDemosaicForwardGraph();
+
+  NeuralDemosaicForwardGraph(const NeuralDemosaicForwardGraph&)            = delete;
+  NeuralDemosaicForwardGraph& operator=(const NeuralDemosaicForwardGraph&) = delete;
+  NeuralDemosaicForwardGraph(NeuralDemosaicForwardGraph&&)                 = delete;
+  NeuralDemosaicForwardGraph& operator=(NeuralDemosaicForwardGraph&&)      = delete;
+
+  void Invalidate() noexcept;
+
+  // Destroy any executable whose baked weight/activation pointers no longer match.
+  void InvalidateIfKeyMismatch(const NeuralForwardGraphKey& key) noexcept;
+
+  [[nodiscard]] auto ready() const noexcept -> bool { return exec_ != nullptr; }
+  [[nodiscard]] auto capture_failed() const noexcept -> bool { return capture_failed_; }
+  [[nodiscard]] auto capture_count() const noexcept -> std::uint64_t { return capture_count_; }
+  [[nodiscard]] auto launch_count() const noexcept -> std::uint64_t { return launch_count_; }
+  [[nodiscard]] auto key() const noexcept -> const NeuralForwardGraphKey& { return key_; }
+
+  // When ready and key matches: launch and return true. Otherwise false (caller
+  // should CaptureOrForward / ordinary forward).
+  [[nodiscard]] auto TryLaunch(const NeuralForwardGraphKey& key, cudaStream_t stream) -> bool;
+
+  // Capture model.Forward via ordinary_forward on `stream`, instantiate, then
+  // launch once so the first call produces results (stream capture only records
+  // work; it does not execute it). On failure falls back to ordinary launches.
+  template <typename ForwardFn>
+  void Capture(const NeuralForwardGraphKey& key, cudaStream_t stream, ForwardFn&& ordinary_forward) {
+    Invalidate();
+    key_ = key;
+    if (stream == nullptr) {
+      capture_failed_ = true;
+      ordinary_forward();
+      return;
+    }
+    const cudaError_t begin_err =
+        cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal);
+    if (begin_err != cudaSuccess) {
+      capture_failed_ = true;
+      (void)cudaGetLastError();
+      ordinary_forward();
+      return;
+    }
+    try {
+      ordinary_forward();
+    } catch (...) {
+      AbortCapture(stream);
+      capture_failed_ = true;
+      throw;
+    }
+    cudaGraph_t graph = nullptr;
+    const cudaError_t end_err = cudaStreamEndCapture(stream, &graph);
+    if (end_err != cudaSuccess || graph == nullptr) {
+      if (graph != nullptr) {
+        (void)cudaGraphDestroy(graph);
+      }
+      capture_failed_ = true;
+      (void)cudaGetLastError();
+      // Work from the failed capture is discarded; re-run ordinarily.
+      ordinary_forward();
+      return;
+    }
+    cudaGraphExec_t exec = nullptr;
+    const cudaError_t inst_err =
+        cudaGraphInstantiate(&exec, graph, nullptr, nullptr, 0);
+    (void)cudaGraphDestroy(graph);
+    if (inst_err != cudaSuccess || exec == nullptr) {
+      if (exec != nullptr) {
+        (void)cudaGraphExecDestroy(exec);
+      }
+      capture_failed_ = true;
+      (void)cudaGetLastError();
+      ordinary_forward();
+      return;
+    }
+    exec_ = exec;
+    ++capture_count_;
+    // Stream capture records but does not execute — launch the first instance now.
+    const cudaError_t launch_err = cudaGraphLaunch(exec_, stream);
+    if (launch_err != cudaSuccess) {
+      Invalidate();
+      capture_failed_ = true;
+      (void)cudaGetLastError();
+      ordinary_forward();
+      return;
+    }
+  }
+
+ private:
+  void AbortCapture(cudaStream_t stream) noexcept;
+
+  NeuralForwardGraphKey key_{};
+  cudaGraphExec_t       exec_           = nullptr;
+  bool                  capture_failed_ = false;
+  std::uint64_t         capture_count_  = 0;
+  std::uint64_t         launch_count_   = 0;
+};
 
 // Per-decode storage for Neural Engine tile forwards. This is deliberately owned by
 // the caller rather than the model cache: weights are immutable and shared, while
@@ -40,8 +174,16 @@ class NeuralDemosaicWorkspace {
   }
   [[nodiscard]] auto rgb_buffer() noexcept -> cv::cuda::GpuMat& { return rgb_buffer_; }
 
+  [[nodiscard]] auto forward_graph() noexcept -> NeuralDemosaicForwardGraph& {
+    return forward_graph_;
+  }
+  [[nodiscard]] auto forward_graph() const noexcept -> const NeuralDemosaicForwardGraph& {
+    return forward_graph_;
+  }
+
   // Grow-only reservation for a single forward of the given CFA spatial size.
   // Increments `allocation_generation()` when any owned capacity actually grows.
+  // Invalidates a captured forward graph when any owned pointer may change.
   void EnsureCapacity(DemosaicNetVariant variant, int height, int width, std::size_t input_numel,
                       std::size_t output_numel);
 
@@ -54,11 +196,12 @@ class NeuralDemosaicWorkspace {
   [[nodiscard]] auto OwnedDeviceBytes() const -> std::size_t;
 
  private:
-  cuda::nn::WorkspacePool   activation_workspace_;
-  cuda::nn::DeviceBufferF32 input_buffer_;
-  cuda::nn::DeviceBufferF32 output_buffer_;
-  cv::cuda::GpuMat          rgb_buffer_;
-  std::uint64_t             allocation_generation_ = 0;
+  cuda::nn::WorkspacePool     activation_workspace_;
+  cuda::nn::DeviceBufferF32   input_buffer_;
+  cuda::nn::DeviceBufferF32   output_buffer_;
+  cv::cuda::GpuMat            rgb_buffer_;
+  NeuralDemosaicForwardGraph  forward_graph_;
+  std::uint64_t               allocation_generation_ = 0;
 };
 
 struct NeuralDemosaicOptions {
@@ -72,6 +215,12 @@ struct NeuralDemosaicOptions {
   // Product student owned-output edge (export tile). 0 selects the 1K control
   // policy (Bayer 1086→1024 / X-Trans 1048→1024). P2 candidates: 1024/1536/2048/3072.
   int student_owned_tile_edge = 0;
+  // P3: capture/replay fixed-shape model Forward when workspace + non-null stream
+  // are available. Default off — full-frame p50 did not clear the +5% retention
+  // gate on the WDDM laptop path (P0 wall≈batch; launch amortization not material).
+  // Set true for re-measure / future non-WDDM hosts. Env
+  // ALCEDO_DEMOASICNET_DISABLE_CUDA_GRAPH also forces ordinary launches.
+  bool enable_cuda_graph = false;
 };
 
 // Fill `destination` with a reflected window of `source`. `source_rect` is in source

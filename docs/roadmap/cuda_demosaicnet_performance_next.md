@@ -5,8 +5,11 @@ Date: 2026-07-13
 Status: active follow-up to
 [`cuda_nn_forward_demosaicnet_plan.md`](cuda_nn_forward_demosaicnet_plan.md).
 **P0 complete** (see §4.3). **P1 complete** (see §5.4). **P2 complete** (see
-§6.5) — larger tiles measured and **rejected** for product auto-select; retain
-1024. Next: re-run P0 on retained policy; P3 remains deferred; P4 conditional.
+§6.5) — larger square tiles **rejected**; retain 1024. **P3 complete** (see §7.4) —
+CUDA Graph implemented, correctness green, **rejected for product default**
+(latency gate not met; matches P0 “wall ≈ batch”). **P4-A through P4-D are now
+the active ordered experiments** (see §8): fused tail, ragged edge tiles,
+rectangular strips, then persistent channels-last FP32.
 
 ## 1. Objective and current baseline
 
@@ -190,10 +193,11 @@ Telemetry (profiled pass, P0 / boost clocks, laptop thermally elevated):
 2. **P2 (larger tiles)** remains high leverage: 40/48 jobs, trunk-dominated
    per-tile work, and negligible pack/ROI share mean amortizing tile count
    targets the expensive path without waiting on pack fusion.
-3. **P3 (CUDA Graph)** is **deferred**: wall ≈ batch CUDA on this WDDM laptop
-   path; re-check only after P2 if a material host gap appears.
-4. **P4 (channels-last)** stays conditional: re-evaluate after P1–P2 when
-   trunk+post still dominate the retained full-frame budget above 150–200 ms.
+3. **P3 (CUDA Graph)** was still **implemented and measured** after P2 (user
+   request); full-frame gate failed as P0 predicted — see §7.4.
+4. **P4-A through P4-D** are the active ordered experiments. Tail fusion and
+   tile geometry run first; channels-last remains the last, microbenchmark-gated
+   slice because it has the largest implementation surface.
 
 ## 5. Phase P1 — activation lifetime reuse
 
@@ -524,35 +528,339 @@ global CUDA lock.
 
 Artifact: `build/perf/demosaicnet_next_p3_cuda_graph.json`.
 
-## 8. Phase P4 — channels-last/vectorized FP32 candidate
+### 7.4 P3 results (2026-07-13, RTX 3080 Laptop, Release)
 
-This is the expensive fallback track. Start it only if the best retained P1-P3
-combination remains above 150-200 ms and P0 still attributes most CUDA time to
-the square trunk/post convolutions.
+Implementation landed (correctness-complete; product default off):
 
-### 8.1 Scope
+- `NeuralDemosaicForwardGraph` owned by `NeuralDemosaicWorkspace` (not process-global)
+- Capture boundary: fixed-shape model `Forward` only (pack / unpack / ROI stay ordinary)
+- Key: device, variant, tile geometry, I/O + activation pointers, weight pointers,
+  and `DemosaicNetModelCache::WeightGeneration` (survives CUDA address reuse)
+- Stream capture (`cudaStreamCaptureModeThreadLocal`) → instantiate → **launch**
+  (capture records only; first launch required for real results)
+- Fallback: null stream, profiler active, capture/runtime failure, or
+  `ALCEDO_DEMOASICNET_DISABLE_CUDA_GRAPH`
+- `NeuralDemosaicOptions::enable_cuda_graph` **default false** after retention fail
+- Tests force `enable_cuda_graph = true` for P3 contracts
 
-- keep the public model boundary NCHW initially;
-- benchmark a channels-last internal trunk segment with C=24/32 contiguous;
-- use scalar FP32/CUDA cores and vectorized `float4` loads where alignment and
-  channel multiples allow;
-- compare the cost of two boundary conversions against the convolution gain;
-- keep direct NCHW as fallback and do not introduce Tensor Core, TF32, FP16, or
-  BF16 behavior in this phase.
+Commands:
 
-Start with one isolated 24->24 and 32->32 layer candidate. Do not rewrite all
-operators before a layer microbenchmark wins by at least 15%, because layout
-conversion and structural operators can erase a small kernel gain.
+```bat
+build\release\alcedo_studio\tests\MlOpsTest.exe --gtest_filter=*Graph*:*Invalidates*:*ModelReload*:*WorkspaceGrowth*
 
-### 8.2 Retention gate
+:: A/B (same binary; env forces ordinary):
+set ALCEDO_DEMOASICNET_DISABLE_CUDA_GRAPH=1
+build\release\alcedo_studio\tests\DemosaicNetPerfHarness.exe ^
+  --fixture bayer --method neural --mode full --model student ^
+  --warmup 3 --iterations 20 --output build/perf/demosaicnet_next_p3_ordinary_bayer.json
+set ALCEDO_DEMOASICNET_DISABLE_CUDA_GRAPH=
+build\release\alcedo_studio\tests\DemosaicNetPerfHarness.exe ^
+  --fixture bayer --method neural --mode full --model student ^
+  --warmup 3 --iterations 20 --output build/perf/demosaicnet_next_p3_graph_bayer.json
+```
 
-- isolated square trunk layer improves by >=15%;
-- a complete internal-layout model forward improves tile p50 by >=10% including
-  conversions;
-- full-frame p50 improves by >=5%;
-- FP32 numerical tolerances and CC 6.0+ remain intact.
+#### Correctness
 
-Artifact: `build/perf/demosaicnet_next_p4_channels_last.json`.
+| Check | Result |
+|-------|--------|
+| Graph vs ordinary student tile (Bayer + X-Trans) | **pass** (`max abs ≤ 1e-4`) |
+| Graph replay preserves exported goldens | **pass** (Bayer + X-Trans `*_00`) |
+| Model reload invalidates (weight generation) | **pass** |
+| Workspace growth invalidates activation pointers | **pass** |
+| Replay keeps `allocation_generation` stable | **pass** |
+| Two workspaces own independent executables | **pass** |
+
+#### Full-frame latency (Release, 1K retained policy)
+
+Cool-ish single-fixture graph-on (first measure after rebuild, graphs enabled in that binary):
+
+| Variant | min ms | p50 ms | p95 ms |
+|---------|-------:|-------:|-------:|
+| Bayer graph | 361.0 | 398.8 | 415.8 |
+| X-Trans graph | 440.4 | 483.7 | 689.3 |
+
+Same-session A/B (ordinary first, then graph; laptop thermally climbs):
+
+| Variant | mode | min ms | p50 ms | p95 ms | vs ordinary p50 |
+|---------|------|-------:|-------:|-------:|----------------:|
+| Bayer | ordinary | 381.1 | 408.6 | 423.7 | control |
+| Bayer | graph | 431.1 | 506.9 | 607.1 | **+24%** (thermal-contaminated order) |
+| X-Trans | ordinary | 1011.6 | 1080.0 | 1533.0 | control (already hot) |
+| X-Trans | graph | 1758.8 | 1814.6 | 2405.0 | **+68%** (severely throttled) |
+
+Cross-session cool comparison (not perfect isolation): graph Bayer p50 **398.8** vs
+ordinary A/B p50 **408.6** is only ~**2.4%** better — **below the ≥5% gate**.
+This matches P0: wall − batch / wall ≈ 0.04%, so WDDM launch amortization has
+almost nothing to reclaim. Graph capture/replay also adds host work on first
+tile and does not raise effective TFLOP/s of the direct NCHW kernels.
+
+#### Retention summary
+
+| Gate | Result |
+|------|--------|
+| p50 improves ≥5% | **fail** |
+| Graph construction amortized after warm-up | **pass** (capture once per workspace key) |
+| p95 / fallback defined | **pass** (sticky ordinary on failure) |
+| Goldens / invalidation tests | **pass** |
+
+**Verdict: REJECT product default CUDA Graph.** Infrastructure stays in-tree;
+`enable_cuda_graph` defaults to **false**. Re-enable only with new evidence
+(e.g. desktop TCC, multi-tile launch gap after a faster kernel path). The
+retained path remains far above target with trunk/post dominant, so proceed to
+the ordered P4-A through P4-D experiments below.
+
+Artifacts:
+
+- `build/perf/demosaicnet_next_p3_bayer.json` / `_xtrans.json` (early graph-on)
+- `build/perf/demosaicnet_next_p3_ordinary_*.json` / `_graph_*.json` (A/B)
+- `build/perf/demosaicnet_next_p3_summary.json`
+
+## 8. Phase P4 — ordered FP32 product experiments
+
+Run P4 strictly in the order P4-A -> P4-B -> P4-C -> P4-D. Each phase starts
+from the best retained predecessor and must leave the prior product path as a
+runtime/compile-time fallback. Do not combine two unproven candidates in one
+measurement: that makes a regression impossible to attribute.
+
+The sustained hot state is part of the product workload. A user may repeatedly
+switch RAW files, so P4 retention is based on repeated full-frame measurements
+without a cooldown requirement or a cold-clock normalization. Temperature,
+power, and clocks may still be recorded as diagnostics, but a candidate does
+not receive a separate cold-state rescue result.
+
+Common constraints for P4-A through P4-D:
+
+- retain the in-tree hard-coded model and FP32 numerical contract;
+- no cuDNN, TensorRT, ONNX Runtime, TF32, FP16, BF16, WMMA, or Tensor Core path;
+- no per-forward weight transform, `cudaMalloc`, or workspace growth after warm-up;
+- retain Bayer and X-Trans correctness, CFA phase, owned-ROI, crop, and orientation;
+- preserve the existing path for HLR, DNG warp, unsupported geometry, and allocation failure;
+- use the same Release harness, fixture order, warm-up count, iteration count, and sustained
+  workload for baseline and candidate;
+- retain a slice only when full-frame p50 improves by >=5%, p95 does not regress by >5%,
+  all correctness tests pass, and the extra VRAM/complexity is proportionate.
+
+### 8.1 P4-A — fuse the post/output/gamma tail
+
+#### Rationale
+
+`Conv2d3x3s1TiledKernel` already holds every post-convolution output channel for
+one pixel in registers (`24` for Bayer, `32` for X-Trans). The ordinary path
+then writes that full activation to global memory, launches a 1x1 `C -> 3`
+convolution that reads it back, writes NCHW RGB, converts NCHW to HWC, assembles
+the frame, and finally gamma-decodes the full RGB frame. This is the cleanest
+remaining exact fusion opportunity and also removes the largest P1 slot.
+
+#### Implementation slices
+
+1. Add a dedicated FP32 primitive for the two exact student tails:
+   `6 -> 24 -> 3` and `6 -> 32 -> 3`.
+   It performs post 3x3 accumulation, post bias, ReLU, output 1x1 accumulation,
+   and output bias without materializing the `24/32`-channel post tensor.
+2. Prepack/retain any alternate output-weight layout at model load time. The
+   hot path must use immutable resident weights and must not transform them.
+3. Add a student-specific forward-to-HWC entrypoint so the fused epilogue can
+   write three contiguous RGB values directly into the pitched tile `GpuMat`.
+   Keep the existing NCHW `Forward` API for tests and fallback callers.
+4. Fold the current signed gamma decode (`pow_signed(x, 2.2)`) into the fused
+   output epilogue. Preserve the current operation and edge-case semantics;
+   do not introduce `--use_fast_math` as part of this experiment.
+5. After the generic HWC version is retained, add an optional HLR-off and
+   no-DNG-warp fast path that applies inverse cam-mul/orientation and writes
+   owned pixels directly to final RGBA. HLR-on or warp-enabled frames continue
+   through the assembled linear RGB fallback.
+6. Remove the post activation slot from the fused workspace estimate only
+   after the fused path is selected. Graph/cache keys must distinguish fused
+   and ordinary pointer topologies.
+
+#### Required measurements and gates
+
+- Benchmark fused versus ordinary tail at the Bayer and X-Trans 1024 control
+  shapes before RAW integration.
+- Report tail CUDA time, complete model-forward time, full-frame time, launches,
+  activation bytes, and total owned bytes.
+- Desired isolated tail gain: >=15%.
+- Mandatory product gate: full-frame p50 >=5% faster (>=8% is the target), p95
+  within the common gate, and lower activation memory.
+- Reject only the direct-to-final-RGBA sub-slice if it cannot preserve crop,
+  orientation, and ROI semantics; a retained generic fused HWC tail may remain.
+
+Artifacts:
+
+- `build/perf/demosaicnet_next_p4a_tail_microbench.json`
+- `build/perf/demosaicnet_next_p4a_full_bayer.json`
+- `build/perf/demosaicnet_next_p4a_full_xtrans.json`
+
+### 8.2 P4-B — ragged edge tiles instead of paid 1024 tails
+
+#### Rationale
+
+The retained grid evaluates every right/bottom edge job as a full 1024-owned
+tile. P0 reports paid-output factors of about `1.148x` for Bayer and `1.233x`
+for X-Trans. Removing tiling entirely is not required to remove most of this
+tail work: keep 1024 interior tiles and make only boundary jobs rectangular.
+
+#### Implementation slices
+
+1. Extend the student tile job/policy representation with per-job owned width,
+   owned height, input width, and input height. Do not overload the Legacy RCD
+   clamped-halo behavior.
+2. Generalize Bayer/X-Trans product geometry from square `owned_edge` to
+   rectangular `(owned_w, owned_h)`, with input dimensions equal to owned
+   dimensions plus the model border on both sides.
+3. Keep job origins aligned to the CFA period (2 Bayer, 6 X-Trans). Preserve
+   X-Trans first-writer ownership where the period-safe step creates overlap.
+4. Reuse the maximum 1024 workspace; smaller edge jobs form views inside that
+   capacity and must not trigger allocation growth.
+5. Avoid a pathologically narrow final Bayer tile. If the final owned extent is
+   below 512, rebalance it with its predecessor into two period-aligned extents
+   no larger than 1024. Apply the same rule independently in X and Y.
+6. Update the profiler/roofline output to report actual per-job shapes and the
+   sum of paid pixels/FLOPs rather than `tile_count * 1024^2`.
+
+#### Required measurements and gates
+
+- Compare the fixed-1024 and ragged grids using the same retained P4-A setting.
+- Report job shape histogram, paid pixels, estimated FLOPs, tile count, and
+  full-frame p50/p95.
+- Add explicit seam checks at every internal boundary and at the final right,
+  bottom, and bottom-right jobs.
+- Mandatory product gate: >=5% full-frame p50 gain on at least one fixture, no
+  >2% p50 regression on the other, and no increase in peak workspace.
+- If only one CFA benefits, retain a CFA-specific policy rather than forcing a
+  shared default.
+
+Artifacts:
+
+- `build/perf/demosaicnet_next_p4b_ragged_bayer.json`
+- `build/perf/demosaicnet_next_p4b_ragged_xtrans.json`
+
+### 8.3 P4-C — rectangular and full-width strip tiling
+
+#### Rationale
+
+P2 rejected larger **square** tiles under sustained product load; it did not
+measure constant-area aspect-ratio changes or full-width bounded-memory strips.
+An unconstrained full-frame forward is not a product candidate: the current P1
+formula estimates about 6.48 GiB owned workspace for the D800E Bayer frame and
+9.09 GiB for the X-T5 X-Trans frame before the rest of the RAW pipeline.
+
+Full-width strips remain bounded. Approximate 512-owned-height candidates are
+about 0.73 GiB owned workspace for Bayer and 0.92 GiB for X-Trans, before any
+additional reduction retained from P4-A.
+
+#### Experiment matrix
+
+First isolate aspect ratio at approximately constant input area:
+
+| Owned shape class | Purpose |
+|-------------------|---------|
+| 1024 x 1024 | retained control |
+| 2048 x 512 | 2:1 rectangle |
+| 4096 x 256 | 4:1 rectangle |
+| aligned full width x ~128 | extreme strip at near-control area |
+
+Then run complete RAW frames with aligned full-width owned strips of height
+128, 256, and 512. Derive exact Bayer/X-Trans input sizes from their border and
+CFA-period rules; do not hard-code one shared geometry.
+
+#### Implementation and fallback rules
+
+- Separate owned width and height throughout policy selection, workspace
+  estimation, graph/cache keys, profiler metadata, and harness overrides.
+- Reuse one workspace and one stream in raster strip order.
+- Combine P4-C only with already-retained P4-A/P4-B work; report an ordinary
+  1024 control from the same sustained session.
+- Auto-selection must check free/total VRAM using the existing conservative
+  fractions. Allocation failure falls back directly to the retained ragged
+  1024 policy.
+- Do not add a whole-frame allocation fallback for X-Trans.
+
+#### Retention gate
+
+- Constant-area rectangular forward throughput per FLOP must remain within 10%
+  of the 1024 control before full-width strips are integrated.
+- A strip policy must improve full-frame p50 by >=5%, keep p95 within the common
+  gate, and fit the existing VRAM budget.
+- If every strip loses under the repeated hot workload, reject P4-C and retain
+  P4-B. Do not reclassify it using a separate cooled run.
+
+Artifacts:
+
+- `build/perf/demosaicnet_next_p4c_rectangles.json`
+- `build/perf/demosaicnet_next_p4c_strips_bayer.json`
+- `build/perf/demosaicnet_next_p4c_strips_xtrans.json`
+
+### 8.4 P4-D — persistent channels-last/vectorized FP32
+
+This is the most invasive P4 experiment and starts only after A-C have produced
+the retained baseline. NHWC is not treated as intrinsically faster: this track
+still uses scalar FP32 CUDA cores, so it must win through lower register
+pressure, channel-vector loads, and better kernel work distribution rather
+than Tensor Core behavior.
+
+#### Microbenchmark prerequisite
+
+Implement only isolated kernels first:
+
+- trunk `24 -> 24`, 3x3, bias + ReLU;
+- trunk `32 -> 32`, 3x3, bias + ReLU;
+- the retained fused P4-A tail, or `6 -> 24/32` post if P4-A was rejected.
+
+Use persistent NHWC input/output and load/store channel groups with `float4`
+where alignment permits. For post `Cin=6`, use an exact `float4 + float2` (or
+equivalent scalar tail); do not pad to eight channels and silently add 33%
+more post-convolution FLOPs.
+
+Isolated trunk kernels must improve by >=25%, and the tail candidate by >=15%,
+before implementing structural NHWC operators.
+
+#### Full internal-layout scope
+
+- pack/preprocess writes the first internal tensor directly in channels-last;
+- all trunk activations remain channels-last with no per-layer transpose;
+- residual, unpack, crop, and concat receive dedicated channels-last paths;
+- immutable weights are transformed/prepacked once during model load;
+- the final fused tail writes pipeline HWC/RGBA directly;
+- no public-boundary NCHW conversion is allowed in the timed product path;
+- ordinary NCHW remains the compatibility and failure fallback.
+
+Profile register count, theoretical/achieved occupancy, eligible warps, local
+loads/stores, long-scoreboard stalls, L1/L2 hit rate, and DRAM throughput for
+both the retained NCHW and NHWC kernels. A kernel win without a complete-model
+win is insufficient.
+
+#### Retention gate
+
+- isolated gates above pass for both student widths;
+- complete tile/model forward improves p50 by >=10% with all structural work;
+- full-frame p50 improves by >=5% and p95 stays within the common gate;
+- peak VRAM does not exceed the retained predecessor by >10%;
+- FP32 goldens and CC 6.0+ behavior remain intact.
+
+Artifacts:
+
+- `build/perf/demosaicnet_next_p4d_channels_last_microbench.json`
+- `build/perf/demosaicnet_next_p4d_full_bayer.json`
+- `build/perf/demosaicnet_next_p4d_full_xtrans.json`
+
+### 8.5 Required P4 correctness coverage
+
+Add concrete regression tests (the exact suite may use equivalent established
+naming) for:
+
+- `FusedPostOutputMatchesUnfusedStudentForward`;
+- `FusedStudentHwcOutputMatchesOrdinaryNchwUnpack`;
+- `RaggedStudentTilesPreserveInteriorAndBoundaryPixels`;
+- `RectangularStudentTilesPreserveCfaPhaseAndFirstWriterOwnership`;
+- `ChannelsLastStudentForwardMatchesNchwWithinFp32Tolerance`;
+- allocation generation remains constant after warm-up for every retained path;
+- existing real Bayer/X-Trans RAW goldens, crop/orientation, HLR-off/on, and
+  fallback behavior.
+
+Do not weaken a golden tolerance to retain a performance candidate. If an
+operation-order change requires a new tolerance, document its measured max/mean
+error and obtain a separate correctness decision.
 
 ## 9. Explicitly closed directions
 
@@ -574,13 +882,16 @@ Execute in this order:
 2. P1 activation lifetime reuse;
 3. P2 larger tile matrix and product selection;
 4. re-run P0 on the retained P2 policy;
-5. P3 only if launch overhead remains material;
-6. P4 only if convolution remains dominant and the retained result is still
-   above 150-200 ms.
+5. P3 CUDA Graph measured and rejected for product default;
+6. P4-A fused tail;
+7. P4-B ragged edge tiles on the retained P4-A result;
+8. P4-C rectangular/full-width strips on the retained A-B result;
+9. P4-D persistent channels-last only after its isolated kernels pass.
 
 Stop a candidate immediately when it breaks correctness, cannot clear its
 microbenchmark prerequisite, exceeds its VRAM budget, or loses the full-frame
 retention gate. Preserve the best correct product path after every slice.
 
-The first implementation slice should be P0 + P1. P1 creates the memory headroom
-needed for the first genuinely high-leverage experiment: the P2 2048 tile.
+P0-P3 are complete. The next implementation slice is P4-A only. Record and
+decide it before assigning P4-B; continue the same handoff discipline through
+P4-D so every retained improvement has an attributable artifact and fallback.

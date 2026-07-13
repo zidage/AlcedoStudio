@@ -154,14 +154,27 @@ auto DemosaicNetModelCache::XTrans() const -> const XTransDemosaicNet& {
   return *xtrans_;
 }
 
+auto DemosaicNetModelCache::WeightGeneration(DemosaicNetVariant variant) const -> std::uint64_t {
+  std::lock_guard<std::mutex> lock(mutex_);
+  switch (variant) {
+    case DemosaicNetVariant::Bayer:
+      return bayer_generation_;
+    case DemosaicNetVariant::XTrans:
+      return xtrans_generation_;
+  }
+  return 0;
+}
+
 void DemosaicNetModelCache::Unload(DemosaicNetVariant variant) {
   std::lock_guard<std::mutex> lock(mutex_);
   switch (variant) {
     case DemosaicNetVariant::Bayer:
       bayer_.reset();
+      ++bayer_generation_;
       break;
     case DemosaicNetVariant::XTrans:
       xtrans_.reset();
+      ++xtrans_generation_;
       break;
   }
 }
@@ -170,6 +183,8 @@ void DemosaicNetModelCache::UnloadAll() {
   std::lock_guard<std::mutex> lock(mutex_);
   bayer_.reset();
   xtrans_.reset();
+  ++bayer_generation_;
+  ++xtrans_generation_;
 }
 
 auto DemosaicNetModelCache::LoadVariantLocked(DemosaicNetVariant variant,
@@ -195,12 +210,14 @@ auto DemosaicNetModelCache::LoadVariantLocked(DemosaicNetVariant variant,
         auto module = std::make_unique<BayerDemosaicNet>();
         module->LoadWeights(dto, options.stream);
         bayer_ = std::move(module);
+        ++bayer_generation_;
         break;
       }
       case DemosaicNetVariant::XTrans: {
         auto module = std::make_unique<XTransDemosaicNet>();
         module->LoadWeights(dto, options.stream);
         xtrans_ = std::move(module);
+        ++xtrans_generation_;
         break;
       }
     }
