@@ -2,8 +2,6 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include "cuda/nn/conv2d.hpp"
-
 #include <cuda_runtime.h>
 
 #include <cstdint>
@@ -11,15 +9,16 @@
 #include <string>
 
 #include "cuda/nn/common.hpp"
+#include "cuda/nn/conv2d.hpp"
 
 namespace alcedo::cuda::nn {
 namespace {
 
-constexpr int kBlockSize = 256;
+constexpr int                   kBlockSize = 256;
 
 // Unified epilogue: optional bias add, optional ReLU.
 __device__ __forceinline__ auto ApplyBiasRelu(float acc, const float* __restrict__ bias, int co,
-                                             bool add_bias, bool do_relu) -> float {
+                                              bool add_bias, bool do_relu) -> float {
   if (add_bias) {
     acc += bias[co];
   }
@@ -34,11 +33,10 @@ __device__ __forceinline__ auto ApplyBiasRelu(float acc, const float* __restrict
 // Correct for arbitrary k/s/pad/dilation within int range; used as fallback.
 // ---------------------------------------------------------------------------
 __global__ void Conv2dDirectKernel(const float* __restrict__ input,
-                                   const float* __restrict__ weight,
-                                   const float* __restrict__ bias, float* __restrict__ output,
-                                   int N, int Cin, int Cout, int H, int W, int Ho, int Wo, int kH,
-                                   int kW, int sH, int sW, int padH, int padW, int dil, bool add_bias,
-                                   bool do_relu) {
+                                   const float* __restrict__ weight, const float* __restrict__ bias,
+                                   float* __restrict__ output, int N, int Cin, int Cout, int H,
+                                   int W, int Ho, int Wo, int kH, int kW, int sH, int sW, int padH,
+                                   int padW, int dil, bool add_bias, bool do_relu) {
   const std::int64_t numel = static_cast<std::int64_t>(N) * static_cast<std::int64_t>(Cout) *
                              static_cast<std::int64_t>(Ho) * static_cast<std::int64_t>(Wo);
   const std::int64_t grid_stride =
@@ -58,8 +56,8 @@ __global__ void Conv2dDirectKernel(const float* __restrict__ input,
     rem /= Wo;
     const int oh = static_cast<int>(rem % Ho);
     rem /= Ho;
-    const int co = static_cast<int>(rem % Cout);
-    const int n  = static_cast<int>(rem / Cout);
+    const int    co   = static_cast<int>(rem % Cout);
+    const int    n    = static_cast<int>(rem / Cout);
 
     float        acc  = 0.0f;
     const float* w_co = weight + static_cast<std::int64_t>(co) * w_stride_co;
@@ -85,8 +83,8 @@ __global__ void Conv2dDirectKernel(const float* __restrict__ input,
 
     acc = ApplyBiasRelu(acc, bias, co, add_bias, do_relu);
     output[static_cast<std::int64_t>(n) * out_stride_n +
-           static_cast<std::int64_t>(co) * out_stride_c +
-           static_cast<std::int64_t>(oh) * Wo + ow] = acc;
+           static_cast<std::int64_t>(co) * out_stride_c + static_cast<std::int64_t>(oh) * Wo + ow] =
+        acc;
   }
 }
 
@@ -102,26 +100,26 @@ __global__ void Conv2d1x1TiledKernel(const float* __restrict__ input,
                                      int N, int Cin, int Cout, int H, int W, bool add_bias,
                                      bool do_relu) {
   // grid: (spatial_tiles, cout_tiles, N)
-  const int spatial = H * W;
-  const int spat0   = static_cast<int>(blockIdx.x) * kTileSpatial;
-  const int co0     = static_cast<int>(blockIdx.y) * kTileCout;
-  const int n       = static_cast<int>(blockIdx.z);
+  const int          spatial    = H * W;
+  const int          spat0      = static_cast<int>(blockIdx.x) * kTileSpatial;
+  const int          co0        = static_cast<int>(blockIdx.y) * kTileCout;
+  const int          n          = static_cast<int>(blockIdx.z);
 
   // Thread maps to one (spatial_local, cout_local) within the tile.
   // blockDim.x is always kTileSpatial * kTileCout, so co_local < kTileCout.
-  const int tid        = static_cast<int>(threadIdx.x);
-  const int spat_local = tid % kTileSpatial;
-  const int co_local   = tid / kTileSpatial;
+  const int          tid        = static_cast<int>(threadIdx.x);
+  const int          spat_local = tid % kTileSpatial;
+  const int          co_local   = tid / kTileSpatial;
 
-  const int  spat  = spat0 + spat_local;
-  const int  co    = co0 + co_local;
-  const bool valid = (spat < spatial) && (co < Cout);
+  const int          spat       = spat0 + spat_local;
+  const int          co         = co0 + co_local;
+  const bool         valid      = (spat < spatial) && (co < Cout);
 
-  __shared__ float w_tile[kTileCout][kTileCin];
+  __shared__ float   w_tile[kTileCout][kTileCin];
   // Stage a strip of input for the spatial tile (one cin strip at a time).
-  __shared__ float in_tile[kTileSpatial][kTileCin];
+  __shared__ float   in_tile[kTileSpatial][kTileCin];
 
-  float acc = 0.0f;
+  float              acc = 0.0f;
 
   const std::int64_t in_base =
       static_cast<std::int64_t>(n) * static_cast<std::int64_t>(Cin) * spatial;
@@ -173,6 +171,53 @@ __global__ void Conv2d1x1TiledKernel(const float* __restrict__ input,
   }
 }
 
+// Exact small-Cout 1x1 kernel for the student residual (Cout=12) and output
+// (Cout=3) layers. One thread owns one spatial position and accumulates every
+// output channel in registers. Compared with the generic 8-Cout tiled kernel,
+// this avoids a mostly-empty Cout tile for 3 outputs and avoids loading the
+// same input spatial position twice for 12 outputs. Adjacent threads read the
+// same channel plane at adjacent pixels, so NCHW input and output accesses are
+// coalesced; weights are warp-uniform and served by the read-only cache.
+template <int kCout>
+__global__ void Conv2d1x1SmallCoutKernel(const float* __restrict__ input,
+                                         const float* __restrict__ weight,
+                                         const float* __restrict__ bias, float* __restrict__ output,
+                                         int N, int Cin, int spatial, bool add_bias, bool do_relu) {
+  static_assert(kCout == 3 || kCout == 12, "unsupported small-Cout specialization");
+
+  const std::int64_t numel  = static_cast<std::int64_t>(N) * spatial;
+  const std::int64_t stride = static_cast<std::int64_t>(blockDim.x) * gridDim.x;
+
+  for (std::int64_t linear = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+       linear < numel; linear += stride) {
+    const int n = static_cast<int>(linear / spatial);
+    const int s = static_cast<int>(linear - static_cast<std::int64_t>(n) * spatial);
+
+    float     acc[kCout];
+#pragma unroll
+    for (int co = 0; co < kCout; ++co) {
+      acc[co] = 0.0F;
+    }
+
+    const float* in_n = input + static_cast<std::int64_t>(n) * Cin * spatial;
+#pragma unroll 1
+    for (int ci = 0; ci < Cin; ++ci) {
+      const float v = in_n[static_cast<std::int64_t>(ci) * spatial + s];
+#pragma unroll
+      for (int co = 0; co < kCout; ++co) {
+        acc[co] = fmaf(v, weight[static_cast<std::int64_t>(co) * Cin + ci], acc[co]);
+      }
+    }
+
+    float* out_n = output + static_cast<std::int64_t>(n) * kCout * spatial;
+#pragma unroll
+    for (int co = 0; co < kCout; ++co) {
+      out_n[static_cast<std::int64_t>(co) * spatial + s] =
+          ApplyBiasRelu(acc[co], bias, co, add_bias, do_relu);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 2×2 stride-2 pad=0 (pack_mosaick): specialized direct kernel.
 // ---------------------------------------------------------------------------
@@ -198,11 +243,11 @@ __global__ void Conv2d2x2s2Kernel(const float* __restrict__ input, const float* 
     rem /= Wo;
     const int oh = static_cast<int>(rem % Ho);
     rem /= Ho;
-    const int co = static_cast<int>(rem % Cout);
-    const int n  = static_cast<int>(rem / Cout);
+    const int    co   = static_cast<int>(rem % Cout);
+    const int    n    = static_cast<int>(rem / Cout);
 
-    const int ih0 = oh * 2;
-    const int iw0 = ow * 2;
+    const int    ih0  = oh * 2;
+    const int    iw0  = ow * 2;
 
     float        acc  = 0.0f;
     const float* w_co = weight + static_cast<std::int64_t>(co) * w_stride_co;
@@ -212,40 +257,28 @@ __global__ void Conv2d2x2s2Kernel(const float* __restrict__ input, const float* 
       const float* in_c = in_n + static_cast<std::int64_t>(ci) * in_stride_c;
       const float* w_ci = w_co + static_cast<std::int64_t>(ci) * 4;
       // Bounds: for valid 2×2 s=2, ih0+1 < H and iw0+1 < W when Ho/Wo computed correctly.
-      const float v00 = in_c[static_cast<std::int64_t>(ih0) * W + iw0];
-      const float v01 = in_c[static_cast<std::int64_t>(ih0) * W + (iw0 + 1)];
-      const float v10 = in_c[static_cast<std::int64_t>(ih0 + 1) * W + iw0];
-      const float v11 = in_c[static_cast<std::int64_t>(ih0 + 1) * W + (iw0 + 1)];
+      const float  v00  = in_c[static_cast<std::int64_t>(ih0) * W + iw0];
+      const float  v01  = in_c[static_cast<std::int64_t>(ih0) * W + (iw0 + 1)];
+      const float  v10  = in_c[static_cast<std::int64_t>(ih0 + 1) * W + iw0];
+      const float  v11  = in_c[static_cast<std::int64_t>(ih0 + 1) * W + (iw0 + 1)];
       acc += v00 * w_ci[0] + v01 * w_ci[1] + v10 * w_ci[2] + v11 * w_ci[3];
     }
 
     acc = ApplyBiasRelu(acc, bias, co, add_bias, do_relu);
     output[static_cast<std::int64_t>(n) * out_stride_n +
-           static_cast<std::int64_t>(co) * out_stride_c +
-           static_cast<std::int64_t>(oh) * Wo + ow] = acc;
+           static_cast<std::int64_t>(co) * out_stride_c + static_cast<std::int64_t>(oh) * Wo + ow] =
+        acc;
   }
 }
 
 // ---------------------------------------------------------------------------
-// 3×3 s=1 pad=0 — demosaicnet hot path (major overhaul).
+// 3×3 s=1 pad=0 — multi-Cout tiled direct conv (Phase 8F fallback).
 //
-// Prior kernel (one Cout per block, weights-only SMEM):
-//   - Reloaded the same input spatial tile from global memory Cout times.
-//   - Each thread reduced Cin×9 with no cross-channel input reuse.
-//   - Measured ~0.4–0.5 s per 64→64 layer at ~1024 tile (tens of GFLOP/s).
-//
-// New design: implicit multi-Cout direct convolution (hand-written, no cuBLAS
-// / cuDNN), matching the industry pattern used by CUTLASS-style direct /
-// implicit-GEMM CNN kernels:
-//
-//   Block owns  OH_TILE × OW_TILE output pixels × COUT_TILE output channels.
-//   Cin is reduced in CIN_TILE strips.
-//   Shared memory holds:
-//     - input apron (OH_TILE+2) × (OW_TILE+2) × CIN_TILE
-//     - weight slice COUT_TILE × CIN_TILE × 9  (OIHW slice)
-//   Each thread owns one output pixel and accumulates COUT_TILE values in
-//   registers. The 3×3 input window is loaded once per (pixel, cin) and reused
-//   across all COUT_TILE output channels → arithmetic intensity ×COUT_TILE.
+// Block owns OH_TILE × OW_TILE output pixels × COUT_TILE output channels.
+// Cin is reduced in CIN_TILE strips. Shared memory holds the input apron and
+// an OIHW weight slice. Each thread owns one output pixel and accumulates
+// COUT_TILE values in registers — high register pressure when COUT_TILE is
+// 24/32 (student trunks). Retained as generic / thin-Cin fallback.
 //
 // Grid: (ceil(Wo/OW), ceil(Ho/OH), N * ceil(Cout/COUT_TILE))
 // Block: (OW_TILE, OH_TILE)
@@ -256,41 +289,40 @@ __global__ void Conv2d3x3s1TiledKernel(const float* __restrict__ input,
                                        const float* __restrict__ bias, float* __restrict__ output,
                                        int N, int Cin, int Cout, int H, int W, int Ho, int Wo,
                                        bool add_bias, bool do_relu) {
-  constexpr int kInH    = kOhTile + 2;
-  constexpr int kInW    = kOwTile + 2;
-  constexpr int kInArea = kInH * kInW;
-  constexpr int kWElems = kCoutTile * kCinTile * 9;
+  constexpr int           kInH       = kOhTile + 2;
+  constexpr int           kInW       = kOwTile + 2;
+  constexpr int           kInArea    = kInH * kInW;
+  constexpr int           kWElems    = kCoutTile * kCinTile * 9;
 
-  const int ow0 = static_cast<int>(blockIdx.x) * kOwTile;
-  const int oh0 = static_cast<int>(blockIdx.y) * kOhTile;
+  const int               ow0        = static_cast<int>(blockIdx.x) * kOwTile;
+  const int               oh0        = static_cast<int>(blockIdx.y) * kOhTile;
 
-  const int cout_tiles = (Cout + kCoutTile - 1) / kCoutTile;
-  const int bc         = static_cast<int>(blockIdx.z);
-  const int n          = bc / cout_tiles;
-  const int co0        = (bc % cout_tiles) * kCoutTile;
+  const int               cout_tiles = (Cout + kCoutTile - 1) / kCoutTile;
+  const int               bc         = static_cast<int>(blockIdx.z);
+  const int               n          = bc / cout_tiles;
+  const int               co0        = (bc % cout_tiles) * kCoutTile;
 
-  const int tx = static_cast<int>(threadIdx.x);
-  const int ty = static_cast<int>(threadIdx.y);
-  const int tid =
-      ty * kOwTile + tx;  // 0 .. kOhTile*kOwTile-1
-  constexpr int kThreads = kOhTile * kOwTile;
+  const int               tx         = static_cast<int>(threadIdx.x);
+  const int               ty         = static_cast<int>(threadIdx.y);
+  const int               tid        = ty * kOwTile + tx;  // 0 .. kOhTile*kOwTile-1
+  constexpr int           kThreads   = kOhTile * kOwTile;
 
   // Dynamic SMEM: [input apron | weights]
   // Layout input: [CIN_TILE][IN_H][IN_W]  — consecutive W for coalesced loads
   // Layout weight: [COUT_TILE][CIN_TILE][9]
   extern __shared__ float smem[];
-  float*                  in_s = smem;                    // kCinTile * kInArea
+  float*                  in_s = smem;                       // kCinTile * kInArea
   float*                  w_s  = smem + kCinTile * kInArea;  // kWElems
 
-  float acc[kCoutTile];
+  float                   acc[kCoutTile];
 #pragma unroll
   for (int i = 0; i < kCoutTile; ++i) {
     acc[i] = 0.0f;
   }
 
-  const int oh = oh0 + ty;
-  const int ow = ow0 + tx;
-  const bool pixel_valid = (n < N) && (oh < Ho) && (ow < Wo);
+  const int          oh           = oh0 + ty;
+  const int          ow           = ow0 + tx;
+  const bool         pixel_valid  = (n < N) && (oh < Ho) && (ow < Wo);
 
   const std::int64_t in_stride_n  = static_cast<std::int64_t>(Cin) * H * W;
   const std::int64_t in_stride_c  = static_cast<std::int64_t>(H) * W;
@@ -298,13 +330,12 @@ __global__ void Conv2d3x3s1TiledKernel(const float* __restrict__ input,
   const std::int64_t out_stride_c = static_cast<std::int64_t>(Ho) * Wo;
   const std::int64_t w_stride_co  = static_cast<std::int64_t>(Cin) * 9;
 
-  const float* in_n = input + static_cast<std::int64_t>(n) * in_stride_n;
+  const float*       in_n         = input + static_cast<std::int64_t>(n) * in_stride_n;
 
   for (int ci0 = 0; ci0 < Cin; ci0 += kCinTile) {
     const int cin_tile = (ci0 + kCinTile <= Cin) ? kCinTile : (Cin - ci0);
 
     // ---- Cooperative load: input apron for this cin strip ----
-    // Total elements = kCinTile * kInArea (pad unused cin slots with 0).
     for (int load = tid; load < kCinTile * kInArea; load += kThreads) {
       const int lci = load / kInArea;
       const int rem = load - lci * kInArea;
@@ -315,19 +346,16 @@ __global__ void Conv2d3x3s1TiledKernel(const float* __restrict__ input,
       const int gh  = oh0 + lh;
       const int gw  = ow0 + lw;
 
-      float v = 0.0f;
-      // Valid 3×3: interior of a full tile is always in-bounds. Edge partial
-      // tiles and cin padding need the guard.
+      float     v   = 0.0f;
       if (lci < cin_tile && gci < Cin && gh >= 0 && gh < H && gw >= 0 && gw < W) {
-        v = in_n[static_cast<std::int64_t>(gci) * in_stride_c +
-                 static_cast<std::int64_t>(gh) * W + gw];
+        v = in_n[static_cast<std::int64_t>(gci) * in_stride_c + static_cast<std::int64_t>(gh) * W +
+                 gw];
       }
       in_s[load] = v;
     }
 
     // ---- Cooperative load: weight slice [COUT_TILE, CIN_TILE, 9] ----
     for (int load = tid; load < kWElems; load += kThreads) {
-      // linear: ((lco * kCinTile) + lci) * 9 + k
       const int k   = load % 9;
       const int tmp = load / 9;
       const int lci = tmp % kCinTile;
@@ -336,7 +364,7 @@ __global__ void Conv2d3x3s1TiledKernel(const float* __restrict__ input,
       const int gco = co0 + lco;
       const int gci = ci0 + lci;
 
-      float v = 0.0f;
+      float     v   = 0.0f;
       if (lco < kCoutTile && gco < Cout && lci < cin_tile && gci < Cin) {
         v = weight[static_cast<std::int64_t>(gco) * w_stride_co +
                    static_cast<std::int64_t>(gci) * 9 + k];
@@ -345,13 +373,10 @@ __global__ void Conv2d3x3s1TiledKernel(const float* __restrict__ input,
     }
     __syncthreads();
 
-    // ---- Compute: reuse 3×3 window across COUT_TILE channels ----
-    // Avoid `break` inside #pragma unroll (nvcc codegen is unreliable).
     if (pixel_valid) {
 #pragma unroll
       for (int lci = 0; lci < kCinTile; ++lci) {
         if (lci < cin_tile) {
-          // Apron origin for this pixel is (ty, tx) in [0..OH+1] × [0..OW+1].
           const float* base = in_s + lci * kInArea + ty * kInW + tx;
           const float  i00  = base[0];
           const float  i01  = base[1];
@@ -384,7 +409,6 @@ __global__ void Conv2d3x3s1TiledKernel(const float* __restrict__ input,
     __syncthreads();
   }
 
-  // ---- Store epilogue ----
   if (pixel_valid) {
 #pragma unroll
     for (int lco = 0; lco < kCoutTile; ++lco) {
@@ -392,8 +416,531 @@ __global__ void Conv2d3x3s1TiledKernel(const float* __restrict__ input,
       if (co < Cout) {
         const float v = ApplyBiasRelu(acc[lco], bias, co, add_bias, do_relu);
         output[static_cast<std::int64_t>(n) * out_stride_n +
+               static_cast<std::int64_t>(co) * out_stride_c + static_cast<std::int64_t>(oh) * Wo +
+               ow]    = v;
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 3×3 s=1 pad=0 — Phase 8G+ FP32 Winograd F(2×2, 3×3) (student square trunks).
+//
+// Arithmetic: each fully-valid 2×2 output tile costs 16·Cin·Cout elementwise
+// products in the transform domain instead of 36·Cin·Cout direct FMAs
+// (theoretical ~2.25× fewer multiplies), plus BᵀdB / GgGᵀ / AᵀMA transforms.
+//
+// Scalar FMA only — no WMMA / Tensor Core / TF32 / FP16 / BF16 / cp.async.
+// Immutable filters are pre-transformed once at model load. Each block stages
+// U and computes every input transform once per (tile,Cin), shared by all Cout.
+//
+// Edge policy: complete 2×2 tiles use Winograd; partial edge tiles (odd Ho/Wo)
+// fall back to direct 3×3 from the same staged apron so valid-conv numerics
+// stay exact at borders.
+//
+// Grid: (ceil(Wo/Ow), ceil(Ho/Oh), N * ceil(Cout/Bn))
+// Block: (TilesW * TilesH * Bn,)  — one thread per (2×2 tile, local cout)
+// SMEM: input apron + U [Bn][CinTile][16] + V [tiles][CinTile][16]
+// ---------------------------------------------------------------------------
+
+// G g Gᵀ for one 3×3 OIHW filter → 4×4 Winograd domain (row-major 16).
+__host__ __device__ __forceinline__ void WinogradFilterTransform3x3(
+    const float g00, const float g01, const float g02, const float g10, const float g11,
+    const float g12, const float g20, const float g21, const float g22, float* __restrict__ u) {
+  const float r00 = g00;
+  const float r01 = g01;
+  const float r02 = g02;
+  const float r10 = 0.5f * (g00 + g10 + g20);
+  const float r11 = 0.5f * (g01 + g11 + g21);
+  const float r12 = 0.5f * (g02 + g12 + g22);
+  const float r20 = 0.5f * (g00 - g10 + g20);
+  const float r21 = 0.5f * (g01 - g11 + g21);
+  const float r22 = 0.5f * (g02 - g12 + g22);
+  const float r30 = g20;
+  const float r31 = g21;
+  const float r32 = g22;
+
+  // Each Gg row × Gᵀ → 4 coeffs: [r0, 0.5*(r0+r1+r2), 0.5*(r0-r1+r2), r2]
+  u[0]            = r00;
+  u[1]            = 0.5f * (r00 + r01 + r02);
+  u[2]            = 0.5f * (r00 - r01 + r02);
+  u[3]            = r02;
+  u[4]            = r10;
+  u[5]            = 0.5f * (r10 + r11 + r12);
+  u[6]            = 0.5f * (r10 - r11 + r12);
+  u[7]            = r12;
+  u[8]            = r20;
+  u[9]            = 0.5f * (r20 + r21 + r22);
+  u[10]           = 0.5f * (r20 - r21 + r22);
+  u[11]           = r22;
+  u[12]           = r30;
+  u[13]           = 0.5f * (r30 + r31 + r32);
+  u[14]           = 0.5f * (r30 - r31 + r32);
+  u[15]           = r32;
+}
+
+// V = Bᵀ d B for one 4×4 input patch (row-major).
+__device__ __forceinline__ void WinogradInputTransform4x4(const float* __restrict__ d,
+                                                          float* __restrict__ v) {
+  float tmp[4][4];
+#pragma unroll
+  for (int j = 0; j < 4; ++j) {
+    const float d0 = d[0 * 4 + j];
+    const float d1 = d[1 * 4 + j];
+    const float d2 = d[2 * 4 + j];
+    const float d3 = d[3 * 4 + j];
+    tmp[0][j]      = d0 - d2;
+    tmp[1][j]      = d1 + d2;
+    tmp[2][j]      = d2 - d1;
+    tmp[3][j]      = d1 - d3;
+  }
+#pragma unroll
+  for (int i = 0; i < 4; ++i) {
+    const float t0 = tmp[i][0];
+    const float t1 = tmp[i][1];
+    const float t2 = tmp[i][2];
+    const float t3 = tmp[i][3];
+    v[i * 4 + 0]   = t0 - t2;
+    v[i * 4 + 1]   = t1 + t2;
+    v[i * 4 + 2]   = t2 - t1;
+    v[i * 4 + 3]   = t1 - t3;
+  }
+}
+
+// Y = Aᵀ M A for one 4×4 transform-domain tile → 2×2 spatial outputs.
+__device__ __forceinline__ void WinogradOutputTransform4x4(const float* __restrict__ m,
+                                                           float y[2][2]) {
+  float t[2][4];
+#pragma unroll
+  for (int j = 0; j < 4; ++j) {
+    const float m0 = m[0 * 4 + j];
+    const float m1 = m[1 * 4 + j];
+    const float m2 = m[2 * 4 + j];
+    const float m3 = m[3 * 4 + j];
+    t[0][j]        = m0 + m1 + m2;
+    t[1][j]        = m1 - m2 - m3;
+  }
+#pragma unroll
+  for (int i = 0; i < 2; ++i) {
+    const float t0 = t[i][0];
+    const float t1 = t[i][1];
+    const float t2 = t[i][2];
+    const float t3 = t[i][3];
+    y[i][0]        = t0 + t1 + t2;
+    y[i][1]        = t1 - t2 - t3;
+  }
+}
+
+// Direct 3×3 at one pixel from the staged apron (edge-tile fallback).
+__device__ __forceinline__ auto Direct3x3FromApron(const float* __restrict__ in_s, int lci,
+                                                   int in_area, int in_w, int lh, int lw,
+                                                   const float* __restrict__ w9) -> float {
+  const float* base = in_s + lci * in_area + lh * in_w + lw;
+  float        a    = 0.0f;
+  a                 = fmaf(base[0], w9[0], a);
+  a                 = fmaf(base[1], w9[1], a);
+  a                 = fmaf(base[2], w9[2], a);
+  a                 = fmaf(base[in_w], w9[3], a);
+  a                 = fmaf(base[in_w + 1], w9[4], a);
+  a                 = fmaf(base[in_w + 2], w9[5], a);
+  a                 = fmaf(base[2 * in_w], w9[6], a);
+  a                 = fmaf(base[2 * in_w + 1], w9[7], a);
+  a                 = fmaf(base[2 * in_w + 2], w9[8], a);
+  return a;
+}
+
+template <int kOhTile, int kOwTile, int kBn, int kCinTile>
+__global__ void Conv2d3x3s1WinogradF22Kernel(const float* __restrict__ input,
+                                             const float* __restrict__ weight,
+                                             const float* __restrict__ winograd_weight,
+                                             const float* __restrict__ bias,
+                                             float* __restrict__ output, int N, int Cin, int Cout,
+                                             int H, int W, int Ho, int Wo, bool add_bias,
+                                             bool do_relu) {
+  static_assert(kOhTile > 0 && (kOhTile % 2) == 0, "OhTile must be positive even");
+  static_assert(kOwTile > 0 && (kOwTile % 2) == 0, "OwTile must be positive even");
+  static_assert(kBn > 0 && kCinTile > 0, "Bn/CinTile must be positive");
+
+  constexpr int kTilesH          = kOhTile / 2;
+  constexpr int kTilesW          = kOwTile / 2;
+  constexpr int kTiles           = kTilesH * kTilesW;
+  constexpr int kThreads         = kTiles * kBn;
+  constexpr int kInH             = kOhTile + 2;
+  constexpr int kInW             = kOwTile + 2;
+  constexpr int kInArea          = kInH * kInW;
+  constexpr int kTransformStride = 17;
+  constexpr int kUElems          = kBn * kCinTile * kTransformStride;
+
+  const int     ow0              = static_cast<int>(blockIdx.x) * kOwTile;
+  const int     oh0              = static_cast<int>(blockIdx.y) * kOhTile;
+
+  const int     cout_tiles       = (Cout + kBn - 1) / kBn;
+  const int     bc               = static_cast<int>(blockIdx.z);
+  const int     n                = bc / cout_tiles;
+  const int     co0              = (bc % cout_tiles) * kBn;
+
+  const int     tid              = static_cast<int>(threadIdx.x);
+  const int     tile_idx         = tid % kTiles;
+  const int     lco              = tid / kTiles;
+
+  const int     th               = tile_idx / kTilesW;
+  const int     tw               = tile_idx - th * kTilesW;
+  const int     oh               = oh0 + th * 2;
+  const int     ow               = ow0 + tw * 2;
+  const int     lh               = th * 2;
+  const int     lw               = tw * 2;
+
+  const int     co               = co0 + lco;
+  const bool    co_valid         = (n < N) && (lco < kBn) && (co < Cout);
+  const bool    tile_full        = co_valid && (oh + 1 < Ho) && (ow + 1 < Wo);
+  const bool    tile_partial =
+      co_valid && !tile_full && (oh < Ho) && (ow < Wo);  // at least one valid pixel
+
+  extern __shared__ float smem[];
+  float*                  in_s = smem;                       // kCinTile * kInArea
+  float*                  u_s  = smem + kCinTile * kInArea;  // kUElems pre-transformed
+  float*                  v_s  = u_s + kUElems;              // kVElems shared input transform
+
+  float                   acc[16];
+#pragma unroll
+  for (int k = 0; k < 16; ++k) {
+    acc[k] = 0.0f;
+  }
+  // Partial-edge path accumulates up to 4 direct pixels (sparse).
+  float              acc_direct[2][2] = {{0.0f, 0.0f}, {0.0f, 0.0f}};
+
+  const std::int64_t in_stride_n      = static_cast<std::int64_t>(Cin) * H * W;
+  const std::int64_t in_stride_c      = static_cast<std::int64_t>(H) * W;
+  const std::int64_t out_stride_n     = static_cast<std::int64_t>(Cout) * Ho * Wo;
+  const std::int64_t out_stride_c     = static_cast<std::int64_t>(Ho) * Wo;
+  const std::int64_t w_stride_co      = static_cast<std::int64_t>(Cin) * 9;
+
+  const float*       in_n             = input + static_cast<std::int64_t>(n) * in_stride_n;
+
+  for (int ci0 = 0; ci0 < Cin; ci0 += kCinTile) {
+    const int cin_tile = (ci0 + kCinTile <= Cin) ? kCinTile : (Cin - ci0);
+
+    // ---- Stage input apron ----
+    for (int load = tid; load < kCinTile * kInArea; load += kThreads) {
+      const int lci = load / kInArea;
+      const int rem = load - lci * kInArea;
+      const int ih  = rem / kInW;
+      const int iw  = rem - ih * kInW;
+
+      const int gci = ci0 + lci;
+      const int gh  = oh0 + ih;
+      const int gw  = ow0 + iw;
+
+      float     v   = 0.0f;
+      if (lci < cin_tile && gci < Cin && gh >= 0 && gh < H && gw >= 0 && gw < W) {
+        v = in_n[static_cast<std::int64_t>(gci) * in_stride_c + static_cast<std::int64_t>(gh) * W +
+                 gw];
+      }
+      in_s[load] = v;
+    }
+
+    // ---- Stage pre-transformed U [Bn,CinTile,16] ----
+    const int logical_u_elems = kBn * kCinTile * 16;
+    for (int load = tid; load < logical_u_elems; load += kThreads) {
+      const int k   = load % 16;
+      const int tmp = load / 16;
+      const int lci = tmp % kCinTile;
+      const int lc  = tmp / kCinTile;
+
+      const int gco = co0 + lc;
+      const int gci = ci0 + lci;
+
+      float     v   = 0.0f;
+      if (lc < kBn && gco < Cout && lci < cin_tile && gci < Cin) {
+        v = winograd_weight[(static_cast<std::int64_t>(gco) * Cin + gci) * 16 + k];
+      }
+      u_s[(lc * kCinTile + lci) * kTransformStride + k] = v;
+    }
+    __syncthreads();
+
+    // Compute B^T d B exactly once per (spatial tile,Cin), then share it
+    // across all 24/32 output-channel threads. The previous candidate did this
+    // redundantly in every output-channel thread, erasing Winograd's savings.
+    for (int item = tid; item < kTiles * kCinTile; item += kThreads) {
+      const int input_lci  = item % kCinTile;
+      const int input_tile = item / kCinTile;
+      const int input_th   = input_tile / kTilesW;
+      const int input_tw   = input_tile - input_th * kTilesW;
+      float     d[16];
+#pragma unroll
+      for (int r = 0; r < 4; ++r) {
+#pragma unroll
+        for (int c = 0; c < 4; ++c) {
+          d[r * 4 + c] =
+              input_lci < cin_tile
+                  ? in_s[input_lci * kInArea + (input_th * 2 + r) * kInW + input_tw * 2 + c]
+                  : 0.0f;
+        }
+      }
+      WinogradInputTransform4x4(d, v_s + (input_tile * kCinTile + input_lci) * kTransformStride);
+    }
+    __syncthreads();
+
+    if (tile_full) {
+#pragma unroll
+      for (int lci = 0; lci < kCinTile; ++lci) {
+        if (lci < cin_tile) {
+#pragma unroll
+          for (int k = 0; k < 16; ++k) {
+            const float v = v_s[(tile_idx * kCinTile + lci) * kTransformStride + k];
+            const float u = u_s[(lco * kCinTile + lci) * kTransformStride + k];
+            acc[k]        = fmaf(v, u, acc[k]);
+          }
+        }
+      }
+    } else if (tile_partial) {
+      // Direct 3×3 for each in-bounds pixel of the incomplete 2×2 tile.
+#pragma unroll
+      for (int lci = 0; lci < kCinTile; ++lci) {
+        if (lci < cin_tile) {
+          const float* w9 = weight + static_cast<std::int64_t>(co) * w_stride_co +
+                            static_cast<std::int64_t>(ci0 + lci) * 9;
+#pragma unroll
+          for (int dh = 0; dh < 2; ++dh) {
+#pragma unroll
+            for (int dw = 0; dw < 2; ++dw) {
+              if ((oh + dh) < Ho && (ow + dw) < Wo) {
+                acc_direct[dh][dw] +=
+                    Direct3x3FromApron(in_s, lci, kInArea, kInW, lh + dh, lw + dw, w9);
+              }
+            }
+          }
+        }
+      }
+    }
+    __syncthreads();
+  }
+
+  if (tile_full) {
+    float y[2][2];
+    WinogradOutputTransform4x4(acc, y);
+#pragma unroll
+    for (int dh = 0; dh < 2; ++dh) {
+#pragma unroll
+      for (int dw = 0; dw < 2; ++dw) {
+        const float v = ApplyBiasRelu(y[dh][dw], bias, co, add_bias, do_relu);
+        output[static_cast<std::int64_t>(n) * out_stride_n +
                static_cast<std::int64_t>(co) * out_stride_c +
-               static_cast<std::int64_t>(oh) * Wo + ow] = v;
+               static_cast<std::int64_t>(oh + dh) * Wo + (ow + dw)] = v;
+      }
+    }
+  } else if (tile_partial) {
+#pragma unroll
+    for (int dh = 0; dh < 2; ++dh) {
+#pragma unroll
+      for (int dw = 0; dw < 2; ++dw) {
+        if ((oh + dh) < Ho && (ow + dw) < Wo) {
+          const float v = ApplyBiasRelu(acc_direct[dh][dw], bias, co, add_bias, do_relu);
+          output[static_cast<std::int64_t>(n) * out_stride_n +
+                 static_cast<std::int64_t>(co) * out_stride_c +
+                 static_cast<std::int64_t>(oh + dh) * Wo + (ow + dw)] = v;
+        }
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 3×3 s=1 pad=0 — Phase 8G FP32 SIMT implicit-GEMM (student square trunks).
+//
+// GEMM view for valid 3×3:
+//   M = output pixels in a spatial tile (OhTile × OwTile)
+//   N = Cout (kBn covers one exact student width: 24 or 32)
+//   K = Cin * 9  (reduced in CinTile strips = K-slices of 9*CinTile)
+//
+// Unlike the 8F direct kernel (one pixel / thread, all Cout in registers),
+// each thread owns a fixed TM×TN register micro-tile. Input is staged as a
+// spatial apron (same reuse as 8F) so the 3×3 window is loaded once per
+// (pixel, cin) and reused across the thread's TN channels; weights stage as
+// an OIHW K-slice. Scalar FMA only — no WMMA / Tensor Core / TF32 / FP16 /
+// BF16 / cp.async. Compatible with the existing CC 6.0 floor.
+//
+// Grid: (ceil(Wo/Ow), ceil(Ho/Oh), N * ceil(Cout/Bn))
+// Block: (ThreadsM * ThreadsN,) with ThreadsM = Bm/Tm, ThreadsN = Bn/Tn
+// SMEM: input apron [CinTile][Oh+2][Ow+2] + weight [Bn][CinTile][9]
+// ---------------------------------------------------------------------------
+template <int kOhTile, int kOwTile, int kBn, int kCinTile, int kTm, int kTn>
+__global__ void Conv2d3x3s1ImplicitGemmKernel(const float* __restrict__ input,
+                                              const float* __restrict__ weight,
+                                              const float* __restrict__ bias,
+                                              float* __restrict__ output, int N, int Cin, int Cout,
+                                              int H, int W, int Ho, int Wo, bool add_bias,
+                                              bool do_relu) {
+  static_assert(kOhTile > 0 && kOwTile > 0, "spatial tile must be positive");
+  static_assert((kOhTile * kOwTile) % kTm == 0, "Bm must be divisible by Tm");
+  static_assert(kBn % kTn == 0, "Bn must be divisible by Tn");
+  static_assert(kCinTile > 0, "CinTile must be positive");
+
+  constexpr int           kBm        = kOhTile * kOwTile;
+  constexpr int           kThreadsM  = kBm / kTm;
+  constexpr int           kThreadsN  = kBn / kTn;
+  constexpr int           kThreads   = kThreadsM * kThreadsN;
+  constexpr int           kInH       = kOhTile + 2;
+  constexpr int           kInW       = kOwTile + 2;
+  constexpr int           kInArea    = kInH * kInW;
+  constexpr int           kWElems    = kBn * kCinTile * 9;
+
+  const int               ow0        = static_cast<int>(blockIdx.x) * kOwTile;
+  const int               oh0        = static_cast<int>(blockIdx.y) * kOhTile;
+
+  const int               cout_tiles = (Cout + kBn - 1) / kBn;
+  const int               bc         = static_cast<int>(blockIdx.z);
+  const int               n          = bc / cout_tiles;
+  const int               co0        = (bc % cout_tiles) * kBn;
+
+  const int               tid        = static_cast<int>(threadIdx.x);
+  // Thread maps to a (M-micro, N-micro) lane inside the GEMM tile.
+  const int               tm         = tid % kThreadsM;
+  const int               tn         = tid / kThreadsM;
+
+  extern __shared__ float smem[];
+  float*                  in_s = smem;                       // kCinTile * kInArea
+  float*                  w_s  = smem + kCinTile * kInArea;  // kWElems
+
+  float                   acc[kTm][kTn];
+#pragma unroll
+  for (int i = 0; i < kTm; ++i) {
+#pragma unroll
+    for (int j = 0; j < kTn; ++j) {
+      acc[i][j] = 0.0f;
+    }
+  }
+
+  // Per-thread owned spatial indices within the block tile (linearized).
+  int  m_local[kTm];
+  int  oh_regs[kTm];
+  int  ow_regs[kTm];
+  int  lh_regs[kTm];
+  int  lw_regs[kTm];
+  bool m_valid[kTm];
+#pragma unroll
+  for (int i = 0; i < kTm; ++i) {
+    m_local[i] = tm * kTm + i;
+    lh_regs[i] = m_local[i] / kOwTile;
+    lw_regs[i] = m_local[i] - lh_regs[i] * kOwTile;
+    oh_regs[i] = oh0 + lh_regs[i];
+    ow_regs[i] = ow0 + lw_regs[i];
+    m_valid[i] = (n < N) && (oh_regs[i] < Ho) && (ow_regs[i] < Wo);
+  }
+
+  int  n_local[kTn];
+  int  co_regs[kTn];
+  bool n_valid[kTn];
+#pragma unroll
+  for (int j = 0; j < kTn; ++j) {
+    n_local[j] = tn * kTn + j;
+    co_regs[j] = co0 + n_local[j];
+    n_valid[j] = co_regs[j] < Cout;
+  }
+
+  const std::int64_t in_stride_n  = static_cast<std::int64_t>(Cin) * H * W;
+  const std::int64_t in_stride_c  = static_cast<std::int64_t>(H) * W;
+  const std::int64_t out_stride_n = static_cast<std::int64_t>(Cout) * Ho * Wo;
+  const std::int64_t out_stride_c = static_cast<std::int64_t>(Ho) * Wo;
+  const std::int64_t w_stride_co  = static_cast<std::int64_t>(Cin) * 9;
+
+  const float*       in_n         = input + static_cast<std::int64_t>(n) * in_stride_n;
+
+  for (int ci0 = 0; ci0 < Cin; ci0 += kCinTile) {
+    const int cin_tile = (ci0 + kCinTile <= Cin) ? kCinTile : (Cin - ci0);
+
+    // ---- Stage input apron for this Cin K-slice ----
+    for (int load = tid; load < kCinTile * kInArea; load += kThreads) {
+      const int lci = load / kInArea;
+      const int rem = load - lci * kInArea;
+      const int lh  = rem / kInW;
+      const int lw  = rem - lh * kInW;
+
+      const int gci = ci0 + lci;
+      const int gh  = oh0 + lh;
+      const int gw  = ow0 + lw;
+
+      float     v   = 0.0f;
+      if (lci < cin_tile && gci < Cin && gh >= 0 && gh < H && gw >= 0 && gw < W) {
+        v = in_n[static_cast<std::int64_t>(gci) * in_stride_c + static_cast<std::int64_t>(gh) * W +
+                 gw];
+      }
+      in_s[load] = v;
+    }
+
+    // ---- Stage weight slice [Bn, CinTile, 9] (OIHW) ----
+    for (int load = tid; load < kWElems; load += kThreads) {
+      const int k   = load % 9;
+      const int tmp = load / 9;
+      const int lci = tmp % kCinTile;
+      const int lco = tmp / kCinTile;
+
+      const int gco = co0 + lco;
+      const int gci = ci0 + lci;
+
+      float     v   = 0.0f;
+      if (lco < kBn && gco < Cout && lci < cin_tile && gci < Cin) {
+        v = weight[static_cast<std::int64_t>(gco) * w_stride_co +
+                   static_cast<std::int64_t>(gci) * 9 + k];
+      }
+      w_s[load] = v;
+    }
+    __syncthreads();
+
+    // ---- MxN micro-tile FMA: reuse 3×3 window across TN channels ----
+#pragma unroll
+    for (int i = 0; i < kTm; ++i) {
+      if (m_valid[i]) {
+#pragma unroll
+        for (int lci = 0; lci < kCinTile; ++lci) {
+          if (lci < cin_tile) {
+            const float* base = in_s + lci * kInArea + lh_regs[i] * kInW + lw_regs[i];
+            const float  i00  = base[0];
+            const float  i01  = base[1];
+            const float  i02  = base[2];
+            const float  i10  = base[kInW];
+            const float  i11  = base[kInW + 1];
+            const float  i12  = base[kInW + 2];
+            const float  i20  = base[2 * kInW];
+            const float  i21  = base[2 * kInW + 1];
+            const float  i22  = base[2 * kInW + 2];
+
+#pragma unroll
+            for (int j = 0; j < kTn; ++j) {
+              if (n_valid[j]) {
+                const float* w = w_s + (n_local[j] * kCinTile + lci) * 9;
+                float        a = acc[i][j];
+                a              = fmaf(i00, w[0], a);
+                a              = fmaf(i01, w[1], a);
+                a              = fmaf(i02, w[2], a);
+                a              = fmaf(i10, w[3], a);
+                a              = fmaf(i11, w[4], a);
+                a              = fmaf(i12, w[5], a);
+                a              = fmaf(i20, w[6], a);
+                a              = fmaf(i21, w[7], a);
+                a              = fmaf(i22, w[8], a);
+                acc[i][j]      = a;
+              }
+            }
+          }
+        }
+      }
+    }
+    __syncthreads();
+  }
+
+  // ---- Epilogue: bias + optional ReLU + NCHW store ----
+#pragma unroll
+  for (int i = 0; i < kTm; ++i) {
+    if (m_valid[i]) {
+#pragma unroll
+      for (int j = 0; j < kTn; ++j) {
+        if (n_valid[j]) {
+          const float v = ApplyBiasRelu(acc[i][j], bias, co_regs[j], add_bias, do_relu);
+          output[static_cast<std::int64_t>(n) * out_stride_n +
+                 static_cast<std::int64_t>(co_regs[j]) * out_stride_c +
+                 static_cast<std::int64_t>(oh_regs[i]) * Wo + ow_regs[i]] = v;
+        }
       }
     }
   }
@@ -469,18 +1016,17 @@ void ValidateParams(const DeviceTensor& input, const DeviceTensor& output,
   }
 }
 
-// Launch the multi-Cout 3×3 tiled kernel with a fixed tile configuration.
-// Tile sizes are chosen for demosaicnet (C≈64, large spatial, pad=0 valid):
+// Launch the multi-Cout 3×3 tiled direct kernel (Phase 8F fallback).
+// Tile sizes for demosaicnet-class shapes (large spatial, pad=0 valid):
 //   OH=8, OW=16 → 128 threads/block
-//   COUT=16      → 16 register accumulators / thread (good occupancy)
+//   COUT tile fills student widths when possible (24 / 32)
 //   CIN=8        → modest SMEM, frequent reuse of input apron
-// SMEM ≈ 8*10*18*4 + 16*8*9*4 ≈ 10.3 KiB → multiple blocks/SM.
 template <int kOhTile, int kOwTile, int kCoutTile, int kCinTile>
 void LaunchConv2d3x3Tiled(const float* in_ptr, const float* w_ptr, const float* b_ptr,
                           float* out_ptr, int N, int Cin, int Cout, int H, int W, int Ho, int Wo,
                           bool add_bias, bool do_relu, cudaStream_t stream) {
-  constexpr int kInH    = kOhTile + 2;
-  constexpr int kInW    = kOwTile + 2;
+  constexpr int kInH = kOhTile + 2;
+  constexpr int kInW = kOwTile + 2;
   constexpr int kSmemBytes =
       static_cast<int>((kCinTile * kInH * kInW + kCoutTile * kCinTile * 9) * sizeof(float));
 
@@ -499,6 +1045,112 @@ void LaunchConv2d3x3Tiled(const float* in_ptr, const float* w_ptr, const float* 
   CheckCuda(cudaGetLastError(), "Conv2d3x3s1TiledKernel launch");
 }
 
+// Phase 8G student square trunks: 8×8 spatial tile, exact Bn=Cout, CinTile=8,
+// TM×TN = 4×4 register micro-tile → 16 accumulators / thread (vs 24/32 in 8F).
+//   24→24: 96 threads
+//   32→32: 128 threads
+// SMEM ≈ CinTile*(Oh+2)*(Ow+2)*4 + Bn*CinTile*9*4
+template <int kOhTile, int kOwTile, int kBn, int kCinTile, int kTm, int kTn>
+void LaunchConv2d3x3ImplicitGemm(const float* in_ptr, const float* w_ptr, const float* b_ptr,
+                                 float* out_ptr, int N, int Cin, int Cout, int H, int W, int Ho,
+                                 int Wo, bool add_bias, bool do_relu, cudaStream_t stream) {
+  constexpr int kBm       = kOhTile * kOwTile;
+  constexpr int kThreadsM = kBm / kTm;
+  constexpr int kThreadsN = kBn / kTn;
+  constexpr int kThreads  = kThreadsM * kThreadsN;
+  constexpr int kInH      = kOhTile + 2;
+  constexpr int kInW      = kOwTile + 2;
+  constexpr int kSmemBytes =
+      static_cast<int>((kCinTile * kInH * kInW + kBn * kCinTile * 9) * sizeof(float));
+
+  const int cout_tiles = (Cout + kBn - 1) / kBn;
+  dim3      block(kThreads);
+  dim3      grid((Wo + kOwTile - 1) / kOwTile, (Ho + kOhTile - 1) / kOhTile,
+                 static_cast<unsigned>(N) * static_cast<unsigned>(cout_tiles));
+
+  if (grid.x == 0 || grid.y == 0 || grid.z == 0) {
+    return;
+  }
+
+  Conv2d3x3s1ImplicitGemmKernel<kOhTile, kOwTile, kBn, kCinTile, kTm, kTn>
+      <<<grid, block, kSmemBytes, stream>>>(in_ptr, w_ptr, b_ptr, out_ptr, N, Cin, Cout, H, W, Ho,
+                                            Wo, add_bias, do_relu);
+  CheckCuda(cudaGetLastError(), "Conv2d3x3s1ImplicitGemmKernel launch");
+}
+
+// Phase 8G+ Winograd F(2×2,3×3).
+// One thread per (2×2 tile, local cout). Exact Bn = student Cout.
+// Spatial tile is smaller than 8F's 8×16 so threads×regs stay launchable:
+//   Oh=4 Ow=8 → 2×4 Winograd tiles = 8 spatial units
+//   24→24: 8 × 24 = 192 threads
+//   32→32: 8 × 32 = 256 threads
+// SMEM = apron + pre-transformed U + shared input transforms V.
+template <int kOhTile, int kOwTile, int kBn, int kCinTile>
+void LaunchConv2d3x3WinogradF22(const float* in_ptr, const float* w_ptr,
+                                const float* winograd_w_ptr, const float* b_ptr, float* out_ptr,
+                                int N, int Cin, int Cout, int H, int W, int Ho, int Wo,
+                                bool add_bias, bool do_relu, cudaStream_t stream) {
+  constexpr int kTiles     = (kOhTile / 2) * (kOwTile / 2);
+  constexpr int kThreads   = kTiles * kBn;
+  constexpr int kInH       = kOhTile + 2;
+  constexpr int kInW       = kOwTile + 2;
+  constexpr int kSmemBytes = static_cast<int>(
+      (kCinTile * kInH * kInW + kBn * kCinTile * 17 + kTiles * kCinTile * 17) * sizeof(float));
+
+  const int cout_tiles = (Cout + kBn - 1) / kBn;
+  dim3      block(kThreads);
+  dim3      grid((Wo + kOwTile - 1) / kOwTile, (Ho + kOhTile - 1) / kOhTile,
+                 static_cast<unsigned>(N) * static_cast<unsigned>(cout_tiles));
+
+  if (grid.x == 0 || grid.y == 0 || grid.z == 0) {
+    return;
+  }
+
+  Conv2d3x3s1WinogradF22Kernel<kOhTile, kOwTile, kBn, kCinTile>
+      <<<grid, block, kSmemBytes, stream>>>(in_ptr, w_ptr, winograd_w_ptr, b_ptr, out_ptr, N, Cin,
+                                            Cout, H, W, Ho, Wo, add_bias, do_relu);
+  CheckCuda(cudaGetLastError(), "Conv2d3x3s1WinogradF22Kernel launch");
+}
+
+// Frozen compile-time student square-trunk candidates (Phase 8G / 8G+).
+// Spatial 8×16 (same footprint as 8F direct), Cin strip 8.
+// Micro-tile TM=1 × TN=8: one pixel / thread, N-split so each thread holds
+// 8 accumulators instead of all 24/32 (the measured 8F register bottleneck).
+//   24→24: 128 * 3 = 384 threads, Bn=24 exact
+//   32→32: 128 * 4 = 512 threads, Bn=32 exact
+constexpr int      kIgOh      = 8;
+constexpr int      kIgOw      = 16;
+constexpr int      kIgCinTile = 8;
+constexpr int      kIgTm      = 1;
+constexpr int      kIgTn      = 8;
+constexpr int      kIgBn24    = 24;
+constexpr int      kIgBn32    = 32;
+
+// Winograd F(2×2,3×3) product-candidate tiles (under measurement).
+// Keep block threads modest: 8 spatial 2×2 tiles × Bn channels.
+constexpr int      kWgOh      = 4;
+constexpr int      kWgOw      = 8;
+constexpr int      kWgCinTile = 8;
+constexpr int      kWgBn24    = 24;
+constexpr int      kWgBn32    = 32;
+
+[[nodiscard]] auto WinogradF22SmemBytes(const int bn) -> int {
+  constexpr int kInH   = kWgOh + 2;
+  constexpr int kInW   = kWgOw + 2;
+  constexpr int kTiles = (kWgOh / 2) * (kWgOw / 2);
+  return static_cast<int>(
+      (kWgCinTile * kInH * kInW + bn * kWgCinTile * 17 + kTiles * kWgCinTile * 17) * sizeof(float));
+}
+
+[[nodiscard]] auto DirectTiledSmemBytes(const int cout_tile) -> int {
+  constexpr int kOh      = 8;
+  constexpr int kOw      = 16;
+  constexpr int kCinTile = 8;
+  constexpr int kInH     = kOh + 2;
+  constexpr int kInW     = kOw + 2;
+  return static_cast<int>((kCinTile * kInH * kInW + cout_tile * kCinTile * 9) * sizeof(float));
+}
+
 void LaunchConv2d(const DeviceTensor& input, DeviceTensor& output, const Conv2dParams& params,
                   bool do_relu, cudaStream_t stream, WorkspacePool* workspace) {
   // Workspace is accepted for API stability. Current kernels need no scratch and
@@ -507,13 +1159,13 @@ void LaunchConv2d(const DeviceTensor& input, DeviceTensor& output, const Conv2dP
 
   ValidateParams(input, output, params, do_relu ? "Conv2dBiasRelu" : "Conv2d");
 
-  const int N    = static_cast<int>(input.shape[0]);
-  const int Cin  = static_cast<int>(input.shape[1]);
-  const int H    = static_cast<int>(input.shape[2]);
-  const int W    = static_cast<int>(input.shape[3]);
-  const int Cout = params.out_channels;
-  const int Ho   = static_cast<int>(output.shape[2]);
-  const int Wo   = static_cast<int>(output.shape[3]);
+  const int    N        = static_cast<int>(input.shape[0]);
+  const int    Cin      = static_cast<int>(input.shape[1]);
+  const int    H        = static_cast<int>(input.shape[2]);
+  const int    W        = static_cast<int>(input.shape[3]);
+  const int    Cout     = params.out_channels;
+  const int    Ho       = static_cast<int>(output.shape[2]);
+  const int    Wo       = static_cast<int>(output.shape[3]);
 
   const bool   add_bias = params.bias != nullptr;
   const float* in_ptr   = input.data;
@@ -521,25 +1173,43 @@ void LaunchConv2d(const DeviceTensor& input, DeviceTensor& output, const Conv2dP
   const float* b_ptr    = params.bias;
   float*       out_ptr  = output.data;
 
-  const bool is_1x1 = (params.kH == 1 && params.kW == 1 && params.sH == 1 && params.sW == 1 &&
+  const bool   is_1x1   = (params.kH == 1 && params.kW == 1 && params.sH == 1 && params.sW == 1 &&
                        params.padH == 0 && params.padW == 0 && params.dilation == 1);
-  const bool is_2x2s2 = (params.kH == 2 && params.kW == 2 && params.sH == 2 && params.sW == 2 &&
+  const bool   is_2x2s2 = (params.kH == 2 && params.kW == 2 && params.sH == 2 && params.sW == 2 &&
                          params.padH == 0 && params.padW == 0 && params.dilation == 1);
-  const bool is_3x3s1 = (params.kH == 3 && params.kW == 3 && params.sH == 1 && params.sW == 1 &&
+  const bool   is_3x3s1 = (params.kH == 3 && params.kW == 3 && params.sH == 1 && params.sW == 1 &&
                          params.padH == 0 && params.padW == 0 && params.dilation == 1);
 
   if (is_1x1) {
+    const int  spatial               = H * W;
+    // Student residual/output layers have exact small Cout. The generic
+    // spatial×Cout kernel uses 8-channel tiles, which wastes 5/8 lanes for
+    // Cout=3 and reloads the input for the second partial tile at Cout=12.
+    const bool is_student_small_cout = (Cin == 24 || Cin == 32) && (Cout == 3 || Cout == 12);
+    if (is_student_small_cout) {
+      const std::int64_t numel = static_cast<std::int64_t>(N) * spatial;
+      if (numel > 0) {
+        const int grid = ChooseGridSize(numel, kBlockSize);
+        if (Cout == 3) {
+          Conv2d1x1SmallCoutKernel<3><<<grid, kBlockSize, 0, stream>>>(
+              in_ptr, w_ptr, b_ptr, out_ptr, N, Cin, spatial, add_bias, do_relu);
+        } else {
+          Conv2d1x1SmallCoutKernel<12><<<grid, kBlockSize, 0, stream>>>(
+              in_ptr, w_ptr, b_ptr, out_ptr, N, Cin, spatial, add_bias, do_relu);
+        }
+        CheckCuda(cudaGetLastError(), "Conv2d1x1SmallCoutKernel launch");
+      }
+      return;
+    }
     // Tile: 32 spatial × 8 cout → 256 threads/block
     constexpr int kTileSpatial = 32;
     constexpr int kTileCout    = 8;
     constexpr int kTileCin     = 16;
-    const int     spatial      = H * W;
     dim3          block(kTileSpatial * kTileCout);
     dim3 grid((spatial + kTileSpatial - 1) / kTileSpatial, (Cout + kTileCout - 1) / kTileCout, N);
     if (grid.x > 0 && grid.y > 0 && grid.z > 0) {
-      Conv2d1x1TiledKernel<kTileSpatial, kTileCout, kTileCin>
-          <<<grid, block, 0, stream>>>(in_ptr, w_ptr, b_ptr, out_ptr, N, Cin, Cout, H, W, add_bias,
-                                       do_relu);
+      Conv2d1x1TiledKernel<kTileSpatial, kTileCout, kTileCin><<<grid, block, 0, stream>>>(
+          in_ptr, w_ptr, b_ptr, out_ptr, N, Cin, Cout, H, W, add_bias, do_relu);
       CheckCuda(cudaGetLastError(), "Conv2d1x1TiledKernel launch");
     }
     return;
@@ -557,16 +1227,29 @@ void LaunchConv2d(const DeviceTensor& input, DeviceTensor& output, const Conv2dP
   }
 
   if (is_3x3s1) {
-    // Multi-Cout tiled direct conv. Dispatch by Cout tile so student shapes fill
-    // blocks exactly: bayer_s24_d8 (Cout=24), xtrans_p2_s32_d4 (Cout=32), and
-    // residual teacher-sized layers (Cout>=32). Cin is always reduced in kCinTile
-    // strips — do not gate the Cout tile on Cin (post_conv is 6→24/32).
+    // Prepacked Winograd is opt-in: only immutable square student trunks pass
+    // winograd_f22_weight. Generic Conv2d callers and thin-Cin layers retain
+    // the direct path without allocating or transforming weights per forward.
+    if (params.winograd_f22_weight != nullptr && Cin == Cout && Cin == 24) {
+      LaunchConv2d3x3WinogradF22<kWgOh, kWgOw, kWgBn24, kWgCinTile>(
+          in_ptr, w_ptr, params.winograd_f22_weight, b_ptr, out_ptr, N, Cin, Cout, H, W, Ho, Wo,
+          add_bias, do_relu, stream);
+      return;
+    }
+    if (params.winograd_f22_weight != nullptr && Cin == Cout && Cin == 32) {
+      LaunchConv2d3x3WinogradF22<kWgOh, kWgOw, kWgBn32, kWgCinTile>(
+          in_ptr, w_ptr, params.winograd_f22_weight, b_ptr, out_ptr, N, Cin, Cout, H, W, Ho, Wo,
+          add_bias, do_relu, stream);
+      return;
+    }
+    // Multi-Cout tiled direct conv (8F). Dispatch by Cout tile so student
+    // shapes fill blocks exactly: bayer_s24_d8 (Cout=24), xtrans_p2_s32_d4
+    // (Cout=32). Cin is always reduced in kCinTile strips — do not gate the
+    // Cout tile on Cin (post_conv is 6→24/32).
     if (Cout >= 32) {
-      // X-Trans trunk 32→32 / post 6→32, and any wider nets.
       LaunchConv2d3x3Tiled</*OH=*/8, /*OW=*/16, /*Cout=*/32, /*Cin=*/8>(
           in_ptr, w_ptr, b_ptr, out_ptr, N, Cin, Cout, H, W, Ho, Wo, add_bias, do_relu, stream);
     } else if (Cout >= 24) {
-      // Bayer student trunk 24→24 and post 6→24: one exact Cout tile (was 16+partial).
       LaunchConv2d3x3Tiled</*OH=*/8, /*OW=*/16, /*Cout=*/24, /*Cin=*/8>(
           in_ptr, w_ptr, b_ptr, out_ptr, N, Cin, Cout, H, W, Ho, Wo, add_bias, do_relu, stream);
     } else if (Cout >= 16) {
@@ -590,7 +1273,37 @@ void LaunchConv2d(const DeviceTensor& input, DeviceTensor& output, const Conv2dP
   }
 }
 
+template <typename KernelT>
+void FillKernelAttrs(KernelT kernel, const char* name, int cin, int cout, int threads_per_block,
+                     int dynamic_smem_bytes, Conv2d3x3KernelInfo* out) {
+  cudaFuncAttributes attr{};
+  CheckCuda(cudaFuncGetAttributes(&attr, kernel), "cudaFuncGetAttributes");
+  out->name                   = name;
+  out->cin                    = cin;
+  out->cout                   = cout;
+  out->num_regs               = attr.numRegs;
+  out->static_smem_bytes      = static_cast<int>(attr.sharedSizeBytes);
+  out->max_dynamic_smem_bytes = attr.maxDynamicSharedSizeBytes;
+  out->max_threads_per_block  = attr.maxThreadsPerBlock;
+  out->threads_per_block      = threads_per_block;
+  out->dynamic_smem_bytes     = dynamic_smem_bytes;
+}
+
 }  // namespace
+
+void TransformConv2d3x3WeightsWinogradF22(const float* src_oihw, const int in_channels,
+                                          const int out_channels, float* dst) {
+  if (src_oihw == nullptr || dst == nullptr || in_channels <= 0 || out_channels <= 0) {
+    throw std::runtime_error("TransformConv2d3x3WeightsWinogradF22: invalid argument");
+  }
+  for (int co = 0; co < out_channels; ++co) {
+    for (int ci = 0; ci < in_channels; ++ci) {
+      const float* g = src_oihw + (static_cast<std::int64_t>(co) * in_channels + ci) * 9;
+      float*       u = dst + (static_cast<std::int64_t>(co) * in_channels + ci) * 16;
+      WinogradFilterTransform3x3(g[0], g[1], g[2], g[3], g[4], g[5], g[6], g[7], g[8], u);
+    }
+  }
+}
 
 void Conv2d(const DeviceTensor& input, DeviceTensor& output, const Conv2dParams& params,
             cudaStream_t stream, WorkspacePool* workspace) {
@@ -600,6 +1313,96 @@ void Conv2d(const DeviceTensor& input, DeviceTensor& output, const Conv2dParams&
 void Conv2dBiasRelu(const DeviceTensor& input, DeviceTensor& output, const Conv2dParams& params,
                     cudaStream_t stream, WorkspacePool* workspace) {
   LaunchConv2d(input, output, params, /*do_relu=*/true, stream, workspace);
+}
+
+auto QueryConv2d3x3KernelInfo(const int cin, const int cout, Conv2d3x3KernelInfo* out,
+                              const bool has_prepacked_winograd) -> bool {
+  if (out == nullptr || cin <= 0 || cout <= 0) {
+    return false;
+  }
+  *out                    = Conv2d3x3KernelInfo{};
+
+  const bool use_winograd = has_prepacked_winograd && cin == cout && (cin == 24 || cin == 32);
+  if (use_winograd && cin == 24) {
+    constexpr int kThreads = (kWgOh / 2) * (kWgOw / 2) * kWgBn24;
+    FillKernelAttrs(Conv2d3x3s1WinogradF22Kernel<kWgOh, kWgOw, kWgBn24, kWgCinTile>,
+                    "winograd_f22_prepacked_24", cin, cout, kThreads, WinogradF22SmemBytes(kWgBn24),
+                    out);
+  } else if (use_winograd && cin == 32) {
+    constexpr int kThreads = (kWgOh / 2) * (kWgOw / 2) * kWgBn32;
+    FillKernelAttrs(Conv2d3x3s1WinogradF22Kernel<kWgOh, kWgOw, kWgBn32, kWgCinTile>,
+                    "winograd_f22_prepacked_32", cin, cout, kThreads, WinogradF22SmemBytes(kWgBn32),
+                    out);
+  } else if (cout >= 32) {
+    FillKernelAttrs(Conv2d3x3s1TiledKernel<8, 16, 32, 8>, "direct_tiled_32", cin, cout,
+                    /*threads=*/8 * 16, DirectTiledSmemBytes(32), out);
+  } else if (cout >= 24) {
+    FillKernelAttrs(Conv2d3x3s1TiledKernel<8, 16, 24, 8>, "direct_tiled_24", cin, cout,
+                    /*threads=*/8 * 16, DirectTiledSmemBytes(24), out);
+  } else if (cout >= 16) {
+    FillKernelAttrs(Conv2d3x3s1TiledKernel<8, 16, 16, 8>, "direct_tiled_16", cin, cout,
+                    /*threads=*/8 * 16, DirectTiledSmemBytes(16), out);
+  } else {
+    FillKernelAttrs(Conv2d3x3s1TiledKernel<8, 16, 8, 8>, "direct_tiled_8", cin, cout,
+                    /*threads=*/8 * 16, DirectTiledSmemBytes(8), out);
+  }
+
+  // Phase 8G+ square-trunk Winograd candidate (not product-selected after
+  // retention fail). Touching cudaFuncGetAttributes keeps the device code
+  // linked for re-measurement. Prior implicit-GEMM stays compiled via the
+  // same symbol reference path when needed for comparison builds.
+  if (!use_winograd && cin == 24 && cout == 24) {
+    constexpr int      kThreads = (kWgOh / 2) * (kWgOw / 2) * kWgBn24;
+    cudaFuncAttributes attr{};
+    CheckCuda(cudaFuncGetAttributes(
+                  &attr, Conv2d3x3s1WinogradF22Kernel<kWgOh, kWgOw, kWgBn24, kWgCinTile>),
+              "cudaFuncGetAttributes winograd_f22_24");
+    out->candidate_name               = "winograd_f22_24";
+    out->candidate_num_regs           = attr.numRegs;
+    out->candidate_threads_per_block  = kThreads;
+    out->candidate_dynamic_smem_bytes = WinogradF22SmemBytes(kWgBn24);
+    // Keep implicit-GEMM object linked for dual-candidate rebuilds.
+    cudaFuncAttributes ig{};
+    CheckCuda(
+        cudaFuncGetAttributes(
+            &ig, Conv2d3x3s1ImplicitGemmKernel<kIgOh, kIgOw, kIgBn24, kIgCinTile, kIgTm, kIgTn>),
+        "cudaFuncGetAttributes implicit_gemm_24");
+    (void)ig;
+  } else if (!use_winograd && cin == 32 && cout == 32) {
+    constexpr int      kThreads = (kWgOh / 2) * (kWgOw / 2) * kWgBn32;
+    cudaFuncAttributes attr{};
+    CheckCuda(cudaFuncGetAttributes(
+                  &attr, Conv2d3x3s1WinogradF22Kernel<kWgOh, kWgOw, kWgBn32, kWgCinTile>),
+              "cudaFuncGetAttributes winograd_f22_32");
+    out->candidate_name               = "winograd_f22_32";
+    out->candidate_num_regs           = attr.numRegs;
+    out->candidate_threads_per_block  = kThreads;
+    out->candidate_dynamic_smem_bytes = WinogradF22SmemBytes(kWgBn32);
+    cudaFuncAttributes ig{};
+    CheckCuda(
+        cudaFuncGetAttributes(
+            &ig, Conv2d3x3s1ImplicitGemmKernel<kIgOh, kIgOw, kIgBn32, kIgCinTile, kIgTm, kIgTn>),
+        "cudaFuncGetAttributes implicit_gemm_32");
+    (void)ig;
+  } else if (use_winograd) {
+    cudaFuncAttributes direct{};
+    if (cin == 24) {
+      CheckCuda(cudaFuncGetAttributes(&direct, Conv2d3x3s1TiledKernel<8, 16, 24, 8>),
+                "cudaFuncGetAttributes direct_tiled_24");
+      out->candidate_name               = "direct_tiled_24";
+      out->candidate_threads_per_block  = 8 * 16;
+      out->candidate_dynamic_smem_bytes = DirectTiledSmemBytes(24);
+    } else {
+      CheckCuda(cudaFuncGetAttributes(&direct, Conv2d3x3s1TiledKernel<8, 16, 32, 8>),
+                "cudaFuncGetAttributes direct_tiled_32");
+      out->candidate_name               = "direct_tiled_32";
+      out->candidate_threads_per_block  = 8 * 16;
+      out->candidate_dynamic_smem_bytes = DirectTiledSmemBytes(32);
+    }
+    out->candidate_num_regs = direct.numRegs;
+  }
+
+  return true;
 }
 
 }  // namespace alcedo::cuda::nn

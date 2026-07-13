@@ -27,19 +27,31 @@ namespace alcedo::cuda::nn {
 // Implementation is pure CUDA Runtime (cudart only). No cuBLAS / cuDNN link —
 // packaging ships only cudart64_*.dll for CUDA.
 struct Conv2dParams {
-  int          in_channels  = 0;
-  int          out_channels = 0;
-  int          kH           = 1;
-  int          kW           = 1;
-  int          sH           = 1;
-  int          sW           = 1;
-  int          padH         = 0;
-  int          padW         = 0;
-  int          dilation     = 1;  // isotropic; same for H and W
-  int          groups       = 1;
-  const float* weight       = nullptr;  // OIHW device pointer
-  const float* bias         = nullptr;  // optional, length out_channels
+  int          in_channels         = 0;
+  int          out_channels        = 0;
+  int          kH                  = 1;
+  int          kW                  = 1;
+  int          sH                  = 1;
+  int          sW                  = 1;
+  int          padH                = 0;
+  int          padW                = 0;
+  int          dilation            = 1;  // isotropic; same for H and W
+  int          groups              = 1;
+  const float* weight              = nullptr;  // OIHW device pointer
+  // Optional pre-transformed F(2x2,3x3) weights, laid out [Cout,Cin,16].
+  // When present for an exact 24->24 or 32->32 valid 3x3 student trunk,
+  // dispatch uses the Winograd path. The OIHW pointer remains required for
+  // validation/fallback and for callers that do not opt into prepacking.
+  const float* winograd_f22_weight = nullptr;
+  const float* bias                = nullptr;  // optional, length out_channels
 };
+
+// Host-side one-time weight prepack for Winograd F(2x2,3x3).
+// `dst` must hold out_channels * in_channels * 16 floats. This is intentionally
+// separate from Conv2d so immutable model weights are transformed at load time,
+// never once per spatial block or forward.
+void TransformConv2d3x3WeightsWinogradF22(const float* src_oihw, int in_channels, int out_channels,
+                                          float* dst);
 
 // PyTorch / demosaicnet spatial output size:
 //   floor((in + 2*pad - dilation*(k-1) - 1) / stride) + 1
@@ -63,20 +75,47 @@ struct Conv2dParams {
 // Output spatial size must match Conv2dOutputHeight/Width.
 //
 // Dispatch (cudart only — no cuBLAS / cuDNN):
-//   - 1×1 s=1 pad=0: tiled GEMM-style (spatial × Cout tiles, Cin strip SMEM)
+//   - 1×1 s=1 pad=0: tiled GEMM-style (spatial × Cout tiles, Cin strip SMEM);
+//     exact small-Cout kernels for student residual/output (Cout 12 / 3)
 //   - 2×2 s=2 pad=0: specialized pack_mosaick kernel
-//   - 3×3 s=1 pad=0: multi-Cout tiled direct conv (input apron + weight SMEM,
-//     register-blocked Cout) — demosaicnet primary hot path
+//   - 3×3 s=1 pad=0: multi-Cout tiled direct (input apron + weight SMEM) for
+//     all student shapes. Phase 8G/8G+ candidates (implicit-GEMM, Winograd
+//     F(2×2,3×3)) were measured and not retained; they remain queryable.
 //   - other shapes: generic direct fallback
 //
-// `workspace` is reserved for scratch-backed paths (e.g. im2col / Winograd).
-// Current kernels are direct / implicit and do not allocate; when a non-null
-// workspace is passed, the hot path still performs no cudaMalloc.
+// `workspace` is reserved for scratch-backed multi-pass paths. Current product
+// kernels do not allocate; when a non-null workspace is passed, the hot path
+// still performs no cudaMalloc.
 void Conv2d(const DeviceTensor& input, DeviceTensor& output, const Conv2dParams& params,
             cudaStream_t stream = nullptr, WorkspacePool* workspace = nullptr);
 
 // Fused Conv2d + bias + ReLU. Bias may be null (then only ReLU is applied after conv).
 void Conv2dBiasRelu(const DeviceTensor& input, DeviceTensor& output, const Conv2dParams& params,
                     cudaStream_t stream = nullptr, WorkspacePool* workspace = nullptr);
+
+// Benchmark-only: describe the 3×3 s=1 kernel family that LaunchConv2d would
+// select for the given channel shape (product path). Does not launch work or
+// synchronize. Returns false when the shape would not use a specialized 3×3
+// path. Alternate candidate attributes (Winograd F(2×2,3×3)) are exposed when
+// a square student trunk has a non-product experimental kernel still linked.
+struct Conv2d3x3KernelInfo {
+  const char* name                         = nullptr;  // product path, e.g. "direct_tiled_24"
+  int         cin                          = 0;
+  int         cout                         = 0;
+  int         num_regs                     = 0;
+  int         static_smem_bytes            = 0;
+  int         max_dynamic_smem_bytes       = 0;
+  int         max_threads_per_block        = 0;
+  int         threads_per_block            = 0;
+  int         dynamic_smem_bytes           = 0;
+  // Non-null when an alternate square-trunk candidate is still compiled in.
+  const char* candidate_name               = nullptr;
+  int         candidate_num_regs           = 0;
+  int         candidate_threads_per_block  = 0;
+  int         candidate_dynamic_smem_bytes = 0;
+};
+
+[[nodiscard]] auto QueryConv2d3x3KernelInfo(int cin, int cout, Conv2d3x3KernelInfo* out,
+                                            bool has_prepacked_winograd = false) -> bool;
 
 }  // namespace alcedo::cuda::nn

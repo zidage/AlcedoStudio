@@ -1,7 +1,7 @@
 # CUDA CNN Forward Framework + DemosaicNet Plan
 
 Date: 2026-07-09
-Updated: 2026-07-12
+Updated: 2026-07-13
 
 Status: Phases 0–6c landed for the teacher modules (generic CNN ops, hard-coded
 Bayer/XTrans modules, lazy cache, goldens, Neural preprocess, and
@@ -26,13 +26,44 @@ fix for student widths (exact Cout-tile 24 / ungated Cout-tile 32 for thin-Cin
 post_conv). Authoritative p50 ratios on RTX 3080 Laptop (CC 8.6, 20 iters):
 Bayer ~4.22× Legacy, X-Trans ~5.70× Legacy (miss the ≤1.10 objective; FP32 track
 still open — effective ~1.6–2.0 TFLOP/s vs sustained ~11.6). Historical teacher
-baselines (~2.83 s Bayer / ~9.52 s X-Trans) remain comparison only. **Phase 8G
-is selected as an FP32 CUDA-core 3x3 kernel pass:** replace the high-register
-per-pixel/all-Cout hot kernel for the student shape families with a
-shape-specialized SIMT implicit-GEMM kernel, while retaining the current direct
-kernel as fallback. CUDA Graph and multi-lane execution stay gated; Tensor Core,
-TF32, FP16, and BF16 paths are out of scope so the CUDA path keeps its current
-CC 6.0+ compatibility contract.
+baselines (~2.83 s Bayer / ~9.52 s X-Trans) remain comparison only. **Phase 8G landed (FP32 SIMT 3×3 candidates measured, not product-retained):**
+apron-based register-micro-tiled implicit-GEMM kernels for square student trunks
+(24→24 / 32→32) were implemented with per-layer harness + `QueryConv2d3x3KernelInfo`
+resource reporting. On RTX 3080 Laptop they did not clear the full-frame ≥5% p50
+retention rule versus the 8F multi-Cout direct path (best IG full-frame Bayer
+~579 ms / X-Trans ~659 ms vs 8F ~499 / ~627 ms), so product dispatch keeps
+`Conv2d3x3s1TiledKernel` and candidates remain queryable for re-measurement.
+CUDA Graph and multi-lane stay gated; Tensor Core / TF32 / FP16 / BF16 remain
+out of scope. See `build/perf/demosaicnet_student_8g_summary.json`. **The
+post-8G FP32 small-Cout pass is product-retained:** exact `Cout=12` residual and
+`Cout=3` output 1x1 kernels remove partial Cout tiles and duplicate input reads.
+Release per-layer medians improved from ~0.65/0.87 to ~0.11/0.30 ms (Bayer) and
+~0.78/0.86 to ~0.12/0.36 ms (X-Trans). A short thermally valid full-frame check
+measured ~393 / ~427 ms; the long recheck that reached 85-87 C and P8/210 MHz
+is rejected as throttled data, not an optimization result. **A benchmark-only
+tile concurrency experiment is also complete and rejected for product use:**
+2/3 independent stream+workspace lanes reduced throughput by ~5-8% versus one
+lane while multiplying owned workspace VRAM (~384-429 MiB per lane). The
+product remains single-stream/single-workspace. **Phase 8G+ FP32 Winograd
+F(2×2,3×3) measured, not retained:** fused Winograd for square trunks
+(24→24 / 32→32) is correct (CPU match + student goldens while dispatched) but
+slower than product direct on Release microbench (~0.96 ms / ~3.1 TFLOP/s vs
+direct ~0.61 ms / ~4.9 TFLOP/s on Bayer trunk) and regresses short full-frame
+(~484 / ~561 ms vs small-Cout+direct ~393 / ~427 ms). Product stays on 8F
+direct 3×3; Winograd remains queryable via `QueryConv2d3x3KernelInfo.candidate_*`.
+See `build/perf/demosaicnet_student_8g_winograd_summary.json`.
+**The follow-up Winograd implementation audit is complete:** the first fused
+candidate repeated `B^T d B` once per output channel and transformed immutable
+OIHW filters again in every spatial block. The repaired candidate pretransforms
+filters once on the host/model-load side, computes each input transform once per
+`(tile,Cin)` and shares it across Cout, and pads 16-coefficient shared-memory
+records to 17 floats to avoid power-of-two bank aliasing. It is correct across
+odd partial tiles and both student goldens, but still loses a same-build Release
+recheck: Bayer square trunks ~1.13-1.20 ms vs direct ~0.57-0.60 ms; X-Trans
+~1.65-1.68 ms vs direct ~0.91-0.93 ms. Product therefore remains direct. The
+repaired path is opt-in through `Conv2dParams::winograd_f22_weight` and harness
+`--conv-winograd`, so it cannot silently change normal dispatch. See
+`build/perf/demosaicnet_student_8g_{direct_recheck,winograd_repaired}_conv.json`.
 
 Phase 7 keeps the broader workspace policy / multi-image readiness work. Phase
 8 first uses one ordered CUDA stream and one reusable workspace per decode;
@@ -1818,7 +1849,114 @@ Implementation order:
   >=5% retention rule; preserve the best correct FP32 dispatch and report the
   remaining gap rather than introducing Tensor Core or reduced precision.
 
-#### 8.8 Measurement matrix and stopping rules
+#### 8.8 Post-8G FP32 small-Cout 1x1 pass
+
+The direct-trunk recheck showed that the retained 8F 3x3 kernels already sustain
+~4.9-5.5 TFLOP/s in isolated Release measurements. The earlier ~1.5-2.0
+TFLOP/s figure divided total product latency by convolution FLOPs and therefore
+did not describe the 3x3 kernels alone. Per-layer timing instead exposed two
+low-arithmetic-intensity 1x1 layers with disproportionate latency:
+
+- `residual`: `24/32 -> 12`; the generic Cout-tile-8 kernel launches a second
+  partial tile and reads the input again;
+- `output`: `24/32 -> 3`; five of every eight Cout lanes are inactive.
+
+The retained `Conv2d1x1SmallCoutKernel<3|12>` assigns one spatial position to
+each thread, reads each Cin value once, and accumulates the exact Cout values in
+registers. It uses scalar FP32 FMA only, allocates no workspace, preserves NCHW
+and OIHW layouts, and keeps the CC 6.0+ contract.
+
+Measured Release medians at the product tile shapes:
+
+| Layer | 8F generic 1x1 | Exact small-Cout | Delta |
+|------|----------------:|-----------------:|------:|
+| Bayer residual `24->12` | ~0.652 ms | ~0.106 ms | -84% |
+| Bayer output `24->3` | ~0.868 ms | ~0.295 ms | -66% |
+| X-Trans residual `32->12` | ~0.783 ms | ~0.122 ms | -84% |
+| X-Trans output `32->3` | ~0.863 ms | ~0.363 ms | -58% |
+
+At 40/48 product jobs this explains approximately 45/56 ms of full-frame
+savings. A short alternating full-frame run (warm-up 1, 5 iterations) measured
+Bayer ~393 ms and X-Trans ~427 ms p50. Treat those absolute values as a retained
+sanity check, not a replacement 20-iteration baseline: the laptop reached 87 C
+after the run, and a preceding long run fell to P8 / 210 MHz and produced
+invalid multi-second samples.
+
+Correctness coverage includes purpose-named CPU comparisons for product
+`24->12` residual and `32->3` output shapes plus both exported student goldens.
+The non-performance Conv2d/DemosaicNet selection passes 27/27 tests. Existing
+Debug C64 soft performance floors are excluded from this correctness result.
+
+#### 8.9 Post-8G tile concurrency experiment
+
+`DemosaicNetPerfHarness --mode tile --lanes N` now creates real independent
+lanes for experiment only. Each lane owns one CUDA stream,
+`NeuralDemosaicWorkspace`, boundary buffers, and RGB output; immutable model
+weights and the synthetic read-only CFA input are shared. Timed batches enqueue
+all lanes before waiting, validate identical RGB output, and report batch wall
+time, maximum per-lane CUDA event time, aggregate allocation generation, and
+owned device bytes. This does not change `ProcessCudaTiled`.
+
+Short Release batches (warm-up 2, 10 iterations) on RTX 3080 Laptop, P0 with SM
+clock ~1.67-1.71 GHz:
+
+| Variant | 1 lane | 2 lanes | 3 lanes | Owned VRAM per lane |
+|---------|-------:|--------:|--------:|--------------------:|
+| Bayer | ~163 tiles/s | ~155 tiles/s | ~157 tiles/s | ~429 MiB |
+| X-Trans | ~188 tiles/s | ~178 tiles/s | ~173 tiles/s | ~384 MiB |
+
+Batch latency scaled almost linearly with lane count, so the concurrent streams
+compete for already-saturated SM/register/shared-memory resources rather than
+hiding launch gaps. No candidate clears the >=5% full-frame retention gate;
+multi-lane product execution is rejected and the default remains one lane.
+Artifacts: `build/perf/demosaicnet_tile_lanes_{1,2,3}.json`.
+
+#### 8.10 Winograd implementation audit and repaired candidate
+
+The initial F(2x2,3x3) result did not isolate the algorithm from avoidable
+implementation overhead. The follow-up audit found three concrete issues:
+
+1. `B^T d B` was recomputed independently by all 24/32 output-channel threads
+   for the same spatial tile and Cin value.
+2. Immutable 3x3 filters were transformed from OIHW inside every spatial block
+   and every forward rather than once before hot-path dispatch.
+3. Tight 16-float U/V records created regular shared-memory bank aliasing. A
+   17-float shared stride reduced the repaired candidate latency by roughly
+   2.2-2.5x versus its unpadded version in the same implementation series.
+
+The retained experimental API accepts an optional pretransformed
+`[Cout,Cin,16]` pointer. Generic callers still supply OIHW only and select direct;
+the performance harness opts in explicitly with `--conv-winograd`. CPU reference
+tests cover 24- and 32-channel square trunks with partial odd edge tiles. All
+136 non-performance `MlOpsTest` cases, including student exported goldens, pass.
+
+Same-build Release medians on RTX 3080 Laptop (20 measured iterations):
+
+| Trunk | Direct | Repaired Winograd | Result |
+|-------|-------:|------------------:|--------|
+| Bayer 24->24 | ~0.57-0.60 ms | ~1.13-1.20 ms | reject (~1.9-2.0x slower) |
+| X-Trans 32->32 | ~0.91-0.93 ms | ~1.65-1.68 ms | reject (~1.8x slower) |
+
+The F(2x2,3x3) multiply-count reduction is real, but for these narrow FP32 NCHW
+layers the transform, synchronization, shared staging, and four-output epilogue
+remain more expensive than the retained direct kernel. Do not product-dispatch
+this candidate or extend it to thin-Cin layers. Future work toward the 100 ms
+goal should target activation lifetime/tile-size and launch amortization, or a
+deliberate channels-last/vectorized convolution track, rather than another fused
+F(2x2,3x3) tile permutation.
+
+The executable follow-up plan is tracked separately in
+[`cuda_demosaicnet_performance_next.md`](cuda_demosaicnet_performance_next.md).
+
+Artifacts:
+
+- `build/perf/demosaicnet_student_8g_direct_recheck_conv.json`
+- `build/perf/demosaicnet_student_8g_winograd_repaired_conv.json`
+- rejected diagnostic layouts:
+  `demosaicnet_student_8g_winograd_{prepacked,prepacked_padded,
+  prepacked_transposed,warp_per_tile}_conv.json`
+
+#### 8.11 Measurement matrix and stopping rules
 
 Every optimization candidate is evaluated with this matrix:
 
@@ -1832,6 +1970,7 @@ Every optimization candidate is evaluated with this matrix:
 | Precision | FP32 only |
 | HLR | off (primary), on (regression/secondary timing) |
 | Iteration | 3 warm-up, >=20 measured |
+| Device state | temperature, P-state, SM/memory clocks at start/end |
 
 Stopping rules:
 
@@ -1848,8 +1987,12 @@ Stopping rules:
 5. Never infer full-frame success by multiplying a single-tile number; always
    run the full fixtures because lane saturation, WDDM scheduling, clocks, and
    edge-tile shapes affect p95.
+6. Reject a performance run when thermal/power throttling changes the GPU to a
+   low-clock state (for example the observed P8 / 210 MHz) or when clocks vary
+   enough to dominate the candidate delta. Cool the device and rerun candidates
+   in short alternating batches; never interpret throttling as a code regression.
 
-#### 8.9 Implementation slices
+#### 8.12 Implementation slices
 
 The change is intentionally split so topology, tile geometry, and performance
 work do not land as one unreviewable patch:
@@ -1871,11 +2014,33 @@ work do not land as one unreviewable patch:
    accounting), retained student-width 3×3 dispatch; CUDA Graph / lanes / mixed
    precision deferred with measured rationale (see exit criteria +
    `build/perf/demosaicnet_student_8f_summary.json`).
-7. **8G — FP32 SIMT 3x3 kernel pass:** benchmark per-layer/resource evidence,
-   implement shape-specialized implicit-GEMM kernels for the `24->24` and
-   `32->32` trunks, then extend to thin-Cin first/post layers only when measured.
-   Keep the 8F direct kernel as fallback. CUDA Graph / lanes remain gated;
-   Tensor Core and reduced-precision paths are explicitly excluded.
+7. **8G — FP32 SIMT 3x3 kernel pass:** ✅ per-layer + kernel-attribute harness;
+   apron-based implicit-GEMM candidates for `24->24` / `32->32` implemented and
+   correctness-tested; full-frame retention failed (≥5% p50) so 8F direct remains
+   product path; thin-Cin left on direct; CUDA Graph / lanes / Tensor Core /
+   reduced precision still excluded (see `build/perf/demosaicnet_student_8g_summary.json`).
+8. **Post-8G — FP32 exact small-Cout 1x1 pass:** ✅ product-retain exact
+   `Cout=12` residual and `Cout=3` output kernels; per-layer latency falls
+   58-84%, short full-frame sanity check is ~393 / ~427 ms, and 27/27 selected
+   correctness/golden tests pass. Long thermally throttled samples are rejected;
+   see `build/perf/demosaicnet_student_small_cout_{conv,full_short}.json`.
+9. **Post-8G — tile concurrency experiment:** ✅ benchmark-only real 1/2/3
+   stream+workspace lanes with output/allocation/VRAM checks. Two and three
+   lanes regress throughput by ~5-8% and consume ~2x/3x workspace VRAM, so the
+   product path remains single-lane; see
+   `build/perf/demosaicnet_tile_lanes_{1,2,3}.json`.
+10. **8G+ — FP32 Winograd F(2×2,3×3) trunk pass:** ✅ fused candidate for
+    `24->24` / `32->32` implemented and correctness-tested; per-layer and short
+    full-frame retention failed vs product direct (+57% trunk latency; short
+    full-frame ~484/561 ms vs ~393/427 ms). Product remains 8F direct 3×3;
+    candidate queryable as `winograd_f22_24/32`. See
+    `build/perf/demosaicnet_student_8g_winograd_{conv,full_short,summary}.json`.
+11. **8G+ audit — repaired prepacked/shared-input Winograd:** ✅ remove repeated
+    input/filter transforms, add bank-conflict-safe shared layout, explicit
+    `--conv-winograd` measurement, partial-edge CPU comparisons, and same-build
+    direct comparison. Best repaired candidate remains ~1.8-2.0x slower, so the
+    product stays direct; see
+    `build/perf/demosaicnet_student_8g_{direct_recheck,winograd_repaired}_conv.json`.
 
 Each slice must keep `MlOpsTest` and RAW CUDA tests green. Build/test with the
 repository's MSVC wrapper; do not add timing assertions to default correctness
