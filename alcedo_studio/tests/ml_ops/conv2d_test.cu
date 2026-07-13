@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "cuda/nn/conv2d.hpp"
+#include "cuda/nn/cutlass_conv2d.hpp"
 #include "cuda/nn/device_buffer.hpp"
 #include "cuda/nn/relu.hpp"
 #include "cuda/nn/safetensors.hpp"
@@ -201,6 +202,78 @@ auto RunGpuConv(const std::vector<float>& h_in, const std::vector<float>& h_w,
   return d_out.Download();
 }
 
+auto NchwToNhwc(const std::vector<float>& nchw, const int N, const int C, const int H, const int W)
+    -> std::vector<float> {
+  std::vector<float> nhwc(nchw.size());
+  for (int n = 0; n < N; ++n) {
+    for (int y = 0; y < H; ++y) {
+      for (int x = 0; x < W; ++x) {
+        for (int c = 0; c < C; ++c) {
+          nhwc[((static_cast<std::size_t>(n) * H + y) * W + x) * C + c] =
+              nchw[((static_cast<std::size_t>(n) * C + c) * H + y) * W + x];
+        }
+      }
+    }
+  }
+  return nhwc;
+}
+
+auto NhwcToNchw(const std::vector<float>& nhwc, const int N, const int C, const int H, const int W)
+    -> std::vector<float> {
+  std::vector<float> nchw(nhwc.size());
+  for (int n = 0; n < N; ++n) {
+    for (int y = 0; y < H; ++y) {
+      for (int x = 0; x < W; ++x) {
+        for (int c = 0; c < C; ++c) {
+          nchw[((static_cast<std::size_t>(n) * C + c) * H + y) * W + x] =
+              nhwc[((static_cast<std::size_t>(n) * H + y) * W + x) * C + c];
+        }
+      }
+    }
+  }
+  return nchw;
+}
+
+auto RunGpuNhwcTrunk(const std::vector<float>& h_in_nchw, const std::vector<float>& h_w,
+                     const std::vector<float>& h_b, const int channels, const int H, const int W)
+    -> std::vector<float> {
+  const auto         h_in_nhwc = NchwToNhwc(h_in_nchw, 1, channels, H, W);
+  std::vector<float> h_w_ckco(static_cast<std::size_t>(channels) * channels * 9);
+  cuda::nn::TransformConv2d3x3WeightsNhwc(h_w.data(), channels, channels, h_w_ckco.data());
+
+  cuda::nn::DeviceBufferF32 d_in(h_in_nhwc.size());
+  cuda::nn::DeviceBufferF32 d_w(h_w_ckco.size());
+  cuda::nn::DeviceBufferF32 d_b(h_b.size());
+  cuda::nn::DeviceBufferF32 d_out(static_cast<std::size_t>(channels) * (H - 2) * (W - 2));
+  d_in.Upload(h_in_nhwc);
+  d_w.Upload(h_w_ckco);
+  d_b.Upload(h_b);
+  cuda::nn::Conv2d3x3NhwcBiasRelu(d_in.data(), d_out.data(), d_w.data(), d_b.data(), 1, H, W,
+                                  channels);
+  EXPECT_EQ(::cudaDeviceSynchronize(), cudaSuccess);
+  return NhwcToNchw(d_out.Download(), 1, channels, H - 2, W - 2);
+}
+
+auto RunGpuCutlassNhwcTrunk(const std::vector<float>& h_in_nchw,
+                            const std::vector<float>& h_w, const std::vector<float>& h_b,
+                            const int channels, const int H, const int W) -> std::vector<float> {
+  const auto         h_in_nhwc = NchwToNhwc(h_in_nchw, 1, channels, H, W);
+  std::vector<float> h_w_krsc(static_cast<std::size_t>(channels) * channels * 9);
+  cuda::nn::TransformConv2d3x3WeightsCutlassKrsc(h_w.data(), channels, h_w_krsc.data());
+
+  cuda::nn::DeviceBufferF32 d_in(h_in_nhwc.size());
+  cuda::nn::DeviceBufferF32 d_w(h_w_krsc.size());
+  cuda::nn::DeviceBufferF32 d_b(h_b.size());
+  cuda::nn::DeviceBufferF32 d_out(static_cast<std::size_t>(channels) * (H - 2) * (W - 2));
+  d_in.Upload(h_in_nhwc);
+  d_w.Upload(h_w_krsc);
+  d_b.Upload(h_b);
+  cuda::nn::Conv2d3x3NhwcCutlassBiasRelu(d_in.data(), d_out.data(), d_w.data(), d_b.data(), 1, H,
+                                         W, channels);
+  EXPECT_EQ(::cudaDeviceSynchronize(), cudaSuccess);
+  return NhwcToNchw(d_out.Download(), 1, channels, H - 2, W - 2);
+}
+
 }  // namespace
 
 class MlOpsConv2dTest : public ::testing::Test {
@@ -232,6 +305,35 @@ TEST_F(MlOpsConv2dTest, OneByOneMatchesCpu) {
       RunGpuConv(hin, hw, &hb, N, Cin, Cout, H, W, 1, 1, 1, 1, 0, 0, false, nullptr);
   // 1×1 accumulation over Cin=8 — tight tol
   ExpectVectorsNear(actual, expected, 1e-5f);
+}
+
+TEST_F(MlOpsConv2dTest, ChannelsLastSquareStudentTrunksMatchNchwReference) {
+  constexpr int H = 19;
+  constexpr int W = 23;
+  for (const int channels : {24, 32}) {
+    const auto hin = MakePattern(static_cast<std::size_t>(channels) * H * W,
+                                 static_cast<std::uint32_t>(900 + channels));
+    const auto hw  = MakePattern(static_cast<std::size_t>(channels) * channels * 9,
+                                 static_cast<std::uint32_t>(1000 + channels));
+    const auto hb  = MakePattern(static_cast<std::size_t>(channels),
+                                 static_cast<std::uint32_t>(1100 + channels));
+    const auto expected =
+        CpuConv2d(hin, hw, &hb, 1, channels, channels, H, W, 3, 3, 1, 1, 0, 0, 1, true);
+    const auto actual = RunGpuNhwcTrunk(hin, hw, hb, channels, H, W);
+    ExpectVectorsNear(actual, expected, 2e-4F);
+  }
+}
+
+TEST_F(MlOpsConv2dTest, CutlassChannelsLastC32TrunkMatchesNchwReference) {
+  constexpr int H = 19;
+  constexpr int W = 23;
+  constexpr int C = 32;
+  const auto hin = MakePattern(static_cast<std::size_t>(C) * H * W, 1232);
+  const auto hw  = MakePattern(static_cast<std::size_t>(C) * C * 9, 1332);
+  const auto hb  = MakePattern(static_cast<std::size_t>(C), 1432);
+  const auto expected = CpuConv2d(hin, hw, &hb, 1, C, C, H, W, 3, 3, 1, 1, 0, 0, 1, true);
+  const auto actual   = RunGpuCutlassNhwcTrunk(hin, hw, hb, C, H, W);
+  ExpectVectorsNear(actual, expected, 3e-4F);
 }
 
 TEST_F(MlOpsConv2dTest, StudentResidualOneByOneExactCout12MatchesCpu) {

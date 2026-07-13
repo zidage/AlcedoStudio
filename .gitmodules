@@ -29,3 +29,6 @@
 [submodule "alcedo_studio/src/third_party/grpc"]
 	path = alcedo_studio/src/third_party/grpc
 	url = https://github.com/grpc/grpc.git
+[submodule "alcedo_studio/src/third_party/cutlass"]
+	path = alcedo_studio/src/third_party/cutlass
+	url = https://github.com/NVIDIA/cutlass.git

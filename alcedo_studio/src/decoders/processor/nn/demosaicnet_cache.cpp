@@ -22,17 +22,17 @@ namespace fs = std::filesystem;
 [[nodiscard]] auto VariantFileName(DemosaicNetVariant variant) -> const char* {
   switch (variant) {
     case DemosaicNetVariant::Bayer:
-      return "bayer.safetensors";
+      return "bayer_nhwc.safetensors";
     case DemosaicNetVariant::XTrans:
-      return "xtrans.safetensors";
+      return "xtrans_nhwc.safetensors";
   }
-  return "bayer.safetensors";
+  return "bayer_nhwc.safetensors";
 }
 
 [[nodiscard]] auto DirHasModels(const fs::path& dir) -> bool {
   std::error_code ec;
-  return fs::is_regular_file(dir / "bayer.safetensors", ec) ||
-         fs::is_regular_file(dir / "xtrans.safetensors", ec);
+  return fs::is_regular_file(dir / "bayer_nhwc.safetensors", ec) ||
+         fs::is_regular_file(dir / "xtrans_nhwc.safetensors", ec);
 }
 
 }  // namespace

@@ -69,6 +69,11 @@ class XTransDemosaicNet : public NnWeightModule<XTransDemosaicNet> {
                   cuda::nn::WorkspacePool& workspace, cudaStream_t stream = nullptr,
                   bool apply_gamma_decode = true) const;
 
+  void ForwardHwcChannelsLast(const cuda::nn::DeviceTensor& input, float* rgb_hwc,
+                              std::size_t rgb_step_bytes, cuda::nn::WorkspacePool& workspace,
+                              cudaStream_t stream = nullptr,
+                              bool apply_gamma_decode = true) const;
+
   [[nodiscard]] static auto NaturalOutputHeight(int input_h) -> int {
     return input_h - kNaturalSpatialLoss;
   }
@@ -124,8 +129,11 @@ class XTransDemosaicNet : public NnWeightModule<XTransDemosaicNet> {
  private:
   cuda::nn::DeviceBufferF32 pack_w_;  // fixed, no bias
   cuda::nn::DeviceBufferF32 trunk_w_[kDepth];
+  // CUTLASS KRSC prepack for the persistent NHWC square trunk (layers 1..3).
+  cuda::nn::DeviceBufferF32 trunk_w_nhwc_[kDepth];
   cuda::nn::DeviceBufferF32 trunk_b_[kDepth];
   cuda::nn::DeviceBufferF32 residual_w_;
+  cuda::nn::DeviceBufferF32 residual_w_nhwc_;  // prepacked [width,12]
   cuda::nn::DeviceBufferF32 residual_b_;
   cuda::nn::DeviceBufferF32 unpack_w_;  // fixed, no bias
   cuda::nn::DeviceBufferF32 post_w_;

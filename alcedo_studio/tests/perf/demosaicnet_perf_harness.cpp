@@ -39,6 +39,7 @@
 
 #include "cuda/nn/common.hpp"
 #include "cuda/nn/conv2d.hpp"
+#include "cuda/nn/cutlass_conv2d.hpp"
 #include "cuda/nn/device_buffer.hpp"
 #include "cuda/nn/tensor.hpp"
 #include "cuda/nn/workspace.hpp"
@@ -75,29 +76,29 @@ enum class ModeKind { Full, Tile, Conv };
 enum class ModelKind { Student };
 
 struct HarnessConfig {
-  FixtureKind fixture        = FixtureKind::Bayer;
-  bool        run_bayer      = true;
-  bool        run_xtrans     = false;
-  MethodKind  method         = MethodKind::Both;
-  ModeKind    mode           = ModeKind::Full;
-  ModelKind   model          = ModelKind::Student;
-  int         warmup         = 3;
-  int         iterations     = 20;
-  int         tile_size      = 1024;  // square owned edge (default / --tile-size)
-  int         tile_w         = 0;     // rectangular owned width (0 → tile_size)
-  int         tile_h         = 0;     // rectangular owned height (0 → tile_size)
-  int         strip_height   = 0;     // >0 → full-width strip of this owned height
-  int         lanes          = 1;
-  bool        profile_ranges = false;
-  bool        conv_winograd  = false;
-  bool        ragged_edges   = false;  // P4-B: rectangular boundary jobs (vs paid 1024 tails)
-  fs::path    output_json;
-  fs::path    fixture_override;
+  FixtureKind        fixture            = FixtureKind::Bayer;
+  bool               run_bayer          = true;
+  bool               run_xtrans         = false;
+  MethodKind         method             = MethodKind::Both;
+  ModeKind           mode               = ModeKind::Full;
+  ModelKind          model              = ModelKind::Student;
+  int                warmup             = 3;
+  int                iterations         = 20;
+  int                tile_size          = 1024;  // square owned edge (default / --tile-size)
+  int                tile_w             = 0;     // rectangular owned width (0 → tile_size)
+  int                tile_h             = 0;     // rectangular owned height (0 → tile_size)
+  int                strip_height       = 0;     // >0 → full-width strip of this owned height
+  int                lanes              = 1;
+  bool               profile_ranges     = false;
+  bool               conv_winograd      = false;
+  bool               conv_channels_last = false;  // P4-D isolated NHWC trunk gate only
+  bool               conv_cutlass       = false;  // BSD CUTLASS FP32 NHWC candidate
+  bool               ragged_edges = false;  // P4-B: rectangular boundary jobs (vs paid 1024 tails)
+  fs::path           output_json;
+  fs::path           fixture_override;
 
   // Resolved owned shape after parse (strip fills width at plan time from cover).
-  [[nodiscard]] auto OwnedW() const -> int {
-    return tile_w > 0 ? tile_w : tile_size;
-  }
+  [[nodiscard]] auto OwnedW() const -> int { return tile_w > 0 ? tile_w : tile_size; }
   [[nodiscard]] auto OwnedH() const -> int {
     if (strip_height > 0) {
       return strip_height;
@@ -145,6 +146,8 @@ void PrintUsage(const char* argv0) {
          "1)\n"
       << "  --profile-ranges               Named CUDA-event ranges (full/tile; P0 breakdown)\n"
       << "  --conv-winograd                Conv mode: benchmark prepacked F(2x2,3x3) trunks\n"
+      << "  --conv-channels-last           Conv mode: benchmark isolated NHWC 24/32 trunks (P4-D)\n"
+      << "  --conv-cutlass                Conv mode: benchmark CUTLASS FP32 NHWC trunks\n"
       << "  --ragged-edges                 P4-B: ragged right/bottom owned tiles (vs fixed 1024)\n"
       << "  --output path.json             Write machine-readable JSON\n"
       << "  --raw path                     Override fixture RAW path (single fixture)\n"
@@ -231,6 +234,10 @@ void PrintUsage(const char* argv0) {
       cfg.profile_ranges = true;
     } else if (arg == "--conv-winograd") {
       cfg.conv_winograd = true;
+    } else if (arg == "--conv-channels-last") {
+      cfg.conv_channels_last = true;
+    } else if (arg == "--conv-cutlass") {
+      cfg.conv_cutlass = true;
     } else if (arg == "--ragged-edges") {
       cfg.ragged_edges = true;
     } else if (arg == "--output") {
@@ -342,33 +349,33 @@ void PrintUsage(const char* argv0) {
 }
 
 struct ProductTilePlanSummary {
-  int         aligned_width        = 0;
-  int         aligned_height       = 0;
-  int         phase_sx             = 0;
-  int         phase_sy             = 0;
-  int         tile_count           = 0;
-  int         tiles_x              = 0;
-  int         tiles_y              = 0;
-  int         tile_input_w         = 0;
-  int         tile_input_h         = 0;
-  int         tile_output_w        = 0;
-  int         tile_output_h        = 0;
-  int         tile_step_x          = 0;
-  int         tile_step_y          = 0;
+  int          aligned_width        = 0;
+  int          aligned_height       = 0;
+  int          phase_sx             = 0;
+  int          phase_sy             = 0;
+  int          tile_count           = 0;
+  int          tiles_x              = 0;
+  int          tiles_y              = 0;
+  int          tile_input_w         = 0;
+  int          tile_input_h         = 0;
+  int          tile_output_w        = 0;
+  int          tile_output_h        = 0;
+  int          tile_step_x          = 0;
+  int          tile_step_y          = 0;
   // Historical square aliases (width axis).
-  int         tile_input           = 0;
-  int         tile_output          = 0;
-  int         tile_step            = 0;
-  int         virtual_pad          = 0;
-  int         output_border        = 0;
-  int         overlap_x            = 0;
-  int         overlap_y            = 0;
-  int         first_model_out_x    = 0;
-  int         first_model_out_y    = 0;
-  int         first_input_origin_x = 0;
-  int         first_input_origin_y = 0;
-  std::int64_t paid_output_pixels  = 0;
-  std::string architecture;
+  int          tile_input           = 0;
+  int          tile_output          = 0;
+  int          tile_step            = 0;
+  int          virtual_pad          = 0;
+  int          output_border        = 0;
+  int          overlap_x            = 0;
+  int          overlap_y            = 0;
+  int          first_model_out_x    = 0;
+  int          first_model_out_y    = 0;
+  int          first_input_origin_x = 0;
+  int          first_input_origin_y = 0;
+  std::int64_t paid_output_pixels   = 0;
+  std::string  architecture;
 };
 
 [[nodiscard]] auto SummarizeStudentProductJobs(LibRaw& raw, const FixtureKind kind,
@@ -383,39 +390,39 @@ struct ProductTilePlanSummary {
 
   // Product ProcessCudaTiled covers the full uploaded CFA (raw dims), after phase crop + period
   // trim — not only the LibRaw visible crop. Match that for FLOP / tile accounting.
-  const int raw_w   = static_cast<int>(raw.imgdata.sizes.raw_width);
-  const int raw_h   = static_cast<int>(raw.imgdata.sizes.raw_height);
-  const int period  = CfaPeriod(camera.kind);
-  const int avail_w = raw_w - s.phase_sx;
-  const int avail_h = raw_h - s.phase_sy;
-  s.aligned_width   = avail_w - (avail_w % period);
-  s.aligned_height  = avail_h - (avail_h % period);
+  const int raw_w               = static_cast<int>(raw.imgdata.sizes.raw_width);
+  const int raw_h               = static_cast<int>(raw.imgdata.sizes.raw_height);
+  const int period              = CfaPeriod(camera.kind);
+  const int avail_w             = raw_w - s.phase_sx;
+  const int avail_h             = raw_h - s.phase_sy;
+  s.aligned_width               = avail_w - (avail_w % period);
+  s.aligned_height              = avail_h - (avail_h % period);
 
   // Honor ragged flag for this summary only (restore previous state afterward).
-  const bool prev_ragged = detail::StudentRaggedEdgeTilesEnabled();
+  const bool prev_ragged        = detail::StudentRaggedEdgeTilesEnabled();
   detail::SetStudentRaggedEdgeTilesEnabled(ragged_edges);
-  const detail::CudaTilePolicy policy =
-      kind == FixtureKind::Bayer ? detail::MakeBayerStudentTilePolicy(owned_w, owned_h)
-                                 : detail::MakeXTransStudentTilePolicy(owned_w, owned_h);
+  const detail::CudaTilePolicy policy = kind == FixtureKind::Bayer
+                                            ? detail::MakeBayerStudentTilePolicy(owned_w, owned_h)
+                                            : detail::MakeXTransStudentTilePolicy(owned_w, owned_h);
   detail::SetStudentRaggedEdgeTilesEnabled(prev_ragged);
 
-  s.tile_input_w   = policy.input_tile.width;
-  s.tile_input_h   = policy.input_tile.height;
-  s.tile_output_w  = policy.output_tile.width;
-  s.tile_output_h  = policy.output_tile.height;
-  s.tile_step_x    = policy.step.width;
-  s.tile_step_y    = policy.step.height;
-  s.tile_input     = s.tile_input_w;
-  s.tile_output    = s.tile_output_w;
-  s.tile_step      = s.tile_step_x;
-  s.virtual_pad    = policy.virtual_pad.x;
-  s.output_border  = policy.output_border.x;
-  s.overlap_x      = std::max(0, s.tile_output_w - s.tile_step_x);
-  s.overlap_y      = std::max(0, s.tile_output_h - s.tile_step_y);
+  s.tile_input_w      = policy.input_tile.width;
+  s.tile_input_h      = policy.input_tile.height;
+  s.tile_output_w     = policy.output_tile.width;
+  s.tile_output_h     = policy.output_tile.height;
+  s.tile_step_x       = policy.step.width;
+  s.tile_step_y       = policy.step.height;
+  s.tile_input        = s.tile_input_w;
+  s.tile_output       = s.tile_output_w;
+  s.tile_step         = s.tile_step_x;
+  s.virtual_pad       = policy.virtual_pad.x;
+  s.output_border     = policy.output_border.x;
+  s.overlap_x         = std::max(0, s.tile_output_w - s.tile_step_x);
+  s.overlap_y         = std::max(0, s.tile_output_h - s.tile_step_y);
   s.first_model_out_x = -s.virtual_pad + s.output_border;
   s.first_model_out_y = s.first_model_out_x;
-  s.architecture = kind == FixtureKind::Bayer ? BayerDemosaicNet::kArchitecture
-                                              : XTransDemosaicNet::kArchitecture;
+  s.architecture      = kind == FixtureKind::Bayer ? BayerDemosaicNet::kArchitecture
+                                                   : XTransDemosaicNet::kArchitecture;
 
   if (s.aligned_width < period || s.aligned_height < period) {
     return s;
@@ -433,12 +440,10 @@ struct ProductTilePlanSummary {
   int max_gx = 0;
   int max_gy = 0;
   for (const auto& job : jobs) {
-    const int gx =
-        (job.input_origin.x + s.virtual_pad - cover.x) / std::max(1, s.tile_step_x);
-    const int gy =
-        (job.input_origin.y + s.virtual_pad - cover.y) / std::max(1, s.tile_step_y);
-    max_gx = std::max(max_gx, gx);
-    max_gy = std::max(max_gy, gy);
+    const int gx = (job.input_origin.x + s.virtual_pad - cover.x) / std::max(1, s.tile_step_x);
+    const int gy = (job.input_origin.y + s.virtual_pad - cover.y) / std::max(1, s.tile_step_y);
+    max_gx       = std::max(max_gx, gx);
+    max_gy       = std::max(max_gy, gy);
     const int ow = job.owned_w > 0 ? job.owned_w : s.tile_output_w;
     const int oh = job.owned_h > 0 ? job.owned_h : s.tile_output_h;
     s.paid_output_pixels += static_cast<std::int64_t>(ow) * static_cast<std::int64_t>(oh);
@@ -509,14 +514,13 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
   // Resolve cover first so full-width strips can use aligned width as owned_w.
   const ProductTilePlanSummary cover_probe =
       SummarizeStudentProductJobs(*raw, fixture.kind, /*owned_w=*/1024, /*owned_h=*/1024,
-                                 /*ragged_edges=*/false);
-  const detail::StudentOwnedTileShape shape =
-      ResolveOwnedShape(cfg, cover_probe.aligned_width);
-  result.tile_owned_w = shape.width;
-  result.tile_owned_h = shape.height;
+                                  /*ragged_edges=*/false);
+  const detail::StudentOwnedTileShape shape = ResolveOwnedShape(cfg, cover_probe.aligned_width);
+  result.tile_owned_w                       = shape.width;
+  result.tile_owned_h                       = shape.height;
   result.product_plan =
       SummarizeStudentProductJobs(*raw, fixture.kind, shape.width, shape.height, cfg.ragged_edges);
-  result.tile_count = result.product_plan.tile_count;
+  result.tile_count      = result.product_plan.tile_count;
 
   const bool want_legacy = cfg.method == MethodKind::Legacy || cfg.method == MethodKind::Both;
   const bool want_neural = cfg.method == MethodKind::Neural || cfg.method == MethodKind::Both;
@@ -613,7 +617,7 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
     profiler.CaptureTelemetryBefore();
     {
       DemosaicNetProfilerScope scope(&profiler);
-      auto out = RunFullProcess(*raw, RawDemosaicMethod::NeuralEngine);
+      auto                     out = RunFullProcess(*raw, RawDemosaicMethod::NeuralEngine);
       (void)ValidateRgbaOutput(out, "neural profile-ranges");
     }
     profiler.CaptureTelemetryAfter();
@@ -621,8 +625,8 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
     result.profile_json = profiler.ToJsonObjectBody();
   }
 
-  size_t free_b       = 0;
-  size_t total_b      = 0;
+  size_t free_b  = 0;
+  size_t total_b = 0;
   cudaMemGetInfo(&free_b, &total_b);
   result.free_bytes_after  = free_b;
   result.total_bytes_after = total_b;
@@ -634,8 +638,9 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
                                                               : result.active_width;
   const int  cover_h  = result.product_plan.aligned_height > 0 ? result.product_plan.aligned_height
                                                                : result.active_height;
-  const auto work = perf::EstimateFullFrameWork(topology, cover_w, cover_h, result.tile_owned_w,
-                                                result.tile_owned_h, result.product_plan.tile_count);
+  const auto work =
+      perf::EstimateFullFrameWork(topology, cover_w, cover_h, result.tile_owned_w,
+                                  result.tile_owned_h, result.product_plan.tile_count);
   const auto envelope = perf::EstimateDeviceComputeEnvelope(device);
   result.roofline =
       perf::BuildRooflineReport(work, envelope, result.neural_stats.median_ms,
@@ -687,32 +692,30 @@ struct TileLane {
 
 auto RunTileMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> TileFixtureResult {
   TileFixtureResult result;
-  result.fixture_name   = fixture.name;
+  result.fixture_name = fixture.name;
 
   // Product owned-output shape → student input/export contract (P2/P4-C).
   // Strip mode in tile microbench uses owned_w = max(1024, OwnedH()*8) as a stand-in
   // full-width class when no RAW cover is available (constant-area / aspect experiments
   // should pass --tile-width/--tile-height explicitly).
-  const int owned_w = cfg.IsFullWidthStrip()
-                          ? std::max(1024, cfg.strip_height * 8)
-                          : cfg.OwnedW();
+  const int owned_w = cfg.IsFullWidthStrip() ? std::max(1024, cfg.strip_height * 8) : cfg.OwnedW();
   const int owned_h = cfg.OwnedH();
-  const detail::CudaTilePolicy policy =
-      fixture.kind == FixtureKind::Bayer ? detail::MakeBayerStudentTilePolicy(owned_w, owned_h)
-                                         : detail::MakeXTransStudentTilePolicy(owned_w, owned_h);
-  const int input_w  = policy.input_tile.width;
-  const int input_h  = policy.input_tile.height;
-  const int output_w = policy.output_tile.width;
-  const int output_h = policy.output_tile.height;
-  result.input_size  = input_w;   // historical field: report width
-  result.output_size = output_w;
-  result.input_w     = input_w;
-  result.input_h     = input_h;
-  result.output_w    = output_w;
-  result.output_h    = output_h;
-  result.lanes       = cfg.lanes;
+  const detail::CudaTilePolicy policy   = fixture.kind == FixtureKind::Bayer
+                                              ? detail::MakeBayerStudentTilePolicy(owned_w, owned_h)
+                                              : detail::MakeXTransStudentTilePolicy(owned_w, owned_h);
+  const int                    input_w  = policy.input_tile.width;
+  const int                    input_h  = policy.input_tile.height;
+  const int                    output_w = policy.output_tile.width;
+  const int                    output_h = policy.output_tile.height;
+  result.input_size                     = input_w;  // historical field: report width
+  result.output_size                    = output_w;
+  result.input_w                        = input_w;
+  result.input_h                        = input_h;
+  result.output_w                       = output_w;
+  result.output_h                       = output_h;
+  result.lanes                          = cfg.lanes;
 
-  RawCfaPattern pattern = DemosaicNetTrainingPattern(
+  RawCfaPattern pattern                 = DemosaicNetTrainingPattern(
       fixture.kind == FixtureKind::Bayer ? RawCfaKind::Bayer2x2 : RawCfaKind::XTrans6x6);
 
   const unsigned   seed     = fixture.kind == FixtureKind::Bayer ? 0xBA5E11u : 0x7A511u;
@@ -731,12 +734,12 @@ auto RunTileMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> TileFi
   std::vector<std::unique_ptr<TileLane>> lanes;
   lanes.reserve(static_cast<std::size_t>(cfg.lanes));
   for (int lane_index = 0; lane_index < cfg.lanes; ++lane_index) {
-    auto lane                              = std::make_unique<TileLane>();
-    lane->options.workspace                = &lane->workspace;
-    lane->options.model_cache              = &cache;
-    lane->options.student_owned_tile_w     = owned_w;
-    lane->options.student_owned_tile_h     = owned_h;
-    lane->options.student_owned_tile_edge  = (owned_w == owned_h) ? owned_w : 0;
+    auto lane                             = std::make_unique<TileLane>();
+    lane->options.workspace               = &lane->workspace;
+    lane->options.model_cache             = &cache;
+    lane->options.student_owned_tile_w    = owned_w;
+    lane->options.student_owned_tile_h    = owned_h;
+    lane->options.student_owned_tile_edge = (owned_w == owned_h) ? owned_w : 0;
     lanes.push_back(std::move(lane));
   }
 
@@ -829,8 +832,8 @@ auto RunTileMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> TileFi
     profiler.CaptureTelemetryBefore();
     {
       DemosaicNetProfilerScope scope(&profiler);
-      auto&              lane   = *lanes.front();
-      const cudaStream_t stream = cv::cuda::StreamAccessor::getStream(lane.stream);
+      auto&                    lane   = *lanes.front();
+      const cudaStream_t       stream = cv::cuda::StreamAccessor::getStream(lane.stream);
       profiler.BeginFrame(stream);
       enqueue_lane(lane, "profile enqueue");
       profiler.EndFrame(stream);
@@ -942,6 +945,20 @@ struct ConvFixtureResult {
   std::vector<ConvLayerResult> layers;
 };
 
+[[nodiscard]] auto NchwToNhwc(const std::vector<float>& nchw, const int channels, const int height,
+                              const int width) -> std::vector<float> {
+  std::vector<float> nhwc(nchw.size());
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      for (int c = 0; c < channels; ++c) {
+        nhwc[(static_cast<std::size_t>(y) * width + x) * channels + c] =
+            nchw[(static_cast<std::size_t>(c) * height + y) * width + x];
+      }
+    }
+  }
+  return nhwc;
+}
+
 auto RunConvMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> ConvFixtureResult {
   ConvFixtureResult result;
   result.fixture_name = fixture.name;
@@ -962,6 +979,12 @@ auto RunConvMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> ConvFi
     const std::size_t out_numel = static_cast<std::size_t>(layer.cout) * out_h * out_w;
     const std::size_t w_numel =
         static_cast<std::size_t>(layer.cout) * layer.cin * layer.k * layer.k;
+    // Retained hybrid candidate: the in-tree float4 kernel wins at C=24; CUTLASS wins at C=32.
+    const bool cutlass_trunk = cfg.conv_cutlass && layer.k == 3 && layer.s == 1 &&
+                               layer.cin == layer.cout && layer.cin == 32;
+    const bool nhwc_trunk = (cfg.conv_channels_last || cfg.conv_cutlass) && layer.k == 3 &&
+                            layer.s == 1 && layer.cin == layer.cout &&
+                            (layer.cin == 24 || layer.cin == 32);
 
     cuda::nn::DeviceBufferF32 in_buf(in_numel);
     cuda::nn::DeviceBufferF32 out_buf(out_numel);
@@ -981,7 +1004,21 @@ auto RunConvMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> ConvFi
     for (auto& v : host_in) {
       v = dist(rng) + 0.5F;
     }
-    w_buf.Upload(host_w);
+    if (nhwc_trunk) {
+      std::vector<float> nhwc_weights(w_numel);
+      if (cutlass_trunk) {
+        cuda::nn::TransformConv2d3x3WeightsCutlassKrsc(host_w.data(), layer.cin,
+                                                       nhwc_weights.data());
+      } else {
+        cuda::nn::TransformConv2d3x3WeightsNhwc(host_w.data(), layer.cin, layer.cout,
+                                                nhwc_weights.data());
+      }
+      w_buf.Upload(nhwc_weights);
+      in_buf.Upload(NchwToNhwc(host_in, layer.cin, layer.in_h, layer.in_w));
+    } else {
+      w_buf.Upload(host_w);
+      in_buf.Upload(host_in);
+    }
     if (cfg.conv_winograd && layer.k == 3 && layer.s == 1 && layer.cin == layer.cout &&
         (layer.cin == 24 || layer.cin == 32)) {
       std::vector<float> transformed(static_cast<std::size_t>(layer.cout) * layer.cin * 16);
@@ -991,7 +1028,6 @@ auto RunConvMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> ConvFi
       winograd_w_buf.Upload(transformed);
     }
     b_buf.Upload(host_b);
-    in_buf.Upload(host_in);
 
     auto in_tensor =
         cuda::nn::DeviceTensor::Contiguous(in_buf.data(), {1, layer.cin, layer.in_h, layer.in_w});
@@ -1008,7 +1044,14 @@ auto RunConvMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> ConvFi
     params.bias                = b_buf.data();
 
     auto launch                = [&] {
-      if (layer.bias_relu) {
+      if (cutlass_trunk) {
+        cuda::nn::Conv2d3x3NhwcCutlassBiasRelu(
+            in_buf.data(), out_buf.data(), w_buf.data(), b_buf.data(), 1, layer.in_h, layer.in_w,
+            layer.cin);
+      } else if (nhwc_trunk) {
+        cuda::nn::Conv2d3x3NhwcBiasRelu(in_buf.data(), out_buf.data(), w_buf.data(), b_buf.data(),
+                                                       1, layer.in_h, layer.in_w, layer.cin);
+      } else if (layer.bias_relu) {
         cuda::nn::Conv2dBiasRelu(in_tensor, out_tensor, params, nullptr, nullptr);
       } else {
         cuda::nn::Conv2d(in_tensor, out_tensor, params, nullptr, nullptr);
@@ -1047,7 +1090,18 @@ auto RunConvMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> ConvFi
     if (lr.cuda_stats.median_ms > 0.0) {
       lr.gflops = (lr.flops / (lr.cuda_stats.median_ms * 1e-3)) / 1e9;
     }
-    if (layer.k == 3 && layer.s == 1) {
+    if (cutlass_trunk) {
+      lr.kernel_name = "cutlass_simt_sfprop_128x32_32";
+    } else if (nhwc_trunk) {
+      cuda::nn::Conv2d3x3KernelInfo kinfo{};
+      if (cuda::nn::QueryConv2d3x3NhwcKernelInfo(layer.cin, &kinfo)) {
+        lr.kernel_name               = kinfo.name != nullptr ? kinfo.name : "";
+        lr.kernel_num_regs           = kinfo.num_regs;
+        lr.kernel_threads_per_block  = kinfo.threads_per_block;
+        lr.kernel_dynamic_smem_bytes = kinfo.dynamic_smem_bytes;
+        lr.kernel_static_smem_bytes  = kinfo.static_smem_bytes;
+      }
+    } else if (layer.k == 3 && layer.s == 1) {
       cuda::nn::Conv2d3x3KernelInfo kinfo{};
       if (cuda::nn::QueryConv2d3x3KernelInfo(layer.cin, layer.cout, &kinfo,
                                              winograd_w_buf.data() != nullptr)) {
@@ -1202,6 +1256,8 @@ int main(int argc, char** argv) {
     perf::AppendJsonKeyInt(json, "warmup", cfg.warmup);
     perf::AppendJsonKeyInt(json, "iterations", cfg.iterations);
     perf::AppendJsonKeyBool(json, "profile_ranges", cfg.profile_ranges);
+    perf::AppendJsonKeyBool(json, "conv_channels_last", cfg.conv_channels_last);
+    perf::AppendJsonKeyBool(json, "conv_cutlass", cfg.conv_cutlass);
     perf::AppendJsonKeyBool(json, "ragged_edges", cfg.ragged_edges);
     perf::AppendJsonKeyString(json, "model",
                               cfg.model == ModelKind::Student ? "student" : "unknown");
@@ -1273,8 +1329,8 @@ int main(int argc, char** argv) {
       json += "\"fixtures\":[";
       for (std::size_t i = 0; i < fixtures.size(); ++i) {
         const auto r = RunTileMode(fixtures[i], cfg);
-        std::cout << "\n--- tile / " << r.fixture_name << "  input " << r.input_w << "x" << r.input_h
-                  << " -> " << r.output_w << "x" << r.output_h << " ---\n";
+        std::cout << "\n--- tile / " << r.fixture_name << "  input " << r.input_w << "x"
+                  << r.input_h << " -> " << r.output_w << "x" << r.output_h << " ---\n";
         std::cout << "  cold_load_ms=" << r.cold_load_ms << "  lanes=" << r.lanes
                   << "  allocation_generation=" << r.allocation_gen_end << "  owned_device_mib="
                   << (static_cast<double>(r.owned_device_bytes) / (1024.0 * 1024.0))

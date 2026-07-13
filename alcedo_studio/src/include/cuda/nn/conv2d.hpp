@@ -53,6 +53,16 @@ struct Conv2dParams {
 void TransformConv2d3x3WeightsWinogradF22(const float* src_oihw, int in_channels, int out_channels,
                                           float* dst);
 
+// Benchmark-only channels-last 3x3 path for the P4-D gate. Input and output
+// are persistent NHWC buffers; weights are prepacked once from OIHW into
+// [Cin, 3, 3, Cout]. It deliberately supports only the square 24/32 student
+// trunks so no production NCHW call site can select it accidentally.
+void TransformConv2d3x3WeightsNhwc(const float* src_oihw, int in_channels, int out_channels,
+                                   float* dst_ckco);
+void Conv2d3x3NhwcBiasRelu(const float* input_nhwc, float* output_nhwc, const float* weight_ckco,
+                           const float* bias, int batch, int height, int width, int channels,
+                           cudaStream_t stream = nullptr);
+
 // PyTorch / demosaicnet spatial output size:
 //   floor((in + 2*pad - dilation*(k-1) - 1) / stride) + 1
 [[nodiscard]] inline auto Conv2dOutputSize(int input_size, int pad, int dilation, int kernel,
@@ -117,5 +127,9 @@ struct Conv2d3x3KernelInfo {
 
 [[nodiscard]] auto QueryConv2d3x3KernelInfo(int cin, int cout, Conv2d3x3KernelInfo* out,
                                             bool has_prepacked_winograd = false) -> bool;
+
+// Benchmark-only attributes for the P4-D channels-last kernel. This is kept
+// separate from QueryConv2d3x3KernelInfo because NHWC is not a product dispatch.
+[[nodiscard]] auto QueryConv2d3x3NhwcKernelInfo(int channels, Conv2d3x3KernelInfo* out) -> bool;
 
 }  // namespace alcedo::cuda::nn

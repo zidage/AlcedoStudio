@@ -161,6 +161,13 @@ void RunModelOrdinary(const Model& model, const cuda::nn::DeviceTensor& input,
   model.Forward(input, output, workspace, stream, /*force_ordinary_tail=*/!fuse);
 }
 
+// P4-D compatibility escape hatch. Persistent NHWC is the retained product
+// path; set this only to diagnose or fall back to the ordinary NCHW forward.
+[[nodiscard]] auto EnvDisablesPersistentNhwc() -> bool {
+  const char* value = std::getenv("ALCEDO_DEMOASICNET_DISABLE_PERSISTENT_NHWC");
+  return value != nullptr && value[0] != '\0' && value[0] != '0';
+}
+
 template <typename Model>
 void RunModelHwc(const Model& model, const cuda::nn::DeviceTensor& input, cv::cuda::GpuMat& rgb,
                  cuda::nn::WorkspacePool& workspace, const cudaStream_t stream,
@@ -168,8 +175,14 @@ void RunModelHwc(const Model& model, const cuda::nn::DeviceTensor& input, cv::cu
   workspace.Reserve(Model::EstimateWorkspaceBytes(static_cast<int>(input.shape[2]),
                                                   static_cast<int>(input.shape[3]), 1,
                                                   /*fuse_post_output=*/true));
-  model.ForwardHwc(input, reinterpret_cast<float*>(rgb.ptr()),
-                   static_cast<std::size_t>(rgb.step), workspace, stream, apply_gamma_decode);
+  if (!EnvDisablesPersistentNhwc()) {
+    model.ForwardHwcChannelsLast(input, reinterpret_cast<float*>(rgb.ptr()),
+                                 static_cast<std::size_t>(rgb.step), workspace, stream,
+                                 apply_gamma_decode);
+  } else {
+    model.ForwardHwc(input, reinterpret_cast<float*>(rgb.ptr()),
+                     static_cast<std::size_t>(rgb.step), workspace, stream, apply_gamma_decode);
+  }
 }
 
 // Harness / experiment escape hatch: force ordinary launches without rebuilding options.

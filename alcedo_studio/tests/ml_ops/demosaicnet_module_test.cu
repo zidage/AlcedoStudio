@@ -66,7 +66,7 @@ auto FindModelDir() -> fs::path {
     }
   }
 #endif
-  return FindPath("bayer.safetensors",
+  return FindPath("bayer_nhwc.safetensors",
                   {"alcedo_studio/src/config/models/", "../alcedo_studio/src/config/models/",
                    "../../alcedo_studio/src/config/models/",
                    "../../../alcedo_studio/src/config/models/", "src/config/models/",
@@ -144,7 +144,7 @@ TEST_F(MlOpsDemosaicNetTest, BayerLoadWeightsAndRejectWrongShape) {
     GTEST_SKIP() << "model dir not found";
   }
 
-  auto map = cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors");
+  auto map = cuda::nn::LoadSafetensors(model_dir / "bayer_nhwc.safetensors");
   BayerDemosaicNet net;
   EXPECT_FALSE(net.weights_loaded());
   ASSERT_NO_THROW(net.LoadWeights(map));
@@ -169,7 +169,7 @@ TEST_F(MlOpsDemosaicNetTest, BayerLoadWeightsRejectsWrongArchitectureMetadata) {
   if (model_dir.empty()) {
     GTEST_SKIP() << "model dir not found";
   }
-  auto map = cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors");
+  auto map = cuda::nn::LoadSafetensors(model_dir / "bayer_nhwc.safetensors");
   auto meta = map.metadata();
   meta["architecture"] = "teacher_bayer_d15";
   map.SetMetadata(std::move(meta));
@@ -183,7 +183,7 @@ TEST_F(MlOpsDemosaicNetTest, XTransLoadWeightsAndRejectWrongShape) {
     GTEST_SKIP() << "model dir not found";
   }
 
-  auto map = cuda::nn::LoadSafetensors(model_dir / "xtrans.safetensors");
+  auto map = cuda::nn::LoadSafetensors(model_dir / "xtrans_nhwc.safetensors");
   XTransDemosaicNet net;
   ASSERT_NO_THROW(net.LoadWeights(map));
   EXPECT_TRUE(net.weights_loaded());
@@ -296,7 +296,7 @@ TEST_F(MlOpsDemosaicNetTest, BayerStudentForwardMatchesExportedGolden00) {
   const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
 
   BayerDemosaicNet net;
-  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors"));
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer_nhwc.safetensors"));
 
   cuda::nn::DeviceBufferF32 d_in(hin.size());
   d_in.Upload(hin);
@@ -329,7 +329,7 @@ TEST_F(MlOpsDemosaicNetTest, BayerStudentForwardMatchesExportedGolden01) {
   const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
 
   BayerDemosaicNet net;
-  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors"));
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer_nhwc.safetensors"));
   cuda::nn::DeviceBufferF32 d_in(hin.size());
   d_in.Upload(hin);
   cuda::nn::DeviceBufferF32 d_out(expected.size());
@@ -358,7 +358,7 @@ TEST_F(MlOpsDemosaicNetTest, XTransStudentForwardMatchesExportedGolden00) {
   const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
 
   XTransDemosaicNet net;
-  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "xtrans.safetensors"));
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "xtrans_nhwc.safetensors"));
 
   cuda::nn::DeviceBufferF32 d_in(hin.size());
   d_in.Upload(hin);
@@ -391,7 +391,7 @@ TEST_F(MlOpsDemosaicNetTest, XTransStudentForwardMatchesExportedGolden01) {
   const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
 
   XTransDemosaicNet net;
-  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "xtrans.safetensors"));
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "xtrans_nhwc.safetensors"));
   cuda::nn::DeviceBufferF32 d_in(hin.size());
   d_in.Upload(hin);
   cuda::nn::DeviceBufferF32 d_out(expected.size());
@@ -419,7 +419,7 @@ TEST_F(MlOpsDemosaicNetTest, BayerStudentGoldenCornerPixelsFinite) {
   const auto    hin      = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
   const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
   BayerDemosaicNet net;
-  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors"));
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer_nhwc.safetensors"));
 
   cuda::nn::DeviceBufferF32 d_in(hin.size());
   d_in.Upload(hin);
@@ -595,7 +595,7 @@ TEST_F(MlOpsDemosaicNetTest, BayerStudentForwardReusesTwoTrunkSlotsAndMatchesExp
   const auto hin      = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
   const auto expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
   BayerDemosaicNet net;
-  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors"));
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer_nhwc.safetensors"));
   cuda::nn::DeviceBufferF32 d_in(hin.size());
   d_in.Upload(hin);
   cuda::nn::DeviceBufferF32 d_out(expected.size());
@@ -640,7 +640,7 @@ TEST_F(MlOpsDemosaicNetTest, XTransStudentForwardReusesTwoTrunkSlotsAndMatchesEx
   const auto hin      = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
   const auto expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
   XTransDemosaicNet net;
-  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "xtrans.safetensors"));
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "xtrans_nhwc.safetensors"));
   cuda::nn::DeviceBufferF32 d_in(hin.size());
   d_in.Upload(hin);
   cuda::nn::DeviceBufferF32 d_out(expected.size());
@@ -920,7 +920,7 @@ TEST_F(MlOpsDemosaicNetTest, GraphReplayPreservesExportedBayerGolden) {
   const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
 
   BayerDemosaicNet net;
-  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors"));
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer_nhwc.safetensors"));
 
   CUDA::NeuralDemosaicWorkspace workspace;
   workspace.EnsureCapacity(DemosaicNetVariant::Bayer, H, W,
@@ -977,7 +977,7 @@ TEST_F(MlOpsDemosaicNetTest, GraphReplayPreservesExportedXTransGolden) {
   const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
 
   XTransDemosaicNet net;
-  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "xtrans.safetensors"));
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "xtrans_nhwc.safetensors"));
 
   CUDA::NeuralDemosaicWorkspace workspace;
   workspace.EnsureCapacity(DemosaicNetVariant::XTrans, H, W,
@@ -1071,7 +1071,7 @@ TEST_F(MlOpsDemosaicNetTest, WorkspaceGrowthInvalidatesCapturedActivationPointer
   const int     Ow = BayerDemosaicNet::OutputWidth(W, H);
 
   BayerDemosaicNet net;
-  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors"));
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer_nhwc.safetensors"));
 
   CUDA::NeuralDemosaicWorkspace workspace;
   workspace.EnsureCapacity(DemosaicNetVariant::Bayer, H, W,
@@ -1232,7 +1232,7 @@ TEST_F(MlOpsDemosaicNetTest, FusedPostOutputMatchesUnfusedStudentForward) {
   const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
 
   BayerDemosaicNet net;
-  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors"));
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer_nhwc.safetensors"));
 
   cuda::nn::DeviceBufferF32 d_in(hin.size());
   d_in.Upload(hin);
@@ -1272,7 +1272,7 @@ TEST_F(MlOpsDemosaicNetTest, FusedPostOutputMatchesUnfusedXTransStudentForward) 
   const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
 
   XTransDemosaicNet net;
-  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "xtrans.safetensors"));
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "xtrans_nhwc.safetensors"));
 
   cuda::nn::DeviceBufferF32 d_in(hin.size());
   d_in.Upload(hin);
@@ -1311,7 +1311,7 @@ TEST_F(MlOpsDemosaicNetTest, FusedStudentHwcOutputMatchesOrdinaryNchwUnpack) {
   const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
 
   BayerDemosaicNet net;
-  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors"));
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer_nhwc.safetensors"));
 
   cuda::nn::DeviceBufferF32 d_in(hin.size());
   d_in.Upload(hin);
@@ -1343,6 +1343,70 @@ TEST_F(MlOpsDemosaicNetTest, FusedStudentHwcOutputMatchesOrdinaryNchwUnpack) {
   }
   ExpectVectorsNear(DownloadGpuMatRgb(hwc), expected_hwc, 1e-5f);
   ExpectVectorsNear(nchw, expected, 1e-4f);
+}
+
+TEST_F(MlOpsDemosaicNetTest, PersistentNhwcBayerForwardMatchesRetainedHwcForward) {
+  const auto model_dir = FindModelDir();
+  const auto in_path   = FindGolden("bayer_input_00.bin");
+  if (model_dir.empty() || in_path.empty()) {
+    GTEST_SKIP() << "model or Bayer student input not found";
+  }
+
+  constexpr int N  = 1;
+  constexpr int H  = BayerDemosaicNet::kTileInput;
+  constexpr int W  = BayerDemosaicNet::kTileInput;
+  constexpr int Oh = BayerDemosaicNet::kTileOutput;
+  constexpr int Ow = BayerDemosaicNet::kTileOutput;
+  const auto hin = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
+
+  BayerDemosaicNet net;
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer_nhwc.safetensors"));
+  cuda::nn::DeviceBufferF32 d_in(hin.size());
+  d_in.Upload(hin);
+  auto tin = d_in.AsTensor({N, 3, H, W});
+
+  cv::cuda::GpuMat retained(Oh, Ow, CV_32FC3);
+  cv::cuda::GpuMat candidate(Oh, Ow, CV_32FC3);
+  cuda::nn::WorkspacePool ws_retained(BayerDemosaicNet::EstimateWorkspaceBytes(H, W, N, true));
+  cuda::nn::WorkspacePool ws_candidate(BayerDemosaicNet::EstimateWorkspaceBytes(H, W, N, true));
+  net.ForwardHwc(tin, reinterpret_cast<float*>(retained.ptr()), retained.step, ws_retained,
+                 nullptr, /*apply_gamma_decode=*/false);
+  net.ForwardHwcChannelsLast(tin, reinterpret_cast<float*>(candidate.ptr()), candidate.step,
+                             ws_candidate, nullptr, /*apply_gamma_decode=*/false);
+  ASSERT_EQ(::cudaDeviceSynchronize(), cudaSuccess);
+  ExpectVectorsNear(DownloadGpuMatRgb(candidate), DownloadGpuMatRgb(retained), 3e-4f);
+}
+
+TEST_F(MlOpsDemosaicNetTest, PersistentNhwcXTransForwardMatchesRetainedHwcForward) {
+  const auto model_dir = FindModelDir();
+  const auto in_path   = FindGolden("xtrans_input_00.bin");
+  if (model_dir.empty() || in_path.empty()) {
+    GTEST_SKIP() << "model or X-Trans student input not found";
+  }
+
+  constexpr int N  = 1;
+  constexpr int H  = XTransDemosaicNet::kTileInput;
+  constexpr int W  = XTransDemosaicNet::kTileInput;
+  constexpr int Oh = XTransDemosaicNet::kTileOutput;
+  constexpr int Ow = XTransDemosaicNet::kTileOutput;
+  const auto hin = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
+
+  XTransDemosaicNet net;
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "xtrans_nhwc.safetensors"));
+  cuda::nn::DeviceBufferF32 d_in(hin.size());
+  d_in.Upload(hin);
+  auto tin = d_in.AsTensor({N, 3, H, W});
+
+  cv::cuda::GpuMat retained(Oh, Ow, CV_32FC3);
+  cv::cuda::GpuMat candidate(Oh, Ow, CV_32FC3);
+  cuda::nn::WorkspacePool ws_retained(XTransDemosaicNet::EstimateWorkspaceBytes(H, W, N, true));
+  cuda::nn::WorkspacePool ws_candidate(XTransDemosaicNet::EstimateWorkspaceBytes(H, W, N, true));
+  net.ForwardHwc(tin, reinterpret_cast<float*>(retained.ptr()), retained.step, ws_retained,
+                 nullptr, /*apply_gamma_decode=*/false);
+  net.ForwardHwcChannelsLast(tin, reinterpret_cast<float*>(candidate.ptr()), candidate.step,
+                             ws_candidate, nullptr, /*apply_gamma_decode=*/false);
+  ASSERT_EQ(::cudaDeviceSynchronize(), cudaSuccess);
+  ExpectVectorsNear(DownloadGpuMatRgb(candidate), DownloadGpuMatRgb(retained), 4e-4f);
 }
 
 }  // namespace alcedo

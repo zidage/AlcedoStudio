@@ -11,8 +11,10 @@ CUDA Graph implemented, correctness green, **rejected for product default**
 fused post/output/gamma tail **retained** as product default. **P4-B complete**
 (see §8.2) — ragged edge tiles **rejected** for product default (paid pixels drop
 but full-frame p50 regresses). **P4-C complete** (see §8.3) — rectangular /
-full-width strip tiling **rejected** for product default. **P4-D remains** (see
-§8): channels-last FP32 after isolated kernel gates.
+full-width strip tiling **rejected** for product default. **P4-D complete and
+retained** (see §8.4) — the complete persistent channels-last FP32 path is now
+the product default for Bayer and X-Trans; ordinary NCHW remains an explicit
+compatibility fallback.
 
 ## 1. Objective and current baseline
 
@@ -1023,9 +1025,198 @@ win is insufficient.
 
 Artifacts:
 
+- `build/perf/demosaicnet_next_p4d_nchw_microbench.json`
 - `build/perf/demosaicnet_next_p4d_channels_last_microbench.json`
-- `build/perf/demosaicnet_next_p4d_full_bayer.json`
-- `build/perf/demosaicnet_next_p4d_full_xtrans.json`
+
+#### P4-D result (2026-07-13, RTX 3080 Laptop, Release)
+
+Implementation stopped at the required isolated-kernel gate. The benchmark-only
+candidate keeps input/output activations in persistent NHWC, prepacks immutable
+OIHW weights once to `[Cin,3,3,Cout]`, and uses `float4` cooperative loads and
+stores. It is not reachable through the product `Conv2d` dispatch.
+
+Correctness: `ChannelsLastSquareStudentTrunksMatchNchwReference` passed for
+both 24 and 32 channels (FP32 tolerance `2e-4`).
+
+| Trunk | Retained NCHW p50 | NHWC p50 | Gain | Gate |
+|-------|------------------:|---------:|-----:|------|
+| Bayer 24→24 (layers 2–8 mean) | 0.589 ms | **0.438 ms** | **25.7%** | pass |
+| X-Trans 32→32 (layers 2–4 mean) | 0.902 ms | **0.709 ms** | **21.4%** | fail |
+
+A wider 8×32 / 256-thread X-Trans variant measured 0.752 ms mean, worse than
+the retained 8×16 / 128-thread NHWC candidate (0.709 ms). The best 32-channel
+candidate therefore remains below the required 25% isolated trunk improvement.
+Per the stopping rule, no NHWC residual/structural/tail path or full-frame
+experiment was implemented.
+
+**Verdict: PROMOTE P4-D as the next product implementation track.** The
+measured 21–26% isolated-trunk gain is sufficient evidence to complete and
+measure the end-to-end channels-last product path. Preserve the current NCHW
+path as a correctness/failure fallback until that result is accepted.
+
+### P4-D production objective
+
+Complete the persistent FP32 channels-last implementation, validate it against
+the existing Bayer/X-Trans reference outputs and sustained full-frame measurements, then
+make the winning path the product default. Once that decision is complete,
+remove superseded convolution experiments, benchmark-only dispatch switches,
+and their dead supporting code so the shipping runtime contains one maintained
+implementation plus only the required compatibility fallback. This is a goal,
+not a detailed implementation plan.
+
+#### P4-D first full-frame result (2026-07-13)
+
+The first integration replaced only the equal-width trunk layers and converted
+the activation layout at both ends of that section. It did not meet the product
+gate, so the production HWC entry was restored to NCHW.
+
+| Fixture | Full-frame p50 | Result |
+|---------|---------------:|--------|
+| Bayer D800e | 384.4 ms | no retained improvement |
+| X-Trans XT5 | 493.1 ms | regression with high tail variation |
+
+The offline NHWC model assets and isolated-kernel evidence are retained for the
+production objective above. No default-path change is made from this result.
+
+#### CUTLASS FP32 NHWC candidate (2026-07-13)
+
+NVIDIA CUTLASS 3.9.2 is integrated as a pinned submodule at commit
+`ad7b2f5e84fcfa124cb02b91d5bd26d238c0459e` under its BSD-3-Clause license.
+The candidate uses the SIMT FP32 implicit-GEMM fprop kernel with optimized NHWC
+iterators, fuses per-channel bias and ReLU in the epilogue, runs on the caller's
+CUDA stream, and requires no workspace for `split_k_slices=1`. Immutable OIHW
+weights are prepacked to CUTLASS KRSC order outside the measured forward loop.
+
+An exact 100-iteration A/B on the current checkout selected a hybrid dispatch:
+
+| Equal-width trunk | In-tree NHWC p50 mean | CUTLASS p50 mean | Decision |
+|-------------------|-----------------------:|-----------------:|----------|
+| Bayer 24→24 (layers 2–8) | **0.438 ms** | 0.506 ms | retain in-tree `float4` kernel |
+| X-Trans 32→32 (layers 2–4) | 0.893 ms | **0.705 ms** | select CUTLASS 128×32 CTA |
+
+The final X-Trans CUTLASS run also reduced the three-layer mean p95 from
+1.498 ms to 1.010 ms. Its 0.705 ms p50 matches the earlier best
+in-tree result (0.709 ms) while avoiding the current kernel's tail collapse;
+this is primarily a stability/dispatch win, not evidence of another 20% beyond
+the best historical NHWC measurement. `--conv-cutlass` now benchmarks this
+hybrid policy. The product default remains unchanged until activations stay
+channels-last across the complete model section, so no boundary transpose is
+charged per trunk segment.
+
+Artifacts:
+
+- `build/perf/demosaicnet_cutlass_ab_current_nhwc.json`
+- `build/perf/demosaicnet_cutlass_ab_candidate.json`
+- `build/perf/demosaicnet_cutlass_hybrid.json`
+
+#### Current product-path range profile after CUTLASS integration
+
+This profile still measures the retained NCHW product path; CUTLASS is only
+reachable through the isolated `--conv-cutlass` switch until the complete
+persistent-NHWC section exists.
+
+| Range (one full frame) | Bayer D800e | X-Trans XT5 |
+|------------------------|------------:|------------:|
+| hot full-process p50 (10 runs) | 393.698 ms | 427.550 ms |
+| CUDA batch | 366.124 ms | 382.640 ms |
+| phase/crop/linear | 13.512 ms | 17.749 ms |
+| reflect-pad + pack | 2.003 ms | 2.281 ms |
+| pack convolution | 6.103 ms | 21.259 ms |
+| equal-width trunk | 218.968 ms | 198.595 ms |
+| residual/unpack/crop/concat | 17.090 ms | 22.689 ms |
+| post/output | 22.744 ms | 36.632 ms |
+| owned ROI copy | 2.959 ms | 2.583 ms |
+| final stream wait | 22.586 ms | 24.995 ms |
+
+The explicitly named ranges account for 77.4% (Bayer) and 78.9% (X-Trans) of
+the CUDA batch, so the remaining gap is still GPU work or range coverage, not
+host launch overhead: wall time exceeds the CUDA batch by only 0.04%. The final
+stream wait is host time draining already-enqueued GPU work and is not additive
+to the CUDA batch duration.
+
+Artifact: `build/perf/demosaicnet_cutlass_post_profile_ranges.json`.
+
+#### Complete persistent-NHWC product result (2026-07-13)
+
+The complete path removes the two section-boundary transposes that invalidated
+the first full-frame experiment. Pack and the unequal first trunk remain NCHW;
+the result is converted once into a dead ping-pong slot, every equal-width trunk
+then remains NHWC, and the residual, factor-2 unpack, centered mosaic crop,
+concat, post convolution, output projection, gamma, and pitched-HWC store all
+have layout-aware paths. No public-boundary NCHW conversion remains in the
+timed path.
+
+Immutable weights are transformed once during model load: Bayer equal-width
+trunks use `[Cin,3,3,Cout]`, X-Trans equal-width trunks use CUTLASS KRSC, and
+the residual 1x1 uses `[Cin,12]`. The residual kernel maps 16 pixels x 12 output
+channels to a 192-thread block so each pixel's threads read adjacent weights.
+The final NHWC cooperative load is channel-fast and transposes only inside
+shared memory before the fused post/output epilogue.
+
+Correctness and lifetime checks passed:
+
+- `PersistentNhwcBayerForwardMatchesRetainedHwcForward` (`3e-4`);
+- `PersistentNhwcXTransForwardMatchesRetainedHwcForward` (`4e-4`);
+- `FusedStudentHwcOutputMatchesOrdinaryNchwUnpack`;
+- `StudentForwardRepeatedRunsKeepAllocationGenerationStable`.
+
+The 1024 tile gate uses separate 200-iteration runs for each fixture. Both
+paths report allocation generation 1 after warm-up and identical owned VRAM.
+
+| Fixture | NCHW p50 | persistent NHWC p50 | Gain | NCHW p95 | NHWC p95 | Owned VRAM |
+|---------|---------:|--------------------:|-----:|---------:|---------:|-----------:|
+| Bayer D800e | 6.529 ms | **5.073 ms** | **22.3%** | 7.771 ms | **6.050 ms** | 104.053 MiB |
+| X-Trans XT5 | 5.219 ms | **4.250 ms** | **18.6%** | 6.069 ms | **5.019 ms** | 115.532 MiB |
+
+Sustained full-frame runs were separated by fixture and started at matched idle
+temperatures (82--84 C). This matters on the RTX 3080 Laptop: combining both
+fixtures into one long process reaches the thermal limit and makes run order,
+not layout, dominate the tail.
+
+| Fixture | NCHW p50 | persistent NHWC p50 | Gain | NCHW p95 | NHWC p95 |
+|---------|---------:|--------------------:|-----:|---------:|---------:|
+| Bayer D800e | 467.941 ms | **375.511 ms** | **19.8%** | 746.654 ms | **502.858 ms** |
+| X-Trans XT5 | 430.847 ms | **375.624 ms** | **12.8%** | 548.282 ms | **396.426 ms** |
+
+The matched-start data includes thermal throttling and therefore is the
+retention result, not a claim about the fastest absolute latency. A short
+1785-MHz range capture shows the attainable cool-state p50 at 294.477 ms
+(Bayer) and 331.851 ms (X-Trans), and locates the improvement:
+
+| CUDA range | Bayer NCHW | Bayer NHWC | X-Trans NCHW | X-Trans NHWC |
+|------------|-----------:|-----------:|--------------:|--------------:|
+| CUDA batch | 353.524 ms | **270.462 ms** | 377.287 ms | **291.854 ms** |
+| equal-width trunk | 216.543 ms | **151.058 ms** | 194.113 ms | **130.842 ms** |
+| residual/unpack/crop/concat | 19.071 ms | **11.695 ms** | 22.848 ms | **17.480 ms** |
+| post/output | 22.739 ms | **19.201 ms** | 36.341 ms | **31.927 ms** |
+| final host stream wait | 22.192 ms | 19.105 ms | 24.569 ms | 23.004 ms |
+
+There is no synchronization inside either model forward. All convolution and
+structural kernels enqueue on the caller's stream. Synchronization is confined
+to: one cold-load stream wait after immutable weight upload; the explicitly
+synchronous public wrappers; and one product-frame `waitForCompletion()` after
+all tiles, HLR, orientation, and float4 packing have been enqueued. The profiler
+uses event synchronization only while finalizing already-completed samples.
+The per-tile product loop calls the asynchronous enqueue API and never waits.
+
+**Verdict: retain persistent NHWC as the product default.** Set
+`ALCEDO_DEMOASICNET_DISABLE_PERSISTENT_NHWC=1` to select the ordinary NCHW
+compatibility path for diagnosis or fallback. The 100 ms stretch goal is not
+met; the next evidence-backed work must attack total convolution throughput or
+paid tile work rather than add another activation-layout conversion.
+
+Artifacts:
+
+- `build/perf/demosaicnet_retained_hwc_bayer_tile_control_v3_repeat.json`
+- `build/perf/demosaicnet_persistent_nhwc_bayer_tile_candidate_v3_repeat2.json`
+- `build/perf/demosaicnet_retained_hwc_xtrans_tile_control_v3_repeat.json`
+- `build/perf/demosaicnet_persistent_nhwc_xtrans_tile_candidate_v3_repeat2.json`
+- `build/perf/demosaicnet_retained_hwc_bayer_full_v3_matched_start.json`
+- `build/perf/demosaicnet_persistent_nhwc_bayer_full_v3_matched_start.json`
+- `build/perf/demosaicnet_retained_hwc_xtrans_full_v3_matched_start.json`
+- `build/perf/demosaicnet_persistent_nhwc_xtrans_full_v3_matched_start.json`
+- `build/perf/demosaicnet_retained_hwc_profile_ranges_control_v3.json`
+- `build/perf/demosaicnet_persistent_nhwc_profile_ranges_v3.json`
 
 ### 8.5 Required P4 correctness coverage
 
@@ -1075,8 +1266,8 @@ Stop a candidate immediately when it breaks correctness, cannot clear its
 microbenchmark prerequisite, exceeds its VRAM budget, or loses the full-frame
 retention gate. Preserve the best correct product path after every slice.
 
-P0–P4-C are complete (P4-A retained; P2/P3/P4-B/P4-C rejected). The retained
-product path is square **1024 + fused tail**. The next ordered slice is **P4-D**
-(channels-last FP32) only after its isolated kernel gates pass. Continue the
+P0–P4-D are complete (P4-A and P4-D retained; P2/P3/P4-B/P4-C rejected). The
+retained product path is square **1024 + persistent NHWC + fused HWC tail**,
+with ordinary NCHW available only as the compatibility fallback. Continue the
 same handoff discipline so every retained improvement has an attributable
 artifact and fallback.

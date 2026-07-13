@@ -128,6 +128,8 @@ if(ALCEDO_CUDA_ENABLED)
             cuda/nn/crop.cu
             cuda/nn/layout.cu
             cuda/nn/conv2d.cu
+            cuda/nn/cutlass_conv2d.cu
+            cuda/nn/demosaicnet_nhwc.cu
             cuda/nn/conv_transpose2d.cu
             cuda/nn/fused_post_output.cu
             cuda/nn/safetensors.cpp
@@ -139,6 +141,12 @@ if(ALCEDO_CUDA_ENABLED)
     )
     set_target_properties(CudaUtils PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
     target_compile_definitions(CudaUtils PUBLIC HAVE_CUDA)
+    target_include_directories(CudaUtils PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/cutlass/include"
+    )
+    set_source_files_properties(cuda/nn/cutlass_conv2d.cu PROPERTIES
+        COMPILE_OPTIONS "-Xcompiler=/Zc:__cplusplus;--expt-relaxed-constexpr"
+    )
 endif()
 
 def_library(UiLocalization

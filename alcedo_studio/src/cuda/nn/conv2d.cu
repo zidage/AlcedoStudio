@@ -424,6 +424,120 @@ __global__ void Conv2d3x3s1TiledKernel(const float* __restrict__ input,
 }
 
 // ---------------------------------------------------------------------------
+// P4-D benchmark-only channels-last 3x3 trunk candidate.
+//
+// One block owns an 8x16 spatial tile and all 24 or 32 channels. The input
+// apron and prepacked [Cin,3,3,Cout] weights stay channels-last in shared
+// memory. Cin/Cout are multiples of four, so the cooperative global loads and
+// final stores are float4 operations. This kernel is intentionally not wired
+// into Conv2d: it must clear the isolated P4-D gate before structural NHWC
+// operators are introduced.
+// ---------------------------------------------------------------------------
+template <int kCout, int kOhTile, int kOwTile>
+__global__ void Conv2d3x3s1NhwcTiledKernel(const float* __restrict__ input,
+                                           const float* __restrict__ weight_ckco,
+                                           const float* __restrict__ bias,
+                                           float* __restrict__ output, int N, int H, int W, int Cin,
+                                           int Ho, int Wo) {
+  constexpr int           kInH     = kOhTile + 2;
+  constexpr int           kInW     = kOwTile + 2;
+  constexpr int           kInArea  = kInH * kInW;
+  constexpr int           kThreads = kOhTile * kOwTile;
+
+  const int               ox0      = static_cast<int>(blockIdx.x) * kOwTile;
+  const int               oy0      = static_cast<int>(blockIdx.y) * kOhTile;
+  const int               n        = static_cast<int>(blockIdx.z);
+  const int               tx       = static_cast<int>(threadIdx.x);
+  const int               ty       = static_cast<int>(threadIdx.y);
+  const int               tid      = ty * kOwTile + tx;
+
+  extern __shared__ float smem[];
+  constexpr int           kCinTile    = 8;
+  float*                  in_s        = smem;                       // [in_area][8]
+  float*                  w_s         = smem + kInArea * kCinTile;  // [8][3][3][Cout]
+
+  const int               oy          = oy0 + ty;
+  const int               ox          = ox0 + tx;
+  const bool              pixel_valid = (n < N) && (oy < Ho) && (ox < Wo);
+  constexpr int           kCout4      = kCout / 4;
+
+  float                   acc[kCout];
+#pragma unroll
+  for (int co = 0; co < kCout; ++co) {
+    acc[co] = 0.0F;
+  }
+
+  for (int ci0 = 0; ci0 < Cin; ci0 += kCinTile) {
+    // Channel alignment is part of the P4-D gate: student 24/32 trunks use
+    // float4 input and weight loads while retaining the direct kernel's
+    // small shared-memory working set for CC 6.0+ compatibility.
+    for (int load4 = tid; load4 < kInArea * (kCinTile / 4); load4 += kThreads) {
+      const int pixel = load4 / (kCinTile / 4);
+      const int c4    = load4 - pixel * (kCinTile / 4);
+      const int iy    = pixel / kInW;
+      const int ix    = pixel - iy * kInW;
+      const int gy    = oy0 + iy;
+      const int gx    = ox0 + ix;
+      float4    v     = make_float4(0.0F, 0.0F, 0.0F, 0.0F);
+      if (gy < H && gx < W) {
+        v = reinterpret_cast<const float4*>(
+            input +
+            (static_cast<std::int64_t>(n) * H * W + static_cast<std::int64_t>(gy) * W + gx) * Cin +
+            ci0 + c4 * 4)[0];
+      }
+      reinterpret_cast<float4*>(in_s + pixel * kCinTile + c4 * 4)[0] = v;
+    }
+    for (int load4 = tid; load4 < kCinTile * 9 * kCout4; load4 += kThreads) {
+      const int c4  = load4 % kCout4;
+      const int tmp = load4 / kCout4;
+      const int k   = tmp % 9;
+      const int ci  = tmp / 9;
+      reinterpret_cast<float4*>(w_s + (ci * 9 + k) * kCout + c4 * 4)[0] =
+          reinterpret_cast<const float4*>(weight_ckco + ((ci0 + ci) * 9 + k) * kCout + c4 * 4)[0];
+    }
+    __syncthreads();
+
+    if (pixel_valid) {
+#pragma unroll
+      for (int ci = 0; ci < kCinTile; ++ci) {
+#pragma unroll
+        for (int k = 0; k < 9; ++k) {
+          const int   ky = k / 3;
+          const int   kx = k - ky * 3;
+          const float v  = in_s[((ty + ky) * kInW + tx + kx) * kCinTile + ci];
+#pragma unroll
+          for (int co4 = 0; co4 < kCout4; ++co4) {
+            const float4 w =
+                reinterpret_cast<const float4*>(w_s + (ci * 9 + k) * kCout + co4 * 4)[0];
+            acc[co4 * 4]     = fmaf(v, w.x, acc[co4 * 4]);
+            acc[co4 * 4 + 1] = fmaf(v, w.y, acc[co4 * 4 + 1]);
+            acc[co4 * 4 + 2] = fmaf(v, w.z, acc[co4 * 4 + 2]);
+            acc[co4 * 4 + 3] = fmaf(v, w.w, acc[co4 * 4 + 3]);
+          }
+        }
+      }
+    }
+    __syncthreads();
+  }
+
+  if (pixel_valid) {
+#pragma unroll
+    for (int co4 = 0; co4 < kCout4; ++co4) {
+      float4 v;
+      v.x = fmaxf(acc[co4 * 4] + bias[co4 * 4], 0.0F);
+      v.y = fmaxf(acc[co4 * 4 + 1] + bias[co4 * 4 + 1], 0.0F);
+      v.z = fmaxf(acc[co4 * 4 + 2] + bias[co4 * 4 + 2], 0.0F);
+      v.w = fmaxf(acc[co4 * 4 + 3] + bias[co4 * 4 + 3], 0.0F);
+      reinterpret_cast<float4*>(
+          output +
+          (static_cast<std::int64_t>(n) * Ho * Wo + static_cast<std::int64_t>(oy) * Wo + ox) *
+              kCout +
+          co4 * 4)[0] = v;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 3×3 s=1 pad=0 — Phase 8G+ FP32 Winograd F(2×2, 3×3) (student square trunks).
 //
 // Arithmetic: each fully-valid 2×2 output tile costs 16·Cin·Cout elementwise
@@ -1151,6 +1265,13 @@ constexpr int      kWgBn32    = 32;
   return static_cast<int>((kCinTile * kInH * kInW + cout_tile * kCinTile * 9) * sizeof(float));
 }
 
+[[nodiscard]] auto NhwcTiledSmemBytes(const int channels, const int output_tile_width = 16) -> int {
+  constexpr int kInHeight = 8 + 2;
+  const int     kInArea   = kInHeight * (output_tile_width + 2);
+  constexpr int kCinTile  = 8;
+  return static_cast<int>((kInArea * kCinTile + kCinTile * 9 * channels) * sizeof(float));
+}
+
 void LaunchConv2d(const DeviceTensor& input, DeviceTensor& output, const Conv2dParams& params,
                   bool do_relu, cudaStream_t stream, WorkspacePool* workspace) {
   // Workspace is accepted for API stability. Current kernels need no scratch and
@@ -1305,6 +1426,44 @@ void TransformConv2d3x3WeightsWinogradF22(const float* src_oihw, const int in_ch
   }
 }
 
+void TransformConv2d3x3WeightsNhwc(const float* src_oihw, const int in_channels,
+                                   const int out_channels, float* dst_ckco) {
+  if (src_oihw == nullptr || dst_ckco == nullptr || in_channels != out_channels ||
+      (in_channels != 24 && in_channels != 32)) {
+    throw std::runtime_error("TransformConv2d3x3WeightsNhwc: expected a 24/32 square trunk");
+  }
+  for (int ci = 0; ci < in_channels; ++ci) {
+    for (int k = 0; k < 9; ++k) {
+      for (int co = 0; co < out_channels; ++co) {
+        dst_ckco[(static_cast<std::size_t>(ci) * 9 + k) * out_channels + co] =
+            src_oihw[(static_cast<std::size_t>(co) * in_channels + ci) * 9 + k];
+      }
+    }
+  }
+}
+
+void Conv2d3x3NhwcBiasRelu(const float* input_nhwc, float* output_nhwc, const float* weight_ckco,
+                           const float* bias, const int batch, const int height, const int width,
+                           const int channels, const cudaStream_t stream) {
+  if (input_nhwc == nullptr || output_nhwc == nullptr || weight_ckco == nullptr ||
+      bias == nullptr || batch < 1 || height < 3 || width < 3 ||
+      (channels != 24 && channels != 32)) {
+    throw std::runtime_error("Conv2d3x3NhwcBiasRelu: expected valid 24/32-channel NHWC tensors");
+  }
+  const int Ho = height - 2;
+  const int Wo = width - 2;
+  dim3      block(16, 8);
+  dim3      grid((Wo + 15) / 16, (Ho + 7) / 8, static_cast<unsigned>(batch));
+  if (channels == 24) {
+    Conv2d3x3s1NhwcTiledKernel<24, 8, 16><<<grid, block, NhwcTiledSmemBytes(24), stream>>>(
+        input_nhwc, weight_ckco, bias, output_nhwc, batch, height, width, channels, Ho, Wo);
+  } else {
+    Conv2d3x3s1NhwcTiledKernel<32, 8, 16><<<grid, block, NhwcTiledSmemBytes(32), stream>>>(
+        input_nhwc, weight_ckco, bias, output_nhwc, batch, height, width, channels, Ho, Wo);
+  }
+  CheckCuda(cudaGetLastError(), "Conv2d3x3s1NhwcTiledKernel launch");
+}
+
 void Conv2d(const DeviceTensor& input, DeviceTensor& output, const Conv2dParams& params,
             cudaStream_t stream, WorkspacePool* workspace) {
   LaunchConv2d(input, output, params, /*do_relu=*/false, stream, workspace);
@@ -1402,6 +1561,20 @@ auto QueryConv2d3x3KernelInfo(const int cin, const int cout, Conv2d3x3KernelInfo
     out->candidate_num_regs = direct.numRegs;
   }
 
+  return true;
+}
+
+auto QueryConv2d3x3NhwcKernelInfo(const int channels, Conv2d3x3KernelInfo* out) -> bool {
+  if (out == nullptr || (channels != 24 && channels != 32)) {
+    return false;
+  }
+  if (channels == 24) {
+    FillKernelAttrs(Conv2d3x3s1NhwcTiledKernel<24, 8, 16>, "nhwc_tiled_float4_24", 24, 24,
+                    /*threads=*/8 * 16, NhwcTiledSmemBytes(24), out);
+  } else {
+    FillKernelAttrs(Conv2d3x3s1NhwcTiledKernel<32, 8, 16>, "nhwc_tiled_float4_32", 32, 32,
+                    /*threads=*/8 * 16, NhwcTiledSmemBytes(32), out);
+  }
   return true;
 }
 

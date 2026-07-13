@@ -54,6 +54,13 @@ void FusedPostOutputToHwc(const DeviceTensor& cat, float* rgb_hwc, std::size_t s
                           int out_h, int out_w, const FusedPostOutputParams& params,
                           cudaStream_t stream = nullptr);
 
+// Persistent channels-last tail. `cat_nhwc` is contiguous [N,H,W,6]; output is
+// pitched HWC RGB. Post/output weights use the same OIHW/CIO layouts as above.
+void FusedPostOutputNhwcToHwc(const float* cat_nhwc, int batch, int cat_h, int cat_w,
+                              float* rgb_hwc, std::size_t step_bytes, int out_h, int out_w,
+                              const FusedPostOutputParams& params,
+                              cudaStream_t stream = nullptr);
+
 // Runtime escape hatch for A/B measurement (env ALCEDO_DEMOASICNET_DISABLE_FUSED_TAIL).
 [[nodiscard]] auto FusedPostOutputEnabled() -> bool;
 

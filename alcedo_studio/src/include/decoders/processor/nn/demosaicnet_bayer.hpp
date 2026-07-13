@@ -76,6 +76,13 @@ class BayerDemosaicNet : public NnWeightModule<BayerDemosaicNet> {
                   cuda::nn::WorkspacePool& workspace, cudaStream_t stream = nullptr,
                   bool apply_gamma_decode = true) const;
 
+  // P4-D candidate: trunk_0 remains NCHW, then one conversion establishes a
+  // persistent NHWC section through residual/structural/fused HWC output.
+  void ForwardHwcChannelsLast(const cuda::nn::DeviceTensor& input, float* rgb_hwc,
+                              std::size_t rgb_step_bytes, cuda::nn::WorkspacePool& workspace,
+                              cudaStream_t stream = nullptr,
+                              bool apply_gamma_decode = true) const;
+
   // Spatial helpers matching student_models.StudentDemosaicNet.output_size.
   [[nodiscard]] static auto NaturalOutputHeight(int input_h) -> int {
     return input_h - kNaturalSpatialLoss;
@@ -141,8 +148,11 @@ class BayerDemosaicNet : public NnWeightModule<BayerDemosaicNet> {
  private:
   cuda::nn::DeviceBufferF32 pack_w_;  // fixed, no bias
   cuda::nn::DeviceBufferF32 trunk_w_[kDepth];
+  // [Cin,3,3,Cout] CKCO prepack for the persistent NHWC square trunk (layers 1..7).
+  cuda::nn::DeviceBufferF32 trunk_w_nhwc_[kDepth];
   cuda::nn::DeviceBufferF32 trunk_b_[kDepth];
   cuda::nn::DeviceBufferF32 residual_w_;
+  cuda::nn::DeviceBufferF32 residual_w_nhwc_;  // prepacked [width,12]
   cuda::nn::DeviceBufferF32 residual_b_;
   cuda::nn::DeviceBufferF32 unpack_w_;  // fixed, no bias
   cuda::nn::DeviceBufferF32 post_w_;

@@ -29,7 +29,7 @@ __device__ __forceinline__ auto PowSignedDevice(const float x, const float g) ->
 // kPostCout holds every post channel in registers (24 Bayer / 32 X-Trans).
 // Cin is fixed at 6 and loaded as one strip. Grid covers the *export* spatial
 // size; crop_y/crop_x map export pixels onto the natural valid grid.
-template <int kPostCout>
+template <int kPostCout, bool kCatNhwc>
 __global__ void FusedPostOutputKernel(const float* __restrict__ cat,
                                       const float* __restrict__ post_w,
                                       const float* __restrict__ post_b,
@@ -78,8 +78,8 @@ __global__ void FusedPostOutputKernel(const float* __restrict__ cat,
 
   // ---- Cooperative load: full Cin=6 input apron ----
   for (int load = tid; load < kPostCin * kInArea; load += kThreads) {
-    const int lci = load / kInArea;
-    const int rem = load - lci * kInArea;
+    const int lci = kCatNhwc ? load % kPostCin : load / kInArea;
+    const int rem = kCatNhwc ? load / kPostCin : load - lci * kInArea;
     const int lh  = rem / kInW;
     const int lw  = rem - lh * kInW;
 
@@ -88,10 +88,15 @@ __global__ void FusedPostOutputKernel(const float* __restrict__ cat,
 
     float v = 0.0F;
     if (lci < kPostCin && gh >= 0 && gh < H && gw >= 0 && gw < W) {
-      v = in_n[static_cast<std::int64_t>(lci) * in_stride_c +
-               static_cast<std::int64_t>(gh) * W + gw];
+      if constexpr (kCatNhwc) {
+        v = in_n[(static_cast<std::int64_t>(gh) * W + gw) * kPostCin + lci];
+      } else {
+        v = in_n[static_cast<std::int64_t>(lci) * in_stride_c +
+                 static_cast<std::int64_t>(gh) * W + gw];
+      }
     }
-    in_s[load] = v;
+    const int shared_index = lci * kInArea + rem;
+    in_s[shared_index] = v;
   }
 
   // ---- Cooperative load: full post weights [Cout,6,9] ----
@@ -220,14 +225,11 @@ void ValidateCatAndParams(const DeviceTensor& cat, const FusedPostOutputParams& 
   }
 }
 
-void LaunchFused(const DeviceTensor& cat, float* rgb, const int out_h, const int out_w,
-                 const std::size_t hwc_step_floats, const int write_hwc,
-                 const FusedPostOutputParams& params, const cudaStream_t stream) {
-  ValidateCatAndParams(cat, params, out_h, out_w, "FusedPostOutput");
-
-  const int N         = static_cast<int>(cat.shape[0]);
-  const int H         = static_cast<int>(cat.shape[2]);
-  const int W         = static_cast<int>(cat.shape[3]);
+template <bool kCatNhwc>
+void LaunchFusedRaw(const float* cat, const int N, const int H, const int W, float* rgb,
+                    const int out_h, const int out_w, const std::size_t hwc_step_floats,
+                    const int write_hwc, const FusedPostOutputParams& params,
+                    const cudaStream_t stream) {
   const int natural_h = H - 2;
   const int natural_w = W - 2;
   const int crop_y    = (natural_h - out_h) / 2;
@@ -249,15 +251,24 @@ void LaunchFused(const DeviceTensor& cat, float* rgb, const int out_h, const int
   }
 
   if (params.post_channels == 24) {
-    FusedPostOutputKernel<24><<<grid, block, smem_24, stream>>>(
-        cat.data, params.post_weight, params.post_bias, params.output_weight_cio, params.output_bias,
-        rgb, N, H, W, out_h, out_w, crop_y, crop_x, write_hwc, hwc_step_floats, apply_g);
+    FusedPostOutputKernel<24, kCatNhwc><<<grid, block, smem_24, stream>>>(
+        cat, params.post_weight, params.post_bias, params.output_weight_cio, params.output_bias, rgb,
+        N, H, W, out_h, out_w, crop_y, crop_x, write_hwc, hwc_step_floats, apply_g);
   } else {
-    FusedPostOutputKernel<32><<<grid, block, smem_32, stream>>>(
-        cat.data, params.post_weight, params.post_bias, params.output_weight_cio, params.output_bias,
-        rgb, N, H, W, out_h, out_w, crop_y, crop_x, write_hwc, hwc_step_floats, apply_g);
+    FusedPostOutputKernel<32, kCatNhwc><<<grid, block, smem_32, stream>>>(
+        cat, params.post_weight, params.post_bias, params.output_weight_cio, params.output_bias, rgb,
+        N, H, W, out_h, out_w, crop_y, crop_x, write_hwc, hwc_step_floats, apply_g);
   }
   CheckCuda(cudaGetLastError(), "FusedPostOutputKernel launch");
+}
+
+void LaunchFused(const DeviceTensor& cat, float* rgb, const int out_h, const int out_w,
+                 const std::size_t hwc_step_floats, const int write_hwc,
+                 const FusedPostOutputParams& params, const cudaStream_t stream) {
+  ValidateCatAndParams(cat, params, out_h, out_w, "FusedPostOutput");
+  LaunchFusedRaw<false>(cat.data, static_cast<int>(cat.shape[0]), static_cast<int>(cat.shape[2]),
+                        static_cast<int>(cat.shape[3]), rgb, out_h, out_w, hwc_step_floats,
+                        write_hwc, params, stream);
 }
 
 }  // namespace
@@ -303,6 +314,34 @@ void FusedPostOutputToHwc(const DeviceTensor& cat, float* rgb_hwc, const std::si
   }
   LaunchFused(cat, rgb_hwc, out_h, out_w, step_bytes / sizeof(float), /*write_hwc=*/1, params,
               stream);
+}
+
+void FusedPostOutputNhwcToHwc(const float* cat_nhwc, const int batch, const int cat_h,
+                              const int cat_w, float* rgb_hwc, const std::size_t step_bytes,
+                              const int out_h, const int out_w,
+                              const FusedPostOutputParams& params, const cudaStream_t stream) {
+  if (cat_nhwc == nullptr || rgb_hwc == nullptr || batch != 1 || cat_h < 3 || cat_w < 3) {
+    throw std::runtime_error("FusedPostOutputNhwcToHwc: invalid tensor");
+  }
+  if (params.post_channels != 24 && params.post_channels != 32) {
+    throw std::runtime_error("FusedPostOutputNhwcToHwc: post_channels must be 24 or 32");
+  }
+  if (params.post_weight == nullptr || params.post_bias == nullptr ||
+      params.output_weight_cio == nullptr || params.output_bias == nullptr) {
+    throw std::runtime_error("FusedPostOutputNhwcToHwc: null weight/bias pointer");
+  }
+  const int natural_h = cat_h - 2;
+  const int natural_w = cat_w - 2;
+  if (out_h < 1 || out_w < 1 || out_h > natural_h || out_w > natural_w ||
+      ((natural_h - out_h) & 1) != 0 || ((natural_w - out_w) & 1) != 0) {
+    throw std::runtime_error("FusedPostOutputNhwcToHwc: invalid centered output geometry");
+  }
+  if (step_bytes < static_cast<std::size_t>(out_w) * kRgbCout * sizeof(float) ||
+      (step_bytes % sizeof(float)) != 0) {
+    throw std::runtime_error("FusedPostOutputNhwcToHwc: invalid row pitch");
+  }
+  LaunchFusedRaw<true>(cat_nhwc, batch, cat_h, cat_w, rgb_hwc, out_h, out_w,
+                       step_bytes / sizeof(float), /*write_hwc=*/1, params, stream);
 }
 
 auto FusedPostOutputEnabled() -> bool {
