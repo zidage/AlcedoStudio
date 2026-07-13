@@ -69,6 +69,9 @@ struct NeuralDemosaicOptions {
   // Optional per-decode storage. Supplying this avoids all per-tile CUDA allocations
   // after the first (largest) tile reserves its buffers.
   NeuralDemosaicWorkspace* workspace    = nullptr;
+  // Product student owned-output edge (export tile). 0 selects the 1K control
+  // policy (Bayer 1086→1024 / X-Trans 1048→1024). P2 candidates: 1024/1536/2048/3072.
+  int student_owned_tile_edge = 0;
 };
 
 // Fill `destination` with a reflected window of `source`. `source_rect` is in source
@@ -119,10 +122,10 @@ auto EnqueueDemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPa
     -> NeuralDemosaicResult;
 
 // Product student tile: fused virtual-pad pack + fixed-shape student forward + HWC unpack.
-// Always uses the bundled student tile shapes (Bayer 1086→1024, X-Trans 1048→1024).
+// Tile geometry comes from `options.student_owned_tile_edge` (0 → 1024 control policy).
 // `training_pattern` must be the phase-aligned training origin (from PrepareNeuralEngineCfa).
 // `input_origin` is signed in the aligned CFA lattice (may be negative under virtual pad).
-// On success, `rgb` references the workspace HWC buffer (1024²) when `options.workspace` is set;
+// On success, `rgb` references the workspace HWC buffer (owned²) when `options.workspace` is set;
 // otherwise `rgb` owns a copy. Soft-fail leaves `rgb` untouched.
 // Synchronous wrapper: enqueues then waits so `rgb` is complete when this returns.
 auto DemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_cfa,

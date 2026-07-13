@@ -120,7 +120,8 @@ void PrintUsage(const char* argv0) {
       << "  --model student                Hard-coded product topology (default; only value)\n"
       << "  --warmup N                     Warm-up iterations (default: 3)\n"
       << "  --iterations N                 Measured iterations (default: 20)\n"
-      << "  --tile-size N                  Export tile output edge for tile/conv (default: 1024)\n"
+      << "  --tile-size N                  Product owned-output edge (even, >=256; default 1024; "
+         "P2 candidates 512/1024/1536/2048/3072)\n"
       << "  --lanes N                      Concurrent streams/workspaces in tile mode (default: "
          "1)\n"
       << "  --profile-ranges               Named CUDA-event ranges (full/tile; P0 breakdown)\n"
@@ -215,8 +216,14 @@ void PrintUsage(const char* argv0) {
   if (cfg.warmup < 0 || cfg.iterations < 1) {
     throw std::runtime_error("--warmup must be >= 0 and --iterations must be >= 1");
   }
-  if (cfg.tile_size < 64 || cfg.lanes < 1) {
-    throw std::runtime_error("--tile-size must be >= 64 and --lanes must be >= 1");
+  if (cfg.lanes < 1) {
+    throw std::runtime_error("--lanes must be >= 1");
+  }
+  if (cfg.tile_size < detail::kStudentMinOwnedTileEdge) {
+    throw std::runtime_error("--tile-size must be >= 256 (experimental minimum owned edge)");
+  }
+  if ((cfg.tile_size % 2) != 0) {
+    throw std::runtime_error("--tile-size must be even (Bayer CFA period / pack alignment)");
   }
   return cfg;
 }
@@ -304,7 +311,8 @@ struct ProductTilePlanSummary {
   std::string architecture;
 };
 
-[[nodiscard]] auto SummarizeStudentProductJobs(LibRaw& raw, const FixtureKind kind)
+[[nodiscard]] auto SummarizeStudentProductJobs(LibRaw& raw, const FixtureKind kind,
+                                               const int owned_tile_edge = 1024)
     -> ProductTilePlanSummary {
   ProductTilePlanSummary s;
   const RawCfaPattern    camera       = ReadLibRawCfaPattern(raw);
@@ -322,9 +330,9 @@ struct ProductTilePlanSummary {
   s.aligned_width                     = avail_w - (avail_w % period);
   s.aligned_height                    = avail_h - (avail_h % period);
 
-  const detail::CudaTilePolicy policy = kind == FixtureKind::Bayer
-                                            ? detail::MakeBayerStudentTilePolicy()
-                                            : detail::MakeXTransStudentTilePolicy();
+  const detail::CudaTilePolicy policy =
+      kind == FixtureKind::Bayer ? detail::MakeBayerStudentTilePolicy(owned_tile_edge)
+                                 : detail::MakeXTransStudentTilePolicy(owned_tile_edge);
   s.tile_input                        = policy.input_tile.width;
   s.tile_output                       = policy.output_tile.width;
   s.tile_step                         = policy.step.width;
@@ -405,11 +413,17 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
   result.active_megapixels =
       (static_cast<double>(result.active_width) * static_cast<double>(result.active_height)) /
       1.0e6;
-  result.product_plan    = SummarizeStudentProductJobs(*raw, fixture.kind);
-  result.tile_count      = result.product_plan.tile_count;
+  result.product_plan = SummarizeStudentProductJobs(*raw, fixture.kind, cfg.tile_size);
+  result.tile_count   = result.product_plan.tile_count;
 
   const bool want_legacy = cfg.method == MethodKind::Legacy || cfg.method == MethodKind::Both;
   const bool want_neural = cfg.method == MethodKind::Neural || cfg.method == MethodKind::Both;
+
+  // Force the harness-selected product tile edge into ProcessCudaTiled.
+  detail::SetStudentProductTileEdgeOverride(cfg.tile_size);
+  struct OverrideReset {
+    ~OverrideReset() { detail::SetStudentProductTileEdgeOverride(0); }
+  } override_reset;
 
   // Correctness pass before timing.
   if (want_legacy) {
@@ -561,15 +575,12 @@ auto RunTileMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> TileFi
   TileFixtureResult result;
   result.fixture_name   = fixture.name;
 
-  // Fixed export-tile shapes (student product contract), not generic border=spatial/2.
-  const int input_size  = fixture.kind == FixtureKind::Bayer ? BayerDemosaicNet::kTileInput
-                                                             : XTransDemosaicNet::kTileInput;
-  const int output_size = fixture.kind == FixtureKind::Bayer ? BayerDemosaicNet::kTileOutput
-                                                             : XTransDemosaicNet::kTileOutput;
-  if (cfg.tile_size != output_size) {
-    std::cerr << "note: --tile-size " << cfg.tile_size << " ignored for student tile mode; using "
-              << input_size << "->" << output_size << " export contract\n";
-  }
+  // Product owned-output edge → student input/export contract (P2).
+  const detail::CudaTilePolicy policy =
+      fixture.kind == FixtureKind::Bayer ? detail::MakeBayerStudentTilePolicy(cfg.tile_size)
+                                         : detail::MakeXTransStudentTilePolicy(cfg.tile_size);
+  const int input_size  = policy.input_tile.width;
+  const int output_size = policy.output_tile.width;
   result.input_size     = input_size;
   result.output_size    = output_size;
   result.lanes          = cfg.lanes;
@@ -593,9 +604,10 @@ auto RunTileMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> TileFi
   std::vector<std::unique_ptr<TileLane>> lanes;
   lanes.reserve(static_cast<std::size_t>(cfg.lanes));
   for (int lane_index = 0; lane_index < cfg.lanes; ++lane_index) {
-    auto lane                 = std::make_unique<TileLane>();
-    lane->options.workspace   = &lane->workspace;
-    lane->options.model_cache = &cache;
+    auto lane                              = std::make_unique<TileLane>();
+    lane->options.workspace                = &lane->workspace;
+    lane->options.model_cache              = &cache;
+    lane->options.student_owned_tile_edge  = cfg.tile_size;
     lanes.push_back(std::move(lane));
   }
 
@@ -724,10 +736,8 @@ struct ConvLayer {
 };
 
 [[nodiscard]] auto BuildBayerConvLayers(const int tile_out) -> std::vector<ConvLayer> {
-  // Student bayer_s24_d8 shapes at the export tile contract.
-  const int              hin = (tile_out == BayerDemosaicNet::kTileOutput)
-                                   ? BayerDemosaicNet::kTileInput
-                                   : tile_out + BayerDemosaicNet::kNaturalSpatialLoss;
+  // Student bayer_s24_d8 product shapes: input = owned + 2*border31.
+  const int              hin = tile_out + 2 * BayerDemosaicNet::kTileBorder;
   const int              win = hin;
   const int              ph  = hin / BayerDemosaicNet::kPackFactor;
   const int              pw  = win / BayerDemosaicNet::kPackFactor;
@@ -752,10 +762,8 @@ struct ConvLayer {
 }
 
 [[nodiscard]] auto BuildXTransConvLayers(const int tile_out) -> std::vector<ConvLayer> {
-  // Student xtrans_p2_s32_d4 shapes at the export tile contract.
-  const int              hin = (tile_out == XTransDemosaicNet::kTileOutput)
-                                   ? XTransDemosaicNet::kTileInput
-                                   : tile_out + XTransDemosaicNet::kNaturalSpatialLoss;
+  // Student xtrans_p2_s32_d4 product shapes: input = owned + 2*border12.
+  const int              hin = tile_out + 2 * XTransDemosaicNet::kTileBorder;
   const int              win = hin;
   std::vector<ConvLayer> layers;
   layers.push_back({"pack", 3, 12, 2, 2, hin, win, false});

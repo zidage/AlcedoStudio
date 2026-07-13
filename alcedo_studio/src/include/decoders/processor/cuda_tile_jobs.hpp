@@ -5,6 +5,8 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <stdexcept>
 #include <vector>
 
@@ -19,9 +21,9 @@ namespace alcedo::detail {
 // One scheduler; model-specific geometry is expressed as CudaTilePolicy.
 
 struct CudaTilePolicy {
-  cv::Size  input_tile;      // student: 1086² / 1048²; legacy: variable via halo
-  cv::Size  output_tile;     // 1024² for student; = step for legacy non-overlap
-  cv::Size  step;            // 1024² / 1020² student; = output_tile for legacy
+  cv::Size  input_tile;      // student: owned+2*border; legacy: variable via halo
+  cv::Size  output_tile;     // owned export edge for student; = step for legacy
+  cv::Size  step;            // period-safe owned step; = output_tile for legacy
   cv::Point virtual_pad;     // 32,32 / 12,12 student; halo for legacy clamp path
   cv::Point output_border;   // 31,31 / 12,12 student; 0 for legacy inner ownership
   int       cfa_period = 1;  // 2 / 6 student; 1 for legacy (no phase assert)
@@ -30,6 +32,165 @@ struct CudaTilePolicy {
   // full image, no virtual signed origins, no overlap ownership discard.
   bool legacy_clamped = false;
 };
+
+// Measured / experimental owned-export edges. Harness force-override may use any
+// value the policy constructors accept (period-aligned, >= kStudentMinOwnedTileEdge).
+inline constexpr std::array<int, 5> kStudentProductTileEdges = {512, 1024, 1536, 2048, 3072};
+
+// Smallest owned edge allowed for product-style virtual-pad tiling (export context
+// still uses fixed pad/border; not a product default).
+inline constexpr int kStudentMinOwnedTileEdge = 256;
+
+// Product auto-select walks only retained edges (passed full-frame latency gates).
+// P2: 1536/2048/3072 regress. Smaller edges are experimental until gated.
+inline constexpr std::array<int, 1> kStudentProductRetainedTileEdges = {1024};
+
+// Conservative VRAM budgets for auto-selecting the largest retained policy.
+inline constexpr double kStudentTileMaxTotalVramFraction = 0.35;
+inline constexpr double kStudentTileMaxFreeVramFraction  = 0.50;
+
+// Optional harness/test override for the product owned edge (0 = auto-select).
+// ProcessCudaTiled and SelectStudentProductTileEdge honor this when non-zero.
+[[nodiscard]] inline int& StudentProductTileEdgeOverride() {
+  // Function-local static keeps the override process-wide without a .cpp TU.
+  static int override_edge = 0;
+  return override_edge;
+}
+
+inline void SetStudentProductTileEdgeOverride(const int owned_output_edge) {
+  StudentProductTileEdgeOverride() = owned_output_edge;
+}
+
+[[nodiscard]] inline auto GetStudentProductTileEdgeOverride() -> int {
+  return StudentProductTileEdgeOverride();
+}
+
+// Period-safe grid step for a requested owned export edge (first-writer overlap
+// when owned is not a multiple of the CFA period).
+[[nodiscard]] inline auto StudentPeriodSafeStep(const int owned_output_edge, const int cfa_period)
+    -> int {
+  if (owned_output_edge <= 0 || cfa_period <= 0) {
+    throw std::runtime_error("StudentPeriodSafeStep: invalid owned edge or period");
+  }
+  const int step = (owned_output_edge / cfa_period) * cfa_period;
+  if (step <= 0) {
+    throw std::runtime_error("StudentPeriodSafeStep: owned edge smaller than CFA period");
+  }
+  return step;
+}
+
+// Derive student tile geometry from an explicit owned-output edge while retaining
+// the fixed export context of the 1K policies (Bayer pad32/border31, X-Trans
+// pad12/border12). Do not infer pad/border from kNaturalSpatialLoss alone.
+[[nodiscard]] inline auto MakeBayerStudentTilePolicy(const int owned_output_edge) -> CudaTilePolicy {
+  if (owned_output_edge < kStudentMinOwnedTileEdge) {
+    throw std::runtime_error("MakeBayerStudentTilePolicy: owned edge below minimum product tile");
+  }
+  if ((owned_output_edge % BayerDemosaicNet::kCfaPeriod) != 0) {
+    throw std::runtime_error("MakeBayerStudentTilePolicy: owned edge must be CFA-period aligned");
+  }
+  // Keep the 1K control constants exact: input = owned + 2*31, pad=32, border=31.
+  const int input =
+      owned_output_edge + 2 * BayerDemosaicNet::kTileBorder;  // 1024 → 1086
+  const int step = StudentPeriodSafeStep(owned_output_edge, BayerDemosaicNet::kCfaPeriod);
+  CudaTilePolicy p;
+  p.input_tile     = {input, input};
+  p.output_tile    = {owned_output_edge, owned_output_edge};
+  p.step           = {step, step};
+  p.virtual_pad    = {BayerDemosaicNet::kTilePad, BayerDemosaicNet::kTilePad};
+  p.output_border  = {BayerDemosaicNet::kTileBorder, BayerDemosaicNet::kTileBorder};
+  p.cfa_period     = BayerDemosaicNet::kCfaPeriod;
+  p.legacy_clamped = false;
+  return p;
+}
+
+[[nodiscard]] inline auto MakeXTransStudentTilePolicy(const int owned_output_edge)
+    -> CudaTilePolicy {
+  if (owned_output_edge < kStudentMinOwnedTileEdge) {
+    throw std::runtime_error("MakeXTransStudentTilePolicy: owned edge below minimum product tile");
+  }
+  // Keep the 1K control constants exact: input = owned + 2*12, pad=12, border=12.
+  // Step is floored to a multiple of 6 (1024 → 1020).
+  const int input =
+      owned_output_edge + 2 * XTransDemosaicNet::kTileBorder;  // 1024 → 1048
+  const int step = StudentPeriodSafeStep(owned_output_edge, XTransDemosaicNet::kCfaPeriod);
+  CudaTilePolicy p;
+  p.input_tile     = {input, input};
+  p.output_tile    = {owned_output_edge, owned_output_edge};
+  p.step           = {step, step};
+  p.virtual_pad    = {XTransDemosaicNet::kTilePad, XTransDemosaicNet::kTilePad};
+  p.output_border  = {XTransDemosaicNet::kTileBorder, XTransDemosaicNet::kTileBorder};
+  p.cfa_period     = XTransDemosaicNet::kCfaPeriod;
+  p.legacy_clamped = false;
+  return p;
+}
+
+// Best-effort estimate of NeuralDemosaicWorkspace::OwnedDeviceBytes for one tile
+// (activation peak-live + NCHW input/output + HWC RGB tile). Used for VRAM selection.
+[[nodiscard]] inline auto EstimateStudentTileOwnedBytes(const bool is_bayer,
+                                                        const int owned_output_edge)
+    -> std::size_t {
+  const CudaTilePolicy policy =
+      is_bayer ? MakeBayerStudentTilePolicy(owned_output_edge)
+               : MakeXTransStudentTilePolicy(owned_output_edge);
+  const int hin = policy.input_tile.width;
+  const int win = policy.input_tile.height;
+  const int oh  = policy.output_tile.width;
+  const int ow  = policy.output_tile.height;
+  const std::size_t activation =
+      is_bayer ? BayerDemosaicNet::EstimateWorkspaceBytes(hin, win, 1)
+               : XTransDemosaicNet::EstimateWorkspaceBytes(hin, win, 1);
+  const std::size_t input_bytes =
+      static_cast<std::size_t>(3) * static_cast<std::size_t>(hin) * static_cast<std::size_t>(win) *
+      sizeof(float);
+  const std::size_t output_bytes =
+      static_cast<std::size_t>(3) * static_cast<std::size_t>(oh) * static_cast<std::size_t>(ow) *
+      sizeof(float);
+  // HWC RGB tile: assume contiguous CV_32FC3 (no row padding in the estimate).
+  const std::size_t rgb_bytes = output_bytes;
+  return activation + input_bytes + output_bytes + rgb_bytes;
+}
+
+// Largest retained product edge whose reserved owned memory fits the budget.
+// force_edge / harness override may request any experimental edge (>= min, period-safe).
+// Allocation failure at product warm-up must still fall back to the next smaller retained edge.
+[[nodiscard]] inline auto SelectStudentProductTileEdge(const bool is_bayer,
+                                                       const std::size_t free_vram_bytes,
+                                                       const std::size_t total_vram_bytes,
+                                                       const int force_edge = 0) -> int {
+  const int override_edge = GetStudentProductTileEdgeOverride();
+  const int requested     = force_edge > 0 ? force_edge : override_edge;
+
+  if (requested > 0) {
+    // Force/override: experimental sizes (512, 768, …) as well as the P2 matrix.
+    if (requested < kStudentMinOwnedTileEdge) {
+      throw std::runtime_error("SelectStudentProductTileEdge: force/override edge below minimum");
+    }
+    if (is_bayer && (requested % BayerDemosaicNet::kCfaPeriod) != 0) {
+      throw std::runtime_error("SelectStudentProductTileEdge: Bayer force edge must be even");
+    }
+    return requested;
+  }
+
+  const std::size_t total_budget =
+      static_cast<std::size_t>(static_cast<double>(total_vram_bytes) *
+                               kStudentTileMaxTotalVramFraction);
+  const std::size_t free_budget =
+      static_cast<std::size_t>(static_cast<double>(free_vram_bytes) *
+                               kStudentTileMaxFreeVramFraction);
+
+  // Prefer largest *retained* edges first (not the full experimental candidate list).
+  for (auto it = kStudentProductRetainedTileEdges.rbegin();
+       it != kStudentProductRetainedTileEdges.rend(); ++it) {
+    const int         edge  = *it;
+    const std::size_t owned = EstimateStudentTileOwnedBytes(is_bayer, edge);
+    if (owned <= total_budget && owned <= free_budget) {
+      return edge;
+    }
+  }
+  // Always fall back to the 1K control policy.
+  return kStudentProductRetainedTileEdges.front();
+}
 
 // Generalized job: signed origin + disjoint owned model/destination ROIs.
 // Legacy fields remain for existing RCD / interim Neural loops.
@@ -61,28 +222,13 @@ struct CudaTileJob {
   return p;
 }
 
+// Default product policy: retained 1024 owned-output control.
 [[nodiscard]] inline auto MakeBayerStudentTilePolicy() -> CudaTilePolicy {
-  CudaTilePolicy p;
-  p.input_tile     = {BayerDemosaicNet::kTileInput, BayerDemosaicNet::kTileInput};
-  p.output_tile    = {BayerDemosaicNet::kTileOutput, BayerDemosaicNet::kTileOutput};
-  p.step           = {BayerDemosaicNet::kTileStep, BayerDemosaicNet::kTileStep};
-  p.virtual_pad    = {BayerDemosaicNet::kTilePad, BayerDemosaicNet::kTilePad};
-  p.output_border  = {BayerDemosaicNet::kTileBorder, BayerDemosaicNet::kTileBorder};
-  p.cfa_period     = BayerDemosaicNet::kCfaPeriod;
-  p.legacy_clamped = false;
-  return p;
+  return MakeBayerStudentTilePolicy(BayerDemosaicNet::kTileOutput);
 }
 
 [[nodiscard]] inline auto MakeXTransStudentTilePolicy() -> CudaTilePolicy {
-  CudaTilePolicy p;
-  p.input_tile     = {XTransDemosaicNet::kTileInput, XTransDemosaicNet::kTileInput};
-  p.output_tile    = {XTransDemosaicNet::kTileOutput, XTransDemosaicNet::kTileOutput};
-  p.step           = {XTransDemosaicNet::kTileStep, XTransDemosaicNet::kTileStep};
-  p.virtual_pad    = {XTransDemosaicNet::kTilePad, XTransDemosaicNet::kTilePad};
-  p.output_border  = {XTransDemosaicNet::kTileBorder, XTransDemosaicNet::kTileBorder};
-  p.cfa_period     = XTransDemosaicNet::kCfaPeriod;
-  p.legacy_clamped = false;
-  return p;
+  return MakeXTransStudentTilePolicy(XTransDemosaicNet::kTileOutput);
 }
 
 // Policy-driven planner. For legacy_clamped, `active_rect` is the region to cover

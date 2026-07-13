@@ -24,7 +24,8 @@ namespace alcedo {
 // Input:  contiguous NCHW f32 mosaic [N, 3, H, W], H,W >= kMinSpatial, divisible by
 //         pack_factor (2).
 // Output: contiguous NCHW f32 RGB [N, 3, Oh, Ow] where
-//   - exact tile (H=W=kTileInput) → center-cropped export kTileOutput
+//   - product square tile H=W=owned+2*kTileBorder with owned>=kTileOutput →
+//     center-cropped export `owned` (retains 1K export context: 1048→1024, …)
 //   - otherwise → natural size H - kNaturalSpatialLoss
 //
 // Uses space-to-depth pack (3→12), residual 1×1 → 12, grouped unpack → RGB,
@@ -66,17 +67,34 @@ class XTransDemosaicNet : public NnWeightModule<XTransDemosaicNet> {
   [[nodiscard]] static auto NaturalOutputWidth(int input_w) -> int {
     return input_w - kNaturalSpatialLoss;
   }
+  // Product export owned edge when input is a square product tile; else -1.
+  // Minimum owned edge matches experimental tiling (256); free-size patches stay natural.
+  [[nodiscard]] static auto ProductOwnedOutput(int input_h, int input_w) -> int {
+    if (input_h != input_w) {
+      return -1;
+    }
+    const int owned = input_h - 2 * kTileBorder;
+    if (owned < 256) {
+      return -1;
+    }
+    if (input_h != owned + 2 * kTileBorder) {
+      return -1;
+    }
+    return owned;
+  }
   [[nodiscard]] static auto OutputHeight(int input_h, int input_w = -1) -> int {
-    const int w = input_w < 0 ? input_h : input_w;
-    if (input_h == kTileInput && w == kTileInput) {
-      return kTileOutput;
+    const int w     = input_w < 0 ? input_h : input_w;
+    const int owned = ProductOwnedOutput(input_h, w);
+    if (owned > 0) {
+      return owned;
     }
     return NaturalOutputHeight(input_h);
   }
   [[nodiscard]] static auto OutputWidth(int input_w, int input_h = -1) -> int {
-    const int h = input_h < 0 ? input_w : input_h;
-    if (h == kTileInput && input_w == kTileInput) {
-      return kTileOutput;
+    const int h     = input_h < 0 ? input_w : input_h;
+    const int owned = ProductOwnedOutput(h, input_w);
+    if (owned > 0) {
+      return owned;
     }
     return NaturalOutputWidth(input_w);
   }

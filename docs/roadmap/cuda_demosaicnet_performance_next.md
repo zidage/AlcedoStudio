@@ -4,8 +4,9 @@ Date: 2026-07-13
 
 Status: active follow-up to
 [`cuda_nn_forward_demosaicnet_plan.md`](cuda_nn_forward_demosaicnet_plan.md).
-**P0 complete** (see §4.3). **P1 complete** (see §5.4). Next: P2 larger product
-tiles.
+**P0 complete** (see §4.3). **P1 complete** (see §5.4). **P2 complete** (see
+§6.5) — larger tiles measured and **rejected** for product auto-select; retain
+1024. Next: re-run P0 on retained policy; P3 remains deferred; P4 conditional.
 
 ## 1. Objective and current baseline
 
@@ -384,11 +385,100 @@ Retain a larger product policy only when:
 
 Artifacts:
 
-- `build/perf/demosaicnet_next_p2_tiles_1024.json`
+- `build/perf/demosaicnet_next_p2_tiles_1024.json` (or per-fixture `*_bayer` / `*_xtrans`)
 - `build/perf/demosaicnet_next_p2_tiles_1536.json`
 - `build/perf/demosaicnet_next_p2_tiles_2048.json`
 - `build/perf/demosaicnet_next_p2_tiles_3072.json`
 - `build/perf/demosaicnet_next_p2_summary.json`
+
+### 6.5 P2 results (2026-07-13, RTX 3080 Laptop, Release)
+
+Implementation landed:
+
+- Generalized student policies from an explicit owned-output edge while keeping
+  1K pad/border constants exact:
+  - Bayer: `input = owned + 62`, pad 32, border 31, step = owned
+  - X-Trans: `input = owned + 24`, pad 12, border 12, step = `floor(owned/6)*6`
+- `OutputHeight` / `OutputWidth` export-crop any product square
+  `owned + 2*border` with `owned >= 1024` (free-size patches stay natural)
+- `NeuralDemosaicOptions::student_owned_tile_edge` + product
+  `SelectStudentProductTileEdge` (VRAM budgets 35% total / 50% free)
+- Harness `--tile-size 1024|1536|2048|3072` forces product path via override
+- OOM warm-up falls back down the retained list; force/override fails hard
+- After measurement, **product auto-select uses only retained edges**
+  (`kStudentProductRetainedTileEdges = {1024}`); larger edges remain
+  forceable for re-measure
+
+Commands:
+
+```bat
+build\release\alcedo_studio\tests\MlOpsTest.exe
+build\release\alcedo_studio\tests\CudaRawOpsTest.exe --gtest_filter=*Student*:*LargerTile*
+
+:: Per-edge cool-ish matrix (HLR-off neural full):
+for %E in (1024 1536 2048 3072) do (
+  build\release\alcedo_studio\tests\DemosaicNetPerfHarness.exe ^
+    --fixture bayer --method neural --mode full --model student ^
+    --warmup 3 --iterations 20 --tile-size %E ^
+    --output build/perf/demosaicnet_next_p2_tiles_%E_bayer.json
+  build\release\alcedo_studio\tests\DemosaicNetPerfHarness.exe ^
+    --fixture xtrans --method neural --mode full --model student ^
+    --warmup 3 --iterations 20 --tile-size %E ^
+    --output build/perf/demosaicnet_next_p2_tiles_%E_xtrans.json
+)
+```
+
+#### Full-frame latency matrix (same session; p50 vs 1024 control in-matrix)
+
+| Edge | Bayer jobs | Bayer p50 ms | vs 1024 | X-Trans jobs | X-Trans p50 ms | vs 1024 | Gate |
+|-----:|-----------:|-------------:|--------:|-------------:|---------------:|--------:|------|
+| 1024 | 40 | 412.7 | control | 48 | 525.6 | control | **retain** |
+| 1536 | 20 | 1012.6 | **+145%** | 24 | 2102.7 | **+300%** | **reject** |
+| 2048 | 12 | 2055.1 | **+398%** | 12 | 1826.1 | **+247%** | **reject** |
+| 3072 | 6 | 2322.9 | **+463%** | 6 | 2141.5 | **+307%** | **reject** |
+
+p95 also regresses far beyond +5% on every larger edge. Owned memory for larger
+edges remains within the 8 GiB laptop budget (selection was not VRAM-limited).
+
+#### Work accounting (why larger is slower)
+
+| Edge | Bayer halo_work | Bayer full TFLOP | Bayer eff TFLOP/s | X-Trans halo | X-Trans TFLOP | X-Trans eff |
+|-----:|----------------:|-----------------:|------------------:|-------------:|--------------:|------------:|
+| 1024 | 1.15 | 0.975 | **2.36** | 1.23 | 1.00 | **1.91** |
+| 2048 | 1.38 | 1.13 | 0.55 | 1.23 | 0.99 | 0.54 |
+| 3072 | 1.55 | 1.25 | 0.54 | 1.39 | 1.11 | 0.52 |
+
+Job count drops, but paid full-frame FLOPs rise (larger virtual-pad windows) and
+**effective TFLOP/s collapses ~4×** on the direct NCHW kernels — consistent with
+activation footprint / cache thrash, not launch overhead. Launch amortization
+does not compensate.
+
+#### Correctness
+
+| Check | Result |
+|-------|--------|
+| `MlOpsTest` | **148/148** |
+| Policy formulas 1024/1536/2048/3072 | **pass** |
+| CFA-period origins + exclusive ROI coverage | **pass** |
+| Bayer/X-Trans 2048 matches 1K across former boundary | **pass** (`max abs ≤ 1e-4`) |
+| Low-VRAM / retained auto-select → 1024 | **pass** |
+
+#### Retention summary
+
+| Gate | Result |
+|------|--------|
+| p50 improves ≥5% | **fail** for 1536/2048/3072 (large regressions) |
+| p95 does not regress >5% | **fail** |
+| geometry / goldens / seams | **pass** |
+| VRAM budget | **pass** (not the limiter) |
+
+**Verdict: REJECT larger product tiles for auto-select. RETAIN 1024.**  
+Geometry generalization stays in-tree for harness re-measure and future kernel
+work (P4). Product `SelectStudentProductTileEdge` only walks
+`kStudentProductRetainedTileEdges = {1024}`.
+
+Artifacts: per-edge JSON under `build/perf/demosaicnet_next_p2_tiles_*` and
+`build/perf/demosaicnet_next_p2_summary.json`.
 
 ## 7. Phase P3 — CUDA Graph launch amortization
 

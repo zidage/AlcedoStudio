@@ -15,6 +15,7 @@
 #include "cuda/nn/layout.hpp"
 #include "cuda/nn/tensor.hpp"
 #include "cuda/nn/workspace.hpp"
+#include "decoders/processor/cuda_tile_jobs.hpp"
 #include "decoders/processor/nn/demosaicnet_profiler.hpp"
 #include "decoders/processor/operators/gpu/cuda_demosaicnet.hpp"
 
@@ -360,14 +361,20 @@ auto EnqueueDemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_
     }
 
     const bool is_xtrans = training_pattern.kind == RawCfaKind::XTrans6x6;
-    const int  tile_h    = is_xtrans ? XTransDemosaicNet::kTileInput : BayerDemosaicNet::kTileInput;
-    const int  tile_w    = tile_h;
-    const int  out_h = is_xtrans ? XTransDemosaicNet::kTileOutput : BayerDemosaicNet::kTileOutput;
-    const int  out_w = out_h;
-    result.source_border =
-        is_xtrans ? XTransDemosaicNet::kTileBorder : BayerDemosaicNet::kTileBorder;
+    const int  owned_edge =
+        options.student_owned_tile_edge > 0
+            ? options.student_owned_tile_edge
+            : (is_xtrans ? XTransDemosaicNet::kTileOutput : BayerDemosaicNet::kTileOutput);
+    const detail::CudaTilePolicy policy =
+        is_xtrans ? detail::MakeXTransStudentTilePolicy(owned_edge)
+                  : detail::MakeBayerStudentTilePolicy(owned_edge);
+    const int tile_h = policy.input_tile.height;
+    const int tile_w = policy.input_tile.width;
+    const int out_h  = policy.output_tile.height;
+    const int out_w  = policy.output_tile.width;
+    result.source_border = policy.output_border.x;
 
-    const int period = is_xtrans ? XTransDemosaicNet::kCfaPeriod : BayerDemosaicNet::kCfaPeriod;
+    const int period = policy.cfa_period;
     if ((input_origin.x % period) != 0 || (input_origin.y % period) != 0) {
       throw std::runtime_error(
           "Student tile input origin is not CFA-period aligned (phase-unsafe)");

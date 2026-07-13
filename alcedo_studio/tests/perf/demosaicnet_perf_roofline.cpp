@@ -12,6 +12,8 @@
 #include <stdexcept>
 #include <tuple>
 
+#include "decoders/processor/cuda_tile_jobs.hpp"
+
 namespace alcedo::perf {
 namespace {
 
@@ -197,13 +199,13 @@ auto BuildBayerTileAccounting(const int tile_output, const int batch) -> Topolog
   if (tile_output < 2 || batch < 1) {
     throw std::runtime_error("BuildBayerTileAccounting: invalid tile_output/batch");
   }
-  // Student bayer_s24_d8 export tile: 1086 → natural 1052 → center-crop 1024.
+  // Student bayer_s24_d8 product tile: input = owned + 2*border31 (1086 for 1024).
   constexpr int kDepth      = 8;
   constexpr int kWidth      = 24;
   constexpr int kPackFactor = 2;
-  const int     hin =
-      (tile_output == 1024) ? 1086 : (tile_output + 2 * kPackFactor * kDepth + 2);
-  const int win = hin;
+  constexpr int kTileBorder = 31;
+  const int     hin         = tile_output + 2 * kTileBorder;
+  const int     win         = hin;
   const int n   = batch;
 
   TopologyAccounting acc;
@@ -284,13 +286,13 @@ auto BuildXTransTileAccounting(const int tile_output, const int batch) -> Topolo
   if (tile_output < 2 || batch < 1) {
     throw std::runtime_error("BuildXTransTileAccounting: invalid tile_output/batch");
   }
-  // Student xtrans_p2_s32_d4 export tile: 1048 → natural 1030 → center-crop 1024.
+  // Student xtrans_p2_s32_d4 product tile: input = owned + 2*border12 (1048 for 1024).
   constexpr int kDepth      = 4;
   constexpr int kWidth      = 32;
   constexpr int kPackFactor = 2;
-  const int     hin =
-      (tile_output == 1024) ? 1048 : (tile_output + 2 * kPackFactor * kDepth + 2);
-  const int win = hin;
+  constexpr int kTileBorder = 12;
+  const int     hin         = tile_output + 2 * kTileBorder;
+  const int     win         = hin;
   const int n   = batch;
 
   TopologyAccounting acc;
@@ -403,16 +405,18 @@ auto EstimateFullFrameWork(const DemosaicNetTopologyKind kind, const int cover_w
   }
 
   FullFrameWorkEstimate est;
-  est.tile_inner    = tile_inner;
-  // Student product policies (hard-coded modules).
+  est.tile_inner = tile_inner;
+  // Student product policies derived from the requested owned-output edge (P2).
   if (kind == DemosaicNetTopologyKind::Bayer) {
-    est.tile_step     = 1024;
-    est.virtual_pad   = 32;
-    est.source_border = 31;
+    const auto policy   = detail::MakeBayerStudentTilePolicy(tile_inner);
+    est.tile_step       = policy.step.width;
+    est.virtual_pad     = policy.virtual_pad.x;
+    est.source_border   = policy.output_border.x;
   } else {
-    est.tile_step     = 1020;
-    est.virtual_pad   = 12;
-    est.source_border = 12;
+    const auto policy   = detail::MakeXTransStudentTilePolicy(tile_inner);
+    est.tile_step       = policy.step.width;
+    est.virtual_pad     = policy.virtual_pad.x;
+    est.source_border   = policy.output_border.x;
   }
   est.overlap_x = std::max(0, tile_inner - est.tile_step);
   est.overlap_y = std::max(0, tile_inner - est.tile_step);
