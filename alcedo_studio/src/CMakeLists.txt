@@ -129,6 +129,7 @@ if(ALCEDO_CUDA_ENABLED)
             cuda/nn/layout.cu
             cuda/nn/conv2d.cu
             cuda/nn/conv_transpose2d.cu
+            cuda/nn/fused_post_output.cu
             cuda/nn/safetensors.cpp
         PUBLIC_DEPS
             CUDA::cudart

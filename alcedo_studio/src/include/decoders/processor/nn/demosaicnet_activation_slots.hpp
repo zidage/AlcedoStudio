@@ -30,21 +30,22 @@ namespace detail {
   return detail::AlignUp(elems * sizeof(float), cuda::nn::WorkspacePool::kDefaultAlignment);
 }
 
-// Peak-live activation layout for student DemosaicNet forwards (P1):
+// Peak-live activation layout for student DemosaicNet forwards (P1 / P4-A):
 //
 //   slot A / B  — ping-pong pack + trunk; inactive side reused for residual,
 //                 unpack, and concat once stream order makes prior values dead
-//   structural  — cropped mosaic, then natural RGB (export-crop path)
-//   post        — full-width post-convolution activation
+//   structural  — cropped mosaic; natural RGB only on the unfused export-crop path
+//   post        — full-width post-convolution activation (unfused only; 0 when fused)
 //
 // Host-side reuse is valid only because all consumers and later overwrites are
 // ordered on the same CUDA stream. Do not share the arena across streams.
 struct PeakLiveSlots {
   std::size_t trunk_slot_bytes       = 0;  // size of each of A and B
   std::size_t structural_slot_bytes  = 0;
-  std::size_t post_slot_bytes        = 0;
+  std::size_t post_slot_bytes        = 0;  // 0 when fuse_post_output
   std::size_t peak_live_bytes        = 0;  // 2*trunk + structural + post
   std::size_t estimate_bytes         = 0;  // peak + scratch headroom
+  bool        fuse_post_output       = false;
 
   // Geometry retained for Forward slot views (packed / mosaic / natural).
   std::int64_t pack_h     = 0;
@@ -62,9 +63,12 @@ inline constexpr std::size_t kScratchHeadroomBytes = 256 * 1024;
 
 // Compute peak-live slot sizes for a student topology.
 // pack_out_ch / width / residual_ch / depth / pack_factor match the hard-coded net.
+// When fuse_post_output is true (P4-A product path), the width-channel post
+// activation is never materialized and natural-RGB structural reuse is dropped.
 [[nodiscard]] inline auto ComputePeakLiveSlots(int input_h, int input_w, int batch, int pack_out_ch,
                                                int width, int residual_ch, int depth,
-                                               int pack_factor) -> PeakLiveSlots {
+                                               int pack_factor, bool fuse_post_output = true)
+    -> PeakLiveSlots {
   PeakLiveSlots out;
   if (batch < 1 || input_h < 1 || input_w < 1 || pack_factor < 1 || depth < 1) {
     return out;
@@ -90,14 +94,15 @@ inline constexpr std::size_t kScratchHeadroomBytes = 256 * 1024;
     return out;
   }
 
-  out.pack_h    = ph;
-  out.pack_w    = pw;
-  out.mosaic_h  = mh;
-  out.mosaic_w  = mw;
-  out.unpack_h  = uh;
-  out.unpack_w  = uw;
-  out.natural_h = nh;
-  out.natural_w = nw;
+  out.pack_h           = ph;
+  out.pack_w           = pw;
+  out.mosaic_h         = mh;
+  out.mosaic_w         = mw;
+  out.unpack_h         = uh;
+  out.unpack_w         = uw;
+  out.natural_h        = nh;
+  out.natural_w        = nw;
+  out.fuse_post_output = fuse_post_output;
 
   // Largest pack / first trunk output dominate the ping-pong slots; residual,
   // unpack, and concat reuse the same physical slabs after earlier values die.
@@ -107,10 +112,14 @@ inline constexpr std::size_t kScratchHeadroomBytes = 256 * 1024;
   trunk = std::max(trunk, TensorBytes(N, 3, uh, uw));
   trunk = std::max(trunk, TensorBytes(N, 6, uh, uw));  // concat on inactive trunk slot
 
-  // Cropped mosaic (3, uh, uw) and natural RGB (3, nh, nw) share structural.
-  const std::size_t structural =
-      std::max(TensorBytes(N, 3, uh, uw), TensorBytes(N, 3, nh, nw));
-  const std::size_t post = TensorBytes(N, width, nh, nw);
+  // Cropped mosaic always lives in structural. Natural RGB is only needed when
+  // the unfused path materializes full natural post then center-crops.
+  std::size_t structural = TensorBytes(N, 3, uh, uw);
+  std::size_t post       = 0;
+  if (!fuse_post_output) {
+    structural = std::max(structural, TensorBytes(N, 3, nh, nw));
+    post       = TensorBytes(N, width, nh, nw);
+  }
 
   out.trunk_slot_bytes      = trunk;
   out.structural_slot_bytes = structural;

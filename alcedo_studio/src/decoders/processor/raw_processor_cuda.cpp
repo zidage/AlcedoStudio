@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "cuda/nn/fused_post_output.hpp"
 #include "decoders/processor/cuda_tile_jobs.hpp"
 #include "decoders/processor/nn/demosaicnet_preprocess.hpp"
 #include "decoders/processor/nn/demosaicnet_profiler.hpp"
@@ -522,7 +523,9 @@ auto RawProcessor::ProcessCudaTiled() -> ImageBuffer {
           const auto jobs = BuildTileJobs(neural_active_rect, neural_cfa.size(), policy);
 
           if (profiler != nullptr) {
-            const int launches_per_tile = StudentTileKernelLaunchCount(!is_bayer);
+            const bool fused_tail =
+                alcedo::cuda::nn::FusedPostOutputEnabled();  // P4-A product default
+            const int launches_per_tile = StudentTileKernelLaunchCount(!is_bayer, fused_tail);
             profiler->SetWorkspaceBytes(neural_workspace.activation_workspace().capacity_bytes(),
                                         neural_workspace.OwnedDeviceBytes());
             profiler->SetKernelLaunchCounts(
@@ -553,7 +556,14 @@ auto RawProcessor::ProcessCudaTiled() -> ImageBuffer {
             }
           }
           if (tile_ok) {
-            FinishNeuralEngineRgb(output_rgb, &stream);
+            // P4-A: fused HWC epilogue applies gamma per tile when graph is off.
+            // Ordinary NCHW (env fallback or CUDA Graph experiment) still needs
+            // full-frame FinishNeuralEngineRgb after assembly.
+            const bool gamma_in_tile_epilogue =
+                alcedo::cuda::nn::FusedPostOutputEnabled() && !neural_options.enable_cuda_graph;
+            if (!gamma_in_tile_epilogue) {
+              FinishNeuralEngineRgb(output_rgb, &stream);
+            }
             LogCudaProfileStep(stream, "RAW CUDA Tiled Neural Engine tile assembly",
                                stage_neural_start);
 

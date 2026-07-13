@@ -7,9 +7,10 @@ Status: active follow-up to
 **P0 complete** (see §4.3). **P1 complete** (see §5.4). **P2 complete** (see
 §6.5) — larger square tiles **rejected**; retain 1024. **P3 complete** (see §7.4) —
 CUDA Graph implemented, correctness green, **rejected for product default**
-(latency gate not met; matches P0 “wall ≈ batch”). **P4-A through P4-D are now
-the active ordered experiments** (see §8): fused tail, ragged edge tiles,
-rectangular strips, then persistent channels-last FP32.
+(latency gate not met; matches P0 “wall ≈ batch”). **P4-A complete** (see §8.1) —
+fused post/output/gamma tail **retained** as product default. **P4-B through
+P4-D remain ordered** (see §8): ragged edge tiles, rectangular strips, then
+persistent channels-last FP32.
 
 ## 1. Objective and current baseline
 
@@ -18,12 +19,12 @@ ONNX Runtime, TensorRT, cuDNN, a runtime graph interpreter, reduced precision,
 or a new model architecture in this track.
 
 Current retained RTX 3080 Laptop short full-frame medians (Release,
-`--warmup 3 --iterations 20`, HLR-off, post-P0 remeasure):
+`--warmup 3 --iterations 20`, HLR-off, post-P4-A fused tail):
 
 | Variant | Retained latency (p50) | Stretch target |
 |---------|-----------------------:|---------------:|
-| Bayer student (`bayer_s24_d8`) | ~382 ms | <=100 ms |
-| X-Trans student (`xtrans_p2_s32_d4`) | ~455 ms | <=100 ms |
+| Bayer student (`bayer_s24_d8`) | ~376 ms | <=100 ms |
+| X-Trans student (`xtrans_p2_s32_d4`) | ~412 ms | <=100 ms |
 
 The stretch target is not treated as guaranteed. The work proceeds through
 measured gates: first <=300 ms, then <=200 ms, then <=150 ms. Each retained
@@ -691,6 +692,63 @@ Artifacts:
 - `build/perf/demosaicnet_next_p4a_full_bayer.json`
 - `build/perf/demosaicnet_next_p4a_full_xtrans.json`
 
+#### 8.1.1 P4-A results (2026-07-13, RTX 3080 Laptop, Release)
+
+Implementation landed:
+
+- `cuda/nn/fused_post_output.cu` — exact `6→24→3` / `6→32→3` FP32 kernel:
+  post 3×3 + bias + ReLU + output 1×1 + optional signed γ=2.2, no post tensor
+- CIO output-weight prepack once at model load (`output_w_cio_`)
+- `BayerDemosaicNet` / `XTransDemosaicNet`: fused NCHW `Forward` default;
+  product `ForwardHwc` writes pitched tile RGB with gamma in the epilogue
+- Peak-live workspace drops the post slot (~60% less activation on 1K tiles)
+- Ordinary path retained: `force_ordinary_tail` / env
+  `ALCEDO_DEMOASICNET_DISABLE_FUSED_TAIL=1`
+- Optional direct-to-final-RGBA (plan slice 5) **not** implemented in this slice;
+  product still assembles linear HWC then inverse cam-mul / HLR / pack
+
+Correctness (Release `MlOpsTest` filter):
+
+- goldens 00/01 Bayer + X-Trans
+- `FusedPostOutputMatchesUnfusedStudentForward` (+ X-Trans)
+- `FusedStudentHwcOutputMatchesOrdinaryNchwUnpack`
+- peak-live fused vs ordinary workspace estimates
+
+##### Profiled-frame tail isolation (CUDA-event ranges)
+
+| Metric | Bayer ordinary | Bayer fused | X-Trans ordinary | X-Trans fused |
+|--------|---------------:|------------:|-----------------:|--------------:|
+| post_output ms | 47.4 | **24.5** | 110.3† | **71.2**† |
+| tail gain | | **48.4%** | | **35.4%** |
+| nchw_hwc_unpack ms | 2.8 | 0 | 5.7 | 0 |
+| launches / tile | 19 | **16** | 15 | **12** |
+| activation workspace | 168 MiB | **67 MiB** | 208 MiB | **79 MiB** |
+
+† X-Trans profiled absolute times were thermally elevated (SM clocks down to
+~480–1050 MHz); relative tail gain still clears the ≥15% isolated gate.
+
+##### Fair full-frame A/B (cool between runs; `--warmup 3 --iterations 20`)
+
+| Variant | Ordinary p50 | Fused p50 | p50 gain | Ordinary p95 | Fused p95 |
+|---------|-------------:|----------:|---------:|-------------:|----------:|
+| Bayer D800e | 412.6 ms | **376.3 ms** | **+8.8%** | 487.9 | **385.0** |
+| X-Trans XT5 | 455.0 ms | **411.7 ms** | **+9.5%** | 668.6 | **488.0** |
+
+##### Decision gates
+
+| Gate | Threshold | Result | Verdict |
+|------|-----------|--------|---------|
+| Isolated tail | ≥15% | Bayer 48% / X-Trans 35% | **pass** |
+| Full-frame p50 | ≥5% (target ≥8%) | +8.8% / +9.5% | **pass** |
+| p95 | no >5% regression | improved on both | **pass** |
+| Activation memory | lower | −60% class | **pass** |
+| Correctness | goldens + fused/unfused | green | **pass** |
+
+**Verdict: RETAIN fused post/output/gamma as product default.** Ordinary path
+remains the runtime fallback. Next ordered experiment is **P4-B** (ragged edge
+tiles) on this retained baseline. Direct-to-final-RGBA remains optional follow-up
+and is not required for retention.
+
 ### 8.2 P4-B — ragged edge tiles instead of paid 1024 tails
 
 #### Rationale
@@ -892,6 +950,7 @@ Stop a candidate immediately when it breaks correctness, cannot clear its
 microbenchmark prerequisite, exceeds its VRAM budget, or loses the full-frame
 retention gate. Preserve the best correct product path after every slice.
 
-P0-P3 are complete. The next implementation slice is P4-A only. Record and
-decide it before assigning P4-B; continue the same handoff discipline through
-P4-D so every retained improvement has an attributable artifact and fallback.
+P0-P4-A are complete (P4-A retained). The next implementation slice is P4-B
+only, starting from the fused-tail product path. Record and decide it before
+assigning P4-C; continue the same handoff discipline through P4-D so every
+retained improvement has an attributable artifact and fallback.

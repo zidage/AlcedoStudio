@@ -59,11 +59,20 @@ enum class DemosaicNetProfileRange : std::uint8_t {
 }
 
 // Static topology launch counts for one student export tile (product 1K path).
-// Includes entry pack + model ops + HWC unpack + owned ROI copy.
-[[nodiscard]] constexpr auto StudentTileKernelLaunchCount(const bool is_xtrans) -> int {
+// Includes entry pack + model ops + optional HWC unpack + owned ROI copy.
+// P4-A fused tail collapses post + output + export_crop into one launch and
+// writes HWC directly (no NCHW unpack).
+[[nodiscard]] constexpr auto StudentTileKernelLaunchCount(const bool is_xtrans,
+                                                          const bool fused_tail = true) -> int {
+  const int depth = is_xtrans ? 4 : 8;
+  if (fused_tail) {
+    // Model: pack + trunk(d) + residual + transpose + crop + concat + fused_post_output
+    // Entry: reflect_pack; product: roi copy. No nchw_unpack.
+    const int model = 1 + depth + 1 + 1 + 1 + 1 + 1;
+    return model + 1 + 1;
+  }
   // Model: pack + trunk(d) + residual + transpose + crop + concat + post + output + export_crop
   // Entry: reflect_pack + nchw_unpack; product: roi copy.
-  const int depth = is_xtrans ? 4 : 8;
   const int model = 1 + depth + 1 + 1 + 1 + 1 + 1 + 1 + 1;
   return model + 2 + 1;
 }

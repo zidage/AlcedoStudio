@@ -61,8 +61,18 @@ class BayerDemosaicNet : public NnWeightModule<BayerDemosaicNet> {
                        cudaStream_t stream = nullptr);
 
   // Straight-line student forward. `output` must be pre-sized to OutputShape.
+  // Product default fuses post+output (P4-A); set force_ordinary_tail to measure
+  // the unfused reference or when the fused kernel is disabled.
   void Forward(const cuda::nn::DeviceTensor& input, cuda::nn::DeviceTensor& output,
-               cuda::nn::WorkspacePool& workspace, cudaStream_t stream = nullptr) const;
+               cuda::nn::WorkspacePool& workspace, cudaStream_t stream = nullptr,
+               bool force_ordinary_tail = false) const;
+
+  // Product HWC entry (P4-A): pack→trunk→…→fused post/output/(optional gamma)
+  // writes export-sized RGB into a pitched N=1 HWC buffer (OpenCV GpuMat layout).
+  // `rgb_hwc` must already be allocated to OutputHeight × OutputWidth, CV_32FC3.
+  void ForwardHwc(const cuda::nn::DeviceTensor& input, float* rgb_hwc, std::size_t rgb_step_bytes,
+                  cuda::nn::WorkspacePool& workspace, cudaStream_t stream = nullptr,
+                  bool apply_gamma_decode = true) const;
 
   // Spatial helpers matching student_models.StudentDemosaicNet.output_size.
   [[nodiscard]] static auto NaturalOutputHeight(int input_h) -> int {
@@ -105,9 +115,9 @@ class BayerDemosaicNet : public NnWeightModule<BayerDemosaicNet> {
   }
 
   // Peak-live activation workspace for one Forward (P1 slot reuse; not sum-of-all
-  // intermediates). Does not include weight VRAM.
-  [[nodiscard]] static auto EstimateWorkspaceBytes(int input_h, int input_w, int batch = 1)
-      -> std::size_t;
+  // intermediates). Does not include weight VRAM. Default matches product fused tail.
+  [[nodiscard]] static auto EstimateWorkspaceBytes(int input_h, int input_w, int batch = 1,
+                                                   bool fuse_post_output = true) -> std::size_t;
 
   // Device bytes held by weight slots (0 if not loaded).
   [[nodiscard]] auto ResidentWeightBytes() const -> std::size_t;
@@ -115,6 +125,9 @@ class BayerDemosaicNet : public NnWeightModule<BayerDemosaicNet> {
   // Stable device pointers for no-reload tests (null if empty).
   [[nodiscard]] auto PackWeightDevicePtr() const -> const float* { return pack_w_.get(); }
   [[nodiscard]] auto OutputWeightDevicePtr() const -> const float* { return output_w_.get(); }
+  [[nodiscard]] auto OutputWeightCioDevicePtr() const -> const float* {
+    return output_w_cio_.get();
+  }
 
  private:
   cuda::nn::DeviceBufferF32 pack_w_;  // fixed, no bias
@@ -125,7 +138,8 @@ class BayerDemosaicNet : public NnWeightModule<BayerDemosaicNet> {
   cuda::nn::DeviceBufferF32 unpack_w_;  // fixed, no bias
   cuda::nn::DeviceBufferF32 post_w_;
   cuda::nn::DeviceBufferF32 post_b_;
-  cuda::nn::DeviceBufferF32 output_w_;
+  cuda::nn::DeviceBufferF32 output_w_;      // OIHW [3,width,1,1] for ordinary path
+  cuda::nn::DeviceBufferF32 output_w_cio_;  // prepacked [width,3] for fused tail
   cuda::nn::DeviceBufferF32 output_b_;
 };
 

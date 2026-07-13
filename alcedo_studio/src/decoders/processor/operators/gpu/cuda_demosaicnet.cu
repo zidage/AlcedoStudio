@@ -14,6 +14,7 @@
 
 #include "cuda/nn/common.hpp"
 #include "cuda/nn/device_buffer.hpp"
+#include "cuda/nn/fused_post_output.hpp"
 #include "cuda/nn/layout.hpp"
 #include "cuda/nn/tensor.hpp"
 #include "cuda/nn/workspace.hpp"
@@ -153,9 +154,21 @@ template <typename Model>
 void RunModelOrdinary(const Model& model, const cuda::nn::DeviceTensor& input,
                       cuda::nn::DeviceTensor& output, cuda::nn::WorkspacePool& workspace,
                       const cudaStream_t stream) {
+  const bool fuse = cuda::nn::FusedPostOutputEnabled();
   workspace.Reserve(Model::EstimateWorkspaceBytes(static_cast<int>(input.shape[2]),
-                                                  static_cast<int>(input.shape[3]), 1));
-  model.Forward(input, output, workspace, stream);
+                                                  static_cast<int>(input.shape[3]), 1, fuse));
+  model.Forward(input, output, workspace, stream, /*force_ordinary_tail=*/!fuse);
+}
+
+template <typename Model>
+void RunModelHwc(const Model& model, const cuda::nn::DeviceTensor& input, cv::cuda::GpuMat& rgb,
+                 cuda::nn::WorkspacePool& workspace, const cudaStream_t stream,
+                 const bool apply_gamma_decode) {
+  workspace.Reserve(Model::EstimateWorkspaceBytes(static_cast<int>(input.shape[2]),
+                                                  static_cast<int>(input.shape[3]), 1,
+                                                  /*fuse_post_output=*/true));
+  model.ForwardHwc(input, reinterpret_cast<float*>(rgb.ptr()),
+                   static_cast<std::size_t>(rgb.step), workspace, stream, apply_gamma_decode);
 }
 
 // Harness / experiment escape hatch: force ordinary launches without rebuilding options.
@@ -261,10 +274,11 @@ void NeuralDemosaicWorkspace::EnsureCapacity(const DemosaicNetVariant variant, c
     grew           = true;
   }
 
+  const bool        fuse_tail = cuda::nn::FusedPostOutputEnabled();
   const std::size_t activation_bytes =
       variant == DemosaicNetVariant::Bayer
-          ? BayerDemosaicNet::EstimateWorkspaceBytes(height, width, 1)
-          : XTransDemosaicNet::EstimateWorkspaceBytes(height, width, 1);
+          ? BayerDemosaicNet::EstimateWorkspaceBytes(height, width, 1, fuse_tail)
+          : XTransDemosaicNet::EstimateWorkspaceBytes(height, width, 1, fuse_tail);
   const std::size_t prev_activation = activation_workspace_.capacity_bytes();
   activation_workspace_.Reserve(activation_bytes);
   if (activation_workspace_.capacity_bytes() > prev_activation) {
@@ -428,16 +442,32 @@ auto EnqueueDemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPa
                                                             {1, 3, output_height, output_width});
     PackCfaMosaic(model_input, input_tensor, pattern, cuda_stream);
 
-    if (variant == DemosaicNetVariant::Bayer) {
-      RunModel(cache.Bayer(), input_tensor, output_tensor, workspace, options.enable_cuda_graph,
-               cache.WeightGeneration(variant), cuda_stream);
-    } else {
-      RunModel(cache.XTrans(), input_tensor, output_tensor, workspace, options.enable_cuda_graph,
-               cache.WeightGeneration(variant), cuda_stream);
-    }
-
     cv::cuda::GpuMat& neural_rgb = workspace.rgb_buffer();
-    cuda::nn::UnpackNchwToHwc(output_tensor, neural_rgb, cuda_stream);
+    // P4-A: product default writes gamma-encoded HWC via fused tail, then
+    // FinishNeuralEngineRgb applies gamma decode on the assembled frame when
+    // the epilogue did not. Tile product path folds gamma into ForwardHwc.
+    // Free-size path keeps gamma outside (FinishNeuralEngineRgb) so callers that
+    // only demosaic a patch without the RAW finish still see network-space RGB
+    // when they skip Finish. Use ForwardHwc without gamma here, then unpack is
+    // skipped; Finish still gamma-decodes.
+    if (cuda::nn::FusedPostOutputEnabled()) {
+      if (variant == DemosaicNetVariant::Bayer) {
+        RunModelHwc(cache.Bayer(), input_tensor, neural_rgb, workspace.activation_workspace(),
+                    cuda_stream, /*apply_gamma_decode=*/false);
+      } else {
+        RunModelHwc(cache.XTrans(), input_tensor, neural_rgb, workspace.activation_workspace(),
+                    cuda_stream, /*apply_gamma_decode=*/false);
+      }
+    } else {
+      if (variant == DemosaicNetVariant::Bayer) {
+        RunModel(cache.Bayer(), input_tensor, output_tensor, workspace, options.enable_cuda_graph,
+                 cache.WeightGeneration(variant), cuda_stream);
+      } else {
+        RunModel(cache.XTrans(), input_tensor, output_tensor, workspace, options.enable_cuda_graph,
+                 cache.WeightGeneration(variant), cuda_stream);
+      }
+      cuda::nn::UnpackNchwToHwc(output_tensor, neural_rgb, cuda_stream);
+    }
     // No host wait: caller owns workspace for the lifetime of enqueued work.
     rgb              = neural_rgb;
     result.succeeded = true;
@@ -547,24 +577,38 @@ auto EnqueueDemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_
       profiler->EndRange(DemosaicNetProfileRange::ReflectPadPack, cuda_stream);
     }
 
-    if (variant == DemosaicNetVariant::Bayer) {
-      RunModel(cache.Bayer(), input_tensor, output_tensor, workspace, options.enable_cuda_graph,
-               cache.WeightGeneration(variant), cuda_stream);
-    } else {
-      RunModel(cache.XTrans(), input_tensor, output_tensor, workspace, options.enable_cuda_graph,
-               cache.WeightGeneration(variant), cuda_stream);
-    }
-
     cv::cuda::GpuMat& neural_rgb = workspace.rgb_buffer();
-    if (profiler != nullptr) {
-      profiler->BeginRange(DemosaicNetProfileRange::NchwHwcUnpack, cuda_stream);
-    }
-    cuda::nn::UnpackNchwToHwc(output_tensor, neural_rgb, cuda_stream);
-    if (profiler != nullptr) {
-      profiler->EndRange(DemosaicNetProfileRange::NchwHwcUnpack, cuda_stream);
+    // P4-A product default: fused post/output/gamma → pitched HWC.
+    // CUDA Graph (P3 experiment) still captures NCHW Forward only — when graph is
+    // requested, retain ordinary NCHW + unpack; gamma stays in FinishNeuralEngineRgb.
+    const bool use_fused_hwc =
+        cuda::nn::FusedPostOutputEnabled() && !options.enable_cuda_graph;
+    if (use_fused_hwc) {
+      if (variant == DemosaicNetVariant::Bayer) {
+        RunModelHwc(cache.Bayer(), input_tensor, neural_rgb, workspace.activation_workspace(),
+                    cuda_stream, /*apply_gamma_decode=*/true);
+      } else {
+        RunModelHwc(cache.XTrans(), input_tensor, neural_rgb, workspace.activation_workspace(),
+                    cuda_stream, /*apply_gamma_decode=*/true);
+      }
+    } else {
+      if (variant == DemosaicNetVariant::Bayer) {
+        RunModel(cache.Bayer(), input_tensor, output_tensor, workspace, options.enable_cuda_graph,
+                 cache.WeightGeneration(variant), cuda_stream);
+      } else {
+        RunModel(cache.XTrans(), input_tensor, output_tensor, workspace, options.enable_cuda_graph,
+                 cache.WeightGeneration(variant), cuda_stream);
+      }
+      if (profiler != nullptr) {
+        profiler->BeginRange(DemosaicNetProfileRange::NchwHwcUnpack, cuda_stream);
+      }
+      cuda::nn::UnpackNchwToHwc(output_tensor, neural_rgb, cuda_stream);
+      if (profiler != nullptr) {
+        profiler->EndRange(DemosaicNetProfileRange::NchwHwcUnpack, cuda_stream);
+      }
     }
     // Product tiled path reuses workspace RGB without a per-tile stream wait; stream
-    // ordering serializes pack → forward → unpack → ROI copy.
+    // ordering serializes pack → forward → (unpack) → ROI copy.
     rgb              = neural_rgb;
     result.succeeded = true;
     result.error.clear();

@@ -1,0 +1,60 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#pragma once
+
+#include <cuda_runtime.h>
+
+#include <cstddef>
+#include <cstdint>
+
+#include "cuda/nn/tensor.hpp"
+
+namespace alcedo::cuda::nn {
+
+// P4-A: fuse student post 3×3 (6 → width) + bias + ReLU + output 1×1 (width → 3)
+// + optional bias + optional signed gamma decode, without materializing the
+// width-channel post activation.
+//
+// Supported exact student tails only: width ∈ {24, 32}, Cin fixed at 6.
+//
+// Weight layouts (device, immutable after model load):
+//   post_weight:  OIHW [width, 6, 3, 3]
+//   post_bias:    [width] (required)
+//   output_weight_cio: prepacked [width, 3] so each post channel's RGB weights
+//                      are contiguous (host transforms once from OIHW [3,width,1,1])
+//   output_bias:  [3] (required)
+//
+// Spatial: valid 3×3 on cat [N,6,H,W] yields natural (H-2)×(W-2). Callers may
+// request a center crop by setting out_h/out_w smaller than natural and the
+// kernel only evaluates those export pixels.
+
+struct FusedPostOutputParams {
+  int          post_channels = 0;  // 24 (Bayer) or 32 (X-Trans)
+  const float* post_weight   = nullptr;
+  const float* post_bias     = nullptr;
+  const float* output_weight_cio = nullptr;
+  const float* output_bias   = nullptr;
+  bool         apply_gamma_decode = false;  // pow_signed(x, 2.2) after output bias
+};
+
+// Host-side one-time prepack: OIHW [3, width, 1, 1] → CIO [width, 3].
+// `dst` must hold width * 3 floats.
+void PrepackOutputWeightsCio(const float* src_oihw, int width, float* dst);
+
+// Fused tail → contiguous NCHW RGB [N,3,out_h,out_w]. Center-crops when
+// out_h/out_w are smaller than natural valid size.
+void FusedPostOutputToNchw(const DeviceTensor& cat, DeviceTensor& rgb,
+                           const FusedPostOutputParams& params, cudaStream_t stream = nullptr);
+
+// Fused tail → pitched HWC RGB (N=1 only). `rgb_hwc` is row-major float3 with
+// `step_bytes` row pitch (OpenCV GpuMat step). Shape is out_h × out_w.
+void FusedPostOutputToHwc(const DeviceTensor& cat, float* rgb_hwc, std::size_t step_bytes,
+                          int out_h, int out_w, const FusedPostOutputParams& params,
+                          cudaStream_t stream = nullptr);
+
+// Runtime escape hatch for A/B measurement (env ALCEDO_DEMOASICNET_DISABLE_FUSED_TAIL).
+[[nodiscard]] auto FusedPostOutputEnabled() -> bool;
+
+}  // namespace alcedo::cuda::nn

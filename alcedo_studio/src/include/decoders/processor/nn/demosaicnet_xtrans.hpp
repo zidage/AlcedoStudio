@@ -59,7 +59,13 @@ class XTransDemosaicNet : public NnWeightModule<XTransDemosaicNet> {
                        cudaStream_t stream = nullptr);
 
   void Forward(const cuda::nn::DeviceTensor& input, cuda::nn::DeviceTensor& output,
-               cuda::nn::WorkspacePool& workspace, cudaStream_t stream = nullptr) const;
+               cuda::nn::WorkspacePool& workspace, cudaStream_t stream = nullptr,
+               bool force_ordinary_tail = false) const;
+
+  // Product HWC entry (P4-A): fused post/output/(optional gamma) into pitched HWC.
+  void ForwardHwc(const cuda::nn::DeviceTensor& input, float* rgb_hwc, std::size_t rgb_step_bytes,
+                  cuda::nn::WorkspacePool& workspace, cudaStream_t stream = nullptr,
+                  bool apply_gamma_decode = true) const;
 
   [[nodiscard]] static auto NaturalOutputHeight(int input_h) -> int {
     return input_h - kNaturalSpatialLoss;
@@ -100,14 +106,17 @@ class XTransDemosaicNet : public NnWeightModule<XTransDemosaicNet> {
   }
 
   // Peak-live activation workspace for one Forward (P1 slot reuse; not sum-of-all
-  // intermediates). Does not include weight VRAM.
-  [[nodiscard]] static auto EstimateWorkspaceBytes(int input_h, int input_w, int batch = 1)
-      -> std::size_t;
+  // intermediates). Does not include weight VRAM. Default matches product fused tail.
+  [[nodiscard]] static auto EstimateWorkspaceBytes(int input_h, int input_w, int batch = 1,
+                                                   bool fuse_post_output = true) -> std::size_t;
 
   [[nodiscard]] auto ResidentWeightBytes() const -> std::size_t;
 
   [[nodiscard]] auto PackWeightDevicePtr() const -> const float* { return pack_w_.get(); }
   [[nodiscard]] auto OutputWeightDevicePtr() const -> const float* { return output_w_.get(); }
+  [[nodiscard]] auto OutputWeightCioDevicePtr() const -> const float* {
+    return output_w_cio_.get();
+  }
 
  private:
   cuda::nn::DeviceBufferF32 pack_w_;  // fixed, no bias
@@ -118,7 +127,8 @@ class XTransDemosaicNet : public NnWeightModule<XTransDemosaicNet> {
   cuda::nn::DeviceBufferF32 unpack_w_;  // fixed, no bias
   cuda::nn::DeviceBufferF32 post_w_;
   cuda::nn::DeviceBufferF32 post_b_;
-  cuda::nn::DeviceBufferF32 output_w_;
+  cuda::nn::DeviceBufferF32 output_w_;      // OIHW [3,width,1,1] for ordinary path
+  cuda::nn::DeviceBufferF32 output_w_cio_;  // prepacked [width,3] for fused tail
   cuda::nn::DeviceBufferF32 output_b_;
 };
 

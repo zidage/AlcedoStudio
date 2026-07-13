@@ -657,32 +657,43 @@ TEST_F(MlOpsDemosaicNetTest, XTransStudentForwardReusesTwoTrunkSlotsAndMatchesEx
 TEST_F(MlOpsDemosaicNetTest, StudentForwardPeakWorkspaceEstimateCoversEveryLiveSlot) {
   auto check = [](int H, int W, int pack_out, int width, int residual, int depth, int pack,
                   auto estimate_fn) {
-    const auto peak =
-        demosaicnet_slots::ComputePeakLiveSlots(H, W, 1, pack_out, width, residual, depth, pack);
-    ASSERT_GT(peak.trunk_slot_bytes, 0u);
-    ASSERT_GT(peak.structural_slot_bytes, 0u);
-    ASSERT_GT(peak.post_slot_bytes, 0u);
-    // Estimate must cover both trunk slabs + structural + post + headroom.
-    const std::size_t live_slots =
-        2 * peak.trunk_slot_bytes + peak.structural_slot_bytes + peak.post_slot_bytes;
-    EXPECT_EQ(peak.peak_live_bytes, live_slots);
-    EXPECT_EQ(peak.estimate_bytes, live_slots + demosaicnet_slots::kScratchHeadroomBytes);
-    EXPECT_EQ(estimate_fn(H, W, 1), peak.estimate_bytes);
-    // Trunk slot must cover pack, first trunk out, residual, unpack, and concat views.
     using demosaicnet_slots::TensorBytes;
+    // P4-A product default: fused post drops the width-channel post slot.
+    const auto peak_fused = demosaicnet_slots::ComputePeakLiveSlots(
+        H, W, 1, pack_out, width, residual, depth, pack, /*fuse_post_output=*/true);
+    ASSERT_GT(peak_fused.trunk_slot_bytes, 0u);
+    ASSERT_GT(peak_fused.structural_slot_bytes, 0u);
+    EXPECT_EQ(peak_fused.post_slot_bytes, 0u);
+    EXPECT_TRUE(peak_fused.fuse_post_output);
+    const std::size_t live_fused =
+        2 * peak_fused.trunk_slot_bytes + peak_fused.structural_slot_bytes;
+    EXPECT_EQ(peak_fused.peak_live_bytes, live_fused);
+    EXPECT_EQ(peak_fused.estimate_bytes, live_fused + demosaicnet_slots::kScratchHeadroomBytes);
+    EXPECT_EQ(estimate_fn(H, W, 1, true), peak_fused.estimate_bytes);
+
+    // Ordinary unfused path still reserves post + natural RGB structural capacity.
+    const auto peak_ord = demosaicnet_slots::ComputePeakLiveSlots(
+        H, W, 1, pack_out, width, residual, depth, pack, /*fuse_post_output=*/false);
+    ASSERT_GT(peak_ord.post_slot_bytes, 0u);
+    const std::size_t live_ord =
+        2 * peak_ord.trunk_slot_bytes + peak_ord.structural_slot_bytes + peak_ord.post_slot_bytes;
+    EXPECT_EQ(peak_ord.peak_live_bytes, live_ord);
+    EXPECT_EQ(estimate_fn(H, W, 1, false), peak_ord.estimate_bytes);
+    EXPECT_LT(peak_fused.estimate_bytes, peak_ord.estimate_bytes);
+
     const std::int64_t ph = H / pack;
     const std::int64_t pw = W / pack;
     const std::int64_t mh = ph - 2 * depth;
     const std::int64_t mw = pw - 2 * depth;
     const std::int64_t uh = mh * pack;
     const std::int64_t uw = mw * pack;
-    EXPECT_GE(peak.trunk_slot_bytes, TensorBytes(1, pack_out, ph, pw));
-    EXPECT_GE(peak.trunk_slot_bytes, TensorBytes(1, width, ph - 2, pw - 2));
-    EXPECT_GE(peak.trunk_slot_bytes, TensorBytes(1, residual, mh, mw));
-    EXPECT_GE(peak.trunk_slot_bytes, TensorBytes(1, 3, uh, uw));
-    EXPECT_GE(peak.trunk_slot_bytes, TensorBytes(1, 6, uh, uw));
-    EXPECT_GE(peak.structural_slot_bytes, TensorBytes(1, 3, uh, uw));
-    EXPECT_GE(peak.post_slot_bytes, TensorBytes(1, width, uh - 2, uw - 2));
+    EXPECT_GE(peak_fused.trunk_slot_bytes, TensorBytes(1, pack_out, ph, pw));
+    EXPECT_GE(peak_fused.trunk_slot_bytes, TensorBytes(1, width, ph - 2, pw - 2));
+    EXPECT_GE(peak_fused.trunk_slot_bytes, TensorBytes(1, residual, mh, mw));
+    EXPECT_GE(peak_fused.trunk_slot_bytes, TensorBytes(1, 3, uh, uw));
+    EXPECT_GE(peak_fused.trunk_slot_bytes, TensorBytes(1, 6, uh, uw));
+    EXPECT_GE(peak_fused.structural_slot_bytes, TensorBytes(1, 3, uh, uw));
+    EXPECT_GE(peak_ord.post_slot_bytes, TensorBytes(1, width, uh - 2, uw - 2));
   };
 
   check(BayerDemosaicNet::kTileInput, BayerDemosaicNet::kTileInput, BayerDemosaicNet::kPackOutCh,
@@ -1198,6 +1209,140 @@ TEST_F(MlOpsDemosaicNetTest, TwoWorkspacesOwnIndependentGraphExecutables) {
   const auto ha = DownloadGpuMatRgb(rgb_a);
   const auto hb = DownloadGpuMatRgb(rgb_b);
   ExpectVectorsNear(ha, hb, 1e-4f);
+}
+
+// ---------------------------------------------------------------------------
+// P4-A — fused post/output tail (exact student 6→24/32→3)
+// ---------------------------------------------------------------------------
+
+TEST_F(MlOpsDemosaicNetTest, FusedPostOutputMatchesUnfusedStudentForward) {
+  const auto model_dir = FindModelDir();
+  const auto in_path   = FindGolden("bayer_input_00.bin");
+  const auto out_path  = FindGolden("bayer_output_00.bin");
+  if (model_dir.empty() || in_path.empty() || out_path.empty()) {
+    GTEST_SKIP() << "models or student goldens not found";
+  }
+
+  constexpr int N  = 1;
+  constexpr int H  = BayerDemosaicNet::kTileInput;
+  constexpr int W  = BayerDemosaicNet::kTileInput;
+  constexpr int Oh = BayerDemosaicNet::kTileOutput;
+  constexpr int Ow = BayerDemosaicNet::kTileOutput;
+  const auto    hin      = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
+  const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
+
+  BayerDemosaicNet net;
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors"));
+
+  cuda::nn::DeviceBufferF32 d_in(hin.size());
+  d_in.Upload(hin);
+  auto tin = d_in.AsTensor({N, 3, H, W});
+
+  cuda::nn::DeviceBufferF32 d_fused(expected.size());
+  cuda::nn::DeviceBufferF32 d_ord(expected.size());
+  auto tout_f = d_fused.AsTensor({N, 3, Oh, Ow});
+  auto tout_o = d_ord.AsTensor({N, 3, Oh, Ow});
+
+  cuda::nn::WorkspacePool ws_f(BayerDemosaicNet::EstimateWorkspaceBytes(H, W, N, true));
+  cuda::nn::WorkspacePool ws_o(BayerDemosaicNet::EstimateWorkspaceBytes(H, W, N, false));
+  net.Forward(tin, tout_f, ws_f, nullptr, /*force_ordinary_tail=*/false);
+  net.Forward(tin, tout_o, ws_o, nullptr, /*force_ordinary_tail=*/true);
+  ASSERT_EQ(::cudaDeviceSynchronize(), cudaSuccess);
+
+  ExpectVectorsNear(d_fused.Download(), expected, 1e-4f);
+  ExpectVectorsNear(d_ord.Download(), expected, 1e-4f);
+  ExpectVectorsNear(d_fused.Download(), d_ord.Download(), 1e-5f);
+  EXPECT_LT(ws_f.capacity_bytes(), ws_o.capacity_bytes());
+}
+
+TEST_F(MlOpsDemosaicNetTest, FusedPostOutputMatchesUnfusedXTransStudentForward) {
+  const auto model_dir = FindModelDir();
+  const auto in_path   = FindGolden("xtrans_input_00.bin");
+  const auto out_path  = FindGolden("xtrans_output_00.bin");
+  if (model_dir.empty() || in_path.empty() || out_path.empty()) {
+    GTEST_SKIP() << "models or student goldens not found";
+  }
+
+  constexpr int N  = 1;
+  constexpr int H  = XTransDemosaicNet::kTileInput;
+  constexpr int W  = XTransDemosaicNet::kTileInput;
+  constexpr int Oh = XTransDemosaicNet::kTileOutput;
+  constexpr int Ow = XTransDemosaicNet::kTileOutput;
+  const auto    hin      = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
+  const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
+
+  XTransDemosaicNet net;
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "xtrans.safetensors"));
+
+  cuda::nn::DeviceBufferF32 d_in(hin.size());
+  d_in.Upload(hin);
+  auto tin = d_in.AsTensor({N, 3, H, W});
+
+  cuda::nn::DeviceBufferF32 d_fused(expected.size());
+  cuda::nn::DeviceBufferF32 d_ord(expected.size());
+  auto tout_f = d_fused.AsTensor({N, 3, Oh, Ow});
+  auto tout_o = d_ord.AsTensor({N, 3, Oh, Ow});
+
+  cuda::nn::WorkspacePool ws_f(XTransDemosaicNet::EstimateWorkspaceBytes(H, W, N, true));
+  cuda::nn::WorkspacePool ws_o(XTransDemosaicNet::EstimateWorkspaceBytes(H, W, N, false));
+  net.Forward(tin, tout_f, ws_f, nullptr, /*force_ordinary_tail=*/false);
+  net.Forward(tin, tout_o, ws_o, nullptr, /*force_ordinary_tail=*/true);
+  ASSERT_EQ(::cudaDeviceSynchronize(), cudaSuccess);
+
+  ExpectVectorsNear(d_fused.Download(), expected, 1e-4f);
+  ExpectVectorsNear(d_ord.Download(), expected, 1e-4f);
+  ExpectVectorsNear(d_fused.Download(), d_ord.Download(), 1e-5f);
+}
+
+TEST_F(MlOpsDemosaicNetTest, FusedStudentHwcOutputMatchesOrdinaryNchwUnpack) {
+  const auto model_dir = FindModelDir();
+  const auto in_path   = FindGolden("bayer_input_00.bin");
+  const auto out_path  = FindGolden("bayer_output_00.bin");
+  if (model_dir.empty() || in_path.empty() || out_path.empty()) {
+    GTEST_SKIP() << "models or student goldens not found";
+  }
+
+  constexpr int N  = 1;
+  constexpr int H  = BayerDemosaicNet::kTileInput;
+  constexpr int W  = BayerDemosaicNet::kTileInput;
+  constexpr int Oh = BayerDemosaicNet::kTileOutput;
+  constexpr int Ow = BayerDemosaicNet::kTileOutput;
+  const auto    hin      = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
+  const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
+
+  BayerDemosaicNet net;
+  net.LoadWeights(cuda::nn::LoadSafetensors(model_dir / "bayer.safetensors"));
+
+  cuda::nn::DeviceBufferF32 d_in(hin.size());
+  d_in.Upload(hin);
+  auto tin = d_in.AsTensor({N, 3, H, W});
+
+  cuda::nn::DeviceBufferF32 d_nchw(expected.size());
+  auto tout = d_nchw.AsTensor({N, 3, Oh, Ow});
+  cuda::nn::WorkspacePool ws(BayerDemosaicNet::EstimateWorkspaceBytes(H, W, N, true));
+  net.Forward(tin, tout, ws, nullptr, /*force_ordinary_tail=*/false);
+  ASSERT_EQ(::cudaDeviceSynchronize(), cudaSuccess);
+
+  cv::cuda::GpuMat hwc(Oh, Ow, CV_32FC3);
+  cuda::nn::WorkspacePool ws_hwc(BayerDemosaicNet::EstimateWorkspaceBytes(H, W, N, true));
+  net.ForwardHwc(tin, reinterpret_cast<float*>(hwc.ptr()), static_cast<std::size_t>(hwc.step),
+                 ws_hwc, nullptr, /*apply_gamma_decode=*/false);
+  ASSERT_EQ(::cudaDeviceSynchronize(), cudaSuccess);
+
+  // NCHW golden → HWC order for comparison.
+  const auto nchw = d_nchw.Download();
+  std::vector<float> expected_hwc(static_cast<std::size_t>(Oh) * Ow * 3);
+  const std::size_t  plane = static_cast<std::size_t>(Oh) * Ow;
+  for (int y = 0; y < Oh; ++y) {
+    for (int x = 0; x < Ow; ++x) {
+      const std::size_t pix = static_cast<std::size_t>(y) * Ow + x;
+      expected_hwc[pix * 3 + 0] = nchw[0 * plane + pix];
+      expected_hwc[pix * 3 + 1] = nchw[1 * plane + pix];
+      expected_hwc[pix * 3 + 2] = nchw[2 * plane + pix];
+    }
+  }
+  ExpectVectorsNear(DownloadGpuMatRgb(hwc), expected_hwc, 1e-5f);
+  ExpectVectorsNear(nchw, expected, 1e-4f);
 }
 
 }  // namespace alcedo
