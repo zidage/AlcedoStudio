@@ -152,17 +152,17 @@ void BuildWarpRectilinearMaps(const dng::WarpRectilinear& warp, const cv::Size& 
                               const int plane, cv::Mat& map_x, cv::Mat& map_y) {
   map_x.create(size, CV_32FC1);
   map_y.create(size, CV_32FC1);
-  const auto& coeffs = ResolveWarpCoefficientSet(warp, plane);
+  const auto&  coeffs = ResolveWarpCoefficientSet(warp, plane);
 
-  const double x0 = 0.0;
-  const double y0 = 0.0;
-  const double x1 = static_cast<double>(std::max(size.width - 1, 0));
-  const double y1 = static_cast<double>(std::max(size.height - 1, 0));
-  const double cx = x0 + warp.center_x * (x1 - x0);
-  const double cy = y0 + warp.center_y * (y1 - y0);
-  const double mx = std::max(std::abs(x0 - cx), std::abs(x1 - cx));
-  const double my = std::max(std::abs(y0 - cy), std::abs(y1 - cy));
-  const double m  = std::sqrt(mx * mx + my * my);
+  const double x0     = 0.0;
+  const double y0     = 0.0;
+  const double x1     = static_cast<double>(std::max(size.width - 1, 0));
+  const double y1     = static_cast<double>(std::max(size.height - 1, 0));
+  const double cx     = x0 + warp.center_x * (x1 - x0);
+  const double cy     = y0 + warp.center_y * (y1 - y0);
+  const double mx     = std::max(std::abs(x0 - cx), std::abs(x1 - cx));
+  const double my     = std::max(std::abs(y0 - cy), std::abs(y1 - cy));
+  const double m      = std::sqrt(mx * mx + my * my);
   if (m <= std::numeric_limits<double>::epsilon()) {
     for (int y = 0; y < size.height; ++y) {
       for (int x = 0; x < size.width; ++x) {
@@ -178,14 +178,11 @@ void BuildWarpRectilinearMaps(const dng::WarpRectilinear& warp, const cv::Size& 
       const double dx = (static_cast<double>(x) - cx) / m;
       const double dy = (static_cast<double>(y) - cy) / m;
       const double r2 = dx * dx + dy * dy;
-      const double f =
-          coeffs[0] + coeffs[1] * r2 + coeffs[2] * r2 * r2 + coeffs[3] * r2 * r2 * r2;
-      const double dxr = f * dx;
-      const double dyr = f * dy;
-      const double dxt = coeffs[4] * (2.0 * dx * dy) +
-                         coeffs[5] * (r2 + 2.0 * dx * dx);
-      const double dyt = coeffs[5] * (2.0 * dx * dy) +
-                         coeffs[4] * (r2 + 2.0 * dy * dy);
+      const double f  = coeffs[0] + coeffs[1] * r2 + coeffs[2] * r2 * r2 + coeffs[3] * r2 * r2 * r2;
+      const double dxr      = f * dx;
+      const double dyr      = f * dy;
+      const double dxt      = coeffs[4] * (2.0 * dx * dy) + coeffs[5] * (r2 + 2.0 * dx * dx);
+      const double dyt      = coeffs[5] * (2.0 * dx * dy) + coeffs[4] * (r2 + 2.0 * dy * dy);
       map_x.at<float>(y, x) = static_cast<float>(cx + m * (dxr + dxt));
       map_y.at<float>(y, x) = static_cast<float>(cy + m * (dyr + dyt));
     }
@@ -248,9 +245,9 @@ auto BuildDirectRgbRgba(const libraw_rawdata_t& raw_data, const libraw_iparams_t
                                 ? static_cast<size_t>(sizes.raw_pitch)
                                 : static_cast<size_t>(raw_width) * sizeof(uint16_t) * 4;
     cv::Mat      view(raw_height, raw_width, CV_16UC4, raw_data.color4_image, row_step);
-    cv::Mat rgb16 = ExtractRgbFromFourChannel(
+    cv::Mat      rgb16 = ExtractRgbFromFourChannel(
         CropToDecodeArea(view, sizes, raw_data.color.dng_levels.default_crop));
-    cv::Mat      rgb32f;
+    cv::Mat rgb32f;
     rgb16.convertTo(rgb32f, CV_32FC3, 1.0 / 65535.0);
     return BuildOpaqueRgbaFromRgb(rgb32f);
   }
@@ -310,7 +307,15 @@ auto SelectCudaExecutionMode(const RawParams& params, const RawCfaPattern& cfa_p
     return *g_cuda_execution_mode_override;
   }
   if ((params.gpu_backend_ != RawGpuBackend::GPU && params.gpu_backend_ != RawGpuBackend::CUDA) ||
-      cfa_pattern.kind != RawCfaKind::Bayer2x2) {
+      (cfa_pattern.kind != RawCfaKind::Bayer2x2 && cfa_pattern.kind != RawCfaKind::XTrans6x6)) {
+    return CudaExecutionMode::FullFrame;
+  }
+  if (ResolveRawDemosaicMethod(params, cfa_pattern.kind) == RawDemosaicMethod::NeuralEngine) {
+    // Neural activations dominate VRAM even for modest images. Its tiled path uses the model's
+    // valid-convolution receptive-field border rather than the Legacy RCD halo.
+    return CudaExecutionMode::Tiled;
+  }
+  if (cfa_pattern.kind != RawCfaKind::Bayer2x2) {
     return CudaExecutionMode::FullFrame;
   }
 
@@ -331,7 +336,7 @@ auto GetCudaExecutionModeOverrideForTesting() -> std::optional<CudaExecutionMode
 
 RawProcessor::RawProcessor(const RawParams& params, const libraw_rawdata_t& rawdata,
                            LibRaw& raw_processor, const RawRuntimeColorContext& pre_ctx,
-                           const ushort default_crop[4],
+                           const ushort                        default_crop[4],
                            std::optional<dng::WarpRectilinear> dng_warp_rectilinear)
     : params_(params),
       runtime_color_context_(pre_ctx),
@@ -349,7 +354,7 @@ void RawProcessor::SetDecodeRes(int already_done_passes) {
     params_.decode_res_ = DecodeRes::EIGHTH;
   }
 
-  int total_passes = DecodeResToDownsamplePasses(params_.decode_res_);
+  int total_passes      = DecodeResToDownsamplePasses(params_.decode_res_);
   int downsample_passes = std::max(0, total_passes - already_done_passes);
 
   for (int pass = 0; pass < downsample_passes; ++pass) {
@@ -463,10 +468,11 @@ auto RawProcessor::ProcessGpu() -> ImageBuffer {
 }
 
 auto RawProcessor::Process() -> ImageBuffer {
+  const RawGpuBackend requested_gpu_backend = params_.gpu_backend_;
   input_kind_ = ClassifyRawInput(raw_data_, raw_processor_.imgdata.idata);
   runtime_color_context_.output_in_camera_space_ = false;
   gpu_input_downsample_passes_                   = 0;
-  params_.gpu_backend_                           = ResolveRuntimeRawGpuBackend(params_.gpu_backend_);
+  params_.gpu_backend_ = ResolveRuntimeRawGpuBackend(params_.gpu_backend_);
 
   if (input_kind_ == RawInputKind::DebayeredRgb) {
     params_.highlights_reconstruct_ = false;
@@ -493,6 +499,20 @@ auto RawProcessor::Process() -> ImageBuffer {
   }
 
   cfa_pattern_ = ReadLibRawCfaPattern(raw_processor_);
+#ifdef HAVE_CUDA
+  if (requested_gpu_backend == RawGpuBackend::GPU &&
+      detail::ResolveRawDemosaicMethod(params_, cfa_pattern_.kind) ==
+          RawDemosaicMethod::NeuralEngine) {
+    // Auto prefers the only backend that currently implements Neural Engine. If CUDA was
+    // compiled but is unavailable at runtime, retain Auto's resolved backend for Legacy fallback.
+    try {
+      if (ResolveAcceleratorBackend(AcceleratorBackendPreference::CUDA) == GpuBackendKind::CUDA) {
+        params_.gpu_backend_ = RawGpuBackend::CUDA;
+      }
+    } catch (...) {
+    }
+  }
+#endif
   if (cfa_pattern_.kind == RawCfaKind::Bayer2x2 && !IsClassic2x2Bayer(cfa_pattern_.bayer_pattern)) {
     throw std::runtime_error("RawProcessor: unsupported 2x2 CFA pattern " +
                              DescribeBayerPattern(cfa_pattern_.bayer_pattern) + ".");

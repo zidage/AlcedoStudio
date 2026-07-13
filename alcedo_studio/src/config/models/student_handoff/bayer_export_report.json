@@ -1,0 +1,141 @@
+{
+  "architecture": "bayer_s24_d8",
+  "architecture_md": "pytorch/handoff/bayer_architecture.md",
+  "architecture_md_sha256": "164550480048836abf34e973773b59f1284de96e02ef7ab3d5fd36c763c612cf",
+  "checkpoint": "pytorch/runs/phase45_handoff/phase4/bayer_s24_d8/checkpoints/best.pt",
+  "checkpoint_sha256": "f00fb0e4f4a49e32344ffb0add583bee98c7d5dbfda6c593b5b066d08f9de69f",
+  "cost": {
+    "budget_status": "within_preferred",
+    "full_frame_flops": 974713551360,
+    "full_frame_tflop": 0.97471355136,
+    "n_tiles": 40,
+    "tile_flops": 24367838784
+  },
+  "export_git_commit": "336cadec9c0d18e24c0a2df49b7cd3e7eb69cabb",
+  "exported_at": "2026-07-12T13:22:18.568268+00:00",
+  "fp32_weight_bytes": 156540,
+  "golden": {
+    "dtype": "float32",
+    "format": "demosaicnet-fp32-golden-v1",
+    "manifest_path": "bayer_golden_manifest.json",
+    "manifest_sha256": "2d168e0d6d40b1bf4a8a833866a9926a31b85075f00e26cdaf91cb6057f773fd",
+    "n": 2,
+    "patches": [
+      {
+        "index": 0,
+        "input_file": "bayer_input_00.pt",
+        "input_sha256": "ea32bb08d81c436262b7917ad975f5e3b8d4aa50be7ede83861cbcab4a60a175",
+        "input_shape": [
+          1,
+          3,
+          1086,
+          1086
+        ],
+        "output_file": "bayer_output_00.pt",
+        "output_sha256": "32d0a9f46c06e25881a601a88f108b17be686cb6049a56b55dd5874ea98780fc",
+        "output_shape": [
+          1,
+          3,
+          1024,
+          1024
+        ],
+        "seed": 20260712
+      },
+      {
+        "index": 1,
+        "input_file": "bayer_input_01.pt",
+        "input_sha256": "983fce71e467b8452196c9a25b396c404ed3263181300df8e7364a15d76bbd40",
+        "input_shape": [
+          1,
+          3,
+          1086,
+          1086
+        ],
+        "output_file": "bayer_output_01.pt",
+        "output_sha256": "ee6774650d6c037f2d3b0b24f9effbc3458a1432f0f78cf1156df7d5491780da",
+        "output_shape": [
+          1,
+          3,
+          1024,
+          1024
+        ],
+        "seed": 20260712
+      }
+    ],
+    "seed": 20260712,
+    "variant": "bayer"
+  },
+  "metadata": {
+    "architecture": "bayer_s24_d8",
+    "architecture_version": "1",
+    "cfa_period": "2",
+    "checkpoint_sha256": "f00fb0e4f4a49e32344ffb0add583bee98c7d5dbfda6c593b5b066d08f9de69f",
+    "format": "demosaicnet-pytorch-state_dict",
+    "pack_factor": "2",
+    "phase": "6",
+    "teacher_sha256": "02be9ed3238c6761114e75d2b059fe66019292277627d04b38d1a1b91375c2d5",
+    "tile_border": "31",
+    "tile_input": "1086",
+    "tile_output": "1024",
+    "tile_pad": "32",
+    "tile_step": "1024",
+    "training_commit": "unknown",
+    "variant": "bayer"
+  },
+  "n_tensors": 24,
+  "parameter_count": 39135,
+  "safetensors": "pytorch/handoff/bayer_student.safetensors",
+  "safetensors_bytes": 158868,
+  "safetensors_sha256": "c2cd167aa87500add9a7343f840b27699a8e50f075f1f74d09e4322a463c079d",
+  "selection": "pytorch/selected/bayer_selection.json",
+  "tiling": {
+    "border": 31,
+    "input_tile": 1086,
+    "output_tile": 1024,
+    "pad": 32,
+    "period": 2,
+    "step": 1024
+  },
+  "trainable_parameter_count": 39039,
+  "variant": "bayer",
+  "verify": {
+    "architecture": "bayer_s24_d8",
+    "errors": [],
+    "golden": [
+      {
+        "index": 0,
+        "match": true,
+        "max_abs_diff": 0.0
+      },
+      {
+        "index": 1,
+        "match": true,
+        "max_abs_diff": 0.0
+      }
+    ],
+    "max_state_abs_diff": 0.0,
+    "metadata": {
+      "architecture": "bayer_s24_d8",
+      "architecture_version": "1",
+      "cfa_period": "2",
+      "checkpoint_sha256": "f00fb0e4f4a49e32344ffb0add583bee98c7d5dbfda6c593b5b066d08f9de69f",
+      "format": "demosaicnet-pytorch-state_dict",
+      "pack_factor": "2",
+      "phase": "6",
+      "teacher_sha256": "02be9ed3238c6761114e75d2b059fe66019292277627d04b38d1a1b91375c2d5",
+      "tile_border": "31",
+      "tile_input": "1086",
+      "tile_output": "1024",
+      "tile_pad": "32",
+      "tile_step": "1024",
+      "training_commit": "unknown",
+      "variant": "bayer"
+    },
+    "n_tensors": 24,
+    "ok": true,
+    "path": "D:\\Projects\\deepjoint_demosiacing\\demosaicnet_caffe\\pytorch\\handoff\\bayer_student.safetensors",
+    "path_rel": "pytorch/handoff/bayer_student.safetensors",
+    "sha256": "c2cd167aa87500add9a7343f840b27699a8e50f075f1f74d09e4322a463c079d",
+    "variant": "bayer"
+  }
+}

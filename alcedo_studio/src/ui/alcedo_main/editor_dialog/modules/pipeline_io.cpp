@@ -286,6 +286,7 @@ auto ParamsForField(AdjustmentField field, const AdjustmentState& s, CPUPipeline
           }
         }
       }
+      params["raw"]["method"] = RawDemosaicMethodSelectionToString(s.raw_demosaic_method_);
       params["raw"]["highlights_reconstruct"] = s.raw_highlights_reconstruct_;
       return params;
     }
@@ -637,7 +638,8 @@ auto FieldChanged(AdjustmentField field, const AdjustmentState& current,
     case AdjustmentField::Saturation:
       return !NearlyEqual(current.saturation_, committed.saturation_);
     case AdjustmentField::RawDecode:
-      return current.raw_highlights_reconstruct_ != committed.raw_highlights_reconstruct_;
+      return current.raw_demosaic_method_ != committed.raw_demosaic_method_ ||
+             current.raw_highlights_reconstruct_ != committed.raw_highlights_reconstruct_;
     case AdjustmentField::LensCalib:
       return current.lens_calib_enabled_ != committed.lens_calib_enabled_ ||
              current.lens_override_make_ != committed.lens_override_make_ ||
@@ -772,6 +774,13 @@ auto LoadStateFromPipeline(CPUPipelineExecutor& exec, const AdjustmentState& bas
   if (const auto raw_json = ReadNestedObject(loading, OperatorType::RAW_DECODE, "raw");
       raw_json.has_value()) {
     const auto& raw = *raw_json;
+    if (raw.contains("method") && raw["method"].is_string()) {
+      try {
+        loaded_state.raw_demosaic_method_ =
+            RawDemosaicMethodSelectionFromString(raw["method"].get<std::string>());
+      } catch (...) {
+      }
+    }
     if (raw.contains("highlights_reconstruct")) {
       try {
         loaded_state.raw_highlights_reconstruct_ = raw["highlights_reconstruct"].get<bool>();

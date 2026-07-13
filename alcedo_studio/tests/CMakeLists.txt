@@ -33,6 +33,8 @@ option(ALCEDO_ENABLE_CUDA_IMAGE_GEOMETRY_OPS_TEST
        "Enable CudaImageGeometryOpsTest discovery and execution." ON)
 option(ALCEDO_ENABLE_CUDA_PREVIEW_VRAM_RECLAMATION_TEST
        "Enable CudaPreviewVramReclamationTest discovery and execution." ON)
+option(ALCEDO_ENABLE_GPU_PERF_TESTS
+       "Register GPU performance harnesses with the performance ctest label (opt-in)." OFF)
 
 add_custom_target(alcedo_tests_all)
 add_custom_target(alcedo_tests_core)
@@ -168,6 +170,33 @@ if(ALCEDO_CUDA_ENABLED)
   set_target_properties(CudaPrngTest PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
   gtest_discover_tests(CudaPrngTest TEST_PREFIX "CudaPrngTest.")
 
+  # Forward-only CNN / ML operator suite (ReLU, Mul, structural ops, Conv2d, …)
+  # plus hard-coded DemosaicNet modules + lazy cache (Phase 5).
+  add_executable(MlOpsTest
+    ml_ops/relu_test.cu
+    ml_ops/device_buffer_test.cu
+    ml_ops/workspace_test.cu
+    ml_ops/mul_test.cu
+    ml_ops/concat_test.cu
+    ml_ops/slice_test.cu
+    ml_ops/crop_test.cu
+    ml_ops/layout_test.cu
+    ml_ops/structural_compose_test.cu
+    ml_ops/conv2d_test.cu
+    ml_ops/conv_transpose2d_test.cu
+    ml_ops/safetensors_test.cpp
+    ml_ops/demosaicnet_module_test.cu
+    ml_ops/cuda_tile_jobs_test.cpp
+  )
+  target_include_directories(MlOpsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(MlOpsTest PRIVATE GTest::gtest_main CudaUtils DemosaicNet
+                        CudaDemosaicNetEntry CUDA::cudart JSON ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+  set_target_properties(MlOpsTest PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+  target_compile_definitions(MlOpsTest PRIVATE
+      ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+  )
+  gtest_discover_tests(MlOpsTest TEST_PREFIX "MlOpsTest.")
+
   if(WIN32)
     add_executable(D3DCudaInteropUtilsTest ui/d3d_cuda_interop_utils_test.cpp)
     target_include_directories(D3DCudaInteropUtilsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
@@ -177,8 +206,78 @@ if(ALCEDO_CUDA_ENABLED)
 
   add_executable(CudaRawOpsTest raw/cuda_raw_ops_test.cpp)
   target_include_directories(CudaRawOpsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-  target_link_libraries(CudaRawOpsTest PRIVATE GTest::gtest_main RawProcessorOp ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+  target_link_libraries(CudaRawOpsTest PRIVATE GTest::gtest_main RawProcessor RawProcessorOp
+                                               ${ALCEDO_TEST_OPENCV_MIN_DEPS})
   gtest_discover_tests(CudaRawOpsTest TEST_PREFIX "CudaRawOpsTest.")
+
+  # Phase 8.1: standalone Neural/Legacy full-frame and tile/conv diagnosis harness.
+  # Not part of default ctest. Build Release for authoritative timings:
+  #   cmd /c scripts\msvc_env.cmd --build --preset win_release --target DemosaicNetPerfHarness --parallel 4
+  execute_process(
+    COMMAND git rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_VARIABLE ALCEDO_GIT_COMMIT_SHORT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+  if(NOT ALCEDO_GIT_COMMIT_SHORT)
+    set(ALCEDO_GIT_COMMIT_SHORT "unknown")
+  endif()
+
+  add_executable(DemosaicNetPerfHarness
+    perf/demosaicnet_perf_harness.cpp
+    perf/demosaicnet_perf_metrics.cpp
+    perf/demosaicnet_perf_roofline.cpp
+  )
+  target_include_directories(DemosaicNetPerfHarness PRIVATE
+    ${ALCEDO_INCLUDE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/perf
+  )
+  target_link_libraries(DemosaicNetPerfHarness PRIVATE
+    RawProcessor
+    CudaDemosaicNetEntry
+    DemosaicNet
+    CudaUtils
+    CUDA::cudart
+    ${ALCEDO_TEST_OPENCV_MIN_DEPS}
+    opencv_core
+  )
+  set_target_properties(DemosaicNetPerfHarness PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+  target_compile_definitions(DemosaicNetPerfHarness PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+    ALCEDO_GIT_COMMIT="${ALCEDO_GIT_COMMIT_SHORT}"
+  )
+  # Prefer Release for authoritative numbers; still buildable in Debug for bring-up.
+  if(ALCEDO_ENABLE_GPU_PERF_TESTS)
+    add_test(
+      NAME DemosaicNetPerfHarness.FullBayerBoth
+      COMMAND $<TARGET_FILE:DemosaicNetPerfHarness>
+        --fixture bayer
+        --method both
+        --mode full
+        --warmup 3
+        --iterations 20
+        --output ${CMAKE_BINARY_DIR}/perf/demosaicnet_bayer.json
+    )
+    set_tests_properties(DemosaicNetPerfHarness.FullBayerBoth PROPERTIES
+      LABELS "performance"
+      TIMEOUT 7200
+    )
+    add_test(
+      NAME DemosaicNetPerfHarness.FullXTransBoth
+      COMMAND $<TARGET_FILE:DemosaicNetPerfHarness>
+        --fixture xtrans
+        --method both
+        --mode full
+        --warmup 3
+        --iterations 20
+        --output ${CMAKE_BINARY_DIR}/perf/demosaicnet_xtrans.json
+    )
+    set_tests_properties(DemosaicNetPerfHarness.FullXTransBoth PROPERTIES
+      LABELS "performance"
+      TIMEOUT 14400
+    )
+  endif()
 endif()
 
 if(ALCEDO_CUDA_ENABLED AND ALCEDO_OPENCL_ENABLED)
@@ -1117,9 +1216,11 @@ alcedo_assign_test_category(raw ALCEDO_BUILD_RAW_TESTS alcedo_tests_raw
 
 alcedo_assign_test_category(gpu ALCEDO_BUILD_GPU_TESTS alcedo_tests_gpu
   CudaPrngTest
+  MlOpsTest
   CudaImageGeometryOpsTest
   D3DCudaInteropUtilsTest
   CudaRawOpsTest
+  DemosaicNetPerfHarness
   MetalUtilsTest
   MetalRawOpsTest
   ODTCudaSmokeTest

@@ -128,8 +128,8 @@ void RawDecodeOp::Apply(std::shared_ptr<ImageBuffer> input) {
   raw_processor->imgdata.rawparams.use_rawspeed = 1;
   ImageBuffer output;
   latest_runtime_context_ = {};
-  const auto dng_metadata = dng::ExtractMetadata(
-      std::span<const uint8_t>(buffer.data(), buffer.size()));
+  const auto dng_metadata =
+      dng::ExtractMetadata(std::span<const uint8_t>(buffer.data(), buffer.size()));
 
   switch (backend_) {
     case RawProcessBackend::ALCEDO: {
@@ -148,12 +148,13 @@ void RawDecodeOp::Apply(std::shared_ptr<ImageBuffer> input) {
       }
       ctx.dng_warp_rectilinear_present_ = dng_metadata.warp_rectilinear.has_value();
 
-      RawProcessor processor{params_, raw_processor->imgdata.rawdata, *raw_processor, ctx,
-                             dng_metadata.default_crop.data(), dng_metadata.warp_rectilinear};
+      RawProcessor processor{
+          params_, raw_processor->imgdata.rawdata,   *raw_processor,
+          ctx,     dng_metadata.default_crop.data(), dng_metadata.warp_rectilinear};
 
-      const auto   process_start = ProfileClock::now();
+      const auto process_start = ProfileClock::now();
       throw_if_cancelled();
-      output                     = processor.Process();
+      output = processor.Process();
       AppendProfileMs(deferred_log, "RAW CPU processor.Process",
                       ProfileClock::now() - process_start);
       throw_if_cancelled();
@@ -227,7 +228,8 @@ auto RawDecodeOp::GetParams() const -> nlohmann::json {
   nlohmann::json inner;
 
   inner["gpu_backend"] = RawGpuBackendToString(params_.gpu_backend_);
-  inner["cuda"]     = false;
+  inner["method"]      = RawDemosaicMethodToString(params_.demosaic_method_);
+  inner["cuda"]        = false;
 #ifdef HAVE_CUDA
   inner["cuda"] =
       (params_.gpu_backend_ == RawGpuBackend::GPU || params_.gpu_backend_ == RawGpuBackend::CUDA);
@@ -276,11 +278,16 @@ void RawDecodeOp::SetParams(const nlohmann::json& params) {
   } else if (inner.contains("cuda")) {
     params_.gpu_backend_ = inner["cuda"].get<bool>() ? RawGpuBackend::CUDA : RawGpuBackend::CPU;
   } else if (inner.contains("opencl")) {
-    params_.gpu_backend_ =
-        inner["opencl"].get<bool>() ? RawGpuBackend::OpenCL : RawGpuBackend::CPU;
+    params_.gpu_backend_ = inner["opencl"].get<bool>() ? RawGpuBackend::OpenCL : RawGpuBackend::CPU;
   }
   if (inner.contains("highlights_reconstruct"))
     params_.highlights_reconstruct_ = inner["highlights_reconstruct"].get<bool>();
+  if (inner.contains("method")) {
+    if (!inner["method"].is_string()) {
+      throw std::runtime_error("RawDecodeOp: method should be a string");
+    }
+    params_.demosaic_method_ = RawDemosaicMethodFromString(inner["method"].get<std::string>());
+  }
   if (inner.contains("use_camera_wb")) params_.use_camera_wb_ = inner["use_camera_wb"].get<bool>();
   if (inner.contains("user_wb")) params_.user_wb_ = inner["user_wb"].get<uint32_t>();
   if (inner.contains("backend")) {
@@ -328,23 +335,21 @@ void RawDecodeOp::SetGlobalParams(OperatorParams& params) const {
   }
   params.raw_calibration_illuminants_valid_ =
       latest_runtime_context_.calibration_illuminants_valid_;
-  params.raw_color_matrix_1_cct_    = latest_runtime_context_.color_matrix_1_cct_;
-  params.raw_color_matrix_2_cct_    = latest_runtime_context_.color_matrix_2_cct_;
-  params.raw_lens_metadata_valid_   = latest_runtime_context_.lens_metadata_valid_;
-  params.raw_lens_make_             = latest_runtime_context_.lens_make_;
-  params.raw_lens_model_            = latest_runtime_context_.lens_model_;
-  params.raw_lens_focal_mm_         = latest_runtime_context_.focal_length_mm_;
-  params.raw_lens_aperture_f_       = latest_runtime_context_.aperture_f_number_;
-  params.raw_lens_focus_distance_m_ = latest_runtime_context_.focus_distance_m_;
-  params.raw_lens_focal_35mm_       = latest_runtime_context_.focal_35mm_mm_;
-  params.raw_lens_crop_factor_hint_ = latest_runtime_context_.crop_factor_hint_;
-  params.raw_dng_warp_rectilinear_present_ =
-      latest_runtime_context_.dng_warp_rectilinear_present_;
-  params.raw_dng_warp_rectilinear_applied_ =
-      latest_runtime_context_.dng_warp_rectilinear_applied_;
+  params.raw_color_matrix_1_cct_           = latest_runtime_context_.color_matrix_1_cct_;
+  params.raw_color_matrix_2_cct_           = latest_runtime_context_.color_matrix_2_cct_;
+  params.raw_lens_metadata_valid_          = latest_runtime_context_.lens_metadata_valid_;
+  params.raw_lens_make_                    = latest_runtime_context_.lens_make_;
+  params.raw_lens_model_                   = latest_runtime_context_.lens_model_;
+  params.raw_lens_focal_mm_                = latest_runtime_context_.focal_length_mm_;
+  params.raw_lens_aperture_f_              = latest_runtime_context_.aperture_f_number_;
+  params.raw_lens_focus_distance_m_        = latest_runtime_context_.focus_distance_m_;
+  params.raw_lens_focal_35mm_              = latest_runtime_context_.focal_35mm_mm_;
+  params.raw_lens_crop_factor_hint_        = latest_runtime_context_.crop_factor_hint_;
+  params.raw_dng_warp_rectilinear_present_ = latest_runtime_context_.dng_warp_rectilinear_present_;
+  params.raw_dng_warp_rectilinear_applied_ = latest_runtime_context_.dng_warp_rectilinear_applied_;
 
-  params.lens_calib_runtime_dirty_  = true;
-  params.color_temp_runtime_dirty_  = true;
+  params.lens_calib_runtime_dirty_         = true;
+  params.color_temp_runtime_dirty_         = true;
 }
 
 void RawDecodeOp::EnableGlobalParams(OperatorParams&, bool) {

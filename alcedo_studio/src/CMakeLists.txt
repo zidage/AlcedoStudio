@@ -119,11 +119,34 @@ def_library(CudaDriverRequirements
 
 if(ALCEDO_CUDA_ENABLED)
     def_library(CudaUtils
-        SOURCES cuda/prng.cu
-        PUBLIC_DEPS CUDA::cudart
+        SOURCES
+            cuda/prng.cu
+            cuda/nn/relu.cu
+            cuda/nn/mul.cu
+            cuda/nn/concat.cu
+            cuda/nn/slice.cu
+            cuda/nn/crop.cu
+            cuda/nn/layout.cu
+            cuda/nn/conv2d.cu
+            cuda/nn/cutlass_conv2d.cu
+            cuda/nn/demosaicnet_nhwc.cu
+            cuda/nn/conv_transpose2d.cu
+            cuda/nn/fused_post_output.cu
+            cuda/nn/safetensors.cpp
+        PUBLIC_DEPS
+            CUDA::cudart
+            ${ALCEDO_OPENCV_CORE_DEPS}
+        PRIVATE_DEPS
+            JSON
     )
     set_target_properties(CudaUtils PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
     target_compile_definitions(CudaUtils PUBLIC HAVE_CUDA)
+    target_include_directories(CudaUtils PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/cutlass/include"
+    )
+    set_source_files_properties(cuda/nn/cutlass_conv2d.cu PROPERTIES
+        COMPILE_OPTIONS "-Xcompiler=/Zc:__cplusplus;--expt-relaxed-constexpr"
+    )
 endif()
 
 def_library(UiLocalization
@@ -723,11 +746,46 @@ if(ALCEDO_OPENCL_ENABLED)
     list(APPEND RAW_PROCESSOR_BACKEND_SRCS decoders/processor/raw_processor_opencl.cpp)
 endif()
 
+# Hard-coded DemosaicNet modules + lazy model cache. Owned by the RAW CUDA backend path
+# (raw_processor_cuda.cpp / cuda_demosaicnet.cu), NOT by RawProcessorOp (legacy op facade only).
+if(ALCEDO_CUDA_ENABLED)
+    def_library(DemosaicNet
+        SOURCES
+            decoders/processor/nn/demosaicnet_bayer.cu
+            decoders/processor/nn/demosaicnet_xtrans.cu
+            decoders/processor/nn/demosaicnet_cache.cpp
+            decoders/processor/nn/demosaicnet_profiler.cpp
+        PUBLIC_DEPS
+            CudaUtils
+    )
+    set_target_properties(DemosaicNet PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+    target_compile_definitions(DemosaicNet PUBLIC HAVE_CUDA)
+    target_compile_definitions(DemosaicNet PRIVATE
+        ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config/models"
+    )
+
+    # Product-path Neural preprocess (phase-align + gamma) + GpuMat demosaic entry.
+    # Stays on CudaDemosaicNetEntry (not generic DemosaicNet modules) so LibRaw CFA types link.
+    def_library(CudaDemosaicNetEntry
+        SOURCES
+            decoders/processor/operators/gpu/cuda_demosaicnet.cu
+            decoders/processor/nn/demosaicnet_preprocess.cu
+        PUBLIC_DEPS
+            DemosaicNet
+            libraw::raw_r
+    )
+    set_target_properties(CudaDemosaicNetEntry PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+    target_compile_definitions(CudaDemosaicNetEntry PUBLIC HAVE_CUDA)
+endif()
+
 def_library(RawProcessor
     SOURCES decoders/processor/raw_processor.cpp ${RAW_PROCESSOR_BACKEND_SRCS}
     PUBLIC_DEPS Image libraw::raw_r Exiv2 RawProcessorOp
     PRIVATE_DEPS opencv_imgproc AcceleratorBackend
 )
+if(ALCEDO_CUDA_ENABLED)
+    target_link_libraries(RawProcessor PRIVATE CudaDemosaicNetEntry)
+endif()
 if(ALCEDO_OPENCL_ENABLED)
     target_link_libraries(RawProcessor PRIVATE OpenClGeometryUtils)
 endif()

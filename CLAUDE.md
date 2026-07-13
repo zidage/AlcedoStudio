@@ -55,6 +55,10 @@ ctest --test-dir build/debug --output-on-failure
 ./build/debug/tests/test_exposure_op
 ```
 
+**Test naming ban — no "smoke" tests.** Do not name tests, targets, files, or
+docs with `smoke` / `Smoke` / `SMOKE`. Every test must state a concrete purpose
+(behavior, contract, regression, or property). See `Agents.md` for the full rule.
+
 ## Architecture
 
 The codebase follows a strict layered architecture. Higher layers depend only on the layer directly below them.

@@ -77,6 +77,7 @@ void CopyFieldState(AdjustmentField field, const AdjustmentState& from, Adjustme
       to.saturation_ = from.saturation_;
       return;
     case AdjustmentField::RawDecode:
+      to.raw_demosaic_method_        = from.raw_demosaic_method_;
       to.raw_highlights_reconstruct_ = from.raw_highlights_reconstruct_;
       return;
     case AdjustmentField::LensCalib:

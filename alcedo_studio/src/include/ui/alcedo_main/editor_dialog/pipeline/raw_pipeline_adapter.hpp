@@ -25,6 +25,7 @@ struct RawPipelineAdapter {
   static auto ParamsFor(AdjustmentField field, const RawDecodeAdjustmentState& state,
                         CPUPipelineExecutor* exec = nullptr) -> nlohmann::json {
     AdjustmentState legacy{};
+    legacy.raw_demosaic_method_        = state.raw_demosaic_method_;
     legacy.raw_highlights_reconstruct_ = state.raw_highlights_reconstruct_;
     legacy.lens_calib_enabled_         = state.lens_calib_enabled_;
     legacy.lens_override_make_         = state.lens_override_make_;
@@ -40,12 +41,14 @@ struct RawPipelineAdapter {
   static auto FieldChanged(AdjustmentField field, const RawDecodeAdjustmentState& current,
                            const RawDecodeAdjustmentState& committed) -> bool {
     AdjustmentState legacy_current{};
+    legacy_current.raw_demosaic_method_        = current.raw_demosaic_method_;
     legacy_current.raw_highlights_reconstruct_ = current.raw_highlights_reconstruct_;
     legacy_current.lens_calib_enabled_         = current.lens_calib_enabled_;
     legacy_current.lens_override_make_         = current.lens_override_make_;
     legacy_current.lens_override_model_        = current.lens_override_model_;
 
     AdjustmentState legacy_committed{};
+    legacy_committed.raw_demosaic_method_        = committed.raw_demosaic_method_;
     legacy_committed.raw_highlights_reconstruct_ = committed.raw_highlights_reconstruct_;
     legacy_committed.lens_calib_enabled_         = committed.lens_calib_enabled_;
     legacy_committed.lens_override_make_         = committed.lens_override_make_;
@@ -56,6 +59,7 @@ struct RawPipelineAdapter {
 
  private:
   static void CopyRawStateToLegacy(const RawDecodeAdjustmentState& raw, AdjustmentState& legacy) {
+    legacy.raw_demosaic_method_        = raw.raw_demosaic_method_;
     legacy.raw_highlights_reconstruct_ = raw.raw_highlights_reconstruct_;
     legacy.lens_calib_enabled_         = raw.lens_calib_enabled_;
     legacy.lens_override_make_         = raw.lens_override_make_;
@@ -64,6 +68,7 @@ struct RawPipelineAdapter {
 
   static auto RawStateFromLegacy(const AdjustmentState& legacy) -> RawDecodeAdjustmentState {
     RawDecodeAdjustmentState raw;
+    raw.raw_demosaic_method_        = legacy.raw_demosaic_method_;
     raw.raw_highlights_reconstruct_ = legacy.raw_highlights_reconstruct_;
     raw.lens_calib_enabled_         = legacy.lens_calib_enabled_;
     raw.lens_override_make_         = legacy.lens_override_make_;

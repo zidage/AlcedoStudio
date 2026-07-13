@@ -10,13 +10,14 @@
 
 namespace alcedo::pipeline_defaults {
 
-inline constexpr float kCleanBaselineExposure = 1.5f;
-inline constexpr float kCleanBaselineSaturation = 30.0f;
-inline constexpr bool kCleanBaselineLensCalibEnabled = false;
+inline constexpr float kCleanBaselineExposure         = 1.5f;
+inline constexpr float kCleanBaselineSaturation       = 30.0f;
+inline constexpr bool  kCleanBaselineLensCalibEnabled = false;
 
-inline auto MakeDefaultRawDecodeParams() -> nlohmann::json {
+inline auto            MakeDefaultRawDecodeParams() -> nlohmann::json {
   nlohmann::json decode_params;
   decode_params["raw"]["gpu_backend"] = "cpu";
+  decode_params["raw"]["method"]      = "default";
 #if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
   decode_params["raw"]["gpu_backend"] = "gpu";
 #endif
@@ -82,7 +83,7 @@ inline auto MakeDefaultODTParams() -> nlohmann::json {
                               {"hs_r_rng", 0.6f},      {"hs_g", 0.35f},       {"hs_g_rng", 1.0f},
                               {"hs_b", 0.66f},         {"hs_b_rng", 1.0f},    {"hs_c", 0.25f},
                               {"hs_c_rng", 1.0f},      {"hs_m", 0.0f},        {"hs_m_rng", 1.0f},
-              {"hs_y", 0.0f},          {"hs_y_rng", 1.0f}}}}}}}};
+                              {"hs_y", 0.0f},          {"hs_y_rng", 1.0f}}}}}}}};
 }
 
 inline auto MakeDefaultFilmGrainParams() -> nlohmann::json {
@@ -105,20 +106,18 @@ inline auto MakeDefaultCropRotateParams() -> nlohmann::json {
 }
 
 inline auto MakeCleanBaselineAdjustableParams() -> nlohmann::json {
-  const auto zero_wheel =
-      nlohmann::json{{"disc", {{"x", 0.0f}, {"y", 0.0f}}},
-                     {"strength", 1.0f},
-                     {"color_offset", {{"x", 0.0f}, {"y", 0.0f}, {"z", 0.0f}}},
-                     {"luminance_offset", 0.0f}};
-  const auto unity_wheel =
-      nlohmann::json{{"disc", {{"x", 0.0f}, {"y", 0.0f}}},
-                     {"strength", 1.0f},
-                     {"color_offset", {{"x", 1.0f}, {"y", 1.0f}, {"z", 1.0f}}},
-                     {"luminance_offset", 0.0f}};
+  const auto     zero_wheel    = nlohmann::json{{"disc", {{"x", 0.0f}, {"y", 0.0f}}},
+                                                {"strength", 1.0f},
+                                                {"color_offset", {{"x", 0.0f}, {"y", 0.0f}, {"z", 0.0f}}},
+                                                {"luminance_offset", 0.0f}};
+  const auto     unity_wheel   = nlohmann::json{{"disc", {{"x", 0.0f}, {"y", 0.0f}}},
+                                                {"strength", 1.0f},
+                                                {"color_offset", {{"x", 1.0f}, {"y", 1.0f}, {"z", 1.0f}}},
+                                                {"luminance_offset", 0.0f}};
 
   nlohmann::json hls_adj_table = nlohmann::json::array();
   nlohmann::json h_range_table = nlohmann::json::array();
-  nlohmann::json hue_bins = nlohmann::json::array();
+  nlohmann::json hue_bins      = nlohmann::json::array();
   for (float hue : {0.0f, 45.0f, 90.0f, 135.0f, 180.0f, 225.0f, 270.0f, 315.0f}) {
     hue_bins.push_back(hue);
     hls_adj_table.push_back({0.0f, 0.0f, 0.0f});
@@ -127,33 +126,33 @@ inline auto MakeCleanBaselineAdjustableParams() -> nlohmann::json {
 
   nlohmann::json defaults;
   defaults["crop_rotate"] = MakeDefaultCropRotateParams();
-  defaults["exposure"] = {{"exposure", kCleanBaselineExposure}};
-  defaults["contrast"] = {{"contrast", 0.0f}};
-  defaults["white"] = {{"white", 0.0f}};
-  defaults["black"] = {{"black", 0.0f}};
-  defaults["highlights"] = {{"highlights", 0.0f}};
-  defaults["shadows"] = {{"shadows", 0.0f}};
-  defaults["curve"] = {
+  defaults["exposure"]    = {{"exposure", kCleanBaselineExposure}};
+  defaults["contrast"]    = {{"contrast", 0.0f}};
+  defaults["white"]       = {{"white", 0.0f}};
+  defaults["black"]       = {{"black", 0.0f}};
+  defaults["highlights"]  = {{"highlights", 0.0f}};
+  defaults["shadows"]     = {{"shadows", 0.0f}};
+  defaults["curve"]       = {
       {"curve", {{"points", {{{"x", 0.0f}, {"y", 0.0f}}, {{"x", 1.0f}, {"y", 1.0f}}}}}}};
-  defaults["saturation"] = {{"saturation", kCleanBaselineSaturation}};
-  defaults["vibrance"] = {{"vibrance", 0.0f}};
-  defaults["HLS"] = {{"HLS",
-                      {{"hue_bins", std::move(hue_bins)},
-                       {"hls_adj_table", std::move(hls_adj_table)},
-                       {"h_range_table", std::move(h_range_table)},
-                       {"target_hls", {0.0f, 0.5f, 1.0f}},
-                       {"hls_adj", {0.0f, 0.0f, 0.0f}},
-                       {"h_range", 45.0f},
-                       {"l_range", 0.1f},
-                       {"s_range", 0.1f}}}};
+  defaults["saturation"]  = {{"saturation", kCleanBaselineSaturation}};
+  defaults["vibrance"]    = {{"vibrance", 0.0f}};
+  defaults["HLS"]         = {{"HLS",
+                              {{"hue_bins", std::move(hue_bins)},
+                               {"hls_adj_table", std::move(hls_adj_table)},
+                               {"h_range_table", std::move(h_range_table)},
+                               {"target_hls", {0.0f, 0.5f, 1.0f}},
+                               {"hls_adj", {0.0f, 0.0f, 0.0f}},
+                               {"h_range", 45.0f},
+                               {"l_range", 0.1f},
+                               {"s_range", 0.1f}}}};
   defaults["color_wheel"] = {
       {"color_wheel", {{"lift", zero_wheel}, {"gamma", unity_wheel}, {"gain", unity_wheel}}}};
-  defaults["ocio_lmt"] = {{"ocio_lmt", ""}};
-  defaults["sharpen"] = {{"sharpen", {{"offset", 0.0f}, {"radius", 3.0f}, {"threshold", 0.0f}}}};
-  defaults["clarity"] = {{"clarity", 0.0f}};
-  defaults["odt"] = MakeDefaultODTParams();
+  defaults["ocio_lmt"]   = {{"ocio_lmt", ""}};
+  defaults["sharpen"]    = {{"sharpen", {{"offset", 0.0f}, {"radius", 3.0f}, {"threshold", 0.0f}}}};
+  defaults["clarity"]    = {{"clarity", 0.0f}};
+  defaults["odt"]        = MakeDefaultODTParams();
   defaults["film_grain"] = MakeDefaultFilmGrainParams();
-  defaults["halation"] = MakeDefaultHalationParams();
+  defaults["halation"]   = MakeDefaultHalationParams();
   return defaults;
 }
 

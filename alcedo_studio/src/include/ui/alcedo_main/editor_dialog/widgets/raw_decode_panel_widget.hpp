@@ -53,6 +53,7 @@ class RawDecodePanelWidget final : public AdjustmentPanelWidget {
  private:
   void                     BuildDecodeSection();
   void                     BuildLensSection();
+  void                     RefreshDemosaicMethodComboFromState();
   void                     EnsureLensCatalogLoaded();
   void                     RefreshLensBrandComboFromState();
   void                     RefreshLensModelComboFromState();
@@ -73,6 +74,7 @@ class RawDecodePanelWidget final : public AdjustmentPanelWidget {
   RawDecodeAdjustmentState committed_raw_state_{};
   lens_calib::LensCatalog  lens_catalog_{};
 
+  QComboBox*               raw_demosaic_method_combo_           = nullptr;
   QCheckBox*               raw_highlights_reconstruct_checkbox_ = nullptr;
   QCheckBox*               lens_calib_enabled_checkbox_         = nullptr;
   QComboBox*               lens_brand_combo_                    = nullptr;
