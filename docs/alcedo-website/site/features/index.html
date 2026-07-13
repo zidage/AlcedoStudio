@@ -4,19 +4,19 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Features — Alcedo Studio RAW editor and photo library</title>
-  <meta name="description" content="Details on non-destructive RAW editing, local library management, content search, optional AI descriptions and ratings, and performance in Alcedo Studio.">
+  <meta name="description" content="Details on RAW editing with ACES and OpenDRT color pipelines, LUT support, tone and color tools, local library management, search, AI ratings, and performance in Alcedo Studio.">
   <link rel="canonical" href="https://zidage.github.io/AlcedoStudio/features/">
   <link rel="alternate" hreflang="en" href="https://zidage.github.io/AlcedoStudio/features/">
   <link rel="alternate" hreflang="zh-CN" href="https://zidage.github.io/AlcedoStudio/zh-cn/features/">
   <link rel="alternate" hreflang="x-default" href="https://zidage.github.io/AlcedoStudio/features/">
   <meta property="og:title" content="Features — Alcedo Studio RAW editor and photo library">
-  <meta property="og:description" content="Details on non-destructive RAW editing, local library management, content search, optional AI descriptions and ratings, and performance in Alcedo Studio.">
+  <meta property="og:description" content="Details on RAW editing with ACES and OpenDRT color pipelines, LUT support, tone and color tools, local library management, search, AI ratings, and performance in Alcedo Studio.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://zidage.github.io/AlcedoStudio/features/">
   <meta property="og:image" content="https://zidage.github.io/AlcedoStudio/assets/social-card.png">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Features — Alcedo Studio RAW editor and photo library">
-  <meta name="twitter:description" content="Details on non-destructive RAW editing, local library management, content search, optional AI descriptions and ratings, and performance in Alcedo Studio.">
+  <meta name="twitter:description" content="Details on RAW editing with ACES and OpenDRT color pipelines, LUT support, tone and color tools, local library management, search, AI ratings, and performance in Alcedo Studio.">
   <meta name="twitter:image" content="https://zidage.github.io/AlcedoStudio/assets/social-card.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
@@ -59,7 +59,8 @@
         <div>
           <h2 id="raw-heading">RAW editing</h2>
           <div class="prose">
-            <p>Adjust exposure, white balance, color, tone, and crop on RAW photos. Previews update while you work so you can judge the result before export.</p>
+            <p>Adjust exposure, white balance, color, tone, and crop on RAW photos. The editor includes ACES and OpenDRT color pipelines, with LUT support for applying custom color looks.</p>
+            <p>Use tone curves, HSL, channel mixing, geometry and lens correction, crop and rotate, plus grain and Halation controls. Previews update while you work so you can judge the result before export.</p>
             <p>Edits stay in the project until you export; original files are not overwritten. Finished photos can be exported in common formats for sharing or further use.</p>
           </div>
         </div>
@@ -75,6 +76,51 @@
               decoding="async">
           </picture>
         </div>
+      </div>
+      <div class="wrap raw-editing__gallery" aria-label="Additional RAW editing tools">
+        <h3 class="sr-only">More RAW editing tools</h3>
+        <figure>
+          <picture>
+            <source type="image/avif" srcset="../assets/feature-raw-color-science.avif">
+            <img src="../assets/feature-raw-color-science.webp" width="1440" height="757" alt="ACES 2.0 and OpenDRT display transform controls in Alcedo Studio" loading="lazy" decoding="async">
+          </picture>
+          <figcaption>ACES 2.0 and OpenDRT display transform controls.</figcaption>
+        </figure>
+        <figure>
+          <picture>
+            <source type="image/avif" srcset="../assets/feature-raw-tone.avif">
+            <img src="../assets/feature-raw-tone.webp" width="1440" height="757" alt="Exposure, contrast, highlight, shadow, and tone curve controls in Alcedo Studio" loading="lazy" decoding="async">
+          </picture>
+          <figcaption>Exposure, contrast, highlight, shadow, and tone curve controls.</figcaption>
+        </figure>
+        <figure>
+          <picture>
+            <source type="image/avif" srcset="../assets/feature-raw-decoding.avif">
+            <img src="../assets/feature-raw-decoding.webp" width="1440" height="757" alt="RAW highlight reconstruction and lens correction controls in Alcedo Studio" loading="lazy" decoding="async">
+          </picture>
+          <figcaption>RAW highlight reconstruction and lens correction controls.</figcaption>
+        </figure>
+        <figure>
+          <picture>
+            <source type="image/avif" srcset="../assets/feature-raw-geometry.avif">
+            <img src="../assets/feature-raw-geometry.webp" width="1440" height="757" alt="Crop, rotation, and geometry controls in Alcedo Studio" loading="lazy" decoding="async">
+          </picture>
+          <figcaption>Crop, rotation, and geometry controls.</figcaption>
+        </figure>
+        <figure>
+          <picture>
+            <source type="image/avif" srcset="../assets/feature-raw-film-grain.avif">
+            <img src="../assets/feature-raw-film-grain.webp" width="1440" height="757" alt="Film grain and Halation controls in Alcedo Studio" loading="lazy" decoding="async">
+          </picture>
+          <figcaption>Film grain and Halation controls.</figcaption>
+        </figure>
+        <figure>
+          <picture>
+            <source type="image/avif" srcset="../assets/feature-raw-lut.avif">
+            <img src="../assets/feature-raw-lut.webp" width="1440" height="757" alt="LUT browser with a Kodak Portra 400 look selected in Alcedo Studio" loading="lazy" decoding="async">
+          </picture>
+          <figcaption>LUT browser with a Kodak Portra 400 look selected.</figcaption>
+        </figure>
       </div>
     </article>
 

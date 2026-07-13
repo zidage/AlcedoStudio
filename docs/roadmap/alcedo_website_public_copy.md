@@ -352,7 +352,7 @@ Installation and user guide for import, editing, and export.
 | 字段 | 文案 |
 | --- | --- |
 | `<title>` | Features — Alcedo Studio RAW editor and photo library |
-| `meta description` | Details on non-destructive RAW editing, local library management, content search, optional AI descriptions and ratings, and performance in Alcedo Studio. |
+| `meta description` | Details on RAW editing with ACES and OpenDRT color pipelines, LUT support, tone and color tools, local library management, search, AI ratings, and performance in Alcedo Studio. |
 | `og:title` | 同 `<title>` |
 | `og:description` | 同 `meta description` |
 | `og:url` | https://zidage.github.io/AlcedoStudio/features/ |
@@ -374,12 +374,19 @@ Alcedo Studio is a free, open-source photography workstation. This page describe
 
 **Heading:** RAW editing
 
-Adjust exposure, white balance, color, tone, and crop on RAW photos. Previews update while you work so you can judge the result before export.
+Adjust exposure, white balance, color, tone, and crop on RAW photos. The editor includes ACES and OpenDRT color pipelines, with LUT support for applying custom color looks.
+
+Use tone curves, HSL, channel mixing, geometry and lens correction, crop and rotate, plus grain and Halation controls. Previews update while you work so you can judge the result before export.
 
 Edits stay in the project until you export; original files are not overwritten. Finished photos can be exported in common formats for sharing or further use.
 
 **Screenshot (lazy):** `3-基础调整.png` → optimized asset  
 **Alt:** Exposure, tone, and color controls in the Alcedo Studio editor
+
+**Additional RAW screenshots (lazy):** `2-色彩科学.png`, `2-自然影调1.png`, `2-自然影调2.png`,
+`5-几何调整.png`, `5-胶片颗粒与Halation模拟.png`, `Portra 400.png` → optimized AVIF/WebP assets.
+These images show ACES 2.0 and OpenDRT, tone and RAW decoding controls, geometry, film grain/Halation,
+and the LUT browser.
 
 ### 5.4 Photo library
 
@@ -443,7 +450,7 @@ Exports are processed quickly for finished work. Memory is allocated on demand t
 | 字段 | 文案 |
 | --- | --- |
 | `<title>` | 功能说明 — Alcedo Studio RAW 编辑与图库管理 |
-| `meta description` | 了解 Alcedo Studio 的 RAW 编辑、图库管理、内容搜索、可选 AI 描述与评分，以及导入预览与导出性能。 |
+| `meta description` | 了解 Alcedo Studio 的 RAW 编辑、ACES 与 OpenDRT 色彩管线、LUT 支持、调色工具、图库管理、搜索、AI 描述与评分，以及性能表现。 |
 | `og:title` | 同 `<title>` |
 | `og:description` | 同 `meta description` |
 | `og:url` | https://zidage.github.io/AlcedoStudio/zh-cn/features/ |
@@ -465,12 +472,17 @@ Alcedo Studio 是免费、开源的摄影师工作站。本页说明 RAW 编辑�
 
 **Heading:** RAW 编辑
 
-在 RAW 照片上调整曝光、白平衡、色彩、影调和构图。预览会随调整更新，便于在导出前确认效果。
+在 RAW 照片上调整曝光、白平衡、色彩、影调和构图。编辑器提供基于 ACES 与 OpenDRT 的色彩科学管线，并支持使用 LUT 应用自定义色彩效果。
+
+可使用色调曲线、HSL、通道混合、几何与镜头校正、裁剪与旋转，以及胶片颗粒和 Halation 控制。预览会随调整更新，便于在导出前确认效果。
 
 修改保存在项目中，不会覆盖原始文件。完成后可导出为常用格式，用于分享或后续使用。
 
 **Screenshot (lazy):** 同英文页 RAW 编辑图  
 **Alt:** Alcedo Studio 编辑器中的曝光、影调与色彩调整
+
+**Additional RAW screenshots (lazy):** 同英文页 RAW 编辑辅助图库
+**Alt:** Alcedo Studio 中的色彩科学、RAW 解码、几何、胶片效果与 LUT 工具
 
 ### 6.4 图库管理
 
@@ -532,7 +544,7 @@ Alcedo Studio 是免费、开源的摄影师工作站。本页说明 RAW 编辑�
 | 用途 | 源截图 | 生产资源 | loading |
 | --- | --- | --- | --- |
 | 首页主视觉 | `1-主界面.png` + `3-基础调整.png` 叠放合成 | `assets/alcedo-hero-desktop.avif/webp`、`assets/alcedo-hero-mobile.avif/webp` | high / LCP |
-| Features: RAW | `3-基础调整.png` | features 优化图 | lazy |
+| Features: RAW | `3-基础调整.png`, `2-色彩科学.png`, `2-自然影调1.png`, `2-自然影调2.png`, `5-几何调整.png`, `5-胶片颗粒与Halation模拟.png`, `Portra 400.png` | RAW editing optimized AVIF/WebP set | lazy |
 | Features: Library | `1-主界面.png` | features 优化图 | lazy |
 | Features: Search | `10-AI自然语言搜索.png` | features 优化图 | lazy |
 | Features: AI | `8-AI内容识别.png`（可换评分界面） | features 优化图 | lazy |
@@ -540,7 +552,8 @@ Alcedo Studio 是免费、开源的摄影师工作站。本页说明 RAW 编辑�
 | 社交卡片 | 基于主视觉或品牌构图 | `assets/social-card.png` 1200×630 | n/a |
 | Favicon | 现有品牌图标 | `assets/favicon.svg` | n/a |
 
-可选保留、本版 Features **不单独成节** 的截图：胶片颗粒、Halation、高级色彩、几何、Portra 等。若用户审核要求增加胶片一节，再补文案；默认不写。
+`8-AI内容识别.png`、`9-AI内容过滤.png` 和旧版 `header.jpg` 暂不放入首版网页。RAW 编辑相关截图
+已经作为 RAW editing 区域的辅助图库发布，不单独拆成胶片或 LUT 营销页面。
 
 ---
 
