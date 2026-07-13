@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "cuda/nn/common.hpp"
@@ -15,6 +16,7 @@
 #include "cuda/nn/conv2d.hpp"
 #include "cuda/nn/conv_transpose2d.hpp"
 #include "cuda/nn/crop.hpp"
+#include "decoders/processor/nn/demosaicnet_activation_slots.hpp"
 #include "decoders/processor/nn/demosaicnet_profiler.hpp"
 
 namespace alcedo {
@@ -31,19 +33,9 @@ using cuda::nn::ConvTranspose2dParams;
 using cuda::nn::DeviceTensor;
 using cuda::nn::WorkspacePool;
 
-[[nodiscard]] auto AlignUp(std::size_t value, std::size_t alignment) -> std::size_t {
-  return (value + alignment - 1) & ~(alignment - 1);
-}
-
-[[nodiscard]] auto TensorBytes(std::int64_t n, std::int64_t c, std::int64_t h, std::int64_t w)
-    -> std::size_t {
-  if (n <= 0 || c <= 0 || h <= 0 || w <= 0) {
-    return 0;
-  }
-  const std::size_t elems =
-      static_cast<std::size_t>(n) * static_cast<std::size_t>(c) * static_cast<std::size_t>(h) *
-      static_cast<std::size_t>(w);
-  return AlignUp(elems * sizeof(float), WorkspacePool::kDefaultAlignment);
+[[nodiscard]] auto ViewNchw(float* base, std::int64_t n, std::int64_t c, std::int64_t h,
+                            std::int64_t w) -> DeviceTensor {
+  return DeviceTensor::Contiguous(base, {n, c, h, w});
 }
 
 void RequireContiguousNchw3(const DeviceTensor& t, const char* what) {
@@ -192,36 +184,9 @@ auto BayerDemosaicNet::EstimateWorkspaceBytes(int input_h, int input_w, int batc
   if ((input_h % kPackFactor) != 0 || (input_w % kPackFactor) != 0) {
     return 0;
   }
-
-  const std::int64_t N     = batch;
-  std::size_t        total = 0;
-
-  const std::int64_t ph = input_h / kPackFactor;
-  const std::int64_t pw = input_w / kPackFactor;
-  total += TensorBytes(N, kPackOutCh, ph, pw);
-
-  std::int64_t ch = ph;
-  std::int64_t cw = pw;
-  for (int i = 0; i < kDepth; ++i) {
-    const std::int64_t oh = ch - 2;
-    const std::int64_t ow = cw - 2;
-    total += TensorBytes(N, kWidth, oh, ow);
-    ch = oh;
-    cw = ow;
-  }
-  total += TensorBytes(N, kResidualCh, ch, cw);  // residual
-  const std::int64_t uh = ch * kPackFactor;
-  const std::int64_t uw = cw * kPackFactor;
-  total += TensorBytes(N, 3, uh, uw);  // unpack RGB
-  total += TensorBytes(N, 3, uh, uw);  // cropped mosaick
-  total += TensorBytes(N, 6, uh, uw);  // concat
-  const std::int64_t natural_h = uh - 2;
-  const std::int64_t natural_w = uw - 2;
-  total += TensorBytes(N, kWidth, natural_h, natural_w);  // post
-  // Natural RGB before optional export crop (caller owns final output).
-  total += TensorBytes(N, 3, natural_h, natural_w);
-
-  return total + (256 * 1024);
+  return demosaicnet_slots::ComputePeakLiveSlots(input_h, input_w, batch, kPackOutCh, kWidth,
+                                                 kResidualCh, kDepth, kPackFactor)
+      .estimate_bytes;
 }
 
 void BayerDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
@@ -251,20 +216,47 @@ void BayerDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
     throw std::runtime_error("BayerDemosaicNet::Forward: output shape mismatch");
   }
 
+  const demosaicnet_slots::PeakLiveSlots slots = demosaicnet_slots::ComputePeakLiveSlots(
+      H, W, N, kPackOutCh, kWidth, kResidualCh, kDepth, kPackFactor);
+  if (slots.estimate_bytes == 0) {
+    throw std::runtime_error("BayerDemosaicNet::Forward: invalid peak-live slot geometry");
+  }
+
   workspace.Reset();
-  const std::size_t need = EstimateWorkspaceBytes(H, W, N);
-  if (workspace.capacity_bytes() < need) {
-    workspace.Reserve(need);
+  if (workspace.capacity_bytes() < slots.estimate_bytes) {
+    workspace.Reserve(slots.estimate_bytes);
+  }
+
+  // Fixed liveness slots (P1). Views only — no per-layer bump growth.
+  float* slot_a =
+      static_cast<float*>(workspace.Allocate(slots.trunk_slot_bytes));
+  float* slot_b =
+      static_cast<float*>(workspace.Allocate(slots.trunk_slot_bytes));
+  float* slot_structural =
+      static_cast<float*>(workspace.Allocate(slots.structural_slot_bytes));
+  float* slot_post =
+      static_cast<float*>(workspace.Allocate(slots.post_slot_bytes));
+  if (slot_a == nullptr || slot_b == nullptr || slot_structural == nullptr ||
+      slot_post == nullptr) {
+    throw std::runtime_error("BayerDemosaicNet::Forward: failed to allocate activation slots");
   }
 
   DemosaicNetProfiler* profiler = ActiveDemosaicNetProfiler();
 
-  // pack: fixed 3→4, k=2 s=2, no bias
-  const int ph = H / kPackFactor;
-  const int pw = W / kPackFactor;
-  DeviceTensor cur = workspace.AllocateTensor(
-      {static_cast<std::int64_t>(N), kPackOutCh, static_cast<std::int64_t>(ph),
-       static_cast<std::int64_t>(pw)});
+  const std::int64_t n64 = N;
+  const std::int64_t ph  = slots.pack_h;
+  const std::int64_t pw  = slots.pack_w;
+  const std::int64_t mh  = slots.mosaic_h;
+  const std::int64_t mw  = slots.mosaic_w;
+  const std::int64_t uh  = slots.unpack_h;
+  const std::int64_t uw  = slots.unpack_w;
+  const std::int64_t nh  = slots.natural_h;
+  const std::int64_t nw  = slots.natural_w;
+
+  // pack → slot A
+  float*       cur_base  = slot_a;
+  float*       next_base = slot_b;
+  DeviceTensor cur       = ViewNchw(cur_base, n64, kPackOutCh, ph, pw);
   {
     if (profiler != nullptr) {
       profiler->BeginRange(DemosaicNetProfileRange::PackConv, stream);
@@ -282,7 +274,7 @@ void BayerDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
     }
   }
 
-  // trunk: depth × valid 3×3 + ReLU (optional per-layer events)
+  // trunk: ping-pong A/B (previous layer dies when next completes on the stream)
   for (int i = 0; i < kDepth; ++i) {
     const int cin = static_cast<int>(cur.shape[1]);
     const int oh  = static_cast<int>(cur.shape[2]) - 2;
@@ -290,9 +282,7 @@ void BayerDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
     if (oh < 1 || ow < 1) {
       throw std::runtime_error("BayerDemosaicNet::Forward: spatial collapsed in trunk");
     }
-    DeviceTensor next = workspace.AllocateTensor({static_cast<std::int64_t>(N), kWidth,
-                                                  static_cast<std::int64_t>(oh),
-                                                  static_cast<std::int64_t>(ow)});
+    DeviceTensor next = ViewNchw(next_base, n64, kWidth, oh, ow);
     if (profiler != nullptr) {
       profiler->BeginTrunkLayer(i, stream);
     }
@@ -308,16 +298,14 @@ void BayerDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
       profiler->EndTrunkLayer(i, stream);
     }
     cur = next;
+    std::swap(cur_base, next_base);
   }
 
-  const int mh = static_cast<int>(cur.shape[2]);
-  const int mw = static_cast<int>(cur.shape[3]);
-  DeviceTensor residual = workspace.AllocateTensor(
-      {static_cast<std::int64_t>(N), kResidualCh, static_cast<std::int64_t>(mh),
-       static_cast<std::int64_t>(mw)});
+  // residual → inactive trunk slot (next_base); final trunk stays in cur_base until residual done
   if (profiler != nullptr) {
     profiler->BeginRange(DemosaicNetProfileRange::ResidualUnpackCropConcat, stream);
   }
+  DeviceTensor residual = ViewNchw(next_base, n64, kResidualCh, mh, mw);
   {
     Conv2dParams p;
     p.in_channels  = kWidth;
@@ -329,11 +317,8 @@ void BayerDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
     Conv2d(cur, residual, p, stream, &workspace);
   }
 
-  const int uh = mh * kPackFactor;
-  const int uw = mw * kPackFactor;
-  DeviceTensor up = workspace.AllocateTensor({static_cast<std::int64_t>(N), 3,
-                                              static_cast<std::int64_t>(uh),
-                                              static_cast<std::int64_t>(uw)});
+  // unpack → dead trunk slot (cur_base); residual still live in next_base
+  DeviceTensor up = ViewNchw(cur_base, n64, 3, uh, uw);
   {
     ConvTranspose2dParams p;
     p.in_channels  = kResidualCh;
@@ -346,24 +331,17 @@ void BayerDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
     ConvTranspose2d(residual, up, p, stream, &workspace);
   }
 
-  DeviceTensor cropped = workspace.AllocateTensor({static_cast<std::int64_t>(N), 3,
-                                                   static_cast<std::int64_t>(uh),
-                                                   static_cast<std::int64_t>(uw)});
+  // cropped mosaick → structural; concat → inactive (residual dead after unpack)
+  DeviceTensor cropped = ViewNchw(slot_structural, n64, 3, uh, uw);
   CenterCropLike(input, up, cropped, stream);
 
-  DeviceTensor cat = workspace.AllocateTensor({static_cast<std::int64_t>(N), 6,
-                                               static_cast<std::int64_t>(uh),
-                                               static_cast<std::int64_t>(uw)});
+  DeviceTensor cat = ViewNchw(next_base, n64, 6, uh, uw);
   ConcatChannels(cropped, up, cat, stream);
   if (profiler != nullptr) {
     profiler->EndRange(DemosaicNetProfileRange::ResidualUnpackCropConcat, stream);
   }
 
-  const int natural_h = uh - 2;
-  const int natural_w = uw - 2;
-  DeviceTensor y = workspace.AllocateTensor({static_cast<std::int64_t>(N), kWidth,
-                                             static_cast<std::int64_t>(natural_h),
-                                             static_cast<std::int64_t>(natural_w)});
+  DeviceTensor y = ViewNchw(slot_post, n64, kWidth, nh, nw);
   if (profiler != nullptr) {
     profiler->BeginRange(DemosaicNetProfileRange::PostOutput, stream);
   }
@@ -378,7 +356,7 @@ void BayerDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
     Conv2dBiasRelu(cat, y, p, stream, &workspace);
   }
 
-  if (out_h == natural_h && out_w == natural_w) {
+  if (out_h == static_cast<int>(nh) && out_w == static_cast<int>(nw)) {
     Conv2dParams p;
     p.in_channels  = kWidth;
     p.out_channels = 3;
@@ -388,9 +366,8 @@ void BayerDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
     p.bias      = output_b_.get();
     Conv2d(y, output, p, stream, &workspace);
   } else {
-    DeviceTensor natural_rgb = workspace.AllocateTensor(
-        {static_cast<std::int64_t>(N), 3, static_cast<std::int64_t>(natural_h),
-         static_cast<std::int64_t>(natural_w)});
+    // Reuse structural (cropped/concat inputs are dead after post begins reading cat).
+    DeviceTensor natural_rgb = ViewNchw(slot_structural, n64, 3, nh, nw);
     {
       Conv2dParams p;
       p.in_channels  = kWidth;

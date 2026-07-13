@@ -85,7 +85,8 @@ class BayerDemosaicNet : public NnWeightModule<BayerDemosaicNet> {
     return NaturalOutputWidth(input_w);
   }
 
-  // Peak activation workspace for one Forward (does not include weight VRAM).
+  // Peak-live activation workspace for one Forward (P1 slot reuse; not sum-of-all
+  // intermediates). Does not include weight VRAM.
   [[nodiscard]] static auto EstimateWorkspaceBytes(int input_h, int input_w, int batch = 1)
       -> std::size_t;
 

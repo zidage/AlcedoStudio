@@ -190,7 +190,7 @@ if(ALCEDO_CUDA_ENABLED)
   )
   target_include_directories(MlOpsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(MlOpsTest PRIVATE GTest::gtest_main CudaUtils DemosaicNet
-                        CUDA::cudart JSON ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+                        CudaDemosaicNetEntry CUDA::cudart JSON ${ALCEDO_TEST_OPENCV_MIN_DEPS})
   set_target_properties(MlOpsTest PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
   target_compile_definitions(MlOpsTest PRIVATE
       ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"

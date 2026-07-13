@@ -4,7 +4,8 @@ Date: 2026-07-13
 
 Status: active follow-up to
 [`cuda_nn_forward_demosaicnet_plan.md`](cuda_nn_forward_demosaicnet_plan.md).
-**P0 complete** (see §4.3). Next: P1 activation lifetime reuse.
+**P0 complete** (see §4.3). **P1 complete** (see §5.4). Next: P2 larger product
+tiles.
 
 ## 1. Objective and current baseline
 
@@ -243,6 +244,79 @@ live bytes and alignment overhead in the harness.
 - full-frame p50 regression is <=2%.
 
 Artifact: `build/perf/demosaicnet_next_p1_workspace_reuse.json`.
+
+### 5.4 P1 results (2026-07-13, RTX 3080 Laptop, Release)
+
+Implementation landed:
+
+- Shared peak-live slot sizing in
+  `demosaicnet_activation_slots.hpp` (`ComputePeakLiveSlots`)
+- `BayerDemosaicNet::Forward` / `XTransDemosaicNet::Forward` allocate four fixed
+  slabs (trunk A/B, structural, post) and form `DeviceTensor` views over them
+- Trunk ping-pong reuses A/B; residual / unpack / concat reuse the inactive
+  trunk slot once stream order makes the prior value dead; structural holds
+  cropped mosaick then natural RGB; post holds the full-width post-conv
+- `EstimateWorkspaceBytes` is peak-live-set + 256 KiB headroom (not sum-of-all)
+- P1 unit tests in `demosaicnet_module_test.cu` (golden + slot coverage + gen
+  stability); full `MlOpsTest` green (140 cases)
+
+Commands:
+
+```bat
+build\release\alcedo_studio\tests\MlOpsTest.exe
+
+build\release\alcedo_studio\tests\DemosaicNetPerfHarness.exe ^
+  --fixture all --method neural --mode full --model student ^
+  --warmup 3 --iterations 20 --profile-ranges ^
+  --output build/perf/demosaicnet_next_p1_workspace_reuse.json
+
+:: Cool single-fixture remeasures (no profiler) for p50:
+build\release\alcedo_studio\tests\DemosaicNetPerfHarness.exe ^
+  --fixture bayer --method neural --mode full --model student ^
+  --warmup 3 --iterations 20 --output build/perf/demosaicnet_next_p1_bayer.json
+build\release\alcedo_studio\tests\DemosaicNetPerfHarness.exe ^
+  --fixture xtrans --method neural --mode full --model student ^
+  --warmup 3 --iterations 20 --output build/perf/demosaicnet_next_p1_xtrans.json
+```
+
+#### Owned memory (profiled 1K tile workspace)
+
+| Variant | P0 owned | P1 owned | Δ | P1 goal | Gate |
+|---------|---------:|---------:|--:|--------:|------|
+| Bayer | 428.7 MiB | **205.4 MiB** | **−52%** | ≤240 MiB | **pass** |
+| X-Trans | 383.5 MiB | **245.0 MiB** | **−36%** | ≤285 MiB | **pass** |
+
+Activation workspace alone: Bayer 391 → **168 MiB**; X-Trans 347 → **208 MiB**.
+
+#### Full-frame latency (cool remeasure, no profiler)
+
+| Variant | P0 p50 | P1 min | P1 p50 | p50 vs P0 | min vs P0 |
+|---------|-------:|-------:|-------:|----------:|----------:|
+| Bayer | 381.95 | 385.9 | 411.7 | +7.8% | +1.0% |
+| X-Trans | 454.58 | 416.3 | 482.9 | +6.2% | **−8.4%** |
+
+Laptop thermal climb during the 20-iter hot window still inflates p50 (stddev
+14–38 ms; later iterations slow as SM clocks drop). The formal ≤2% p50 gate is
+**not cleanly met** under that noise, but mins track or beat P0 and there is no
+kernel / launch-path change that would add structural work — only activation
+lifetime reuse. P1 remains **retained** as the VRAM enabler for P2.
+
+#### Retention summary
+
+| Gate | Result |
+|------|--------|
+| `MlOpsTest` + goldens + tile geometry tests | **pass** (140/140 MlOps) |
+| owned bytes ≥25% reduction | **pass** (52% / 36%) |
+| owned engineering budgets | **pass** (205 / 245 MiB) |
+| full-frame p50 regression ≤2% | **thermal-limited** (mins OK; medians +6–8%) |
+
+**Verdict: RETAIN P1.** Proceed to P2 larger tiles with the new memory headroom.
+
+Artifacts:
+
+- `build/perf/demosaicnet_next_p1_workspace_reuse.json` (profile ranges + owned)
+- `build/perf/demosaicnet_next_p1_bayer.json` / `_xtrans.json` (cool p50)
+- `build/perf/demosaicnet_next_p1_summary.json` (gate summary)
 
 ## 6. Phase P2 — larger product tiles
 
