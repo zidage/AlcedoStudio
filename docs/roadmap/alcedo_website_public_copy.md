@@ -383,6 +383,11 @@ Edits stay in the project until you export; original files are not overwritten. 
 **Screenshot (lazy):** `3-基础调整.png` → optimized asset  
 **Alt:** Exposure, tone, and color controls in the Alcedo Studio editor
 
+**Additional RAW screenshots (lazy):** `2-色彩科学.png`, `2-自然影调1.png`, `2-自然影调2.png`,
+`5-几何调整.png`, `5-胶片颗粒与Halation模拟.png`, `Portra 400.png` → optimized AVIF/WebP assets.
+These images show ACES 2.0 and OpenDRT, tone and RAW decoding controls, geometry, film grain/Halation,
+and the LUT browser.
+
 ### 5.4 Photo library
 
 **Heading:** Photo library
@@ -476,6 +481,9 @@ Alcedo Studio 是免费、开源的摄影师工作站。本页说明 RAW 编辑�
 **Screenshot (lazy):** 同英文页 RAW 编辑图  
 **Alt:** Alcedo Studio 编辑器中的曝光、影调与色彩调整
 
+**Additional RAW screenshots (lazy):** 同英文页 RAW 编辑辅助图库
+**Alt:** Alcedo Studio 中的色彩科学、RAW 解码、几何、胶片效果与 LUT 工具
+
 ### 6.4 图库管理
 
 **Heading:** 图库管理
@@ -536,7 +544,7 @@ Alcedo Studio 是免费、开源的摄影师工作站。本页说明 RAW 编辑�
 | 用途 | 源截图 | 生产资源 | loading |
 | --- | --- | --- | --- |
 | 首页主视觉 | `1-主界面.png` + `3-基础调整.png` 叠放合成 | `assets/alcedo-hero-desktop.avif/webp`、`assets/alcedo-hero-mobile.avif/webp` | high / LCP |
-| Features: RAW | `3-基础调整.png` | features 优化图 | lazy |
+| Features: RAW | `3-基础调整.png`, `2-色彩科学.png`, `2-自然影调1.png`, `2-自然影调2.png`, `5-几何调整.png`, `5-胶片颗粒与Halation模拟.png`, `Portra 400.png` | RAW editing optimized AVIF/WebP set | lazy |
 | Features: Library | `1-主界面.png` | features 优化图 | lazy |
 | Features: Search | `10-AI自然语言搜索.png` | features 优化图 | lazy |
 | Features: AI | `8-AI内容识别.png`（可换评分界面） | features 优化图 | lazy |
@@ -544,7 +552,8 @@ Alcedo Studio 是免费、开源的摄影师工作站。本页说明 RAW 编辑�
 | 社交卡片 | 基于主视觉或品牌构图 | `assets/social-card.png` 1200×630 | n/a |
 | Favicon | 现有品牌图标 | `assets/favicon.svg` | n/a |
 
-可选保留、本版 Features **不单独成节** 的截图：胶片颗粒、Halation、高级色彩、几何、Portra 等。若用户审核要求增加胶片一节，再补文案；默认不写。
+`8-AI内容识别.png`、`9-AI内容过滤.png` 和旧版 `header.jpg` 暂不放入首版网页。RAW 编辑相关截图
+已经作为 RAW editing 区域的辅助图库发布，不单独拆成胶片或 LUT 营销页面。
 
 ---
 

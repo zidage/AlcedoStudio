@@ -316,6 +316,13 @@ def main() -> None:
 
     # Features images (plan §19.3)
     feature_export(SHOTS / "4-高级色彩.png", "feature-raw-editor")
+    # Additional RAW editing material requested for the Features page.
+    feature_export(SHOTS / "2-自然影调1.png", "feature-raw-tone")
+    feature_export(SHOTS / "2-自然影调2.png", "feature-raw-decoding")
+    feature_export(SHOTS / "2-色彩科学.png", "feature-raw-color-science")
+    feature_export(SHOTS / "5-几何调整.png", "feature-raw-geometry")
+    feature_export(SHOTS / "5-胶片颗粒与Halation模拟.png", "feature-raw-film-grain")
+    feature_export(SHOTS / "Portra 400.png", "feature-raw-lut")
     feature_export(SHOTS / "7-高级筛选.png", "feature-library-filter")
     feature_export(SHOTS / "10-AI自然语言搜索.png", "feature-library-search")
     feature_export(SHOTS / "6-导出界面.png", "feature-export")

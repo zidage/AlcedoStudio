@@ -1005,6 +1005,11 @@ Download、Documentation、GitHub 三个下一步链接。
 | 功能区 | 源文件 | 处理方式 | 画面能够证明的内容 |
 | --- | --- | --- | --- |
 | RAW editing | `public/screenshots/4-高级色彩.png` | 裁掉多余黑边，保留照片和高级色彩面板 | RAW 照片调整和色彩控制 |
+| RAW color science | `public/screenshots/2-色彩科学.png` | 转码后保留右侧显示变换设置 | ACES 2.0 与 OpenDRT |
+| RAW tone and decoding | `public/screenshots/2-自然影调1.png`、`2-自然影调2.png` | 分别转码，保留调整、RAW 解码和镜头校正面板 | 影调、RAW 解码与镜头校正 |
+| RAW geometry | `public/screenshots/5-几何调整.png` | 转码后保留裁剪网格、旋转角度和几何面板 | 裁剪、旋转和几何调整 |
+| RAW film effects | `public/screenshots/5-胶片颗粒与Halation模拟.png` | 转码后保留胶片颗粒与 Halation 控件 | 胶片颗粒和 Halation |
+| RAW LUT | `public/screenshots/Portra 400.png` | 转码后保留 LUT 浏览器和选中效果 | LUT 浏览和色彩效果 |
 | Photo library | `public/screenshots/7-高级筛选.png` | 保留图库、日期和相机等筛选条件 | 图片浏览、元数据和组合筛选 |
 | Library search | `public/screenshots/10-AI自然语言搜索.png` | 重点保留搜索输入和结果，减少无关背景 | 通过内容描述进行模糊搜索 |
 | Performance and export | `public/screenshots/6-导出界面.png` | 以导出队列和批量操作为主体 | 批量管理和导出流程 |
@@ -1013,7 +1018,7 @@ Download、Documentation、GitHub 三个下一步链接。
 | Rating strictness | `docs/social_media_pub/2026-07-06/severity.png` | 保留任务选择和完整的苛刻程度滑杆 | 描述、评分、评分理由任务以及可调苛刻程度 |
 
 表中以 `public/screenshots/` 开头的路径均相对于 `docs/alcedo-website/`。发布前，位于
-`docs/social_media_pub/` 的三个 AI 源文件应复制并转换到网站自己的 `public/media/`，网页不能
+`docs/social_media_pub/` 的三个 AI 源文件应复制并转换到网站自己的 `site/assets/`，网页不能
 在运行时引用网站目录之外的文件。
 
 AI 功能区桌面端可以使用一张主图加一张紧随正文的小图，但不能把三张图全部并排：
@@ -1026,17 +1031,17 @@ Features 页仍保持“一节一个主要视觉”的节奏。后两张细节�
 独立营销画廊。EXIF 可兼容读取属于产品行为，由正文清楚说明；截图没有直接显示写回格式时，
 图片说明不能声称画面已经证明了 EXIF 写回。
 
-### 19.4 首版不使用的现有图片
+### 19.4 首版暂不使用的现有图片
 
-以下图片不是无效素材，但首版官网不使用，以免首页和 Features 页变成长画廊：
+以下图片不是无效素材，但首版官网暂不使用：
 
-- `2-自然影调1.png`、`2-自然影调2.png`、`2-色彩科学.png`；
-- `5-几何调整.png`、`5-胶片颗粒与Halation模拟.png`、`Portra 400.png`；
 - `8-AI内容识别.png`、`9-AI内容过滤.png`；
 - `docs/alcedo-website/public/header.jpg`。
 
-这些素材可以继续用于教程或未来单独的功能文章。`header.jpg` 不再作为首页横幅，因为它属于
-旧版品牌展示方式，与新的“软件名称 + 用途 + 下载 + 真实界面”结构冲突。
+`2-自然影调1.png`、`2-自然影调2.png`、`2-色彩科学.png`、`5-几何调整.png`、
+`5-胶片颗粒与Halation模拟.png` 和 `Portra 400.png` 已按用户要求加入 RAW editing 的辅助图库，
+并生成对应的 AVIF/WebP 发布资源。`header.jpg` 不再作为首页横幅，因为它属于旧版品牌展示方式，
+与新的“软件名称 + 用途 + 下载 + 真实界面”结构冲突。
 
 ### 19.5 发布文件结构
 
@@ -1053,6 +1058,18 @@ docs/alcedo-website/public/
 │  ├─ hero-workstation-1440.webp
 │  ├─ feature-raw-editor.avif
 │  ├─ feature-raw-editor.webp
+│  ├─ feature-raw-tone.avif
+│  ├─ feature-raw-tone.webp
+│  ├─ feature-raw-decoding.avif
+│  ├─ feature-raw-decoding.webp
+│  ├─ feature-raw-color-science.avif
+│  ├─ feature-raw-color-science.webp
+│  ├─ feature-raw-geometry.avif
+│  ├─ feature-raw-geometry.webp
+│  ├─ feature-raw-film-grain.avif
+│  ├─ feature-raw-film-grain.webp
+│  ├─ feature-raw-lut.avif
+│  ├─ feature-raw-lut.webp
 │  ├─ feature-library-filter.avif
 │  ├─ feature-library-filter.webp
 │  ├─ feature-library-search.avif
