@@ -83,12 +83,28 @@ struct HarnessConfig {
   ModelKind   model          = ModelKind::Student;
   int         warmup         = 3;
   int         iterations     = 20;
-  int         tile_size      = 1024;
+  int         tile_size      = 1024;  // square owned edge (default / --tile-size)
+  int         tile_w         = 0;     // rectangular owned width (0 → tile_size)
+  int         tile_h         = 0;     // rectangular owned height (0 → tile_size)
+  int         strip_height   = 0;     // >0 → full-width strip of this owned height
   int         lanes          = 1;
   bool        profile_ranges = false;
   bool        conv_winograd  = false;
+  bool        ragged_edges   = false;  // P4-B: rectangular boundary jobs (vs paid 1024 tails)
   fs::path    output_json;
   fs::path    fixture_override;
+
+  // Resolved owned shape after parse (strip fills width at plan time from cover).
+  [[nodiscard]] auto OwnedW() const -> int {
+    return tile_w > 0 ? tile_w : tile_size;
+  }
+  [[nodiscard]] auto OwnedH() const -> int {
+    if (strip_height > 0) {
+      return strip_height;
+    }
+    return tile_h > 0 ? tile_h : tile_size;
+  }
+  [[nodiscard]] auto IsFullWidthStrip() const -> bool { return strip_height > 0; }
 };
 
 struct FixtureSpec {
@@ -120,12 +136,16 @@ void PrintUsage(const char* argv0) {
       << "  --model student                Hard-coded product topology (default; only value)\n"
       << "  --warmup N                     Warm-up iterations (default: 3)\n"
       << "  --iterations N                 Measured iterations (default: 20)\n"
-      << "  --tile-size N                  Product owned-output edge (even, >=256; default 1024; "
+      << "  --tile-size N                  Square owned-output edge (even, >=256; default 1024; "
          "P2 candidates 512/1024/1536/2048/3072)\n"
+      << "  --tile-width N                 Rectangular owned width (P4-C; with --tile-height)\n"
+      << "  --tile-height N                Rectangular owned height (P4-C; with --tile-width)\n"
+      << "  --strip-height N               Full-width owned strip height (P4-C; 128/256/512)\n"
       << "  --lanes N                      Concurrent streams/workspaces in tile mode (default: "
          "1)\n"
       << "  --profile-ranges               Named CUDA-event ranges (full/tile; P0 breakdown)\n"
       << "  --conv-winograd                Conv mode: benchmark prepacked F(2x2,3x3) trunks\n"
+      << "  --ragged-edges                 P4-B: ragged right/bottom owned tiles (vs fixed 1024)\n"
       << "  --output path.json             Write machine-readable JSON\n"
       << "  --raw path                     Override fixture RAW path (single fixture)\n"
       << "  --help                         Show this help\n";
@@ -199,12 +219,20 @@ void PrintUsage(const char* argv0) {
       cfg.iterations = std::stoi(need("--iterations"));
     } else if (arg == "--tile-size") {
       cfg.tile_size = std::stoi(need("--tile-size"));
+    } else if (arg == "--tile-width") {
+      cfg.tile_w = std::stoi(need("--tile-width"));
+    } else if (arg == "--tile-height") {
+      cfg.tile_h = std::stoi(need("--tile-height"));
+    } else if (arg == "--strip-height") {
+      cfg.strip_height = std::stoi(need("--strip-height"));
     } else if (arg == "--lanes") {
       cfg.lanes = std::stoi(need("--lanes"));
     } else if (arg == "--profile-ranges") {
       cfg.profile_ranges = true;
     } else if (arg == "--conv-winograd") {
       cfg.conv_winograd = true;
+    } else if (arg == "--ragged-edges") {
+      cfg.ragged_edges = true;
     } else if (arg == "--output") {
       cfg.output_json = need("--output");
     } else if (arg == "--raw") {
@@ -224,6 +252,29 @@ void PrintUsage(const char* argv0) {
   }
   if ((cfg.tile_size % 2) != 0) {
     throw std::runtime_error("--tile-size must be even (Bayer CFA period / pack alignment)");
+  }
+  if ((cfg.tile_w > 0) != (cfg.tile_h > 0)) {
+    throw std::runtime_error("--tile-width and --tile-height must be set together");
+  }
+  if (cfg.tile_w > 0) {
+    if (cfg.tile_w < detail::kStudentMinOwnedRectAxis ||
+        cfg.tile_h < detail::kStudentMinOwnedRectAxis) {
+      throw std::runtime_error("--tile-width/height must be >= 128");
+    }
+    if ((cfg.tile_w % 2) != 0 || (cfg.tile_h % 2) != 0) {
+      throw std::runtime_error("--tile-width/height must be even (pack alignment)");
+    }
+  }
+  if (cfg.strip_height > 0) {
+    if (cfg.strip_height < detail::kStudentMinOwnedRectAxis) {
+      throw std::runtime_error("--strip-height must be >= 128");
+    }
+    if ((cfg.strip_height % 2) != 0) {
+      throw std::runtime_error("--strip-height must be even (pack alignment)");
+    }
+    if (cfg.tile_w > 0 || cfg.tile_h > 0) {
+      throw std::runtime_error("--strip-height cannot be combined with --tile-width/height");
+    }
   }
   return cfg;
 }
@@ -298,51 +349,73 @@ struct ProductTilePlanSummary {
   int         tile_count           = 0;
   int         tiles_x              = 0;
   int         tiles_y              = 0;
+  int         tile_input_w         = 0;
+  int         tile_input_h         = 0;
+  int         tile_output_w        = 0;
+  int         tile_output_h        = 0;
+  int         tile_step_x          = 0;
+  int         tile_step_y          = 0;
+  // Historical square aliases (width axis).
   int         tile_input           = 0;
   int         tile_output          = 0;
   int         tile_step            = 0;
   int         virtual_pad          = 0;
   int         output_border        = 0;
   int         overlap_x            = 0;
+  int         overlap_y            = 0;
   int         first_model_out_x    = 0;
   int         first_model_out_y    = 0;
   int         first_input_origin_x = 0;
   int         first_input_origin_y = 0;
+  std::int64_t paid_output_pixels  = 0;
   std::string architecture;
 };
 
 [[nodiscard]] auto SummarizeStudentProductJobs(LibRaw& raw, const FixtureKind kind,
-                                               const int owned_tile_edge = 1024)
+                                               const int owned_w, const int owned_h,
+                                               const bool ragged_edges = false)
     -> ProductTilePlanSummary {
   ProductTilePlanSummary s;
-  const RawCfaPattern    camera       = ReadLibRawCfaPattern(raw);
-  const auto             shift        = FindCfaAlignShift(camera);
-  s.phase_sx                          = shift.has_value() ? shift->sx : 0;
-  s.phase_sy                          = shift.has_value() ? shift->sy : 0;
+  const RawCfaPattern    camera = ReadLibRawCfaPattern(raw);
+  const auto             shift  = FindCfaAlignShift(camera);
+  s.phase_sx                    = shift.has_value() ? shift->sx : 0;
+  s.phase_sy                    = shift.has_value() ? shift->sy : 0;
 
   // Product ProcessCudaTiled covers the full uploaded CFA (raw dims), after phase crop + period
   // trim — not only the LibRaw visible crop. Match that for FLOP / tile accounting.
-  const int raw_w                     = static_cast<int>(raw.imgdata.sizes.raw_width);
-  const int raw_h                     = static_cast<int>(raw.imgdata.sizes.raw_height);
-  const int period                    = CfaPeriod(camera.kind);
-  const int avail_w                   = raw_w - s.phase_sx;
-  const int avail_h                   = raw_h - s.phase_sy;
-  s.aligned_width                     = avail_w - (avail_w % period);
-  s.aligned_height                    = avail_h - (avail_h % period);
+  const int raw_w   = static_cast<int>(raw.imgdata.sizes.raw_width);
+  const int raw_h   = static_cast<int>(raw.imgdata.sizes.raw_height);
+  const int period  = CfaPeriod(camera.kind);
+  const int avail_w = raw_w - s.phase_sx;
+  const int avail_h = raw_h - s.phase_sy;
+  s.aligned_width   = avail_w - (avail_w % period);
+  s.aligned_height  = avail_h - (avail_h % period);
 
+  // Honor ragged flag for this summary only (restore previous state afterward).
+  const bool prev_ragged = detail::StudentRaggedEdgeTilesEnabled();
+  detail::SetStudentRaggedEdgeTilesEnabled(ragged_edges);
   const detail::CudaTilePolicy policy =
-      kind == FixtureKind::Bayer ? detail::MakeBayerStudentTilePolicy(owned_tile_edge)
-                                 : detail::MakeXTransStudentTilePolicy(owned_tile_edge);
-  s.tile_input                        = policy.input_tile.width;
-  s.tile_output                       = policy.output_tile.width;
-  s.tile_step                         = policy.step.width;
-  s.virtual_pad                       = policy.virtual_pad.x;
-  s.output_border                     = policy.output_border.x;
-  s.overlap_x                         = std::max(0, s.tile_output - s.tile_step);
-  s.first_model_out_x                 = -s.virtual_pad + s.output_border;
-  s.first_model_out_y                 = s.first_model_out_x;
-  s.architecture                      = kind == FixtureKind::Bayer ? BayerDemosaicNet::kArchitecture
-                                                                   : XTransDemosaicNet::kArchitecture;
+      kind == FixtureKind::Bayer ? detail::MakeBayerStudentTilePolicy(owned_w, owned_h)
+                                 : detail::MakeXTransStudentTilePolicy(owned_w, owned_h);
+  detail::SetStudentRaggedEdgeTilesEnabled(prev_ragged);
+
+  s.tile_input_w   = policy.input_tile.width;
+  s.tile_input_h   = policy.input_tile.height;
+  s.tile_output_w  = policy.output_tile.width;
+  s.tile_output_h  = policy.output_tile.height;
+  s.tile_step_x    = policy.step.width;
+  s.tile_step_y    = policy.step.height;
+  s.tile_input     = s.tile_input_w;
+  s.tile_output    = s.tile_output_w;
+  s.tile_step      = s.tile_step_x;
+  s.virtual_pad    = policy.virtual_pad.x;
+  s.output_border  = policy.output_border.x;
+  s.overlap_x      = std::max(0, s.tile_output_w - s.tile_step_x);
+  s.overlap_y      = std::max(0, s.tile_output_h - s.tile_step_y);
+  s.first_model_out_x = -s.virtual_pad + s.output_border;
+  s.first_model_out_y = s.first_model_out_x;
+  s.architecture = kind == FixtureKind::Bayer ? BayerDemosaicNet::kArchitecture
+                                              : XTransDemosaicNet::kArchitecture;
 
   if (s.aligned_width < period || s.aligned_height < period) {
     return s;
@@ -355,18 +428,35 @@ struct ProductTilePlanSummary {
     s.first_input_origin_x = jobs.front().input_origin.x;
     s.first_input_origin_y = jobs.front().input_origin.y;
   }
-  // Recover grid extents from destinations / step.
+  // Recover grid extents from destinations / step. Paid pixels use per-job owned
+  // sizes (P4-B ragged) rather than tile_count * max_owned^2.
   int max_gx = 0;
   int max_gy = 0;
   for (const auto& job : jobs) {
-    const int gx = (job.input_origin.x + s.virtual_pad - cover.x) / std::max(1, s.tile_step);
-    const int gy = (job.input_origin.y + s.virtual_pad - cover.y) / std::max(1, s.tile_step);
-    max_gx       = std::max(max_gx, gx);
-    max_gy       = std::max(max_gy, gy);
+    const int gx =
+        (job.input_origin.x + s.virtual_pad - cover.x) / std::max(1, s.tile_step_x);
+    const int gy =
+        (job.input_origin.y + s.virtual_pad - cover.y) / std::max(1, s.tile_step_y);
+    max_gx = std::max(max_gx, gx);
+    max_gy = std::max(max_gy, gy);
+    const int ow = job.owned_w > 0 ? job.owned_w : s.tile_output_w;
+    const int oh = job.owned_h > 0 ? job.owned_h : s.tile_output_h;
+    s.paid_output_pixels += static_cast<std::int64_t>(ow) * static_cast<std::int64_t>(oh);
   }
   s.tiles_x = max_gx + 1;
   s.tiles_y = max_gy + 1;
   return s;
+}
+
+[[nodiscard]] auto ResolveOwnedShape(const HarnessConfig& cfg, const int aligned_cover_w)
+    -> detail::StudentOwnedTileShape {
+  if (cfg.IsFullWidthStrip()) {
+    if (aligned_cover_w < detail::kStudentMinOwnedRectAxis) {
+      throw std::runtime_error("full-width strip: aligned cover width too small");
+    }
+    return detail::StudentOwnedTileShape{aligned_cover_w, cfg.strip_height};
+  }
+  return detail::StudentOwnedTileShape{cfg.OwnedW(), cfg.OwnedH()};
 }
 
 struct FullFixtureResult {
@@ -379,6 +469,8 @@ struct FullFixtureResult {
   double                 active_megapixels = 0.0;
   int                    tile_count        = 0;
   int                    tile_size         = 0;
+  int                    tile_owned_w      = 0;
+  int                    tile_owned_h      = 0;
   int                    lanes             = 1;
   ProductTilePlanSummary product_plan;
   double                 cold_load_ms = 0.0;
@@ -413,17 +505,34 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
   result.active_megapixels =
       (static_cast<double>(result.active_width) * static_cast<double>(result.active_height)) /
       1.0e6;
-  result.product_plan = SummarizeStudentProductJobs(*raw, fixture.kind, cfg.tile_size);
-  result.tile_count   = result.product_plan.tile_count;
+
+  // Resolve cover first so full-width strips can use aligned width as owned_w.
+  const ProductTilePlanSummary cover_probe =
+      SummarizeStudentProductJobs(*raw, fixture.kind, /*owned_w=*/1024, /*owned_h=*/1024,
+                                 /*ragged_edges=*/false);
+  const detail::StudentOwnedTileShape shape =
+      ResolveOwnedShape(cfg, cover_probe.aligned_width);
+  result.tile_owned_w = shape.width;
+  result.tile_owned_h = shape.height;
+  result.product_plan =
+      SummarizeStudentProductJobs(*raw, fixture.kind, shape.width, shape.height, cfg.ragged_edges);
+  result.tile_count = result.product_plan.tile_count;
 
   const bool want_legacy = cfg.method == MethodKind::Legacy || cfg.method == MethodKind::Both;
   const bool want_neural = cfg.method == MethodKind::Neural || cfg.method == MethodKind::Both;
 
-  // Force the harness-selected product tile edge into ProcessCudaTiled.
-  detail::SetStudentProductTileEdgeOverride(cfg.tile_size);
+  // Force the harness-selected product tile shape into ProcessCudaTiled.
+  detail::SetStudentProductTileShapeOverride(shape.width, shape.height);
+  // P4-B: ragged edge tiles (boundary jobs use actual owned extents).
+  const bool prev_ragged = detail::StudentRaggedEdgeTilesEnabled();
+  detail::SetStudentRaggedEdgeTilesEnabled(cfg.ragged_edges);
   struct OverrideReset {
-    ~OverrideReset() { detail::SetStudentProductTileEdgeOverride(0); }
-  } override_reset;
+    bool prev_ragged_flag = false;
+    ~OverrideReset() {
+      detail::SetStudentProductTileShapeOverride(0, 0);
+      detail::SetStudentRaggedEdgeTilesEnabled(prev_ragged_flag);
+    }
+  } override_reset{prev_ragged};
 
   // Correctness pass before timing.
   if (want_legacy) {
@@ -525,8 +634,8 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
                                                               : result.active_width;
   const int  cover_h  = result.product_plan.aligned_height > 0 ? result.product_plan.aligned_height
                                                                : result.active_height;
-  const auto work     = perf::EstimateFullFrameWork(topology, cover_w, cover_h, cfg.tile_size,
-                                                    result.product_plan.tile_count);
+  const auto work = perf::EstimateFullFrameWork(topology, cover_w, cover_h, result.tile_owned_w,
+                                                result.tile_owned_h, result.product_plan.tile_count);
   const auto envelope = perf::EstimateDeviceComputeEnvelope(device);
   result.roofline =
       perf::BuildRooflineReport(work, envelope, result.neural_stats.median_ms,
@@ -537,8 +646,12 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
 
 struct TileFixtureResult {
   std::string       fixture_name;
-  int               input_size   = 0;
-  int               output_size  = 0;
+  int               input_size   = 0;  // historical: input width
+  int               output_size  = 0;  // historical: output width
+  int               input_w      = 0;
+  int               input_h      = 0;
+  int               output_w     = 0;
+  int               output_h     = 0;
   int               lanes        = 1;
   double            cold_load_ms = 0.0;
   perf::TimingStats wall_stats;
@@ -558,13 +671,14 @@ struct TileLane {
   std::unique_ptr<perf::CudaEventRange> range = std::make_unique<perf::CudaEventRange>();
 };
 
-[[nodiscard]] auto MakeSyntheticCfa(const int size, const unsigned seed) -> cv::Mat {
-  cv::Mat                               cfa(size, size, CV_32FC1);
+[[nodiscard]] auto MakeSyntheticCfa(const int height, const int width, const unsigned seed)
+    -> cv::Mat {
+  cv::Mat                               cfa(height, width, CV_32FC1);
   std::mt19937                          rng(seed);
   std::uniform_real_distribution<float> dist(0.0F, 1.0F);
-  for (int y = 0; y < size; ++y) {
+  for (int y = 0; y < height; ++y) {
     float* row = cfa.ptr<float>(y);
-    for (int x = 0; x < size; ++x) {
+    for (int x = 0; x < width; ++x) {
       row[x] = dist(rng);
     }
   }
@@ -575,21 +689,34 @@ auto RunTileMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> TileFi
   TileFixtureResult result;
   result.fixture_name   = fixture.name;
 
-  // Product owned-output edge → student input/export contract (P2).
+  // Product owned-output shape → student input/export contract (P2/P4-C).
+  // Strip mode in tile microbench uses owned_w = max(1024, OwnedH()*8) as a stand-in
+  // full-width class when no RAW cover is available (constant-area / aspect experiments
+  // should pass --tile-width/--tile-height explicitly).
+  const int owned_w = cfg.IsFullWidthStrip()
+                          ? std::max(1024, cfg.strip_height * 8)
+                          : cfg.OwnedW();
+  const int owned_h = cfg.OwnedH();
   const detail::CudaTilePolicy policy =
-      fixture.kind == FixtureKind::Bayer ? detail::MakeBayerStudentTilePolicy(cfg.tile_size)
-                                         : detail::MakeXTransStudentTilePolicy(cfg.tile_size);
-  const int input_size  = policy.input_tile.width;
-  const int output_size = policy.output_tile.width;
-  result.input_size     = input_size;
-  result.output_size    = output_size;
-  result.lanes          = cfg.lanes;
+      fixture.kind == FixtureKind::Bayer ? detail::MakeBayerStudentTilePolicy(owned_w, owned_h)
+                                         : detail::MakeXTransStudentTilePolicy(owned_w, owned_h);
+  const int input_w  = policy.input_tile.width;
+  const int input_h  = policy.input_tile.height;
+  const int output_w = policy.output_tile.width;
+  const int output_h = policy.output_tile.height;
+  result.input_size  = input_w;   // historical field: report width
+  result.output_size = output_w;
+  result.input_w     = input_w;
+  result.input_h     = input_h;
+  result.output_w    = output_w;
+  result.output_h    = output_h;
+  result.lanes       = cfg.lanes;
 
   RawCfaPattern pattern = DemosaicNetTrainingPattern(
       fixture.kind == FixtureKind::Bayer ? RawCfaKind::Bayer2x2 : RawCfaKind::XTrans6x6);
 
   const unsigned   seed     = fixture.kind == FixtureKind::Bayer ? 0xBA5E11u : 0x7A511u;
-  cv::Mat          host_cfa = MakeSyntheticCfa(input_size, seed);
+  cv::Mat          host_cfa = MakeSyntheticCfa(input_h, input_w, seed);
 
   cv::cuda::GpuMat gpu_cfa(host_cfa);
 
@@ -607,7 +734,9 @@ auto RunTileMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> TileFi
     auto lane                              = std::make_unique<TileLane>();
     lane->options.workspace                = &lane->workspace;
     lane->options.model_cache              = &cache;
-    lane->options.student_owned_tile_edge  = cfg.tile_size;
+    lane->options.student_owned_tile_w     = owned_w;
+    lane->options.student_owned_tile_h     = owned_h;
+    lane->options.student_owned_tile_edge  = (owned_w == owned_h) ? owned_w : 0;
     lanes.push_back(std::move(lane));
   }
 
@@ -630,8 +759,7 @@ auto RunTileMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> TileFi
   }
   wait_all_lanes();
   for (auto& lane : lanes) {
-    if (lane->rgb.rows != output_size || lane->rgb.cols != output_size ||
-        lane->rgb.type() != CV_32FC3) {
+    if (lane->rgb.rows != output_h || lane->rgb.cols != output_w || lane->rgb.type() != CV_32FC3) {
       throw std::runtime_error("tile correctness shape mismatch");
     }
   }
@@ -969,16 +1097,27 @@ void AppendFullJson(std::string& out, const FullFixtureResult& r, const bool tra
   perf::AppendJsonKeyInt(out, "tiles_x", r.product_plan.tiles_x);
   perf::AppendJsonKeyInt(out, "tiles_y", r.product_plan.tiles_y);
   perf::AppendJsonKeyInt(out, "tile_input", r.product_plan.tile_input);
+  perf::AppendJsonKeyInt(out, "tile_input_w", r.product_plan.tile_input_w);
+  perf::AppendJsonKeyInt(out, "tile_input_h", r.product_plan.tile_input_h);
   perf::AppendJsonKeyInt(out, "tile_output", r.product_plan.tile_output);
+  perf::AppendJsonKeyInt(out, "tile_output_w", r.product_plan.tile_output_w);
+  perf::AppendJsonKeyInt(out, "tile_output_h", r.product_plan.tile_output_h);
   perf::AppendJsonKeyInt(out, "tile_step", r.product_plan.tile_step);
+  perf::AppendJsonKeyInt(out, "tile_step_x", r.product_plan.tile_step_x);
+  perf::AppendJsonKeyInt(out, "tile_step_y", r.product_plan.tile_step_y);
   perf::AppendJsonKeyInt(out, "virtual_pad", r.product_plan.virtual_pad);
   perf::AppendJsonKeyInt(out, "output_border", r.product_plan.output_border);
   perf::AppendJsonKeyInt(out, "overlap_x", r.product_plan.overlap_x);
+  perf::AppendJsonKeyInt(out, "overlap_y", r.product_plan.overlap_y);
   perf::AppendJsonKeyInt(out, "first_model_out_x", r.product_plan.first_model_out_x);
   perf::AppendJsonKeyInt(out, "first_model_out_y", r.product_plan.first_model_out_y);
   perf::AppendJsonKeyInt(out, "first_input_origin_x", r.product_plan.first_input_origin_x);
   perf::AppendJsonKeyInt(out, "first_input_origin_y", r.product_plan.first_input_origin_y);
+  perf::AppendJsonKeyInt(out, "paid_output_pixels",
+                         static_cast<std::int64_t>(r.product_plan.paid_output_pixels));
   perf::AppendJsonKeyInt(out, "tile_size", r.tile_size);
+  perf::AppendJsonKeyInt(out, "tile_owned_w", r.tile_owned_w);
+  perf::AppendJsonKeyInt(out, "tile_owned_h", r.tile_owned_h);
   perf::AppendJsonKeyInt(out, "lanes", r.lanes);
   perf::AppendJsonKeyNumber(out, "cold_load_ms", r.cold_load_ms);
   if (r.legacy_stats.count > 0) {
@@ -1057,9 +1196,13 @@ int main(int argc, char** argv) {
                               perf::FormatCudaVersion(device.runtime_version));
     perf::AppendJsonKeyInt(json, "lanes", cfg.lanes);
     perf::AppendJsonKeyInt(json, "tile_size", cfg.tile_size);
+    perf::AppendJsonKeyInt(json, "tile_width", cfg.tile_w > 0 ? cfg.tile_w : cfg.tile_size);
+    perf::AppendJsonKeyInt(json, "tile_height", cfg.tile_h > 0 ? cfg.tile_h : cfg.tile_size);
+    perf::AppendJsonKeyInt(json, "strip_height", cfg.strip_height);
     perf::AppendJsonKeyInt(json, "warmup", cfg.warmup);
     perf::AppendJsonKeyInt(json, "iterations", cfg.iterations);
     perf::AppendJsonKeyBool(json, "profile_ranges", cfg.profile_ranges);
+    perf::AppendJsonKeyBool(json, "ragged_edges", cfg.ragged_edges);
     perf::AppendJsonKeyString(json, "model",
                               cfg.model == ModelKind::Student ? "student" : "unknown");
 
@@ -1082,15 +1225,18 @@ int main(int argc, char** argv) {
                   << r.product_plan.phase_sy << ")"
                   << "  jobs=" << r.tile_count << " (" << r.product_plan.tiles_x << "x"
                   << r.product_plan.tiles_y << ")\n";
-        std::cout << "  policy in=" << r.product_plan.tile_input
-                  << " out=" << r.product_plan.tile_output << " step=" << r.product_plan.tile_step
-                  << " pad=" << r.product_plan.virtual_pad
+        std::cout << "  policy in=" << r.product_plan.tile_input_w << "x"
+                  << r.product_plan.tile_input_h << " out=" << r.product_plan.tile_output_w << "x"
+                  << r.product_plan.tile_output_h << " step=" << r.product_plan.tile_step_x << "x"
+                  << r.product_plan.tile_step_y << " pad=" << r.product_plan.virtual_pad
                   << " border=" << r.product_plan.output_border
-                  << " overlap=" << r.product_plan.overlap_x << " first_model_out=("
-                  << r.product_plan.first_model_out_x << "," << r.product_plan.first_model_out_y
-                  << ")"
+                  << " overlap=" << r.product_plan.overlap_x << "x" << r.product_plan.overlap_y
+                  << " first_model_out=(" << r.product_plan.first_model_out_x << ","
+                  << r.product_plan.first_model_out_y << ")"
                   << " first_origin=(" << r.product_plan.first_input_origin_x << ","
                   << r.product_plan.first_input_origin_y << ")\n";
+        std::cout << "  owned=" << r.tile_owned_w << "x" << r.tile_owned_h
+                  << " paid_output_px=" << r.product_plan.paid_output_pixels << "\n";
         std::cout << "  cold_load_ms=" << r.cold_load_ms << "\n";
         if (r.legacy_stats.count > 0) {
           perf::PrintTimingTable("Legacy full_process_hot_ms", r.legacy_stats, r.active_megapixels,
@@ -1127,8 +1273,8 @@ int main(int argc, char** argv) {
       json += "\"fixtures\":[";
       for (std::size_t i = 0; i < fixtures.size(); ++i) {
         const auto r = RunTileMode(fixtures[i], cfg);
-        std::cout << "\n--- tile / " << r.fixture_name << "  input " << r.input_size << "^2 -> "
-                  << r.output_size << "^2 ---\n";
+        std::cout << "\n--- tile / " << r.fixture_name << "  input " << r.input_w << "x" << r.input_h
+                  << " -> " << r.output_w << "x" << r.output_h << " ---\n";
         std::cout << "  cold_load_ms=" << r.cold_load_ms << "  lanes=" << r.lanes
                   << "  allocation_generation=" << r.allocation_gen_end << "  owned_device_mib="
                   << (static_cast<double>(r.owned_device_bytes) / (1024.0 * 1024.0))

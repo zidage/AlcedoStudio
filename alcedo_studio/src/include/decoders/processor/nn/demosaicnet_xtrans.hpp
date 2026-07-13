@@ -24,8 +24,10 @@ namespace alcedo {
 // Input:  contiguous NCHW f32 mosaic [N, 3, H, W], H,W >= kMinSpatial, divisible by
 //         pack_factor (2).
 // Output: contiguous NCHW f32 RGB [N, 3, Oh, Ow] where
-//   - product square tile H=W=owned+2*kTileBorder with owned>=kTileOutput →
-//     center-cropped export `owned` (retains 1K export context: 1048→1024, …)
+//   - product tile H=owned_h+2*kTileBorder, W=owned_w+2*kTileBorder with each
+//     owned axis >= kMinProductOwned → center-cropped export (owned_h, owned_w)
+//     (retains 1K export context: 1048→1024, …; rectangular/strip tiles use the
+//     same border per axis)
 //   - otherwise → natural size H - kNaturalSpatialLoss
 //
 // Uses space-to-depth pack (3→12), residual 1×1 → 12, grouped unpack → RGB,
@@ -73,34 +75,35 @@ class XTransDemosaicNet : public NnWeightModule<XTransDemosaicNet> {
   [[nodiscard]] static auto NaturalOutputWidth(int input_w) -> int {
     return input_w - kNaturalSpatialLoss;
   }
+  // Smallest owned axis for product export (P4-C strips may be 128-high).
+  static constexpr int kMinProductOwned = 128;
+
+  // True when both axes use product export: input = owned + 2*kTileBorder.
+  // X-Trans step period safety is enforced by the tile planner, not export crop.
+  [[nodiscard]] static auto IsProductExportInput(int input_h, int input_w) -> bool {
+    const int owned_h = input_h - 2 * kTileBorder;
+    const int owned_w = input_w - 2 * kTileBorder;
+    return owned_h >= kMinProductOwned && owned_w >= kMinProductOwned;
+  }
   // Product export owned edge when input is a square product tile; else -1.
-  // Minimum owned edge matches experimental tiling (256); free-size patches stay natural.
+  // Prefer OutputHeight/Width for rectangular product tiles.
   [[nodiscard]] static auto ProductOwnedOutput(int input_h, int input_w) -> int {
-    if (input_h != input_w) {
+    if (input_h != input_w || !IsProductExportInput(input_h, input_w)) {
       return -1;
     }
-    const int owned = input_h - 2 * kTileBorder;
-    if (owned < 256) {
-      return -1;
-    }
-    if (input_h != owned + 2 * kTileBorder) {
-      return -1;
-    }
-    return owned;
+    return input_h - 2 * kTileBorder;
   }
   [[nodiscard]] static auto OutputHeight(int input_h, int input_w = -1) -> int {
-    const int w     = input_w < 0 ? input_h : input_w;
-    const int owned = ProductOwnedOutput(input_h, w);
-    if (owned > 0) {
-      return owned;
+    const int w = input_w < 0 ? input_h : input_w;
+    if (IsProductExportInput(input_h, w)) {
+      return input_h - 2 * kTileBorder;
     }
     return NaturalOutputHeight(input_h);
   }
   [[nodiscard]] static auto OutputWidth(int input_w, int input_h = -1) -> int {
-    const int h     = input_h < 0 ? input_w : input_h;
-    const int owned = ProductOwnedOutput(h, input_w);
-    if (owned > 0) {
-      return owned;
+    const int h = input_h < 0 ? input_w : input_h;
+    if (IsProductExportInput(h, input_w)) {
+      return input_w - 2 * kTileBorder;
     }
     return NaturalOutputWidth(input_w);
   }

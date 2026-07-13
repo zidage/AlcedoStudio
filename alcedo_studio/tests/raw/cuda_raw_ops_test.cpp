@@ -966,13 +966,14 @@ TEST(CudaRawOpsTest, ProcessCudaTiled_BayerStudentMatchesReferenceAcross1024Boun
 #endif
 }
 
-// Assemble student tiles for a fixed owned-output edge onto a host CV_32FC3 image.
+// Assemble student tiles for a fixed owned-output shape onto a host CV_32FC3 image.
+// Honors per-job owned_w/h (P4-B ragged) when BuildTileJobs fills them.
 [[nodiscard]] auto AssembleStudentTiles(const cv::cuda::GpuMat& gpu_cfa,
                                         const RawCfaPattern& pattern, const bool is_bayer,
-                                        const int owned_edge) -> cv::Mat {
+                                        const int owned_w, const int owned_h) -> cv::Mat {
   const detail::CudaTilePolicy policy =
-      is_bayer ? detail::MakeBayerStudentTilePolicy(owned_edge)
-               : detail::MakeXTransStudentTilePolicy(owned_edge);
+      is_bayer ? detail::MakeBayerStudentTilePolicy(owned_w, owned_h)
+               : detail::MakeXTransStudentTilePolicy(owned_w, owned_h);
   const cv::Rect cover(0, 0, gpu_cfa.cols, gpu_cfa.rows);
   const auto     jobs = detail::BuildTileJobs(cover, cover.size(), policy);
 
@@ -982,11 +983,15 @@ TEST(CudaRawOpsTest, ProcessCudaTiled_BayerStudentMatchesReferenceAcross1024Boun
   DemosaicNetModelCache         cache;
   CUDA::NeuralDemosaicWorkspace workspace;
   CUDA::NeuralDemosaicOptions   options;
-  options.model_cache               = &cache;
-  options.workspace                 = &workspace;
-  options.student_owned_tile_edge   = owned_edge;
+  options.model_cache = &cache;
+  options.workspace   = &workspace;
 
   for (const auto& job : jobs) {
+    const int jw = job.owned_w > 0 ? job.owned_w : owned_w;
+    const int jh = job.owned_h > 0 ? job.owned_h : owned_h;
+    options.student_owned_tile_w    = jw;
+    options.student_owned_tile_h    = jh;
+    options.student_owned_tile_edge = (jw == jh) ? jw : 0;
     const auto result = CUDA::DemosaicStudentTileWithNeuralEngine(
         gpu_cfa, job.input_origin, pattern, tile_rgb, nullptr, options);
     if (!result.succeeded) {
@@ -997,6 +1002,72 @@ TEST(CudaRawOpsTest, ProcessCudaTiled_BayerStudentMatchesReferenceAcross1024Boun
   cv::Mat host;
   assembled.download(host);
   return host;
+}
+
+[[nodiscard]] auto AssembleStudentTiles(const cv::cuda::GpuMat& gpu_cfa,
+                                        const RawCfaPattern& pattern, const bool is_bayer,
+                                        const int owned_edge) -> cv::Mat {
+  return AssembleStudentTiles(gpu_cfa, pattern, is_bayer, owned_edge, owned_edge);
+}
+
+// Purpose: P4-B ragged edge tiles assemble the same frame as fixed 1024 jobs (seams +
+// right/bottom edges) within FP32 noise; edge jobs use smaller owned sizes.
+TEST(CudaRawOpsTest, RaggedEdgeBayerAssemblyMatchesFixed1024WithinFp32Tolerance) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA is not enabled in this build.";
+#else
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
+  }
+
+  // Partial final column/row so ragged shrink fires (not a pure multiple of 1024).
+  constexpr int kW = 1024 + 300;
+  constexpr int kH = 1024 + 180;
+  cv::Mat       host(kH, kW, CV_32FC1);
+  for (int y = 0; y < kH; ++y) {
+    for (int x = 0; x < kW; ++x) {
+      host.at<float>(y, x) = static_cast<float>((y * 31 + x * 17) % 251) / 251.0F;
+    }
+  }
+  cv::cuda::GpuMat    gpu_cfa(host);
+  const RawCfaPattern pattern = DemosaicNetTrainingPattern(RawCfaKind::Bayer2x2);
+
+  detail::SetStudentRaggedEdgeTilesEnabled(false);
+  const cv::Mat fixed = AssembleStudentTiles(gpu_cfa, pattern, /*is_bayer=*/true, 1024);
+
+  detail::SetStudentRaggedEdgeTilesEnabled(true);
+  struct ResetRagged {
+    ~ResetRagged() { detail::SetStudentRaggedEdgeTilesEnabled(false); }
+  } reset;
+  const cv::Mat ragged = AssembleStudentTiles(gpu_cfa, pattern, /*is_bayer=*/true, 1024);
+  ASSERT_EQ(fixed.size(), ragged.size());
+
+  // Confirm the planner actually produced a smaller edge job.
+  auto policy = detail::MakeBayerStudentTilePolicy(1024);
+  ASSERT_TRUE(policy.ragged_edge_tiles);
+  const auto jobs =
+      detail::BuildTileJobs(cv::Rect(0, 0, kW, kH), cv::Size(kW, kH), policy);
+  bool saw_small = false;
+  for (const auto& job : jobs) {
+    if (job.owned_w < 1024 || job.owned_h < 1024) {
+      saw_small = true;
+    }
+  }
+  EXPECT_TRUE(saw_small);
+
+  double max_abs = 0.0;
+  for (int y = 0; y < kH; ++y) {
+    for (int x = 0; x < kW; ++x) {
+      const cv::Vec3f a = fixed.at<cv::Vec3f>(y, x);
+      const cv::Vec3f b = ragged.at<cv::Vec3f>(y, x);
+      for (int c = 0; c < 3; ++c) {
+        max_abs = std::max(max_abs, static_cast<double>(std::abs(a[c] - b[c])));
+      }
+    }
+  }
+  // Same convolutional support for the assembled ROIs; allow modest FP32 noise.
+  EXPECT_LE(max_abs, 1e-3) << "ragged vs fixed assembly max abs";
+#endif
 }
 
 // Purpose: P2 — a single 2048 owned tile matches the 1K two-tile assembly across the
@@ -1038,6 +1109,45 @@ TEST(CudaRawOpsTest, ProcessCudaTiled_BayerLargerTileMatches1KPolicyAcrossFormer
     }
   }
   EXPECT_LE(max_abs, 1e-4) << "Bayer 1K vs 2048 max abs at former boundary";
+#endif
+}
+
+// Purpose: P4-C — Bayer full-width strip assembly matches square 1K interior pixels.
+TEST(CudaRawOpsTest, ProcessCudaTiled_BayerStripTilesMatch1KInteriorPixels) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA is not enabled in this build.";
+#else
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
+  }
+
+  // Cover fits two vertical 512 strips and a 1024-wide square grid.
+  constexpr int kW = 2048;
+  constexpr int kH = 1024;
+  cv::Mat       host(kH, kW, CV_32FC1);
+  for (int y = 0; y < kH; ++y) {
+    for (int x = 0; x < kW; ++x) {
+      host.at<float>(y, x) = static_cast<float>((y * 19 + x * 23) % 239) / 239.0F;
+    }
+  }
+  cv::cuda::GpuMat    gpu_cfa(host);
+  const RawCfaPattern pattern = DemosaicNetTrainingPattern(RawCfaKind::Bayer2x2);
+
+  const cv::Mat ref_1k  = AssembleStudentTiles(gpu_cfa, pattern, /*is_bayer=*/true, 1024);
+  const cv::Mat strips  = AssembleStudentTiles(gpu_cfa, pattern, /*is_bayer=*/true, kW, 512);
+  ASSERT_EQ(ref_1k.size(), strips.size());
+
+  double max_abs = 0.0;
+  for (int y = 32; y < kH - 32; ++y) {
+    for (int x = 32; x < kW - 32; ++x) {
+      const cv::Vec3f a = ref_1k.at<cv::Vec3f>(y, x);
+      const cv::Vec3f b = strips.at<cv::Vec3f>(y, x);
+      for (int c = 0; c < 3; ++c) {
+        max_abs = std::max(max_abs, static_cast<double>(std::abs(a[c] - b[c])));
+      }
+    }
+  }
+  EXPECT_LE(max_abs, 1e-4) << "Bayer 1K vs full-width 512 strip max abs interior";
 #endif
 }
 

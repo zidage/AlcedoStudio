@@ -8,9 +8,11 @@ Status: active follow-up to
 §6.5) — larger square tiles **rejected**; retain 1024. **P3 complete** (see §7.4) —
 CUDA Graph implemented, correctness green, **rejected for product default**
 (latency gate not met; matches P0 “wall ≈ batch”). **P4-A complete** (see §8.1) —
-fused post/output/gamma tail **retained** as product default. **P4-B through
-P4-D remain ordered** (see §8): ragged edge tiles, rectangular strips, then
-persistent channels-last FP32.
+fused post/output/gamma tail **retained** as product default. **P4-B complete**
+(see §8.2) — ragged edge tiles **rejected** for product default (paid pixels drop
+but full-frame p50 regresses). **P4-C complete** (see §8.3) — rectangular /
+full-width strip tiling **rejected** for product default. **P4-D remains** (see
+§8): channels-last FP32 after isolated kernel gates.
 
 ## 1. Objective and current baseline
 
@@ -745,9 +747,9 @@ Correctness (Release `MlOpsTest` filter):
 | Correctness | goldens + fused/unfused | green | **pass** |
 
 **Verdict: RETAIN fused post/output/gamma as product default.** Ordinary path
-remains the runtime fallback. Next ordered experiment is **P4-B** (ragged edge
-tiles) on this retained baseline. Direct-to-final-RGBA remains optional follow-up
-and is not required for retention.
+remains the runtime fallback. P4-B (ragged edge tiles) was measured next and
+**rejected** (see §8.2.1). Direct-to-final-RGBA remains optional follow-up and is
+not required for retention.
 
 ### 8.2 P4-B — ragged edge tiles instead of paid 1024 tails
 
@@ -792,6 +794,63 @@ Artifacts:
 
 - `build/perf/demosaicnet_next_p4b_ragged_bayer.json`
 - `build/perf/demosaicnet_next_p4b_ragged_xtrans.json`
+- `build/perf/demosaicnet_next_p4b_fixed_bayer.json` / `_xtrans.json` (same-session controls)
+- `build/perf/demosaicnet_next_p4b_summary.json`
+
+#### 8.2.1 P4-B results (2026-07-13, RTX 3080 Laptop, Release)
+
+Implementation landed (opt-in experiment; **not** product default):
+
+- Per-job `owned_w/h` + `input_w/h` on `CudaTileJob`; student planner via
+  `PlanStudentAxisSpans` (shrink edge extents to destination ROI, rebalance when
+  final dest extent &lt; 512 into two period-aligned extents ≤ 1024)
+- `SetStudentRaggedEdgeTilesEnabled` / harness `--ragged-edges`; product default
+  remains **false** (fixed 1024 jobs)
+- Workspace RGB is grow-only so ragged edge jobs reuse the max 1K reservation
+  without post-warm realloc; `ProcessCudaTiled` sets per-job owned sizes
+- Harness paid-pixel accounting sums actual per-job owned areas
+- Correctness: planner cover/rebalance/CFA-phase tests; GPU assembly
+  `RaggedEdgeBayerAssemblyMatchesFixed1024WithinFp32Tolerance` (max abs ≤ 1e-3)
+
+##### Paid work (geometry)
+
+| Variant | Fixed paid px | Ragged paid px | Reduction |
+|---------|--------------:|---------------:|----------:|
+| Bayer D800e (40 jobs) | 41,943,040 | 36,570,624 | **−12.8%** |
+| X-Trans XT5 (48 jobs) | 50,331,648 | 41,143,528 | **−18.3%** |
+
+Matches the P0 paid-output / halo story: most of the 1.15–1.23× paid factor is
+on right/bottom tails and is removed by ragged extents.
+
+##### Full-frame A/B (same session after cooldown; `--warmup 3 --iterations 20`)
+
+| Variant | Fixed p50 | Ragged p50 | p50 Δ | Fixed p95 | Ragged p95 |
+|---------|----------:|-----------:|------:|----------:|-----------:|
+| Bayer D800e | 404.8 ms | **525.0 ms** | **−29.7%** | 439.6 | **692.0** |
+| X-Trans XT5 | 1512.3 ms† | **2023.5 ms**† | **−33.8%** | 2441.9 | 2058.0 |
+
+† X-Trans absolute times were thermally elevated in this session (sustained load
+after Bayer). Relative regression vs the **same-session fixed control** is still
+decisive. Bayer **min** also worsened (396.7 → 416.9 ms), so the loss is not
+explained by p50 noise alone.
+
+##### Decision gates
+
+| Gate | Threshold | Result | Verdict |
+|------|-----------|--------|---------|
+| Full-frame p50 | ≥5% on ≥1 fixture | both regress | **fail** |
+| Other fixture | no &gt;2% p50 regression | both regress | **fail** |
+| Peak workspace | no increase | still max-1K reserve | **pass** |
+| Correctness | seams + assembly | green | **pass** |
+
+**Verdict: REJECT ragged edge tiles for product default.** Infrastructure stays
+opt-in (`--ragged-edges` / `SetStudentRaggedEdgeTilesEnabled(true)`). Retained
+path remains square 1024 + fused tail (P4-A). Smaller variable-shape edge
+kernels do not convert paid-pixel savings into wall-time on this WDDM laptop
+path (likely launch/occupancy inefficiency dominating the ~13–18% FLOP cut).
+
+Next ordered experiment: **P4-D** (channels-last FP32) after its isolated kernel
+gates pass. P4-C was already measured and rejected against fixed 1024.
 
 ### 8.3 P4-C — rectangular and full-width strip tiling
 
@@ -848,6 +907,72 @@ Artifacts:
 - `build/perf/demosaicnet_next_p4c_rectangles.json`
 - `build/perf/demosaicnet_next_p4c_strips_bayer.json`
 - `build/perf/demosaicnet_next_p4c_strips_xtrans.json`
+- `build/perf/demosaicnet_next_p4c_summary.json`
+
+#### 8.3.1 P4-C results (2026-07-13, RTX 3080 Laptop, Release)
+
+Implementation landed (infrastructure retained for harness/experiments; **not**
+product-default):
+
+- Product export geometry accepts rectangular tiles: per-axis
+  `owned = input − 2·border` when both axes ≥ `kMinProductOwned` (128)
+- `MakeBayer/XTransStudentTilePolicy(owned_w, owned_h)` + full-width strip helpers
+- `StudentOwnedTileShape` override / selection; `NeuralDemosaicOptions`
+  `student_owned_tile_w/h`; product path falls back to square 1024 on OOM
+- Harness: `--tile-width` / `--tile-height` / `--strip-height`
+- Correctness: rectangular export sizes, CFA phase + first-writer cover,
+  Bayer strip assembly vs 1K interior (`CudaTileJobsTest`, `CudaRawOpsTest`)
+
+##### Constant-area tile microbench (`--mode tile`, ~1M owned pixels)
+
+| Owned shape | Bayer p50 ms | vs 1K | X-Trans p50 ms | vs 1K |
+|-------------|-------------:|------:|---------------:|------:|
+| 1024×1024 (control) | 5.38 | — | 4.60 | — |
+| 2048×512 | 5.52 | **+2.7%** | 4.67 | **+1.5%** |
+| 4096×256 | 5.94 | **+10.4%** | 4.72 | **+2.6%** |
+| 8192×128 | 6.79 | **+26%** | 4.99 | **+8.6%** |
+
+Moderate 2:1 rectangles stay within the ±10% FLOP-normalized gate for both CFA
+families; extreme aspect ratios (especially Bayer 8:1) lose. Proceeded to
+full-frame strips per plan.
+
+##### Full-frame strip A/B (sustained hot; `--warmup 3 --iterations 20`)
+
+| Policy | Bayer jobs | Bayer p50 | vs 1K | X-Trans jobs | X-Trans p50 | vs 1K |
+|--------|----------:|----------:|------:|-------------:|------------:|------:|
+| 1024² control | 40 | **328.8 ms** | — | 48 | **906.9 ms**† | — |
+| full-W × 128 | 78 (2×39)‡ | 757 ms | **−57%** | 42 | 1567 ms | **−42%** |
+| full-W × 256 | 40 (2×20)‡ | 1968 ms | **−83%** | 21 | 1489 ms | **−39%** |
+| full-W × 512 | 20 (2×10)‡ | 2902 ms | **−89%** | 11 | 1562 ms | **−42%** |
+
+† X-Trans control was thermally elevated after the Bayer series (min still
+622 ms vs strip mins ≥1388 ms). Relative strip loss holds.
+
+‡ Bayer full-width owned = cover width still schedules **two** horizontal jobs
+because pad32/border31 places the first model origin at −1; residual one-pixel
+column forces a second nearly full-width paid tile. That amplifies strip cost
+but is not the sole cause (X-Trans is 1×N and still loses ≥39%).
+
+Root cause under sustained load: wide NCHW product tiles destroy the cache
+behavior that the retained 1K square direct kernels rely on. Reducing job count
+does not recover wall time when each job’s spatial width is ~7–8K.
+
+##### Decision gates
+
+| Gate | Threshold | Result | Verdict |
+|------|-----------|--------|---------|
+| Constant-area within 10% of 1K | 2048×512 | pass both CFA | **pass** (moderate only) |
+| Full-frame strip p50 ≥5% faster | strips | all regress | **fail** |
+| p95 within common gate | no >5% regress | failed with p50 | **fail** |
+| VRAM fit | conservative fractions | strips fit; not limiting | n/a |
+| Correctness | rect + strip tests | green | **pass** |
+
+**Verdict: REJECT P4-C for product default.** Retain square **1024** + P4-A
+fused tail. Rectangular/strip policy APIs and harness overrides stay in-tree for
+future experiments (e.g. after a channels-last kernel path), but auto-select
+never picks strips. P4-B was measured afterward and also **rejected** (see
+§8.2.1). Next ordered experiment: **P4-D** (channels-last FP32) after isolated
+kernel gates.
 
 ### 8.4 P4-D — persistent channels-last/vectorized FP32
 
@@ -950,7 +1075,8 @@ Stop a candidate immediately when it breaks correctness, cannot clear its
 microbenchmark prerequisite, exceeds its VRAM budget, or loses the full-frame
 retention gate. Preserve the best correct product path after every slice.
 
-P0-P4-A are complete (P4-A retained). The next implementation slice is P4-B
-only, starting from the fused-tail product path. Record and decide it before
-assigning P4-C; continue the same handoff discipline through P4-D so every
-retained improvement has an attributable artifact and fallback.
+P0–P4-C are complete (P4-A retained; P2/P3/P4-B/P4-C rejected). The retained
+product path is square **1024 + fused tail**. The next ordered slice is **P4-D**
+(channels-last FP32) only after its isolated kernel gates pass. Continue the
+same handoff discipline so every retained improvement has an attributable
+artifact and fallback.

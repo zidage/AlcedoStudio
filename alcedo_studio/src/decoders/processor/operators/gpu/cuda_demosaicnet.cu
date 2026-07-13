@@ -4,6 +4,7 @@
 
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -291,13 +292,18 @@ void NeuralDemosaicWorkspace::EnsureCapacity(const DemosaicNetVariant variant, c
   const int output_width = variant == DemosaicNetVariant::Bayer
                                ? BayerDemosaicNet::OutputWidth(width, height)
                                : XTransDemosaicNet::OutputWidth(width, height);
+  // Grow-only RGB capacity (P4-B ragged edges reuse the max 1K workspace without
+  // shrinking/reallocating when a boundary job is smaller than an interior job).
   const int prev_rows = rgb_buffer_.rows;
   const int prev_cols = rgb_buffer_.cols;
   const int prev_type = rgb_buffer_.type();
-  rgb_buffer_.create(output_height, output_width, CV_32FC3);
-  if (rgb_buffer_.rows != prev_rows || rgb_buffer_.cols != prev_cols || prev_type != CV_32FC3) {
-    // OpenCV may reuse a larger allocation for equal-or-smaller shapes; treat any
-    // first create or geometric change as a generation event for the harness.
+  if (rgb_buffer_.empty() || prev_type != CV_32FC3 || prev_rows < output_height ||
+      prev_cols < output_width) {
+    const int new_h = std::max(prev_rows > 0 && prev_type == CV_32FC3 ? prev_rows : 0,
+                               output_height);
+    const int new_w = std::max(prev_cols > 0 && prev_type == CV_32FC3 ? prev_cols : 0,
+                               output_width);
+    rgb_buffer_.create(new_h, new_w, CV_32FC3);
     grew = true;
   }
 
@@ -524,13 +530,28 @@ auto EnqueueDemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_
     }
 
     const bool is_xtrans = training_pattern.kind == RawCfaKind::XTrans6x6;
-    const int  owned_edge =
-        options.student_owned_tile_edge > 0
-            ? options.student_owned_tile_edge
-            : (is_xtrans ? XTransDemosaicNet::kTileOutput : BayerDemosaicNet::kTileOutput);
+    // P4-C: rectangular owned (w,h) take precedence; else square edge / 1K control.
+    const int owned_w = [&]() {
+      if (options.student_owned_tile_w > 0 && options.student_owned_tile_h > 0) {
+        return options.student_owned_tile_w;
+      }
+      if (options.student_owned_tile_edge > 0) {
+        return options.student_owned_tile_edge;
+      }
+      return is_xtrans ? XTransDemosaicNet::kTileOutput : BayerDemosaicNet::kTileOutput;
+    }();
+    const int owned_h = [&]() {
+      if (options.student_owned_tile_w > 0 && options.student_owned_tile_h > 0) {
+        return options.student_owned_tile_h;
+      }
+      if (options.student_owned_tile_edge > 0) {
+        return options.student_owned_tile_edge;
+      }
+      return is_xtrans ? XTransDemosaicNet::kTileOutput : BayerDemosaicNet::kTileOutput;
+    }();
     const detail::CudaTilePolicy policy =
-        is_xtrans ? detail::MakeXTransStudentTilePolicy(owned_edge)
-                  : detail::MakeBayerStudentTilePolicy(owned_edge);
+        is_xtrans ? detail::MakeXTransStudentTilePolicy(owned_w, owned_h)
+                  : detail::MakeBayerStudentTilePolicy(owned_w, owned_h);
     const int tile_h = policy.input_tile.height;
     const int tile_w = policy.input_tile.width;
     const int out_h  = policy.output_tile.height;
@@ -578,6 +599,12 @@ auto EnqueueDemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_
     }
 
     cv::cuda::GpuMat& neural_rgb = workspace.rgb_buffer();
+    // P4-B: capacity may be larger than this job's owned export (ragged edges).
+    // Forward writes only the active out_h×out_w region using the full row pitch.
+    if (neural_rgb.rows < out_h || neural_rgb.cols < out_w) {
+      throw std::runtime_error("Student tile RGB buffer smaller than owned export");
+    }
+    cv::cuda::GpuMat tile_rgb_view = neural_rgb(cv::Rect(0, 0, out_w, out_h));
     // P4-A product default: fused post/output/gamma → pitched HWC.
     // CUDA Graph (P3 experiment) still captures NCHW Forward only — when graph is
     // requested, retain ordinary NCHW + unpack; gamma stays in FinishNeuralEngineRgb.
@@ -585,10 +612,10 @@ auto EnqueueDemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_
         cuda::nn::FusedPostOutputEnabled() && !options.enable_cuda_graph;
     if (use_fused_hwc) {
       if (variant == DemosaicNetVariant::Bayer) {
-        RunModelHwc(cache.Bayer(), input_tensor, neural_rgb, workspace.activation_workspace(),
+        RunModelHwc(cache.Bayer(), input_tensor, tile_rgb_view, workspace.activation_workspace(),
                     cuda_stream, /*apply_gamma_decode=*/true);
       } else {
-        RunModelHwc(cache.XTrans(), input_tensor, neural_rgb, workspace.activation_workspace(),
+        RunModelHwc(cache.XTrans(), input_tensor, tile_rgb_view, workspace.activation_workspace(),
                     cuda_stream, /*apply_gamma_decode=*/true);
       }
     } else {
@@ -602,14 +629,15 @@ auto EnqueueDemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_
       if (profiler != nullptr) {
         profiler->BeginRange(DemosaicNetProfileRange::NchwHwcUnpack, cuda_stream);
       }
-      cuda::nn::UnpackNchwToHwc(output_tensor, neural_rgb, cuda_stream);
+      cuda::nn::UnpackNchwToHwc(output_tensor, tile_rgb_view, cuda_stream);
       if (profiler != nullptr) {
         profiler->EndRange(DemosaicNetProfileRange::NchwHwcUnpack, cuda_stream);
       }
     }
     // Product tiled path reuses workspace RGB without a per-tile stream wait; stream
     // ordering serializes pack → forward → (unpack) → ROI copy.
-    rgb              = neural_rgb;
+    // Return the job-sized view so model_output_roi is relative to owned_w×owned_h.
+    rgb              = tile_rgb_view;
     result.succeeded = true;
     result.error.clear();
     return result;

@@ -442,20 +442,21 @@ auto RawProcessor::ProcessCudaTiled() -> ImageBuffer {
       } else {
         try {
           const bool is_bayer = cfa_pattern_.kind == RawCfaKind::Bayer2x2;
-          // P2: select the largest validated owned-output edge under VRAM budgets.
-          // Allocation failure falls back to the next smaller candidate, then 1K.
+          // P2/P4-C: select owned (w,h) under VRAM budgets. Retained product default is
+          // square 1024. Harness may force rectangles/full-width strips. Allocation
+          // failure falls back to the next smaller retained square, then 1K.
           size_t free_vram  = 0;
           size_t total_vram = 0;
           if (cudaMemGetInfo(&free_vram, &total_vram) != cudaSuccess) {
             free_vram  = 0;
             total_vram = 0;
           }
-          int selected_edge =
-              detail::SelectStudentProductTileEdge(is_bayer, free_vram, total_vram);
+          detail::StudentOwnedTileShape selected =
+              detail::SelectStudentProductTileShape(is_bayer, free_vram, total_vram);
 
-          detail::CudaTilePolicy policy = is_bayer
-                                              ? detail::MakeBayerStudentTilePolicy(selected_edge)
-                                              : detail::MakeXTransStudentTilePolicy(selected_edge);
+          detail::CudaTilePolicy policy =
+              is_bayer ? detail::MakeBayerStudentTilePolicy(selected.width, selected.height)
+                       : detail::MakeXTransStudentTilePolicy(selected.width, selected.height);
           const cv::Rect neural_active_rect(0, 0, neural_cfa.cols, neural_cfa.rows);
 
           cv::cuda::GpuMat              output_rgb(neural_cfa.size(), CV_32FC3);
@@ -477,10 +478,10 @@ auto RawProcessor::ProcessCudaTiled() -> ImageBuffer {
             }
           }
 
-          auto try_warm_tile = [&](const int owned_edge) -> bool {
+          auto try_warm_tile = [&](const detail::StudentOwnedTileShape shape) -> bool {
             try {
-              policy = is_bayer ? detail::MakeBayerStudentTilePolicy(owned_edge)
-                                : detail::MakeXTransStudentTilePolicy(owned_edge);
+              policy = is_bayer ? detail::MakeBayerStudentTilePolicy(shape.width, shape.height)
+                                : detail::MakeXTransStudentTilePolicy(shape.width, shape.height);
               const int tile_h = policy.input_tile.height;
               const int tile_w = policy.input_tile.width;
               const int out_h  = policy.output_tile.height;
@@ -491,25 +492,30 @@ auto RawProcessor::ProcessCudaTiled() -> ImageBuffer {
                       static_cast<std::size_t>(tile_w),
                   static_cast<std::size_t>(3) * static_cast<std::size_t>(out_h) *
                       static_cast<std::size_t>(out_w));
-              selected_edge                       = owned_edge;
-              neural_options.student_owned_tile_edge = owned_edge;
+              selected                              = shape;
+              neural_options.student_owned_tile_w   = shape.width;
+              neural_options.student_owned_tile_h   = shape.height;
+              neural_options.student_owned_tile_edge =
+                  shape.IsSquare() ? shape.width : 0;
               return true;
             } catch (const std::exception&) {
               return false;
             }
           };
 
-          // Auto-select: try selected edge, then walk down candidates on OOM.
+          // Auto-select: try selected shape, then walk down retained squares on OOM.
           // Explicit harness/test override fails hard (no silent size change).
-          const int  force_edge = detail::GetStudentProductTileEdgeOverride();
-          bool       warmed     = try_warm_tile(selected_edge);
-          if (!warmed && force_edge <= 0) {
+          const auto force_shape = detail::GetStudentProductTileShapeOverride();
+          bool       warmed      = try_warm_tile(selected);
+          if (!warmed && !force_shape.IsSet()) {
             for (auto it = detail::kStudentProductRetainedTileEdges.rbegin();
                  it != detail::kStudentProductRetainedTileEdges.rend(); ++it) {
-              if (*it >= selected_edge) {
-                continue;  // already failed at this size or larger
+              const detail::StudentOwnedTileShape candidate{*it, *it};
+              // Skip shapes that are not strictly smaller in both axes (already failed).
+              if (candidate.width >= selected.width && candidate.height >= selected.height) {
+                continue;
               }
-              if (try_warm_tile(*it)) {
+              if (try_warm_tile(candidate)) {
                 warmed = true;
                 break;
               }
@@ -517,7 +523,7 @@ auto RawProcessor::ProcessCudaTiled() -> ImageBuffer {
           }
           if (!warmed) {
             throw std::runtime_error(
-                "Neural Engine student tile workspace reservation failed for product tile edge");
+                "Neural Engine student tile workspace reservation failed for product tile shape");
           }
 
           const auto jobs = BuildTileJobs(neural_active_rect, neural_cfa.size(), policy);
@@ -536,6 +542,14 @@ auto RawProcessor::ProcessCudaTiled() -> ImageBuffer {
           bool         tile_ok            = true;
           const auto   stage_neural_start = ProfileClock::now();
           for (const auto& job : jobs) {
+            // P4-B: per-job owned geometry (ragged edge tiles shrink right/bottom jobs).
+            // Workspace was reserved for the max policy shape; smaller jobs are views.
+            if (job.owned_w > 0 && job.owned_h > 0) {
+              neural_options.student_owned_tile_w = job.owned_w;
+              neural_options.student_owned_tile_h = job.owned_h;
+              neural_options.student_owned_tile_edge =
+                  (job.owned_w == job.owned_h) ? job.owned_w : 0;
+            }
             // Single stream: pack → forward → unpack → owned ROI copy are ordered by the
             // stream; one NeuralDemosaicWorkspace is reused without per-tile host waits.
             const auto result = CUDA::EnqueueDemosaicStudentTileWithNeuralEngine(

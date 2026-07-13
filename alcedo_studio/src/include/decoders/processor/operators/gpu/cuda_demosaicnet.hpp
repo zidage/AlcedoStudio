@@ -214,7 +214,12 @@ struct NeuralDemosaicOptions {
   NeuralDemosaicWorkspace* workspace    = nullptr;
   // Product student owned-output edge (export tile). 0 selects the 1K control
   // policy (Bayer 1086→1024 / X-Trans 1048→1024). P2 candidates: 1024/1536/2048/3072.
+  // When student_owned_tile_w/h are both >0 they take precedence (P4-C rectangles/strips).
   int student_owned_tile_edge = 0;
+  // Optional rectangular owned export size (P4-C). Both must be >0 to apply; otherwise
+  // student_owned_tile_edge (or 1024 default) is used as a square.
+  int student_owned_tile_w = 0;
+  int student_owned_tile_h = 0;
   // P3: capture/replay fixed-shape model Forward when workspace + non-null stream
   // are available. Default off — full-frame p50 did not clear the +5% retention
   // gate on the WDDM laptop path (P0 wall≈batch; launch amortization not material).
@@ -271,7 +276,8 @@ auto EnqueueDemosaicWithNeuralEngine(const cv::cuda::GpuMat& cfa, const RawCfaPa
     -> NeuralDemosaicResult;
 
 // Product student tile: fused virtual-pad pack + fixed-shape student forward + HWC unpack.
-// Tile geometry comes from `options.student_owned_tile_edge` (0 → 1024 control policy).
+// Tile geometry comes from `options.student_owned_tile_w/h` (rectangular/strip), else
+// `options.student_owned_tile_edge` (0 → 1024 square control policy).
 // `training_pattern` must be the phase-aligned training origin (from PrepareNeuralEngineCfa).
 // `input_origin` is signed in the aligned CFA lattice (may be negative under virtual pad).
 // On success, `rgb` references the workspace HWC buffer (owned²) when `options.workspace` is set;

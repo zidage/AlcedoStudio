@@ -195,25 +195,26 @@ auto AccountElemwiseMul(const std::string_view name, const int n, const int c, c
   return acc;
 }
 
-auto BuildBayerTileAccounting(const int tile_output, const int batch) -> TopologyAccounting {
-  if (tile_output < 2 || batch < 1) {
-    throw std::runtime_error("BuildBayerTileAccounting: invalid tile_output/batch");
+auto BuildBayerTileAccounting(const int owned_w, const int owned_h, const int batch)
+    -> TopologyAccounting {
+  if (owned_w < 2 || owned_h < 2 || batch < 1) {
+    throw std::runtime_error("BuildBayerTileAccounting: invalid owned size/batch");
   }
   // Student bayer_s24_d8 product tile: input = owned + 2*border31 (1086 for 1024).
   constexpr int kDepth      = 8;
   constexpr int kWidth      = 24;
   constexpr int kPackFactor = 2;
   constexpr int kTileBorder = 31;
-  const int     hin         = tile_output + 2 * kTileBorder;
-  const int     win         = hin;
+  const int     hin         = owned_h + 2 * kTileBorder;
+  const int     win         = owned_w + 2 * kTileBorder;
   const int n   = batch;
 
   TopologyAccounting acc;
   acc.kind           = DemosaicNetTopologyKind::Bayer;
   acc.tile_input_h   = hin;
   acc.tile_input_w   = win;
-  acc.tile_output_h  = tile_output;
-  acc.tile_output_w  = tile_output;
+  acc.tile_output_h  = owned_h;
+  acc.tile_output_w  = owned_w;
   acc.batch          = batch;
 
   {
@@ -269,38 +270,44 @@ auto BuildBayerTileAccounting(const int tile_output, const int batch) -> Topolog
     w = spec.out_w;
   }
 
-  const int natural = hin - (2 * kPackFactor * kDepth + 2);
-  if (h != natural || w != natural) {
+  const int natural_h = hin - (2 * kPackFactor * kDepth + 2);
+  const int natural_w = win - (2 * kPackFactor * kDepth + 2);
+  if (h != natural_h || w != natural_w) {
     throw std::runtime_error("BuildBayerTileAccounting: natural spatial mismatch");
   }
   // Export center-crop is structural (no MACs).
-  if (tile_output != natural && tile_output > natural) {
-    throw std::runtime_error("BuildBayerTileAccounting: tile_output exceeds natural size");
+  if (owned_h > natural_h || owned_w > natural_w) {
+    throw std::runtime_error("BuildBayerTileAccounting: owned size exceeds natural size");
   }
 
   AccumulateTotals(acc);
   return acc;
 }
 
-auto BuildXTransTileAccounting(const int tile_output, const int batch) -> TopologyAccounting {
-  if (tile_output < 2 || batch < 1) {
-    throw std::runtime_error("BuildXTransTileAccounting: invalid tile_output/batch");
+auto BuildBayerTileAccounting(const int tile_output, const int batch) -> TopologyAccounting {
+  return BuildBayerTileAccounting(tile_output, tile_output, batch);
+}
+
+auto BuildXTransTileAccounting(const int owned_w, const int owned_h, const int batch)
+    -> TopologyAccounting {
+  if (owned_w < 2 || owned_h < 2 || batch < 1) {
+    throw std::runtime_error("BuildXTransTileAccounting: invalid owned size/batch");
   }
   // Student xtrans_p2_s32_d4 product tile: input = owned + 2*border12 (1048 for 1024).
   constexpr int kDepth      = 4;
   constexpr int kWidth      = 32;
   constexpr int kPackFactor = 2;
   constexpr int kTileBorder = 12;
-  const int     hin         = tile_output + 2 * kTileBorder;
-  const int     win         = hin;
+  const int     hin         = owned_h + 2 * kTileBorder;
+  const int     win         = owned_w + 2 * kTileBorder;
   const int n   = batch;
 
   TopologyAccounting acc;
   acc.kind          = DemosaicNetTopologyKind::XTrans;
   acc.tile_input_h  = hin;
   acc.tile_input_w  = win;
-  acc.tile_output_h = tile_output;
-  acc.tile_output_w = tile_output;
+  acc.tile_output_h = owned_h;
+  acc.tile_output_w = owned_w;
   acc.batch         = batch;
 
   {
@@ -355,19 +362,33 @@ auto BuildXTransTileAccounting(const int tile_output, const int batch) -> Topolo
     w = spec.out_w;
   }
 
-  const int natural = hin - (2 * kPackFactor * kDepth + 2);
-  if (h != natural || w != natural) {
+  const int natural_h = hin - (2 * kPackFactor * kDepth + 2);
+  const int natural_w = win - (2 * kPackFactor * kDepth + 2);
+  if (h != natural_h || w != natural_w) {
     throw std::runtime_error("BuildXTransTileAccounting: natural spatial mismatch");
+  }
+  if (owned_h > natural_h || owned_w > natural_w) {
+    throw std::runtime_error("BuildXTransTileAccounting: owned size exceeds natural size");
   }
 
   AccumulateTotals(acc);
   return acc;
 }
 
+auto BuildXTransTileAccounting(const int tile_output, const int batch) -> TopologyAccounting {
+  return BuildXTransTileAccounting(tile_output, tile_output, batch);
+}
+
 auto BuildTileAccounting(const DemosaicNetTopologyKind kind, const int tile_output,
                          const int batch) -> TopologyAccounting {
   return kind == DemosaicNetTopologyKind::Bayer ? BuildBayerTileAccounting(tile_output, batch)
                                                 : BuildXTransTileAccounting(tile_output, batch);
+}
+
+auto BuildTileAccounting(const DemosaicNetTopologyKind kind, const int owned_w, const int owned_h,
+                         const int batch) -> TopologyAccounting {
+  return kind == DemosaicNetTopologyKind::Bayer ? BuildBayerTileAccounting(owned_w, owned_h, batch)
+                                                : BuildXTransTileAccounting(owned_w, owned_h, batch);
 }
 
 // Match product BuildTileJobs student grid: count gx,gy while
@@ -398,28 +419,28 @@ auto BuildTileAccounting(const DemosaicNetTopologyKind kind, const int tile_outp
 }
 
 auto EstimateFullFrameWork(const DemosaicNetTopologyKind kind, const int cover_w,
-                           const int cover_h, const int tile_inner, const int tile_count_override)
-    -> FullFrameWorkEstimate {
-  if (cover_w <= 0 || cover_h <= 0 || tile_inner <= 0) {
+                           const int cover_h, const int owned_w, const int owned_h,
+                           const int tile_count_override) -> FullFrameWorkEstimate {
+  if (cover_w <= 0 || cover_h <= 0 || owned_w <= 0 || owned_h <= 0) {
     throw std::runtime_error("EstimateFullFrameWork: invalid dimensions");
   }
 
   FullFrameWorkEstimate est;
-  est.tile_inner = tile_inner;
-  // Student product policies derived from the requested owned-output edge (P2).
-  if (kind == DemosaicNetTopologyKind::Bayer) {
-    const auto policy   = detail::MakeBayerStudentTilePolicy(tile_inner);
-    est.tile_step       = policy.step.width;
-    est.virtual_pad     = policy.virtual_pad.x;
-    est.source_border   = policy.output_border.x;
-  } else {
-    const auto policy   = detail::MakeXTransStudentTilePolicy(tile_inner);
-    est.tile_step       = policy.step.width;
-    est.virtual_pad     = policy.virtual_pad.x;
-    est.source_border   = policy.output_border.x;
-  }
-  est.overlap_x = std::max(0, tile_inner - est.tile_step);
-  est.overlap_y = std::max(0, tile_inner - est.tile_step);
+  est.tile_inner   = owned_w;  // historical field: report width; see paid pixels for area
+  est.tile_owned_w = owned_w;
+  est.tile_owned_h = owned_h;
+  // Student product policies derived from the requested owned-output shape (P2/P4-C).
+  const detail::CudaTilePolicy policy =
+      kind == DemosaicNetTopologyKind::Bayer
+          ? detail::MakeBayerStudentTilePolicy(owned_w, owned_h)
+          : detail::MakeXTransStudentTilePolicy(owned_w, owned_h);
+  est.tile_step_x     = policy.step.width;
+  est.tile_step_y     = policy.step.height;
+  est.tile_step       = policy.step.width;  // historical alias (X)
+  est.virtual_pad     = policy.virtual_pad.x;
+  est.source_border   = policy.output_border.x;
+  est.overlap_x       = std::max(0, owned_w - est.tile_step_x);
+  est.overlap_y       = std::max(0, owned_h - est.tile_step_y);
   est.first_model_out_x = -est.virtual_pad + est.source_border;  // Bayer -1, X-Trans 0
   est.first_model_out_y = est.first_model_out_x;
   est.cover_width   = cover_w;
@@ -427,20 +448,20 @@ auto EstimateFullFrameWork(const DemosaicNetTopologyKind kind, const int cover_w
   est.active_width  = cover_w;
   est.active_height = cover_h;
 
-  const auto [tiles_x, tiles_y, planner_count] =
-      CountStudentProductTiles(cover_w, cover_h, est.tile_step, est.tile_step, est.virtual_pad,
-                               est.virtual_pad, est.source_border, est.source_border);
+  const auto [tiles_x, tiles_y, planner_count] = CountStudentProductTiles(
+      cover_w, cover_h, est.tile_step_x, est.tile_step_y, est.virtual_pad, est.virtual_pad,
+      est.source_border, est.source_border);
   est.tiles_x    = tiles_x;
   est.tiles_y    = tiles_y;
   est.tile_count = tile_count_override > 0 ? tile_count_override : planner_count;
   if (est.tile_count <= 0) {
     // Degenerate cover smaller than first model origin reach — fall back to 1×1 ceil.
-    est.tiles_x    = std::max(1, CeilDiv(cover_w, est.tile_step));
-    est.tiles_y    = std::max(1, CeilDiv(cover_h, est.tile_step));
+    est.tiles_x    = std::max(1, CeilDiv(cover_w, est.tile_step_x));
+    est.tiles_y    = std::max(1, CeilDiv(cover_h, est.tile_step_y));
     est.tile_count = est.tiles_x * est.tiles_y;
   }
 
-  est.per_tile = BuildTileAccounting(kind, tile_inner, 1);
+  est.per_tile = BuildTileAccounting(kind, owned_w, owned_h, 1);
 
   const auto scale = static_cast<std::int64_t>(est.tile_count);
   est.full_conv_flops    = est.per_tile.total_conv_flops * scale;
@@ -452,14 +473,20 @@ auto EstimateFullFrameWork(const DemosaicNetTopologyKind kind, const int cover_w
   est.active_output_megapixels =
       (static_cast<double>(cover_w) * static_cast<double>(cover_h)) / 1.0e6;
   est.paid_tile_output_megapixels =
-      (static_cast<double>(est.tile_count) * static_cast<double>(tile_inner) *
-       static_cast<double>(tile_inner)) /
+      (static_cast<double>(est.tile_count) * static_cast<double>(owned_w) *
+       static_cast<double>(owned_h)) /
       1.0e6;
   est.halo_work_factor =
       est.active_output_megapixels > 0.0
           ? est.paid_tile_output_megapixels / est.active_output_megapixels
           : 1.0;
   return est;
+}
+
+auto EstimateFullFrameWork(const DemosaicNetTopologyKind kind, const int cover_w,
+                           const int cover_h, const int tile_inner) -> FullFrameWorkEstimate {
+  return EstimateFullFrameWork(kind, cover_w, cover_h, tile_inner, tile_inner,
+                               /*tile_count_override=*/-1);
 }
 
 auto EstimateDeviceComputeEnvelope(const DeviceInfo& info) -> DeviceComputeEnvelope {

@@ -76,8 +76,12 @@ struct TopologyAccounting {
 // (product neural path), not the LibRaw visible crop alone.
 struct FullFrameWorkEstimate {
   TopologyAccounting per_tile;
-  int                tile_inner     = 0;   // owned/export output edge (1024)
-  int                tile_step      = 0;   // Bayer 1024 / X-Trans 1020
+  int                tile_inner     = 0;   // owned/export width (historical square edge field)
+  int                tile_owned_w   = 0;   // owned export width (P4-C rectangles/strips)
+  int                tile_owned_h   = 0;   // owned export height
+  int                tile_step      = 0;   // X step (historical); prefer tile_step_x/y
+  int                tile_step_x    = 0;
+  int                tile_step_y    = 0;
   int                virtual_pad    = 0;   // Bayer 32 / X-Trans 12
   int                source_border  = 0;   // Bayer 31 / X-Trans 12 (tile-local)
   int                cover_width    = 0;   // aligned CFA / assembled RGB size
@@ -98,7 +102,7 @@ struct FullFrameWorkEstimate {
   std::int64_t       full_bytes_traffic = 0;
   // Unique cover output pixels vs work paid (halo + inter-tile overlap).
   double             active_output_megapixels = 0.0;
-  double             paid_tile_output_megapixels = 0.0;  // tile_count * tile_out^2
+  double             paid_tile_output_megapixels = 0.0;  // tile_count * owned_w * owned_h
   double             halo_work_factor = 1.0;  // paid / cover ( >= 1 )
 };
 
@@ -178,16 +182,26 @@ struct RooflineReport {
 
 // Exact layer list for one tile input size (product fixed shape after reflect-pad).
 [[nodiscard]] auto BuildBayerTileAccounting(int tile_output, int batch = 1) -> TopologyAccounting;
+[[nodiscard]] auto BuildBayerTileAccounting(int owned_w, int owned_h, int batch)
+    -> TopologyAccounting;
 [[nodiscard]] auto BuildXTransTileAccounting(int tile_output, int batch = 1) -> TopologyAccounting;
+[[nodiscard]] auto BuildXTransTileAccounting(int owned_w, int owned_h, int batch)
+    -> TopologyAccounting;
 [[nodiscard]] auto BuildTileAccounting(DemosaicNetTopologyKind kind, int tile_output,
                                        int batch = 1) -> TopologyAccounting;
+[[nodiscard]] auto BuildTileAccounting(DemosaicNetTopologyKind kind, int owned_w, int owned_h,
+                                       int batch = 1) -> TopologyAccounting;
 
-// Product student grid: Bayer pad32/border31/step1024, X-Trans pad12/border12/step1020.
+// Product student grid: Bayer pad32/border31, X-Trans pad12/border12; step from owned axes.
 // `cover_w/h` is the aligned CFA size scheduled by BuildTileJobs. Every job pays full
-// fixed-shape tile FLOPs (edge tiles are virtually reflect-padded to kTileInput).
+// fixed-shape tile FLOPs (edge tiles are virtually reflect-padded to the policy input).
 // Optional explicit tile_count overrides the product planner count (tests/harness).
+// Square convenience (no override):
 [[nodiscard]] auto EstimateFullFrameWork(DemosaicNetTopologyKind kind, int cover_w, int cover_h,
-                                         int tile_inner = 1024, int tile_count_override = -1)
+                                         int tile_inner = 1024) -> FullFrameWorkEstimate;
+// Rectangular / strip (pass tile_count_override=-1 to use the planner count):
+[[nodiscard]] auto EstimateFullFrameWork(DemosaicNetTopologyKind kind, int cover_w, int cover_h,
+                                         int owned_w, int owned_h, int tile_count_override)
     -> FullFrameWorkEstimate;
 
 [[nodiscard]] auto EstimateDeviceComputeEnvelope(const DeviceInfo& info) -> DeviceComputeEnvelope;
