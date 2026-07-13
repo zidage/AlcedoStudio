@@ -15,6 +15,7 @@
 #include "cuda/nn/conv2d.hpp"
 #include "cuda/nn/conv_transpose2d.hpp"
 #include "cuda/nn/crop.hpp"
+#include "decoders/processor/nn/demosaicnet_profiler.hpp"
 
 namespace alcedo {
 namespace {
@@ -251,12 +252,17 @@ void XTransDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
     workspace.Reserve(need);
   }
 
+  DemosaicNetProfiler* profiler = ActiveDemosaicNetProfiler();
+
   const int ph = H / kPackFactor;
   const int pw = W / kPackFactor;
   DeviceTensor cur = workspace.AllocateTensor(
       {static_cast<std::int64_t>(N), kPackOutCh, static_cast<std::int64_t>(ph),
        static_cast<std::int64_t>(pw)});
   {
+    if (profiler != nullptr) {
+      profiler->BeginRange(DemosaicNetProfileRange::PackConv, stream);
+    }
     Conv2dParams p;
     p.in_channels  = 3;
     p.out_channels = kPackOutCh;
@@ -265,6 +271,9 @@ void XTransDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
     p.weight    = pack_w_.get();
     p.bias      = nullptr;
     Conv2d(input, cur, p, stream, &workspace);
+    if (profiler != nullptr) {
+      profiler->EndRange(DemosaicNetProfileRange::PackConv, stream);
+    }
   }
 
   for (int i = 0; i < kDepth; ++i) {
@@ -277,6 +286,9 @@ void XTransDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
     DeviceTensor next = workspace.AllocateTensor({static_cast<std::int64_t>(N), kWidth,
                                                   static_cast<std::int64_t>(oh),
                                                   static_cast<std::int64_t>(ow)});
+    if (profiler != nullptr) {
+      profiler->BeginTrunkLayer(i, stream);
+    }
     Conv2dParams p;
     p.in_channels  = cin;
     p.out_channels = kWidth;
@@ -285,6 +297,9 @@ void XTransDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
     p.weight    = trunk_w_[i].get();
     p.bias      = trunk_b_[i].get();
     Conv2dBiasRelu(cur, next, p, stream, &workspace);
+    if (profiler != nullptr) {
+      profiler->EndTrunkLayer(i, stream);
+    }
     cur = next;
   }
 
@@ -293,6 +308,9 @@ void XTransDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
   DeviceTensor residual = workspace.AllocateTensor(
       {static_cast<std::int64_t>(N), kResidualCh, static_cast<std::int64_t>(mh),
        static_cast<std::int64_t>(mw)});
+  if (profiler != nullptr) {
+    profiler->BeginRange(DemosaicNetProfileRange::ResidualUnpackCropConcat, stream);
+  }
   {
     Conv2dParams p;
     p.in_channels  = kWidth;
@@ -330,12 +348,18 @@ void XTransDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
                                                static_cast<std::int64_t>(uh),
                                                static_cast<std::int64_t>(uw)});
   ConcatChannels(cropped, up, cat, stream);
+  if (profiler != nullptr) {
+    profiler->EndRange(DemosaicNetProfileRange::ResidualUnpackCropConcat, stream);
+  }
 
   const int natural_h = uh - 2;
   const int natural_w = uw - 2;
   DeviceTensor y = workspace.AllocateTensor({static_cast<std::int64_t>(N), kWidth,
                                              static_cast<std::int64_t>(natural_h),
                                              static_cast<std::int64_t>(natural_w)});
+  if (profiler != nullptr) {
+    profiler->BeginRange(DemosaicNetProfileRange::PostOutput, stream);
+  }
   {
     Conv2dParams p;
     p.in_channels  = 6;
@@ -371,6 +395,9 @@ void XTransDemosaicNet::Forward(const DeviceTensor& input, DeviceTensor& output,
       Conv2d(y, natural_rgb, p, stream, &workspace);
     }
     CenterCropSpatial(natural_rgb, output, out_h, out_w, stream);
+  }
+  if (profiler != nullptr) {
+    profiler->EndRange(DemosaicNetProfileRange::PostOutput, stream);
   }
 }
 

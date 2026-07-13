@@ -745,6 +745,7 @@ if(ALCEDO_CUDA_ENABLED)
             decoders/processor/nn/demosaicnet_bayer.cu
             decoders/processor/nn/demosaicnet_xtrans.cu
             decoders/processor/nn/demosaicnet_cache.cpp
+            decoders/processor/nn/demosaicnet_profiler.cpp
         PUBLIC_DEPS
             CudaUtils
     )

@@ -4,6 +4,7 @@ Date: 2026-07-13
 
 Status: active follow-up to
 [`cuda_nn_forward_demosaicnet_plan.md`](cuda_nn_forward_demosaicnet_plan.md).
+**P0 complete** (see §4.3). Next: P1 activation lifetime reuse.
 
 ## 1. Objective and current baseline
 
@@ -11,12 +12,13 @@ Keep the existing in-tree, hard-coded FP32 CUDA inference runtime. Do not add
 ONNX Runtime, TensorRT, cuDNN, a runtime graph interpreter, reduced precision,
 or a new model architecture in this track.
 
-Current retained RTX 3080 Laptop short full-frame medians are approximately:
+Current retained RTX 3080 Laptop short full-frame medians (Release,
+`--warmup 3 --iterations 20`, HLR-off, post-P0 remeasure):
 
-| Variant | Retained latency | Stretch target |
-|---------|-----------------:|---------------:|
-| Bayer student (`bayer_s24_d8`) | ~393 ms | <=100 ms |
-| X-Trans student (`xtrans_p2_s32_d4`) | ~427 ms | <=100 ms |
+| Variant | Retained latency (p50) | Stretch target |
+|---------|-----------------------:|---------------:|
+| Bayer student (`bayer_s24_d8`) | ~382 ms | <=100 ms |
+| X-Trans student (`xtrans_p2_s32_d4`) | ~455 ms | <=100 ms |
 
 The stretch target is not treated as guaranteed. The work proceeds through
 measured gates: first <=300 ms, then <=200 ms, then <=150 ms. Each retained
@@ -93,6 +95,103 @@ Do not use profiler-only ranges as timing assertions in correctness tests.
   optional Phase P4 layout track are the primary routes.
 
 Artifact: `build/perf/demosaicnet_next_p0_breakdown.json`.
+
+### 4.3 P0 results (2026-07-13, RTX 3080 Laptop, Release)
+
+Implementation landed:
+
+- `DemosaicNetProfiler` + thread-local install (`--profile-ranges` only)
+- CUDA-event ranges in student `Forward`, fused tile pack/unpack, and
+  `ProcessCudaTiled` (phase/linear, owned ROI, host stream wait, wall/batch)
+- harness full mode emits `profile` JSON; artifact path above
+
+Command:
+
+```bat
+build\release\alcedo_studio\tests\DemosaicNetPerfHarness.exe ^
+  --fixture all --method neural --mode full --model student ^
+  --warmup 3 --iterations 20 --profile-ranges ^
+  --output build/perf/demosaicnet_next_p0_breakdown.json
+```
+
+#### Hot-path full-process p50 (wall, no profiler)
+
+| Variant | p50 ms | tiles | architecture |
+|---------|-------:|------:|--------------|
+| Bayer D800e | 381.95 | 40 | `bayer_s24_d8` |
+| X-Trans XT5 | 454.58 | 48 | `xtrans_p2_s32_d4` |
+
+#### Profiled-frame decomposition (one post-hot pass with events)
+
+Times are **frame sums** of non-overlapping CUDA-event ranges unless noted.
+`stream_wait` is host wait after the CUDA batch span ends. `sum_of_cuda_ranges`
+excludes `stream_wait`. Unaccounted CUDA time is primarily post-tile product
+work (FinishNeuralEngineRgb + inverse cam-mul / RGBA pack) between the last
+tile range and `EndFrame`.
+
+| Metric | Bayer | X-Trans |
+|--------|------:|--------:|
+| wall_ms | 352.6 | 423.3 |
+| batch_cuda_ms | 352.5 | 423.2 |
+| sum_of_cuda_ranges_ms | 275.0 | 322.4 |
+| sum_ranges / batch_cuda | 0.780 | 0.762 |
+| wall − batch / wall | **0.04%** | **0.03%** |
+| tiles | 40 | 48 |
+| kernel launches / tile (static) | 19 | 15 |
+| kernel launches / frame | 760 | 720 |
+| activation workspace | 391.2 MiB | 346.9 MiB |
+| owned device bytes | 428.7 MiB | 383.5 MiB |
+
+| Range | Bayer ms | Bayer % batch | X-Trans ms | X-Trans % batch |
+|-------|---------:|--------------:|-----------:|----------------:|
+| phase_crop_linear | 13.5 | 3.8% | 15.0 | 3.6% |
+| reflect_pad_pack | 2.0 | 0.6% | 2.3 | 0.5% |
+| pack_conv | 6.1 | 1.7% | 19.9 | 4.7% |
+| trunk (all layers) | 187.5 | **53.2%** | 191.1 | **45.2%** |
+| residual_unpack_crop_concat | 16.0 | 4.5% | 22.0 | 5.2% |
+| post_output | 44.9 | 12.7% | 66.1 | 15.6% |
+| nchw_hwc_unpack | 2.7 | 0.8% | 3.4 | 0.8% |
+| owned_roi_copy | 2.3 | 0.7% | 2.6 | 0.6% |
+| stream_wait (host) | 18.8 | 5.3% | 24.8 | 5.9% |
+| pack+unpack+roi | 7.1 | **2.0%** | 8.3 | **2.0%** |
+| trunk+post | 232.4 | **65.9%** | 257.2 | **60.8%** |
+
+Bayer trunk layers (ms, frame sum):  
+`[7.1, 26.3, 26.0, 24.6, 27.1, 26.1, 26.4, 24.0]` — layer 0 is 4→24; layers 1–7
+are square 24→24 and dominate.
+
+X-Trans trunk layers (ms, frame sum):  
+`[21.9, 57.0, 54.7, 57.5]` — layer 0 is 12→32; layers 1–3 are square 32→32.
+
+Telemetry (profiled pass, P0 / boost clocks, laptop thermally elevated):
+
+| | Bayer before → after | X-Trans before → after |
+|--|---------------------:|-----------------------:|
+| temp °C | 86 → 85 | 89 → 88 |
+| power W | 107.7 → 105.4 | 88.4 → 77.9 |
+| SM MHz | 1605 → 1785 | 1350 → 1350 |
+| mem MHz | 7001 → 7001 | 7001 → 7001 |
+| P-state | P0 → P0 | P0 → P0 |
+
+#### Decision gates
+
+| Gate | Threshold | Bayer | X-Trans | Verdict |
+|------|-----------|------:|--------:|---------|
+| wall vs batch CUDA | wall exceeds batch by ≥10% | 0.04% | 0.03% | **P3 CUDA Graph not justified** by host/WDDM launch gap |
+| pack/unpack/ROI | >15% of batch CUDA | 2.0% | 2.0% | **no fusion priority** for pack path |
+| trunk + post | ≥75% of batch CUDA | 65.9% | 60.8% | **below formal 75%** on full batch (post-tile RGBA pack is the main unaccounted remainder); still the largest named demosaic cost |
+
+#### Implications for later phases
+
+1. **P1 (activation reuse)** remains the next step: owned memory is ~429 MiB
+   Bayer / ~384 MiB X-Trans at the 1K tile — headroom for larger tiles.
+2. **P2 (larger tiles)** remains high leverage: 40/48 jobs, trunk-dominated
+   per-tile work, and negligible pack/ROI share mean amortizing tile count
+   targets the expensive path without waiting on pack fusion.
+3. **P3 (CUDA Graph)** is **deferred**: wall ≈ batch CUDA on this WDDM laptop
+   path; re-check only after P2 if a material host gap appears.
+4. **P4 (channels-last)** stays conditional: re-evaluate after P1–P2 when
+   trunk+post still dominate the retained full-frame budget above 150–200 ms.
 
 ## 5. Phase P1 — activation lifetime reuse
 

@@ -15,6 +15,7 @@
 #include "cuda/nn/layout.hpp"
 #include "cuda/nn/tensor.hpp"
 #include "cuda/nn/workspace.hpp"
+#include "decoders/processor/nn/demosaicnet_profiler.hpp"
 #include "decoders/processor/operators/gpu/cuda_demosaicnet.hpp"
 
 namespace alcedo::CUDA {
@@ -395,8 +396,16 @@ auto EnqueueDemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_
     auto output_tensor =
         cuda::nn::DeviceTensor::Contiguous(workspace.output_buffer().data(), {1, 3, out_h, out_w});
 
+    DemosaicNetProfiler* profiler = ActiveDemosaicNetProfiler();
+    if (profiler != nullptr) {
+      profiler->NoteTile();
+      profiler->BeginRange(DemosaicNetProfileRange::ReflectPadPack, cuda_stream);
+    }
     PackReflectPaddedCfaTile(aligned_cfa, input_origin, training_pattern, input_tensor, tile_h,
                              tile_w, stream);
+    if (profiler != nullptr) {
+      profiler->EndRange(DemosaicNetProfileRange::ReflectPadPack, cuda_stream);
+    }
 
     if (variant == DemosaicNetVariant::Bayer) {
       RunModel(cache.Bayer(), input_tensor, output_tensor, workspace.activation_workspace(),
@@ -407,7 +416,13 @@ auto EnqueueDemosaicStudentTileWithNeuralEngine(const cv::cuda::GpuMat& aligned_
     }
 
     cv::cuda::GpuMat& neural_rgb = workspace.rgb_buffer();
+    if (profiler != nullptr) {
+      profiler->BeginRange(DemosaicNetProfileRange::NchwHwcUnpack, cuda_stream);
+    }
     cuda::nn::UnpackNchwToHwc(output_tensor, neural_rgb, cuda_stream);
+    if (profiler != nullptr) {
+      profiler->EndRange(DemosaicNetProfileRange::NchwHwcUnpack, cuda_stream);
+    }
     // Product tiled path reuses workspace RGB without a per-tile stream wait; stream
     // ordering serializes pack → forward → unpack → ROI copy.
     rgb              = neural_rgb;

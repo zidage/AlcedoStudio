@@ -18,6 +18,7 @@
 
 #include "decoders/processor/cuda_tile_jobs.hpp"
 #include "decoders/processor/nn/demosaicnet_preprocess.hpp"
+#include "decoders/processor/nn/demosaicnet_profiler.hpp"
 #include "decoders/processor/operators/gpu/cuda_color_space_conv.hpp"
 #include "decoders/processor/operators/gpu/cuda_debayer_rcd.hpp"
 #include "decoders/processor/operators/gpu/cuda_demosaicnet.hpp"
@@ -403,12 +404,20 @@ auto RawProcessor::ProcessCudaTiled() -> ImageBuffer {
       &stream);
   LogCudaProfileStep(stream, "RAW CUDA Tiled downsample", stage_downsample_start);
 
+  const RawDemosaicMethod demosaic_method =
+      detail::ResolveRawDemosaicMethod(params_, cfa_pattern_.kind);
+  DemosaicNetProfiler*    profiler    = ActiveDemosaicNetProfiler();
+  const cudaStream_t      cuda_stream = cv::cuda::StreamAccessor::getStream(stream);
+  // P0: when a harness profiler is installed, wrap linear preprocess + neural tile path.
+  if (profiler != nullptr && demosaic_method == RawDemosaicMethod::NeuralEngine) {
+    profiler->BeginFrame(cuda_stream);
+    profiler->BeginRange(DemosaicNetProfileRange::PhaseCropLinear, cuda_stream);
+  }
+
   const auto stage_linear_start = ProfileClock::now();
   CUDA::ToLinearRef(linear_raw, raw_processor_, cfa_pattern_, &stream);
   LogCudaProfileStep(stream, "RAW CUDA Tiled to-linear", stage_linear_start);
 
-  const RawDemosaicMethod demosaic_method =
-      detail::ResolveRawDemosaicMethod(params_, cfa_pattern_.kind);
   if (demosaic_method == RawDemosaicMethod::NeuralEngine) {
     // Keep preprocessing global: it establishes the training CFA origin and applies gamma once.
     // Tiles then only shift that known origin and never re-encode/decode their overlapping halos.
@@ -420,6 +429,9 @@ auto RawProcessor::ProcessCudaTiled() -> ImageBuffer {
     cv::cuda::GpuMat          neural_cfa;
     const NeuralEngineCfaPrep prep =
         PrepareNeuralEngineCfa(linear_raw, cfa_pattern_, neural_cfa, &stream);
+    if (profiler != nullptr) {
+      profiler->EndRange(DemosaicNetProfileRange::PhaseCropLinear, cuda_stream);
+    }
     std::string neural_tiled_error;
     if (prep.succeeded) {
       // Student virtual-pad tiling: cover the full aligned CFA. Period-aligned pad restores
@@ -453,7 +465,7 @@ auto RawProcessor::ProcessCudaTiled() -> ImageBuffer {
           {
             DemosaicNetModelCache& cache = DemosaicNetModelCache::Instance();
             DemosaicNetLoadOptions load_options;
-            load_options.stream = cv::cuda::StreamAccessor::getStream(stream);
+            load_options.stream = cuda_stream;
             if (!cache.EnsureLoaded(variant, load_options)) {
               throw std::runtime_error(cache.LastError());
             }
@@ -463,6 +475,14 @@ auto RawProcessor::ProcessCudaTiled() -> ImageBuffer {
                     static_cast<std::size_t>(tile_w),
                 static_cast<std::size_t>(3) * static_cast<std::size_t>(out_h) *
                     static_cast<std::size_t>(out_w));
+          }
+          if (profiler != nullptr) {
+            const int launches_per_tile = StudentTileKernelLaunchCount(!is_bayer);
+            profiler->SetWorkspaceBytes(neural_workspace.activation_workspace().capacity_bytes(),
+                                        neural_workspace.OwnedDeviceBytes());
+            profiler->SetKernelLaunchCounts(
+                launches_per_tile,
+                launches_per_tile * static_cast<int>(jobs.size()));
           }
 
           bool         tile_ok            = true;
@@ -479,7 +499,13 @@ auto RawProcessor::ProcessCudaTiled() -> ImageBuffer {
               break;
             }
             // First-writer ownership: copy only the disjoint model_output_roi.
+            if (profiler != nullptr) {
+              profiler->BeginRange(DemosaicNetProfileRange::OwnedRoiCopy, cuda_stream);
+            }
             tile_rgb(job.model_output_roi).copyTo(output_rgb(job.destination_roi), stream);
+            if (profiler != nullptr) {
+              profiler->EndRange(DemosaicNetProfileRange::OwnedRoiCopy, cuda_stream);
+            }
           }
           if (tile_ok) {
             FinishNeuralEngineRgb(output_rgb, &stream);
@@ -525,7 +551,18 @@ auto RawProcessor::ProcessCudaTiled() -> ImageBuffer {
               CUDA::ApplyInverseCamMulAndPackRGBAOriented(
                   output_rgb, output_rgba, raw_data_.color.cam_mul, raw_data_.sizes.flip, &stream);
             }
+            if (profiler != nullptr) {
+              // End CUDA batch span before host wait so batch_cuda_ms excludes host blocking.
+              profiler->EndFrame(cuda_stream);
+              profiler->BeginHostStreamWait();
+            }
             stream.waitForCompletion();
+            if (profiler != nullptr) {
+              profiler->EndHostStreamWait();
+              // Refresh owned bytes after steady-state tile work.
+              profiler->SetWorkspaceBytes(neural_workspace.activation_workspace().capacity_bytes(),
+                                          neural_workspace.OwnedDeviceBytes());
+            }
             runtime_color_context_.output_in_camera_space_ = true;
             process_buffer_                                = {std::move(output_rgba)};
             PrintProfileMs("RAW CUDA Tiled", ProfileClock::now() - tiled_start);

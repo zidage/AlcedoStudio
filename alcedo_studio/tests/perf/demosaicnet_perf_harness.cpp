@@ -46,6 +46,7 @@
 #include "decoders/processor/nn/demosaicnet_bayer.hpp"
 #include "decoders/processor/nn/demosaicnet_cache.hpp"
 #include "decoders/processor/nn/demosaicnet_preprocess.hpp"
+#include "decoders/processor/nn/demosaicnet_profiler.hpp"
 #include "decoders/processor/nn/demosaicnet_xtrans.hpp"
 #include "decoders/processor/operators/gpu/cuda_demosaicnet.hpp"
 #include "decoders/processor/raw_processor.hpp"
@@ -122,7 +123,7 @@ void PrintUsage(const char* argv0) {
       << "  --tile-size N                  Export tile output edge for tile/conv (default: 1024)\n"
       << "  --lanes N                      Concurrent streams/workspaces in tile mode (default: "
          "1)\n"
-      << "  --profile-ranges               Named CUDA-event ranges (tile/conv)\n"
+      << "  --profile-ranges               Named CUDA-event ranges (full/tile; P0 breakdown)\n"
       << "  --conv-winograd                Conv mode: benchmark prepacked F(2x2,3x3) trunks\n"
       << "  --output path.json             Write machine-readable JSON\n"
       << "  --raw path                     Override fixture RAW path (single fixture)\n"
@@ -384,6 +385,8 @@ struct FullFixtureResult {
   std::size_t            total_bytes_after    = 0;
   perf::RooflineReport   roofline;
   bool                   has_roofline = false;
+  // P0 --profile-ranges body (object fields only; empty when disabled).
+  std::string            profile_json;
 };
 
 auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
@@ -480,6 +483,20 @@ auto RunFullMode(const FixtureSpec& fixture, const HarnessConfig& cfg,
 
   result.legacy_stats = perf::ComputeTimingStats(std::move(legacy_samples));
   result.neural_stats = perf::ComputeTimingStats(std::move(neural_samples));
+
+  // P0: dedicated profiled pass (does not replace hot-path wall samples above).
+  if (cfg.profile_ranges && want_neural) {
+    DemosaicNetProfiler profiler;
+    profiler.CaptureTelemetryBefore();
+    {
+      DemosaicNetProfilerScope scope(&profiler);
+      auto out = RunFullProcess(*raw, RawDemosaicMethod::NeuralEngine);
+      (void)ValidateRgbaOutput(out, "neural profile-ranges");
+    }
+    profiler.CaptureTelemetryAfter();
+    profiler.Finalize();
+    result.profile_json = profiler.ToJsonObjectBody();
+  }
 
   size_t free_b       = 0;
   size_t total_b      = 0;
@@ -667,19 +684,29 @@ auto RunTileMode(const FixtureSpec& fixture, const HarnessConfig& cfg) -> TileFi
   result.cuda_stats = perf::ComputeTimingStats(std::move(cuda_samples));
 
   if (cfg.profile_ranges) {
-    double max_cuda_ms = 0.0;
-    for (auto& lane : lanes) {
-      const cudaStream_t stream = cv::cuda::StreamAccessor::getStream(lane->stream);
-      lane->range->RecordStart(stream);
-      enqueue_lane(*lane, "profile enqueue");
-      lane->range->RecordStop(stream);
+    // Single-lane detailed P0 ranges (lanes>1 still report max-lane batch only for cuda_stats).
+    DemosaicNetProfiler profiler;
+    profiler.CaptureTelemetryBefore();
+    {
+      DemosaicNetProfilerScope scope(&profiler);
+      auto&              lane   = *lanes.front();
+      const cudaStream_t stream = cv::cuda::StreamAccessor::getStream(lane.stream);
+      profiler.BeginFrame(stream);
+      enqueue_lane(lane, "profile enqueue");
+      profiler.EndFrame(stream);
+      profiler.BeginHostStreamWait();
+      lane.stream.waitForCompletion();
+      profiler.EndHostStreamWait();
+      profiler.SetWorkspaceBytes(lane.workspace.activation_workspace().capacity_bytes(),
+                                 lane.workspace.OwnedDeviceBytes());
+      const bool is_xtrans = fixture.kind == FixtureKind::XTrans;
+      const int  launches  = StudentTileKernelLaunchCount(is_xtrans);
+      // Tile mode has no product ROI copy; entry+model only (subtract ROI launch).
+      profiler.SetKernelLaunchCounts(launches - 1, launches - 1);
     }
-    for (auto& lane : lanes) {
-      max_cuda_ms = std::max(max_cuda_ms, static_cast<double>(lane->range->ElapsedMs()));
-    }
-    std::ostringstream oss;
-    oss << "\"batch_max_lane_ms\":" << perf::JsonNumber(max_cuda_ms);
-    result.profile_json = oss.str();
+    profiler.CaptureTelemetryAfter();
+    profiler.Finalize();
+    result.profile_json = profiler.ToJsonObjectBody();
   }
 
   return result;
@@ -966,10 +993,16 @@ void AppendFullJson(std::string& out, const FullFixtureResult& r, const bool tra
       perf::ActiveMegapixelsPerSecond(r.neural_stats.median_ms, r.active_megapixels));
   perf::AppendJsonKeyInt(out, "cuda_free_bytes_after",
                          static_cast<std::int64_t>(r.free_bytes_after));
+  const bool more_after_mem = r.has_roofline || !r.profile_json.empty();
   perf::AppendJsonKeyInt(out, "cuda_total_bytes", static_cast<std::int64_t>(r.total_bytes_after),
-                         r.has_roofline);
+                         more_after_mem);
   if (r.has_roofline) {
-    perf::AppendJsonRooflineReport(out, "roofline", r.roofline, false);
+    perf::AppendJsonRooflineReport(out, "roofline", r.roofline, !r.profile_json.empty());
+  }
+  if (!r.profile_json.empty()) {
+    out += "\"profile\":{";
+    out += r.profile_json;
+    out += "}";
   }
   out += trailing ? "}," : "}";
 }
@@ -1074,6 +1107,10 @@ int main(int argc, char** argv) {
         }
         if (r.has_roofline) {
           perf::PrintRooflineReport(r.roofline);
+        }
+        if (!r.profile_json.empty()) {
+          std::cout << "\n  --- P0 profile-ranges ---\n";
+          std::cout << "  " << r.profile_json << "\n";
         }
         AppendFullJson(json, r, i + 1 < fixtures.size());
       }
