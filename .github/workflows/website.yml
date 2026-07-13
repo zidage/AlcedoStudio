@@ -1,10 +1,15 @@
 name: Deploy Website to GitHub Pages
 
+# Single deploy entry for docs/alcedo-website/site/ (plain static HTML).
+# No Node, Vite, or build step — site/ is the production source.
+
 on:
   push:
     branches: [main]
     paths:
-      - 'docs/alcedo-website/**'
+      - "docs/alcedo-website/site/**"
+      - "docs/alcedo-website/scripts/verify_site.py"
+      - ".github/workflows/website.yml"
   workflow_dispatch:
 
 permissions:
@@ -19,21 +24,16 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: docs/alcedo-website
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+
+      - name: Verify static site
+        run: python3 docs/alcedo-website/scripts/verify_site.py
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: docs/alcedo-website/package-lock.json
-      - run: npm ci
-      - run: npm run build
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs/alcedo-website/dist
+          path: docs/alcedo-website/site
 
   deploy:
     needs: build
