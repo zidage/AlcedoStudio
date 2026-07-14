@@ -1,0 +1,192 @@
+name: Sync release assets to R2
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to synchronize (for example, v0.2.7)
+        required: true
+        type: string
+      promote_latest:
+        description: Update releases/latest after the versioned archive succeeds
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: r2-release-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Archive release installers
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+      AWS_EC2_METADATA_DISABLED: "true"
+      GH_TOKEN: ${{ github.token }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+
+    steps:
+      - name: Check R2 configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for variable in R2_ACCOUNT_ID R2_BUCKET AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+            if [[ -z "${!variable}" ]]; then
+              echo "Missing required GitHub Actions secret: ${variable}" >&2
+              exit 1
+            fi
+          done
+
+      - name: Resolve release and promotion target
+        id: release
+        shell: bash
+        env:
+          MANUAL_TAG: ${{ inputs.tag }}
+          MANUAL_PROMOTE_LATEST: ${{ inputs.promote_latest }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_EVENT_NAME" == "release" ]]; then
+            tag="$(jq -er '.release.tag_name' "$GITHUB_EVENT_PATH")"
+            prerelease="$(jq -er '.release.prerelease' "$GITHUB_EVENT_PATH")"
+            promote_latest=false
+            if [[ "$prerelease" == "false" ]]; then
+              promote_latest=true
+            fi
+          else
+            tag="$MANUAL_TAG"
+            promote_latest="$MANUAL_PROMOTE_LATEST"
+          fi
+
+          if [[ ! "$tag" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+            echo "Release tag contains unsupported characters: $tag" >&2
+            exit 1
+          fi
+
+          version="${tag#v}"
+          windows_file="AlcedoStudio-${version}-Windows-AMD64.exe"
+          macos_file="AlcedoStudio-${version}-Darwin-arm64.dmg"
+
+          {
+            echo "tag=$tag"
+            echo "windows_file=$windows_file"
+            echo "macos_file=$macos_file"
+            echo "promote_latest=$promote_latest"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download only the expected installers
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          WINDOWS_FILE: ${{ steps.release.outputs.windows_file }}
+          MACOS_FILE: ${{ steps.release.outputs.macos_file }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$WINDOWS_FILE" \
+            --pattern "$MACOS_FILE" \
+            --dir release-assets
+
+      - name: Validate installers and generate SHA-256 sums
+        shell: bash
+        env:
+          WINDOWS_FILE: ${{ steps.release.outputs.windows_file }}
+          MACOS_FILE: ${{ steps.release.outputs.macos_file }}
+        run: |
+          set -euo pipefail
+          test -f "release-assets/$WINDOWS_FILE"
+          test -f "release-assets/$MACOS_FILE"
+
+          file_count="$(find release-assets -maxdepth 1 -type f | wc -l | tr -d ' ')"
+          if [[ "$file_count" != "2" ]]; then
+            echo "Expected exactly the Windows and macOS installers, found $file_count files." >&2
+            exit 1
+          fi
+
+          (
+            cd release-assets
+            sha256sum "$WINDOWS_FILE" "$MACOS_FILE" > SHA256SUMS.txt
+          )
+
+      - name: Upload immutable version archive
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          WINDOWS_FILE: ${{ steps.release.outputs.windows_file }}
+          MACOS_FILE: ${{ steps.release.outputs.macos_file }}
+        run: |
+          set -euo pipefail
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          version_prefix="releases/${RELEASE_TAG}"
+
+          upload() {
+            local source="$1"
+            local key="$2"
+            local content_type="$3"
+            local disposition="$4"
+            aws s3 cp "$source" "s3://${R2_BUCKET}/${key}" \
+              --endpoint-url "$endpoint" \
+              --content-type "$content_type" \
+              --content-disposition "$disposition" \
+              --cache-control "public, max-age=31536000, immutable" \
+              --no-progress
+          }
+
+          upload "release-assets/$WINDOWS_FILE" "$version_prefix/$WINDOWS_FILE" \
+            "application/vnd.microsoft.portable-executable" \
+            "attachment; filename=\"$WINDOWS_FILE\""
+          upload "release-assets/$MACOS_FILE" "$version_prefix/$MACOS_FILE" \
+            "application/x-apple-diskimage" \
+            "attachment; filename=\"$MACOS_FILE\""
+          upload "release-assets/SHA256SUMS.txt" "$version_prefix/SHA256SUMS.txt" \
+            "text/plain; charset=utf-8" \
+            "attachment; filename=\"SHA256SUMS.txt\""
+
+          for key in "$version_prefix/$WINDOWS_FILE" "$version_prefix/$MACOS_FILE" "$version_prefix/SHA256SUMS.txt"; do
+            aws s3api head-object --bucket "$R2_BUCKET" --key "$key" --endpoint-url "$endpoint" >/dev/null
+          done
+
+      - name: Update stable download aliases
+        if: ${{ steps.release.outputs.promote_latest == 'true' }}
+        shell: bash
+        env:
+          WINDOWS_FILE: ${{ steps.release.outputs.windows_file }}
+          MACOS_FILE: ${{ steps.release.outputs.macos_file }}
+        run: |
+          set -euo pipefail
+          endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
+
+          upload_latest() {
+            local source="$1"
+            local key="$2"
+            local content_type="$3"
+            local disposition="$4"
+            aws s3 cp "$source" "s3://${R2_BUCKET}/${key}" \
+              --endpoint-url "$endpoint" \
+              --content-type "$content_type" \
+              --content-disposition "$disposition" \
+              --cache-control "public, max-age=300, must-revalidate" \
+              --no-progress
+          }
+
+          upload_latest "release-assets/$WINDOWS_FILE" "releases/latest/AlcedoStudio-Windows-x64.exe" \
+            "application/vnd.microsoft.portable-executable" \
+            "attachment; filename=\"AlcedoStudio-Windows-x64.exe\""
+          upload_latest "release-assets/$MACOS_FILE" "releases/latest/AlcedoStudio-macos-arm64.dmg" \
+            "application/x-apple-diskimage" \
+            "attachment; filename=\"AlcedoStudio-macos-arm64.dmg\""
+          upload_latest "release-assets/SHA256SUMS.txt" "releases/latest/SHA256SUMS.txt" \
+            "text/plain; charset=utf-8" \
+            "attachment; filename=\"SHA256SUMS.txt\""
