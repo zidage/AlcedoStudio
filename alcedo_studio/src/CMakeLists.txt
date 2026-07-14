@@ -519,6 +519,20 @@ if(ALCEDO_OPENCL_ENABLED)
     target_compile_definitions(OpenClDemosaicNet PRIVATE
         ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config/models"
     )
+
+    # Product-path OpenCL Neural demosaic entry (Phase 6 RAW routing). Soft-fail API for
+    # RawProcessor OpenCL branch; not part of the generic OpenClDemosaicNet module layer.
+    def_library(OpenClDemosaicNetEntry
+        SOURCES
+            decoders/processor/operators/gpu/opencl_demosaicnet.cpp
+        PUBLIC_DEPS
+            OpenClDemosaicNet
+            ImageBuffer
+            OpenClProgramLibrary
+            OpenCL::OpenCL
+            ${ALCEDO_OPENCV_CORE_DEPS}
+    )
+    target_compile_definitions(OpenClDemosaicNetEntry PUBLIC HAVE_OPENCL)
 endif()
 
 # Image Base
@@ -829,7 +843,7 @@ if(ALCEDO_CUDA_ENABLED)
     target_link_libraries(RawProcessor PRIVATE CudaDemosaicNetEntry)
 endif()
 if(ALCEDO_OPENCL_ENABLED)
-    target_link_libraries(RawProcessor PRIVATE OpenClGeometryUtils)
+    target_link_libraries(RawProcessor PRIVATE OpenClGeometryUtils OpenClDemosaicNetEntry)
 endif()
 
 # ==============================================================================

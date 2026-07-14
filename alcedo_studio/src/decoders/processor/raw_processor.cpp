@@ -503,8 +503,9 @@ auto RawProcessor::Process() -> ImageBuffer {
   if (requested_gpu_backend == RawGpuBackend::GPU &&
       detail::ResolveRawDemosaicMethod(params_, cfa_pattern_.kind) ==
           RawDemosaicMethod::NeuralEngine) {
-    // Auto prefers the only backend that currently implements Neural Engine. If CUDA was
-    // compiled but is unavailable at runtime, retain Auto's resolved backend for Legacy fallback.
+    // Auto prefers CUDA Neural when available. Explicit OpenCL selection uses OpenCL Neural
+    // with same-backend Legacy soft-fail. CUDA Neural never falls back to OpenCL, and OpenCL
+    // Neural never falls back to CUDA.
     try {
       if (ResolveAcceleratorBackend(AcceleratorBackendPreference::CUDA) == GpuBackendKind::CUDA) {
         params_.gpu_backend_ = RawGpuBackend::CUDA;

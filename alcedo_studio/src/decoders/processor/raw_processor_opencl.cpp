@@ -14,6 +14,7 @@
 
 #include "decoders/processor/operators/gpu/opencl_cvt_ref_space.hpp"
 #include "decoders/processor/operators/gpu/opencl_debayer_rcd.hpp"
+#include "decoders/processor/operators/gpu/opencl_demosaicnet.hpp"
 #include "decoders/processor/operators/gpu/opencl_highlight_reconstruct.hpp"
 #include "decoders/processor/operators/gpu/opencl_to_linear_ref.hpp"
 #include "decoders/processor/operators/gpu/opencl_xtrans_interpolate.hpp"
@@ -84,6 +85,75 @@ void CropOpenClImage(opencl::OpenClImage& gpu_img, const cv::Rect& crop_rect) {
   gpu_img = std::move(cropped);
 }
 
+// OpenCL Legacy demosaic from preserved linear CFA (CV_32FC1). Used for the normal
+// Legacy path and for same-backend Neural soft-fail. Never switches to CUDA.
+void RunOpenClLegacyDemosaic(opencl::OpenClImage& gpu_img, const RawCfaPattern& cfa_pattern,
+                             const RawParams& params, LibRaw& raw_processor,
+                             const libraw_image_sizes_t& sizes, const ushort default_crop[4],
+                             DeferredOpenClLog& deferred_log) {
+  if (cfa_pattern.kind == RawCfaKind::Bayer2x2 && params.highlights_reconstruct_) {
+    const auto stage_debayer_start = ProfileClock::now();
+    OpenCL::Bayer2x2ToRGB_RCD(gpu_img, cfa_pattern.bayer_pattern);
+    LogProfileStep(deferred_log, "RAW OpenCL debayer", stage_debayer_start);
+
+    const auto     stage_crop_start = ProfileClock::now();
+    const cv::Rect crop_rect        = detail::BuildRcdDecodeCropRect(
+        sizes, default_crop, cv::Size(gpu_img.Width(), gpu_img.Height()), params.decode_res_);
+    CropOpenClImage(gpu_img, crop_rect);
+    LogProfileStep(deferred_log, "RAW OpenCL crop", stage_crop_start);
+
+    const auto stage_highlight_start = ProfileClock::now();
+    OpenCL::HighlightReconstruct(gpu_img, raw_processor);
+    LogProfileStep(deferred_log, "RAW OpenCL highlight reconstruct", stage_highlight_start);
+    return;
+  }
+
+  if (cfa_pattern.kind == RawCfaKind::XTrans6x6) {
+    const int  passes             = params.decode_res_ == DecodeRes::FULL ? 3 : 1;
+    const auto stage_xtrans_start = ProfileClock::now();
+    OpenCL::XTransToRGB_Ref(gpu_img, cfa_pattern.xtrans_pattern, passes);
+    LogProfileStep(deferred_log, "RAW OpenCL xtrans interpolate", stage_xtrans_start);
+  } else {
+    const auto stage_debayer_start = ProfileClock::now();
+    OpenCL::Bayer2x2ToRGB_RCD(gpu_img, cfa_pattern.bayer_pattern);
+    LogProfileStep(deferred_log, "RAW OpenCL debayer", stage_debayer_start);
+  }
+
+  const auto     stage_crop_start = ProfileClock::now();
+  const cv::Size crop_size(gpu_img.Width(), gpu_img.Height());
+  const cv::Rect crop_rect =
+      cfa_pattern.kind == RawCfaKind::Bayer2x2
+          ? detail::BuildRcdDecodeCropRect(sizes, default_crop, crop_size, params.decode_res_)
+          : detail::BuildDecodeCropRect(sizes, default_crop, crop_size, params.decode_res_);
+  CropOpenClImage(gpu_img, crop_rect);
+  LogProfileStep(deferred_log, "RAW OpenCL crop", stage_crop_start);
+}
+
+// Continue from demosaiced CV_32FC4 camera RGB through inverse cam-mul, optional DNG warp,
+// and orientation. Shared by Neural success and Legacy paths.
+void FinishOpenClCameraRgb(opencl::OpenClImage& gpu_img, const float* cam_mul,
+                           const std::optional<dng::WarpRectilinear>& dng_warp,
+                           RawRuntimeColorContext& runtime_color_context, const int flip,
+                           DeferredOpenClLog& deferred_log) {
+  const auto stage_cam_mul_start = ProfileClock::now();
+  OpenCL::ApplyInverseCamMul(gpu_img, cam_mul);
+  LogProfileStep(deferred_log, "RAW OpenCL apply inverse cam mul", stage_cam_mul_start);
+
+  if (dng_warp.has_value()) {
+    const auto          stage_dng_warp_start = ProfileClock::now();
+    opencl::OpenClImage warped;
+    OpenCL::Geometry::WarpRectilinear(gpu_img, warped, *dng_warp);
+    gpu_img                                              = std::move(warped);
+    runtime_color_context.dng_warp_rectilinear_applied_ = true;
+    LogProfileStep(deferred_log, "RAW OpenCL DNG warp rectilinear", stage_dng_warp_start);
+  }
+
+  runtime_color_context.output_in_camera_space_ = true;
+  const auto stage_geo_start                     = ProfileClock::now();
+  ApplyOpenClGeometricCorrections(gpu_img, flip);
+  LogProfileStep(deferred_log, "RAW OpenCL geometric corrections", stage_geo_start);
+}
+
 }  // namespace
 
 auto RawProcessor::ProcessDirectRgbOpenCL() -> ImageBuffer {
@@ -118,61 +188,60 @@ auto RawProcessor::ProcessOpenCL() -> ImageBuffer {
   OpenCL::ToLinearRef(gpu_img, raw_processor_, cfa_pattern_);
   LogProfileStep(deferred_log, "RAW OpenCL to-linear", stage_linear_start);
 
-  if (cfa_pattern_.kind == RawCfaKind::Bayer2x2 && params_.highlights_reconstruct_) {
-    const auto stage_debayer_start = ProfileClock::now();
-    OpenCL::Bayer2x2ToRGB_RCD(gpu_img, cfa_pattern_.bayer_pattern);
-    LogProfileStep(deferred_log, "RAW OpenCL debayer", stage_debayer_start);
+  const RawDemosaicMethod demosaic_method =
+      detail::ResolveRawDemosaicMethod(params_, cfa_pattern_.kind);
 
-    const auto     stage_crop_start = ProfileClock::now();
-    const cv::Rect crop_rect        = detail::BuildRcdDecodeCropRect(
-        raw_data_.sizes, default_crop_, cv::Size(gpu_img.Width(), gpu_img.Height()),
-        params_.decode_res_);
-    CropOpenClImage(gpu_img, crop_rect);
-    LogProfileStep(deferred_log, "RAW OpenCL crop", stage_crop_start);
-
-    const auto stage_highlight_start = ProfileClock::now();
-    OpenCL::HighlightReconstruct(gpu_img, raw_processor_);
-    LogProfileStep(deferred_log, "RAW OpenCL highlight reconstruct", stage_highlight_start);
-  } else {
-    if (cfa_pattern_.kind == RawCfaKind::XTrans6x6) {
-      const int  passes             = params_.decode_res_ == DecodeRes::FULL ? 3 : 1;
-      const auto stage_xtrans_start = ProfileClock::now();
-      OpenCL::XTransToRGB_Ref(gpu_img, cfa_pattern_.xtrans_pattern, passes);
-      LogProfileStep(deferred_log, "RAW OpenCL xtrans interpolate", stage_xtrans_start);
-    } else {
-      const auto stage_debayer_start = ProfileClock::now();
-      OpenCL::Bayer2x2ToRGB_RCD(gpu_img, cfa_pattern_.bayer_pattern);
-      LogProfileStep(deferred_log, "RAW OpenCL debayer", stage_debayer_start);
+  if (demosaic_method == RawDemosaicMethod::NeuralEngine) {
+    // Match CUDA product sandwich: HLR-off clamps linear CFA before Neural preprocess.
+    // The monochrome linear buffer is never replaced until Neural commits RGBA, so Legacy
+    // soft-fail always reuses the same OpenCL CFA the path started with.
+    if (!params_.highlights_reconstruct_) {
+      const auto stage_clamp_start = ProfileClock::now();
+      OpenCL::Clamp01(gpu_img);
+      LogProfileStep(deferred_log, "RAW OpenCL clamp", stage_clamp_start);
     }
 
-    const auto     stage_crop_start = ProfileClock::now();
-    const cv::Size crop_size(gpu_img.Width(), gpu_img.Height());
-    const cv::Rect crop_rect = cfa_pattern_.kind == RawCfaKind::Bayer2x2
-                                   ? detail::BuildRcdDecodeCropRect(raw_data_.sizes, default_crop_,
-                                                                    crop_size, params_.decode_res_)
-                                   : detail::BuildDecodeCropRect(raw_data_.sizes, default_crop_,
-                                                                 crop_size, params_.decode_res_);
-    CropOpenClImage(gpu_img, crop_rect);
-    LogProfileStep(deferred_log, "RAW OpenCL crop", stage_crop_start);
+    const auto             stage_neural_start = ProfileClock::now();
+    const cv::Size         original_cfa_size(gpu_img.Width(), gpu_img.Height());
+    opencl::OpenClImage    neural_rgba;
+    OpenCL::OpenClNeuralDemosaicOptions neural_options;
+    const auto neural_result =
+        OpenCL::DemosaicWithNeuralEngine(gpu_img, cfa_pattern_, neural_rgba, neural_options);
+
+    if (neural_result.succeeded) {
+      LogProfileStep(deferred_log, "RAW OpenCL Neural Engine demosaic", stage_neural_start);
+
+      const detail::NeuralOutputGeometry geometry =
+          detail::MakeStudentTiledNeuralOutputGeometry(
+              neural_result.phase_shift_x, neural_result.phase_shift_y,
+              cv::Size(neural_result.aligned_width, neural_result.aligned_height));
+      const cv::Rect crop_rect = detail::BuildNeuralEngineDecodeCropRect(
+          raw_data_.sizes, default_crop_, original_cfa_size, params_.decode_res_, geometry);
+      CropOpenClImage(neural_rgba, crop_rect);
+
+      if (params_.highlights_reconstruct_) {
+        const auto stage_highlight_start = ProfileClock::now();
+        OpenCL::HighlightReconstruct(neural_rgba, raw_processor_);
+        LogProfileStep(deferred_log, "RAW OpenCL highlight reconstruct", stage_highlight_start);
+      }
+
+      gpu_img = std::move(neural_rgba);
+      FinishOpenClCameraRgb(gpu_img, raw_data_.color.cam_mul, dng_warp_rectilinear_,
+                            runtime_color_context_, raw_data_.sizes.flip, deferred_log);
+      PrintProfileMs(deferred_log, "RAW OpenCL FullFrame", ProfileClock::now() - full_frame_start);
+      deferred_log.Flush();
+      return {std::move(process_buffer_)};
+    }
+
+    // Soft-fail: discard partial Neural output and stay on OpenCL Legacy.
+    OpenCL::NoteOpenClNeuralLegacyFallbackForTest();
+    deferred_log.Add("RAW OpenCL Neural Engine unavailable; using Legacy: " + neural_result.error);
   }
 
-  const auto stage_cam_mul_start = ProfileClock::now();
-  OpenCL::ApplyInverseCamMul(gpu_img, raw_data_.color.cam_mul);
-  LogProfileStep(deferred_log, "RAW OpenCL apply inverse cam mul", stage_cam_mul_start);
-
-  if (dng_warp_rectilinear_.has_value()) {
-    const auto          stage_dng_warp_start = ProfileClock::now();
-    opencl::OpenClImage warped;
-    OpenCL::Geometry::WarpRectilinear(gpu_img, warped, *dng_warp_rectilinear_);
-    gpu_img                                              = std::move(warped);
-    runtime_color_context_.dng_warp_rectilinear_applied_ = true;
-    LogProfileStep(deferred_log, "RAW OpenCL DNG warp rectilinear", stage_dng_warp_start);
-  }
-
-  runtime_color_context_.output_in_camera_space_ = true;
-  const auto stage_geo_start                     = ProfileClock::now();
-  ApplyOpenClGeometricCorrections(gpu_img, raw_data_.sizes.flip);
-  LogProfileStep(deferred_log, "RAW OpenCL geometric corrections", stage_geo_start);
+  RunOpenClLegacyDemosaic(gpu_img, cfa_pattern_, params_, raw_processor_, raw_data_.sizes,
+                          default_crop_, deferred_log);
+  FinishOpenClCameraRgb(gpu_img, raw_data_.color.cam_mul, dng_warp_rectilinear_,
+                        runtime_color_context_, raw_data_.sizes.flip, deferred_log);
 
   PrintProfileMs(deferred_log, "RAW OpenCL FullFrame", ProfileClock::now() - full_frame_start);
   deferred_log.Flush();

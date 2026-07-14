@@ -379,6 +379,20 @@ if(ALCEDO_OPENCL_ENABLED)
   target_link_libraries(OpenClRawOpsTest PRIVATE GTest::gtest_main RawProcessorOp ${ALCEDO_TEST_OPENCV_MIN_DEPS})
   gtest_discover_tests(OpenClRawOpsTest TEST_PREFIX "OpenClRawOpsTest.")
 
+  # Phase 6: OpenCL Neural RAW routing + same-backend Legacy fallback.
+  add_executable(OpenClRawNeuralTest raw/opencl_raw_neural_test.cpp)
+  target_include_directories(OpenClRawNeuralTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(OpenClRawNeuralTest PRIVATE
+    GTest::gtest_main
+    RawProcessor
+    OpenClDemosaicNetEntry
+    ${ALCEDO_TEST_OPENCV_MIN_DEPS}
+  )
+  target_compile_definitions(OpenClRawNeuralTest PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+  )
+  gtest_discover_tests(OpenClRawNeuralTest TEST_PREFIX "OpenClRawNeuralTest.")
+
   add_executable(OpenCLRawPreview gui_pocs/opencl_raw_preview.cpp)
   target_include_directories(OpenCLRawPreview PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(OpenCLRawPreview PRIVATE RawProcessor Qt6::Widgets ${ALCEDO_TEST_OPENCV_MIN_DEPS})
@@ -1032,6 +1046,18 @@ if(ALCEDO_OPENCL_ENABLED)
   )
   gtest_discover_tests(OpenClDemosaicNetTest TEST_PREFIX "OpenClDemosaicNetTest.")
 
+  # Development full-frame OpenCL Neural wall-clock timing (not part of default ctest).
+  add_executable(OpenClDemosaicNetFullFrameTiming perf/opencl_demosaicnet_fullframe_timing.cpp)
+  target_include_directories(OpenClDemosaicNetFullFrameTiming PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(OpenClDemosaicNetFullFrameTiming PRIVATE
+    RawProcessor
+    OpenClDemosaicNetEntry
+    ${ALCEDO_TEST_OPENCV_MIN_DEPS}
+  )
+  target_compile_definitions(OpenClDemosaicNetFullFrameTiming PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+  )
+
   add_executable(OpenClFusedEditPipelineTest opencl/opencl_fused_edit_pipeline_test.cpp)
   target_include_directories(OpenClFusedEditPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(OpenClFusedEditPipelineTest
@@ -1246,6 +1272,7 @@ alcedo_assign_test_category(raw ALCEDO_BUILD_RAW_TESTS alcedo_tests_raw
   ColorTempCudaSanityTest
   RawProcessorCropTest
   OpenClRawOpsTest
+  OpenClRawNeuralTest
   MetalRawStagePreviewTest
   MetalFullPipelinePreviewTest
 )

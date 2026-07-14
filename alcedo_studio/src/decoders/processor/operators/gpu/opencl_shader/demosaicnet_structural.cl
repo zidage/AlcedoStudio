@@ -378,3 +378,49 @@ __kernel void demosaicnet_assemble_rgb_tile(__global const float* restrict tile,
   canvas[dst_index + 1] = tile[src_index + 1];
   canvas[dst_index + 2] = tile[src_index + 2];
 }
+
+// Product boundary: clamp linear CFA samples to [0,1] when highlight reconstruction is off.
+__kernel void demosaicnet_clamp01(__global float* restrict data, const int count) {
+  const int i = get_global_id(0);
+  if (i >= count) {
+    return;
+  }
+  const float v = data[i];
+  data[i]       = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
+}
+
+// Product boundary: monochrome linear CFA -> sparse HWC3 mosaic at the training origin.
+// rgb_fc is a row-major period×period table of RGB color indices (0/1/2).
+__kernel void demosaicnet_pack_cfa_mono_to_hwc3(__global const float* restrict mono,
+                                                __global float* restrict hwc3, const int width,
+                                                const int height, const int period,
+                                                __global const int* restrict rgb_fc) {
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+  if (x >= width || y >= height || period <= 0) {
+    return;
+  }
+  const int color = rgb_fc[(y % period) * period + (x % period)];
+  const float v   = mono[y * width + x];
+  const int base  = (y * width + x) * 3;
+  hwc3[base + 0]  = (color == 0) ? v : 0.0f;
+  hwc3[base + 1]  = (color == 1) ? v : 0.0f;
+  hwc3[base + 2]  = (color == 2) ? v : 0.0f;
+}
+
+// Product continuation: HWC3 camera RGB -> HWC4 RGBA with alpha = 1.
+__kernel void demosaicnet_rgb3_to_rgba4(__global const float* restrict rgb,
+                                        __global float* restrict rgba, const int width,
+                                        const int height) {
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+  if (x >= width || y >= height) {
+    return;
+  }
+  const int src = (y * width + x) * 3;
+  const int dst = (y * width + x) * 4;
+  rgba[dst + 0] = rgb[src + 0];
+  rgba[dst + 1] = rgb[src + 1];
+  rgba[dst + 2] = rgb[src + 2];
+  rgba[dst + 3] = 1.0f;
+}

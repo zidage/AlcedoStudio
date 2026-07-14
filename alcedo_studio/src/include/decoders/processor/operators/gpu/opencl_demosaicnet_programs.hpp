@@ -31,6 +31,10 @@ inline constexpr const char* kFormPostInputC6KernelName      = "demosaicnet_form
 inline constexpr const char* kOutputRgbHwcKernelName         = "demosaicnet_output_rgb_hwc";
 inline constexpr const char* kOutputGammaHwcKernelName       = "demosaicnet_output_gamma_hwc";
 inline constexpr const char* kAssembleRgbTileKernelName      = "demosaicnet_assemble_rgb_tile";
+// Product RAW boundary helpers (Phase 6 routing).
+inline constexpr const char* kClamp01KernelName              = "demosaicnet_clamp01";
+inline constexpr const char* kPackCfaMonoToHwc3KernelName    = "demosaicnet_pack_cfa_mono_to_hwc3";
+inline constexpr const char* kRgb3ToRgba4KernelName          = "demosaicnet_rgb3_to_rgba4";
 
 // Conservative default build options. Offline tuning (Phase 7) may replace the
 // CLBlast-style WGD/MDIMCD/... constants; channel-block counts stay variant-fixed.
