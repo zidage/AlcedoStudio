@@ -498,6 +498,7 @@ if(ALCEDO_OPENCL_ENABLED)
     def_library(OpenClNn
         SOURCES
             opencl/nn/device_buffer.cpp
+            opencl/nn/activation_slots.cpp
             opencl/nn/workspace.cpp
             opencl/nn/convolution.cpp
             opencl/nn/demosaicnet_stage_profiler.cpp

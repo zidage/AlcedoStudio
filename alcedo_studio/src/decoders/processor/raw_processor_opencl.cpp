@@ -203,10 +203,13 @@ auto RawProcessor::ProcessOpenCL() -> ImageBuffer {
 
     const auto             stage_neural_start = ProfileClock::now();
     const cv::Size         original_cfa_size(gpu_img.Width(), gpu_img.Height());
-    opencl::OpenClImage    neural_rgba;
+    // Reusable aligned-RGBA staging across ProcessOpenCL calls (product path is
+    // single-active-decode). Avoids a fresh clCreateBuffer every hot decode for the
+    // full aligned Neural canvas; crop still materialises product-owned decode size.
+    static opencl::OpenClImage neural_rgba_staging;
     OpenCL::OpenClNeuralDemosaicOptions neural_options;
-    const auto neural_result =
-        OpenCL::DemosaicWithNeuralEngine(gpu_img, cfa_pattern_, neural_rgba, neural_options);
+    const auto neural_result = OpenCL::DemosaicWithNeuralEngine(
+        gpu_img, cfa_pattern_, neural_rgba_staging, neural_options);
 
     if (neural_result.succeeded) {
       LogProfileStep(deferred_log, "RAW OpenCL Neural Engine demosaic", stage_neural_start);
@@ -217,15 +220,16 @@ auto RawProcessor::ProcessOpenCL() -> ImageBuffer {
               cv::Size(neural_result.aligned_width, neural_result.aligned_height));
       const cv::Rect crop_rect = detail::BuildNeuralEngineDecodeCropRect(
           raw_data_.sizes, default_crop_, original_cfa_size, params_.decode_res_, geometry);
-      CropOpenClImage(neural_rgba, crop_rect);
+      // Crop into the process buffer (overwrites linear CFA after Neural commit).
+      // Staging keeps the full aligned canvas for the next hot decode.
+      OpenCL::Geometry::CropResize(neural_rgba_staging, gpu_img, crop_rect, crop_rect.size());
 
       if (params_.highlights_reconstruct_) {
         const auto stage_highlight_start = ProfileClock::now();
-        OpenCL::HighlightReconstruct(neural_rgba, raw_processor_);
+        OpenCL::HighlightReconstruct(gpu_img, raw_processor_);
         LogProfileStep(deferred_log, "RAW OpenCL highlight reconstruct", stage_highlight_start);
       }
 
-      gpu_img = std::move(neural_rgba);
       FinishOpenClCameraRgb(gpu_img, raw_data_.color.cam_mul, dng_warp_rectilinear_,
                             runtime_color_context_, raw_data_.sizes.flip, deferred_log);
       PrintProfileMs(deferred_log, "RAW OpenCL FullFrame", ProfileClock::now() - full_frame_start);

@@ -389,19 +389,30 @@ __kernel void demosaicnet_clamp01(__global float* restrict data, const int count
   data[i]       = v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f : v);
 }
 
-// Product boundary: monochrome linear CFA -> sparse HWC3 mosaic at the training origin.
-// rgb_fc is a row-major period×period table of RGB color indices (0/1/2).
+// Product boundary: monochrome linear CFA ROI -> sparse HWC3 mosaic at the training origin.
+// Reads a crop (crop_x, crop_y, width, height) from a full-frame mono plane of size
+// (src_width, src_height) so phase crop does not require a materialised intermediate.
+// rgb_fc is a row-major period×period table of RGB color indices (0/1/2) in the
+// aligned (training-origin) lattice.
 __kernel void demosaicnet_pack_cfa_mono_to_hwc3(__global const float* restrict mono,
-                                                __global float* restrict hwc3, const int width,
-                                                const int height, const int period,
+                                                __global float* restrict hwc3,
+                                                const int src_width, const int src_height,
+                                                const int crop_x, const int crop_y,
+                                                const int width, const int height,
+                                                const int period,
                                                 __global const int* restrict rgb_fc) {
   const int x = get_global_id(0);
   const int y = get_global_id(1);
   if (x >= width || y >= height || period <= 0) {
     return;
   }
+  const int sx = crop_x + x;
+  const int sy = crop_y + y;
+  if (sx < 0 || sy < 0 || sx >= src_width || sy >= src_height) {
+    return;
+  }
   const int color = rgb_fc[(y % period) * period + (x % period)];
-  const float v   = mono[y * width + x];
+  const float v   = mono[sy * src_width + sx];
   const int base  = (y * width + x) * 3;
   hwc3[base + 0]  = (color == 0) ? v : 0.0f;
   hwc3[base + 1]  = (color == 1) ? v : 0.0f;

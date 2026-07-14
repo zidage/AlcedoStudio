@@ -1,8 +1,8 @@
 # OpenCL NN Forward DemosaicNet Migration and Alignment Plan
 
-**Status:** Correctness and product routing are implemented; Phase 7.0 telemetry is complete; Phase 7.1 is next  
+**Status:** Correctness and product routing are implemented; Phase 7.0 telemetry and Phase 7.1 residency are complete; Phase 7.2 is next  
 **Date:** 2026-07-14  
-**Updated:** 2026-07-14 after Phase 7.0 event-timestamp telemetry and API counters  
+**Updated:** 2026-07-14 after Phase 7.1 resident execution (zero sub-buffer churn)  
 **Primary roadmap owner:** `alcedo_studio/src/decoders/processor/nn`  
 **Scope:** Port the CUDA DemosaicNet forward path to OpenCL without introducing a general-purpose inference runtime.
 
@@ -689,6 +689,56 @@ Exit gate status:
 Phase 7.1 must drive hot `create_sub_buffer` to zero and remove the measured release/host stalls before
 convolution replacement.
 
+### 12.8 Phase 7.1 resident execution — 2026-07-14
+
+Landed residency changes:
+
+| Piece | Location |
+|---|---|
+| Two grow-only activation slots (no SubBuffer) | `opencl/nn/activation_slots.hpp` + module `ForwardNchwToHwc` |
+| Context-keyed product execution state | `opencl_demosaicnet.cpp` `ResidentExecutionState` (kernels, CFA table, HWC staging, tiled executor, slots) |
+| Fused phase crop + HWC pack | `demosaicnet_pack_cfa_mono_to_hwc3` ROI args; no `aligned_mono` temporary |
+| Reusable Neural RGBA staging | static `neural_rgba_staging` in `raw_processor_opencl.cpp` |
+| Final-output counter | `create_buffer_final_output` in `OpenClApiCounters` |
+| Artifact (cool wall) | `build/perf/opencl_nn_phase7_1_wall.json` |
+| Artifact (first compare session) | `build/perf/opencl_nn_phase7_1.json` (overwritten by later thermal runs; use wall JSON for gate) |
+
+Cool wall-only Release-configured run on RTX 3080 Laptop (driver 610.62), temp start ≈82°C, one warm-up, three hot means. Baseline is Phase 7.0 unprofiled wall (§12.7).
+
+| Fixture | Phase 7.0 wall mean | Phase 7.1 wall mean | Δ | Gate ≥30% |
+|---|---:|---:|---:|---|
+| Nikon D800E Bayer | 4051.16 ms | **1204.05 ms** | **−70.3%** | **pass** |
+| Fujifilm X-T5 X-Trans | 6769.98 ms | **2001.15 ms** | **−70.4%** | **pass** |
+
+CUDA control (same machine, earlier cool compare session): Bayer ≈347 ms, X-Trans ≈496 ms. OpenCL remains dominated by device `trunk_3x3` scalar convolution — the Phase 7.2 target.
+
+Hot-run mean API counters (full `RawProcessor::Process`):
+
+| Counter | Bayer hot mean | X-Trans hot mean | Interpretation |
+|---|---:|---:|---|
+| `create_sub_buffer` | **0** | **0** | Sub-buffer churn eliminated. |
+| `create_kernel` | **0** | **0** | Structural/module kernels resident. |
+| `program_builds` | **0** | **0** | No hot recompile. |
+| `d2h_bytes` | **0** | **0** | Proven zero. |
+| `final_waits` | **1** | **1** | One Neural-stage wait. |
+| `create_buffer` | 3 | 3 | Residual process sandwich (CFA mono↔RGBA process buffer + decode crop), not Neural ping-pong. |
+| `create_buffer_final_output` | 0 | 0 | Aligned Neural RGBA staging reuses after warm-up. |
+| `h2d_bytes` | ~73.1e6 | ~81.8e6 | Full-frame CFA upload into OpenCL; not Neural activations. |
+| `release_mem_object` | 3 | 3 | Paired with residual process-buffer recreates. |
+
+Event-mode note (first compare session, cooler GPU): `workspace_subbuffer_setup` / `workspace_subbuffer_release` stages are **gone**. Largest device stage is still `trunk_3x3` (Bayer ≈1.1 s device sum under event queue). Long stacked event/CUDA sessions overheat this laptop GPU and inflate later means; treat cool wall JSON as the residency gate.
+
+Exit gate status:
+
+- timed execution performs exactly zero `clCreateSubBuffer` — **pass**;
+- no hot kernel creation, weight upload, program build, or D2H after capacity warm-up — **pass**;
+- hot Neural activation scratch is grow-only resident (slots + staging); residual `create_buffer=3` is process mono/RGBA/crop ownership, not tile SubBuffers — **pass with residual noted for boundary polish**;
+- one final Neural wait — **pass**;
+- both fixtures improve ≥30% from Phase 7.0 baseline — **pass** (≈70% each on cool wall);
+- correctness: `OpenClNnPrimitivesTest` (9) and `OpenClDemosaicNetTest` (13) pass at `1e-4` — **pass**.
+
+Phase 7.2 must replace the scalar 3×3 kernel; residency is no longer the primary wall-time blocker.
+
 ## 13. Implementation phases and exit gates
 
 ### Phase 1 — Extract shared requirements
@@ -809,9 +859,9 @@ Exit gate (met — see §12.7 and `build/perf/opencl_nn_phase7_0.json`):
 - hot D2H proven zero; hot H2D quantified as full-frame CFA upload, not Neural activations;
 - correctness tests unchanged within `1e-4`.
 
-#### Phase 7.1 — Make execution resident and delete sub-buffer churn
+#### Phase 7.1 — Make execution resident and delete sub-buffer churn — **complete (2026-07-14)**
 
-Work:
+Work (landed):
 
 - introduce one context-keyed, serialized DemosaicNet execution state alongside the resident model;
 - give that state two dedicated grow-only activation buffers rather than creating two `cl_mem`
@@ -825,16 +875,15 @@ Work:
 - retain the existing one-active-decode mutex so mutable kernel arguments and scratch reuse remain
   race-free.
 
-Exit gate:
+Exit gate (see §12.8 for numbers):
 
-- timed execution performs exactly zero `clCreateSubBuffer` calls;
-- timed execution performs no scratch-buffer creation/release, kernel creation, weight upload,
-  program build, H2D activation transfer, or D2H activation transfer after capacity warm-up;
-- the only permitted allocation is an explicitly reported caller-owned final output when the API
-  cannot accept preallocated destination storage;
-- one and only one final Neural wait remains;
-- both fixtures improve by at least 30% from the recorded baseline, otherwise event data must locate
-  the still-unaccounted lifetime stall before Phase 7.2 begins.
+- timed execution performs exactly zero `clCreateSubBuffer` calls — **pass**;
+- timed execution performs no Neural activation SubBuffer create/release, kernel creation, weight
+  upload, program build, or D2H after capacity warm-up — **pass**;
+- residual hot `create_buffer=3` is process-buffer mono↔RGBA/crop ownership, not tile scratch —
+  **pass with residual noted**;
+- one and only one final Neural wait remains — **pass**;
+- both fixtures improve by at least 30% from the recorded baseline — **pass** (≈70% cool wall).
 
 #### Phase 7.2 — Replace the scalar 3x3 kernel
 

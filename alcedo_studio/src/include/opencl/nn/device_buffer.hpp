@@ -18,9 +18,9 @@ namespace alcedo::opencl::nn {
 
 // Move-only owning cl_mem buffer with explicit byte capacity.
 //
-// Primary use: long-lived weight buffers and test fixtures. Intermediate
-// activations should prefer WorkspacePool so steady-state forward does not
-// call clCreateBuffer.
+// Primary use: long-lived weight buffers, fixed activation slots, and fixtures.
+// DemosaicNet product activations use two dedicated grow-only DeviceBuffers
+// (ActivationSlots); generic WorkspacePool remains for primitives/tests.
 //
 // Element type is FP32 for the DemosaicNet milestone.
 class DeviceBuffer {
@@ -101,6 +101,10 @@ class DeviceBuffer {
 
   // Zero the allocated region.
   void FillZero(cl_command_queue queue = nullptr, bool blocking = true);
+
+  // Grow-only capacity ensure. No-op when `bytes <= byte_capacity()`.
+  // Reallocates (and releases the previous object) only when capacity must grow.
+  void EnsureBytes(std::size_t bytes);
 
   void Reset() noexcept;
 

@@ -12,8 +12,8 @@
 
 #include "decoders/processor/nn/demosaicnet_specs.hpp"
 #include "nn/safetensors.hpp"
+#include "opencl/nn/activation_slots.hpp"
 #include "opencl/nn/device_buffer.hpp"
-#include "opencl/nn/workspace.hpp"
 #include "opencl/opencl_context.hpp"
 
 namespace alcedo {
@@ -23,7 +23,8 @@ namespace alcedo {
 //
 // Input:  contiguous NCHW f32 mosaic [N, 3, H, W] on device (batch N==1).
 // Output: contiguous HWC RGB f32 on device, size OutputHeight × OutputWidth.
-// Weights immutable after LoadWeights. Caller owns WorkspacePool.
+// Weights immutable after LoadWeights. Caller owns ActivationSlots (two grow-only
+// ping-pong buffers); the hot path never creates OpenCL sub-buffers.
 class OpenClBayerDemosaicNet {
  public:
   using Spec = DemosaicNetBayerSpec;
@@ -62,8 +63,8 @@ class OpenClBayerDemosaicNet {
   // Enqueues full fixed-network forward on the in-order queue. Does not clFinish.
   // `output_rgb_hwc` must hold OutputHeight(H,W) * OutputWidth(W,H) * 3 floats.
   void ForwardNchwToHwc(cl_mem input_nchw, int batch, int height, int width, cl_mem output_rgb_hwc,
-                        opencl::nn::WorkspacePool& workspace, cl_command_queue queue = nullptr,
-                        bool apply_gamma_decode = true) const;
+                        opencl::nn::ActivationSlots& activation_slots,
+                        cl_command_queue queue = nullptr, bool apply_gamma_decode = true) const;
 
   [[nodiscard]] static auto NaturalOutputHeight(int input_h) -> int {
     return Spec::NaturalOutputHeight(input_h);
@@ -84,8 +85,15 @@ class OpenClBayerDemosaicNet {
     return Spec::OutputWidth(input_w, input_h);
   }
 
-  [[nodiscard]] static auto EstimateWorkspaceBytes(int input_h, int input_w, int batch = 1)
+  // Bytes required for each of the two ping-pong activation slots.
+  [[nodiscard]] static auto EstimateActivationSlotBytes(int input_h, int input_w, int batch = 1)
       -> std::size_t;
+
+  // Total capacity for both slots (2 × EstimateActivationSlotBytes).
+  [[nodiscard]] static auto EstimateWorkspaceBytes(int input_h, int input_w, int batch = 1)
+      -> std::size_t {
+    return 2 * EstimateActivationSlotBytes(input_h, input_w, batch);
+  }
 
   [[nodiscard]] auto ResidentWeightBytes() const -> std::size_t;
 
@@ -134,8 +142,8 @@ class OpenClXTransDemosaicNet {
   [[nodiscard]] auto weights_loaded() const -> bool;
 
   void ForwardNchwToHwc(cl_mem input_nchw, int batch, int height, int width, cl_mem output_rgb_hwc,
-                        opencl::nn::WorkspacePool& workspace, cl_command_queue queue = nullptr,
-                        bool apply_gamma_decode = true) const;
+                        opencl::nn::ActivationSlots& activation_slots,
+                        cl_command_queue queue = nullptr, bool apply_gamma_decode = true) const;
 
   [[nodiscard]] static auto NaturalOutputHeight(int input_h) -> int {
     return Spec::NaturalOutputHeight(input_h);
@@ -156,8 +164,13 @@ class OpenClXTransDemosaicNet {
     return Spec::OutputWidth(input_w, input_h);
   }
 
-  [[nodiscard]] static auto EstimateWorkspaceBytes(int input_h, int input_w, int batch = 1)
+  [[nodiscard]] static auto EstimateActivationSlotBytes(int input_h, int input_w, int batch = 1)
       -> std::size_t;
+
+  [[nodiscard]] static auto EstimateWorkspaceBytes(int input_h, int input_w, int batch = 1)
+      -> std::size_t {
+    return 2 * EstimateActivationSlotBytes(input_h, input_w, batch);
+  }
 
   [[nodiscard]] auto ResidentWeightBytes() const -> std::size_t;
 

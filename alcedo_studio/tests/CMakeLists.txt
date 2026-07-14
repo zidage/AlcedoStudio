@@ -1049,7 +1049,8 @@ if(ALCEDO_OPENCL_ENABLED)
   # Development full-frame OpenCL Neural telemetry harness (Phase 7.0+; not default ctest).
   # Authoritative timings: Release build.
   #   cmd /c scripts\msvc_env.cmd --build --preset win_release --target OpenClDemosaicNetFullFrameTiming --parallel 4
-  #   build\release\alcedo_studio\tests\OpenClDemosaicNetFullFrameTiming.exe --compare --cuda-control --json build/perf/opencl_nn_phase7_0.json
+  #   build\release\alcedo_studio\tests\OpenClDemosaicNetFullFrameTiming.exe --wall --json build/perf/opencl_nn_phase7_1_wall.json
+  #   build\release\alcedo_studio\tests\OpenClDemosaicNetFullFrameTiming.exe --compare --event-profile --cuda-control --json build/perf/opencl_nn_phase7_1.json
   add_executable(OpenClDemosaicNetFullFrameTiming perf/opencl_demosaicnet_fullframe_timing.cpp)
   target_include_directories(OpenClDemosaicNetFullFrameTiming PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(OpenClDemosaicNetFullFrameTiming PRIVATE

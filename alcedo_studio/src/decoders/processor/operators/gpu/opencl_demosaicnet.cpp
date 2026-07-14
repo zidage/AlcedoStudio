@@ -6,9 +6,11 @@
 
 #include "decoders/processor/operators/gpu/opencl_demosaicnet.hpp"
 
+#include <algorithm>
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <opencv2/core.hpp>
@@ -18,11 +20,11 @@
 #include "decoders/processor/nn/opencl_demosaicnet_module.hpp"
 #include "decoders/processor/nn/opencl_demosaicnet_tiled.hpp"
 #include "decoders/processor/operators/gpu/opencl_demosaicnet_programs.hpp"
+#include "opencl/nn/activation_slots.hpp"
 #include "opencl/nn/common.hpp"
 #include "opencl/nn/convolution.hpp"
 #include "opencl/nn/demosaicnet_stage_profiler.hpp"
 #include "opencl/nn/device_buffer.hpp"
-#include "opencl/nn/workspace.hpp"
 #include "opencl/opencl_api_counters.hpp"
 #include "opencl/opencl_backend_program_registry.hpp"
 #include "opencl/opencl_context.hpp"
@@ -31,15 +33,15 @@
 namespace alcedo::OpenCL {
 namespace {
 
-// One active Neural decode: mutable cl_kernel arguments and the grow-only workspace
-// are shared on the single in-order queue. Product RAW processing is already serialized;
+// One active Neural decode: mutable cl_kernel arguments and resident scratch are
+// shared on the single in-order queue. Product RAW processing is already serialized;
 // this mutex covers harness/test re-entry as well.
 std::mutex g_neural_decode_mutex;
 
-std::uint64_t g_success_count          = 0;
-std::uint64_t g_fallback_ready_count   = 0;
-std::uint64_t g_host_wait_count        = 0;
-std::uint64_t g_legacy_fallback_count  = 0;
+std::uint64_t g_success_count         = 0;
+std::uint64_t g_fallback_ready_count  = 0;
+std::uint64_t g_host_wait_count       = 0;
+std::uint64_t g_legacy_fallback_count = 0;
 
 class KernelHolder {
  public:
@@ -66,8 +68,8 @@ class KernelHolder {
   }
 
   [[nodiscard]] auto get() const -> cl_kernel { return kernel_; }
+  [[nodiscard]] auto empty() const -> bool { return kernel_ == nullptr; }
 
- private:
   void Reset() noexcept {
     if (kernel_ != nullptr) {
       clReleaseKernel(kernel_);
@@ -75,6 +77,8 @@ class KernelHolder {
       kernel_ = nullptr;
     }
   }
+
+ private:
   cl_kernel kernel_ = nullptr;
 };
 
@@ -88,65 +92,134 @@ auto StructuralProgram() -> cl_program {
   return OpenClProgramLibrary::Instance().GetProgram(DemosaicNet::kStructuralProgramName);
 }
 
-void EnqueueClamp01(cl_mem buffer, const int count, cl_command_queue queue) {
+// Context-keyed resident execution state for the product Neural path.
+// Retained across hot decodes under g_neural_decode_mutex:
+//   structural kernels, CFA lookup, full-frame HWC staging, tiled executor
+//   (tile buffers + pack/assemble kernels), and two activation slots.
+struct ResidentExecutionState {
+  cl_context context = nullptr;
+
+  KernelHolder pack_cfa;
+  KernelHolder clamp01;
+  KernelHolder rgb_to_rgba;
+
+  opencl::nn::DeviceBuffer cfa_table;
+  int                      cfa_period = -1;
+  std::vector<int>         cfa_host;
+
+  opencl::nn::DeviceBuffer mosaic_hwc;
+  opencl::nn::DeviceBuffer rgb_hwc;
+
+  OpenClDemosaicNetTiledExecutor executor;
+  opencl::nn::ActivationSlots    activation_slots;
+
+  void Reset() {
+    pack_cfa.Reset();
+    clamp01.Reset();
+    rgb_to_rgba.Reset();
+    cfa_table.Reset();
+    cfa_period = -1;
+    cfa_host.clear();
+    mosaic_hwc.Reset();
+    rgb_hwc.Reset();
+    executor         = OpenClDemosaicNetTiledExecutor{};
+    activation_slots = opencl::nn::ActivationSlots{};
+    context          = nullptr;
+  }
+
+  void EnsureForContext(OpenClContext& ctx) {
+    const cl_context current = ctx.Context();
+    if (context != nullptr && context != current) {
+      Reset();
+    }
+    context = current;
+    if (pack_cfa.empty()) {
+      const cl_program program = StructuralProgram();
+      pack_cfa.Create(program, DemosaicNet::kPackCfaMonoToHwc3KernelName);
+      clamp01.Create(program, DemosaicNet::kClamp01KernelName);
+      rgb_to_rgba.Create(program, DemosaicNet::kRgb3ToRgba4KernelName);
+    }
+  }
+
+  void EnsureCfaTable(const int period, const std::vector<int>& rgb_fc, cl_command_queue queue) {
+    if (period <= 0) {
+      throw std::runtime_error("OpenCL Neural Engine: invalid CFA period");
+    }
+    const std::size_t need = static_cast<std::size_t>(period) * period;
+    if (rgb_fc.size() != need) {
+      throw std::runtime_error("OpenCL Neural Engine: CFA table size mismatch");
+    }
+    const bool same = cfa_period == period && cfa_host.size() == need &&
+                      std::equal(cfa_host.begin(), cfa_host.end(), rgb_fc.begin());
+    if (same && !cfa_table.empty()) {
+      return;
+    }
+    cfa_table.EnsureBytes(need * sizeof(int));
+    cfa_table.UploadBytes(rgb_fc.data(), need * sizeof(int), queue, /*blocking=*/true);
+    cfa_period = period;
+    cfa_host   = rgb_fc;
+  }
+
+  void EnsureStagingFloats(const std::size_t hwc3_floats) {
+    mosaic_hwc.EnsureBytes(hwc3_floats * sizeof(float));
+    rgb_hwc.EnsureBytes(hwc3_floats * sizeof(float));
+  }
+};
+
+auto ResidentState() -> ResidentExecutionState& {
+  static ResidentExecutionState state;
+  return state;
+}
+
+void EnqueueClamp01(ResidentExecutionState& state, cl_mem buffer, const int count,
+                    cl_command_queue queue) {
   if (count <= 0) {
     return;
   }
-  KernelHolder kernel;
-  kernel.Create(StructuralProgram(), DemosaicNet::kClamp01KernelName);
-  SetArg(kernel.get(), 0, buffer, "clamp01 arg0");
-  SetArg(kernel.get(), 1, count, "clamp01 arg1");
-  const size_t               global = static_cast<size_t>(count);
+  SetArg(state.clamp01.get(), 0, buffer, "clamp01 arg0");
+  SetArg(state.clamp01.get(), 1, count, "clamp01 arg1");
+  const size_t                 global = static_cast<size_t>(count);
   opencl::nn::ScopedStageEvent stage_event;
-  opencl::nn::CheckOpenCl(clEnqueueNDRangeKernel(queue, kernel.get(), 1, nullptr, &global, nullptr,
-                                                 0, nullptr, stage_event.out()),
+  opencl::nn::CheckOpenCl(clEnqueueNDRangeKernel(queue, state.clamp01.get(), 1, nullptr, &global,
+                                                 nullptr, 0, nullptr, stage_event.out()),
                           "clamp01 enqueue");
   ++opencl::nn::GetDispatchInstrumentation().enqueue_count;
   NoteOpenClEnqueueNdRange();
 }
 
-void EnqueuePackMonoToHwc3(cl_mem mono, cl_mem hwc3, int width, int height, int period,
-                           const int* rgb_fc, cl_command_queue queue) {
-  KernelHolder kernel;
-  kernel.Create(StructuralProgram(), DemosaicNet::kPackCfaMonoToHwc3KernelName);
-
-  const std::size_t table_bytes = static_cast<std::size_t>(period) * period * sizeof(int);
-  cl_int            err         = CL_SUCCESS;
-  cl_mem table = clCreateBuffer(OpenClContext::Instance().Context(),
-                                CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, table_bytes,
-                                const_cast<int*>(rgb_fc), &err);
-  opencl::nn::CheckOpenCl(err, "pack mono table buffer");
-  NoteOpenClCreateBuffer();
-  NoteOpenClH2DBytes(static_cast<std::uint64_t>(table_bytes));
-
-  SetArg(kernel.get(), 0, mono, "pack mono arg0");
-  SetArg(kernel.get(), 1, hwc3, "pack mono arg1");
-  SetArg(kernel.get(), 2, width, "pack mono arg2");
-  SetArg(kernel.get(), 3, height, "pack mono arg3");
-  SetArg(kernel.get(), 4, period, "pack mono arg4");
-  SetArg(kernel.get(), 5, table, "pack mono arg5");
-  const size_t               global[2] = {static_cast<size_t>(width), static_cast<size_t>(height)};
+void EnqueuePackMonoRoiToHwc3(ResidentExecutionState& state, cl_mem mono, cl_mem hwc3,
+                              int src_width, int src_height, int crop_x, int crop_y, int width,
+                              int height, int period, cl_command_queue queue) {
+  SetArg(state.pack_cfa.get(), 0, mono, "pack mono arg0");
+  SetArg(state.pack_cfa.get(), 1, hwc3, "pack mono arg1");
+  SetArg(state.pack_cfa.get(), 2, src_width, "pack mono arg2");
+  SetArg(state.pack_cfa.get(), 3, src_height, "pack mono arg3");
+  SetArg(state.pack_cfa.get(), 4, crop_x, "pack mono arg4");
+  SetArg(state.pack_cfa.get(), 5, crop_y, "pack mono arg5");
+  SetArg(state.pack_cfa.get(), 6, width, "pack mono arg6");
+  SetArg(state.pack_cfa.get(), 7, height, "pack mono arg7");
+  SetArg(state.pack_cfa.get(), 8, period, "pack mono arg8");
+  cl_mem table = state.cfa_table.get();
+  SetArg(state.pack_cfa.get(), 9, table, "pack mono arg9");
+  const size_t                 global[2] = {static_cast<size_t>(width), static_cast<size_t>(height)};
   opencl::nn::ScopedStageEvent stage_event;
-  err = clEnqueueNDRangeKernel(queue, kernel.get(), 2, nullptr, global, nullptr, 0, nullptr,
-                               stage_event.out());
-  clReleaseMemObject(table);
-  NoteOpenClReleaseMemObject();
-  opencl::nn::CheckOpenCl(err, "pack mono enqueue");
+  opencl::nn::CheckOpenCl(clEnqueueNDRangeKernel(queue, state.pack_cfa.get(), 2, nullptr, global,
+                                                 nullptr, 0, nullptr, stage_event.out()),
+                          "pack mono enqueue");
   ++opencl::nn::GetDispatchInstrumentation().enqueue_count;
   NoteOpenClEnqueueNdRange();
 }
 
-void EnqueueRgb3ToRgba4(cl_mem rgb, cl_mem rgba, int width, int height, cl_command_queue queue) {
-  KernelHolder kernel;
-  kernel.Create(StructuralProgram(), DemosaicNet::kRgb3ToRgba4KernelName);
-  SetArg(kernel.get(), 0, rgb, "rgb2rgba arg0");
-  SetArg(kernel.get(), 1, rgba, "rgb2rgba arg1");
-  SetArg(kernel.get(), 2, width, "rgb2rgba arg2");
-  SetArg(kernel.get(), 3, height, "rgb2rgba arg3");
-  const size_t               global[2] = {static_cast<size_t>(width), static_cast<size_t>(height)};
+void EnqueueRgb3ToRgba4(ResidentExecutionState& state, cl_mem rgb, cl_mem rgba, int width,
+                        int height, cl_command_queue queue) {
+  SetArg(state.rgb_to_rgba.get(), 0, rgb, "rgb2rgba arg0");
+  SetArg(state.rgb_to_rgba.get(), 1, rgba, "rgb2rgba arg1");
+  SetArg(state.rgb_to_rgba.get(), 2, width, "rgb2rgba arg2");
+  SetArg(state.rgb_to_rgba.get(), 3, height, "rgb2rgba arg3");
+  const size_t                 global[2] = {static_cast<size_t>(width), static_cast<size_t>(height)};
   opencl::nn::ScopedStageEvent stage_event;
-  opencl::nn::CheckOpenCl(clEnqueueNDRangeKernel(queue, kernel.get(), 2, nullptr, global, nullptr, 0,
-                                                 nullptr, stage_event.out()),
+  opencl::nn::CheckOpenCl(clEnqueueNDRangeKernel(queue, state.rgb_to_rgba.get(), 2, nullptr, global,
+                                                 nullptr, 0, nullptr, stage_event.out()),
                           "rgb2rgba enqueue");
   ++opencl::nn::GetDispatchInstrumentation().enqueue_count;
   NoteOpenClEnqueueNdRange();
@@ -176,12 +249,12 @@ void Clamp01(opencl::OpenClImage& image) {
   if (!context.IsInitialized()) {
     context.Initialize();
   }
+  std::lock_guard<std::mutex> lock(g_neural_decode_mutex);
+  auto&                       state = ResidentState();
+  state.EnsureForContext(context);
   const int channels = CV_MAT_CN(image.Type());
   const int count    = image.Width() * image.Height() * channels;
-  EnqueueClamp01(image.Buffer(), count, context.Queue());
-  // Boundary helper for product path: wait so subsequent host decisions see clamped data
-  // only when callers require it. Product Neural path enqueues further work on the same
-  // in-order queue without requiring an intermediate wait; keep this non-blocking here.
+  EnqueueClamp01(state, image.Buffer(), count, context.Queue());
 }
 
 void ResetOpenClNeuralPathCountersForTest() {
@@ -233,6 +306,9 @@ auto DemosaicWithNeuralEngine(const opencl::OpenClImage& linear_cfa,
       profiler->Drain(queue);
     }
 
+    auto& state = ResidentState();
+    state.EnsureForContext(context);
+
     const int min_spatial = camera_pattern.kind == RawCfaKind::XTrans6x6
                                 ? DemosaicNetXTransSpec::kMinSpatial
                                 : DemosaicNetBayerSpec::kMinSpatial;
@@ -253,21 +329,20 @@ auto DemosaicWithNeuralEngine(const opencl::OpenClImage& linear_cfa,
     result.aligned_width  = geo->aligned_width;
     result.aligned_height = geo->aligned_height;
 
-    // Private monochrome ROI so the caller's linear CFA stays intact for Legacy fallback.
+    // Fused phase crop + HWC pack: no materialised aligned_mono temporary.
     opencl::nn::BeginDemosaicNetStage("phase_crop_and_hwc_pack");
-    opencl::OpenClImage aligned_mono;
-    linear_cfa.CropTo(aligned_mono,
-                      cv::Rect(geo->shift_sx, geo->shift_sy, geo->aligned_width, geo->aligned_height));
-
     const RawCfaPattern training = DemosaicNetTrainingPattern(camera_pattern.kind);
     std::vector<int>    rgb_fc;
     int                 period = 0;
     FillRgbFcTable(training, rgb_fc, period);
+    state.EnsureCfaTable(period, rgb_fc, queue);
 
-    opencl::nn::DeviceBuffer mosaic_hwc = opencl::nn::DeviceBuffer::Floats(
-        static_cast<std::size_t>(geo->aligned_width) * geo->aligned_height * 3);
-    EnqueuePackMonoToHwc3(aligned_mono.Buffer(), mosaic_hwc.get(), geo->aligned_width,
-                          geo->aligned_height, period, rgb_fc.data(), queue);
+    const std::size_t hwc3_floats =
+        static_cast<std::size_t>(geo->aligned_width) * geo->aligned_height * 3;
+    state.EnsureStagingFloats(hwc3_floats);
+    EnqueuePackMonoRoiToHwc3(state, linear_cfa.Buffer(), state.mosaic_hwc.get(), linear_cfa.Width(),
+                             linear_cfa.Height(), geo->shift_sx, geo->shift_sy, geo->aligned_width,
+                             geo->aligned_height, period, queue);
     opencl::nn::FinishDemosaicNetStage("phase_crop_and_hwc_pack", queue);
 
     if (options.injected_failure == OpenClNeuralInjectedFailure::ModelLoad) {
@@ -305,37 +380,37 @@ auto DemosaicWithNeuralEngine(const opencl::OpenClImage& linear_cfa,
       return result;
     }
 
-    opencl::nn::DeviceBuffer rgb_hwc = opencl::nn::DeviceBuffer::Floats(
-        static_cast<std::size_t>(geo->aligned_width) * geo->aligned_height * 3);
-
-    opencl::nn::WorkspacePool          workspace;
-    OpenClDemosaicNetTiledExecutor     executor;
-    OpenClDemosaicNetTiledDispatch     dispatch;
-    dispatch.input_aligned_hwc  = mosaic_hwc.get();
-    dispatch.output_aligned_hwc = rgb_hwc.get();
+    OpenClDemosaicNetTiledDispatch dispatch;
+    dispatch.input_aligned_hwc  = state.mosaic_hwc.get();
+    dispatch.output_aligned_hwc = state.rgb_hwc.get();
     dispatch.aligned_width      = geo->aligned_width;
     dispatch.aligned_height     = geo->aligned_height;
     dispatch.queue              = queue;
 
     OpenClDemosaicNetTiledResult tiled;
     if (variant == OpenClDemosaicNetVariant::Bayer) {
-      tiled = executor.EnqueueBayer(cache.Bayer(), workspace, dispatch);
+      tiled = state.executor.EnqueueBayer(cache.Bayer(), state.activation_slots, dispatch);
     } else {
-      tiled = executor.EnqueueXTrans(cache.XTrans(), workspace, dispatch);
+      tiled = state.executor.EnqueueXTrans(cache.XTrans(), state.activation_slots, dispatch);
     }
     result.tile_count = tiled.tile_count;
 
-    // Pack RGBA on the same in-order queue, then one Neural-stage wait.
+    // Caller-owned final RGBA: Create reuses capacity after warm-up for the same size.
     opencl::nn::BeginDemosaicNetStage("rgb_to_rgba");
-    opencl::OpenClImage rgba;
-    rgba.Create(geo->aligned_width, geo->aligned_height, CV_32FC4);
-    EnqueueRgb3ToRgba4(rgb_hwc.get(), rgba.Buffer(), geo->aligned_width, geo->aligned_height,
-                       queue);
+    const bool final_was_ready =
+        !rgb_rgba.Empty() && rgb_rgba.Width() == geo->aligned_width &&
+        rgb_rgba.Height() == geo->aligned_height && rgb_rgba.Type() == CV_32FC4;
+    rgb_rgba.Create(geo->aligned_width, geo->aligned_height, CV_32FC4);
+    if (!final_was_ready) {
+      // OpenClImage::Create already counted create_buffer; reclassify as final output.
+      NoteOpenClCreateBufferFinalOutput();
+    }
+    EnqueueRgb3ToRgba4(state, state.rgb_hwc.get(), rgb_rgba.Buffer(), geo->aligned_width,
+                       geo->aligned_height, queue);
     opencl::nn::FinishDemosaicNetStage("rgb_to_rgba", queue);
     opencl::nn::WaitQueue(queue);
     ++g_host_wait_count;
 
-    rgb_rgba         = std::move(rgba);
     result.succeeded = true;
     result.error.clear();
     ++g_success_count;

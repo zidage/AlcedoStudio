@@ -14,6 +14,7 @@
 
 #include "decoders/processor/neural_tile_jobs.hpp"
 #include "decoders/processor/operators/gpu/opencl_demosaicnet_programs.hpp"
+#include "opencl/nn/activation_slots.hpp"
 #include "opencl/nn/common.hpp"
 #include "opencl/nn/convolution.hpp"
 #include "opencl/nn/demosaicnet_stage_profiler.hpp"
@@ -151,7 +152,7 @@ namespace {
 
 template <typename Module>
 auto EnqueueTiles(OpenClDemosaicNetTiledExecutor::Impl& state, const Module& module,
-                  opencl::nn::WorkspacePool& workspace,
+                  opencl::nn::ActivationSlots& activation_slots,
                   const OpenClDemosaicNetTiledDispatch& dispatch,
                   const detail::NeuralTilePolicy& policy) -> OpenClDemosaicNetTiledResult {
   if (!module.weights_loaded()) {
@@ -205,7 +206,7 @@ auto EnqueueTiles(OpenClDemosaicNetTiledExecutor::Impl& state, const Module& mod
     opencl::nn::FinishDemosaicNetStage("tile_reflect_pack", queue);
 
     module.ForwardNchwToHwc(state.tile_input.get(), 1, tile_h, tile_w, state.tile_output.get(),
-                            workspace, queue, /*apply_gamma_decode=*/true);
+                            activation_slots, queue, /*apply_gamma_decode=*/true);
 
     const cl_int canvas_w = dispatch.aligned_width;
     const cl_int canvas_h = dispatch.aligned_height;
@@ -240,15 +241,17 @@ auto EnqueueTiles(OpenClDemosaicNetTiledExecutor::Impl& state, const Module& mod
 }  // namespace
 
 auto OpenClDemosaicNetTiledExecutor::EnqueueBayer(
-    const OpenClBayerDemosaicNet& module, opencl::nn::WorkspacePool& workspace,
+    const OpenClBayerDemosaicNet& module, opencl::nn::ActivationSlots& activation_slots,
     const OpenClDemosaicNetTiledDispatch& dispatch) -> OpenClDemosaicNetTiledResult {
-  return EnqueueTiles(*impl_, module, workspace, dispatch, detail::MakeBayerStudentTilePolicy());
+  return EnqueueTiles(*impl_, module, activation_slots, dispatch,
+                      detail::MakeBayerStudentTilePolicy());
 }
 
 auto OpenClDemosaicNetTiledExecutor::EnqueueXTrans(
-    const OpenClXTransDemosaicNet& module, opencl::nn::WorkspacePool& workspace,
+    const OpenClXTransDemosaicNet& module, opencl::nn::ActivationSlots& activation_slots,
     const OpenClDemosaicNetTiledDispatch& dispatch) -> OpenClDemosaicNetTiledResult {
-  return EnqueueTiles(*impl_, module, workspace, dispatch, detail::MakeXTransStudentTilePolicy());
+  return EnqueueTiles(*impl_, module, activation_slots, dispatch,
+                      detail::MakeXTransStudentTilePolicy());
 }
 
 }  // namespace alcedo

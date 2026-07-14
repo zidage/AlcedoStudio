@@ -106,6 +106,14 @@ void DeviceBuffer::FillZero(cl_command_queue queue, bool blocking) {
   }
 }
 
+void DeviceBuffer::EnsureBytes(const std::size_t bytes) {
+  if (bytes <= byte_capacity_) {
+    return;
+  }
+  DeviceBuffer grown(bytes);
+  *this = std::move(grown);
+}
+
 }  // namespace alcedo::opencl::nn
 
 #endif  // HAVE_OPENCL

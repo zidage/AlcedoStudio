@@ -15,6 +15,7 @@ namespace {
 std::atomic<bool> g_enabled{false};
 
 std::atomic<std::uint64_t> g_create_buffer{0};
+std::atomic<std::uint64_t> g_create_buffer_final_output{0};
 std::atomic<std::uint64_t> g_create_sub_buffer{0};
 std::atomic<std::uint64_t> g_create_kernel{0};
 std::atomic<std::uint64_t> g_release_mem_object{0};
@@ -46,6 +47,7 @@ void EnableOpenClApiCounters(const bool enabled) noexcept {
 
 void ResetOpenClApiCounters() noexcept {
   g_create_buffer.store(0, std::memory_order_relaxed);
+  g_create_buffer_final_output.store(0, std::memory_order_relaxed);
   g_create_sub_buffer.store(0, std::memory_order_relaxed);
   g_create_kernel.store(0, std::memory_order_relaxed);
   g_release_mem_object.store(0, std::memory_order_relaxed);
@@ -64,24 +66,27 @@ auto GetOpenClApiCounters() noexcept -> OpenClApiCounters {
 
 auto SnapshotOpenClApiCounters() noexcept -> OpenClApiCounters {
   OpenClApiCounters c;
-  c.create_buffer      = g_create_buffer.load(std::memory_order_relaxed);
-  c.create_sub_buffer  = g_create_sub_buffer.load(std::memory_order_relaxed);
-  c.create_kernel      = g_create_kernel.load(std::memory_order_relaxed);
-  c.release_mem_object = g_release_mem_object.load(std::memory_order_relaxed);
-  c.release_kernel     = g_release_kernel.load(std::memory_order_relaxed);
-  c.h2d_bytes          = g_h2d_bytes.load(std::memory_order_relaxed);
-  c.d2h_bytes          = g_d2h_bytes.load(std::memory_order_relaxed);
-  c.program_builds     = g_program_builds.load(std::memory_order_relaxed);
-  c.final_waits        = g_final_waits.load(std::memory_order_relaxed);
-  c.queue_finish       = g_queue_finish.load(std::memory_order_relaxed);
-  c.enqueue_ndrange    = g_enqueue_ndrange.load(std::memory_order_relaxed);
+  c.create_buffer              = g_create_buffer.load(std::memory_order_relaxed);
+  c.create_buffer_final_output = g_create_buffer_final_output.load(std::memory_order_relaxed);
+  c.create_sub_buffer          = g_create_sub_buffer.load(std::memory_order_relaxed);
+  c.create_kernel              = g_create_kernel.load(std::memory_order_relaxed);
+  c.release_mem_object         = g_release_mem_object.load(std::memory_order_relaxed);
+  c.release_kernel             = g_release_kernel.load(std::memory_order_relaxed);
+  c.h2d_bytes                  = g_h2d_bytes.load(std::memory_order_relaxed);
+  c.d2h_bytes                  = g_d2h_bytes.load(std::memory_order_relaxed);
+  c.program_builds             = g_program_builds.load(std::memory_order_relaxed);
+  c.final_waits                = g_final_waits.load(std::memory_order_relaxed);
+  c.queue_finish               = g_queue_finish.load(std::memory_order_relaxed);
+  c.enqueue_ndrange            = g_enqueue_ndrange.load(std::memory_order_relaxed);
   return c;
 }
 
 auto DeltaOpenClApiCounters(const OpenClApiCounters& before,
                             const OpenClApiCounters& after) noexcept -> OpenClApiCounters {
   OpenClApiCounters d;
-  d.create_buffer      = after.create_buffer - before.create_buffer;
+  d.create_buffer = after.create_buffer - before.create_buffer;
+  d.create_buffer_final_output =
+      after.create_buffer_final_output - before.create_buffer_final_output;
   d.create_sub_buffer  = after.create_sub_buffer - before.create_sub_buffer;
   d.create_kernel      = after.create_kernel - before.create_kernel;
   d.release_mem_object = after.release_mem_object - before.release_mem_object;
@@ -96,6 +101,7 @@ auto DeltaOpenClApiCounters(const OpenClApiCounters& before,
 }
 
 void NoteOpenClCreateBuffer() noexcept { Inc(g_create_buffer); }
+void NoteOpenClCreateBufferFinalOutput() noexcept { Inc(g_create_buffer_final_output); }
 void NoteOpenClCreateSubBuffer() noexcept { Inc(g_create_sub_buffer); }
 void NoteOpenClCreateKernel() noexcept { Inc(g_create_kernel); }
 void NoteOpenClReleaseMemObject() noexcept { Inc(g_release_mem_object); }
@@ -109,18 +115,20 @@ void NoteOpenClEnqueueNdRange() noexcept { Inc(g_enqueue_ndrange); }
 
 auto FormatOpenClApiCounters(const OpenClApiCounters& c) -> std::string {
   std::ostringstream oss;
-  oss << "create_buffer=" << c.create_buffer << " create_sub_buffer=" << c.create_sub_buffer
-      << " create_kernel=" << c.create_kernel << " release_mem=" << c.release_mem_object
-      << " release_kernel=" << c.release_kernel << " h2d_bytes=" << c.h2d_bytes
-      << " d2h_bytes=" << c.d2h_bytes << " program_builds=" << c.program_builds
-      << " final_waits=" << c.final_waits << " queue_finish=" << c.queue_finish
-      << " enqueue_ndrange=" << c.enqueue_ndrange;
+  oss << "create_buffer=" << c.create_buffer
+      << " create_buffer_final_output=" << c.create_buffer_final_output
+      << " create_sub_buffer=" << c.create_sub_buffer << " create_kernel=" << c.create_kernel
+      << " release_mem=" << c.release_mem_object << " release_kernel=" << c.release_kernel
+      << " h2d_bytes=" << c.h2d_bytes << " d2h_bytes=" << c.d2h_bytes
+      << " program_builds=" << c.program_builds << " final_waits=" << c.final_waits
+      << " queue_finish=" << c.queue_finish << " enqueue_ndrange=" << c.enqueue_ndrange;
   return oss.str();
 }
 
 auto OpenClApiCountersToJsonObjectBody(const OpenClApiCounters& c) -> std::string {
   std::ostringstream oss;
   oss << "\"create_buffer\":" << c.create_buffer << ","
+      << "\"create_buffer_final_output\":" << c.create_buffer_final_output << ","
       << "\"create_sub_buffer\":" << c.create_sub_buffer << ","
       << "\"create_kernel\":" << c.create_kernel << ","
       << "\"release_mem_object\":" << c.release_mem_object << ","

@@ -27,8 +27,9 @@ struct WorkspaceSlice {
   }
 };
 
-// RAII clCreateSubBuffer over a WorkspaceSlice. Required when a kernel takes a
-// cl_mem base without a byte-offset argument (all DemosaicNet kernels today).
+// RAII clCreateSubBuffer over a WorkspaceSlice. For kernels that take a cl_mem
+// base without a byte-offset argument. DemosaicNet product path uses dedicated
+// ActivationSlots instead; keep SubBuffer for generic NN primitives/tests only.
 class SubBuffer {
  public:
   SubBuffer() = default;

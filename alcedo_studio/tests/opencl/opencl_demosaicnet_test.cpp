@@ -22,9 +22,9 @@
 #include "decoders/processor/nn/opencl_demosaicnet_tiled.hpp"
 #include "decoders/processor/operators/gpu/opencl_demosaicnet_programs.hpp"
 #include "nn/safetensors.hpp"
+#include "opencl/nn/activation_slots.hpp"
 #include "opencl/nn/convolution.hpp"
 #include "opencl/nn/device_buffer.hpp"
-#include "opencl/nn/workspace.hpp"
 #include "opencl/opencl_backend_program_registry.hpp"
 #include "opencl/opencl_context.hpp"
 #include "opencl/opencl_program_library.hpp"
@@ -168,7 +168,7 @@ void ExpectNchwNear(const std::vector<float>& actual, const std::vector<float>& 
 
 template <typename Net>
 auto ForwardReference(const Net& net, const std::vector<float>& input_nchw, int h, int w, int oh,
-                      int ow, nn_ocl::WorkspacePool& workspace) -> std::vector<float> {
+                      int ow, nn_ocl::ActivationSlots& slots) -> std::vector<float> {
   constexpr int N = 1;
   nn_ocl::DeviceBuffer in_buf  = nn_ocl::DeviceBuffer::Floats(input_nchw.size());
   nn_ocl::DeviceBuffer out_buf =
@@ -176,7 +176,7 @@ auto ForwardReference(const Net& net, const std::vector<float>& input_nchw, int 
   in_buf.UploadFloats(input_nchw);
 
   auto& ctx = OpenClContext::Instance();
-  net.ForwardNchwToHwc(in_buf.get(), N, h, w, out_buf.get(), workspace, ctx.Queue(),
+  net.ForwardNchwToHwc(in_buf.get(), N, h, w, out_buf.get(), slots, ctx.Queue(),
                        /*apply_gamma_decode=*/false);
   nn_ocl::WaitQueue(ctx.Queue());
 
@@ -282,7 +282,7 @@ TEST_F(OpenClDemosaicNetModuleTest, CacheSecondEnsureLoadedReusesWeightBuffers) 
 }
 
 TEST_F(OpenClDemosaicNetModuleTest,
-       SecondForwardReusesWorkspaceAllocationAndCompiledPrograms) {
+       SecondForwardReusesActivationSlotsAndCompiledPrograms) {
   const auto model_dir = FindModelDir();
   const auto in_path   = FindGolden("bayer_64_in.bin");
   const auto out_path  = FindGolden("bayer_64_out.bin");
@@ -300,28 +300,28 @@ TEST_F(OpenClDemosaicNetModuleTest,
   OpenClBayerDemosaicNet net;
   net.LoadWeights(nn::LoadSafetensors(model_dir / "bayer.safetensors"));
 
-  nn_ocl::WorkspacePool workspace;
-  workspace.Reserve(OpenClBayerDemosaicNet::EstimateWorkspaceBytes(H, W, N));
-  const auto gen_after_reserve = workspace.allocation_generation();
+  nn_ocl::ActivationSlots slots;
+  slots.EnsureSlotBytes(OpenClBayerDemosaicNet::EstimateActivationSlotBytes(H, W, N));
+  const auto gen_after_reserve = slots.allocation_generation();
 
   const bool built_before_first =
       OpenClProgramLibrary::Instance().IsProgramBuilt(OpenCL::DemosaicNet::kConvBayerProgramName);
 
-  (void)ForwardReference(net, hin, H, W, Oh, Ow, workspace);
+  (void)ForwardReference(net, hin, H, W, Oh, Ow, slots);
   EXPECT_TRUE(OpenClProgramLibrary::Instance().IsProgramBuilt(
       OpenCL::DemosaicNet::kConvBayerProgramName));
   EXPECT_TRUE(OpenClProgramLibrary::Instance().IsProgramBuilt(
       OpenCL::DemosaicNet::kStructuralProgramName));
   (void)built_before_first;
 
-  const auto gen_after_first = workspace.allocation_generation();
+  const auto gen_after_first = slots.allocation_generation();
   EXPECT_EQ(gen_after_first, gen_after_reserve)
-      << "first forward must not reallocate after Reserve";
+      << "first forward must not reallocate after EnsureSlotBytes";
 
   const cl_mem pack_w = net.Trunk0WeightBuffer();
-  (void)ForwardReference(net, hin, H, W, Oh, Ow, workspace);
-  EXPECT_EQ(workspace.allocation_generation(), gen_after_first)
-      << "second forward must not reallocate workspace";
+  (void)ForwardReference(net, hin, H, W, Oh, Ow, slots);
+  EXPECT_EQ(slots.allocation_generation(), gen_after_first)
+      << "second forward must not reallocate activation slots";
   EXPECT_EQ(net.Trunk0WeightBuffer(), pack_w) << "second forward must not re-upload weights";
 }
 
@@ -347,8 +347,8 @@ TEST_F(OpenClDemosaicNetModuleTest, BayerStudentForwardMatchesExportedReference0
 
   OpenClBayerDemosaicNet net;
   net.LoadWeights(nn::LoadSafetensors(model_dir / "bayer.safetensors"));
-  nn_ocl::WorkspacePool ws(OpenClBayerDemosaicNet::EstimateWorkspaceBytes(H, W, N));
-  ExpectNchwNear(ForwardReference(net, hin, H, W, Oh, Ow, ws), expected, Oh, Ow, kAbsTol);
+  nn_ocl::ActivationSlots slots;
+  ExpectNchwNear(ForwardReference(net, hin, H, W, Oh, Ow, slots), expected, Oh, Ow, kAbsTol);
 }
 
 TEST_F(OpenClDemosaicNetModuleTest, BayerStudentForwardMatchesExportedReference01) {
@@ -369,8 +369,8 @@ TEST_F(OpenClDemosaicNetModuleTest, BayerStudentForwardMatchesExportedReference0
 
   OpenClBayerDemosaicNet net;
   net.LoadWeights(nn::LoadSafetensors(model_dir / "bayer.safetensors"));
-  nn_ocl::WorkspacePool ws(OpenClBayerDemosaicNet::EstimateWorkspaceBytes(H, W, N));
-  ExpectNchwNear(ForwardReference(net, hin, H, W, Oh, Ow, ws), expected, Oh, Ow, kAbsTol);
+  nn_ocl::ActivationSlots slots;
+  ExpectNchwNear(ForwardReference(net, hin, H, W, Oh, Ow, slots), expected, Oh, Ow, kAbsTol);
 }
 
 TEST_F(OpenClDemosaicNetModuleTest, XTransStudentForwardMatchesExportedReference00) {
@@ -391,8 +391,8 @@ TEST_F(OpenClDemosaicNetModuleTest, XTransStudentForwardMatchesExportedReference
 
   OpenClXTransDemosaicNet net;
   net.LoadWeights(nn::LoadSafetensors(model_dir / "xtrans.safetensors"));
-  nn_ocl::WorkspacePool ws(OpenClXTransDemosaicNet::EstimateWorkspaceBytes(H, W, N));
-  ExpectNchwNear(ForwardReference(net, hin, H, W, Oh, Ow, ws), expected, Oh, Ow, kAbsTol);
+  nn_ocl::ActivationSlots slots;
+  ExpectNchwNear(ForwardReference(net, hin, H, W, Oh, Ow, slots), expected, Oh, Ow, kAbsTol);
 }
 
 TEST_F(OpenClDemosaicNetModuleTest, XTransStudentForwardMatchesExportedReference01) {
@@ -413,8 +413,8 @@ TEST_F(OpenClDemosaicNetModuleTest, XTransStudentForwardMatchesExportedReference
 
   OpenClXTransDemosaicNet net;
   net.LoadWeights(nn::LoadSafetensors(model_dir / "xtrans.safetensors"));
-  nn_ocl::WorkspacePool ws(OpenClXTransDemosaicNet::EstimateWorkspaceBytes(H, W, N));
-  ExpectNchwNear(ForwardReference(net, hin, H, W, Oh, Ow, ws), expected, Oh, Ow, kAbsTol);
+  nn_ocl::ActivationSlots slots;
+  ExpectNchwNear(ForwardReference(net, hin, H, W, Oh, Ow, slots), expected, Oh, Ow, kAbsTol);
 }
 
 TEST_F(OpenClDemosaicNetModuleTest, OutputShapeHelpersMatchSpecs) {
@@ -447,11 +447,11 @@ TEST_F(OpenClDemosaicNetModuleTest,
   OpenClBayerDemosaicNet module;
   module.LoadWeights(nn::LoadSafetensors(model_dir / "bayer.safetensors"));
   OpenClDemosaicNetTiledExecutor executor;
-  nn_ocl::WorkspacePool workspace;
+  nn_ocl::ActivationSlots slots;
   nn_ocl::ResetDispatchInstrumentation();
 
   const auto result = executor.EnqueueBayer(
-      module, workspace,
+      module, slots,
       {.input_aligned_hwc = input_buffer.get(),
        .output_aligned_hwc = output_buffer.get(),
        .aligned_width = kWidth,
@@ -491,11 +491,11 @@ TEST_F(OpenClDemosaicNetModuleTest,
   OpenClXTransDemosaicNet module;
   module.LoadWeights(nn::LoadSafetensors(model_dir / "xtrans.safetensors"));
   OpenClDemosaicNetTiledExecutor executor;
-  nn_ocl::WorkspacePool workspace;
+  nn_ocl::ActivationSlots slots;
   nn_ocl::ResetDispatchInstrumentation();
 
   const auto result = executor.EnqueueXTrans(
-      module, workspace,
+      module, slots,
       {.input_aligned_hwc = input_buffer.get(),
        .output_aligned_hwc = output_buffer.get(),
        .aligned_width = kWidth,

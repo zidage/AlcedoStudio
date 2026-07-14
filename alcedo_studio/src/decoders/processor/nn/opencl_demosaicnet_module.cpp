@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "decoders/processor/operators/gpu/opencl_demosaicnet_programs.hpp"
+#include "opencl/nn/activation_slots.hpp"
 #include "opencl/nn/common.hpp"
 #include "opencl/nn/convolution.hpp"
 #include "opencl/nn/demosaicnet_stage_profiler.hpp"
@@ -163,10 +164,10 @@ void RequireExactHostWeight(const nn::SafetensorsTensor& host, const std::vector
   return (value + alignment - 1) & ~(alignment - 1);
 }
 
-// Peak-live NHWC4 workspace: two ping-pong trunk slots sized for the largest intermediate.
-[[nodiscard]] auto EstimateNhwc4WorkspaceBytes(int input_h, int input_w, int batch, int pack_out_ch,
-                                               int width, int residual_ch, int depth,
-                                               int pack_factor) -> std::size_t {
+// Peak-live NHWC4 size for one of the two dedicated ping-pong activation slots.
+[[nodiscard]] auto EstimateNhwc4ActivationSlotBytes(int input_h, int input_w, int batch,
+                                                    int pack_out_ch, int width, int residual_ch,
+                                                    int depth, int pack_factor) -> std::size_t {
   if (batch < 1 || input_h < 1 || input_w < 1 || pack_factor < 1 || depth < 1) {
     return 0;
   }
@@ -196,11 +197,8 @@ void RequireExactHostWeight(const nn::SafetensorsTensor& host, const std::vector
   trunk = std::max(trunk, Nhwc4Bytes(batch, uh, uw, 6, kPostInBlocks));
   trunk = std::max(trunk, Nhwc4Bytes(batch, nh, nw, width));
   trunk = std::max(trunk, Nhwc4Bytes(batch, nh, nw, 3));
-  trunk = AlignUp(trunk, nn_ocl::WorkspacePool::kDefaultAlignment);
-
-  // 2 trunk slots + small headroom (sub-buffers / alignment waste).
-  constexpr std::size_t kHeadroom = 256 * 1024;
-  return 2 * trunk + kHeadroom;
+  // 256-byte alignment matches DeviceBuffer/WorkspacePool defaults.
+  return AlignUp(trunk, 256);
 }
 
 void UploadPackedWeight(const float* oihw, int out_c, int in_c, int kh, int kw,
@@ -370,9 +368,10 @@ void LoadCommonWeights(ModuleState& s, const nn::SafetensorsTensorMap& tensors, 
 }
 
 void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height, int width,
-                 cl_mem output_rgb_hwc, nn_ocl::WorkspacePool& workspace, cl_command_queue queue,
-                 bool apply_gamma_decode, int (*output_height_fn)(int, int),
-                 int (*output_width_fn)(int, int), int min_spatial, const char* module) {
+                 cl_mem output_rgb_hwc, nn_ocl::ActivationSlots& activation_slots,
+                 cl_command_queue queue, bool apply_gamma_decode,
+                 int (*output_height_fn)(int, int), int (*output_width_fn)(int, int), int min_spatial,
+                 const char* module) {
   if (!s.loaded) {
     throw std::runtime_error(std::string(module) + ": weights not loaded");
   }
@@ -391,28 +390,19 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
   const int ph    = height / s.pack_factor;
   const int pw    = width / s.pack_factor;
 
-  const std::size_t need =
-      EstimateNhwc4WorkspaceBytes(height, width, batch, s.pack_out_ch, s.width, s.residual_ch,
-                                  s.depth, s.pack_factor);
-  if (need == 0) {
+  const std::size_t slot_bytes = EstimateNhwc4ActivationSlotBytes(
+      height, width, batch, s.pack_out_ch, s.width, s.residual_ch, s.depth, s.pack_factor);
+  if (slot_bytes == 0) {
     throw std::runtime_error(std::string(module) + ": invalid activation geometry");
   }
 
-  nn_ocl::BeginDemosaicNetStage("workspace_subbuffer_setup");
-  workspace.Reset();
-  if (workspace.capacity_bytes() < need) {
-    workspace.Reserve(need);
+  // Dedicated full buffers (no SubBuffer). Grow-only after warm-up.
+  activation_slots.EnsureSlotBytes(slot_bytes);
+  cl_mem slot_a = activation_slots.slot_a();
+  cl_mem slot_b = activation_slots.slot_b();
+  if (slot_a == nullptr || slot_b == nullptr) {
+    throw std::runtime_error(std::string(module) + ": activation slots empty after EnsureSlotBytes");
   }
-
-  // Two ping-pong slots large enough for every intermediate (including C6 physical).
-  const std::size_t slot_bytes = (need - 256 * 1024) / 2;
-  auto              slice_a    = workspace.Allocate(slot_bytes);
-  auto              slice_b    = workspace.Allocate(slot_bytes);
-  nn_ocl::SubBuffer sub_a(slice_a);
-  nn_ocl::SubBuffer sub_b(slice_b);
-  cl_mem            slot_a = sub_a.get();
-  cl_mem            slot_b = sub_b.get();
-  nn_ocl::FinishDemosaicNetStage("workspace_subbuffer_setup", queue);
 
   // ---- Pack NCHW → NHWC4 ----
   nn_ocl::BeginDemosaicNetStage("pack_nchw_to_nhwc4");
@@ -435,11 +425,11 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
   nn_ocl::FinishDemosaicNetStage("pack_nchw_to_nhwc4", queue);
 
   // ---- Trunk: depth × 3x3 bias+ReLU, ping-pong ----
-  int   cur_h    = ph;
-  int   cur_w    = pw;
-  cl_mem cur     = slot_a;
-  cl_mem next    = slot_b;
-  int   cur_c    = s.pack_out_ch;
+  int    cur_h = ph;
+  int    cur_w = pw;
+  cl_mem cur   = slot_a;
+  cl_mem next  = slot_b;
+  int    cur_c = s.pack_out_ch;
 
   nn_ocl::BeginDemosaicNetStage("trunk_3x3");
   for (int i = 0; i < s.depth; ++i) {
@@ -580,13 +570,6 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
               static_cast<size_t>(batch), queue, "output enqueue");
   }
   nn_ocl::FinishDemosaicNetStage("post_output", queue);
-
-  if (nn_ocl::ActiveDemosaicNetStageProfiler() != nullptr) {
-    nn_ocl::BeginDemosaicNetStage("workspace_subbuffer_release");
-    sub_a.Reset();
-    sub_b.Reset();
-    nn_ocl::FinishDemosaicNetStage("workspace_subbuffer_release", queue);
-  }
 }
 
 }  // namespace
@@ -634,20 +617,20 @@ auto OpenClBayerDemosaicNet::weights_loaded() const -> bool {
 
 void OpenClBayerDemosaicNet::ForwardNchwToHwc(cl_mem input_nchw, int batch, int height, int width,
                                               cl_mem output_rgb_hwc,
-                                              opencl::nn::WorkspacePool& workspace,
+                                              opencl::nn::ActivationSlots& activation_slots,
                                               cl_command_queue queue,
                                               bool apply_gamma_decode) const {
-  ForwardImpl(impl_->state, input_nchw, batch, height, width, output_rgb_hwc, workspace, queue,
-              apply_gamma_decode,
+  ForwardImpl(impl_->state, input_nchw, batch, height, width, output_rgb_hwc, activation_slots,
+              queue, apply_gamma_decode,
               [](int h, int w) { return Spec::OutputHeight(h, w); },
               [](int w, int h) { return Spec::OutputWidth(w, h); }, kMinSpatial,
               "OpenClBayerDemosaicNet");
 }
 
-auto OpenClBayerDemosaicNet::EstimateWorkspaceBytes(int input_h, int input_w, int batch)
+auto OpenClBayerDemosaicNet::EstimateActivationSlotBytes(int input_h, int input_w, int batch)
     -> std::size_t {
-  return EstimateNhwc4WorkspaceBytes(input_h, input_w, batch, kPackOutCh, kWidth, kResidualCh,
-                                     kDepth, kPackFactor);
+  return EstimateNhwc4ActivationSlotBytes(input_h, input_w, batch, kPackOutCh, kWidth, kResidualCh,
+                                          kDepth, kPackFactor);
 }
 
 auto OpenClBayerDemosaicNet::ResidentWeightBytes() const -> std::size_t {
@@ -705,20 +688,20 @@ auto OpenClXTransDemosaicNet::weights_loaded() const -> bool {
 
 void OpenClXTransDemosaicNet::ForwardNchwToHwc(cl_mem input_nchw, int batch, int height, int width,
                                                cl_mem output_rgb_hwc,
-                                               opencl::nn::WorkspacePool& workspace,
+                                               opencl::nn::ActivationSlots& activation_slots,
                                                cl_command_queue queue,
                                                bool apply_gamma_decode) const {
-  ForwardImpl(impl_->state, input_nchw, batch, height, width, output_rgb_hwc, workspace, queue,
-              apply_gamma_decode,
+  ForwardImpl(impl_->state, input_nchw, batch, height, width, output_rgb_hwc, activation_slots,
+              queue, apply_gamma_decode,
               [](int h, int w) { return Spec::OutputHeight(h, w); },
               [](int w, int h) { return Spec::OutputWidth(w, h); }, kMinSpatial,
               "OpenClXTransDemosaicNet");
 }
 
-auto OpenClXTransDemosaicNet::EstimateWorkspaceBytes(int input_h, int input_w, int batch)
+auto OpenClXTransDemosaicNet::EstimateActivationSlotBytes(int input_h, int input_w, int batch)
     -> std::size_t {
-  return EstimateNhwc4WorkspaceBytes(input_h, input_w, batch, kPackOutCh, kWidth, kResidualCh,
-                                     kDepth, kPackFactor);
+  return EstimateNhwc4ActivationSlotBytes(input_h, input_w, batch, kPackOutCh, kWidth, kResidualCh,
+                                          kDepth, kPackFactor);
 }
 
 auto OpenClXTransDemosaicNet::ResidentWeightBytes() const -> std::size_t {

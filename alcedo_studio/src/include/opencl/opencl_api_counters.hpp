@@ -15,17 +15,18 @@ namespace alcedo {
 // Product code may call Note* freely: they are no-ops while disabled (default).
 // Enable only around harness/cold-hot measurement scopes.
 struct OpenClApiCounters {
-  std::uint64_t create_buffer      = 0;
-  std::uint64_t create_sub_buffer  = 0;
-  std::uint64_t create_kernel      = 0;
-  std::uint64_t release_mem_object = 0;  // last-reference releases we own
-  std::uint64_t release_kernel     = 0;
-  std::uint64_t h2d_bytes          = 0;
-  std::uint64_t d2h_bytes          = 0;
-  std::uint64_t program_builds     = 0;
-  std::uint64_t final_waits        = 0;  // product-style WaitQueue / stage-end finish
-  std::uint64_t queue_finish       = 0;  // every clFinish observed through helpers
-  std::uint64_t enqueue_ndrange    = 0;
+  std::uint64_t create_buffer              = 0;  // Neural/scratch clCreateBuffer
+  std::uint64_t create_buffer_final_output = 0;  // caller-owned product destination only
+  std::uint64_t create_sub_buffer          = 0;
+  std::uint64_t create_kernel              = 0;
+  std::uint64_t release_mem_object         = 0;  // last-reference releases we own
+  std::uint64_t release_kernel             = 0;
+  std::uint64_t h2d_bytes                  = 0;
+  std::uint64_t d2h_bytes                  = 0;
+  std::uint64_t program_builds             = 0;
+  std::uint64_t final_waits                = 0;  // product-style WaitQueue / stage-end finish
+  std::uint64_t queue_finish               = 0;  // every clFinish observed through helpers
+  std::uint64_t enqueue_ndrange            = 0;
 };
 
 [[nodiscard]] auto OpenClApiCountersEnabled() noexcept -> bool;
@@ -38,6 +39,7 @@ void               ResetOpenClApiCounters() noexcept;
     -> OpenClApiCounters;
 
 void NoteOpenClCreateBuffer() noexcept;
+void NoteOpenClCreateBufferFinalOutput() noexcept;
 void NoteOpenClCreateSubBuffer() noexcept;
 void NoteOpenClCreateKernel() noexcept;
 void NoteOpenClReleaseMemObject() noexcept;

@@ -10,7 +10,7 @@
 #include <memory>
 
 #include "decoders/processor/nn/opencl_demosaicnet_module.hpp"
-#include "opencl/nn/workspace.hpp"
+#include "opencl/nn/activation_slots.hpp"
 
 namespace alcedo {
 
@@ -21,8 +21,8 @@ namespace alcedo {
 // one reusable NCHW tile buffer, then assembled directly into aligned_rgb_hwc.
 // All commands are queued on one in-order queue; this class intentionally does
 // not wait, finish, or read back inside (or after) its tile loop. Keep this
-// executor and the workspace alive until the owner performs the final queue
-// wait at the Neural-stage boundary.
+// executor and the activation slots alive until the owner performs the final
+// queue wait at the Neural-stage boundary.
 struct OpenClDemosaicNetTiledDispatch {
   cl_mem input_aligned_hwc  = nullptr;
   cl_mem output_aligned_hwc = nullptr;
@@ -51,12 +51,12 @@ class OpenClDemosaicNetTiledExecutor {
   auto operator=(OpenClDemosaicNetTiledExecutor&&) noexcept -> OpenClDemosaicNetTiledExecutor&;
 
   [[nodiscard]] auto EnqueueBayer(const OpenClBayerDemosaicNet& module,
-                                  opencl::nn::WorkspacePool& workspace,
+                                  opencl::nn::ActivationSlots& activation_slots,
                                   const OpenClDemosaicNetTiledDispatch& dispatch)
       -> OpenClDemosaicNetTiledResult;
 
   [[nodiscard]] auto EnqueueXTrans(const OpenClXTransDemosaicNet& module,
-                                   opencl::nn::WorkspacePool& workspace,
+                                   opencl::nn::ActivationSlots& activation_slots,
                                    const OpenClDemosaicNetTiledDispatch& dispatch)
       -> OpenClDemosaicNetTiledResult;
 
