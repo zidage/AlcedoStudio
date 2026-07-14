@@ -2,7 +2,13 @@
 
 Date: 2026-07-13
 
-Status: Phase 3 complete — SEO + GitHub Pages deploy of `site/`; Phase 4 validation next
+Status: Phase 5 in progress — the deployed website now lives in the standalone
+[`AlcedoStudio-site`](https://github.com/zidage/AlcedoStudio-site) repository and is
+served from `https://aoraw.org` through Cloudflare Workers.
+
+> Historical-path note: the `docs/alcedo-website/` paths below describe the original
+> GitHub Pages implementation. That deployment has been retired; project README
+> screenshots now live under `docs/screenshots/`.
 
 Public copy (Phase 1 deliverable): [`alcedo_website_public_copy.md`](alcedo_website_public_copy.md)
 
