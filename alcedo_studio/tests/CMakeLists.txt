@@ -1013,6 +1013,11 @@ if(ALCEDO_OPENCL_ENABLED)
   target_link_libraries(OpenClRuntimeTest PRIVATE GTest::gtest_main OpenClProgramLibrary)
   gtest_discover_tests(OpenClRuntimeTest TEST_PREFIX "OpenClRuntimeTest.")
 
+  add_executable(OpenClNnPrimitivesTest opencl/opencl_nn_primitives_test.cpp)
+  target_include_directories(OpenClNnPrimitivesTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(OpenClNnPrimitivesTest PRIVATE GTest::gtest_main OpenClNn OpenClProgramLibrary)
+  gtest_discover_tests(OpenClNnPrimitivesTest TEST_PREFIX "OpenClNnPrimitivesTest.")
+
   add_executable(OpenClFusedEditPipelineTest opencl/opencl_fused_edit_pipeline_test.cpp)
   target_include_directories(OpenClFusedEditPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(OpenClFusedEditPipelineTest
@@ -1204,6 +1209,7 @@ alcedo_assign_test_category(core ALCEDO_BUILD_CORE_TESTS alcedo_tests_core
   CudaDriverRequirementsTest
   OpenClProgramLibraryTest
   OpenClRuntimeTest
+  OpenClNnPrimitivesTest
 )
 
 alcedo_assign_test_category(image ALCEDO_BUILD_IMAGE_TESTS alcedo_tests_image

@@ -487,6 +487,20 @@ if(ALCEDO_OPENCL_ENABLED)
         PUBLIC_DEPS ImageBuffer OpenClProgramLibrary ${ALCEDO_OPENCV_CORE_DEPS}
     )
     target_compile_definitions(OpenClGeometryUtils PUBLIC HAVE_OPENCL)
+
+    # Reusable OpenCL NN primitives (device buffer, workspace, NHWC4 conv).
+    # No Bayer/X-Trans topology, model paths, or RAW routing — product modules only.
+    def_library(OpenClNn
+        SOURCES
+            opencl/nn/device_buffer.cpp
+            opencl/nn/workspace.cpp
+            opencl/nn/convolution.cpp
+        PUBLIC_DEPS
+            OpenClContext
+            OpenClProgramLibrary
+            OpenCL::OpenCL
+    )
+    target_compile_definitions(OpenClNn PUBLIC HAVE_OPENCL)
 endif()
 
 # Image Base
