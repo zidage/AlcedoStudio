@@ -1,0 +1,715 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#ifdef HAVE_OPENCL
+
+#include "decoders/processor/nn/opencl_demosaicnet_module.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "decoders/processor/operators/gpu/opencl_demosaicnet_programs.hpp"
+#include "opencl/nn/common.hpp"
+#include "opencl/nn/convolution.hpp"
+#include "opencl/nn/tensor_view.hpp"
+#include "opencl/opencl_backend_program_registry.hpp"
+#include "opencl/opencl_program_library.hpp"
+
+namespace alcedo {
+namespace {
+
+namespace nn_ocl = opencl::nn;
+
+// ---------------------------------------------------------------------------
+// Kernel RAII
+// ---------------------------------------------------------------------------
+
+class KernelHolder {
+ public:
+  KernelHolder() = default;
+  KernelHolder(cl_program program, const char* name) {
+    cl_int err = CL_SUCCESS;
+    kernel_    = clCreateKernel(program, name, &err);
+    nn_ocl::CheckOpenCl(err, name);
+  }
+  ~KernelHolder() { Reset(); }
+
+  KernelHolder(const KernelHolder&)            = delete;
+  KernelHolder& operator=(const KernelHolder&) = delete;
+
+  KernelHolder(KernelHolder&& other) noexcept : kernel_(other.kernel_) { other.kernel_ = nullptr; }
+  auto operator=(KernelHolder&& other) noexcept -> KernelHolder& {
+    if (this != &other) {
+      Reset();
+      kernel_       = other.kernel_;
+      other.kernel_ = nullptr;
+    }
+    return *this;
+  }
+
+  [[nodiscard]] auto get() const -> cl_kernel { return kernel_; }
+  [[nodiscard]] auto empty() const -> bool { return kernel_ == nullptr; }
+
+  void Reset() noexcept {
+    if (kernel_ != nullptr) {
+      clReleaseKernel(kernel_);
+      kernel_ = nullptr;
+    }
+  }
+
+ private:
+  cl_kernel kernel_ = nullptr;
+};
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+void RequireMetadata(const nn::SafetensorsTensorMap& tensors, std::string_view key,
+                     std::string_view expected, const char* module) {
+  const auto actual = tensors.metadata(key);
+  if (actual != expected) {
+    throw std::runtime_error(std::string(module) + ": metadata '" + std::string(key) +
+                             "' expected '" + std::string(expected) + "', got '" +
+                             std::string(actual) + "'");
+  }
+}
+
+void RequireExactHostWeight(const nn::SafetensorsTensor& host, const std::vector<float>& expected,
+                            std::string_view key, const char* module) {
+  if (host.data.size() != expected.size()) {
+    throw std::runtime_error(std::string(module) + ": fixed weight size mismatch for " +
+                             std::string(key));
+  }
+  for (std::size_t i = 0; i < expected.size(); ++i) {
+    if (std::fabs(host.data[i] - expected[i]) > 0.0f) {
+      throw std::runtime_error(std::string(module) + ": fixed one-hot mismatch for " +
+                               std::string(key) + " at index " + std::to_string(i));
+    }
+  }
+}
+
+[[nodiscard]] auto ExpectedBayerPackWeight() -> std::vector<float> {
+  std::vector<float> w(4 * 3 * 2 * 2, 0.0f);
+  for (int py = 0; py < 2; ++py) {
+    for (int px = 0; px < 2; ++px) {
+      const int out_i = py * 2 + px;
+      for (int c = 0; c < 3; ++c) {
+        w[((out_i * 3 + c) * 2 + py) * 2 + px] = 1.0f;
+      }
+    }
+  }
+  return w;
+}
+
+[[nodiscard]] auto ExpectedXTransPackWeight() -> std::vector<float> {
+  std::vector<float> w(12 * 3 * 2 * 2, 0.0f);
+  for (int c = 0; c < 3; ++c) {
+    for (int py = 0; py < 2; ++py) {
+      for (int px = 0; px < 2; ++px) {
+        const int out_i = c * 4 + py * 2 + px;
+        w[((out_i * 3 + c) * 2 + py) * 2 + px] = 1.0f;
+      }
+    }
+  }
+  return w;
+}
+
+[[nodiscard]] auto ExpectedUnpackWeight() -> std::vector<float> {
+  std::vector<float> w(12 * 1 * 2 * 2, 0.0f);
+  for (int g = 0; g < 3; ++g) {
+    for (int py = 0; py < 2; ++py) {
+      for (int px = 0; px < 2; ++px) {
+        const int in_i = g * 4 + py * 2 + px;
+        w[(in_i * 2 + py) * 2 + px] = 1.0f;
+      }
+    }
+  }
+  return w;
+}
+
+[[nodiscard]] auto ResolveQueue(cl_command_queue queue) -> cl_command_queue {
+  if (queue != nullptr) {
+    return queue;
+  }
+  auto& ctx = OpenClContext::Instance();
+  if (!ctx.IsInitialized()) {
+    throw std::runtime_error("OpenCL DemosaicNet: OpenClContext not initialized");
+  }
+  return ctx.Queue();
+}
+
+[[nodiscard]] auto Nhwc4Bytes(int batch, int height, int width, int logical_channels,
+                              int channel_blocks = -1) -> std::size_t {
+  if (channel_blocks < 0) {
+    channel_blocks = nn_ocl::ChannelBlocks(logical_channels);
+  }
+  return static_cast<std::size_t>(batch) * static_cast<std::size_t>(height) *
+         static_cast<std::size_t>(width) * static_cast<std::size_t>(channel_blocks) * 4u *
+         sizeof(float);
+}
+
+[[nodiscard]] auto AlignUp(std::size_t value, std::size_t alignment) -> std::size_t {
+  return (value + alignment - 1) & ~(alignment - 1);
+}
+
+// Peak-live NHWC4 workspace: two ping-pong trunk slots sized for the largest intermediate.
+[[nodiscard]] auto EstimateNhwc4WorkspaceBytes(int input_h, int input_w, int batch, int pack_out_ch,
+                                               int width, int residual_ch, int depth,
+                                               int pack_factor) -> std::size_t {
+  if (batch < 1 || input_h < 1 || input_w < 1 || pack_factor < 1 || depth < 1) {
+    return 0;
+  }
+  if ((input_h % pack_factor) != 0 || (input_w % pack_factor) != 0) {
+    return 0;
+  }
+  const int ph = input_h / pack_factor;
+  const int pw = input_w / pack_factor;
+  if (ph <= 2 * depth || pw <= 2 * depth) {
+    return 0;
+  }
+  const int mh = ph - 2 * depth;
+  const int mw = pw - 2 * depth;
+  const int uh = mh * pack_factor;
+  const int uw = mw * pack_factor;
+  const int nh = uh - 2;
+  const int nw = uw - 2;
+  if (mh < 1 || mw < 1 || nh < 1 || nw < 1) {
+    return 0;
+  }
+
+  // Physical blocks for C6 post input (logical 6 → 2 blocks).
+  constexpr int kPostInBlocks = 2;
+  std::size_t   trunk         = Nhwc4Bytes(batch, ph, pw, pack_out_ch);
+  trunk = std::max(trunk, Nhwc4Bytes(batch, ph - 2, pw - 2, width));
+  trunk = std::max(trunk, Nhwc4Bytes(batch, mh, mw, residual_ch));
+  trunk = std::max(trunk, Nhwc4Bytes(batch, uh, uw, 6, kPostInBlocks));
+  trunk = std::max(trunk, Nhwc4Bytes(batch, nh, nw, width));
+  trunk = std::max(trunk, Nhwc4Bytes(batch, nh, nw, 3));
+  trunk = AlignUp(trunk, nn_ocl::WorkspacePool::kDefaultAlignment);
+
+  // 2 trunk slots + small headroom (sub-buffers / alignment waste).
+  constexpr std::size_t kHeadroom = 256 * 1024;
+  return 2 * trunk + kHeadroom;
+}
+
+void UploadPackedWeight(const float* oihw, int out_c, int in_c, int kh, int kw,
+                        nn_ocl::DeviceBuffer& dst, cl_command_queue queue) {
+  auto packed = nn_ocl::PackOhwi4o4iFromOihw(oihw, out_c, in_c, kh, kw);
+  dst         = nn_ocl::DeviceBuffer::Floats(packed.size());
+  dst.UploadFloats(packed, queue, /*blocking=*/true);
+}
+
+void UploadBias(const nn::SafetensorsTensor& host, nn_ocl::DeviceBuffer& dst,
+                cl_command_queue queue) {
+  dst = nn_ocl::DeviceBuffer::Floats(host.data.size());
+  dst.UploadFloats(host.data, queue, /*blocking=*/true);
+}
+
+void Enqueue3D(cl_kernel kernel, size_t gx, size_t gy, size_t gz, cl_command_queue queue,
+               const char* what) {
+  if (kernel == nullptr) {
+    throw std::runtime_error(std::string(what) + ": null kernel");
+  }
+  const size_t global[3] = {gx, gy, gz};
+  nn_ocl::CheckOpenCl(
+      clEnqueueNDRangeKernel(queue, kernel, 3, nullptr, global, nullptr, 0, nullptr, nullptr),
+      what);
+  ++nn_ocl::GetDispatchInstrumentation().enqueue_count;
+}
+
+template <typename T>
+void SetArg(cl_kernel kernel, cl_uint index, const T& value, const char* what) {
+  nn_ocl::CheckOpenCl(clSetKernelArg(kernel, index, sizeof(T), &value), what);
+}
+
+// ---------------------------------------------------------------------------
+// Shared module state for Bayer / X-Trans
+// ---------------------------------------------------------------------------
+
+struct ModuleState {
+  bool loaded = false;
+
+  // Weights (OHWI4o4i for convs; bias as length-logical vectors).
+  nn_ocl::DeviceBuffer trunk_w_[8];  // depth max 8
+  nn_ocl::DeviceBuffer trunk_b_[8];
+  nn_ocl::DeviceBuffer residual_w_;
+  nn_ocl::DeviceBuffer residual_b_;
+  nn_ocl::DeviceBuffer post_w_;
+  nn_ocl::DeviceBuffer post_b_;
+  nn_ocl::DeviceBuffer output_w_;
+  nn_ocl::DeviceBuffer output_b_;
+
+  // Kernels created once at load.
+  KernelHolder pack;
+  KernelHolder conv3x3;
+  KernelHolder conv1x1;
+  KernelHolder unpack_concat;
+  KernelHolder output_rgb;
+
+  int depth      = 0;
+  int width      = 0;
+  int pack_out_ch = 0;
+  int residual_ch = 0;
+  int pack_factor = 2;
+  bool is_bayer   = true;
+};
+
+void EnsureProgramsRegistered() {
+  // Central registry path — modules never register programs themselves.
+  RegisterOpenClBackendPrograms();
+}
+
+void CreateKernels(ModuleState& s, bool is_bayer) {
+  EnsureProgramsRegistered();
+  auto& lib = OpenClProgramLibrary::Instance();
+  const char* conv_name =
+      is_bayer ? OpenCL::DemosaicNet::kConvBayerProgramName
+               : OpenCL::DemosaicNet::kConvXTransProgramName;
+  cl_program conv_prog = lib.GetProgram(conv_name);
+  cl_program struct_prog =
+      lib.GetProgram(OpenCL::DemosaicNet::kStructuralProgramName);
+
+  s.conv3x3 = KernelHolder(conv_prog, OpenCL::DemosaicNet::kConv3x3KernelName);
+  s.conv1x1 = KernelHolder(conv_prog, OpenCL::DemosaicNet::kConv1x1KernelName);
+  s.pack    = KernelHolder(struct_prog, is_bayer ? OpenCL::DemosaicNet::kPackBayerNchwKernelName
+                                                 : OpenCL::DemosaicNet::kPackXTransNchwKernelName);
+  s.unpack_concat =
+      KernelHolder(struct_prog, OpenCL::DemosaicNet::kUnpackCropConcatKernelName);
+  s.output_rgb = KernelHolder(struct_prog, OpenCL::DemosaicNet::kOutputRgbHwcKernelName);
+}
+
+void LoadCommonWeights(ModuleState& s, const nn::SafetensorsTensorMap& tensors, int depth, int width,
+                       int pack_out_ch, int residual_ch, cl_command_queue queue, const char* module,
+                       bool is_bayer) {
+  s.depth       = depth;
+  s.width       = width;
+  s.pack_out_ch = pack_out_ch;
+  s.residual_ch = residual_ch;
+  s.is_bayer    = is_bayer;
+
+  // Fixed pack / unpack one-hots (validated, not stored — pack/unpack are structural kernels).
+  {
+    const auto& pack =
+        nn::RequireF32Tensor(tensors, "pack.weight", {pack_out_ch, 3, 2, 2});
+    RequireExactHostWeight(pack, is_bayer ? ExpectedBayerPackWeight() : ExpectedXTransPackWeight(),
+                           "pack.weight", module);
+  }
+  {
+    const auto& unpack = nn::RequireF32Tensor(tensors, "unpack.weight", {residual_ch, 1, 2, 2});
+    RequireExactHostWeight(unpack, ExpectedUnpackWeight(), "unpack.weight", module);
+  }
+
+  // Trunk layers 0..depth-1: all packed OHWI4o4i 3x3 + bias.
+  for (int i = 0; i < depth; ++i) {
+    const int in_c = (i == 0) ? pack_out_ch : width;
+    const std::string wk = "trunk." + std::to_string(i) + ".weight";
+    const std::string bk = "trunk." + std::to_string(i) + ".bias";
+    const auto& weight = nn::RequireF32Tensor(tensors, wk, {width, in_c, 3, 3});
+    const auto& bias   = nn::RequireF32Tensor(tensors, bk, {width});
+    UploadPackedWeight(weight.data.data(), width, in_c, 3, 3, s.trunk_w_[i], queue);
+    UploadBias(bias, s.trunk_b_[i], queue);
+  }
+
+  {
+    const auto& weight =
+        nn::RequireF32Tensor(tensors, "residual.weight", {residual_ch, width, 1, 1});
+    UploadPackedWeight(weight.data.data(), residual_ch, width, 1, 1, s.residual_w_, queue);
+  }
+  {
+    const auto& bias = nn::RequireF32Tensor(tensors, "residual.bias", {residual_ch});
+    UploadBias(bias, s.residual_b_, queue);
+  }
+  {
+    const auto& weight = nn::RequireF32Tensor(tensors, "post_conv.weight", {width, 6, 3, 3});
+    UploadPackedWeight(weight.data.data(), width, 6, 3, 3, s.post_w_, queue);
+  }
+  {
+    const auto& bias = nn::RequireF32Tensor(tensors, "post_conv.bias", {width});
+    UploadBias(bias, s.post_b_, queue);
+  }
+  {
+    const auto& weight = nn::RequireF32Tensor(tensors, "output.weight", {3, width, 1, 1});
+    UploadPackedWeight(weight.data.data(), 3, width, 1, 1, s.output_w_, queue);
+  }
+  {
+    const auto& bias = nn::RequireF32Tensor(tensors, "output.bias", {3});
+    UploadBias(bias, s.output_b_, queue);
+  }
+
+  CreateKernels(s, is_bayer);
+  s.loaded = true;
+}
+
+[[nodiscard]] auto ResidentBytes(const ModuleState& s) -> std::size_t {
+  std::size_t total = 0;
+  auto add = [&](const nn_ocl::DeviceBuffer& b) { total += b.byte_capacity(); };
+  for (int i = 0; i < s.depth; ++i) {
+    add(s.trunk_w_[i]);
+    add(s.trunk_b_[i]);
+  }
+  add(s.residual_w_);
+  add(s.residual_b_);
+  add(s.post_w_);
+  add(s.post_b_);
+  add(s.output_w_);
+  add(s.output_b_);
+  return total;
+}
+
+void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height, int width,
+                 cl_mem output_rgb_hwc, nn_ocl::WorkspacePool& workspace, cl_command_queue queue,
+                 bool apply_gamma_decode, int (*output_height_fn)(int, int),
+                 int (*output_width_fn)(int, int), int min_spatial, const char* module) {
+  if (!s.loaded) {
+    throw std::runtime_error(std::string(module) + ": weights not loaded");
+  }
+  if (input_nchw == nullptr || output_rgb_hwc == nullptr) {
+    throw std::runtime_error(std::string(module) + ": null input/output buffer");
+  }
+  if (batch != 1 || (height % s.pack_factor) != 0 || (width % s.pack_factor) != 0 ||
+      height < min_spatial || width < min_spatial) {
+    throw std::runtime_error(std::string(module) + ": invalid input geometry");
+  }
+
+  queue = ResolveQueue(queue);
+
+  const int out_h = output_height_fn(height, width);
+  const int out_w = output_width_fn(width, height);
+  const int ph    = height / s.pack_factor;
+  const int pw    = width / s.pack_factor;
+
+  const std::size_t need =
+      EstimateNhwc4WorkspaceBytes(height, width, batch, s.pack_out_ch, s.width, s.residual_ch,
+                                  s.depth, s.pack_factor);
+  if (need == 0) {
+    throw std::runtime_error(std::string(module) + ": invalid activation geometry");
+  }
+
+  workspace.Reset();
+  if (workspace.capacity_bytes() < need) {
+    workspace.Reserve(need);
+  }
+
+  // Two ping-pong slots large enough for every intermediate (including C6 physical).
+  const std::size_t slot_bytes = (need - 256 * 1024) / 2;
+  auto              slice_a    = workspace.Allocate(slot_bytes);
+  auto              slice_b    = workspace.Allocate(slot_bytes);
+  nn_ocl::SubBuffer sub_a(slice_a);
+  nn_ocl::SubBuffer sub_b(slice_b);
+  cl_mem            slot_a = sub_a.get();
+  cl_mem            slot_b = sub_b.get();
+
+  // ---- Pack NCHW → NHWC4 ----
+  {
+    const cl_int b  = batch;
+    const cl_int ih = height;
+    const cl_int iw = width;
+    const cl_int oh = ph;
+    const cl_int ow = pw;
+    SetArg(s.pack.get(), 0, input_nchw, "pack arg0");
+    SetArg(s.pack.get(), 1, slot_a, "pack arg1");
+    SetArg(s.pack.get(), 2, b, "pack arg2");
+    SetArg(s.pack.get(), 3, ih, "pack arg3");
+    SetArg(s.pack.get(), 4, iw, "pack arg4");
+    SetArg(s.pack.get(), 5, oh, "pack arg5");
+    SetArg(s.pack.get(), 6, ow, "pack arg6");
+    Enqueue3D(s.pack.get(), static_cast<size_t>(pw), static_cast<size_t>(ph),
+              static_cast<size_t>(batch), queue, "pack enqueue");
+  }
+
+  // ---- Trunk: depth × 3x3 bias+ReLU, ping-pong ----
+  int   cur_h    = ph;
+  int   cur_w    = pw;
+  cl_mem cur     = slot_a;
+  cl_mem next    = slot_b;
+  int   cur_c    = s.pack_out_ch;
+
+  for (int i = 0; i < s.depth; ++i) {
+    const int next_h = cur_h - 2;
+    const int next_w = cur_w - 2;
+    auto in_view =
+        nn_ocl::Nhwc4TensorView::Contiguous(cur, batch, cur_h, cur_w, cur_c);
+    auto out_view =
+        nn_ocl::Nhwc4TensorView::Contiguous(next, batch, next_h, next_w, s.width);
+    nn_ocl::Conv3x3Dispatch d;
+    d.kernel  = s.conv3x3.get();
+    d.input   = &in_view;
+    d.output  = &out_view;
+    d.weights = s.trunk_w_[i].get();
+    d.bias    = s.trunk_b_[i].get();
+    d.pad_h   = 0;
+    d.pad_w   = 0;
+    nn_ocl::EnqueueConv3x3Nhwc4(d, queue);
+    std::swap(cur, next);
+    cur_h = next_h;
+    cur_w = next_w;
+    cur_c = s.width;
+  }
+
+  // ---- Residual 1x1 (no ReLU) → residual buffer on next slot ----
+  {
+    auto in_view =
+        nn_ocl::Nhwc4TensorView::Contiguous(cur, batch, cur_h, cur_w, s.width);
+    auto out_view =
+        nn_ocl::Nhwc4TensorView::Contiguous(next, batch, cur_h, cur_w, s.residual_ch);
+    nn_ocl::Conv1x1Dispatch d;
+    d.kernel     = s.conv1x1.get();
+    d.input      = &in_view;
+    d.output     = &out_view;
+    d.weights    = s.residual_w_.get();
+    d.bias       = s.residual_b_.get();
+    d.apply_relu = 0;
+    nn_ocl::EnqueueConv1x1Nhwc4(d, queue);
+  }
+  // residual is in next; reuse cur for C6 concat.
+  cl_mem residual_buf = next;
+  cl_mem cat_buf      = cur;
+
+  const int residual_h = cur_h;
+  const int residual_w = cur_w;
+  const int up_h       = residual_h * s.pack_factor;
+  const int up_w       = residual_w * s.pack_factor;
+  const int residual_blocks = nn_ocl::ChannelBlocks(s.residual_ch);
+
+  // ---- Unpack + crop mosaic + concat → C6 NHWC4 (2 blocks) ----
+  {
+    const cl_int b   = batch;
+    const cl_int ih  = height;
+    const cl_int iw  = width;
+    const cl_int rh  = residual_h;
+    const cl_int rw  = residual_w;
+    const cl_int rcb = residual_blocks;
+    SetArg(s.unpack_concat.get(), 0, input_nchw, "unpack arg0");
+    SetArg(s.unpack_concat.get(), 1, residual_buf, "unpack arg1");
+    SetArg(s.unpack_concat.get(), 2, cat_buf, "unpack arg2");
+    SetArg(s.unpack_concat.get(), 3, b, "unpack arg3");
+    SetArg(s.unpack_concat.get(), 4, ih, "unpack arg4");
+    SetArg(s.unpack_concat.get(), 5, iw, "unpack arg5");
+    SetArg(s.unpack_concat.get(), 6, rh, "unpack arg6");
+    SetArg(s.unpack_concat.get(), 7, rw, "unpack arg7");
+    SetArg(s.unpack_concat.get(), 8, rcb, "unpack arg8");
+    Enqueue3D(s.unpack_concat.get(), static_cast<size_t>(up_w), static_cast<size_t>(up_h),
+              static_cast<size_t>(batch), queue, "unpack enqueue");
+  }
+
+  // ---- Post 3x3 C6→width + ReLU (valid) ----
+  const int post_h = up_h - 2;
+  const int post_w = up_w - 2;
+  {
+    auto in_view = nn_ocl::Nhwc4TensorView::ContiguousBlocked(cat_buf, batch, up_h, up_w, 6, 2);
+    auto out_view =
+        nn_ocl::Nhwc4TensorView::Contiguous(residual_buf, batch, post_h, post_w, s.width);
+    nn_ocl::Conv3x3Dispatch d;
+    d.kernel  = s.conv3x3.get();
+    d.input   = &in_view;
+    d.output  = &out_view;
+    d.weights = s.post_w_.get();
+    d.bias    = s.post_b_.get();
+    d.pad_h   = 0;
+    d.pad_w   = 0;
+    nn_ocl::EnqueueConv3x3Nhwc4(d, queue);
+  }
+
+  // ---- Output 1x1 width→3 (no ReLU) into cat_buf ----
+  {
+    auto in_view =
+        nn_ocl::Nhwc4TensorView::Contiguous(residual_buf, batch, post_h, post_w, s.width);
+    auto out_view = nn_ocl::Nhwc4TensorView::Contiguous(cat_buf, batch, post_h, post_w, 3);
+    nn_ocl::Conv1x1Dispatch d;
+    d.kernel     = s.conv1x1.get();
+    d.input      = &in_view;
+    d.output     = &out_view;
+    d.weights    = s.output_w_.get();
+    d.bias       = s.output_b_.get();
+    d.apply_relu = 0;
+    nn_ocl::EnqueueConv1x1Nhwc4(d, queue);
+  }
+
+  // ---- Center-crop + optional gamma → HWC RGB ----
+  const int crop_top  = (post_h - out_h) / 2;
+  const int crop_left = (post_w - out_w) / 2;
+  if (crop_top < 0 || crop_left < 0 || (post_h - out_h) % 2 != 0 || (post_w - out_w) % 2 != 0) {
+    throw std::runtime_error(std::string(module) + ": invalid centered export crop");
+  }
+  {
+    const cl_int b      = batch;
+    const cl_int ih     = post_h;
+    const cl_int iw     = post_w;
+    const cl_int oh     = out_h;
+    const cl_int ow     = out_w;
+    const cl_int ct     = crop_top;
+    const cl_int cl     = crop_left;
+    const cl_int icb    = 1;
+    const cl_int gamma  = apply_gamma_decode ? 1 : 0;
+    const cl_int clampv = 0;
+    SetArg(s.output_rgb.get(), 0, cat_buf, "out arg0");
+    SetArg(s.output_rgb.get(), 1, output_rgb_hwc, "out arg1");
+    SetArg(s.output_rgb.get(), 2, b, "out arg2");
+    SetArg(s.output_rgb.get(), 3, ih, "out arg3");
+    SetArg(s.output_rgb.get(), 4, iw, "out arg4");
+    SetArg(s.output_rgb.get(), 5, oh, "out arg5");
+    SetArg(s.output_rgb.get(), 6, ow, "out arg6");
+    SetArg(s.output_rgb.get(), 7, ct, "out arg7");
+    SetArg(s.output_rgb.get(), 8, cl, "out arg8");
+    SetArg(s.output_rgb.get(), 9, icb, "out arg9");
+    SetArg(s.output_rgb.get(), 10, gamma, "out arg10");
+    SetArg(s.output_rgb.get(), 11, clampv, "out arg11");
+    Enqueue3D(s.output_rgb.get(), static_cast<size_t>(out_w), static_cast<size_t>(out_h),
+              static_cast<size_t>(batch), queue, "output enqueue");
+  }
+}
+
+}  // namespace
+
+// ===========================================================================
+// Bayer
+// ===========================================================================
+
+struct OpenClBayerDemosaicNet::Impl {
+  ModuleState state;
+};
+
+OpenClBayerDemosaicNet::OpenClBayerDemosaicNet() : impl_(std::make_unique<Impl>()) {}
+OpenClBayerDemosaicNet::~OpenClBayerDemosaicNet() = default;
+OpenClBayerDemosaicNet::OpenClBayerDemosaicNet(OpenClBayerDemosaicNet&&) noexcept = default;
+OpenClBayerDemosaicNet& OpenClBayerDemosaicNet::operator=(OpenClBayerDemosaicNet&&) noexcept =
+    default;
+
+void OpenClBayerDemosaicNet::LoadWeights(const nn::SafetensorsTensorMap& tensors,
+                                         cl_command_queue queue) {
+  RequireMetadata(tensors, "format", "demosaicnet-pytorch-state_dict", "OpenClBayerDemosaicNet");
+  RequireMetadata(tensors, "architecture", kArchitecture, "OpenClBayerDemosaicNet");
+  RequireMetadata(tensors, "architecture_version", "1", "OpenClBayerDemosaicNet");
+  RequireMetadata(tensors, "variant", "bayer", "OpenClBayerDemosaicNet");
+  RequireMetadata(tensors, "cfa_period", "2", "OpenClBayerDemosaicNet");
+  RequireMetadata(tensors, "pack_factor", "2", "OpenClBayerDemosaicNet");
+  RequireMetadata(tensors, "tile_input", "1086", "OpenClBayerDemosaicNet");
+  RequireMetadata(tensors, "tile_output", "1024", "OpenClBayerDemosaicNet");
+  RequireMetadata(tensors, "tile_border", "31", "OpenClBayerDemosaicNet");
+  RequireMetadata(tensors, "tile_pad", "32", "OpenClBayerDemosaicNet");
+  RequireMetadata(tensors, "tile_step", "1024", "OpenClBayerDemosaicNet");
+  RequireMetadata(tensors, "checkpoint_sha256",
+                  "f00fb0e4f4a49e32344ffb0add583bee98c7d5dbfda6c593b5b066d08f9de69f",
+                  "OpenClBayerDemosaicNet");
+
+  ModuleState staging;
+  LoadCommonWeights(staging, tensors, kDepth, kWidth, kPackOutCh, kResidualCh, ResolveQueue(queue),
+                    "OpenClBayerDemosaicNet", /*is_bayer=*/true);
+  impl_->state = std::move(staging);
+}
+
+auto OpenClBayerDemosaicNet::weights_loaded() const -> bool {
+  return impl_ != nullptr && impl_->state.loaded;
+}
+
+void OpenClBayerDemosaicNet::ForwardNchwToHwc(cl_mem input_nchw, int batch, int height, int width,
+                                              cl_mem output_rgb_hwc,
+                                              opencl::nn::WorkspacePool& workspace,
+                                              cl_command_queue queue,
+                                              bool apply_gamma_decode) const {
+  ForwardImpl(impl_->state, input_nchw, batch, height, width, output_rgb_hwc, workspace, queue,
+              apply_gamma_decode,
+              [](int h, int w) { return Spec::OutputHeight(h, w); },
+              [](int w, int h) { return Spec::OutputWidth(w, h); }, kMinSpatial,
+              "OpenClBayerDemosaicNet");
+}
+
+auto OpenClBayerDemosaicNet::EstimateWorkspaceBytes(int input_h, int input_w, int batch)
+    -> std::size_t {
+  return EstimateNhwc4WorkspaceBytes(input_h, input_w, batch, kPackOutCh, kWidth, kResidualCh,
+                                     kDepth, kPackFactor);
+}
+
+auto OpenClBayerDemosaicNet::ResidentWeightBytes() const -> std::size_t {
+  return impl_ != nullptr ? ResidentBytes(impl_->state) : 0;
+}
+
+auto OpenClBayerDemosaicNet::Trunk0WeightBuffer() const -> cl_mem {
+  return impl_ != nullptr ? impl_->state.trunk_w_[0].get() : nullptr;
+}
+
+auto OpenClBayerDemosaicNet::OutputWeightBuffer() const -> cl_mem {
+  return impl_ != nullptr ? impl_->state.output_w_.get() : nullptr;
+}
+
+// ===========================================================================
+// X-Trans
+// ===========================================================================
+
+struct OpenClXTransDemosaicNet::Impl {
+  ModuleState state;
+};
+
+OpenClXTransDemosaicNet::OpenClXTransDemosaicNet() : impl_(std::make_unique<Impl>()) {}
+OpenClXTransDemosaicNet::~OpenClXTransDemosaicNet() = default;
+OpenClXTransDemosaicNet::OpenClXTransDemosaicNet(OpenClXTransDemosaicNet&&) noexcept = default;
+OpenClXTransDemosaicNet& OpenClXTransDemosaicNet::operator=(OpenClXTransDemosaicNet&&) noexcept =
+    default;
+
+void OpenClXTransDemosaicNet::LoadWeights(const nn::SafetensorsTensorMap& tensors,
+                                          cl_command_queue queue) {
+  RequireMetadata(tensors, "format", "demosaicnet-pytorch-state_dict", "OpenClXTransDemosaicNet");
+  RequireMetadata(tensors, "architecture", kArchitecture, "OpenClXTransDemosaicNet");
+  RequireMetadata(tensors, "architecture_version", "1", "OpenClXTransDemosaicNet");
+  RequireMetadata(tensors, "variant", "xtrans", "OpenClXTransDemosaicNet");
+  RequireMetadata(tensors, "cfa_period", "6", "OpenClXTransDemosaicNet");
+  RequireMetadata(tensors, "pack_factor", "2", "OpenClXTransDemosaicNet");
+  RequireMetadata(tensors, "tile_input", "1048", "OpenClXTransDemosaicNet");
+  RequireMetadata(tensors, "tile_output", "1024", "OpenClXTransDemosaicNet");
+  RequireMetadata(tensors, "tile_border", "12", "OpenClXTransDemosaicNet");
+  RequireMetadata(tensors, "tile_pad", "12", "OpenClXTransDemosaicNet");
+  RequireMetadata(tensors, "tile_step", "1020", "OpenClXTransDemosaicNet");
+  RequireMetadata(tensors, "checkpoint_sha256",
+                  "f985ba64404a4ef9e4662d4f556d184de1e47127ab046f7140fa4b614f4c7546",
+                  "OpenClXTransDemosaicNet");
+
+  ModuleState staging;
+  LoadCommonWeights(staging, tensors, kDepth, kWidth, kPackOutCh, kResidualCh, ResolveQueue(queue),
+                    "OpenClXTransDemosaicNet", /*is_bayer=*/false);
+  impl_->state = std::move(staging);
+}
+
+auto OpenClXTransDemosaicNet::weights_loaded() const -> bool {
+  return impl_ != nullptr && impl_->state.loaded;
+}
+
+void OpenClXTransDemosaicNet::ForwardNchwToHwc(cl_mem input_nchw, int batch, int height, int width,
+                                               cl_mem output_rgb_hwc,
+                                               opencl::nn::WorkspacePool& workspace,
+                                               cl_command_queue queue,
+                                               bool apply_gamma_decode) const {
+  ForwardImpl(impl_->state, input_nchw, batch, height, width, output_rgb_hwc, workspace, queue,
+              apply_gamma_decode,
+              [](int h, int w) { return Spec::OutputHeight(h, w); },
+              [](int w, int h) { return Spec::OutputWidth(w, h); }, kMinSpatial,
+              "OpenClXTransDemosaicNet");
+}
+
+auto OpenClXTransDemosaicNet::EstimateWorkspaceBytes(int input_h, int input_w, int batch)
+    -> std::size_t {
+  return EstimateNhwc4WorkspaceBytes(input_h, input_w, batch, kPackOutCh, kWidth, kResidualCh,
+                                     kDepth, kPackFactor);
+}
+
+auto OpenClXTransDemosaicNet::ResidentWeightBytes() const -> std::size_t {
+  return impl_ != nullptr ? ResidentBytes(impl_->state) : 0;
+}
+
+auto OpenClXTransDemosaicNet::Trunk0WeightBuffer() const -> cl_mem {
+  return impl_ != nullptr ? impl_->state.trunk_w_[0].get() : nullptr;
+}
+
+auto OpenClXTransDemosaicNet::OutputWeightBuffer() const -> cl_mem {
+  return impl_ != nullptr ? impl_->state.output_w_.get() : nullptr;
+}
+
+}  // namespace alcedo
+
+#endif  // HAVE_OPENCL

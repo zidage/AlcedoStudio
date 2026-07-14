@@ -1018,6 +1018,20 @@ if(ALCEDO_OPENCL_ENABLED)
   target_link_libraries(OpenClNnPrimitivesTest PRIVATE GTest::gtest_main OpenClNn OpenClProgramLibrary)
   gtest_discover_tests(OpenClNnPrimitivesTest TEST_PREFIX "OpenClNnPrimitivesTest.")
 
+  # Phase 4: fixed Bayer/X-Trans modules vs exported student reference pairs.
+  add_executable(OpenClDemosaicNetTest opencl/opencl_demosaicnet_test.cpp)
+  target_include_directories(OpenClDemosaicNetTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(OpenClDemosaicNetTest PRIVATE
+    GTest::gtest_main
+    OpenClDemosaicNet
+    OpenClProgramLibrary
+    NnSafetensors
+  )
+  target_compile_definitions(OpenClDemosaicNetTest PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+  )
+  gtest_discover_tests(OpenClDemosaicNetTest TEST_PREFIX "OpenClDemosaicNetTest.")
+
   add_executable(OpenClFusedEditPipelineTest opencl/opencl_fused_edit_pipeline_test.cpp)
   target_include_directories(OpenClFusedEditPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(OpenClFusedEditPipelineTest
@@ -1210,6 +1224,7 @@ alcedo_assign_test_category(core ALCEDO_BUILD_CORE_TESTS alcedo_tests_core
   OpenClProgramLibraryTest
   OpenClRuntimeTest
   OpenClNnPrimitivesTest
+  OpenClDemosaicNetTest
 )
 
 alcedo_assign_test_category(image ALCEDO_BUILD_IMAGE_TESTS alcedo_tests_image

@@ -501,6 +501,22 @@ if(ALCEDO_OPENCL_ENABLED)
             OpenCL::OpenCL
     )
     target_compile_definitions(OpenClNn PUBLIC HAVE_OPENCL)
+
+    # Fixed OpenCL DemosaicNet modules + lazy model cache (Phase 4).
+    def_library(OpenClDemosaicNet
+        SOURCES
+            decoders/processor/nn/opencl_demosaicnet_module.cpp
+            decoders/processor/nn/opencl_demosaicnet_cache.cpp
+        PUBLIC_DEPS
+            OpenClNn
+            OpenClProgramLibrary
+            NnSafetensors
+            OpenCL::OpenCL
+    )
+    target_compile_definitions(OpenClDemosaicNet PUBLIC HAVE_OPENCL)
+    target_compile_definitions(OpenClDemosaicNet PRIVATE
+        ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config/models"
+    )
 endif()
 
 # Image Base
