@@ -8,6 +8,7 @@
 
 #include <cmath>
 #include <stdexcept>
+#include <string>
 
 #include <opencv2/core/cuda_stream_accessor.hpp>
 #include <opencv2/core/cuda_types.hpp>
@@ -17,9 +18,6 @@
 
 namespace alcedo {
 namespace {
-
-constexpr float kGammaEncode = 1.0F / 2.2F;
-constexpr float kGammaDecode = 2.2F;
 
 auto GetCudaStream(cv::cuda::Stream* stream) -> cudaStream_t {
   return stream == nullptr ? nullptr : cv::cuda::StreamAccessor::getStream(*stream);
@@ -80,11 +78,11 @@ void LaunchPowSigned(cv::cuda::GpuMat& img, const float gamma, cv::cuda::Stream*
 }  // namespace
 
 void GammaEncodeGpuMat(cv::cuda::GpuMat& img, cv::cuda::Stream* stream) {
-  LaunchPowSigned(img, kGammaEncode, stream);
+  LaunchPowSigned(img, kDemosaicNetGammaEncode, stream);
 }
 
 void GammaDecodeGpuMat(cv::cuda::GpuMat& img, cv::cuda::Stream* stream) {
-  LaunchPowSigned(img, kGammaDecode, stream);
+  LaunchPowSigned(img, kDemosaicNetGammaDecode, stream);
 }
 
 void FinishNeuralEngineRgb(cv::cuda::GpuMat& rgb, cv::cuda::Stream* stream) {
@@ -101,34 +99,21 @@ auto PrepareNeuralEngineCfa(const cv::cuda::GpuMat& linear_cfa, const RawCfaPatt
       return prep;
     }
 
-    const auto shift = FindCfaAlignShift(camera_pattern);
-    if (!shift.has_value()) {
-      prep.error =
-          "CFA cannot be aligned to DemosaicNet training origin by a cyclic shift "
-          "(rotated/reflected CFA is unsupported)";
-      return prep;
-    }
-    prep.shift = *shift;
-
-    const int period = CfaPeriod(camera_pattern.kind);
-    const int avail_h = linear_cfa.rows - prep.shift.sy;
-    const int avail_w = linear_cfa.cols - prep.shift.sx;
-    if (avail_h < period || avail_w < period) {
-      prep.error = "CFA is too small after phase-align crop";
-      return prep;
-    }
-
-    const int aligned_h = avail_h - (avail_h % period);
-    const int aligned_w = avail_w - (avail_w % period);
     const int min_spatial = camera_pattern.kind == RawCfaKind::XTrans6x6
                                 ? XTransDemosaicNet::kMinSpatial
                                 : BayerDemosaicNet::kMinSpatial;
-    if (aligned_h < min_spatial || aligned_w < min_spatial) {
-      prep.error = "CFA is smaller than the Neural Engine minimum after phase-align";
+    std::string geo_error;
+    const auto geo = ComputeNeuralAlignedGeometry(camera_pattern, linear_cfa.cols, linear_cfa.rows,
+                                                  min_spatial, &geo_error);
+    if (!geo.has_value()) {
+      prep.error = geo_error;
       return prep;
     }
+    prep.shift = CfaAlignShift{geo->shift_sy, geo->shift_sx};
 
     // Clone the ROI so gamma encode never mutates the original linear buffer (Legacy fallback).
+    const int aligned_w = geo->aligned_width;
+    const int aligned_h = geo->aligned_height;
     const cv::Rect roi(prep.shift.sx, prep.shift.sy, aligned_w, aligned_h);
     if (stream == nullptr) {
       linear_cfa(roi).copyTo(aligned_cfa);

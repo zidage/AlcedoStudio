@@ -117,6 +117,12 @@ def_library(CudaDriverRequirements
     SOURCES utils/cuda/cuda_driver_requirements.cpp
 )
 
+# Backend-neutral host safetensors parser (no CUDA / OpenCL).
+def_library(NnSafetensors
+    SOURCES nn/safetensors.cpp
+    PRIVATE_DEPS JSON
+)
+
 if(ALCEDO_CUDA_ENABLED)
     def_library(CudaUtils
         SOURCES
@@ -135,9 +141,8 @@ if(ALCEDO_CUDA_ENABLED)
             cuda/nn/safetensors.cpp
         PUBLIC_DEPS
             CUDA::cudart
+            NnSafetensors
             ${ALCEDO_OPENCV_CORE_DEPS}
-        PRIVATE_DEPS
-            JSON
     )
     set_target_properties(CudaUtils PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
     target_compile_definitions(CudaUtils PUBLIC HAVE_CUDA)

@@ -234,7 +234,7 @@ TEST_F(MlOpsDemosaicNetTest, BayerLoadWeightsAndRejectWrongShape) {
   auto mutated = bad.at("trunk.0.weight");
   mutated.shape = {24, 5, 3, 3};  // wrong Cin
   mutated.data.assign(mutated.numel(), 0.0f);
-  bad.Insert(std::move(mutated));
+  bad.InsertOrAssign(std::move(mutated));
 
   BayerDemosaicNet bad_net;
   EXPECT_THROW(bad_net.LoadWeights(bad), std::runtime_error);
@@ -270,7 +270,7 @@ TEST_F(MlOpsDemosaicNetTest, XTransLoadWeightsAndRejectWrongShape) {
   auto mutated = bad.at("post_conv.weight");
   mutated.shape = {32, 5, 3, 3};  // wrong Cin (must be 6)
   mutated.data.assign(mutated.numel(), 0.0f);
-  bad.Insert(std::move(mutated));
+  bad.InsertOrAssign(std::move(mutated));
 
   XTransDemosaicNet bad_net;
   EXPECT_THROW(bad_net.LoadWeights(bad), std::runtime_error);

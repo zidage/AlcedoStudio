@@ -57,6 +57,8 @@ __global__ void PackCfaMosaicKernel(const cv::cuda::PtrStepSz<float> cfa, float*
   mosaic[2 * plane + pixel] = color == 2 ? value : 0.0F;
 }
 
+// Host/device-identical to alcedo::Reflect101 (demosaicnet_preprocess_common.hpp).
+// Kept as a device function so kernels need no host linkage.
 __device__ auto Reflect101(const int coordinate, const int limit) -> int {
   if (limit <= 1) {
     return 0;

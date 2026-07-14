@@ -163,6 +163,21 @@ if(ALCEDO_CUDA_ENABLED AND ALCEDO_ENABLE_CUDA_IMAGE_GEOMETRY_OPS_TEST)
   gtest_discover_tests(CudaImageGeometryOpsTest TEST_PREFIX "CudaImageGeometryOpsTest.")
 endif()
 
+# Phase 1 OpenCL NN plan: backend-neutral safetensors parser, student tile planner,
+# CFA alignment / Reflect101 / gamma constants. Must not link CUDA or OpenCL.
+add_executable(NnSharedUtilsTest
+  ml_ops/nn_safetensors_test.cpp
+  ml_ops/neural_tile_jobs_test.cpp
+  ml_ops/demosaicnet_preprocess_common_test.cpp
+)
+target_include_directories(NnSharedUtilsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(NnSharedUtilsTest PRIVATE GTest::gtest_main NnSafetensors JSON
+                      libraw::raw_r ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+target_compile_definitions(NnSharedUtilsTest PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+)
+gtest_discover_tests(NnSharedUtilsTest TEST_PREFIX "NnSharedUtilsTest.")
+
 if(ALCEDO_CUDA_ENABLED)
   add_executable(CudaPrngTest cuda/prng_test.cu)
   target_include_directories(CudaPrngTest PUBLIC ${ALCEDO_INCLUDE_DIR})
