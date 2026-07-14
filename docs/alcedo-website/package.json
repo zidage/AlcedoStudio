@@ -5,7 +5,12 @@
   "description": "Static Alcedo Studio website (site/ is the deploy root)",
   "scripts": {
     "assets": "python scripts/build_assets.py",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
     "verify": "python scripts/verify_site.py",
     "serve": "python -m http.server 8080 --directory site"
+  },
+  "devDependencies": {
+    "wrangler": "4.110.0"
   }
 }
