@@ -1,6 +1,6 @@
 # Alcedo Studio
 
-项目网站：[English](https://zidage.github.io/Alcedo/en/) | [简体中文](https://zidage.github.io/Alcedo/zh/)
+项目网站：[English](https://aoraw.org/) | [简体中文](https://aoraw.org/zh-cn/)
 
 <p align="right"><a href="./README.md">English</a> | <a href="./README.zh-CN.md"><strong>简体中文</strong></a></p>
 
@@ -26,51 +26,51 @@
   </colgroup>
   <tbody>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/1-主界面.png" alt="Alcedo Studio 图库浏览器" width="100%" /></td>
+      <td><img src="docs/screenshots/1-主界面.png" alt="Alcedo Studio 图库浏览器" width="100%" /></td>
       <td><strong>图库影集浏览器</strong> —— 极速加载的缩略图网格、物理文件夹树、活跃搜索维度、星标过滤器与 AI 语义标签集成。</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/7-高级筛选.png" alt="高级筛选与过滤" width="100%" /></td>
+      <td><img src="docs/screenshots/7-高级筛选.png" alt="高级筛选与过滤" width="100%" /></td>
       <td><strong>高级筛选与过滤</strong> —— 结合 EXIF 元数据、星标和 AI 语义标签，在庞大的库中进行精准的组合搜索与筛选。</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/8-AI内容识别.png" alt="本地 AI 视觉引擎" width="100%" /></td>
+      <td><img src="docs/screenshots/8-AI内容识别.png" alt="本地 AI 视觉引擎" width="100%" /></td>
       <td><strong>本地 AI 视觉引擎</strong> —— 自由开启与管理本地 CLIP 或 SigLIP 端侧模型， 100% 数据隐私安全。</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/9-AI内容过滤.png" alt="AI 语义标签过滤" width="100%" /></td>
+      <td><img src="docs/screenshots/9-AI内容过滤.png" alt="AI 语义标签过滤" width="100%" /></td>
       <td><strong>AI 语义标签过滤</strong> —— 本地 AI 自动生成的语义标签会作为一级属性融入过滤器面板，与其他参数无缝组合。</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/10-AI自然语言搜索.png" alt="自然语言智能搜索" width="100%" /></td>
+      <td><img src="docs/screenshots/10-AI自然语言搜索.png" alt="自然语言智能搜索" width="100%" /></td>
       <td><strong>自然语言智能搜索</strong> —— 像与人对话一样输入画面描述（如“海边日落人像”），在本地向量索引中实现即时的高匹配度排序。</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/2-色彩科学.png" alt="电影级色彩科学" width="100%" /></td>
+      <td><img src="docs/screenshots/2-色彩科学.png" alt="电影级色彩科学" width="100%" /></td>
       <td><strong>电影级双色彩科学</strong> —— 提供 ACES 2.0 和 OpenDRT 规范的输出渲染，带显示色彩空间与峰值亮度调整。</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/3-基础调整.png" alt="实时影调基础调整" width="100%" /></td>
+      <td><img src="docs/screenshots/3-基础调整.png" alt="实时影调基础调整" width="100%" /></td>
       <td><strong>实时影调基础调整</strong> —— 支持曝光、对比度、白平衡、色调曲线和局部高光/阴影（LLF）微调，带实时直方图反馈。</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/4-高级色彩.png" alt="创意调色板" width="100%" /></td>
+      <td><img src="docs/screenshots/4-高级色彩.png" alt="创意调色板" width="100%" /></td>
       <td><strong>创意调色板</strong> —— 精准控制 HSL 调整、色彩轮（Lift, Gamma, Gain）创意分级与实时示波器。</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/5-几何调整.png" alt="几何畸变与透视修复" width="100%" /></td>
+      <td><img src="docs/screenshots/5-几何调整.png" alt="几何畸变与透视修复" width="100%" /></td>
       <td><strong>几何畸变与透视修复</strong> —— 包含裁剪、旋转、镜头畸变与透视修复等基本工具。</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/Portra 400.png" alt="胶片模拟与配方" width="100%" /></td>
+      <td><img src="docs/screenshots/Portra 400.png" alt="胶片模拟与配方" width="100%" /></td>
       <td><strong>胶片模拟与配方</strong> —— 原生支持针对 ACEScc/ACEScct 流程优化的 Kodak、Fuji 和 Agfa 预设（.cube 格式 3D LUT）。</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/5-胶片颗粒与Halation模拟.png" alt="真实胶片质感模拟" width="100%" /></td>
+      <td><img src="docs/screenshots/5-胶片颗粒与Halation模拟.png" alt="真实胶片质感模拟" width="100%" /></td>
       <td><strong>真实胶片质感模拟</strong> —— 基于物理模型的颗粒与光晕（Halation）仿真，在 CPU/GPU 混合管线上高效渲染。</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/6-导出界面.png" alt="高级批量导出" width="100%" /></td>
+      <td><img src="docs/screenshots/6-导出界面.png" alt="高级批量导出" width="100%" /></td>
       <td><strong>高级批量导出</strong> —— 支持多格式并行队列，带精细位深控制、ICC 元数据选择和 UltraHDR 增益图写入。</td>
     </tr>
   </tbody>

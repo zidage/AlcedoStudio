@@ -1,6 +1,6 @@
 <img src="docs/header.jpg" alt="Alcedo Studio" width="100%"/>
 
-[Project website](https://zidage.github.io/AlcedoStudio) | [项目网页](https://zidage.github.io/AlcedoStudio)
+[Project website](https://aoraw.org/) | [项目网页](https://aoraw.org/zh-cn/)
 
 <p align="right"><a href="./README.md"><strong>English</strong></a> | <a href="./README.zh-CN.md">简体中文</a></p>
 
@@ -24,51 +24,51 @@ The screenshots below reflect the v0.2.6-era interface of Alcedo Studio.
   </colgroup>
   <tbody>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/1-主界面.png" alt="Alcedo Studio library browser" width="100%" /></td>
+      <td><img src="docs/screenshots/1-主界面.png" alt="Alcedo Studio library browser" width="100%" /></td>
       <td><strong>Library Browser</strong> — Fast thumbnail grid, folder directory tree, active search facets, rating filters, and AI labels in a single workspace.</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/7-高级筛选.png" alt="Advanced filtering and library overview" width="100%" /></td>
+      <td><img src="docs/screenshots/7-高级筛选.png" alt="Advanced filtering and library overview" width="100%" /></td>
       <td><strong>Advanced Filtering</strong> — Search, filter, and drill down through your library using EXIF data, custom ratings, and semantic keywords.</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/8-AI内容识别.png" alt="AI content recognition settings" width="100%" /></td>
+      <td><img src="docs/screenshots/8-AI内容识别.png" alt="AI content recognition settings" width="100%" /></td>
       <td><strong>Local AI Vision Engine</strong> — Toggle and manage local CLIP and SigLIP models to run lightning-fast photo scanning with 100% data privacy.</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/9-AI内容过滤.png" alt="AI semantic label filtering" width="100%" /></td>
+      <td><img src="docs/screenshots/9-AI内容过滤.png" alt="AI semantic label filtering" width="100%" /></td>
       <td><strong>Semantic Label Filters</strong> — Automatically generated AI tags are integrated directly into the filter panel as first-class library attributes.</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/10-AI自然语言搜索.png" alt="AI natural-language search" width="100%" /></td>
+      <td><img src="docs/screenshots/10-AI自然语言搜索.png" alt="AI natural-language search" width="100%" /></td>
       <td><strong>Natural-Language Search</strong> — Describe a scene in plain English, and find the closest matches instantly using our local vector index.</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/2-色彩科学.png" alt="ACES and OpenDRT color science" width="100%" /></td>
+      <td><img src="docs/screenshots/2-色彩科学.png" alt="ACES and OpenDRT color science" width="100%" /></td>
       <td><strong>Professional Color Science</strong> — Output rendering using ACES 2.0 and OpenDRT with display color space and peak luminance controls.</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/3-基础调整.png" alt="Basic and local tone adjustments" width="100%" /></td>
+      <td><img src="docs/screenshots/3-基础调整.png" alt="Basic and local tone adjustments" width="100%" /></td>
       <td><strong>Real-Time Exposure & Tone</strong> — Fine-tune white balance, exposure, contrast, tone curves, and local highlights/shadows with live histogram feedback.</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/4-高级色彩.png" alt="Advanced color controls" width="100%" /></td>
+      <td><img src="docs/screenshots/4-高级色彩.png" alt="Advanced color controls" width="100%" /></td>
       <td><strong>Creative Grading</strong> — Precise control over HSL adjustments, color wheel grading (Lift, Gamma, Gain), and real-time scopes.</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/5-几何调整.png" alt="Geometry and crop controls" width="100%" /></td>
+      <td><img src="docs/screenshots/5-几何调整.png" alt="Geometry and crop controls" width="100%" /></td>
       <td><strong>Geometry & Perspective</strong> — Intuitive crop, rotation, perspective repair, and common aspect ratio templates.</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/Portra 400.png" alt="Kodak Portra 400 film simulation" width="100%" /></td>
+      <td><img src="docs/screenshots/Portra 400.png" alt="Kodak Portra 400 film simulation" width="100%" /></td>
       <td><strong>Film Simulation</strong> — Native support for curated Kodak, Fuji, and Agfa LUTs (.cube) designed for ACEScc/ACEScct workflows.</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/5-胶片颗粒与Halation模拟.png" alt="Film grain and halation controls" width="100%" /></td>
+      <td><img src="docs/screenshots/5-胶片颗粒与Halation模拟.png" alt="Film grain and halation controls" width="100%" /></td>
       <td><strong>Analog Film Effects</strong> — Beautiful, mathematically realistic film grain and halation effects computed dynamically on GPU/CPU pipelines.</td>
     </tr>
     <tr>
-      <td><img src="docs/alcedo-website/public/screenshots/6-导出界面.png" alt="Export settings" width="100%" /></td>
+      <td><img src="docs/screenshots/6-导出界面.png" alt="Export settings" width="100%" /></td>
       <td><strong>Advanced Export</strong> — Multi-format batch export, quality parameters, metadata handling, and UltraHDR gain-map embedding.</td>
     </tr>
   </tbody>
