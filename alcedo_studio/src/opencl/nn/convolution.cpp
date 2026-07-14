@@ -64,6 +64,35 @@ void Enqueue3D(cl_kernel kernel, size_t gx, size_t gy, size_t gz, cl_command_que
   // Intentionally no clFinish / event wait here.
 }
 
+void EnqueueConvTile3D(cl_kernel kernel, size_t gx, size_t gy, size_t gz,
+                       cl_command_queue queue, const EnqueueOptions& options, const char* what) {
+  if (kernel == nullptr) {
+    throw std::runtime_error(std::string(what) + ": null kernel");
+  }
+  if (queue == nullptr) {
+    throw std::runtime_error(std::string(what) + ": null command queue");
+  }
+  if (gx == 0 || gy == 0 || gz == 0) {
+    throw std::runtime_error(std::string(what) + ": zero global size");
+  }
+  constexpr size_t kLocalX = 16;
+  constexpr size_t kLocalY = 8;
+  const size_t global[3] = {
+      ((gx + kLocalX - 1) / kLocalX) * kLocalX,
+      ((gy + kLocalY - 1) / kLocalY) * kLocalY,
+      gz,
+  };
+  const size_t local[3] = {kLocalX, kLocalY, 1};
+  ScopedStageEvent stage_event;
+  cl_event*        event_out = options.event != nullptr ? options.event : stage_event.out();
+  CheckOpenCl(clEnqueueNDRangeKernel(queue, kernel, 3, nullptr, global, local, 0, nullptr,
+                                     event_out),
+              what);
+  ++g_instrumentation.enqueue_count;
+  NoteOpenClEnqueueNdRange();
+  // Intentionally no clFinish / event wait here.
+}
+
 }  // namespace
 
 auto GetDispatchInstrumentation() -> DispatchInstrumentation& { return g_instrumentation; }
@@ -211,9 +240,11 @@ void EnqueueConv3x3Nhwc4(const Conv3x3Dispatch& dispatch, cl_command_queue queue
   SetArg(dispatch.kernel, 13, in_logical_channels, "EnqueueConv3x3Nhwc4 arg13");
   SetArg(dispatch.kernel, 14, out_logical_channels, "EnqueueConv3x3Nhwc4 arg14");
 
-  const size_t gz = static_cast<size_t>(batch) * static_cast<size_t>(out_channel_blocks);
-  Enqueue3D(dispatch.kernel, static_cast<size_t>(out_w), static_cast<size_t>(out_h), gz, queue,
-            options, "EnqueueConv3x3Nhwc4");
+  // The tiled kernel computes every output channel block for one spatial tile
+  // and batch plane; z is therefore batch-only, matching the CUDA mapping.
+  const size_t gz = static_cast<size_t>(batch);
+  EnqueueConvTile3D(dispatch.kernel, static_cast<size_t>(out_w), static_cast<size_t>(out_h), gz,
+                    queue, options, "EnqueueConv3x3Nhwc4");
 }
 
 void EnqueueConv1x1Nhwc4(const Conv1x1Dispatch& dispatch, cl_command_queue queue,
@@ -265,7 +296,8 @@ void EnqueueConv1x1Nhwc4(const Conv1x1Dispatch& dispatch, cl_command_queue queue
   SetArg(dispatch.kernel, 10, out_logical_channels, "EnqueueConv1x1Nhwc4 arg10");
   SetArg(dispatch.kernel, 11, apply_relu, "EnqueueConv1x1Nhwc4 arg11");
 
-  const size_t gz = static_cast<size_t>(batch) * static_cast<size_t>(out_channel_blocks);
+  // One work-item owns one spatial position and all output channel blocks.
+  const size_t gz = static_cast<size_t>(batch);
   Enqueue3D(dispatch.kernel, static_cast<size_t>(width), static_cast<size_t>(height), gz, queue,
             options, "EnqueueConv1x1Nhwc4");
 }

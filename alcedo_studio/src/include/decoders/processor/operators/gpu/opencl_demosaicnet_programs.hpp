@@ -36,25 +36,16 @@ inline constexpr const char* kClamp01KernelName              = "demosaicnet_clam
 inline constexpr const char* kPackCfaMonoToHwc3KernelName    = "demosaicnet_pack_cfa_mono_to_hwc3";
 inline constexpr const char* kRgb3ToRgba4KernelName          = "demosaicnet_rgb3_to_rgba4";
 
-// Conservative default build options. Offline tuning (Phase 7) may replace the
-// CLBlast-style WGD/MDIMCD/... constants; channel-block counts stay variant-fixed.
-inline constexpr const char* kCommonConvBuildOptions =
-    "-cl-std=CL1.2 -DWGD=8 -DMDIMCD=8 -DNDIMCD=8 -DMDIMAD=8 -DNDIMBD=8 "
-    "-DKWID=1 -DVWMD=1 -DVWND=1 -DPADA=1 -DPADB=1 -DRELAX_WORKGROUP_SIZE=1 "
-    "-DUSE_INLINE_KEYWORD=1 -DFUSE_BIAS=1 -DFUSE_RELU=1";
-
-// Bayer trunk C24 → 6 float4 blocks; X-Trans trunk C32 → 8 float4 blocks.
+// The project-owned direct kernel uses a fixed 8x8 local tile. Channel block
+// The input channel-block bound is compile-time for local-memory allocation;
+// runtime dimensions still cover the first/post-layer shape families.
 inline constexpr const char* kBayerConvBuildOptions =
-    "-cl-std=CL1.2 -DWGD=8 -DMDIMCD=8 -DNDIMCD=8 -DMDIMAD=8 -DNDIMBD=8 "
-    "-DKWID=1 -DVWMD=1 -DVWND=1 -DPADA=1 -DPADB=1 -DRELAX_WORKGROUP_SIZE=1 "
-    "-DUSE_INLINE_KEYWORD=1 -DFUSE_BIAS=1 -DFUSE_RELU=1 "
+    "-cl-std=CL1.2 "
     "-DIN_CHANNEL_BLOCKS=6 -DOUT_CHANNEL_BLOCKS=6 "
     "-DIN_LOGICAL_CHANNELS=24 -DOUT_LOGICAL_CHANNELS=24";
 
 inline constexpr const char* kXTransConvBuildOptions =
-    "-cl-std=CL1.2 -DWGD=8 -DMDIMCD=8 -DNDIMCD=8 -DMDIMAD=8 -DNDIMBD=8 "
-    "-DKWID=1 -DVWMD=1 -DVWND=1 -DPADA=1 -DPADB=1 -DRELAX_WORKGROUP_SIZE=1 "
-    "-DUSE_INLINE_KEYWORD=1 -DFUSE_BIAS=1 -DFUSE_RELU=1 "
+    "-cl-std=CL1.2 "
     "-DIN_CHANNEL_BLOCKS=8 -DOUT_CHANNEL_BLOCKS=8 "
     "-DIN_LOGICAL_CHANNELS=32 -DOUT_LOGICAL_CHANNELS=32";
 

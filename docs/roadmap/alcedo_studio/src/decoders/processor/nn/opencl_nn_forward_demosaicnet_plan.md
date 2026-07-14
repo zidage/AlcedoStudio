@@ -1,8 +1,8 @@
 # OpenCL NN Forward DemosaicNet Migration and Alignment Plan
 
-**Status:** Correctness and product routing are implemented; Phase 7.0 telemetry and Phase 7.1 residency are complete; Phase 7.2 is next  
+**Status:** Correctness, product routing, Phase 7.0 telemetry, Phase 7.1 residency, and Phase 7.2 are complete; both local OpenCL full-frame means pass the `<500 ms` acceptance gate
 **Date:** 2026-07-14  
-**Updated:** 2026-07-14 after Phase 7.1 resident execution (zero sub-buffer churn)  
+**Updated:** 2026-07-14 after CUDA-shaped all-output-channel tiling and 1x1 specialization
 **Primary roadmap owner:** `alcedo_studio/src/decoders/processor/nn`  
 **Scope:** Port the CUDA DemosaicNet forward path to OpenCL without introducing a general-purpose inference runtime.
 
@@ -33,12 +33,9 @@ independent implementation failures:
    every tile, and the full-frame staging buffers, workspace, tiled executor, tile buffers, and
    several kernel objects are recreated for every decode. Per-tile sub-buffer release alone accounts
    for 1.70 seconds of Bayer time and 2.76 seconds of X-Trans time in the diagnostic profile.
-2. **The 3x3 kernel is not a CLBlast tiled convolution.** The current source retains CLBlast-style
-   parameter names, but those parameters do not drive work-group tiling, local-memory staging,
-   register blocking, or vector width. The host submits `local_work_size = nullptr`, and each work
-   item computes one spatial position and one `float4` output block with scalar loops. Changing
-   `WGD`, `MDIMCD`, `NDIMCD`, `KWID`, `VWMD`, or `VWND` therefore cannot materially tune the
-   current algorithm.
+2. **The old 3x3 kernel was a scalar baseline.** It retained CLBlast-style parameter names, but
+   those parameters did not drive work-group tiling, local-memory staging, register blocking, or
+   vector width. Phase 7.2 replaces it with a project-owned fixed-shape kernel.
 
 The major required improvement is consequently explicit: **make the complete Neural execution
 resident, then replace the nominal CLBlast-derived scalar convolution with a real tiled,
@@ -47,10 +44,9 @@ cleanup is mandatory but cannot by itself reach the `<500 ms` gate. Subtracting 
 sub-buffer-release cost from wall time still leaves approximately 2.78 seconds for Bayer and 4.60
 seconds for X-Trans.
 
-The full CLBlast library is not linked into this path, so the current result must not be described as
-"CLBlast performance." A faithful upstream single-kernel `Xconvgemm` adaptation is retained as a
-development A/B candidate, but the preferred product candidate is an OpenCL implementation of the
-same persistent-NHWC, fixed-shape direct-convolution strategy already retained by the CUDA path.
+The full CLBlast library is not linked into this path, and the product source no longer retains a
+CLBlast-derived extract. The selected product candidate is a project-owned persistent-NHWC,
+fixed-shape direct-convolution implementation shaped after the CUDA path.
 
 ## 2. Locked design decisions
 
@@ -220,26 +216,12 @@ This layer owns:
 - structural residual/post layers;
 - product-facing Neural execution and error reporting.
 
-### 5.4 Provisional minimal CLBlast-derived source
+### 5.4 Project-owned convolution source
 
-```text
-alcedo_studio/src/third_party/clblast_min/LICENSE
-alcedo_studio/src/third_party/clblast_min/UPSTREAM.md
-alcedo_studio/src/third_party/clblast_min/xconvgemm_direct_f32_nhwc4.cl
-```
-
-This directory is provisional until Phase 7.2 selects the convolution implementation. While it
-exists, `UPSTREAM.md` must record:
-
-- upstream repository: <https://github.com/CNugteren/CLBlast>;
-- upstream tag `1.7.0` and commit `ca2fc3cb09d4917cc72d4ca661d30296865a4afc`;
-- source fragments used from `xconvgemm_part1.opencl`, `xconvgemm_part2.opencl`, and the direct GEMM helper fragments required by the single-kernel path;
-- every local layout, indexing, fusion, and build-option modification;
-- the Apache-2.0 notice and preservation requirements.
-
-Do not import the CLBlast C++ API, runtime database, host tuner, indirect im2col path, other
-precisions, unrelated BLAS levels, tests, samples, or build system into the product. If the
-project-owned kernel wins, delete this directory instead of preserving CLBlast-shaped dead macros.
+The product convolution source is
+`alcedo_studio/src/decoders/processor/operators/gpu/opencl_shader/demosaicnet_conv.cl`.
+It is a fixed 3x3 stride-1 NHWC4 implementation and does not import the CLBlast C++ API, runtime
+database, host tuner, indirect im2col path, or unrelated BLAS levels.
 
 ## 6. Tensor and weight layout
 
@@ -582,7 +564,7 @@ structural stages other than the X-Trans post/output path are small relative to 
 | CLBlast itself is ten times slower than CUDA | **Rejected as an attribution** | No CLBlast runtime is linked. The local source does not contain the upstream local-memory tiles, `MWID x NWID` register accumulators, barriers, or CLBlast global/local launch formula. Most advertised tuning macros are dead. | Treat the current kernel as a project-owned scalar baseline. A/B a faithful upstream algorithm against a CUDA-shaped custom OpenCL kernel before deciding what, if anything, to retain from CLBlast. |
 | OpenCL launch/runtime overhead explains the whole gap | **Rejected** | Later OpenCL RAW pipeline stages are already comparable with CUDA, and the traced time is concentrated in sub-buffer retirement and fixed convolution/pack regions rather than evenly across every enqueue. | Optimize the identified regions before considering command-buffer replay or broader runtime changes. |
 
-### 12.5 Why the current "CLBlast tuning" cannot work
+### 12.5 Why the former "CLBlast tuning" could not work
 
 The upstream CLBlast single-kernel convolution maps output patches and output channels into `WGD`
 tiles, fixes the local work-group to `{MDIMCD, NDIMCD, 1}`, stages A/B tiles through `__local`
@@ -592,7 +574,7 @@ launch formula and
 [`xconvgemm_part2.opencl`](https://github.com/CNugteren/CLBlast/blob/1.7.0/src/kernels/levelx/xconvgemm_part2.opencl)
 kernel body.
 
-The local `demosaicnet_conv3x3_nhwc4` instead:
+The former local `demosaicnet_conv3x3_nhwc4` instead:
 
 - dispatches `global = {out_w, out_h, batch * out_channel_blocks}` with no explicit local size;
 - assigns one work item to one output pixel and one four-channel output block;
@@ -602,17 +584,12 @@ The local `demosaicnet_conv3x3_nhwc4` instead:
 - keeps dynamic boundary and logical-lane branches inside the innermost production loops;
 - defines CLBlast-style macros without using them to change the work mapping or memory hierarchy.
 
-This is a legal correctness kernel, but it is not the algorithm described by its provenance file.
-Before Phase 7 is complete, provenance must be made truthful in one of two ways:
+This was a legal correctness kernel, but it was not a tiled convolution and its provenance was
+misleading. Phase 7.2 removed the dead CLBlast-shaped source and replaced it with the project-owned
+kernel described below.
 
-1. if the custom fixed-shape OpenCL kernel wins, remove the misleading CLBlast-derived naming and
-   delete vendored fragments that no longer contribute meaningful implementation material; or
-2. if a faithful CLBlast-derived kernel wins, retain the actual tiled helpers and update
-   `UPSTREAM.md` to enumerate the code that is truly present and modified.
-
-CLBlast's own tuning documentation lists the RTX 3080 Laptop (SM 8.6) among tuned devices and says
-shape-specific tuning is appropriate. That is useful evidence for the A/B control, not evidence that
-the current dead parameters are tuned.
+CLBlast's own tuning documentation remains historical A/B reference material, not product
+provenance.
 
 ### 12.6 Performance budget after the first profile
 
@@ -738,6 +715,37 @@ Exit gate status:
 - correctness: `OpenClNnPrimitivesTest` (9) and `OpenClDemosaicNetTest` (13) pass at `1e-4` — **pass**.
 
 Phase 7.2 must replace the scalar 3×3 kernel; residency is no longer the primary wall-time blocker.
+
+### 12.9 Phase 7.2 project-owned tiled convolution — 2026-07-14
+
+Implemented in `demosaicnet_conv.cl` and `opencl/nn/convolution.cpp`:
+
+| Piece | Implementation |
+|---|---|
+| Spatial mapping | Explicit `16×8×1` local work-group; rounded spatial globals with bounds-safe writes. |
+| Local reuse | Cooperative 3×3 input-halo staging and packed-weight staging in `__local` memory. |
+| Register blocking | Each work-item computes every output C4 block from one spatial position, matching the CUDA NHWC kernel. |
+| Shape coverage | Bayer and X-Trans first/trunk/post 3×3 channel families; runtime logical-channel masking remains active. |
+| Epilogue | FP32 accumulation, bias, ReLU, and zeroing of padded output lanes. |
+| Provenance | Removed the unused CLBlast-shaped extract and its misleading tuning surface. |
+
+Validation on the local RTX 3080 Laptop GPU:
+
+- `OpenClNnPrimitivesTest`: 9/9 passed, including production shapes, padding, edge bounds, and
+  asynchronous multi-layer dispatch;
+- `OpenClDemosaicNetTest`: 13/13 passed, including all four exported Bayer/X-Trans references at
+  absolute tolerance `1e-4` and tiled coverage;
+- CUDA-shaped wall run, three hot iterations: Bayer **381.57 ms**, X-Trans **413.24 ms**;
+  both pass the roadmap's `<500 ms` two-fixture acceptance gate.
+- Short event profile: Bayer trunk device sum **174.18 ms**, X-Trans trunk device sum
+  **163.64 ms**; full-frame event-profiled wall samples were **374.13 ms** and **403.95 ms**.
+- The timing harness was configured through the `win_release` preset, but reports
+  `NDEBUG` as unset; treat the wall artifact as a measured local gate result, not as a clean
+  compiler-mode comparison against CUDA.
+- Artifacts: `build/perf/opencl_nn_phase7_2_cuda_shaped_wall.json` and
+  `build/perf/opencl_nn_phase7_2_cuda_shaped_event.json`.
+
+No relaxed precision, changed tile coverage, or extra full-frame concurrency was used.
 
 ## 13. Implementation phases and exit gates
 
