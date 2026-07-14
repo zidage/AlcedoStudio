@@ -13,12 +13,14 @@
 #include <string>
 #include <vector>
 
+#include "decoders/processor/operators/gpu/opencl_demosaicnet_programs.hpp"
 #include "edit/pipeline/opencl_pipeline_programs.hpp"
 #include "edit/scope/opencl_scope_programs.hpp"
 #include "opencl/opencl_backend_program_registry.hpp"
 #include "opencl/opencl_context.hpp"
 #include "opencl/opencl_geometry_programs.hpp"
 #include "opencl/opencl_program_library.hpp"
+#include "opencl/opencl_runtime.hpp"
 
 namespace alcedo {
 namespace {
@@ -570,6 +572,98 @@ TEST(OpenClRuntimeTest, PrecompiledProgramAcceleratesComputeHeavyIntegration) {
             << " ms; observed speedup: " << cpu_ms / opencl_ms << "x\n";
 
   EXPECT_NEAR(opencl_integral, cpu_integral, 1.0e-3);
+}
+
+TEST(OpenClRuntimeTest, WarmUpOpenClRuntimeDoesNotCompileColdDemosaicNetPrograms) {
+  auto& context = OpenClContext::Instance();
+  if (!TryEnsureOpenClContext()) {
+    GTEST_SKIP() << context.LastInitializationError();
+  }
+
+  RegisterOpenClBackendPrograms();
+
+  const char* demosaicnet_programs[] = {
+      OpenCL::DemosaicNet::kConvBayerProgramName,
+      OpenCL::DemosaicNet::kConvXTransProgramName,
+      OpenCL::DemosaicNet::kStructuralProgramName,
+  };
+
+  // Snapshot built-state before warm-up. The process-wide library may already
+  // hold programs compiled by an earlier test in this binary; the contract is
+  // that warm-up never builds a still-cold Neural program.
+  bool built_before[3] = {};
+  for (size_t i = 0; i < 3; ++i) {
+    built_before[i] = OpenClProgramLibrary::Instance().IsProgramBuilt(demosaicnet_programs[i]);
+  }
+
+  WarmUpOpenClRuntime();
+
+  for (size_t i = 0; i < 3; ++i) {
+    if (!built_before[i]) {
+      EXPECT_FALSE(OpenClProgramLibrary::Instance().IsProgramBuilt(demosaicnet_programs[i]))
+          << demosaicnet_programs[i];
+    }
+  }
+}
+
+TEST(OpenClRuntimeTest, DemosaicNetProgramsCompileOnceOnFirstUseAndReuse) {
+  auto& context = OpenClContext::Instance();
+  if (!TryEnsureOpenClContext()) {
+    GTEST_SKIP() << context.LastInitializationError();
+  }
+
+  RegisterOpenClBackendPrograms();
+
+  const char* demosaicnet_programs[] = {
+      OpenCL::DemosaicNet::kConvBayerProgramName,
+      OpenCL::DemosaicNet::kConvXTransProgramName,
+      OpenCL::DemosaicNet::kStructuralProgramName,
+  };
+
+  for (const char* program_name : demosaicnet_programs) {
+    const bool built_before = OpenClProgramLibrary::Instance().IsProgramBuilt(program_name);
+    cl_program first = OpenClProgramLibrary::Instance().GetProgram(program_name);
+    ASSERT_NE(first, nullptr) << program_name;
+    EXPECT_TRUE(OpenClProgramLibrary::Instance().IsProgramBuilt(program_name)) << program_name;
+
+    cl_program second = OpenClProgramLibrary::Instance().GetProgram(program_name);
+    EXPECT_EQ(first, second) << program_name;
+    if (!built_before) {
+      // First GetProgram is the compile path; second must reuse the same object.
+      EXPECT_NE(first, nullptr);
+    }
+  }
+
+  struct ProgramKernel {
+    const char* program_name;
+    const char* kernel_name;
+  };
+  const ProgramKernel demosaicnet_kernels[] = {
+      {OpenCL::DemosaicNet::kConvBayerProgramName, OpenCL::DemosaicNet::kConv3x3KernelName},
+      {OpenCL::DemosaicNet::kConvBayerProgramName, OpenCL::DemosaicNet::kConv1x1KernelName},
+      {OpenCL::DemosaicNet::kConvXTransProgramName, OpenCL::DemosaicNet::kConv3x3KernelName},
+      {OpenCL::DemosaicNet::kConvXTransProgramName, OpenCL::DemosaicNet::kConv1x1KernelName},
+      {OpenCL::DemosaicNet::kStructuralProgramName, OpenCL::DemosaicNet::kPackGammaKernelName},
+      {OpenCL::DemosaicNet::kStructuralProgramName,
+       OpenCL::DemosaicNet::kResidualAddCropKernelName},
+      {OpenCL::DemosaicNet::kStructuralProgramName,
+       OpenCL::DemosaicNet::kFormPostInputC6KernelName},
+      {OpenCL::DemosaicNet::kStructuralProgramName, OpenCL::DemosaicNet::kOutputGammaHwcKernelName},
+      {OpenCL::DemosaicNet::kStructuralProgramName,
+       OpenCL::DemosaicNet::kAssembleRgbTileKernelName},
+  };
+
+  for (const auto& item : demosaicnet_kernels) {
+    cl_program program = OpenClProgramLibrary::Instance().GetProgram(item.program_name);
+    ASSERT_NE(program, nullptr) << item.program_name;
+    cl_int    error  = CL_SUCCESS;
+    cl_kernel kernel = clCreateKernel(program, item.kernel_name, &error);
+    EXPECT_EQ(error, CL_SUCCESS) << item.program_name << "." << item.kernel_name;
+    EXPECT_NE(kernel, nullptr) << item.program_name << "." << item.kernel_name;
+    if (kernel != nullptr) {
+      clReleaseKernel(kernel);
+    }
+  }
 }
 
 }  // namespace

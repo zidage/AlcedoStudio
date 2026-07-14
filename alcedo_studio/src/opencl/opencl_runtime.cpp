@@ -31,7 +31,9 @@ auto TryInitializeOpenClRuntime(const OpenClInitializationOptions& options) -> b
 }
 
 void WarmUpOpenClRuntime() {
-  OpenClProgramLibrary::Instance().WarmUpAllPrograms();
+  // Only programs marked required_at_startup are compiled during warm-up.
+  // Optional Neural (DemosaicNet) programs stay lazy until first explicit use.
+  OpenClProgramLibrary::Instance().WarmUpRequiredPrograms();
 }
 
 auto TryPrepareOpenClRuntime(const OpenClInitializationOptions& options) -> bool {

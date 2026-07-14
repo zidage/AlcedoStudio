@@ -283,6 +283,15 @@ auto OpenClProgramLibrary::GetProgram(std::string_view name) -> cl_program {
   }
 }
 
+auto OpenClProgramLibrary::IsProgramBuilt(std::string_view name) const -> bool {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto                  it = programs_.find(std::string(name));
+  if (it == programs_.end() || !it->second) {
+    return false;
+  }
+  return it->second->program != nullptr;
+}
+
 auto OpenClProgramLibrary::RegisteredProgramNames() const -> std::vector<std::string> {
   std::lock_guard<std::mutex> lock(mutex_);
   std::vector<std::string>    names;

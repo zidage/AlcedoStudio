@@ -70,6 +70,10 @@ class OpenClProgramLibrary {
 
   auto        GetProgram(std::string_view name) -> cl_program;
 
+  // True when the named program is registered and has already been built.
+  // Does not trigger compilation. Used by lifecycle tests and diagnostics.
+  auto        IsProgramBuilt(std::string_view name) const -> bool;
+
   auto        RegisteredProgramNames() const -> std::vector<std::string>;
 };
 

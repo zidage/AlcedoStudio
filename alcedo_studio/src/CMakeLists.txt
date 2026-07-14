@@ -58,6 +58,8 @@ if(ALCEDO_OPENCL_ENABLED)
     set(OPENCL_EDIT_PIPELINE_COLOR_CL "${CMAKE_CURRENT_SOURCE_DIR}/edit/pipeline/opencl_shader/color.cl")
     set(OPENCL_EDIT_PIPELINE_CST_CL "${CMAKE_CURRENT_SOURCE_DIR}/edit/pipeline/opencl_shader/cst.cl")
     set(OPENCL_XTRANS_INTERPOLATE_CL "${CMAKE_CURRENT_SOURCE_DIR}/decoders/processor/operators/gpu/opencl_shader/xtrans_interpolate.cl")
+    set(OPENCL_DEMOSAICNET_CONV_CL "${CMAKE_CURRENT_SOURCE_DIR}/third_party/clblast_min/xconvgemm_direct_f32_nhwc4.cl")
+    set(OPENCL_DEMOSAICNET_STRUCTURAL_CL "${CMAKE_CURRENT_SOURCE_DIR}/decoders/processor/operators/gpu/opencl_shader/demosaicnet_structural.cl")
     set(OPENCL_GEOMETRY_UTILS_CL "${CMAKE_CURRENT_SOURCE_DIR}/opencl/opencl_shader/geometry_utils.cl")
     set(OPENCL_EDIT_GEOMETRY_LENS_CALIB_CL "${CMAKE_CURRENT_SOURCE_DIR}/edit/operators/geometry/opencl_shader/lens_calib.cl")
     set(OPENCL_SCOPE_ANALYZER_CL "${CMAKE_CURRENT_SOURCE_DIR}/edit/scope/opencl_shader/scope_analyzer.cl")
@@ -68,6 +70,7 @@ if(ALCEDO_OPENCL_ENABLED)
             opencl/opencl_program_library.cpp
             opencl/opencl_runtime.cpp
             decoders/processor/operators/gpu/opencl_raw_programs.cpp
+            decoders/processor/operators/gpu/opencl_demosaicnet_programs.cpp
             edit/pipeline/opencl_pipeline_programs.cpp
             edit/scope/opencl_scope_programs.cpp
             opencl/opencl_geometry_programs.cpp
@@ -97,6 +100,8 @@ if(ALCEDO_OPENCL_ENABLED)
         ALCEDO_OPENCL_EDIT_PIPELINE_COLOR_CL="${OPENCL_EDIT_PIPELINE_COLOR_CL}"
         ALCEDO_OPENCL_EDIT_PIPELINE_CST_CL="${OPENCL_EDIT_PIPELINE_CST_CL}"
         ALCEDO_OPENCL_XTRANS_INTERPOLATE_CL="${OPENCL_XTRANS_INTERPOLATE_CL}"
+        ALCEDO_OPENCL_DEMOSAICNET_CONV_CL="${OPENCL_DEMOSAICNET_CONV_CL}"
+        ALCEDO_OPENCL_DEMOSAICNET_STRUCTURAL_CL="${OPENCL_DEMOSAICNET_STRUCTURAL_CL}"
         ALCEDO_OPENCL_GEOMETRY_UTILS_CL="${OPENCL_GEOMETRY_UTILS_CL}"
         ALCEDO_OPENCL_EDIT_GEOMETRY_LENS_CALIB_CL="${OPENCL_EDIT_GEOMETRY_LENS_CALIB_CL}"
         ALCEDO_OPENCL_SCOPE_ANALYZER_CL="${OPENCL_SCOPE_ANALYZER_CL}"

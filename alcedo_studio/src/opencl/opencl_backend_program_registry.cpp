@@ -17,6 +17,7 @@ void RegisterOpenClRawProcessorPrograms();
 void RegisterOpenClEditPipelinePrograms();
 void RegisterOpenClGeometryPrograms();
 void RegisterOpenClScopePrograms();
+void RegisterOpenClDemosaicNetPrograms();
 
 namespace {
 
@@ -31,6 +32,7 @@ void RegisterBuiltinOpenClProgramManifests() {
     RegisterOpenClEditPipelinePrograms();
     RegisterOpenClGeometryPrograms();
     RegisterOpenClScopePrograms();
+    RegisterOpenClDemosaicNetPrograms();
   });
 }
 
