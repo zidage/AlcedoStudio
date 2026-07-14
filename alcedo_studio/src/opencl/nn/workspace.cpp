@@ -9,6 +9,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "opencl/opencl_api_counters.hpp"
+
 namespace alcedo::opencl::nn {
 namespace {
 
@@ -37,11 +39,13 @@ SubBuffer::SubBuffer(const WorkspaceSlice& slice) {
   if (buffer_ == nullptr) {
     throw std::runtime_error("SubBuffer::clCreateSubBuffer returned null");
   }
+  NoteOpenClCreateSubBuffer();
 }
 
 void SubBuffer::Reset() noexcept {
   if (buffer_ != nullptr) {
     clReleaseMemObject(buffer_);
+    NoteOpenClReleaseMemObject();
     buffer_ = nullptr;
   }
 }
@@ -64,9 +68,11 @@ void WorkspacePool::Reserve(std::size_t bytes) {
   if (new_buf == nullptr) {
     throw std::runtime_error("WorkspacePool::Reserve: clCreateBuffer returned null");
   }
+  NoteOpenClCreateBuffer();
 
   if (buffer_ != nullptr) {
     clReleaseMemObject(buffer_);
+    NoteOpenClReleaseMemObject();
   }
   buffer_ = new_buf;
   capacity_ = bytes;
@@ -143,6 +149,7 @@ auto WorkspacePool::AllocateNhwc4Blocked(int batch, int height, int width, int l
 void WorkspacePool::FreeDevice() noexcept {
   if (buffer_ != nullptr) {
     clReleaseMemObject(buffer_);
+    NoteOpenClReleaseMemObject();
     buffer_ = nullptr;
   }
   capacity_ = 0;

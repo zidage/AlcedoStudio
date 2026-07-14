@@ -20,8 +20,10 @@
 #include "decoders/processor/operators/gpu/opencl_demosaicnet_programs.hpp"
 #include "opencl/nn/common.hpp"
 #include "opencl/nn/convolution.hpp"
+#include "opencl/nn/demosaicnet_stage_profiler.hpp"
 #include "opencl/nn/device_buffer.hpp"
 #include "opencl/nn/workspace.hpp"
+#include "opencl/opencl_api_counters.hpp"
 #include "opencl/opencl_backend_program_registry.hpp"
 #include "opencl/opencl_context.hpp"
 #include "opencl/opencl_program_library.hpp"
@@ -60,6 +62,7 @@ class KernelHolder {
     cl_int err = CL_SUCCESS;
     kernel_    = clCreateKernel(program, name, &err);
     opencl::nn::CheckOpenCl(err, name);
+    NoteOpenClCreateKernel();
   }
 
   [[nodiscard]] auto get() const -> cl_kernel { return kernel_; }
@@ -68,6 +71,7 @@ class KernelHolder {
   void Reset() noexcept {
     if (kernel_ != nullptr) {
       clReleaseKernel(kernel_);
+      NoteOpenClReleaseKernel();
       kernel_ = nullptr;
     }
   }
@@ -92,11 +96,13 @@ void EnqueueClamp01(cl_mem buffer, const int count, cl_command_queue queue) {
   kernel.Create(StructuralProgram(), DemosaicNet::kClamp01KernelName);
   SetArg(kernel.get(), 0, buffer, "clamp01 arg0");
   SetArg(kernel.get(), 1, count, "clamp01 arg1");
-  const size_t global = static_cast<size_t>(count);
-  opencl::nn::CheckOpenCl(
-      clEnqueueNDRangeKernel(queue, kernel.get(), 1, nullptr, &global, nullptr, 0, nullptr, nullptr),
-      "clamp01 enqueue");
+  const size_t               global = static_cast<size_t>(count);
+  opencl::nn::ScopedStageEvent stage_event;
+  opencl::nn::CheckOpenCl(clEnqueueNDRangeKernel(queue, kernel.get(), 1, nullptr, &global, nullptr,
+                                                 0, nullptr, stage_event.out()),
+                          "clamp01 enqueue");
   ++opencl::nn::GetDispatchInstrumentation().enqueue_count;
+  NoteOpenClEnqueueNdRange();
 }
 
 void EnqueuePackMonoToHwc3(cl_mem mono, cl_mem hwc3, int width, int height, int period,
@@ -110,6 +116,8 @@ void EnqueuePackMonoToHwc3(cl_mem mono, cl_mem hwc3, int width, int height, int 
                                 CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, table_bytes,
                                 const_cast<int*>(rgb_fc), &err);
   opencl::nn::CheckOpenCl(err, "pack mono table buffer");
+  NoteOpenClCreateBuffer();
+  NoteOpenClH2DBytes(static_cast<std::uint64_t>(table_bytes));
 
   SetArg(kernel.get(), 0, mono, "pack mono arg0");
   SetArg(kernel.get(), 1, hwc3, "pack mono arg1");
@@ -117,12 +125,15 @@ void EnqueuePackMonoToHwc3(cl_mem mono, cl_mem hwc3, int width, int height, int 
   SetArg(kernel.get(), 3, height, "pack mono arg3");
   SetArg(kernel.get(), 4, period, "pack mono arg4");
   SetArg(kernel.get(), 5, table, "pack mono arg5");
-  const size_t global[2] = {static_cast<size_t>(width), static_cast<size_t>(height)};
+  const size_t               global[2] = {static_cast<size_t>(width), static_cast<size_t>(height)};
+  opencl::nn::ScopedStageEvent stage_event;
   err = clEnqueueNDRangeKernel(queue, kernel.get(), 2, nullptr, global, nullptr, 0, nullptr,
-                               nullptr);
+                               stage_event.out());
   clReleaseMemObject(table);
+  NoteOpenClReleaseMemObject();
   opencl::nn::CheckOpenCl(err, "pack mono enqueue");
   ++opencl::nn::GetDispatchInstrumentation().enqueue_count;
+  NoteOpenClEnqueueNdRange();
 }
 
 void EnqueueRgb3ToRgba4(cl_mem rgb, cl_mem rgba, int width, int height, cl_command_queue queue) {
@@ -132,11 +143,13 @@ void EnqueueRgb3ToRgba4(cl_mem rgb, cl_mem rgba, int width, int height, cl_comma
   SetArg(kernel.get(), 1, rgba, "rgb2rgba arg1");
   SetArg(kernel.get(), 2, width, "rgb2rgba arg2");
   SetArg(kernel.get(), 3, height, "rgb2rgba arg3");
-  const size_t global[2] = {static_cast<size_t>(width), static_cast<size_t>(height)};
-  opencl::nn::CheckOpenCl(
-      clEnqueueNDRangeKernel(queue, kernel.get(), 2, nullptr, global, nullptr, 0, nullptr, nullptr),
-      "rgb2rgba enqueue");
+  const size_t               global[2] = {static_cast<size_t>(width), static_cast<size_t>(height)};
+  opencl::nn::ScopedStageEvent stage_event;
+  opencl::nn::CheckOpenCl(clEnqueueNDRangeKernel(queue, kernel.get(), 2, nullptr, global, nullptr, 0,
+                                                 nullptr, stage_event.out()),
+                          "rgb2rgba enqueue");
   ++opencl::nn::GetDispatchInstrumentation().enqueue_count;
+  NoteOpenClEnqueueNdRange();
 }
 
 auto VariantName(const RawCfaKind kind) -> const char* {
@@ -216,6 +229,9 @@ auto DemosaicWithNeuralEngine(const opencl::OpenClImage& linear_cfa,
       context.Initialize();
     }
     const cl_command_queue queue = context.Queue();
+    if (auto* const profiler = opencl::nn::ActiveDemosaicNetStageProfiler(); profiler != nullptr) {
+      profiler->Drain(queue);
+    }
 
     const int min_spatial = camera_pattern.kind == RawCfaKind::XTrans6x6
                                 ? DemosaicNetXTransSpec::kMinSpatial
@@ -238,6 +254,7 @@ auto DemosaicWithNeuralEngine(const opencl::OpenClImage& linear_cfa,
     result.aligned_height = geo->aligned_height;
 
     // Private monochrome ROI so the caller's linear CFA stays intact for Legacy fallback.
+    opencl::nn::BeginDemosaicNetStage("phase_crop_and_hwc_pack");
     opencl::OpenClImage aligned_mono;
     linear_cfa.CropTo(aligned_mono,
                       cv::Rect(geo->shift_sx, geo->shift_sy, geo->aligned_width, geo->aligned_height));
@@ -251,6 +268,7 @@ auto DemosaicWithNeuralEngine(const opencl::OpenClImage& linear_cfa,
         static_cast<std::size_t>(geo->aligned_width) * geo->aligned_height * 3);
     EnqueuePackMonoToHwc3(aligned_mono.Buffer(), mosaic_hwc.get(), geo->aligned_width,
                           geo->aligned_height, period, rgb_fc.data(), queue);
+    opencl::nn::FinishDemosaicNetStage("phase_crop_and_hwc_pack", queue);
 
     if (options.injected_failure == OpenClNeuralInjectedFailure::ModelLoad) {
       result.failure_stage = "load";
@@ -308,10 +326,12 @@ auto DemosaicWithNeuralEngine(const opencl::OpenClImage& linear_cfa,
     result.tile_count = tiled.tile_count;
 
     // Pack RGBA on the same in-order queue, then one Neural-stage wait.
+    opencl::nn::BeginDemosaicNetStage("rgb_to_rgba");
     opencl::OpenClImage rgba;
     rgba.Create(geo->aligned_width, geo->aligned_height, CV_32FC4);
     EnqueueRgb3ToRgba4(rgb_hwc.get(), rgba.Buffer(), geo->aligned_width, geo->aligned_height,
                        queue);
+    opencl::nn::FinishDemosaicNetStage("rgb_to_rgba", queue);
     opencl::nn::WaitQueue(queue);
     ++g_host_wait_count;
 

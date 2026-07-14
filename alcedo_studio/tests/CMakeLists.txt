@@ -1046,17 +1046,25 @@ if(ALCEDO_OPENCL_ENABLED)
   )
   gtest_discover_tests(OpenClDemosaicNetTest TEST_PREFIX "OpenClDemosaicNetTest.")
 
-  # Development full-frame OpenCL Neural wall-clock timing (not part of default ctest).
+  # Development full-frame OpenCL Neural telemetry harness (Phase 7.0+; not default ctest).
+  # Authoritative timings: Release build.
+  #   cmd /c scripts\msvc_env.cmd --build --preset win_release --target OpenClDemosaicNetFullFrameTiming --parallel 4
+  #   build\release\alcedo_studio\tests\OpenClDemosaicNetFullFrameTiming.exe --compare --cuda-control --json build/perf/opencl_nn_phase7_0.json
   add_executable(OpenClDemosaicNetFullFrameTiming perf/opencl_demosaicnet_fullframe_timing.cpp)
   target_include_directories(OpenClDemosaicNetFullFrameTiming PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(OpenClDemosaicNetFullFrameTiming PRIVATE
     RawProcessor
     OpenClDemosaicNetEntry
+    OpenClContext
     ${ALCEDO_TEST_OPENCV_MIN_DEPS}
   )
   target_compile_definitions(OpenClDemosaicNetFullFrameTiming PRIVATE
     ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
   )
+  if(ALCEDO_CUDA_ENABLED)
+    target_link_libraries(OpenClDemosaicNetFullFrameTiming PRIVATE DemosaicNet)
+    target_compile_definitions(OpenClDemosaicNetFullFrameTiming PRIVATE ALCEDO_FULLFRAME_CUDA_CONTROL=1)
+  endif()
 
   add_executable(OpenClFusedEditPipelineTest opencl/opencl_fused_edit_pipeline_test.cpp)
   target_include_directories(OpenClFusedEditPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR})

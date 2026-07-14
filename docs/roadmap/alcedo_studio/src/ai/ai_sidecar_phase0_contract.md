@@ -1,6 +1,7 @@
 # AI Sidecar Backend — Phase 0 Contract Inventory and Gates
 
 Date: 2026-06-25
+Primary roadmap owner: `alcedo_studio/src/ai` (cross-module sidecar/app integration)
 Status: Phase 0 complete. This document freezes the compatibility boundary that
 Phase 1 (`proto/ai_common.proto`, `proto/ai_runtime.proto`, multi-proto generation)
 must not cross.

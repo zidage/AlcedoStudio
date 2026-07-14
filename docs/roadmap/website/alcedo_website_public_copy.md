@@ -2,8 +2,9 @@
 
 Date: 2026-07-13  
 Status: **Approved for Phase 2**  
+Primary roadmap owner: external `AlcedoStudio-site` repository  
 Scope: 完整中英文公开文案；不含样式、HTML 实现或部署配置  
-Source plan: `docs/roadmap/alcedo_website_redesign_plan.md`
+Source plan: [Alcedo Studio Website Redesign Plan](alcedo_website_redesign_plan.md)
 
 ## 使用说明
 

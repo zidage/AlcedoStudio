@@ -16,7 +16,9 @@
 #include "decoders/processor/operators/gpu/opencl_demosaicnet_programs.hpp"
 #include "opencl/nn/common.hpp"
 #include "opencl/nn/convolution.hpp"
+#include "opencl/nn/demosaicnet_stage_profiler.hpp"
 #include "opencl/nn/device_buffer.hpp"
+#include "opencl/opencl_api_counters.hpp"
 #include "opencl/opencl_backend_program_registry.hpp"
 #include "opencl/opencl_context.hpp"
 #include "opencl/opencl_program_library.hpp"
@@ -45,6 +47,7 @@ class KernelHolder {
     cl_int err = CL_SUCCESS;
     kernel_ = clCreateKernel(program, name, &err);
     opencl::nn::CheckOpenCl(err, name);
+    NoteOpenClCreateKernel();
   }
   [[nodiscard]] auto get() const -> cl_kernel { return kernel_; }
   [[nodiscard]] auto empty() const -> bool { return kernel_ == nullptr; }
@@ -53,6 +56,7 @@ class KernelHolder {
   void Reset() noexcept {
     if (kernel_ != nullptr) {
       clReleaseKernel(kernel_);
+      NoteOpenClReleaseKernel();
       kernel_ = nullptr;
     }
   }
@@ -65,21 +69,25 @@ void SetArg(cl_kernel kernel, cl_uint index, const T& value, const char* what) {
 }
 
 void Enqueue2D(cl_kernel kernel, int width, int height, cl_command_queue queue, const char* what) {
-  const size_t global[] = {static_cast<size_t>(width), static_cast<size_t>(height)};
+  const size_t             global[] = {static_cast<size_t>(width), static_cast<size_t>(height)};
+  opencl::nn::ScopedStageEvent stage_event;
   opencl::nn::CheckOpenCl(clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, global, nullptr, 0,
-                                                  nullptr, nullptr),
-                         what);
+                                                 nullptr, stage_event.out()),
+                          what);
   ++opencl::nn::GetDispatchInstrumentation().enqueue_count;
+  NoteOpenClEnqueueNdRange();
 }
 
 void Enqueue3D(cl_kernel kernel, int width, int height, int depth, cl_command_queue queue,
                const char* what) {
   const size_t global[] = {static_cast<size_t>(width), static_cast<size_t>(height),
                            static_cast<size_t>(depth)};
+  opencl::nn::ScopedStageEvent stage_event;
   opencl::nn::CheckOpenCl(clEnqueueNDRangeKernel(queue, kernel, 3, nullptr, global, nullptr, 0,
-                                                  nullptr, nullptr),
-                         what);
+                                                 nullptr, stage_event.out()),
+                          what);
   ++opencl::nn::GetDispatchInstrumentation().enqueue_count;
+  NoteOpenClEnqueueNdRange();
 }
 
 auto ResolveQueue(cl_command_queue queue) -> cl_command_queue {
@@ -184,6 +192,7 @@ auto EnqueueTiles(OpenClDemosaicNetTiledExecutor::Impl& state, const Module& mod
     const cl_int origin_x = job.input_origin.x;
     const cl_int tile_h = job.input_h;
     const cl_int tile_w = job.input_w;
+    opencl::nn::BeginDemosaicNetStage("tile_reflect_pack");
     SetArg(state.pack_reflect.get(), 0, dispatch.input_aligned_hwc, "tile pack arg0");
     SetArg(state.pack_reflect.get(), 1, state.tile_input.get(), "tile pack arg1");
     SetArg(state.pack_reflect.get(), 2, frame_h, "tile pack arg2");
@@ -193,6 +202,7 @@ auto EnqueueTiles(OpenClDemosaicNetTiledExecutor::Impl& state, const Module& mod
     SetArg(state.pack_reflect.get(), 6, tile_h, "tile pack arg6");
     SetArg(state.pack_reflect.get(), 7, tile_w, "tile pack arg7");
     Enqueue3D(state.pack_reflect.get(), tile_w, tile_h, 3, queue, "tile reflect pack enqueue");
+    opencl::nn::FinishDemosaicNetStage("tile_reflect_pack", queue);
 
     module.ForwardNchwToHwc(state.tile_input.get(), 1, tile_h, tile_w, state.tile_output.get(),
                             workspace, queue, /*apply_gamma_decode=*/true);
@@ -205,6 +215,7 @@ auto EnqueueTiles(OpenClDemosaicNetTiledExecutor::Impl& state, const Module& mod
     const cl_int owned_h = job.destination_roi.height;
     const cl_int src_x = job.model_output_roi.x;
     const cl_int src_y = job.model_output_roi.y;
+    opencl::nn::BeginDemosaicNetStage("tile_assembly");
     SetArg(state.assemble.get(), 0, state.tile_output.get(), "tile assemble arg0");
     SetArg(state.assemble.get(), 1, dispatch.output_aligned_hwc, "tile assemble arg1");
     SetArg(state.assemble.get(), 2, tile_w - 2 * Module::kTileBorder, "tile assemble arg2");
@@ -218,6 +229,7 @@ auto EnqueueTiles(OpenClDemosaicNetTiledExecutor::Impl& state, const Module& mod
     SetArg(state.assemble.get(), 10, src_x, "tile assemble arg10");
     SetArg(state.assemble.get(), 11, src_y, "tile assemble arg11");
     Enqueue2D(state.assemble.get(), owned_w, owned_h, queue, "tile assembly enqueue");
+    opencl::nn::FinishDemosaicNetStage("tile_assembly", queue);
   }
 
   return {.tile_count = jobs.size(),

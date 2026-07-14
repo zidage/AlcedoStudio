@@ -2,6 +2,8 @@
 
 Date: 2026-06-12
 
+Primary roadmap owner: `alcedo_studio/src/ai` (with `app`, `storage`, `ui`, and Rust sidecar consumers)
+
 Status: Phase 1 complete; Phase 2 complete; Phase 3 complete; Phase 4a
 initial scaffold complete; Phase 4c complete; Phase 4d complete; Phase 5a
 complete; Phase 5b complete; Phase 5c complete; Phase 5d complete; Phase 5e

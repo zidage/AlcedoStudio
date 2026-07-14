@@ -10,6 +10,9 @@
 #include <stdexcept>
 #include <string>
 
+#include "opencl/nn/demosaicnet_stage_profiler.hpp"
+#include "opencl/opencl_api_counters.hpp"
+
 namespace alcedo::opencl::nn {
 namespace {
 
@@ -51,11 +54,13 @@ void Enqueue3D(cl_kernel kernel, size_t gx, size_t gy, size_t gz, cl_command_que
     throw std::runtime_error(std::string(what) + ": zero global size");
   }
   const size_t global[3] = {gx, gy, gz};
-  cl_event*    event_out = options.event;
+  ScopedStageEvent stage_event;
+  cl_event*        event_out = options.event != nullptr ? options.event : stage_event.out();
   CheckOpenCl(clEnqueueNDRangeKernel(queue, kernel, 3, nullptr, global, nullptr, 0, nullptr,
                                      event_out),
               what);
   ++g_instrumentation.enqueue_count;
+  NoteOpenClEnqueueNdRange();
   // Intentionally no clFinish / event wait here.
 }
 
@@ -72,6 +77,8 @@ void WaitQueue(cl_command_queue queue) {
   CheckOpenCl(clFinish(queue), "WaitQueue");
   ++g_instrumentation.finish_count;
   ++g_instrumentation.wait_count;
+  NoteOpenClFinalWait();
+  NoteOpenClQueueFinish();
 }
 
 void WaitEvent(cl_event event) {

@@ -1,7 +1,9 @@
 # OpenCL NN Forward DemosaicNet Migration and Alignment Plan
 
-**Status:** Design decisions locked; ready for implementation  
+**Status:** Correctness and product routing are implemented; Phase 7.0 telemetry is complete; Phase 7.1 is next  
 **Date:** 2026-07-14  
+**Updated:** 2026-07-14 after Phase 7.0 event-timestamp telemetry and API counters  
+**Primary roadmap owner:** `alcedo_studio/src/decoders/processor/nn`  
 **Scope:** Port the CUDA DemosaicNet forward path to OpenCL without introducing a general-purpose inference runtime.
 
 ## 1. Objective
@@ -15,10 +17,40 @@ The implementation must:
 - match exported reference tensors with absolute tolerance `1e-4`;
 - process the two CUDA performance-harness RAW fixtures in less than `500 ms` each on the local GPU, measured as the arithmetic mean of three hot runs;
 - keep OpenCL Neural failures inside the OpenCL backend by falling back to OpenCL Legacy;
-- import only the required CLBlast direct-convolution kernel material, not the complete CLBlast library;
+- do not link the complete CLBlast library; retain minimal derived kernel material only if a faithful
+  CLBlast control wins the Phase 7.2 A/B;
 - remain a hard-coded DemosaicNet implementation rather than becoming a graph executor.
 
 The target local device is an NVIDIA GeForce RTX 3080 Laptop GPU with 8 GB VRAM. CUDA remains the behavioral and performance comparison on this machine, but the OpenCL implementation must stay portable across conforming OpenCL devices supported by the project.
+
+### 1.1 Performance recovery decision
+
+The first full-frame results change the emphasis of Phase 7. This is not evidence that OpenCL is
+intrinsically an order of magnitude slower than CUDA on this GPU. The current path contains two
+independent implementation failures:
+
+1. **The execution state is not resident.** Two OpenCL sub-buffers are created and released for
+   every tile, and the full-frame staging buffers, workspace, tiled executor, tile buffers, and
+   several kernel objects are recreated for every decode. Per-tile sub-buffer release alone accounts
+   for 1.70 seconds of Bayer time and 2.76 seconds of X-Trans time in the diagnostic profile.
+2. **The 3x3 kernel is not a CLBlast tiled convolution.** The current source retains CLBlast-style
+   parameter names, but those parameters do not drive work-group tiling, local-memory staging,
+   register blocking, or vector width. The host submits `local_work_size = nullptr`, and each work
+   item computes one spatial position and one `float4` output block with scalar loops. Changing
+   `WGD`, `MDIMCD`, `NDIMCD`, `KWID`, `VWMD`, or `VWND` therefore cannot materially tune the
+   current algorithm.
+
+The major required improvement is consequently explicit: **make the complete Neural execution
+resident, then replace the nominal CLBlast-derived scalar convolution with a real tiled,
+register-blocked direct convolution specialized for the fixed C24 and C32 trunks.** Allocation
+cleanup is mandatory but cannot by itself reach the `<500 ms` gate. Subtracting the measured
+sub-buffer-release cost from wall time still leaves approximately 2.78 seconds for Bayer and 4.60
+seconds for X-Trans.
+
+The full CLBlast library is not linked into this path, so the current result must not be described as
+"CLBlast performance." A faithful upstream single-kernel `Xconvgemm` adaptation is retained as a
+development A/B candidate, but the preferred product candidate is an OpenCL implementation of the
+same persistent-NHWC, fixed-shape direct-convolution strategy already retained by the CUDA path.
 
 ## 2. Locked design decisions
 
@@ -31,7 +63,7 @@ The target local device is an NVIDIA GeForce RTX 3080 Laptop GPU with 8 GB VRAM.
 | Numeric mode | FP32 only, including accumulation. |
 | Correctness | Exported reference tensors use absolute tolerance `1e-4`. |
 | Tensor layout | Persistent buffer-backed `NHWC4` activations through the network. |
-| Convolution | Minimal CLBlast-derived single-kernel direct convolution for 3x3 layers; specialized project kernel for C4 1x1 layers. |
+| Convolution | Real tiled/register-blocked fixed-shape direct convolution for 3x3 layers; compare a project-owned CUDA-shaped OpenCL kernel with a faithful minimal CLBlast control. Specialized project kernel for C4 1x1 layers. |
 | Fusion | Fuse bias and ReLU into convolution; fuse structural unpack, skip, post, output, and gamma operations where data dependencies allow. |
 | Network representation | Hard-coded Bayer and X-Trans modules; no runtime graph or generic layer list. |
 | Tiling | Extract and share the exact CUDA student tile planner and coverage rules. |
@@ -62,7 +94,7 @@ The CUDA path already defines the required observable behavior:
 - exact student tile coverage and overlap behavior;
 - lazy model parsing, validation, upload, and reuse.
 
-### 3.2 Existing OpenCL infrastructure
+### 3.2 Existing OpenCL infrastructure and landed migration
 
 The project already has the correct foundation:
 
@@ -72,13 +104,19 @@ The project already has the correct foundation:
 - `OpenClBackendProgramRegistry` centrally activates module manifests;
 - the OpenCL RAW path already implements Bayer and X-Trans Legacy processing.
 
-The missing pieces are a reusable OpenCL NN buffer layer, the fixed DemosaicNet modules, shared backend-neutral model/tile utilities, product routing, and representative correctness/performance coverage.
+The reusable OpenCL NN buffer layer, fixed Bayer/X-Trans modules, shared model/tile utilities,
+product routing, correctness tests, and full-frame timing harness now exist. The remaining blocking
+gap is performance: the current correct implementation violates its intended resident-lifetime and
+tiled-convolution architecture.
 
-### 3.3 Lifecycle correction required
+### 3.3 Program lifecycle correction landed
 
-`WarmUpOpenClRuntime()` currently warms every registered program. Neural programs must remain lazy because they are large, optional, and used only when the user selects OpenCL Neural.
+Neural programs are registered centrally with `required_at_startup = false`, so they remain lazy
+because they are large, optional, and used only when the user selects OpenCL Neural.
 
-Change runtime warm-up to compile only programs marked `required_at_startup`. Register all DemosaicNet programs with `required_at_startup = false`. This keeps application startup independent of Neural model availability while retaining centralized registration.
+Runtime warm-up compiles only programs marked `required_at_startup`. Keep this behavior unchanged;
+the Phase 7 problem is buffer/kernel execution-object lifetime after the program and model are ready,
+not repeated OpenCL program compilation.
 
 ## 4. Target architecture
 
@@ -182,7 +220,7 @@ This layer owns:
 - structural residual/post layers;
 - product-facing Neural execution and error reporting.
 
-### 5.4 Minimal CLBlast-derived source
+### 5.4 Provisional minimal CLBlast-derived source
 
 ```text
 alcedo_studio/src/third_party/clblast_min/LICENSE
@@ -190,7 +228,8 @@ alcedo_studio/src/third_party/clblast_min/UPSTREAM.md
 alcedo_studio/src/third_party/clblast_min/xconvgemm_direct_f32_nhwc4.cl
 ```
 
-`UPSTREAM.md` must record:
+This directory is provisional until Phase 7.2 selects the convolution implementation. While it
+exists, `UPSTREAM.md` must record:
 
 - upstream repository: <https://github.com/CNugteren/CLBlast>;
 - upstream tag `1.7.0` and commit `ca2fc3cb09d4917cc72d4ca661d30296865a4afc`;
@@ -198,7 +237,9 @@ alcedo_studio/src/third_party/clblast_min/xconvgemm_direct_f32_nhwc4.cl
 - every local layout, indexing, fusion, and build-option modification;
 - the Apache-2.0 notice and preservation requirements.
 
-Do not import the CLBlast C++ API, runtime database, host tuner, indirect im2col path, other precisions, unrelated BLAS levels, tests, samples, or build system.
+Do not import the CLBlast C++ API, runtime database, host tuner, indirect im2col path, other
+precisions, unrelated BLAS levels, tests, samples, or build system into the product. If the
+project-owned kernel wins, delete this directory instead of preserving CLBlast-shaped dead macros.
 
 ## 6. Tensor and weight layout
 
@@ -247,26 +288,35 @@ The cache must never expose a partially initialized model.
 
 ### 7.1 Direct 3x3 convolution
 
-Derive the FP32 single-kernel path from CLBlast `Xconvgemm`, specialized for the project's fixed NHWC4 buffer layout.
+The shipping path must be a real tiled FP32 direct convolution specialized for the project's fixed
+NHWC4 layout. The first implementation attempted to derive this from CLBlast `Xconvgemm`, but the
+result retained names rather than the upstream work mapping. Phase 7.2 therefore compares a
+project-owned CUDA-shaped OpenCL kernel with a faithful minimal CLBlast control and retains the
+faster correct implementation.
 
 Required behavior:
 
 - direct spatial convolution with no im2col allocation;
 - vectorized `float4` channel loads and blocked weight loads;
-- compile-time kernel geometry and channel blocking;
+- compile-time kernel geometry and channel blocking for the production shapes;
+- an explicit local work-group, cooperative local-memory reuse, and multi-output register blocking;
 - bias addition in the accumulator epilogue;
 - optional ReLU in the same epilogue;
 - no implicit precision conversion;
 - bounds-safe writes for edge work-groups.
 
-The offline parameter search must cover the relevant CLBlast parameters:
+If the CLBlast control is retained, the offline parameter search must cover the relevant parameters
+and every one must be live in the compiled work mapping:
 
 ```text
 KWID, MDIMAD, MDIMCD, NDIMBD, NDIMCD,
 PADA, PADB, VWMD, VWND, WGD
 ```
 
-Only configurations that pass the CPU/reference correctness filter are eligible for timing. Tune Bayer and X-Trans shapes separately when their best settings differ.
+For the project-owned kernel, tune actual spatial tile, output block, vector width, and local-memory
+choices instead of preserving CLBlast parameter names. Only configurations that pass the
+CPU/reference correctness filter are eligible for timing. Tune Bayer and X-Trans shapes separately
+when their best settings differ.
 
 ### 7.2 Specialized 1x1 convolution
 
@@ -299,14 +349,20 @@ Use one final wait when the Neural output becomes a CPU-visible or externally sy
 
 ### 8.1 Workspace
 
-Reserve a grow-only workspace sized for the largest supported tile and selected variant:
+Reserve resident grow-only storage sized for the largest supported tile and selected variant:
 
 - packed boundary input;
 - two ping-pong trunk activation slots;
 - structural/post temporary storage that cannot be fused;
 - tile output staging when direct assembly is not legal.
 
-Expose an allocation-generation counter for tests and performance diagnostics. After warm-up, three measured runs must leave this counter unchanged.
+The fixed product network should own the two ping-pong activation slots as dedicated buffers, not
+as per-forward sub-buffer views into a generic slab. A generic `WorkspacePool` may remain for tests
+or unrelated NN primitives, but its sub-buffer API is not part of the DemosaicNet hot path.
+
+Expose allocation-generation and memory-object lifecycle counters for tests and performance
+diagnostics. After warm-up, three measured runs must leave every scratch generation unchanged and
+must create zero sub-buffers.
 
 Only one Neural decode may use the workspace at a time. Enforce this with the existing RAW processing serialization or a narrow mutex at the model/workspace boundary; do not duplicate full-image workspaces to manufacture concurrency the product does not expose.
 
@@ -471,6 +527,168 @@ Report CUDA timing from the same machine/run configuration when CUDA is availabl
 
 Keep the performance gate out of default CI because it is hardware-specific. Make the harness an explicit Release target and preserve its JSON results as local/benchmark artifacts rather than source fixtures.
 
+### 12.3 Pre-Phase 7 stage profile — 2026-07-14
+
+Profiled before beginning tuning on the target local GPU:
+
+| Item | Value |
+|---|---|
+| GPU | NVIDIA GeForce RTX 3080 Laptop GPU, 8 GB |
+| Driver | NVIDIA 610.62 |
+| Build | `win_release`, `CMAKE_BUILD_TYPE=Release`, MSVC `/O2` |
+| Fixtures | Nikon D800E Bayer and Fujifilm X-T5 X-Trans |
+| Hot timing | one warm-up followed by three complete OpenCL Neural decodes; wall-clock `RawProcessor::Process` |
+| Stage timing | three additional hot decodes; diagnostic queue drains at named boundaries only, so their stage sums include host enqueue and required device completion but are not product-path timings |
+
+The timing harness currently prints `Debug (NDEBUG not set)` even in the Release configuration because
+the C++ compile flags do not define `NDEBUG`; the configured build type and `/O2` flags above are the
+authoritative build facts.
+
+| Fixture | Hot samples (ms) | Hot mean (ms) | Gate | Result |
+|---|---:|---:|---:|---|
+| Nikon D800E Bayer | 4594.02, 4454.09, 4385.27 | 4477.79 | <500 | fail (8.96× gate) |
+| Fujifilm X-T5 X-Trans | 7361.26, 7543.82, 7181.94 | 7362.34 | <500 | fail (14.72× gate) |
+
+Stage means below are full-frame sums across the same three diagnostic runs. Call counts expose the
+fixed 1024-owned-tile work: 40 Bayer tiles and 48 X-Trans tiles.
+
+| Stage | Bayer ms (calls/run) | X-Trans ms (calls/run) | Finding |
+|---|---:|---:|---|
+| Phase crop + HWC pack | 30.35 (1) | 29.31 (1) | Small full-frame boundary cost. |
+| Reflect-101 tile pack | 8.88 (40) | 13.13 (48) | Not a primary limiter. |
+| Workspace sub-buffer setup | 0.34 (40) | 2.29 (48) | Negligible. |
+| NCHW-to-NHWC4 pack | 772.31 (40) | 1262.46 (48) | 18.0% / 17.8% of traced time; unexpectedly large for a pack and likely includes sub-buffer first-use/driver object effects. |
+| Trunk 3×3 convolutions, including the first unequal-channel layer | 1609.95 (40) | 2492.42 (48) | 37.5% / 35.1%; largest pure convolution region. |
+| Residual 1×1 + unpack/concat | 22.91 (40) | 42.79 (48) | Minor. |
+| Post 3×3, output 1×1, RGB export | 104.46 (40) | 423.45 (48) | Secondary on X-Trans; retain as a later tuning target. |
+| Workspace sub-buffer release | 1697.07 (40) | 2758.91 (48) | 39.5% / 38.9%; primary blocker. Releasing per-tile OpenCL sub-buffers forces costly driver-side work. |
+| Tile assembly | 24.24 (40) | 35.33 (48) | Minor. |
+| RGB-to-RGBA boundary | 27.19 (1) | 32.60 (1) | Small full-frame boundary cost. |
+| **Traced total** | **4297.70** | **7092.69** | Matches the wall-clock Neural stage within normal run variance. |
+
+Phase 7 must first keep the two workspace slots resident for the whole Neural decode (use tensor views
+or fixed offsets rather than creating/releasing `cl_mem` sub-buffers per tile). Next remeasure the
+pack and replace/tune the trunk 3×3 paths. Structural fusion is not the first leverage point: all
+structural stages other than the X-Trans post/output path are small relative to those three costs.
+
+### 12.4 Root-cause audit and hypothesis verdicts
+
+| Hypothesis | Verdict | Repository evidence | Required action |
+|---|---|---|---|
+| Repeated device allocation is dominant | **Confirmed** | `ForwardImpl` creates and releases two sub-buffers for every tile; `DemosaicWithNeuralEngine` constructs the workspace and tiled executor per decode; the executor then allocates its tile input/output buffers. Sub-buffer release is 39.5% / 38.9% of traced time. | Remove sub-buffers from the fixed network and move all reusable scratch, tables, and kernels into a context-keyed resident execution object. |
+| Hidden activation host/device exchange | **Not the primary problem** | The hot forward contains no activation `clEnqueueReadBuffer` or `clEnqueueWriteBuffer`. Model weight upload is a cold cache operation. The only recurring host-originated transfer found in the product path is the 2x2/6x6 CFA lookup table created with `CL_MEM_COPY_HOST_PTR`; it is tiny but should still become resident. | Add byte counters to prove hot H2D/D2H is zero, then keep the CFA table resident. Do not spend the first optimization cycle on PCIe transfer work. |
+| Explicit waits occur per tile | **Not in the unprofiled product loop** | The tile loop intentionally enqueues on one in-order queue and performs one final `clFinish`. The diagnostic stage profiler adds `clFinish` at boundaries and must not be used as the final device-time authority. | Replace boundary-drain timing with event profiling on a profiling-enabled queue; keep the existing wall-clock run as the product truth. |
+| Object destruction causes implicit driver work | **Confirmed** | Two `clReleaseMemObject` calls occur at every forward/tile boundary. Khronos specifies that deletion happens only after the reference count reaches zero and queued users finish; repeated last-reference release puts object retirement directly in the hot loop. The measured release region is 1.70 s / 2.76 s. | Hold stable scratch allocations across every tile and across hot decodes. Timed runs must execute zero `clCreateSubBuffer` calls and zero scratch-buffer last releases. |
+| CLBlast itself is ten times slower than CUDA | **Rejected as an attribution** | No CLBlast runtime is linked. The local source does not contain the upstream local-memory tiles, `MWID x NWID` register accumulators, barriers, or CLBlast global/local launch formula. Most advertised tuning macros are dead. | Treat the current kernel as a project-owned scalar baseline. A/B a faithful upstream algorithm against a CUDA-shaped custom OpenCL kernel before deciding what, if anything, to retain from CLBlast. |
+| OpenCL launch/runtime overhead explains the whole gap | **Rejected** | Later OpenCL RAW pipeline stages are already comparable with CUDA, and the traced time is concentrated in sub-buffer retirement and fixed convolution/pack regions rather than evenly across every enqueue. | Optimize the identified regions before considering command-buffer replay or broader runtime changes. |
+
+### 12.5 Why the current "CLBlast tuning" cannot work
+
+The upstream CLBlast single-kernel convolution maps output patches and output channels into `WGD`
+tiles, fixes the local work-group to `{MDIMCD, NDIMCD, 1}`, stages A/B tiles through `__local`
+memory, and accumulates an `MWID x NWID` register tile per work item. See the upstream
+[`xconvgemm.cpp`](https://github.com/CNugteren/CLBlast/blob/1.7.0/src/routines/levelx/xconvgemm.cpp)
+launch formula and
+[`xconvgemm_part2.opencl`](https://github.com/CNugteren/CLBlast/blob/1.7.0/src/kernels/levelx/xconvgemm_part2.opencl)
+kernel body.
+
+The local `demosaicnet_conv3x3_nhwc4` instead:
+
+- dispatches `global = {out_w, out_h, batch * out_channel_blocks}` with no explicit local size;
+- assigns one work item to one output pixel and one four-channel output block;
+- reloads the 3x3 input neighborhood for every output block and neighboring pixel;
+- performs no cooperative spatial-halo load and no cooperative weight-tile load;
+- accumulates only four scalar outputs;
+- keeps dynamic boundary and logical-lane branches inside the innermost production loops;
+- defines CLBlast-style macros without using them to change the work mapping or memory hierarchy.
+
+This is a legal correctness kernel, but it is not the algorithm described by its provenance file.
+Before Phase 7 is complete, provenance must be made truthful in one of two ways:
+
+1. if the custom fixed-shape OpenCL kernel wins, remove the misleading CLBlast-derived naming and
+   delete vendored fragments that no longer contribute meaningful implementation material; or
+2. if a faithful CLBlast-derived kernel wins, retain the actual tiled helpers and update
+   `UPSTREAM.md` to enumerate the code that is truly present and modified.
+
+CLBlast's own tuning documentation lists the RTX 3080 Laptop (SM 8.6) among tuned devices and says
+shape-specific tuning is appropriate. That is useful evidence for the A/B control, not evidence that
+the current dead parameters are tuned.
+
+### 12.6 Performance budget after the first profile
+
+Use the retained CUDA fixed-1024 persistent-NHWC path as the same-machine reference: approximately
+375.5 ms p50 for both fixtures in the most directly comparable retained measurements. The OpenCL
+means are currently about 11.9x Bayer and 19.6x X-Trans slower; the aggregation differs (three-run
+mean versus CUDA p50), so these ratios are directional rather than an acceptance metric.
+
+| Recovery step | Bayer budget | X-Trans budget | Interpretation |
+|---|---:|---:|---|
+| Current wall mean | 4477.79 ms | 7362.34 ms | Observed failure. |
+| Wall minus measured sub-buffer release | ~2780.72 ms | ~4603.43 ms | Allocation/lifetime repair alone is still far from the gate. |
+| First target after resident execution | <=3000 ms and >=30% faster | <=5000 ms and >=30% faster | Confirms object-lifecycle removal had the expected order of effect. |
+| Target after convolution replacement | <=750 ms | <=750 ms | Do not move to minor fusion/launch work while above this threshold. |
+| Shipping gate | <500 ms mean | <500 ms mean | Existing product requirement; correctness remains `1e-4` FP32. |
+
+The intermediate budgets are diagnostic gates, not permission to stop. Missing a budget sends work
+back to the preceding root cause; it does not weaken the final `<500 ms` requirement.
+
+### 12.7 Phase 7.0 trustworthy telemetry — 2026-07-14
+
+Landed instrumentation and harness:
+
+| Piece | Location |
+|---|---|
+| API lifecycle counters | `opencl/opencl_api_counters.hpp` (create/sub/kernel/release, H2D/D2H bytes, builds, waits) |
+| Profiling queue override | `OpenClContext::InstallProfilingQueueOverride()` (`CL_QUEUE_PROFILING_ENABLE`, same context) |
+| Event stage profiler | `opencl/nn/demosaicnet_stage_profiler.hpp` mode `EventTimestamps` (no mid-network `clFinish`) |
+| Full-frame harness | `OpenClDemosaicNetFullFrameTiming` with `--compare --event-profile --cuda-control --json` |
+| Artifact | `build/perf/opencl_nn_phase7_0.json` |
+
+Same-session Release-configured run on RTX 3080 Laptop (driver 610.62); C++ still reports
+`NDEBUG` unset while `/O2` is active (pre-existing build-flag note). One warm-up, three hot means.
+CUDA Neural control ran first per fixture, then OpenCL wall, then OpenCL event profile.
+
+| Fixture | Unprofiled wall mean | Event-profile wall mean | Residual (event−wall) | CUDA control mean |
+|---|---:|---:|---:|---:|
+| Nikon D800E Bayer | 4051.16 ms | 4273.71 ms | +222.56 ms (5.5%) | 286.54 ms |
+| Fujifilm X-T5 X-Trans | 6769.98 ms | 7206.52 ms | +436.54 ms (6.5%) | 603.12 ms |
+
+Event-mode device exclusive sums (sum of `END−START`; no boundary `clFinish`):
+
+| Fixture | device_exec_sum | host stage wall sum | residual wall−device | events/run |
+|---|---:|---:|---:|---:|
+| Bayer | 972.10 ms | 4104.93 ms | 3301.62 ms | 643 |
+| X-Trans | 1884.74 ms | 7015.78 ms | 5321.78 ms | 579 |
+
+Hot-run mean API counters (full `RawProcessor::Process`, not Neural-only):
+
+| Counter | Bayer hot mean | X-Trans hot mean | Interpretation |
+|---|---:|---:|---|
+| `create_sub_buffer` | 80 | 96 | 2 per tile; confirms sub-buffer churn. |
+| `create_buffer` | 11 | 11 | Per-decode scratch/images, not steady-state zero. |
+| `create_kernel` | 5 | 5 | Structural helpers recreated on the product path. |
+| `release_mem_object` | 91 | 107 | Last-reference release in the hot loop. |
+| `h2d_bytes` | ~73.1e6 | ~81.8e6 | Full-frame CFA upload into OpenCL (~RAW ushort plane); **not** Neural activation exchange. |
+| `d2h_bytes` | 0 | 0 | **Proven zero** on hot runs. |
+| `program_builds` | 0 | 0 | Hot path does not recompile. |
+| `final_waits` | 1 | 1 | One Neural-stage `WaitQueue` (plus `OpenClImage` crop finish counted under `queue_finish`). |
+
+Largest host-only stage under event mode (Bayer): `workspace_subbuffer_release` ≈ 2556 ms host /
+40 calls, zero device events — pure last-reference retirement. Largest device stage: `trunk_3x3`
+≈ 821 ms Bayer / 1446 ms X-Trans. `pack_nchw_to_nhwc4` remains host-heavy (≈750 / 1219 ms) while
+device pack is only a few milliseconds, consistent with queue back-pressure and sub-buffer first-use
+rather than pure arithmetic.
+
+Exit gate status:
+
+- event sums collected after the product final wait without diagnostic boundary `clFinish` — **pass**;
+- unprofiled vs event-profiled wall residual ≈ 5–6% with residual explicitly reported — **pass**;
+- hot D2H proven zero; hot H2D is full-frame CFA upload (counter-proven), not inferred Neural traffic — **pass**;
+- `OpenClNnPrimitivesTest` (9) and `OpenClDemosaicNetTest` (13) still pass at `1e-4` — **pass**.
+
+Phase 7.1 must drive hot `create_sub_buffer` to zero and remove the measured release/host stalls before
+convolution replacement.
+
 ## 13. Implementation phases and exit gates
 
 ### Phase 1 — Extract shared requirements
@@ -566,29 +784,150 @@ Exit gate:
 - successful paths do not execute Legacy;
 - failure at every defined stage produces a valid Legacy result.
 
-### Phase 7 — Tune and enforce full-image performance
+### Phase 7 — Recover performance and enforce the full-image gate
+
+Phase 7 is a measured recovery sequence. Complete each subphase and record its JSON artifact before
+starting the next; do not hide a failed root cause under several simultaneous changes.
+
+#### Phase 7.0 — Establish trustworthy telemetry — **complete (2026-07-14)**
+
+Work (landed):
+
+- development-only profiling-enabled in-order queue via `OpenClContext::InstallProfilingQueueOverride()`;
+- `DemosaicNetProfileMode::EventTimestamps` attaches events without mid-network waits; timestamps
+  collected after the product final wait;
+- harness reports device execution, queue delay, host enqueue wall, and final wall separately;
+- `OpenClApiCounters` count buffer/sub-buffer/kernel create, last-reference releases, H2D/D2H bytes,
+  program builds, and final waits for cold/hot runs;
+- device/driver/build options and GPU clock/temperature (nvidia-smi) recorded;
+- CUDA and OpenCL controls alternate in the same session (`--cuda-control`).
+
+Exit gate (met — see §12.7 and `build/perf/opencl_nn_phase7_0.json`):
+
+- event sums do not require diagnostic boundary `clFinish` calls;
+- unprofiled wall and event-profiled wall residual ≈ 5–6% with residual reported;
+- hot D2H proven zero; hot H2D quantified as full-frame CFA upload, not Neural activations;
+- correctness tests unchanged within `1e-4`.
+
+#### Phase 7.1 — Make execution resident and delete sub-buffer churn
 
 Work:
 
-- run offline tuning on the local RTX 3080 Laptop GPU;
-- solidify selected parameters in program build options;
-- profile bandwidth-heavy structural kernels and reduce unnecessary passes;
-- run the Release full RAW harness.
+- introduce one context-keyed, serialized DemosaicNet execution state alongside the resident model;
+- give that state two dedicated grow-only activation buffers rather than creating two `cl_mem`
+  sub-buffer objects per tile; fixed Bayer/X-Trans networks do not need a generic suballocator here;
+- retain the tiled executor, tile input/output buffers, structural kernels, CFA lookup buffers, and
+  reusable full-frame staging capacity across hot decodes;
+- fuse phase crop directly into the HWC pack so the full-frame `aligned_mono` temporary is not
+  materialized;
+- distinguish unavoidable caller-owned final output allocation from removable Neural scratch
+  allocation in the counters;
+- retain the existing one-active-decode mutex so mutable kernel arguments and scratch reuse remain
+  race-free.
+
+Exit gate:
+
+- timed execution performs exactly zero `clCreateSubBuffer` calls;
+- timed execution performs no scratch-buffer creation/release, kernel creation, weight upload,
+  program build, H2D activation transfer, or D2H activation transfer after capacity warm-up;
+- the only permitted allocation is an explicitly reported caller-owned final output when the API
+  cannot accept preallocated destination storage;
+- one and only one final Neural wait remains;
+- both fixtures improve by at least 30% from the recorded baseline, otherwise event data must locate
+  the still-unaccounted lifetime stall before Phase 7.2 begins.
+
+#### Phase 7.2 — Replace the scalar 3x3 kernel
+
+Build one isolated harness that times the exact production shapes and compare these candidates:
+
+1. **Baseline:** current one-pixel/one-`float4` scalar kernel.
+2. **Preferred candidate:** project-owned fixed-shape OpenCL direct convolution modeled on the
+   retained CUDA persistent-NHWC kernel: explicit local size, cooperative input-halo loading,
+   register-blocked output channels/pixels, compile-time channel counts, fused bias/ReLU, and
+   branch-free valid-convolution trunk loops.
+3. **Control candidate:** a faithful minimal adaptation of upstream CLBlast single-kernel
+   `Xconvgemm`, including its actual local-memory tiles, register tile, local-size formula, and live
+   tuning parameters. This is a benchmark/control and does not authorize linking the full CLBlast
+   runtime into the product.
+
+Tune and validate these shape families independently:
+
+- Bayer first layer and C24->C24 trunk;
+- X-Trans first layer and C32->C32 trunk;
+- C6->C24 / C6->C32 post 3x3;
+- border-free valid convolution separately from any padded reference-test shape.
+
+Every parameter candidate must pass the CPU/exported reference check before timing. Record local
+memory, registers when the compiler exposes them, work-group geometry, achieved throughput, and
+event time. Do not use dead build parameters: a tuning dimension is valid only if source review and
+the compiled launch geometry show that it changes the algorithm.
+
+Exit gate:
+
+- the selected kernel beats the scalar baseline by at least 5x on both retained trunk shapes;
+- its same-tile trunk event sum is no worse than 1.5x the retained CUDA trunk on the same GPU;
+- both full-frame means reach `<=750 ms` before work moves to minor structural/launch polishing;
+- all four exported model references remain within absolute error `1e-4`;
+- provenance matches the selected implementation, including removal of misleading CLBlast claims
+  if the project-owned kernel wins.
+
+#### Phase 7.3 — Re-profile pack, post, and boundary passes
+
+Work only from the new event profile:
+
+- remeasure the NCHW/HWC packing stage after stable activation buffers remove first-use and
+  sub-buffer effects;
+- if it remains material, pack reflect-101 + signed gamma directly into the network's first NHWC4
+  input and remove the intermediate NCHW tile;
+- specialize the C6-padded post layer and X-Trans output tail if they exceed 10% of the new frame;
+- retain separate passes whenever a fusion changes FP32 operation ordering beyond `1e-4`;
+- avoid optimizing tile assembly, phase crop, or RGB/RGBA conversion while each remains below 5%.
+
+Exit gate:
+
+- no material full-frame intermediate exists solely to convert between two adjacent OpenCL kernels;
+- no newly fused pass violates negative/over-range/highlight behavior;
+- each retained optimization improves full-frame mean by at least 3% or removes a measured memory
+  allocation without regression.
+
+#### Phase 7.4 — Reduce submission overhead only if it is measured
+
+Work:
+
+- compare host enqueue wall time with event execution time after convolution is fixed;
+- cache immutable kernel objects and avoid rebinding invariant weight/bias arguments where a safe
+  per-layer dispatch object can own them;
+- consider `cl_khr_command_buffer` replay only when the selected device reports the extension and
+  queue-gap/host-submit time is at least 5% of the remaining frame;
+- keep the ordinary in-order enqueue path as the portable fallback;
+- do not revisit larger/ragged tiles unless new same-session evidence overturns the already rejected
+  CUDA tile experiments.
+
+Exit gate:
+
+- no launch optimization is retained without at least 3% full-frame improvement;
+- replay and ordinary paths produce the same reference output and fallback behavior;
+- product correctness does not depend on an optional extension.
+
+#### Phase 7.5 — Final acceptance
 
 Exit gate:
 
 - Nikon Bayer mean of three hot runs is `<500 ms`;
 - Fujifilm X-Trans mean of three hot runs is `<500 ms`;
-- measured runs perform no allocation, compilation, kernel creation, or weight upload;
-- cold and hot costs are reported separately;
-- correctness tests remain within `1e-4` after tuning.
+- measured runs perform no removable scratch allocation, compilation, kernel creation, weight
+  upload, or host-visible activation transfer;
+- cold and hot costs, individual samples, event-stage sums, allocation/transfer counters, and CUDA
+  same-session comparison are recorded separately;
+- correctness tests remain within `1e-4` using pure FP32.
 
 ### Phase 8 — Retention and cleanup audit
 
 Work:
 
 - remove temporary tuning-only variants not selected for production;
-- verify all imported CLBlast-derived code is used;
+- make convolution provenance match the retained implementation: either keep only genuinely used
+  CLBlast-derived code or remove the CLBlast extract and its misleading tuning surface;
 - verify source manifests and CMake targets own the correct files;
 - update backend/user-facing diagnostics and developer documentation;
 - run debug correctness suites and Release performance harness.
@@ -623,15 +962,18 @@ cmd /c scripts\msvc_env.cmd --build --preset win_release --target OpenClDemosaic
 
 ## 15. Performance optimization order
 
-When the full-image mean misses the gate, optimize in this order using event data:
+When the full-image mean misses the gate, optimize in this order using event and lifecycle data:
 
-1. eliminate accidental synchronization and allocation in the hot path;
-2. verify weights, kernels, and programs are reused;
-3. tune direct 3x3 work-group and register blocking for the two production trunks;
-4. reduce structural/post memory passes through safe fusion;
-5. specialize first, last, and C6-padded layers where generic dispatch wastes lanes;
-6. reduce tile pack/assembly traffic without changing shared tile coverage;
-7. inspect queue gaps and host-side tile-loop overhead.
+1. replace boundary `clFinish` profiling with non-perturbing event telemetry;
+2. eliminate all per-tile sub-buffer creation/release and make scratch/executors/kernels resident;
+3. prove hot H2D/D2H bytes are zero and eliminate the recurring CFA-table upload;
+4. replace the scalar 3x3 implementation with a real tiled/register-blocked fixed-shape kernel;
+5. re-profile before deciding whether pack, post, or boundary fusion is still material;
+6. specialize the first, last, and C6-padded layers only when each exceeds 10% of the new frame;
+7. inspect queue gaps and host submission only after device convolution is within 1.5x CUDA.
+
+The first three items repair execution lifecycle; item 4 is the major compute improvement. Adjusting
+the current dead CLBlast-style constants is not an optimization step.
 
 Do not use FP16, mixed precision, looser tolerance, changed tile coverage, or parallel full-image decoding to reach the gate.
 
@@ -639,7 +981,9 @@ Do not use FP16, mixed precision, looser tolerance, changed tile coverage, or pa
 
 | Risk | Control |
 |---|---|
-| CLBlast extraction silently changes convolution semantics | Preserve provenance, keep the extracted source small, and compare every production shape to CPU/reference results. |
+| CLBlast branding hides a project-owned scalar kernel | Require a faithful algorithmic A/B, keep only source that materially contributes to the winner, and make `UPSTREAM.md` match the actual code. |
+| Resident scratch increases VRAM pressure | Report per-variant and full-frame peak bytes, keep one serialized execution state, grow only to observed capacity, and release it with the model/context cache rather than per tile. |
+| Event profiling perturbs the product path | Use a separate profiling-enabled in-order queue, retain events without intermediate waits, and keep unprofiled wall time authoritative. |
 | NVIDIA-only tuning harms portability | Keep correctness generic, bound work-group sizes using device limits, and retain conservative build constants for unsupported capability classes if required. |
 | Fused operations exceed numeric tolerance | Test fused and unfused operation order; retain a separate pass when fusion cannot meet `1e-4`. |
 | Mutable reused kernels race | Enforce one active Neural decode and one in-order queue; document the execution rules beside kernel ownership. |
@@ -660,7 +1004,8 @@ The migration is complete only when all of the following are true:
 - the product performs no per-tile host synchronization;
 - OpenCL Neural failures fall back only to OpenCL Legacy;
 - CUDA Neural failures fall back only to CUDA Legacy;
-- the minimal CLBlast-derived source is licensed, traceable, and limited to code actually compiled;
+- convolution provenance is truthful: any retained CLBlast-derived source is licensed, traceable,
+  and materially used, otherwise the obsolete extract has been removed;
 - the Nikon D800E and Fujifilm X-T5 Release means are each below `500 ms` across three hot runs on the local GPU;
 - correctness remains within tolerance using pure FP32;
 - no general inference runtime, product runtime tuner, full-image Neural parallelism, or unused CLBlast subsystem is introduced.
@@ -669,6 +1014,10 @@ The migration is complete only when all of the following are true:
 
 - CLBlast direct convolution host selection and kernel structure: <https://github.com/CNugteren/CLBlast/blob/1.7.0/src/routines/levelx/xconvgemm.cpp>
 - CLBlast convolution kernel fragments: <https://github.com/CNugteren/CLBlast/tree/1.7.0/src/kernels/levelx>
+- CLBlast device/shape tuning guidance: <https://github.com/CNugteren/CLBlast/blob/1.7.0/doc/tuning.md>
+- Khronos sub-buffer semantics: <https://registry.khronos.org/OpenCL/specs/unified/refpages/man/html/clCreateSubBuffer.html>
+- Khronos memory-object lifetime semantics: <https://registry.khronos.org/OpenCL/specs/unified/refpages/man/html/clReleaseMemObject.html>
+- Khronos NDRange/local-work-size semantics: <https://registry.khronos.org/OpenCL/specs/unified/refpages/man/html/clEnqueueNDRangeKernel.html>
 - MNN OpenCL buffer convolution variants and channel blocking: <https://github.com/alibaba/MNN/blob/master/source/backend/opencl/execution/buffer/ConvBufExecution.cpp>
 - TNN OpenCL convolution channel/output blocking and fused activation: <https://github.com/Tencent/TNN/blob/master/source/tnn/device/opencl/acc/convolution/opencl_conv_layer_common_acc.cc>
 

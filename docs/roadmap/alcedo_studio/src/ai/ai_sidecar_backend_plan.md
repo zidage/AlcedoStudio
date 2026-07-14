@@ -2,6 +2,8 @@
 
 Date: 2026-06-25
 
+Primary roadmap owner: `alcedo_studio/src/ai` (cross-module sidecar/app integration)
+
 Status: Planning. SAM and smart mask work are explicitly deferred until the editor pipeline
 has first-class mask capability.
 

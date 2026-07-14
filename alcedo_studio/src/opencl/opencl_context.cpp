@@ -408,6 +408,11 @@ auto SelectCandidate(const std::vector<OpenClDeviceCandidate>& candidates,
 }  // namespace
 
 OpenClContext::~OpenClContext() {
+  queue_override_ = nullptr;
+  if (profiling_queue_ != nullptr) {
+    clReleaseCommandQueue(profiling_queue_);
+    profiling_queue_ = nullptr;
+  }
   if (queue_ != nullptr) {
     clReleaseCommandQueue(queue_);
     queue_ = nullptr;
@@ -548,6 +553,11 @@ auto OpenClContext::Context() const -> cl_context {
 
 auto OpenClContext::Queue() const -> cl_command_queue {
   std::lock_guard<std::mutex> lock(mutex_);
+  return queue_override_ != nullptr ? queue_override_ : queue_;
+}
+
+auto OpenClContext::ProductQueue() const -> cl_command_queue {
+  std::lock_guard<std::mutex> lock(mutex_);
   return queue_;
 }
 
@@ -568,6 +578,39 @@ auto OpenClContext::Capabilities() const -> const OpenClDeviceCapabilities& {
         "[FATAL] OpenClContext: capabilities requested before initialization.");
   }
   return capabilities_;
+}
+
+void OpenClContext::InstallProfilingQueueOverride() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!initialized_ || context_ == nullptr || device_ == nullptr) {
+    throw std::runtime_error(
+        "[FATAL] OpenClContext: InstallProfilingQueueOverride requires an initialized context.");
+  }
+  if (profiling_queue_ == nullptr) {
+    cl_int error = CL_SUCCESS;
+    profiling_queue_ =
+        clCreateCommandQueue(context_, device_, CL_QUEUE_PROFILING_ENABLE, &error);
+    if (error != CL_SUCCESS || profiling_queue_ == nullptr) {
+      throw std::runtime_error(
+          "[FATAL] OpenClContext: failed to create profiling-enabled command queue.");
+    }
+  }
+  queue_override_ = profiling_queue_;
+}
+
+void OpenClContext::ClearQueueOverride() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  queue_override_ = nullptr;
+}
+
+auto OpenClContext::ProfilingQueueInstalled() const -> bool {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return queue_override_ != nullptr && queue_override_ == profiling_queue_;
+}
+
+auto OpenClContext::HasProfilingQueue() const -> bool {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return profiling_queue_ != nullptr;
 }
 
 }  // namespace alcedo

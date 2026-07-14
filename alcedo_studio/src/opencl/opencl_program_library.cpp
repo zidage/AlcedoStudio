@@ -19,6 +19,7 @@
 #include <windows.h>
 #endif
 
+#include "opencl/opencl_api_counters.hpp"
 #include "utils/string/convert.hpp"
 
 namespace alcedo {
@@ -190,6 +191,7 @@ auto OpenClProgramLibrary::BuildProgram(const std::shared_ptr<ProgramSlot>& slot
       slot->descriptor.build_options.empty() ? nullptr : slot->descriptor.build_options.c_str();
   const cl_device_id device = context.Device();
   error                     = clBuildProgram(program, 1, &device, build_options, nullptr, nullptr);
+  NoteOpenClProgramBuild();
   if (error != CL_SUCCESS) {
     const auto build_log = GetBuildLog(program, device);
     clReleaseProgram(program);

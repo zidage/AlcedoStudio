@@ -63,7 +63,12 @@ if(ALCEDO_OPENCL_ENABLED)
     set(OPENCL_GEOMETRY_UTILS_CL "${CMAKE_CURRENT_SOURCE_DIR}/opencl/opencl_shader/geometry_utils.cl")
     set(OPENCL_EDIT_GEOMETRY_LENS_CALIB_CL "${CMAKE_CURRENT_SOURCE_DIR}/edit/operators/geometry/opencl_shader/lens_calib.cl")
     set(OPENCL_SCOPE_ANALYZER_CL "${CMAKE_CURRENT_SOURCE_DIR}/edit/scope/opencl_shader/scope_analyzer.cl")
-    def_library(OpenClContext SOURCES opencl/opencl_context.cpp PUBLIC_DEPS OpenCL::OpenCL)
+    def_library(OpenClContext
+        SOURCES
+            opencl/opencl_context.cpp
+            opencl/opencl_api_counters.cpp
+        PUBLIC_DEPS OpenCL::OpenCL
+    )
     def_library(OpenClProgramLibrary
         SOURCES
             opencl/opencl_backend_program_registry.cpp
@@ -495,6 +500,7 @@ if(ALCEDO_OPENCL_ENABLED)
             opencl/nn/device_buffer.cpp
             opencl/nn/workspace.cpp
             opencl/nn/convolution.cpp
+            opencl/nn/demosaicnet_stage_profiler.cpp
         PUBLIC_DEPS
             OpenClContext
             OpenClProgramLibrary

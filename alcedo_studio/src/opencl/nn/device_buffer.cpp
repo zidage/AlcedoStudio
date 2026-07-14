@@ -9,6 +9,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "opencl/opencl_api_counters.hpp"
+
 namespace alcedo::opencl::nn {
 namespace {
 
@@ -38,11 +40,13 @@ DeviceBuffer::DeviceBuffer(std::size_t byte_count) : byte_capacity_(byte_count) 
   if (buffer_ == nullptr) {
     throw std::runtime_error("DeviceBuffer::clCreateBuffer returned null");
   }
+  NoteOpenClCreateBuffer();
 }
 
 void DeviceBuffer::Reset() noexcept {
   if (buffer_ != nullptr) {
     clReleaseMemObject(buffer_);
+    NoteOpenClReleaseMemObject();
     buffer_ = nullptr;
   }
   byte_capacity_ = 0;
@@ -65,6 +69,7 @@ void DeviceBuffer::UploadBytes(const void* host, std::size_t byte_count, cl_comm
   CheckOpenCl(clEnqueueWriteBuffer(ResolveQueue(queue), buffer_, blocking ? CL_TRUE : CL_FALSE, 0,
                                    byte_count, host, 0, nullptr, nullptr),
               "DeviceBuffer::UploadBytes");
+  NoteOpenClH2DBytes(static_cast<std::uint64_t>(byte_count));
 }
 
 void DeviceBuffer::DownloadBytes(void* host, std::size_t byte_count, cl_command_queue queue,
@@ -84,6 +89,7 @@ void DeviceBuffer::DownloadBytes(void* host, std::size_t byte_count, cl_command_
   CheckOpenCl(clEnqueueReadBuffer(ResolveQueue(queue), buffer_, blocking ? CL_TRUE : CL_FALSE, 0,
                                   byte_count, host, 0, nullptr, nullptr),
               "DeviceBuffer::DownloadBytes");
+  NoteOpenClD2HBytes(static_cast<std::uint64_t>(byte_count));
 }
 
 void DeviceBuffer::FillZero(cl_command_queue queue, bool blocking) {
@@ -96,6 +102,7 @@ void DeviceBuffer::FillZero(cl_command_queue queue, bool blocking) {
               "DeviceBuffer::FillZero");
   if (blocking) {
     CheckOpenCl(clFinish(ResolveQueue(queue)), "DeviceBuffer::FillZero clFinish");
+    NoteOpenClQueueFinish();
   }
 }
 

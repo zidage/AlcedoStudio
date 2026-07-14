@@ -17,7 +17,9 @@
 #include "decoders/processor/operators/gpu/opencl_demosaicnet_programs.hpp"
 #include "opencl/nn/common.hpp"
 #include "opencl/nn/convolution.hpp"
+#include "opencl/nn/demosaicnet_stage_profiler.hpp"
 #include "opencl/nn/tensor_view.hpp"
+#include "opencl/opencl_api_counters.hpp"
 #include "opencl/opencl_backend_program_registry.hpp"
 #include "opencl/opencl_program_library.hpp"
 
@@ -37,6 +39,7 @@ class KernelHolder {
     cl_int err = CL_SUCCESS;
     kernel_    = clCreateKernel(program, name, &err);
     nn_ocl::CheckOpenCl(err, name);
+    NoteOpenClCreateKernel();
   }
   ~KernelHolder() { Reset(); }
 
@@ -59,6 +62,7 @@ class KernelHolder {
   void Reset() noexcept {
     if (kernel_ != nullptr) {
       clReleaseKernel(kernel_);
+      NoteOpenClReleaseKernel();
       kernel_ = nullptr;
     }
   }
@@ -217,11 +221,13 @@ void Enqueue3D(cl_kernel kernel, size_t gx, size_t gy, size_t gz, cl_command_que
   if (kernel == nullptr) {
     throw std::runtime_error(std::string(what) + ": null kernel");
   }
-  const size_t global[3] = {gx, gy, gz};
-  nn_ocl::CheckOpenCl(
-      clEnqueueNDRangeKernel(queue, kernel, 3, nullptr, global, nullptr, 0, nullptr, nullptr),
-      what);
+  const size_t               global[3] = {gx, gy, gz};
+  nn_ocl::ScopedStageEvent   stage_event;
+  nn_ocl::CheckOpenCl(clEnqueueNDRangeKernel(queue, kernel, 3, nullptr, global, nullptr, 0, nullptr,
+                                             stage_event.out()),
+                      what);
   ++nn_ocl::GetDispatchInstrumentation().enqueue_count;
+  NoteOpenClEnqueueNdRange();
 }
 
 template <typename T>
@@ -392,6 +398,7 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
     throw std::runtime_error(std::string(module) + ": invalid activation geometry");
   }
 
+  nn_ocl::BeginDemosaicNetStage("workspace_subbuffer_setup");
   workspace.Reset();
   if (workspace.capacity_bytes() < need) {
     workspace.Reserve(need);
@@ -405,8 +412,10 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
   nn_ocl::SubBuffer sub_b(slice_b);
   cl_mem            slot_a = sub_a.get();
   cl_mem            slot_b = sub_b.get();
+  nn_ocl::FinishDemosaicNetStage("workspace_subbuffer_setup", queue);
 
   // ---- Pack NCHW → NHWC4 ----
+  nn_ocl::BeginDemosaicNetStage("pack_nchw_to_nhwc4");
   {
     const cl_int b  = batch;
     const cl_int ih = height;
@@ -423,6 +432,7 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
     Enqueue3D(s.pack.get(), static_cast<size_t>(pw), static_cast<size_t>(ph),
               static_cast<size_t>(batch), queue, "pack enqueue");
   }
+  nn_ocl::FinishDemosaicNetStage("pack_nchw_to_nhwc4", queue);
 
   // ---- Trunk: depth × 3x3 bias+ReLU, ping-pong ----
   int   cur_h    = ph;
@@ -431,6 +441,7 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
   cl_mem next    = slot_b;
   int   cur_c    = s.pack_out_ch;
 
+  nn_ocl::BeginDemosaicNetStage("trunk_3x3");
   for (int i = 0; i < s.depth; ++i) {
     const int next_h = cur_h - 2;
     const int next_w = cur_w - 2;
@@ -452,8 +463,10 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
     cur_w = next_w;
     cur_c = s.width;
   }
+  nn_ocl::FinishDemosaicNetStage("trunk_3x3", queue);
 
   // ---- Residual 1x1 (no ReLU) → residual buffer on next slot ----
+  nn_ocl::BeginDemosaicNetStage("residual_unpack_concat");
   {
     auto in_view =
         nn_ocl::Nhwc4TensorView::Contiguous(cur, batch, cur_h, cur_w, s.width);
@@ -498,8 +511,10 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
     Enqueue3D(s.unpack_concat.get(), static_cast<size_t>(up_w), static_cast<size_t>(up_h),
               static_cast<size_t>(batch), queue, "unpack enqueue");
   }
+  nn_ocl::FinishDemosaicNetStage("residual_unpack_concat", queue);
 
   // ---- Post 3x3 C6→width + ReLU (valid) ----
+  nn_ocl::BeginDemosaicNetStage("post_output");
   const int post_h = up_h - 2;
   const int post_w = up_w - 2;
   {
@@ -563,6 +578,14 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
     SetArg(s.output_rgb.get(), 11, clampv, "out arg11");
     Enqueue3D(s.output_rgb.get(), static_cast<size_t>(out_w), static_cast<size_t>(out_h),
               static_cast<size_t>(batch), queue, "output enqueue");
+  }
+  nn_ocl::FinishDemosaicNetStage("post_output", queue);
+
+  if (nn_ocl::ActiveDemosaicNetStageProfiler() != nullptr) {
+    nn_ocl::BeginDemosaicNetStage("workspace_subbuffer_release");
+    sub_a.Reset();
+    sub_b.Reset();
+    nn_ocl::FinishDemosaicNetStage("workspace_subbuffer_release", queue);
   }
 }
 

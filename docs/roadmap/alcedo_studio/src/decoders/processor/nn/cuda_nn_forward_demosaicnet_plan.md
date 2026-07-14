@@ -2,6 +2,7 @@
 
 Date: 2026-07-09
 Updated: 2026-07-13
+Primary roadmap owner: `alcedo_studio/src/decoders/processor/nn`
 
 Status: Phases 0–6c landed for the teacher modules (generic CNN ops, hard-coded
 Bayer/XTrans modules, lazy cache, goldens, Neural preprocess, and

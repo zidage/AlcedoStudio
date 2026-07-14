@@ -63,6 +63,10 @@ class OpenClContext {
   cl_device_id             device_   = nullptr;
   cl_context               context_  = nullptr;
   cl_command_queue         queue_    = nullptr;
+  // Development-only second in-order queue with CL_QUEUE_PROFILING_ENABLE.
+  cl_command_queue         profiling_queue_ = nullptr;
+  // When set, Queue() returns this instead of the product queue.
+  mutable cl_command_queue queue_override_ = nullptr;
   OpenClDeviceCapabilities capabilities_;
   bool                     initialized_              = false;
   bool                     initialization_attempted_ = false;
@@ -98,10 +102,21 @@ class OpenClContext {
   auto        Platform() const -> cl_platform_id;
   auto        Device() const -> cl_device_id;
   auto        Context() const -> cl_context;
+  // Product command queue, or the installed development override when active.
   auto        Queue() const -> cl_command_queue;
+  // Product queue only (never the profiling override).
+  auto        ProductQueue() const -> cl_command_queue;
   auto        D3D11SharingEnabled() const -> bool;
   auto        GLSharingEnabled() const -> bool;
   auto        Capabilities() const -> const OpenClDeviceCapabilities&;
+
+  // Development-only: create (once) and install a profiling-enabled in-order queue
+  // as Queue() for event-timestamp telemetry. Does not replace the product queue
+  // object; clear with ClearQueueOverride(). Not for product decode paths.
+  void        InstallProfilingQueueOverride();
+  void        ClearQueueOverride();
+  [[nodiscard]] auto ProfilingQueueInstalled() const -> bool;
+  [[nodiscard]] auto HasProfilingQueue() const -> bool;
 };
 
 }  // namespace alcedo

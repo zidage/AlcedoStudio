@@ -10,6 +10,8 @@
 #include <string>
 #include <utility>
 
+#include "opencl/opencl_api_counters.hpp"
+
 namespace alcedo::opencl {
 namespace {
 
@@ -91,6 +93,7 @@ void OpenClImage::Create(int width, int height, int type) {
   if (buffer_ == nullptr) {
     throw std::runtime_error("OpenClImage: clCreateBuffer returned a null buffer.");
   }
+  NoteOpenClCreateBuffer();
 
   width_     = width;
   height_    = height;
@@ -110,6 +113,7 @@ void OpenClImage::Upload(const cv::Mat& cpu_data) {
     CheckOpenCl(clEnqueueWriteBuffer(context.Queue(), buffer_, CL_TRUE, 0, ByteSize(),
                                      cpu_data.data, 0, nullptr, nullptr),
                 "clEnqueueWriteBuffer");
+    NoteOpenClH2DBytes(static_cast<std::uint64_t>(ByteSize()));
     return;
   }
 
@@ -118,6 +122,7 @@ void OpenClImage::Upload(const cv::Mat& cpu_data) {
         clEnqueueWriteBuffer(context.Queue(), buffer_, CL_TRUE, static_cast<size_t>(y) * row_bytes_,
                              row_bytes_, cpu_data.ptr(y), 0, nullptr, nullptr),
         "clEnqueueWriteBuffer(row)");
+    NoteOpenClH2DBytes(static_cast<std::uint64_t>(row_bytes_));
   }
 }
 
@@ -133,6 +138,7 @@ void OpenClImage::Download(cv::Mat& cpu_data) const {
     CheckOpenCl(clEnqueueReadBuffer(context.Queue(), buffer_, CL_TRUE, 0, ByteSize(), cpu_data.data,
                                     0, nullptr, nullptr),
                 "clEnqueueReadBuffer");
+    NoteOpenClD2HBytes(static_cast<std::uint64_t>(ByteSize()));
     return;
   }
 
@@ -141,6 +147,7 @@ void OpenClImage::Download(cv::Mat& cpu_data) const {
         clEnqueueReadBuffer(context.Queue(), buffer_, CL_TRUE, static_cast<size_t>(y) * row_bytes_,
                             row_bytes_, cpu_data.ptr(y), 0, nullptr, nullptr),
         "clEnqueueReadBuffer(row)");
+    NoteOpenClD2HBytes(static_cast<std::uint64_t>(row_bytes_));
   }
 }
 
@@ -173,6 +180,7 @@ void OpenClImage::CopyTo(OpenClImage& dst) const {
                                   nullptr, nullptr),
               "clEnqueueCopyBuffer");
   CheckOpenCl(clFinish(context.Queue()), "clFinish");
+  NoteOpenClQueueFinish();
 }
 
 void OpenClImage::ConvertTo(OpenClImage& dst, int type, double alpha, double beta) const {
@@ -214,11 +222,13 @@ void OpenClImage::CropTo(OpenClImage& dst, const cv::Rect& crop_rect) const {
                               row_bytes_, 0, dst.row_bytes_, 0, 0, nullptr, nullptr),
       "clEnqueueCopyBufferRect");
   CheckOpenCl(clFinish(context.Queue()), "clFinish");
+  NoteOpenClQueueFinish();
 }
 
 void OpenClImage::Release() {
   if (buffer_ != nullptr) {
     clReleaseMemObject(buffer_);
+    NoteOpenClReleaseMemObject();
     buffer_ = nullptr;
   }
   width_     = 0;
