@@ -107,6 +107,116 @@ __kernel void demosaicnet_pack_reflect_nchw(__global const float* restrict input
   tile[(c * tile_h + y) * tile_w + x] = demosaicnet_signed_gamma_encode(linear);
 }
 
+// Product tile boundary: combine reflect-101, signed gamma, and Bayer 2x2
+// collapse directly into the first persistent NHWC4 activation. This keeps
+// the operation order of demosaicnet_pack_reflect_nchw followed by the Bayer
+// one-hot pack while removing the intermediate NCHW tile.
+__kernel void demosaicnet_pack_reflect_bayer_nhwc4(
+    __global const float* restrict input, __global float4* restrict output,
+    const int frame_h, const int frame_w, const int origin_y, const int origin_x,
+    const int tile_h, const int tile_w) {
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+  if (x >= tile_w / 2 || y >= tile_h / 2) {
+    return;
+  }
+
+  float vals[4];
+  for (int py = 0; py < 2; ++py) {
+    for (int px = 0; px < 2; ++px) {
+      const int sx = demosaicnet_reflect101(origin_x + x * 2 + px, frame_w);
+      const int sy = demosaicnet_reflect101(origin_y + y * 2 + py, frame_h);
+      float     sum = 0.0f;
+      for (int c = 0; c < 3; ++c) {
+        const float linear = input[(sy * frame_w + sx) * 3 + c];
+        sum += demosaicnet_signed_gamma_encode(linear);
+      }
+      vals[py * 2 + px] = sum;
+    }
+  }
+  output[demosaicnet_nhwc4_index(0, y, x, 0, tile_h / 2, tile_w / 2, 1)] =
+      (float4)(vals[0], vals[1], vals[2], vals[3]);
+}
+
+// Product tile boundary: combine reflect-101, signed gamma, and X-Trans
+// 2x2 space-to-depth directly into the first persistent NHWC4 activation.
+__kernel void demosaicnet_pack_reflect_xtrans_nhwc4(
+    __global const float* restrict input, __global float4* restrict output,
+    const int frame_h, const int frame_w, const int origin_y, const int origin_x,
+    const int tile_h, const int tile_w) {
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+  if (x >= tile_w / 2 || y >= tile_h / 2) {
+    return;
+  }
+
+  for (int cb = 0; cb < 3; ++cb) {
+    float vals[4];
+    for (int lane = 0; lane < 4; ++lane) {
+      const int py = lane / 2;
+      const int px = lane % 2;
+      const int sx = demosaicnet_reflect101(origin_x + x * 2 + px, frame_w);
+      const int sy = demosaicnet_reflect101(origin_y + y * 2 + py, frame_h);
+      const int c  = cb;
+      vals[lane] = demosaicnet_signed_gamma_encode(input[(sy * frame_w + sx) * 3 + c]);
+    }
+    output[demosaicnet_nhwc4_index(0, y, x, cb, tile_h / 2, tile_w / 2, 3)] =
+        (float4)(vals[0], vals[1], vals[2], vals[3]);
+  }
+}
+
+// Product residual boundary: read the original HWC3 frame through the same
+// phase-aware reflect-101 and signed-gamma mapping used by the old NCHW tile,
+// while combining it with the residual into the C6 post input. This removes
+// the second consumer of the former intermediate NCHW tile.
+__kernel void demosaicnet_unpack_reflect_concat_nhwc4(
+    __global const float* restrict input, __global const float4* restrict residual,
+    __global float4* restrict cat, const int frame_h, const int frame_w,
+    const int origin_y, const int origin_x, const int tile_h, const int tile_w,
+    const int residual_h, const int residual_w, const int residual_channel_blocks) {
+  const int up_w = residual_w * 2;
+  const int up_h = residual_h * 2;
+  const int x   = get_global_id(0);
+  const int y   = get_global_id(1);
+  if (x >= up_w || y >= up_h) {
+    return;
+  }
+
+  const int crop_x = (tile_w - up_w) / 2;
+  const int crop_y = (tile_h - up_h) / 2;
+  const int tx     = x + crop_x;
+  const int ty     = y + crop_y;
+  const int sx     = demosaicnet_reflect101(origin_x + tx, frame_w);
+  const int sy     = demosaicnet_reflect101(origin_y + ty, frame_h);
+
+  float vals[8];
+  const int mosaic_base = (sy * frame_w + sx) * 3;
+  vals[0]               = demosaicnet_signed_gamma_encode(input[mosaic_base + 0]);
+  vals[1]               = demosaicnet_signed_gamma_encode(input[mosaic_base + 1]);
+  vals[2]               = demosaicnet_signed_gamma_encode(input[mosaic_base + 2]);
+
+  const int sub_y = y & 1;
+  const int sub_x = x & 1;
+  const int ry    = y / 2;
+  const int rx    = x / 2;
+  for (int g = 0; g < 3; ++g) {
+    const int rc     = g * 4 + sub_y * 2 + sub_x;
+    const int src_cb = rc / 4;
+    const int lane   = rc % 4;
+    vals[3 + g] = demosaicnet_float4_lane(
+        residual[demosaicnet_nhwc4_index(0, ry, rx, src_cb, residual_h, residual_w,
+                                         residual_channel_blocks)],
+        lane);
+  }
+  vals[6] = 0.0f;
+  vals[7] = 0.0f;
+
+  cat[demosaicnet_nhwc4_index(0, y, x, 0, up_h, up_w, 2)] =
+      (float4)(vals[0], vals[1], vals[2], vals[3]);
+  cat[demosaicnet_nhwc4_index(0, y, x, 1, up_h, up_w, 2)] =
+      (float4)(vals[4], vals[5], vals[6], vals[7]);
+}
+
 // Fixed Bayer collapse-colors pack: NCHW [N,3,H,W] → NHWC4 [N,H/2,W/2,C4].
 // out_c = py*2+px sums all three mosaic color planes at that sub-pixel (stride 2).
 __kernel void demosaicnet_pack_bayer_nchw_to_nhwc4(__global const float* restrict mosaic,

@@ -1,8 +1,8 @@
 # OpenCL NN Forward DemosaicNet Migration and Alignment Plan
 
-**Status:** Correctness, product routing, Phase 7.0 telemetry, Phase 7.1 residency, and Phase 7.2 are complete; both local OpenCL full-frame means pass the `<500 ms` acceptance gate
+**Status:** Correctness, product routing, Phase 7.0 telemetry, Phase 7.1 residency, Phase 7.2, and Phase 7.3 are complete; both local OpenCL full-frame means pass the `<500 ms` acceptance gate
 **Date:** 2026-07-14  
-**Updated:** 2026-07-14 after CUDA-shaped all-output-channel tiling and 1x1 specialization
+**Updated:** 2026-07-14 after direct NHWC4 tile packing and post/output stage profiling
 **Primary roadmap owner:** `alcedo_studio/src/decoders/processor/nn`  
 **Scope:** Port the CUDA DemosaicNet forward path to OpenCL without introducing a general-purpose inference runtime.
 
@@ -746,6 +746,46 @@ Validation on the local RTX 3080 Laptop GPU:
   `build/perf/opencl_nn_phase7_2_cuda_shaped_event.json`.
 
 No relaxed precision, changed tile coverage, or extra full-frame concurrency was used.
+
+### 12.10 Phase 7.3 direct packing and boundary re-profile — 2026-07-14
+
+Implemented from the Phase 7.2 event profile:
+
+| Piece | Implementation |
+|---|---|
+| Direct first-input packing | Bayer and X-Trans kernels combine reflect-101, signed-gamma encoding, and their fixed 2x2 pack directly into the first persistent NHWC4 activation. |
+| Residual skip input | A direct HWC3 reflect/gamma residual-concat kernel removes the second consumer of the former NCHW tile. |
+| C6 post layer | Fixed two-block C6 input kernel preserves FP32 accumulation, bias, ReLU, and output-lane masking. |
+| Output tail | Fixed C3/one-block 1x1 kernel avoids accumulating unused output blocks for the final RGB tail. |
+| Stage telemetry | Post 3x3, output tail, and output RGB are reported separately; tile assembly, phase crop, and RGB/RGBA conversion remain separate passes. |
+
+The legacy NCHW entrypoint remains available for module/reference tests. Product tiling uses only the
+direct HWC3 path and no longer owns a tile NCHW buffer or its per-tile pack dispatch.
+
+Validation on the local NVIDIA GeForce RTX 3080 Laptop GPU (driver 610.62; the `win_release`
+preset still reports `NDEBUG` unset):
+
+- `OpenClNnPrimitivesTest`: 9/9 passed;
+- `OpenClDemosaicNetTest`: 15/15 passed, including both direct HWC3-vs-NCHW reflected-input
+  comparisons and all four exported references at absolute tolerance `1e-4`;
+- hot product counters remain at zero `create_sub_buffer`, zero `create_kernel`, zero program
+  builds, zero D2H bytes, and one final wait;
+- direct packing removes 40 Bayer / 48 X-Trans pack-and-layout enqueues per full-frame decode;
+- event-profiled hot means: Bayer **407.44 ms**, X-Trans **428.24 ms**;
+- final wall artifact means: Bayer **390.01 ms**, X-Trans **419.55 ms**;
+- artifacts: `build/perf/opencl_nn_phase7_3_wall.json` and
+  `build/perf/opencl_nn_phase7_3_event.json`.
+
+The event profile records the material retained layers independently:
+
+| Fixture | Reflect pack | Residual concat | Post 3x3 | Output tail | Output RGB | Assembly |
+|---|---:|---:|---:|---:|---:|---:|
+| Bayer | 2.59 ms | 14.43 ms | 34.90 ms | 13.92 ms | 3.33 ms | 2.47 ms |
+| X-Trans | 4.62 ms | 20.33 ms | 59.16 ms | 24.94 ms | 3.69 ms | 2.98 ms |
+
+No additional fusion was retained for phase crop, tile assembly, output RGB extraction, or
+RGB/RGBA conversion: each remains below the material boundary threshold, and the direct pack and
+residual comparisons meet the existing `1e-4` FP32 contract.
 
 ## 13. Implementation phases and exit gates
 

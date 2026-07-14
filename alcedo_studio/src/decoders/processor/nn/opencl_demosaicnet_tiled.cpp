@@ -6,11 +6,10 @@
 
 #include "decoders/processor/nn/opencl_demosaicnet_tiled.hpp"
 
+#include <opencv2/core.hpp>
 #include <stdexcept>
 #include <string>
 #include <utility>
-
-#include <opencv2/core.hpp>
 
 #include "decoders/processor/neural_tile_jobs.hpp"
 #include "decoders/processor/operators/gpu/opencl_demosaicnet_programs.hpp"
@@ -31,13 +30,13 @@ class KernelHolder {
  public:
   KernelHolder() = default;
   ~KernelHolder() { Reset(); }
-  KernelHolder(const KernelHolder&) = delete;
+  KernelHolder(const KernelHolder&)                    = delete;
   auto operator=(const KernelHolder&) -> KernelHolder& = delete;
   KernelHolder(KernelHolder&& other) noexcept : kernel_(other.kernel_) { other.kernel_ = nullptr; }
   auto operator=(KernelHolder&& other) noexcept -> KernelHolder& {
     if (this != &other) {
       Reset();
-      kernel_ = other.kernel_;
+      kernel_       = other.kernel_;
       other.kernel_ = nullptr;
     }
     return *this;
@@ -46,7 +45,7 @@ class KernelHolder {
   void Create(cl_program program, const char* name) {
     Reset();
     cl_int err = CL_SUCCESS;
-    kernel_ = clCreateKernel(program, name, &err);
+    kernel_    = clCreateKernel(program, name, &err);
     opencl::nn::CheckOpenCl(err, name);
     NoteOpenClCreateKernel();
   }
@@ -70,21 +69,9 @@ void SetArg(cl_kernel kernel, cl_uint index, const T& value, const char* what) {
 }
 
 void Enqueue2D(cl_kernel kernel, int width, int height, cl_command_queue queue, const char* what) {
-  const size_t             global[] = {static_cast<size_t>(width), static_cast<size_t>(height)};
+  const size_t                 global[] = {static_cast<size_t>(width), static_cast<size_t>(height)};
   opencl::nn::ScopedStageEvent stage_event;
   opencl::nn::CheckOpenCl(clEnqueueNDRangeKernel(queue, kernel, 2, nullptr, global, nullptr, 0,
-                                                 nullptr, stage_event.out()),
-                          what);
-  ++opencl::nn::GetDispatchInstrumentation().enqueue_count;
-  NoteOpenClEnqueueNdRange();
-}
-
-void Enqueue3D(cl_kernel kernel, int width, int height, int depth, cl_command_queue queue,
-               const char* what) {
-  const size_t global[] = {static_cast<size_t>(width), static_cast<size_t>(height),
-                           static_cast<size_t>(depth)};
-  opencl::nn::ScopedStageEvent stage_event;
-  opencl::nn::CheckOpenCl(clEnqueueNDRangeKernel(queue, kernel, 3, nullptr, global, nullptr, 0,
                                                  nullptr, stage_event.out()),
                           what);
   ++opencl::nn::GetDispatchInstrumentation().enqueue_count;
@@ -103,11 +90,6 @@ auto ResolveQueue(cl_command_queue queue) -> cl_command_queue {
 }
 
 template <typename Module>
-auto TileInputBytes() -> std::size_t {
-  return static_cast<std::size_t>(Module::kTileInput) * Module::kTileInput * 3 * sizeof(float);
-}
-
-template <typename Module>
 auto TileOutputBytes() -> std::size_t {
   return static_cast<std::size_t>(Module::kTileOutput) * Module::kTileOutput * 3 * sizeof(float);
 }
@@ -115,33 +97,28 @@ auto TileOutputBytes() -> std::size_t {
 }  // namespace
 
 struct OpenClDemosaicNetTiledExecutor::Impl {
-  KernelHolder pack_reflect;
-  KernelHolder assemble;
-  opencl::nn::DeviceBuffer tile_input;
+  KernelHolder             assemble;
   opencl::nn::DeviceBuffer tile_output;
 
-  void EnsureKernels() {
-    if (!pack_reflect.empty()) {
+  void                     EnsureKernels() {
+    if (!assemble.empty()) {
       return;
     }
     RegisterOpenClBackendPrograms();
     const cl_program program =
         OpenClProgramLibrary::Instance().GetProgram(OpenCL::DemosaicNet::kStructuralProgramName);
-    pack_reflect.Create(program, OpenCL::DemosaicNet::kPackReflectNchwKernelName);
     assemble.Create(program, OpenCL::DemosaicNet::kAssembleRgbTileKernelName);
   }
 
-  void EnsureTileBuffers(std::size_t input_bytes, std::size_t output_bytes) {
-    if (tile_input.byte_capacity() < input_bytes) {
-      tile_input = opencl::nn::DeviceBuffer(input_bytes);
-    }
+  void EnsureTileBuffers(std::size_t output_bytes) {
     if (tile_output.byte_capacity() < output_bytes) {
       tile_output = opencl::nn::DeviceBuffer(output_bytes);
     }
   }
 };
 
-OpenClDemosaicNetTiledExecutor::OpenClDemosaicNetTiledExecutor() : impl_(std::make_unique<Impl>()) {}
+OpenClDemosaicNetTiledExecutor::OpenClDemosaicNetTiledExecutor()
+    : impl_(std::make_unique<Impl>()) {}
 OpenClDemosaicNetTiledExecutor::~OpenClDemosaicNetTiledExecutor() = default;
 OpenClDemosaicNetTiledExecutor::OpenClDemosaicNetTiledExecutor(
     OpenClDemosaicNetTiledExecutor&&) noexcept = default;
@@ -152,9 +129,9 @@ namespace {
 
 template <typename Module>
 auto EnqueueTiles(OpenClDemosaicNetTiledExecutor::Impl& state, const Module& module,
-                  opencl::nn::ActivationSlots& activation_slots,
+                  opencl::nn::ActivationSlots&          activation_slots,
                   const OpenClDemosaicNetTiledDispatch& dispatch,
-                  const detail::NeuralTilePolicy& policy) -> OpenClDemosaicNetTiledResult {
+                  const detail::NeuralTilePolicy&       policy) -> OpenClDemosaicNetTiledResult {
   if (!module.weights_loaded()) {
     throw std::runtime_error("OpenClDemosaicNetTiledExecutor: module weights are not loaded");
   }
@@ -164,17 +141,17 @@ auto EnqueueTiles(OpenClDemosaicNetTiledExecutor::Impl& state, const Module& mod
   }
   if ((dispatch.aligned_width % Module::kCfaPeriod) != 0 ||
       (dispatch.aligned_height % Module::kCfaPeriod) != 0) {
-    throw std::runtime_error("OpenClDemosaicNetTiledExecutor: aligned dimensions violate CFA period");
+    throw std::runtime_error(
+        "OpenClDemosaicNetTiledExecutor: aligned dimensions violate CFA period");
   }
 
   const cl_command_queue queue = ResolveQueue(dispatch.queue);
   state.EnsureKernels();
-  state.EnsureTileBuffers(TileInputBytes<Module>(), TileOutputBytes<Module>());
+  state.EnsureTileBuffers(TileOutputBytes<Module>());
 
-  const auto jobs = detail::BuildTileJobs(cv::Rect(0, 0, dispatch.aligned_width,
-                                                    dispatch.aligned_height),
-                                           cv::Size(dispatch.aligned_width, dispatch.aligned_height),
-                                           policy);
+  const auto jobs =
+      detail::BuildTileJobs(cv::Rect(0, 0, dispatch.aligned_width, dispatch.aligned_height),
+                            cv::Size(dispatch.aligned_width, dispatch.aligned_height), policy);
 
   // The in-order queue makes one pair of staging buffers safe: every pack,
   // forward, and assembly completes before the next job overwrites either one.
@@ -187,35 +164,24 @@ auto EnqueueTiles(OpenClDemosaicNetTiledExecutor::Impl& state, const Module& mod
       throw std::runtime_error("OpenClDemosaicNetTiledExecutor: invalid shared tile job geometry");
     }
 
-    const cl_int frame_h = dispatch.aligned_height;
-    const cl_int frame_w = dispatch.aligned_width;
+    const cl_int frame_h  = dispatch.aligned_height;
+    const cl_int frame_w  = dispatch.aligned_width;
     const cl_int origin_y = job.input_origin.y;
     const cl_int origin_x = job.input_origin.x;
-    const cl_int tile_h = job.input_h;
-    const cl_int tile_w = job.input_w;
-    opencl::nn::BeginDemosaicNetStage("tile_reflect_pack");
-    SetArg(state.pack_reflect.get(), 0, dispatch.input_aligned_hwc, "tile pack arg0");
-    SetArg(state.pack_reflect.get(), 1, state.tile_input.get(), "tile pack arg1");
-    SetArg(state.pack_reflect.get(), 2, frame_h, "tile pack arg2");
-    SetArg(state.pack_reflect.get(), 3, frame_w, "tile pack arg3");
-    SetArg(state.pack_reflect.get(), 4, origin_y, "tile pack arg4");
-    SetArg(state.pack_reflect.get(), 5, origin_x, "tile pack arg5");
-    SetArg(state.pack_reflect.get(), 6, tile_h, "tile pack arg6");
-    SetArg(state.pack_reflect.get(), 7, tile_w, "tile pack arg7");
-    Enqueue3D(state.pack_reflect.get(), tile_w, tile_h, 3, queue, "tile reflect pack enqueue");
-    opencl::nn::FinishDemosaicNetStage("tile_reflect_pack", queue);
-
-    module.ForwardNchwToHwc(state.tile_input.get(), 1, tile_h, tile_w, state.tile_output.get(),
-                            activation_slots, queue, /*apply_gamma_decode=*/true);
+    const cl_int tile_h   = job.input_h;
+    const cl_int tile_w   = job.input_w;
+    module.ForwardReflectHwc3ToHwc(dispatch.input_aligned_hwc, frame_h, frame_w, origin_y, origin_x,
+                                   tile_h, tile_w, state.tile_output.get(), activation_slots, queue,
+                                   /*apply_gamma_decode=*/true);
 
     const cl_int canvas_w = dispatch.aligned_width;
     const cl_int canvas_h = dispatch.aligned_height;
-    const cl_int dst_x = job.destination_roi.x;
-    const cl_int dst_y = job.destination_roi.y;
-    const cl_int owned_w = job.destination_roi.width;
-    const cl_int owned_h = job.destination_roi.height;
-    const cl_int src_x = job.model_output_roi.x;
-    const cl_int src_y = job.model_output_roi.y;
+    const cl_int dst_x    = job.destination_roi.x;
+    const cl_int dst_y    = job.destination_roi.y;
+    const cl_int owned_w  = job.destination_roi.width;
+    const cl_int owned_h  = job.destination_roi.height;
+    const cl_int src_x    = job.model_output_roi.x;
+    const cl_int src_y    = job.model_output_roi.y;
     opencl::nn::BeginDemosaicNetStage("tile_assembly");
     SetArg(state.assemble.get(), 0, state.tile_output.get(), "tile assemble arg0");
     SetArg(state.assemble.get(), 1, dispatch.output_aligned_hwc, "tile assemble arg1");
@@ -233,23 +199,25 @@ auto EnqueueTiles(OpenClDemosaicNetTiledExecutor::Impl& state, const Module& mod
     opencl::nn::FinishDemosaicNetStage("tile_assembly", queue);
   }
 
-  return {.tile_count = jobs.size(),
-          .output_width = dispatch.aligned_width,
+  return {.tile_count    = jobs.size(),
+          .output_width  = dispatch.aligned_width,
           .output_height = dispatch.aligned_height};
 }
 
 }  // namespace
 
-auto OpenClDemosaicNetTiledExecutor::EnqueueBayer(
-    const OpenClBayerDemosaicNet& module, opencl::nn::ActivationSlots& activation_slots,
-    const OpenClDemosaicNetTiledDispatch& dispatch) -> OpenClDemosaicNetTiledResult {
+auto OpenClDemosaicNetTiledExecutor::EnqueueBayer(const OpenClBayerDemosaicNet& module,
+                                                  opencl::nn::ActivationSlots&  activation_slots,
+                                                  const OpenClDemosaicNetTiledDispatch& dispatch)
+    -> OpenClDemosaicNetTiledResult {
   return EnqueueTiles(*impl_, module, activation_slots, dispatch,
                       detail::MakeBayerStudentTilePolicy());
 }
 
-auto OpenClDemosaicNetTiledExecutor::EnqueueXTrans(
-    const OpenClXTransDemosaicNet& module, opencl::nn::ActivationSlots& activation_slots,
-    const OpenClDemosaicNetTiledDispatch& dispatch) -> OpenClDemosaicNetTiledResult {
+auto OpenClDemosaicNetTiledExecutor::EnqueueXTrans(const OpenClXTransDemosaicNet& module,
+                                                   opencl::nn::ActivationSlots&   activation_slots,
+                                                   const OpenClDemosaicNetTiledDispatch& dispatch)
+    -> OpenClDemosaicNetTiledResult {
   return EnqueueTiles(*impl_, module, activation_slots, dispatch,
                       detail::MakeXTransStudentTilePolicy());
 }

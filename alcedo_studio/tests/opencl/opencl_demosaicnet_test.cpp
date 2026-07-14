@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "decoders/processor/nn/demosaicnet_preprocess_common.hpp"
 #include "decoders/processor/nn/opencl_demosaicnet_cache.hpp"
 #include "decoders/processor/nn/opencl_demosaicnet_module.hpp"
 #include "decoders/processor/nn/opencl_demosaicnet_tiled.hpp"
@@ -33,12 +34,12 @@
 namespace alcedo {
 namespace {
 
-namespace fs     = std::filesystem;
-namespace nn_ocl = opencl::nn;
+namespace fs            = std::filesystem;
+namespace nn_ocl        = opencl::nn;
 
 constexpr float kAbsTol = 1e-4f;
 
-auto EnsureOpenCl() -> bool {
+auto            EnsureOpenCl() -> bool {
   if (TryPrepareOpenClRuntime()) {
     return true;
   }
@@ -55,7 +56,7 @@ void RequireOpenCl() {
 
 auto FindPath(const char* filename, std::initializer_list<const char*> prefixes) -> fs::path {
   for (const char* prefix : prefixes) {
-    fs::path path = fs::path(prefix) / filename;
+    fs::path        path = fs::path(prefix) / filename;
     std::error_code ec;
     if (fs::is_regular_file(path, ec)) {
       return path;
@@ -67,28 +68,29 @@ auto FindPath(const char* filename, std::initializer_list<const char*> prefixes)
 auto FindModelDir() -> fs::path {
 #ifdef ALCEDO_DEMOASICNET_MODEL_DIR
   {
-    fs::path p{ALCEDO_DEMOASICNET_MODEL_DIR};
+    fs::path        p{ALCEDO_DEMOASICNET_MODEL_DIR};
     std::error_code ec;
     if (fs::is_directory(p, ec)) {
       return p;
     }
   }
 #endif
-  return FindPath("bayer.safetensors",
-                  {"alcedo_studio/src/config/models/", "../alcedo_studio/src/config/models/",
-                   "../../alcedo_studio/src/config/models/",
-                   "../../../alcedo_studio/src/config/models/", "src/config/models/",
-                   "../src/config/models/", "D:/Projects/pu-erh_lab/alcedo_studio/src/config/models/"})
+  return FindPath(
+             "bayer.safetensors",
+             {"alcedo_studio/src/config/models/", "../alcedo_studio/src/config/models/",
+              "../../alcedo_studio/src/config/models/", "../../../alcedo_studio/src/config/models/",
+              "src/config/models/", "../src/config/models/",
+              "D:/Projects/pu-erh_lab/alcedo_studio/src/config/models/"})
       .parent_path();
 }
 
 auto FindGolden(const char* filename) -> fs::path {
-  return FindPath(filename, {"alcedo_studio/tests/ml_ops/goldens/",
-                             "../alcedo_studio/tests/ml_ops/goldens/",
-                             "../../alcedo_studio/tests/ml_ops/goldens/",
-                             "../../../alcedo_studio/tests/ml_ops/goldens/",
-                             "tests/ml_ops/goldens/", "../tests/ml_ops/goldens/",
-                             "D:/Projects/pu-erh_lab/alcedo_studio/tests/ml_ops/goldens/"});
+  return FindPath(
+      filename,
+      {"alcedo_studio/tests/ml_ops/goldens/", "../alcedo_studio/tests/ml_ops/goldens/",
+       "../../alcedo_studio/tests/ml_ops/goldens/", "../../../alcedo_studio/tests/ml_ops/goldens/",
+       "tests/ml_ops/goldens/", "../tests/ml_ops/goldens/",
+       "D:/Projects/pu-erh_lab/alcedo_studio/tests/ml_ops/goldens/"});
 }
 
 auto LoadFloatBin(const fs::path& path, std::size_t expected_count) -> std::vector<float> {
@@ -109,7 +111,7 @@ auto LoadFloatBin(const fs::path& path, std::size_t expected_count) -> std::vect
 
 // Product forward writes HWC; references remain NCHW [1,3,H,W].
 auto HwcToNchw(const std::vector<float>& hwc, int height, int width) -> std::vector<float> {
-  const std::size_t plane = static_cast<std::size_t>(height) * width;
+  const std::size_t  plane = static_cast<std::size_t>(height) * width;
   std::vector<float> nchw(plane * 3);
   for (int y = 0; y < height; ++y) {
     for (int x = 0; x < width; ++x) {
@@ -134,19 +136,19 @@ struct MaxAbsReport {
 
 auto ComputeMaxAbsNchw(const std::vector<float>& actual, const std::vector<float>& expected, int h,
                        int w) -> MaxAbsReport {
-  MaxAbsReport report;
+  MaxAbsReport      report;
   const std::size_t plane = static_cast<std::size_t>(h) * w;
   for (std::size_t i = 0; i < actual.size(); ++i) {
     const float err = std::fabs(actual[i] - expected[i]);
     if (err > report.max_abs) {
-      report.max_abs  = err;
-      report.index    = i;
-      report.expected = expected[i];
-      report.actual   = actual[i];
-      report.channel  = static_cast<int>(i / plane);
+      report.max_abs        = err;
+      report.index          = i;
+      report.expected       = expected[i];
+      report.actual         = actual[i];
+      report.channel        = static_cast<int>(i / plane);
       const std::size_t pix = i % plane;
-      report.y        = static_cast<int>(pix / static_cast<std::size_t>(w));
-      report.x        = static_cast<int>(pix % static_cast<std::size_t>(w));
+      report.y              = static_cast<int>(pix / static_cast<std::size_t>(w));
+      report.x              = static_cast<int>(pix % static_cast<std::size_t>(w));
     }
   }
   return report;
@@ -169,8 +171,8 @@ void ExpectNchwNear(const std::vector<float>& actual, const std::vector<float>& 
 template <typename Net>
 auto ForwardReference(const Net& net, const std::vector<float>& input_nchw, int h, int w, int oh,
                       int ow, nn_ocl::ActivationSlots& slots) -> std::vector<float> {
-  constexpr int N = 1;
-  nn_ocl::DeviceBuffer in_buf  = nn_ocl::DeviceBuffer::Floats(input_nchw.size());
+  constexpr int        N      = 1;
+  nn_ocl::DeviceBuffer in_buf = nn_ocl::DeviceBuffer::Floats(input_nchw.size());
   nn_ocl::DeviceBuffer out_buf =
       nn_ocl::DeviceBuffer::Floats(static_cast<std::size_t>(N) * oh * ow * 3);
   in_buf.UploadFloats(input_nchw);
@@ -200,8 +202,8 @@ TEST_F(OpenClDemosaicNetModuleTest, BayerLoadWeightsRejectsWrongArchitectureMeta
   if (model_dir.empty()) {
     GTEST_SKIP() << "model dir not found";
   }
-  auto map  = nn::LoadSafetensors(model_dir / "bayer.safetensors");
-  auto meta = map.metadata();
+  auto map             = nn::LoadSafetensors(model_dir / "bayer.safetensors");
+  auto meta            = map.metadata();
   meta["architecture"] = "teacher_bayer_d15";
   map.SetMetadata(std::move(meta));
 
@@ -215,8 +217,8 @@ TEST_F(OpenClDemosaicNetModuleTest, BayerLoadWeightsRejectsWrongTensorShapeWitho
   if (model_dir.empty()) {
     GTEST_SKIP() << "model dir not found";
   }
-  auto map     = nn::LoadSafetensors(model_dir / "bayer.safetensors");
-  auto mutated = map.at("trunk.0.weight");
+  auto map      = nn::LoadSafetensors(model_dir / "bayer.safetensors");
+  auto mutated  = map.at("trunk.0.weight");
   mutated.shape = {24, 5, 3, 3};
   mutated.data.assign(mutated.numel(), 0.0f);
   map.InsertOrAssign(std::move(mutated));
@@ -231,7 +233,7 @@ TEST_F(OpenClDemosaicNetModuleTest, XTransLoadWeightsAndResidentWeightsNonZero) 
   if (model_dir.empty()) {
     GTEST_SKIP() << "model dir not found";
   }
-  auto map = nn::LoadSafetensors(model_dir / "xtrans.safetensors");
+  auto                    map = nn::LoadSafetensors(model_dir / "xtrans.safetensors");
   OpenClXTransDemosaicNet net;
   ASSERT_NO_THROW(net.LoadWeights(map));
   EXPECT_TRUE(net.weights_loaded());
@@ -253,7 +255,7 @@ TEST_F(OpenClDemosaicNetModuleTest, CacheRejectsInvalidMetadataWithoutPublishing
   // Use a temporary copy with bad architecture metadata is heavy; instead load a
   // path that exists then simulate via direct module rejection (above). Here we
   // verify a missing weight file leaves the cache cold.
-  OpenClDemosaicNetModelCache cache;
+  OpenClDemosaicNetModelCache  cache;
   OpenClDemosaicNetLoadOptions opts;
   opts.model_dir = model_dir / "does_not_exist_subdir";
   EXPECT_FALSE(cache.EnsureLoaded(OpenClDemosaicNetVariant::Bayer, opts));
@@ -281,8 +283,7 @@ TEST_F(OpenClDemosaicNetModuleTest, CacheSecondEnsureLoadedReusesWeightBuffers) 
   EXPECT_EQ(cache.Bayer().OutputWeightBuffer(), w1);
 }
 
-TEST_F(OpenClDemosaicNetModuleTest,
-       SecondForwardReusesActivationSlotsAndCompiledPrograms) {
+TEST_F(OpenClDemosaicNetModuleTest, SecondForwardReusesActivationSlotsAndCompiledPrograms) {
   const auto model_dir = FindModelDir();
   const auto in_path   = FindGolden("bayer_64_in.bin");
   const auto out_path  = FindGolden("bayer_64_out.bin");
@@ -290,12 +291,12 @@ TEST_F(OpenClDemosaicNetModuleTest,
     GTEST_SKIP() << "models or small reference fixtures not found";
   }
 
-  constexpr int N  = 1;
-  constexpr int H  = 64;
-  constexpr int W  = 64;
-  const int     Oh = OpenClBayerDemosaicNet::OutputHeight(H, W);
-  const int     Ow = OpenClBayerDemosaicNet::OutputWidth(W, H);
-  const auto    hin = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
+  constexpr int          N   = 1;
+  constexpr int          H   = 64;
+  constexpr int          W   = 64;
+  const int              Oh  = OpenClBayerDemosaicNet::OutputHeight(H, W);
+  const int              Ow  = OpenClBayerDemosaicNet::OutputWidth(W, H);
+  const auto             hin = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
 
   OpenClBayerDemosaicNet net;
   net.LoadWeights(nn::LoadSafetensors(model_dir / "bayer.safetensors"));
@@ -308,10 +309,10 @@ TEST_F(OpenClDemosaicNetModuleTest,
       OpenClProgramLibrary::Instance().IsProgramBuilt(OpenCL::DemosaicNet::kConvBayerProgramName);
 
   (void)ForwardReference(net, hin, H, W, Oh, Ow, slots);
-  EXPECT_TRUE(OpenClProgramLibrary::Instance().IsProgramBuilt(
-      OpenCL::DemosaicNet::kConvBayerProgramName));
-  EXPECT_TRUE(OpenClProgramLibrary::Instance().IsProgramBuilt(
-      OpenCL::DemosaicNet::kStructuralProgramName));
+  EXPECT_TRUE(
+      OpenClProgramLibrary::Instance().IsProgramBuilt(OpenCL::DemosaicNet::kConvBayerProgramName));
+  EXPECT_TRUE(
+      OpenClProgramLibrary::Instance().IsProgramBuilt(OpenCL::DemosaicNet::kStructuralProgramName));
   (void)built_before_first;
 
   const auto gen_after_first = slots.allocation_generation();
@@ -323,6 +324,134 @@ TEST_F(OpenClDemosaicNetModuleTest,
   EXPECT_EQ(slots.allocation_generation(), gen_after_first)
       << "second forward must not reallocate activation slots";
   EXPECT_EQ(net.Trunk0WeightBuffer(), pack_w) << "second forward must not re-upload weights";
+}
+
+// Purpose: the fused product tile pack preserves the old reflected signed-gamma
+// input tensor exactly before the fixed network consumes it.
+TEST_F(OpenClDemosaicNetModuleTest,
+       BayerReflectHwc3ForwardMatchesReferenceNchwInputWithin1eMinus4) {
+  const auto model_dir = FindModelDir();
+  if (model_dir.empty()) {
+    GTEST_SKIP() << "model dir not found";
+  }
+
+  constexpr int      kFrameH = 64;
+  constexpr int      kFrameW = 64;
+  constexpr int      kTileH  = 64;
+  constexpr int      kTileW  = 64;
+  const int          out_h   = OpenClBayerDemosaicNet::OutputHeight(kTileH, kTileW);
+  const int          out_w   = OpenClBayerDemosaicNet::OutputWidth(kTileW, kTileH);
+
+  std::vector<float> frame(static_cast<std::size_t>(kFrameH) * kFrameW * 3);
+  for (std::size_t i = 0; i < frame.size(); ++i) {
+    frame[i] = static_cast<float>(static_cast<int>(i % 17) - 8) * 0.03f;
+  }
+
+  constexpr int      kOriginY = -2;
+  constexpr int      kOriginX = -4;
+  std::vector<float> reference_nchw(frame.size());
+  for (int c = 0; c < 3; ++c) {
+    for (int y = 0; y < kTileH; ++y) {
+      for (int x = 0; x < kTileW; ++x) {
+        const int   sy    = Reflect101(kOriginY + y, kFrameH);
+        const int   sx    = Reflect101(kOriginX + x, kFrameW);
+        const float value = frame[(static_cast<std::size_t>(sy) * kFrameW + sx) * 3 + c];
+        reference_nchw[(static_cast<std::size_t>(c) * kTileH + y) * kTileW + x] =
+            PowSigned(value, kDemosaicNetGammaEncode);
+      }
+    }
+  }
+
+  OpenClBayerDemosaicNet net;
+  net.LoadWeights(nn::LoadSafetensors(model_dir / "bayer.safetensors"));
+  nn_ocl::DeviceBuffer frame_buffer = nn_ocl::DeviceBuffer::Floats(frame.size());
+  nn_ocl::DeviceBuffer nchw_buffer  = nn_ocl::DeviceBuffer::Floats(reference_nchw.size());
+  nn_ocl::DeviceBuffer direct_output =
+      nn_ocl::DeviceBuffer::Floats(static_cast<std::size_t>(out_h) * out_w * 3);
+  nn_ocl::DeviceBuffer reference_output =
+      nn_ocl::DeviceBuffer::Floats(static_cast<std::size_t>(out_h) * out_w * 3);
+  frame_buffer.UploadFloats(frame);
+  nchw_buffer.UploadFloats(reference_nchw);
+  nn_ocl::ActivationSlots slots;
+
+  auto&                   context = OpenClContext::Instance();
+  net.ForwardReflectHwc3ToHwc(frame_buffer.get(), kFrameH, kFrameW, kOriginY, kOriginX, kTileH,
+                              kTileW, direct_output.get(), slots, context.Queue(), false);
+  nn_ocl::WaitQueue(context.Queue());
+  net.ForwardNchwToHwc(nchw_buffer.get(), 1, kTileH, kTileW, reference_output.get(), slots,
+                       context.Queue(), false);
+  nn_ocl::WaitQueue(context.Queue());
+
+  const auto direct = direct_output.DownloadFloats(static_cast<std::size_t>(out_h) * out_w * 3);
+  const auto reference =
+      reference_output.DownloadFloats(static_cast<std::size_t>(out_h) * out_w * 3);
+  ASSERT_EQ(direct.size(), reference.size());
+  for (std::size_t i = 0; i < direct.size(); ++i) {
+    EXPECT_NEAR(direct[i], reference[i], kAbsTol) << "index=" << i;
+  }
+}
+
+TEST_F(OpenClDemosaicNetModuleTest,
+       XTransReflectHwc3ForwardMatchesReferenceNchwInputWithin1eMinus4) {
+  const auto model_dir = FindModelDir();
+  if (model_dir.empty()) {
+    GTEST_SKIP() << "model dir not found";
+  }
+
+  constexpr int      kFrameH = 64;
+  constexpr int      kFrameW = 64;
+  constexpr int      kTileH  = 64;
+  constexpr int      kTileW  = 64;
+  const int          out_h   = OpenClXTransDemosaicNet::OutputHeight(kTileH, kTileW);
+  const int          out_w   = OpenClXTransDemosaicNet::OutputWidth(kTileW, kTileH);
+
+  std::vector<float> frame(static_cast<std::size_t>(kFrameH) * kFrameW * 3);
+  for (std::size_t i = 0; i < frame.size(); ++i) {
+    frame[i] = static_cast<float>(static_cast<int>(i % 19) - 9) * 0.025f;
+  }
+
+  constexpr int      kOriginY = -6;
+  constexpr int      kOriginX = -4;
+  std::vector<float> reference_nchw(frame.size());
+  for (int c = 0; c < 3; ++c) {
+    for (int y = 0; y < kTileH; ++y) {
+      for (int x = 0; x < kTileW; ++x) {
+        const int   sy    = Reflect101(kOriginY + y, kFrameH);
+        const int   sx    = Reflect101(kOriginX + x, kFrameW);
+        const float value = frame[(static_cast<std::size_t>(sy) * kFrameW + sx) * 3 + c];
+        reference_nchw[(static_cast<std::size_t>(c) * kTileH + y) * kTileW + x] =
+            PowSigned(value, kDemosaicNetGammaEncode);
+      }
+    }
+  }
+
+  OpenClXTransDemosaicNet net;
+  net.LoadWeights(nn::LoadSafetensors(model_dir / "xtrans.safetensors"));
+  nn_ocl::DeviceBuffer frame_buffer = nn_ocl::DeviceBuffer::Floats(frame.size());
+  nn_ocl::DeviceBuffer nchw_buffer  = nn_ocl::DeviceBuffer::Floats(reference_nchw.size());
+  nn_ocl::DeviceBuffer direct_output =
+      nn_ocl::DeviceBuffer::Floats(static_cast<std::size_t>(out_h) * out_w * 3);
+  nn_ocl::DeviceBuffer reference_output =
+      nn_ocl::DeviceBuffer::Floats(static_cast<std::size_t>(out_h) * out_w * 3);
+  frame_buffer.UploadFloats(frame);
+  nchw_buffer.UploadFloats(reference_nchw);
+  nn_ocl::ActivationSlots slots;
+
+  auto&                   context = OpenClContext::Instance();
+  net.ForwardReflectHwc3ToHwc(frame_buffer.get(), kFrameH, kFrameW, kOriginY, kOriginX, kTileH,
+                              kTileW, direct_output.get(), slots, context.Queue(), false);
+  nn_ocl::WaitQueue(context.Queue());
+  net.ForwardNchwToHwc(nchw_buffer.get(), 1, kTileH, kTileW, reference_output.get(), slots,
+                       context.Queue(), false);
+  nn_ocl::WaitQueue(context.Queue());
+
+  const auto direct = direct_output.DownloadFloats(static_cast<std::size_t>(out_h) * out_w * 3);
+  const auto reference =
+      reference_output.DownloadFloats(static_cast<std::size_t>(out_h) * out_w * 3);
+  ASSERT_EQ(direct.size(), reference.size());
+  for (std::size_t i = 0; i < direct.size(); ++i) {
+    EXPECT_NEAR(direct[i], reference[i], kAbsTol) << "index=" << i;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -337,11 +466,11 @@ TEST_F(OpenClDemosaicNetModuleTest, BayerStudentForwardMatchesExportedReference0
     GTEST_SKIP() << "models or student references not found";
   }
 
-  constexpr int N  = 1;
-  constexpr int H  = OpenClBayerDemosaicNet::kTileInput;
-  constexpr int W  = OpenClBayerDemosaicNet::kTileInput;
-  constexpr int Oh = OpenClBayerDemosaicNet::kTileOutput;
-  constexpr int Ow = OpenClBayerDemosaicNet::kTileOutput;
+  constexpr int N        = 1;
+  constexpr int H        = OpenClBayerDemosaicNet::kTileInput;
+  constexpr int W        = OpenClBayerDemosaicNet::kTileInput;
+  constexpr int Oh       = OpenClBayerDemosaicNet::kTileOutput;
+  constexpr int Ow       = OpenClBayerDemosaicNet::kTileOutput;
   const auto    hin      = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
   const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
 
@@ -359,11 +488,11 @@ TEST_F(OpenClDemosaicNetModuleTest, BayerStudentForwardMatchesExportedReference0
     GTEST_SKIP() << "models or student references not found";
   }
 
-  constexpr int N  = 1;
-  constexpr int H  = OpenClBayerDemosaicNet::kTileInput;
-  constexpr int W  = OpenClBayerDemosaicNet::kTileInput;
-  constexpr int Oh = OpenClBayerDemosaicNet::kTileOutput;
-  constexpr int Ow = OpenClBayerDemosaicNet::kTileOutput;
+  constexpr int N        = 1;
+  constexpr int H        = OpenClBayerDemosaicNet::kTileInput;
+  constexpr int W        = OpenClBayerDemosaicNet::kTileInput;
+  constexpr int Oh       = OpenClBayerDemosaicNet::kTileOutput;
+  constexpr int Ow       = OpenClBayerDemosaicNet::kTileOutput;
   const auto    hin      = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
   const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
 
@@ -381,11 +510,11 @@ TEST_F(OpenClDemosaicNetModuleTest, XTransStudentForwardMatchesExportedReference
     GTEST_SKIP() << "models or student references not found";
   }
 
-  constexpr int N  = 1;
-  constexpr int H  = OpenClXTransDemosaicNet::kTileInput;
-  constexpr int W  = OpenClXTransDemosaicNet::kTileInput;
-  constexpr int Oh = OpenClXTransDemosaicNet::kTileOutput;
-  constexpr int Ow = OpenClXTransDemosaicNet::kTileOutput;
+  constexpr int N        = 1;
+  constexpr int H        = OpenClXTransDemosaicNet::kTileInput;
+  constexpr int W        = OpenClXTransDemosaicNet::kTileInput;
+  constexpr int Oh       = OpenClXTransDemosaicNet::kTileOutput;
+  constexpr int Ow       = OpenClXTransDemosaicNet::kTileOutput;
   const auto    hin      = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
   const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
 
@@ -403,11 +532,11 @@ TEST_F(OpenClDemosaicNetModuleTest, XTransStudentForwardMatchesExportedReference
     GTEST_SKIP() << "models or student references not found";
   }
 
-  constexpr int N  = 1;
-  constexpr int H  = OpenClXTransDemosaicNet::kTileInput;
-  constexpr int W  = OpenClXTransDemosaicNet::kTileInput;
-  constexpr int Oh = OpenClXTransDemosaicNet::kTileOutput;
-  constexpr int Ow = OpenClXTransDemosaicNet::kTileOutput;
+  constexpr int N        = 1;
+  constexpr int H        = OpenClXTransDemosaicNet::kTileInput;
+  constexpr int W        = OpenClXTransDemosaicNet::kTileInput;
+  constexpr int Oh       = OpenClXTransDemosaicNet::kTileOutput;
+  constexpr int Ow       = OpenClXTransDemosaicNet::kTileOutput;
   const auto    hin      = LoadFloatBin(in_path, static_cast<std::size_t>(N * 3 * H * W));
   const auto    expected = LoadFloatBin(out_path, static_cast<std::size_t>(N * 3 * Oh * Ow));
 
@@ -437,26 +566,25 @@ TEST_F(OpenClDemosaicNetModuleTest,
     GTEST_SKIP() << "model dir not found";
   }
 
-  constexpr int kWidth = 2048;
-  constexpr int kHeight = 2048;
-  std::vector<float> input(static_cast<std::size_t>(kWidth) * kHeight * 3, 0.1f);
-  nn_ocl::DeviceBuffer input_buffer = nn_ocl::DeviceBuffer::Floats(input.size());
+  constexpr int        kWidth  = 2048;
+  constexpr int        kHeight = 2048;
+  std::vector<float>   input(static_cast<std::size_t>(kWidth) * kHeight * 3, 0.1f);
+  nn_ocl::DeviceBuffer input_buffer  = nn_ocl::DeviceBuffer::Floats(input.size());
   nn_ocl::DeviceBuffer output_buffer = nn_ocl::DeviceBuffer::Floats(input.size());
   input_buffer.UploadFloats(input);
 
   OpenClBayerDemosaicNet module;
   module.LoadWeights(nn::LoadSafetensors(model_dir / "bayer.safetensors"));
   OpenClDemosaicNetTiledExecutor executor;
-  nn_ocl::ActivationSlots slots;
+  nn_ocl::ActivationSlots        slots;
   nn_ocl::ResetDispatchInstrumentation();
 
-  const auto result = executor.EnqueueBayer(
-      module, slots,
-      {.input_aligned_hwc = input_buffer.get(),
-       .output_aligned_hwc = output_buffer.get(),
-       .aligned_width = kWidth,
-       .aligned_height = kHeight,
-       .queue = OpenClContext::Instance().Queue()});
+  const auto result = executor.EnqueueBayer(module, slots,
+                                            {.input_aligned_hwc  = input_buffer.get(),
+                                             .output_aligned_hwc = output_buffer.get(),
+                                             .aligned_width      = kWidth,
+                                             .aligned_height     = kHeight,
+                                             .queue = OpenClContext::Instance().Queue()});
 
   // Bayer's model-output origin is -1 (pad32/border31), so the 2048 square
   // requires a 3×3 shared-job grid rather than a naïve 2×2 grid.
@@ -481,26 +609,25 @@ TEST_F(OpenClDemosaicNetModuleTest,
     GTEST_SKIP() << "model dir not found";
   }
 
-  constexpr int kWidth = 2040;
-  constexpr int kHeight = 2040;
-  std::vector<float> input(static_cast<std::size_t>(kWidth) * kHeight * 3, 0.1f);
-  nn_ocl::DeviceBuffer input_buffer = nn_ocl::DeviceBuffer::Floats(input.size());
+  constexpr int        kWidth  = 2040;
+  constexpr int        kHeight = 2040;
+  std::vector<float>   input(static_cast<std::size_t>(kWidth) * kHeight * 3, 0.1f);
+  nn_ocl::DeviceBuffer input_buffer  = nn_ocl::DeviceBuffer::Floats(input.size());
   nn_ocl::DeviceBuffer output_buffer = nn_ocl::DeviceBuffer::Floats(input.size());
   input_buffer.UploadFloats(input);
 
   OpenClXTransDemosaicNet module;
   module.LoadWeights(nn::LoadSafetensors(model_dir / "xtrans.safetensors"));
   OpenClDemosaicNetTiledExecutor executor;
-  nn_ocl::ActivationSlots slots;
+  nn_ocl::ActivationSlots        slots;
   nn_ocl::ResetDispatchInstrumentation();
 
-  const auto result = executor.EnqueueXTrans(
-      module, slots,
-      {.input_aligned_hwc = input_buffer.get(),
-       .output_aligned_hwc = output_buffer.get(),
-       .aligned_width = kWidth,
-       .aligned_height = kHeight,
-       .queue = OpenClContext::Instance().Queue()});
+  const auto result = executor.EnqueueXTrans(module, slots,
+                                             {.input_aligned_hwc  = input_buffer.get(),
+                                              .output_aligned_hwc = output_buffer.get(),
+                                              .aligned_width      = kWidth,
+                                              .aligned_height     = kHeight,
+                                              .queue = OpenClContext::Instance().Queue()});
 
   EXPECT_EQ(result.tile_count, 4u);
   EXPECT_EQ(result.output_width, kWidth);

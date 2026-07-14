@@ -60,7 +60,7 @@ class KernelHolder {
   [[nodiscard]] auto get() const -> cl_kernel { return kernel_; }
   [[nodiscard]] auto empty() const -> bool { return kernel_ == nullptr; }
 
-  void Reset() noexcept {
+  void               Reset() noexcept {
     if (kernel_ != nullptr) {
       clReleaseKernel(kernel_);
       NoteOpenClReleaseKernel();
@@ -118,7 +118,7 @@ void RequireExactHostWeight(const nn::SafetensorsTensor& host, const std::vector
   for (int c = 0; c < 3; ++c) {
     for (int py = 0; py < 2; ++py) {
       for (int px = 0; px < 2; ++px) {
-        const int out_i = c * 4 + py * 2 + px;
+        const int out_i                        = c * 4 + py * 2 + px;
         w[((out_i * 3 + c) * 2 + py) * 2 + px] = 1.0f;
       }
     }
@@ -131,7 +131,7 @@ void RequireExactHostWeight(const nn::SafetensorsTensor& host, const std::vector
   for (int g = 0; g < 3; ++g) {
     for (int py = 0; py < 2; ++py) {
       for (int px = 0; px < 2; ++px) {
-        const int in_i = g * 4 + py * 2 + px;
+        const int in_i              = g * 4 + py * 2 + px;
         w[(in_i * 2 + py) * 2 + px] = 1.0f;
       }
     }
@@ -192,11 +192,11 @@ void RequireExactHostWeight(const nn::SafetensorsTensor& host, const std::vector
   // Physical blocks for C6 post input (logical 6 → 2 blocks).
   constexpr int kPostInBlocks = 2;
   std::size_t   trunk         = Nhwc4Bytes(batch, ph, pw, pack_out_ch);
-  trunk = std::max(trunk, Nhwc4Bytes(batch, ph - 2, pw - 2, width));
-  trunk = std::max(trunk, Nhwc4Bytes(batch, mh, mw, residual_ch));
-  trunk = std::max(trunk, Nhwc4Bytes(batch, uh, uw, 6, kPostInBlocks));
-  trunk = std::max(trunk, Nhwc4Bytes(batch, nh, nw, width));
-  trunk = std::max(trunk, Nhwc4Bytes(batch, nh, nw, 3));
+  trunk                       = std::max(trunk, Nhwc4Bytes(batch, ph - 2, pw - 2, width));
+  trunk                       = std::max(trunk, Nhwc4Bytes(batch, mh, mw, residual_ch));
+  trunk                       = std::max(trunk, Nhwc4Bytes(batch, uh, uw, 6, kPostInBlocks));
+  trunk                       = std::max(trunk, Nhwc4Bytes(batch, nh, nw, width));
+  trunk                       = std::max(trunk, Nhwc4Bytes(batch, nh, nw, 3));
   // 256-byte alignment matches DeviceBuffer/WorkspacePool defaults.
   return AlignUp(trunk, 256);
 }
@@ -219,8 +219,8 @@ void Enqueue3D(cl_kernel kernel, size_t gx, size_t gy, size_t gz, cl_command_que
   if (kernel == nullptr) {
     throw std::runtime_error(std::string(what) + ": null kernel");
   }
-  const size_t               global[3] = {gx, gy, gz};
-  nn_ocl::ScopedStageEvent   stage_event;
+  const size_t             global[3] = {gx, gy, gz};
+  nn_ocl::ScopedStageEvent stage_event;
   nn_ocl::CheckOpenCl(clEnqueueNDRangeKernel(queue, kernel, 3, nullptr, global, nullptr, 0, nullptr,
                                              stage_event.out()),
                       what);
@@ -238,7 +238,7 @@ void SetArg(cl_kernel kernel, cl_uint index, const T& value, const char* what) {
 // ---------------------------------------------------------------------------
 
 struct ModuleState {
-  bool loaded = false;
+  bool                 loaded = false;
 
   // Weights (OHWI4o4i for convs; bias as length-logical vectors).
   nn_ocl::DeviceBuffer trunk_w_[8];  // depth max 8
@@ -251,18 +251,22 @@ struct ModuleState {
   nn_ocl::DeviceBuffer output_b_;
 
   // Kernels created once at load.
-  KernelHolder pack;
-  KernelHolder conv3x3;
-  KernelHolder conv1x1;
-  KernelHolder unpack_concat;
-  KernelHolder output_rgb;
+  KernelHolder         pack;
+  KernelHolder         pack_reflect_hwc;
+  KernelHolder         conv3x3;
+  KernelHolder         conv3x3_c6;
+  KernelHolder         conv1x1;
+  KernelHolder         conv1x1_output3;
+  KernelHolder         unpack_concat;
+  KernelHolder         unpack_reflect_concat;
+  KernelHolder         output_rgb;
 
-  int depth      = 0;
-  int width      = 0;
-  int pack_out_ch = 0;
-  int residual_ch = 0;
-  int pack_factor = 2;
-  bool is_bayer   = true;
+  int                  depth       = 0;
+  int                  width       = 0;
+  int                  pack_out_ch = 0;
+  int                  residual_ch = 0;
+  int                  pack_factor = 2;
+  bool                 is_bayer    = true;
 };
 
 void EnsureProgramsRegistered() {
@@ -272,26 +276,30 @@ void EnsureProgramsRegistered() {
 
 void CreateKernels(ModuleState& s, bool is_bayer) {
   EnsureProgramsRegistered();
-  auto& lib = OpenClProgramLibrary::Instance();
-  const char* conv_name =
-      is_bayer ? OpenCL::DemosaicNet::kConvBayerProgramName
-               : OpenCL::DemosaicNet::kConvXTransProgramName;
-  cl_program conv_prog = lib.GetProgram(conv_name);
-  cl_program struct_prog =
-      lib.GetProgram(OpenCL::DemosaicNet::kStructuralProgramName);
+  auto&       lib         = OpenClProgramLibrary::Instance();
+  const char* conv_name   = is_bayer ? OpenCL::DemosaicNet::kConvBayerProgramName
+                                     : OpenCL::DemosaicNet::kConvXTransProgramName;
+  cl_program  conv_prog   = lib.GetProgram(conv_name);
+  cl_program  struct_prog = lib.GetProgram(OpenCL::DemosaicNet::kStructuralProgramName);
 
-  s.conv3x3 = KernelHolder(conv_prog, OpenCL::DemosaicNet::kConv3x3KernelName);
-  s.conv1x1 = KernelHolder(conv_prog, OpenCL::DemosaicNet::kConv1x1KernelName);
-  s.pack    = KernelHolder(struct_prog, is_bayer ? OpenCL::DemosaicNet::kPackBayerNchwKernelName
-                                                 : OpenCL::DemosaicNet::kPackXTransNchwKernelName);
-  s.unpack_concat =
-      KernelHolder(struct_prog, OpenCL::DemosaicNet::kUnpackCropConcatKernelName);
+  s.conv3x3               = KernelHolder(conv_prog, OpenCL::DemosaicNet::kConv3x3KernelName);
+  s.conv3x3_c6            = KernelHolder(conv_prog, OpenCL::DemosaicNet::kConv3x3C6KernelName);
+  s.conv1x1               = KernelHolder(conv_prog, OpenCL::DemosaicNet::kConv1x1KernelName);
+  s.conv1x1_output3       = KernelHolder(conv_prog, OpenCL::DemosaicNet::kConv1x1Output3KernelName);
+  s.pack = KernelHolder(struct_prog, is_bayer ? OpenCL::DemosaicNet::kPackBayerNchwKernelName
+                                              : OpenCL::DemosaicNet::kPackXTransNchwKernelName);
+  s.pack_reflect_hwc =
+      KernelHolder(struct_prog, is_bayer ? OpenCL::DemosaicNet::kPackReflectBayerNhwc4KernelName
+                                         : OpenCL::DemosaicNet::kPackReflectXTransNhwc4KernelName);
+  s.unpack_concat = KernelHolder(struct_prog, OpenCL::DemosaicNet::kUnpackCropConcatKernelName);
+  s.unpack_reflect_concat =
+      KernelHolder(struct_prog, OpenCL::DemosaicNet::kUnpackReflectConcatKernelName);
   s.output_rgb = KernelHolder(struct_prog, OpenCL::DemosaicNet::kOutputRgbHwcKernelName);
 }
 
-void LoadCommonWeights(ModuleState& s, const nn::SafetensorsTensorMap& tensors, int depth, int width,
-                       int pack_out_ch, int residual_ch, cl_command_queue queue, const char* module,
-                       bool is_bayer) {
+void LoadCommonWeights(ModuleState& s, const nn::SafetensorsTensorMap& tensors, int depth,
+                       int width, int pack_out_ch, int residual_ch, cl_command_queue queue,
+                       const char* module, bool is_bayer) {
   s.depth       = depth;
   s.width       = width;
   s.pack_out_ch = pack_out_ch;
@@ -300,8 +308,7 @@ void LoadCommonWeights(ModuleState& s, const nn::SafetensorsTensorMap& tensors, 
 
   // Fixed pack / unpack one-hots (validated, not stored — pack/unpack are structural kernels).
   {
-    const auto& pack =
-        nn::RequireF32Tensor(tensors, "pack.weight", {pack_out_ch, 3, 2, 2});
+    const auto& pack = nn::RequireF32Tensor(tensors, "pack.weight", {pack_out_ch, 3, 2, 2});
     RequireExactHostWeight(pack, is_bayer ? ExpectedBayerPackWeight() : ExpectedXTransPackWeight(),
                            "pack.weight", module);
   }
@@ -312,11 +319,11 @@ void LoadCommonWeights(ModuleState& s, const nn::SafetensorsTensorMap& tensors, 
 
   // Trunk layers 0..depth-1: all packed OHWI4o4i 3x3 + bias.
   for (int i = 0; i < depth; ++i) {
-    const int in_c = (i == 0) ? pack_out_ch : width;
-    const std::string wk = "trunk." + std::to_string(i) + ".weight";
-    const std::string bk = "trunk." + std::to_string(i) + ".bias";
-    const auto& weight = nn::RequireF32Tensor(tensors, wk, {width, in_c, 3, 3});
-    const auto& bias   = nn::RequireF32Tensor(tensors, bk, {width});
+    const int         in_c   = (i == 0) ? pack_out_ch : width;
+    const std::string wk     = "trunk." + std::to_string(i) + ".weight";
+    const std::string bk     = "trunk." + std::to_string(i) + ".bias";
+    const auto&       weight = nn::RequireF32Tensor(tensors, wk, {width, in_c, 3, 3});
+    const auto&       bias   = nn::RequireF32Tensor(tensors, bk, {width});
     UploadPackedWeight(weight.data.data(), width, in_c, 3, 3, s.trunk_w_[i], queue);
     UploadBias(bias, s.trunk_b_[i], queue);
   }
@@ -353,7 +360,7 @@ void LoadCommonWeights(ModuleState& s, const nn::SafetensorsTensorMap& tensors, 
 
 [[nodiscard]] auto ResidentBytes(const ModuleState& s) -> std::size_t {
   std::size_t total = 0;
-  auto add = [&](const nn_ocl::DeviceBuffer& b) { total += b.byte_capacity(); };
+  auto        add   = [&](const nn_ocl::DeviceBuffer& b) { total += b.byte_capacity(); };
   for (int i = 0; i < s.depth; ++i) {
     add(s.trunk_w_[i]);
     add(s.trunk_b_[i]);
@@ -367,15 +374,18 @@ void LoadCommonWeights(ModuleState& s, const nn::SafetensorsTensorMap& tensors, 
   return total;
 }
 
-void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height, int width,
+enum class ForwardInputMode { Nchw, ReflectHwc3 };
+
+void ForwardImpl(const ModuleState& s, cl_mem input, int batch, int height, int width,
                  cl_mem output_rgb_hwc, nn_ocl::ActivationSlots& activation_slots,
-                 cl_command_queue queue, bool apply_gamma_decode,
-                 int (*output_height_fn)(int, int), int (*output_width_fn)(int, int), int min_spatial,
-                 const char* module) {
+                 cl_command_queue queue, bool apply_gamma_decode, int (*output_height_fn)(int, int),
+                 int (*output_width_fn)(int, int), int min_spatial, const char* module,
+                 ForwardInputMode input_mode = ForwardInputMode::Nchw, int frame_height = 0,
+                 int frame_width = 0, int origin_y = 0, int origin_x = 0) {
   if (!s.loaded) {
     throw std::runtime_error(std::string(module) + ": weights not loaded");
   }
-  if (input_nchw == nullptr || output_rgb_hwc == nullptr) {
+  if (input == nullptr || output_rgb_hwc == nullptr) {
     throw std::runtime_error(std::string(module) + ": null input/output buffer");
   }
   if (batch != 1 || (height % s.pack_factor) != 0 || (width % s.pack_factor) != 0 ||
@@ -383,12 +393,12 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
     throw std::runtime_error(std::string(module) + ": invalid input geometry");
   }
 
-  queue = ResolveQueue(queue);
+  queue                        = ResolveQueue(queue);
 
-  const int out_h = output_height_fn(height, width);
-  const int out_w = output_width_fn(width, height);
-  const int ph    = height / s.pack_factor;
-  const int pw    = width / s.pack_factor;
+  const int         out_h      = output_height_fn(height, width);
+  const int         out_w      = output_width_fn(width, height);
+  const int         ph         = height / s.pack_factor;
+  const int         pw         = width / s.pack_factor;
 
   const std::size_t slot_bytes = EstimateNhwc4ActivationSlotBytes(
       height, width, batch, s.pack_out_ch, s.width, s.residual_ch, s.depth, s.pack_factor);
@@ -401,28 +411,55 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
   cl_mem slot_a = activation_slots.slot_a();
   cl_mem slot_b = activation_slots.slot_b();
   if (slot_a == nullptr || slot_b == nullptr) {
-    throw std::runtime_error(std::string(module) + ": activation slots empty after EnsureSlotBytes");
+    throw std::runtime_error(std::string(module) +
+                             ": activation slots empty after EnsureSlotBytes");
   }
 
-  // ---- Pack NCHW → NHWC4 ----
-  nn_ocl::BeginDemosaicNetStage("pack_nchw_to_nhwc4");
-  {
-    const cl_int b  = batch;
-    const cl_int ih = height;
-    const cl_int iw = width;
-    const cl_int oh = ph;
-    const cl_int ow = pw;
-    SetArg(s.pack.get(), 0, input_nchw, "pack arg0");
-    SetArg(s.pack.get(), 1, slot_a, "pack arg1");
-    SetArg(s.pack.get(), 2, b, "pack arg2");
-    SetArg(s.pack.get(), 3, ih, "pack arg3");
-    SetArg(s.pack.get(), 4, iw, "pack arg4");
-    SetArg(s.pack.get(), 5, oh, "pack arg5");
-    SetArg(s.pack.get(), 6, ow, "pack arg6");
-    Enqueue3D(s.pack.get(), static_cast<size_t>(pw), static_cast<size_t>(ph),
-              static_cast<size_t>(batch), queue, "pack enqueue");
+  if (input_mode == ForwardInputMode::Nchw) {
+    // ---- Pack NCHW → NHWC4 (reference/module test path) ----
+    nn_ocl::BeginDemosaicNetStage("pack_nchw_to_nhwc4");
+    {
+      const cl_int b  = batch;
+      const cl_int ih = height;
+      const cl_int iw = width;
+      const cl_int oh = ph;
+      const cl_int ow = pw;
+      SetArg(s.pack.get(), 0, input, "pack arg0");
+      SetArg(s.pack.get(), 1, slot_a, "pack arg1");
+      SetArg(s.pack.get(), 2, b, "pack arg2");
+      SetArg(s.pack.get(), 3, ih, "pack arg3");
+      SetArg(s.pack.get(), 4, iw, "pack arg4");
+      SetArg(s.pack.get(), 5, oh, "pack arg5");
+      SetArg(s.pack.get(), 6, ow, "pack arg6");
+      Enqueue3D(s.pack.get(), static_cast<size_t>(pw), static_cast<size_t>(ph),
+                static_cast<size_t>(batch), queue, "pack enqueue");
+    }
+    nn_ocl::FinishDemosaicNetStage("pack_nchw_to_nhwc4", queue);
+  } else {
+    if (frame_height <= 0 || frame_width <= 0) {
+      throw std::runtime_error(std::string(module) + ": invalid reflected tile geometry");
+    }
+    // Product path: reflect-101 + signed gamma + variant-specific packing
+    // writes slot_a directly. No intermediate NCHW tile is materialised.
+    nn_ocl::BeginDemosaicNetStage("reflect_pack_nhwc4");
+    const cl_int fh = frame_height;
+    const cl_int fw = frame_width;
+    const cl_int oy = origin_y;
+    const cl_int ox = origin_x;
+    const cl_int th = height;
+    const cl_int tw = width;
+    SetArg(s.pack_reflect_hwc.get(), 0, input, "reflect pack arg0");
+    SetArg(s.pack_reflect_hwc.get(), 1, slot_a, "reflect pack arg1");
+    SetArg(s.pack_reflect_hwc.get(), 2, fh, "reflect pack arg2");
+    SetArg(s.pack_reflect_hwc.get(), 3, fw, "reflect pack arg3");
+    SetArg(s.pack_reflect_hwc.get(), 4, oy, "reflect pack arg4");
+    SetArg(s.pack_reflect_hwc.get(), 5, ox, "reflect pack arg5");
+    SetArg(s.pack_reflect_hwc.get(), 6, th, "reflect pack arg6");
+    SetArg(s.pack_reflect_hwc.get(), 7, tw, "reflect pack arg7");
+    Enqueue3D(s.pack_reflect_hwc.get(), static_cast<size_t>(pw), static_cast<size_t>(ph), 1, queue,
+              "reflect pack enqueue");
+    nn_ocl::FinishDemosaicNetStage("reflect_pack_nhwc4", queue);
   }
-  nn_ocl::FinishDemosaicNetStage("pack_nchw_to_nhwc4", queue);
 
   // ---- Trunk: depth × 3x3 bias+ReLU, ping-pong ----
   int    cur_h = ph;
@@ -433,12 +470,10 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
 
   nn_ocl::BeginDemosaicNetStage("trunk_3x3");
   for (int i = 0; i < s.depth; ++i) {
-    const int next_h = cur_h - 2;
-    const int next_w = cur_w - 2;
-    auto in_view =
-        nn_ocl::Nhwc4TensorView::Contiguous(cur, batch, cur_h, cur_w, cur_c);
-    auto out_view =
-        nn_ocl::Nhwc4TensorView::Contiguous(next, batch, next_h, next_w, s.width);
+    const int next_h   = cur_h - 2;
+    const int next_w   = cur_w - 2;
+    auto      in_view  = nn_ocl::Nhwc4TensorView::Contiguous(cur, batch, cur_h, cur_w, cur_c);
+    auto      out_view = nn_ocl::Nhwc4TensorView::Contiguous(next, batch, next_h, next_w, s.width);
     nn_ocl::Conv3x3Dispatch d;
     d.kernel  = s.conv3x3.get();
     d.input   = &in_view;
@@ -458,10 +493,8 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
   // ---- Residual 1x1 (no ReLU) → residual buffer on next slot ----
   nn_ocl::BeginDemosaicNetStage("residual_unpack_concat");
   {
-    auto in_view =
-        nn_ocl::Nhwc4TensorView::Contiguous(cur, batch, cur_h, cur_w, s.width);
-    auto out_view =
-        nn_ocl::Nhwc4TensorView::Contiguous(next, batch, cur_h, cur_w, s.residual_ch);
+    auto in_view  = nn_ocl::Nhwc4TensorView::Contiguous(cur, batch, cur_h, cur_w, s.width);
+    auto out_view = nn_ocl::Nhwc4TensorView::Contiguous(next, batch, cur_h, cur_w, s.residual_ch);
     nn_ocl::Conv1x1Dispatch d;
     d.kernel     = s.conv1x1.get();
     d.input      = &in_view;
@@ -472,39 +505,62 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
     nn_ocl::EnqueueConv1x1Nhwc4(d, queue);
   }
   // residual is in next; reuse cur for C6 concat.
-  cl_mem residual_buf = next;
-  cl_mem cat_buf      = cur;
+  cl_mem    residual_buf    = next;
+  cl_mem    cat_buf         = cur;
 
-  const int residual_h = cur_h;
-  const int residual_w = cur_w;
-  const int up_h       = residual_h * s.pack_factor;
-  const int up_w       = residual_w * s.pack_factor;
+  const int residual_h      = cur_h;
+  const int residual_w      = cur_w;
+  const int up_h            = residual_h * s.pack_factor;
+  const int up_w            = residual_w * s.pack_factor;
   const int residual_blocks = nn_ocl::ChannelBlocks(s.residual_ch);
 
   // ---- Unpack + crop mosaic + concat → C6 NHWC4 (2 blocks) ----
   {
-    const cl_int b   = batch;
-    const cl_int ih  = height;
-    const cl_int iw  = width;
-    const cl_int rh  = residual_h;
-    const cl_int rw  = residual_w;
-    const cl_int rcb = residual_blocks;
-    SetArg(s.unpack_concat.get(), 0, input_nchw, "unpack arg0");
-    SetArg(s.unpack_concat.get(), 1, residual_buf, "unpack arg1");
-    SetArg(s.unpack_concat.get(), 2, cat_buf, "unpack arg2");
-    SetArg(s.unpack_concat.get(), 3, b, "unpack arg3");
-    SetArg(s.unpack_concat.get(), 4, ih, "unpack arg4");
-    SetArg(s.unpack_concat.get(), 5, iw, "unpack arg5");
-    SetArg(s.unpack_concat.get(), 6, rh, "unpack arg6");
-    SetArg(s.unpack_concat.get(), 7, rw, "unpack arg7");
-    SetArg(s.unpack_concat.get(), 8, rcb, "unpack arg8");
-    Enqueue3D(s.unpack_concat.get(), static_cast<size_t>(up_w), static_cast<size_t>(up_h),
+    const cl_int rh     = residual_h;
+    const cl_int rw     = residual_w;
+    const cl_int rcb    = residual_blocks;
+    cl_kernel    kernel = s.unpack_concat.get();
+    if (input_mode == ForwardInputMode::Nchw) {
+      const cl_int b  = batch;
+      const cl_int ih = height;
+      const cl_int iw = width;
+      SetArg(kernel, 0, input, "unpack arg0");
+      SetArg(kernel, 1, residual_buf, "unpack arg1");
+      SetArg(kernel, 2, cat_buf, "unpack arg2");
+      SetArg(kernel, 3, b, "unpack arg3");
+      SetArg(kernel, 4, ih, "unpack arg4");
+      SetArg(kernel, 5, iw, "unpack arg5");
+      SetArg(kernel, 6, rh, "unpack arg6");
+      SetArg(kernel, 7, rw, "unpack arg7");
+      SetArg(kernel, 8, rcb, "unpack arg8");
+    } else {
+      const cl_int fh = frame_height;
+      const cl_int fw = frame_width;
+      const cl_int oy = origin_y;
+      const cl_int ox = origin_x;
+      const cl_int th = height;
+      const cl_int tw = width;
+      kernel          = s.unpack_reflect_concat.get();
+      SetArg(kernel, 0, input, "reflect unpack arg0");
+      SetArg(kernel, 1, residual_buf, "reflect unpack arg1");
+      SetArg(kernel, 2, cat_buf, "reflect unpack arg2");
+      SetArg(kernel, 3, fh, "reflect unpack arg3");
+      SetArg(kernel, 4, fw, "reflect unpack arg4");
+      SetArg(kernel, 5, oy, "reflect unpack arg5");
+      SetArg(kernel, 6, ox, "reflect unpack arg6");
+      SetArg(kernel, 7, th, "reflect unpack arg7");
+      SetArg(kernel, 8, tw, "reflect unpack arg8");
+      SetArg(kernel, 9, rh, "reflect unpack arg9");
+      SetArg(kernel, 10, rw, "reflect unpack arg10");
+      SetArg(kernel, 11, rcb, "reflect unpack arg11");
+    }
+    Enqueue3D(kernel, static_cast<size_t>(up_w), static_cast<size_t>(up_h),
               static_cast<size_t>(batch), queue, "unpack enqueue");
   }
   nn_ocl::FinishDemosaicNetStage("residual_unpack_concat", queue);
 
   // ---- Post 3x3 C6→width + ReLU (valid) ----
-  nn_ocl::BeginDemosaicNetStage("post_output");
+  nn_ocl::BeginDemosaicNetStage("post_3x3");
   const int post_h = up_h - 2;
   const int post_w = up_w - 2;
   {
@@ -512,7 +568,7 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
     auto out_view =
         nn_ocl::Nhwc4TensorView::Contiguous(residual_buf, batch, post_h, post_w, s.width);
     nn_ocl::Conv3x3Dispatch d;
-    d.kernel  = s.conv3x3.get();
+    d.kernel  = s.conv3x3_c6.get();
     d.input   = &in_view;
     d.output  = &out_view;
     d.weights = s.post_w_.get();
@@ -521,14 +577,16 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
     d.pad_w   = 0;
     nn_ocl::EnqueueConv3x3Nhwc4(d, queue);
   }
+  nn_ocl::FinishDemosaicNetStage("post_3x3", queue);
 
   // ---- Output 1x1 width→3 (no ReLU) into cat_buf ----
+  nn_ocl::BeginDemosaicNetStage("output_tail");
   {
     auto in_view =
         nn_ocl::Nhwc4TensorView::Contiguous(residual_buf, batch, post_h, post_w, s.width);
     auto out_view = nn_ocl::Nhwc4TensorView::Contiguous(cat_buf, batch, post_h, post_w, 3);
     nn_ocl::Conv1x1Dispatch d;
-    d.kernel     = s.conv1x1.get();
+    d.kernel     = s.conv1x1_output3.get();
     d.input      = &in_view;
     d.output     = &out_view;
     d.weights    = s.output_w_.get();
@@ -536,8 +594,10 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
     d.apply_relu = 0;
     nn_ocl::EnqueueConv1x1Nhwc4(d, queue);
   }
+  nn_ocl::FinishDemosaicNetStage("output_tail", queue);
 
   // ---- Center-crop + optional gamma → HWC RGB ----
+  nn_ocl::BeginDemosaicNetStage("output_rgb");
   const int crop_top  = (post_h - out_h) / 2;
   const int crop_left = (post_w - out_w) / 2;
   if (crop_top < 0 || crop_left < 0 || (post_h - out_h) % 2 != 0 || (post_w - out_w) % 2 != 0) {
@@ -569,7 +629,7 @@ void ForwardImpl(const ModuleState& s, cl_mem input_nchw, int batch, int height,
     Enqueue3D(s.output_rgb.get(), static_cast<size_t>(out_w), static_cast<size_t>(out_h),
               static_cast<size_t>(batch), queue, "output enqueue");
   }
-  nn_ocl::FinishDemosaicNetStage("post_output", queue);
+  nn_ocl::FinishDemosaicNetStage("output_rgb", queue);
 }
 
 }  // namespace
@@ -583,13 +643,13 @@ struct OpenClBayerDemosaicNet::Impl {
 };
 
 OpenClBayerDemosaicNet::OpenClBayerDemosaicNet() : impl_(std::make_unique<Impl>()) {}
-OpenClBayerDemosaicNet::~OpenClBayerDemosaicNet() = default;
+OpenClBayerDemosaicNet::~OpenClBayerDemosaicNet()                                 = default;
 OpenClBayerDemosaicNet::OpenClBayerDemosaicNet(OpenClBayerDemosaicNet&&) noexcept = default;
 OpenClBayerDemosaicNet& OpenClBayerDemosaicNet::operator=(OpenClBayerDemosaicNet&&) noexcept =
     default;
 
 void OpenClBayerDemosaicNet::LoadWeights(const nn::SafetensorsTensorMap& tensors,
-                                         cl_command_queue queue) {
+                                         cl_command_queue                queue) {
   RequireMetadata(tensors, "format", "demosaicnet-pytorch-state_dict", "OpenClBayerDemosaicNet");
   RequireMetadata(tensors, "architecture", kArchitecture, "OpenClBayerDemosaicNet");
   RequireMetadata(tensors, "architecture_version", "1", "OpenClBayerDemosaicNet");
@@ -616,15 +676,28 @@ auto OpenClBayerDemosaicNet::weights_loaded() const -> bool {
 }
 
 void OpenClBayerDemosaicNet::ForwardNchwToHwc(cl_mem input_nchw, int batch, int height, int width,
-                                              cl_mem output_rgb_hwc,
+                                              cl_mem                       output_rgb_hwc,
                                               opencl::nn::ActivationSlots& activation_slots,
-                                              cl_command_queue queue,
+                                              cl_command_queue             queue,
                                               bool apply_gamma_decode) const {
-  ForwardImpl(impl_->state, input_nchw, batch, height, width, output_rgb_hwc, activation_slots,
-              queue, apply_gamma_decode,
-              [](int h, int w) { return Spec::OutputHeight(h, w); },
-              [](int w, int h) { return Spec::OutputWidth(w, h); }, kMinSpatial,
-              "OpenClBayerDemosaicNet");
+  ForwardImpl(
+      impl_->state, input_nchw, batch, height, width, output_rgb_hwc, activation_slots, queue,
+      apply_gamma_decode, [](int h, int w) { return Spec::OutputHeight(h, w); },
+      [](int w, int h) { return Spec::OutputWidth(w, h); }, kMinSpatial, "OpenClBayerDemosaicNet");
+}
+
+void OpenClBayerDemosaicNet::ForwardReflectHwc3ToHwc(cl_mem input_frame_hwc3, int frame_height,
+                                                     int frame_width, int origin_y, int origin_x,
+                                                     int tile_height, int tile_width,
+                                                     cl_mem                       output_rgb_hwc,
+                                                     opencl::nn::ActivationSlots& activation_slots,
+                                                     cl_command_queue             queue,
+                                                     bool apply_gamma_decode) const {
+  ForwardImpl(
+      impl_->state, input_frame_hwc3, 1, tile_height, tile_width, output_rgb_hwc, activation_slots,
+      queue, apply_gamma_decode, [](int h, int w) { return Spec::OutputHeight(h, w); },
+      [](int w, int h) { return Spec::OutputWidth(w, h); }, kMinSpatial, "OpenClBayerDemosaicNet",
+      ForwardInputMode::ReflectHwc3, frame_height, frame_width, origin_y, origin_x);
 }
 
 auto OpenClBayerDemosaicNet::EstimateActivationSlotBytes(int input_h, int input_w, int batch)
@@ -654,13 +727,13 @@ struct OpenClXTransDemosaicNet::Impl {
 };
 
 OpenClXTransDemosaicNet::OpenClXTransDemosaicNet() : impl_(std::make_unique<Impl>()) {}
-OpenClXTransDemosaicNet::~OpenClXTransDemosaicNet() = default;
+OpenClXTransDemosaicNet::~OpenClXTransDemosaicNet()                                  = default;
 OpenClXTransDemosaicNet::OpenClXTransDemosaicNet(OpenClXTransDemosaicNet&&) noexcept = default;
 OpenClXTransDemosaicNet& OpenClXTransDemosaicNet::operator=(OpenClXTransDemosaicNet&&) noexcept =
     default;
 
 void OpenClXTransDemosaicNet::LoadWeights(const nn::SafetensorsTensorMap& tensors,
-                                          cl_command_queue queue) {
+                                          cl_command_queue                queue) {
   RequireMetadata(tensors, "format", "demosaicnet-pytorch-state_dict", "OpenClXTransDemosaicNet");
   RequireMetadata(tensors, "architecture", kArchitecture, "OpenClXTransDemosaicNet");
   RequireMetadata(tensors, "architecture_version", "1", "OpenClXTransDemosaicNet");
@@ -687,15 +760,28 @@ auto OpenClXTransDemosaicNet::weights_loaded() const -> bool {
 }
 
 void OpenClXTransDemosaicNet::ForwardNchwToHwc(cl_mem input_nchw, int batch, int height, int width,
-                                               cl_mem output_rgb_hwc,
+                                               cl_mem                       output_rgb_hwc,
                                                opencl::nn::ActivationSlots& activation_slots,
-                                               cl_command_queue queue,
+                                               cl_command_queue             queue,
                                                bool apply_gamma_decode) const {
-  ForwardImpl(impl_->state, input_nchw, batch, height, width, output_rgb_hwc, activation_slots,
-              queue, apply_gamma_decode,
-              [](int h, int w) { return Spec::OutputHeight(h, w); },
-              [](int w, int h) { return Spec::OutputWidth(w, h); }, kMinSpatial,
-              "OpenClXTransDemosaicNet");
+  ForwardImpl(
+      impl_->state, input_nchw, batch, height, width, output_rgb_hwc, activation_slots, queue,
+      apply_gamma_decode, [](int h, int w) { return Spec::OutputHeight(h, w); },
+      [](int w, int h) { return Spec::OutputWidth(w, h); }, kMinSpatial, "OpenClXTransDemosaicNet");
+}
+
+void OpenClXTransDemosaicNet::ForwardReflectHwc3ToHwc(cl_mem input_frame_hwc3, int frame_height,
+                                                      int frame_width, int origin_y, int origin_x,
+                                                      int tile_height, int tile_width,
+                                                      cl_mem                       output_rgb_hwc,
+                                                      opencl::nn::ActivationSlots& activation_slots,
+                                                      cl_command_queue             queue,
+                                                      bool apply_gamma_decode) const {
+  ForwardImpl(
+      impl_->state, input_frame_hwc3, 1, tile_height, tile_width, output_rgb_hwc, activation_slots,
+      queue, apply_gamma_decode, [](int h, int w) { return Spec::OutputHeight(h, w); },
+      [](int w, int h) { return Spec::OutputWidth(w, h); }, kMinSpatial, "OpenClXTransDemosaicNet",
+      ForwardInputMode::ReflectHwc3, frame_height, frame_width, origin_y, origin_x);
 }
 
 auto OpenClXTransDemosaicNet::EstimateActivationSlotBytes(int input_h, int input_w, int batch)

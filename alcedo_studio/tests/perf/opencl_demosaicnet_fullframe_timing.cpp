@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 //
-// Phase 7.0 OpenCL Neural full-frame telemetry harness (development report).
+// Phase 7 OpenCL Neural full-frame telemetry harness (development report).
 // Cold path includes first program compile / model load; hot mean excludes that.
 //
 //   OpenClDemosaicNetFullFrameTiming.exe
@@ -50,8 +50,8 @@
 namespace alcedo {
 namespace {
 
-using Clock = std::chrono::steady_clock;
-namespace fs = std::filesystem;
+using Clock      = std::chrono::steady_clock;
+namespace fs     = std::filesystem;
 namespace nn_ocl = opencl::nn;
 
 [[nodiscard]] auto ElapsedMs(const Clock::time_point start) -> double {
@@ -62,8 +62,7 @@ namespace nn_ocl = opencl::nn;
   if (samples.empty()) {
     return 0.0;
   }
-  return std::accumulate(samples.begin(), samples.end(), 0.0) /
-         static_cast<double>(samples.size());
+  return std::accumulate(samples.begin(), samples.end(), 0.0) / static_cast<double>(samples.size());
 }
 
 [[nodiscard]] auto BayerPath() -> fs::path {
@@ -78,19 +77,19 @@ namespace nn_ocl = opencl::nn;
 enum class ProfileKind { WallOnly, EventTimestamps, BoundaryDrain };
 
 struct RunStats {
-  std::string name;
-  std::string backend;
-  int         width  = 0;
-  int         height = 0;
-  int         out_w  = 0;
-  int         out_h  = 0;
-  double      cold_ms = 0.0;
-  std::vector<double> hot_ms;
-  bool        used_neural = false;
-  ProfileKind profile_kind = ProfileKind::WallOnly;
+  std::string                    name;
+  std::string                    backend;
+  int                            width   = 0;
+  int                            height  = 0;
+  int                            out_w   = 0;
+  int                            out_h   = 0;
+  double                         cold_ms = 0.0;
+  std::vector<double>            hot_ms;
+  bool                           used_neural  = false;
+  ProfileKind                    profile_kind = ProfileKind::WallOnly;
 
-  OpenClApiCounters cold_counters{};
-  OpenClApiCounters hot_counters_mean{};  // arithmetic mean of per-hot deltas
+  OpenClApiCounters              cold_counters{};
+  OpenClApiCounters              hot_counters_mean{};  // arithmetic mean of per-hot deltas
   std::vector<OpenClApiCounters> hot_counter_samples;
 
   std::vector<nn_ocl::DemosaicNetStageTiming> event_stage_means;
@@ -98,9 +97,9 @@ struct RunStats {
   bool                                        has_event_summary = false;
 
   // Same-session CUDA Neural control (optional).
-  std::vector<double> cuda_hot_ms;
-  double              cuda_hot_mean_ms = 0.0;
-  bool                has_cuda         = false;
+  std::vector<double>                         cuda_hot_ms;
+  double                                      cuda_hot_mean_ms = 0.0;
+  bool                                        has_cuda         = false;
 };
 
 struct GpuTelemetry {
@@ -115,7 +114,7 @@ struct GpuTelemetry {
 [[nodiscard]] auto QueryGpuTelemetry() -> GpuTelemetry {
   GpuTelemetry snap;
 #if ALCEDO_FULLFRAME_HAS_CUDA
-  const auto t = QueryDemosaicNetGpuTelemetry();
+  const auto t       = QueryDemosaicNetGpuTelemetry();
   snap.temperature_c = t.temperature_c;
   snap.power_w       = t.power_w;
   snap.sm_clock_mhz  = t.sm_clock_mhz;
@@ -170,7 +169,7 @@ struct GpuTelemetry {
       snap.mem_clock_mhz = std::atoi(t);
     }
     if (char* t = next(cur); t != nullptr) {
-      snap.pstate = t;
+      snap.pstate    = t;
       snap.available = true;
     }
   }
@@ -192,11 +191,12 @@ struct GpuTelemetry {
   params.decode_res_             = DecodeRes::FULL;
   RawRuntimeColorContext context;
   const ushort           no_crop[4] = {};
-  RawProcessor processor(params, raw.imgdata.rawdata, raw, context, no_crop);
+  RawProcessor           processor(params, raw.imgdata.rawdata, raw, context, no_crop);
   return processor.Process();
 }
 
-[[nodiscard]] auto MeanCounters(const std::vector<OpenClApiCounters>& samples) -> OpenClApiCounters {
+[[nodiscard]] auto MeanCounters(const std::vector<OpenClApiCounters>& samples)
+    -> OpenClApiCounters {
   OpenClApiCounters mean{};
   if (samples.empty()) {
     return mean;
@@ -230,20 +230,20 @@ struct GpuTelemetry {
 }
 
 void AggregateStageMeans(const std::vector<std::vector<nn_ocl::DemosaicNetStageTiming>>& samples,
-                         std::vector<nn_ocl::DemosaicNetStageTiming>& out_means,
+                         std::vector<nn_ocl::DemosaicNetStageTiming>&                    out_means,
                          nn_ocl::DemosaicNetProfileSummary& summary_mean) {
   std::map<std::string, nn_ocl::DemosaicNetStageTiming> acc;
-  double wall_sum = 0.0;
-  double host_sum = 0.0;
-  double device_sum = 0.0;
-  double queue_sum = 0.0;
-  double submit_sum = 0.0;
-  std::size_t event_sum = 0;
-  std::size_t n = samples.size();
+  double                                                wall_sum   = 0.0;
+  double                                                host_sum   = 0.0;
+  double                                                device_sum = 0.0;
+  double                                                queue_sum  = 0.0;
+  double                                                submit_sum = 0.0;
+  std::size_t                                           event_sum  = 0;
+  std::size_t                                           n          = samples.size();
   for (const auto& sample : samples) {
     for (const auto& stage : sample) {
       auto& a = acc[stage.name];
-      a.name = stage.name;
+      a.name  = stage.name;
       a.calls += stage.calls;
       a.host_enqueue_wall_ms += stage.host_enqueue_wall_ms;
       a.device_exec_ms += stage.device_exec_ms;
@@ -305,7 +305,7 @@ auto TimeFixtureOpenCl(const char* name, const fs::path& path, const RawCfaKind 
   stats.profile_kind = profile_kind;
   stats.backend      = "OpenCL";
 
-  auto& cache = OpenClDemosaicNetModelCache::Instance();
+  auto& cache        = OpenClDemosaicNetModelCache::Instance();
   cache.Unload(variant);
 
   OpenClApiCounterScope counter_scope(true);
@@ -313,11 +313,11 @@ auto TimeFixtureOpenCl(const char* name, const fs::path& path, const RawCfaKind 
 
   // Cold: first Neural process (may compile programs + load weights).
   {
-    const auto before = SnapshotOpenClApiCounters();
-    const auto t0     = Clock::now();
-    auto       out    = ProcessOnce(*raw, RawDemosaicMethod::NeuralEngine, RawGpuBackend::OpenCL);
-    stats.cold_ms     = ElapsedMs(t0);
-    const auto after  = SnapshotOpenClApiCounters();
+    const auto before   = SnapshotOpenClApiCounters();
+    const auto t0       = Clock::now();
+    auto       out      = ProcessOnce(*raw, RawDemosaicMethod::NeuralEngine, RawGpuBackend::OpenCL);
+    stats.cold_ms       = ElapsedMs(t0);
+    const auto after    = SnapshotOpenClApiCounters();
     stats.cold_counters = DeltaOpenClApiCounters(before, after);
     if (!out.gpu_data_valid_ || out.GetGPUBackend() != GpuBackendKind::OpenCL) {
       throw std::runtime_error(std::string(name) + ": cold output not on OpenCL");
@@ -340,17 +340,16 @@ auto TimeFixtureOpenCl(const char* name, const fs::path& path, const RawCfaKind 
     const auto before = SnapshotOpenClApiCounters();
 
     if (profile_kind == ProfileKind::WallOnly) {
-      const auto t0 = Clock::now();
-      auto       out =
-          ProcessOnce(*raw, RawDemosaicMethod::NeuralEngine, RawGpuBackend::OpenCL);
+      const auto t0  = Clock::now();
+      auto       out = ProcessOnce(*raw, RawDemosaicMethod::NeuralEngine, RawGpuBackend::OpenCL);
       stats.hot_ms.push_back(ElapsedMs(t0));
       if (!out.gpu_data_valid_ || out.GetGPUBackend() != GpuBackendKind::OpenCL) {
         throw std::runtime_error(std::string(name) + ": hot output not on OpenCL");
       }
     } else {
-      const auto mode = profile_kind == ProfileKind::EventTimestamps
-                            ? nn_ocl::DemosaicNetProfileMode::EventTimestamps
-                            : nn_ocl::DemosaicNetProfileMode::BoundaryDrain;
+      const auto                       mode = profile_kind == ProfileKind::EventTimestamps
+                                                  ? nn_ocl::DemosaicNetProfileMode::EventTimestamps
+                                                  : nn_ocl::DemosaicNetProfileMode::BoundaryDrain;
       nn_ocl::DemosaicNetStageProfiler profiler(mode);
       {
         nn_ocl::DemosaicNetStageProfilerScope scope(&profiler);
@@ -427,8 +426,8 @@ auto TimeCudaControl(const fs::path& path, const int warmup, const int iteration
   std::vector<double> samples;
   samples.reserve(static_cast<std::size_t>(iterations));
   for (int i = 0; i < iterations; ++i) {
-    const auto t0 = Clock::now();
-    auto out = ProcessOnce(*raw, RawDemosaicMethod::NeuralEngine, RawGpuBackend::CUDA);
+    const auto t0  = Clock::now();
+    auto       out = ProcessOnce(*raw, RawDemosaicMethod::NeuralEngine, RawGpuBackend::CUDA);
     samples.push_back(ElapsedMs(t0));
     if (!out.gpu_data_valid_) {
       throw std::runtime_error("CUDA control: invalid output");
@@ -539,7 +538,7 @@ void WriteJson(const fs::path& path, const std::vector<RunStats>& runs,
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(4);
   oss << "{\n";
-  oss << "  \"phase\": \"7.0\",\n";
+  oss << "  \"phase\": \"7.3\",\n";
   oss << "  \"device\": {\n";
   oss << "    \"name\": \"" << EscapeJson(caps.name) << "\",\n";
   oss << "    \"vendor\": \"" << EscapeJson(caps.vendor) << "\",\n";
@@ -551,15 +550,15 @@ void WriteJson(const fs::path& path, const std::vector<RunStats>& runs,
   oss << "    \"global_memory_bytes\": " << caps.global_memory_bytes << "\n";
   oss << "  },\n";
   oss << "  \"neural_build_options\": \"" << EscapeJson(neural_build_options) << "\",\n";
-  oss << "  \"telemetry_before\": {\"available\":"
-      << (telem_before.available ? "true" : "false") << ",\"temperature_c\":"
-      << telem_before.temperature_c << ",\"power_w\":" << telem_before.power_w
+  oss << "  \"telemetry_before\": {\"available\":" << (telem_before.available ? "true" : "false")
+      << ",\"temperature_c\":" << telem_before.temperature_c
+      << ",\"power_w\":" << telem_before.power_w
       << ",\"sm_clock_mhz\":" << telem_before.sm_clock_mhz
       << ",\"mem_clock_mhz\":" << telem_before.mem_clock_mhz << ",\"pstate\":\""
       << EscapeJson(telem_before.pstate) << "\"},\n";
   oss << "  \"telemetry_after\": {\"available\":" << (telem_after.available ? "true" : "false")
-      << ",\"temperature_c\":" << telem_after.temperature_c << ",\"power_w\":" << telem_after.power_w
-      << ",\"sm_clock_mhz\":" << telem_after.sm_clock_mhz
+      << ",\"temperature_c\":" << telem_after.temperature_c
+      << ",\"power_w\":" << telem_after.power_w << ",\"sm_clock_mhz\":" << telem_after.sm_clock_mhz
       << ",\"mem_clock_mhz\":" << telem_after.mem_clock_mhz << ",\"pstate\":\""
       << EscapeJson(telem_after.pstate) << "\"},\n";
   oss << "  \"runs\": [\n";
@@ -660,13 +659,13 @@ void WriteJson(const fs::path& path, const std::vector<RunStats>& runs,
 auto main(int argc, char** argv) -> int {
   using namespace alcedo;
 
-  int  warmup     = 1;
-  int  iterations = 3;
-  bool do_wall    = false;
-  bool do_event   = false;
-  bool do_boundary = false;
-  bool do_compare = false;
-  bool cuda_control = false;
+  int      warmup       = 1;
+  int      iterations   = 3;
+  bool     do_wall      = false;
+  bool     do_event     = false;
+  bool     do_boundary  = false;
+  bool     do_compare   = false;
+  bool     cuda_control = false;
   fs::path json_path;
 
   for (int i = 1; i < argc; ++i) {
@@ -688,16 +687,15 @@ auto main(int argc, char** argv) -> int {
     } else if ((arg == "--json" || arg == "-o") && i + 1 < argc) {
       json_path = argv[++i];
     } else if (arg == "--help" || arg == "-h") {
-      std::cout
-          << "Usage: OpenClDemosaicNetFullFrameTiming [options]\n"
-          << "  --warmup N           warm-up decodes after cold (default 1)\n"
-          << "  --iterations N       measured hot runs (default 3)\n"
-          << "  --wall               unprofiled wall timing only\n"
-          << "  --event-profile      event-timestamp telemetry (profiling queue)\n"
-          << "  --boundary-profile   diagnostic boundary clFinish profile\n"
-          << "  --compare            wall then event (default if no mode flag)\n"
-          << "  --cuda-control       alternate CUDA Neural same-session control\n"
-          << "  --json path          write machine-readable artifact\n";
+      std::cout << "Usage: OpenClDemosaicNetFullFrameTiming [options]\n"
+                << "  --warmup N           warm-up decodes after cold (default 1)\n"
+                << "  --iterations N       measured hot runs (default 3)\n"
+                << "  --wall               unprofiled wall timing only\n"
+                << "  --event-profile      event-timestamp telemetry (profiling queue)\n"
+                << "  --boundary-profile   diagnostic boundary clFinish profile\n"
+                << "  --compare            wall then event (default if no mode flag)\n"
+                << "  --cuda-control       alternate CUDA Neural same-session control\n"
+                << "  --json path          write machine-readable artifact\n";
       return 0;
     } else {
       std::cerr << "unknown argument: " << arg << "\n";
@@ -742,7 +740,7 @@ auto main(int argc, char** argv) -> int {
       OpenCL::DemosaicNet::kStructuralBuildOptions + "]";
   std::cout << "Neural options: " << neural_build_options << "\n";
   std::cout << "Warmup: " << warmup << "  measured iterations: " << iterations << "\n";
-  std::cout << "Phase 7.0 telemetry: wall / event timestamps / API counters.\n";
+  std::cout << "Phase 7.3 telemetry: wall / event timestamps / API counters.\n";
 
   const auto telem_before = QueryGpuTelemetry();
   if (telem_before.available) {
@@ -784,13 +782,13 @@ auto main(int argc, char** argv) -> int {
 
       auto run_modes = [&](const ProfileKind kind, const char* label) {
         std::cout << "\n--- " << label << " ---\n";
-        auto stats = TimeFixtureOpenCl(fix.name, fix.path, fix.kind, fix.variant, warmup,
-                                       iterations, kind);
+        auto stats =
+            TimeFixtureOpenCl(fix.name, fix.path, fix.kind, fix.variant, warmup, iterations, kind);
 #if ALCEDO_FULLFRAME_HAS_CUDA
         if (cuda_samples.has_value()) {
-          stats.cuda_hot_ms     = *cuda_samples;
+          stats.cuda_hot_ms      = *cuda_samples;
           stats.cuda_hot_mean_ms = Mean(stats.cuda_hot_ms);
-          stats.has_cuda        = true;
+          stats.has_cuda         = true;
         }
 #endif
         PrintStats(stats);
@@ -802,12 +800,12 @@ auto main(int argc, char** argv) -> int {
         run_modes(ProfileKind::EventTimestamps, "event-profiled");
         // Residual agreement between the two series for this fixture.
         if (all_runs.size() >= 2) {
-          const auto& wall  = all_runs[all_runs.size() - 2];
-          const auto& event = all_runs[all_runs.size() - 1];
-          const double wall_mean  = Mean(wall.hot_ms);
-          const double event_wall = event.has_event_summary ? event.event_summary.wall_ms
-                                                            : Mean(event.hot_ms);
-          const double residual   = event_wall - wall_mean;
+          const auto&  wall      = all_runs[all_runs.size() - 2];
+          const auto&  event     = all_runs[all_runs.size() - 1];
+          const double wall_mean = Mean(wall.hot_ms);
+          const double event_wall =
+              event.has_event_summary ? event.event_summary.wall_ms : Mean(event.hot_ms);
+          const double residual = event_wall - wall_mean;
           std::cout << "\n  Compare residual (event_wall − unprofiled_wall): " << std::fixed
                     << std::setprecision(2) << residual << " ms ("
                     << (wall_mean > 0.0 ? 100.0 * residual / wall_mean : 0.0) << "% of wall)\n";
