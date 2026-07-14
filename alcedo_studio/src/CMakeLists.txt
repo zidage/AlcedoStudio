@@ -507,11 +507,13 @@ if(ALCEDO_OPENCL_ENABLED)
         SOURCES
             decoders/processor/nn/opencl_demosaicnet_module.cpp
             decoders/processor/nn/opencl_demosaicnet_cache.cpp
+            decoders/processor/nn/opencl_demosaicnet_tiled.cpp
         PUBLIC_DEPS
             OpenClNn
             OpenClProgramLibrary
             NnSafetensors
             OpenCL::OpenCL
+            ${ALCEDO_OPENCV_CORE_DEPS}
     )
     target_compile_definitions(OpenClDemosaicNet PUBLIC HAVE_OPENCL)
     target_compile_definitions(OpenClDemosaicNet PRIVATE

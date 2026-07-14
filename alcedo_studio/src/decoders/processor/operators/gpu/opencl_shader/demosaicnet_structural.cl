@@ -23,6 +23,16 @@ inline int demosaicnet_nchw_index(const int n, const int c, const int y, const i
   return (((n * channels + c) * height + y) * width + x);
 }
 
+inline int demosaicnet_reflect101(int coordinate, const int limit) {
+  if (limit <= 1) {
+    return 0;
+  }
+  while (coordinate < 0 || coordinate >= limit) {
+    coordinate = coordinate < 0 ? -coordinate : 2 * limit - coordinate - 2;
+  }
+  return coordinate;
+}
+
 inline float demosaicnet_signed_gamma_encode(const float v) {
   const float a = fabs(v);
   const float g = pow(a, DEMOSAICNET_SIGNED_GAMMA_ENCODE_EXP);
@@ -75,6 +85,26 @@ __kernel void demosaicnet_pack_gamma_nhwc4(__global const float* restrict input,
     output[demosaicnet_nhwc4_index(n, y, x, cb, height, width, out_channel_blocks)] =
         (float4)(vals[0], vals[1], vals[2], vals[3]);
   }
+}
+
+// Product tile boundary: phase-aligned HWC3 linear CFA -> NCHW3 student input.
+// The host only submits origins divisible by cfa_period. Reflect-101 therefore
+// extends each phase without changing the phase of any in-bounds source sample.
+__kernel void demosaicnet_pack_reflect_nchw(__global const float* restrict input,
+                                            __global float* restrict tile,
+                                            const int frame_h, const int frame_w,
+                                            const int origin_y, const int origin_x,
+                                            const int tile_h, const int tile_w) {
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+  const int c = get_global_id(2);
+  if (x >= tile_w || y >= tile_h || c >= 3) {
+    return;
+  }
+  const int sx = demosaicnet_reflect101(origin_x + x, frame_w);
+  const int sy = demosaicnet_reflect101(origin_y + y, frame_h);
+  const float linear = input[(sy * frame_w + sx) * 3 + c];
+  tile[(c * tile_h + y) * tile_w + x] = demosaicnet_signed_gamma_encode(linear);
 }
 
 // Fixed Bayer collapse-colors pack: NCHW [N,3,H,W] → NHWC4 [N,H/2,W/2,C4].

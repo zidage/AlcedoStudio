@@ -22,6 +22,7 @@ inline constexpr const char* kConv1x1KernelName = "demosaicnet_conv1x1_nhwc4";
 
 // Structural / post / boundary kernels.
 inline constexpr const char* kPackGammaKernelName            = "demosaicnet_pack_gamma_nhwc4";
+inline constexpr const char* kPackReflectNchwKernelName      = "demosaicnet_pack_reflect_nchw";
 inline constexpr const char* kPackBayerNchwKernelName        = "demosaicnet_pack_bayer_nchw_to_nhwc4";
 inline constexpr const char* kPackXTransNchwKernelName       = "demosaicnet_pack_xtrans_nchw_to_nhwc4";
 inline constexpr const char* kResidualAddCropKernelName      = "demosaicnet_residual_add_crop";

@@ -19,6 +19,7 @@
 
 #include "decoders/processor/nn/opencl_demosaicnet_cache.hpp"
 #include "decoders/processor/nn/opencl_demosaicnet_module.hpp"
+#include "decoders/processor/nn/opencl_demosaicnet_tiled.hpp"
 #include "decoders/processor/operators/gpu/opencl_demosaicnet_programs.hpp"
 #include "nn/safetensors.hpp"
 #include "opencl/nn/convolution.hpp"
@@ -425,6 +426,92 @@ TEST_F(OpenClDemosaicNetModuleTest, OutputShapeHelpersMatchSpecs) {
   EXPECT_EQ(OpenClXTransDemosaicNet::OutputHeight(OpenClXTransDemosaicNet::kTileInput,
                                                   OpenClXTransDemosaicNet::kTileInput),
             OpenClXTransDemosaicNet::kTileOutput);
+}
+
+// Purpose: Bayer product tiling queues all shared jobs without a host wait,
+// preserves the aligned canvas geometry, and completes to finite RGB values.
+TEST_F(OpenClDemosaicNetModuleTest,
+       BayerTiledExecutionQueuesMultiTileCoverageWithoutHostSynchronization) {
+  const auto model_dir = FindModelDir();
+  if (model_dir.empty()) {
+    GTEST_SKIP() << "model dir not found";
+  }
+
+  constexpr int kWidth = 2048;
+  constexpr int kHeight = 2048;
+  std::vector<float> input(static_cast<std::size_t>(kWidth) * kHeight * 3, 0.1f);
+  nn_ocl::DeviceBuffer input_buffer = nn_ocl::DeviceBuffer::Floats(input.size());
+  nn_ocl::DeviceBuffer output_buffer = nn_ocl::DeviceBuffer::Floats(input.size());
+  input_buffer.UploadFloats(input);
+
+  OpenClBayerDemosaicNet module;
+  module.LoadWeights(nn::LoadSafetensors(model_dir / "bayer.safetensors"));
+  OpenClDemosaicNetTiledExecutor executor;
+  nn_ocl::WorkspacePool workspace;
+  nn_ocl::ResetDispatchInstrumentation();
+
+  const auto result = executor.EnqueueBayer(
+      module, workspace,
+      {.input_aligned_hwc = input_buffer.get(),
+       .output_aligned_hwc = output_buffer.get(),
+       .aligned_width = kWidth,
+       .aligned_height = kHeight,
+       .queue = OpenClContext::Instance().Queue()});
+
+  // Bayer's model-output origin is -1 (pad32/border31), so the 2048 square
+  // requires a 3×3 shared-job grid rather than a naïve 2×2 grid.
+  EXPECT_EQ(result.tile_count, 9u);
+  EXPECT_EQ(result.output_width, kWidth);
+  EXPECT_EQ(result.output_height, kHeight);
+  EXPECT_EQ(nn_ocl::GetDispatchInstrumentation().finish_count, 0u);
+  EXPECT_EQ(nn_ocl::GetDispatchInstrumentation().wait_count, 0u);
+
+  nn_ocl::WaitQueue(OpenClContext::Instance().Queue());
+  const auto output = output_buffer.DownloadFloats(input.size());
+  EXPECT_TRUE(std::all_of(output.begin(), output.end(),
+                          [](const float value) { return std::isfinite(value); }));
+}
+
+// Purpose: X-Trans product tiling keeps period-6 shared-job coverage asynchronous
+// and writes finite RGB to the period-trimmed aligned canvas.
+TEST_F(OpenClDemosaicNetModuleTest,
+       XTransTiledExecutionQueuesMultiTileCoverageWithoutHostSynchronization) {
+  const auto model_dir = FindModelDir();
+  if (model_dir.empty()) {
+    GTEST_SKIP() << "model dir not found";
+  }
+
+  constexpr int kWidth = 2040;
+  constexpr int kHeight = 2040;
+  std::vector<float> input(static_cast<std::size_t>(kWidth) * kHeight * 3, 0.1f);
+  nn_ocl::DeviceBuffer input_buffer = nn_ocl::DeviceBuffer::Floats(input.size());
+  nn_ocl::DeviceBuffer output_buffer = nn_ocl::DeviceBuffer::Floats(input.size());
+  input_buffer.UploadFloats(input);
+
+  OpenClXTransDemosaicNet module;
+  module.LoadWeights(nn::LoadSafetensors(model_dir / "xtrans.safetensors"));
+  OpenClDemosaicNetTiledExecutor executor;
+  nn_ocl::WorkspacePool workspace;
+  nn_ocl::ResetDispatchInstrumentation();
+
+  const auto result = executor.EnqueueXTrans(
+      module, workspace,
+      {.input_aligned_hwc = input_buffer.get(),
+       .output_aligned_hwc = output_buffer.get(),
+       .aligned_width = kWidth,
+       .aligned_height = kHeight,
+       .queue = OpenClContext::Instance().Queue()});
+
+  EXPECT_EQ(result.tile_count, 4u);
+  EXPECT_EQ(result.output_width, kWidth);
+  EXPECT_EQ(result.output_height, kHeight);
+  EXPECT_EQ(nn_ocl::GetDispatchInstrumentation().finish_count, 0u);
+  EXPECT_EQ(nn_ocl::GetDispatchInstrumentation().wait_count, 0u);
+
+  nn_ocl::WaitQueue(OpenClContext::Instance().Queue());
+  const auto output = output_buffer.DownloadFloats(input.size());
+  EXPECT_TRUE(std::all_of(output.begin(), output.end(),
+                          [](const float value) { return std::isfinite(value); }));
 }
 
 }  // namespace alcedo
