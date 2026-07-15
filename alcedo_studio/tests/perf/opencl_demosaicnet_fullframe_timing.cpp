@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 //
-// Phase 7 OpenCL Neural full-frame telemetry harness (development report).
+// OpenCL Neural full-frame telemetry harness (development report).
 // Cold path includes first program compile / model load; hot mean excludes that.
 //
 //   OpenClDemosaicNetFullFrameTiming.exe
@@ -538,7 +538,7 @@ void WriteJson(const fs::path& path, const std::vector<RunStats>& runs,
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(4);
   oss << "{\n";
-  oss << "  \"phase\": \"7.4\",\n";
+  oss << "  \"measurement\": \"opencl_demosaicnet_full_frame\",\n";
   oss << "  \"device\": {\n";
   oss << "    \"name\": \"" << EscapeJson(caps.name) << "\",\n";
   oss << "    \"vendor\": \"" << EscapeJson(caps.vendor) << "\",\n";
@@ -732,10 +732,10 @@ auto main(int argc, char** argv) -> int {
   std::cout << "Device OpenCL: " << caps.device_version << " / " << caps.opencl_c_version << "\n";
   std::cout << "Max clock MHz: " << caps.max_clock_frequency_mhz << "\n";
   std::cout << "Build type:    "
-#if defined(NDEBUG)
-            << "Release-like (NDEBUG)\n";
+#if defined(ALCEDO_OPENCL_DEMOSAICNET_RELEASE_BUILD) || defined(NDEBUG)
+            << "Release\n";
 #else
-            << "Debug (NDEBUG not set)\n";
+            << "Debug\n";
 #endif
   const std::string neural_build_options =
       std::string("bayer_conv=[") + OpenCL::DemosaicNet::kBayerConvBuildOptions +
@@ -743,7 +743,7 @@ auto main(int argc, char** argv) -> int {
       OpenCL::DemosaicNet::kStructuralBuildOptions + "]";
   std::cout << "Neural options: " << neural_build_options << "\n";
   std::cout << "Warmup: " << warmup << "  measured iterations: " << iterations << "\n";
-  std::cout << "Phase 7.4 telemetry: wall / event timestamps / API counters.\n";
+  std::cout << "OpenCL DemosaicNet telemetry: wall / event timestamps / API counters.\n";
   std::cout << "Command buffer replay: "
             << (caps.SupportsExtension("cl_khr_command_buffer") ? "available" : "unavailable")
             << " (ordinary in-order path retained)\n";

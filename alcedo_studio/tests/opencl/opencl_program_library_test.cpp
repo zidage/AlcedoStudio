@@ -8,11 +8,13 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <string>
 
 #include "decoders/processor/operators/gpu/opencl_demosaicnet_programs.hpp"
 #include "opencl/opencl_backend_program_registry.hpp"
+#include "opencl/opencl_runtime.hpp"
 
 namespace alcedo {
 namespace {
@@ -90,6 +92,43 @@ TEST(OpenClProgramLibraryTest, FormatsUnicodePathsAsUtf8ForDiagnostics) {
 #else
   GTEST_SKIP() << "Windows-specific UTF-16 path formatting test.";
 #endif
+}
+
+TEST(OpenClProgramLibraryTest, BuildFailureReportsProgramDeviceDriverAndOptions) {
+  if (!TryPrepareOpenClRuntime()) {
+    GTEST_SKIP() << "OpenCL unavailable";
+  }
+
+  const auto source_path =
+      std::filesystem::temp_directory_path() / (UniqueProgramName("invalid_source") + ".cl");
+  {
+    std::ofstream source(source_path, std::ios::binary);
+    ASSERT_TRUE(source.is_open());
+    source << "__kernel void invalid( {";
+  }
+
+  const auto program_name = UniqueProgramName("build_failure");
+  const auto build_options = std::string("-cl-std=CL1.2 -DALCEDO_DIAGNOSTIC_TEST=1");
+  OpenClProgramLibrary::Instance().RegisterProgram(OpenClProgramDescriptor{
+      .name                = program_name,
+      .source_paths        = {source_path},
+      .build_options       = build_options,
+      .required_at_startup = false,
+  });
+
+  std::string diagnostic;
+  try {
+    (void)OpenClProgramLibrary::Instance().GetProgram(program_name);
+  } catch (const std::exception& error) {
+    diagnostic = error.what();
+  }
+  std::filesystem::remove(source_path);
+
+  ASSERT_FALSE(diagnostic.empty());
+  EXPECT_NE(diagnostic.find("program='" + program_name + "'"), std::string::npos);
+  EXPECT_NE(diagnostic.find("device='"), std::string::npos);
+  EXPECT_NE(diagnostic.find("driver='"), std::string::npos);
+  EXPECT_NE(diagnostic.find("build_options='" + build_options + "'"), std::string::npos);
 }
 
 TEST(OpenClProgramLibraryTest, DemosaicNetProgramsAreRegisteredLazyAndUnbuiltAfterBackendRegister) {

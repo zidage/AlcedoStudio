@@ -44,8 +44,8 @@ inline constexpr const char* kClamp01KernelName           = "demosaicnet_clamp01
 inline constexpr const char* kPackCfaMonoToHwc3KernelName = "demosaicnet_pack_cfa_mono_to_hwc3";
 inline constexpr const char* kRgb3ToRgba4KernelName       = "demosaicnet_rgb3_to_rgba4";
 
-// The project-owned direct kernel uses a fixed 8x8 local tile. Channel block
-// The input channel-block bound is compile-time for local-memory allocation;
+// The project-owned direct kernel uses a fixed 16x8 local tile. The output
+// channel-block bound is compile-time for register/local-memory allocation;
 // runtime dimensions still cover the first/post-layer shape families.
 inline constexpr const char* kBayerConvBuildOptions =
     "-cl-std=CL1.2 "

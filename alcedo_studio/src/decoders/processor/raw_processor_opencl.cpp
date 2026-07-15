@@ -239,7 +239,11 @@ auto RawProcessor::ProcessOpenCL() -> ImageBuffer {
 
     // Soft-fail: discard partial Neural output and stay on OpenCL Legacy.
     OpenCL::NoteOpenClNeuralLegacyFallbackForTest();
-    deferred_log.Add("RAW OpenCL Neural Engine unavailable; using Legacy: " + neural_result.error);
+    const std::string failure_stage =
+        neural_result.failure_stage.empty() ? "unknown" : neural_result.failure_stage;
+    const std::string variant = neural_result.variant.empty() ? "unknown" : neural_result.variant;
+    deferred_log.Add("RAW OpenCL Neural Engine unavailable (stage=" + failure_stage +
+                     ", variant=" + variant + "); using OpenCL Legacy: " + neural_result.error);
   }
 
   RunOpenClLegacyDemosaic(gpu_img, cfa_pattern_, params_, raw_processor_, raw_data_.sizes,

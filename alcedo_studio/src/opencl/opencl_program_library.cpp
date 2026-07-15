@@ -167,6 +167,19 @@ auto OpenClProgramLibrary::BuildProgram(const std::shared_ptr<ProgramSlot>& slot
     throw std::runtime_error("OpenClProgramLibrary: OpenCL context is not initialized.");
   }
 
+  const auto& capabilities = context.Capabilities();
+  const std::string build_options = slot->descriptor.build_options.empty()
+                                      ? std::string("<none>")
+                                      : slot->descriptor.build_options;
+  const auto build_diagnostic_prefix = [&]() {
+    std::ostringstream message;
+    message << "OpenClProgramLibrary: program='" << slot->descriptor.name << "'"
+            << ", device='" << capabilities.name << "'"
+            << ", driver='" << capabilities.driver_version << "'"
+            << ", build_options='" << build_options << "'";
+    return message.str();
+  };
+
   const auto               sources = LoadSourceText(slot->descriptor.source_paths);
 
   std::vector<const char*> source_ptrs;
@@ -183,21 +196,23 @@ auto OpenClProgramLibrary::BuildProgram(const std::shared_ptr<ProgramSlot>& slot
       clCreateProgramWithSource(context.Context(), static_cast<cl_uint>(source_ptrs.size()),
                                 source_ptrs.data(), source_lengths.data(), &error);
   if (error != CL_SUCCESS || program == nullptr) {
-    throw std::runtime_error("OpenClProgramLibrary: failed to create program: " +
-                             slot->descriptor.name);
+    throw std::runtime_error(build_diagnostic_prefix() +
+                             ": failed to create program (OpenCL error " +
+                             std::to_string(error) + ").");
   }
 
-  const char* build_options =
+  const char* build_options_arg =
       slot->descriptor.build_options.empty() ? nullptr : slot->descriptor.build_options.c_str();
   const cl_device_id device = context.Device();
-  error                     = clBuildProgram(program, 1, &device, build_options, nullptr, nullptr);
+  error = clBuildProgram(program, 1, &device, build_options_arg, nullptr, nullptr);
   NoteOpenClProgramBuild();
   if (error != CL_SUCCESS) {
     const auto build_log = GetBuildLog(program, device);
     clReleaseProgram(program);
 
     std::ostringstream message;
-    message << "OpenClProgramLibrary: failed to build program '" << slot->descriptor.name << "'.";
+    message << build_diagnostic_prefix() << ": failed to build program (OpenCL error " << error
+            << ").";
     if (!build_log.empty()) {
       message << "\n" << build_log;
     }

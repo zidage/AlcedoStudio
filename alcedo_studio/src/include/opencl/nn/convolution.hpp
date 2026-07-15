@@ -59,8 +59,7 @@ void BindConv1x1Nhwc4InvariantArgs(cl_kernel kernel, cl_mem weights, cl_mem bias
 // Optional event for development harness timing. When non-null, the enqueue
 // retains a CL event the caller must release after profiling.
 struct EnqueueOptions {
-  cl_event* event               = nullptr;  // optional out-event
-  bool      enable_profiling    = false;    // reserved; queue must support profiling
+  cl_event* event = nullptr;  // optional out-event; ownership stays with the caller
 };
 
 // Instrumentation counters for tests / diagnostics. Thread-local to the calling
@@ -84,10 +83,10 @@ void WaitEvent(cl_event event);
 // Direct 3x3 NHWC4 convolution (+ fused bias + ReLU when program built that way)
 //
 // Kernel: demosaicnet_conv3x3_nhwc4
-// Global size: (out_w, out_h, batch * out_channel_blocks)
+// Global size: (out_w, out_h, batch); each work-group computes every output
+// channel block for its spatial tile.
 // pad_h/pad_w: zero-pad amount (product valid conv uses 0).
-// bias may be nullptr when the program was built with FUSE_BIAS and the kernel
-// null-checks; for product trunk layers bias is always present.
+// bias may be nullptr; the kernel checks it before applying the fused bias.
 // ---------------------------------------------------------------------------
 
 struct Conv3x3Dispatch {
@@ -119,7 +118,8 @@ void EnqueueConv3x3Nhwc4(const Conv3x3Dispatch& dispatch, cl_command_queue queue
 // Specialized 1x1 NHWC4 convolution (C4-aligned blocks, runtime ReLU flag)
 //
 // Kernel: demosaicnet_conv1x1_nhwc4
-// Global size: (width, height, batch * out_channel_blocks)
+// Global size: (width, height, batch); each work-item computes every output
+// channel block at its spatial position.
 // ---------------------------------------------------------------------------
 
 struct Conv1x1Dispatch {

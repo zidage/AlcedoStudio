@@ -1,8 +1,8 @@
 # OpenCL NN Forward DemosaicNet Migration and Alignment Plan
 
-**Status:** Correctness, product routing, Phase 7.0 telemetry, Phase 7.1 residency, Phase 7.2, Phase 7.3, and Phase 7.4 are complete; both local OpenCL full-frame means pass the `<500 ms` acceptance gate
+**Status:** Correctness, product routing, Phase 7.0 telemetry, Phase 7.1 residency, Phase 7.2, Phase 7.3, Phase 7.4, and Phase 8 retention/cleanup are complete; both local OpenCL full-frame means pass the `<500 ms` acceptance gate
 **Date:** 2026-07-14  
-**Updated:** 2026-07-15 after Phase 7.4 submission-overhead profiling
+**Updated:** 2026-07-15 after the Phase 8 retention and cleanup audit
 **Primary roadmap owner:** `alcedo_studio/src/decoders/processor/nn`  
 **Scope:** Port the CUDA DemosaicNet forward path to OpenCL without introducing a general-purpose inference runtime.
 
@@ -828,6 +828,36 @@ Exit gate status:
   device — **pass with portable fallback**;
 - ordinary and fallback behavior remain unchanged because no optional extension is required —
   **pass**.
+
+### 12.12 Phase 8 retention and cleanup audit — 2026-07-15
+
+The retained product path is now documented and its development-only surface has been audited:
+
+- `demosaicnet_conv.cl` is the project-owned fixed 16x8 direct-convolution implementation. No
+  CLBlast extract, CLBlast tuning constants, im2col path, alternative precision path, runtime
+  tuner, or tuning database remains in the OpenCL DemosaicNet source or build targets;
+- `WorkspacePool` and `SubBuffer` remain only as reusable primitive APIs with direct tests. The
+  product DemosaicNet path uses dedicated resident `ActivationSlots` and creates no sub-buffer per
+  tile;
+- all DemosaicNet programs are described by the `raw_demosaicnet` manifest and activated through
+  `OpenClBackendProgramRegistry`; the OpenCL program library remains RAW-agnostic;
+- build diagnostics now include the stable program name, selected device, driver, and build
+  options; RAW Neural fallback diagnostics identify the failure stage, variant, and OpenCL Legacy
+  fallback backend explicitly;
+- the retained architecture, ownership boundaries, cleanup rules, and verification commands are
+  recorded in this roadmap and in the source-level ownership comments beside the OpenCL targets.
+
+Verification on the local NVIDIA GeForce RTX 3080 Laptop GPU (driver 610.62) passed:
+
+- the Windows debug build and targeted OpenCL suite: **40/40 tests passed**, including the new
+  program-build diagnostic contract;
+- the Windows `win_release` build and three-hot-run full-frame harness: Bayer wall mean **383.61 ms**
+  and X-Trans wall mean **413.94 ms**, both below the `<500 ms` gate;
+- the same hot runs recorded zero sub-buffer creation, zero Neural kernel creation, zero program
+  builds, zero D2H bytes, and one final wait for both fixtures;
+- the Release harness reports the retained ordinary in-order path because
+  `cl_khr_command_buffer` is unavailable. The JSON report is a development artifact under
+  `build/perf/` and is not part of the shipped product.
 
 ## 13. Implementation phases and exit gates
 

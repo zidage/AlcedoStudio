@@ -509,7 +509,7 @@ if(ALCEDO_OPENCL_ENABLED)
     )
     target_compile_definitions(OpenClNn PUBLIC HAVE_OPENCL)
 
-    # Fixed OpenCL DemosaicNet modules + lazy model cache (Phase 4).
+    # Fixed OpenCL DemosaicNet modules and lazy model cache.
     def_library(OpenClDemosaicNet
         SOURCES
             decoders/processor/nn/opencl_demosaicnet_module.cpp
@@ -527,7 +527,7 @@ if(ALCEDO_OPENCL_ENABLED)
         ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config/models"
     )
 
-    # Product-path OpenCL Neural demosaic entry (Phase 6 RAW routing). Soft-fail API for
+    # Product-path OpenCL Neural demosaic entry. Soft-fail API for
     # RawProcessor OpenCL branch; not part of the generic OpenClDemosaicNet module layer.
     def_library(OpenClDemosaicNetEntry
         SOURCES

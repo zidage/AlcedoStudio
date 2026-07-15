@@ -1032,7 +1032,7 @@ if(ALCEDO_OPENCL_ENABLED)
   target_link_libraries(OpenClNnPrimitivesTest PRIVATE GTest::gtest_main OpenClNn OpenClProgramLibrary)
   gtest_discover_tests(OpenClNnPrimitivesTest TEST_PREFIX "OpenClNnPrimitivesTest.")
 
-  # Phase 4: fixed Bayer/X-Trans modules vs exported student reference pairs.
+  # Fixed Bayer/X-Trans modules vs exported student reference pairs.
   add_executable(OpenClDemosaicNetTest opencl/opencl_demosaicnet_test.cpp)
   target_include_directories(OpenClDemosaicNetTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(OpenClDemosaicNetTest PRIVATE
@@ -1046,11 +1046,11 @@ if(ALCEDO_OPENCL_ENABLED)
   )
   gtest_discover_tests(OpenClDemosaicNetTest TEST_PREFIX "OpenClDemosaicNetTest.")
 
-  # Development full-frame OpenCL Neural telemetry harness (Phase 7+; not default ctest).
+  # Development full-frame OpenCL Neural telemetry harness (not default ctest).
   # Authoritative timings: Release build.
   #   cmd /c scripts\msvc_env.cmd --build --preset win_release --target OpenClDemosaicNetFullFrameTiming --parallel 4
-  #   build\release\alcedo_studio\tests\OpenClDemosaicNetFullFrameTiming.exe --wall --json build/perf/opencl_nn_phase7_3_wall.json
-  #   build\release\alcedo_studio\tests\OpenClDemosaicNetFullFrameTiming.exe --event-profile --json build/perf/opencl_nn_phase7_3_event.json
+  #   build\release\alcedo_studio\tests\OpenClDemosaicNetFullFrameTiming.exe --wall --json build/perf/opencl_demosaicnet_wall.json
+  #   build\release\alcedo_studio\tests\OpenClDemosaicNetFullFrameTiming.exe --event-profile --json build/perf/opencl_demosaicnet_event.json
   add_executable(OpenClDemosaicNetFullFrameTiming perf/opencl_demosaicnet_fullframe_timing.cpp)
   target_include_directories(OpenClDemosaicNetFullFrameTiming PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(OpenClDemosaicNetFullFrameTiming PRIVATE
@@ -1061,6 +1061,7 @@ if(ALCEDO_OPENCL_ENABLED)
   )
   target_compile_definitions(OpenClDemosaicNetFullFrameTiming PRIVATE
     ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+    $<$<CONFIG:Release>:ALCEDO_OPENCL_DEMOSAICNET_RELEASE_BUILD>
   )
   if(ALCEDO_CUDA_ENABLED)
     target_link_libraries(OpenClDemosaicNetFullFrameTiming PRIVATE DemosaicNet)
