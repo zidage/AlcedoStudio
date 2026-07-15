@@ -99,6 +99,178 @@ auto GetDispatchInstrumentation() -> DispatchInstrumentation& { return g_instrum
 
 void ResetDispatchInstrumentation() { g_instrumentation = {}; }
 
+void BindConv3x3Nhwc4InvariantArgs(const cl_kernel kernel, const cl_mem weights,
+                                   const cl_mem bias, const int in_channel_blocks,
+                                   const int out_channel_blocks, const int in_logical_channels,
+                                   const int out_logical_channels) {
+  if (kernel == nullptr) {
+    throw std::runtime_error("BindConv3x3Nhwc4InvariantArgs: null kernel");
+  }
+  if (weights == nullptr) {
+    throw std::runtime_error("BindConv3x3Nhwc4InvariantArgs: null weights");
+  }
+  if (in_channel_blocks <= 0 || out_channel_blocks <= 0 || in_logical_channels < 0 ||
+      out_logical_channels < 0) {
+    throw std::runtime_error("BindConv3x3Nhwc4InvariantArgs: invalid channel metadata");
+  }
+
+  SetArg(kernel, 1, weights, "BindConv3x3Nhwc4InvariantArgs weights");
+  if (bias != nullptr) {
+    SetArg(kernel, 2, bias, "BindConv3x3Nhwc4InvariantArgs bias");
+  } else {
+    CheckOpenCl(clSetKernelArg(kernel, 2, sizeof(cl_mem), nullptr),
+                "BindConv3x3Nhwc4InvariantArgs null bias");
+  }
+  SetArg(kernel, 11, in_channel_blocks, "BindConv3x3Nhwc4InvariantArgs input blocks");
+  SetArg(kernel, 12, out_channel_blocks, "BindConv3x3Nhwc4InvariantArgs output blocks");
+  SetArg(kernel, 13, in_logical_channels, "BindConv3x3Nhwc4InvariantArgs input channels");
+  SetArg(kernel, 14, out_logical_channels, "BindConv3x3Nhwc4InvariantArgs output channels");
+}
+
+void BindConv1x1Nhwc4InvariantArgs(const cl_kernel kernel, const cl_mem weights,
+                                   const cl_mem bias, const int in_channel_blocks,
+                                   const int out_channel_blocks, const int in_logical_channels,
+                                   const int out_logical_channels, const int apply_relu) {
+  if (kernel == nullptr) {
+    throw std::runtime_error("BindConv1x1Nhwc4InvariantArgs: null kernel");
+  }
+  if (weights == nullptr) {
+    throw std::runtime_error("BindConv1x1Nhwc4InvariantArgs: null weights");
+  }
+  if (in_channel_blocks <= 0 || out_channel_blocks <= 0 || in_logical_channels < 0 ||
+      out_logical_channels < 0) {
+    throw std::runtime_error("BindConv1x1Nhwc4InvariantArgs: invalid channel metadata");
+  }
+
+  SetArg(kernel, 1, weights, "BindConv1x1Nhwc4InvariantArgs weights");
+  if (bias != nullptr) {
+    SetArg(kernel, 2, bias, "BindConv1x1Nhwc4InvariantArgs bias");
+  } else {
+    CheckOpenCl(clSetKernelArg(kernel, 2, sizeof(cl_mem), nullptr),
+                "BindConv1x1Nhwc4InvariantArgs null bias");
+  }
+  SetArg(kernel, 7, in_channel_blocks, "BindConv1x1Nhwc4InvariantArgs input blocks");
+  SetArg(kernel, 8, out_channel_blocks, "BindConv1x1Nhwc4InvariantArgs output blocks");
+  SetArg(kernel, 9, in_logical_channels, "BindConv1x1Nhwc4InvariantArgs input channels");
+  SetArg(kernel, 10, out_logical_channels, "BindConv1x1Nhwc4InvariantArgs output channels");
+  SetArg(kernel, 11, apply_relu != 0 ? 1 : 0, "BindConv1x1Nhwc4InvariantArgs ReLU");
+}
+
+void BindConv3x3Nhwc4DispatchArgs(const Conv3x3Dispatch& dispatch) {
+  if (dispatch.kernel == nullptr || dispatch.input == nullptr || dispatch.output == nullptr) {
+    throw std::runtime_error("BindConv3x3Nhwc4DispatchArgs: null kernel or tensor view");
+  }
+  if (dispatch.weights == nullptr) {
+    throw std::runtime_error("BindConv3x3Nhwc4DispatchArgs: null weights");
+  }
+  ValidateNhwc4(*dispatch.input, "BindConv3x3Nhwc4DispatchArgs input");
+  ValidateNhwc4(*dispatch.output, "BindConv3x3Nhwc4DispatchArgs output");
+
+  const auto& in  = *dispatch.input;
+  const auto& out = *dispatch.output;
+  if (in.batch != out.batch) {
+    throw std::runtime_error("BindConv3x3Nhwc4DispatchArgs: batch mismatch");
+  }
+  const int expected_out_h = ConvOutputSize(in.height, dispatch.pad_h, 3);
+  const int expected_out_w = ConvOutputSize(in.width, dispatch.pad_w, 3);
+  if (out.height != expected_out_h || out.width != expected_out_w) {
+    throw std::runtime_error("BindConv3x3Nhwc4DispatchArgs: output spatial size mismatch");
+  }
+
+  const cl_int batch                = in.batch;
+  const cl_int in_h                 = in.height;
+  const cl_int in_w                 = in.width;
+  const cl_int out_h                = out.height;
+  const cl_int out_w                = out.width;
+  const cl_int pad_h                = dispatch.pad_h;
+  const cl_int pad_w                = dispatch.pad_w;
+  const cl_int in_channel_blocks    = in.channel_blocks;
+  const cl_int out_channel_blocks   = out.channel_blocks;
+  const cl_int in_logical_channels  = in.logical_channels;
+  const cl_int out_logical_channels = out.logical_channels;
+  const cl_mem input_buf            = in.buffer;
+  const cl_mem output_buf           = out.buffer;
+  const cl_mem weights              = dispatch.weights;
+  const cl_mem bias                 = dispatch.bias;
+
+  SetArg(dispatch.kernel, 0, input_buf, "BindConv3x3Nhwc4DispatchArgs arg0");
+  if (!dispatch.invariant_args_bound) {
+    SetArg(dispatch.kernel, 1, weights, "BindConv3x3Nhwc4DispatchArgs arg1");
+    if (bias != nullptr) {
+      SetArg(dispatch.kernel, 2, bias, "BindConv3x3Nhwc4DispatchArgs arg2");
+    } else {
+      CheckOpenCl(clSetKernelArg(dispatch.kernel, 2, sizeof(cl_mem), nullptr),
+                  "BindConv3x3Nhwc4DispatchArgs arg2 null bias");
+    }
+  }
+  SetArg(dispatch.kernel, 3, output_buf, "BindConv3x3Nhwc4DispatchArgs arg3");
+  SetArg(dispatch.kernel, 4, batch, "BindConv3x3Nhwc4DispatchArgs arg4");
+  SetArg(dispatch.kernel, 5, in_h, "BindConv3x3Nhwc4DispatchArgs arg5");
+  SetArg(dispatch.kernel, 6, in_w, "BindConv3x3Nhwc4DispatchArgs arg6");
+  SetArg(dispatch.kernel, 7, out_h, "BindConv3x3Nhwc4DispatchArgs arg7");
+  SetArg(dispatch.kernel, 8, out_w, "BindConv3x3Nhwc4DispatchArgs arg8");
+  SetArg(dispatch.kernel, 9, pad_h, "BindConv3x3Nhwc4DispatchArgs arg9");
+  SetArg(dispatch.kernel, 10, pad_w, "BindConv3x3Nhwc4DispatchArgs arg10");
+  if (!dispatch.invariant_args_bound) {
+    SetArg(dispatch.kernel, 11, in_channel_blocks, "BindConv3x3Nhwc4DispatchArgs arg11");
+    SetArg(dispatch.kernel, 12, out_channel_blocks, "BindConv3x3Nhwc4DispatchArgs arg12");
+    SetArg(dispatch.kernel, 13, in_logical_channels, "BindConv3x3Nhwc4DispatchArgs arg13");
+    SetArg(dispatch.kernel, 14, out_logical_channels, "BindConv3x3Nhwc4DispatchArgs arg14");
+  }
+}
+
+void BindConv1x1Nhwc4DispatchArgs(const Conv1x1Dispatch& dispatch) {
+  if (dispatch.kernel == nullptr || dispatch.input == nullptr || dispatch.output == nullptr) {
+    throw std::runtime_error("BindConv1x1Nhwc4DispatchArgs: null kernel or tensor view");
+  }
+  if (dispatch.weights == nullptr) {
+    throw std::runtime_error("BindConv1x1Nhwc4DispatchArgs: null weights");
+  }
+  ValidateNhwc4(*dispatch.input, "BindConv1x1Nhwc4DispatchArgs input");
+  ValidateNhwc4(*dispatch.output, "BindConv1x1Nhwc4DispatchArgs output");
+
+  const auto& in  = *dispatch.input;
+  const auto& out = *dispatch.output;
+  if (in.batch != out.batch || in.height != out.height || in.width != out.width) {
+    throw std::runtime_error("BindConv1x1Nhwc4DispatchArgs: batch/spatial mismatch");
+  }
+
+  const cl_int batch                = in.batch;
+  const cl_int height               = in.height;
+  const cl_int width                = in.width;
+  const cl_int in_channel_blocks    = in.channel_blocks;
+  const cl_int out_channel_blocks   = out.channel_blocks;
+  const cl_int in_logical_channels  = in.logical_channels;
+  const cl_int out_logical_channels = out.logical_channels;
+  const cl_int apply_relu           = dispatch.apply_relu != 0 ? 1 : 0;
+  const cl_mem input_buf            = in.buffer;
+  const cl_mem output_buf           = out.buffer;
+  const cl_mem weights              = dispatch.weights;
+  const cl_mem bias                 = dispatch.bias;
+
+  SetArg(dispatch.kernel, 0, input_buf, "BindConv1x1Nhwc4DispatchArgs arg0");
+  if (!dispatch.invariant_args_bound) {
+    SetArg(dispatch.kernel, 1, weights, "BindConv1x1Nhwc4DispatchArgs arg1");
+    if (bias != nullptr) {
+      SetArg(dispatch.kernel, 2, bias, "BindConv1x1Nhwc4DispatchArgs arg2");
+    } else {
+      CheckOpenCl(clSetKernelArg(dispatch.kernel, 2, sizeof(cl_mem), nullptr),
+                  "BindConv1x1Nhwc4DispatchArgs arg2 null bias");
+    }
+  }
+  SetArg(dispatch.kernel, 3, output_buf, "BindConv1x1Nhwc4DispatchArgs arg3");
+  SetArg(dispatch.kernel, 4, batch, "BindConv1x1Nhwc4DispatchArgs arg4");
+  SetArg(dispatch.kernel, 5, height, "BindConv1x1Nhwc4DispatchArgs arg5");
+  SetArg(dispatch.kernel, 6, width, "BindConv1x1Nhwc4DispatchArgs arg6");
+  if (!dispatch.invariant_args_bound) {
+    SetArg(dispatch.kernel, 7, in_channel_blocks, "BindConv1x1Nhwc4DispatchArgs arg7");
+    SetArg(dispatch.kernel, 8, out_channel_blocks, "BindConv1x1Nhwc4DispatchArgs arg8");
+    SetArg(dispatch.kernel, 9, in_logical_channels, "BindConv1x1Nhwc4DispatchArgs arg9");
+    SetArg(dispatch.kernel, 10, out_logical_channels, "BindConv1x1Nhwc4DispatchArgs arg10");
+    SetArg(dispatch.kernel, 11, apply_relu, "BindConv1x1Nhwc4DispatchArgs arg11");
+  }
+}
+
 void WaitQueue(cl_command_queue queue) {
   if (queue == nullptr) {
     throw std::runtime_error("WaitQueue: null queue");
@@ -180,6 +352,9 @@ auto PackOhwi4o4iFromOihw(const float* oihw, int out_channels, int in_channels, 
 
 void EnqueueConv3x3Nhwc4(const Conv3x3Dispatch& dispatch, cl_command_queue queue,
                          const EnqueueOptions& options) {
+  if (dispatch.kernel == nullptr) {
+    throw std::runtime_error("EnqueueConv3x3Nhwc4: null kernel");
+  }
   if (dispatch.input == nullptr || dispatch.output == nullptr) {
     throw std::runtime_error("EnqueueConv3x3Nhwc4: null input/output view");
   }
@@ -201,54 +376,22 @@ void EnqueueConv3x3Nhwc4(const Conv3x3Dispatch& dispatch, cl_command_queue queue
     throw std::runtime_error("EnqueueConv3x3Nhwc4: output spatial size mismatch");
   }
 
-  const cl_int batch               = in.batch;
-  const cl_int in_h                = in.height;
-  const cl_int in_w                = in.width;
-  const cl_int out_h               = out.height;
-  const cl_int out_w               = out.width;
-  const cl_int pad_h               = dispatch.pad_h;
-  const cl_int pad_w               = dispatch.pad_w;
-  const cl_int in_channel_blocks   = in.channel_blocks;
-  const cl_int out_channel_blocks  = out.channel_blocks;
-  const cl_int in_logical_channels = in.logical_channels;
-  const cl_int out_logical_channels = out.logical_channels;
-
-  cl_mem input_buf  = in.buffer;
-  cl_mem output_buf = out.buffer;
-  cl_mem weights    = dispatch.weights;
-  cl_mem bias       = dispatch.bias;  // may be nullptr
-
-  SetArg(dispatch.kernel, 0, input_buf, "EnqueueConv3x3Nhwc4 arg0");
-  SetArg(dispatch.kernel, 1, weights, "EnqueueConv3x3Nhwc4 arg1");
-  // OpenCL null cl_mem for optional bias: pass size of cl_mem with nullptr value.
-  if (bias != nullptr) {
-    SetArg(dispatch.kernel, 2, bias, "EnqueueConv3x3Nhwc4 arg2");
-  } else {
-    CheckOpenCl(clSetKernelArg(dispatch.kernel, 2, sizeof(cl_mem), nullptr),
-                "EnqueueConv3x3Nhwc4 arg2 null bias");
+  if (!dispatch.all_args_bound) {
+    BindConv3x3Nhwc4DispatchArgs(dispatch);
   }
-  SetArg(dispatch.kernel, 3, output_buf, "EnqueueConv3x3Nhwc4 arg3");
-  SetArg(dispatch.kernel, 4, batch, "EnqueueConv3x3Nhwc4 arg4");
-  SetArg(dispatch.kernel, 5, in_h, "EnqueueConv3x3Nhwc4 arg5");
-  SetArg(dispatch.kernel, 6, in_w, "EnqueueConv3x3Nhwc4 arg6");
-  SetArg(dispatch.kernel, 7, out_h, "EnqueueConv3x3Nhwc4 arg7");
-  SetArg(dispatch.kernel, 8, out_w, "EnqueueConv3x3Nhwc4 arg8");
-  SetArg(dispatch.kernel, 9, pad_h, "EnqueueConv3x3Nhwc4 arg9");
-  SetArg(dispatch.kernel, 10, pad_w, "EnqueueConv3x3Nhwc4 arg10");
-  SetArg(dispatch.kernel, 11, in_channel_blocks, "EnqueueConv3x3Nhwc4 arg11");
-  SetArg(dispatch.kernel, 12, out_channel_blocks, "EnqueueConv3x3Nhwc4 arg12");
-  SetArg(dispatch.kernel, 13, in_logical_channels, "EnqueueConv3x3Nhwc4 arg13");
-  SetArg(dispatch.kernel, 14, out_logical_channels, "EnqueueConv3x3Nhwc4 arg14");
 
   // The tiled kernel computes every output channel block for one spatial tile
   // and batch plane; z is therefore batch-only, matching the CUDA mapping.
-  const size_t gz = static_cast<size_t>(batch);
-  EnqueueConvTile3D(dispatch.kernel, static_cast<size_t>(out_w), static_cast<size_t>(out_h), gz,
-                    queue, options, "EnqueueConv3x3Nhwc4");
+  EnqueueConvTile3D(dispatch.kernel, static_cast<size_t>(out.width),
+                    static_cast<size_t>(out.height), static_cast<size_t>(in.batch), queue, options,
+                    "EnqueueConv3x3Nhwc4");
 }
 
 void EnqueueConv1x1Nhwc4(const Conv1x1Dispatch& dispatch, cl_command_queue queue,
                          const EnqueueOptions& options) {
+  if (dispatch.kernel == nullptr) {
+    throw std::runtime_error("EnqueueConv1x1Nhwc4: null kernel");
+  }
   if (dispatch.input == nullptr || dispatch.output == nullptr) {
     throw std::runtime_error("EnqueueConv1x1Nhwc4: null input/output view");
   }
@@ -264,42 +407,13 @@ void EnqueueConv1x1Nhwc4(const Conv1x1Dispatch& dispatch, cl_command_queue queue
     throw std::runtime_error("EnqueueConv1x1Nhwc4: batch/spatial mismatch");
   }
 
-  const cl_int batch                = in.batch;
-  const cl_int height               = in.height;
-  const cl_int width                = in.width;
-  const cl_int in_channel_blocks    = in.channel_blocks;
-  const cl_int out_channel_blocks   = out.channel_blocks;
-  const cl_int in_logical_channels  = in.logical_channels;
-  const cl_int out_logical_channels = out.logical_channels;
-  const cl_int apply_relu           = dispatch.apply_relu != 0 ? 1 : 0;
-
-  cl_mem input_buf  = in.buffer;
-  cl_mem output_buf = out.buffer;
-  cl_mem weights    = dispatch.weights;
-  cl_mem bias       = dispatch.bias;
-
-  SetArg(dispatch.kernel, 0, input_buf, "EnqueueConv1x1Nhwc4 arg0");
-  SetArg(dispatch.kernel, 1, weights, "EnqueueConv1x1Nhwc4 arg1");
-  if (bias != nullptr) {
-    SetArg(dispatch.kernel, 2, bias, "EnqueueConv1x1Nhwc4 arg2");
-  } else {
-    CheckOpenCl(clSetKernelArg(dispatch.kernel, 2, sizeof(cl_mem), nullptr),
-                "EnqueueConv1x1Nhwc4 arg2 null bias");
+  if (!dispatch.all_args_bound) {
+    BindConv1x1Nhwc4DispatchArgs(dispatch);
   }
-  SetArg(dispatch.kernel, 3, output_buf, "EnqueueConv1x1Nhwc4 arg3");
-  SetArg(dispatch.kernel, 4, batch, "EnqueueConv1x1Nhwc4 arg4");
-  SetArg(dispatch.kernel, 5, height, "EnqueueConv1x1Nhwc4 arg5");
-  SetArg(dispatch.kernel, 6, width, "EnqueueConv1x1Nhwc4 arg6");
-  SetArg(dispatch.kernel, 7, in_channel_blocks, "EnqueueConv1x1Nhwc4 arg7");
-  SetArg(dispatch.kernel, 8, out_channel_blocks, "EnqueueConv1x1Nhwc4 arg8");
-  SetArg(dispatch.kernel, 9, in_logical_channels, "EnqueueConv1x1Nhwc4 arg9");
-  SetArg(dispatch.kernel, 10, out_logical_channels, "EnqueueConv1x1Nhwc4 arg10");
-  SetArg(dispatch.kernel, 11, apply_relu, "EnqueueConv1x1Nhwc4 arg11");
 
   // One work-item owns one spatial position and all output channel blocks.
-  const size_t gz = static_cast<size_t>(batch);
-  Enqueue3D(dispatch.kernel, static_cast<size_t>(width), static_cast<size_t>(height), gz, queue,
-            options, "EnqueueConv1x1Nhwc4");
+  Enqueue3D(dispatch.kernel, static_cast<size_t>(out.width), static_cast<size_t>(out.height),
+            static_cast<size_t>(in.batch), queue, options, "EnqueueConv1x1Nhwc4");
 }
 
 auto EventDurationNs(cl_event event) -> std::uint64_t {

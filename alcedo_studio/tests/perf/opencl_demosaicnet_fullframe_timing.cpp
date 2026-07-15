@@ -538,13 +538,16 @@ void WriteJson(const fs::path& path, const std::vector<RunStats>& runs,
   std::ostringstream oss;
   oss << std::fixed << std::setprecision(4);
   oss << "{\n";
-  oss << "  \"phase\": \"7.3\",\n";
+  oss << "  \"phase\": \"7.4\",\n";
   oss << "  \"device\": {\n";
   oss << "    \"name\": \"" << EscapeJson(caps.name) << "\",\n";
   oss << "    \"vendor\": \"" << EscapeJson(caps.vendor) << "\",\n";
   oss << "    \"driver_version\": \"" << EscapeJson(caps.driver_version) << "\",\n";
   oss << "    \"device_version\": \"" << EscapeJson(caps.device_version) << "\",\n";
   oss << "    \"opencl_c_version\": \"" << EscapeJson(caps.opencl_c_version) << "\",\n";
+  oss << "    \"extensions\": \"" << EscapeJson(caps.extensions) << "\",\n";
+  oss << "    \"command_buffer_extension\": "
+      << (caps.SupportsExtension("cl_khr_command_buffer") ? "true" : "false") << ",\n";
   oss << "    \"max_clock_frequency_mhz\": " << caps.max_clock_frequency_mhz << ",\n";
   oss << "    \"compute_units\": " << caps.compute_units << ",\n";
   oss << "    \"global_memory_bytes\": " << caps.global_memory_bytes << "\n";
@@ -740,7 +743,10 @@ auto main(int argc, char** argv) -> int {
       OpenCL::DemosaicNet::kStructuralBuildOptions + "]";
   std::cout << "Neural options: " << neural_build_options << "\n";
   std::cout << "Warmup: " << warmup << "  measured iterations: " << iterations << "\n";
-  std::cout << "Phase 7.3 telemetry: wall / event timestamps / API counters.\n";
+  std::cout << "Phase 7.4 telemetry: wall / event timestamps / API counters.\n";
+  std::cout << "Command buffer replay: "
+            << (caps.SupportsExtension("cl_khr_command_buffer") ? "available" : "unavailable")
+            << " (ordinary in-order path retained)\n";
 
   const auto telem_before = QueryGpuTelemetry();
   if (telem_before.available) {

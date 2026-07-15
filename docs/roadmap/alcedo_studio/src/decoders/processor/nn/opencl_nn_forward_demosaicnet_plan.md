@@ -1,8 +1,8 @@
 # OpenCL NN Forward DemosaicNet Migration and Alignment Plan
 
-**Status:** Correctness, product routing, Phase 7.0 telemetry, Phase 7.1 residency, Phase 7.2, and Phase 7.3 are complete; both local OpenCL full-frame means pass the `<500 ms` acceptance gate
+**Status:** Correctness, product routing, Phase 7.0 telemetry, Phase 7.1 residency, Phase 7.2, Phase 7.3, and Phase 7.4 are complete; both local OpenCL full-frame means pass the `<500 ms` acceptance gate
 **Date:** 2026-07-14  
-**Updated:** 2026-07-14 after direct NHWC4 tile packing and post/output stage profiling
+**Updated:** 2026-07-15 after Phase 7.4 submission-overhead profiling
 **Primary roadmap owner:** `alcedo_studio/src/decoders/processor/nn`  
 **Scope:** Port the CUDA DemosaicNet forward path to OpenCL without introducing a general-purpose inference runtime.
 
@@ -786,6 +786,48 @@ The event profile records the material retained layers independently:
 No additional fusion was retained for phase crop, tile assembly, output RGB extraction, or
 RGB/RGBA conversion: each remains below the material boundary threshold, and the direct pack and
 residual comparisons meet the existing `1e-4` FP32 contract.
+
+### 12.11 Phase 7.4 submission-overhead reduction — 2026-07-15
+
+Implemented only the measured submission optimization:
+
+| Piece | Implementation |
+|---|---|
+| Per-layer kernel ownership | Each trunk layer, residual 1x1, post 3x3, and output 1x1 owns a dedicated resident `cl_kernel`; mutable kernel argument state is never shared between weighted layers. |
+| Immutable argument binding | Weights, bias, logical/physical channel metadata, and the 1x1 ReLU flag are bound once when the model cache entry becomes ready. Each tile only binds its input/output buffers and spatial dimensions. |
+| Portable fallback | The ordinary in-order enqueue path remains the product path. The selected NVIDIA device reports no `cl_khr_command_buffer`, so command-buffer replay is not retained or required for correctness. Device extensions are now recorded by the performance harness. |
+
+The Phase 7.3 event profile showed host enqueue wall of **123.35 ms Bayer / 112.02 ms X-Trans**
+against device execution of **279.00 ms / 302.33 ms**. That made submission work material, while
+the actual queued-to-submit delay was only **1.24 ms / 1.13 ms**; the dominant removable part was
+the repeated host-side argument binding and mutable-kernel setup.
+
+Validation on the local NVIDIA GeForce RTX 3080 Laptop GPU (driver 610.62):
+
+- `OpenClNnPrimitivesTest` and `OpenClDemosaicNetTest`: **24/24 passed**;
+- all four exported student references and direct HWC3-vs-NCHW comparisons remain within absolute
+  tolerance `1e-4`;
+- hot product counters remain at zero `create_sub_buffer`, zero `create_kernel`, zero program
+  builds, zero D2H bytes, and one final wait;
+- cold kernel creation is expected to rise to 20 Bayer / 12 X-Trans because each weighted layer
+  now owns its own immutable-argument kernel object; this cost is outside the hot mean;
+- event-profiled host enqueue mean becomes **103.97 ms Bayer / 104.19 ms X-Trans**, a reduction of
+  approximately **15.7% / 7.0%** from Phase 7.3;
+- unprofiled wall means are **345.94 ms Bayer / 367.29 ms X-Trans**, compared with Phase 7.3's
+  **390.01 ms / 419.55 ms**. This is an improvement of approximately **11.3% / 12.5%**; the
+  comparison is reported with GPU telemetry because clock and temperature vary between sessions;
+  the event host-enqueue reduction is the direct optimization signal;
+- artifacts: `build/perf/opencl_nn_phase7_4_wall.json` and
+  `build/perf/opencl_nn_phase7_4_event.json`.
+
+Exit gate status:
+
+- the retained launch optimization improves the measured host-submit component by more than 3%
+  and the full-frame wall means remain below 500 ms — **pass**;
+- command-buffer replay is not retained because `cl_khr_command_buffer` is absent on the selected
+  device — **pass with portable fallback**;
+- ordinary and fallback behavior remain unchanged because no optional extension is required —
+  **pass**.
 
 ## 13. Implementation phases and exit gates
 

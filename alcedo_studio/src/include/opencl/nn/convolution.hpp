@@ -42,6 +42,20 @@ void PackOhwi4o4iFromOihw(const float* oihw, int out_channels, int in_channels, 
 // They never call clFinish; product code waits once at the Neural stage end.
 // ---------------------------------------------------------------------------
 
+// Bind arguments that are immutable for one fixed network layer. The enqueue
+// helpers bind the input/output buffers and spatial dimensions on the first
+// dispatch, unless a resident caller supplies all_args_bound after binding
+// them separately. A layer must use a dedicated cl_kernel object after calling
+// one of these functions; cl_kernel argument state is mutable.
+void BindConv3x3Nhwc4InvariantArgs(cl_kernel kernel, cl_mem weights, cl_mem bias,
+                                   int in_channel_blocks, int out_channel_blocks,
+                                   int in_logical_channels, int out_logical_channels);
+
+void BindConv1x1Nhwc4InvariantArgs(cl_kernel kernel, cl_mem weights, cl_mem bias,
+                                   int in_channel_blocks, int out_channel_blocks,
+                                   int in_logical_channels, int out_logical_channels,
+                                   int apply_relu);
+
 // Optional event for development harness timing. When non-null, the enqueue
 // retains a CL event the caller must release after profiling.
 struct EnqueueOptions {
@@ -84,7 +98,18 @@ struct Conv3x3Dispatch {
   cl_mem               bias    = nullptr;  // length out_logical_channels, or nullptr
   int                  pad_h   = 0;
   int                  pad_w   = 0;
+  // When true, args 1, 2, and 11..14 were installed by
+  // BindConv3x3Nhwc4InvariantArgs on this dedicated kernel object.
+  bool                 invariant_args_bound = false;
+  // When true, all remaining launch arguments are already installed on the
+  // dedicated kernel object and the enqueue helper only submits the NDRange.
+  bool                 all_args_bound = false;
 };
+
+// Installs the launch arguments that depend on the current tensor geometry.
+// This is separate from enqueue so a resident caller can bind them once and
+// replay the same fixed-shape dispatch across several tiles.
+void BindConv3x3Nhwc4DispatchArgs(const Conv3x3Dispatch& dispatch);
 
 // Validates geometry and enqueues. Does not synchronize.
 void EnqueueConv3x3Nhwc4(const Conv3x3Dispatch& dispatch, cl_command_queue queue,
@@ -104,7 +129,13 @@ struct Conv1x1Dispatch {
   cl_mem               weights    = nullptr;  // OHWI4o4i 1x1
   cl_mem               bias       = nullptr;  // optional
   int                  apply_relu = 1;
+  // When true, args 1, 2, and 7..11 were installed by
+  // BindConv1x1Nhwc4InvariantArgs on this dedicated kernel object.
+  bool                 invariant_args_bound = false;
+  bool                 all_args_bound       = false;
 };
+
+void BindConv1x1Nhwc4DispatchArgs(const Conv1x1Dispatch& dispatch);
 
 void EnqueueConv1x1Nhwc4(const Conv1x1Dispatch& dispatch, cl_command_queue queue,
                          const EnqueueOptions& options = {});

@@ -25,6 +25,7 @@ struct OpenClDeviceCapabilities {
   std::string           driver_version;
   std::string           device_version;
   std::string           opencl_c_version;
+  std::string           extensions;
   cl_device_type        device_type                 = 0;
   cl_uint               compute_units               = 0;
   cl_uint               max_clock_frequency_mhz     = 0;
@@ -37,6 +38,8 @@ struct OpenClDeviceCapabilities {
   bool                  image_support               = false;
   bool                  available                   = false;
   bool                  compiler_available          = false;
+
+  [[nodiscard]] auto SupportsExtension(std::string_view extension) const -> bool;
 };
 
 struct OpenClInitializationOptions {

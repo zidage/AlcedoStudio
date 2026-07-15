@@ -107,6 +107,7 @@ auto QueryCapabilities(cl_device_id device) -> OpenClDeviceCapabilities {
   capabilities.driver_version   = GetDeviceInfoString(device, CL_DRIVER_VERSION);
   capabilities.device_version   = GetDeviceInfoString(device, CL_DEVICE_VERSION);
   capabilities.opencl_c_version = GetDeviceInfoString(device, CL_DEVICE_OPENCL_C_VERSION);
+  capabilities.extensions       = GetDeviceInfoString(device, CL_DEVICE_EXTENSIONS);
   capabilities.device_type      = GetDeviceInfoValue<cl_device_type>(device, CL_DEVICE_TYPE);
   capabilities.compute_units    = GetDeviceInfoValue<cl_uint>(device, CL_DEVICE_MAX_COMPUTE_UNITS);
   capabilities.max_clock_frequency_mhz =
@@ -426,6 +427,23 @@ OpenClContext::~OpenClContext() {
 auto OpenClContext::Instance() -> OpenClContext& {
   static OpenClContext instance;
   return instance;
+}
+
+auto OpenClDeviceCapabilities::SupportsExtension(const std::string_view extension) const -> bool {
+  if (extension.empty()) {
+    return false;
+  }
+  std::size_t offset = 0;
+  while ((offset = extensions.find(extension, offset)) != std::string::npos) {
+    const bool begins_token = offset == 0 || extensions[offset - 1] == ' ';
+    const auto  end         = offset + extension.size();
+    const bool ends_token   = end == extensions.size() || extensions[end] == ' ';
+    if (begins_token && ends_token) {
+      return true;
+    }
+    offset = end;
+  }
+  return false;
 }
 
 void OpenClContext::Initialize(const OpenClInitializationOptions& options) {

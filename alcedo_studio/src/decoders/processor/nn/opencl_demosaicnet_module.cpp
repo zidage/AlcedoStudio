@@ -72,6 +72,90 @@ class KernelHolder {
   cl_kernel kernel_ = nullptr;
 };
 
+// A fixed network layer owns a dedicated kernel object so its immutable
+// arguments can be installed once at model-load time. OpenCL kernel argument
+// state is mutable, therefore sharing one kernel across trunk layers would
+// make this optimization unsafe.
+struct BoundConvKernel {
+  struct Conv3x3LaunchKey {
+    cl_mem input   = nullptr;
+    cl_mem output  = nullptr;
+    int    batch   = 0;
+    int    in_h    = 0;
+    int    in_w    = 0;
+    int    out_h   = 0;
+    int    out_w   = 0;
+    int    pad_h   = 0;
+    int    pad_w   = 0;
+
+    bool operator==(const Conv3x3LaunchKey&) const = default;
+  };
+
+  struct Conv1x1LaunchKey {
+    cl_mem input  = nullptr;
+    cl_mem output = nullptr;
+    int    batch  = 0;
+    int    height = 0;
+    int    width  = 0;
+
+    bool operator==(const Conv1x1LaunchKey&) const = default;
+  };
+
+  KernelHolder kernel;
+  cl_mem       weights = nullptr;
+  cl_mem       bias    = nullptr;
+
+  void Bind3x3(const cl_mem weights_in, const cl_mem bias_in, const int in_blocks,
+               const int out_blocks, const int in_channels, const int out_channels) {
+    weights = weights_in;
+    bias    = bias_in;
+    nn_ocl::BindConv3x3Nhwc4InvariantArgs(kernel.get(), weights, bias, in_blocks, out_blocks,
+                                          in_channels, out_channels);
+  }
+
+  void Bind1x1(const cl_mem weights_in, const cl_mem bias_in, const int in_blocks,
+               const int out_blocks, const int in_channels, const int out_channels,
+               const int apply_relu) {
+    weights = weights_in;
+    bias    = bias_in;
+    nn_ocl::BindConv1x1Nhwc4InvariantArgs(kernel.get(), weights, bias, in_blocks, out_blocks,
+                                          in_channels, out_channels, apply_relu);
+  }
+
+  // Product decode is serialized by g_neural_decode_mutex, so the mutable
+  // launch arguments can be resident on this kernel object. The key also
+  // invalidates the cache when a boundary tile changes geometry or a caller
+  // supplies different slot buffers.
+  void Prepare3x3(const nn_ocl::Conv3x3Dispatch& dispatch) const {
+    const auto& in  = *dispatch.input;
+    const auto& out = *dispatch.output;
+    const Conv3x3LaunchKey key{in.buffer,  out.buffer, in.batch, in.height, in.width,
+                               out.height, out.width, dispatch.pad_h, dispatch.pad_w};
+    if (!has_3x3_launch_ || key != launch_3x3_) {
+      nn_ocl::BindConv3x3Nhwc4DispatchArgs(dispatch);
+      launch_3x3_     = key;
+      has_3x3_launch_ = true;
+    }
+  }
+
+  void Prepare1x1(const nn_ocl::Conv1x1Dispatch& dispatch) const {
+    const auto& in  = *dispatch.input;
+    const auto& out = *dispatch.output;
+    const Conv1x1LaunchKey key{in.buffer, out.buffer, in.batch, in.height, in.width};
+    if (!has_1x1_launch_ || key != launch_1x1_) {
+      nn_ocl::BindConv1x1Nhwc4DispatchArgs(dispatch);
+      launch_1x1_     = key;
+      has_1x1_launch_ = true;
+    }
+  }
+
+ private:
+  mutable bool               has_3x3_launch_ = false;
+  mutable Conv3x3LaunchKey   launch_3x3_;
+  mutable bool               has_1x1_launch_ = false;
+  mutable Conv1x1LaunchKey   launch_1x1_;
+};
+
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
@@ -250,13 +334,14 @@ struct ModuleState {
   nn_ocl::DeviceBuffer output_w_;
   nn_ocl::DeviceBuffer output_b_;
 
-  // Kernels created once at load.
+  // Kernels created once at load. Every weighted layer has its own kernel
+  // object because clSetKernelArg mutates kernel state.
   KernelHolder         pack;
   KernelHolder         pack_reflect_hwc;
-  KernelHolder         conv3x3;
-  KernelHolder         conv3x3_c6;
-  KernelHolder         conv1x1;
-  KernelHolder         conv1x1_output3;
+  BoundConvKernel      trunk[8];
+  BoundConvKernel      residual;
+  BoundConvKernel      post;
+  BoundConvKernel      output;
   KernelHolder         unpack_concat;
   KernelHolder         unpack_reflect_concat;
   KernelHolder         output_rgb;
@@ -282,10 +367,12 @@ void CreateKernels(ModuleState& s, bool is_bayer) {
   cl_program  conv_prog   = lib.GetProgram(conv_name);
   cl_program  struct_prog = lib.GetProgram(OpenCL::DemosaicNet::kStructuralProgramName);
 
-  s.conv3x3               = KernelHolder(conv_prog, OpenCL::DemosaicNet::kConv3x3KernelName);
-  s.conv3x3_c6            = KernelHolder(conv_prog, OpenCL::DemosaicNet::kConv3x3C6KernelName);
-  s.conv1x1               = KernelHolder(conv_prog, OpenCL::DemosaicNet::kConv1x1KernelName);
-  s.conv1x1_output3       = KernelHolder(conv_prog, OpenCL::DemosaicNet::kConv1x1Output3KernelName);
+  for (int i = 0; i < s.depth; ++i) {
+    s.trunk[i].kernel = KernelHolder(conv_prog, OpenCL::DemosaicNet::kConv3x3KernelName);
+  }
+  s.residual.kernel = KernelHolder(conv_prog, OpenCL::DemosaicNet::kConv1x1KernelName);
+  s.post.kernel     = KernelHolder(conv_prog, OpenCL::DemosaicNet::kConv3x3C6KernelName);
+  s.output.kernel  = KernelHolder(conv_prog, OpenCL::DemosaicNet::kConv1x1Output3KernelName);
   s.pack = KernelHolder(struct_prog, is_bayer ? OpenCL::DemosaicNet::kPackBayerNchwKernelName
                                               : OpenCL::DemosaicNet::kPackXTransNchwKernelName);
   s.pack_reflect_hwc =
@@ -295,6 +382,23 @@ void CreateKernels(ModuleState& s, bool is_bayer) {
   s.unpack_reflect_concat =
       KernelHolder(struct_prog, OpenCL::DemosaicNet::kUnpackReflectConcatKernelName);
   s.output_rgb = KernelHolder(struct_prog, OpenCL::DemosaicNet::kOutputRgbHwcKernelName);
+}
+
+void BindLayerArguments(ModuleState& s) {
+  const int trunk_blocks = nn_ocl::ChannelBlocks(s.width);
+  for (int i = 0; i < s.depth; ++i) {
+    const int input_channels = i == 0 ? s.pack_out_ch : s.width;
+    s.trunk[i].Bind3x3(s.trunk_w_[i].get(), s.trunk_b_[i].get(),
+                       nn_ocl::ChannelBlocks(input_channels), trunk_blocks, input_channels,
+                       s.width);
+  }
+  s.residual.Bind1x1(s.residual_w_.get(), s.residual_b_.get(), trunk_blocks,
+                     nn_ocl::ChannelBlocks(s.residual_ch), s.width, s.residual_ch,
+                     /*apply_relu=*/0);
+  s.post.Bind3x3(s.post_w_.get(), s.post_b_.get(), /*in_blocks=*/2, trunk_blocks,
+                 /*in_channels=*/6, s.width);
+  s.output.Bind1x1(s.output_w_.get(), s.output_b_.get(), trunk_blocks, /*out_blocks=*/1, s.width,
+                   /*out_channels=*/3, /*apply_relu=*/0);
 }
 
 void LoadCommonWeights(ModuleState& s, const nn::SafetensorsTensorMap& tensors, int depth,
@@ -355,6 +459,7 @@ void LoadCommonWeights(ModuleState& s, const nn::SafetensorsTensorMap& tensors, 
   }
 
   CreateKernels(s, is_bayer);
+  BindLayerArguments(s);
   s.loaded = true;
 }
 
@@ -475,13 +580,16 @@ void ForwardImpl(const ModuleState& s, cl_mem input, int batch, int height, int 
     auto      in_view  = nn_ocl::Nhwc4TensorView::Contiguous(cur, batch, cur_h, cur_w, cur_c);
     auto      out_view = nn_ocl::Nhwc4TensorView::Contiguous(next, batch, next_h, next_w, s.width);
     nn_ocl::Conv3x3Dispatch d;
-    d.kernel  = s.conv3x3.get();
+    d.kernel  = s.trunk[i].kernel.get();
     d.input   = &in_view;
     d.output  = &out_view;
-    d.weights = s.trunk_w_[i].get();
-    d.bias    = s.trunk_b_[i].get();
+    d.weights = s.trunk[i].weights;
+    d.bias    = s.trunk[i].bias;
     d.pad_h   = 0;
     d.pad_w   = 0;
+    d.invariant_args_bound = true;
+    s.trunk[i].Prepare3x3(d);
+    d.all_args_bound = true;
     nn_ocl::EnqueueConv3x3Nhwc4(d, queue);
     std::swap(cur, next);
     cur_h = next_h;
@@ -496,12 +604,15 @@ void ForwardImpl(const ModuleState& s, cl_mem input, int batch, int height, int 
     auto in_view  = nn_ocl::Nhwc4TensorView::Contiguous(cur, batch, cur_h, cur_w, s.width);
     auto out_view = nn_ocl::Nhwc4TensorView::Contiguous(next, batch, cur_h, cur_w, s.residual_ch);
     nn_ocl::Conv1x1Dispatch d;
-    d.kernel     = s.conv1x1.get();
+    d.kernel     = s.residual.kernel.get();
     d.input      = &in_view;
     d.output     = &out_view;
-    d.weights    = s.residual_w_.get();
-    d.bias       = s.residual_b_.get();
+    d.weights    = s.residual.weights;
+    d.bias       = s.residual.bias;
     d.apply_relu = 0;
+    d.invariant_args_bound = true;
+    s.residual.Prepare1x1(d);
+    d.all_args_bound = true;
     nn_ocl::EnqueueConv1x1Nhwc4(d, queue);
   }
   // residual is in next; reuse cur for C6 concat.
@@ -568,13 +679,16 @@ void ForwardImpl(const ModuleState& s, cl_mem input, int batch, int height, int 
     auto out_view =
         nn_ocl::Nhwc4TensorView::Contiguous(residual_buf, batch, post_h, post_w, s.width);
     nn_ocl::Conv3x3Dispatch d;
-    d.kernel  = s.conv3x3_c6.get();
+    d.kernel  = s.post.kernel.get();
     d.input   = &in_view;
     d.output  = &out_view;
-    d.weights = s.post_w_.get();
-    d.bias    = s.post_b_.get();
+    d.weights = s.post.weights;
+    d.bias    = s.post.bias;
     d.pad_h   = 0;
     d.pad_w   = 0;
+    d.invariant_args_bound = true;
+    s.post.Prepare3x3(d);
+    d.all_args_bound = true;
     nn_ocl::EnqueueConv3x3Nhwc4(d, queue);
   }
   nn_ocl::FinishDemosaicNetStage("post_3x3", queue);
@@ -586,12 +700,15 @@ void ForwardImpl(const ModuleState& s, cl_mem input, int batch, int height, int 
         nn_ocl::Nhwc4TensorView::Contiguous(residual_buf, batch, post_h, post_w, s.width);
     auto out_view = nn_ocl::Nhwc4TensorView::Contiguous(cat_buf, batch, post_h, post_w, 3);
     nn_ocl::Conv1x1Dispatch d;
-    d.kernel     = s.conv1x1_output3.get();
+    d.kernel     = s.output.kernel.get();
     d.input      = &in_view;
     d.output     = &out_view;
-    d.weights    = s.output_w_.get();
-    d.bias       = s.output_b_.get();
+    d.weights    = s.output.weights;
+    d.bias       = s.output.bias;
     d.apply_relu = 0;
+    d.invariant_args_bound = true;
+    s.output.Prepare1x1(d);
+    d.all_args_bound = true;
     nn_ocl::EnqueueConv1x1Nhwc4(d, queue);
   }
   nn_ocl::FinishDemosaicNetStage("output_tail", queue);
