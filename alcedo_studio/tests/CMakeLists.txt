@@ -485,6 +485,24 @@ if(ALCEDO_METAL_ENABLED)
   gtest_discover_tests(MetalRawOpsTest TEST_PREFIX "MetalRawOpsTest."
     PROPERTIES LABELS "ci_metal_runtime")
 
+  # Phase 4: Metal Neural RAW product path (hard-fail), geometry, thumbnail Legacy.
+  add_executable(MetalRawNeuralTest raw/metal_raw_neural_test.cpp)
+  target_include_directories(MetalRawNeuralTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_compile_definitions(MetalRawNeuralTest PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+  )
+  target_link_libraries(MetalRawNeuralTest PRIVATE
+    GTest::gtest_main
+    RawProcessor
+    MetalDemosaicNetEntry
+    MetalDemosaicNet
+    MetalImage
+    MetalContext
+    ${ALCEDO_TEST_OPENCV_MIN_DEPS}
+  )
+  gtest_discover_tests(MetalRawNeuralTest TEST_PREFIX "MetalRawNeuralTest."
+    PROPERTIES LABELS "ci_metal_runtime")
+
   add_executable(MetalRawStagePreviewTest raw/metal_raw_stage_preview_test.cpp)
   target_include_directories(MetalRawStagePreviewTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(MetalRawStagePreviewTest PRIVATE GTest::gtest_main EditPipeline RawProcessor ThreadPool opencv_highgui ${ALCEDO_TEST_OPENCV_MIN_DEPS})
@@ -1417,6 +1435,7 @@ alcedo_assign_test_category(raw ALCEDO_BUILD_RAW_TESTS alcedo_tests_raw
   RawProcessorCropTest
   OpenClRawOpsTest
   OpenClRawNeuralTest
+  MetalRawNeuralTest
   MetalRawStagePreviewTest
   MetalFullPipelinePreviewTest
 )
@@ -1528,7 +1547,9 @@ alcedo_assign_test_category(ci_metal ALCEDO_BUILD_CI_TESTS alcedo_tests_ci_metal
   MetalUtilsTest
   MetalDemosaicNetGraphTest
   MetalDemosaicNetModuleTest
+  MetalDemosaicNetIoTest
   MetalRawOpsTest
+  MetalRawNeuralTest
   MetalRawStagePreviewTest
   MetalFullPipelinePreviewTest
 )

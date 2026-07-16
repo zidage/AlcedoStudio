@@ -1,6 +1,6 @@
 # Metal MPSGraph DemosaicNet Plan
 
-**Status:** In progress (Phase 3 complete)  
+**Status:** In progress (Phase 4 complete)  
 **Date:** 2026-07-15  
 **Primary roadmap area:** Alcedo Studio RAW processing  
 **Target platform:** macOS 13.3 or newer, Apple Silicon, Metal backend  
@@ -630,6 +630,8 @@ Completion checks:
 
 ### Phase 4 — Integrate the Metal RAW path
 
+**Status:** Complete (2026-07-16)
+
 Work:
 
 - branch on `RawDemosaicMethod::NeuralEngine` in `ProcessMetal()`;
@@ -639,6 +641,16 @@ Work:
 - continue through inverse camera multiplier, DNG warp, and orientation;
 - add strict exception propagation;
 - keep thumbnail routing on Legacy.
+
+Delivered:
+
+- `metal_demosaicnet.hpp/.cpp` — product entry `metal::DemosaicWithNeuralEngine`
+  (hard-fail only; crop-sized RGBA publish after success; stage+variant errors);
+- `ProcessMetal()` Neural branch: clamp when HLR off, `ComputeNeuralAlignedGeometry`,
+  student `NeuralOutputGeometry`, crop before entry, no catch-to-Legacy;
+- `RawProcessor` links `MetalDemosaicNetEntry`;
+- `MetalRawNeuralTest` — Bayer/X-Trans product geometry, injected stage failures,
+  HLR-on, multi-tile single host wait, thumbnail Legacy with zero cache activity.
 
 Completion checks:
 

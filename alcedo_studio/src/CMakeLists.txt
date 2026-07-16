@@ -503,10 +503,11 @@ if(ALCEDO_METAL_ENABLED)
         "-framework MetalPerformanceShadersGraph"
     )
 
-    # Phase 3: tile input / crop-sized output orchestration (RAW entry is Phase 4).
+    # Phase 3–4: tile IO orchestration + product RAW Neural entry (hard-fail).
     def_library(MetalDemosaicNetEntry
         SOURCES
             decoders/processor/nn/metal_demosaicnet_tiled.mm
+            decoders/processor/operators/gpu/metal_demosaicnet.cpp
         PUBLIC_DEPS
             MetalDemosaicNet
             MetalImage
@@ -518,6 +519,7 @@ if(ALCEDO_METAL_ENABLED)
     target_compile_definitions(MetalDemosaicNetEntry PUBLIC HAVE_METAL)
     target_compile_definitions(MetalDemosaicNetEntry PRIVATE
         ALCEDO_METAL_DEMOSAICNET_IO_METALLIB_PATH="${METAL_DEMOSAICNET_IO_METALLIB}"
+        ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config/models"
     )
     target_compile_options(MetalDemosaicNetEntry PRIVATE
         $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
@@ -926,6 +928,9 @@ def_library(RawProcessor
 )
 if(ALCEDO_CUDA_ENABLED)
     target_link_libraries(RawProcessor PRIVATE CudaDemosaicNetEntry)
+endif()
+if(ALCEDO_METAL_ENABLED)
+    target_link_libraries(RawProcessor PRIVATE MetalDemosaicNetEntry MetalGeometryUtils)
 endif()
 if(ALCEDO_OPENCL_ENABLED)
     target_link_libraries(RawProcessor PRIVATE OpenClGeometryUtils OpenClDemosaicNetEntry)
