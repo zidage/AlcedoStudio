@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include "metal/compute_pipeline_cache.hpp"
 #include "metal/metal_context.hpp"
 
 namespace alcedo {
@@ -42,6 +43,10 @@ auto ToObjcBuffer(MTL::Buffer* buffer) -> id<MTLBuffer> {
 
 auto ToObjcCommandBuffer(MTL::CommandBuffer* command_buffer) -> id<MTLCommandBuffer> {
   return (__bridge id<MTLCommandBuffer>)(reinterpret_cast<void*>(command_buffer));
+}
+
+auto ToObjcTexture(MTL::Texture* texture) -> id<MTLTexture> {
+  return (__bridge id<MTLTexture>)(reinterpret_cast<void*>(texture));
 }
 
 auto NSErrorMessage(NSError* error) -> std::string {
@@ -223,9 +228,15 @@ struct GraphModule {
   bool ready = false;
 
   GraphGeometry geometry;
+  int           post_channels = 0;  // 24 Bayer / 32 X-Trans
 
-  NS::SharedPtr<MTL::Buffer> input_buffer;
-  NS::SharedPtr<MTL::Buffer> output_buffer;
+  NS::SharedPtr<MTL::Buffer> input_buffer;   // [N,Hin,Win,3]
+  NS::SharedPtr<MTL::Buffer> output_buffer;  // graph concat [N,Hcat,Wcat,6]
+  // Fused-tail weights (shared, filled once at load; immutable on hot path).
+  NS::SharedPtr<MTL::Buffer> post_w_buffer;      // OIHW [Cout,6,3,3] flat
+  NS::SharedPtr<MTL::Buffer> post_b_buffer;      // [Cout]
+  NS::SharedPtr<MTL::Buffer> out_w_cio_buffer;   // prepacked [Cout,3]
+  NS::SharedPtr<MTL::Buffer> out_b_buffer;       // [3]
 
   // ARC-retained graph objects. Kept alive for the life of the executable.
   // Move transfers ownership by nulling the source so the moved-from destructor
@@ -260,8 +271,13 @@ struct GraphModule {
     Reset();
     ready                         = other.ready;
     geometry                      = other.geometry;
+    post_channels                 = other.post_channels;
     input_buffer                  = std::move(other.input_buffer);
     output_buffer                 = std::move(other.output_buffer);
+    post_w_buffer                 = std::move(other.post_w_buffer);
+    post_b_buffer                 = std::move(other.post_b_buffer);
+    out_w_cio_buffer              = std::move(other.out_w_cio_buffer);
+    out_b_buffer                  = std::move(other.out_b_buffer);
     graph                         = other.graph;
     input_tensor                  = other.input_tensor;
     output_tensor                 = other.output_tensor;
@@ -276,6 +292,7 @@ struct GraphModule {
 
     other.ready                         = false;
     other.geometry                      = {};
+    other.post_channels                 = 0;
     other.graph                         = nil;
     other.input_tensor                  = nil;
     other.output_tensor                 = nil;
@@ -293,8 +310,13 @@ struct GraphModule {
   void Reset() {
     ready                         = false;
     geometry                      = {};
+    post_channels                 = 0;
     input_buffer.reset();
     output_buffer.reset();
+    post_w_buffer.reset();
+    post_b_buffer.reset();
+    out_w_cio_buffer.reset();
+    out_b_buffer.reset();
     graph                         = nil;
     input_tensor                  = nil;
     output_tensor                 = nil;
@@ -411,29 +433,26 @@ auto ConvBiasRelu(MPSGraph* graph, MPSGraphTensor* source, const nn::Safetensors
   return [graph reLUWithTensor:added name:[name_prefix stringByAppendingString:@"_relu"]];
 }
 
-auto ExplicitResidualUnpack(MPSGraph* graph, MPSGraphTensor* residual_nhwc12, int residual_h,
-                            NSString* name_prefix) -> MPSGraphTensor* {
-  // residual: [1, H, W, 12] → [1, H, W, 3, 2, 2] → [1, H, 2, W, 2, 3] → [1, 2H, 2W, 3]
-  MPSGraphTensor* packed =
-      [graph reshapeTensor:residual_nhwc12
-                 withShape:@[ @1, @(residual_h), @(residual_h), @3, @2, @2 ]
-                      name:[name_prefix stringByAppendingString:@"_pack"]];
-  MPSGraphTensor* transposed =
-      [graph transposeTensor:packed
-                 permutation:@[ @0, @1, @4, @2, @5, @3 ]
-                        name:[name_prefix stringByAppendingString:@"_tr"]];
-  const int up = residual_h * 2;
-  return [graph reshapeTensor:transposed
-                    withShape:@[ @1, @(up), @(up), @3 ]
-                         name:[name_prefix stringByAppendingString:@"_up"]];
+auto NativeResidualUnpack(MPSGraph* graph, MPSGraphTensor* residual_nhwc12,
+                          NSString* name_prefix) -> MPSGraphTensor* {
+  // The safetensors unpack order is [rgb, subpixel_y, subpixel_x]. MPSGraph's
+  // pixel-shuffle order stores each spatial block contiguously in depth, which
+  // matches that [rgb, y, x] channel order for this model.
+  return [graph depthToSpace2DTensor:residual_nhwc12
+                           widthAxis:2
+                          heightAxis:1
+                           depthAxis:3
+                           blockSize:2
+                usePixelShuffleOrder:YES
+                                  name:name_prefix];
 }
 
 auto CenterSliceNHWC(MPSGraph* graph, MPSGraphTensor* source, int source_h, int out_h, int top,
-                     NSString* name) -> MPSGraphTensor* {
+                     int batch_size, NSString* name) -> MPSGraphTensor* {
   (void)source_h;
   return [graph sliceTensor:source
                      starts:@[ @0, @(top), @(top), @0 ]
-                       ends:@[ @1, @(top + out_h), @(top + out_h), @3 ]
+                       ends:@[ @(batch_size), @(top + out_h), @(top + out_h), @3 ]
                     strides:@[ @1, @1, @1, @1 ]
                        name:name];
 }
@@ -450,10 +469,12 @@ void BuildGraph(GraphModule& module, const nn::SafetensorsTensorMap& tensors, bo
       is_bayer ? MetalBayerDemosaicNet::kTileInput : MetalXTransDemosaicNet::kTileInput;
   const int tile_output =
       is_bayer ? MetalBayerDemosaicNet::kTileOutput : MetalXTransDemosaicNet::kTileOutput;
+  constexpr int batch_size = 2;
   const int pack_factor = 2;
 
   module.geometry =
       MakeGeometry(tile_input, tile_output, depth, width, pack_out_ch, residual_ch, pack_factor);
+  module.post_channels = width;
 
   // Validate fixed pack / unpack arrays (pack is used as a real conv; unpack is structural only).
   {
@@ -475,7 +496,7 @@ void BuildGraph(GraphModule& module, const nn::SafetensorsTensorMap& tensors, bo
   graph.options   = MPSGraphOptionsNone;
   module.graph    = graph;
 
-  MPSShape* input_shape = MakeShape(1, tile_input, tile_input, 3);
+  MPSShape* input_shape = MakeShape(batch_size, tile_input, tile_input, 3);
   module.input_tensor =
       [graph placeholderWithShape:input_shape dataType:MPSDataTypeFloat32 name:@"input"];
 
@@ -514,52 +535,87 @@ void BuildGraph(GraphModule& module, const nn::SafetensorsTensorMap& tensors, bo
                      @"residual");
   }
 
-  // Explicit residual unpack (reshape / transpose / reshape).
-  MPSGraphTensor* residual_rgb =
-      ExplicitResidualUnpack(graph, x, module.geometry.residual_h, @"unpack");
+  // Native depth-to-space replaces the materialized reshape / transpose / reshape sequence.
+  MPSGraphTensor* residual_rgb = NativeResidualUnpack(graph, x, @"unpack");
 
   // Center-crop the original graph input and concatenate on the channel axis.
+  // Graph ends here: the post/output/gamma tail is a fixed Metal kernel (CUDA P4-A style)
+  // so the 24/32-channel post activation is never materialized.
   MPSGraphTensor* skip =
       CenterSliceNHWC(graph, module.input_tensor, tile_input, module.geometry.unpacked_h,
-                      module.geometry.skip_top, @"skip_crop");
-  x = [graph concatTensors:@[ residual_rgb, skip ] dimension:3 name:@"concat"];
+                      module.geometry.skip_top, batch_size, @"skip_crop");
+  // The post convolution's OIHW weights consume the concat in the same order as
+  // CUDA/OpenCL's DemosaicNetUnpackCropConcatNhwc: the cropped sparse mosaic
+  // occupies channels 0..2 and the unpacked residual occupies channels 3..5.
+  // Reversing these inputs still produces a valid MPSGraph tensor, but applies
+  // every post-convolution weight to the wrong feature family.
+  module.output_tensor = [graph concatTensors:@[ skip, residual_rgb ] dimension:3 name:@"concat"];
 
-  // Post 3×3 + bias + ReLU, then 1×1 output + bias.
+  // Validate and account for fused-tail weights (uploaded as MTLBuffers in CompileAndBind).
   {
     const auto& weight = nn::RequireF32Tensor(tensors, "post_conv.weight", {width, 6, 3, 3});
     const auto& bias   = nn::RequireF32Tensor(tensors, "post_conv.bias", {width});
     add_bytes(weight);
     add_bytes(bias);
-    x = ConvBiasRelu(graph, x, weight, bias, width, 6, 3, 3, 1, /*apply_relu=*/true, @"post");
   }
   {
     const auto& weight = nn::RequireF32Tensor(tensors, "output.weight", {3, width, 1, 1});
     const auto& bias   = nn::RequireF32Tensor(tensors, "output.bias", {3});
     add_bytes(weight);
     add_bytes(bias);
-    x = ConvBiasRelu(graph, x, weight, bias, 3, width, 1, 1, 1, /*apply_relu=*/false, @"output");
   }
-
-  // Final fixed center crop to 1024×1024.
-  module.output_tensor =
-      CenterSliceNHWC(graph, x, module.geometry.post_h, tile_output, module.geometry.final_top,
-                      @"export_crop");
   // unpack.weight is validated only; count its bytes for resident accounting.
   add_bytes(nn::RequireF32Tensor(tensors, "unpack.weight", {residual_ch, 1, 2, 2}));
   module.resident_weight_bytes = weight_bytes;
 }
 
-void CompileAndBind(GraphModule& module, MTL::Device* device, const char* module_name) {
+[[nodiscard]] auto MakeSharedWeightBuffer(MTL::Device* device, const float* data,
+                                          std::size_t count, const char* module_name,
+                                          const char* label) -> NS::SharedPtr<MTL::Buffer> {
+  if (data == nullptr || count == 0) {
+    throw std::runtime_error(std::string(module_name) +
+                             ": Metal Neural Engine failed (stage=load): empty " + label);
+  }
+  const std::size_t bytes = count * sizeof(float);
+  auto buffer = NS::TransferPtr(
+      device->newBuffer(static_cast<NS::UInteger>(bytes), MTL::ResourceStorageModeShared));
+  if (!buffer) {
+    throw std::runtime_error(std::string(module_name) +
+                             ": Metal Neural Engine failed (stage=load): allocate " + label);
+  }
+  std::memcpy(buffer->contents(), data, bytes);
+  return buffer;
+}
+
+// OIHW [3, width, 1, 1] → CIO [width, 3] so each post channel's RGB weights are contiguous.
+[[nodiscard]] auto PrepackOutputWeightsCio(const nn::SafetensorsTensor& oihw, int width)
+    -> std::vector<float> {
+  std::vector<float> cio(static_cast<std::size_t>(width) * 3U);
+  for (int co = 0; co < width; ++co) {
+    for (int c = 0; c < 3; ++c) {
+      cio[static_cast<std::size_t>(co) * 3U + static_cast<std::size_t>(c)] =
+          oihw.data[static_cast<std::size_t>(c) * static_cast<std::size_t>(width) +
+                    static_cast<std::size_t>(co)];
+    }
+  }
+  return cio;
+}
+
+void CompileAndBind(GraphModule& module, MTL::Device* device,
+                    const nn::SafetensorsTensorMap& tensors, const char* module_name) {
   id<MTLDevice> objc_device = ToObjcDevice(device);
   if (objc_device == nil) {
     throw std::runtime_error(std::string(module_name) +
                              ": Metal Neural Engine failed (stage=compile): null device");
   }
 
-  const int tile_input  = module.geometry.tile_input;
-  const int tile_output = module.geometry.tile_output;
-  MPSShape* input_shape  = MakeShape(1, tile_input, tile_input, 3);
-  MPSShape* output_shape = MakeShape(1, tile_output, tile_output, 3);
+  const int tile_input   = module.geometry.tile_input;
+  const int cat_h        = module.geometry.unpacked_h;
+  const int width        = module.post_channels;
+  constexpr int batch_size = 2;
+  constexpr int cat_ch     = 6;
+  MPSShape* input_shape  = MakeShape(batch_size, tile_input, tile_input, 3);
+  MPSShape* output_shape = MakeShape(batch_size, cat_h, cat_h, cat_ch);
 
   MPSGraphShapedType* feed_type =
       [[MPSGraphShapedType alloc] initWithShape:input_shape dataType:MPSDataTypeFloat32];
@@ -595,9 +651,10 @@ void CompileAndBind(GraphModule& module, MTL::Device* device, const char* module
   ++module.compile_count;
 
   const std::size_t input_bytes =
-      static_cast<std::size_t>(1) * tile_input * tile_input * 3U * sizeof(float);
+      static_cast<std::size_t>(batch_size) * tile_input * tile_input * 3U * sizeof(float);
   const std::size_t output_bytes =
-      static_cast<std::size_t>(1) * tile_output * tile_output * 3U * sizeof(float);
+      static_cast<std::size_t>(batch_size) * cat_h * cat_h * static_cast<std::size_t>(cat_ch) *
+      sizeof(float);
 
   module.input_buffer =
       NS::TransferPtr(device->newBuffer(static_cast<NS::UInteger>(input_bytes),
@@ -610,6 +667,25 @@ void CompileAndBind(GraphModule& module, MTL::Device* device, const char* module
                              ": Metal Neural Engine failed (stage=prepare): tile buffer allocation");
   }
   ++module.input_output_allocation_count;
+
+  // Fused-tail weights: post OIHW as-is, output prepacked CIO once at cold load.
+  {
+    const auto& post_w = nn::RequireF32Tensor(tensors, "post_conv.weight", {width, 6, 3, 3});
+    const auto& post_b = nn::RequireF32Tensor(tensors, "post_conv.bias", {width});
+    const auto& out_w  = nn::RequireF32Tensor(tensors, "output.weight", {3, width, 1, 1});
+    const auto& out_b  = nn::RequireF32Tensor(tensors, "output.bias", {3});
+    module.post_w_buffer =
+        MakeSharedWeightBuffer(device, post_w.data.data(), post_w.data.size(), module_name,
+                               "post_w");
+    module.post_b_buffer =
+        MakeSharedWeightBuffer(device, post_b.data.data(), post_b.data.size(), module_name,
+                               "post_b");
+    const std::vector<float> out_cio = PrepackOutputWeightsCio(out_w, width);
+    module.out_w_cio_buffer =
+        MakeSharedWeightBuffer(device, out_cio.data(), out_cio.size(), module_name, "out_w_cio");
+    module.out_b_buffer =
+        MakeSharedWeightBuffer(device, out_b.data.data(), out_b.data.size(), module_name, "out_b");
+  }
 
   module.input_data =
       [[MPSGraphTensorData alloc] initWithMTLBuffer:ToObjcBuffer(module.input_buffer.get())
@@ -675,7 +751,7 @@ void LoadModule(GraphModule& module, const nn::SafetensorsTensorMap& tensors, bo
   });
 
   MTL::Device* device = ResolveDevice(device_in);
-  RunObjc("compile", [&] { CompileAndBind(staging, device, module_name); });
+  RunObjc("compile", [&] { CompileAndBind(staging, device, tensors, module_name); });
 
   // Publish only after full success.
   module = std::move(staging);
@@ -691,7 +767,6 @@ void EncodeGraph(const GraphModule& module, void* mps_command_buffer, const char
                              ": Metal Neural Engine failed (stage=graph_encode): null command buffer");
   }
   MPSCommandBuffer* command_buffer = (__bridge MPSCommandBuffer*)mps_command_buffer;
-  module.last_encode_error         = nil;
   NSArray<MPSGraphTensorData*>* results =
       [module.executable encodeToCommandBuffer:command_buffer
                                    inputsArray:@[ module.input_data ]
@@ -701,6 +776,146 @@ void EncodeGraph(const GraphModule& module, void* mps_command_buffer, const char
     throw std::runtime_error(std::string(module_name) +
                              ": Metal Neural Engine failed (stage=graph_encode): encode returned nil");
   }
+}
+
+auto GetFusedTailPipeline(const char* function_name) -> NS::SharedPtr<MTL::ComputePipelineState> {
+#ifndef ALCEDO_METAL_DEMOSAICNET_IO_METALLIB_PATH
+  (void)function_name;
+  throw std::runtime_error(
+      "Metal Neural Engine failed (stage=tile_output): demosaicnet_io metallib path is not "
+      "configured");
+#else
+  return metal::ComputePipelineCache::Instance().GetPipelineState(
+      ALCEDO_METAL_DEMOSAICNET_IO_METALLIB_PATH, function_name, "Metal DemosaicNet Fused Tail");
+#endif
+}
+
+void Dispatch2D(id<MTLComputeCommandEncoder> encoder, id<MTLComputePipelineState> pipeline,
+                int width, int height) {
+  const NSUInteger thread_width =
+      std::max<NSUInteger>(1, pipeline.threadExecutionWidth);
+  const NSUInteger thread_height =
+      std::max<NSUInteger>(1, pipeline.maxTotalThreadsPerThreadgroup / thread_width);
+  const MTLSize threads_per_threadgroup = MTLSizeMake(thread_width, thread_height, 1);
+  const MTLSize threads_per_grid =
+      MTLSizeMake(static_cast<NSUInteger>(std::max(width, 1)),
+                  static_cast<NSUInteger>(std::max(height, 1)), 1);
+  [encoder dispatchThreads:threads_per_grid threadsPerThreadgroup:threads_per_threadgroup];
+}
+
+[[nodiscard]] auto FusedRgbaKernelName(int post_channels) -> const char* {
+  if (post_channels == 24) {
+    return "demosaicnet_fused_tail_rgba_w24";
+  }
+  if (post_channels == 32) {
+    return "demosaicnet_fused_tail_rgba_w32";
+  }
+  throw std::runtime_error(
+      "Metal Neural Engine failed (stage=tile_output): post_channels must be 24 or 32");
+}
+
+[[nodiscard]] auto FusedNhwcKernelName(int post_channels) -> const char* {
+  if (post_channels == 24) {
+    return "demosaicnet_fused_tail_nhwc_w24";
+  }
+  if (post_channels == 32) {
+    return "demosaicnet_fused_tail_nhwc_w32";
+  }
+  throw std::runtime_error(
+      "Metal Neural Engine failed (stage=tile_output): post_channels must be 24 or 32");
+}
+
+void EncodeFusedTailRgbaImpl(const GraphModule& module, id<MTLCommandBuffer> command_buffer,
+                             id<MTLTexture> output_rgba, const DemosaicNetFusedTailParams& params,
+                             const char* module_name) {
+  if (!module.ready || module.output_buffer.get() == nullptr ||
+      module.post_w_buffer.get() == nullptr || module.post_b_buffer.get() == nullptr ||
+      module.out_w_cio_buffer.get() == nullptr || module.out_b_buffer.get() == nullptr) {
+    throw std::runtime_error(std::string(module_name) +
+                             ": Metal Neural Engine failed (stage=tile_output): not ready");
+  }
+  if (command_buffer == nil || output_rgba == nil) {
+    throw std::runtime_error(std::string(module_name) +
+                             ": Metal Neural Engine failed (stage=tile_output): null command or "
+                             "texture");
+  }
+  if (params.owned_w <= 0 || params.owned_h <= 0 || params.cat_h < 3 || params.cat_w < 3 ||
+      params.export_h < 1 || params.export_w < 1) {
+    throw std::runtime_error(std::string(module_name) +
+                             ": Metal Neural Engine failed (stage=tile_output): invalid fused "
+                             "geometry");
+  }
+
+  auto pipeline_cpp = GetFusedTailPipeline(FusedRgbaKernelName(module.post_channels));
+  id<MTLComputePipelineState> pipeline =
+      (__bridge id<MTLComputePipelineState>)(reinterpret_cast<void*>(pipeline_cpp.get()));
+
+  id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+  if (encoder == nil) {
+    throw std::runtime_error(std::string(module_name) +
+                             ": Metal Neural Engine failed (stage=tile_output): compute encoder");
+  }
+  encoder.label = @"DemosaicNet Fused Tail RGBA";
+  [encoder setComputePipelineState:pipeline];
+  [encoder setBuffer:ToObjcBuffer(module.output_buffer.get()) offset:0 atIndex:0];
+  [encoder setBuffer:ToObjcBuffer(module.post_w_buffer.get()) offset:0 atIndex:1];
+  [encoder setBuffer:ToObjcBuffer(module.post_b_buffer.get()) offset:0 atIndex:2];
+  [encoder setBuffer:ToObjcBuffer(module.out_w_cio_buffer.get()) offset:0 atIndex:3];
+  [encoder setBuffer:ToObjcBuffer(module.out_b_buffer.get()) offset:0 atIndex:4];
+  [encoder setBytes:&params length:sizeof(params) atIndex:5];
+  [encoder setTexture:output_rgba atIndex:0];
+  Dispatch2D(encoder, pipeline, params.owned_w, params.owned_h);
+  [encoder endEncoding];
+}
+
+void EncodeFusedTailNhwcImpl(const GraphModule& module, id<MTLCommandBuffer> command_buffer,
+                             id<MTLBuffer> rgb_nhwc, const DemosaicNetFusedTailParams& params,
+                             const char* module_name) {
+  if (!module.ready || module.output_buffer.get() == nullptr ||
+      module.post_w_buffer.get() == nullptr || module.post_b_buffer.get() == nullptr ||
+      module.out_w_cio_buffer.get() == nullptr || module.out_b_buffer.get() == nullptr) {
+    throw std::runtime_error(std::string(module_name) +
+                             ": Metal Neural Engine failed (stage=tile_output): not ready");
+  }
+  if (command_buffer == nil || rgb_nhwc == nil) {
+    throw std::runtime_error(std::string(module_name) +
+                             ": Metal Neural Engine failed (stage=tile_output): null command or "
+                             "rgb buffer");
+  }
+
+  auto pipeline_cpp = GetFusedTailPipeline(FusedNhwcKernelName(module.post_channels));
+  id<MTLComputePipelineState> pipeline =
+      (__bridge id<MTLComputePipelineState>)(reinterpret_cast<void*>(pipeline_cpp.get()));
+
+  id<MTLComputeCommandEncoder> encoder = [command_buffer computeCommandEncoder];
+  if (encoder == nil) {
+    throw std::runtime_error(std::string(module_name) +
+                             ": Metal Neural Engine failed (stage=tile_output): compute encoder");
+  }
+  encoder.label = @"DemosaicNet Fused Tail NHWC";
+  [encoder setComputePipelineState:pipeline];
+  [encoder setBuffer:ToObjcBuffer(module.output_buffer.get()) offset:0 atIndex:0];
+  [encoder setBuffer:ToObjcBuffer(module.post_w_buffer.get()) offset:0 atIndex:1];
+  [encoder setBuffer:ToObjcBuffer(module.post_b_buffer.get()) offset:0 atIndex:2];
+  [encoder setBuffer:ToObjcBuffer(module.out_w_cio_buffer.get()) offset:0 atIndex:3];
+  [encoder setBuffer:ToObjcBuffer(module.out_b_buffer.get()) offset:0 atIndex:4];
+  [encoder setBuffer:rgb_nhwc offset:0 atIndex:5];
+  [encoder setBytes:&params length:sizeof(params) atIndex:6];
+  Dispatch2D(encoder, pipeline, params.export_w, params.export_h);
+  [encoder endEncoding];
+}
+
+[[nodiscard]] auto MakeReferenceTailParams(const GraphModule& module, int batch_index,
+                                           int apply_gamma) -> DemosaicNetFusedTailParams {
+  DemosaicNetFusedTailParams p;
+  p.batch_index = batch_index;
+  p.cat_h       = module.geometry.unpacked_h;
+  p.cat_w       = module.geometry.unpacked_h;
+  p.export_h    = module.geometry.tile_output;
+  p.export_w    = module.geometry.tile_output;
+  p.final_crop  = module.geometry.final_top;
+  p.apply_gamma = apply_gamma;
+  return p;
 }
 
 void NchwToNhwc(const float* nchw, float* nhwc, int h, int w) {
@@ -742,28 +957,33 @@ void ForwardNchw(const GraphModule& module, const float* input_nchw, float* outp
 
   const int tile_input  = module.geometry.tile_input;
   const int tile_output = module.geometry.tile_output;
+  constexpr int batch_size = 2;
   const std::size_t input_elems =
-      static_cast<std::size_t>(1) * 3U * tile_input * tile_input;
-  const std::size_t output_elems =
-      static_cast<std::size_t>(1) * 3U * tile_output * tile_output;
+      static_cast<std::size_t>(batch_size) * 3U * tile_input * tile_input;
+  // Fused tail writes NHWC RGB for both batch lanes; reference reads lane 0 only.
+  const std::size_t rgb_elems =
+      static_cast<std::size_t>(batch_size) * 3U * tile_output * tile_output;
 
   MTL::Device*       device = ResolveDevice(nullptr);
   MTL::CommandQueue* queue  = ResolveQueue();
 
   auto host_in = NS::TransferPtr(device->newBuffer(static_cast<NS::UInteger>(input_elems * sizeof(float)),
                                                    MTL::ResourceStorageModeShared));
-  auto host_out =
-      NS::TransferPtr(device->newBuffer(static_cast<NS::UInteger>(output_elems * sizeof(float)),
+  auto host_rgb =
+      NS::TransferPtr(device->newBuffer(static_cast<NS::UInteger>(rgb_elems * sizeof(float)),
                                         MTL::ResourceStorageModeShared));
-  if (!host_in || !host_out) {
+  if (!host_in || !host_rgb) {
     throw std::runtime_error(std::string(module_name) +
                              ": Metal Neural Engine failed (stage=prepare): staging allocation");
   }
 
-  NchwToNhwc(input_nchw, static_cast<float*>(ToObjcBuffer(host_in.get()).contents), tile_input,
-             tile_input);
+  float* host_in_ptr = static_cast<float*>(ToObjcBuffer(host_in.get()).contents);
+  const std::size_t one_input_elems = 3U * static_cast<std::size_t>(tile_input) * tile_input;
+  NchwToNhwc(input_nchw, host_in_ptr, tile_input, tile_input);
+  std::memcpy(host_in_ptr + one_input_elems, host_in_ptr, one_input_elems * sizeof(float));
 
   RunObjc("graph_execute", [&] {
+    module.last_encode_error = nil;
     NS::SharedPtr<MTL::CommandBuffer> backing = NS::RetainPtr(queue->commandBuffer());
     if (!backing) {
       throw std::runtime_error(std::string(module_name) +
@@ -791,18 +1011,11 @@ void ForwardNchw(const GraphModule& module, const float* input_nchw, float* outp
 
     EncodeGraph(module, (__bridge void*)mps_cb, module_name);
 
-    id<MTLBlitCommandEncoder> download = [mps_cb blitCommandEncoder];
-    if (download == nil) {
-      throw std::runtime_error(
-          std::string(module_name) +
-          ": Metal Neural Engine failed (stage=graph_execute): download blit encoder");
-    }
-    [download copyFromBuffer:ToObjcBuffer(module.output_buffer.get())
-                sourceOffset:0
-                    toBuffer:ToObjcBuffer(host_out.get())
-           destinationOffset:0
-                        size:output_elems * sizeof(float)];
-    [download endEncoding];
+    // Graph product is concat [N,H,W,6]. Fused Metal tail produces export RGB without gamma.
+    const DemosaicNetFusedTailParams tail_params =
+        MakeReferenceTailParams(module, /*batch_index=*/0, /*apply_gamma=*/0);
+    EncodeFusedTailNhwcImpl(module, mps_cb, ToObjcBuffer(host_rgb.get()), tail_params,
+                            module_name);
 
     [mps_cb commit];
     [mps_cb waitUntilCompleted];
@@ -821,7 +1034,7 @@ void ForwardNchw(const GraphModule& module, const float* input_nchw, float* outp
     }
   });
 
-  NhwcToNchw(static_cast<const float*>(ToObjcBuffer(host_out.get()).contents), output_nchw,
+  NhwcToNchw(static_cast<const float*>(ToObjcBuffer(host_rgb.get()).contents), output_nchw,
              tile_output, tile_output);
 }
 
@@ -863,10 +1076,13 @@ auto MetalBayerDemosaicNet::OwnedBufferBytes() const -> std::size_t {
   }
   const auto& g = impl_->module.geometry;
   const std::size_t in =
-      static_cast<std::size_t>(1) * g.tile_input * g.tile_input * 3U * sizeof(float);
-  const std::size_t out =
-      static_cast<std::size_t>(1) * g.tile_output * g.tile_output * 3U * sizeof(float);
-  return in + out;
+      static_cast<std::size_t>(MetalBayerDemosaicNet::kBatchSize) * g.tile_input * g.tile_input *
+      3U * sizeof(float);
+  // Graph product is concat [N, unpacked, unpacked, 6].
+  const std::size_t cat =
+      static_cast<std::size_t>(MetalBayerDemosaicNet::kBatchSize) * g.unpacked_h * g.unpacked_h *
+      6U * sizeof(float);
+  return in + cat;
 }
 
 auto MetalBayerDemosaicNet::compile_count() const -> std::uint64_t {
@@ -885,9 +1101,25 @@ auto MetalBayerDemosaicNet::OutputBuffer() const -> MTL::Buffer* {
   return impl_ != nullptr ? impl_->module.output_buffer.get() : nullptr;
 }
 
+auto MetalBayerDemosaicNet::CatHeight() const -> int {
+  return impl_ != nullptr && impl_->module.ready ? impl_->module.geometry.unpacked_h : 0;
+}
+
+auto MetalBayerDemosaicNet::FinalCrop() const -> int {
+  return impl_ != nullptr && impl_->module.ready ? impl_->module.geometry.final_top : 0;
+}
+
 void MetalBayerDemosaicNet::EncodeOnMpsCommandBuffer(void* mps_command_buffer) const {
   RunObjc("graph_encode",
           [&] { EncodeGraph(impl_->module, mps_command_buffer, "MetalBayerDemosaicNet"); });
+}
+
+void MetalBayerDemosaicNet::EncodeFusedTailRgba(void* mtl_command_buffer, MTL::Texture* output_rgba,
+                                                const DemosaicNetFusedTailParams& params) const {
+  RunObjc("tile_output", [&] {
+    EncodeFusedTailRgbaImpl(impl_->module, (__bridge id<MTLCommandBuffer>)mtl_command_buffer,
+                            ToObjcTexture(output_rgba), params, "MetalBayerDemosaicNet");
+  });
 }
 
 void MetalBayerDemosaicNet::ClearLastEncodeError() const {
@@ -947,10 +1179,12 @@ auto MetalXTransDemosaicNet::OwnedBufferBytes() const -> std::size_t {
   }
   const auto& g = impl_->module.geometry;
   const std::size_t in =
-      static_cast<std::size_t>(1) * g.tile_input * g.tile_input * 3U * sizeof(float);
-  const std::size_t out =
-      static_cast<std::size_t>(1) * g.tile_output * g.tile_output * 3U * sizeof(float);
-  return in + out;
+      static_cast<std::size_t>(MetalXTransDemosaicNet::kBatchSize) * g.tile_input * g.tile_input *
+      3U * sizeof(float);
+  const std::size_t cat =
+      static_cast<std::size_t>(MetalXTransDemosaicNet::kBatchSize) * g.unpacked_h * g.unpacked_h *
+      6U * sizeof(float);
+  return in + cat;
 }
 
 auto MetalXTransDemosaicNet::compile_count() const -> std::uint64_t {
@@ -969,9 +1203,26 @@ auto MetalXTransDemosaicNet::OutputBuffer() const -> MTL::Buffer* {
   return impl_ != nullptr ? impl_->module.output_buffer.get() : nullptr;
 }
 
+auto MetalXTransDemosaicNet::CatHeight() const -> int {
+  return impl_ != nullptr && impl_->module.ready ? impl_->module.geometry.unpacked_h : 0;
+}
+
+auto MetalXTransDemosaicNet::FinalCrop() const -> int {
+  return impl_ != nullptr && impl_->module.ready ? impl_->module.geometry.final_top : 0;
+}
+
 void MetalXTransDemosaicNet::EncodeOnMpsCommandBuffer(void* mps_command_buffer) const {
   RunObjc("graph_encode",
           [&] { EncodeGraph(impl_->module, mps_command_buffer, "MetalXTransDemosaicNet"); });
+}
+
+void MetalXTransDemosaicNet::EncodeFusedTailRgba(void* mtl_command_buffer,
+                                                 MTL::Texture* output_rgba,
+                                                 const DemosaicNetFusedTailParams& params) const {
+  RunObjc("tile_output", [&] {
+    EncodeFusedTailRgbaImpl(impl_->module, (__bridge id<MTLCommandBuffer>)mtl_command_buffer,
+                            ToObjcTexture(output_rgba), params, "MetalXTransDemosaicNet");
+  });
 }
 
 void MetalXTransDemosaicNet::ClearLastEncodeError() const {

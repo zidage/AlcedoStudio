@@ -117,16 +117,15 @@ Metal RAW R32F CFA texture after ToLinearRef
   |     |     fixed 2x2 pack convolution
   |     |     valid 3x3 trunk convolutions + bias + ReLU
   |     |     1x1 residual convolution + bias
-  |     |     explicit residual unpack
-  |     |     center-cropped input skip + concatenate
-  |     |     valid 3x3 post convolution + bias + ReLU
-  |     |     1x1 output convolution + bias
-  |     |     fixed center crop to 1024x1024 RGB
+  |     |     native residual depth-to-space unpack
+  |     |     center-cropped input skip + concatenate → NHWC cat6
   |     |
-  |     +-- custom Metal output kernel
-  |           intersect the tile-owned ROI with the requested product crop
-  |           apply sign-preserving gamma 2.2
-  |           write FP32 RGBA directly into the final MetalImage texture
+  |     +-- fused Metal post/output/gamma tail
+  |           post 3x3 + bias + ReLU (registers; no post activation)
+  |           output 1x1 + bias
+  |           center crop to 1024 export
+  |           sign-preserving gamma 2.2
+  |           owned ROI ∩ product crop → FP32 RGBA MetalImage
   |
   +-- commit and wait after all tiles
   |
@@ -156,17 +155,19 @@ compiled MPSGraph executable.
 
 ## 6. Fixed MPSGraph network
 
-Build one graph for Bayer and one graph for X-Trans. Both use batch size one and static shapes.
-Static shapes allow graph compilation before the first timed tile and avoid per-boundary graph
-specialization. The shared tile planner already guarantees that every model input is the fixed
-square input size, including image edges.
+The original product baseline builds one graph for Bayer and one graph for X-Trans, both with
+batch size one and static shapes. Static shapes allow graph compilation before the first timed
+tile and avoid per-boundary graph specialization. The shared tile planner already guarantees that
+every model input is the fixed square input size, including image edges. The post-HWIO batch-2
+experiment is recorded below and remains separate from that baseline until it clears the retention
+gates.
 
 ### 6.1 Graph input and output
 
-| Variant | Input | Network output before assembly |
-|---|---:|---:|
-| Bayer | `[1, 1086, 1086, 3]` FP32 NHWC | `[1, 1024, 1024, 3]` FP32 NHWC |
-| X-Trans | `[1, 1048, 1048, 3]` FP32 NHWC | `[1, 1024, 1024, 3]` FP32 NHWC |
+| Variant | Input | Graph product (concat) | After fused Metal tail |
+|---|---:|---:|---:|
+| Bayer | `[2, 1086, 1086, 3]` FP32 NHWC | `[2, 1054, 1054, 6]` FP32 NHWC | product RGBA or ref `[1, 1024, 1024, 3]` |
+| X-Trans | `[2, 1048, 1048, 3]` FP32 NHWC | `[2, 1032, 1032, 6]` FP32 NHWC | product RGBA or ref `[1, 1024, 1024, 3]` |
 
 Create one private `MTLBuffer` for graph input and one private `MTLBuffer` for graph output. Wrap
 them with `MPSGraphTensorData`. Reuse these objects after warm-up. The output data array passed to
@@ -226,14 +227,18 @@ ordering. A one-hot unit test must check all twelve input channels.
 ### 6.6 Skip, post, and final crop
 
 Center-slice the original graph input to the unpacked residual size and concatenate the two RGB
-tensors on the channel axis. Apply:
+tensors on the channel axis. The MPSGraph product ends at this six-channel concat.
 
-- `post_conv`: valid 3×3 convolution, bias, ReLU;
-- `output`: 1×1 convolution and bias;
-- a final fixed center slice to 1024×1024.
+The fixed student post/output tail is a specialized Metal compute kernel (CUDA P4-A style), not
+additional MPSGraph convolutions:
 
-Signed gamma decode stays in the output Metal kernel. This keeps graph output binding simple and
-combines gamma with the unavoidable tile-to-texture write.
+- `post_conv`: valid 3×3, bias, ReLU — post channels held in registers (no 24/32-channel activation);
+- `output`: 1×1, bias;
+- center crop to 1024×1024 via export-pixel offsets into natural post space;
+- signed γ=2.2 decode combined with owned-ROI ∩ product-crop RGBA assembly.
+
+`ForwardNchwReference` uses the same fused kernel without gamma so module goldens stay absolute
+`1e-4`.
 
 ## 7. Command buffers and synchronization
 
@@ -293,6 +298,7 @@ alcedo_studio/tests/raw/
 
 alcedo_studio/tests/perf/
   metal_demosaicnet_fullframe_timing.cpp
+  metal_demosaicnet_tail_profile.mm
 ```
 
 ### 8.1 C++ boundary
@@ -742,6 +748,121 @@ is already continuously occupied. If graph-only work within the allowed design c
 remaining X-Trans reduction, the `500 ms` X-Trans requirement or the constraints that forbid
 precision/model/tile changes must be revisited explicitly rather than hidden by unrelated
 micro-optimizations.
+
+#### Fixed batch N=2 experiment and post-HWIO timeline (2026-07-16)
+
+The requested experiment was implemented with a static batch of two for both graph variants:
+
+- graph input/output shapes are `[2,H,W,3]`;
+- the resident private input/output buffers include both batch lanes;
+- two prepared tiles are encoded by one MPSGraph executable invocation;
+- the product still uses one MPSCommandBuffer and one final host wait;
+- an odd final tile is copied into lane 1 and lane 1 output is ignored;
+- `MetalDemosaicNetTiledResult` reports real tiles, graph invocations, and padded tiles.
+
+The odd-tile contract is covered by `MetalDemosaicNetIoTest.BatchTwoPairsTilesAndIgnoresOddDuplicate`:
+three Bayer tiles produce two graph invocations, four padded lanes, three assembled outputs, and one
+host wait. Model correctness, RAW routing, hard-failure behavior, and the thumbnail Legacy contract
+remain green.
+
+The experiment does **not** pass the retention gates. Release hot runs were executed in separate
+processes with one untimed warm-up and three measured runs:
+
+| Fixture | HWIO baseline mean (ms) | Batch-2 mean (ms) | Change | Tile throughput gate | Frame gate |
+|---|---:|---:|---:|---:|---:|
+| Bayer S5M2, 24 tiles | ~443.6 | **442.485** | ~0.3% faster | **Fail** — no 10% gain | Bayer regression limit passes |
+| X-Trans X-T5, 48 tiles | ~708.3 | **694.146** | ~2.0% faster | **Fail** — no 10% gain | **Fail** — below 8% reduction |
+
+The batch-2 resident tile buffers are approximately twice the batch-1 sizes. A single-variant run
+does not grow after the hot loop (`Bayer: 482,656,256 → 482,639,872 B`,
+`X-Trans: 598,016,000 → 597,983,232 B`), but the prescribed `--variant both` process showed
+X-Trans growth from `1,079,918,592` B after compile to `2,170,437,632` B after hot execution.
+That cross-variant result fails the no-sustained-allocation-growth gate and is not acceptable as a
+product baseline.
+
+For the post-HWIO Shader Timeline capture, use the `Metal GPU Counters` instrument in addition to
+`Metal System Trace`; the CLI report confirms `Shader Timeline: Enabled`. The captured hot X-Trans
+window had 115 target GPU intervals whose union was `646.127 ms`, with only `0.041 ms` total gap
+(`1.209 µs` maximum), so command-buffer gaps are not the bottleneck. The trace-labeled IO intervals
+were:
+
+| Timeline item | Hot trace observation |
+|---|---:|
+| input Metal kernel (`demosaicnet_tile_input_nhwc`) | 24 composite intervals, 97.231 ms summed |
+| output Metal kernel (`demosaicnet_tile_output_rgba`) | 48 composite intervals, 187.034 ms summed |
+| MPSGraph activity | 24 batch-2 internal activities, 102.113 ms summed, 4.255 ms mean |
+| pack / trunk | emitted as generic MPSGraph convolution shaders (`ndArrayConvolution2DA14`, `ndArrayConvWinogradBatched`) |
+| residual / unpack / concat | no separately timed named interval in the exported trace |
+| post + output | no separately timed named interval in the exported trace |
+| command-buffer gap | 0.041 ms total, 1.209 µs maximum |
+
+The IO rows are composite command labels and are intentionally not added to the MPSGraph total.
+The exported macOS 26 trace lists the generated shader names but does not attach per-operation
+durations to the MPSGraph node names, so pack/trunk/residual/unpack/concat/post/output cannot be
+honestly split further from this capture. The full-frame timings and allocation counters remain the
+authoritative gate results. Keep the experiment result as rejected until a graph-only change can
+meet the throughput, X-Trans, and allocation criteria together.
+
+#### Native depth-to-space and fixed-tail profile (2026-07-16)
+
+The residual unpack short experiment replaced the explicit
+`reshape → transpose → reshape` sequence with the macOS 12+ native
+`depthToSpace2DTensor:widthAxis:heightAxis:depthAxis:blockSize:usePixelShuffleOrder:name:`
+operation. The model's `[rgb, subpixel_y, subpixel_x]` channel order requires
+`usePixelShuffleOrder=YES`; `NO` was rejected by the twelve one-hot channel test. The test now
+checks every input channel and every output `[y, x, rgb]` position.
+
+The native operation was retained after separate Release controls on the M4, using the existing
+batch-2/HWIO graph and three hot full-frame runs per process:
+
+| Fixture | Explicit unpack mean | Native depth-to-space mean | Change |
+|---|---:|---:|---:|
+| Bayer S5M2, 24 tiles | 568.004 ms | **556.897 ms** | **−1.95%** |
+| X-Trans X-T5, 48 tiles | 895.062 ms | **861.116 ms** | **−3.79%** |
+
+The native graph remains within the existing deterministic `1e-4` reference tolerance. It does
+not close the 500 ms X-Trans target, so this is a small graph-only win rather than a complete
+performance solution.
+
+The development-only `MetalDemosaicNetTailProfile` harness isolates the exact post 3×3 + bias +
+ReLU + output 1×1 graph tail, with the real model weights, static batch-2 shapes, and the same 12
+Bayer / 24 X-Trans graph invocations as the full-frame executor. It measures only the MPSGraph
+tail, so it excludes gamma and is a conservative lower bound for the requested post/output/gamma
+tail share:
+
+| Fixture | Isolated post/output tail | Native full Neural mean | Lower-bound share |
+|---|---:|---:|---:|
+| Bayer S5M2 | 159.541 ms | 556.897 ms | **28.65%** |
+| X-Trans X-T5 | 300.196 ms | 861.116 ms | **34.86%** |
+
+Both variants exceed the conditional 10% threshold. MPSGraph exposes no API that guarantees
+fusion across these two convolutions. Following the CUDA P4-A / OpenCL fixed-tail approach, the
+product path was changed to cut the graph at residual/skip concat and run a specialized Metal
+compute kernel for the exact student tails `6→24→3` and `6→32→3`:
+
+- post valid 3×3 + bias + ReLU held in registers (no 24/32-channel activation buffer);
+- output 1×1 + bias;
+- signed γ=2.2 decode;
+- owned-ROI ∩ product-crop write into the crop-sized RGBA texture.
+
+Graph product is therefore NHWC concat `[2, unpacked_h, unpacked_h, 6]`. Tail weights
+(`post_conv` OIHW, `output` prepacked CIO) are uploaded once at cold load as shared
+`MTLBuffer`s. `ForwardNchwReference` uses the same fused kernel without gamma and writes an
+NHWC RGB buffer so module goldens stay absolute-tolerance `1e-4`. The ordinary
+`demosaicnet_tile_output_rgba` kernel remains for synthetic ownership/gamma unit tests that do
+not exercise the network.
+
+##### Fused-tail full-frame results (2026-07-16, M4, Release, 3 hot runs)
+
+Compared with the retained HWIO + batch-2 baseline (~443.6 / ~708.3 ms):
+
+| Fixture | Baseline mean | Fused-tail mean | Change | `<500 ms` |
+|---|---:|---:|---:|---|
+| Bayer S5M2, 24 tiles | ~443.6 ms | **377.107 ms** | **−15.0%** | **Pass** |
+| X-Trans X-T5, 48 tiles | ~708.3 ms | **591.726 ms** | **−16.5%** | Fail (~18% still needed) |
+
+JSON: `build/perf/metal_demosaicnet_m4_fused_tail.json`. Module host-reference and product RAW
+tests remain green. **Retain fused post/output/gamma as product default.**
 
 ### Phase 6 — Cleanup and documentation
 

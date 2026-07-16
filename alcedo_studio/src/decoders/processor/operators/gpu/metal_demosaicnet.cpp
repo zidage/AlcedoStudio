@@ -189,6 +189,9 @@ auto DemosaicWithNeuralEngine(const MetalImage& linear_cfa, const RawCfaPattern&
     g_last_telemetry.tiled_execution_ms   = tiled_execution_ms;
     g_last_telemetry.total_ms             = ElapsedMs(total_start);
     g_last_telemetry.tile_count           = tiled.tile_count;
+    g_last_telemetry.graph_invocation_count = tiled.graph_invocation_count;
+    g_last_telemetry.padded_tile_count      = tiled.padded_tile_count;
+    g_last_telemetry.batch_size             = 2;
     g_last_telemetry.host_wait_count      = tiled.host_wait_count;
   }
   return result;

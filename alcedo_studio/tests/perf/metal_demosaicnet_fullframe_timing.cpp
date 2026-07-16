@@ -154,7 +154,8 @@ void PrintResult(const FixtureResult& result) {
     process_values.push_back(sample.process_ms);
     std::cout << "  hot[" << i << "]: neural=" << sample.neural.tiled_execution_ms
               << " ms process=" << sample.process_ms
-              << " ms waits=" << sample.neural.host_wait_count << "\n";
+              << " ms waits=" << sample.neural.host_wait_count
+              << " graph_invocations=" << sample.neural.graph_invocation_count << "\n";
   }
   std::cout << "  mean: neural=" << NeuralMean(result) << " ms process=" << Mean(process_values)
             << " ms target=" << (NeuralMean(result) < 500.0 ? "PASS" : "FAIL") << "\n"
@@ -184,6 +185,9 @@ void WriteJson(const fs::path& path, const std::string& device_name,
         << "      \"variant\": \"" << r.variant << "\",\n"
         << "      \"width\": " << r.width << ", \"height\": " << r.height << ",\n"
         << "      \"tile_count\": " << r.cold_neural.tile_count << ",\n"
+        << "      \"batch_size\": " << r.cold_neural.batch_size << ",\n"
+        << "      \"graph_invocation_count\": " << r.cold_neural.graph_invocation_count << ",\n"
+        << "      \"padded_tile_count\": " << r.cold_neural.padded_tile_count << ",\n"
         << "      \"cold_parse_ms\": " << r.cold_parse_ms << ",\n"
         << "      \"cold_compile_ms\": " << r.cold_compile_ms << ",\n"
         << "      \"cold_first_neural_ms\": " << r.cold_neural.tiled_execution_ms << ",\n"

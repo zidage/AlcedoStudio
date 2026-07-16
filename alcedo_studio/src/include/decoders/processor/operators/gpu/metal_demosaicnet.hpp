@@ -55,6 +55,9 @@ struct NeuralDemosaicTelemetry {
   double        tiled_execution_ms   = 0.0;
   double        total_ms             = 0.0;
   std::size_t   tile_count           = 0;
+  std::size_t   graph_invocation_count = 0;
+  std::size_t   padded_tile_count      = 0;
+  int           batch_size            = 0;
   std::uint64_t host_wait_count      = 0;
 };
 

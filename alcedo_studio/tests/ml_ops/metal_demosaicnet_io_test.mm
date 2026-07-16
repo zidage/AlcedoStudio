@@ -512,6 +512,59 @@ TEST_F(MetalDemosaicNetIoTest, TiledExecutorReusesBuffersAndWaitsOnce) {
   EXPECT_EQ(result2.tile_count, result.tile_count);
 }
 
+TEST_F(MetalDemosaicNetIoTest, BatchTwoPairsTilesAndIgnoresOddDuplicate) {
+  auto& cache = MetalDemosaicNetModelCache::Instance();
+  if (!cache.EnsureLoaded(MetalDemosaicNetVariant::Bayer)) {
+    GTEST_SKIP() << "Bayer model unavailable: " << cache.LastError();
+  }
+
+  // Bayer's period-safe 1024-step planner produces three x-spans for 2100
+  // pixels and one y-span here: the final invocation must pad lane 1 by
+  // copying tile 2, then discard that duplicate output.
+  constexpr int kAlignedW = 2100;
+  constexpr int kAlignedH = 128;
+  cv::Mat host = MakeSyntheticCfa(kAlignedW + 2, kAlignedH + 2);
+  metal::MetalImage cfa = metal::MetalImage::Create2D(
+      kAlignedW + 2, kAlignedH + 2, metal::PixelFormat::R32FLOAT);
+  cfa.Upload(host);
+
+  const cv::Rect crop(0, 0, kAlignedW, kAlignedH);
+  metal::MetalImage out = metal::MetalImage::Create2D(
+      kAlignedW, kAlignedH, metal::PixelFormat::RGBA32FLOAT);
+  out.Upload(cv::Mat(kAlignedH, kAlignedW, CV_32FC4, cv::Scalar(0, 0, 0, 0)));
+
+  MetalDemosaicNetTiledDispatch dispatch;
+  dispatch.cfa_image       = &cfa;
+  dispatch.output_rgba     = &out;
+  dispatch.aligned_width   = kAlignedW;
+  dispatch.aligned_height  = kAlignedH;
+  dispatch.product_crop    = crop;
+  dispatch.commit_and_wait = true;
+
+  ResetMetalDemosaicNetHostWaitCountForTest();
+  MetalDemosaicNetTiledExecutor executor;
+  const auto result = executor.EnqueueBayer(cache.Bayer(), dispatch);
+
+  EXPECT_EQ(result.tile_count, 3U);
+  EXPECT_EQ(result.graph_invocation_count, 2U);
+  EXPECT_EQ(result.padded_tile_count, 4U);
+  EXPECT_EQ(result.tile_encode_count, 3U);
+  EXPECT_EQ(result.host_wait_count, 1U);
+  EXPECT_EQ(MetalDemosaicNetHostWaitCountForTest(), 1U);
+  EXPECT_FALSE(cache.Bayer().HasLastEncodeError());
+
+  cv::Mat downloaded;
+  out.Download(downloaded);
+  ASSERT_EQ(downloaded.type(), CV_32FC4);
+  for (int y = 0; y < downloaded.rows; ++y) {
+    for (int x = 0; x < downloaded.cols; ++x) {
+      const cv::Vec4f px = downloaded.at<cv::Vec4f>(y, x);
+      EXPECT_TRUE(std::isfinite(px[0]) && std::isfinite(px[1]) && std::isfinite(px[2]));
+      EXPECT_FLOAT_EQ(px[3], 1.0f);
+    }
+  }
+}
+
 TEST_F(MetalDemosaicNetIoTest, NoFullFrameStagingInDispatchContract) {
   // Structural contract: dispatch only holds the original CFA texture and crop-sized
   // RGBA output — no HWC3 intermediate fields exist on the public API.

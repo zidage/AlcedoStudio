@@ -320,7 +320,7 @@ TEST(MetalDemosaicNetGraphTest, ValidOihwConvolutionUsesPrivateBuffersAndOrdered
   });
 }
 
-TEST(MetalDemosaicNetGraphTest, ResidualUnpackMapsAllTwelveOneHotChannels) {
+TEST(MetalDemosaicNetGraphTest, NativeDepthToSpaceMapsAllTwelveOneHotChannels) {
   RunObjcBoundary([&] {
     @autoreleasepool {
       auto&              context = MetalContext::Instance();
@@ -344,21 +344,19 @@ TEST(MetalDemosaicNetGraphTest, ResidualUnpackMapsAllTwelveOneHotChannels) {
       MPSGraph* graph                  = [MPSGraph new];
       graph.options                    = MPSGraphOptionsNone;
       MPSShape*       input_shape      = @[ @12, @1, @1, @12 ];
-      MPSShape*       packed_shape     = @[ @12, @1, @1, @3, @2, @2 ];
-      MPSShape*       transposed_shape = @[ @12, @1, @2, @1, @2, @3 ];
       MPSShape*       output_shape     = @[ @12, @2, @2, @3 ];
       MPSGraphTensor* input            = [graph placeholderWithShape:input_shape
                                                  dataType:MPSDataTypeFloat32
                                                      name:@"input"];
-      MPSGraphTensor* packed     = [graph reshapeTensor:input withShape:packed_shape name:@"pack"];
-      MPSGraphTensor* transposed = [graph transposeTensor:packed
-                                              permutation:@[ @0, @1, @4, @2, @5, @3 ]
-                                                     name:@"transpose"];
-      ASSERT_TRUE([transposed.shape isEqual:transposed_shape]);
-      MPSGraphTensor* output = [graph reshapeTensor:transposed
-                                          withShape:output_shape
-                                               name:@"unpack"];
+      MPSGraphTensor* output = [graph depthToSpace2DTensor:input
+                                                 widthAxis:2
+                                                heightAxis:1
+                                                 depthAxis:3
+                                                 blockSize:2
+                                      usePixelShuffleOrder:YES
+                                                        name:@"unpack"];
       ASSERT_NE(output, nil);
+      ASSERT_TRUE([output.shape isEqual:output_shape]);
 
       MPSGraphShapedType* feed_type = [[MPSGraphShapedType alloc] initWithShape:input_shape
                                                                        dataType:MPSDataTypeFloat32];

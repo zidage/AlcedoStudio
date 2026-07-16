@@ -204,6 +204,7 @@ template <typename Module>
 auto EnqueueTiles(const Module& module, const MetalDemosaicNetTiledDispatch& dispatch,
                   const detail::NeuralTilePolicy& policy, bool is_xtrans, const char* variant)
     -> MetalDemosaicNetTiledResult {
+  static_assert(Module::kBatchSize == 2, "Metal experiment is intentionally fixed at batch N=2");
   if (!module.ready()) {
     ThrowStage("prepare", "module is not ready", variant);
   }
@@ -217,7 +218,8 @@ auto EnqueueTiles(const Module& module, const MetalDemosaicNetTiledDispatch& dis
 
   // Warm ComputePipelineCache before the timed tile loop.
   (void)GetIoPipeline("demosaicnet_tile_input_nhwc");
-  (void)GetIoPipeline("demosaicnet_tile_output_rgba");
+  (void)GetIoPipeline(Module::kWidth == 24 ? "demosaicnet_fused_tail_rgba_w24"
+                                           : "demosaicnet_fused_tail_rgba_w32");
 
   const auto jobs =
       detail::BuildTileJobs(cv::Rect(0, 0, dispatch.aligned_width, dispatch.aligned_height),
@@ -234,16 +236,26 @@ auto EnqueueTiles(const Module& module, const MetalDemosaicNetTiledDispatch& dis
   input_params.full_h    = static_cast<int>(dispatch.cfa_image->Height());
   FillDemosaicNetTrainingRgbFc(is_xtrans, input_params);
 
-  DemosaicNetTileOutputParams output_params;
-  output_params.tile_w = Module::kTileOutput;
-  output_params.tile_h = Module::kTileOutput;
-  output_params.crop_x = dispatch.product_crop.x;
-  output_params.crop_y = dispatch.product_crop.y;
-  output_params.crop_w = dispatch.product_crop.width;
-  output_params.crop_h = dispatch.product_crop.height;
+  // Fused post/output/gamma tail writes owned ROI ∩ product crop directly.
+  DemosaicNetFusedTailParams tail_params;
+  tail_params.cat_h       = module.CatHeight();
+  tail_params.cat_w       = module.CatHeight();
+  tail_params.export_h    = Module::kTileOutput;
+  tail_params.export_w    = Module::kTileOutput;
+  tail_params.final_crop  = module.FinalCrop();
+  tail_params.crop_x      = dispatch.product_crop.x;
+  tail_params.crop_y      = dispatch.product_crop.y;
+  tail_params.crop_w      = dispatch.product_crop.width;
+  tail_params.crop_h      = dispatch.product_crop.height;
+  tail_params.apply_gamma = 1;
+  if (tail_params.cat_h < 3 || tail_params.final_crop < 0) {
+    ThrowStage("prepare", "invalid fused-tail geometry from module", variant);
+  }
 
   MetalDemosaicNetTiledResult result;
-  result.tile_count = jobs.size();
+  result.tile_count             = jobs.size();
+  result.graph_invocation_count = (jobs.size() + 1U) / 2U;
+  result.padded_tile_count      = result.graph_invocation_count * 2U;
 
   module.ClearLastEncodeError();
 
@@ -260,35 +272,54 @@ auto EnqueueTiles(const Module& module, const MetalDemosaicNetTiledDispatch& dis
     }
 
     id<MTLTexture> cfa_tex = ToObjcTexture(dispatch.cfa_image->Texture());
-    id<MTLTexture> out_tex = ToObjcTexture(dispatch.output_rgba->Texture());
     id<MTLBuffer>  in_buf  = ToObjcBuffer(input_buffer);
-    id<MTLBuffer>  out_buf = ToObjcBuffer(output_buffer);
+    (void)output_buffer;  // Graph concat product; fused tail reads it via the module.
 
-    // Queue ordering makes one input/output buffer pair safe across tiles.
-    // There is deliberately no host wait inside this loop.
-    for (const auto& job : jobs) {
-      if (job.input_w != Module::kTileInput || job.input_h != Module::kTileInput ||
-          job.owned_w != Module::kTileOutput || job.owned_h != Module::kTileOutput ||
-          (job.input_origin.x % Module::kCfaPeriod) != 0 ||
-          (job.input_origin.y % Module::kCfaPeriod) != 0) {
-        ThrowStage("prepare", "invalid shared tile job geometry", variant);
+    // Queue ordering makes one batch-2 input/output buffer pair safe across
+    // invocations. There is deliberately no host wait inside this loop.
+    for (std::size_t base = 0; base < jobs.size(); base += 2U) {
+      for (int lane = 0; lane < 2; ++lane) {
+        // The last odd tile is copied into lane 1. Its graph result is never
+        // assembled, but feeding a complete static batch keeps the graph shape
+        // fixed and avoids a second batch-1 executable.
+        const std::size_t job_index =
+            std::min(base + static_cast<std::size_t>(lane), jobs.size() - 1U);
+        const auto&       job       = jobs[job_index];
+        if (job.input_w != Module::kTileInput || job.input_h != Module::kTileInput ||
+            job.owned_w != Module::kTileOutput || job.owned_h != Module::kTileOutput ||
+            (job.input_origin.x % Module::kCfaPeriod) != 0 ||
+            (job.input_origin.y % Module::kCfaPeriod) != 0) {
+          ThrowStage("prepare", "invalid shared tile job geometry", variant);
+        }
+
+        input_params.batch_index = lane;
+        input_params.origin_x   = job.input_origin.x;
+        input_params.origin_y   = job.input_origin.y;
+        EncodeTileInputImpl(mps_cb, cfa_tex, in_buf, input_params);
+        if (lane == 0 || base + 1U < jobs.size()) {
+          ++result.tile_encode_count;
+        }
       }
 
-      input_params.origin_x = job.input_origin.x;
-      input_params.origin_y = job.input_origin.y;
-      EncodeTileInputImpl(mps_cb, cfa_tex, in_buf, input_params);
-
+      // One MPSGraph invocation consumes both prepared tiles (through concat).
       module.EncodeOnMpsCommandBuffer((__bridge void*)mps_cb);
 
-      output_params.src_x0  = job.model_output_roi.x;
-      output_params.src_y0  = job.model_output_roi.y;
-      output_params.owned_w = job.model_output_roi.width;
-      output_params.owned_h = job.model_output_roi.height;
-      output_params.dst_x   = job.destination_roi.x;
-      output_params.dst_y   = job.destination_roi.y;
-      EncodeTileOutputImpl(mps_cb, out_buf, out_tex, output_params);
-
-      ++result.tile_encode_count;
+      for (int lane = 0; lane < 2; ++lane) {
+        if (base + static_cast<std::size_t>(lane) >= jobs.size()) {
+          break;  // The odd duplicate is intentionally ignored.
+        }
+        const auto& job = jobs[base + static_cast<std::size_t>(lane)];
+        tail_params.batch_index = lane;
+        tail_params.src_x0      = job.model_output_roi.x;
+        tail_params.src_y0      = job.model_output_roi.y;
+        tail_params.owned_w     = job.model_output_roi.width;
+        tail_params.owned_h     = job.model_output_roi.height;
+        tail_params.dst_x       = job.destination_roi.x;
+        tail_params.dst_y       = job.destination_roi.y;
+        // Fused Metal kernel: post 3×3 + ReLU + output 1×1 + gamma + RGBA write.
+        module.EncodeFusedTailRgba((__bridge void*)mps_cb, dispatch.output_rgba->Texture(),
+                                   tail_params);
+      }
     }
 
     [mps_cb commit];

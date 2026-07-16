@@ -276,7 +276,9 @@ auto HostForward(const nn::SafetensorsTensorMap& tensors, const std::vector<floa
 
   HostTensor residual_rgb = ResidualUnpack(x);
   HostTensor skip         = CenterCrop(original, residual_rgb.h, residual_rgb.w);
-  x                       = ConcatChannels(residual_rgb, skip);
+  // DemosaicNet post_conv consumes sparse mosaic RGB first, then residual RGB.
+  // This is the same C6 ABI used by CUDA/OpenCL product kernels.
+  x                       = ConcatChannels(skip, residual_rgb);
 
   {
     const auto& w = nn::RequireF32Tensor(tensors, "post_conv.weight", {width, 6, 3, 3});
@@ -363,9 +365,15 @@ TEST_F(MetalDemosaicNetModuleTest, XTransLoadAndCompileProducesResidentBuffers) 
   EXPECT_NE(net.InputBuffer(), nullptr);
   EXPECT_NE(net.OutputBuffer(), nullptr);
   EXPECT_EQ(net.InputBuffer()->length(),
-            static_cast<NS::UInteger>(1u * 1048u * 1048u * 3u * sizeof(float)));
+            static_cast<NS::UInteger>(MetalXTransDemosaicNet::kBatchSize * 1048u * 1048u * 3u *
+                                     sizeof(float)));
+  // Graph product is skip/residual concat [N, unpacked_h, unpacked_h, 6].
+  // X-Trans: packed=524, residual=516, unpacked=1032.
   EXPECT_EQ(net.OutputBuffer()->length(),
-            static_cast<NS::UInteger>(1u * 1024u * 1024u * 3u * sizeof(float)));
+            static_cast<NS::UInteger>(MetalXTransDemosaicNet::kBatchSize * 1032u * 1032u * 6u *
+                                     sizeof(float)));
+  EXPECT_EQ(net.CatHeight(), 1032);
+  EXPECT_GE(net.FinalCrop(), 0);
 }
 
 // ---------------------------------------------------------------------------

@@ -485,6 +485,7 @@ if(ALCEDO_METAL_ENABLED)
     target_compile_definitions(MetalDemosaicNet PUBLIC HAVE_METAL)
     target_compile_definitions(MetalDemosaicNet PRIVATE
         ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config/models"
+        ALCEDO_METAL_DEMOSAICNET_IO_METALLIB_PATH="${METAL_DEMOSAICNET_IO_METALLIB}"
     )
     target_compile_options(MetalDemosaicNet PRIVATE
         $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
@@ -496,6 +497,7 @@ if(ALCEDO_METAL_ENABLED)
             COMPILE_FLAGS "-fobjc-arc"
             LANGUAGE OBJCXX
     )
+    add_dependencies(MetalDemosaicNet MetalDemosaicNetIoShaders)
     target_link_libraries(MetalDemosaicNet PUBLIC
         "-framework Foundation"
         "-framework Metal"

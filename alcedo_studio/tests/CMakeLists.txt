@@ -521,6 +521,31 @@ if(ALCEDO_METAL_ENABLED)
     ${ALCEDO_TEST_OPENCV_MIN_DEPS}
   )
 
+  # Development-only isolated profile for the fixed post/output MPSGraph tail.
+  add_executable(MetalDemosaicNetTailProfile EXCLUDE_FROM_ALL
+    perf/metal_demosaicnet_tail_profile.mm
+  )
+  target_include_directories(MetalDemosaicNetTailProfile PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_compile_definitions(MetalDemosaicNetTailProfile PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+  )
+  target_compile_options(MetalDemosaicNetTailProfile PRIVATE
+    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
+  )
+  set_source_files_properties(perf/metal_demosaicnet_tail_profile.mm PROPERTIES
+    COMPILE_FLAGS "-fobjc-arc"
+    LANGUAGE OBJCXX
+  )
+  target_link_libraries(MetalDemosaicNetTailProfile PRIVATE
+    NnSafetensors
+    MetalContext
+    alcedo::metal_cpp
+    "-framework Foundation"
+    "-framework Metal"
+    "-framework MetalPerformanceShaders"
+    "-framework MetalPerformanceShadersGraph"
+  )
+
   add_executable(MetalRawStagePreviewTest raw/metal_raw_stage_preview_test.cpp)
   target_include_directories(MetalRawStagePreviewTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(MetalRawStagePreviewTest PRIVATE GTest::gtest_main EditPipeline RawProcessor ThreadPool opencv_highgui ${ALCEDO_TEST_OPENCV_MIN_DEPS})

@@ -26,8 +26,9 @@ namespace alcedo {
 //
 // Reads the original R32F CFA texture directly (no full-frame HWC3 staging),
 // encodes fixed student tiles into the module's reusable private input buffer,
-// runs the compiled graph, and assembles owned ROIs into a crop-sized RGBA
-// texture. One MPSCommandBuffer carries every tile; the tile loop never waits.
+// runs the compiled graph through residual/skip concat, then the fused Metal
+// post/output/gamma tail writes owned ROIs into a crop-sized RGBA texture.
+// One MPSCommandBuffer carries every tile; the tile loop never waits.
 
 struct MetalDemosaicNetTiledDispatch {
   // Full-frame linear CFA (R32FLOAT). Phase crop is applied in the input kernel.
@@ -53,13 +54,16 @@ struct MetalDemosaicNetTiledDispatch {
 };
 
 struct MetalDemosaicNetTiledResult {
-  std::size_t   tile_count       = 0;
-  std::uint64_t host_wait_count  = 0;
-  std::uint64_t tile_encode_count = 0;
+  std::size_t   tile_count             = 0;
+  std::size_t   graph_invocation_count = 0;
+  std::size_t   padded_tile_count      = 0;
+  std::uint64_t host_wait_count        = 0;
+  std::uint64_t tile_encode_count      = 0;
 };
 
 // Shared parameter layouts for demosaicnet_io.metal (must match shader structs).
 struct DemosaicNetTileInputParams {
+  int batch_index = 0;
   int origin_x   = 0;
   int origin_y   = 0;
   int tile_w     = 0;
@@ -75,6 +79,7 @@ struct DemosaicNetTileInputParams {
 };
 
 struct DemosaicNetTileOutputParams {
+  int batch_index = 0;
   int tile_w  = 0;
   int tile_h  = 0;
   int src_x0  = 0;
