@@ -1,6 +1,6 @@
 # Metal MPSGraph DemosaicNet Plan
 
-**Status:** In progress (Phase 2 complete)  
+**Status:** In progress (Phase 3 complete)  
 **Date:** 2026-07-15  
 **Primary roadmap area:** Alcedo Studio RAW processing  
 **Target platform:** macOS 13.3 or newer, Apple Silicon, Metal backend  
@@ -598,6 +598,8 @@ Completion checks:
 
 ### Phase 3 — Add tile input and crop-sized output
 
+**Status:** Complete (2026-07-16)
+
 Work:
 
 - add `demosaicnet_io.metal`;
@@ -606,6 +608,17 @@ Work:
 - write the graph's fixed NHWC tile buffer;
 - assemble owned output intersections directly into the crop-sized RGBA texture;
 - reuse one input and one output buffer across every tile.
+
+Delivered:
+
+- `demosaicnet_io.metal` — `demosaicnet_tile_input_nhwc` and `demosaicnet_tile_output_rgba`
+  (phase + reflect-101 + sparse RGB + signed gamma; ownership ∩ crop + gamma decode);
+- `metal_demosaicnet_tiled.hpp/.mm` — MPSCommandBuffer tile loop with no host wait inside,
+  one reusable module input/output buffer pair, crop-sized RGBA assembly only;
+- `MetalDemosaicNetEntry` CMake target + metallib in `RawProcessorOpMetalShaders` /
+  `ALCEDO_METAL_RUNTIME_LIBS` via `ComputePipelineCache`;
+- `MetalDemosaicNetIoTest` — Bayer/X-Trans phase, reflect edges, gamma, ownership vs
+  aligned-then-crop, buffer reuse, single host wait.
 
 Completion checks:
 

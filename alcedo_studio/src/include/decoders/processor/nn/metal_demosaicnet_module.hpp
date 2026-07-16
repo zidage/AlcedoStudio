@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string>
 
 #include "decoders/processor/nn/demosaicnet_specs.hpp"
 #include "nn/safetensors.hpp"
@@ -86,6 +87,11 @@ class MetalBayerDemosaicNet {
   // Results land in OutputBuffer via the bound results array.
   void EncodeOnMpsCommandBuffer(void* mps_command_buffer) const;
 
+  // Multi-tile encode helpers: clear before the first tile; inspect after the final wait.
+  void ClearLastEncodeError() const;
+  [[nodiscard]] auto HasLastEncodeError() const -> bool;
+  [[nodiscard]] auto LastEncodeErrorMessage() const -> std::string;
+
   // Synchronous host reference path for module tests:
   // NCHW input [1,3,H,W] → NHWC graph → NCHW output [1,3,1024,1024].
   // No gamma decode. H and W must equal kTileInput.
@@ -141,6 +147,11 @@ class MetalXTransDemosaicNet {
   [[nodiscard]] auto OutputBuffer() const -> MTL::Buffer*;
 
   void EncodeOnMpsCommandBuffer(void* mps_command_buffer) const;
+
+  void ClearLastEncodeError() const;
+  [[nodiscard]] auto HasLastEncodeError() const -> bool;
+  [[nodiscard]] auto LastEncodeErrorMessage() const -> std::string;
+
   void ForwardNchwReference(const float* input_nchw, float* output_nchw) const;
 
  private:

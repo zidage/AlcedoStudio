@@ -445,6 +445,29 @@ if(ALCEDO_METAL_ENABLED)
   gtest_discover_tests(MetalDemosaicNetModuleTest TEST_PREFIX "MetalDemosaicNetModuleTest."
     PROPERTIES LABELS "ci_metal_runtime")
 
+  # Phase 3: tile input / crop-sized output kernels and tiled executor.
+  add_executable(MetalDemosaicNetIoTest
+    ml_ops/metal_demosaicnet_io_test.mm
+  )
+  target_include_directories(MetalDemosaicNetIoTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_compile_options(MetalDemosaicNetIoTest PRIVATE
+    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
+  )
+  target_compile_definitions(MetalDemosaicNetIoTest PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+  )
+  target_link_libraries(MetalDemosaicNetIoTest PRIVATE
+    GTest::gtest_main
+    MetalDemosaicNetEntry
+    MetalDemosaicNet
+    MetalImage
+    MetalContext
+    alcedo::metal_cpp
+    ${ALCEDO_TEST_OPENCV_MIN_DEPS}
+  )
+  gtest_discover_tests(MetalDemosaicNetIoTest TEST_PREFIX "MetalDemosaicNetIoTest."
+    PROPERTIES LABELS "ci_metal_runtime")
+
   add_executable(ImageBufferMetalTest image/image_buffer_metal_test.cpp)
   target_include_directories(ImageBufferMetalTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(ImageBufferMetalTest PRIVATE GTest::gtest_main ImageBuffer MetalImage ${ALCEDO_TEST_OPENCV_MIN_DEPS})

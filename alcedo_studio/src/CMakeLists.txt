@@ -226,6 +226,9 @@ if(ALCEDO_METAL_ENABLED)
     set(METAL_XTRANS_INTERPOLATE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/decoders/processor/operators/gpu/metal_shader/xtrans_interpolate.metal")
     set(METAL_XTRANS_INTERPOLATE_AIR "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/xtrans_interpolate.air")
     set(METAL_XTRANS_INTERPOLATE_METALLIB "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/xtrans_interpolate.metallib")
+    set(METAL_DEMOSAICNET_IO_SRC "${CMAKE_CURRENT_SOURCE_DIR}/decoders/processor/operators/gpu/metal_shader/demosaicnet_io.metal")
+    set(METAL_DEMOSAICNET_IO_AIR "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/demosaicnet_io.air")
+    set(METAL_DEMOSAICNET_IO_METALLIB "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/demosaicnet_io.metallib")
     find_program(ALCEDO_XCRUN_EXECUTABLE xcrun REQUIRED)
     execute_process(
         COMMAND ${ALCEDO_XCRUN_EXECUTABLE} --sdk macosx --find metal
@@ -419,12 +422,22 @@ if(ALCEDO_METAL_ENABLED)
         "Linking Metal ConvertToRefSpace library"
     )
 
+    alcedo_add_metal_library(
+        MetalDemosaicNetIoShaders
+        "${METAL_DEMOSAICNET_IO_SRC}"
+        "${METAL_DEMOSAICNET_IO_AIR}"
+        "${METAL_DEMOSAICNET_IO_METALLIB}"
+        "Compiling Metal DemosaicNet IO shader"
+        "Linking Metal DemosaicNet IO library"
+    )
+
     add_custom_target(RawProcessorOpMetalShaders DEPENDS
         "${METAL_TO_LINEAR_REF_METALLIB}"
         "${METAL_DEBAYER_RCD_METALLIB}"
         "${METAL_HIGHLIGHT_RECONSTRUCT_METALLIB}"
         "${METAL_XTRANS_INTERPOLATE_METALLIB}"
         "${METAL_CVT_REF_SPACE_METALLIB}"
+        "${METAL_DEMOSAICNET_IO_METALLIB}"
     )
     set(ALCEDO_METAL_RUNTIME_LIBS
         "${METAL_UTILS_METALLIB}"
@@ -437,6 +450,7 @@ if(ALCEDO_METAL_ENABLED)
         "${METAL_HIGHLIGHT_RECONSTRUCT_METALLIB}"
         "${METAL_XTRANS_INTERPOLATE_METALLIB}"
         "${METAL_CVT_REF_SPACE_METALLIB}"
+        "${METAL_DEMOSAICNET_IO_METALLIB}"
     )
     set(ALCEDO_METAL_RUNTIME_LIBS "${ALCEDO_METAL_RUNTIME_LIBS}" CACHE INTERNAL
         "Metal shader libraries required at runtime."
@@ -459,7 +473,6 @@ if(ALCEDO_METAL_ENABLED)
     target_compile_definitions(MetalGeometryUtils PRIVATE ALCEDO_METAL_GEOMETRY_UTILS_METALLIB_PATH="${METAL_GEOMETRY_UTILS_METALLIB}")
 
     # Fixed Metal MPSGraph DemosaicNet modules and lazy model cache (Phase 2).
-    # Tile IO and RAW entry land in later phases as MetalDemosaicNetEntry.
     def_library(MetalDemosaicNet
         SOURCES
             decoders/processor/nn/metal_demosaicnet_module.mm
@@ -484,6 +497,39 @@ if(ALCEDO_METAL_ENABLED)
             LANGUAGE OBJCXX
     )
     target_link_libraries(MetalDemosaicNet PUBLIC
+        "-framework Foundation"
+        "-framework Metal"
+        "-framework MetalPerformanceShaders"
+        "-framework MetalPerformanceShadersGraph"
+    )
+
+    # Phase 3: tile input / crop-sized output orchestration (RAW entry is Phase 4).
+    def_library(MetalDemosaicNetEntry
+        SOURCES
+            decoders/processor/nn/metal_demosaicnet_tiled.mm
+        PUBLIC_DEPS
+            MetalDemosaicNet
+            MetalImage
+            MetalContext
+            alcedo::metal_cpp
+            ${ALCEDO_OPENCV_CORE_DEPS}
+            libraw::raw_r
+    )
+    target_compile_definitions(MetalDemosaicNetEntry PUBLIC HAVE_METAL)
+    target_compile_definitions(MetalDemosaicNetEntry PRIVATE
+        ALCEDO_METAL_DEMOSAICNET_IO_METALLIB_PATH="${METAL_DEMOSAICNET_IO_METALLIB}"
+    )
+    target_compile_options(MetalDemosaicNetEntry PRIVATE
+        $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
+    )
+    set_source_files_properties(
+        decoders/processor/nn/metal_demosaicnet_tiled.mm
+        PROPERTIES
+            COMPILE_FLAGS "-fobjc-arc"
+            LANGUAGE OBJCXX
+    )
+    add_dependencies(MetalDemosaicNetEntry MetalDemosaicNetIoShaders)
+    target_link_libraries(MetalDemosaicNetEntry PUBLIC
         "-framework Foundation"
         "-framework Metal"
         "-framework MetalPerformanceShaders"

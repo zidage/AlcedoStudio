@@ -841,6 +841,23 @@ void MetalBayerDemosaicNet::EncodeOnMpsCommandBuffer(void* mps_command_buffer) c
           [&] { EncodeGraph(impl_->module, mps_command_buffer, "MetalBayerDemosaicNet"); });
 }
 
+void MetalBayerDemosaicNet::ClearLastEncodeError() const {
+  if (impl_ != nullptr) {
+    impl_->module.last_encode_error = nil;
+  }
+}
+
+auto MetalBayerDemosaicNet::HasLastEncodeError() const -> bool {
+  return impl_ != nullptr && impl_->module.last_encode_error != nil;
+}
+
+auto MetalBayerDemosaicNet::LastEncodeErrorMessage() const -> std::string {
+  if (impl_ == nullptr || impl_->module.last_encode_error == nil) {
+    return {};
+  }
+  return NSErrorMessage(impl_->module.last_encode_error);
+}
+
 void MetalBayerDemosaicNet::ForwardNchwReference(const float* input_nchw,
                                                  float*       output_nchw) const {
   ForwardNchw(impl_->module, input_nchw, output_nchw, "MetalBayerDemosaicNet");
@@ -906,6 +923,23 @@ auto MetalXTransDemosaicNet::OutputBuffer() const -> MTL::Buffer* {
 void MetalXTransDemosaicNet::EncodeOnMpsCommandBuffer(void* mps_command_buffer) const {
   RunObjc("graph_encode",
           [&] { EncodeGraph(impl_->module, mps_command_buffer, "MetalXTransDemosaicNet"); });
+}
+
+void MetalXTransDemosaicNet::ClearLastEncodeError() const {
+  if (impl_ != nullptr) {
+    impl_->module.last_encode_error = nil;
+  }
+}
+
+auto MetalXTransDemosaicNet::HasLastEncodeError() const -> bool {
+  return impl_ != nullptr && impl_->module.last_encode_error != nil;
+}
+
+auto MetalXTransDemosaicNet::LastEncodeErrorMessage() const -> std::string {
+  if (impl_ == nullptr || impl_->module.last_encode_error == nil) {
+    return {};
+  }
+  return NSErrorMessage(impl_->module.last_encode_error);
 }
 
 void MetalXTransDemosaicNet::ForwardNchwReference(const float* input_nchw,
