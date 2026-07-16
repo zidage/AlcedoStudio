@@ -342,10 +342,10 @@ auto ConstantFromTensor(MPSGraph* graph, const nn::SafetensorsTensor& host, MPSS
   return [graph constantWithData:data shape:shape dataType:MPSDataTypeFloat32];
 }
 
-// Phase 5 experiment: feed NHWC activations with HWIO constants. Safetensors
-// store OIHW (O,I,H,W); transpose once at cold load so the graph compiler can
-// avoid an implicit OIHW→HWIO conversion on every tile. Element count is
-// unchanged; math is identical when weightsLayout is HWIO.
+// Product path: NHWC activations with HWIO weight constants. Safetensors store
+// OIHW (O,I,H,W); transpose once at cold load so the graph compiler can avoid an
+// implicit OIHW→HWIO conversion on every tile. Element count is unchanged; math
+// is identical when weightsLayout is HWIO.
 [[nodiscard]] auto TransposeOihwToHwio(const nn::SafetensorsTensor& oihw, int out_c, int in_c,
                                        int kh, int kw) -> std::vector<float> {
   const std::size_t expected =

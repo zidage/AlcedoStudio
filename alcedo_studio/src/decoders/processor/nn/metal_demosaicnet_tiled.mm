@@ -204,7 +204,7 @@ template <typename Module>
 auto EnqueueTiles(const Module& module, const MetalDemosaicNetTiledDispatch& dispatch,
                   const detail::NeuralTilePolicy& policy, bool is_xtrans, const char* variant)
     -> MetalDemosaicNetTiledResult {
-  static_assert(Module::kBatchSize == 2, "Metal experiment is intentionally fixed at batch N=2");
+  static_assert(Module::kBatchSize == 2, "Metal product path is fixed at batch N=2");
   if (!module.ready()) {
     ThrowStage("prepare", "module is not ready", variant);
   }

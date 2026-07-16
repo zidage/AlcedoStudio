@@ -424,7 +424,7 @@ if(ALCEDO_METAL_ENABLED)
   gtest_discover_tests(MetalDemosaicNetGraphTest TEST_PREFIX "MetalDemosaicNetGraphTest."
     PROPERTIES LABELS "ci_metal_runtime")
 
-  # Phase 2: fixed MPSGraph modules, lazy cache, full student reference pairs.
+  # Fixed MPSGraph modules, lazy cache, full student reference pairs.
   add_executable(MetalDemosaicNetModuleTest
     ml_ops/metal_demosaicnet_module_test.mm
   )
@@ -445,7 +445,7 @@ if(ALCEDO_METAL_ENABLED)
   gtest_discover_tests(MetalDemosaicNetModuleTest TEST_PREFIX "MetalDemosaicNetModuleTest."
     PROPERTIES LABELS "ci_metal_runtime")
 
-  # Phase 3: tile input / crop-sized output kernels and tiled executor.
+  # Tile input / crop-sized output kernels and tiled executor.
   add_executable(MetalDemosaicNetIoTest
     ml_ops/metal_demosaicnet_io_test.mm
   )
@@ -485,7 +485,7 @@ if(ALCEDO_METAL_ENABLED)
   gtest_discover_tests(MetalRawOpsTest TEST_PREFIX "MetalRawOpsTest."
     PROPERTIES LABELS "ci_metal_runtime")
 
-  # Phase 4: Metal Neural RAW product path (hard-fail), geometry, thumbnail Legacy.
+  # Metal Neural RAW product path (hard-fail), geometry, thumbnail Legacy.
   add_executable(MetalRawNeuralTest raw/metal_raw_neural_test.cpp)
   target_include_directories(MetalRawNeuralTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_compile_definitions(MetalRawNeuralTest PRIVATE
@@ -503,8 +503,7 @@ if(ALCEDO_METAL_ENABLED)
   gtest_discover_tests(MetalRawNeuralTest TEST_PREFIX "MetalRawNeuralTest."
     PROPERTIES LABELS "ci_metal_runtime")
 
-  # Phase 5 development harness: full-frame Metal Neural timing and memory telemetry.
-  # Authoritative results require a Release build and the two gitignored local fixtures.
+  # Full-frame Metal Neural timing and memory telemetry (Release + local fixtures).
   add_executable(MetalDemosaicNetFullFrameTiming EXCLUDE_FROM_ALL
     perf/metal_demosaicnet_fullframe_timing.cpp
   )
@@ -519,31 +518,6 @@ if(ALCEDO_METAL_ENABLED)
     MetalDemosaicNet
     MetalContext
     ${ALCEDO_TEST_OPENCV_MIN_DEPS}
-  )
-
-  # Development-only isolated profile for the fixed post/output MPSGraph tail.
-  add_executable(MetalDemosaicNetTailProfile EXCLUDE_FROM_ALL
-    perf/metal_demosaicnet_tail_profile.mm
-  )
-  target_include_directories(MetalDemosaicNetTailProfile PUBLIC ${ALCEDO_INCLUDE_DIR})
-  target_compile_definitions(MetalDemosaicNetTailProfile PRIVATE
-    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
-  )
-  target_compile_options(MetalDemosaicNetTailProfile PRIVATE
-    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
-  )
-  set_source_files_properties(perf/metal_demosaicnet_tail_profile.mm PROPERTIES
-    COMPILE_FLAGS "-fobjc-arc"
-    LANGUAGE OBJCXX
-  )
-  target_link_libraries(MetalDemosaicNetTailProfile PRIVATE
-    NnSafetensors
-    MetalContext
-    alcedo::metal_cpp
-    "-framework Foundation"
-    "-framework Metal"
-    "-framework MetalPerformanceShaders"
-    "-framework MetalPerformanceShadersGraph"
   )
 
   add_executable(MetalRawStagePreviewTest raw/metal_raw_stage_preview_test.cpp)
@@ -1493,6 +1467,7 @@ alcedo_assign_test_category(gpu ALCEDO_BUILD_GPU_TESTS alcedo_tests_gpu
   MetalUtilsTest
   MetalDemosaicNetGraphTest
   MetalDemosaicNetModuleTest
+  MetalDemosaicNetIoTest
   MetalRawOpsTest
   ODTCudaSmokeTest
   FilmGrainCudaStageTest

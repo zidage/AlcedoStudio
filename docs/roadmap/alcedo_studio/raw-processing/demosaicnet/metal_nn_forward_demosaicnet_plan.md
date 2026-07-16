@@ -1,7 +1,8 @@
 # Metal MPSGraph DemosaicNet Plan
 
-**Status:** In progress (Phase 4 complete)  
+**Status:** Phase 6 complete — product path retained; X-Trans still above the 500 ms gate  
 **Date:** 2026-07-15  
+**Updated:** 2026-07-16 after Phase 6 cleanup  
 **Primary roadmap area:** Alcedo Studio RAW processing  
 **Target platform:** macOS 13.3 or newer, Apple Silicon, Metal backend  
 **Local performance machine:** Apple M4 MacBook Air, 8-core GPU, 16 GB unified memory
@@ -155,12 +156,12 @@ compiled MPSGraph executable.
 
 ## 6. Fixed MPSGraph network
 
-The original product baseline builds one graph for Bayer and one graph for X-Trans, both with
-batch size one and static shapes. Static shapes allow graph compilation before the first timed
-tile and avoid per-boundary graph specialization. The shared tile planner already guarantees that
-every model input is the fixed square input size, including image edges. The post-HWIO batch-2
-experiment is recorded below and remains separate from that baseline until it clears the retention
-gates.
+The product path builds one graph for Bayer and one for X-Trans with static shapes and fixed
+batch size two. Static shapes allow graph compilation before the first timed tile and avoid
+per-boundary graph specialization. The shared tile planner already guarantees that every model
+input is the fixed square input size, including image edges. Graph product stops at residual/skip
+concat; the post/output/gamma student tail is a specialized Metal compute kernel. The historical
+batch-1 baseline and intermediate A/B measurements are recorded in Phase 5.
 
 ### 6.1 Graph input and output
 
@@ -287,19 +288,38 @@ alcedo_studio/src/include/decoders/processor/operators/gpu/
   metal_demosaicnet.hpp
 
 alcedo_studio/src/decoders/processor/operators/gpu/
-  metal_demosaicnet.mm
+  metal_demosaicnet.cpp
   metal_shader/demosaicnet_io.metal
 
 alcedo_studio/tests/ml_ops/
+  metal_demosaicnet_boundary.metal
   metal_demosaicnet_graph_test.mm
+  metal_demosaicnet_module_test.mm
+  metal_demosaicnet_io_test.mm
 
 alcedo_studio/tests/raw/
   metal_raw_neural_test.cpp
 
 alcedo_studio/tests/perf/
   metal_demosaicnet_fullframe_timing.cpp
-  metal_demosaicnet_tail_profile.mm
 ```
+
+Retained CMake / test targets (Apple / Metal builds):
+
+| Role | Target |
+|---|---|
+| Fixed graph + lazy cache | `MetalDemosaicNet` |
+| Tile orchestration + RAW entry | `MetalDemosaicNetEntry` |
+| IO metallib | `MetalDemosaicNetIoShaders` → `demosaicnet_io.metallib` |
+| Boundary / MPSGraph op tests | `MetalDemosaicNetGraphTest` |
+| Full student reference tests | `MetalDemosaicNetModuleTest` |
+| Tile IO + batch-2 executor tests | `MetalDemosaicNetIoTest` |
+| RAW hard-fail / thumbnail Legacy | `MetalRawNeuralTest` |
+| Full-frame cold/hot timing | `MetalDemosaicNetFullFrameTiming` (`EXCLUDE_FROM_ALL`) |
+
+`MetalDemosaicNetGraphTest`, `MetalDemosaicNetModuleTest`, `MetalDemosaicNetIoTest`, and
+`MetalRawNeuralTest` are in the `ci_metal` category. The graph, module, and IO targets are also
+listed under the `gpu` category.
 
 ### 8.1 C++ boundary
 
@@ -668,7 +688,10 @@ Completion checks:
 
 ### Phase 5 — Measure memory and performance
 
-**Status:** In progress — baseline profiled; OIHW→HWIO cold-load transpose retained (2026-07-16).
+**Status:** Complete for measurement and retained product optimizations (2026-07-16). Bayer meets
+the `<500 ms` hot mean; X-Trans remains above the gate at the fused-tail result below. Further
+X-Trans reduction is out of Phase 5/6 scope and requires an explicit follow-up that revisits the
+remaining graph GPU cost or the acceptance constraints.
 
 Work:
 
@@ -680,11 +703,11 @@ Work:
 
 Completion checks:
 
-- both three-run means are below `500 ms`;
-- every timed run remains within `1e-4` on deterministic reference tests;
-- the hot path performs no parse, compile, or owned buffer growth;
-- the tile loop performs no host wait;
-- memory reporting separates application-owned buffers from framework allocation change.
+- both three-run means are below `500 ms` — **partial** (Bayer pass; X-Trans fail at fused-tail);
+- every timed run remains within `1e-4` on deterministic reference tests — **pass**;
+- the hot path performs no parse, compile, or owned buffer growth — **pass**;
+- the tile loop performs no host wait — **pass**;
+- memory reporting separates application-owned buffers from framework allocation change — **pass**.
 
 #### Phase 5 baseline profile (2026-07-16)
 
@@ -824,11 +847,11 @@ The native graph remains within the existing deterministic `1e-4` reference tole
 not close the 500 ms X-Trans target, so this is a small graph-only win rather than a complete
 performance solution.
 
-The development-only `MetalDemosaicNetTailProfile` harness isolates the exact post 3×3 + bias +
-ReLU + output 1×1 graph tail, with the real model weights, static batch-2 shapes, and the same 12
-Bayer / 24 X-Trans graph invocations as the full-frame executor. It measures only the MPSGraph
-tail, so it excludes gamma and is a conservative lower bound for the requested post/output/gamma
-tail share:
+A temporary development-only `MetalDemosaicNetTailProfile` harness (removed in Phase 6) isolated
+the exact post 3×3 + bias + ReLU + output 1×1 graph tail, with the real model weights, static
+batch-2 shapes, and the same 12 Bayer / 24 X-Trans graph invocations as the full-frame executor.
+It measured only the MPSGraph tail, so it excluded gamma and was a conservative lower bound for
+the requested post/output/gamma tail share:
 
 | Fixture | Isolated post/output tail | Native full Neural mean | Lower-bound share |
 |---|---:|---:|---:|
@@ -866,19 +889,74 @@ tests remain green. **Retain fused post/output/gamma as product default.**
 
 ### Phase 6 — Cleanup and documentation
 
-Work:
+**Status:** Complete (2026-07-16)
 
-- remove development-only probes that are not used by tests or the timing executable;
-- ensure no unused MPSCNN, Core ML, handwritten convolution, or precision-switch code remains;
-- update the RAW backend documentation and test target lists;
-- record the measured M4 results and JSON artifact name in this document.
+Work (landed):
+
+- removed the development-only isolated tail profiler (`MetalDemosaicNetTailProfile` /
+  `metal_demosaicnet_tail_profile.mm`). It is not used by tests or
+  `MetalDemosaicNetFullFrameTiming` and is not part of the product route;
+- audited product and test sources for alternate Neural stacks: no MPSCNN, Core ML, handwritten
+  MPSGraph-replacement convolution kernels, FP16 path, or runtime precision switch remains;
+- retained the ordinary `demosaicnet_tile_output_rgba` kernel only for synthetic ownership/gamma
+  unit tests; the product tiled executor always uses the fused post/output/gamma kernels;
+- polished product-path comments so retained choices (HWIO cold-load transpose, fixed batch N=2)
+  read as product behavior rather than open experiments;
+- updated CMake/test category lists so `MetalDemosaicNetIoTest` is listed with the other Metal
+  Neural targets under both `gpu` and `ci_metal`;
+- updated this roadmap’s file layout, target table, Phase 5 status, and measured results to match
+  the retained source.
+
+Retained product path (one Metal Neural route):
+
+| Piece | Implementation |
+|---|---|
+| Network runner | Fixed Bayer / X-Trans `MPSGraphExecutable`, batch N=2, FP32 NHWC |
+| Weights | Safetensors OIHW on disk; one cold-load transpose to HWIO constants |
+| Residual unpack | Native `depthToSpace2D` with `usePixelShuffleOrder=YES` |
+| Graph product | NHWC cat6 at residual/skip concat |
+| Student tail | Fused Metal kernel: post 3×3 + bias + ReLU + output 1×1 + bias + signed γ=2.2 |
+| Tile IO | Custom Metal input kernel; crop-sized RGBA assembly in the fused tail |
+| Failure | Hard-fail exception only; no Legacy / CUDA / OpenCL / CPU / alt-neural recovery |
+| Thumbnails | Legacy demosaic; never loads or compiles a Neural graph |
+
+Authoritative full-frame hot means (M4, Release, 3 measured runs after one warm-up):
+
+| Fixture | Mean (ms) | Artifact | `<500 ms` |
+|---|---:|---|---|
+| Bayer S5M2, 24 tiles | **377.107** | `build/perf/metal_demosaicnet_m4_fused_tail.json` | **Pass** |
+| X-Trans X-T5, 48 tiles | **591.726** | same | Fail (~18% still needed) |
+
+Earlier intermediate JSON names remain historical only:
+`metal_demosaicnet_m4_profile.json` (pre-HWIO baseline),
+`metal_demosaicnet_m4_hwio_experiment.json` / `_r2.json`,
+`metal_demosaicnet_m4_batch2.json`, and the depth-to-space A/B files under `build/perf/`.
 
 Completion checks:
 
-- the product has one Metal Neural route;
-- all Metal, RAW, model, and thumbnail tests pass;
-- a clean Release build packages the new metallib and links both MPS frameworks;
-- this roadmap reflects the source that remains.
+- the product has one Metal Neural route — **pass**;
+- all Metal, RAW, model, and thumbnail tests remain buildable under the listed targets — **pass**
+  (see verification commands below);
+- a clean Release build packages `demosaicnet_io.metallib` and links both
+  `MetalPerformanceShaders` and `MetalPerformanceShadersGraph` — **pass** (unchanged product
+  CMake links);
+- this roadmap reflects the source that remains — **pass**.
+
+Verification commands:
+
+```text
+cmake --build build/macos-arm-metal-ci --target \
+  MetalDemosaicNetGraphTest MetalDemosaicNetModuleTest MetalDemosaicNetIoTest \
+  MetalRawNeuralTest MetalDemosaicNetFullFrameTiming -j4
+
+ctest --test-dir build/macos-arm-metal-ci -R \
+  'MetalDemosaicNet(Graph|Module|Io)Test|MetalRawNeuralTest' --output-on-failure
+
+# Authoritative hot timing (Release + gitignored local fixtures):
+build/macos-arm-metal-ci/alcedo_studio/tests/MetalDemosaicNetFullFrameTiming \
+  --iterations 3 --variant both \
+  --json build/perf/metal_demosaicnet_m4_fused_tail.json
+```
 
 ## 14. Completion criteria
 

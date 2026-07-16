@@ -472,7 +472,7 @@ if(ALCEDO_METAL_ENABLED)
     add_dependencies(MetalGeometryUtils MetalGeometryUtilsShaders)
     target_compile_definitions(MetalGeometryUtils PRIVATE ALCEDO_METAL_GEOMETRY_UTILS_METALLIB_PATH="${METAL_GEOMETRY_UTILS_METALLIB}")
 
-    # Fixed Metal MPSGraph DemosaicNet modules and lazy model cache (Phase 2).
+    # Fixed Metal MPSGraph DemosaicNet modules and lazy model cache.
     def_library(MetalDemosaicNet
         SOURCES
             decoders/processor/nn/metal_demosaicnet_module.mm
@@ -505,7 +505,7 @@ if(ALCEDO_METAL_ENABLED)
         "-framework MetalPerformanceShadersGraph"
     )
 
-    # Phase 3–4: tile IO orchestration + product RAW Neural entry (hard-fail).
+    # Tile IO orchestration + product RAW Neural entry (hard-fail).
     def_library(MetalDemosaicNetEntry
         SOURCES
             decoders/processor/nn/metal_demosaicnet_tiled.mm
