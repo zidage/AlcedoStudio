@@ -2,8 +2,10 @@
 
 Date: 2026-06-27
 
-Status: planning. This document is the frontend companion to
-`docs/roadmap/ai_sidecar_backend_plan.md`. Backend phases 1-7 are treated as
+Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
+
+Status: planning. This document is the frontend companion to the
+[AI Sidecar Backend Integration Plan](../ai/ai_sidecar_backend_plan.md). Backend phases 1-7 are treated as
 mostly complete for the remote image-analysis path; this plan covers the QML
 product surface that still needs to be built.
 

@@ -58,16 +58,24 @@ if(ALCEDO_OPENCL_ENABLED)
     set(OPENCL_EDIT_PIPELINE_COLOR_CL "${CMAKE_CURRENT_SOURCE_DIR}/edit/pipeline/opencl_shader/color.cl")
     set(OPENCL_EDIT_PIPELINE_CST_CL "${CMAKE_CURRENT_SOURCE_DIR}/edit/pipeline/opencl_shader/cst.cl")
     set(OPENCL_XTRANS_INTERPOLATE_CL "${CMAKE_CURRENT_SOURCE_DIR}/decoders/processor/operators/gpu/opencl_shader/xtrans_interpolate.cl")
+    set(OPENCL_DEMOSAICNET_CONV_CL "${CMAKE_CURRENT_SOURCE_DIR}/decoders/processor/operators/gpu/opencl_shader/demosaicnet_conv.cl")
+    set(OPENCL_DEMOSAICNET_STRUCTURAL_CL "${CMAKE_CURRENT_SOURCE_DIR}/decoders/processor/operators/gpu/opencl_shader/demosaicnet_structural.cl")
     set(OPENCL_GEOMETRY_UTILS_CL "${CMAKE_CURRENT_SOURCE_DIR}/opencl/opencl_shader/geometry_utils.cl")
     set(OPENCL_EDIT_GEOMETRY_LENS_CALIB_CL "${CMAKE_CURRENT_SOURCE_DIR}/edit/operators/geometry/opencl_shader/lens_calib.cl")
     set(OPENCL_SCOPE_ANALYZER_CL "${CMAKE_CURRENT_SOURCE_DIR}/edit/scope/opencl_shader/scope_analyzer.cl")
-    def_library(OpenClContext SOURCES opencl/opencl_context.cpp PUBLIC_DEPS OpenCL::OpenCL)
+    def_library(OpenClContext
+        SOURCES
+            opencl/opencl_context.cpp
+            opencl/opencl_api_counters.cpp
+        PUBLIC_DEPS OpenCL::OpenCL
+    )
     def_library(OpenClProgramLibrary
         SOURCES
             opencl/opencl_backend_program_registry.cpp
             opencl/opencl_program_library.cpp
             opencl/opencl_runtime.cpp
             decoders/processor/operators/gpu/opencl_raw_programs.cpp
+            decoders/processor/operators/gpu/opencl_demosaicnet_programs.cpp
             edit/pipeline/opencl_pipeline_programs.cpp
             edit/scope/opencl_scope_programs.cpp
             opencl/opencl_geometry_programs.cpp
@@ -97,6 +105,8 @@ if(ALCEDO_OPENCL_ENABLED)
         ALCEDO_OPENCL_EDIT_PIPELINE_COLOR_CL="${OPENCL_EDIT_PIPELINE_COLOR_CL}"
         ALCEDO_OPENCL_EDIT_PIPELINE_CST_CL="${OPENCL_EDIT_PIPELINE_CST_CL}"
         ALCEDO_OPENCL_XTRANS_INTERPOLATE_CL="${OPENCL_XTRANS_INTERPOLATE_CL}"
+        ALCEDO_OPENCL_DEMOSAICNET_CONV_CL="${OPENCL_DEMOSAICNET_CONV_CL}"
+        ALCEDO_OPENCL_DEMOSAICNET_STRUCTURAL_CL="${OPENCL_DEMOSAICNET_STRUCTURAL_CL}"
         ALCEDO_OPENCL_GEOMETRY_UTILS_CL="${OPENCL_GEOMETRY_UTILS_CL}"
         ALCEDO_OPENCL_EDIT_GEOMETRY_LENS_CALIB_CL="${OPENCL_EDIT_GEOMETRY_LENS_CALIB_CL}"
         ALCEDO_OPENCL_SCOPE_ANALYZER_CL="${OPENCL_SCOPE_ANALYZER_CL}"
@@ -117,6 +127,12 @@ def_library(CudaDriverRequirements
     SOURCES utils/cuda/cuda_driver_requirements.cpp
 )
 
+# Backend-neutral host safetensors parser (no CUDA / OpenCL).
+def_library(NnSafetensors
+    SOURCES nn/safetensors.cpp
+    PRIVATE_DEPS JSON
+)
+
 if(ALCEDO_CUDA_ENABLED)
     def_library(CudaUtils
         SOURCES
@@ -135,9 +151,8 @@ if(ALCEDO_CUDA_ENABLED)
             cuda/nn/safetensors.cpp
         PUBLIC_DEPS
             CUDA::cudart
+            NnSafetensors
             ${ALCEDO_OPENCV_CORE_DEPS}
-        PRIVATE_DEPS
-            JSON
     )
     set_target_properties(CudaUtils PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
     target_compile_definitions(CudaUtils PUBLIC HAVE_CUDA)
@@ -211,6 +226,9 @@ if(ALCEDO_METAL_ENABLED)
     set(METAL_XTRANS_INTERPOLATE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/decoders/processor/operators/gpu/metal_shader/xtrans_interpolate.metal")
     set(METAL_XTRANS_INTERPOLATE_AIR "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/xtrans_interpolate.air")
     set(METAL_XTRANS_INTERPOLATE_METALLIB "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/xtrans_interpolate.metallib")
+    set(METAL_DEMOSAICNET_IO_SRC "${CMAKE_CURRENT_SOURCE_DIR}/decoders/processor/operators/gpu/metal_shader/demosaicnet_io.metal")
+    set(METAL_DEMOSAICNET_IO_AIR "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/demosaicnet_io.air")
+    set(METAL_DEMOSAICNET_IO_METALLIB "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/demosaicnet_io.metallib")
     find_program(ALCEDO_XCRUN_EXECUTABLE xcrun REQUIRED)
     execute_process(
         COMMAND ${ALCEDO_XCRUN_EXECUTABLE} --sdk macosx --find metal
@@ -404,12 +422,22 @@ if(ALCEDO_METAL_ENABLED)
         "Linking Metal ConvertToRefSpace library"
     )
 
+    alcedo_add_metal_library(
+        MetalDemosaicNetIoShaders
+        "${METAL_DEMOSAICNET_IO_SRC}"
+        "${METAL_DEMOSAICNET_IO_AIR}"
+        "${METAL_DEMOSAICNET_IO_METALLIB}"
+        "Compiling Metal DemosaicNet IO shader"
+        "Linking Metal DemosaicNet IO library"
+    )
+
     add_custom_target(RawProcessorOpMetalShaders DEPENDS
         "${METAL_TO_LINEAR_REF_METALLIB}"
         "${METAL_DEBAYER_RCD_METALLIB}"
         "${METAL_HIGHLIGHT_RECONSTRUCT_METALLIB}"
         "${METAL_XTRANS_INTERPOLATE_METALLIB}"
         "${METAL_CVT_REF_SPACE_METALLIB}"
+        "${METAL_DEMOSAICNET_IO_METALLIB}"
     )
     set(ALCEDO_METAL_RUNTIME_LIBS
         "${METAL_UTILS_METALLIB}"
@@ -422,6 +450,7 @@ if(ALCEDO_METAL_ENABLED)
         "${METAL_HIGHLIGHT_RECONSTRUCT_METALLIB}"
         "${METAL_XTRANS_INTERPOLATE_METALLIB}"
         "${METAL_CVT_REF_SPACE_METALLIB}"
+        "${METAL_DEMOSAICNET_IO_METALLIB}"
     )
     set(ALCEDO_METAL_RUNTIME_LIBS "${ALCEDO_METAL_RUNTIME_LIBS}" CACHE INTERNAL
         "Metal shader libraries required at runtime."
@@ -442,6 +471,74 @@ if(ALCEDO_METAL_ENABLED)
     )
     add_dependencies(MetalGeometryUtils MetalGeometryUtilsShaders)
     target_compile_definitions(MetalGeometryUtils PRIVATE ALCEDO_METAL_GEOMETRY_UTILS_METALLIB_PATH="${METAL_GEOMETRY_UTILS_METALLIB}")
+
+    # Fixed Metal MPSGraph DemosaicNet modules and lazy model cache.
+    def_library(MetalDemosaicNet
+        SOURCES
+            decoders/processor/nn/metal_demosaicnet_module.mm
+            decoders/processor/nn/metal_demosaicnet_cache.mm
+        PUBLIC_DEPS
+            MetalContext
+            NnSafetensors
+            alcedo::metal_cpp
+    )
+    target_compile_definitions(MetalDemosaicNet PUBLIC HAVE_METAL)
+    target_compile_definitions(MetalDemosaicNet PRIVATE
+        ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config/models"
+        ALCEDO_METAL_DEMOSAICNET_IO_METALLIB_PATH="${METAL_DEMOSAICNET_IO_METALLIB}"
+    )
+    target_compile_options(MetalDemosaicNet PRIVATE
+        $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
+    )
+    set_source_files_properties(
+        decoders/processor/nn/metal_demosaicnet_module.mm
+        decoders/processor/nn/metal_demosaicnet_cache.mm
+        PROPERTIES
+            COMPILE_FLAGS "-fobjc-arc"
+            LANGUAGE OBJCXX
+    )
+    add_dependencies(MetalDemosaicNet MetalDemosaicNetIoShaders)
+    target_link_libraries(MetalDemosaicNet PUBLIC
+        "-framework Foundation"
+        "-framework Metal"
+        "-framework MetalPerformanceShaders"
+        "-framework MetalPerformanceShadersGraph"
+    )
+
+    # Tile IO orchestration + product RAW Neural entry (hard-fail).
+    def_library(MetalDemosaicNetEntry
+        SOURCES
+            decoders/processor/nn/metal_demosaicnet_tiled.mm
+            decoders/processor/operators/gpu/metal_demosaicnet.cpp
+        PUBLIC_DEPS
+            MetalDemosaicNet
+            MetalImage
+            MetalContext
+            alcedo::metal_cpp
+            ${ALCEDO_OPENCV_CORE_DEPS}
+            libraw::raw_r
+    )
+    target_compile_definitions(MetalDemosaicNetEntry PUBLIC HAVE_METAL)
+    target_compile_definitions(MetalDemosaicNetEntry PRIVATE
+        ALCEDO_METAL_DEMOSAICNET_IO_METALLIB_PATH="${METAL_DEMOSAICNET_IO_METALLIB}"
+        ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config/models"
+    )
+    target_compile_options(MetalDemosaicNetEntry PRIVATE
+        $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
+    )
+    set_source_files_properties(
+        decoders/processor/nn/metal_demosaicnet_tiled.mm
+        PROPERTIES
+            COMPILE_FLAGS "-fobjc-arc"
+            LANGUAGE OBJCXX
+    )
+    add_dependencies(MetalDemosaicNetEntry MetalDemosaicNetIoShaders)
+    target_link_libraries(MetalDemosaicNetEntry PUBLIC
+        "-framework Foundation"
+        "-framework Metal"
+        "-framework MetalPerformanceShaders"
+        "-framework MetalPerformanceShadersGraph"
+    )
 endif()
 
 # ==============================================================================
@@ -477,6 +574,54 @@ if(ALCEDO_OPENCL_ENABLED)
         PUBLIC_DEPS ImageBuffer OpenClProgramLibrary ${ALCEDO_OPENCV_CORE_DEPS}
     )
     target_compile_definitions(OpenClGeometryUtils PUBLIC HAVE_OPENCL)
+
+    # Reusable OpenCL NN primitives (device buffer, workspace, NHWC4 conv).
+    # No Bayer/X-Trans topology, model paths, or RAW routing — product modules only.
+    def_library(OpenClNn
+        SOURCES
+            opencl/nn/device_buffer.cpp
+            opencl/nn/activation_slots.cpp
+            opencl/nn/workspace.cpp
+            opencl/nn/convolution.cpp
+            opencl/nn/demosaicnet_stage_profiler.cpp
+        PUBLIC_DEPS
+            OpenClContext
+            OpenClProgramLibrary
+            OpenCL::OpenCL
+    )
+    target_compile_definitions(OpenClNn PUBLIC HAVE_OPENCL)
+
+    # Fixed OpenCL DemosaicNet modules and lazy model cache.
+    def_library(OpenClDemosaicNet
+        SOURCES
+            decoders/processor/nn/opencl_demosaicnet_module.cpp
+            decoders/processor/nn/opencl_demosaicnet_cache.cpp
+            decoders/processor/nn/opencl_demosaicnet_tiled.cpp
+        PUBLIC_DEPS
+            OpenClNn
+            OpenClProgramLibrary
+            NnSafetensors
+            OpenCL::OpenCL
+            ${ALCEDO_OPENCV_CORE_DEPS}
+    )
+    target_compile_definitions(OpenClDemosaicNet PUBLIC HAVE_OPENCL)
+    target_compile_definitions(OpenClDemosaicNet PRIVATE
+        ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config/models"
+    )
+
+    # Product-path OpenCL Neural demosaic entry. Soft-fail API for
+    # RawProcessor OpenCL branch; not part of the generic OpenClDemosaicNet module layer.
+    def_library(OpenClDemosaicNetEntry
+        SOURCES
+            decoders/processor/operators/gpu/opencl_demosaicnet.cpp
+        PUBLIC_DEPS
+            OpenClDemosaicNet
+            ImageBuffer
+            OpenClProgramLibrary
+            OpenCL::OpenCL
+            ${ALCEDO_OPENCV_CORE_DEPS}
+    )
+    target_compile_definitions(OpenClDemosaicNetEntry PUBLIC HAVE_OPENCL)
 endif()
 
 # Image Base
@@ -786,8 +931,11 @@ def_library(RawProcessor
 if(ALCEDO_CUDA_ENABLED)
     target_link_libraries(RawProcessor PRIVATE CudaDemosaicNetEntry)
 endif()
+if(ALCEDO_METAL_ENABLED)
+    target_link_libraries(RawProcessor PRIVATE MetalDemosaicNetEntry MetalGeometryUtils)
+endif()
 if(ALCEDO_OPENCL_ENABLED)
-    target_link_libraries(RawProcessor PRIVATE OpenClGeometryUtils)
+    target_link_libraries(RawProcessor PRIVATE OpenClGeometryUtils OpenClDemosaicNetEntry)
 endif()
 
 # ==============================================================================

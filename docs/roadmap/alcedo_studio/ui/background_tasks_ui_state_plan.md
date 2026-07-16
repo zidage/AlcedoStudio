@@ -2,6 +2,8 @@
 
 Date: 2026-07-01
 
+Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
+
 Status: planning. This plan is intentionally small: it captures the direction
 for long-running UI tasks and the UI state model before committing to a large
 rewrite.

@@ -107,6 +107,7 @@ auto QueryCapabilities(cl_device_id device) -> OpenClDeviceCapabilities {
   capabilities.driver_version   = GetDeviceInfoString(device, CL_DRIVER_VERSION);
   capabilities.device_version   = GetDeviceInfoString(device, CL_DEVICE_VERSION);
   capabilities.opencl_c_version = GetDeviceInfoString(device, CL_DEVICE_OPENCL_C_VERSION);
+  capabilities.extensions       = GetDeviceInfoString(device, CL_DEVICE_EXTENSIONS);
   capabilities.device_type      = GetDeviceInfoValue<cl_device_type>(device, CL_DEVICE_TYPE);
   capabilities.compute_units    = GetDeviceInfoValue<cl_uint>(device, CL_DEVICE_MAX_COMPUTE_UNITS);
   capabilities.max_clock_frequency_mhz =
@@ -408,6 +409,11 @@ auto SelectCandidate(const std::vector<OpenClDeviceCandidate>& candidates,
 }  // namespace
 
 OpenClContext::~OpenClContext() {
+  queue_override_ = nullptr;
+  if (profiling_queue_ != nullptr) {
+    clReleaseCommandQueue(profiling_queue_);
+    profiling_queue_ = nullptr;
+  }
   if (queue_ != nullptr) {
     clReleaseCommandQueue(queue_);
     queue_ = nullptr;
@@ -421,6 +427,23 @@ OpenClContext::~OpenClContext() {
 auto OpenClContext::Instance() -> OpenClContext& {
   static OpenClContext instance;
   return instance;
+}
+
+auto OpenClDeviceCapabilities::SupportsExtension(const std::string_view extension) const -> bool {
+  if (extension.empty()) {
+    return false;
+  }
+  std::size_t offset = 0;
+  while ((offset = extensions.find(extension, offset)) != std::string::npos) {
+    const bool begins_token = offset == 0 || extensions[offset - 1] == ' ';
+    const auto  end         = offset + extension.size();
+    const bool ends_token   = end == extensions.size() || extensions[end] == ' ';
+    if (begins_token && ends_token) {
+      return true;
+    }
+    offset = end;
+  }
+  return false;
 }
 
 void OpenClContext::Initialize(const OpenClInitializationOptions& options) {
@@ -548,6 +571,11 @@ auto OpenClContext::Context() const -> cl_context {
 
 auto OpenClContext::Queue() const -> cl_command_queue {
   std::lock_guard<std::mutex> lock(mutex_);
+  return queue_override_ != nullptr ? queue_override_ : queue_;
+}
+
+auto OpenClContext::ProductQueue() const -> cl_command_queue {
+  std::lock_guard<std::mutex> lock(mutex_);
   return queue_;
 }
 
@@ -568,6 +596,39 @@ auto OpenClContext::Capabilities() const -> const OpenClDeviceCapabilities& {
         "[FATAL] OpenClContext: capabilities requested before initialization.");
   }
   return capabilities_;
+}
+
+void OpenClContext::InstallProfilingQueueOverride() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!initialized_ || context_ == nullptr || device_ == nullptr) {
+    throw std::runtime_error(
+        "[FATAL] OpenClContext: InstallProfilingQueueOverride requires an initialized context.");
+  }
+  if (profiling_queue_ == nullptr) {
+    cl_int error = CL_SUCCESS;
+    profiling_queue_ =
+        clCreateCommandQueue(context_, device_, CL_QUEUE_PROFILING_ENABLE, &error);
+    if (error != CL_SUCCESS || profiling_queue_ == nullptr) {
+      throw std::runtime_error(
+          "[FATAL] OpenClContext: failed to create profiling-enabled command queue.");
+    }
+  }
+  queue_override_ = profiling_queue_;
+}
+
+void OpenClContext::ClearQueueOverride() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  queue_override_ = nullptr;
+}
+
+auto OpenClContext::ProfilingQueueInstalled() const -> bool {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return queue_override_ != nullptr && queue_override_ == profiling_queue_;
+}
+
+auto OpenClContext::HasProfilingQueue() const -> bool {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return profiling_queue_ != nullptr;
 }
 
 }  // namespace alcedo

@@ -14,6 +14,7 @@
 #include "cuda/nn/tensor.hpp"
 #include "cuda/nn/workspace.hpp"
 #include "decoders/processor/nn/demosaicnet_module.hpp"
+#include "decoders/processor/nn/demosaicnet_specs.hpp"
 
 namespace alcedo {
 
@@ -34,26 +35,27 @@ namespace alcedo {
 // then mosaick skip + post conv (unlike the full-res teacher trunk).
 class XTransDemosaicNet : public NnWeightModule<XTransDemosaicNet> {
  public:
-  static constexpr const char* kArchitecture = "xtrans_p2_s32_d4";
-  static constexpr int         kDepth        = 4;
-  static constexpr int         kWidth        = 32;
-  static constexpr int         kPackFactor   = 2;
-  static constexpr int         kPackOutCh    = 12;  // space-to-depth 3*2*2
-  static constexpr int         kResidualCh   = 12;
+  using Spec = DemosaicNetXTransSpec;
+
+  static constexpr const char* kArchitecture = Spec::kArchitecture;
+  static constexpr int         kDepth        = Spec::kDepth;
+  static constexpr int         kWidth        = Spec::kWidth;
+  static constexpr int         kPackFactor   = Spec::kPackFactor;
+  static constexpr int         kPackOutCh    = Spec::kPackOutCh;
+  static constexpr int         kResidualCh   = Spec::kResidualCh;
 
   // Tile / CFA contract (product tiling + export goldens).
-  static constexpr int kTileInput  = 1048;
-  static constexpr int kTileOutput = 1024;
-  static constexpr int kTileBorder = 12;
-  static constexpr int kTilePad    = 12;
-  static constexpr int kTileStep   = 1020;  // 1024 % 6 != 0 → period-safe step
-  static constexpr int kCfaPeriod  = 6;
+  static constexpr int kTileInput  = Spec::kTileInput;
+  static constexpr int kTileOutput = Spec::kTileOutput;
+  static constexpr int kTileBorder = Spec::kTileBorder;
+  static constexpr int kTilePad    = Spec::kTilePad;
+  static constexpr int kTileStep   = Spec::kTileStep;
+  static constexpr int kCfaPeriod  = Spec::kCfaPeriod;
 
-  // Natural valid-conv shrink: H - 2*pack_factor*depth - 2 = H - 18
-  static constexpr int kNaturalSpatialLoss = 2 * kPackFactor * kDepth + 2;
-  // Export shrink on the fixed training tile (1048 → 1024).
-  static constexpr int kSpatialLoss = kTileInput - kTileOutput;  // 24
-  static constexpr int kMinSpatial  = kNaturalSpatialLoss + 2;   // 20
+  static constexpr int kNaturalSpatialLoss = Spec::kNaturalSpatialLoss;
+  static constexpr int kSpatialLoss        = Spec::kSpatialLoss;
+  static constexpr int kMinSpatial         = Spec::kMinSpatial;
+  static constexpr int kMinProductOwned    = Spec::kMinProductOwned;
 
   XTransDemosaicNet() = default;
 
@@ -68,42 +70,22 @@ class XTransDemosaicNet : public NnWeightModule<XTransDemosaicNet> {
                               bool apply_gamma_decode = true) const;
 
   [[nodiscard]] static auto NaturalOutputHeight(int input_h) -> int {
-    return input_h - kNaturalSpatialLoss;
+    return Spec::NaturalOutputHeight(input_h);
   }
   [[nodiscard]] static auto NaturalOutputWidth(int input_w) -> int {
-    return input_w - kNaturalSpatialLoss;
+    return Spec::NaturalOutputWidth(input_w);
   }
-  // Smallest owned axis for product export (P4-C strips may be 128-high).
-  static constexpr int kMinProductOwned = 128;
-
-  // True when both axes use product export: input = owned + 2*kTileBorder.
-  // X-Trans step period safety is enforced by the tile planner, not export crop.
   [[nodiscard]] static auto IsProductExportInput(int input_h, int input_w) -> bool {
-    const int owned_h = input_h - 2 * kTileBorder;
-    const int owned_w = input_w - 2 * kTileBorder;
-    return owned_h >= kMinProductOwned && owned_w >= kMinProductOwned;
+    return Spec::IsProductExportInput(input_h, input_w);
   }
-  // Product export owned edge when input is a square product tile; else -1.
-  // Prefer OutputHeight/Width for rectangular product tiles.
   [[nodiscard]] static auto ProductOwnedOutput(int input_h, int input_w) -> int {
-    if (input_h != input_w || !IsProductExportInput(input_h, input_w)) {
-      return -1;
-    }
-    return input_h - 2 * kTileBorder;
+    return Spec::ProductOwnedOutput(input_h, input_w);
   }
   [[nodiscard]] static auto OutputHeight(int input_h, int input_w = -1) -> int {
-    const int w = input_w < 0 ? input_h : input_w;
-    if (IsProductExportInput(input_h, w)) {
-      return input_h - 2 * kTileBorder;
-    }
-    return NaturalOutputHeight(input_h);
+    return Spec::OutputHeight(input_h, input_w);
   }
   [[nodiscard]] static auto OutputWidth(int input_w, int input_h = -1) -> int {
-    const int h = input_h < 0 ? input_w : input_h;
-    if (IsProductExportInput(h, input_w)) {
-      return input_w - 2 * kTileBorder;
-    }
-    return NaturalOutputWidth(input_w);
+    return Spec::OutputWidth(input_w, input_h);
   }
 
   // Peak-live activation workspace for one ForwardHwcChannelsLast (fused tail).

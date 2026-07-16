@@ -2,6 +2,8 @@
 
 Date: 2026-07-13
 
+Primary roadmap owner: external `AlcedoStudio-site` repository
+
 Status: Phase 5 in progress — the deployed website now lives in the standalone
 [`AlcedoStudio-site`](https://github.com/zidage/AlcedoStudio-site) repository and is
 served from `https://aoraw.org` through Cloudflare Workers.

@@ -163,6 +163,21 @@ if(ALCEDO_CUDA_ENABLED AND ALCEDO_ENABLE_CUDA_IMAGE_GEOMETRY_OPS_TEST)
   gtest_discover_tests(CudaImageGeometryOpsTest TEST_PREFIX "CudaImageGeometryOpsTest.")
 endif()
 
+# Phase 1 OpenCL NN plan: backend-neutral safetensors parser, student tile planner,
+# CFA alignment / Reflect101 / gamma constants. Must not link CUDA or OpenCL.
+add_executable(NnSharedUtilsTest
+  ml_ops/nn_safetensors_test.cpp
+  ml_ops/neural_tile_jobs_test.cpp
+  ml_ops/demosaicnet_preprocess_common_test.cpp
+)
+target_include_directories(NnSharedUtilsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(NnSharedUtilsTest PRIVATE GTest::gtest_main NnSafetensors JSON
+                      libraw::raw_r ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+target_compile_definitions(NnSharedUtilsTest PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+)
+gtest_discover_tests(NnSharedUtilsTest TEST_PREFIX "NnSharedUtilsTest.")
+
 if(ALCEDO_CUDA_ENABLED)
   add_executable(CudaPrngTest cuda/prng_test.cu)
   target_include_directories(CudaPrngTest PUBLIC ${ALCEDO_INCLUDE_DIR})
@@ -319,6 +334,140 @@ if(ALCEDO_CUDA_ENABLED AND ALCEDO_OPENCL_ENABLED)
 endif()
 
 if(ALCEDO_METAL_ENABLED)
+  if(POLICY CMP0116)
+    cmake_policy(SET CMP0116 NEW)
+  endif()
+  find_program(ALCEDO_TEST_XCRUN_EXECUTABLE xcrun REQUIRED)
+  execute_process(
+    COMMAND ${ALCEDO_TEST_XCRUN_EXECUTABLE} --sdk macosx --find metal
+    RESULT_VARIABLE ALCEDO_TEST_METAL_COMPILER_STATUS
+    OUTPUT_VARIABLE ALCEDO_TEST_METAL_EXECUTABLE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_VARIABLE ALCEDO_TEST_METAL_COMPILER_ERROR
+  )
+  if(NOT ALCEDO_TEST_METAL_COMPILER_STATUS EQUAL 0)
+    string(STRIP "${ALCEDO_TEST_METAL_COMPILER_ERROR}" ALCEDO_TEST_METAL_COMPILER_ERROR)
+    message(FATAL_ERROR "Metal compiler is not available via xcrun. ${ALCEDO_TEST_METAL_COMPILER_ERROR}")
+  endif()
+  execute_process(
+    COMMAND ${ALCEDO_TEST_XCRUN_EXECUTABLE} --sdk macosx --find metallib
+    RESULT_VARIABLE ALCEDO_TEST_METALLIB_STATUS
+    OUTPUT_VARIABLE ALCEDO_TEST_METALLIB_EXECUTABLE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_VARIABLE ALCEDO_TEST_METALLIB_ERROR
+  )
+  if(NOT ALCEDO_TEST_METALLIB_STATUS EQUAL 0)
+    string(STRIP "${ALCEDO_TEST_METALLIB_ERROR}" ALCEDO_TEST_METALLIB_ERROR)
+    message(FATAL_ERROR "Metal library linker is not available via xcrun. ${ALCEDO_TEST_METALLIB_ERROR}")
+  endif()
+
+  set(ALCEDO_METAL_DEMOSAICNET_BOUNDARY_SRC
+      "${CMAKE_CURRENT_SOURCE_DIR}/ml_ops/metal_demosaicnet_boundary.metal")
+  set(ALCEDO_METAL_DEMOSAICNET_BOUNDARY_AIR
+      "${CMAKE_CURRENT_BINARY_DIR}/ml_ops/metal_demosaicnet_boundary.air")
+  set(ALCEDO_METAL_DEMOSAICNET_BOUNDARY_METALLIB
+      "${CMAKE_CURRENT_BINARY_DIR}/ml_ops/metal_demosaicnet_boundary.metallib")
+  set(ALCEDO_TEST_METAL_DEPLOYMENT_TARGET "13.3")
+  if(DEFINED CMAKE_OSX_DEPLOYMENT_TARGET AND
+     NOT "${CMAKE_OSX_DEPLOYMENT_TARGET}" STREQUAL "" AND
+     NOT "${CMAKE_OSX_DEPLOYMENT_TARGET}" VERSION_LESS "13.3")
+    set(ALCEDO_TEST_METAL_DEPLOYMENT_TARGET "${CMAKE_OSX_DEPLOYMENT_TARGET}")
+  endif()
+  add_custom_command(
+    OUTPUT "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_AIR}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${CMAKE_CURRENT_BINARY_DIR}/ml_ops"
+    COMMAND ${ALCEDO_TEST_METAL_EXECUTABLE}
+            -MMD
+            -fno-color-diagnostics
+            "-mmacosx-version-min=${ALCEDO_TEST_METAL_DEPLOYMENT_TARGET}"
+            -MF "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_AIR}.d"
+            -c "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_SRC}"
+            -o "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_AIR}"
+    DEPENDS "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_SRC}"
+    DEPFILE "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_AIR}.d"
+    BYPRODUCTS "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_AIR}.d"
+    COMMENT "Compiling Metal DemosaicNet boundary test shader"
+    VERBATIM
+  )
+  add_custom_command(
+    OUTPUT "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_METALLIB}"
+    COMMAND ${ALCEDO_TEST_METALLIB_EXECUTABLE}
+            "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_AIR}"
+            -o "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_METALLIB}"
+    DEPENDS "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_AIR}"
+    COMMENT "Linking Metal DemosaicNet boundary test library"
+    VERBATIM
+  )
+  add_custom_target(MetalDemosaicNetGraphShaders
+                    DEPENDS "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_METALLIB}")
+  set_target_properties(MetalDemosaicNetGraphShaders PROPERTIES EXCLUDE_FROM_ALL TRUE)
+
+  add_executable(MetalDemosaicNetGraphTest
+    ml_ops/metal_demosaicnet_graph_test.mm
+  )
+  add_dependencies(MetalDemosaicNetGraphTest MetalDemosaicNetGraphShaders)
+  target_include_directories(MetalDemosaicNetGraphTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_compile_options(MetalDemosaicNetGraphTest PRIVATE
+    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
+  )
+  target_compile_definitions(MetalDemosaicNetGraphTest PRIVATE
+    ALCEDO_METAL_DEMOSAICNET_BOUNDARY_METALLIB_PATH="${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_METALLIB}"
+  )
+  target_link_libraries(MetalDemosaicNetGraphTest PRIVATE
+    GTest::gtest_main
+    MetalContext
+    alcedo::metal_cpp
+    "-framework MetalPerformanceShaders"
+    "-framework MetalPerformanceShadersGraph"
+  )
+  gtest_discover_tests(MetalDemosaicNetGraphTest TEST_PREFIX "MetalDemosaicNetGraphTest."
+    PROPERTIES LABELS "ci_metal_runtime")
+
+  # Fixed MPSGraph modules, lazy cache, full student reference pairs.
+  add_executable(MetalDemosaicNetModuleTest
+    ml_ops/metal_demosaicnet_module_test.mm
+  )
+  target_include_directories(MetalDemosaicNetModuleTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_compile_options(MetalDemosaicNetModuleTest PRIVATE
+    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
+  )
+  target_compile_definitions(MetalDemosaicNetModuleTest PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+  )
+  target_link_libraries(MetalDemosaicNetModuleTest PRIVATE
+    GTest::gtest_main
+    MetalDemosaicNet
+    MetalContext
+    NnSafetensors
+    alcedo::metal_cpp
+  )
+  gtest_discover_tests(MetalDemosaicNetModuleTest TEST_PREFIX "MetalDemosaicNetModuleTest."
+    PROPERTIES LABELS "ci_metal_runtime")
+
+  # Tile input / crop-sized output kernels and tiled executor.
+  add_executable(MetalDemosaicNetIoTest
+    ml_ops/metal_demosaicnet_io_test.mm
+  )
+  target_include_directories(MetalDemosaicNetIoTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_compile_options(MetalDemosaicNetIoTest PRIVATE
+    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
+  )
+  target_compile_definitions(MetalDemosaicNetIoTest PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+  )
+  target_link_libraries(MetalDemosaicNetIoTest PRIVATE
+    GTest::gtest_main
+    MetalDemosaicNetEntry
+    MetalDemosaicNet
+    MetalImage
+    MetalContext
+    alcedo::metal_cpp
+    ${ALCEDO_TEST_OPENCV_MIN_DEPS}
+  )
+  gtest_discover_tests(MetalDemosaicNetIoTest TEST_PREFIX "MetalDemosaicNetIoTest."
+    PROPERTIES LABELS "ci_metal_runtime")
+
   add_executable(ImageBufferMetalTest image/image_buffer_metal_test.cpp)
   target_include_directories(ImageBufferMetalTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(ImageBufferMetalTest PRIVATE GTest::gtest_main ImageBuffer MetalImage ${ALCEDO_TEST_OPENCV_MIN_DEPS})
@@ -335,6 +484,41 @@ if(ALCEDO_METAL_ENABLED)
   target_link_libraries(MetalRawOpsTest PRIVATE GTest::gtest_main RawProcessorOp ${ALCEDO_TEST_OPENCV_MIN_DEPS})
   gtest_discover_tests(MetalRawOpsTest TEST_PREFIX "MetalRawOpsTest."
     PROPERTIES LABELS "ci_metal_runtime")
+
+  # Metal Neural RAW product path (hard-fail), geometry, thumbnail Legacy.
+  add_executable(MetalRawNeuralTest raw/metal_raw_neural_test.cpp)
+  target_include_directories(MetalRawNeuralTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_compile_definitions(MetalRawNeuralTest PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+  )
+  target_link_libraries(MetalRawNeuralTest PRIVATE
+    GTest::gtest_main
+    RawProcessor
+    MetalDemosaicNetEntry
+    MetalDemosaicNet
+    MetalImage
+    MetalContext
+    ${ALCEDO_TEST_OPENCV_MIN_DEPS}
+  )
+  gtest_discover_tests(MetalRawNeuralTest TEST_PREFIX "MetalRawNeuralTest."
+    PROPERTIES LABELS "ci_metal_runtime")
+
+  # Full-frame Metal Neural timing and memory telemetry (Release + local fixtures).
+  add_executable(MetalDemosaicNetFullFrameTiming EXCLUDE_FROM_ALL
+    perf/metal_demosaicnet_fullframe_timing.cpp
+  )
+  target_include_directories(MetalDemosaicNetFullFrameTiming PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_compile_definitions(MetalDemosaicNetFullFrameTiming PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+    $<$<CONFIG:Release>:ALCEDO_METAL_DEMOSAICNET_RELEASE_BUILD>
+  )
+  target_link_libraries(MetalDemosaicNetFullFrameTiming PRIVATE
+    RawProcessor
+    MetalDemosaicNetEntry
+    MetalDemosaicNet
+    MetalContext
+    ${ALCEDO_TEST_OPENCV_MIN_DEPS}
+  )
 
   add_executable(MetalRawStagePreviewTest raw/metal_raw_stage_preview_test.cpp)
   target_include_directories(MetalRawStagePreviewTest PUBLIC ${ALCEDO_INCLUDE_DIR})
@@ -363,6 +547,20 @@ if(ALCEDO_OPENCL_ENABLED)
   target_include_directories(OpenClRawOpsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(OpenClRawOpsTest PRIVATE GTest::gtest_main RawProcessorOp ${ALCEDO_TEST_OPENCV_MIN_DEPS})
   gtest_discover_tests(OpenClRawOpsTest TEST_PREFIX "OpenClRawOpsTest.")
+
+  # Phase 6: OpenCL Neural RAW routing + same-backend Legacy fallback.
+  add_executable(OpenClRawNeuralTest raw/opencl_raw_neural_test.cpp)
+  target_include_directories(OpenClRawNeuralTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(OpenClRawNeuralTest PRIVATE
+    GTest::gtest_main
+    RawProcessor
+    OpenClDemosaicNetEntry
+    ${ALCEDO_TEST_OPENCV_MIN_DEPS}
+  )
+  target_compile_definitions(OpenClRawNeuralTest PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+  )
+  gtest_discover_tests(OpenClRawNeuralTest TEST_PREFIX "OpenClRawNeuralTest.")
 
   add_executable(OpenCLRawPreview gui_pocs/opencl_raw_preview.cpp)
   target_include_directories(OpenCLRawPreview PUBLIC ${ALCEDO_INCLUDE_DIR})
@@ -998,6 +1196,47 @@ if(ALCEDO_OPENCL_ENABLED)
   target_link_libraries(OpenClRuntimeTest PRIVATE GTest::gtest_main OpenClProgramLibrary)
   gtest_discover_tests(OpenClRuntimeTest TEST_PREFIX "OpenClRuntimeTest.")
 
+  add_executable(OpenClNnPrimitivesTest opencl/opencl_nn_primitives_test.cpp)
+  target_include_directories(OpenClNnPrimitivesTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(OpenClNnPrimitivesTest PRIVATE GTest::gtest_main OpenClNn OpenClProgramLibrary)
+  gtest_discover_tests(OpenClNnPrimitivesTest TEST_PREFIX "OpenClNnPrimitivesTest.")
+
+  # Fixed Bayer/X-Trans modules vs exported student reference pairs.
+  add_executable(OpenClDemosaicNetTest opencl/opencl_demosaicnet_test.cpp)
+  target_include_directories(OpenClDemosaicNetTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(OpenClDemosaicNetTest PRIVATE
+    GTest::gtest_main
+    OpenClDemosaicNet
+    OpenClProgramLibrary
+    NnSafetensors
+  )
+  target_compile_definitions(OpenClDemosaicNetTest PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+  )
+  gtest_discover_tests(OpenClDemosaicNetTest TEST_PREFIX "OpenClDemosaicNetTest.")
+
+  # Development full-frame OpenCL Neural telemetry harness (not default ctest).
+  # Authoritative timings: Release build.
+  #   cmd /c scripts\msvc_env.cmd --build --preset win_release --target OpenClDemosaicNetFullFrameTiming --parallel 4
+  #   build\release\alcedo_studio\tests\OpenClDemosaicNetFullFrameTiming.exe --wall --json build/perf/opencl_demosaicnet_wall.json
+  #   build\release\alcedo_studio\tests\OpenClDemosaicNetFullFrameTiming.exe --event-profile --json build/perf/opencl_demosaicnet_event.json
+  add_executable(OpenClDemosaicNetFullFrameTiming perf/opencl_demosaicnet_fullframe_timing.cpp)
+  target_include_directories(OpenClDemosaicNetFullFrameTiming PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(OpenClDemosaicNetFullFrameTiming PRIVATE
+    RawProcessor
+    OpenClDemosaicNetEntry
+    OpenClContext
+    ${ALCEDO_TEST_OPENCV_MIN_DEPS}
+  )
+  target_compile_definitions(OpenClDemosaicNetFullFrameTiming PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+    $<$<CONFIG:Release>:ALCEDO_OPENCL_DEMOSAICNET_RELEASE_BUILD>
+  )
+  if(ALCEDO_CUDA_ENABLED)
+    target_link_libraries(OpenClDemosaicNetFullFrameTiming PRIVATE DemosaicNet)
+    target_compile_definitions(OpenClDemosaicNetFullFrameTiming PRIVATE ALCEDO_FULLFRAME_CUDA_CONTROL=1)
+  endif()
+
   add_executable(OpenClFusedEditPipelineTest opencl/opencl_fused_edit_pipeline_test.cpp)
   target_include_directories(OpenClFusedEditPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(OpenClFusedEditPipelineTest
@@ -1189,6 +1428,8 @@ alcedo_assign_test_category(core ALCEDO_BUILD_CORE_TESTS alcedo_tests_core
   CudaDriverRequirementsTest
   OpenClProgramLibraryTest
   OpenClRuntimeTest
+  OpenClNnPrimitivesTest
+  OpenClDemosaicNetTest
 )
 
 alcedo_assign_test_category(image ALCEDO_BUILD_IMAGE_TESTS alcedo_tests_image
@@ -1210,6 +1451,8 @@ alcedo_assign_test_category(raw ALCEDO_BUILD_RAW_TESTS alcedo_tests_raw
   ColorTempCudaSanityTest
   RawProcessorCropTest
   OpenClRawOpsTest
+  OpenClRawNeuralTest
+  MetalRawNeuralTest
   MetalRawStagePreviewTest
   MetalFullPipelinePreviewTest
 )
@@ -1222,6 +1465,9 @@ alcedo_assign_test_category(gpu ALCEDO_BUILD_GPU_TESTS alcedo_tests_gpu
   CudaRawOpsTest
   DemosaicNetPerfHarness
   MetalUtilsTest
+  MetalDemosaicNetGraphTest
+  MetalDemosaicNetModuleTest
+  MetalDemosaicNetIoTest
   MetalRawOpsTest
   ODTCudaSmokeTest
   FilmGrainCudaStageTest
@@ -1317,7 +1563,11 @@ alcedo_assign_test_category(ci_raw ALCEDO_BUILD_CI_TESTS alcedo_tests_ci_raw
 
 alcedo_assign_test_category(ci_metal ALCEDO_BUILD_CI_TESTS alcedo_tests_ci_metal
   MetalUtilsTest
+  MetalDemosaicNetGraphTest
+  MetalDemosaicNetModuleTest
+  MetalDemosaicNetIoTest
   MetalRawOpsTest
+  MetalRawNeuralTest
   MetalRawStagePreviewTest
   MetalFullPipelinePreviewTest
 )

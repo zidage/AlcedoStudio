@@ -2,6 +2,8 @@
 
 Date: 2026-07-13
 
+Primary roadmap owner: `alcedo_studio/src/decoders/processor/nn`
+
 Status: active follow-up to
 [`cuda_nn_forward_demosaicnet_plan.md`](cuda_nn_forward_demosaicnet_plan.md).
 **P0 complete** (see §4.3). **P1 complete** (see §5.4). **P2 complete** (see
