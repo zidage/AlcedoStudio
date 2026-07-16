@@ -255,6 +255,9 @@ tags
 # Persistent undo
 [._]*.un~
 
+# Local RAW performance fixtures; never commit or route through Git LFS.
+/alcedo_studio/tests/resources/sample_images/local/
+
 ##### Emacs
 # -*- mode: gitignore; -*-
 *~

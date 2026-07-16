@@ -334,6 +334,96 @@ if(ALCEDO_CUDA_ENABLED AND ALCEDO_OPENCL_ENABLED)
 endif()
 
 if(ALCEDO_METAL_ENABLED)
+  if(POLICY CMP0116)
+    cmake_policy(SET CMP0116 NEW)
+  endif()
+  find_program(ALCEDO_TEST_XCRUN_EXECUTABLE xcrun REQUIRED)
+  execute_process(
+    COMMAND ${ALCEDO_TEST_XCRUN_EXECUTABLE} --sdk macosx --find metal
+    RESULT_VARIABLE ALCEDO_TEST_METAL_COMPILER_STATUS
+    OUTPUT_VARIABLE ALCEDO_TEST_METAL_EXECUTABLE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_VARIABLE ALCEDO_TEST_METAL_COMPILER_ERROR
+  )
+  if(NOT ALCEDO_TEST_METAL_COMPILER_STATUS EQUAL 0)
+    string(STRIP "${ALCEDO_TEST_METAL_COMPILER_ERROR}" ALCEDO_TEST_METAL_COMPILER_ERROR)
+    message(FATAL_ERROR "Metal compiler is not available via xcrun. ${ALCEDO_TEST_METAL_COMPILER_ERROR}")
+  endif()
+  execute_process(
+    COMMAND ${ALCEDO_TEST_XCRUN_EXECUTABLE} --sdk macosx --find metallib
+    RESULT_VARIABLE ALCEDO_TEST_METALLIB_STATUS
+    OUTPUT_VARIABLE ALCEDO_TEST_METALLIB_EXECUTABLE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_VARIABLE ALCEDO_TEST_METALLIB_ERROR
+  )
+  if(NOT ALCEDO_TEST_METALLIB_STATUS EQUAL 0)
+    string(STRIP "${ALCEDO_TEST_METALLIB_ERROR}" ALCEDO_TEST_METALLIB_ERROR)
+    message(FATAL_ERROR "Metal library linker is not available via xcrun. ${ALCEDO_TEST_METALLIB_ERROR}")
+  endif()
+
+  set(ALCEDO_METAL_DEMOSAICNET_BOUNDARY_SRC
+      "${CMAKE_CURRENT_SOURCE_DIR}/ml_ops/metal_demosaicnet_boundary.metal")
+  set(ALCEDO_METAL_DEMOSAICNET_BOUNDARY_AIR
+      "${CMAKE_CURRENT_BINARY_DIR}/ml_ops/metal_demosaicnet_boundary.air")
+  set(ALCEDO_METAL_DEMOSAICNET_BOUNDARY_METALLIB
+      "${CMAKE_CURRENT_BINARY_DIR}/ml_ops/metal_demosaicnet_boundary.metallib")
+  set(ALCEDO_TEST_METAL_DEPLOYMENT_TARGET "13.3")
+  if(DEFINED CMAKE_OSX_DEPLOYMENT_TARGET AND
+     NOT "${CMAKE_OSX_DEPLOYMENT_TARGET}" STREQUAL "" AND
+     NOT "${CMAKE_OSX_DEPLOYMENT_TARGET}" VERSION_LESS "13.3")
+    set(ALCEDO_TEST_METAL_DEPLOYMENT_TARGET "${CMAKE_OSX_DEPLOYMENT_TARGET}")
+  endif()
+  add_custom_command(
+    OUTPUT "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_AIR}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "${CMAKE_CURRENT_BINARY_DIR}/ml_ops"
+    COMMAND ${ALCEDO_TEST_METAL_EXECUTABLE}
+            -MMD
+            -fno-color-diagnostics
+            "-mmacosx-version-min=${ALCEDO_TEST_METAL_DEPLOYMENT_TARGET}"
+            -MF "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_AIR}.d"
+            -c "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_SRC}"
+            -o "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_AIR}"
+    DEPENDS "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_SRC}"
+    DEPFILE "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_AIR}.d"
+    BYPRODUCTS "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_AIR}.d"
+    COMMENT "Compiling Metal DemosaicNet boundary test shader"
+    VERBATIM
+  )
+  add_custom_command(
+    OUTPUT "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_METALLIB}"
+    COMMAND ${ALCEDO_TEST_METALLIB_EXECUTABLE}
+            "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_AIR}"
+            -o "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_METALLIB}"
+    DEPENDS "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_AIR}"
+    COMMENT "Linking Metal DemosaicNet boundary test library"
+    VERBATIM
+  )
+  add_custom_target(MetalDemosaicNetGraphShaders
+                    DEPENDS "${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_METALLIB}")
+  set_target_properties(MetalDemosaicNetGraphShaders PROPERTIES EXCLUDE_FROM_ALL TRUE)
+
+  add_executable(MetalDemosaicNetGraphTest
+    ml_ops/metal_demosaicnet_graph_test.mm
+  )
+  add_dependencies(MetalDemosaicNetGraphTest MetalDemosaicNetGraphShaders)
+  target_include_directories(MetalDemosaicNetGraphTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_compile_options(MetalDemosaicNetGraphTest PRIVATE
+    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
+  )
+  target_compile_definitions(MetalDemosaicNetGraphTest PRIVATE
+    ALCEDO_METAL_DEMOSAICNET_BOUNDARY_METALLIB_PATH="${ALCEDO_METAL_DEMOSAICNET_BOUNDARY_METALLIB}"
+  )
+  target_link_libraries(MetalDemosaicNetGraphTest PRIVATE
+    GTest::gtest_main
+    MetalContext
+    alcedo::metal_cpp
+    "-framework MetalPerformanceShaders"
+    "-framework MetalPerformanceShadersGraph"
+  )
+  gtest_discover_tests(MetalDemosaicNetGraphTest TEST_PREFIX "MetalDemosaicNetGraphTest."
+    PROPERTIES LABELS "ci_metal_runtime")
+
   add_executable(ImageBufferMetalTest image/image_buffer_metal_test.cpp)
   target_include_directories(ImageBufferMetalTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(ImageBufferMetalTest PRIVATE GTest::gtest_main ImageBuffer MetalImage ${ALCEDO_TEST_OPENCV_MIN_DEPS})
@@ -1295,6 +1385,7 @@ alcedo_assign_test_category(gpu ALCEDO_BUILD_GPU_TESTS alcedo_tests_gpu
   CudaRawOpsTest
   DemosaicNetPerfHarness
   MetalUtilsTest
+  MetalDemosaicNetGraphTest
   MetalRawOpsTest
   ODTCudaSmokeTest
   FilmGrainCudaStageTest
@@ -1390,6 +1481,7 @@ alcedo_assign_test_category(ci_raw ALCEDO_BUILD_CI_TESTS alcedo_tests_ci_raw
 
 alcedo_assign_test_category(ci_metal ALCEDO_BUILD_CI_TESTS alcedo_tests_ci_metal
   MetalUtilsTest
+  MetalDemosaicNetGraphTest
   MetalRawOpsTest
   MetalRawStagePreviewTest
   MetalFullPipelinePreviewTest

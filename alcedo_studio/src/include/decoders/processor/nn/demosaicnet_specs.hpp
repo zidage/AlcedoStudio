@@ -5,7 +5,7 @@
 #pragma once
 
 // Backend-neutral Bayer / X-Trans DemosaicNet topology and tile constants.
-// Shared by CUDA and OpenCL product paths so tile lists and export geometry match.
+// Shared by CUDA, OpenCL, and Metal product paths so tile lists and export geometry match.
 
 namespace alcedo {
 

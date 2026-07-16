@@ -1,26 +1,26 @@
 # Development Roadmap
 
-Roadmap documents are stored under the source directory that primarily owns the work. Cross-module
-plans live with the dominant owner and declare secondary consumers in their metadata. Project-wide
-release planning stays at this directory root; plans for external repositories use a separate
-top-level category.
+Roadmap documents are grouped by product area. The directory structure does not mirror the source
+tree. Project-wide release planning stays at this directory root, and plans for external projects
+use their own top-level category.
 
-## `alcedo_studio/src/ai`
+## Alcedo Studio — AI
 
-- [AI Sidecar Backend Integration Plan](alcedo_studio/src/ai/ai_sidecar_backend_plan.md)
-- [AI Sidecar Phase 0 Contract](alcedo_studio/src/ai/ai_sidecar_phase0_contract.md)
-- [Semantic Generation and Search Integration Plan](alcedo_studio/src/ai/semantic_generation_search_plan.md)
+- [AI Sidecar Backend Integration Plan](alcedo_studio/ai/ai_sidecar_backend_plan.md)
+- [AI Sidecar Phase 0 Requirements](alcedo_studio/ai/ai_sidecar_phase0_contract.md)
+- [Semantic Generation and Search Integration Plan](alcedo_studio/ai/semantic_generation_search_plan.md)
 
-## `alcedo_studio/src/decoders/processor/nn`
+## Alcedo Studio — RAW processing and DemosaicNet
 
-- [CUDA CNN Forward Framework + DemosaicNet Plan](alcedo_studio/src/decoders/processor/nn/cuda_nn_forward_demosaicnet_plan.md)
-- [CUDA DemosaicNet Performance Follow-up](alcedo_studio/src/decoders/processor/nn/cuda_demosaicnet_performance_next.md)
-- [OpenCL NN Forward DemosaicNet Migration and Performance Recovery](alcedo_studio/src/decoders/processor/nn/opencl_nn_forward_demosaicnet_plan.md)
+- [CUDA CNN Forward Framework + DemosaicNet Plan](alcedo_studio/raw-processing/demosaicnet/cuda_nn_forward_demosaicnet_plan.md)
+- [CUDA DemosaicNet Performance Follow-up](alcedo_studio/raw-processing/demosaicnet/cuda_demosaicnet_performance_next.md)
+- [OpenCL NN Forward DemosaicNet Migration and Performance Recovery](alcedo_studio/raw-processing/demosaicnet/opencl_nn_forward_demosaicnet_plan.md)
+- [Metal MPSGraph DemosaicNet Plan](alcedo_studio/raw-processing/demosaicnet/metal_nn_forward_demosaicnet_plan.md)
 
-## `alcedo_studio/src/ui/alcedo_main`
+## Alcedo Studio — UI
 
-- [AI Sidecar Frontend Plan](alcedo_studio/src/ui/alcedo_main/ai_sidecar_frontend_plan.md)
-- [Background Tasks and Declarative UI State Plan](alcedo_studio/src/ui/alcedo_main/background_tasks_ui_state_plan.md)
+- [AI Sidecar Frontend Plan](alcedo_studio/ui/ai_sidecar_frontend_plan.md)
+- [Background Tasks and Declarative UI State Plan](alcedo_studio/ui/background_tasks_ui_state_plan.md)
 
 ## External website
 
@@ -33,9 +33,11 @@ top-level category.
 
 ## Placement rules
 
-- Mirror the primary owning path below `alcedo_studio/src/` when adding a new implementation plan.
-- Keep tightly related plans together so relative links survive moves.
-- Put cross-cutting work under the dominant source owner and list other modules in the document's
-  `Primary roadmap owner` metadata.
+- Choose a plain product-area folder such as `ai`, `raw-processing`, or `ui`.
+- Add a topic folder when several closely related plans need to stay together.
+- Keep tightly related plans together so relative links remain short and stable.
+- Put cross-cutting work under the product area that owns the user-visible result and list other
+  affected areas near the top of the document.
 - Keep only navigation and genuinely project-wide roadmaps at this root.
-- Do not create monthly buckets; source ownership is the stable classification.
+- Do not mirror `src`, `include`, or implementation-language directories.
+- Do not create monthly buckets.
