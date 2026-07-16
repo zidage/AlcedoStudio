@@ -3,7 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 /// @file album_backend_import_test.cpp
-/// @brief Import-robustness tests for AlbumBackend.
+/// @brief Import-robustness tests for ApplicationModuleHost.
 ///
 /// Focus: JPEG/TIFF graceful handling (pipeline does not support them as raw
 /// decode input), CTD prevention, mixed-format import, cancellation, and
@@ -19,7 +19,7 @@
 namespace alcedo::ui::test {
 namespace {
 
-using ImportTests = AlbumBackendTestFixture;
+using ImportTests = ApplicationModuleHostTestFixture;
 
 auto FindPackedProjectPath(const std::filesystem::path& dir)
     -> std::optional<std::filesystem::path> {
@@ -43,11 +43,11 @@ auto FindFolderId(const QVariantList& folders, const QString& name) -> uint {
 
 // ── Helper: wait until importRunning becomes false ─────────────────────────
 
-void WaitForImportFinished(AlbumBackend& backend, int timeoutMs = 30000) {
-  QSignalSpy spy(&backend, &AlbumBackend::ImportStateChanged);
+void WaitForImportFinished(ApplicationModuleHost& backend, int timeoutMs = 30000) {
+  QSignalSpy spy(backend.import_export(), &ImportExportHandler::ImportStateChanged);
   const int step = 200;
   int       elapsed = 0;
-  while (backend.ImportRunning() && elapsed < timeoutMs) {
+  while (backend.import_export()->ImportRunning() && elapsed < timeoutMs) {
     spy.wait(step);
     elapsed += step;
   }
@@ -77,7 +77,7 @@ auto WaitForSearchPreviewThumbnail(QSignalSpy& spy, uint element_id, int timeout
 // ── Single RAW import ──────────────────────────────────────────────────────
 
 TEST_F(ImportTests, Import_SingleRawFile_Succeeds) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
   auto images = CollectRawTestImages("airplane", 1);
@@ -85,19 +85,19 @@ TEST_F(ImportTests, Import_SingleRawFile_Succeeds) {
     GTEST_SKIP() << "No test RAW images found in raw/airplane/";
   }
 
-  QSignalSpy importSpy(&backend, &AlbumBackend::ImportStateChanged);
-  backend.StartImport(PathsToQStringList(images));
+  QSignalSpy importSpy(backend.import_export(), &ImportExportHandler::ImportStateChanged);
+  backend.import_export()->StartImport(PathsToQStringList(images));
 
   WaitForImportFinished(backend);
 
-  EXPECT_FALSE(backend.ImportRunning());
-  EXPECT_GE(backend.ImportCompleted(), 1);
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_GE(backend.import_export()->ImportCompleted(), 1);
 }
 
 // ── JPEG-only import — must not crash ──────────────────────────────────────
 
 TEST_F(ImportTests, Import_JpegOnly_NoCrash) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
   // Collect .jpg/.jpeg files from the batch folder (they exist alongside ARWs).
@@ -128,17 +128,17 @@ TEST_F(ImportTests, Import_JpegOnly_NoCrash) {
   }
 
   // This should NOT crash — even if pipeline cannot process JPEGs.
-  backend.StartImport(PathsToQStringList(jpegPaths));
+  backend.import_export()->StartImport(PathsToQStringList(jpegPaths));
   WaitForImportFinished(backend);
 
   // The test passes as long as we reach here without crashing.
-  EXPECT_FALSE(backend.ImportRunning());
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
 }
 
 // ── TIFF-only import — must not crash ──────────────────────────────────────
 
 TEST_F(ImportTests, Import_TiffOnly_NoCrash) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
   std::vector<std::filesystem::path> tiffPaths;
@@ -159,16 +159,16 @@ TEST_F(ImportTests, Import_TiffOnly_NoCrash) {
     GTEST_SKIP() << "No TIFF test images available";
   }
 
-  backend.StartImport(PathsToQStringList(tiffPaths));
+  backend.import_export()->StartImport(PathsToQStringList(tiffPaths));
   WaitForImportFinished(backend);
 
-  EXPECT_FALSE(backend.ImportRunning());
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
 }
 
 // ── Mixed RAW + JPEG — only RAWs should survive pipeline without crash ─────
 
 TEST_F(ImportTests, Import_MixedRawAndJpeg_NoCrash) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
   // Collect everything from raw/batch (NEFs, ARWs, JPGs).
@@ -189,18 +189,18 @@ TEST_F(ImportTests, Import_MixedRawAndJpeg_NoCrash) {
     GTEST_SKIP() << "No mixed test images available in raw/batch/";
   }
 
-  backend.StartImport(PathsToQStringList(allPaths));
+  backend.import_export()->StartImport(PathsToQStringList(allPaths));
   WaitForImportFinished(backend);
 
-  EXPECT_FALSE(backend.ImportRunning());
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
   // At least the RAW files should succeed (if JPEGs fail, that's OK —
   // the critical thing is no crash).
 }
 
 TEST_F(ImportTests, SearchPreview_ReturnsPagedResultsAndTotalCount) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
-  auto* search = qobject_cast<SearchController*>(backend.SearchControllerObject());
+  auto* search = backend.search();
   ASSERT_NE(search, nullptr);
 
   auto images = CollectRawTestImages("batch", 8);
@@ -208,10 +208,10 @@ TEST_F(ImportTests, SearchPreview_ReturnsPagedResultsAndTotalCount) {
     GTEST_SKIP() << "Need several RAW fixtures in raw/batch/";
   }
 
-  backend.StartImport(PathsToQStringList(images));
+  backend.import_export()->StartImport(PathsToQStringList(images));
   WaitForImportFinished(backend, 60000);
-  ASSERT_FALSE(backend.ImportRunning());
-  ASSERT_GE(backend.ImportCompleted(), 6);
+  ASSERT_FALSE(backend.import_export()->ImportRunning());
+  ASSERT_GE(backend.import_export()->ImportCompleted(), 6);
 
   const QString query = PathToQString(images.front().stem()).left(4);
   ASSERT_FALSE(query.isEmpty());
@@ -219,7 +219,7 @@ TEST_F(ImportTests, SearchPreview_ReturnsPagedResultsAndTotalCount) {
   const QVariantMap first_page = search->SearchPreview(query, 0, 3);
   const auto        first_rows = first_page.value("rows").toList();
   ASSERT_EQ(first_rows.size(), 3);
-  EXPECT_GE(first_page.value("total").toInt(), backend.ImportCompleted());
+  EXPECT_GE(first_page.value("total").toInt(), backend.import_export()->ImportCompleted());
   EXPECT_TRUE(first_page.value("hasMore").toBool());
 
   const QVariantMap second_page = search->SearchPreview(query, 3, 3);
@@ -235,9 +235,9 @@ TEST_F(ImportTests, SearchPreview_ReturnsPagedResultsAndTotalCount) {
 }
 
 TEST_F(ImportTests, SearchPreviewThumbnail_LoadsForPagedVisibleResult) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
-  auto* search = qobject_cast<SearchController*>(backend.SearchControllerObject());
+  auto* search = backend.search();
   ASSERT_NE(search, nullptr);
 
   auto images = CollectRawTestImages("batch", 8);
@@ -245,9 +245,9 @@ TEST_F(ImportTests, SearchPreviewThumbnail_LoadsForPagedVisibleResult) {
     GTEST_SKIP() << "Need several RAW fixtures in raw/batch/";
   }
 
-  backend.StartImport(PathsToQStringList(images));
+  backend.import_export()->StartImport(PathsToQStringList(images));
   WaitForImportFinished(backend, 60000);
-  ASSERT_FALSE(backend.ImportRunning());
+  ASSERT_FALSE(backend.import_export()->ImportRunning());
 
   const QString query = PathToQString(images.front().stem()).left(4);
   ASSERT_FALSE(query.isEmpty());
@@ -279,36 +279,36 @@ TEST_F(ImportTests, SearchPreviewThumbnail_LoadsForPagedVisibleResult) {
 // ── Empty file list — no crash, sensible feedback ──────────────────────────
 
 TEST_F(ImportTests, Import_EmptyFileList_NoCrash) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
-  backend.StartImport({});
+  backend.import_export()->StartImport({});
 
   ProcessEvents(200);
 
-  EXPECT_FALSE(backend.ImportRunning());
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
 }
 
 // ── Non-existent path — no crash ───────────────────────────────────────────
 
 TEST_F(ImportTests, Import_NonexistentPath_NoCrash) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
   QStringList fakeFiles;
   fakeFiles << "C:/this/path/does/not/exist/photo.nef";
   fakeFiles << "/tmp/phantom_image.arw";
 
-  backend.StartImport(fakeFiles);
+  backend.import_export()->StartImport(fakeFiles);
   ProcessEvents(200);
 
-  EXPECT_FALSE(backend.ImportRunning());
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
 }
 
 // ── Import without a project loaded — no crash ─────────────────────────────
 
 TEST_F(ImportTests, Import_NoProjectLoaded_NoCrash) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   // Do NOT create a project — backend is in "not ready" state.
 
   auto images = CollectRawTestImages("airplane", 1);
@@ -317,17 +317,17 @@ TEST_F(ImportTests, Import_NoProjectLoaded_NoCrash) {
   }
 
   // Should fail gracefully, not crash.
-  backend.StartImport(PathsToQStringList(images));
+  backend.import_export()->StartImport(PathsToQStringList(images));
   ProcessEvents(200);
 
-  EXPECT_FALSE(backend.ImportRunning());
-  EXPECT_FALSE(backend.ServiceReady());
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_FALSE(backend.project()->ServiceReady());
 }
 
 // ── Duplicate files in same import call — deduplication ────────────────────
 
 TEST_F(ImportTests, Import_DuplicateFiles_Deduplication) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
   auto images = CollectRawTestImages("airplane", 1);
@@ -340,18 +340,18 @@ TEST_F(ImportTests, Import_DuplicateFiles_Deduplication) {
   duped << PathToQString(images[0]);
   duped << PathToQString(images[0]);
 
-  backend.StartImport(duped);
+  backend.import_export()->StartImport(duped);
   WaitForImportFinished(backend);
 
-  EXPECT_FALSE(backend.ImportRunning());
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
   // Only one copy should have been imported.
-  EXPECT_EQ(backend.ImportCompleted(), 1);
+  EXPECT_EQ(backend.import_export()->ImportCompleted(), 1);
 }
 
 // ── Batch DNG import ───────────────────────────────────────────────────────
 
 TEST_F(ImportTests, Import_BatchDng_Succeeds) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
   auto images = CollectRawTestImages("batch_import", 5);
@@ -359,17 +359,17 @@ TEST_F(ImportTests, Import_BatchDng_Succeeds) {
     GTEST_SKIP() << "No DNG files in raw/batch_import/";
   }
 
-  backend.StartImport(PathsToQStringList(images));
+  backend.import_export()->StartImport(PathsToQStringList(images));
   WaitForImportFinished(backend, 60000);  // DNG batch can be slow.
 
-  EXPECT_FALSE(backend.ImportRunning());
-  EXPECT_EQ(backend.ImportCompleted(), static_cast<int>(images.size()));
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.import_export()->ImportCompleted(), static_cast<int>(images.size()));
 }
 
 // ── Cancel import — no crash ───────────────────────────────────────────────
 
 TEST_F(ImportTests, Import_CancelImmediate_NoCrash) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
   auto images = CollectRawTestImages("batch_import", 10);
@@ -377,19 +377,19 @@ TEST_F(ImportTests, Import_CancelImmediate_NoCrash) {
     GTEST_SKIP() << "No DNG files for cancel test";
   }
 
-  backend.StartImport(PathsToQStringList(images));
+  backend.import_export()->StartImport(PathsToQStringList(images));
   // Cancel immediately — the import thread may or may not have started.
   ProcessEvents(50);
-  backend.CancelImport();
+  backend.import_export()->CancelImport();
 
   WaitForImportFinished(backend, 15000);
-  EXPECT_FALSE(backend.ImportRunning());
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
 }
 
 // ── Unsupported extension — silently ignored ───────────────────────────────
 
 TEST_F(ImportTests, Import_UnsupportedExtension_Ignored) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
   // Create a temp file with a made-up extension.
@@ -401,17 +401,17 @@ TEST_F(ImportTests, Import_UnsupportedExtension_Ignored) {
 
   QStringList list;
   list << PathToQString(fakePath);
-  backend.StartImport(list);
+  backend.import_export()->StartImport(list);
   ProcessEvents(200);
 
   // The file should be silently skipped (not a supported extension).
-  EXPECT_FALSE(backend.ImportRunning());
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
 }
 
 // ── Corrupted file with valid extension — no crash ─────────────────────────
 
 TEST_F(ImportTests, Import_CorruptedFileValidExtension_NoCrash) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
   // Create a file named .nef but with garbage content.
@@ -423,11 +423,11 @@ TEST_F(ImportTests, Import_CorruptedFileValidExtension_NoCrash) {
 
   QStringList list;
   list << PathToQString(corruptPath);
-  backend.StartImport(list);
+  backend.import_export()->StartImport(list);
   WaitForImportFinished(backend);
 
   // Must not crash. Import may report 0 succeeded + 1 failed, or skip it.
-  EXPECT_FALSE(backend.ImportRunning());
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
 }
 
 TEST_F(ImportTests, ImportIntoSubfolder_PersistsAcrossFreshProjectLoad) {
@@ -439,51 +439,51 @@ TEST_F(ImportTests, ImportIntoSubfolder_PersistsAcrossFreshProjectLoad) {
   const QString expected_name = PathToQString(images.front().filename());
 
   {
-    AlbumBackend backend;
+    ApplicationModuleHost backend;
     ASSERT_TRUE(CreateTestProject(backend, "subfolder_import_reload"));
 
-    backend.CreateFolder("Imports");
+    backend.folders()->CreateFolder("Imports");
     ProcessEvents(500);
 
-    const uint imports_folder_id = FindFolderId(backend.Folders(), "Imports");
+    const uint imports_folder_id = FindFolderId(backend.folders()->Folders(), "Imports");
     ASSERT_NE(imports_folder_id, 0u);
 
-    backend.SelectFolder(imports_folder_id);
+    backend.folders()->SelectFolder(imports_folder_id);
     ProcessEvents(300);
-    ASSERT_EQ(backend.CurrentFolderPath(), "\\Imports");
+    ASSERT_EQ(backend.folders()->CurrentFolderPath(), "\\Imports");
 
-    backend.StartImport(PathsToQStringList(images));
+    backend.import_export()->StartImport(PathsToQStringList(images));
     WaitForImportFinished(backend);
 
-    ASSERT_FALSE(backend.ImportRunning());
-    ASSERT_EQ(backend.ShownCount(), 1);
-    ASSERT_EQ(backend.Thumbnails().size(), 1);
+    ASSERT_FALSE(backend.import_export()->ImportRunning());
+    ASSERT_EQ(backend.library()->ShownCount(), 1);
+    ASSERT_EQ(backend.library()->Thumbnails().size(), 1);
 
-    const QVariantMap imported = backend.Thumbnails().front().toMap();
+    const QVariantMap imported = backend.library()->Thumbnails().front().toMap();
     EXPECT_EQ(imported.value("fileName").toString(), expected_name);
-    ASSERT_TRUE(backend.SaveProject());
+    ASSERT_TRUE(backend.project()->SaveProject());
   }
 
   const auto packed_project_path = FindPackedProjectPath(temp_dir_);
   ASSERT_TRUE(packed_project_path.has_value());
 
-  AlbumBackend reloaded_backend;
-  QSignalSpy   project_spy(&reloaded_backend, &AlbumBackend::ProjectChanged);
-  ASSERT_TRUE(reloaded_backend.LoadProject(PathToQString(*packed_project_path)));
+  ApplicationModuleHost reloaded_backend;
+  QSignalSpy project_spy(reloaded_backend.project(), &ProjectModule::ProjectChanged);
+  ASSERT_TRUE(reloaded_backend.project()->LoadProject(PathToQString(*packed_project_path)));
   ASSERT_TRUE(WaitForSignal(project_spy, 15000));
   ProcessEvents(500);
 
-  const uint imports_folder_id = FindFolderId(reloaded_backend.Folders(), "Imports");
+  const uint imports_folder_id = FindFolderId(reloaded_backend.folders()->Folders(), "Imports");
   ASSERT_NE(imports_folder_id, 0u);
 
-  reloaded_backend.SelectFolder(imports_folder_id);
+  reloaded_backend.folders()->SelectFolder(imports_folder_id);
   ProcessEvents(500);
 
-  EXPECT_EQ(reloaded_backend.CurrentFolderPath(), "\\Imports");
-  ASSERT_EQ(reloaded_backend.ShownCount(), 1);
-  ASSERT_EQ(reloaded_backend.Thumbnails().size(), 1);
+  EXPECT_EQ(reloaded_backend.folders()->CurrentFolderPath(), "\\Imports");
+  ASSERT_EQ(reloaded_backend.library()->ShownCount(), 1);
+  ASSERT_EQ(reloaded_backend.library()->Thumbnails().size(), 1);
 
-  const QVariantMap imported = reloaded_backend.Thumbnails().front().toMap();
+  const QVariantMap imported = reloaded_backend.library()->Thumbnails().front().toMap();
   EXPECT_EQ(imported.value("fileName").toString(), expected_name);
 }
 
@@ -495,46 +495,46 @@ TEST_F(ImportTests, ImportIntoNestedSubfolder_PersistsAcrossProjectReload) {
 
   const QString expected_name = PathToQString(images.front().filename());
 
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend, "nested_subfolder_import_reload"));
 
-  backend.CreateFolder("ParentFolder");
+  backend.folders()->CreateFolder("ParentFolder");
   ProcessEvents(500);
 
-  const uint parent_folder_id = FindFolderId(backend.Folders(), "ParentFolder");
+  const uint parent_folder_id = FindFolderId(backend.folders()->Folders(), "ParentFolder");
   ASSERT_NE(parent_folder_id, 0u);
 
-  backend.SelectFolder(parent_folder_id);
+  backend.folders()->SelectFolder(parent_folder_id);
   ProcessEvents(300);
-  backend.CreateFolder("ChildFolder");
+  backend.folders()->CreateFolder("ChildFolder");
   ProcessEvents(500);
 
-  const uint child_folder_id = FindFolderId(backend.Folders(), "ChildFolder");
+  const uint child_folder_id = FindFolderId(backend.folders()->Folders(), "ChildFolder");
   ASSERT_NE(child_folder_id, 0u);
 
-  backend.SelectFolder(child_folder_id);
+  backend.folders()->SelectFolder(child_folder_id);
   ProcessEvents(300);
-  ASSERT_EQ(backend.CurrentFolderPath(), "\\ParentFolder\\ChildFolder");
+  ASSERT_EQ(backend.folders()->CurrentFolderPath(), "\\ParentFolder\\ChildFolder");
 
-  backend.StartImport(PathsToQStringList(images));
+  backend.import_export()->StartImport(PathsToQStringList(images));
   WaitForImportFinished(backend);
 
-  ASSERT_FALSE(backend.ImportRunning());
-  ASSERT_EQ(backend.ShownCount(), 1);
-  ASSERT_EQ(backend.Thumbnails().size(), 1);
-  EXPECT_EQ(backend.Thumbnails().front().toMap().value("fileName").toString(), expected_name);
+  ASSERT_FALSE(backend.import_export()->ImportRunning());
+  ASSERT_EQ(backend.library()->ShownCount(), 1);
+  ASSERT_EQ(backend.library()->Thumbnails().size(), 1);
+  EXPECT_EQ(backend.library()->Thumbnails().front().toMap().value("fileName").toString(), expected_name);
   const auto packed_project_path = FindPackedProjectPath(temp_dir_);
   ASSERT_TRUE(packed_project_path.has_value());
 
-  QSignalSpy project_spy(&backend, &AlbumBackend::ProjectChanged);
-  ASSERT_TRUE(backend.LoadProject(PathToQString(*packed_project_path)));
+  QSignalSpy project_spy(backend.project(), &ProjectModule::ProjectChanged);
+  ASSERT_TRUE(backend.project()->LoadProject(PathToQString(*packed_project_path)));
   ASSERT_TRUE(WaitForSignal(project_spy, 15000));
   ProcessEvents(500);
 
-  EXPECT_EQ(backend.CurrentFolderPath(), "\\ParentFolder\\ChildFolder");
-  ASSERT_EQ(backend.ShownCount(), 1);
-  ASSERT_EQ(backend.Thumbnails().size(), 1);
-  EXPECT_EQ(backend.Thumbnails().front().toMap().value("fileName").toString(), expected_name);
+  EXPECT_EQ(backend.folders()->CurrentFolderPath(), "\\ParentFolder\\ChildFolder");
+  ASSERT_EQ(backend.library()->ShownCount(), 1);
+  ASSERT_EQ(backend.library()->Thumbnails().size(), 1);
+  EXPECT_EQ(backend.library()->Thumbnails().front().toMap().value("fileName").toString(), expected_name);
 }
 
 }  // namespace

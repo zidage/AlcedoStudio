@@ -23,9 +23,9 @@ namespace alcedo::ui {
 /// and the pending delete / analysis target lists) and exposes both Q_INVOKABLE
 /// one-shot queries and cached Q_PROPERTY booleans for `enabled:` bindings.
 ///
-/// Like `BackgroundTaskController`, this is a standalone QObject with no
-/// `AlbumBackend` dependency so it is unit-testable with just a
-/// `BackgroundTaskController` (tests register snapshots with `locks_` directly).
+/// Like `BackgroundTaskController`, this is a standalone QObject with no host
+/// dependency so it is unit-testable with just a `BackgroundTaskController`
+/// (tests register snapshots with `locks_` directly).
 ///
 /// Threading: all register/query activity happens on the UI thread
 /// (`BackgroundTaskController::TasksChanged` is emitted there and the QML inputs

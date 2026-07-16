@@ -5,6 +5,8 @@
 #include "ui/alcedo_main/album_backend/image_controller.hpp"
 
 #include <QCoreApplication>
+#include <QDesktopServices>
+#include <QUrl>
 #include <QStringList>
 #include <algorithm>
 #include <array>
@@ -21,7 +23,16 @@
 #include "ai/ai_rating.hpp"
 #include "image/image.hpp"
 #include "sleeve/storage_service.hpp"
-#include "ui/alcedo_main/album_backend/album_backend.hpp"
+#include "ui/alcedo_main/album_backend/image_controller.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
+#include "ui/alcedo_main/album_backend/folder_controller.hpp"
+#include "ui/alcedo_main/album_backend/stats_engine.hpp"
+#include "ui/alcedo_main/album_backend/import_export.hpp"
+#include "ui/alcedo_main/album_backend/editor_controller.hpp"
+#include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
+#include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
+#include "ui/alcedo_main/album_backend/ui_status_sink.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 
 namespace alcedo::ui {
@@ -505,16 +516,31 @@ void FillManualRatingIdentity(AiRating& rating) {
 }
 }  // namespace
 
-ImageController::ImageController(AlbumBackend& backend) : backend_(backend) {}
+ImageController::ImageController(ProjectModule* project, LibraryModule* library,
+                                 FolderController* folders, IUiStatusSink* status,
+                                 QObject* parent)
+    : QObject(parent), project_(project), library_(library), folders_(folders),
+      status_(status) {}
+
+void ImageController::BindCollaborators(StatsEngine* stats, ImportExportHandler* import_export,
+                                        EditorController* editor,
+                                        SemanticGenerationController* semantic,
+                                        InteractionPolicyController* policy) {
+  stats_ = stats;
+  import_export_ = import_export;
+  editor_ = editor;
+  semantic_ = semantic;
+  policy_ = policy;
+}
 
 auto ImageController::SaveProjectSnapshot() -> bool {
   bool save_ok = true;
   try {
-    if (!backend_.project_handler_.meta_path().empty()) {
-      backend_.project_handler_.project()->SaveProject(backend_.project_handler_.meta_path());
+    if (!project_->handler().meta_path().empty()) {
+      project_->handler().project()->SaveProject(project_->handler().meta_path());
     }
     QString ignored_error;
-    if (!backend_.project_handler_.PackageCurrentProjectFiles(&ignored_error)) {
+    if (!project_->handler().PackageCurrentProjectFiles(&ignored_error)) {
       save_ok = false;
     }
   } catch (...) {
@@ -543,7 +569,7 @@ auto ImageController::CollectDeleteTargets(const QVariantList& targetEntries) co
     target.image_id_   = static_cast<image_id_t>(row.value("imageId").toUInt());
     target.folder_id_  = static_cast<sl_element_id_t>(row.value("folderId").toUInt());
 
-    if (const auto* item = backend_.FindAlbumItem(element_id); item) {
+    if (const auto* item = library_->FindAlbumItem(element_id); item) {
       if (target.image_id_ == 0) {
         target.image_id_ = item->image_id;
       }
@@ -565,7 +591,7 @@ auto ImageController::ResolveRatingTarget(uint elementId, uint imageId) const ->
   target.image_id_   = static_cast<image_id_t>(imageId);
 
   if (target.element_id_ != 0) {
-    if (const auto* item = backend_.FindAlbumItem(target.element_id_); item) {
+    if (const auto* item = library_->FindAlbumItem(target.element_id_); item) {
       if (target.image_id_ == 0) {
         target.image_id_ = item->image_id;
       }
@@ -576,6 +602,24 @@ auto ImageController::ResolveRatingTarget(uint elementId, uint imageId) const ->
 }
 
 auto ImageController::DeleteImages(const QVariantList& targetEntries) -> QVariantMap {
+  if (policy_) {
+    const QVariantMap policy = policy_->EvaluateDeleteImages(targetEntries);
+    if (!policy.value(QStringLiteral("allowed")).toBool()) {
+      QString reason = policy.value(QStringLiteral("reason")).toString();
+      if (reason.isEmpty()) {
+        reason = PL_TEXT("These images cannot be deleted right now.").Render();
+      }
+      if (status_) {
+        status_->SetTaskState(PL_TEXT("%1", reason), 0, false);
+      }
+      return QVariantMap{{QStringLiteral("success"), false},
+                         {QStringLiteral("deletedCount"), 0},
+                         {QStringLiteral("failedCount"), targetEntries.size()},
+                         {QStringLiteral("deletedElementIds"), QVariantList{}},
+                         {QStringLiteral("failedElementIds"), QVariantList{}},
+                         {QStringLiteral("message"), reason}};
+    }
+  }
   const auto  delete_result = DeleteTargets(CollectDeleteTargets(targetEntries));
 
   QVariantMap result{{"success", false},
@@ -602,7 +646,7 @@ auto ImageController::AddImagesToFolder(const QVariantList& targetEntries, uint 
                      {"failedElementIds", QVariantList{}},
                      {"message", QString{}}};
 
-  auto&       ph = backend_.project_handler_;
+  auto&       ph = project_->handler();
   if (ph.project_loading()) {
     const auto msg    = PL_TEXT("Project is loading. Please wait.");
     result["message"] = msg.Render();
@@ -621,7 +665,7 @@ auto ImageController::AddImagesToFolder(const QVariantList& targetEntries, uint 
     return result;
   }
 
-  const auto target_folder_id = backend_.folder_ctrl_.FolderElementIdForUiId(targetFolderId);
+  const auto target_folder_id = folders_->FolderElementIdForUiId(targetFolderId);
   if (!target_folder_id.has_value() || target_folder_id.value() == 0) {
     const auto msg    = PL_TEXT("Select an album folder.");
     result["message"] = msg.Render();
@@ -666,8 +710,8 @@ auto ImageController::AddImagesToFolder(const QVariantList& targetEntries, uint 
     }
   }
 
-  if (backend_.folder_ctrl_.CurrentFolderElementId() == target_folder_id) {
-    backend_.ReloadCurrentFolder();
+  if (folders_->CurrentFolderElementId() == target_folder_id) {
+    library_->ReloadCurrentFolder();
   }
 
   const int added_count  = static_cast<int>(added_ids.size());
@@ -684,10 +728,10 @@ auto ImageController::AddImagesToFolder(const QVariantList& targetEntries, uint 
     msg = PL_TEXT("%1 Project state save failed.", msg.Render());
   }
 
-  backend_.SetServiceMessageForCurrentProject(msg);
-  backend_.SetTaskState(msg, added_count > 0 ? 100 : 0, false);
+  status_->SetServiceMessage(msg);
+  status_->SetTaskState(msg, added_count > 0 ? 100 : 0, false);
   if (added_count > 0) {
-    backend_.ScheduleIdleTaskStateReset(1200);
+    status_->ScheduleIdleTaskStateReset(1200);
   }
 
   result["success"]          = added_count > 0;
@@ -703,45 +747,45 @@ auto ImageController::DeleteTargets(const std::vector<DeleteTarget>& targets)
     -> DeleteExecutionResult {
   DeleteExecutionResult result;
 
-  auto&                 ph = backend_.project_handler_;
+  auto&                 ph = project_->handler();
   if (ph.project_loading()) {
     const auto msg = PL_TEXT("Project is loading. Please wait.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result.message_ = msg.Render();
     return result;
   }
   if (!ph.project()) {
     const auto msg = PL_TEXT("No project is loaded.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result.message_ = msg.Render();
     return result;
   }
 
-  auto& ie = backend_.import_export_;
-  if (ie.current_import_job() && !ie.current_import_job()->IsCancelationAcked()) {
+  auto* ie = import_export_;
+  if (ie && ie->current_import_job() && !ie && ie->current_import_job()->IsCancelationAcked()) {
     const auto msg = PL_TEXT("Cannot delete images while import is running.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result.message_ = msg.Render();
     return result;
   }
-  if (ie.export_inflight()) {
+  if (ie && ie->export_inflight()) {
     const auto msg = PL_TEXT("Cannot delete images while export is running.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result.message_ = msg.Render();
     return result;
   }
 
   if (targets.empty()) {
     const auto msg = PL_TEXT("No valid images selected for deletion.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result.message_ = msg.Render();
     return result;
   }
 
-  const auto folder_id = backend_.folder_ctrl_.CurrentFolderElementId();
+  const auto folder_id = folders_->CurrentFolderElementId();
   if (!folder_id.has_value()) {
     const auto msg = PL_TEXT("Folder scope is unavailable.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result.message_ = msg.Render();
     return result;
   }
@@ -754,7 +798,7 @@ auto ImageController::DeleteTargets(const std::vector<DeleteTarget>& targets)
   std::vector<DeleteTarget> resolved_targets = targets;
   for (auto& target : resolved_targets) {
     if (target.image_id_ == 0 || target.file_path_.empty()) {
-      if (const auto* item = backend_.FindAlbumItem(target.element_id_); item) {
+      if (const auto* item = library_->FindAlbumItem(target.element_id_); item) {
         if (target.image_id_ == 0) {
           target.image_id_ = item->image_id;
         }
@@ -773,9 +817,9 @@ auto ImageController::DeleteTargets(const std::vector<DeleteTarget>& targets)
     }
   }
 
-  if (backend_.editor_.editor_active() &&
-      target_ids.contains(backend_.editor_.editor_element_id())) {
-    backend_.editor_.FinalizeEditorSession(true);
+  if (editor_ && editor_->editor_active() &&
+      target_ids.contains(editor_->editor_element_id())) {
+    editor_->FinalizeEditorSession(true);
   }
 
   auto proj         = ph.project();
@@ -787,7 +831,7 @@ auto ImageController::DeleteTargets(const std::vector<DeleteTarget>& targets)
 
   if (!browse) {
     const auto msg = PL_TEXT("Image service is unavailable.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result.message_ = msg.Render();
     return result;
   }
@@ -824,7 +868,7 @@ auto ImageController::DeleteTargets(const std::vector<DeleteTarget>& targets)
     }
 
     try {
-      backend_.thumb_.RemoveThumbnailState(target.element_id_, target.image_id_);
+      library_->thumbs().RemoveThumbnailState(target.element_id_, target.image_id_);
     } catch (...) {
     }
 
@@ -885,7 +929,7 @@ auto ImageController::DeleteTargets(const std::vector<DeleteTarget>& targets)
   }
 
   if (!deleted_ids.empty()) {
-    backend_.ReloadCurrentFolder();
+    library_->ReloadCurrentFolder();
   }
 
   const int deleted_count = static_cast<int>(deleted_ids.size());
@@ -907,10 +951,10 @@ auto ImageController::DeleteTargets(const std::vector<DeleteTarget>& targets)
     msg = PL_TEXT("%1 Project state save failed.", msg.Render());
   }
 
-  backend_.SetServiceMessageForCurrentProject(msg);
-  backend_.SetTaskState(msg, deleted_count > 0 ? 100 : 0, false);
+  status_->SetServiceMessage(msg);
+  status_->SetTaskState(msg, deleted_count > 0 ? 100 : 0, false);
   if (deleted_count > 0) {
-    backend_.ScheduleIdleTaskStateReset(1500);
+    status_->ScheduleIdleTaskStateReset(1500);
   }
 
   result.success_             = deleted_count > 0;
@@ -930,16 +974,16 @@ auto ImageController::GetImageDetails(uint elementId, uint imageId) -> QVariantM
                      {"semanticTags", QString{}},
                      {"rows", QVariantList{}}};
 
-  auto&       ph = backend_.project_handler_;
+  auto&       ph = project_->handler();
   if (ph.project_loading()) {
     const auto msg = PL_TEXT("Project is loading. Please wait.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
   if (!ph.project()) {
     const auto msg = PL_TEXT("No project is loaded.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
@@ -947,7 +991,7 @@ auto ImageController::GetImageDetails(uint elementId, uint imageId) -> QVariantM
   image_id_t  resolved_image_id   = static_cast<image_id_t>(imageId);
   const auto  resolved_element_id = static_cast<sl_element_id_t>(elementId);
   const auto* item =
-      resolved_element_id != 0 ? backend_.FindAlbumItem(resolved_element_id) : nullptr;
+      resolved_element_id != 0 ? library_->FindAlbumItem(resolved_element_id) : nullptr;
   const auto resolved_file_id =
       item != nullptr && item->file_id != 0 ? item->file_id : resolved_element_id;
   if (resolved_image_id == 0 && item) {
@@ -955,7 +999,7 @@ auto ImageController::GetImageDetails(uint elementId, uint imageId) -> QVariantM
   }
   if (resolved_image_id == 0) {
     const auto msg = PL_TEXT("No valid image was selected.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
@@ -963,14 +1007,16 @@ auto ImageController::GetImageDetails(uint elementId, uint imageId) -> QVariantM
   auto image_pool = ph.project()->GetImagePoolService();
   if (!image_pool) {
     const auto msg = PL_TEXT("Image service is unavailable.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
 
   try {
     const QString semantic_tags =
-        resolved_file_id != 0 ? backend_.SemanticLabelDisplayText(resolved_file_id) : QString{};
+        resolved_file_id != 0
+            ? (semantic_ ? semantic_->LabelDisplayText(resolved_file_id) : QString{})
+            : QString{};
     return image_pool->Read<QVariantMap>(
         resolved_image_id,
         [item, semantic_tags](const std::shared_ptr<Image>& image) {
@@ -978,12 +1024,12 @@ auto ImageController::GetImageDetails(uint elementId, uint imageId) -> QVariantM
         });
   } catch (const std::exception&) {
     const auto msg = PL_TEXT("Failed to load image details.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   } catch (...) {
     const auto msg = PL_TEXT("Failed to load image details.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
@@ -1002,16 +1048,16 @@ auto ImageController::GetFocusedImageInspection(uint elementId, uint imageId) ->
                      {"ratingReason", QString{}},
                      {"tiles", QVariantList{}}};
 
-  auto& ph = backend_.project_handler_;
+  auto& ph = project_->handler();
   if (ph.project_loading()) {
     const auto msg = PL_TEXT("Project is loading. Please wait.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
   if (!ph.project()) {
     const auto msg = PL_TEXT("No project is loaded.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
@@ -1019,7 +1065,7 @@ auto ImageController::GetFocusedImageInspection(uint elementId, uint imageId) ->
   image_id_t  resolved_image_id   = static_cast<image_id_t>(imageId);
   const auto  resolved_element_id = static_cast<sl_element_id_t>(elementId);
   const auto* item =
-      resolved_element_id != 0 ? backend_.FindAlbumItem(resolved_element_id) : nullptr;
+      resolved_element_id != 0 ? library_->FindAlbumItem(resolved_element_id) : nullptr;
   const auto resolved_file_id =
       item != nullptr && item->file_id != 0 ? item->file_id : resolved_element_id;
   if (resolved_image_id == 0 && item) {
@@ -1027,7 +1073,7 @@ auto ImageController::GetFocusedImageInspection(uint elementId, uint imageId) ->
   }
   if (resolved_image_id == 0 || resolved_file_id == 0) {
     const auto msg = PL_TEXT("No valid image was selected.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
@@ -1037,7 +1083,7 @@ auto ImageController::GetFocusedImageInspection(uint elementId, uint imageId) ->
   auto storage_svc = project->GetStorageService();
   if (!image_pool || !storage_svc) {
     const auto msg = PL_TEXT("Image service is unavailable.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
@@ -1046,7 +1092,8 @@ auto ImageController::GetFocusedImageInspection(uint elementId, uint imageId) ->
     auto& ai = storage_svc->GetAiStorageController();
     const std::optional<AiDescription> description = ai.GetActiveUnderstanding(resolved_file_id);
     const std::optional<AiRating>      rating_reason = ai.GetActiveRating(resolved_file_id);
-    const QString semantic_tags = backend_.SemanticLabelDisplayText(resolved_file_id);
+    const QString semantic_tags =
+        semantic_ ? semantic_->LabelDisplayText(resolved_file_id) : QString{};
     return image_pool->Read<QVariantMap>(
         resolved_image_id, [item, resolved_file_id, resolved_image_id, semantic_tags, description,
                             rating_reason](const std::shared_ptr<Image>& image) {
@@ -1055,12 +1102,12 @@ auto ImageController::GetFocusedImageInspection(uint elementId, uint imageId) ->
         });
   } catch (const std::exception&) {
     const auto msg = PL_TEXT("Failed to load image details.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   } catch (...) {
     const auto msg = PL_TEXT("Failed to load image details.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
@@ -1069,7 +1116,7 @@ auto ImageController::GetFocusedImageInspection(uint elementId, uint imageId) ->
 auto ImageController::GetImageRating(uint elementId, uint imageId) -> QVariantMap {
   QVariantMap result{{"success", false}, {"message", QString{}}, {"rating", 0}};
 
-  auto&       ph = backend_.project_handler_;
+  auto&       ph = project_->handler();
   if (ph.project_loading()) {
     const auto msg    = PL_TEXT("Project is loading. Please wait.");
     result["message"] = msg.Render();
@@ -1130,16 +1177,16 @@ auto ImageController::SetImageRating(uint elementId, uint imageId, int rating) -
     return result;
   }
 
-  auto& ph = backend_.project_handler_;
+  auto& ph = project_->handler();
   if (ph.project_loading()) {
     const auto msg = PL_TEXT("Project is loading. Please wait.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
   if (!ph.project()) {
     const auto msg = PL_TEXT("No project is loaded.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
@@ -1147,7 +1194,7 @@ auto ImageController::SetImageRating(uint elementId, uint imageId, int rating) -
   const RatingTarget target = ResolveRatingTarget(elementId, imageId);
   if (target.image_id_ == 0) {
     const auto msg = PL_TEXT("No valid image was selected.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
@@ -1156,7 +1203,7 @@ auto ImageController::SetImageRating(uint elementId, uint imageId, int rating) -
   auto image_pool = proj->GetImagePoolService();
   if (!image_pool) {
     const auto msg = PL_TEXT("Image service is unavailable.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
@@ -1184,19 +1231,19 @@ auto ImageController::SetImageRating(uint elementId, uint imageId, int rating) -
                      });
     if (failed_it != sync_status.failed_images_.end()) {
       const auto msg = PL_TEXT("Failed to save image rating.");
-      backend_.SetTaskState(msg, 0, false);
+      status_->SetTaskState(msg, 0, false);
       result["message"] = msg.Render();
       return result;
     }
 
-    for (auto& item : backend_.view_state_.all_images_) {
+    for (auto& item : library_->view_state().all_images_) {
       if ((target.element_id_ != 0 && item.element_id == target.element_id_) ||
           (target.element_id_ == 0 && item.image_id == target.image_id_)) {
         item.rating = rating;
       }
     }
-    backend_.thumbnail_model_.updateRating(target.element_id_, target.image_id_, rating);
-    backend_.stats_.RefreshStats();
+    library_->model().updateRating(target.element_id_, target.image_id_, rating);
+    stats_->RefreshStats();
 
     bool save_ok = true;
     try {
@@ -1216,10 +1263,10 @@ auto ImageController::SetImageRating(uint elementId, uint imageId, int rating) -
     if (!save_ok) {
       msg = PL_TEXT("%1 Project state save failed.", msg.Render());
     }
-    backend_.SetServiceMessageForCurrentProject(msg);
-    backend_.SetTaskState(msg, save_ok ? 100 : 0, false);
+    status_->SetServiceMessage(msg);
+    status_->SetTaskState(msg, save_ok ? 100 : 0, false);
     if (save_ok) {
-      backend_.ScheduleIdleTaskStateReset(1200);
+      status_->ScheduleIdleTaskStateReset(1200);
     }
 
     result["success"] = true;
@@ -1228,7 +1275,7 @@ auto ImageController::SetImageRating(uint elementId, uint imageId, int rating) -
     return result;
   } catch (...) {
     const auto msg = PL_TEXT("Failed to save image rating.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
@@ -1244,27 +1291,27 @@ auto ImageController::SetImageDescription(uint elementId, const QString& caption
     return result;
   }
 
-  auto& ph = backend_.project_handler_;
+  auto& ph = project_->handler();
   if (ph.project_loading()) {
     const auto msg = PL_TEXT("Project is loading. Please wait.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
   auto project = ph.project();
   if (!project) {
     const auto msg = PL_TEXT("No project is loaded.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
 
   const auto raw_element_id = static_cast<sl_element_id_t>(elementId);
-  const auto* item = raw_element_id != 0 ? backend_.FindAlbumItem(raw_element_id) : nullptr;
+  const auto* item = raw_element_id != 0 ? library_->FindAlbumItem(raw_element_id) : nullptr;
   const auto file_id = item != nullptr && item->file_id != 0 ? item->file_id : raw_element_id;
   if (file_id == 0) {
     const auto msg = PL_TEXT("No valid image was selected.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
@@ -1272,7 +1319,7 @@ auto ImageController::SetImageDescription(uint elementId, const QString& caption
   auto storage_svc = project->GetStorageService();
   if (!storage_svc) {
     const auto msg = PL_TEXT("Image service is unavailable.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
@@ -1290,16 +1337,16 @@ auto ImageController::SetImageDescription(uint elementId, const QString& caption
       return result;
     }
 
-    backend_.stats_.RebuildThumbnailView();
+    stats_->RebuildThumbnailView();
     bool      save_ok = SaveProjectSnapshot();
     auto      msg     = PL_TEXT("Description saved.");
     if (!save_ok) {
       msg = PL_TEXT("%1 Project state save failed.", msg.Render());
     }
-    backend_.SetServiceMessageForCurrentProject(msg);
-    backend_.SetTaskState(msg, save_ok ? 100 : 0, false);
+    status_->SetServiceMessage(msg);
+    status_->SetTaskState(msg, save_ok ? 100 : 0, false);
     if (save_ok) {
-      backend_.ScheduleIdleTaskStateReset(1200);
+      status_->ScheduleIdleTaskStateReset(1200);
     }
 
     result["success"] = true;
@@ -1308,7 +1355,7 @@ auto ImageController::SetImageDescription(uint elementId, const QString& caption
     return result;
   } catch (...) {
     const auto msg = PL_TEXT("Failed to save image description.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
@@ -1325,27 +1372,27 @@ auto ImageController::SetImageRatingReasons(uint elementId, const QString& reaso
     return result;
   }
 
-  auto& ph = backend_.project_handler_;
+  auto& ph = project_->handler();
   if (ph.project_loading()) {
     const auto msg = PL_TEXT("Project is loading. Please wait.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
   auto project = ph.project();
   if (!project) {
     const auto msg = PL_TEXT("No project is loaded.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
 
   const auto raw_element_id = static_cast<sl_element_id_t>(elementId);
-  const auto* item = raw_element_id != 0 ? backend_.FindAlbumItem(raw_element_id) : nullptr;
+  const auto* item = raw_element_id != 0 ? library_->FindAlbumItem(raw_element_id) : nullptr;
   const auto file_id = item != nullptr && item->file_id != 0 ? item->file_id : raw_element_id;
   if (file_id == 0) {
     const auto msg = PL_TEXT("No valid image was selected.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
@@ -1353,7 +1400,7 @@ auto ImageController::SetImageRatingReasons(uint elementId, const QString& reaso
   auto storage_svc = project->GetStorageService();
   if (!storage_svc) {
     const auto msg = PL_TEXT("Image service is unavailable.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
@@ -1377,10 +1424,10 @@ auto ImageController::SetImageRatingReasons(uint elementId, const QString& reaso
     if (!save_ok) {
       msg = PL_TEXT("%1 Project state save failed.", msg.Render());
     }
-    backend_.SetServiceMessageForCurrentProject(msg);
-    backend_.SetTaskState(msg, save_ok ? 100 : 0, false);
+    status_->SetServiceMessage(msg);
+    status_->SetTaskState(msg, save_ok ? 100 : 0, false);
     if (save_ok) {
-      backend_.ScheduleIdleTaskStateReset(1200);
+      status_->ScheduleIdleTaskStateReset(1200);
     }
 
     result["success"] = true;
@@ -1389,7 +1436,7 @@ auto ImageController::SetImageRatingReasons(uint elementId, const QString& reaso
     return result;
   } catch (...) {
     const auto msg = PL_TEXT("Failed to save rating reason.");
-    backend_.SetTaskState(msg, 0, false);
+    status_->SetTaskState(msg, 0, false);
     result["message"] = msg.Render();
     return result;
   }
@@ -1407,7 +1454,7 @@ void ImageController::ApplyStarRatingLight(uint elementId, uint imageId, int rat
   if (target.image_id_ == 0) {
     return;
   }
-  auto proj = backend_.project_handler_.project();
+  auto proj = project_->handler().project();
   if (!proj) {
     return;
   }
@@ -1430,13 +1477,13 @@ void ImageController::ApplyStarRatingLight(uint elementId, uint imageId, int rat
                                      metadata.rating_ = ExifDisplayMetaData::NormalizeRating(rating);
                                      image->SetExifDisplayMetaData(std::move(metadata));
                                    });
-    for (auto& item : backend_.view_state_.all_images_) {
+    for (auto& item : library_->view_state().all_images_) {
       if ((target.element_id_ != 0 && item.element_id == target.element_id_) ||
           (target.element_id_ == 0 && item.image_id == target.image_id_)) {
         item.rating = rating;
       }
     }
-    backend_.thumbnail_model_.updateRating(target.element_id_, target.image_id_, rating);
+    library_->model().updateRating(target.element_id_, target.image_id_, rating);
   } catch (...) {
     // Best-effort light write: a transient pool failure leaves the prior rating; the
     // batch flush at job end is the durability point. Match `PersistImageHdrFlag`'s
@@ -1451,7 +1498,7 @@ void ImageController::ApplyStarRatingLight(uint elementId, uint imageId, int rat
 // until the next normal save/close; the live DB is authoritative (same as any DB change
 // between manual saves).
 void ImageController::FlushPendingStarRatings() {
-  auto proj = backend_.project_handler_.project();
+  auto proj = project_->handler().project();
   if (!proj) {
     return;
   }
@@ -1462,7 +1509,88 @@ void ImageController::FlushPendingStarRatings() {
     }
   } catch (...) {
   }
-  backend_.stats_.RefreshStats();
+  stats_->RefreshStats();
+}
+
+
+auto ImageController::GetImageRatingReasons(uint elementId) -> QVariantMap {
+  QVariantMap result{{QStringLiteral("hasReasons"), false},
+                     {QStringLiteral("reasons"), QString{}},
+                     {QStringLiteral("provider"), QString{}},
+                     {QStringLiteral("modelId"), QString{}},
+                     {QStringLiteral("rubricId"), QString{}},
+                     {QStringLiteral("rubricVersion"), QString{}}};
+  if (!project_) {
+    return result;
+  }
+  auto project = project_->handler().project();
+  if (!project) {
+    return result;
+  }
+  const auto row =
+      project->GetStorageService()->GetAiStorageController().GetActiveRating(elementId);
+  if (!row.has_value() || row->reasons_.empty()) {
+    return result;
+  }
+  result[QStringLiteral("hasReasons")] = true;
+  result[QStringLiteral("reasons")] = QString::fromStdString(row->reasons_);
+  result[QStringLiteral("provider")] = QString::fromStdString(row->provider_id_);
+  result[QStringLiteral("modelId")] = QString::fromStdString(row->model_id_);
+  result[QStringLiteral("rubricId")] = QString::fromStdString(row->rubric_id_);
+  result[QStringLiteral("rubricVersion")] = QString::fromStdString(row->rubric_version_);
+  return result;
+}
+
+auto ImageController::GetImageDescription(uint elementId) -> QVariantMap {
+  QVariantMap result{{QStringLiteral("hasDescription"), false},
+                     {QStringLiteral("caption"), QString{}},
+                     {QStringLiteral("scene"), QString{}},
+                     {QStringLiteral("provider"), QString{}},
+                     {QStringLiteral("modelId"), QString{}}};
+  if (!project_) {
+    return result;
+  }
+  auto project = project_->handler().project();
+  if (!project) {
+    return result;
+  }
+  const auto row =
+      project->GetStorageService()->GetAiStorageController().GetActiveUnderstanding(elementId);
+  if (!row.has_value() || row->caption_.empty()) {
+    return result;
+  }
+  result[QStringLiteral("hasDescription")] = true;
+  result[QStringLiteral("caption")] = QString::fromStdString(row->caption_);
+  result[QStringLiteral("scene")] = QString::fromStdString(row->scene_);
+  result[QStringLiteral("provider")] = QString::fromStdString(row->provider_id_);
+  result[QStringLiteral("modelId")] = QString::fromStdString(row->model_id_);
+  return result;
+}
+
+bool ImageController::OpenDirectoryInFileManager(const QString& dirUrlOrPath) {
+  const auto dir_path_opt = album_util::InputToPath(dirUrlOrPath);
+  if (!dir_path_opt.has_value()) {
+    if (status_) {
+      status_->SetServiceMessage(PL_TEXT("Source directory is unavailable."));
+    }
+    return false;
+  }
+  const std::filesystem::path dir_path = dir_path_opt.value().lexically_normal();
+  std::error_code ec;
+  if (!std::filesystem::exists(dir_path, ec) || ec ||
+      !std::filesystem::is_directory(dir_path, ec) || ec) {
+    if (status_) {
+      status_->SetServiceMessage(PL_TEXT("Source directory is unavailable."));
+    }
+    return false;
+  }
+  if (!QDesktopServices::openUrl(QUrl::fromLocalFile(album_util::PathToQString(dir_path)))) {
+    if (status_) {
+      status_->SetServiceMessage(PL_TEXT("Failed to open source directory."));
+    }
+    return false;
+  }
+  return true;
 }
 
 }  // namespace alcedo::ui

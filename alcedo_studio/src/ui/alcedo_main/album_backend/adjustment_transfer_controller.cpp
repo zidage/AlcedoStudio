@@ -15,7 +15,10 @@
 
 #include "edit/operators/utils/color_utils.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
-#include "ui/alcedo_main/album_backend/album_backend.hpp"
+#include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
+#include "ui/alcedo_main/album_backend/import_export.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 
@@ -324,11 +327,13 @@ auto MakeTargetIds(const std::vector<ExportTarget>& targets) -> std::vector<sl_e
 
 }  // namespace
 
-AdjustmentTransferController::AdjustmentTransferController(AlbumBackend& backend)
-    : backend_(backend) {}
+AdjustmentTransferController::AdjustmentTransferController(
+    ProjectModule* project, LibraryModule* library, ImportExportHandler* import_export,
+    QObject* parent)
+    : QObject(parent), project_(project), library_(library), import_export_(import_export) {}
 
 auto AdjustmentTransferController::PrepareCopy(uint elementId) -> QVariantMap {
-  auto pipeline_service = backend_.project_handler_.pipeline_service();
+  auto pipeline_service = project_->handler().pipeline_service();
   if (!pipeline_service) {
     return ErrorResult(Tr("Pipeline service is unavailable."));
   }
@@ -354,7 +359,7 @@ auto AdjustmentTransferController::PrepareCopy(uint elementId) -> QVariantMap {
     pipeline_service->SavePipeline(guard);
 
     QVariantMap result = SuccessResult();
-    const auto* item   = backend_.FindAlbumItem(static_cast<sl_element_id_t>(elementId));
+    const auto* item   = library_->FindAlbumItem(static_cast<sl_element_id_t>(elementId));
     result.insert("sourceTitle", TitleForItem(item, static_cast<sl_element_id_t>(elementId)));
     result.insert("items", rows);
     return result;
@@ -368,7 +373,7 @@ auto AdjustmentTransferController::PrepareCopy(uint elementId) -> QVariantMap {
 
 auto AdjustmentTransferController::Copy(uint elementId, const QVariantList& selectedKeys)
     -> QVariantMap {
-  auto pipeline_service = backend_.project_handler_.pipeline_service();
+  auto pipeline_service = project_->handler().pipeline_service();
   if (!pipeline_service) {
     return ErrorResult(Tr("Pipeline service is unavailable."));
   }
@@ -424,7 +429,7 @@ auto AdjustmentTransferController::Copy(uint elementId, const QVariantList& sele
 
     copied_package_      = std::move(package);
     copied_summary_      = std::move(summary);
-    const auto* item     = backend_.FindAlbumItem(static_cast<sl_element_id_t>(elementId));
+    const auto* item     = library_->FindAlbumItem(static_cast<sl_element_id_t>(elementId));
     copied_source_title_ = TitleForItem(item, static_cast<sl_element_id_t>(elementId));
     emit        PackageChanged();
 
@@ -446,16 +451,16 @@ auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, cons
     return ErrorResult(Tr("No copied adjustments."));
   }
 
-  auto pipeline_service = backend_.project_handler_.pipeline_service();
+  auto pipeline_service = project_->handler().pipeline_service();
   if (!pipeline_service) {
     return ErrorResult(Tr("Pipeline service is unavailable."));
   }
-  auto history_service = backend_.project_handler_.history_service();
+  auto history_service = project_->handler().history_service();
   if (!history_service) {
     return ErrorResult(Tr("Edit history service is unavailable."));
   }
 
-  const auto targets = backend_.import_export_.CollectExportTargets(targetEntries);
+  const auto targets = import_export_->CollectExportTargets(targetEntries);
   const auto ids     = MakeTargetIds(targets);
   if (ids.empty()) {
     return ErrorResult(Tr("No target images selected."));
@@ -467,10 +472,10 @@ auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, cons
         *pipeline_service, *history_service, ids, *copied_package_,
         (merge_strategy ? Tr("Merged Adjustments") : Tr("Pasted Adjustments")).toStdString(),
         merge_strategy ? AdjustmentVersionApplyMode::kMerge : AdjustmentVersionApplyMode::kPaste);
-    auto thumbnail_service = backend_.project_handler_.thumbnail_service();
+    auto thumbnail_service = project_->handler().thumbnail_service();
     bool hdr_metadata_dirty = false;
     for (sl_element_id_t element_id : result.applied_ids_) {
-      const auto*      item     = backend_.FindAlbumItem(element_id);
+      const auto*      item     = library_->FindAlbumItem(element_id);
       const image_id_t image_id = item != nullptr ? item->image_id : 0;
       if (image_id != 0) {
         try {
@@ -479,7 +484,7 @@ auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, cons
             const bool is_hdr = IsHdrExportEotf(
                 guard->pipeline_->GetGlobalParams().to_output_params_.eotf_);
             pipeline_service->SavePipeline(guard);
-            backend_.PersistImageHdrFlag(element_id, image_id, is_hdr);
+            library_->PersistImageHdrFlag(element_id, image_id, is_hdr);
             hdr_metadata_dirty = true;
           }
         } catch (...) {
@@ -492,18 +497,18 @@ auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, cons
         }
       }
       if (image_id != 0) {
-        if (!backend_.thumb_.RefreshCurrentThumbnail(element_id, image_id)) {
-          backend_.thumb_.UpdateThumbnailState(element_id, QString(), false, false);
+        if (!library_->thumbs().RefreshCurrentThumbnail(element_id, image_id)) {
+          library_->thumbs().UpdateThumbnailState(element_id, QString(), false, false);
         }
       }
     }
     if (hdr_metadata_dirty) {
-      if (auto project = backend_.project_handler_.project()) {
+      if (auto project = project_->handler().project()) {
         try {
           project->GetImagePoolService()->SyncWithStorage();
           QString ignored_error;
-          if (backend_.project_handler_.PersistCurrentProjectState()) {
-            (void)backend_.project_handler_.PackageCurrentProjectFiles(&ignored_error);
+          if (project_->handler().PersistCurrentProjectState()) {
+            (void)project_->handler().PackageCurrentProjectFiles(&ignored_error);
           }
         } catch (...) {
         }

@@ -1374,6 +1374,7 @@ def_ui_test(AlbumBackendCiWorkflowTest album_backend_ci_workflow_test.cpp "ci_ra
 def_ui_test(AlbumBackendBackgroundTaskTest album_backend_background_task_test.cpp)
 def_ui_test(AlbumBackendInteractionPolicyTest album_backend_interaction_policy_test.cpp)
 def_ui_test(AlbumBackendDbWriteBarrierTest album_backend_db_write_barrier_test.cpp)
+def_ui_test(ApplicationModuleHostLifecycleTest application_module_host_lifecycle_test.cpp)
 
 # Phase 0: deterministic editor RHI contracts (backend parse, fixtures, lease schema).
 add_executable(EditorRhiContractsTest
@@ -1541,6 +1542,7 @@ alcedo_assign_test_category(ui ALCEDO_BUILD_UI_TESTS alcedo_tests_ui
   AlbumBackendBackgroundTaskTest
   AlbumBackendInteractionPolicyTest
   AlbumBackendDbWriteBarrierTest
+  ApplicationModuleHostLifecycleTest
   EditorRhiContractsTest
   GlobalSearchDialogQmlTest
   LanguageManagerTest

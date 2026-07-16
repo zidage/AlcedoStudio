@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <QObject>
 #include <QString>
 #include <QVariantList>
 #include <QVariantMap>
@@ -14,10 +15,20 @@
 
 namespace alcedo::ui {
 
-class AlbumBackend;
+class EditorController;
+class FolderController;
+class ImportExportHandler;
+class InteractionPolicyController;
+class LibraryModule;
+class ProjectModule;
+class SemanticGenerationController;
+class StatsEngine;
+class IUiStatusSink;
 
 /// Handles single/batch image deletion and related project data cleanup.
-class ImageController {
+class ImageController final : public QObject {
+  Q_OBJECT
+
  public:
   struct DeleteTarget {
     sl_element_id_t       element_id_ = 0;
@@ -35,32 +46,29 @@ class ImageController {
     QString                      message_{};
   };
 
-  explicit ImageController(AlbumBackend& backend);
+  ImageController(ProjectModule* project, LibraryModule* library, FolderController* folders,
+                  IUiStatusSink* status, QObject* parent = nullptr);
 
-  auto DeleteImages(const QVariantList& targetEntries) -> QVariantMap;
-  auto AddImagesToFolder(const QVariantList& targetEntries, uint targetFolderId) -> QVariantMap;
+  void BindCollaborators(StatsEngine* stats, ImportExportHandler* import_export,
+                         EditorController* editor, SemanticGenerationController* semantic,
+                         InteractionPolicyController* policy);
+
+  Q_INVOKABLE QVariantMap DeleteImages(const QVariantList& targetEntries);
+  Q_INVOKABLE QVariantMap AddImagesToFolder(const QVariantList& targetEntries, uint targetFolderId);
+  Q_INVOKABLE QVariantMap GetImageDetails(uint elementId, uint imageId);
+  Q_INVOKABLE QVariantMap GetFocusedImageInspection(uint elementId, uint imageId);
+  Q_INVOKABLE QVariantMap GetImageRating(uint elementId, uint imageId);
+  Q_INVOKABLE QVariantMap SetImageRating(uint elementId, uint imageId, int rating);
+  Q_INVOKABLE QVariantMap SetImageDescription(uint elementId, const QString& caption);
+  Q_INVOKABLE QVariantMap SetImageRatingReasons(uint elementId, const QString& reasons);
+  Q_INVOKABLE QVariantMap GetImageRatingReasons(uint elementId);
+  Q_INVOKABLE QVariantMap GetImageDescription(uint elementId);
+  Q_INVOKABLE bool        OpenDirectoryInFileManager(const QString& dirUrlOrPath);
+
   auto DeleteTargets(const std::vector<DeleteTarget>& targets) -> DeleteExecutionResult;
-  auto GetImageDetails(uint elementId, uint imageId) -> QVariantMap;
-  auto GetFocusedImageInspection(uint elementId, uint imageId) -> QVariantMap;
-  auto GetImageRating(uint elementId, uint imageId) -> QVariantMap;
-  auto SetImageRating(uint elementId, uint imageId, int rating) -> QVariantMap;
-  auto SetImageDescription(uint elementId, const QString& caption) -> QVariantMap;
-  auto SetImageRatingReasons(uint elementId, const QString& reasons) -> QVariantMap;
 
-  // Phase 7a: the light half of the star-rating path, extracted from `SetImageRating`.
-  // Writes the 1..5 value into the in-memory EXIF/metadata `Rating` column via
-  // `Write_NoSync` (sets MODIFIED, no DB flush), patches the album view-state item, and
-  // emits the thumbnail-model `Rating` dataChanged. NO `SyncWithStorage`/`SaveProject`/
-  // `Package`/`RefreshStats` — those are `FlushPendingStarRatings`, called once at batch
-  // end by the AI image-analysis sink so a batch AI scoring run does one DB flush, not
-  // one per image. `SetImageRating` (manual single star click) is unchanged and still
-  // does a full sync+save per one-off user action.
+  // Phase 7a: light star-rating path for AI batch scoring (no full save/package).
   void ApplyStarRatingLight(uint elementId, uint imageId, int rating);
-  // Phase 7a: the batched flush half — `SyncWithStorage` (one transaction for all
-  // MODIFIED image rows) + `RefreshStats` (re-run the rating-bucket GROUP BY so
-  // star-filter stats are correct). No `SaveProject`/`Package` (the `.alcd` packaged
-  // snapshot is left stale until the next normal save/close; the live DB is
-  // authoritative).
   void FlushPendingStarRatings();
 
  private:
@@ -74,7 +82,15 @@ class ImageController {
   [[nodiscard]] auto ResolveRatingTarget(uint elementId, uint imageId) const -> RatingTarget;
   [[nodiscard]] auto SaveProjectSnapshot() -> bool;
 
-  AlbumBackend&      backend_;
+  ProjectModule*                 project_       = nullptr;
+  LibraryModule*                 library_       = nullptr;
+  FolderController*              folders_       = nullptr;
+  IUiStatusSink*                 status_        = nullptr;
+  StatsEngine*                   stats_         = nullptr;
+  ImportExportHandler*           import_export_ = nullptr;
+  EditorController*              editor_        = nullptr;
+  SemanticGenerationController*  semantic_      = nullptr;
+  InteractionPolicyController*   policy_        = nullptr;
 };
 
 }  // namespace alcedo::ui

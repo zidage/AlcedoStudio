@@ -168,11 +168,11 @@ Item {
     }
 
     function modelCount() {
-        return albumBackend.thumbnailModel.count
+        return appModules.library.thumbnailModel.count
     }
 
     function modelTotalCount() {
-        return Math.max(modelCount(), albumBackend.thumbnailModel.totalCount)
+        return Math.max(modelCount(), appModules.library.thumbnailModel.totalCount)
     }
 
     function clampedZoomLevel(nextZoomLevel) {
@@ -278,7 +278,7 @@ Item {
         _deferredThumbnailReleases = ({})
         for (const key in pending) {
             const release = pending[key]
-            albumBackend.SetThumbnailVisible(release.elementId, release.imageId, false,
+            appModules.library.SetThumbnailVisible(release.elementId, release.imageId, false,
                                              release.maxEdge)
         }
     }
@@ -535,27 +535,27 @@ Item {
         }
         const cols = effectiveColumnCount()
         const rows = Math.max(1, Math.ceil(grid.height / grid.cellHeight))
-        albumBackend.SetThumbnailCacheHint(cols * rows, root.desiredMaxEdge)
+        appModules.library.SetThumbnailCacheHint(cols * rows, root.desiredMaxEdge)
     }
 
     function maybeLoadMoreThumbnails() {
         if (thumbnailBindingSuspended
-                || !albumBackend.thumbnailModel.hasMore
-                || albumBackend.thumbnailModel.loading
+                || !appModules.library.thumbnailModel.hasMore
+                || appModules.library.thumbnailModel.loading
                 || grid.cellHeight <= 0) {
             return
         }
         const threshold = Math.max(grid.cellHeight * 3, grid.height * 0.5)
         const loadedMaxY = maxContentYForHeight(loadedContentHeight(), grid.originY)
         if (grid.contentY >= loadedMaxY - threshold) {
-            albumBackend.LoadMoreThumbnails()
+            appModules.library.LoadMoreThumbnails()
         }
     }
 
     Connections {
-        target: albumBackend.thumbnailModel
+        target: appModules.library.thumbnailModel
         function onLoadingChanged() {
-            if (!albumBackend.thumbnailModel.loading) {
+            if (!appModules.library.thumbnailModel.loading) {
                 loadMoreThumbnailTimer.restart()
             }
         }
@@ -629,7 +629,7 @@ Item {
     }
 
     function selectionItemForIndex(index) {
-        const row = albumBackend.thumbnailModel.getItemAt(index)
+        const row = appModules.library.thumbnailModel.getItemAt(index)
         if (!row || !row.elementId) {
             return null
         }
@@ -651,7 +651,7 @@ Item {
     }
 
     function selectionItemsForRange(firstIndex, lastIndex) {
-        const rows = albumBackend.thumbnailModel.getItemsInRange(firstIndex, lastIndex)
+        const rows = appModules.library.thumbnailModel.getItemsInRange(firstIndex, lastIndex)
         const items = []
         for (let i = 0; i < rows.length; ++i) {
             const row = rows[i]
@@ -677,7 +677,7 @@ Item {
     }
 
     function loadedIndexForElement(elementId) {
-        return albumBackend.thumbnailModel.rowByElementId(Number(elementId))
+        return appModules.library.thumbnailModel.rowByElementId(Number(elementId))
     }
 
     function updateSelectionAnchor(index) {
@@ -691,7 +691,7 @@ Item {
             return
         }
         const anchor = selectionAnchorIndex >= 0 ? selectionAnchorIndex : index
-        albumBackend.LoadThumbnailsThroughIndex(Math.max(anchor, index))
+        appModules.library.LoadThumbnailsThroughIndex(Math.max(anchor, index))
         const rangeItems = selectionItemsForRange(anchor, index)
         if (additive) {
             root.replaceSelection(Object.values(selectedImagesById).concat(rangeItems))
@@ -705,7 +705,7 @@ Item {
         id: grid
         z: 0
         anchors.fill: parent
-        model: albumBackend.thumbnailModel
+        model: appModules.library.thumbnailModel
         clip: true
         cacheBuffer: 0
         boundsBehavior: Flickable.StopAtBounds
@@ -769,7 +769,7 @@ Item {
 
         function releasePinnedThumbnail() {
             if (pinnedElementId !== 0 && pinnedImageId !== 0) {
-                albumBackend.SetThumbnailVisible(pinnedElementId, pinnedImageId, false,
+                appModules.library.SetThumbnailVisible(pinnedElementId, pinnedImageId, false,
                                                  pinnedMaxEdge > 0 ? pinnedMaxEdge : root.desiredMaxEdge)
             }
             pinnedElementId = 0
@@ -797,9 +797,9 @@ Item {
                 const oldMaxEdge = pinnedMaxEdge
                 pinnedMaxEdge = root.desiredMaxEdge
                 if (pinnedElementId !== 0 && pinnedImageId !== 0) {
-                    albumBackend.SetThumbnailVisible(pinnedElementId, pinnedImageId, true,
+                    appModules.library.SetThumbnailVisible(pinnedElementId, pinnedImageId, true,
                                                      pinnedMaxEdge)
-                    albumBackend.SetThumbnailVisible(pinnedElementId, pinnedImageId, false,
+                    appModules.library.SetThumbnailVisible(pinnedElementId, pinnedImageId, false,
                                                      oldMaxEdge)
                 }
                 return
@@ -814,7 +814,7 @@ Item {
             liveThumbMissingSource = thumbMissingSource
             liveThumbErrorText = thumbErrorText
             if (pinnedElementId !== 0 && pinnedImageId !== 0) {
-                albumBackend.SetThumbnailVisible(pinnedElementId, pinnedImageId, true, pinnedMaxEdge)
+                appModules.library.SetThumbnailVisible(pinnedElementId, pinnedImageId, true, pinnedMaxEdge)
             }
         }
 
@@ -949,7 +949,7 @@ Item {
             }
 
         Connections {
-            target: albumBackend
+            target: appModules.library
             ignoreUnknownSignals: true
             function onThumbnailUpdated(updatedElementId, updatedUrl, loading, missingSource, errorText) {
                 if (updatedElementId === elementId) {
@@ -1240,7 +1240,7 @@ Item {
                 return []
             }
 
-            albumBackend.LoadThumbnailsThroughIndex(bounds.last)
+            appModules.library.LoadThumbnailsThroughIndex(bounds.last)
             const colCount = root.effectiveColumnCount()
             const loadedCount = root.modelCount()
 
@@ -1333,7 +1333,7 @@ Item {
                 const item = root.selectionItemForIndex(idx)
                 if (item) {
                     root.imageFocused(item)
-                    albumBackend.OpenEditor(item.elementId, item.imageId)
+                    appModules.editor.OpenEditor(item.elementId, item.imageId)
                 }
             }
         }

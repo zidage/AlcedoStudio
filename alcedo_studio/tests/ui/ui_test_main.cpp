@@ -3,7 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 /// @file ui_test_main.cpp
-/// @brief Custom main() for AlbumBackend UI tests.
+/// @brief Custom main() for ApplicationModuleHost UI tests.
 ///
 /// Creates a QCoreApplication before running GoogleTest — required for Qt
 /// signal/slot delivery and QSignalSpy in headless (CI) environments.

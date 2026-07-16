@@ -1651,7 +1651,9 @@ def_library(BackgroundTaskController
 
 # ── AlbumBackendLib: reusable static library for album_backend ──────────────
 add_library(AlbumBackendLib STATIC
-    ui/alcedo_main/album_backend/album_backend.cpp
+    ui/alcedo_main/album_backend/application_module_host.cpp
+    ui/alcedo_main/album_backend/project_module.cpp
+    ui/alcedo_main/album_backend/library_module.cpp
     ui/alcedo_main/album_backend/album_thumbnail_model.cpp
     ui/alcedo_main/album_backend/interaction_policy_controller.cpp
     ui/alcedo_main/album_backend/project_db_write_barrier.cpp
@@ -1667,7 +1669,11 @@ add_library(AlbumBackendLib STATIC
     ui/alcedo_main/album_backend/nikon_he_recovery_controller.cpp
     ui/alcedo_main/album_backend/editor_controller.cpp
     ui/alcedo_main/album_backend/adjustment_transfer_controller.cpp
-    include/ui/alcedo_main/album_backend/album_backend.hpp
+    include/ui/alcedo_main/album_backend/application_module_host.hpp
+    include/ui/alcedo_main/album_backend/project_module.hpp
+    include/ui/alcedo_main/album_backend/library_module.hpp
+    include/ui/alcedo_main/album_backend/album_catalog.hpp
+    include/ui/alcedo_main/album_backend/ui_status_sink.hpp
     include/ui/alcedo_main/album_backend/album_thumbnail_model.hpp
     include/ui/alcedo_main/album_backend/album_types.hpp
     include/ui/alcedo_main/album_backend/interaction_policy_controller.hpp

@@ -11,19 +11,24 @@
 #include <string>
 #include <vector>
 
+#include "app/ai_provider_profile.hpp"
 #include "app/semantic_generation_service.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 
 namespace alcedo::ui {
 
-class AlbumBackend;
+class BackgroundTaskController;
+class LibraryModule;
+class ModelDownloadController;
+class NikonHeRecoveryController;
+class ProjectModule;
+class IUiStatusSink;
 
 // Drives semantic (AI content) label generation and model activation. Owns the
 // generation pipeline state (progress, prompt, album summary) and the
 // active-model surface. Model download / install / settings live in
-// ModelDownloadController; this controller consumes the install state (via
-// AlbumBackend::model_download_controller_) only to activate a model and to
-// derive the `selectedModelActive` badge.
+// ModelDownloadController; this controller consumes the install state only to
+// activate a model and to derive the `selectedModelActive` badge.
 class SemanticGenerationController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool promptVisible READ PromptVisible NOTIFY StateChanged)
@@ -48,7 +53,13 @@ class SemanticGenerationController final : public QObject {
   Q_PROPERTY(bool selectedModelActive READ SelectedModelActive NOTIFY StateChanged)
 
  public:
-  explicit SemanticGenerationController(AlbumBackend& backend, QObject* parent = nullptr);
+  SemanticGenerationController(ProjectModule* project, LibraryModule* library,
+                               ModelDownloadController* model_download,
+                               BackgroundTaskController* background_tasks, IUiStatusSink* status,
+                               alcedo::AiProviderProfileController* ai_profiles,
+                               QObject* parent = nullptr);
+
+  void BindCollaborators(NikonHeRecoveryController* nikon);
 
   bool               PromptVisible() const;
   bool               ActivatePromptVisible() const;
@@ -135,7 +146,13 @@ class SemanticGenerationController final : public QObject {
   [[nodiscard]] auto RuntimeOptionsForProfile(const QString& profileId, bool profileRoot) const
       -> AiSidecarRuntimeOptions;
 
-  AlbumBackend&                          backend_;
+  ProjectModule*                            project_          = nullptr;
+  LibraryModule*                            library_          = nullptr;
+  ModelDownloadController*                  model_download_   = nullptr;
+  BackgroundTaskController*                 background_tasks_ = nullptr;
+  IUiStatusSink*                            status_           = nullptr;
+  alcedo::AiProviderProfileController*      ai_profiles_      = nullptr;
+  NikonHeRecoveryController*                nikon_            = nullptr;
   std::vector<SemanticGenerationItem>    pending_items_{};
   std::shared_ptr<SemanticGenerationJob> job_{};
   std::shared_ptr<void>                  sidecar_lease_{};

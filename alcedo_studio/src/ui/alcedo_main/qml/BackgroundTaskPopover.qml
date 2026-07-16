@@ -8,7 +8,7 @@ import QtQuick.Controls.Material
 import QtQuick.Layouts
 
 // Popover listing all active + recent background tasks from
-// `albumBackend.backgroundTaskController`. Opened by `BackgroundTaskBar`.
+// `appModules.backgroundTasks`. Opened by `BackgroundTaskBar`.
 // Each row shows a status dot, title, detail, a progress bar, and a Cancel
 // button when the task is still cancelable. Non-modal; closes on
 // Escape/outside-click.

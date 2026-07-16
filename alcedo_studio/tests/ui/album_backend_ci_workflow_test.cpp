@@ -10,7 +10,7 @@
 namespace alcedo::ui::test {
 namespace {
 
-using AlbumBackendCiWorkflowTest = AlbumBackendTestFixture;
+using ApplicationModuleHostCiWorkflowTest = ApplicationModuleHostTestFixture;
 
 auto CollectCiRawFiles(size_t maxCount = 2) -> std::vector<std::filesystem::path> {
   const std::filesystem::path        root{std::string(TEST_IMG_PATH) + "/ci_rawfiles"};
@@ -31,11 +31,11 @@ auto CollectCiRawFiles(size_t maxCount = 2) -> std::vector<std::filesystem::path
   return paths;
 }
 
-void WaitForImportFinished(AlbumBackend& backend, int timeoutMs = 60000) {
-  QSignalSpy spy(&backend, &AlbumBackend::ImportStateChanged);
+void WaitForImportFinished(ApplicationModuleHost& backend, int timeoutMs = 60000) {
+  QSignalSpy spy(backend.import_export(), &ImportExportHandler::ImportStateChanged);
   const int  step    = 200;
   int        elapsed = 0;
-  while (backend.ImportRunning() && elapsed < timeoutMs) {
+  while (backend.import_export()->ImportRunning() && elapsed < timeoutMs) {
     spy.wait(step);
     elapsed += step;
   }
@@ -44,8 +44,8 @@ void WaitForImportFinished(AlbumBackend& backend, int timeoutMs = 60000) {
 
 }  // namespace
 
-TEST_F(AlbumBackendCiWorkflowTest, ImportCiRawFilesPublishesAlbumItems) {
-  AlbumBackend backend;
+TEST_F(ApplicationModuleHostCiWorkflowTest, ImportCiRawFilesPublishesAlbumItems) {
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
   const auto images = CollectCiRawFiles();
@@ -53,22 +53,22 @@ TEST_F(AlbumBackendCiWorkflowTest, ImportCiRawFilesPublishesAlbumItems) {
     GTEST_SKIP() << "CI RAW fixtures missing under TEST_IMG_PATH/ci_rawfiles";
   }
 
-  backend.StartImport(PathsToQStringList(images));
+  backend.import_export()->StartImport(PathsToQStringList(images));
   WaitForImportFinished(backend);
 
-  EXPECT_FALSE(backend.ImportRunning());
-  EXPECT_EQ(backend.ImportFailed(), 0);
-  EXPECT_GE(backend.ImportCompleted(), static_cast<int>(images.size()));
-  EXPECT_GE(backend.ShownCount(), static_cast<int>(images.size()));
-  ASSERT_FALSE(backend.Thumbnails().isEmpty());
+  EXPECT_FALSE(backend.import_export()->ImportRunning());
+  EXPECT_EQ(backend.import_export()->ImportFailed(), 0);
+  EXPECT_GE(backend.import_export()->ImportCompleted(), static_cast<int>(images.size()));
+  EXPECT_GE(backend.library()->ShownCount(), static_cast<int>(images.size()));
+  ASSERT_FALSE(backend.library()->Thumbnails().isEmpty());
 
-  const QVariantMap first      = backend.Thumbnails().front().toMap();
+  const QVariantMap first      = backend.library()->Thumbnails().front().toMap();
   const auto        element_id = first.value("elementId").toUInt();
   const auto        image_id   = first.value("imageId").toUInt();
   EXPECT_GT(element_id, 0u);
   EXPECT_GT(image_id, 0u);
 
-  const QVariantMap details = backend.GetImageDetails(element_id, image_id);
+  const QVariantMap details = backend.images()->GetImageDetails(element_id, image_id);
   EXPECT_FALSE(details.isEmpty());
 }
 

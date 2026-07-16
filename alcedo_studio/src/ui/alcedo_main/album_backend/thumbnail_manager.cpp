@@ -4,7 +4,8 @@
 
 #include "ui/alcedo_main/album_backend/thumbnail_manager.hpp"
 
-#include "ui/alcedo_main/album_backend/album_backend.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 
 #include <QCoreApplication>
@@ -71,7 +72,7 @@ auto ThumbnailManager::PathExists(const std::filesystem::path& path) -> bool {
 auto ThumbnailManager::ResolveThumbnailSourcePath(sl_element_id_t elementId,
                                                   image_id_t imageId) const
     -> std::filesystem::path {
-  auto proj = backend_.project_handler_.project();
+  auto proj = library_.project()->handler().project();
   if (proj) {
     try {
       auto image_path = proj->GetImagePoolService()->Read<std::filesystem::path>(
@@ -89,7 +90,7 @@ auto ThumbnailManager::ResolveThumbnailSourcePath(sl_element_id_t elementId,
     }
   }
 
-  if (const auto* item = backend_.FindAlbumItem(elementId);
+  if (const auto* item = library_.FindAlbumItem(elementId);
       item != nullptr && item->file_path_.is_absolute() && !item->file_path_.empty()) {
     return item->file_path_;
   }
@@ -97,7 +98,7 @@ auto ThumbnailManager::ResolveThumbnailSourcePath(sl_element_id_t elementId,
   return {};
 }
 
-ThumbnailManager::ThumbnailManager(AlbumBackend& backend) : backend_(backend) {}
+ThumbnailManager::ThumbnailManager(LibraryModule& library) : library_(library) {}
 
 void ThumbnailManager::SetThumbnailVisible(sl_element_id_t elementId, image_id_t imageId,
                                            bool visible, uint32_t maxEdge) {
@@ -105,7 +106,7 @@ void ThumbnailManager::SetThumbnailVisible(sl_element_id_t elementId, image_id_t
     return;
   }
 
-  auto thumb_svc = backend_.project_handler_.thumbnail_service();
+  auto thumb_svc = library_.project()->handler().thumbnail_service();
   const auto key = MakeThumbnailKey(elementId, maxEdge);
 
   if (visible) {
@@ -119,7 +120,7 @@ void ThumbnailManager::SetThumbnailVisible(sl_element_id_t elementId, image_id_t
       if (pin.image_id_ == imageId) {
         pin.ref_count_++;
         current_visible_thumbnail_keys_[elementId] = key;
-        const auto* item = backend_.FindAlbumItem(elementId);
+        const auto* item = library_.FindAlbumItem(elementId);
         if (item != nullptr && item->thumb_data_url.isEmpty() && !item->thumb_loading &&
             item->thumb_error_text.isEmpty()) {
           RequestThumbnail(elementId, imageId, maxEdge);
@@ -145,7 +146,7 @@ void ThumbnailManager::SetThumbnailVisible(sl_element_id_t elementId, image_id_t
     }
     current_visible_thumbnail_keys_[elementId] = key;
 
-    const auto* item = backend_.FindAlbumItem(elementId);
+    const auto* item = library_.FindAlbumItem(elementId);
     const bool known_missing = item != nullptr && item->thumb_missing_source;
     const auto source_path = ResolveThumbnailSourcePath(elementId, imageId);
     if (known_missing && !source_path.empty() && !PathExists(source_path)) {
@@ -177,7 +178,7 @@ void ThumbnailManager::SetThumbnailVisible(sl_element_id_t elementId, image_id_t
   // Strategy B: mark only this request key as inactive.
   DeactivateThumbnailRequest(key);
 
-  const auto* item = backend_.FindAlbumItem(elementId);
+  const auto* item = library_.FindAlbumItem(elementId);
   const bool  missing_source = item != nullptr && item->thumb_missing_source;
   if (!IsThumbnailPinned(elementId)) {
     UpdateThumbnailState(elementId, QString(), false, missing_source);
@@ -192,14 +193,14 @@ void ThumbnailManager::SetThumbnailVisible(sl_element_id_t elementId, image_id_t
 
 void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t imageId,
                                         uint32_t maxEdge, int retryAttempt) {
-  auto thumb_svc = backend_.project_handler_.thumbnail_service();
+  auto thumb_svc = library_.project()->handler().thumbnail_service();
   if (!thumb_svc) {
     return;
   }
 
   const auto key = MakeThumbnailKey(elementId, maxEdge);
 
-  const auto* item = backend_.FindAlbumItem(elementId);
+  const auto* item = library_.FindAlbumItem(elementId);
   const QString existing_data_url = item != nullptr ? item->thumb_data_url : QString{};
   UpdateThumbnailState(elementId, existing_data_url, true, false);
 
@@ -217,7 +218,7 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
   }
 
   auto                   service = thumb_svc;
-  QPointer<AlbumBackend> self(&backend_);
+  QPointer<LibraryModule> self(&library_);
 
   CallbackDispatcher dispatcher = [](std::function<void()> fn) {
     auto* app = QCoreApplication::instance();
@@ -245,13 +246,13 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
         auto guard = std::move(result.guard);
         if (!guard || !guard->thumbnail_buffer_) {
           if (self) {
-            if (IsRetryableEmptyThumbnailResult(result) && self->thumb_.IsThumbnailPinned(key) &&
+            if (IsRetryableEmptyThumbnailResult(result) && self->thumbs().IsThumbnailPinned(key) &&
                 retryAttempt < 1) {
-              self->thumb_.RequestThumbnail(elementId, imageId, maxEdge, retryAttempt + 1);
+              self->thumbs().RequestThumbnail(elementId, imageId, maxEdge, retryAttempt + 1);
               return;
             }
 
-            const auto source_path = self->thumb_.ResolveThumbnailSourcePath(elementId, imageId);
+            const auto source_path = self->thumbs().ResolveThumbnailSourcePath(elementId, imageId);
             const bool missing_source = !source_path.empty() && !PathExists(source_path);
             const QString error_text = [&]() {
               if (missing_source) {
@@ -263,10 +264,10 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
               }
               return QObject::tr("Thumbnail render returned no image.");
             }();
-            self->thumb_.UpdateThumbnailState(elementId, QString(), false, missing_source,
+            self->thumbs().UpdateThumbnailState(elementId, QString(), false, missing_source,
                                               error_text);
           }
-          if (self && !self->thumb_.IsThumbnailPinned(key) && service) {
+          if (self && !self->thumbs().IsThumbnailPinned(key) && service) {
             try {
               service->ReleaseThumbnail(key);
             } catch (...) {
@@ -333,18 +334,18 @@ void ThumbnailManager::RequestThumbnail(sl_element_id_t elementId, image_id_t im
                     return;
                   }
 
-                  const bool pinned = self->thumb_.IsThumbnailPinned(key);
+                  const bool pinned = self->thumbs().IsThumbnailPinned(key);
                   if (pinned) {
                     const bool render_error = dataUrl.isEmpty();
-                    self->thumb_.UpdateThumbnailState(
+                    self->thumbs().UpdateThumbnailState(
                         elementId, dataUrl, false, false,
                         render_error
                             ? (errorText.isEmpty()
                                    ? QObject::tr("Thumbnail conversion produced no image.")
                                    : errorText)
                             : QString{});
-                  } else if (!self->thumb_.IsThumbnailPinned(elementId)) {
-                    self->thumb_.UpdateThumbnailState(elementId, QString(), false, false);
+                  } else if (!self->thumbs().IsThumbnailPinned(elementId)) {
+                    self->thumbs().UpdateThumbnailState(elementId, QString(), false, false);
                   }
                   if (!pinned && service) {
                     try {
@@ -388,7 +389,7 @@ bool ThumbnailManager::RefreshCurrentThumbnail(sl_element_id_t elementId, image_
 void ThumbnailManager::UpdateThumbnailState(sl_element_id_t elementId, const QString& dataUrl,
                                             bool loading, bool missingSource,
                                             const QString& errorText) {
-  auto* item = backend_.FindAlbumItem(elementId);
+  auto* item = library_.FindAlbumItem(elementId);
   if (!item) {
     return;
   }
@@ -403,12 +404,10 @@ void ThumbnailManager::UpdateThumbnailState(sl_element_id_t elementId, const QSt
   item->thumb_missing_source  = missingSource;
   item->thumb_error_text      = errorText;
 
-  backend_.thumbnail_model_.updateThumbnailState(elementId, dataUrl, loading, missingSource,
+  library_.model().updateThumbnailState(elementId, dataUrl, loading, missingSource,
                                                   errorText);
 
-  emit backend_.ThumbnailUpdated(static_cast<uint>(elementId), dataUrl, loading, missingSource,
-                                 errorText);
-  emit backend_.thumbnailUpdated(static_cast<uint>(elementId), dataUrl, loading, missingSource,
+  library_.EmitThumbnailUpdated(static_cast<uint>(elementId), dataUrl, loading, missingSource,
                                  errorText);
 }
 
@@ -446,7 +445,7 @@ void ThumbnailManager::ReleasePinnedThumbnailRequest(const ThumbnailCacheKey& ke
   }
   DeactivateThumbnailRequest(key);
 
-  auto thumb_svc = backend_.project_handler_.thumbnail_service();
+  auto thumb_svc = library_.project()->handler().thumbnail_service();
   if (thumb_svc) {
     try {
       thumb_svc->ReleaseThumbnail(key);
@@ -455,7 +454,7 @@ void ThumbnailManager::ReleasePinnedThumbnailRequest(const ThumbnailCacheKey& ke
   }
 
   if (update_state_if_unpinned && !IsThumbnailPinned(key.element_id)) {
-    const auto* item = backend_.FindAlbumItem(key.element_id);
+    const auto* item = library_.FindAlbumItem(key.element_id);
     const bool  missing_source = item != nullptr && item->thumb_missing_source;
     UpdateThumbnailState(key.element_id, QString(), false, missing_source);
   }
@@ -509,7 +508,7 @@ void ThumbnailManager::RemoveThumbnailState(sl_element_id_t elementId, image_id_
 
   UpdateThumbnailState(elementId, QString(), false, false);
 
-  auto thumb_svc = backend_.project_handler_.thumbnail_service();
+  auto thumb_svc = library_.project()->handler().thumbnail_service();
   if (!thumb_svc) {
     return;
   }
@@ -526,7 +525,7 @@ void ThumbnailManager::ReleaseVisibleThumbnailPins() {
     return;
   }
 
-  auto thumb_svc = backend_.project_handler_.thumbnail_service();
+  auto thumb_svc = library_.project()->handler().thumbnail_service();
 
   const auto pinned_keys = [&]() {
     std::vector<ThumbnailCacheKey> keys;
@@ -539,7 +538,7 @@ void ThumbnailManager::ReleaseVisibleThumbnailPins() {
   }();
 
   for (const auto& key : pinned_keys) {
-    auto* item = backend_.FindAlbumItem(key.element_id);
+    auto* item = library_.FindAlbumItem(key.element_id);
     if (item) {
       item->thumb_data_url.clear();
       item->thumb_loading = false;

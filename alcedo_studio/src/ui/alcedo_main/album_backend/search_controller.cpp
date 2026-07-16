@@ -20,7 +20,11 @@
 #include "app/thumbnail_service.hpp"
 #include "app/search_query_classifier.hpp"
 #include "image/image.hpp"
-#include "ui/alcedo_main/album_backend/album_backend.hpp"
+#include "ui/alcedo_main/album_backend/search_controller.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
+#include "ui/alcedo_main/album_backend/folder_controller.hpp"
+#include "ui/alcedo_main/album_backend/stats_engine.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 
@@ -151,7 +155,11 @@ auto ExecuteSearchTask(const SearchTask& task) -> SearchCoreResult {
 
 }  // namespace
 
-SearchController::SearchController(AlbumBackend& backend) : backend_(backend) {
+SearchController::SearchController(ProjectModule* project, LibraryModule* library,
+                                   FolderController* folders, StatsEngine* stats,
+                                   QObject* parent)
+    : QObject(parent), project_(project), library_(library), folders_(folders),
+      stats_(stats) {
   QSettings settings;
   if (!settings.contains(QLatin1String(kNaturalLanguageSearchEnabledKey))) {
     // One-time migration: carry over the pre-rename "Semantic" toggle so
@@ -239,7 +247,7 @@ auto SearchController::SearchRecommendations(int limit) -> QVariantList {
   if (limit <= 0) {
     return {};
   }
-  return backend_.stats_.BuildSearchRecommendations(limit);
+  return stats_->BuildSearchRecommendations(limit);
 }
 
 auto SearchController::SearchPreview(const QString& query, int offset, int limit) -> QVariantMap {
@@ -271,7 +279,7 @@ auto SearchController::RunTraditionalPreview(const QString& query, int offset, i
     return response;
   }
 
-  auto proj = backend_.project_handler_.project();
+  auto proj = project_->handler().project();
   if (!proj) {
     response["rows"] = rows;
     return response;
@@ -281,7 +289,7 @@ auto SearchController::RunTraditionalPreview(const QString& query, int offset, i
     response["rows"] = rows;
     return response;
   }
-  const auto folder_id = backend_.folder_ctrl_.CurrentFolderElementId();
+  const auto folder_id = folders_->CurrentFolderElementId();
   if (!folder_id.has_value()) {
     response["rows"] = rows;
     return response;
@@ -313,7 +321,7 @@ auto SearchController::BuildResultRows(const std::vector<alcedo::FuzzySearchMatc
   QVariantList rows;
   rows.reserve(static_cast<qsizetype>(matches.size()));
 
-  auto proj = backend_.project_handler_.project();
+  auto proj = project_->handler().project();
   for (const auto& match : matches) {
     QVariantMap row{{"elementId", static_cast<uint>(match.file_id_)},
                     {"fileId", static_cast<uint>(match.file_id_)},
@@ -328,7 +336,7 @@ auto SearchController::BuildResultRows(const std::vector<alcedo::FuzzySearchMatc
                     {"thumbMissingSource", false},
                     {"thumbErrorText", QString{}}};
 
-    if (const auto* item = backend_.FindAlbumItem(match.file_id_); item != nullptr) {
+    if (const auto* item = library_->FindAlbumItem(match.file_id_); item != nullptr) {
       row["thumbUrl"]           = item->thumb_data_url;
       row["thumbLoading"]       = item->thumb_loading;
       row["thumbMissingSource"] = item->thumb_missing_source;
@@ -390,9 +398,9 @@ auto SearchController::SubmitSearch(const QString& query, int offset, int limit)
     return response;
   }
 
-  auto proj = backend_.project_handler_.project();
+  auto proj = project_->handler().project();
   auto filter_service = proj ? proj->GetSleeveFilterService() : nullptr;
-  const auto folder_id = backend_.folder_ctrl_.CurrentFolderElementId();
+  const auto folder_id = folders_->CurrentFolderElementId();
   if (!filter_service || !filter_service->HasSemanticSearchProvider() || !folder_id.has_value()) {
     auto response            = MakeEmptyResponse(offset, limit, route_name);
     response["semanticUnavailable"] = true;
@@ -459,10 +467,10 @@ auto SearchController::RequestSearch(const QString& query, int offset, int limit
   };
   task.route_name = std::string(SearchQueryRouteName(task.classification.route_));
 
-  if (auto project = backend_.project_handler_.project()) {
+  if (auto project = project_->handler().project()) {
     task.semantic_filter_service = project->GetSleeveFilterService();
   }
-  task.folder_id = backend_.folder_ctrl_.CurrentFolderElementId();
+  task.folder_id = folders_->CurrentFolderElementId();
 
   QPointer<SearchController> self(this);
   std::thread([self, request_id, mode, task = std::move(task)]() mutable {
@@ -509,7 +517,7 @@ void SearchController::ApplyFuzzySearch(const QString& query) {
     return;
   }
 
-  auto proj = backend_.project_handler_.project();
+  auto proj = project_->handler().project();
   if (!proj) {
     return;
   }
@@ -527,10 +535,10 @@ void SearchController::ApplyFuzzySearch(const QString& query) {
 
   active_search_query_        = trimmed;
   active_search_filter_where_ = std::move(where);
-  backend_.stats_.ClearFilters();
-  backend_.stats_.RebuildThumbnailView();
-  backend_.stats_.RefreshStats();
-  emit backend_.StatsFilterChanged();
+  stats_->ClearFilters();
+  stats_->RebuildThumbnailView();
+  stats_->RefreshStats();
+  emit stats_->StatsFilterChanged();
   emit SearchStateChanged();
 }
 
@@ -539,7 +547,7 @@ void SearchController::ApplyExactSearch(uint elementId) {
     return;
   }
 
-  auto proj = backend_.project_handler_.project();
+  auto proj = project_->handler().project();
   if (!proj) {
     return;
   }
@@ -552,10 +560,10 @@ void SearchController::ApplyExactSearch(uint elementId) {
       SEARCH_TEXT("Image %1", QString::number(static_cast<qulonglong>(elementId))).Render();
   active_search_filter_where_ =
       filter_service->BuildExactFileWhere(static_cast<sl_element_id_t>(elementId));
-  backend_.stats_.ClearFilters();
-  backend_.stats_.RebuildThumbnailView();
-  backend_.stats_.RefreshStats();
-  emit backend_.StatsFilterChanged();
+  stats_->ClearFilters();
+  stats_->RebuildThumbnailView();
+  stats_->RefreshStats();
+  emit stats_->StatsFilterChanged();
   emit SearchStateChanged();
 }
 
@@ -564,8 +572,8 @@ void SearchController::ClearFuzzySearch() {
     return;
   }
   ClearSearchState(true);
-  backend_.stats_.RebuildThumbnailView();
-  backend_.stats_.RefreshStats();
+  stats_->RebuildThumbnailView();
+  stats_->RefreshStats();
 }
 
 void SearchController::SetSearchPreviewThumbnailVisible(uint elementId, uint imageId, bool visible,
@@ -580,7 +588,7 @@ void SearchController::SetSearchPreviewThumbnailVisible(uint elementId, uint ima
     search_preview_visible_thumbnails_.erase(key);
     search_preview_thumbnail_requests_.erase(key);
 
-    auto thumb_svc = backend_.project_handler_.thumbnail_service();
+    auto thumb_svc = project_->handler().thumbnail_service();
     if (!thumb_svc) {
       return;
     }
@@ -600,7 +608,7 @@ void SearchController::RequestSearchPreviewThumbnail(uint elementId, uint imageI
     return;
   }
 
-  auto thumb_svc = backend_.project_handler_.thumbnail_service();
+  auto thumb_svc = project_->handler().thumbnail_service();
   if (!thumb_svc) {
     return;
   }
@@ -615,7 +623,7 @@ void SearchController::RequestSearchPreviewThumbnail(uint elementId, uint imageI
     return;
   }
 
-  if (const auto* item = backend_.FindAlbumItem(static_cast<sl_element_id_t>(elementId));
+  if (const auto* item = library_->FindAlbumItem(static_cast<sl_element_id_t>(elementId));
       item != nullptr && !item->thumb_data_url.isEmpty()) {
     emit SearchPreviewThumbnailUpdated(elementId, item->thumb_data_url, false,
                                        item->thumb_missing_source, item->thumb_error_text);
@@ -805,7 +813,7 @@ void SearchController::CancelSearchPreviewThumbnails() {
     keys_to_release.emplace(key, true);
   }
 
-  auto thumb_svc = backend_.project_handler_.thumbnail_service();
+  auto thumb_svc = project_->handler().thumbnail_service();
   search_preview_visible_thumbnails_.clear();
   search_preview_thumbnail_requests_.clear();
   if (!thumb_svc) {

@@ -124,13 +124,13 @@ ApplicationWindow {
     property bool gridMode: true
     readonly property int defaultGridZoomLevel: 4
     property int gridZoomLevel: defaultGridZoomLevel  // 0..7, maps to column counts 2/3/4/5/6/8/11/14
-    readonly property bool backendInteractive: albumBackend.serviceReady
-                                               && !albumBackend.projectLoading
-                                               && !albumBackend.acceleratorPreparing
+    readonly property bool backendInteractive: appModules.project.serviceReady
+                                               && !appModules.project.projectLoading
+                                               && !appModules.project.acceleratorPreparing
     readonly property var selectedImagesById: selectionState.selectedImagesById
     readonly property var exportQueueById: exportQueueState.exportQueueById
     readonly property var exportPreviewRows: exportQueueState.exportPreviewRows
-    readonly property var semanticGeneration: albumBackend.semanticGenerationController
+    readonly property var semanticGeneration: appModules.semanticGeneration
     readonly property int selectedCount: selectionState.selectedCount
     readonly property int exportQueueCount: exportQueueState.exportQueueCount
     readonly property var languageOptions: languageManager.availableLanguages
@@ -147,7 +147,7 @@ ApplicationWindow {
     property int lastObservedExportCompleted: 0
     property bool projectLaunchPending: false
     property bool welcomeDismissedForLaunch: false
-    readonly property bool projectLoadingOverlayVisible: root.projectLaunchPending || albumBackend.projectLoading
+    readonly property bool projectLoadingOverlayVisible: root.projectLaunchPending || appModules.project.projectLoading
     readonly property bool projectLaunchBusy: root.projectLoadingOverlayVisible || root.pendingProjectLaunchAction !== null
     property var pendingProjectLaunchAction: null
     property bool restoreWelcomeOnProjectLaunchFailure: false
@@ -159,12 +159,12 @@ ApplicationWindow {
     // PolicyChanged. focusedImageTarget is the reliable elementId source
     // (focusedImageInspection may omit it on the success branch).
     Binding {
-        target: albumBackend.interactionPolicyController
+        target: appModules.interactionPolicy
         property: "focusedElementId"
         value: root.focusedImageTarget ? Number(root.focusedImageTarget.elementId || 0) : 0
     }
     Binding {
-        target: albumBackend.interactionPolicyController
+        target: appModules.interactionPolicy
         property: "pendingDeleteTargets"
         value: root.pendingDeleteTargets
     }
@@ -178,7 +178,7 @@ ApplicationWindow {
         id: acceleratorPreparationStartTimer
         interval: 16
         repeat: false
-        onTriggered: albumBackend.StartAcceleratorPreparation()
+        onTriggered: appModules.project.StartAcceleratorPreparation()
     }
 
     Timer {
@@ -189,7 +189,7 @@ ApplicationWindow {
             const loadAction = root.pendingProjectLaunchAction
             root.pendingProjectLaunchAction = null
             const started = loadAction ? loadAction() : false
-            if (!started && !albumBackend.projectLoading) {
+            if (!started && !appModules.project.projectLoading) {
                 root.projectLaunchPending = false
                 if (root.restoreWelcomeOnProjectLaunchFailure) {
                     root.welcomeDismissedForLaunch = false
@@ -212,9 +212,9 @@ ApplicationWindow {
     }
 
     function requestSaveProject() {
-        const ok = albumBackend.SaveProject()
+        const ok = appModules.project.SaveProject()
         if (ok) {
-            showSnackbar(albumBackend.serviceMessage)
+            showSnackbar(appModules.project.serviceMessage)
         }
     }
 
@@ -245,10 +245,10 @@ ApplicationWindow {
     }
 
     function beginProjectLaunch(loadAction) {
-        if (albumBackend.acceleratorPreparing) {
+        if (appModules.project.acceleratorPreparing) {
             return
         }
-        root.restoreWelcomeOnProjectLaunchFailure = !albumBackend.serviceReady
+        root.restoreWelcomeOnProjectLaunchFailure = !appModules.project.serviceReady
         root.pendingProjectLaunchAction = loadAction
         root.dismissWelcomeForProjectLaunch()
         root.updateWelcomeDialogVisibility()
@@ -267,8 +267,8 @@ ApplicationWindow {
 
     function updateWelcomeDialogVisibility() {
         const shouldShowWelcome = !root.welcomeDismissedForLaunch
-                                  && !albumBackend.serviceReady
-                                  && !albumBackend.projectLoading
+                                  && !appModules.project.serviceReady
+                                  && !appModules.project.projectLoading
         if (shouldShowWelcome) {
             if (!welcomeDialog.opened) {
                 welcomeDialog.open()
@@ -301,7 +301,7 @@ ApplicationWindow {
             elementId: elementId,
             fileId: Number(row.fileId || row.elementId),
             imageId: Number(row.imageId),
-            folderId: Number(row.folderId || albumBackend.currentFolderId),
+            folderId: Number(row.folderId || appModules.folders.currentFolderId),
             scopeType: row.scopeType ? String(row.scopeType) : "",
             fileName: row.fileName ? row.fileName : qsTr("(unnamed)"),
             rating: Number(row.rating),
@@ -319,7 +319,7 @@ ApplicationWindow {
             elementId: Number(item.elementId || item.fileId),
             fileId: Number(item.fileId || item.elementId),
             imageId: Number(item.imageId),
-            folderId: Number(item.folderId || albumBackend.currentFolderId),
+            folderId: Number(item.folderId || appModules.folders.currentFolderId),
             scopeType: item.scopeType ? String(item.scopeType) : "",
             fileName: item.fileName ? item.fileName : qsTr("(unnamed)"),
             rating: Number(item.rating || 0),
@@ -333,7 +333,7 @@ ApplicationWindow {
             root.focusedImageInspection = ({ success: false, tiles: [] })
             return
         }
-        const result = albumBackend.GetFocusedImageInspection(
+        const result = appModules.images.GetFocusedImageInspection(
             Number(root.focusedImageTarget.elementId || root.focusedImageTarget.fileId),
             Number(root.focusedImageTarget.imageId))
         if (!result || result.success !== true) {
@@ -357,11 +357,11 @@ ApplicationWindow {
 
     function analysisResultTouchesFocusedImage() {
         if (!root.focusedImageTarget || Number(root.focusedImageTarget.imageId) <= 0
-                || !albumBackend.imageAnalysisController
-                || !albumBackend.imageAnalysisController.lastResults) {
+                || !appModules.imageAnalysis
+                || !appModules.imageAnalysis.lastResults) {
             return false
         }
-        const results = albumBackend.imageAnalysisController.lastResults
+        const results = appModules.imageAnalysis.lastResults
         const targetElementId = Number(root.focusedImageTarget.elementId || 0)
         const targetFileId = Number(root.focusedImageTarget.fileId || 0)
         const targetImageId = Number(root.focusedImageTarget.imageId || 0)
@@ -381,17 +381,17 @@ ApplicationWindow {
     }
 
     function selectAllCurrentAlbum() {
-        if (!root.backendInteractive || albumBackend.thumbnailModel.loading) {
+        if (!root.backendInteractive || appModules.library.thumbnailModel.loading) {
             return
         }
-        const total = Number(albumBackend.totalCount)
+        const total = Number(appModules.library.totalCount)
         if (total <= 0) {
             selectionState.clearSelectedImages()
             return
         }
 
-        albumBackend.LoadThumbnailsThroughIndex(total - 1)
-        const rows = albumBackend.thumbnailModel.getItemsInRange(0, total - 1)
+        appModules.library.LoadThumbnailsThroughIndex(total - 1)
+        const rows = appModules.library.thumbnailModel.getItemsInRange(0, total - 1)
         const items = []
         for (let i = 0; i < rows.length; ++i) {
             const item = root.selectionItemFromThumbnailRow(rows[i])
@@ -413,14 +413,14 @@ ApplicationWindow {
             elementId: Number(clickedItem.elementId),
             fileId: Number(clickedItem.fileId || clickedItem.elementId),
             imageId: Number(clickedItem.imageId),
-            folderId: Number(clickedItem.folderId || albumBackend.currentFolderId),
+            folderId: Number(clickedItem.folderId || appModules.folders.currentFolderId),
             scopeType: clickedItem.scopeType ? String(clickedItem.scopeType) : "",
             fileName: clickedItem.fileName ? clickedItem.fileName : qsTr("(unnamed)")
         }]
     }
 
     function albumTargetActions() {
-        const rows = albumBackend.folders ? albumBackend.folders : []
+        const rows = appModules.folders.folders ? appModules.folders.folders : []
         const actions = []
         for (let i = 0; i < rows.length; ++i) {
             const row = rows[i]
@@ -428,7 +428,7 @@ ApplicationWindow {
                 continue
             }
             const folderId = Number(row.folderId)
-            if (folderId === 0 || folderId === Number(albumBackend.currentFolderId)) {
+            if (folderId === 0 || folderId === Number(appModules.folders.currentFolderId)) {
                 continue
             }
             actions.push({
@@ -453,7 +453,7 @@ ApplicationWindow {
         }
         root.setFocusedImage(clickedItem)
         root.pendingDeleteTargets = targets
-        const ratingResult = albumBackend.GetImageRating(
+        const ratingResult = appModules.images.GetImageRating(
             Number(clickedItem.elementId),
             Number(clickedItem.imageId))
         root.pendingRatingTarget = {
@@ -481,11 +481,11 @@ ApplicationWindow {
             return
         }
         if (count === 1) {
-            root.deleteConfirmText = Number(albumBackend.currentFolderId) === 0
+            root.deleteConfirmText = Number(appModules.folders.currentFolderId) === 0
                     ? qsTr("Delete this image from project?")
                     : qsTr("Remove this image from this album?")
         } else {
-            root.deleteConfirmText = Number(albumBackend.currentFolderId) === 0
+            root.deleteConfirmText = Number(appModules.folders.currentFolderId) === 0
                     ? qsTr("Delete %1 images from project?").arg(count)
                     : qsTr("Remove %1 images from this album?").arg(count)
         }
@@ -496,7 +496,7 @@ ApplicationWindow {
         if (!root.pendingDeleteTargets || root.pendingDeleteTargets.length === 0) {
             return
         }
-        const result = albumBackend.AddImagesToFolder(root.pendingDeleteTargets, Number(targetFolderId))
+        const result = appModules.images.AddImagesToFolder(root.pendingDeleteTargets, Number(targetFolderId))
         if (result && result.message) {
             root.showSnackbar(result.message)
         }
@@ -506,7 +506,7 @@ ApplicationWindow {
         if (!root.pendingDeleteTargets || root.pendingDeleteTargets.length === 0) {
             return
         }
-        const result = albumBackend.DeleteImages(root.pendingDeleteTargets)
+        const result = appModules.images.DeleteImages(root.pendingDeleteTargets)
         const deletedIds = (result && result.deletedElementIds) ? result.deletedElementIds : []
         if (deletedIds.length > 0) {
             selectionState.pruneDeletedElements(deletedIds)
@@ -529,7 +529,7 @@ ApplicationWindow {
             return
         }
         const normalizedRating = Math.max(0, Math.min(5, Number(rating)))
-        const result = albumBackend.SetImageRating(
+        const result = appModules.images.SetImageRating(
             Number(root.pendingRatingTarget.elementId),
             Number(root.pendingRatingTarget.imageId),
             normalizedRating)
@@ -552,7 +552,7 @@ ApplicationWindow {
             return
         }
         const normalizedRating = Math.max(0, Math.min(5, Number(rating)))
-        const result = albumBackend.SetImageRating(
+        const result = appModules.images.SetImageRating(
             Number(root.focusedImageTarget.elementId || root.focusedImageTarget.fileId),
             Number(root.focusedImageTarget.imageId),
             normalizedRating)
@@ -572,7 +572,7 @@ ApplicationWindow {
                 || root.focusedImageTarget.elementId) <= 0) {
             return
         }
-        const result = albumBackend.SetImageDescription(
+        const result = appModules.images.SetImageDescription(
             Number(root.focusedImageTarget.fileId || root.focusedImageTarget.elementId),
             String(caption || ""))
         if (result && result.success === true) {
@@ -588,7 +588,7 @@ ApplicationWindow {
                 || root.focusedImageTarget.elementId) <= 0) {
             return
         }
-        const result = albumBackend.SetImageRatingReasons(
+        const result = appModules.images.SetImageRatingReasons(
             Number(root.focusedImageTarget.fileId || root.focusedImageTarget.elementId),
             String(reasons || ""))
         if (result && result.success === true) {
@@ -603,7 +603,7 @@ ApplicationWindow {
         if (!root.pendingAdjustmentSource || Number(root.pendingAdjustmentSource.elementId) <= 0) {
             return
         }
-        const result = albumBackend.adjustmentTransferController.PrepareCopy(
+        const result = appModules.adjustmentTransfer.PrepareCopy(
             Number(root.pendingAdjustmentSource.elementId))
         if (!result || result.success !== true) {
             if (result && result.message) {
@@ -619,7 +619,7 @@ ApplicationWindow {
     }
 
     function requestPasteAdjustments() {
-        if (!albumBackend.adjustmentTransferController.packageAvailable) {
+        if (!appModules.adjustmentTransfer.packageAvailable) {
             return
         }
         if (!root.pendingAdjustmentPasteTargets || root.pendingAdjustmentPasteTargets.length === 0) {
@@ -628,10 +628,10 @@ ApplicationWindow {
         adjustmentTransferDialog.mode = "paste"
         adjustmentTransferDialog.pasteStrategy = "merge"
         adjustmentTransferDialog.sourceTitle =
-                albumBackend.adjustmentTransferController.packageSourceTitle
+                appModules.adjustmentTransfer.packageSourceTitle
         adjustmentTransferDialog.targetCount = root.pendingAdjustmentPasteTargets.length
         adjustmentTransferDialog.adjustmentRows =
-                albumBackend.adjustmentTransferController.packageSummary
+                appModules.adjustmentTransfer.packageSummary
         adjustmentTransferDialog.open()
     }
 
@@ -695,9 +695,9 @@ ApplicationWindow {
             const items = []
             for (let i = 0; i < rows.length; ++i) {
                 const item = rows[i]
-                const rowIndex = albumBackend.thumbnailModel.rowByElementId(Number(item.elementId))
+                const rowIndex = appModules.library.thumbnailModel.rowByElementId(Number(item.elementId))
                 if (rowIndex >= 0) {
-                    const current = albumBackend.thumbnailModel.getItemAt(rowIndex)
+                    const current = appModules.library.thumbnailModel.getItemAt(rowIndex)
                     if (current && Number(current.elementId) === Number(item.elementId)) {
                         items.push({
                             elementId: Number(current.elementId),
@@ -756,7 +756,7 @@ ApplicationWindow {
             for (let i = 0; i < selectedFiles.length; ++i) {
                 files.push(selectedFiles[i].toString())
             }
-            albumBackend.StartImport(files)
+            appModules.importExport.StartImport(files)
         }
     }
 
@@ -774,7 +774,7 @@ ApplicationWindow {
         onClearQueueRequested: exportQueueState.clearQueue()
         onEnsurePreviewRequested: exportQueueState.refreshExportPreview()
         onStartExportRequested: function(outDir, sdrResizeEnabled, sdrMaxSide, ultraHdrMaxSide, sdrFormat, sdrQuality, sdrBitDepth, sdrPngLevel, sdrTiffComp, ultraHdrQuality, ultraHdrDitherEnabled) {
-            albumBackend.StartExportWithSplitOptionsForTargets(
+            appModules.importExport.StartExportWithSplitOptionsForTargets(
                 outDir,
                 sdrResizeEnabled,
                 sdrMaxSide,
@@ -821,7 +821,7 @@ ApplicationWindow {
         blurSource: mainContent
         cornerRadius: root.windowCornerRadius
         onCopyAccepted: function(selectedKeys) {
-            const result = albumBackend.adjustmentTransferController.Copy(
+            const result = appModules.adjustmentTransfer.Copy(
                 Number(root.pendingAdjustmentSource.elementId),
                 selectedKeys)
             if (result && result.message) {
@@ -829,7 +829,7 @@ ApplicationWindow {
             }
         }
         onPasteAccepted: function(strategy) {
-            const result = albumBackend.adjustmentTransferController.Paste(
+            const result = appModules.adjustmentTransfer.Paste(
                 root.pendingAdjustmentPasteTargets,
                 strategy)
             if (result && result.message) {
@@ -838,7 +838,7 @@ ApplicationWindow {
             root.pendingAdjustmentPasteTargets = []
         }
         onPasteDiscarded: {
-            albumBackend.adjustmentTransferController.Discard()
+            appModules.adjustmentTransfer.Discard()
             root.pendingAdjustmentPasteTargets = []
         }
     }
@@ -856,17 +856,17 @@ ApplicationWindow {
             {
                 id: "paste-adjustments",
                 label: qsTr("Paste Adjustments"),
-                enabled: albumBackend.adjustmentTransferController.packageAvailable
+                enabled: appModules.adjustmentTransfer.packageAvailable
                          && root.pendingAdjustmentPasteTargets.length > 0
             },
             {
                 id: "delete",
-                label: Number(albumBackend.currentFolderId) === 0 ? qsTr("Delete") : qsTr("Remove from Album"),
+                label: Number(appModules.folders.currentFolderId) === 0 ? qsTr("Delete") : qsTr("Remove from Album"),
                 // Phase 2: blocked while the selected images are in an active
                 // analysis set (DeleteImages lock). The reason is exposed on the
                 // policy controller as pendingDeleteReason.
                 enabled: root.pendingDeleteTargets.length > 0
-                          && albumBackend.interactionPolicyController.canDeletePendingTargets
+                          && appModules.interactionPolicy.canDeletePendingTargets
             }
         ].concat(root.albumTargetActions())
         onRatingRequested: function(rating) {
@@ -901,10 +901,10 @@ ApplicationWindow {
     }
 
     Connections {
-        target: albumBackend.imageAnalysisController
+        target: appModules.imageAnalysis
         ignoreUnknownSignals: true
         function onStateChanged() {
-            if (!albumBackend.imageAnalysisController.running
+            if (!appModules.imageAnalysis.running
                     && root.analysisResultTouchesFocusedImage()) {
                 root.refreshFocusedImageInspection()
             }
@@ -915,30 +915,30 @@ ApplicationWindow {
         id: nikonHeRecoveryDialog
         parent: Overlay.overlay
         backgroundSource: mainContent
-        recoveryActive: albumBackend.nikonHeRecoveryActive
-        recoveryBusy: albumBackend.nikonHeRecoveryBusy
-        recoveryPhase: albumBackend.nikonHeRecoveryPhase
-        recoveryStatus: albumBackend.nikonHeRecoveryStatus
-        unsupportedFiles: albumBackend.nikonHeUnsupportedFiles
-        converterPath: albumBackend.nikonHeConverterPath
-        converterPathFromDefault: albumBackend.nikonHeConverterPathFromDefault
-        showImportProgress: albumBackend.importRunning && albumBackend.nikonHeRecoveryActive
-        importCompleted: albumBackend.importCompleted
-        importTotal: albumBackend.importTotal
-        importFailed: albumBackend.importFailed
-        onBrowseRequested: albumBackend.BrowseNikonHeConverter()
-        onConvertRequested: albumBackend.StartNikonHeConversion()
-        onExitRequested: albumBackend.ExitNikonHeRecovery()
+        recoveryActive: appModules.nikonHeRecovery.nikonHeRecoveryActive
+        recoveryBusy: appModules.nikonHeRecovery.nikonHeRecoveryBusy
+        recoveryPhase: appModules.nikonHeRecovery.nikonHeRecoveryPhase
+        recoveryStatus: appModules.nikonHeRecovery.nikonHeRecoveryStatus
+        unsupportedFiles: appModules.nikonHeRecovery.nikonHeUnsupportedFiles
+        converterPath: appModules.nikonHeRecovery.nikonHeConverterPath
+        converterPathFromDefault: appModules.nikonHeRecovery.nikonHeConverterPathFromDefault
+        showImportProgress: appModules.importExport.importRunning && appModules.nikonHeRecovery.nikonHeRecoveryActive
+        importCompleted: appModules.importExport.importCompleted
+        importTotal: appModules.importExport.importTotal
+        importFailed: appModules.importExport.importFailed
+        onBrowseRequested: appModules.nikonHeRecovery.BrowseNikonHeConverter()
+        onConvertRequested: appModules.nikonHeRecovery.StartNikonHeConversion()
+        onExitRequested: appModules.nikonHeRecovery.ExitNikonHeRecovery()
     }
 
     AdvancedContentAnalysisDialog {
         id: advancedContentAnalysisDialog
         parent: Overlay.overlay
         blurSource: mainContent
-        backend: albumBackend
-        analysisController: albumBackend.imageAnalysisController
-        profileController: albumBackend.aiProviderProfileController
-        interactionPolicy: albumBackend.interactionPolicyController
+        backend: appModules
+        analysisController: appModules.imageAnalysis
+        profileController: appModules.aiProviderProfiles
+        interactionPolicy: appModules.interactionPolicy
         backendInteractive: root.backendInteractive
         onMessageRequested: function(message) {
             root.showSnackbar(message)
@@ -1070,7 +1070,7 @@ ApplicationWindow {
                     text: qsTr("Delete")
                     // Phase 2: gated by the same policy as the context-menu delete
                     // action — stays disabled while the targets are being analyzed.
-                    enabled: albumBackend.interactionPolicyController.canDeletePendingTargets
+                    enabled: appModules.interactionPolicy.canDeletePendingTargets
                     Material.background: root.colDanger
                     Material.foreground: root.colText
                     onClicked: {
@@ -1083,7 +1083,7 @@ ApplicationWindow {
     }
 
     Connections {
-        target: albumBackend
+        target: appModules.project
         ignoreUnknownSignals: true
         function onProjectChanged() {
             root.projectLaunchPending = false
@@ -1095,14 +1095,29 @@ ApplicationWindow {
             root.pendingRatingTarget = ({})
             root.setFocusedImage(null)
             deleteConfirmDialog.close()
-            root.showSnackbar(albumBackend.serviceMessage)
+            root.showSnackbar(appModules.project.serviceMessage)
 
             // Auto-maximize when a project is successfully opened.
-            if (albumBackend.serviceReady && !root.windowMaximized && !maximizeTransition.running) {
+            if (appModules.project.serviceReady && !root.windowMaximized && !maximizeTransition.running) {
                 maximizeTransition.targetMaximize = true
                 maximizeTransition.start()
             }
         }
+        function onServiceStateChanged() {
+            root.updateWelcomeDialogVisibility()
+        }
+        function onProjectLoadStateChanged() {
+            root.projectLaunchPending = false
+            if (!appModules.project.projectLoading) {
+                root.welcomeDismissedForLaunch = false
+            }
+            root.updateWelcomeDialogVisibility()
+        }
+    }
+
+    Connections {
+        target: appModules.folders
+        ignoreUnknownSignals: true
         function onFolderSelectionChanged() {
             selectionState.clearSelectedImages()
             root.pendingDeleteTargets = []
@@ -1110,23 +1125,23 @@ ApplicationWindow {
             root.setFocusedImage(null)
             deleteConfirmDialog.close()
         }
-        function onServiceStateChanged() {
-            root.updateWelcomeDialogVisibility()
-        }
-        function onProjectLoadStateChanged() {
-            root.projectLaunchPending = false
-            if (!albumBackend.projectLoading) {
-                root.welcomeDismissedForLaunch = false
-            }
-            root.updateWelcomeDialogVisibility()
-        }
+    }
+
+    Connections {
+        target: appModules.library
+        ignoreUnknownSignals: true
         function onThumbnailsChanged() {
             if (exportDialog.visible) {
                 exportQueueState.refreshExportPreview()
             }
         }
+    }
+
+    Connections {
+        target: appModules.importExport
+        ignoreUnknownSignals: true
         function onImportStateChanged() {
-            if (albumBackend.importRunning) {
+            if (appModules.importExport.importRunning) {
                 root.importSessionObserved = true
                 return
             }
@@ -1134,24 +1149,24 @@ ApplicationWindow {
                 return
             }
             root.importSessionObserved = false
-            root.showSnackbar(qsTr("Imported %1 image(s).").arg(albumBackend.importCompleted))
+            root.showSnackbar(qsTr("Imported %1 image(s).").arg(appModules.importExport.importCompleted))
         }
         function onExportStateChanged() {
-            if (albumBackend.exportInFlight) {
+            if (appModules.importExport.exportInFlight) {
                 root.exportSessionObserved = true
-                if (albumBackend.exportCompleted > root.lastObservedExportCompleted) {
-                    exportQueueState.pruneCompleted(albumBackend.exportItemStatuses)
-                    root.lastObservedExportCompleted = albumBackend.exportCompleted
+                if (appModules.importExport.exportCompleted > root.lastObservedExportCompleted) {
+                    exportQueueState.pruneCompleted(appModules.importExport.exportItemStatuses)
+                    root.lastObservedExportCompleted = appModules.importExport.exportCompleted
                 }
                 return
             }
-            exportQueueState.pruneCompleted(albumBackend.exportItemStatuses)
+            exportQueueState.pruneCompleted(appModules.importExport.exportItemStatuses)
             root.lastObservedExportCompleted = 0
             if (!root.exportSessionObserved) {
                 return
             }
             root.exportSessionObserved = false
-            root.showSnackbar(qsTr("Exported %1 image(s).").arg(albumBackend.exportSucceeded))
+            root.showSnackbar(qsTr("Exported %1 image(s).").arg(appModules.importExport.exportSucceeded))
         }
     }
 
@@ -1264,16 +1279,16 @@ ApplicationWindow {
 
                         MenuItem {
                             text: qsTr("Load Project")
-                            enabled: !root.projectLaunchBusy && !albumBackend.acceleratorPreparing
+                            enabled: !root.projectLaunchBusy && !appModules.project.acceleratorPreparing
                             onTriggered: root.beginProjectLaunch(function() {
-                                return albumBackend.PromptAndLoadProject()
+                                return appModules.project.PromptAndLoadProject()
                             })
                         }
                         MenuItem {
                             text: qsTr("Create Project")
-                            enabled: !root.projectLaunchBusy && !albumBackend.acceleratorPreparing
+                            enabled: !root.projectLaunchBusy && !appModules.project.acceleratorPreparing
                             onTriggered: root.beginProjectLaunch(function() {
-                                return albumBackend.PromptAndCreateProject()
+                                return appModules.project.PromptAndCreateProject()
                             })
                         }
                         MenuSeparator {
@@ -1445,7 +1460,7 @@ ApplicationWindow {
                 Layout.minimumWidth: root.leftPaneWidth
                 Layout.maximumWidth: root.leftPaneWidth
                 Layout.fillHeight: true
-                backend: albumBackend
+                backend: appModules
                 theme: root
                 backendInteractive: root.backendInteractive
                 selectedCount: root.selectedCount
@@ -1668,7 +1683,7 @@ ApplicationWindow {
 
                         Loader {
                             anchors.fill: parent
-                            active: albumBackend.shownCount > 0
+                            active: appModules.library.shownCount > 0
                             sourceComponent: gridMode ? gridComp : listComp
                         }
 
@@ -1676,17 +1691,17 @@ ApplicationWindow {
                             anchors.left: parent.left
                             anchors.right: parent.right
                             anchors.top: parent.top
-                            visible: albumBackend.shownCount === 0
+                            visible: appModules.library.shownCount === 0
                             spacing: 8
                             Label {
-                                text: albumBackend.serviceReady ? qsTr("No Photos Yet") : qsTr("Open or Create a Project")
+                                text: appModules.project.serviceReady ? qsTr("No Photos Yet") : qsTr("Open or Create a Project")
                                 font.family: root.headlineFontFamily
                                 color: root.colText
                                 font.pixelSize: 22
                                 font.weight: 700
                             }
                             Label {
-                                text: albumBackend.serviceReady
+                                text: appModules.project.serviceReady
                                       ? qsTr("Import your images for RAW adjustments.")
                                       : qsTr("Use File > Load Project or File > Create Project to choose .alcd files.")
                                 color: root.colTextMuted
@@ -1694,12 +1709,12 @@ ApplicationWindow {
                             }
                             Button {
                                 id: emptyStateLoadButton
-                                visible: !albumBackend.serviceReady
+                                visible: !appModules.project.serviceReady
                                 text: qsTr("Load Project")
                                 Material.background: root.colButtonPrimary
                                 Material.foreground: root.colText
                                 onClicked: root.beginProjectLaunch(function() {
-                                    return albumBackend.PromptAndLoadProject()
+                                    return appModules.project.PromptAndLoadProject()
                                 })
                             }
                         }
@@ -1736,7 +1751,7 @@ ApplicationWindow {
                             anchors.fill: parent
                             anchors.margins: 10
                             focusedImage: root.focusedImageInspection
-                            interactionPolicy: albumBackend.interactionPolicyController
+                            interactionPolicy: appModules.interactionPolicy
                             onRatingRequested: function(rating) {
                                 root.requestSetFocusedImageRating(rating)
                             }
@@ -1791,7 +1806,7 @@ ApplicationWindow {
                             Layout.fillWidth: true
                             Layout.preferredHeight: 52
                             text: qsTr("Export") + " (" + root.exportQueueCount + ")"
-                            enabled: root.backendInteractive && (albumBackend.shownCount > 0 || root.exportQueueCount > 0)
+                            enabled: root.backendInteractive && (appModules.library.shownCount > 0 || root.exportQueueCount > 0)
                             icon.source: "qrc:/panel_icons/export.svg"
                             icon.width: 16
                             icon.height: 16
@@ -1891,7 +1906,7 @@ ApplicationWindow {
 
         GlobalSearchDialog {
             id: globalSearchDialog
-            backend: albumBackend
+            backend: appModules
             theme: root
             blurSource: mainContent
             cornerRadius: root.windowCornerRadius
@@ -2028,13 +2043,13 @@ ApplicationWindow {
         z: 30
         blurSource: mainContent
         cornerRadius: root.windowCornerRadius
-        recentProjects: albumBackend.recentProjects
+        recentProjects: appModules.project.recentProjects
         languageOptions: root.languageOptions
-        acceleratorOptions: albumBackend.acceleratorOptions
+        acceleratorOptions: appModules.project.acceleratorOptions
         currentLanguageIndex: root.languageIndexForCode(languageManager.currentLanguageCode)
-        currentAcceleratorBackend: albumBackend.acceleratorBackend
-        acceleratorWarning: albumBackend.acceleratorWarning
-        serviceMessage: albumBackend.serviceMessage
+        currentAcceleratorBackend: appModules.project.acceleratorBackend
+        acceleratorWarning: appModules.project.acceleratorWarning
+        serviceMessage: appModules.project.serviceMessage
         headlineFontFamily: root.headlineFontFamily
         primaryAccent: root.colButtonPrimary
         secondaryAccent: root.colAccentSecondary
@@ -2046,12 +2061,12 @@ ApplicationWindow {
         baseColor: root.colBgCanvas
         onLoadRequested: {
             root.beginProjectLaunch(function() {
-                return albumBackend.PromptAndLoadProject()
+                return appModules.project.PromptAndLoadProject()
             })
         }
         onCreateRequested: function(projectName, storageLocation) {
             root.beginProjectLaunch(function() {
-                return albumBackend.CreateProjectInFolderNamed(storageLocation, projectName)
+                return appModules.project.CreateProjectInFolderNamed(storageLocation, projectName)
             })
         }
         onExitRequested: Qt.quit()
@@ -2059,14 +2074,14 @@ ApplicationWindow {
             languageManager.setLanguage(languageCode)
         }
         onAcceleratorRequested: function(backend) {
-            if (!albumBackend.SetAcceleratorBackend(backend)) {
-                root.showSnackbar(albumBackend.serviceMessage)
+            if (!appModules.project.SetAcceleratorBackend(backend)) {
+                root.showSnackbar(appModules.project.serviceMessage)
             }
         }
-        onAcceleratorWarningAcknowledged: albumBackend.AcknowledgeAcceleratorWarning()
+        onAcceleratorWarningAcknowledged: appModules.project.AcknowledgeAcceleratorWarning()
         onRecentProjectRequested: function(projectPath) {
             root.beginProjectLaunch(function() {
-                return albumBackend.LoadProject(projectPath)
+                return appModules.project.LoadProject(projectPath)
             })
         }
         onClosed: root.startPendingProjectLaunch()
@@ -2083,7 +2098,7 @@ ApplicationWindow {
         id: acceleratorPreparationOverlay
         parent: Overlay.overlay
         anchors.fill: parent
-        visible: albumBackend.acceleratorPreparing
+        visible: appModules.project.acceleratorPreparing
         z: 70
 
         ShaderEffectSource {
@@ -2152,15 +2167,15 @@ ApplicationWindow {
                     trackColor: root.colHover
                     fillColor: root.colAccentPrimary
                     indeterminate: true
-                    running: albumBackend.acceleratorPreparing
+                    running: appModules.project.acceleratorPreparing
                 }
 
                 Label {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     horizontalAlignment: Text.AlignHCenter
-                    text: albumBackend.acceleratorPreparationStatus.length > 0
-                          ? albumBackend.acceleratorPreparationStatus
+                    text: appModules.project.acceleratorPreparationStatus.length > 0
+                          ? appModules.project.acceleratorPreparationStatus
                           : qsTr("Compiling kernels...")
                     color: root.colTextMuted
                     font.pixelSize: 12
@@ -2249,8 +2264,8 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     horizontalAlignment: Text.AlignHCenter
-                    text: albumBackend.projectLoadingMessage.length > 0
-                          ? albumBackend.projectLoadingMessage
+                    text: appModules.project.projectLoadingMessage.length > 0
+                          ? appModules.project.projectLoadingMessage
                           : qsTr("Preparing library...")
                     color: root.colTextMuted
                     font.pixelSize: 12
@@ -2263,7 +2278,7 @@ ApplicationWindow {
     Item {
         id: importProgressOverlay
         anchors.fill: parent
-        visible: albumBackend.importRunning && !albumBackend.nikonHeRecoveryActive
+        visible: appModules.importExport.importRunning && !appModules.nikonHeRecovery.nikonHeRecoveryActive
         z: 50
 
         ShaderEffectSource {
@@ -2331,14 +2346,14 @@ ApplicationWindow {
                     ringWidth: 14
                     trackColor: root.colHover
                     fillColor: root.colAccentPrimary
-                    progress: albumBackend.importTotal > 0
-                              ? albumBackend.importCompleted / albumBackend.importTotal
+                    progress: appModules.importExport.importTotal > 0
+                              ? appModules.importExport.importCompleted / appModules.importExport.importTotal
                               : 0
                 }
 
                 Label {
                     Layout.alignment: Qt.AlignHCenter
-                    text: qsTr("%1 / %2").arg(albumBackend.importCompleted).arg(albumBackend.importTotal)
+                    text: qsTr("%1 / %2").arg(appModules.importExport.importCompleted).arg(appModules.importExport.importTotal)
                     font.family: root.dataFontFamily
                     font.pixelSize: 28
                     font.weight: 600
@@ -2349,8 +2364,8 @@ ApplicationWindow {
                     Layout.fillWidth: true
                     wrapMode: Text.WordWrap
                     horizontalAlignment: Text.AlignHCenter
-                    text: albumBackend.importStatus.length > 0
-                          ? albumBackend.importStatus
+                    text: appModules.importExport.importStatus.length > 0
+                          ? appModules.importExport.importStatus
                           : qsTr("Preparing...")
                     color: root.colTextMuted
                     font.pixelSize: 12
@@ -2358,10 +2373,10 @@ ApplicationWindow {
 
                 Label {
                     Layout.fillWidth: true
-                    visible: albumBackend.importFailed > 0
+                    visible: appModules.importExport.importFailed > 0
                     wrapMode: Text.WordWrap
                     horizontalAlignment: Text.AlignHCenter
-                    text: qsTr("%1 file(s) failed").arg(albumBackend.importFailed)
+                    text: qsTr("%1 file(s) failed").arg(appModules.importExport.importFailed)
                     color: root.colDanger
                     font.family: root.dataFontFamily
                     font.pixelSize: 12
@@ -2373,7 +2388,7 @@ ApplicationWindow {
                     text: qsTr("Cancel")
                     Material.background: root.colDanger
                     Material.foreground: root.colText
-                    onClicked: albumBackend.CancelImport()
+                    onClicked: appModules.importExport.CancelImport()
                 }
             }
         }

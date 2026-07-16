@@ -20,12 +20,12 @@
 
 namespace alcedo::ui {
 
-class AlbumBackend;
+class ProjectModule;
 
 /// Owns all back-end services and manages lifetime of a single project.
 class ProjectHandler {
  public:
-  explicit ProjectHandler(AlbumBackend& backend);
+  explicit ProjectHandler(ProjectModule& project_module);
 
   bool InitializeServices(const std::filesystem::path& dbPath,
                           const std::filesystem::path& metaPath,
@@ -37,6 +37,13 @@ class ProjectHandler {
   bool PackageCurrentProjectFiles(QString* errorOut = nullptr) const;
   void SetProjectLoadingState(bool loading, const i18n::LocalizedText& message);
   void ClearProjectData();
+
+  // Drops DuckDB embeddings/labels/prototypes and the SemanticModel registry row
+  // for every registered model whose profile is no longer installed locally.
+  // Keeps rows for still-installed models (so switching back stays free) and for
+  // profiles absent from the catalog (install state indeterminate). Returns true
+  // if any rows were purged.
+  bool PurgeUninstalledSemanticModels();
 
   [[nodiscard]] auto project() const -> const std::shared_ptr<ProjectService>& { return project_; }
   [[nodiscard]] auto pipeline_service() const -> const std::shared_ptr<PipelineMgmtService>& {
@@ -55,39 +62,38 @@ class ProjectHandler {
 
   [[nodiscard]] auto db_path() const -> const std::filesystem::path& { return db_path_; }
   [[nodiscard]] auto meta_path() const -> const std::filesystem::path& { return meta_path_; }
-  [[nodiscard]] auto package_path() const -> const std::filesystem::path& { return project_package_path_; }
-  [[nodiscard]] auto workspace_dir() const -> const std::filesystem::path& { return project_workspace_dir_; }
+  [[nodiscard]] auto package_path() const -> const std::filesystem::path& {
+    return project_package_path_;
+  }
+  [[nodiscard]] auto workspace_dir() const -> const std::filesystem::path& {
+    return project_workspace_dir_;
+  }
   [[nodiscard]] bool project_loading() const { return project_loading_; }
   [[nodiscard]] auto project_loading_message() const -> QString {
     return project_loading_message_text_.Render();
   }
+  [[nodiscard]] auto project_load_request_id() const -> uint64_t {
+    return project_load_request_id_;
+  }
 
  private:
-  friend class AlbumBackend;
-  // Drops DuckDB embeddings/labels/prototypes and the SemanticModel registry row
-  // for every registered model whose profile is no longer installed locally.
-  // Keeps rows for still-installed models (so switching back stays free) and for
-  // profiles absent from the catalog (install state indeterminate). Returns true
-  // if any rows were purged.
-  bool PurgeUninstalledSemanticModels();
+  ProjectModule& project_module_;
 
-  AlbumBackend& backend_;
-
-  std::shared_ptr<ProjectService>        project_{};
-  std::shared_ptr<PipelineMgmtService>   pipeline_service_{};
+  std::shared_ptr<ProjectService>         project_{};
+  std::shared_ptr<PipelineMgmtService>    pipeline_service_{};
   std::shared_ptr<EditHistoryMgmtService> history_service_{};
-  std::shared_ptr<ThumbnailService>      thumbnail_service_{};
-  std::unique_ptr<ImportServiceImpl>     import_service_{};
-  std::shared_ptr<ExportService>         export_service_{};
+  std::shared_ptr<ThumbnailService>       thumbnail_service_{};
+  std::unique_ptr<ImportServiceImpl>      import_service_{};
+  std::shared_ptr<ExportService>          export_service_{};
 
   std::filesystem::path db_path_{};
   std::filesystem::path meta_path_{};
   std::filesystem::path project_package_path_{};
   std::filesystem::path project_workspace_dir_{};
 
-  bool     project_loading_         = false;
+  bool                project_loading_ = false;
   i18n::LocalizedText project_loading_message_text_{};
-  uint64_t project_load_request_id_ = 0;
+  uint64_t            project_load_request_id_ = 0;
 };
 
 }  // namespace alcedo::ui

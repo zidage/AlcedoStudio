@@ -23,7 +23,7 @@
 #include <string>
 #include <string_view>
 
-#include "ui/alcedo_main/album_backend/album_backend.hpp"
+#include "ui/alcedo_main/album_backend/application_module_host.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/alcedo_main/language_manager.hpp"
 #include "edit/operators/operator_registeration.hpp"
@@ -177,12 +177,12 @@ int main(int argc, char* argv[]) {
   (void)opencl_gl_bootstrap.Initialize();
 #endif
 
-  alcedo::ui::AlbumBackend backend;
+  alcedo::ui::ApplicationModuleHost app_modules;
 
   QQmlApplicationEngine engine;
   engine.addImportPath("qrc:/");
   language_manager.AttachEngine(&engine);
-  engine.rootContext()->setContextProperty("albumBackend", &backend);
+  engine.rootContext()->setContextProperty("appModules", &app_modules);
   engine.rootContext()->setContextProperty("appTheme", &alcedo::ui::AppTheme::Instance());
   engine.rootContext()->setContextProperty("languageManager", &language_manager);
 

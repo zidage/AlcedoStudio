@@ -8,8 +8,8 @@ import "util"
 SwipeView {
     id: panel
 
-    property var profileController: null       // albumBackend.aiProviderProfileController
-    property var analysisController: null      // albumBackend.imageAnalysisController
+    property var profileController: null       // appModules.aiProviderProfiles
+    property var analysisController: null      // appModules.imageAnalysis
     property var interactionPolicy: null
     property color primaryAccent: "#457B9D"
     property color secondaryAccent: "#9FC7D8"

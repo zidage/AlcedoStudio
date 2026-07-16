@@ -22,7 +22,7 @@
 namespace alcedo::ui::test {
 namespace {
 
-using ThumbnailTests = AlbumBackendTestFixture;
+using ThumbnailTests = ApplicationModuleHostTestFixture;
 
 auto MetalAvailable() -> bool {
 #ifdef HAVE_METAL
@@ -37,22 +37,22 @@ auto MetalAvailable() -> bool {
 #endif
 }
 
-void WaitForImportFinished(AlbumBackend& backend, int timeoutMs = 30000) {
-  QSignalSpy spy(&backend, &AlbumBackend::ImportStateChanged);
+void WaitForImportFinished(ApplicationModuleHost& backend, int timeoutMs = 30000) {
+  QSignalSpy spy(backend.import_export(), &ImportExportHandler::ImportStateChanged);
   const int  step_ms = 200;
   int        elapsed = 0;
-  while (backend.ImportRunning() && elapsed < timeoutMs) {
+  while (backend.import_export()->ImportRunning() && elapsed < timeoutMs) {
     spy.wait(step_ms);
     elapsed += step_ms;
   }
   ProcessEvents(500);
 }
 
-auto WaitForThumbnailUrl(AlbumBackend& backend, sl_element_id_t element_id,
+auto WaitForThumbnailUrl(ApplicationModuleHost& backend, sl_element_id_t element_id,
                          bool expect_non_empty, int timeout_ms = 30000) -> QString {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   while (std::chrono::steady_clock::now() < deadline) {
-    const QVariantList thumbnails = backend.Thumbnails();
+    const QVariantList thumbnails = backend.library()->Thumbnails();
     for (const QVariant& row_value : thumbnails) {
       const QVariantMap row = row_value.toMap();
       if (static_cast<sl_element_id_t>(row.value("elementId").toUInt()) != element_id) {
@@ -69,12 +69,12 @@ auto WaitForThumbnailUrl(AlbumBackend& backend, sl_element_id_t element_id,
   return {};
 }
 
-auto WaitForThumbnailRow(AlbumBackend& backend, sl_element_id_t element_id,
+auto WaitForThumbnailRow(ApplicationModuleHost& backend, sl_element_id_t element_id,
                          const std::function<bool(const QVariantMap&)>& predicate,
                          int timeout_ms = 30000) -> QVariantMap {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   while (std::chrono::steady_clock::now() < deadline) {
-    const QVariantList thumbnails = backend.Thumbnails();
+    const QVariantList thumbnails = backend.library()->Thumbnails();
     for (const QVariant& row_value : thumbnails) {
       const QVariantMap row = row_value.toMap();
       if (static_cast<sl_element_id_t>(row.value("elementId").toUInt()) != element_id) {
@@ -161,7 +161,7 @@ TEST_F(ThumbnailTests, MetalThumbnailGridLifecycleWithGeometryOperatorsProducesD
     GTEST_SKIP() << "Metal device is unavailable in this environment.";
   }
 
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
   auto images = CollectRawTestImages("still_life", 1);
@@ -172,13 +172,13 @@ TEST_F(ThumbnailTests, MetalThumbnailGridLifecycleWithGeometryOperatorsProducesD
     GTEST_SKIP() << "No RAW test image available for thumbnail regression.";
   }
 
-  backend.StartImport(PathsToQStringList(images));
+  backend.import_export()->StartImport(PathsToQStringList(images));
   WaitForImportFinished(backend);
 
-  ASSERT_FALSE(backend.ImportRunning());
-  ASSERT_GE(backend.ShownCount(), 1);
+  ASSERT_FALSE(backend.import_export()->ImportRunning());
+  ASSERT_GE(backend.library()->ShownCount(), 1);
 
-  const QVariantMap first_row = backend.Thumbnails().front().toMap();
+  const QVariantMap first_row = backend.library()->Thumbnails().front().toMap();
   const auto        element_id =
       static_cast<sl_element_id_t>(first_row.value("elementId").toUInt());
   const auto image_id = static_cast<image_id_t>(first_row.value("imageId").toUInt());
@@ -217,9 +217,9 @@ TEST_F(ThumbnailTests, MetalThumbnailGridLifecycleWithGeometryOperatorsProducesD
   pipeline_service->SavePipeline(pipeline_guard);
   pipeline_service->Sync();
 
-  QSignalSpy thumb_spy(&backend, &AlbumBackend::ThumbnailUpdated);
+  QSignalSpy thumb_spy(backend.library(), &LibraryModule::ThumbnailUpdated);
 
-  backend.SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id), true);
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id), true);
 
   ASSERT_TRUE(WaitForSignal(thumb_spy, 30000))
       << "Timed out waiting for ThumbnailUpdated after requesting visible thumbnail.";
@@ -240,7 +240,7 @@ TEST_F(ThumbnailTests, MetalThumbnailGridLifecycleWithGeometryOperatorsProducesD
   ASSERT_FALSE(loaded_row.isEmpty())
       << "Loaded thumbnail row did not clear loading state or unexpectedly marked source missing.";
 
-  backend.SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id), false);
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id), false);
   ProcessEvents(500);
 
   const QString cleared_thumb_url = WaitForThumbnailUrl(backend, element_id, false, 5000);
@@ -250,7 +250,7 @@ TEST_F(ThumbnailTests, MetalThumbnailGridLifecycleWithGeometryOperatorsProducesD
 }
 
 TEST_F(ThumbnailTests, MissingSourceThumbnailStopsLoadingAndSetsMissingFlag) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
   auto images = CollectRawTestImages("airplane", 1);
@@ -265,13 +265,13 @@ TEST_F(ThumbnailTests, MissingSourceThumbnailStopsLoadingAndSetsMissingFlag) {
   std::filesystem::copy_file(images.front(), copied_image,
                              std::filesystem::copy_options::overwrite_existing);
 
-  backend.StartImport(PathsToQStringList({copied_image}));
+  backend.import_export()->StartImport(PathsToQStringList({copied_image}));
   WaitForImportFinished(backend);
 
-  ASSERT_FALSE(backend.ImportRunning());
-  ASSERT_GE(backend.ShownCount(), 1);
+  ASSERT_FALSE(backend.import_export()->ImportRunning());
+  ASSERT_GE(backend.library()->ShownCount(), 1);
 
-  const QVariantMap first_row = backend.Thumbnails().front().toMap();
+  const QVariantMap first_row = backend.library()->Thumbnails().front().toMap();
   const auto        element_id =
       static_cast<sl_element_id_t>(first_row.value("elementId").toUInt());
   const auto image_id = static_cast<image_id_t>(first_row.value("imageId").toUInt());
@@ -280,8 +280,8 @@ TEST_F(ThumbnailTests, MissingSourceThumbnailStopsLoadingAndSetsMissingFlag) {
 
   std::filesystem::remove(copied_image);
 
-  QSignalSpy thumb_spy(&backend, &AlbumBackend::ThumbnailUpdated);
-  backend.SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id), true);
+  QSignalSpy thumb_spy(backend.library(), &LibraryModule::ThumbnailUpdated);
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id), true);
 
   ASSERT_TRUE(WaitForSignal(thumb_spy, 10000))
       << "Timed out waiting for ThumbnailUpdated after source file removal.";
@@ -299,12 +299,12 @@ TEST_F(ThumbnailTests, MissingSourceThumbnailStopsLoadingAndSetsMissingFlag) {
   EXPECT_FALSE(missing_row.value("thumbErrorText").toString().isEmpty())
       << "Missing-source thumbnail row should expose a user-visible error message.";
 
-  backend.SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id), false);
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id), false);
   ProcessEvents(250);
 }
 
 TEST_F(ThumbnailTests, VisibleThumbnailRerequestsWhenMaxEdgeChanges) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
   auto images = CollectRawTestImages("airplane", 1);
@@ -315,20 +315,20 @@ TEST_F(ThumbnailTests, VisibleThumbnailRerequestsWhenMaxEdgeChanges) {
     GTEST_SKIP() << "No RAW test image available for zoom-tier thumbnail test.";
   }
 
-  backend.StartImport(PathsToQStringList(images));
+  backend.import_export()->StartImport(PathsToQStringList(images));
   WaitForImportFinished(backend);
 
-  ASSERT_FALSE(backend.ImportRunning());
-  ASSERT_GE(backend.ShownCount(), 1);
+  ASSERT_FALSE(backend.import_export()->ImportRunning());
+  ASSERT_GE(backend.library()->ShownCount(), 1);
 
-  const QVariantMap first_row = backend.Thumbnails().front().toMap();
+  const QVariantMap first_row = backend.library()->Thumbnails().front().toMap();
   const auto        element_id =
       static_cast<sl_element_id_t>(first_row.value("elementId").toUInt());
   const auto image_id = static_cast<image_id_t>(first_row.value("imageId").toUInt());
   ASSERT_NE(element_id, 0);
   ASSERT_NE(image_id, 0);
 
-  backend.SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id), true,
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id), true,
                               2048);
   const QString high_url = WaitForThumbnailUrl(backend, element_id, true, 30000);
   ASSERT_FALSE(high_url.isEmpty());
@@ -337,7 +337,7 @@ TEST_F(ThumbnailTests, VisibleThumbnailRerequestsWhenMaxEdgeChanges) {
   ASSERT_FALSE(high_image.isNull());
   ASSERT_LE(MaxImageEdge(high_image), 2048);
 
-  backend.SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id), true,
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id), true,
                               256);
   const QVariantMap high_row = WaitForThumbnailRow(
       backend, element_id,
@@ -354,7 +354,7 @@ TEST_F(ThumbnailTests, VisibleThumbnailRerequestsWhenMaxEdgeChanges) {
   EXPECT_LT(MaxImageEdge(low_image), MaxImageEdge(high_image));
   EXPECT_LE(MaxImageEdge(low_image), 256);
 
-  backend.SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id), false,
+  backend.library()->SetThumbnailVisible(static_cast<uint>(element_id), static_cast<uint>(image_id), false,
                               256);
   ProcessEvents(250);
 }

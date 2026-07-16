@@ -15,7 +15,7 @@ namespace alcedo::ui {
 
 /// Phase 7a — the host-state mutation seam for `ImageAnalysisController`.
 ///
-/// The controller stays decoupled from `AlbumBackend` (Phase 6d invariant) and
+/// The controller stays decoupled from the module host (Phase 6d invariant) and
 /// `ImageAnalysisService` stays storage-agnostic (Phase 5d/6d tests unchanged). This
 /// narrow interface, injected into the controller's constructor, owns every host-side
 /// side effect of a finished remote-analysis job: persisting understanding / rating

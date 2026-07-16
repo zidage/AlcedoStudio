@@ -3,7 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 /// @file album_backend_project_test.cpp
-/// @brief Project lifecycle tests for AlbumBackend.
+/// @brief Project lifecycle tests for ApplicationModuleHost.
 ///
 /// Covers: create project, load project (valid/invalid), save project,
 /// pack/unpack integrity, data_summary diagnostics, and initial service
@@ -35,7 +35,7 @@
 namespace alcedo::ui::test {
 namespace {
 
-using ProjectTests = AlbumBackendTestFixture;
+using ProjectTests = ApplicationModuleHostTestFixture;
 
 TEST(ModelAssetCatalogTests, NativeCoreMlProfileIsOnlyAvailableOnMacos) {
   const auto has_coreml = std::any_of(
@@ -85,14 +85,14 @@ void CreateMetadataProject(const std::filesystem::path& dbPath,
     project.SaveProject(metaPath);
 }
 
-bool WaitForProjectLoadToFinish(AlbumBackend& backend, int timeoutMs = 15000) {
-  if (!backend.ProjectLoading()) {
+bool WaitForProjectLoadToFinish(ApplicationModuleHost& backend, int timeoutMs = 15000) {
+  if (!backend.project()->ProjectLoading()) {
     return true;
   }
 
-  QSignalSpy spy(&backend, &AlbumBackend::ProjectLoadStateChanged);
+  QSignalSpy spy(backend.project(), &ProjectModule::ProjectLoadStateChanged);
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
-  while (backend.ProjectLoading() && std::chrono::steady_clock::now() < deadline) {
+  while (backend.project()->ProjectLoading() && std::chrono::steady_clock::now() < deadline) {
     const auto remaining =
         std::chrono::duration_cast<std::chrono::milliseconds>(deadline -
                                                               std::chrono::steady_clock::now())
@@ -101,42 +101,42 @@ bool WaitForProjectLoadToFinish(AlbumBackend& backend, int timeoutMs = 15000) {
       ProcessEvents(50);
     }
   }
-  return !backend.ProjectLoading();
+  return !backend.project()->ProjectLoading();
 }
 
 // ── Initial state ──────────────────────────────────────────────────────────
 
 TEST_F(ProjectTests, ServiceState_InitiallyNotReady) {
-  AlbumBackend backend;
-  EXPECT_FALSE(backend.ServiceReady());
-  EXPECT_FALSE(backend.ServiceMessage().isEmpty());
+  ApplicationModuleHost backend;
+  EXPECT_FALSE(backend.project()->ServiceReady());
+  EXPECT_FALSE(backend.project()->ServiceMessage().isEmpty());
 }
 
 // ── Create project — happy path ────────────────────────────────────────────
 
 TEST_F(ProjectTests, CreateProject_ValidFolder_Succeeds) {
-  AlbumBackend backend;
-  QSignalSpy   projSpy(&backend, &AlbumBackend::ProjectChanged);
-  QSignalSpy   stateSpy(&backend, &AlbumBackend::ServiceStateChanged);
+  ApplicationModuleHost backend;
+  QSignalSpy projSpy(backend.project(), &ProjectModule::ProjectChanged);
+  QSignalSpy stateSpy(backend.project(), &ProjectModule::ServiceStateChanged);
 
   const bool ok =
-      backend.CreateProjectInFolderNamed(PathToQString(temp_dir_), "test_proj");
+      backend.project()->CreateProjectInFolderNamed(PathToQString(temp_dir_), "test_proj");
   EXPECT_TRUE(ok);
 
   // Wait for async project initialisation.
   WaitForSignal(projSpy, 15000);
   ProcessEvents(500);
 
-  EXPECT_TRUE(backend.ServiceReady());
+  EXPECT_TRUE(backend.project()->ServiceReady());
   EXPECT_FALSE(stateSpy.isEmpty());
 }
 
 // ── Create project — empty name ────────────────────────────────────────────
 
 TEST_F(ProjectTests, CreateProject_EmptyName_Fails) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   const bool   ok =
-      backend.CreateProjectInFolderNamed(PathToQString(temp_dir_), "");
+      backend.project()->CreateProjectInFolderNamed(PathToQString(temp_dir_), "");
   // Either returns false or sets a service message.
   // The critical assertion: no crash.
   if (!ok) {
@@ -149,34 +149,51 @@ TEST_F(ProjectTests, CreateProject_EmptyName_Fails) {
 }
 
 TEST_F(ProjectTests, SemanticActivationManifestRequiresListedFilesOnDisk) {
-  const auto base_dir   = temp_dir_ / "model";
-  const auto model_dir  = base_dir / "mobileclip2-s2-en";
-  const auto asset_path = model_dir / "tokenizer.json";
-  std::filesystem::create_directories(model_dir);
-  {
-    std::ofstream asset(asset_path);
-    asset << "{}";
+  // Production validation checks every catalog-listed asset under the profile
+  // root, not just the subset written into alcedo_model_manifest.json. Seed a
+  // complete stub tree, then delete one asset and confirm activation fails.
+  const auto base_dir  = temp_dir_ / "model";
+  const auto model_dir = base_dir / "mobileclip2-s2-en";
+  const auto* catalog  = FindSemanticProfile("mobileclip2-s2-en");
+  ASSERT_NE(catalog, nullptr);
+
+  nlohmann::json assets = nlohmann::json::array();
+  for (const auto& asset : catalog->assets) {
+    const auto relative = std::filesystem::path(asset.local_path);
+    const auto full     = model_dir / relative;
+    std::filesystem::create_directories(full.parent_path());
+    {
+      // Match catalog size_bytes exactly (ValidateCatalogAssetPresence is strict).
+      std::ofstream out(full, std::ios::binary);
+      if (asset.size_bytes > 0) {
+        out.seekp(static_cast<std::streamoff>(asset.size_bytes) - 1);
+        out.put('\0');
+      }
+    }
+    assets.push_back({
+        {"role", std::string(ToString(asset.role))},
+        {"repo_id", asset.repo_id},
+        {"revision", asset.revision},
+        {"remote_path", asset.remote_path},
+        // Relative path so ManifestAssetRelativePath matches catalog local_path.
+        {"local_path", asset.local_path},
+        {"size_bytes", asset.size_bytes},
+        {"sha256", asset.sha256 ? std::string(asset.sha256) : std::string{}},
+    });
   }
 
   nlohmann::json manifest;
-  manifest["profile_id"]                 = "mobileclip2-s2-en";
-  manifest["model_id"]                   = "plhery/mobileclip2-onnx:s2";
-  manifest["revision"]                   = "ba95759a5bdbaca53e9111e2550a76ec09c8fd9e";
-  manifest["engine_profile_id"]          = "mobileclip2-openclip";
-  manifest["language"]                   = "en";
-  manifest["embedding_dimension"]        = 512;
-  manifest["native_embedding_dimension"] = 512;
-  manifest["image_size"]                 = 256;
-  manifest["embedding_transform"]        = "l2_normalize";
+  manifest["profile_id"]                 = catalog->profile_id;
+  manifest["model_id"]                   = catalog->model_id;
+  manifest["revision"]                   = catalog->revision;
+  manifest["engine_profile_id"]          = catalog->engine_profile_id;
+  manifest["language"]                   = ToString(catalog->language);
+  manifest["embedding_dimension"]        = catalog->embedding_dimension;
+  manifest["native_embedding_dimension"] = catalog->native_embedding_dimension;
+  manifest["image_size"]                 = catalog->image_size;
+  manifest["embedding_transform"]        = catalog->embedding_transform;
   manifest["model_root"]                 = model_dir.string();
-  manifest["assets"]                     = nlohmann::json::array(
-      {{{"role", "tokenizer"},
-        {"repo_id", "plhery/mobileclip2-onnx"},
-        {"revision", "ba95759a5bdbaca53e9111e2550a76ec09c8fd9e"},
-        {"remote_path", "tokenizer.json"},
-        {"local_path", asset_path.string()},
-        {"size_bytes", 2},
-        {"sha256", ""}}});
+  manifest["assets"]                     = assets;
 
   {
     std::ofstream out(model_dir / "alcedo_model_manifest.json");
@@ -188,7 +205,8 @@ TEST_F(ProjectTests, SemanticActivationManifestRequiresListedFilesOnDisk) {
       QStringLiteral("mobileclip2-s2-en"), PathToQString(base_dir), &error);
   ASSERT_TRUE(loaded.has_value()) << error.toStdString();
 
-  std::filesystem::remove(asset_path);
+  const auto removed_asset = model_dir / catalog->assets.front().local_path;
+  std::filesystem::remove(removed_asset);
   error.clear();
   loaded = detail::LoadLocalResolvedModelManifestForActivation(
       QStringLiteral("mobileclip2-s2-en"), PathToQString(base_dir), &error);
@@ -200,18 +218,18 @@ TEST_F(ProjectTests, SemanticActivationManifestRequiresListedFilesOnDisk) {
 // ── Create project while "loading" — second call rejected ──────────────────
 
 TEST_F(ProjectTests, CreateProject_DoubleCall_SecondRejected) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
 
   const bool first =
-      backend.CreateProjectInFolderNamed(PathToQString(temp_dir_), "proj_a");
+      backend.project()->CreateProjectInFolderNamed(PathToQString(temp_dir_), "proj_a");
 
   // If first call started async loading, a second call should be rejected.
-  if (first && backend.ProjectLoading()) {
+  if (first && backend.project()->ProjectLoading()) {
     // Create a different subfolder so paths differ.
     const auto subDir = temp_dir_ / "sub";
     std::filesystem::create_directories(subDir);
     const bool second =
-        backend.CreateProjectInFolderNamed(PathToQString(subDir), "proj_b");
+        backend.project()->CreateProjectInFolderNamed(PathToQString(subDir), "proj_b");
     EXPECT_FALSE(second);
   }
 
@@ -222,16 +240,16 @@ TEST_F(ProjectTests, CreateProject_DoubleCall_SecondRejected) {
 // ── Load project — non-existent file ───────────────────────────────────────
 
 TEST_F(ProjectTests, LoadProject_NonexistentFile_Fails) {
-  AlbumBackend backend;
-  const bool   ok = backend.LoadProject("C:/nonexistent/project.json");
+  ApplicationModuleHost backend;
+  const bool   ok = backend.project()->LoadProject("C:/nonexistent/project.json");
   EXPECT_FALSE(ok);
-  EXPECT_FALSE(backend.ServiceReady());
+  EXPECT_FALSE(backend.project()->ServiceReady());
 }
 
 // ── Load project — invalid format ──────────────────────────────────────────
 
 TEST_F(ProjectTests, LoadProject_InvalidFormat_Fails) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
 
   // Create a temporary .txt file — not a valid project format.
   const auto txtPath = temp_dir_ / "notes.txt";
@@ -240,7 +258,7 @@ TEST_F(ProjectTests, LoadProject_InvalidFormat_Fails) {
     ofs << "hello world";
   }
 
-  const bool ok = backend.LoadProject(PathToQString(txtPath));
+  const bool ok = backend.project()->LoadProject(PathToQString(txtPath));
   EXPECT_FALSE(ok);
 }
 
@@ -253,9 +271,9 @@ TEST_F(ProjectTests, LoadProject_OldPackedProjectVersion_Fails) {
     WriteU32Le(out, project_pack::kPackedProjectVersion - 1);
   }
 
-  AlbumBackend backend;
-  EXPECT_FALSE(backend.LoadProject(PathToQString(oldProjectPath)));
-  EXPECT_FALSE(backend.ServiceReady());
+  ApplicationModuleHost backend;
+  EXPECT_FALSE(backend.project()->LoadProject(PathToQString(oldProjectPath)));
+  EXPECT_FALSE(backend.project()->ServiceReady());
 }
 
 TEST_F(ProjectTests, LoadProject_MetadataJsonProject_Fails) {
@@ -263,16 +281,16 @@ TEST_F(ProjectTests, LoadProject_MetadataJsonProject_Fails) {
   const auto metaPath = temp_dir_ / "corrupt_meta.json";
   CreateMetadataProject(dbPath, metaPath);
 
-  AlbumBackend backend;
-  EXPECT_FALSE(backend.LoadProject(PathToQString(metaPath)));
-  EXPECT_FALSE(backend.ServiceReady());
+  ApplicationModuleHost backend;
+  EXPECT_FALSE(backend.project()->LoadProject(PathToQString(metaPath)));
+  EXPECT_FALSE(backend.project()->ServiceReady());
 }
 
 TEST_F(ProjectTests, LoadProject_CorruptPackedProjectPayload_Fails) {
   {
-    AlbumBackend backend;
+    ApplicationModuleHost backend;
     ASSERT_TRUE(CreateTestProject(backend, "corrupt_packed_project"));
-    ASSERT_TRUE(backend.SaveProject());
+    ASSERT_TRUE(backend.project()->SaveProject());
   }
 
   const auto packedProjectPath = FindPackedProjectPath(temp_dir_);
@@ -290,9 +308,9 @@ TEST_F(ProjectTests, LoadProject_CorruptPackedProjectPayload_Fails) {
     file.write(&byte, 1);
   }
 
-  AlbumBackend backend;
-  EXPECT_FALSE(backend.LoadProject(PathToQString(*packedProjectPath)));
-  EXPECT_FALSE(backend.ServiceReady());
+  ApplicationModuleHost backend;
+  EXPECT_FALSE(backend.project()->LoadProject(PathToQString(*packedProjectPath)));
+  EXPECT_FALSE(backend.project()->ServiceReady());
 }
 
 TEST_F(ProjectTests, LoadProject_ValidMetadataProject_Fails) {
@@ -300,28 +318,28 @@ TEST_F(ProjectTests, LoadProject_ValidMetadataProject_Fails) {
   const auto metaPath = temp_dir_ / "valid_project.json";
   CreateMetadataProject(dbPath, metaPath);
 
-  AlbumBackend backend;
-  EXPECT_FALSE(backend.LoadProject(PathToQString(metaPath)));
-  EXPECT_FALSE(backend.ServiceReady());
+  ApplicationModuleHost backend;
+  EXPECT_FALSE(backend.project()->LoadProject(PathToQString(metaPath)));
+  EXPECT_FALSE(backend.project()->ServiceReady());
 }
 
 TEST_F(ProjectTests, LoadProject_ValidPackedProject_Succeeds) {
   {
-    AlbumBackend backend;
+    ApplicationModuleHost backend;
     ASSERT_TRUE(CreateTestProject(backend, "valid_packed_project"));
-    ASSERT_TRUE(backend.SaveProject());
+    ASSERT_TRUE(backend.project()->SaveProject());
   }
 
   const auto packedProjectPath = FindPackedProjectPath(temp_dir_);
   ASSERT_TRUE(packedProjectPath.has_value());
 
-  AlbumBackend backend;
-  QSignalSpy projectSpy(&backend, &AlbumBackend::ProjectChanged);
-  ASSERT_TRUE(backend.LoadProject(PathToQString(*packedProjectPath)));
+  ApplicationModuleHost backend;
+  QSignalSpy projectSpy(backend.project(), &ProjectModule::ProjectChanged);
+  ASSERT_TRUE(backend.project()->LoadProject(PathToQString(*packedProjectPath)));
   ASSERT_TRUE(WaitForSignal(projectSpy, 15000));
   ProcessEvents(500);
 
-  EXPECT_TRUE(backend.ServiceReady());
+  EXPECT_TRUE(backend.project()->ServiceReady());
 }
 
 TEST_F(ProjectTests, LoadProject_ExternalPackedProjectFromEnv_Succeeds) {
@@ -330,13 +348,13 @@ TEST_F(ProjectTests, LoadProject_ExternalPackedProjectFromEnv_Succeeds) {
     GTEST_SKIP() << "Set ALCEDO_TEST_PACKED_PROJECT_PATH to load a real .alcd project.";
   }
 
-  AlbumBackend backend;
-  QSignalSpy   projectSpy(&backend, &AlbumBackend::ProjectChanged);
-  ASSERT_TRUE(backend.LoadProject(QString::fromLocal8Bit(raw_path)));
+  ApplicationModuleHost backend;
+  QSignalSpy projectSpy(backend.project(), &ProjectModule::ProjectChanged);
+  ASSERT_TRUE(backend.project()->LoadProject(QString::fromLocal8Bit(raw_path)));
   ASSERT_TRUE(WaitForSignal(projectSpy, 30000));
   ProcessEvents(500);
 
-  EXPECT_TRUE(backend.ServiceReady()) << backend.ServiceMessage().toStdString();
+  EXPECT_TRUE(backend.project()->ServiceReady()) << backend.project()->ServiceMessage().toStdString();
 }
 
 TEST_F(ProjectTests, LoadProject_ExternalPackedProjectFromEnv_RequestsThumbnails) {
@@ -345,21 +363,21 @@ TEST_F(ProjectTests, LoadProject_ExternalPackedProjectFromEnv_RequestsThumbnails
     GTEST_SKIP() << "Set ALCEDO_TEST_PACKED_PROJECT_PATH to load a real .alcd project.";
   }
 
-  AlbumBackend backend;
-  QSignalSpy   projectSpy(&backend, &AlbumBackend::ProjectChanged);
-  ASSERT_TRUE(backend.LoadProject(QString::fromLocal8Bit(raw_path)));
+  ApplicationModuleHost backend;
+  QSignalSpy projectSpy(backend.project(), &ProjectModule::ProjectChanged);
+  ASSERT_TRUE(backend.project()->LoadProject(QString::fromLocal8Bit(raw_path)));
   ASSERT_TRUE(WaitForSignal(projectSpy, 30000));
   ProcessEvents(500);
-  ASSERT_TRUE(backend.ServiceReady()) << backend.ServiceMessage().toStdString();
+  ASSERT_TRUE(backend.project()->ServiceReady()) << backend.project()->ServiceMessage().toStdString();
 
-  auto* model = qobject_cast<AlbumThumbnailModel*>(backend.ThumbnailModel());
+  auto* model = qobject_cast<AlbumThumbnailModel*>(backend.library()->ThumbnailModel());
   ASSERT_NE(model, nullptr);
   ASSERT_GT(model->count(), 0);
 
-  QSignalSpy thumbnailSpy(&backend, &AlbumBackend::ThumbnailUpdated);
+  QSignalSpy thumbnailSpy(backend.library(), &LibraryModule::ThumbnailUpdated);
   for (int i = 0; i < model->count(); ++i) {
     const QVariantMap row = model->getItemAt(i);
-    backend.SetThumbnailVisible(row.value(QStringLiteral("elementId")).toUInt(),
+    backend.library()->SetThumbnailVisible(row.value(QStringLiteral("elementId")).toUInt(),
                                 row.value(QStringLiteral("imageId")).toUInt(), true, 512);
   }
 
@@ -376,15 +394,14 @@ TEST_F(ProjectTests, LoadProject_ExternalPackedProjectFromEnv_StartsSemanticGene
     GTEST_SKIP() << "Set ALCEDO_TEST_PACKED_PROJECT_PATH to load a real .alcd project.";
   }
 
-  AlbumBackend backend;
-  QSignalSpy   projectSpy(&backend, &AlbumBackend::ProjectChanged);
-  ASSERT_TRUE(backend.LoadProject(QString::fromLocal8Bit(raw_path)));
+  ApplicationModuleHost backend;
+  QSignalSpy projectSpy(backend.project(), &ProjectModule::ProjectChanged);
+  ASSERT_TRUE(backend.project()->LoadProject(QString::fromLocal8Bit(raw_path)));
   ASSERT_TRUE(WaitForSignal(projectSpy, 30000));
   ProcessEvents(500);
-  ASSERT_TRUE(backend.ServiceReady()) << backend.ServiceMessage().toStdString();
+  ASSERT_TRUE(backend.project()->ServiceReady()) << backend.project()->ServiceMessage().toStdString();
 
-  auto* semantic = qobject_cast<SemanticGenerationController*>(
-      backend.SemanticGenerationControllerObject());
+  auto* semantic = backend.semantic_generation();
   ASSERT_NE(semantic, nullptr);
   semantic->RefreshAlbumSummary();
   if (semantic->AlbumTotalCount() <= 0) {
@@ -405,32 +422,32 @@ TEST_F(ProjectTests, LoadProject_ExternalPackedProjectFromEnv_StartsSemanticGene
 // ── Save project — no project loaded ───────────────────────────────────────
 
 TEST_F(ProjectTests, SaveProject_NoProject_Fails) {
-  AlbumBackend backend;
-  const bool   ok = backend.SaveProject();
+  ApplicationModuleHost backend;
+  const bool   ok = backend.project()->SaveProject();
   EXPECT_FALSE(ok);
 }
 
 // ── Save project — after create ────────────────────────────────────────────
 
 TEST_F(ProjectTests, SaveProject_AfterCreate_Succeeds) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
-  const bool ok = backend.SaveProject();
+  const bool ok = backend.project()->SaveProject();
   EXPECT_TRUE(ok);
 }
 
 TEST_F(ProjectTests, CreateProjectWhileProjectOpen_CompletesSwitch) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend, "first_project"));
 
-  QSignalSpy project_spy(&backend, &AlbumBackend::ProjectChanged);
-  ASSERT_TRUE(backend.CreateProjectInFolderNamed(PathToQString(temp_dir_), "second_project"));
+  QSignalSpy project_spy(backend.project(), &ProjectModule::ProjectChanged);
+  ASSERT_TRUE(backend.project()->CreateProjectInFolderNamed(PathToQString(temp_dir_), "second_project"));
   ASSERT_TRUE(WaitForProjectLoadToFinish(backend, 15000));
   ProcessEvents(500);
 
-  EXPECT_TRUE(backend.ServiceReady());
-  EXPECT_FALSE(backend.ProjectLoading());
+  EXPECT_TRUE(backend.project()->ServiceReady());
+  EXPECT_FALSE(backend.project()->ProjectLoading());
   EXPECT_GE(project_spy.count(), 1);
 }
 
@@ -668,15 +685,15 @@ TEST_F(ProjectTests, DataSummary_WarnsOnDbChanged) {
 // ── Create project with default name via convenience overload ──────────────
 
 TEST_F(ProjectTests, CreateProjectInFolder_DefaultName_Succeeds) {
-  AlbumBackend backend;
-  QSignalSpy   projSpy(&backend, &AlbumBackend::ProjectChanged);
+  ApplicationModuleHost backend;
+  QSignalSpy projSpy(backend.project(), &ProjectModule::ProjectChanged);
 
-  const bool ok = backend.CreateProjectInFolder(PathToQString(temp_dir_));
+  const bool ok = backend.project()->CreateProjectInFolder(PathToQString(temp_dir_));
   EXPECT_TRUE(ok);
 
   WaitForSignal(projSpy, 15000);
   ProcessEvents(500);
-  EXPECT_TRUE(backend.ServiceReady());
+  EXPECT_TRUE(backend.project()->ServiceReady());
 }
 
 }  // namespace

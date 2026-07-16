@@ -14,7 +14,9 @@
 
 namespace alcedo::ui {
 
-class AlbumBackend;
+class ImportExportHandler;
+class LibraryModule;
+class ProjectModule;
 
 class AdjustmentTransferController final : public QObject {
   Q_OBJECT
@@ -23,12 +25,13 @@ class AdjustmentTransferController final : public QObject {
   Q_PROPERTY(QString packageSourceTitle READ package_source_title NOTIFY PackageChanged)
 
  public:
-  explicit AdjustmentTransferController(AlbumBackend& backend);
+  AdjustmentTransferController(ProjectModule* project, LibraryModule* library,
+                               ImportExportHandler* import_export, QObject* parent = nullptr);
   ~AdjustmentTransferController() override = default;
 
-  [[nodiscard]] bool      package_available() const { return copied_package_.has_value(); }
-  [[nodiscard]] auto      package_summary() const -> QVariantList { return copied_summary_; }
-  [[nodiscard]] auto      package_source_title() const -> QString { return copied_source_title_; }
+  [[nodiscard]] bool package_available() const { return copied_package_.has_value(); }
+  [[nodiscard]] auto package_summary() const -> QVariantList { return copied_summary_; }
+  [[nodiscard]] auto package_source_title() const -> QString { return copied_source_title_; }
 
   Q_INVOKABLE QVariantMap PrepareCopy(uint elementId);
   Q_INVOKABLE QVariantMap Copy(uint elementId, const QVariantList& selectedKeys);
@@ -39,7 +42,10 @@ class AdjustmentTransferController final : public QObject {
   void PackageChanged();
 
  private:
-  AlbumBackend&                            backend_;
+  ProjectModule*       project_       = nullptr;
+  LibraryModule*       library_       = nullptr;
+  ImportExportHandler* import_export_ = nullptr;
+
   std::optional<AdjustmentTransferPackage> copied_package_{};
   QVariantList                             copied_summary_{};
   QString                                  copied_source_title_{};

@@ -16,7 +16,7 @@
 
 namespace alcedo::ui {
 
-class AlbumBackend;
+class BackgroundTaskController;
 
 namespace detail {
 // Reads the on-disk resolved manifest for a profile back into a
@@ -57,7 +57,8 @@ class ModelDownloadController final : public QObject {
   Q_PROPERTY(bool selectedModelInstalled READ SelectedModelInstalled NOTIFY StateChanged)
 
  public:
-  explicit ModelDownloadController(AlbumBackend& backend, QObject* parent = nullptr);
+  ModelDownloadController(alcedo::ModelDownloadService& service,
+                          BackgroundTaskController* background_tasks, QObject* parent = nullptr);
 
   QVariantList ModelProfileOptions() const;
   QString      SelectedModelProfileId() const;
@@ -144,7 +145,8 @@ class ModelDownloadController final : public QObject {
   // the assigned task id; empty when no registry is reachable.
   auto RegisterBackgroundTask() -> QString;
 
-  AlbumBackend&         backend_;
+  alcedo::ModelDownloadService& service_;
+  BackgroundTaskController*     background_tasks_ = nullptr;
   // Phase 1 background-task mirroring id; empty when no task is registered.
   QString               background_task_id_;
   i18n::LocalizedText   model_download_status_text_{};

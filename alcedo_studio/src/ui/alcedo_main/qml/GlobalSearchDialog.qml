@@ -9,8 +9,13 @@ Dialog {
     font.family: appTheme.uiFontFamily
 
     property var backend
-    readonly property var searchController: backend ? backend.searchController : null
-    readonly property var interactionPolicyController: backend ? backend.interactionPolicyController : null
+    readonly property var searchController: backend
+        ? (backend.search ? backend.search : backend.searchController)
+        : null
+    readonly property var interactionPolicyController: backend
+        ? (backend.interactionPolicy ? backend.interactionPolicy
+                                     : backend.interactionPolicyController)
+        : null
     // Gate driven by InteractionPolicyController: when natural-language search is
     // on, the field-filter checkboxes are disabled (mutual exclusion). Defaults
     // to enabled when the controller is unavailable (e.g. null backend in tests).

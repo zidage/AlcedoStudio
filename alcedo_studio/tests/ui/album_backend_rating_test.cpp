@@ -18,7 +18,7 @@
 namespace alcedo::ui::test {
 namespace {
 
-using RatingTests = AlbumBackendTestFixture;
+using RatingTests = ApplicationModuleHostTestFixture;
 
 struct SeededProject {
   std::filesystem::path packed_path_{};
@@ -89,14 +89,14 @@ auto CreateSeededPackedProject(const std::filesystem::path& tempDir, int rating)
   return SeededProject{packed_path, element_id, image_id};
 }
 
-auto LoadPackedProject(AlbumBackend& backend, const std::filesystem::path& packedPath) -> bool {
-  QSignalSpy project_spy(&backend, &AlbumBackend::ProjectChanged);
-  if (!backend.LoadProject(PathToQString(packedPath))) {
+auto LoadPackedProject(ApplicationModuleHost& backend, const std::filesystem::path& packedPath) -> bool {
+  QSignalSpy project_spy(backend.project(), &ProjectModule::ProjectChanged);
+  if (!backend.project()->LoadProject(PathToQString(packedPath))) {
     return false;
   }
   WaitForSignal(project_spy, 15000);
   ProcessEvents(500);
-  return backend.ServiceReady();
+  return backend.project()->ServiceReady();
 }
 
 auto ReadPackedImageRating(const std::filesystem::path& packedPath, image_id_t imageId,
@@ -125,10 +125,10 @@ TEST_F(RatingTests, SetImageRating_SyncsRatingToPackedDatabase) {
   const auto seeded = CreateSeededPackedProject(temp_dir_, 0);
   ASSERT_TRUE(seeded.has_value());
 
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(LoadPackedProject(backend, seeded->packed_path_));
 
-  const QVariantMap result = backend.SetImageRating(seeded->element_id_, seeded->image_id_, 4);
+  const QVariantMap result = backend.images()->SetImageRating(seeded->element_id_, seeded->image_id_, 4);
   ASSERT_TRUE(result.value("success").toBool()) << result.value("message").toString().toStdString();
   EXPECT_EQ(result.value("rating").toInt(), 4);
 
@@ -143,15 +143,15 @@ TEST_F(RatingTests, LoadProject_RestoresPersistedImageRating) {
   ASSERT_TRUE(seeded.has_value());
 
   {
-    AlbumBackend backend;
+    ApplicationModuleHost backend;
     ASSERT_TRUE(LoadPackedProject(backend, seeded->packed_path_));
-    const QVariantMap result = backend.SetImageRating(seeded->element_id_, seeded->image_id_, 5);
+    const QVariantMap result = backend.images()->SetImageRating(seeded->element_id_, seeded->image_id_, 5);
     ASSERT_TRUE(result.value("success").toBool());
   }
 
-  AlbumBackend reloaded;
+  ApplicationModuleHost reloaded;
   ASSERT_TRUE(LoadPackedProject(reloaded, seeded->packed_path_));
-  const QVariantList thumbs = reloaded.Thumbnails();
+  const QVariantList thumbs = reloaded.library()->Thumbnails();
   ASSERT_EQ(thumbs.size(), 1);
   EXPECT_EQ(thumbs.front().toMap().value("rating").toInt(), 5);
 }
@@ -160,21 +160,21 @@ TEST_F(RatingTests, GetImageRating_ReflectsCurrentRatingForContextMenuState) {
   const auto seeded = CreateSeededPackedProject(temp_dir_, 2);
   ASSERT_TRUE(seeded.has_value());
 
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(LoadPackedProject(backend, seeded->packed_path_));
 
-  QVariantMap rating_state = backend.GetImageRating(seeded->element_id_, seeded->image_id_);
+  QVariantMap rating_state = backend.images()->GetImageRating(seeded->element_id_, seeded->image_id_);
   ASSERT_TRUE(rating_state.value("success").toBool());
   EXPECT_EQ(rating_state.value("rating").toInt(), 2);
 
-  const QVariantMap set_result = backend.SetImageRating(seeded->element_id_, seeded->image_id_, 3);
+  const QVariantMap set_result = backend.images()->SetImageRating(seeded->element_id_, seeded->image_id_, 3);
   ASSERT_TRUE(set_result.value("success").toBool());
 
-  rating_state = backend.GetImageRating(seeded->element_id_, seeded->image_id_);
+  rating_state = backend.images()->GetImageRating(seeded->element_id_, seeded->image_id_);
   ASSERT_TRUE(rating_state.value("success").toBool());
   EXPECT_EQ(rating_state.value("rating").toInt(), 3);
 
-  const QVariantList thumbs = backend.Thumbnails();
+  const QVariantList thumbs = backend.library()->Thumbnails();
   ASSERT_EQ(thumbs.size(), 1);
   EXPECT_EQ(thumbs.front().toMap().value("rating").toInt(), 3);
 }
@@ -183,15 +183,15 @@ TEST_F(RatingTests, SetImageRating_UpdatesLoadedThumbnailWithoutModelReset) {
   const auto seeded = CreateSeededPackedProject(temp_dir_, 0);
   ASSERT_TRUE(seeded.has_value());
 
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(LoadPackedProject(backend, seeded->packed_path_));
 
-  auto* model = qobject_cast<AlbumThumbnailModel*>(backend.ThumbnailModel());
+  auto* model = qobject_cast<AlbumThumbnailModel*>(backend.library()->ThumbnailModel());
   ASSERT_NE(model, nullptr);
   QSignalSpy model_reset_spy(model, SIGNAL(modelReset()));
   QSignalSpy data_changed_spy(model, &QAbstractItemModel::dataChanged);
 
-  const QVariantMap result = backend.SetImageRating(seeded->element_id_, seeded->image_id_, 4);
+  const QVariantMap result = backend.images()->SetImageRating(seeded->element_id_, seeded->image_id_, 4);
   ASSERT_TRUE(result.value("success").toBool()) << result.value("message").toString().toStdString();
 
   EXPECT_EQ(model_reset_spy.count(), 0);

@@ -89,7 +89,7 @@ class AlbumThumbnailModel : public QAbstractListModel {
   /// Lookup row index by elementId. Returns -1 if not found.
   Q_INVOKABLE int rowByElementId(uint elementId) const;
 
-  /// Raw access for AlbumBackend friend classes.
+  /// Raw access for library/controller collaborators.
   const std::vector<AlbumItem>& items() const { return rows_; }
   size_t totalCount() const { return total_count_; }
 

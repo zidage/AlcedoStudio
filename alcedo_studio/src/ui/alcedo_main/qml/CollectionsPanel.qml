@@ -41,7 +41,10 @@ ColumnLayout {
     }
 
     function rebuildFolderRows() {
-        const source = backend && backend.folders ? backend.folders : []
+        const foldersObj = backend && (backend.folders && backend.folders.folders !== undefined
+                                       ? backend.folders
+                                       : backend)
+        const source = foldersObj && foldersObj.folders ? foldersObj.folders : []
         let rootRow = null
         const next = []
 
@@ -114,11 +117,18 @@ ColumnLayout {
             return
         }
 
-        backend.CreateFolder(trimmed)
+        const folders = backend.folders && backend.folders.CreateFolder
+                        ? backend.folders : backend
+        folders.CreateFolder(trimmed)
         cancelDraftCollection()
     }
 
-    readonly property bool hasSelectedCollection: backend && Number(backend.currentFolderId) !== 0
+    readonly property var foldersModule: backend
+        ? (backend.folders && backend.folders.currentFolderId !== undefined
+           ? backend.folders : backend)
+        : null
+    readonly property bool hasSelectedCollection: foldersModule
+        && Number(foldersModule.currentFolderId) !== 0
 
     Layout.preferredWidth: 276
     Layout.minimumWidth: 276
@@ -130,7 +140,7 @@ ColumnLayout {
     onSortDescendingChanged: rebuildFolderRows()
 
     Connections {
-        target: backend
+        target: panel.foldersModule
         ignoreUnknownSignals: true
 
         function onFoldersChanged() {
@@ -443,7 +453,7 @@ ColumnLayout {
                     width: ListView.view.width
                     height: 52
 
-                    readonly property bool selected: modelData.folderId === Number(panel.backend.currentFolderId)
+                    readonly property bool selected: modelData.folderId === Number(panel.foldersModule.currentFolderId)
 
                     Rectangle {
                         anchors.fill: parent
@@ -502,7 +512,7 @@ ColumnLayout {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: panel.backend.SelectFolder(modelData.folderId)
+                            onClicked: panel.foldersModule.SelectFolder(modelData.folderId)
                         }
                     }
                 }
@@ -534,7 +544,7 @@ ColumnLayout {
                     enabled: hasSelectedCollection && backendInteractive
                     text: qsTr("Delete collection")
                     Material.foreground: theme.colText
-                    onClicked: backend.DeleteFolder(backend.currentFolderId)
+                    onClicked: panel.foldersModule.DeleteFolder(panel.foldersModule.currentFolderId)
                     background: Item {}
 
                     contentItem: Label {

@@ -12,17 +12,17 @@
 namespace alcedo::ui::test {
 namespace {
 
-using AlbumBackendDbWriteBarrierTests = AlbumBackendTestFixture;
+using ApplicationModuleHostDbWriteBarrierTests = ApplicationModuleHostTestFixture;
 
 // ── ProjectDbWriteBarrier ─────────────────────────────────────────────────
 
-TEST_F(AlbumBackendDbWriteBarrierTests, InitiallyNotHeld) {
+TEST_F(ApplicationModuleHostDbWriteBarrierTests, InitiallyNotHeld) {
   ProjectDbWriteBarrier barrier;
   EXPECT_FALSE(barrier.IsHeld());
   EXPECT_EQ(barrier.Count(), 0);
 }
 
-TEST_F(AlbumBackendDbWriteBarrierTests, AcquireReleaseRefCount) {
+TEST_F(ApplicationModuleHostDbWriteBarrierTests, AcquireReleaseRefCount) {
   ProjectDbWriteBarrier barrier;
   barrier.Acquire();
   EXPECT_TRUE(barrier.IsHeld());
@@ -37,7 +37,7 @@ TEST_F(AlbumBackendDbWriteBarrierTests, AcquireReleaseRefCount) {
   EXPECT_EQ(barrier.Count(), 0);
 }
 
-TEST_F(AlbumBackendDbWriteBarrierTests, OnRelease_FiresOnlyOnOneToZero) {
+TEST_F(ApplicationModuleHostDbWriteBarrierTests, OnRelease_FiresOnlyOnOneToZero) {
   ProjectDbWriteBarrier barrier;
   int                   release_count = 0;
   barrier.SetOnRelease([&] { ++release_count; });
@@ -56,7 +56,7 @@ TEST_F(AlbumBackendDbWriteBarrierTests, OnRelease_FiresOnlyOnOneToZero) {
 
 // ── AnalysisResultWriteQueue ───────────────────────────────────────────────
 
-TEST_F(AlbumBackendDbWriteBarrierTests, Queue_SubmitRunsImmediatelyWhenNotHeld) {
+TEST_F(ApplicationModuleHostDbWriteBarrierTests, Queue_SubmitRunsImmediatelyWhenNotHeld) {
   ProjectDbWriteBarrier      barrier;
   AnalysisResultWriteQueue   queue(barrier);
   int                        ran = 0;
@@ -65,7 +65,7 @@ TEST_F(AlbumBackendDbWriteBarrierTests, Queue_SubmitRunsImmediatelyWhenNotHeld) 
   EXPECT_FALSE(queue.IsPending());
 }
 
-TEST_F(AlbumBackendDbWriteBarrierTests, Queue_SubmitQueuesWhenHeldThenDrainRuns) {
+TEST_F(ApplicationModuleHostDbWriteBarrierTests, Queue_SubmitQueuesWhenHeldThenDrainRuns) {
   ProjectDbWriteBarrier      barrier;
   AnalysisResultWriteQueue   queue(barrier);
   int                        ran = 0;
@@ -80,7 +80,7 @@ TEST_F(AlbumBackendDbWriteBarrierTests, Queue_SubmitQueuesWhenHeldThenDrainRuns)
   EXPECT_FALSE(queue.IsPending());
 }
 
-TEST_F(AlbumBackendDbWriteBarrierTests, Queue_DrainRunsAllInSubmissionOrder) {
+TEST_F(ApplicationModuleHostDbWriteBarrierTests, Queue_DrainRunsAllInSubmissionOrder) {
   ProjectDbWriteBarrier      barrier;
   AnalysisResultWriteQueue   queue(barrier);
   std::vector<int>           order;
@@ -98,7 +98,7 @@ TEST_F(AlbumBackendDbWriteBarrierTests, Queue_DrainRunsAllInSubmissionOrder) {
   EXPECT_FALSE(queue.IsPending());
 }
 
-TEST_F(AlbumBackendDbWriteBarrierTests, Queue_DrainFiresDrainCompletesFifo) {
+TEST_F(ApplicationModuleHostDbWriteBarrierTests, Queue_DrainFiresDrainCompletesFifo) {
   ProjectDbWriteBarrier      barrier;
   AnalysisResultWriteQueue   queue(barrier);
   std::vector<int>           order;
@@ -120,7 +120,7 @@ TEST_F(AlbumBackendDbWriteBarrierTests, Queue_DrainFiresDrainCompletesFifo) {
   EXPECT_EQ(order.size(), 3u);
 }
 
-TEST_F(AlbumBackendDbWriteBarrierTests, Queue_DrainWhileHeldReEntrantSubmitRunsImmediately) {
+TEST_F(ApplicationModuleHostDbWriteBarrierTests, Queue_DrainWhileHeldReEntrantSubmitRunsImmediately) {
   // Drain is normally called after release, but guard against a future caller
   // that drains while held: a re-entrant Submit during Drain must not reallocate
   // the iterating vector. This just confirms Drain is re-entrancy-safe.

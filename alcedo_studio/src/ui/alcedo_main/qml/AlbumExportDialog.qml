@@ -14,7 +14,7 @@ Dialog {
     x: parent ? Math.round((parent.width - width) / 2) : 0
     y: parent ? Math.round((parent.height - height) / 2) : 0
     padding: 0
-    closePolicy: albumBackend.exportInFlight
+    closePolicy: appModules.importExport.exportInFlight
         ? Popup.NoAutoClose
         : Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
@@ -105,11 +105,11 @@ Dialog {
         if (summaryRow === true)
             return ""
         if (!statusKey)
-            return albumBackend.exportInFlight ? "running" : "queued"
-        const map = albumBackend.exportItemStatuses
+            return appModules.importExport.exportInFlight ? "running" : "queued"
+        const map = appModules.importExport.exportItemStatuses
         const value = map ? map[statusKey] : ""
         if (!value || value.length === 0)
-            return albumBackend.exportInFlight ? "queued" : "queued"
+            return appModules.importExport.exportInFlight ? "queued" : "queued"
         return String(value)
     }
 
@@ -209,11 +209,11 @@ Dialog {
 
     onOpened: {
         if (exportOutDir.text.length === 0)
-            exportOutDir.text = albumBackend.defaultExportFolder
+            exportOutDir.text = appModules.importExport.defaultExportFolder
         normalizeUltraHdrMaxSide()
         ensureValidBitDepthSelection()
         ensurePreviewRequested()
-        albumBackend.ResetExportState()
+        appModules.importExport.ResetExportState()
         exportTriggered = false
     }
     onClosed: exportTriggered = false
@@ -271,7 +271,7 @@ Dialog {
             Button {
                 text: "✕"
                 flat: true
-                enabled: !albumBackend.exportInFlight
+                enabled: !appModules.importExport.exportInFlight
                 onClicked: root.close()
                 implicitWidth: 28
                 implicitHeight: 28
@@ -315,7 +315,7 @@ Dialog {
 
                         MouseArea {
                             anchors.fill: parent
-                            enabled: !albumBackend.exportInFlight
+                            enabled: !appModules.importExport.exportInFlight
                             onClicked: root.clearSizeLimitFocus()
                         }
 
@@ -344,11 +344,11 @@ Dialog {
                                     placeholderText: qsTr("Select output directory...")
                                     font.family: root.dataFontFamily
                                     font.pixelSize: 12
-                                    enabled: !albumBackend.exportInFlight
+                                    enabled: !appModules.importExport.exportInFlight
                                 }
                                 Button {
                                     text: qsTr("Browse")
-                                    enabled: !albumBackend.exportInFlight
+                                    enabled: !appModules.importExport.exportInFlight
                                     onClicked: exportFolderDialog.open()
                                     implicitWidth: 80
                                     Material.foreground: root.textColor
@@ -373,7 +373,7 @@ Dialog {
                                     text: qsTr("Put in Subfolder")
                                     checked: false
                                     font.pixelSize: 12
-                                    enabled: !albumBackend.exportInFlight
+                                    enabled: !appModules.importExport.exportInFlight
                                 }
                                 TextField {
                                     id: subfolderName
@@ -381,7 +381,7 @@ Dialog {
                                     text: "Processed"
                                     font.pixelSize: 12
                                     implicitWidth: 130
-                                    enabled: !albumBackend.exportInFlight
+                                    enabled: !appModules.importExport.exportInFlight
                                 }
                             }
                         }
@@ -402,7 +402,7 @@ Dialog {
 
                             MouseArea {
                                 anchors.fill: parent
-                                enabled: !albumBackend.exportInFlight
+                                enabled: !appModules.importExport.exportInFlight
                                 onClicked: root.clearSizeLimitFocus()
                             }
 
@@ -432,7 +432,7 @@ Dialog {
                                 RowLayout {
                                     Layout.fillWidth: true
                                     spacing: 8
-                                    enabled: root.hdrExportAvailable && !albumBackend.exportInFlight
+                                    enabled: root.hdrExportAvailable && !appModules.importExport.exportInFlight
                                     opacity: root.hdrExportAvailable ? 1.0 : 0.45
 
                                     Label {
@@ -454,14 +454,14 @@ Dialog {
                                     id: ultraHdrQualitySlider
                                     Layout.fillWidth: true
                                     from: 1; to: 100; value: 95; stepSize: 1
-                                    enabled: root.hdrExportAvailable && !albumBackend.exportInFlight
+                                    enabled: root.hdrExportAvailable && !appModules.importExport.exportInFlight
                                     opacity: root.hdrExportAvailable ? 1.0 : 0.45
                                 }
 
                                 ColumnLayout {
                                     Layout.fillWidth: true
                                     spacing: 5
-                                    enabled: root.hdrExportAvailable && !albumBackend.exportInFlight
+                                    enabled: root.hdrExportAvailable && !appModules.importExport.exportInFlight
                                     opacity: root.hdrExportAvailable ? 1.0 : 0.45
                                     Label {
                                         text: qsTr("Encoding longest edge (px)")
@@ -480,7 +480,7 @@ Dialog {
                                         inputMethodHints: Qt.ImhDigitsOnly
                                         font.family: root.dataFontFamily
                                         font.pixelSize: 12
-                                        enabled: root.hdrExportAvailable && !albumBackend.exportInFlight
+                                        enabled: root.hdrExportAvailable && !appModules.importExport.exportInFlight
                                         onEditingFinished: root.normalizeUltraHdrMaxSide()
                                     }
                                 }
@@ -491,7 +491,7 @@ Dialog {
                                     text: qsTr("Dithering")
                                     checked: true
                                     font.pixelSize: 12
-                                    enabled: root.hdrExportAvailable && !albumBackend.exportInFlight
+                                    enabled: root.hdrExportAvailable && !appModules.importExport.exportInFlight
                                     opacity: root.hdrExportAvailable ? 1.0 : 0.45
                                 }
                             }
@@ -507,7 +507,7 @@ Dialog {
 
                             MouseArea {
                                 anchors.fill: parent
-                                enabled: !albumBackend.exportInFlight
+                                enabled: !appModules.importExport.exportInFlight
                                 onClicked: root.clearSizeLimitFocus()
                             }
 
@@ -535,7 +535,7 @@ Dialog {
                                     ComboBox {
                                         id: exportFormat
                                         Layout.fillWidth: true
-                                        enabled: !albumBackend.exportInFlight
+                                        enabled: !appModules.importExport.exportInFlight
                                         model: [
                                             { text: "JPEG", value: "JPEG" },
                                             { text: "PNG",  value: "PNG"  },
@@ -567,7 +567,7 @@ Dialog {
                                         inputMethodHints: Qt.ImhDigitsOnly
                                         font.family: root.dataFontFamily
                                         font.pixelSize: 12
-                                        enabled: !albumBackend.exportInFlight
+                                        enabled: !appModules.importExport.exportInFlight
                                     }
                                 }
 
@@ -597,7 +597,7 @@ Dialog {
                                     visible: root.sdrExportFormat === "JPEG"
                                              || root.sdrExportFormat === "WEBP"
                                     from: 1; to: 100; value: 90; stepSize: 1
-                                    enabled: !albumBackend.exportInFlight
+                                    enabled: !appModules.importExport.exportInFlight
                                 }
 
                                 ColumnLayout {
@@ -612,7 +612,7 @@ Dialog {
                                         id: exportBitDepth
                                         Layout.fillWidth: true
                                         enabled: root.bitDepthOptionsFor(root.sdrExportFormat).length > 1
-                                                 && !albumBackend.exportInFlight
+                                                 && !appModules.importExport.exportInFlight
                                         model: root.bitDepthOptionsFor(root.sdrExportFormat)
                                         textRole: "text"
                                         valueRole: "value"
@@ -633,7 +633,7 @@ Dialog {
                                         id: exportPngLevel
                                         from: 0; to: 9; value: 5; editable: true
                                         implicitWidth: 90
-                                        enabled: !albumBackend.exportInFlight
+                                        enabled: !appModules.importExport.exportInFlight
                                     }
                                 }
 
@@ -658,7 +658,7 @@ Dialog {
                                         valueRole: "value"
                                         currentIndex: 0
                                         implicitWidth: 110
-                                        enabled: !albumBackend.exportInFlight
+                                        enabled: !appModules.importExport.exportInFlight
                                     }
                                 }
                             }
@@ -676,7 +676,7 @@ Dialog {
 
                 MouseArea {
                     anchors.fill: parent
-                    enabled: !albumBackend.exportInFlight
+                    enabled: !appModules.importExport.exportInFlight
                     onClicked: root.clearSizeLimitFocus()
                 }
 
@@ -717,7 +717,7 @@ Dialog {
                         Button {
                             Layout.fillWidth: true
                             text: qsTr("Add Selected (%1)").arg(root.selectedCount)
-                            enabled: !albumBackend.exportInFlight && root.selectedCount > 0
+                            enabled: !appModules.importExport.exportInFlight && root.selectedCount > 0
                             onClicked: root.addSelectedToQueueRequested()
                             Material.foreground: root.textColor
                             background: Rectangle {
@@ -733,7 +733,7 @@ Dialog {
                         }
                         Button {
                             text: qsTr("Clear")
-                            enabled: !albumBackend.exportInFlight && root.exportQueueCount > 0
+                            enabled: !appModules.importExport.exportInFlight && root.exportQueueCount > 0
                             onClicked: root.clearQueueRequested()
                             implicitWidth: 70
                             Material.foreground: root.textColor
@@ -879,9 +879,9 @@ Dialog {
                         font.pixelSize: 12
                     }
                     Label {
-                        text: albumBackend.exportCompleted + "/"
-                              + (albumBackend.exportTotal > 0
-                                 ? albumBackend.exportTotal
+                        text: appModules.importExport.exportCompleted + "/"
+                              + (appModules.importExport.exportTotal > 0
+                                 ? appModules.importExport.exportTotal
                                  : root.exportQueueCount)
                         color: root.mutedTextColor
                         font.family: root.dataFontFamily
@@ -890,15 +890,15 @@ Dialog {
                 }
                 ProgressBar {
                     implicitWidth: 240
-                    value: albumBackend.exportTotal > 0
-                           ? albumBackend.exportCompleted / albumBackend.exportTotal
+                    value: appModules.importExport.exportTotal > 0
+                           ? appModules.importExport.exportCompleted / appModules.importExport.exportTotal
                            : 0
                 }
             }
 
             Label {
-                visible: albumBackend.exportErrorSummary.length > 0
-                text: albumBackend.exportErrorSummary
+                visible: appModules.importExport.exportErrorSummary.length > 0
+                text: appModules.importExport.exportErrorSummary
                 wrapMode: Text.WordWrap
                 color: root.textColor
                 font.family: root.dataFontFamily
@@ -909,10 +909,10 @@ Dialog {
             Item { Layout.fillWidth: true }
 
             Button {
-                text: (root.exportTriggered && !albumBackend.exportInFlight)
+                text: (root.exportTriggered && !appModules.importExport.exportInFlight)
                       ? qsTr("Close")
                       : qsTr("Cancel")
-                enabled: !albumBackend.exportInFlight
+                enabled: !appModules.importExport.exportInFlight
                 onClicked: root.close()
                 Material.foreground: root.textColor
                 background: Rectangle {
@@ -928,12 +928,12 @@ Dialog {
             }
             Button {
                 highlighted: true
-                text: albumBackend.exportInFlight
+                text: appModules.importExport.exportInFlight
                       ? qsTr("Exporting...")
                       : root.exportQueueCount === 1
                         ? qsTr("Export 1 File")
                         : qsTr("Export %1 Files").arg(root.exportQueueCount)
-                enabled: !albumBackend.exportInFlight && root.exportQueueCount > 0
+                enabled: !appModules.importExport.exportInFlight && root.exportQueueCount > 0
                 Material.foreground: root.textColor
                 background: Rectangle {
                     radius: 8

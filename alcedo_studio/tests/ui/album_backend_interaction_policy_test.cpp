@@ -14,7 +14,7 @@
 namespace alcedo::ui::test {
 namespace {
 
-using AlbumBackendInteractionPolicyTests = AlbumBackendTestFixture;
+using ApplicationModuleHostInteractionPolicyTests = ApplicationModuleHostTestFixture;
 
 auto Target(uint64_t elementId) -> QVariantMap {
   QVariantMap m;
@@ -47,7 +47,7 @@ auto RegisterLockedTask(BackgroundTaskController& registry, BackgroundTaskKind k
   return registry.RegisterTask(s);
 }
 
-TEST_F(AlbumBackendInteractionPolicyTests, NoTasks_AllCapabilitiesAllowed) {
+TEST_F(ApplicationModuleHostInteractionPolicyTests, NoTasks_AllCapabilitiesAllowed) {
   BackgroundTaskController    registry;
   InteractionPolicyController policy(&registry);
   EXPECT_TRUE(policy.EvaluateEditImageDescription(42).value("allowed").toBool());
@@ -72,7 +72,7 @@ TEST_F(AlbumBackendInteractionPolicyTests, NoTasks_AllCapabilitiesAllowed) {
   EXPECT_TRUE(policy.CanChangeImageAnalysisProvider());
 }
 
-TEST_F(AlbumBackendInteractionPolicyTests, ImageAnalysisPerElementLocks_BlockAffectedOnly) {
+TEST_F(ApplicationModuleHostInteractionPolicyTests, ImageAnalysisPerElementLocks_BlockAffectedOnly) {
   BackgroundTaskController    registry;
   InteractionPolicyController policy(&registry);
   const QString               id = RegisterLockedTask(
@@ -140,7 +140,7 @@ TEST_F(AlbumBackendInteractionPolicyTests, ImageAnalysisPerElementLocks_BlockAff
   EXPECT_TRUE(policy.CanRunAnalysis());
 }
 
-TEST_F(AlbumBackendInteractionPolicyTests, GlobalLock_BlocksEveryElement) {
+TEST_F(ApplicationModuleHostInteractionPolicyTests, GlobalLock_BlocksEveryElement) {
   BackgroundTaskController    registry;
   InteractionPolicyController policy(&registry);
   RegisterLockedTask(
@@ -154,7 +154,7 @@ TEST_F(AlbumBackendInteractionPolicyTests, GlobalLock_BlocksEveryElement) {
   EXPECT_FALSE(policy.EvaluateRunImageAnalysis(Targets({7})).value("allowed").toBool());
 }
 
-TEST_F(AlbumBackendInteractionPolicyTests, SemanticGenerationLocks_BlockModelAndGeneration) {
+TEST_F(ApplicationModuleHostInteractionPolicyTests, SemanticGenerationLocks_BlockModelAndGeneration) {
   BackgroundTaskController    registry;
   InteractionPolicyController policy(&registry);
   RegisterLockedTask(
@@ -177,7 +177,7 @@ TEST_F(AlbumBackendInteractionPolicyTests, SemanticGenerationLocks_BlockModelAnd
   EXPECT_TRUE(policy.EvaluateEditImageDescription(42).value("allowed").toBool());
 }
 
-TEST_F(AlbumBackendInteractionPolicyTests, ModelDownloadLocks_BlockSettingsAndModelNotGeneration) {
+TEST_F(ApplicationModuleHostInteractionPolicyTests, ModelDownloadLocks_BlockSettingsAndModelNotGeneration) {
   BackgroundTaskController    registry;
   InteractionPolicyController policy(&registry);
   RegisterLockedTask(
@@ -192,7 +192,7 @@ TEST_F(AlbumBackendInteractionPolicyTests, ModelDownloadLocks_BlockSettingsAndMo
   EXPECT_TRUE(policy.EvaluateRunSemanticGeneration().value("allowed").toBool());
 }
 
-TEST_F(AlbumBackendInteractionPolicyTests, ModelActivationLocks_BlockAllThree) {
+TEST_F(ApplicationModuleHostInteractionPolicyTests, ModelActivationLocks_BlockAllThree) {
   BackgroundTaskController    registry;
   InteractionPolicyController policy(&registry);
   RegisterLockedTask(
@@ -210,7 +210,7 @@ TEST_F(AlbumBackendInteractionPolicyTests, ModelActivationLocks_BlockAllThree) {
   EXPECT_TRUE(policy.EvaluateRunImageAnalysis(Targets({42})).value("allowed").toBool());
 }
 
-TEST_F(AlbumBackendInteractionPolicyTests, FinishTask_ClearsLocks) {
+TEST_F(ApplicationModuleHostInteractionPolicyTests, FinishTask_ClearsLocks) {
   BackgroundTaskController    registry;
   InteractionPolicyController policy(&registry);
   const QString               id = RegisterLockedTask(
@@ -222,7 +222,7 @@ TEST_F(AlbumBackendInteractionPolicyTests, FinishTask_ClearsLocks) {
   EXPECT_TRUE(policy.CanEditFocusedDescription());
 }
 
-TEST_F(AlbumBackendInteractionPolicyTests, PolicyChanged_FiresOnlyOnLockSetChange) {
+TEST_F(ApplicationModuleHostInteractionPolicyTests, PolicyChanged_FiresOnlyOnLockSetChange) {
   BackgroundTaskController    registry;
   InteractionPolicyController policy(&registry);
   QSignalSpy                  spy(&policy, &InteractionPolicyController::PolicyChanged);
@@ -239,7 +239,7 @@ TEST_F(AlbumBackendInteractionPolicyTests, PolicyChanged_FiresOnlyOnLockSetChang
   EXPECT_GT(spy.count(), after_register);
 }
 
-TEST_F(AlbumBackendInteractionPolicyTests, BlockingTaskIds_AggregatesAcrossTasks) {
+TEST_F(ApplicationModuleHostInteractionPolicyTests, BlockingTaskIds_AggregatesAcrossTasks) {
   BackgroundTaskController    registry;
   InteractionPolicyController policy(&registry);
   const QString               a = RegisterLockedTask(
@@ -255,7 +255,7 @@ TEST_F(AlbumBackendInteractionPolicyTests, BlockingTaskIds_AggregatesAcrossTasks
   EXPECT_EQ(ids.size(), 2);
 }
 
-TEST_F(AlbumBackendInteractionPolicyTests, NullRegistry_PolicyStaysOpen) {
+TEST_F(ApplicationModuleHostInteractionPolicyTests, NullRegistry_PolicyStaysOpen) {
   InteractionPolicyController policy(nullptr);
   // No registry → no locks → everything allowed, no PolicyChanged expected.
   EXPECT_TRUE(policy.CanEditFocusedDescription());
@@ -264,7 +264,7 @@ TEST_F(AlbumBackendInteractionPolicyTests, NullRegistry_PolicyStaysOpen) {
   EXPECT_TRUE(policy.CanEditFocusedDescription());
 }
 
-TEST_F(AlbumBackendInteractionPolicyTests, NaturalLanguageSearchGate_DisablesFieldFilters) {
+TEST_F(ApplicationModuleHostInteractionPolicyTests, NaturalLanguageSearchGate_DisablesFieldFilters) {
   BackgroundTaskController    registry;
   InteractionPolicyController policy(&registry);
   QSignalSpy                  spy(&policy, &InteractionPolicyController::PolicyChanged);

@@ -34,7 +34,7 @@
 namespace alcedo::ui::test {
 namespace {
 
-using GlobalSearchDialogQmlTests = AlbumBackendTestFixture;
+using GlobalSearchDialogQmlTests = ApplicationModuleHostTestFixture;
 
 constexpr int kPageSize        = 24;
 constexpr int kSearchItemCount = 30;
@@ -62,7 +62,7 @@ ApplicationWindow {
             if (!item) {
                 return
             }
-            item.backend = albumBackend
+            item.backend = appModules
             item.theme = null
             item.blurSource = null
             item.cornerRadius = 0
@@ -71,12 +71,12 @@ ApplicationWindow {
 }
 )";
 
-void WaitForImportFinished(AlbumBackend& backend, int timeoutMs = 180000) {
-  QSignalSpy spy(&backend, &AlbumBackend::ImportStateChanged);
+void WaitForImportFinished(ApplicationModuleHost& backend, int timeoutMs = 180000) {
+  QSignalSpy spy(backend.import_export(), &ImportExportHandler::ImportStateChanged);
   const int  stepMs  = 200;
   int        waited  = 0;
 
-  while (backend.ImportRunning() && waited < timeoutMs) {
+  while (backend.import_export()->ImportRunning() && waited < timeoutMs) {
     spy.wait(stepMs);
     waited += stepMs;
   }
@@ -370,27 +370,27 @@ TEST_F(GlobalSearchDialogQmlTests,
   AppTheme::RegisterFonts();
   AppTheme::ApplyApplicationFont(*app);
 
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
   const auto searchDataset = MakeSearchDataset(temp_dir_, kSearchItemCount);
   ASSERT_EQ(searchDataset.size(), static_cast<size_t>(kSearchItemCount))
       << "Need at least 30 searchable RAW files to exercise page 2 thumbnail loading.";
 
-  backend.StartImport(PathsToQStringList(searchDataset));
+  backend.import_export()->StartImport(PathsToQStringList(searchDataset));
   WaitForImportFinished(backend);
 
-  ASSERT_FALSE(backend.ImportRunning());
-  ASSERT_GE(backend.ImportCompleted(), kSearchItemCount);
-  ASSERT_GE(backend.ShownCount(), kSearchItemCount);
+  ASSERT_FALSE(backend.import_export()->ImportRunning());
+  ASSERT_GE(backend.import_export()->ImportCompleted(), kSearchItemCount);
+  ASSERT_GE(backend.library()->ShownCount(), kSearchItemCount);
 
-  auto* searchController = qobject_cast<SearchController*>(backend.SearchControllerObject());
+  auto* searchController = backend.search();
   ASSERT_NE(searchController, nullptr);
   QSignalSpy previewSpy(searchController, &SearchController::SearchPreviewThumbnailUpdated);
 
   QQmlApplicationEngine engine;
   engine.addImportPath(QStringLiteral("qrc:/"));
-  engine.rootContext()->setContextProperty(QStringLiteral("albumBackend"), &backend);
+  engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &backend);
   engine.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
   engine.rootContext()->setContextProperty(QStringLiteral("dialogSourceUrl"),
                                            GlobalSearchDialogFileUrl());
@@ -542,10 +542,10 @@ TEST_F(GlobalSearchDialogQmlTests, SearchControllerClassifiesAndRoutesBySemantic
   QCoreApplication::setApplicationName(QStringLiteral("GlobalSearchDialogQmlTest"));
   QSettings{}.remove(QStringLiteral("search/naturalLanguageSearchEnabled"));
 
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
-  auto* searchController = qobject_cast<SearchController*>(backend.SearchControllerObject());
+  auto* searchController = backend.search();
   ASSERT_NE(searchController, nullptr);
 
   // Deterministic start state (QSettings persists across runs).
@@ -619,16 +619,16 @@ TEST_F(GlobalSearchDialogQmlTests, SemanticTypingShowsAwaitingSubmitAndLabelUses
   AppTheme::RegisterFonts();
   AppTheme::ApplyApplicationFont(*app);
 
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
-  auto* searchController = qobject_cast<SearchController*>(backend.SearchControllerObject());
+  auto* searchController = backend.search();
   ASSERT_NE(searchController, nullptr);
   searchController->SetNaturalLanguageSearchEnabled(true);
 
   QQmlApplicationEngine engine;
   engine.addImportPath(QStringLiteral("qrc:/"));
-  engine.rootContext()->setContextProperty(QStringLiteral("albumBackend"), &backend);
+  engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &backend);
   engine.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
   engine.rootContext()->setContextProperty(QStringLiteral("dialogSourceUrl"),
                                            GlobalSearchDialogFileUrl());
@@ -699,25 +699,25 @@ TEST_F(GlobalSearchDialogQmlTests, NaturalLanguageSearchGate_SyncedOnDialogOpen)
   QSettings{}.remove(QStringLiteral("search/naturalLanguageSearchEnabled"));
   QSettings{}.remove(QStringLiteral("search/semanticEnabled"));
 
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend));
 
-  auto* searchController = qobject_cast<SearchController*>(backend.SearchControllerObject());
+  auto* searchController = backend.search();
   ASSERT_NE(searchController, nullptr);
-  ASSERT_NE(backend.InteractionPolicyControllerObject(), nullptr);
+  ASSERT_NE(backend.interaction_policy(), nullptr);
 
   // Persist NL enabled (what a restart would restore). SearchController knows it
   // now; the policy controller does NOT — the gate is still open.
   searchController->SetNaturalLanguageSearchEnabled(true);
   ASSERT_TRUE(searchController->natural_language_search_enabled());
-  EXPECT_TRUE(backend.InteractionPolicyControllerObject()
+  EXPECT_TRUE(backend.interaction_policy()
                   ->property("canChangeSearchFieldFilters")
                   .toBool())
       << "Before the dialog syncs, the policy controller should still allow field filters.";
 
   QQmlApplicationEngine engine;
   engine.addImportPath(QStringLiteral("qrc:/"));
-  engine.rootContext()->setContextProperty(QStringLiteral("albumBackend"), &backend);
+  engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &backend);
   engine.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
   engine.rootContext()->setContextProperty(QStringLiteral("dialogSourceUrl"),
                                            GlobalSearchDialogFileUrl());
@@ -738,7 +738,7 @@ TEST_F(GlobalSearchDialogQmlTests, NaturalLanguageSearchGate_SyncedOnDialogOpen)
   ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "openFromCollection"));
   ASSERT_TRUE(WaitUntil([&]() { return dialog->property("visible").toBool(); }, 5000));
 
-  EXPECT_FALSE(backend.InteractionPolicyControllerObject()
+  EXPECT_FALSE(backend.interaction_policy()
                    ->property("canChangeSearchFieldFilters")
                    .toBool())
       << "Opening the dialog must sync the NL gate so field filters are disabled.";

@@ -281,7 +281,8 @@ Dialog {
         if (!backend || !target) {
             return false
         }
-        const result = backend.GetImageDescription(Number(target.elementId))
+        const images = backend.images ? backend.images : backend
+        const result = images.GetImageDescription(Number(target.elementId))
         return result && result.hasDescription === true
     }
 
@@ -289,7 +290,8 @@ Dialog {
         if (!backend || !target) {
             return false
         }
-        const result = backend.GetImageRating(Number(target.elementId), Number(target.imageId))
+        const images = backend.images ? backend.images : backend
+        const result = images.GetImageRating(Number(target.elementId), Number(target.imageId))
         return result && result.success === true && Number(result.rating) > 0
     }
 
@@ -297,7 +299,8 @@ Dialog {
         if (!backend || !target) {
             return false
         }
-        const result = backend.GetImageRatingReasons(Number(target.elementId))
+        const images = backend.images ? backend.images : backend
+        const result = images.GetImageRatingReasons(Number(target.elementId))
         return result && result.hasReasons === true
     }
 

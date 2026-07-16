@@ -102,11 +102,10 @@ struct BackgroundTaskSnapshot {
 ///
 /// Phase 1 is additive mirroring only — no modal behavior is removed and no
 /// interaction locks are published (those land in Phase 2). The controller is
-/// a standalone QObject with no `AlbumBackend` dependency so it is unit-
-/// testable in isolation; owning controllers reach it either via an injected
-/// pointer (`ImageAnalysisController`, which is env-injected for testability)
-/// or via `backend_.background_task_` (`SemanticGenerationController` /
-/// `ModelDownloadController`, which are friends of `AlbumBackend`).
+/// a standalone QObject with no host dependency so it is unit-testable in
+/// isolation; owning controllers receive it via narrow constructor injection
+/// (`ImageAnalysisController`, `SemanticGenerationController`,
+/// `ModelDownloadController`).
 ///
 /// All register/update/finish/cancel calls happen on the UI thread
 /// (controller progress callbacks hop back via

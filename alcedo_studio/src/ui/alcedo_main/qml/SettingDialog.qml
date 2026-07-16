@@ -39,14 +39,14 @@ Dialog {
     property int currentCategory: 0
     property int pendingThemeIndex: appTheme.currentThemeIndex
     property string pendingLanguageCode: languageManager.currentLanguageCode
-    property bool pendingCacheEnabled: albumBackend.thumbnailDiskCacheEnabled
-    property string pendingCacheRoot: albumBackend.thumbnailDiskCacheRoot
-    property int pendingCacheMaxEntries: albumBackend.thumbnailDiskCacheMaxEntries
-    property int pendingCacheJpegQuality: albumBackend.thumbnailDiskCacheJpegQuality
-    property string pendingSemanticImportPreference: albumBackend.semanticGenerationController.importPreference
+    property bool pendingCacheEnabled: appModules.library.thumbnailDiskCacheEnabled
+    property string pendingCacheRoot: appModules.library.thumbnailDiskCacheRoot
+    property int pendingCacheMaxEntries: appModules.library.thumbnailDiskCacheMaxEntries
+    property int pendingCacheJpegQuality: appModules.library.thumbnailDiskCacheJpegQuality
+    property string pendingSemanticImportPreference: appModules.semanticGeneration.importPreference
     property string cacheStatsSnapshot: ""
     property int requestedCategory: 0
-    readonly property bool canCompleteSettings: albumBackend.interactionPolicyController.canRunSemanticGeneration
+    readonly property bool canCompleteSettings: appModules.interactionPolicy.canRunSemanticGeneration
 
     signal messageRequested(string message)
     signal semanticGenerationBackgroundRequested()
@@ -62,12 +62,12 @@ Dialog {
         if (currentCategory === 2) {
             refreshCacheStats()
         } else if (currentCategory === 3) {
-            albumBackend.semanticGenerationController.RefreshAlbumSummary()
+            appModules.semanticGeneration.RefreshAlbumSummary()
         } else if (currentCategory === 4) {
             // Refresh credential/configured state when the Advanced Content
             // Analysis page is shown, so the API-key label and model box reflect
             // any changes made since the last visit.
-            albumBackend.imageAnalysisController.RefreshCredentialState()
+            appModules.imageAnalysis.RefreshCredentialState()
         }
     }
 
@@ -80,16 +80,16 @@ Dialog {
     function resetPendingValues() {
         pendingThemeIndex = appTheme.currentThemeIndex
         pendingLanguageCode = languageManager.currentLanguageCode
-        pendingCacheEnabled = albumBackend.thumbnailDiskCacheEnabled
-        pendingCacheRoot = albumBackend.thumbnailDiskCacheRoot
-        pendingCacheMaxEntries = albumBackend.thumbnailDiskCacheMaxEntries
-        pendingCacheJpegQuality = albumBackend.thumbnailDiskCacheJpegQuality
-        pendingSemanticImportPreference = albumBackend.semanticGenerationController.importPreference
+        pendingCacheEnabled = appModules.library.thumbnailDiskCacheEnabled
+        pendingCacheRoot = appModules.library.thumbnailDiskCacheRoot
+        pendingCacheMaxEntries = appModules.library.thumbnailDiskCacheMaxEntries
+        pendingCacheJpegQuality = appModules.library.thumbnailDiskCacheJpegQuality
+        pendingSemanticImportPreference = appModules.semanticGeneration.importPreference
         refreshCacheStats()
     }
 
     function refreshCacheStats() {
-        cacheStatsSnapshot = albumBackend.thumbnailDiskCacheStats
+        cacheStatsSnapshot = appModules.library.thumbnailDiskCacheStats
     }
 
     function languageIndexForCode(code) {
@@ -169,20 +169,20 @@ Dialog {
         if (languageManager.currentLanguageCode !== pendingLanguageCode) {
             languageManager.setLanguage(pendingLanguageCode)
         }
-        if (albumBackend.thumbnailDiskCacheEnabled !== pendingCacheEnabled) {
-            albumBackend.SetThumbnailDiskCacheEnabled(pendingCacheEnabled)
+        if (appModules.library.thumbnailDiskCacheEnabled !== pendingCacheEnabled) {
+            appModules.library.SetThumbnailDiskCacheEnabled(pendingCacheEnabled)
         }
-        if (albumBackend.thumbnailDiskCacheRoot !== pendingCacheRoot) {
-            albumBackend.SetThumbnailDiskCacheRoot(pendingCacheRoot)
+        if (appModules.library.thumbnailDiskCacheRoot !== pendingCacheRoot) {
+            appModules.library.SetThumbnailDiskCacheRoot(pendingCacheRoot)
         }
-        if (albumBackend.thumbnailDiskCacheMaxEntries !== pendingCacheMaxEntries) {
-            albumBackend.SetThumbnailDiskCacheMaxEntries(pendingCacheMaxEntries)
+        if (appModules.library.thumbnailDiskCacheMaxEntries !== pendingCacheMaxEntries) {
+            appModules.library.SetThumbnailDiskCacheMaxEntries(pendingCacheMaxEntries)
         }
-        if (albumBackend.thumbnailDiskCacheJpegQuality !== pendingCacheJpegQuality) {
-            albumBackend.SetThumbnailDiskCacheJpegQuality(pendingCacheJpegQuality)
+        if (appModules.library.thumbnailDiskCacheJpegQuality !== pendingCacheJpegQuality) {
+            appModules.library.SetThumbnailDiskCacheJpegQuality(pendingCacheJpegQuality)
         }
-        if (albumBackend.semanticGenerationController.importPreference !== pendingSemanticImportPreference) {
-            albumBackend.semanticGenerationController.SetImportPreference(pendingSemanticImportPreference)
+        if (appModules.semanticGeneration.importPreference !== pendingSemanticImportPreference) {
+            appModules.semanticGeneration.SetImportPreference(pendingSemanticImportPreference)
         }
         refreshCacheStats()
         messageRequested(qsTr("Settings applied"))
@@ -743,10 +743,10 @@ Dialog {
                                             id: clearProjectButton
                                             Layout.preferredHeight: 42
                                             text: qsTr("Clear current project")
-                                            enabled: albumBackend.serviceReady
+                                            enabled: appModules.project.serviceReady
                                             Material.foreground: dialog.textColor
                                             onClicked: {
-                                                albumBackend.ClearProjectThumbnailDiskCache()
+                                                appModules.library.ClearProjectThumbnailDiskCache()
                                                 dialog.refreshCacheStats()
                                                 dialog.messageRequested(qsTr("Current project cache cleared"))
                                             }
@@ -758,7 +758,7 @@ Dialog {
                                             text: qsTr("Clear all cache")
                                             Material.foreground: dialog.dangerColor
                                             onClicked: {
-                                                albumBackend.ClearAllThumbnailDiskCache()
+                                                appModules.library.ClearAllThumbnailDiskCache()
                                                 dialog.refreshCacheStats()
                                                 dialog.messageRequested(qsTr("All thumbnail cache cleared"))
                                             }
@@ -790,9 +790,9 @@ Dialog {
                                     Layout.leftMargin: 34
                                     Layout.rightMargin: 34
                                     Layout.bottomMargin: 26
-                                    semanticController: albumBackend.semanticGenerationController
-                                    downloadController: albumBackend.modelDownloadController
-                                    interactionPolicy: albumBackend.interactionPolicyController
+                                    semanticController: appModules.semanticGeneration
+                                    downloadController: appModules.modelDownload
+                                    interactionPolicy: appModules.interactionPolicy
                                     importPreference: dialog.pendingSemanticImportPreference
                                     primaryAccent: dialog.primaryAccent
                                     secondaryAccent: dialog.secondaryAccent
@@ -820,9 +820,9 @@ Dialog {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             width: parent ? parent.width : 0
-                            profileController: albumBackend.aiProviderProfileController
-                            analysisController: albumBackend.imageAnalysisController
-                            interactionPolicy: albumBackend.interactionPolicyController
+                            profileController: appModules.aiProviderProfiles
+                            analysisController: appModules.imageAnalysis
+                            interactionPolicy: appModules.interactionPolicy
                             backgroundSource: dialog.blurSource
                             primaryAccent: dialog.primaryAccent
                             secondaryAccent: dialog.secondaryAccent

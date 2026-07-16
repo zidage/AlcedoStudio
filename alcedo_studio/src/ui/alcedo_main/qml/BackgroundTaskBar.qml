@@ -9,14 +9,14 @@ import QtQuick.Layouts
 
 // Compact background-task summary bar for the main-window chrome. Phase 1
 // mirrors running image-analysis / semantic-generation / model-download tasks
-// from `albumBackend.backgroundTaskController`. It collapses to zero height
+// from `appModules.backgroundTasks`. It collapses to zero height
 // when no tasks are registered, shows the primary running task title + progress
 // when one is active, a "+N" count badge when several are active, and a Cancel
 // button for the primary task. Click opens `BackgroundTaskPopover`.
 Item {
     id: root
 
-    readonly property var controller: albumBackend ? albumBackend.backgroundTaskController : null
+    readonly property var controller: appModules ? appModules.backgroundTasks : null
     readonly property var primary: controller && controller.primaryTask ? controller.primaryTask : ({})
     readonly property int runningCount: controller ? controller.runningCount : 0
     readonly property bool hasTasks: controller && controller.tasks.length > 0

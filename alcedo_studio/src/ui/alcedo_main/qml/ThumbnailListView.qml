@@ -5,7 +5,7 @@ import QtQuick.Effects
 
 ListView {
     id: root
-    model: albumBackend.thumbnailModel
+    model: appModules.library.thumbnailModel
     clip: true
     cacheBuffer: 0
     spacing: 8
@@ -30,19 +30,19 @@ ListView {
     signal contextMenuRequested(var item, real sceneX, real sceneY)
 
     function maybeLoadMoreThumbnails() {
-        if (!albumBackend.thumbnailModel.hasMore || albumBackend.thumbnailModel.loading) {
+        if (!appModules.library.thumbnailModel.hasMore || appModules.library.thumbnailModel.loading) {
             return
         }
         const threshold = Math.max(360, height * 0.5)
         if (contentY >= originY + Math.max(0, contentHeight - height) - threshold) {
-            albumBackend.LoadMoreThumbnails()
+            appModules.library.LoadMoreThumbnails()
         }
     }
 
     Connections {
-        target: albumBackend.thumbnailModel
+        target: appModules.library.thumbnailModel
         function onLoadingChanged() {
-            if (!albumBackend.thumbnailModel.loading) {
+            if (!appModules.library.thumbnailModel.loading) {
                 Qt.callLater(root.maybeLoadMoreThumbnails)
             }
         }
@@ -118,7 +118,7 @@ ListView {
                 return
             }
             if (pinnedElementId !== 0 && pinnedImageId !== 0) {
-                albumBackend.SetThumbnailVisible(pinnedElementId, pinnedImageId, false)
+                appModules.library.SetThumbnailVisible(pinnedElementId, pinnedImageId, false)
             }
             pinnedElementId = elementId
             pinnedImageId = imageId
@@ -127,7 +127,7 @@ ListView {
             liveThumbMissingSource = thumbMissingSource
             liveThumbErrorText = thumbErrorText
             if (pinnedElementId !== 0 && pinnedImageId !== 0) {
-                albumBackend.SetThumbnailVisible(pinnedElementId, pinnedImageId, true)
+                appModules.library.SetThumbnailVisible(pinnedElementId, pinnedImageId, true)
             }
         }
 
@@ -136,7 +136,7 @@ ListView {
         onImageIdChanged: bindThumbnailLifetime()
         Component.onDestruction: {
             if (pinnedElementId !== 0 && pinnedImageId !== 0) {
-                albumBackend.SetThumbnailVisible(pinnedElementId, pinnedImageId, false)
+                appModules.library.SetThumbnailVisible(pinnedElementId, pinnedImageId, false)
             }
         }
 
@@ -152,7 +152,7 @@ ListView {
         Behavior on border.width { NumberAnimation { duration: 150 } }
 
         Connections {
-            target: albumBackend
+            target: appModules.library
             ignoreUnknownSignals: true
             function onThumbnailUpdated(updatedElementId, updatedUrl, loading, missingSource, errorText) {
                 if (updatedElementId === elementId) {
@@ -364,7 +364,7 @@ ListView {
                     rating: rating,
                     isHdr: isHdr
                 })
-                albumBackend.OpenEditor(elementId, imageId)
+                appModules.editor.OpenEditor(elementId, imageId)
             }
         }
     }
