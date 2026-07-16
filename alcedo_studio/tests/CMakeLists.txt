@@ -1375,6 +1375,40 @@ def_ui_test(AlbumBackendBackgroundTaskTest album_backend_background_task_test.cp
 def_ui_test(AlbumBackendInteractionPolicyTest album_backend_interaction_policy_test.cpp)
 def_ui_test(AlbumBackendDbWriteBarrierTest album_backend_db_write_barrier_test.cpp)
 
+# Phase 0: deterministic editor RHI contracts (backend parse, fixtures, lease schema).
+add_executable(EditorRhiContractsTest
+    ui/editor_rhi_contracts_test.cpp
+)
+target_include_directories(EditorRhiContractsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorRhiContractsTest PRIVATE
+    EditorRhiContracts
+    GTest::gtest_main
+    Qt6::Core
+)
+gtest_discover_tests(EditorRhiContractsTest TEST_PREFIX "EditorRhiContractsTest.")
+
+# Phase 0: maintained GPU presentation harness (manual / CI GPU workers).
+if(TARGET EditorRhiHarness)
+  if(WIN32 AND ALCEDO_CUDA_ENABLED)
+    add_test(NAME EditorRhiHarness.CudaDirectPresentation
+      COMMAND EditorRhiHarness --editor-backend=cuda --case=direct-presentation
+    )
+    set_tests_properties(EditorRhiHarness.CudaDirectPresentation PROPERTIES
+      LABELS "gpu;editor_rhi;cuda"
+      WORKING_DIRECTORY $<TARGET_FILE_DIR:EditorRhiHarness>
+    )
+  endif()
+  if(WIN32 AND ALCEDO_OPENCL_ENABLED)
+    add_test(NAME EditorRhiHarness.OpenClDirectPresentation
+      COMMAND EditorRhiHarness --editor-backend=opencl --case=direct-presentation
+    )
+    set_tests_properties(EditorRhiHarness.OpenClDirectPresentation PROPERTIES
+      LABELS "gpu;editor_rhi;opencl"
+      WORKING_DIRECTORY $<TARGET_FILE_DIR:EditorRhiHarness>
+    )
+  endif()
+endif()
+
 add_executable(GlobalSearchDialogQmlTest
     ui/global_search_dialog_qml_test.cpp
     ui/widget_test_main.cpp
@@ -1507,6 +1541,7 @@ alcedo_assign_test_category(ui ALCEDO_BUILD_UI_TESTS alcedo_tests_ui
   AlbumBackendBackgroundTaskTest
   AlbumBackendInteractionPolicyTest
   AlbumBackendDbWriteBarrierTest
+  EditorRhiContractsTest
   GlobalSearchDialogQmlTest
   LanguageManagerTest
 )

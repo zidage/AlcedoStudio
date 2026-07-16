@@ -1522,6 +1522,122 @@ if(ALCEDO_REAL_WIDGET_EDITOR)
     endif()
 endif()
 
+# ── EditorRhiContracts + EditorRhiHarness (Phase 0 QML/RHI unified workspace) ─
+# Shared startup backend parsing, CUDA adapter discovery, native lease contract,
+# deterministic fixtures, and the maintained QQuickRhiItem GPU presentation harness.
+set(EDITOR_RHI_CONTRACT_SRCS
+    ui/editor_rhi/editor_backend.cpp
+    ui/editor_rhi/frame_presentation_lease.cpp
+    ui/editor_rhi/native_resource_counters.cpp
+    ui/editor_rhi/harness_fixtures.cpp
+    include/ui/editor_rhi/editor_backend.hpp
+    include/ui/editor_rhi/frame_presentation_lease.hpp
+    include/ui/editor_rhi/native_resource_counters.hpp
+    include/ui/editor_rhi/harness_fixtures.hpp
+    include/ui/editor_rhi/editor_startup.hpp
+    include/ui/editor_rhi/cuda_adapter_discovery.hpp
+)
+set(EDITOR_RHI_STARTUP_SRCS
+    ui/editor_rhi/editor_startup.cpp
+)
+if(WIN32 AND ALCEDO_CUDA_ENABLED)
+    list(APPEND EDITOR_RHI_STARTUP_SRCS ui/editor_rhi/cuda_adapter_discovery.cpp)
+endif()
+
+def_library(EditorRhiContracts
+    SOURCES ${EDITOR_RHI_CONTRACT_SRCS}
+    PUBLIC_DEPS Qt6::Core
+)
+if(ALCEDO_CUDA_ENABLED)
+    target_compile_definitions(EditorRhiContracts PUBLIC HAVE_CUDA)
+endif()
+if(ALCEDO_OPENCL_ENABLED)
+    target_compile_definitions(EditorRhiContracts PUBLIC HAVE_OPENCL)
+endif()
+if(ALCEDO_METAL_ENABLED)
+    target_compile_definitions(EditorRhiContracts PUBLIC HAVE_METAL)
+endif()
+
+set(EDITOR_RHI_VIEWPORT_SRCS
+    ui/editor_rhi/harness_viewport_item.cpp
+    ui/editor_rhi/harness_viewport_renderer.cpp
+    include/ui/editor_rhi/harness_viewport_item.hpp
+    include/ui/editor_rhi/harness_viewport_renderer.hpp
+)
+
+def_library(EditorRhiHarnessLib
+    SOURCES
+        ${EDITOR_RHI_STARTUP_SRCS}
+        ${EDITOR_RHI_VIEWPORT_SRCS}
+    PUBLIC_DEPS
+        EditorRhiContracts
+        Qt6::Core
+        Qt6::Gui
+        Qt6::GuiPrivate
+        Qt6::Quick
+        Qt6::OpenGL
+        Qt6::ShaderTools
+)
+if(ALCEDO_CUDA_ENABLED)
+    target_compile_definitions(EditorRhiHarnessLib PUBLIC HAVE_CUDA)
+    target_link_libraries(EditorRhiHarnessLib PUBLIC CUDA::cudart)
+endif()
+if(ALCEDO_OPENCL_ENABLED)
+    target_compile_definitions(EditorRhiHarnessLib PUBLIC HAVE_OPENCL)
+    target_link_libraries(EditorRhiHarnessLib PUBLIC OpenClProgramLibrary OpenCL::OpenCL)
+endif()
+if(ALCEDO_METAL_ENABLED)
+    target_compile_definitions(EditorRhiHarnessLib PUBLIC HAVE_METAL)
+endif()
+if(WIN32)
+    target_link_libraries(EditorRhiHarnessLib PRIVATE d3d11 dxgi opengl32)
+endif()
+
+qt_add_shaders(EditorRhiHarnessLib "editor_rhi_harness_shaders"
+    PREFIX
+        "/shaders/editor_rhi"
+    BASE
+        "ui/editor_rhi/shaders"
+    FILES
+        ui/editor_rhi/shaders/harness_image.vert
+        ui/editor_rhi/shaders/harness_image.frag
+)
+
+add_executable(EditorRhiHarness
+    ui/editor_rhi/editor_rhi_harness_main.cpp
+)
+target_include_directories(EditorRhiHarness PUBLIC include)
+target_link_libraries(EditorRhiHarness PRIVATE
+    EditorRhiHarnessLib
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Quick
+    Qt6::Qml
+)
+if(COMMAND qt_finalize_target)
+    qt_finalize_target(EditorRhiHarness)
+elseif(COMMAND qt_finalize_executable)
+    qt_finalize_executable(EditorRhiHarness)
+endif()
+
+# Developer convenience targets: one command per backend.
+if(WIN32 AND ALCEDO_CUDA_ENABLED)
+    add_custom_target(run_editor_rhi_harness_cuda
+        COMMAND EditorRhiHarness --editor-backend=cuda --case=direct-presentation
+        DEPENDS EditorRhiHarness
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:EditorRhiHarness>
+        USES_TERMINAL
+    )
+endif()
+if(WIN32 AND ALCEDO_OPENCL_ENABLED)
+    add_custom_target(run_editor_rhi_harness_opencl
+        COMMAND EditorRhiHarness --editor-backend=opencl --case=direct-presentation
+        DEPENDS EditorRhiHarness
+        WORKING_DIRECTORY $<TARGET_FILE_DIR:EditorRhiHarness>
+        USES_TERMINAL
+    )
+endif()
+
 # ── BackgroundTaskController: standalone QObject task registry (Phase 1). Kept
 # as its own lightweight lib so ImageAnalysisController and other controllers can
 # link it without pulling in the full AlbumBackendLib. AlbumBackendLib links it
