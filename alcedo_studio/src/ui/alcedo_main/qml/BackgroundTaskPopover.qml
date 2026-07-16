@@ -139,7 +139,7 @@ Popup {
                     }
 
                     Button {
-                        visible: modelData.cancelable
+                        visible: modelData.cancelable === true
                                 && (modelData.state === "running" || modelData.state === "queued")
                         text: qsTr("Cancel")
                         flat: true

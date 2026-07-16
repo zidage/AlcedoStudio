@@ -1375,6 +1375,7 @@ def_ui_test(AlbumBackendBackgroundTaskTest album_backend_background_task_test.cp
 def_ui_test(AlbumBackendInteractionPolicyTest album_backend_interaction_policy_test.cpp)
 def_ui_test(AlbumBackendDbWriteBarrierTest album_backend_db_write_barrier_test.cpp)
 def_ui_test(ApplicationModuleHostLifecycleTest application_module_host_lifecycle_test.cpp)
+def_ui_test(ApplicationModuleHostShutdownTest application_module_host_shutdown_test.cpp)
 
 # Phase 0: deterministic editor RHI contracts (backend parse, fixtures, lease schema).
 add_executable(EditorRhiContractsTest
@@ -1439,6 +1440,36 @@ target_compile_definitions(GlobalSearchDialogQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
 gtest_discover_tests(GlobalSearchDialogQmlTest TEST_PREFIX "GlobalSearchDialogQmlTest.")
+
+add_executable(MainQmlWorkflowTest
+    ui/main_qml_workflow_test.cpp
+    ui/widget_test_main.cpp
+    ui/editor_dialog_stub.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(MainQmlWorkflowTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(MainQmlWorkflowTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(MainQmlWorkflowTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+gtest_discover_tests(MainQmlWorkflowTest TEST_PREFIX "MainQmlWorkflowTest.")
 
 add_executable(LanguageManagerTest
     ui/language_manager_test.cpp
@@ -1543,8 +1574,10 @@ alcedo_assign_test_category(ui ALCEDO_BUILD_UI_TESTS alcedo_tests_ui
   AlbumBackendInteractionPolicyTest
   AlbumBackendDbWriteBarrierTest
   ApplicationModuleHostLifecycleTest
+  ApplicationModuleHostShutdownTest
   EditorRhiContractsTest
   GlobalSearchDialogQmlTest
+  MainQmlWorkflowTest
   LanguageManagerTest
 )
 

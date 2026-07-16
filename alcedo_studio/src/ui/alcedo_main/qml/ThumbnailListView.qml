@@ -364,7 +364,7 @@ ListView {
                     rating: rating,
                     isHdr: isHdr
                 })
-                appModules.editor.OpenEditor(elementId, imageId)
+                appModules.workspaceRouter.openEditor(elementId, imageId)
             }
         }
     }

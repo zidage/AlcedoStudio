@@ -13,6 +13,7 @@
 #include <QOpenGLContext>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <qqml.h>
 #include <QQuickStyle>
 #include <QString>
 #include <QtGlobal>
@@ -44,6 +45,45 @@
 #endif
 
 namespace {
+
+void RegisterApplicationModuleTypes() {
+  qmlRegisterUncreatableType<alcedo::ui::ProjectModule>(
+      "Alcedo.Main", 1, 0, "ProjectModule", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::ui::LibraryModule>(
+      "Alcedo.Main", 1, 0, "LibraryModule", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::ui::FolderController>(
+      "Alcedo.Main", 1, 0, "FolderController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::ui::ImageController>(
+      "Alcedo.Main", 1, 0, "ImageController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::ui::StatsEngine>(
+      "Alcedo.Main", 1, 0, "StatsEngine", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::ui::SearchController>(
+      "Alcedo.Main", 1, 0, "SearchController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::ui::ImportExportHandler>(
+      "Alcedo.Main", 1, 0, "ImportExportHandler", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::ui::NikonHeRecoveryController>(
+      "Alcedo.Main", 1, 0, "NikonHeRecoveryController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::ui::EditorController>(
+      "Alcedo.Main", 1, 0, "EditorController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::ui::BackgroundTaskController>(
+      "Alcedo.Main", 1, 0, "BackgroundTaskController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::ui::InteractionPolicyController>(
+      "Alcedo.Main", 1, 0, "InteractionPolicyController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::ui::ModelDownloadController>(
+      "Alcedo.Main", 1, 0, "ModelDownloadController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::ui::SemanticGenerationController>(
+      "Alcedo.Main", 1, 0, "SemanticGenerationController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::AiProviderProfileController>(
+      "Alcedo.Main", 1, 0, "AiProviderProfileController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::ui::ImageAnalysisController>(
+      "Alcedo.Main", 1, 0, "ImageAnalysisController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::ui::AdjustmentTransferController>(
+      "Alcedo.Main", 1, 0, "AdjustmentTransferController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::ui::EditorSessionController>(
+      "Alcedo.Main", 1, 0, "EditorSessionController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::ui::WorkspaceRouter>(
+      "Alcedo.Main", 1, 0, "WorkspaceRouter", "Owned by ApplicationModuleHost");
+}
 
 auto FindArgValue(int argc, char** argv, std::string_view option_name)
     -> std::optional<std::string_view> {
@@ -178,6 +218,7 @@ int main(int argc, char* argv[]) {
 #endif
 
   alcedo::ui::ApplicationModuleHost app_modules;
+  RegisterApplicationModuleTypes();
 
   QQmlApplicationEngine engine;
   engine.addImportPath("qrc:/");

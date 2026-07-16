@@ -172,6 +172,41 @@ TEST_F(DeleteTests, DeleteImages_RemovesImageAndRelatedRows) {
   EXPECT_EQ(shownCountAfterDelete, 0);
 }
 
+TEST_F(DeleteTests, DeleteTargetsRejectsUnacknowledgedImportAtDirectEntryPoint) {
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend, "delete_direct_import_guard"));
+
+  const auto source_images = CollectRawTestImages("airplane", 1);
+  if (source_images.empty()) {
+    GTEST_SKIP() << "No RAW images available in raw/airplane/";
+  }
+
+  const auto import_dir = temp_dir_ / "direct_delete_import_dataset";
+  std::filesystem::create_directories(import_dir);
+  std::vector<std::filesystem::path> import_paths;
+  import_paths.reserve(32);
+  for (int i = 0; i < 32; ++i) {
+    const auto destination = import_dir / ("direct_delete_" + std::to_string(i) +
+                                           source_images.front().extension().string());
+    std::filesystem::copy_file(source_images.front(), destination,
+                                std::filesystem::copy_options::overwrite_existing);
+    import_paths.push_back(destination);
+  }
+
+  backend.import_export()->StartImport(PathsToQStringList(import_paths));
+
+  ImageController::DeleteTarget target;
+  target.element_id_ = 1;
+  const auto result = backend.images()->DeleteTargets({target});
+
+  EXPECT_FALSE(result.success_);
+  EXPECT_TRUE(result.message_.contains(QStringLiteral("import")))
+      << result.message_.toStdString();
+
+  backend.import_export()->CancelImport();
+  WaitForImportFinished(backend);
+}
+
 TEST_F(DeleteTests, DeleteImages_BestEffortPartialFailure) {
   QVariantMap result;
 

@@ -64,10 +64,15 @@ LibraryModule::LibraryModule(ProjectModule* project, QObject* parent)
 }
 
 void LibraryModule::BindCollaborators(FolderController* folders, SearchController* search,
-                                      StatsEngine* stats) {
+                                       StatsEngine* stats) {
   folders_ = folders;
   search_ = search;
   stats_ = stats;
+}
+
+void LibraryModule::SetSemanticLabelProvider(
+    std::function<QString(sl_element_id_t)> provider) {
+  semantic_label_provider_ = std::move(provider);
 }
 
 void LibraryModule::NotifyThumbnailsChanged() {
@@ -348,7 +353,7 @@ void LibraryModule::AddOrUpdateAlbumItem(sl_element_id_t elementId, image_id_t i
   if (item->extension.isEmpty()) {
     item->extension = ExtensionFromFileName(item->file_name);
   }
-  item->tags = project_->SemanticLabelDisplayText(elementId);
+  item->tags = semantic_label_provider_ ? semantic_label_provider_(elementId) : QString{};
 }
 
 

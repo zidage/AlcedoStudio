@@ -21,7 +21,7 @@ Dialog {
     property Item blurSource: null
     property var analysisController: null
     property var profileController: null
-    property var backend: null
+    property var imageController: null
     property var selectionTargets: []
     property bool backendInteractive: false
     // Phase 2: the interaction-policy controller. The Start button binds to its
@@ -278,29 +278,26 @@ Dialog {
     }
 
     function hasExistingDescription(target) {
-        if (!backend || !target) {
+        if (!imageController || !target) {
             return false
         }
-        const images = backend.images ? backend.images : backend
-        const result = images.GetImageDescription(Number(target.elementId))
+        const result = imageController.GetImageDescription(Number(target.elementId))
         return result && result.hasDescription === true
     }
 
     function hasExistingRating(target) {
-        if (!backend || !target) {
+        if (!imageController || !target) {
             return false
         }
-        const images = backend.images ? backend.images : backend
-        const result = images.GetImageRating(Number(target.elementId), Number(target.imageId))
+        const result = imageController.GetImageRating(Number(target.elementId), Number(target.imageId))
         return result && result.success === true && Number(result.rating) > 0
     }
 
     function hasExistingReason(target) {
-        if (!backend || !target) {
+        if (!imageController || !target) {
             return false
         }
-        const images = backend.images ? backend.images : backend
-        const result = images.GetImageRatingReasons(Number(target.elementId))
+        const result = imageController.GetImageRatingReasons(Number(target.elementId))
         return result && result.hasReasons === true
     }
 
@@ -547,7 +544,10 @@ Dialog {
         }
     }
 
-    background: Item {}
+    background: Rectangle {
+        radius: 0
+        color: "transparent"
+    }
 
     contentItem: Item {
         implicitWidth: root.width

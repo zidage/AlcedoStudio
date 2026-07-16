@@ -7,6 +7,7 @@ import QtQuick.Effects
 
 ApplicationWindow {
     id: root
+    objectName: "mainWindow"
     width: 1200
     height: 760
     minimumWidth: 960
@@ -792,6 +793,7 @@ ApplicationWindow {
 
     SettingDialog {
         id: settingsDialog
+        objectName: "settingsDialog"
         z: 30
         blurSource: mainContent
         cornerRadius: root.windowCornerRadius
@@ -895,7 +897,7 @@ ApplicationWindow {
 
     Connections {
         target: languageManager
-        function onLanguageChanged() {
+        function onEffectiveLanguageCodeChanged() {
             root.refreshFocusedImageInspection()
         }
     }
@@ -933,9 +935,10 @@ ApplicationWindow {
 
     AdvancedContentAnalysisDialog {
         id: advancedContentAnalysisDialog
+        objectName: "advancedContentAnalysisDialog"
         parent: Overlay.overlay
         blurSource: mainContent
-        backend: appModules
+        imageController: appModules.images
         analysisController: appModules.imageAnalysis
         profileController: appModules.aiProviderProfiles
         interactionPolicy: appModules.interactionPolicy
@@ -1456,11 +1459,12 @@ ApplicationWindow {
             spacing: 12
 
             CollectionsPanel {
+                objectName: "collectionsPanel"
                 Layout.preferredWidth: root.leftPaneWidth
                 Layout.minimumWidth: root.leftPaneWidth
                 Layout.maximumWidth: root.leftPaneWidth
                 Layout.fillHeight: true
-                backend: appModules
+                folderController: appModules.folders
                 theme: root
                 backendInteractive: root.backendInteractive
                 selectedCount: root.selectedCount
@@ -1906,7 +1910,9 @@ ApplicationWindow {
 
         GlobalSearchDialog {
             id: globalSearchDialog
-            backend: appModules
+            objectName: "globalSearchDialog"
+            searchController: appModules.search
+            interactionPolicyController: appModules.interactionPolicy
             theme: root
             blurSource: mainContent
             cornerRadius: root.windowCornerRadius

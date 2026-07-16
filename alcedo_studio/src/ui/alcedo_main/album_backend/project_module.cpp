@@ -21,14 +21,9 @@
 #ifdef HAVE_OPENCL
 #include "opencl/opencl_runtime.hpp"
 #endif
-#include "ui/alcedo_main/album_backend/editor_controller.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
-#include "ui/alcedo_main/album_backend/import_export.hpp"
 #include "ui/alcedo_main/album_backend/library_module.hpp"
-#include "ui/alcedo_main/album_backend/model_download_controller.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
-#include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
-#include "ui/alcedo_main/album_backend/stats_engine.hpp"
 #include "utils/cuda/cuda_driver_requirements.hpp"
 
 namespace alcedo::ui {
@@ -227,20 +222,8 @@ ProjectModule::ProjectModule(QObject* parent)
   task_status_text_ = PL_TEXT("Open or create a project to begin.");
 }
 
-void ProjectModule::BindCollaborators(
-    ImportExportHandler* import_export, EditorController* editor, LibraryModule* library,
-    FolderController* folders, StatsEngine* stats,
-    SemanticGenerationController* semantic_generation, ModelDownloadController* model_download) {
-  import_export_ = import_export;
-  editor_ = editor;
-  library_ = library;
-  folders_ = folders;
-  stats_ = stats;
-  semantic_generation_ = semantic_generation;
-  model_download_ = model_download;
-  if (editor_) {
-    editor_->InitializeEditorLuts();
-  }
+void ProjectModule::SetLifecycleHooks(ProjectLifecycleHooks hooks) {
+  lifecycle_hooks_ = std::move(hooks);
 }
 
 void ProjectModule::SetServiceMessage(const i18n::LocalizedText& message) {
@@ -248,15 +231,6 @@ void ProjectModule::SetServiceMessage(const i18n::LocalizedText& message) {
 }
 
 void ProjectModule::NotifyProjectLoadStateChanged() { emit ProjectLoadStateChanged(); }
-
-void ProjectModule::HandleProjectOpened() {
-  // reserved for future post-open hooks
-}
-
-void ProjectModule::ClearProjectUiState() {
-  handler_.ClearProjectData();
-}
-
 
 void ProjectModule::SetAcceleratorPreparationState(bool                       preparing,
                                                   const i18n::LocalizedText& status) {
@@ -670,14 +644,14 @@ bool ProjectModule::SaveProject() {
     return false;
   }
 
-  if (editor_ && editor_->editor_active()) {
-    editor_->FinalizeEditorSession(true);
-  }
+  FinalizeEditorSession();
 
   // Drop DB rows for models no longer installed locally before the metadata
   // save + packaging, then refresh the badge/counts so the open app reflects it.
   if (handler_.PurgeUninstalledSemanticModels()) {
-    if (semantic_generation_) semantic_generation_->RefreshSemanticState();
+    if (lifecycle_hooks_.refresh_semantic_state) {
+      lifecycle_hooks_.refresh_semantic_state();
+    }
   }
 
   if (!handler_.PersistCurrentProjectState()) {
@@ -728,7 +702,8 @@ void ProjectModule::SetServiceMessageForCurrentProject(const i18n::LocalizedText
 
 void ProjectModule::ScheduleIdleTaskStateReset(int delayMs) {
   QTimer::singleShot(std::max(delayMs, 0), this, [this]() {
-    if (!(import_export_ && import_export_->export_inflight()) && !task_cancel_visible_) {
+    if ((!lifecycle_hooks_.export_inflight || !lifecycle_hooks_.export_inflight()) &&
+        !task_cancel_visible_) {
       SetTaskState(PL_TEXT("No background tasks"), 0, false);
     }
   });
@@ -744,51 +719,45 @@ void ProjectModule::SetTaskState(const i18n::LocalizedText& status, int progress
 }
 
 
-void ProjectModule::QueueSemanticGenerationPrompt(std::vector<SemanticGenerationItem> items) {
-  if (semantic_generation_) semantic_generation_->QueuePrompt(std::move(items));
-}
-
-
-void ProjectModule::ResumeQueuedSemanticGenerationWorkflow() {
-  if (semantic_generation_) semantic_generation_->ResumeQueuedWorkflow();
-}
-
-
-auto ProjectModule::ActiveSemanticModelKey() const -> std::string {
-  return semantic_generation_ ? semantic_generation_->ActiveModelKey() : std::string{};
-}
-
-
-auto ProjectModule::SemanticLabelDisplayText(sl_element_id_t elementId) const -> QString {
-  return semantic_generation_ ? semantic_generation_->LabelDisplayText(elementId) : QString{};
-}
-
-
 void ProjectModule::RefreshTranslations() {
-  if (folders_ && !folders_->folder_entries().empty()) {
-    folders_->RebuildFolderView();
-  }
-  if (library_ && !library_->model().items().empty() && stats_) {
-    stats_->RebuildThumbnailView();
-  }
-  if (stats_) {
-    stats_->RefreshStats();
+  if (lifecycle_hooks_.refresh_translations) {
+    lifecycle_hooks_.refresh_translations();
   }
   emit ServiceStateChanged();
   RebuildAcceleratorOptions();
   emit AcceleratorStateChanged();
   emit TaskStateChanged();
   emit ProjectLoadStateChanged();
-  if (import_export_) {
-    emit import_export_->ImportStateChanged();
-    emit import_export_->importStateChanged();
-    emit import_export_->ExportStateChanged();
-    emit import_export_->exportStateChanged();
-  }
   emit RecentProjectsChanged();
-  if (editor_) {
-    emit editor_->EditorStateChanged();
+}
+
+void ProjectModule::HandleProjectOpened() {
+  if (lifecycle_hooks_.project_opened) {
+    lifecycle_hooks_.project_opened();
   }
+}
+
+void ProjectModule::ClearProjectUiState() {
+  if (lifecycle_hooks_.clear_project_ui_state) {
+    lifecycle_hooks_.clear_project_ui_state();
+  }
+}
+
+auto ProjectModule::ProjectSwitchBlockReason() const -> QString {
+  return lifecycle_hooks_.project_switch_block_reason
+             ? lifecycle_hooks_.project_switch_block_reason()
+             : QString{};
+}
+
+void ProjectModule::FinalizeEditorSession() {
+  if (lifecycle_hooks_.finalize_editor_session) {
+    lifecycle_hooks_.finalize_editor_session();
+  }
+}
+
+bool ProjectModule::ShouldKeepSemanticModelData(const QString& profileId) const {
+  return !lifecycle_hooks_.should_keep_semantic_model_data ||
+         lifecycle_hooks_.should_keep_semantic_model_data(profileId);
 }
 
 

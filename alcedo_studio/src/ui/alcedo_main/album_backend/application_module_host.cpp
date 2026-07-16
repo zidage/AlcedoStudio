@@ -4,546 +4,84 @@
 
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
 
-#include <algorithm>
-#include <cctype>
+#include <QCoreApplication>
+#include <QDeadlineTimer>
+#include <QEventLoop>
 #include <chrono>
-#include <cmath>
-#include <iomanip>
-#include <sstream>
 #include <string>
-#include <vector>
 
-#include "ai/ai_description.hpp"
-#include "ai/ai_rating.hpp"
-#include "image/image.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 
 namespace alcedo::ui {
 
-using namespace std::chrono_literals;
-
-constexpr auto kImageAnalysisSidecarStartupTimeout = 60s;
-
-namespace {
-
-auto TrimAscii(std::string value) -> std::string {
-  auto is_space = [](unsigned char ch) { return std::isspace(ch) != 0; };
-  while (!value.empty() && is_space(static_cast<unsigned char>(value.front()))) {
-    value.erase(value.begin());
-  }
-  while (!value.empty() && is_space(static_cast<unsigned char>(value.back()))) {
-    value.pop_back();
-  }
-  return value;
-}
-
-auto CleanContextValue(std::string value) -> std::string {
-  value = TrimAscii(std::move(value));
-  for (char& ch : value) {
-    if (ch == '\r' || ch == '\n' || ch == '\t') {
-      ch = ' ';
-    }
-  }
-  return value;
-}
-
-auto FormatOneDecimal(float value) -> std::string {
-  std::ostringstream ss;
-  ss << std::fixed << std::setprecision(1) << value;
-  std::string out = ss.str();
-  while (out.size() > 1 && out.back() == '0') {
-    out.pop_back();
-  }
-  if (!out.empty() && out.back() == '.') {
-    out.pop_back();
-  }
-  return out;
-}
-
-auto FormatShutterSpeed(std::pair<int, int> shutter) -> std::string {
-  const auto [num, den] = shutter;
-  if (num <= 0 || den <= 0) {
-    return {};
-  }
-  if (den == 1) {
-    return std::to_string(num) + "s";
-  }
-  return std::to_string(num) + "/" + std::to_string(den) + "s";
-}
-
-void AppendContextField(std::vector<std::string>* fields, std::string key, std::string value) {
-  if (fields == nullptr) {
-    return;
-  }
-  value = CleanContextValue(std::move(value));
-  if (!value.empty()) {
-    fields->push_back(std::move(key) + "=" + std::move(value));
-  }
-}
-
-auto BuildCameraContext(const ExifDisplayMetaData& exif) -> std::string {
-  std::vector<std::string> fields;
-  fields.reserve(12);
-  AppendContextField(&fields, "camera_make", exif.make_);
-  AppendContextField(&fields, "camera_model", exif.model_);
-  AppendContextField(&fields, "lens_make", exif.lens_make_);
-  AppendContextField(&fields, "lens_model", exif.lens_);
-  if (std::isfinite(exif.aperture_) && exif.aperture_ > 0.0f) {
-    AppendContextField(&fields, "aperture", "f/" + FormatOneDecimal(exif.aperture_));
-  }
-  AppendContextField(&fields, "shutter_speed", FormatShutterSpeed(exif.shutter_speed_));
-  if (exif.iso_ > 0) {
-    AppendContextField(&fields, "iso", std::to_string(exif.iso_));
-  }
-  if (std::isfinite(exif.focal_) && exif.focal_ > 0.0f) {
-    AppendContextField(&fields, "focal_length", FormatOneDecimal(exif.focal_) + "mm");
-  }
-  if (std::isfinite(exif.focal_35mm_) && exif.focal_35mm_ > 0.0f) {
-    AppendContextField(&fields, "focal_length_35mm", FormatOneDecimal(exif.focal_35mm_) + "mm");
-  }
-  if (std::isfinite(exif.focus_distance_m_) && exif.focus_distance_m_ > 0.0f) {
-    AppendContextField(&fields, "focus_distance", FormatOneDecimal(exif.focus_distance_m_) + "m");
-  }
-  if (exif.width_ > 0 && exif.height_ > 0) {
-    AppendContextField(&fields, "image_size",
-                       std::to_string(exif.width_) + "x" + std::to_string(exif.height_));
-  }
-  AppendContextField(&fields, "captured_at", exif.date_time_str_);
-  if (exif.is_hdr_) {
-    AppendContextField(&fields, "hdr", "true");
-  }
-  if (fields.empty()) {
-    return {};
-  }
-  std::ostringstream ss;
-  ss << "Camera/EXIF metadata for this image: ";
-  for (size_t i = 0; i < fields.size(); ++i) {
-    if (i != 0) {
-      ss << "; ";
-    }
-    ss << fields[i];
-  }
-  ss << ".";
-  return ss.str();
-}
-
-}  // namespace
-
-// ── Production IImageAnalysisEnvironment (no host dependency) ───────────────
-class AlbumImageAnalysisEnvironment final : public IImageAnalysisEnvironment {
- public:
-  AlbumImageAnalysisEnvironment(ProjectModule* project, SemanticGenerationController* semantic,
-                                alcedo::AiProviderProfileController* profiles,
-                                std::shared_ptr<alcedo::ImageAnalysisInFlightGate> gate)
-      : project_(project), semantic_(semantic), profiles_(profiles), gate_(std::move(gate)) {}
-
-  auto ThumbnailProvider() -> std::shared_ptr<IImageAnalysisThumbnailProvider> override {
-    if (thumbnail_provider_) {
-      return thumbnail_provider_;
-    }
-    if (!project_) {
-      return nullptr;
-    }
-    auto ts = project_->handler().thumbnail_service();
-    if (!ts) {
-      return nullptr;
-    }
-    thumbnail_provider_ = std::make_shared<ThumbnailServiceImageAnalysisProvider>(ts);
-    return thumbnail_provider_;
-  }
-
-  auto AnalysisClient() -> std::shared_ptr<IImageAnalysisClient> override {
-    if (!project_) {
-      return nullptr;
-    }
-    auto project = project_->handler().project();
-    if (!project) {
-      return nullptr;
-    }
-    auto runtime = project->GetAiSidecarRuntimeService();
-    if (!runtime) {
-      return nullptr;
-    }
-    return std::make_shared<AiSidecarRuntimeImageAnalysisClient>(runtime);
-  }
-
-  auto CredentialStore() -> std::shared_ptr<IAiCredentialStore> override {
-    return profiles_ ? profiles_->CredentialStore() : nullptr;
-  }
-
-  auto Gate() -> std::shared_ptr<ImageAnalysisInFlightGate> override { return gate_; }
-
-  auto CameraContextForItem(const ImageAnalysisItem& item) -> std::string override {
-    if (!project_ || item.image_id == 0) {
-      return {};
-    }
-    auto project = project_->handler().project();
-    if (!project) {
-      return {};
-    }
-    auto image_pool = project->GetImagePoolService();
-    if (!image_pool) {
-      return {};
-    }
-    std::string context;
-    image_pool->Read<void>(item.image_id, [&context](const std::shared_ptr<Image>& image) {
-      if (!image || !image->has_exif_display_.load()) {
-        return;
-      }
-      context = BuildCameraContext(image->exif_display_);
-    });
-    return context;
-  }
-
-  auto AcquireSidecarLease() -> std::shared_ptr<void> override {
-    if (!project_) {
-      return {};
-    }
-    auto project = project_->handler().project();
-    if (!project) {
-      return {};
-    }
-    auto runtime = project->GetAiSidecarRuntimeService();
-    return runtime ? runtime->AcquireLease() : std::shared_ptr<void>{};
-  }
-
-  auto EnsureSidecarReady(bool provider_configs_dirty, std::string* error) -> bool override {
-    (void)provider_configs_dirty;
-    if (!project_) {
-      if (error) {
-        *error = "no project is open";
-      }
-      return false;
-    }
-    auto project = project_->handler().project();
-    if (!project) {
-      if (error) {
-        *error = "no project is open";
-      }
-      return false;
-    }
-    auto runtime = project->GetAiSidecarRuntimeService();
-    if (!runtime) {
-      if (error) {
-        *error = "ai sidecar runtime service is unavailable";
-      }
-      return false;
-    }
-    if (runtime->Status().state == AiSidecarRuntimeState::kReady) {
-      return true;
-    }
-    AiSidecarRuntimeOptions options =
-        semantic_ ? semantic_->RuntimeOptionsForCurrentSidecarSnapshot(false)
-                  : AiSidecarRuntimeOptions{};
-    options.allow_download     = false;
-    options.require_model_info = false;
-    options.startup_timeout    = kImageAnalysisSidecarStartupTimeout;
-    if (!runtime->StartAndWait(options)) {
-      if (error) {
-        *error = runtime->Status().message;
-        if (error->empty()) {
-          *error = "ai sidecar failed to start";
-        }
-      }
-      return false;
-    }
-    return runtime->Status().state == AiSidecarRuntimeState::kReady;
-  }
-
-  auto EnsureSidecarReadyInteractive(bool provider_configs_dirty, std::string* error)
-      -> bool override {
-    (void)provider_configs_dirty;
-    if (!project_) {
-      if (error) {
-        *error = "no project is open";
-      }
-      return false;
-    }
-    auto project = project_->handler().project();
-    if (!project) {
-      if (error) {
-        *error = "no project is open";
-      }
-      return false;
-    }
-    auto runtime = project->GetAiSidecarRuntimeService();
-    if (!runtime) {
-      if (error) {
-        *error = "ai sidecar runtime service is unavailable";
-      }
-      return false;
-    }
-    if (runtime->Status().state == AiSidecarRuntimeState::kReady) {
-      return true;
-    }
-    AiSidecarRuntimeOptions options =
-        semantic_ ? semantic_->RuntimeOptionsForCurrentSidecarSnapshot(false)
-                  : AiSidecarRuntimeOptions{};
-    options.allow_download     = false;
-    options.require_model_info = false;
-    options.startup_timeout    = kImageAnalysisSidecarStartupTimeout;
-    if (!runtime->StartAndWaitInteractive(options)) {
-      if (error) {
-        *error = runtime->Status().message;
-        if (error->empty()) {
-          *error = "ai sidecar failed to start";
-        }
-      }
-      return false;
-    }
-    return runtime->Status().state == AiSidecarRuntimeState::kReady;
-  }
-
-  void RequestSidecarStartCancel() override {
-    if (!project_) {
-      return;
-    }
-    auto project = project_->handler().project();
-    if (!project) {
-      return;
-    }
-    auto runtime = project->GetAiSidecarRuntimeService();
-    if (runtime) {
-      runtime->RequestCancelStart();
-    }
-  }
-
- private:
-  ProjectModule*                                   project_  = nullptr;
-  SemanticGenerationController*                    semantic_ = nullptr;
-  alcedo::AiProviderProfileController*             profiles_ = nullptr;
-  std::shared_ptr<alcedo::ImageAnalysisInFlightGate> gate_;
-  std::shared_ptr<IImageAnalysisThumbnailProvider> thumbnail_provider_;
-};
-
-std::shared_ptr<IImageAnalysisEnvironment> MakeAlbumImageAnalysisEnvironment(
-    ProjectModule* project, SemanticGenerationController* semantic,
-    alcedo::AiProviderProfileController* profiles,
-    std::shared_ptr<alcedo::ImageAnalysisInFlightGate> gate) {
-  return std::make_shared<AlbumImageAnalysisEnvironment>(project, semantic, profiles,
-                                                         std::move(gate));
-}
-
-// ── Production IImageAnalysisSink ───────────────────────────────────────────
-class AlbumImageAnalysisSink final : public IImageAnalysisSink {
- public:
-  AlbumImageAnalysisSink(ProjectModule* project, ImageController* images, StatsEngine* stats,
-                         ProjectDbWriteBarrier* barrier)
-      : project_(project), images_(images), stats_(stats), queue_(*barrier) {}
-
-  static constexpr const char* kDescribeTaskId = "describe";
-  static constexpr const char* kScoreTaskId    = "rate";
-
-  bool PersistUnderstanding(const ImageAnalysisItemResult& result) override {
-    queue_.Submit([this, result] { DoPersistUnderstanding(result); });
-    return true;
-  }
-
-  size_t PersistUnderstandings(const std::vector<ImageAnalysisItemResult>& results) override {
-    const size_t n = results.size();
-    queue_.Submit([this, results] { DoPersistUnderstandings(results); });
-    return n;
-  }
-
-  bool PersistRatingReasons(const ImageAnalysisItemResult& result) override {
-    queue_.Submit([this, result] { DoPersistRatingReasons(result); });
-    return true;
-  }
-
-  bool ApplyStarRating(uint32_t elementId, uint32_t imageId, int rating) override {
-    queue_.Submit(
-        [this, elementId, imageId, rating] { DoApplyStarRating(elementId, imageId, rating); });
-    return true;
-  }
-
-  void FlushPendingStarRatings() override {
-    queue_.Submit([this] { DoFlushPendingStarRatings(); });
-  }
-
-  void NotifySearchDocumentChanged() override {
-    queue_.Submit([this] { DoNotifySearchDocumentChanged(); });
-  }
-
-  bool HasPendingWrites() const override { return queue_.IsPending(); }
-  void SetOnDrainComplete(std::function<void()> cb) override {
-    queue_.SetOnDrainComplete(std::move(cb));
-  }
-  void FlushPendingWrites() override { queue_.Drain(); }
-
- private:
-  void DoPersistUnderstanding(const ImageAnalysisItemResult& result) {
-    if (!project_) {
-      return;
-    }
-    auto project = project_->handler().project();
-    if (!project) {
-      return;
-    }
-    auto& ai = project->GetStorageService()->GetAiStorageController();
-    (void)ai.UpsertUnderstanding(MakeDescription(result));
-  }
-
-  void DoPersistUnderstandings(const std::vector<ImageAnalysisItemResult>& results) {
-    if (!project_ || results.empty()) {
-      return;
-    }
-    auto project = project_->handler().project();
-    if (!project) {
-      return;
-    }
-    std::vector<AiDescription> descriptions;
-    descriptions.reserve(results.size());
-    for (const auto& result : results) {
-      descriptions.push_back(MakeDescription(result));
-    }
-    auto& ai = project->GetStorageService()->GetAiStorageController();
-    (void)ai.UpsertUnderstandings(descriptions);
-  }
-
-  void DoPersistRatingReasons(const ImageAnalysisItemResult& result) {
-    if (!project_) {
-      return;
-    }
-    auto project = project_->handler().project();
-    if (!project) {
-      return;
-    }
-    auto&    ai = project->GetStorageService()->GetAiStorageController();
-    AiRating r;
-    r.file_id_           = result.item.element_id;
-    r.task_id_           = kScoreTaskId;
-    r.provider_id_       = result.rating.provider;
-    r.model_id_          = result.rating.model_id;
-    r.prompt_profile_id_ = result.rating.prompt_profile_id;
-    r.rendition_kind_    = result.rating.rendition.kind;
-    r.rating_            = 0;
-    r.rubric_id_         = result.rating.rubric_id;
-    r.rubric_version_    = result.rating.rubric_version;
-    r.reasons_           = result.rating.reasons;
-    r.active_            = true;
-    (void)ai.UpsertRatingReasons(r);
-  }
-
-  void DoApplyStarRating(uint32_t elementId, uint32_t imageId, int rating) {
-    if (images_) {
-      images_->ApplyStarRatingLight(elementId, imageId, rating);
-    }
-  }
-
-  void DoFlushPendingStarRatings() {
-    if (images_) {
-      images_->FlushPendingStarRatings();
-    }
-  }
-
-  void DoNotifySearchDocumentChanged() {
-    if (stats_) {
-      stats_->RebuildThumbnailView();
-    }
-  }
-
-  static auto MakeDescription(const ImageAnalysisItemResult& result) -> AiDescription {
-    AiDescription d;
-    d.file_id_           = result.item.element_id;
-    d.task_id_           = kDescribeTaskId;
-    d.provider_id_       = result.understanding.provider;
-    d.model_id_          = result.understanding.model_id;
-    d.prompt_profile_id_ = result.understanding.prompt_profile_id;
-    d.rendition_kind_    = result.understanding.rendition.kind;
-    d.caption_           = result.understanding.caption;
-    d.scene_             = result.understanding.scene;
-    d.confidence_        = result.understanding.confidence;
-    d.active_            = true;
-    d.SetTags(result.understanding.tags);
-    return d;
-  }
-
-  ProjectModule*           project_ = nullptr;
-  ImageController*         images_  = nullptr;
-  StatsEngine*             stats_   = nullptr;
-  AnalysisResultWriteQueue queue_;
-};
-
-std::shared_ptr<IImageAnalysisSink> MakeAlbumImageAnalysisSink(ProjectModule* project,
-                                                               ImageController* images,
-                                                               StatsEngine* stats,
-                                                               ProjectDbWriteBarrier* barrier) {
-  return std::make_shared<AlbumImageAnalysisSink>(project, images, stats, barrier);
-}
-
 // ── ApplicationModuleHost ───────────────────────────────────────────────────
 
-auto ApplicationModuleHost::ConstructionOrder() -> std::vector<std::string> {
-  return {
-      "BackgroundTaskController",
-      "InteractionPolicyController",
-      "ModelDownloadService",
-      "ProjectModule",
-      "LibraryModule",
-      "FolderController",
-      "ImageController",
-      "StatsEngine",
-      "SearchController",
-      "ModelDownloadController",
-      "AiProviderProfileController",
-      "SemanticGenerationController",
-      "ImageAnalysisInFlightGate",
-      "ProjectDbWriteBarrier",
-      "ImageAnalysisSink",
-      "ImageAnalysisController",
-      "ImportExportHandler",
-      "NikonHeRecoveryController",
-      "EditorController",
-      "AdjustmentTransferController",
-  };
-}
-
-auto ApplicationModuleHost::DestructionOrder() -> std::vector<std::string> {
-  auto order = ConstructionOrder();
-  std::reverse(order.begin(), order.end());
-  return order;
-}
-
-ApplicationModuleHost::ApplicationModuleHost(QObject* parent) : QObject(parent) {
-  // Construction dependency order (see ConstructionOrder()).
+ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver observer)
+    : QObject(parent), lifecycle_observer_(std::move(observer)) {
   background_tasks_    = std::make_unique<BackgroundTaskController>();
+  RecordConstruction("BackgroundTaskController", background_tasks_.get());
   interaction_policy_  = std::make_unique<InteractionPolicyController>(background_tasks_.get(), this);
+  RecordConstruction("InteractionPolicyController", interaction_policy_.get());
   model_download_service_ = std::make_unique<alcedo::ModelDownloadService>();
+  RecordConstruction("ModelDownloadService", model_download_service_.get());
   project_             = std::make_unique<ProjectModule>(this);
+  RecordConstruction("ProjectModule", project_.get());
   library_             = std::make_unique<LibraryModule>(project_.get(), this);
+  RecordConstruction("LibraryModule", library_.get());
   folders_ =
       std::make_unique<FolderController>(project_.get(), library_.get(), project_.get(), this);
+  RecordConstruction("FolderController", folders_.get());
   images_ = std::make_unique<ImageController>(project_.get(), library_.get(), folders_.get(),
                                               project_.get(), this);
+  RecordConstruction("ImageController", images_.get());
   stats_  = std::make_unique<StatsEngine>(project_.get(), library_.get(), folders_.get(), this);
+  RecordConstruction("StatsEngine", stats_.get());
   search_ = std::make_unique<SearchController>(project_.get(), library_.get(), folders_.get(),
                                                stats_.get(), this);
+  RecordConstruction("SearchController", search_.get());
   model_download_ = std::make_unique<ModelDownloadController>(*model_download_service_,
                                                               background_tasks_.get(), this);
+  RecordConstruction("ModelDownloadController", model_download_.get());
   ai_provider_profiles_ = std::make_unique<alcedo::AiProviderProfileController>(this);
+  RecordConstruction("AiProviderProfileController", ai_provider_profiles_.get());
   semantic_generation_  = std::make_unique<SemanticGenerationController>(
       project_.get(), library_.get(), model_download_.get(), background_tasks_.get(),
       project_.get(), ai_provider_profiles_.get(), this);
+  RecordConstruction("SemanticGenerationController", semantic_generation_.get());
   image_analysis_gate_ = std::make_shared<alcedo::ImageAnalysisInFlightGate>();
+  RecordConstruction("ImageAnalysisInFlightGate", image_analysis_gate_.get());
   db_write_barrier_    = std::make_unique<ProjectDbWriteBarrier>();
+  RecordConstruction("ProjectDbWriteBarrier", db_write_barrier_.get());
   image_analysis_sink_ =
       MakeAlbumImageAnalysisSink(project_.get(), images_.get(), stats_.get(), db_write_barrier_.get());
+  RecordConstruction("ImageAnalysisSink", image_analysis_sink_.get());
   image_analysis_ = std::make_unique<ImageAnalysisController>(
       MakeAlbumImageAnalysisEnvironment(project_.get(), semantic_generation_.get(),
                                         ai_provider_profiles_.get(), image_analysis_gate_),
       ai_provider_profiles_.get(), image_analysis_sink_, background_tasks_.get());
+  RecordConstruction("ImageAnalysisController", image_analysis_.get());
   import_export_ = std::make_unique<ImportExportHandler>(
       project_.get(), library_.get(), folders_.get(), project_.get(), db_write_barrier_.get(), this);
+  RecordConstruction("ImportExportHandler", import_export_.get());
   nikon_he_recovery_ = std::make_unique<NikonHeRecoveryController>(
       project_.get(), images_.get(), project_.get(), this);
+  RecordConstruction("NikonHeRecoveryController", nikon_he_recovery_.get());
   editor_ = std::make_unique<EditorController>(project_.get(), library_.get(), this);
+  RecordConstruction("EditorController", editor_.get());
   adjustment_transfer_ = std::make_unique<AdjustmentTransferController>(
       project_.get(), library_.get(), import_export_.get(), this);
+  RecordConstruction("AdjustmentTransferController", adjustment_transfer_.get());
+  editor_session_ = std::make_unique<EditorSessionController>(editor_.get(), this);
+  RecordConstruction("EditorSessionController", editor_session_.get());
+  workspace_router_ = std::make_unique<WorkspaceRouter>(editor_session_.get(), this);
+  RecordConstruction("WorkspaceRouter", workspace_router_.get());
 
-  // Late collaborator binding (breaks residual construction cycles).
-  project_->BindCollaborators(import_export_.get(), editor_.get(), library_.get(), folders_.get(),
-                              stats_.get(), semantic_generation_.get(), model_download_.get());
+  editor_->InitializeEditorLuts();
   library_->BindCollaborators(folders_.get(), search_.get(), stats_.get());
+  library_->SetSemanticLabelProvider(
+      [semantic = semantic_generation_.get()](sl_element_id_t element_id) {
+        return semantic ? semantic->LabelDisplayText(element_id) : QString{};
+      });
   folders_->BindCollaborators(stats_.get(), search_.get(), import_export_.get());
   images_->BindCollaborators(stats_.get(), import_export_.get(), editor_.get(),
                              semantic_generation_.get(), interaction_policy_.get());
@@ -552,6 +90,109 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent) : QObject(parent) 
   import_export_->BindCollaborators(stats_.get(), nikon_he_recovery_.get(),
                                     semantic_generation_.get());
   nikon_he_recovery_->BindCollaborators(import_export_.get(), semantic_generation_.get());
+
+  ProjectLifecycleHooks lifecycle_hooks;
+  lifecycle_hooks.project_switch_block_reason = [import_export = import_export_.get()] {
+    if (import_export && import_export->current_import_job() &&
+        !import_export->current_import_job()->IsCancelationAcked()) {
+      return QStringLiteral("Cannot switch project while an import is running.");
+    }
+    if (import_export && import_export->export_inflight()) {
+      return QStringLiteral("Cannot switch project while export is running.");
+    }
+    return QString{};
+  };
+  lifecycle_hooks.finalize_editor_session = [editor = editor_.get()] {
+    if (editor && editor->editor_active()) {
+      editor->FinalizeEditorSession(true);
+    }
+  };
+  lifecycle_hooks.clear_project_ui_state = [library = library_.get(), folders = folders_.get(),
+                                            import_export = import_export_.get()] {
+    if (library) {
+      library->thumbs().ReleaseVisibleThumbnailPins();
+      library->view_state().all_images_.clear();
+      library->view_state().total_count_ = 0;
+      library->model().resetModel({}, 0);
+    }
+    if (folders) {
+      folders->ClearState();
+    }
+    if (import_export) {
+      import_export->ClearImportTarget();
+    }
+    if (library) {
+      library->NotifyThumbnailsChanged();
+      library->NotifyCountsChanged();
+    }
+    if (folders) {
+      emit folders->FoldersChanged();
+      emit folders->FolderSelectionChanged();
+      emit folders->folderSelectionChanged();
+    }
+  };
+  lifecycle_hooks.project_opened = [library = library_.get(), folders = folders_.get(),
+                                    stats = stats_.get(), import_export = import_export_.get(),
+                                    semantic = semantic_generation_.get()] {
+    const auto preferred_folder_path = folders ? folders->current_folder_path()
+                                               : std::filesystem::path{};
+    if (import_export) {
+      import_export->ResetExportState();
+    }
+    if (library) {
+      library->ReloadFolderTree(preferred_folder_path);
+    }
+    if (stats) {
+      stats->ClearFilters();
+    }
+    if (library) {
+      library->ReloadCurrentFolder();
+    }
+    if (semantic) {
+      semantic->RefreshSemanticState();
+    }
+    if (stats) {
+      emit stats->StatsFilterChanged();
+    }
+    if (library) {
+      library->ApplyThumbnailDiskCacheSettingsToService();
+    }
+  };
+  lifecycle_hooks.should_keep_semantic_model_data =
+      [model_download = model_download_.get()](const QString& profile_id) {
+        return model_download && model_download->ShouldKeepSemanticModelData(profile_id);
+      };
+  lifecycle_hooks.refresh_semantic_state = [semantic = semantic_generation_.get()] {
+    if (semantic) {
+      semantic->RefreshSemanticState();
+    }
+  };
+  lifecycle_hooks.export_inflight = [import_export = import_export_.get()] {
+    return import_export && import_export->export_inflight();
+  };
+  lifecycle_hooks.refresh_translations = [folders = folders_.get(), library = library_.get(),
+                                          stats = stats_.get(), import_export = import_export_.get(),
+                                          editor = editor_.get()] {
+    if (folders && !folders->folder_entries().empty()) {
+      folders->RebuildFolderView();
+    }
+    if (library && !library->model().items().empty() && stats) {
+      stats->RebuildThumbnailView();
+    }
+    if (stats) {
+      stats->RefreshStats();
+    }
+    if (import_export) {
+      emit import_export->ImportStateChanged();
+      emit import_export->importStateChanged();
+      emit import_export->ExportStateChanged();
+      emit import_export->exportStateChanged();
+    }
+    if (editor) {
+      emit editor->EditorStateChanged();
+    }
+  };
+  project_->SetLifecycleHooks(std::move(lifecycle_hooks));
 
   db_write_barrier_->SetOnRelease([this] {
     if (image_analysis_sink_) {
@@ -566,9 +207,10 @@ void ApplicationModuleHost::ShutdownModules() {
   }
   shutting_down_ = true;
 
-  db_write_barrier_->SetOnRelease({});
-
   try {
+    if (background_tasks_) {
+      background_tasks_->CancelAll();
+    }
     if (semantic_generation_) {
       semantic_generation_->CancelGeneration();
     }
@@ -582,10 +224,21 @@ void ApplicationModuleHost::ShutdownModules() {
       editor_->FinalizeEditorSession(true);
     }
     if (import_export_) {
-      auto job = import_export_->current_import_job();
-      if (job) {
-        job->canceled_.store(true);
-      }
+      import_export_->CancelImport();
+    }
+
+    // Deliver cancellation/finalization callbacks while every module is still
+    // alive. Export is a wait-for-finish task; its completion releases the DB
+    // barrier and the installed callback drains analysis results immediately.
+    const QDeadlineTimer deadline(15000);
+    while (((background_tasks_ && background_tasks_->RunningCount() > 0) ||
+            (import_export_ &&
+             (import_export_->ImportRunning() || import_export_->export_inflight()))) &&
+           !deadline.hasExpired()) {
+      QCoreApplication::processEvents(QEventLoop::AllEvents, 25);
+    }
+    if (image_analysis_sink_ && (!db_write_barrier_ || !db_write_barrier_->IsHeld())) {
+      image_analysis_sink_->FlushPendingWrites();
     }
     if (project_) {
       auto psvc = project_->handler().pipeline_service();
@@ -605,7 +258,56 @@ void ApplicationModuleHost::ShutdownModules() {
 
 ApplicationModuleHost::~ApplicationModuleHost() {
   ShutdownModules();
-  // unique_ptr members destroy in reverse declaration order automatically.
+
+  // Destroy explicitly so the lifecycle observer records the actual object
+  // lifetime, including non-QObject infrastructure, and so dependent modules
+  // are visibly torn down before the services they reference.
+  auto destroy = [this](auto& pointer, const char* type_name) {
+    const void* object = pointer.get();
+    pointer.reset();
+    RecordDestruction(type_name, object);
+  };
+  auto destroy_shared = [this](auto& pointer, const char* type_name) {
+    const void* object = pointer.get();
+    pointer.reset();
+    RecordDestruction(type_name, object);
+  };
+  destroy(workspace_router_, "WorkspaceRouter");
+  destroy(editor_session_, "EditorSessionController");
+  destroy(adjustment_transfer_, "AdjustmentTransferController");
+  destroy(editor_, "EditorController");
+  destroy(nikon_he_recovery_, "NikonHeRecoveryController");
+  destroy(import_export_, "ImportExportHandler");
+  destroy(image_analysis_, "ImageAnalysisController");
+  destroy_shared(image_analysis_sink_, "ImageAnalysisSink");
+  destroy(db_write_barrier_, "ProjectDbWriteBarrier");
+  destroy_shared(image_analysis_gate_, "ImageAnalysisInFlightGate");
+  destroy(semantic_generation_, "SemanticGenerationController");
+  destroy(ai_provider_profiles_, "AiProviderProfileController");
+  destroy(model_download_, "ModelDownloadController");
+  destroy(search_, "SearchController");
+  destroy(stats_, "StatsEngine");
+  destroy(images_, "ImageController");
+  destroy(folders_, "FolderController");
+  destroy(library_, "LibraryModule");
+  destroy(project_, "ProjectModule");
+  destroy(model_download_service_, "ModelDownloadService");
+  destroy(interaction_policy_, "InteractionPolicyController");
+  destroy(background_tasks_, "BackgroundTaskController");
+}
+
+void ApplicationModuleHost::Shutdown() { ShutdownModules(); }
+
+void ApplicationModuleHost::RecordConstruction(const char* type_name, const void* object) {
+  if (lifecycle_observer_) {
+    lifecycle_observer_(LifecycleEvent{LifecycleEvent::Kind::Constructed, type_name, object});
+  }
+}
+
+void ApplicationModuleHost::RecordDestruction(const char* type_name, const void* object) {
+  if (lifecycle_observer_) {
+    lifecycle_observer_(LifecycleEvent{LifecycleEvent::Kind::Destroyed, type_name, object});
+  }
 }
 
 }  // namespace alcedo::ui

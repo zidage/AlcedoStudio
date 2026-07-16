@@ -9,6 +9,7 @@
 #include <QVariantList>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -21,13 +22,19 @@
 
 namespace alcedo::ui {
 
-class EditorController;
-class FolderController;
-class ImportExportHandler;
-class LibraryModule;
-class ModelDownloadController;
-class SemanticGenerationController;
-class StatsEngine;
+/// Narrow lifecycle callbacks used by ProjectModule and ProjectHandler. These
+/// are behavior seams, not a service bag: project code can ask the composition
+/// root to perform one lifecycle operation without acquiring sibling modules.
+struct ProjectLifecycleHooks {
+  std::function<QString()> project_switch_block_reason;
+  std::function<void()> finalize_editor_session;
+  std::function<void()> clear_project_ui_state;
+  std::function<void()> project_opened;
+  std::function<bool(const QString&)> should_keep_semantic_model_data;
+  std::function<void()> refresh_semantic_state;
+  std::function<bool()> export_inflight;
+  std::function<void()> refresh_translations;
+};
 
 /// Project lifecycle module: open/create/save, accelerator preference, recent
 /// projects, and the legacy task status surface. Implements IUiStatusSink so
@@ -55,41 +62,14 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   explicit ProjectModule(QObject* parent = nullptr);
   ~ProjectModule() override = default;
 
-  // ── Late collaborator binding (host wires after all modules exist) ─────
-  void BindCollaborators(ImportExportHandler* import_export, EditorController* editor,
-                         LibraryModule* library, FolderController* folders, StatsEngine* stats,
-                         SemanticGenerationController* semantic_generation,
-                         ModelDownloadController*      model_download);
+  void SetLifecycleHooks(ProjectLifecycleHooks hooks);
 
-  // ── Typed accessors for sibling modules ────────────────────────────────
+  // ── Core accessors ─────────────────────────────────────────────────────
   [[nodiscard]] auto handler() -> ProjectHandler& { return handler_; }
   [[nodiscard]] auto handler() const -> const ProjectHandler& { return handler_; }
   [[nodiscard]] auto accelerator_preference() const -> AcceleratorBackendPreference {
     return accelerator_preference_;
   }
-  [[nodiscard]] auto import_export() -> ImportExportHandler* { return import_export_; }
-  [[nodiscard]] auto import_export() const -> const ImportExportHandler* {
-    return import_export_;
-  }
-  [[nodiscard]] auto editor() -> EditorController* { return editor_; }
-  [[nodiscard]] auto editor() const -> const EditorController* { return editor_; }
-  [[nodiscard]] auto library() -> LibraryModule* { return library_; }
-  [[nodiscard]] auto library() const -> const LibraryModule* { return library_; }
-  [[nodiscard]] auto folders() -> FolderController* { return folders_; }
-  [[nodiscard]] auto folders() const -> const FolderController* { return folders_; }
-  [[nodiscard]] auto stats() -> StatsEngine* { return stats_; }
-  [[nodiscard]] auto stats() const -> const StatsEngine* { return stats_; }
-  [[nodiscard]] auto semantic_generation() -> SemanticGenerationController* {
-    return semantic_generation_;
-  }
-  [[nodiscard]] auto semantic_generation() const -> const SemanticGenerationController* {
-    return semantic_generation_;
-  }
-  [[nodiscard]] auto model_download() -> ModelDownloadController* { return model_download_; }
-  [[nodiscard]] auto model_download() const -> const ModelDownloadController* {
-    return model_download_;
-  }
-
   // ── Q_PROPERTY getters ─────────────────────────────────────────────────
   bool         ServiceReady() const { return service_ready_; }
   QString      ServiceMessage() const { return service_message_text_.Render(); }
@@ -140,10 +120,9 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   void NotifyProjectLoadStateChanged();
   void HandleProjectOpened();
   void ClearProjectUiState();
-  void QueueSemanticGenerationPrompt(std::vector<SemanticGenerationItem> items);
-  void ResumeQueuedSemanticGenerationWorkflow();
-  auto ActiveSemanticModelKey() const -> std::string;
-  auto SemanticLabelDisplayText(sl_element_id_t elementId) const -> QString;
+  [[nodiscard]] auto ProjectSwitchBlockReason() const -> QString;
+  void              FinalizeEditorSession();
+  [[nodiscard]] bool ShouldKeepSemanticModelData(const QString& profileId) const;
 
  signals:
   void ServiceStateChanged();
@@ -165,14 +144,7 @@ class ProjectModule final : public QObject, public IUiStatusSink {
 
   ProjectHandler handler_;
 
-  // Bound after host constructs sibling modules (null until BindCollaborators).
-  ImportExportHandler*           import_export_        = nullptr;
-  EditorController*              editor_               = nullptr;
-  LibraryModule*                 library_              = nullptr;
-  FolderController*              folders_              = nullptr;
-  StatsEngine*                   stats_                = nullptr;
-  SemanticGenerationController*  semantic_generation_  = nullptr;
-  ModelDownloadController*       model_download_       = nullptr;
+  ProjectLifecycleHooks lifecycle_hooks_{};
 
   i18n::LocalizedText service_message_text_{};
   bool                service_ready_ = false;

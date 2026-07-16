@@ -254,7 +254,10 @@ Dialog {
         }
     }
 
-    background: Item {}
+    background: Rectangle {
+        radius: 0
+        color: "transparent"
+    }
 
     contentItem: Item {
         implicitWidth: dialog.width

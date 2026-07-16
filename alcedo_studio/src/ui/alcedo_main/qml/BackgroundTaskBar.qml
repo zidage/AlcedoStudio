@@ -101,7 +101,7 @@ Item {
             }
 
             Button {
-                visible: root.primary && root.primary.cancelable
+                visible: root.primary.cancelable === true
                         && root.primary.state === "running"
                 text: qsTr("Cancel")
                 flat: true

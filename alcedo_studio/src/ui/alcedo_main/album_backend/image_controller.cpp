@@ -762,7 +762,7 @@ auto ImageController::DeleteTargets(const std::vector<DeleteTarget>& targets)
   }
 
   auto* ie = import_export_;
-  if (ie && ie->current_import_job() && !ie && ie->current_import_job()->IsCancelationAcked()) {
+  if (ie && ie->current_import_job() && !ie->current_import_job()->IsCancelationAcked()) {
     const auto msg = PL_TEXT("Cannot delete images while import is running.");
     status_->SetTaskState(msg, 0, false);
     result.message_ = msg.Render();

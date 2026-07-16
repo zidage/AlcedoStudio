@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QString>
 #include <QVariantList>
+#include <functional>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -50,6 +51,7 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   ~LibraryModule() override = default;
 
   void BindCollaborators(FolderController* folders, SearchController* search, StatsEngine* stats);
+  void SetSemanticLabelProvider(std::function<QString(sl_element_id_t)> provider);
 
   [[nodiscard]] auto thumbs() -> ThumbnailManager& { return thumbs_; }
   [[nodiscard]] auto thumbs() const -> const ThumbnailManager& { return thumbs_; }
@@ -135,6 +137,7 @@ class LibraryModule final : public QObject, public IAlbumCatalog {
   QString thumbnail_disk_cache_root_;
   int     thumbnail_disk_cache_max_entries_  = 10000;
   int     thumbnail_disk_cache_jpeg_quality_ = 85;
+  std::function<QString(sl_element_id_t)> semantic_label_provider_{};
 };
 
 }  // namespace alcedo::ui

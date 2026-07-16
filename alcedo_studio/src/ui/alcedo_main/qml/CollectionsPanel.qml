@@ -6,7 +6,7 @@ import QtQuick.Layouts
 ColumnLayout {
     id: panel
 
-    property var backend
+    property var folderController
     property var theme
     property bool backendInteractive: false
     property int selectedCount: 0
@@ -41,10 +41,7 @@ ColumnLayout {
     }
 
     function rebuildFolderRows() {
-        const foldersObj = backend && (backend.folders && backend.folders.folders !== undefined
-                                       ? backend.folders
-                                       : backend)
-        const source = foldersObj && foldersObj.folders ? foldersObj.folders : []
+        const source = folderController && folderController.folders ? folderController.folders : []
         let rootRow = null
         const next = []
 
@@ -113,20 +110,14 @@ ColumnLayout {
             return
         }
 
-        if (!backend) {
+        if (!folderController) {
             return
         }
-
-        const folders = backend.folders && backend.folders.CreateFolder
-                        ? backend.folders : backend
-        folders.CreateFolder(trimmed)
+        folderController.CreateFolder(trimmed)
         cancelDraftCollection()
     }
 
-    readonly property var foldersModule: backend
-        ? (backend.folders && backend.folders.currentFolderId !== undefined
-           ? backend.folders : backend)
-        : null
+    readonly property var foldersModule: folderController
     readonly property bool hasSelectedCollection: foldersModule
         && Number(foldersModule.currentFolderId) !== 0
 

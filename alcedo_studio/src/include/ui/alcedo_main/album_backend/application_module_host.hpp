@@ -5,9 +5,9 @@
 #pragma once
 
 #include <QObject>
+#include <functional>
 #include <memory>
 #include <string>
-#include <vector>
 
 #include "app/ai_provider_profile.hpp"
 #include "app/image_analysis_service.hpp"
@@ -29,6 +29,8 @@
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
 #include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
+#include "ui/alcedo_main/album_backend/workspace_router.hpp"
 
 namespace alcedo::ui {
 
@@ -37,25 +39,36 @@ namespace alcedo::ui {
 /// actions or mirror module-specific state.
 class ApplicationModuleHost final : public QObject {
   Q_OBJECT
-  Q_PROPERTY(QObject* project READ ProjectObject CONSTANT)
-  Q_PROPERTY(QObject* library READ LibraryObject CONSTANT)
-  Q_PROPERTY(QObject* folders READ FoldersObject CONSTANT)
-  Q_PROPERTY(QObject* images READ ImagesObject CONSTANT)
-  Q_PROPERTY(QObject* stats READ StatsObject CONSTANT)
-  Q_PROPERTY(QObject* search READ SearchObject CONSTANT)
-  Q_PROPERTY(QObject* importExport READ ImportExportObject CONSTANT)
-  Q_PROPERTY(QObject* nikonHeRecovery READ NikonHeRecoveryObject CONSTANT)
-  Q_PROPERTY(QObject* editor READ EditorObject CONSTANT)
-  Q_PROPERTY(QObject* backgroundTasks READ BackgroundTasksObject CONSTANT)
-  Q_PROPERTY(QObject* interactionPolicy READ InteractionPolicyObject CONSTANT)
-  Q_PROPERTY(QObject* modelDownload READ ModelDownloadObject CONSTANT)
-  Q_PROPERTY(QObject* semanticGeneration READ SemanticGenerationObject CONSTANT)
-  Q_PROPERTY(QObject* aiProviderProfiles READ AiProviderProfilesObject CONSTANT)
-  Q_PROPERTY(QObject* imageAnalysis READ ImageAnalysisObject CONSTANT)
-  Q_PROPERTY(QObject* adjustmentTransfer READ AdjustmentTransferObject CONSTANT)
+  Q_PROPERTY(ProjectModule* project READ project CONSTANT)
+  Q_PROPERTY(LibraryModule* library READ library CONSTANT)
+  Q_PROPERTY(FolderController* folders READ folders CONSTANT)
+  Q_PROPERTY(ImageController* images READ images CONSTANT)
+  Q_PROPERTY(StatsEngine* stats READ stats CONSTANT)
+  Q_PROPERTY(SearchController* search READ search CONSTANT)
+  Q_PROPERTY(ImportExportHandler* importExport READ import_export CONSTANT)
+  Q_PROPERTY(NikonHeRecoveryController* nikonHeRecovery READ nikon_he_recovery CONSTANT)
+  Q_PROPERTY(EditorController* editor READ editor CONSTANT)
+  Q_PROPERTY(BackgroundTaskController* backgroundTasks READ background_tasks CONSTANT)
+  Q_PROPERTY(InteractionPolicyController* interactionPolicy READ interaction_policy CONSTANT)
+  Q_PROPERTY(ModelDownloadController* modelDownload READ model_download CONSTANT)
+  Q_PROPERTY(SemanticGenerationController* semanticGeneration READ semantic_generation CONSTANT)
+  Q_PROPERTY(alcedo::AiProviderProfileController* aiProviderProfiles READ ai_provider_profiles CONSTANT)
+  Q_PROPERTY(ImageAnalysisController* imageAnalysis READ image_analysis CONSTANT)
+  Q_PROPERTY(AdjustmentTransferController* adjustmentTransfer READ adjustment_transfer CONSTANT)
+  Q_PROPERTY(EditorSessionController* editorSession READ editor_session CONSTANT)
+  Q_PROPERTY(WorkspaceRouter* workspaceRouter READ workspace_router CONSTANT)
 
  public:
-  explicit ApplicationModuleHost(QObject* parent = nullptr);
+  struct LifecycleEvent {
+    enum class Kind { Constructed, Destroyed };
+    Kind              kind;
+    std::string       type_name;
+    const void*       object = nullptr;
+  };
+  using LifecycleObserver = std::function<void(const LifecycleEvent&)>;
+
+  explicit ApplicationModuleHost(QObject* parent = nullptr,
+                                 LifecycleObserver observer = {});
   ~ApplicationModuleHost() override;
 
   // Typed accessors (C++ / tests).
@@ -94,36 +107,26 @@ class ApplicationModuleHost final : public QObject {
     return adjustment_transfer_.get();
   }
   [[nodiscard]] auto db_write_barrier() -> ProjectDbWriteBarrier& { return *db_write_barrier_; }
+  [[nodiscard]] auto image_analysis_sink() -> IImageAnalysisSink* {
+    return image_analysis_sink_.get();
+  }
   [[nodiscard]] auto image_analysis_gate()
       -> const std::shared_ptr<alcedo::ImageAnalysisInFlightGate>& {
     return image_analysis_gate_;
   }
 
-  // QML CONSTANT property getters.
-  QObject* ProjectObject() { return project_.get(); }
-  QObject* LibraryObject() { return library_.get(); }
-  QObject* FoldersObject() { return folders_.get(); }
-  QObject* ImagesObject() { return images_.get(); }
-  QObject* StatsObject() { return stats_.get(); }
-  QObject* SearchObject() { return search_.get(); }
-  QObject* ImportExportObject() { return import_export_.get(); }
-  QObject* NikonHeRecoveryObject() { return nikon_he_recovery_.get(); }
-  QObject* EditorObject() { return editor_.get(); }
-  QObject* BackgroundTasksObject() { return background_tasks_.get(); }
-  QObject* InteractionPolicyObject() { return interaction_policy_.get(); }
-  QObject* ModelDownloadObject() { return model_download_.get(); }
-  QObject* SemanticGenerationObject() { return semantic_generation_.get(); }
-  QObject* AiProviderProfilesObject() { return ai_provider_profiles_.get(); }
-  QObject* ImageAnalysisObject() { return image_analysis_.get(); }
-  QObject* AdjustmentTransferObject() { return adjustment_transfer_.get(); }
+  [[nodiscard]] auto editor_session() -> EditorSessionController* {
+    return editor_session_.get();
+  }
+  [[nodiscard]] auto workspace_router() -> WorkspaceRouter* { return workspace_router_.get(); }
 
-  /// Deterministic construction order used by the lifecycle test.
-  /// Returns module type names in construction order.
-  [[nodiscard]] static auto ConstructionOrder() -> std::vector<std::string>;
-  /// Reverse of ConstructionOrder (destruction order).
-  [[nodiscard]] static auto DestructionOrder() -> std::vector<std::string>;
+  // Explicitly idempotent so the application can shut down modules before the
+  // QML engine is torn down. The destructor calls the same path.
+  void Shutdown();
 
  private:
+  void RecordConstruction(const char* type_name, const void* object);
+  void RecordDestruction(const char* type_name, const void* object);
   void ShutdownModules();
 
   // Owned in construction dependency order. Destroyed in reverse.
@@ -137,8 +140,8 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<StatsEngine>                       stats_;
   std::unique_ptr<SearchController>                  search_;
   std::unique_ptr<ModelDownloadController>           model_download_;
-  std::unique_ptr<SemanticGenerationController>      semantic_generation_;
   std::unique_ptr<alcedo::AiProviderProfileController> ai_provider_profiles_;
+  std::unique_ptr<SemanticGenerationController>      semantic_generation_;
   std::shared_ptr<alcedo::ImageAnalysisInFlightGate> image_analysis_gate_;
   std::unique_ptr<ProjectDbWriteBarrier>             db_write_barrier_;
   std::shared_ptr<IImageAnalysisSink>                image_analysis_sink_;
@@ -147,8 +150,11 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<NikonHeRecoveryController>         nikon_he_recovery_;
   std::unique_ptr<EditorController>                  editor_;
   std::unique_ptr<AdjustmentTransferController>      adjustment_transfer_;
+  std::unique_ptr<EditorSessionController>           editor_session_;
+  std::unique_ptr<WorkspaceRouter>                   workspace_router_;
 
-  bool shutting_down_ = false;
+  LifecycleObserver lifecycle_observer_{};
+  bool              shutting_down_ = false;
 };
 
 }  // namespace alcedo::ui

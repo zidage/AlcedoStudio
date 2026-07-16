@@ -62,7 +62,8 @@ ApplicationWindow {
             if (!item) {
                 return
             }
-            item.backend = appModules
+            item.searchController = appModules.search
+            item.interactionPolicyController = appModules.interactionPolicy
             item.theme = null
             item.blurSource = null
             item.cornerRadius = 0

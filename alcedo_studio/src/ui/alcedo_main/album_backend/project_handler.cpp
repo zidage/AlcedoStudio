@@ -12,13 +12,6 @@
 
 #include "app/project_package_service.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
-#include "ui/alcedo_main/album_backend/library_module.hpp"
-#include "ui/alcedo_main/album_backend/folder_controller.hpp"
-#include "ui/alcedo_main/album_backend/import_export.hpp"
-#include "ui/alcedo_main/album_backend/editor_controller.hpp"
-#include "ui/alcedo_main/album_backend/stats_engine.hpp"
-#include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
-#include "ui/alcedo_main/album_backend/model_download_controller.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 
 namespace alcedo::ui {
@@ -40,21 +33,13 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
     return false;
   }
 
-  auto* ie = project_module_.import_export();
-  if (ie && ie->current_import_job() && !ie->current_import_job()->IsCancelationAcked()) {
-    project_module_.SetServiceMessageForCurrentProject(
-        PL_TEXT("Cannot switch project while an import is running."));
-    return false;
-  }
-  if (ie && ie->export_inflight()) {
-    project_module_.SetServiceMessageForCurrentProject(
-        PL_TEXT("Cannot switch project while export is running."));
+  const QString switch_block_reason = project_module_.ProjectSwitchBlockReason();
+  if (!switch_block_reason.isEmpty()) {
+    project_module_.SetServiceMessageForCurrentProject(PL_TEXT("%1", switch_block_reason));
     return false;
   }
 
-  if (project_module_.editor() && project_module_.editor()->editor_active()) {
-    project_module_.editor()->FinalizeEditorSession(true);
-  }
+  project_module_.FinalizeEditorSession();
 
   project_module_.SetServiceMessageForCurrentProject((openMode == ProjectOpenMode::kCreateNew)
                                                   ? PL_TEXT("Creating project...")
@@ -225,28 +210,8 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
             (void)ph.project_->GetAiSidecarRuntimeService();
           }
 
-          const auto preferred_folder_path = self->folders()
-              ? self->folders()->current_folder_path()
-              : std::filesystem::path{};
           ph.ClearProjectData();
-          if (self->import_export()) {
-            self->import_export()->ResetExportState();
-          }
-          if (self->library()) {
-            self->library()->ReloadFolderTree(preferred_folder_path);
-          }
-          if (self->stats()) {
-            self->stats()->ClearFilters();
-          }
-          if (self->library()) {
-            self->library()->ReloadCurrentFolder();
-          }
-          if (self->semantic_generation()) {
-            self->semantic_generation()->RefreshSemanticState();
-          }
-          if (self->stats()) {
-            emit self->stats()->StatsFilterChanged();
-          }
+          self->HandleProjectOpened();
           self->SetTaskState(PL_TEXT("No background tasks"), 0, false);
 
           self->SetServiceState(
@@ -261,9 +226,6 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
                                           ? (!ph.project_package_path_.empty() ? ph.project_package_path_
                                                                                : ph.meta_path_)
                                           : result->recent_project_path_);
-          if (self->library()) {
-            self->library()->ApplyThumbnailDiskCacheSettingsToService();
-          }
           emit self->ProjectChanged();
           emit self->projectChanged();
           ph.SetProjectLoadingState(false, {});
@@ -289,9 +251,7 @@ bool ProjectHandler::PurgeUninstalledSemanticModels() {
   bool        changed = false;
   for (const auto& model : models) {
     const auto lookup = model.profile_id_.empty() ? model.model_id_ : model.profile_id_;
-    if (project_module_.model_download() &&
-        project_module_.model_download()->ShouldKeepSemanticModelData(
-            QString::fromStdString(lookup))) {
+    if (project_module_.ShouldKeepSemanticModelData(QString::fromStdString(lookup))) {
       continue;  // still installed (or unknown to the catalog) — keep its rows
     }
     // If this was the active model, deleting its SemanticModel row leaves no
@@ -377,42 +337,7 @@ void ProjectHandler::SetProjectLoadingState(bool loading, const i18n::LocalizedT
 }
 
 void ProjectHandler::ClearProjectData() {
-  if (project_module_.library()) {
-    project_module_.library()->thumbs().ReleaseVisibleThumbnailPins();
-  }
-
-  if (project_module_.library()) {
-    project_module_.library()->view_state().all_images_.clear();
-  }
-  if (project_module_.library()) {
-    project_module_.library()->view_state().total_count_ = 0;
-  }
-  if (project_module_.library()) {
-    project_module_.library()->model().resetModel({}, 0);
-  }
-  if (project_module_.folders()) {
-    project_module_.folders()->ClearState();
-  }
-  if (project_module_.import_export()) {
-    project_module_.import_export()->ClearImportTarget();
-  }
-
-  if (project_module_.library()) {
-    project_module_.library()->NotifyThumbnailsChanged();
-  }
-  
-  if (project_module_.folders()) {
-    emit project_module_.folders()->FoldersChanged();
-  }
-  if (project_module_.folders()) {
-    emit project_module_.folders()->FolderSelectionChanged();
-  }
-  if (project_module_.folders()) {
-    emit project_module_.folders()->folderSelectionChanged();
-  }
-  if (project_module_.library()) {
-    project_module_.library()->NotifyCountsChanged();
-  }
+  project_module_.ClearProjectUiState();
 }
 
 }  // namespace alcedo::ui

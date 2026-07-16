@@ -1661,6 +1661,8 @@ add_library(AlbumBackendLib STATIC
     ui/alcedo_main/album_backend/thumbnail_manager.cpp
     ui/alcedo_main/album_backend/folder_controller.cpp
     ui/alcedo_main/album_backend/image_controller.cpp
+    ui/alcedo_main/album_backend/image_analysis_environment.cpp
+    ui/alcedo_main/album_backend/image_analysis_sink.cpp
     ui/alcedo_main/album_backend/stats_engine.cpp
     ui/alcedo_main/album_backend/search_controller.cpp
     ui/alcedo_main/album_backend/semantic_generation_controller.cpp
@@ -1668,6 +1670,8 @@ add_library(AlbumBackendLib STATIC
     ui/alcedo_main/album_backend/import_export.cpp
     ui/alcedo_main/album_backend/nikon_he_recovery_controller.cpp
     ui/alcedo_main/album_backend/editor_controller.cpp
+    ui/alcedo_main/album_backend/editor_session_controller.cpp
+    ui/alcedo_main/album_backend/workspace_router.cpp
     ui/alcedo_main/album_backend/adjustment_transfer_controller.cpp
     include/ui/alcedo_main/album_backend/application_module_host.hpp
     include/ui/alcedo_main/album_backend/project_module.hpp
@@ -1691,6 +1695,8 @@ add_library(AlbumBackendLib STATIC
     include/ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp
     include/ui/alcedo_main/album_backend/nikon_he_recovery_types.hpp
     include/ui/alcedo_main/album_backend/editor_controller.hpp
+    include/ui/alcedo_main/album_backend/editor_session_controller.hpp
+    include/ui/alcedo_main/album_backend/workspace_router.hpp
     include/ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp
 )
 

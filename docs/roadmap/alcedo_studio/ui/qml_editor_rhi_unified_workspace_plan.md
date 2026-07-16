@@ -515,6 +515,90 @@ Acceptance:
   project, or unrelated modules.
 - Construction and shutdown order are covered by a deterministic lifecycle test.
 
+### Phase 1A-Fix
+
+审核范围是 `28f75d15..56b92f43`。忽略换行符和纯空白变化后，实际代码变化约为
+4,858 行增加、4,004 行删除。`alcedo_main`、`alcedo_tests_ui` 和
+`AlbumBackendCiWorkflowTest` 均能编译；本次改动相关的 105 个可运行测试全部通过，另有
+4 个测试因为缺少外部项目或 Metal 环境而跳过。常用的项目、导入、文件夹、删除、评分、
+缩略图和搜索流程目前没有发现普遍退化，但下面的问题仍需修正后才能把 Phase 1A 标为完成。
+
+- `ImageController::DeleteTargets()` 中“导入仍在运行”的判断写成了
+  `ie && ie->current_import_job() && !ie && ...`。前面已经要求 `ie` 有值，后面又要求
+  `ie` 没有值，所以这个分支永远不会执行。`DeleteImages()` 从 QML 进入时通常还会先经过
+  `InteractionPolicyController`，因此普通界面操作不一定马上暴露问题；但是
+  `NikonHeRecoveryController` 等 C++ 调用者会直接调用 `DeleteTargets()`，可以绕过前一层
+  检查。应恢复原来的 `!ie->current_import_job()->IsCancelationAcked()` 判断，并增加一个测试：
+  导入尚未结束时，从直接 C++ 入口删除图片必须被拒绝，导入确认取消后才允许删除。
+
+- 退出处理没有完成 Phase 1A 计划中写明的步骤。`ShutdownModules()` 先清除了数据库写入
+  屏障的回调，却没有调用 `image_analysis_sink_->FlushPendingWrites()`；如果导出仍占用屏障，
+  图片分析结果会留在内存队列中，随后随对象销毁而丢失。这里也没有调用
+  `background_tasks_->CancelAll()`，没有按照每个任务的退出规则等待结束，也没有等待模型
+  下载、模型启用、图片分析和导出真正停止。应先拒绝新的界面操作，再按任务各自的规则取消
+  或等待，释放数据库写入屏障，写完排队的数据，最后保存和打包项目。需要增加“导出占用
+  屏障时图片分析完成并立即退出”和“每种后台任务仍在运行时退出”的测试，确认数据已经写入，
+  回调不会在模块销毁后执行。
+
+- 新增的创建和销毁顺序测试没有观察真实对象。测试只读取
+  `ConstructionOrder()` 返回的固定字符串，再把这组字符串倒过来比较；即使构造函数和成员
+  声明已经写错，测试仍然会通过。当前就有一个实际不一致：构造时先创建
+  `AiProviderProfileController`，再创建 `SemanticGenerationController`，但头文件中的成员声明
+  顺序相反，C++ 销毁成员时会先销毁 `AiProviderProfileController`，而
+  `SemanticGenerationController` 仍保存着指向它的指针。应调整成员声明或显式按正确顺序释放，
+  并让测试通过真实对象的创建、停止和 `destroyed` 事件记录顺序，不能再用固定字符串代替。
+
+- `ApplicationModuleHost` 暴露给 QML 的 16 个模块属性全部声明成了 `QObject*`。这与 Phase 1A
+  要求的具体模块类型不符，也让 QML 工具无法在编译时检查 `appModules.project`、
+  `appModules.library` 等对象上是否真的存在某个属性或方法。应注册这些具体 C++ 类型，并把
+  `Q_PROPERTY` 和读取函数改成对应的具体指针类型。增加一个检查，读取每个属性的类型名称，
+  防止以后又退回 `QObject*`。
+
+- 原来的集中访问方式并没有真正拆开，只是从 `AlbumBackend` 转移到了 `ProjectModule`。
+  `ProjectModule::BindCollaborators()` 一次接收七个其他模块，并公开这些模块的读取函数；
+  `ProjectHandler` 再通过 `ProjectModule` 取得 library、folders、stats、editor、import/export、
+  semantic generation 和 model download。这样 `ProjectHandler` 仍然可以接触几乎全部界面模块，
+  单个模块也仍然必须等其他模块全部创建后再补指针。应把每项操作需要的少量接口直接传给
+  使用者，例如项目打开后的通知、界面状态提示和语义标签读取分别使用小接口或 Qt 信号，删除
+  `ProjectModule` 上为其他模块转发的读取函数和方法。
+
+- “模块可以用假对象单独测试”这一项没有完成。项目、文件夹、图片、导入导出、图库、统计和
+  搜索测试仍然都先创建完整的 `ApplicationModuleHost`，会同时创建项目服务、模型服务和所有
+  无关模块。现有测试只能证明整组对象放在一起时能工作，不能证明构造函数只要求了真正需要的
+  对象。应至少为 `ProjectModule`、`LibraryModule`、`FolderController`、`ImageController`、
+  `ImportExportHandler`、`StatsEngine` 和 `SearchController` 各增加直接构造测试，使用小型假对象
+  验证输入、状态变化和信号，不创建 `ApplicationModuleHost`。
+
+- `application_module_host.cpp` 仍包含约四百多行与对象创建无关的功能，包括 EXIF 文本整理、
+  AI sidecar 启动、分析结果写数据库、评分更新和搜索刷新。虽然这些代码写在几个内部类里，
+  它们仍让这个文件同时负责对象创建和具体业务。应把图片分析环境和结果写入实现移到独立文件，
+  `ApplicationModuleHost` 文件只保留创建、连接、停止和销毁对象的代码。
+
+- Phase 1A 的交付项写明创建关系应包含 `workspaceRouter` 和 `editorSession`，当前主机没有这两个
+  属性或对象。现在 QML 仍调用 `appModules.editor.OpenEditor()`，进入的还是旧
+  `EditorController` 和旧对话框流程。如果这两项确实要到 Phase 1B 和后续编辑器阶段才实现，
+  应先修改 Phase 1A 的交付说明，避免把未实现内容记为完成；否则应在 Phase 1A 补齐这两个模块
+  的最小接口、创建顺序和测试。
+
+- 一些 QML 组件仍保留了同时兼容新旧入口的判断。例如 `GlobalSearchDialog.qml` 会在
+  `backend.search` 与 `backend.searchController` 之间选择，`AdvancedContentAnalysisDialog.qml`
+  会在 `backend.images` 与 `backend` 之间选择，`CollectionsPanel.qml` 也同时接受主机和文件夹
+  模块。这会继续允许把整个 `appModules` 传给子组件，也容易让旧调用方式悄悄回来。应让这些
+  组件只接收自己需要的模块，例如只传 search、interactionPolicy、images 或 folders，并删除
+  旧入口判断。
+
+- 这次修改替换了约 260 处 QML 调用，但测试只实际加载了 `GlobalSearchDialog.qml`，没有测试
+  完整的 `Main.qml`。C++ 测试通过不能发现主窗口中属性名称写错、信号接到错误模块、弹窗打开
+  后才访问到不存在方法等问题。应增加一个可见窗口测试，使用真实 `ApplicationModuleHost`
+  加载 `Main.qml`，至少走完项目打开、文件夹切换、缩略图更新、导入状态、导出状态、图片检查、
+  搜索弹窗、设置弹窗和编辑入口，并把 QML warning 当作测试失败。
+
+- 38 个本来只需要少量修改的源文件、QML 文件和测试文件被整体改成了 CRLF。结果是普通 diff
+  显示 23,609 行增加、22,755 行删除，`git diff --check` 也会把这些行尾报告成空白问题；这正是
+  本次改动看起来超过两万行的主要原因，也掩盖了真正的代码变化。应在提交修复前恢复仓库原有
+  行尾，只保留实际修改，并去掉这次顺带加入的重复自包含头文件。清理后重新运行
+  `git diff --check`，结果必须为空。
+
 ### Phase 1B - Thin Main and workspace shell
 
 Deliverables:

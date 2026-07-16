@@ -1333,7 +1333,7 @@ Item {
                 const item = root.selectionItemForIndex(idx)
                 if (item) {
                     root.imageFocused(item)
-                    appModules.editor.OpenEditor(item.elementId, item.imageId)
+                    appModules.workspaceRouter.openEditor(item.elementId, item.imageId)
                 }
             }
         }
