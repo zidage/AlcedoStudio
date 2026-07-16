@@ -320,6 +320,55 @@ auto ConstantFromTensor(MPSGraph* graph, const nn::SafetensorsTensor& host, MPSS
   return [graph constantWithData:data shape:shape dataType:MPSDataTypeFloat32];
 }
 
+// Phase 5 experiment: feed NHWC activations with HWIO constants. Safetensors
+// store OIHW (O,I,H,W); transpose once at cold load so the graph compiler can
+// avoid an implicit OIHW→HWIO conversion on every tile. Element count is
+// unchanged; math is identical when weightsLayout is HWIO.
+[[nodiscard]] auto TransposeOihwToHwio(const nn::SafetensorsTensor& oihw, int out_c, int in_c,
+                                       int kh, int kw) -> std::vector<float> {
+  const std::size_t expected =
+      static_cast<std::size_t>(out_c) * static_cast<std::size_t>(in_c) *
+      static_cast<std::size_t>(kh) * static_cast<std::size_t>(kw);
+  if (oihw.data.size() != expected) {
+    throw std::runtime_error(
+        "Metal Neural Engine failed (stage=load): OIHW weight size mismatch for HWIO transpose");
+  }
+  std::vector<float> hwio(expected);
+  for (int o = 0; o < out_c; ++o) {
+    for (int i = 0; i < in_c; ++i) {
+      for (int h = 0; h < kh; ++h) {
+        for (int w = 0; w < kw; ++w) {
+          const std::size_t src =
+              ((((static_cast<std::size_t>(o) * static_cast<std::size_t>(in_c)) +
+                 static_cast<std::size_t>(i)) *
+                static_cast<std::size_t>(kh)) +
+               static_cast<std::size_t>(h)) *
+                  static_cast<std::size_t>(kw) +
+              static_cast<std::size_t>(w);
+          const std::size_t dst =
+              ((((static_cast<std::size_t>(h) * static_cast<std::size_t>(kw)) +
+                 static_cast<std::size_t>(w)) *
+                static_cast<std::size_t>(in_c)) +
+               static_cast<std::size_t>(i)) *
+                  static_cast<std::size_t>(out_c) +
+              static_cast<std::size_t>(o);
+          hwio[dst] = oihw.data[src];
+        }
+      }
+    }
+  }
+  return hwio;
+}
+
+auto ConstantHwioFromOihw(MPSGraph* graph, const nn::SafetensorsTensor& oihw, int out_c, int in_c,
+                          int kh, int kw) -> MPSGraphTensor* {
+  const std::vector<float> hwio = TransposeOihwToHwio(oihw, out_c, in_c, kh, kw);
+  NSData* data = [NSData dataWithBytes:hwio.data() length:hwio.size() * sizeof(float)];
+  // HWIO shape: [kernelHeight, kernelWidth, inputChannels, outputChannels]
+  MPSShape* shape = @[ @(kh), @(kw), @(in_c), @(out_c) ];
+  return [graph constantWithData:data shape:shape dataType:MPSDataTypeFloat32];
+}
+
 auto ValidConvDescriptor(NSUInteger stride_x, NSUInteger stride_y)
     -> MPSGraphConvolution2DOpDescriptor* {
   MPSGraphConvolution2DOpDescriptor* desc = [MPSGraphConvolution2DOpDescriptor
@@ -330,7 +379,7 @@ auto ValidConvDescriptor(NSUInteger stride_x, NSUInteger stride_y)
                        groups:1
                  paddingStyle:MPSGraphPaddingStyleExplicit
                    dataLayout:MPSGraphTensorNamedDataLayoutNHWC
-                weightsLayout:MPSGraphTensorNamedDataLayoutOIHW];
+                weightsLayout:MPSGraphTensorNamedDataLayoutHWIO];
   desc.paddingLeft   = 0;
   desc.paddingRight  = 0;
   desc.paddingTop    = 0;
@@ -341,8 +390,7 @@ auto ValidConvDescriptor(NSUInteger stride_x, NSUInteger stride_y)
 auto ConvBiasRelu(MPSGraph* graph, MPSGraphTensor* source, const nn::SafetensorsTensor& weight,
                   const nn::SafetensorsTensor& bias, int out_c, int in_c, int kh, int kw,
                   NSUInteger stride, bool apply_relu, NSString* name_prefix) -> MPSGraphTensor* {
-  MPSShape* weight_shape = @[ @(out_c), @(in_c), @(kh), @(kw) ];
-  MPSGraphTensor* w      = ConstantFromTensor(graph, weight, weight_shape);
+  MPSGraphTensor* w = ConstantHwioFromOihw(graph, weight, out_c, in_c, kh, kw);
   MPSGraphTensor* conv =
       [graph convolution2DWithSourceTensor:source
                              weightsTensor:w
@@ -432,9 +480,10 @@ void BuildGraph(GraphModule& module, const nn::SafetensorsTensorMap& tensors, bo
       [graph placeholderWithShape:input_shape dataType:MPSDataTypeFloat32 name:@"input"];
 
   // Pack: 2×2 stride-2 valid convolution, no bias.
+  // Host pack.weight is OIHW and already validated above; transpose to HWIO once.
   const auto& pack_w = nn::RequireF32Tensor(tensors, "pack.weight", {pack_out_ch, 3, 2, 2});
   add_bytes(pack_w);
-  MPSGraphTensor* pack_weights = ConstantFromTensor(graph, pack_w, @[ @(pack_out_ch), @3, @2, @2 ]);
+  MPSGraphTensor* pack_weights = ConstantHwioFromOihw(graph, pack_w, pack_out_ch, 3, 2, 2);
   MPSGraphTensor* x =
       [graph convolution2DWithSourceTensor:module.input_tensor
                              weightsTensor:pack_weights

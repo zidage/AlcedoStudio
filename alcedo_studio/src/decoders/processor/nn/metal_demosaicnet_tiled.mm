@@ -128,6 +128,7 @@ void EncodeTileInputImpl(id<MTLCommandBuffer> command_buffer, id<MTLTexture> cfa
   if (encoder == nil) {
     ThrowStage("tile_input", "failed to create compute encoder");
   }
+  encoder.label = @"DemosaicNet Tile Input";
   [encoder setComputePipelineState:pipeline];
   [encoder setTexture:cfa atIndex:0];
   [encoder setBuffer:tile_nhwc offset:0 atIndex:0];
@@ -154,6 +155,7 @@ void EncodeTileOutputImpl(id<MTLCommandBuffer> command_buffer, id<MTLBuffer> til
   if (encoder == nil) {
     ThrowStage("tile_output", "failed to create compute encoder");
   }
+  encoder.label = @"DemosaicNet Tile Output";
   [encoder setComputePipelineState:pipeline];
   [encoder setBuffer:tile_nhwc offset:0 atIndex:0];
   [encoder setTexture:output_rgba atIndex:0];

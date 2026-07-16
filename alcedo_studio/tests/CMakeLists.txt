@@ -503,6 +503,24 @@ if(ALCEDO_METAL_ENABLED)
   gtest_discover_tests(MetalRawNeuralTest TEST_PREFIX "MetalRawNeuralTest."
     PROPERTIES LABELS "ci_metal_runtime")
 
+  # Phase 5 development harness: full-frame Metal Neural timing and memory telemetry.
+  # Authoritative results require a Release build and the two gitignored local fixtures.
+  add_executable(MetalDemosaicNetFullFrameTiming EXCLUDE_FROM_ALL
+    perf/metal_demosaicnet_fullframe_timing.cpp
+  )
+  target_include_directories(MetalDemosaicNetFullFrameTiming PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_compile_definitions(MetalDemosaicNetFullFrameTiming PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+    $<$<CONFIG:Release>:ALCEDO_METAL_DEMOSAICNET_RELEASE_BUILD>
+  )
+  target_link_libraries(MetalDemosaicNetFullFrameTiming PRIVATE
+    RawProcessor
+    MetalDemosaicNetEntry
+    MetalDemosaicNet
+    MetalContext
+    ${ALCEDO_TEST_OPENCV_MIN_DEPS}
+  )
+
   add_executable(MetalRawStagePreviewTest raw/metal_raw_stage_preview_test.cpp)
   target_include_directories(MetalRawStagePreviewTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(MetalRawStagePreviewTest PRIVATE GTest::gtest_main EditPipeline RawProcessor ThreadPool opencv_highgui ${ALCEDO_TEST_OPENCV_MIN_DEPS})

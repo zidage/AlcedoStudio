@@ -40,7 +40,7 @@ backend.
 | Network shape | Fixed Bayer and X-Trans graphs; no runtime layer list or graph parser. |
 | Precision | FP32 only. |
 | Activation layout | NHWC inside MPSGraph. |
-| Weight layout | Use the safetensors OIHW arrays directly through MPSGraph convolution descriptors. |
+| Weight layout | Safetensors remain OIHW on disk; cold load transposes once to HWIO constants for NHWC/HWIO MPSGraph convolutions (Phase 5 measured win). |
 | Convolution padding | Explicit zero padding of zero pixels, which gives valid 3×3 convolution. |
 | Model load | Lazy on the first full-resolution Metal Neural request for that variant. |
 | Model reuse | Keep the compiled executable for the rest of the process. |
@@ -181,7 +181,7 @@ During lazy model load:
 2. validate format, architecture, depth, width, pack factor, tile fields, and tensor shapes;
 3. verify the fixed pack and unpack arrays contain the expected one-hot values;
 4. create FP32 MPSGraph constants for learned weights and bias arrays;
-5. set convolution descriptors to NHWC data and OIHW weights;
+5. transpose OIHW host weights to HWIO once and set convolution descriptors to NHWC data and HWIO weights;
 6. compile the executable for the fixed input shape;
 7. release the parser result and other temporary host storage;
 8. publish the executable only after all validation and compilation has succeeded.
@@ -662,6 +662,8 @@ Completion checks:
 
 ### Phase 5 — Measure memory and performance
 
+**Status:** In progress — baseline profiled; OIHW→HWIO cold-load transpose retained (2026-07-16).
+
 Work:
 
 - add the local full-frame timing executable;
@@ -677,6 +679,69 @@ Completion checks:
 - the hot path performs no parse, compile, or owned buffer growth;
 - the tile loop performs no host wait;
 - memory reporting separates application-owned buffers from framework allocation change.
+
+#### Phase 5 baseline profile (2026-07-16)
+
+Release target and command:
+
+```text
+cmake --build build/macos-arm-metal-ci --target MetalDemosaicNetFullFrameTiming -j4
+build/macos-arm-metal-ci/alcedo_studio/tests/MetalDemosaicNetFullFrameTiming \
+  --iterations 3 --variant both \
+  --json build/perf/metal_demosaicnet_m4_profile.json
+```
+
+Machine: Apple M4 MacBook Air, 8-core GPU, 16 GB unified memory. The timed `neural` value is the
+wall time around the tiled executor: it includes tile input, MPSGraph execution, tile output, and
+the single final host wait. It excludes RAW file IO, LibRaw unpack, model parsing/compilation,
+`ToLinearRef`, and downstream camera-RGB work.
+
+| Fixture | Tiles | Hot runs (ms) | Mean (ms) | `<500 ms` | Required reduction |
+|---|---:|---:|---:|---:|---:|
+| Bayer S5M2, 6008×4008 | 24 | 565.543, 578.095, 553.054 | **565.564** | Fail | 11.6% |
+| X-Trans X-T5, 7872×5196 | 48 | 890.123, 909.827, 896.978 | **898.976** | Fail | 44.4% |
+
+Cold and memory observations:
+
+| Variant | Parse (ms) | Compile (ms) | First Neural (ms) | Owned tile buffers | `currentAllocatedSize` after compile → after hot |
+|---|---:|---:|---:|---:|---:|
+| Bayer | 0.976 | 13.788 | 587.339 | 26,735,664 B | 242,008,064 → 241,991,680 B |
+| X-Trans | 1.627 | 5.542 | 932.068 | 52,498,224 B total with both variants resident | 540,868,608 → 540,868,608 B |
+
+Counters remained at one parse, one compile, and one input/output buffer allocation per loaded
+variant. Every hot full-frame run performed one host wait. The normal Release runs therefore show
+no hot parse/compile, no application-owned tile-buffer growth, and no wait inside the tile loop.
+
+A separate `Metal System Trace` run (`build/perf/metal_demosaicnet_m4.trace`) recorded one measured
+iteration after warm-up. In the hot Neural windows, target-process GPU execution occupied 99.9% of
+the Bayer graph span and 98.9% of the X-Trans graph span. The trace therefore does **not** support
+host submission gaps, cache work, or allocation churn as the next optimization target. MPSGraph
+also splits each tile execution into internal command buffers; the trace's MPS hardware intervals
+cover only part of the total graph work, so they must not be interpreted as idle time.
+
+**OIHW→HWIO experiment (retained, 2026-07-16):** transpose safetensors OIHW weights once during
+cold load, compile NHWC/HWIO convolutions. Deterministic host references stay within `1e-4`
+(`MetalDemosaicNetModuleTest`). Two independent 3-run Release measurements:
+
+| Fixture | Baseline mean (ms) | HWIO run1 / run2 mean (ms) | Approx. reduction | `<500 ms` |
+|---|---:|---:|---:|---|
+| Bayer S5M2 | 565.564 | 441.648 / 445.601 | ~21–22% | **Pass** |
+| X-Trans X-T5 | 898.976 | 708.995 / 707.623 | ~21% | Fail (~42% still needed) |
+
+JSON artifacts: `build/perf/metal_demosaicnet_m4_hwio_experiment.json`,
+`build/perf/metal_demosaicnet_m4_hwio_experiment_r2.json`. Hot path still shows one parse, one
+compile, one I/O allocation per variant, and one host wait per full-frame run. Application-owned
+tile buffer sizes are unchanged. The change is kept because both fixtures improve and correctness
+remains green.
+
+**Next optimization target:** further reduce the fixed MPSGraph GPU cost per tile. The weight-layout
+win did not close the X-Trans gap. Use a Shader Timeline capture to identify materialized
+bias/ReLU, residual-unpack, concatenate, and crop operations, then target the largest measured
+non-convolution materialization. Do not prioritize host-object cleanup or heap prefetching: the GPU
+is already continuously occupied. If graph-only work within the allowed design cannot deliver the
+remaining X-Trans reduction, the `500 ms` X-Trans requirement or the constraints that forbid
+precision/model/tile changes must be revisited explicitly rather than hidden by unrelated
+micro-optimizations.
 
 ### Phase 6 — Cleanup and documentation
 
@@ -726,4 +791,3 @@ Metal DemosaicNet support is complete only when all items below are true:
 - Apple, executable encoding and command-buffer behavior: <https://developer.apple.com/documentation/metalperformanceshadersgraph/mpsgraphexecutable/encode%28to%3Ainputs%3Aresults%3Aexecutiondescriptor%3A%29>
 - CUDA DemosaicNet plan: [`cuda_nn_forward_demosaicnet_plan.md`](cuda_nn_forward_demosaicnet_plan.md)
 - OpenCL DemosaicNet plan: [`opencl_nn_forward_demosaicnet_plan.md`](opencl_nn_forward_demosaicnet_plan.md)
-

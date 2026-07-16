@@ -6,6 +6,7 @@
 
 #include "decoders/processor/nn/metal_demosaicnet_cache.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <stdexcept>
@@ -18,6 +19,11 @@ namespace alcedo {
 namespace {
 
 namespace fs = std::filesystem;
+using Clock = std::chrono::steady_clock;
+
+[[nodiscard]] auto ElapsedMs(const Clock::time_point start) -> double {
+  return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+}
 
 [[nodiscard]] auto VariantFileName(MetalDemosaicNetVariant variant) -> const char* {
   switch (variant) {
@@ -174,6 +180,16 @@ auto MetalDemosaicNetModelCache::input_output_allocation_count() const -> std::u
   return input_output_allocation_count_;
 }
 
+auto MetalDemosaicNetModelCache::last_parse_ms() const -> double {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return last_parse_ms_;
+}
+
+auto MetalDemosaicNetModelCache::last_compile_ms() const -> double {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return last_compile_ms_;
+}
+
 auto MetalDemosaicNetModelCache::Bayer() const -> const MetalBayerDemosaicNet& {
   std::lock_guard<std::mutex> lock(mutex_);
   if (bayer_ == nullptr || !bayer_->ready()) {
@@ -216,6 +232,8 @@ auto MetalDemosaicNetModelCache::LoadVariantLocked(MetalDemosaicNetVariant varia
                                                    const MetalDemosaicNetLoadOptions& options)
     -> bool {
   ++load_attempt_count_;
+  last_parse_ms_   = 0.0;
+  last_compile_ms_ = 0.0;
   try {
     if (MetalContext::Instance().Device() == nullptr) {
       last_error_ = "Metal context device is null";
@@ -238,14 +256,18 @@ auto MetalDemosaicNetModelCache::LoadVariantLocked(MetalDemosaicNetVariant varia
 
     // Parse + validate + compile into a staging module. Publish only on success.
     ++parse_count_;
+    const auto parse_start = Clock::now();
     auto dto = nn::LoadSafetensors(path);
+    last_parse_ms_ = ElapsedMs(parse_start);
 
     const std::string identity = DeviceIdentityLocked() + "|" + path.string();
 
     switch (variant) {
       case MetalDemosaicNetVariant::Bayer: {
         auto module = std::make_unique<MetalBayerDemosaicNet>();
+        const auto compile_start = Clock::now();
         module->LoadAndCompile(dto, MetalContext::Instance().Device());
+        last_compile_ms_ = ElapsedMs(compile_start);
         compile_count_ += module->compile_count();
         input_output_allocation_count_ += module->input_output_allocation_count();
         bayer_          = std::move(module);
@@ -254,7 +276,9 @@ auto MetalDemosaicNetModelCache::LoadVariantLocked(MetalDemosaicNetVariant varia
       }
       case MetalDemosaicNetVariant::XTrans: {
         auto module = std::make_unique<MetalXTransDemosaicNet>();
+        const auto compile_start = Clock::now();
         module->LoadAndCompile(dto, MetalContext::Instance().Device());
+        last_compile_ms_ = ElapsedMs(compile_start);
         compile_count_ += module->compile_count();
         input_output_allocation_count_ += module->input_output_allocation_count();
         xtrans_          = std::move(module);

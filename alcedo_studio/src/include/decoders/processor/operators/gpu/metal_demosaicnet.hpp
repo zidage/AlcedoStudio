@@ -49,6 +49,15 @@ struct NeuralDemosaicResult {
   std::size_t tile_count     = 0;
 };
 
+struct NeuralDemosaicTelemetry {
+  double        load_ms              = 0.0;
+  double        output_allocation_ms = 0.0;
+  double        tiled_execution_ms   = 0.0;
+  double        total_ms             = 0.0;
+  std::size_t   tile_count           = 0;
+  std::uint64_t host_wait_count      = 0;
+};
+
 // Student-tiled Metal MPSGraph Neural demosaic with crop-sized assembly.
 //
 // Input:  R32FLOAT linear CFA after ToLinearRef (and optional ClampTexture). Never modified.
@@ -76,6 +85,7 @@ void ResetMetalNeuralPathCountersForTest();
 // Always zero on the product path (Metal never soft-fails to Legacy). Present so tests can
 // assert the hard-fail contract explicitly.
 [[nodiscard]] auto MetalNeuralLegacyFallbackCountForTest() noexcept -> std::uint64_t;
+[[nodiscard]] auto LastMetalNeuralTelemetryForTest() -> NeuralDemosaicTelemetry;
 
 }  // namespace alcedo::metal
 

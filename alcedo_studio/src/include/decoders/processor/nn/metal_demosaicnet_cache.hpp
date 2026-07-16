@@ -62,6 +62,8 @@ class MetalDemosaicNetModelCache {
   [[nodiscard]] auto compile_count() const -> std::uint64_t;
   [[nodiscard]] auto load_attempt_count() const -> std::uint64_t;
   [[nodiscard]] auto input_output_allocation_count() const -> std::uint64_t;
+  [[nodiscard]] auto last_parse_ms() const -> double;
+  [[nodiscard]] auto last_compile_ms() const -> double;
 
   // Precondition: EnsureLoaded succeeded for that variant.
   [[nodiscard]] auto Bayer() const -> const MetalBayerDemosaicNet&;
@@ -89,6 +91,8 @@ class MetalDemosaicNetModelCache {
   std::uint64_t                              compile_count_               = 0;
   std::uint64_t                              load_attempt_count_          = 0;
   std::uint64_t                              input_output_allocation_count_ = 0;
+  double                                     last_parse_ms_               = 0.0;
+  double                                     last_compile_ms_             = 0.0;
 };
 
 }  // namespace alcedo
