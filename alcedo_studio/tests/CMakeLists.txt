@@ -424,6 +424,27 @@ if(ALCEDO_METAL_ENABLED)
   gtest_discover_tests(MetalDemosaicNetGraphTest TEST_PREFIX "MetalDemosaicNetGraphTest."
     PROPERTIES LABELS "ci_metal_runtime")
 
+  # Phase 2: fixed MPSGraph modules, lazy cache, full student reference pairs.
+  add_executable(MetalDemosaicNetModuleTest
+    ml_ops/metal_demosaicnet_module_test.mm
+  )
+  target_include_directories(MetalDemosaicNetModuleTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_compile_options(MetalDemosaicNetModuleTest PRIVATE
+    $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
+  )
+  target_compile_definitions(MetalDemosaicNetModuleTest PRIVATE
+    ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/models"
+  )
+  target_link_libraries(MetalDemosaicNetModuleTest PRIVATE
+    GTest::gtest_main
+    MetalDemosaicNet
+    MetalContext
+    NnSafetensors
+    alcedo::metal_cpp
+  )
+  gtest_discover_tests(MetalDemosaicNetModuleTest TEST_PREFIX "MetalDemosaicNetModuleTest."
+    PROPERTIES LABELS "ci_metal_runtime")
+
   add_executable(ImageBufferMetalTest image/image_buffer_metal_test.cpp)
   target_include_directories(ImageBufferMetalTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(ImageBufferMetalTest PRIVATE GTest::gtest_main ImageBuffer MetalImage ${ALCEDO_TEST_OPENCV_MIN_DEPS})
@@ -1386,6 +1407,7 @@ alcedo_assign_test_category(gpu ALCEDO_BUILD_GPU_TESTS alcedo_tests_gpu
   DemosaicNetPerfHarness
   MetalUtilsTest
   MetalDemosaicNetGraphTest
+  MetalDemosaicNetModuleTest
   MetalRawOpsTest
   ODTCudaSmokeTest
   FilmGrainCudaStageTest
@@ -1482,6 +1504,7 @@ alcedo_assign_test_category(ci_raw ALCEDO_BUILD_CI_TESTS alcedo_tests_ci_raw
 alcedo_assign_test_category(ci_metal ALCEDO_BUILD_CI_TESTS alcedo_tests_ci_metal
   MetalUtilsTest
   MetalDemosaicNetGraphTest
+  MetalDemosaicNetModuleTest
   MetalRawOpsTest
   MetalRawStagePreviewTest
   MetalFullPipelinePreviewTest

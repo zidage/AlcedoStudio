@@ -457,6 +457,38 @@ if(ALCEDO_METAL_ENABLED)
     )
     add_dependencies(MetalGeometryUtils MetalGeometryUtilsShaders)
     target_compile_definitions(MetalGeometryUtils PRIVATE ALCEDO_METAL_GEOMETRY_UTILS_METALLIB_PATH="${METAL_GEOMETRY_UTILS_METALLIB}")
+
+    # Fixed Metal MPSGraph DemosaicNet modules and lazy model cache (Phase 2).
+    # Tile IO and RAW entry land in later phases as MetalDemosaicNetEntry.
+    def_library(MetalDemosaicNet
+        SOURCES
+            decoders/processor/nn/metal_demosaicnet_module.mm
+            decoders/processor/nn/metal_demosaicnet_cache.mm
+        PUBLIC_DEPS
+            MetalContext
+            NnSafetensors
+            alcedo::metal_cpp
+    )
+    target_compile_definitions(MetalDemosaicNet PUBLIC HAVE_METAL)
+    target_compile_definitions(MetalDemosaicNet PRIVATE
+        ALCEDO_DEMOASICNET_MODEL_DIR="${CMAKE_CURRENT_SOURCE_DIR}/config/models"
+    )
+    target_compile_options(MetalDemosaicNet PRIVATE
+        $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
+    )
+    set_source_files_properties(
+        decoders/processor/nn/metal_demosaicnet_module.mm
+        decoders/processor/nn/metal_demosaicnet_cache.mm
+        PROPERTIES
+            COMPILE_FLAGS "-fobjc-arc"
+            LANGUAGE OBJCXX
+    )
+    target_link_libraries(MetalDemosaicNet PUBLIC
+        "-framework Foundation"
+        "-framework Metal"
+        "-framework MetalPerformanceShaders"
+        "-framework MetalPerformanceShadersGraph"
+    )
 endif()
 
 # ==============================================================================

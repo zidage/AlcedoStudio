@@ -1,6 +1,6 @@
 # Metal MPSGraph DemosaicNet Plan
 
-**Status:** Planned  
+**Status:** In progress (Phase 2 complete)  
 **Date:** 2026-07-15  
 **Primary roadmap area:** Alcedo Studio RAW processing  
 **Target platform:** macOS 13.3 or newer, Apple Silicon, Metal backend  
@@ -567,6 +567,8 @@ Do not continue to the product graph if this phase fails.
 
 ### Phase 2 — Build and cache both fixed graphs
 
+**Status:** Complete (2026-07-16)
+
 Work:
 
 - implement the C++ PIMPL module and cache interfaces;
@@ -575,6 +577,16 @@ Work:
 - compile each graph lazily for its static input shape;
 - bind reusable input/output tensor data;
 - add full model reference tests.
+
+Delivered:
+
+- `metal_demosaicnet_module.hpp/.mm` — fixed FP32 NHWC MPSGraph for `bayer_s24_d8` and
+  `xtrans_p2_s32_d4` with private reusable tile buffers;
+- `metal_demosaicnet_cache.hpp/.mm` — lazy per-variant cache with parse/compile counters and
+  no partial publication on failure;
+- `MetalDemosaicNet` CMake target linking MPS + MPSGraph frameworks;
+- `MetalDemosaicNetModuleTest` — metadata rejection, cache reuse, host FP32 reference at
+  absolute `1e-4`, plus optional exported `.bin` pairs when present (gitignored via `*.bin`).
 
 Completion checks:
 
