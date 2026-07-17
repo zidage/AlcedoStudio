@@ -5,6 +5,7 @@
 #pragma once
 
 #include <QObject>
+#include <QPointer>
 #include <QtGlobal>
 
 namespace alcedo::ui {
@@ -16,6 +17,11 @@ class EditorController;
 /// Phase 1B owns route/session identity and filmstrip shell preferences for the
 /// unified QML editor workspace. It does not open the legacy modal dialog; that
 /// path remains on EditorController until the cutover phase removes it.
+///
+/// Phase 3-Fix also holds the production presentation viewport pointer so the
+/// edit pipeline (Phase 4+) can reach `EditorViewportItem::frameSink()` without
+/// QML calling storage/pipeline infrastructure directly. Typed as QObject so
+/// AlbumBackendLib does not depend on the RHI library at the header level.
 class EditorSessionController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool active READ active NOTIFY StateChanged)
@@ -29,6 +35,8 @@ class EditorSessionController final : public QObject {
                  NOTIFY FilmstripUiChanged)
   Q_PROPERTY(double filmstripExpandedHeight READ filmstrip_expanded_height WRITE
                  set_filmstrip_expanded_height NOTIFY FilmstripUiChanged)
+  Q_PROPERTY(bool presentationViewportBound READ presentation_viewport_bound NOTIFY
+                 PresentationBindingChanged)
 
  public:
   explicit EditorSessionController(EditorController* editor, QObject* parent = nullptr);
@@ -40,10 +48,22 @@ class EditorSessionController final : public QObject {
   [[nodiscard]] qulonglong session_generation() const { return session_generation_; }
   [[nodiscard]] bool filmstrip_collapsed() const { return filmstrip_collapsed_; }
   [[nodiscard]] double filmstrip_expanded_height() const { return filmstrip_expanded_height_; }
+  [[nodiscard]] bool presentation_viewport_bound() const {
+    return presentation_viewport_ != nullptr;
+  }
 
   Q_INVOKABLE void Open(uint elementId = 0, uint imageId = 0);
   Q_INVOKABLE void Close();
   void Finalize(bool persistChanges);
+
+  // Bind/unbind the production EditorViewportItem for this session. QML calls
+  // bind when the workspace mounts the viewport; unbind on teardown.
+  Q_INVOKABLE void bindPresentationViewport(QObject* viewportItem);
+  Q_INVOKABLE void unbindPresentationViewport();
+
+  // C++ pipeline services qobject_cast this to EditorViewportItem and call
+  // frameSink() / setViewState. Never null-check alone: QPointer may clear.
+  [[nodiscard]] auto presentation_viewport() const -> QObject*;
 
   void set_filmstrip_collapsed(bool collapsed);
   void set_filmstrip_expanded_height(double height);
@@ -51,6 +71,7 @@ class EditorSessionController final : public QObject {
  signals:
   void StateChanged();
   void FilmstripUiChanged();
+  void PresentationBindingChanged();
 
  private:
   void LoadFilmstripUiPrefs();
@@ -63,6 +84,7 @@ class EditorSessionController final : public QObject {
   qulonglong        session_generation_ = 0;
   bool              filmstrip_collapsed_ = false;
   double            filmstrip_expanded_height_ = 128.0;
+  QPointer<QObject> presentation_viewport_;
 };
 
 }  // namespace alcedo::ui

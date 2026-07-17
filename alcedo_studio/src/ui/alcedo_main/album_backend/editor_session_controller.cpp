@@ -45,6 +45,8 @@ void EditorSessionController::Close() {
   element_id_ = 0;
   image_id_ = 0;
   // Leave session_generation_ intact so a later Open still advances past it.
+  // Keep the presentation binding: the viewport may outlive a brief no-image
+  // state inside the same workspace instance.
   emit StateChanged();
 }
 
@@ -52,7 +54,28 @@ void EditorSessionController::Finalize(bool persistChanges) {
   Q_UNUSED(persistChanges);
   // Phase 1B seals only the workspace session identity. Journal flush arrives
   // with EditorSessionService in Phase 4.
+  unbindPresentationViewport();
   Close();
+}
+
+void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {
+  if (presentation_viewport_ == viewportItem) {
+    return;
+  }
+  presentation_viewport_ = viewportItem;
+  emit PresentationBindingChanged();
+}
+
+void EditorSessionController::unbindPresentationViewport() {
+  if (!presentation_viewport_) {
+    return;
+  }
+  presentation_viewport_.clear();
+  emit PresentationBindingChanged();
+}
+
+auto EditorSessionController::presentation_viewport() const -> QObject* {
+  return presentation_viewport_.data();
 }
 
 void EditorSessionController::set_filmstrip_collapsed(bool collapsed) {

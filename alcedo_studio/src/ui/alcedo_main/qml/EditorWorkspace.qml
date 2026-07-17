@@ -243,6 +243,19 @@ Item {
                         imageGeneration: root.editorSession ? root.editorSession.sessionGeneration : 0
                         Accessible.role: Accessible.Canvas
                         Accessible.name: qsTr("Image viewport")
+
+                        Component.onCompleted: {
+                            if (root.editorSession) {
+                                root.editorSession.bindPresentationViewport(editorViewportItem)
+                            }
+                            viewportSlot.syncImageGeometry()
+                            viewportSlot.pushViewToViewport()
+                        }
+                        Component.onDestruction: {
+                            if (root.editorSession) {
+                                root.editorSession.unbindPresentationViewport()
+                            }
+                        }
                     }
 
                     EditorOverlayItem {
@@ -324,30 +337,34 @@ Item {
                         }
                     }
 
-                    // DragHandler covers pan + crop drag; press/move/release map 1:1.
-                    DragHandler {
-                        id: viewportDrag
+                    // PointHandler records the true press position (no drag-distance
+                    // threshold). DragHandler would only activate after the system
+                    // drag distance, which lost crop-corner hit tests and click-zoom.
+                    PointHandler {
+                        id: viewportPointer
                         enabled: root.hasImage
-                        target: null
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.TouchScreen | PointerDevice.Stylus
                         acceptedButtons: Qt.LeftButton | Qt.MiddleButton
                         property int _activeButton: Qt.LeftButton
+                        property bool _pressed: false
                         onActiveChanged: {
                             if (active) {
-                                _activeButton = (centroid.pressedButtons & Qt.MiddleButton)
+                                _pressed = true
+                                _activeButton = (point.pressedButtons & Qt.MiddleButton)
                                         ? Qt.MiddleButton : Qt.LeftButton
                                 editorInteraction.handlePress(
-                                            centroid.position.x, centroid.position.y, _activeButton)
-                            } else {
+                                            point.position.x, point.position.y, _activeButton)
+                            } else if (_pressed) {
                                 editorInteraction.handleRelease(
-                                            centroid.position.x, centroid.position.y, _activeButton)
+                                            point.position.x, point.position.y, _activeButton)
+                                _pressed = false
                             }
                         }
-                        onCentroidChanged: {
+                        onPointChanged: {
                             if (active) {
                                 editorInteraction.handleMove(
-                                            centroid.position.x, centroid.position.y,
-                                            centroid.pressedButtons)
+                                            point.position.x, point.position.y,
+                                            point.pressedButtons)
                             }
                         }
                     }
@@ -380,8 +397,11 @@ Item {
                             if (!active) {
                                 return
                             }
-                            // HandlePinchZoom expects a relative zoom delta (value).
-                            var delta = scale - _lastScale
+                            // PinchHandler.scale is cumulative from gesture start.
+                            // HandlePinchZoom expects Qt ZoomNativeGesture-style
+                            // relative value where scale *= (1 + value).
+                            var ratio = scale / Math.max(_lastScale, 1e-6)
+                            var delta = ratio - 1.0
                             _lastScale = scale
                             if (Math.abs(delta) > 1e-4) {
                                 editorInteraction.handlePinch(
@@ -425,33 +445,82 @@ Item {
                         }
                     }
 
-                    function syncViewportMetrics() {
-                        var dpr = 1.0
-                        if (viewportSlot.Window.window) {
-                            dpr = viewportSlot.Window.window.devicePixelRatio
+                    function currentDevicePixelRatio() {
+                        var win = viewportSlot.Window.window
+                        if (win) {
+                            return win.devicePixelRatio
                         }
+                        return 1.0
+                    }
+
+                    function syncViewportMetrics() {
                         editorInteraction.setViewportMetrics(
-                                    viewportSlot.width, viewportSlot.height, dpr)
+                                    viewportSlot.width, viewportSlot.height,
+                                    currentDevicePixelRatio())
+                        pushViewToViewport()
+                    }
+
+                    function syncImageGeometry() {
+                        if (!root.hasImage) {
+                            editorInteraction.setImageSize(0, 0)
+                            editorInteraction.setRenderReferenceSize(0, 0)
+                            return
+                        }
+                        if (!appModules || !appModules.images) {
+                            return
+                        }
+                        var size = appModules.images.GetImagePixelSize(
+                                    root.focusedElementId, root.focusedImageId)
+                        if (size && size.success && size.width > 0 && size.height > 0) {
+                            editorInteraction.setImageSize(size.width, size.height)
+                            // Until a pipeline frame arrives, use source size as the
+                            // render reference so crop/zoom math is not zero-sized.
+                            if (editorInteraction.renderReferenceWidth <= 0 ||
+                                    editorInteraction.renderReferenceHeight <= 0) {
+                                editorInteraction.setRenderReferenceSize(size.width, size.height)
+                            }
+                        }
+                        pushViewToViewport()
                     }
 
                     function pushViewToViewport() {
-                        editorViewportItem.setViewTransform(
-                                    editorInteraction.zoom,
-                                    editorInteraction.panX,
-                                    editorInteraction.panY)
+                        // Full ViewerViewState (zoom/pan, region cache, interactive /
+                        // detail flags) — not just three floats — so LeaseFrameSink
+                        // ROI requests track the controller after zoom and pan.
+                        editorInteraction.applyViewStateToViewport(editorViewportItem)
                     }
 
                     Connections {
                         target: editorInteraction
                         function onViewChanged() {
-                            // Zoom/pan only — never recreates the viewport texture or
-                            // broker targets; the RHI item just re-samples the last frame.
+                            // Never recreates the viewport texture or broker targets.
                             viewportSlot.pushViewToViewport()
+                        }
+                        function onViewStateChanged() {
+                            viewportSlot.pushViewToViewport()
+                        }
+                    }
+
+                    Connections {
+                        target: root.editorSession
+                        function onStateChanged() {
+                            viewportSlot.syncImageGeometry()
+                        }
+                    }
+
+                    Connections {
+                        target: viewportSlot.Window.window
+                        function onScreenChanged() {
+                            viewportSlot.syncViewportMetrics()
+                        }
+                        function onDevicePixelRatioChanged() {
+                            viewportSlot.syncViewportMetrics()
                         }
                     }
 
                     Component.onCompleted: {
                         syncViewportMetrics()
+                        syncImageGeometry()
                         pushViewToViewport()
                     }
                     onWidthChanged: syncViewportMetrics()

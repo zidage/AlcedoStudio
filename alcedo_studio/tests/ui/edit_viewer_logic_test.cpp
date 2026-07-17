@@ -168,6 +168,31 @@ TEST(EditViewerLogicTests, ViewTransformControllerCtrlWheelUpdatesZoomAndPan) {
   EXPECT_GT(state.GetViewZoom(), 1.0f);
 }
 
+TEST(EditViewerLogicTests, ViewTransformPanDeltaMatchesAcrossDevicePixelRatios) {
+  ViewerState state_dpr1;
+  ViewerState state_dpr2;
+  ViewTransformController controller_a;
+  ViewTransformController controller_b;
+
+  // Zoom in so pan is free to move.
+  state_dpr1.SetViewTransform(2.0f, QVector2D(0.0f, 0.0f));
+  state_dpr2.SetViewTransform(2.0f, QVector2D(0.0f, 0.0f));
+
+  const ViewportWidgetInfo widget_dpr1{800, 600, 1.0f};
+  const ViewportWidgetInfo widget_dpr2{800, 600, 2.0f};
+
+  (void)controller_a.HandlePanPress(false, QPoint(400, 300));
+  (void)controller_a.HandlePanMove(state_dpr1, widget_dpr1, kImageInfo, QPoint(450, 300));
+
+  (void)controller_b.HandlePanPress(false, QPoint(400, 300));
+  (void)controller_b.HandlePanMove(state_dpr2, widget_dpr2, kImageInfo, QPoint(450, 300));
+
+  EXPECT_NEAR(state_dpr1.GetViewTransform().pan.x(), state_dpr2.GetViewTransform().pan.x(),
+              1.0e-5f);
+  EXPECT_NEAR(state_dpr1.GetViewTransform().pan.y(), state_dpr2.GetViewTransform().pan.y(),
+              1.0e-5f);
+}
+
 TEST(EditViewerLogicTests, ViewTransformControllerDoubleClickStartsAnimationAndReturnsToFit) {
   ViewerState             state;
   ViewTransformController controller;

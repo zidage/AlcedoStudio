@@ -102,6 +102,8 @@ auto CropInteractionController::HandlePress(ViewerState& state, const ViewportIm
   drag_anchor_uv_            = uv_point;
   drag_anchor_widget_pos_    = press_context.event_pos;
   drag_origin_rect_          = crop_state.rect;
+  drag_pre_press_rect_       = crop_state.rect;
+  drag_pre_press_rotation_   = crop_state.rotation_degrees;
   drag_rotation_degrees_     = crop_state.rotation_degrees;
   drag_corner_               = CropCorner::None;
   drag_edge_                 = CropEdge::None;
@@ -382,6 +384,16 @@ auto CropInteractionController::HandleDoubleClick(ViewerState& state) -> CropInt
   result.rotation_changed  = crop_state.rotation_degrees;
   result.rotation_is_final = true;
   return result;
+}
+
+void CropInteractionController::Cancel(ViewerState& state) {
+  if (drag_mode_ != CropDragMode::None) {
+    auto crop_state = state.GetCropOverlay();
+    crop_state.rect = drag_pre_press_rect_;
+    crop_state.rotation_degrees = drag_pre_press_rotation_;
+    state.SetCropOverlayState(crop_state);
+  }
+  Cancel();
 }
 
 void CropInteractionController::Cancel() {

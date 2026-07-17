@@ -4,7 +4,7 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-17 after Phase 3 closeout.
+Last revised: 2026-07-17 after Phase 3-Fix closeout.
 
 Affected areas:
 
@@ -774,6 +774,38 @@ Implementation closeout:
 - Tests: `EditViewerLogicTest` (18, including DPR + landscape/portrait/square/odd golden geometry)
   and `EditorOverlayInteractionTest` (12, crop/zoom/pan/fit/ROI/reset at DPR 1.0/1.5/2.0, overlay
   updates do not invalidate presentation targets).
+
+### Phase 3-Fix
+
+**Status: complete (2026-07-17).**
+
+审核范围是 `d8069e9d..99312526`。下列问题已全部修正；`EditViewerLogicTest`（19）与
+`EditorOverlayInteractionTest`（20）通过。完整编辑管线帧投递仍由 Phase 4A
+`EditorSessionService` 完成；Phase 3-Fix 已把会话几何、完整 `ViewerViewState`、
+`frameSink` 绑定面与交互/遮罩正确性接到生产 QML 路径。
+
+| 问题 | 修复 |
+| --- | --- |
+| 控制器未接生产会话 / `frameSink` 无调用 | `EditorWorkspace` 打开图片时 `GetImagePixelSize` → `setImageSize` / `setRenderReferenceSize`；`EditorSessionController::bindPresentationViewport` 持有生产视口，C++ 经 `presentation_viewport()` → `frameSink()` 接入管线；`applyViewStateToViewport` 推送完整状态 |
+| 只推 zoom/pan 三数 | `pushViewToViewport` 改为 `applyViewStateToViewport`（区域缓存 + interactive/detail 标志进 `LeaseFrameSink`） |
+| DragHandler 晚 press / 丢单击 | 改用 `PointHandler`，在真实按下处 `handlePress`；无拖动的 press/release 恢复单击缩放 |
+| 捏合 `scale - lastScale` | 改为 `scale/lastScale - 1`；路径无关性测试（10 小步 vs 1 大步） |
+| 平移逻辑坐标 / 物理 DPR 混用；跨屏 DPR | `HandlePanMove`/`HandleWheelPan` 用逻辑宽高；QML 监听 `devicePixelRatioChanged` / `screenChanged` |
+| reconcile 不发 `viewChanged` | 修正 zoom/pan 时发 `viewChanged`；metrics 变化在无 clamp 时也推视口 |
+| 关裁剪不取消；`setCropRect` 无旋转 clamp | `Cancel(ViewerState&)` 恢复 press 前矩形；`setCropRectNormalized` 用 `ClampCropRectForRotation` |
+| 遮罩扇形切洞 | 凸裁剪外半平面并集 + 凸三角化；测试断言裁剪中心不被遮罩覆盖 |
+| 每帧删建节点 | 保留节点/材质，只更新顶点；信号合并为一次 queued rebuild |
+| 外观 / D3D11 线宽 | 描边与圆头、虚线三分线、手柄描边一律三角形，不依赖 `lineWidth` |
+| 弱验收测试 | 扩展控制器/几何契约测试：DPR 平移不变、捏合路径无关、遮罩孔洞、取消拖动、viewState→sink、rebuild 合并 |
+
+Implementation closeout:
+
+- `EditorInteractionController::applyViewStateToViewport` + crop cancel / rotation clamp / viewChanged on reconcile.
+- `ViewTransformController` pan/wheel use logical deltas (DPR-invariant).
+- `EditorOverlayItem` retained QSG nodes, coalesced rebuilds, triangle strokes, hole-safe dim mask.
+- `EditorWorkspace.qml` PointHandler, pinch ratio, full view-state push, image geometry, DPR/screen sync, session viewport bind.
+- `ImageController::GetImagePixelSize` + `EditorSessionController` presentation binding for pipeline attach.
+- Remaining Phase 4A work: load pipeline, attach `frameSink`, drive InteractivePrimary / QualityBase / DetailPatch from the bound session.
 
 ### Phase 4A - Editor session state machine and service boundaries
 

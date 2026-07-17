@@ -5,6 +5,7 @@
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 
 #include "ui/editor_rhi/editor_overlay_item.hpp"
+#include "ui/editor_rhi/editor_viewport_item.hpp"
 
 #include <QApplication>
 #include <QtQml/qqml.h>
@@ -102,6 +103,11 @@ void EditorInteractionController::setCropToolEnabled(bool enabled) {
     return;
   }
   stopZoomAnimation();
+  // Match legacy QtEditViewer: disable cancels an in-flight crop drag so a later
+  // release cannot commit a stale rect after the tool is off.
+  if (!enabled) {
+    crop_interaction_controller_.Cancel(viewer_state_);
+  }
   viewer_state_.SetCropToolEnabled(enabled);
   const auto result = view_transform_controller_.HandleCropToolEnabledChanged(viewer_state_, enabled);
   applyViewTransformResult(result);
@@ -115,6 +121,10 @@ void EditorInteractionController::setCropOverlayVisible(bool visible) {
   if (viewer_state_.GetCropOverlay().overlay_visible == visible) {
     return;
   }
+  if (!visible) {
+    crop_interaction_controller_.Cancel(viewer_state_);
+    applyCursor(std::nullopt, true);
+  }
   viewer_state_.SetCropOverlayVisible(visible);
   emit cropChanged();
   emit overlayGeometryChanged();
@@ -122,15 +132,19 @@ void EditorInteractionController::setCropOverlayVisible(bool visible) {
 }
 
 void EditorInteractionController::setCropRectNormalized(const QRectF& rect) {
-  const QRectF clamped = CropGeometry::ClampCropRect(rect);
   auto crop = viewer_state_.GetCropOverlay();
-  if (crop.rect == clamped) {
+  const QRectF clamped = CropGeometry::ClampCropRect(rect);
+  // External setters must honor the active rotation so rotated corners stay inside
+  // the image (legacy SetCropOverlayRectNormalized behavior).
+  const QRectF adjusted = CropGeometry::ClampCropRectForRotation(
+      clamped, crop.rotation_degrees, crop.metric_aspect);
+  if (crop.rect == adjusted) {
     return;
   }
-  crop.rect = clamped;
+  crop.rect = adjusted;
   viewer_state_.SetCropOverlayState(crop);
   emit cropChanged();
-  emit cropRectCommitted(clamped, true);
+  emit cropRectCommitted(adjusted, true);
   emit overlayGeometryChanged();
   emit viewStateChanged();
 }
@@ -200,7 +214,7 @@ void EditorInteractionController::setInteractionEnabled(bool enabled) {
   }
   interaction_enabled_ = enabled;
   if (!enabled) {
-    crop_interaction_controller_.Cancel();
+    crop_interaction_controller_.Cancel(viewer_state_);
     stopZoomAnimation();
     applyCursor(std::nullopt, true);
   }
@@ -217,11 +231,21 @@ void EditorInteractionController::setViewportMetrics(qreal width, qreal height,
     return;
   }
   widget_info_ = {w, h, dpr};
+  // Capture transform before reconcile so we can detect no-op clamps that still
+  // need a viewChanged when the caller expects a metrics-driven push.
+  const auto before = viewer_state_.GetViewTransform();
   reconcileViewTransformForRenderReference();
   updateViewportRenderRegionCache();
   emit viewportMetricsChanged();
   emit overlayGeometryChanged();
   emit viewStateChanged();
+  // If reconcile did not emit (no clamp change), still notify the viewport so
+  // photograph sampling matches the new letterbox after a pure size change.
+  const auto after = viewer_state_.GetViewTransform();
+  if (std::abs(before.zoom - after.zoom) <= 1.0e-5f &&
+      (before.pan - after.pan).lengthSquared() <= 1.0e-8f) {
+    emit viewChanged();
+  }
 }
 
 void EditorInteractionController::setImageSize(int width, int height) {
@@ -486,6 +510,17 @@ auto EditorInteractionController::viewerViewState() const -> ViewerViewState {
   return state;
 }
 
+void EditorInteractionController::applyViewStateToViewport(QObject* viewportItem) {
+  auto* item = qobject_cast<EditorViewportItem*>(viewportItem);
+  if (!item) {
+    return;
+  }
+  // Always refresh the region cache before hand-off so LeaseFrameSink ROI requests
+  // match the controller after zoom/pan/resize.
+  updateViewportRenderRegionCache();
+  item->setViewState(viewerViewState());
+}
+
 void EditorInteractionController::applyViewTransformForTest(float next_zoom, float pan_x,
                                                             float pan_y) {
   stopZoomAnimation();
@@ -609,6 +644,13 @@ void EditorInteractionController::reconcileViewTransformForRenderReference() {
   }
   stopZoomAnimation();
   viewer_state_.SetViewTransform(clamped_zoom, clamped_pan);
+  // QML only pushes photograph zoom/pan on viewChanged. Without this emit, a
+  // resize/ref-size reconcile can leave the overlay at the new pan while the
+  // viewport still samples the old transform.
+  emit viewChanged();
+  if (zoom_changed) {
+    emit viewZoomChanged(clamped_zoom);
+  }
 }
 
 void RegisterEditorOverlayQmlTypes() {

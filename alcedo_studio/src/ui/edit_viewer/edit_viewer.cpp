@@ -278,7 +278,7 @@ void QtEditViewer::SetCropToolEnabled(bool enabled) {
   }
   viewer_state_.SetCropToolEnabled(enabled);
   if (!enabled) {
-    crop_interaction_controller_.Cancel();
+    crop_interaction_controller_.Cancel(viewer_state_);
   }
   const auto result =
       view_transform_controller_.HandleCropToolEnabledChanged(viewer_state_, enabled);

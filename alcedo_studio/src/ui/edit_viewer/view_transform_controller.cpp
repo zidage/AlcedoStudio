@@ -76,9 +76,9 @@ auto ViewTransformController::HandleWheelPan(ViewerState& state,
     return result;
   }
 
-  const float dpr = std::max(widget_info.device_pixel_ratio, 1e-4f);
-  const float vw  = std::max(1.0f, static_cast<float>(widget_info.widget_width) * dpr);
-  const float vh  = std::max(1.0f, static_cast<float>(widget_info.widget_height) * dpr);
+  // Qt 6 wheel pixelDelta is device-independent; keep the same logical NDC scale as pan.
+  const float vw = std::max(1.0f, static_cast<float>(widget_info.widget_width));
+  const float vh = std::max(1.0f, static_cast<float>(widget_info.widget_height));
   QVector2D   ndc_delta(2.0f * static_cast<float>(pixel_delta.x()) / vw,
                         -2.0f * static_cast<float>(pixel_delta.y()) / vh);
 
@@ -131,11 +131,14 @@ auto ViewTransformController::HandlePanMove(ViewerState& state, const ViewportWi
     return result;
   }
 
-  const float dpr = std::max(widget_info.device_pixel_ratio, 1e-4f);
-  const float vw = std::max(1.0f, static_cast<float>(widget_info.widget_width) * dpr);
-  const float vh = std::max(1.0f, static_cast<float>(widget_info.widget_height) * dpr);
+  // Mouse/pointer deltas arrive in logical (device-independent) coordinates from both
+  // QWidget and QML. Normalize by logical viewport size so the same logical drag yields
+  // the same NDC pan at every devicePixelRatio. Absolute mapping multiplies both sides
+  // by DPR; deltas must not mix logical numerators with physical denominators.
+  const float vw = std::max(1.0f, static_cast<float>(widget_info.widget_width));
+  const float vh = std::max(1.0f, static_cast<float>(widget_info.widget_height));
   QVector2D   ndc_delta(2.0f * static_cast<float>(delta.x()) / vw,
-                      -2.0f * static_cast<float>(delta.y()) / vh);
+                        -2.0f * static_cast<float>(delta.y()) / vh);
 
   const auto view_state = state.GetViewTransform();
   return ApplyViewTransform(state, widget_info, image_info, view_state.zoom,

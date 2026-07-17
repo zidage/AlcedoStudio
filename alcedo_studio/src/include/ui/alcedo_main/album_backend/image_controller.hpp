@@ -56,6 +56,9 @@ class ImageController final : public QObject {
   Q_INVOKABLE QVariantMap DeleteImages(const QVariantList& targetEntries);
   Q_INVOKABLE QVariantMap AddImagesToFolder(const QVariantList& targetEntries, uint targetFolderId);
   Q_INVOKABLE QVariantMap GetImageDetails(uint elementId, uint imageId);
+  // Pixel width/height for the editor interaction controller (source image UV).
+  // Returns {success, width, height}; dimensions come from EXIF/metadata when present.
+  Q_INVOKABLE QVariantMap GetImagePixelSize(uint elementId, uint imageId);
   Q_INVOKABLE QVariantMap GetFocusedImageInspection(uint elementId, uint imageId);
   Q_INVOKABLE QVariantMap GetImageRating(uint elementId, uint imageId);
   Q_INVOKABLE QVariantMap SetImageRating(uint elementId, uint imageId, int rating);

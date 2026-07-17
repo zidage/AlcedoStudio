@@ -6,58 +6,249 @@
 
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 
-#include <QPainterPath>
-#include <QPolygonF>
+#include <QMetaObject>
 #include <QSGVertexColorMaterial>
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "ui/edit_viewer/crop_geometry.hpp"
 
 namespace alcedo::editor_rhi {
 namespace {
 
-constexpr int kHandleSegments = 14;
+constexpr int kCapSegments = 10;
 constexpr float kMaskAlpha = 112.0f / 255.0f;
 
-void AppendLinePair(std::vector<QPointF>& lines, const QPointF& a, const QPointF& b) {
-  lines.push_back(a);
-  lines.push_back(b);
+auto Cross(const QPointF& o, const QPointF& a, const QPointF& b) -> double {
+  return (a.x() - o.x()) * (b.y() - o.y()) - (a.y() - o.y()) * (b.x() - o.x());
 }
 
-void AppendDisc(std::vector<QPointF>& discs, const QPointF& center, float radius, int segments) {
-  discs.push_back(center);
-  for (int i = 0; i <= segments; ++i) {
-    const float angle = (static_cast<float>(i) / static_cast<float>(segments)) * 6.28318530718f;
-    discs.emplace_back(center.x() + (std::cos(angle) * radius),
-                       center.y() + (std::sin(angle) * radius));
+auto PolygonArea(const std::vector<QPointF>& poly) -> double {
+  if (poly.size() < 3) {
+    return 0.0;
   }
-}
-
-void AppendPolygonLines(std::vector<QPointF>& lines, const std::array<QPointF, 4>& corners) {
-  for (size_t i = 0; i < corners.size(); ++i) {
-    AppendLinePair(lines, corners[i], corners[(i + 1) % corners.size()]);
+  double area = 0.0;
+  for (size_t i = 0; i < poly.size(); ++i) {
+    const QPointF& a = poly[i];
+    const QPointF& b = poly[(i + 1) % poly.size()];
+    area += (a.x() * b.y()) - (b.x() * a.y());
   }
+  return area * 0.5;
 }
 
-// Fan-triangulate a simple polygon (assumes nearly convex outer ring).
-void AppendFanTriangles(std::vector<QPointF>& triangles, const QPolygonF& poly) {
+// Clip a convex polygon to the half-plane where Cross(a, b, p) has the requested sign.
+// keep_positive=true keeps Cross(a,b,p) >= 0 (left of directed edge a→b).
+auto ClipPolygonToHalfPlane(const std::vector<QPointF>& input, const QPointF& a, const QPointF& b,
+                            bool keep_positive) -> std::vector<QPointF> {
+  if (input.empty()) {
+    return {};
+  }
+  auto inside = [&](const QPointF& p) {
+    const double c = Cross(a, b, p);
+    return keep_positive ? (c >= -1e-9) : (c <= 1e-9);
+  };
+  auto intersect = [&](const QPointF& p, const QPointF& q) -> QPointF {
+    const double c1 = Cross(a, b, p);
+    const double c2 = Cross(a, b, q);
+    const double t = c1 / (c1 - c2 + 1e-30);
+    return {p.x() + t * (q.x() - p.x()), p.y() + t * (q.y() - p.y())};
+  };
+
+  std::vector<QPointF> output;
+  output.reserve(input.size() + 1);
+  for (size_t i = 0; i < input.size(); ++i) {
+    const QPointF& cur = input[i];
+    const QPointF& prev = input[(i + input.size() - 1) % input.size()];
+    const bool cur_in = inside(cur);
+    const bool prev_in = inside(prev);
+    if (cur_in) {
+      if (!prev_in) {
+        output.push_back(intersect(prev, cur));
+      }
+      output.push_back(cur);
+    } else if (prev_in) {
+      output.push_back(intersect(prev, cur));
+    }
+  }
+  return output;
+}
+
+void AppendConvexPolygonTriangles(std::vector<QPointF>& triangles,
+                                  const std::vector<QPointF>& poly) {
   if (poly.size() < 3) {
     return;
   }
-  const QPointF origin = poly.at(0);
-  for (int i = 1; i + 1 < poly.size(); ++i) {
-    triangles.push_back(origin);
-    triangles.push_back(poly.at(i));
-    triangles.push_back(poly.at(i + 1));
+  // Convex poly → safe fan from vertex 0.
+  for (size_t i = 1; i + 1 < poly.size(); ++i) {
+    triangles.push_back(poly[0]);
+    triangles.push_back(poly[i]);
+    triangles.push_back(poly[i + 1]);
+  }
+}
+
+// Dim = image \ crop for a convex crop. Since crop is the intersection of four
+// interior half-planes, its exterior is the union of the four exterior half-planes:
+//   image \ crop = ∪_edge (image ∩ exterior(edge))
+// Overdraw in exterior corner wedges is fine (same solid color).
+void AppendDimMaskWithHole(std::vector<QPointF>& triangles, const QRectF& image,
+                           const std::array<QPointF, 4>& crop_corners) {
+  std::vector<QPointF> image_poly = {image.topLeft(), image.topRight(), image.bottomRight(),
+                                     image.bottomLeft()};
+  // Ensure CCW so interior is left of edges.
+  if (PolygonArea(image_poly) < 0.0) {
+    std::reverse(image_poly.begin(), image_poly.end());
+  }
+
+  // Determine crop winding: interior of crop is left of directed edges for CCW.
+  std::array<QPointF, 4> ordered = crop_corners;
+  double crop_area = 0.0;
+  for (size_t i = 0; i < 4; ++i) {
+    const QPointF& a = ordered[i];
+    const QPointF& b = ordered[(i + 1) % 4];
+    crop_area += (a.x() * b.y()) - (b.x() * a.y());
+  }
+  if (crop_area < 0.0) {
+    std::reverse(ordered.begin(), ordered.end());
+  }
+
+  for (size_t i = 0; i < 4; ++i) {
+    const QPointF& a = ordered[i];
+    const QPointF& b = ordered[(i + 1) % 4];
+    // Exterior of CCW crop edge a→b is Cross(a,b,p) < 0 (right of the edge).
+    auto clipped = ClipPolygonToHalfPlane(image_poly, a, b, /*keep_positive=*/false);
+    AppendConvexPolygonTriangles(triangles, clipped);
+  }
+}
+
+auto PerpUnit(const QPointF& a, const QPointF& b) -> QPointF {
+  const double dx = b.x() - a.x();
+  const double dy = b.y() - a.y();
+  const double len = std::hypot(dx, dy);
+  if (len < 1e-9) {
+    return {1.0, 0.0};
+  }
+  return {-dy / len, dx / len};
+}
+
+void AppendThickLine(std::vector<QPointF>& tris, const QPointF& a, const QPointF& b, float width) {
+  const QPointF n = PerpUnit(a, b);
+  const double half = static_cast<double>(width) * 0.5;
+  const QPointF o = {n.x() * half, n.y() * half};
+  const QPointF p0 = a + o;
+  const QPointF p1 = a - o;
+  const QPointF p2 = b - o;
+  const QPointF p3 = b + o;
+  tris.push_back(p0);
+  tris.push_back(p1);
+  tris.push_back(p2);
+  tris.push_back(p0);
+  tris.push_back(p2);
+  tris.push_back(p3);
+}
+
+void AppendRoundCap(std::vector<QPointF>& tris, const QPointF& center, const QPointF& along,
+                    float radius, int segments) {
+  const double len = std::hypot(along.x(), along.y());
+  if (len < 1e-9 || radius <= 0.0f || segments < 2) {
+    return;
+  }
+  const QPointF dir = {along.x() / len, along.y() / len};
+  const QPointF n = {-dir.y(), dir.x()};
+  // Semicircle on the outward side of the endpoint.
+  const double start = std::atan2(n.y(), n.x());
+  for (int i = 0; i < segments; ++i) {
+    const double a0 = start + (3.14159265358979323846 * static_cast<double>(i) / segments);
+    const double a1 = start + (3.14159265358979323846 * static_cast<double>(i + 1) / segments);
+    tris.push_back(center);
+    tris.push_back(QPointF(center.x() + std::cos(a0) * radius, center.y() + std::sin(a0) * radius));
+    tris.push_back(QPointF(center.x() + std::cos(a1) * radius, center.y() + std::sin(a1) * radius));
+  }
+}
+
+void AppendStrokeSegment(std::vector<QPointF>& tris, const QPointF& a, const QPointF& b, float width,
+                         bool round_caps) {
+  AppendThickLine(tris, a, b, width);
+  if (round_caps) {
+    const QPointF ab = b - a;
+    AppendRoundCap(tris, a, a - b, width * 0.5f, kCapSegments);
+    AppendRoundCap(tris, b, ab, width * 0.5f, kCapSegments);
+  }
+}
+
+void AppendPolygonStroke(std::vector<QPointF>& tris, const std::array<QPointF, 4>& corners,
+                         float width, bool closed) {
+  const size_t n = corners.size();
+  const size_t count = closed ? n : n - 1;
+  for (size_t i = 0; i < count; ++i) {
+    AppendStrokeSegment(tris, corners[i], corners[(i + 1) % n], width, /*round_caps=*/false);
+  }
+}
+
+void AppendDashedStroke(std::vector<QPointF>& tris, const QPointF& a, const QPointF& b, float width,
+                        float dash_len, float gap_len) {
+  const double dx = b.x() - a.x();
+  const double dy = b.y() - a.y();
+  const double len = std::hypot(dx, dy);
+  if (len < 1e-6) {
+    return;
+  }
+  const double ux = dx / len;
+  const double uy = dy / len;
+  double t = 0.0;
+  bool draw = true;
+  while (t < len - 1e-6) {
+    const double remaining = len - t;
+    const double step = std::min(remaining, static_cast<double>(draw ? dash_len : gap_len));
+    if (draw && step > 1e-6) {
+      const QPointF p0(a.x() + ux * t, a.y() + uy * t);
+      const QPointF p1(a.x() + ux * (t + step), a.y() + uy * (t + step));
+      AppendThickLine(tris, p0, p1, width);
+    }
+    t += step;
+    draw = !draw;
+  }
+}
+
+void AppendFilledDisc(std::vector<QPointF>& tris, const QPointF& center, float radius, int segments) {
+  if (radius <= 0.0f || segments < 3) {
+    return;
+  }
+  for (int i = 0; i < segments; ++i) {
+    const float a0 = (static_cast<float>(i) / static_cast<float>(segments)) * 6.28318530718f;
+    const float a1 = (static_cast<float>(i + 1) / static_cast<float>(segments)) * 6.28318530718f;
+    tris.push_back(center);
+    tris.push_back(QPointF(center.x() + std::cos(a0) * radius, center.y() + std::sin(a0) * radius));
+    tris.push_back(QPointF(center.x() + std::cos(a1) * radius, center.y() + std::sin(a1) * radius));
+  }
+}
+
+void AppendRing(std::vector<QPointF>& tris, const QPointF& center, float inner_r, float outer_r,
+                int segments) {
+  if (outer_r <= inner_r || segments < 3) {
+    return;
+  }
+  for (int i = 0; i < segments; ++i) {
+    const float a0 = (static_cast<float>(i) / static_cast<float>(segments)) * 6.28318530718f;
+    const float a1 = (static_cast<float>(i + 1) / static_cast<float>(segments)) * 6.28318530718f;
+    const QPointF o0(center.x() + std::cos(a0) * outer_r, center.y() + std::sin(a0) * outer_r);
+    const QPointF o1(center.x() + std::cos(a1) * outer_r, center.y() + std::sin(a1) * outer_r);
+    const QPointF i0(center.x() + std::cos(a0) * inner_r, center.y() + std::sin(a0) * inner_r);
+    const QPointF i1(center.x() + std::cos(a1) * inner_r, center.y() + std::sin(a1) * inner_r);
+    tris.push_back(o0);
+    tris.push_back(i0);
+    tris.push_back(i1);
+    tris.push_back(o0);
+    tris.push_back(i1);
+    tris.push_back(o1);
   }
 }
 
 void FillColoredGeometry(QSGGeometry* geometry, const std::vector<QPointF>& points,
-                         const QColor& color, QSGGeometry::DrawingMode mode) {
+                         const QColor& color) {
   geometry->allocate(static_cast<int>(points.size()));
-  geometry->setDrawingMode(mode);
+  geometry->setDrawingMode(QSGGeometry::DrawTriangles);
   auto* vertices = geometry->vertexDataAsColoredPoint2D();
   const uchar r = static_cast<uchar>(color.red());
   const uchar g = static_cast<uchar>(color.green());
@@ -67,48 +258,38 @@ void FillColoredGeometry(QSGGeometry* geometry, const std::vector<QPointF>& poin
     vertices[i].set(static_cast<float>(points[i].x()), static_cast<float>(points[i].y()), r, g, b,
                     a);
   }
+  geometry->markVertexDataDirty();
 }
 
-auto MakeColoredNode(const std::vector<QPointF>& points, const QColor& color,
-                     QSGGeometry::DrawingMode mode, float line_width = 1.0f) -> QSGGeometryNode* {
+// Update an existing node in place, or create once. Never deletes material.
+void UpsertTriangleNode(QSGNode* root, QSGGeometryNode*& slot, const std::vector<QPointF>& points,
+                        const QColor& color, int& create_count) {
   if (points.empty()) {
-    return nullptr;
-  }
-  auto* node = new QSGGeometryNode;
-  auto* geometry = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(),
-                                   static_cast<int>(points.size()));
-  geometry->setLineWidth(line_width);
-  FillColoredGeometry(geometry, points, color, mode);
-  node->setGeometry(geometry);
-  node->setFlag(QSGNode::OwnsGeometry);
-
-  auto* material = new QSGVertexColorMaterial;
-  node->setMaterial(material);
-  node->setFlag(QSGNode::OwnsMaterial);
-  return node;
-}
-
-// Disc triangle list from center + rim points.
-auto ExpandHandleDiscs(const OverlaySceneGeometry& scene) -> std::vector<QPointF> {
-  std::vector<QPointF> triangles;
-  if (scene.handle_count <= 0 || scene.handle_segments <= 0) {
-    return triangles;
-  }
-  const int verts_per = 1 + scene.handle_segments + 1;
-  triangles.reserve(static_cast<size_t>(scene.handle_count * scene.handle_segments * 3));
-  for (int h = 0; h < scene.handle_count; ++h) {
-    const int base = h * verts_per;
-    if (base + verts_per > static_cast<int>(scene.handle_discs.size())) {
-      break;
+    if (slot) {
+      slot->setFlag(QSGNode::OwnedByParent, false);
+      root->removeChildNode(slot);
+      delete slot;
+      slot = nullptr;
     }
-    const QPointF center = scene.handle_discs[static_cast<size_t>(base)];
-    for (int s = 0; s < scene.handle_segments; ++s) {
-      triangles.push_back(center);
-      triangles.push_back(scene.handle_discs[static_cast<size_t>(base + 1 + s)]);
-      triangles.push_back(scene.handle_discs[static_cast<size_t>(base + 2 + s)]);
-    }
+    return;
   }
-  return triangles;
+
+  if (!slot) {
+    slot = new QSGGeometryNode;
+    auto* geometry = new QSGGeometry(QSGGeometry::defaultAttributes_ColoredPoint2D(),
+                                     static_cast<int>(points.size()));
+    geometry->setDrawingMode(QSGGeometry::DrawTriangles);
+    slot->setGeometry(geometry);
+    slot->setFlag(QSGNode::OwnsGeometry);
+    auto* material = new QSGVertexColorMaterial;
+    slot->setMaterial(material);
+    slot->setFlag(QSGNode::OwnsMaterial);
+    root->appendChildNode(slot);
+    ++create_count;
+  }
+
+  FillColoredGeometry(slot->geometry(), points, color);
+  slot->markDirty(QSGNode::DirtyGeometry);
 }
 
 }  // namespace
@@ -116,11 +297,11 @@ auto ExpandHandleDiscs(const OverlaySceneGeometry& scene) -> std::vector<QPointF
 auto BuildOverlaySceneGeometry(const CropOverlayWidgetGeometry& geometry, bool crop_tool_visible)
     -> OverlaySceneGeometry {
   OverlaySceneGeometry scene;
-  scene.handle_segments = kHandleSegments;
 
   if (geometry.detail_roi_valid) {
     scene.has_detail_roi = true;
-    AppendPolygonLines(scene.detail_roi_lines, geometry.detail_roi_corners_widget);
+    AppendPolygonStroke(scene.detail_roi_triangles, geometry.detail_roi_corners_widget, 1.5f,
+                        /*closed=*/true);
   }
 
   if (!crop_tool_visible || !geometry.image_rect_valid || !geometry.crop_corners_valid) {
@@ -128,58 +309,61 @@ auto BuildOverlaySceneGeometry(const CropOverlayWidgetGeometry& geometry, bool c
   }
   scene.has_crop = true;
 
-  QPolygonF crop_polygon;
-  crop_polygon.reserve(4);
-  for (const auto& corner : geometry.crop_corners_widget) {
-    crop_polygon << corner;
-  }
+  // Dim mask: hole-safe ear-clip of path-subtraction polygons (never fan a hole).
+  AppendDimMaskWithHole(scene.mask_triangles, geometry.image_rect, geometry.crop_corners_widget);
 
-  QPainterPath image_path;
-  image_path.addRect(geometry.image_rect);
-  QPainterPath crop_path;
-  crop_path.addPolygon(crop_polygon);
-  crop_path.closeSubpath();
-  const QPainterPath mask_path = image_path.subtracted(crop_path);
-  const QList<QPolygonF> mask_polys = mask_path.toFillPolygons();
-  for (const QPolygonF& poly : mask_polys) {
-    AppendFanTriangles(scene.mask_triangles, poly);
-  }
-
-  AppendPolygonLines(scene.border_lines, geometry.crop_corners_widget);
+  // Dual border strokes as triangles (legacy white 3.0 / dark 1.2).
+  AppendPolygonStroke(scene.border_outer_triangles, geometry.crop_corners_widget, 3.0f, true);
+  AppendPolygonStroke(scene.border_inner_triangles, geometry.crop_corners_widget, 1.2f, true);
 
   auto append_edge_grip = [&](const QPointF& a, const QPointF& b) {
     const QPointF grip_a = CropGeometry::LerpPoint(a, b, 0.38f);
     const QPointF grip_b = CropGeometry::LerpPoint(a, b, 0.62f);
-    AppendLinePair(scene.edge_grip_lines, grip_a, grip_b);
+    AppendStrokeSegment(scene.grip_outer_triangles, grip_a, grip_b, 5.0f, true);
+    AppendStrokeSegment(scene.grip_inner_triangles, grip_a, grip_b, 2.4f, true);
   };
   append_edge_grip(geometry.crop_corners_widget[0], geometry.crop_corners_widget[1]);
   append_edge_grip(geometry.crop_corners_widget[1], geometry.crop_corners_widget[2]);
   append_edge_grip(geometry.crop_corners_widget[2], geometry.crop_corners_widget[3]);
   append_edge_grip(geometry.crop_corners_widget[3], geometry.crop_corners_widget[0]);
 
+  // Dashed thirds (legacy Qt::DashLine).
+  constexpr float kDash = 6.0f;
+  constexpr float kGap = 4.0f;
   for (const float t : {1.0f / 3.0f, 2.0f / 3.0f}) {
-    AppendLinePair(scene.grid_lines,
-                   CropGeometry::LerpPoint(geometry.crop_corners_widget[0],
-                                           geometry.crop_corners_widget[1], t),
-                   CropGeometry::LerpPoint(geometry.crop_corners_widget[3],
-                                           geometry.crop_corners_widget[2], t));
-    AppendLinePair(scene.grid_lines,
-                   CropGeometry::LerpPoint(geometry.crop_corners_widget[0],
-                                           geometry.crop_corners_widget[3], t),
-                   CropGeometry::LerpPoint(geometry.crop_corners_widget[1],
-                                           geometry.crop_corners_widget[2], t));
+    AppendDashedStroke(
+        scene.grid_triangles,
+        CropGeometry::LerpPoint(geometry.crop_corners_widget[0], geometry.crop_corners_widget[1], t),
+        CropGeometry::LerpPoint(geometry.crop_corners_widget[3], geometry.crop_corners_widget[2], t),
+        1.0f, kDash, kGap);
+    AppendDashedStroke(
+        scene.grid_triangles,
+        CropGeometry::LerpPoint(geometry.crop_corners_widget[0], geometry.crop_corners_widget[3], t),
+        CropGeometry::LerpPoint(geometry.crop_corners_widget[1], geometry.crop_corners_widget[2], t),
+        1.0f, kDash, kGap);
   }
 
-  AppendLinePair(scene.rotate_stem_line, geometry.rotate_stem_widget, geometry.rotate_handle_widget);
+  AppendStrokeSegment(scene.stem_outer_triangles, geometry.rotate_stem_widget,
+                      geometry.rotate_handle_widget, 2.4f, true);
+  AppendStrokeSegment(scene.stem_inner_triangles, geometry.rotate_stem_widget,
+                      geometry.rotate_handle_widget, 1.1f, true);
 
+  constexpr int kHandleSegs = 16;
   for (const auto& corner : geometry.crop_corners_widget) {
-    AppendDisc(scene.handle_discs, corner, CropGeometry::kCropCornerDrawRadiusPx, kHandleSegments);
+    const float r = CropGeometry::kCropCornerDrawRadiusPx;
+    AppendRing(scene.handle_outline_triangles, corner, r, r + 1.2f, kHandleSegs);
+    AppendFilledDisc(scene.handle_fill_triangles, corner, r, kHandleSegs);
     ++scene.handle_count;
   }
-  AppendDisc(scene.handle_discs, geometry.rotate_handle_widget,
-             CropGeometry::kCropRotateHandleDrawRadiusPx, kHandleSegments);
-  ++scene.handle_count;
+  {
+    const float r = CropGeometry::kCropRotateHandleDrawRadiusPx;
+    AppendRing(scene.handle_outline_triangles, geometry.rotate_handle_widget, r, r + 1.2f,
+               kHandleSegs);
+    AppendFilledDisc(scene.handle_fill_triangles, geometry.rotate_handle_widget, r, kHandleSegs);
+    ++scene.handle_count;
+  }
 
+  (void)kMaskAlpha;
   return scene;
 }
 
@@ -192,7 +376,8 @@ struct EditorOverlayItem::OverlayRootNode : public QSGNode {
   QSGGeometryNode* grid_node = nullptr;
   QSGGeometryNode* stem_outer_node = nullptr;
   QSGGeometryNode* stem_inner_node = nullptr;
-  QSGGeometryNode* handle_node = nullptr;
+  QSGGeometryNode* handle_outline_node = nullptr;
+  QSGGeometryNode* handle_fill_node = nullptr;
   QSGGeometryNode* detail_roi_node = nullptr;
 };
 
@@ -208,7 +393,7 @@ void EditorOverlayItem::setInteraction(EditorInteractionController* controller) 
   }
   bindInteraction(controller);
   emit InteractionChanged();
-  refreshFromInteraction();
+  scheduleRebuildFromInteraction();
 }
 
 auto EditorOverlayItem::cropVisible() const -> bool { return last_scene_geometry_.has_crop; }
@@ -216,15 +401,34 @@ auto EditorOverlayItem::cropVisible() const -> bool { return last_scene_geometry
 void EditorOverlayItem::refreshFromInteraction() {
   rebuildSceneGeometry();
   ++geometry_revision_;
+  ++geometry_rebuild_count_;
   geometry_dirty_ = true;
+  rebuild_scheduled_ = false;
   emit GeometryRevisionChanged();
   update();
+}
+
+void EditorOverlayItem::scheduleRebuildFromInteraction() {
+  if (rebuild_scheduled_) {
+    return;
+  }
+  rebuild_scheduled_ = true;
+  // Coalesce multi-signal bursts (view+crop+overlay) into one rebuild per event loop turn.
+  QMetaObject::invokeMethod(
+      this,
+      [this]() {
+        if (!rebuild_scheduled_) {
+          return;
+        }
+        refreshFromInteraction();
+      },
+      Qt::QueuedConnection);
 }
 
 void EditorOverlayItem::geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) {
   QQuickItem::geometryChange(newGeometry, oldGeometry);
   if (newGeometry.size() != oldGeometry.size()) {
-    refreshFromInteraction();
+    scheduleRebuildFromInteraction();
   }
 }
 
@@ -236,6 +440,7 @@ void EditorOverlayItem::bindInteraction(EditorInteractionController* controller)
   if (!interaction_) {
     return;
   }
+  // Single slot for all geometry-affecting signals — coalesced by scheduleRebuild.
   connect(interaction_, &EditorInteractionController::overlayGeometryChanged, this,
           &EditorOverlayItem::onInteractionOverlayChanged);
   connect(interaction_, &EditorInteractionController::cropChanged, this,
@@ -248,7 +453,7 @@ void EditorOverlayItem::bindInteraction(EditorInteractionController* controller)
           &EditorOverlayItem::onInteractionOverlayChanged);
 }
 
-void EditorOverlayItem::onInteractionOverlayChanged() { refreshFromInteraction(); }
+void EditorOverlayItem::onInteractionOverlayChanged() { scheduleRebuildFromInteraction(); }
 
 void EditorOverlayItem::rebuildSceneGeometry() {
   if (!interaction_) {
@@ -265,6 +470,7 @@ auto EditorOverlayItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*)
   auto* root = static_cast<OverlayRootNode*>(old_node);
   if (!root) {
     root = new OverlayRootNode;
+    ++paint_node_create_count_;
   }
 
   if (!geometry_dirty_ && old_node) {
@@ -272,59 +478,32 @@ auto EditorOverlayItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData*)
   }
   geometry_dirty_ = false;
 
-  auto replace_child = [root](QSGGeometryNode*& slot, QSGGeometryNode* next) {
-    if (slot) {
-      root->removeChildNode(slot);
-      delete slot;
-      slot = nullptr;
-    }
-    if (next) {
-      root->appendChildNode(next);
-      slot = next;
-    }
-  };
-
   const auto& scene = last_scene_geometry_;
+  int creates = 0;
 
-  replace_child(root->mask_node,
-                MakeColoredNode(scene.mask_triangles, QColor(0, 0, 0, 112),
-                                QSGGeometry::DrawTriangles));
+  UpsertTriangleNode(root, root->mask_node, scene.mask_triangles, QColor(0, 0, 0, 112), creates);
+  UpsertTriangleNode(root, root->border_outer_node, scene.border_outer_triangles,
+                     QColor(255, 255, 255, 235), creates);
+  UpsertTriangleNode(root, root->border_inner_node, scene.border_inner_triangles,
+                     QColor(22, 22, 22, 230), creates);
+  UpsertTriangleNode(root, root->grip_outer_node, scene.grip_outer_triangles,
+                     QColor(255, 255, 255, 245), creates);
+  UpsertTriangleNode(root, root->grip_inner_node, scene.grip_inner_triangles,
+                     QColor(28, 28, 28, 235), creates);
+  UpsertTriangleNode(root, root->grid_node, scene.grid_triangles, QColor(255, 255, 255, 135),
+                     creates);
+  UpsertTriangleNode(root, root->stem_outer_node, scene.stem_outer_triangles,
+                     QColor(255, 255, 255, 220), creates);
+  UpsertTriangleNode(root, root->stem_inner_node, scene.stem_inner_triangles,
+                     QColor(25, 25, 25, 220), creates);
+  UpsertTriangleNode(root, root->handle_outline_node, scene.handle_outline_triangles,
+                     QColor(28, 28, 28, 230), creates);
+  UpsertTriangleNode(root, root->handle_fill_node, scene.handle_fill_triangles,
+                     QColor(255, 255, 255, 245), creates);
+  UpsertTriangleNode(root, root->detail_roi_node, scene.detail_roi_triangles,
+                     QColor(120, 200, 255, 200), creates);
 
-  replace_child(root->border_outer_node,
-                MakeColoredNode(scene.border_lines, QColor(255, 255, 255, 235),
-                                QSGGeometry::DrawLines, 3.0f));
-  replace_child(root->border_inner_node,
-                MakeColoredNode(scene.border_lines, QColor(22, 22, 22, 230),
-                                QSGGeometry::DrawLines, 1.2f));
-
-  replace_child(root->grip_outer_node,
-                MakeColoredNode(scene.edge_grip_lines, QColor(255, 255, 255, 245),
-                                QSGGeometry::DrawLines, 5.0f));
-  replace_child(root->grip_inner_node,
-                MakeColoredNode(scene.edge_grip_lines, QColor(28, 28, 28, 235),
-                                QSGGeometry::DrawLines, 2.4f));
-
-  replace_child(root->grid_node,
-                MakeColoredNode(scene.grid_lines, QColor(255, 255, 255, 135),
-                                QSGGeometry::DrawLines, 1.0f));
-
-  replace_child(root->stem_outer_node,
-                MakeColoredNode(scene.rotate_stem_line, QColor(255, 255, 255, 220),
-                                QSGGeometry::DrawLines, 2.4f));
-  replace_child(root->stem_inner_node,
-                MakeColoredNode(scene.rotate_stem_line, QColor(25, 25, 25, 220),
-                                QSGGeometry::DrawLines, 1.1f));
-
-  const auto handle_tris = ExpandHandleDiscs(scene);
-  replace_child(root->handle_node,
-                MakeColoredNode(handle_tris, QColor(255, 255, 255, 245),
-                                QSGGeometry::DrawTriangles));
-
-  replace_child(root->detail_roi_node,
-                MakeColoredNode(scene.detail_roi_lines, QColor(120, 200, 255, 200),
-                                QSGGeometry::DrawLines, 1.5f));
-
-  (void)kMaskAlpha;
+  paint_node_create_count_ += creates;
   return root;
 }
 

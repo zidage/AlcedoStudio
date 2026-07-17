@@ -61,6 +61,10 @@ class CropInteractionController {
 
   auto HandleRelease(ViewerState& state) -> CropInteractionResult;
   auto HandleDoubleClick(ViewerState& state) -> CropInteractionResult;
+  // Aborts an in-flight drag without a final commit. Restores the crop rect and
+  // rotation captured at press so a later release cannot apply a stale provisional
+  // result after the tool is disabled or the session cancels.
+  void Cancel(ViewerState& state);
   void Cancel();
 
  private:
@@ -72,6 +76,10 @@ class CropInteractionController {
   QPointF      drag_anchor_uv_{};
   QPointF      drag_anchor_widget_pos_{};
   QRectF       drag_origin_rect_{};
+  // Crop rect present at press, before Create/Move provisional mutation. Cancel
+  // restores this so disabling the tool mid-gesture never leaves a half-built rect.
+  QRectF       drag_pre_press_rect_{0.0, 0.0, 1.0, 1.0};
+  float        drag_pre_press_rotation_ = 0.0f;
   QPointF      drag_fixed_corner_uv_{};
   float        drag_rotation_degrees_   = 0.0f;
 };

@@ -155,6 +155,11 @@ class EditorInteractionController : public QObject {
   [[nodiscard]] auto viewerState() -> ViewerState& { return viewer_state_; }
   [[nodiscard]] auto viewerState() const -> const ViewerState& { return viewer_state_; }
 
+  // Pushes the full ViewerViewState (zoom/pan, crop, viewport render region,
+  // interactive/detail flags) into the production viewport + LeaseFrameSink.
+  // QML must call this after view/metrics/frame changes — not only setViewTransform.
+  Q_INVOKABLE void applyViewStateToViewport(QObject* viewportItem);
+
   // Test/harness helpers: force a view transform without animation.
   void applyViewTransformForTest(float zoom, float pan_x, float pan_y);
 
