@@ -682,6 +682,12 @@ Acceptance:
 - Hiding/minimizing the window cannot leave a producer blocked forever on a target lease.
 - Scene graph invalidation releases all imported wrappers and native targets in a deterministic order.
 
+**Status: complete (2026-07-17).** Implemented and verified on Windows with the production
+`QQuickRhiItem` viewport, broker lease protocol, CUDA/D3D11 and OpenCL/OpenGL adapters, generation
+and stale-frame filtering, render-thread resource release, and read-only diagnostics. The focused
+broker/contract suite, production QML workflow, workspace-shell suite, and both direct backend
+harness cases pass.
+
 ### Phase 3 - Scene graph overlays and viewer interactions
 
 Deliverables:

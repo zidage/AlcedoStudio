@@ -35,6 +35,14 @@ enum class LeaseNativeHandleKind : std::uint8_t {
   MetalTexture,       // MTLTexture* (id) as opaque pointer
 };
 
+// The broker keeps these layer identities independent from the edit-viewer
+// implementation so a future Metal adapter can use the same protocol.
+enum class LeaseFrameLayer : std::uint8_t {
+  InteractivePrimary = 0,
+  QualityBase,
+  DetailPatch,
+};
+
 struct LeaseDimensions {
   int width  = 0;
   int height = 0;
@@ -56,6 +64,7 @@ struct WritableTargetLease {
   LeasePixelFormat      pixel_format  = LeasePixelFormat::Rgba32f;
   LeaseDimensions       dimensions{};
   TargetGeneration      generation{};
+  LeaseFrameLayer       layer         = LeaseFrameLayer::InteractivePrimary;
   std::uintptr_t        native_handle = 0;
   // Optional external semaphore / fence for producer->consumer sync.
   std::uintptr_t        sync_object   = 0;
@@ -73,11 +82,22 @@ struct WritableTargetLease {
 struct CompletedFrameLease {
   WritableTargetLease   target{};
   TargetGeneration      generation{};
+  LeaseFrameLayer       layer              = LeaseFrameLayer::InteractivePrimary;
+  std::uint64_t         preview_generation = 0;
+  std::uint64_t         detail_serial      = 0;
+  float                 roi_x              = 0.0f;
+  float                 roi_y              = 0.0f;
+  float                 roi_width          = 1.0f;
+  float                 roi_height         = 1.0f;
   bool                  producer_complete = false;
 
   [[nodiscard]] auto valid() const -> bool {
     return target.valid() && producer_complete &&
-           generation.target_generation == target.generation.target_generation;
+           generation.target_generation == target.generation.target_generation &&
+           generation.image_generation == target.generation.image_generation &&
+           (target.generation.layer_generation == 0 ||
+            generation.layer_generation == target.generation.layer_generation) &&
+           layer == target.layer;
   }
 };
 

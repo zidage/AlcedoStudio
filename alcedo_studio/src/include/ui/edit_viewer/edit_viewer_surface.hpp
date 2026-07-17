@@ -10,20 +10,11 @@
 #include <optional>
 #include <vector>
 
-#include "ui/edit_viewer/viewer_state.hpp"
+#include "ui/viewer/viewer_view_state.hpp"
 
 class QWidget;
 
 namespace alcedo {
-
-struct ViewerViewState {
-  ViewerStateSnapshot snapshot{};
-  bool                prefer_interactive_primary = false;
-  bool                allow_detail_patch         = true;
-  bool                has_expected_detail_token  = false;
-  std::uint64_t       expected_detail_generation = 0;
-  std::uint64_t       expected_detail_serial     = 0;
-};
 
 struct EditViewerRenderTargetResizeDecision {
   bool need_resize = false;

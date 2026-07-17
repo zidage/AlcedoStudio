@@ -2,10 +2,10 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
+import Alcedo.Main 1.0
 
-// Editor workspace shell for Phase 1B.
-// Provides toolbar regions, empty viewport slot, inspector/scope slots, and the
-// downward-collapsing filmstrip dock. Real viewport/RHI and panels arrive later.
+// Unified editor workspace shell. The viewport is a QQuickRhiItem-backed
+// presentation surface; the surrounding shell remains QML-owned.
 Item {
     id: root
     objectName: "editorWorkspace"
@@ -223,11 +223,21 @@ Item {
                         }
                     }
 
-                    // Has-image placeholder until QQuickRhiItem lands in Phase 2.
-                    Label {
-                        anchors.centerIn: parent
+                    EditorViewportItem {
+                        id: editorViewportItem
+                        objectName: "editorViewportItem"
+                        anchors.fill: parent
                         visible: root.hasImage
-                        text: qsTr("Viewport ready for element %1").arg(root.focusedElementId)
+                        imageGeneration: root.focusedImageId
+                        Accessible.role: Accessible.Canvas
+                        Accessible.name: qsTr("Image viewport")
+                    }
+
+                    Label {
+                        objectName: "editorViewportStatus"
+                        anchors.centerIn: parent
+                        visible: root.hasImage && !editorViewportItem.presentationAvailable
+                        text: qsTr("Preparing image viewport")
                         color: root.colMuted
                         font.pixelSize: 14
                     }

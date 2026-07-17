@@ -1528,10 +1528,12 @@ endif()
 set(EDITOR_RHI_CONTRACT_SRCS
     ui/editor_rhi/editor_backend.cpp
     ui/editor_rhi/frame_presentation_lease.cpp
+    ui/editor_rhi/frame_presentation_broker.cpp
     ui/editor_rhi/native_resource_counters.cpp
     ui/editor_rhi/harness_fixtures.cpp
     include/ui/editor_rhi/editor_backend.hpp
     include/ui/editor_rhi/frame_presentation_lease.hpp
+    include/ui/editor_rhi/frame_presentation_broker.hpp
     include/ui/editor_rhi/native_resource_counters.hpp
     include/ui/editor_rhi/harness_fixtures.hpp
     include/ui/editor_rhi/editor_startup.hpp
@@ -1558,7 +1560,56 @@ if(ALCEDO_METAL_ENABLED)
     target_compile_definitions(EditorRhiContracts PUBLIC HAVE_METAL)
 endif()
 
-set(EDITOR_RHI_VIEWPORT_SRCS
+set(EDITOR_RHI_UNIFIED_VIEWPORT_SRCS
+    ui/editor_rhi/lease_target_adapters.cpp
+    ui/editor_rhi/editor_viewport_item.cpp
+    ui/editor_rhi/editor_viewport_renderer.cpp
+    include/ui/editor_rhi/frame_presentation_broker.hpp
+    include/ui/editor_rhi/lease_target_adapters.hpp
+    include/ui/viewer/viewer_view_state.hpp
+    include/ui/editor_rhi/editor_viewport_item.hpp
+    include/ui/editor_rhi/editor_viewport_renderer.hpp
+)
+
+def_library(EditorRhiViewport
+    SOURCES ${EDITOR_RHI_UNIFIED_VIEWPORT_SRCS}
+    PUBLIC_DEPS
+        EditorRhiContracts
+        Qt6::Core
+        Qt6::Gui
+        Qt6::GuiPrivate
+        Qt6::Quick
+        Qt6::Qml
+        Qt6::OpenGL
+        Qt6::ShaderTools
+        opencv_core
+)
+if(ALCEDO_CUDA_ENABLED)
+    target_compile_definitions(EditorRhiViewport PUBLIC HAVE_CUDA)
+    target_link_libraries(EditorRhiViewport PUBLIC CUDA::cudart)
+endif()
+if(ALCEDO_OPENCL_ENABLED)
+    target_compile_definitions(EditorRhiViewport PUBLIC HAVE_OPENCL)
+    target_link_libraries(EditorRhiViewport PUBLIC OpenClContext OpenCL::OpenCL)
+endif()
+if(ALCEDO_METAL_ENABLED)
+    target_compile_definitions(EditorRhiViewport PUBLIC HAVE_METAL)
+endif()
+if(WIN32)
+    target_link_libraries(EditorRhiViewport PRIVATE d3d11 dxgi opengl32)
+endif()
+
+qt_add_shaders(EditorRhiViewport "editor_rhi_viewport_shaders"
+    PREFIX
+        "/shaders/editor_rhi"
+    BASE
+        "ui/editor_rhi/shaders"
+    FILES
+        ui/editor_rhi/shaders/editor_viewport.vert
+        ui/editor_rhi/shaders/editor_viewport.frag
+)
+
+set(EDITOR_RHI_HARNESS_VIEWPORT_SRCS
     ui/editor_rhi/harness_viewport_item.cpp
     ui/editor_rhi/harness_viewport_renderer.cpp
     include/ui/editor_rhi/harness_viewport_item.hpp
@@ -1568,7 +1619,7 @@ set(EDITOR_RHI_VIEWPORT_SRCS
 def_library(EditorRhiHarnessLib
     SOURCES
         ${EDITOR_RHI_STARTUP_SRCS}
-        ${EDITOR_RHI_VIEWPORT_SRCS}
+        ${EDITOR_RHI_HARNESS_VIEWPORT_SRCS}
     PUBLIC_DEPS
         EditorRhiContracts
         Qt6::Core
@@ -1712,6 +1763,7 @@ target_link_libraries(AlbumBackendLib
     PUBLIC
         UiLocalization
         BackgroundTaskController
+        EditorRhiViewport
         Qt6::Quick
         Qt6::Qml
         Qt6::QuickControls2

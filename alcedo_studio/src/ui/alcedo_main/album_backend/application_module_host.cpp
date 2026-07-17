@@ -11,6 +11,7 @@
 #include <string>
 
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
+#include "ui/editor_rhi/editor_viewport_item.hpp"
 
 namespace alcedo::ui {
 
@@ -18,6 +19,7 @@ namespace alcedo::ui {
 
 ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver observer)
     : QObject(parent), lifecycle_observer_(std::move(observer)) {
+  alcedo::editor_rhi::RegisterEditorViewportQmlTypes();
   background_tasks_    = std::make_unique<BackgroundTaskController>();
   RecordConstruction("BackgroundTaskController", background_tasks_.get());
   interaction_policy_  = std::make_unique<InteractionPolicyController>(background_tasks_.get(), this);

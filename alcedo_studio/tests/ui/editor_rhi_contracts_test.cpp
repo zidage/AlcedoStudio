@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "ui/editor_rhi/editor_backend.hpp"
+#include "ui/editor_rhi/frame_presentation_broker.hpp"
 #include "ui/editor_rhi/frame_presentation_lease.hpp"
 #include "ui/editor_rhi/harness_fixtures.hpp"
 #include "ui/editor_rhi/native_resource_counters.hpp"
@@ -122,6 +123,82 @@ TEST(FramePresentationLeaseTest, MetalLeaseContractIsDefinedWithoutImplementatio
   EXPECT_TRUE(lease.valid());
   const std::string desc = DescribeLease(lease);
   EXPECT_NE(desc.find("metal"), std::string::npos);
+}
+
+auto MakeTestLease(std::uintptr_t native_handle, std::uint64_t target_generation,
+                   std::uint64_t image_generation) -> WritableTargetLease {
+  WritableTargetLease lease;
+  lease.backend = EditorBackend::Cuda;
+  lease.handle_kind = LeaseNativeHandleKind::D3D11Texture2D;
+  lease.dimensions = {64, 48};
+  lease.generation = {target_generation, image_generation, 0};
+  lease.native_handle = native_handle;
+  lease.lifetime_token = std::shared_ptr<const void>(
+      reinterpret_cast<const void*>(native_handle), [](const void*) {});
+  return lease;
+}
+
+TEST(FramePresentationBrokerTest, AcquiresSubmitsAndConsumesNewestCompatibleLayer) {
+  FramePresentationBroker broker(EditorBackend::Cuda);
+  ASSERT_TRUE(broker.PublishWritableTarget(MakeTestLease(0x10, 4, 7)));
+  ASSERT_TRUE(broker.PublishWritableTarget(MakeTestLease(0x11, 4, 7)));
+
+  auto target = broker.TryAcquireWritableTarget();
+  ASSERT_TRUE(target.has_value());
+  target->layer = LeaseFrameLayer::QualityBase;
+
+  CompletedFrameLease older;
+  older.target = *target;
+  older.layer = LeaseFrameLayer::QualityBase;
+  older.generation = {4, 7, 1};
+  older.preview_generation = 1;
+  older.producer_complete = true;
+  ASSERT_TRUE(broker.SubmitCompletedFrame(older));
+
+  auto second_target = broker.TryAcquireWritableTarget();
+  ASSERT_TRUE(second_target.has_value());
+  second_target->layer = LeaseFrameLayer::QualityBase;
+  CompletedFrameLease newer = older;
+  newer.target = *second_target;
+  newer.generation = {4, 7, 2};
+  newer.preview_generation = 2;
+  ASSERT_TRUE(broker.SubmitCompletedFrame(newer));
+
+  const auto frame = broker.ConsumeNewestCompletedFrame(
+      TargetGeneration{4, 7, 0}, LeaseFrameLayer::QualityBase);
+  ASSERT_TRUE(frame.has_value());
+  EXPECT_EQ(frame->preview_generation, 2u);
+  EXPECT_EQ(broker.DiagnosticsSnapshot().dropped_stale_frame_count, 1u);
+  broker.CompleteRendererConsumption(*frame);
+  EXPECT_EQ(broker.DiagnosticsSnapshot().last_presented_image_generation, 7u);
+}
+
+TEST(FramePresentationBrokerTest, InvalidatesGenerationsAndNeverBlocksHiddenProducer) {
+  FramePresentationBroker broker(EditorBackend::Cuda);
+  ASSERT_TRUE(broker.PublishWritableTarget(MakeTestLease(0x20, 8, 9)));
+  ASSERT_TRUE(broker.TryAcquireWritableTarget().has_value());
+
+  broker.SetConsumerAvailable(false);
+  EXPECT_FALSE(broker.TryAcquireWritableTarget().has_value());
+  EXPECT_EQ(broker.DiagnosticsSnapshot().live_target_count, 0u);
+  EXPECT_EQ(broker.DrainReleasedTargets().size(), 1u);
+
+  broker.SetConsumerAvailable(true);
+  ASSERT_TRUE(broker.PublishWritableTarget(MakeTestLease(0x21, 9, 10)));
+  broker.InvalidateImageGeneration(11);
+  EXPECT_FALSE(broker.TryAcquireWritableTarget().has_value());
+  EXPECT_EQ(broker.DrainReleasedTargets().size(), 1u);
+}
+
+TEST(FramePresentationBrokerTest, RejectsPriorImageAfterGenerationChange) {
+  FramePresentationBroker broker(EditorBackend::Cuda);
+  ASSERT_TRUE(broker.PublishWritableTarget(MakeTestLease(0x30, 12, 20)));
+
+  broker.InvalidateImageGeneration(21);
+  EXPECT_FALSE(broker.PublishWritableTarget(MakeTestLease(0x31, 12, 20)));
+  EXPECT_EQ(broker.CurrentImageGeneration(), 21u);
+  EXPECT_EQ(broker.DiagnosticsSnapshot().dropped_stale_frame_count, 1u);
+  EXPECT_EQ(broker.DrainReleasedTargets().size(), 2u);
 }
 
 TEST(NativeResourceCountersTest, LiveTotalTracksCreateDestroy) {
