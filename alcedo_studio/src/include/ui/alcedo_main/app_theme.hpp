@@ -48,6 +48,39 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int currentThemeIndex READ currentThemeIndex WRITE setCurrentThemeIndex NOTIFY ThemeChanged)
   Q_PROPERTY(QVariantList availableThemes READ availableThemes CONSTANT)
 
+  // ── Design tokens — structural (theme-invariant) ─────────────────────────
+  // Canonical visual-identity contract: see src/ui/alcedo_main/DESIGN.md.
+  // Literal getters (CONSTANT) for radii, icon geometry, spacing, motion
+  // durations, and QML-facing typography sizes/weights. Only reduceMotion is
+  // stateful (QSettings-backed "ui/reduceMotion"). cardSurfaceColor /
+  // cardBorderColor are semantic aliases that follow the active theme.
+  Q_PROPERTY(int controlRadius READ controlRadius CONSTANT)
+  Q_PROPERTY(int controlRadiusSmall READ controlRadiusSmall CONSTANT)
+  Q_PROPERTY(int badgeRadius READ badgeRadius CONSTANT)
+  Q_PROPERTY(int iconOpticalSize READ iconOpticalSize CONSTANT)
+  Q_PROPERTY(int iconOpticalSizeCompact READ iconOpticalSizeCompact CONSTANT)
+  Q_PROPERTY(int iconButtonHitSize READ iconButtonHitSize CONSTANT)
+  Q_PROPERTY(int iconButtonHitSizeCompact READ iconButtonHitSizeCompact CONSTANT)
+  Q_PROPERTY(int spaceXs READ spaceXs CONSTANT)
+  Q_PROPERTY(int spaceSm READ spaceSm CONSTANT)
+  Q_PROPERTY(int spaceMd READ spaceMd CONSTANT)
+  Q_PROPERTY(int spaceLg READ spaceLg CONSTANT)
+  Q_PROPERTY(int spaceXl READ spaceXl CONSTANT)
+  Q_PROPERTY(int motionFoldOpenMs READ motionFoldOpenMs CONSTANT)
+  Q_PROPERTY(int motionFoldCloseMs READ motionFoldCloseMs CONSTANT)
+  Q_PROPERTY(int motionFadeMs READ motionFadeMs CONSTANT)
+  Q_PROPERTY(bool reduceMotion READ reduceMotion WRITE setReduceMotion NOTIFY ReduceMotionChanged)
+  Q_PROPERTY(int fontSizeCaption READ fontSizeCaption CONSTANT)
+  Q_PROPERTY(int fontSizeBody READ fontSizeBody CONSTANT)
+  Q_PROPERTY(int fontSizeTitle READ fontSizeTitle CONSTANT)
+  Q_PROPERTY(int fontSizeSection READ fontSizeSection CONSTANT)
+  Q_PROPERTY(int fontSizeHeadline READ fontSizeHeadline CONSTANT)
+  Q_PROPERTY(int fontWeightRegular READ fontWeightRegular CONSTANT)
+  Q_PROPERTY(int fontWeightStrong READ fontWeightStrong CONSTANT)
+  Q_PROPERTY(int fontWeightHeading READ fontWeightHeading CONSTANT)
+  Q_PROPERTY(QColor cardSurfaceColor READ cardSurfaceColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor cardBorderColor READ cardBorderColor NOTIFY ThemeChanged)
+
  public:
   enum class FontRole : int {
     UiBody = 0,
@@ -131,6 +164,34 @@ class AppTheme final : public QObject {
   auto overlayColor() const -> QColor;
   auto panelRadius() const -> int;
 
+  auto controlRadius() const -> int;
+  auto controlRadiusSmall() const -> int;
+  auto badgeRadius() const -> int;
+  auto iconOpticalSize() const -> int;
+  auto iconOpticalSizeCompact() const -> int;
+  auto iconButtonHitSize() const -> int;
+  auto iconButtonHitSizeCompact() const -> int;
+  auto spaceXs() const -> int;
+  auto spaceSm() const -> int;
+  auto spaceMd() const -> int;
+  auto spaceLg() const -> int;
+  auto spaceXl() const -> int;
+  auto motionFoldOpenMs() const -> int;
+  auto motionFoldCloseMs() const -> int;
+  auto motionFadeMs() const -> int;
+  auto reduceMotion() const -> bool;
+  void setReduceMotion(bool enabled);
+  auto fontSizeCaption() const -> int;
+  auto fontSizeBody() const -> int;
+  auto fontSizeTitle() const -> int;
+  auto fontSizeSection() const -> int;
+  auto fontSizeHeadline() const -> int;
+  auto fontWeightRegular() const -> int;
+  auto fontWeightStrong() const -> int;
+  auto fontWeightHeading() const -> int;
+  auto cardSurfaceColor() const -> QColor;
+  auto cardBorderColor() const -> QColor;
+
   auto currentThemeIndex() const -> int;
   void setCurrentThemeIndex(int index);
   auto availableThemes() const -> QVariantList;
@@ -138,6 +199,7 @@ class AppTheme final : public QObject {
  signals:
   void UiFontFamilyChanged();
   void ThemeChanged();
+  void ReduceMotionChanged();
 
  private:
   explicit AppTheme(QObject* parent = nullptr);
@@ -145,6 +207,10 @@ class AppTheme final : public QObject {
   static auto ResolveRole(QWidget* widget) -> FontRole;
 
   int current_theme_index_ = 0;
+  // Lazy-loaded from QSettings("ui/reduceMotion") on first read so the
+  // singleton is safe to construct before QCoreApplication org/app are set.
+  mutable bool reduce_motion_loaded_ = false;
+  mutable bool reduce_motion_ = false;
 };
 
 }  // namespace alcedo::ui

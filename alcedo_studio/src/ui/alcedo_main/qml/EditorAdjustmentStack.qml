@@ -23,6 +23,9 @@ Item {
     readonly property color colHover: theme ? theme.colHover : Qt.rgba(1, 1, 1, 0.07)
     readonly property color colBase: theme ? theme.colBgBase : "#161719"
     readonly property color colDeep: theme ? theme.colBgDeep : "#0C0D0F"
+    // Card surface family — shared with the Library grid (see DESIGN.md).
+    readonly property color colCardSurface: theme ? theme.colCardSurface : "#161719"
+    readonly property color colCardBorder: theme ? theme.colCardBorder : Qt.rgba(1, 1, 1, 0.08)
     readonly property int panelRadius: theme ? theme.panelRadius : 12
     readonly property int controlRadius: theme ? theme.controlRadius : 10
 
@@ -76,16 +79,16 @@ Item {
         objectName: "editorRightPanelSlot"
         anchors.fill: parent
         radius: root.panelRadius
-        color: root.colPanel
+        color: root.colCardSurface
         border.width: 1
-        border.color: root.colStroke
+        border.color: root.colCardBorder
         opacity: root.controlsEnabled ? 1.0 : 0.55
         clip: true
 
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: 12
-            spacing: 10
+            anchors.margins: appTheme.spaceMd
+            spacing: appTheme.spaceMd
 
             // Histogram / waveform placement stays with the right-side tools.
             Rectangle {
@@ -94,16 +97,16 @@ Item {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 120
                 Layout.minimumHeight: 96
-                radius: 8
-                color: root.colDeep
+                radius: appTheme.controlRadiusSmall
+                color: "transparent"
                 border.width: 1
-                border.color: root.colStroke
+                border.color: root.colCardBorder
 
                 Label {
                     anchors.centerIn: parent
                     text: qsTr("Histogram / Waveform")
                     color: root.colMuted
-                    font.pixelSize: 12
+                    font.pixelSize: appTheme.fontSizeBody
                 }
             }
 
@@ -113,11 +116,11 @@ Item {
                 id: adjustmentNav
                 objectName: "editorAdjustmentNav"
                 Layout.fillWidth: true
-                Layout.preferredHeight: 40
+                Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
                 radius: root.controlRadius
-                color: root.colBase
+                color: root.colCardSurface
                 border.width: 1
-                border.color: root.colStroke
+                border.color: root.colCardBorder
 
                 component AdjustmentNavButton: Button {
                     id: navBtn
@@ -139,8 +142,8 @@ Item {
                                                           : (navHover.hovered ? 1 : 0))
                     readonly property bool focusRingVisible: enabled && activeFocus
                     icon.source: iconSrc
-                    icon.width: 16
-                    icon.height: 16
+                    icon.width: appTheme.iconOpticalSizeCompact
+                    icon.height: appTheme.iconOpticalSizeCompact
                     icon.color: !enabled ? root.withAlpha(root.colMuted, 0.55)
                                : (isActive ? root.colText : root.colMuted)
                     Material.foreground: icon.color
@@ -224,23 +227,23 @@ Item {
 
                     ColumnLayout {
                         anchors.fill: parent
-                        spacing: 8
+                        spacing: appTheme.spaceSm
 
                         Label {
                             Layout.fillWidth: true
                             text: root.panelTitle(panelKey)
                             color: root.colText
-                            font.pixelSize: 13
-                            font.weight: 700
+                            font.pixelSize: appTheme.fontSizeTitle
+                            font.weight: appTheme.fontWeightHeading
                         }
 
                         Rectangle {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            radius: 8
+                            radius: appTheme.controlRadiusSmall
                             color: "transparent"
                             border.width: 1
-                            border.color: root.colStroke
+                            border.color: root.colCardBorder
 
                             Label {
                                 anchors.centerIn: parent
@@ -249,7 +252,7 @@ Item {
                                 horizontalAlignment: Text.AlignHCenter
                                 text: root.panelEmptyHint(panelKey)
                                 color: root.colMuted
-                                font.pixelSize: 12
+                                font.pixelSize: appTheme.fontSizeBody
                             }
                         }
                     }

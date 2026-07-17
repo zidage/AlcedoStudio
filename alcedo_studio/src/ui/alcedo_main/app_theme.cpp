@@ -12,6 +12,7 @@
 #include <QFontDatabase>
 #include <QListWidget>
 #include <QPushButton>
+#include <QSettings>
 #include <QSpinBox>
 #include <QVariantMap>
 #include <QWidget>
@@ -935,6 +936,59 @@ auto AppTheme::glassPanelColor() const -> QColor { return GetTheme(current_theme
 auto AppTheme::glassStrokeColor() const -> QColor { return GetTheme(current_theme_index_).glass_stroke; }
 auto AppTheme::overlayColor() const -> QColor { return GetTheme(current_theme_index_).overlay; }
 auto AppTheme::panelRadius() const -> int { return GetTheme(current_theme_index_).panel_radius; }
+
+// ── Design tokens — structural (theme-invariant) ───────────────────────────
+// Values are the canonical VI contract documented in DESIGN.md. Literal
+// getters keep a single source of truth shared by QML and (future) QWidget
+// consumers; do not duplicate these numbers in feature QML.
+auto AppTheme::controlRadius() const -> int { return 10; }
+auto AppTheme::controlRadiusSmall() const -> int { return 8; }
+auto AppTheme::badgeRadius() const -> int { return 6; }
+auto AppTheme::iconOpticalSize() const -> int { return 24; }
+auto AppTheme::iconOpticalSizeCompact() const -> int { return 20; }
+auto AppTheme::iconButtonHitSize() const -> int { return 44; }
+auto AppTheme::iconButtonHitSizeCompact() const -> int { return 40; }
+auto AppTheme::spaceXs() const -> int { return 4; }
+auto AppTheme::spaceSm() const -> int { return 8; }
+auto AppTheme::spaceMd() const -> int { return 12; }
+auto AppTheme::spaceLg() const -> int { return 16; }
+auto AppTheme::spaceXl() const -> int { return 20; }
+auto AppTheme::motionFoldOpenMs() const -> int { return 200; }
+auto AppTheme::motionFoldCloseMs() const -> int { return 160; }
+auto AppTheme::motionFadeMs() const -> int { return 120; }
+
+auto AppTheme::reduceMotion() const -> bool {
+  if (!reduce_motion_loaded_) {
+    QSettings settings;
+    reduce_motion_ = settings.value(QStringLiteral("ui/reduceMotion"), false).toBool();
+    reduce_motion_loaded_ = true;
+  }
+  return reduce_motion_;
+}
+
+void AppTheme::setReduceMotion(bool enabled) {
+  if (reduce_motion_loaded_ && reduce_motion_ == enabled) {
+    return;
+  }
+  reduce_motion_ = enabled;
+  reduce_motion_loaded_ = true;
+  QSettings settings;
+  settings.setValue(QStringLiteral("ui/reduceMotion"), enabled);
+  settings.sync();
+  emit ReduceMotionChanged();
+}
+
+auto AppTheme::fontSizeCaption() const -> int { return 11; }
+auto AppTheme::fontSizeBody() const -> int { return 12; }
+auto AppTheme::fontSizeTitle() const -> int { return 13; }
+auto AppTheme::fontSizeSection() const -> int { return 14; }
+auto AppTheme::fontSizeHeadline() const -> int { return 22; }
+auto AppTheme::fontWeightRegular() const -> int { return 500; }
+auto AppTheme::fontWeightStrong() const -> int { return 600; }
+auto AppTheme::fontWeightHeading() const -> int { return 700; }
+
+auto AppTheme::cardSurfaceColor() const -> QColor { return bgBaseColor(); }
+auto AppTheme::cardBorderColor() const -> QColor { return dividerColor(); }
 
 auto AppTheme::currentThemeIndex() const -> int { return current_theme_index_; }
 

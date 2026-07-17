@@ -19,14 +19,41 @@ Item {
     property bool hasImage: editorSession ? editorSession.hasImage : false
 
     readonly property real handleHeight: 28
-    readonly property real dockHeight: collapsed ? handleHeight : expandedHeight
+    // dockExpandProgress drives the downward fold (0 collapsed -> 1 expanded).
+    // collapsed flips immediately (persisted session state); only the visual
+    // height animates so the handle stays stationary and state assertions hold.
+    // _motionArmed suppresses the initial snap; reduceMotion snaps the fold.
+    property real dockExpandProgress: 0
+    property bool _motionArmed: false
+    property int _foldDuration: appTheme.motionFoldOpenMs
+    readonly property real dockHeight: handleHeight
+                                       + (expandedHeight - handleHeight) * dockExpandProgress
     readonly property color colPanel: theme ? theme.colGlassPanel : "#1C1C1D"
     readonly property color colStroke: theme ? theme.colGlassStroke : Qt.rgba(1, 1, 1, 0.08)
     readonly property color colText: theme ? theme.colText : "#F5F1EA"
     readonly property color colMuted: theme ? theme.colTextMuted : "#AAA59D"
     readonly property color colAccent: theme ? theme.colAccentPrimary : "#457B9D"
     readonly property color colHover: theme ? theme.colHover : Qt.rgba(1, 1, 1, 0.07)
+    readonly property color colCardSurface: theme ? theme.colCardSurface : "#161719"
+    readonly property color colCardBorder: theme ? theme.colCardBorder : Qt.rgba(1, 1, 1, 0.08)
     readonly property int panelRadius: theme ? theme.panelRadius : 12
+
+    onCollapsedChanged: {
+        _foldDuration = collapsed ? appTheme.motionFoldCloseMs : appTheme.motionFoldOpenMs
+        dockExpandProgress = collapsed ? 0 : 1
+    }
+    Component.onCompleted: {
+        // Snap to the persisted collapse state on load (no open animation).
+        dockExpandProgress = collapsed ? 0 : 1
+        _motionArmed = true
+    }
+    Behavior on dockExpandProgress {
+        enabled: root._motionArmed
+        NumberAnimation {
+            duration: appTheme.reduceMotion ? 0 : root._foldDuration
+            easing.type: Easing.OutCubic
+        }
+    }
 
     signal expandRequested()
     signal collapseRequested()
@@ -63,9 +90,9 @@ Item {
     Rectangle {
         anchors.fill: parent
         radius: root.panelRadius
-        color: root.colPanel
+        color: root.colCardSurface
         border.width: 1
-        border.color: root.colStroke
+        border.color: root.colCardBorder
         clip: true
 
         // Persistent focusable handle — remains keyboard- and pointer-accessible
@@ -108,9 +135,9 @@ Item {
 
             RowLayout {
                 anchors.fill: parent
-                anchors.leftMargin: 12
-                anchors.rightMargin: 12
-                spacing: 10
+                anchors.leftMargin: appTheme.spaceMd
+                anchors.rightMargin: appTheme.spaceMd
+                spacing: appTheme.spaceMd
 
                 // Drag/affordance chevron
                 Canvas {
@@ -154,8 +181,8 @@ Item {
                         return qsTr("%1 / %2").arg(Math.max(1, root.currentIndex)).arg(root.totalCount)
                     }
                     color: root.colText
-                    font.pixelSize: 12
-                    font.weight: 600
+                    font.pixelSize: appTheme.fontSizeBody
+                    font.weight: appTheme.fontWeightStrong
                     elide: Text.ElideRight
                 }
 
@@ -164,14 +191,7 @@ Item {
                     Layout.alignment: Qt.AlignVCenter
                     text: qsTr("Saving…")
                     color: root.colAccent
-                    font.pixelSize: 11
-                }
-
-                Label {
-                    Layout.alignment: Qt.AlignVCenter
-                    text: root.collapsed ? qsTr("Expand") : qsTr("Collapse")
-                    color: root.colMuted
-                    font.pixelSize: 11
+                    font.pixelSize: appTheme.fontSizeCaption
                 }
             }
 
@@ -184,7 +204,9 @@ Item {
             }
         }
 
-        // Expanded body placeholder — model-backed thumbnails land in Phase 6C.
+        // Expanded body — model-backed thumbnails land in Phase 6C. Visibility
+        // and opacity track dockExpandProgress so the body folds with the dock
+        // while the handle stays stationary.
         Item {
             id: filmstripBody
             objectName: "editorFilmstripBody"
@@ -192,29 +214,29 @@ Item {
             anchors.right: parent.right
             anchors.top: collapseHandle.bottom
             anchors.bottom: parent.bottom
-            visible: !root.collapsed
-            opacity: root.collapsed ? 0 : 1
+            visible: root.dockExpandProgress > 0.001
+            opacity: root.dockExpandProgress
             clip: true
 
             Label {
                 anchors.centerIn: parent
                 visible: root.totalCount <= 0
-                text: qsTr("Filmstrip will show album or search results here")
+                text: qsTr("No images")
                 color: root.colMuted
-                font.pixelSize: 12
+                font.pixelSize: appTheme.fontSizeBody
             }
 
             // Keep a stable visual strip region so collapse geometry can release
             // height to the viewport without destroying dock identity.
             Rectangle {
                 anchors.fill: parent
-                anchors.margins: 8
-                anchors.topMargin: 4
+                anchors.margins: appTheme.spaceSm
+                anchors.topMargin: appTheme.spaceXs
                 visible: root.totalCount > 0
-                radius: 8
+                radius: appTheme.controlRadiusSmall
                 color: "transparent"
                 border.width: 1
-                border.color: root.colStroke
+                border.color: root.colCardBorder
 
                 Label {
                     anchors.centerIn: parent
@@ -222,7 +244,7 @@ Item {
                           ? qsTr("Focused image %1").arg(root.currentIndex)
                           : qsTr("Select an image")
                     color: root.colMuted
-                    font.pixelSize: 12
+                    font.pixelSize: appTheme.fontSizeBody
                 }
             }
         }

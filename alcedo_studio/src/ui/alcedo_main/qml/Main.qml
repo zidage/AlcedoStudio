@@ -51,9 +51,15 @@ ApplicationWindow {
     readonly property color colGlassPanel: appTheme.glassPanelColor
     readonly property color colGlassStroke: appTheme.glassStrokeColor
     readonly property color colOverlay: appTheme.overlayColor
+    // Semantic card surface family — the same base/border the Library grid
+    // (ThumbnailGridView) uses for its card wells. Editor cards resolve here so
+    // History/Versions, adjustment shells, the filmstrip dock, and the viewport
+    // placeholder share one documented surface (see DESIGN.md).
+    readonly property color colCardSurface: appTheme.cardSurfaceColor
+    readonly property color colCardBorder: appTheme.cardBorderColor
     readonly property string dataFontFamily: appTheme.dataFontFamily
     readonly property string headlineFontFamily: appTheme.headlineFontFamily
-    readonly property int controlRadius: 10
+    readonly property int controlRadius: appTheme.controlRadius
     readonly property color colButtonPrimary: "#457B9D"
     readonly property color colButtonSecondary: "#3A3F44"
     readonly property color colButtonHighlight: "#E9C46A"
@@ -1335,6 +1341,7 @@ ApplicationWindow {
 
                     Rectangle {
                         id: wsThumb
+                        objectName: "workspaceSwitchThumb"
                         width: parent.width / 2 - 4
                         height: parent.height - 4
                         y: 2
@@ -1349,7 +1356,14 @@ ApplicationWindow {
                             root.colAccentSecondary.b,
                             0.52)
                         opacity: workspaceSwitch.navEnabled ? 1.0 : 0.45
-                        Behavior on x { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+                        // The thumb is the ONLY selected-workspace indication;
+                        // it slides between segments. Reduced motion snaps it.
+                        Behavior on x {
+                            NumberAnimation {
+                                duration: appTheme.reduceMotion ? 0 : appTheme.motionFoldOpenMs
+                                easing.type: Easing.OutCubic
+                            }
+                        }
                     }
 
                     Row {
@@ -1367,39 +1381,27 @@ ApplicationWindow {
                             enabled: workspaceSwitch.navEnabled
                             activeFocusOnTab: true
                             readonly property bool isActive: appModules.workspaceRouter.workspace === "library"
-                            // Phase 4A-Fix: observable interaction states. The active
-                            // workspace is still shown by the sliding accent thumb
-                            // (wsThumb); these drive a subtle hover/press tint and a
-                            // keyboard-focus ring so hover, press, and focus each
-                            // visibly change the button, not only the click result.
-                            // Hover is tracked by a HoverHandler (a pointer handler)
-                            // rather than the Button's built-in hovered: pointer
-                            // handlers receive mouse-move events on every QPA platform,
-                            // so the hover tint is testable offscreen and consistent.
+                            // The active workspace is shown ONLY by the sliding accent
+                            // thumb (wsThumb) beneath the segment. Per DESIGN.md the
+                            // capsule draws no hover/press tint and no focus ring: the
+                            // thumb is the single selected-workspace indication. The
+                            // HoverHandler is retained only to drive the localized
+                            // tooltip; pointer handlers receive mouse-move events on
+                            // every QPA platform, so hover is testable offscreen.
+                            readonly property string actionName: qsTr("Library")
                             HoverHandler { id: libraryNavHover }
-                            readonly property int highlightLevel: !enabled ? 0 : (down ? 2 : (libraryNavHover.hovered ? 1 : 0))
-                            readonly property bool focusRingVisible: enabled && activeFocus
                             icon.source: "qrc:/panel_icons/layout-grid.svg"
-                            icon.width: 20
-                            icon.height: 20
+                            icon.width: appTheme.iconOpticalSizeCompact
+                            icon.height: appTheme.iconOpticalSizeCompact
                             icon.color: !enabled ? root.withAlpha(root.colText, 0.30) : root.colText
                             Material.foreground: icon.color
                             background: Rectangle {
-                                // Semi-transparent so the active accent thumb beneath
-                                // the segment still shows through on hover/press.
-                                color: !libraryNavButton.enabled ? "transparent"
-                                      : libraryNavButton.highlightLevel === 2
-                                        ? root.withAlpha(root.colHover, 0.42)
-                                        : libraryNavButton.highlightLevel === 1
-                                          ? root.withAlpha(root.colHover, 0.22)
-                                          : "transparent"
-                                border.width: libraryNavButton.focusRingVisible ? 1 : 0
-                                border.color: root.withAlpha(root.colAccentPrimary, 0.60)
+                                color: "transparent"
                                 radius: 4
                             }
-                            ToolTip.visible: hovered
-                            ToolTip.text: qsTr("Library")
-                            Accessible.name: qsTr("Library")
+                            ToolTip.visible: libraryNavHover.hovered
+                            ToolTip.text: libraryNavButton.actionName
+                            Accessible.name: libraryNavButton.actionName
                             Accessible.role: Accessible.Button
                             onClicked: {
                                 if (appModules.workspaceRouter.workspace !== "library") {
@@ -1419,28 +1421,22 @@ ApplicationWindow {
                             enabled: workspaceSwitch.navEnabled
                             activeFocusOnTab: true
                             readonly property bool isActive: appModules.workspaceRouter.workspace === "editor"
+                            // See libraryNavButton: the capsule shows no hover/press
+                            // tint and no focus ring — only the sliding thumb.
+                            readonly property string actionName: qsTr("Editor")
                             HoverHandler { id: editorNavHover }
-                            readonly property int highlightLevel: !enabled ? 0 : (down ? 2 : (editorNavHover.hovered ? 1 : 0))
-                            readonly property bool focusRingVisible: enabled && activeFocus
                             icon.source: "qrc:/panel_icons/adjustments.svg"
-                            icon.width: 20
-                            icon.height: 20
+                            icon.width: appTheme.iconOpticalSizeCompact
+                            icon.height: appTheme.iconOpticalSizeCompact
                             icon.color: !enabled ? root.withAlpha(root.colText, 0.30) : root.colText
                             Material.foreground: icon.color
                             background: Rectangle {
-                                color: !editorNavButton.enabled ? "transparent"
-                                      : editorNavButton.highlightLevel === 2
-                                        ? root.withAlpha(root.colHover, 0.42)
-                                        : editorNavButton.highlightLevel === 1
-                                          ? root.withAlpha(root.colHover, 0.22)
-                                          : "transparent"
-                                border.width: editorNavButton.focusRingVisible ? 1 : 0
-                                border.color: root.withAlpha(root.colAccentPrimary, 0.60)
+                                color: "transparent"
                                 radius: 4
                             }
-                            ToolTip.visible: hovered
-                            ToolTip.text: qsTr("Editor")
-                            Accessible.name: qsTr("Editor")
+                            ToolTip.visible: editorNavHover.hovered
+                            ToolTip.text: editorNavButton.actionName
+                            Accessible.name: editorNavButton.actionName
                             Accessible.role: Accessible.Button
                             // Editor activates with no selected image unless the user
                             // was just editing one: re-entry restores the last-edited

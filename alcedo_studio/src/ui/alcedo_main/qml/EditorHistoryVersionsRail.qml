@@ -24,6 +24,11 @@ Item {
     readonly property color colHover: theme ? theme.colHover : Qt.rgba(1, 1, 1, 0.07)
     readonly property color colDeep: theme ? theme.colBgDeep : "#0C0D0F"
     readonly property color colBase: theme ? theme.colBgBase : "#161719"
+    // Card surface family — shared with the Library grid (ThumbnailGridView) so
+    // the rail and expanded panel never introduce locally darker/lighter fills.
+    // See src/ui/alcedo_main/DESIGN.md.
+    readonly property color colCardSurface: theme ? theme.colCardSurface : "#161719"
+    readonly property color colCardBorder: theme ? theme.colCardBorder : Qt.rgba(1, 1, 1, 0.08)
     readonly property int panelRadius: theme ? theme.panelRadius : 12
     readonly property int controlRadius: theme ? theme.controlRadius : 10
 
@@ -33,7 +38,16 @@ Item {
     readonly property bool panelExpanded: activePage === "history" || activePage === "versions"
     readonly property int railWidth: 60
     readonly property int expandedPanelWidth: 300
-    readonly property int totalWidth: railWidth + (panelExpanded ? (8 + expandedPanelWidth) : 0)
+    readonly property int panelGap: appTheme.spaceSm
+    // panelOpenProgress drives the fold (0 collapsed -> 1 expanded). The
+    // logical panelExpanded flips immediately so session-state assertions hold;
+    // only the visual progress animates. _motionArmed suppresses the initial
+    // snap so a recreated rail (workspace round-trip) appears in its persisted
+    // state without replaying the open animation. reduceMotion snaps it.
+    property real panelOpenProgress: 0
+    property bool _motionArmed: false
+    property int _foldDuration: appTheme.motionFoldOpenMs
+    readonly property int totalWidth: railWidth + (panelGap + expandedPanelWidth) * panelOpenProgress
 
     implicitWidth: totalWidth
     implicitHeight: 200
@@ -41,6 +55,23 @@ Item {
     Layout.minimumWidth: totalWidth
     Layout.maximumWidth: totalWidth
     Layout.fillHeight: true
+
+    onPanelExpandedChanged: {
+        _foldDuration = panelExpanded ? appTheme.motionFoldOpenMs : appTheme.motionFoldCloseMs
+        panelOpenProgress = panelExpanded ? 1 : 0
+    }
+    Component.onCompleted: {
+        // Snap to the persisted expand state on load (no open animation).
+        panelOpenProgress = panelExpanded ? 1 : 0
+        _motionArmed = true
+    }
+    Behavior on panelOpenProgress {
+        enabled: root._motionArmed
+        NumberAnimation {
+            duration: appTheme.reduceMotion ? 0 : root._foldDuration
+            easing.type: Easing.OutCubic
+        }
+    }
 
     function selectPage(page) {
         if (!editorSession) {
@@ -59,7 +90,7 @@ Item {
 
     RowLayout {
         anchors.fill: parent
-        spacing: 8
+        spacing: root.panelGap * root.panelOpenProgress
 
         // Persistent narrow rail — never collapses away.
         Rectangle {
@@ -70,16 +101,16 @@ Item {
             Layout.maximumWidth: root.railWidth
             Layout.fillHeight: true
             radius: root.panelRadius
-            color: root.colPanel
+            color: root.colCardSurface
             border.width: 1
-            border.color: root.colStroke
+            border.color: root.colCardBorder
             opacity: root.controlsEnabled ? 1.0 : 0.55
 
             Column {
                 anchors.top: parent.top
                 anchors.horizontalCenter: parent.horizontalCenter
-                anchors.topMargin: 12
-                spacing: 8
+                anchors.topMargin: appTheme.spaceMd
+                spacing: appTheme.spaceSm
 
                 // History
                 Button {
@@ -99,8 +130,8 @@ Item {
                                                           : (historyHover.hovered ? 1 : 0))
                     readonly property bool focusRingVisible: enabled && activeFocus
                     icon.source: "qrc:/history_icons/git-commit-horizontal.svg"
-                    icon.width: 18
-                    icon.height: 18
+                    icon.width: appTheme.iconOpticalSize
+                    icon.height: appTheme.iconOpticalSize
                     icon.color: !enabled ? root.withAlpha(root.colMuted, 0.55)
                                : (isActive ? root.colText : root.colMuted)
                     Material.foreground: icon.color
@@ -143,8 +174,8 @@ Item {
                                                           : (versionsHover.hovered ? 1 : 0))
                     readonly property bool focusRingVisible: enabled && activeFocus
                     icon.source: "qrc:/panel_icons/palette.svg"
-                    icon.width: 18
-                    icon.height: 18
+                    icon.width: appTheme.iconOpticalSize
+                    icon.height: appTheme.iconOpticalSize
                     icon.color: !enabled ? root.withAlpha(root.colMuted, 0.55)
                                : (isActive ? root.colText : root.colMuted)
                     Material.foreground: icon.color
@@ -171,34 +202,36 @@ Item {
             }
         }
 
-        // Expanded panel beside the rail (takes space from the viewport).
+        // Expanded panel beside the rail (takes space from the viewport). Width
+        // and opacity track panelOpenProgress so the panel folds quietly; the
+        // rail stays stationary and content is clipped mid-transition.
         Rectangle {
             id: historyPanel
             objectName: "editorHistoryVersionsPanel"
-            visible: root.panelExpanded
-            Layout.preferredWidth: root.expandedPanelWidth
-            Layout.minimumWidth: root.expandedPanelWidth
+            visible: root.panelOpenProgress > 0.001
+            Layout.preferredWidth: root.expandedPanelWidth * root.panelOpenProgress
+            Layout.minimumWidth: 0
             Layout.maximumWidth: root.expandedPanelWidth
             Layout.fillHeight: true
             radius: root.panelRadius
-            color: root.colDeep
+            color: root.colCardSurface
             border.width: 1
-            border.color: root.colStroke
-            opacity: root.controlsEnabled ? 1.0 : 0.55
+            border.color: root.colCardBorder
+            opacity: root.panelOpenProgress * (root.controlsEnabled ? 1.0 : 0.55)
             clip: true
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 16
-                spacing: 10
+                anchors.margins: appTheme.spaceLg
+                spacing: appTheme.spaceMd
 
                 Label {
                     objectName: "editorHistoryVersionsPanelTitle"
                     Layout.fillWidth: true
                     text: root.activePage === "versions" ? qsTr("Versions") : qsTr("Edit History")
                     color: root.colText
-                    font.pixelSize: 14
-                    font.weight: 700
+                    font.pixelSize: appTheme.fontSizeSection
+                    font.weight: appTheme.fontWeightHeading
                 }
 
                 // History page body (empty until history port).
@@ -217,7 +250,7 @@ Item {
                               ? qsTr("No edit history yet")
                               : qsTr("Select an image to view history")
                         color: root.colMuted
-                        font.pixelSize: 12
+                        font.pixelSize: appTheme.fontSizeBody
                     }
                 }
 
@@ -237,7 +270,7 @@ Item {
                               ? qsTr("No versions yet")
                               : qsTr("Select an image to view versions")
                         color: root.colMuted
-                        font.pixelSize: 12
+                        font.pixelSize: appTheme.fontSizeBody
                     }
                 }
             }

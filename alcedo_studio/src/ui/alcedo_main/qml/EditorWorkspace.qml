@@ -22,6 +22,10 @@ Item {
     readonly property color colBg: theme ? theme.colBgCanvas : "#111214"
     readonly property color colDeep: theme ? theme.colBgDeep : "#0C0D0F"
     readonly property color colHover: theme ? theme.colHover : Qt.rgba(1, 1, 1, 0.07)
+    // Card surface family — shared with the Library grid (see DESIGN.md). The
+    // viewport placeholder resolves here so it matches the editor card family.
+    readonly property color colCardSurface: theme ? theme.colCardSurface : "#161719"
+    readonly property color colCardBorder: theme ? theme.colCardBorder : Qt.rgba(1, 1, 1, 0.08)
     readonly property int panelRadius: theme ? theme.panelRadius : 12
     readonly property int controlRadius: theme ? theme.controlRadius : 10
     readonly property string headlineFont: theme ? theme.headlineFontFamily : appTheme.headlineFontFamily
@@ -46,7 +50,7 @@ Item {
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: 12
+        spacing: appTheme.spaceMd
 
         // ── Main editor body ────────────────────────────────────────────
         // Desktop order (non-negotiable): History/Versions left, viewport
@@ -56,7 +60,7 @@ Item {
             objectName: "editorDesktopRow"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 12
+            spacing: appTheme.spaceMd
 
             // Left: History / Versions rail (+ expandable panel beside rail).
             // objectName is set inside the component (editorHistoryVersionsRail).
@@ -77,7 +81,7 @@ Item {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.minimumWidth: root.minimumViewportWidth
-                spacing: 12
+                spacing: appTheme.spaceMd
 
                 Rectangle {
                     id: viewportSlot
@@ -85,9 +89,9 @@ Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     radius: root.panelRadius
-                    color: root.colDeep
+                    color: root.colCardSurface
                     border.width: 1
-                    border.color: root.colStroke
+                    border.color: root.colCardBorder
                     clip: true
                     activeFocusOnTab: true
                     focus: true
@@ -103,7 +107,7 @@ Item {
                         objectName: "editorEmptyState"
                         anchors.centerIn: parent
                         width: Math.min(parent.width - 48, 420)
-                        spacing: 12
+                        spacing: appTheme.spaceMd
                         visible: !root.hasImage
                         activeFocusOnTab: true
                         Accessible.role: Accessible.StaticText
@@ -113,8 +117,8 @@ Item {
                             anchors.horizontalCenter: parent.horizontalCenter
                             text: qsTr("Select an image to edit")
                             font.family: root.headlineFont
-                            font.pixelSize: 22
-                            font.weight: 700
+                            font.pixelSize: appTheme.fontSizeHeadline
+                            font.weight: appTheme.fontWeightHeading
                             color: root.colText
                             horizontalAlignment: Text.AlignHCenter
                         }
@@ -124,7 +128,7 @@ Item {
                             horizontalAlignment: Text.AlignHCenter
                             text: qsTr("Open an image from the library, or keep this workspace ready for search results.")
                             color: root.colMuted
-                            font.pixelSize: 13
+                            font.pixelSize: appTheme.fontSizeTitle
                         }
                     }
 
@@ -185,7 +189,7 @@ Item {
                         visible: root.hasImage && !editorViewportItem.presentationAvailable
                         text: qsTr("Preparing image viewport")
                         color: root.colMuted
-                        font.pixelSize: 14
+                        font.pixelSize: appTheme.fontSizeSection
                         z: 3
                     }
 
@@ -224,8 +228,8 @@ Item {
                         visible: root.hasImage
                         text: qsTr("%1%").arg(Math.round(editorInteraction.zoom * 100))
                         color: root.colMuted
-                        font.pixelSize: 12
-                        font.weight: 600
+                        font.pixelSize: appTheme.fontSizeBody
+                        font.weight: appTheme.fontWeightStrong
                         z: 4
                     }
 
