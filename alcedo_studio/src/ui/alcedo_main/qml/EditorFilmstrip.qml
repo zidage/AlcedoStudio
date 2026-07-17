@@ -5,6 +5,7 @@ import QtQuick.Layouts
 // Bottom filmstrip dock for EditorWorkspace.
 // Phase 1B defines collapse geometry, persistent handle accessibility, and
 // empty-state presentation. Thumbnail model/selection arrives in Phase 6C.
+// Motion / surface tokens: DESIGN.md.
 Item {
     id: root
     objectName: "editorFilmstrip"
@@ -22,8 +23,9 @@ Item {
     // dockExpandProgress drives the downward fold (0 collapsed -> 1 expanded).
     // collapsed flips immediately (persisted session state); only the visual
     // height animates so the handle stays stationary and state assertions hold.
-    // _motionArmed suppresses the initial snap; reduceMotion snaps the fold.
+    // foldManualDrive + driveFoldProgress() pin intermediate geometry for tests.
     property real dockExpandProgress: 0
+    property bool foldManualDrive: false
     property bool _motionArmed: false
     property int _foldDuration: appTheme.motionFoldOpenMs
     readonly property real dockHeight: handleHeight
@@ -38,9 +40,21 @@ Item {
     readonly property color colCardBorder: theme ? theme.colCardBorder : Qt.rgba(1, 1, 1, 0.08)
     readonly property int panelRadius: theme ? theme.panelRadius : 12
 
+    function driveFoldProgress(value) {
+        foldManualDrive = true
+        dockExpandProgress = Math.max(0, Math.min(1, value))
+    }
+
+    function endFoldDrive() {
+        foldManualDrive = false
+        dockExpandProgress = collapsed ? 0 : 1
+    }
+
     onCollapsedChanged: {
         _foldDuration = collapsed ? appTheme.motionFoldCloseMs : appTheme.motionFoldOpenMs
-        dockExpandProgress = collapsed ? 0 : 1
+        if (!foldManualDrive) {
+            dockExpandProgress = collapsed ? 0 : 1
+        }
     }
     Component.onCompleted: {
         // Snap to the persisted collapse state on load (no open animation).
@@ -48,7 +62,7 @@ Item {
         _motionArmed = true
     }
     Behavior on dockExpandProgress {
-        enabled: root._motionArmed
+        enabled: root._motionArmed && !root.foldManualDrive
         NumberAnimation {
             duration: appTheme.reduceMotion ? 0 : root._foldDuration
             easing.type: Easing.OutCubic
@@ -139,7 +153,6 @@ Item {
                 anchors.rightMargin: appTheme.spaceMd
                 spacing: appTheme.spaceMd
 
-                // Drag/affordance chevron
                 Canvas {
                     id: chevron
                     Layout.preferredWidth: 14
@@ -226,8 +239,6 @@ Item {
                 font.pixelSize: appTheme.fontSizeBody
             }
 
-            // Keep a stable visual strip region so collapse geometry can release
-            // height to the viewport without destroying dock identity.
             Rectangle {
                 anchors.fill: parent
                 anchors.margins: appTheme.spaceSm

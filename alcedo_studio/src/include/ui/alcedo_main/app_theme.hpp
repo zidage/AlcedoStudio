@@ -59,8 +59,18 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int badgeRadius READ badgeRadius CONSTANT)
   Q_PROPERTY(int iconOpticalSize READ iconOpticalSize CONSTANT)
   Q_PROPERTY(int iconOpticalSizeCompact READ iconOpticalSizeCompact CONSTANT)
+  // Raster source size for Image/sourceSize (separate from optical display size).
+  // At DPR 1.0 source == optical; higher DPR scales via Qt; keep source ≥ optical.
+  Q_PROPERTY(int iconSourceSize READ iconSourceSize CONSTANT)
+  Q_PROPERTY(int iconSourceSizeCompact READ iconSourceSizeCompact CONSTANT)
   Q_PROPERTY(int iconButtonHitSize READ iconButtonHitSize CONSTANT)
   Q_PROPERTY(int iconButtonHitSizeCompact READ iconButtonHitSizeCompact CONSTANT)
+  // Line heights (px) for QML Label lineHeight when using fixed pixel sizes.
+  Q_PROPERTY(int lineHeightCaption READ lineHeightCaption CONSTANT)
+  Q_PROPERTY(int lineHeightBody READ lineHeightBody CONSTANT)
+  Q_PROPERTY(int lineHeightTitle READ lineHeightTitle CONSTANT)
+  Q_PROPERTY(int lineHeightSection READ lineHeightSection CONSTANT)
+  Q_PROPERTY(int lineHeightHeadline READ lineHeightHeadline CONSTANT)
   Q_PROPERTY(int spaceXs READ spaceXs CONSTANT)
   Q_PROPERTY(int spaceSm READ spaceSm CONSTANT)
   Q_PROPERTY(int spaceMd READ spaceMd CONSTANT)
@@ -169,8 +179,15 @@ class AppTheme final : public QObject {
   auto badgeRadius() const -> int;
   auto iconOpticalSize() const -> int;
   auto iconOpticalSizeCompact() const -> int;
+  auto iconSourceSize() const -> int;
+  auto iconSourceSizeCompact() const -> int;
   auto iconButtonHitSize() const -> int;
   auto iconButtonHitSizeCompact() const -> int;
+  auto lineHeightCaption() const -> int;
+  auto lineHeightBody() const -> int;
+  auto lineHeightTitle() const -> int;
+  auto lineHeightSection() const -> int;
+  auto lineHeightHeadline() const -> int;
   auto spaceXs() const -> int;
   auto spaceSm() const -> int;
   auto spaceMd() const -> int;

@@ -1527,8 +1527,8 @@ ApplicationWindow {
                     activeFocusOnTab: true
                     property real iconRotationTarget: root.libraryInspectorVisible ? 180 : 0
                     icon.source: "qrc:/panel_icons/inspector-expand.svg"
-                    icon.width: 24
-                    icon.height: 24
+                    icon.width: appTheme.iconOpticalSize
+                    icon.height: appTheme.iconOpticalSize
                     icon.color: root.libraryInspectorVisible
                                 ? root.colAccentPrimary
                                 : (inspectorToggleButton.hovered ? root.colText : root.colTextMuted)
@@ -1564,7 +1564,7 @@ ApplicationWindow {
                     NumberAnimation {
                         id: inspectorIconRotate
                         property: "rotation"
-                        duration: 170
+                        duration: appTheme.reduceMotion ? 0 : appTheme.motionFoldCloseMs
                         easing.type: Easing.OutCubic
                     }
                     onClicked: root.libraryInspectorVisible = !root.libraryInspectorVisible

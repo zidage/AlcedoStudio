@@ -17,11 +17,12 @@ import QtQuick.Effects
 Item {
     id: control
 
-    property real buttonSize: 40
+    // Defaults follow DESIGN.md structural geometry; callers may still override.
+    property real buttonSize: appTheme.iconButtonHitSizeCompact
     property real buttonWidth: buttonSize
     property real buttonHeight: buttonSize
-    property int buttonRadius: 10
-    property int iconSize: 16
+    property int buttonRadius: appTheme.controlRadius
+    property int iconSize: appTheme.iconOpticalSizeCompact
     property string iconSrc: ""
     property string kind: "normal"           // "accent" | "normal"
     property color accentColor: "transparent"   // override; transparent => appTheme.accentColor

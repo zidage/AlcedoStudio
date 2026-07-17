@@ -946,8 +946,15 @@ auto AppTheme::controlRadiusSmall() const -> int { return 8; }
 auto AppTheme::badgeRadius() const -> int { return 6; }
 auto AppTheme::iconOpticalSize() const -> int { return 24; }
 auto AppTheme::iconOpticalSizeCompact() const -> int { return 20; }
+auto AppTheme::iconSourceSize() const -> int { return 24; }
+auto AppTheme::iconSourceSizeCompact() const -> int { return 20; }
 auto AppTheme::iconButtonHitSize() const -> int { return 44; }
 auto AppTheme::iconButtonHitSizeCompact() const -> int { return 40; }
+auto AppTheme::lineHeightCaption() const -> int { return 14; }
+auto AppTheme::lineHeightBody() const -> int { return 16; }
+auto AppTheme::lineHeightTitle() const -> int { return 18; }
+auto AppTheme::lineHeightSection() const -> int { return 20; }
+auto AppTheme::lineHeightHeadline() const -> int { return 28; }
 auto AppTheme::spaceXs() const -> int { return 4; }
 auto AppTheme::spaceSm() const -> int { return 8; }
 auto AppTheme::spaceMd() const -> int { return 12; }

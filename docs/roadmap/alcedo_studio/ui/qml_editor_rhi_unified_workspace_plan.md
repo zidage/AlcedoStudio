@@ -4,8 +4,8 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-17 after Phase 4B UI review, visual-system planning, and frontend/backend
-phase separation.
+Last revised: 2026-07-17 after Phase 4C completion (VI contract, shared primitives, motion
+driver tests, and acceptance closeout).
 
 Affected areas:
 
@@ -1064,6 +1064,31 @@ Implementation closeout:
 This phase owns the visual debt found in the production review immediately after Phase 4B. It must
 correct the existing QML workspace first, then freeze the reusable rules in a visual-identity guide
 before Phase 6 begins adding real adjustment controls.
+
+**Status: complete (2026-07-17).**
+
+Implementation closeout:
+
+- Canonical VI contract: `alcedo_studio/src/ui/alcedo_main/DESIGN.md` (agent rule + token tables
+  mapped to `AppTheme` / shared components). Drift checklist:
+  `docs/roadmap/alcedo_studio/ui/qml_visual_literal_review_checklist.md`.
+- `AppTheme` tokens: hit / optical / **source** icon sizes, spacing, radii, type sizes/weights,
+  line heights, motion open/close/fade, `reduceMotion`, `cardSurfaceColor` / `cardBorderColor`.
+- Shared primitives: `IconActionButton.qml`, `CollapsibleSection.qml`. History/Versions rail and
+  adjustment nav consume `IconActionButton`; adjustment panels host a collapsible group shell.
+- Fold motion contract on History/Versions (`panelOpenProgress`), filmstrip (`dockExpandProgress`),
+  and `CollapsibleSection` (`foldProgress`) with `driveFoldProgress` / `endFoldDrive` test drivers.
+  Ordinary workflow tests force `reduceMotion` so they assert terminal geometry.
+- Capsule selection visual is only `workspaceSwitchThumb` (no `highlightLevel` / focus ring).
+- Product empty-state copy audited (no “will appear here” / developer placeholders).
+- Verification (Windows offscreen, 2026-07-17): `WorkspaceShellTest` **36/36 passed** (includes 7
+  new Phase 4C token/surface/icon/motion/copy tests); `MainQmlWorkflowTest` **1/1 passed**;
+  `git diff --check` clean. Screenshot property matrix and icon source≥optical / hit-band 40–46
+  assertions live in `WorkspaceShellTest`; optional grab fixtures via
+  `ALCEDO_PHASE4C_WRITE_FIXTURES=1` under `tests/ui/fixtures/phase4c/` (not required for green CI).
+
+Handoff scope boundary respected: no Phase 5 backend/session work and no Phase 6 production
+adjustment controls.
 
 Deliverables:
 

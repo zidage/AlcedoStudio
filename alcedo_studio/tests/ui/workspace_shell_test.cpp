@@ -4,11 +4,12 @@
 
 /// @file workspace_shell_test.cpp
 /// @brief Verifies Phase 1B workspace routing, lazy load teardown, filmstrip shell
-/// prefs, project-switch session seal, library view-state restore, and real QML
-/// interaction entrypoints.
+/// prefs, project-switch session seal, library view-state restore, real QML
+/// interaction entrypoints, and Phase 4C visual/motion contracts.
 
 #include "ui/album_backend_test_fixture.hpp"
 
+#include <QColor>
 #include <QPoint>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
@@ -20,6 +21,7 @@
 #include <QTest>
 #include <QTimer>
 #include <QUrl>
+#include <QVariant>
 #include <QWheelEvent>
 
 #include <cmath>
@@ -137,9 +139,17 @@ void SeedLibraryThumbnails(ApplicationModuleHost& host, int count, int content_h
 
 class WorkspaceShellTests : public ApplicationModuleHostTestFixture {
  protected:
+  // Phase 4C: ordinary workflow tests force reduced motion so geometry /
+  // visibility assertions observe terminal state without wall-clock fold timing.
+  // Motion-progress tests opt out via setReduceMotion(false) and driveFoldProgress.
+  void ForceReducedMotionForWorkflowTests() {
+    alcedo::ui::AppTheme::Instance().setReduceMotion(true);
+  }
+
   auto LoadMainWindow(bool create_project = true) -> std::unique_ptr<LoadedMainWindow> {
     auto loaded = std::make_unique<LoadedMainWindow>();
     alcedo::ui::AppTheme::RegisterFonts();
+    ForceReducedMotionForWorkflowTests();
     if (create_project) {
       EXPECT_TRUE(CreateTestProject(loaded->host));
     }
@@ -187,6 +197,7 @@ class WorkspaceShellTests : public ApplicationModuleHostTestFixture {
       -> std::unique_ptr<LoadedMainWindow> {
     auto loaded = std::make_unique<LoadedMainWindow>();
     alcedo::ui::AppTheme::RegisterFonts();
+    ForceReducedMotionForWorkflowTests();
     EXPECT_TRUE(LoadPackedProject(loaded->host, packedPath));
 
     alcedo::ui::AppTheme::SetEffectiveLanguageCode(
@@ -1202,6 +1213,9 @@ TEST_F(WorkspaceShellTests, DeletingCurrentEditorImageDropsEditorToEmptyState) {
 }
 
 TEST_F(WorkspaceShellTests, MainNavigationButtonsShowHoverPressAndFocusStates) {
+  // Phase 4C: the capsule no longer uses highlightLevel / focusRingVisible.
+  // The sliding workspaceSwitchThumb is the only selected-workspace visual;
+  // hover remains only for tooltips; keyboard activation is still required.
   ASSERT_TRUE(QCoreApplication::instance());
   auto loaded = LoadMainWindow();
   ASSERT_NE(loaded, nullptr);
@@ -1212,58 +1226,52 @@ TEST_F(WorkspaceShellTests, MainNavigationButtonsShowHoverPressAndFocusStates) {
       loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
   auto* editor_nav =
       loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  auto* thumb =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("workspaceSwitchThumb"));
   ASSERT_NE(library_nav, nullptr);
   ASSERT_NE(editor_nav, nullptr);
+  ASSERT_NE(thumb, nullptr);
 
-  // Hover is driven by a HoverHandler on each button (see Main.qml): pointer
-  // handlers receive QTest::mouseMove on every QPA platform, so the hover tint
-  // is observable offscreen. Library nav is active in the library workspace, so
-  // press/release is a no-op and does not switch workspaces — safe for the press
-  // state.
-  EXPECT_EQ(library_nav->property("highlightLevel").toInt(), 0);
-  EXPECT_FALSE(library_nav->property("focusRingVisible").toBool());
+  // Removed Phase 4A-Fix selection chrome must not reappear as QObject properties.
+  EXPECT_FALSE(library_nav->property("highlightLevel").isValid());
+  EXPECT_FALSE(library_nav->property("focusRingVisible").isValid());
+  EXPECT_FALSE(editor_nav->property("highlightLevel").isValid());
+  EXPECT_FALSE(editor_nav->property("focusRingVisible").isValid());
 
-  // Hover → level 1 (subtle tint).
+  // Thumb tracks the active workspace (library at load).
+  const qreal thumb_x_library = thumb->x();
+  EXPECT_TRUE(library_nav->property("isActive").toBool());
+  EXPECT_FALSE(editor_nav->property("isActive").toBool());
+
+  // Hover still works for tooltips (no segment fill property to assert).
   QTest::mouseMove(loaded->window, CenterOfItem(library_nav));
   ProcessEvents(20);
-  EXPECT_EQ(library_nav->property("highlightLevel").toInt(), 1);
-
-  // Press → level 2 (stronger tint). down is set synchronously by the press.
-  QTest::mousePress(loaded->window, Qt::LeftButton, Qt::NoModifier,
-                    CenterOfItem(library_nav));
-  ProcessEvents(10);
-  EXPECT_EQ(library_nav->property("highlightLevel").toInt(), 2);
-
-  // Release → back to hover. Clicking the active library nav is a no-op.
-  QTest::mouseRelease(loaded->window, Qt::LeftButton, Qt::NoModifier,
-                      CenterOfItem(library_nav));
-  ProcessEvents(10);
-  EXPECT_EQ(library_nav->property("highlightLevel").toInt(), 1);
-
-  // Move away → back to baseline.
   QTest::mouseMove(loaded->window, QPoint(5, 5));
   ProcessEvents(20);
-  EXPECT_EQ(library_nav->property("highlightLevel").toInt(), 0);
 
-  // Keyboard focus → focus ring visible.
+  // Keyboard focus remains reachable without a custom focus-ring property.
   library_nav->forceActiveFocus();
   ProcessEvents(10);
-  EXPECT_TRUE(library_nav->property("focusRingVisible").toBool());
-
-  // Editor nav: hover and focus (do not press — release would switch to editor).
-  EXPECT_EQ(editor_nav->property("highlightLevel").toInt(), 0);
-  QTest::mouseMove(loaded->window, CenterOfItem(editor_nav));
-  ProcessEvents(20);
-  EXPECT_EQ(editor_nav->property("highlightLevel").toInt(), 1);
-  QTest::mouseMove(loaded->window, QPoint(5, 5));
-  ProcessEvents(20);
-  EXPECT_EQ(editor_nav->property("highlightLevel").toInt(), 0);
+  EXPECT_TRUE(library_nav->hasActiveFocus());
   editor_nav->forceActiveFocus();
   ProcessEvents(10);
-  EXPECT_TRUE(editor_nav->property("focusRingVisible").toBool());
+  EXPECT_TRUE(editor_nav->hasActiveFocus());
 
-  // No workspace switch happened during the interaction-state probe.
+  // Activate editor: thumb must move; segments still expose no highlight chrome.
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(editor_nav));
+  ProcessEvents(80);
+  EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("editor"));
+  EXPECT_TRUE(editor_nav->property("isActive").toBool());
+  EXPECT_FALSE(library_nav->property("isActive").toBool());
+  EXPECT_NE(thumb->x(), thumb_x_library);
+
+  // Return to library; no highlightLevel reintroduced after round-trip.
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(library_nav));
+  ProcessEvents(80);
   EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("library"));
+  EXPECT_NEAR(thumb->x(), thumb_x_library, 1.0);
+  EXPECT_FALSE(library_nav->property("highlightLevel").isValid());
+
   EXPECT_TRUE(loaded->qml_warnings.empty())
       << loaded->qml_warnings.front().toString().toStdString();
 }
@@ -1600,6 +1608,359 @@ TEST_F(WorkspaceShellTests, NarrowWindowKeepsSidePanelOrderAndMinViewport) {
 
   EXPECT_TRUE(loaded->qml_warnings.empty())
       << loaded->qml_warnings.front().toString().toStdString();
+}
+
+// ── Phase 4C — visual tokens, fold driver, product copy ─────────────────────
+
+TEST_F(WorkspaceShellTests, AppThemeExposesPhase4CGeometryAndMotionTokens) {
+  auto& theme = alcedo::ui::AppTheme::Instance();
+  EXPECT_EQ(theme.iconOpticalSize(), 24);
+  EXPECT_EQ(theme.iconOpticalSizeCompact(), 20);
+  EXPECT_EQ(theme.iconSourceSize(), 24);
+  EXPECT_EQ(theme.iconSourceSizeCompact(), 20);
+  EXPECT_EQ(theme.iconButtonHitSize(), 44);
+  EXPECT_EQ(theme.iconButtonHitSizeCompact(), 40);
+  // Source size must be at least optical so DPR scaling stays sharp.
+  EXPECT_GE(theme.iconSourceSize(), theme.iconOpticalSize());
+  EXPECT_GE(theme.iconSourceSizeCompact(), theme.iconOpticalSizeCompact());
+  // Hit band 40–46 for structural actions.
+  EXPECT_GE(theme.iconButtonHitSize(), 40);
+  EXPECT_LE(theme.iconButtonHitSize(), 46);
+  EXPECT_GE(theme.iconButtonHitSizeCompact(), 40);
+  EXPECT_LE(theme.iconButtonHitSizeCompact(), 46);
+  EXPECT_EQ(theme.motionFoldOpenMs(), 200);
+  EXPECT_EQ(theme.motionFoldCloseMs(), 160);
+  EXPECT_LT(theme.motionFoldCloseMs(), theme.motionFoldOpenMs());
+  EXPECT_EQ(theme.lineHeightBody(), 16);
+  EXPECT_EQ(theme.lineHeightHeadline(), 28);
+}
+
+TEST_F(WorkspaceShellTests, EditorCardSurfacesResolveThroughSharedCardFamily) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  loaded->host.workspace_router()->OpenEditor(0, 0);
+  ProcessEvents(80);
+
+  auto* theme_obj = loaded->window;
+  ASSERT_NE(theme_obj, nullptr);
+  const QColor expected_surface =
+      theme_obj->property("colCardSurface").value<QColor>();
+  const QColor expected_border =
+      theme_obj->property("colCardBorder").value<QColor>();
+  EXPECT_TRUE(expected_surface.isValid());
+  EXPECT_EQ(expected_surface, alcedo::ui::AppTheme::Instance().cardSurfaceColor());
+  EXPECT_EQ(expected_border, alcedo::ui::AppTheme::Instance().cardBorderColor());
+
+  auto* rail = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail"));
+  auto* stack = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
+  auto* filmstrip = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorFilmstrip"));
+  auto* viewport = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorViewportSlot"));
+  ASSERT_NE(rail, nullptr);
+  ASSERT_NE(stack, nullptr);
+  ASSERT_NE(filmstrip, nullptr);
+  ASSERT_NE(viewport, nullptr);
+
+  // Host items expose the same card family properties as the theme mirror.
+  for (QQuickItem* item : {rail, stack, filmstrip, viewport}) {
+    // Parent shells pass theme; resolve colCardSurface from nearest owner.
+    QObject* owner = item;
+    QColor surface;
+    while (owner != nullptr) {
+      const QVariant v = owner->property("colCardSurface");
+      if (v.isValid() && v.canConvert<QColor>()) {
+        surface = v.value<QColor>();
+        break;
+      }
+      owner = owner->parent();
+    }
+    EXPECT_TRUE(surface.isValid()) << item->objectName().toStdString();
+    EXPECT_EQ(surface, expected_surface) << item->objectName().toStdString();
+  }
+
+  // Open history panel: expanded shell still uses the same card surface property.
+  auto* history_btn =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRailButton"));
+  ASSERT_NE(history_btn, nullptr);
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(history_btn));
+  ProcessEvents(40);
+  auto* panel =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsPanel"));
+  ASSERT_NE(panel, nullptr);
+  EXPECT_TRUE(panel->isVisible());
+}
+
+TEST_F(WorkspaceShellTests, StructuralIconActionsExposeHitOpticalAndAccessibleNames) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  loaded->host.workspace_router()->OpenEditor(0, 0);
+  ProcessEvents(80);
+
+  auto* history_btn =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRailButton"));
+  auto* versions_btn =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorVersionsRailButton"));
+  auto* tone_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentNav_tone"));
+  auto* library_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  auto* editor_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  ASSERT_NE(history_btn, nullptr);
+  ASSERT_NE(versions_btn, nullptr);
+  ASSERT_NE(tone_nav, nullptr);
+  ASSERT_NE(library_nav, nullptr);
+  ASSERT_NE(editor_nav, nullptr);
+
+  // History rail: documented 46 px hit exception within 40–46 band.
+  EXPECT_NEAR(history_btn->width(), 46.0, 0.5);
+  EXPECT_NEAR(history_btn->height(), 46.0, 0.5);
+  EXPECT_NEAR(versions_btn->width(), 46.0, 0.5);
+  EXPECT_NEAR(versions_btn->height(), 46.0, 0.5);
+
+  // Optical size token on IconActionButton.
+  EXPECT_EQ(history_btn->property("opticalSize").toInt(),
+            alcedo::ui::AppTheme::Instance().iconOpticalSize());
+  EXPECT_EQ(tone_nav->property("opticalSize").toInt(),
+            alcedo::ui::AppTheme::Instance().iconOpticalSizeCompact());
+  EXPECT_EQ(tone_nav->property("sourceSize").toInt(),
+            alcedo::ui::AppTheme::Instance().iconSourceSizeCompact());
+  EXPECT_GE(tone_nav->property("sourceSize").toInt(),
+            tone_nav->property("opticalSize").toInt());
+
+  // Accessible names / tooltips present on structural actions.
+  EXPECT_FALSE(history_btn->property("actionName").toString().isEmpty());
+  EXPECT_FALSE(versions_btn->property("actionName").toString().isEmpty());
+  EXPECT_FALSE(tone_nav->property("actionName").toString().isEmpty());
+  EXPECT_FALSE(library_nav->property("actionName").toString().isEmpty());
+  EXPECT_FALSE(editor_nav->property("actionName").toString().isEmpty());
+
+  // Keyboard reachability.
+  EXPECT_TRUE(history_btn->activeFocusOnTab());
+  EXPECT_TRUE(tone_nav->activeFocusOnTab());
+  EXPECT_TRUE(library_nav->activeFocusOnTab());
+}
+
+TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+
+  // Exercise the manual progress driver (works with reduceMotion on or off).
+  loaded->host.workspace_router()->OpenEditor(0, 0);
+  ProcessEvents(80);
+
+  auto* rail =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsRail"));
+  auto* session = loaded->host.editor_session();
+  ASSERT_NE(rail, nullptr);
+  ASSERT_NE(session, nullptr);
+
+  const int rail_width = rail->property("railWidth").toInt();
+  const int panel_width = rail->property("expandedPanelWidth").toInt();
+  const int panel_gap = rail->property("panelGap").toInt();
+  ASSERT_GT(rail_width, 0);
+  ASSERT_GT(panel_width, 0);
+
+  // Start collapsed.
+  session->set_history_panel_page(QString());
+  ProcessEvents(20);
+  ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress",
+                                        Q_ARG(QVariant, QVariant(0.0))));
+  ProcessEvents(10);
+  EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 0.0, 0.001);
+  EXPECT_NEAR(rail->width(), rail_width, 1.0);
+
+  // Intermediate 0.5 — geometry tracks progress; session page still empty until open.
+  ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress",
+                                        Q_ARG(QVariant, QVariant(0.5))));
+  ProcessEvents(10);
+  EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 0.5, 0.001);
+  const qreal mid_w = rail_width + (panel_gap + panel_width) * 0.5;
+  EXPECT_NEAR(rail->width(), mid_w, 1.5);
+
+  // Open session page and complete the fold.
+  session->set_history_panel_page(QStringLiteral("history"));
+  ProcessEvents(10);
+  ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress",
+                                        Q_ARG(QVariant, QVariant(1.0))));
+  ProcessEvents(10);
+  EXPECT_EQ(session->history_panel_page(), QStringLiteral("history"));
+  EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 1.0, 0.001);
+  EXPECT_NEAR(rail->width(), rail_width + panel_gap + panel_width, 1.5);
+
+  // Rapid reverse at mid progress: session collapses immediately; driver pins mid.
+  ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress",
+                                        Q_ARG(QVariant, QVariant(0.5))));
+  ProcessEvents(10);
+  session->set_history_panel_page(QString());
+  ProcessEvents(10);
+  EXPECT_TRUE(session->history_panel_page().isEmpty());
+  EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 0.5, 0.001);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress",
+                                        Q_ARG(QVariant, QVariant(0.0))));
+  ProcessEvents(10);
+  EXPECT_NEAR(rail->width(), rail_width, 1.0);
+
+  // Release driver and re-open with reduced motion → terminal bounds.
+  ASSERT_TRUE(QMetaObject::invokeMethod(rail, "endFoldDrive"));
+  ProcessEvents(10);
+  session->set_history_panel_page(QStringLiteral("versions"));
+  ProcessEvents(40);
+  EXPECT_EQ(session->history_panel_page(), QStringLiteral("versions"));
+  EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 1.0, 0.001);
+  EXPECT_NEAR(rail->width(), rail_width + panel_gap + panel_width, 1.5);
+
+  // Rail identity preserved.
+  EXPECT_NE(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail")),
+            nullptr);
+}
+
+TEST_F(WorkspaceShellTests, FilmstripFoldDriverPinsIntermediateAndTerminalGeometry) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  loaded->host.workspace_router()->OpenEditor(1, 1);
+  ProcessEvents(80);
+
+  auto* filmstrip = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorFilmstrip"));
+  auto* handle = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorFilmstripHandle"));
+  auto* session = loaded->host.editor_session();
+  ASSERT_NE(filmstrip, nullptr);
+  ASSERT_NE(handle, nullptr);
+  ASSERT_NE(session, nullptr);
+
+  session->set_filmstrip_collapsed(false);
+  session->set_filmstrip_expanded_height(140.0);
+  ProcessEvents(20);
+  ASSERT_TRUE(QMetaObject::invokeMethod(filmstrip, "endFoldDrive"));
+  ProcessEvents(20);
+
+  const qreal handle_h = filmstrip->property("handleHeight").toReal();
+  const qreal expanded_h = filmstrip->property("expandedHeight").toReal();
+  ASSERT_GT(expanded_h, handle_h);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(filmstrip, "driveFoldProgress",
+                                        Q_ARG(QVariant, QVariant(1.0))));
+  ProcessEvents(10);
+  EXPECT_NEAR(filmstrip->height(), expanded_h, 1.0);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(filmstrip, "driveFoldProgress",
+                                        Q_ARG(QVariant, QVariant(0.5))));
+  ProcessEvents(10);
+  const qreal mid_h = handle_h + (expanded_h - handle_h) * 0.5;
+  EXPECT_NEAR(filmstrip->height(), mid_h, 1.5);
+  EXPECT_NEAR(filmstrip->property("dockExpandProgress").toReal(), 0.5, 0.001);
+
+  // Collapse session while mid-fold: logical state flips; progress stays driven.
+  session->set_filmstrip_collapsed(true);
+  ProcessEvents(10);
+  EXPECT_TRUE(session->filmstrip_collapsed());
+  EXPECT_NEAR(filmstrip->property("dockExpandProgress").toReal(), 0.5, 0.001);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(filmstrip, "driveFoldProgress",
+                                        Q_ARG(QVariant, QVariant(0.0))));
+  ProcessEvents(10);
+  EXPECT_NEAR(filmstrip->height(), handle_h, 1.0);
+  EXPECT_NEAR(handle->height(), handle_h, 1.0);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(filmstrip, "endFoldDrive"));
+  ProcessEvents(20);
+  EXPECT_TRUE(session->filmstrip_collapsed());
+  EXPECT_NEAR(filmstrip->height(), handle_h, 1.0);
+}
+
+TEST_F(WorkspaceShellTests, AdjustmentSectionFoldDriverPreservesPanelSelection) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  loaded->host.workspace_router()->OpenEditor(1, 1);
+  ProcessEvents(80);
+
+  auto* session = loaded->host.editor_session();
+  ASSERT_NE(session, nullptr);
+  session->set_active_adjustment_panel(QStringLiteral("tone"));
+  ProcessEvents(20);
+
+  auto* group = loaded->window->findChild<QQuickItem*>(
+      QStringLiteral("editorAdjustmentGroupShell_tone"));
+  ASSERT_NE(group, nullptr);
+
+  const qreal header_h = group->property("headerHeight").toReal();
+  const qreal body_content_h = group->property("bodyContentHeight").toReal();
+  ASSERT_GT(header_h, 0.0);
+  ASSERT_GT(body_content_h, 0.0);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(group, "driveFoldProgress",
+                                        Q_ARG(QVariant, QVariant(1.0))));
+  ProcessEvents(10);
+  EXPECT_NEAR(group->height(), header_h + body_content_h, 1.5);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(group, "driveFoldProgress",
+                                        Q_ARG(QVariant, QVariant(0.0))));
+  ProcessEvents(10);
+  EXPECT_NEAR(group->height(), header_h, 1.5);
+  EXPECT_NEAR(group->property("foldProgress").toReal(), 0.0, 0.001);
+
+  // Intermediate + rapid expand while selection stays on tone.
+  ASSERT_TRUE(QMetaObject::invokeMethod(group, "driveFoldProgress",
+                                        Q_ARG(QVariant, QVariant(0.4))));
+  ProcessEvents(10);
+  group->setProperty("expanded", true);
+  ASSERT_TRUE(QMetaObject::invokeMethod(group, "driveFoldProgress",
+                                        Q_ARG(QVariant, QVariant(1.0))));
+  ProcessEvents(10);
+  EXPECT_EQ(session->active_adjustment_panel(), QStringLiteral("tone"));
+  EXPECT_NEAR(group->property("foldProgress").toReal(), 1.0, 0.001);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(group, "endFoldDrive"));
+  ProcessEvents(10);
+  EXPECT_EQ(session->active_adjustment_panel(), QStringLiteral("tone"));
+}
+
+TEST_F(WorkspaceShellTests, EditorVisibleCopyHasNoDeveloperPlaceholderPhrasing) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  loaded->host.workspace_router()->OpenEditor(0, 0);
+  ProcessEvents(80);
+
+  const QStringList banned = {QStringLiteral("will appear here"),
+                              QStringLiteral("TODO"),
+                              QStringLiteral("Phase 4"),
+                              QStringLiteral("placeholder"),
+                              QStringLiteral("FIXME")};
+
+  // Walk labels under the editor workspace and reject banned product-facing phrasing.
+  auto* workspace =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspace"));
+  ASSERT_NE(workspace, nullptr);
+  const auto labels = workspace->findChildren<QQuickItem*>();
+  for (QQuickItem* item : labels) {
+    const QString text = item->property("text").toString();
+    if (text.isEmpty()) {
+      continue;
+    }
+    const QString lower = text.toLower();
+    for (const QString& ban : banned) {
+      EXPECT_FALSE(lower.contains(ban.toLower()))
+          << "Banned copy in " << item->objectName().toStdString() << ": "
+          << text.toStdString();
+    }
+  }
+
+  // Positive empty-state product strings still present.
+  auto* empty = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorEmptyState"));
+  ASSERT_NE(empty, nullptr);
+  EXPECT_TRUE(empty->isVisible());
 }
 
 }  // namespace

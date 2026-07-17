@@ -206,7 +206,7 @@ Item {
                                     Math.max(0, parent.height - height - 4))
                         width: cropAngleLabel.implicitWidth + 14
                         height: cropAngleLabel.implicitHeight + 10
-                        radius: 4
+                        radius: appTheme.badgeRadius
                         color: Qt.rgba(18 / 255, 18 / 255, 18 / 255, 210 / 255)
                         z: 4
 
@@ -215,7 +215,8 @@ Item {
                             anchors.centerIn: parent
                             text: qsTr("%1°").arg(editorInteraction.rotationLabelDegrees.toFixed(1))
                             color: Qt.rgba(1, 1, 1, 0.96)
-                            font.pixelSize: 12
+                            font.pixelSize: appTheme.fontSizeBody
+                            font.family: appTheme.dataFontFamily
                         }
                     }
 

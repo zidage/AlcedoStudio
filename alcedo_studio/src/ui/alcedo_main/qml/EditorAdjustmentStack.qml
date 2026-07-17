@@ -6,7 +6,8 @@ import QtQuick.Layouts
 // Right-side editor tools: histogram/waveform scope slot, adjustment navbar,
 // and stacked panel bodies for Tone / Look / Display Transform / Geometry /
 // RAW Decode. Phase 4B finalizes navigation, ordering, selection, collapse,
-// and sizing; panel bodies may stay empty until later port phases.
+// and sizing; real controls arrive in Phase 6. Phase 4C adds a collapsible
+// section shell that proves the shared fold motion contract.
 Item {
     id: root
     objectName: "editorAdjustmentStack"
@@ -69,9 +70,10 @@ Item {
 
     function panelEmptyHint(key) {
         if (!root.controlsEnabled) {
-            return qsTr("Select an image to enable adjustment controls")
+            return qsTr("Select an image to enable adjustments")
         }
-        return qsTr("%1 controls will appear here").arg(panelTitle(key))
+        // Product empty state — no developer/placeholder phrasing.
+        return qsTr("No adjustments yet")
     }
 
     Rectangle {
@@ -122,47 +124,20 @@ Item {
                 border.width: 1
                 border.color: root.colCardBorder
 
-                component AdjustmentNavButton: Button {
-                    id: navBtn
+                component AdjustmentNavButton: IconActionButton {
                     property string panelKey: "tone"
-                    property string iconSrc: ""
-                    property string tip: ""
 
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    flat: true
-                    padding: 0
-                    display: AbstractButton.IconOnly
-                    enabled: true
-                    activeFocusOnTab: true
-                    readonly property bool isActive: root.activePanel === panelKey
-                    HoverHandler { id: navHover }
-                    readonly property int highlightLevel: !enabled ? 0
-                                                          : (down ? 2
-                                                          : (navHover.hovered ? 1 : 0))
-                    readonly property bool focusRingVisible: enabled && activeFocus
-                    icon.source: iconSrc
-                    icon.width: appTheme.iconOpticalSizeCompact
-                    icon.height: appTheme.iconOpticalSizeCompact
-                    icon.color: !enabled ? root.withAlpha(root.colMuted, 0.55)
-                               : (isActive ? root.colText : root.colMuted)
-                    Material.foreground: icon.color
-                    background: Rectangle {
-                        radius: Math.max(4, root.controlRadius - 2)
-                        color: navBtn.isActive
-                               ? root.withAlpha(root.colHover, 0.55)
-                               : navBtn.highlightLevel === 2
-                                 ? root.withAlpha(root.colHover, 0.40)
-                                 : navBtn.highlightLevel === 1
-                                   ? root.withAlpha(root.colHover, 0.22)
-                                   : "transparent"
-                        border.width: navBtn.focusRingVisible ? 1 : 0
-                        border.color: root.withAlpha(root.colAccent, 0.60)
-                    }
-                    ToolTip.visible: hovered
-                    ToolTip.text: tip
-                    Accessible.name: tip
-                    Accessible.role: Accessible.Button
+                    // Compact optical size + stretch across the segmented row.
+                    compact: true
+                    stretchInLayout: true
+                    selected: root.activePanel === panelKey
+                    iconColorDefault: root.colMuted
+                    iconColorSelected: root.colText
+                    iconColorMuted: root.colMuted
+                    fillIdle: "transparent"
+                    fillHover: root.colHover
+                    fillSelected: root.withAlpha(root.colHover, 0.55)
+                    focusRingColor: root.colAccent
                     onClicked: root.selectPanel(panelKey)
                 }
 
@@ -175,31 +150,31 @@ Item {
                         objectName: "editorAdjustmentNav_tone"
                         panelKey: "tone"
                         iconSrc: "qrc:/panel_icons/adjustments.svg"
-                        tip: qsTr("Tone")
+                        actionName: qsTr("Tone")
                     }
                     AdjustmentNavButton {
                         objectName: "editorAdjustmentNav_look"
                         panelKey: "look"
                         iconSrc: "qrc:/panel_icons/palette.svg"
-                        tip: qsTr("Look")
+                        actionName: qsTr("Look")
                     }
                     AdjustmentNavButton {
                         objectName: "editorAdjustmentNav_display"
                         panelKey: "display"
                         iconSrc: "qrc:/panel_icons/color-filter.svg"
-                        tip: qsTr("Display Transform")
+                        actionName: qsTr("Display Transform")
                     }
                     AdjustmentNavButton {
                         objectName: "editorAdjustmentNav_geometry"
                         panelKey: "geometry"
                         iconSrc: "qrc:/panel_icons/crop.svg"
-                        tip: qsTr("Geometry")
+                        actionName: qsTr("Geometry")
                     }
                     AdjustmentNavButton {
                         objectName: "editorAdjustmentNav_raw"
                         panelKey: "raw"
                         iconSrc: "qrc:/panel_icons/aperture.svg"
-                        tip: qsTr("RAW Decode")
+                        actionName: qsTr("RAW Decode")
                     }
                 }
             }
@@ -237,17 +212,26 @@ Item {
                             font.weight: appTheme.fontWeightHeading
                         }
 
-                        Rectangle {
+                        // Shared fold reference for adjustment groups (Phase 4C).
+                        // Real controls replace the empty body in Phase 6.
+                        CollapsibleSection {
+                            id: groupShell
+                            objectName: "editorAdjustmentGroupShell_" + panelKey
                             Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            radius: appTheme.controlRadiusSmall
-                            color: "transparent"
-                            border.width: 1
-                            border.color: root.colCardBorder
+                            title: root.panelTitle(panelKey)
+                            expanded: true
+                            controlsEnabled: root.controlsEnabled
+                            surfaceColor: "transparent"
+                            borderColor: root.colCardBorder
+                            textColor: root.colText
+                            mutedColor: root.colMuted
+                            hoverColor: root.colHover
+                            accentColor: root.colAccent
+                            bodyContentHeight: 96
 
                             Label {
                                 anchors.centerIn: parent
-                                width: parent.width - 24
+                                width: parent.width - 8
                                 wrapMode: Text.WordWrap
                                 horizontalAlignment: Text.AlignHCenter
                                 text: root.panelEmptyHint(panelKey)
@@ -255,6 +239,8 @@ Item {
                                 font.pixelSize: appTheme.fontSizeBody
                             }
                         }
+
+                        Item { Layout.fillHeight: true }
                     }
                 }
 
