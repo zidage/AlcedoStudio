@@ -10,31 +10,53 @@ namespace alcedo::ui {
 
 class EditorController;
 
-/// Owns the editor-session boundary exposed to workspace routing. The legacy
-/// editor implementation remains behind this narrow module until the QML
-/// editor surface is migrated.
+/// QML-facing editor session facade used by workspace routing.
+///
+/// Phase 1B owns route/session identity and filmstrip shell preferences for the
+/// unified QML editor workspace. It does not open the legacy modal dialog; that
+/// path remains on EditorController until the cutover phase removes it.
 class EditorSessionController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool active READ active NOTIFY StateChanged)
+  Q_PROPERTY(bool hasImage READ has_image NOTIFY StateChanged)
   Q_PROPERTY(uint elementId READ element_id NOTIFY StateChanged)
   Q_PROPERTY(uint imageId READ image_id NOTIFY StateChanged)
+  Q_PROPERTY(bool filmstripCollapsed READ filmstrip_collapsed WRITE set_filmstrip_collapsed
+                 NOTIFY FilmstripUiChanged)
+  Q_PROPERTY(double filmstripExpandedHeight READ filmstrip_expanded_height WRITE
+                 set_filmstrip_expanded_height NOTIFY FilmstripUiChanged)
 
  public:
   explicit EditorSessionController(EditorController* editor, QObject* parent = nullptr);
 
-  [[nodiscard]] bool active() const;
-  [[nodiscard]] uint element_id() const;
-  [[nodiscard]] uint image_id() const;
+  [[nodiscard]] bool active() const { return active_; }
+  [[nodiscard]] bool has_image() const { return active_ && element_id_ > 0 && image_id_ > 0; }
+  [[nodiscard]] uint element_id() const { return element_id_; }
+  [[nodiscard]] uint image_id() const { return image_id_; }
+  [[nodiscard]] bool filmstrip_collapsed() const { return filmstrip_collapsed_; }
+  [[nodiscard]] double filmstrip_expanded_height() const { return filmstrip_expanded_height_; }
 
   Q_INVOKABLE void Open(uint elementId = 0, uint imageId = 0);
   Q_INVOKABLE void Close();
   void Finalize(bool persistChanges);
 
+  void set_filmstrip_collapsed(bool collapsed);
+  void set_filmstrip_expanded_height(double height);
+
  signals:
   void StateChanged();
+  void FilmstripUiChanged();
 
  private:
+  void LoadFilmstripUiPrefs();
+  void SaveFilmstripUiPrefs() const;
+
   EditorController* editor_ = nullptr;
+  bool              active_ = false;
+  uint              element_id_ = 0;
+  uint              image_id_ = 0;
+  bool              filmstrip_collapsed_ = false;
+  double            filmstrip_expanded_height_ = 128.0;
 };
 
 }  // namespace alcedo::ui

@@ -1978,6 +1978,10 @@ qt_add_qml_module(alcedo_main
         ui/alcedo_main/qml/ThumbnailListView.qml
         ui/alcedo_main/qml/BackgroundTaskBar.qml
         ui/alcedo_main/qml/BackgroundTaskPopover.qml
+        ui/alcedo_main/qml/WorkspaceHost.qml
+        ui/alcedo_main/qml/LibraryWorkspace.qml
+        ui/alcedo_main/qml/EditorWorkspace.qml
+        ui/alcedo_main/qml/EditorFilmstrip.qml
     RESOURCES
         ui/alcedo_main/qml/util/qmldir
 )

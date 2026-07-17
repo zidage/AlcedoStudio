@@ -601,6 +601,8 @@ Acceptance:
 
 ### Phase 1B - Thin Main and workspace shell
 
+**Status: complete (2026-07-17).**
+
 Deliverables:
 
 - Extract the current library body from `Main.qml` into `LibraryWorkspace.qml` without changing its
@@ -623,6 +625,18 @@ Acceptance:
   keyboard- and pointer-accessible.
 - Repeating workspace switches does not grow the QML object count or retain inactive visual trees.
 - `Main.qml` contains no library/editor panel layout decisions.
+
+Implementation notes:
+
+- `Main.qml` is the application shell (window chrome, global dialogs, shortcuts, overlays).
+- `WorkspaceHost.qml` lazy-loads exactly one of `LibraryWorkspace.qml` / `EditorWorkspace.qml`
+  via mutually exclusive `Loader`s so inactive trees are destroyed.
+- `EditorFilmstrip.qml` owns the collapsible dock + persistent handle; collapse state and expanded
+  height persist through `EditorSessionController` (`QSettings` keys
+  `editor/filmstripCollapsed`, `editor/filmstripExpandedHeight`).
+- `WorkspaceRouter::OpenEditor` / `OpenLibrary` drive route state only. `EditorSessionController`
+  tracks session identity without opening the legacy modal `OpenEditorDialog`.
+- Covered by `MainQmlWorkflowTest` and `WorkspaceShellTest`.
 
 ### Phase 2 - QQuickRhiItem viewport and native frame broker
 

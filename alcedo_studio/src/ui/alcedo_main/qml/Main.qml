@@ -106,25 +106,6 @@ ApplicationWindow {
     // Transparent root surface so DWM does not draw a frame/border around our rounded content.
     color: "transparent"
 
-    property bool inspectorVisible: true
-    property real inspectorWidth: 300
-    readonly property real inspectorMinWidth: 300
-    readonly property real inspectorMaxWidth: 600
-    readonly property real leftPaneWidth: 276
-    readonly property real centerPaneMinWidth: 560
-    readonly property real mainFrameHorizontalMargins: 24
-    readonly property real contentRowSpacingTotal: 36
-    readonly property real inspectorAdaptiveMaxWidth: Math.max(
-        0,
-        root.width
-        - leftPaneWidth
-        - centerPaneMinWidth
-        - mainFrameHorizontalMargins
-        - contentRowSpacingTotal
-        - 5)
-    property bool gridMode: true
-    readonly property int defaultGridZoomLevel: 4
-    property int gridZoomLevel: defaultGridZoomLevel  // 0..7, maps to column counts 2/3/4/5/6/8/11/14
     readonly property bool backendInteractive: appModules.project.serviceReady
                                                && !appModules.project.projectLoading
                                                && !appModules.project.acceleratorPreparing
@@ -636,12 +617,18 @@ ApplicationWindow {
         adjustmentTransferDialog.open()
     }
 
+    readonly property alias exportQueueState: exportQueueStateObj
+    readonly property alias selectionState: selectionStateObj
+    readonly property alias importDialog: importDialogObj
+    readonly property alias exportDialog: exportDialogObj
+    readonly property alias globalSearchDialog: globalSearchDialogObj
+
     ExportQueueState {
-        id: exportQueueState
+        id: exportQueueStateObj
     }
 
     QtObject {
-        id: selectionState
+        id: selectionStateObj
         property var selectedImagesById: ({})
         readonly property int selectedCount: Object.keys(selectedImagesById).length
 
@@ -745,7 +732,7 @@ ApplicationWindow {
     }
 
     FileDialog {
-        id: importDialog
+        id: importDialogObj
         title: qsTr("Select Images")
         fileMode: FileDialog.OpenFiles
         nameFilters: [
@@ -762,7 +749,7 @@ ApplicationWindow {
     }
 
     AlbumExportDialog {
-        id: exportDialog
+        id: exportDialogObj
         blurSource: mainContent
         selectedCount: root.selectedCount
         exportQueueCount: root.exportQueueCount
@@ -1313,56 +1300,6 @@ ApplicationWindow {
                 }
 
                 Item { Layout.fillWidth: true }
-                Button {
-                    id: inspectorToggleButton
-                    checkable: false
-                    flat: true
-                    Layout.preferredWidth: 52
-                    Layout.preferredHeight: 42
-                    display: AbstractButton.IconOnly
-                    property real iconRotationTarget: inspectorVisible ? 180 : 0
-                    icon.source: "qrc:/panel_icons/inspector-expand.svg"
-                    icon.width: 24
-                    icon.height: 24
-                    icon.color: inspectorVisible
-                                ? root.colAccentPrimary
-                                : (inspectorToggleButton.hovered ? root.colText : root.colTextMuted)
-                    Material.foreground: icon.color
-                    ToolTip.visible: hovered
-                    ToolTip.text: inspectorVisible ? qsTr("Collapse Inspector") : qsTr("Expand Inspector")
-                    background: Rectangle {
-                        radius: root.controlRadius
-                        color: "transparent"
-                        border.width: 0
-                    }
-                    onContentItemChanged: {
-                        inspectorIconRotate.target = contentItem
-                        if (contentItem) {
-                            contentItem.transformOrigin = Item.Center
-                            contentItem.rotation = iconRotationTarget
-                        }
-                    }
-                    onIconRotationTargetChanged: {
-                        if (contentItem) {
-                            inspectorIconRotate.stop()
-                            inspectorIconRotate.to = iconRotationTarget
-                            inspectorIconRotate.start()
-                        }
-                    }
-                    Component.onCompleted: {
-                        if (contentItem) {
-                            contentItem.transformOrigin = Item.Center
-                            contentItem.rotation = iconRotationTarget
-                        }
-                    }
-                    NumberAnimation {
-                        id: inspectorIconRotate
-                        property: "rotation"
-                        duration: 170
-                        easing.type: Easing.OutCubic
-                    }
-                    onClicked: inspectorVisible = !inspectorVisible
-                }
 
                 // ── Frameless window caption buttons ──
                 Item { Layout.preferredWidth: 8 }
@@ -1453,450 +1390,14 @@ ApplicationWindow {
             }
         }
 
-        RowLayout {
+        WorkspaceHost {
+            id: workspaceHost
+            objectName: "workspaceHost"
             Layout.fillWidth: true
             Layout.fillHeight: true
-            spacing: 12
-
-            CollectionsPanel {
-                objectName: "collectionsPanel"
-                Layout.preferredWidth: root.leftPaneWidth
-                Layout.minimumWidth: root.leftPaneWidth
-                Layout.maximumWidth: root.leftPaneWidth
-                Layout.fillHeight: true
-                folderController: appModules.folders
-                theme: root
-                backendInteractive: root.backendInteractive
-                selectedCount: root.selectedCount
-                onImportRequested: importDialog.open()
-                onSearchRequested: globalSearchDialog.openFromCollection()
-                onAdvancedAnalysisRequested: root.openAdvancedAnalysisDialog()
-            }
-
-            ColumnLayout {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                Layout.minimumWidth: root.centerPaneMinWidth
-                spacing: 10
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    radius: root.panelRadius
-                    color: root.colGlassPanel
-                    border.width: 1
-                    border.color: root.colGlassStroke
-                    clip: true
-
-                ColumnLayout {
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
-                    anchors.leftMargin: 18
-                    anchors.rightMargin: 18
-                    anchors.topMargin: 10
-                    anchors.bottomMargin: 0
-                    spacing: 10
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 40
-                        Label { text: qsTr("Browser"); color: root.colTextMuted; font.pixelSize: 13; font.weight: 600 }
-                        Item { Layout.fillWidth: true }
-
-                        // ── Zoom slider ──
-                        Item {
-                            Layout.preferredWidth: 180
-                            Layout.preferredHeight: 36
-
-                            TapHandler {
-                                acceptedButtons: Qt.LeftButton
-                                onDoubleTapped: root.gridZoomLevel = root.defaultGridZoomLevel
-                            }
-
-                            RowLayout {
-                                anchors.fill: parent
-                                spacing: 8
-
-                                Label {
-                                    text: "-"
-                                    color: root.colTextMuted
-                                    font.family: root.dataFontFamily
-                                    font.pixelSize: 18
-                                    font.weight: 600
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: root.gridZoomLevel = Math.min(7, root.gridZoomLevel + 1)
-                                    }
-                                }
-
-                                Slider {
-                                    id: zoomSlider
-                                    Layout.fillWidth: true
-                                    Layout.alignment: Qt.AlignVCenter
-                                    from: 0
-                                    to: 7
-                                    stepSize: 1
-                                    value: root.gridZoomLevel
-                                    onValueChanged: root.gridZoomLevel = Math.round(value)
-                                    background: Rectangle {
-                                        x: zoomSlider.leftPadding
-                                        y: zoomSlider.topPadding + zoomSlider.availableHeight / 2 - height / 2
-                                        implicitWidth: zoomSlider.availableWidth
-                                        implicitHeight: 4
-                                        width: zoomSlider.availableWidth
-                                        height: implicitHeight
-                                        radius: 2
-                                        color: Qt.rgba(root.colBgBase.r, root.colBgBase.g, root.colBgBase.b, 0.98)
-                                        Rectangle {
-                                            width: zoomSlider.visualPosition * parent.width
-                                            height: parent.height
-                                            color: root.colAccentPrimary
-                                            radius: 2
-                                        }
-                                    }
-                                    handle: Rectangle {
-                                        x: zoomSlider.leftPadding + zoomSlider.visualPosition * (zoomSlider.availableWidth - width)
-                                        y: zoomSlider.topPadding + zoomSlider.availableHeight / 2 - height / 2
-                                        implicitWidth: 14
-                                        implicitHeight: 14
-                                        radius: 7
-                                        color: root.colAccentPrimary
-                                        border.width: 1
-                                        border.color: root.colAccentSecondary
-                                    }
-                                }
-
-                                Label {
-                                    text: "+"
-                                    color: root.colText
-                                    font.family: root.dataFontFamily
-                                    font.pixelSize: 18
-                                    font.weight: 600
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: root.gridZoomLevel = Math.max(0, root.gridZoomLevel - 1)
-                                    }
-                                }
-                            }
-                        }
-
-                        Item { Layout.preferredWidth: 10 }
-                        Item {
-                            id: viewModeSwitch
-                            Layout.preferredWidth: 132
-                            Layout.preferredHeight: 36
-
-                            Rectangle {
-                                id: viewModeTrack
-                                anchors.fill: parent
-                                radius: height / 2
-                                color: Qt.rgba(root.colBgBase.r, root.colBgBase.g, root.colBgBase.b, 0.98)
-                                border.width: 1
-                                border.color: root.colDivider
-                            }
-
-                            Rectangle {
-                                id: viewModeThumb
-                                width: parent.width / 2 - 4
-                                height: parent.height - 4
-                                y: 2
-                                x: root.gridMode ? 2 : parent.width - width - 2
-                                radius: height / 2
-                                color: root.colAccentPrimary
-                                border.width: 1
-                                border.color: Qt.rgba(
-                                    root.colAccentSecondary.r,
-                                    root.colAccentSecondary.g,
-                                    root.colAccentSecondary.b,
-                                    0.52)
-                                Behavior on x { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-                            }
-
-                            Row {
-                                anchors.fill: parent
-                                spacing: 0
-
-                                Item {
-                                    width: parent.width / 2
-                                    height: parent.height
-
-                                    Image {
-                                        id: gridModeIconSource
-                                        anchors.centerIn: parent
-                                        width: 20
-                                        height: 20
-                                        source: "qrc:/panel_icons/layout-grid.svg"
-                                        visible: false
-                                        asynchronous: true
-                                    }
-
-                                    MultiEffect {
-                                        anchors.fill: gridModeIconSource
-                                        source: gridModeIconSource
-                                        colorization: 1.0
-                                        colorizationColor: "white"
-                                    }
-
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: root.gridMode = true
-                                    }
-                                }
-
-                                Item {
-                                    width: parent.width / 2
-                                    height: parent.height
-
-                                    Image {
-                                        id: listModeIconSource
-                                        anchors.centerIn: parent
-                                        width: 20
-                                        height: 20
-                                        source: "qrc:/panel_icons/list.svg"
-                                        visible: false
-                                        asynchronous: true
-                                    }
-
-                                    MultiEffect {
-                                        anchors.fill: listModeIconSource
-                                        source: listModeIconSource
-                                        colorization: 1.0
-                                        colorizationColor: "white"
-                                    }
-
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: root.gridMode = false
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Item {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-
-                        Loader {
-                            anchors.fill: parent
-                            active: appModules.library.shownCount > 0
-                            sourceComponent: gridMode ? gridComp : listComp
-                        }
-
-                        Column {
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.top: parent.top
-                            visible: appModules.library.shownCount === 0
-                            spacing: 8
-                            Label {
-                                text: appModules.project.serviceReady ? qsTr("No Photos Yet") : qsTr("Open or Create a Project")
-                                font.family: root.headlineFontFamily
-                                color: root.colText
-                                font.pixelSize: 22
-                                font.weight: 700
-                            }
-                            Label {
-                                text: appModules.project.serviceReady
-                                      ? qsTr("Import your images for RAW adjustments.")
-                                      : qsTr("Use File > Load Project or File > Create Project to choose .alcd files.")
-                                color: root.colTextMuted
-                                font.pixelSize: 12
-                            }
-                            Button {
-                                id: emptyStateLoadButton
-                                visible: !appModules.project.serviceReady
-                                text: qsTr("Load Project")
-                                Material.background: root.colButtonPrimary
-                                Material.foreground: root.colText
-                                onClicked: root.beginProjectLaunch(function() {
-                                    return appModules.project.PromptAndLoadProject()
-                                })
-                            }
-                        }
-                    }
-                }
-                } // close album card Rectangle
-
-            } // close center block wrapper
-
-            // ── inspector panel + overlay resize handle ──
-            Item {
-                id: inspectorContainer
-                Layout.fillHeight: true
-                Layout.minimumWidth: 0
-                Layout.maximumWidth: root.inspectorAdaptiveMaxWidth
-                Layout.preferredWidth: inspectorVisible
-                                       ? Math.min(root.inspectorWidth, root.inspectorAdaptiveMaxWidth)
-                                       : 0
-                Behavior on Layout.preferredWidth { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: 10
-
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        radius: root.panelRadius
-                        color: root.colBgPanel
-                        border.width: 0
-                        clip: true
-
-                        InspectorPanel {
-                            anchors.fill: parent
-                            anchors.margins: 10
-                            focusedImage: root.focusedImageInspection
-                            interactionPolicy: appModules.interactionPolicy
-                            onRatingRequested: function(rating) {
-                                root.requestSetFocusedImageRating(rating)
-                            }
-                            onDescriptionSaveRequested: function(caption) {
-                                root.requestSaveFocusedDescription(caption)
-                            }
-                            onRatingReasonSaveRequested: function(reasons) {
-                                root.requestSaveFocusedRatingReason(reasons)
-                            }
-                            onContextMenuRequested: function(item, sceneX, sceneY) {
-                                root.openImageContextMenu(item, sceneX, sceneY)
-                            }
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 52
-                        spacing: 10
-
-                        Button {
-                            id: addSelectedBtn
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 52
-                            text: qsTr("Add to Queue") + " (" + root.selectedCount + ")"
-                            enabled: root.backendInteractive && root.selectedCount > 0
-                            icon.source: "qrc:/panel_icons/queue-add.svg"
-                            icon.width: 16
-                            icon.height: 16
-                            icon.color: root.colText
-                            display: AbstractButton.TextBesideIcon
-                            background: Rectangle {
-                                radius: root.controlRadius
-                                color: root.secondaryButtonFill(
-                                    addSelectedBtn.enabled,
-                                    addSelectedBtn.hovered,
-                                    addSelectedBtn.down)
-                                border.width: 1
-                                border.color: root.colButtonSecondaryBorder
-                            }
-                            Material.foreground: root.colText
-                            scale: addSelectedBtn.hovered && enabled ? 1.03 : 1.0
-                            Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutCubic } }
-                            onClicked: {
-                                exportQueueState.addTargets(selectionState.currentSelectedItems())
-                                selectionState.clearSelectedImages()
-                            }
-                        }
-
-                        Button {
-                            id: exportQueueBtn
-                            Layout.fillWidth: true
-                            Layout.preferredHeight: 52
-                            text: qsTr("Export") + " (" + root.exportQueueCount + ")"
-                            enabled: root.backendInteractive && (appModules.library.shownCount > 0 || root.exportQueueCount > 0)
-                            icon.source: "qrc:/panel_icons/export.svg"
-                            icon.width: 16
-                            icon.height: 16
-                            icon.color: root.colText
-                            display: AbstractButton.TextBesideIcon
-                            background: Canvas {
-                                opacity: exportQueueBtn.enabled ? 1.0 : 0.5
-                                property color gradStart: root.colAccentPrimary
-                                property color gradEnd: root.colAccentSecondary
-                                onGradStartChanged: requestPaint()
-                                onGradEndChanged: requestPaint()
-                                onWidthChanged: requestPaint()
-                                onHeightChanged: requestPaint()
-                                onPaint: {
-                                    var ctx = getContext("2d")
-                                    ctx.clearRect(0, 0, width, height)
-                                    var r = 8
-                                    ctx.beginPath()
-                                    ctx.moveTo(r, 0)
-                                    ctx.lineTo(width - r, 0)
-                                    ctx.quadraticCurveTo(width, 0, width, r)
-                                    ctx.lineTo(width, height - r)
-                                    ctx.quadraticCurveTo(width, height, width - r, height)
-                                    ctx.lineTo(r, height)
-                                    ctx.quadraticCurveTo(0, height, 0, height - r)
-                                    ctx.lineTo(0, r)
-                                    ctx.quadraticCurveTo(0, 0, r, 0)
-                                    ctx.closePath()
-                                    var grad = ctx.createLinearGradient(0, height, width, 0)
-                                    grad.addColorStop(0.0, Qt.rgba(gradStart.r, gradStart.g, gradStart.b, 1.0))
-                                    grad.addColorStop(1.0, Qt.rgba(gradEnd.r, gradEnd.g, gradEnd.b, 1.0))
-                                    ctx.fillStyle = grad
-                                    ctx.fill()
-                                }
-                            }
-                            Material.foreground: root.colText
-                            scale: exportQueueBtn.hovered && enabled ? 1.03 : 1.0
-                            Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutCubic } }
-                            onClicked: {
-                                exportQueueState.refreshExportPreview()
-                                exportDialog.open()
-                            }
-                        }
-                    }
-                }
-
-                Rectangle {
-                    id: inspectorResizeHandle
-                    anchors.left: parent.left
-                    anchors.top: parent.top
-                    anchors.bottom: parent.bottom
-                    width: inspectorVisible && root.inspectorAdaptiveMaxWidth > 0 ? 5 : 0
-                    x: -Math.round(width / 2)
-                    color: dragArea.containsMouse || dragArea.drag.active ? root.colAccentPrimary : "transparent"
-                    visible: width > 0
-                    z: 10
-                    Behavior on width { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
-                    Behavior on color { ColorAnimation { duration: 120 } }
-
-                    MouseArea {
-                        id: dragArea
-                        anchors.fill: parent
-                        anchors.margins: -3          // widen the hit area
-                        hoverEnabled: true
-                        cursorShape: Qt.SplitHCursor
-                        property real startX: 0
-                        property real startWidth: 0
-                        onPressed: function(mouse) {
-                            startX = mapToGlobal(mouse.x, 0).x
-                            startWidth = root.inspectorWidth
-                        }
-                        onPositionChanged: function(mouse) {
-                            if (!pressed) return
-                            var globalX = mapToGlobal(mouse.x, 0).x
-                            var delta = startX - globalX   // dragging left ⇒ wider
-                            var cappedMax = Math.min(root.inspectorMaxWidth, root.inspectorAdaptiveMaxWidth)
-                            var target = startWidth + delta
-                            if (cappedMax >= root.inspectorMinWidth) {
-                                root.inspectorWidth = Math.max(root.inspectorMinWidth, Math.min(cappedMax, target))
-                            } else {
-                                root.inspectorWidth = Math.max(0, Math.min(cappedMax, target))
-                            }
-                        }
-                    }
-                }
-            }
+            theme: root
+            host: root
+            workspaceRouter: appModules.workspaceRouter
         }
 
         BackgroundTaskBar {
@@ -1909,7 +1410,7 @@ ApplicationWindow {
         }
 
         GlobalSearchDialog {
-            id: globalSearchDialog
+            id: globalSearchDialogObj
             objectName: "globalSearchDialog"
             searchController: appModules.search
             interactionPolicyController: appModules.interactionPolicy
@@ -2400,56 +1901,4 @@ ApplicationWindow {
         }
     }
 
-    Component {
-        id: gridComp
-        ThumbnailGridView {
-            zoomLevel: root.gridZoomLevel
-            zoomAdjusting: zoomSlider.pressed
-            onZoomLevelChanged: root.gridZoomLevel = zoomLevel
-            selectedImagesById: root.selectedImagesById
-            exportQueueById: root.exportQueueById
-            onImageSelectionChanged: function(elementId, imageId, fileName, isHdr, selected) {
-                selectionState.setImageSelected(elementId, imageId, fileName, isHdr, selected)
-            }
-            onReplaceSelection: function(items) {
-                selectionState.replaceSelectedImages(items)
-                if (items && items.length > 0) {
-                    root.setFocusedImage(items[0])
-                } else {
-                    root.setFocusedImage(null)
-                }
-            }
-            onImageFocused: function(item) {
-                root.setFocusedImage(item)
-            }
-            onContextMenuRequested: function(item, sceneX, sceneY) {
-                root.openImageContextMenu(item, sceneX, sceneY)
-            }
-        }
-    }
-
-    Component {
-        id: listComp
-        ThumbnailListView {
-            selectedImagesById: root.selectedImagesById
-            exportQueueById: root.exportQueueById
-            onImageSelectionChanged: function(elementId, imageId, fileName, isHdr, selected) {
-                selectionState.setImageSelected(elementId, imageId, fileName, isHdr, selected)
-            }
-            onReplaceSelection: function(items) {
-                selectionState.replaceSelectedImages(items)
-                if (items && items.length > 0) {
-                    root.setFocusedImage(items[0])
-                } else {
-                    root.setFocusedImage(null)
-                }
-            }
-            onImageFocused: function(item) {
-                root.setFocusedImage(item)
-            }
-            onContextMenuRequested: function(item, sceneX, sceneY) {
-                root.openImageContextMenu(item, sceneX, sceneY)
-            }
-        }
-    }
 }

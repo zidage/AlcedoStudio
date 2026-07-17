@@ -16,6 +16,7 @@ void WorkspaceRouter::OpenLibrary() {
     return;
   }
   if (editor_session_ && editor_session_->active()) {
+    // Seal the active image session before tearing down the editor visual tree.
     editor_session_->Finalize(true);
   }
   workspace_ = QStringLiteral("library");
@@ -25,10 +26,16 @@ void WorkspaceRouter::OpenLibrary() {
 }
 
 void WorkspaceRouter::OpenEditor(uint elementId, uint imageId) {
+  const bool already_editor = workspace_ == QStringLiteral("editor");
   workspace_ = QStringLiteral("editor");
   element_id_ = elementId;
   image_id_ = imageId;
   if (editor_session_) {
+    if (already_editor && editor_session_->active() &&
+        (editor_session_->element_id() != elementId || editor_session_->image_id() != imageId)) {
+      // Image switch inside the editor workspace: seal prior session first.
+      editor_session_->Finalize(true);
+    }
     editor_session_->Open(elementId, imageId);
   }
   emit RouteChanged();

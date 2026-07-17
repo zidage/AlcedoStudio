@@ -91,10 +91,24 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   (void)host.search()->SearchPreview(QStringLiteral(""), 0, 24);
 
   host.workspace_router()->OpenEditor(0, 0);
+  ProcessEvents(50);
   EXPECT_EQ(host.workspace_router()->workspace(), QStringLiteral("editor"));
-  EXPECT_EQ(host.editor_session()->active(), host.editor()->editor_active());
+  EXPECT_TRUE(host.editor_session()->active());
+  EXPECT_FALSE(host.editor_session()->has_image());
+  // Unified workspace route must not open the legacy modal editor.
+  EXPECT_FALSE(host.editor()->editor_active());
+  auto* workspace_host = root->findChild<QObject*>(QStringLiteral("workspaceHost"));
+  ASSERT_NE(workspace_host, nullptr);
+  EXPECT_EQ(workspace_host->property("activeWorkspace").toString(), QStringLiteral("editor"));
+  EXPECT_NE(root->findChild<QObject*>(QStringLiteral("editorWorkspace")), nullptr);
+  EXPECT_EQ(root->findChild<QObject*>(QStringLiteral("libraryWorkspace")), nullptr);
+
   host.workspace_router()->OpenLibrary();
+  ProcessEvents(50);
   EXPECT_EQ(host.workspace_router()->workspace(), QStringLiteral("library"));
+  EXPECT_FALSE(host.editor_session()->active());
+  EXPECT_NE(root->findChild<QObject*>(QStringLiteral("libraryWorkspace")), nullptr);
+  EXPECT_EQ(root->findChild<QObject*>(QStringLiteral("editorWorkspace")), nullptr);
 
   ASSERT_TRUE(QMetaObject::invokeMethod(root, "openSettingsDialog",
                                         Q_ARG(QVariant, QVariant(0))));

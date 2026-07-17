@@ -1471,6 +1471,36 @@ target_compile_definitions(MainQmlWorkflowTest
 )
 gtest_discover_tests(MainQmlWorkflowTest TEST_PREFIX "MainQmlWorkflowTest.")
 
+add_executable(WorkspaceShellTest
+    ui/workspace_shell_test.cpp
+    ui/widget_test_main.cpp
+    ui/editor_dialog_stub.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(WorkspaceShellTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(WorkspaceShellTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(WorkspaceShellTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+gtest_discover_tests(WorkspaceShellTest TEST_PREFIX "WorkspaceShellTest.")
+
 add_executable(LanguageManagerTest
     ui/language_manager_test.cpp
     ui/ui_test_main.cpp
@@ -1578,6 +1608,7 @@ alcedo_assign_test_category(ui ALCEDO_BUILD_UI_TESTS alcedo_tests_ui
   EditorRhiContractsTest
   GlobalSearchDialogQmlTest
   MainQmlWorkflowTest
+  WorkspaceShellTest
   LanguageManagerTest
 )
 
