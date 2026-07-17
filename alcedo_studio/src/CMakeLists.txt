@@ -2052,7 +2052,6 @@ qt_add_qml_module(alcedo_main
         ui/alcedo_main/qml/StarRatingFilter.qml
         ui/alcedo_main/qml/ImageContextMenu.qml
         ui/alcedo_main/qml/ThumbnailGridView.qml
-        ui/alcedo_main/qml/ThumbnailListView.qml
         ui/alcedo_main/qml/BackgroundTaskBar.qml
         ui/alcedo_main/qml/BackgroundTaskPopover.qml
         ui/alcedo_main/qml/WorkspaceHost.qml

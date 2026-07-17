@@ -918,6 +918,8 @@ while any row remains unverified, even if its newly added functionality passes.
 
 ### Phase 4A - Main-window Library / Editor navigation
 
+**Status: complete (2026-07-17).**
+
 Deliverables:
 
 - Add persistent Library and Editor SVG actions to the shared main-window navigation owned by
@@ -940,6 +942,43 @@ Acceptance:
 - No visible or hidden editor-local control performs a separate “return to library” action.
 - Repeated navigation does not duplicate the main navigation, lose library scroll/filter state, or
   leak an inactive visual tree.
+
+Implementation closeout:
+
+- Shared main-window navigation is a two-segment capsule in `Main.qml`'s top toolbar
+  (`workspaceSwitch`, with `libraryNavButton` / `editorNavButton` icon segments) that reuses the
+  former library grid/list switch form (`viewModeTrack` pill + sliding `viewModeThumb` accent + two
+  icon segments) and existing repository SVGs `qrc:/panel_icons/layout-grid.svg` (Library) and
+  `qrc:/panel_icons/adjustments.svg` (Editor) — no new SVG assets. The accent thumb slides to the
+  active workspace (bound to `appModules.workspaceRouter.workspace`); hover, pressed, disabled, and
+  keyboard-focus states are expressed without permanent text labels. Tooltips and accessible names
+  are localized (`qsTr("Library")` / `qsTr("Editor")`).
+- `enabled: appModules.project.serviceReady` gives a meaningful disabled state (verified before any
+  project is loaded). Clicking the already-active segment is a no-op so the active editor session is
+  preserved; `editorNavButton` activates Editor with no image (`openEditor(0, 0)`), and library
+  double-click still routes through `appModules.workspaceRouter.openEditor(elementId, imageId)`.
+- The library ListView mode was deleted entirely: `ThumbnailListView.qml` is gone, the
+  `viewModeSwitch` grid/list capsule toggle was removed from `LibraryWorkspace.qml`, the `gridMode`
+  property + machinery and the `libraryGridMode` / `libraryListContentY` shell properties were
+  dropped, and the content Loader always uses `gridComp` (grid-only). The `.ts` `ThumbnailListView`
+  context is left as harmless dead weight; no `lupdate` was run.
+- `EditorWorkspace.qml` no longer contains `editorBackToLibraryButton`, the empty-state “Back to
+  Library” button, the `returnToLibrary()` function, or the redundant full-width editor toolbar card
+  (the `editorToolbar` that showed `Editing` / `Editor` / `Element %1` / `No image selected`). The
+  active workspace is shown by the shared capsule; the empty state still prompts “Select an image to
+  edit”.
+- i18n: `alcedo_main_zh_CN.ts` `Main` context un-vanished `Library` (图库) and added `Editor` (编辑).
+  No `lupdate` run; `en.ts` left as-is (English source fallback).
+- Tests (`workspace_shell_test.cpp`): `RealQmlEntrypointsDriveRoutingFocusAndFilmstripHeight` now
+  returns to library via `libraryNavButton` and asserts `editorBackToLibraryButton` is gone. Six new
+  tests cover mouse activation (with `isActive` active-state assertions), keyboard activation
+  (Space), the already-active no-op, no-leak / no-duplicate with preserved library view state, the
+  absent editor-local return control, and the disabled-before-project-load state.
+  `LibraryViewStateSurvivesEditorRoundTrip` and `MainNavigationDoesNotDuplicateOrLeakAcrossSwitches`
+  were updated to drop list-mode (`gridMode` / `libraryGridMode` / `libraryListContentY`) now that
+  the library is grid-only; they still verify `gridZoomLevel` / `inspectorVisible` / `inspectorWidth`
+  survival. `WorkspaceShellTest` (20) and `MainQmlWorkflowTest` (1) pass with no QML warnings;
+  `git diff --check` is clean and edited files remain LF.
 
 ### Phase 4B - Restore editor desktop ordering and History/Versions navbar
 

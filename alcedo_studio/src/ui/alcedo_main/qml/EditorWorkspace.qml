@@ -29,7 +29,9 @@ Item {
     readonly property int focusedElementId: workspaceRouter ? Number(workspaceRouter.elementId) : 0
     readonly property int focusedImageId: workspaceRouter ? Number(workspaceRouter.imageId) : 0
 
-    // Focus order: return-to-library → toolbar → viewport → side panels → filmstrip handle.
+    // Focus order: viewport → side panels → filmstrip handle. Returning to the
+    // library is owned by the shared main-window navigation, not by an
+    // editor-local control.
     Component.onCompleted: {
         if (!hasImage) {
             emptyStatePrompt.forceActiveFocus()
@@ -38,82 +40,9 @@ Item {
         }
     }
 
-    function returnToLibrary() {
-        if (workspaceRouter) {
-            workspaceRouter.openLibrary()
-        }
-    }
-
     ColumnLayout {
         anchors.fill: parent
         spacing: 12
-
-        // ── Editor toolbar ──────────────────────────────────────────────
-        Rectangle {
-            id: editorToolbar
-            objectName: "editorToolbar"
-            Layout.fillWidth: true
-            Layout.preferredHeight: 48
-            radius: root.panelRadius
-            color: root.colPanel
-            border.width: 1
-            border.color: root.colStroke
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: 12
-                anchors.rightMargin: 12
-                spacing: 10
-
-                Button {
-                    id: backToLibraryButton
-                    objectName: "editorBackToLibraryButton"
-                    text: qsTr("Library")
-                    flat: true
-                    activeFocusOnTab: true
-                    Material.foreground: root.colText
-                    Accessible.name: qsTr("Return to library")
-                    onClicked: root.returnToLibrary()
-                }
-
-                Rectangle {
-                    Layout.preferredWidth: 1
-                    Layout.preferredHeight: 22
-                    color: root.colStroke
-                }
-
-                Label {
-                    text: root.hasImage
-                          ? qsTr("Editing")
-                          : qsTr("Editor")
-                    color: root.colMuted
-                    font.pixelSize: 12
-                    font.weight: 600
-                }
-
-                Label {
-                    visible: root.hasImage
-                    text: qsTr("Element %1").arg(root.focusedElementId)
-                    color: root.colText
-                    font.pixelSize: 13
-                    font.weight: 600
-                    elide: Text.ElideRight
-                    Layout.fillWidth: true
-                }
-
-                Item {
-                    Layout.fillWidth: !root.hasImage
-                    visible: !root.hasImage
-                }
-
-                Label {
-                    visible: !root.hasImage
-                    text: qsTr("No image selected")
-                    color: root.colMuted
-                    font.pixelSize: 12
-                }
-            }
-        }
 
         // ── Main editor body ────────────────────────────────────────────
         RowLayout {
@@ -212,14 +141,6 @@ Item {
                             text: qsTr("Open an image from the library, or keep this workspace ready for search results.")
                             color: root.colMuted
                             font.pixelSize: 13
-                        }
-                        Button {
-                            anchors.horizontalCenter: parent.horizontalCenter
-                            text: qsTr("Back to Library")
-                            activeFocusOnTab: true
-                            Material.background: root.colAccent
-                            Material.foreground: root.colText
-                            onClicked: root.returnToLibrary()
                         }
                     }
 

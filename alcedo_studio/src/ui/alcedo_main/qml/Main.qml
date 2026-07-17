@@ -139,10 +139,8 @@ ApplicationWindow {
     // LibraryWorkspace reads these on create and writes them back on destroy.
     property bool libraryInspectorVisible: true
     property real libraryInspectorWidth: 300
-    property bool libraryGridMode: true
     property int libraryGridZoomLevel: 4
     property real libraryGridContentY: 0
-    property real libraryListContentY: 0
 
     // Phase 2: push the focused image element id and the pending delete targets
     // into the interaction-policy controller so its cached Q_PROPERTYs (which the
@@ -1262,6 +1260,120 @@ ApplicationWindow {
                     Label { text: qsTr("Studio"); font.family: root.headlineFontFamily; font.pixelSize: 19; font.weight: 700; color: root.colText }
                 }
                 Item { Layout.preferredWidth: 12 }
+
+                // ── Workspace navigation (Library / Editor) ─────────────────
+                // Persistent shared navigation, visible in the same position in
+                // both workspaces. A capsule — the same form as the former library
+                // grid/list switch — carries the two icon segments; the accent thumb
+                // slides to the active workspace. No permanent text label: meaning
+                // lives in the SVG plus the localized tooltip and accessible name.
+                // Return-to-library is owned here, not by an editor-local control.
+                Item {
+                    id: workspaceSwitch
+                    objectName: "workspaceSwitch"
+                    Layout.preferredWidth: 132
+                    Layout.preferredHeight: 36
+
+                    readonly property bool navEnabled: appModules.project.serviceReady
+
+                    Rectangle {
+                        id: wsTrack
+                        anchors.fill: parent
+                        radius: height / 2
+                        color: Qt.rgba(root.colBgBase.r, root.colBgBase.g, root.colBgBase.b, 0.98)
+                        border.width: 1
+                        border.color: root.colDivider
+                        opacity: workspaceSwitch.navEnabled ? 1.0 : 0.45
+                    }
+
+                    Rectangle {
+                        id: wsThumb
+                        width: parent.width / 2 - 4
+                        height: parent.height - 4
+                        y: 2
+                        x: appModules.workspaceRouter.workspace === "library"
+                           ? 2 : parent.width - width - 2
+                        radius: height / 2
+                        color: root.colAccentPrimary
+                        border.width: 1
+                        border.color: Qt.rgba(
+                            root.colAccentSecondary.r,
+                            root.colAccentSecondary.g,
+                            root.colAccentSecondary.b,
+                            0.52)
+                        opacity: workspaceSwitch.navEnabled ? 1.0 : 0.45
+                        Behavior on x { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+                    }
+
+                    Row {
+                        anchors.fill: parent
+                        spacing: 0
+
+                        Button {
+                            id: libraryNavButton
+                            objectName: "libraryNavButton"
+                            width: parent.width / 2
+                            height: parent.height
+                            flat: true
+                            padding: 0
+                            display: AbstractButton.IconOnly
+                            enabled: workspaceSwitch.navEnabled
+                            activeFocusOnTab: true
+                            readonly property bool isActive: appModules.workspaceRouter.workspace === "library"
+                            icon.source: "qrc:/panel_icons/layout-grid.svg"
+                            icon.width: 20
+                            icon.height: 20
+                            icon.color: !enabled ? root.withAlpha(root.colText, 0.30) : root.colText
+                            Material.foreground: icon.color
+                            background: Rectangle { color: "transparent" }
+                            ToolTip.visible: hovered
+                            ToolTip.text: qsTr("Library")
+                            Accessible.name: qsTr("Library")
+                            Accessible.role: Accessible.Button
+                            onClicked: {
+                                if (appModules.workspaceRouter.workspace !== "library") {
+                                    appModules.workspaceRouter.openLibrary()
+                                }
+                            }
+                        }
+
+                        Button {
+                            id: editorNavButton
+                            objectName: "editorNavButton"
+                            width: parent.width / 2
+                            height: parent.height
+                            flat: true
+                            padding: 0
+                            display: AbstractButton.IconOnly
+                            enabled: workspaceSwitch.navEnabled
+                            activeFocusOnTab: true
+                            readonly property bool isActive: appModules.workspaceRouter.workspace === "editor"
+                            icon.source: "qrc:/panel_icons/adjustments.svg"
+                            icon.width: 20
+                            icon.height: 20
+                            icon.color: !enabled ? root.withAlpha(root.colText, 0.30) : root.colText
+                            Material.foreground: icon.color
+                            background: Rectangle { color: "transparent" }
+                            ToolTip.visible: hovered
+                            ToolTip.text: qsTr("Editor")
+                            Accessible.name: qsTr("Editor")
+                            Accessible.role: Accessible.Button
+                            // Editor activates with no selected image; clicking while
+                            // already active is a no-op so the session is preserved.
+                            onClicked: {
+                                if (appModules.workspaceRouter.workspace !== "editor") {
+                                    appModules.workspaceRouter.openEditor(0, 0)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    Layout.preferredWidth: 1
+                    Layout.preferredHeight: 22
+                    color: root.colGlassStroke
+                }
 
                 // ── File menu ──
                 Button {

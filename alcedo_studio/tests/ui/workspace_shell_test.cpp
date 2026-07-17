@@ -133,10 +133,12 @@ void SeedLibraryThumbnails(ApplicationModuleHost& host, int count, int content_h
 
 class WorkspaceShellTests : public ApplicationModuleHostTestFixture {
  protected:
-  auto LoadMainWindow() -> std::unique_ptr<LoadedMainWindow> {
+  auto LoadMainWindow(bool create_project = true) -> std::unique_ptr<LoadedMainWindow> {
     auto loaded = std::make_unique<LoadedMainWindow>();
     alcedo::ui::AppTheme::RegisterFonts();
-    EXPECT_TRUE(CreateTestProject(loaded->host));
+    if (create_project) {
+      EXPECT_TRUE(CreateTestProject(loaded->host));
+    }
 
     alcedo::ui::AppTheme::SetEffectiveLanguageCode(
         loaded->language_manager.EffectiveLanguageCode());
@@ -421,19 +423,14 @@ TEST_F(WorkspaceShellTests, LibraryViewStateSurvivesEditorRoundTrip) {
 
   // Non-default settings via the live library surface; write-through updates the
   // Main shell so values survive Loader destroy/recreate.
-  ASSERT_TRUE(library->setProperty("gridMode", false));
   ASSERT_TRUE(library->setProperty("gridZoomLevel", 1));
   ASSERT_TRUE(library->setProperty("inspectorVisible", false));
   ASSERT_TRUE(library->setProperty("inspectorWidth", 360.0));
-  loaded->window->setProperty("libraryGridContentY", 240.0);
-  loaded->window->setProperty("libraryListContentY", 180.0);
   ProcessEvents(20);
 
-  EXPECT_FALSE(library->property("gridMode").toBool());
   EXPECT_EQ(library->property("gridZoomLevel").toInt(), 1);
   EXPECT_FALSE(library->property("inspectorVisible").toBool());
   EXPECT_DOUBLE_EQ(library->property("inspectorWidth").toDouble(), 360.0);
-  EXPECT_FALSE(loaded->window->property("libraryGridMode").toBool());
   EXPECT_EQ(loaded->window->property("libraryGridZoomLevel").toInt(), 1);
   EXPECT_FALSE(loaded->window->property("libraryInspectorVisible").toBool());
   EXPECT_DOUBLE_EQ(loaded->window->property("libraryInspectorWidth").toDouble(), 360.0);
@@ -443,18 +440,15 @@ TEST_F(WorkspaceShellTests, LibraryViewStateSurvivesEditorRoundTrip) {
   EXPECT_EQ(loaded->window->findChild<QObject*>(QStringLiteral("libraryWorkspace")), nullptr);
 
   // Shell properties must still hold the values after library destruction.
-  EXPECT_FALSE(loaded->window->property("libraryGridMode").toBool());
   EXPECT_EQ(loaded->window->property("libraryGridZoomLevel").toInt(), 1);
   EXPECT_FALSE(loaded->window->property("libraryInspectorVisible").toBool());
   EXPECT_DOUBLE_EQ(loaded->window->property("libraryInspectorWidth").toDouble(), 360.0);
-  EXPECT_DOUBLE_EQ(loaded->window->property("libraryListContentY").toDouble(), 180.0);
 
   loaded->host.workspace_router()->OpenLibrary();
   ProcessEvents(50);
 
   auto* restored = loaded->window->findChild<QObject*>(QStringLiteral("libraryWorkspace"));
   ASSERT_NE(restored, nullptr);
-  EXPECT_FALSE(restored->property("gridMode").toBool());
   EXPECT_EQ(restored->property("gridZoomLevel").toInt(), 1);
   EXPECT_FALSE(restored->property("inspectorVisible").toBool());
   EXPECT_DOUBLE_EQ(restored->property("inspectorWidth").toDouble(), 360.0);
@@ -592,10 +586,14 @@ TEST_F(WorkspaceShellTests, RealQmlEntrypointsDriveRoutingFocusAndFilmstripHeigh
   EXPECT_EQ(OpenEditorDialogCallCount(), 0);
   EXPECT_NE(loaded->window->findChild<QObject*>(QStringLiteral("editorWorkspace")), nullptr);
 
-  auto* back =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorBackToLibraryButton"));
-  ASSERT_NE(back, nullptr);
-  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(back));
+  // Phase 4A: return-to-library is owned by the shared main-window navigation,
+  // not an editor-local control. The editor back button no longer exists.
+  EXPECT_EQ(loaded->window->findChild<QObject*>(QStringLiteral("editorBackToLibraryButton")),
+            nullptr);
+  auto* library_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  ASSERT_NE(library_nav, nullptr);
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(library_nav));
   ProcessEvents(80);
 
   EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("library"));
@@ -796,6 +794,245 @@ TEST_F(WorkspaceShellTests, EditorViewportReceivesRealPointerAndWheelEvents) {
 
   EXPECT_TRUE(loaded->qml_warnings.empty())
       << loaded->qml_warnings.front().toString().toStdString();
+}
+
+// ── Phase 4A: main-window Library / Editor navigation ──────────────────────
+
+TEST_F(WorkspaceShellTests, MainNavigationActivatesLibraryAndEditorByMouse) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  ProcessEvents(50);
+
+  auto* library_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  auto* editor_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  ASSERT_NE(library_nav, nullptr);
+  ASSERT_NE(editor_nav, nullptr);
+  // Navigation is persistent and visible in both workspaces.
+  EXPECT_TRUE(library_nav->isVisible());
+  EXPECT_TRUE(editor_nav->isVisible());
+  EXPECT_TRUE(library_nav->isEnabled());
+  EXPECT_TRUE(editor_nav->isEnabled());
+
+  // Editor (empty) activated from the library workspace via main nav.
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
+                    CenterOfItem(editor_nav));
+  ProcessEvents(80);
+  EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("editor"));
+  EXPECT_TRUE(loaded->host.editor_session()->active());
+  EXPECT_FALSE(loaded->host.editor_session()->has_image());
+  EXPECT_NE(loaded->window->findChild<QObject*>(QStringLiteral("editorWorkspace")), nullptr);
+  EXPECT_EQ(loaded->window->findChild<QObject*>(QStringLiteral("libraryWorkspace")), nullptr);
+  auto* empty = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorEmptyState"));
+  ASSERT_NE(empty, nullptr);
+  EXPECT_TRUE(empty->isVisible());
+  // The active-state indicator tracks the workspace (drives the accent icon/tint).
+  EXPECT_TRUE(editor_nav->property("isActive").toBool());
+  EXPECT_FALSE(library_nav->property("isActive").toBool());
+
+  // Library activated from the editor workspace via main nav.
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
+                    CenterOfItem(library_nav));
+  ProcessEvents(80);
+  EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("library"));
+  EXPECT_FALSE(loaded->host.editor_session()->active());
+  EXPECT_NE(loaded->window->findChild<QObject*>(QStringLiteral("libraryWorkspace")), nullptr);
+  EXPECT_EQ(loaded->window->findChild<QObject*>(QStringLiteral("editorWorkspace")), nullptr);
+  EXPECT_FALSE(editor_nav->property("isActive").toBool());
+  EXPECT_TRUE(library_nav->property("isActive").toBool());
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, MainNavigationActivatesWorkspacesByKeyboard) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  ProcessEvents(50);
+
+  auto* library_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  auto* editor_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  ASSERT_NE(library_nav, nullptr);
+  ASSERT_NE(editor_nav, nullptr);
+  EXPECT_TRUE(library_nav->activeFocusOnTab());
+  EXPECT_TRUE(editor_nav->activeFocusOnTab());
+
+  // Keyboard-activate the editor nav from the library workspace.
+  editor_nav->forceActiveFocus();
+  ProcessEvents(20);
+  ASSERT_TRUE(editor_nav->hasActiveFocus());
+  QTest::keyClick(loaded->window, Qt::Key_Space);
+  ProcessEvents(80);
+  EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("editor"));
+  EXPECT_TRUE(loaded->host.editor_session()->active());
+  EXPECT_FALSE(loaded->host.editor_session()->has_image());
+  EXPECT_NE(loaded->window->findChild<QObject*>(QStringLiteral("editorWorkspace")), nullptr);
+
+  // Keyboard-activate the library nav from the editor workspace.
+  library_nav->forceActiveFocus();
+  ProcessEvents(20);
+  ASSERT_TRUE(library_nav->hasActiveFocus());
+  QTest::keyClick(loaded->window, Qt::Key_Space);
+  ProcessEvents(80);
+  EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("library"));
+  EXPECT_FALSE(loaded->host.editor_session()->active());
+  EXPECT_NE(loaded->window->findChild<QObject*>(QStringLiteral("libraryWorkspace")), nullptr);
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, MainNavigationEditorButtonIsNoOpWhenAlreadyActive) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  ProcessEvents(50);
+
+  // Open the editor focused on a real image (not the empty state).
+  loaded->host.workspace_router()->OpenEditor(42, 7);
+  ProcessEvents(80);
+  ASSERT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("editor"));
+  ASSERT_TRUE(loaded->host.editor_session()->has_image());
+  ASSERT_EQ(loaded->host.editor_session()->element_id(), 42u);
+  ASSERT_EQ(loaded->host.editor_session()->image_id(), 7u);
+
+  auto* editor_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  ASSERT_NE(editor_nav, nullptr);
+  EXPECT_TRUE(editor_nav->isEnabled());
+
+  // Clicking the already-active editor nav must NOT reset to the empty state;
+  // the active session is preserved.
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
+                    CenterOfItem(editor_nav));
+  ProcessEvents(80);
+  EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("editor"));
+  EXPECT_TRUE(loaded->host.editor_session()->active());
+  EXPECT_TRUE(loaded->host.editor_session()->has_image());
+  EXPECT_EQ(loaded->host.editor_session()->element_id(), 42u);
+  EXPECT_EQ(loaded->host.editor_session()->image_id(), 7u);
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, MainNavigationDoesNotDuplicateOrLeakAcrossSwitches) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  auto* workspace_host = loaded->window->findChild<QObject*>(QStringLiteral("workspaceHost"));
+  ASSERT_NE(workspace_host, nullptr);
+  ProcessEvents(40);
+
+  auto* library_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  auto* editor_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  ASSERT_NE(library_nav, nullptr);
+  ASSERT_NE(editor_nav, nullptr);
+
+  // Seed non-default library view state through the live library surface; it
+  // writes through to the shell and must survive the workspace switches.
+  auto* library = loaded->window->findChild<QObject*>(QStringLiteral("libraryWorkspace"));
+  ASSERT_NE(library, nullptr);
+  ASSERT_TRUE(library->setProperty("gridZoomLevel", 1));
+  ASSERT_TRUE(library->setProperty("inspectorVisible", false));
+  ProcessEvents(20);
+  EXPECT_EQ(loaded->window->property("libraryGridZoomLevel").toInt(), 1);
+  EXPECT_FALSE(loaded->window->property("libraryInspectorVisible").toBool());
+
+  const int library_creates_before = workspace_host->property("libraryCreateCount").toInt();
+  const int editor_creates_before = workspace_host->property("editorCreateCount").toInt();
+
+  for (int i = 0; i < 6; ++i) {
+    QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
+                      CenterOfItem(editor_nav));
+    ProcessEvents(40);
+    EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("editor"))
+        << "iter " << i;
+    QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
+                      CenterOfItem(library_nav));
+    ProcessEvents(40);
+    EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("library"))
+        << "iter " << i;
+  }
+
+  // Repeated switching must not duplicate the main navigation.
+  EXPECT_EQ(loaded->window->findChildren<QQuickItem*>(
+                QStringLiteral("libraryNavButton")).size(), 1);
+  EXPECT_EQ(loaded->window->findChildren<QQuickItem*>(
+                QStringLiteral("editorNavButton")).size(), 1);
+
+  // Six round trips add six editor creates and six library creates.
+  const int library_creates = workspace_host->property("libraryCreateCount").toInt();
+  const int editor_creates = workspace_host->property("editorCreateCount").toInt();
+  EXPECT_EQ(library_creates - library_creates_before, 6);
+  EXPECT_EQ(editor_creates - editor_creates_before, 6);
+
+  // Library view state is preserved across the switches.
+  EXPECT_EQ(loaded->window->property("libraryGridZoomLevel").toInt(), 1);
+  EXPECT_FALSE(loaded->window->property("libraryInspectorVisible").toBool());
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, NoEditorLocalReturnControlRemains) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  ProcessEvents(30);
+
+  // Focused editor: no editor-local return control.
+  loaded->host.workspace_router()->OpenEditor(42, 7);
+  ProcessEvents(60);
+  EXPECT_EQ(loaded->window->findChild<QObject*>(QStringLiteral("editorBackToLibraryButton")),
+            nullptr);
+
+  // Empty editor: the empty state is shown, but still no editor-local return.
+  loaded->host.workspace_router()->OpenEditor(0, 0);
+  ProcessEvents(60);
+  EXPECT_EQ(loaded->window->findChild<QObject*>(QStringLiteral("editorBackToLibraryButton")),
+            nullptr);
+  auto* empty = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorEmptyState"));
+  ASSERT_NE(empty, nullptr);
+  EXPECT_TRUE(empty->isVisible());
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, MainNavigationDisabledBeforeProjectLoad) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  // Load Main.qml without creating a project: serviceReady stays false, so the
+  // workspace navigation must render in its disabled state.
+  auto loaded = LoadMainWindow(/*create_project=*/false);
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  ProcessEvents(50);
+
+  EXPECT_FALSE(loaded->host.project()->ServiceReady());
+  auto* library_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  auto* editor_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  ASSERT_NE(library_nav, nullptr);
+  ASSERT_NE(editor_nav, nullptr);
+  // Navigation is still present (persistent chrome) but disabled.
+  EXPECT_TRUE(library_nav->isVisible());
+  EXPECT_TRUE(editor_nav->isVisible());
+  EXPECT_FALSE(library_nav->isEnabled());
+  EXPECT_FALSE(editor_nav->isEnabled());
 }
 
 }  // namespace

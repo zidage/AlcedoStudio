@@ -62,7 +62,6 @@ Item {
         - centerPaneMinWidth
         - contentRowSpacingTotal
         - 5)
-    property bool gridMode: true
     readonly property int defaultGridZoomLevel: 4
     property int gridZoomLevel: defaultGridZoomLevel
     property bool _viewStateReady: false
@@ -74,7 +73,6 @@ Item {
         _viewStateReady = false
         inspectorVisible = host.libraryInspectorVisible
         inspectorWidth = host.libraryInspectorWidth
-        gridMode = host.libraryGridMode
         gridZoomLevel = host.libraryGridZoomLevel
         _viewStateReady = true
     }
@@ -85,15 +83,10 @@ Item {
         }
         host.libraryInspectorVisible = inspectorVisible
         host.libraryInspectorWidth = inspectorWidth
-        host.libraryGridMode = gridMode
         host.libraryGridZoomLevel = gridZoomLevel
         const view = contentViewLoader.item
         if (view && view.contentY !== undefined) {
-            if (gridMode) {
-                host.libraryGridContentY = view.contentY
-            } else {
-                host.libraryListContentY = view.contentY
-            }
+            host.libraryGridContentY = view.contentY
         }
     }
 
@@ -102,8 +95,7 @@ Item {
         if (!view || !host || !view.restoreContentY) {
             return
         }
-        const y = gridMode ? host.libraryGridContentY : host.libraryListContentY
-        view.restoreContentY(y)
+        view.restoreContentY(host.libraryGridContentY)
     }
 
     onInspectorVisibleChanged: {
@@ -114,11 +106,6 @@ Item {
     onInspectorWidthChanged: {
         if (_viewStateReady && host) {
             host.libraryInspectorWidth = inspectorWidth
-        }
-    }
-    onGridModeChanged: {
-        if (_viewStateReady && host) {
-            host.libraryGridMode = gridMode
         }
     }
     onGridZoomLevelChanged: {
@@ -272,101 +259,6 @@ RowLayout {
                 }
 
                 Item { Layout.preferredWidth: 10 }
-                Item {
-                    id: viewModeSwitch
-                    Layout.preferredWidth: 132
-                    Layout.preferredHeight: 36
-
-                    Rectangle {
-                        id: viewModeTrack
-                        anchors.fill: parent
-                        radius: height / 2
-                        color: Qt.rgba(root.colBgBase.r, root.colBgBase.g, root.colBgBase.b, 0.98)
-                        border.width: 1
-                        border.color: root.colDivider
-                    }
-
-                    Rectangle {
-                        id: viewModeThumb
-                        width: parent.width / 2 - 4
-                        height: parent.height - 4
-                        y: 2
-                        x: root.gridMode ? 2 : parent.width - width - 2
-                        radius: height / 2
-                        color: root.colAccentPrimary
-                        border.width: 1
-                        border.color: Qt.rgba(
-                            root.colAccentSecondary.r,
-                            root.colAccentSecondary.g,
-                            root.colAccentSecondary.b,
-                            0.52)
-                        Behavior on x { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
-                    }
-
-                    Row {
-                        anchors.fill: parent
-                        spacing: 0
-
-                        Item {
-                            width: parent.width / 2
-                            height: parent.height
-
-                            Image {
-                                id: gridModeIconSource
-                                anchors.centerIn: parent
-                                width: 20
-                                height: 20
-                                source: "qrc:/panel_icons/layout-grid.svg"
-                                visible: false
-                                asynchronous: true
-                            }
-
-                            MultiEffect {
-                                anchors.fill: gridModeIconSource
-                                source: gridModeIconSource
-                                colorization: 1.0
-                                colorizationColor: "white"
-                            }
-
-                            MouseArea {
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root.gridMode = true
-                            }
-                        }
-
-                        Item {
-                            width: parent.width / 2
-                            height: parent.height
-
-                            Image {
-                                id: listModeIconSource
-                                anchors.centerIn: parent
-                                width: 20
-                                height: 20
-                                source: "qrc:/panel_icons/list.svg"
-                                visible: false
-                                asynchronous: true
-                            }
-
-                            MultiEffect {
-                                anchors.fill: listModeIconSource
-                                source: listModeIconSource
-                                colorization: 1.0
-                                colorizationColor: "white"
-                            }
-
-                            MouseArea {
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root.gridMode = false
-                            }
-                        }
-                    }
-                }
-
             }
 
             Item {
@@ -378,7 +270,7 @@ RowLayout {
                     objectName: "libraryContentViewLoader"
                     anchors.fill: parent
                     active: appModules.library.shownCount > 0
-                    sourceComponent: root.gridMode ? gridComp : listComp
+                    sourceComponent: gridComp
                     onLoaded: Qt.callLater(root.restoreScrollPosition)
                 }
 
@@ -601,37 +493,6 @@ RowLayout {
             onContentYChanged: {
                 if (host) {
                     host.libraryGridContentY = contentY
-                }
-            }
-            selectedImagesById: host.selectedImagesById
-            exportQueueById: host.exportQueueById
-            onImageSelectionChanged: function(elementId, imageId, fileName, isHdr, selected) {
-                host.selectionState.setImageSelected(elementId, imageId, fileName, isHdr, selected)
-            }
-            onReplaceSelection: function(items) {
-                host.selectionState.replaceSelectedImages(items)
-                if (items && items.length > 0) {
-                    host.setFocusedImage(items[0])
-                } else {
-                    host.setFocusedImage(null)
-                }
-            }
-            onImageFocused: function(item) {
-                host.setFocusedImage(item)
-            }
-            onContextMenuRequested: function(item, sceneX, sceneY) {
-                host.openImageContextMenu(item, sceneX, sceneY)
-            }
-        }
-    }
-
-    Component {
-        id: listComp
-        ThumbnailListView {
-            objectName: "libraryThumbnailListView"
-            onContentYChanged: {
-                if (host) {
-                    host.libraryListContentY = contentY
                 }
             }
             selectedImagesById: host.selectedImagesById

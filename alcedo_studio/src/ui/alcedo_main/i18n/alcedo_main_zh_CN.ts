@@ -2412,7 +2412,11 @@ Alcedo 将改用 %1。</translation>
     </message>
     <message>
         <source>Library</source>
-        <translation type="vanished">图库</translation>
+        <translation>图库</translation>
+    </message>
+    <message>
+        <source>Editor</source>
+        <translation>编辑</translation>
     </message>
     <message>
         <source>Inspector</source>
