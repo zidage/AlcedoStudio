@@ -4,7 +4,7 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-16 after the second architecture grill.
+Last revised: 2026-07-17 after Phase 1B-Fix closeout.
 
 Affected areas:
 
@@ -601,7 +601,7 @@ Acceptance:
 
 ### Phase 1B - Thin Main and workspace shell
 
-**Status: complete (2026-07-17).**
+**Status: complete (2026-07-17).** Phase 1B-Fix closed the review gaps below.
 
 Deliverables:
 
@@ -637,6 +637,26 @@ Implementation notes:
 - `WorkspaceRouter::OpenEditor` / `OpenLibrary` drive route state only. `EditorSessionController`
   tracks session identity without opening the legacy modal `OpenEditorDialog`.
 - Covered by `MainQmlWorkflowTest` and `WorkspaceShellTest`.
+
+### Phase 1B-Fix
+
+**Status: complete (2026-07-17).**
+
+审核范围是 `d94fbbce..73c55433`。下列问题已全部修正，`WorkspaceShellTest`（11）与
+`MainQmlWorkflowTest`（1）通过。
+
+| 问题 | 修复 |
+| --- | --- |
+| 项目切换/关闭不结束新编辑会话 | `finalize_editor_session` 同时结束 legacy `EditorController` 与 `EditorSessionController`，并 `WorkspaceRouter::OpenLibrary()` |
+| 图库视图状态随 Loader 销毁丢失 | 状态提升到 `Main.qml`（`library*` 属性）；`LibraryWorkspace` 创建时 snapshot、销毁时 persist；滚动 `contentY` 往返恢复 |
+| 检查面板自适应宽度少算 24px | 去掉对窗口级 `mainFrameHorizontalMargins` 的重复扣减；基于 workspace 实际宽度计算 |
+| Inspector 按钮位置/尺寸漂移 | 恢复到顶部工具栏 52×42、图标 24×24（`libraryInspectorToggle`） |
+| 缩放中进入编辑器泄漏缩略图 pin | `ThumbnailGridView` `Component.onDestruction` 强制 `flushDeferredThumbnailReleases` |
+| 测试只调 C++ 路由 | QTest 双击网格、点击返回、胶片栏 Space/Enter/Down |
+| Loader active 计数不足 | `library/editor Create/Destroy` 计数 + `QTimer` 基线对比 |
+| 旧对话框调用不可观测 | 测试 stub 记录 `OpenEditorDialogCallCount()`，断言为 0 |
+| 胶片栏 QSettings 污染本机 | IniFormat + 测试临时目录 + 恢复 org/app/format |
+| Main/LibraryWorkspace CRLF | 恢复 LF；`git diff --check` 干净 |
 
 ### Phase 2 - QQuickRhiItem viewport and native frame broker
 

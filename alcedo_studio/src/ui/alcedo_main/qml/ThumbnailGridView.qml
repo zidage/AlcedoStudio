@@ -283,6 +283,23 @@ Item {
         }
     }
 
+    // Exposed for library view-state restore across workspace Loader teardown.
+    readonly property real contentY: grid.contentY
+    function restoreContentY(y) {
+        if (y === undefined || y === null) {
+            return
+        }
+        grid.contentY = clampYForHeight(layoutContentHeight(), Number(y))
+    }
+
+    // Destroying the library mid-zoom must not leave deferred releases unprocessed;
+    // otherwise the backend keeps treating those thumbnails as visible.
+    Component.onDestruction: {
+        resumeThumbnailBindingTimer.stop()
+        thumbnailBindingSuspended = false
+        flushDeferredThumbnailReleases()
+    }
+
     function finishZoomCommit() {
         if (!_zoomReady) {
             return

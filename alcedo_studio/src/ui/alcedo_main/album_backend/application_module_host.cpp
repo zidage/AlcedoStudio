@@ -102,11 +102,22 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     }
     return QString{};
   };
-  lifecycle_hooks.finalize_editor_session = [editor = editor_.get()] {
-    if (editor && editor->editor_active()) {
-      editor->FinalizeEditorSession(true);
-    }
-  };
+  lifecycle_hooks.finalize_editor_session =
+      [editor = editor_.get(), editor_session = editor_session_.get(),
+       workspace_router = workspace_router_.get()] {
+        // Project switch/close must end both the legacy controller session (if any)
+        // and the unified QML workspace session, then return to the library route
+        // so stale element/image ids never survive into the next project.
+        if (editor && editor->editor_active()) {
+          editor->FinalizeEditorSession(true);
+        }
+        if (workspace_router) {
+          // OpenLibrary finalizes an active EditorSessionController session.
+          workspace_router->OpenLibrary();
+        } else if (editor_session && editor_session->active()) {
+          editor_session->Finalize(true);
+        }
+      };
   lifecycle_hooks.clear_project_ui_state = [library = library_.get(), folders = folders_.get(),
                                             import_export = import_export_.get()] {
     if (library) {
@@ -222,6 +233,11 @@ void ApplicationModuleHost::ShutdownModules() {
     }
     if (editor_) {
       editor_->FinalizeEditorSession(true);
+    }
+    if (workspace_router_) {
+      workspace_router_->OpenLibrary();
+    } else if (editor_session_ && editor_session_->active()) {
+      editor_session_->Finalize(true);
     }
     if (import_export_) {
       import_export_->CancelImport();

@@ -23,6 +23,11 @@ Item {
     readonly property Item editorItem: editorLoader.item
     readonly property int activeLoaderCount: (libraryLoader.active ? 1 : 0)
                                              + (editorLoader.active ? 1 : 0)
+    // Create/destroy counters catch leaked trees that activeLoaderCount alone cannot.
+    property int libraryCreateCount: 0
+    property int libraryDestroyCount: 0
+    property int editorCreateCount: 0
+    property int editorDestroyCount: 0
 
     // Lazy-load / teardown rules:
     // - Only the active workspace Loader is active.
@@ -71,6 +76,8 @@ Item {
         LibraryWorkspace {
             theme: root.theme
             host: root.host
+            Component.onCompleted: root.libraryCreateCount += 1
+            Component.onDestruction: root.libraryDestroyCount += 1
         }
     }
 
@@ -80,6 +87,8 @@ Item {
             theme: root.theme
             workspaceRouter: root.workspaceRouter
             editorSession: appModules.editorSession
+            Component.onCompleted: root.editorCreateCount += 1
+            Component.onDestruction: root.editorDestroyCount += 1
         }
     }
 }

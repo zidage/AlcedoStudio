@@ -9,6 +9,15 @@ ListView {
     clip: true
     cacheBuffer: 0
     spacing: 8
+    // contentY is already a ListView property; restore across library Loader teardown.
+    function restoreContentY(y) {
+        if (y === undefined || y === null) {
+            return
+        }
+        const minY = originY
+        const maxY = originY + Math.max(0, contentHeight - height)
+        contentY = Math.max(minY, Math.min(maxY, Number(y)))
+    }
     readonly property color rowBg: "transparent"
     readonly property color rowBgSelected: appTheme.selectedTintColor
     readonly property color rowBgHover: appTheme.hoverColor

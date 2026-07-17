@@ -135,6 +135,15 @@ ApplicationWindow {
     property bool restoreWelcomeOnProjectLaunchFailure: false
     onWelcomeDismissedForLaunchChanged: updateWelcomeDialogVisibility()
 
+    // Library workspace UI state survives Loader teardown when routing to the editor.
+    // LibraryWorkspace reads these on create and writes them back on destroy.
+    property bool libraryInspectorVisible: true
+    property real libraryInspectorWidth: 300
+    property bool libraryGridMode: true
+    property int libraryGridZoomLevel: 4
+    property real libraryGridContentY: 0
+    property real libraryListContentY: 0
+
     // Phase 2: push the focused image element id and the pending delete targets
     // into the interaction-policy controller so its cached Q_PROPERTYs (which the
     // inspector edit gates and the delete action bind to) re-evaluate on
@@ -1300,6 +1309,63 @@ ApplicationWindow {
                 }
 
                 Item { Layout.fillWidth: true }
+
+                // Inspector toggle lives on the application top toolbar (52×42,
+                // icon 24×24) — same placement and size as before workspace extraction.
+                Button {
+                    id: inspectorToggleButton
+                    objectName: "libraryInspectorToggle"
+                    checkable: false
+                    flat: true
+                    Layout.preferredWidth: 52
+                    Layout.preferredHeight: 42
+                    display: AbstractButton.IconOnly
+                    visible: appModules.workspaceRouter.workspace === "library"
+                    activeFocusOnTab: true
+                    property real iconRotationTarget: root.libraryInspectorVisible ? 180 : 0
+                    icon.source: "qrc:/panel_icons/inspector-expand.svg"
+                    icon.width: 24
+                    icon.height: 24
+                    icon.color: root.libraryInspectorVisible
+                                ? root.colAccentPrimary
+                                : (inspectorToggleButton.hovered ? root.colText : root.colTextMuted)
+                    Material.foreground: icon.color
+                    ToolTip.visible: hovered
+                    ToolTip.text: root.libraryInspectorVisible ? qsTr("Collapse Inspector") : qsTr("Expand Inspector")
+                    Accessible.name: ToolTip.text
+                    background: Rectangle {
+                        radius: root.controlRadius
+                        color: "transparent"
+                        border.width: 0
+                    }
+                    onContentItemChanged: {
+                        inspectorIconRotate.target = contentItem
+                        if (contentItem) {
+                            contentItem.transformOrigin = Item.Center
+                            contentItem.rotation = iconRotationTarget
+                        }
+                    }
+                    onIconRotationTargetChanged: {
+                        if (contentItem) {
+                            inspectorIconRotate.stop()
+                            inspectorIconRotate.to = iconRotationTarget
+                            inspectorIconRotate.start()
+                        }
+                    }
+                    Component.onCompleted: {
+                        if (contentItem) {
+                            contentItem.transformOrigin = Item.Center
+                            contentItem.rotation = iconRotationTarget
+                        }
+                    }
+                    NumberAnimation {
+                        id: inspectorIconRotate
+                        property: "rotation"
+                        duration: 170
+                        easing.type: Easing.OutCubic
+                    }
+                    onClicked: root.libraryInspectorVisible = !root.libraryInspectorVisible
+                }
 
                 // ── Frameless window caption buttons ──
                 Item { Layout.preferredWidth: 8 }

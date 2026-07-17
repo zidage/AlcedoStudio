@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "ui/alcedo_main/app_theme.hpp"
+#include "ui/alcedo_main/editor_dialog/editor_dialog.hpp"
 #include "ui/alcedo_main/language_manager.hpp"
 
 namespace alcedo::ui::test {
@@ -90,6 +91,7 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   (void)host.images()->GetFocusedImageInspection(0, 0);
   (void)host.search()->SearchPreview(QStringLiteral(""), 0, 24);
 
+  ResetOpenEditorDialogCallCount();
   host.workspace_router()->OpenEditor(0, 0);
   ProcessEvents(50);
   EXPECT_EQ(host.workspace_router()->workspace(), QStringLiteral("editor"));
@@ -97,6 +99,7 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   EXPECT_FALSE(host.editor_session()->has_image());
   // Unified workspace route must not open the legacy modal editor.
   EXPECT_FALSE(host.editor()->editor_active());
+  EXPECT_EQ(OpenEditorDialogCallCount(), 0);
   auto* workspace_host = root->findChild<QObject*>(QStringLiteral("workspaceHost"));
   ASSERT_NE(workspace_host, nullptr);
   EXPECT_EQ(workspace_host->property("activeWorkspace").toString(), QStringLiteral("editor"));

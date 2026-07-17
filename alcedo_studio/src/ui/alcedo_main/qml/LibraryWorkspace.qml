@@ -43,25 +43,103 @@ Item {
         return colButtonSecondary
     }
 
+    // Inspector / browser view state is owned by the Main shell (host) so values
+    // survive Loader teardown when entering the editor workspace. Snapshot on
+    // create; write through on change (avoid live bindings that fight Slider).
     property bool inspectorVisible: true
     property real inspectorWidth: 300
     readonly property real inspectorMinWidth: 300
     readonly property real inspectorMaxWidth: 600
     readonly property real leftPaneWidth: 276
     readonly property real centerPaneMinWidth: 560
-    readonly property real mainFrameHorizontalMargins: 24
+    // root.width is already the workspace content width (Main's 12px margins are
+    // outside WorkspaceHost). Do not subtract the window-level 24px margins again.
     readonly property real contentRowSpacingTotal: 36
     readonly property real inspectorAdaptiveMaxWidth: Math.max(
         0,
         root.width
         - leftPaneWidth
         - centerPaneMinWidth
-        - mainFrameHorizontalMargins
         - contentRowSpacingTotal
         - 5)
     property bool gridMode: true
     readonly property int defaultGridZoomLevel: 4
     property int gridZoomLevel: defaultGridZoomLevel
+    property bool _viewStateReady: false
+
+    function applyHostViewState() {
+        if (!host) {
+            return
+        }
+        _viewStateReady = false
+        inspectorVisible = host.libraryInspectorVisible
+        inspectorWidth = host.libraryInspectorWidth
+        gridMode = host.libraryGridMode
+        gridZoomLevel = host.libraryGridZoomLevel
+        _viewStateReady = true
+    }
+
+    function persistViewState() {
+        if (!host) {
+            return
+        }
+        host.libraryInspectorVisible = inspectorVisible
+        host.libraryInspectorWidth = inspectorWidth
+        host.libraryGridMode = gridMode
+        host.libraryGridZoomLevel = gridZoomLevel
+        const view = contentViewLoader.item
+        if (view && view.contentY !== undefined) {
+            if (gridMode) {
+                host.libraryGridContentY = view.contentY
+            } else {
+                host.libraryListContentY = view.contentY
+            }
+        }
+    }
+
+    function restoreScrollPosition() {
+        const view = contentViewLoader.item
+        if (!view || !host || !view.restoreContentY) {
+            return
+        }
+        const y = gridMode ? host.libraryGridContentY : host.libraryListContentY
+        view.restoreContentY(y)
+    }
+
+    onInspectorVisibleChanged: {
+        if (_viewStateReady && host) {
+            host.libraryInspectorVisible = inspectorVisible
+        }
+    }
+    onInspectorWidthChanged: {
+        if (_viewStateReady && host) {
+            host.libraryInspectorWidth = inspectorWidth
+        }
+    }
+    onGridModeChanged: {
+        if (_viewStateReady && host) {
+            host.libraryGridMode = gridMode
+        }
+    }
+    onGridZoomLevelChanged: {
+        if (_viewStateReady && host) {
+            host.libraryGridZoomLevel = gridZoomLevel
+        }
+    }
+
+    // Keep local mirrors in sync when the top-toolbar toggle flips host state.
+    Connections {
+        target: host
+        ignoreUnknownSignals: true
+        function onLibraryInspectorVisibleChanged() {
+            if (root.inspectorVisible !== host.libraryInspectorVisible) {
+                root.inspectorVisible = host.libraryInspectorVisible
+            }
+        }
+    }
+
+    Component.onCompleted: root.applyHostViewState()
+    Component.onDestruction: root.persistViewState()
 
 RowLayout {
     anchors.fill: parent
@@ -289,61 +367,6 @@ RowLayout {
                     }
                 }
 
-                Item { Layout.preferredWidth: 8 }
-
-                Button {
-                    id: inspectorToggleButton
-                    objectName: "libraryInspectorToggle"
-                    checkable: false
-                    flat: true
-                    Layout.preferredWidth: 42
-                    Layout.preferredHeight: 36
-                    display: AbstractButton.IconOnly
-                    activeFocusOnTab: true
-                    property real iconRotationTarget: root.inspectorVisible ? 180 : 0
-                    icon.source: "qrc:/panel_icons/inspector-expand.svg"
-                    icon.width: 20
-                    icon.height: 20
-                    icon.color: root.inspectorVisible
-                                ? root.colAccentPrimary
-                                : (inspectorToggleButton.hovered ? root.colText : root.colTextMuted)
-                    Material.foreground: icon.color
-                    ToolTip.visible: hovered
-                    ToolTip.text: root.inspectorVisible ? qsTr("Collapse Inspector") : qsTr("Expand Inspector")
-                    Accessible.name: ToolTip.text
-                    background: Rectangle {
-                        radius: root.controlRadius
-                        color: "transparent"
-                        border.width: 0
-                    }
-                    onContentItemChanged: {
-                        inspectorIconRotate.target = contentItem
-                        if (contentItem) {
-                            contentItem.transformOrigin = Item.Center
-                            contentItem.rotation = iconRotationTarget
-                        }
-                    }
-                    onIconRotationTargetChanged: {
-                        if (contentItem) {
-                            inspectorIconRotate.stop()
-                            inspectorIconRotate.to = iconRotationTarget
-                            inspectorIconRotate.start()
-                        }
-                    }
-                    Component.onCompleted: {
-                        if (contentItem) {
-                            contentItem.transformOrigin = Item.Center
-                            contentItem.rotation = iconRotationTarget
-                        }
-                    }
-                    NumberAnimation {
-                        id: inspectorIconRotate
-                        property: "rotation"
-                        duration: 170
-                        easing.type: Easing.OutCubic
-                    }
-                    onClicked: root.inspectorVisible = !root.inspectorVisible
-                }
             }
 
             Item {
@@ -351,9 +374,12 @@ RowLayout {
                 Layout.fillHeight: true
 
                 Loader {
+                    id: contentViewLoader
+                    objectName: "libraryContentViewLoader"
                     anchors.fill: parent
                     active: appModules.library.shownCount > 0
                     sourceComponent: root.gridMode ? gridComp : listComp
+                    onLoaded: Qt.callLater(root.restoreScrollPosition)
                 }
 
                 Column {
@@ -568,9 +594,15 @@ RowLayout {
     Component {
         id: gridComp
         ThumbnailGridView {
+            objectName: "libraryThumbnailGridView"
             zoomLevel: root.gridZoomLevel
             zoomAdjusting: zoomSlider.pressed
             onZoomLevelChanged: root.gridZoomLevel = zoomLevel
+            onContentYChanged: {
+                if (host) {
+                    host.libraryGridContentY = contentY
+                }
+            }
             selectedImagesById: host.selectedImagesById
             exportQueueById: host.exportQueueById
             onImageSelectionChanged: function(elementId, imageId, fileName, isHdr, selected) {
@@ -596,6 +628,12 @@ RowLayout {
     Component {
         id: listComp
         ThumbnailListView {
+            objectName: "libraryThumbnailListView"
+            onContentYChanged: {
+                if (host) {
+                    host.libraryListContentY = contentY
+                }
+            }
             selectedImagesById: host.selectedImagesById
             exportQueueById: host.exportQueueById
             onImageSelectionChanged: function(elementId, imageId, fileName, isHdr, selected) {
