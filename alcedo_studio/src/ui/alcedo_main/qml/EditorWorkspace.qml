@@ -245,15 +245,19 @@ Item {
                         Accessible.name: qsTr("Image viewport")
 
                         Component.onCompleted: {
-                            if (root.editorSession) {
-                                root.editorSession.bindPresentationViewport(editorViewportItem)
-                            }
+                            viewportSlot.ensurePresentationBinding()
                             viewportSlot.syncImageGeometry()
-                            viewportSlot.pushViewToViewport()
                         }
                         Component.onDestruction: {
                             if (root.editorSession) {
                                 root.editorSession.unbindPresentationViewport()
+                            }
+                        }
+
+                        // Pipeline EnsureSize → render reference for crop/zoom math.
+                        onTargetSizeRequested: function (w, h) {
+                            if (w > 0 && h > 0) {
+                                editorInteraction.setRenderReferenceSize(w, h)
                             }
                         }
                     }
@@ -447,17 +451,42 @@ Item {
 
                     function currentDevicePixelRatio() {
                         var win = viewportSlot.Window.window
-                        if (win) {
-                            return win.devicePixelRatio
+                        if (!win) {
+                            return 1.0
                         }
-                        return 1.0
+                        // QWindow has no devicePixelRatioChanged in Qt 6.9.3.
+                        // Prefer the window's current screen; fall back to the property.
+                        if (win.screen) {
+                            return win.screen.devicePixelRatio
+                        }
+                        return win.devicePixelRatio
+                    }
+
+                    function ensurePresentationBinding() {
+                        // Rebind on every open while the same viewport lives so
+                        // Finalize→Open image switches keep presentationViewportBound.
+                        if (root.editorSession && editorViewportItem) {
+                            root.editorSession.bindPresentationViewport(editorViewportItem)
+                        }
                     }
 
                     function syncViewportMetrics() {
+                        // setViewportMetrics emits viewStateChanged → single push.
                         editorInteraction.setViewportMetrics(
                                     viewportSlot.width, viewportSlot.height,
                                     currentDevicePixelRatio())
-                        pushViewToViewport()
+                    }
+
+                    function resetAndSyncForImageSession() {
+                        ensurePresentationBinding()
+                        if (!root.hasImage) {
+                            editorInteraction.resetPresentationStateForNewImage()
+                            editorInteraction.setImageSize(0, 0)
+                            return
+                        }
+                        // Drop previous image crop/ROI/mode before applying new geometry.
+                        editorInteraction.resetPresentationStateForNewImage()
+                        syncImageGeometry()
                     }
 
                     function syncImageGeometry() {
@@ -473,14 +502,13 @@ Item {
                                     root.focusedElementId, root.focusedImageId)
                         if (size && size.success && size.width > 0 && size.height > 0) {
                             editorInteraction.setImageSize(size.width, size.height)
-                            // Until a pipeline frame arrives, use source size as the
-                            // render reference so crop/zoom math is not zero-sized.
+                            // Until a pipeline frame arrives (TargetSizeRequested), use
+                            // source size so crop/zoom math is not zero-sized.
                             if (editorInteraction.renderReferenceWidth <= 0 ||
                                     editorInteraction.renderReferenceHeight <= 0) {
                                 editorInteraction.setRenderReferenceSize(size.width, size.height)
                             }
                         }
-                        pushViewToViewport()
                     }
 
                     function pushViewToViewport() {
@@ -492,36 +520,65 @@ Item {
 
                     Connections {
                         target: editorInteraction
-                        function onViewChanged() {
-                            // Never recreates the viewport texture or broker targets.
-                            viewportSlot.pushViewToViewport()
-                        }
+                        // Single full-state notification; do not also listen to
+                        // viewChanged (emitViewAndOverlay fires both).
                         function onViewStateChanged() {
                             viewportSlot.pushViewToViewport()
                         }
                     }
 
-                    Connections {
-                        target: root.editorSession
-                        function onStateChanged() {
-                            viewportSlot.syncImageGeometry()
+                    // EditorSessionController signals are PascalCase (StateChanged).
+                    // Connections function handlers only match camelCase signal names, so
+                    // watch NOTIFY-backed properties instead of onStateChanged handlers.
+                    property string sessionIdentityKey: {
+                        if (!root.editorSession) {
+                            return ""
                         }
+                        return root.editorSession.sessionGeneration
+                                + ":" + root.editorSession.elementId
+                                + ":" + root.editorSession.imageId
+                                + ":" + (root.editorSession.active ? "1" : "0")
+                    }
+                    onSessionIdentityKeyChanged: {
+                        if (sessionIdentityKey.length > 0) {
+                            resetAndSyncForImageSession()
+                        }
+                    }
+
+                    property bool presentationBound: root.editorSession
+                                                    ? root.editorSession.presentationViewportBound
+                                                    : false
+                    onPresentationBoundChanged: {
+                        if (presentationBound) {
+                            pushViewToViewport()
+                        }
+                    }
+
+                    // Qt 6.9.3: QQuickWindow has no devicePixelRatioChanged.
+                    // QScreen.devicePixelRatio uses physicalDotsPerInchChanged as NOTIFY.
+                    property var trackedScreen: null
+                    property real trackedScreenDpr: trackedScreen ? trackedScreen.devicePixelRatio : 1.0
+                    onTrackedScreenDprChanged: syncViewportMetrics()
+
+                    function refreshTrackedScreen() {
+                        var win = viewportSlot.Window.window
+                        trackedScreen = (win && win.screen) ? win.screen : null
                     }
 
                     Connections {
                         target: viewportSlot.Window.window
+                        ignoreUnknownSignals: true
                         function onScreenChanged() {
-                            viewportSlot.syncViewportMetrics()
-                        }
-                        function onDevicePixelRatioChanged() {
+                            viewportSlot.refreshTrackedScreen()
                             viewportSlot.syncViewportMetrics()
                         }
                     }
 
                     Component.onCompleted: {
+                        refreshTrackedScreen()
                         syncViewportMetrics()
+                        ensurePresentationBinding()
                         syncImageGeometry()
-                        pushViewToViewport()
                     }
                     onWidthChanged: syncViewportMetrics()
                     onHeightChanged: syncViewportMetrics()

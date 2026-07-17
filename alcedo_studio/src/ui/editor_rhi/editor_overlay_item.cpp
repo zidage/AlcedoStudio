@@ -88,10 +88,12 @@ void AppendConvexPolygonTriangles(std::vector<QPointF>& triangles,
   }
 }
 
-// Dim = image \ crop for a convex crop. Since crop is the intersection of four
-// interior half-planes, its exterior is the union of the four exterior half-planes:
-//   image \ crop = ∪_edge (image ∩ exterior(edge))
-// Overdraw in exterior corner wedges is fine (same solid color).
+// Dim = image \ crop for a convex crop. Complement of the intersection of four
+// interior half-planes is the union of four exteriors. Partition into disjoint
+// pieces so alpha-blended corners are not double-covered:
+//   R0 = image ∩ exterior(e0)
+//   Ri = image ∩ exterior(ei) ∩ interior(e0) ∩ … ∩ interior(e{i-1})
+// Overlapping boundaries have measure zero and do not change final color.
 void AppendDimMaskWithHole(std::vector<QPointF>& triangles, const QRectF& image,
                            const std::array<QPointF, 4>& crop_corners) {
   std::vector<QPointF> image_poly = {image.topLeft(), image.topRight(), image.bottomRight(),
@@ -117,8 +119,14 @@ void AppendDimMaskWithHole(std::vector<QPointF>& triangles, const QRectF& image,
     const QPointF& a = ordered[i];
     const QPointF& b = ordered[(i + 1) % 4];
     // Exterior of CCW crop edge a→b is Cross(a,b,p) < 0 (right of the edge).
-    auto clipped = ClipPolygonToHalfPlane(image_poly, a, b, /*keep_positive=*/false);
-    AppendConvexPolygonTriangles(triangles, clipped);
+    auto region = ClipPolygonToHalfPlane(image_poly, a, b, /*keep_positive=*/false);
+    // Keep interiors of earlier edges so this region is disjoint from R0..R{i-1}.
+    for (size_t j = 0; j < i && region.size() >= 3; ++j) {
+      const QPointF& ja = ordered[j];
+      const QPointF& jb = ordered[(j + 1) % 4];
+      region = ClipPolygonToHalfPlane(region, ja, jb, /*keep_positive=*/true);
+    }
+    AppendConvexPolygonTriangles(triangles, region);
   }
 }
 
@@ -154,13 +162,17 @@ void AppendRoundCap(std::vector<QPointF>& tris, const QPointF& center, const QPo
   if (len < 1e-9 || radius <= 0.0f || segments < 2) {
     return;
   }
+  // `along` points outward past the endpoint. Diameter is perpendicular to that
+  // direction; the arc must pass through center + dir * radius (beyond the tip).
   const QPointF dir = {along.x() / len, along.y() / len};
   const QPointF n = {-dir.y(), dir.x()};
-  // Semicircle on the outward side of the endpoint.
-  const double start = std::atan2(n.y(), n.x());
+  // Start at -n so the +π sweep goes through `dir` (outward), not through -dir
+  // (which would fold the semicircle back over the stroke interior).
+  const double start = std::atan2(-n.y(), -n.x());
+  constexpr double kPi = 3.14159265358979323846;
   for (int i = 0; i < segments; ++i) {
-    const double a0 = start + (3.14159265358979323846 * static_cast<double>(i) / segments);
-    const double a1 = start + (3.14159265358979323846 * static_cast<double>(i + 1) / segments);
+    const double a0 = start + (kPi * static_cast<double>(i) / segments);
+    const double a1 = start + (kPi * static_cast<double>(i + 1) / segments);
     tris.push_back(center);
     tris.push_back(QPointF(center.x() + std::cos(a0) * radius, center.y() + std::sin(a0) * radius));
     tris.push_back(QPointF(center.x() + std::cos(a1) * radius, center.y() + std::sin(a1) * radius));

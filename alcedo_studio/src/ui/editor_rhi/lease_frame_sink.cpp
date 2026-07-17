@@ -79,7 +79,7 @@ void LeaseFrameSink::EnsureSize(int width, int height) {
     if (item_->broker()) {
       item_->broker()->NoteTargetRequest(request);
     }
-    emit item_->TargetSizeRequested(width, height);
+    emit item_->targetSizeRequested(width, height);
     item_->requestPresentUpdate();
   }
 }
@@ -231,6 +231,11 @@ void LeaseFrameSink::SetNextFramePreviewMetadata(const FramePreviewMetadata& met
   std::lock_guard lock(mutex_);
   pending_preview_metadata_ = metadata;
   pending_preview_metadata_valid_ = true;
+}
+
+auto LeaseFrameSink::ViewState() const -> ViewerViewState {
+  std::lock_guard lock(mutex_);
+  return view_state_;
 }
 
 void LeaseFrameSink::SetViewState(const ViewerViewState& state) {

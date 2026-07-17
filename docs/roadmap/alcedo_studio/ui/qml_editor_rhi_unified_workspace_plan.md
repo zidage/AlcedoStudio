@@ -4,7 +4,7 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-17 after Phase 3-Fix closeout.
+Last revised: 2026-07-17 after production UI review and Phase 4 redesign.
 
 Affected areas:
 
@@ -27,6 +27,12 @@ Move the editor into the same application window as the library UI. The top-leve
 `WorkspaceHost` that switches between a library workspace and an editor workspace. The editor keeps
 a bottom filmstrip that collapses downward into a small persistent handle, accepts live search
 results, and remains open with an empty-state prompt when no image is selected.
+
+Library and Editor are two persistent choices in the main-window navigation. Double-clicking a
+library image remains a shortcut that selects the image and activates Editor, but it is not the only
+way to enter Editor. Editor does not own a separate “Back to Library” button. The editor desktop
+keeps the established ordering: History/Versions rail on the left, image viewport in the center,
+and adjustment controls on the right.
 
 Replace the current broad `AlbumBackend` facade with an `ApplicationModuleHost` composition root,
 exposed to QML as `appModules`. The host constructs modules in dependency order, owns their
@@ -72,6 +78,21 @@ secondary action on the current filmstrip thumbnail's context menu only.
   loop is active.
 - Do not expose a renderer/backend selector in QML. Backend selection happens before QML engine and
   window construction.
+- Do not make Library-to-Editor navigation depend on double-clicking an image. The main-window
+  navigation always exposes both workspaces, including Editor with no selected image.
+- Do not add workspace-return buttons inside `EditorWorkspace.qml`. Workspace selection belongs to
+  the shared main-window navigation.
+- Do not reverse the established editor desktop. History/Versions stay on the left; adjustment
+  controls stay on the right.
+- Do not use visible words as the main affordance for workspace switching, panel switching,
+  collapse/expand, close, reset-view, or filmstrip dock controls. These structural actions use SVG
+  icons with localized tooltips and accessible names. Text remains for actual content, values,
+  errors, and places where an icon alone would be ambiguous.
+- Do not let adjustment panels, viewport input handlers, image loading code, or history modules call
+  the pipeline scheduler independently. They submit typed render intents to one editor render
+  coordinator; that coordinator is the only production owner of editor render scheduling.
+- Opening an image always creates an initial render intent. First-frame rendering must not depend on
+  an adjustment change, zoom, pan, or any other later interaction.
 - Do not cut over with a reduced editor. Tone, Look, Display Transform, Geometry, RAW Decode,
   crop/rotate, zoom/pan, ROI/detail patch, LUT browsing, history/versioning, histogram/waveform,
   export, and editor shortcuts are all required.
@@ -188,9 +209,20 @@ moving them behind clean interfaces; do not preserve their QWidget ownership gra
 - `WorkspaceHost.qml` owns workspace layout and lazy loading.
 - A C++ `WorkspaceRouter` owns the route (`Library` or `Editor`) and route arguments; it does not
   perform pixel layout.
+- The main-window navigation contains persistent Library and Editor SVG actions. It is owned by
+  `Main.qml` / `WorkspaceHost.qml`, remains visible in both workspaces, and shows the active choice.
+- Activating Editor without an image is valid. Double-clicking a library image sets the focused
+  image and activates Editor in one action.
+- `EditorWorkspace.qml` contains no “Library” or “Back to Library” button. Returning to Library uses
+  the same main navigation as entering Editor.
 - `LibraryWorkspace.qml` contains the extracted current album/library surface.
 - `EditorWorkspace.qml` contains the editor toolbar, central viewport, control panels,
   scopes/history, and bottom `EditorFilmstrip.qml`.
+- The editor desktop order is left History/Versions SVG rail and flyout, center viewport/filmstrip,
+  and right scope plus adjustment stack. The right adjustment stack keeps its panel navbar rather
+  than replacing it with a single placeholder or a long text explanation.
+- Structural controls use SVG icons and visual state. Their localized words live in tooltips,
+  accessible names, and tests, not as permanent labels consuming editor space.
 - The filmstrip collapses downward. Collapsed state leaves a small focusable handle showing the
   current position/count and background-save state, expands the viewport into the released space,
   and does not destroy the filmstrip model or current image session. The preference survives
@@ -282,6 +314,7 @@ moving them behind clean interfaces; do not preserve their QWidget ownership gra
 flowchart TD
     Modules["ApplicationModuleHost / appModules"]
     Main["Main.qml: ApplicationWindow lifecycle and global chrome"]
+    WorkspaceNav["Main workspace navigation: Library / Editor SVG actions"]
     WorkspaceHost["WorkspaceHost.qml"]
     Router["WorkspaceRouter"]
     Library["LibraryWorkspace.qml"]
@@ -289,6 +322,7 @@ flowchart TD
     Filmstrip["EditorFilmstrip.qml"]
     UiController["EditorSessionController: QML facade"]
     SessionService["EditorSessionService: application layer"]
+    RenderCoordinator["EditorRenderCoordinator: sole editor render scheduler"]
     Journal["Redo-only EditorTransactionJournal"]
     Tasks["BackgroundTaskController / scheduler"]
     Pipeline["PipelineMgmtService and GPU scheduler"]
@@ -301,6 +335,8 @@ flowchart TD
     Modules --> UiController
     Modules --> Tasks
     Main --> WorkspaceHost
+    Main --> WorkspaceNav
+    WorkspaceNav --> Router
     Router --> WorkspaceHost
     WorkspaceHost --> Library
     WorkspaceHost --> Editor
@@ -309,9 +345,10 @@ flowchart TD
     Editor --> Viewport
     Editor --> Overlay
     UiController --> SessionService
+    SessionService --> RenderCoordinator
     SessionService --> Journal
     SessionService --> Tasks
-    SessionService --> Pipeline
+    RenderCoordinator --> Pipeline
     SessionService --> History
     Pipeline --> Broker
     Broker --> Viewport
@@ -348,6 +385,14 @@ Each module owns its QML-facing properties, signals, and invokables. For example
 - uses `Loader` so inactive expensive trees are destroyed;
 - restores focus deliberately after route changes.
 
+Main workspace navigation:
+
+- is part of shared window chrome, not part of LibraryWorkspace or EditorWorkspace;
+- always exposes Library and Editor with SVG actions and a clear active state;
+- lets Editor open without an image and removes the need for an editor-local return button;
+- keeps localized tooltips, accessible names, and keyboard focus even though visible labels are
+  minimized.
+
 `EditorSessionController`:
 
 - is a QML-facing QObject facade with typed properties and invokables;
@@ -363,6 +408,20 @@ Each module owns its QML-facing properties, signals, and invokables. For example
 - calls existing application services rather than allowing UI code to reach storage directly;
 - registers save/load/render operations with the background-task system and declares per-image
   resource locks.
+
+`EditorRenderCoordinator`:
+
+- is the only production component allowed to enqueue editor work on `PipelineScheduler` or the
+  corresponding `PipelineMgmtService` entrypoint;
+- accepts typed intents for initial frame, interactive adjustment, settled adjustment, zoom/pan,
+  viewport resize, detail refresh, undo/redo, image switch, and explicit retry;
+- owns request priority, replacement of outdated pending work, quality timing, image/session/view
+  generations, cancellation, and frame-delivery status;
+- attaches the active session's presentation sink before issuing its first render and submits all
+  completed frame roles through the same frame-routing path;
+- does not know QML controls, QWidget, `QtEditViewer`, or dialog-owned spinner widgets;
+- exposes immutable state/results to `EditorSessionService`; individual UI modules never receive a
+  pipeline or scheduler pointer.
 
 `EditorTransactionJournal`:
 
@@ -777,37 +836,166 @@ Implementation closeout:
 
 ### Phase 3-Fix
 
-**Status: complete (2026-07-17).**
+**Status: 复审后仍需修正（2026-07-17）。**
 
-审核范围是 `d8069e9d..99312526`。下列问题已全部修正；`EditViewerLogicTest`（19）与
-`EditorOverlayInteractionTest`（20）通过。完整编辑管线帧投递仍由 Phase 4A
-`EditorSessionService` 完成；Phase 3-Fix 已把会话几何、完整 `ViewerViewState`、
-`frameSink` 绑定面与交互/遮罩正确性接到生产 QML 路径。
+复审范围是 `99312526..219e8e25` 的遗留项。下列问题已全部修正；
+`EditViewerLogicTest`（19）、`EditorOverlayInteractionTest`（24）、`WorkspaceShellTest`（14）
+共 57 项测试全部通过且无 QML warning。测试通过后继续检查生产调用和验收内容，仍发现下面
+3 个问题，因此本阶段暂时不能记为完成。
 
 | 问题 | 修复 |
 | --- | --- |
-| 控制器未接生产会话 / `frameSink` 无调用 | `EditorWorkspace` 打开图片时 `GetImagePixelSize` → `setImageSize` / `setRenderReferenceSize`；`EditorSessionController::bindPresentationViewport` 持有生产视口，C++ 经 `presentation_viewport()` → `frameSink()` 接入管线；`applyViewStateToViewport` 推送完整状态 |
-| 只推 zoom/pan 三数 | `pushViewToViewport` 改为 `applyViewStateToViewport`（区域缓存 + interactive/detail 标志进 `LeaseFrameSink`） |
-| DragHandler 晚 press / 丢单击 | 改用 `PointHandler`，在真实按下处 `handlePress`；无拖动的 press/release 恢复单击缩放 |
-| 捏合 `scale - lastScale` | 改为 `scale/lastScale - 1`；路径无关性测试（10 小步 vs 1 大步） |
-| 平移逻辑坐标 / 物理 DPR 混用；跨屏 DPR | `HandlePanMove`/`HandleWheelPan` 用逻辑宽高；QML 监听 `devicePixelRatioChanged` / `screenChanged` |
-| reconcile 不发 `viewChanged` | 修正 zoom/pan 时发 `viewChanged`；metrics 变化在无 clamp 时也推视口 |
-| 关裁剪不取消；`setCropRect` 无旋转 clamp | `Cancel(ViewerState&)` 恢复 press 前矩形；`setCropRectNormalized` 用 `ClampCropRectForRotation` |
-| 遮罩扇形切洞 | 凸裁剪外半平面并集 + 凸三角化；测试断言裁剪中心不被遮罩覆盖 |
-| 每帧删建节点 | 保留节点/材质，只更新顶点；信号合并为一次 queued rebuild |
-| 外观 / D3D11 线宽 | 描边与圆头、虚线三分线、手柄描边一律三角形，不依赖 `lineWidth` |
-| 弱验收测试 | 扩展控制器/几何契约测试：DPR 平移不变、捏合路径无关、遮罩孔洞、取消拖动、viewState→sink、rebuild 合并 |
+| 生产会话无法取得视口接收帧的入口 | `EditorSessionController::presentation_frame_sink()` 可以从当前视口取得 `frameSink()`；`Open`/`bind` 也会同步图片编号和本次打开的编号 |
+| 编辑器内 A→B 丢失视口绑定 | `Finalize` 不再 unbind；仅 viewport `Component.onDestruction` 解绑；QML 在每次 session 身份变化时 `ensurePresentationBinding`；A→B→A 测试断言同一 sink 指针 |
+| 切换图片保留上图裁剪/ROI | `resetPresentationStateForNewImage()` 清 crop/ROI/mode/zoom；`onTargetSizeRequested` 用管线 EnsureSize 更新 render reference |
+| 不存在的 `devicePixelRatioChanged` | 删除窗口假信号；跟踪 `QScreen` 并用其 `devicePixelRatio`（NOTIFY=`physicalDotsPerInchChanged`）+ `screenChanged` |
+| 暗色遮罩外角重叠 | 用互斥半平面划分 `R0 ∪ (R1∩H0) ∪ …` 三角化；多旋转角下外角采样 coverage==1 |
+| 圆头半圆朝内 | `AppendRoundCap` 从 `-n` 扫过 `dir`；端点外向 extent 测试 |
+| 一次变化重复 `setViewState` | QML 只监听 `viewStateChanged`；metrics 不再二次 push；`viewStatePushCount` + 手势次数测试 |
+| 原有测试中的空断言和宽松断言 | 接收端会检查完整视图状态；目标编号先变成非零再比较；遮罩刷新次数严格检查为 1 |
+
+本次复审仍发现的问题：
+
+| 问题 | 需要修正和验证的结果 |
+| --- | --- |
+| `presentation_frame_sink()` 目前只有测试调用，生产代码没有把图片处理结果送到这里。`ProductionFrameSinkAcceptsThreeLayerFrameSubmissions` 也只设置了输出大小和三类说明信息，没有写入或提交任何一帧。现在打开图片仍不能证明新视口会收到并显示真实编辑结果。 | 在 Phase 4D–4G 的统一协调流程中取得这个入口并实际提交 InteractivePrimary、QualityBase 和 DetailPatch。Phase 4E 的测试至少要写入并提交一帧，再确认生产视口收到了正确图片和本次打开的编号；在此之前不要写成生产接入已经完成。 |
+| 切换图片时会把显示计算使用的图片大小清零，然后暂时改用源图大小。若新旧两张图片请求的输出宽高相同，`LeaseFrameSink::EnsureSize()` 会直接返回，不再发出 `targetSizeRequested`，新图就可能一直用源图大小计算裁剪、缩放和局部区域。 | 即使输出宽高没有变化，只要换了图片或本次打开的编号变了，也要把实际输出大小重新同步给交互控制器。增加“两张源图大小不同、输出大小相同”的切图测试。 |
+| Phase 3 原文要求在真实 QML 中验证裁剪、缩放、平移、适配、局部区域和重置，并覆盖 DPR 1.0、1.5、2.0；还要求比较叠加层截图。现在真实 QML 用例把拖动、滚轮和双击放在一起，最后只要求缩放或平移任意一个发生变化，单个操作失效也可能通过；裁剪、捏合、局部区域、重置和三种 DPR 仍只在控制器层测试。名称带 `Golden` 的测试也只检查点和三角形数量，没有截图或像素比较。 | 把真实 QML 操作分开检查，每个操作都验证自己的结果，并覆盖三种 DPR。为横图、竖图、方图和奇数尺寸视口保存实际叠加层图片并做像素比较。 |
 
 Implementation closeout:
 
-- `EditorInteractionController::applyViewStateToViewport` + crop cancel / rotation clamp / viewChanged on reconcile.
-- `ViewTransformController` pan/wheel use logical deltas (DPR-invariant).
-- `EditorOverlayItem` retained QSG nodes, coalesced rebuilds, triangle strokes, hole-safe dim mask.
-- `EditorWorkspace.qml` PointHandler, pinch ratio, full view-state push, image geometry, DPR/screen sync, session viewport bind.
-- `ImageController::GetImagePixelSize` + `EditorSessionController` presentation binding for pipeline attach.
-- Remaining Phase 4A work: load pipeline, attach `frameSink`, drive InteractivePrimary / QualityBase / DetailPatch from the bound session.
+- Production attach surface prepared but not yet used by a production frame producer: the session
+  holds the viewport, resolves `IFrameSink*`, advances image/session generation on every Open, and
+  rebinds across A→B→A without rebuilding the QML workspace.
+- Interaction: full state push once per gesture; image-switch resets crop/ROI/mode;
+  render reference follows `EnsureSize` / `targetSizeRequested`.
+- Overlay: non-overlapping dim mask, outward round caps, coalesced rebuilds.
+- QML: PointHandlers unchanged; DPR via screen property binding; session identity key
+  drives rebind (PascalCase C++ signals are not used as Connections function handlers).
+- Phase 4D–4G now explicitly own loading, unified scheduling, first-frame proof, and production
+  cutover. Phase 3-Fix remains open until the Phase 3 interaction/screenshot checks above are
+  complete; production first-frame completion is gated by Phase 4E and 4G.
 
-### Phase 4A - Editor session state machine and service boundaries
+### Phase 4 - UI correction and unified render coordination
+
+Phase 4 is deliberately split so the visible workspace can be corrected without hiding a second,
+large backend cutover inside the same change. UI work follows `4A → 4B → 4C`. Backend work follows
+`4D → 4E → 4F → 4G`. The two tracks may be developed in parallel after Phase 3, but Phase 4 is not
+complete until both tracks meet in the production `alcedo_main` workflow.
+
+All editor rendering uses this one flow:
+
+```text
+Open image / adjustment / zoom / pan / resize / crop / undo / redo
+  -> typed RenderIntent
+  -> EditorRenderCoordinator
+       validate image + session + view generations
+       replace outdated pending work
+       choose frame role, region, size, quality, and priority
+       attach/request presentation target when needed
+  -> PipelineScheduler / PipelineMgmtService
+  -> pipeline writes the coordinator-selected presentation sink
+  -> FramePresentationBroker
+  -> EditorViewportItem presents the compatible frame
+  -> presentation acknowledgement returns to the coordinator/session state
+```
+
+Pipeline task completion and frame presentation are different events. The editor may report a
+rendering stage after the task starts, but it leaves first-frame loading only after the matching
+frame has actually been accepted and presented. No module may add a shorter direct arrow to the
+pipeline.
+
+Phase 3-Fix carry-over ownership:
+
+| Phase 3-Fix remaining problem | Required follow-up phase |
+| --- | --- |
+| Production code does not submit real frames through `presentation_frame_sink()` | Phase 4D defines the single scheduling owner and request/result contract; Phase 4E delivers and verifies the first real frame; Phase 4F covers all later render reasons; Phase 4G completes both production GPU paths and removes bypasses. |
+| A new image can keep the wrong render-reference geometry when its requested output size equals the previous image | Phase 4E must synchronize render-reference geometry for every new image/session generation and includes the equal-output-size switch test. |
+| Real QML interaction coverage is incomplete and the existing “Golden” tests do not compare rendered pixels | Phase 4G must run separate real-QML crop, zoom, pan, fit, ROI, reset, pinch, wheel, and double-click checks at DPR 1.0, 1.5, and 2.0, and compare rendered overlay captures for landscape, portrait, square, and odd viewport sizes. |
+
+These are inherited acceptance requirements, not optional cleanup. Phase 4 cannot be marked complete
+while any row remains unverified, even if its newly added functionality passes.
+
+### Phase 4A - Main-window Library / Editor navigation
+
+Deliverables:
+
+- Add persistent Library and Editor SVG actions to the shared main-window navigation owned by
+  `Main.qml` / `WorkspaceHost.qml`.
+- Keep the navigation visible and in the same position in both workspaces. Show active, hover,
+  pressed, disabled, and keyboard-focus states without relying on permanent text labels.
+- Let the user activate Editor with no selected image. Keep library double-click as a shortcut that
+  selects the image and activates Editor in one action.
+- Remove `editorBackToLibraryButton`, the empty-state “Back to Library” button, and the editor-local
+  return function from `EditorWorkspace.qml`.
+- Preserve library view state and the active editor session when switching workspaces according to
+  the existing Loader/session lifetime rules.
+
+Acceptance:
+
+- Library and Editor can each be activated from the main navigation by mouse and keyboard.
+- Editor opens successfully with no image, with a selected image, and after the current image is
+  removed.
+- Double-clicking a library thumbnail still focuses that image and activates Editor.
+- No visible or hidden editor-local control performs a separate “return to library” action.
+- Repeated navigation does not duplicate the main navigation, lose library scroll/filter state, or
+  leak an inactive visual tree.
+
+### Phase 4B - Restore editor desktop ordering and History/Versions navbar
+
+Deliverables:
+
+- Restore the established desktop order: History/Versions on the left, viewport and filmstrip in
+  the center, scope plus adjustment controls on the right.
+- Rebuild the left narrow History/Versions navbar in QML with separate SVG actions for History and
+  Versions. Selecting an action opens its panel beside the rail; selecting the active action again
+  collapses it.
+- Keep the left rail present while its panel is collapsed. Expanding it may take space from the
+  viewport or use the documented flyout behavior, but it must not move adjustment controls to the
+  left.
+- Restore the right adjustment navbar and panel stack for Tone, Look, Display Transform, Geometry,
+  and RAW Decode. Phase 4B may use disabled or empty panel bodies until their later port phases, but
+  the navigation, ordering, selection, collapse behavior, and sizing must already be final.
+- Keep histogram/waveform placement with the right-side editor tools instead of merging history and
+  adjustments into one placeholder card.
+
+Acceptance:
+
+- A production screenshot clearly shows the same left/center/right meaning as the existing editor:
+  left History/Versions, center image, right adjustments.
+- History and Versions open, switch, and collapse from the restored left navbar.
+- All five adjustment choices switch the right panel stack and preserve the selected choice across
+  workspace round-trips.
+- Narrow-window behavior has an explicit minimum viewport size and never silently swaps the two
+  side panels.
+
+### Phase 4C - SVG structural controls and reduced visible text
+
+Deliverables:
+
+- Inventory visible structural actions in `EditorWorkspace.qml`, `EditorFilmstrip.qml`, the new
+  workspace navigation, History/Versions rail, adjustment navbar, and panel headers.
+- Replace text-based workspace switch, panel switch, collapse/expand, close, reset-view, dock,
+  history, and version controls with repository SVG resources. Reuse existing artwork where it has
+  the correct meaning; add one clear SVG only when no suitable asset exists.
+- Render SVGs with theme-aware color, correct high-DPI sizing, and distinct normal, hover, pressed,
+  active, disabled, and focus states.
+- Keep localized tooltips and accessible names on every icon action. Keep visible text for image
+  information, numeric values, adjustment names, warnings, errors, empty-state meaning, and actions
+  that an icon alone cannot explain safely.
+- Remove placeholder paragraphs that describe where future controls will appear. Empty or disabled
+  areas use concise status and visual state instead of implementation notes shown to the user.
+
+Acceptance:
+
+- Structural navigation and every collapse/expand operation can be understood and used without a
+  permanent text button.
+- Every SVG action is keyboard reachable, has a localized tooltip and accessible name, and remains
+  recognizable at DPR 1.0, 1.5, and 2.0.
+- Screenshot checks cover normal, hover, active, disabled, expanded, and collapsed states.
+- The visible editor contains no developer-facing placeholder explanation.
+
+### Phase 4D - Editor session and unified render-intent contracts
 
 Deliverables:
 
@@ -820,6 +1008,20 @@ Deliverables:
 - Acquire pipeline/history guards inside the service; never expose them to the QML module.
 - Define typed intents/results for open, switch, patch, gesture commit, undo, redo, discard, and
   shutdown.
+- Extract the reusable scheduling policy from the legacy `EditorRenderCoordinator`, but do not move
+  its QWidget, `QtEditViewer`, spinner, or dialog callbacks into the new service.
+- Add an application-layer `EditorRenderCoordinator` as the only owner of editor calls to
+  `PipelineScheduler` / `PipelineMgmtService`.
+- Define immutable render intents and requests containing image, session and render generations;
+  reason; adjustment snapshot; view region; requested size; frame role; quality; priority;
+  replacement key; cancellation token; and presentation sink identity.
+- Define reasons at minimum for initial frame, interactive adjustment, settled adjustment,
+  zoom/pan, resize, detail refresh, undo/redo, image switch, and retry.
+- Make the session service, adjustment models, and viewport controller submit intents only. They do
+  not receive the pipeline scheduler and cannot submit pipeline tasks themselves.
+- Define separate request-accepted, render-started, render-completed, frame-submitted,
+  frame-presented, replaced, cancelled, and failed results. Session UI state follows these results
+  instead of assuming a completed pipeline task is already visible.
 
 Acceptance:
 
@@ -828,8 +1030,110 @@ Acceptance:
   history, task, and journal ports.
 - Neither class depends on `AlbumBackend`, QWidget, the future module host, or a global service
   locator.
+- Coordinator tests with a fake scheduler prove priority, replacement, cancellation, generation
+  rejection, and one scheduling owner without constructing QML or a GPU backend.
+- A source scan and dependency test show no editor UI module or input controller calling the
+  pipeline scheduler directly.
 
-### Phase 4B - Redo-only journal format and timeline rewrites
+### Phase 4E - Image open and guaranteed first frame
+
+Deliverables:
+
+- Implement one open-image flow owned by `EditorSessionService` and `EditorRenderCoordinator`:
+  allocate a new session/render generation, acquire image and pipeline state, attach the active
+  presentation sink, request targets, enqueue the initial render, and publish the first compatible
+  frame.
+- Create the initial render intent for every successful image open, even when no adjustment value
+  changed and the user has not zoomed or panned.
+- Use an InteractivePrimary full-frame request for the first visible result, followed by the normal
+  QualityBase request according to coordinator policy. DetailPatch is never a prerequisite for the
+  first visible frame.
+- Keep the editor in a clear loading state until the first compatible frame is presented. Report a
+  useful error and offer retry when image load, target creation, render, or submission fails.
+- Synchronize actual render-reference size on every new image/session generation, including when
+  the requested width and height happen to equal the previous image's request.
+- Reject frames from an older open of the same image as well as frames from a different image.
+
+Acceptance:
+
+- Opening an unedited real RAW fixture from Library displays a first frame in the production
+  `EditorViewportItem` without requiring any later UI action.
+- Opening Editor first and selecting an image from its filmstrip follows the same path and displays
+  the same first frame.
+- Two source images with different dimensions but the same requested output dimensions both use
+  the correct render-reference geometry.
+- A→B→A switching never displays a late frame from the first A session.
+- Tests write and submit real frame data through the production presentation sink and verify the
+  visible pixels; setting only size or frame description is not sufficient.
+
+### Phase 4F - Unified adjustment, zoom, pan, resize, and quality scheduling
+
+Deliverables:
+
+- Route adjustment preview, gesture completion, zoom, pan, viewport resize, crop/rotation, ROI,
+  undo/redo, and retry through typed intents handled by the same coordinator used for the first
+  frame.
+- Let the coordinator decide whether a view change can reuse the current full frame, needs a new
+  InteractivePrimary render, or should wait briefly and request a DetailPatch. Input handlers only
+  report the new view; they do not choose or submit pipeline tasks.
+- Coalesce repeated slider and pointer updates by image/session and intent replacement key. Keep the
+  newest useful interactive request, then request QualityBase after the gesture settles.
+- Define one priority order for visible work: missing first frame, current interactive response,
+  settled QualityBase, current detail patch, then background/non-visible work.
+- Attach frame role, request reason, image/session generation, adjustment generation, view
+  generation, requested region, and requested size to every request and completion.
+- Expose coordinator state to QML for spinner/progress/error display without letting QML observe or
+  manipulate pipeline task objects.
+
+Acceptance:
+
+- Separate tests prove that first open, adjustment drag, adjustment release, zoom, pan, resize,
+  crop/rotation, ROI, undo, and redo each produce the expected coordinator decision.
+- A burst of replaceable input does not create one pipeline task per event, but the last requested
+  state is never lost.
+- Interactive work is not blocked behind an outdated quality or detail request.
+- No individual panel, viewport handler, history controller, or image loader can bypass the
+  coordinator and schedule editor rendering directly.
+- The production viewport shows InteractivePrimary, QualityBase, and DetailPatch from this single
+  route with the correct generation and region.
+
+### Phase 4G - Production cutover, cancellation, and sustained rendering
+
+Deliverables:
+
+- Connect the new coordinator to the production pipeline guards, background-task registration,
+  `FramePresentationBroker`, and `EditorViewportItem` presentation sink.
+- Remove or disable every QML-editor path that directly attaches its own sink, creates an editor
+  render task, or independently decides preview timing. Keep only the coordinator-owned route.
+- Define cancellation and replacement across image switch, workspace switch, resize, hidden or
+  minimized window, scene-graph recreation, project close, and application shutdown.
+- Keep target leases and pipeline tasks non-blocking: losing presentation availability cancels or
+  parks work according to policy and never leaves a producer waiting forever.
+- Add diagnostics for current request reason, queued/replaced/cancelled counts, active image/session
+  generation, first-frame time, last submitted frame role, and last rejection reason.
+- Complete the Phase 3-Fix interaction carry-over in the production QML workspace: test crop, zoom,
+  pan, fit, ROI, reset, pinch, wheel, and double-click separately at DPR 1.0, 1.5, and 2.0.
+- Replace geometry-count tests presented as “golden” coverage with rendered overlay captures and
+  pixel comparisons for landscape, portrait, square, and odd viewport sizes.
+
+Acceptance:
+
+- Production `alcedo_main` displays the first frame and then remains responsive through 30 minutes
+  of adjustment, zoom, pan, resize, crop, image switching, hide/show, and minimize/restore.
+- CUDA/D3D11 and OpenCL/OpenGL both deliver all three frame roles through the same coordinator and
+  native presentation path with no host-copy fallback.
+- A→B→A, rapid filmstrip navigation, repeated workspace changes, and project close leave no stale
+  frame, blocked producer, live task, or leaked target.
+- Diagnostics and tests can explain why each render was requested, replaced, cancelled, presented,
+  or rejected.
+- Every inherited Phase 3-Fix interaction test fails when its own QML operation is disabled; passing
+  another operation in the same gesture sequence cannot hide the failure.
+- Overlay capture comparisons verify the actual dim mask, crop border, grid, grips, rotate handle,
+  and ROI bounds, not only triangle counts or selected sample points.
+- Phase 4 is complete only after the corrected UI from 4A–4C and this production backend route are
+  exercised together in one end-to-end test.
+
+### Phase 4H - Redo-only journal format and timeline rewrites
 
 Deliverables:
 
@@ -857,7 +1161,7 @@ Acceptance:
 - WorkingVersion, journal replay, and the independent reference model produce identical pipeline
   params, cursor, transaction IDs, and timeline hash for the same operation sequence.
 
-### Phase 4C - Background autosave and overlapping image switches
+### Phase 4I - Background autosave and overlapping image switches
 
 Deliverables:
 
@@ -880,7 +1184,7 @@ Acceptance:
 - Discard removes only the current unflushed transaction; published versions remain available
   through history.
 
-### Phase 4D - Recovery, compaction, and injected storage failures
+### Phase 4J - Recovery, compaction, and injected storage failures
 
 Deliverables:
 
@@ -899,7 +1203,7 @@ Acceptance:
 - A failed compaction leaves the previous journal recoverable.
 - Materialization interrupted after journal durability reconstructs the same history/pipeline head.
 
-### Phase 4E - Reproducible forced-termination fuzz harness
+### Phase 4K - Reproducible forced-termination fuzz harness
 
 Deliverables:
 
@@ -910,7 +1214,7 @@ Deliverables:
   head-marker update, materialization, thumbnail invalidation, compaction replace, and image switch.
 - Let the parent randomly terminate the child at those points, restart it, recover, and compare the
   result with the independent reference timeline model.
-- Combine process termination with the Phase 4D in-process file/task fault injectors.
+- Combine process termination with the Phase 4J in-process file/task fault injectors.
 - Print and persist the seed, minimized operation sequence, crash point, backend-independent journal
   fixture, and expected/actual state for every failure.
 - Keep a checked-in regression-seed corpus and run fresh bounded random seeds in scheduled CI.

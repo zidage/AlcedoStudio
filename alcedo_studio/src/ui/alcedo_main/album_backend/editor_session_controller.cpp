@@ -8,6 +8,9 @@
 #include <QtGlobal>
 
 #include "ui/alcedo_main/album_backend/editor_controller.hpp"
+#include "ui/edit_viewer/frame_sink.hpp"
+#include "ui/editor_rhi/editor_viewport_item.hpp"
+#include "ui/editor_rhi/lease_frame_sink.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -34,6 +37,13 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
   // Keep the legacy controller identity fields aligned for modules that still
   // read them, but do not open the modal QWidget editor from the QML workspace.
   Q_UNUSED(editor_);
+  // Align the still-bound production viewport with this session so pipeline
+  // producers that re-resolve presentation_frame_sink() reject prior frames.
+  if (auto* item =
+          qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
+    item->setImageIdentity(static_cast<qulonglong>(imageId));
+    item->setImageGeneration(session_generation_);
+  }
   emit StateChanged();
 }
 
@@ -45,16 +55,16 @@ void EditorSessionController::Close() {
   element_id_ = 0;
   image_id_ = 0;
   // Leave session_generation_ intact so a later Open still advances past it.
-  // Keep the presentation binding: the viewport may outlive a brief no-image
-  // state inside the same workspace instance.
+  // Keep the presentation binding: the viewport outlives image switches and
+  // brief no-image states inside the same EditorWorkspace instance.
   emit StateChanged();
 }
 
 void EditorSessionController::Finalize(bool persistChanges) {
   Q_UNUSED(persistChanges);
-  // Phase 1B seals only the workspace session identity. Journal flush arrives
-  // with EditorSessionService in Phase 4.
-  unbindPresentationViewport();
+  // Seal only session identity. Do not unbind the presentation viewport here:
+  // OpenEditor A→B calls Finalize then Open while the same QML viewport lives.
+  // Unbind happens on viewport Component.onDestruction when the workspace unloads.
   Close();
 }
 
@@ -63,6 +73,12 @@ void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {
     return;
   }
   presentation_viewport_ = viewportItem;
+  if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(viewportItem)) {
+    if (has_image()) {
+      item->setImageIdentity(static_cast<qulonglong>(image_id_));
+      item->setImageGeneration(session_generation_);
+    }
+  }
   emit PresentationBindingChanged();
 }
 
@@ -76,6 +92,16 @@ void EditorSessionController::unbindPresentationViewport() {
 
 auto EditorSessionController::presentation_viewport() const -> QObject* {
   return presentation_viewport_.data();
+}
+
+auto EditorSessionController::presentation_frame_sink() const -> alcedo::IFrameSink* {
+  // Production attach path: resolve the bound QML viewport to its lease sink.
+  // Pipeline code must call this (not construct a parallel sink).
+  auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
+  if (!item) {
+    return nullptr;
+  }
+  return item->frameSink();
 }
 
 void EditorSessionController::set_filmstrip_collapsed(bool collapsed) {

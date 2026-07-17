@@ -197,6 +197,7 @@ void EditorInteractionController::setDetailRoiVisible(bool visible) {
   }
   detail_roi_visible_ = visible;
   emit overlayGeometryChanged();
+  emit viewStateChanged();
 }
 
 void EditorInteractionController::setDetailRoiNormalized(const QRectF& rect_uv) {
@@ -206,6 +207,37 @@ void EditorInteractionController::setDetailRoiNormalized(const QRectF& rect_uv) 
   }
   detail_roi_uv_ = next;
   emit overlayGeometryChanged();
+  emit viewStateChanged();
+}
+
+void EditorInteractionController::resetPresentationStateForNewImage() {
+  stopZoomAnimation();
+  crop_interaction_controller_.Cancel(viewer_state_);
+  applyCursor(std::nullopt, true);
+
+  auto crop = viewer_state_.GetCropOverlay();
+  crop.tool_enabled = false;
+  crop.overlay_visible = false;
+  crop.rect = QRectF(0.0, 0.0, 1.0, 1.0);
+  crop.rotation_degrees = 0.0f;
+  crop.aspect_locked = false;
+  viewer_state_.SetCropOverlayState(crop);
+
+  presentation_mode_ = FramePresentationMode::FullFrame;
+  detail_roi_visible_ = false;
+  detail_roi_uv_ = QRectF(0.0, 0.0, 1.0, 1.0);
+
+  viewer_state_.SetViewTransform(ViewTransformController::kMinInteractiveZoom, QVector2D(0.0f, 0.0f));
+  viewer_state_.SetRenderReferenceSize(0, 0);
+  updateViewportRenderRegionCache();
+
+  emit cropToolChanged();
+  emit cropChanged();
+  emit imageGeometryChanged();
+  emit overlayGeometryChanged();
+  emit viewChanged();
+  emit viewStateChanged();
+  emit viewZoomChanged(zoom());
 }
 
 void EditorInteractionController::setInteractionEnabled(bool enabled) {
@@ -608,6 +640,8 @@ void EditorInteractionController::stopZoomAnimation() {
 }
 
 void EditorInteractionController::emitViewAndOverlay() {
+  // viewChanged drives QML property bindings (zoom readout). viewStateChanged is
+  // the single full-state push signal QML uses for applyViewStateToViewport.
   emit viewChanged();
   emit overlayGeometryChanged();
   emit viewStateChanged();

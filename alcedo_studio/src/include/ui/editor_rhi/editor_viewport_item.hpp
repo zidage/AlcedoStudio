@@ -84,6 +84,11 @@ class EditorViewportItem : public QQuickRhiItem {
   [[nodiscard]] auto broker() const -> const std::shared_ptr<FramePresentationBroker>& {
     return broker_;
   }
+  // Diagnostics: how many times setViewState was entered (tests assert once
+  // per user gesture / metrics change).
+  [[nodiscard]] auto viewStatePushCount() const -> int {
+    return view_state_push_count_.load(std::memory_order_acquire);
+  }
 
   // IFrameSink bridge used by the edit pipeline. Owned by the item; safe to
   // keep while the viewport exists.
@@ -107,7 +112,8 @@ class EditorViewportItem : public QQuickRhiItem {
   void ImageIdentityChanged();
   void ImageGenerationChanged();
   void StatusChanged();
-  void TargetSizeRequested(int width, int height);
+  // camelCase for QML handler onTargetSizeRequested.
+  void targetSizeRequested(int width, int height);
 
  protected:
   auto createRenderer() -> QQuickRhiItemRenderer* override;
@@ -138,6 +144,7 @@ class EditorViewportItem : public QQuickRhiItem {
   QString status_text_ = QStringLiteral("waiting for a compatible frame");
   std::atomic<qulonglong> image_identity_{0};
   std::atomic<qulonglong> image_generation_{0};
+  std::atomic<int> view_state_push_count_{0};
   QQuickWindow* attached_window_ = nullptr;
   bool scene_graph_ready_ = false;
   bool update_pending_ = false;

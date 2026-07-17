@@ -8,6 +8,10 @@
 #include <QPointer>
 #include <QtGlobal>
 
+namespace alcedo {
+class IFrameSink;
+}
+
 namespace alcedo::ui {
 
 class EditorController;
@@ -18,10 +22,10 @@ class EditorController;
 /// unified QML editor workspace. It does not open the legacy modal dialog; that
 /// path remains on EditorController until the cutover phase removes it.
 ///
-/// Phase 3-Fix also holds the production presentation viewport pointer so the
-/// edit pipeline (Phase 4+) can reach `EditorViewportItem::frameSink()` without
-/// QML calling storage/pipeline infrastructure directly. Typed as QObject so
-/// AlbumBackendLib does not depend on the RHI library at the header level.
+/// Phase 3-Fix holds the production presentation viewport and resolves its
+/// `LeaseFrameSink` so pipeline code can attach without QML calling storage or
+/// pipeline infrastructure. The viewport pointer is typed as QObject in the
+/// public API; resolution to `IFrameSink` lives in the implementation.
 class EditorSessionController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool active READ active NOTIFY StateChanged)
@@ -56,14 +60,19 @@ class EditorSessionController final : public QObject {
   Q_INVOKABLE void Close();
   void Finalize(bool persistChanges);
 
-  // Bind/unbind the production EditorViewportItem for this session. QML calls
-  // bind when the workspace mounts the viewport; unbind on teardown.
+  // Bind/unbind the production EditorViewportItem for this workspace instance.
+  // Bind on mount and after every image Open while the same viewport lives.
+  // Unbind only when the workspace tears the viewport down (not on A→B switch).
   Q_INVOKABLE void bindPresentationViewport(QObject* viewportItem);
   Q_INVOKABLE void unbindPresentationViewport();
 
-  // C++ pipeline services qobject_cast this to EditorViewportItem and call
-  // frameSink() / setViewState. Never null-check alone: QPointer may clear.
+  // Bound QQuickRhiItem (EditorViewportItem). QPointer may clear after destroy.
   [[nodiscard]] auto presentation_viewport() const -> QObject*;
+
+  // Production pipeline entry: resolves the bound viewport to its LeaseFrameSink.
+  // Returns null when unbound or the object is not an EditorViewportItem.
+  // Callers must re-resolve after PresentationBindingChanged / StateChanged.
+  [[nodiscard]] auto presentation_frame_sink() const -> alcedo::IFrameSink*;
 
   void set_filmstrip_collapsed(bool collapsed);
   void set_filmstrip_expanded_height(double height);

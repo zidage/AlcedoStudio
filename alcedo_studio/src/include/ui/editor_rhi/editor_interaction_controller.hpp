@@ -127,6 +127,9 @@ class EditorInteractionController : public QObject {
   Q_INVOKABLE void setViewportMetrics(qreal width, qreal height, qreal devicePixelRatio);
   Q_INVOKABLE void setImageSize(int width, int height);
   Q_INVOKABLE void setRenderReferenceSize(int width, int height);
+  // Clear crop/ROI/presentation mode and fit the view when the focused image
+  // changes so A→B cannot keep A's crop/ROI overlays.
+  Q_INVOKABLE void resetPresentationStateForNewImage();
 
   // Pointer entrypoints — positions are item/logical coordinates.
   Q_INVOKABLE void handleHoverMove(qreal x, qreal y);

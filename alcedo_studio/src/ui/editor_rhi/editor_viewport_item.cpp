@@ -138,6 +138,7 @@ void EditorViewportItem::abandonProducerWrite(const WritableTargetLease& lease) 
 }
 
 void EditorViewportItem::setViewState(const ViewerViewState& state) {
+  view_state_push_count_.fetch_add(1, std::memory_order_acq_rel);
   {
     std::lock_guard lock(mutex_);
     view_state_ = state;

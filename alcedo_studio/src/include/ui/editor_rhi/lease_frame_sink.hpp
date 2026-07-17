@@ -39,6 +39,8 @@ class LeaseFrameSink final : public alcedo::IFrameSink {
   void SetNextFramePreviewMetadata(const FramePreviewMetadata& metadata) override;
 
   void SetViewState(const ViewerViewState& state);
+  // Test/production diagnostics: last view state accepted from the controller.
+  [[nodiscard]] auto ViewState() const -> ViewerViewState;
   void ClearMappedLease();
 
  private:

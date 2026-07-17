@@ -11,6 +11,7 @@
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
+#include <QObject>
 #include <QPointF>
 #include <QRectF>
 #include <QSignalSpy>
@@ -22,10 +23,13 @@
 
 #include "ui/edit_viewer/crop_geometry.hpp"
 #include "ui/edit_viewer/edit_viewer_overlay_geometry.hpp"
+#include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/edit_viewer/view_transform_controller.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_overlay_item.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
+#include "ui/editor_rhi/frame_presentation_broker.hpp"
+#include "ui/editor_rhi/frame_presentation_lease.hpp"
 #include "ui/editor_rhi/lease_frame_sink.hpp"
 
 namespace alcedo::editor_rhi {
@@ -63,14 +67,32 @@ auto PointInTriangle(const QPointF& p, const QPointF& a, const QPointF& b, const
   return !(has_neg && has_pos);
 }
 
-auto MaskCoversPoint(const OverlaySceneGeometry& scene, const QPointF& p) -> bool {
+auto MaskCoverageCount(const OverlaySceneGeometry& scene, const QPointF& p) -> int {
   const auto& t = scene.mask_triangles;
+  int count = 0;
   for (size_t i = 0; i + 2 < t.size(); i += 3) {
     if (PointInTriangle(p, t[i], t[i + 1], t[i + 2])) {
-      return true;
+      ++count;
     }
   }
-  return false;
+  return count;
+}
+
+auto MaskCoversPoint(const OverlaySceneGeometry& scene, const QPointF& p) -> bool {
+  return MaskCoverageCount(scene, p) > 0;
+}
+
+// Build a single stroke segment with round caps via grip geometry helpers.
+// Horizontal grip from (x0,y) to (x1,y) is exercised through BuildOverlaySceneGeometry.
+auto MaxExtentBeyondEndpoint(const std::vector<QPointF>& tris, const QPointF& endpoint,
+                             const QPointF& outward_unit) -> double {
+  double best = -1.0e9;
+  for (const auto& p : tris) {
+    const double proj =
+        (p.x() - endpoint.x()) * outward_unit.x() + (p.y() - endpoint.y()) * outward_unit.y();
+    best = std::max(best, proj);
+  }
+  return best;
 }
 
 }  // namespace
@@ -353,6 +375,78 @@ TEST(EditorOverlayInteractionTest, DimMaskDoesNotCoverCropInteriorAtMultipleRota
   }
 }
 
+TEST(EditorOverlayInteractionTest, DimMaskExteriorPixelsCoveredExactlyOnceAtMultipleRotations) {
+  for (const float degrees : {0.0f, 15.0f, 35.0f, -22.0f}) {
+    EditorInteractionController controller;
+    controller.setViewportMetrics(800, 600, 1.0);
+    ConfigureImage(controller, 400, 300);
+    controller.setCropOverlayVisible(true);
+    controller.setCropRotationDegrees(degrees);
+    controller.setCropRectNormalized(QRectF(0.3, 0.3, 0.4, 0.4));
+
+    const auto geometry = controller.overlayGeometry();
+    ASSERT_TRUE(geometry.crop_corners_valid) << degrees;
+    const auto scene = BuildOverlaySceneGeometry(geometry, true);
+    ASSERT_FALSE(scene.mask_triangles.empty()) << degrees;
+
+    // Four exterior samples near image corners — each must be covered once so
+    // alpha blending yields a uniform dim (no double-dark corners).
+    const QPointF samples[] = {
+        geometry.image_rect.topLeft() + QPointF(4.0, 4.0),
+        geometry.image_rect.topRight() + QPointF(-4.0, 4.0),
+        geometry.image_rect.bottomLeft() + QPointF(4.0, -4.0),
+        geometry.image_rect.bottomRight() + QPointF(-4.0, -4.0),
+    };
+    int covered = 0;
+    for (const auto& sample : samples) {
+      const int count = MaskCoverageCount(scene, sample);
+      if (count > 0) {
+        EXPECT_EQ(count, 1) << "rotation=" << degrees << " sample=(" << sample.x() << ","
+                            << sample.y() << ") coverage=" << count;
+        ++covered;
+      }
+    }
+    EXPECT_GE(covered, 2) << "rotation=" << degrees;
+  }
+}
+
+TEST(EditorOverlayInteractionTest, RoundCapsExtendOutwardPastStrokeEndpoints) {
+  // Axis-aligned crop so edge grips are horizontal/vertical with known endpoints.
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  ConfigureImage(controller, 400, 300);
+  controller.setCropOverlayVisible(true);
+  controller.setCropRectNormalized(QRectF(0.2, 0.2, 0.6, 0.6));
+
+  const auto geometry = controller.overlayGeometry();
+  ASSERT_TRUE(geometry.crop_corners_valid);
+  const auto scene = BuildOverlaySceneGeometry(geometry, true);
+  ASSERT_FALSE(scene.grip_outer_triangles.empty());
+
+  // Top edge grip is the middle 24% of the top crop edge (0.38..0.62).
+  const QPointF a = CropGeometry::LerpPoint(geometry.crop_corners_widget[0],
+                                            geometry.crop_corners_widget[1], 0.38f);
+  const QPointF b = CropGeometry::LerpPoint(geometry.crop_corners_widget[0],
+                                            geometry.crop_corners_widget[1], 0.62f);
+  const QPointF ab = b - a;
+  const double len = std::hypot(ab.x(), ab.y());
+  ASSERT_GT(len, 1.0);
+  const QPointF outward_a(-ab.x() / len, -ab.y() / len);
+  const QPointF outward_b(ab.x() / len, ab.y() / len);
+
+  // Outer grip stroke width is 5.0 → radius 2.5. Caps must reach past endpoints.
+  const double reach_a = MaxExtentBeyondEndpoint(scene.grip_outer_triangles, a, outward_a);
+  const double reach_b = MaxExtentBeyondEndpoint(scene.grip_outer_triangles, b, outward_b);
+  EXPECT_GT(reach_a, 1.5) << "left/top cap must extend outward past endpoint a";
+  EXPECT_GT(reach_b, 1.5) << "right/top cap must extend outward past endpoint b";
+
+  // Interior of the stroke (midpoint) must also have geometry, but endpoints
+  // should not only have inward-only coverage: max inward reach past a toward b
+  // for a pure inward bug is large; outward reach was the failing signal.
+  const double inward_a = MaxExtentBeyondEndpoint(scene.grip_outer_triangles, a, outward_b);
+  EXPECT_GT(inward_a, 0.0);
+}
+
 TEST(EditorOverlayInteractionTest, HoverSetsCropCursorPriorityCornersOverEdges) {
   EditorInteractionController controller;
   controller.setViewportMetrics(800, 600, 1.0);
@@ -385,10 +479,73 @@ TEST(EditorOverlayInteractionTest, ApplyViewStatePushesRegionAndInteractiveFlags
   EXPECT_GT(region->reference_width_, 0);
   EXPECT_GT(region->reference_height_, 0);
 
-  // Prefer interactive primary when zoomed in.
-  const auto state = controller.viewerViewState();
-  EXPECT_TRUE(state.prefer_interactive_primary);
-  EXPECT_TRUE(state.allow_detail_patch);
+  // Receive-side verification: flags and transform live on the sink, not only
+  // on the controller's local copy.
+  const auto sink_state = sink->ViewState();
+  EXPECT_TRUE(sink_state.prefer_interactive_primary);
+  EXPECT_TRUE(sink_state.allow_detail_patch);
+  EXPECT_NEAR(sink_state.snapshot.view_transform.zoom, 2.5f, 1.0e-4f);
+  EXPECT_NEAR(sink_state.snapshot.view_transform.pan.x(), controller.panX(), 1.0e-4f);
+  EXPECT_NEAR(sink_state.snapshot.view_transform.pan.y(), controller.panY(), 1.0e-4f);
+}
+
+TEST(EditorOverlayInteractionTest, SingleViewStatePushPerGestureDespiteDualSignals) {
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  ConfigureImage(controller, 4000, 3000);
+
+  EditorViewportItem viewport;
+  int push_count = 0;
+  QObject::connect(&controller, &EditorInteractionController::viewStateChanged, &controller,
+                   [&]() {
+                     controller.applyViewStateToViewport(&viewport);
+                     ++push_count;
+                   });
+  // Intentionally do NOT connect viewChanged — production QML only listens to
+  // viewStateChanged so dual emits cannot double-push.
+
+  const int before = viewport.viewStatePushCount();
+  controller.applyViewTransformForTest(2.0f, 0.1f, -0.05f);
+  EXPECT_EQ(push_count, 1);
+  EXPECT_EQ(viewport.viewStatePushCount() - before, 1);
+
+  // Continuous drag: each move is one push, never two for the same state.
+  controller.handlePress(400, 300, static_cast<int>(Qt::LeftButton));
+  const int mid = viewport.viewStatePushCount();
+  controller.handleMove(420, 310, static_cast<int>(Qt::LeftButton));
+  controller.handleMove(440, 320, static_cast<int>(Qt::LeftButton));
+  controller.handleRelease(440, 320, static_cast<int>(Qt::LeftButton));
+  EXPECT_GE(viewport.viewStatePushCount() - mid, 1);
+  // Two moves + release path should not emit more than a handful of state pushes.
+  EXPECT_LE(viewport.viewStatePushCount() - mid, 4);
+}
+
+TEST(EditorOverlayInteractionTest, ResetPresentationStateClearsCropRoiAndMode) {
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  ConfigureImage(controller, 400, 300);
+  controller.setCropToolEnabled(true);
+  controller.setCropOverlayVisible(true);
+  controller.setCropRectNormalized(QRectF(0.2, 0.2, 0.5, 0.5));
+  controller.setCropRotationDegrees(18.0f);
+  controller.setDetailRoiVisible(true);
+  controller.setDetailRoiNormalized(QRectF(0.4, 0.4, 0.1, 0.1));
+  controller.setPresentationMode(static_cast<int>(alcedo::FramePresentationMode::RoiFrame));
+  controller.applyViewTransformForTest(2.5f, 0.2f, 0.1f);
+
+  controller.resetPresentationStateForNewImage();
+
+  EXPECT_FALSE(controller.cropToolEnabled());
+  EXPECT_FALSE(controller.cropOverlayVisible());
+  EXPECT_NEAR(controller.cropRectNormalized().x(), 0.0, 1.0e-5);
+  EXPECT_NEAR(controller.cropRectNormalized().width(), 1.0, 1.0e-5);
+  EXPECT_NEAR(controller.cropRotationDegrees(), 0.0f, 1.0e-4f);
+  EXPECT_FALSE(controller.detailRoiVisible());
+  EXPECT_EQ(controller.presentationMode(),
+            static_cast<int>(alcedo::FramePresentationMode::FullFrame));
+  EXPECT_NEAR(controller.zoom(), alcedo::ViewTransformController::kMinInteractiveZoom, 1.0e-4f);
+  EXPECT_EQ(controller.renderReferenceWidth(), 0);
+  EXPECT_EQ(controller.renderReferenceHeight(), 0);
 }
 
 TEST(EditorOverlayInteractionTest, ReconcileViewportMetricsEmitsViewChanged) {
@@ -405,8 +562,21 @@ TEST(EditorOverlayInteractionTest, ReconcileViewportMetricsEmitsViewChanged) {
 
 TEST(EditorOverlayInteractionTest, ViewTransformPushDoesNotInvalidateBrokerTargets) {
   EditorViewportItem viewport;
+  // Seed a synthetic target generation so the comparison is not 0 == 0 vacuously.
+  // View-state pushes must not advance broker target generation.
+  if (viewport.broker()) {
+    WritableTargetRequest req;
+    req.layer = LeaseFrameLayer::InteractivePrimary;
+    req.dimensions = {64, 48};
+    req.image_generation = 1;
+    req.image_identity = 1;
+    viewport.broker()->NoteTargetRequest(req);
+    // Manually bump generation via invalidate so both sides start non-zero.
+    viewport.broker()->InvalidateTargetGeneration();
+  }
   const auto before_live = viewport.liveTargetCount();
   const auto before_gen = viewport.targetGeneration();
+  EXPECT_GT(before_gen, 0u);
 
   EditorInteractionController controller;
   controller.setViewportMetrics(640, 480, 1.0);
@@ -472,10 +642,9 @@ TEST(EditorOverlayInteractionTest, OverlayRebuildsCoalesceAcrossMultiSignalBurst
 
   // Process the queued coalesced rebuild.
   QCoreApplication::processEvents();
-  // At most a small number of rebuilds (queued once per burst), never one per signal.
+  // One logical change burst must schedule exactly one rebuild (not one per signal).
   const int delta = overlay.geometryRebuildCount() - rebuilds_before;
-  EXPECT_GE(delta, 1);
-  EXPECT_LE(delta, 3);
+  EXPECT_EQ(delta, 1);
 }
 
 }  // namespace alcedo::editor_rhi

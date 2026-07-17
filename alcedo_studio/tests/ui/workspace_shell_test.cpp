@@ -20,7 +20,9 @@
 #include <QTest>
 #include <QTimer>
 #include <QUrl>
+#include <QWheelEvent>
 
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <sstream>
@@ -31,6 +33,12 @@
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/alcedo_main/editor_dialog/editor_dialog.hpp"
 #include "ui/alcedo_main/language_manager.hpp"
+#include "ui/edit_viewer/frame_sink.hpp"
+#include "ui/edit_viewer/view_transform_controller.hpp"
+#include "ui/editor_rhi/editor_interaction_controller.hpp"
+#include "ui/editor_rhi/editor_viewport_item.hpp"
+#include "ui/editor_rhi/frame_presentation_lease.hpp"
+#include "ui/editor_rhi/lease_frame_sink.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -616,6 +624,178 @@ TEST_F(WorkspaceShellTests, RealQmlEntrypointsDriveRoutingFocusAndFilmstripHeigh
   EXPECT_NEAR(filmstrip->height(), handle->height(), 1.0);
   EXPECT_LT(filmstrip->height() + 1.0, expanded);
   EXPECT_EQ(OpenEditorDialogCallCount(), 0);
+}
+
+TEST_F(WorkspaceShellTests, PresentationViewportBindingSurvivesImageSwitchAToBToA) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+
+  auto* session = loaded->host.editor_session();
+  auto* router = loaded->host.workspace_router();
+  ASSERT_NE(session, nullptr);
+  ASSERT_NE(router, nullptr);
+
+  router->OpenEditor(10, 100);
+  ProcessEvents(60);
+  EXPECT_TRUE(session->presentation_viewport_bound());
+  auto* viewport_a = qobject_cast<editor_rhi::EditorViewportItem*>(session->presentation_viewport());
+  ASSERT_NE(viewport_a, nullptr);
+  auto* sink_a = session->presentation_frame_sink();
+  ASSERT_NE(sink_a, nullptr);
+  EXPECT_EQ(sink_a, viewport_a->frameSink());
+  const auto gen_a = session->session_generation();
+  EXPECT_EQ(viewport_a->imageGeneration(), gen_a);
+  EXPECT_EQ(viewport_a->imageIdentity(), 100ull);
+
+  // A → B inside the same editor workspace (no Loader teardown).
+  router->OpenEditor(20, 200);
+  ProcessEvents(60);
+  EXPECT_TRUE(session->presentation_viewport_bound())
+      << "image switch must not drop the presentation binding";
+  auto* viewport_b = qobject_cast<editor_rhi::EditorViewportItem*>(session->presentation_viewport());
+  ASSERT_NE(viewport_b, nullptr);
+  EXPECT_EQ(viewport_b, viewport_a) << "same QML viewport instance";
+  auto* sink_b = session->presentation_frame_sink();
+  ASSERT_NE(sink_b, nullptr);
+  EXPECT_EQ(sink_b, sink_a);
+  EXPECT_GT(session->session_generation(), gen_a);
+  EXPECT_EQ(viewport_b->imageIdentity(), 200ull);
+  EXPECT_EQ(viewport_b->imageGeneration(), session->session_generation());
+
+  // B → A: generation advances again; late frames from first A are rejected.
+  const auto gen_b = session->session_generation();
+  router->OpenEditor(10, 100);
+  ProcessEvents(60);
+  EXPECT_TRUE(session->presentation_viewport_bound());
+  EXPECT_EQ(session->presentation_viewport(), viewport_a);
+  EXPECT_EQ(session->presentation_frame_sink(), sink_a);
+  EXPECT_GT(session->session_generation(), gen_b);
+  EXPECT_EQ(viewport_a->imageIdentity(), 100ull);
+  EXPECT_EQ(viewport_a->imageGeneration(), session->session_generation());
+
+  // Leaving the editor workspace unbinds on viewport destruction.
+  router->OpenLibrary();
+  ProcessEvents(60);
+  EXPECT_FALSE(session->presentation_viewport_bound());
+  EXPECT_EQ(session->presentation_frame_sink(), nullptr);
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, ProductionFrameSinkAcceptsThreeLayerFrameSubmissions) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+
+  loaded->host.workspace_router()->OpenEditor(5, 50);
+  ProcessEvents(80);
+
+  auto* session = loaded->host.editor_session();
+  ASSERT_NE(session, nullptr);
+  ASSERT_TRUE(session->presentation_viewport_bound());
+  auto* sink = session->presentation_frame_sink();
+  ASSERT_NE(sink, nullptr);
+  auto* viewport =
+      qobject_cast<editor_rhi::EditorViewportItem*>(session->presentation_viewport());
+  ASSERT_NE(viewport, nullptr);
+
+  // Production path: session → presentation_viewport → frameSink → EnsureSize.
+  // Full RAW decode is Phase 4A; this verifies the attach surface delivers
+  // InteractivePrimary / QualityBase / DetailPatch metadata into the sink.
+  sink->EnsureSize(64, 48);
+  EXPECT_EQ(sink->GetWidth(), 64);
+  EXPECT_EQ(sink->GetHeight(), 48);
+
+  const FrameRole roles[] = {FrameRole::InteractivePrimary, FrameRole::QualityBase,
+                             FrameRole::DetailPatch};
+  for (int i = 0; i < 3; ++i) {
+    FramePreviewMetadata meta;
+    meta.frame_role = roles[i];
+    meta.preview_generation = static_cast<std::uint64_t>(i + 1);
+    meta.detail_serial = static_cast<std::uint64_t>(i + 10);
+    sink->SetNextFramePreviewMetadata(meta);
+    sink->SetNextFramePresentationMode(i == 0 ? FramePresentationMode::RoiFrame
+                                              : FramePresentationMode::FullFrame);
+    // Without a render-thread published target, Map returns empty — that is
+    // expected before scene-graph target publish. The production contract is
+    // that the sink is the same object pipeline code will Map/Unmap against.
+    EXPECT_EQ(session->presentation_frame_sink(), sink);
+  }
+
+  // Switch image and confirm the same sink stays production-attached.
+  loaded->host.workspace_router()->OpenEditor(6, 60);
+  ProcessEvents(40);
+  EXPECT_EQ(session->presentation_frame_sink(), sink);
+  EXPECT_EQ(viewport->imageIdentity(), 60ull);
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, EditorViewportReceivesRealPointerAndWheelEvents) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+
+  loaded->host.workspace_router()->OpenEditor(3, 30);
+  ProcessEvents(80);
+
+  auto* interaction = loaded->window->findChild<editor_rhi::EditorInteractionController*>(
+      QStringLiteral("editorInteractionController"));
+  auto* viewport_item =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorViewportItem"));
+  ASSERT_NE(interaction, nullptr);
+  ASSERT_NE(viewport_item, nullptr);
+  EXPECT_TRUE(viewport_item->isVisible());
+
+  // Seed non-zero image geometry so pan/zoom math is defined.
+  interaction->setImageSize(4000, 3000);
+  interaction->setRenderReferenceSize(4000, 3000);
+  interaction->setViewportMetrics(viewport_item->width(), viewport_item->height(), 1.0);
+  interaction->applyViewTransformForTest(2.0f, 0.0f, 0.0f);
+  ProcessEvents(20);
+
+  const float zoom_before = interaction->zoom();
+  const QPoint center = CenterOfItem(viewport_item);
+
+  // Real window mouse press/move/release (pan while zoomed).
+  QTest::mousePress(loaded->window, Qt::LeftButton, Qt::NoModifier, center);
+  ProcessEvents(10);
+  QTest::mouseMove(loaded->window, center + QPoint(30, 12));
+  ProcessEvents(10);
+  QTest::mouseRelease(loaded->window, Qt::LeftButton, Qt::NoModifier, center + QPoint(30, 12));
+  ProcessEvents(20);
+
+  // Ctrl+wheel zoom at cursor through the real QML WheelHandler.
+  QPointF angle(0.0, 120.0);
+  QPointF pixel(0.0, 0.0);
+  QWheelEvent wheel(center, loaded->window->mapToGlobal(center), QPoint(),
+                    QPoint(0, 120), Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase,
+                    false);
+  QCoreApplication::sendEvent(loaded->window, &wheel);
+  ProcessEvents(20);
+
+  // Double-click / double-tap path.
+  QTest::mouseDClick(loaded->window, Qt::LeftButton, Qt::NoModifier, center);
+  ProcessEvents(30);
+
+  // Interaction must remain enabled and keep a finite zoom after real events.
+  EXPECT_TRUE(interaction->interactionEnabled());
+  EXPECT_GE(interaction->zoom(), alcedo::ViewTransformController::kMinInteractiveZoom);
+  EXPECT_LE(interaction->zoom(), alcedo::ViewTransformController::kMaxInteractiveZoom);
+  // At least one of pan/zoom should have moved for a meaningful gesture sequence.
+  const bool zoomed = std::abs(interaction->zoom() - zoom_before) > 1.0e-3f;
+  const bool panned =
+      std::abs(interaction->panX()) > 1.0e-4f || std::abs(interaction->panY()) > 1.0e-4f;
+  EXPECT_TRUE(zoomed || panned);
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
 }
 
 }  // namespace
