@@ -17,6 +17,7 @@ namespace {
 
 constexpr auto kFilmstripCollapsedKey = "editor/filmstripCollapsed";
 constexpr auto kFilmstripExpandedHeightKey = "editor/filmstripExpandedHeight";
+constexpr auto kActiveAdjustmentPanelKey = "editor/activeAdjustmentPanel";
 constexpr double kFilmstripExpandedHeightMin = 72.0;
 constexpr double kFilmstripExpandedHeightMax = 320.0;
 constexpr double kFilmstripExpandedHeightDefault = 128.0;
@@ -26,6 +27,7 @@ constexpr double kFilmstripExpandedHeightDefault = 128.0;
 EditorSessionController::EditorSessionController(EditorController* editor, QObject* parent)
     : QObject(parent), editor_(editor) {
   LoadFilmstripUiPrefs();
+  LoadDesktopUiPrefs();
 }
 
 void EditorSessionController::Open(uint elementId, uint imageId) {
@@ -158,6 +160,69 @@ void EditorSessionController::SaveFilmstripUiPrefs() const {
   QSettings settings;
   settings.setValue(QLatin1String(kFilmstripCollapsedKey), filmstrip_collapsed_);
   settings.setValue(QLatin1String(kFilmstripExpandedHeightKey), filmstrip_expanded_height_);
+  settings.sync();
+}
+
+auto EditorSessionController::NormalizeAdjustmentPanel(const QString& panel) -> QString {
+  const QString key = panel.trimmed().toLower();
+  if (key == QLatin1String("look") || key == QLatin1String("color")) {
+    return QStringLiteral("look");
+  }
+  if (key == QLatin1String("display") || key == QLatin1String("drt") ||
+      key == QLatin1String("displayrenderingtransform")) {
+    return QStringLiteral("display");
+  }
+  if (key == QLatin1String("geometry") || key == QLatin1String("crop")) {
+    return QStringLiteral("geometry");
+  }
+  if (key == QLatin1String("raw") || key == QLatin1String("rawdecode")) {
+    return QStringLiteral("raw");
+  }
+  return QStringLiteral("tone");
+}
+
+auto EditorSessionController::NormalizeHistoryPanelPage(const QString& page) -> QString {
+  const QString key = page.trimmed().toLower();
+  if (key == QLatin1String("history")) {
+    return QStringLiteral("history");
+  }
+  if (key == QLatin1String("versions")) {
+    return QStringLiteral("versions");
+  }
+  return {};
+}
+
+void EditorSessionController::set_active_adjustment_panel(const QString& panel) {
+  const QString normalized = NormalizeAdjustmentPanel(panel);
+  if (active_adjustment_panel_ == normalized) {
+    return;
+  }
+  active_adjustment_panel_ = normalized;
+  SaveDesktopUiPrefs();
+  emit DesktopUiChanged();
+}
+
+void EditorSessionController::set_history_panel_page(const QString& page) {
+  const QString normalized = NormalizeHistoryPanelPage(page);
+  if (history_panel_page_ == normalized) {
+    return;
+  }
+  history_panel_page_ = normalized;
+  emit DesktopUiChanged();
+}
+
+void EditorSessionController::LoadDesktopUiPrefs() {
+  QSettings settings;
+  active_adjustment_panel_ = NormalizeAdjustmentPanel(
+      settings.value(QLatin1String(kActiveAdjustmentPanelKey), QStringLiteral("tone"))
+          .toString());
+  // historyPanelPage is intentionally not restored from disk: collapsed on
+  // cold start, but kept in memory across library/editor workspace switches.
+}
+
+void EditorSessionController::SaveDesktopUiPrefs() const {
+  QSettings settings;
+  settings.setValue(QLatin1String(kActiveAdjustmentPanelKey), active_adjustment_panel_);
   settings.sync();
 }
 

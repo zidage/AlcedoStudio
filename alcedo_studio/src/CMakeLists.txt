@@ -2058,6 +2058,8 @@ qt_add_qml_module(alcedo_main
         ui/alcedo_main/qml/LibraryWorkspace.qml
         ui/alcedo_main/qml/EditorWorkspace.qml
         ui/alcedo_main/qml/EditorFilmstrip.qml
+        ui/alcedo_main/qml/EditorHistoryVersionsRail.qml
+        ui/alcedo_main/qml/EditorAdjustmentStack.qml
     RESOURCES
         ui/alcedo_main/qml/util/qmldir
 )

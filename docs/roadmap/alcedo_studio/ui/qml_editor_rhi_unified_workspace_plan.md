@@ -4,7 +4,8 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-17 after production UI review and Phase 4 redesign.
+Last revised: 2026-07-17 after Phase 4B UI review, visual-system planning, and frontend/backend
+phase separation.
 
 Affected areas:
 
@@ -512,11 +513,11 @@ Verified on NVIDIA GeForce RTX 3080 Laptop GPU:
 - `EditorRhiHarness --editor-backend=cuda --case=direct-presentation` (pixel error 0)
 - `EditorRhiHarness --editor-backend=opencl --case=direct-presentation` (pixel error 0)
 - CUDA cases: resize-churn, hide-show, minimize-restore, renderer-recreation, hdr-format-query
-- OpenGL HDR probe (Phase 9 input): SDR supported; HDRExtendedSrgbLinear/HDR10/P3Linear false
+- OpenGL HDR probe (Phase 10 input): SDR supported; HDRExtendedSrgbLinear/HDR10/P3Linear false
   on this display/backend path
 - `EditorRhiContractsTest` (9 tests) passed
 
-Metal lease contract is defined in `frame_presentation_lease.hpp`; Metal feasibility remains Phase 8.
+Metal lease contract is defined in `frame_presentation_lease.hpp`; Metal feasibility remains Phase 9.
 Production `alcedo_main` entrypoint is intentionally unchanged in Phase 0.
 
 Deliverables:
@@ -531,11 +532,11 @@ Deliverables:
 - Exercise RGBA32F viewport rendering, resize, device-pixel-ratio change, hide/show,
   minimize/restore, renderer recreation, and application shutdown on both Windows backend pairs.
 - Record Windows OpenGL `isFormatSupported()` results for HDR on representative NVIDIA, AMD, HDR,
-  and SDR display configurations. This is input for Phase 9, not a reason to switch renderers.
+  and SDR display configurations. This is input for Phase 10, not a reason to switch renderers.
 - Create deterministic fixtures: FP32 gradient, checkerboard, ROI patch, odd-sized image, and a small
   real RAW project fixture.
 - Define the backend-neutral Metal lease contract but do not claim Metal feasibility while the macOS
-  environment is unavailable. Metal implementation and qualification are Phase 8.
+  environment is unavailable. Metal implementation and qualification are Phase 9.
 
 Acceptance:
 
@@ -725,7 +726,7 @@ Deliverables:
 - Port the existing RHI image renderer behavior to the QQuickRhiItem render target.
 - Replace synchronous target mapping with target leases and completed-frame submissions.
 - Implement CUDA/D3D11 and OpenCL/OpenGL lease adapters. Preserve a backend-neutral lease boundary
-  so Phase 8 can add Metal without changing the broker protocol.
+  so Phase 9 can add Metal without changing the broker protocol.
 - Carry target and image generations through InteractivePrimary, QualityBase, and DetailPatch.
 - Define cancellation and resource release for image switch, resize, hidden window, scene graph
   invalidation, and application shutdown.
@@ -858,7 +859,7 @@ Implementation closeout:
 
 | 问题 | 需要修正和验证的结果 |
 | --- | --- |
-| `presentation_frame_sink()` 目前只有测试调用，生产代码没有把图片处理结果送到这里。`ProductionFrameSinkAcceptsThreeLayerFrameSubmissions` 也只设置了输出大小和三类说明信息，没有写入或提交任何一帧。现在打开图片仍不能证明新视口会收到并显示真实编辑结果。 | 在 Phase 4D–4G 的统一协调流程中取得这个入口并实际提交 InteractivePrimary、QualityBase 和 DetailPatch。Phase 4E 的测试至少要写入并提交一帧，再确认生产视口收到了正确图片和本次打开的编号；在此之前不要写成生产接入已经完成。 |
+| `presentation_frame_sink()` 目前只有测试调用，生产代码没有把图片处理结果送到这里。`ProductionFrameSinkAcceptsThreeLayerFrameSubmissions` 也只设置了输出大小和三类说明信息，没有写入或提交任何一帧。现在打开图片仍不能证明新视口会收到并显示真实编辑结果。 | 在 Phase 5A–5D 的统一协调流程中取得这个入口并实际提交 InteractivePrimary、QualityBase 和 DetailPatch。Phase 5B 的测试至少要写入并提交一帧，再确认生产视口收到了正确图片和本次打开的编号；在此之前不要写成生产接入已经完成。 |
 | 切换图片时会把显示计算使用的图片大小清零，然后暂时改用源图大小。若新旧两张图片请求的输出宽高相同，`LeaseFrameSink::EnsureSize()` 会直接返回，不再发出 `targetSizeRequested`，新图就可能一直用源图大小计算裁剪、缩放和局部区域。 | 即使输出宽高没有变化，只要换了图片或本次打开的编号变了，也要把实际输出大小重新同步给交互控制器。增加“两张源图大小不同、输出大小相同”的切图测试。 |
 | Phase 3 原文要求在真实 QML 中验证裁剪、缩放、平移、适配、局部区域和重置，并覆盖 DPR 1.0、1.5、2.0；还要求比较叠加层截图。现在真实 QML 用例把拖动、滚轮和双击放在一起，最后只要求缩放或平移任意一个发生变化，单个操作失效也可能通过；裁剪、捏合、局部区域、重置和三种 DPR 仍只在控制器层测试。名称带 `Golden` 的测试也只检查点和三角形数量，没有截图或像素比较。 | 把真实 QML 操作分开检查，每个操作都验证自己的结果，并覆盖三种 DPR。为横图、竖图、方图和奇数尺寸视口保存实际叠加层图片并做像素比较。 |
 
@@ -872,49 +873,20 @@ Implementation closeout:
 - Overlay: non-overlapping dim mask, outward round caps, coalesced rebuilds.
 - QML: PointHandlers unchanged; DPR via screen property binding; session identity key
   drives rebind (PascalCase C++ signals are not used as Connections function handlers).
-- Phase 4D–4G now explicitly own loading, unified scheduling, first-frame proof, and production
+- Phase 5A–5D now explicitly own loading, unified scheduling, first-frame proof, and production
   cutover. Phase 3-Fix remains open until the Phase 3 interaction/screenshot checks above are
-  complete; production first-frame completion is gated by Phase 4E and 4G.
+  complete; production first-frame completion is gated by Phase 5B and 5D.
 
-### Phase 4 - UI correction and unified render coordination
+### Phase 4 - QML workspace frontend and visual system
 
-Phase 4 is deliberately split so the visible workspace can be corrected without hiding a second,
-large backend cutover inside the same change. UI work follows `4A → 4B → 4C`. Backend work follows
-`4D → 4E → 4F → 4G`. The two tracks may be developed in parallel after Phase 3, but Phase 4 is not
-complete until both tracks meet in the production `alcedo_main` workflow.
+Phase 4 is frontend-only. It establishes the functioning QML workspace, correct desktop structure,
+and one documented visual language before backend cutover or adjustment-panel migration adds more
+UI. Work follows `4A → 4A-Fix → 4B → 4C`. Phase 4B is complete; the production review items found
+after it are owned by Phase 4C and are release-blocking visual corrections, not optional polish.
 
-All editor rendering uses this one flow:
-
-```text
-Open image / adjustment / zoom / pan / resize / crop / undo / redo
-  -> typed RenderIntent
-  -> EditorRenderCoordinator
-       validate image + session + view generations
-       replace outdated pending work
-       choose frame role, region, size, quality, and priority
-       attach/request presentation target when needed
-  -> PipelineScheduler / PipelineMgmtService
-  -> pipeline writes the coordinator-selected presentation sink
-  -> FramePresentationBroker
-  -> EditorViewportItem presents the compatible frame
-  -> presentation acknowledgement returns to the coordinator/session state
-```
-
-Pipeline task completion and frame presentation are different events. The editor may report a
-rendering stage after the task starts, but it leaves first-frame loading only after the matching
-frame has actually been accepted and presented. No module may add a shorter direct arrow to the
-pipeline.
-
-Phase 3-Fix carry-over ownership:
-
-| Phase 3-Fix remaining problem | Required follow-up phase |
-| --- | --- |
-| Production code does not submit real frames through `presentation_frame_sink()` | Phase 4D defines the single scheduling owner and request/result contract; Phase 4E delivers and verifies the first real frame; Phase 4F covers all later render reasons; Phase 4G completes both production GPU paths and removes bypasses. |
-| A new image can keep the wrong render-reference geometry when its requested output size equals the previous image | Phase 4E must synchronize render-reference geometry for every new image/session generation and includes the equal-output-size switch test. |
-| Real QML interaction coverage is incomplete and the existing “Golden” tests do not compare rendered pixels | Phase 4G must run separate real-QML crop, zoom, pan, fit, ROI, reset, pinch, wheel, and double-click checks at DPR 1.0, 1.5, and 2.0, and compare rendered overlay captures for landscape, portrait, square, and odd viewport sizes. |
-
-These are inherited acceptance requirements, not optional cleanup. Phase 4 cannot be marked complete
-while any row remains unverified, even if its newly added functionality passes.
+The render/session/backend work formerly grouped into Phase 4 is now the independent Phase 5. It
+must consume the frontend contracts and visual tokens established here without reopening the
+workspace information architecture.
 
 ### Phase 4A - Main-window Library / Editor navigation
 
@@ -998,7 +970,7 @@ Implementation closeout:
 - `editorNavButton.onClicked` 在 `workspace !== "editor"` 时读取 `lastElementId`/`lastImageId`；
   两者都 >0 且 `editorImageStillExists(el)`（`thumbnailModel.rowByElementId`）成立则
   `openEditor(lastEl,lastImg)`，否则 `openEditor(0,0)`。存在性检查刻意限制在当前文件夹视图
-  （与未来 filmstrip = 当前图库列表一致；全局存在性查询留给 Phase 4E 首帧加载）；删除路径与
+  （与未来 filmstrip = 当前图库列表一致；全局存在性查询留给 Phase 5B 首帧加载）；删除路径与
   项目切换会清除记忆，所以"只有图片不存在时才显示空白提示"在常见路径上成立。
 - `Main.qml` 新增 `handleEditorImageDeleted(deletedIds)`，由 `runDeleteTargets()` 在清理
   selection/queue/focusedImage 之后调用：当 `workspace === "editor"` 且某被删 id 等于
@@ -1030,6 +1002,8 @@ Implementation closeout:
 
 ### Phase 4B - Restore editor desktop ordering and History/Versions navbar
 
+**Status: complete (2026-07-17).**
+
 Deliverables:
 
 - Restore the established desktop order: History/Versions on the left, viewport and filmstrip in
@@ -1056,33 +1030,153 @@ Acceptance:
 - Narrow-window behavior has an explicit minimum viewport size and never silently swaps the two
   side panels.
 
-### Phase 4C - SVG structural controls and reduced visible text
+Implementation closeout:
+
+- Desktop order is fixed in `EditorWorkspace.qml` as `RowLayout` `editorDesktopRow`: left
+  `EditorHistoryVersionsRail`, center `editorCenterColumn` (viewport + filmstrip), right
+  `EditorAdjustmentStack`. Explicit `minimumViewportWidth: 360` on the workspace; the center column
+  holds that floor. Side panels never reorder under a narrow window.
+- Left rail (`EditorHistoryVersionsRail.qml`): persistent 60 px rail with SVG History
+  (`qrc:/history_icons/git-commit-horizontal.svg`) and Versions (`qrc:/panel_icons/palette.svg`)
+  buttons. Selecting an action expands a 300 px panel beside the rail (takes space from the
+  viewport); selecting the active action again collapses it. Panel bodies are empty-state only until
+  the history/versioning port phases.
+- Right stack (`EditorAdjustmentStack.qml`): histogram/waveform scope slot on top, five-segment
+  icon navbar (Tone / Look / Display Transform / Geometry / RAW Decode using existing
+  `panel_icons`), and a `StackLayout` of empty panel bodies. Preferred / min / max width 300 / 260 /
+  420 matches the legacy controls panel contract. Shell dims when no image is open; navbar remains
+  selectable so choice can be set before an image arrives.
+- Session-backed UI state on `EditorSessionController`: `activeAdjustmentPanel` (tone | look |
+  display | geometry | raw) is QSettings-persisted (`editor/activeAdjustmentPanel`) so it survives
+  Loader teardown and app restart; `historyPanelPage` ("" | history | versions) is in-process only
+  so workspace round-trips keep the expanded page without restoring a cold-start flyout.
+- QML module: both new files are registered in `alcedo_main` `QML_FILES`.
+- Tests (`workspace_shell_test.cpp`, four new):
+  `EditorDesktopOrderIsHistoryCenterAdjustments`,
+  `HistoryAndVersionsOpenSwitchAndCollapseFromLeftNavbar`,
+  `AdjustmentPanelsSwitchAndSurviveWorkspaceRoundTrip`,
+  `NarrowWindowKeepsSidePanelOrderAndMinViewport`.
+  `WorkspaceShellTest` (29) and `MainQmlWorkflowTest` (1) pass with no QML warnings;
+  `git diff --check` is clean.
+
+### Phase 4C - Visual correction and VI foundation
+
+This phase owns the visual debt found in the production review immediately after Phase 4B. It must
+correct the existing QML workspace first, then freeze the reusable rules in a visual-identity guide
+before Phase 6 begins adding real adjustment controls.
 
 Deliverables:
 
-- Inventory visible structural actions in `EditorWorkspace.qml`, `EditorFilmstrip.qml`, the new
-  workspace navigation, History/Versions rail, adjustment navbar, and panel headers.
-- Replace text-based workspace switch, panel switch, collapse/expand, close, reset-view, dock,
-  history, and version controls with repository SVG resources. Reuse existing artwork where it has
-  the correct meaning; add one clear SVG only when no suitable asset exists.
-- Render SVGs with theme-aware color, correct high-DPI sizing, and distinct normal, hover, pressed,
-  active, disabled, and focus states.
+- Inventory visible structural actions in `Main.qml`, `EditorWorkspace.qml`,
+  `EditorFilmstrip.qml`, `EditorHistoryVersionsRail.qml`, `EditorAdjustmentStack.qml`, and panel
+  headers. Replace any remaining text-only structural action with an existing repository SVG, or add
+  one clear asset only when no existing artwork has the correct meaning.
+- Correct the undersized SVGs introduced by the recent workspace work. Define separate tokens for
+  button hit area, icon source size, and optical icon size instead of inheriting the SVG view-box or
+  using ad-hoc `16`, `18`, and `20` pixel values. Use `DialogActionButton.qml` as the reference for
+  deliberate button geometry: ordinary structural actions should provide a 40–46 px hit target and
+  a normally 22–24 px optical icon, with compact exceptions documented rather than silently
+  shrinking every new asset. Normalize icons with unusual internal whitespace so equal token sizes
+  look equal, and verify DPR 1.0, 1.5, and 2.0.
+- Simplify the Library/Editor capsule state model. Remove the Phase 4A-Fix
+  `highlightLevel`, `focusRingVisible`, `HoverHandler` tint, press tint, and custom 1 px accent focus
+  ring from both segments. The sliding `wsThumb` is the only selected-workspace indication; hover is
+  retained only to drive the localized tooltip. Keyboard activation and accessible names remain,
+  but neither pointer selection nor retained focus may draw the unexplained blue rectangle.
+- Unify editor card and empty-state surfaces with the Library grid. History and Versions collapsible
+  cards, their expanded bodies, and the editor image placeholder must consume the same semantic
+  base/card surface used by `ThumbnailGridView.qml` (currently `appTheme.bgBaseColor`) rather than
+  introducing locally darker or lighter fills. Promote that relationship to a named semantic token
+  if needed. Borders and selected/hover overlays may vary only through documented semantic tokens;
+  collapsed and expanded cards must not change their base color.
+- Create `alcedo_studio/src/ui/alcedo_main/DESIGN.md` as the canonical visual-identity (VI) contract
+  for the functioning QML application. It must document the approved UI/data/display font families;
+  type roles, sizes, weights, line heights, and numeric alignment; semantic colors and surface
+  hierarchy; spacing and margin scale; corner-radius scale; border treatment; button and icon
+  geometry; tooltip and focus policy; empty/loading/error states; and the motion rules below. Map
+  every rule to named `appTheme` or shared component tokens instead of encouraging literal values in
+  feature QML. Future AI agents must read this file before changing or adding QML visuals.
+- Consolidate repeated visual primitives into shared QML components or theme tokens where that
+  reduces drift. Do not turn `DESIGN.md` into a second, disconnected palette: the document, theme
+  properties, components, and screenshot fixtures must describe the same values.
+- Define one quiet desktop-motion language in `DESIGN.md` and apply it to editor panel folding.
+  History/Versions expansion and collapse, adjustment-group folding, filmstrip docking, and future
+  collapsible panels use shared duration/easing/distance tokens. The initial baseline is 160–220 ms
+  with an emphasized deceleration curve for opening and a slightly faster closing curve; animate
+  geometry together with opacity, keep the persistent rail/trigger stationary, clip intermediate
+  content, and never block input or recreate the editor session during the transition. Avoid bounce,
+  overshoot, unrelated decoration, and perpetual motion. Provide one shared reduced/disabled-motion
+  switch that resolves transitions immediately while preserving the same final state.
 - Keep localized tooltips and accessible names on every icon action. Keep visible text for image
   information, numeric values, adjustment names, warnings, errors, empty-state meaning, and actions
-  that an icon alone cannot explain safely.
-- Remove placeholder paragraphs that describe where future controls will appear. Empty or disabled
-  areas use concise status and visual state instead of implementation notes shown to the user.
+  that an icon alone cannot explain safely. Remove developer-facing placeholder paragraphs from the
+  visible editor.
 
 Acceptance:
 
-- Structural navigation and every collapse/expand operation can be understood and used without a
-  permanent text button.
-- Every SVG action is keyboard reachable, has a localized tooltip and accessible name, and remains
-  recognizable at DPR 1.0, 1.5, and 2.0.
-- Screenshot checks cover normal, hover, active, disabled, expanded, and collapsed states.
-- The visible editor contains no developer-facing placeholder explanation.
+- Side-by-side captures show that newly introduced SVG controls have intentional, consistent optical
+  size and are no longer visibly smaller than established Alcedo actions; their hit targets and
+  alignment match the `DialogActionButton.qml` sizing discipline.
+- Library/Editor mouse selection, keyboard activation, workspace round-trip, and tooltip tests pass
+  without `highlightLevel`/`focusRingVisible`; screenshots contain the sliding thumb but no blue
+  segment outline or extra hover/press fill.
+- History, Versions, adjustment shells, Library cards, and the editor image placeholder resolve
+  their base fills through the same documented semantic surface family. Screenshot tests cover empty,
+  selected, collapsed, expanded, hover, and disabled states in one theme matrix.
+- `DESIGN.md` exists at the QML owner root, includes typography, color, radius, spacing, icon, state,
+  and motion token tables, and names the corresponding implementation properties/components. A
+  repository check or review checklist prevents new unexplained visual literals from becoming the
+  default pattern.
+- History/Versions and adjustment-panel expand/collapse transitions are visibly continuous, finish
+  at exact layout bounds, preserve focus/selection/session state, and remain deterministic under
+  rapid reversal. Tests check start, intermediate, completed, and reduced/disabled-animation states
+  without timing sleeps.
+- Every SVG action remains keyboard reachable and recognizable at DPR 1.0, 1.5, and 2.0, exposes a
+  localized tooltip and accessible name, and the visible editor contains no developer-facing
+  placeholder explanation.
 
-### Phase 4D - Editor session and unified render-intent contracts
+### Phase 5 - Editor backend, render coordination, and durable session state
+
+Phase 5 is backend-only except for the minimum state exposure needed by the already established QML
+shell. All scheduling, first-frame delivery, journaling, autosave, recovery, and cancellation work
+formerly nested under Phase 4 moves here. It may develop against Phase 4's stable frontend contract,
+but it must not introduce a parallel visual system or bypass `DESIGN.md` when surfacing state.
+
+All editor rendering uses this one flow:
+
+```text
+Open image / adjustment / zoom / pan / resize / crop / undo / redo
+  -> typed RenderIntent
+  -> EditorRenderCoordinator
+       validate image + session + view generations
+       replace outdated pending work
+       choose frame role, region, size, quality, and priority
+       attach/request presentation target when needed
+  -> PipelineScheduler / PipelineMgmtService
+  -> pipeline writes the coordinator-selected presentation sink
+  -> FramePresentationBroker
+  -> EditorViewportItem presents the compatible frame
+  -> presentation acknowledgement returns to the coordinator/session state
+```
+
+Pipeline task completion and frame presentation are different events. The editor may report a
+rendering stage after the task starts, but it leaves first-frame loading only after the matching
+frame has actually been accepted and presented. No module may add a shorter direct arrow to the
+pipeline.
+
+Phase 3-Fix carry-over ownership:
+
+| Phase 3-Fix remaining problem | Required follow-up phase |
+| --- | --- |
+| Production code does not submit real frames through `presentation_frame_sink()` | Phase 5A defines the single scheduling owner and request/result contract; Phase 5B delivers and verifies the first real frame; Phase 5C covers all later render reasons; Phase 5D completes both production GPU paths and removes bypasses. |
+| A new image can keep the wrong render-reference geometry when its requested output size equals the previous image | Phase 5B must synchronize render-reference geometry for every new image/session generation and includes the equal-output-size switch test. |
+| Real QML interaction coverage is incomplete and the existing “Golden” tests do not compare rendered pixels | Phase 5D must run separate real-QML crop, zoom, pan, fit, ROI, reset, pinch, wheel, and double-click checks at DPR 1.0, 1.5, and 2.0, and compare rendered overlay captures for landscape, portrait, square, and odd viewport sizes. |
+
+These are inherited acceptance requirements for Phase 5, not optional cleanup. The backend phase
+cannot be marked complete while any row remains unverified, even if its newly added functionality
+passes.
+
+### Phase 5A - Editor session and unified render-intent contracts
 
 Deliverables:
 
@@ -1122,7 +1216,7 @@ Acceptance:
 - A source scan and dependency test show no editor UI module or input controller calling the
   pipeline scheduler directly.
 
-### Phase 4E - Image open and guaranteed first frame
+### Phase 5B - Image open and guaranteed first frame
 
 Deliverables:
 
@@ -1153,7 +1247,7 @@ Acceptance:
 - Tests write and submit real frame data through the production presentation sink and verify the
   visible pixels; setting only size or frame description is not sufficient.
 
-### Phase 4F - Unified adjustment, zoom, pan, resize, and quality scheduling
+### Phase 5C - Unified adjustment, zoom, pan, resize, and quality scheduling
 
 Deliverables:
 
@@ -1184,7 +1278,7 @@ Acceptance:
 - The production viewport shows InteractivePrimary, QualityBase, and DetailPatch from this single
   route with the correct generation and region.
 
-### Phase 4G - Production cutover, cancellation, and sustained rendering
+### Phase 5D - Production cutover, cancellation, and sustained rendering
 
 Deliverables:
 
@@ -1217,10 +1311,10 @@ Acceptance:
   another operation in the same gesture sequence cannot hide the failure.
 - Overlay capture comparisons verify the actual dim mask, crop border, grid, grips, rotate handle,
   and ROI bounds, not only triangle counts or selected sample points.
-- Phase 4 is complete only after the corrected UI from 4A–4C and this production backend route are
+- Phase 5 is complete only after the Phase 4 frontend and this production backend route are
   exercised together in one end-to-end test.
 
-### Phase 4H - Redo-only journal format and timeline rewrites
+### Phase 5E - Redo-only journal format and timeline rewrites
 
 Deliverables:
 
@@ -1248,7 +1342,7 @@ Acceptance:
 - WorkingVersion, journal replay, and the independent reference model produce identical pipeline
   params, cursor, transaction IDs, and timeline hash for the same operation sequence.
 
-### Phase 4I - Background autosave and overlapping image switches
+### Phase 5F - Background autosave and overlapping image switches
 
 Deliverables:
 
@@ -1271,7 +1365,7 @@ Acceptance:
 - Discard removes only the current unflushed transaction; published versions remain available
   through history.
 
-### Phase 4J - Recovery, compaction, and injected storage failures
+### Phase 5G - Recovery, compaction, and injected storage failures
 
 Deliverables:
 
@@ -1290,7 +1384,7 @@ Acceptance:
 - A failed compaction leaves the previous journal recoverable.
 - Materialization interrupted after journal durability reconstructs the same history/pipeline head.
 
-### Phase 4K - Reproducible forced-termination fuzz harness
+### Phase 5H - Reproducible forced-termination fuzz harness
 
 Deliverables:
 
@@ -1301,7 +1395,7 @@ Deliverables:
   head-marker update, materialization, thumbnail invalidation, compaction replace, and image switch.
 - Let the parent randomly terminate the child at those points, restart it, recover, and compare the
   result with the independent reference timeline model.
-- Combine process termination with the Phase 4J in-process file/task fault injectors.
+- Combine process termination with the Phase 5G in-process file/task fault injectors.
 - Print and persist the seed, minimized operation sequence, crash point, backend-independent journal
   fixture, and expected/actual state for every failure.
 - Keep a checked-in regression-seed corpus and run fresh bounded random seeds in scheduled CI.
@@ -1315,7 +1409,13 @@ Acceptance:
 - The fixed regression corpus passes in ordinary presubmit tests; the larger randomized run is a
   required scheduled job.
 
-### Phase 5A - Shared adjustment contracts and QML controls
+### Phase 6 - Adjustment panels and shared QML controls
+
+This is the former Phase 5, shifted intact behind the new backend Phase 5. It consumes the Phase 4
+VI/components and Phase 5 session, render-intent, journal, and recovery contracts; it must not create
+panel-local scheduling paths or visual literals that bypass those foundations.
+
+### Phase 6A - Shared adjustment contracts and QML controls
 
 Deliverables:
 
@@ -1331,7 +1431,7 @@ Acceptance:
 - Keyboard editing, pointer dragging, reset, focus, accessibility, and invalid values have focused
   component tests.
 
-### Phase 5B - Tone panel
+### Phase 6B - Tone panel
 
 Deliverables:
 
@@ -1345,7 +1445,7 @@ Acceptance:
   and reconstructed version.
 - Curve gestures have deterministic model and visual geometry tests.
 
-### Phase 5C - Look panel
+### Phase 6C - Look panel
 
 Deliverables:
 
@@ -1360,7 +1460,7 @@ Acceptance:
   recovered-journal parity.
 - Trackball and LUT interactions have deterministic controller and QML tests.
 
-### Phase 5D - Display Transform panel
+### Phase 6D - Display Transform panel
 
 Deliverables:
 
@@ -1375,7 +1475,7 @@ Acceptance:
 - HDR intent changes request display transitions without directly touching a window or swapchain from
   QML.
 
-### Phase 5E - Geometry panel
+### Phase 6E - Geometry panel
 
 Deliverables:
 
@@ -1388,7 +1488,7 @@ Acceptance:
 - Panel edits and direct overlay gestures stay bidirectionally consistent without binding loops.
 - Undo/redo/rewrite/recovery restores both pipeline geometry and overlay geometry exactly.
 
-### Phase 5F - RAW Decode panel
+### Phase 6F - RAW Decode panel
 
 Deliverables:
 
@@ -1401,7 +1501,7 @@ Acceptance:
 - Supported and unsupported RAW fixtures expose the correct controls and values.
 - Every RAW Decode edit survives save, replay, version reconstruction, image switch, and reopen.
 
-### Phase 5G - Cross-panel integration and shortcuts
+### Phase 6G - Cross-panel integration and shortcuts
 
 Deliverables:
 
@@ -1415,7 +1515,12 @@ Acceptance:
 - Every existing adjustment can be set, reset, serialized, replayed, and represented in history.
 - Cross-panel operation sequences match the independent journal oracle and rendered pipeline state.
 
-### Phase 6A - Versioning and history module
+### Phase 7 - Remaining editor workflow modules
+
+The former Phase 6 follows the adjustment-panel port so History/Versions, scopes, filmstrip, search,
+and lifecycle UI reuse the same visual, motion, session, and durability contracts.
+
+### Phase 7A - Versioning and history module
 
 Deliverables:
 
@@ -1431,7 +1536,7 @@ Acceptance:
   current editor.
 - Timeline rewrite never creates an implicit Version or corrupts an existing Version hash.
 
-### Phase 6B - Histogram and waveform scope module
+### Phase 7B - Histogram and waveform scope module
 
 Deliverables:
 
@@ -1446,7 +1551,7 @@ Acceptance:
   after switching.
 - Hidden/collapsed scopes stop scheduling visual updates without corrupting the analyzer lifecycle.
 
-### Phase 6C - Collapsible editor filmstrip module
+### Phase 7C - Collapsible editor filmstrip module
 
 Deliverables:
 
@@ -1464,7 +1569,7 @@ Acceptance:
 - Repeated animation and workspace switching do not leak delegates or trigger image reloads.
 - Discard is visible only where specified and only when the current transaction is eligible.
 
-### Phase 6D - Live search editor integration
+### Phase 7D - Live search editor integration
 
 Deliverables:
 
@@ -1481,7 +1586,7 @@ Acceptance:
 - Removing the current image seals/autosaves it before selecting the deterministic successor.
 - Rapid search replacement causes no stale frame, scope, transaction, or selection publication.
 
-### Phase 6E - Empty state and workspace lifecycle module
+### Phase 7E - Empty state and workspace lifecycle module
 
 Deliverables:
 
@@ -1495,7 +1600,7 @@ Acceptance:
 - Every lifecycle state has deterministic QML and controller tests.
 - Empty editor, workspace switch, and shutdown preserve journal and module-host invariants.
 
-### Phase 7 - Windows full parity and release qualification
+### Phase 8 - Windows full parity and release qualification
 
 Deliverables:
 
@@ -1517,7 +1622,7 @@ Acceptance:
 - No known data-loss, stale-generation, resource-lifetime, or Windows display-mode defect remains
   open.
 
-### Phase 8 - macOS Metal and existing EDR feasibility qualification
+### Phase 9 - macOS Metal and existing EDR feasibility qualification
 
 This phase is intentionally delayed until the macOS development environment is available, and is the
 mandatory gate immediately before the final render-host/cutover phase.
@@ -1532,7 +1637,7 @@ Deliverables:
 - Apply the existing `ColorManager` system-API behavior to the unified QQuickWindow CAMetalLayer and
   verify color space, `wantsExtendedDynamicRangeContent`, PQ/HLG EDR metadata, and SDR reset.
 - Compare the unified editor against the current macOS editor on the same HDR/SDR fixtures and
-  display. Preserve the current result before attempting the Phase 9 owned swapchain.
+  display. Preserve the current result before attempting the Phase 10 owned swapchain.
 - Run the editor session, journal, filmstrip, search, scopes, versioning, and panel parity suites on
   macOS rather than assuming backend-neutral code is sufficient.
 
@@ -1543,9 +1648,9 @@ Acceptance:
 - Existing macOS EDR behavior is demonstrably preserved in the unified QML window and resets cleanly
   in SDR.
 - No Metal resource lifetime, threaded scene graph, DPR, window, or EDR blocker remains.
-- The full macOS parity matrix passes. Phase 9 cannot start and production cannot cut over otherwise.
+- The full macOS parity matrix passes. Phase 10 cannot start and production cannot cut over otherwise.
 
-### Phase 9 - Application-owned HDR render host and hard cutover
+### Phase 10 - Application-owned HDR render host and hard cutover
 
 This is intentionally the last phase.
 
@@ -1565,7 +1670,7 @@ Deliverables:
   and accessibility-relevant window state deliberately.
 - Implement the SDR/HDR transition state machine, including last-frame freeze, GPU idle, swapchain
   destroy/recreate, scene target rebuild, and optional native-window recreation with state restore.
-- Preserve the Phase 8 macOS color-space/EDR result and integrate it with the owned Metal swapchain.
+- Preserve the Phase 9 macOS color-space/EDR result and integrate it with the owned Metal swapchain.
 - On Windows D3D11, prefer `HDRExtendedSrgbLinear` when supported. On Windows OpenGL, use a true HDR
   format when supported; otherwise select the defined HDR-to-SDR display transform and expose the
   reason in diagnostics.
@@ -1613,7 +1718,7 @@ The final cutover deletes or replaces all of the following:
   the `WorkspaceRouter` and `EditorSessionController` modules.
 
 Do not leave deprecated forwarding headers or adapters “for later cleanup.” Repository search for
-the deleted types, symbols, compile definitions, and include paths is part of Phase 9 acceptance.
+the deleted types, symbols, compile definitions, and include paths is part of Phase 10 acceptance.
 
 ## Test harness
 
@@ -1667,7 +1772,7 @@ EditorRhiHarness --editor-backend=metal --case=direct-presentation
 ```
 
 The CUDA and OpenCL commands are Phase 0/2 gates. The Metal command is added and becomes mandatory
-in Phase 8 when macOS hardware is available.
+in Phase 9 when macOS hardware is available.
 
 Required cases:
 
@@ -1778,7 +1883,7 @@ idle during HDR/surface rebuild is isolated to the display-transition state and 
 | --- | --- |
 | Windows CUDA machine | D3D11 scene graph, CUDA interop, adapter LUID, SDR, HDR when screen supports it |
 | Windows OpenCL NVIDIA/AMD | OpenGL scene graph, CL/GL sharing, SDR, HDR query and HDR/down-transform result |
-| macOS Apple Silicon, Phase 8+ | Metal interop, existing EDR behavior, final owned HDR swapchain, SDR reset |
+| macOS Apple Silicon, Phase 9+ | Metal interop, existing EDR behavior, final owned HDR swapchain, SDR reset |
 | Non-GPU logic job | geometry, journal, session state machine, models, QML structure where software rendering is not required |
 
 `QQuickRhiItem` does not work with the software scene graph. GPU integration tests must fail as skipped

@@ -6,6 +6,7 @@
 
 #include <QObject>
 #include <QPointer>
+#include <QString>
 #include <QtGlobal>
 
 namespace alcedo {
@@ -44,6 +45,15 @@ class EditorSessionController final : public QObject {
                  NOTIFY FilmstripUiChanged)
   Q_PROPERTY(double filmstripExpandedHeight READ filmstrip_expanded_height WRITE
                  set_filmstrip_expanded_height NOTIFY FilmstripUiChanged)
+  // Active right-side adjustment panel. One of: tone, look, display, geometry, raw.
+  // Survives workspace Loader teardown and application restart (QSettings).
+  Q_PROPERTY(QString activeAdjustmentPanel READ active_adjustment_panel WRITE
+                 set_active_adjustment_panel NOTIFY DesktopUiChanged)
+  // Left History/Versions rail page: empty string = collapsed; "history" or
+  // "versions" = expanded. Survives workspace round-trips within the process
+  // (not persisted across application restart).
+  Q_PROPERTY(QString historyPanelPage READ history_panel_page WRITE set_history_panel_page
+                 NOTIFY DesktopUiChanged)
   Q_PROPERTY(bool presentationViewportBound READ presentation_viewport_bound NOTIFY
                  PresentationBindingChanged)
 
@@ -59,6 +69,8 @@ class EditorSessionController final : public QObject {
   [[nodiscard]] qulonglong session_generation() const { return session_generation_; }
   [[nodiscard]] bool filmstrip_collapsed() const { return filmstrip_collapsed_; }
   [[nodiscard]] double filmstrip_expanded_height() const { return filmstrip_expanded_height_; }
+  [[nodiscard]] QString active_adjustment_panel() const { return active_adjustment_panel_; }
+  [[nodiscard]] QString history_panel_page() const { return history_panel_page_; }
   [[nodiscard]] bool presentation_viewport_bound() const {
     return presentation_viewport_ != nullptr;
   }
@@ -86,16 +98,23 @@ class EditorSessionController final : public QObject {
 
   void set_filmstrip_collapsed(bool collapsed);
   void set_filmstrip_expanded_height(double height);
+  void set_active_adjustment_panel(const QString& panel);
+  void set_history_panel_page(const QString& page);
 
  signals:
   void StateChanged();
   void FilmstripUiChanged();
+  void DesktopUiChanged();
   void PresentationBindingChanged();
   void LastEditedImageChanged();
 
  private:
   void LoadFilmstripUiPrefs();
   void SaveFilmstripUiPrefs() const;
+  void LoadDesktopUiPrefs();
+  void SaveDesktopUiPrefs() const;
+  [[nodiscard]] static auto NormalizeAdjustmentPanel(const QString& panel) -> QString;
+  [[nodiscard]] static auto NormalizeHistoryPanelPage(const QString& page) -> QString;
 
   EditorController* editor_ = nullptr;
   bool              active_ = false;
@@ -106,6 +125,8 @@ class EditorSessionController final : public QObject {
   qulonglong        session_generation_ = 0;
   bool              filmstrip_collapsed_ = false;
   double            filmstrip_expanded_height_ = 128.0;
+  QString           active_adjustment_panel_ = QStringLiteral("tone");
+  QString           history_panel_page_;
   QPointer<QObject> presentation_viewport_;
 };
 

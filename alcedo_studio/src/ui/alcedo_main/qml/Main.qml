@@ -495,7 +495,7 @@ ApplicationWindow {
     // current folder's thumbnail model still lists it. The check is deliberately
     // folder-scoped (the editor filmstrip will be the current library list, so a
     // restored image must be in view); a global existence query belongs with the
-    // Phase 4E first-frame loader.
+    // Phase 5B first-frame loader.
     function editorImageStillExists(elementId) {
         if (!appModules || !appModules.library || !appModules.library.thumbnailModel) {
             return false

@@ -1378,5 +1378,229 @@ TEST_F(WorkspaceShellTests, LibraryFolderFilterSurvivesEditorRoundTrip) {
       << loaded->qml_warnings.front().toString().toStdString();
 }
 
+// ── Phase 4B: restored editor desktop ordering ─────────────────────────────
+
+namespace {
+
+auto SceneX(QQuickItem* item) -> qreal {
+  return item->mapToScene(QPointF(0.0, 0.0)).x();
+}
+
+}  // namespace
+
+TEST_F(WorkspaceShellTests, EditorDesktopOrderIsHistoryCenterAdjustments) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+
+  loaded->host.workspace_router()->OpenEditor(1, 1);
+  ProcessEvents(80);
+  loaded->window->resize(1400, 900);
+  ProcessEvents(40);
+
+  auto* left = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsRail"));
+  auto* center = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorViewportSlot"));
+  auto* right = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
+  auto* scope = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorScopeSlot"));
+  ASSERT_NE(left, nullptr);
+  ASSERT_NE(center, nullptr);
+  ASSERT_NE(right, nullptr);
+  ASSERT_NE(scope, nullptr);
+
+  // Left History/Versions, center image viewport, right adjustments — same
+  // meaning as the established editor desktop.
+  EXPECT_LT(SceneX(left), SceneX(center));
+  EXPECT_LT(SceneX(center), SceneX(right));
+  // Scope/histogram lives with the right-side tools, not merged into history.
+  EXPECT_GT(SceneX(scope), SceneX(center));
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, HistoryAndVersionsOpenSwitchAndCollapseFromLeftNavbar) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+
+  loaded->host.workspace_router()->OpenEditor(0, 0);
+  ProcessEvents(80);
+
+  auto* session = loaded->host.editor_session();
+  ASSERT_NE(session, nullptr);
+  EXPECT_TRUE(session->history_panel_page().isEmpty());
+
+  auto* history_btn =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRailButton"));
+  auto* versions_btn =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorVersionsRailButton"));
+  ASSERT_NE(history_btn, nullptr);
+  ASSERT_NE(versions_btn, nullptr);
+
+  // Open History.
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(history_btn));
+  ProcessEvents(60);
+  EXPECT_EQ(session->history_panel_page(), QStringLiteral("history"));
+  auto* panel =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsPanel"));
+  ASSERT_NE(panel, nullptr);
+  EXPECT_TRUE(panel->isVisible());
+  auto* history_body =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryPageBody"));
+  ASSERT_NE(history_body, nullptr);
+  EXPECT_TRUE(history_body->isVisible());
+
+  // Switch to Versions without collapsing first.
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(versions_btn));
+  ProcessEvents(60);
+  EXPECT_EQ(session->history_panel_page(), QStringLiteral("versions"));
+  auto* versions_body =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorVersionsPageBody"));
+  ASSERT_NE(versions_body, nullptr);
+  EXPECT_TRUE(versions_body->isVisible());
+  EXPECT_FALSE(history_body->isVisible());
+
+  // Selecting the active action again collapses the panel; the rail remains.
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(versions_btn));
+  ProcessEvents(60);
+  EXPECT_TRUE(session->history_panel_page().isEmpty());
+  EXPECT_FALSE(panel->isVisible());
+  EXPECT_NE(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail")), nullptr);
+
+  // Re-open History, then round-trip Library and confirm in-memory page survives
+  // the editor Loader teardown/recreate.
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(history_btn));
+  ProcessEvents(60);
+  EXPECT_EQ(session->history_panel_page(), QStringLiteral("history"));
+  loaded->host.workspace_router()->OpenLibrary();
+  ProcessEvents(40);
+  loaded->host.workspace_router()->OpenEditor(0, 0);
+  ProcessEvents(80);
+  EXPECT_EQ(session->history_panel_page(), QStringLiteral("history"));
+  auto* panel_after =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsPanel"));
+  ASSERT_NE(panel_after, nullptr);
+  EXPECT_TRUE(panel_after->isVisible());
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, AdjustmentPanelsSwitchAndSurviveWorkspaceRoundTrip) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  ScopedIniSettings settings_scope(temp_dir_ / "qml_settings_adj", QStringLiteral("AlcedoTestOrg"),
+                                   QStringLiteral("AlcedoWorkspaceShellAdjTest"));
+
+  {
+    QSettings settings;
+    settings.setValue(QStringLiteral("editor/activeAdjustmentPanel"), QStringLiteral("tone"));
+    settings.sync();
+  }
+
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+
+  loaded->host.workspace_router()->OpenEditor(1, 1);
+  ProcessEvents(80);
+
+  auto* session = loaded->host.editor_session();
+  ASSERT_NE(session, nullptr);
+  EXPECT_EQ(session->active_adjustment_panel(), QStringLiteral("tone"));
+
+  const QStringList panels = {QStringLiteral("tone"), QStringLiteral("look"),
+                              QStringLiteral("display"), QStringLiteral("geometry"),
+                              QStringLiteral("raw")};
+  for (const auto& panel : panels) {
+    auto* nav = loaded->window->findChild<QQuickItem*>(
+        QStringLiteral("editorAdjustmentNav_") + panel);
+    ASSERT_NE(nav, nullptr) << panel.toStdString();
+    QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(nav));
+    ProcessEvents(40);
+    EXPECT_EQ(session->active_adjustment_panel(), panel) << panel.toStdString();
+
+    auto* body = loaded->window->findChild<QQuickItem*>(
+        QStringLiteral("editorAdjustmentPanel_") + panel);
+    ASSERT_NE(body, nullptr) << panel.toStdString();
+    // StackLayout keeps non-current children; active page is the one whose
+    // StackLayout index matches. Prefer reading the stack currentIndex.
+  }
+
+  // Leave on Geometry, leave editor, re-enter: selection must survive.
+  auto* geometry_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentNav_geometry"));
+  ASSERT_NE(geometry_nav, nullptr);
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(geometry_nav));
+  ProcessEvents(40);
+  EXPECT_EQ(session->active_adjustment_panel(), QStringLiteral("geometry"));
+
+  loaded->host.workspace_router()->OpenLibrary();
+  ProcessEvents(40);
+  loaded->host.workspace_router()->OpenEditor(2, 2);
+  ProcessEvents(80);
+  EXPECT_EQ(loaded->host.editor_session()->active_adjustment_panel(),
+            QStringLiteral("geometry"));
+
+  auto* stack =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentPanelStack"));
+  ASSERT_NE(stack, nullptr);
+  EXPECT_EQ(stack->property("currentIndex").toInt(), 3);
+
+  loaded.reset();
+  {
+    alcedo::ui::EditorSessionController restored(nullptr);
+    EXPECT_EQ(restored.active_adjustment_panel(), QStringLiteral("geometry"));
+  }
+}
+
+TEST_F(WorkspaceShellTests, NarrowWindowKeepsSidePanelOrderAndMinViewport) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+
+  loaded->host.workspace_router()->OpenEditor(1, 1);
+  ProcessEvents(80);
+
+  // Narrow enough that side panels compete for width; order must not swap.
+  loaded->window->resize(900, 700);
+  ProcessEvents(60);
+
+  auto* left = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsRail"));
+  auto* center = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorViewportSlot"));
+  auto* center_col =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorCenterColumn"));
+  auto* right = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
+  auto* workspace =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspace"));
+  ASSERT_NE(left, nullptr);
+  ASSERT_NE(center, nullptr);
+  ASSERT_NE(center_col, nullptr);
+  ASSERT_NE(right, nullptr);
+  ASSERT_NE(workspace, nullptr);
+
+  EXPECT_LT(SceneX(left), SceneX(center));
+  EXPECT_LT(SceneX(center), SceneX(right));
+
+  const int min_viewport = workspace->property("minimumViewportWidth").toInt();
+  EXPECT_EQ(min_viewport, 360);
+  EXPECT_GE(center_col->width(), min_viewport - 1.0);
+
+  // Expand history panel: still left of center, adjustments stay right.
+  auto* history_btn =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRailButton"));
+  ASSERT_NE(history_btn, nullptr);
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(history_btn));
+  ProcessEvents(60);
+  EXPECT_EQ(loaded->host.editor_session()->history_panel_page(), QStringLiteral("history"));
+  EXPECT_LT(SceneX(left), SceneX(center));
+  EXPECT_LT(SceneX(center), SceneX(right));
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
 }  // namespace
 }  // namespace alcedo::ui::test

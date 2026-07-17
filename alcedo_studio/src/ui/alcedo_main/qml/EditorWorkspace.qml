@@ -40,59 +40,43 @@ Item {
         }
     }
 
+    // Explicit minimum center viewport width. Side panels never swap places
+    // under a narrow window; the center column holds this floor instead.
+    readonly property int minimumViewportWidth: 360
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 12
 
         // ── Main editor body ────────────────────────────────────────────
+        // Desktop order (non-negotiable): History/Versions left, viewport
+        // center, scopes + adjustment stack right.
         RowLayout {
+            id: editorDesktopRow
+            objectName: "editorDesktopRow"
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 12
 
-            // Left adjustment panel slot (Tone / Look / Geometry placeholders)
-            Rectangle {
-                id: leftPanelSlot
-                objectName: "editorLeftPanelSlot"
-                Layout.preferredWidth: 280
-                Layout.minimumWidth: 240
-                Layout.maximumWidth: 360
+            // Left: History / Versions rail (+ expandable panel beside rail).
+            // objectName is set inside the component (editorHistoryVersionsRail).
+            EditorHistoryVersionsRail {
+                id: historyVersionsRail
                 Layout.fillHeight: true
-                radius: root.panelRadius
-                color: root.colPanel
-                border.width: 1
-                border.color: root.colStroke
-                opacity: root.hasImage ? 1.0 : 0.55
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 14
-                    spacing: 10
-
-                    Label {
-                        text: qsTr("Adjustments")
-                        color: root.colMuted
-                        font.pixelSize: 12
-                        font.weight: 600
-                    }
-                    Label {
-                        Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: root.hasImage
-                              ? qsTr("Tone, Look, Display Transform, Geometry, and RAW Decode panels mount here.")
-                              : qsTr("Select an image to enable adjustment controls.")
-                        color: root.colMuted
-                        font.pixelSize: 12
-                    }
-                    Item { Layout.fillHeight: true }
-                }
+                theme: root.theme
+                editorSession: root.editorSession
+                // Rail stays usable without an image so empty-state navigation
+                // can still open/collapse the panels; bodies show empty hints.
+                controlsEnabled: true
             }
 
             // Center column: viewport + filmstrip
             ColumnLayout {
+                id: centerColumn
+                objectName: "editorCenterColumn"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                Layout.minimumWidth: 360
+                Layout.minimumWidth: root.minimumViewportWidth
                 spacing: 12
 
                 Rectangle {
@@ -346,7 +330,7 @@ Item {
                         }
                     }
 
-                    // Invisible focus/input owner for keyboard shortcuts (Phase 5G).
+                    // Invisible focus/input owner for keyboard shortcuts (Phase 6G).
                     Item {
                         id: viewportInteractionLayer
                         objectName: "editorViewportInteractionLayer"
@@ -518,60 +502,13 @@ Item {
                 }
             }
 
-            // Right inspector / scope / history slot
-            Rectangle {
-                id: rightPanelSlot
-                objectName: "editorRightPanelSlot"
-                Layout.preferredWidth: 300
-                Layout.minimumWidth: 240
-                Layout.maximumWidth: 420
+            // Right: histogram/waveform + adjustment navbar + panel stack.
+            EditorAdjustmentStack {
+                id: adjustmentStack
                 Layout.fillHeight: true
-                radius: root.panelRadius
-                color: root.colPanel
-                border.width: 1
-                border.color: root.colStroke
-                opacity: root.hasImage ? 1.0 : 0.55
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    anchors.margins: 14
-                    spacing: 12
-
-                    Label {
-                        text: qsTr("Scopes & History")
-                        color: root.colMuted
-                        font.pixelSize: 12
-                        font.weight: 600
-                    }
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 120
-                        radius: 8
-                        color: "transparent"
-                        border.width: 1
-                        border.color: root.colStroke
-                        Label {
-                            anchors.centerIn: parent
-                            text: qsTr("Histogram / Waveform")
-                            color: root.colMuted
-                            font.pixelSize: 12
-                        }
-                    }
-                    Rectangle {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        radius: 8
-                        color: "transparent"
-                        border.width: 1
-                        border.color: root.colStroke
-                        Label {
-                            anchors.centerIn: parent
-                            text: qsTr("History / Versions")
-                            color: root.colMuted
-                            font.pixelSize: 12
-                        }
-                    }
-                }
+                theme: root.theme
+                editorSession: root.editorSession
+                controlsEnabled: root.hasImage
             }
         }
     }
