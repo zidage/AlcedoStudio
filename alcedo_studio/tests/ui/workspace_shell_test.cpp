@@ -30,6 +30,7 @@
 
 #include "ui/alcedo_main/album_backend/album_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
+#include "ui/album_backend_seeded_project_fixture.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/alcedo_main/editor_dialog/editor_dialog.hpp"
 #include "ui/alcedo_main/language_manager.hpp"
@@ -120,7 +121,10 @@ void SeedLibraryThumbnails(ApplicationModuleHost& host, int count, int content_h
     item.file_id = static_cast<sl_element_id_t>(3000 + i);
     item.file_name = QStringLiteral("test_%1.arw").arg(i);
     item.extension = QStringLiteral("arw");
-    item.thumb_data_url = QStringLiteral("data:image/png;base64,");
+    // Empty data URL: the grid renders placeholder cards (no decode attempt) so
+    // the async QQuickImage decode-failure warning never fires. Routing, scroll,
+    // and filter tests do not depend on thumbnail pixels.
+    item.thumb_data_url = QString();
     items.push_back(item);
   }
   host.library()->view_state().all_images_ = items;
@@ -139,6 +143,51 @@ class WorkspaceShellTests : public ApplicationModuleHostTestFixture {
     if (create_project) {
       EXPECT_TRUE(CreateTestProject(loaded->host));
     }
+
+    alcedo::ui::AppTheme::SetEffectiveLanguageCode(
+        loaded->language_manager.EffectiveLanguageCode());
+    QQuickStyle::setStyle(QStringLiteral("Material"));
+
+    loaded->engine.addImportPath(QStringLiteral("qrc:/"));
+    loaded->language_manager.AttachEngine(&loaded->engine);
+    loaded->engine.rootContext()->setContextProperty(QStringLiteral("appModules"),
+                                                      &loaded->host);
+    loaded->engine.rootContext()->setContextProperty(QStringLiteral("appTheme"),
+                                                      &alcedo::ui::AppTheme::Instance());
+    loaded->engine.rootContext()->setContextProperty(QStringLiteral("languageManager"),
+                                                      &loaded->language_manager);
+
+    QObject::connect(&loaded->engine, &QQmlEngine::warnings,
+                     [raw = loaded.get()](const QList<QQmlError>& warnings) {
+                       raw->qml_warnings.insert(raw->qml_warnings.end(), warnings.begin(),
+                                                warnings.end());
+                     });
+
+    loaded->engine.load(MainQmlUrl());
+    if (loaded->engine.rootObjects().empty()) {
+      std::ostringstream errors;
+      for (const auto& warning : loaded->qml_warnings) {
+        errors << warning.toString().toStdString() << '\n';
+      }
+      ADD_FAILURE() << errors.str();
+      return loaded;
+    }
+    loaded->window = qobject_cast<QQuickWindow*>(loaded->engine.rootObjects().front());
+    if (loaded->window) {
+      loaded->window->show();
+      loaded->window->requestActivate();
+    }
+    return loaded;
+  }
+
+  // Load Main.qml with a pre-built packed project (e.g. a seeded synthetic image)
+  // already loaded into the host. The project is loaded BEFORE the QML engine so
+  // the window inits with serviceReady == true (nav enabled, no welcome dialog).
+  auto LoadMainWindowWithPackedProject(const std::filesystem::path& packedPath)
+      -> std::unique_ptr<LoadedMainWindow> {
+    auto loaded = std::make_unique<LoadedMainWindow>();
+    alcedo::ui::AppTheme::RegisterFonts();
+    EXPECT_TRUE(LoadPackedProject(loaded->host, packedPath));
 
     alcedo::ui::AppTheme::SetEffectiveLanguageCode(
         loaded->language_manager.EffectiveLanguageCode());
@@ -1033,6 +1082,300 @@ TEST_F(WorkspaceShellTests, MainNavigationDisabledBeforeProjectLoad) {
   EXPECT_TRUE(editor_nav->isVisible());
   EXPECT_FALSE(library_nav->isEnabled());
   EXPECT_FALSE(editor_nav->isEnabled());
+}
+
+// ── Phase 4A-Fix: last-edited image restore, delete clears editor, nav visual
+// states, and library scroll/filter preservation ────────────────────────────
+
+TEST_F(WorkspaceShellTests, EditorNavButtonRestoresLastEditedImageAcrossLibraryRoundTrip) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  // Seed the library model so editorImageStillExists(lastEl) resolves in-view.
+  SeedLibraryThumbnails(loaded->host, 8);
+  ProcessEvents(80);
+
+  auto* router = loaded->host.workspace_router();
+  auto* session = loaded->host.editor_session();
+  ASSERT_NE(router, nullptr);
+  ASSERT_NE(session, nullptr);
+
+  // Open image A (element 1000 / image 2000) via the real router path; Open sets
+  // lastElementId/lastImageId.
+  router->OpenEditor(1000, 2000);
+  ProcessEvents(80);
+  ASSERT_EQ(router->workspace(), QStringLiteral("editor"));
+  ASSERT_TRUE(session->active());
+  ASSERT_TRUE(session->has_image());
+  ASSERT_EQ(session->element_id(), 1000u);
+  ASSERT_EQ(session->image_id(), 2000u);
+  ASSERT_EQ(session->last_element_id(), 1000u);
+  ASSERT_EQ(session->last_image_id(), 2000u);
+
+  // Real Library nav button: OpenLibrary finalizes the session but must keep
+  // lastElementId/lastImageId so re-entry can restore the image.
+  auto* library_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  ASSERT_NE(library_nav, nullptr);
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
+                    CenterOfItem(library_nav));
+  ProcessEvents(80);
+  EXPECT_EQ(router->workspace(), QStringLiteral("library"));
+  EXPECT_FALSE(session->active());
+  EXPECT_EQ(session->last_element_id(), 1000u);
+  EXPECT_EQ(session->last_image_id(), 2000u);
+
+  // Real Editor nav button: must restore image A, not open the empty state.
+  auto* editor_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  ASSERT_NE(editor_nav, nullptr);
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
+                    CenterOfItem(editor_nav));
+  ProcessEvents(80);
+  EXPECT_EQ(router->workspace(), QStringLiteral("editor"));
+  EXPECT_TRUE(session->active());
+  EXPECT_TRUE(session->has_image());
+  EXPECT_EQ(session->element_id(), 1000u);
+  EXPECT_EQ(session->image_id(), 2000u);
+  auto* empty = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorEmptyState"));
+  ASSERT_NE(empty, nullptr);
+  EXPECT_FALSE(empty->isVisible());
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, DeletingCurrentEditorImageDropsEditorToEmptyState) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  const auto seeded = CreateSeededPackedProject(temp_dir_);
+  ASSERT_TRUE(seeded.has_value());
+  const auto file_id = static_cast<uint>(seeded->file_id_);
+  const auto image_id = static_cast<uint>(seeded->image_id_);
+
+  auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  ProcessEvents(80);
+
+  auto* router = loaded->host.workspace_router();
+  auto* session = loaded->host.editor_session();
+  ASSERT_NE(router, nullptr);
+  ASSERT_NE(session, nullptr);
+
+  // Edit the seeded image; Open records it as the last-edited image.
+  router->OpenEditor(file_id, image_id);
+  ProcessEvents(80);
+  ASSERT_EQ(router->workspace(), QStringLiteral("editor"));
+  ASSERT_TRUE(session->active());
+  ASSERT_TRUE(session->has_image());
+  ASSERT_EQ(session->element_id(), file_id);
+  ASSERT_EQ(session->image_id(), image_id);
+  ASSERT_EQ(session->last_element_id(), file_id);
+  ASSERT_GT(loaded->host.library()->ShownCount(), 0);
+
+  // Drive the real QML delete entry: set pendingDeleteTargets (as the context
+  // menu / confirm dialog does) and invoke runDeleteTargets().
+  QVariantList targets;
+  targets.push_back(QVariantMap{{QStringLiteral("elementId"), file_id},
+                                {QStringLiteral("imageId"), image_id}});
+  ASSERT_TRUE(loaded->window->setProperty("pendingDeleteTargets",
+                                          QVariant::fromValue(targets)));
+  ASSERT_TRUE(QMetaObject::invokeMethod(loaded->window, "runDeleteTargets"));
+  ProcessEvents(500);
+
+  // Editor stays selected, drops to the empty state, and forgets the image.
+  EXPECT_EQ(router->workspace(), QStringLiteral("editor"));
+  EXPECT_TRUE(session->active());
+  EXPECT_FALSE(session->has_image());
+  EXPECT_EQ(session->element_id(), 0u);
+  EXPECT_EQ(session->image_id(), 0u);
+  EXPECT_EQ(session->last_element_id(), 0u);
+  auto* empty = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorEmptyState"));
+  ASSERT_NE(empty, nullptr);
+  EXPECT_TRUE(empty->isVisible());
+  // The delete (and its project snapshot) completed: the image is gone.
+  EXPECT_EQ(loaded->host.library()->ShownCount(), 0);
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, MainNavigationButtonsShowHoverPressAndFocusStates) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  ProcessEvents(50);
+
+  auto* library_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  auto* editor_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  ASSERT_NE(library_nav, nullptr);
+  ASSERT_NE(editor_nav, nullptr);
+
+  // Hover is driven by a HoverHandler on each button (see Main.qml): pointer
+  // handlers receive QTest::mouseMove on every QPA platform, so the hover tint
+  // is observable offscreen. Library nav is active in the library workspace, so
+  // press/release is a no-op and does not switch workspaces — safe for the press
+  // state.
+  EXPECT_EQ(library_nav->property("highlightLevel").toInt(), 0);
+  EXPECT_FALSE(library_nav->property("focusRingVisible").toBool());
+
+  // Hover → level 1 (subtle tint).
+  QTest::mouseMove(loaded->window, CenterOfItem(library_nav));
+  ProcessEvents(20);
+  EXPECT_EQ(library_nav->property("highlightLevel").toInt(), 1);
+
+  // Press → level 2 (stronger tint). down is set synchronously by the press.
+  QTest::mousePress(loaded->window, Qt::LeftButton, Qt::NoModifier,
+                    CenterOfItem(library_nav));
+  ProcessEvents(10);
+  EXPECT_EQ(library_nav->property("highlightLevel").toInt(), 2);
+
+  // Release → back to hover. Clicking the active library nav is a no-op.
+  QTest::mouseRelease(loaded->window, Qt::LeftButton, Qt::NoModifier,
+                      CenterOfItem(library_nav));
+  ProcessEvents(10);
+  EXPECT_EQ(library_nav->property("highlightLevel").toInt(), 1);
+
+  // Move away → back to baseline.
+  QTest::mouseMove(loaded->window, QPoint(5, 5));
+  ProcessEvents(20);
+  EXPECT_EQ(library_nav->property("highlightLevel").toInt(), 0);
+
+  // Keyboard focus → focus ring visible.
+  library_nav->forceActiveFocus();
+  ProcessEvents(10);
+  EXPECT_TRUE(library_nav->property("focusRingVisible").toBool());
+
+  // Editor nav: hover and focus (do not press — release would switch to editor).
+  EXPECT_EQ(editor_nav->property("highlightLevel").toInt(), 0);
+  QTest::mouseMove(loaded->window, CenterOfItem(editor_nav));
+  ProcessEvents(20);
+  EXPECT_EQ(editor_nav->property("highlightLevel").toInt(), 1);
+  QTest::mouseMove(loaded->window, QPoint(5, 5));
+  ProcessEvents(20);
+  EXPECT_EQ(editor_nav->property("highlightLevel").toInt(), 0);
+  editor_nav->forceActiveFocus();
+  ProcessEvents(10);
+  EXPECT_TRUE(editor_nav->property("focusRingVisible").toBool());
+
+  // No workspace switch happened during the interaction-state probe.
+  EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("library"));
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, LibraryScrollPositionSurvivesEditorRoundTrip) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  // Many thumbnails so the grid overflows and a non-zero contentY is valid.
+  SeedLibraryThumbnails(loaded->host, 80);
+  ProcessEvents(80);
+
+  auto* grid =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryThumbnailGridView"));
+  ASSERT_NE(grid, nullptr);
+  ProcessEvents(40);
+
+  // Scroll to a non-zero position via the real restore path; read back the
+  // shell-persisted value.
+  ASSERT_TRUE(QMetaObject::invokeMethod(grid, "restoreContentY",
+                                         Q_ARG(QVariant, QVariant(200.0))));
+  ProcessEvents(80);
+  const qreal persisted = loaded->window->property("libraryGridContentY").toReal();
+  ASSERT_GT(persisted, 0.0) << "scroll position did not take; grid layout not ready";
+
+  // Round-trip via the real nav buttons.
+  auto* editor_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  auto* library_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  ASSERT_NE(editor_nav, nullptr);
+  ASSERT_NE(library_nav, nullptr);
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(editor_nav));
+  ProcessEvents(80);
+  EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("editor"));
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(library_nav));
+  ProcessEvents(80);
+  EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("library"));
+
+  // The shell-persisted scroll value survives the round-trip (persistViewState
+  // wrote it on library teardown; it is not reset while the editor is open).
+  EXPECT_GT(loaded->window->property("libraryGridContentY").toReal(), 0.0);
+
+  auto* restored_grid =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryThumbnailGridView"));
+  ASSERT_NE(restored_grid, nullptr);
+  ProcessEvents(80);  // Qt.callLater(restoreScrollPosition) + layout settle
+  const qreal restored = restored_grid->property("contentY").toReal();
+  // The grid re-applied the scroll (not reset to the top) and stays within a
+  // row of the original — the grid may align the offset to its content origin.
+  EXPECT_GT(restored, 0.0);
+  EXPECT_NEAR(restored, persisted, 80.0);
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, LibraryFolderFilterSurvivesEditorRoundTrip) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  const auto seeded = CreateSeededPackedProject(temp_dir_);
+  ASSERT_TRUE(seeded.has_value());
+  const auto file_id = static_cast<uint>(seeded->file_id_);
+  const auto image_id = static_cast<uint>(seeded->image_id_);
+
+  auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  ProcessEvents(80);
+  ASSERT_GT(loaded->host.library()->ShownCount(), 0);
+
+  // Set a non-default filter: create an album, add the image, select the album.
+  loaded->host.folders()->CreateFolder(QStringLiteral("AlbumA"));
+  ProcessEvents(500);
+  const uint album_id =
+      FindFolderId(loaded->host.folders()->Folders(), QStringLiteral("AlbumA"));
+  ASSERT_NE(album_id, 0u);
+
+  QVariantList targets;
+  targets.push_back(QVariantMap{{QStringLiteral("elementId"), file_id},
+                                {QStringLiteral("imageId"), image_id}});
+  const QVariantMap add_result =
+      loaded->host.images()->AddImagesToFolder(targets, album_id);
+  ASSERT_TRUE(add_result.value(QStringLiteral("success")).toBool());
+  EXPECT_EQ(add_result.value(QStringLiteral("addedCount")).toInt(), 1);
+
+  loaded->host.folders()->SelectFolder(album_id);
+  ProcessEvents(500);
+  ASSERT_EQ(loaded->host.library()->ShownCount(), 1);
+
+  // Round-trip via the real nav buttons.
+  auto* editor_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  auto* library_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  ASSERT_NE(editor_nav, nullptr);
+  ASSERT_NE(library_nav, nullptr);
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(editor_nav));
+  ProcessEvents(80);
+  EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("editor"));
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(library_nav));
+  ProcessEvents(80);
+  EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("library"));
+
+  // The album filter survives: still selected, and the library still shows the
+  // album's single image.
+  EXPECT_EQ(loaded->host.folders()->CurrentFolderId(), album_id);
+  EXPECT_EQ(loaded->host.library()->ShownCount(), 1);
+  EXPECT_NE(loaded->window->findChild<QObject*>(QStringLiteral("libraryWorkspace")), nullptr);
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
 }
 
 }  // namespace

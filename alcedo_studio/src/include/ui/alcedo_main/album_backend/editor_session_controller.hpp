@@ -32,6 +32,11 @@ class EditorSessionController final : public QObject {
   Q_PROPERTY(bool hasImage READ has_image NOTIFY StateChanged)
   Q_PROPERTY(uint elementId READ element_id NOTIFY StateChanged)
   Q_PROPERTY(uint imageId READ image_id NOTIFY StateChanged)
+  // Last image opened with a non-zero id. Survives Close/Finalize so re-entering
+  // the editor from the library can restore the same image (Phase 4A-Fix). Cleared
+  // by clearLastEditedImage() when the image is deleted or the project switches.
+  Q_PROPERTY(uint lastElementId READ last_element_id NOTIFY LastEditedImageChanged)
+  Q_PROPERTY(uint lastImageId READ last_image_id NOTIFY LastEditedImageChanged)
   // Monotonic counter advanced on every Open, including A→B→A reopens. Distinct
   // from imageId so the viewport can reject stale frames from a prior session.
   Q_PROPERTY(qulonglong sessionGeneration READ session_generation NOTIFY StateChanged)
@@ -49,6 +54,8 @@ class EditorSessionController final : public QObject {
   [[nodiscard]] bool has_image() const { return active_ && element_id_ > 0 && image_id_ > 0; }
   [[nodiscard]] uint element_id() const { return element_id_; }
   [[nodiscard]] uint image_id() const { return image_id_; }
+  [[nodiscard]] uint last_element_id() const { return last_element_id_; }
+  [[nodiscard]] uint last_image_id() const { return last_image_id_; }
   [[nodiscard]] qulonglong session_generation() const { return session_generation_; }
   [[nodiscard]] bool filmstrip_collapsed() const { return filmstrip_collapsed_; }
   [[nodiscard]] double filmstrip_expanded_height() const { return filmstrip_expanded_height_; }
@@ -59,6 +66,9 @@ class EditorSessionController final : public QObject {
   Q_INVOKABLE void Open(uint elementId = 0, uint imageId = 0);
   Q_INVOKABLE void Close();
   void Finalize(bool persistChanges);
+  // Forget the last-edited image so re-entering the editor does not resurrect a
+  // deleted image or one from a prior project (Phase 4A-Fix).
+  Q_INVOKABLE void clearLastEditedImage();
 
   // Bind/unbind the production EditorViewportItem for this workspace instance.
   // Bind on mount and after every image Open while the same viewport lives.
@@ -81,6 +91,7 @@ class EditorSessionController final : public QObject {
   void StateChanged();
   void FilmstripUiChanged();
   void PresentationBindingChanged();
+  void LastEditedImageChanged();
 
  private:
   void LoadFilmstripUiPrefs();
@@ -90,6 +101,8 @@ class EditorSessionController final : public QObject {
   bool              active_ = false;
   uint              element_id_ = 0;
   uint              image_id_ = 0;
+  uint              last_element_id_ = 0;
+  uint              last_image_id_ = 0;
   qulonglong        session_generation_ = 0;
   bool              filmstrip_collapsed_ = false;
   double            filmstrip_expanded_height_ = 128.0;

@@ -491,6 +491,52 @@ ApplicationWindow {
         }
     }
 
+    // Phase 4A-Fix: a deleted image is only "still in the library" if the
+    // current folder's thumbnail model still lists it. The check is deliberately
+    // folder-scoped (the editor filmstrip will be the current library list, so a
+    // restored image must be in view); a global existence query belongs with the
+    // Phase 4E first-frame loader.
+    function editorImageStillExists(elementId) {
+        if (!appModules || !appModules.library || !appModules.library.thumbnailModel) {
+            return false
+        }
+        return appModules.library.thumbnailModel.rowByElementId(Number(elementId)) >= 0
+    }
+
+    // Phase 4A-Fix: deleting the image currently loaded in the editor must end
+    // that image's session, clear its id, and drop the editor to the empty state
+    // while staying in the editor workspace. It also forgets the last-edited
+    // image so re-entering the editor does not resurrect a deleted image.
+    function handleEditorImageDeleted(deletedIds) {
+        if (!appModules.editorSession || !appModules.workspaceRouter) {
+            return
+        }
+        // Only the editor workspace owns the live edit session; a delete issued
+        // from the library must not touch the (empty) editor state.
+        if (appModules.workspaceRouter.workspace !== "editor") {
+            return
+        }
+        const editorElementId = Number(appModules.editorSession.elementId || 0)
+        if (editorElementId <= 0) {
+            return
+        }
+        let touchedEditor = false
+        for (let i = 0; i < deletedIds.length; ++i) {
+            if (Number(deletedIds[i]) === editorElementId) {
+                touchedEditor = true
+                break
+            }
+        }
+        if (!touchedEditor) {
+            return
+        }
+        // openEditor(0,0) while already in editor finalizes the active session
+        // and reopens with no image (active + hasImage=false), so the empty-state
+        // prompt shows without tearing the editor workspace down.
+        appModules.editorSession.clearLastEditedImage()
+        appModules.workspaceRouter.openEditor(0, 0)
+    }
+
     function runDeleteTargets() {
         if (!root.pendingDeleteTargets || root.pendingDeleteTargets.length === 0) {
             return
@@ -509,6 +555,7 @@ ApplicationWindow {
                     break
                 }
             }
+            root.handleEditorImageDeleted(deletedIds)
         }
         root.pendingDeleteTargets = []
     }
@@ -1320,12 +1367,36 @@ ApplicationWindow {
                             enabled: workspaceSwitch.navEnabled
                             activeFocusOnTab: true
                             readonly property bool isActive: appModules.workspaceRouter.workspace === "library"
+                            // Phase 4A-Fix: observable interaction states. The active
+                            // workspace is still shown by the sliding accent thumb
+                            // (wsThumb); these drive a subtle hover/press tint and a
+                            // keyboard-focus ring so hover, press, and focus each
+                            // visibly change the button, not only the click result.
+                            // Hover is tracked by a HoverHandler (a pointer handler)
+                            // rather than the Button's built-in hovered: pointer
+                            // handlers receive mouse-move events on every QPA platform,
+                            // so the hover tint is testable offscreen and consistent.
+                            HoverHandler { id: libraryNavHover }
+                            readonly property int highlightLevel: !enabled ? 0 : (down ? 2 : (libraryNavHover.hovered ? 1 : 0))
+                            readonly property bool focusRingVisible: enabled && activeFocus
                             icon.source: "qrc:/panel_icons/layout-grid.svg"
                             icon.width: 20
                             icon.height: 20
                             icon.color: !enabled ? root.withAlpha(root.colText, 0.30) : root.colText
                             Material.foreground: icon.color
-                            background: Rectangle { color: "transparent" }
+                            background: Rectangle {
+                                // Semi-transparent so the active accent thumb beneath
+                                // the segment still shows through on hover/press.
+                                color: !libraryNavButton.enabled ? "transparent"
+                                      : libraryNavButton.highlightLevel === 2
+                                        ? root.withAlpha(root.colHover, 0.42)
+                                        : libraryNavButton.highlightLevel === 1
+                                          ? root.withAlpha(root.colHover, 0.22)
+                                          : "transparent"
+                                border.width: libraryNavButton.focusRingVisible ? 1 : 0
+                                border.color: root.withAlpha(root.colAccentPrimary, 0.60)
+                                radius: 4
+                            }
                             ToolTip.visible: hovered
                             ToolTip.text: qsTr("Library")
                             Accessible.name: qsTr("Library")
@@ -1348,21 +1419,45 @@ ApplicationWindow {
                             enabled: workspaceSwitch.navEnabled
                             activeFocusOnTab: true
                             readonly property bool isActive: appModules.workspaceRouter.workspace === "editor"
+                            HoverHandler { id: editorNavHover }
+                            readonly property int highlightLevel: !enabled ? 0 : (down ? 2 : (editorNavHover.hovered ? 1 : 0))
+                            readonly property bool focusRingVisible: enabled && activeFocus
                             icon.source: "qrc:/panel_icons/adjustments.svg"
                             icon.width: 20
                             icon.height: 20
                             icon.color: !enabled ? root.withAlpha(root.colText, 0.30) : root.colText
                             Material.foreground: icon.color
-                            background: Rectangle { color: "transparent" }
+                            background: Rectangle {
+                                color: !editorNavButton.enabled ? "transparent"
+                                      : editorNavButton.highlightLevel === 2
+                                        ? root.withAlpha(root.colHover, 0.42)
+                                        : editorNavButton.highlightLevel === 1
+                                          ? root.withAlpha(root.colHover, 0.22)
+                                          : "transparent"
+                                border.width: editorNavButton.focusRingVisible ? 1 : 0
+                                border.color: root.withAlpha(root.colAccentPrimary, 0.60)
+                                radius: 4
+                            }
                             ToolTip.visible: hovered
                             ToolTip.text: qsTr("Editor")
                             Accessible.name: qsTr("Editor")
                             Accessible.role: Accessible.Button
-                            // Editor activates with no selected image; clicking while
-                            // already active is a no-op so the session is preserved.
+                            // Editor activates with no selected image unless the user
+                            // was just editing one: re-entry restores the last-edited
+                            // image when it still exists, so an image -> library ->
+                            // editor round-trip returns to the same image. Clicking
+                            // while already active is a no-op so the session is
+                            // preserved.
                             onClicked: {
                                 if (appModules.workspaceRouter.workspace !== "editor") {
-                                    appModules.workspaceRouter.openEditor(0, 0)
+                                    const lastEl = Number(appModules.editorSession.lastElementId || 0)
+                                    const lastImg = Number(appModules.editorSession.lastImageId || 0)
+                                    if (lastEl > 0 && lastImg > 0
+                                            && root.editorImageStillExists(lastEl)) {
+                                        appModules.workspaceRouter.openEditor(lastEl, lastImg)
+                                    } else {
+                                        appModules.workspaceRouter.openEditor(0, 0)
+                                    }
                                 }
                             }
                         }

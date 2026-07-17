@@ -32,6 +32,15 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
   active_ = true;
   element_id_ = elementId;
   image_id_ = imageId;
+  // Remember the last real image so re-entering the editor from the library can
+  // restore it (Phase 4A-Fix). Close/Finalize never touch this; only an explicit
+  // clearLastEditedImage() (delete / project switch) forgets it.
+  if (elementId > 0 && imageId > 0 &&
+      (last_element_id_ != elementId || last_image_id_ != imageId)) {
+    last_element_id_ = elementId;
+    last_image_id_ = imageId;
+    emit LastEditedImageChanged();
+  }
   // Always advance so A→B→A cannot reuse a generation accepted by the viewport.
   ++session_generation_;
   // Keep the legacy controller identity fields aligned for modules that still
@@ -66,6 +75,15 @@ void EditorSessionController::Finalize(bool persistChanges) {
   // OpenEditor A→B calls Finalize then Open while the same QML viewport lives.
   // Unbind happens on viewport Component.onDestruction when the workspace unloads.
   Close();
+}
+
+void EditorSessionController::clearLastEditedImage() {
+  if (last_element_id_ == 0 && last_image_id_ == 0) {
+    return;
+  }
+  last_element_id_ = 0;
+  last_image_id_ = 0;
+  emit LastEditedImageChanged();
 }
 
 void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {

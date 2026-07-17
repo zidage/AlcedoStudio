@@ -32,6 +32,9 @@ Item {
     readonly property color colButtonSecondary: theme ? theme.colButtonSecondary : "#3A3F44"
     readonly property color colButtonSecondaryBorder: theme ? theme.colButtonSecondaryBorder : Qt.rgba(1, 1, 1, 0.12)
     readonly property color colButtonHighlight: theme ? theme.colButtonHighlight : "#E9C46A"
+    // CollectionsPanel reads theme.colDanger for the delete-folder button tint
+    // when a non-root folder is selected; mirror Main's colDanger so it resolves.
+    readonly property color colDanger: theme ? theme.colDanger : appTheme.dangerColor
     readonly property string dataFontFamily: theme ? theme.dataFontFamily : appTheme.dataFontFamily
     readonly property string headlineFontFamily: theme ? theme.headlineFontFamily : appTheme.headlineFontFamily
     readonly property int controlRadius: theme ? theme.controlRadius : 10

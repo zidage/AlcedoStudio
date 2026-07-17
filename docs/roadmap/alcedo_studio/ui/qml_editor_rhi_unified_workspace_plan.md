@@ -980,6 +980,54 @@ Implementation closeout:
   survival. `WorkspaceShellTest` (20) and `MainQmlWorkflowTest` (1) pass with no QML warnings;
   `git diff --check` is clean and edited files remain LF.
 
+### Phase 4A-Fix
+
+**Status: complete (2026-07-17).**
+
+审核范围是 `2b4f9feb..e08dec38` 的遗留项。下列问题已全部修正；`WorkspaceShellTest`
+（原 20 + 新增 5 = 25）与 `AlbumBackendImageDeleteTest`（重构为共享 seeded-project 夹具，
+仍全部通过）通过，无 QML warning，`git diff --check` 干净，所有改动文件保持 LF。新增测试均
+GPU-free（合成 seeded 项目 / 直接注入缩略图模型），可在非 GPU CI 任务运行。
+
+Implementation closeout:
+
+- `EditorSessionController` 记住上次编辑的图片：`lastElementId`/`lastImageId` 在 `Open(>0,>0)`
+  时设置，`Close`/`Finalize` 不触碰，新增 `Q_INVOKABLE clearLastEditedImage()` 与
+  `LastEditedImageChanged` 信号。项目切换/关闭经 `finalize_editor_session` 钩子清除该记忆；
+  正常 Library 往返（`OpenLibrary()`）不清除，所以再次进入编辑器能回到同一张图片。
+- `editorNavButton.onClicked` 在 `workspace !== "editor"` 时读取 `lastElementId`/`lastImageId`；
+  两者都 >0 且 `editorImageStillExists(el)`（`thumbnailModel.rowByElementId`）成立则
+  `openEditor(lastEl,lastImg)`，否则 `openEditor(0,0)`。存在性检查刻意限制在当前文件夹视图
+  （与未来 filmstrip = 当前图库列表一致；全局存在性查询留给 Phase 4E 首帧加载）；删除路径与
+  项目切换会清除记忆，所以"只有图片不存在时才显示空白提示"在常见路径上成立。
+- `Main.qml` 新增 `handleEditorImageDeleted(deletedIds)`，由 `runDeleteTargets()` 在清理
+  selection/queue/focusedImage 之后调用：当 `workspace === "editor"` 且某被删 id 等于
+  `editorSession.elementId` 时，先 `clearLastEditedImage()` 再 `openEditor(0,0)`——在编辑器内
+  对已编辑会话 `Finalize` 后以空图重开（`active==true`、`hasImage==false`、路由保持 `"editor"`，
+  不触发 Loader 重建），显示"选择一张图片进行编辑"空白提示。
+- 两个导航按钮新增 `readonly property int highlightLevel`（`!enabled?0 : down?2 : hover.hovered?1 : 0`）
+  与 `readonly property bool focusRingVisible`（`enabled && activeFocus`），驱动半透明
+  hover/press 背景色与 1px 强调色焦点环；活跃工作区仍由滑动的 `wsThumb` 指示，`isActive` 不变。
+  hover 由 `HoverHandler`（指针处理器）跟踪而非 Button 内建 `hovered`——指针处理器在所有 QPA
+  平台（含 offscreen CI）都收到 mouse-move 事件，使 hover 色调可测且一致；Button 内建
+  `hovered` 仍驱动 ToolTip。
+- `LibraryWorkspace.qml` 补上缺失的 `colDanger`（镜像 Main 的 `colDanger`）。CollectionsPanel 在
+  选中非根文件夹时用 `withAlpha(theme.colDanger, …)` 渲染删除相册按钮底色；原先 LibraryWorkspace
+  未暴露 `colDanger` 导致 `Cannot read property 'r' of undefined` warning。该潜在问题由
+  `LibraryFolderFilterSurvivesEditorRoundTrip` 暴露并修复。
+- seeded-project 测试夹具抽取为共享头 `tests/ui/album_backend_seeded_project_fixture.hpp`
+  （`CreateSeededPackedProject`/`LoadPackedProject`/`FindFolderId` 等内联函数），
+  `workspace_shell_test.cpp` 与 `album_backend_image_delete_test.cpp` 共用，避免重复。
+  `SeedLibraryThumbnails` 的缩略图数据 URL 改为空串（占位卡片，无解码），避免空 base64 触发
+  async `QQuickImage` 解码失败 warning。
+
+| 问题 | 修复 |
+| --- | --- |
+| 从一张正在编辑的图片切到图库，再点顶部的编辑器按钮，原来的图片不会恢复。 | `EditorSessionController` 记住上次编辑图片；`editorNavButton` 重入时经 `editorImageStillExists` 还原。新增 `EditorNavButtonRestoresLastEditedImageAcrossLibraryRoundTrip`：`OpenEditor(1000,2000)` → 点 `libraryNavButton` → 点 `editorNavButton`，断言仍为 1000/2000。 |
+| 当前图片被删除后，新编辑器不会转为空白状态。 | `runDeleteTargets()` 调 `handleEditorImageDeleted()`：被删 id 等于当前 `editorSession.elementId` 时 `clearLastEditedImage()` + `openEditor(0,0)`，停留编辑器显示空白提示。新增 `DeletingCurrentEditorImageDropsEditorToEmptyState`：真实 `runDeleteTargets` 入口删 seeded 图片，断言 `workspace=="editor"`、`has_image()==false`、`last_element_id()==0`、`ShownCount()==0`。 |
+| 顶部两个导航按钮没有完整的状态反馈。 | 两按钮新增 `highlightLevel`/`focusRingVisible`，hover 经 `HoverHandler`、press 经 `down`、focus 经 `activeFocus`，驱动 hover/press 背景色与焦点环（活跃仍由 `wsThumb` 指示）。新增 `MainNavigationButtonsShowHoverPressAndFocusStates`：`QTest::mouseMove`/`mousePress`/`forceActiveFocus` 逐一进入 hover(1)/press(2)/focus(ring) 并断言外观状态确实变化。 |
+| 图库状态保留只测了缩放/检查面板，没测滚动位置和筛选条件。 | 新增 `LibraryScrollPositionSurvivesEditorRoundTrip`（seed 80 缩略图、`restoreContentY(200)`、真实按钮往返、断言 shell `libraryGridContentY` 保持非零且 grid `contentY` 回到 persisted 一个行高内）与 `LibraryFolderFilterSurvivesEditorRoundTrip`（seeded 项目 + AlbumA、选相册、往返、断言 `currentFolderId()==albumId` 且 `ShownCount()==1`）。 |
+
 ### Phase 4B - Restore editor desktop ordering and History/Versions navbar
 
 Deliverables:

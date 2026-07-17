@@ -113,6 +113,11 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
         if (editor && editor->editor_active()) {
           editor->FinalizeEditorSession(true);
         }
+        // Forget the last-edited image so re-entering the editor in the next
+        // project does not restore an image that belongs to the old project.
+        if (editor_session) {
+          editor_session->clearLastEditedImage();
+        }
         if (workspace_router) {
           // OpenLibrary finalizes an active EditorSessionController session.
           workspace_router->OpenLibrary();
