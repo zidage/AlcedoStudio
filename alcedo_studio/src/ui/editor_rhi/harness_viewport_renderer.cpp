@@ -272,8 +272,7 @@ auto HarnessViewportRenderer::ensureSharedTarget(int width, int height) -> bool 
     present_.texture_handle = reinterpret_cast<std::uintptr_t>(present_.d3d11_texture.Get());
     present_.width          = width;
     present_.height         = height;
-    present_.lifetime_token = std::shared_ptr<const void>(
-        reinterpret_cast<const void*>(present_.texture_handle), [](const void*) {});
+    present_.lifetime_token = std::make_shared<LeaseLifetimeToken>();
     return true;
 #else
     return false;
@@ -330,8 +329,7 @@ auto HarnessViewportRenderer::ensureSharedTarget(int width, int height) -> bool 
     present_.texture_handle = static_cast<std::uintptr_t>(present_.gl_texture);
     present_.width          = width;
     present_.height         = height;
-    present_.lifetime_token = std::shared_ptr<const void>(
-        reinterpret_cast<const void*>(present_.texture_handle), [](const void*) {});
+    present_.lifetime_token = std::make_shared<LeaseLifetimeToken>();
     return true;
 #else
     return false;
@@ -590,10 +588,23 @@ void HarnessViewportRenderer::render(QRhiCommandBuffer* cb) {
   // Publish completed lease (producer side done).
   completed_lease_.target.backend       = backend_;
   completed_lease_.target.handle_kind   = LeaseHandleKindForBackend(backend_);
+  completed_lease_.target.writable_kind = LeaseWritableKindForBackend(backend_);
   completed_lease_.target.pixel_format  = LeasePixelFormat::Rgba32f;
   completed_lease_.target.dimensions    = {present_.width, present_.height};
-  completed_lease_.target.generation    = {1, 1, 1};
+  completed_lease_.target.generation    = {1, 1, 1, 1};
   completed_lease_.target.native_handle = present_.texture_handle;
+  completed_lease_.target.writable_resource =
+#if defined(_WIN32) && defined(HAVE_CUDA)
+      backend_ == EditorBackend::Cuda
+          ? reinterpret_cast<std::uintptr_t>(present_.image_array)
+          :
+#endif
+#if defined(HAVE_OPENCL)
+      backend_ == EditorBackend::OpenCl
+          ? reinterpret_cast<std::uintptr_t>(present_.opencl_image)
+          :
+#endif
+          present_.texture_handle;
   completed_lease_.target.lifetime_token = present_.lifetime_token;
   completed_lease_.generation           = completed_lease_.target.generation;
   completed_lease_.producer_complete    = true;

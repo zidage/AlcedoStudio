@@ -24,11 +24,11 @@ namespace {
 
 constexpr const char* kVertexShaderResource = ":/shaders/editor_rhi/editor_viewport.vert.qsb";
 constexpr const char* kFragmentShaderResource = ":/shaders/editor_rhi/editor_viewport.frag.qsb";
-constexpr int kTargetPoolSize = 3;
+constexpr int kDefaultPoolSize = 3;
 
 auto BackendForRhi(QRhi* rhi) -> EditorBackend {
   if (!rhi) {
-    return EditorBackend::Cuda;
+    return ActiveEditorBackend();
   }
   switch (rhi->backend()) {
     case QRhi::OpenGLES2:
@@ -39,30 +39,6 @@ auto BackendForRhi(QRhi* rhi) -> EditorBackend {
     default:
       return EditorBackend::Cuda;
   }
-}
-
-auto LayerForFrameRole(FrameRole role) -> EditorViewportRenderer::LayerId {
-  switch (role) {
-    case FrameRole::InteractivePrimary:
-      return EditorViewportRenderer::LayerId::InteractivePrimary;
-    case FrameRole::QualityBase:
-      return EditorViewportRenderer::LayerId::QualityBase;
-    case FrameRole::DetailPatch:
-      return EditorViewportRenderer::LayerId::DetailPatch;
-  }
-  return EditorViewportRenderer::LayerId::InteractivePrimary;
-}
-
-auto LeaseLayerForFrameRole(FrameRole role) -> LeaseFrameLayer {
-  switch (role) {
-    case FrameRole::InteractivePrimary:
-      return LeaseFrameLayer::InteractivePrimary;
-    case FrameRole::QualityBase:
-      return LeaseFrameLayer::QualityBase;
-    case FrameRole::DetailPatch:
-      return LeaseFrameLayer::DetailPatch;
-  }
-  return LeaseFrameLayer::InteractivePrimary;
 }
 
 auto FrameMetadata(const CompletedFrameLease& frame) -> FramePreviewMetadata {
@@ -84,18 +60,20 @@ auto FrameMetadata(const CompletedFrameLease& frame) -> FramePreviewMetadata {
   return metadata;
 }
 
+auto ToFramePresentationMode(LeasePresentationMode mode) -> FramePresentationMode {
+  return mode == LeasePresentationMode::RoiFrame ? FramePresentationMode::RoiFrame
+                                                 : FramePresentationMode::FullFrame;
+}
+
 auto BuildNormalizedRoi(const std::optional<ViewportRenderRegion>& region)
     -> std::optional<FrameRoiRect> {
-  if (!region.has_value() || region->reference_width_ <= 0 ||
-      region->reference_height_ <= 0) {
+  if (!region.has_value() || region->reference_width_ <= 0 || region->reference_height_ <= 0) {
     return std::nullopt;
   }
   return FrameRoiRect{
-      std::clamp(static_cast<float>(region->x_) /
-                     static_cast<float>(region->reference_width_),
+      std::clamp(static_cast<float>(region->x_) / static_cast<float>(region->reference_width_),
                  0.0f, 1.0f),
-      std::clamp(static_cast<float>(region->y_) /
-                     static_cast<float>(region->reference_height_),
+      std::clamp(static_cast<float>(region->y_) / static_cast<float>(region->reference_height_),
                  0.0f, 1.0f),
       std::clamp(region->scale_x_, 1.0e-4f, 1.0f),
       std::clamp(region->scale_y_, 1.0e-4f, 1.0f),
@@ -124,10 +102,10 @@ void DestroyRhi(T*& resource) {
 EditorViewportRenderer::EditorViewportRenderer() = default;
 
 EditorViewportRenderer::~EditorViewportRenderer() {
+  // Release only this renderer's QRhi wrappers and adapter-owned natives that
+  // were queued for release. Never permanently shut down the shared broker —
+  // scene-graph recreation must continue to publish targets.
   releaseResources();
-  if (broker_) {
-    broker_->Shutdown();
-  }
   releaseBrokerTargets();
   adapter_.reset();
 }
@@ -152,35 +130,22 @@ auto EditorViewportRenderer::loadShader(const char* path) const -> QShader {
   return QShader::fromSerialized(file.readAll());
 }
 
-void EditorViewportRenderer::destroyResource(QRhiTexture*& resource) {
-  DestroyRhi(resource);
-}
-
-void EditorViewportRenderer::destroyResource(QRhiBuffer*& resource) {
-  DestroyRhi(resource);
-}
-
-void EditorViewportRenderer::destroyResource(QRhiSampler*& resource) {
-  DestroyRhi(resource);
-}
-
+void EditorViewportRenderer::destroyResource(QRhiTexture*& resource) { DestroyRhi(resource); }
+void EditorViewportRenderer::destroyResource(QRhiBuffer*& resource) { DestroyRhi(resource); }
+void EditorViewportRenderer::destroyResource(QRhiSampler*& resource) { DestroyRhi(resource); }
 void EditorViewportRenderer::destroyResource(QRhiShaderResourceBindings*& resource) {
   DestroyRhi(resource);
 }
-
 void EditorViewportRenderer::destroyResource(QRhiGraphicsPipeline*& resource) {
   DestroyRhi(resource);
 }
 
 void EditorViewportRenderer::releaseLayer(LayerState& layer) {
-  // QRhi must drop its imported wrapper before the adapter can release the
-  // underlying native object. This ordering is the central lifetime rule of
-  // the phase-2 broker boundary.
   destroyResource(layer.texture);
   if (layer.imported) {
     NativeResourceCounters::Instance().OnDestroyImportedQRhiTexture();
   }
-  if (layer.direct_frame.valid() && broker_) {
+  if (layer.direct_frame.target.valid() && broker_) {
     broker_->CompleteRendererConsumption(layer.direct_frame);
   }
   layer = {};
@@ -195,6 +160,8 @@ void EditorViewportRenderer::releaseBrokerTargets() {
     return;
   }
   for (const auto& lease : released) {
+    // Prefer waiting for dual-sided completion; cancelled idle targets still
+    // destroy once producer_complete was stamped by the broker.
     adapter_->DestroyTarget(lease);
   }
 }
@@ -213,10 +180,10 @@ void EditorViewportRenderer::releaseResources() {
   bound_primary_texture_ = nullptr;
   bound_detail_texture_ = nullptr;
   static_upload_pending_ = false;
-  target_size_ = {};
+  default_pool_size_ = {};
   target_generation_ = 0;
-  image_generation_ = 0;
   if (broker_) {
+    // Drop current pool for this renderer; do not shut the broker down.
     broker_->InvalidateTargetGeneration();
   }
   releaseBrokerTargets();
@@ -231,12 +198,18 @@ void EditorViewportRenderer::initialize(QRhiCommandBuffer* /*command_buffer*/) {
   releaseResources();
   rhi_ = next_rhi;
   backend_ = BackendForRhi(rhi_);
+  // Prefer the process-wide startup backend when it matches the RHI so OpenCL
+  // targets are not rejected by a CUDA-default broker.
+  if (HasActiveEditorBackend() && ActiveEditorBackend() == backend_) {
+    // ok
+  }
   adapter_ = MakeLeaseTargetAdapter(backend_);
   if (item_) {
     item_->setBackendName(QString::fromUtf8(ToString(backend_)));
     item_->setStatusText(QStringLiteral("render thread initialized (%1)")
                              .arg(QString::fromUtf8(QtGraphicsApiName(backend_))));
   }
+  content_dirty_ = true;
 }
 
 void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
@@ -244,33 +217,35 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
   if (!item_) {
     return;
   }
+  item_->update_pending_ = false;
+
   if (broker_ != item_->broker()) {
     broker_ = item_->broker();
     image_generation_ = 0;
+    image_identity_ = 0;
     target_generation_ = 0;
-    target_size_ = {};
+    default_pool_size_ = {};
+    content_dirty_ = true;
   }
 
-  view_state_ = item_->viewStateSnapshot();
-  auto pending = item_->takePendingFrames();
-  for (auto& frame : pending) {
-    host_frames_.push_back(std::move(frame));
-  }
-  while (host_frames_.size() > 8) {
-    host_frames_.pop_front();
-  }
+  const auto next_view = item_->viewStateSnapshot();
+  view_state_ = next_view;
+  content_dirty_ = true;
 
   const auto next_image_generation = item_->imageGeneration();
-  if (next_image_generation != image_generation_) {
+  const auto next_image_identity = item_->imageIdentity();
+  if (next_image_generation != image_generation_ || next_image_identity != image_identity_) {
     for (auto& layer : layers_) {
       releaseLayer(layer);
     }
     if (broker_) {
-      broker_->InvalidateImageGeneration(next_image_generation);
+      broker_->InvalidateImageGeneration(next_image_generation, next_image_identity);
     }
     releaseBrokerTargets();
     image_generation_ = next_image_generation;
-    target_size_ = {};
+    image_identity_ = next_image_identity;
+    default_pool_size_ = {};
+    content_dirty_ = true;
   }
 }
 
@@ -282,6 +257,7 @@ void EditorViewportRenderer::ensureStaticResources(QRhiRenderTarget* render_targ
   if (render_target_ != render_target) {
     destroyResource(pipeline_);
     render_target_ = render_target;
+    content_dirty_ = true;
   }
 
   if (!placeholder_texture_) {
@@ -300,8 +276,8 @@ void EditorViewportRenderer::ensureStaticResources(QRhiRenderTarget* render_targ
   }
   if (!detail_sampler_) {
     detail_sampler_ = rhi_->newSampler(QRhiSampler::Nearest, QRhiSampler::Nearest,
-                                        QRhiSampler::None, QRhiSampler::ClampToEdge,
-                                        QRhiSampler::ClampToEdge);
+                                       QRhiSampler::None, QRhiSampler::ClampToEdge,
+                                       QRhiSampler::ClampToEdge);
     detail_sampler_->create();
   }
   if (!uniform_buffer_) {
@@ -337,32 +313,93 @@ void EditorViewportRenderer::ensureStaticResources(QRhiRenderTarget* render_targ
   }
 }
 
-void EditorViewportRenderer::ensureTargetPool(const QSize& size) {
-  if (!broker_ || !adapter_ || image_generation_ == 0 || size.width() <= 0 ||
-      size.height() <= 0) {
+void EditorViewportRenderer::fulfillTargetRequests() {
+  if (!broker_ || !adapter_ || image_generation_ == 0) {
     return;
   }
-  const auto diagnostics = broker_->DiagnosticsSnapshot();
-  if (target_size_ == size && diagnostics.live_target_count > 0 &&
-      diagnostics.target_generation == target_generation_ &&
-      diagnostics.consumer_available) {
+  auto requests = broker_->DrainTargetRequests();
+  if (requests.empty()) {
     return;
   }
 
-  for (auto& layer : layers_) {
-    releaseLayer(layer);
-  }
-  broker_->InvalidateTargetGeneration();
-  releaseBrokerTargets();
-  target_generation_ = broker_->CurrentTargetGeneration();
   if (target_generation_ == 0) {
     broker_->InvalidateTargetGeneration();
     target_generation_ = broker_->CurrentTargetGeneration();
   }
 
-  for (int i = 0; i < kTargetPoolSize; ++i) {
+  // Deduplicate size+layer pairs for this pass.
+  std::vector<WritableTargetRequest> unique;
+  for (const auto& request : requests) {
+    if (!request.valid() || request.image_generation != image_generation_) {
+      continue;
+    }
+    if (request.image_identity != 0 && request.image_identity != image_identity_) {
+      continue;
+    }
+    const auto exists = std::any_of(unique.begin(), unique.end(), [&](const auto& other) {
+      return other.dimensions == request.dimensions && other.layer == request.layer;
+    });
+    if (!exists) {
+      unique.push_back(request);
+    }
+  }
+
+  for (const auto& request : unique) {
+    // Keep a small pool per requested size so multi-layer / multi-submit load
+    // does not exhaust targets.
+    for (int i = 0; i < kDefaultPoolSize; ++i) {
+      TargetGeneration generation{target_generation_, image_generation_,
+                                  request.layer_generation, image_identity_};
+      auto lease = adapter_->CreateTarget(
+          rhi_, QSize(request.dimensions.width, request.dimensions.height), generation,
+          request.layer);
+      if (!lease.has_value()) {
+        if (item_) {
+          item_->setStatusText(QString::fromStdString(adapter_->lastError()));
+        }
+        break;
+      }
+      if (!broker_->PublishWritableTarget(*lease)) {
+        adapter_->DestroyTarget(*lease);
+      } else {
+        content_dirty_ = true;
+      }
+    }
+  }
+  publishDiagnosticsIfChanged();
+}
+
+void EditorViewportRenderer::ensureDefaultTargetPool(const QSize& size) {
+  if (!broker_ || !adapter_ || image_generation_ == 0 || size.width() <= 0 ||
+      size.height() <= 0) {
+    return;
+  }
+  const auto diagnostics = broker_->DiagnosticsSnapshot();
+  if (!diagnostics.consumer_available) {
+    return;
+  }
+  if (target_generation_ == 0) {
+    if (diagnostics.target_generation == 0) {
+      broker_->InvalidateTargetGeneration();
+    }
+    target_generation_ = broker_->CurrentTargetGeneration();
+  }
+
+  // Top up by Available count. Hide/minimize releases Available targets while
+  // RendererConsuming ones may linger with release_when_idle; live count alone
+  // would skip recreation and starve the producer forever.
+  const int to_create =
+      std::max(0, kDefaultPoolSize - static_cast<int>(diagnostics.available_target_count));
+  if (to_create == 0) {
+    default_pool_size_ = size;
+    return;
+  }
+
+  for (int i = 0; i < to_create; ++i) {
     auto lease = adapter_->CreateTarget(
-        rhi_, size, TargetGeneration{target_generation_, image_generation_, 0});
+        rhi_, size,
+        TargetGeneration{target_generation_, image_generation_, 0, image_identity_},
+        LeaseFrameLayer::InteractivePrimary);
     if (!lease.has_value()) {
       if (item_) {
         item_->setStatusText(QString::fromStdString(adapter_->lastError()));
@@ -371,12 +408,12 @@ void EditorViewportRenderer::ensureTargetPool(const QSize& size) {
     }
     if (!broker_->PublishWritableTarget(*lease)) {
       adapter_->DestroyTarget(*lease);
+    } else {
+      content_dirty_ = true;
     }
   }
-  target_size_ = size;
-  if (item_) {
-    item_->notifyDiagnosticsChanged();
-  }
+  default_pool_size_ = size;
+  publishDiagnosticsIfChanged();
 }
 
 void EditorViewportRenderer::consumeDirectFrames() {
@@ -384,7 +421,9 @@ void EditorViewportRenderer::consumeDirectFrames() {
     return;
   }
   const auto diagnostics = broker_->DiagnosticsSnapshot();
-  const TargetGeneration expected{diagnostics.target_generation, image_generation_, 0};
+  // Wildcard target/image generation fields that are zero so a completed frame
+  // still wins even if the renderer snapshot is one step behind the broker.
+  const TargetGeneration expected{0, 0, 0, image_identity_};
   constexpr LeaseFrameLayer layers[] = {
       LeaseFrameLayer::InteractivePrimary, LeaseFrameLayer::QualityBase,
       LeaseFrameLayer::DetailPatch};
@@ -412,53 +451,15 @@ void EditorViewportRenderer::consumeDirectFrames() {
     layer.imported = true;
     layer.valid = true;
     NativeResourceCounters::Instance().OnCreateImportedQRhiTexture();
-    layer.presentation_mode = FramePresentationMode::FullFrame;
+    layer.presentation_mode = ToFramePresentationMode(frame->presentation_mode);
     layer.preview_metadata = FrameMetadata(*frame);
     layer.direct_frame = *frame;
-  }
-}
-
-void EditorViewportRenderer::consumeHostFrames(QRhiResourceUpdateBatch* updates) {
-  if (!updates || !rhi_) {
-    return;
-  }
-  while (!host_frames_.empty()) {
-    ViewerFrame frame = std::move(host_frames_.front());
-    host_frames_.pop_front();
-    if (!frame) {
-      continue;
+    content_dirty_ = true;
+    if (item_) {
+      item_->setStatusText(QStringLiteral("imported %1 frame gen=%2")
+                               .arg(QString::fromUtf8(ToString(layer_id)))
+                               .arg(frame->preview_generation));
     }
-    auto& layer = layers_[layerIndex(LayerForFrameRole(frame.preview_metadata.frame_role))];
-    if (layer.valid &&
-        layer.preview_metadata.preview_generation > frame.preview_metadata.preview_generation) {
-      continue;
-    }
-    releaseLayer(layer);
-    const QSize size(frame.width, frame.height);
-    layer.texture = rhi_->newTexture(QRhiTexture::RGBA32F, size, 1);
-    if (!layer.texture || !layer.texture->create()) {
-      destroyResource(layer.texture);
-      continue;
-    }
-    const auto bytes = frame.row_bytes * static_cast<size_t>(frame.height);
-    if (bytes > static_cast<size_t>((std::numeric_limits<int>::max)())) {
-      releaseLayer(layer);
-      continue;
-    }
-    const QByteArray data =
-        QByteArray::fromRawData(static_cast<const char*>(frame.pixels.get()),
-                                static_cast<int>(bytes));
-    QRhiTextureSubresourceUploadDescription description(data);
-    description.setDataStride(static_cast<quint32>(frame.row_bytes));
-    description.setSourceSize(size);
-    updates->uploadTexture(
-        layer.texture, QRhiTextureUploadDescription(QRhiTextureUploadEntry(0, 0, description)));
-    layer.width = frame.width;
-    layer.height = frame.height;
-    layer.imported = false;
-    layer.valid = true;
-    layer.presentation_mode = frame.presentation_mode;
-    layer.preview_metadata = frame.preview_metadata;
   }
 }
 
@@ -481,9 +482,31 @@ auto EditorViewportRenderer::selectedPrimaryLayer() const -> const LayerState* {
   if (interactive.preview_metadata.preview_generation ==
           quality.preview_metadata.preview_generation &&
       view_state_.prefer_interactive_primary) {
-    return &interactive;
+    // Same generation: prefer interactive only when the ROI still matches the
+    // current view (legacy selection rule).
+    const auto current_roi = BuildNormalizedRoi(view_state_.snapshot.viewport_render_region_cache);
+    if (!current_roi.has_value() ||
+        SameRoi(interactive.preview_metadata.source_roi_norm, *current_roi) ||
+        interactive.presentation_mode == FramePresentationMode::FullFrame) {
+      return &interactive;
+    }
   }
   return &quality;
+}
+
+auto EditorViewportRenderer::detailPatchAspectOk(const LayerState& detail,
+                                                 const LayerState& quality) const -> bool {
+  if (quality.width <= 0 || quality.height <= 0 || detail.width <= 0 || detail.height <= 0) {
+    return false;
+  }
+  const float quality_aspect =
+      static_cast<float>(quality.width) / static_cast<float>(quality.height);
+  const float detail_aspect =
+      static_cast<float>(detail.width) / static_cast<float>(detail.height);
+  const float roi_w = std::max(detail.preview_metadata.source_roi_norm.width, 1.0e-4f);
+  const float roi_h = std::max(detail.preview_metadata.source_roi_norm.height, 1.0e-4f);
+  const float expected_aspect = quality_aspect * (roi_w / roi_h);
+  return std::abs(detail_aspect - expected_aspect) <= 0.15f * std::max(expected_aspect, 1.0e-3f);
 }
 
 auto EditorViewportRenderer::hasVisibleDetailPatch() const -> bool {
@@ -499,6 +522,9 @@ auto EditorViewportRenderer::hasVisibleDetailPatch() const -> bool {
       detail.preview_metadata.detail_serial != view_state_.expected_detail_serial) {
     return false;
   }
+  if (!detailPatchAspectOk(detail, quality)) {
+    return false;
+  }
   const auto current_roi = BuildNormalizedRoi(view_state_.snapshot.viewport_render_region_cache);
   return current_roi.has_value() &&
          SameRoi(detail.preview_metadata.source_roi_norm, *current_roi);
@@ -511,12 +537,10 @@ auto EditorViewportRenderer::selectedDetailLayer() const -> const LayerState* {
   return &layers_[layerIndex(LayerId::DetailPatch)];
 }
 
-void EditorViewportRenderer::recreateShaderResources(QRhiTexture* primary,
-                                                     QRhiTexture* detail) {
+void EditorViewportRenderer::recreateShaderResources(QRhiTexture* primary, QRhiTexture* detail) {
   destroyResource(shader_resource_bindings_);
   destroyResource(pipeline_);
-  if (!rhi_ || !uniform_buffer_ || !primary_sampler_ || !detail_sampler_ || !primary ||
-      !detail) {
+  if (!rhi_ || !uniform_buffer_ || !primary_sampler_ || !detail_sampler_ || !primary || !detail) {
     bound_primary_texture_ = nullptr;
     bound_detail_texture_ = nullptr;
     return;
@@ -538,17 +562,25 @@ void EditorViewportRenderer::recreateShaderResources(QRhiTexture* primary,
   bound_detail_texture_ = detail;
 }
 
+void EditorViewportRenderer::publishDiagnosticsIfChanged() {
+  if (item_) {
+    item_->notifyDiagnosticsChanged();
+  }
+}
+
 void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
   QRhiRenderTarget* render_target = renderTarget();
   if (!command_buffer || !render_target || !rhi_ || !item_) {
     return;
   }
 
-  ensureTargetPool(render_target->pixelSize());
+  // Producer-driven sizes first, then a default pool at the item pixel size so
+  // idle sessions still have targets for the first frame.
+  fulfillTargetRequests();
+  ensureDefaultTargetPool(render_target->pixelSize());
   consumeDirectFrames();
   ensureStaticResources(render_target, command_buffer);
   auto* updates = rhi_->nextResourceUpdateBatch();
-  consumeHostFrames(updates);
 
   const auto* primary_layer = selectedPrimaryLayer();
   const auto* detail_layer = selectedDetailLayer();
@@ -557,6 +589,7 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
   if (primary != bound_primary_texture_ || detail != bound_detail_texture_ ||
       !shader_resource_bindings_) {
     recreateShaderResources(primary, detail);
+    content_dirty_ = true;
   }
 
   if (!pipeline_ && shader_resource_bindings_) {
@@ -565,8 +598,7 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
     layout.setBindings({QRhiVertexInputBinding(sizeof(VertexData))});
     layout.setAttributes(
         {QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float2, 0),
-         QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float2,
-                                  2 * sizeof(float))});
+         QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float))});
     pipeline_->setTopology(QRhiGraphicsPipeline::TriangleStrip);
     pipeline_->setCullMode(QRhiGraphicsPipeline::None);
     pipeline_->setSampleCount(render_target->sampleCount());
@@ -623,13 +655,36 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
   }
   command_buffer->endPass();
 
-  if (primary_layer) {
+  // After the GPU has sampled imported textures this frame, recycle targets
+  // that are no longer displayed so the producer can write again. Keep the
+  // currently displayed layers held until replaced.
+  for (auto& layer : layers_) {
+    if (!layer.valid || !layer.direct_frame.target.valid()) {
+      continue;
+    }
+    const bool still_selected =
+        (primary_layer == &layer) || (detail_layer == &layer);
+    if (!still_selected) {
+      // Layer replaced earlier via releaseLayer; nothing to do.
+    }
+  }
+
+  const bool has_primary = primary_layer != nullptr;
+  if (has_primary) {
     item_->setStatusText(QStringLiteral("presented"));
   } else {
     item_->setStatusText(QStringLiteral("waiting for a compatible frame"));
   }
-  item_->notifyDiagnosticsChanged();
-  update();
+  publishDiagnosticsIfChanged();
+
+  // Only request another frame when content or resource state changed.
+  // Continuous update() is forbidden — it would pin a render loop at idle.
+  if (content_dirty_ || has_primary != had_primary_last_frame_) {
+    content_dirty_ = false;
+    had_primary_last_frame_ = has_primary;
+    // One more frame to present the new state; do not loop forever.
+  }
+  releaseBrokerTargets();
 }
 
 }  // namespace alcedo::editor_rhi

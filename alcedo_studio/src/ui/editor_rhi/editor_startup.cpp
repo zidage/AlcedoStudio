@@ -147,6 +147,7 @@ auto ApplyEditorBackendBeforeWindow(EditorBackend backend) -> EditorStartupResul
           "CUDA/D3D11 adapter LUID matched before first QQuickWindow; "
           "bind via QQuickGraphicsDevice::fromAdapter on the window";
       result.ok = true;
+      SetActiveEditorBackend(backend);
       return result;
 #else
       result.error = "CUDA backend requires Windows + HAVE_CUDA";
@@ -170,6 +171,7 @@ auto ApplyEditorBackendBeforeWindow(EditorBackend backend) -> EditorStartupResul
       result.diagnostics.notes =
           "OpenCL initialized with OpenGL sharing; Qt Quick uses OpenGL render loop";
       result.ok = true;
+      SetActiveEditorBackend(backend);
       return result;
 #else
       result.error = "OpenCL backend requires Windows + HAVE_OPENCL";
@@ -182,6 +184,7 @@ auto ApplyEditorBackendBeforeWindow(EditorBackend backend) -> EditorStartupResul
       result.diagnostics.notes =
           "Metal API selected; full interop feasibility is Phase 8 and is not claimed here";
       result.ok = true;
+      SetActiveEditorBackend(backend);
       return result;
 #else
       result.error = "Metal backend requires macOS + HAVE_METAL";

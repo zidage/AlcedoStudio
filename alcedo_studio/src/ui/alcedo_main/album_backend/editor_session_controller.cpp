@@ -29,6 +29,8 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
   active_ = true;
   element_id_ = elementId;
   image_id_ = imageId;
+  // Always advance so A→B→A cannot reuse a generation accepted by the viewport.
+  ++session_generation_;
   // Keep the legacy controller identity fields aligned for modules that still
   // read them, but do not open the modal QWidget editor from the QML workspace.
   Q_UNUSED(editor_);
@@ -42,6 +44,7 @@ void EditorSessionController::Close() {
   active_ = false;
   element_id_ = 0;
   image_id_ = 0;
+  // Leave session_generation_ intact so a later Open still advances past it.
   emit StateChanged();
 }
 

@@ -1437,27 +1437,39 @@ def_library(ExportService
 # ==============================================================================
 # 9. UI Components
 # ==============================================================================
-if(ALCEDO_REAL_WIDGET_EDITOR)
-    set(EDIT_VIEWER_COMMON_SRCS
-        ui/edit_viewer/edit_viewer.cpp
+
+# Pure viewer geometry / interaction controllers (no QWidget ownership).
+# Shared by the legacy QWidget editor and the Phase 3 QML scene-graph overlay.
+def_library(EditorViewerLogic
+    SOURCES
         ui/edit_viewer/edit_viewer_overlay_geometry.cpp
         ui/edit_viewer/viewport_mapper.cpp
         ui/edit_viewer/crop_geometry.cpp
         ui/edit_viewer/view_transform_controller.cpp
         ui/edit_viewer/crop_interaction_controller.cpp
-        include/ui/edit_viewer/edit_viewer.hpp
         include/ui/edit_viewer/edit_viewer_overlay_geometry.hpp
-        include/ui/edit_viewer/edit_viewer_surface.hpp
-        include/ui/edit_viewer/color_manager.hpp
         include/ui/edit_viewer/viewer_state.hpp
         include/ui/edit_viewer/viewport_mapper.hpp
         include/ui/edit_viewer/crop_geometry.hpp
         include/ui/edit_viewer/view_transform_controller.hpp
         include/ui/edit_viewer/crop_interaction_controller.hpp
+        include/ui/edit_viewer/frame_sink.hpp
+    PUBLIC_DEPS
+        Qt6::Core
+        Qt6::Gui
+        opencv_core
+)
+
+if(ALCEDO_REAL_WIDGET_EDITOR)
+    set(EDIT_VIEWER_COMMON_SRCS
+        ui/edit_viewer/edit_viewer.cpp
+        include/ui/edit_viewer/edit_viewer.hpp
+        include/ui/edit_viewer/edit_viewer_surface.hpp
+        include/ui/edit_viewer/color_manager.hpp
     )
 
     set(EDIT_VIEWER_BACKEND_SRCS)
-    set(EDIT_VIEWER_PUBLIC_DEPS EditPipeline Qt6::Widgets)
+    set(EDIT_VIEWER_PUBLIC_DEPS EditPipeline EditorViewerLogic Qt6::Widgets)
 
     if(ALCEDO_REAL_OPENGL_EDITOR)
         list(APPEND EDIT_VIEWER_BACKEND_SRCS
@@ -1561,20 +1573,28 @@ if(ALCEDO_METAL_ENABLED)
 endif()
 
 set(EDITOR_RHI_UNIFIED_VIEWPORT_SRCS
+    ${EDITOR_RHI_STARTUP_SRCS}
     ui/editor_rhi/lease_target_adapters.cpp
+    ui/editor_rhi/lease_frame_sink.cpp
     ui/editor_rhi/editor_viewport_item.cpp
     ui/editor_rhi/editor_viewport_renderer.cpp
+    ui/editor_rhi/editor_interaction_controller.cpp
+    ui/editor_rhi/editor_overlay_item.cpp
     include/ui/editor_rhi/frame_presentation_broker.hpp
     include/ui/editor_rhi/lease_target_adapters.hpp
+    include/ui/editor_rhi/lease_frame_sink.hpp
     include/ui/viewer/viewer_view_state.hpp
     include/ui/editor_rhi/editor_viewport_item.hpp
     include/ui/editor_rhi/editor_viewport_renderer.hpp
+    include/ui/editor_rhi/editor_interaction_controller.hpp
+    include/ui/editor_rhi/editor_overlay_item.hpp
 )
 
 def_library(EditorRhiViewport
     SOURCES ${EDITOR_RHI_UNIFIED_VIEWPORT_SRCS}
     PUBLIC_DEPS
         EditorRhiContracts
+        EditorViewerLogic
         Qt6::Core
         Qt6::Gui
         Qt6::GuiPrivate
@@ -1584,6 +1604,10 @@ def_library(EditorRhiViewport
         Qt6::ShaderTools
         opencv_core
 )
+# Legacy widget surface still optional for intermediate coexistence.
+if(TARGET EditViewer)
+    target_link_libraries(EditorRhiViewport PUBLIC EditViewer)
+endif()
 if(ALCEDO_CUDA_ENABLED)
     target_compile_definitions(EditorRhiViewport PUBLIC HAVE_CUDA)
     target_link_libraries(EditorRhiViewport PUBLIC CUDA::cudart)
@@ -1660,6 +1684,7 @@ add_executable(EditorRhiHarness
 target_include_directories(EditorRhiHarness PUBLIC include)
 target_link_libraries(EditorRhiHarness PRIVATE
     EditorRhiHarnessLib
+    EditorRhiViewport
     Qt6::Core
     Qt6::Gui
     Qt6::Quick

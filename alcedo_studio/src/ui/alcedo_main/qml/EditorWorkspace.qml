@@ -223,16 +223,40 @@ Item {
                         }
                     }
 
+                    // Interaction owns zoom/pan/crop state. The RHI viewport only
+                    // presents photograph layers; overlays are a separate QSG item.
+                    EditorInteractionController {
+                        id: editorInteraction
+                        objectName: "editorInteractionController"
+                        interactionEnabled: root.hasImage
+                    }
+
                     EditorViewportItem {
                         id: editorViewportItem
                         objectName: "editorViewportItem"
                         anchors.fill: parent
                         visible: root.hasImage
-                        imageGeneration: root.focusedImageId
+                        // imageIdentity is the durable DB id; imageGeneration is the
+                        // monotonic session counter from EditorSessionController so
+                        // A→B→A cannot accept a late frame from the first A session.
+                        imageIdentity: root.focusedImageId
+                        imageGeneration: root.editorSession ? root.editorSession.sessionGeneration : 0
                         Accessible.role: Accessible.Canvas
                         Accessible.name: qsTr("Image viewport")
                     }
 
+                    EditorOverlayItem {
+                        id: editorOverlayItem
+                        objectName: "editorOverlayItem"
+                        anchors.fill: parent
+                        visible: root.hasImage
+                        interaction: editorInteraction
+                        // Overlay must sit above the photograph and receive no
+                        // exclusive mouse grab — handlers below own input.
+                        z: 2
+                    }
+
+                    // Spinner / status remain ordinary QML (not baked into the RHI pass).
                     Label {
                         objectName: "editorViewportStatus"
                         anchors.centerIn: parent
@@ -240,7 +264,198 @@ Item {
                         text: qsTr("Preparing image viewport")
                         color: root.colMuted
                         font.pixelSize: 14
+                        z: 3
                     }
+
+                    // Crop rotation label (text overlay, not QSG).
+                    Rectangle {
+                        id: cropAngleBadge
+                        objectName: "editorCropAngleBadge"
+                        visible: root.hasImage
+                                 && editorInteraction.cropOverlayVisible
+                                 && editorInteraction.overlayGeometryValid
+                        x: Math.min(Math.max(0, editorInteraction.rotateHandleItemPos.x + 10),
+                                    Math.max(0, parent.width - width - 4))
+                        y: Math.min(Math.max(0, editorInteraction.rotateHandleItemPos.y - height * 0.5),
+                                    Math.max(0, parent.height - height - 4))
+                        width: cropAngleLabel.implicitWidth + 14
+                        height: cropAngleLabel.implicitHeight + 10
+                        radius: 4
+                        color: Qt.rgba(18 / 255, 18 / 255, 18 / 255, 210 / 255)
+                        z: 4
+
+                        Label {
+                            id: cropAngleLabel
+                            anchors.centerIn: parent
+                            text: qsTr("%1°").arg(editorInteraction.rotationLabelDegrees.toFixed(1))
+                            color: Qt.rgba(1, 1, 1, 0.96)
+                            font.pixelSize: 12
+                        }
+                    }
+
+                    // Zoom readout (status chrome).
+                    Label {
+                        objectName: "editorZoomReadout"
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        anchors.margins: 10
+                        visible: root.hasImage
+                        text: qsTr("%1%").arg(Math.round(editorInteraction.zoom * 100))
+                        color: root.colMuted
+                        font.pixelSize: 12
+                        font.weight: 600
+                        z: 4
+                    }
+
+                    // Pointer handlers call the typed interaction surface. They do
+                    // not own crop math or view transform state.
+                    HoverHandler {
+                        id: viewportHover
+                        enabled: root.hasImage
+                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
+                        // HoverHandler owns the platform cursor (Item has no cursorShape).
+                        cursorShape: editorInteraction.hasCustomCursor
+                                     ? editorInteraction.cursorShape
+                                     : Qt.ArrowCursor
+                        onPointChanged: {
+                            if (viewportHover.hovered) {
+                                editorInteraction.handleHoverMove(point.position.x, point.position.y)
+                            }
+                        }
+                    }
+
+                    // DragHandler covers pan + crop drag; press/move/release map 1:1.
+                    DragHandler {
+                        id: viewportDrag
+                        enabled: root.hasImage
+                        target: null
+                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.TouchScreen | PointerDevice.Stylus
+                        acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+                        property int _activeButton: Qt.LeftButton
+                        onActiveChanged: {
+                            if (active) {
+                                _activeButton = (centroid.pressedButtons & Qt.MiddleButton)
+                                        ? Qt.MiddleButton : Qt.LeftButton
+                                editorInteraction.handlePress(
+                                            centroid.position.x, centroid.position.y, _activeButton)
+                            } else {
+                                editorInteraction.handleRelease(
+                                            centroid.position.x, centroid.position.y, _activeButton)
+                            }
+                        }
+                        onCentroidChanged: {
+                            if (active) {
+                                editorInteraction.handleMove(
+                                            centroid.position.x, centroid.position.y,
+                                            centroid.pressedButtons)
+                            }
+                        }
+                    }
+
+                    WheelHandler {
+                        id: viewportWheel
+                        enabled: root.hasImage
+                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                        onWheel: function (event) {
+                            var synthesized = event.pixelDelta.x !== 0 || event.pixelDelta.y !== 0
+                            editorInteraction.handleWheel(
+                                        event.x, event.y,
+                                        event.angleDelta.y,
+                                        event.pixelDelta.x, event.pixelDelta.y,
+                                        event.modifiers,
+                                        synthesized)
+                            event.accepted = true
+                        }
+                    }
+
+                    PinchHandler {
+                        id: viewportPinch
+                        enabled: root.hasImage
+                        target: null
+                        property real _lastScale: 1.0
+                        onActiveChanged: {
+                            _lastScale = 1.0
+                        }
+                        onScaleChanged: {
+                            if (!active) {
+                                return
+                            }
+                            // HandlePinchZoom expects a relative zoom delta (value).
+                            var delta = scale - _lastScale
+                            _lastScale = scale
+                            if (Math.abs(delta) > 1e-4) {
+                                editorInteraction.handlePinch(
+                                            centroid.position.x, centroid.position.y, delta)
+                            }
+                        }
+                    }
+
+                    TapHandler {
+                        id: viewportDoubleTap
+                        enabled: root.hasImage
+                        acceptedButtons: Qt.LeftButton
+                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                        onDoubleTapped: function (eventPoint) {
+                            editorInteraction.handleDoubleTap(
+                                        eventPoint.position.x, eventPoint.position.y)
+                        }
+                    }
+
+                    // Invisible focus/input owner for keyboard shortcuts (Phase 5G).
+                    Item {
+                        id: viewportInteractionLayer
+                        objectName: "editorViewportInteractionLayer"
+                        anchors.fill: parent
+                        visible: root.hasImage
+                        focus: root.hasImage
+                        activeFocusOnTab: true
+                        z: 5
+
+                        Keys.onPressed: function (event) {
+                            if (event.key === Qt.Key_0 || event.key === Qt.Key_Home) {
+                                editorInteraction.resetView()
+                                event.accepted = true
+                            }
+                        }
+
+                        onVisibleChanged: {
+                            if (!visible) {
+                                editorInteraction.handleLeave()
+                            }
+                        }
+                    }
+
+                    function syncViewportMetrics() {
+                        var dpr = 1.0
+                        if (viewportSlot.Window.window) {
+                            dpr = viewportSlot.Window.window.devicePixelRatio
+                        }
+                        editorInteraction.setViewportMetrics(
+                                    viewportSlot.width, viewportSlot.height, dpr)
+                    }
+
+                    function pushViewToViewport() {
+                        editorViewportItem.setViewTransform(
+                                    editorInteraction.zoom,
+                                    editorInteraction.panX,
+                                    editorInteraction.panY)
+                    }
+
+                    Connections {
+                        target: editorInteraction
+                        function onViewChanged() {
+                            // Zoom/pan only — never recreates the viewport texture or
+                            // broker targets; the RHI item just re-samples the last frame.
+                            viewportSlot.pushViewToViewport()
+                        }
+                    }
+
+                    Component.onCompleted: {
+                        syncViewportMetrics()
+                        pushViewToViewport()
+                    }
+                    onWidthChanged: syncViewportMetrics()
+                    onHeightChanged: syncViewportMetrics()
                 }
 
                 EditorFilmstrip {

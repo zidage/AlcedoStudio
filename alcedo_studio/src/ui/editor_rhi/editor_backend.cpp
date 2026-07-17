@@ -4,11 +4,14 @@
 
 #include "ui/editor_rhi/editor_backend.hpp"
 
+#include <atomic>
 #include <cctype>
 #include <cstring>
 
 namespace alcedo::editor_rhi {
 namespace {
+
+std::atomic<int> g_active_backend{-1};
 
 auto ToLowerAscii(std::string_view in) -> std::string {
   std::string out;
@@ -152,6 +155,25 @@ auto DefaultEditorBackendForPlatform() -> std::optional<EditorBackend> {
 #else
   return std::nullopt;
 #endif
+}
+
+void SetActiveEditorBackend(EditorBackend backend) {
+  g_active_backend.store(static_cast<int>(backend), std::memory_order_release);
+}
+
+auto ActiveEditorBackend() -> EditorBackend {
+  const int value = g_active_backend.load(std::memory_order_acquire);
+  if (value < 0) {
+    if (const auto def = DefaultEditorBackendForPlatform()) {
+      return *def;
+    }
+    return EditorBackend::Cuda;
+  }
+  return static_cast<EditorBackend>(value);
+}
+
+auto HasActiveEditorBackend() -> bool {
+  return g_active_backend.load(std::memory_order_acquire) >= 0;
 }
 
 }  // namespace alcedo::editor_rhi

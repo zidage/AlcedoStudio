@@ -106,14 +106,37 @@ target_link_libraries(SampleTest PRIVATE GTest::gtest_main)
 
 add_executable(EditViewerLogicTest
   ui/edit_viewer_logic_test.cpp
-  ${ALCEDO_SRC_DIR}/ui/edit_viewer/viewport_mapper.cpp
-  ${ALCEDO_SRC_DIR}/ui/edit_viewer/crop_geometry.cpp
-  ${ALCEDO_SRC_DIR}/ui/edit_viewer/view_transform_controller.cpp
-  ${ALCEDO_SRC_DIR}/ui/edit_viewer/crop_interaction_controller.cpp
 )
 target_include_directories(EditViewerLogicTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditViewerLogicTest PRIVATE GTest::gtest_main Qt6::Widgets opencv_core)
+target_link_libraries(EditViewerLogicTest PRIVATE
+  EditorViewerLogic
+  GTest::gtest_main
+  Qt6::Gui
+  opencv_core
+)
 gtest_discover_tests(EditViewerLogicTest TEST_PREFIX "EditViewerLogicTest.")
+
+# Phase 3: scene-graph overlay geometry + QML pointer interaction surface.
+add_executable(EditorOverlayInteractionTest
+  ui/editor_overlay_interaction_test.cpp
+  ui/widget_test_main.cpp
+)
+target_include_directories(EditorOverlayInteractionTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR}
+  PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorOverlayInteractionTest
+  PRIVATE
+    EditorRhiViewport
+    EditorViewerLogic
+    GTest::gtest
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Test
+    Qt6::Quick
+    Qt6::Qml
+)
+gtest_discover_tests(EditorOverlayInteractionTest TEST_PREFIX "EditorOverlayInteractionTest.")
 
 add_executable(ToneCurveWidgetTest
   ui/tone_curve_widget_test.cpp
@@ -1408,6 +1431,43 @@ if(TARGET EditorRhiHarness)
       LABELS "gpu;editor_rhi;opencl"
       WORKING_DIRECTORY $<TARGET_FILE_DIR:EditorRhiHarness>
     )
+    add_test(NAME EditorRhiHarness.OpenClProductionLeasePresentation
+      COMMAND EditorRhiHarness --editor-backend=opencl --case=production-lease-presentation
+    )
+    set_tests_properties(EditorRhiHarness.OpenClProductionLeasePresentation PROPERTIES
+      LABELS "gpu;editor_rhi;opencl;production"
+      WORKING_DIRECTORY $<TARGET_FILE_DIR:EditorRhiHarness>
+    )
+  endif()
+  if(WIN32 AND ALCEDO_CUDA_ENABLED)
+    add_test(NAME EditorRhiHarness.CudaProductionLeasePresentation
+      COMMAND EditorRhiHarness --editor-backend=cuda --case=production-lease-presentation
+    )
+    set_tests_properties(EditorRhiHarness.CudaProductionLeasePresentation PROPERTIES
+      LABELS "gpu;editor_rhi;cuda;production"
+      WORKING_DIRECTORY $<TARGET_FILE_DIR:EditorRhiHarness>
+    )
+    add_test(NAME EditorRhiHarness.CudaProductionContinuousSubmit
+      COMMAND EditorRhiHarness --editor-backend=cuda --case=production-continuous-submit
+    )
+    set_tests_properties(EditorRhiHarness.CudaProductionContinuousSubmit PROPERTIES
+      LABELS "gpu;editor_rhi;cuda;production"
+      WORKING_DIRECTORY $<TARGET_FILE_DIR:EditorRhiHarness>
+    )
+    add_test(NAME EditorRhiHarness.CudaProductionHideShow
+      COMMAND EditorRhiHarness --editor-backend=cuda --case=production-hide-show
+    )
+    set_tests_properties(EditorRhiHarness.CudaProductionHideShow PROPERTIES
+      LABELS "gpu;editor_rhi;cuda;production"
+      WORKING_DIRECTORY $<TARGET_FILE_DIR:EditorRhiHarness>
+    )
+    add_test(NAME EditorRhiHarness.CudaProductionRendererRecreation
+      COMMAND EditorRhiHarness --editor-backend=cuda --case=production-renderer-recreation
+    )
+    set_tests_properties(EditorRhiHarness.CudaProductionRendererRecreation PROPERTIES
+      LABELS "gpu;editor_rhi;cuda;production"
+      WORKING_DIRECTORY $<TARGET_FILE_DIR:EditorRhiHarness>
+    )
   endif()
 endif()
 
@@ -1590,6 +1650,7 @@ alcedo_assign_test_category(edit ALCEDO_BUILD_EDIT_TESTS alcedo_tests_edit
 
 alcedo_assign_test_category(ui ALCEDO_BUILD_UI_TESTS alcedo_tests_ui
   EditViewerLogicTest
+  EditorOverlayInteractionTest
   ToneCurveWidgetTest
   LutCatalogTest
   EditorPipelineIoTest

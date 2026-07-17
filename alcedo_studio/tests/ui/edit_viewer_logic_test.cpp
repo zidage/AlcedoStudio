@@ -8,6 +8,7 @@
 
 #include "ui/edit_viewer/crop_geometry.hpp"
 #include "ui/edit_viewer/crop_interaction_controller.hpp"
+#include "ui/edit_viewer/edit_viewer_overlay_geometry.hpp"
 #include "ui/edit_viewer/edit_viewer_surface.hpp"
 #include "ui/edit_viewer/view_transform_controller.hpp"
 #include "ui/edit_viewer/viewer_state.hpp"
@@ -323,6 +324,110 @@ TEST(EditViewerLogicTests, CropGeometryHitTestPrefersCornersOverEdges) {
   EXPECT_EQ(hit.corner_index, 0);
   EXPECT_EQ(hit.edge, CropEdge::None);
   EXPECT_FALSE(hit.rotate_handle_hit);
+}
+
+TEST(EditViewerLogicTests, OverlayGeometryBuildsCropCornersAndRotateHandleAtMultipleDpr) {
+  for (const float dpr : {1.0f, 1.5f, 2.0f}) {
+    EditViewerOverlaySnapshot snapshot;
+    snapshot.widget_info = {800, 600, dpr};
+    snapshot.image_info = kImageInfo;
+    snapshot.viewer_state.view_transform = {1.0f, QVector2D(0.0f, 0.0f)};
+    snapshot.viewer_state.crop_overlay.overlay_visible = true;
+    snapshot.viewer_state.crop_overlay.tool_enabled = true;
+    snapshot.viewer_state.crop_overlay.rect = QRectF(0.2, 0.2, 0.5, 0.5);
+    snapshot.viewer_state.crop_overlay.metric_aspect =
+        CropGeometry::SafeAspect(kImageInfo.image_width, kImageInfo.image_height);
+
+    const auto geometry = EditViewerOverlayGeometry::Build(snapshot);
+    ASSERT_TRUE(geometry.image_rect_valid) << "dpr=" << dpr;
+    ASSERT_TRUE(geometry.crop_corners_valid) << "dpr=" << dpr;
+    EXPECT_GT(geometry.image_rect.width(), 0.0);
+    EXPECT_GT(geometry.image_rect.height(), 0.0);
+
+    // Item/logical coordinates must not be multiplied by DPR (mapper divides back out).
+    for (const auto& corner : geometry.crop_corners_widget) {
+      EXPECT_GE(corner.x(), -1.0);
+      EXPECT_LE(corner.x(), 801.0);
+      EXPECT_GE(corner.y(), -1.0);
+      EXPECT_LE(corner.y(), 601.0);
+    }
+    EXPECT_NE(geometry.rotate_stem_widget, geometry.rotate_handle_widget);
+
+    // Round-trip a corner through UV to prove coordinate space stability at this DPR.
+    const auto uv = ViewportMapper::WidgetPointToImageUv(
+        geometry.crop_corners_widget[0], snapshot.widget_info, snapshot.image_info, 1.0f,
+        QVector2D(0.0f, 0.0f));
+    ASSERT_TRUE(uv.has_value());
+    EXPECT_NEAR(uv->x(), 0.2, 2.0e-3);
+    EXPECT_NEAR(uv->y(), 0.2, 2.0e-3);
+  }
+}
+
+TEST(EditViewerLogicTests, OverlayGeometryGoldenMatchesLandscapePortraitSquareAndOddViewports) {
+  struct Case {
+    const char* name;
+    int width;
+    int height;
+    int image_w;
+    int image_h;
+    QRectF crop;
+  };
+  const Case cases[] = {
+      {"landscape", 960, 540, 4000, 2250, QRectF(0.1, 0.15, 0.7, 0.6)},
+      {"portrait", 540, 960, 2250, 4000, QRectF(0.2, 0.1, 0.55, 0.7)},
+      {"square", 700, 700, 3000, 3000, QRectF(0.25, 0.25, 0.5, 0.5)},
+      {"odd", 801, 599, 4001, 3001, QRectF(0.05, 0.08, 0.81, 0.77)},
+  };
+
+  for (const auto& c : cases) {
+    EditViewerOverlaySnapshot snapshot;
+    snapshot.widget_info = {c.width, c.height, 1.0f};
+    snapshot.image_info = {c.image_w, c.image_h};
+    snapshot.viewer_state.view_transform = {1.0f, QVector2D(0.0f, 0.0f)};
+    snapshot.viewer_state.crop_overlay.overlay_visible = true;
+    snapshot.viewer_state.crop_overlay.tool_enabled = true;
+    snapshot.viewer_state.crop_overlay.rect = c.crop;
+    snapshot.viewer_state.crop_overlay.metric_aspect =
+        CropGeometry::SafeAspect(c.image_w, c.image_h);
+
+    const auto geometry = EditViewerOverlayGeometry::Build(snapshot);
+    ASSERT_TRUE(geometry.image_rect_valid) << c.name;
+    ASSERT_TRUE(geometry.crop_corners_valid) << c.name;
+
+    // Golden: image UV corners map inside the letterboxed image rect, and
+    // crop corners stay inside that rect for an unrotated full-frame view.
+    for (const auto& corner : geometry.crop_corners_widget) {
+      EXPECT_GE(corner.x(), geometry.image_rect.left() - 1.0) << c.name;
+      EXPECT_LE(corner.x(), geometry.image_rect.right() + 1.0) << c.name;
+      EXPECT_GE(corner.y(), geometry.image_rect.top() - 1.0) << c.name;
+      EXPECT_LE(corner.y(), geometry.image_rect.bottom() + 1.0) << c.name;
+    }
+
+    // Rotate handle is offset outside the crop edge.
+    const auto center = CropGeometry::CropCenterWidgetPoint(geometry.crop_corners_widget);
+    const auto stem_to_handle = geometry.rotate_handle_widget - geometry.rotate_stem_widget;
+    EXPECT_GT(QPointF::dotProduct(stem_to_handle, stem_to_handle), 1.0) << c.name;
+    EXPECT_NE(geometry.rotate_handle_widget, center) << c.name;
+  }
+}
+
+TEST(EditViewerLogicTests, OverlayGeometryMapsDetailRoiBoundsInSourceImageUv) {
+  EditViewerOverlaySnapshot snapshot;
+  snapshot.widget_info = kWidgetInfo;
+  snapshot.image_info = kImageInfo;
+  snapshot.viewer_state.view_transform = {2.0f, QVector2D(0.1f, -0.05f)};
+  snapshot.detail_roi_visible = true;
+  snapshot.detail_roi_uv = QRectF(0.3, 0.25, 0.2, 0.15);
+
+  const auto geometry = EditViewerOverlayGeometry::Build(snapshot);
+  ASSERT_TRUE(geometry.detail_roi_valid);
+
+  const auto tl = ViewportMapper::WidgetPointToImageUv(
+      geometry.detail_roi_corners_widget[0], snapshot.widget_info, snapshot.image_info, 2.0f,
+      QVector2D(0.1f, -0.05f));
+  ASSERT_TRUE(tl.has_value());
+  EXPECT_NEAR(tl->x(), 0.3, 2.0e-3);
+  EXPECT_NEAR(tl->y(), 0.25, 2.0e-3);
 }
 
 }  // namespace alcedo

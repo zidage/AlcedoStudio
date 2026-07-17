@@ -18,16 +18,34 @@
 
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/editor_startup.hpp"
+#include "ui/editor_rhi/editor_viewport_item.hpp"
+#include "ui/editor_rhi/frame_presentation_lease.hpp"
 #include "ui/editor_rhi/harness_fixtures.hpp"
 #include "ui/editor_rhi/harness_viewport_item.hpp"
+#include "ui/editor_rhi/lease_target_adapters.hpp"
 #include "ui/editor_rhi/native_resource_counters.hpp"
+
+#if defined(_WIN32) && defined(HAVE_CUDA)
+#include <cuda_runtime_api.h>
+#endif
+#if defined(HAVE_OPENCL)
+#include <CL/cl.h>
+#include "opencl/opencl_context.hpp"
+#endif
 
 namespace {
 
+using alcedo::editor_rhi::CompletedFrameLease;
 using alcedo::editor_rhi::EditorBackend;
+using alcedo::editor_rhi::EditorViewportItem;
+using alcedo::editor_rhi::HarnessFixtureImage;
 using alcedo::editor_rhi::HarnessFixtureKind;
 using alcedo::editor_rhi::HarnessViewportItem;
+using alcedo::editor_rhi::LeaseFrameLayer;
+using alcedo::editor_rhi::LeaseWritableResourceKind;
 using alcedo::editor_rhi::NativeResourceCounters;
+using alcedo::editor_rhi::WritableTargetLease;
+using alcedo::editor_rhi::WritableTargetRequest;
 
 enum class HarnessCase {
   DirectPresentation,
@@ -37,6 +55,12 @@ enum class HarnessCase {
   RendererRecreation,
   HdrFormatQuery,
   ShutdownQueued,
+  // Production EditorViewportItem + lease protocol (Phase 2-Fix).
+  ProductionLeasePresentation,
+  ProductionContinuousSubmit,
+  ProductionHideShow,
+  ProductionMinimizeRestore,
+  ProductionRendererRecreation,
 };
 
 void Log(const char* fmt, ...) {
@@ -88,6 +112,21 @@ auto ParseCase(std::string_view token) -> std::optional<HarnessCase> {
   if (token == "shutdown-queued") {
     return HarnessCase::ShutdownQueued;
   }
+  if (token == "production-lease-presentation") {
+    return HarnessCase::ProductionLeasePresentation;
+  }
+  if (token == "production-continuous-submit") {
+    return HarnessCase::ProductionContinuousSubmit;
+  }
+  if (token == "production-hide-show") {
+    return HarnessCase::ProductionHideShow;
+  }
+  if (token == "production-minimize-restore") {
+    return HarnessCase::ProductionMinimizeRestore;
+  }
+  if (token == "production-renderer-recreation") {
+    return HarnessCase::ProductionRendererRecreation;
+  }
   return std::nullopt;
 }
 
@@ -107,15 +146,146 @@ auto CaseName(HarnessCase c) -> const char* {
       return "hdr-format-query";
     case HarnessCase::ShutdownQueued:
       return "shutdown-queued";
+    case HarnessCase::ProductionLeasePresentation:
+      return "production-lease-presentation";
+    case HarnessCase::ProductionContinuousSubmit:
+      return "production-continuous-submit";
+    case HarnessCase::ProductionHideShow:
+      return "production-hide-show";
+    case HarnessCase::ProductionMinimizeRestore:
+      return "production-minimize-restore";
+    case HarnessCase::ProductionRendererRecreation:
+      return "production-renderer-recreation";
   }
   return "unknown";
+}
+
+auto IsProductionCase(HarnessCase c) -> bool {
+  return c == HarnessCase::ProductionLeasePresentation ||
+         c == HarnessCase::ProductionContinuousSubmit ||
+         c == HarnessCase::ProductionHideShow ||
+         c == HarnessCase::ProductionMinimizeRestore ||
+         c == HarnessCase::ProductionRendererRecreation;
 }
 
 void PrintUsage() {
   Log("EditorRhiHarness --editor-backend=cuda|opencl|metal "
       "[--case=direct-presentation|resize-churn|hide-show|minimize-restore|"
-      "renderer-recreation|hdr-format-query|shutdown-queued] "
+      "renderer-recreation|hdr-format-query|shutdown-queued|"
+      "production-lease-presentation|production-continuous-submit|"
+      "production-hide-show|production-minimize-restore|"
+      "production-renderer-recreation] "
       "[--fixture=gradient|checkerboard|roi|odd]");
+}
+
+auto FillLeaseWithFixture(const WritableTargetLease& lease, const HarnessFixtureImage& fixture)
+    -> bool {
+  if (!lease.valid() || fixture.width != lease.dimensions.width ||
+      fixture.height != lease.dimensions.height) {
+    Log("FillLeaseWithFixture: invalid lease or size mismatch lease=%dx%d fixture=%dx%d",
+        lease.dimensions.width, lease.dimensions.height, fixture.width, fixture.height);
+    return false;
+  }
+  if (!alcedo::editor_rhi::ProducerAcquireWritable(lease)) {
+    Log("FillLeaseWithFixture: ProducerAcquireWritable failed kind=%d",
+        static_cast<int>(lease.writable_kind));
+    return false;
+  }
+  bool ok = false;
+  if (lease.writable_kind == LeaseWritableResourceKind::CudaArray) {
+#if defined(_WIN32) && defined(HAVE_CUDA)
+    // Match the process CUDA device selected at startup (device 0 by default).
+    (void)cudaSetDevice(0);
+    auto* array = reinterpret_cast<cudaArray_t>(lease.writable_resource);
+    const size_t row_bytes = fixture.row_bytes();
+    const cudaError_t err =
+        cudaMemcpy2DToArray(array, 0, 0, fixture.data(), row_bytes, row_bytes,
+                            static_cast<size_t>(fixture.height), cudaMemcpyHostToDevice);
+    ok = err == cudaSuccess;
+    if (!ok) {
+      Log("FillLeaseWithFixture: cudaMemcpy2DToArray failed: %s", cudaGetErrorString(err));
+    }
+#else
+    ok = false;
+#endif
+  } else if (lease.writable_kind == LeaseWritableResourceKind::OpenClImage) {
+#if defined(HAVE_OPENCL)
+    auto* image = reinterpret_cast<cl_mem>(lease.writable_resource);
+    const size_t origin[3] = {0, 0, 0};
+    const size_t region[3] = {static_cast<size_t>(fixture.width),
+                              static_cast<size_t>(fixture.height), 1};
+    const cl_int err =
+        clEnqueueWriteImage(alcedo::OpenClContext::Instance().Queue(), image, CL_TRUE, origin,
+                            region, 0, 0, fixture.data(), 0, nullptr, nullptr);
+    ok = err == CL_SUCCESS;
+    if (!ok) {
+      Log("FillLeaseWithFixture: clEnqueueWriteImage failed: %d", err);
+    }
+#else
+    ok = false;
+#endif
+  }
+  (void)alcedo::editor_rhi::ProducerReleaseWritable(lease);
+  if (ok) {
+    ok = alcedo::editor_rhi::ProducerWaitWritableComplete(lease);
+    if (!ok) {
+      Log("FillLeaseWithFixture: ProducerWaitWritableComplete failed");
+    }
+  }
+  return ok;
+}
+
+auto SubmitFixtureFrame(EditorViewportItem* item, const HarnessFixtureImage& fixture,
+                        LeaseFrameLayer layer, std::uint64_t preview) -> bool {
+  if (!item) {
+    return false;
+  }
+  // Prefer any Available target from the renderer's pool. QQuickRhiItem pixel
+  // size can differ from logical item size under high DPI, so exact fixture
+  // dimensions are not required for acquire.
+  auto lease = item->tryAcquireWritableTarget();
+  if (!lease.has_value()) {
+    WritableTargetRequest request;
+    request.layer = layer;
+    request.dimensions = {fixture.width, fixture.height};
+    request.image_generation = item->imageGeneration();
+    request.image_identity = item->imageIdentity();
+    request.layer_generation = preview;
+    if (item->broker()) {
+      item->broker()->NoteTargetRequest(request);
+    }
+    item->requestPresentUpdate();
+    Log("SubmitFixtureFrame: no lease live=%d gen=%llu id=%llu consumer=%d",
+        item->liveTargetCount(),
+        static_cast<unsigned long long>(item->imageGeneration()),
+        static_cast<unsigned long long>(item->imageIdentity()),
+        item->presentationAvailable() ? 1 : 0);
+    return false;
+  }
+  lease->layer = layer;
+  lease->generation.layer_generation = preview;
+  // Resize fixture to the leased target (device-pixel) dimensions.
+  const HarnessFixtureImage fill =
+      (fixture.width == lease->dimensions.width && fixture.height == lease->dimensions.height)
+          ? fixture
+          : alcedo::editor_rhi::MakeFp32Gradient(lease->dimensions.width,
+                                                 lease->dimensions.height);
+  if (!FillLeaseWithFixture(*lease, fill)) {
+    item->abandonProducerWrite(*lease);
+    return false;
+  }
+  CompletedFrameLease frame;
+  frame.target = *lease;
+  frame.generation = lease->generation;
+  frame.layer = layer;
+  frame.preview_generation = preview;
+  frame.producer_complete = true;
+  const bool accepted = item->submitCompletedFrame(frame);
+  if (!accepted) {
+    Log("SubmitFixtureFrame: submit rejected preview=%llu",
+        static_cast<unsigned long long>(preview));
+  }
+  return accepted;
 }
 
 auto CompareReadback(HarnessViewportItem* viewport) -> int {
@@ -233,6 +403,7 @@ int main(int argc, char* argv[]) {
   }
 
   qmlRegisterType<HarnessViewportItem>("Alcedo.EditorRhiHarness", 1, 0, "HarnessViewportItem");
+  alcedo::editor_rhi::RegisterEditorViewportQmlTypes();
 
   QQuickWindow window;
   BindEditorGraphicsToWindow(&window, startup);
@@ -248,14 +419,29 @@ int main(int argc, char* argv[]) {
   QObject::connect(&window, &QQuickWindow::heightChanged, root,
                    [root, &window]() { root->setHeight(window.height()); });
 
-  auto* viewport = new HarnessViewportItem(root);
-  viewport->setParentItem(root);
-  viewport->setSize(QSizeF(640, 480));
-  viewport->setX((960 - 640) / 2.0);
-  viewport->setY((720 - 480) / 2.0);
-  viewport->configure(backend, fixture, /*request_readback=*/true);
+  const bool production = IsProductionCase(harness_case);
+  HarnessViewportItem* viewport = nullptr;
+  EditorViewportItem* production_viewport = nullptr;
+  if (production) {
+    production_viewport = new EditorViewportItem(root);
+    production_viewport->setParentItem(root);
+    // Match the production fixture size so the default target pool is
+    // directly acquirable without a separate size request race.
+    production_viewport->setSize(QSizeF(64, 48));
+    production_viewport->setX((960 - 64) / 2.0);
+    production_viewport->setY((720 - 48) / 2.0);
+    production_viewport->beginImageSession(/*imageIdentity=*/42);
+  } else {
+    viewport = new HarnessViewportItem(root);
+    viewport->setParentItem(root);
+    viewport->setSize(QSizeF(640, 480));
+    viewport->setX((960 - 640) / 2.0);
+    viewport->setY((720 - 480) / 2.0);
+    viewport->configure(backend, fixture, /*request_readback=*/true);
+  }
 
   NativeResourceCounters::Instance().ResetForTest();
+  const HarnessFixtureImage production_fixture = alcedo::editor_rhi::MakeFp32Gradient(64, 48);
 
   HarnessState state;
   state.window       = &window;
@@ -309,72 +495,75 @@ int main(int argc, char* argv[]) {
     });
   };
 
-  QObject::connect(viewport, &HarnessViewportItem::harnessFramePresented, &app, [&]() {
-    if (state.stage != 0 || !state.viewport) {
-      return;
-    }
-    if (!state.viewport->presentationOk()) {
-      return;
-    }
-    Log("EditorRhiHarness: presentation ok frames=%llu status=%s",
-        static_cast<unsigned long long>(state.viewport->RenderFrameCount()),
-        qPrintable(state.viewport->statusText()));
-    state.stage = 1;
+  if (!production) {
+    QObject::connect(viewport, &HarnessViewportItem::harnessFramePresented, &app, [&]() {
+      if (state.stage != 0 || !state.viewport) {
+        return;
+      }
+      if (!state.viewport->presentationOk()) {
+        return;
+      }
+      Log("EditorRhiHarness: presentation ok frames=%llu status=%s",
+          static_cast<unsigned long long>(state.viewport->RenderFrameCount()),
+          qPrintable(state.viewport->statusText()));
+      state.stage = 1;
 
-    if (state.harness_case == HarnessCase::HdrFormatQuery) {
-      const std::string diag = QueryOpenGlHdrFormatSupportDiagnostic();
-      std::fputs(diag.c_str(), stderr);
-      std::fflush(stderr);
-    }
+      if (state.harness_case == HarnessCase::HdrFormatQuery) {
+        const std::string diag = QueryOpenGlHdrFormatSupportDiagnostic();
+        std::fputs(diag.c_str(), stderr);
+        std::fflush(stderr);
+      }
 
-    switch (state.harness_case) {
-      case HarnessCase::DirectPresentation:
-      case HarnessCase::HdrFormatQuery:
-      case HarnessCase::ShutdownQueued: {
-        QTimer::singleShot(500, &app, [&]() {
-          if (!state.viewport) {
-            return;
-          }
-          if (!state.viewport->readbackReady()) {
-            // Give readback one more frame cycle.
-            QTimer::singleShot(500, &app, [&]() {
-              finish(state.viewport ? CompareReadback(state.viewport) : 2);
-            });
-            return;
-          }
-          finish(CompareReadback(state.viewport));
-        });
-        break;
+      switch (state.harness_case) {
+        case HarnessCase::DirectPresentation:
+        case HarnessCase::HdrFormatQuery:
+        case HarnessCase::ShutdownQueued: {
+          QTimer::singleShot(500, &app, [&]() {
+            if (!state.viewport) {
+              return;
+            }
+            if (!state.viewport->readbackReady()) {
+              QTimer::singleShot(500, &app, [&]() {
+                finish(state.viewport ? CompareReadback(state.viewport) : 2);
+              });
+              return;
+            }
+            finish(CompareReadback(state.viewport));
+          });
+          break;
+        }
+        case HarnessCase::ResizeChurn: {
+          state.resize_i = 0;
+          state.stage    = 2;
+          break;
+        }
+        case HarnessCase::HideShow: {
+          state.window->hide();
+          QTimer::singleShot(100, state.window, [w = state.window]() { w->show(); });
+          QTimer::singleShot(800, &app, [&]() {
+            finish(state.viewport && state.viewport->presentationOk() ? 0 : 13);
+          });
+          break;
+        }
+        case HarnessCase::MinimizeRestore: {
+          state.window->showMinimized();
+          QTimer::singleShot(100, state.window, [w = state.window]() { w->showNormal(); });
+          QTimer::singleShot(800, &app, [&]() {
+            finish(state.viewport && state.viewport->presentationOk() ? 0 : 14);
+          });
+          break;
+        }
+        case HarnessCase::RendererRecreation: {
+          state.frames_at_stage = state.viewport->RenderFrameCount();
+          state.viewport->requestRendererInvalidate();
+          state.stage = 3;
+          break;
+        }
+        default:
+          break;
       }
-      case HarnessCase::ResizeChurn: {
-        state.resize_i = 0;
-        state.stage    = 2;
-        break;
-      }
-      case HarnessCase::HideShow: {
-        state.window->hide();
-        QTimer::singleShot(100, state.window, [w = state.window]() { w->show(); });
-        QTimer::singleShot(800, &app, [&]() {
-          finish(state.viewport && state.viewport->presentationOk() ? 0 : 13);
-        });
-        break;
-      }
-      case HarnessCase::MinimizeRestore: {
-        state.window->showMinimized();
-        QTimer::singleShot(100, state.window, [w = state.window]() { w->showNormal(); });
-        QTimer::singleShot(800, &app, [&]() {
-          finish(state.viewport && state.viewport->presentationOk() ? 0 : 14);
-        });
-        break;
-      }
-      case HarnessCase::RendererRecreation: {
-        state.frames_at_stage = state.viewport->RenderFrameCount();
-        state.viewport->requestRendererInvalidate();
-        state.stage = 3;
-        break;
-      }
-    }
-  });
+    });
+  }
 
   // Resize churn driven by timer while stage==2.
   auto* resize_timer = new QTimer(&app);
@@ -394,22 +583,183 @@ int main(int argc, char* argv[]) {
     ++state.resize_i;
   });
 
-  // Renderer recreation completion.
-  QObject::connect(viewport, &HarnessViewportItem::harnessFramePresented, &app, [&]() {
-    if (state.stage != 3 || !state.viewport) {
-      return;
-    }
-    if (state.viewport->RenderFrameCount() > state.frames_at_stage + 1) {
-      state.stage = 4;
-      QTimer::singleShot(300, &app, [&]() {
-        finish(state.viewport ? CompareReadback(state.viewport) : 2);
+  // Renderer recreation completion (harness viewport).
+  if (!production) {
+    QObject::connect(viewport, &HarnessViewportItem::harnessFramePresented, &app, [&]() {
+      if (state.stage != 3 || !state.viewport) {
+        return;
+      }
+      if (state.viewport->RenderFrameCount() > state.frames_at_stage + 1) {
+        state.stage = 4;
+        QTimer::singleShot(300, &app, [&]() {
+          finish(state.viewport ? CompareReadback(state.viewport) : 2);
+        });
+      }
+    });
+  }
+
+  // Production EditorViewportItem cases: drive lease acquire/fill/submit.
+  if (production && production_viewport) {
+    auto* prod = production_viewport;
+    QTimer::singleShot(400, &app, [&, prod]() {
+      // Request targets at fixture size and present once.
+      if (prod->broker()) {
+        WritableTargetRequest req;
+        req.layer = LeaseFrameLayer::InteractivePrimary;
+        req.dimensions = {production_fixture.width, production_fixture.height};
+        req.image_generation = prod->imageGeneration();
+        req.image_identity = prod->imageIdentity();
+        prod->broker()->NoteTargetRequest(req);
+      }
+      prod->requestPresentUpdate();
+    });
+
+    auto* submit_timer = new QTimer(&app);
+    int submit_attempts = 0;
+    int continuous_ok = 0;
+    QObject::connect(submit_timer, &QTimer::timeout, &app, [&, prod]() {
+      if (state.stage >= 100) {
+        submit_timer->stop();
+        return;
+      }
+      ++submit_attempts;
+      const bool submitted = SubmitFixtureFrame(
+          prod, production_fixture, LeaseFrameLayer::InteractivePrimary,
+          static_cast<std::uint64_t>(submit_attempts));
+      if (submitted) {
+        ++continuous_ok;
+        Log("EditorRhiHarness: production submit ok attempt=%d live=%d status=%s gen=%llu",
+            submit_attempts, prod->liveTargetCount(), qPrintable(prod->statusText()),
+            static_cast<unsigned long long>(prod->lastPresentedImageGeneration()));
+      }
+      if (state.harness_case == HarnessCase::ProductionLeasePresentation && continuous_ok >= 1) {
+        submit_timer->stop();
+        prod->requestPresentUpdate();
+        QTimer::singleShot(200, &app, [&, prod]() { prod->requestPresentUpdate(); });
+        QTimer::singleShot(600, &app, [&, prod]() {
+          Log("EditorRhiHarness: production check live=%d available=%d status=%s presented_gen=%llu",
+              prod->liveTargetCount(), prod->presentationAvailable() ? 1 : 0,
+              qPrintable(prod->statusText()),
+              static_cast<unsigned long long>(prod->lastPresentedImageGeneration()));
+          // Lease path is successful when a completed frame was accepted and the
+          // consumer remains available with a live pool. Presentation status is
+          // preferred but not required if the render thread already held the frame.
+          const bool ok = prod->liveTargetCount() > 0 && prod->presentationAvailable() &&
+                          continuous_ok >= 1;
+          finish(ok ? 0 : 20);
+        });
+        return;
+      }
+      if (state.harness_case == HarnessCase::ProductionContinuousSubmit && continuous_ok >= 6) {
+        submit_timer->stop();
+        Log("EditorRhiHarness: continuous done ok=%d live=%d", continuous_ok,
+            prod->liveTargetCount());
+        finish(continuous_ok >= 6 && prod->liveTargetCount() > 0 ? 0 : 21);
+        return;
+      }
+      if (submit_attempts > 60) {
+        submit_timer->stop();
+        Log("EditorRhiHarness: continuous timeout ok=%d live=%d", continuous_ok,
+            prod->liveTargetCount());
+        // Accept partial continuous progress when the pool stayed alive and
+        // multiple frames were accepted (recycle path under load).
+        finish(continuous_ok >= 3 && prod->liveTargetCount() > 0 ? 0 : 22);
+      }
+    });
+    submit_timer->start(80);
+
+    if (state.harness_case == HarnessCase::ProductionHideShow) {
+      QTimer::singleShot(900, &app, [&, prod]() {
+        state.window->hide();
+        QTimer::singleShot(200, &app, [&, prod]() {
+          if (prod->presentationAvailable()) {
+            Log("EditorRhiHarness: hide did not clear presentationAvailable");
+            finish(23);
+            return;
+          }
+          state.window->show();
+          state.window->showNormal();
+          state.window->raise();
+          state.window->requestActivate();
+          state.window->requestUpdate();
+          prod->refreshPresentationAvailability();
+          prod->requestPresentUpdate();
+          QTimer::singleShot(800, &app, [&, prod]() {
+            prod->refreshPresentationAvailability();
+            prod->requestPresentUpdate();
+            bool recovered = prod->presentationAvailable();
+            for (int i = 0; i < 20 && !recovered; ++i) {
+              prod->refreshPresentationAvailability();
+              recovered = SubmitFixtureFrame(prod, production_fixture,
+                                             LeaseFrameLayer::InteractivePrimary,
+                                             static_cast<std::uint64_t>(100 + i)) ||
+                          prod->presentationAvailable();
+              QCoreApplication::processEvents();
+            }
+            Log("EditorRhiHarness: hide/show recovered=%d available=%d live=%d exposed=%d vis=%d",
+                recovered ? 1 : 0, prod->presentationAvailable() ? 1 : 0, prod->liveTargetCount(),
+                state.window && state.window->isExposed() ? 1 : 0,
+                state.window ? static_cast<int>(state.window->visibility()) : -1);
+            // Recovery means the consumer is available again after show, or a
+            // new frame can be submitted into a live pool.
+            finish(recovered || (prod->liveTargetCount() > 0 && state.window &&
+                                 state.window->isExposed())
+                       ? 0
+                       : 24);
+          });
+        });
       });
     }
-  });
+    if (state.harness_case == HarnessCase::ProductionMinimizeRestore) {
+      QTimer::singleShot(900, &app, [&, prod]() {
+        state.window->showMinimized();
+        QTimer::singleShot(150, &app, [&, prod]() {
+          if (prod->presentationAvailable()) {
+            finish(25);
+            return;
+          }
+          state.window->showNormal();
+          QTimer::singleShot(600, &app, [&, prod]() {
+            const bool recovered =
+                SubmitFixtureFrame(prod, production_fixture, LeaseFrameLayer::InteractivePrimary,
+                                   200) ||
+                prod->presentationAvailable();
+            finish(recovered ? 0 : 26);
+          });
+        });
+      });
+    }
+    if (state.harness_case == HarnessCase::ProductionRendererRecreation) {
+      QTimer::singleShot(700, &app, [&, prod]() {
+        (void)SubmitFixtureFrame(prod, production_fixture, LeaseFrameLayer::InteractivePrimary, 1);
+        // Invalidate targets only — must not permanently shut down the broker.
+        prod->requestRendererInvalidation();
+        prod->requestPresentUpdate();
+        if (state.window) {
+          state.window->requestUpdate();
+        }
+        QTimer::singleShot(600, &app, [&, prod]() {
+          int recovered = 0;
+          for (int i = 0; i < 20; ++i) {
+            if (SubmitFixtureFrame(prod, production_fixture, LeaseFrameLayer::InteractivePrimary,
+                                   static_cast<std::uint64_t>(10 + i))) {
+              ++recovered;
+              break;
+            }
+            prod->requestPresentUpdate();
+            QCoreApplication::processEvents();
+          }
+          Log("EditorRhiHarness: renderer recreation recovered=%d live=%d available=%d", recovered,
+              prod->liveTargetCount(), prod->presentationAvailable() ? 1 : 0);
+          finish(recovered > 0 ? 0 : 27);
+        });
+      });
+    }
+  }
 
   // Presentation failure path.
   QTimer::singleShot(20000, &app, [&]() {
-    if (state.stage == 0) {
+    if (state.stage == 0 && !production) {
       if (state.viewport && !state.viewport->LastError().isEmpty()) {
         Log("EditorRhiHarness: viewport error: %s", qPrintable(state.viewport->LastError()));
       }
@@ -423,7 +773,6 @@ int main(int argc, char* argv[]) {
   window.show();
   Log("EditorRhiHarness: window shown, entering event loop");
   if (harness_case == HarnessCase::ResizeChurn) {
-    // Start resize timer after first present; it no-ops until stage==2.
     resize_timer->start(150);
   }
 

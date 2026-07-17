@@ -4,7 +4,7 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-17 after Phase 1B-Fix closeout.
+Last revised: 2026-07-17 after Phase 3 closeout.
 
 Affected areas:
 
@@ -684,9 +684,52 @@ Acceptance:
 
 **Status: complete (2026-07-17).** Implemented and verified on Windows with the production
 `QQuickRhiItem` viewport, broker lease protocol, CUDA/D3D11 and OpenCL/OpenGL adapters, generation
-and stale-frame filtering, render-thread resource release, and read-only diagnostics. The focused
-broker/contract suite, production QML workflow, workspace-shell suite, and both direct backend
-harness cases pass.
+and stale-frame filtering, render-thread resource release, and read-only diagnostics. Phase 2-Fix
+closed the production-viewport gaps (lease sink wiring, startup backend, sync, pool recycle,
+session generation). Contract suite (20), production `EditorViewportItem` harness on CUDA/OpenCL,
+and direct-presentation harness cases pass.
+
+### Phase 2-Fix
+
+**Status: complete (2026-07-17).**
+
+审核范围是 `82623d7d..d8069e9d`。下列问题已全部修正；`EditorRhiContractsTest`（20）、
+生产 `EditorViewportItem` harness（CUDA/OpenCL lease presentation、continuous submit、
+hide/show、renderer recreation）与既有 direct-presentation harness 通过。
+
+Implementation closeout:
+
+- `LeaseFrameSink` bridges `IFrameSink` → lease acquire/fill/submit (no CPU-upload path).
+- Production `alcedo_main` parses `--editor-backend` and calls `ApplyEditorBackendBeforeWindow`
+  before any QML window.
+- Broker backend comes from `ActiveEditorBackend()`; writable CUDA array / OpenCL `cl_mem` are
+  distinct from sync fields; dual-sided `LeaseLifetimeToken` + producer-writing invalidation.
+- Dropped completed frames recycle targets; newest selection uses preview/detail generation;
+  image identity is separate from monotonic session generation (`EditorSessionController`).
+- Worker submits queue `update()` to the GUI thread; renderer destruction no longer shuts down
+  the shared broker; window hide/minimize/exposure drives consumer availability.
+- Layer/size-aware target requests + Available-count pool top-up; presentation mode + ROI/aspect
+  checks restored; idle `render()` no longer loops forever.
+
+| 问题 | 需要修正和验证的结果 |
+| --- | --- |
+| 新视口没有接到真实编辑管线。仓库里没有生产代码调用 `tryAcquireWritableTarget`、`submitCompletedFrame`、`submitFrame` 或 `setViewState`，QML 只把 `imageId` 交给视口。打开图片后只能创建一个空的 RHI 视口，不会加载或显示编辑结果。 | 把管线输出、视口状态和图片切换接到新视口。用真实 RAW 输入验证 InteractivePrimary、QualityBase 和 DetailPatch 都能到达生产 `EditorViewportItem`。 |
+| 生产程序没有使用已经写好的启动后端选择。`alcedo_main --editor-backend=opencl` 目前不会解析这个参数，也没有在创建窗口前调用 `QQuickWindow::setGraphicsApi(OpenGL)`；Windows 上仍会使用 Qt 默认图形后端。 | 在生产入口创建 `QApplication` 后、加载任何 QML 窗口前完成参数检查、显卡匹配、OpenCL/GL 初始化和 Qt Quick 后端选择。分别启动生产程序验证 CUDA/D3D11 与 OpenCL/OpenGL。 |
+| `EditorViewportItem` 创建 `FramePresentationBroker` 时固定使用 CUDA。即使 Qt Quick 已经运行在 OpenGL 上，OpenCL adapter 创建出来的目标也会因后端不一致被 broker 全部拒绝，`liveTargetCount` 会一直是 0。 | broker 的后端必须来自启动时已经确定的后端，并且和当前 QRhi、管线后端一致。增加生产视口的 OpenCL 测试，确认至少一个目标被接受并能显示完成帧。 |
+| 管线拿到目标后没有足够的信息完成 GPU 写入。CUDA adapter 创建了 `cudaArray_t`，但它只保存在 adapter 私有状态中，lease 没有把可写数组交给管线；OpenCL 把 `cl_mem` 塞进名为 `sync_object` 的字段，但没有 acquire/release 调用。 | 为 CUDA 和 OpenCL 定义清楚的可写目标内容。CUDA 管线必须拿到正确的 CUDA array，OpenCL 管线必须按顺序 acquire、写入、release，并把失败传回 broker。不要让一个字段同时表示“可写图片”和“同步对象”。 |
+| GPU 写入与 Qt Quick 读取之间没有真正的同步。`sync_object` 和 `sync_value` 在渲染器中完全没有使用，`producer_complete` 只是一个布尔值；渲染器也会在 GPU 可能仍在读取旧纹理时立刻把目标重新交给生产者。画面可能撕裂，也可能在高负载时读写同一张纹理。 | 完成 CUDA/D3D11 和 OpenCL/OpenGL 的等待与交接。只有生产 GPU 已经写完，Qt Quick 才能读取；只有 Qt Quick 的读取已经完成，目标才可以再次写入。用异步队列和连续帧测试验证，不要靠 CPU 时序碰巧正确。 |
+| resize、换图、隐藏和 shutdown 会把所有目标直接放进销毁队列，包括仍处于 `ProducerWriting` 的目标。`lifetime_token` 使用空删除器，`LeaseReleaseState` 也没有参与实际流程，所以渲染线程可能在管线仍使用 CUDA array 或 `cl_mem` 时销毁它。 | 失效时先阻止新写入，再等待或取消正在写的目标；生产者和渲染器都确认结束后才能销毁底层资源。增加“写入过程中 resize/换图/关闭窗口”的测试，并检查资源计数归零。 |
+| 同一图层有多张完成帧时，broker 丢掉旧记录却没有把旧记录对应的目标恢复为可写。测试里的 `older` 目标在 `ConsumeNewestCompletedFrame` 后仍停留在 `RendererConsuming`。重复几轮后，三个目标会逐个耗尽，管线再也拿不到目标。 | 丢弃任何完成帧时都要结束它的渲染端占用，或者安全销毁该目标。增加连续提交多张同图层帧的测试，确认目标数量不会减少，长期运行仍能持续取得目标。 |
+| “最新帧”按提交到 broker 的先后顺序选择，而不是按 `preview_generation` 或 `layer_generation` 选择。较早的编辑计算如果更晚结束，会覆盖已经完成的新结果。当前测试只覆盖“旧帧先到、新帧后到”，没有覆盖相反顺序。 | 每个图层记录当前允许显示的 generation，晚到的旧结果直接丢弃。增加“新帧先完成、旧帧后完成”以及三个图层交错完成的测试。 |
+| QML 把数据库 `imageId` 当作 `imageGeneration`。图片 A 切到 B 再切回 A 时 generation 会重复，第一次打开 A 的迟到结果可能被第二次 A 会话接受；QML 还把它声明为 `int`，不能可靠保存所有 64 位图片编号。 | 图片身份和每次打开/切换产生的递增 generation 分开保存。帧同时校验图片身份、会话和 generation，A→B→A 后第一轮 A 的结果必须被丢弃。 |
+| `submitFrame` 和 `submitCompletedFrame` 声明可以从工作线程调用，但接受帧后直接调用 `QQuickItem::update()`。`QQuickItem` 属于 GUI 线程，这个调用没有切回 GUI 线程。 | 工作线程只改受锁保护的数据；请求 QML/Qt Quick 更新必须通过排队调用回到 GUI 线程。增加从真实管线工作线程连续提交、同时切换图片和关闭窗口的测试。 |
+| 场景图被重建后，旧 `EditorViewportRenderer` 析构时会调用 `broker_->Shutdown()`。QML item 仍保留同一个已经永久关闭的 broker，新 renderer 无法再发布目标。Phase 0 的 renderer-recreation 测试测的是另一套 harness renderer，不是生产 renderer。 | renderer 销毁只释放属于该 renderer 的资源；只有 item 或应用真正结束时才永久关闭 broker。直接对生产 `EditorViewportItem` 做场景图失效和恢复测试，恢复后必须继续显示新帧。 |
+| 只监听了 `ItemVisibleHasChanged`。最小化或隐藏顶层窗口不会把 item 的 `visible` 属性改成 false，渲染停止后 broker 仍认为消费者可用，也不会按 Phase 2 的约定取消和释放目标。 | 同时监听窗口暴露、可见性、最小化和场景图失效。窗口不再渲染时停止发放目标并安全回收；恢复时重新建池。使用生产窗口做 hide/show 和 minimize/restore 测试。 |
+| 三种图层共用一个固定为 QQuickRhiItem 渲染目标大小的三目标池，生产者不能请求输出尺寸，`layer_generation` 创建时也始终为 0。旧实现允许 QualityBase、InteractivePrimary 和 DetailPatch 使用不同尺寸；当前设计无法正确承载不同长宽比的主图和小块细节图。 | 让 lease 请求明确包含图层、目标尺寸和图层 generation，按实际管线输出创建或复用目标。验证横图、竖图、奇数尺寸、缩放中的 ROI 和 DetailPatch 都保持正确比例。 |
+| 旧视口的 ROI 选择规则没有完整搬过来。完成帧没有携带 `FramePresentationMode`，直接帧被一律当作 `FullFrame`；同 generation 下选择 InteractivePrimary 时没有检查 ROI 是否仍匹配；DetailPatch 也少了旧实现已有的尺寸比例检查。迟到或尺寸错误的小块可能被拉伸并盖到主图上。 | 把 presentation mode 和完整 ROI 信息带过 lease，恢复旧实现的 ROI 匹配与 DetailPatch 比例检查。用相同输入对比旧、新视口在缩放、平移和连续 ROI 更新时的选帧结果。 |
+| 生产视口新增了 `submitFrame`/`consumeHostFrames` 的 CPU 上传路径，这与本计划“不增加 host-upload 或 CPU-copy presentation fallback”的约束相反，而且真实管线并未使用它。 | 删除生产视口的 CPU 展示退路；测试图片应通过独立测试接口或真实 GPU lease 进入，不要让生产代码在 GPU 互操作失败时静默改走 CPU 上传。 |
+| `render()` 每一帧末尾都再次调用 `update()`，同时每帧向 GUI 线程发送状态和诊断通知。即使没有新画面，视口也会一直重绘并产生排队事件。 | 只在新帧、视图状态、尺寸或资源状态变化时请求下一帧；诊断值真正变化时才发通知。增加空闲状态测试，确认没有持续占用一个 CPU/GPU 渲染循环。 |
+| 当前完成说明把两条 GPU harness 当作生产视口验证，但 `EditorRhiHarness` 仍使用 `HarnessViewportItem/HarnessViewportRenderer`。`MainQmlWorkflowTest` 和 `WorkspaceShellTest` 也没有检查 `EditorViewportItem` 的目标、帧或像素结果，因此上述问题都不会让现有测试失败。 | 给 `EditorRhiViewport` 本身增加可见窗口测试和真实后端测试，检查像素、generation、resize、hide/minimize、renderer recreation、资源释放及长期连续提交。只有这些测试在 CUDA 和 OpenCL 上都通过后，才能把 Phase 2 状态改回 complete。 |
 
 ### Phase 3 - Scene graph overlays and viewer interactions
 
@@ -710,6 +753,27 @@ Acceptance:
 - Overlay golden captures match expected geometry at landscape, portrait, square, and odd viewport
   sizes.
 - Overlay updates do not recreate the viewport texture or block the render thread on pipeline work.
+
+**Status: complete (2026-07-17).**
+
+Implementation closeout:
+
+- `EditorViewerLogic` library holds pure geometry/controllers (`ViewportMapper`, `CropGeometry`,
+  `CropInteractionController`, `ViewTransformController`, `EditViewerOverlayGeometry`) with no
+  QWidget ownership; legacy `EditViewer` and `EditorRhiViewport` both link it.
+- `EditorInteractionController` is the QML-facing typed input surface: viewport metrics (logical size
+  + DPR), image/render-reference sizes, crop tool state, detail-ROI UV, and invokables for hover,
+  press/move/release, double-tap, wheel (Ctrl-zoom + trackpad pan), pinch, leave, reset view/crop.
+  Coordinate APIs document item/logical vs source-image UV explicitly.
+- `EditorOverlayItem` builds retained `QSGGeometryNode` content (dim mask, border, edge grips,
+  thirds grid, rotate stem/handles, detail-ROI bounds) from `BuildOverlaySceneGeometry`; photograph
+  pixels stay in `EditorViewportItem`. Rotation angle, zoom readout, and status remain ordinary QML.
+- `EditorWorkspace.qml` stacks viewport + overlay + `HoverHandler` / `DragHandler` / `WheelHandler` /
+  `PinchHandler` / `TapHandler` and pushes zoom/pan via `EditorViewportItem::setViewTransform`
+  without advancing broker target generation.
+- Tests: `EditViewerLogicTest` (18, including DPR + landscape/portrait/square/odd golden geometry)
+  and `EditorOverlayInteractionTest` (12, crop/zoom/pan/fit/ROI/reset at DPR 1.0/1.5/2.0, overlay
+  updates do not invalidate presentation targets).
 
 ### Phase 4A - Editor session state machine and service boundaries
 

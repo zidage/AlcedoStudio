@@ -39,6 +39,28 @@ auto EditViewerOverlayGeometry::Build(const EditViewerOverlaySnapshot& snapshot)
     geometry.image_rect_valid = geometry.image_rect.isValid();
   }
 
+  // Detail ROI is independent of crop overlay visibility.
+  if (snapshot.detail_roi_visible && snapshot.detail_roi_uv.isValid()) {
+    const QRectF roi = snapshot.detail_roi_uv.normalized();
+    const std::array<QPointF, 4> roi_uv = {
+        QPointF(roi.left(), roi.top()),
+        QPointF(roi.right(), roi.top()),
+        QPointF(roi.right(), roi.bottom()),
+        QPointF(roi.left(), roi.bottom()),
+    };
+    bool roi_ok = true;
+    for (size_t i = 0; i < roi_uv.size(); ++i) {
+      const auto corner = ViewportMapper::ImageUvToWidgetPoint(
+          roi_uv[i], snapshot.widget_info, snapshot.image_info, zoom, pan);
+      if (!corner.has_value()) {
+        roi_ok = false;
+        break;
+      }
+      geometry.detail_roi_corners_widget[i] = *corner;
+    }
+    geometry.detail_roi_valid = roi_ok;
+  }
+
   const auto& crop_state = snapshot.viewer_state.crop_overlay;
   if (!crop_state.overlay_visible) {
     return geometry;

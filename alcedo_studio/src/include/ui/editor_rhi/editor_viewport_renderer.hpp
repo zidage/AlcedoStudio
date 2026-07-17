@@ -10,8 +10,8 @@
 
 #include <array>
 #include <cstdint>
-#include <deque>
 #include <memory>
+#include <vector>
 
 #include "ui/editor_rhi/frame_presentation_broker.hpp"
 #include "ui/editor_rhi/frame_presentation_lease.hpp"
@@ -79,24 +79,27 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
   void releaseBrokerTargets();
   void ensureStaticResources(QRhiRenderTarget* render_target,
                              QRhiCommandBuffer* command_buffer);
-  void ensureTargetPool(const QSize& size);
+  void fulfillTargetRequests();
+  void ensureDefaultTargetPool(const QSize& size);
   void consumeDirectFrames();
-  void consumeHostFrames(QRhiResourceUpdateBatch* updates);
   [[nodiscard]] auto selectedPrimaryLayer() const -> const LayerState*;
   [[nodiscard]] auto selectedDetailLayer() const -> const LayerState*;
   [[nodiscard]] auto hasVisibleDetailPatch() const -> bool;
+  [[nodiscard]] auto detailPatchAspectOk(const LayerState& detail,
+                                         const LayerState& quality) const -> bool;
   void recreateShaderResources(QRhiTexture* primary, QRhiTexture* detail);
+  void publishDiagnosticsIfChanged();
 
   EditorViewportItem* item_ = nullptr;
   std::shared_ptr<FramePresentationBroker> broker_;
   std::unique_ptr<ILeaseTargetAdapter> adapter_;
   ViewerViewState view_state_{};
   std::array<LayerState, 3> layers_{};
-  std::deque<ViewerFrame> host_frames_;
   EditorBackend backend_ = EditorBackend::Cuda;
   std::uint64_t target_generation_ = 0;
   std::uint64_t image_generation_ = 0;
-  QSize target_size_{};
+  std::uint64_t image_identity_ = 0;
+  QSize default_pool_size_{};
   QRhi* rhi_ = nullptr;
   QRhiRenderTarget* render_target_ = nullptr;
 
@@ -110,6 +113,8 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
   QRhiTexture* bound_primary_texture_ = nullptr;
   QRhiTexture* bound_detail_texture_ = nullptr;
   bool static_upload_pending_ = false;
+  bool content_dirty_ = false;
+  bool had_primary_last_frame_ = false;
 };
 
 }  // namespace alcedo::editor_rhi

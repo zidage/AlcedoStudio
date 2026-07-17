@@ -50,7 +50,7 @@ class HarnessViewportRenderer final : public QQuickRhiItemRenderer {
     int  width  = 0;
     int  height = 0;
     std::uintptr_t texture_handle = 0;
-    std::shared_ptr<const void> lifetime_token{};
+    std::shared_ptr<LeaseLifetimeToken> lifetime_token{};
 
 #if defined(_WIN32) && defined(HAVE_CUDA)
     Microsoft::WRL::ComPtr<ID3D11Texture2D> d3d11_texture;

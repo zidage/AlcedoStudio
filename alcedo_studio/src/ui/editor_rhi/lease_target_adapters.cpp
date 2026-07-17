@@ -50,6 +50,7 @@ struct CudaD3D11LeaseAdapter::State {
     cudaMipmappedArray_t mipmapped_array = nullptr;
     cudaArray_t image_array = nullptr;
     std::uintptr_t native_handle = 0;
+    std::shared_ptr<LeaseLifetimeToken> lifetime_token;
   };
 
   ID3D11Device* device = nullptr;
@@ -65,6 +66,8 @@ struct OpenClOpenGlLeaseAdapter::State {
     GLuint texture = 0;
     cl_mem image = nullptr;
     std::uintptr_t native_handle = 0;
+    bool acquired = false;
+    std::shared_ptr<LeaseLifetimeToken> lifetime_token;
   };
 
   std::vector<std::unique_ptr<Target>> targets;
@@ -81,14 +84,16 @@ CudaD3D11LeaseAdapter::~CudaD3D11LeaseAdapter() {
     return;
   }
   while (!state_->targets.empty()) {
-    const auto native_handle = state_->targets.back()->native_handle;
-    DestroyTarget(WritableTargetLease{.native_handle = native_handle});
+    WritableTargetLease lease;
+    lease.native_handle = state_->targets.back()->native_handle;
+    lease.lifetime_token = state_->targets.back()->lifetime_token;
+    DestroyTarget(lease);
   }
 #endif
 }
 
 auto CudaD3D11LeaseAdapter::CreateTarget(QRhi* rhi, const QSize& size,
-                                         TargetGeneration generation)
+                                         TargetGeneration generation, LeaseFrameLayer layer)
     -> std::optional<WritableTargetLease> {
 #if defined(_WIN32) && defined(HAVE_CUDA)
   if (!rhi || rhi->backend() != QRhi::D3D11 || !size.isValid() || size.width() <= 0 ||
@@ -143,8 +148,7 @@ auto CudaD3D11LeaseAdapter::CreateTarget(QRhi* rhi, const QSize& size,
 
   Microsoft::WRL::ComPtr<IDXGIResource1> resource;
   if (FAILED(target->texture.As(&resource)) ||
-      FAILED(resource->CreateSharedHandle(nullptr, GENERIC_ALL, nullptr,
-                                           &target->shared_handle)) ||
+      FAILED(resource->CreateSharedHandle(nullptr, GENERIC_ALL, nullptr, &target->shared_handle)) ||
       !target->shared_handle) {
     last_error_ = "failed to create a shared D3D11 handle";
     cleanup_target();
@@ -164,13 +168,12 @@ auto CudaD3D11LeaseAdapter::CreateTarget(QRhi* rhi, const QSize& size,
 
   cudaExternalMemoryMipmappedArrayDesc array_desc{};
   array_desc.formatDesc = cudaCreateChannelDesc(32, 32, 32, 32, cudaChannelFormatKindFloat);
-  array_desc.extent = cudaExtent{static_cast<size_t>(size.width()),
-                                 static_cast<size_t>(size.height()), 0};
+  array_desc.extent =
+      cudaExtent{static_cast<size_t>(size.width()), static_cast<size_t>(size.height()), 0};
   array_desc.flags = cudaArrayColorAttachment;
   array_desc.numLevels = 1;
-  if (cudaExternalMemoryGetMappedMipmappedArray(&target->mipmapped_array,
-                                                 target->external_memory, &array_desc) !=
-          cudaSuccess ||
+  if (cudaExternalMemoryGetMappedMipmappedArray(&target->mipmapped_array, target->external_memory,
+                                                 &array_desc) != cudaSuccess ||
       cudaGetMipmappedArrayLevel(&target->image_array, target->mipmapped_array, 0) !=
           cudaSuccess) {
     last_error_ = "failed to map CUDA array for lease target";
@@ -179,23 +182,30 @@ auto CudaD3D11LeaseAdapter::CreateTarget(QRhi* rhi, const QSize& size,
   }
 
   target->native_handle = reinterpret_cast<std::uintptr_t>(target->texture.Get());
+  target->lifetime_token = std::make_shared<LeaseLifetimeToken>();
   state_->device = device;
   state_->targets.push_back(std::move(target));
+
   WritableTargetLease lease;
   lease.backend = EditorBackend::Cuda;
   lease.handle_kind = LeaseNativeHandleKind::D3D11Texture2D;
+  lease.writable_kind = LeaseWritableResourceKind::CudaArray;
   lease.pixel_format = LeasePixelFormat::Rgba32f;
   lease.dimensions = {size.width(), size.height()};
   lease.generation = generation;
+  lease.layer = layer;
   lease.native_handle = state_->targets.back()->native_handle;
+  lease.writable_resource =
+      reinterpret_cast<std::uintptr_t>(state_->targets.back()->image_array);
+  // Shared NT handle is retained for diagnostics only; CUDA array is the write target.
   lease.sync_object = reinterpret_cast<std::uintptr_t>(state_->targets.back()->shared_handle);
-  lease.lifetime_token = std::shared_ptr<const void>(
-      reinterpret_cast<const void*>(lease.native_handle), [](const void*) {});
+  lease.lifetime_token = state_->targets.back()->lifetime_token;
   return lease;
 #else
   (void)rhi;
   (void)size;
   (void)generation;
+  (void)layer;
   last_error_ = "CUDA/D3D11 lease adapter is unavailable in this build";
   return std::nullopt;
 #endif
@@ -236,20 +246,42 @@ void CudaD3D11LeaseAdapter::DestroyTarget(const WritableTargetLease& lease) {
 #endif
 }
 
+auto CudaD3D11LeaseAdapter::WaitProducerWriteComplete(const WritableTargetLease& lease) -> bool {
+#if defined(_WIN32) && defined(HAVE_CUDA)
+  if (lease.writable_kind != LeaseWritableResourceKind::CudaArray ||
+      lease.writable_resource == 0) {
+    last_error_ = "CUDA wait requires a valid cudaArray writable resource";
+    return false;
+  }
+  const cudaError_t err = cudaDeviceSynchronize();
+  if (err != cudaSuccess) {
+    last_error_ = std::string("cudaDeviceSynchronize failed: ") + cudaGetErrorString(err);
+    return false;
+  }
+  return true;
+#else
+  (void)lease;
+  last_error_ = "CUDA wait unavailable in this build";
+  return false;
+#endif
+}
+
 OpenClOpenGlLeaseAdapter::OpenClOpenGlLeaseAdapter() : state_(std::make_unique<State>()) {}
 
 OpenClOpenGlLeaseAdapter::~OpenClOpenGlLeaseAdapter() {
 #if defined(HAVE_OPENCL)
   if (state_) {
     while (!state_->targets.empty()) {
-      DestroyTarget(WritableTargetLease{.native_handle = state_->targets.back()->native_handle});
+      WritableTargetLease lease;
+      lease.native_handle = state_->targets.back()->native_handle;
+      DestroyTarget(lease);
     }
   }
 #endif
 }
 
 auto OpenClOpenGlLeaseAdapter::CreateTarget(QRhi* rhi, const QSize& size,
-                                            TargetGeneration generation)
+                                            TargetGeneration generation, LeaseFrameLayer layer)
     -> std::optional<WritableTargetLease> {
 #if defined(HAVE_OPENCL)
   if (!rhi || rhi->backend() != QRhi::OpenGLES2 || !size.isValid() || size.width() <= 0 ||
@@ -292,6 +324,7 @@ auto OpenClOpenGlLeaseAdapter::CreateTarget(QRhi* rhi, const QSize& size,
   functions->glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, size.width(), size.height(), 0, GL_RGBA,
                           GL_FLOAT, nullptr);
   functions->glBindTexture(GL_TEXTURE_2D, 0);
+  functions->glFlush();
   if (target->texture == 0) {
     last_error_ = "glGenTextures failed for OpenCL lease target";
     return std::nullopt;
@@ -308,23 +341,29 @@ auto OpenClOpenGlLeaseAdapter::CreateTarget(QRhi* rhi, const QSize& size,
   }
   NativeResourceCounters::Instance().OnCreateOpenClImage();
   target->native_handle = static_cast<std::uintptr_t>(target->texture);
+  target->lifetime_token = std::make_shared<LeaseLifetimeToken>();
   state_->targets.push_back(std::move(target));
 
   WritableTargetLease lease;
   lease.backend = EditorBackend::OpenCl;
   lease.handle_kind = LeaseNativeHandleKind::OpenGLTexture2D;
+  lease.writable_kind = LeaseWritableResourceKind::OpenClImage;
   lease.pixel_format = LeasePixelFormat::Rgba32f;
   lease.dimensions = {size.width(), size.height()};
   lease.generation = generation;
+  lease.layer = layer;
   lease.native_handle = state_->targets.back()->native_handle;
-  lease.sync_object = reinterpret_cast<std::uintptr_t>(state_->targets.back()->image);
-  lease.lifetime_token = std::shared_ptr<const void>(
-      reinterpret_cast<const void*>(lease.native_handle), [](const void*) {});
+  lease.writable_resource =
+      reinterpret_cast<std::uintptr_t>(state_->targets.back()->image);
+  // sync_object remains 0; OpenCL/GL ordering uses acquire/release + clFinish.
+  lease.sync_object = 0;
+  lease.lifetime_token = state_->targets.back()->lifetime_token;
   return lease;
 #else
   (void)rhi;
   (void)size;
   (void)generation;
+  (void)layer;
   last_error_ = "OpenCL/OpenGL lease adapter is unavailable in this build";
   return std::nullopt;
 #endif
@@ -343,6 +382,13 @@ void OpenClOpenGlLeaseAdapter::DestroyTarget(const WritableTargetLease& lease) {
     return;
   }
   auto& target = *it;
+  if (target->acquired && target->image) {
+    cl_mem image = target->image;
+    (void)clEnqueueReleaseGLObjects(OpenClContext::Instance().Queue(), 1, &image, 0, nullptr,
+                                    nullptr);
+    (void)clFinish(OpenClContext::Instance().Queue());
+    target->acquired = false;
+  }
   if (target->image) {
     clReleaseMemObject(target->image);
     target->image = nullptr;
@@ -361,6 +407,84 @@ void OpenClOpenGlLeaseAdapter::DestroyTarget(const WritableTargetLease& lease) {
 #endif
 }
 
+auto OpenClOpenGlLeaseAdapter::AcquireForProducerWrite(const WritableTargetLease& lease) -> bool {
+#if defined(HAVE_OPENCL)
+  if (lease.writable_kind != LeaseWritableResourceKind::OpenClImage ||
+      lease.writable_resource == 0) {
+    last_error_ = "OpenCL acquire requires a valid cl_mem writable resource";
+    return false;
+  }
+  auto* image = reinterpret_cast<cl_mem>(lease.writable_resource);
+  const cl_int error =
+      clEnqueueAcquireGLObjects(OpenClContext::Instance().Queue(), 1, &image, 0, nullptr, nullptr);
+  if (error != CL_SUCCESS) {
+    last_error_ = "clEnqueueAcquireGLObjects failed: " + std::to_string(error);
+    return false;
+  }
+  if (state_) {
+    for (auto& target : state_->targets) {
+      if (target && target->native_handle == lease.native_handle) {
+        target->acquired = true;
+        break;
+      }
+    }
+  }
+  return true;
+#else
+  (void)lease;
+  return false;
+#endif
+}
+
+auto OpenClOpenGlLeaseAdapter::ReleaseAfterProducerWrite(const WritableTargetLease& lease)
+    -> bool {
+#if defined(HAVE_OPENCL)
+  if (lease.writable_kind != LeaseWritableResourceKind::OpenClImage ||
+      lease.writable_resource == 0) {
+    last_error_ = "OpenCL release requires a valid cl_mem writable resource";
+    return false;
+  }
+  auto* image = reinterpret_cast<cl_mem>(lease.writable_resource);
+  const cl_int error =
+      clEnqueueReleaseGLObjects(OpenClContext::Instance().Queue(), 1, &image, 0, nullptr, nullptr);
+  if (error != CL_SUCCESS) {
+    last_error_ = "clEnqueueReleaseGLObjects failed: " + std::to_string(error);
+    return false;
+  }
+  if (state_) {
+    for (auto& target : state_->targets) {
+      if (target && target->native_handle == lease.native_handle) {
+        target->acquired = false;
+        break;
+      }
+    }
+  }
+  return true;
+#else
+  (void)lease;
+  return false;
+#endif
+}
+
+auto OpenClOpenGlLeaseAdapter::WaitProducerWriteComplete(const WritableTargetLease& lease)
+    -> bool {
+#if defined(HAVE_OPENCL)
+  (void)lease;
+  const cl_int error = clFinish(OpenClContext::Instance().Queue());
+  if (error != CL_SUCCESS) {
+    last_error_ = "clFinish failed after OpenCL producer write: " + std::to_string(error);
+    return false;
+  }
+  if (QOpenGLContext::currentContext()) {
+    QOpenGLContext::currentContext()->functions()->glFlush();
+  }
+  return true;
+#else
+  (void)lease;
+  return false;
+#endif
+}
+
 auto MakeLeaseTargetAdapter(EditorBackend backend) -> std::unique_ptr<ILeaseTargetAdapter> {
   switch (backend) {
     case EditorBackend::Cuda:
@@ -371,6 +495,56 @@ auto MakeLeaseTargetAdapter(EditorBackend backend) -> std::unique_ptr<ILeaseTarg
       return std::make_unique<UnsupportedLeaseTargetAdapter>(backend);
   }
   return std::make_unique<UnsupportedLeaseTargetAdapter>(backend);
+}
+
+auto ProducerAcquireWritable(const WritableTargetLease& lease) -> bool {
+  if (lease.writable_kind == LeaseWritableResourceKind::OpenClImage) {
+#if defined(HAVE_OPENCL)
+    if (lease.writable_resource == 0) {
+      return false;
+    }
+    auto* image = reinterpret_cast<cl_mem>(lease.writable_resource);
+    return clEnqueueAcquireGLObjects(OpenClContext::Instance().Queue(), 1, &image, 0, nullptr,
+                                     nullptr) == CL_SUCCESS;
+#else
+    return false;
+#endif
+  }
+  return lease.writable_resource != 0;
+}
+
+auto ProducerReleaseWritable(const WritableTargetLease& lease) -> bool {
+  if (lease.writable_kind == LeaseWritableResourceKind::OpenClImage) {
+#if defined(HAVE_OPENCL)
+    if (lease.writable_resource == 0) {
+      return false;
+    }
+    auto* image = reinterpret_cast<cl_mem>(lease.writable_resource);
+    return clEnqueueReleaseGLObjects(OpenClContext::Instance().Queue(), 1, &image, 0, nullptr,
+                                     nullptr) == CL_SUCCESS;
+#else
+    return false;
+#endif
+  }
+  return true;
+}
+
+auto ProducerWaitWritableComplete(const WritableTargetLease& lease) -> bool {
+  if (lease.writable_kind == LeaseWritableResourceKind::CudaArray) {
+#if defined(_WIN32) && defined(HAVE_CUDA)
+    return cudaDeviceSynchronize() == cudaSuccess;
+#else
+    return false;
+#endif
+  }
+  if (lease.writable_kind == LeaseWritableResourceKind::OpenClImage) {
+#if defined(HAVE_OPENCL)
+    return clFinish(OpenClContext::Instance().Queue()) == CL_SUCCESS;
+#else
+    return false;
+#endif
+  }
+  return true;
 }
 
 }  // namespace alcedo::editor_rhi

@@ -22,6 +22,10 @@ struct EditViewerOverlaySnapshot {
   ViewportWidgetInfo    widget_info{};
   ViewportImageInfo     image_info{};
   FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
+  // Optional detail-patch / ROI bounds in source-image UV (0..1). When valid,
+  // overlay drawing may show a guide rectangle independent of crop handles.
+  bool                  detail_roi_visible = false;
+  QRectF                detail_roi_uv      = QRectF(0.0, 0.0, 1.0, 1.0);
 };
 
 struct CropOverlayWidgetGeometry {
@@ -31,6 +35,8 @@ struct CropOverlayWidgetGeometry {
   bool                   crop_corners_valid  = false;
   QPointF                rotate_stem_widget{};
   QPointF                rotate_handle_widget{};
+  std::array<QPointF, 4> detail_roi_corners_widget{};
+  bool                   detail_roi_valid    = false;
 };
 
 enum class EditViewerOverlayHitKind {

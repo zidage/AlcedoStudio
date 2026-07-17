@@ -5,6 +5,7 @@
 #pragma once
 
 #include <QObject>
+#include <QtGlobal>
 
 namespace alcedo::ui {
 
@@ -21,6 +22,9 @@ class EditorSessionController final : public QObject {
   Q_PROPERTY(bool hasImage READ has_image NOTIFY StateChanged)
   Q_PROPERTY(uint elementId READ element_id NOTIFY StateChanged)
   Q_PROPERTY(uint imageId READ image_id NOTIFY StateChanged)
+  // Monotonic counter advanced on every Open, including A→B→A reopens. Distinct
+  // from imageId so the viewport can reject stale frames from a prior session.
+  Q_PROPERTY(qulonglong sessionGeneration READ session_generation NOTIFY StateChanged)
   Q_PROPERTY(bool filmstripCollapsed READ filmstrip_collapsed WRITE set_filmstrip_collapsed
                  NOTIFY FilmstripUiChanged)
   Q_PROPERTY(double filmstripExpandedHeight READ filmstrip_expanded_height WRITE
@@ -33,6 +37,7 @@ class EditorSessionController final : public QObject {
   [[nodiscard]] bool has_image() const { return active_ && element_id_ > 0 && image_id_ > 0; }
   [[nodiscard]] uint element_id() const { return element_id_; }
   [[nodiscard]] uint image_id() const { return image_id_; }
+  [[nodiscard]] qulonglong session_generation() const { return session_generation_; }
   [[nodiscard]] bool filmstrip_collapsed() const { return filmstrip_collapsed_; }
   [[nodiscard]] double filmstrip_expanded_height() const { return filmstrip_expanded_height_; }
 
@@ -55,6 +60,7 @@ class EditorSessionController final : public QObject {
   bool              active_ = false;
   uint              element_id_ = 0;
   uint              image_id_ = 0;
+  qulonglong        session_generation_ = 0;
   bool              filmstrip_collapsed_ = false;
   double            filmstrip_expanded_height_ = 128.0;
 };
