@@ -4,20 +4,17 @@
 
 #pragma once
 
+#include <QString>
 #include <functional>
+#include <json.hpp>
 #include <memory>
 #include <optional>
 #include <string>
-
-#include <QString>
-#include <json.hpp>
 
 #include "app/history_mgmt_service.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/history/version.hpp"
 #include "ui/alcedo_main/editor_dialog/modules/versioning.hpp"
-
-class QListWidgetItem;
 
 namespace alcedo::ui {
 
@@ -39,7 +36,7 @@ class EditorHistoryCoordinator {
     /// Prompt for a string; returns nullopt if cancelled.
     std::function<std::optional<QString>(const QString& title, const QString& label,
                                          const QString& current)>
-        prompt_text;
+                              prompt_text;
     std::function<bool(bool)> reload_ui_state_from_pipeline;
     std::function<void()>     after_pipeline_params_imported;
     std::function<void()>     refresh_version_log_selection_styles;
@@ -53,14 +50,11 @@ class EditorHistoryCoordinator {
   void SetUiContext(const versioning::VersionUiContext& ui);
   void SeedWorkingVersionFromActive();
 
-  auto ReconstructPipelineParamsForVersion(Version& version) const
-      -> std::optional<nlohmann::json>;
+  auto ReconstructPipelineParamsForVersion(Version& version) const -> std::optional<nlohmann::json>;
   auto ReloadUiStateFromPipeline(bool reset_to_defaults_if_missing) -> bool;
   auto ApplyPipelineParamsToEditor(const nlohmann::json& params) -> bool;
   auto ReloadEditorFromHistoryVersion(Version& version, QString* error) -> bool;
 
-  /// UI entry: list item → version id. Widgets only at the call site.
-  void CheckoutSelectedVersion(QListWidgetItem* item);
   void CheckoutVersionById(const QString& version_id);
   void RenameVersionById(const QString& version_id);
   void UndoLastTransaction();
@@ -69,10 +63,10 @@ class EditorHistoryCoordinator {
   void CreateVersion();
 
  private:
-  void ShowMessage(const QString& title, const QString& text, bool is_warning) const;
+  void         ShowMessage(const QString& title, const QString& text, bool is_warning) const;
 
-  Dependencies                   dependencies_;
-  Callbacks                      callbacks_;
+  Dependencies dependencies_;
+  Callbacks    callbacks_;
   versioning::VersionUiContext   ui_{};
   versioning::VersionUiCallbacks ui_callbacks_{};
   alcedo::WorkingVersion         working_version_{};

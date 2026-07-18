@@ -13,15 +13,31 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
     : dependencies_(std::move(dependencies)) {}
 
 void EditorSessionService::SetResultObserver(ResultObserver observer) {
+  std::scoped_lock lock(mutex_);
   observer_ = std::move(observer);
 }
 
 void EditorSessionService::SetChangeNotifier(ChangeNotifier notifier) {
+  std::scoped_lock lock(mutex_);
   change_notifier_ = std::move(notifier);
 }
 
 void EditorSessionService::SetPresentationSinkId(PresentationSinkId sink_id) {
+  std::scoped_lock lock(mutex_);
   presentation_sink_id_ = sink_id;
+  if (sink_id == 0) {
+    presentation_width_  = 0;
+    presentation_height_ = 0;
+    return;
+  }
+  RoutePendingInitialRender();
+}
+
+void EditorSessionService::SetPresentationSize(int width, int height) {
+  std::scoped_lock lock(mutex_);
+  presentation_width_  = std::max(0, width);
+  presentation_height_ = std::max(0, height);
+  RoutePendingInitialRender();
 }
 
 auto EditorSessionService::Emit(EditorSessionResult result) -> EditorSessionResult {
@@ -92,6 +108,7 @@ auto EditorSessionService::AcquireGuards(sl_element_id_t element_id, std::string
 
 auto EditorSessionService::MakeRenderIntent(EditorRenderReason reason) const
     -> std::optional<EditorRenderIntent> {
+  std::scoped_lock lock(mutex_);
   if (!has_image() && state_ != EditorSessionState::Loading &&
       state_ != EditorSessionState::Acquiring && state_ != EditorSessionState::Switching) {
     return std::nullopt;
@@ -108,6 +125,8 @@ auto EditorSessionService::MakeRenderIntent(EditorRenderReason reason) const
   intent.frame_role           = FrameRoleForQuality(intent.quality);
   intent.replacement_key      = DefaultReplacementKey(intent.quality);
   intent.adjustment           = adjustment_snapshot_;
+  intent.requested_width      = presentation_width_;
+  intent.requested_height     = presentation_height_;
   intent.presentation_sink_id = presentation_sink_id_;
   intent.cancellation         = std::make_shared<EditorRenderCancellationToken>();
   FillRenderIntentDefaults(intent);
@@ -115,6 +134,10 @@ auto EditorSessionService::MakeRenderIntent(EditorRenderReason reason) const
 }
 
 auto EditorSessionService::RouteInitialRender(EditorRenderReason reason) -> std::uint64_t {
+  if (!PresentationTargetReady()) {
+    pending_initial_reason_ = reason;
+    return 0;
+  }
   if (!dependencies_.render) {
     return 0;
   }
@@ -122,9 +145,8 @@ auto EditorSessionService::RouteInitialRender(EditorRenderReason reason) -> std:
   if (!intent) {
     return 0;
   }
-  dependencies_.render->SetActiveGenerations(identity_.session_generation,
-                                             identity_.render_generation,
-                                             identity_.view_generation);
+  dependencies_.render->SetActiveGenerations(
+      identity_.session_generation, identity_.render_generation, identity_.view_generation);
   const EditorRenderResult routed = dependencies_.render->Submit(*intent);
   if (routed.kind == EditorRenderResultKind::RequestAccepted) {
     if (reason == EditorRenderReason::InitialFrame || reason == EditorRenderReason::ImageSwitch ||
@@ -134,6 +156,7 @@ auto EditorSessionService::RouteInitialRender(EditorRenderReason reason) -> std:
       first_frame_submitted_  = false;
       first_frame_presented_  = false;
     }
+    pending_initial_reason_.reset();
     EditorSessionResult session_result;
     session_result.kind              = EditorSessionResultKind::RenderRouted;
     session_result.state             = state_;
@@ -145,13 +168,36 @@ auto EditorSessionService::RouteInitialRender(EditorRenderReason reason) -> std:
   return 0;
 }
 
-void EditorSessionService::BeginSaveForSession(std::uint64_t session_generation,
-                                               sl_element_id_t element_id) {
+auto EditorSessionService::PresentationTargetReady() const -> bool {
+  return presentation_sink_id_ != 0 && presentation_width_ > 0 && presentation_height_ > 0;
+}
+
+void EditorSessionService::RoutePendingInitialRender() {
+  if (!pending_initial_reason_.has_value() || !PresentationTargetReady() || !has_image()) {
+    return;
+  }
+  const EditorRenderReason reason = *pending_initial_reason_;
+  if (RouteInitialRender(reason) == 0 && pending_initial_reason_.has_value()) {
+    TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                 "First frame could not be scheduled");
+  }
+}
+
+auto EditorSessionService::BeginSaveForSession(std::uint64_t   session_generation,
+                                               sl_element_id_t element_id, std::string* error)
+    -> bool {
   std::uint64_t task_id = 0;
   if (dependencies_.tasks) {
     task_id = dependencies_.tasks->BeginTask("editor_save", element_id);
+    if (task_id == 0) {
+      if (error) {
+        *error = "Failed to start editor save task";
+      }
+      return false;
+    }
   }
   pending_saves_.push_back(PendingSave{session_generation, task_id});
+  state_ = EditorSessionState::Saving;
   EditorSessionResult started;
   started.kind     = EditorSessionResultKind::SaveStarted;
   started.state    = state_;
@@ -159,6 +205,48 @@ void EditorSessionService::BeginSaveForSession(std::uint64_t session_generation,
   started.task_id  = task_id;
   started.message  = "Save started";
   Emit(std::move(started));
+  return true;
+}
+
+auto EditorSessionService::SealCurrentSession(bool persist_changes, bool start_background_save,
+                                              std::string* error) -> bool {
+  if (identity_.element_id == 0 || identity_.image_id == 0) {
+    return true;
+  }
+
+  if (persist_changes) {
+    if (dependencies_.journal && !dependencies_.journal->AppendBarrier(
+                                     identity_.element_id, identity_.session_generation, error)) {
+      return false;
+    }
+    if (start_background_save &&
+        !BeginSaveForSession(identity_.session_generation, identity_.element_id, error)) {
+      return false;
+    }
+  } else if (dependencies_.journal &&
+             !dependencies_.journal->DiscardUnflushed(identity_.element_id, error)) {
+    return false;
+  }
+
+  if (dependencies_.render && identity_.session_generation != 0) {
+    dependencies_.render->CancelSession(identity_.session_generation);
+  }
+  ReleaseGuards();
+  return true;
+}
+
+void EditorSessionService::ResetActiveImageState() {
+  identity_.element_id        = 0;
+  identity_.image_id          = 0;
+  identity_.render_generation = 0;
+  identity_.view_generation   = 0;
+  adjustment_snapshot_        = {};
+  first_frame_request_id_     = 0;
+  image_acquired_             = false;
+  first_frame_completed_      = false;
+  first_frame_submitted_      = false;
+  first_frame_presented_      = false;
+  pending_initial_reason_.reset();
 }
 
 auto EditorSessionService::HandleOpenOrSwitch(const EditorSessionIntent& intent, bool is_switch)
@@ -169,19 +257,7 @@ auto EditorSessionService::HandleOpenOrSwitch(const EditorSessionIntent& intent,
 
   const bool open_empty = intent.element_id == 0 || intent.image_id == 0;
   if (open_empty) {
-    if (dependencies_.render && identity_.session_generation != 0) {
-      dependencies_.render->CancelSession(identity_.session_generation);
-    }
-    ReleaseGuards();
-    identity_.element_id = 0;
-    identity_.image_id   = 0;
-    first_frame_request_id_ = 0;
-    image_acquired_         = false;
-    first_frame_completed_  = false;
-    first_frame_submitted_  = false;
-    first_frame_presented_  = false;
-    return TransitionTo(EditorSessionState::NoImage, EditorSessionResultKind::StateChanged,
-                        "No image selected");
+    return HandleClose(/*persist_changes=*/true);
   }
 
   // Same image already open: no-op. Avoids leaking guards or orphaning renders.
@@ -197,22 +273,15 @@ auto EditorSessionService::HandleOpenOrSwitch(const EditorSessionIntent& intent,
     return Emit(std::move(result));
   }
 
-  // Seal prior session: cancel outdated renders; optional save barrier when switching.
-  if (identity_.session_generation != 0 &&
-      (identity_.element_id != 0 || identity_.image_id != 0)) {
-    if (dependencies_.render) {
-      dependencies_.render->CancelSession(identity_.session_generation);
+  // Seal the prior image before acquiring the next one. Workspace routing calls
+  // Switch directly, so this is the single A→B lifecycle path.
+  if (identity_.session_generation != 0 && (identity_.element_id != 0 || identity_.image_id != 0)) {
+    std::string seal_error;
+    if (!SealCurrentSession(/*persist_changes=*/true, /*start_background_save=*/true,
+                            &seal_error)) {
+      return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                          seal_error.empty() ? "Failed to save current image" : seal_error);
     }
-    if (is_switch || state_ == EditorSessionState::Interactive ||
-        state_ == EditorSessionState::Saving) {
-      if (dependencies_.journal) {
-        std::string journal_error;
-        dependencies_.journal->AppendBarrier(identity_.element_id, identity_.session_generation,
-                                             &journal_error);
-      }
-      BeginSaveForSession(identity_.session_generation, identity_.element_id);
-    }
-    ReleaseGuards();
   }
 
   ++identity_.session_generation;
@@ -225,10 +294,9 @@ auto EditorSessionService::HandleOpenOrSwitch(const EditorSessionIntent& intent,
   first_frame_completed_      = false;
   first_frame_submitted_      = false;
   first_frame_presented_      = false;
-  if (!intent.adjustment.fingerprint.empty() || !intent.adjustment.params_json.empty() ||
-      !intent.adjustment.patches.empty()) {
-    adjustment_snapshot_ = intent.adjustment;
-  }
+  // Adjustment state is image-scoped. An empty snapshot means a clean image;
+  // never inherit the previous image's params.
+  adjustment_snapshot_        = intent.adjustment;
 
   const EditorSessionState acquire_state =
       is_switch ? EditorSessionState::Switching : EditorSessionState::Acquiring;
@@ -244,15 +312,34 @@ auto EditorSessionService::HandleOpenOrSwitch(const EditorSessionIntent& intent,
   }
 
   TransitionTo(EditorSessionState::Loading, EditorSessionResultKind::StateChanged, "Loading image");
-  RouteInitialRender(is_switch ? EditorRenderReason::ImageSwitch
-                               : EditorRenderReason::InitialFrame);
+  const auto request_id = RouteInitialRender(is_switch ? EditorRenderReason::ImageSwitch
+                                                       : EditorRenderReason::InitialFrame);
+  if (request_id == 0 && PresentationTargetReady()) {
+    return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                        "First frame could not be scheduled");
+  }
   return results_.back();
+}
+
+auto EditorSessionService::HandleClose(bool persist_changes) -> EditorSessionResult {
+  if (state_ == EditorSessionState::ShuttingDown) {
+    return Reject("Cannot close while shutting down");
+  }
+
+  std::string error;
+  if (!SealCurrentSession(persist_changes, /*start_background_save=*/persist_changes, &error)) {
+    return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                        error.empty() ? "Failed to close editor session" : error);
+  }
+  ResetActiveImageState();
+  return TransitionTo(EditorSessionState::NoImage, EditorSessionResultKind::StateChanged,
+                      persist_changes ? "Editor session closed" : "Editor changes discarded");
 }
 
 auto EditorSessionService::HandlePatch(const EditorSessionIntent& intent, bool settled)
     -> EditorSessionResult {
-  if (state_ != EditorSessionState::Interactive && state_ != EditorSessionState::Loading) {
-    return Reject("Patch requires an active interactive or loading session");
+  if (state_ != EditorSessionState::Interactive) {
+    return Reject("Patch requires an interactive session");
   }
   if (!has_image()) {
     return Reject("Patch requires an open image");
@@ -278,20 +365,17 @@ auto EditorSessionService::HandlePatch(const EditorSessionIntent& intent, bool s
 
   ++identity_.render_generation;
   if (dependencies_.render) {
-    dependencies_.render->SetActiveGenerations(identity_.session_generation,
-                                               identity_.render_generation,
-                                               identity_.view_generation);
+    dependencies_.render->SetActiveGenerations(
+        identity_.session_generation, identity_.render_generation, identity_.view_generation);
   }
-  const auto reason = settled ? EditorRenderReason::SettledAdjustment
-                              : EditorRenderReason::InteractiveAdjustment;
+  const auto reason =
+      settled ? EditorRenderReason::SettledAdjustment : EditorRenderReason::InteractiveAdjustment;
   const auto request_id = RouteInitialRender(reason);
-  EditorSessionResult result;
-  result.kind              = EditorSessionResultKind::RenderRouted;
-  result.state             = state_;
-  result.identity          = identity_;
-  result.render_request_id = request_id;
-  result.message           = patch.field_key;
-  return Emit(std::move(result));
+  if (request_id == 0) {
+    return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                        "Adjustment render could not be scheduled");
+  }
+  return results_.back();
 }
 
 auto EditorSessionService::HandleUndoRedo(bool undo) -> EditorSessionResult {
@@ -308,15 +392,25 @@ auto EditorSessionService::HandleUndoRedo(bool undo) -> EditorSessionResult {
     return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
                         error.empty() ? (undo ? "Undo failed" : "Redo failed") : error);
   }
+  EditorRenderAdjustmentSnapshot snapshot;
+  if (!dependencies_.history->ReadAdjustmentSnapshot(history_guard_, &snapshot, &error)) {
+    return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                        error.empty() ? "Failed to read history adjustment state" : error);
+  }
+  adjustment_snapshot_ = std::move(snapshot);
   ++identity_.render_generation;
-  RouteInitialRender(EditorRenderReason::UndoRedo);
+  if (RouteInitialRender(EditorRenderReason::UndoRedo) == 0) {
+    return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                        "History render could not be scheduled");
+  }
   return TransitionTo(EditorSessionState::Interactive, EditorSessionResultKind::Accepted,
                       undo ? "Undo applied" : "Redo applied");
 }
 
 auto EditorSessionService::HandleDiscard() -> EditorSessionResult {
-  if (!has_image() && state_ != EditorSessionState::Failed) {
-    return Reject("Discard requires a session with an image");
+  if ((state_ != EditorSessionState::Interactive && state_ != EditorSessionState::Failed) ||
+      identity_.element_id == 0 || identity_.image_id == 0 || !history_guard_.valid) {
+    return Reject("Discard requires an image with an active history session");
   }
   if (dependencies_.journal) {
     std::string error;
@@ -325,40 +419,59 @@ auto EditorSessionService::HandleDiscard() -> EditorSessionResult {
                           error.empty() ? "Discard failed" : error);
     }
   }
-  return TransitionTo(state_ == EditorSessionState::Failed ? EditorSessionState::Interactive
-                                                           : state_,
-                      EditorSessionResultKind::Accepted, "Discarded unflushed transaction");
+  std::string                    error;
+  EditorRenderAdjustmentSnapshot snapshot;
+  if (!dependencies_.history ||
+      !dependencies_.history->ReadAdjustmentSnapshot(history_guard_, &snapshot, &error)) {
+    return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                        error.empty() ? "Failed to restore discarded adjustment state" : error);
+  }
+  adjustment_snapshot_ = std::move(snapshot);
+  ++identity_.render_generation;
+
+  if (state_ == EditorSessionState::Failed) {
+    TransitionTo(EditorSessionState::Loading, EditorSessionResultKind::StateChanged,
+                 "Retrying after discard");
+    const auto request_id = RouteInitialRender(EditorRenderReason::Retry);
+    if (request_id == 0 && PresentationTargetReady()) {
+      return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                          "Discard retry render could not be scheduled");
+    }
+    return results_.back();
+  }
+
+  if (RouteInitialRender(EditorRenderReason::SettledAdjustment) == 0) {
+    return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                        "Discard render could not be scheduled");
+  }
+  return TransitionTo(EditorSessionState::Interactive, EditorSessionResultKind::Accepted,
+                      "Discarded unflushed transaction");
 }
 
 auto EditorSessionService::HandleShutdown() -> EditorSessionResult {
   if (state_ == EditorSessionState::ShuttingDown) {
     return Reject("Already shutting down");
   }
-  if (dependencies_.render && identity_.session_generation != 0) {
-    dependencies_.render->CancelSession(identity_.session_generation);
+  std::string error;
+  if (!SealCurrentSession(/*persist_changes=*/true, /*start_background_save=*/false, &error)) {
+    return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                        error.empty() ? "Failed to seal editor session for shutdown" : error);
   }
-  if (has_image() && dependencies_.journal) {
-    std::string error;
-    dependencies_.journal->AppendBarrier(identity_.element_id, identity_.session_generation,
-                                         &error);
-  }
-  ReleaseGuards();
-  identity_                 = {};
-  first_frame_request_id_   = 0;
-  image_acquired_           = false;
-  first_frame_completed_    = false;
-  first_frame_submitted_    = false;
-  first_frame_presented_    = false;
+  identity_ = {};
+  ResetActiveImageState();
   return TransitionTo(EditorSessionState::ShuttingDown, EditorSessionResultKind::StateChanged,
                       "Shutting down");
 }
 
 auto EditorSessionService::Submit(const EditorSessionIntent& intent) -> EditorSessionResult {
+  std::scoped_lock lock(mutex_);
   switch (intent.kind) {
     case EditorSessionIntentKind::Open:
       return HandleOpenOrSwitch(intent, /*is_switch=*/false);
     case EditorSessionIntentKind::Switch:
       return HandleOpenOrSwitch(intent, /*is_switch=*/true);
+    case EditorSessionIntentKind::Close:
+      return HandleClose(intent.persist_changes);
     case EditorSessionIntentKind::Patch:
       return HandlePatch(intent, /*settled=*/false);
     case EditorSessionIntentKind::GestureCommit:
@@ -390,6 +503,13 @@ auto EditorSessionService::Switch(sl_element_id_t element_id, image_id_t image_i
   intent.kind       = EditorSessionIntentKind::Switch;
   intent.element_id = element_id;
   intent.image_id   = image_id;
+  return Submit(intent);
+}
+
+auto EditorSessionService::Close(bool persist_changes) -> EditorSessionResult {
+  EditorSessionIntent intent;
+  intent.kind            = EditorSessionIntentKind::Close;
+  intent.persist_changes = persist_changes;
   return Submit(intent);
 }
 
@@ -438,6 +558,7 @@ auto EditorSessionService::Shutdown() -> EditorSessionResult {
 
 void EditorSessionService::NotifyImageAcquired(std::uint64_t session_generation, bool success,
                                                std::string message) {
+  std::scoped_lock lock(mutex_);
   // Stale completions for a prior open must not mutate the current session.
   if (session_generation != identity_.session_generation) {
     return;
@@ -459,15 +580,16 @@ void EditorSessionService::NotifyImageAcquired(std::uint64_t session_generation,
   result.kind     = EditorSessionResultKind::Accepted;
   result.state    = state_;
   result.identity = identity_;
-  result.message  = message.empty() ? "Image acquired; waiting for first frame" : std::move(message);
+  result.message = message.empty() ? "Image acquired; waiting for first frame" : std::move(message);
   Emit(std::move(result));
   TryEnterInteractiveFromFirstFrame({});
 }
 
 void EditorSessionService::NotifySaveFinished(std::uint64_t session_generation, bool success,
                                               std::string message) {
-  auto it = std::find_if(pending_saves_.begin(), pending_saves_.end(),
-                         [session_generation](const PendingSave& save) {
+  std::scoped_lock lock(mutex_);
+  auto             it = std::find_if(pending_saves_.begin(), pending_saves_.end(),
+                                     [session_generation](const PendingSave& save) {
                            return save.session_generation == session_generation;
                          });
   if (it == pending_saves_.end()) {
@@ -478,7 +600,7 @@ void EditorSessionService::NotifySaveFinished(std::uint64_t session_generation, 
   if (dependencies_.tasks) {
     dependencies_.tasks->EndTask(task_id, success, message);
   }
-  if (!success && state_ != EditorSessionState::ShuttingDown) {
+  if (!success) {
     last_error_ = message.empty() ? "Save failed" : message;
     EditorSessionResult result;
     result.kind     = EditorSessionResultKind::Failed;
@@ -525,6 +647,7 @@ void EditorSessionService::TryEnterInteractiveFromFirstFrame(
 }
 
 void EditorSessionService::NotifyRenderResult(const EditorRenderResult& render_result) {
+  std::scoped_lock lock(mutex_);
   // Ignore results for a different image/session.
   if (render_result.intent.session_generation != 0 &&
       render_result.intent.session_generation != identity_.session_generation) {

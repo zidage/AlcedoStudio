@@ -33,7 +33,7 @@ class IEditorPipelinePort {
  public:
   virtual ~IEditorPipelinePort() = default;
   virtual auto Acquire(sl_element_id_t element_id, std::string* error)
-      -> EditorPipelineGuardHandle = 0;
+      -> EditorPipelineGuardHandle                             = 0;
   virtual void Release(const EditorPipelineGuardHandle& guard) = 0;
 };
 
@@ -41,10 +41,15 @@ class IEditorHistoryPort {
  public:
   virtual ~IEditorHistoryPort() = default;
   virtual auto Acquire(sl_element_id_t element_id, std::string* error)
-      -> EditorHistoryGuardHandle = 0;
-  virtual void Release(const EditorHistoryGuardHandle& guard) = 0;
+      -> EditorHistoryGuardHandle                                                      = 0;
+  virtual void Release(const EditorHistoryGuardHandle& guard)                          = 0;
   virtual auto Undo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool = 0;
   virtual auto Redo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool = 0;
+  /// Read the adjustment state after a history operation. History remains the
+  /// source of truth; the session service must not guess the resulting params.
+  virtual auto ReadAdjustmentSnapshot(const EditorHistoryGuardHandle& guard,
+                                      EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
+      -> bool = 0;
 };
 
 class IEditorTaskPort {
@@ -52,16 +57,16 @@ class IEditorTaskPort {
   virtual ~IEditorTaskPort() = default;
   /// Register a logical background operation for UI progress (save, load, etc.).
   virtual auto BeginTask(const std::string& name, sl_element_id_t element_id) -> std::uint64_t = 0;
-  virtual void EndTask(std::uint64_t task_id, bool success, const std::string& message) = 0;
+  virtual void EndTask(std::uint64_t task_id, bool success, const std::string& message)        = 0;
 };
 
 /// Redo-only journal port. Phase 5E owns the durable format; Phase 5A only needs
 /// a seam so the session service never reaches storage from the UI module.
 class IEditorJournalPort {
  public:
-  virtual ~IEditorJournalPort() = default;
+  virtual ~IEditorJournalPort()                                                         = default;
   virtual auto AppendBarrier(sl_element_id_t element_id, std::uint64_t session_generation,
-                             std::string* error) -> bool = 0;
+                             std::string* error) -> bool                                = 0;
   virtual auto DiscardUnflushed(sl_element_id_t element_id, std::string* error) -> bool = 0;
 };
 
@@ -69,12 +74,12 @@ class IEditorJournalPort {
 /// EditorRenderCoordinator; tests may inject a recording stub.
 class IEditorRenderSubmitPort {
  public:
-  virtual ~IEditorRenderSubmitPort() = default;
+  virtual ~IEditorRenderSubmitPort()                                          = default;
   virtual auto Submit(const EditorRenderIntent& intent) -> EditorRenderResult = 0;
-  virtual void CancelSession(std::uint64_t session_generation) = 0;
+  virtual void CancelSession(std::uint64_t session_generation)                = 0;
   virtual void SetActiveGenerations(std::uint64_t session_generation,
                                     std::uint64_t render_generation,
-                                    std::uint64_t view_generation) = 0;
+                                    std::uint64_t view_generation)            = 0;
 };
 
 }  // namespace alcedo

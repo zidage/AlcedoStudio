@@ -385,6 +385,12 @@ Item {
                         editorInteraction.setViewportMetrics(
                                     viewportSlot.width, viewportSlot.height,
                                     currentDevicePixelRatio())
+                        if (root.editorSession) {
+                            var dpr = currentDevicePixelRatio()
+                            root.editorSession.updatePresentationTargetSize(
+                                        Math.max(1, Math.round(viewportSlot.width * dpr)),
+                                        Math.max(1, Math.round(viewportSlot.height * dpr)))
+                        }
                     }
 
                     function resetAndSyncForImageSession() {

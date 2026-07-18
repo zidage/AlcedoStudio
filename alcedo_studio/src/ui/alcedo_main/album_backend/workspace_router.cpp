@@ -19,23 +19,19 @@ void WorkspaceRouter::OpenLibrary() {
     // Seal the active image session before tearing down the editor visual tree.
     editor_session_->Finalize(true);
   }
-  workspace_ = QStringLiteral("library");
+  workspace_  = QStringLiteral("library");
   element_id_ = 0;
-  image_id_ = 0;
+  image_id_   = 0;
   emit RouteChanged();
 }
 
 void WorkspaceRouter::OpenEditor(uint elementId, uint imageId) {
-  const bool already_editor = workspace_ == QStringLiteral("editor");
-  workspace_ = QStringLiteral("editor");
+  workspace_  = QStringLiteral("editor");
   element_id_ = elementId;
-  image_id_ = imageId;
+  image_id_   = imageId;
   if (editor_session_) {
-    if (already_editor && editor_session_->active() &&
-        (editor_session_->element_id() != elementId || editor_session_->image_id() != imageId)) {
-      // Image switch inside the editor workspace: seal prior session first.
-      editor_session_->Finalize(true);
-    }
+    // EditorSessionController chooses Open, Switch, or Close. Do not pre-close
+    // here: A→B must remain one service-owned switch operation.
     editor_session_->Open(elementId, imageId);
   }
   emit RouteChanged();

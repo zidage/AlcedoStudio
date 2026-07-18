@@ -11,15 +11,18 @@
 #include <QCoreApplication>
 #include <QEvent>
 #include <QObject>
+#include <QThread>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "app/editor_session_bootstrap.hpp"
 #include "app/editor_session_service.hpp"
 #include "app/editor_session_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
+#include "ui/alcedo_main/album_backend/workspace_router.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -30,15 +33,19 @@ class FakeSessionBackend final : public IEditorSessionBackend {
  public:
   EditorSessionState    state_ = EditorSessionState::NoImage;
   EditorSessionIdentity identity_{};
-  PresentationSinkId    sink_id_ = 0;
-  int                   open_count = 0;
-  int                   switch_count = 0;
-  int                   shutdown_count = 0;
+  PresentationSinkId    sink_id_            = 0;
+  int                   open_count          = 0;
+  int                   switch_count        = 0;
+  int                   close_count         = 0;
+  int                   shutdown_count      = 0;
+  bool                  last_close_persist  = true;
+  int                   presentation_width  = 0;
+  int                   presentation_height = 0;
   std::string           last_error_;
 
-  auto state() const -> EditorSessionState override { return state_; }
-  auto identity() const -> EditorSessionIdentity override { return identity_; }
-  auto active() const -> bool override {
+  auto                  state() const -> EditorSessionState override { return state_; }
+  auto                  identity() const -> EditorSessionIdentity override { return identity_; }
+  auto                  active() const -> bool override {
     return state_ != EditorSessionState::NoImage && state_ != EditorSessionState::ShuttingDown;
   }
   auto has_image() const -> bool override {
@@ -47,6 +54,10 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   auto last_error() const -> std::string override { return last_error_; }
 
   void SetPresentationSinkId(PresentationSinkId sink_id) override { sink_id_ = sink_id; }
+  void SetPresentationSize(int width, int height) override {
+    presentation_width  = width;
+    presentation_height = height;
+  }
 
   auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override {
     ++open_count;
@@ -72,6 +83,20 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override {
     ++switch_count;
     return Open(element_id, image_id);
+  }
+
+  auto Close(bool persist_changes) -> EditorSessionResult override {
+    ++close_count;
+    last_close_persist   = persist_changes;
+    state_               = EditorSessionState::NoImage;
+    identity_.element_id = 0;
+    identity_.image_id   = 0;
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::StateChanged;
+    result.state    = state_;
+    result.identity = identity_;
+    NotifyChange();
+    return result;
   }
 
   auto Shutdown() -> EditorSessionResult override {
@@ -100,12 +125,14 @@ class FakeSessionBackend final : public IEditorSessionBackend {
     state_ = EditorSessionState::Interactive;
     NotifyChange();
   }
+
+  void NotifyWithoutStateChange() { NotifyChange(); }
 };
 
 TEST(EditorSessionControllerPhase5ATest, RoutesOpenThroughInjectedFakeBackend) {
-  FakeSessionBackend backend;
+  FakeSessionBackend      backend;
   EditorSessionController controller(nullptr, &backend);
-  int state_signals = 0;
+  int                     state_signals = 0;
   QObject::connect(&controller, &EditorSessionController::StateChanged, [&] { ++state_signals; });
 
   controller.Open(42, 84);
@@ -126,6 +153,54 @@ TEST(EditorSessionControllerPhase5ATest, RoutesOpenThroughInjectedFakeBackend) {
   controller.Close();
   EXPECT_FALSE(controller.has_image());
   EXPECT_EQ(controller.session_state(), EditorSessionState::NoImage);
+  EXPECT_EQ(backend.close_count, 1);
+  EXPECT_TRUE(backend.last_close_persist);
+}
+
+TEST(EditorSessionControllerPhase5ATest, WorkspaceSwitchesImagesWithoutClosingTheFirstSession) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(nullptr, &backend);
+  WorkspaceRouter         router(&controller);
+
+  router.OpenEditor(1, 2);
+  EXPECT_EQ(backend.open_count, 1);
+  EXPECT_EQ(backend.switch_count, 0);
+  EXPECT_EQ(backend.close_count, 0);
+
+  router.OpenEditor(3, 4);
+  EXPECT_EQ(backend.switch_count, 1);
+  EXPECT_EQ(backend.close_count, 0);
+  EXPECT_EQ(controller.element_id(), 3u);
+
+  router.OpenLibrary();
+  EXPECT_EQ(backend.close_count, 1);
+  EXPECT_TRUE(backend.last_close_persist);
+  EXPECT_EQ(router.workspace(), QStringLiteral("library"));
+}
+
+TEST(EditorSessionControllerPhase5ATest, FinalizeAndShutdownKeepLifecycleInTheBackend) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(nullptr, &backend);
+
+  controller.Open(1, 2);
+  controller.Finalize(false);
+  EXPECT_EQ(backend.close_count, 1);
+  EXPECT_FALSE(backend.last_close_persist);
+
+  controller.Open(3, 4);
+  controller.Shutdown();
+  EXPECT_EQ(backend.shutdown_count, 1);
+  EXPECT_EQ(controller.session_state(), EditorSessionState::ShuttingDown);
+}
+
+TEST(EditorSessionControllerPhase5ATest, PresentationSizeIsForwardedToTheBackend) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(nullptr, &backend);
+
+  controller.updatePresentationTargetSize(1920, 1080);
+
+  EXPECT_EQ(backend.presentation_width, 1920);
+  EXPECT_EQ(backend.presentation_height, 1080);
 }
 
 TEST(EditorSessionControllerPhase5ATest, WorksWithoutBackendForShellOnlyTests) {
@@ -138,9 +213,9 @@ TEST(EditorSessionControllerPhase5ATest, WorksWithoutBackendForShellOnlyTests) {
 }
 
 TEST(EditorSessionControllerPhase5ATest, AsyncBackendChangeEmitsStateChangedToQml) {
-  FakeSessionBackend backend;
+  FakeSessionBackend      backend;
   EditorSessionController controller(nullptr, &backend);
-  int state_signals = 0;
+  int                     state_signals = 0;
   QObject::connect(&controller, &EditorSessionController::StateChanged, [&] { ++state_signals; });
 
   controller.Open(7, 8);
@@ -153,10 +228,41 @@ TEST(EditorSessionControllerPhase5ATest, AsyncBackendChangeEmitsStateChangedToQm
   EXPECT_EQ(controller.session_state_name(), QStringLiteral("Interactive"));
 }
 
+TEST(EditorSessionControllerPhase5ATest, WorkerNotificationIsDeliveredOnTheControllerThread) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(nullptr, &backend);
+  QThread*                delivered_thread = nullptr;
+  int                     state_signals    = 0;
+  QObject::connect(&controller, &EditorSessionController::StateChanged, [&] {
+    delivered_thread = QThread::currentThread();
+    ++state_signals;
+  });
+
+  std::thread worker([&] { backend.NotifyWithoutStateChange(); });
+  worker.join();
+  QCoreApplication::sendPostedEvents(&controller, QEvent::MetaCall);
+
+  EXPECT_EQ(state_signals, 1);
+  EXPECT_EQ(delivered_thread, controller.thread());
+}
+
+TEST(EditorSessionControllerPhase5ATest, DestroyedControllerIsDetachedFromBackendNotifications) {
+  FakeSessionBackend backend;
+  {
+    EditorSessionController controller(nullptr, &backend);
+    controller.Open(1, 2);
+  }
+
+  backend.NotifyWithoutStateChange();
+  SUCCEED();
+}
+
 TEST(EditorSessionControllerPhase5ATest, RuntimeCoordinatorPresentationUpdatesController) {
   auto runtime = alcedo::EditorSessionRuntime::Create();
+  runtime->service->SetPresentationSinkId(1);
+  runtime->service->SetPresentationSize(640, 480);
   EditorSessionController controller(nullptr, runtime->service.get());
-  int state_signals = 0;
+  int                     state_signals = 0;
   QObject::connect(&controller, &EditorSessionController::StateChanged, [&] { ++state_signals; });
 
   controller.Open(3, 4);
@@ -209,7 +315,7 @@ TEST(EditorSessionControllerPhase5ATest, QmlEditorPathDoesNotIncludePipelineSche
   // Phase 5A acceptance (scoped to the QML editor path + Phase 5A session/render
   // sources). The legacy QWidget editor still calls PipelineScheduler until
   // Phase 5D cutover; those files are explicit temporary exceptions.
-  const fs::path repo_root = fs::path(ALCEDO_REPO_ROOT);
+  const fs::path              repo_root  = fs::path(ALCEDO_REPO_ROOT);
   const std::vector<fs::path> scan_roots = {
       repo_root / "alcedo_studio/src/ui/alcedo_main/album_backend",
       repo_root / "alcedo_studio/src/ui/editor_rhi",
@@ -253,7 +359,7 @@ TEST(EditorSessionControllerPhase5ATest, QmlEditorPathDoesNotIncludePipelineSche
     return true;
   };
 
-  int scanned = 0;
+  int  scanned  = 0;
   auto scan_one = [&](const fs::path& path) {
     const std::string path_str = path.generic_string();
     if (!should_scan(path_str)) {
@@ -284,16 +390,13 @@ TEST(EditorSessionControllerPhase5ATest, QmlEditorPathDoesNotIncludePipelineSche
 TEST(EditorSessionControllerPhase5ATest, Phase5AAppHeadersDoNotIncludeUi) {
   const fs::path app_include = fs::path(ALCEDO_REPO_ROOT) / "alcedo_studio/src/include/app";
   const std::vector<std::string> phase5a_headers = {
-      "editor_session_types.hpp",
-      "editor_adjustment_types.hpp",
-      "editor_render_intent.hpp",
-      "editor_session_ports.hpp",
-      "editor_session_service.hpp",
-      "editor_render_coordinator.hpp",
+      "editor_session_types.hpp",     "editor_adjustment_types.hpp",
+      "editor_render_intent.hpp",     "editor_session_ports.hpp",
+      "editor_session_service.hpp",   "editor_render_coordinator.hpp",
       "editor_session_bootstrap.hpp",
   };
   for (const auto& name : phase5a_headers) {
-    const fs::path path = app_include / name;
+    const fs::path    path = app_include / name;
     const std::string text = ReadFileText(path.string());
     ASSERT_FALSE(text.empty()) << "missing " << path.string();
     EXPECT_EQ(text.find("ui/"), std::string::npos)
@@ -304,14 +407,13 @@ TEST(EditorSessionControllerPhase5ATest, Phase5AAppHeadersDoNotIncludeUi) {
 }
 
 TEST(EditorSessionControllerPhase5ATest, EditorSessionServiceCMakeDoesNotLinkQtWidgets) {
-  const fs::path cmake =
-      fs::path(ALCEDO_REPO_ROOT) / "alcedo_studio/src/CMakeLists.txt";
-  const std::string text = ReadFileText(cmake.string());
+  const fs::path    cmake = fs::path(ALCEDO_REPO_ROOT) / "alcedo_studio/src/CMakeLists.txt";
+  const std::string text  = ReadFileText(cmake.string());
   ASSERT_FALSE(text.empty());
 
   const auto start = text.find("def_library(EditorSessionService");
   ASSERT_NE(start, std::string::npos);
-  const auto next = text.find("\ndef_library(", start + 1);
+  const auto        next = text.find("\ndef_library(", start + 1);
   const std::string block =
       text.substr(start, next == std::string::npos ? std::string::npos : next - start);
   // Match real link dependency tokens, not comments that mention Widgets.

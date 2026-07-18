@@ -1299,10 +1299,11 @@ marked complete while any row remains unverified, even if its newly added functi
 
 ### Phase 5A - Editor session and unified render-intent interfaces
 
-**Status: complete (Phase 5A-Fix applied 2026-07-18).** Interfaces, result delivery, first-frame
-gate, multi-save tracking, generation cancellation, full adjustment snapshots, and QML-path
-scheduler ownership checks are implemented and covered by tests. Production still uses bootstrap
-pipeline/history/journal/scheduler ports until Phase 5B wires real image load and first-frame
+**Status: complete after the second Phase 5A-Fix review (2026-07-18).** The real workspace route now
+uses explicit switch, close, discard, and shutdown operations. Loading-time edits, per-image
+adjustment state, history restoration, cancellation, first-frame target setup, save failures, and
+asynchronous UI notification are covered by tests. Production still uses bootstrap pipeline,
+history, journal, and scheduler ports until Phase 5B wires real image load and first-frame
 presentation.
 
 Deliverables:
@@ -1311,8 +1312,10 @@ Deliverables:
   `EditorSessionController` child module under `appModules`.
 - Define explicit session states for no image, acquiring, loading, interactive, saving, switching,
   failed, and shutting down.
-- Move reusable adjustment snapshots, patches, pipeline adapters, LUT catalog logic, history
-  coordination, and scope tap interfaces out of QWidget ownership.
+- Define reusable adjustment snapshots, patches, history operations, and scope tap interfaces in
+  the application layer without QWidget types. Moving the legacy panel parameter converters and LUT
+  browser data out of `editor_dialog/` belongs to the matching Phase 6 panel work, where each old
+  and new path can be compared while the real controls are moved.
 - Acquire pipeline/history guards inside the service; never expose them to the QML module.
 - Define typed intents/results for open, switch, patch, gesture commit, undo, redo, discard, and
   shutdown.
@@ -1325,8 +1328,10 @@ Deliverables:
   replacement key; cancellation token; and presentation sink identity.
 - Define reasons at minimum for initial frame, interactive adjustment, settled adjustment,
   zoom/pan, resize, detail refresh, undo/redo, image switch, and retry.
-- Make the session service, adjustment models, and viewport controller submit intents only. They do
-  not receive the pipeline scheduler and cannot submit pipeline tasks themselves.
+- Make the session service the only Phase 5A intent producer. Define the input interfaces used by
+  adjustment models and the viewport controller, but connect their adjustment, zoom, pan, and
+  resize events in Phase 5C. None of these modules receives the pipeline scheduler or submits
+  pipeline tasks itself.
 - Define separate request-accepted, render-started, render-completed, frame-submitted,
   frame-presented, replaced, cancelled, and failed results. Session UI state follows these results
   instead of assuming a completed pipeline task is already visible.
@@ -1356,8 +1361,9 @@ Implementation notes:
   Production bootstrap ports succeed without DuckDB/GPU so shell tests keep working; Phase 5B
   replaces them with real acquire/load/render/presentation.
 - App-layer `EditorAdjustmentPatch` / `EditorRenderAdjustmentSnapshot` carry full field + params
-  JSON (and ordered patches). QWidget panel states remain under `editor_dialog/` for UI binding;
-  session/render intents use the app-layer types only.
+  JSON (and ordered patches). QWidget panel states, legacy parameter converters, and the legacy LUT
+  browser remain under `editor_dialog/` until their Phase 6 panel is moved; session/render intents
+  use the app-layer types only.
 - Legacy QWidget `alcedo::ui::EditorRenderCoordinator` is unchanged until Phase 5D cutover. Phase 5A
   acceptance for scheduler ownership is scoped to the QML editor path; the legacy QWidget callers
   are documented temporary exceptions in `EditorSessionControllerPhase5ATest`.
@@ -1369,8 +1375,8 @@ Implementation notes:
 
 ### Phase 5A-Fix - 补全结果传递、状态变化和渲染调度
 
-**状态：完成（2026-07-18）。** 下列复审问题均已修正，并有对应回归测试；Phase 5A 三个测试程序
-全部通过（约 37 个用例）。
+**状态：二次复审问题已修正（2026-07-18）。** 第一轮和第二轮发现的问题都保留在下面，并写明
+实际改动和验证方式。Phase 5B 仍需把这里的临时图片读取、历史、日志和调度实现换成生产实现。
 
 | 复审发现的问题 | 修正与验证结果 |
 | --- | --- |
@@ -1385,6 +1391,21 @@ Implementation notes:
 | 历史协调器绑定 QWidget；可复用库链 Widgets | 消息/输入改为回调；`EditorSessionService` 无 PUBLIC/PRIVATE deps、无 Widgets。测试：`EditorSessionServiceCMakeDoesNotLinkQtWidgets`。 |
 | 应用层头文件包含 `ui/edit_viewer/frame_sink.hpp` | `FrameRole`/`ViewportRenderRegion` 迁至 `edit/frame_presentation_types.hpp`。测试：`Phase5AAppHeadersDoNotIncludeUi`。 |
 | 调度器扫描列表过窄 | 自动扫描 QML 编辑器路径 + Phase 5A 会话/渲染源；明确例外 legacy QWidget 至 Phase 5D。测试：`QmlEditorPathDoesNotIncludePipelineScheduler`。 |
+
+二次复审发现的重大问题：
+
+| 复审发现的问题 | 修正与验证结果 |
+| --- | --- |
+| 实际工作区切换没有走会话服务的 Switch；返回图库、放弃修改和程序退出也被当成打开空图片。 | `WorkspaceRouter` 不再预先关闭图片。控制器分别调用 `Switch`、`Close(true)`、`Close(false)` 和 `Shutdown`，程序关闭也明确进入 `ShuttingDown`。测试覆盖工作区切图、返回图库、放弃修改和退出。 |
+| 首帧还在加载时修改参数会取消首帧，而且没有新的首帧接替，会话可能一直停在 `Loading`。 | 会话服务只在 `Interactive` 状态接受参数修改。加载期间的修改会被拒绝，不会改变首帧编号或取消首帧；视口移动和面板切换不受影响。测试确认旧首帧仍能正常进入 `Interactive`。 |
+| 图片 A 的调整数据会被图片 B 继续使用。 | 每次打开新图片都会先使用该图片随请求带入的调整数据，空数据就是未编辑状态，不再继承上一张图片。测试覆盖 A 调整曝光后切到未编辑的 B。 |
+| Undo、Redo 和 Discard 完成后仍使用操作前的调整数据；图片取得失败后 Discard 还能错误地进入可编辑状态。 | 历史接口新增读取完整调整数据的方法。Undo、Redo 和 Discard 先读取操作后的数据再渲染；没有图片或历史使用权时拒绝 Discard。测试同时检查数据内容和失败状态。 |
+| 运行中的请求只设置取消标记时，实际调度任务不会停止。 | 取消标记现在会通知协调器；协调器停止实际任务、只发出一次取消结果，并立即运行下一条可用请求。测试只调用取消标记，不再用直接取消请求代替。 |
+| 后台结果会直接修改界面，而且控制器销毁后服务还可能调用旧通知函数。 | 协调器先完成内部状态修改，再在锁外按顺序通知。控制器把后台通知排入自己的 Qt 线程，并在销毁或更换服务时解除通知。测试覆盖后台线程通知和控制器先销毁的情况。 |
+| 第一次进入编辑器时，首帧请求没有显示目标，宽高也是 0。 | 会话服务在显示目标和实际像素大小都有效后才提交首帧；QML 在尺寸或屏幕缩放变化时更新目标大小。测试确认首条请求的目标、宽和高都有效。 |
+| Phase 5A 的交付范围把应用层数据和后续面板迁移混在一起，历史操作还接收 `QListWidgetItem*`。 | Phase 5A 只负责不依赖 QWidget 的调整数据和历史操作接口；旧参数转换和 LUT 浏览数据随对应 Phase 6 面板迁移。历史协调器不再接收列表控件对象。独立应用层构建检查继续禁止 Qt Widgets 和 UI 头文件。 |
+| 交付项写成调整模型和视口控制器已经提交请求，但现阶段只有会话服务完成了连接。 | Phase 5A 交付项已改成“定义输入接口，由会话服务提交请求”。调整、缩放、平移和尺寸变化接入统一协调器明确归 Phase 5C，并要求每种输入只提交一次。 |
+| `Saving` 没有进入点，日志写入失败和保存任务启动失败也被当成保存成功。 | 写入日志成功且保存任务成功启动后才发布 `SaveStarted`，发布时状态为 `Saving`。任一步失败都会停止切图并报告失败，不释放当前图片。测试覆盖日志失败、任务失败和正常保存状态。 |
 
 ### Phase 5B - Image open and guaranteed first frame
 

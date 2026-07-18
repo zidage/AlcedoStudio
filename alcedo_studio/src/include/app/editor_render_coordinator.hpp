@@ -8,6 +8,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_set>
@@ -22,10 +23,10 @@ namespace alcedo {
 /// PipelineScheduler tasks; Phase 5A tests prove policy without GPU or Qt.
 class IEditorPipelineSchedulerPort {
  public:
-  virtual ~IEditorPipelineSchedulerPort() = default;
+  virtual ~IEditorPipelineSchedulerPort()                                    = default;
   /// Returns a scheduler-side job id, or 0 on immediate failure.
   virtual auto Schedule(const EditorRenderRequest& request) -> std::uint64_t = 0;
-  virtual void Cancel(std::uint64_t scheduler_job_id) = 0;
+  virtual void Cancel(std::uint64_t scheduler_job_id)                        = 0;
 };
 
 /// Application-layer editor render coordinator (Phase 5A).
@@ -38,6 +39,7 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   using ResultObserver = std::function<void(const EditorRenderResult&)>;
 
   explicit EditorRenderCoordinator(std::shared_ptr<IEditorPipelineSchedulerPort> scheduler);
+  ~EditorRenderCoordinator() override;
 
   void SetResultObserver(ResultObserver observer);
 
@@ -46,9 +48,18 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   void SetActiveGenerations(std::uint64_t session_generation, std::uint64_t render_generation,
                             std::uint64_t view_generation) override;
 
-  [[nodiscard]] auto session_generation() const -> std::uint64_t { return session_generation_; }
-  [[nodiscard]] auto render_generation() const -> std::uint64_t { return render_generation_; }
-  [[nodiscard]] auto view_generation() const -> std::uint64_t { return view_generation_; }
+  [[nodiscard]] auto session_generation() const -> std::uint64_t {
+    std::scoped_lock lock(mutex_);
+    return session_generation_;
+  }
+  [[nodiscard]] auto render_generation() const -> std::uint64_t {
+    std::scoped_lock lock(mutex_);
+    return render_generation_;
+  }
+  [[nodiscard]] auto view_generation() const -> std::uint64_t {
+    std::scoped_lock lock(mutex_);
+    return view_generation_;
+  }
 
   auto Submit(const EditorRenderIntent& intent) -> EditorRenderResult override;
 
@@ -66,16 +77,29 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   /// Process the pending queue: schedule at most one job when idle.
   void Pump();
 
-  [[nodiscard]] auto pending_count() const -> std::size_t { return pending_.size(); }
-  [[nodiscard]] auto has_inflight() const -> bool { return inflight_.has_value(); }
+  [[nodiscard]] auto pending_count() const -> std::size_t {
+    std::scoped_lock lock(mutex_);
+    return pending_.size();
+  }
+  [[nodiscard]] auto has_inflight() const -> bool {
+    std::scoped_lock lock(mutex_);
+    return inflight_.has_value();
+  }
   [[nodiscard]] auto last_scheduled_request_id() const -> std::uint64_t {
+    std::scoped_lock lock(mutex_);
     return last_scheduled_request_id_;
   }
-  [[nodiscard]] auto results() const -> const std::vector<EditorRenderResult>& {
+  [[nodiscard]] auto results() const -> std::vector<EditorRenderResult> {
+    std::scoped_lock lock(mutex_);
     return results_;
   }
 
  private:
+  struct CancellationCallbackGate {
+    std::mutex               mutex;
+    EditorRenderCoordinator* owner = nullptr;
+  };
+
   struct PendingEntry {
     EditorRenderRequest request;
     std::uint64_t       scheduler_job_id = 0;
@@ -85,8 +109,9 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   void ReplacePendingWithKey(const std::string& key, std::uint64_t except_request_id);
   void CancelObsoleteForActiveGenerations();
   [[nodiscard]] auto IsObsolete(const EditorRenderIntent& intent) const -> bool;
-  void Emit(EditorRenderResult result);
-  void ScheduleNext();
+  void               Emit(EditorRenderResult result);
+  void               DeliverPendingResults();
+  void               ScheduleNext();
   [[nodiscard]] auto HasResultKind(std::uint64_t request_id, EditorRenderResultKind kind) const
       -> bool;
   [[nodiscard]] static auto PriorityRank(EditorRenderPriority priority) -> int;
@@ -94,15 +119,19 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
 
   std::shared_ptr<IEditorPipelineSchedulerPort> scheduler_;
   ResultObserver                                observer_;
-  std::uint64_t                                 session_generation_ = 0;
-  std::uint64_t                                 render_generation_  = 0;
-  std::uint64_t                                 view_generation_    = 0;
-  std::uint64_t                                 next_request_id_    = 1;
+  std::uint64_t                                 session_generation_        = 0;
+  std::uint64_t                                 render_generation_         = 0;
+  std::uint64_t                                 view_generation_           = 0;
+  std::uint64_t                                 next_request_id_           = 1;
   std::uint64_t                                 last_scheduled_request_id_ = 0;
   std::deque<PendingEntry>                      pending_;
   std::optional<PendingEntry>                   inflight_;
   std::vector<EditorRenderResult>               results_;
+  std::vector<EditorRenderResult>               pending_delivery_;
   std::unordered_set<std::uint64_t>             terminal_request_ids_;
+  std::shared_ptr<CancellationCallbackGate>     cancellation_gate_;
+  mutable std::mutex                            mutex_;
+  std::recursive_mutex                          delivery_mutex_;
 };
 
 }  // namespace alcedo

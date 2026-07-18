@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "app/editor_render_coordinator.hpp"
@@ -42,6 +43,21 @@ class EditorSessionBootstrapHistoryPort final : public IEditorHistoryPort {
   auto Redo(const EditorHistoryGuardHandle& /*guard*/, std::string* /*error*/) -> bool override {
     return true;
   }
+  auto ReadAdjustmentSnapshot(const EditorHistoryGuardHandle& /*guard*/,
+                              EditorRenderAdjustmentSnapshot* snapshot, std::string* /*error*/)
+      -> bool override {
+    if (snapshot) {
+      *snapshot = current_snapshot_;
+    }
+    return true;
+  }
+
+  void SetCurrentSnapshot(EditorRenderAdjustmentSnapshot snapshot) {
+    current_snapshot_ = std::move(snapshot);
+  }
+
+ private:
+  EditorRenderAdjustmentSnapshot current_snapshot_{};
 };
 
 class EditorSessionBootstrapTaskPort final : public IEditorTaskPort {
@@ -75,7 +91,7 @@ class EditorSessionBootstrapSchedulerPort final : public IEditorPipelineSchedule
     scheduled_.push_back(request);
     return ++next_job_id_;
   }
-  void Cancel(std::uint64_t job_id) override { cancelled_.push_back(job_id); }
+  void               Cancel(std::uint64_t job_id) override { cancelled_.push_back(job_id); }
 
   [[nodiscard]] auto scheduled() const -> const std::vector<EditorRenderRequest>& {
     return scheduled_;
@@ -83,31 +99,30 @@ class EditorSessionBootstrapSchedulerPort final : public IEditorPipelineSchedule
   [[nodiscard]] auto cancelled() const -> const std::vector<std::uint64_t>& { return cancelled_; }
 
  private:
-  std::uint64_t                     next_job_id_ = 0;
-  std::vector<EditorRenderRequest>  scheduled_;
-  std::vector<std::uint64_t>        cancelled_;
+  std::uint64_t                    next_job_id_ = 0;
+  std::vector<EditorRenderRequest> scheduled_;
+  std::vector<std::uint64_t>       cancelled_;
 };
 
 struct EditorSessionRuntime {
-  std::shared_ptr<EditorSessionBootstrapPipelinePort>  pipeline =
+  std::shared_ptr<EditorSessionBootstrapPipelinePort> pipeline =
       std::make_shared<EditorSessionBootstrapPipelinePort>();
-  std::shared_ptr<EditorSessionBootstrapHistoryPort>   history =
+  std::shared_ptr<EditorSessionBootstrapHistoryPort> history =
       std::make_shared<EditorSessionBootstrapHistoryPort>();
-  std::shared_ptr<EditorSessionBootstrapTaskPort>      tasks =
+  std::shared_ptr<EditorSessionBootstrapTaskPort> tasks =
       std::make_shared<EditorSessionBootstrapTaskPort>();
-  std::shared_ptr<EditorSessionBootstrapJournalPort>   journal =
+  std::shared_ptr<EditorSessionBootstrapJournalPort> journal =
       std::make_shared<EditorSessionBootstrapJournalPort>();
   std::shared_ptr<EditorSessionBootstrapSchedulerPort> scheduler =
       std::make_shared<EditorSessionBootstrapSchedulerPort>();
-  std::shared_ptr<EditorRenderCoordinator>             coordinator;
-  std::unique_ptr<EditorSessionService>                service;
+  std::shared_ptr<EditorRenderCoordinator> coordinator;
+  std::unique_ptr<EditorSessionService>    service;
 
   /// Create runtime with coordinator results forwarded into the session service
   /// (Phase 5A-Fix: production path must not leave render results undelivered).
-  static auto Create() -> std::unique_ptr<EditorSessionRuntime> {
+  static auto                              Create() -> std::unique_ptr<EditorSessionRuntime> {
     auto runtime = std::make_unique<EditorSessionRuntime>();
-    runtime->coordinator =
-        std::make_shared<EditorRenderCoordinator>(runtime->scheduler);
+    runtime->coordinator = std::make_shared<EditorRenderCoordinator>(runtime->scheduler);
     EditorSessionService::Dependencies deps;
     deps.pipeline = runtime->pipeline;
     deps.history  = runtime->history;
@@ -119,12 +134,11 @@ struct EditorSessionRuntime {
     // Keep a raw service pointer for the observer; service outlives coordinator
     // only while runtime owns both (destroyed together).
     EditorSessionService* service_ptr = runtime->service.get();
-    runtime->coordinator->SetResultObserver(
-        [service_ptr](const EditorRenderResult& result) {
-          if (service_ptr) {
-            service_ptr->NotifyRenderResult(result);
-          }
-        });
+    runtime->coordinator->SetResultObserver([service_ptr](const EditorRenderResult& result) {
+      if (service_ptr) {
+        service_ptr->NotifyRenderResult(result);
+      }
+    });
     return runtime;
   }
 };

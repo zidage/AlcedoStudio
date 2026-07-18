@@ -4,10 +4,10 @@
 
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 
-#include <cstdint>
-
 #include <QSettings>
+#include <QThread>
 #include <QtGlobal>
+#include <cstdint>
 
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_service.hpp"
@@ -18,11 +18,11 @@
 namespace alcedo::ui {
 namespace {
 
-constexpr auto kFilmstripCollapsedKey = "editor/filmstripCollapsed";
-constexpr auto kFilmstripExpandedHeightKey = "editor/filmstripExpandedHeight";
-constexpr auto kActiveAdjustmentPanelKey = "editor/activeAdjustmentPanel";
-constexpr double kFilmstripExpandedHeightMin = 72.0;
-constexpr double kFilmstripExpandedHeightMax = 320.0;
+constexpr auto   kFilmstripCollapsedKey          = "editor/filmstripCollapsed";
+constexpr auto   kFilmstripExpandedHeightKey     = "editor/filmstripExpandedHeight";
+constexpr auto   kActiveAdjustmentPanelKey       = "editor/activeAdjustmentPanel";
+constexpr double kFilmstripExpandedHeightMin     = 72.0;
+constexpr double kFilmstripExpandedHeightMax     = 320.0;
 constexpr double kFilmstripExpandedHeightDefault = 128.0;
 
 }  // namespace
@@ -36,9 +36,37 @@ EditorSessionController::EditorSessionController(EditorController*              
     : QObject(parent), editor_(editor), session_backend_(session_backend) {
   LoadFilmstripUiPrefs();
   LoadDesktopUiPrefs();
+  InstallBackendNotifier();
+}
+
+EditorSessionController::~EditorSessionController() {
   if (session_backend_) {
-    session_backend_->SetChangeNotifier([this] { OnBackendChanged(); });
+    session_backend_->SetChangeNotifier({});
   }
+}
+
+void EditorSessionController::InstallBackendNotifier() {
+  if (!session_backend_) {
+    return;
+  }
+  QPointer<EditorSessionController> self(this);
+  session_backend_->SetChangeNotifier([self] {
+    if (!self) {
+      return;
+    }
+    if (QThread::currentThread() == self->thread()) {
+      self->OnBackendChanged();
+      return;
+    }
+    QMetaObject::invokeMethod(
+        self,
+        [self] {
+          if (self) {
+            self->OnBackendChanged();
+          }
+        },
+        Qt::QueuedConnection);
+  });
 }
 
 void EditorSessionController::SetSessionBackend(alcedo::IEditorSessionBackend* session_backend) {
@@ -50,7 +78,7 @@ void EditorSessionController::SetSessionBackend(alcedo::IEditorSessionBackend* s
   }
   session_backend_ = session_backend;
   if (session_backend_) {
-    session_backend_->SetChangeNotifier([this] { OnBackendChanged(); });
+    InstallBackendNotifier();
     SyncIdentityFromBackend();
   }
 }
@@ -113,25 +141,25 @@ void EditorSessionController::SyncIdentityFromBackend() {
   if (!session_backend_) {
     return;
   }
-  const auto id = session_backend_->identity();
-  element_id_ = id.element_id;
-  image_id_ = id.image_id;
+  const auto id       = session_backend_->identity();
+  element_id_         = id.element_id;
+  image_id_           = id.image_id;
   session_generation_ = id.session_generation;
-  session_state_ = session_backend_->state();
+  session_state_      = session_backend_->state();
   // active_ is workspace membership owned by Open/Close/Finalize, not by
   // backend NoImage vs Loading (empty editor remains active).
 }
 
 void EditorSessionController::ApplyOpenLocal(uint elementId, uint imageId) {
-  active_ = true;
-  element_id_ = elementId;
-  image_id_ = imageId;
+  active_        = true;
+  element_id_    = elementId;
+  image_id_      = imageId;
   session_state_ = (elementId > 0 && imageId > 0) ? alcedo::EditorSessionState::Loading
                                                   : alcedo::EditorSessionState::NoImage;
   if (elementId > 0 && imageId > 0 &&
       (last_element_id_ != elementId || last_image_id_ != imageId)) {
     last_element_id_ = elementId;
-    last_image_id_ = imageId;
+    last_image_id_   = imageId;
     emit LastEditedImageChanged();
   }
   ++session_generation_;
@@ -142,15 +170,14 @@ void EditorSessionController::ApplyCloseLocal() {
       session_state_ == alcedo::EditorSessionState::NoImage) {
     return;
   }
-  active_ = false;
-  element_id_ = 0;
-  image_id_ = 0;
+  active_        = false;
+  element_id_    = 0;
+  image_id_      = 0;
   session_state_ = alcedo::EditorSessionState::NoImage;
 }
 
 void EditorSessionController::SyncViewportIdentity() {
-  if (auto* item =
-          qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
+  if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
     if (has_image()) {
       item->setImageIdentity(static_cast<qulonglong>(image_id()));
       item->setImageGeneration(session_generation());
@@ -165,14 +192,14 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
   if (elementId > 0 && imageId > 0 &&
       (last_element_id_ != elementId || last_image_id_ != imageId)) {
     last_element_id_ = elementId;
-    last_image_id_ = imageId;
+    last_image_id_   = imageId;
     emit LastEditedImageChanged();
   }
 
   if (session_backend_) {
     if (elementId == 0 || imageId == 0) {
-      // Empty editor: open no-image session via Open(0,0).
-      session_backend_->Open(0, 0);
+      // Empty editor is an explicit persisted close, not a fake image open.
+      session_backend_->Close(/*persist_changes=*/true);
     } else if (session_backend_->has_image() &&
                (session_backend_->identity().element_id != elementId ||
                 session_backend_->identity().image_id != imageId)) {
@@ -197,8 +224,7 @@ void EditorSessionController::Close() {
     return;
   }
   if (session_backend_) {
-    // Prefer NoImage without full process shutdown so workspace round-trips work.
-    session_backend_->Open(0, 0);
+    session_backend_->Close(/*persist_changes=*/true);
     SyncIdentityFromBackend();
   } else {
     ApplyCloseLocal();
@@ -207,15 +233,23 @@ void EditorSessionController::Close() {
   emit StateChanged();
 }
 
-void EditorSessionController::Finalize(bool persistChanges) {
-  Q_UNUSED(persistChanges);
-  // Seal only session identity. Do not unbind the presentation viewport here:
-  // OpenEditor A→B calls Finalize then Open while the same QML viewport lives.
-  // Unbind happens on viewport Component.onDestruction when the workspace unloads.
+void EditorSessionController::Shutdown() {
   if (session_backend_) {
-    // Image switch / leave editor: Open(0,0) keeps the service usable; full
-    // Shutdown is reserved for application exit (Phase 5D+).
-    session_backend_->Open(0, 0);
+    session_backend_->Shutdown();
+    SyncIdentityFromBackend();
+  } else {
+    ApplyCloseLocal();
+    session_state_ = alcedo::EditorSessionState::ShuttingDown;
+  }
+  active_ = false;
+  emit StateChanged();
+}
+
+void EditorSessionController::Finalize(bool persistChanges) {
+  // Finalize closes the active image through the lifecycle owner. The QML
+  // viewport unbinds itself when the workspace visual tree is destroyed.
+  if (session_backend_) {
+    session_backend_->Close(persistChanges);
     SyncIdentityFromBackend();
     active_ = false;
     emit StateChanged();
@@ -229,7 +263,7 @@ void EditorSessionController::clearLastEditedImage() {
     return;
   }
   last_element_id_ = 0;
-  last_image_id_ = 0;
+  last_image_id_   = 0;
   emit LastEditedImageChanged();
 }
 
@@ -250,6 +284,12 @@ void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {
     }
   }
   emit PresentationBindingChanged();
+}
+
+void EditorSessionController::updatePresentationTargetSize(int width, int height) {
+  if (session_backend_) {
+    session_backend_->SetPresentationSize(width, height);
+  }
 }
 
 void EditorSessionController::unbindPresentationViewport() {
@@ -287,8 +327,7 @@ void EditorSessionController::set_filmstrip_collapsed(bool collapsed) {
 }
 
 void EditorSessionController::set_filmstrip_expanded_height(double height) {
-  const double clamped =
-      qBound(kFilmstripExpandedHeightMin, height, kFilmstripExpandedHeightMax);
+  const double clamped = qBound(kFilmstripExpandedHeightMin, height, kFilmstripExpandedHeightMax);
   if (qFuzzyCompare(filmstrip_expanded_height_, clamped)) {
     return;
   }
@@ -300,13 +339,11 @@ void EditorSessionController::set_filmstrip_expanded_height(double height) {
 void EditorSessionController::LoadFilmstripUiPrefs() {
   QSettings settings;
   filmstrip_collapsed_ = settings.value(QLatin1String(kFilmstripCollapsedKey), false).toBool();
-  filmstrip_expanded_height_ =
-      qBound(kFilmstripExpandedHeightMin,
-              settings
-                  .value(QLatin1String(kFilmstripExpandedHeightKey),
-                         kFilmstripExpandedHeightDefault)
-                  .toDouble(),
-              kFilmstripExpandedHeightMax);
+  filmstrip_expanded_height_ = qBound(
+      kFilmstripExpandedHeightMin,
+      settings.value(QLatin1String(kFilmstripExpandedHeightKey), kFilmstripExpandedHeightDefault)
+          .toDouble(),
+      kFilmstripExpandedHeightMax);
 }
 
 void EditorSessionController::SaveFilmstripUiPrefs() const {
@@ -367,8 +404,7 @@ void EditorSessionController::set_history_panel_page(const QString& page) {
 void EditorSessionController::LoadDesktopUiPrefs() {
   QSettings settings;
   active_adjustment_panel_ = NormalizeAdjustmentPanel(
-      settings.value(QLatin1String(kActiveAdjustmentPanelKey), QStringLiteral("tone"))
-          .toString());
+      settings.value(QLatin1String(kActiveAdjustmentPanelKey), QStringLiteral("tone")).toString());
   // historyPanelPage is intentionally not restored from disk: collapsed on
   // cold start, but kept in memory across library/editor workspace switches.
 }

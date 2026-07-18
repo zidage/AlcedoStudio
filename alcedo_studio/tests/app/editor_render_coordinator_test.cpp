@@ -51,7 +51,7 @@ auto MakeIntent(EditorRenderQuality quality, EditorRenderPriority priority,
 class EditorRenderCoordinatorTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    scheduler_ = std::make_shared<RecordingScheduler>();
+    scheduler_   = std::make_shared<RecordingScheduler>();
     coordinator_ = std::make_unique<EditorRenderCoordinator>(scheduler_);
     coordinator_->SetActiveGenerations(1, 1, 1);
   }
@@ -61,8 +61,8 @@ class EditorRenderCoordinatorTest : public ::testing::Test {
 };
 
 TEST_F(EditorRenderCoordinatorTest, AcceptsIntentAndSchedulesThroughSingleOwner) {
-  const auto accepted = coordinator_->Submit(MakeIntent(EditorRenderQuality::Interactive,
-                                                        EditorRenderPriority::Normal));
+  const auto accepted = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
   EXPECT_EQ(accepted.kind, EditorRenderResultKind::RequestAccepted);
   ASSERT_EQ(scheduler_->scheduled_.size(), 1u);
   EXPECT_EQ(scheduler_->scheduled_.front().request_id, accepted.request_id);
@@ -70,9 +70,8 @@ TEST_F(EditorRenderCoordinatorTest, AcceptsIntentAndSchedulesThroughSingleOwner)
 }
 
 TEST_F(EditorRenderCoordinatorTest, RejectsStaleSessionGeneration) {
-  const auto rejected =
-      coordinator_->Submit(MakeIntent(EditorRenderQuality::Interactive,
-                                      EditorRenderPriority::Normal, /*session=*/2));
+  const auto rejected = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, /*session=*/2));
   EXPECT_EQ(rejected.kind, EditorRenderResultKind::Failed);
   EXPECT_TRUE(scheduler_->scheduled_.empty());
   EXPECT_NE(rejected.message.find("session"), std::string::npos);
@@ -83,14 +82,14 @@ TEST_F(EditorRenderCoordinatorTest, ReplacesPendingWorkWithSameReplacementKey) {
       MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
   ASSERT_TRUE(coordinator_->has_inflight());
 
-  auto older = MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Low);
-  older.reason = EditorRenderReason::ZoomPan;
+  auto older             = MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Low);
+  older.reason           = EditorRenderReason::ZoomPan;
   const auto pending_old = coordinator_->Submit(older);
   EXPECT_EQ(pending_old.kind, EditorRenderResultKind::RequestAccepted);
   EXPECT_EQ(coordinator_->pending_count(), 1u);
 
-  auto newer = MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::High);
-  newer.reason = EditorRenderReason::ZoomPan;
+  auto newer             = MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::High);
+  newer.reason           = EditorRenderReason::ZoomPan;
   const auto pending_new = coordinator_->Submit(newer);
   EXPECT_EQ(pending_new.kind, EditorRenderResultKind::RequestAccepted);
   EXPECT_EQ(coordinator_->pending_count(), 1u);
@@ -113,8 +112,8 @@ TEST_F(EditorRenderCoordinatorTest, SchedulesQualityBeforeInteractiveWhenBothPen
 
   const auto interactive = coordinator_->Submit(
       MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::High));
-  const auto quality = coordinator_->Submit(
-      MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Low));
+  const auto quality =
+      coordinator_->Submit(MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Low));
   EXPECT_EQ(coordinator_->pending_count(), 2u);
 
   coordinator_->NotifySchedulerCompleted(inflight_id, true);
@@ -139,9 +138,8 @@ TEST_F(EditorRenderCoordinatorTest, CancelSessionDropsPendingAndInflight) {
 }
 
 TEST_F(EditorRenderCoordinatorTest, CancellationTokenPreventsSchedule) {
-  coordinator_->Submit(
-      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
-  auto intent = MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::High);
+  coordinator_->Submit(MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
+  auto intent         = MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::High);
   intent.cancellation = std::make_shared<EditorRenderCancellationToken>();
   const auto accepted = coordinator_->Submit(intent);
   EXPECT_EQ(accepted.kind, EditorRenderResultKind::RequestAccepted);
@@ -155,6 +153,71 @@ TEST_F(EditorRenderCoordinatorTest, CancellationTokenPreventsSchedule) {
     }
   }
   EXPECT_FALSE(scheduled_quality);
+}
+
+TEST_F(EditorRenderCoordinatorTest, CancellationTokenStopsAnInflightRequestAndStartsNextWork) {
+  auto inflight_intent = MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal);
+  inflight_intent.cancellation = std::make_shared<EditorRenderCancellationToken>();
+  const auto inflight          = coordinator_->Submit(inflight_intent);
+  ASSERT_TRUE(coordinator_->has_inflight());
+
+  auto pending            = MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal);
+  pending.replacement_key = "quality-after-cancel";
+  const auto pending_result = coordinator_->Submit(pending);
+  ASSERT_EQ(coordinator_->pending_count(), 1u);
+
+  inflight_intent.cancellation->Cancel();
+
+  ASSERT_EQ(scheduler_->cancelled_.size(), 1u);
+  EXPECT_TRUE(coordinator_->has_inflight());
+  EXPECT_EQ(coordinator_->last_scheduled_request_id(), pending_result.request_id);
+  EXPECT_EQ(coordinator_->pending_count(), 0u);
+
+  int cancellation_results = 0;
+  for (const auto& result : coordinator_->results()) {
+    if (result.request_id == inflight.request_id &&
+        result.kind == EditorRenderResultKind::Cancelled) {
+      ++cancellation_results;
+    }
+  }
+  EXPECT_EQ(cancellation_results, 1);
+}
+
+TEST_F(EditorRenderCoordinatorTest, ObserverRunsAfterQueueStateIsStable) {
+  const auto inflight = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
+  bool observer_cancelled = false;
+  coordinator_->SetResultObserver([&](const EditorRenderResult& result) {
+    if (!observer_cancelled && result.kind == EditorRenderResultKind::RequestAccepted &&
+        result.request_id != inflight.request_id) {
+      observer_cancelled = coordinator_->CancelRequest(inflight.request_id);
+    }
+  });
+
+  auto pending            = MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::High);
+  pending.replacement_key = "observer-follow-up";
+  const auto accepted     = coordinator_->Submit(pending);
+
+  EXPECT_TRUE(observer_cancelled);
+  ASSERT_EQ(scheduler_->cancelled_.size(), 1u);
+  EXPECT_TRUE(coordinator_->has_inflight());
+  EXPECT_EQ(coordinator_->last_scheduled_request_id(), accepted.request_id);
+  EXPECT_EQ(coordinator_->pending_count(), 0u);
+}
+
+TEST(EditorRenderCoordinatorLifetimeTest, LateTokenCancellationIgnoresDestroyedCoordinator) {
+  auto scheduler = std::make_shared<RecordingScheduler>();
+  auto token     = std::make_shared<EditorRenderCancellationToken>();
+  {
+    EditorRenderCoordinator coordinator(scheduler);
+    coordinator.SetActiveGenerations(1, 1, 1);
+    auto intent = MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal);
+    intent.cancellation = token;
+    ASSERT_EQ(coordinator.Submit(intent).kind, EditorRenderResultKind::RequestAccepted);
+  }
+
+  token->Cancel();
+  SUCCEED();
 }
 
 TEST_F(EditorRenderCoordinatorTest, ReportsFramePresentationSeparateFromRenderCompletion) {
@@ -216,7 +279,7 @@ TEST_F(EditorRenderCoordinatorTest, CancelInflightStartsUnrelatedPendingRequest)
       MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
   ASSERT_TRUE(coordinator_->has_inflight());
 
-  auto pending = MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal);
+  auto pending            = MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal);
   pending.replacement_key = "quality";
   const auto pending_result = coordinator_->Submit(pending);
   EXPECT_EQ(coordinator_->pending_count(), 1u);
@@ -245,7 +308,8 @@ TEST_F(EditorRenderCoordinatorTest, CancelInflightStartsUnrelatedPendingRequest)
   }
 }
 
-TEST_F(EditorRenderCoordinatorTest, SetActiveGenerationsCancelsObsoletePendingAndInflightRenderGen) {
+TEST_F(EditorRenderCoordinatorTest,
+       SetActiveGenerationsCancelsObsoletePendingAndInflightRenderGen) {
   const auto inflight = coordinator_->Submit(
       MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1, 1, 1));
   auto pending = MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal, 1, 1, 1);

@@ -11,9 +11,20 @@ namespace alcedo {
 
 EditorRenderCoordinator::EditorRenderCoordinator(
     std::shared_ptr<IEditorPipelineSchedulerPort> scheduler)
-    : scheduler_(std::move(scheduler)) {}
+    : scheduler_(std::move(scheduler)),
+      cancellation_gate_(std::make_shared<CancellationCallbackGate>()) {
+  cancellation_gate_->owner = this;
+}
+
+EditorRenderCoordinator::~EditorRenderCoordinator() {
+  // A token may be cancelled from another thread. Clearing the gate waits for
+  // any callback already using this coordinator and blocks all later callbacks.
+  std::scoped_lock lock(cancellation_gate_->mutex);
+  cancellation_gate_->owner = nullptr;
+}
 
 void EditorRenderCoordinator::SetResultObserver(ResultObserver observer) {
+  std::scoped_lock lock(mutex_);
   observer_ = std::move(observer);
 }
 
@@ -52,16 +63,20 @@ void EditorRenderCoordinator::CancelObsoleteForActiveGenerations() {
     terminal_request_ids_.insert(request_id);
     inflight_.reset();
   }
-  Pump();
+  ScheduleNext();
 }
 
 void EditorRenderCoordinator::SetActiveGenerations(std::uint64_t session_generation,
                                                    std::uint64_t render_generation,
                                                    std::uint64_t view_generation) {
-  session_generation_ = session_generation;
-  render_generation_  = render_generation;
-  view_generation_    = view_generation;
-  CancelObsoleteForActiveGenerations();
+  {
+    std::scoped_lock lock(mutex_);
+    session_generation_ = session_generation;
+    render_generation_  = render_generation;
+    view_generation_    = view_generation;
+    CancelObsoleteForActiveGenerations();
+  }
+  DeliverPendingResults();
 }
 
 auto EditorRenderCoordinator::AcceptOrReject(const EditorRenderIntent& intent,
@@ -116,8 +131,8 @@ auto EditorRenderCoordinator::SelectNextIndex(const std::deque<PendingEntry>& pe
   // Prefer QualityBase, then DetailPatch, then InteractivePrimary — matching the
   // reusable policy extracted from the legacy QWidget coordinator's StartNext().
   // Within the same role, higher EditorRenderPriority wins; stable order otherwise.
-  std::size_t best = 0;
-  auto role_rank = [](FrameRole role) -> int {
+  std::size_t best      = 0;
+  auto        role_rank = [](FrameRole role) -> int {
     switch (role) {
       case FrameRole::QualityBase:
         return 3;
@@ -129,8 +144,8 @@ auto EditorRenderCoordinator::SelectNextIndex(const std::deque<PendingEntry>& pe
     return 0;
   };
   for (std::size_t i = 1; i < pending.size(); ++i) {
-    const auto& a = pending[i].request.intent;
-    const auto& b = pending[best].request.intent;
+    const auto& a  = pending[i].request.intent;
+    const auto& b  = pending[best].request.intent;
     const int   ra = role_rank(a.frame_role);
     const int   rb = role_rank(b.frame_role);
     if (ra > rb) {
@@ -148,13 +163,12 @@ auto EditorRenderCoordinator::SelectNextIndex(const std::deque<PendingEntry>& pe
 }
 
 void EditorRenderCoordinator::ReplacePendingWithKey(const std::string& key,
-                                                    std::uint64_t       except_request_id) {
+                                                    std::uint64_t      except_request_id) {
   if (key.empty()) {
     return;
   }
   for (auto it = pending_.begin(); it != pending_.end();) {
-    if (it->request.request_id != except_request_id &&
-        it->request.intent.replacement_key == key) {
+    if (it->request.request_id != except_request_id && it->request.intent.replacement_key == key) {
       EditorRenderResult replaced;
       replaced.kind       = EditorRenderResultKind::Replaced;
       replaced.request_id = it->request.request_id;
@@ -172,11 +186,36 @@ void EditorRenderCoordinator::ReplacePendingWithKey(const std::string& key,
 void EditorRenderCoordinator::Emit(EditorRenderResult result) {
   results_.push_back(result);
   if (observer_) {
-    observer_(results_.back());
+    pending_delivery_.push_back(results_.back());
   }
 }
 
-auto EditorRenderCoordinator::HasResultKind(std::uint64_t request_id,
+void EditorRenderCoordinator::DeliverPendingResults() {
+  // Keep result order stable when scheduler completion and cancellation arrive
+  // on different threads. Internal queues are already fully updated before an
+  // observer is called, so observers never run inside coordinator critical sections.
+  std::scoped_lock delivery_lock(delivery_mutex_);
+  for (;;) {
+    ResultObserver                  observer;
+    std::vector<EditorRenderResult> batch;
+    {
+      std::scoped_lock lock(mutex_);
+      if (pending_delivery_.empty()) {
+        return;
+      }
+      observer = observer_;
+      batch.swap(pending_delivery_);
+    }
+    if (!observer) {
+      continue;
+    }
+    for (const auto& result : batch) {
+      observer(result);
+    }
+  }
+}
+
+auto EditorRenderCoordinator::HasResultKind(std::uint64_t          request_id,
                                             EditorRenderResultKind kind) const -> bool {
   for (const auto& prior : results_) {
     if (prior.request_id == request_id && prior.kind == kind) {
@@ -187,108 +226,140 @@ auto EditorRenderCoordinator::HasResultKind(std::uint64_t request_id,
 }
 
 auto EditorRenderCoordinator::Submit(const EditorRenderIntent& intent) -> EditorRenderResult {
-  // Fill defaults on a local copy before accept so the stored request is immutable
-  // after RequestAccepted (Phase 5A-Fix).
-  EditorRenderIntent stamped = intent;
-  FillRenderIntentDefaults(stamped);
+  EditorRenderResult                             result;
+  std::shared_ptr<EditorRenderCancellationToken> cancellation;
+  std::uint64_t                                  request_id = 0;
+  std::weak_ptr<CancellationCallbackGate>        weak_gate;
+  {
+    std::scoped_lock   lock(mutex_);
+    // Fill defaults on a local copy before accept so the stored request is immutable
+    // after RequestAccepted (Phase 5A-Fix).
+    EditorRenderIntent stamped = intent;
+    FillRenderIntentDefaults(stamped);
 
-  std::string message;
-  if (!AcceptOrReject(stamped, &message)) {
-    EditorRenderResult failed;
-    failed.kind    = EditorRenderResultKind::Failed;
-    failed.intent  = stamped;
-    failed.message = std::move(message);
-    Emit(failed);
-    return failed;
+    std::string message;
+    if (!AcceptOrReject(stamped, &message)) {
+      result.kind    = EditorRenderResultKind::Failed;
+      result.intent  = std::move(stamped);
+      result.message = std::move(message);
+      Emit(result);
+    } else {
+      EditorRenderRequest request;
+      request.request_id = next_request_id_++;
+      request.intent     = std::move(stamped);
+
+      ReplacePendingWithKey(request.intent.replacement_key, request.request_id);
+
+      PendingEntry entry;
+      entry.request = request;
+      pending_.push_back(std::move(entry));
+
+      result.kind       = EditorRenderResultKind::RequestAccepted;
+      result.request_id = request.request_id;
+      result.intent     = request.intent;
+      Emit(result);
+
+      cancellation = request.intent.cancellation;
+      request_id   = request.request_id;
+      weak_gate    = cancellation_gate_;
+      ScheduleNext();
+    }
   }
 
-  EditorRenderRequest request;
-  request.request_id = next_request_id_++;
-  request.intent     = std::move(stamped);
-
-  ReplacePendingWithKey(request.intent.replacement_key, request.request_id);
-
-  PendingEntry entry;
-  entry.request = request;
-  pending_.push_back(std::move(entry));
-
-  EditorRenderResult accepted;
-  accepted.kind       = EditorRenderResultKind::RequestAccepted;
-  accepted.request_id = request.request_id;
-  accepted.intent     = request.intent;
-  Emit(accepted);
-
-  Pump();
-  return accepted;
+  DeliverPendingResults();
+  if (cancellation) {
+    // Install the cross-thread cancellation bridge after releasing the queue lock.
+    // SetCancelCallback handles cancellation that raced with request acceptance.
+    cancellation->SetCancelCallback([weak_gate, request_id] {
+      if (const auto gate = weak_gate.lock()) {
+        std::scoped_lock lock(gate->mutex);
+        if (gate->owner) {
+          gate->owner->CancelRequest(request_id);
+        }
+      }
+    });
+  }
+  return result;
 }
 
 void EditorRenderCoordinator::CancelSession(std::uint64_t session_generation) {
-  for (auto it = pending_.begin(); it != pending_.end();) {
-    if (it->request.intent.session_generation == session_generation) {
-      EditorRenderResult cancelled;
+  {
+    std::scoped_lock lock(mutex_);
+    for (auto it = pending_.begin(); it != pending_.end();) {
+      if (it->request.intent.session_generation == session_generation) {
+        EditorRenderResult cancelled;
+        cancelled.kind       = EditorRenderResultKind::Cancelled;
+        cancelled.request_id = it->request.request_id;
+        cancelled.intent     = it->request.intent;
+        cancelled.message    = "Cancelled with session";
+        Emit(std::move(cancelled));
+        terminal_request_ids_.insert(it->request.request_id);
+        it = pending_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    if (inflight_ && inflight_->request.intent.session_generation == session_generation) {
+      if (scheduler_ && inflight_->scheduler_job_id != 0) {
+        scheduler_->Cancel(inflight_->scheduler_job_id);
+      }
+      const std::uint64_t request_id = inflight_->request.request_id;
+      EditorRenderResult  cancelled;
       cancelled.kind       = EditorRenderResultKind::Cancelled;
-      cancelled.request_id = it->request.request_id;
-      cancelled.intent     = it->request.intent;
-      cancelled.message    = "Cancelled with session";
+      cancelled.request_id = request_id;
+      cancelled.intent     = inflight_->request.intent;
+      cancelled.message    = "Cancelled in-flight with session";
       Emit(std::move(cancelled));
-      terminal_request_ids_.insert(it->request.request_id);
-      it = pending_.erase(it);
-    } else {
-      ++it;
+      terminal_request_ids_.insert(request_id);
+      inflight_.reset();
     }
+    // Start any pending work that is still valid after the cancel.
+    ScheduleNext();
   }
-  if (inflight_ && inflight_->request.intent.session_generation == session_generation) {
-    if (scheduler_ && inflight_->scheduler_job_id != 0) {
-      scheduler_->Cancel(inflight_->scheduler_job_id);
-    }
-    const std::uint64_t request_id = inflight_->request.request_id;
-    EditorRenderResult  cancelled;
-    cancelled.kind       = EditorRenderResultKind::Cancelled;
-    cancelled.request_id = request_id;
-    cancelled.intent     = inflight_->request.intent;
-    cancelled.message    = "Cancelled in-flight with session";
-    Emit(std::move(cancelled));
-    terminal_request_ids_.insert(request_id);
-    inflight_.reset();
-  }
-  // Start any pending work that is still valid after the cancel.
-  Pump();
+  DeliverPendingResults();
 }
 
 auto EditorRenderCoordinator::CancelRequest(std::uint64_t request_id) -> bool {
-  if (terminal_request_ids_.count(request_id) != 0) {
-    return false;
-  }
-  for (auto it = pending_.begin(); it != pending_.end(); ++it) {
-    if (it->request.request_id == request_id) {
+  bool did_cancel = false;
+  {
+    std::scoped_lock lock(mutex_);
+    if (terminal_request_ids_.count(request_id) == 0) {
+      for (auto it = pending_.begin(); it != pending_.end(); ++it) {
+        if (it->request.request_id != request_id) {
+          continue;
+        }
+        EditorRenderResult cancelled;
+        cancelled.kind       = EditorRenderResultKind::Cancelled;
+        cancelled.request_id = request_id;
+        cancelled.intent     = it->request.intent;
+        cancelled.message    = "Cancelled by request id";
+        Emit(std::move(cancelled));
+        terminal_request_ids_.insert(request_id);
+        pending_.erase(it);
+        ScheduleNext();
+        did_cancel = true;
+        break;
+      }
+    }
+    if (!did_cancel && terminal_request_ids_.count(request_id) == 0 && inflight_ &&
+        inflight_->request.request_id == request_id) {
+      if (scheduler_ && inflight_->scheduler_job_id != 0) {
+        scheduler_->Cancel(inflight_->scheduler_job_id);
+      }
       EditorRenderResult cancelled;
       cancelled.kind       = EditorRenderResultKind::Cancelled;
       cancelled.request_id = request_id;
-      cancelled.intent     = it->request.intent;
-      cancelled.message    = "Cancelled by request id";
+      cancelled.intent     = inflight_->request.intent;
+      cancelled.message    = "Cancelled in-flight by request id";
       Emit(std::move(cancelled));
       terminal_request_ids_.insert(request_id);
-      pending_.erase(it);
-      Pump();
-      return true;
+      inflight_.reset();
+      ScheduleNext();
+      did_cancel = true;
     }
   }
-  if (inflight_ && inflight_->request.request_id == request_id) {
-    if (scheduler_ && inflight_->scheduler_job_id != 0) {
-      scheduler_->Cancel(inflight_->scheduler_job_id);
-    }
-    EditorRenderResult cancelled;
-    cancelled.kind       = EditorRenderResultKind::Cancelled;
-    cancelled.request_id = request_id;
-    cancelled.intent     = inflight_->request.intent;
-    cancelled.message    = "Cancelled in-flight by request id";
-    Emit(std::move(cancelled));
-    terminal_request_ids_.insert(request_id);
-    inflight_.reset();
-    Pump();
-    return true;
-  }
-  return false;
+  DeliverPendingResults();
+  return did_cancel;
 }
 
 void EditorRenderCoordinator::ScheduleNext() {
@@ -352,79 +423,84 @@ void EditorRenderCoordinator::ScheduleNext() {
   Emit(std::move(started));
 }
 
-void EditorRenderCoordinator::Pump() { ScheduleNext(); }
+void EditorRenderCoordinator::Pump() {
+  {
+    std::scoped_lock lock(mutex_);
+    ScheduleNext();
+  }
+  DeliverPendingResults();
+}
 
 void EditorRenderCoordinator::NotifySchedulerCompleted(std::uint64_t request_id, bool success,
                                                        std::string message) {
-  if (terminal_request_ids_.count(request_id) != 0) {
-    return;
+  {
+    std::scoped_lock lock(mutex_);
+    if (terminal_request_ids_.count(request_id) == 0 && inflight_ &&
+        inflight_->request.request_id == request_id) {
+      EditorRenderResult completed;
+      completed.kind =
+          success ? EditorRenderResultKind::RenderCompleted : EditorRenderResultKind::Failed;
+      completed.request_id = request_id;
+      completed.intent     = inflight_->request.intent;
+      completed.message    = std::move(message);
+      if (!success) {
+        terminal_request_ids_.insert(request_id);
+      }
+      Emit(std::move(completed));
+      inflight_.reset();
+      ScheduleNext();
+    }
   }
-  if (!inflight_ || inflight_->request.request_id != request_id) {
-    return;
-  }
-  EditorRenderResult completed;
-  completed.kind       = success ? EditorRenderResultKind::RenderCompleted
-                                 : EditorRenderResultKind::Failed;
-  completed.request_id = request_id;
-  completed.intent     = inflight_->request.intent;
-  completed.message    = std::move(message);
-  if (!success) {
-    terminal_request_ids_.insert(request_id);
-  }
-  Emit(std::move(completed));
-  inflight_.reset();
-  Pump();
+  DeliverPendingResults();
 }
 
 void EditorRenderCoordinator::NotifyFrameSubmitted(std::uint64_t request_id) {
-  if (terminal_request_ids_.count(request_id) != 0) {
-    return;
-  }
-  if (HasResultKind(request_id, EditorRenderResultKind::FrameSubmitted)) {
-    return;
-  }
-  if (!HasResultKind(request_id, EditorRenderResultKind::RenderCompleted)) {
-    return;
-  }
-  EditorRenderIntent intent{};
-  for (const auto& prior : results_) {
-    if (prior.request_id == request_id &&
-        prior.kind == EditorRenderResultKind::RenderCompleted) {
-      intent = prior.intent;
-      break;
+  {
+    std::scoped_lock lock(mutex_);
+    if (terminal_request_ids_.count(request_id) == 0 &&
+        !HasResultKind(request_id, EditorRenderResultKind::FrameSubmitted) &&
+        HasResultKind(request_id, EditorRenderResultKind::RenderCompleted)) {
+      EditorRenderIntent intent{};
+      for (const auto& prior : results_) {
+        if (prior.request_id == request_id &&
+            prior.kind == EditorRenderResultKind::RenderCompleted) {
+          intent = prior.intent;
+          break;
+        }
+      }
+      EditorRenderResult submitted;
+      submitted.kind       = EditorRenderResultKind::FrameSubmitted;
+      submitted.request_id = request_id;
+      submitted.intent     = intent;
+      Emit(std::move(submitted));
     }
   }
-  EditorRenderResult submitted;
-  submitted.kind       = EditorRenderResultKind::FrameSubmitted;
-  submitted.request_id = request_id;
-  submitted.intent     = intent;
-  Emit(std::move(submitted));
+  DeliverPendingResults();
 }
 
 void EditorRenderCoordinator::NotifyFramePresented(std::uint64_t request_id) {
-  if (terminal_request_ids_.count(request_id) != 0) {
-    return;
-  }
-  if (HasResultKind(request_id, EditorRenderResultKind::FramePresented)) {
-    return;
-  }
-  // Presentation requires an ordered submit first (Phase 5A-Fix).
-  if (!HasResultKind(request_id, EditorRenderResultKind::FrameSubmitted)) {
-    return;
-  }
-  EditorRenderIntent intent{};
-  for (const auto& prior : results_) {
-    if (prior.request_id == request_id &&
-        prior.kind == EditorRenderResultKind::FrameSubmitted) {
-      intent = prior.intent;
-      break;
+  {
+    std::scoped_lock lock(mutex_);
+    if (terminal_request_ids_.count(request_id) == 0 &&
+        !HasResultKind(request_id, EditorRenderResultKind::FramePresented) &&
+        HasResultKind(request_id, EditorRenderResultKind::FrameSubmitted)) {
+      EditorRenderIntent intent{};
+      for (const auto& prior : results_) {
+        if (prior.request_id == request_id &&
+            prior.kind == EditorRenderResultKind::FrameSubmitted) {
+          intent = prior.intent;
+          break;
+        }
+      }
+      EditorRenderResult presented;
+      presented.kind       = EditorRenderResultKind::FramePresented;
+      presented.request_id = request_id;
+      presented.intent     = intent;
+      Emit(std::move(presented));
+      terminal_request_ids_.insert(request_id);
     }
   }
-  EditorRenderResult presented;
-  presented.kind       = EditorRenderResultKind::FramePresented;
-  presented.request_id = request_id;
-  presented.intent     = intent;
-  Emit(std::move(presented));
+  DeliverPendingResults();
 }
 
 }  // namespace alcedo

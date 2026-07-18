@@ -20,15 +20,16 @@ namespace alcedo::ui {
 ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver observer)
     : QObject(parent), lifecycle_observer_(std::move(observer)) {
   alcedo::editor_rhi::RegisterEditorViewportQmlTypes();
-  background_tasks_    = std::make_unique<BackgroundTaskController>();
+  background_tasks_ = std::make_unique<BackgroundTaskController>();
   RecordConstruction("BackgroundTaskController", background_tasks_.get());
-  interaction_policy_  = std::make_unique<InteractionPolicyController>(background_tasks_.get(), this);
+  interaction_policy_ =
+      std::make_unique<InteractionPolicyController>(background_tasks_.get(), this);
   RecordConstruction("InteractionPolicyController", interaction_policy_.get());
   model_download_service_ = std::make_unique<alcedo::ModelDownloadService>();
   RecordConstruction("ModelDownloadService", model_download_service_.get());
-  project_             = std::make_unique<ProjectModule>(this);
+  project_ = std::make_unique<ProjectModule>(this);
   RecordConstruction("ProjectModule", project_.get());
-  library_             = std::make_unique<LibraryModule>(project_.get(), this);
+  library_ = std::make_unique<LibraryModule>(project_.get(), this);
   RecordConstruction("LibraryModule", library_.get());
   folders_ =
       std::make_unique<FolderController>(project_.get(), library_.get(), project_.get(), this);
@@ -36,7 +37,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   images_ = std::make_unique<ImageController>(project_.get(), library_.get(), folders_.get(),
                                               project_.get(), this);
   RecordConstruction("ImageController", images_.get());
-  stats_  = std::make_unique<StatsEngine>(project_.get(), library_.get(), folders_.get(), this);
+  stats_ = std::make_unique<StatsEngine>(project_.get(), library_.get(), folders_.get(), this);
   RecordConstruction("StatsEngine", stats_.get());
   search_ = std::make_unique<SearchController>(project_.get(), library_.get(), folders_.get(),
                                                stats_.get(), this);
@@ -46,27 +47,28 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   RecordConstruction("ModelDownloadController", model_download_.get());
   ai_provider_profiles_ = std::make_unique<alcedo::AiProviderProfileController>(this);
   RecordConstruction("AiProviderProfileController", ai_provider_profiles_.get());
-  semantic_generation_  = std::make_unique<SemanticGenerationController>(
+  semantic_generation_ = std::make_unique<SemanticGenerationController>(
       project_.get(), library_.get(), model_download_.get(), background_tasks_.get(),
       project_.get(), ai_provider_profiles_.get(), this);
   RecordConstruction("SemanticGenerationController", semantic_generation_.get());
   image_analysis_gate_ = std::make_shared<alcedo::ImageAnalysisInFlightGate>();
   RecordConstruction("ImageAnalysisInFlightGate", image_analysis_gate_.get());
-  db_write_barrier_    = std::make_unique<ProjectDbWriteBarrier>();
+  db_write_barrier_ = std::make_unique<ProjectDbWriteBarrier>();
   RecordConstruction("ProjectDbWriteBarrier", db_write_barrier_.get());
-  image_analysis_sink_ =
-      MakeAlbumImageAnalysisSink(project_.get(), images_.get(), stats_.get(), db_write_barrier_.get());
+  image_analysis_sink_ = MakeAlbumImageAnalysisSink(project_.get(), images_.get(), stats_.get(),
+                                                    db_write_barrier_.get());
   RecordConstruction("ImageAnalysisSink", image_analysis_sink_.get());
   image_analysis_ = std::make_unique<ImageAnalysisController>(
       MakeAlbumImageAnalysisEnvironment(project_.get(), semantic_generation_.get(),
                                         ai_provider_profiles_.get(), image_analysis_gate_),
       ai_provider_profiles_.get(), image_analysis_sink_, background_tasks_.get());
   RecordConstruction("ImageAnalysisController", image_analysis_.get());
-  import_export_ = std::make_unique<ImportExportHandler>(
-      project_.get(), library_.get(), folders_.get(), project_.get(), db_write_barrier_.get(), this);
+  import_export_ =
+      std::make_unique<ImportExportHandler>(project_.get(), library_.get(), folders_.get(),
+                                            project_.get(), db_write_barrier_.get(), this);
   RecordConstruction("ImportExportHandler", import_export_.get());
-  nikon_he_recovery_ = std::make_unique<NikonHeRecoveryController>(
-      project_.get(), images_.get(), project_.get(), this);
+  nikon_he_recovery_ = std::make_unique<NikonHeRecoveryController>(project_.get(), images_.get(),
+                                                                   project_.get(), this);
   RecordConstruction("NikonHeRecoveryController", nikon_he_recovery_.get());
   editor_ = std::make_unique<EditorController>(project_.get(), library_.get(), this);
   RecordConstruction("EditorController", editor_.get());
@@ -109,27 +111,27 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     }
     return QString{};
   };
-  lifecycle_hooks.finalize_editor_session =
-      [editor = editor_.get(), editor_session = editor_session_.get(),
-       workspace_router = workspace_router_.get()] {
-        // Project switch/close must end both the legacy controller session (if any)
-        // and the unified QML workspace session, then return to the library route
-        // so stale element/image ids never survive into the next project.
-        if (editor && editor->editor_active()) {
-          editor->FinalizeEditorSession(true);
-        }
-        // Forget the last-edited image so re-entering the editor in the next
-        // project does not restore an image that belongs to the old project.
-        if (editor_session) {
-          editor_session->clearLastEditedImage();
-        }
-        if (workspace_router) {
-          // OpenLibrary finalizes an active EditorSessionController session.
-          workspace_router->OpenLibrary();
-        } else if (editor_session && editor_session->active()) {
-          editor_session->Finalize(true);
-        }
-      };
+  lifecycle_hooks.finalize_editor_session = [editor           = editor_.get(),
+                                             editor_session   = editor_session_.get(),
+                                             workspace_router = workspace_router_.get()] {
+    // Project switch/close must end both the legacy controller session (if any)
+    // and the unified QML workspace session, then return to the library route
+    // so stale element/image ids never survive into the next project.
+    if (editor && editor->editor_active()) {
+      editor->FinalizeEditorSession(true);
+    }
+    // Forget the last-edited image so re-entering the editor in the next
+    // project does not restore an image that belongs to the old project.
+    if (editor_session) {
+      editor_session->clearLastEditedImage();
+    }
+    if (workspace_router) {
+      // OpenLibrary finalizes an active EditorSessionController session.
+      workspace_router->OpenLibrary();
+    } else if (editor_session && editor_session->active()) {
+      editor_session->Finalize(true);
+    }
+  };
   lifecycle_hooks.clear_project_ui_state = [library = library_.get(), folders = folders_.get(),
                                             import_export = import_export_.get()] {
     if (library) {
@@ -157,8 +159,8 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   lifecycle_hooks.project_opened = [library = library_.get(), folders = folders_.get(),
                                     stats = stats_.get(), import_export = import_export_.get(),
                                     semantic = semantic_generation_.get()] {
-    const auto preferred_folder_path = folders ? folders->current_folder_path()
-                                               : std::filesystem::path{};
+    const auto preferred_folder_path =
+        folders ? folders->current_folder_path() : std::filesystem::path{};
     if (import_export) {
       import_export->ResetExportState();
     }
@@ -193,28 +195,28 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   lifecycle_hooks.export_inflight = [import_export = import_export_.get()] {
     return import_export && import_export->export_inflight();
   };
-  lifecycle_hooks.refresh_translations = [folders = folders_.get(), library = library_.get(),
-                                          stats = stats_.get(), import_export = import_export_.get(),
-                                          editor = editor_.get()] {
-    if (folders && !folders->folder_entries().empty()) {
-      folders->RebuildFolderView();
-    }
-    if (library && !library->model().items().empty() && stats) {
-      stats->RebuildThumbnailView();
-    }
-    if (stats) {
-      stats->RefreshStats();
-    }
-    if (import_export) {
-      emit import_export->ImportStateChanged();
-      emit import_export->importStateChanged();
-      emit import_export->ExportStateChanged();
-      emit import_export->exportStateChanged();
-    }
-    if (editor) {
-      emit editor->EditorStateChanged();
-    }
-  };
+  lifecycle_hooks.refresh_translations =
+      [folders = folders_.get(), library = library_.get(), stats = stats_.get(),
+       import_export = import_export_.get(), editor = editor_.get()] {
+        if (folders && !folders->folder_entries().empty()) {
+          folders->RebuildFolderView();
+        }
+        if (library && !library->model().items().empty() && stats) {
+          stats->RebuildThumbnailView();
+        }
+        if (stats) {
+          stats->RefreshStats();
+        }
+        if (import_export) {
+          emit import_export->ImportStateChanged();
+          emit import_export->importStateChanged();
+          emit import_export->ExportStateChanged();
+          emit import_export->exportStateChanged();
+        }
+        if (editor) {
+          emit editor->EditorStateChanged();
+        }
+      };
   project_->SetLifecycleHooks(std::move(lifecycle_hooks));
 
   db_write_barrier_->SetOnRelease([this] {
@@ -250,6 +252,9 @@ void ApplicationModuleHost::ShutdownModules() {
       workspace_router_->OpenLibrary();
     } else if (editor_session_ && editor_session_->active()) {
       editor_session_->Finalize(true);
+    }
+    if (editor_session_) {
+      editor_session_->Shutdown();
     }
     if (import_export_) {
       import_export_->CancelImport();

@@ -6,7 +6,9 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -63,10 +65,45 @@ using PresentationSinkId = std::uint64_t;
 struct EditorRenderCancellationToken {
   std::atomic<bool> cancelled{false};
 
-  void Cancel() { cancelled.store(true, std::memory_order_release); }
+  void              Cancel() {
+    if (cancelled.exchange(true, std::memory_order_acq_rel)) {
+      return;
+    }
+    std::function<void()> callback;
+    {
+      std::scoped_lock lock(callback_mutex);
+      if (!callback_delivered && on_cancel) {
+        callback_delivered = true;
+        callback           = on_cancel;
+      }
+    }
+    if (callback) {
+      callback();
+    }
+  }
   [[nodiscard]] auto IsCancelled() const -> bool {
     return cancelled.load(std::memory_order_acquire);
   }
+
+  void SetCancelCallback(std::function<void()> callback) {
+    std::function<void()> callback_to_run;
+    {
+      std::scoped_lock lock(callback_mutex);
+      on_cancel = std::move(callback);
+      if (cancelled.load(std::memory_order_acquire) && !callback_delivered && on_cancel) {
+        callback_delivered = true;
+        callback_to_run    = on_cancel;
+      }
+    }
+    if (callback_to_run) {
+      callback_to_run();
+    }
+  }
+
+ private:
+  mutable std::mutex    callback_mutex;
+  std::function<void()> on_cancel;
+  bool                  callback_delivered = false;
 };
 
 /// Render intent accepted only by EditorRenderCoordinator.
@@ -74,23 +111,23 @@ struct EditorRenderCancellationToken {
 /// Producers fill defaults before Submit. After Submit accepts the request the
 /// coordinator does not mutate the stored intent (Phase 5A-Fix immutability).
 struct EditorRenderIntent {
-  sl_element_id_t element_id = 0;
-  image_id_t      image_id   = 0;
-  std::uint64_t   session_generation = 0;
-  std::uint64_t   render_generation  = 0;
-  std::uint64_t   view_generation    = 0;
-  EditorRenderReason   reason   = EditorRenderReason::InitialFrame;
-  EditorRenderAdjustmentSnapshot adjustment{};
-  std::optional<ViewportRenderRegion> view_region;
-  int requested_width  = 0;
-  int requested_height = 0;
-  FrameRole            frame_role = FrameRole::InteractivePrimary;
-  EditorRenderQuality  quality    = EditorRenderQuality::Interactive;
-  EditorRenderPriority priority   = EditorRenderPriority::Normal;
+  sl_element_id_t                                element_id         = 0;
+  image_id_t                                     image_id           = 0;
+  std::uint64_t                                  session_generation = 0;
+  std::uint64_t                                  render_generation  = 0;
+  std::uint64_t                                  view_generation    = 0;
+  EditorRenderReason                             reason = EditorRenderReason::InitialFrame;
+  EditorRenderAdjustmentSnapshot                 adjustment{};
+  std::optional<ViewportRenderRegion>            view_region;
+  int                                            requested_width  = 0;
+  int                                            requested_height = 0;
+  FrameRole                                      frame_role       = FrameRole::InteractivePrimary;
+  EditorRenderQuality                            quality  = EditorRenderQuality::Interactive;
+  EditorRenderPriority                           priority = EditorRenderPriority::Normal;
   /// Same key replaces prior pending work (e.g. "interactive", "quality", "detail").
-  std::string replacement_key;
+  std::string                                    replacement_key;
   std::shared_ptr<EditorRenderCancellationToken> cancellation;
-  PresentationSinkId presentation_sink_id = 0;
+  PresentationSinkId                             presentation_sink_id = 0;
 };
 
 struct EditorRenderRequest {

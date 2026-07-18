@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -20,26 +22,30 @@ namespace alcedo {
 /// EditorSessionService; tests may inject a recording fake.
 class IEditorSessionBackend {
  public:
-  virtual ~IEditorSessionBackend() = default;
+  virtual ~IEditorSessionBackend()                                     = default;
 
-  using ChangeNotifier = std::function<void()>;
+  using ChangeNotifier                                                 = std::function<void()>;
 
-  [[nodiscard]] virtual auto state() const -> EditorSessionState = 0;
+  [[nodiscard]] virtual auto state() const -> EditorSessionState       = 0;
   [[nodiscard]] virtual auto identity() const -> EditorSessionIdentity = 0;
-  [[nodiscard]] virtual auto active() const -> bool = 0;
-  [[nodiscard]] virtual auto has_image() const -> bool = 0;
-  [[nodiscard]] virtual auto last_error() const -> std::string = 0;
+  [[nodiscard]] virtual auto active() const -> bool                    = 0;
+  [[nodiscard]] virtual auto has_image() const -> bool                 = 0;
+  [[nodiscard]] virtual auto last_error() const -> std::string         = 0;
 
   /// Optional: notified after state/identity changes from async results.
-  virtual void SetChangeNotifier(ChangeNotifier notifier) { change_notifier_ = std::move(notifier); }
+  virtual void               SetChangeNotifier(ChangeNotifier notifier) {
+    change_notifier_ = std::move(notifier);
+  }
 
-  virtual void SetPresentationSinkId(PresentationSinkId sink_id) = 0;
-  virtual auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult = 0;
+  virtual void SetPresentationSinkId(PresentationSinkId sink_id)                              = 0;
+  virtual void SetPresentationSize(int width, int height)                                     = 0;
+  virtual auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult   = 0;
   virtual auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult = 0;
-  virtual auto Shutdown() -> EditorSessionResult = 0;
-  virtual auto Discard() -> EditorSessionResult = 0;
-  virtual auto Undo() -> EditorSessionResult = 0;
-  virtual auto Redo() -> EditorSessionResult = 0;
+  virtual auto Close(bool persist_changes) -> EditorSessionResult                             = 0;
+  virtual auto Shutdown() -> EditorSessionResult                                              = 0;
+  virtual auto Discard() -> EditorSessionResult                                               = 0;
+  virtual auto Undo() -> EditorSessionResult                                                  = 0;
+  virtual auto Redo() -> EditorSessionResult                                                  = 0;
 
  protected:
   void NotifyChange() {
@@ -70,33 +76,49 @@ class EditorSessionService final : public IEditorSessionBackend {
 
   explicit EditorSessionService(Dependencies dependencies);
 
-  void SetResultObserver(ResultObserver observer);
-  void SetChangeNotifier(ChangeNotifier notifier) override;
+  void               SetResultObserver(ResultObserver observer);
+  void               SetChangeNotifier(ChangeNotifier notifier) override;
 
-  [[nodiscard]] auto state() const -> EditorSessionState override { return state_; }
-  [[nodiscard]] auto identity() const -> EditorSessionIdentity override { return identity_; }
+  [[nodiscard]] auto state() const -> EditorSessionState override {
+    std::scoped_lock lock(mutex_);
+    return state_;
+  }
+  [[nodiscard]] auto identity() const -> EditorSessionIdentity override {
+    std::scoped_lock lock(mutex_);
+    return identity_;
+  }
   [[nodiscard]] auto active() const -> bool override {
+    std::scoped_lock lock(mutex_);
     return state_ != EditorSessionState::NoImage && state_ != EditorSessionState::ShuttingDown;
   }
   [[nodiscard]] auto has_image() const -> bool override {
+    std::scoped_lock lock(mutex_);
     return identity_.element_id > 0 && identity_.image_id > 0 && EditorSessionHasImage(state_);
   }
-  [[nodiscard]] auto last_error() const -> std::string override { return last_error_; }
+  [[nodiscard]] auto last_error() const -> std::string override {
+    std::scoped_lock lock(mutex_);
+    return last_error_;
+  }
   [[nodiscard]] auto presentation_sink_id() const -> PresentationSinkId {
+    std::scoped_lock lock(mutex_);
     return presentation_sink_id_;
   }
-  [[nodiscard]] auto results() const -> const std::vector<EditorSessionResult>& {
+  [[nodiscard]] auto results() const -> std::vector<EditorSessionResult> {
+    std::scoped_lock lock(mutex_);
     return results_;
   }
   [[nodiscard]] auto first_frame_request_id() const -> std::uint64_t {
+    std::scoped_lock lock(mutex_);
     return first_frame_request_id_;
   }
-  [[nodiscard]] auto adjustment_snapshot() const -> const EditorRenderAdjustmentSnapshot& {
+  [[nodiscard]] auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot {
+    std::scoped_lock lock(mutex_);
     return adjustment_snapshot_;
   }
 
   /// Bind the presentation sink identity used on subsequent render intents.
   void SetPresentationSinkId(PresentationSinkId sink_id) override;
+  void SetPresentationSize(int width, int height) override;
 
   /// Primary API: typed session intents.
   auto Submit(const EditorSessionIntent& intent) -> EditorSessionResult;
@@ -104,6 +126,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   // Convenience wrappers used by the QML controller.
   auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
   auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
+  auto Close(bool persist_changes) -> EditorSessionResult override;
   auto Patch(EditorAdjustmentPatch patch) -> EditorSessionResult;
   auto GestureCommit(EditorAdjustmentPatch patch) -> EditorSessionResult;
   /// Legacy convenience: field key only.
@@ -115,7 +138,8 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto Shutdown() -> EditorSessionResult override;
 
   /// Feed async completions that may arrive out of order relative to load/render/save.
-  void NotifyImageAcquired(std::uint64_t session_generation, bool success, std::string message = {});
+  void NotifyImageAcquired(std::uint64_t session_generation, bool success,
+                           std::string message = {});
   void NotifySaveFinished(std::uint64_t session_generation, bool success, std::string message = {});
   void NotifyRenderResult(const EditorRenderResult& render_result);
 
@@ -130,41 +154,50 @@ class EditorSessionService final : public IEditorSessionBackend {
     std::uint64_t task_id            = 0;
   };
 
-  auto TransitionTo(EditorSessionState next, EditorSessionResultKind kind,
-                    std::string message = {}) -> EditorSessionResult;
+  auto TransitionTo(EditorSessionState next, EditorSessionResultKind kind, std::string message = {})
+      -> EditorSessionResult;
   auto Reject(std::string message) -> EditorSessionResult;
   auto Emit(EditorSessionResult result) -> EditorSessionResult;
   void ReleaseGuards();
   auto AcquireGuards(sl_element_id_t element_id, std::string* error) -> bool;
   auto RouteInitialRender(EditorRenderReason reason) -> std::uint64_t;
-  auto HandleOpenOrSwitch(const EditorSessionIntent& intent, bool is_switch)
-      -> EditorSessionResult;
+  auto HandleOpenOrSwitch(const EditorSessionIntent& intent, bool is_switch) -> EditorSessionResult;
+  auto HandleClose(bool persist_changes) -> EditorSessionResult;
   auto HandlePatch(const EditorSessionIntent& intent, bool settled) -> EditorSessionResult;
   auto HandleUndoRedo(bool undo) -> EditorSessionResult;
   auto HandleDiscard() -> EditorSessionResult;
   auto HandleShutdown() -> EditorSessionResult;
-  void BeginSaveForSession(std::uint64_t session_generation, sl_element_id_t element_id);
-  [[nodiscard]] auto MatchesActiveFirstFrame(const EditorRenderResult& render_result) const
+  auto BeginSaveForSession(std::uint64_t session_generation, sl_element_id_t element_id,
+                           std::string* error) -> bool;
+  auto SealCurrentSession(bool persist_changes, bool start_background_save, std::string* error)
       -> bool;
-  void TryEnterInteractiveFromFirstFrame(const EditorRenderResult& render_result);
+  void               ResetActiveImageState();
+  void               RoutePendingInitialRender();
+  [[nodiscard]] auto PresentationTargetReady() const -> bool;
+  [[nodiscard]] auto MatchesActiveFirstFrame(const EditorRenderResult& render_result) const -> bool;
+  void               TryEnterInteractiveFromFirstFrame(const EditorRenderResult& render_result);
 
-  Dependencies            dependencies_;
-  ResultObserver          observer_;
-  EditorSessionState      state_ = EditorSessionState::NoImage;
-  EditorSessionIdentity   identity_{};
-  PresentationSinkId      presentation_sink_id_ = 0;
-  EditorPipelineGuardHandle pipeline_guard_{};
-  EditorHistoryGuardHandle  history_guard_{};
-  std::string               last_error_;
-  std::vector<EditorSessionResult> results_;
+  Dependencies       dependencies_;
+  ResultObserver     observer_;
+  EditorSessionState state_ = EditorSessionState::NoImage;
+  EditorSessionIdentity             identity_{};
+  PresentationSinkId                presentation_sink_id_ = 0;
+  int                               presentation_width_   = 0;
+  int                               presentation_height_  = 0;
+  EditorPipelineGuardHandle         pipeline_guard_{};
+  EditorHistoryGuardHandle          history_guard_{};
+  std::string                       last_error_;
+  std::vector<EditorSessionResult>  results_;
   /// Concurrent in-flight saves keyed by the sealed session generation (A→B→C).
-  std::vector<PendingSave>  pending_saves_;
-  EditorRenderAdjustmentSnapshot adjustment_snapshot_{};
-  std::uint64_t             first_frame_request_id_ = 0;
-  bool                      image_acquired_         = false;
-  bool                      first_frame_completed_  = false;
-  bool                      first_frame_submitted_  = false;
-  bool                      first_frame_presented_  = false;
+  std::vector<PendingSave>          pending_saves_;
+  EditorRenderAdjustmentSnapshot    adjustment_snapshot_{};
+  std::uint64_t                     first_frame_request_id_ = 0;
+  bool                              image_acquired_         = false;
+  bool                              first_frame_completed_  = false;
+  bool                              first_frame_submitted_  = false;
+  bool                              first_frame_presented_  = false;
+  std::optional<EditorRenderReason> pending_initial_reason_;
+  mutable std::recursive_mutex      mutex_;
 };
 
 }  // namespace alcedo

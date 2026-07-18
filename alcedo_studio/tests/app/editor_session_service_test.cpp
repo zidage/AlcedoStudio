@@ -18,11 +18,12 @@ namespace {
 
 class FakePipelinePort final : public IEditorPipelinePort {
  public:
-  bool fail_acquire = false;
+  bool fail_acquire  = false;
   int  acquire_count = 0;
   int  release_count = 0;
 
-  auto Acquire(sl_element_id_t element_id, std::string* error) -> EditorPipelineGuardHandle override {
+  auto Acquire(sl_element_id_t element_id, std::string* error)
+      -> EditorPipelineGuardHandle override {
     ++acquire_count;
     if (fail_acquire) {
       if (error) {
@@ -37,12 +38,15 @@ class FakePipelinePort final : public IEditorPipelinePort {
 
 class FakeHistoryPort final : public IEditorHistoryPort {
  public:
-  bool fail_acquire = false;
-  bool fail_undo    = false;
-  int  undo_count   = 0;
-  int  redo_count   = 0;
+  bool                           fail_acquire  = false;
+  bool                           fail_undo     = false;
+  bool                           fail_snapshot = false;
+  int                            undo_count    = 0;
+  int                            redo_count    = 0;
+  EditorRenderAdjustmentSnapshot current_snapshot{};
 
-  auto Acquire(sl_element_id_t element_id, std::string* error) -> EditorHistoryGuardHandle override {
+  auto                           Acquire(sl_element_id_t element_id, std::string* error)
+      -> EditorHistoryGuardHandle override {
     if (fail_acquire) {
       if (error) {
         *error = "history acquire failed";
@@ -66,18 +70,36 @@ class FakeHistoryPort final : public IEditorHistoryPort {
     ++redo_count;
     return true;
   }
+  auto ReadAdjustmentSnapshot(const EditorHistoryGuardHandle&,
+                              EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
+      -> bool override {
+    if (fail_snapshot) {
+      if (error) {
+        *error = "snapshot read failed";
+      }
+      return false;
+    }
+    if (snapshot) {
+      *snapshot = current_snapshot;
+    }
+    return true;
+  }
 };
 
 class FakeTaskPort final : public IEditorTaskPort {
  public:
-  int begin_count = 0;
-  int end_count   = 0;
+  bool                       fail_begin  = false;
+  int                        begin_count = 0;
+  int                        end_count   = 0;
   std::vector<std::uint64_t> begun_ids;
   std::vector<std::uint64_t> ended_ids;
-  std::uint64_t next_id = 1;
+  std::uint64_t              next_id = 1;
 
   auto BeginTask(const std::string&, sl_element_id_t) -> std::uint64_t override {
     ++begin_count;
+    if (fail_begin) {
+      return 0;
+    }
     const auto id = next_id++;
     begun_ids.push_back(id);
     return id;
@@ -90,23 +112,38 @@ class FakeTaskPort final : public IEditorTaskPort {
 
 class FakeJournalPort final : public IEditorJournalPort {
  public:
-  int barrier_count = 0;
-  int discard_count = 0;
-  auto AppendBarrier(sl_element_id_t, std::uint64_t, std::string*) -> bool override {
+  bool fail_barrier  = false;
+  bool fail_discard  = false;
+  int  barrier_count = 0;
+  int  discard_count = 0;
+  auto AppendBarrier(sl_element_id_t, std::uint64_t, std::string* error) -> bool override {
     ++barrier_count;
+    if (fail_barrier) {
+      if (error) {
+        *error = "journal barrier failed";
+      }
+      return false;
+    }
     return true;
   }
-  auto DiscardUnflushed(sl_element_id_t, std::string*) -> bool override {
+  auto DiscardUnflushed(sl_element_id_t, std::string* error) -> bool override {
     ++discard_count;
+    if (fail_discard) {
+      if (error) {
+        *error = "journal discard failed";
+      }
+      return false;
+    }
     return true;
   }
 };
 
 class RecordingRenderPort final : public IEditorRenderSubmitPort {
  public:
+  bool                            fail_submit = false;
   std::vector<EditorRenderIntent> submitted;
   std::vector<std::uint64_t>      cancelled_sessions;
-  std::uint64_t                   next_id = 1;
+  std::uint64_t                   next_id        = 1;
   std::uint64_t                   active_session = 0;
   std::uint64_t                   active_render  = 0;
   std::uint64_t                   active_view    = 0;
@@ -114,8 +151,9 @@ class RecordingRenderPort final : public IEditorRenderSubmitPort {
   auto Submit(const EditorRenderIntent& intent) -> EditorRenderResult override {
     submitted.push_back(intent);
     EditorRenderResult result;
-    result.kind       = EditorRenderResultKind::RequestAccepted;
-    result.request_id = next_id++;
+    result.kind =
+        fail_submit ? EditorRenderResultKind::Failed : EditorRenderResultKind::RequestAccepted;
+    result.request_id = fail_submit ? 0 : next_id++;
     result.intent     = intent;
     return result;
   }
@@ -146,6 +184,8 @@ class EditorSessionServiceTest : public ::testing::Test {
     deps.journal  = journal_;
     deps.render   = render_;
     service_      = std::make_unique<EditorSessionService>(std::move(deps));
+    service_->SetPresentationSinkId(1);
+    service_->SetPresentationSize(640, 480);
   }
 
   void PresentFirstFrame(EditorSessionService& service) {
@@ -168,12 +208,12 @@ class EditorSessionServiceTest : public ::testing::Test {
     service.NotifyRenderResult(presented);
   }
 
-  std::shared_ptr<FakePipelinePort>      pipeline_;
-  std::shared_ptr<FakeHistoryPort>       history_;
-  std::shared_ptr<FakeTaskPort>          tasks_;
-  std::shared_ptr<FakeJournalPort>       journal_;
-  std::shared_ptr<RecordingRenderPort>   render_;
-  std::unique_ptr<EditorSessionService>  service_;
+  std::shared_ptr<FakePipelinePort>     pipeline_;
+  std::shared_ptr<FakeHistoryPort>      history_;
+  std::shared_ptr<FakeTaskPort>         tasks_;
+  std::shared_ptr<FakeJournalPort>      journal_;
+  std::shared_ptr<RecordingRenderPort>  render_;
+  std::unique_ptr<EditorSessionService> service_;
 };
 
 TEST_F(EditorSessionServiceTest, OpenAcquiresGuardsRoutesInitialRenderAndLeavesLoading) {
@@ -187,6 +227,36 @@ TEST_F(EditorSessionServiceTest, OpenAcquiresGuardsRoutesInitialRenderAndLeavesL
   EXPECT_EQ(render_->submitted.front().reason, EditorRenderReason::InitialFrame);
   EXPECT_EQ(render_->submitted.front().quality, EditorRenderQuality::Interactive);
   EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
+}
+
+TEST_F(EditorSessionServiceTest, InitialRenderWaitsForARealPresentationTarget) {
+  service_->SetPresentationSinkId(0);
+  const auto open = service_->Open(100, 200);
+
+  EXPECT_EQ(open.kind, EditorSessionResultKind::StateChanged);
+  EXPECT_EQ(service_->state(), EditorSessionState::Loading);
+  EXPECT_EQ(service_->first_frame_request_id(), 0u);
+  EXPECT_TRUE(render_->submitted.empty());
+
+  service_->SetPresentationSize(1280, 720);
+  EXPECT_TRUE(render_->submitted.empty());
+  service_->SetPresentationSinkId(99);
+
+  ASSERT_EQ(render_->submitted.size(), 1u);
+  EXPECT_EQ(render_->submitted.front().presentation_sink_id, 99u);
+  EXPECT_EQ(render_->submitted.front().requested_width, 1280);
+  EXPECT_EQ(render_->submitted.front().requested_height, 720);
+  EXPECT_NE(service_->first_frame_request_id(), 0u);
+}
+
+TEST_F(EditorSessionServiceTest, InitialRenderSchedulingFailureDoesNotStayLoading) {
+  render_->fail_submit = true;
+
+  const auto result    = service_->Open(100, 200);
+
+  EXPECT_EQ(result.kind, EditorSessionResultKind::Failed);
+  EXPECT_EQ(service_->state(), EditorSessionState::Failed);
+  EXPECT_EQ(service_->first_frame_request_id(), 0u);
 }
 
 TEST_F(EditorSessionServiceTest, ImageAcquireAloneDoesNotLeaveLoading) {
@@ -299,6 +369,44 @@ TEST_F(EditorSessionServiceTest, PatchAndGestureCommitRouteThroughRenderPortOnly
   EXPECT_EQ(render_->submitted.back().reason, EditorRenderReason::SettledAdjustment);
 }
 
+TEST_F(EditorSessionServiceTest, PatchWhileLoadingIsRejectedWithoutCancellingFirstFrame) {
+  service_->Open(1, 2);
+  const auto first_request = service_->first_frame_request_id();
+  ASSERT_NE(first_request, 0u);
+
+  EditorAdjustmentPatch patch;
+  patch.field_key   = "exposure";
+  const auto result = service_->Patch(patch);
+
+  EXPECT_EQ(result.kind, EditorSessionResultKind::Rejected);
+  EXPECT_EQ(service_->state(), EditorSessionState::Loading);
+  EXPECT_EQ(service_->first_frame_request_id(), first_request);
+  ASSERT_EQ(render_->submitted.size(), 1u);
+
+  PresentFirstFrame(*service_);
+  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+}
+
+TEST_F(EditorSessionServiceTest, SwitchingImagesDoesNotReuseThePreviousAdjustment) {
+  service_->Open(1, 2);
+  PresentFirstFrame(*service_);
+
+  EditorAdjustmentPatch patch;
+  patch.field_key   = "exposure";
+  patch.params_json = R"({"exposure":1.0})";
+  service_->Patch(patch);
+  ASSERT_FALSE(service_->adjustment_snapshot().params_json.empty());
+
+  service_->Switch(3, 4);
+
+  ASSERT_FALSE(render_->submitted.empty());
+  const auto& switched = render_->submitted.back();
+  EXPECT_EQ(switched.reason, EditorRenderReason::ImageSwitch);
+  EXPECT_TRUE(switched.adjustment.params_json.empty());
+  EXPECT_TRUE(switched.adjustment.patches.empty());
+  EXPECT_TRUE(service_->adjustment_snapshot().params_json.empty());
+}
+
 TEST_F(EditorSessionServiceTest, UndoRedoAdvanceRenderGenerationAndRoute) {
   service_->Open(1, 2);
   PresentFirstFrame(*service_);
@@ -311,11 +419,112 @@ TEST_F(EditorSessionServiceTest, UndoRedoAdvanceRenderGenerationAndRoute) {
   EXPECT_EQ(render_->submitted.back().reason, EditorRenderReason::UndoRedo);
 }
 
+TEST_F(EditorSessionServiceTest, UndoAndRedoRenderTheSnapshotReturnedByHistory) {
+  service_->Open(1, 2);
+  PresentFirstFrame(*service_);
+  render_->submitted.clear();
+
+  history_->current_snapshot.params_json = R"({"exposure":-0.5})";
+  history_->current_snapshot.fingerprint = "undo-state";
+  service_->Undo();
+  ASSERT_EQ(render_->submitted.size(), 1u);
+  EXPECT_EQ(render_->submitted.back().adjustment.params_json, R"({"exposure":-0.5})");
+
+  history_->current_snapshot.params_json = R"({"exposure":0.75})";
+  history_->current_snapshot.fingerprint = "redo-state";
+  service_->Redo();
+  ASSERT_EQ(render_->submitted.size(), 2u);
+  EXPECT_EQ(render_->submitted.back().adjustment.params_json, R"({"exposure":0.75})");
+}
+
 TEST_F(EditorSessionServiceTest, DiscardUsesJournalPort) {
   service_->Open(1, 2);
   PresentFirstFrame(*service_);
+  history_->current_snapshot.params_json = R"({"contrast":0.0})";
   service_->Discard();
   EXPECT_EQ(journal_->discard_count, 1);
+  EXPECT_EQ(render_->submitted.back().adjustment.params_json, R"({"contrast":0.0})");
+}
+
+TEST_F(EditorSessionServiceTest, DiscardCannotTurnAnAcquireFailureInteractive) {
+  pipeline_->fail_acquire = true;
+  service_->Open(1, 2);
+  ASSERT_EQ(service_->state(), EditorSessionState::Failed);
+
+  const auto discarded = service_->Discard();
+
+  EXPECT_EQ(discarded.kind, EditorSessionResultKind::Rejected);
+  EXPECT_EQ(service_->state(), EditorSessionState::Failed);
+  EXPECT_TRUE(render_->submitted.empty());
+}
+
+TEST_F(EditorSessionServiceTest, DiscardRetryFailureReturnsToFailedState) {
+  service_->Open(1, 2);
+  PresentFirstFrame(*service_);
+  render_->fail_submit = true;
+
+  EditorAdjustmentPatch patch;
+  patch.field_key = "exposure";
+  ASSERT_EQ(service_->Patch(patch).kind, EditorSessionResultKind::Failed);
+  ASSERT_EQ(service_->state(), EditorSessionState::Failed);
+
+  const auto discarded = service_->Discard();
+
+  EXPECT_EQ(discarded.kind, EditorSessionResultKind::Failed);
+  EXPECT_EQ(service_->state(), EditorSessionState::Failed);
+}
+
+TEST_F(EditorSessionServiceTest, CloseCanPersistOrDiscardThroughTheSameLifecycleOwner) {
+  service_->Open(1, 2);
+  PresentFirstFrame(*service_);
+  const auto first_session = service_->identity().session_generation;
+
+  const auto discarded     = service_->Close(false);
+  EXPECT_EQ(discarded.kind, EditorSessionResultKind::StateChanged);
+  EXPECT_EQ(service_->state(), EditorSessionState::NoImage);
+  EXPECT_EQ(journal_->discard_count, 1);
+  ASSERT_FALSE(render_->cancelled_sessions.empty());
+  EXPECT_EQ(render_->cancelled_sessions.back(), first_session);
+
+  service_->Open(3, 4);
+  const auto persisted = service_->Close(true);
+  EXPECT_EQ(persisted.kind, EditorSessionResultKind::StateChanged);
+  EXPECT_EQ(journal_->barrier_count, 1);
+  EXPECT_EQ(tasks_->begin_count, 1);
+}
+
+TEST_F(EditorSessionServiceTest, SwitchStopsWhenJournalOrSaveTaskCannotStart) {
+  service_->Open(1, 2);
+  PresentFirstFrame(*service_);
+
+  journal_->fail_barrier     = true;
+  const auto journal_failure = service_->Switch(3, 4);
+  EXPECT_EQ(journal_failure.kind, EditorSessionResultKind::Failed);
+  EXPECT_EQ(service_->identity().element_id, 1u);
+  EXPECT_EQ(pipeline_->release_count, 0);
+
+  journal_->fail_barrier  = false;
+  tasks_->fail_begin      = true;
+  const auto task_failure = service_->Switch(3, 4);
+  EXPECT_EQ(task_failure.kind, EditorSessionResultKind::Failed);
+  EXPECT_EQ(service_->identity().element_id, 1u);
+  EXPECT_EQ(pipeline_->release_count, 0);
+}
+
+TEST_F(EditorSessionServiceTest, SaveStartedIsReportedWhileStateIsSaving) {
+  service_->Open(1, 2);
+  PresentFirstFrame(*service_);
+  std::vector<EditorSessionState> save_states;
+  service_->SetResultObserver([&](const EditorSessionResult& result) {
+    if (result.kind == EditorSessionResultKind::SaveStarted) {
+      save_states.push_back(result.state);
+    }
+  });
+
+  service_->Switch(3, 4);
+
+  ASSERT_EQ(save_states.size(), 1u);
+  EXPECT_EQ(save_states.front(), EditorSessionState::Saving);
 }
 
 TEST_F(EditorSessionServiceTest, ShutdownReleasesGuardsAndRejectsFurtherOpens) {
@@ -329,7 +538,7 @@ TEST_F(EditorSessionServiceTest, ShutdownReleasesGuardsAndRejectsFurtherOpens) {
 
 TEST_F(EditorSessionServiceTest, AcquireFailureEntersFailedState) {
   pipeline_->fail_acquire = true;
-  const auto result = service_->Open(1, 2);
+  const auto result       = service_->Open(1, 2);
   EXPECT_EQ(service_->state(), EditorSessionState::Failed);
   EXPECT_EQ(result.kind, EditorSessionResultKind::Failed);
   EXPECT_TRUE(render_->submitted.empty());
@@ -346,9 +555,9 @@ TEST_F(EditorSessionServiceTest, FramePresentedMovesLoadingToInteractiveOnlyWhen
 
   // Stale older render generation must not complete the first-frame gate.
   EditorRenderResult stale_presented;
-  stale_presented.kind       = EditorRenderResultKind::FramePresented;
-  stale_presented.request_id = first_id;
-  stale_presented.intent     = render_->submitted.front();
+  stale_presented.kind                     = EditorRenderResultKind::FramePresented;
+  stale_presented.request_id               = first_id;
+  stale_presented.intent                   = render_->submitted.front();
   stale_presented.intent.render_generation = 999;
   service_->NotifyRenderResult(stale_presented);
   EXPECT_EQ(service_->state(), EditorSessionState::Loading);
@@ -386,12 +595,12 @@ TEST_F(EditorSessionServiceTest, LateOldRenderInSameSessionIsIgnored) {
 
   // Patch advances render generation.
   service_->Patch("exposure");
-  const auto new_render_gen = service_->identity().render_generation;
+  const auto         new_render_gen = service_->identity().render_generation;
 
   EditorRenderResult late_old;
-  late_old.kind       = EditorRenderResultKind::FramePresented;
-  late_old.request_id = 999;
-  late_old.intent     = render_->submitted.front();
+  late_old.kind                     = EditorRenderResultKind::FramePresented;
+  late_old.request_id               = 999;
+  late_old.intent                   = render_->submitted.front();
   late_old.intent.render_generation = new_render_gen - 1;
   service_->NotifyRenderResult(late_old);
   EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
@@ -413,7 +622,7 @@ TEST_F(EditorSessionServiceTest, ReopenSameImageIsNoOpWithoutLeakingGuards) {
 }
 
 TEST_F(EditorSessionServiceTest, WorksWithRealCoordinatorAsRenderPort) {
-  auto scheduler = std::make_shared<EditorSessionBootstrapSchedulerPort>();
+  auto scheduler   = std::make_shared<EditorSessionBootstrapSchedulerPort>();
   auto coordinator = std::make_shared<EditorRenderCoordinator>(scheduler);
   EditorSessionService::Dependencies deps;
   deps.pipeline = pipeline_;
@@ -422,6 +631,8 @@ TEST_F(EditorSessionServiceTest, WorksWithRealCoordinatorAsRenderPort) {
   deps.journal  = journal_;
   deps.render   = coordinator;
   EditorSessionService service(std::move(deps));
+  service.SetPresentationSinkId(1);
+  service.SetPresentationSize(640, 480);
   service.Open(7, 8);
   EXPECT_EQ(service.state(), EditorSessionState::Loading);
   EXPECT_EQ(scheduler->scheduled().size(), 1u);
@@ -429,9 +640,11 @@ TEST_F(EditorSessionServiceTest, WorksWithRealCoordinatorAsRenderPort) {
 }
 
 TEST_F(EditorSessionServiceTest, RuntimeForwardsCoordinatorResultsToControllerState) {
-  auto runtime = EditorSessionRuntime::Create();
+  auto runtime      = EditorSessionRuntime::Create();
   int  change_count = 0;
   runtime->service->SetChangeNotifier([&] { ++change_count; });
+  runtime->service->SetPresentationSinkId(1);
+  runtime->service->SetPresentationSize(640, 480);
 
   runtime->service->Open(11, 22);
   EXPECT_EQ(runtime->service->state(), EditorSessionState::Loading);

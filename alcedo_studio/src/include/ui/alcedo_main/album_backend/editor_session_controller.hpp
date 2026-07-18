@@ -50,8 +50,8 @@ class EditorSessionController final : public QObject {
   // from imageId so the viewport can reject stale frames from a prior session.
   Q_PROPERTY(qulonglong sessionGeneration READ session_generation NOTIFY StateChanged)
   Q_PROPERTY(QString sessionState READ session_state_name NOTIFY StateChanged)
-  Q_PROPERTY(bool filmstripCollapsed READ filmstrip_collapsed WRITE set_filmstrip_collapsed
-                 NOTIFY FilmstripUiChanged)
+  Q_PROPERTY(bool filmstripCollapsed READ filmstrip_collapsed WRITE set_filmstrip_collapsed NOTIFY
+                 FilmstripUiChanged)
   Q_PROPERTY(double filmstripExpandedHeight READ filmstrip_expanded_height WRITE
                  set_filmstrip_expanded_height NOTIFY FilmstripUiChanged)
   // Active right-side adjustment panel. One of: tone, look, display, geometry, raw.
@@ -61,8 +61,8 @@ class EditorSessionController final : public QObject {
   // Left History/Versions rail page: empty string = collapsed; "history" or
   // "versions" = expanded. Survives workspace round-trips within the process
   // (not persisted across application restart).
-  Q_PROPERTY(QString historyPanelPage READ history_panel_page WRITE set_history_panel_page
-                 NOTIFY DesktopUiChanged)
+  Q_PROPERTY(QString historyPanelPage READ history_panel_page WRITE set_history_panel_page NOTIFY
+                 DesktopUiChanged)
   Q_PROPERTY(bool presentationViewportBound READ presentation_viewport_bound NOTIFY
                  PresentationBindingChanged)
 
@@ -70,42 +70,45 @@ class EditorSessionController final : public QObject {
   explicit EditorSessionController(EditorController* editor = nullptr, QObject* parent = nullptr);
   EditorSessionController(EditorController* editor, alcedo::IEditorSessionBackend* session_backend,
                           QObject* parent = nullptr);
+  ~EditorSessionController() override;
 
-  void SetSessionBackend(alcedo::IEditorSessionBackend* session_backend);
+  void                     SetSessionBackend(alcedo::IEditorSessionBackend* session_backend);
 
   /// Called when the injected backend reports an async state/identity change
   /// (render presented, save finished, etc.). Mirrors backend into QML properties.
-  void OnBackendChanged();
+  void                     OnBackendChanged();
 
-  [[nodiscard]] bool active() const;
-  [[nodiscard]] bool has_image() const;
-  [[nodiscard]] uint element_id() const;
-  [[nodiscard]] uint image_id() const;
-  [[nodiscard]] uint last_element_id() const { return last_element_id_; }
-  [[nodiscard]] uint last_image_id() const { return last_image_id_; }
+  [[nodiscard]] bool       active() const;
+  [[nodiscard]] bool       has_image() const;
+  [[nodiscard]] uint       element_id() const;
+  [[nodiscard]] uint       image_id() const;
+  [[nodiscard]] uint       last_element_id() const { return last_element_id_; }
+  [[nodiscard]] uint       last_image_id() const { return last_image_id_; }
   [[nodiscard]] qulonglong session_generation() const;
-  [[nodiscard]] auto session_state() const -> alcedo::EditorSessionState;
-  [[nodiscard]] QString session_state_name() const;
-  [[nodiscard]] bool filmstrip_collapsed() const { return filmstrip_collapsed_; }
-  [[nodiscard]] double filmstrip_expanded_height() const { return filmstrip_expanded_height_; }
-  [[nodiscard]] QString active_adjustment_panel() const { return active_adjustment_panel_; }
-  [[nodiscard]] QString history_panel_page() const { return history_panel_page_; }
-  [[nodiscard]] bool presentation_viewport_bound() const {
+  [[nodiscard]] auto       session_state() const -> alcedo::EditorSessionState;
+  [[nodiscard]] QString    session_state_name() const;
+  [[nodiscard]] bool       filmstrip_collapsed() const { return filmstrip_collapsed_; }
+  [[nodiscard]] double     filmstrip_expanded_height() const { return filmstrip_expanded_height_; }
+  [[nodiscard]] QString    active_adjustment_panel() const { return active_adjustment_panel_; }
+  [[nodiscard]] QString    history_panel_page() const { return history_panel_page_; }
+  [[nodiscard]] bool       presentation_viewport_bound() const {
     return presentation_viewport_ != nullptr;
   }
 
-  Q_INVOKABLE void Open(uint elementId = 0, uint imageId = 0);
-  Q_INVOKABLE void Close();
-  void Finalize(bool persistChanges);
+  Q_INVOKABLE void   Open(uint elementId = 0, uint imageId = 0);
+  Q_INVOKABLE void   Close();
+  Q_INVOKABLE void   Shutdown();
+  void               Finalize(bool persistChanges);
   // Forget the last-edited image so re-entering the editor does not resurrect a
   // deleted image or one from a prior project (Phase 4A-Fix).
-  Q_INVOKABLE void clearLastEditedImage();
+  Q_INVOKABLE void   clearLastEditedImage();
 
   // Bind/unbind the production EditorViewportItem for this workspace instance.
   // Bind on mount and after every image Open while the same viewport lives.
   // Unbind only when the workspace tears the viewport down (not on A→B switch).
-  Q_INVOKABLE void bindPresentationViewport(QObject* viewportItem);
-  Q_INVOKABLE void unbindPresentationViewport();
+  Q_INVOKABLE void   bindPresentationViewport(QObject* viewportItem);
+  Q_INVOKABLE void   unbindPresentationViewport();
+  Q_INVOKABLE void   updatePresentationTargetSize(int width, int height);
 
   // Bound QQuickRhiItem (EditorViewportItem). QPointer may clear after destroy.
   [[nodiscard]] auto presentation_viewport() const -> QObject*;
@@ -115,10 +118,10 @@ class EditorSessionController final : public QObject {
   // Callers must re-resolve after PresentationBindingChanged / StateChanged.
   [[nodiscard]] auto presentation_frame_sink() const -> alcedo::IFrameSink*;
 
-  void set_filmstrip_collapsed(bool collapsed);
-  void set_filmstrip_expanded_height(double height);
-  void set_active_adjustment_panel(const QString& panel);
-  void set_history_panel_page(const QString& page);
+  void               set_filmstrip_collapsed(bool collapsed);
+  void               set_filmstrip_expanded_height(double height);
+  void               set_active_adjustment_panel(const QString& panel);
+  void               set_history_panel_page(const QString& page);
 
  signals:
   void StateChanged();
@@ -128,30 +131,31 @@ class EditorSessionController final : public QObject {
   void LastEditedImageChanged();
 
  private:
-  void LoadFilmstripUiPrefs();
-  void SaveFilmstripUiPrefs() const;
-  void LoadDesktopUiPrefs();
-  void SaveDesktopUiPrefs() const;
-  void SyncIdentityFromBackend();
-  void ApplyOpenLocal(uint elementId, uint imageId);
-  void ApplyCloseLocal();
-  void SyncViewportIdentity();
-  [[nodiscard]] static auto NormalizeAdjustmentPanel(const QString& panel) -> QString;
-  [[nodiscard]] static auto NormalizeHistoryPanelPage(const QString& page) -> QString;
+  void                           LoadFilmstripUiPrefs();
+  void                           SaveFilmstripUiPrefs() const;
+  void                           LoadDesktopUiPrefs();
+  void                           SaveDesktopUiPrefs() const;
+  void                           SyncIdentityFromBackend();
+  void                           ApplyOpenLocal(uint elementId, uint imageId);
+  void                           ApplyCloseLocal();
+  void                           SyncViewportIdentity();
+  void                           InstallBackendNotifier();
+  [[nodiscard]] static auto      NormalizeAdjustmentPanel(const QString& panel) -> QString;
+  [[nodiscard]] static auto      NormalizeHistoryPanelPage(const QString& page) -> QString;
 
-  EditorController*              editor_ = nullptr;
-  alcedo::IEditorSessionBackend* session_backend_ = nullptr;
+  EditorController*              editor_                    = nullptr;
+  alcedo::IEditorSessionBackend* session_backend_           = nullptr;
   // Local mirror when no backend is injected (legacy shell tests).
-  bool                           active_ = false;
-  uint                           element_id_ = 0;
-  uint                           image_id_ = 0;
-  uint                           last_element_id_ = 0;
-  uint                           last_image_id_ = 0;
-  qulonglong                     session_generation_ = 0;
-  alcedo::EditorSessionState     session_state_ = alcedo::EditorSessionState::NoImage;
-  bool                           filmstrip_collapsed_ = false;
+  bool                           active_                    = false;
+  uint                           element_id_                = 0;
+  uint                           image_id_                  = 0;
+  uint                           last_element_id_           = 0;
+  uint                           last_image_id_             = 0;
+  qulonglong                     session_generation_        = 0;
+  alcedo::EditorSessionState     session_state_             = alcedo::EditorSessionState::NoImage;
+  bool                           filmstrip_collapsed_       = false;
   double                         filmstrip_expanded_height_ = 128.0;
-  QString                        active_adjustment_panel_ = QStringLiteral("tone");
+  QString                        active_adjustment_panel_   = QStringLiteral("tone");
   QString                        history_panel_page_;
   QPointer<QObject>              presentation_viewport_;
 };
