@@ -50,4 +50,4 @@ height:\s*(16|18|20)\b
 - Phase 5 backend/session/render scheduling
 - Phase 6 production adjustment control bodies
 - Whole-application restyle of Library non-shell chrome (unless it breaks the
-  card-surface contract)
+  card-surface specification)

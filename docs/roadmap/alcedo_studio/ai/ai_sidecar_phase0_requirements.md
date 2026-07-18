@@ -1,4 +1,4 @@
-# AI Sidecar Backend — Phase 0 Contract Inventory and Gates
+# AI Sidecar Backend — Phase 0 Interface Inventory and Gates
 
 Date: 2026-06-25
 Primary roadmap owner: `alcedo_studio/src/ai` (cross-module sidecar/app integration)
@@ -156,7 +156,7 @@ enum AiErrorCode {
 }
 ```
 
-### 1.5 Status → tonic mapping (Rust impl contract)
+### 1.5 Status → tonic mapping (Rust implementation mapping)
 
 The Rust server maps `AiResponseStatus` to `tonic::Status` for transport-level
 behavior, while the typed `AiResponseHeader` carries the precise outcome inside the
@@ -381,7 +381,7 @@ that returns *canned* gRPC responses. The binary does not serve gRPC; the live g
 path is exercised only by `SemanticRuntimeServiceLiveTest` against an external Rust
 runtime.
 
-Phase 0 freezes the **minimum fake-runtime contract** the test suite must satisfy for
+Phase 0 freezes the **minimum fake-runtime behavior** the test suite must satisfy for
 Phases 1-6. Items marked **(existing)** are already provided; **(Phase N)** are added
 in that phase.
 
@@ -619,7 +619,7 @@ Confirmed: Phase 0 introduces **only** the control surface — headers, status e
 and a capability *descriptor*. There is no `Invoke(task_name, json_payload)` universal
 RPC, no generic provider trait, and no credential vault in the Phase 1 scope. Provider
 abstractions are task-scoped and deferred to Phase 5 (image-understanding provider
-traits) and Phase 3 (credential vault), each behind its own typed contract. The
+traits) and Phase 3 (credential vault), each behind its own typed interface. The
 `AiCapability` message describes capabilities; it does not dispatch them.
 
 ### 7.2 Compatibility paths

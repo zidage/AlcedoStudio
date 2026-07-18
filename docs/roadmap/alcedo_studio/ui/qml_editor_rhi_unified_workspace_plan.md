@@ -4,8 +4,8 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-17 after Phase 4C completion (VI contract, shared primitives, motion
-driver tests, and acceptance closeout).
+Last revised: 2026-07-18 to add Phase 4D visual-consistency closeout and clarify that production
+first-frame delivery remains in Phase 5B.
 
 Affected areas:
 
@@ -141,7 +141,7 @@ top-level swapchain.
   `HDRExtendedSrgbLinear`, HDR10, and `HDRExtendedDisplayP3Linear`, but the format is intended to be
   selected before the first `createOrResize()`.
 - The standard Qt Quick render loop owns its swapchain. `QQuickWindow::swapChain()` exposes it for
-  inspection, but Qt 6.9 has no public, high-level contract for repeatedly changing the owned
+  inspection, but Qt 6.9 has no public, high-level API for repeatedly changing the owned
   swapchain between SDR and HDR while the window is live.
 - [`QQuickRenderControl`](https://doc.qt.io/qt-6/qquickrendercontrol.html) lets an application drive
   the Qt Quick scene into an application-controlled render target. Together with
@@ -180,7 +180,7 @@ Specific blockers:
   thread.
 - `IFrameSink` exposes synchronous `EnsureSize`, map, unmap, and notify calls. CUDA and OpenCL
   pipeline code assumes the target can be resized and mapped from worker execution. A threaded
-  scene graph cannot safely honor that contract directly.
+  scene graph cannot safely honor that synchronous behavior directly.
 - `EditorRenderCoordinator` and `EditorFrameManager` hold concrete `QtEditViewer`, spinner, and scope
   widget types. They must be split at service/model boundaries, not wrapped in QObjects unchanged.
 - `EditorDialog` builds Tone, Look, Display Transform, Geometry, RAW Decode, LUT, versioning, and
@@ -254,7 +254,7 @@ moving them behind clean interfaces; do not preserve their QWidget ownership gra
 
 ### Save, journal, and version semantics
 
-- Editing is autosave-first. There is no primary Save/Cancel dialog contract.
+- Editing is autosave-first. There is no primary Save/Cancel dialog workflow.
 - A completed user gesture creates one coalesced redo-only edit transaction. Slider samples during a
   drag do not each become durable transactions; release or an idle coalescing boundary commits the
   latest value.
@@ -432,7 +432,7 @@ Main workspace navigation:
 
 `FramePresentationBroker`:
 
-- replaces the synchronous `IFrameSink` map/unmap contract;
+- replaces the synchronous `IFrameSink` map/unmap interface;
 - exchanges immutable target leases and completed-frame submissions between pipeline workers and the
   render thread;
 - carries backend, pixel format, dimensions, target generation, image render generation, native
@@ -450,7 +450,7 @@ Main workspace navigation:
   letterbox, and ROI rules;
 - consumes only the newest completed frame compatible with the current target and image generation.
 
-## Startup backend contract
+## Startup backend requirements
 
 Add a startup parser before `QQmlApplicationEngine` and before any QML type can construct a window.
 Use one explicit argument, for example:
@@ -503,7 +503,7 @@ enter the empty state.
 Each phase has a hard acceptance gate. A phase is not complete because code exists; its named tests,
 thread/lifetime assertions, and platform checks must pass.
 
-### Phase 0 - Windows executable contracts and feasibility harness
+### Phase 0 - Windows executable requirements and feasibility harness
 
 Status: **implemented and verified on Windows** (2026-07-16). Maintained targets:
 `EditorRhiHarness`, `EditorRhiContractsTest`, `run_editor_rhi_harness_cuda`,
@@ -517,7 +517,8 @@ Verified on NVIDIA GeForce RTX 3080 Laptop GPU:
   on this display/backend path
 - `EditorRhiContractsTest` (9 tests) passed
 
-Metal lease contract is defined in `frame_presentation_lease.hpp`; Metal feasibility remains Phase 9.
+The Metal lease interface is defined in `frame_presentation_lease.hpp`; Metal feasibility remains
+Phase 9.
 Production `alcedo_main` entrypoint is intentionally unchanged in Phase 0.
 
 Deliverables:
@@ -535,7 +536,7 @@ Deliverables:
   and SDR display configurations. This is input for Phase 10, not a reason to switch renderers.
 - Create deterministic fixtures: FP32 gradient, checkerboard, ROI patch, odd-sized image, and a small
   real RAW project fixture.
-- Define the backend-neutral Metal lease contract but do not claim Metal feasibility while the macOS
+- Define the backend-neutral Metal lease interface but do not claim Metal feasibility while the macOS
   environment is unavailable. Metal implementation and qualification are Phase 9.
 
 Acceptance:
@@ -672,7 +673,7 @@ Deliverables:
   shortcuts, global dialogs/toasts, and `WorkspaceHost` construction.
 - Add `EditorWorkspace.qml` with toolbar regions, central empty viewport slot, inspector/scope slots,
   and a bottom filmstrip dock slot.
-- Define the downward-collapse geometry and persistent handle contract for the filmstrip dock.
+- Define the downward-collapse geometry and persistent handle behavior for the filmstrip dock.
 - Add the no-image empty state and focus/accessibility order.
 - Route grid/list double-click through `appModules.workspaceRouter` rather than a modal editor method.
 - Define lazy-load and teardown rules for both workspaces.
@@ -746,7 +747,7 @@ Acceptance:
 `QQuickRhiItem` viewport, broker lease protocol, CUDA/D3D11 and OpenCL/OpenGL adapters, generation
 and stale-frame filtering, render-thread resource release, and read-only diagnostics. Phase 2-Fix
 closed the production-viewport gaps (lease sink wiring, startup backend, sync, pool recycle,
-session generation). Contract suite (20), production `EditorViewportItem` harness on CUDA/OpenCL,
+session generation). Interface suite (20), production `EditorViewportItem` harness on CUDA/OpenCL,
 and direct-presentation harness cases pass.
 
 ### Phase 2-Fix
@@ -873,19 +874,20 @@ Implementation closeout:
 - Overlay: non-overlapping dim mask, outward round caps, coalesced rebuilds.
 - QML: PointHandlers unchanged; DPR via screen property binding; session identity key
   drives rebind (PascalCase C++ signals are not used as Connections function handlers).
-- Phase 5A–5D now explicitly own loading, unified scheduling, first-frame proof, and production
-  cutover. Phase 3-Fix remains open until the Phase 3 interaction/screenshot checks above are
-  complete; production first-frame completion is gated by Phase 5B and 5D.
+- Phase 5A–5D own loading, unified scheduling, first-frame proof, equal-output-size geometry
+  synchronization, and sustained production operation. Phase 3-Fix remains open until the Phase 3
+  interaction/screenshot checks above are complete; production first-frame completion is gated by
+  Phase 5B and the sustained-path verification in Phase 5D.
 
 ### Phase 4 - QML workspace frontend and visual system
 
 Phase 4 is frontend-only. It establishes the functioning QML workspace, correct desktop structure,
 and one documented visual language before backend cutover or adjustment-panel migration adds more
-UI. Work follows `4A → 4A-Fix → 4B → 4C`. Phase 4B is complete; the production review items found
-after it are owned by Phase 4C and are release-blocking visual corrections, not optional polish.
+UI. Work follows `4A → 4A-Fix → 4B → 4C → 4D`. Phase 4D is the frontend closeout gate for the
+remaining visual inconsistencies found after Phase 4C.
 
 The render/session/backend work formerly grouped into Phase 4 is now the independent Phase 5. It
-must consume the frontend contracts and visual tokens established here without reopening the
+must consume the frontend interfaces and visual tokens established here without reopening the
 workspace information architecture.
 
 ### Phase 4A - Main-window Library / Editor navigation
@@ -1044,7 +1046,7 @@ Implementation closeout:
 - Right stack (`EditorAdjustmentStack.qml`): histogram/waveform scope slot on top, five-segment
   icon navbar (Tone / Look / Display Transform / Geometry / RAW Decode using existing
   `panel_icons`), and a `StackLayout` of empty panel bodies. Preferred / min / max width 300 / 260 /
-  420 matches the legacy controls panel contract. Shell dims when no image is open; navbar remains
+  420 matches the legacy controls panel width. Shell dims when no image is open; navbar remains
   selectable so choice can be set before an image arrives.
 - Session-backed UI state on `EditorSessionController`: `activeAdjustmentPanel` (tone | look |
   display | geometry | raw) is QSettings-persisted (`editor/activeAdjustmentPanel`) so it survives
@@ -1069,14 +1071,14 @@ before Phase 6 begins adding real adjustment controls.
 
 Implementation closeout:
 
-- Canonical VI contract: `alcedo_studio/src/ui/alcedo_main/DESIGN.md` (agent rule + token tables
+- Canonical VI specification: `alcedo_studio/src/ui/alcedo_main/DESIGN.md` (agent rule + token tables
   mapped to `AppTheme` / shared components). Drift checklist:
   `docs/roadmap/alcedo_studio/ui/qml_visual_literal_review_checklist.md`.
 - `AppTheme` tokens: hit / optical / **source** icon sizes, spacing, radii, type sizes/weights,
   line heights, motion open/close/fade, `reduceMotion`, `cardSurfaceColor` / `cardBorderColor`.
 - Shared primitives: `IconActionButton.qml`, `CollapsibleSection.qml`. History/Versions rail and
   adjustment nav consume `IconActionButton`; adjustment panels host a collapsible group shell.
-- Fold motion contract on History/Versions (`panelOpenProgress`), filmstrip (`dockExpandProgress`),
+- Fold motion behavior on History/Versions (`panelOpenProgress`), filmstrip (`dockExpandProgress`),
   and `CollapsibleSection` (`foldProgress`) with `driveFoldProgress` / `endFoldDrive` test drivers.
   Ordinary workflow tests force `reduceMotion` so they assert terminal geometry.
 - Capsule selection visual is only `workspaceSwitchThumb` (no `highlightLevel` / focus ring).
@@ -1114,7 +1116,7 @@ Deliverables:
   introducing locally darker or lighter fills. Promote that relationship to a named semantic token
   if needed. Borders and selected/hover overlays may vary only through documented semantic tokens;
   collapsed and expanded cards must not change their base color.
-- Create `alcedo_studio/src/ui/alcedo_main/DESIGN.md` as the canonical visual-identity (VI) contract
+- Create `alcedo_studio/src/ui/alcedo_main/DESIGN.md` as the canonical visual-identity (VI) specification
   for the functioning QML application. It must document the approved UI/data/display font families;
   type roles, sizes, weights, line heights, and numeric alignment; semantic colors and surface
   hierarchy; spacing and margin scale; corner-radius scale; border treatment; button and icon
@@ -1160,12 +1162,66 @@ Acceptance:
   localized tooltip and accessible name, and the visible editor contains no developer-facing
   placeholder explanation.
 
+### Phase 4D - Opaque control surfaces and shared icon actions
+
+This frontend-only phase closes the visual inconsistencies visible after Phase 4C. It does not own
+image acquisition, pipeline scheduling, or frame submission. With the current implementation, a
+selected image can therefore still leave the production viewport black after Phase 4D; that is an
+explicit temporary limitation until Phase 5B delivers the first real frame, not evidence that the
+Phase 4 workspace or visual work has regressed.
+
+**Status: planned.**
+
+Deliverables:
+
+- Make the Adjustment stack use opaque, named theme colors for every visible surface and state.
+  The panel shell, scope slot, navigation shell, idle/hover/pressed/selected/disabled buttons, and
+  collapsible group shell must not derive their fills through `opacity`, `Qt.rgba(..., alpha)`,
+  `withAlpha(...)`, or `"transparent"`. Add explicit opaque semantic colors to `AppTheme` where a
+  distinct state is needed. Disabling the panel changes its concrete surface, text, and icon colors;
+  it must not lower the opacity of a parent item and blend all descendants with the viewport.
+- Use one surface color family for Library cards, the History/Versions rail, and the Adjustment
+  stack. Verify the actual resolved `QColor` values, including alpha 255, instead of checking only
+  that each component references a similarly named property.
+- Replace the locally declared stretched `AdjustmentNavButton` variant with direct use of the shared
+  icon-action component. Every Adjustment navigation action is square, uses the shared hit-size and
+  icon-size tokens, and uses the same radius, fill-state behavior, focus behavior, and border policy
+  as the `DialogActionButton.qml` visual family. The Adjustment navigation container and its button
+  shells consume the same radius token so the selected button does not appear to have a different
+  curvature from its card. Do not add per-button width, height, radius, fill, or alpha literals.
+- Consolidate shared button styling rather than copying `DialogActionButton.qml` into another local
+  component. If `DialogActionButton.qml` and `IconActionButton.qml` need different content layouts,
+  they still consume one set of surface/radius/state tokens. Feature QML supplies only the action,
+  icon, selected state, tooltip, and accessible name.
+- Add the official [Tabler `versions`](https://tabler.io/icons/icon/versions) SVG as the Versions
+  action asset, register it in the existing
+  QML resource group, and replace the palette artwork currently used by
+  `editorVersionsRailButton`. Preserve the Tabler view box and stroke geometry; do not redraw the
+  symbol in QML or approximate it with paths. Record source and license metadata beside the asset.
+  For future structural actions, prefer an existing Tabler symbol; a custom-drawn icon requires a
+  documented reason that no suitable Tabler symbol exists.
+
+Acceptance:
+
+- Screenshot comparisons for the supplied narrow and horizontal layouts show identical opaque card
+  surfaces, square Adjustment actions, matching navigation/button radii, and no parent-opacity color
+  drift in enabled, hovered, pressed, selected, keyboard-focused, and disabled states.
+- A QML property test enumerates every visible Adjustment background and asserts alpha 255. It also
+  fails on local `Qt.rgba` alpha fills, `withAlpha` surface derivation, `"transparent"` surface
+  fills, parent-shell opacity changes, or ad-hoc button geometry in `EditorAdjustmentStack.qml`.
+- The Adjustment actions and History/Versions rail use shared button primitives; their hit targets,
+  optical icon sizes, radii, keyboard focus, tooltips, and accessible names pass at DPR 1.0, 1.5,
+  and 2.0.
+- `editorVersionsRailButton` resolves to the registered Tabler `versions` asset and no longer
+  resolves to `palette.svg`. The asset renders at the shared optical size without QML-drawn path
+  geometry.
+
 ### Phase 5 - Editor backend, render coordination, and durable session state
 
 Phase 5 is backend-only except for the minimum state exposure needed by the already established QML
-shell. All scheduling, first-frame delivery, journaling, autosave, recovery, and cancellation work
-formerly nested under Phase 4 moves here. It may develop against Phase 4's stable frontend contract,
-but it must not introduce a parallel visual system or bypass `DESIGN.md` when surfacing state.
+shell. All scheduling, first-frame delivery, quality replacement, journaling, autosave, recovery,
+and cancellation work lives here. It may develop against Phase 4's stable frontend interface, but
+it must not introduce a parallel visual system or bypass `DESIGN.md` when surfacing state.
 
 All editor rendering uses this one flow:
 
@@ -1193,24 +1249,23 @@ Phase 3-Fix carry-over ownership:
 
 | Phase 3-Fix remaining problem | Required follow-up phase |
 | --- | --- |
-| Production code does not submit real frames through `presentation_frame_sink()` | Phase 5A defines the single scheduling owner and request/result contract; Phase 5B delivers and verifies the first real frame; Phase 5C covers all later render reasons; Phase 5D completes both production GPU paths and removes bypasses. |
-| A new image can keep the wrong render-reference geometry when its requested output size equals the previous image | Phase 5B must synchronize render-reference geometry for every new image/session generation and includes the equal-output-size switch test. |
+| Production code does not submit real frames through `presentation_frame_sink()` | Phase 5A defines the single scheduling owner and typed request/result interfaces; Phase 5B delivers and verifies the first real frame; Phase 5C covers all later render reasons; Phase 5D completes sustained operation and removes bypasses. |
+| A new image can keep the wrong render-reference geometry when its requested output size equals the previous image | Phase 5B synchronizes render-reference geometry for every new image/session generation and includes the equal-output-size switch test. |
 | Real QML interaction coverage is incomplete and the existing “Golden” tests do not compare rendered pixels | Phase 5D must run separate real-QML crop, zoom, pan, fit, ROI, reset, pinch, wheel, and double-click checks at DPR 1.0, 1.5, and 2.0, and compare rendered overlay captures for landscape, portrait, square, and odd viewport sizes. |
 
-These are inherited acceptance requirements for Phase 5, not optional cleanup. The backend phase
-cannot be marked complete while any row remains unverified, even if its newly added functionality
-passes.
+These are inherited acceptance requirements for Phase 5, not optional cleanup. Phase 5 cannot be
+marked complete while any row remains unverified, even if its newly added functionality passes.
 
-### Phase 5A - Editor session and unified render-intent contracts
+### Phase 5A - Editor session and unified render-intent interfaces
 
 Deliverables:
 
-- Add `EditorSessionService` in the application-service layer and a thin
+- Add `EditorSessionService` in the application-service layer and retain a thin
   `EditorSessionController` child module under `appModules`.
 - Define explicit session states for no image, acquiring, loading, interactive, saving, switching,
   failed, and shutting down.
 - Move reusable adjustment snapshots, patches, pipeline adapters, LUT catalog logic, history
-  coordination, and scope tap contracts out of QWidget ownership.
+  coordination, and scope tap interfaces out of QWidget ownership.
 - Acquire pipeline/history guards inside the service; never expose them to the QML module.
 - Define typed intents/results for open, switch, patch, gesture commit, undo, redo, discard, and
   shutdown.
@@ -1249,8 +1304,9 @@ Deliverables:
   allocate a new session/render generation, acquire image and pipeline state, attach the active
   presentation sink, request targets, enqueue the initial render, and publish the first compatible
   frame.
-- Create the initial render intent for every successful image open, even when no adjustment value
-  changed and the user has not zoomed or panned.
+- Create the initial render intent for every successful image open, including Editor filmstrip
+  selection and session restoration, even when no adjustment value changed and the user has not
+  zoomed or panned.
 - Use an InteractivePrimary full-frame request for the first visible result, followed by the normal
   QualityBase request according to coordinator policy. DetailPatch is never a prerequisite for the
   first visible frame.
@@ -1437,10 +1493,10 @@ Acceptance:
 ### Phase 6 - Adjustment panels and shared QML controls
 
 This is the former Phase 5, shifted intact behind the new backend Phase 5. It consumes the Phase 4
-VI/components and Phase 5 session, render-intent, journal, and recovery contracts; it must not create
+VI/components and Phase 5 session, render-intent, journal, and recovery interfaces; it must not create
 panel-local scheduling paths or visual literals that bypass those foundations.
 
-### Phase 6A - Shared adjustment contracts and QML controls
+### Phase 6A - Shared adjustment interfaces and QML controls
 
 Deliverables:
 
@@ -1543,7 +1599,7 @@ Acceptance:
 ### Phase 7 - Remaining editor workflow modules
 
 The former Phase 6 follows the adjustment-panel port so History/Versions, scopes, filmstrip, search,
-and lifecycle UI reuse the same visual, motion, session, and durability contracts.
+and lifecycle UI reuse the same visual, motion, session, and durability rules.
 
 ### Phase 7A - Versioning and history module
 
@@ -1728,11 +1784,11 @@ The final cutover deletes or replaces all of the following:
   only exist for the old ownership graph.
 - `OpenEditorDialog`, `EditorDialog::exec()`, and `editor_dialog_stub.cpp`.
 - `QtEditViewer`, `RhiEditViewerSurface`, `GlEditViewerSurface`, the QWidget/QPainter overlay, and the
-  old synchronous `IFrameSink` presentation contract.
+  old synchronous `IFrameSink` presentation interface.
 - `ALCEDO_REAL_WIDGET_EDITOR`, `ALCEDO_REAL_OPENGL_EDITOR`, `ALCEDO_RHI_WIDGET_EDITOR`,
   `ALCEDO_HAS_LEGACY_GL_VIEWER`, and the editor-stub branch.
 - `ALCEDO_ENABLE_OPENGL_EDITOR` as a widget-editor switch. OpenGL remains a supported Qt Quick backend
-  under the startup backend contract and should have a backend-oriented build option/name.
+  under the startup backend requirements and should have a backend-oriented build option/name.
 - The QML-visible runtime backend picker and any assumption that backend selection can occur after a
   QQuickWindow exists.
 - `Qt6::OpenGLWidgets` and editor-only `Qt6::Widgets` linkage. If unrelated application code still

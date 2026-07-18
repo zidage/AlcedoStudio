@@ -65,6 +65,15 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int iconSourceSizeCompact READ iconSourceSizeCompact CONSTANT)
   Q_PROPERTY(int iconButtonHitSize READ iconButtonHitSize CONSTANT)
   Q_PROPERTY(int iconButtonHitSizeCompact READ iconButtonHitSizeCompact CONSTANT)
+  // Editor side-panel + scope geometry (Phase 4C comfort sizing). The preferred
+  // width unifies the adjustment stack and the History/Versions expanded panel;
+  // min/max bound only the adjustment stack. Scope height covers the
+  // histogram/waveform slot. See src/ui/alcedo_main/DESIGN.md.
+  Q_PROPERTY(int editorSidePanelWidth READ editorSidePanelWidth CONSTANT)
+  Q_PROPERTY(int editorSidePanelWidthMin READ editorSidePanelWidthMin CONSTANT)
+  Q_PROPERTY(int editorSidePanelWidthMax READ editorSidePanelWidthMax CONSTANT)
+  Q_PROPERTY(int editorScopeHeight READ editorScopeHeight CONSTANT)
+  Q_PROPERTY(int editorScopeHeightMin READ editorScopeHeightMin CONSTANT)
   // Line heights (px) for QML Label lineHeight when using fixed pixel sizes.
   Q_PROPERTY(int lineHeightCaption READ lineHeightCaption CONSTANT)
   Q_PROPERTY(int lineHeightBody READ lineHeightBody CONSTANT)
@@ -183,6 +192,11 @@ class AppTheme final : public QObject {
   auto iconSourceSizeCompact() const -> int;
   auto iconButtonHitSize() const -> int;
   auto iconButtonHitSizeCompact() const -> int;
+  auto editorSidePanelWidth() const -> int;
+  auto editorSidePanelWidthMin() const -> int;
+  auto editorSidePanelWidthMax() const -> int;
+  auto editorScopeHeight() const -> int;
+  auto editorScopeHeightMin() const -> int;
   auto lineHeightCaption() const -> int;
   auto lineHeightBody() const -> int;
   auto lineHeightTitle() const -> int;

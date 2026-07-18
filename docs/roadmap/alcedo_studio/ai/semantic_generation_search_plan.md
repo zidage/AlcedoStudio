@@ -604,7 +604,7 @@ Packaging smoke tests should verify:
    - real image embedding request/response waiting and timeout handling
    - request-id matching and per-item partial failure mapping
    - model-info compatibility checks before generation starts
-   - decide final image payload contract: raw `rgba8:WxH` or encoded image bytes
+   - decide final image payload format: raw `rgba8:WxH` or encoded image bytes
 
 4c. Bulk generation persistence and labels - complete
    - persist image embeddings through `SemanticStorageController`
@@ -735,7 +735,7 @@ Packaging smoke tests should verify:
        should accept user query text in any supported language and route through
        embeddings instead of requiring a query-language gate.
    - 6b. Embedding dimension policy
-     - complete: this is folded into the model-manager profile contract rather
+     - complete: this is folded into the model-manager profile schema rather
        than implemented as an independent schema expansion. DuckDB VSS/HNSW
        remains the only semantic vector-ranking path, and the active storage
        shape remains `FLOAT[512]`.
@@ -818,7 +818,7 @@ Packaging smoke tests should verify:
      - covered by 6a/current activation gate: old semantic rows are hidden by
        active model key rather than silently mixed into active labels/search.
    - 6f. Model profile engine configuration and compatibility transforms
-     - complete: make the model profile contract explicit: `embedding_dimension`
+     - complete: make the model profile schema explicit: `embedding_dimension`
        is Alcedo's stored/output dimension, while `native_embedding_dimension`
        records the upstream model's raw output dimension.
      - complete: configure Jina CLIP v2 as a 512-dimensional Alcedo profile over

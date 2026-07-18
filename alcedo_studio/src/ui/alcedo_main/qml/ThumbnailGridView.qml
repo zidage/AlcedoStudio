@@ -6,7 +6,7 @@ import QtQuick.Effects
 Item {
     id: root
     clip: true
-    readonly property color cardBg: "transparent"
+    readonly property color cardBg: appTheme.cardSurfaceColor
     readonly property color cardBgSelected: appTheme.selectedTintColor
     readonly property color cardBgHover: appTheme.hoverColor
     readonly property color cardMuted: appTheme.textMutedColor

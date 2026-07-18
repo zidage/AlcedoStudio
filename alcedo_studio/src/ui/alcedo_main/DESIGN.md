@@ -56,7 +56,7 @@ and notify via `ThemeChanged`.
 | Deep | `bgDeepColor` | Floating modals / popovers |
 | Base | `bgBaseColor` | Sunken inputs, selected rail fill |
 | Panel | `bgPanelColor` | Side panels, header/footer chrome |
-| **Card surface** | **`cardSurfaceColor`** | **Library cards + editor cards** (alias of `bgBaseColor`) |
+| **Card surface** | **`cardSurfaceColor`** | **Library cards + editor cards** (alias of `bgPanelColor`) |
 | **Card border** | **`cardBorderColor`** | **Shared card outline** (alias of `dividerColor`) |
 | Text | `textColor` | Primary copy |
 | Text muted | `textMutedColor` | Secondary / empty hints |
@@ -95,10 +95,31 @@ base fill — only width/height/opacity via fold progress.
 
 | Token | px | Use |
 | --- | --- | --- |
-| `panelRadius` | theme (typically 12) | Editor cards, filmstrip, rail shells |
+| `panelRadius` | theme (10 Alcedo / 8 Classic) | Editor cards, filmstrip, rail shells |
 | `controlRadius` | 10 | Icon actions, nav pills |
 | `controlRadiusSmall` | 8 | Inner wells, collapsible section |
 | `badgeRadius` | 6 | Crop angle badge, small chips |
+
+---
+
+## Editor panel geometry
+
+Side-panel and scope sizing for the editor desktop. Values are logical px; Qt
+scales by DPR so they stay comfortable at 1.0 / 1.25 / 1.5 / 2.0. The preferred
+width unifies the adjustment stack and the History/Versions expanded panel so
+the two side columns read as one family.
+
+| Token | px | Use |
+| --- | --- | --- |
+| `editorSidePanelWidth` | 320 | Preferred width: adjustment stack + History/Versions expanded panel |
+| `editorSidePanelWidthMin` | 260 | Adjustment stack minimum (narrow-window floor) |
+| `editorSidePanelWidthMax` | 460 | Adjustment stack maximum |
+| `editorScopeHeight` | 160 | Histogram / waveform slot preferred height |
+| `editorScopeHeightMin` | 128 | Histogram / waveform slot minimum height |
+
+The History/Versions rail width (60 px) and rail-button hit (46 px) stay under
+Icon and action geometry; the rail width is not tokenized because it is locked to
+the rail-button optical balance.
 
 ---
 
@@ -110,15 +131,18 @@ Three independent sizes — never inherit only the SVG viewBox:
 | --- | --- | --- |
 | `iconButtonHitSize` | 44 | Default square hit target |
 | `iconButtonHitSizeCompact` | 40 | Dense segmented rows only |
-| `iconOpticalSize` | 24 | Drawn icon size (normal) |
-| `iconOpticalSizeCompact` | 20 | Drawn icon size (compact) |
-| `iconSourceSize` | 24 | `Image.sourceSize` / raster request (normal) |
+| `iconOpticalSize` | 32 | Drawn icon size (normal) |
+| `iconOpticalSizeCompact` | 20 | Drawn icon size (compact; reserved — no current usage) |
+| `iconSourceSize` | 32 | `Image.sourceSize` / raster request (normal) |
 | `iconSourceSizeCompact` | 20 | Raster request (compact) |
 
 **Hit band:** structural SVG actions use **40–46 px** hit targets. Default token
-is 44. Documented compact exception: 40 for the adjustment segmented navbar.
-History/Versions rail buttons use **46** (within band) for optical balance in
-the 60 px rail — set explicitly, do not invent a third default.
+is 44. History/Versions rail buttons use **46** (within band) for optical
+balance in the 60 px rail — set explicitly, do not invent a third default. The
+adjustment navbar and the Library/Editor workspace capsule both use the default
+44/32 hit/optical tokens (navbar: five segments in the ~320 px panel; capsule:
+132×40 pill); neither is a compact exception. The compact optical token (20)
+is reserved for future genuinely cramped rows (no current usage).
 
 **Reference:** `DialogActionButton.qml` (text actions, height 46) and
 `IconActionButton.qml` (SVG structural actions).
@@ -221,8 +245,6 @@ blocking. Session identity is never recreated by a fold.
 
 | Location | Exception | Why |
 | --- | --- | --- |
-| Adjustment navbar | `compact: true`, hit 40, optical 20 | Five segments in ~300 px width |
-| Library/Editor capsule icons | optical compact (20) | Capsule height is smaller than rail |
 | History rail buttons | explicit 46×46 hit | Optical balance in 60 px rail |
 | Window caption buttons | custom canvas 16 px glyphs | OS-chrome parity, not content SVG set |
 

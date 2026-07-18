@@ -8,8 +8,8 @@ import QtQuick.Layouts
 //
 // Geometry (AppTheme tokens — do not hardcode px here):
 //   hit:     iconButtonHitSize / iconButtonHitSizeCompact   (44 / 40)
-//   optical: iconOpticalSize / iconOpticalSizeCompact       (24 / 20)
-//   source:  iconSourceSize / iconSourceSizeCompact         (24 / 20)
+//   optical: iconOpticalSize / iconOpticalSizeCompact       (32 / 20)
+//   source:  iconSourceSize / iconSourceSizeCompact         (32 / 20)
 // Compact exception: set compact:true for dense segmented rows only.
 Button {
     id: control

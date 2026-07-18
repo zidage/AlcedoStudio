@@ -35,10 +35,12 @@ Item {
                                           ? String(editorSession.activeAdjustmentPanel || "tone")
                                           : "tone"
 
-    // Final sizing contract for Phase 4B.
-    readonly property int preferredPanelWidth: 300
-    readonly property int minimumPanelWidth: 260
-    readonly property int maximumPanelWidth: 420
+    // Final sizing contract — editor side-panel tokens (DESIGN.md). The
+    // preferred width matches the History/Versions expanded panel so the two
+    // side columns read as one family.
+    readonly property int preferredPanelWidth: appTheme.editorSidePanelWidth
+    readonly property int minimumPanelWidth: appTheme.editorSidePanelWidthMin
+    readonly property int maximumPanelWidth: appTheme.editorSidePanelWidthMax
 
     implicitWidth: preferredPanelWidth
     implicitHeight: 400
@@ -97,8 +99,8 @@ Item {
                 id: scopeSlot
                 objectName: "editorScopeSlot"
                 Layout.fillWidth: true
-                Layout.preferredHeight: 120
-                Layout.minimumHeight: 96
+                Layout.preferredHeight: appTheme.editorScopeHeight
+                Layout.minimumHeight: appTheme.editorScopeHeightMin
                 radius: appTheme.controlRadiusSmall
                 color: "transparent"
                 border.width: 1
@@ -118,7 +120,8 @@ Item {
                 id: adjustmentNav
                 objectName: "editorAdjustmentNav"
                 Layout.fillWidth: true
-                Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
+                // 32px optical icons + inset -> 48; cell (height - 2x2 margin) gives 6px icon padding.
+                Layout.preferredHeight: appTheme.iconOpticalSize + appTheme.spaceLg
                 radius: root.controlRadius
                 color: root.colCardSurface
                 border.width: 1
@@ -127,8 +130,7 @@ Item {
                 component AdjustmentNavButton: IconActionButton {
                     property string panelKey: "tone"
 
-                    // Compact optical size + stretch across the segmented row.
-                    compact: true
+                    // Default 44/24 icon tokens + stretch across the segmented row.
                     stretchInLayout: true
                     selected: root.activePanel === panelKey
                     iconColorDefault: root.colMuted

@@ -944,12 +944,19 @@ auto AppTheme::panelRadius() const -> int { return GetTheme(current_theme_index_
 auto AppTheme::controlRadius() const -> int { return 10; }
 auto AppTheme::controlRadiusSmall() const -> int { return 8; }
 auto AppTheme::badgeRadius() const -> int { return 6; }
-auto AppTheme::iconOpticalSize() const -> int { return 24; }
+auto AppTheme::iconOpticalSize() const -> int { return 32; }
 auto AppTheme::iconOpticalSizeCompact() const -> int { return 20; }
-auto AppTheme::iconSourceSize() const -> int { return 24; }
+auto AppTheme::iconSourceSize() const -> int { return 32; }
 auto AppTheme::iconSourceSizeCompact() const -> int { return 20; }
 auto AppTheme::iconButtonHitSize() const -> int { return 44; }
 auto AppTheme::iconButtonHitSizeCompact() const -> int { return 40; }
+// Editor side-panel + scope sizing (DESIGN.md "Editor panel geometry"). Values
+// are logical px; Qt scales by DPR so they stay comfortable at 1.25/1.5/2.0.
+auto AppTheme::editorSidePanelWidth() const -> int { return 320; }
+auto AppTheme::editorSidePanelWidthMin() const -> int { return 260; }
+auto AppTheme::editorSidePanelWidthMax() const -> int { return 460; }
+auto AppTheme::editorScopeHeight() const -> int { return 160; }
+auto AppTheme::editorScopeHeightMin() const -> int { return 128; }
 auto AppTheme::lineHeightCaption() const -> int { return 14; }
 auto AppTheme::lineHeightBody() const -> int { return 16; }
 auto AppTheme::lineHeightTitle() const -> int { return 18; }
@@ -994,7 +1001,7 @@ auto AppTheme::fontWeightRegular() const -> int { return 500; }
 auto AppTheme::fontWeightStrong() const -> int { return 600; }
 auto AppTheme::fontWeightHeading() const -> int { return 700; }
 
-auto AppTheme::cardSurfaceColor() const -> QColor { return bgBaseColor(); }
+auto AppTheme::cardSurfaceColor() const -> QColor { return bgPanelColor(); }
 auto AppTheme::cardBorderColor() const -> QColor { return dividerColor(); }
 
 auto AppTheme::currentThemeIndex() const -> int { return current_theme_index_; }

@@ -10,7 +10,7 @@ package alcedo.ai;
 // typed request/response proto and carries these headers inline for uniform
 // correlation, timeout, cancellation, and credential handling.
 //
-// See docs/roadmap/ai_sidecar_phase0_contract.md (section 1) for the frozen
+// See docs/roadmap/alcedo_studio/ai/ai_sidecar_phase0_requirements.md (section 1) for the frozen
 // field-by-field contract. Well-known types are intentionally not imported; the
 // Rust build (tonic_prost_build defaults) and the C++ generator both compile
 // only the `proto/` path with no WKT include, so timeouts are int64 scalars.

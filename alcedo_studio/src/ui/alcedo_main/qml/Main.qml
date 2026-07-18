@@ -1325,7 +1325,7 @@ ApplicationWindow {
                     id: workspaceSwitch
                     objectName: "workspaceSwitch"
                     Layout.preferredWidth: 132
-                    Layout.preferredHeight: 36
+                    Layout.preferredHeight: 40
 
                     readonly property bool navEnabled: appModules.project.serviceReady
 
@@ -1391,8 +1391,8 @@ ApplicationWindow {
                             readonly property string actionName: qsTr("Library")
                             HoverHandler { id: libraryNavHover }
                             icon.source: "qrc:/panel_icons/layout-grid.svg"
-                            icon.width: appTheme.iconOpticalSizeCompact
-                            icon.height: appTheme.iconOpticalSizeCompact
+                            icon.width: appTheme.iconOpticalSize
+                            icon.height: appTheme.iconOpticalSize
                             icon.color: !enabled ? root.withAlpha(root.colText, 0.30) : root.colText
                             Material.foreground: icon.color
                             background: Rectangle {
@@ -1426,8 +1426,8 @@ ApplicationWindow {
                             readonly property string actionName: qsTr("Editor")
                             HoverHandler { id: editorNavHover }
                             icon.source: "qrc:/panel_icons/adjustments.svg"
-                            icon.width: appTheme.iconOpticalSizeCompact
-                            icon.height: appTheme.iconOpticalSizeCompact
+                            icon.width: appTheme.iconOpticalSize
+                            icon.height: appTheme.iconOpticalSize
                             icon.color: !enabled ? root.withAlpha(root.colText, 0.30) : root.colText
                             Material.foreground: icon.color
                             background: Rectangle {

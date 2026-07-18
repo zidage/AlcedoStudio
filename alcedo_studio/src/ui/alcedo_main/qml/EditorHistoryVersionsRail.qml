@@ -36,7 +36,7 @@ Item {
                                          : ""
     readonly property bool panelExpanded: activePage === "history" || activePage === "versions"
     readonly property int railWidth: 60
-    readonly property int expandedPanelWidth: 300
+    readonly property int expandedPanelWidth: appTheme.editorSidePanelWidth
     readonly property int panelGap: appTheme.spaceSm
     // panelOpenProgress drives the fold (0 collapsed -> 1 expanded). The
     // logical panelExpanded flips immediately so session-state assertions hold;
@@ -102,144 +102,146 @@ Item {
         return Qt.rgba(c.r, c.g, c.b, a)
     }
 
-    RowLayout {
-        anchors.fill: parent
-        spacing: root.panelGap * root.panelOpenProgress
+    // Persistent narrow rail — never collapses away. Anchor-positioned at a
+    // fixed width so it never participates in the fold's layout churn; only the
+    // outer editor row relayouts as the root item width animates.
+    Rectangle {
+        id: rail
+        objectName: "editorHistoryRail"
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: root.railWidth
+        radius: root.panelRadius
+        color: root.colCardSurface
+        border.width: 1
+        border.color: root.colCardBorder
+        opacity: root.controlsEnabled ? 1.0 : 0.55
 
-        // Persistent narrow rail — never collapses away.
-        Rectangle {
-            id: rail
-            objectName: "editorHistoryRail"
-            Layout.preferredWidth: root.railWidth
-            Layout.minimumWidth: root.railWidth
-            Layout.maximumWidth: root.railWidth
-            Layout.fillHeight: true
-            radius: root.panelRadius
-            color: root.colCardSurface
-            border.width: 1
-            border.color: root.colCardBorder
-            opacity: root.controlsEnabled ? 1.0 : 0.55
+        Column {
+            anchors.top: parent.top
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.topMargin: appTheme.spaceMd
+            spacing: appTheme.spaceSm
 
-            Column {
-                anchors.top: parent.top
-                anchors.horizontalCenter: parent.horizontalCenter
-                anchors.topMargin: appTheme.spaceMd
-                spacing: appTheme.spaceSm
+            IconActionButton {
+                id: historyRailButton
+                objectName: "editorHistoryRailButton"
+                // Slightly larger than default 44 so the 60 px rail keeps
+                // breathing room; still within the documented 40–46 hit band.
+                width: 46
+                height: 46
+                implicitWidth: 46
+                implicitHeight: 46
+                enabled: root.controlsEnabled
+                selected: root.activePage === "history"
+                iconSrc: "qrc:/history_icons/git-commit-horizontal.svg"
+                iconColorDefault: root.colMuted
+                iconColorSelected: root.colText
+                iconColorMuted: root.colMuted
+                fillIdle: root.withAlpha(root.colBase, 0.55)
+                fillHover: root.colHover
+                fillSelected: root.colBase
+                focusRingColor: root.colAccent
+                actionName: selected ? qsTr("Hide Edit History") : qsTr("Show Edit History")
+                onClicked: root.selectPage("history")
+            }
 
-                IconActionButton {
-                    id: historyRailButton
-                    objectName: "editorHistoryRailButton"
-                    // Slightly larger than default 44 so the 60 px rail keeps
-                    // breathing room; still within the documented 40–46 hit band.
-                    width: 46
-                    height: 46
-                    implicitWidth: 46
-                    implicitHeight: 46
-                    enabled: root.controlsEnabled
-                    selected: root.activePage === "history"
-                    iconSrc: "qrc:/history_icons/git-commit-horizontal.svg"
-                    iconColorDefault: root.colMuted
-                    iconColorSelected: root.colText
-                    iconColorMuted: root.colMuted
-                    fillIdle: root.withAlpha(root.colBase, 0.55)
-                    fillHover: root.colHover
-                    fillSelected: root.colBase
-                    focusRingColor: root.colAccent
-                    actionName: selected ? qsTr("Hide Edit History") : qsTr("Show Edit History")
-                    onClicked: root.selectPage("history")
-                }
-
-                IconActionButton {
-                    id: versionsRailButton
-                    objectName: "editorVersionsRailButton"
-                    width: 46
-                    height: 46
-                    implicitWidth: 46
-                    implicitHeight: 46
-                    enabled: root.controlsEnabled
-                    selected: root.activePage === "versions"
-                    iconSrc: "qrc:/panel_icons/palette.svg"
-                    iconColorDefault: root.colMuted
-                    iconColorSelected: root.colText
-                    iconColorMuted: root.colMuted
-                    fillIdle: root.withAlpha(root.colBase, 0.55)
-                    fillHover: root.colHover
-                    fillSelected: root.colBase
-                    focusRingColor: root.colAccent
-                    actionName: selected ? qsTr("Hide Versions") : qsTr("Show Versions")
-                    onClicked: root.selectPage("versions")
-                }
+            IconActionButton {
+                id: versionsRailButton
+                objectName: "editorVersionsRailButton"
+                width: 46
+                height: 46
+                implicitWidth: 46
+                implicitHeight: 46
+                enabled: root.controlsEnabled
+                selected: root.activePage === "versions"
+                iconSrc: "qrc:/panel_icons/palette.svg"
+                iconColorDefault: root.colMuted
+                iconColorSelected: root.colText
+                iconColorMuted: root.colMuted
+                fillIdle: root.withAlpha(root.colBase, 0.55)
+                fillHover: root.colHover
+                fillSelected: root.colBase
+                focusRingColor: root.colAccent
+                actionName: selected ? qsTr("Hide Versions") : qsTr("Show Versions")
+                onClicked: root.selectPage("versions")
             }
         }
+    }
 
-        // Expanded panel beside the rail (takes space from the viewport). Width
-        // and opacity track panelOpenProgress so the panel folds quietly; the
-        // rail stays stationary and content is clipped mid-transition.
-        Rectangle {
-            id: historyPanel
-            objectName: "editorHistoryVersionsPanel"
-            visible: root.panelOpenProgress > 0.001
-            Layout.preferredWidth: root.expandedPanelWidth * root.panelOpenProgress
-            Layout.minimumWidth: 0
-            Layout.maximumWidth: root.expandedPanelWidth
-            Layout.fillHeight: true
-            radius: root.panelRadius
-            color: root.colCardSurface
-            border.width: 1
-            border.color: root.colCardBorder
-            opacity: root.panelOpenProgress * (root.controlsEnabled ? 1.0 : 0.55)
-            clip: true
+    // Expanded panel beside the rail (takes space from the viewport). Width and
+    // left margin track panelOpenProgress as Item geometry, not Layout
+    // properties, so the fold animates without relayouting the rail's inner
+    // row (the cause of the prior jank). The outer editor row still relayouts
+    // as the root item width animates — the tested "takes space" contract —
+    // and the panel's right edge stays flush with the root right edge at every
+    // step: rail.right + gap*progress + panelWidth*progress == totalWidth.
+    Rectangle {
+        id: historyPanel
+        objectName: "editorHistoryVersionsPanel"
+        anchors.left: rail.right
+        anchors.leftMargin: root.panelGap * root.panelOpenProgress
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: root.expandedPanelWidth * root.panelOpenProgress
+        visible: root.panelOpenProgress > 0.001
+        radius: root.panelRadius
+        color: root.colCardSurface
+        border.width: 1
+        border.color: root.colCardBorder
+        opacity: root.panelOpenProgress * (root.controlsEnabled ? 1.0 : 0.55)
+        clip: true
 
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: appTheme.spaceLg
-                spacing: appTheme.spaceMd
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: appTheme.spaceLg
+            spacing: appTheme.spaceMd
+
+            Label {
+                objectName: "editorHistoryVersionsPanelTitle"
+                Layout.fillWidth: true
+                text: root.activePage === "versions" ? qsTr("Versions") : qsTr("Edit History")
+                color: root.colText
+                font.pixelSize: appTheme.fontSizeSection
+                font.weight: appTheme.fontWeightHeading
+            }
+
+            Item {
+                objectName: "editorHistoryPageBody"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: root.activePage === "history"
 
                 Label {
-                    objectName: "editorHistoryVersionsPanelTitle"
-                    Layout.fillWidth: true
-                    text: root.activePage === "versions" ? qsTr("Versions") : qsTr("Edit History")
-                    color: root.colText
-                    font.pixelSize: appTheme.fontSizeSection
-                    font.weight: appTheme.fontWeightHeading
+                    anchors.centerIn: parent
+                    width: parent.width - 16
+                    wrapMode: Text.WordWrap
+                    horizontalAlignment: Text.AlignHCenter
+                    text: root.controlsEnabled
+                          ? qsTr("No edit history yet")
+                          : qsTr("Select an image to view history")
+                    color: root.colMuted
+                    font.pixelSize: appTheme.fontSizeBody
                 }
+            }
 
-                Item {
-                    objectName: "editorHistoryPageBody"
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    visible: root.activePage === "history"
+            Item {
+                objectName: "editorVersionsPageBody"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: root.activePage === "versions"
 
-                    Label {
-                        anchors.centerIn: parent
-                        width: parent.width - 16
-                        wrapMode: Text.WordWrap
-                        horizontalAlignment: Text.AlignHCenter
-                        text: root.controlsEnabled
-                              ? qsTr("No edit history yet")
-                              : qsTr("Select an image to view history")
-                        color: root.colMuted
-                        font.pixelSize: appTheme.fontSizeBody
-                    }
-                }
-
-                Item {
-                    objectName: "editorVersionsPageBody"
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    visible: root.activePage === "versions"
-
-                    Label {
-                        anchors.centerIn: parent
-                        width: parent.width - 16
-                        wrapMode: Text.WordWrap
-                        horizontalAlignment: Text.AlignHCenter
-                        text: root.controlsEnabled
-                              ? qsTr("No versions yet")
-                              : qsTr("Select an image to view versions")
-                        color: root.colMuted
-                        font.pixelSize: appTheme.fontSizeBody
-                    }
+                Label {
+                    anchors.centerIn: parent
+                    width: parent.width - 16
+                    wrapMode: Text.WordWrap
+                    horizontalAlignment: Text.AlignHCenter
+                    text: root.controlsEnabled
+                          ? qsTr("No versions yet")
+                          : qsTr("Select an image to view versions")
+                    color: root.colMuted
+                    font.pixelSize: appTheme.fontSizeBody
                 }
             }
         }

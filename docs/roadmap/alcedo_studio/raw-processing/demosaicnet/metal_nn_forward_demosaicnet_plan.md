@@ -783,9 +783,9 @@ The requested experiment was implemented with a static batch of two for both gra
 - an odd final tile is copied into lane 1 and lane 1 output is ignored;
 - `MetalDemosaicNetTiledResult` reports real tiles, graph invocations, and padded tiles.
 
-The odd-tile contract is covered by `MetalDemosaicNetIoTest.BatchTwoPairsTilesAndIgnoresOddDuplicate`:
+The odd-tile behavior is covered by `MetalDemosaicNetIoTest.BatchTwoPairsTilesAndIgnoresOddDuplicate`:
 three Bayer tiles produce two graph invocations, four padded lanes, three assembled outputs, and one
-host wait. Model correctness, RAW routing, hard-failure behavior, and the thumbnail Legacy contract
+host wait. Model correctness, RAW routing, hard-failure behavior, and the thumbnail Legacy invariant
 remain green.
 
 The experiment does **not** pass the retention gates. Release hot runs were executed in separate

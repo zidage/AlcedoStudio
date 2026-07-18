@@ -1614,9 +1614,9 @@ TEST_F(WorkspaceShellTests, NarrowWindowKeepsSidePanelOrderAndMinViewport) {
 
 TEST_F(WorkspaceShellTests, AppThemeExposesPhase4CGeometryAndMotionTokens) {
   auto& theme = alcedo::ui::AppTheme::Instance();
-  EXPECT_EQ(theme.iconOpticalSize(), 24);
+  EXPECT_EQ(theme.iconOpticalSize(), 32);
   EXPECT_EQ(theme.iconOpticalSizeCompact(), 20);
-  EXPECT_EQ(theme.iconSourceSize(), 24);
+  EXPECT_EQ(theme.iconSourceSize(), 32);
   EXPECT_EQ(theme.iconSourceSizeCompact(), 20);
   EXPECT_EQ(theme.iconButtonHitSize(), 44);
   EXPECT_EQ(theme.iconButtonHitSizeCompact(), 40);
@@ -1633,6 +1633,15 @@ TEST_F(WorkspaceShellTests, AppThemeExposesPhase4CGeometryAndMotionTokens) {
   EXPECT_LT(theme.motionFoldCloseMs(), theme.motionFoldOpenMs());
   EXPECT_EQ(theme.lineHeightBody(), 16);
   EXPECT_EQ(theme.lineHeightHeadline(), 28);
+  // Editor side-panel + scope sizing tokens (Phase 4C comfort sizing).
+  EXPECT_EQ(theme.editorSidePanelWidth(), 320);
+  EXPECT_EQ(theme.editorSidePanelWidthMin(), 260);
+  EXPECT_EQ(theme.editorSidePanelWidthMax(), 460);
+  EXPECT_EQ(theme.editorScopeHeight(), 160);
+  EXPECT_EQ(theme.editorScopeHeightMin(), 128);
+  EXPECT_GE(theme.editorSidePanelWidthMax(), theme.editorSidePanelWidth());
+  EXPECT_GE(theme.editorSidePanelWidth(), theme.editorSidePanelWidthMin());
+  EXPECT_GE(theme.editorScopeHeight(), theme.editorScopeHeightMin());
 }
 
 TEST_F(WorkspaceShellTests, EditorCardSurfacesResolveThroughSharedCardFamily) {
@@ -1721,13 +1730,15 @@ TEST_F(WorkspaceShellTests, StructuralIconActionsExposeHitOpticalAndAccessibleNa
   EXPECT_NEAR(versions_btn->width(), 46.0, 0.5);
   EXPECT_NEAR(versions_btn->height(), 46.0, 0.5);
 
-  // Optical size token on IconActionButton.
+  // Optical size token on IconActionButton. History rail buttons use the
+  // default 24 px optical; the adjustment navbar now uses the default 44/24
+  // tokens (de-compacted from the prior 40/20 exception for comfort).
   EXPECT_EQ(history_btn->property("opticalSize").toInt(),
             alcedo::ui::AppTheme::Instance().iconOpticalSize());
   EXPECT_EQ(tone_nav->property("opticalSize").toInt(),
-            alcedo::ui::AppTheme::Instance().iconOpticalSizeCompact());
+            alcedo::ui::AppTheme::Instance().iconOpticalSize());
   EXPECT_EQ(tone_nav->property("sourceSize").toInt(),
-            alcedo::ui::AppTheme::Instance().iconSourceSizeCompact());
+            alcedo::ui::AppTheme::Instance().iconSourceSize());
   EXPECT_GE(tone_nav->property("sourceSize").toInt(),
             tone_nav->property("opticalSize").toInt());
 

@@ -32,7 +32,7 @@
 //! metadata, so those defaults are treated as image-analysis candidates.
 //!
 //! See docs/roadmap/ai_sidecar_backend_plan.md (Phase 5a / Phase 6a) and
-//! docs/roadmap/ai_sidecar_phase0_contract.md (section 1) for the frozen
+//! docs/roadmap/alcedo_studio/ai/ai_sidecar_phase0_requirements.md (section 1) for the frozen
 //! control-surface contract these configs feed into.
 
 use std::collections::{HashMap, HashSet};

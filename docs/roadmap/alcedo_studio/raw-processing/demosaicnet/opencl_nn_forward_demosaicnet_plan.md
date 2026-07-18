@@ -785,7 +785,7 @@ The event profile records the material retained layers independently:
 
 No additional fusion was retained for phase crop, tile assembly, output RGB extraction, or
 RGB/RGBA conversion: each remains below the material boundary threshold, and the direct pack and
-residual comparisons meet the existing `1e-4` FP32 contract.
+residual comparisons meet the existing `1e-4` FP32 tolerance.
 
 ### 12.11 Phase 7.4 submission-overhead reduction — 2026-07-15
 
@@ -850,7 +850,7 @@ The retained product path is now documented and its development-only surface has
 Verification on the local NVIDIA GeForce RTX 3080 Laptop GPU (driver 610.62) passed:
 
 - the Windows debug build and targeted OpenCL suite: **40/40 tests passed**, including the new
-  program-build diagnostic contract;
+  program-build diagnostic requirements;
 - the Windows `win_release` build and three-hot-run full-frame harness: Bayer wall mean **383.61 ms**
   and X-Trans wall mean **413.94 ms**, both below the `<500 ms` gate;
 - the same hot runs recorded zero sub-buffer creation, zero Neural kernel creation, zero program
