@@ -9,9 +9,12 @@
 #include <QString>
 #include <QtGlobal>
 
+#include "app/editor_session_types.hpp"
+
 namespace alcedo {
 class IFrameSink;
-}
+class IEditorSessionBackend;
+}  // namespace alcedo
 
 namespace alcedo::ui {
 
@@ -27,6 +30,11 @@ class EditorController;
 /// `LeaseFrameSink` so pipeline code can attach without QML calling storage or
 /// pipeline infrastructure. The viewport pointer is typed as QObject in the
 /// public API; resolution to `IFrameSink` lives in the implementation.
+///
+/// Phase 5A routes open/close/finalize through an injected `IEditorSessionBackend`
+/// (production: EditorSessionService). The controller never owns pipeline guards,
+/// the scheduler, or journal storage. UI shell state (filmstrip, panels) remains
+/// controller-local.
 class EditorSessionController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool active READ active NOTIFY StateChanged)
@@ -41,6 +49,7 @@ class EditorSessionController final : public QObject {
   // Monotonic counter advanced on every Open, including A→B→A reopens. Distinct
   // from imageId so the viewport can reject stale frames from a prior session.
   Q_PROPERTY(qulonglong sessionGeneration READ session_generation NOTIFY StateChanged)
+  Q_PROPERTY(QString sessionState READ session_state_name NOTIFY StateChanged)
   Q_PROPERTY(bool filmstripCollapsed READ filmstrip_collapsed WRITE set_filmstrip_collapsed
                  NOTIFY FilmstripUiChanged)
   Q_PROPERTY(double filmstripExpandedHeight READ filmstrip_expanded_height WRITE
@@ -58,15 +67,21 @@ class EditorSessionController final : public QObject {
                  PresentationBindingChanged)
 
  public:
-  explicit EditorSessionController(EditorController* editor, QObject* parent = nullptr);
+  explicit EditorSessionController(EditorController* editor = nullptr, QObject* parent = nullptr);
+  EditorSessionController(EditorController* editor, alcedo::IEditorSessionBackend* session_backend,
+                          QObject* parent = nullptr);
 
-  [[nodiscard]] bool active() const { return active_; }
-  [[nodiscard]] bool has_image() const { return active_ && element_id_ > 0 && image_id_ > 0; }
-  [[nodiscard]] uint element_id() const { return element_id_; }
-  [[nodiscard]] uint image_id() const { return image_id_; }
+  void SetSessionBackend(alcedo::IEditorSessionBackend* session_backend);
+
+  [[nodiscard]] bool active() const;
+  [[nodiscard]] bool has_image() const;
+  [[nodiscard]] uint element_id() const;
+  [[nodiscard]] uint image_id() const;
   [[nodiscard]] uint last_element_id() const { return last_element_id_; }
   [[nodiscard]] uint last_image_id() const { return last_image_id_; }
-  [[nodiscard]] qulonglong session_generation() const { return session_generation_; }
+  [[nodiscard]] qulonglong session_generation() const;
+  [[nodiscard]] auto session_state() const -> alcedo::EditorSessionState;
+  [[nodiscard]] QString session_state_name() const;
   [[nodiscard]] bool filmstrip_collapsed() const { return filmstrip_collapsed_; }
   [[nodiscard]] double filmstrip_expanded_height() const { return filmstrip_expanded_height_; }
   [[nodiscard]] QString active_adjustment_panel() const { return active_adjustment_panel_; }
@@ -113,21 +128,28 @@ class EditorSessionController final : public QObject {
   void SaveFilmstripUiPrefs() const;
   void LoadDesktopUiPrefs();
   void SaveDesktopUiPrefs() const;
+  void SyncIdentityFromBackend();
+  void ApplyOpenLocal(uint elementId, uint imageId);
+  void ApplyCloseLocal();
+  void SyncViewportIdentity();
   [[nodiscard]] static auto NormalizeAdjustmentPanel(const QString& panel) -> QString;
   [[nodiscard]] static auto NormalizeHistoryPanelPage(const QString& page) -> QString;
 
-  EditorController* editor_ = nullptr;
-  bool              active_ = false;
-  uint              element_id_ = 0;
-  uint              image_id_ = 0;
-  uint              last_element_id_ = 0;
-  uint              last_image_id_ = 0;
-  qulonglong        session_generation_ = 0;
-  bool              filmstrip_collapsed_ = false;
-  double            filmstrip_expanded_height_ = 128.0;
-  QString           active_adjustment_panel_ = QStringLiteral("tone");
-  QString           history_panel_page_;
-  QPointer<QObject> presentation_viewport_;
+  EditorController*              editor_ = nullptr;
+  alcedo::IEditorSessionBackend* session_backend_ = nullptr;
+  // Local mirror when no backend is injected (legacy shell tests).
+  bool                           active_ = false;
+  uint                           element_id_ = 0;
+  uint                           image_id_ = 0;
+  uint                           last_element_id_ = 0;
+  uint                           last_image_id_ = 0;
+  qulonglong                     session_generation_ = 0;
+  alcedo::EditorSessionState     session_state_ = alcedo::EditorSessionState::NoImage;
+  bool                           filmstrip_collapsed_ = false;
+  double                         filmstrip_expanded_height_ = 128.0;
+  QString                        active_adjustment_panel_ = QStringLiteral("tone");
+  QString                        history_panel_page_;
+  QPointer<QObject>              presentation_viewport_;
 };
 
 }  // namespace alcedo::ui

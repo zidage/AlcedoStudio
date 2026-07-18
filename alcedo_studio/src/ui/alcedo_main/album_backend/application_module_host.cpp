@@ -73,7 +73,12 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   adjustment_transfer_ = std::make_unique<AdjustmentTransferController>(
       project_.get(), library_.get(), import_export_.get(), this);
   RecordConstruction("AdjustmentTransferController", adjustment_transfer_.get());
-  editor_session_ = std::make_unique<EditorSessionController>(editor_.get(), this);
+  // Phase 5A: application-layer session + render coordinator before the QML facade.
+  editor_session_runtime_ = alcedo::EditorSessionRuntime::Create();
+  RecordConstruction("EditorSessionService", editor_session_runtime_->service.get());
+  RecordConstruction("EditorRenderCoordinator", editor_session_runtime_->coordinator.get());
+  editor_session_ = std::make_unique<EditorSessionController>(
+      editor_.get(), editor_session_runtime_->service.get(), this);
   RecordConstruction("EditorSessionController", editor_session_.get());
   workspace_router_ = std::make_unique<WorkspaceRouter>(editor_session_.get(), this);
   RecordConstruction("WorkspaceRouter", workspace_router_.get());
@@ -297,6 +302,11 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   };
   destroy(workspace_router_, "WorkspaceRouter");
   destroy(editor_session_, "EditorSessionController");
+  if (editor_session_runtime_) {
+    RecordDestruction("EditorRenderCoordinator", editor_session_runtime_->coordinator.get());
+    RecordDestruction("EditorSessionService", editor_session_runtime_->service.get());
+    editor_session_runtime_.reset();
+  }
   destroy(adjustment_transfer_, "AdjustmentTransferController");
   destroy(editor_, "EditorController");
   destroy(nikon_he_recovery_, "NikonHeRecoveryController");

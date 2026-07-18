@@ -4,10 +4,13 @@
 
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 
+#include <cstdint>
+
 #include <QSettings>
 #include <QtGlobal>
 
-#include "ui/alcedo_main/album_backend/editor_controller.hpp"
+#include "app/editor_render_intent.hpp"
+#include "app/editor_session_service.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "ui/editor_rhi/lease_frame_sink.hpp"
@@ -25,15 +28,115 @@ constexpr double kFilmstripExpandedHeightDefault = 128.0;
 }  // namespace
 
 EditorSessionController::EditorSessionController(EditorController* editor, QObject* parent)
-    : QObject(parent), editor_(editor) {
+    : EditorSessionController(editor, nullptr, parent) {}
+
+EditorSessionController::EditorSessionController(EditorController*              editor,
+                                                 alcedo::IEditorSessionBackend* session_backend,
+                                                 QObject*                       parent)
+    : QObject(parent), editor_(editor), session_backend_(session_backend) {
   LoadFilmstripUiPrefs();
   LoadDesktopUiPrefs();
 }
 
-void EditorSessionController::Open(uint elementId, uint imageId) {
+void EditorSessionController::SetSessionBackend(alcedo::IEditorSessionBackend* session_backend) {
+  session_backend_ = session_backend;
+}
+
+auto EditorSessionController::active() const -> bool {
+  // Workspace membership: true for empty editor as well as loading/interactive.
+  // Backend NoImage is still an active editor session until Close/Finalize.
+  return active_;
+}
+
+auto EditorSessionController::has_image() const -> bool {
+  if (session_backend_) {
+    return session_backend_->has_image();
+  }
+  return active_ && element_id_ > 0 && image_id_ > 0;
+}
+
+auto EditorSessionController::element_id() const -> uint {
+  if (session_backend_) {
+    return session_backend_->identity().element_id;
+  }
+  return element_id_;
+}
+
+auto EditorSessionController::image_id() const -> uint {
+  if (session_backend_) {
+    return session_backend_->identity().image_id;
+  }
+  return image_id_;
+}
+
+auto EditorSessionController::session_generation() const -> qulonglong {
+  if (session_backend_) {
+    return session_backend_->identity().session_generation;
+  }
+  return session_generation_;
+}
+
+auto EditorSessionController::session_state() const -> alcedo::EditorSessionState {
+  if (session_backend_) {
+    return session_backend_->state();
+  }
+  return session_state_;
+}
+
+auto EditorSessionController::session_state_name() const -> QString {
+  return QString::fromUtf8(alcedo::EditorSessionStateName(session_state()));
+}
+
+void EditorSessionController::SyncIdentityFromBackend() {
+  if (!session_backend_) {
+    return;
+  }
+  const auto id = session_backend_->identity();
+  element_id_ = id.element_id;
+  image_id_ = id.image_id;
+  session_generation_ = id.session_generation;
+  session_state_ = session_backend_->state();
+  // active_ is workspace membership owned by Open/Close/Finalize, not by
+  // backend NoImage vs Loading (empty editor remains active).
+}
+
+void EditorSessionController::ApplyOpenLocal(uint elementId, uint imageId) {
   active_ = true;
   element_id_ = elementId;
   image_id_ = imageId;
+  session_state_ = (elementId > 0 && imageId > 0) ? alcedo::EditorSessionState::Loading
+                                                  : alcedo::EditorSessionState::NoImage;
+  if (elementId > 0 && imageId > 0 &&
+      (last_element_id_ != elementId || last_image_id_ != imageId)) {
+    last_element_id_ = elementId;
+    last_image_id_ = imageId;
+    emit LastEditedImageChanged();
+  }
+  ++session_generation_;
+}
+
+void EditorSessionController::ApplyCloseLocal() {
+  if (!active_ && element_id_ == 0 && image_id_ == 0 &&
+      session_state_ == alcedo::EditorSessionState::NoImage) {
+    return;
+  }
+  active_ = false;
+  element_id_ = 0;
+  image_id_ = 0;
+  session_state_ = alcedo::EditorSessionState::NoImage;
+}
+
+void EditorSessionController::SyncViewportIdentity() {
+  if (auto* item =
+          qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
+    if (has_image()) {
+      item->setImageIdentity(static_cast<qulonglong>(image_id()));
+      item->setImageGeneration(session_generation());
+    }
+  }
+}
+
+void EditorSessionController::Open(uint elementId, uint imageId) {
   // Remember the last real image so re-entering the editor from the library can
   // restore it (Phase 4A-Fix). Close/Finalize never touch this; only an explicit
   // clearLastEditedImage() (delete / project switch) forgets it.
@@ -43,31 +146,42 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
     last_image_id_ = imageId;
     emit LastEditedImageChanged();
   }
-  // Always advance so A→B→A cannot reuse a generation accepted by the viewport.
-  ++session_generation_;
-  // Keep the legacy controller identity fields aligned for modules that still
-  // read them, but do not open the modal QWidget editor from the QML workspace.
-  Q_UNUSED(editor_);
-  // Align the still-bound production viewport with this session so pipeline
-  // producers that re-resolve presentation_frame_sink() reject prior frames.
-  if (auto* item =
-          qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
-    item->setImageIdentity(static_cast<qulonglong>(imageId));
-    item->setImageGeneration(session_generation_);
+
+  if (session_backend_) {
+    if (elementId == 0 || imageId == 0) {
+      // Empty editor: open no-image session via Open(0,0).
+      session_backend_->Open(0, 0);
+    } else if (session_backend_->has_image() &&
+               (session_backend_->identity().element_id != elementId ||
+                session_backend_->identity().image_id != imageId)) {
+      session_backend_->Switch(elementId, imageId);
+    } else {
+      session_backend_->Open(elementId, imageId);
+    }
+    SyncIdentityFromBackend();
+    active_ = true;
+  } else {
+    ApplyOpenLocal(elementId, imageId);
   }
+
+  Q_UNUSED(editor_);
+  SyncViewportIdentity();
   emit StateChanged();
 }
 
 void EditorSessionController::Close() {
-  if (!active_ && element_id_ == 0 && image_id_ == 0) {
+  if (!active_ && element_id_ == 0 && image_id_ == 0 &&
+      session_state_ == alcedo::EditorSessionState::NoImage) {
     return;
   }
+  if (session_backend_) {
+    // Prefer NoImage without full process shutdown so workspace round-trips work.
+    session_backend_->Open(0, 0);
+    SyncIdentityFromBackend();
+  } else {
+    ApplyCloseLocal();
+  }
   active_ = false;
-  element_id_ = 0;
-  image_id_ = 0;
-  // Leave session_generation_ intact so a later Open still advances past it.
-  // Keep the presentation binding: the viewport outlives image switches and
-  // brief no-image states inside the same EditorWorkspace instance.
   emit StateChanged();
 }
 
@@ -76,6 +190,15 @@ void EditorSessionController::Finalize(bool persistChanges) {
   // Seal only session identity. Do not unbind the presentation viewport here:
   // OpenEditor A→B calls Finalize then Open while the same QML viewport lives.
   // Unbind happens on viewport Component.onDestruction when the workspace unloads.
+  if (session_backend_) {
+    // Image switch / leave editor: Open(0,0) keeps the service usable; full
+    // Shutdown is reserved for application exit (Phase 5D+).
+    session_backend_->Open(0, 0);
+    SyncIdentityFromBackend();
+    active_ = false;
+    emit StateChanged();
+    return;
+  }
   Close();
 }
 
@@ -95,8 +218,13 @@ void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {
   presentation_viewport_ = viewportItem;
   if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(viewportItem)) {
     if (has_image()) {
-      item->setImageIdentity(static_cast<qulonglong>(image_id_));
-      item->setImageGeneration(session_generation_);
+      item->setImageIdentity(static_cast<qulonglong>(image_id()));
+      item->setImageGeneration(session_generation());
+    }
+    // Stamp a stable presentation sink identity for render intents (Phase 5A).
+    if (session_backend_) {
+      session_backend_->SetPresentationSinkId(
+          static_cast<alcedo::PresentationSinkId>(reinterpret_cast<std::uintptr_t>(item)));
     }
   }
   emit PresentationBindingChanged();
@@ -107,6 +235,9 @@ void EditorSessionController::unbindPresentationViewport() {
     return;
   }
   presentation_viewport_.clear();
+  if (session_backend_) {
+    session_backend_->SetPresentationSinkId(0);
+  }
   emit PresentationBindingChanged();
 }
 

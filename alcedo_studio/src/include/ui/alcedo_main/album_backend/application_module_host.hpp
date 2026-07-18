@@ -29,6 +29,7 @@
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
 #include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
+#include "app/editor_session_bootstrap.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/workspace_router.hpp"
 
@@ -119,6 +120,13 @@ class ApplicationModuleHost final : public QObject {
     return editor_session_.get();
   }
   [[nodiscard]] auto workspace_router() -> WorkspaceRouter* { return workspace_router_.get(); }
+  /// Phase 5A application-layer editor session (owned by the host, not QML).
+  [[nodiscard]] auto editor_session_service() -> alcedo::EditorSessionService* {
+    return editor_session_runtime_ ? editor_session_runtime_->service.get() : nullptr;
+  }
+  [[nodiscard]] auto editor_render_coordinator() -> alcedo::EditorRenderCoordinator* {
+    return editor_session_runtime_ ? editor_session_runtime_->coordinator.get() : nullptr;
+  }
 
   // Explicitly idempotent so the application can shut down modules before the
   // QML engine is torn down. The destructor calls the same path.
@@ -150,6 +158,7 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<NikonHeRecoveryController>         nikon_he_recovery_;
   std::unique_ptr<EditorController>                  editor_;
   std::unique_ptr<AdjustmentTransferController>      adjustment_transfer_;
+  std::unique_ptr<alcedo::EditorSessionRuntime>      editor_session_runtime_;
   std::unique_ptr<EditorSessionController>           editor_session_;
   std::unique_ptr<WorkspaceRouter>                   workspace_router_;
 

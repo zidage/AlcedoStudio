@@ -953,6 +953,42 @@ target_link_libraries(EditHistoryMgmtServiceTest ProjectService EditHistoryMgmtS
 gtest_discover_tests(EditHistoryMgmtServiceTest TEST_PREFIX "EditHistoryMgmtServiceTest."
   PROPERTIES LABELS "ci_core_flow")
 
+# Phase 5A: application-layer editor session + render coordinator (no GPU/QML).
+add_executable(EditorRenderCoordinatorTest app/editor_render_coordinator_test.cpp)
+target_include_directories(EditorRenderCoordinatorTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorRenderCoordinatorTest EditorSessionService GTest::gtest_main)
+gtest_discover_tests(EditorRenderCoordinatorTest TEST_PREFIX "EditorRenderCoordinatorTest."
+  PROPERTIES LABELS "ci_core_flow")
+
+add_executable(EditorSessionServiceTest app/editor_session_service_test.cpp)
+target_include_directories(EditorSessionServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorSessionServiceTest EditorSessionService GTest::gtest_main)
+gtest_discover_tests(EditorSessionServiceTest TEST_PREFIX "EditorSessionServiceTest."
+  PROPERTIES LABELS "ci_core_flow")
+
+add_executable(EditorSessionControllerPhase5ATest
+    ui/editor_session_controller_phase5a_test.cpp
+    ui/ui_test_main.cpp
+    ui/editor_dialog_stub.cpp
+)
+target_include_directories(EditorSessionControllerPhase5ATest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_compile_definitions(EditorSessionControllerPhase5ATest PRIVATE
+  ALCEDO_REPO_ROOT="${CMAKE_SOURCE_DIR}")
+target_link_libraries(EditorSessionControllerPhase5ATest
+  PRIVATE
+    AlbumBackendLib
+    EditorSessionService
+    GTest::gtest
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Qml
+    Qt6::Quick
+    Qt6::Widgets
+)
+gtest_discover_tests(EditorSessionControllerPhase5ATest
+  TEST_PREFIX "EditorSessionControllerPhase5ATest."
+  PROPERTIES LABELS "ci_core_flow")
+
 if(WIN32)
   target_link_libraries(EditHistoryMgmtServiceTest)
   if(TARGET alcedo_lensfun)
@@ -1679,6 +1715,9 @@ alcedo_assign_test_category(app ALCEDO_BUILD_APP_TESTS alcedo_tests_app
   FilterServiceTest
   PipelineServiceTest
   EditHistoryMgmtServiceTest
+  EditorRenderCoordinatorTest
+  EditorSessionServiceTest
+  EditorSessionControllerPhase5ATest
   SemanticGenerationServiceTest
   ThumbnailServiceTest
   ThumbnailDiskCacheServiceTest

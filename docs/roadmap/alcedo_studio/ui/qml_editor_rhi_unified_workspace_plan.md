@@ -1299,6 +1299,10 @@ marked complete while any row remains unverified, even if its newly added functi
 
 ### Phase 5A - Editor session and unified render-intent interfaces
 
+**Status: complete (2026-07-18).** Interfaces, state machine, and sole scheduling owner are
+implemented and unit-tested with fake ports. Production still uses bootstrap pipeline/history/
+journal/scheduler ports until Phase 5B wires real image load and first-frame presentation.
+
 Deliverables:
 
 - Add `EditorSessionService` in the application-service layer and retain a thin
@@ -1336,6 +1340,28 @@ Acceptance:
   rejection, and one scheduling owner without constructing QML or a GPU backend.
 - A source scan and dependency test show no editor UI module or input controller calling the
   pipeline scheduler directly.
+
+Implementation notes:
+
+- Headers: `include/app/editor_session_types.hpp`, `editor_render_intent.hpp`,
+  `editor_session_ports.hpp`, `editor_session_service.hpp`, `editor_render_coordinator.hpp`,
+  `editor_session_bootstrap.hpp`.
+- Sources: `app/editor_session_service.cpp`, `app/editor_render_coordinator.cpp` (library
+  `EditorSessionService`).
+- `ApplicationModuleHost` owns `EditorSessionRuntime` (bootstrap ports + coordinator + service)
+  and injects the service into `EditorSessionController`.
+- QML facade exposes `sessionState` string; open/switch/close route through the backend.
+  Production bootstrap ports succeed without DuckDB/GPU so shell tests keep working; Phase 5B
+  replaces them with real acquire/load/render/presentation.
+- Reusable adjustment types already outside QWidget ownership remain the source of truth:
+  `EditorAdjustmentSnapshot`, `AdjustmentPreview` / `AdjustmentCommit` under
+  `editor_dialog/session/`. App-layer intents carry `EditorRenderAdjustmentSnapshot`
+  fingerprints until Phase 6 panels fill full params.
+- Legacy QWidget `alcedo::ui::EditorRenderCoordinator` is unchanged; the new
+  `alcedo::EditorRenderCoordinator` is the sole production editor scheduling owner going forward.
+- Tests: `EditorRenderCoordinatorTest`, `EditorSessionServiceTest`,
+  `EditorSessionControllerPhase5ATest` (includes scheduler include/call scan of editor UI modules
+  and input controllers).
 
 ### Phase 5B - Image open and guaranteed first frame
 
