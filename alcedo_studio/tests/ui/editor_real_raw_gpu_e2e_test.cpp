@@ -189,10 +189,13 @@ TEST_F(EditorRealRawGpuE2eTest,
 
     const auto first_request_id = viewport->lastPresentedRequestId();
     previous_request_id = first_request_id;
+    // Direct-present composition counts every primary drawn into a Qt Quick
+    // window frame (InteractivePrimary then QualityBase). Application-level
+    // FramePresented is a one-shot first-frame composition event only.
     expected_presented_count += 2;
     ASSERT_TRUE(WaitUntil([&] { return viewport->presentedFrameCount() >= expected_presented_count; },
                           std::chrono::minutes(2)))
-        << "QualityBase was not acknowledged after InteractivePrimary";
+        << "QualityBase was not composed after InteractivePrimary";
     EXPECT_EQ(viewport->lastPresentedImageGeneration(),
               host.editor_session()->session_generation());
     EXPECT_EQ(viewport->imageIdentity(), key.image_id);
@@ -205,7 +208,8 @@ TEST_F(EditorRealRawGpuE2eTest,
       coordinator_results.begin(), coordinator_results.end(), [](const EditorRenderResult& result) {
         return result.kind == EditorRenderResultKind::FramePresented;
       });
-  EXPECT_GE(presented_count, switch_count * 2);
+  // Phase 5C: exactly one first-frame composition confirmation per image open.
+  EXPECT_GE(presented_count, switch_count);
   EXPECT_EQ(host.editor_session_production_scheduler()->pending_present_request_id(), 0u);
 
   host.workspace_router()->OpenLibrary();

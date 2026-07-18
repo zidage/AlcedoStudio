@@ -77,6 +77,12 @@ class IEditorRenderSubmitPort {
   virtual ~IEditorRenderSubmitPort()                                          = default;
   virtual auto Submit(const EditorRenderIntent& intent) -> EditorRenderResult = 0;
   virtual void CancelSession(std::uint64_t session_generation)                = 0;
+  /// Cancel a session and wait until production workers no longer use its
+  /// presentation sink. Test/fake ports keep the historical synchronous
+  /// behavior through this default implementation.
+  virtual void CancelSessionAndWait(std::uint64_t session_generation) {
+    CancelSession(session_generation);
+  }
   virtual void SetActiveGenerations(std::uint64_t session_generation,
                                     std::uint64_t render_generation,
                                     std::uint64_t view_generation)            = 0;

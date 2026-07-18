@@ -24,9 +24,13 @@ class RecordingScheduler final : public IEditorPipelineSchedulerPort {
     return ++next_job_;
   }
   void Cancel(std::uint64_t job_id) override { cancelled_.push_back(job_id); }
+  void WaitForSessionIdle(std::uint64_t session_generation) override {
+    waited_sessions_.push_back(session_generation);
+  }
 
   std::vector<EditorRenderRequest> scheduled_;
   std::vector<std::uint64_t>       cancelled_;
+  std::vector<std::uint64_t>       waited_sessions_;
   std::uint64_t                    next_job_  = 0;
   bool                             fail_next_ = false;
 };
@@ -135,6 +139,18 @@ TEST_F(EditorRenderCoordinatorTest, CancelSessionDropsPendingAndInflight) {
   EXPECT_EQ(coordinator_->pending_count(), 0u);
   EXPECT_FALSE(scheduler_->cancelled_.empty());
   EXPECT_EQ(a.kind, EditorRenderResultKind::RequestAccepted);
+}
+
+TEST_F(EditorRenderCoordinatorTest, CancelSessionAndWaitJoinsTheMatchingSchedulerWork) {
+  coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
+
+  coordinator_->CancelSessionAndWait(1);
+
+  ASSERT_EQ(scheduler_->cancelled_.size(), 1u);
+  ASSERT_EQ(scheduler_->waited_sessions_.size(), 1u);
+  EXPECT_EQ(scheduler_->waited_sessions_.front(), 1u);
+  EXPECT_FALSE(coordinator_->has_inflight());
 }
 
 TEST_F(EditorRenderCoordinatorTest, CancellationTokenPreventsSchedule) {

@@ -560,7 +560,7 @@ void EditorInteractionController::applyViewStateToViewport(QObject* viewportItem
   if (!item) {
     return;
   }
-  // Always refresh the region cache before hand-off so LeaseFrameSink ROI requests
+  // Always refresh the region cache before hand-off so DirectFrameSink ROI requests
   // match the controller after zoom/pan/resize.
   updateViewportRenderRegionCache();
   item->setViewState(viewerViewState());

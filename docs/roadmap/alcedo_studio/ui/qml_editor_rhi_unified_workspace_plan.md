@@ -4,7 +4,8 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-18 to add the Phase 5C direct-presentation architecture correction.
+Last revised: 2026-07-18 to add the Phase 5C direct-presentation architecture correction and the
+Qt Quick/RHI lifecycle rules inherited by every later phase.
 
 Affected areas:
 
@@ -152,6 +153,70 @@ top-level swapchain.
 Qt's QRhi APIs have limited source and binary compatibility guarantees and require `Qt6::GuiPrivate`.
 The editor must therefore pin the supported Qt minor version to 6.9.3, compile all RHI integration in
 CI, and treat a Qt minor upgrade as an explicit port with the full GPU harness.
+
+### Qt Quick/RHI lifecycle rules inherited by every later phase
+
+These rules are mandatory for Phase 5D onward. They are derived from Qt's
+[RHI Texture Item example](https://doc.qt.io/qt-6/qtquick-scenegraph-rhitextureitem-example.html),
+which is the production viewport pattern, and the
+[RHI Under QML example](https://doc.qt.io/qt-6/qtquick-scenegraph-rhiunderqml-example.html),
+which defines the same synchronization and scene-graph invalidation boundaries. A later phase may
+not weaken them for convenience.
+
+- Treat `QQuickRhiItemRenderer::initialize()` as a repeatable render-thread callback, not as a
+  constructor. Qt may call it again after geometry, color-buffer, sample-count, render-target, RHI,
+  or window changes. Compare the current `QRhi`, render target, format, and sample count with the
+  previously observed values and rebuild only the resources that actually depend on what changed.
+- Never clear a pending producer request, invalidate the direct-present queue, cancel an image
+  generation, or release a valid imported frame merely because `initialize()` ran again. Queue or
+  generation invalidation must come from an explicit image/session/lifecycle transition. This rule
+  prevents `initialize()` from erasing a native-target request immediately before `render()` can
+  fulfill it.
+- Copy GUI-owned item state into renderer-owned state only in `synchronize()`. The renderer uses
+  that snapshot for the complete frame and must not read mutable QML/controller objects from
+  `initialize()` or `render()`. GUI state and renderer state are separate even when a platform uses
+  a single-threaded render loop.
+- Create, import, use, and destroy every `QRhiResource` and native-texture QRhi wrapper on the Qt
+  Quick scene-graph render thread. `EditorViewportItem` and pipeline workers may own only thread-safe
+  queue state, generation values, metadata, and native producer handles; they never own a QRhi
+  wrapper.
+- Let `QQuickRhiItem` own its scene-graph node and offscreen render target. Do not override its
+  `updatePaintNode()` for photograph presentation, inject photograph commands into the window's
+  main render pass, or replace its separate texture pass with the underlay example's swapchain path.
+  The underlay example is a threading/lifecycle reference here, not the viewport architecture.
+- Call `QQuickItem::update()` only on the GUI thread. A pipeline worker requests it through a queued
+  GUI-thread invocation. A GUI-thread caller must never wait for a render pass that can start only
+  after the current GUI event returns. Continuous animation, when genuinely required, uses the
+  renderer's update mechanism; ordinary editor frames stay producer-driven.
+- Renderer existence, plus an explicit item/window lifecycle request, defines whether the direct
+  presenter consumer is available. `QWindow::isExposed()` alone is not proof that the item's
+  renderer exists. Re-enable the consumer only after the next `synchronize()` acknowledges the
+  live renderer.
+- Connect render-thread lifecycle callbacks such as `sceneGraphInvalidated` with
+  `Qt::DirectConnection` when they must release native resources or wake producers before Qt tears
+  down the scene graph. Such callbacks may touch only thread-safe presentation state and
+  render-thread-owned resources; GUI notifications are queued separately.
+- On hide, minimize, workspace Loader deactivation, window change, renderer destruction, project
+  close, and application shutdown, mark the consumer unavailable before releasing QRhi/native
+  resources. Wake every target wait with an explicit lifecycle result. Then cancel the pipeline
+  token and wait until the matching session worker has stopped using `IFrameSink` before QML
+  destroys `EditorViewportItem`.
+- Store and disconnect only connections created by `EditorViewportItem`. Never use a blanket
+  `disconnect(window, nullptr, item, nullptr)`, because that can remove private scene-graph cleanup
+  connections installed by `QQuickRhiItem` itself.
+- Import a native texture only after producer completion synchronization on the matching graphics
+  device. Apply the backend's required native layout/state after `createFrom()`, matching the proven
+  `RhiEditViewerSurface` path. A failed device match, import, or layout transition is a hard backend
+  error rather than a black placeholder or host-upload fallback.
+- Keep a QRhi wrapper alive for the entire command-buffer read and recycle its native slot only
+  after the renderer has completed that read. Scene composition acknowledgement, pipeline
+  completion, and slot reuse remain three distinct events.
+
+Every phase that changes QML visibility, Loader ownership, viewport geometry, render scheduling,
+native resource import, overlays, scopes, window state, or application shutdown must run the native
+GPU lifecycle cases before it can be marked complete: first presentation with pixel readback,
+repeated `initialize()`, resize/DPR churn, hide/show, minimize/restore, scene-graph recreation,
+rapid image/workspace switching, and shutdown with a producer waiting for a target.
 
 ## Current architecture and why it cannot be embedded as-is
 
@@ -506,7 +571,7 @@ thread/lifetime assertions, and platform checks must pass.
 ### Phase 0 - Windows executable requirements and feasibility harness
 
 Status: **implemented and verified on Windows** (2026-07-16). Maintained targets:
-`EditorRhiHarness`, `EditorRhiContractsTest`, `run_editor_rhi_harness_cuda`,
+`EditorRhiHarness`, the editor RHI invariant unit suite, `run_editor_rhi_harness_cuda`,
 `run_editor_rhi_harness_opencl`.
 
 Verified on NVIDIA GeForce RTX 3080 Laptop GPU:
@@ -515,7 +580,7 @@ Verified on NVIDIA GeForce RTX 3080 Laptop GPU:
 - CUDA cases: resize-churn, hide-show, minimize-restore, renderer-recreation, hdr-format-query
 - OpenGL HDR probe (Phase 10 input): SDR supported; HDRExtendedSrgbLinear/HDR10/P3Linear false
   on this display/backend path
-- `EditorRhiContractsTest` (9 tests) passed
+- editor RHI invariant unit suite (9 tests) passed
 
 The experimental Metal target interface is not a production architecture commitment; Phase 9 must
 implement Metal behind the Phase 5C direct presenter after hardware feasibility is verified.
@@ -760,7 +825,7 @@ and direct-presentation harness cases pass.
 
 **Historical status: complete against the Phase 2 design (2026-07-17); superseded by Phase 5C.**
 
-审核范围是 `82623d7d..d8069e9d`。下列问题已全部修正；`EditorRhiContractsTest`（20）、
+审核范围是 `82623d7d..d8069e9d`。下列问题已全部修正；编辑器 RHI 不变量单元测试（20）、
 生产 `EditorViewportItem` harness（CUDA/OpenCL lease presentation、continuous submit、
 hide/show、renderer recreation）与既有 direct-presentation harness 通过。
 
@@ -1475,10 +1540,23 @@ Implementation closeout:
 
 ### Phase 5C - Restore direct presentation behind QQuickRhiItem
 
-**Status: required architecture correction.** Keep `QQuickRhiItem` because the photograph must
-participate in native QML layout, clipping, opacity, stacking, and overlay composition. Do not treat
-that display requirement as authorization to replace the proven producer path, shared-texture slot
-queue, pipeline scheduling behavior, or editor session model.
+**Status: implemented with the Qt lifecycle correction (2026-07-18).** Keep `QQuickRhiItem` because
+the photograph must participate in native QML layout, clipping, opacity, stacking, and overlay
+composition. Do not treat that display requirement as authorization to replace the proven producer
+path, shared-texture slot queue, pipeline scheduling behavior, or editor session model.
+
+Production path restored as:
+
+```text
+DirectFrameSink::EnsureSize → MapResourceForWrite → GPU write → UnmapResource → NotifyFrameReady
+  → DirectPresentQueue (3 slots: Available / ProducerWriting / Ready / RendererReading)
+  → EditorViewportRenderer imports on the scene-graph thread and draws into the Qt Quick frame
+  → one-shot first-frame composition confirmation per image session
+```
+
+`FramePresentationBroker` / `LeaseFrameSink` remain only in legacy Phase 2 RHI invariant unit tests
+as historical Phase 2 protocol coverage. Production `EditorViewportItem`, `EditorRhiViewport`, and
+`alcedo_main` session production no longer construct or route through them.
 
 The target production path is:
 
@@ -1511,6 +1589,14 @@ Why this phase exists:
 - The Phase 2 lease/broker design duplicated the old queue and introduced target exhaustion,
   producer/renderer dual-completion races, renderer-recreation shutdown state, and long-lived
   per-request presentation bookkeeping. Phase 5C removes that duplication instead of polishing it.
+- The first implementation also treated `QQuickRhiItemRenderer::initialize()` as one-shot setup and
+  invalidated the direct-present queue every time Qt called it. Qt is allowed to call
+  `initialize()` repeatedly; clearing the request there produced a permanent black viewport even
+  though RAW/CUDA processing completed. The corrected renderer rebuilds only on an actual RHI or
+  dependent render-target change and keeps producer requests intact until `render()` fulfills them.
+- The corrected workspace-exit path marks the presentation consumer unavailable, propagates the
+  cancellation token into the real pipeline task, waits for the session worker to leave the frame
+  sink, and only then allows the QML Loader to destroy the viewport.
 
 Deliverables:
 
@@ -1578,6 +1664,10 @@ Acceptance:
   teardown errors. Assigned CUDA/OpenCL workers may not convert those failures into skips.
 - A source and link scan confirms that the production QML editor has no `FramePresentationBroker`,
   `LeaseFrameSink`, production lease adapter, host upload, or legacy editor facade dependency.
+- A regression case proves that repeated `initialize()` calls cannot erase a queued native-target
+  request and that the production renderer reaches non-black composition after GPU submission.
+- Returning to Library while RAW/GPU production is running completes without a GUI/render/worker
+  wait cycle; after the Loader destroys the viewport, no worker retains or calls its frame sink.
 
 ### Phase 5D - Unified adjustment, zoom, pan, resize, and quality scheduling
 
@@ -1597,6 +1687,12 @@ Deliverables:
   generation, requested region, and requested size to every request and completion.
 - Expose coordinator state to QML for spinner/progress/error display without letting QML observe or
   manipulate pipeline task objects.
+- Apply view and adjustment snapshots only through the item-to-renderer `synchronize()` boundary.
+  Slider, pointer, resize, and ROI handlers may enqueue or coalesce render intents and request an
+  item update, but may not read or write renderer state or wait for Qt Quick to render.
+- A viewport resize changes the QQuickRhiItem render target independently from the pipeline's native
+  source slots. Rebuild render-pass-dependent QRhi objects without invalidating compatible native
+  source frames or the active image generation.
 
 Acceptance:
 
@@ -1609,6 +1705,9 @@ Acceptance:
   coordinator and schedule editor rendering directly.
 - The production viewport shows InteractivePrimary, QualityBase, and DetailPatch from this single
   route with the correct generation and region.
+- Adjustment and resize bursts remain responsive when `initialize()` is called repeatedly; the
+  newest compatible request reaches composition and no request disappears between
+  `synchronize()` and `render()`.
 
 ### Phase 5E - Production interaction cutover and cancellation
 
@@ -1623,6 +1722,10 @@ Deliverables:
 - Keep pipeline tasks non-blocking with respect to window-frame confirmation. Losing presentation
   availability returns an explicit lifecycle result to the direct target wait and never leaves a
   producer waiting forever.
+- Enforce teardown order for every route: suspend presentation, wake target waiters, cancel the
+  request token, wait for the session worker to leave `IFrameSink`, release render-thread QRhi/native
+  resources, then destroy the QML Loader tree. No GUI-thread wait may depend on a queued GUI event or
+  a future scene-graph pass.
 - Add diagnostics for current request reason, queued/replaced/cancelled counts, active image/session
   generation, first-frame time, last submitted frame role, and last rejection reason.
 - Complete the Phase 3-Fix interaction carry-over in the production QML workspace: test crop, zoom,
@@ -1638,6 +1741,8 @@ Acceptance:
   native presentation path with no host-copy fallback.
 - A→B→A, rapid filmstrip navigation, repeated workspace changes, and project close leave no stale
   frame, blocked producer, live task, or leaked target.
+- Returning to Library at each pipeline/direct-present slot state completes within the lifecycle
+  budget and proves that the previous viewport receives no call after destruction.
 - Diagnostics and tests can explain why each render was requested, replaced, cancelled, presented,
   or rejected.
 - Every inherited Phase 3-Fix interaction test fails when its own QML operation is disabled; passing
@@ -1748,6 +1853,11 @@ This is the former Phase 5, shifted intact behind the new backend Phase 5. It co
 VI/components and Phase 5 session, render-intent, journal, and recovery interfaces; it must not create
 panel-local scheduling paths or visual literals that bypass those foundations.
 
+All Phase 6 panels inherit the Qt Quick/RHI lifecycle rules above. Panels communicate through typed
+models and render intents only. They do not retain `EditorViewportRenderer`, `QRhiResource`, native
+slot, or command-buffer pointers; they do not call render-thread functions from QML signal handlers;
+and their loading or destruction cannot synchronously wait for scene-graph work.
+
 ### Phase 6A - Shared adjustment interfaces and QML controls
 
 Deliverables:
@@ -1853,6 +1963,12 @@ Acceptance:
 The former Phase 6 follows the adjustment-panel port so History/Versions, scopes, filmstrip, search,
 and lifecycle UI reuse the same visual, motion, session, and durability rules.
 
+Scopes and custom overlay nodes have their own render-thread state and synchronization snapshots.
+They may observe copied frame metadata or dedicated analyzer output, but must not borrow the
+photograph renderer's QRhi wrappers or extend a native slot lifetime implicitly. Filmstrip/search
+and workspace lifecycle changes must exercise the same suspend-cancel-wait-destroy order used by
+Phase 5E.
+
 ### Phase 7A - Versioning and history module
 
 Deliverables:
@@ -1942,6 +2058,9 @@ Deliverables:
 - Run the feature-parity matrix on CUDA/D3D11 and OpenCL/OpenGL against the existing editor using the
   same RAW fixtures and stored edit histories.
 - Run long-duration resource, frame-pacing, transaction, search, and workspace-switch tests.
+- Run the complete QQuickRhiItem lifecycle matrix on both D3D11/CUDA and OpenGL/OpenCL, including
+  repeated initialization, render-target recreation, resize/DPR churn, hide/minimize, Loader
+  teardown, and shutdown while a producer is waiting.
 - Resolve every direct QWidget dependency in the new editor path.
 - Freeze the production cutover commit contents, including the complete deletion manifest, but do
   not retain a runtime old/new selector.
@@ -1954,6 +2073,8 @@ Acceptance:
 - The QML editor is the only path exercised by the end-to-end harness.
 - No known data-loss, stale-generation, resource-lifetime, or Windows display-mode defect remains
   open.
+- No lifecycle case relies on a timeout, polling loop, CPU fallback, or a later UI event to escape a
+  blocked native-target wait.
 
 ### Phase 9 - macOS Metal and existing EDR feasibility qualification
 
@@ -1967,6 +2088,9 @@ Deliverables:
   lifetime/synchronization path behind the same `IFrameSink` sequence used by CUDA and OpenCL.
 - Exercise QQuickRhiItem rendering, resize, DPR/screen change, hide/show, renderer recreation, image
   generation cancellation, and shutdown under the Metal scene graph.
+- Verify repeated `initialize()` with stable and changed Metal render targets, render-thread-only
+  `MTLTexture` QRhi wrapper lifetime, direct scene-graph invalidation cleanup, and
+  wake-before-release behavior with a producer waiting for a texture.
 - Apply the existing `ColorManager` system-API behavior to the unified QQuickWindow CAMetalLayer and
   verify color space, `wantsExtendedDynamicRangeContent`, PQ/HLG EDR metadata, and SDR reset.
 - Compare the unified editor against the current macOS editor on the same HDR/SDR fixtures and
@@ -1986,6 +2110,12 @@ Acceptance:
 ### Phase 10 - Application-owned HDR render host and hard cutover
 
 This is intentionally the last phase.
+
+Phase 10 changes the frame owner from the standard QQuickWindow render loop to
+`QQuickRenderControl`; it must not reuse assumptions that depend on a regular on-screen
+QQuickWindow swapchain. The Phase 5C queue, generation, and cancellation invariants remain, while
+QRhi resource creation, synchronization, and cleanup move to the application-owned render thread
+and explicit render-control frame lifecycle.
 
 Deliverables:
 
@@ -2024,6 +2154,9 @@ Acceptance:
   renderer and reports that state; it never selects a different graphics backend.
 - Application exit, surface destruction, and window recreation release the swapchain before the
   native surface and leave no outstanding direct-frame slots or transaction ownership.
+- Render-control invalidation, offscreen target recreation, HDR swapchain recreation, and native
+  window recreation each wake producers before resource release and prove that GUI/input threads do
+  not wait on a render-control callback they are responsible for scheduling.
 - Legacy source, build options, symbols, and Qt Widgets dependencies are deleted in the same cutover.
 
 ## Legacy deletion manifest
@@ -2110,10 +2243,15 @@ in Phase 9 when macOS hardware is available.
 Required cases:
 
 - generated RGBA32F gradient/checker presentation;
+- a queued native-target request survives repeated `initialize()` calls and produces a non-black
+  pixel readback;
 - InteractivePrimary -> QualityBase -> DetailPatch ordering;
 - resize and DPR churn;
 - hide/show and minimize/restore;
 - scene graph invalidation/recreation;
+- workspace Loader destruction while a worker is producing or waiting for a target;
+- GUI-thread target request returns to the event loop without waiting for its own future render
+  pass;
 - rapid image-generation cancellation;
 - native producer/consumer synchronization;
 - process shutdown with queued render and journal work.
@@ -2232,6 +2370,8 @@ Log structured, non-sensitive diagnostics for:
 
 - selected launch backend, Qt RHI backend, adapter/device identity, and interop capability;
 - scene graph and target generations;
+- renderer creation/destruction, repeated initialization reason, render-target identity, and
+  presentation-consumer availability transitions;
 - current image render generation and presented layer generation;
 - stale frame/scope/journal completion drops;
 - journal durable/materialized head per image;

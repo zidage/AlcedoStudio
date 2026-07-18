@@ -51,9 +51,7 @@
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
-#include "ui/editor_rhi/frame_presentation_broker.hpp"
-#include "ui/editor_rhi/frame_presentation_lease.hpp"
-#include "ui/editor_rhi/lease_frame_sink.hpp"
+#include "ui/editor_rhi/direct_frame_sink.hpp"
 
 namespace alcedo::ui::test {
 namespace {

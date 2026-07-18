@@ -13,7 +13,7 @@
 #include "app/editor_session_service.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
-#include "ui/editor_rhi/lease_frame_sink.hpp"
+#include "ui/editor_rhi/direct_frame_sink.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -213,6 +213,10 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
     }
     if (elementId == 0 || imageId == 0) {
       // Empty editor is an explicit persisted close, not a fake image open.
+      if (auto* item =
+              qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
+        item->suspendPresentation();
+      }
       session_backend_->Close(/*persist_changes=*/true);
     } else if (session_backend_->has_image() &&
                (session_backend_->identity().element_id != elementId ||
@@ -238,6 +242,10 @@ void EditorSessionController::Close() {
     return;
   }
   if (session_backend_) {
+    if (auto* item =
+            qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
+      item->suspendPresentation();
+    }
     session_backend_->Close(/*persist_changes=*/true);
     SyncIdentityFromBackend();
   } else {
@@ -249,6 +257,10 @@ void EditorSessionController::Close() {
 
 void EditorSessionController::Shutdown() {
   if (session_backend_) {
+    if (auto* item =
+            qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
+      item->suspendPresentation();
+    }
     session_backend_->Shutdown();
     SyncIdentityFromBackend();
   } else {
@@ -263,6 +275,10 @@ void EditorSessionController::Finalize(bool persistChanges) {
   // Finalize closes the active image through the lifecycle owner. The QML
   // viewport unbinds itself when the workspace visual tree is destroyed.
   if (session_backend_) {
+    if (auto* item =
+            qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
+      item->suspendPresentation();
+    }
     session_backend_->Close(persistChanges);
     SyncIdentityFromBackend();
     active_ = false;
@@ -310,6 +326,9 @@ void EditorSessionController::unbindPresentationViewport() {
   if (!presentation_viewport_) {
     return;
   }
+  if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
+    item->suspendPresentation();
+  }
   presentation_viewport_.clear();
   if (session_backend_) {
     session_backend_->SetPresentationSinkId(0);
@@ -322,7 +341,7 @@ auto EditorSessionController::presentation_viewport() const -> QObject* {
 }
 
 auto EditorSessionController::presentation_frame_sink() const -> alcedo::IFrameSink* {
-  // Production attach path: resolve the bound QML viewport to its lease sink.
+  // Production attach path: resolve the bound QML viewport to its direct sink.
   // Pipeline code must call this (not construct a parallel sink).
   auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
   if (!item) {

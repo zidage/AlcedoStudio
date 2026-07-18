@@ -143,6 +143,7 @@ class RecordingRenderPort final : public IEditorRenderSubmitPort {
   bool                            fail_submit = false;
   std::vector<EditorRenderIntent> submitted;
   std::vector<std::uint64_t>      cancelled_sessions;
+  std::vector<std::uint64_t>      waited_sessions;
   std::uint64_t                   next_id        = 1;
   std::uint64_t                   active_session = 0;
   std::uint64_t                   active_render  = 0;
@@ -159,6 +160,10 @@ class RecordingRenderPort final : public IEditorRenderSubmitPort {
   }
   void CancelSession(std::uint64_t session_generation) override {
     cancelled_sessions.push_back(session_generation);
+  }
+  void CancelSessionAndWait(std::uint64_t session_generation) override {
+    CancelSession(session_generation);
+    waited_sessions.push_back(session_generation);
   }
   void SetActiveGenerations(std::uint64_t session_generation, std::uint64_t render_generation,
                             std::uint64_t view_generation) override {
@@ -321,6 +326,8 @@ TEST_F(EditorSessionServiceTest, SwitchCancelsPriorSessionAndSealsJournal) {
   service_->Switch(9, 10);
   ASSERT_FALSE(render_->cancelled_sessions.empty());
   EXPECT_EQ(render_->cancelled_sessions.front(), gen_a);
+  ASSERT_FALSE(render_->waited_sessions.empty());
+  EXPECT_EQ(render_->waited_sessions.front(), gen_a);
   EXPECT_GE(journal_->barrier_count, 1);
   EXPECT_GE(tasks_->begin_count, 1);
   ASSERT_FALSE(render_->submitted.empty());
@@ -513,6 +520,8 @@ TEST_F(EditorSessionServiceTest, CloseCanPersistOrDiscardThroughTheSameLifecycle
   EXPECT_EQ(journal_->discard_count, 1);
   ASSERT_FALSE(render_->cancelled_sessions.empty());
   EXPECT_EQ(render_->cancelled_sessions.back(), first_session);
+  ASSERT_FALSE(render_->waited_sessions.empty());
+  EXPECT_EQ(render_->waited_sessions.back(), first_session);
 
   service_->Open(3, 4);
   const auto persisted = service_->Close(true);

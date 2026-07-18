@@ -431,7 +431,7 @@ Item {
 
                     function pushViewToViewport() {
                         // Full ViewerViewState (zoom/pan, region cache, interactive /
-                        // detail flags) — not just three floats — so LeaseFrameSink
+                        // detail flags) — not just three floats — so DirectFrameSink
                         // ROI requests track the controller after zoom and pan.
                         editorInteraction.applyViewStateToViewport(editorViewportItem)
                     }

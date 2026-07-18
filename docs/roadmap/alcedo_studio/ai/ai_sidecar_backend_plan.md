@@ -3574,7 +3574,7 @@ Invariants (Phase 6b review focus):
 - No active annotation on unsupported structured output: the explicit fail-closed
   path is pinned by `ignored_response_format_produces_no_active_annotation`
   (OpenAI-compatible: 200 with prose content → `SchemaValidation`),
-  `json_violating_contract_maps_to_schema_validation` (valid JSON, empty caption),
+  the schema-validation case for valid JSON with an empty caption,
   `opencode_missing_tool_use_maps_to_schema_validation` (Anthropic: 200 with only
   a text block), and the existing `missing_tool_use`/`wrong_tool_name` Coding Plan
   tests. `ensure_structured_output` still fails closed before any HTTP call when

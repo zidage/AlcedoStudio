@@ -4,6 +4,7 @@
 
 #include "ui/alcedo_main/album_backend/editor_session_production.hpp"
 
+#include <algorithm>
 #include <thread>
 #include <utility>
 
@@ -15,7 +16,7 @@
 #include "renderer/pipeline_task.hpp"
 #include "ui/alcedo_main/editor_dialog/controllers/image_controller.hpp"
 #include "ui/alcedo_main/editor_dialog/controllers/pipeline_controller.hpp"
-#include "ui/editor_rhi/lease_frame_sink.hpp"
+#include "ui/editor_rhi/direct_frame_sink.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -294,37 +295,84 @@ auto EditorSessionProductionSchedulerPort::Schedule(const alcedo::EditorRenderRe
     return job.job_id;
   }
 
+  {
+    std::scoped_lock lock(mutex_);
+    auto it = jobs_.find(job.job_id);
+    if (it != jobs_.end()) {
+      it->second.running = true;
+    }
+  }
+
   // Complete asynchronously so the coordinator can mark the request in-flight
   // before NotifySchedulerCompleted runs (Schedule is called under ScheduleNext).
   std::jthread worker([this, job]() mutable {
     try {
       ExecuteJob(job);
     } catch (const std::exception& ex) {
+      RemoveJob(job.job_id);
       CompleteJob(job.request, false, false, ex.what());
     } catch (...) {
+      RemoveJob(job.job_id);
       CompleteJob(job.request, false, false, "First-frame producer exception");
     }
   });
+  bool cancel_started_worker = false;
   {
     std::scoped_lock lock(mutex_);
     if (shutting_down_) {
-      if (job.request.intent.cancellation) {
-        job.request.intent.cancellation->Cancel();
-      }
-      return 0;
+      cancel_started_worker = true;
+    } else {
+      workers_.push_back(std::move(worker));
     }
-    workers_.push_back(std::move(worker));
+  }
+  if (cancel_started_worker) {
+    // Cancellation can re-enter scheduler/coordinator code, and local jthread
+    // destruction joins. Both must happen after releasing mutex_.
+    if (job.request.intent.cancellation) {
+      job.request.intent.cancellation->Cancel();
+    }
+    return 0;
   }
   return job.job_id;
 }
 
 void EditorSessionProductionSchedulerPort::Cancel(std::uint64_t scheduler_job_id) {
-  std::scoped_lock lock(mutex_);
-  auto             it = jobs_.find(scheduler_job_id);
-  if (it != jobs_.end()) {
+  std::shared_ptr<alcedo::EditorRenderCancellationToken> cancellation;
+  {
+    std::scoped_lock lock(mutex_);
+    auto             it = jobs_.find(scheduler_job_id);
+    if (it == jobs_.end()) {
+      return;
+    }
     it->second.cancelled = true;
+    cancellation = it->second.request.intent.cancellation;
     pending_presentations_.erase(it->second.request.request_id);
+    if (!it->second.running) {
+      jobs_.erase(it);
+      jobs_changed_.notify_all();
+    }
   }
+  // Cancellation callbacks can re-enter the coordinator and this scheduler.
+  // Never invoke them while holding mutex_.
+  if (cancellation) {
+    cancellation->Cancel();
+  }
+}
+
+void EditorSessionProductionSchedulerPort::WaitForSessionIdle(
+    std::uint64_t session_generation) {
+  std::unique_lock lock(mutex_);
+  jobs_changed_.wait(lock, [&] {
+    return std::none_of(jobs_.begin(), jobs_.end(), [&](const auto& entry) {
+      return entry.second.request.intent.session_generation == session_generation;
+    });
+  });
+}
+
+void EditorSessionProductionSchedulerPort::RemoveJob(std::uint64_t job_id) {
+  std::scoped_lock lock(mutex_);
+  jobs_.erase(job_id);
+  jobs_changed_.notify_all();
 }
 
 void EditorSessionProductionSchedulerPort::NotifyPresentationAcknowledged(
@@ -372,6 +420,7 @@ void EditorSessionProductionSchedulerPort::ExecuteJob(Job job) {
     auto             it = jobs_.find(job.job_id);
     if (it != jobs_.end() && it->second.cancelled) {
       jobs_.erase(it);
+      jobs_changed_.notify_all();
       cancelled_before_execution = true;
     }
   }
@@ -398,17 +447,17 @@ void EditorSessionProductionSchedulerPort::ExecuteJob(Job job) {
     // When presentation target is not bound, treat as deferred failure so the
     // coordinator can start the next request. Open path typically has sink id
     // stamped before Schedule; missing sink is a real error.
+    RemoveJob(job.job_id);
     CompleteJob(job.request, false, false, "No presentation frame sink bound");
-    std::scoped_lock lock(mutex_);
-    jobs_.erase(job.job_id);
     return;
   }
 
-  if (auto* lease_sink = dynamic_cast<alcedo::editor_rhi::LeaseFrameSink*>(sink)) {
-    lease_sink->SetPresentationAcknowledgementCallback(
-        [weak = weak_from_this()](std::uint64_t request_id,
-                                  std::uint64_t image_generation,
-                                  std::uint64_t image_identity) {
+  // One-shot first-frame composition only. QualityBase / DetailPatch / superseded
+  // interactive frames must not accumulate in an application-level pending map.
+  if (auto* direct_sink = dynamic_cast<alcedo::editor_rhi::DirectFrameSink*>(sink)) {
+    direct_sink->SetFirstFrameCompositionCallback(
+        [weak = weak_from_this()](std::uint64_t request_id, std::uint64_t image_generation,
+                                 std::uint64_t image_identity) {
           if (const auto self = weak.lock()) {
             self->NotifyPresentationAcknowledged(request_id, image_generation, image_identity);
           }
@@ -424,14 +473,19 @@ void EditorSessionProductionSchedulerPort::ExecuteJob(Job job) {
   sink->SetNextFramePreviewMetadata(meta);
   sink->SetNextFramePresentationMode(alcedo::FramePresentationMode::FullFrame);
 
-  auto* lease_sink = dynamic_cast<alcedo::editor_rhi::LeaseFrameSink*>(sink);
-  const auto submitted_before = lease_sink ? lease_sink->submitted_frame_count() : 0;
+  auto* direct_sink = dynamic_cast<alcedo::editor_rhi::DirectFrameSink*>(sink);
+  const auto submitted_before = direct_sink ? direct_sink->submitted_frame_count() : 0;
 
   std::string error;
   bool        submitted = false;
   bool        ok        = false;
 
-  {
+  // Only InteractivePrimary first-frame work is tracked for composition. Pipeline
+  // scheduling capacity is released on complete/submit without waiting for a
+  // window-frame confirmation for every request.
+  const bool track_first_composition =
+      job.request.intent.frame_role == alcedo::FrameRole::InteractivePrimary;
+  if (track_first_composition) {
     std::scoped_lock lock(mutex_);
     pending_presentations_[job.request.request_id] = PendingPresentation{
         job.request.intent.session_generation, job.request.intent.image_id, false, false};
@@ -439,17 +493,17 @@ void EditorSessionProductionSchedulerPort::ExecuteJob(Job job) {
 
   if (test_producer) {
     ok        = test_producer(sink, job.request);
-    submitted = ok && (!lease_sink || lease_sink->submitted_frame_count() > submitted_before);
+    submitted = ok && (!direct_sink || direct_sink->submitted_frame_count() > submitted_before);
     if (!ok) {
       error = "Test frame producer failed";
     }
   } else {
     ok = TryProducePipelineFrame(job.request, sink, &error);
     // Pipeline writes through Map/Unmap/NotifyFrameReady when successful.
-    submitted = ok && (!lease_sink || lease_sink->submitted_frame_count() > submitted_before);
+    submitted = ok && (!direct_sink || direct_sink->submitted_frame_count() > submitted_before);
     if (ok && !submitted) {
       ok = false;
-      error = "Pipeline completed without submitting a native presentation lease";
+      error = "Pipeline completed without submitting a native presentation frame";
     }
   }
 
@@ -459,6 +513,7 @@ void EditorSessionProductionSchedulerPort::ExecuteJob(Job job) {
     auto             it = jobs_.find(job.job_id);
     if (it != jobs_.end() && it->second.cancelled) {
       jobs_.erase(it);
+      jobs_changed_.notify_all();
       pending_presentations_.erase(job.request.request_id);
       cancelled_during_execution = true;
     } else {
@@ -466,6 +521,7 @@ void EditorSessionProductionSchedulerPort::ExecuteJob(Job job) {
         pending_presentations_.erase(job.request.request_id);
       }
       jobs_.erase(job.job_id);
+      jobs_changed_.notify_all();
     }
   }
   if (cancelled_during_execution) {

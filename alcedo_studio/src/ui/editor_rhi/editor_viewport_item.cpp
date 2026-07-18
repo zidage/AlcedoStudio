@@ -6,41 +6,58 @@
 
 #include <QMetaObject>
 #include <QQuickWindow>
+#include <QThread>
 #include <QVector2D>
 #include <QtQml/qqml.h>
 
 #include <cmath>
 #include <mutex>
 
+#include "ui/editor_rhi/direct_frame_sink.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_viewport_renderer.hpp"
-#include "ui/editor_rhi/lease_frame_sink.hpp"
 
 namespace alcedo::editor_rhi {
 
 EditorViewportItem::EditorViewportItem(QQuickItem* parent)
     : QQuickRhiItem(parent),
-      broker_(std::make_shared<FramePresentationBroker>(ActiveEditorBackend())) {
+      present_queue_(std::make_shared<DirectPresentQueue>(ActiveEditorBackend())) {
   setColorBufferFormat(QQuickRhiItem::TextureFormat::RGBA32F);
   setMirrorVertically(false);
   setAlphaBlending(false);
-  frame_sink_ = std::make_unique<LeaseFrameSink>(this);
-  RegisterQmlType();
+  frame_sink_ = std::make_unique<DirectFrameSink>(this);
   connect(this, &QQuickItem::windowChanged, this, [this](QQuickWindow* window) {
     attachWindow(window);
-    refreshConsumerAvailability();
+    if (window && isVisible() && window->visibility() != QWindow::Hidden &&
+        window->visibility() != QWindow::Minimized) {
+      resumePresentation();
+    } else {
+      suspendPresentation();
+    }
   });
-  connect(this, &QQuickItem::visibleChanged, this, [this] { refreshConsumerAvailability(); });
+  connect(this, &QQuickItem::visibleChanged, this, [this] {
+    if (isVisible() && window() && window()->visibility() != QWindow::Hidden &&
+        window()->visibility() != QWindow::Minimized) {
+      // synchronize() is the render-thread acknowledgement that turns the
+      // consumer back on. Merely becoming visible is not sufficient.
+      resumePresentation();
+    } else {
+      suspendPresentation();
+    }
+  });
   // Parent may already place this item in a window before windowChanged fires.
   if (window()) {
     attachWindow(window());
-    refreshConsumerAvailability();
   }
+  // The queue remains unavailable until EditorViewportRenderer::synchronize()
+  // runs on the scene-graph thread. This prevents a producer from waiting on a
+  // window that is exposed but has not created this item's renderer yet.
+  present_queue_->SetConsumerAvailable(false);
 }
 
 EditorViewportItem::~EditorViewportItem() {
   detachWindow();
-  broker_->Shutdown();
+  present_queue_->Shutdown();
   setStatusText(QStringLiteral("viewport shutting down"));
 }
 
@@ -62,31 +79,31 @@ auto EditorViewportItem::backendName() const -> QString {
 }
 
 auto EditorViewportItem::targetGeneration() const -> qulonglong {
-  return broker_->DiagnosticsSnapshot().target_generation;
+  return present_queue_->DiagnosticsSnapshot().target_generation;
 }
 
 auto EditorViewportItem::lastPresentedImageGeneration() const -> qulonglong {
-  return broker_->DiagnosticsSnapshot().last_presented_image_generation;
+  return present_queue_->DiagnosticsSnapshot().last_composed_image_generation;
 }
 
 auto EditorViewportItem::lastPresentedRequestId() const -> qulonglong {
-  return broker_->DiagnosticsSnapshot().last_presented_request_id;
+  return present_queue_->DiagnosticsSnapshot().last_composed_request_id;
 }
 
 auto EditorViewportItem::presentedFrameCount() const -> qulonglong {
-  return broker_->DiagnosticsSnapshot().presented_frame_count;
+  return present_queue_->DiagnosticsSnapshot().composed_frame_count;
 }
 
 auto EditorViewportItem::droppedStaleFrameCount() const -> qulonglong {
-  return broker_->DiagnosticsSnapshot().dropped_stale_frame_count;
+  return present_queue_->DiagnosticsSnapshot().dropped_stale_frame_count;
 }
 
 auto EditorViewportItem::liveTargetCount() const -> int {
-  return static_cast<int>(broker_->DiagnosticsSnapshot().live_target_count);
+  return static_cast<int>(present_queue_->DiagnosticsSnapshot().live_target_count);
 }
 
 auto EditorViewportItem::presentationAvailable() const -> bool {
-  return broker_->DiagnosticsSnapshot().consumer_available;
+  return present_queue_->DiagnosticsSnapshot().consumer_available;
 }
 
 auto EditorViewportItem::statusText() const -> QString {
@@ -107,7 +124,7 @@ void EditorViewportItem::setImageGeneration(qulonglong generation) {
   if (previous == generation) {
     return;
   }
-  broker_->InvalidateImageGeneration(generation, imageIdentity());
+  present_queue_->InvalidateImageGeneration(generation, imageIdentity());
   emit ImageGenerationChanged();
   notifyDiagnosticsChanged();
   requestPresentUpdate();
@@ -117,32 +134,10 @@ void EditorViewportItem::beginImageSession(qulonglong imageIdentity) {
   setImageIdentity(imageIdentity);
   const auto next = image_generation_.load(std::memory_order_acquire) + 1;
   image_generation_.store(next, std::memory_order_release);
-  broker_->InvalidateImageGeneration(next, imageIdentity);
+  present_queue_->InvalidateImageGeneration(next, imageIdentity);
   emit ImageGenerationChanged();
   notifyDiagnosticsChanged();
   requestPresentUpdate();
-}
-
-auto EditorViewportItem::tryAcquireWritableTarget(const WritableTargetRequest& request)
-    -> std::optional<WritableTargetLease> {
-  return broker_->TryAcquireWritableTarget(request);
-}
-
-auto EditorViewportItem::tryAcquireWritableTarget() -> std::optional<WritableTargetLease> {
-  return broker_->TryAcquireWritableTarget();
-}
-
-auto EditorViewportItem::submitCompletedFrame(const CompletedFrameLease& frame) -> bool {
-  const bool accepted = broker_->SubmitCompletedFrame(frame);
-  if (accepted) {
-    requestPresentUpdateOnGuiThread();
-  }
-  return accepted;
-}
-
-void EditorViewportItem::abandonProducerWrite(const WritableTargetLease& lease) {
-  broker_->AbandonProducerWrite(lease);
-  notifyDiagnosticsChanged();
 }
 
 void EditorViewportItem::setViewState(const ViewerViewState& state) {
@@ -177,15 +172,26 @@ void EditorViewportItem::setViewTransform(float zoom, float panX, float panY) {
   requestPresentUpdateOnGuiThread();
 }
 
-auto EditorViewportItem::frameSink() -> LeaseFrameSink* { return frame_sink_.get(); }
+auto EditorViewportItem::frameSink() -> DirectFrameSink* { return frame_sink_.get(); }
 
 void EditorViewportItem::requestRendererInvalidation() {
-  broker_->InvalidateTargetGeneration();
+  present_queue_->InvalidateTargetGeneration();
   requestPresentUpdate();
 }
 
 void EditorViewportItem::cancelPendingFrames() {
-  broker_->InvalidateImageGeneration(imageGeneration(), imageIdentity());
+  present_queue_->InvalidateImageGeneration(imageGeneration(), imageIdentity());
+  requestPresentUpdate();
+}
+
+void EditorViewportItem::suspendPresentation() {
+  presentation_requested_.store(false, std::memory_order_release);
+  present_queue_->SetConsumerAvailable(false);
+  notifyDiagnosticsChanged();
+}
+
+void EditorViewportItem::resumePresentation() {
+  presentation_requested_.store(true, std::memory_order_release);
   requestPresentUpdate();
 }
 
@@ -194,43 +200,39 @@ void EditorViewportItem::requestPresentUpdate() {
 }
 
 void EditorViewportItem::refreshPresentationAvailability() {
-  refreshConsumerAvailability();
+  if (isVisible() && window() && window()->visibility() != QWindow::Hidden &&
+      window()->visibility() != QWindow::Minimized) {
+    resumePresentation();
+  } else {
+    suspendPresentation();
+  }
 }
 
 void EditorViewportItem::requestPresentUpdateOnGuiThread() {
   // Worker threads must not call QQuickItem::update() directly.
-  QMetaObject::invokeMethod(
-      this,
-      [this] {
-        // QQuickItem already coalesces update requests. A separate sticky flag
-        // can remain set while the item is hidden and suppress the first update
-        // after exposure, stranding a producer waiting for its native target.
-        update();
-        if (QQuickWindow* w = window()) {
-          w->requestUpdate();
-        }
-      },
-      Qt::QueuedConnection);
+  auto request = [this] {
+    // QQuickItem already coalesces update requests. A separate sticky flag
+    // can remain set while the item is hidden and suppress the first update
+    // after exposure, stranding a producer waiting for its native target.
+    update();
+    if (QQuickWindow* w = window()) {
+      w->requestUpdate();
+    }
+  };
+  if (thread() == QThread::currentThread()) {
+    request();
+  } else {
+    QMetaObject::invokeMethod(this, std::move(request), Qt::QueuedConnection);
+  }
 }
 
 auto EditorViewportItem::createRenderer() -> QQuickRhiItemRenderer* {
-  // Renderer destruction must not shut down the broker; the item keeps it for
-  // scene-graph recreation.
+  // Renderer destruction must not shut down the present queue; the item keeps
+  // it for scene-graph recreation.
+  qInfo("[EditorPresent] creating QQuickRhiItem renderer image=%llu generation=%llu",
+        static_cast<unsigned long long>(imageIdentity()),
+        static_cast<unsigned long long>(imageGeneration()));
   return new EditorViewportRenderer();
-}
-
-void EditorViewportItem::itemChange(ItemChange change, const ItemChangeData& value) {
-  QQuickRhiItem::itemChange(change, value);
-  if (change == ItemVisibleHasChanged || change == ItemSceneChange) {
-    refreshConsumerAvailability();
-  }
-}
-
-void EditorViewportItem::geometryChange(const QRectF& newGeometry, const QRectF& oldGeometry) {
-  QQuickRhiItem::geometryChange(newGeometry, oldGeometry);
-  if (newGeometry.size() != oldGeometry.size()) {
-    requestPresentUpdate();
-  }
 }
 
 void EditorViewportItem::attachWindow(QQuickWindow* window) {
@@ -240,66 +242,38 @@ void EditorViewportItem::attachWindow(QQuickWindow* window) {
   detachWindow();
   attached_window_ = window;
   if (!attached_window_) {
+    suspendPresentation();
     return;
   }
-  connect(attached_window_, &QWindow::visibilityChanged, this,
-          &EditorViewportItem::onWindowVisibilityChanged);
-  connect(attached_window_, &QWindow::activeChanged, this,
-          &EditorViewportItem::onWindowVisibilityChanged);
-  connect(attached_window_, &QQuickWindow::sceneGraphInvalidated, this,
-          &EditorViewportItem::onWindowSceneGraphInvalidated);
-  connect(attached_window_, &QQuickWindow::sceneGraphInitialized, this,
-          &EditorViewportItem::onWindowSceneGraphInitialized);
-  scene_graph_ready_ = true;
+  window_visibility_connection_ =
+      connect(attached_window_, &QWindow::visibilityChanged, this,
+              [this](QWindow::Visibility visibility) {
+                if (visibility == QWindow::Hidden || visibility == QWindow::Minimized) {
+                  suspendPresentation();
+                } else {
+                  // The next synchronize() confirms that the renderer is live.
+                  resumePresentation();
+                }
+              });
+  // sceneGraphInvalidated is emitted on the render thread. Direct connection
+  // is required so blocked producers are released before Qt destroys QRhi
+  // resources; the queue operation itself is thread-safe.
+  scene_graph_invalidated_connection_ = connect(
+      attached_window_, &QQuickWindow::sceneGraphInvalidated, this,
+      [queue = present_queue_] { queue->SetConsumerAvailable(false); }, Qt::DirectConnection);
+  scene_graph_initialized_connection_ =
+      connect(attached_window_, &QQuickWindow::sceneGraphInitialized, this,
+              [this] { refreshPresentationAvailability(); }, Qt::QueuedConnection);
 }
 
 void EditorViewportItem::detachWindow() {
-  if (!attached_window_) {
-    return;
-  }
-  disconnect(attached_window_, nullptr, this, nullptr);
+  QObject::disconnect(window_visibility_connection_);
+  QObject::disconnect(scene_graph_invalidated_connection_);
+  QObject::disconnect(scene_graph_initialized_connection_);
+  window_visibility_connection_ = {};
+  scene_graph_invalidated_connection_ = {};
+  scene_graph_initialized_connection_ = {};
   attached_window_ = nullptr;
-  scene_graph_ready_ = false;
-}
-
-void EditorViewportItem::onWindowVisibilityChanged() { refreshConsumerAvailability(); }
-
-void EditorViewportItem::onWindowSceneGraphInvalidated() {
-  scene_graph_ready_ = false;
-  // Do not permanently shut down the broker; only mark the consumer unavailable
-  // so producers stop writing. Targets are released; a new renderer recreates them.
-  broker_->SetConsumerAvailable(false);
-  notifyDiagnosticsChanged();
-}
-
-void EditorViewportItem::onWindowSceneGraphInitialized() {
-  scene_graph_ready_ = true;
-  refreshConsumerAvailability();
-  requestPresentUpdate();
-}
-
-void EditorViewportItem::refreshConsumerAvailability() {
-  bool available = isVisible() && opacity() > 0.0;
-  if (attached_window_) {
-    const auto visibility = attached_window_->visibility();
-    const bool window_ok = attached_window_->isExposed() &&
-                           visibility != QWindow::Hidden &&
-                           visibility != QWindow::Minimized;
-    // Simple hide/show does not always re-emit sceneGraphInitialized. Once the
-    // window is exposed again, treat the consumer as ready so the pool can
-    // top up and producers can resume.
-    if (window_ok) {
-      scene_graph_ready_ = true;
-    }
-    available = available && window_ok && scene_graph_ready_;
-  } else {
-    available = false;
-  }
-  broker_->SetConsumerAvailable(available);
-  if (available) {
-    requestPresentUpdate();
-  }
-  notifyDiagnosticsChanged();
 }
 
 auto EditorViewportItem::viewStateSnapshot() const -> ViewerViewState {
@@ -330,12 +304,12 @@ void EditorViewportItem::setStatusText(const QString& text) {
 }
 
 void EditorViewportItem::notifyDiagnosticsChanged() {
-  const auto diag = broker_->DiagnosticsSnapshot();
+  const auto diag = present_queue_->DiagnosticsSnapshot();
   const bool available = diag.consumer_available;
   const auto target_gen = diag.target_generation;
-  const auto presented_image_gen = diag.last_presented_image_generation;
-  const auto presented_request_id = diag.last_presented_request_id;
-  const auto presented_frame_count = diag.presented_frame_count;
+  const auto presented_image_gen = diag.last_composed_image_generation;
+  const auto presented_request_id = diag.last_composed_request_id;
+  const auto presented_frame_count = diag.composed_frame_count;
   const auto dropped = diag.dropped_stale_frame_count;
   const int live = static_cast<int>(diag.live_target_count);
   if (available == last_diagnostics_available_ && target_gen == last_diag_target_gen_ &&

@@ -4,7 +4,7 @@
 
 /// @file editor_overlay_interaction_test.cpp
 /// @brief Phase 3 / Phase 3-Fix: EditorInteractionController, OverlaySceneGeometry,
-/// full view-state push to LeaseFrameSink, crop rules, DPR-invariant pan, pinch
+/// full view-state push to DirectFrameSink, crop rules, DPR-invariant pan, pinch
 /// relative scale, and mask hole safety. Overlay updates must not recreate
 /// viewport presentation targets.
 
@@ -28,9 +28,9 @@
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_overlay_item.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
-#include "ui/editor_rhi/frame_presentation_broker.hpp"
+#include "ui/editor_rhi/direct_present_queue.hpp"
 #include "ui/editor_rhi/frame_presentation_lease.hpp"
-#include "ui/editor_rhi/lease_frame_sink.hpp"
+#include "ui/editor_rhi/direct_frame_sink.hpp"
 
 namespace alcedo::editor_rhi {
 namespace {
@@ -638,19 +638,18 @@ TEST(EditorOverlayInteractionTest, ReconcileViewportMetricsEmitsViewChanged) {
   EXPECT_GE(view_spy.count(), 1);
 }
 
-TEST(EditorOverlayInteractionTest, ViewTransformPushDoesNotInvalidateBrokerTargets) {
+TEST(EditorOverlayInteractionTest, ViewTransformPushDoesNotInvalidateDirectPresentTargets) {
   EditorViewportItem viewport;
   // Seed a synthetic target generation so the comparison is not 0 == 0 vacuously.
-  // View-state pushes must not advance broker target generation.
-  if (viewport.broker()) {
-    WritableTargetRequest req;
-    req.layer = LeaseFrameLayer::InteractivePrimary;
-    req.dimensions = {64, 48};
+  // View-state pushes must not advance direct-present target generation.
+  if (viewport.present_queue()) {
+    DirectPresentQueue::SizeRequest req;
+    req.width = 64;
+    req.height = 48;
     req.image_generation = 1;
     req.image_identity = 1;
-    viewport.broker()->NoteTargetRequest(req);
-    // Manually bump generation via invalidate so both sides start non-zero.
-    viewport.broker()->InvalidateTargetGeneration();
+    viewport.present_queue()->NoteSizeRequest(req);
+    viewport.present_queue()->InvalidateTargetGeneration();
   }
   const auto before_live = viewport.liveTargetCount();
   const auto before_gen = viewport.targetGeneration();

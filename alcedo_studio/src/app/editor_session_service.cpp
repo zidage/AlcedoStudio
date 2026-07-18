@@ -276,7 +276,7 @@ auto EditorSessionService::SealCurrentSession(bool persist_changes, bool start_b
   }
 
   if (dependencies_.render && identity_.session_generation != 0) {
-    dependencies_.render->CancelSession(identity_.session_generation);
+    dependencies_.render->CancelSessionAndWait(identity_.session_generation);
   }
   ReleaseGuards();
   return true;

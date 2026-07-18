@@ -27,6 +27,7 @@ class IEditorPipelineSchedulerPort {
   /// Returns a scheduler-side job id, or 0 on immediate failure.
   virtual auto Schedule(const EditorRenderRequest& request) -> std::uint64_t = 0;
   virtual void Cancel(std::uint64_t scheduler_job_id)                        = 0;
+  virtual void WaitForSessionIdle(std::uint64_t /*session_generation*/) {}
 };
 
 /// Application-layer editor render coordinator (Phase 5A).
@@ -65,6 +66,7 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
 
   /// Cancel every pending/in-flight request for a session generation (image switch).
   void CancelSession(std::uint64_t session_generation) override;
+  void CancelSessionAndWait(std::uint64_t session_generation) override;
 
   /// Cancel one request by id (token or explicit). Starts the next runnable request.
   auto CancelRequest(std::uint64_t request_id) -> bool;

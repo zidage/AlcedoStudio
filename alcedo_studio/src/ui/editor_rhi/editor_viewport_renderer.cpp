@@ -4,11 +4,11 @@
 
 #include "ui/editor_rhi/editor_viewport_renderer.hpp"
 
+#include "ui/editor_rhi/direct_frame_sink.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
-#include "ui/editor_rhi/lease_frame_sink.hpp"
 
-#include <QFile>
 #include <QDebug>
+#include <QFile>
 #include <QSize>
 
 #include <algorithm>
@@ -17,16 +17,14 @@
 #include <cstring>
 #include <limits>
 
-#include "ui/editor_rhi/frame_presentation_broker.hpp"
-#include "ui/editor_rhi/native_resource_counters.hpp"
 #include "ui/edit_viewer/viewport_mapper.hpp"
+#include "ui/editor_rhi/native_resource_counters.hpp"
 
 namespace alcedo::editor_rhi {
 namespace {
 
 constexpr const char* kVertexShaderResource = ":/shaders/editor_rhi/editor_viewport.vert.qsb";
 constexpr const char* kFragmentShaderResource = ":/shaders/editor_rhi/editor_viewport.frag.qsb";
-constexpr int kDefaultPoolSize = 3;
 
 auto BackendForRhi(QRhi* rhi) -> EditorBackend {
   if (!rhi) {
@@ -41,30 +39,6 @@ auto BackendForRhi(QRhi* rhi) -> EditorBackend {
     default:
       return EditorBackend::Cuda;
   }
-}
-
-auto FrameMetadata(const CompletedFrameLease& frame) -> FramePreviewMetadata {
-  FramePreviewMetadata metadata{};
-  switch (frame.layer) {
-    case LeaseFrameLayer::InteractivePrimary:
-      metadata.frame_role = FrameRole::InteractivePrimary;
-      break;
-    case LeaseFrameLayer::QualityBase:
-      metadata.frame_role = FrameRole::QualityBase;
-      break;
-    case LeaseFrameLayer::DetailPatch:
-      metadata.frame_role = FrameRole::DetailPatch;
-      break;
-  }
-  metadata.preview_generation = frame.preview_generation;
-  metadata.detail_serial = frame.detail_serial;
-  metadata.source_roi_norm = {frame.roi_x, frame.roi_y, frame.roi_width, frame.roi_height};
-  return metadata;
-}
-
-auto ToFramePresentationMode(LeasePresentationMode mode) -> FramePresentationMode {
-  return mode == LeasePresentationMode::RoiFrame ? FramePresentationMode::RoiFrame
-                                                 : FramePresentationMode::FullFrame;
 }
 
 auto BuildNormalizedRoi(const std::optional<ViewportRenderRegion>& region)
@@ -99,26 +73,40 @@ void DestroyRhi(T*& resource) {
   resource = nullptr;
 }
 
+auto RoleToLeaseLayer(FrameRole role) -> LeaseFrameLayer {
+  switch (role) {
+    case FrameRole::QualityBase:
+      return LeaseFrameLayer::QualityBase;
+    case FrameRole::DetailPatch:
+      return LeaseFrameLayer::DetailPatch;
+    case FrameRole::InteractivePrimary:
+    default:
+      return LeaseFrameLayer::InteractivePrimary;
+  }
+}
+
 }  // namespace
 
 EditorViewportRenderer::EditorViewportRenderer() = default;
 
 EditorViewportRenderer::~EditorViewportRenderer() {
-  // Release only this renderer's QRhi wrappers and adapter-owned natives that
-  // were queued for release. Never permanently shut down the shared broker —
-  // scene-graph recreation must continue to publish targets.
+  if (present_queue_) {
+    // Renderer lifetime, not QWindow exposure, defines whether native target
+    // requests can be serviced.
+    present_queue_->SetConsumerAvailable(false);
+  }
   releaseResources();
-  releaseBrokerTargets();
+  releaseQueuedNatives();
   adapter_.reset();
 }
 
-auto EditorViewportRenderer::layerForLease(LeaseFrameLayer layer) const -> LayerId {
-  switch (layer) {
-    case LeaseFrameLayer::InteractivePrimary:
+auto EditorViewportRenderer::layerForRole(FrameRole role) const -> LayerId {
+  switch (role) {
+    case FrameRole::InteractivePrimary:
       return LayerId::InteractivePrimary;
-    case LeaseFrameLayer::QualityBase:
+    case FrameRole::QualityBase:
       return LayerId::QualityBase;
-    case LeaseFrameLayer::DetailPatch:
+    case FrameRole::DetailPatch:
       return LayerId::DetailPatch;
   }
   return LayerId::InteractivePrimary;
@@ -147,24 +135,26 @@ void EditorViewportRenderer::releaseLayer(LayerState& layer) {
   if (layer.imported) {
     NativeResourceCounters::Instance().OnDestroyImportedQRhiTexture();
   }
-  if (layer.direct_frame.target.valid() && broker_) {
-    broker_->CompleteRendererConsumption(layer.direct_frame);
+  if (layer.slot_index >= 0 && present_queue_) {
+    present_queue_->CompleteRendererRead(layer.slot_index);
   }
   layer = {};
 }
 
-void EditorViewportRenderer::releaseBrokerTargets() {
-  if (!broker_) {
+void EditorViewportRenderer::releaseQueuedNatives() {
+  if (!present_queue_ || !adapter_) {
     return;
   }
-  const auto released = broker_->DrainReleasedTargets();
-  if (!adapter_) {
-    return;
-  }
-  for (const auto& lease : released) {
-    // Prefer waiting for dual-sided completion; cancelled idle targets still
-    // destroy once producer_complete was stamped by the broker.
-    adapter_->DestroyTarget(lease);
+  const auto released = present_queue_->DrainReleasedNatives();
+  for (const auto& native : released) {
+    auto it = std::find_if(owned_natives_.begin(), owned_natives_.end(),
+                           [&](const WritableTargetLease& lease) {
+                             return lease.native_handle == native.native_handle;
+                           });
+    if (it != owned_natives_.end()) {
+      adapter_->DestroyTarget(*it);
+      owned_natives_.erase(it);
+    }
   }
 }
 
@@ -182,13 +172,11 @@ void EditorViewportRenderer::releaseResources() {
   bound_primary_texture_ = nullptr;
   bound_detail_texture_ = nullptr;
   static_upload_pending_ = false;
-  default_pool_size_ = {};
   target_generation_ = 0;
-  if (broker_) {
-    // Drop current pool for this renderer; do not shut the broker down.
-    broker_->InvalidateTargetGeneration();
+  if (present_queue_) {
+    present_queue_->InvalidateTargetGeneration();
   }
-  releaseBrokerTargets();
+  releaseQueuedNatives();
   render_target_ = nullptr;
 }
 
@@ -197,19 +185,21 @@ void EditorViewportRenderer::initialize(QRhiCommandBuffer* /*command_buffer*/) {
   if (!next_rhi) {
     return;
   }
-  releaseResources();
-  rhi_ = next_rhi;
-  backend_ = BackendForRhi(rhi_);
-  // Prefer the process-wide startup backend when it matches the RHI so OpenCL
-  // targets are not rejected by a CUDA-default broker.
-  if (HasActiveEditorBackend() && ActiveEditorBackend() == backend_) {
-    // ok
-  }
-  adapter_ = MakeLeaseTargetAdapter(backend_);
-  if (item_) {
-    item_->setBackendName(QString::fromUtf8(ToString(backend_)));
-    item_->setStatusText(QStringLiteral("render thread initialized (%1)")
-                             .arg(QString::fromUtf8(QtGraphicsApiName(backend_))));
+  // QQuickRhiItem calls initialize() before rendering and may call it again
+  // after geometry or render-target changes. It is not a one-shot constructor.
+  // Releasing on every call used to invalidate the native target request just
+  // before render() could fulfill it, leaving the viewport permanently black.
+  if (rhi_ != next_rhi) {
+    releaseResources();
+    rhi_ = next_rhi;
+    backend_ = BackendForRhi(rhi_);
+    adapter_ = MakeLeaseTargetAdapter(backend_);
+    qInfo("[EditorPresent] render thread initialized backend=%s", ToString(backend_));
+    if (item_) {
+      item_->setBackendName(QString::fromUtf8(ToString(backend_)));
+      item_->setStatusText(QStringLiteral("render thread initialized (%1)")
+                               .arg(QString::fromUtf8(QtGraphicsApiName(backend_))));
+    }
   }
   content_dirty_ = true;
 }
@@ -217,16 +207,18 @@ void EditorViewportRenderer::initialize(QRhiCommandBuffer* /*command_buffer*/) {
 void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
   item_ = qobject_cast<EditorViewportItem*>(item);
   if (!item_) {
+    qWarning("[EditorPresent] synchronize received incompatible item");
     return;
   }
-  if (broker_ != item_->broker()) {
-    broker_ = item_->broker();
+  if (present_queue_ != item_->present_queue()) {
+    present_queue_ = item_->present_queue();
     image_generation_ = 0;
     image_identity_ = 0;
     target_generation_ = 0;
-    default_pool_size_ = {};
     content_dirty_ = true;
   }
+
+  present_queue_->SetConsumerAvailable(item_->presentationRequested());
 
   const auto next_view = item_->viewStateSnapshot();
   view_state_ = next_view;
@@ -238,13 +230,9 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
     for (auto& layer : layers_) {
       releaseLayer(layer);
     }
-    // EditorViewportItem::setImageGeneration owns broker invalidation. Repeating
-    // it here used to erase an exact-size request that arrived between the GUI
-    // property update and this render-thread synchronization.
-    releaseBrokerTargets();
+    releaseQueuedNatives();
     image_generation_ = next_image_generation;
     image_identity_ = next_image_identity;
-    default_pool_size_ = {};
     content_dirty_ = true;
   }
 }
@@ -314,10 +302,10 @@ void EditorViewportRenderer::ensureStaticResources(QRhiRenderTarget* render_targ
 }
 
 void EditorViewportRenderer::fulfillTargetRequests() {
-  if (!broker_ || !adapter_ || image_generation_ == 0) {
+  if (!present_queue_ || !adapter_ || !rhi_ || image_generation_ == 0) {
     return;
   }
-  auto requests = broker_->DrainTargetRequests();
+  auto requests = present_queue_->DrainSizeRequests();
   if (requests.empty()) {
     return;
   }
@@ -326,12 +314,12 @@ void EditorViewportRenderer::fulfillTargetRequests() {
         static_cast<unsigned long long>(image_generation_));
 
   if (target_generation_ == 0) {
-    broker_->InvalidateTargetGeneration();
-    target_generation_ = broker_->CurrentTargetGeneration();
+    present_queue_->InvalidateTargetGeneration();
+    target_generation_ = present_queue_->CurrentTargetGeneration();
   }
 
-  // Deduplicate size+layer pairs for this pass.
-  std::vector<WritableTargetRequest> unique;
+  // Deduplicate exact sizes for this pass (one lazy allocation per size).
+  std::vector<DirectPresentQueue::SizeRequest> unique;
   for (const auto& request : requests) {
     if (!request.valid() || request.image_generation != image_generation_) {
       continue;
@@ -340,7 +328,7 @@ void EditorViewportRenderer::fulfillTargetRequests() {
       continue;
     }
     const auto exists = std::any_of(unique.begin(), unique.end(), [&](const auto& other) {
-      return other.dimensions == request.dimensions && other.layer == request.layer;
+      return other.width == request.width && other.height == request.height;
     });
     if (!exists) {
       unique.push_back(request);
@@ -349,139 +337,122 @@ void EditorViewportRenderer::fulfillTargetRequests() {
 
   for (const auto& request : unique) {
     // Match the proven QRhiWidget path: allocate the selected slot lazily.
-    // A later concurrent/layer request can add another slot; eagerly allocating
-    // three full-resolution RGBA32F targets here multiplies first-frame latency
-    // and VRAM for no presentation benefit.
-    TargetGeneration generation{target_generation_, image_generation_,
-                                request.layer_generation, image_identity_};
-    auto lease = adapter_->CreateTarget(
-        rhi_, QSize(request.dimensions.width, request.dimensions.height), generation,
-        request.layer);
+    auto prepare = present_queue_->PrepareWrite(request.width, request.height, image_generation_,
+                                                image_identity_);
+    int slot_index = prepare.slot_index;
+    if (slot_index < 0) {
+      slot_index = request.preferred_slot >= 0 ? request.preferred_slot : 0;
+    }
+
+    // Reuse existing exact-size Available slot without reallocating.
+    if (!prepare.need_create && prepare.ok) {
+      continue;
+    }
+
+    TargetGeneration generation{target_generation_, image_generation_, request.layer_generation,
+                                image_identity_};
+    auto lease = adapter_->CreateTarget(rhi_, QSize(request.width, request.height), generation,
+                                        RoleToLeaseLayer(request.frame_role));
     if (!lease.has_value()) {
       target_error_ = adapter_->lastError();
-      qWarning("[EditorPresent] target allocation failed %dx%d: %s", request.dimensions.width,
-               request.dimensions.height, target_error_.c_str());
-      broker_->FailTargetRequest(request);
+      qWarning("[EditorPresent] target allocation failed %dx%d: %s", request.width, request.height,
+               target_error_.c_str());
+      present_queue_->FailSizeRequest(request);
       if (item_) {
         item_->setStatusText(QString::fromStdString(target_error_));
       }
       continue;
     }
-    if (!broker_->PublishWritableTarget(*lease)) {
-      qWarning("[EditorPresent] broker rejected target %dx%d", request.dimensions.width,
-               request.dimensions.height);
-      adapter_->DestroyTarget(*lease);
-      broker_->FailTargetRequest(request);
-    } else {
-      qInfo("[EditorPresent] published native target %dx%d",
-            request.dimensions.width, request.dimensions.height);
-      target_error_.clear();
-      content_dirty_ = true;
-    }
-  }
-  publishDiagnosticsIfChanged();
-}
 
-void EditorViewportRenderer::ensureDefaultTargetPool(const QSize& size) {
-  if (!broker_ || !adapter_ || image_generation_ == 0 || size.width() <= 0 ||
-      size.height() <= 0) {
-    return;
-  }
-  const auto diagnostics = broker_->DiagnosticsSnapshot();
-  if (!diagnostics.consumer_available) {
-    return;
-  }
-  if (target_generation_ == 0) {
-    if (diagnostics.target_generation == 0) {
-      broker_->InvalidateTargetGeneration();
-    }
-    target_generation_ = broker_->CurrentTargetGeneration();
-  }
+    DirectPresentQueue::SlotNative native;
+    native.backend = lease->backend;
+    native.handle_kind = lease->handle_kind;
+    native.writable_kind = lease->writable_kind;
+    native.native_handle = lease->native_handle;
+    native.writable_resource = lease->writable_resource;
+    native.sync_object = lease->sync_object;
+    native.sync_value = lease->sync_value;
+    native.adapter_cookie = lease->native_handle;
 
-  // Top up by Available count. Hide/minimize releases Available targets while
-  // RendererConsuming ones may linger with release_when_idle; live count alone
-  // would skip recreation and starve the producer forever.
-  const int to_create =
-      std::max(0, kDefaultPoolSize - static_cast<int>(diagnostics.available_target_count));
-  if (to_create == 0) {
-    default_pool_size_ = size;
-    return;
-  }
-
-  for (int i = 0; i < to_create; ++i) {
-    auto lease = adapter_->CreateTarget(
-        rhi_, size,
-        TargetGeneration{target_generation_, image_generation_, 0, image_identity_},
-        LeaseFrameLayer::InteractivePrimary);
-    if (!lease.has_value()) {
-      target_error_ = adapter_->lastError();
-      if (item_) {
-        item_->setStatusText(QString::fromStdString(target_error_));
+    if (!present_queue_->PublishCreatedSlot(slot_index, request.width, request.height, native,
+                                            image_generation_, image_identity_)) {
+      // Try another free slot index.
+      bool published = false;
+      for (int i = 0; i < DirectPresentQueue::kSlotCount; ++i) {
+        if (present_queue_->PublishCreatedSlot(i, request.width, request.height, native,
+                                               image_generation_, image_identity_)) {
+          published = true;
+          break;
+        }
       }
-      break;
+      if (!published) {
+        qWarning("[EditorPresent] queue rejected target %dx%d", request.width, request.height);
+        adapter_->DestroyTarget(*lease);
+        present_queue_->FailSizeRequest(request);
+        continue;
+      }
     }
-    if (!broker_->PublishWritableTarget(*lease)) {
-      adapter_->DestroyTarget(*lease);
-    } else {
-      target_error_.clear();
-      content_dirty_ = true;
-    }
+    owned_natives_.push_back(*lease);
+    qInfo("[EditorPresent] published native target %dx%d slot=%d", request.width, request.height,
+          slot_index);
+    target_error_.clear();
+    content_dirty_ = true;
   }
-  default_pool_size_ = size;
   publishDiagnosticsIfChanged();
 }
 
 void EditorViewportRenderer::consumeDirectFrames() {
-  if (!broker_ || !rhi_) {
+  if (!present_queue_ || !rhi_) {
     return;
   }
-  const auto diagnostics = broker_->DiagnosticsSnapshot();
-  // Wildcard target/image generation fields that are zero so a completed frame
-  // still wins even if the renderer snapshot is one step behind the broker.
-  const TargetGeneration expected{0, 0, 0, image_identity_};
-  constexpr LeaseFrameLayer layers[] = {
-      LeaseFrameLayer::InteractivePrimary, LeaseFrameLayer::QualityBase,
-      LeaseFrameLayer::DetailPatch};
-  for (const auto layer_id : layers) {
-    const auto frame = broker_->ConsumeNewestCompletedFrame(expected, layer_id);
+  constexpr FrameRole roles[] = {FrameRole::InteractivePrimary, FrameRole::QualityBase,
+                                 FrameRole::DetailPatch};
+  for (const auto role : roles) {
+    auto frame = present_queue_->ConsumeNewestReady(role, image_generation_, image_identity_);
     if (!frame.has_value()) {
       continue;
     }
-    qWarning("[EditorPresent] consuming frame request=%llu image=%llu generation=%llu size=%dx%d",
-             static_cast<unsigned long long>(frame->presentation_request_id),
-             static_cast<unsigned long long>(frame->generation.image_identity),
-             static_cast<unsigned long long>(frame->generation.image_generation),
-             frame->target.dimensions.width, frame->target.dimensions.height);
-    auto& layer = layers_[layerIndex(layerForLease(layer_id))];
+    qInfo("[EditorPresent] consuming frame request=%llu image=%llu generation=%llu size=%dx%d",
+          static_cast<unsigned long long>(frame->slot.preview_metadata.presentation_request_id),
+          static_cast<unsigned long long>(frame->slot.image_identity),
+          static_cast<unsigned long long>(frame->slot.image_generation), frame->slot.width,
+          frame->slot.height);
+
+    auto& layer = layers_[layerIndex(layerForRole(role))];
     releaseLayer(layer);
-    auto* texture = rhi_->newTexture(
-        QRhiTexture::RGBA32F,
-        QSize(frame->target.dimensions.width, frame->target.dimensions.height), 1);
-    if (!texture || !texture->createFrom({static_cast<quint64>(frame->target.native_handle), 0})) {
+    auto* texture =
+        rhi_->newTexture(QRhiTexture::RGBA32F, QSize(frame->slot.width, frame->slot.height), 1);
+    if (!texture ||
+        !texture->createFrom({static_cast<quint64>(frame->slot.native.native_handle), 0})) {
       qWarning("[EditorPresent] QRhi import failed for request=%llu handle=%llu",
-               static_cast<unsigned long long>(frame->presentation_request_id),
-               static_cast<unsigned long long>(frame->target.native_handle));
+               static_cast<unsigned long long>(
+                   frame->slot.preview_metadata.presentation_request_id),
+               static_cast<unsigned long long>(frame->slot.native.native_handle));
       destroyResource(texture);
-      broker_->CompleteRendererConsumption(*frame);
+      present_queue_->CompleteRendererRead(frame->slot.index);
       if (item_) {
         item_->setStatusText(QStringLiteral("failed to import a completed native frame"));
       }
       continue;
     }
+    // Keep imported-resource state explicit, matching the proven
+    // RhiEditViewerSurface path. D3D11/OpenGL use layout 0.
+    texture->setNativeLayout(0);
     layer.texture = texture;
-    layer.width = frame->target.dimensions.width;
-    layer.height = frame->target.dimensions.height;
+    layer.width = frame->slot.width;
+    layer.height = frame->slot.height;
     layer.imported = true;
     layer.valid = true;
+    layer.slot_index = frame->slot.index;
     NativeResourceCounters::Instance().OnCreateImportedQRhiTexture();
-    layer.presentation_mode = ToFramePresentationMode(frame->presentation_mode);
-    layer.preview_metadata = FrameMetadata(*frame);
-    layer.direct_frame = *frame;
+    layer.presentation_mode = frame->slot.presentation_mode;
+    layer.preview_metadata = frame->slot.preview_metadata;
+    layer.ready_frame = *frame;
     content_dirty_ = true;
     if (item_) {
-      item_->setStatusText(QStringLiteral("imported %1 frame gen=%2")
-                               .arg(QString::fromUtf8(ToString(layer_id)))
-                               .arg(frame->preview_generation));
+      item_->setStatusText(QStringLiteral("imported frame role=%1 gen=%2")
+                               .arg(static_cast<int>(role))
+                               .arg(frame->slot.preview_metadata.preview_generation));
     }
   }
 }
@@ -505,8 +476,6 @@ auto EditorViewportRenderer::selectedPrimaryLayer() const -> const LayerState* {
   if (interactive.preview_metadata.preview_generation ==
           quality.preview_metadata.preview_generation &&
       view_state_.prefer_interactive_primary) {
-    // Same generation: prefer interactive only when the ROI still matches the
-    // current view (legacy selection rule).
     const auto current_roi = BuildNormalizedRoi(view_state_.snapshot.viewport_render_region_cache);
     if (!current_roi.has_value() ||
         SameRoi(interactive.preview_metadata.source_roi_norm, *current_roi) ||
@@ -597,8 +566,8 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
     return;
   }
 
-  // Targets are producer-driven. This matches the pre-refactor surface: create
-  // the exact output slot requested by EnsureSize, with no speculative pool.
+  // Targets are producer-driven. Matches the pre-refactor surface: create the
+  // exact output slot requested by EnsureSize, with no speculative pool.
   fulfillTargetRequests();
   consumeDirectFrames();
   ensureStaticResources(render_target, command_buffer);
@@ -679,37 +648,16 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
   }
   command_buffer->endPass();
 
-  // A frame is presented only after it was selected and encoded into this
-  // render pass. Import, broker consumption, or producer submission alone are
-  // deliberately insufficient acknowledgement.
-  if (drew_primary && primary_layer->direct_frame.target.valid() &&
-      broker_->AcknowledgeFramePresented(primary_layer->direct_frame)) {
-    qWarning("[EditorPresent] acknowledged render-pass request=%llu",
-             static_cast<unsigned long long>(
-                 primary_layer->direct_frame.presentation_request_id));
-    item_->frameSink()->AcknowledgePresentedFrame(primary_layer->direct_frame);
-  }
-  if (detail_layer && detail_layer->direct_frame.target.valid() &&
-      broker_->AcknowledgeFramePresented(detail_layer->direct_frame)) {
-    item_->frameSink()->AcknowledgePresentedFrame(detail_layer->direct_frame);
+  // Composition confirmation only after the selected primary slot was encoded
+  // into this Qt Quick window frame. Intermediate frames are not application
+  // presentation events; first-frame service uses a one-shot session event.
+  if (drew_primary && primary_layer->slot_index >= 0 && item_->frameSink()) {
+    item_->frameSink()->NotifyPrimaryFrameComposed(primary_layer->ready_frame);
   }
 
-  // After the GPU has sampled imported textures this frame, recycle targets
-  // that are no longer displayed so the producer can write again. Keep the
-  // currently displayed layers held until replaced.
-  for (auto& layer : layers_) {
-    if (!layer.valid || !layer.direct_frame.target.valid()) {
-      continue;
-    }
-    const bool still_selected =
-        (primary_layer == &layer) || (detail_layer == &layer);
-    if (!still_selected) {
-      // Layer replaced earlier via releaseLayer; nothing to do.
-    }
-  }
+  releaseQueuedNatives();
 
-  const bool has_primary = primary_layer != nullptr;
-  if (has_primary) {
+  if (drew_primary) {
     item_->setStatusText(QStringLiteral("presented"));
   } else if (!target_error_.empty()) {
     item_->setStatusText(QString::fromStdString(target_error_));
@@ -717,15 +665,7 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
     item_->setStatusText(QStringLiteral("waiting for a compatible frame"));
   }
   publishDiagnosticsIfChanged();
-
-  // Only request another frame when content or resource state changed.
-  // Continuous update() is forbidden — it would pin a render loop at idle.
-  if (content_dirty_ || has_primary != had_primary_last_frame_) {
-    content_dirty_ = false;
-    had_primary_last_frame_ = has_primary;
-    // One more frame to present the new state; do not loop forever.
-  }
-  releaseBrokerTargets();
+  (void)content_dirty_;
 }
 
 }  // namespace alcedo::editor_rhi

@@ -14,16 +14,19 @@
 #include <string>
 #include <vector>
 
-#include "ui/editor_rhi/frame_presentation_broker.hpp"
-#include "ui/editor_rhi/frame_presentation_lease.hpp"
-#include "ui/viewer/viewer_view_state.hpp"
-#include "ui/editor_rhi/lease_target_adapters.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
+#include "ui/editor_rhi/direct_present_queue.hpp"
+#include "ui/editor_rhi/editor_backend.hpp"
+#include "ui/editor_rhi/lease_target_adapters.hpp"
+#include "ui/viewer/viewer_view_state.hpp"
 
 namespace alcedo::editor_rhi {
 
 class EditorViewportItem;
 
+// Scene-graph render-thread half of the production viewport. Owns QRhi wrappers
+// and native target adapters. The fixed three-slot DirectPresentQueue is shared
+// with the producer (DirectFrameSink) and holds ownership state only.
 class EditorViewportRenderer final : public QQuickRhiItemRenderer {
  public:
   EditorViewportRenderer();
@@ -47,9 +50,10 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
     int height = 0;
     bool imported = false;
     bool valid = false;
+    int slot_index = -1;
     FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
     FramePreviewMetadata preview_metadata{};
-    CompletedFrameLease direct_frame{};
+    DirectPresentQueue::ReadyFrame ready_frame{};
   };
 
   struct UniformData {
@@ -68,7 +72,7 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
   [[nodiscard]] auto layerIndex(LayerId layer) const -> std::size_t {
     return static_cast<std::size_t>(layer);
   }
-  [[nodiscard]] auto layerForLease(LeaseFrameLayer layer) const -> LayerId;
+  [[nodiscard]] auto layerForRole(FrameRole role) const -> LayerId;
   [[nodiscard]] auto loadShader(const char* path) const -> QShader;
   void destroyResource(QRhiTexture*& resource);
   void destroyResource(QRhiBuffer*& resource);
@@ -77,11 +81,10 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
   void destroyResource(QRhiGraphicsPipeline*& resource);
   void releaseLayer(LayerState& layer);
   void releaseResources();
-  void releaseBrokerTargets();
+  void releaseQueuedNatives();
   void ensureStaticResources(QRhiRenderTarget* render_target,
                              QRhiCommandBuffer* command_buffer);
   void fulfillTargetRequests();
-  void ensureDefaultTargetPool(const QSize& size);
   void consumeDirectFrames();
   [[nodiscard]] auto selectedPrimaryLayer() const -> const LayerState*;
   [[nodiscard]] auto selectedDetailLayer() const -> const LayerState*;
@@ -92,15 +95,16 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
   void publishDiagnosticsIfChanged();
 
   EditorViewportItem* item_ = nullptr;
-  std::shared_ptr<FramePresentationBroker> broker_;
+  std::shared_ptr<DirectPresentQueue> present_queue_;
   std::unique_ptr<ILeaseTargetAdapter> adapter_;
+  // Maps adapter_cookie (native_handle) -> last WritableTargetLease for destroy.
+  std::vector<WritableTargetLease> owned_natives_;
   ViewerViewState view_state_{};
   std::array<LayerState, 3> layers_{};
   EditorBackend backend_ = EditorBackend::Cuda;
   std::uint64_t target_generation_ = 0;
   std::uint64_t image_generation_ = 0;
   std::uint64_t image_identity_ = 0;
-  QSize default_pool_size_{};
   QRhi* rhi_ = nullptr;
   QRhiRenderTarget* render_target_ = nullptr;
 
@@ -115,7 +119,6 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
   QRhiTexture* bound_detail_texture_ = nullptr;
   bool static_upload_pending_ = false;
   bool content_dirty_ = false;
-  bool had_primary_last_frame_ = false;
   std::string target_error_;
 };
 

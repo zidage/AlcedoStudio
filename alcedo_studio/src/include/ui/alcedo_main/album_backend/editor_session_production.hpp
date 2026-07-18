@@ -5,6 +5,7 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -113,6 +114,7 @@ class EditorSessionProductionSchedulerPort final
 
   auto Schedule(const alcedo::EditorRenderRequest& request) -> std::uint64_t override;
   void Cancel(std::uint64_t scheduler_job_id) override;
+  void WaitForSessionIdle(std::uint64_t session_generation) override;
 
   /// Exact render-thread acknowledgement after a compatible frame was sampled.
   void NotifyPresentationAcknowledged(std::uint64_t request_id,
@@ -127,6 +129,7 @@ class EditorSessionProductionSchedulerPort final
     std::uint64_t              job_id    = 0;
     alcedo::EditorRenderRequest request{};
     bool                       cancelled = false;
+    bool                       running   = false;
   };
 
   struct PendingPresentation {
@@ -143,6 +146,7 @@ class EditorSessionProductionSchedulerPort final
                                std::string* error) -> bool;
   void CompleteJob(const alcedo::EditorRenderRequest& request, bool success, bool frame_submitted,
                    std::string message);
+  void RemoveJob(std::uint64_t job_id);
 
   std::shared_ptr<alcedo::PipelineScheduler>              pipeline_scheduler_;
   std::weak_ptr<alcedo::EditorRenderCoordinator>          coordinator_;
@@ -151,6 +155,7 @@ class EditorSessionProductionSchedulerPort final
   EditorSessionProductionServices                         services_{};
   EditorTestFrameProducer                                 test_producer_;
   mutable std::mutex                                      mutex_;
+  std::condition_variable                                 jobs_changed_;
   std::uint64_t                                           next_job_id_ = 0;
   std::unordered_map<std::uint64_t, Job>                  jobs_;
   std::unordered_map<std::uint64_t, PendingPresentation>  pending_presentations_;

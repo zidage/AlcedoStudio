@@ -16,6 +16,7 @@
 #include <string>
 #include <string_view>
 
+#include "ui/editor_rhi/direct_frame_sink.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/editor_startup.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
@@ -235,57 +236,75 @@ auto FillLeaseWithFixture(const WritableTargetLease& lease, const HarnessFixture
   return ok;
 }
 
+auto FrameRoleForLeaseLayer(LeaseFrameLayer layer) -> alcedo::FrameRole {
+  switch (layer) {
+    case LeaseFrameLayer::QualityBase:
+      return alcedo::FrameRole::QualityBase;
+    case LeaseFrameLayer::DetailPatch:
+      return alcedo::FrameRole::DetailPatch;
+    case LeaseFrameLayer::InteractivePrimary:
+    default:
+      return alcedo::FrameRole::InteractivePrimary;
+  }
+}
+
 auto SubmitFixtureFrame(EditorViewportItem* item, const HarnessFixtureImage& fixture,
                         LeaseFrameLayer layer, std::uint64_t preview) -> bool {
-  if (!item) {
+  if (!item || !item->frameSink()) {
     return false;
   }
-  // Prefer any Available target from the renderer's pool. QQuickRhiItem pixel
-  // size can differ from logical item size under high DPI, so exact fixture
-  // dimensions are not required for acquire.
-  auto lease = item->tryAcquireWritableTarget();
-  if (!lease.has_value()) {
-    WritableTargetRequest request;
-    request.layer = layer;
-    request.dimensions = {fixture.width, fixture.height};
-    request.image_generation = item->imageGeneration();
-    request.image_identity = item->imageIdentity();
-    request.layer_generation = preview;
-    if (item->broker()) {
-      item->broker()->NoteTargetRequest(request);
-    }
+  auto* sink = item->frameSink();
+  alcedo::FramePreviewMetadata meta;
+  meta.frame_role = FrameRoleForLeaseLayer(layer);
+  meta.preview_generation = preview;
+  meta.presentation_request_id = preview;
+  sink->SetNextFramePreviewMetadata(meta);
+  sink->SetNextFramePresentationMode(alcedo::FramePresentationMode::FullFrame);
+  sink->EnsureSize(fixture.width, fixture.height);
+
+  const auto domain = alcedo::editor_rhi::ActiveEditorBackend() == EditorBackend::OpenCl
+                          ? alcedo::FrameMemoryDomain::OpenClDevice
+                          : alcedo::FrameMemoryDomain::CudaDevice;
+  auto mapping = sink->MapResourceForWrite(domain);
+  if (!mapping) {
     item->requestPresentUpdate();
-    Log("SubmitFixtureFrame: no lease live=%d gen=%llu id=%llu consumer=%d",
+    Log("SubmitFixtureFrame: map failed live=%d gen=%llu id=%llu consumer=%d",
         item->liveTargetCount(),
         static_cast<unsigned long long>(item->imageGeneration()),
         static_cast<unsigned long long>(item->imageIdentity()),
         item->presentationAvailable() ? 1 : 0);
     return false;
   }
-  lease->layer = layer;
-  lease->generation.layer_generation = preview;
-  // Resize fixture to the leased target (device-pixel) dimensions.
-  const HarnessFixtureImage fill =
-      (fixture.width == lease->dimensions.width && fixture.height == lease->dimensions.height)
-          ? fixture
-          : alcedo::editor_rhi::MakeFp32Gradient(lease->dimensions.width,
-                                                 lease->dimensions.height);
-  if (!FillLeaseWithFixture(*lease, fill)) {
-    item->abandonProducerWrite(*lease);
+
+  // Mapping is already acquired by DirectFrameSink::MapResourceForWrite.
+  bool filled = false;
+  if (mapping.target_type == alcedo::FrameWriteTargetType::CudaArray && mapping.image_array) {
+#if defined(_WIN32) && defined(HAVE_CUDA)
+    (void)cudaSetDevice(0);
+    auto* array = reinterpret_cast<cudaArray_t>(mapping.image_array);
+    const size_t row_bytes = fixture.row_bytes();
+    filled = cudaMemcpy2DToArray(array, 0, 0, fixture.data(), row_bytes, row_bytes,
+                                 static_cast<size_t>(fixture.height),
+                                 cudaMemcpyHostToDevice) == cudaSuccess;
+#endif
+  } else if (mapping.target_type == alcedo::FrameWriteTargetType::OpenClImage && mapping.data) {
+#if defined(HAVE_OPENCL)
+    auto* image = reinterpret_cast<cl_mem>(mapping.data);
+    const size_t origin[3] = {0, 0, 0};
+    const size_t region[3] = {static_cast<size_t>(fixture.width),
+                              static_cast<size_t>(fixture.height), 1};
+    filled = clEnqueueWriteImage(alcedo::OpenClContext::Instance().Queue(), image, CL_TRUE, origin,
+                                 region, 0, 0, fixture.data(), 0, nullptr, nullptr) == CL_SUCCESS;
+#endif
+  }
+  sink->UnmapResource();
+  if (!filled) {
+    Log("SubmitFixtureFrame: fill failed preview=%llu",
+        static_cast<unsigned long long>(preview));
     return false;
   }
-  CompletedFrameLease frame;
-  frame.target = *lease;
-  frame.generation = lease->generation;
-  frame.layer = layer;
-  frame.preview_generation = preview;
-  frame.producer_complete = true;
-  const bool accepted = item->submitCompletedFrame(frame);
-  if (!accepted) {
-    Log("SubmitFixtureFrame: submit rejected preview=%llu",
-        static_cast<unsigned long long>(preview));
-  }
-  return accepted;
+  sink->NotifyFrameReady();
+  return true;
 }
 
 auto CompareReadback(HarnessViewportItem* viewport) -> int {
@@ -428,9 +447,15 @@ int main(int argc, char* argv[]) {
     // Match the production fixture size so the default target pool is
     // directly acquirable without a separate size request race.
     production_viewport->setSize(QSizeF(64, 48));
+    production_viewport->setFixedColorBufferWidth(64);
+    production_viewport->setFixedColorBufferHeight(48);
     production_viewport->setX((960 - 64) / 2.0);
     production_viewport->setY((720 - 48) / 2.0);
     production_viewport->beginImageSession(/*imageIdentity=*/42);
+    Log("EditorRhiHarness: production viewport flags=%d visible=%d enabled=%d size=%.0fx%.0f",
+        static_cast<int>(production_viewport->flags()),
+        production_viewport->isVisible() ? 1 : 0, production_viewport->isEnabled() ? 1 : 0,
+        production_viewport->width(), production_viewport->height());
   } else {
     viewport = new HarnessViewportItem(root);
     viewport->setParentItem(root);
@@ -598,19 +623,11 @@ int main(int argc, char* argv[]) {
     });
   }
 
-  // Production EditorViewportItem cases: drive lease acquire/fill/submit.
+  // Production EditorViewportItem cases: drive direct EnsureSize/Map/Notify path.
   if (production && production_viewport) {
     auto* prod = production_viewport;
     QTimer::singleShot(400, &app, [&, prod]() {
-      // Request targets at fixture size and present once.
-      if (prod->broker()) {
-        WritableTargetRequest req;
-        req.layer = LeaseFrameLayer::InteractivePrimary;
-        req.dimensions = {production_fixture.width, production_fixture.height};
-        req.image_generation = prod->imageGeneration();
-        req.image_identity = prod->imageIdentity();
-        prod->broker()->NoteTargetRequest(req);
-      }
+      // Kick a present pass so the scene-graph thread can create the first slot.
       prod->requestPresentUpdate();
     });
 

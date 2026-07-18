@@ -283,6 +283,7 @@ auto EditorRenderCoordinator::Submit(const EditorRenderIntent& intent) -> Editor
 }
 
 void EditorRenderCoordinator::CancelSession(std::uint64_t session_generation) {
+  std::uint64_t scheduler_job_to_cancel = 0;
   {
     std::scoped_lock lock(mutex_);
     for (auto it = pending_.begin(); it != pending_.end();) {
@@ -300,9 +301,7 @@ void EditorRenderCoordinator::CancelSession(std::uint64_t session_generation) {
       }
     }
     if (inflight_ && inflight_->request.intent.session_generation == session_generation) {
-      if (scheduler_ && inflight_->scheduler_job_id != 0) {
-        scheduler_->Cancel(inflight_->scheduler_job_id);
-      }
+      scheduler_job_to_cancel = inflight_->scheduler_job_id;
       const std::uint64_t request_id = inflight_->request.request_id;
       EditorRenderResult  cancelled;
       cancelled.kind       = EditorRenderResultKind::Cancelled;
@@ -316,7 +315,19 @@ void EditorRenderCoordinator::CancelSession(std::uint64_t session_generation) {
     // Start any pending work that is still valid after the cancel.
     ScheduleNext();
   }
+  // Production Cancel propagates the request token. Its callback re-enters
+  // CancelRequest, so it must run outside the coordinator mutex.
+  if (scheduler_ && scheduler_job_to_cancel != 0) {
+    scheduler_->Cancel(scheduler_job_to_cancel);
+  }
   DeliverPendingResults();
+}
+
+void EditorRenderCoordinator::CancelSessionAndWait(std::uint64_t session_generation) {
+  CancelSession(session_generation);
+  if (scheduler_) {
+    scheduler_->WaitForSessionIdle(session_generation);
+  }
 }
 
 auto EditorRenderCoordinator::CancelRequest(std::uint64_t request_id) -> bool {

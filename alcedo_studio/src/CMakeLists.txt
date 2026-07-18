@@ -1593,14 +1593,15 @@ endif()
 set(EDITOR_RHI_UNIFIED_VIEWPORT_SRCS
     ${EDITOR_RHI_STARTUP_SRCS}
     ui/editor_rhi/lease_target_adapters.cpp
-    ui/editor_rhi/lease_frame_sink.cpp
+    ui/editor_rhi/direct_present_queue.cpp
+    ui/editor_rhi/direct_frame_sink.cpp
     ui/editor_rhi/editor_viewport_item.cpp
     ui/editor_rhi/editor_viewport_renderer.cpp
     ui/editor_rhi/editor_interaction_controller.cpp
     ui/editor_rhi/editor_overlay_item.cpp
-    include/ui/editor_rhi/frame_presentation_broker.hpp
+    include/ui/editor_rhi/direct_present_queue.hpp
+    include/ui/editor_rhi/direct_frame_sink.hpp
     include/ui/editor_rhi/lease_target_adapters.hpp
-    include/ui/editor_rhi/lease_frame_sink.hpp
     include/ui/viewer/viewer_view_state.hpp
     include/ui/editor_rhi/editor_viewport_item.hpp
     include/ui/editor_rhi/editor_viewport_renderer.hpp
