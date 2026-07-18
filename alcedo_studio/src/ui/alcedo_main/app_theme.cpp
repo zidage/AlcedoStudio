@@ -46,6 +46,12 @@ struct ThemeColors {
   QColor glass_stroke;
   QColor overlay;
   int panel_radius;
+  // Phase 4D: opaque button-state fills, pre-computed from bg_panel + hover.
+  QColor button_idle_fill;
+  QColor button_hovered_fill;
+  QColor button_pressed_fill;
+  QColor button_selected_fill;
+  QColor disabled_surface;  // bg_panel blended toward bg_canvas (simulates 0.55 opacity)
 };
 
 auto BrandBlueBase() -> QColor { return QColor(104, 146, 185); }
@@ -76,6 +82,15 @@ auto MakePuerhTheme() -> ThemeColors {
       .glass_stroke = QColor(200, 200, 200, 20),
       .overlay = QColor(0x0A, 0x0A, 0x0A, 0xC8),
       .panel_radius = 10,
+      // Phase 4D: opaque button fills. Idle matches the card/panel surface so
+      // icon chrome is quiet; hover/pressed/selected step to the hover well so
+      // selected actions read on both the card shell and the lighter base
+      // inset track (scope / adjustment nav).
+      .button_idle_fill = QColor(0x1A, 0x1A, 0x1A),        // = bg_panel
+      .button_hovered_fill = QColor(0x20, 0x20, 0x20),      // between panel and base
+      .button_pressed_fill = QColor(0x26, 0x25, 0x25),      // = hover (engaged)
+      .button_selected_fill = QColor(0x26, 0x25, 0x25),     // = pressed / hover
+      .disabled_surface = QColor(0x16, 0x16, 0x16),         // Blend(bg_panel, bg_canvas, 0.45)
   };
 }
 
@@ -103,6 +118,12 @@ auto MakeClassicTheme() -> ThemeColors {
       .glass_stroke = QColor(230, 230, 230, 28),
       .overlay = QColor(0x12, 0x12, 0x12, 0xC0),
       .panel_radius = 8,
+      // Phase 4D: opaque button fills — idle = panel; engaged = hover well.
+      .button_idle_fill = QColor(0x22, 0x22, 0x22),        // = bg_panel
+      .button_hovered_fill = QColor(0x27, 0x27, 0x27),      // between panel and hover
+      .button_pressed_fill = QColor(0x2B, 0x2B, 0x2B),      // = hover
+      .button_selected_fill = QColor(0x2B, 0x2B, 0x2B),     // = pressed / hover
+      .disabled_surface = QColor(0x19, 0x19, 0x19),         // Blend(bg_panel, bg_canvas, 0.45)
   };
 }
 
@@ -944,9 +965,9 @@ auto AppTheme::panelRadius() const -> int { return GetTheme(current_theme_index_
 auto AppTheme::controlRadius() const -> int { return 10; }
 auto AppTheme::controlRadiusSmall() const -> int { return 8; }
 auto AppTheme::badgeRadius() const -> int { return 6; }
-auto AppTheme::iconOpticalSize() const -> int { return 32; }
-auto AppTheme::iconOpticalSizeCompact() const -> int { return 20; }
-auto AppTheme::iconSourceSize() const -> int { return 32; }
+auto AppTheme::iconOpticalSize() const -> int { return 22; }
+auto AppTheme::iconOpticalSizeCompact() const -> int { return 18; }
+auto AppTheme::iconSourceSize() const -> int { return 24; }
 auto AppTheme::iconSourceSizeCompact() const -> int { return 20; }
 auto AppTheme::iconButtonHitSize() const -> int { return 44; }
 auto AppTheme::iconButtonHitSizeCompact() const -> int { return 40; }
@@ -1003,6 +1024,11 @@ auto AppTheme::fontWeightHeading() const -> int { return 700; }
 
 auto AppTheme::cardSurfaceColor() const -> QColor { return bgPanelColor(); }
 auto AppTheme::cardBorderColor() const -> QColor { return dividerColor(); }
+auto AppTheme::buttonIdleFillColor() const -> QColor { return GetTheme(current_theme_index_).button_idle_fill; }
+auto AppTheme::buttonHoveredFillColor() const -> QColor { return GetTheme(current_theme_index_).button_hovered_fill; }
+auto AppTheme::buttonPressedFillColor() const -> QColor { return GetTheme(current_theme_index_).button_pressed_fill; }
+auto AppTheme::buttonSelectedFillColor() const -> QColor { return GetTheme(current_theme_index_).button_selected_fill; }
+auto AppTheme::disabledSurfaceColor() const -> QColor { return GetTheme(current_theme_index_).disabled_surface; }
 
 auto AppTheme::currentThemeIndex() const -> int { return current_theme_index_; }
 

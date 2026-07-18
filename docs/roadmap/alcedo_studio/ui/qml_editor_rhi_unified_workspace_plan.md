@@ -1170,7 +1170,11 @@ selected image can therefore still leave the production viewport black after Pha
 explicit temporary limitation until Phase 5B delivers the first real frame, not evidence that the
 Phase 4 workspace or visual work has regressed.
 
-**Status: planned.**
+**Status: complete (2026-07-18).** Residual visual closeout applied the same day after the first
+pass: History/Versions rail buttons were still painted as Material rectangles (only the SVG was
+correct), the adjustment navbar read as a nested second card, and the right panel shell used
+`disabledSurfaceColor` when no image was selected so it no longer matched the left rail / viewport /
+filmstrip card family.
 
 Deliverables:
 
@@ -1178,8 +1182,9 @@ Deliverables:
   The panel shell, scope slot, navigation shell, idle/hover/pressed/selected/disabled buttons, and
   collapsible group shell must not derive their fills through `opacity`, `Qt.rgba(..., alpha)`,
   `withAlpha(...)`, or `"transparent"`. Add explicit opaque semantic colors to `AppTheme` where a
-  distinct state is needed. Disabling the panel changes its concrete surface, text, and icon colors;
-  it must not lower the opacity of a parent item and blend all descendants with the viewport.
+  distinct state is needed. Editor side-panel shells always stay on the shared card surface;
+  disabling tools mutes text/icons and sets `enabled: false` — it must not lower parent opacity or
+  recolor the shell to a second panel tone that breaks left/right column unity.
 - Use one surface color family for Library cards, the History/Versions rail, and the Adjustment
   stack. Verify the actual resolved `QColor` values, including alpha 255, instead of checking only
   that each component references a similarly named property.
@@ -1215,6 +1220,42 @@ Acceptance:
 - `editorVersionsRailButton` resolves to the registered Tabler `versions` asset and no longer
   resolves to `palette.svg`. The asset renders at the shared optical size without QML-drawn path
   geometry.
+
+Implementation closeout:
+
+- AppTheme: 5 new Q_PROPERTYs (`buttonIdleFillColor`, `buttonHoveredFillColor`,
+  `buttonPressedFillColor`, `buttonSelectedFillColor`, `disabledSurfaceColor`) all with alpha 255,
+  computed in both Alcedo and Classic theme factories as opaque blends of `bgPanelColor` +
+  `hoverColor` / `bgCanvasColor`.
+- `IconActionButton.qml`: rewritten as an `Item` root (not Material `Button`) so hit chrome stays
+  square — Material padding/implicit sizing was stretching icon-only controls into rectangles while
+  the SVG looked correct. Defaults use `buttonIdleFillColor` / `buttonSelectedFillColor`;
+  hover/press use opaque `buttonHoveredFillColor` / `buttonPressedFillColor`. SVG tinting uses the
+  same `MultiEffect` mask path as `IconButton.qml`. Selected/pressed fills step to the hover well
+  so selected state reads on both the card shell and the lighter base inset track.
+- `EditorAdjustmentStack.qml`: removed the local `AdjustmentNavButton` and parent-opacity patterns.
+  Outer shell always uses `colCardSurface` (matches rail / viewport / filmstrip). Scope slot and
+  adjustment nav are sunken `colBase` insets (not a nested second card of the same fill). Five
+  square `IconActionButton` instances use shared 44/32 hit/optical tokens; idle fill matches the
+  nav track, selected uses `buttonSelectedFillColor`.
+- `EditorHistoryVersionsRail.qml`: `editorVersionsRailButton.iconSrc` changed from
+  `panel_icons/palette.svg` to `panel_icons/versions.svg` (Tabler). Rail and expanded panel always
+  use opaque `colCardSurface` (no disabled recolor). Rail buttons are explicit 46×46 squares on
+  the Item-based `IconActionButton`.
+- `CollapsibleSection.qml`: added `disabledSurfaceColor` property; outer shell uses opaque
+  conditional color instead of `opacity: controlsEnabled ? 1.0 : 0.55`; header idle fill is the
+  section `surfaceColor` (was `"transparent"`).
+- `Main.qml`: exposed `colDisabledSurface: appTheme.disabledSurfaceColor` for child access.
+- `resource.qrc`: registered `panel_icons/versions.svg`.
+- New SVG: `panel_icons/versions.svg` — Tabler `versions` icon (MIT license, 24×24 viewBox,
+  2 px stroke, round caps/joins).
+- `DESIGN.md`: documented new button-state fill tokens and disabled surface token; updated
+  adjustment navbar description to reflect square buttons; added Tabler icon policy.
+- Tests: 6 new `WorkspaceShellTest` cases — `AdjustmentStackBackgroundFillsHaveAlpha255`,
+  `AdjustmentNavButtonsAreSquareWithSharedTokens`, `AdjustmentNavContainerAndButtonsShareRadiusToken`,
+  `VersionsRailButtonUsesTablerVersionsIcon`, `NewOpaqueThemeTokensExistAndHaveAlpha255`,
+  `DisabledAdjustmentStackUsesOpaqueSurfaceNotParentOpacity`.
+- `WorkspaceShellTest` (36 prior) → 42; `MainQmlWorkflowTest` (1) unchanged.
 
 ### Phase 5 - Editor backend, render coordination, and durable session state
 

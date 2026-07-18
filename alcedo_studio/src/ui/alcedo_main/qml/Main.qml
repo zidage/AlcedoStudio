@@ -57,6 +57,8 @@ ApplicationWindow {
     // placeholder share one documented surface (see DESIGN.md).
     readonly property color colCardSurface: appTheme.cardSurfaceColor
     readonly property color colCardBorder: appTheme.cardBorderColor
+    // Phase 4D: opaque disabled surface (replaces opacity: 0.55 on panel shells).
+    readonly property color colDisabledSurface: appTheme.disabledSurfaceColor
     readonly property string dataFontFamily: appTheme.dataFontFamily
     readonly property string headlineFontFamily: appTheme.headlineFontFamily
     readonly property int controlRadius: appTheme.controlRadius
@@ -1316,23 +1318,26 @@ ApplicationWindow {
 
                 // ── Workspace navigation (Library / Editor) ─────────────────
                 // Persistent shared navigation, visible in the same position in
-                // both workspaces. A capsule — the same form as the former library
-                // grid/list switch — carries the two icon segments; the accent thumb
-                // slides to the active workspace. No permanent text label: meaning
-                // lives in the SVG plus the localized tooltip and accessible name.
+                // both workspaces. A compact inset track carries the two icon
+                // segments; its hit area remains 40 px high while the painted
+                // control and SVGs stay deliberately smaller.
                 // Return-to-library is owned here, not by an editor-local control.
                 Item {
                     id: workspaceSwitch
                     objectName: "workspaceSwitch"
-                    Layout.preferredWidth: 132
+                    Layout.preferredWidth: 112
                     Layout.preferredHeight: 40
 
                     readonly property bool navEnabled: appModules.project.serviceReady
+                    readonly property int opticalIconSize: appTheme.iconOpticalSizeCompact
 
                     Rectangle {
                         id: wsTrack
-                        anchors.fill: parent
-                        radius: height / 2
+                        objectName: "workspaceSwitchTrack"
+                        anchors.centerIn: parent
+                        width: parent.width - 4
+                        height: 32
+                        radius: appTheme.controlRadiusSmall
                         color: Qt.rgba(root.colBgBase.r, root.colBgBase.g, root.colBgBase.b, 0.98)
                         border.width: 1
                         border.color: root.colDivider
@@ -1342,12 +1347,13 @@ ApplicationWindow {
                     Rectangle {
                         id: wsThumb
                         objectName: "workspaceSwitchThumb"
-                        width: parent.width / 2 - 4
-                        height: parent.height - 4
-                        y: 2
+                        width: wsTrack.width / 2 - 2
+                        height: wsTrack.height - 4
+                        y: wsTrack.y + 2
                         x: appModules.workspaceRouter.workspace === "library"
-                           ? 2 : parent.width - width - 2
-                        radius: height / 2
+                           ? wsTrack.x + 2
+                           : wsTrack.x + wsTrack.width - width - 2
+                        radius: appTheme.controlRadiusSmall - 2
                         color: root.colAccentPrimary
                         border.width: 1
                         border.color: Qt.rgba(
@@ -1356,8 +1362,8 @@ ApplicationWindow {
                             root.colAccentSecondary.b,
                             0.52)
                         opacity: workspaceSwitch.navEnabled ? 1.0 : 0.45
-                        // The thumb is the ONLY selected-workspace indication;
-                        // it slides between segments. Reduced motion snaps it.
+                        // The thumb carries the selected workspace surface and
+                        // slides between segments. Reduced motion snaps it.
                         Behavior on x {
                             NumberAnimation {
                                 duration: appTheme.reduceMotion ? 0 : appTheme.motionFoldOpenMs
@@ -1381,19 +1387,17 @@ ApplicationWindow {
                             enabled: workspaceSwitch.navEnabled
                             activeFocusOnTab: true
                             readonly property bool isActive: appModules.workspaceRouter.workspace === "library"
-                            // The active workspace is shown ONLY by the sliding accent
-                            // thumb (wsThumb) beneath the segment. Per DESIGN.md the
-                            // capsule draws no hover/press tint and no focus ring: the
-                            // thumb is the single selected-workspace indication. The
-                            // HoverHandler is retained only to drive the localized
-                            // tooltip; pointer handlers receive mouse-move events on
-                            // every QPA platform, so hover is testable offscreen.
+                            // The sliding thumb supplies the selected surface; icon
+                            // tint keeps the inactive action quiet and brightens on
+                            // hover without adding a second painted well.
                             readonly property string actionName: qsTr("Library")
                             HoverHandler { id: libraryNavHover }
                             icon.source: "qrc:/panel_icons/layout-grid.svg"
-                            icon.width: appTheme.iconOpticalSize
-                            icon.height: appTheme.iconOpticalSize
-                            icon.color: !enabled ? root.withAlpha(root.colText, 0.30) : root.colText
+                            icon.width: workspaceSwitch.opticalIconSize
+                            icon.height: workspaceSwitch.opticalIconSize
+                            icon.color: !enabled
+                                        ? root.withAlpha(root.colText, 0.30)
+                                        : (isActive || hovered ? root.colText : root.colTextMuted)
                             Material.foreground: icon.color
                             background: Rectangle {
                                 color: "transparent"
@@ -1421,14 +1425,15 @@ ApplicationWindow {
                             enabled: workspaceSwitch.navEnabled
                             activeFocusOnTab: true
                             readonly property bool isActive: appModules.workspaceRouter.workspace === "editor"
-                            // See libraryNavButton: the capsule shows no hover/press
-                            // tint and no focus ring — only the sliding thumb.
+                            // See libraryNavButton: no per-segment hover/press fill.
                             readonly property string actionName: qsTr("Editor")
                             HoverHandler { id: editorNavHover }
                             icon.source: "qrc:/panel_icons/adjustments.svg"
-                            icon.width: appTheme.iconOpticalSize
-                            icon.height: appTheme.iconOpticalSize
-                            icon.color: !enabled ? root.withAlpha(root.colText, 0.30) : root.colText
+                            icon.width: workspaceSwitch.opticalIconSize
+                            icon.height: workspaceSwitch.opticalIconSize
+                            icon.color: !enabled
+                                        ? root.withAlpha(root.colText, 0.30)
+                                        : (isActive || hovered ? root.colText : root.colTextMuted)
                             Material.foreground: icon.color
                             background: Rectangle {
                                 color: "transparent"

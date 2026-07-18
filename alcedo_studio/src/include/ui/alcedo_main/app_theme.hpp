@@ -60,7 +60,7 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int iconOpticalSize READ iconOpticalSize CONSTANT)
   Q_PROPERTY(int iconOpticalSizeCompact READ iconOpticalSizeCompact CONSTANT)
   // Raster source size for Image/sourceSize (separate from optical display size).
-  // At DPR 1.0 source == optical; higher DPR scales via Qt; keep source ≥ optical.
+  // Keep source ≥ optical so vector rasterization stays crisp at fractional DPRs.
   Q_PROPERTY(int iconSourceSize READ iconSourceSize CONSTANT)
   Q_PROPERTY(int iconSourceSizeCompact READ iconSourceSizeCompact CONSTANT)
   Q_PROPERTY(int iconButtonHitSize READ iconButtonHitSize CONSTANT)
@@ -99,6 +99,17 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int fontWeightHeading READ fontWeightHeading CONSTANT)
   Q_PROPERTY(QColor cardSurfaceColor READ cardSurfaceColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor cardBorderColor READ cardBorderColor NOTIFY ThemeChanged)
+  // Phase 4D: opaque button-state fills (alpha 255). These replace the former
+  // Qt.rgba(…, alpha) / withAlpha(…, …) / "transparent" surface derivations.
+  // Idle matches the card surface so the button blends in; hovered/pressed/
+  // selected are pre-computed opaque blends of cardSurfaceColor + hoverColor.
+  Q_PROPERTY(QColor buttonIdleFillColor READ buttonIdleFillColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor buttonHoveredFillColor READ buttonHoveredFillColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor buttonPressedFillColor READ buttonPressedFillColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor buttonSelectedFillColor READ buttonSelectedFillColor NOTIFY ThemeChanged)
+  // Opaque disabled surface: cardSurfaceColor blended with bgCanvasColor so a
+  // disabled panel shell reads as a single concrete fill rather than 0.55 opacity.
+  Q_PROPERTY(QColor disabledSurfaceColor READ disabledSurfaceColor NOTIFY ThemeChanged)
 
  public:
   enum class FontRole : int {
@@ -222,6 +233,11 @@ class AppTheme final : public QObject {
   auto fontWeightHeading() const -> int;
   auto cardSurfaceColor() const -> QColor;
   auto cardBorderColor() const -> QColor;
+  auto buttonIdleFillColor() const -> QColor;
+  auto buttonHoveredFillColor() const -> QColor;
+  auto buttonPressedFillColor() const -> QColor;
+  auto buttonSelectedFillColor() const -> QColor;
+  auto disabledSurfaceColor() const -> QColor;
 
   auto currentThemeIndex() const -> int;
   void setCurrentThemeIndex(int index);

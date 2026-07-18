@@ -8,6 +8,14 @@ import QtQuick.Layouts
 // RAW Decode. Phase 4B finalizes navigation, ordering, selection, collapse,
 // and sizing; real controls arrive in Phase 6. Phase 4C adds a collapsible
 // section shell that proves the shared fold motion contract.
+// Phase 4D: every surface, button fill, and disabled state uses opaque named
+// theme colors (alpha 255). No parent-shell opacity, withAlpha(…), Qt.rgba(…,
+// alpha), or "transparent" surface fills remain.
+//
+// Surface family: the outer shell always uses the shared card surface so the
+// right column matches History/Versions, the viewport placeholder, and the
+// filmstrip. Disabled state mutes text/icons and disables controls — it does
+// not recolor the shell to a second panel tone.
 Item {
     id: root
     objectName: "editorAdjustmentStack"
@@ -16,17 +24,15 @@ Item {
     property var editorSession: null
     property bool controlsEnabled: true
 
-    readonly property color colPanel: theme ? theme.colGlassPanel : "#1C1C1D"
-    readonly property color colStroke: theme ? theme.colGlassStroke : Qt.rgba(1, 1, 1, 0.08)
+    // ── Opaque semantic colors (no alpha derivations) ─────────────────────
+    // Card surface family (DESIGN.md): same as Library cards and left rail.
+    readonly property color colCardSurface: theme ? theme.colCardSurface : "#161719"
+    readonly property color colCardBorder: theme ? theme.colCardBorder : Qt.rgba(1, 1, 1, 0.08)
     readonly property color colText: theme ? theme.colText : "#F5F1EA"
     readonly property color colMuted: theme ? theme.colTextMuted : "#AAA59D"
     readonly property color colAccent: theme ? theme.colAccentPrimary : "#457B9D"
-    readonly property color colHover: theme ? theme.colHover : Qt.rgba(1, 1, 1, 0.07)
+    // Sunken inset for scope + nav track (interactive well, not a second card).
     readonly property color colBase: theme ? theme.colBgBase : "#161719"
-    readonly property color colDeep: theme ? theme.colBgDeep : "#0C0D0F"
-    // Card surface family — shared with the Library grid (see DESIGN.md).
-    readonly property color colCardSurface: theme ? theme.colCardSurface : "#161719"
-    readonly property color colCardBorder: theme ? theme.colCardBorder : Qt.rgba(1, 1, 1, 0.08)
     readonly property int panelRadius: theme ? theme.panelRadius : 12
     readonly property int controlRadius: theme ? theme.controlRadius : 10
 
@@ -56,10 +62,6 @@ Item {
         editorSession.activeAdjustmentPanel = panel
     }
 
-    function withAlpha(c, a) {
-        return Qt.rgba(c.r, c.g, c.b, a)
-    }
-
     function panelTitle(key) {
         switch (key) {
         case "look": return qsTr("Look")
@@ -83,10 +85,12 @@ Item {
         objectName: "editorRightPanelSlot"
         anchors.fill: parent
         radius: root.panelRadius
+        // Always the shared card surface — matches left rail, viewport, filmstrip.
+        // Disabled is expressed through control enablement and muted copy, not a
+        // second shell fill that breaks the editor card family.
         color: root.colCardSurface
         border.width: 1
         border.color: root.colCardBorder
-        opacity: root.controlsEnabled ? 1.0 : 0.55
         clip: true
 
         ColumnLayout {
@@ -102,7 +106,8 @@ Item {
                 Layout.preferredHeight: appTheme.editorScopeHeight
                 Layout.minimumHeight: appTheme.editorScopeHeightMin
                 radius: appTheme.controlRadiusSmall
-                color: "transparent"
+                // Sunken inset (not a nested card of the same fill).
+                color: root.colBase
                 border.width: 1
                 border.color: root.colCardBorder
 
@@ -114,69 +119,165 @@ Item {
                 }
             }
 
-            // Segmented adjustment navbar (icon-only; tooltips carry the names).
-            // Explicit buttons keep stable objectNames for tests (no Repeater).
+            // Compact adjustment navbar: sunken track + sliding selection window
+            // (same family as Main.qml workspaceSwitchThumb). 40 px hits, 18 px
+            // SVGs; the thumb — not per-button fill — is the selected surface.
             Rectangle {
                 id: adjustmentNav
                 objectName: "editorAdjustmentNav"
                 Layout.fillWidth: true
-                // 32px optical icons + inset -> 48; cell (height - 2x2 margin) gives 6px icon padding.
-                Layout.preferredHeight: appTheme.iconOpticalSize + appTheme.spaceLg
-                radius: root.controlRadius
-                color: root.colCardSurface
+                Layout.preferredHeight: appTheme.iconButtonHitSizeCompact + appTheme.spaceXs
+                radius: appTheme.controlRadiusSmall
+                color: root.colBase
                 border.width: 1
                 border.color: root.colCardBorder
 
-                component AdjustmentNavButton: IconActionButton {
-                    property string panelKey: "tone"
-
-                    // Default 44/24 icon tokens + stretch across the segmented row.
-                    stretchInLayout: true
-                    selected: root.activePanel === panelKey
-                    iconColorDefault: root.colMuted
-                    iconColorSelected: root.colText
-                    iconColorMuted: root.colMuted
-                    fillIdle: "transparent"
-                    fillHover: root.colHover
-                    fillSelected: root.withAlpha(root.colHover, 0.55)
-                    focusRingColor: root.colAccent
-                    onClicked: root.selectPanel(panelKey)
+                readonly property int navHit: appTheme.iconButtonHitSizeCompact
+                readonly property int navSpacing: 2
+                readonly property int navIndex: {
+                    switch (root.activePanel) {
+                    case "look": return 1
+                    case "display": return 2
+                    case "geometry": return 3
+                    case "raw": return 4
+                    default: return 0
+                    }
                 }
+                // Chrome size mirrors IconActionButton compact wells (optical+8 / hit-8).
+                readonly property int thumbSize: Math.min(
+                    navHit,
+                    Math.max(appTheme.iconOpticalSizeCompact + 8, navHit - 8))
 
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.margins: 2
-                    spacing: 0
+                Item {
+                    id: navHost
+                    anchors.centerIn: parent
+                    width: navRow.width
+                    height: adjustmentNav.navHit
+                    opacity: root.controlsEnabled ? 1.0 : 0.55
 
-                    AdjustmentNavButton {
-                        objectName: "editorAdjustmentNav_tone"
-                        panelKey: "tone"
-                        iconSrc: "qrc:/panel_icons/adjustments.svg"
-                        actionName: qsTr("Tone")
+                    // Sliding selection window under the icons. Buttons must use
+                    // transparent chrome — an opaque fillIdle (even track-matched)
+                    // completely covers this thumb so you only see a blue slab
+                    // sliding in the 2 px gaps between segments.
+                    Rectangle {
+                        id: navThumb
+                        objectName: "editorAdjustmentNavThumb"
+                        z: 0
+                        width: adjustmentNav.thumbSize
+                        height: adjustmentNav.thumbSize
+                        radius: Math.max(4, appTheme.controlRadiusSmall - 2)
+                        color: root.colAccent
+                        border.width: 1
+                        border.color: {
+                            const s = theme && theme.colAccentSecondary
+                                      ? theme.colAccentSecondary
+                                      : appTheme.accentSecondaryColor
+                            return Qt.rgba(s.r, s.g, s.b, 0.52)
+                        }
+                        y: (parent.height - height) / 2
+                        x: adjustmentNav.navIndex
+                           * (adjustmentNav.navHit + adjustmentNav.navSpacing)
+                           + (adjustmentNav.navHit - width) / 2
+
+                        Behavior on x {
+                            enabled: !appTheme.reduceMotion
+                            NumberAnimation {
+                                duration: Math.max(appTheme.motionFoldOpenMs, 240)
+                                easing.type: Easing.OutBack
+                                easing.overshoot: 1.18
+                            }
+                        }
+
+                        // Soft land pulse so the window feels mechanical, not
+                        // just a translating rect. Skipped under reduceMotion.
+                        scale: 1.0
+                        transformOrigin: Item.Center
+
+                        Connections {
+                            target: adjustmentNav
+                            function onNavIndexChanged() {
+                                if (appTheme.reduceMotion) {
+                                    navThumb.scale = 1.0
+                                    return
+                                }
+                                thumbLandAnim.restart()
+                            }
+                        }
+
+                        SequentialAnimation {
+                            id: thumbLandAnim
+                            NumberAnimation {
+                                target: navThumb
+                                property: "scale"
+                                to: 0.90
+                                duration: 70
+                                easing.type: Easing.OutQuad
+                            }
+                            NumberAnimation {
+                                target: navThumb
+                                property: "scale"
+                                to: 1.0
+                                duration: 200
+                                easing.type: Easing.OutBack
+                                easing.overshoot: 1.4
+                            }
+                        }
                     }
-                    AdjustmentNavButton {
-                        objectName: "editorAdjustmentNav_look"
-                        panelKey: "look"
-                        iconSrc: "qrc:/panel_icons/palette.svg"
-                        actionName: qsTr("Look")
-                    }
-                    AdjustmentNavButton {
-                        objectName: "editorAdjustmentNav_display"
-                        panelKey: "display"
-                        iconSrc: "qrc:/panel_icons/color-filter.svg"
-                        actionName: qsTr("Display Transform")
-                    }
-                    AdjustmentNavButton {
-                        objectName: "editorAdjustmentNav_geometry"
-                        panelKey: "geometry"
-                        iconSrc: "qrc:/panel_icons/crop.svg"
-                        actionName: qsTr("Geometry")
-                    }
-                    AdjustmentNavButton {
-                        objectName: "editorAdjustmentNav_raw"
-                        panelKey: "raw"
-                        iconSrc: "qrc:/panel_icons/aperture.svg"
-                        actionName: qsTr("RAW Decode")
+
+                    Row {
+                        id: navRow
+                        z: 1
+                        spacing: adjustmentNav.navSpacing
+
+                        // Capsule rule (workspace switch): no per-button fill.
+                        // Transparent wells let the accent thumb read as the
+                        // selected surface under the SVG; only the icon sits above.
+                        component NavIconButton: IconActionButton {
+                            compact: true
+                            enabled: root.controlsEnabled
+                            showHoverFill: false
+                            showFocusRing: true
+                            iconColorDefault: selected ? "#FFFFFF" : root.colMuted
+                            iconColorMuted: root.colMuted
+                            fillIdle: "transparent"
+                            fillSelected: "transparent"
+                        }
+
+                        NavIconButton {
+                            objectName: "editorAdjustmentNav_tone"
+                            selected: root.activePanel === "tone"
+                            iconSrc: "qrc:/panel_icons/adjustments.svg"
+                            actionName: qsTr("Tone")
+                            onClicked: root.selectPanel("tone")
+                        }
+                        NavIconButton {
+                            objectName: "editorAdjustmentNav_look"
+                            selected: root.activePanel === "look"
+                            iconSrc: "qrc:/panel_icons/palette.svg"
+                            actionName: qsTr("Look")
+                            onClicked: root.selectPanel("look")
+                        }
+                        NavIconButton {
+                            objectName: "editorAdjustmentNav_display"
+                            selected: root.activePanel === "display"
+                            iconSrc: "qrc:/panel_icons/color-filter.svg"
+                            actionName: qsTr("Display Transform")
+                            onClicked: root.selectPanel("display")
+                        }
+                        NavIconButton {
+                            objectName: "editorAdjustmentNav_geometry"
+                            selected: root.activePanel === "geometry"
+                            iconSrc: "qrc:/panel_icons/crop.svg"
+                            actionName: qsTr("Geometry")
+                            onClicked: root.selectPanel("geometry")
+                        }
+                        NavIconButton {
+                            objectName: "editorAdjustmentNav_raw"
+                            selected: root.activePanel === "raw"
+                            iconSrc: "qrc:/panel_icons/aperture.svg"
+                            actionName: qsTr("RAW Decode")
+                            onClicked: root.selectPanel("raw")
+                        }
                     }
                 }
             }
@@ -216,6 +317,8 @@ Item {
 
                         // Shared fold reference for adjustment groups (Phase 4C).
                         // Real controls replace the empty body in Phase 6.
+                        // Surface stays the card family; section border provides
+                        // hierarchy without a second panel tone.
                         CollapsibleSection {
                             id: groupShell
                             objectName: "editorAdjustmentGroupShell_" + panelKey
@@ -223,11 +326,12 @@ Item {
                             title: root.panelTitle(panelKey)
                             expanded: true
                             controlsEnabled: root.controlsEnabled
-                            surfaceColor: "transparent"
+                            surfaceColor: root.colCardSurface
+                            disabledSurfaceColor: root.colCardSurface
                             borderColor: root.colCardBorder
                             textColor: root.colText
                             mutedColor: root.colMuted
-                            hoverColor: root.colHover
+                            hoverColor: theme ? theme.colHover : appTheme.hoverColor
                             accentColor: root.colAccent
                             bodyContentHeight: 96
 

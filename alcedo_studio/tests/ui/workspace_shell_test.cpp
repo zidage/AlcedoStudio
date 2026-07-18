@@ -1213,9 +1213,8 @@ TEST_F(WorkspaceShellTests, DeletingCurrentEditorImageDropsEditorToEmptyState) {
 }
 
 TEST_F(WorkspaceShellTests, MainNavigationButtonsShowHoverPressAndFocusStates) {
-  // Phase 4C: the capsule no longer uses highlightLevel / focusRingVisible.
-  // The sliding workspaceSwitchThumb is the only selected-workspace visual;
-  // hover remains only for tooltips; keyboard activation is still required.
+  // The compact capsule keeps selection on the sliding thumb and icon tint;
+  // hover adds no large per-segment fill and keyboard activation remains.
   ASSERT_TRUE(QCoreApplication::instance());
   auto loaded = LoadMainWindow();
   ASSERT_NE(loaded, nullptr);
@@ -1228,9 +1227,21 @@ TEST_F(WorkspaceShellTests, MainNavigationButtonsShowHoverPressAndFocusStates) {
       loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
   auto* thumb =
       loaded->window->findChild<QQuickItem*>(QStringLiteral("workspaceSwitchThumb"));
+  auto* track =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("workspaceSwitchTrack"));
+  auto* workspace_switch =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("workspaceSwitch"));
   ASSERT_NE(library_nav, nullptr);
   ASSERT_NE(editor_nav, nullptr);
   ASSERT_NE(thumb, nullptr);
+  ASSERT_NE(track, nullptr);
+  ASSERT_NE(workspace_switch, nullptr);
+
+  EXPECT_NEAR(workspace_switch->width(), 112.0, 0.5);
+  EXPECT_NEAR(workspace_switch->height(), 40.0, 0.5);
+  EXPECT_NEAR(track->height(), 32.0, 0.5);
+  EXPECT_EQ(workspace_switch->property("opticalIconSize").toInt(),
+            alcedo::ui::AppTheme::Instance().iconOpticalSizeCompact());
 
   // Removed Phase 4A-Fix selection chrome must not reappear as QObject properties.
   EXPECT_FALSE(library_nav->property("highlightLevel").isValid());
@@ -1614,9 +1625,9 @@ TEST_F(WorkspaceShellTests, NarrowWindowKeepsSidePanelOrderAndMinViewport) {
 
 TEST_F(WorkspaceShellTests, AppThemeExposesPhase4CGeometryAndMotionTokens) {
   auto& theme = alcedo::ui::AppTheme::Instance();
-  EXPECT_EQ(theme.iconOpticalSize(), 32);
-  EXPECT_EQ(theme.iconOpticalSizeCompact(), 20);
-  EXPECT_EQ(theme.iconSourceSize(), 32);
+  EXPECT_EQ(theme.iconOpticalSize(), 22);
+  EXPECT_EQ(theme.iconOpticalSizeCompact(), 18);
+  EXPECT_EQ(theme.iconSourceSize(), 24);
   EXPECT_EQ(theme.iconSourceSizeCompact(), 20);
   EXPECT_EQ(theme.iconButtonHitSize(), 44);
   EXPECT_EQ(theme.iconButtonHitSizeCompact(), 40);
@@ -1671,7 +1682,9 @@ TEST_F(WorkspaceShellTests, EditorCardSurfacesResolveThroughSharedCardFamily) {
   ASSERT_NE(filmstrip, nullptr);
   ASSERT_NE(viewport, nullptr);
 
-  // Host items expose the same card family properties as the theme mirror.
+  // Phase 4D closeout: empty editor (no image) keeps every editor card on the
+  // shared card surface. Disabled tools mute copy/controls; they do not recolor
+  // the right panel to disabledSurfaceColor (that broke left/right unity).
   for (QQuickItem* item : {rail, stack, filmstrip, viewport}) {
     // Parent shells pass theme; resolve colCardSurface from nearest owner.
     QObject* owner = item;
@@ -1687,6 +1700,14 @@ TEST_F(WorkspaceShellTests, EditorCardSurfacesResolveThroughSharedCardFamily) {
     EXPECT_TRUE(surface.isValid()) << item->objectName().toStdString();
     EXPECT_EQ(surface, expected_surface) << item->objectName().toStdString();
   }
+
+  // Painted shell fills (not only property mirrors) stay on the card family.
+  auto* panel_shell =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorRightPanelSlot"));
+  ASSERT_NE(panel_shell, nullptr);
+  EXPECT_EQ(panel_shell->property("color").value<QColor>(), expected_surface);
+  EXPECT_EQ(rail->property("color").value<QColor>(), expected_surface);
+  EXPECT_EQ(viewport->property("color").value<QColor>(), expected_surface);
 
   // Open history panel: expanded shell still uses the same card surface property.
   auto* history_btn =
@@ -1724,21 +1745,21 @@ TEST_F(WorkspaceShellTests, StructuralIconActionsExposeHitOpticalAndAccessibleNa
   ASSERT_NE(library_nav, nullptr);
   ASSERT_NE(editor_nav, nullptr);
 
-  // History rail: documented 46 px hit exception within 40–46 band.
-  EXPECT_NEAR(history_btn->width(), 46.0, 0.5);
-  EXPECT_NEAR(history_btn->height(), 46.0, 0.5);
-  EXPECT_NEAR(versions_btn->width(), 46.0, 0.5);
-  EXPECT_NEAR(versions_btn->height(), 46.0, 0.5);
+  // The rail preserves a 40 px hit target while using compact visual geometry.
+  EXPECT_NEAR(history_btn->width(), 40.0, 0.5);
+  EXPECT_NEAR(history_btn->height(), 40.0, 0.5);
+  EXPECT_NEAR(versions_btn->width(), 40.0, 0.5);
+  EXPECT_NEAR(versions_btn->height(), 40.0, 0.5);
 
-  // Optical size token on IconActionButton. History rail buttons use the
-  // default 24 px optical; the adjustment navbar now uses the default 44/24
-  // tokens (de-compacted from the prior 40/20 exception for comfort).
+  // Rails and dense adjustment navigation share compact icon geometry.
   EXPECT_EQ(history_btn->property("opticalSize").toInt(),
-            alcedo::ui::AppTheme::Instance().iconOpticalSize());
+            alcedo::ui::AppTheme::Instance().iconOpticalSizeCompact());
+  EXPECT_EQ(history_btn->property("chromeSize").toInt(), 32);
   EXPECT_EQ(tone_nav->property("opticalSize").toInt(),
-            alcedo::ui::AppTheme::Instance().iconOpticalSize());
+            alcedo::ui::AppTheme::Instance().iconOpticalSizeCompact());
+  EXPECT_EQ(tone_nav->property("chromeSize").toInt(), 32);
   EXPECT_EQ(tone_nav->property("sourceSize").toInt(),
-            alcedo::ui::AppTheme::Instance().iconSourceSize());
+            alcedo::ui::AppTheme::Instance().iconSourceSizeCompact());
   EXPECT_GE(tone_nav->property("sourceSize").toInt(),
             tone_nav->property("opticalSize").toInt());
 
@@ -1972,6 +1993,259 @@ TEST_F(WorkspaceShellTests, EditorVisibleCopyHasNoDeveloperPlaceholderPhrasing) 
   auto* empty = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorEmptyState"));
   ASSERT_NE(empty, nullptr);
   EXPECT_TRUE(empty->isVisible());
+}
+
+// ── Phase 4D — opaque control surfaces and shared icon actions ──────────────
+
+TEST_F(WorkspaceShellTests, AdjustmentStackBackgroundFillsHaveAlpha255) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  loaded->host.workspace_router()->OpenEditor(1, 1);
+  ProcessEvents(80);
+
+  auto* stack =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
+  ASSERT_NE(stack, nullptr);
+
+  // Walk every Rectangle descendant under the adjustment stack and assert its
+  // color fill is fully opaque (alpha 255). Scope slots, nav bars, panel
+  // shells, and collapsible section bodies must all use concrete opaque colors.
+  const auto rects = stack->findChildren<QQuickItem*>();
+  int checked = 0;
+  for (QQuickItem* item : rects) {
+    // Only check Rectangles (the surface primitives). Skip non-surface Items
+    // and interaction overlays (MouseArea, Handler, etc.).
+    const QVariant color_var = item->property("color");
+    if (!color_var.isValid() || !color_var.canConvert<QColor>()) {
+      continue;
+    }
+    // Skip focus/highlight overlays that are not structural surfaces.
+    const QString obj_name = item->objectName();
+    if (obj_name.isEmpty() && item->parent() != nullptr) {
+      // Anonymous inner rectangles (like header hover overlays) may use
+      // "transparent" to show the parent surface — skip those.
+      continue;
+    }
+    const QColor c = color_var.value<QColor>();
+    EXPECT_EQ(c.alpha(), 255)
+        << "Non-opaque surface in adjustment stack: "
+        << (obj_name.isEmpty() ? "(unnamed)" : obj_name.toStdString())
+        << " color=" << c.name(QColor::HexArgb).toStdString();
+    checked++;
+  }
+  EXPECT_GT(checked, 0) << "Expected at least one background Rectangle to verify";
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, AdjustmentNavButtonsAreSquareWithSharedTokens) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  loaded->host.workspace_router()->OpenEditor(1, 1);
+  ProcessEvents(80);
+
+  const auto& theme = alcedo::ui::AppTheme::Instance();
+  const QStringList panels = {QStringLiteral("tone"), QStringLiteral("look"),
+                              QStringLiteral("display"), QStringLiteral("geometry"),
+                              QStringLiteral("raw")};
+  for (const auto& panel : panels) {
+    auto* nav = loaded->window->findChild<QQuickItem*>(
+        QStringLiteral("editorAdjustmentNav_") + panel);
+    ASSERT_NE(nav, nullptr) << panel.toStdString();
+
+    // Square: width == height within 1 px (shared hitSize token).
+    EXPECT_NEAR(nav->width(), nav->height(), 1.0)
+        << panel.toStdString() << " adjustment nav button is not square";
+    EXPECT_NEAR(nav->width(), static_cast<qreal>(theme.iconButtonHitSizeCompact()), 1.0)
+        << panel.toStdString() << " should use shared hitSize";
+    EXPECT_NEAR(nav->height(), static_cast<qreal>(theme.iconButtonHitSizeCompact()), 1.0)
+        << panel.toStdString() << " should use shared hitSize";
+
+    // Optical icon size uses the shared token.
+    EXPECT_EQ(nav->property("opticalSize").toInt(), theme.iconOpticalSizeCompact())
+        << panel.toStdString();
+    EXPECT_EQ(nav->property("sourceSize").toInt(), theme.iconSourceSizeCompact())
+        << panel.toStdString();
+    EXPECT_GE(nav->property("sourceSize").toInt(), nav->property("opticalSize").toInt())
+        << panel.toStdString();
+
+    // No stretchInLayout — must be false or absent.
+    EXPECT_FALSE(nav->property("stretchInLayout").toBool())
+        << panel.toStdString() << " should not stretch";
+
+    // Accessible name / tooltip present.
+    EXPECT_FALSE(nav->property("actionName").toString().isEmpty())
+        << panel.toStdString();
+
+    // Keyboard reachable.
+    EXPECT_TRUE(nav->activeFocusOnTab()) << panel.toStdString();
+  }
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, AdjustmentNavContainerUsesCompactRadiusToken) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  loaded->host.workspace_router()->OpenEditor(1, 1);
+  ProcessEvents(80);
+
+  auto* nav_container =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentNav"));
+  ASSERT_NE(nav_container, nullptr);
+
+  // The dense navigation track and its 32 px wells use the compact radius.
+  const int container_radius = nav_container->property("radius").toInt();
+  EXPECT_EQ(container_radius, alcedo::ui::AppTheme::Instance().controlRadiusSmall());
+
+  auto* tone_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentNav_tone"));
+  ASSERT_NE(tone_nav, nullptr);
+  EXPECT_EQ(container_radius, alcedo::ui::AppTheme::Instance().controlRadiusSmall());
+}
+
+TEST_F(WorkspaceShellTests, VersionsRailButtonUsesTablerVersionsIcon) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  loaded->host.workspace_router()->OpenEditor(0, 0);
+  ProcessEvents(80);
+
+  auto* versions_btn =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorVersionsRailButton"));
+  ASSERT_NE(versions_btn, nullptr);
+
+  const QString icon_src = versions_btn->property("iconSrc").toString();
+  EXPECT_TRUE(icon_src.endsWith(QStringLiteral("versions.svg")))
+      << "Versions rail button iconSrc should be versions.svg, got: "
+      << icon_src.toStdString();
+  EXPECT_FALSE(icon_src.contains(QStringLiteral("palette.svg")))
+      << "Versions rail button must not use palette.svg";
+
+  // Still uses shared optical/source size tokens.
+  EXPECT_EQ(versions_btn->property("opticalSize").toInt(),
+            alcedo::ui::AppTheme::Instance().iconOpticalSizeCompact());
+  EXPECT_FALSE(versions_btn->property("actionName").toString().isEmpty());
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, NewOpaqueThemeTokensExistAndHaveAlpha255) {
+  auto& theme = alcedo::ui::AppTheme::Instance();
+
+  // Phase 4D button-state fills.
+  const QColor idle = theme.buttonIdleFillColor();
+  const QColor hovered = theme.buttonHoveredFillColor();
+  const QColor pressed = theme.buttonPressedFillColor();
+  const QColor selected = theme.buttonSelectedFillColor();
+  const QColor disabled_surface = theme.disabledSurfaceColor();
+
+  EXPECT_EQ(idle.alpha(), 255);
+  EXPECT_EQ(hovered.alpha(), 255);
+  EXPECT_EQ(pressed.alpha(), 255);
+  EXPECT_EQ(selected.alpha(), 255);
+  EXPECT_EQ(disabled_surface.alpha(), 255);
+
+  // Idle fill matches card surface.
+  EXPECT_EQ(idle, theme.cardSurfaceColor());
+
+  // Hovered / pressed / selected are distinct from idle (they show interaction).
+  EXPECT_NE(hovered, idle);
+  EXPECT_NE(pressed, idle);
+  EXPECT_NE(selected, idle);
+
+  // Pressed and selected are the same (both represent the active/engaged state).
+  EXPECT_EQ(pressed, selected);
+
+  // Disabled surface is dimmed relative to card surface (different color).
+  EXPECT_NE(disabled_surface, theme.cardSurfaceColor());
+}
+
+TEST_F(WorkspaceShellTests, DisabledAdjustmentStackUsesOpaqueSurfaceNotParentOpacity) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+
+  // Open editor with NO image (controlsEnabled = false). Disabled mutes
+  // controls/copy; the shell stays the shared card surface so the right column
+  // matches History/Versions, viewport, and filmstrip. No parent opacity.
+  loaded->host.workspace_router()->OpenEditor(0, 0);
+  ProcessEvents(80);
+
+  auto* panel_shell =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorRightPanelSlot"));
+  ASSERT_NE(panel_shell, nullptr);
+
+  // The panel shell must be fully opaque (not dimmed via opacity).
+  const QVariant opacity_var = panel_shell->property("opacity");
+  if (opacity_var.isValid()) {
+    EXPECT_NEAR(opacity_var.toReal(), 1.0, 0.001)
+        << "Panel shell must not use opacity for disabled state";
+  }
+
+  const QColor shell_color = panel_shell->property("color").value<QColor>();
+  EXPECT_EQ(shell_color.alpha(), 255)
+      << "Disabled panel shell must be fully opaque";
+  EXPECT_EQ(shell_color, alcedo::ui::AppTheme::Instance().cardSurfaceColor())
+      << "Right panel shell must stay on the shared card surface when disabled";
+
+  auto* rail =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail"));
+  ASSERT_NE(rail, nullptr);
+  const QColor rail_color = rail->property("color").value<QColor>();
+  EXPECT_EQ(rail_color.alpha(), 255);
+  EXPECT_EQ(rail_color, shell_color)
+      << "History rail and adjustment shell must share one card surface fill";
+
+  auto* viewport =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorViewportSlot"));
+  ASSERT_NE(viewport, nullptr);
+  const QColor viewport_color = viewport->property("color").value<QColor>();
+  EXPECT_EQ(viewport_color, shell_color)
+      << "Viewport placeholder must share the same card surface as side panels";
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+TEST_F(WorkspaceShellTests, HistoryRailButtonsAreSquareWithSquareVisibleChrome) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  loaded->host.workspace_router()->OpenEditor(0, 0);
+  ProcessEvents(80);
+
+  for (const char* name : {"editorHistoryRailButton", "editorVersionsRailButton"}) {
+    auto* btn = loaded->window->findChild<QQuickItem*>(QString::fromUtf8(name));
+    ASSERT_NE(btn, nullptr) << name;
+    EXPECT_NEAR(btn->width(), btn->height(), 0.5) << name << " hit target not square";
+    EXPECT_NEAR(btn->width(), 40.0, 0.5) << name << " should use compact rail hit";
+    EXPECT_NEAR(btn->height(), 40.0, 0.5) << name << " should use compact rail hit";
+    EXPECT_NEAR(btn->property("chromeSize").toReal(), 32.0, 0.5)
+        << name << " visible well should stay smaller than its hit target";
+    // Item-based IconActionButton: optical/source tokens still resolve.
+    EXPECT_EQ(btn->property("opticalSize").toInt(),
+              alcedo::ui::AppTheme::Instance().iconOpticalSizeCompact())
+        << name;
+    EXPECT_EQ(btn->property("sourceSize").toInt(),
+              alcedo::ui::AppTheme::Instance().iconSourceSizeCompact())
+        << name;
+  }
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
 }
 
 }  // namespace

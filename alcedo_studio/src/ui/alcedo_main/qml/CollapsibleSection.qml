@@ -17,7 +17,9 @@ Item {
     property string title: ""
     property bool expanded: true
     property bool controlsEnabled: true
+    // Phase 4D: opaque surface colors (no parent-shell opacity for disabled).
     property color surfaceColor: appTheme.cardSurfaceColor
+    property color disabledSurfaceColor: appTheme.disabledSurfaceColor
     property color borderColor: appTheme.cardBorderColor
     property color textColor: appTheme.textColor
     property color mutedColor: appTheme.textMutedColor
@@ -83,10 +85,10 @@ Item {
     Rectangle {
         anchors.fill: parent
         radius: appTheme.controlRadiusSmall
-        color: root.surfaceColor
+        // Phase 4D: opaque disabled surface (was opacity: 0.55 on the shell).
+        color: root.controlsEnabled ? root.surfaceColor : root.disabledSurfaceColor
         border.width: 1
         border.color: root.borderColor
-        opacity: root.controlsEnabled ? 1.0 : 0.55
 
         ColumnLayout {
             anchors.fill: parent
@@ -113,11 +115,12 @@ Item {
                     }
                 }
 
+                // Phase 4D: explicit opaque idle color (was "transparent").
                 Rectangle {
                     anchors.fill: parent
                     color: headerMouse.containsMouse || header.activeFocus
                            ? root.hoverColor
-                           : "transparent"
+                           : root.surfaceColor
                     radius: appTheme.controlRadiusSmall
                 }
 
