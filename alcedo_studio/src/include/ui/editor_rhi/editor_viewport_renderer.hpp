@@ -11,6 +11,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "ui/editor_rhi/frame_presentation_broker.hpp"
@@ -115,6 +116,7 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
   bool static_upload_pending_ = false;
   bool content_dirty_ = false;
   bool had_primary_last_frame_ = false;
+  std::string target_error_;
 };
 
 }  // namespace alcedo::editor_rhi

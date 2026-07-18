@@ -4,8 +4,7 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-18 to add Phase 4D visual-consistency closeout and clarify that production
-first-frame delivery remains in Phase 5B.
+Last revised: 2026-07-18 to add the Phase 5C direct-presentation architecture correction.
 
 Affected areas:
 
@@ -41,7 +40,8 @@ lifecycle, and exposes typed module properties. QML behavior starts at a child m
 host does not mirror module state or forward module actions.
 
 The image viewport becomes a `QQuickRhiItem`. Pipeline output remains GPU-resident and is presented
-through an explicit native-resource lease protocol for all supported backend pairs:
+through the existing direct frame-sink API and a bounded three-slot native queue for all supported
+backend pairs:
 
 | Launch backend | Qt Quick graphics API | Pipeline backend | Native presentation path |
 | --- | --- | --- | --- |
@@ -330,7 +330,7 @@ flowchart TD
     History["EditHistoryMgmtService"]
     Viewport["EditorViewportItem / QQuickRhiItemRenderer"]
     Overlay["EditorOverlayItem / QSGGeometryNode"]
-    Broker["FramePresentationBroker"]
+    DirectPresenter["Three-slot native direct presenter"]
 
     Modules --> Router
     Modules --> UiController
@@ -351,8 +351,8 @@ flowchart TD
     SessionService --> Tasks
     RenderCoordinator --> Pipeline
     SessionService --> History
-    Pipeline --> Broker
-    Broker --> Viewport
+    Pipeline --> DirectPresenter
+    DirectPresenter --> Viewport
 ```
 
 ### Responsibility boundaries
@@ -430,15 +430,15 @@ Main workspace navigation:
 - supports durable barriers, replay, commit/head markers, and safe truncation;
 - never records intermediate slider samples or renderer-only state such as zoom/pan.
 
-`FramePresentationBroker`:
+Direct presenter:
 
-- replaces the synchronous `IFrameSink` map/unmap interface;
-- exchanges immutable target leases and completed-frame submissions between pipeline workers and the
-  render thread;
+- preserves the existing `IFrameSink` `EnsureSize`, map, unmap, and ready notification sequence;
+- owns a bounded three-slot native target queue shared by pipeline workers and the render thread;
 - carries backend, pixel format, dimensions, target generation, image render generation, native
-  handle, synchronization primitive, and lifetime token;
+  handle, frame role, presentation mode, and ROI metadata;
+- keeps the newest compatible ready frame and recycles older undisplayed frames;
 - rejects stale detail patches and frames after resize, image switch, or target recreation;
-- releases an imported native resource only after both producer completion and QRhi consumption.
+- returns slot ownership only after producer writing and QRhi reading have each finished.
 
 `EditorViewportRenderer`:
 
@@ -517,8 +517,8 @@ Verified on NVIDIA GeForce RTX 3080 Laptop GPU:
   on this display/backend path
 - `EditorRhiContractsTest` (9 tests) passed
 
-The Metal lease interface is defined in `frame_presentation_lease.hpp`; Metal feasibility remains
-Phase 9.
+The experimental Metal target interface is not a production architecture commitment; Phase 9 must
+implement Metal behind the Phase 5C direct presenter after hardware feasibility is verified.
 Production `alcedo_main` entrypoint is intentionally unchanged in Phase 0.
 
 Deliverables:
@@ -536,8 +536,9 @@ Deliverables:
   and SDR display configurations. This is input for Phase 10, not a reason to switch renderers.
 - Create deterministic fixtures: FP32 gradient, checkerboard, ROI patch, odd-sized image, and a small
   real RAW project fixture.
-- Define the backend-neutral Metal lease interface but do not claim Metal feasibility while the macOS
-  environment is unavailable. Metal implementation and qualification are Phase 9.
+- Record the native information a future Metal direct-present slot requires, but do not claim Metal
+  feasibility while the macOS environment is unavailable. Metal implementation and qualification
+  are Phase 9 and must follow the Phase 5C presenter shape.
 
 Acceptance:
 
@@ -719,7 +720,11 @@ Implementation notes:
 | 胶片栏 QSettings 污染本机 | IniFormat + 测试临时目录 + 恢复 org/app/format |
 | Main/LibraryWorkspace CRLF | 恢复 LF；`git diff --check` 干净 |
 
-### Phase 2 - QQuickRhiItem viewport and native frame broker
+### Phase 2 - QQuickRhiItem viewport and experimental native frame broker
+
+**Historical status: implemented, then superseded for production by Phase 5C.** Phase 2 proved that
+the QML viewport and both Windows native-sharing pairs were feasible. Its lease/broker architecture
+is retained here as implementation history, not as the target production design.
 
 Deliverables:
 
@@ -743,7 +748,8 @@ Acceptance:
 - Hiding/minimizing the window cannot leave a producer blocked forever on a target lease.
 - Scene graph invalidation releases all imported wrappers and native targets in a deterministic order.
 
-**Status: complete (2026-07-17).** Implemented and verified on Windows with the production
+**Historical status: complete for the Phase 2 experiment (2026-07-17), not accepted for production
+cutover.** Implemented and verified on Windows with the production
 `QQuickRhiItem` viewport, broker lease protocol, CUDA/D3D11 and OpenCL/OpenGL adapters, generation
 and stale-frame filtering, render-thread resource release, and read-only diagnostics. Phase 2-Fix
 closed the production-viewport gaps (lease sink wiring, startup backend, sync, pool recycle,
@@ -752,7 +758,7 @@ and direct-presentation harness cases pass.
 
 ### Phase 2-Fix
 
-**Status: complete (2026-07-17).**
+**Historical status: complete against the Phase 2 design (2026-07-17); superseded by Phase 5C.**
 
 审核范围是 `82623d7d..d8069e9d`。下列问题已全部修正；`EditorRhiContractsTest`（20）、
 生产 `EditorViewportItem` harness（CUDA/OpenCL lease presentation、continuous submit、
@@ -831,7 +837,7 @@ Implementation closeout:
   pixels stay in `EditorViewportItem`. Rotation angle, zoom readout, and status remain ordinary QML.
 - `EditorWorkspace.qml` stacks viewport + overlay + `HoverHandler` / `DragHandler` / `WheelHandler` /
   `PinchHandler` / `TapHandler` and pushes zoom/pan via `EditorViewportItem::setViewTransform`
-  without advancing broker target generation.
+  without advancing direct-present target generation.
 - Tests: `EditViewerLogicTest` (18, including DPR + landscape/portrait/square/odd golden geometry)
   and `EditorOverlayInteractionTest` (12, crop/zoom/pan/fit/ROI/reset at DPR 1.0/1.5/2.0, overlay
   updates do not invalidate presentation targets).
@@ -860,7 +866,7 @@ Implementation closeout:
 
 | 问题 | 需要修正和验证的结果 |
 | --- | --- |
-| `presentation_frame_sink()` 目前只有测试调用，生产代码没有把图片处理结果送到这里。`ProductionFrameSinkAcceptsThreeLayerFrameSubmissions` 也只设置了输出大小和三类说明信息，没有写入或提交任何一帧。现在打开图片仍不能证明新视口会收到并显示真实编辑结果。 | 在 Phase 5A–5D 的统一协调流程中取得这个入口并实际提交 InteractivePrimary、QualityBase 和 DetailPatch。Phase 5B 的测试至少要写入并提交一帧，再确认生产视口收到了正确图片和本次打开的编号；在此之前不要写成生产接入已经完成。 |
+| `presentation_frame_sink()` 目前只有测试调用，生产代码没有把图片处理结果送到这里。`ProductionFrameSinkAcceptsThreeLayerFrameSubmissions` 也只设置了输出大小和三类说明信息，没有写入或提交任何一帧。现在打开图片仍不能证明新视口会收到并显示真实编辑结果。 | 在 Phase 5A–5E 的统一协调流程中取得这个入口并实际提交 InteractivePrimary、QualityBase 和 DetailPatch。Phase 5B 验证首帧服务流程；Phase 5C 恢复旧式 direct-present 数据路径并完成持续真实 RAW GPU 验证。在此之前不要写成生产接入已经完成。 |
 | 切换图片时会把显示计算使用的图片大小清零，然后暂时改用源图大小。若新旧两张图片请求的输出宽高相同，`LeaseFrameSink::EnsureSize()` 会直接返回，不再发出 `targetSizeRequested`，新图就可能一直用源图大小计算裁剪、缩放和局部区域。 | 即使输出宽高没有变化，只要换了图片或本次打开的编号变了，也要把实际输出大小重新同步给交互控制器。增加“两张源图大小不同、输出大小相同”的切图测试。 |
 | Phase 3 原文要求在真实 QML 中验证裁剪、缩放、平移、适配、局部区域和重置，并覆盖 DPR 1.0、1.5、2.0；还要求比较叠加层截图。现在真实 QML 用例把拖动、滚轮和双击放在一起，最后只要求缩放或平移任意一个发生变化，单个操作失效也可能通过；裁剪、捏合、局部区域、重置和三种 DPR 仍只在控制器层测试。名称带 `Golden` 的测试也只检查点和三角形数量，没有截图或像素比较。 | 把真实 QML 操作分开检查，每个操作都验证自己的结果，并覆盖三种 DPR。为横图、竖图、方图和奇数尺寸视口保存实际叠加层图片并做像素比较。 |
 
@@ -874,10 +880,10 @@ Implementation closeout:
 - Overlay: non-overlapping dim mask, outward round caps, coalesced rebuilds.
 - QML: PointHandlers unchanged; DPR via screen property binding; session identity key
   drives rebind (PascalCase C++ signals are not used as Connections function handlers).
-- Phase 5A–5D own loading, unified scheduling, first-frame proof, equal-output-size geometry
+- Phase 5A–5E own loading, unified scheduling, first-frame proof, equal-output-size geometry
   synchronization, and sustained production operation. Phase 3-Fix remains open until the Phase 3
   interaction/screenshot checks above are complete; production first-frame completion is gated by
-  Phase 5B and the sustained-path verification in Phase 5D.
+  Phase 5B and the direct-presentation plus sustained-path verification in Phase 5C.
 
 ### Phase 4 - QML workspace frontend and visual system
 
@@ -1273,26 +1279,27 @@ Open image / adjustment / zoom / pan / resize / crop / undo / redo
        validate image + session + view generations
        replace outdated pending work
        choose frame role, region, size, quality, and priority
-       attach/request presentation target when needed
   -> PipelineScheduler / PipelineMgmtService
-  -> pipeline writes the coordinator-selected presentation sink
-  -> FramePresentationBroker
-  -> EditorViewportItem presents the compatible frame
-  -> presentation acknowledgement returns to the coordinator/session state
+  -> pipeline writes through the existing EnsureSize / Map / Unmap / NotifyFrameReady API
+  -> three-slot native direct-present queue (latest compatible frame wins)
+  -> QQuickRhiItemRenderer imports and samples the selected slot
+  -> one first-frame composition confirmation returns to session state
 ```
 
-Pipeline task completion and frame presentation are different events. The editor may report a
-rendering stage after the task starts, but it leaves first-frame loading only after the matching
-frame has actually been accepted and presented. No module may add a shorter direct arrow to the
+Pipeline task completion, native-slot reuse, and first-frame composition are three different events.
+Pipeline completion immediately releases coordinator scheduling capacity. Native-slot reuse stays
+inside the direct presenter and never becomes an application-level per-request acknowledgement.
+Only the first compatible frame of an image session must confirm that it entered a Qt Quick window
+frame before the editor leaves first-frame loading. No module may add a shorter direct arrow to the
 pipeline.
 
 Phase 3-Fix carry-over ownership:
 
 | Phase 3-Fix remaining problem | Required follow-up phase |
 | --- | --- |
-| Production code does not submit real frames through `presentation_frame_sink()` | Phase 5A defines the single scheduling owner and typed request/result interfaces; Phase 5B delivers and verifies the first real frame; Phase 5C covers all later render reasons; Phase 5D completes sustained operation and removes bypasses. |
+| Production code does not submit real frames through `presentation_frame_sink()` | Phase 5A defines the single scheduling owner and typed request/result interfaces; Phase 5B delivers the first-frame service flow; Phase 5C restores the proven direct-present backend path, removes production lease/broker bypasses, and completes sustained real-RAW GPU verification; Phase 5D covers all later render reasons; Phase 5E completes the full production interaction cutover. |
 | A new image can keep the wrong render-reference geometry when its requested output size equals the previous image | Phase 5B synchronizes render-reference geometry for every new image/session generation and includes the equal-output-size switch test. |
-| Real QML interaction coverage is incomplete and the existing “Golden” tests do not compare rendered pixels | Phase 5D must run separate real-QML crop, zoom, pan, fit, ROI, reset, pinch, wheel, and double-click checks at DPR 1.0, 1.5, and 2.0, and compare rendered overlay captures for landscape, portrait, square, and odd viewport sizes. |
+| Real QML interaction coverage is incomplete and the existing “Golden” tests do not compare rendered pixels | Phase 5E must run separate real-QML crop, zoom, pan, fit, ROI, reset, pinch, wheel, and double-click checks at DPR 1.0, 1.5, and 2.0, and compare rendered overlay captures for landscape, portrait, square, and odd viewport sizes. |
 
 These are inherited acceptance requirements for Phase 5, not optional cleanup. Phase 5 cannot be
 marked complete while any row remains unverified, even if its newly added functionality passes.
@@ -1330,7 +1337,7 @@ Deliverables:
   zoom/pan, resize, detail refresh, undo/redo, image switch, and retry.
 - Make the session service the only Phase 5A intent producer. Define the input interfaces used by
   adjustment models and the viewport controller, but connect their adjustment, zoom, pan, and
-  resize events in Phase 5C. None of these modules receives the pipeline scheduler or submits
+  resize events in Phase 5D. None of these modules receives the pipeline scheduler or submits
   pipeline tasks itself.
 - Define separate request-accepted, render-started, render-completed, frame-submitted,
   frame-presented, replaced, cancelled, and failed results. Session UI state follows these results
@@ -1364,7 +1371,7 @@ Implementation notes:
   JSON (and ordered patches). QWidget panel states, legacy parameter converters, and the legacy LUT
   browser remain under `editor_dialog/` until their Phase 6 panel is moved; session/render intents
   use the app-layer types only.
-- Legacy QWidget `alcedo::ui::EditorRenderCoordinator` is unchanged until Phase 5D cutover. Phase 5A
+- Legacy QWidget `alcedo::ui::EditorRenderCoordinator` is unchanged until Phase 5E cutover. Phase 5A
   acceptance for scheduler ownership is scoped to the QML editor path; the legacy QWidget callers
   are documented temporary exceptions in `EditorSessionControllerPhase5ATest`.
 - `EditorSessionRuntime::Create()` wires coordinator results into `NotifyRenderResult`; the
@@ -1390,7 +1397,7 @@ Implementation notes:
 | 调整数据只有字符串摘要；intent 提交后被改写 | `editor_adjustment_types.hpp`；提交前 `FillRenderIntentDefaults`，之后不改存储 intent。测试：`SubmitDoesNotMutateStoredIntentAfterAccept`、`ScheduledAdjustmentMatchesSubmittedSnapshotFieldByField`。 |
 | 历史协调器绑定 QWidget；可复用库链 Widgets | 消息/输入改为回调；`EditorSessionService` 无 PUBLIC/PRIVATE deps、无 Widgets。测试：`EditorSessionServiceCMakeDoesNotLinkQtWidgets`。 |
 | 应用层头文件包含 `ui/edit_viewer/frame_sink.hpp` | `FrameRole`/`ViewportRenderRegion` 迁至 `edit/frame_presentation_types.hpp`。测试：`Phase5AAppHeadersDoNotIncludeUi`。 |
-| 调度器扫描列表过窄 | 自动扫描 QML 编辑器路径 + Phase 5A 会话/渲染源；明确例外 legacy QWidget 至 Phase 5D。测试：`QmlEditorPathDoesNotIncludePipelineScheduler`。 |
+| 调度器扫描列表过窄 | 自动扫描 QML 编辑器路径 + Phase 5A 会话/渲染源；明确例外 legacy QWidget 至 Phase 5E。测试：`QmlEditorPathDoesNotIncludePipelineScheduler`。 |
 
 二次复审发现的重大问题：
 
@@ -1404,10 +1411,21 @@ Implementation notes:
 | 后台结果会直接修改界面，而且控制器销毁后服务还可能调用旧通知函数。 | 协调器先完成内部状态修改，再在锁外按顺序通知。控制器把后台通知排入自己的 Qt 线程，并在销毁或更换服务时解除通知。测试覆盖后台线程通知和控制器先销毁的情况。 |
 | 第一次进入编辑器时，首帧请求没有显示目标，宽高也是 0。 | 会话服务在显示目标和实际像素大小都有效后才提交首帧；QML 在尺寸或屏幕缩放变化时更新目标大小。测试确认首条请求的目标、宽和高都有效。 |
 | Phase 5A 的交付范围把应用层数据和后续面板迁移混在一起，历史操作还接收 `QListWidgetItem*`。 | Phase 5A 只负责不依赖 QWidget 的调整数据和历史操作接口；旧参数转换和 LUT 浏览数据随对应 Phase 6 面板迁移。历史协调器不再接收列表控件对象。独立应用层构建检查继续禁止 Qt Widgets 和 UI 头文件。 |
-| 交付项写成调整模型和视口控制器已经提交请求，但现阶段只有会话服务完成了连接。 | Phase 5A 交付项已改成“定义输入接口，由会话服务提交请求”。调整、缩放、平移和尺寸变化接入统一协调器明确归 Phase 5C，并要求每种输入只提交一次。 |
+| 交付项写成调整模型和视口控制器已经提交请求，但现阶段只有会话服务完成了连接。 | Phase 5A 交付项已改成“定义输入接口，由会话服务提交请求”。调整、缩放、平移和尺寸变化接入统一协调器明确归 Phase 5D，并要求每种输入只提交一次。 |
 | `Saving` 没有进入点，日志写入失败和保存任务启动失败也被当成保存成功。 | 写入日志成功且保存任务成功启动后才发布 `SaveStarted`，发布时状态为 `Saving`。任一步失败都会停止切图并报告失败，不释放当前图片。测试覆盖日志失败、任务失败和正常保存状态。 |
 
 ### Phase 5B - Image open and guaranteed first frame
+
+**Status: service flow complete; presentation backend superseded by Phase 5C (2026-07-18).**
+Production open/first-frame path is owned by
+`EditorSessionService` + app-layer `EditorRenderCoordinator` +
+`EditorSessionProductionSchedulerPort`. Opening marks the image acquired after
+guards, routes InteractivePrimary when the presentation sink and size are ready,
+stays Loading until complete→submit→present, then enters Interactive and queues
+QualityBase. Equal-output-size image switches re-emit `targetSizeRequested` and
+force-apply render-reference geometry. Shell tests without a real image path keep
+Loading (bootstrap-compatible). Real RAW pipeline execute is wired through
+lazy `EnsureLoaded` + `PipelineScheduler` when the image pool has a path.
 
 Deliverables:
 
@@ -1439,7 +1457,129 @@ Acceptance:
 - Tests write and submit real frame data through the production presentation sink and verify the
   visible pixels; setting only size or frame description is not sufficient.
 
-### Phase 5C - Unified adjustment, zoom, pan, resize, and quality scheduling
+Implementation closeout:
+
+- Session: `MarkImageAcquiredAfterGuards` after successful open/switch; first-frame gate unchanged;
+  `RouteQualityBaseFollowUp` after InteractivePrimary presentation.
+- Production ports: `editor_session_production.{hpp,cpp}` — pipeline/history soft-acquire on Open,
+  lazy `EnsureLoaded` + real `PipelineScheduler` only when producing; test producer hook for shell
+  first-frame proof; presentation sink resolver from `EditorSessionController`.
+- Geometry: `LeaseFrameSink::EnsureSize` re-emits on image generation/identity change even when
+  width/height match; `forceRenderReferenceSize` + QML `onTargetSizeRequested` force-apply.
+- Runtime: `EditorSessionRuntime::CreateWithPorts`; host wires production ports at composition.
+- Tests: `QualityBaseFollowsInteractivePrimaryFirstFrame`, equal-output-size interaction tests,
+  `ProductionFirstFramePathWritesAndSubmitsRealFrameData` (gradient write + native-slot submit +
+  A→B→A generation identity). The Phase 5B lease/broker presentation implementation is provisional;
+  Phase 5C replaces it before production acceptance. Sustained real-RAW GPU e2e and bypass removal
+  are Phase 5C acceptance and are not deferred to the later interaction cutover.
+
+### Phase 5C - Restore direct presentation behind QQuickRhiItem
+
+**Status: required architecture correction.** Keep `QQuickRhiItem` because the photograph must
+participate in native QML layout, clipping, opacity, stacking, and overlay composition. Do not treat
+that display requirement as authorization to replace the proven producer path, shared-texture slot
+queue, pipeline scheduling behavior, or editor session model.
+
+The target production path is:
+
+```text
+PipelineScheduler / CPUPipelineExecutor
+  -> DirectFrameSink::EnsureSize
+       request the exact native target size
+       wait for explicit created / failed / renderer-exited result
+  -> MapResourceForWrite
+  -> CUDA or OpenCL writes the shared target
+  -> UnmapResource
+  -> NotifyFrameReady
+  -> three-slot ready queue
+       keep the newest compatible frame
+       supersede and recycle older undisplayed frames
+  -> QQuickRhiItemRenderer imports the native slot on the scene-graph render thread
+  -> Qt Quick window frame
+       confirm the first compatible frame once per image session
+```
+
+Why this phase exists:
+
+- Before the unified-QML branch, `QtEditViewer` and `RhiEditViewerSurface` already provided the
+  required GPU-resident `EnsureSize → Map → write → Unmap → NotifyFrameReady` path, a three-slot
+  native target queue, CUDA/D3D11 and OpenCL/OpenGL interoperability, frame-role selection, ROI
+  behavior, and deterministic target release.
+- `QQuickRhiItem` adds one necessary ownership rule: QRhi wrappers must be created, imported, and
+  destroyed by its scene-graph render thread. It does not require an application-wide native
+  resource lease protocol, a second presentation scheduler, or per-request presentation state.
+- The Phase 2 lease/broker design duplicated the old queue and introduced target exhaustion,
+  producer/renderer dual-completion races, renderer-recreation shutdown state, and long-lived
+  per-request presentation bookkeeping. Phase 5C removes that duplication instead of polishing it.
+
+Deliverables:
+
+- Retain `EditorViewportItem : QQuickRhiItem` as a thin QML and render-thread boundary. It owns no
+  pipeline scheduler and exposes no backend selection or host-upload path.
+- Extract or reuse the native target creation, mapping, ready-queue, frame-role, ROI, and teardown
+  behavior already proven by `RhiEditViewerSurface`. Adapt only QRhi import and drawing to
+  `QQuickRhiItemRenderer`.
+- Restore a direct production `IFrameSink` implementation with the existing `EnsureSize`,
+  `MapResourceForWrite`, `UnmapResource`, and `NotifyFrameReady` calls. The pipeline must not know
+  about QML, QRhi wrappers, slot-generation internals, or window-frame confirmation.
+- Use three native slots with explicit `Available`, `ProducerWriting`, `Ready`, and
+  `RendererReading` ownership. Selection is latest-compatible-frame-wins. An undisplayed older
+  ready frame is superseded and recycled without generating an application-level presentation
+  event.
+- Preserve image/session generation, frame role, preview generation, detail serial, presentation
+  mode, and ROI metadata so stale-frame and layer-selection behavior remains deterministic.
+- Remove `FramePresentationBroker`, `LeaseFrameSink`, the production native-resource lease pool,
+  dual-sided lease completion, and their production adapter route. Source scans must prove that the
+  production QML editor no longer includes or constructs them.
+- Keep native target allocation and QRhi import on the scene-graph render thread. A producer waiting
+  for an exact target resumes only from an explicit target-created, target-failed, image/session
+  invalidated, renderer-exited, or application-shutdown result. Do not poll and do not use a time
+  limit as a correctness mechanism.
+- Separate the three completion meanings:
+  - pipeline completion immediately releases coordinator scheduling capacity;
+  - slot reuse is private direct-present lifecycle state and occurs only after QRhi no longer reads
+    that slot;
+  - first-frame composition is a one-shot image-session event after the selected slot enters a Qt
+    Quick window frame.
+- Do not emit application-level presentation acknowledgement for every interactive, quality, or
+  detail request. At high producer rates the display consumes the newest compatible frame and
+  intermediate frames are expected to be superseded.
+- Rename result/state APIs so they do not claim OS scan-out when they only prove Qt Quick window
+  composition. Actual display scan-out is outside the first-frame service guarantee.
+- Keep the no-host-copy invariant. CUDA/D3D11 and OpenCL/OpenGL interoperability failure is an
+  explicit backend error, never a CPU upload or legacy-widget fallback.
+- Remove the QML-visible legacy editor facade and every alternate QML presentation bypass in the
+  same change.
+
+Acceptance:
+
+- The production call sequence for CUDA and OpenCL is observably
+  `EnsureSize → MapResourceForWrite → GPU write → UnmapResource → NotifyFrameReady`; there is no
+  production lease acquisition or broker submission between these calls.
+- Pipeline scheduling continues after render completion without waiting for a window-frame
+  confirmation. A producer capable of 10–30 ms frame time is not serialized to the QML display
+  refresh rate by application-layer acknowledgement.
+- One image session produces exactly one first-frame composition confirmation. QualityBase,
+  DetailPatch, and superseded interactive frames do not accumulate entries in an application-level
+  pending-presentation map.
+- Sustained real-RAW GPU tests switch A→B→A and alternate at least two RAW fixtures for eight or more
+  switches on CUDA/D3D11 and OpenCL/OpenGL. Every switch reaches a correct first compatible frame,
+  later quality work continues, and no stale image appears.
+- A continuous producer test submits faster than the display consumes. The queue remains bounded to
+  three native slots, older ready frames are superseded, the newest compatible frame appears, and
+  the producer resumes whenever a slot is safely reusable.
+- Equal-size image switches, different aspect ratios, odd dimensions, InteractivePrimary,
+  QualityBase, DetailPatch, ROI updates, and A→B→A generation changes match the pre-branch selection
+  behavior.
+- Resize, hide/show, minimize/restore, scene-graph recreation, image invalidation, project close,
+  and application shutdown wake every producer through an explicit result and leave no live native
+  target or imported QRhi wrapper.
+- Tests fail on target creation, map, GPU write, unmap, native import, first-frame composition, and
+  teardown errors. Assigned CUDA/OpenCL workers may not convert those failures into skips.
+- A source and link scan confirms that the production QML editor has no `FramePresentationBroker`,
+  `LeaseFrameSink`, production lease adapter, host upload, or legacy editor facade dependency.
+
+### Phase 5D - Unified adjustment, zoom, pan, resize, and quality scheduling
 
 Deliverables:
 
@@ -1470,18 +1610,19 @@ Acceptance:
 - The production viewport shows InteractivePrimary, QualityBase, and DetailPatch from this single
   route with the correct generation and region.
 
-### Phase 5D - Production cutover, cancellation, and sustained rendering
+### Phase 5E - Production interaction cutover and cancellation
 
 Deliverables:
 
-- Connect the new coordinator to the production pipeline guards, background-task registration,
-  `FramePresentationBroker`, and `EditorViewportItem` presentation sink.
+- Connect the coordinator to the production pipeline guards, background-task registration, and the
+  Phase 5C direct presentation sink behind `EditorViewportItem`.
 - Remove or disable every QML-editor path that directly attaches its own sink, creates an editor
   render task, or independently decides preview timing. Keep only the coordinator-owned route.
 - Define cancellation and replacement across image switch, workspace switch, resize, hidden or
   minimized window, scene-graph recreation, project close, and application shutdown.
-- Keep target leases and pipeline tasks non-blocking: losing presentation availability cancels or
-  parks work according to policy and never leaves a producer waiting forever.
+- Keep pipeline tasks non-blocking with respect to window-frame confirmation. Losing presentation
+  availability returns an explicit lifecycle result to the direct target wait and never leaves a
+  producer waiting forever.
 - Add diagnostics for current request reason, queued/replaced/cancelled counts, active image/session
   generation, first-frame time, last submitted frame role, and last rejection reason.
 - Complete the Phase 3-Fix interaction carry-over in the production QML workspace: test crop, zoom,
@@ -1506,7 +1647,7 @@ Acceptance:
 - Phase 5 is complete only after the Phase 4 frontend and this production backend route are
   exercised together in one end-to-end test.
 
-### Phase 5E - Redo-only journal format and timeline rewrites
+### Phase 5F - Redo-only journal format and timeline rewrites
 
 Deliverables:
 
@@ -1534,7 +1675,7 @@ Acceptance:
 - WorkingVersion, journal replay, and the independent reference model produce identical pipeline
   params, cursor, transaction IDs, and timeline hash for the same operation sequence.
 
-### Phase 5F - Background autosave and overlapping image switches
+### Phase 5G - Background autosave and overlapping image switches
 
 Deliverables:
 
@@ -1557,7 +1698,7 @@ Acceptance:
 - Discard removes only the current unflushed transaction; published versions remain available
   through history.
 
-### Phase 5G - Recovery, compaction, and injected storage failures
+### Phase 5H - Recovery, compaction, and injected storage failures
 
 Deliverables:
 
@@ -1576,7 +1717,7 @@ Acceptance:
 - A failed compaction leaves the previous journal recoverable.
 - Materialization interrupted after journal durability reconstructs the same history/pipeline head.
 
-### Phase 5H - Reproducible forced-termination fuzz harness
+### Phase 5I - Reproducible forced-termination fuzz harness
 
 Deliverables:
 
@@ -1587,7 +1728,7 @@ Deliverables:
   head-marker update, materialization, thumbnail invalidation, compaction replace, and image switch.
 - Let the parent randomly terminate the child at those points, restart it, recover, and compare the
   result with the independent reference timeline model.
-- Combine process termination with the Phase 5G in-process file/task fault injectors.
+- Combine process termination with the Phase 5H in-process file/task fault injectors.
 - Print and persist the seed, minimized operation sequence, crash point, backend-independent journal
   fixture, and expected/actual state for every failure.
 - Keep a checked-in regression-seed corpus and run fresh bounded random seeds in scheduled CI.
@@ -1822,8 +1963,8 @@ mandatory gate immediately before the final render-host/cutover phase.
 Deliverables:
 
 - Extend `EditorRhiHarness` with the Metal backend on actual supported macOS hardware.
-- Implement and validate the Metal `FramePresentationBroker` lease adapter and shared `MTLTexture`
-  lifetime/synchronization path.
+- Implement and validate a Metal three-slot direct presenter and shared `MTLTexture`
+  lifetime/synchronization path behind the same `IFrameSink` sequence used by CUDA and OpenCL.
 - Exercise QQuickRhiItem rendering, resize, DPR/screen change, hide/show, renderer recreation, image
   generation cancellation, and shutdown under the Metal scene graph.
 - Apply the existing `ColorManager` system-API behavior to the unified QQuickWindow CAMetalLayer and
@@ -1882,7 +2023,7 @@ Acceptance:
 - An unsupported Windows OpenGL HDR configuration uses the explicit down-transform in the same
   renderer and reports that state; it never selects a different graphics backend.
 - Application exit, surface destruction, and window recreation release the swapchain before the
-  native surface and leave no outstanding frame/transaction leases.
+  native surface and leave no outstanding direct-frame slots or transaction ownership.
 - Legacy source, build options, symbols, and Qt Widgets dependencies are deleted in the same cutover.
 
 ## Legacy deletion manifest
@@ -1918,9 +2059,9 @@ the deleted types, symbols, compile definitions, and include paths is part of Ph
 
 Extend the existing viewer geometry coverage and add focused tests such as:
 
-- `FramePresentationBrokerRejectsPriorImageAfterGenerationChange`
-- `FramePresentationBrokerReleasesTargetAfterProducerAndRendererComplete`
-- `HiddenViewportCancelsOutstandingWritableLease`
+- `DirectPresenterRejectsPriorImageAfterGenerationChange`
+- `DirectPresenterRecyclesSlotAfterProducerAndRendererComplete`
+- `HiddenViewportWakesOutstandingTargetWaitWithLifecycleResult`
 - `EditorTransactionJournalReplaysCommittedGenerationsInOrder`
 - `EditorTransactionJournalIgnoresAlreadyMaterializedRecords`
 - `RewriteTimelineAtomicallyDropsRedoTailAndAppendsReplacement`
@@ -2064,7 +2205,7 @@ Required stress runs:
 - 200 resize/DPR/minimize cycles;
 - 30 minutes of continuous adjustment, crop, search, and version operations;
 - repeated Library <-> Editor workspace switches;
-- shutdown at each journal and frame-lease state.
+- shutdown at each journal and direct-frame-slot state.
 
 The GUI and render threads must never wait for database I/O or a pipeline worker. Any intentional GPU
 idle during HDR/surface rebuild is isolated to the display-transition state and measured separately.
@@ -2105,7 +2246,7 @@ transitions must be queryable by the harness without scraping human-readable log
 | Risk | Containment |
 | --- | --- |
 | QRhi private API changes | Pin Qt 6.9.3; isolate QRhi includes; run all backend harnesses before a Qt minor upgrade |
-| Render-thread/native-resource race | Immutable leases, dual-sided completion, generation rejection, deterministic teardown tests |
+| Render-thread/native-resource race | Bounded slots, explicit producer/renderer ownership, generation rejection, deterministic teardown tests |
 | CUDA uses a different adapter from Qt | Select LUID before first window; fail startup on mismatch |
 | OpenCL/GL sharing depends on context/share group | Create and validate the share topology at startup; require the sharing extension; no host-copy path |
 | Search removes the active image mid-edit | Seal/autosave by identity and generation, then nearest-survivor or empty-state transition |

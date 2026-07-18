@@ -105,34 +105,46 @@ class EditorSessionBootstrapSchedulerPort final : public IEditorPipelineSchedule
 };
 
 struct EditorSessionRuntime {
-  std::shared_ptr<EditorSessionBootstrapPipelinePort> pipeline =
-      std::make_shared<EditorSessionBootstrapPipelinePort>();
-  std::shared_ptr<EditorSessionBootstrapHistoryPort> history =
-      std::make_shared<EditorSessionBootstrapHistoryPort>();
-  std::shared_ptr<EditorSessionBootstrapTaskPort> tasks =
-      std::make_shared<EditorSessionBootstrapTaskPort>();
-  std::shared_ptr<EditorSessionBootstrapJournalPort> journal =
-      std::make_shared<EditorSessionBootstrapJournalPort>();
-  std::shared_ptr<EditorSessionBootstrapSchedulerPort> scheduler =
-      std::make_shared<EditorSessionBootstrapSchedulerPort>();
-  std::shared_ptr<EditorRenderCoordinator> coordinator;
-  std::unique_ptr<EditorSessionService>    service;
+  std::shared_ptr<IEditorPipelinePort>           pipeline;
+  std::shared_ptr<IEditorHistoryPort>            history;
+  std::shared_ptr<IEditorTaskPort>               tasks;
+  std::shared_ptr<IEditorJournalPort>            journal;
+  std::shared_ptr<IEditorPipelineSchedulerPort>  scheduler;
+  std::shared_ptr<EditorRenderCoordinator>       coordinator;
+  std::unique_ptr<EditorSessionService>          service;
 
-  /// Create runtime with coordinator results forwarded into the session service
-  /// (Phase 5A-Fix: production path must not leave render results undelivered).
-  static auto                              Create() -> std::unique_ptr<EditorSessionRuntime> {
-    auto runtime = std::make_unique<EditorSessionRuntime>();
+  /// Create runtime with bootstrap ports (no DuckDB/GPU). Coordinator results
+  /// are forwarded into the session service.
+  static auto Create() -> std::unique_ptr<EditorSessionRuntime> {
+    return CreateWithPorts(std::make_shared<EditorSessionBootstrapPipelinePort>(),
+                           std::make_shared<EditorSessionBootstrapHistoryPort>(),
+                           std::make_shared<EditorSessionBootstrapTaskPort>(),
+                           std::make_shared<EditorSessionBootstrapJournalPort>(),
+                           std::make_shared<EditorSessionBootstrapSchedulerPort>());
+  }
+
+  /// Phase 5B: production (or test) ports. Same wiring as Create().
+  static auto CreateWithPorts(std::shared_ptr<IEditorPipelinePort>          pipeline,
+                              std::shared_ptr<IEditorHistoryPort>           history,
+                              std::shared_ptr<IEditorTaskPort>              tasks,
+                              std::shared_ptr<IEditorJournalPort>           journal,
+                              std::shared_ptr<IEditorPipelineSchedulerPort> scheduler)
+      -> std::unique_ptr<EditorSessionRuntime> {
+    auto runtime      = std::make_unique<EditorSessionRuntime>();
+    runtime->pipeline = std::move(pipeline);
+    runtime->history  = std::move(history);
+    runtime->tasks    = std::move(tasks);
+    runtime->journal  = std::move(journal);
+    runtime->scheduler = std::move(scheduler);
     runtime->coordinator = std::make_shared<EditorRenderCoordinator>(runtime->scheduler);
     EditorSessionService::Dependencies deps;
-    deps.pipeline = runtime->pipeline;
-    deps.history  = runtime->history;
-    deps.tasks    = runtime->tasks;
-    deps.journal  = runtime->journal;
-    deps.render   = runtime->coordinator;
+    deps.pipeline    = runtime->pipeline;
+    deps.history     = runtime->history;
+    deps.tasks       = runtime->tasks;
+    deps.journal     = runtime->journal;
+    deps.render      = runtime->coordinator;
     runtime->service = std::make_unique<EditorSessionService>(std::move(deps));
 
-    // Keep a raw service pointer for the observer; service outlives coordinator
-    // only while runtime owns both (destroyed together).
     EditorSessionService* service_ptr = runtime->service.get();
     runtime->coordinator->SetResultObserver([service_ptr](const EditorRenderResult& result) {
       if (service_ptr) {

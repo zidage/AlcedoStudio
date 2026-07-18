@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstdint>
+#include <functional>
 #include <mutex>
 #include <optional>
 
@@ -20,6 +22,9 @@ class EditorViewportItem;
 // native target is available yet.
 class LeaseFrameSink final : public alcedo::IFrameSink {
  public:
+  using PresentationAcknowledgement =
+      std::function<void(std::uint64_t request_id, std::uint64_t image_generation,
+                         std::uint64_t image_identity)>;
   explicit LeaseFrameSink(EditorViewportItem* item);
   ~LeaseFrameSink() override;
 
@@ -39,6 +44,10 @@ class LeaseFrameSink final : public alcedo::IFrameSink {
   void SetNextFramePreviewMetadata(const FramePreviewMetadata& metadata) override;
 
   void SetViewState(const ViewerViewState& state);
+  void SetPresentationAcknowledgementCallback(PresentationAcknowledgement callback);
+  void AcknowledgePresentedFrame(const CompletedFrameLease& frame);
+  [[nodiscard]] auto HasWritableTargetForNextFrame() const -> bool;
+  [[nodiscard]] auto submitted_frame_count() const -> std::uint64_t;
   // Test/production diagnostics: last view state accepted from the controller.
   [[nodiscard]] auto ViewState() const -> ViewerViewState;
   void ClearMappedLease();
@@ -54,7 +63,13 @@ class LeaseFrameSink final : public alcedo::IFrameSink {
   mutable std::mutex mutex_;
   int width_ = 0;
   int height_ = 0;
+  // Last image session identity for which EnsureSize published a target request.
+  // Re-sync on every new image/session generation even when width/height match the
+  // previous image (Phase 5B equal-output-size geometry).
+  std::uint64_t last_sized_image_generation_ = 0;
+  std::uint64_t last_sized_image_identity_   = 0;
   bool has_mapped_lease_ = false;
+  std::optional<WritableTargetLease> prepared_lease_;
   bool unmapped_pending_submit_ = false;
   WritableTargetLease mapped_lease_{};
   FramePresentationMode pending_presentation_mode_ = FramePresentationMode::FullFrame;
@@ -62,6 +77,9 @@ class LeaseFrameSink final : public alcedo::IFrameSink {
   FramePreviewMetadata pending_preview_metadata_{};
   bool pending_preview_metadata_valid_ = false;
   ViewerViewState view_state_{};
+  PresentationAcknowledgement presentation_acknowledgement_{};
+  std::uint64_t last_acknowledged_request_id_ = 0;
+  std::uint64_t submitted_frame_count_ = 0;
 };
 
 }  // namespace alcedo::editor_rhi

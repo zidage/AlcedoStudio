@@ -548,6 +548,84 @@ TEST(EditorOverlayInteractionTest, ResetPresentationStateClearsCropRoiAndMode) {
   EXPECT_EQ(controller.renderReferenceHeight(), 0);
 }
 
+// Phase 5B: two source images with different dimensions can share the same
+// pipeline output size; EnsureSize must still re-emit targetSizeRequested so
+// render-reference geometry is not stuck on the previous image's source size.
+TEST(EditorOverlayInteractionTest, EqualOutputSizeImageSwitchResyncsRenderReference) {
+  EditorViewportItem viewport;
+  viewport.setImageIdentity(10);
+  viewport.setImageGeneration(1);
+
+  int target_size_signals = 0;
+  int last_w              = 0;
+  int last_h              = 0;
+  QObject::connect(&viewport, &EditorViewportItem::targetSizeRequested, &viewport,
+                   [&](int w, int h) {
+                     ++target_size_signals;
+                     last_w = w;
+                     last_h = h;
+                   });
+
+  auto* sink = viewport.frameSink();
+  ASSERT_NE(sink, nullptr);
+
+  // Image A: source 4000x3000, pipeline output 800x600.
+  sink->EnsureSize(800, 600);
+  EXPECT_EQ(target_size_signals, 1);
+  EXPECT_EQ(last_w, 800);
+  EXPECT_EQ(last_h, 600);
+
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  controller.setImageSize(4000, 3000);
+  controller.forceRenderReferenceSize(800, 600);
+  EXPECT_EQ(controller.renderReferenceWidth(), 800);
+  EXPECT_EQ(controller.renderReferenceHeight(), 600);
+
+  // Switch to image B: different source size, same requested output size.
+  viewport.setImageIdentity(20);
+  viewport.setImageGeneration(2);
+  controller.resetPresentationStateForNewImage();
+  controller.setImageSize(6000, 4000);
+  // Interim source-size fallback (production QML path).
+  controller.setRenderReferenceSize(6000, 4000);
+  EXPECT_EQ(controller.renderReferenceWidth(), 6000);
+
+  // EnsureSize with equal output dimensions must still re-emit for the new
+  // session generation so forceRenderReferenceSize can restore pipeline size.
+  sink->EnsureSize(800, 600);
+  EXPECT_EQ(target_size_signals, 2);
+  EXPECT_EQ(last_w, 800);
+  EXPECT_EQ(last_h, 600);
+
+  controller.forceRenderReferenceSize(last_w, last_h);
+  EXPECT_EQ(controller.renderReferenceWidth(), 800);
+  EXPECT_EQ(controller.renderReferenceHeight(), 600);
+
+  // Same generation + same size is a true no-op.
+  sink->EnsureSize(800, 600);
+  EXPECT_EQ(target_size_signals, 2);
+}
+
+TEST(EditorOverlayInteractionTest, ForceRenderReferenceSizeReappliesEqualDimensions) {
+  EditorInteractionController controller;
+  controller.setViewportMetrics(640, 480, 1.0);
+  controller.setImageSize(1000, 800);
+  controller.setRenderReferenceSize(512, 384);
+  EXPECT_EQ(controller.renderReferenceWidth(), 512);
+
+  QSignalSpy geometry_spy(&controller, &EditorInteractionController::imageGeometryChanged);
+  // setRenderReferenceSize with equal size is a no-op.
+  controller.setRenderReferenceSize(512, 384);
+  EXPECT_EQ(geometry_spy.count(), 0);
+
+  // forceRenderReferenceSize always notifies (equal-output-size image switch).
+  controller.forceRenderReferenceSize(512, 384);
+  EXPECT_GE(geometry_spy.count(), 1);
+  EXPECT_EQ(controller.renderReferenceWidth(), 512);
+  EXPECT_EQ(controller.renderReferenceHeight(), 384);
+}
+
 TEST(EditorOverlayInteractionTest, ReconcileViewportMetricsEmitsViewChanged) {
   EditorInteractionController controller;
   controller.setViewportMetrics(800, 600, 1.0);

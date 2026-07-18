@@ -35,6 +35,12 @@ auto FramePresentationBroker::GenerationMatches(const TargetGeneration& actual,
          (expected.image_identity == 0 || actual.image_identity == expected.image_identity);
 }
 
+auto FramePresentationBroker::SameRequestTarget(const WritableTargetRequest& lhs,
+                                                const WritableTargetRequest& rhs) -> bool {
+  return lhs.dimensions == rhs.dimensions && lhs.image_generation == rhs.image_generation &&
+         lhs.image_identity == rhs.image_identity;
+}
+
 auto FramePresentationBroker::IsNewerFrame(const CompletedFrameLease& candidate,
                                            const CompletedFrameLease& current,
                                            std::uint64_t candidate_sequence,
@@ -166,19 +172,17 @@ auto FramePresentationBroker::PublishWritableTarget(WritableTargetLease lease) -
         return SameTarget(record.lease, lease);
       });
   if (duplicate != targets_.end()) {
+    target_ready_.notify_all();
     return true;
   }
   targets_.push_back(TargetRecord{std::move(lease), TargetState::Available, false});
+  target_ready_.notify_all();
   return true;
 }
 
-auto FramePresentationBroker::TryAcquireWritableTarget(const WritableTargetRequest& request)
+auto FramePresentationBroker::TryAcquireWritableTargetLocked(const WritableTargetRequest& request)
     -> std::optional<WritableTargetLease> {
-  std::lock_guard lock(mutex_);
   if (shutdown_ || !consumer_available_ || !request.valid()) {
-    if (request.valid() && !shutdown_) {
-      pending_requests_.push_back(request);
-    }
     return std::nullopt;
   }
   if (current_image_generation_ != 0 &&
@@ -216,8 +220,75 @@ auto FramePresentationBroker::TryAcquireWritableTarget(const WritableTargetReque
     return target.lease;
   }
 
-  pending_requests_.push_back(request);
   return std::nullopt;
+}
+
+auto FramePresentationBroker::TryAcquireWritableTarget(const WritableTargetRequest& request)
+    -> std::optional<WritableTargetLease> {
+  std::lock_guard lock(mutex_);
+  auto lease = TryAcquireWritableTargetLocked(request);
+  if (!lease.has_value() && request.valid() && !shutdown_) {
+    pending_requests_.push_back(request);
+  }
+  return lease;
+}
+
+auto FramePresentationBroker::WaitAcquireWritableTarget(const WritableTargetRequest& request)
+    -> std::optional<WritableTargetLease> {
+  if (!request.valid()) {
+    return std::nullopt;
+  }
+  std::unique_lock lock(mutex_);
+  target_ready_.wait(lock, [&] {
+    if (shutdown_ || !consumer_available_ ||
+        (current_image_generation_ != 0 &&
+         request.image_generation != current_image_generation_) ||
+        (current_image_identity_ != 0 && request.image_identity != 0 &&
+         request.image_identity != current_image_identity_)) {
+      return true;
+    }
+    if (std::any_of(failed_requests_.begin(), failed_requests_.end(), [&](const auto& failed) {
+          return SameRequestTarget(failed, request);
+        })) {
+      return true;
+    }
+    return std::any_of(targets_.begin(), targets_.end(), [&](const TargetRecord& record) {
+      return record.state == TargetState::Available && !record.release_when_idle &&
+             record.lease.dimensions == request.dimensions &&
+             record.lease.generation.image_generation == request.image_generation &&
+             record.lease.generation.image_identity == request.image_identity;
+    });
+  });
+
+  const auto failed = std::find_if(failed_requests_.begin(), failed_requests_.end(),
+                                   [&](const auto& entry) {
+                                     return SameRequestTarget(entry, request);
+                                   });
+  if (failed != failed_requests_.end()) {
+    failed_requests_.erase(failed);
+    return std::nullopt;
+  }
+  return TryAcquireWritableTargetLocked(request);
+}
+
+auto FramePresentationBroker::HasWritableTarget(const WritableTargetRequest& request) const
+    -> bool {
+  if (!request.valid()) {
+    return false;
+  }
+  std::lock_guard lock(mutex_);
+  if (shutdown_ || !consumer_available_) {
+    return false;
+  }
+  return std::any_of(targets_.begin(), targets_.end(), [&](const TargetRecord& record) {
+    return record.state == TargetState::Available && !record.release_when_idle &&
+           record.lease.dimensions == request.dimensions &&
+           record.lease.generation.image_generation == request.image_generation &&
+           record.lease.generation.image_identity == request.image_identity &&
+           (request.layer_generation == 0 ||
+            record.lease.generation.layer_generation == 0 ||
+            record.lease.generation.layer_generation == request.layer_generation);
+  });
 }
 
 auto FramePresentationBroker::TryAcquireWritableTarget() -> std::optional<WritableTargetLease> {
@@ -261,6 +332,7 @@ void FramePresentationBroker::AbandonProducerWrite(const WritableTargetLease& le
   } else {
     record->state = TargetState::Available;
   }
+  target_ready_.notify_all();
 }
 
 auto FramePresentationBroker::SubmitCompletedFrame(CompletedFrameLease frame) -> bool {
@@ -436,9 +508,29 @@ void FramePresentationBroker::CompleteRendererConsumption(const CompletedFrameLe
         target->lease.lifetime_token->renderer_complete.store(false, std::memory_order_release);
         target->lease.lifetime_token->producer_complete.store(false, std::memory_order_release);
       }
-      last_presented_image_generation_ = frame.generation.image_generation;
     }
   }
+  target_ready_.notify_all();
+}
+
+auto FramePresentationBroker::AcknowledgeFramePresented(const CompletedFrameLease& frame) -> bool {
+  if (!frame.valid()) {
+    return false;
+  }
+  std::lock_guard lock(mutex_);
+  const auto* target = FindTargetLocked(frame.target);
+  if (!target || target->state != TargetState::RendererConsuming ||
+      !AcceptsFrameLocked(frame)) {
+    return false;
+  }
+  if (frame.presentation_request_id != 0 &&
+      last_presented_request_id_ == frame.presentation_request_id) {
+    return false;
+  }
+  last_presented_image_generation_ = frame.generation.image_generation;
+  last_presented_request_id_       = frame.presentation_request_id;
+  ++presented_frame_count_;
+  return true;
 }
 
 void FramePresentationBroker::InvalidateLocked(bool bump_target_generation) {
@@ -471,7 +563,15 @@ void FramePresentationBroker::InvalidateLocked(bool bump_target_generation) {
   }
   last_accepted_preview_generation_.fill(0);
   last_accepted_detail_serial_.fill(0);
-  pending_requests_.clear();
+  // A target-generation rebuild does not invalidate producer requests: they
+  // describe image/layer/size, not a native target generation. Keeping them is
+  // the QQuick equivalent of the legacy blocking RequestResize handshake.
+  // Image/session invalidation and consumer teardown still discard them.
+  if (!bump_target_generation) {
+    pending_requests_.clear();
+    failed_requests_.clear();
+  }
+  target_ready_.notify_all();
 }
 
 void FramePresentationBroker::SetConsumerAvailable(bool available) {
@@ -483,6 +583,7 @@ void FramePresentationBroker::SetConsumerAvailable(bool available) {
   if (!available) {
     InvalidateLocked(false);
   }
+  target_ready_.notify_all();
 }
 
 void FramePresentationBroker::InvalidateTargetGeneration() {
@@ -508,6 +609,7 @@ void FramePresentationBroker::Shutdown() {
   shutdown_ = true;
   consumer_available_ = false;
   InvalidateLocked(false);
+  target_ready_.notify_all();
 }
 
 auto FramePresentationBroker::DrainReleasedTargets() -> std::vector<WritableTargetLease> {
@@ -526,10 +628,23 @@ void FramePresentationBroker::NoteTargetRequest(const WritableTargetRequest& req
     return;
   }
   std::lock_guard lock(mutex_);
-  if (shutdown_ || !consumer_available_) {
+  if (shutdown_) {
     return;
   }
+  // Preserve a producer's exact-size request while the window is being
+  // exposed. The render thread drains it after consumer availability flips;
+  // dropping it here can strand the first native frame when logical and
+  // device-pixel viewport sizes differ.
   pending_requests_.push_back(request);
+}
+
+void FramePresentationBroker::FailTargetRequest(const WritableTargetRequest& request) {
+  if (!request.valid()) {
+    return;
+  }
+  std::lock_guard lock(mutex_);
+  failed_requests_.push_back(request);
+  target_ready_.notify_all();
 }
 
 auto FramePresentationBroker::DrainTargetRequests() -> std::vector<WritableTargetRequest> {
@@ -574,6 +689,8 @@ auto FramePresentationBroker::DiagnosticsSnapshot() const -> Diagnostics {
                      current_image_generation_,
                      current_image_identity_,
                      last_presented_image_generation_,
+                     last_presented_request_id_,
+                     presented_frame_count_,
                      dropped_stale_frame_count_,
                      targets_.size(),
                      available,

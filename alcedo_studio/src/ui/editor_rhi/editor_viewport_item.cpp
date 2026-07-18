@@ -69,6 +69,14 @@ auto EditorViewportItem::lastPresentedImageGeneration() const -> qulonglong {
   return broker_->DiagnosticsSnapshot().last_presented_image_generation;
 }
 
+auto EditorViewportItem::lastPresentedRequestId() const -> qulonglong {
+  return broker_->DiagnosticsSnapshot().last_presented_request_id;
+}
+
+auto EditorViewportItem::presentedFrameCount() const -> qulonglong {
+  return broker_->DiagnosticsSnapshot().presented_frame_count;
+}
+
 auto EditorViewportItem::droppedStaleFrameCount() const -> qulonglong {
   return broker_->DiagnosticsSnapshot().dropped_stale_frame_count;
 }
@@ -194,10 +202,9 @@ void EditorViewportItem::requestPresentUpdateOnGuiThread() {
   QMetaObject::invokeMethod(
       this,
       [this] {
-        if (update_pending_) {
-          return;
-        }
-        update_pending_ = true;
+        // QQuickItem already coalesces update requests. A separate sticky flag
+        // can remain set while the item is hidden and suppress the first update
+        // after exposure, stranding a producer waiting for its native target.
         update();
         if (QQuickWindow* w = window()) {
           w->requestUpdate();
@@ -326,14 +333,23 @@ void EditorViewportItem::notifyDiagnosticsChanged() {
   const auto diag = broker_->DiagnosticsSnapshot();
   const bool available = diag.consumer_available;
   const auto target_gen = diag.target_generation;
+  const auto presented_image_gen = diag.last_presented_image_generation;
+  const auto presented_request_id = diag.last_presented_request_id;
+  const auto presented_frame_count = diag.presented_frame_count;
   const auto dropped = diag.dropped_stale_frame_count;
   const int live = static_cast<int>(diag.live_target_count);
   if (available == last_diagnostics_available_ && target_gen == last_diag_target_gen_ &&
+      presented_image_gen == last_diag_presented_image_gen_ &&
+      presented_request_id == last_diag_presented_request_id_ &&
+      presented_frame_count == last_diag_presented_frame_count_ &&
       dropped == last_diag_dropped_ && live == last_diag_live_targets_) {
     return;
   }
   last_diagnostics_available_ = available;
   last_diag_target_gen_ = target_gen;
+  last_diag_presented_image_gen_ = presented_image_gen;
+  last_diag_presented_request_id_ = presented_request_id;
+  last_diag_presented_frame_count_ = presented_frame_count;
   last_diag_dropped_ = dropped;
   last_diag_live_targets_ = live;
   QMetaObject::invokeMethod(this, [this] { emit DiagnosticsChanged(); }, Qt::QueuedConnection);

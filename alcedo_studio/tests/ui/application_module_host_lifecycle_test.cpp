@@ -111,7 +111,6 @@ TEST_F(ApplicationModuleHostLifecycleTests,
         {"search", "alcedo::ui::SearchController*"},
         {"importExport", "alcedo::ui::ImportExportHandler*"},
         {"nikonHeRecovery", "alcedo::ui::NikonHeRecoveryController*"},
-        {"editor", "alcedo::ui::EditorController*"},
         {"backgroundTasks", "alcedo::ui::BackgroundTaskController*"},
         {"interactionPolicy", "alcedo::ui::InteractionPolicyController*"},
         {"modelDownload", "alcedo::ui::ModelDownloadController*"},
@@ -127,6 +126,8 @@ TEST_F(ApplicationModuleHostLifecycleTests,
       ASSERT_GE(index, 0) << name;
       EXPECT_STREQ(meta->property(index).typeName(), type_name) << name;
     }
+    EXPECT_LT(meta->indexOfProperty("editor"), 0)
+        << "Legacy EditorController must not be reachable from QML";
   }
 }
 

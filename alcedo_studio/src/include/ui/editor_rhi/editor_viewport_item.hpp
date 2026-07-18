@@ -40,6 +40,9 @@ class EditorViewportItem : public QQuickRhiItem {
   Q_PROPERTY(qulonglong targetGeneration READ targetGeneration NOTIFY DiagnosticsChanged)
   Q_PROPERTY(qulonglong lastPresentedImageGeneration READ lastPresentedImageGeneration
                  NOTIFY DiagnosticsChanged)
+  Q_PROPERTY(qulonglong lastPresentedRequestId READ lastPresentedRequestId
+                 NOTIFY DiagnosticsChanged)
+  Q_PROPERTY(qulonglong presentedFrameCount READ presentedFrameCount NOTIFY DiagnosticsChanged)
   Q_PROPERTY(qulonglong droppedStaleFrameCount READ droppedStaleFrameCount
                  NOTIFY DiagnosticsChanged)
   Q_PROPERTY(int liveTargetCount READ liveTargetCount NOTIFY DiagnosticsChanged)
@@ -59,6 +62,8 @@ class EditorViewportItem : public QQuickRhiItem {
   }
   [[nodiscard]] auto targetGeneration() const -> qulonglong;
   [[nodiscard]] auto lastPresentedImageGeneration() const -> qulonglong;
+  [[nodiscard]] auto lastPresentedRequestId() const -> qulonglong;
+  [[nodiscard]] auto presentedFrameCount() const -> qulonglong;
   [[nodiscard]] auto droppedStaleFrameCount() const -> qulonglong;
   [[nodiscard]] auto liveTargetCount() const -> int;
   [[nodiscard]] auto presentationAvailable() const -> bool;
@@ -147,9 +152,11 @@ class EditorViewportItem : public QQuickRhiItem {
   std::atomic<int> view_state_push_count_{0};
   QQuickWindow* attached_window_ = nullptr;
   bool scene_graph_ready_ = false;
-  bool update_pending_ = false;
   bool last_diagnostics_available_ = false;
   qulonglong last_diag_target_gen_ = 0;
+  qulonglong last_diag_presented_image_gen_ = 0;
+  qulonglong last_diag_presented_request_id_ = 0;
+  qulonglong last_diag_presented_frame_count_ = 0;
   qulonglong last_diag_dropped_ = 0;
   int last_diag_live_targets_ = 0;
 };

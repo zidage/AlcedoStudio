@@ -10,6 +10,8 @@
 #include <chrono>
 #include <string>
 
+#include "app/editor_session_bootstrap.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_production.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 
@@ -75,13 +77,51 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   adjustment_transfer_ = std::make_unique<AdjustmentTransferController>(
       project_.get(), library_.get(), import_export_.get(), this);
   RecordConstruction("AdjustmentTransferController", adjustment_transfer_.get());
-  // Phase 5A: application-layer session + render coordinator before the QML facade.
-  editor_session_runtime_ = alcedo::EditorSessionRuntime::Create();
+  // Phase 5B: wire production first-frame ports into the session runtime.
+  // The production scheduler accepts intents without completing when no real
+  // image path / test producer is available (shell-compatible Loading state).
+  {
+    auto production_pipeline  = std::make_shared<EditorSessionProductionPipelinePort>();
+    auto production_history   = std::make_shared<EditorSessionProductionHistoryPort>();
+    auto production_scheduler = std::make_shared<EditorSessionProductionSchedulerPort>();
+    production_scheduler->SetPipelinePort(production_pipeline);
+
+    EditorSessionProductionServices production_services;
+    production_services.pipeline_service =
+        [this]() -> std::shared_ptr<alcedo::PipelineMgmtService> {
+      return project_ ? project_->handler().pipeline_service() : nullptr;
+    };
+    production_services.history_service =
+        [this]() -> std::shared_ptr<alcedo::EditHistoryMgmtService> {
+      return project_ ? project_->handler().history_service() : nullptr;
+    };
+    production_services.image_pool = [this]() -> std::shared_ptr<alcedo::ImagePoolService> {
+      if (!project_ || !project_->handler().project()) {
+        return nullptr;
+      }
+      return project_->handler().project()->GetImagePoolService();
+    };
+    production_pipeline->SetServices(production_services);
+    production_history->SetServices(production_services);
+    production_scheduler->SetServices(production_services);
+
+    editor_session_runtime_ = alcedo::EditorSessionRuntime::CreateWithPorts(
+        production_pipeline, production_history,
+        std::make_shared<alcedo::EditorSessionBootstrapTaskPort>(),
+        std::make_shared<alcedo::EditorSessionBootstrapJournalPort>(), production_scheduler);
+    production_scheduler->SetCoordinator(editor_session_runtime_->coordinator);
+    editor_session_production_scheduler_ = std::move(production_scheduler);
+  }
   RecordConstruction("EditorSessionService", editor_session_runtime_->service.get());
   RecordConstruction("EditorRenderCoordinator", editor_session_runtime_->coordinator.get());
   editor_session_ = std::make_unique<EditorSessionController>(
       editor_.get(), editor_session_runtime_->service.get(), this);
   RecordConstruction("EditorSessionController", editor_session_.get());
+  if (editor_session_production_scheduler_) {
+    editor_session_production_scheduler_->SetSinkResolver([this]() -> alcedo::IFrameSink* {
+      return editor_session_ ? editor_session_->presentation_frame_sink() : nullptr;
+    });
+  }
   workspace_router_ = std::make_unique<WorkspaceRouter>(editor_session_.get(), this);
   RecordConstruction("WorkspaceRouter", workspace_router_.get());
 

@@ -314,6 +314,19 @@ void EditorInteractionController::setRenderReferenceSize(int width, int height) 
   emit viewStateChanged();
 }
 
+void EditorInteractionController::forceRenderReferenceSize(int width, int height) {
+  width  = std::max(0, width);
+  height = std::max(0, height);
+  // Always write and notify so equal-output-size image switches re-bind crop/zoom
+  // math to the pipeline output, even when the previous image used the same size.
+  viewer_state_.SetRenderReferenceSize(width, height);
+  reconcileViewTransformForRenderReference();
+  updateViewportRenderRegionCache();
+  emit imageGeometryChanged();
+  emit overlayGeometryChanged();
+  emit viewStateChanged();
+}
+
 void EditorInteractionController::handleHoverMove(qreal x, qreal y) {
   if (!interaction_enabled_) {
     return;

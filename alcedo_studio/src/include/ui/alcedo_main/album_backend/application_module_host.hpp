@@ -31,6 +31,7 @@
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_production.hpp"
 #include "ui/alcedo_main/album_backend/workspace_router.hpp"
 
 namespace alcedo::ui {
@@ -48,7 +49,8 @@ class ApplicationModuleHost final : public QObject {
   Q_PROPERTY(SearchController* search READ search CONSTANT)
   Q_PROPERTY(ImportExportHandler* importExport READ import_export CONSTANT)
   Q_PROPERTY(NikonHeRecoveryController* nikonHeRecovery READ nikon_he_recovery CONSTANT)
-  Q_PROPERTY(EditorController* editor READ editor CONSTANT)
+  // The legacy EditorController remains C++-only for deletion/i18n compatibility.
+  // QML must use editorSession so it cannot schedule a parallel render path.
   Q_PROPERTY(BackgroundTaskController* backgroundTasks READ background_tasks CONSTANT)
   Q_PROPERTY(InteractionPolicyController* interactionPolicy READ interaction_policy CONSTANT)
   Q_PROPERTY(ModelDownloadController* modelDownload READ model_download CONSTANT)
@@ -127,6 +129,11 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto editor_render_coordinator() -> alcedo::EditorRenderCoordinator* {
     return editor_session_runtime_ ? editor_session_runtime_->coordinator.get() : nullptr;
   }
+  /// Phase 5B production first-frame scheduler (null when runtime uses bootstrap only).
+  [[nodiscard]] auto editor_session_production_scheduler()
+      -> EditorSessionProductionSchedulerPort* {
+    return editor_session_production_scheduler_.get();
+  }
 
   // Explicitly idempotent so the application can shut down modules before the
   // QML engine is torn down. The destructor calls the same path.
@@ -158,9 +165,10 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<NikonHeRecoveryController>         nikon_he_recovery_;
   std::unique_ptr<EditorController>                  editor_;
   std::unique_ptr<AdjustmentTransferController>      adjustment_transfer_;
-  std::unique_ptr<alcedo::EditorSessionRuntime>      editor_session_runtime_;
-  std::unique_ptr<EditorSessionController>           editor_session_;
-  std::unique_ptr<WorkspaceRouter>                   workspace_router_;
+  std::unique_ptr<alcedo::EditorSessionRuntime>          editor_session_runtime_;
+  std::shared_ptr<EditorSessionProductionSchedulerPort>  editor_session_production_scheduler_;
+  std::unique_ptr<EditorSessionController>               editor_session_;
+  std::unique_ptr<WorkspaceRouter>                       workspace_router_;
 
   LifecycleObserver lifecycle_observer_{};
   bool              shutting_down_ = false;

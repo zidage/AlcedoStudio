@@ -178,6 +178,10 @@ TEST(FramePresentationBrokerTest, AcquiresSubmitsAndConsumesNewestCompatibleLaye
   req.image_identity = 100;
   req.layer_generation = 1;
 
+  // Available targets form a shared same-size pool. A quality request must be
+  // considered ready even when the target was originally tagged interactive;
+  // acquisition retags it for the producer.
+  EXPECT_TRUE(broker.HasWritableTarget(req));
   auto target = broker.TryAcquireWritableTarget(req);
   ASSERT_TRUE(target.has_value());
   target->layer = LeaseFrameLayer::QualityBase;
@@ -191,13 +195,18 @@ TEST(FramePresentationBrokerTest, AcquiresSubmitsAndConsumesNewestCompatibleLaye
   CompletedFrameLease newer = MakeCompleted(*second_target, 2);
   ASSERT_TRUE(broker.SubmitCompletedFrame(newer));
 
-  const auto frame = broker.ConsumeNewestCompletedFrame(
+  auto frame = broker.ConsumeNewestCompletedFrame(
       TargetGeneration{gen, 7, 0, 100}, LeaseFrameLayer::QualityBase);
   ASSERT_TRUE(frame.has_value());
   EXPECT_EQ(frame->preview_generation, 2u);
   EXPECT_GE(broker.DiagnosticsSnapshot().dropped_stale_frame_count, 1u);
+  frame->presentation_request_id = 42;
+  EXPECT_TRUE(broker.AcknowledgeFramePresented(*frame));
+  EXPECT_FALSE(broker.AcknowledgeFramePresented(*frame));
   broker.CompleteRendererConsumption(*frame);
   EXPECT_EQ(broker.DiagnosticsSnapshot().last_presented_image_generation, 7u);
+  EXPECT_EQ(broker.DiagnosticsSnapshot().last_presented_request_id, 42u);
+  EXPECT_EQ(broker.DiagnosticsSnapshot().presented_frame_count, 1u);
 }
 
 TEST(FramePresentationBrokerTest, DroppedCompletedFramesReturnTargetsToAvailable) {
@@ -374,6 +383,23 @@ TEST(FramePresentationBrokerTest, AcquireRequestRecordsPendingWhenNoSizeMatch) {
   const auto pending = broker.DrainTargetRequests();
   ASSERT_FALSE(pending.empty());
   EXPECT_EQ(pending.front().dimensions.width, 128);
+}
+
+TEST(FramePresentationBrokerTest, TargetRequestSurvivesInitialConsumerExposure) {
+  FramePresentationBroker broker(EditorBackend::Cuda);
+  broker.SetConsumerAvailable(false);
+
+  WritableTargetRequest request;
+  request.dimensions = {1536, 1024};
+  request.image_generation = 4;
+  request.image_identity = 12;
+  broker.NoteTargetRequest(request);
+
+  broker.SetConsumerAvailable(true);
+  const auto pending = broker.DrainTargetRequests();
+  ASSERT_EQ(pending.size(), 1u);
+  EXPECT_EQ(pending.front().dimensions.width, 1536);
+  EXPECT_EQ(pending.front().image_generation, 4u);
 }
 
 TEST(FramePresentationBrokerTest, BackendMismatchRejectsPublish) {

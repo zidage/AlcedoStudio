@@ -7,6 +7,9 @@
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "ui/editor_rhi/lease_target_adapters.hpp"
 
+#include <QDebug>
+#include <QMetaObject>
+
 namespace alcedo::editor_rhi {
 
 LeaseFrameSink::LeaseFrameSink(EditorViewportItem* item) : item_(item) {}
@@ -24,6 +27,12 @@ void LeaseFrameSink::ClearMappedLease() {
     has_mapped_lease_ = false;
     unmapped_pending_submit_ = false;
     mapped_lease_ = {};
+  }
+  if (prepared_lease_) {
+    if (item_) {
+      item_->abandonProducerWrite(*prepared_lease_);
+    }
+    prepared_lease_.reset();
   }
 }
 
@@ -61,26 +70,47 @@ void LeaseFrameSink::EnsureSize(int width, int height) {
   if (width <= 0 || height <= 0) {
     return;
   }
+  const std::uint64_t image_generation = item_ ? item_->imageGeneration() : 0;
+  const std::uint64_t image_identity   = item_ ? item_->imageIdentity() : 0;
+  bool geometry_changed = false;
+  WritableTargetRequest request;
   {
     std::lock_guard lock(mutex_);
-    if (width_ == width && height_ == height) {
+    if (has_mapped_lease_ || prepared_lease_) {
       return;
     }
-    width_ = width;
-    height_ = height;
+    // Same pixel size is not enough for geometry notification when the image
+    // session changes, but every frame still reserves its own write slot.
+    geometry_changed = width_ != width || height_ != height ||
+                       last_sized_image_generation_ != image_generation ||
+                       last_sized_image_identity_ != image_identity;
+    width_                       = width;
+    height_                      = height;
+    last_sized_image_generation_ = image_generation;
+    last_sized_image_identity_   = image_identity;
+    const LeaseFrameLayer layer = pending_preview_metadata_valid_
+                                      ? LayerForMetadata(pending_preview_metadata_)
+                                      : LeaseFrameLayer::InteractivePrimary;
+    request = CurrentRequest(layer);
   }
   if (item_) {
-    // Queue a target request so the render thread can publish matching leases.
-    WritableTargetRequest request;
-    request.layer = LeaseFrameLayer::InteractivePrimary;
-    request.dimensions = {width, height};
-    request.image_generation = item_->imageGeneration();
-    request.image_identity = item_->imageIdentity();
+    // This is the QQuick render-thread form of the pre-refactor viewer's
+    // BlockingQueuedConnection resize: reserve the exact native slot before
+    // CUDA/OpenCL dispatch begins, so target creation never races GPU work.
     if (item_->broker()) {
       item_->broker()->NoteTargetRequest(request);
     }
-    emit item_->targetSizeRequested(width, height);
+    if (geometry_changed) {
+      // EnsureSize runs on the pipeline worker. QML handlers must remain on the
+      // item's GUI thread.
+      QMetaObject::invokeMethod(
+          item_, [item = item_, width, height] { emit item->targetSizeRequested(width, height); },
+          Qt::QueuedConnection);
+    }
     item_->requestPresentUpdate();
+    auto lease = item_->broker()->WaitAcquireWritableTarget(request);
+    std::lock_guard lock(mutex_);
+    prepared_lease_ = std::move(lease);
   }
 }
 
@@ -96,12 +126,38 @@ auto LeaseFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain) -> 
   const LeaseFrameLayer layer = pending_preview_metadata_valid_
                                     ? LayerForMetadata(pending_preview_metadata_)
                                     : LeaseFrameLayer::InteractivePrimary;
-  auto lease = item_->tryAcquireWritableTarget(CurrentRequest(layer));
+  const auto request = CurrentRequest(layer);
+  auto lease = std::move(prepared_lease_);
+  prepared_lease_.reset();
+  if (lease.has_value() &&
+      (lease->dimensions != request.dimensions ||
+       lease->generation.image_generation != request.image_generation ||
+       lease->generation.image_identity != request.image_identity)) {
+    item_->abandonProducerWrite(*lease);
+    lease.reset();
+  }
   if (!lease.has_value()) {
-    // Ask the render thread to create matching targets; producer retries later.
-    item_->broker()->NoteTargetRequest(CurrentRequest(layer));
+    lease = item_->tryAcquireWritableTarget(request);
+  }
+  if (!lease.has_value()) {
+    // Pipeline output geometry may only become known at the final GPU stage.
+    // Restore the legacy deterministic resize handshake: the scene-graph thread
+    // publishes a matching native target (or reports failure/lifecycle exit),
+    // and this producer resumes from that explicit result without polling.
+    item_->broker()->NoteTargetRequest(request);
     item_->requestPresentUpdate();
-    return {};
+    qInfo("[EditorPresent] producer waiting for native target %dx%d image=%llu generation=%llu",
+          request.dimensions.width, request.dimensions.height,
+          static_cast<unsigned long long>(request.image_identity),
+          static_cast<unsigned long long>(request.image_generation));
+    lease = item_->broker()->WaitAcquireWritableTarget(request);
+    if (!lease.has_value()) {
+      qWarning("[EditorPresent] native target handshake failed %dx%d", request.dimensions.width,
+               request.dimensions.height);
+      return {};
+    }
+    qInfo("[EditorPresent] producer acquired native target %dx%d", request.dimensions.width,
+          request.dimensions.height);
   }
 
   if (lease->lifetime_token && lease->lifetime_token->cancelled()) {
@@ -175,6 +231,7 @@ void LeaseFrameSink::NotifyFrameReady() {
       frame.layer = LayerForMetadata(pending_preview_metadata_);
       frame.preview_generation = pending_preview_metadata_.preview_generation;
       frame.detail_serial = pending_preview_metadata_.detail_serial;
+      frame.presentation_request_id = pending_preview_metadata_.presentation_request_id;
       frame.roi_x = pending_preview_metadata_.source_roi_norm.x;
       frame.roi_y = pending_preview_metadata_.source_roi_norm.y;
       frame.roi_width = pending_preview_metadata_.source_roi_norm.width;
@@ -192,7 +249,14 @@ void LeaseFrameSink::NotifyFrameReady() {
     mapped_lease_ = {};
   }
   if (item_) {
-    if (!item_->submitCompletedFrame(frame)) {
+    if (item_->submitCompletedFrame(frame)) {
+      qWarning("[EditorPresent] submitted frame request=%llu image=%llu generation=%llu",
+               static_cast<unsigned long long>(frame.presentation_request_id),
+               static_cast<unsigned long long>(frame.generation.image_identity),
+               static_cast<unsigned long long>(frame.generation.image_generation));
+      std::lock_guard lock(mutex_);
+      ++submitted_frame_count_;
+    } else {
       // Stale or cancelled; nothing else to do (broker abandoned the target).
     }
   }
@@ -241,6 +305,45 @@ auto LeaseFrameSink::ViewState() const -> ViewerViewState {
 void LeaseFrameSink::SetViewState(const ViewerViewState& state) {
   std::lock_guard lock(mutex_);
   view_state_ = state;
+}
+
+void LeaseFrameSink::SetPresentationAcknowledgementCallback(
+    PresentationAcknowledgement callback) {
+  std::lock_guard lock(mutex_);
+  presentation_acknowledgement_ = std::move(callback);
+}
+
+void LeaseFrameSink::AcknowledgePresentedFrame(const CompletedFrameLease& frame) {
+  PresentationAcknowledgement callback;
+  {
+    std::lock_guard lock(mutex_);
+    if (frame.presentation_request_id == 0 ||
+        frame.presentation_request_id == last_acknowledged_request_id_) {
+      return;
+    }
+    last_acknowledged_request_id_ = frame.presentation_request_id;
+    callback = presentation_acknowledgement_;
+  }
+  if (callback) {
+    callback(frame.presentation_request_id, frame.generation.image_generation,
+             frame.generation.image_identity);
+  }
+}
+
+auto LeaseFrameSink::HasWritableTargetForNextFrame() const -> bool {
+  if (!item_ || !item_->broker()) {
+    return false;
+  }
+  std::lock_guard lock(mutex_);
+  const LeaseFrameLayer layer = pending_preview_metadata_valid_
+                                    ? LayerForMetadata(pending_preview_metadata_)
+                                    : LeaseFrameLayer::InteractivePrimary;
+  return item_->broker()->HasWritableTarget(CurrentRequest(layer));
+}
+
+auto LeaseFrameSink::submitted_frame_count() const -> std::uint64_t {
+  std::lock_guard lock(mutex_);
+  return submitted_frame_count_;
 }
 
 }  // namespace alcedo::editor_rhi

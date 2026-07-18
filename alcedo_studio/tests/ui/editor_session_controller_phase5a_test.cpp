@@ -267,8 +267,11 @@ TEST(EditorSessionControllerPhase5ATest, RuntimeCoordinatorPresentationUpdatesCo
 
   controller.Open(3, 4);
   EXPECT_EQ(controller.session_state(), EditorSessionState::Loading);
-  ASSERT_FALSE(runtime->scheduler->scheduled().empty());
-  const auto request_id = runtime->scheduler->scheduled().front().request_id;
+  auto* bootstrap_scheduler =
+      dynamic_cast<alcedo::EditorSessionBootstrapSchedulerPort*>(runtime->scheduler.get());
+  ASSERT_NE(bootstrap_scheduler, nullptr);
+  ASSERT_FALSE(bootstrap_scheduler->scheduled().empty());
+  const auto request_id = bootstrap_scheduler->scheduled().front().request_id;
 
   runtime->service->NotifyImageAcquired(runtime->service->identity().session_generation, true);
   EXPECT_EQ(controller.session_state(), EditorSessionState::Loading);
@@ -337,12 +340,17 @@ TEST(EditorSessionControllerPhase5ATest, QmlEditorPathDoesNotIncludePipelineSche
       repo_root / "alcedo_studio/src/include/app/editor_render_coordinator.hpp",
       repo_root / "alcedo_studio/src/include/app/editor_session_bootstrap.hpp",
   };
-  // Temporary Phase 5A exceptions: legacy QWidget editor scheduler callers.
+  // Temporary exceptions:
+  // - legacy QWidget editor scheduler callers (until Phase 5D cutover)
+  // - Phase 5B production IEditorPipelineSchedulerPort implementation (the only
+  //   component allowed to call PipelineScheduler::ScheduleTask for the QML path)
   const std::vector<std::string> exception_substrings = {
       "editor_controller.cpp",
       "editor_controller.hpp",
       "editor_dialog/render/editor_render_coordinator",
       "editor_dialog\\render\\editor_render_coordinator",
+      "editor_session_production.cpp",
+      "editor_session_production.hpp",
   };
 
   const std::vector<std::string> forbidden = {

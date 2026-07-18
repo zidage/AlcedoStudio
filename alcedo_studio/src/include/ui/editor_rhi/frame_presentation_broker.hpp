@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <mutex>
@@ -29,6 +30,8 @@ class FramePresentationBroker final {
     std::uint64_t image_generation = 0;
     std::uint64_t image_identity = 0;
     std::uint64_t last_presented_image_generation = 0;
+    std::uint64_t last_presented_request_id = 0;
+    std::uint64_t presented_frame_count = 0;
     std::uint64_t dropped_stale_frame_count = 0;
     std::size_t live_target_count = 0;
     std::size_t available_target_count = 0;
@@ -48,6 +51,12 @@ class FramePresentationBroker final {
   // viewports return no lease so a pipeline worker can cancel or reschedule.
   [[nodiscard]] auto TryAcquireWritableTarget(const WritableTargetRequest& request)
       -> std::optional<WritableTargetLease>;
+  // Producer-side equivalent of the legacy BlockingQueuedConnection resize
+  // handshake. Waits for an explicit publish/failure/lifecycle result; it does
+  // not guess render-thread latency with a timer.
+  [[nodiscard]] auto WaitAcquireWritableTarget(const WritableTargetRequest& request)
+      -> std::optional<WritableTargetLease>;
+  [[nodiscard]] auto HasWritableTarget(const WritableTargetRequest& request) const -> bool;
 
   // Legacy helper used by older unit tests: acquire any Available target of the
   // current generation. Prefer the request form in production code.
@@ -68,6 +77,9 @@ class FramePresentationBroker final {
                                                  LeaseFrameLayer layer)
       -> std::optional<CompletedFrameLease>;
   void CompleteRendererConsumption(const CompletedFrameLease& frame);
+  // Render-thread acknowledgement. This marks a compatible imported frame as
+  // actually sampled without recycling its target while it remains displayed.
+  auto AcknowledgeFramePresented(const CompletedFrameLease& frame) -> bool;
 
   // Lifecycle operations are safe from the GUI or producer thread. They only
   // mutate broker state and enqueue native-release intents for targets that are
@@ -84,6 +96,7 @@ class FramePresentationBroker final {
 
   // Outstanding producer size requests that the render thread should fulfill.
   void NoteTargetRequest(const WritableTargetRequest& request);
+  void FailTargetRequest(const WritableTargetRequest& request);
   [[nodiscard]] auto DrainTargetRequests() -> std::vector<WritableTargetRequest>;
 
   [[nodiscard]] auto CurrentTargetGeneration() const -> std::uint64_t;
@@ -123,9 +136,14 @@ class FramePresentationBroker final {
   void InvalidateLocked(bool bump_target_generation);
   void RecycleOrReleaseTargetLocked(TargetRecord& record);
   auto FindTargetLocked(const WritableTargetLease& lease) -> TargetRecord*;
+  auto TryAcquireWritableTargetLocked(const WritableTargetRequest& request)
+      -> std::optional<WritableTargetLease>;
+  static auto SameRequestTarget(const WritableTargetRequest& lhs,
+                                const WritableTargetRequest& rhs) -> bool;
   auto AcceptsFrameLocked(const CompletedFrameLease& frame) const -> bool;
 
   mutable std::mutex mutex_;
+  std::condition_variable target_ready_;
   EditorBackend backend_;
   bool consumer_available_ = true;
   bool shutdown_ = false;
@@ -134,6 +152,8 @@ class FramePresentationBroker final {
   std::uint64_t current_image_identity_ = 0;
   std::uint64_t sequence_ = 0;
   std::uint64_t last_presented_image_generation_ = 0;
+  std::uint64_t last_presented_request_id_ = 0;
+  std::uint64_t presented_frame_count_ = 0;
   std::uint64_t dropped_stale_frame_count_ = 0;
   // Per-layer high-water marks so late older edits cannot replace newer results.
   std::array<std::uint64_t, 3> last_accepted_preview_generation_{};
@@ -142,6 +162,7 @@ class FramePresentationBroker final {
   std::deque<CompletedRecord> completed_;
   std::deque<WritableTargetLease> release_queue_;
   std::deque<WritableTargetRequest> pending_requests_;
+  std::deque<WritableTargetRequest> failed_requests_;
 };
 
 }  // namespace alcedo::editor_rhi

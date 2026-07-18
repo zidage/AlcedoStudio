@@ -152,6 +152,7 @@ struct CompletedFrameLease {
   LeaseFrameLayer         layer              = LeaseFrameLayer::InteractivePrimary;
   std::uint64_t           preview_generation = 0;
   std::uint64_t           detail_serial      = 0;
+  std::uint64_t           presentation_request_id = 0;
   float                   roi_x              = 0.0f;
   float                   roi_y              = 0.0f;
   float                   roi_width          = 1.0f;

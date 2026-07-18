@@ -1765,8 +1765,12 @@ add_library(AlbumBackendLib STATIC
     ui/alcedo_main/album_backend/nikon_he_recovery_controller.cpp
     ui/alcedo_main/album_backend/editor_controller.cpp
     ui/alcedo_main/album_backend/editor_session_controller.cpp
+    ui/alcedo_main/album_backend/editor_session_production.cpp
     ui/alcedo_main/album_backend/workspace_router.cpp
     ui/alcedo_main/album_backend/adjustment_transfer_controller.cpp
+    # Phase 5B: reusable dialog-free pipeline helpers for the QML open path.
+    ui/alcedo_main/editor_dialog/controllers/image_controller.cpp
+    ui/alcedo_main/editor_dialog/controllers/pipeline_controller.cpp
     include/ui/alcedo_main/album_backend/application_module_host.hpp
     include/ui/alcedo_main/album_backend/project_module.hpp
     include/ui/alcedo_main/album_backend/library_module.hpp
@@ -1790,8 +1794,11 @@ add_library(AlbumBackendLib STATIC
     include/ui/alcedo_main/album_backend/nikon_he_recovery_types.hpp
     include/ui/alcedo_main/album_backend/editor_controller.hpp
     include/ui/alcedo_main/album_backend/editor_session_controller.hpp
+    include/ui/alcedo_main/album_backend/editor_session_production.hpp
     include/ui/alcedo_main/album_backend/workspace_router.hpp
     include/ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp
+    include/ui/alcedo_main/editor_dialog/controllers/image_controller.hpp
+    include/ui/alcedo_main/editor_dialog/controllers/pipeline_controller.hpp
 )
 
 target_include_directories(AlbumBackendLib
@@ -1828,6 +1835,8 @@ target_link_libraries(AlbumBackendLib
         SleeveFilterService
         FSService
         EditPipeline
+        PipelineScheduler
+        ImageLoader
         xxHash
         CudaDriverRequirements
 )
@@ -1849,8 +1858,7 @@ if(ALCEDO_REAL_WIDGET_EDITOR)
         ui/alcedo_main/editor_dialog/dialog_pipeline.cpp
         ui/alcedo_main/editor_dialog/dialog_ui_state.cpp
         ui/alcedo_main/editor_dialog/state.cpp
-        ui/alcedo_main/editor_dialog/controllers/image_controller.cpp
-        ui/alcedo_main/editor_dialog/controllers/pipeline_controller.cpp
+        # image_controller / pipeline_controller live in AlbumBackendLib (Phase 5B).
         ui/alcedo_main/editor_dialog/controllers/history_controller.cpp
         ui/alcedo_main/editor_dialog/controllers/lut_controller.cpp
         ui/alcedo_main/editor_dialog/controllers/render_controller.cpp

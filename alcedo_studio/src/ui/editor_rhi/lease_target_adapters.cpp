@@ -26,6 +26,7 @@
 #include <cuda_runtime_api.h>
 
 #include "ui/edit_viewer/d3d_cuda_interop_utils.hpp"
+#include "ui/editor_rhi/cuda_adapter_discovery.hpp"
 #endif
 
 #if defined(HAVE_OPENCL)
@@ -54,6 +55,7 @@ struct CudaD3D11LeaseAdapter::State {
   };
 
   ID3D11Device* device = nullptr;
+  int cuda_device = -1;
   std::vector<std::unique_ptr<Target>> targets;
 };
 #else
@@ -106,6 +108,19 @@ auto CudaD3D11LeaseAdapter::CreateTarget(QRhi* rhi, const QSize& size,
   auto* device = native ? static_cast<ID3D11Device*>(native->dev) : nullptr;
   if (!device) {
     last_error_ = "QRhi did not expose its D3D11 device";
+    return std::nullopt;
+  }
+  int cuda_device = -1;
+  const auto discovery = DiscoverCudaAdapters();
+  for (const auto& candidate : discovery.devices) {
+    if (D3D11DeviceMatchesCudaDevice(device, candidate.device_index)) {
+      cuda_device = candidate.device_index;
+      break;
+    }
+  }
+  if (cuda_device < 0 ||
+      !BindCudaDeviceOnCurrentThread(cuda_device, "CudaD3D11LeaseAdapter::CreateTarget")) {
+    last_error_ = "D3D11 device does not have a compatible CUDA device";
     return std::nullopt;
   }
 
@@ -184,6 +199,7 @@ auto CudaD3D11LeaseAdapter::CreateTarget(QRhi* rhi, const QSize& size,
   target->native_handle = reinterpret_cast<std::uintptr_t>(target->texture.Get());
   target->lifetime_token = std::make_shared<LeaseLifetimeToken>();
   state_->device = device;
+  state_->cuda_device = cuda_device;
   state_->targets.push_back(std::move(target));
 
   WritableTargetLease lease;

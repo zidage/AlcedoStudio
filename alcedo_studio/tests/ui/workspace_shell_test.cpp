@@ -24,22 +24,34 @@
 #include <QVariant>
 #include <QWheelEvent>
 
+#ifdef HAVE_CUDA
+#include <cuda_runtime_api.h>
+#endif
+#ifdef HAVE_OPENCL
+#include <CL/cl.h>
+#include "opencl/opencl_context.hpp"
+#endif
+
 #include <cmath>
 #include <filesystem>
 #include <memory>
 #include <sstream>
 #include <vector>
 
+#include "app/editor_render_intent.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_production.hpp"
 #include "ui/album_backend_seeded_project_fixture.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/alcedo_main/editor_dialog/editor_dialog.hpp"
 #include "ui/alcedo_main/language_manager.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/edit_viewer/view_transform_controller.hpp"
+#include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
+#include "ui/editor_rhi/frame_presentation_broker.hpp"
 #include "ui/editor_rhi/frame_presentation_lease.hpp"
 #include "ui/editor_rhi/lease_frame_sink.hpp"
 
@@ -762,8 +774,6 @@ TEST_F(WorkspaceShellTests, ProductionFrameSinkAcceptsThreeLayerFrameSubmissions
   ASSERT_NE(viewport, nullptr);
 
   // Production path: session → presentation_viewport → frameSink → EnsureSize.
-  // Full RAW decode is Phase 4A; this verifies the attach surface delivers
-  // InteractivePrimary / QualityBase / DetailPatch metadata into the sink.
   sink->EnsureSize(64, 48);
   EXPECT_EQ(sink->GetWidth(), 64);
   EXPECT_EQ(sink->GetHeight(), 48);
@@ -778,9 +788,6 @@ TEST_F(WorkspaceShellTests, ProductionFrameSinkAcceptsThreeLayerFrameSubmissions
     sink->SetNextFramePreviewMetadata(meta);
     sink->SetNextFramePresentationMode(i == 0 ? FramePresentationMode::RoiFrame
                                               : FramePresentationMode::FullFrame);
-    // Without a render-thread published target, Map returns empty — that is
-    // expected before scene-graph target publish. The production contract is
-    // that the sink is the same object pipeline code will Map/Unmap against.
     EXPECT_EQ(session->presentation_frame_sink(), sink);
   }
 
@@ -789,6 +796,133 @@ TEST_F(WorkspaceShellTests, ProductionFrameSinkAcceptsThreeLayerFrameSubmissions
   ProcessEvents(40);
   EXPECT_EQ(session->presentation_frame_sink(), sink);
   EXPECT_EQ(viewport->imageIdentity(), 60ull);
+
+  EXPECT_TRUE(loaded->qml_warnings.empty())
+      << loaded->qml_warnings.front().toString().toStdString();
+}
+
+// Phase 5B: write native GPU leases through the production sink and require the
+// actual RHI render pass to acknowledge the exact coordinator request.
+TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameData) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  if (QGuiApplication::platformName() == QStringLiteral("offscreen")) {
+    GTEST_SKIP() << "Native RHI coverage runs in EditorRealRawGpuE2eTest";
+  }
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+
+  auto* production_scheduler = loaded->host.editor_session_production_scheduler();
+  ASSERT_NE(production_scheduler, nullptr);
+
+  std::atomic<int> written_frame_count{0};
+  production_scheduler->SetTestFrameProducer(
+      [&written_frame_count](alcedo::IFrameSink* sink,
+                             const alcedo::EditorRenderRequest& request) -> bool {
+        if (!sink) {
+          return false;
+        }
+        const int w = std::max(1, request.intent.requested_width);
+        const int h = std::max(1, request.intent.requested_height);
+        auto mapping = sink->MapResourceForWrite();
+        if (!mapping) {
+          return false;
+        }
+        std::vector<float> pixels(static_cast<size_t>(w) * static_cast<size_t>(h) * 4u, 0.0f);
+        for (int y = 0; y < h; ++y) {
+          for (int x = 0; x < w; ++x) {
+            const size_t i = (static_cast<size_t>(y) * static_cast<size_t>(w) +
+                              static_cast<size_t>(x)) *
+                             4u;
+            pixels[i + 0] = static_cast<float>(x) / static_cast<float>(w);
+            pixels[i + 1] = static_cast<float>(y) / static_cast<float>(h);
+            pixels[i + 2] = 0.25f;
+            pixels[i + 3] = 1.0f;
+          }
+        }
+        bool copied = false;
+#ifdef HAVE_CUDA
+        if (mapping.memory_domain == alcedo::FrameMemoryDomain::CudaDevice &&
+            mapping.target_type == alcedo::FrameWriteTargetType::CudaArray) {
+          const auto result = cudaMemcpy2DToArray(
+              reinterpret_cast<cudaArray_t>(mapping.image_array), 0, 0, pixels.data(),
+              static_cast<size_t>(w) * sizeof(float) * 4u,
+              static_cast<size_t>(w) * sizeof(float) * 4u, static_cast<size_t>(h),
+              cudaMemcpyHostToDevice);
+          copied = result == cudaSuccess;
+        }
+#endif
+#ifdef HAVE_OPENCL
+        if (mapping.memory_domain == alcedo::FrameMemoryDomain::OpenClDevice &&
+            mapping.target_type == alcedo::FrameWriteTargetType::OpenClImage) {
+          const size_t origin[] = {0, 0, 0};
+          const size_t region[] = {static_cast<size_t>(w), static_cast<size_t>(h), 1};
+          copied = clEnqueueWriteImage(
+                       alcedo::OpenClContext::Instance().Queue(),
+                       reinterpret_cast<cl_mem>(mapping.data), CL_TRUE, origin, region,
+                       static_cast<size_t>(w) * sizeof(float) * 4u, 0, pixels.data(), 0, nullptr,
+                       nullptr) == CL_SUCCESS;
+        }
+#endif
+        sink->UnmapResource();
+        if (!copied) {
+          return false;
+        }
+        sink->NotifyFrameReady();
+        written_frame_count.fetch_add(1, std::memory_order_release);
+        return true;
+      });
+
+  loaded->host.workspace_router()->OpenEditor(7, 70);
+  const auto first_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+  while (loaded->host.editor_session_service()->state() !=
+             alcedo::EditorSessionState::Interactive &&
+         std::chrono::steady_clock::now() < first_deadline) {
+    ProcessEvents(20);
+  }
+
+  auto* session = loaded->host.editor_session();
+  ASSERT_NE(session, nullptr);
+  ASSERT_TRUE(session->presentation_viewport_bound());
+  auto* viewport =
+      qobject_cast<editor_rhi::EditorViewportItem*>(session->presentation_viewport());
+  ASSERT_NE(viewport, nullptr);
+  EXPECT_EQ(viewport->imageIdentity(), 70ull);
+  EXPECT_EQ(viewport->imageGeneration(), session->session_generation());
+  ASSERT_EQ(loaded->host.editor_session_service()->state(),
+            alcedo::EditorSessionState::Interactive)
+      << loaded->host.editor_session_service()->last_error()
+      << " backend=" << viewport->backendName().toStdString()
+      << " status=" << viewport->statusText().toStdString()
+      << " available=" << viewport->presentationAvailable()
+      << " live=" << viewport->liveTargetCount();
+  EXPECT_GT(written_frame_count.load(std::memory_order_acquire), 0);
+  EXPECT_EQ(viewport->lastPresentedImageGeneration(), session->session_generation());
+  EXPECT_EQ(viewport->lastPresentedRequestId(),
+            loaded->host.editor_session_service()->first_frame_request_id());
+
+  // QualityBase follows the acknowledged InteractivePrimary through the same
+  // exact request-id route.
+  const auto quality_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+  while (viewport->presentedFrameCount() < 2 &&
+         std::chrono::steady_clock::now() < quality_deadline) {
+    ProcessEvents(20);
+  }
+  EXPECT_GE(viewport->presentedFrameCount(), 2u);
+  EXPECT_GE(written_frame_count.load(std::memory_order_acquire), 2);
+
+  // A→B→A: late frame from the first A session must not replace the current A.
+  const auto gen_a1 = session->session_generation();
+  loaded->host.workspace_router()->OpenEditor(8, 80);
+  ProcessEvents(60);
+  const auto gen_b = session->session_generation();
+  EXPECT_GT(gen_b, gen_a1);
+  loaded->host.workspace_router()->OpenEditor(7, 70);
+  ProcessEvents(60);
+  const auto gen_a2 = session->session_generation();
+  EXPECT_GT(gen_a2, gen_b);
+  EXPECT_EQ(viewport->imageIdentity(), 70ull);
+  EXPECT_EQ(viewport->imageGeneration(), gen_a2);
 
   EXPECT_TRUE(loaded->qml_warnings.empty())
       << loaded->qml_warnings.front().toString().toStdString();

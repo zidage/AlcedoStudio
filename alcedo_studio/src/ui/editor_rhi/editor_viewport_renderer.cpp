@@ -5,8 +5,10 @@
 #include "ui/editor_rhi/editor_viewport_renderer.hpp"
 
 #include "ui/editor_rhi/editor_viewport_item.hpp"
+#include "ui/editor_rhi/lease_frame_sink.hpp"
 
 #include <QFile>
+#include <QDebug>
 #include <QSize>
 
 #include <algorithm>
@@ -217,8 +219,6 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
   if (!item_) {
     return;
   }
-  item_->update_pending_ = false;
-
   if (broker_ != item_->broker()) {
     broker_ = item_->broker();
     image_generation_ = 0;
@@ -238,9 +238,9 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
     for (auto& layer : layers_) {
       releaseLayer(layer);
     }
-    if (broker_) {
-      broker_->InvalidateImageGeneration(next_image_generation, next_image_identity);
-    }
+    // EditorViewportItem::setImageGeneration owns broker invalidation. Repeating
+    // it here used to erase an exact-size request that arrived between the GUI
+    // property update and this render-thread synchronization.
     releaseBrokerTargets();
     image_generation_ = next_image_generation;
     image_identity_ = next_image_identity;
@@ -321,6 +321,9 @@ void EditorViewportRenderer::fulfillTargetRequests() {
   if (requests.empty()) {
     return;
   }
+  qInfo("[EditorPresent] fulfilling %zu target request(s), image=%llu generation=%llu",
+        requests.size(), static_cast<unsigned long long>(image_identity_),
+        static_cast<unsigned long long>(image_generation_));
 
   if (target_generation_ == 0) {
     broker_->InvalidateTargetGeneration();
@@ -345,25 +348,35 @@ void EditorViewportRenderer::fulfillTargetRequests() {
   }
 
   for (const auto& request : unique) {
-    // Keep a small pool per requested size so multi-layer / multi-submit load
-    // does not exhaust targets.
-    for (int i = 0; i < kDefaultPoolSize; ++i) {
-      TargetGeneration generation{target_generation_, image_generation_,
-                                  request.layer_generation, image_identity_};
-      auto lease = adapter_->CreateTarget(
-          rhi_, QSize(request.dimensions.width, request.dimensions.height), generation,
-          request.layer);
-      if (!lease.has_value()) {
-        if (item_) {
-          item_->setStatusText(QString::fromStdString(adapter_->lastError()));
-        }
-        break;
+    // Match the proven QRhiWidget path: allocate the selected slot lazily.
+    // A later concurrent/layer request can add another slot; eagerly allocating
+    // three full-resolution RGBA32F targets here multiplies first-frame latency
+    // and VRAM for no presentation benefit.
+    TargetGeneration generation{target_generation_, image_generation_,
+                                request.layer_generation, image_identity_};
+    auto lease = adapter_->CreateTarget(
+        rhi_, QSize(request.dimensions.width, request.dimensions.height), generation,
+        request.layer);
+    if (!lease.has_value()) {
+      target_error_ = adapter_->lastError();
+      qWarning("[EditorPresent] target allocation failed %dx%d: %s", request.dimensions.width,
+               request.dimensions.height, target_error_.c_str());
+      broker_->FailTargetRequest(request);
+      if (item_) {
+        item_->setStatusText(QString::fromStdString(target_error_));
       }
-      if (!broker_->PublishWritableTarget(*lease)) {
-        adapter_->DestroyTarget(*lease);
-      } else {
-        content_dirty_ = true;
-      }
+      continue;
+    }
+    if (!broker_->PublishWritableTarget(*lease)) {
+      qWarning("[EditorPresent] broker rejected target %dx%d", request.dimensions.width,
+               request.dimensions.height);
+      adapter_->DestroyTarget(*lease);
+      broker_->FailTargetRequest(request);
+    } else {
+      qInfo("[EditorPresent] published native target %dx%d",
+            request.dimensions.width, request.dimensions.height);
+      target_error_.clear();
+      content_dirty_ = true;
     }
   }
   publishDiagnosticsIfChanged();
@@ -401,14 +414,16 @@ void EditorViewportRenderer::ensureDefaultTargetPool(const QSize& size) {
         TargetGeneration{target_generation_, image_generation_, 0, image_identity_},
         LeaseFrameLayer::InteractivePrimary);
     if (!lease.has_value()) {
+      target_error_ = adapter_->lastError();
       if (item_) {
-        item_->setStatusText(QString::fromStdString(adapter_->lastError()));
+        item_->setStatusText(QString::fromStdString(target_error_));
       }
       break;
     }
     if (!broker_->PublishWritableTarget(*lease)) {
       adapter_->DestroyTarget(*lease);
     } else {
+      target_error_.clear();
       content_dirty_ = true;
     }
   }
@@ -432,12 +447,20 @@ void EditorViewportRenderer::consumeDirectFrames() {
     if (!frame.has_value()) {
       continue;
     }
+    qWarning("[EditorPresent] consuming frame request=%llu image=%llu generation=%llu size=%dx%d",
+             static_cast<unsigned long long>(frame->presentation_request_id),
+             static_cast<unsigned long long>(frame->generation.image_identity),
+             static_cast<unsigned long long>(frame->generation.image_generation),
+             frame->target.dimensions.width, frame->target.dimensions.height);
     auto& layer = layers_[layerIndex(layerForLease(layer_id))];
     releaseLayer(layer);
     auto* texture = rhi_->newTexture(
         QRhiTexture::RGBA32F,
         QSize(frame->target.dimensions.width, frame->target.dimensions.height), 1);
     if (!texture || !texture->createFrom({static_cast<quint64>(frame->target.native_handle), 0})) {
+      qWarning("[EditorPresent] QRhi import failed for request=%llu handle=%llu",
+               static_cast<unsigned long long>(frame->presentation_request_id),
+               static_cast<unsigned long long>(frame->target.native_handle));
       destroyResource(texture);
       broker_->CompleteRendererConsumption(*frame);
       if (item_) {
@@ -574,10 +597,9 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
     return;
   }
 
-  // Producer-driven sizes first, then a default pool at the item pixel size so
-  // idle sessions still have targets for the first frame.
+  // Targets are producer-driven. This matches the pre-refactor surface: create
+  // the exact output slot requested by EnsureSize, with no speculative pool.
   fulfillTargetRequests();
-  ensureDefaultTargetPool(render_target->pixelSize());
   consumeDirectFrames();
   ensureStaticResources(render_target, command_buffer);
   auto* updates = rhi_->nextResourceUpdateBatch();
@@ -644,7 +666,9 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
   }
 
   command_buffer->beginPass(render_target, Qt::black, {1.0f, 0}, updates);
-  if (primary_layer && pipeline_ && shader_resource_bindings_ && vertex_buffer_) {
+  const bool drew_primary =
+      primary_layer && pipeline_ && shader_resource_bindings_ && vertex_buffer_;
+  if (drew_primary) {
     const QRhiCommandBuffer::VertexInput vertex_input[] = {{vertex_buffer_, 0}};
     const QSize size = render_target->pixelSize();
     command_buffer->setGraphicsPipeline(pipeline_);
@@ -654,6 +678,21 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
     command_buffer->draw(4);
   }
   command_buffer->endPass();
+
+  // A frame is presented only after it was selected and encoded into this
+  // render pass. Import, broker consumption, or producer submission alone are
+  // deliberately insufficient acknowledgement.
+  if (drew_primary && primary_layer->direct_frame.target.valid() &&
+      broker_->AcknowledgeFramePresented(primary_layer->direct_frame)) {
+    qWarning("[EditorPresent] acknowledged render-pass request=%llu",
+             static_cast<unsigned long long>(
+                 primary_layer->direct_frame.presentation_request_id));
+    item_->frameSink()->AcknowledgePresentedFrame(primary_layer->direct_frame);
+  }
+  if (detail_layer && detail_layer->direct_frame.target.valid() &&
+      broker_->AcknowledgeFramePresented(detail_layer->direct_frame)) {
+    item_->frameSink()->AcknowledgePresentedFrame(detail_layer->direct_frame);
+  }
 
   // After the GPU has sampled imported textures this frame, recycle targets
   // that are no longer displayed so the producer can write again. Keep the
@@ -672,6 +711,8 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
   const bool has_primary = primary_layer != nullptr;
   if (has_primary) {
     item_->setStatusText(QStringLiteral("presented"));
+  } else if (!target_error_.empty()) {
+    item_->setStatusText(QString::fromStdString(target_error_));
   } else {
     item_->setStatusText(QStringLiteral("waiting for a compatible frame"));
   }

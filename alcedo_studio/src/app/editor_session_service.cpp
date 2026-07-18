@@ -151,10 +151,12 @@ auto EditorSessionService::RouteInitialRender(EditorRenderReason reason) -> std:
   if (routed.kind == EditorRenderResultKind::RequestAccepted) {
     if (reason == EditorRenderReason::InitialFrame || reason == EditorRenderReason::ImageSwitch ||
         reason == EditorRenderReason::Retry) {
-      first_frame_request_id_ = routed.request_id;
-      first_frame_completed_  = false;
-      first_frame_submitted_  = false;
-      first_frame_presented_  = false;
+      first_frame_request_id_  = routed.request_id;
+      first_frame_completed_   = false;
+      first_frame_submitted_   = false;
+      first_frame_presented_   = false;
+      quality_base_routed_     = false;
+      quality_base_request_id_ = 0;
     }
     pending_initial_reason_.reset();
     EditorSessionResult session_result;
@@ -166,6 +168,51 @@ auto EditorSessionService::RouteInitialRender(EditorRenderReason reason) -> std:
     return routed.request_id;
   }
   return 0;
+}
+
+auto EditorSessionService::RouteQualityBaseFollowUp() -> std::uint64_t {
+  if (quality_base_routed_ || !PresentationTargetReady() || !dependencies_.render || !has_image()) {
+    return 0;
+  }
+  auto intent = MakeRenderIntent(EditorRenderReason::SettledAdjustment);
+  if (!intent) {
+    return 0;
+  }
+  // Force QualityBase regardless of MakeRenderIntent reason defaults.
+  intent->quality          = EditorRenderQuality::Quality;
+  intent->frame_role       = FrameRole::QualityBase;
+  intent->priority         = EditorRenderPriority::Normal;
+  intent->replacement_key  = DefaultReplacementKey(EditorRenderQuality::Quality);
+  FillRenderIntentDefaults(*intent);
+
+  dependencies_.render->SetActiveGenerations(
+      identity_.session_generation, identity_.render_generation, identity_.view_generation);
+  const EditorRenderResult routed = dependencies_.render->Submit(*intent);
+  if (routed.kind != EditorRenderResultKind::RequestAccepted) {
+    return 0;
+  }
+  quality_base_routed_     = true;
+  quality_base_request_id_ = routed.request_id;
+  EditorSessionResult session_result;
+  session_result.kind              = EditorSessionResultKind::RenderRouted;
+  session_result.state             = state_;
+  session_result.identity          = identity_;
+  session_result.render_request_id = routed.request_id;
+  session_result.message           = "QualityBase follow-up after first frame";
+  Emit(session_result);
+  return routed.request_id;
+}
+
+void EditorSessionService::MarkImageAcquiredAfterGuards() {
+  // Pipeline/history guards mean the image is ready to render. Stay in Loading
+  // until the matching InteractivePrimary frame is presented.
+  image_acquired_ = true;
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = state_;
+  result.identity = identity_;
+  result.message  = "Image acquired; waiting for first frame";
+  Emit(std::move(result));
 }
 
 auto EditorSessionService::PresentationTargetReady() const -> bool {
@@ -236,16 +283,18 @@ auto EditorSessionService::SealCurrentSession(bool persist_changes, bool start_b
 }
 
 void EditorSessionService::ResetActiveImageState() {
-  identity_.element_id        = 0;
-  identity_.image_id          = 0;
-  identity_.render_generation = 0;
-  identity_.view_generation   = 0;
-  adjustment_snapshot_        = {};
-  first_frame_request_id_     = 0;
-  image_acquired_             = false;
-  first_frame_completed_      = false;
-  first_frame_submitted_      = false;
-  first_frame_presented_      = false;
+  identity_.element_id         = 0;
+  identity_.image_id           = 0;
+  identity_.render_generation  = 0;
+  identity_.view_generation    = 0;
+  adjustment_snapshot_         = {};
+  first_frame_request_id_      = 0;
+  quality_base_request_id_     = 0;
+  image_acquired_              = false;
+  first_frame_completed_       = false;
+  first_frame_submitted_       = false;
+  first_frame_presented_       = false;
+  quality_base_routed_         = false;
   pending_initial_reason_.reset();
 }
 
@@ -285,18 +334,20 @@ auto EditorSessionService::HandleOpenOrSwitch(const EditorSessionIntent& intent,
   }
 
   ++identity_.session_generation;
-  identity_.element_id        = intent.element_id;
-  identity_.image_id          = intent.image_id;
-  identity_.render_generation = identity_.session_generation;
-  identity_.view_generation   = 1;
-  image_acquired_             = false;
-  first_frame_request_id_     = 0;
-  first_frame_completed_      = false;
-  first_frame_submitted_      = false;
-  first_frame_presented_      = false;
+  identity_.element_id         = intent.element_id;
+  identity_.image_id           = intent.image_id;
+  identity_.render_generation  = identity_.session_generation;
+  identity_.view_generation    = 1;
+  image_acquired_              = false;
+  first_frame_request_id_      = 0;
+  quality_base_request_id_     = 0;
+  first_frame_completed_       = false;
+  first_frame_submitted_       = false;
+  first_frame_presented_       = false;
+  quality_base_routed_         = false;
   // Adjustment state is image-scoped. An empty snapshot means a clean image;
   // never inherit the previous image's params.
-  adjustment_snapshot_        = intent.adjustment;
+  adjustment_snapshot_         = intent.adjustment;
 
   const EditorSessionState acquire_state =
       is_switch ? EditorSessionState::Switching : EditorSessionState::Acquiring;
@@ -312,6 +363,9 @@ auto EditorSessionService::HandleOpenOrSwitch(const EditorSessionIntent& intent,
   }
 
   TransitionTo(EditorSessionState::Loading, EditorSessionResultKind::StateChanged, "Loading image");
+  // Guards succeeded: the image is ready to render. Interactive still waits for
+  // the first compatible frame (Phase 5B open path).
+  MarkImageAcquiredAfterGuards();
   const auto request_id = RouteInitialRender(is_switch ? EditorRenderReason::ImageSwitch
                                                        : EditorRenderReason::InitialFrame);
   if (request_id == 0 && PresentationTargetReady()) {
@@ -644,6 +698,9 @@ void EditorSessionService::TryEnterInteractiveFromFirstFrame(
   }
   TransitionTo(EditorSessionState::Interactive, EditorSessionResultKind::ImageReady,
                "First frame presented");
+  // InteractivePrimary is visible; queue the normal QualityBase follow-up.
+  // DetailPatch is never a prerequisite for the first visible frame.
+  RouteQualityBaseFollowUp();
 }
 
 void EditorSessionService::NotifyRenderResult(const EditorRenderResult& render_result) {

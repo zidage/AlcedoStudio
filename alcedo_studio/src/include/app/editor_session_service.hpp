@@ -161,6 +161,9 @@ class EditorSessionService final : public IEditorSessionBackend {
   void ReleaseGuards();
   auto AcquireGuards(sl_element_id_t element_id, std::string* error) -> bool;
   auto RouteInitialRender(EditorRenderReason reason) -> std::uint64_t;
+  /// After the InteractivePrimary first frame is presented, enqueue the normal
+  /// QualityBase follow-up. Never a prerequisite for leaving Loading.
+  auto RouteQualityBaseFollowUp() -> std::uint64_t;
   auto HandleOpenOrSwitch(const EditorSessionIntent& intent, bool is_switch) -> EditorSessionResult;
   auto HandleClose(bool persist_changes) -> EditorSessionResult;
   auto HandlePatch(const EditorSessionIntent& intent, bool settled) -> EditorSessionResult;
@@ -176,6 +179,9 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto PresentationTargetReady() const -> bool;
   [[nodiscard]] auto MatchesActiveFirstFrame(const EditorRenderResult& render_result) const -> bool;
   void               TryEnterInteractiveFromFirstFrame(const EditorRenderResult& render_result);
+  /// Mark the image ready to render after pipeline/history guards succeed.
+  /// First-frame Interactive still requires complete→submit→present.
+  void               MarkImageAcquiredAfterGuards();
 
   Dependencies       dependencies_;
   ResultObserver     observer_;
@@ -192,10 +198,12 @@ class EditorSessionService final : public IEditorSessionBackend {
   std::vector<PendingSave>          pending_saves_;
   EditorRenderAdjustmentSnapshot    adjustment_snapshot_{};
   std::uint64_t                     first_frame_request_id_ = 0;
+  std::uint64_t                     quality_base_request_id_ = 0;
   bool                              image_acquired_         = false;
   bool                              first_frame_completed_  = false;
   bool                              first_frame_submitted_  = false;
   bool                              first_frame_presented_  = false;
+  bool                              quality_base_routed_    = false;
   std::optional<EditorRenderReason> pending_initial_reason_;
   mutable std::recursive_mutex      mutex_;
 };

@@ -39,6 +39,10 @@ struct FramePreviewMetadata {
   FrameRole    frame_role          = FrameRole::InteractivePrimary;
   std::uint64_t preview_generation = 0;
   std::uint64_t detail_serial      = 0;
+  // App-layer render request that produced this frame. Zero is reserved for
+  // legacy/non-session producers. The production RHI path returns this exact
+  // identity after the frame is sampled by a render pass.
+  std::uint64_t presentation_request_id = 0;
   FrameRoiRect source_roi_norm     = {};
 };
 

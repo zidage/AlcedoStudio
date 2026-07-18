@@ -197,6 +197,20 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
   }
 
   if (session_backend_) {
+    // Stamp the viewport before Open/Switch can schedule its worker. Otherwise
+    // EnsureSize may publish a generation-0 target and the guaranteed first
+    // frame races permanently ahead of the controller's post-call mirror.
+    if (elementId > 0 && imageId > 0) {
+      if (auto* item =
+              qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
+        const bool same_image =
+            session_backend_->has_image() && session_backend_->identity().element_id == elementId &&
+            session_backend_->identity().image_id == imageId;
+        item->setImageIdentity(static_cast<qulonglong>(imageId));
+        item->setImageGeneration(static_cast<qulonglong>(
+            session_backend_->identity().session_generation + (same_image ? 0 : 1)));
+      }
+    }
     if (elementId == 0 || imageId == 0) {
       // Empty editor is an explicit persisted close, not a fake image open.
       session_backend_->Close(/*persist_changes=*/true);

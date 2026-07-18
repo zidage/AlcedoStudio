@@ -233,10 +233,13 @@ TEST_F(EditorSessionServiceTest, InitialRenderWaitsForARealPresentationTarget) {
   service_->SetPresentationSinkId(0);
   const auto open = service_->Open(100, 200);
 
-  EXPECT_EQ(open.kind, EditorSessionResultKind::StateChanged);
+  // Phase 5B: open acquires the image immediately, then waits for a real
+  // presentation target before routing the InteractivePrimary first frame.
   EXPECT_EQ(service_->state(), EditorSessionState::Loading);
   EXPECT_EQ(service_->first_frame_request_id(), 0u);
   EXPECT_TRUE(render_->submitted.empty());
+  EXPECT_TRUE(open.kind == EditorSessionResultKind::StateChanged ||
+              open.kind == EditorSessionResultKind::Accepted);
 
   service_->SetPresentationSize(1280, 720);
   EXPECT_TRUE(render_->submitted.empty());
@@ -261,9 +264,34 @@ TEST_F(EditorSessionServiceTest, InitialRenderSchedulingFailureDoesNotStayLoadin
 
 TEST_F(EditorSessionServiceTest, ImageAcquireAloneDoesNotLeaveLoading) {
   service_->Open(1, 2);
+  // Open already marks the image acquired after guards; re-notify must not jump state.
   service_->NotifyImageAcquired(service_->identity().session_generation, true);
   EXPECT_EQ(service_->state(), EditorSessionState::Loading);
   EXPECT_NE(service_->first_frame_request_id(), 0u);
+}
+
+TEST_F(EditorSessionServiceTest, OpenMarksImageAcquiredButStaysLoadingUntilFirstFrame) {
+  service_->Open(1, 2);
+  EXPECT_EQ(service_->state(), EditorSessionState::Loading);
+  EXPECT_NE(service_->first_frame_request_id(), 0u);
+  // Guards succeeded: acquire is done without a separate NotifyImageAcquired call.
+  PresentFirstFrame(*service_);
+  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+}
+
+TEST_F(EditorSessionServiceTest, QualityBaseFollowsInteractivePrimaryFirstFrame) {
+  service_->Open(1, 2);
+  ASSERT_EQ(render_->submitted.size(), 1u);
+  EXPECT_EQ(render_->submitted.front().reason, EditorRenderReason::InitialFrame);
+  EXPECT_EQ(render_->submitted.front().frame_role, FrameRole::InteractivePrimary);
+  EXPECT_EQ(render_->submitted.front().quality, EditorRenderQuality::Interactive);
+
+  PresentFirstFrame(*service_);
+  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+  ASSERT_GE(render_->submitted.size(), 2u);
+  EXPECT_EQ(render_->submitted.back().frame_role, FrameRole::QualityBase);
+  EXPECT_EQ(render_->submitted.back().quality, EditorRenderQuality::Quality);
+  EXPECT_EQ(render_->submitted.back().replacement_key, "quality");
 }
 
 TEST_F(EditorSessionServiceTest, StateMachineIgnoresReorderedStaleCompletions) {
@@ -648,8 +676,11 @@ TEST_F(EditorSessionServiceTest, RuntimeForwardsCoordinatorResultsToControllerSt
 
   runtime->service->Open(11, 22);
   EXPECT_EQ(runtime->service->state(), EditorSessionState::Loading);
-  ASSERT_EQ(runtime->scheduler->scheduled().size(), 1u);
-  const auto request_id = runtime->scheduler->scheduled().front().request_id;
+  auto* bootstrap_scheduler =
+      dynamic_cast<EditorSessionBootstrapSchedulerPort*>(runtime->scheduler.get());
+  ASSERT_NE(bootstrap_scheduler, nullptr);
+  ASSERT_EQ(bootstrap_scheduler->scheduled().size(), 1u);
+  const auto request_id = bootstrap_scheduler->scheduled().front().request_id;
 
   runtime->service->NotifyImageAcquired(runtime->service->identity().session_generation, true);
   EXPECT_EQ(runtime->service->state(), EditorSessionState::Loading);

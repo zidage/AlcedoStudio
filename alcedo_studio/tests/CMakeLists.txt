@@ -1597,6 +1597,62 @@ target_compile_definitions(WorkspaceShellTest
 )
 gtest_discover_tests(WorkspaceShellTest TEST_PREFIX "WorkspaceShellTest.")
 
+add_executable(EditorRealRawGpuE2eTest
+    ui/editor_real_raw_gpu_e2e_test.cpp
+    ui/editor_dialog_stub.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorRealRawGpuE2eTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorRealRawGpuE2eTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorRealRawGpuE2eTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+
+if(WIN32 AND ALCEDO_CUDA_ENABLED)
+  add_test(NAME EditorRealRawGpuE2eTest.CudaSustainedImageSwitches
+    COMMAND ${CMAKE_COMMAND} -E env
+      ALCEDO_TEST_EDITOR_BACKEND=cuda
+      ALCEDO_REAL_RAW_E2E_SWITCHES=8
+      $<TARGET_FILE:EditorRealRawGpuE2eTest>
+  )
+  set_tests_properties(EditorRealRawGpuE2eTest.CudaSustainedImageSwitches PROPERTIES
+    LABELS "gpu;cuda;real_raw;phase5b"
+    TIMEOUT 1800
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:EditorRealRawGpuE2eTest>
+  )
+endif()
+
+if(WIN32 AND ALCEDO_OPENCL_ENABLED)
+  add_test(NAME EditorRealRawGpuE2eTest.OpenClSustainedImageSwitches
+    COMMAND ${CMAKE_COMMAND} -E env
+      ALCEDO_TEST_EDITOR_BACKEND=opencl
+      ALCEDO_REAL_RAW_E2E_SWITCHES=8
+      $<TARGET_FILE:EditorRealRawGpuE2eTest>
+  )
+  set_tests_properties(EditorRealRawGpuE2eTest.OpenClSustainedImageSwitches PROPERTIES
+    LABELS "gpu;opencl;real_raw;phase5b"
+    TIMEOUT 1800
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:EditorRealRawGpuE2eTest>
+  )
+endif()
+
 add_executable(LanguageManagerTest
     ui/language_manager_test.cpp
     ui/ui_test_main.cpp

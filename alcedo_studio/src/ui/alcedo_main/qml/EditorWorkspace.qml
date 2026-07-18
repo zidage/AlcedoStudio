@@ -164,9 +164,11 @@ Item {
                         }
 
                         // Pipeline EnsureSize → render reference for crop/zoom math.
+                        // Force-apply so equal output sizes still re-sync after a new
+                        // image/session generation (Phase 5B).
                         onTargetSizeRequested: function (w, h) {
                             if (w > 0 && h > 0) {
-                                editorInteraction.setRenderReferenceSize(w, h)
+                                editorInteraction.forceRenderReferenceSize(w, h)
                             }
                         }
                     }
