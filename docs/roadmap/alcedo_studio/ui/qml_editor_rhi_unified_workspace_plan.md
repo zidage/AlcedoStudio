@@ -1299,9 +1299,11 @@ marked complete while any row remains unverified, even if its newly added functi
 
 ### Phase 5A - Editor session and unified render-intent interfaces
 
-**Status: complete (2026-07-18).** Interfaces, state machine, and sole scheduling owner are
-implemented and unit-tested with fake ports. Production still uses bootstrap pipeline/history/
-journal/scheduler ports until Phase 5B wires real image load and first-frame presentation.
+**Status: complete (Phase 5A-Fix applied 2026-07-18).** Interfaces, result delivery, first-frame
+gate, multi-save tracking, generation cancellation, full adjustment snapshots, and QML-path
+scheduler ownership checks are implemented and covered by tests. Production still uses bootstrap
+pipeline/history/journal/scheduler ports until Phase 5B wires real image load and first-frame
+presentation.
 
 Deliverables:
 
@@ -1353,15 +1355,36 @@ Implementation notes:
 - QML facade exposes `sessionState` string; open/switch/close route through the backend.
   Production bootstrap ports succeed without DuckDB/GPU so shell tests keep working; Phase 5B
   replaces them with real acquire/load/render/presentation.
-- Reusable adjustment types already outside QWidget ownership remain the source of truth:
-  `EditorAdjustmentSnapshot`, `AdjustmentPreview` / `AdjustmentCommit` under
-  `editor_dialog/session/`. App-layer intents carry `EditorRenderAdjustmentSnapshot`
-  fingerprints until Phase 6 panels fill full params.
-- Legacy QWidget `alcedo::ui::EditorRenderCoordinator` is unchanged; the new
-  `alcedo::EditorRenderCoordinator` is the sole production editor scheduling owner going forward.
+- App-layer `EditorAdjustmentPatch` / `EditorRenderAdjustmentSnapshot` carry full field + params
+  JSON (and ordered patches). QWidget panel states remain under `editor_dialog/` for UI binding;
+  session/render intents use the app-layer types only.
+- Legacy QWidget `alcedo::ui::EditorRenderCoordinator` is unchanged until Phase 5D cutover. Phase 5A
+  acceptance for scheduler ownership is scoped to the QML editor path; the legacy QWidget callers
+  are documented temporary exceptions in `EditorSessionControllerPhase5ATest`.
+- `EditorSessionRuntime::Create()` wires coordinator results into `NotifyRenderResult`; the
+  controller observes backend change notifications for async `sessionState` updates.
 - Tests: `EditorRenderCoordinatorTest`, `EditorSessionServiceTest`,
-  `EditorSessionControllerPhase5ATest` (includes scheduler include/call scan of editor UI modules
-  and input controllers).
+  `EditorSessionControllerPhase5ATest` (runtime→controller presentation, QML-path scheduler scan,
+  app-header `ui/` ban, `EditorSessionService` no-Widgets CMake check).
+
+### Phase 5A-Fix - 补全结果传递、状态变化和渲染调度
+
+**状态：完成（2026-07-18）。** 下列复审问题均已修正，并有对应回归测试；Phase 5A 三个测试程序
+全部通过（约 37 个用例）。
+
+| 复审发现的问题 | 修正与验证结果 |
+| --- | --- |
+| `EditorSessionRuntime::Create()` 未把协调器结果交给会话服务；控制器不同步异步状态 | Runtime 观察者转发 `NotifyRenderResult`；`IEditorSessionBackend::SetChangeNotifier` → 控制器 `StateChanged`。测试：`RuntimeCoordinatorPresentationUpdatesController`、`RuntimeForwardsCoordinatorResultsToControllerState`。 |
+| `NotifyImageAcquired` 过早进入 `Interactive` | 读取成功后保持 `Loading`；仅当首帧匹配且 complete→submit→present 后进入 `Interactive`。测试：`ImageAcquireAloneDoesNotLeaveLoading`、`FramePresentedMovesLoadingToInteractiveOnlyWhenMatching`。 |
+| 渲染结果匹配过宽；可跳过 submit 或重复 present | 校验 image/session/render/view/request；协调器要求 submit 后才 present，重复忽略。测试：`LateOldRenderInSameSessionIsIgnored`、`RejectsPresentedWithoutSubmittedAndIgnoresDuplicates`。 |
+| 保存任务编号丢失，并发切换互相覆盖 | `pending_saves_` 按 session generation 记录真实 task id，发出 `SaveStarted`/`SaveFinished`。测试：`ConcurrentSavesForAThenBFinishInEitherOrder`、`ConcurrentSavesFinishInOpenOrder`。 |
+| 再次打开同一图片泄漏守卫/旧渲染 | 策略为 **no-op**（Accepted，不重复 acquire/cancel）。测试：`ReopenSameImageIsNoOpWithoutLeakingGuards`。 |
+| 取消后不启动等待队列；运行中取消不通知调度器 | `CancelRequest`/`CancelSession`/`SetActiveGenerations` 后 `Pump`；运行中调用 `scheduler_->Cancel`，终端 id 防重复。测试：`CancelInflightStartsUnrelatedPendingRequest`。 |
+| `SetActiveGenerations` 不取消旧编号任务 | 前进时取消不匹配的 pending 与 inflight。测试：`SetActiveGenerationsCancelsObsoletePendingAndInflightRenderGen`、`SetActiveGenerationsCancelsObsoleteViewGeneration`。 |
+| 调整数据只有字符串摘要；intent 提交后被改写 | `editor_adjustment_types.hpp`；提交前 `FillRenderIntentDefaults`，之后不改存储 intent。测试：`SubmitDoesNotMutateStoredIntentAfterAccept`、`ScheduledAdjustmentMatchesSubmittedSnapshotFieldByField`。 |
+| 历史协调器绑定 QWidget；可复用库链 Widgets | 消息/输入改为回调；`EditorSessionService` 无 PUBLIC/PRIVATE deps、无 Widgets。测试：`EditorSessionServiceCMakeDoesNotLinkQtWidgets`。 |
+| 应用层头文件包含 `ui/edit_viewer/frame_sink.hpp` | `FrameRole`/`ViewportRenderRegion` 迁至 `edit/frame_presentation_types.hpp`。测试：`Phase5AAppHeadersDoNotIncludeUi`。 |
+| 调度器扫描列表过窄 | 自动扫描 QML 编辑器路径 + Phase 5A 会话/渲染源；明确例外 legacy QWidget 至 Phase 5D。测试：`QmlEditorPathDoesNotIncludePipelineScheduler`。 |
 
 ### Phase 5B - Image open and guaranteed first frame
 

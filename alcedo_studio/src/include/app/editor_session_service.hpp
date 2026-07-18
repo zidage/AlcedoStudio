@@ -22,11 +22,16 @@ class IEditorSessionBackend {
  public:
   virtual ~IEditorSessionBackend() = default;
 
+  using ChangeNotifier = std::function<void()>;
+
   [[nodiscard]] virtual auto state() const -> EditorSessionState = 0;
   [[nodiscard]] virtual auto identity() const -> EditorSessionIdentity = 0;
   [[nodiscard]] virtual auto active() const -> bool = 0;
   [[nodiscard]] virtual auto has_image() const -> bool = 0;
   [[nodiscard]] virtual auto last_error() const -> std::string = 0;
+
+  /// Optional: notified after state/identity changes from async results.
+  virtual void SetChangeNotifier(ChangeNotifier notifier) { change_notifier_ = std::move(notifier); }
 
   virtual void SetPresentationSinkId(PresentationSinkId sink_id) = 0;
   virtual auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult = 0;
@@ -35,6 +40,15 @@ class IEditorSessionBackend {
   virtual auto Discard() -> EditorSessionResult = 0;
   virtual auto Undo() -> EditorSessionResult = 0;
   virtual auto Redo() -> EditorSessionResult = 0;
+
+ protected:
+  void NotifyChange() {
+    if (change_notifier_) {
+      change_notifier_();
+    }
+  }
+
+  ChangeNotifier change_notifier_;
 };
 
 /// Application-layer owner of the active image session (Phase 5A).
@@ -42,8 +56,6 @@ class IEditorSessionBackend {
 /// Acquires pipeline/history guards, sequences session/render generations, and
 /// routes typed intents. UI modules (EditorSessionController) submit intents
 /// only; they never receive pipeline, history, journal, or scheduler handles.
-/// Does not depend on AlbumBackend, QWidget, ApplicationModuleHost, or a service
-/// locator.
 class EditorSessionService final : public IEditorSessionBackend {
  public:
   struct Dependencies {
@@ -59,6 +71,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   explicit EditorSessionService(Dependencies dependencies);
 
   void SetResultObserver(ResultObserver observer);
+  void SetChangeNotifier(ChangeNotifier notifier) override;
 
   [[nodiscard]] auto state() const -> EditorSessionState override { return state_; }
   [[nodiscard]] auto identity() const -> EditorSessionIdentity override { return identity_; }
@@ -75,6 +88,12 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto results() const -> const std::vector<EditorSessionResult>& {
     return results_;
   }
+  [[nodiscard]] auto first_frame_request_id() const -> std::uint64_t {
+    return first_frame_request_id_;
+  }
+  [[nodiscard]] auto adjustment_snapshot() const -> const EditorRenderAdjustmentSnapshot& {
+    return adjustment_snapshot_;
+  }
 
   /// Bind the presentation sink identity used on subsequent render intents.
   void SetPresentationSinkId(PresentationSinkId sink_id) override;
@@ -85,6 +104,9 @@ class EditorSessionService final : public IEditorSessionBackend {
   // Convenience wrappers used by the QML controller.
   auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
   auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
+  auto Patch(EditorAdjustmentPatch patch) -> EditorSessionResult;
+  auto GestureCommit(EditorAdjustmentPatch patch) -> EditorSessionResult;
+  /// Legacy convenience: field key only.
   auto Patch(std::string patch_key) -> EditorSessionResult;
   auto GestureCommit(std::string patch_key) -> EditorSessionResult;
   auto Undo() -> EditorSessionResult override;
@@ -103,6 +125,11 @@ class EditorSessionService final : public IEditorSessionBackend {
       -> std::optional<EditorRenderIntent>;
 
  private:
+  struct PendingSave {
+    std::uint64_t session_generation = 0;
+    std::uint64_t task_id            = 0;
+  };
+
   auto TransitionTo(EditorSessionState next, EditorSessionResultKind kind,
                     std::string message = {}) -> EditorSessionResult;
   auto Reject(std::string message) -> EditorSessionResult;
@@ -116,6 +143,10 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto HandleUndoRedo(bool undo) -> EditorSessionResult;
   auto HandleDiscard() -> EditorSessionResult;
   auto HandleShutdown() -> EditorSessionResult;
+  void BeginSaveForSession(std::uint64_t session_generation, sl_element_id_t element_id);
+  [[nodiscard]] auto MatchesActiveFirstFrame(const EditorRenderResult& render_result) const
+      -> bool;
+  void TryEnterInteractiveFromFirstFrame(const EditorRenderResult& render_result);
 
   Dependencies            dependencies_;
   ResultObserver          observer_;
@@ -126,9 +157,14 @@ class EditorSessionService final : public IEditorSessionBackend {
   EditorHistoryGuardHandle  history_guard_{};
   std::string               last_error_;
   std::vector<EditorSessionResult> results_;
-  /// Session generation of an in-flight save barrier while switching.
-  std::uint64_t             pending_save_generation_ = 0;
-  bool                      pending_save_            = false;
+  /// Concurrent in-flight saves keyed by the sealed session generation (A→B→C).
+  std::vector<PendingSave>  pending_saves_;
+  EditorRenderAdjustmentSnapshot adjustment_snapshot_{};
+  std::uint64_t             first_frame_request_id_ = 0;
+  bool                      image_acquired_         = false;
+  bool                      first_frame_completed_  = false;
+  bool                      first_frame_submitted_  = false;
+  bool                      first_frame_presented_  = false;
 };
 
 }  // namespace alcedo

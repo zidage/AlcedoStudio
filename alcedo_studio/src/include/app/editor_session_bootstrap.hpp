@@ -102,6 +102,8 @@ struct EditorSessionRuntime {
   std::shared_ptr<EditorRenderCoordinator>             coordinator;
   std::unique_ptr<EditorSessionService>                service;
 
+  /// Create runtime with coordinator results forwarded into the session service
+  /// (Phase 5A-Fix: production path must not leave render results undelivered).
   static auto Create() -> std::unique_ptr<EditorSessionRuntime> {
     auto runtime = std::make_unique<EditorSessionRuntime>();
     runtime->coordinator =
@@ -113,6 +115,16 @@ struct EditorSessionRuntime {
     deps.journal  = runtime->journal;
     deps.render   = runtime->coordinator;
     runtime->service = std::make_unique<EditorSessionService>(std::move(deps));
+
+    // Keep a raw service pointer for the observer; service outlives coordinator
+    // only while runtime owns both (destroyed together).
+    EditorSessionService* service_ptr = runtime->service.get();
+    runtime->coordinator->SetResultObserver(
+        [service_ptr](const EditorRenderResult& result) {
+          if (service_ptr) {
+            service_ptr->NotifyRenderResult(result);
+          }
+        });
     return runtime;
   }
 };

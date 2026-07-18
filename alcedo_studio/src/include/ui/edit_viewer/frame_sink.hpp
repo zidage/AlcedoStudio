@@ -10,6 +10,7 @@
 
 #include <optional>
 
+#include "edit/frame_presentation_types.hpp"
 #include "edit/operators/utils/color_utils.hpp"
 
 namespace alcedo {
@@ -24,22 +25,8 @@ struct ViewerDisplayConfig {
   auto operator==(const ViewerDisplayConfig& other) const -> bool = default;
 };
 
-struct ViewportRenderRegion {
-  int   x_            = 0;
-  int   y_            = 0;
-  float scale_x_      = 1.0f;
-  float scale_y_      = 1.0f;
-  int   reference_width_ = 0;
-  int   reference_height_ = 0;
-  int   target_width_ = 0;
-  int   target_height_ = 0;
-};
-
-enum class FrameRole {
-  InteractivePrimary,
-  QualityBase,
-  DetailPatch,
-};
+// ViewportRenderRegion and FrameRole are defined in edit/frame_presentation_types.hpp
+// so app-layer services can use them without including UI headers.
 
 struct FrameRoiRect {
   float x      = 0.0f;

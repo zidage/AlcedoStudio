@@ -6,9 +6,7 @@
 
 #include <utility>
 
-#include <QInputDialog>
 #include <QListWidgetItem>
-#include <QMessageBox>
 
 #include "ui/alcedo_main/editor_dialog/controllers/history_controller.hpp"
 #include "ui/alcedo_main/i18n.hpp"
@@ -19,7 +17,16 @@ namespace alcedo::ui {
 EditorHistoryCoordinator::EditorHistoryCoordinator(Dependencies dependencies, Callbacks callbacks)
     : dependencies_(std::move(dependencies)), callbacks_(std::move(callbacks)) {}
 
-auto EditorHistoryCoordinator::WorkingVersion() -> alcedo::WorkingVersion& { return working_version_; }
+void EditorHistoryCoordinator::ShowMessage(const QString& title, const QString& text,
+                                           bool is_warning) const {
+  if (callbacks_.show_message) {
+    callbacks_.show_message(title, text, is_warning);
+  }
+}
+
+auto EditorHistoryCoordinator::WorkingVersion() -> alcedo::WorkingVersion& {
+  return working_version_;
+}
 
 auto EditorHistoryCoordinator::WorkingVersion() const -> const alcedo::WorkingVersion& {
   return working_version_;
@@ -128,14 +135,14 @@ void EditorHistoryCoordinator::CheckoutVersionById(const QString& version_id) {
   if (!versioning::ResolveVersionId(version_id, dependencies_.history_guard, &selection,
                                     &selection_error)) {
     if (!selection_error.isEmpty()) {
-      QMessageBox::warning(dependencies_.message_parent, Tr("History"), selection_error);
+      ShowMessage(Tr("History"), selection_error, /*is_warning=*/true);
     }
     return;
   }
 
   QString reload_error;
   if (!selection.version || !ReloadEditorFromHistoryVersion(*selection.version, &reload_error)) {
-    QMessageBox::warning(dependencies_.message_parent, Tr("History"), reload_error);
+    ShowMessage(Tr("History"), reload_error, /*is_warning=*/true);
     return;
   }
 
@@ -156,20 +163,21 @@ void EditorHistoryCoordinator::RenameVersionById(const QString& version_id) {
                                     &selection_error) ||
       !selection.version) {
     if (!selection_error.isEmpty()) {
-      QMessageBox::warning(dependencies_.message_parent, Tr("Versions"), selection_error);
+      ShowMessage(Tr("Versions"), selection_error, /*is_warning=*/true);
     }
     return;
   }
 
   const QString current_name = QString::fromStdString(selection.version->GetDisplayName());
-  bool          ok           = false;
-  const QString next_name    = QInputDialog::getText(
-      dependencies_.message_parent, Tr("Rename version"), Tr("Version name"),
-      QLineEdit::Normal, current_name, &ok);
-  if (!ok) {
+  if (!callbacks_.prompt_text) {
     return;
   }
-  const QString trimmed = next_name.trimmed();
+  const auto next_name =
+      callbacks_.prompt_text(Tr("Rename version"), Tr("Version name"), current_name);
+  if (!next_name.has_value()) {
+    return;
+  }
+  const QString trimmed = next_name->trimmed();
   if (trimmed.isEmpty() || trimmed == current_name) {
     return;
   }
@@ -189,17 +197,16 @@ void EditorHistoryCoordinator::UndoLastTransaction() {
   const auto undo_result =
       versioning::UndoLastTransaction(working_version_, dependencies_.pipeline_guard);
   if (!undo_result.moved && undo_result.error.isEmpty()) {
-    QMessageBox::information(dependencies_.message_parent, Tr("History"),
-                             Tr("No transaction to undo."));
+    ShowMessage(Tr("History"), Tr("No transaction to undo."), /*is_warning=*/false);
     return;
   }
   if (!undo_result.error.isEmpty()) {
-    QMessageBox::warning(dependencies_.message_parent, Tr("History"), undo_result.error);
+    ShowMessage(Tr("History"), undo_result.error, /*is_warning=*/true);
     return;
   }
   if (!ReloadUiStateFromPipeline(/*reset_to_defaults_if_missing=*/false)) {
-    QMessageBox::warning(dependencies_.message_parent, Tr("History"),
-                         Tr("Undo failed while reloading pipeline state."));
+    ShowMessage(Tr("History"), Tr("Undo failed while reloading pipeline state."),
+                /*is_warning=*/true);
     return;
   }
   versioning::PersistWorkingVersion(dependencies_.history_service, dependencies_.history_guard,
@@ -214,15 +221,15 @@ void EditorHistoryCoordinator::MoveCursorTo(size_t target_cursor) {
   const auto move_result =
       versioning::MoveCursorTo(working_version_, target_cursor, dependencies_.pipeline_guard);
   if (!move_result.error.isEmpty()) {
-    QMessageBox::warning(dependencies_.message_parent, Tr("History"), move_result.error);
+    ShowMessage(Tr("History"), move_result.error, /*is_warning=*/true);
     return;
   }
   if (!move_result.moved) {
     return;
   }
   if (!ReloadUiStateFromPipeline(/*reset_to_defaults_if_missing=*/false)) {
-    QMessageBox::warning(dependencies_.message_parent, Tr("History"),
-                         Tr("History jump failed while reloading pipeline state."));
+    ShowMessage(Tr("History"), Tr("History jump failed while reloading pipeline state."),
+                /*is_warning=*/true);
     return;
   }
   versioning::PersistWorkingVersion(dependencies_.history_service, dependencies_.history_guard,

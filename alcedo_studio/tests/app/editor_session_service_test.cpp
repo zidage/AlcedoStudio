@@ -72,11 +72,20 @@ class FakeTaskPort final : public IEditorTaskPort {
  public:
   int begin_count = 0;
   int end_count   = 0;
+  std::vector<std::uint64_t> begun_ids;
+  std::vector<std::uint64_t> ended_ids;
+  std::uint64_t next_id = 1;
+
   auto BeginTask(const std::string&, sl_element_id_t) -> std::uint64_t override {
     ++begin_count;
-    return 1;
+    const auto id = next_id++;
+    begun_ids.push_back(id);
+    return id;
   }
-  void EndTask(std::uint64_t, bool, const std::string&) override { ++end_count; }
+  void EndTask(std::uint64_t task_id, bool, const std::string&) override {
+    ++end_count;
+    ended_ids.push_back(task_id);
+  }
 };
 
 class FakeJournalPort final : public IEditorJournalPort {
@@ -139,6 +148,26 @@ class EditorSessionServiceTest : public ::testing::Test {
     service_      = std::make_unique<EditorSessionService>(std::move(deps));
   }
 
+  void PresentFirstFrame(EditorSessionService& service) {
+    const auto gen = service.identity().session_generation;
+    service.NotifyImageAcquired(gen, true);
+    EditorRenderResult completed;
+    completed.kind       = EditorRenderResultKind::RenderCompleted;
+    completed.request_id = service.first_frame_request_id();
+    completed.intent     = render_->submitted.back();
+    service.NotifyRenderResult(completed);
+    EditorRenderResult submitted;
+    submitted.kind       = EditorRenderResultKind::FrameSubmitted;
+    submitted.request_id = service.first_frame_request_id();
+    submitted.intent     = render_->submitted.back();
+    service.NotifyRenderResult(submitted);
+    EditorRenderResult presented;
+    presented.kind       = EditorRenderResultKind::FramePresented;
+    presented.request_id = service.first_frame_request_id();
+    presented.intent     = render_->submitted.back();
+    service.NotifyRenderResult(presented);
+  }
+
   std::shared_ptr<FakePipelinePort>      pipeline_;
   std::shared_ptr<FakeHistoryPort>       history_;
   std::shared_ptr<FakeTaskPort>          tasks_;
@@ -160,10 +189,17 @@ TEST_F(EditorSessionServiceTest, OpenAcquiresGuardsRoutesInitialRenderAndLeavesL
   EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
 }
 
+TEST_F(EditorSessionServiceTest, ImageAcquireAloneDoesNotLeaveLoading) {
+  service_->Open(1, 2);
+  service_->NotifyImageAcquired(service_->identity().session_generation, true);
+  EXPECT_EQ(service_->state(), EditorSessionState::Loading);
+  EXPECT_NE(service_->first_frame_request_id(), 0u);
+}
+
 TEST_F(EditorSessionServiceTest, StateMachineIgnoresReorderedStaleCompletions) {
   service_->Open(1, 2);
   const auto gen_a = service_->identity().session_generation;
-  service_->NotifyImageAcquired(gen_a, true);
+  PresentFirstFrame(*service_);
   EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
 
   service_->Switch(3, 4);
@@ -171,20 +207,19 @@ TEST_F(EditorSessionServiceTest, StateMachineIgnoresReorderedStaleCompletions) {
   EXPECT_NE(gen_a, gen_b);
   EXPECT_EQ(service_->state(), EditorSessionState::Loading);
 
-  // Late save completion for A and late failure for A must not clobber B.
   service_->NotifySaveFinished(gen_a, false, "stale save failure");
   service_->NotifyImageAcquired(gen_a, false, "stale load failure");
   EXPECT_EQ(service_->state(), EditorSessionState::Loading);
   EXPECT_EQ(service_->identity().element_id, 3u);
 
-  service_->NotifyImageAcquired(gen_b, true);
+  PresentFirstFrame(*service_);
   EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
 }
 
 TEST_F(EditorSessionServiceTest, SwitchCancelsPriorSessionAndSealsJournal) {
   service_->Open(1, 2);
+  PresentFirstFrame(*service_);
   const auto gen_a = service_->identity().session_generation;
-  service_->NotifyImageAcquired(gen_a, true);
   service_->Switch(9, 10);
   ASSERT_FALSE(render_->cancelled_sessions.empty());
   EXPECT_EQ(render_->cancelled_sessions.front(), gen_a);
@@ -192,25 +227,81 @@ TEST_F(EditorSessionServiceTest, SwitchCancelsPriorSessionAndSealsJournal) {
   EXPECT_GE(tasks_->begin_count, 1);
   ASSERT_FALSE(render_->submitted.empty());
   EXPECT_EQ(render_->submitted.back().reason, EditorRenderReason::ImageSwitch);
+
+  bool saw_save_started = false;
+  for (const auto& r : service_->results()) {
+    if (r.kind == EditorSessionResultKind::SaveStarted) {
+      saw_save_started = true;
+      EXPECT_NE(r.task_id, 0u);
+    }
+  }
+  EXPECT_TRUE(saw_save_started);
+}
+
+TEST_F(EditorSessionServiceTest, ConcurrentSavesForAThenBFinishInEitherOrder) {
+  service_->Open(1, 2);
+  PresentFirstFrame(*service_);
+  const auto gen_a = service_->identity().session_generation;
+
+  service_->Switch(3, 4);
+  PresentFirstFrame(*service_);
+  const auto gen_b = service_->identity().session_generation;
+
+  service_->Switch(5, 6);
+  const auto gen_c = service_->identity().session_generation;
+  EXPECT_NE(gen_a, gen_b);
+  EXPECT_NE(gen_b, gen_c);
+  EXPECT_EQ(tasks_->begin_count, 2);
+
+  // Finish B then A (out of order).
+  service_->NotifySaveFinished(gen_b, true, "B ok");
+  service_->NotifySaveFinished(gen_a, true, "A ok");
+  ASSERT_EQ(tasks_->ended_ids.size(), 2u);
+  EXPECT_EQ(tasks_->ended_ids[0], tasks_->begun_ids[1]);
+  EXPECT_EQ(tasks_->ended_ids[1], tasks_->begun_ids[0]);
+  EXPECT_EQ(service_->state(), EditorSessionState::Loading);
+}
+
+TEST_F(EditorSessionServiceTest, ConcurrentSavesFinishInOpenOrder) {
+  service_->Open(1, 2);
+  PresentFirstFrame(*service_);
+  const auto gen_a = service_->identity().session_generation;
+  service_->Switch(3, 4);
+  PresentFirstFrame(*service_);
+  const auto gen_b = service_->identity().session_generation;
+  service_->Switch(5, 6);
+
+  service_->NotifySaveFinished(gen_a, true, "A ok");
+  service_->NotifySaveFinished(gen_b, true, "B ok");
+  ASSERT_EQ(tasks_->ended_ids.size(), 2u);
+  EXPECT_EQ(tasks_->ended_ids[0], tasks_->begun_ids[0]);
+  EXPECT_EQ(tasks_->ended_ids[1], tasks_->begun_ids[1]);
 }
 
 TEST_F(EditorSessionServiceTest, PatchAndGestureCommitRouteThroughRenderPortOnly) {
   service_->Open(1, 2);
-  service_->NotifyImageAcquired(service_->identity().session_generation, true);
+  PresentFirstFrame(*service_);
   render_->submitted.clear();
 
-  service_->Patch("exposure");
+  EditorAdjustmentPatch patch;
+  patch.field_key   = "exposure";
+  patch.params_json = R"({"exposure":1.0})";
+  service_->Patch(patch);
   ASSERT_EQ(render_->submitted.size(), 1u);
   EXPECT_EQ(render_->submitted.back().reason, EditorRenderReason::InteractiveAdjustment);
+  EXPECT_EQ(render_->submitted.back().adjustment.params_json, R"({"exposure":1.0})");
+  ASSERT_FALSE(render_->submitted.back().adjustment.patches.empty());
+  EXPECT_EQ(render_->submitted.back().adjustment.patches.back().field_key, "exposure");
 
-  service_->GestureCommit("exposure");
+  patch.settled = true;
+  service_->GestureCommit(patch);
   ASSERT_EQ(render_->submitted.size(), 2u);
   EXPECT_EQ(render_->submitted.back().reason, EditorRenderReason::SettledAdjustment);
 }
 
 TEST_F(EditorSessionServiceTest, UndoRedoAdvanceRenderGenerationAndRoute) {
   service_->Open(1, 2);
-  service_->NotifyImageAcquired(service_->identity().session_generation, true);
+  PresentFirstFrame(*service_);
   const auto render_before = service_->identity().render_generation;
   render_->submitted.clear();
   service_->Undo();
@@ -222,7 +313,7 @@ TEST_F(EditorSessionServiceTest, UndoRedoAdvanceRenderGenerationAndRoute) {
 
 TEST_F(EditorSessionServiceTest, DiscardUsesJournalPort) {
   service_->Open(1, 2);
-  service_->NotifyImageAcquired(service_->identity().session_generation, true);
+  PresentFirstFrame(*service_);
   service_->Discard();
   EXPECT_EQ(journal_->discard_count, 1);
 }
@@ -244,14 +335,81 @@ TEST_F(EditorSessionServiceTest, AcquireFailureEntersFailedState) {
   EXPECT_TRUE(render_->submitted.empty());
 }
 
-TEST_F(EditorSessionServiceTest, FramePresentedMovesLoadingToInteractive) {
+TEST_F(EditorSessionServiceTest, FramePresentedMovesLoadingToInteractiveOnlyWhenMatching) {
   service_->Open(1, 2);
   EXPECT_EQ(service_->state(), EditorSessionState::Loading);
+  const auto first_id = service_->first_frame_request_id();
+  ASSERT_NE(first_id, 0u);
+
+  service_->NotifyImageAcquired(service_->identity().session_generation, true);
+  EXPECT_EQ(service_->state(), EditorSessionState::Loading);
+
+  // Stale older render generation must not complete the first-frame gate.
+  EditorRenderResult stale_presented;
+  stale_presented.kind       = EditorRenderResultKind::FramePresented;
+  stale_presented.request_id = first_id;
+  stale_presented.intent     = render_->submitted.front();
+  stale_presented.intent.render_generation = 999;
+  service_->NotifyRenderResult(stale_presented);
+  EXPECT_EQ(service_->state(), EditorSessionState::Loading);
+
+  // Ordered complete → submit → present for the matching first-frame request.
+  EditorRenderResult completed;
+  completed.kind       = EditorRenderResultKind::RenderCompleted;
+  completed.request_id = first_id;
+  completed.intent     = render_->submitted.front();
+  service_->NotifyRenderResult(completed);
+  EXPECT_EQ(service_->state(), EditorSessionState::Loading);
+
+  EditorRenderResult submitted;
+  submitted.kind       = EditorRenderResultKind::FrameSubmitted;
+  submitted.request_id = first_id;
+  submitted.intent     = render_->submitted.front();
+  service_->NotifyRenderResult(submitted);
+
   EditorRenderResult presented;
-  presented.kind = EditorRenderResultKind::FramePresented;
-  presented.intent.session_generation = service_->identity().session_generation;
+  presented.kind       = EditorRenderResultKind::FramePresented;
+  presented.request_id = first_id;
+  presented.intent     = render_->submitted.front();
   service_->NotifyRenderResult(presented);
   EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+
+  // Duplicate presented is ignored.
+  service_->NotifyRenderResult(presented);
+  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+}
+
+TEST_F(EditorSessionServiceTest, LateOldRenderInSameSessionIsIgnored) {
+  service_->Open(1, 2);
+  PresentFirstFrame(*service_);
+  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+
+  // Patch advances render generation.
+  service_->Patch("exposure");
+  const auto new_render_gen = service_->identity().render_generation;
+
+  EditorRenderResult late_old;
+  late_old.kind       = EditorRenderResultKind::FramePresented;
+  late_old.request_id = 999;
+  late_old.intent     = render_->submitted.front();
+  late_old.intent.render_generation = new_render_gen - 1;
+  service_->NotifyRenderResult(late_old);
+  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+  EXPECT_EQ(service_->identity().render_generation, new_render_gen);
+}
+
+TEST_F(EditorSessionServiceTest, ReopenSameImageIsNoOpWithoutLeakingGuards) {
+  service_->Open(1, 2);
+  const auto gen1 = service_->identity().session_generation;
+  EXPECT_EQ(pipeline_->acquire_count, 1);
+  EXPECT_EQ(pipeline_->release_count, 0);
+
+  const auto second = service_->Open(1, 2);
+  EXPECT_EQ(second.kind, EditorSessionResultKind::Accepted);
+  EXPECT_EQ(service_->identity().session_generation, gen1);
+  EXPECT_EQ(pipeline_->acquire_count, 1);
+  EXPECT_EQ(pipeline_->release_count, 0);
+  EXPECT_TRUE(render_->cancelled_sessions.empty());
 }
 
 TEST_F(EditorSessionServiceTest, WorksWithRealCoordinatorAsRenderPort) {
@@ -268,6 +426,48 @@ TEST_F(EditorSessionServiceTest, WorksWithRealCoordinatorAsRenderPort) {
   EXPECT_EQ(service.state(), EditorSessionState::Loading);
   EXPECT_EQ(scheduler->scheduled().size(), 1u);
   EXPECT_EQ(scheduler->scheduled().front().intent.reason, EditorRenderReason::InitialFrame);
+}
+
+TEST_F(EditorSessionServiceTest, RuntimeForwardsCoordinatorResultsToControllerState) {
+  auto runtime = EditorSessionRuntime::Create();
+  int  change_count = 0;
+  runtime->service->SetChangeNotifier([&] { ++change_count; });
+
+  runtime->service->Open(11, 22);
+  EXPECT_EQ(runtime->service->state(), EditorSessionState::Loading);
+  ASSERT_EQ(runtime->scheduler->scheduled().size(), 1u);
+  const auto request_id = runtime->scheduler->scheduled().front().request_id;
+
+  runtime->service->NotifyImageAcquired(runtime->service->identity().session_generation, true);
+  EXPECT_EQ(runtime->service->state(), EditorSessionState::Loading);
+
+  // Drive coordinator completion → observer → service NotifyRenderResult.
+  runtime->coordinator->NotifySchedulerCompleted(request_id, true);
+  runtime->coordinator->NotifyFrameSubmitted(request_id);
+  runtime->coordinator->NotifyFramePresented(request_id);
+
+  EXPECT_EQ(runtime->service->state(), EditorSessionState::Interactive);
+  EXPECT_GT(change_count, 0);
+}
+
+TEST_F(EditorSessionServiceTest, ScheduledAdjustmentMatchesSubmittedSnapshotFieldByField) {
+  service_->Open(1, 2);
+  PresentFirstFrame(*service_);
+  render_->submitted.clear();
+
+  EditorAdjustmentPatch patch;
+  patch.field_key   = "contrast";
+  patch.params_json = R"({"contrast":0.25})";
+  service_->Patch(patch);
+
+  ASSERT_EQ(render_->submitted.size(), 1u);
+  const auto& snap = render_->submitted.back().adjustment;
+  EXPECT_EQ(snap.params_json, R"({"contrast":0.25})");
+  ASSERT_EQ(snap.patches.size(), 1u);
+  EXPECT_EQ(snap.patches[0].field_key, "contrast");
+  EXPECT_EQ(snap.patches[0].params_json, R"({"contrast":0.25})");
+  EXPECT_FALSE(snap.patches[0].settled);
+  EXPECT_FALSE(snap.fingerprint.empty());
 }
 
 }  // namespace

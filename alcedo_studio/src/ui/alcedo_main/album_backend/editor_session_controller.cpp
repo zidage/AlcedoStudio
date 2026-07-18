@@ -36,10 +36,32 @@ EditorSessionController::EditorSessionController(EditorController*              
     : QObject(parent), editor_(editor), session_backend_(session_backend) {
   LoadFilmstripUiPrefs();
   LoadDesktopUiPrefs();
+  if (session_backend_) {
+    session_backend_->SetChangeNotifier([this] { OnBackendChanged(); });
+  }
 }
 
 void EditorSessionController::SetSessionBackend(alcedo::IEditorSessionBackend* session_backend) {
+  if (session_backend_ == session_backend) {
+    return;
+  }
+  if (session_backend_) {
+    session_backend_->SetChangeNotifier({});
+  }
   session_backend_ = session_backend;
+  if (session_backend_) {
+    session_backend_->SetChangeNotifier([this] { OnBackendChanged(); });
+    SyncIdentityFromBackend();
+  }
+}
+
+void EditorSessionController::OnBackendChanged() {
+  if (!session_backend_) {
+    return;
+  }
+  SyncIdentityFromBackend();
+  SyncViewportIdentity();
+  emit StateChanged();
 }
 
 auto EditorSessionController::active() const -> bool {

@@ -10,8 +10,9 @@
 #include <optional>
 #include <string>
 
+#include "app/editor_adjustment_types.hpp"
+#include "edit/frame_presentation_types.hpp"
 #include "type/type.hpp"
-#include "ui/edit_viewer/frame_sink.hpp"
 
 namespace alcedo {
 
@@ -57,15 +58,6 @@ enum class EditorRenderResultKind : std::uint8_t {
 /// session service resolves it and stamps the identity on each intent.
 using PresentationSinkId = std::uint64_t;
 
-/// Immutable adjustment snapshot carried with a render intent. Phase 5A stores a
-/// fingerprint only; Phase 5B/6 fill pipeline params from reusable snapshot types
-/// that already live outside QWidget ownership (`EditorAdjustmentSnapshot`,
-/// `AdjustmentPreview` / `AdjustmentCommit`).
-struct EditorRenderAdjustmentSnapshot {
-  std::uint64_t snapshot_generation = 0;
-  std::string   fingerprint;
-};
-
 /// Cancellation token shared by intent producers and the coordinator. Setting
 /// `cancelled` to true rejects or aborts the matching request generation.
 struct EditorRenderCancellationToken {
@@ -77,7 +69,10 @@ struct EditorRenderCancellationToken {
   }
 };
 
-/// Immutable render intent accepted only by EditorRenderCoordinator.
+/// Render intent accepted only by EditorRenderCoordinator.
+///
+/// Producers fill defaults before Submit. After Submit accepts the request the
+/// coordinator does not mutate the stored intent (Phase 5A-Fix immutability).
 struct EditorRenderIntent {
   sl_element_id_t element_id = 0;
   image_id_t      image_id   = 0;
@@ -99,7 +94,7 @@ struct EditorRenderIntent {
 };
 
 struct EditorRenderRequest {
-  std::uint64_t     request_id = 0;
+  std::uint64_t      request_id = 0;
   EditorRenderIntent intent{};
 };
 
@@ -170,6 +165,22 @@ struct EditorRenderResult {
       return EditorRenderQuality::Interactive;
   }
   return EditorRenderQuality::Interactive;
+}
+
+/// Fill role/replacement defaults derived from quality before Submit stores the
+/// intent. Producers should set reason/quality/priority (or accept reason defaults).
+inline void FillRenderIntentDefaults(EditorRenderIntent& intent) {
+  // Align InteractivePrimary with non-interactive quality (legacy coordinator policy).
+  if (intent.frame_role == FrameRole::InteractivePrimary &&
+      intent.quality != EditorRenderQuality::Interactive) {
+    intent.frame_role = FrameRoleForQuality(intent.quality);
+  } else if (intent.frame_role == FrameRole::InteractivePrimary &&
+             intent.quality == EditorRenderQuality::Interactive) {
+    intent.frame_role = FrameRoleForQuality(intent.quality);
+  }
+  if (intent.replacement_key.empty()) {
+    intent.replacement_key = DefaultReplacementKey(intent.quality);
+  }
 }
 
 }  // namespace alcedo

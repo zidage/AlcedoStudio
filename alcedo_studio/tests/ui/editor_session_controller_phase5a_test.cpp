@@ -2,24 +2,29 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-/// Phase 5A: EditorSessionController with a fake IEditorSessionBackend, and a
-/// dependency scan proving editor UI modules do not call PipelineScheduler.
+/// Phase 5A / 5A-Fix: EditorSessionController with a fake IEditorSessionBackend,
+/// runtime→controller state propagation, dependency scan of QML editor path,
+/// and build-check that EditorSessionService does not link Qt Widgets.
 
 #include <gtest/gtest.h>
 
 #include <QCoreApplication>
 #include <QEvent>
 #include <QObject>
+#include <filesystem>
 #include <fstream>
 #include <string>
 #include <vector>
 
+#include "app/editor_session_bootstrap.hpp"
 #include "app/editor_session_service.hpp"
 #include "app/editor_session_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 
 namespace alcedo::ui {
 namespace {
+
+namespace fs = std::filesystem;
 
 class FakeSessionBackend final : public IEditorSessionBackend {
  public:
@@ -60,6 +65,7 @@ class FakeSessionBackend final : public IEditorSessionBackend {
     result.kind     = EditorSessionResultKind::StateChanged;
     result.state    = state_;
     result.identity = identity_;
+    NotifyChange();
     return result;
   }
 
@@ -75,6 +81,7 @@ class FakeSessionBackend final : public IEditorSessionBackend {
     EditorSessionResult result;
     result.kind  = EditorSessionResultKind::StateChanged;
     result.state = state_;
+    NotifyChange();
     return result;
   }
 
@@ -87,6 +94,12 @@ class FakeSessionBackend final : public IEditorSessionBackend {
 
   auto Undo() -> EditorSessionResult override { return Discard(); }
   auto Redo() -> EditorSessionResult override { return Discard(); }
+
+  // Test helper: simulate async Interactive transition from first frame.
+  void SimulateFirstFramePresented() {
+    state_ = EditorSessionState::Interactive;
+    NotifyChange();
+  }
 };
 
 TEST(EditorSessionControllerPhase5ATest, RoutesOpenThroughInjectedFakeBackend) {
@@ -124,6 +137,45 @@ TEST(EditorSessionControllerPhase5ATest, WorksWithoutBackendForShellOnlyTests) {
   EXPECT_FALSE(controller.has_image());
 }
 
+TEST(EditorSessionControllerPhase5ATest, AsyncBackendChangeEmitsStateChangedToQml) {
+  FakeSessionBackend backend;
+  EditorSessionController controller(nullptr, &backend);
+  int state_signals = 0;
+  QObject::connect(&controller, &EditorSessionController::StateChanged, [&] { ++state_signals; });
+
+  controller.Open(7, 8);
+  const int after_open = state_signals;
+  EXPECT_EQ(controller.session_state(), EditorSessionState::Loading);
+
+  backend.SimulateFirstFramePresented();
+  EXPECT_GT(state_signals, after_open);
+  EXPECT_EQ(controller.session_state(), EditorSessionState::Interactive);
+  EXPECT_EQ(controller.session_state_name(), QStringLiteral("Interactive"));
+}
+
+TEST(EditorSessionControllerPhase5ATest, RuntimeCoordinatorPresentationUpdatesController) {
+  auto runtime = alcedo::EditorSessionRuntime::Create();
+  EditorSessionController controller(nullptr, runtime->service.get());
+  int state_signals = 0;
+  QObject::connect(&controller, &EditorSessionController::StateChanged, [&] { ++state_signals; });
+
+  controller.Open(3, 4);
+  EXPECT_EQ(controller.session_state(), EditorSessionState::Loading);
+  ASSERT_FALSE(runtime->scheduler->scheduled().empty());
+  const auto request_id = runtime->scheduler->scheduled().front().request_id;
+
+  runtime->service->NotifyImageAcquired(runtime->service->identity().session_generation, true);
+  EXPECT_EQ(controller.session_state(), EditorSessionState::Loading);
+
+  runtime->coordinator->NotifySchedulerCompleted(request_id, true);
+  runtime->coordinator->NotifyFrameSubmitted(request_id);
+  runtime->coordinator->NotifyFramePresented(request_id);
+
+  EXPECT_EQ(controller.session_state(), EditorSessionState::Interactive);
+  EXPECT_EQ(controller.session_state_name(), QStringLiteral("Interactive"));
+  EXPECT_GT(state_signals, 0);
+}
+
 auto ReadFileText(const std::string& path) -> std::string {
   std::ifstream in(path, std::ios::binary);
   if (!in) {
@@ -132,44 +184,146 @@ auto ReadFileText(const std::string& path) -> std::string {
   return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 }
 
-TEST(EditorSessionControllerPhase5ATest, EditorUiModulesDoNotIncludePipelineScheduler) {
-  // Phase 5A acceptance: no editor UI module or input controller calls the
-  // pipeline scheduler directly. Allowlist is the legacy QWidget path only.
-  const char* repo_root = ALCEDO_REPO_ROOT;
-  const std::vector<std::string> forbidden_includes = {
-      "renderer/pipeline_scheduler.hpp",
-      "PipelineScheduler",
-      "ScheduleTask(",
-  };
-  const std::vector<std::string> scanned_files = {
-      std::string(repo_root) +
-          "/alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_controller.cpp",
-      std::string(repo_root) +
-          "/alcedo_studio/src/include/ui/alcedo_main/album_backend/editor_session_controller.hpp",
-      std::string(repo_root) +
-          "/alcedo_studio/src/include/ui/editor_rhi/editor_interaction_controller.hpp",
-      std::string(repo_root) +
-          "/alcedo_studio/src/ui/editor_rhi/editor_interaction_controller.cpp",
-      std::string(repo_root) +
-          "/alcedo_studio/src/include/ui/edit_viewer/view_transform_controller.hpp",
-      std::string(repo_root) +
-          "/alcedo_studio/src/ui/edit_viewer/view_transform_controller.cpp",
-      std::string(repo_root) +
-          "/alcedo_studio/src/include/ui/edit_viewer/crop_interaction_controller.hpp",
-      std::string(repo_root) +
-          "/alcedo_studio/src/ui/edit_viewer/crop_interaction_controller.cpp",
-      std::string(repo_root) + "/alcedo_studio/src/app/editor_session_service.cpp",
-  };
-
-  for (const auto& path : scanned_files) {
-    const std::string text = ReadFileText(path);
-    ASSERT_FALSE(text.empty()) << "missing source: " << path;
-    for (const auto& needle : forbidden_includes) {
-      EXPECT_EQ(text.find(needle), std::string::npos)
-          << path << " must not reference " << needle
-          << "; only EditorRenderCoordinator may own scheduler calls";
+auto CollectSourceFiles(const fs::path& root, const std::vector<std::string>& extensions)
+    -> std::vector<fs::path> {
+  std::vector<fs::path> out;
+  if (!fs::exists(root)) {
+    return out;
+  }
+  for (const auto& entry : fs::recursive_directory_iterator(root)) {
+    if (!entry.is_regular_file()) {
+      continue;
+    }
+    const auto ext = entry.path().extension().string();
+    for (const auto& want : extensions) {
+      if (ext == want) {
+        out.push_back(entry.path());
+        break;
+      }
     }
   }
+  return out;
+}
+
+TEST(EditorSessionControllerPhase5ATest, QmlEditorPathDoesNotIncludePipelineScheduler) {
+  // Phase 5A acceptance (scoped to the QML editor path + Phase 5A session/render
+  // sources). The legacy QWidget editor still calls PipelineScheduler until
+  // Phase 5D cutover; those files are explicit temporary exceptions.
+  const fs::path repo_root = fs::path(ALCEDO_REPO_ROOT);
+  const std::vector<fs::path> scan_roots = {
+      repo_root / "alcedo_studio/src/ui/alcedo_main/album_backend",
+      repo_root / "alcedo_studio/src/ui/editor_rhi",
+      repo_root / "alcedo_studio/src/ui/edit_viewer",
+      repo_root / "alcedo_studio/src/include/ui/alcedo_main/album_backend",
+      repo_root / "alcedo_studio/src/include/ui/editor_rhi",
+      repo_root / "alcedo_studio/src/include/ui/edit_viewer",
+  };
+  // Phase 5A session/render sources only (not entire app/, which owns export/
+  // thumbnail schedulers outside the editor).
+  const std::vector<fs::path> extra_files = {
+      repo_root / "alcedo_studio/src/app/editor_session_service.cpp",
+      repo_root / "alcedo_studio/src/app/editor_render_coordinator.cpp",
+      repo_root / "alcedo_studio/src/include/app/editor_session_types.hpp",
+      repo_root / "alcedo_studio/src/include/app/editor_adjustment_types.hpp",
+      repo_root / "alcedo_studio/src/include/app/editor_render_intent.hpp",
+      repo_root / "alcedo_studio/src/include/app/editor_session_ports.hpp",
+      repo_root / "alcedo_studio/src/include/app/editor_session_service.hpp",
+      repo_root / "alcedo_studio/src/include/app/editor_render_coordinator.hpp",
+      repo_root / "alcedo_studio/src/include/app/editor_session_bootstrap.hpp",
+  };
+  // Temporary Phase 5A exceptions: legacy QWidget editor scheduler callers.
+  const std::vector<std::string> exception_substrings = {
+      "editor_controller.cpp",
+      "editor_controller.hpp",
+      "editor_dialog/render/editor_render_coordinator",
+      "editor_dialog\\render\\editor_render_coordinator",
+  };
+
+  const std::vector<std::string> forbidden = {
+      "renderer/pipeline_scheduler.hpp",
+      "ScheduleTask(",
+  };
+
+  auto should_scan = [&](const std::string& path_str) -> bool {
+    for (const auto& ex : exception_substrings) {
+      if (path_str.find(ex) != std::string::npos) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  int scanned = 0;
+  auto scan_one = [&](const fs::path& path) {
+    const std::string path_str = path.generic_string();
+    if (!should_scan(path_str)) {
+      return;
+    }
+    const std::string text = ReadFileText(path.string());
+    ASSERT_FALSE(text.empty()) << "missing source: " << path_str;
+    ++scanned;
+    for (const auto& needle : forbidden) {
+      EXPECT_EQ(text.find(needle), std::string::npos)
+          << path_str << " must not reference " << needle
+          << "; only alcedo::EditorRenderCoordinator may own scheduler calls "
+             "(legacy QWidget path is excepted until Phase 5D)";
+    }
+  };
+
+  for (const auto& root : scan_roots) {
+    for (const auto& path : CollectSourceFiles(root, {".cpp", ".hpp", ".h"})) {
+      scan_one(path);
+    }
+  }
+  for (const auto& path : extra_files) {
+    scan_one(path);
+  }
+  EXPECT_GT(scanned, 10) << "expected to scan editor QML path sources";
+}
+
+TEST(EditorSessionControllerPhase5ATest, Phase5AAppHeadersDoNotIncludeUi) {
+  const fs::path app_include = fs::path(ALCEDO_REPO_ROOT) / "alcedo_studio/src/include/app";
+  const std::vector<std::string> phase5a_headers = {
+      "editor_session_types.hpp",
+      "editor_adjustment_types.hpp",
+      "editor_render_intent.hpp",
+      "editor_session_ports.hpp",
+      "editor_session_service.hpp",
+      "editor_render_coordinator.hpp",
+      "editor_session_bootstrap.hpp",
+  };
+  for (const auto& name : phase5a_headers) {
+    const fs::path path = app_include / name;
+    const std::string text = ReadFileText(path.string());
+    ASSERT_FALSE(text.empty()) << "missing " << path.string();
+    EXPECT_EQ(text.find("ui/"), std::string::npos)
+        << path.string() << " must not include ui/ headers (Phase 5A-Fix)";
+    EXPECT_EQ(text.find("edit_viewer/frame_sink.hpp"), std::string::npos)
+        << path.string() << " must not include frame_sink.hpp";
+  }
+}
+
+TEST(EditorSessionControllerPhase5ATest, EditorSessionServiceCMakeDoesNotLinkQtWidgets) {
+  const fs::path cmake =
+      fs::path(ALCEDO_REPO_ROOT) / "alcedo_studio/src/CMakeLists.txt";
+  const std::string text = ReadFileText(cmake.string());
+  ASSERT_FALSE(text.empty());
+
+  const auto start = text.find("def_library(EditorSessionService");
+  ASSERT_NE(start, std::string::npos);
+  const auto next = text.find("\ndef_library(", start + 1);
+  const std::string block =
+      text.substr(start, next == std::string::npos ? std::string::npos : next - start);
+  // Match real link dependency tokens, not comments that mention Widgets.
+  // Require an empty dependency list (no PUBLIC/PRIVATE dep args after SOURCES).
+  EXPECT_EQ(block.find("PUBLIC_DEPS"), std::string::npos)
+      << "EditorSessionService must not declare PUBLIC_DEPS";
+  EXPECT_EQ(block.find("PRIVATE_DEPS"), std::string::npos)
+      << "EditorSessionService must not declare PRIVATE_DEPS";
+  EXPECT_EQ(block.find("Qt6::Widgets"), std::string::npos)
+      << "EditorSessionService must not link Qt6::Widgets";
+  EXPECT_EQ(block.find("Qt5::Widgets"), std::string::npos);
+  EXPECT_NE(block.find("no Widgets"), std::string::npos);
 }
 
 }  // namespace

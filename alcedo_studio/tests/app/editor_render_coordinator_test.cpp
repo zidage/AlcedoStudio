@@ -79,7 +79,6 @@ TEST_F(EditorRenderCoordinatorTest, RejectsStaleSessionGeneration) {
 }
 
 TEST_F(EditorRenderCoordinatorTest, ReplacesPendingWorkWithSameReplacementKey) {
-  // Block the queue with an in-flight interactive job.
   auto first = coordinator_->Submit(
       MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
   ASSERT_TRUE(coordinator_->has_inflight());
@@ -108,7 +107,6 @@ TEST_F(EditorRenderCoordinatorTest, ReplacesPendingWorkWithSameReplacementKey) {
 }
 
 TEST_F(EditorRenderCoordinatorTest, SchedulesQualityBeforeInteractiveWhenBothPending) {
-  // Keep one job in-flight so subsequent submits stay pending.
   coordinator_->Submit(MakeIntent(EditorRenderQuality::Detail, EditorRenderPriority::Low));
   ASSERT_TRUE(coordinator_->has_inflight());
   const auto inflight_id = coordinator_->last_scheduled_request_id();
@@ -121,7 +119,6 @@ TEST_F(EditorRenderCoordinatorTest, SchedulesQualityBeforeInteractiveWhenBothPen
 
   coordinator_->NotifySchedulerCompleted(inflight_id, true);
   ASSERT_EQ(scheduler_->scheduled_.size(), 2u);
-  // Second scheduled job should be the quality request (higher frame-role rank).
   EXPECT_EQ(scheduler_->scheduled_.back().request_id, quality.request_id);
   EXPECT_NE(scheduler_->scheduled_.back().request_id, interactive.request_id);
 }
@@ -151,7 +148,6 @@ TEST_F(EditorRenderCoordinatorTest, CancellationTokenPreventsSchedule) {
   intent.cancellation->Cancel();
 
   coordinator_->NotifySchedulerCompleted(coordinator_->last_scheduled_request_id(), true);
-  // Cancelled pending entry must not be scheduled.
   bool scheduled_quality = false;
   for (const auto& req : scheduler_->scheduled_) {
     if (req.request_id == accepted.request_id) {
@@ -182,10 +178,145 @@ TEST_F(EditorRenderCoordinatorTest, ReportsFramePresentationSeparateFromRenderCo
   EXPECT_EQ(kinds[4], EditorRenderResultKind::FramePresented);
 }
 
+TEST_F(EditorRenderCoordinatorTest, RejectsPresentedWithoutSubmittedAndIgnoresDuplicates) {
+  const auto accepted = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
+  coordinator_->NotifySchedulerCompleted(accepted.request_id, true);
+
+  // Presented without submitted must be ignored.
+  coordinator_->NotifyFramePresented(accepted.request_id);
+  for (const auto& r : coordinator_->results()) {
+    EXPECT_NE(r.kind, EditorRenderResultKind::FramePresented);
+  }
+
+  coordinator_->NotifyFrameSubmitted(accepted.request_id);
+  coordinator_->NotifyFramePresented(accepted.request_id);
+  coordinator_->NotifyFrameSubmitted(accepted.request_id);
+  coordinator_->NotifyFramePresented(accepted.request_id);
+
+  int submitted = 0;
+  int presented = 0;
+  for (const auto& r : coordinator_->results()) {
+    if (r.request_id != accepted.request_id) {
+      continue;
+    }
+    if (r.kind == EditorRenderResultKind::FrameSubmitted) {
+      ++submitted;
+    }
+    if (r.kind == EditorRenderResultKind::FramePresented) {
+      ++presented;
+    }
+  }
+  EXPECT_EQ(submitted, 1);
+  EXPECT_EQ(presented, 1);
+}
+
+TEST_F(EditorRenderCoordinatorTest, CancelInflightStartsUnrelatedPendingRequest) {
+  const auto inflight = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
+  ASSERT_TRUE(coordinator_->has_inflight());
+
+  auto pending = MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal);
+  pending.replacement_key = "quality";
+  const auto pending_result = coordinator_->Submit(pending);
+  EXPECT_EQ(coordinator_->pending_count(), 1u);
+
+  EXPECT_TRUE(coordinator_->CancelRequest(inflight.request_id));
+  EXPECT_FALSE(scheduler_->cancelled_.empty());
+  // Unrelated pending quality request must start immediately.
+  EXPECT_TRUE(coordinator_->has_inflight());
+  EXPECT_EQ(coordinator_->last_scheduled_request_id(), pending_result.request_id);
+  EXPECT_EQ(coordinator_->pending_count(), 0u);
+
+  // Only one cancel result for the inflight request.
+  int cancel_count = 0;
+  for (const auto& r : coordinator_->results()) {
+    if (r.request_id == inflight.request_id && r.kind == EditorRenderResultKind::Cancelled) {
+      ++cancel_count;
+    }
+  }
+  EXPECT_EQ(cancel_count, 1);
+  // Late completion after cancel is ignored.
+  coordinator_->NotifySchedulerCompleted(inflight.request_id, true);
+  for (const auto& r : coordinator_->results()) {
+    if (r.request_id == inflight.request_id) {
+      EXPECT_NE(r.kind, EditorRenderResultKind::RenderCompleted);
+    }
+  }
+}
+
+TEST_F(EditorRenderCoordinatorTest, SetActiveGenerationsCancelsObsoletePendingAndInflightRenderGen) {
+  const auto inflight = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1, 1, 1));
+  auto pending = MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal, 1, 1, 1);
+  coordinator_->Submit(pending);
+  EXPECT_TRUE(coordinator_->has_inflight());
+  EXPECT_EQ(coordinator_->pending_count(), 1u);
+
+  // Advance render generation — both obsolete requests must be cancelled.
+  coordinator_->SetActiveGenerations(1, 2, 1);
+  EXPECT_FALSE(coordinator_->has_inflight());
+  EXPECT_EQ(coordinator_->pending_count(), 0u);
+  EXPECT_FALSE(scheduler_->cancelled_.empty());
+
+  int cancelled = 0;
+  for (const auto& r : coordinator_->results()) {
+    if (r.kind == EditorRenderResultKind::Cancelled) {
+      ++cancelled;
+    }
+  }
+  EXPECT_GE(cancelled, 2);
+
+  // New request with current render gen is accepted and scheduled.
+  const auto next = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1, 2, 1));
+  EXPECT_EQ(next.kind, EditorRenderResultKind::RequestAccepted);
+  EXPECT_TRUE(coordinator_->has_inflight());
+  EXPECT_EQ(inflight.kind, EditorRenderResultKind::RequestAccepted);
+}
+
+TEST_F(EditorRenderCoordinatorTest, SetActiveGenerationsCancelsObsoleteViewGeneration) {
+  coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1, 1, 1));
+  auto pending = MakeIntent(EditorRenderQuality::Detail, EditorRenderPriority::Low, 1, 1, 1);
+  coordinator_->Submit(pending);
+  EXPECT_EQ(coordinator_->pending_count(), 1u);
+
+  coordinator_->SetActiveGenerations(1, 1, 2);
+  EXPECT_FALSE(coordinator_->has_inflight());
+  EXPECT_EQ(coordinator_->pending_count(), 0u);
+
+  const auto next = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1, 1, 2));
+  EXPECT_EQ(next.kind, EditorRenderResultKind::RequestAccepted);
+  EXPECT_TRUE(coordinator_->has_inflight());
+}
+
+TEST_F(EditorRenderCoordinatorTest, SubmitDoesNotMutateStoredIntentAfterAccept) {
+  EditorRenderIntent intent =
+      MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal);
+  intent.replacement_key.clear();
+  intent.adjustment.fingerprint = "tone:v1";
+  intent.adjustment.params_json = R"({"exposure":0.5})";
+  intent.adjustment.patches.push_back(EditorAdjustmentPatch{"exposure", R"({"v":0.5})", false});
+
+  const auto accepted = coordinator_->Submit(intent);
+  EXPECT_EQ(accepted.kind, EditorRenderResultKind::RequestAccepted);
+  EXPECT_EQ(accepted.intent.replacement_key, "quality");
+  EXPECT_EQ(accepted.intent.frame_role, FrameRole::QualityBase);
+  EXPECT_EQ(accepted.intent.adjustment.fingerprint, "tone:v1");
+  ASSERT_EQ(accepted.intent.adjustment.patches.size(), 1u);
+  EXPECT_EQ(accepted.intent.adjustment.patches[0].field_key, "exposure");
+  EXPECT_EQ(accepted.intent.adjustment.params_json, R"({"exposure":0.5})");
+
+  ASSERT_FALSE(scheduler_->scheduled_.empty());
+  const auto& scheduled_intent = scheduler_->scheduled_.front().intent;
+  EXPECT_EQ(scheduled_intent.adjustment, accepted.intent.adjustment);
+  EXPECT_EQ(scheduled_intent.replacement_key, accepted.intent.replacement_key);
+  EXPECT_EQ(scheduled_intent.frame_role, accepted.intent.frame_role);
+}
+
 TEST_F(EditorRenderCoordinatorTest, IsTheOnlySchedulerCallerThroughSubmitPort) {
-  // Structural guarantee: tests exercise scheduling solely via Submit on the
-  // coordinator (IEditorRenderSubmitPort). No other production type in this
-  // translation unit holds the scheduler.
   IEditorRenderSubmitPort* port = coordinator_.get();
   port->SetActiveGenerations(1, 1, 1);
   const auto result =

@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "app/editor_render_intent.hpp"
@@ -31,10 +32,7 @@ class IEditorPipelineSchedulerPort {
 ///
 /// This is the only production component allowed to call the editor pipeline
 /// scheduler. Session service, adjustment models, and viewport controllers submit
-/// immutable EditorRenderIntent values here and never receive a PipelineScheduler
-/// pointer. Extracted scheduling policy from the legacy QWidget coordinator
-/// (priority, replacement, generation rejection, cancellation) without spinner,
-/// QtEditViewer, or dialog callbacks.
+/// EditorRenderIntent values here and never receive a PipelineScheduler pointer.
 class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
  public:
   using ResultObserver = std::function<void(const EditorRenderResult&)>;
@@ -43,7 +41,8 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
 
   void SetResultObserver(ResultObserver observer);
 
-  /// Active image/session/view generations. Older intents are rejected.
+  /// Active image/session/view generations. Older intents are rejected on submit;
+  /// advancing also cancels obsolete pending and in-flight work (Phase 5A-Fix).
   void SetActiveGenerations(std::uint64_t session_generation, std::uint64_t render_generation,
                             std::uint64_t view_generation) override;
 
@@ -56,7 +55,7 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   /// Cancel every pending/in-flight request for a session generation (image switch).
   void CancelSession(std::uint64_t session_generation) override;
 
-  /// Cancel one request by id (token or explicit).
+  /// Cancel one request by id (token or explicit). Starts the next runnable request.
   auto CancelRequest(std::uint64_t request_id) -> bool;
 
   /// Drive completion from the scheduler port (tests and future production glue).
@@ -84,8 +83,12 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
 
   auto AcceptOrReject(const EditorRenderIntent& intent, std::string* message) const -> bool;
   void ReplacePendingWithKey(const std::string& key, std::uint64_t except_request_id);
+  void CancelObsoleteForActiveGenerations();
+  [[nodiscard]] auto IsObsolete(const EditorRenderIntent& intent) const -> bool;
   void Emit(EditorRenderResult result);
   void ScheduleNext();
+  [[nodiscard]] auto HasResultKind(std::uint64_t request_id, EditorRenderResultKind kind) const
+      -> bool;
   [[nodiscard]] static auto PriorityRank(EditorRenderPriority priority) -> int;
   [[nodiscard]] static auto SelectNextIndex(const std::deque<PendingEntry>& pending) -> std::size_t;
 
@@ -99,6 +102,7 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   std::deque<PendingEntry>                      pending_;
   std::optional<PendingEntry>                   inflight_;
   std::vector<EditorRenderResult>               results_;
+  std::unordered_set<std::uint64_t>             terminal_request_ids_;
 };
 
 }  // namespace alcedo

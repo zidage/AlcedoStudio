@@ -1379,20 +1379,20 @@ def_library(EditHistoryMgmtService
 
 # Phase 5A: application-layer editor session + unified render-intent coordinator.
 # No QWidget, QML, or AlbumBackend dependency. UI modules submit intents only.
+# Reusable library: no Widgets link (Phase 5A-Fix build check).
 def_library(EditorSessionService
     SOURCES
         app/editor_session_service.cpp
         app/editor_render_coordinator.cpp
         include/app/editor_session_types.hpp
+        include/app/editor_adjustment_types.hpp
         include/app/editor_render_intent.hpp
         include/app/editor_session_ports.hpp
         include/app/editor_session_service.hpp
         include/app/editor_render_coordinator.hpp
         include/app/editor_session_bootstrap.hpp
-    PUBLIC_DEPS
-        # FrameRole / ViewportRenderRegion live in frame_sink.hpp (header-only
-        # relative to EditPipeline include surface).
-        EditPipeline
+        include/edit/frame_presentation_types.hpp
+    # Header-only frame types; no link dependencies (no UI, no Widgets).
 )
 
 def_library(ImportService

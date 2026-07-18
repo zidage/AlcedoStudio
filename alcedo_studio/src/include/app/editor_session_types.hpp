@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 
+#include "app/editor_adjustment_types.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -61,10 +62,15 @@ struct EditorSessionIntent {
   EditorSessionIntentKind kind = EditorSessionIntentKind::Open;
   sl_element_id_t         element_id = 0;
   image_id_t              image_id   = 0;
-  /// Opaque adjustment patch fingerprint or field key for Patch intents.
-  std::string             patch_key;
+  /// Full adjustment patch for Patch / GestureCommit (field + params).
+  EditorAdjustmentPatch   patch{};
+  /// Optional full snapshot when the producer already has one.
+  EditorRenderAdjustmentSnapshot adjustment{};
   /// Optional human-readable failure/context payload for tests and diagnostics.
   std::string             note;
+
+  /// Convenience: field key only (maps into patch.field_key).
+  [[nodiscard]] auto patch_key() const -> const std::string& { return patch.field_key; }
 };
 
 struct EditorSessionResult {
@@ -72,6 +78,8 @@ struct EditorSessionResult {
   EditorSessionState      state = EditorSessionState::NoImage;
   EditorSessionIdentity   identity{};
   std::uint64_t           render_request_id = 0;
+  /// Background task id for SaveStarted / SaveFinished pairing.
+  std::uint64_t           task_id = 0;
   std::string             message;
 };
 

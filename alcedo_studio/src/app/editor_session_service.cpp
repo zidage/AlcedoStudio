@@ -4,6 +4,7 @@
 
 #include "app/editor_session_service.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace alcedo {
@@ -15,6 +16,10 @@ void EditorSessionService::SetResultObserver(ResultObserver observer) {
   observer_ = std::move(observer);
 }
 
+void EditorSessionService::SetChangeNotifier(ChangeNotifier notifier) {
+  change_notifier_ = std::move(notifier);
+}
+
 void EditorSessionService::SetPresentationSinkId(PresentationSinkId sink_id) {
   presentation_sink_id_ = sink_id;
 }
@@ -24,6 +29,7 @@ auto EditorSessionService::Emit(EditorSessionResult result) -> EditorSessionResu
   if (observer_) {
     observer_(results_.back());
   }
+  NotifyChange();
   return result;
 }
 
@@ -87,22 +93,24 @@ auto EditorSessionService::AcquireGuards(sl_element_id_t element_id, std::string
 auto EditorSessionService::MakeRenderIntent(EditorRenderReason reason) const
     -> std::optional<EditorRenderIntent> {
   if (!has_image() && state_ != EditorSessionState::Loading &&
-      state_ != EditorSessionState::Acquiring) {
+      state_ != EditorSessionState::Acquiring && state_ != EditorSessionState::Switching) {
     return std::nullopt;
   }
   EditorRenderIntent intent;
-  intent.element_id          = identity_.element_id;
-  intent.image_id            = identity_.image_id;
-  intent.session_generation  = identity_.session_generation;
-  intent.render_generation   = identity_.render_generation;
-  intent.view_generation     = identity_.view_generation;
-  intent.reason              = reason;
-  intent.quality             = DefaultQualityForReason(reason);
-  intent.priority            = DefaultPriorityForReason(reason);
-  intent.frame_role          = FrameRoleForQuality(intent.quality);
-  intent.replacement_key     = DefaultReplacementKey(intent.quality);
+  intent.element_id           = identity_.element_id;
+  intent.image_id             = identity_.image_id;
+  intent.session_generation   = identity_.session_generation;
+  intent.render_generation    = identity_.render_generation;
+  intent.view_generation      = identity_.view_generation;
+  intent.reason               = reason;
+  intent.quality              = DefaultQualityForReason(reason);
+  intent.priority             = DefaultPriorityForReason(reason);
+  intent.frame_role           = FrameRoleForQuality(intent.quality);
+  intent.replacement_key      = DefaultReplacementKey(intent.quality);
+  intent.adjustment           = adjustment_snapshot_;
   intent.presentation_sink_id = presentation_sink_id_;
-  intent.cancellation        = std::make_shared<EditorRenderCancellationToken>();
+  intent.cancellation         = std::make_shared<EditorRenderCancellationToken>();
+  FillRenderIntentDefaults(intent);
   return intent;
 }
 
@@ -119,6 +127,13 @@ auto EditorSessionService::RouteInitialRender(EditorRenderReason reason) -> std:
                                              identity_.view_generation);
   const EditorRenderResult routed = dependencies_.render->Submit(*intent);
   if (routed.kind == EditorRenderResultKind::RequestAccepted) {
+    if (reason == EditorRenderReason::InitialFrame || reason == EditorRenderReason::ImageSwitch ||
+        reason == EditorRenderReason::Retry) {
+      first_frame_request_id_ = routed.request_id;
+      first_frame_completed_  = false;
+      first_frame_submitted_  = false;
+      first_frame_presented_  = false;
+    }
     EditorSessionResult session_result;
     session_result.kind              = EditorSessionResultKind::RenderRouted;
     session_result.state             = state_;
@@ -128,6 +143,22 @@ auto EditorSessionService::RouteInitialRender(EditorRenderReason reason) -> std:
     return routed.request_id;
   }
   return 0;
+}
+
+void EditorSessionService::BeginSaveForSession(std::uint64_t session_generation,
+                                               sl_element_id_t element_id) {
+  std::uint64_t task_id = 0;
+  if (dependencies_.tasks) {
+    task_id = dependencies_.tasks->BeginTask("editor_save", element_id);
+  }
+  pending_saves_.push_back(PendingSave{session_generation, task_id});
+  EditorSessionResult started;
+  started.kind     = EditorSessionResultKind::SaveStarted;
+  started.state    = state_;
+  started.identity = identity_;
+  started.task_id  = task_id;
+  started.message  = "Save started";
+  Emit(std::move(started));
 }
 
 auto EditorSessionService::HandleOpenOrSwitch(const EditorSessionIntent& intent, bool is_switch)
@@ -142,34 +173,44 @@ auto EditorSessionService::HandleOpenOrSwitch(const EditorSessionIntent& intent,
       dependencies_.render->CancelSession(identity_.session_generation);
     }
     ReleaseGuards();
-    // Clear image identity but keep session_generation so the next Open still
-    // advances past it (A → empty → B must not reuse generation A).
     identity_.element_id = 0;
     identity_.image_id   = 0;
-    pending_save_ = false;
-    pending_save_generation_ = 0;
+    first_frame_request_id_ = 0;
+    image_acquired_         = false;
+    first_frame_completed_  = false;
+    first_frame_submitted_  = false;
+    first_frame_presented_  = false;
     return TransitionTo(EditorSessionState::NoImage, EditorSessionResultKind::StateChanged,
                         "No image selected");
   }
 
+  // Same image already open: no-op. Avoids leaking guards or orphaning renders.
+  if (identity_.element_id == intent.element_id && identity_.image_id == intent.image_id &&
+      (state_ == EditorSessionState::Loading || state_ == EditorSessionState::Interactive ||
+       state_ == EditorSessionState::Acquiring || state_ == EditorSessionState::Switching ||
+       state_ == EditorSessionState::Saving)) {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Accepted;
+    result.state    = state_;
+    result.identity = identity_;
+    result.message  = "Image already open";
+    return Emit(std::move(result));
+  }
+
   // Seal prior session: cancel outdated renders; optional save barrier when switching.
   if (identity_.session_generation != 0 &&
-      (identity_.element_id != intent.element_id || identity_.image_id != intent.image_id)) {
+      (identity_.element_id != 0 || identity_.image_id != 0)) {
     if (dependencies_.render) {
       dependencies_.render->CancelSession(identity_.session_generation);
     }
     if (is_switch || state_ == EditorSessionState::Interactive ||
         state_ == EditorSessionState::Saving) {
-      pending_save_            = true;
-      pending_save_generation_ = identity_.session_generation;
-      if (dependencies_.tasks) {
-        dependencies_.tasks->BeginTask("editor_save", identity_.element_id);
-      }
       if (dependencies_.journal) {
         std::string journal_error;
         dependencies_.journal->AppendBarrier(identity_.element_id, identity_.session_generation,
                                              &journal_error);
       }
+      BeginSaveForSession(identity_.session_generation, identity_.element_id);
     }
     ReleaseGuards();
   }
@@ -179,6 +220,15 @@ auto EditorSessionService::HandleOpenOrSwitch(const EditorSessionIntent& intent,
   identity_.image_id          = intent.image_id;
   identity_.render_generation = identity_.session_generation;
   identity_.view_generation   = 1;
+  image_acquired_             = false;
+  first_frame_request_id_     = 0;
+  first_frame_completed_      = false;
+  first_frame_submitted_      = false;
+  first_frame_presented_      = false;
+  if (!intent.adjustment.fingerprint.empty() || !intent.adjustment.params_json.empty() ||
+      !intent.adjustment.patches.empty()) {
+    adjustment_snapshot_ = intent.adjustment;
+  }
 
   const EditorSessionState acquire_state =
       is_switch ? EditorSessionState::Switching : EditorSessionState::Acquiring;
@@ -194,8 +244,6 @@ auto EditorSessionService::HandleOpenOrSwitch(const EditorSessionIntent& intent,
   }
 
   TransitionTo(EditorSessionState::Loading, EditorSessionResultKind::StateChanged, "Loading image");
-  // Phase 5A: route the initial interactive render intent immediately so open
-  // always creates a render intent. Phase 5B owns real frame presentation.
   RouteInitialRender(is_switch ? EditorRenderReason::ImageSwitch
                                : EditorRenderReason::InitialFrame);
   return results_.back();
@@ -209,6 +257,25 @@ auto EditorSessionService::HandlePatch(const EditorSessionIntent& intent, bool s
   if (!has_image()) {
     return Reject("Patch requires an open image");
   }
+
+  EditorAdjustmentPatch patch = intent.patch;
+  patch.settled               = settled;
+  if (!intent.adjustment.params_json.empty() || !intent.adjustment.patches.empty() ||
+      !intent.adjustment.fingerprint.empty()) {
+    adjustment_snapshot_ = intent.adjustment;
+  } else if (!patch.field_key.empty()) {
+    ++adjustment_snapshot_.snapshot_generation;
+    adjustment_snapshot_.patches.push_back(patch);
+    if (!patch.params_json.empty()) {
+      adjustment_snapshot_.params_json = patch.params_json;
+    }
+    if (adjustment_snapshot_.fingerprint.empty()) {
+      adjustment_snapshot_.fingerprint = patch.field_key;
+    } else {
+      adjustment_snapshot_.fingerprint += "|" + patch.field_key;
+    }
+  }
+
   ++identity_.render_generation;
   if (dependencies_.render) {
     dependencies_.render->SetActiveGenerations(identity_.session_generation,
@@ -223,7 +290,7 @@ auto EditorSessionService::HandlePatch(const EditorSessionIntent& intent, bool s
   result.state             = state_;
   result.identity          = identity_;
   result.render_request_id = request_id;
-  result.message           = intent.patch_key;
+  result.message           = patch.field_key;
   return Emit(std::move(result));
 }
 
@@ -276,9 +343,12 @@ auto EditorSessionService::HandleShutdown() -> EditorSessionResult {
                                          &error);
   }
   ReleaseGuards();
-  identity_ = {};
-  pending_save_ = false;
-  pending_save_generation_ = 0;
+  identity_                 = {};
+  first_frame_request_id_   = 0;
+  image_acquired_           = false;
+  first_frame_completed_    = false;
+  first_frame_submitted_    = false;
+  first_frame_presented_    = false;
   return TransitionTo(EditorSessionState::ShuttingDown, EditorSessionResultKind::StateChanged,
                       "Shutting down");
 }
@@ -323,18 +393,31 @@ auto EditorSessionService::Switch(sl_element_id_t element_id, image_id_t image_i
   return Submit(intent);
 }
 
-auto EditorSessionService::Patch(std::string patch_key) -> EditorSessionResult {
+auto EditorSessionService::Patch(EditorAdjustmentPatch patch) -> EditorSessionResult {
   EditorSessionIntent intent;
-  intent.kind      = EditorSessionIntentKind::Patch;
-  intent.patch_key = std::move(patch_key);
+  intent.kind  = EditorSessionIntentKind::Patch;
+  intent.patch = std::move(patch);
   return Submit(intent);
 }
 
-auto EditorSessionService::GestureCommit(std::string patch_key) -> EditorSessionResult {
+auto EditorSessionService::GestureCommit(EditorAdjustmentPatch patch) -> EditorSessionResult {
   EditorSessionIntent intent;
-  intent.kind      = EditorSessionIntentKind::GestureCommit;
-  intent.patch_key = std::move(patch_key);
+  intent.kind  = EditorSessionIntentKind::GestureCommit;
+  intent.patch = std::move(patch);
   return Submit(intent);
+}
+
+auto EditorSessionService::Patch(std::string patch_key) -> EditorSessionResult {
+  EditorAdjustmentPatch patch;
+  patch.field_key = std::move(patch_key);
+  return Patch(std::move(patch));
+}
+
+auto EditorSessionService::GestureCommit(std::string patch_key) -> EditorSessionResult {
+  EditorAdjustmentPatch patch;
+  patch.field_key = std::move(patch_key);
+  patch.settled   = true;
+  return GestureCommit(std::move(patch));
 }
 
 auto EditorSessionService::Undo() -> EditorSessionResult {
@@ -365,32 +448,43 @@ void EditorSessionService::NotifyImageAcquired(std::uint64_t session_generation,
   }
   if (!success) {
     ReleaseGuards();
+    image_acquired_ = false;
     TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
                  message.empty() ? "Image acquisition failed" : std::move(message));
     return;
   }
-  TransitionTo(EditorSessionState::Interactive, EditorSessionResultKind::ImageReady,
-               message.empty() ? "Image ready" : std::move(message));
+  // Stay Loading until the matching first frame is submitted and presented.
+  image_acquired_ = true;
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = state_;
+  result.identity = identity_;
+  result.message  = message.empty() ? "Image acquired; waiting for first frame" : std::move(message);
+  Emit(std::move(result));
+  TryEnterInteractiveFromFirstFrame({});
 }
 
 void EditorSessionService::NotifySaveFinished(std::uint64_t session_generation, bool success,
                                               std::string message) {
-  if (!pending_save_ || session_generation != pending_save_generation_) {
-    // Completions for non-current save generations are ignored (reordered async).
+  auto it = std::find_if(pending_saves_.begin(), pending_saves_.end(),
+                         [session_generation](const PendingSave& save) {
+                           return save.session_generation == session_generation;
+                         });
+  if (it == pending_saves_.end()) {
     return;
   }
-  pending_save_            = false;
-  pending_save_generation_ = 0;
+  const std::uint64_t task_id = it->task_id;
+  pending_saves_.erase(it);
   if (dependencies_.tasks) {
-    dependencies_.tasks->EndTask(0, success, message);
+    dependencies_.tasks->EndTask(task_id, success, message);
   }
   if (!success && state_ != EditorSessionState::ShuttingDown) {
-    // Save failure is recorded but does not force Failed if a new image is interactive.
     last_error_ = message.empty() ? "Save failed" : message;
     EditorSessionResult result;
     result.kind     = EditorSessionResultKind::Failed;
     result.state    = state_;
     result.identity = identity_;
+    result.task_id  = task_id;
     result.message  = last_error_;
     Emit(std::move(result));
     return;
@@ -399,27 +493,87 @@ void EditorSessionService::NotifySaveFinished(std::uint64_t session_generation, 
   result.kind     = EditorSessionResultKind::SaveFinished;
   result.state    = state_;
   result.identity = identity_;
+  result.task_id  = task_id;
   result.message  = std::move(message);
   Emit(std::move(result));
 }
 
-void EditorSessionService::NotifyRenderResult(const EditorRenderResult& render_result) {
-  // Presentation is a separate event from pipeline task completion. Session UI
-  // follows these results instead of assuming a completed task is already visible.
-  if (render_result.intent.session_generation != identity_.session_generation) {
+auto EditorSessionService::MatchesActiveFirstFrame(const EditorRenderResult& render_result) const
+    -> bool {
+  if (first_frame_request_id_ == 0 || render_result.request_id != first_frame_request_id_) {
+    return false;
+  }
+  const auto& intent = render_result.intent;
+  return intent.element_id == identity_.element_id && intent.image_id == identity_.image_id &&
+         intent.session_generation == identity_.session_generation &&
+         intent.render_generation == identity_.render_generation &&
+         intent.view_generation == identity_.view_generation;
+}
+
+void EditorSessionService::TryEnterInteractiveFromFirstFrame(
+    const EditorRenderResult& /*render_result*/) {
+  if (state_ != EditorSessionState::Loading && state_ != EditorSessionState::Acquiring &&
+      state_ != EditorSessionState::Switching) {
     return;
   }
+  if (!image_acquired_ || !first_frame_completed_ || !first_frame_submitted_ ||
+      !first_frame_presented_) {
+    return;
+  }
+  TransitionTo(EditorSessionState::Interactive, EditorSessionResultKind::ImageReady,
+               "First frame presented");
+}
+
+void EditorSessionService::NotifyRenderResult(const EditorRenderResult& render_result) {
+  // Ignore results for a different image/session.
+  if (render_result.intent.session_generation != 0 &&
+      render_result.intent.session_generation != identity_.session_generation) {
+    return;
+  }
+  if (render_result.intent.image_id != 0 && render_result.intent.image_id != identity_.image_id) {
+    return;
+  }
+  if (render_result.intent.element_id != 0 &&
+      render_result.intent.element_id != identity_.element_id) {
+    return;
+  }
+
   if (render_result.kind == EditorRenderResultKind::Failed) {
-    if (state_ == EditorSessionState::Loading) {
+    if (state_ == EditorSessionState::Loading && MatchesActiveFirstFrame(render_result)) {
       TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
                    render_result.message.empty() ? "Render failed" : render_result.message);
     }
     return;
   }
-  if (render_result.kind == EditorRenderResultKind::FramePresented &&
-      state_ == EditorSessionState::Loading) {
-    TransitionTo(EditorSessionState::Interactive, EditorSessionResultKind::ImageReady,
-                 "First frame presented");
+
+  // First-frame gate: require matching generations and ordered complete→submit→present.
+  if (MatchesActiveFirstFrame(render_result)) {
+    if (render_result.kind == EditorRenderResultKind::RenderCompleted) {
+      first_frame_completed_ = true;
+    } else if (render_result.kind == EditorRenderResultKind::FrameSubmitted) {
+      if (!first_frame_completed_) {
+        return;
+      }
+      first_frame_submitted_ = true;
+    } else if (render_result.kind == EditorRenderResultKind::FramePresented) {
+      if (!first_frame_completed_ || !first_frame_submitted_) {
+        return;
+      }
+      if (first_frame_presented_) {
+        return;
+      }
+      first_frame_presented_ = true;
+      TryEnterInteractiveFromFirstFrame(render_result);
+    }
+    return;
+  }
+
+  // Non-first-frame results: still require generation match for presentation side-effects.
+  if (render_result.kind == EditorRenderResultKind::FramePresented) {
+    if (render_result.intent.render_generation != identity_.render_generation ||
+        render_result.intent.view_generation != identity_.view_generation) {
+      return;
+    }
   }
 }
 

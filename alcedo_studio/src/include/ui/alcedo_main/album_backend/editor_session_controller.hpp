@@ -73,6 +73,10 @@ class EditorSessionController final : public QObject {
 
   void SetSessionBackend(alcedo::IEditorSessionBackend* session_backend);
 
+  /// Called when the injected backend reports an async state/identity change
+  /// (render presented, save finished, etc.). Mirrors backend into QML properties.
+  void OnBackendChanged();
+
   [[nodiscard]] bool active() const;
   [[nodiscard]] bool has_image() const;
   [[nodiscard]] uint element_id() const;

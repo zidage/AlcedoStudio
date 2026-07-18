@@ -1,6 +1,10 @@
 #define ALCEDO_EDITOR_DIALOG_INTERNAL
 #include "ui/alcedo_main/editor_dialog/editor_dialog.hpp"
 
+#include <QInputDialog>
+#include <QLineEdit>
+#include <optional>
+
 #include "ui/alcedo_main/editor_dialog/pipeline/display_transform_pipeline_adapter.hpp"
 #include "ui/alcedo_main/editor_dialog/pipeline/look_pipeline_adapter.hpp"
 #include "ui/alcedo_main/editor_dialog/pipeline/raw_pipeline_adapter.hpp"
@@ -60,9 +64,27 @@ EditorDialog::EditorDialog(std::shared_ptr<ImagePoolService>       image_pool,
           .history_guard   = history_guard_,
           .pipeline_guard  = pipeline_guard_,
           .element_id      = element_id_,
-          .message_parent  = this,
       },
       EditorHistoryCoordinator::Callbacks{
+          .show_message =
+              [this](const QString& title, const QString& text, bool is_warning) {
+                if (is_warning) {
+                  QMessageBox::warning(this, title, text);
+                } else {
+                  QMessageBox::information(this, title, text);
+                }
+              },
+          .prompt_text =
+              [this](const QString& title, const QString& label,
+                     const QString& current) -> std::optional<QString> {
+                bool          ok = false;
+                const QString next =
+                    QInputDialog::getText(this, title, label, QLineEdit::Normal, current, &ok);
+                if (!ok) {
+                  return std::nullopt;
+                }
+                return next;
+              },
           .reload_ui_state_from_pipeline =
               [this](bool reset_to_defaults_if_missing) {
                 const bool loaded = LoadStateFromPipelineIfPresent();
