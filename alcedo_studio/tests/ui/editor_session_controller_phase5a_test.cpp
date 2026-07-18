@@ -23,6 +23,7 @@
 #include "app/editor_session_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/workspace_router.hpp"
+#include "ui/editor_rhi/editor_interaction_controller.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -120,6 +121,26 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   auto Undo() -> EditorSessionResult override { return Discard(); }
   auto Redo() -> EditorSessionResult override { return Discard(); }
 
+  // Phase 5D: record view-change routing so tests can assert the controller
+  // forwards intents (and only intents) to the backend without bypassing it.
+  bool                               view_change_recorded = false;
+  EditorRenderReason                 view_change_reason = EditorRenderReason::ZoomPan;
+  std::optional<ViewportRenderRegion> view_change_region{std::nullopt};
+  bool                               render_busy_ = false;
+
+  auto RequestViewChange(EditorRenderReason reason,
+                         std::optional<ViewportRenderRegion> region) -> EditorSessionResult override {
+    view_change_recorded = true;
+    view_change_reason   = reason;
+    view_change_region   = std::move(region);
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::RenderRouted;
+    result.state    = state_;
+    result.identity = identity_;
+    return result;
+  }
+  [[nodiscard]] auto render_busy() const -> bool override { return render_busy_; }
+
   // Test helper: simulate async Interactive transition from first frame.
   void SimulateFirstFramePresented() {
     state_ = EditorSessionState::Interactive;
@@ -201,6 +222,57 @@ TEST(EditorSessionControllerPhase5ATest, PresentationSizeIsForwardedToTheBackend
 
   EXPECT_EQ(backend.presentation_width, 1920);
   EXPECT_EQ(backend.presentation_height, 1080);
+}
+
+TEST(EditorSessionControllerPhase5ATest, SubmitViewChangeRoutesThroughBackend) {
+  // Phase 5D A4/D2: the controller only reports the new view and forwards a
+  // typed ViewChange intent to the backend; it never bypasses the coordinator.
+  // ViewChangeKind maps 1:1 to EditorRenderReason; only DetailRefresh carries a
+  // region (resolved from the bound frame sink — nullopt when no viewport is
+  // bound).
+  FakeSessionBackend      backend;
+  EditorSessionController controller(nullptr, &backend);
+  controller.Open(7, 8);  // backend -> Loading with an image identity
+  ASSERT_TRUE(controller.has_image());
+
+  using VCK = alcedo::editor_rhi::EditorInteractionController::ViewChangeKind;
+
+  controller.submitViewChange(static_cast<int>(VCK::DetailRefresh));
+  EXPECT_TRUE(backend.view_change_recorded);
+  EXPECT_EQ(backend.view_change_reason, alcedo::EditorRenderReason::DetailRefresh);
+  EXPECT_FALSE(backend.view_change_region.has_value());  // no bound sink
+
+  controller.submitViewChange(static_cast<int>(VCK::CropRotate));
+  EXPECT_EQ(backend.view_change_reason, alcedo::EditorRenderReason::CropRotate);
+  EXPECT_FALSE(backend.view_change_region.has_value());
+
+  controller.submitViewChange(static_cast<int>(VCK::Resize));
+  EXPECT_EQ(backend.view_change_reason, alcedo::EditorRenderReason::Resize);
+
+  controller.submitViewChange(static_cast<int>(VCK::ZoomPan));
+  EXPECT_EQ(backend.view_change_reason, alcedo::EditorRenderReason::ZoomPan);
+}
+
+TEST(EditorSessionControllerPhase5ATest, SubmitViewChangeIsNoOpWithoutImage) {
+  // Phase 5D: a backend with no open image must not route a view change. The
+  // view state itself already updated in the interaction controller; the
+  // viewport re-samples whatever frame it last received.
+  FakeSessionBackend      backend;
+  EditorSessionController controller(nullptr, &backend);
+  EXPECT_FALSE(controller.has_image());
+  controller.submitViewChange(static_cast<int>(
+      alcedo::editor_rhi::EditorInteractionController::ViewChangeKind::ZoomPan));
+  EXPECT_FALSE(backend.view_change_recorded);
+}
+
+TEST(EditorSessionControllerPhase5ATest, RenderBusyReflectsBackendDiagnostics) {
+  // Phase 5D D6: render_busy is a thin reflection of backend diagnostics; it
+  // never exposes a pipeline task object to QML.
+  FakeSessionBackend      backend;
+  EditorSessionController controller(nullptr, &backend);
+  EXPECT_FALSE(controller.render_busy());
+  backend.render_busy_ = true;
+  EXPECT_TRUE(controller.render_busy());
 }
 
 TEST(EditorSessionControllerPhase5ATest, WorksWithoutBackendForShellOnlyTests) {

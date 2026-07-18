@@ -517,6 +517,77 @@ auto EditorSessionService::HandleShutdown() -> EditorSessionResult {
                       "Shutting down");
 }
 
+auto EditorSessionService::HandleViewChange(const EditorSessionIntent& intent) -> EditorSessionResult {
+  if (state_ != EditorSessionState::Interactive) {
+    return Reject("View change requires an interactive session");
+  }
+  if (!has_image()) {
+    return Reject("View change requires an open image");
+  }
+  const EditorRenderReason reason = intent.view_reason;
+
+  // Phase 5D D2 generation policy. A content-changing geometry change (crop/
+  // rotation) advances the render generation and cancels obsolete full-frame
+  // work. Pure view transforms (zoom/pan/resize) and detail refresh advance only
+  // the view generation: full-frame renders survive (the renderer re-samples
+  // them under the new view) and only view-dependent DetailPatch work is
+  // cancelled by the view-generation advance.
+  if (reason == EditorRenderReason::CropRotate) {
+    ++identity_.render_generation;
+  } else {
+    ++identity_.view_generation;
+  }
+  if (dependencies_.render) {
+    dependencies_.render->SetActiveGenerations(
+        identity_.session_generation, identity_.render_generation, identity_.view_generation);
+  }
+
+  auto intent_opt = MakeRenderIntent(reason);
+  if (!intent_opt) {
+    return Reject("View change render intent could not be built");
+  }
+  // Phase 5D D5: attach the requested region to DetailRefresh intents. Full-frame
+  // view changes carry no region; the production scheduler still loads the ROI
+  // from the sink at render time for DetailPatch work.
+  intent_opt->view_region =
+      (reason == EditorRenderReason::DetailRefresh) ? intent.view_region : std::nullopt;
+
+  EditorRenderResult routed;
+  if (dependencies_.render) {
+    routed = dependencies_.render->Submit(*intent_opt);
+  } else {
+    routed.kind    = EditorRenderResultKind::Failed;
+    routed.message = "Render submit port unavailable";
+  }
+
+  EditorSessionResult result;
+  result.state    = state_;
+  result.identity = identity_;
+  switch (routed.kind) {
+    case EditorRenderResultKind::RequestAccepted:
+      // Coordinator scheduled a pipeline task (InteractivePrimary for CropRotate,
+      // DetailPatch for DetailRefresh). ZoomPan/Resize never reach here: the
+      // coordinator reuses the current frame and returns Reused instead.
+      result.kind              = EditorSessionResultKind::RenderRouted;
+      result.render_request_id = routed.request_id;
+      result.message           = "View change render routed";
+      break;
+    case EditorRenderResultKind::Reused:
+      // Coordinator decision (D2): the current full frame covers this view
+      // change; the viewport re-samples it via synchronize(). No pipeline task.
+      result.kind    = EditorSessionResultKind::Accepted;
+      result.message = "View change reused current frame";
+      break;
+    default:
+      // Rejected/Failed: the session stays Interactive and the prior frame
+      // remains valid. Surface the reason without a state transition.
+      result.kind    = EditorSessionResultKind::Rejected;
+      result.message = routed.message.empty() ? "View change render rejected" : routed.message;
+      break;
+  }
+  return Emit(std::move(result));
+}
+
 auto EditorSessionService::Submit(const EditorSessionIntent& intent) -> EditorSessionResult {
   std::scoped_lock lock(mutex_);
   switch (intent.kind) {
@@ -536,6 +607,8 @@ auto EditorSessionService::Submit(const EditorSessionIntent& intent) -> EditorSe
       return HandleUndoRedo(/*undo=*/false);
     case EditorSessionIntentKind::Discard:
       return HandleDiscard();
+    case EditorSessionIntentKind::ViewChange:
+      return HandleViewChange(intent);
     case EditorSessionIntentKind::Shutdown:
       return HandleShutdown();
   }
@@ -608,6 +681,31 @@ auto EditorSessionService::Discard() -> EditorSessionResult {
 
 auto EditorSessionService::Shutdown() -> EditorSessionResult {
   return Submit(EditorSessionIntent{EditorSessionIntentKind::Shutdown});
+}
+
+auto EditorSessionService::RequestViewChange(EditorRenderReason reason,
+                                             std::optional<ViewportRenderRegion> region)
+    -> EditorSessionResult {
+  EditorSessionIntent intent;
+  intent.kind        = EditorSessionIntentKind::ViewChange;
+  intent.view_reason = reason;
+  intent.view_region = std::move(region);
+  return Submit(intent);
+}
+
+auto EditorSessionService::CoordinatorBusy() const -> bool {
+  if (!dependencies_.render) {
+    return false;
+  }
+  const auto diag = dependencies_.render->diagnostics();
+  return diag.has_inflight || diag.pending_count > 0;
+}
+
+auto EditorSessionService::render_busy() const -> bool {
+  // Do not hold the service mutex while querying the coordinator. dependencies_
+  // is immutable after construction, and the coordinator observer runs outside
+  // the coordinator data mutex, so this cannot deadlock against NotifyRenderResult.
+  return CoordinatorBusy();
 }
 
 void EditorSessionService::NotifyImageAcquired(std::uint64_t session_generation, bool success,
@@ -754,6 +852,15 @@ void EditorSessionService::NotifyRenderResult(const EditorRenderResult& render_r
         render_result.intent.view_generation != identity_.view_generation) {
       return;
     }
+  }
+
+  // Phase 5D D6: announce render-busy transitions so QML spinners reflect
+  // coordinator in-flight/pending state even when the session state itself does
+  // not change (e.g. a view-change render starts or completes while Interactive).
+  const bool busy = CoordinatorBusy();
+  if (busy != last_notified_render_busy_) {
+    last_notified_render_busy_ = busy;
+    NotifyChange();
   }
 }
 

@@ -70,6 +70,19 @@ class EditorInteractionController : public QObject {
                  interactionEnabledChanged)
 
  public:
+  // Phase 5D: view-change kind reported to the session controller for render
+  // routing. UI-level only — the album backend maps this to an EditorRenderReason
+  // and the coordinator decides reuse vs. InteractivePrimary vs. DetailPatch.
+  // Input handlers report the new view; they never choose or submit pipeline
+  // tasks (plan Phase 5D D2).
+  enum class ViewChangeKind {
+    ZoomPan,        // zoom/pan transform (reuse or detail, decided downstream)
+    Resize,         // viewport metrics (size/dpr) changed
+    CropRotate,     // crop rect or rotation changed (content change)
+    DetailRefresh,  // ROI detail region/mode changed
+  };
+  Q_ENUM(ViewChangeKind)
+
   explicit EditorInteractionController(QObject* parent = nullptr);
 
   [[nodiscard]] auto zoom() const -> float;
@@ -183,6 +196,11 @@ class EditorInteractionController : public QObject {
   void interactionEnabledChanged();
   void viewZoomChanged(float zoom);
   void viewStateChanged();
+  // Phase 5D: a user-driven view change occurred (zoom/pan/resize/crop-
+  // rotation/ROI). Carries a ViewChangeKind (int for QML). Emitted AFTER
+  // viewStateChanged so the QML push of the new view to the viewport (and its
+  // sink region) lands before the session routes the render intent.
+  void viewChangeReported(int kind);
 
  private:
   static constexpr int kZoomAnimationDurationMs = 170;
@@ -195,6 +213,10 @@ class EditorInteractionController : public QObject {
   void applyCursor(std::optional<Qt::CursorShape> cursor, bool unset);
   void stopZoomAnimation();
   void emitViewAndOverlay();
+  // Phase 5D: report a user-driven view change for render routing. No-op when
+  // interaction is disabled (bookkeeping setters call this directly only when a
+  // real view/content change happened).
+  void emitViewChange(ViewChangeKind kind);
   void updateViewportRenderRegionCache();
   void reconcileViewTransformForRenderReference();
 

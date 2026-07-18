@@ -95,6 +95,20 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
     std::scoped_lock lock(mutex_);
     return results_;
   }
+  /// Phase 5D: aggregate busy/reason summary for QML. Never exposes pipeline
+  /// task objects.
+  [[nodiscard]] auto diagnostics() const -> EditorRenderCoordinatorDiagnostics override {
+    std::scoped_lock lock(mutex_);
+    EditorRenderCoordinatorDiagnostics diag;
+    diag.has_inflight    = inflight_.has_value();
+    diag.pending_count   = pending_.size();
+    diag.inflight_reason = inflight_ ? std::make_optional(inflight_->request.intent.reason)
+                                     : std::nullopt;
+    diag.replaced_count  = replaced_count_;
+    diag.cancelled_count = cancelled_count_;
+    diag.last_error      = last_error_;
+    return diag;
+  }
 
  private:
   struct CancellationCallbackGate {
@@ -132,6 +146,10 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   std::vector<EditorRenderResult>               pending_delivery_;
   std::unordered_set<std::uint64_t>             terminal_request_ids_;
   std::shared_ptr<CancellationCallbackGate>     cancellation_gate_;
+  // Phase 5D diagnostics counters (QML spinner/progress/error surface).
+  std::size_t                                   replaced_count_  = 0;
+  std::size_t                                   cancelled_count_ = 0;
+  std::string                                   last_error_;
   mutable std::mutex                            mutex_;
   std::recursive_mutex                          delivery_mutex_;
 };

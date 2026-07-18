@@ -147,6 +147,8 @@ void EditorInteractionController::setCropRectNormalized(const QRectF& rect) {
   emit cropRectCommitted(adjusted, true);
   emit overlayGeometryChanged();
   emit viewStateChanged();
+  // Phase 5D: programmatic crop-rect change is a content change → CropRotate.
+  emitViewChange(ViewChangeKind::CropRotate);
 }
 
 void EditorInteractionController::setCropRotationDegrees(float degrees) {
@@ -163,6 +165,8 @@ void EditorInteractionController::setCropRotationDegrees(float degrees) {
   emit cropRotationCommitted(normalized, true);
   emit overlayGeometryChanged();
   emit viewStateChanged();
+  // Phase 5D: programmatic rotation change is a content change → CropRotate.
+  emitViewChange(ViewChangeKind::CropRotate);
 }
 
 void EditorInteractionController::setCropAspectLock(bool enabled, float aspect_ratio) {
@@ -278,6 +282,11 @@ void EditorInteractionController::setViewportMetrics(qreal width, qreal height,
       (before.pan - after.pan).lengthSquared() <= 1.0e-8f) {
     emit viewChanged();
   }
+  // Phase 5D: a metrics change (size/dpr) is a Resize — the viewport re-samples
+  // the current full frame; render-pass QRhi objects are rebuilt in initialize()
+  // without invalidating active image generation (D8). Emitted after the view
+  // push so the sink region reflects the new letterbox.
+  emitViewChange(ViewChangeKind::Resize);
 }
 
 void EditorInteractionController::setImageSize(int width, int height) {
@@ -606,6 +615,13 @@ void EditorInteractionController::applyViewTransformResult(const ViewTransformRe
   if (result.request_repaint) {
     updateViewportRenderRegionCache();
     emitViewAndOverlay();
+    // Phase 5D: report the view change for render routing. emitViewAndOverlay
+    // fires viewStateChanged first so the QML push of the new view (and the sink
+    // region) lands before the session routes the intent. While zoomed in (>1),
+    // the visible viewport is an ROI that needs a DetailPatch; at fit it is a
+    // pure re-sample that reuses the current full frame (ZoomPan).
+    emitViewChange(zoom() > 1.0f + 1.0e-4f ? ViewChangeKind::DetailRefresh
+                                           : ViewChangeKind::ZoomPan);
   }
   if (result.emitted_zoom.has_value()) {
     emit viewZoomChanged(*result.emitted_zoom);
@@ -625,6 +641,13 @@ void EditorInteractionController::applyCropInteractionResult(const CropInteracti
   if (result.request_repaint) {
     emit overlayGeometryChanged();
     emit viewStateChanged();
+  }
+  // Phase 5D: a crop rect or rotation change is a content change — the
+  // coordinator must schedule a fresh InteractivePrimary (no reuse). Emitted
+  // after viewStateChanged so the QML view push lands first. Drag moves report
+  // the change repeatedly; the session/coordinator coalesce them.
+  if (result.rect_changed.has_value() || result.rotation_changed.has_value()) {
+    emitViewChange(ViewChangeKind::CropRotate);
   }
 }
 
@@ -658,6 +681,13 @@ void EditorInteractionController::emitViewAndOverlay() {
   emit viewChanged();
   emit overlayGeometryChanged();
   emit viewStateChanged();
+}
+
+void EditorInteractionController::emitViewChange(ViewChangeKind kind) {
+  // Phase 5D: report the view change for render routing. Emitted by callers
+  // AFTER viewStateChanged so the QML push of the new view to the viewport (and
+  // its DirectFrameSink region) lands before the session routes the intent.
+  emit viewChangeReported(static_cast<int>(kind));
 }
 
 void EditorInteractionController::updateViewportRenderRegionCache() {

@@ -221,6 +221,51 @@ class EditorSessionServiceTest : public ::testing::Test {
   std::unique_ptr<EditorSessionService> service_;
 };
 
+// Phase 5D: drive a real-coordinator runtime to Interactive by presenting the
+// first frame through the bootstrap scheduler. Returns the first-frame request
+// id so tests can correlate coordinator completions.
+auto DriveRuntimeToInteractive(EditorSessionRuntime& runtime) -> std::uint64_t {
+  runtime.service->SetPresentationSinkId(1);
+  runtime.service->SetPresentationSize(640, 480);
+  runtime.service->Open(11, 22);
+  auto* bootstrap_scheduler =
+      dynamic_cast<EditorSessionBootstrapSchedulerPort*>(runtime.scheduler.get());
+  EXPECT_NE(bootstrap_scheduler, nullptr);
+  const auto request_id = bootstrap_scheduler->scheduled().front().request_id;
+  runtime.service->NotifyImageAcquired(runtime.service->identity().session_generation, true);
+  runtime.coordinator->NotifySchedulerCompleted(request_id, true);
+  runtime.coordinator->NotifyFrameSubmitted(request_id);
+  runtime.coordinator->NotifyFramePresented(request_id);
+  // Presenting the first frame transitions the session to Interactive and
+  // auto-routes a QualityBase follow-up (TryEnterInteractiveFromFirstFrame ->
+  // RouteQualityBaseFollowUp). Drive that follow-up to completion too so the
+  // coordinator is idle and each Phase 5D view-change test starts from a clean
+  // Interactive state (render_busy == false, no in-flight shadowing the next
+  // intent). Without this, the QualityBase follow-up stays in-flight and a
+  // subsequent DetailRefresh (view-generation advance, which does NOT cancel
+  // full-frame work by design) would never get scheduled.
+  if (bootstrap_scheduler->scheduled().size() > 1u) {
+    const auto quality_request_id = bootstrap_scheduler->scheduled().back().request_id;
+    runtime.coordinator->NotifySchedulerCompleted(quality_request_id, true);
+    runtime.coordinator->NotifyFrameSubmitted(quality_request_id);
+    runtime.coordinator->NotifyFramePresented(quality_request_id);
+  }
+  return request_id;
+}
+
+auto MakeRegion(int x) -> ViewportRenderRegion {
+  ViewportRenderRegion region{};
+  region.x_               = x;
+  region.y_               = 0;
+  region.scale_x_         = 2.0f;
+  region.scale_y_         = 2.0f;
+  region.reference_width_ = 640;
+  region.reference_height_ = 480;
+  region.target_width_    = 320;
+  region.target_height_   = 240;
+  return region;
+}
+
 TEST_F(EditorSessionServiceTest, OpenAcquiresGuardsRoutesInitialRenderAndLeavesLoading) {
   const auto result = service_->Open(100, 200);
   EXPECT_EQ(service_->state(), EditorSessionState::Loading);
@@ -721,6 +766,134 @@ TEST_F(EditorSessionServiceTest, ScheduledAdjustmentMatchesSubmittedSnapshotFiel
   EXPECT_EQ(snap.patches[0].params_json, R"({"contrast":0.25})");
   EXPECT_FALSE(snap.patches[0].settled);
   EXPECT_FALSE(snap.fingerprint.empty());
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5D: ViewChange intent routing through the real coordinator (A1/A2/A3,
+// render_busy for D6). These use EditorSessionRuntime so the coordinator's
+// reuse-vs-render decision is exercised end-to-end through the service.
+
+TEST_F(EditorSessionServiceTest, ViewChangeZoomPanIsReusedWithoutScheduling) {
+  auto runtime = EditorSessionRuntime::Create();
+  DriveRuntimeToInteractive(*runtime);
+  auto* sched = dynamic_cast<EditorSessionBootstrapSchedulerPort*>(runtime->scheduler.get());
+  ASSERT_NE(sched, nullptr);
+  const auto scheduled_before = sched->scheduled().size();
+
+  const auto result =
+      runtime->service->RequestViewChange(EditorRenderReason::ZoomPan, std::nullopt);
+  // The coordinator reused the current full frame (D2); the service maps Reused
+  // to Accepted. No new pipeline task, no busy state.
+  EXPECT_EQ(result.kind, EditorSessionResultKind::Accepted);
+  EXPECT_EQ(sched->scheduled().size(), scheduled_before);
+  EXPECT_FALSE(runtime->service->render_busy());
+}
+
+TEST_F(EditorSessionServiceTest, ViewChangeResizeIsReusedWithoutScheduling) {
+  auto runtime = EditorSessionRuntime::Create();
+  DriveRuntimeToInteractive(*runtime);
+  auto* sched = dynamic_cast<EditorSessionBootstrapSchedulerPort*>(runtime->scheduler.get());
+  ASSERT_NE(sched, nullptr);
+  const auto scheduled_before = sched->scheduled().size();
+
+  const auto result = runtime->service->RequestViewChange(EditorRenderReason::Resize, std::nullopt);
+  EXPECT_EQ(result.kind, EditorSessionResultKind::Accepted);
+  EXPECT_EQ(sched->scheduled().size(), scheduled_before);
+  EXPECT_FALSE(runtime->service->render_busy());
+}
+
+TEST_F(EditorSessionServiceTest, ViewChangeDetailRefreshSchedulesDetailPatch) {
+  auto runtime = EditorSessionRuntime::Create();
+  DriveRuntimeToInteractive(*runtime);
+  auto* sched = dynamic_cast<EditorSessionBootstrapSchedulerPort*>(runtime->scheduler.get());
+  ASSERT_NE(sched, nullptr);
+
+  const auto region = MakeRegion(7);
+  const auto result =
+      runtime->service->RequestViewChange(EditorRenderReason::DetailRefresh, region);
+  EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
+  ASSERT_FALSE(sched->scheduled().empty());
+  const auto& scheduled = sched->scheduled().back().intent;
+  EXPECT_EQ(scheduled.frame_role, FrameRole::DetailPatch);
+  EXPECT_EQ(scheduled.reason, EditorRenderReason::DetailRefresh);
+  EXPECT_EQ(scheduled.quality, EditorRenderQuality::Detail);
+  ASSERT_TRUE(scheduled.view_region.has_value());
+  EXPECT_EQ(scheduled.view_region->x_, 7);
+  EXPECT_TRUE(runtime->service->render_busy());
+}
+
+TEST_F(EditorSessionServiceTest, ViewChangeCropRotateSchedulesInteractivePrimary) {
+  auto runtime = EditorSessionRuntime::Create();
+  DriveRuntimeToInteractive(*runtime);
+  auto* sched = dynamic_cast<EditorSessionBootstrapSchedulerPort*>(runtime->scheduler.get());
+  ASSERT_NE(sched, nullptr);
+  const auto render_gen_before = runtime->service->identity().render_generation;
+
+  const auto result =
+      runtime->service->RequestViewChange(EditorRenderReason::CropRotate, std::nullopt);
+  EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
+  // A content-changing geometry change advances the render generation.
+  EXPECT_GT(runtime->service->identity().render_generation, render_gen_before);
+  ASSERT_FALSE(sched->scheduled().empty());
+  const auto& scheduled = sched->scheduled().back().intent;
+  EXPECT_EQ(scheduled.frame_role, FrameRole::InteractivePrimary);
+  EXPECT_EQ(scheduled.reason, EditorRenderReason::CropRotate);
+  EXPECT_EQ(scheduled.quality, EditorRenderQuality::Interactive);
+  EXPECT_FALSE(scheduled.view_region.has_value());
+  EXPECT_TRUE(runtime->service->render_busy());
+}
+
+TEST_F(EditorSessionServiceTest, ViewChangeRejectedWhenNotInteractive) {
+  auto runtime = EditorSessionRuntime::Create();
+  // No Open: the session is NoImage, so a view change cannot be routed.
+  const auto result =
+      runtime->service->RequestViewChange(EditorRenderReason::ZoomPan, std::nullopt);
+  EXPECT_EQ(result.kind, EditorSessionResultKind::Rejected);
+  EXPECT_FALSE(runtime->service->render_busy());
+}
+
+TEST_F(EditorSessionServiceTest, ViewChangeBurstKeepsNewestDetailAndCancelsPrior) {
+  // Phase 5D A2: a burst of replaceable view-change input (here, repeated ROI
+  // detail refreshes as a pinch-zoom burst) does not let an outdated detail
+  // patch complete. Each refresh advances the view generation and cancels the
+  // prior in-flight detail patch; only the newest survives (last state never
+  // lost) and the coordinator goes idle once it completes.
+  auto runtime = EditorSessionRuntime::Create();
+  DriveRuntimeToInteractive(*runtime);
+  auto* sched = dynamic_cast<EditorSessionBootstrapSchedulerPort*>(runtime->scheduler.get());
+  ASSERT_NE(sched, nullptr);
+
+  std::uint64_t last_request_id = 0;
+  for (int i = 0; i < 6; ++i) {
+    const auto result = runtime->service->RequestViewChange(EditorRenderReason::DetailRefresh,
+                                                            MakeRegion(i));
+    ASSERT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
+    last_request_id = result.render_request_id;
+  }
+  EXPECT_TRUE(runtime->service->render_busy());
+  // The newest detail patch is the in-flight one; prior patches were cancelled.
+  EXPECT_EQ(runtime->coordinator->last_scheduled_request_id(), last_request_id);
+  EXPECT_EQ(sched->cancelled().size(), 5u);
+
+  // Completing the newest detail patch drains the coordinator.
+  runtime->coordinator->NotifySchedulerCompleted(last_request_id, true);
+  EXPECT_FALSE(runtime->service->render_busy());
+}
+
+TEST_F(EditorSessionServiceTest, RenderBusyTransitionsAroundViewChange) {
+  // Phase 5D D6: render_busy reflects coordinator diagnostics only and
+  // transitions on submit / completion via the backend notifier.
+  auto runtime = EditorSessionRuntime::Create();
+  DriveRuntimeToInteractive(*runtime);
+  EXPECT_FALSE(runtime->service->render_busy());
+
+  const auto result =
+      runtime->service->RequestViewChange(EditorRenderReason::DetailRefresh, MakeRegion(3));
+  ASSERT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
+  EXPECT_TRUE(runtime->service->render_busy());
+
+  runtime->coordinator->NotifySchedulerCompleted(result.render_request_id, true);
+  EXPECT_FALSE(runtime->service->render_busy());
 }
 
 }  // namespace

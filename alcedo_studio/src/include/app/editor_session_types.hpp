@@ -9,6 +9,7 @@
 #include <string>
 
 #include "app/editor_adjustment_types.hpp"
+#include "app/editor_render_intent.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -36,6 +37,10 @@ enum class EditorSessionIntentKind : std::uint8_t {
   Undo,
   Redo,
   Discard,
+  // Phase 5D: pure viewport/geometry view change (zoom, pan, resize, crop/
+  // rotation, ROI). Carries the render reason in EditorSessionIntent::view_reason;
+  // the coordinator decides reuse vs. InteractivePrimary vs. DetailPatch.
+  ViewChange,
   Shutdown,
 };
 
@@ -67,8 +72,15 @@ struct EditorSessionIntent {
   EditorAdjustmentPatch          patch{};
   /// Optional full snapshot when the producer already has one.
   EditorRenderAdjustmentSnapshot adjustment{};
+  /// ViewChange reason (zoom/pan/resize/crop-rotation/ROI). Ignored for other
+  /// intent kinds. Phase 5D.
+  EditorRenderReason             view_reason = EditorRenderReason::ZoomPan;
+  /// ViewChange requested region (the visible viewport ROI). Attached to the
+  /// render intent for DetailRefresh so the request carries its requested
+  /// region (Phase 5D D5). Nullopt for full-frame view changes.
+  std::optional<ViewportRenderRegion> view_region{std::nullopt};
   /// Optional human-readable failure/context payload for tests and diagnostics.
-  std::string                    note;
+  std::string                    note{};
   /// Close persists by default. False means discard the current unflushed edit.
   bool                           persist_changes = true;
 

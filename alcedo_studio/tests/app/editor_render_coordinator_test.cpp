@@ -52,6 +52,18 @@ auto MakeIntent(EditorRenderQuality quality, EditorRenderPriority priority,
   return intent;
 }
 
+// Phase 5D: view-change intent (zoom/pan/resize/crop-rotation/ROI). Carries the
+// reason that drives the coordinator's reuse-vs-render decision; quality still
+// sets frame_role/replacement_key like a service-produced intent.
+auto MakeViewIntent(EditorRenderReason reason, EditorRenderQuality quality,
+                    EditorRenderPriority priority = EditorRenderPriority::Normal,
+                    std::uint64_t          session_gen = 1, std::uint64_t render_gen = 1,
+                    std::uint64_t          view_gen    = 1) -> EditorRenderIntent {
+  EditorRenderIntent intent = MakeIntent(quality, priority, session_gen, render_gen, view_gen);
+  intent.reason             = reason;
+  return intent;
+}
+
 class EditorRenderCoordinatorTest : public ::testing::Test {
  protected:
   void SetUp() override {
@@ -86,14 +98,16 @@ TEST_F(EditorRenderCoordinatorTest, ReplacesPendingWorkWithSameReplacementKey) {
       MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
   ASSERT_TRUE(coordinator_->has_inflight());
 
+  // Phase 5D: ZoomPan/Resize are reused (never enqueued), so a replacement-key
+  // test must use a reason that enqueues. MakeIntent defaults to
+  // InteractiveAdjustment, which produces a pending "interactive" entry that a
+  // newer same-key submit replaces.
   auto older             = MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Low);
-  older.reason           = EditorRenderReason::ZoomPan;
   const auto pending_old = coordinator_->Submit(older);
   EXPECT_EQ(pending_old.kind, EditorRenderResultKind::RequestAccepted);
   EXPECT_EQ(coordinator_->pending_count(), 1u);
 
   auto newer             = MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::High);
-  newer.reason           = EditorRenderReason::ZoomPan;
   const auto pending_new = coordinator_->Submit(newer);
   EXPECT_EQ(pending_new.kind, EditorRenderResultKind::RequestAccepted);
   EXPECT_EQ(coordinator_->pending_count(), 1u);
@@ -109,21 +123,27 @@ TEST_F(EditorRenderCoordinatorTest, ReplacesPendingWorkWithSameReplacementKey) {
   EXPECT_EQ(first.kind, EditorRenderResultKind::RequestAccepted);
 }
 
-TEST_F(EditorRenderCoordinatorTest, SchedulesQualityBeforeInteractiveWhenBothPending) {
+TEST_F(EditorRenderCoordinatorTest, SchedulesInteractiveBeforeQualityWhenBothPending) {
+  // Phase 5D D4 priority order for visible work: missing first frame / current
+  // interactive response (InteractivePrimary) first, then settled QualityBase,
+  // then the current detail patch, then background. Interactive work is never
+  // blocked behind an outdated quality or detail request. Role rank dominates
+  // EditorRenderPriority, so Interactive (role 3) outranks Quality (role 2)
+  // even when Quality carries the higher priority value.
   coordinator_->Submit(MakeIntent(EditorRenderQuality::Detail, EditorRenderPriority::Low));
   ASSERT_TRUE(coordinator_->has_inflight());
   const auto inflight_id = coordinator_->last_scheduled_request_id();
 
   const auto interactive = coordinator_->Submit(
-      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::High));
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
   const auto quality =
-      coordinator_->Submit(MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Low));
+      coordinator_->Submit(MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::High));
   EXPECT_EQ(coordinator_->pending_count(), 2u);
 
   coordinator_->NotifySchedulerCompleted(inflight_id, true);
   ASSERT_EQ(scheduler_->scheduled_.size(), 2u);
-  EXPECT_EQ(scheduler_->scheduled_.back().request_id, quality.request_id);
-  EXPECT_NE(scheduler_->scheduled_.back().request_id, interactive.request_id);
+  EXPECT_EQ(scheduler_->scheduled_.back().request_id, interactive.request_id);
+  EXPECT_NE(scheduler_->scheduled_.back().request_id, quality.request_id);
 }
 
 TEST_F(EditorRenderCoordinatorTest, CancelSessionDropsPendingAndInflight) {
@@ -355,21 +375,80 @@ TEST_F(EditorRenderCoordinatorTest,
   EXPECT_EQ(inflight.kind, EditorRenderResultKind::RequestAccepted);
 }
 
-TEST_F(EditorRenderCoordinatorTest, SetActiveGenerationsCancelsObsoleteViewGeneration) {
-  coordinator_->Submit(
+TEST_F(EditorRenderCoordinatorTest, ViewGenerationAdvanceCancelsOnlyDetailPatch) {
+  // Phase 5D D2: a view-generation advance (zoom/pan/resize/ROI) only obsoletes
+  // view-dependent DetailPatch work. Full-frame renders (InteractivePrimary /
+  // QualityBase) are view-independent — the renderer re-samples them under the
+  // new view — so a zoom must NOT cancel an in-flight or pending full-frame.
+  const auto interactive = coordinator_->Submit(
       MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1, 1, 1));
-  auto pending = MakeIntent(EditorRenderQuality::Detail, EditorRenderPriority::Low, 1, 1, 1);
-  coordinator_->Submit(pending);
-  EXPECT_EQ(coordinator_->pending_count(), 1u);
+  ASSERT_TRUE(coordinator_->has_inflight());
+  const auto detail = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Detail, EditorRenderPriority::Low, 1, 1, 1));
+  ASSERT_EQ(coordinator_->pending_count(), 1u);
 
   coordinator_->SetActiveGenerations(1, 1, 2);
-  EXPECT_FALSE(coordinator_->has_inflight());
+
+  // The interactive full-frame in-flight survives; only the DetailPatch pending
+  // is cancelled.
+  EXPECT_TRUE(coordinator_->has_inflight());
   EXPECT_EQ(coordinator_->pending_count(), 0u);
 
-  const auto next = coordinator_->Submit(
-      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1, 1, 2));
-  EXPECT_EQ(next.kind, EditorRenderResultKind::RequestAccepted);
-  EXPECT_TRUE(coordinator_->has_inflight());
+  bool detail_cancelled       = false;
+  bool interactive_cancelled  = false;
+  for (const auto& r : coordinator_->results()) {
+    if (r.kind != EditorRenderResultKind::Cancelled) {
+      continue;
+    }
+    if (r.request_id == detail.request_id) {
+      detail_cancelled = true;
+    }
+    if (r.request_id == interactive.request_id) {
+      interactive_cancelled = true;
+    }
+  }
+  EXPECT_TRUE(detail_cancelled);
+  EXPECT_FALSE(interactive_cancelled);
+}
+
+TEST_F(EditorRenderCoordinatorTest, ViewGenerationAdvanceKeepsFullFramePendingCancelsOnlyDetail) {
+  // DetailPatch in-flight; QualityBase + InteractivePrimary pending (both full
+  // frame). A view-generation advance cancels the in-flight DetailPatch but
+  // keeps both full-frame pending entries so the viewport re-samples them under
+  // the new view (Phase 5D D2).
+  const auto detail = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Detail, EditorRenderPriority::Low, 1, 1, 1));
+  ASSERT_TRUE(coordinator_->has_inflight());
+  const auto quality = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal, 1, 1, 1));
+  const auto interactive = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1, 1, 1));
+  ASSERT_EQ(coordinator_->pending_count(), 2u);
+
+  coordinator_->SetActiveGenerations(1, 1, 2);
+
+  // The in-flight DetailPatch is cancelled; ScheduleNext then promotes the
+  // higher-role full-frame (InteractivePrimary, role 3) to in-flight, leaving
+  // the QualityBase pending. Both full-frames survive (one in-flight, one
+  // pending); neither is cancelled.
+  EXPECT_TRUE(coordinator_->has_inflight());    // detail cancelled; full-frame promoted
+  EXPECT_EQ(coordinator_->pending_count(), 1u);  // one full-frame pending, one in-flight
+
+  bool  detail_cancelled      = false;
+  int   full_frame_cancelled  = 0;
+  for (const auto& r : coordinator_->results()) {
+    if (r.kind != EditorRenderResultKind::Cancelled) {
+      continue;
+    }
+    if (r.request_id == detail.request_id) {
+      detail_cancelled = true;
+    }
+    if (r.request_id == quality.request_id || r.request_id == interactive.request_id) {
+      ++full_frame_cancelled;
+    }
+  }
+  EXPECT_TRUE(detail_cancelled);
+  EXPECT_EQ(full_frame_cancelled, 0);
 }
 
 TEST_F(EditorRenderCoordinatorTest, SubmitDoesNotMutateStoredIntentAfterAccept) {
@@ -403,6 +482,112 @@ TEST_F(EditorRenderCoordinatorTest, IsTheOnlySchedulerCallerThroughSubmitPort) {
       port->Submit(MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
   EXPECT_EQ(result.kind, EditorRenderResultKind::RequestAccepted);
   EXPECT_EQ(scheduler_->scheduled_.size(), 1u);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5D per-reason coordinator decisions (D2 reuse-vs-render, A1).
+
+TEST_F(EditorRenderCoordinatorTest, ZoomPanIntentIsReusedWithoutScheduling) {
+  // A pure zoom/pan transform reuses the current full frame; the renderer
+  // re-samples it through synchronize(). No pipeline task is scheduled.
+  const auto result = coordinator_->Submit(
+      MakeViewIntent(EditorRenderReason::ZoomPan, EditorRenderQuality::Interactive));
+  EXPECT_EQ(result.kind, EditorRenderResultKind::Reused);
+  EXPECT_TRUE(scheduler_->scheduled_.empty());
+  EXPECT_FALSE(coordinator_->has_inflight());
+  EXPECT_EQ(coordinator_->pending_count(), 0u);
+}
+
+TEST_F(EditorRenderCoordinatorTest, ResizeIntentIsReusedWithoutScheduling) {
+  // Phase 5D D8: a viewport resize reuses the current full frame; the render
+  // pass rebuilds QRhi objects in initialize() without a new pipeline task and
+  // without invalidating active image generation.
+  const auto result = coordinator_->Submit(
+      MakeViewIntent(EditorRenderReason::Resize, EditorRenderQuality::Interactive));
+  EXPECT_EQ(result.kind, EditorRenderResultKind::Reused);
+  EXPECT_TRUE(scheduler_->scheduled_.empty());
+  EXPECT_FALSE(coordinator_->has_inflight());
+  EXPECT_EQ(coordinator_->pending_count(), 0u);
+}
+
+TEST_F(EditorRenderCoordinatorTest, DetailRefreshSchedulesDetailPatch) {
+  const auto result = coordinator_->Submit(
+      MakeViewIntent(EditorRenderReason::DetailRefresh, EditorRenderQuality::Detail));
+  EXPECT_EQ(result.kind, EditorRenderResultKind::RequestAccepted);
+  ASSERT_EQ(scheduler_->scheduled_.size(), 1u);
+  const auto& scheduled = scheduler_->scheduled_.back().intent;
+  EXPECT_EQ(scheduled.frame_role, FrameRole::DetailPatch);
+  EXPECT_EQ(scheduled.reason, EditorRenderReason::DetailRefresh);
+  EXPECT_EQ(scheduled.quality, EditorRenderQuality::Detail);
+  EXPECT_TRUE(coordinator_->has_inflight());
+}
+
+TEST_F(EditorRenderCoordinatorTest, CropRotateSchedulesInteractivePrimary) {
+  // A crop rect / rotation change alters rendered content, so the coordinator
+  // schedules a fresh InteractivePrimary instead of reusing the current frame.
+  const auto result = coordinator_->Submit(
+      MakeViewIntent(EditorRenderReason::CropRotate, EditorRenderQuality::Interactive));
+  EXPECT_EQ(result.kind, EditorRenderResultKind::RequestAccepted);
+  ASSERT_EQ(scheduler_->scheduled_.size(), 1u);
+  const auto& scheduled = scheduler_->scheduled_.back().intent;
+  EXPECT_EQ(scheduled.frame_role, FrameRole::InteractivePrimary);
+  EXPECT_EQ(scheduled.reason, EditorRenderReason::CropRotate);
+  EXPECT_EQ(scheduled.quality, EditorRenderQuality::Interactive);
+  EXPECT_TRUE(coordinator_->has_inflight());
+}
+
+TEST_F(EditorRenderCoordinatorTest, BurstOfReplaceableIntentsKeepsNewestInteractiveOnly) {
+  // Phase 5D A2/D3: a burst of replaceable input (slider/pointer updates sharing
+  // a replacement key) does not create one task per event. Prior pending entries
+  // are replaced; only the newest interactive state survives to render.
+  coordinator_->Submit(MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
+  ASSERT_TRUE(coordinator_->has_inflight());
+
+  std::uint64_t last_pending_id = 0;
+  for (int i = 0; i < 6; ++i) {
+    auto intent = MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal);
+    intent.replacement_key = "interactive";  // same key → replace prior pending
+    const auto result      = coordinator_->Submit(intent);
+    ASSERT_EQ(result.kind, EditorRenderResultKind::RequestAccepted);
+    last_pending_id = result.request_id;
+  }
+  // Six bursts but only one pending entry — the newest — survives.
+  EXPECT_EQ(coordinator_->pending_count(), 1u);
+
+  int replaced = 0;
+  for (const auto& r : coordinator_->results()) {
+    if (r.kind == EditorRenderResultKind::Replaced) {
+      ++replaced;
+    }
+  }
+  EXPECT_EQ(replaced, 5);
+
+  // Complete the in-flight first frame; the newest interactive state is scheduled.
+  const auto inflight_id = coordinator_->last_scheduled_request_id();
+  coordinator_->NotifySchedulerCompleted(inflight_id, true);
+  ASSERT_EQ(scheduler_->scheduled_.size(), 2u);
+  EXPECT_EQ(scheduler_->scheduled_.back().request_id, last_pending_id);
+}
+
+TEST_F(EditorRenderCoordinatorTest, InteractiveNotBlockedBehindOutdatedDetail) {
+  // Phase 5D A3/D4: interactive work is not blocked behind an outdated detail
+  // patch. With Quality in-flight and Interactive + Detail pending, completing
+  // the in-flight work schedules Interactive (role 3) before Detail (role 1),
+  // even though Detail carries the higher EditorRenderPriority.
+  coordinator_->Submit(MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal));
+  ASSERT_TRUE(coordinator_->has_inflight());
+  const auto inflight_id = coordinator_->last_scheduled_request_id();
+
+  const auto interactive = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
+  const auto detail = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Detail, EditorRenderPriority::High));
+  ASSERT_EQ(coordinator_->pending_count(), 2u);
+
+  coordinator_->NotifySchedulerCompleted(inflight_id, true);
+  ASSERT_EQ(scheduler_->scheduled_.size(), 2u);
+  EXPECT_EQ(scheduler_->scheduled_.back().request_id, interactive.request_id);
+  EXPECT_NE(scheduler_->scheduled_.back().request_id, detail.request_id);
 }
 
 }  // namespace

@@ -12,6 +12,7 @@
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_service.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
+#include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "ui/editor_rhi/direct_frame_sink.hpp"
 
@@ -348,6 +349,54 @@ auto EditorSessionController::presentation_frame_sink() const -> alcedo::IFrameS
     return nullptr;
   }
   return item->frameSink();
+}
+
+auto EditorSessionController::render_busy() const -> bool {
+  // Reflects coordinator diagnostics only — never a pipeline task pointer. The
+  // backend flips this via NotifyChange (fired on submit and on every render
+  // result), which routes back through OnBackendChanged → StateChanged so QML
+  // bindings re-evaluate (D6).
+  return session_backend_ && session_backend_->render_busy();
+}
+
+void EditorSessionController::submitViewChange(int kind) {
+  if (!session_backend_ || !has_image()) {
+    // No backend (legacy shell) or empty editor: nothing to route. The view
+    // state itself already updated in the interaction controller; the viewport
+    // re-samples whatever frame it last received.
+    return;
+  }
+  // Map the UI-level ViewChangeKind to a render reason. The interaction
+  // controller owns the geometry; this controller owns only the routing seam,
+  // so it must not recompute the view transform or read renderer state (D2/D7).
+  auto reason = alcedo::EditorRenderReason::ZoomPan;
+  switch (static_cast<editor_rhi::EditorInteractionController::ViewChangeKind>(kind)) {
+    case editor_rhi::EditorInteractionController::ViewChangeKind::ZoomPan:
+      reason = alcedo::EditorRenderReason::ZoomPan;
+      break;
+    case editor_rhi::EditorInteractionController::ViewChangeKind::Resize:
+      reason = alcedo::EditorRenderReason::Resize;
+      break;
+    case editor_rhi::EditorInteractionController::ViewChangeKind::CropRotate:
+      reason = alcedo::EditorRenderReason::CropRotate;
+      break;
+    case editor_rhi::EditorInteractionController::ViewChangeKind::DetailRefresh:
+      reason = alcedo::EditorRenderReason::DetailRefresh;
+      break;
+  }
+  // Only DetailRefresh carries a requested region (the visible viewport ROI).
+  // The service drops any region for full-frame reasons, so we read the sink
+  // region only when it is meaningful. The sink region is kept current by the
+  // interaction controller's applyViewStateToViewport push, which QML runs from
+  // onViewStateChanged BEFORE this handler (viewChangeReported is emitted after
+  // viewStateChanged), so the region matches the just-applied view (D5).
+  std::optional<alcedo::ViewportRenderRegion> region{std::nullopt};
+  if (reason == alcedo::EditorRenderReason::DetailRefresh) {
+    if (auto* sink = presentation_frame_sink()) {
+      region = sink->GetViewportRenderRegion();
+    }
+  }
+  session_backend_->RequestViewChange(reason, std::move(region));
 }
 
 void EditorSessionController::set_filmstrip_collapsed(bool collapsed) {

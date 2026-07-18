@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "app/editor_render_intent.hpp"
@@ -70,6 +72,18 @@ class IEditorJournalPort {
   virtual auto DiscardUnflushed(sl_element_id_t element_id, std::string* error) -> bool = 0;
 };
 
+/// Coordinator-facing diagnostics exposed to the session service for QML
+/// spinner/progress/error display (Phase 5D). QML never observes pipeline task
+/// objects — only this aggregate busy/reason summary.
+struct EditorRenderCoordinatorDiagnostics {
+  bool                          has_inflight       = false;
+  std::size_t                   pending_count      = 0;
+  std::optional<EditorRenderReason> inflight_reason{};
+  std::size_t                   replaced_count     = 0;
+  std::size_t                   cancelled_count    = 0;
+  std::string                   last_error;
+};
+
 /// Sole path from the session service into pipeline work. Production wraps
 /// EditorRenderCoordinator; tests may inject a recording stub.
 class IEditorRenderSubmitPort {
@@ -86,6 +100,11 @@ class IEditorRenderSubmitPort {
   virtual void SetActiveGenerations(std::uint64_t session_generation,
                                     std::uint64_t render_generation,
                                     std::uint64_t view_generation)            = 0;
+  /// Phase 5D diagnostics. Default impls report an idle coordinator so test
+  /// fakes that do not override them stay QML-idle.
+  [[nodiscard]] virtual auto diagnostics() const -> EditorRenderCoordinatorDiagnostics {
+    return {};
+  }
 };
 
 }  // namespace alcedo

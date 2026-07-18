@@ -724,4 +724,62 @@ TEST(EditorOverlayInteractionTest, OverlayRebuildsCoalesceAcrossMultiSignalBurst
   EXPECT_EQ(delta, 1);
 }
 
+TEST(EditorOverlayInteractionTest, ViewChangeReportedForZoomPanCropRotateAndResize) {
+  // Phase 5D D2: input handlers only report the new view via viewChangeReported;
+  // they never choose or submit pipeline tasks. The kind tells the session how
+  // to route: ZoomPan/Resize reuse the current full frame; CropRotate needs a
+  // fresh InteractivePrimary; DetailRefresh (a zoomed viewport ROI) needs a
+  // DetailPatch. viewChangeReported is emitted AFTER viewStateChanged so the QML
+  // view push (and sink region) lands before the session routes the intent.
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  ConfigureImage(controller, 800, 600);  // aspect-matched → fit at zoom 1.0
+
+  QSignalSpy spy(&controller, &EditorInteractionController::viewChangeReported);
+  ASSERT_TRUE(spy.isValid());
+  auto last_kind = [&] { return spy.takeLast().at(0).toInt(); };
+
+  // Ctrl+wheel zoom in until the viewport shows an ROI (zoom > 1) → DetailRefresh.
+  for (int i = 0; i < 4 && controller.zoom() <= 1.0f + 1.0e-4f; ++i) {
+    controller.handleWheel(400, 300, 120, 0, 0, static_cast<int>(Qt::ControlModifier), false);
+  }
+  ASSERT_GT(controller.zoom(), 1.0f + 1.0e-4f);
+  ASSERT_FALSE(spy.empty());
+  EXPECT_EQ(last_kind(), static_cast<int>(EditorInteractionController::ViewChangeKind::DetailRefresh));
+
+  // Pan while zoomed → the detail patch must follow the new ROI → DetailRefresh.
+  spy.clear();
+  controller.handlePress(400, 300, static_cast<int>(Qt::LeftButton));
+  controller.handleMove(450, 320, static_cast<int>(Qt::LeftButton));
+  controller.handleRelease(450, 320, static_cast<int>(Qt::LeftButton));
+  ASSERT_FALSE(spy.empty());
+  EXPECT_EQ(last_kind(), static_cast<int>(EditorInteractionController::ViewChangeKind::DetailRefresh));
+
+  // Reset to fit (zoom ≤ 1) → the full frame is reused → ZoomPan.
+  spy.clear();
+  controller.resetView();
+  ASSERT_LE(controller.zoom(), 1.0f + 1.0e-4f);
+  ASSERT_FALSE(spy.empty());
+  EXPECT_EQ(last_kind(), static_cast<int>(EditorInteractionController::ViewChangeKind::ZoomPan));
+
+  // Crop rect change → rendered content changes → CropRotate.
+  spy.clear();
+  controller.setCropRectNormalized(QRectF(0.25, 0.25, 0.5, 0.5));
+  ASSERT_FALSE(spy.empty());
+  EXPECT_EQ(last_kind(), static_cast<int>(EditorInteractionController::ViewChangeKind::CropRotate));
+
+  // Crop rotation change → rendered content changes → CropRotate.
+  spy.clear();
+  controller.setCropRotationDegrees(15.0f);
+  ASSERT_FALSE(spy.empty());
+  EXPECT_EQ(last_kind(), static_cast<int>(EditorInteractionController::ViewChangeKind::CropRotate));
+
+  // Viewport metrics change (resize) → Resize (rebuild render-pass QRhi objects,
+  // reuse the current full frame).
+  spy.clear();
+  controller.setViewportMetrics(1024, 768, 1.0);
+  ASSERT_FALSE(spy.empty());
+  EXPECT_EQ(last_kind(), static_cast<int>(EditorInteractionController::ViewChangeKind::Resize));
+}
+
 }  // namespace alcedo::editor_rhi

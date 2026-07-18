@@ -46,6 +46,23 @@ class IEditorSessionBackend {
   virtual auto Discard() -> EditorSessionResult                                               = 0;
   virtual auto Undo() -> EditorSessionResult                                                  = 0;
   virtual auto Redo() -> EditorSessionResult                                                  = 0;
+  /// Phase 5D: route a viewport/geometry view change (zoom/pan/resize/crop/
+  /// rotation/ROI) through the same coordinator used for the first frame. The
+  /// optional region is the visible viewport ROI (attached to DetailRefresh
+  /// intents). Default rejects so test/legacy backends that do not override it
+  /// stay no-op.
+  virtual auto RequestViewChange(EditorRenderReason /*reason*/,
+                                 std::optional<ViewportRenderRegion> /*region*/)
+      -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind    = EditorSessionResultKind::Rejected;
+    result.state   = EditorSessionState::NoImage;
+    result.message = "View change not supported by this backend";
+    return result;
+  }
+  /// Aggregate coordinator busy state for QML spinner/progress (Phase 5D D6).
+  /// False for a backend with no render port or an idle coordinator.
+  [[nodiscard]] virtual auto render_busy() const -> bool { return false; }
 
  protected:
   void NotifyChange() {
@@ -136,6 +153,10 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto Redo() -> EditorSessionResult override;
   auto Discard() -> EditorSessionResult override;
   auto Shutdown() -> EditorSessionResult override;
+  /// Phase 5D: route a viewport/geometry view change through the coordinator.
+  auto RequestViewChange(EditorRenderReason reason, std::optional<ViewportRenderRegion> region)
+      -> EditorSessionResult override;
+  [[nodiscard]] auto render_busy() const -> bool override;
 
   /// Feed async completions that may arrive out of order relative to load/render/save.
   void NotifyImageAcquired(std::uint64_t session_generation, bool success,
@@ -170,6 +191,12 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto HandleUndoRedo(bool undo) -> EditorSessionResult;
   auto HandleDiscard() -> EditorSessionResult;
   auto HandleShutdown() -> EditorSessionResult;
+  auto HandleViewChange(const EditorSessionIntent& intent) -> EditorSessionResult;
+  /// Aggregate coordinator in-flight/pending state. Safe to call with or
+  /// without the service mutex: the coordinator observer runs outside the
+  /// coordinator data mutex, so querying diagnostics cannot deadlock against
+  /// the service mutex (Phase 5D).
+  [[nodiscard]] auto CoordinatorBusy() const -> bool;
   auto BeginSaveForSession(std::uint64_t session_generation, sl_element_id_t element_id,
                            std::string* error) -> bool;
   auto SealCurrentSession(bool persist_changes, bool start_background_save, std::string* error)
@@ -205,7 +232,10 @@ class EditorSessionService final : public IEditorSessionBackend {
   bool                              first_frame_presented_  = false;
   bool                              quality_base_routed_    = false;
   std::optional<EditorRenderReason> pending_initial_reason_;
-  mutable std::recursive_mutex      mutex_;
+  // Phase 5D: last render-busy value announced via NotifyChange so QML
+  // spinners toggle only on real coordinator in-flight/pending transitions.
+  bool                               last_notified_render_busy_ = false;
+  mutable std::recursive_mutex       mutex_;
 };
 
 }  // namespace alcedo

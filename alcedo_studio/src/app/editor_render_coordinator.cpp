@@ -29,9 +29,19 @@ void EditorRenderCoordinator::SetResultObserver(ResultObserver observer) {
 }
 
 auto EditorRenderCoordinator::IsObsolete(const EditorRenderIntent& intent) const -> bool {
-  return intent.session_generation != session_generation_ ||
-         intent.render_generation != render_generation_ ||
-         intent.view_generation != view_generation_;
+  if (intent.session_generation != session_generation_ ||
+      intent.render_generation != render_generation_) {
+    return true;
+  }
+  // Phase 5D: a view-generation advance (zoom/pan/resize/ROI) only obsoletes
+  // view-dependent DetailPatch work. Full-frame renders (InteractivePrimary /
+  // QualityBase) are view-independent — the renderer re-samples them under the
+  // new view — so a zoom must NOT cancel a pending QualityBase. Only a
+  // content-changing render-generation advance cancels full-frame work.
+  if (intent.view_generation != view_generation_) {
+    return intent.frame_role == FrameRole::DetailPatch;
+  }
+  return false;
 }
 
 void EditorRenderCoordinator::CancelObsoleteForActiveGenerations() {
@@ -128,17 +138,20 @@ auto EditorRenderCoordinator::PriorityRank(EditorRenderPriority priority) -> int
 
 auto EditorRenderCoordinator::SelectNextIndex(const std::deque<PendingEntry>& pending)
     -> std::size_t {
-  // Prefer QualityBase, then DetailPatch, then InteractivePrimary — matching the
-  // reusable policy extracted from the legacy QWidget coordinator's StartNext().
-  // Within the same role, higher EditorRenderPriority wins; stable order otherwise.
+  // Phase 5D priority order for visible work: missing first frame / current
+  // interactive response (InteractivePrimary) first, then settled QualityBase,
+  // then the current detail patch, then background/non-visible work. Within the
+  // same role, higher EditorRenderPriority wins; stable order otherwise. This
+  // guarantees interactive work is never blocked behind an outdated quality or
+  // detail request.
   std::size_t best      = 0;
   auto        role_rank = [](FrameRole role) -> int {
     switch (role) {
-      case FrameRole::QualityBase:
-        return 3;
-      case FrameRole::DetailPatch:
-        return 2;
       case FrameRole::InteractivePrimary:
+        return 3;
+      case FrameRole::QualityBase:
+        return 2;
+      case FrameRole::DetailPatch:
         return 1;
     }
     return 0;
@@ -184,6 +197,19 @@ void EditorRenderCoordinator::ReplacePendingWithKey(const std::string& key,
 }
 
 void EditorRenderCoordinator::Emit(EditorRenderResult result) {
+  switch (result.kind) {
+    case EditorRenderResultKind::Replaced:
+      ++replaced_count_;
+      break;
+    case EditorRenderResultKind::Cancelled:
+      ++cancelled_count_;
+      break;
+    case EditorRenderResultKind::Failed:
+      last_error_ = result.message.empty() ? "Render failed" : result.message;
+      break;
+    default:
+      break;
+  }
   results_.push_back(result);
   if (observer_) {
     pending_delivery_.push_back(results_.back());
@@ -242,6 +268,15 @@ auto EditorRenderCoordinator::Submit(const EditorRenderIntent& intent) -> Editor
       result.kind    = EditorRenderResultKind::Failed;
       result.intent  = std::move(stamped);
       result.message = std::move(message);
+      Emit(result);
+    } else if (ReasonReusesCurrentFrame(stamped.reason)) {
+      // Phase 5D coordinator decision: a pure view-transform change (zoom/pan/
+      // resize) reuses the current full frame. The renderer re-samples it through
+      // the item-to-renderer synchronize() path, so no pipeline task is needed.
+      // Input handlers only reported the new view; the coordinator chose reuse.
+      result.kind    = EditorRenderResultKind::Reused;
+      result.intent  = std::move(stamped);
+      result.message = "Reused current frame; viewport re-samples the view";
       Emit(result);
     } else {
       EditorRenderRequest request;

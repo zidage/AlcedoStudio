@@ -1671,6 +1671,40 @@ Acceptance:
 
 ### Phase 5D - Unified adjustment, zoom, pan, resize, and quality scheduling
 
+**Status: complete (2026-07-18).** Adjustment, gesture, zoom, pan, resize,
+crop/rotation, ROI detail, undo/redo, and retry now flow through typed
+`EditorRenderIntent`s handled by the same `EditorRenderCoordinator` used for the
+first frame; no panel, viewport handler, history controller, or image loader can
+schedule editor rendering directly. `EditorRenderReason` gained `CropRotate` and
+the coordinator gained a `Reused` result kind: a pure view transform (ZoomPan /
+Resize) reuses the current full frame and returns `Reused` without enqueuing a
+task (the renderer re-samples it through `synchronize()`), while content changes
+(CropRotate / adjustments) and DetailRefresh still schedule. The generation
+policy is split: a render-generation advance (CropRotate) cancels all obsolete
+work, but a view-generation advance (zoom/pan/resize/ROI) cancels only
+view-dependent `DetailPatch` work — full-frame InteractivePrimary / QualityBase
+survive because the renderer re-samples them under the new view. One priority
+order is enforced in `SelectNextIndex`: role rank InteractivePrimary >
+QualityBase > DetailPatch dominates `EditorRenderPriority`, so interactive work
+is never blocked behind an outdated quality or detail request. Replacement-key
+coalescing ("interactive" / "quality" / "detail") keeps only the newest
+replaceable intent. `EditorSessionService::HandleViewChange` advances the right
+generation, attaches the requested region to DetailRefresh intents, and maps
+RequestAccepted -> RenderRouted, Reused -> Accepted, default -> Rejected;
+`render_busy()` exposes coordinator diagnostics (has_inflight / pending_count)
+to QML without exposing pipeline task objects. `EditorInteractionController`
+emits `viewChangeReported` after `viewStateChanged` (so the QML push of the new
+view refreshes the DirectFrameSink region before the session routes the intent);
+the controller `submitViewChange` Q_INVOKABLE + `renderBusy` Q_PROPERTY drive a
+BusyIndicator in `EditorWorkspace.qml`. D8 resize isolation is satisfied by
+construction: `initialize()` releases only on RHI change,
+`ensureStaticResources` rebuilds only `pipeline_` on render-target change, and
+`synchronize` releases layers only on image-generation/identity change —
+compatible native source frames and the active image generation survive a resize.
+Verified by 102/102 tests across EditorRenderCoordinatorTest,
+EditorSessionServiceTest, EditorOverlayInteractionTest, and
+EditorSessionControllerPhase5ATest.
+
 Deliverables:
 
 - Route adjustment preview, gesture completion, zoom, pan, viewport resize, crop/rotation, ROI,

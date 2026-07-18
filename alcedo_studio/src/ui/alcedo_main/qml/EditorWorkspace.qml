@@ -195,6 +195,23 @@ Item {
                         z: 3
                     }
 
+                    // Phase 5D: render-coordinator busy indicator. Visible only
+                    // after the viewport is presenting and the coordinator has
+                    // in-flight/pending work (interactive drag, settled quality
+                    // pass, or detail patch). Bound to EditorSessionController.
+                    // renderBusy, which reflects coordinator diagnostics — never
+                    // a pipeline task object (D6).
+                    BusyIndicator {
+                        objectName: "editorRenderBusyIndicator"
+                        anchors.centerIn: parent
+                        visible: root.hasImage
+                                && editorViewportItem.presentationAvailable
+                                && root.editorSession
+                                && root.editorSession.renderBusy
+                        running: visible
+                        z: 3
+                    }
+
                     // Crop rotation label (text overlay, not QSG).
                     Rectangle {
                         id: cropAngleBadge
@@ -442,6 +459,19 @@ Item {
                         // viewChanged (emitViewAndOverlay fires both).
                         function onViewStateChanged() {
                             viewportSlot.pushViewToViewport()
+                        }
+                        // Phase 5D: route user-driven view changes (zoom/pan/
+                        // resize/crop-rotation/ROI) through the session as a
+                        // typed ViewChange intent. viewChangeReported is emitted
+                        // AFTER viewStateChanged, so pushViewToViewport has
+                        // already refreshed the DirectFrameSink region before the
+                        // session reads it for DetailRefresh (D2/D5). Input
+                        // handlers only report the new view; the coordinator
+                        // decides reuse vs. InteractivePrimary vs. DetailPatch.
+                        function onViewChangeReported(kind) {
+                            if (root.hasImage && root.editorSession) {
+                                root.editorSession.submitViewChange(kind)
+                            }
                         }
                     }
 

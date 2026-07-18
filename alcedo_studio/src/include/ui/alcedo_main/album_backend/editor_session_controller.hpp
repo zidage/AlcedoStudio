@@ -65,6 +65,11 @@ class EditorSessionController final : public QObject {
                  DesktopUiChanged)
   Q_PROPERTY(bool presentationViewportBound READ presentation_viewport_bound NOTIFY
                  PresentationBindingChanged)
+  // Phase 5D: the render coordinator has in-flight or pending work for this
+  // session. QML binds a busy indicator to it. Reflects backend render_busy()
+  // (coordinator diagnostics); transitions fire StateChanged via the backend
+  // notifier so this never exposes pipeline task objects (D6).
+  Q_PROPERTY(bool renderBusy READ render_busy NOTIFY StateChanged)
 
  public:
   explicit EditorSessionController(EditorController* editor = nullptr, QObject* parent = nullptr);
@@ -94,6 +99,8 @@ class EditorSessionController final : public QObject {
   [[nodiscard]] bool       presentation_viewport_bound() const {
     return presentation_viewport_ != nullptr;
   }
+  // Phase 5D: true when the coordinator has in-flight/pending render work.
+  [[nodiscard]] bool       render_busy() const;
 
   Q_INVOKABLE void   Open(uint elementId = 0, uint imageId = 0);
   Q_INVOKABLE void   Close();
@@ -109,6 +116,13 @@ class EditorSessionController final : public QObject {
   Q_INVOKABLE void   bindPresentationViewport(QObject* viewportItem);
   Q_INVOKABLE void   unbindPresentationViewport();
   Q_INVOKABLE void   updatePresentationTargetSize(int width, int height);
+  // Phase 5D: route a user-driven view change (zoom/pan/resize/crop-rotation/
+  // ROI) through the session backend as a typed ViewChange intent. `kind` is an
+  // EditorInteractionController::ViewChangeKind (int for QML). The controller
+  // only reports the new view and resolves the visible ROI region from the
+  // production frame sink; the backend + coordinator decide reuse vs.
+  // InteractivePrimary vs. DetailPatch (D2). No-op without a backend/image.
+  Q_INVOKABLE void   submitViewChange(int kind);
 
   // Bound QQuickRhiItem (EditorViewportItem). QPointer may clear after destroy.
   [[nodiscard]] auto presentation_viewport() const -> QObject*;

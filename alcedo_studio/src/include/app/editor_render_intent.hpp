@@ -30,6 +30,10 @@ enum class EditorRenderReason : std::uint8_t {
   UndoRedo,
   ImageSwitch,
   Retry,
+  // Geometry (crop rect / rotation) changes the rendered content, not just the
+  // view transform. Distinct from ZoomPan so the coordinator can decide a new
+  // InteractivePrimary render instead of reusing the current full frame.
+  CropRotate,
 };
 
 enum class EditorRenderQuality : std::uint8_t {
@@ -54,6 +58,10 @@ enum class EditorRenderResultKind : std::uint8_t {
   Replaced,
   Cancelled,
   Failed,
+  // The coordinator accepted the view change but did not schedule a pipeline
+  // task: the existing full frame is reused (renderer re-samples via the
+  // item-to-renderer synchronize() path). Phase 5D reuse-vs-render decision.
+  Reused,
 };
 
 /// Opaque presentation-sink identity. The coordinator never owns the sink; the
@@ -180,6 +188,7 @@ struct EditorRenderResult {
     case EditorRenderReason::SettledAdjustment:
     case EditorRenderReason::DetailRefresh:
     case EditorRenderReason::UndoRedo:
+    case EditorRenderReason::CropRotate:
       return EditorRenderPriority::Normal;
   }
   return EditorRenderPriority::Normal;
@@ -199,9 +208,18 @@ struct EditorRenderResult {
     case EditorRenderReason::Resize:
     case EditorRenderReason::ImageSwitch:
     case EditorRenderReason::Retry:
+    case EditorRenderReason::CropRotate:
       return EditorRenderQuality::Interactive;
   }
   return EditorRenderQuality::Interactive;
+}
+
+/// Phase 5D: a pure view-transform change (zoom/pan/resize) reuses the current
+/// full frame — the renderer re-samples it through synchronize(). The
+/// coordinator drops these intents without scheduling a pipeline task. Only
+/// content-changing or detail-refresh reasons produce a render.
+[[nodiscard]] inline auto ReasonReusesCurrentFrame(EditorRenderReason reason) -> bool {
+  return reason == EditorRenderReason::ZoomPan || reason == EditorRenderReason::Resize;
 }
 
 /// Fill role/replacement defaults derived from quality before Submit stores the

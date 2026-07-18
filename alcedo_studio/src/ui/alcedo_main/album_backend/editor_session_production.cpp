@@ -601,7 +601,14 @@ auto EditorSessionProductionSchedulerPort::TryProducePipelineFrame(
     task.input_             = controllers::LoadImageInputBuffer(image_pool, request.intent.image_id);
     task.pipeline_executor_ = exec;
     task.options_.render_desc_.render_type_         = RenderTypeForIntent(request.intent);
-    task.options_.render_desc_.use_viewport_region_ = false;
+    // Phase 5D A5: a DetailPatch (Detail quality) must load the visible viewport
+    // ROI from the executor/sink so the produced frame carries the correct
+    // source_roi_norm. Full-frame renders (Interactive/Quality) keep the whole
+    // frame; AttachExecutionStages wired the executor's GetViewportRenderRegion
+    // to the DirectFrameSink, whose region the interaction controller keeps
+    // current via applyViewStateToViewport before the render intent is submitted.
+    task.options_.render_desc_.use_viewport_region_ =
+        request.intent.quality == alcedo::EditorRenderQuality::Detail;
     task.options_.render_desc_.frame_metadata_      = FrameRoleToPreviewMetadata(request.intent);
     task.options_.is_callback_                      = false;
     task.options_.is_seq_callback_                  = false;
