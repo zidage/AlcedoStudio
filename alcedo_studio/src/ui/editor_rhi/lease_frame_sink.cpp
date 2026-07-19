@@ -4,6 +4,7 @@
 
 #include "ui/editor_rhi/lease_frame_sink.hpp"
 
+#include "ui/edit_viewer/edit_viewer_surface.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "ui/editor_rhi/lease_target_adapters.hpp"
 
@@ -72,7 +73,7 @@ void LeaseFrameSink::EnsureSize(int width, int height) {
   }
   const std::uint64_t image_generation = item_ ? item_->imageGeneration() : 0;
   const std::uint64_t image_identity   = item_ ? item_->imageIdentity() : 0;
-  bool geometry_changed = false;
+  bool emit_target_size = false;
   WritableTargetRequest request;
   {
     std::lock_guard lock(mutex_);
@@ -81,9 +82,19 @@ void LeaseFrameSink::EnsureSize(int width, int height) {
     }
     // Same pixel size is not enough for geometry notification when the image
     // session changes, but every frame still reserves its own write slot.
-    geometry_changed = width_ != width || height_ != height ||
-                       last_sized_image_generation_ != image_generation ||
-                       last_sized_image_identity_ != image_identity;
+    const bool geometry_changed = width_ != width || height_ != height ||
+                                  last_sized_image_generation_ != image_generation ||
+                                  last_sized_image_identity_ != image_identity;
+    // DetailPatch / RoiFrame sizes must not rewrite render-reference geometry.
+    bool is_render_reference = true;
+    if (pending_preview_metadata_valid_) {
+      const FramePresentationMode mode = pending_presentation_mode_valid_
+                                             ? pending_presentation_mode_
+                                             : FramePresentationMode::FullFrame;
+      is_render_reference =
+          IsRenderReferenceFrame(mode, pending_preview_metadata_.frame_role);
+    }
+    emit_target_size             = geometry_changed && is_render_reference;
     width_                       = width;
     height_                      = height;
     last_sized_image_generation_ = image_generation;
@@ -100,7 +111,7 @@ void LeaseFrameSink::EnsureSize(int width, int height) {
     if (item_->broker()) {
       item_->broker()->NoteTargetRequest(request);
     }
-    if (geometry_changed) {
+    if (emit_target_size) {
       // EnsureSize runs on the pipeline worker. QML handlers must remain on the
       // item's GUI thread.
       QMetaObject::invokeMethod(

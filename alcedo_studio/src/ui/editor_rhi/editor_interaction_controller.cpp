@@ -7,6 +7,7 @@
 #include "ui/editor_rhi/editor_overlay_item.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 
+#include <QAbstractAnimation>
 #include <QApplication>
 #include <QtQml/qqml.h>
 
@@ -32,9 +33,13 @@ EditorInteractionController::EditorInteractionController(QObject* parent) : QObj
     applyViewTransformResult(result);
   });
   connect(zoom_animation_, &QVariantAnimation::finished, this, [this]() {
+    // Keep routing suppressed while the final transform restarts the settle
+    // timer. Clearing first would emit an immediate request and leave the
+    // previous timer armed for a duplicate DetailRefresh.
     const auto result = view_transform_controller_.ApplyAnimationFinished(
         viewer_state_, widgetInfo(), interactionImageInfo());
     applyViewTransformResult(result);
+    suppress_view_change_routing_ = false;
   });
 
   click_toggle_timer_ = new QTimer(this);
@@ -43,6 +48,16 @@ EditorInteractionController::EditorInteractionController(QObject* parent) : QObj
     const auto result = view_transform_controller_.HandleClickToggleTimeout(
         viewer_state_, widgetInfo(), interactionImageInfo());
     applyViewTransformResult(result);
+  });
+
+  // Keep the same settled-interaction semantics as QtEditViewer. Progress
+  // updates restart this timer, so a DetailRefresh is sent only for the final
+  // stable viewport and does not depend solely on animation-finished delivery.
+  view_interaction_settle_timer_ = new QTimer(this);
+  view_interaction_settle_timer_->setSingleShot(true);
+  connect(view_interaction_settle_timer_, &QTimer::timeout, this, [this] {
+    emitViewChange(zoom() > 1.0f + 1.0e-4f ? ViewChangeKind::DetailRefresh
+                                            : ViewChangeKind::ZoomPan);
   });
 }
 
@@ -607,6 +622,9 @@ void EditorInteractionController::applyViewTransformResult(const ViewTransformRe
   }
   applyCursor(result.cursor, result.unset_cursor);
   if (result.start_animation && zoom_animation_) {
+    // Suppress render routing for the whole animation, including the synchronous
+    // valueChanged(0) that start() may emit before state() reports Running.
+    suppress_view_change_routing_ = true;
     zoom_animation_->setDuration(kZoomAnimationDurationMs);
     zoom_animation_->setStartValue(0.0);
     zoom_animation_->setEndValue(1.0);
@@ -620,8 +638,17 @@ void EditorInteractionController::applyViewTransformResult(const ViewTransformRe
     // region) lands before the session routes the intent. While zoomed in (>1),
     // the visible viewport is an ROI that needs a DetailPatch; at fit it is a
     // pure re-sample that reuses the current full frame (ZoomPan).
-    emitViewChange(zoom() > 1.0f + 1.0e-4f ? ViewChangeKind::DetailRefresh
-                                           : ViewChangeKind::ZoomPan);
+    //
+    // Detail rendering is always settled, not just for double-click animation.
+    // Pointer pan, wheel zoom and pinch generate many progress ticks; routing a
+    // DetailRefresh for every tick repeatedly cancels GPU work and can leave a
+    // queue of obsolete ROI tasks ahead of the final viewport. Re-sample the
+    // full-frame base during interaction and request exactly the final ROI.
+    if (suppress_view_change_routing_ || zoom() > 1.0f + 1.0e-4f) {
+      scheduleViewChangeAfterInteractionSettles();
+    } else {
+      emitViewChange(ViewChangeKind::ZoomPan);
+    }
   }
   if (result.emitted_zoom.has_value()) {
     emit viewZoomChanged(*result.emitted_zoom);
@@ -672,6 +699,18 @@ void EditorInteractionController::applyCursor(std::optional<Qt::CursorShape> cur
 void EditorInteractionController::stopZoomAnimation() {
   if (zoom_animation_ && zoom_animation_->state() == QAbstractAnimation::Running) {
     zoom_animation_->stop();
+  }
+  if (view_interaction_settle_timer_) {
+    view_interaction_settle_timer_->stop();
+  }
+  // stop() does not emit finished; clear the suppress flag so a subsequent
+  // non-animated transform can route DetailRefresh/ZoomPan again.
+  suppress_view_change_routing_ = false;
+}
+
+void EditorInteractionController::scheduleViewChangeAfterInteractionSettles() {
+  if (view_interaction_settle_timer_) {
+    view_interaction_settle_timer_->start(kViewInteractionSettleDelayMs);
   }
 }
 

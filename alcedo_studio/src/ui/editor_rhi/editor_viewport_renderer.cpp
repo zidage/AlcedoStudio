@@ -131,6 +131,16 @@ void EditorViewportRenderer::destroyResource(QRhiGraphicsPipeline*& resource) {
 }
 
 void EditorViewportRenderer::releaseLayer(LayerState& layer) {
+  // Shader bindings retain the imported QRhiTexture pointer. Invalidate them
+  // before destroying a layer texture so a view-driven stale-detail release is
+  // safe even when no replacement frame is available yet.
+  if (layer.texture &&
+      (bound_primary_texture_ == layer.texture || bound_detail_texture_ == layer.texture)) {
+    destroyResource(pipeline_);
+    destroyResource(shader_resource_bindings_);
+    bound_primary_texture_ = nullptr;
+    bound_detail_texture_  = nullptr;
+  }
   destroyResource(layer.texture);
   if (layer.imported) {
     NativeResourceCounters::Instance().OnDestroyImportedQRhiTexture();
@@ -170,9 +180,9 @@ void EditorViewportRenderer::releaseResources() {
   destroyResource(detail_sampler_);
   destroyResource(placeholder_texture_);
   bound_primary_texture_ = nullptr;
-  bound_detail_texture_ = nullptr;
+  bound_detail_texture_  = nullptr;
   static_upload_pending_ = false;
-  target_generation_ = 0;
+  target_generation_     = 0;
   if (present_queue_) {
     present_queue_->InvalidateTargetGeneration();
   }
@@ -191,7 +201,7 @@ void EditorViewportRenderer::initialize(QRhiCommandBuffer* /*command_buffer*/) {
   // before render() could fulfill it, leaving the viewport permanently black.
   if (rhi_ != next_rhi) {
     releaseResources();
-    rhi_ = next_rhi;
+    rhi_     = next_rhi;
     backend_ = BackendForRhi(rhi_);
     adapter_ = MakeLeaseTargetAdapter(backend_);
     qInfo("[EditorPresent] render thread initialized backend=%s", ToString(backend_));
@@ -211,33 +221,47 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
     return;
   }
   if (present_queue_ != item_->present_queue()) {
-    present_queue_ = item_->present_queue();
-    image_generation_ = 0;
-    image_identity_ = 0;
+    present_queue_     = item_->present_queue();
+    image_generation_  = 0;
+    image_identity_    = 0;
     target_generation_ = 0;
-    content_dirty_ = true;
+    content_dirty_     = true;
   }
 
   present_queue_->SetConsumerAvailable(item_->presentationRequested());
 
-  const auto next_view = item_->viewStateSnapshot();
-  view_state_ = next_view;
-  content_dirty_ = true;
-
   const auto next_image_generation = item_->imageGeneration();
-  const auto next_image_identity = item_->imageIdentity();
+  const auto next_image_identity   = item_->imageIdentity();
   if (next_image_generation != image_generation_ || next_image_identity != image_identity_) {
     for (auto& layer : layers_) {
       releaseLayer(layer);
     }
     releaseQueuedNatives();
     image_generation_ = next_image_generation;
-    image_identity_ = next_image_identity;
-    content_dirty_ = true;
+    image_identity_   = next_image_identity;
+    content_dirty_    = true;
   }
+
+  const auto next_view = item_->viewStateSnapshot();
+  if (next_image_generation == image_generation_ && next_image_identity == image_identity_) {
+    auto&      detail   = layers_[layerIndex(LayerId::DetailPatch)];
+    const auto next_roi = BuildNormalizedRoi(next_view.snapshot.viewport_render_region_cache);
+    // A consumed detail frame owns one of the queue's three slots until its
+    // layer is released. Once the view ROI changes it can no longer contribute
+    // to the image, so release it immediately. Waiting to release it when the
+    // replacement DetailPatch is consumed deadlocks: primary + quality + old
+    // detail already occupy all three slots, leaving no writable target for
+    // that replacement.
+    if (detail.valid && (!next_view.allow_detail_patch || !next_roi.has_value() ||
+                         !SameRoi(detail.preview_metadata.source_roi_norm, *next_roi))) {
+      releaseLayer(detail);
+    }
+  }
+  view_state_    = next_view;
+  content_dirty_ = true;
 }
 
-void EditorViewportRenderer::ensureStaticResources(QRhiRenderTarget* render_target,
+void EditorViewportRenderer::ensureStaticResources(QRhiRenderTarget*  render_target,
                                                    QRhiCommandBuffer* command_buffer) {
   if (!rhi_ || !render_target) {
     return;
@@ -487,17 +511,16 @@ auto EditorViewportRenderer::selectedPrimaryLayer() const -> const LayerState* {
 }
 
 auto EditorViewportRenderer::detailPatchAspectOk(const LayerState& detail,
-                                                 const LayerState& quality) const -> bool {
-  if (quality.width <= 0 || quality.height <= 0 || detail.width <= 0 || detail.height <= 0) {
+                                                 const LayerState& base) const -> bool {
+  if (base.width <= 0 || base.height <= 0 || detail.width <= 0 || detail.height <= 0) {
     return false;
   }
-  const float quality_aspect =
-      static_cast<float>(quality.width) / static_cast<float>(quality.height);
+  const float base_aspect = static_cast<float>(base.width) / static_cast<float>(base.height);
   const float detail_aspect =
       static_cast<float>(detail.width) / static_cast<float>(detail.height);
   const float roi_w = std::max(detail.preview_metadata.source_roi_norm.width, 1.0e-4f);
   const float roi_h = std::max(detail.preview_metadata.source_roi_norm.height, 1.0e-4f);
-  const float expected_aspect = quality_aspect * (roi_w / roi_h);
+  const float expected_aspect = base_aspect * (roi_w / roi_h);
   return std::abs(detail_aspect - expected_aspect) <= 0.15f * std::max(expected_aspect, 1.0e-3f);
 }
 
@@ -517,13 +540,25 @@ auto EditorViewportRenderer::hasVisibleDetailPatch() const -> bool {
     return false;
   }
   const auto& quality = layers_[layerIndex(LayerId::QualityBase)];
+  const auto& interactive = layers_[layerIndex(LayerId::InteractivePrimary)];
   const auto& detail = layers_[layerIndex(LayerId::DetailPatch)];
-  if (!quality.valid || !detail.valid ||
-      quality.preview_metadata.preview_generation !=
-          detail.preview_metadata.preview_generation) {
+  if (!detail.valid) {
     return false;
   }
-  if (!detailPatchAspectOk(detail, quality)) {
+  // Prefer QualityBase as the full-frame aspect/generation reference. Fall back
+  // to a full-frame InteractivePrimary so a DetailPatch can land before the
+  // settled quality pass finishes (common after open + immediate zoom).
+  const LayerState* base = nullptr;
+  if (quality.valid && quality.preview_metadata.preview_generation ==
+                           detail.preview_metadata.preview_generation) {
+    base = &quality;
+  } else if (interactive.valid &&
+             interactive.preview_metadata.preview_generation ==
+                 detail.preview_metadata.preview_generation &&
+             interactive.presentation_mode != FramePresentationMode::RoiFrame) {
+    base = &interactive;
+  }
+  if (!base || !detailPatchAspectOk(detail, *base)) {
     return false;
   }
   const auto current_roi = BuildNormalizedRoi(view_state_.snapshot.viewport_render_region_cache);

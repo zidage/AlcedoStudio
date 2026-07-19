@@ -10,8 +10,10 @@
 
 #include <QCoreApplication>
 #include <QEvent>
+#include <QEventLoop>
 #include <QObject>
 #include <QThread>
+#include <QTimer>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -251,6 +253,30 @@ TEST(EditorSessionControllerPhase5ATest, SubmitViewChangeRoutesThroughBackend) {
 
   controller.submitViewChange(static_cast<int>(VCK::ZoomPan));
   EXPECT_EQ(backend.view_change_reason, alcedo::EditorRenderReason::ZoomPan);
+}
+
+TEST(EditorSessionControllerPhase5ATest, BoundInteractionRoutesDetailRefreshWithoutQmlRelay) {
+  // The production workspace binds this signal directly. This protects the
+  // double-click/zoom route from loss while a QML workspace item is rebuilt.
+  FakeSessionBackend                      backend;
+  EditorSessionController                 controller(nullptr, &backend);
+  editor_rhi::EditorInteractionController interaction;
+  controller.Open(7, 8);
+  controller.bindInteractionController(&interaction);
+
+  interaction.setViewportMetrics(800, 600, 1.0);
+  interaction.setImageSize(1600, 1200);
+  interaction.setRenderReferenceSize(1600, 1200);
+  interaction.handleWheel(400, 300, 120, 0, 0, Qt::ControlModifier, false);
+
+  // Zoomed DetailRefresh is intentionally settled so continuous wheel/pan
+  // ticks coalesce into one production request.
+  QEventLoop settle_loop;
+  QTimer::singleShot(150, &settle_loop, &QEventLoop::quit);
+  settle_loop.exec();
+
+  EXPECT_TRUE(backend.view_change_recorded);
+  EXPECT_EQ(backend.view_change_reason, EditorRenderReason::DetailRefresh);
 }
 
 TEST(EditorSessionControllerPhase5ATest, SubmitViewChangeIsNoOpWithoutImage) {

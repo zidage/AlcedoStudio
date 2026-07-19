@@ -323,6 +323,27 @@ void EditorSessionController::updatePresentationTargetSize(int width, int height
   }
 }
 
+void EditorSessionController::bindInteractionController(QObject* interactionController) {
+  if (interaction_controller_ == interactionController) {
+    return;
+  }
+  if (interaction_view_change_connection_) {
+    QObject::disconnect(interaction_view_change_connection_);
+    interaction_view_change_connection_ = {};
+  }
+  interaction_controller_ = interactionController;
+
+  auto* interaction = qobject_cast<editor_rhi::EditorInteractionController*>(interactionController);
+  if (!interaction) {
+    return;
+  }
+  // viewChangeReported follows viewStateChanged. QML has therefore already
+  // updated DirectFrameSink with the matching ROI when this route reads it.
+  interaction_view_change_connection_ =
+      connect(interaction, &editor_rhi::EditorInteractionController::viewChangeReported, this,
+              [this](int kind) { submitViewChange(kind); });
+}
+
 void EditorSessionController::unbindPresentationViewport() {
   if (!presentation_viewport_) {
     return;

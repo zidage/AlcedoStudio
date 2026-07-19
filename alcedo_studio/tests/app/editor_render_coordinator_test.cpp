@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace alcedo {
@@ -520,6 +521,66 @@ TEST_F(EditorRenderCoordinatorTest, DetailRefreshSchedulesDetailPatch) {
   EXPECT_EQ(scheduled.reason, EditorRenderReason::DetailRefresh);
   EXPECT_EQ(scheduled.quality, EditorRenderQuality::Detail);
   EXPECT_TRUE(coordinator_->has_inflight());
+}
+
+// Production Cancel fires the request token callback, which re-enters
+// CancelRequest. That path must not run under the coordinator mutex or a
+// zoom-driven view-generation advance deadlocks and no further DetailPatch
+// work (or any pipeline request) is ever scheduled.
+TEST_F(EditorRenderCoordinatorTest, ViewGenerationCancelDoesNotDeadlockOnTokenReentry) {
+  class ReentrantCancelScheduler final : public IEditorPipelineSchedulerPort {
+   public:
+    auto Schedule(const EditorRenderRequest& request) -> std::uint64_t override {
+      scheduled_.push_back(request);
+      tokens_[++next_job_] = request.intent.cancellation;
+      return next_job_;
+    }
+    void Cancel(std::uint64_t job_id) override {
+      cancelled_.push_back(job_id);
+      auto it = tokens_.find(job_id);
+      if (it != tokens_.end() && it->second) {
+        // Mirrors EditorSessionProductionSchedulerPort::Cancel: token Cancel
+        // invokes the coordinator's CancelRequest re-entry path.
+        it->second->Cancel();
+      }
+    }
+
+    std::vector<EditorRenderRequest>                                       scheduled_;
+    std::vector<std::uint64_t>                                             cancelled_;
+    std::uint64_t                                                          next_job_ = 0;
+    std::unordered_map<std::uint64_t, std::shared_ptr<EditorRenderCancellationToken>> tokens_;
+  };
+
+  auto reentrant = std::make_shared<ReentrantCancelScheduler>();
+  auto coord     = std::make_unique<EditorRenderCoordinator>(reentrant);
+  coord->SetActiveGenerations(1, 1, 1);
+
+  auto first = MakeViewIntent(EditorRenderReason::DetailRefresh, EditorRenderQuality::Detail);
+  first.cancellation = std::make_shared<EditorRenderCancellationToken>();
+  const auto accepted = coord->Submit(first);
+  ASSERT_EQ(accepted.kind, EditorRenderResultKind::RequestAccepted);
+  ASSERT_TRUE(coord->has_inflight());
+  // Install the same cancel bridge production uses after ScheduleNext.
+  first.cancellation->SetCancelCallback([c = coord.get(), id = accepted.request_id] {
+    if (c) {
+      c->CancelRequest(id);
+    }
+  });
+
+  // Zoom/pan advances view generation while a DetailPatch is in-flight. This
+  // used to deadlock: CancelObsolete → scheduler Cancel → token callback →
+  // CancelRequest under the same mutex.
+  coord->SetActiveGenerations(1, 1, 2);
+
+  auto second = MakeViewIntent(EditorRenderReason::DetailRefresh, EditorRenderQuality::Detail,
+                               EditorRenderPriority::Normal, 1, 1, 2);
+  second.cancellation = std::make_shared<EditorRenderCancellationToken>();
+  const auto next = coord->Submit(second);
+  EXPECT_EQ(next.kind, EditorRenderResultKind::RequestAccepted);
+  EXPECT_TRUE(coord->has_inflight());
+  ASSERT_EQ(reentrant->scheduled_.size(), 2u);
+  EXPECT_EQ(reentrant->scheduled_.back().request_id, next.request_id);
+  EXPECT_FALSE(reentrant->cancelled_.empty());
 }
 
 TEST_F(EditorRenderCoordinatorTest, CropRotateSchedulesInteractivePrimary) {

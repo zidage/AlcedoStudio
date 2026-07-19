@@ -204,6 +204,7 @@ class EditorInteractionController : public QObject {
 
  private:
   static constexpr int kZoomAnimationDurationMs = 170;
+  static constexpr int kViewInteractionSettleDelayMs = 120;
 
   [[nodiscard]] auto widgetInfo() const -> ViewportWidgetInfo { return widget_info_; }
   [[nodiscard]] auto imageInfo() const -> ViewportImageInfo { return image_info_; }
@@ -212,6 +213,7 @@ class EditorInteractionController : public QObject {
   void applyCropInteractionResult(const CropInteractionResult& result);
   void applyCursor(std::optional<Qt::CursorShape> cursor, bool unset);
   void stopZoomAnimation();
+  void scheduleViewChangeAfterInteractionSettles();
   void emitViewAndOverlay();
   // Phase 5D: report a user-driven view change for render routing. No-op when
   // interaction is disabled (bookkeeping setters call this directly only when a
@@ -223,15 +225,20 @@ class EditorInteractionController : public QObject {
   ViewerState viewer_state_{};
   ViewTransformController view_transform_controller_{};
   CropInteractionController crop_interaction_controller_{};
-  ViewportWidgetInfo widget_info_{1, 1, 1.0f};
-  ViewportImageInfo image_info_{0, 0};
-  FramePresentationMode presentation_mode_ = FramePresentationMode::FullFrame;
-  bool detail_roi_visible_ = false;
-  QRectF detail_roi_uv_{0.0, 0.0, 1.0, 1.0};
-  bool interaction_enabled_ = true;
+  ViewportWidgetInfo             widget_info_{1, 1, 1.0f};
+  ViewportImageInfo              image_info_{0, 0};
+  FramePresentationMode          presentation_mode_            = FramePresentationMode::FullFrame;
+  // While a zoom animation is in progress, this also covers the synchronous
+  // initial tick where zoom is still at fit. All zoomed view transforms use the
+  // settled timer so DetailRefresh is scheduled once, not per interaction tick.
+  bool                           suppress_view_change_routing_ = false;
+  bool                           detail_roi_visible_           = false;
+  QRectF                         detail_roi_uv_{0.0, 0.0, 1.0, 1.0};
+  bool                           interaction_enabled_ = true;
   std::optional<Qt::CursorShape> cursor_{};
   QVariantAnimation* zoom_animation_ = nullptr;
   QTimer* click_toggle_timer_ = nullptr;
+  QTimer* view_interaction_settle_timer_ = nullptr;
 };
 
 void RegisterEditorOverlayQmlTypes();

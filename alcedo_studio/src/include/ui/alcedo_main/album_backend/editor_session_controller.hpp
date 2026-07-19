@@ -5,6 +5,7 @@
 #pragma once
 
 #include <QObject>
+#include <QMetaObject>
 #include <QPointer>
 #include <QString>
 #include <QtGlobal>
@@ -116,6 +117,10 @@ class EditorSessionController final : public QObject {
   Q_INVOKABLE void   bindPresentationViewport(QObject* viewportItem);
   Q_INVOKABLE void   unbindPresentationViewport();
   Q_INVOKABLE void   updatePresentationTargetSize(int width, int height);
+  /// Bind the viewport interaction producer directly to the session route.
+  /// This keeps DetailRefresh out of a QML Connections relay so a rebuilt
+  /// workspace cannot lose the settled zoom notification.
+  Q_INVOKABLE void   bindInteractionController(QObject* interactionController);
   // Phase 5D: route a user-driven view change (zoom/pan/resize/crop-rotation/
   // ROI) through the session backend as a typed ViewChange intent. `kind` is an
   // EditorInteractionController::ViewChangeKind (int for QML). The controller
@@ -172,6 +177,8 @@ class EditorSessionController final : public QObject {
   QString                        active_adjustment_panel_   = QStringLiteral("tone");
   QString                        history_panel_page_;
   QPointer<QObject>              presentation_viewport_;
+  QPointer<QObject>              interaction_controller_;
+  QMetaObject::Connection        interaction_view_change_connection_;
 };
 
 }  // namespace alcedo::ui

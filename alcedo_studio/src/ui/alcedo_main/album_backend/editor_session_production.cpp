@@ -464,14 +464,22 @@ void EditorSessionProductionSchedulerPort::ExecuteJob(Job job) {
         });
   }
 
-  const int width  = std::max(1, job.request.intent.requested_width);
-  const int height = std::max(1, job.request.intent.requested_height);
-  sink->EnsureSize(width, height);
-
+  // Stamp role/mode before EnsureSize so DirectFrameSink can suppress
+  // targetSizeRequested for non-reference frames (DetailPatch / RoiFrame).
+  // Otherwise a zoomed ROI output size rewrites render-reference geometry and
+  // the detail patch no longer covers the viewport.
   alcedo::FramePreviewMetadata meta = FrameRoleToPreviewMetadata(job.request.intent);
   meta.presentation_request_id = job.request.request_id;
   sink->SetNextFramePreviewMetadata(meta);
-  sink->SetNextFramePresentationMode(alcedo::FramePresentationMode::FullFrame);
+  if (job.request.intent.frame_role == alcedo::FrameRole::DetailPatch) {
+    sink->SetNextFramePresentationMode(alcedo::FramePresentationMode::ViewportTransformed);
+  } else {
+    sink->SetNextFramePresentationMode(alcedo::FramePresentationMode::FullFrame);
+  }
+
+  const int width  = std::max(1, job.request.intent.requested_width);
+  const int height = std::max(1, job.request.intent.requested_height);
+  sink->EnsureSize(width, height);
 
   auto* direct_sink = dynamic_cast<alcedo::editor_rhi::DirectFrameSink*>(sink);
   const auto submitted_before = direct_sink ? direct_sink->submitted_frame_count() : 0;
@@ -598,9 +606,9 @@ auto EditorSessionProductionSchedulerPort::TryProducePipelineFrame(
     }
 
     alcedo::PipelineTask task;
-    task.input_             = controllers::LoadImageInputBuffer(image_pool, request.intent.image_id);
-    task.pipeline_executor_ = exec;
-    task.options_.render_desc_.render_type_         = RenderTypeForIntent(request.intent);
+    task.input_ = controllers::LoadImageInputBuffer(image_pool, request.intent.image_id);
+    task.pipeline_executor_                 = exec;
+    task.options_.render_desc_.render_type_ = RenderTypeForIntent(request.intent);
     // Phase 5D A5: a DetailPatch (Detail quality) must load the visible viewport
     // ROI from the executor/sink so the produced frame carries the correct
     // source_roi_norm. Full-frame renders (Interactive/Quality) keep the whole
@@ -609,10 +617,16 @@ auto EditorSessionProductionSchedulerPort::TryProducePipelineFrame(
     // current via applyViewStateToViewport before the render intent is submitted.
     task.options_.render_desc_.use_viewport_region_ =
         request.intent.quality == alcedo::EditorRenderQuality::Detail;
-    task.options_.render_desc_.frame_metadata_      = FrameRoleToPreviewMetadata(request.intent);
-    task.options_.is_callback_                      = false;
-    task.options_.is_seq_callback_                  = false;
-    task.options_.is_blocking_                      = true;
+    task.options_.render_desc_.frame_metadata_ = FrameRoleToPreviewMetadata(request.intent);
+    // PipelineTask::SetExecutorRenderParams forwards this metadata to the sink
+    // again, after ExecuteJob's initial stamp. Preserve the coordinator request
+    // id here or the forwarded copy resets it to zero, making the already
+    // visible first frame impossible to acknowledge and leaving the session in
+    // Loading forever (which then rejects zoom DetailRefresh requests).
+    task.options_.render_desc_.frame_metadata_.presentation_request_id = request.request_id;
+    task.options_.is_callback_                                         = false;
+    task.options_.is_seq_callback_                                     = false;
+    task.options_.is_blocking_                                         = true;
 
     auto promise = std::make_shared<std::promise<std::shared_ptr<alcedo::ImageBuffer>>>();
     auto future  = promise->get_future();

@@ -4,6 +4,7 @@
 
 #include "ui/editor_rhi/direct_frame_sink.hpp"
 
+#include "ui/edit_viewer/edit_viewer_surface.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "ui/editor_rhi/lease_target_adapters.hpp"
 
@@ -102,22 +103,37 @@ void DirectFrameSink::EnsureSize(int width, int height) {
   }
   const std::uint64_t image_generation = item_->imageGeneration();
   const std::uint64_t image_identity = item_->imageIdentity();
-  bool geometry_changed = false;
+  bool emit_target_size = false;
   {
     std::lock_guard lock(mutex_);
     if (has_mapped_slot_) {
       return;
     }
-    geometry_changed = width_ != width || height_ != height ||
-                       last_sized_image_generation_ != image_generation ||
-                       last_sized_image_identity_ != image_identity;
+    const bool geometry_changed = width_ != width || height_ != height ||
+                                  last_sized_image_generation_ != image_generation ||
+                                  last_sized_image_identity_ != image_identity;
+    // Match QtEditViewer::IsRenderReferenceFrame: DetailPatch / RoiFrame sizes
+    // reserve write slots but must not rewrite interaction render-reference
+    // geometry. Otherwise a zoomed ROI EnsureSize (e.g. 1600x900) overwrites the
+    // full-frame reference (QualityBase / InteractivePrimary) used for zoom,
+    // pan, and SameRoi matching — the high-res detail patch then fails to cover
+    // the view.
+    bool is_render_reference = true;
+    if (pending_preview_metadata_valid_) {
+      const FramePresentationMode mode = pending_presentation_mode_valid_
+                                             ? pending_presentation_mode_
+                                             : FramePresentationMode::FullFrame;
+      is_render_reference =
+          IsRenderReferenceFrame(mode, pending_preview_metadata_.frame_role);
+    }
+    emit_target_size = geometry_changed && is_render_reference;
     width_ = width;
     height_ = height;
     last_sized_image_generation_ = image_generation;
     last_sized_image_identity_ = image_identity;
   }
 
-  if (geometry_changed) {
+  if (emit_target_size) {
     // Pipeline workers are off-thread; unit tests and GUI-thread callers can
     // receive the geometry signal synchronously.
     const auto connection = (item_->thread() == QThread::currentThread())

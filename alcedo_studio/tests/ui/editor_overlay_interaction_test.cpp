@@ -15,6 +15,7 @@
 #include <QPointF>
 #include <QRectF>
 #include <QSignalSpy>
+#include <QTest>
 #include <QVector2D>
 #include <Qt>
 
@@ -626,6 +627,116 @@ TEST(EditorOverlayInteractionTest, ForceRenderReferenceSizeReappliesEqualDimensi
   EXPECT_EQ(controller.renderReferenceHeight(), 384);
 }
 
+// DetailPatch ROI EnsureSize must not rewrite render-reference geometry. If it
+// does, zoom/pan math and SameRoi matching break and the high-res detail patch
+// no longer covers the viewport after double-click zoom.
+TEST(EditorOverlayInteractionTest, DetailPatchEnsureSizeDoesNotRewriteRenderReference) {
+  EditorViewportItem viewport;
+  viewport.setImageIdentity(42);
+  viewport.setImageGeneration(1);
+
+  int target_size_signals = 0;
+  int last_w              = 0;
+  int last_h              = 0;
+  QObject::connect(&viewport, &EditorViewportItem::targetSizeRequested, &viewport,
+                   [&](int w, int h) {
+                     ++target_size_signals;
+                     last_w = w;
+                     last_h = h;
+                   });
+
+  auto* sink = viewport.frameSink();
+  ASSERT_NE(sink, nullptr);
+
+  // QualityBase full frame establishes the render reference (e.g. 4K preview).
+  alcedo::FramePreviewMetadata quality_meta{};
+  quality_meta.frame_role         = alcedo::FrameRole::QualityBase;
+  quality_meta.preview_generation = 1;
+  sink->SetNextFramePreviewMetadata(quality_meta);
+  sink->SetNextFramePresentationMode(alcedo::FramePresentationMode::ViewportTransformed);
+  sink->EnsureSize(2048, 1536);
+  EXPECT_EQ(target_size_signals, 1);
+  EXPECT_EQ(last_w, 2048);
+  EXPECT_EQ(last_h, 1536);
+
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  controller.setImageSize(4000, 3000);
+  controller.forceRenderReferenceSize(last_w, last_h);
+  EXPECT_EQ(controller.renderReferenceWidth(), 2048);
+  EXPECT_EQ(controller.renderReferenceHeight(), 1536);
+
+  // Zoomed DetailPatch is smaller than the full-frame reference (viewport ROI).
+  alcedo::FramePreviewMetadata detail_meta{};
+  detail_meta.frame_role         = alcedo::FrameRole::DetailPatch;
+  detail_meta.preview_generation = 1;
+  detail_meta.source_roi_norm    = {.x = 0.25f, .y = 0.2f, .width = 0.5f, .height = 0.4f};
+  sink->SetNextFramePreviewMetadata(detail_meta);
+  sink->SetNextFramePresentationMode(alcedo::FramePresentationMode::ViewportTransformed);
+  sink->EnsureSize(1600, 900);
+
+  // Must not emit targetSizeRequested — render reference stays full-frame.
+  EXPECT_EQ(target_size_signals, 1);
+  EXPECT_EQ(last_w, 2048);
+  EXPECT_EQ(last_h, 1536);
+  EXPECT_EQ(controller.renderReferenceWidth(), 2048);
+  EXPECT_EQ(controller.renderReferenceHeight(), 1536);
+
+  // Slot sizing still tracks the detail dimensions for write mapping.
+  EXPECT_EQ(sink->GetWidth(), 1600);
+  EXPECT_EQ(sink->GetHeight(), 900);
+}
+
+TEST(EditorOverlayInteractionTest, ReleasingStaleDetailSlotUnblocksReplacementDetailTarget) {
+  DirectPresentQueue queue(EditorBackend::Cuda);
+  queue.InvalidateImageGeneration(1, 42);
+  queue.SetConsumerAvailable(true);
+
+  const auto occupy_layer = [&](FrameRole role, std::uintptr_t handle) {
+    constexpr int width    = 1600;
+    constexpr int height   = 900;
+    const auto    prepared = queue.PrepareWrite(width, height, 1, 42);
+    EXPECT_TRUE(prepared.ok);
+    EXPECT_TRUE(prepared.need_create);
+
+    DirectPresentQueue::SlotNative native{};
+    native.backend           = EditorBackend::Cuda;
+    native.handle_kind       = LeaseNativeHandleKind::D3D11Texture2D;
+    native.writable_kind     = LeaseWritableResourceKind::CudaArray;
+    native.native_handle     = handle;
+    native.writable_resource = handle + 100;
+    EXPECT_TRUE(queue.PublishCreatedSlot(prepared.slot_index, width, height, native, 1, 42));
+    EXPECT_TRUE(queue.BeginWrite(prepared.slot_index).has_value());
+    queue.EndWrite(prepared.slot_index);
+    FramePreviewMetadata metadata{};
+    metadata.frame_role = role;
+    queue.NotifyReady(prepared.slot_index, FramePresentationMode::ViewportTransformed, metadata);
+    const auto consumed = queue.ConsumeNewestReady(role, 1, 42);
+    EXPECT_TRUE(consumed.has_value());
+    return consumed ? consumed->slot.index : -1;
+  };
+
+  const int interactive_slot = occupy_layer(FrameRole::InteractivePrimary, 1);
+  const int quality_slot     = occupy_layer(FrameRole::QualityBase, 2);
+  const int detail_slot      = occupy_layer(FrameRole::DetailPatch, 3);
+  ASSERT_GE(interactive_slot, 0);
+  ASSERT_GE(quality_slot, 0);
+  ASSERT_GE(detail_slot, 0);
+
+  // Three persistent renderer layers occupy the fixed three-slot queue.
+  EXPECT_FALSE(queue.PrepareWrite(1600, 900, 1, 42).ok);
+
+  // synchronize() now performs this release as soon as the view ROI differs.
+  queue.CompleteRendererRead(detail_slot);
+  const auto replacement = queue.PrepareWrite(1600, 900, 1, 42);
+  EXPECT_TRUE(replacement.ok);
+  EXPECT_FALSE(replacement.need_create);
+  EXPECT_EQ(replacement.slot_index, detail_slot);
+
+  queue.CompleteRendererRead(interactive_slot);
+  queue.CompleteRendererRead(quality_slot);
+}
+
 TEST(EditorOverlayInteractionTest, ReconcileViewportMetricsEmitsViewChanged) {
   EditorInteractionController controller;
   controller.setViewportMetrics(800, 600, 1.0);
@@ -644,15 +755,15 @@ TEST(EditorOverlayInteractionTest, ViewTransformPushDoesNotInvalidateDirectPrese
   // View-state pushes must not advance direct-present target generation.
   if (viewport.present_queue()) {
     DirectPresentQueue::SizeRequest req;
-    req.width = 64;
-    req.height = 48;
+    req.width            = 64;
+    req.height           = 48;
     req.image_generation = 1;
-    req.image_identity = 1;
+    req.image_identity   = 1;
     viewport.present_queue()->NoteSizeRequest(req);
     viewport.present_queue()->InvalidateTargetGeneration();
   }
   const auto before_live = viewport.liveTargetCount();
-  const auto before_gen = viewport.targetGeneration();
+  const auto before_gen  = viewport.targetGeneration();
   EXPECT_GT(before_gen, 0u);
 
   EditorInteractionController controller;
@@ -675,9 +786,9 @@ TEST(EditorOverlayInteractionTest, OverlayRefreshDoesNotAdvanceTargetGeneration)
   controller.setCropRectNormalized(QRectF(0.1, 0.1, 0.8, 0.8));
 
   EditorViewportItem viewport;
-  const auto gen_before = viewport.targetGeneration();
+  const auto         gen_before = viewport.targetGeneration();
 
-  QSignalSpy overlay_spy(&controller, &EditorInteractionController::overlayGeometryChanged);
+  QSignalSpy         overlay_spy(&controller, &EditorInteractionController::overlayGeometryChanged);
   controller.setCropRotationDegrees(12.0f);
   controller.applyViewTransformForTest(1.8f, 0.05f, 0.0f);
   EXPECT_GE(overlay_spy.count(), 1);
@@ -724,6 +835,37 @@ TEST(EditorOverlayInteractionTest, OverlayRebuildsCoalesceAcrossMultiSignalBurst
   EXPECT_EQ(delta, 1);
 }
 
+TEST(EditorOverlayInteractionTest, DoubleTapZoomReportsDetailRefreshOnlyAfterAnimationSettles) {
+  // Double-click zoom animates for ~170ms. Progress ticks must re-sample the
+  // view (viewStateChanged) without routing DetailRefresh; only the settled
+  // finished frame schedules a DetailPatch. Spamming DetailRefresh mid-animation
+  // used to deadlock the production cancel path and starve all pipeline work.
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  ConfigureImage(controller, 800, 600);
+
+  QSignalSpy change_spy(&controller, &EditorInteractionController::viewChangeReported);
+  QSignalSpy state_spy(&controller, &EditorInteractionController::viewStateChanged);
+  ASSERT_TRUE(change_spy.isValid());
+  ASSERT_TRUE(state_spy.isValid());
+
+  controller.handleDoubleTap(400, 300);
+  // Animation just started: view may have been pushed, but no DetailRefresh yet.
+  EXPECT_EQ(change_spy.count(), 0);
+
+  // Drive the animation to completion (valueChanged + finished).
+  QCoreApplication::processEvents();
+  // Allow the 170ms zoom animation and 120ms settled-interaction debounce.
+  QTest::qWait(350);
+  QCoreApplication::processEvents();
+
+  ASSERT_GT(controller.zoom(), 1.0f + 1.0e-4f);
+  ASSERT_GE(state_spy.count(), 1);
+  ASSERT_EQ(change_spy.count(), 1);
+  EXPECT_EQ(change_spy.takeLast().at(0).toInt(),
+            static_cast<int>(EditorInteractionController::ViewChangeKind::DetailRefresh));
+}
+
 TEST(EditorOverlayInteractionTest, ViewChangeReportedForZoomPanCropRotateAndResize) {
   // Phase 5D D2: input handlers only report the new view via viewChangeReported;
   // they never choose or submit pipeline tasks. The kind tells the session how
@@ -744,6 +886,8 @@ TEST(EditorOverlayInteractionTest, ViewChangeReportedForZoomPanCropRotateAndResi
     controller.handleWheel(400, 300, 120, 0, 0, static_cast<int>(Qt::ControlModifier), false);
   }
   ASSERT_GT(controller.zoom(), 1.0f + 1.0e-4f);
+  QTest::qWait(150);
+  QCoreApplication::processEvents();
   ASSERT_FALSE(spy.empty());
   EXPECT_EQ(last_kind(), static_cast<int>(EditorInteractionController::ViewChangeKind::DetailRefresh));
 
@@ -751,8 +895,13 @@ TEST(EditorOverlayInteractionTest, ViewChangeReportedForZoomPanCropRotateAndResi
   spy.clear();
   controller.handlePress(400, 300, static_cast<int>(Qt::LeftButton));
   controller.handleMove(450, 320, static_cast<int>(Qt::LeftButton));
-  controller.handleRelease(450, 320, static_cast<int>(Qt::LeftButton));
-  ASSERT_FALSE(spy.empty());
+  controller.handleMove(470, 330, static_cast<int>(Qt::LeftButton));
+  controller.handleMove(490, 340, static_cast<int>(Qt::LeftButton));
+  controller.handleRelease(490, 340, static_cast<int>(Qt::LeftButton));
+  EXPECT_TRUE(spy.empty());
+  QTest::qWait(150);
+  QCoreApplication::processEvents();
+  ASSERT_EQ(spy.count(), 1);
   EXPECT_EQ(last_kind(), static_cast<int>(EditorInteractionController::ViewChangeKind::DetailRefresh));
 
   // Reset to fit (zoom ≤ 1) → the full frame is reused → ZoomPan.

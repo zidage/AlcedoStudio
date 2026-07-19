@@ -844,12 +844,41 @@ TEST_F(EditorSessionServiceTest, ViewChangeCropRotateSchedulesInteractivePrimary
 }
 
 TEST_F(EditorSessionServiceTest, ViewChangeRejectedWhenNotInteractive) {
-  auto runtime = EditorSessionRuntime::Create();
+  auto       runtime = EditorSessionRuntime::Create();
   // No Open: the session is NoImage, so a view change cannot be routed.
   const auto result =
       runtime->service->RequestViewChange(EditorRenderReason::ZoomPan, std::nullopt);
   EXPECT_EQ(result.kind, EditorSessionResultKind::Rejected);
   EXPECT_FALSE(runtime->service->render_busy());
+}
+
+TEST_F(EditorSessionServiceTest, VisibleSubmittedFrameCanRouteDetailBeforeCompositionAck) {
+  auto runtime = EditorSessionRuntime::Create();
+  runtime->service->SetPresentationSinkId(1);
+  runtime->service->SetPresentationSize(640, 480);
+  runtime->service->Open(11, 22);
+  auto* sched = dynamic_cast<EditorSessionBootstrapSchedulerPort*>(runtime->scheduler.get());
+  ASSERT_NE(sched, nullptr);
+  ASSERT_EQ(sched->scheduled().size(), 1u);
+  const auto first_request_id = sched->scheduled().front().request_id;
+
+  runtime->coordinator->NotifySchedulerCompleted(first_request_id, true);
+  runtime->coordinator->NotifyFrameSubmitted(first_request_id);
+
+  // Qt Quick may already show this submitted frame while the one-shot window
+  // composition acknowledgement is still pending. The internal state remains
+  // Loading, but a user's settled zoom must not be silently discarded.
+  ASSERT_EQ(runtime->service->state(), EditorSessionState::Loading);
+  const auto result =
+      runtime->service->RequestViewChange(EditorRenderReason::DetailRefresh, MakeRegion(4));
+
+  ASSERT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
+  ASSERT_EQ(sched->scheduled().size(), 2u);
+  const auto& detail = sched->scheduled().back().intent;
+  EXPECT_EQ(detail.reason, EditorRenderReason::DetailRefresh);
+  EXPECT_EQ(detail.frame_role, FrameRole::DetailPatch);
+  ASSERT_TRUE(detail.view_region.has_value());
+  EXPECT_EQ(detail.view_region->x_, 4);
 }
 
 TEST_F(EditorSessionServiceTest, ViewChangeBurstKeepsNewestDetailAndCancelsPrior) {

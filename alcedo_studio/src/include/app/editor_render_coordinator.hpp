@@ -123,7 +123,10 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
 
   auto AcceptOrReject(const EditorRenderIntent& intent, std::string* message) const -> bool;
   void ReplacePendingWithKey(const std::string& key, std::uint64_t except_request_id);
-  void CancelObsoleteForActiveGenerations();
+  /// Cancel obsolete pending/in-flight work under mutex_. Returns a scheduler
+  /// job id that must be cancelled only after releasing mutex_ (token callbacks
+  /// re-enter CancelRequest).
+  auto CancelObsoleteForActiveGenerations() -> std::uint64_t;
   [[nodiscard]] auto IsObsolete(const EditorRenderIntent& intent) const -> bool;
   void               Emit(EditorRenderResult result);
   void               DeliverPendingResults();

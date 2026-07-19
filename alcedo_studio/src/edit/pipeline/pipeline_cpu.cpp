@@ -408,7 +408,21 @@ void CPUPipelineExecutor::SetAcceleratorBackendPreference(
 }
 
 void CPUPipelineExecutor::SetExecutionStages(IFrameSink* frame_sink) {
-  SetExecutionStages();
+  // Only (re)build the stage graph when it is not already built. The graph
+  // rebuild recreates the merged GPU stage — and with it the CUDA/Metal/OpenCL
+  // pipeline that owns the LLF highlight/shadow stage's cross-frame reference
+  // cache (cached_reference_base_/cached_source_key_/cached_width_/...).
+  // Wiping that cache every render defeats the 42ed19b CanReuseReferenceForRoi
+  // path: zoomed ROI/detail frames can no longer sample the full-image mask and
+  // recompute instead, flickering on every pan/zoom. The QML production path
+  // re-attaches the same sink per render, so guard on merged_stages_ and only
+  // update the sink pointer when the graph is already up. merged_stages_ is null
+  // on first build and after ResetExecutionStages(); backend switches route
+  // through SetAcceleratorBackendPreference, which resets before re-attaching,
+  // so a null guard still triggers a full rebuild there.
+  if (!merged_stages_) {
+    SetExecutionStages();
+  }
   frame_sink_ = frame_sink;
 
   // Set frame sink for the last stage
@@ -668,6 +682,10 @@ void CPUPipelineExecutor::ReleaseAllGPUResources() {
 
 auto CPUPipelineExecutor::DebugGetMergedStageScratchBytes() const -> size_t {
   return merged_stages_ ? merged_stages_->DebugGetAllocatedGpuScratchBytes() : 0;
+}
+
+auto CPUPipelineExecutor::DebugGetMergedStageIdentity() const -> std::uintptr_t {
+  return reinterpret_cast<std::uintptr_t>(merged_stages_.get());
 }
 
 };  // namespace alcedo

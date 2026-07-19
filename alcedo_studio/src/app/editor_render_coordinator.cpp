@@ -44,7 +44,12 @@ auto EditorRenderCoordinator::IsObsolete(const EditorRenderIntent& intent) const
   return false;
 }
 
-void EditorRenderCoordinator::CancelObsoleteForActiveGenerations() {
+auto EditorRenderCoordinator::CancelObsoleteForActiveGenerations() -> std::uint64_t {
+  // Returns any in-flight scheduler job id that must be cancelled AFTER the
+  // coordinator mutex is released. Production Cancel invokes the request token
+  // callback, which re-enters CancelRequest and would deadlock if called while
+  // mutex_ is held (zoom animation used to hit this on every DetailRefresh).
+  std::uint64_t scheduler_job_to_cancel = 0;
   for (auto it = pending_.begin(); it != pending_.end();) {
     if (IsObsolete(it->request.intent)) {
       EditorRenderResult cancelled;
@@ -60,9 +65,7 @@ void EditorRenderCoordinator::CancelObsoleteForActiveGenerations() {
     }
   }
   if (inflight_ && IsObsolete(inflight_->request.intent)) {
-    if (scheduler_ && inflight_->scheduler_job_id != 0) {
-      scheduler_->Cancel(inflight_->scheduler_job_id);
-    }
+    scheduler_job_to_cancel = inflight_->scheduler_job_id;
     const std::uint64_t request_id = inflight_->request.request_id;
     EditorRenderResult  cancelled;
     cancelled.kind       = EditorRenderResultKind::Cancelled;
@@ -74,17 +77,23 @@ void EditorRenderCoordinator::CancelObsoleteForActiveGenerations() {
     inflight_.reset();
   }
   ScheduleNext();
+  return scheduler_job_to_cancel;
 }
 
 void EditorRenderCoordinator::SetActiveGenerations(std::uint64_t session_generation,
                                                    std::uint64_t render_generation,
                                                    std::uint64_t view_generation) {
+  std::uint64_t scheduler_job_to_cancel = 0;
   {
     std::scoped_lock lock(mutex_);
     session_generation_ = session_generation;
     render_generation_  = render_generation;
     view_generation_    = view_generation;
-    CancelObsoleteForActiveGenerations();
+    scheduler_job_to_cancel = CancelObsoleteForActiveGenerations();
+  }
+  // Token cancel callbacks re-enter CancelRequest; never hold mutex_ here.
+  if (scheduler_ && scheduler_job_to_cancel != 0) {
+    scheduler_->Cancel(scheduler_job_to_cancel);
   }
   DeliverPendingResults();
 }
@@ -366,7 +375,8 @@ void EditorRenderCoordinator::CancelSessionAndWait(std::uint64_t session_generat
 }
 
 auto EditorRenderCoordinator::CancelRequest(std::uint64_t request_id) -> bool {
-  bool did_cancel = false;
+  bool          did_cancel              = false;
+  std::uint64_t scheduler_job_to_cancel = 0;
   {
     std::scoped_lock lock(mutex_);
     if (terminal_request_ids_.count(request_id) == 0) {
@@ -389,9 +399,9 @@ auto EditorRenderCoordinator::CancelRequest(std::uint64_t request_id) -> bool {
     }
     if (!did_cancel && terminal_request_ids_.count(request_id) == 0 && inflight_ &&
         inflight_->request.request_id == request_id) {
-      if (scheduler_ && inflight_->scheduler_job_id != 0) {
-        scheduler_->Cancel(inflight_->scheduler_job_id);
-      }
+      // Defer scheduler Cancel until after mutex_ release. Production Cancel
+      // fires the token callback which re-enters CancelRequest.
+      scheduler_job_to_cancel = inflight_->scheduler_job_id;
       EditorRenderResult cancelled;
       cancelled.kind       = EditorRenderResultKind::Cancelled;
       cancelled.request_id = request_id;
@@ -403,6 +413,9 @@ auto EditorRenderCoordinator::CancelRequest(std::uint64_t request_id) -> bool {
       ScheduleNext();
       did_cancel = true;
     }
+  }
+  if (scheduler_ && scheduler_job_to_cancel != 0) {
+    scheduler_->Cancel(scheduler_job_to_cancel);
   }
   DeliverPendingResults();
   return did_cancel;

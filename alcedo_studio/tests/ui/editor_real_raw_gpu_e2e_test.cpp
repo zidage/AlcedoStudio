@@ -2,7 +2,7 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include "ui/album_backend_test_fixture.hpp"
+#include <gtest/gtest.h>
 
 #include <QApplication>
 #include <QQmlApplicationEngine>
@@ -11,8 +11,6 @@
 #include <QQuickWindow>
 #include <QSignalSpy>
 #include <QTimer>
-#include <gtest/gtest.h>
-
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
@@ -21,8 +19,10 @@
 #include <vector>
 
 #include "app/editor_render_intent.hpp"
+#include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/alcedo_main/language_manager.hpp"
+#include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_startup.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 
@@ -157,6 +157,99 @@ TEST_F(EditorRealRawGpuE2eTest,
         << "Visible viewport never published render-thread availability; status="
         << viewport->statusText().toStdString();
 
+    if (i == 0) {
+      const auto first_request_id = host.editor_session_service()->first_frame_request_id();
+      ASSERT_NE(first_request_id, 0u);
+      ASSERT_TRUE(WaitUntil(
+          [&] {
+            const auto results = host.editor_render_coordinator()->results();
+            return std::any_of(results.begin(), results.end(),
+                               [&](const EditorRenderResult& result) {
+                                 return result.request_id == first_request_id &&
+                                        result.kind == EditorRenderResultKind::FrameSubmitted;
+                               });
+          },
+          std::chrono::minutes(2)))
+          << "Primary frame never reached the submitted/visible state";
+
+      auto* interaction = window->findChild<editor_rhi::EditorInteractionController*>(
+          QStringLiteral("editorInteractionController"));
+      ASSERT_NE(interaction, nullptr);
+      const auto scheduled_before_zoom =
+          host.editor_session_production_scheduler()->last_scheduled().size();
+
+      interaction->handleDoubleTap(viewport->width() * 0.5, viewport->height() * 0.5);
+
+      ASSERT_TRUE(WaitUntil(
+          [&] {
+            const auto requests = host.editor_session_production_scheduler()->last_scheduled();
+            return requests.size() > scheduled_before_zoom &&
+                   requests.back().intent.reason == EditorRenderReason::DetailRefresh &&
+                   requests.back().intent.frame_role == FrameRole::DetailPatch;
+          },
+          std::chrono::seconds(5)))
+          << "Settled double-click zoom did not reach the production scheduler as DetailPatch; "
+          << "session=" << EditorSessionStateName(host.editor_session_service()->state());
+
+      const auto detail_request =
+          host.editor_session_production_scheduler()->last_scheduled().back();
+      ASSERT_TRUE(detail_request.intent.view_region.has_value());
+      EXPECT_LT(detail_request.intent.view_region->scale_x_, 1.0f);
+      EXPECT_LT(detail_request.intent.view_region->scale_y_, 1.0f);
+      ASSERT_TRUE(WaitUntil(
+          [&] {
+            const auto results = host.editor_render_coordinator()->results();
+            return std::any_of(results.begin(), results.end(),
+                               [&](const EditorRenderResult& result) {
+                                 return result.request_id == detail_request.request_id &&
+                                        result.kind == EditorRenderResultKind::FrameSubmitted;
+                               });
+          },
+          std::chrono::minutes(2)))
+          << "DetailPatch reached the scheduler but never submitted a frame";
+
+      ASSERT_TRUE(WaitUntil([&] { return !host.editor_session()->render_busy(); },
+                            std::chrono::seconds(10)))
+          << "First DetailPatch left the coordinator busy";
+      ProcessEvents(250);
+
+      const auto scheduled_before_pan =
+          host.editor_session_production_scheduler()->last_scheduled().size();
+      const auto center_x = viewport->width() * 0.5;
+      const auto center_y = viewport->height() * 0.5;
+      interaction->handlePress(center_x, center_y, static_cast<int>(Qt::LeftButton));
+      interaction->handleMove(center_x + 80.0, center_y + 30.0, static_cast<int>(Qt::LeftButton));
+      interaction->handleRelease(center_x + 80.0, center_y + 30.0,
+                                 static_cast<int>(Qt::LeftButton));
+
+      ASSERT_TRUE(WaitUntil(
+          [&] {
+            return host.editor_session_production_scheduler()->last_scheduled().size() >
+                   scheduled_before_pan;
+          },
+          std::chrono::seconds(5)))
+          << "Settled pan did not schedule a replacement DetailPatch";
+      const auto panned_detail =
+          host.editor_session_production_scheduler()->last_scheduled().back();
+      ASSERT_EQ(panned_detail.intent.frame_role, FrameRole::DetailPatch);
+      EXPECT_NE(panned_detail.request_id, detail_request.request_id);
+      ASSERT_TRUE(WaitUntil(
+          [&] {
+            const auto results = host.editor_render_coordinator()->results();
+            return std::any_of(results.begin(), results.end(),
+                               [&](const EditorRenderResult& result) {
+                                 return result.request_id == panned_detail.request_id &&
+                                        result.kind == EditorRenderResultKind::FrameSubmitted;
+                               });
+          },
+          std::chrono::minutes(2)))
+          << "Replacement DetailPatch after pan never submitted a frame; liveTargets="
+          << viewport->liveTargetCount() << " status=" << viewport->statusText().toStdString();
+      ASSERT_TRUE(WaitUntil([&] { return !host.editor_session()->render_busy(); },
+                            std::chrono::seconds(10)))
+          << "Replacement DetailPatch after pan left the coordinator busy";
+    }
+
     const auto first_frame_ready = [&] {
       return host.editor_session_service()->state() == EditorSessionState::Interactive &&
              viewport->lastPresentedImageGeneration() ==
@@ -196,6 +289,7 @@ TEST_F(EditorRealRawGpuE2eTest,
     ASSERT_TRUE(WaitUntil([&] { return viewport->presentedFrameCount() >= expected_presented_count; },
                           std::chrono::minutes(2)))
         << "QualityBase was not composed after InteractivePrimary";
+
     EXPECT_EQ(viewport->lastPresentedImageGeneration(),
               host.editor_session()->session_generation());
     EXPECT_EQ(viewport->imageIdentity(), key.image_id);

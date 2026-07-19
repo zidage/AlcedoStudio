@@ -155,10 +155,14 @@ Item {
 
                         Component.onCompleted: {
                             viewportSlot.ensurePresentationBinding()
+                            if (root.editorSession) {
+                                root.editorSession.bindInteractionController(editorInteraction)
+                            }
                             viewportSlot.syncImageGeometry()
                         }
                         Component.onDestruction: {
                             if (root.editorSession) {
+                                root.editorSession.bindInteractionController(null)
                                 root.editorSession.unbindPresentationViewport()
                             }
                         }
@@ -166,6 +170,10 @@ Item {
                         // Pipeline EnsureSize → render reference for crop/zoom math.
                         // Force-apply so equal output sizes still re-sync after a new
                         // image/session generation (Phase 5B).
+                        // DirectFrameSink only emits this for render-reference frames
+                        // (InteractivePrimary / QualityBase full frames). DetailPatch
+                        // ROI sizes must not rewrite reference geometry or the high-res
+                        // zoom patch fails SameRoi / viewport coverage.
                         onTargetSizeRequested: function (w, h) {
                             if (w > 0 && h > 0) {
                                 editorInteraction.forceRenderReferenceSize(w, h)
@@ -497,19 +505,6 @@ Item {
                         // viewChanged (emitViewAndOverlay fires both).
                         function onViewStateChanged() {
                             viewportSlot.pushViewToViewport()
-                        }
-                        // Phase 5D: route user-driven view changes (zoom/pan/
-                        // resize/crop-rotation/ROI) through the session as a
-                        // typed ViewChange intent. viewChangeReported is emitted
-                        // AFTER viewStateChanged, so pushViewToViewport has
-                        // already refreshed the DirectFrameSink region before the
-                        // session reads it for DetailRefresh (D2/D5). Input
-                        // handlers only report the new view; the coordinator
-                        // decides reuse vs. InteractivePrimary vs. DetailPatch.
-                        function onViewChangeReported(kind) {
-                            if (root.hasImage && root.editorSession) {
-                                root.editorSession.submitViewChange(kind)
-                            }
                         }
                     }
 

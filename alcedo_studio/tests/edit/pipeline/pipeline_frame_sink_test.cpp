@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <cstdint>
 #include <exception>
 #include <filesystem>
 #include <memory>
@@ -111,6 +112,44 @@ TEST_F(PipelineFrameSinkTest, SetExecutionStagesWithoutSinkHasNullFrameSink) {
 
   exec->SetExecutionStages();
   EXPECT_EQ(exec->GetFrameSink(), nullptr);
+}
+
+// Re-attaching a frame sink must NOT recreate the merged GPU stage. The merged
+// stage owns the LLF highlight/shadow stage's cross-frame reference cache
+// (cached_reference_base_/cached_source_key_/cached_width_/...); recreating it
+// every render wipes that cache so zoomed ROI/detail frames can no longer reuse
+// the full-image mask (the 42ed19b CanReuseReferenceForRoi path) and recompute
+// instead, flickering on every pan/zoom. The QML production path re-attaches
+// the same sink per render via AttachExecutionStages -> SetExecutionStages
+// (IFrameSink*), so the merged-stage identity must be stable across re-attach.
+TEST_F(PipelineFrameSinkTest, ReattachingFrameSinkPreservesMergedStage) {
+  auto          exec = std::make_shared<CPUPipelineExecutor>();
+  MockFrameSink sink;
+
+  // First attach builds the stage graph (merged_stages_ non-null).
+  exec->SetExecutionStages(&sink);
+  const auto identity_after_build = exec->DebugGetMergedStageIdentity();
+  ASSERT_NE(identity_after_build, std::uintptr_t{0});
+
+  // Re-attaching the same sink must not rebuild the merged stage.
+  exec->SetExecutionStages(&sink);
+  EXPECT_EQ(exec->DebugGetMergedStageIdentity(), identity_after_build);
+
+  // Swapping to a different sink also must not rebuild; only the sink pointer
+  // changes (matching DetachFrameSink/AttachFrameSink's lightweight behavior).
+  MockFrameSink other_sink;
+  exec->SetExecutionStages(&other_sink);
+  EXPECT_EQ(exec->DebugGetMergedStageIdentity(), identity_after_build);
+  EXPECT_EQ(exec->GetFrameSink(), &other_sink);
+
+  // A genuine reset (e.g. backend switch routes through ResetExecutionStages)
+  // tears the graph down; the next attach rebuilds a fresh merged stage.
+  exec->ResetExecutionStages();
+  EXPECT_EQ(exec->DebugGetMergedStageIdentity(), std::uintptr_t{0});
+  exec->SetExecutionStages(&sink);
+  const auto identity_after_reset = exec->DebugGetMergedStageIdentity();
+  EXPECT_NE(identity_after_reset, std::uintptr_t{0});
+  EXPECT_NE(identity_after_reset, identity_after_build);
 }
 
 TEST_F(PipelineFrameSinkTest, SetNextFramePresentationModeIsNoOpWhenSinkIsDetached) {

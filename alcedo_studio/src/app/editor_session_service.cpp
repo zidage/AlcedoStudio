@@ -517,14 +517,24 @@ auto EditorSessionService::HandleShutdown() -> EditorSessionResult {
                       "Shutting down");
 }
 
-auto EditorSessionService::HandleViewChange(const EditorSessionIntent& intent) -> EditorSessionResult {
-  if (state_ != EditorSessionState::Interactive) {
+auto EditorSessionService::HandleViewChange(const EditorSessionIntent& intent)
+    -> EditorSessionResult {
+  const EditorRenderReason reason = intent.view_reason;
+  // Qt Quick can display the submitted primary frame before its window-frame
+  // composition acknowledgement reaches the session. During that interval the
+  // user is already able to zoom, but the session is still Loading. Do not drop
+  // a settled DetailRefresh from that visible frame: it is independent of the
+  // first-composition state transition and the coordinator can serialize it
+  // after any remaining primary work.
+  const bool               detail_from_visible_loading_frame =
+      reason == EditorRenderReason::DetailRefresh && state_ == EditorSessionState::Loading &&
+      image_acquired_ && first_frame_completed_ && first_frame_submitted_;
+  if (state_ != EditorSessionState::Interactive && !detail_from_visible_loading_frame) {
     return Reject("View change requires an interactive session");
   }
   if (!has_image()) {
     return Reject("View change requires an open image");
   }
-  const EditorRenderReason reason = intent.view_reason;
 
   // Phase 5D D2 generation policy. A content-changing geometry change (crop/
   // rotation) advances the render generation and cancels obsolete full-frame

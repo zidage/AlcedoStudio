@@ -89,8 +89,9 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
   [[nodiscard]] auto selectedPrimaryLayer() const -> const LayerState*;
   [[nodiscard]] auto selectedDetailLayer() const -> const LayerState*;
   [[nodiscard]] auto hasVisibleDetailPatch() const -> bool;
+  // base: QualityBase preferred, else full-frame InteractivePrimary.
   [[nodiscard]] auto detailPatchAspectOk(const LayerState& detail,
-                                         const LayerState& quality) const -> bool;
+                                         const LayerState& base) const -> bool;
   void recreateShaderResources(QRhiTexture* primary, QRhiTexture* detail);
   void publishDiagnosticsIfChanged();
 
