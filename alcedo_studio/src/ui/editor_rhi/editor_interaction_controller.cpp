@@ -141,9 +141,14 @@ void EditorInteractionController::setCropOverlayVisible(bool visible) {
     applyCursor(std::nullopt, true);
   }
   viewer_state_.SetCropOverlayVisible(visible);
+  // Toggling the overlay switches the displayed image between the full source
+  // (panel open) and the committed cropped output (panel closed), so both the
+  // true-zoom readout and the zoom-field ceiling must refresh.
+  applyMaxZoomToController();
   emit cropChanged();
   emit overlayGeometryChanged();
   emit viewStateChanged();
+  emit zoomLabelChanged();
 }
 
 void EditorInteractionController::setCropRectNormalized(const QRectF& rect) {
@@ -158,10 +163,15 @@ void EditorInteractionController::setCropRectNormalized(const QRectF& rect) {
   }
   crop.rect = adjusted;
   viewer_state_.SetCropOverlayState(crop);
+  // The cropped-output size (and thus true zoom + the field ceiling) changes
+  // when the committed rect changes while the panel is closed. While the panel
+  // is open the effective image is the source, so this is a no-op then.
+  applyMaxZoomToController();
   emit cropChanged();
   emit cropRectCommitted(adjusted, true);
   emit overlayGeometryChanged();
   emit viewStateChanged();
+  emit zoomLabelChanged();
   // Phase 5D: programmatic crop-rect change is a content change → CropRotate.
   emitViewChange(ViewChangeKind::CropRotate);
 }
@@ -257,6 +267,7 @@ void EditorInteractionController::resetPresentationStateForNewImage() {
   emit viewChanged();
   emit viewStateChanged();
   emit viewZoomChanged(zoom());
+  emit zoomLabelChanged();
 }
 
 void EditorInteractionController::setInteractionEnabled(bool enabled) {
@@ -282,6 +293,9 @@ void EditorInteractionController::setViewportMetrics(qreal width, qreal height,
     return;
   }
   widget_info_ = {w, h, dpr};
+  // The zoom-field ceiling depends on viewport size/DPR; update it before
+  // reconciling so a clamp uses the new ceiling.
+  applyMaxZoomToController();
   // Capture transform before reconcile so we can detect no-op clamps that still
   // need a viewChanged when the caller expects a metrics-driven push.
   const auto before = viewer_state_.GetViewTransform();
@@ -297,6 +311,9 @@ void EditorInteractionController::setViewportMetrics(qreal width, qreal height,
       (before.pan - after.pan).lengthSquared() <= 1.0e-8f) {
     emit viewChanged();
   }
+  // trueZoom depends on viewport size/DPR (fitFraction) even if the zoom field
+  // is unchanged, so the readout must refresh.
+  emit zoomLabelChanged();
   // Phase 5D: a metrics change (size/dpr) is a Resize — the viewport re-samples
   // the current full frame; render-pass QRhi objects are rebuilt in initialize()
   // without invalidating active image generation (D8). Emitted after the view
@@ -316,11 +333,17 @@ void EditorInteractionController::setImageSize(int width, int height) {
     crop.metric_aspect = CropGeometry::SafeAspect(width, height);
     viewer_state_.SetCropOverlayState(crop);
   }
+  // The zoom-field ceiling depends on the full image size; update it before
+  // reconciling so a clamp uses the new ceiling.
+  applyMaxZoomToController();
   reconcileViewTransformForRenderReference();
   updateViewportRenderRegionCache();
   emit imageGeometryChanged();
   emit overlayGeometryChanged();
   emit viewStateChanged();
+  // trueZoom depends on image size (fitFraction) even if the zoom field is
+  // unchanged, so the readout must refresh.
+  emit zoomLabelChanged();
 }
 
 void EditorInteractionController::setRenderReferenceSize(int width, int height) {
@@ -469,7 +492,7 @@ void EditorInteractionController::handleWheel(qreal x, qreal y, int angleDeltaY,
   const auto qt_modifiers = static_cast<Qt::KeyboardModifiers>(modifiers);
 
   if ((qt_modifiers & Qt::ControlModifier) == Qt::ControlModifier) {
-    stopZoomAnimation();
+    interruptZoomAnimation();
     const auto result = view_transform_controller_.HandleCtrlWheel(
         viewer_state_, widgetInfo(), interactionImageInfo(), angleDeltaY, pos);
     applyViewTransformResult(result);
@@ -482,7 +505,7 @@ void EditorInteractionController::handleWheel(qreal x, qreal y, int angleDeltaY,
       pixel_delta = QPoint(0, angleDeltaY / 4);
     }
     if (!pixel_delta.isNull()) {
-      stopZoomAnimation();
+      interruptZoomAnimation();
       const auto result = view_transform_controller_.HandleWheelPan(
           viewer_state_, widgetInfo(), interactionImageInfo(), pixel_delta);
       applyViewTransformResult(result);
@@ -494,7 +517,7 @@ void EditorInteractionController::handlePinch(qreal x, qreal y, qreal scaleDelta
   if (!interaction_enabled_) {
     return;
   }
-  stopZoomAnimation();
+  interruptZoomAnimation();
   const float value = static_cast<float>(scaleDelta);
   if (std::abs(value) <= 1.0e-4f) {
     return;
@@ -510,6 +533,32 @@ void EditorInteractionController::resetView() {
   stopZoomAnimation();
   const auto result = view_transform_controller_.ResetView(viewer_state_);
   applyViewTransformResult(result);
+}
+
+void EditorInteractionController::zoomToActualPixels() {
+  if (!interaction_enabled_) {
+    return;
+  }
+  const float ff = fitFraction();
+  if (ff <= 0.0f) {
+    return;
+  }
+  stopZoomAnimation();
+  // 1:1 = zoom field 1/fitFraction. Clamp to [fit, maxField] so images that
+  // already exceed 100% at fit land at fit instead of below the floor.
+  const float target_field = std::clamp(1.0f / ff, kMinInteractiveZoom, maxZoomField());
+  const QVector2D target_pan = ViewportMapper::ClampPanForZoom(
+      widgetInfo(), interactionImageInfo(), target_field, QVector2D(0.0f, 0.0f), kMinInteractiveZoom,
+      maxZoomField());
+  viewer_state_.SetViewTransform(target_field, target_pan);
+  updateViewportRenderRegionCache();
+  emitViewAndOverlay();
+  emit zoomLabelChanged();
+  emit viewZoomChanged(target_field);
+  // One-shot jump (no interaction ticks) routes immediately — DetailRefresh for
+  // a zoomed-in 1:1 so the high-res patch renders, else a ZoomPan re-sample.
+  emitViewChange(target_field > 1.0f + 1.0e-4f ? ViewChangeKind::DetailRefresh
+                                              : ViewChangeKind::ZoomPan);
 }
 
 void EditorInteractionController::resetCropToFull() {
@@ -611,6 +660,60 @@ auto EditorInteractionController::interactionImageInfo() const -> ViewportImageI
   return image_info_;
 }
 
+auto EditorInteractionController::fitFraction() const -> float {
+  if (image_info_.image_width <= 0 || image_info_.image_height <= 0 ||
+      widget_info_.widget_width <= 0 || widget_info_.widget_height <= 0) {
+    return 0.0f;
+  }
+  // Effective displayed image: the full source while the crop panel is open
+  // (CROP_ROTATE disabled — overlay only), or the committed cropped output once
+  // the panel closes (CropRotateOp bakes the crop). Cropped output px =
+  // round(src * crop_rect) per axis; rotation is un-baked into an axis-aligned
+  // frame so it does not change the output size. A full crop rect (0,0,1,1)
+  // reduces to the source, so this is safe even when no crop was ever committed.
+  const auto crop = viewer_state_.GetCropOverlay();
+  ViewportImageInfo effective = image_info_;
+  if (!crop.overlay_visible) {
+    effective.image_width  = std::max(1, static_cast<int>(std::lround(
+        static_cast<float>(image_info_.image_width) * crop.rect.width())));
+    effective.image_height = std::max(1, static_cast<int>(std::lround(
+        static_cast<float>(image_info_.image_height) * crop.rect.height())));
+  }
+  // Letterbox scale is aspect-only, so it is identical whether computed from the
+  // effective image or its 2K render reference. Use the effective image so 100%
+  // is defined against the real pixels of what is actually displayed.
+  const auto  scale = ViewportMapper::ComputeLetterboxScale(widget_info_, effective);
+  const float dpr   = std::max(widget_info_.device_pixel_ratio, 1e-4f);
+  const float viewport_w = static_cast<float>(widget_info_.widget_width) * dpr;
+  const float viewport_h = static_cast<float>(widget_info_.widget_height) * dpr;
+  const float fx = scale.x * viewport_w / static_cast<float>(effective.image_width);
+  const float fy = scale.y * viewport_h / static_cast<float>(effective.image_height);
+  // fx and fy are equal (aspect preserved); min is robust to float rounding.
+  return std::min(fx, fy);
+}
+
+auto EditorInteractionController::maxZoomField() const -> float {
+  const float ff = fitFraction();
+  if (ff <= 0.0f) {
+    return ViewTransformController::kMaxInteractiveZoom;
+  }
+  // Guard min <= max: tiny images whose fit already exceeds kMaxTrueZoom clamp
+  // the field ceiling to fit (zoom is locked at fit).
+  return std::max(ViewTransformController::kMinInteractiveZoom, kMaxTrueZoom / ff);
+}
+
+void EditorInteractionController::applyMaxZoomToController() {
+  view_transform_controller_.SetMaxZoom(maxZoomField());
+}
+
+auto EditorInteractionController::trueZoom() const -> float {
+  const float ff = fitFraction();
+  if (ff <= 0.0f) {
+    return 0.0f;
+  }
+  return ff * zoom();
+}
+
 void EditorInteractionController::applyViewTransformResult(const ViewTransformResult& result) {
   if (result.stop_click_toggle_timer && click_toggle_timer_ && click_toggle_timer_->isActive()) {
     click_toggle_timer_->stop();
@@ -647,11 +750,23 @@ void EditorInteractionController::applyViewTransformResult(const ViewTransformRe
     if (suppress_view_change_routing_ || zoom() > 1.0f + 1.0e-4f) {
       scheduleViewChangeAfterInteractionSettles();
     } else {
+      // Zoomed to fit: a pending DetailRefresh (armed while zoomed in) is for a
+      // stale viewport, so cancel it and emit an immediate ZoomPan re-sample.
+      // (Wheel/pinch no longer stop the settle timer up-front, so cancel here.)
+      if (view_interaction_settle_timer_) {
+        view_interaction_settle_timer_->stop();
+      }
       emitViewChange(ViewChangeKind::ZoomPan);
     }
   }
+  // No-op (!request_repaint): leave the settle timer untouched. A pending
+  // DetailRefresh from the last real change is still valid for this viewport;
+  // cancelling it (e.g. zoom-in already at the ceiling) would drop the
+  // high-quality ROI until the next real change, and re-arming would spin the
+  // BusyIndicator on every no-op. A real change restarts the timer above.
   if (result.emitted_zoom.has_value()) {
     emit viewZoomChanged(*result.emitted_zoom);
+    emit zoomLabelChanged();
   }
 }
 
@@ -708,6 +823,17 @@ void EditorInteractionController::stopZoomAnimation() {
   suppress_view_change_routing_ = false;
 }
 
+void EditorInteractionController::interruptZoomAnimation() {
+  if (zoom_animation_ && zoom_animation_->state() == QAbstractAnimation::Running) {
+    zoom_animation_->stop();
+  }
+  // Do NOT stop the settle timer here: a no-op wheel/pinch (e.g. zoom-in already
+  // at the ceiling) must not drop a pending DetailRefresh for the current
+  // viewport. A real view change restarts the timer (superseding the pending
+  // request) inside applyViewTransformResult; a no-op leaves it untouched.
+  suppress_view_change_routing_ = false;
+}
+
 void EditorInteractionController::scheduleViewChangeAfterInteractionSettles() {
   if (view_interaction_settle_timer_) {
     view_interaction_settle_timer_->start(kViewInteractionSettleDelayMs);
@@ -746,10 +872,10 @@ void EditorInteractionController::reconcileViewTransformForRenderReference() {
     return;
   }
   const float clamped_zoom =
-      std::clamp(snapshot.view_transform.zoom, kMinInteractiveZoom, kMaxInteractiveZoom);
+      std::clamp(snapshot.view_transform.zoom, kMinInteractiveZoom, maxZoomField());
   QVector2D clamped_pan = ViewportMapper::ClampPanForZoom(
       widgetInfo(), {snapshot.render_reference_width, snapshot.render_reference_height},
-      clamped_zoom, snapshot.view_transform.pan, kMinInteractiveZoom, kMaxInteractiveZoom);
+      clamped_zoom, snapshot.view_transform.pan, kMinInteractiveZoom, maxZoomField());
   if (clamped_zoom <= (kMinInteractiveZoom + 1.0e-4f)) {
     clamped_pan = QVector2D(0.0f, 0.0f);
   }
@@ -766,6 +892,9 @@ void EditorInteractionController::reconcileViewTransformForRenderReference() {
   emit viewChanged();
   if (zoom_changed) {
     emit viewZoomChanged(clamped_zoom);
+    // trueZoom tracks the zoom field; keep the readout in sync when reconcile
+    // clamps the field (e.g. after image/viewport changed the ceiling).
+    emit zoomLabelChanged();
   }
 }
 

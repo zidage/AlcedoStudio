@@ -116,6 +116,116 @@ TEST(EditorOverlayInteractionTest, CtrlWheelZoomsAtCursorAndClampsPanAtMultipleD
   }
 }
 
+TEST(EditorOverlayInteractionTest, TrueZoomIsOneToOneAtActualPixels) {
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  ConfigureImage(controller, 4000, 3000);  // aspect-matched → fitFraction = 800/4000 = 0.2
+
+  // At fit (zoom field 1.0), true zoom equals the fit fraction (20%).
+  EXPECT_NEAR(controller.trueZoom(), 0.2f, 1.0e-5f);
+  controller.zoomToActualPixels();
+  // 1:1 → zoom field 1/0.2 = 5.0, true zoom == 1.0 (100%).
+  EXPECT_NEAR(controller.zoom(), 5.0f, 1.0e-4f);
+  EXPECT_NEAR(controller.trueZoom(), 1.0f, 1.0e-4f);
+}
+
+TEST(EditorOverlayInteractionTest, ActualPixelsClampsToFitWhenFitExceedsOneToOne) {
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  ConfigureImage(controller, 400, 300);  // fitFraction = 800/400 = 2.0 → fit is 200%
+
+  // 1:1 lies below the fit floor for this small image, so the shortcut clamps
+  // to fit instead of zooming below it.
+  EXPECT_NEAR(controller.trueZoom(), 2.0f, 1.0e-5f);
+  controller.zoomToActualPixels();
+  EXPECT_NEAR(controller.zoom(), 1.0f, 1.0e-5f);
+  EXPECT_NEAR(controller.trueZoom(), 2.0f, 1.0e-5f);
+}
+
+TEST(EditorOverlayInteractionTest, MaxZoomClampsToTrueZoomCeilingNotLegacyField) {
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  ConfigureImage(controller, 4000, 3000);  // fitFraction 0.2 → field ceiling 80 → true ceiling 1600%
+
+  // Saturate the cap with many zoom-in steps. The cap is expressed in true
+  // zoom (1600%), not the legacy 8x fit field, so the field reaches ~80 and
+  // true zoom reaches 16.0 — well past the old 8.0 field / 1.6 true ceiling.
+  for (int i = 0; i < 200; ++i) {
+    controller.handleWheel(400, 300, 120, 0, 0, static_cast<int>(Qt::ControlModifier), false);
+  }
+  EXPECT_NEAR(controller.trueZoom(), 16.0f, 0.05f);
+  EXPECT_LE(controller.trueZoom(), 16.0f + 0.05f);
+}
+
+TEST(EditorOverlayInteractionTest, MaxZoomStillRoutesDetailRefreshAfterNoOpWheels) {
+  // Regression: zooming to the ceiling then scrolling past it (no-op wheels)
+  // must NOT cancel the DetailRefresh armed by the last real zoom step. The
+  // Issue 1 no-op fix made ApplyViewTransform skip request_repaint, but the
+  // wheel handler still stopped the settle timer up-front — so the pending
+  // high-quality ROI never rendered until a drag. Wheel/pinch now preserve the
+  // settle timer on a no-op; only a real view change supersedes it.
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  ConfigureImage(controller, 800, 600);  // fit at 1.0 → field ceiling 16 (1600%)
+
+  QSignalSpy change_spy(&controller, &EditorInteractionController::viewChangeReported);
+  ASSERT_TRUE(change_spy.isValid());
+
+  // Climb to the ceiling. Each step is a real change that arms the settle timer
+  // (no immediate viewChangeReported — the timer hasn't fired yet).
+  for (int i = 0; i < 40; ++i) {
+    controller.handleWheel(400, 300, 120, 0, 0, static_cast<int>(Qt::ControlModifier), false);
+  }
+  ASSERT_NEAR(controller.zoom(), 16.0f, 0.2f);  // saturated at the ceiling
+  EXPECT_EQ(change_spy.count(), 0);             // settle armed, not yet fired
+
+  // No-op wheels at the ceiling must NOT cancel the armed settle timer.
+  for (int i = 0; i < 5; ++i) {
+    controller.handleWheel(400, 300, 120, 0, 0, static_cast<int>(Qt::ControlModifier), false);
+  }
+  EXPECT_NEAR(controller.zoom(), 16.0f, 1.0e-3f);  // unchanged
+
+  // Let the 120ms settle timer fire. The DetailRefresh must be routed — the
+  // no-ops did not drop it.
+  QTest::qWait(200);
+  QCoreApplication::processEvents();
+
+  ASSERT_GE(change_spy.count(), 1);
+  EXPECT_EQ(change_spy.takeLast().at(0).toInt(),
+            static_cast<int>(EditorInteractionController::ViewChangeKind::DetailRefresh));
+}
+
+TEST(EditorOverlayInteractionTest, TrueZoomUsesCroppedOutputAfterCropCommit) {
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  ConfigureImage(controller, 4000, 3000);  // source 4000x3000, fitFraction 0.2
+
+  // Editing a crop (overlay visible): CROP_ROTATE is disabled, so the displayed
+  // image is still the full source. Dragging the rect must NOT change true zoom.
+  controller.setCropOverlayVisible(true);
+  EXPECT_NEAR(controller.trueZoom(), 0.2f, 1.0e-5f);
+  controller.setCropRectNormalized(QRectF(0.25, 0.25, 0.5, 0.5));  // central 50% crop
+  EXPECT_NEAR(controller.trueZoom(), 0.2f, 1.0e-5f);  // still source-based
+
+  // Close the panel → crop commits (overlay hidden). Displayed image is now the
+  // cropped output (round(4000*0.5) x round(3000*0.5) = 2000x1500, same aspect),
+  // so fitFraction becomes 800/2000 = 0.4 and true zoom at fit is 40%.
+  controller.setCropOverlayVisible(false);
+  EXPECT_NEAR(controller.trueZoom(), 0.4f, 1.0e-5f);
+
+  // 1:1 is now 1 cropped-output pixel per screen pixel → field 1/0.4 = 2.5.
+  controller.zoomToActualPixels();
+  EXPECT_NEAR(controller.zoom(), 2.5f, 1.0e-4f);
+  EXPECT_NEAR(controller.trueZoom(), 1.0f, 1.0e-4f);
+
+  // Reopening the panel switches back to the full source (1:1 field 5.0).
+  controller.setCropOverlayVisible(true);
+  EXPECT_NEAR(controller.trueZoom(), 0.5f, 1.0e-4f);  // 0.2 * 2.5
+  controller.zoomToActualPixels();
+  EXPECT_NEAR(controller.zoom(), 5.0f, 1.0e-4f);
+  EXPECT_NEAR(controller.trueZoom(), 1.0f, 1.0e-4f);
+}
+
 TEST(EditorOverlayInteractionTest, PanDragMovesViewWhenCropToolDisabled) {
   EditorInteractionController controller;
   controller.setViewportMetrics(800, 600, 1.0);

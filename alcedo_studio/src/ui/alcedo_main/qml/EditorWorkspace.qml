@@ -247,14 +247,19 @@ Item {
                         }
                     }
 
-                    // Zoom readout (status chrome).
+                    // Zoom readout (status chrome). True zoom: 100% = 1:1 (one
+                    // source-image pixel per screen pixel), derived from the full
+                    // image and viewport — independent of the 2K preview cap. At
+                    // fit (zoom field 1.0) the readout shows "FIT" instead of a %.
                     Label {
                         objectName: "editorZoomReadout"
                         anchors.right: parent.right
                         anchors.bottom: parent.bottom
                         anchors.margins: 10
                         visible: root.hasImage
-                        text: qsTr("%1%").arg(Math.round(editorInteraction.zoom * 100))
+                        text: editorInteraction.zoom > 1.0001
+                              ? qsTr("%1%").arg(Math.round(editorInteraction.trueZoom * 100))
+                              : qsTr("FIT")
                         color: root.colMuted
                         font.pixelSize: appTheme.fontSizeBody
                         font.weight: appTheme.fontWeightStrong
@@ -413,6 +418,10 @@ Item {
                         Keys.onPressed: function (event) {
                             if (event.key === Qt.Key_0 || event.key === Qt.Key_Home) {
                                 editorInteraction.resetView()
+                                event.accepted = true
+                            } else if (event.key === Qt.Key_1) {
+                                // 1:1 (actual pixels). Pro-editor convention.
+                                editorInteraction.zoomToActualPixels()
                                 event.accepted = true
                             }
                         }

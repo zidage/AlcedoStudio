@@ -168,6 +168,35 @@ TEST(EditViewerLogicTests, ViewTransformControllerCtrlWheelUpdatesZoomAndPan) {
   EXPECT_GT(state.GetViewZoom(), 1.0f);
 }
 
+TEST(EditViewerLogicTests, ViewTransformControllerCtrlWheelAtMaxZoomIsNoOp) {
+  ViewerState             state;
+  ViewTransformController controller;
+  // Already at the interactive zoom ceiling. A further zoom-in clamps the
+  // target back to the same value, so the view does not move. The event is
+  // still consumed (it must not fall through to pan/scroll) but no repaint or
+  // DetailRefresh is requested — otherwise the BusyIndicator spins at max zoom.
+  state.SetViewTransform(ViewTransformController::kMaxInteractiveZoom, QVector2D(0.0f, 0.0f));
+  const auto result =
+      controller.HandleCtrlWheel(state, kWidgetInfo, kImageInfo, 120, QPointF(400.0, 300.0));
+  EXPECT_TRUE(result.consumed);
+  EXPECT_FALSE(result.request_repaint);
+  EXPECT_FALSE(result.emitted_zoom.has_value());
+  EXPECT_FLOAT_EQ(state.GetViewZoom(), ViewTransformController::kMaxInteractiveZoom);
+}
+
+TEST(EditViewerLogicTests, ViewTransformControllerCtrlWheelAtFitZoomOutIsNoOp) {
+  ViewerState             state;
+  ViewTransformController controller;
+  // Already at fit (kMinInteractiveZoom). A zoom-out clamps back to fit and the
+  // anchored pan collapses to zero, so nothing repaints.
+  const auto result =
+      controller.HandleCtrlWheel(state, kWidgetInfo, kImageInfo, -120, QPointF(400.0, 300.0));
+  EXPECT_TRUE(result.consumed);
+  EXPECT_FALSE(result.request_repaint);
+  EXPECT_FALSE(result.emitted_zoom.has_value());
+  EXPECT_FLOAT_EQ(state.GetViewZoom(), ViewTransformController::kMinInteractiveZoom);
+}
+
 TEST(EditViewerLogicTests, ViewTransformPanDeltaMatchesAcrossDevicePixelRatios) {
   ViewerState state_dpr1;
   ViewerState state_dpr2;

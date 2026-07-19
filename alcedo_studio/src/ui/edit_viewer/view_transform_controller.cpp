@@ -27,7 +27,7 @@ auto ViewTransformController::HandleCtrlWheel(ViewerState& state,
       static_cast<float>(wheel_delta) / static_cast<float>(QWheelEvent::DefaultDeltasPerStep);
   const float target_zoom  =
       std::clamp(view_state.zoom * std::pow(kWheelZoomStep, steps), kMinInteractiveZoom,
-                 kMaxInteractiveZoom);
+                 max_zoom_);
   const QVector2D target_pan = ViewportMapper::ComputeAnchoredPan(
       anchor_widget_pos, widget_info, image_info, view_state.zoom, view_state.pan, target_zoom,
       view_state.pan);
@@ -54,7 +54,7 @@ auto ViewTransformController::HandlePinchZoom(ViewerState& state,
   // Qt docs: for ZoomNativeGesture, scale = scale * (1 + value)
   const float scale       = 1.0f + zoom_delta;
   const float target_zoom =
-      std::clamp(view_state.zoom * scale, kMinInteractiveZoom, kMaxInteractiveZoom);
+      std::clamp(view_state.zoom * scale, kMinInteractiveZoom, max_zoom_);
   const QVector2D target_pan = ViewportMapper::ComputeAnchoredPan(
       anchor_widget_pos, widget_info, image_info, view_state.zoom, view_state.pan, target_zoom,
       view_state.pan);
@@ -277,15 +277,24 @@ auto ViewTransformController::ApplyViewTransform(ViewerState& state,
                                                  const QVector2D& pan, bool emit_zoom_signal)
     -> ViewTransformResult {
   const auto clamped_pan = ViewportMapper::ClampPanForZoom(widget_info, image_info, zoom, pan,
-                                                           kMinInteractiveZoom, kMaxInteractiveZoom);
-  const float clamped_zoom = std::clamp(zoom, kMinInteractiveZoom, kMaxInteractiveZoom);
+                                                           kMinInteractiveZoom, max_zoom_);
+  const float clamped_zoom = std::clamp(zoom, kMinInteractiveZoom, max_zoom_);
   const auto  previous     = state.GetViewTransform();
   state.SetViewTransform(clamped_zoom, clamped_pan);
 
+  // Request a repaint only when the transform actually changed. A zoom gesture
+  // that clamps to the current limit (e.g. Ctrl+wheel zoom-in already at
+  // kMaxInteractiveZoom, or zoom-out already at fit) leaves zoom and pan
+  // unchanged; routing a DetailRefresh for that no-op drives the render
+  // coordinator busy and spins the BusyIndicator even though the view never
+  // moves. consumed stays true so the input event is still swallowed.
+  const bool zoom_changed = std::abs(previous.zoom - clamped_zoom) > 1e-5f;
+  const bool pan_changed  = (previous.pan - clamped_pan).lengthSquared() > 1e-8f;
+
   ViewTransformResult result;
   result.consumed        = true;
-  result.request_repaint = true;
-  if (emit_zoom_signal && std::abs(previous.zoom - clamped_zoom) > 1e-5f) {
+  result.request_repaint = zoom_changed || pan_changed;
+  if (emit_zoom_signal && zoom_changed) {
     result.emitted_zoom = clamped_zoom;
   }
   return result;
@@ -298,7 +307,7 @@ auto ViewTransformController::AnimateViewTo(ViewerState& state, const ViewportWi
     -> ViewTransformResult {
   const auto  view_state  = state.GetViewTransform();
   const float clamped_zoom =
-      std::clamp(target_zoom, kMinInteractiveZoom, kMaxInteractiveZoom);
+      std::clamp(target_zoom, kMinInteractiveZoom, max_zoom_);
   QVector2D target_pan = explicit_target_pan.value_or(view_state.pan);
   if (!explicit_target_pan.has_value() && anchor_widget_pos.has_value()) {
     target_pan = ViewportMapper::ComputeAnchoredPan(*anchor_widget_pos, widget_info, image_info,
@@ -306,7 +315,7 @@ auto ViewTransformController::AnimateViewTo(ViewerState& state, const ViewportWi
                                                     view_state.pan);
   }
   target_pan = ViewportMapper::ClampPanForZoom(widget_info, image_info, clamped_zoom, target_pan,
-                                               kMinInteractiveZoom, kMaxInteractiveZoom);
+                                               kMinInteractiveZoom, max_zoom_);
 
   if (std::abs(view_state.zoom - clamped_zoom) <= 1e-5f &&
       (view_state.pan - target_pan).lengthSquared() <= 1e-8f) {

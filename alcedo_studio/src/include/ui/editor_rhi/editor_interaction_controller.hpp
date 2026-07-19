@@ -37,6 +37,11 @@ class EditorInteractionController : public QObject {
   Q_PROPERTY(float zoom READ zoom NOTIFY viewChanged)
   Q_PROPERTY(float panX READ panX NOTIFY viewChanged)
   Q_PROPERTY(float panY READ panY NOTIFY viewChanged)
+  // True zoom = physical screen pixels per source-image pixel (1.0 = 1:1 = 100%),
+  // derived from the full image size, viewport metrics and the fit-relative zoom
+  // field. Independent of the 2K preview cap — that cap only selects the render
+  // tier (full-frame base vs. DetailPatch), not the displayed ratio. See trueZoom().
+  Q_PROPERTY(float trueZoom READ trueZoom NOTIFY zoomLabelChanged)
   Q_PROPERTY(bool cropToolEnabled READ cropToolEnabled WRITE setCropToolEnabled NOTIFY
                  cropToolChanged)
   Q_PROPERTY(bool cropOverlayVisible READ cropOverlayVisible WRITE setCropOverlayVisible NOTIFY
@@ -86,6 +91,8 @@ class EditorInteractionController : public QObject {
   explicit EditorInteractionController(QObject* parent = nullptr);
 
   [[nodiscard]] auto zoom() const -> float;
+  // True zoom ratio (1.0 = 1:1). Returns 0 when no image / viewport is set.
+  [[nodiscard]] auto trueZoom() const -> float;
   [[nodiscard]] auto panX() const -> float;
   [[nodiscard]] auto panY() const -> float;
   [[nodiscard]] auto cropToolEnabled() const -> bool;
@@ -161,6 +168,10 @@ class EditorInteractionController : public QObject {
   Q_INVOKABLE void handlePinch(qreal x, qreal y, qreal scaleDelta);
   Q_INVOKABLE void handleLeave();
   Q_INVOKABLE void resetView();
+  // Snap to 1:1 (true zoom = 1.0, one image pixel per screen pixel), centered.
+  // For images whose fit already exceeds 100% (small images / large viewports),
+  // this clamps to fit since 1:1 lies below the fit floor.
+  Q_INVOKABLE void zoomToActualPixels();
   Q_INVOKABLE void resetCropToFull();
 
   // Logical → source-image UV. Empty when outside the letterboxed image.
@@ -195,6 +206,9 @@ class EditorInteractionController : public QObject {
   void viewportMetricsChanged();
   void interactionEnabledChanged();
   void viewZoomChanged(float zoom);
+  // Fires when the displayed zoom ratio (trueZoom) may have changed: zoom field
+  // change, image size change, or viewport metrics change.
+  void zoomLabelChanged();
   void viewStateChanged();
   // Phase 5D: a user-driven view change occurred (zoom/pan/resize/crop-
   // rotation/ROI). Carries a ViewChangeKind (int for QML). Emitted AFTER
@@ -205,14 +219,35 @@ class EditorInteractionController : public QObject {
  private:
   static constexpr int kZoomAnimationDurationMs = 170;
   static constexpr int kViewInteractionSettleDelayMs = 120;
+  // True-zoom ceiling (1600%, matching professional editors). The zoom *field*
+  // ceiling is derived from this and the current fit fraction so the cap is
+  // consistent across image sizes and viewport DPIs.
+  static constexpr float kMaxTrueZoom = 16.0f;
 
   [[nodiscard]] auto widgetInfo() const -> ViewportWidgetInfo { return widget_info_; }
   [[nodiscard]] auto imageInfo() const -> ViewportImageInfo { return image_info_; }
   [[nodiscard]] auto interactionImageInfo() const -> ViewportImageInfo;
+  // fitFraction = physical screen pixels per source-image pixel at fit (zoom
+  // field 1.0). Uses the full image size (image_info_), not the 2K render
+  // reference, because 100% is defined against the real image. Letterbox scale
+  // is aspect-only so it is identical for the full image and the 2K reference
+  // (crop tool off).
+  [[nodiscard]] auto fitFraction() const -> float;
+  // Zoom-field ceiling that maps to kMaxTrueZoom at the current image/viewport.
+  [[nodiscard]] auto maxZoomField() const -> float;
+  // Recompute maxZoomField() and push it to the view transform controller. Call
+  // whenever image size or viewport metrics change.
+  void applyMaxZoomToController();
   void applyViewTransformResult(const ViewTransformResult& result);
   void applyCropInteractionResult(const CropInteractionResult& result);
   void applyCursor(std::optional<Qt::CursorShape> cursor, bool unset);
   void stopZoomAnimation();
+  // Stop an in-progress zoom animation and clear the routing-suppress flag, but
+  // leave the interaction-settle timer running. Used by wheel/pinch input so a
+  // no-op transform (e.g. zoom-in already at the ceiling) does NOT cancel a
+  // pending DetailRefresh for the current viewport — only a real view change
+  // (which restarts the timer via applyViewTransformResult) supersedes it.
+  void interruptZoomAnimation();
   void scheduleViewChangeAfterInteractionSettles();
   void emitViewAndOverlay();
   // Phase 5D: report a user-driven view change for render routing. No-op when
