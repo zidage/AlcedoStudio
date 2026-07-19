@@ -148,6 +148,9 @@ void EditorViewportRenderer::releaseLayer(LayerState& layer) {
   if (layer.slot_index >= 0 && present_queue_) {
     present_queue_->CompleteRendererRead(layer.slot_index);
   }
+  // Drop producer-owned Metal (etc.) texture retain after QRhi wrapper is gone.
+  layer.imported_owner.reset();
+  layer.imported_native_handle = 0;
   layer = {};
 }
 
@@ -237,6 +240,9 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
       releaseLayer(layer);
     }
     releaseQueuedNatives();
+    if (item_->frameSink()) {
+      item_->frameSink()->ClearPendingImportedFrames();
+    }
     image_generation_ = next_image_generation;
     image_identity_   = next_image_identity;
     content_dirty_    = true;
@@ -472,11 +478,97 @@ void EditorViewportRenderer::consumeDirectFrames() {
     layer.presentation_mode = frame->slot.presentation_mode;
     layer.preview_metadata = frame->slot.preview_metadata;
     layer.ready_frame = *frame;
+    layer.imported_owner.reset();
+    layer.imported_native_handle = frame->slot.native.native_handle;
     content_dirty_ = true;
     if (item_) {
       item_->setStatusText(QStringLiteral("imported frame role=%1 gen=%2")
                                .arg(static_cast<int>(role))
                                .arg(frame->slot.preview_metadata.preview_generation));
+    }
+  }
+}
+
+void EditorViewportRenderer::consumeImportedGpuFrames() {
+  if (!rhi_ || !item_ || !item_->frameSink()) {
+    return;
+  }
+  auto pending =
+      item_->frameSink()->DrainPendingImportedFrames(image_generation_, image_identity_);
+  for (auto& frame : pending) {
+    if (!frame.valid()) {
+      continue;
+    }
+    const FrameRole role = frame.preview_metadata.frame_role;
+    qInfo("[EditorPresent] consuming Metal import request=%llu image=%llu generation=%llu "
+          "size=%dx%d handle=%llu",
+          static_cast<unsigned long long>(frame.preview_metadata.presentation_request_id),
+          static_cast<unsigned long long>(frame.image_identity),
+          static_cast<unsigned long long>(frame.image_generation), frame.width, frame.height,
+          static_cast<unsigned long long>(frame.texture_handle));
+
+    auto& layer = layers_[layerIndex(layerForRole(role))];
+    // Same native object already bound for this layer: keep QRhi wrapper, refresh
+    // metadata/owner only (zero-copy path can re-submit the same MTLTexture).
+    if (layer.valid && layer.texture && layer.imported_native_handle == frame.texture_handle &&
+        layer.width == frame.width && layer.height == frame.height) {
+      layer.imported_owner = std::move(frame.owner);
+      layer.presentation_mode = frame.presentation_mode;
+      layer.preview_metadata = frame.preview_metadata;
+      layer.ready_frame = {};
+      layer.ready_frame.slot.width = frame.width;
+      layer.ready_frame.slot.height = frame.height;
+      layer.ready_frame.slot.presentation_mode = frame.presentation_mode;
+      layer.ready_frame.slot.preview_metadata = frame.preview_metadata;
+      layer.ready_frame.slot.image_generation = frame.image_generation;
+      layer.ready_frame.slot.image_identity = frame.image_identity;
+      layer.ready_frame.slot.sequence = frame.sequence;
+      layer.texture->setNativeLayout(frame.native_layout);
+      content_dirty_ = true;
+      continue;
+    }
+
+    releaseLayer(layer);
+    auto* texture =
+        rhi_->newTexture(QRhiTexture::RGBA32F, QSize(frame.width, frame.height), 1);
+    if (!texture ||
+        !texture->createFrom(
+            {static_cast<quint64>(frame.texture_handle), frame.native_layout})) {
+      qWarning("[EditorPresent] QRhi Metal import failed for request=%llu handle=%llu",
+               static_cast<unsigned long long>(frame.preview_metadata.presentation_request_id),
+               static_cast<unsigned long long>(frame.texture_handle));
+      destroyResource(texture);
+      if (item_) {
+        item_->setStatusText(QStringLiteral("failed to import Metal frame (zero-copy)"));
+      }
+      continue;
+    }
+    // Match RhiEditViewerSurface::ensureImportedTexture: keep layout explicit.
+    texture->setNativeLayout(frame.native_layout);
+    layer.texture = texture;
+    layer.width = frame.width;
+    layer.height = frame.height;
+    layer.imported = true;
+    layer.valid = true;
+    layer.slot_index = -1;  // producer-owned; not a DirectPresentQueue slot
+    layer.imported_owner = std::move(frame.owner);
+    layer.imported_native_handle = frame.texture_handle;
+    layer.presentation_mode = frame.presentation_mode;
+    layer.preview_metadata = frame.preview_metadata;
+    layer.ready_frame = {};
+    layer.ready_frame.slot.width = frame.width;
+    layer.ready_frame.slot.height = frame.height;
+    layer.ready_frame.slot.presentation_mode = frame.presentation_mode;
+    layer.ready_frame.slot.preview_metadata = frame.preview_metadata;
+    layer.ready_frame.slot.image_generation = frame.image_generation;
+    layer.ready_frame.slot.image_identity = frame.image_identity;
+    layer.ready_frame.slot.sequence = frame.sequence;
+    NativeResourceCounters::Instance().OnCreateImportedQRhiTexture();
+    content_dirty_ = true;
+    if (item_) {
+      item_->setStatusText(QStringLiteral("imported Metal frame role=%1 gen=%2")
+                               .arg(static_cast<int>(role))
+                               .arg(frame.preview_metadata.preview_generation));
     }
   }
 }
@@ -612,8 +704,10 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
 
   // Targets are producer-driven. Matches the pre-refactor surface: create the
   // exact output slot requested by EnsureSize, with no speculative pool.
+  // Metal skips shared-slot allocation and consumes zero-copy imports instead.
   fulfillTargetRequests();
   consumeDirectFrames();
+  consumeImportedGpuFrames();
   ensureStaticResources(render_target, command_buffer);
   auto* updates = rhi_->nextResourceUpdateBatch();
 
@@ -692,10 +786,10 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
   }
   command_buffer->endPass();
 
-  // Composition confirmation only after the selected primary slot was encoded
-  // into this Qt Quick window frame. Intermediate frames are not application
-  // presentation events; first-frame service uses a one-shot session event.
-  if (drew_primary && primary_layer->slot_index >= 0 && item_->frameSink()) {
+  // Composition confirmation only after the selected primary was encoded into
+  // this Qt Quick window frame. Covers both DirectPresentQueue slots (CUDA /
+  // OpenCL) and zero-copy Metal imports (slot_index == -1).
+  if (drew_primary && item_->frameSink()) {
     item_->frameSink()->NotifyPrimaryFrameComposed(primary_layer->ready_frame);
   }
 

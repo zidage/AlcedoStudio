@@ -5,6 +5,7 @@
 #include "ui/editor_rhi/direct_frame_sink.hpp"
 
 #include "ui/edit_viewer/edit_viewer_surface.hpp"
+#include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "ui/editor_rhi/lease_target_adapters.hpp"
 
@@ -12,12 +13,34 @@
 #include <QMetaObject>
 #include <QThread>
 
+#include <utility>
+
 namespace alcedo::editor_rhi {
 
 DirectFrameSink::DirectFrameSink(EditorViewportItem* item) : item_(item) {}
 
 DirectFrameSink::~DirectFrameSink() {
   ClearMappedSlot();
+  ClearPendingImportedFrames();
+}
+
+auto DirectFrameSink::LayerIndexForRole(FrameRole role) -> std::size_t {
+  switch (role) {
+    case FrameRole::QualityBase:
+      return 1;
+    case FrameRole::DetailPatch:
+      return 2;
+    case FrameRole::InteractivePrimary:
+    default:
+      return 0;
+  }
+}
+
+auto DirectFrameSink::IsMetalPresentPath() const -> bool {
+  if (!item_ || !item_->present_queue()) {
+    return ActiveEditorBackend() == EditorBackend::Metal;
+  }
+  return item_->present_queue()->backend() == EditorBackend::Metal;
 }
 
 void DirectFrameSink::ClearMappedSlot() {
@@ -103,6 +126,7 @@ void DirectFrameSink::EnsureSize(int width, int height) {
   }
   const std::uint64_t image_generation = item_->imageGeneration();
   const std::uint64_t image_identity = item_->imageIdentity();
+  const bool metal_present = IsMetalPresentPath();
   bool emit_target_size = false;
   {
     std::lock_guard lock(mutex_);
@@ -126,9 +150,19 @@ void DirectFrameSink::EnsureSize(int width, int height) {
       is_render_reference =
           IsRenderReferenceFrame(mode, pending_preview_metadata_.frame_role);
     }
-    emit_target_size = geometry_changed && is_render_reference;
-    width_ = width;
-    height_ = height;
+    // Metal zero-copy: production EnsureSize uses the presentation *viewport*
+    // size, not the pipeline MTLTexture size. Emitting that as the render
+    // reference rewrites zoom/pan math to the viewport aspect and causes FIT
+    // snaps / ROI thrash when a real frame arrives. Publish render-reference
+    // geometry from SubmitMetalFrame with the real texture size instead.
+    emit_target_size = geometry_changed && is_render_reference && !metal_present;
+    // CUDA/OpenCL always track the requested write size. On Metal, only track
+    // full-frame requests so Detail/Roi sizes cannot poison later change
+    // detection (actual ref size is set when the MTLTexture is submitted).
+    if (!metal_present || is_render_reference) {
+      width_  = width;
+      height_ = height;
+    }
     last_sized_image_generation_ = image_generation;
     last_sized_image_identity_ = image_identity;
   }
@@ -142,6 +176,14 @@ void DirectFrameSink::EnsureSize(int width, int height) {
     QMetaObject::invokeMethod(
         item_, [item = item_, width, height] { emit item->targetSizeRequested(width, height); },
         connection);
+  }
+
+  // Metal presents by importing the pipeline's own MTLTexture (SubmitMetalFrame).
+  // Shared-slot allocation is CUDA/OpenCL only — skip the failed handshake.
+  if (metal_present) {
+    std::lock_guard lock(mutex_);
+    prepared_slot_index_ = -1;
+    return;
   }
 
   auto slot = ReserveWritableSlot(width, height);
@@ -314,8 +356,128 @@ void DirectFrameSink::SubmitHostFrame(const ViewerFrame&) {
   // Intentionally empty: production presentation has no CPU-upload fallback.
 }
 
+#ifdef HAVE_METAL
+void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
+  if (!frame || !item_) {
+    qWarning("[EditorPresent] SubmitMetalFrame rejected: invalid frame or item");
+    return;
+  }
+  if (!IsMetalPresentPath()) {
+    qWarning("[EditorPresent] SubmitMetalFrame ignored: active backend is not Metal");
+    return;
+  }
+
+  ImportedGpuFrame imported;
+  imported.width = frame.width;
+  imported.height = frame.height;
+  imported.texture_handle = frame.texture_handle;
+  imported.native_layout = 0;
+  imported.owner = frame.owner;
+  imported.presentation_mode = frame.presentation_mode;
+  imported.preview_metadata = frame.preview_metadata;
+  imported.image_generation = item_->imageGeneration();
+  imported.image_identity = item_->imageIdentity();
+
+  std::uint64_t request_id = 0;
+  bool emit_render_reference = false;
+  int ref_w = 0;
+  int ref_h = 0;
+  {
+    std::lock_guard lock(mutex_);
+    // Prefer the session-stamped role/ROI/request id over pipeline defaults.
+    if (pending_presentation_mode_valid_) {
+      imported.presentation_mode = pending_presentation_mode_;
+      pending_presentation_mode_valid_ = false;
+    }
+    if (pending_preview_metadata_valid_) {
+      imported.preview_metadata = pending_preview_metadata_;
+      pending_preview_metadata_valid_ = false;
+    }
+    request_id = imported.preview_metadata.presentation_request_id;
+    imported.sequence = ++imported_sequence_;
+    const auto layer = LayerIndexForRole(imported.preview_metadata.frame_role);
+    if (pending_imported_[layer].has_value()) {
+      qInfo("[EditorPresent] superseding pending Metal import role=%d request=%llu",
+            static_cast<int>(imported.preview_metadata.frame_role),
+            static_cast<unsigned long long>(
+                pending_imported_[layer]->preview_metadata.presentation_request_id));
+    }
+    pending_imported_[layer] = imported;
+    ++submitted_frame_count_;
+
+    // Match QtEditViewer::RefreshFrameDerivedState: only full-frame textures
+    // redefine crop/zoom render-reference geometry. Detail/Roi sizes must not.
+    if (IsRenderReferenceFrame(imported.presentation_mode,
+                               imported.preview_metadata.frame_role)) {
+      const bool geometry_changed = width_ != frame.width || height_ != frame.height;
+      width_  = frame.width;
+      height_ = frame.height;
+      if (geometry_changed) {
+        emit_render_reference = true;
+        ref_w = frame.width;
+        ref_h = frame.height;
+      }
+    }
+  }
+
+  qInfo("[EditorPresent] queued Metal import request=%llu image=%llu generation=%llu size=%dx%d "
+        "handle=%llu (zero-copy)",
+        static_cast<unsigned long long>(request_id),
+        static_cast<unsigned long long>(item_->imageIdentity()),
+        static_cast<unsigned long long>(item_->imageGeneration()), frame.width, frame.height,
+        static_cast<unsigned long long>(frame.texture_handle));
+
+  if (emit_render_reference) {
+    // Publish the real MTLTexture size as the interaction render reference
+    // (not the presentation viewport size from EnsureSize).
+    const auto connection = (item_->thread() == QThread::currentThread())
+                                ? Qt::DirectConnection
+                                : Qt::QueuedConnection;
+    QMetaObject::invokeMethod(
+        item_,
+        [item = item_, ref_w, ref_h] { emit item->targetSizeRequested(ref_w, ref_h); },
+        connection);
+  }
+  item_->requestPresentUpdate();
+}
+#endif
+
 void DirectFrameSink::SubmitFinalDisplayFrame(const FinalDisplayFrameView&) {
   // Scope taps remain responsible for analyzer paths; presentation is direct GPU only.
+}
+
+auto DirectFrameSink::DrainPendingImportedFrames(std::uint64_t image_generation,
+                                                 std::uint64_t image_identity)
+    -> std::vector<ImportedGpuFrame> {
+  std::lock_guard lock(mutex_);
+  std::vector<ImportedGpuFrame> out;
+  out.reserve(pending_imported_.size());
+  for (auto& slot : pending_imported_) {
+    if (!slot.has_value() || !slot->valid()) {
+      slot.reset();
+      continue;
+    }
+    if (image_generation != 0 && slot->image_generation != 0 &&
+        slot->image_generation != image_generation) {
+      slot.reset();
+      continue;
+    }
+    if (image_identity != 0 && slot->image_identity != 0 &&
+        slot->image_identity != image_identity) {
+      slot.reset();
+      continue;
+    }
+    out.push_back(std::move(*slot));
+    slot.reset();
+  }
+  return out;
+}
+
+void DirectFrameSink::ClearPendingImportedFrames() {
+  std::lock_guard lock(mutex_);
+  for (auto& slot : pending_imported_) {
+    slot.reset();
+  }
 }
 
 auto DirectFrameSink::GetWidth() const -> int {
@@ -385,7 +547,16 @@ void DirectFrameSink::NotifyPrimaryFrameComposed(const DirectPresentQueue::Ready
 }
 
 auto DirectFrameSink::HasWritableTargetForNextFrame() const -> bool {
-  if (!item_ || !item_->present_queue()) {
+  if (!item_) {
+    return false;
+  }
+  // Metal does not pre-allocate shared write targets; a submit is always possible
+  // once geometry is known and the consumer is live.
+  if (IsMetalPresentPath()) {
+    std::lock_guard lock(mutex_);
+    return width_ > 0 && height_ > 0;
+  }
+  if (!item_->present_queue()) {
     return false;
   }
   std::lock_guard lock(mutex_);

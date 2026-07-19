@@ -527,6 +527,17 @@ void EditorInteractionController::handlePinch(qreal x, qreal y, qreal scaleDelta
   applyViewTransformResult(result);
 }
 
+void EditorInteractionController::handlePinchTo(qreal x, qreal y, qreal targetZoom) {
+  if (!interaction_enabled_) {
+    return;
+  }
+  interruptZoomAnimation();
+  const auto result = view_transform_controller_.HandlePinchZoomTo(
+      viewer_state_, widgetInfo(), interactionImageInfo(), static_cast<float>(targetZoom),
+      QPointF(x, y));
+  applyViewTransformResult(result);
+}
+
 void EditorInteractionController::handleLeave() { applyCursor(std::nullopt, true); }
 
 void EditorInteractionController::resetView() {
@@ -827,6 +838,13 @@ void EditorInteractionController::interruptZoomAnimation() {
   if (zoom_animation_ && zoom_animation_->state() == QAbstractAnimation::Running) {
     zoom_animation_->stop();
   }
+  // Cancel an armed single-click zoom toggle. Trackpad pinch/wheel often follows
+  // a press/release that scheduled the click-toggle timer; if it fires mid-gesture
+  // it animates toward 2x / restore (often FIT) and fights the live zoom.
+  if (click_toggle_timer_) {
+    click_toggle_timer_->stop();
+  }
+  view_transform_controller_.CancelPendingClickToggle();
   // Do NOT stop the settle timer here: a no-op wheel/pinch (e.g. zoom-in already
   // at the ceiling) must not drop a pending DetailRefresh for the current
   // viewport. A real view change restarts the timer (superseding the pending

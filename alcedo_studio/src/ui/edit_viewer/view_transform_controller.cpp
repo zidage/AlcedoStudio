@@ -33,8 +33,9 @@ auto ViewTransformController::HandleCtrlWheel(ViewerState& state,
       view_state.pan);
 
   double_click_zoom_target_  = target_zoom;
-  double_click_zoom_in_next_ = false;
-  click_zoom_toggle_active_  = false;
+  // Next double-click toggles relative to the new level: out if zoomed, in if at fit.
+  double_click_zoom_in_next_ = target_zoom <= (kMinInteractiveZoom + 1.0e-4f);
+  CancelPendingClickToggle();
   StopAnimation();
   return ApplyViewTransform(state, widget_info, image_info, target_zoom, target_pan, true);
 }
@@ -55,15 +56,38 @@ auto ViewTransformController::HandlePinchZoom(ViewerState& state,
   const float scale       = 1.0f + zoom_delta;
   const float target_zoom =
       std::clamp(view_state.zoom * scale, kMinInteractiveZoom, max_zoom_);
+  return HandlePinchZoomTo(state, widget_info, image_info, target_zoom, anchor_widget_pos);
+}
+
+auto ViewTransformController::HandlePinchZoomTo(ViewerState& state,
+                                                const ViewportWidgetInfo& widget_info,
+                                                const ViewportImageInfo& image_info,
+                                                float target_zoom,
+                                                const QPointF& anchor_widget_pos)
+    -> ViewTransformResult {
+  ViewTransformResult result;
+  result.consumed = true;
+
+  const auto  view_state = state.GetViewTransform();
+  const float clamped_zoom =
+      std::clamp(target_zoom, kMinInteractiveZoom, max_zoom_);
+  // Anchored against the *current* transform so intermediate absolute targets
+  // still keep the pinch centroid stable (same as incremental pinch).
   const QVector2D target_pan = ViewportMapper::ComputeAnchoredPan(
-      anchor_widget_pos, widget_info, image_info, view_state.zoom, view_state.pan, target_zoom,
+      anchor_widget_pos, widget_info, image_info, view_state.zoom, view_state.pan, clamped_zoom,
       view_state.pan);
 
-  double_click_zoom_target_  = target_zoom;
-  double_click_zoom_in_next_ = false;
-  click_zoom_toggle_active_  = false;
+  double_click_zoom_target_  = clamped_zoom;
+  // Next double-click toggles relative to the new level: out if zoomed, in if at fit.
+  double_click_zoom_in_next_ = clamped_zoom <= (kMinInteractiveZoom + 1.0e-4f);
+  CancelPendingClickToggle();
   StopAnimation();
-  return ApplyViewTransform(state, widget_info, image_info, target_zoom, target_pan, true);
+  return ApplyViewTransform(state, widget_info, image_info, clamped_zoom, target_pan, true);
+}
+
+void ViewTransformController::CancelPendingClickToggle() {
+  pending_click_toggle_     = false;
+  click_zoom_toggle_active_ = false;
 }
 
 auto ViewTransformController::HandleWheelPan(ViewerState& state,

@@ -135,6 +135,9 @@ void EditorViewportItem::beginImageSession(qulonglong imageIdentity) {
   const auto next = image_generation_.load(std::memory_order_acquire) + 1;
   image_generation_.store(next, std::memory_order_release);
   present_queue_->InvalidateImageGeneration(next, imageIdentity);
+  if (frame_sink_) {
+    frame_sink_->ClearPendingImportedFrames();
+  }
   emit ImageGenerationChanged();
   notifyDiagnosticsChanged();
   requestPresentUpdate();
@@ -181,6 +184,9 @@ void EditorViewportItem::requestRendererInvalidation() {
 
 void EditorViewportItem::cancelPendingFrames() {
   present_queue_->InvalidateImageGeneration(imageGeneration(), imageIdentity());
+  if (frame_sink_) {
+    frame_sink_->ClearPendingImportedFrames();
+  }
   requestPresentUpdate();
 }
 

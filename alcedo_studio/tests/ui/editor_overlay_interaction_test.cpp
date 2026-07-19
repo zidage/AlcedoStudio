@@ -394,6 +394,41 @@ TEST(EditorOverlayInteractionTest, PinchAndTrackpadPanUpdateViewTransform) {
   EXPECT_NE(controller.panX(), pan_before);
 }
 
+TEST(EditorOverlayInteractionTest, PinchAbsoluteToSurvivesScaleResetWithoutFitSnap) {
+  // Qt PinchHandler.scale resets to 1.0 between gestures. Incremental
+  // scale/lastScale ratios mis-handle that reset and can multiply zoom by
+  // ~1/previousEndScale, snapping to FIT. Absolute handlePinchTo (as used by
+  // EditorWorkspace.qml) keeps zoom continuous across gesture restarts.
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  ConfigureImage(controller);
+  controller.applyViewTransformForTest(2.0f, 0.0f, 0.0f);
+
+  // First gesture: baseZoom=2, scale 1.0 → 1.3
+  controller.handlePinchTo(400, 300, 2.0f * 1.0f);
+  EXPECT_NEAR(controller.zoom(), 2.0f, 1.0e-3f);
+  controller.handlePinchTo(400, 300, 2.0f * 1.3f);
+  EXPECT_NEAR(controller.zoom(), 2.6f, 1.0e-3f);
+
+  // Second gesture restart: re-base at current zoom with scale=1.0 (no change),
+  // then pinch in further. Must not go to FIT.
+  const float second_base = controller.zoom();
+  controller.handlePinchTo(400, 300, second_base * 1.0f);
+  EXPECT_NEAR(controller.zoom(), second_base, 1.0e-3f);
+  controller.handlePinchTo(400, 300, second_base * 1.2f);
+  EXPECT_NEAR(controller.zoom(), second_base * 1.2f, 1.0e-3f);
+  EXPECT_GT(controller.zoom(), 1.0f + 1.0e-3f);
+
+  // Contrast: the broken incremental interpretation of a scale reset
+  // (factor = 1.0 / 1.3) would collapse 2.6 → 2.0, and 1.0/2.6 collapses to FIT.
+  EditorInteractionController broken;
+  broken.setViewportMetrics(800, 600, 1.0);
+  ConfigureImage(broken);
+  broken.applyViewTransformForTest(2.6f, 0.0f, 0.0f);
+  broken.handlePinch(400, 300, (1.0f / 2.6f) - 1.0f);
+  EXPECT_NEAR(broken.zoom(), 1.0f, 1.0e-3f);
+}
+
 TEST(EditorOverlayInteractionTest, ItemAndImageUvCoordinateApisRoundTripAtMultipleDpr) {
   for (const auto& c : kDprCases) {
     EditorInteractionController controller;
@@ -758,6 +793,9 @@ TEST(EditorOverlayInteractionTest, DetailPatchEnsureSizeDoesNotRewriteRenderRefe
   auto* sink = viewport.frameSink();
   ASSERT_NE(sink, nullptr);
 
+  const bool metal_present =
+      alcedo::editor_rhi::ActiveEditorBackend() == alcedo::editor_rhi::EditorBackend::Metal;
+
   // QualityBase full frame establishes the render reference (e.g. 4K preview).
   alcedo::FramePreviewMetadata quality_meta{};
   quality_meta.frame_role         = alcedo::FrameRole::QualityBase;
@@ -765,9 +803,18 @@ TEST(EditorOverlayInteractionTest, DetailPatchEnsureSizeDoesNotRewriteRenderRefe
   sink->SetNextFramePreviewMetadata(quality_meta);
   sink->SetNextFramePresentationMode(alcedo::FramePresentationMode::ViewportTransformed);
   sink->EnsureSize(2048, 1536);
-  EXPECT_EQ(target_size_signals, 1);
-  EXPECT_EQ(last_w, 2048);
-  EXPECT_EQ(last_h, 1536);
+  // CUDA/OpenCL: EnsureSize of a shared write target publishes render-ref size.
+  // Metal zero-copy: EnsureSize is presentation-viewport bookkeeping only;
+  // render-ref is published later from SubmitMetalFrame with the real texture.
+  if (metal_present) {
+    EXPECT_EQ(target_size_signals, 0);
+    last_w = 2048;
+    last_h = 1536;
+  } else {
+    EXPECT_EQ(target_size_signals, 1);
+    EXPECT_EQ(last_w, 2048);
+    EXPECT_EQ(last_h, 1536);
+  }
 
   EditorInteractionController controller;
   controller.setViewportMetrics(800, 600, 1.0);
@@ -786,15 +833,26 @@ TEST(EditorOverlayInteractionTest, DetailPatchEnsureSizeDoesNotRewriteRenderRefe
   sink->EnsureSize(1600, 900);
 
   // Must not emit targetSizeRequested — render reference stays full-frame.
-  EXPECT_EQ(target_size_signals, 1);
+  if (metal_present) {
+    EXPECT_EQ(target_size_signals, 0);
+  } else {
+    EXPECT_EQ(target_size_signals, 1);
+  }
   EXPECT_EQ(last_w, 2048);
   EXPECT_EQ(last_h, 1536);
   EXPECT_EQ(controller.renderReferenceWidth(), 2048);
   EXPECT_EQ(controller.renderReferenceHeight(), 1536);
 
-  // Slot sizing still tracks the detail dimensions for write mapping.
-  EXPECT_EQ(sink->GetWidth(), 1600);
-  EXPECT_EQ(sink->GetHeight(), 900);
+  // CUDA/OpenCL track the detail write size for MapResourceForWrite.
+  // Metal does not allocate shared write slots; Detail EnsureSize must not
+  // overwrite the last full-frame bookkeeping size used for change detection.
+  if (metal_present) {
+    EXPECT_EQ(sink->GetWidth(), 2048);
+    EXPECT_EQ(sink->GetHeight(), 1536);
+  } else {
+    EXPECT_EQ(sink->GetWidth(), 1600);
+    EXPECT_EQ(sink->GetHeight(), 900);
+  }
 }
 
 TEST(EditorOverlayInteractionTest, ReleasingStaleDetailSlotUnblocksReplacementDetailTarget) {

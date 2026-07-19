@@ -165,7 +165,12 @@ class EditorInteractionController : public QObject {
   // modifiers: Qt::KeyboardModifiers. synthesized=true for trackpad gestures.
   Q_INVOKABLE void handleWheel(qreal x, qreal y, int angleDeltaY, int pixelDeltaX, int pixelDeltaY,
                                int modifiers, bool synthesized);
+  // Relative pinch step (ZoomNativeGesture-style): zoom *= (1 + scaleDelta).
+  // Prefer handlePinchTo for Qt Quick PinchHandler.
   Q_INVOKABLE void handlePinch(qreal x, qreal y, qreal scaleDelta);
+  // Absolute pinch target zoom (fit-relative field). QML PinchHandler should
+  // compute startZoom * (scale / startScale) and call this each scale update.
+  Q_INVOKABLE void handlePinchTo(qreal x, qreal y, qreal targetZoom);
   Q_INVOKABLE void handleLeave();
   Q_INVOKABLE void resetView();
   // Snap to 1:1 (true zoom = 1.0, one image pixel per screen pixel), centered.

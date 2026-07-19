@@ -167,16 +167,19 @@ Item {
                             }
                         }
 
-                        // Pipeline EnsureSize → render reference for crop/zoom math.
-                        // Force-apply so equal output sizes still re-sync after a new
-                        // image/session generation (Phase 5B).
+                        // Pipeline frame size → render reference for crop/zoom math.
                         // DirectFrameSink only emits this for render-reference frames
                         // (InteractivePrimary / QualityBase full frames). DetailPatch
                         // ROI sizes must not rewrite reference geometry or the high-res
                         // zoom patch fails SameRoi / viewport coverage.
+                        // Use setRenderReferenceSize (not force): reconcile only when
+                        // the size actually changes. Force-applying on every settled
+                        // frame re-clamps pan/zoom and was causing FIT snaps after
+                        // detail/quality handoff. Image switches clear ref via
+                        // resetPresentationStateForNewImage before the first frame.
                         onTargetSizeRequested: function (w, h) {
                             if (w > 0 && h > 0) {
-                                editorInteraction.forceRenderReferenceSize(w, h)
+                                editorInteraction.setRenderReferenceSize(w, h)
                             }
                         }
                     }
@@ -367,24 +370,43 @@ Item {
                         id: viewportPinch
                         enabled: root.hasImage
                         target: null
-                        property real _lastScale: 1.0
+                        // Absolute mapping from gesture start. PinchHandler.scale is
+                        // cumulative for the active gesture and resets to 1.0 when a
+                        // new pinch begins. Incremental lastScale ratios mis-handle
+                        // that reset (scale→1 with lastScale still at the previous
+                        // gesture's end value) and apply a large negative step that
+                        // snaps zoom to FIT. Cmd+scroll does not use this path.
+                        property real _baseZoom: 1.0
+                        property real _baseScale: 1.0
+                        property bool _pinchLive: false
                         onActiveChanged: {
-                            _lastScale = 1.0
+                            if (active) {
+                                _baseZoom = editorInteraction.zoom
+                                // Sync to whatever scale is now (usually 1.0 at start;
+                                // never assume without reading the property).
+                                _baseScale = Math.max(scale, 1e-6)
+                                _pinchLive = true
+                            } else {
+                                _pinchLive = false
+                            }
                         }
                         onScaleChanged: {
-                            if (!active) {
+                            if (!active || !_pinchLive) {
                                 return
                             }
-                            // PinchHandler.scale is cumulative from gesture start.
-                            // HandlePinchZoom expects Qt ZoomNativeGesture-style
-                            // relative value where scale *= (1 + value).
-                            var ratio = scale / Math.max(_lastScale, 1e-6)
-                            var delta = ratio - 1.0
-                            _lastScale = scale
-                            if (Math.abs(delta) > 1e-4) {
-                                editorInteraction.handlePinch(
-                                            centroid.position.x, centroid.position.y, delta)
+                            var safeBase = Math.max(_baseScale, 1e-6)
+                            var factor = scale / safeBase
+                            // Scale re-baselined mid-gesture (Qt reset to ~1.0 while we
+                            // still held a larger base): re-anchor instead of applying
+                            // a catastrophic zoom-out (factor ≈ 1/previousEndScale).
+                            if (factor < 0.55 && Math.abs(scale - 1.0) < 0.08 && safeBase > 1.05) {
+                                _baseZoom = editorInteraction.zoom
+                                _baseScale = Math.max(scale, 1e-6)
+                                return
                             }
+                            var targetZoom = _baseZoom * factor
+                            editorInteraction.handlePinchTo(
+                                        centroid.position.x, centroid.position.y, targetZoom)
                         }
                     }
 

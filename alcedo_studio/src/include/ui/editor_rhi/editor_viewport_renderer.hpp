@@ -51,6 +51,9 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
     bool imported = false;
     bool valid = false;
     int slot_index = -1;
+    // Keeps Metal (or other producer-owned) textures alive until QRhi release.
+    std::shared_ptr<const void> imported_owner{};
+    std::uintptr_t imported_native_handle = 0;
     FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
     FramePreviewMetadata preview_metadata{};
     DirectPresentQueue::ReadyFrame ready_frame{};
@@ -86,6 +89,7 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
                              QRhiCommandBuffer* command_buffer);
   void fulfillTargetRequests();
   void consumeDirectFrames();
+  void consumeImportedGpuFrames();
   [[nodiscard]] auto selectedPrimaryLayer() const -> const LayerState*;
   [[nodiscard]] auto selectedDetailLayer() const -> const LayerState*;
   [[nodiscard]] auto hasVisibleDetailPatch() const -> bool;
