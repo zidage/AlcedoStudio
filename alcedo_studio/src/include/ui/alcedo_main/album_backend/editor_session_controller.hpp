@@ -8,6 +8,7 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QString>
+#include <QVariantMap>
 #include <QtGlobal>
 
 #include "app/editor_session_types.hpp"
@@ -27,8 +28,8 @@ class EditorController;
 /// unified QML editor workspace. It does not open the legacy modal dialog; that
 /// path remains on EditorController until the cutover phase removes it.
 ///
-/// Phase 3-Fix holds the production presentation viewport and resolves its
-/// `LeaseFrameSink` so pipeline code can attach without QML calling storage or
+/// Phase 3-Fix / 5C holds the production presentation viewport and resolves its
+/// `DirectFrameSink` so pipeline code can attach without QML calling storage or
 /// pipeline infrastructure. The viewport pointer is typed as QObject in the
 /// public API; resolution to `IFrameSink` lives in the implementation.
 ///
@@ -71,6 +72,13 @@ class EditorSessionController final : public QObject {
   // (coordinator diagnostics); transitions fire StateChanged via the backend
   // notifier so this never exposes pipeline task objects (D6).
   Q_PROPERTY(bool renderBusy READ render_busy NOTIFY StateChanged)
+  // Phase 5E: last session/backend error and first-frame latency. QML status
+  // chrome and tests may observe these without touching pipeline task objects.
+  Q_PROPERTY(QString lastError READ last_error NOTIFY StateChanged)
+  Q_PROPERTY(double firstFrameTimeMs READ first_frame_time_ms NOTIFY StateChanged)
+  // Aggregate coordinator diagnostics (reason, replace/cancel counts, last
+  // rejection, last submitted role). Never includes pipeline task pointers.
+  Q_PROPERTY(QVariantMap renderDiagnostics READ render_diagnostics NOTIFY StateChanged)
 
  public:
   explicit EditorSessionController(EditorController* editor = nullptr, QObject* parent = nullptr);
@@ -102,6 +110,10 @@ class EditorSessionController final : public QObject {
   }
   // Phase 5D: true when the coordinator has in-flight/pending render work.
   [[nodiscard]] bool       render_busy() const;
+  // Phase 5E diagnostics surface for QML and integration tests.
+  [[nodiscard]] QString    last_error() const;
+  [[nodiscard]] double     first_frame_time_ms() const;
+  [[nodiscard]] QVariantMap render_diagnostics() const;
 
   Q_INVOKABLE void   Open(uint elementId = 0, uint imageId = 0);
   Q_INVOKABLE void   Close();
@@ -132,7 +144,7 @@ class EditorSessionController final : public QObject {
   // Bound QQuickRhiItem (EditorViewportItem). QPointer may clear after destroy.
   [[nodiscard]] auto presentation_viewport() const -> QObject*;
 
-  // Production pipeline entry: resolves the bound viewport to its LeaseFrameSink.
+  // Production pipeline entry: resolves the bound viewport to its DirectFrameSink.
   // Returns null when unbound or the object is not an EditorViewportItem.
   // Callers must re-resolve after PresentationBindingChanged / StateChanged.
   [[nodiscard]] auto presentation_frame_sink() const -> alcedo::IFrameSink*;

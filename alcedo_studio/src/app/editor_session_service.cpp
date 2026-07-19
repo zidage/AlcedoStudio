@@ -5,6 +5,7 @@
 #include "app/editor_session_service.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <utility>
 
 namespace alcedo {
@@ -133,6 +134,18 @@ auto EditorSessionService::MakeRenderIntent(EditorRenderReason reason) const
   return intent;
 }
 
+auto EditorSessionService::render_diagnostics() const -> EditorRenderCoordinatorDiagnostics {
+  if (!dependencies_.render) {
+    return {};
+  }
+  return dependencies_.render->diagnostics();
+}
+
+auto EditorSessionService::first_frame_time_ms() const -> double {
+  std::scoped_lock lock(mutex_);
+  return first_frame_time_ms_;
+}
+
 auto EditorSessionService::RouteInitialRender(EditorRenderReason reason) -> std::uint64_t {
   if (!PresentationTargetReady()) {
     pending_initial_reason_ = reason;
@@ -157,6 +170,10 @@ auto EditorSessionService::RouteInitialRender(EditorRenderReason reason) -> std:
       first_frame_presented_   = false;
       quality_base_routed_     = false;
       quality_base_request_id_ = 0;
+      // Phase 5E: start first-frame latency from the moment the InteractivePrimary
+      // request is accepted by the sole coordinator.
+      first_frame_route_time_  = std::chrono::steady_clock::now();
+      first_frame_time_ms_     = -1.0;
     }
     pending_initial_reason_.reset();
     EditorSessionResult session_result;
@@ -276,9 +293,37 @@ auto EditorSessionService::SealCurrentSession(bool persist_changes, bool start_b
   }
 
   if (dependencies_.render && identity_.session_generation != 0) {
+    // Teardown order (Phase 5E): cancel obsolete work and wait until session
+    // workers leave IFrameSink before the presentation consumer is destroyed.
     dependencies_.render->CancelSessionAndWait(identity_.session_generation);
   }
   ReleaseGuards();
+  // Phase 5E production cutover: pipeline/history release is the durable save
+  // path today (SavePipeline/SaveHistory). Complete any pending editor_save
+  // task immediately so BackgroundTaskController does not retain a running
+  // orphan. Phase 5G may replace this with true async materialization.
+  if (persist_changes && start_background_save) {
+    const std::uint64_t sealed_generation = identity_.session_generation;
+    // Finish without re-entering Seal: NotifySaveFinished only ends the task.
+    auto it = std::find_if(pending_saves_.begin(), pending_saves_.end(),
+                           [sealed_generation](const PendingSave& save) {
+                             return save.session_generation == sealed_generation;
+                           });
+    if (it != pending_saves_.end()) {
+      const std::uint64_t task_id = it->task_id;
+      pending_saves_.erase(it);
+      if (dependencies_.tasks) {
+        dependencies_.tasks->EndTask(task_id, true, "Editor session sealed");
+      }
+      EditorSessionResult finished;
+      finished.kind     = EditorSessionResultKind::SaveFinished;
+      finished.state    = state_;
+      finished.identity = identity_;
+      finished.task_id  = task_id;
+      finished.message  = "Editor session sealed";
+      Emit(std::move(finished));
+    }
+  }
   return true;
 }
 
@@ -296,6 +341,8 @@ void EditorSessionService::ResetActiveImageState() {
   first_frame_presented_       = false;
   quality_base_routed_         = false;
   pending_initial_reason_.reset();
+  first_frame_route_time_.reset();
+  first_frame_time_ms_ = -1.0;
 }
 
 auto EditorSessionService::HandleOpenOrSwitch(const EditorSessionIntent& intent, bool is_switch)
@@ -345,6 +392,8 @@ auto EditorSessionService::HandleOpenOrSwitch(const EditorSessionIntent& intent,
   first_frame_submitted_       = false;
   first_frame_presented_       = false;
   quality_base_routed_         = false;
+  first_frame_route_time_.reset();
+  first_frame_time_ms_         = -1.0;
   // Adjustment state is image-scoped. An empty snapshot means a clean image;
   // never inherit the previous image's params.
   adjustment_snapshot_         = intent.adjustment;
@@ -851,6 +900,11 @@ void EditorSessionService::NotifyRenderResult(const EditorRenderResult& render_r
         return;
       }
       first_frame_presented_ = true;
+      if (first_frame_route_time_.has_value()) {
+        const auto elapsed = std::chrono::steady_clock::now() - *first_frame_route_time_;
+        first_frame_time_ms_ =
+            std::chrono::duration<double, std::milli>(elapsed).count();
+      }
       TryEnterInteractiveFromFirstFrame(render_result);
     }
     return;

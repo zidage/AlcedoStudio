@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <QString>
+
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -30,6 +32,8 @@ class ProjectService;
 }  // namespace alcedo
 
 namespace alcedo::ui {
+
+class BackgroundTaskController;
 
 /// Resolves the active production presentation sink for a render intent.
 using EditorFrameSinkResolver = std::function<alcedo::IFrameSink*()>;
@@ -63,6 +67,24 @@ class EditorSessionProductionPipelinePort final : public alcedo::IEditorPipeline
   EditorSessionProductionServices                                         services_{};
   mutable std::mutex                                                      mutex_;
   std::unordered_map<sl_element_id_t, std::shared_ptr<alcedo::PipelineGuard>> guards_;
+};
+
+/// Phase 5E production task port: registers editor_save work with the shared
+/// BackgroundTaskController so image-switch/close seal is visible in the task bar.
+class EditorSessionProductionTaskPort final : public alcedo::IEditorTaskPort {
+ public:
+  explicit EditorSessionProductionTaskPort(BackgroundTaskController* background_tasks = nullptr);
+
+  void SetBackgroundTasks(BackgroundTaskController* background_tasks);
+
+  auto BeginTask(const std::string& name, sl_element_id_t element_id) -> std::uint64_t override;
+  void EndTask(std::uint64_t task_id, bool success, const std::string& message) override;
+
+ private:
+  BackgroundTaskController*                         background_tasks_ = nullptr;
+  mutable std::mutex                                mutex_;
+  std::uint64_t                                     next_id_ = 0;
+  std::unordered_map<std::uint64_t, QString>        active_task_ids_;
 };
 
 /// Production history port: real EditHistoryMgmtService when available.

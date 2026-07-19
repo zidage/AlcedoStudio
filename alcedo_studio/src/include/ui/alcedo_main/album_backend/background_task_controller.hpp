@@ -24,6 +24,8 @@ enum class BackgroundTaskKind {
   ModelActivation,
   Import,
   Export,
+  /// Phase 5E: editor session seal/persist while leaving an image.
+  EditorSave,
 };
 
 /// Lifecycle state of a single background task record.

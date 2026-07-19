@@ -211,6 +211,8 @@ auto BackgroundTaskController::KindToString(BackgroundTaskKind kind) -> QString 
       return QStringLiteral("import");
     case BackgroundTaskKind::Export:
       return QStringLiteral("export");
+    case BackgroundTaskKind::EditorSave:
+      return QStringLiteral("editorSave");
   }
   return QStringLiteral("unknown");
 }

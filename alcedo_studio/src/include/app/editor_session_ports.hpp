@@ -62,7 +62,7 @@ class IEditorTaskPort {
   virtual void EndTask(std::uint64_t task_id, bool success, const std::string& message)        = 0;
 };
 
-/// Redo-only journal port. Phase 5E owns the durable format; Phase 5A only needs
+/// Redo-only journal port. Phase 5F owns the durable format; Phase 5A only needs
 /// a seam so the session service never reaches storage from the UI module.
 class IEditorJournalPort {
  public:
@@ -73,15 +73,30 @@ class IEditorJournalPort {
 };
 
 /// Coordinator-facing diagnostics exposed to the session service for QML
-/// spinner/progress/error display (Phase 5D). QML never observes pipeline task
-/// objects — only this aggregate busy/reason summary.
+/// spinner/progress/error display (Phase 5D) and production cutover inspection
+/// (Phase 5E). QML never observes pipeline task objects — only this aggregate
+/// busy/reason/rejection summary.
 struct EditorRenderCoordinatorDiagnostics {
-  bool                          has_inflight       = false;
-  std::size_t                   pending_count      = 0;
+  bool                              has_inflight    = false;
+  std::size_t                       pending_count   = 0;
   std::optional<EditorRenderReason> inflight_reason{};
-  std::size_t                   replaced_count     = 0;
-  std::size_t                   cancelled_count    = 0;
-  std::string                   last_error;
+  std::size_t                       replaced_count  = 0;
+  std::size_t                       cancelled_count = 0;
+  std::string                       last_error;
+  /// Phase 5E: generations the coordinator currently accepts.
+  std::uint64_t                     session_generation = 0;
+  std::uint64_t                     render_generation  = 0;
+  std::uint64_t                     view_generation    = 0;
+  /// Last request that was rejected at Submit (generation/token/scheduler).
+  std::string                       last_rejection_reason;
+  std::optional<EditorRenderReason> last_rejected_render_reason{};
+  /// Last intent that reached FrameSubmitted (native slot ready for composition).
+  std::optional<FrameRole>          last_submitted_frame_role{};
+  std::optional<EditorRenderReason> last_submitted_render_reason{};
+  /// Monotonic counters of terminal outcomes for tests/diagnostics.
+  std::size_t                       accepted_count  = 0;
+  std::size_t                       failed_count    = 0;
+  std::size_t                       presented_count = 0;
 };
 
 /// Sole path from the session service into pipeline work. Production wraps

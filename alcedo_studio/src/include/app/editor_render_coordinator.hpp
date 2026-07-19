@@ -95,18 +95,28 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
     std::scoped_lock lock(mutex_);
     return results_;
   }
-  /// Phase 5D: aggregate busy/reason summary for QML. Never exposes pipeline
-  /// task objects.
+  /// Phase 5D/5E: aggregate busy/reason/rejection summary for QML. Never
+  /// exposes pipeline task objects.
   [[nodiscard]] auto diagnostics() const -> EditorRenderCoordinatorDiagnostics override {
     std::scoped_lock lock(mutex_);
     EditorRenderCoordinatorDiagnostics diag;
-    diag.has_inflight    = inflight_.has_value();
-    diag.pending_count   = pending_.size();
-    diag.inflight_reason = inflight_ ? std::make_optional(inflight_->request.intent.reason)
-                                     : std::nullopt;
-    diag.replaced_count  = replaced_count_;
-    diag.cancelled_count = cancelled_count_;
-    diag.last_error      = last_error_;
+    diag.has_inflight                 = inflight_.has_value();
+    diag.pending_count                = pending_.size();
+    diag.inflight_reason              = inflight_ ? std::make_optional(inflight_->request.intent.reason)
+                                                  : std::nullopt;
+    diag.replaced_count               = replaced_count_;
+    diag.cancelled_count              = cancelled_count_;
+    diag.last_error                   = last_error_;
+    diag.session_generation           = session_generation_;
+    diag.render_generation            = render_generation_;
+    diag.view_generation              = view_generation_;
+    diag.last_rejection_reason        = last_rejection_reason_;
+    diag.last_rejected_render_reason  = last_rejected_render_reason_;
+    diag.last_submitted_frame_role    = last_submitted_frame_role_;
+    diag.last_submitted_render_reason = last_submitted_render_reason_;
+    diag.accepted_count               = accepted_count_;
+    diag.failed_count                 = failed_count_;
+    diag.presented_count              = presented_count_;
     return diag;
   }
 
@@ -149,10 +159,17 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   std::vector<EditorRenderResult>               pending_delivery_;
   std::unordered_set<std::uint64_t>             terminal_request_ids_;
   std::shared_ptr<CancellationCallbackGate>     cancellation_gate_;
-  // Phase 5D diagnostics counters (QML spinner/progress/error surface).
+  // Phase 5D/5E diagnostics counters (QML spinner/progress/error surface).
   std::size_t                                   replaced_count_  = 0;
   std::size_t                                   cancelled_count_ = 0;
+  std::size_t                                   accepted_count_  = 0;
+  std::size_t                                   failed_count_    = 0;
+  std::size_t                                   presented_count_ = 0;
   std::string                                   last_error_;
+  std::string                                   last_rejection_reason_;
+  std::optional<EditorRenderReason>             last_rejected_render_reason_;
+  std::optional<FrameRole>                      last_submitted_frame_role_;
+  std::optional<EditorRenderReason>             last_submitted_render_reason_;
   mutable std::mutex                            mutex_;
   std::recursive_mutex                          delivery_mutex_;
 };

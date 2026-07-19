@@ -77,12 +77,15 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   adjustment_transfer_ = std::make_unique<AdjustmentTransferController>(
       project_.get(), library_.get(), import_export_.get(), this);
   RecordConstruction("AdjustmentTransferController", adjustment_transfer_.get());
-  // Phase 5B: wire production first-frame ports into the session runtime.
-  // The production scheduler accepts intents without completing when no real
-  // image path / test producer is available (shell-compatible Loading state).
+  // Phase 5B/5E: wire production first-frame ports, direct presentation, and
+  // BackgroundTaskController-backed editor_save registration into the session
+  // runtime. The production scheduler accepts intents without completing when
+  // no real image path / test producer is available (shell-compatible Loading).
   {
     auto production_pipeline  = std::make_shared<EditorSessionProductionPipelinePort>();
     auto production_history   = std::make_shared<EditorSessionProductionHistoryPort>();
+    auto production_tasks =
+        std::make_shared<EditorSessionProductionTaskPort>(background_tasks_.get());
     auto production_scheduler = std::make_shared<EditorSessionProductionSchedulerPort>();
     production_scheduler->SetPipelinePort(production_pipeline);
 
@@ -106,8 +109,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     production_scheduler->SetServices(production_services);
 
     editor_session_runtime_ = alcedo::EditorSessionRuntime::CreateWithPorts(
-        production_pipeline, production_history,
-        std::make_shared<alcedo::EditorSessionBootstrapTaskPort>(),
+        production_pipeline, production_history, production_tasks,
         std::make_shared<alcedo::EditorSessionBootstrapJournalPort>(), production_scheduler);
     production_scheduler->SetCoordinator(editor_session_runtime_->coordinator);
     editor_session_production_scheduler_ = std::move(production_scheduler);

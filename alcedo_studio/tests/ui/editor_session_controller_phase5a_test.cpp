@@ -439,8 +439,8 @@ TEST(EditorSessionControllerPhase5ATest, QmlEditorPathDoesNotIncludePipelineSche
       repo_root / "alcedo_studio/src/include/app/editor_session_bootstrap.hpp",
   };
   // Temporary exceptions:
-  // - legacy QWidget editor scheduler callers (until Phase 5D cutover)
-  // - Phase 5B production IEditorPipelineSchedulerPort implementation (the only
+  // - legacy QWidget editor scheduler callers (deleted at Phase 10 hard cutover)
+  // - Phase 5B/5E production IEditorPipelineSchedulerPort implementation (the only
   //   component allowed to call PipelineScheduler::ScheduleTask for the QML path)
   const std::vector<std::string> exception_substrings = {
       "editor_controller.cpp",
@@ -478,7 +478,7 @@ TEST(EditorSessionControllerPhase5ATest, QmlEditorPathDoesNotIncludePipelineSche
       EXPECT_EQ(text.find(needle), std::string::npos)
           << path_str << " must not reference " << needle
           << "; only alcedo::EditorRenderCoordinator may own scheduler calls "
-             "(legacy QWidget path is excepted until Phase 5D)";
+             "(legacy QWidget path is excepted until Phase 10 hard cutover)";
     }
   };
 

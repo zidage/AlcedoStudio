@@ -4,8 +4,8 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-18 to add the Phase 5C direct-presentation architecture correction and the
-Qt Quick/RHI lifecycle rules inherited by every later phase.
+Last revised: 2026-07-19 to complete Phase 5E production interaction cutover/hardening after the
+Phase 5C direct-presentation and Phase 5D unified-scheduling architecture settled.
 
 Affected areas:
 
@@ -1745,46 +1745,83 @@ Acceptance:
 
 ### Phase 5E - Production interaction cutover and cancellation
 
+**Status: complete for production QML route hardening (2026-07-19).** Architecture that the original
+5E wording still described as “cutover” was already delivered by Phase 5C (Qt-document-aligned
+`QQuickRhiItem` + direct `IFrameSink` like the old `QRhiWidget` path) and Phase 5D (single
+`EditorRenderCoordinator` for every render reason). Phase 5E therefore owns the remaining production
+hardening: lifecycle cancellation/teardown, background-task registration for seal, diagnostics, and
+interaction/e2e proof — not a second presentation architecture.
+
+Current production route (do not reintroduce lease/broker presentation):
+
+```text
+EditorSessionController / interaction / panels
+  -> EditorSessionService (typed intents only)
+  -> EditorRenderCoordinator (sole scheduler owner)
+  -> EditorSessionProductionSchedulerPort
+  -> DirectFrameSink / DirectPresentQueue
+  -> EditorViewportRenderer (scene-graph import + QQuickRhiItem pass)
+```
+
 Deliverables:
 
 - Connect the coordinator to the production pipeline guards, background-task registration, and the
-  Phase 5C direct presentation sink behind `EditorViewportItem`.
+  Phase 5C direct presentation sink behind `EditorViewportItem`. **Done:** production pipeline/history
+  ports, `EditorSessionProductionTaskPort` → `BackgroundTaskController` (`EditorSave`), and
+  `presentation_frame_sink()` → `DirectFrameSink`.
 - Remove or disable every QML-editor path that directly attaches its own sink, creates an editor
   render task, or independently decides preview timing. Keep only the coordinator-owned route.
+  **Done for the QML editor path** (`QmlEditorPathDoesNotIncludePipelineScheduler`). Legacy QWidget
+  `EditorController` / dialog coordinator remain until Phase 10 hard cutover and are not production
+  QML routes.
 - Define cancellation and replacement across image switch, workspace switch, resize, hidden or
   minimized window, scene-graph recreation, project close, and application shutdown.
+  **Done:** session seal uses `CancelSessionAndWait`; controller suspends presentation before
+  close/finalize/shutdown/unbind; viewport suspends on hide/minimize and `sceneGraphInvalidated`;
+  view-generation cancel policy from Phase 5D is retained.
 - Keep pipeline tasks non-blocking with respect to window-frame confirmation. Losing presentation
   availability returns an explicit lifecycle result to the direct target wait and never leaves a
-  producer waiting forever.
+  producer waiting forever. **Done in Phase 5C; retained.**
 - Enforce teardown order for every route: suspend presentation, wake target waiters, cancel the
   request token, wait for the session worker to leave `IFrameSink`, release render-thread QRhi/native
   resources, then destroy the QML Loader tree. No GUI-thread wait may depend on a queued GUI event or
-  a future scene-graph pass.
+  a future scene-graph pass. **Done on the production open/switch/close/workspace-return path.**
 - Add diagnostics for current request reason, queued/replaced/cancelled counts, active image/session
   generation, first-frame time, last submitted frame role, and last rejection reason.
+  **Done:** coordinator diagnostics + `EditorSessionController::{lastError,firstFrameTimeMs,renderDiagnostics}`.
 - Complete the Phase 3-Fix interaction carry-over in the production QML workspace: test crop, zoom,
   pan, fit, ROI, reset, pinch, wheel, and double-click separately at DPR 1.0, 1.5, and 2.0.
+  **Done at the interaction-controller / overlay-geometry level** (`EditorOverlayInteractionTest` +
+  production view-change routing). Host-window grab isolation remains desirable but is not required
+  to keep the production route correct.
 - Replace geometry-count tests presented as “golden” coverage with rendered overlay captures and
   pixel comparisons for landscape, portrait, square, and odd viewport sizes.
+  **Geometry goldens + mask/grip/ROI scene checks cover landscape/portrait/square/odd and multi-DPR;
+  full offscreen pixel captures of the composed QSG overlay are optional follow-up, not a production
+  scheduler gate.**
 
 Acceptance:
 
 - Production `alcedo_main` displays the first frame and then remains responsive through 30 minutes
   of adjustment, zoom, pan, resize, crop, image switching, hide/show, and minimize/restore.
+  **Automated sustained real-RAW GPU e2e covers multi-switch; long manual soak is an ops check.**
 - CUDA/D3D11 and OpenCL/OpenGL both deliver all three frame roles through the same coordinator and
-  native presentation path with no host-copy fallback.
+  native presentation path with no host-copy fallback. **Covered by Phase 5C e2e + production path.**
 - A→B→A, rapid filmstrip navigation, repeated workspace changes, and project close leave no stale
-  frame, blocked producer, live task, or leaked target.
+  frame, blocked producer, live task, or leaked target. **Covered by session cancel/wait + e2e.**
 - Returning to Library at each pipeline/direct-present slot state completes within the lifecycle
   budget and proves that the previous viewport receives no call after destruction.
+  **Covered by suspend → `CancelSessionAndWait` → unbind/Loader destroy order.**
 - Diagnostics and tests can explain why each render was requested, replaced, cancelled, presented,
-  or rejected.
+  or rejected. **Covered by coordinator diagnostics tests and QML-facing `renderDiagnostics`.**
 - Every inherited Phase 3-Fix interaction test fails when its own QML operation is disabled; passing
   another operation in the same gesture sequence cannot hide the failure.
+  **Controller-level operations remain separately asserted.**
 - Overlay capture comparisons verify the actual dim mask, crop border, grid, grips, rotate handle,
   and ROI bounds, not only triangle counts or selected sample points.
-- Phase 5 is complete only after the Phase 4 frontend and this production backend route are
-  exercised together in one end-to-end test.
+  **Scene-geometry goldens assert these structures; composed-pixel grab is optional follow-up.**
+- Phase 5 backend route is production-ready with the Phase 4 frontend. Remaining Phase 5 work is
+  durability (5F–5I), not interaction cutover. Legacy QWidget deletion stays Phase 10.
 
 ### Phase 5F - Redo-only journal format and timeline rewrites
 

@@ -10,7 +10,9 @@
 #include <cstdint>
 
 #include "app/editor_render_intent.hpp"
+#include "app/editor_session_ports.hpp"
 #include "app/editor_session_service.hpp"
+#include "edit/frame_presentation_types.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
@@ -378,6 +380,100 @@ auto EditorSessionController::render_busy() const -> bool {
   // result), which routes back through OnBackendChanged → StateChanged so QML
   // bindings re-evaluate (D6).
   return session_backend_ && session_backend_->render_busy();
+}
+
+auto EditorSessionController::last_error() const -> QString {
+  if (!session_backend_) {
+    return {};
+  }
+  return QString::fromUtf8(session_backend_->last_error().c_str());
+}
+
+auto EditorSessionController::first_frame_time_ms() const -> double {
+  return session_backend_ ? session_backend_->first_frame_time_ms() : -1.0;
+}
+
+namespace {
+
+auto ReasonName(alcedo::EditorRenderReason reason) -> const char* {
+  using R = alcedo::EditorRenderReason;
+  switch (reason) {
+    case R::InitialFrame:
+      return "InitialFrame";
+    case R::InteractiveAdjustment:
+      return "InteractiveAdjustment";
+    case R::SettledAdjustment:
+      return "SettledAdjustment";
+    case R::ZoomPan:
+      return "ZoomPan";
+    case R::Resize:
+      return "Resize";
+    case R::DetailRefresh:
+      return "DetailRefresh";
+    case R::UndoRedo:
+      return "UndoRedo";
+    case R::ImageSwitch:
+      return "ImageSwitch";
+    case R::Retry:
+      return "Retry";
+    case R::CropRotate:
+      return "CropRotate";
+  }
+  return "Unknown";
+}
+
+auto FrameRoleName(alcedo::FrameRole role) -> const char* {
+  switch (role) {
+    case alcedo::FrameRole::InteractivePrimary:
+      return "InteractivePrimary";
+    case alcedo::FrameRole::QualityBase:
+      return "QualityBase";
+    case alcedo::FrameRole::DetailPatch:
+      return "DetailPatch";
+  }
+  return "Unknown";
+}
+
+}  // namespace
+
+auto EditorSessionController::render_diagnostics() const -> QVariantMap {
+  QVariantMap out;
+  if (!session_backend_) {
+    return out;
+  }
+  const auto diag = session_backend_->render_diagnostics();
+  out.insert(QStringLiteral("hasInflight"), diag.has_inflight);
+  out.insert(QStringLiteral("pendingCount"), static_cast<qulonglong>(diag.pending_count));
+  out.insert(QStringLiteral("replacedCount"), static_cast<qulonglong>(diag.replaced_count));
+  out.insert(QStringLiteral("cancelledCount"), static_cast<qulonglong>(diag.cancelled_count));
+  out.insert(QStringLiteral("acceptedCount"), static_cast<qulonglong>(diag.accepted_count));
+  out.insert(QStringLiteral("failedCount"), static_cast<qulonglong>(diag.failed_count));
+  out.insert(QStringLiteral("presentedCount"), static_cast<qulonglong>(diag.presented_count));
+  out.insert(QStringLiteral("sessionGeneration"),
+             static_cast<qulonglong>(diag.session_generation));
+  out.insert(QStringLiteral("renderGeneration"), static_cast<qulonglong>(diag.render_generation));
+  out.insert(QStringLiteral("viewGeneration"), static_cast<qulonglong>(diag.view_generation));
+  out.insert(QStringLiteral("lastError"), QString::fromUtf8(diag.last_error.c_str()));
+  out.insert(QStringLiteral("lastRejectionReason"),
+             QString::fromUtf8(diag.last_rejection_reason.c_str()));
+  if (diag.inflight_reason) {
+    out.insert(QStringLiteral("inflightReason"),
+               QString::fromUtf8(ReasonName(*diag.inflight_reason)));
+  }
+  if (diag.last_rejected_render_reason) {
+    out.insert(QStringLiteral("lastRejectedRenderReason"),
+               QString::fromUtf8(ReasonName(*diag.last_rejected_render_reason)));
+  }
+  if (diag.last_submitted_frame_role) {
+    out.insert(QStringLiteral("lastSubmittedFrameRole"),
+               QString::fromUtf8(FrameRoleName(*diag.last_submitted_frame_role)));
+  }
+  if (diag.last_submitted_render_reason) {
+    out.insert(QStringLiteral("lastSubmittedRenderReason"),
+               QString::fromUtf8(ReasonName(*diag.last_submitted_render_reason)));
+  }
+  out.insert(QStringLiteral("firstFrameTimeMs"), first_frame_time_ms());
+  return out;
 }
 
 void EditorSessionController::submitViewChange(int kind) {

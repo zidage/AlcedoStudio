@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -63,6 +64,13 @@ class IEditorSessionBackend {
   /// Aggregate coordinator busy state for QML spinner/progress (Phase 5D D6).
   /// False for a backend with no render port or an idle coordinator.
   [[nodiscard]] virtual auto render_busy() const -> bool { return false; }
+  /// Phase 5E: aggregate coordinator diagnostics for tests and QML status.
+  [[nodiscard]] virtual auto render_diagnostics() const -> EditorRenderCoordinatorDiagnostics {
+    return {};
+  }
+  /// Wall time from open/switch first-frame route to first presentation, in ms.
+  /// Negative when no first frame has been presented for the active image.
+  [[nodiscard]] virtual auto first_frame_time_ms() const -> double { return -1.0; }
 
  protected:
   void NotifyChange() {
@@ -157,6 +165,8 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto RequestViewChange(EditorRenderReason reason, std::optional<ViewportRenderRegion> region)
       -> EditorSessionResult override;
   [[nodiscard]] auto render_busy() const -> bool override;
+  [[nodiscard]] auto render_diagnostics() const -> EditorRenderCoordinatorDiagnostics override;
+  [[nodiscard]] auto first_frame_time_ms() const -> double override;
 
   /// Feed async completions that may arrive out of order relative to load/render/save.
   void NotifyImageAcquired(std::uint64_t session_generation, bool success,
@@ -235,7 +245,10 @@ class EditorSessionService final : public IEditorSessionBackend {
   // Phase 5D: last render-busy value announced via NotifyChange so QML
   // spinners toggle only on real coordinator in-flight/pending transitions.
   bool                               last_notified_render_busy_ = false;
-  mutable std::recursive_mutex       mutex_;
+  // Phase 5E: wall-clock first-frame latency for the active image session.
+  std::optional<std::chrono::steady_clock::time_point> first_frame_route_time_{};
+  double                                               first_frame_time_ms_ = -1.0;
+  mutable std::recursive_mutex                         mutex_;
 };
 
 }  // namespace alcedo

@@ -651,5 +651,56 @@ TEST_F(EditorRenderCoordinatorTest, InteractiveNotBlockedBehindOutdatedDetail) {
   EXPECT_NE(scheduler_->scheduled_.back().request_id, detail.request_id);
 }
 
+TEST_F(EditorRenderCoordinatorTest, DiagnosticsTrackRejectReplaceCancelAndSubmit) {
+  // Phase 5E: diagnostics must explain why work was requested, replaced,
+  // cancelled, presented, or rejected without exposing pipeline task objects.
+  auto rejected = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, /*session=*/9));
+  EXPECT_EQ(rejected.kind, EditorRenderResultKind::Failed);
+
+  auto first = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
+  ASSERT_EQ(first.kind, EditorRenderResultKind::RequestAccepted);
+  auto older = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Low));
+  auto newer = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::High));
+  EXPECT_EQ(older.kind, EditorRenderResultKind::RequestAccepted);
+  EXPECT_EQ(newer.kind, EditorRenderResultKind::RequestAccepted);
+
+  {
+    const auto diag = coordinator_->diagnostics();
+    EXPECT_TRUE(diag.has_inflight);
+    EXPECT_EQ(diag.pending_count, 1u);
+    EXPECT_GE(diag.replaced_count, 1u);
+    EXPECT_EQ(diag.session_generation, 1u);
+    EXPECT_FALSE(diag.last_rejection_reason.empty());
+    EXPECT_NE(diag.last_rejection_reason.find("session"), std::string::npos);
+    ASSERT_TRUE(diag.last_rejected_render_reason.has_value());
+    EXPECT_EQ(*diag.last_rejected_render_reason, EditorRenderReason::InteractiveAdjustment);
+    EXPECT_GE(diag.accepted_count, 2u);
+    EXPECT_GE(diag.failed_count, 1u);
+  }
+
+  coordinator_->NotifySchedulerCompleted(first.request_id, true);
+  coordinator_->NotifyFrameSubmitted(first.request_id);
+  {
+    const auto diag = coordinator_->diagnostics();
+    ASSERT_TRUE(diag.last_submitted_frame_role.has_value());
+    EXPECT_EQ(*diag.last_submitted_frame_role, FrameRole::InteractivePrimary);
+    ASSERT_TRUE(diag.last_submitted_render_reason.has_value());
+    EXPECT_EQ(*diag.last_submitted_render_reason, EditorRenderReason::InteractiveAdjustment);
+  }
+
+  // Cancel remaining pending/in-flight work from the replacement burst.
+  coordinator_->CancelSession(1);
+  {
+    const auto diag = coordinator_->diagnostics();
+    EXPECT_FALSE(diag.has_inflight);
+    EXPECT_EQ(diag.pending_count, 0u);
+    EXPECT_GE(diag.cancelled_count, 1u);
+  }
+}
+
 }  // namespace
 }  // namespace alcedo

@@ -207,6 +207,9 @@ void EditorRenderCoordinator::ReplacePendingWithKey(const std::string& key,
 
 void EditorRenderCoordinator::Emit(EditorRenderResult result) {
   switch (result.kind) {
+    case EditorRenderResultKind::RequestAccepted:
+      ++accepted_count_;
+      break;
     case EditorRenderResultKind::Replaced:
       ++replaced_count_;
       break;
@@ -214,7 +217,20 @@ void EditorRenderCoordinator::Emit(EditorRenderResult result) {
       ++cancelled_count_;
       break;
     case EditorRenderResultKind::Failed:
+      ++failed_count_;
       last_error_ = result.message.empty() ? "Render failed" : result.message;
+      // Submit-time rejections also use Failed with a "Rejected:" message.
+      if (result.message.rfind("Rejected:", 0) == 0) {
+        last_rejection_reason_       = last_error_;
+        last_rejected_render_reason_ = result.intent.reason;
+      }
+      break;
+    case EditorRenderResultKind::FrameSubmitted:
+      last_submitted_frame_role_    = result.intent.frame_role;
+      last_submitted_render_reason_ = result.intent.reason;
+      break;
+    case EditorRenderResultKind::FramePresented:
+      ++presented_count_;
       break;
     default:
       break;

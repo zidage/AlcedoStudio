@@ -329,6 +329,17 @@ TEST_F(EditorSessionServiceTest, OpenMarksImageAcquiredButStaysLoadingUntilFirst
   EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
 }
 
+TEST_F(EditorSessionServiceTest, FirstFrameTimeIsRecordedAfterPresentation) {
+  // Phase 5E: first-frame latency is measured from InteractivePrimary accept
+  // to FramePresented so diagnostics can explain open responsiveness.
+  EXPECT_LT(service_->first_frame_time_ms(), 0.0);
+  service_->Open(1, 2);
+  EXPECT_LT(service_->first_frame_time_ms(), 0.0);
+  PresentFirstFrame(*service_);
+  EXPECT_GE(service_->first_frame_time_ms(), 0.0);
+  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+}
+
 TEST_F(EditorSessionServiceTest, QualityBaseFollowsInteractivePrimaryFirstFrame) {
   service_->Open(1, 2);
   ASSERT_EQ(render_->submitted.size(), 1u);
@@ -378,54 +389,59 @@ TEST_F(EditorSessionServiceTest, SwitchCancelsPriorSessionAndSealsJournal) {
   ASSERT_FALSE(render_->submitted.empty());
   EXPECT_EQ(render_->submitted.back().reason, EditorRenderReason::ImageSwitch);
 
-  bool saw_save_started = false;
+  bool saw_save_started  = false;
+  bool saw_save_finished = false;
   for (const auto& r : service_->results()) {
     if (r.kind == EditorSessionResultKind::SaveStarted) {
       saw_save_started = true;
       EXPECT_NE(r.task_id, 0u);
     }
+    if (r.kind == EditorSessionResultKind::SaveFinished) {
+      saw_save_finished = true;
+      EXPECT_NE(r.task_id, 0u);
+    }
   }
   EXPECT_TRUE(saw_save_started);
+  EXPECT_TRUE(saw_save_finished);
+  ASSERT_EQ(tasks_->ended_ids.size(), 1u);
+  EXPECT_EQ(tasks_->ended_ids.front(), tasks_->begun_ids.front());
 }
 
-TEST_F(EditorSessionServiceTest, ConcurrentSavesForAThenBFinishInEitherOrder) {
+TEST_F(EditorSessionServiceTest, SealCompletesEditorSaveTaskImmediately) {
+  // Phase 5E production cutover: seal persists through guard release and ends
+  // the editor_save background task in the same operation. True overlapping
+  // async materialization remains Phase 5G.
   service_->Open(1, 2);
   PresentFirstFrame(*service_);
-  const auto gen_a = service_->identity().session_generation;
 
   service_->Switch(3, 4);
   PresentFirstFrame(*service_);
-  const auto gen_b = service_->identity().session_generation;
 
   service_->Switch(5, 6);
-  const auto gen_c = service_->identity().session_generation;
-  EXPECT_NE(gen_a, gen_b);
-  EXPECT_NE(gen_b, gen_c);
   EXPECT_EQ(tasks_->begin_count, 2);
-
-  // Finish B then A (out of order).
-  service_->NotifySaveFinished(gen_b, true, "B ok");
-  service_->NotifySaveFinished(gen_a, true, "A ok");
-  ASSERT_EQ(tasks_->ended_ids.size(), 2u);
-  EXPECT_EQ(tasks_->ended_ids[0], tasks_->begun_ids[1]);
-  EXPECT_EQ(tasks_->ended_ids[1], tasks_->begun_ids[0]);
-  EXPECT_EQ(service_->state(), EditorSessionState::Loading);
-}
-
-TEST_F(EditorSessionServiceTest, ConcurrentSavesFinishInOpenOrder) {
-  service_->Open(1, 2);
-  PresentFirstFrame(*service_);
-  const auto gen_a = service_->identity().session_generation;
-  service_->Switch(3, 4);
-  PresentFirstFrame(*service_);
-  const auto gen_b = service_->identity().session_generation;
-  service_->Switch(5, 6);
-
-  service_->NotifySaveFinished(gen_a, true, "A ok");
-  service_->NotifySaveFinished(gen_b, true, "B ok");
   ASSERT_EQ(tasks_->ended_ids.size(), 2u);
   EXPECT_EQ(tasks_->ended_ids[0], tasks_->begun_ids[0]);
   EXPECT_EQ(tasks_->ended_ids[1], tasks_->begun_ids[1]);
+  EXPECT_EQ(service_->state(), EditorSessionState::Loading);
+
+  // Already-finished generations are ignored (no double EndTask).
+  const auto gen_a = tasks_->begun_ids[0];
+  service_->NotifySaveFinished(1, true, "stale");
+  EXPECT_EQ(tasks_->ended_ids.size(), 2u);
+  (void)gen_a;
+}
+
+TEST_F(EditorSessionServiceTest, StaleSaveFinishedAfterSealIsIgnored) {
+  service_->Open(1, 2);
+  PresentFirstFrame(*service_);
+  const auto gen_a = service_->identity().session_generation;
+  service_->Switch(3, 4);
+  PresentFirstFrame(*service_);
+  ASSERT_EQ(tasks_->ended_ids.size(), 1u);
+
+  service_->NotifySaveFinished(gen_a, false, "late failure must not mutate state");
+  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+  EXPECT_EQ(tasks_->ended_ids.size(), 1u);
 }
 
 TEST_F(EditorSessionServiceTest, PatchAndGestureCommitRouteThroughRenderPortOnly) {
