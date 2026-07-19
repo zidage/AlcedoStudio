@@ -951,6 +951,8 @@ TEST_F(WorkspaceShellTests, EditorViewportReceivesRealPointerAndWheelEvents) {
   ProcessEvents(20);
 
   const float zoom_before = interaction->zoom();
+  const float pan_x_before = interaction->panX();
+  const float pan_y_before = interaction->panY();
   const QPoint center = CenterOfItem(viewport_item);
 
   // Real window mouse press/move/release (pan while zoomed).
@@ -960,6 +962,23 @@ TEST_F(WorkspaceShellTests, EditorViewportReceivesRealPointerAndWheelEvents) {
   ProcessEvents(10);
   QTest::mouseRelease(loaded->window, Qt::LeftButton, Qt::NoModifier, center + QPoint(30, 12));
   ProcessEvents(20);
+
+  // Phase 5D: a left-button drag while zoomed MUST pan. The double-tap
+  // TapHandler holds the left-button grab from press until release, which
+  // starves the PointHandler's passive grab of drag move events; without the
+  // dedicated DragHandler the drag would fall through to the single-click zoom
+  // toggle on release instead of panning. Middle-button has no competing
+  // TapHandler and already panned, but left-button must pan too. Asserting this
+  // right after the drag (before the wheel/double-click below can also move
+  // zoom) is what catches the swallowed-pan regression — the final
+  // zoomed-or-panned check alone is too weak because a swallowed drag still
+  // zooms via the click toggle.
+  const bool left_drag_panned =
+      std::abs(interaction->panX() - pan_x_before) > 1.0e-4f ||
+      std::abs(interaction->panY() - pan_y_before) > 1.0e-4f;
+  EXPECT_TRUE(left_drag_panned)
+      << "left-drag pan was swallowed by the double-tap TapHandler; "
+         "panX/panY unchanged after a zoomed left-button drag";
 
   // Ctrl+wheel zoom at cursor through the real QML WheelHandler.
   QPointF angle(0.0, 120.0);

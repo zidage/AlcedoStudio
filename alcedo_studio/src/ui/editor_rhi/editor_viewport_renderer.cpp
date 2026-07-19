@@ -502,16 +502,25 @@ auto EditorViewportRenderer::detailPatchAspectOk(const LayerState& detail,
 }
 
 auto EditorViewportRenderer::hasVisibleDetailPatch() const -> bool {
-  if (!view_state_.allow_detail_patch || !view_state_.has_expected_detail_token) {
+  // Phase 5D: the QML editor route does not use the legacy expected-detail
+  // token handshake (EditorRenderCoordinator never calls a SetExpectedDetail
+  // equivalent), so has_expected_detail_token / expected_detail_generation /
+  // expected_detail_serial stay at their defaults and would gate the patch
+  // off forever. The new route guarantees a detail patch is valid purely from
+  // generation + ROI + aspect matching: the coordinator cancels obsolete
+  // DetailPatch work on every view- and render-generation advance, the
+  // generation match below rejects a detail from a prior content generation,
+  // and SameRoi rejects a detail whose source ROI no longer matches the
+  // current viewport. That is sufficient — the token fields remain on
+  // ViewerViewState only for the legacy QWidget viewer's own check.
+  if (!view_state_.allow_detail_patch) {
     return false;
   }
   const auto& quality = layers_[layerIndex(LayerId::QualityBase)];
   const auto& detail = layers_[layerIndex(LayerId::DetailPatch)];
   if (!quality.valid || !detail.valid ||
       quality.preview_metadata.preview_generation !=
-          detail.preview_metadata.preview_generation ||
-      detail.preview_metadata.preview_generation != view_state_.expected_detail_generation ||
-      detail.preview_metadata.detail_serial != view_state_.expected_detail_serial) {
+          detail.preview_metadata.preview_generation) {
     return false;
   }
   if (!detailPatchAspectOk(detail, quality)) {

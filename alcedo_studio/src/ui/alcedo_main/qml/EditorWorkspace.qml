@@ -302,6 +302,38 @@ Item {
                         }
                     }
 
+                    // Phase 5D: a dedicated DragHandler is the reliable move
+                    // source for pan (and crop-drag) while zoomed. The double-
+                    // tap TapHandler below holds the left-button exclusive grab
+                    // from press until release, which starves the PointHandler's
+                    // passive grab of drag move events — so a left-button drag
+                    // never pans (it falls through to the single-click zoom
+                    // toggle on release). Middle button has no competing
+                    // TapHandler so it already panned; the DragHandler is a
+                    // harmless no-op there (handleMove is idempotent for a
+                    // repeated position). The DragHandler takes the grab at the
+                    // drag threshold and reports centroid moves to the same
+                    // handleMove entry point; target:null so it never moves an
+                    // item (the interaction controller owns the view transform).
+                    // Enabled with an image in both crop-off (pan) and crop-on
+                    // (crop-drag) modes: the controller's handleMove routes to
+                    // crop first, so a crop-handle drag still moves the crop and
+                    // a plain drag still pans.
+                    DragHandler {
+                        id: viewportPanDrag
+                        enabled: root.hasImage
+                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.TouchScreen | PointerDevice.Stylus
+                        acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+                        target: null
+                        onTranslationChanged: {
+                            if (active) {
+                                editorInteraction.handleMove(
+                                            centroid.position.x, centroid.position.y,
+                                            centroid.pressedButtons)
+                            }
+                        }
+                    }
+
                     WheelHandler {
                         id: viewportWheel
                         enabled: root.hasImage
@@ -343,11 +375,17 @@ Item {
                         }
                     }
 
+                    // Phase 5D: gesturePolicy DragThreshold so a left-button drag
+                    // (now owned by viewportPanDrag above) cancels the tap instead
+                    // of being held as a would-be double-tap. A clean double-click
+                    // (two clicks without a drag) still fires onDoubleTapped and
+                    // toggles the zoom; only drags are excluded, which is what
+                    // separates pan from double-click-zoom.
                     TapHandler {
                         id: viewportDoubleTap
                         enabled: root.hasImage
                         acceptedButtons: Qt.LeftButton
-                        gesturePolicy: TapHandler.ReleaseWithinBounds
+                        gesturePolicy: TapHandler.DragThreshold
                         onDoubleTapped: function (eventPoint) {
                             editorInteraction.handleDoubleTap(
                                         eventPoint.position.x, eventPoint.position.y)
