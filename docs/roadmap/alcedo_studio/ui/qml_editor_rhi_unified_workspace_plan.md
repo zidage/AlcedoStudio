@@ -4,8 +4,8 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-19 to complete Phase 5E production interaction cutover/hardening after the
-Phase 5C direct-presentation and Phase 5D unified-scheduling architecture settled.
+Last revised: 2026-07-19 to complete Phase 5F redo-only journal record format, RewriteTimeline,
+and independent timeline simulator after Phase 5E production interaction cutover/hardening.
 
 Affected areas:
 
@@ -1825,31 +1825,54 @@ Acceptance:
 
 ### Phase 5F - Redo-only journal format and timeline rewrites
 
+**Status: complete (2026-07-19).** `EditorTransactionJournal` owns the redo-only record layout,
+checksummed framing, atomic `RewriteTimeline` validation, and an independent
+`JournalTimelineSimulator` that replays journals without `WorkingVersion`.
+`WorkingVersionJournalRecorder` records ordinary interactive edits (append / cursor move /
+rewrite / materialize head) so WorkingVersion state, journal replay, and the simulator agree.
+On-disk flush, background autosave, recovery, and compaction remain Phase 5G–5I.
+
+Product boundary locked for later filmstrip transfer (not implemented here):
+
+- **Paste** (`AdjustmentVersionApplyMode::kPaste`): create a new user-visible Version carrying one
+  edit transaction per transferred operator. Version creation is an atomic history operation
+  outside the working journal sequence; the journal flushes on image/workspace switch.
+- **Merge** (`AdjustmentVersionApplyMode::kMerge`): apply the package onto the current pipeline and
+  commit a new Version that stores only materialized final params (no per-operator transactions).
+  Same Version-commit boundary as today; not a multi-step working-journal rewrite story.
+- Interactive undo/redo and append-behind-cursor continue to use journal `CursorMove` /
+  `EditAppend` / `RewriteTimeline` on the active working timeline after checkout.
+
 Deliverables:
 
-- Add a versioned journal envelope containing record length, record type, sequence, image/version/
-  session/generation identity, payload checksum, and record checksum.
-- Define records for edit append, cursor move, atomic `RewriteTimeline`, materialized-head marker,
+- [x] Versioned journal record frame: record length, record type, sequence, image/version/
+  session/generation identity, payload checksum, and record checksum
+  (`edit/history/editor_transaction_journal.*`).
+- [x] Records for edit append, cursor move, atomic `RewriteTimeline`, materialized-head marker,
   recovery marker, and compaction checkpoint.
-- Make `RewriteTimeline` validate the expected timeline hash and discarded-tail hash, retain the
-  requested cursor prefix, and append the replacement edit as one logical mutation.
-- Keep journal files append-only. A rewrite creates a logical tombstone; only verified compaction can
-  physically omit discarded tail records.
-- Define transaction ID allocation after rewrite/recovery so IDs are never reused even when a tail is
-  discarded.
-- Add a small reference implementation that applies journal records to an in-memory timeline without
-  using `WorkingVersion`. This becomes the oracle for recovery and fuzz tests.
+- [x] `RewriteTimeline` validates the expected timeline hash and discarded-tail hash, retains the
+  requested cursor prefix, and appends the replacement edit as one logical mutation.
+- [x] Journal bytes stay append-only. A rewrite is a logical tombstone; only verified compaction can
+  physically omit discarded tail records (5H).
+- [x] Transaction ID high-water after rewrite so discarded-tail IDs are never reused.
+- [x] Independent timeline simulator (`JournalTimelineSimulator`) applies journal records in memory
+  without `WorkingVersion` (recovery/fuzz baseline for 5H–5I).
 
 Acceptance:
 
-- `edit A, edit B, undo, append C` replays as `[A, C]` with the cursor at two and B unavailable to
-  redo.
-- `edit A, edit B, undo, redo` replays as `[A, B]` with the cursor at two.
-- A hash mismatch rejects the whole rewrite and leaves the prior valid prefix unchanged.
-- A partial `RewriteTimeline` record is ignored as an incomplete tail; replay never observes
-  “B discarded but C absent”.
-- WorkingVersion, journal replay, and the independent reference model produce identical pipeline
-  params, cursor, transaction IDs, and timeline hash for the same operation sequence.
+- [x] `edit A, edit B, undo, append C` replays as `[A, C]` with the cursor at two and B unavailable
+  to redo (`EditAEditBUndoAppendCReplaysAsAThenC`).
+- [x] `edit A, edit B, undo, redo` replays as `[A, B]` with the cursor at two
+  (`EditAEditBUndoRedoReplaysAsAThenB`).
+- [x] A hash mismatch rejects the whole rewrite and leaves the prior valid prefix unchanged
+  (`HashMismatchRejectsWholeRewriteAndLeavesPrefixUnchanged`).
+- [x] A partial `RewriteTimeline` record is ignored as an incomplete tail; replay never observes
+  “B discarded but C absent” (`PartialRewriteTimelineLeavesPriorTimelineUnchanged`).
+- [x] WorkingVersion, journal replay, and the independent timeline simulator produce identical
+  pipeline params, cursor, transaction IDs, and timeline hash for the same operation sequence
+  (`WorkingVersionJournalAndSimulatorSharePipelineParams`,
+  `CursorMovesAndTimelineRewriteReplayToIndependentSimulator`,
+  `RewriteTimelineAtomicallyDropsRedoTailAndAppendsReplacement`).
 
 ### Phase 5G - Background autosave and overlapping image switches
 

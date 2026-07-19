@@ -968,6 +968,7 @@ set(HISTORY_SRCS
     edit/history/edit_history.cpp 
     edit/history/version.cpp 
     edit/history/edit_transaction.cpp
+    edit/history/editor_transaction_journal.cpp
 )
 
 def_library(EditHistory

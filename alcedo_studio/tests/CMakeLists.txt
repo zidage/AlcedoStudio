@@ -1013,6 +1013,13 @@ target_link_libraries(VersionHashTest EditHistory GTest::gtest_main)
 gtest_discover_tests(VersionHashTest TEST_PREFIX "VersionHashTest."
   PROPERTIES LABELS "ci_core_flow")
 
+# Phase 5F: redo-only journal record format, RewriteTimeline, independent timeline simulator.
+add_executable(EditorTransactionJournalTest edit/history/editor_transaction_journal_test.cpp)
+target_include_directories(EditorTransactionJournalTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorTransactionJournalTest EditHistory GTest::gtest_main)
+gtest_discover_tests(EditorTransactionJournalTest TEST_PREFIX "EditorTransactionJournalTest."
+  PROPERTIES LABELS "ci_core_flow")
+
 add_executable(ProjectServiceTest app/project_service_test.cpp)
 target_include_directories(ProjectServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ProjectServiceTest ProjectService GTest::gtest_main)
