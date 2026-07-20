@@ -12,6 +12,7 @@
 #include <QtGlobal>
 
 #include "app/editor_session_types.hpp"
+#include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 
 namespace alcedo {
 class IFrameSink;
@@ -37,10 +38,18 @@ class EditorController;
 /// (production: EditorSessionService). The controller never owns pipeline guards,
 /// the scheduler, or journal storage. UI shell state (filmstrip, panels) remains
 /// controller-local.
-class EditorSessionController final : public QObject {
+///
+/// Phase 6A implements `IEditorAdjustmentSubmitter` so the typed adjustment
+/// models can submit one patch at a time without touching the pipeline scheduler.
+/// `canEdit` exposes whether the session is Interactive with an image so panels
+/// can gate control enablement.
+class EditorSessionController final : public QObject, public IEditorAdjustmentSubmitter {
   Q_OBJECT
   Q_PROPERTY(bool active READ active NOTIFY StateChanged)
   Q_PROPERTY(bool hasImage READ has_image NOTIFY StateChanged)
+  // Phase 6A: true when an image is open and the session is Interactive, i.e.
+  // adjustment controls are enabled and submitPatch will be accepted.
+  Q_PROPERTY(bool canEdit READ can_edit NOTIFY StateChanged)
   Q_PROPERTY(uint elementId READ element_id NOTIFY StateChanged)
   Q_PROPERTY(uint imageId READ image_id NOTIFY StateChanged)
   // Last image opened with a non-zero id. Survives Close/Finalize so re-entering
@@ -114,6 +123,16 @@ class EditorSessionController final : public QObject {
   [[nodiscard]] QString    last_error() const;
   [[nodiscard]] double     first_frame_time_ms() const;
   [[nodiscard]] QVariantMap render_diagnostics() const;
+  // Phase 6A: true when an image is open and the session is Interactive.
+  [[nodiscard]] bool       can_edit() const;
+
+  // Phase 6A: IEditorAdjustmentSubmitter. The typed adjustment models call
+  // submitPatch to route one patch through the session service (interactive
+  // preview when settled=false, one committed transaction when settled=true).
+  // The same method is the QML-visible entry (Q_INVOKABLE) and the interface
+  // override; both forward to the same backend call.
+  Q_INVOKABLE bool          submitPatch(QString fieldKey, QString paramsJson, bool settled) override;
+  [[nodiscard]] auto       canEdit() const -> bool override { return can_edit(); }
 
   Q_INVOKABLE void   Open(uint elementId = 0, uint imageId = 0);
   Q_INVOKABLE void   Close();

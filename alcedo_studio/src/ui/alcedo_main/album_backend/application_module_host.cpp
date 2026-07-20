@@ -13,6 +13,7 @@
 #include <string>
 
 #include "app/editor_session_bootstrap.hpp"
+#include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_production.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
@@ -24,6 +25,7 @@ namespace alcedo::ui {
 ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver observer)
     : QObject(parent), lifecycle_observer_(std::move(observer)) {
   alcedo::editor_rhi::RegisterEditorViewportQmlTypes();
+  alcedo::ui::RegisterEditorAdjustmentQmlTypes();
   background_tasks_ = std::make_unique<BackgroundTaskController>();
   RecordConstruction("BackgroundTaskController", background_tasks_.get());
   interaction_policy_ =

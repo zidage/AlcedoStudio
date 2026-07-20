@@ -1682,6 +1682,60 @@ target_compile_definitions(WorkspaceShellTest
 )
 gtest_discover_tests(WorkspaceShellTest TEST_PREFIX "WorkspaceShellTest.")
 
+# Phase 6A: typed adjustment models (no GPU/QML rendering; QSignalSpy drives the
+# debounce timer deterministically via the event loop).
+add_executable(EditorAdjustmentModelTest
+    ui/editor_adjustment_model_test.cpp
+    ui/ui_test_main.cpp
+    ui/editor_dialog_stub.cpp
+)
+target_include_directories(EditorAdjustmentModelTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorAdjustmentModelTest
+  PRIVATE
+    AlbumBackendLib
+    EditorSessionService
+    GTest::gtest
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Qml
+    Qt6::Quick
+    Qt6::Test
+    Qt6::Widgets
+)
+gtest_discover_tests(EditorAdjustmentModelTest TEST_PREFIX "EditorAdjustmentModelTest.")
+
+# Phase 6A: shared QML adjustment controls. Loads the controls from source via
+# an inline harness; a RecordingSubmitter stands in for editorSession.
+add_executable(EditorAdjustmentControlQmlTest
+    ui/editor_adjustment_control_qml_test.cpp
+    ui/widget_test_main.cpp
+    ui/editor_dialog_stub.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorAdjustmentControlQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorAdjustmentControlQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorAdjustmentControlQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+gtest_discover_tests(EditorAdjustmentControlQmlTest TEST_PREFIX "EditorAdjustmentControlQmlTest.")
+
 add_executable(EditorRealRawGpuE2eTest
     ui/editor_real_raw_gpu_e2e_test.cpp
     ui/editor_dialog_stub.cpp
@@ -1847,6 +1901,8 @@ alcedo_assign_test_category(ui ALCEDO_BUILD_UI_TESTS alcedo_tests_ui
   GlobalSearchDialogQmlTest
   MainQmlWorkflowTest
   WorkspaceShellTest
+  EditorAdjustmentModelTest
+  EditorAdjustmentControlQmlTest
   LanguageManagerTest
 )
 

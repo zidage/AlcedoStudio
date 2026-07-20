@@ -516,6 +516,27 @@ void EditorSessionController::submitViewChange(int kind) {
   session_backend_->RequestViewChange(reason, std::move(region));
 }
 
+auto EditorSessionController::can_edit() const -> bool {
+  if (!session_backend_) {
+    return false;
+  }
+  return session_backend_->has_image() &&
+         session_backend_->state() == alcedo::EditorSessionState::Interactive;
+}
+
+bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, bool settled) {
+  if (!can_edit()) {
+    return false;
+  }
+  alcedo::EditorAdjustmentPatch patch;
+  patch.field_key   = fieldKey.toStdString();
+  patch.params_json = paramsJson.toStdString();
+  patch.settled     = settled;
+  const auto result = settled ? session_backend_->GestureCommit(patch)
+                              : session_backend_->Patch(patch);
+  return result.kind != alcedo::EditorSessionResultKind::Rejected;
+}
+
 void EditorSessionController::set_filmstrip_collapsed(bool collapsed) {
   if (filmstrip_collapsed_ == collapsed) {
     return;

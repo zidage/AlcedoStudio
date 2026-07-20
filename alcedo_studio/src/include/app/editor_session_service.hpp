@@ -48,6 +48,23 @@ class IEditorSessionBackend {
   virtual auto Discard() -> EditorSessionResult                                               = 0;
   virtual auto Undo() -> EditorSessionResult                                                  = 0;
   virtual auto Redo() -> EditorSessionResult                                                  = 0;
+  /// Phase 6A: submit an interactive (settled=false) or settled (settled=true)
+  /// adjustment patch. Production routes through HandlePatch; default rejects so
+  /// test/legacy backends that do not override stay no-op.
+  virtual auto Patch(EditorAdjustmentPatch /*patch*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind    = EditorSessionResultKind::Rejected;
+    result.state   = EditorSessionState::NoImage;
+    result.message = "Patch not supported by this backend";
+    return result;
+  }
+  virtual auto GestureCommit(EditorAdjustmentPatch /*patch*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind    = EditorSessionResultKind::Rejected;
+    result.state   = EditorSessionState::NoImage;
+    result.message = "Gesture commit not supported by this backend";
+    return result;
+  }
   /// Record finalized WorkingVersion mutations immediately. The methods queue
   /// checksummed journal records but leave file I/O to the session save path.
   virtual auto RecordFinalizedEdit(const EditTransaction& /*transaction*/, std::string* /*error*/)
@@ -171,8 +188,8 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
   auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
   auto Close(bool persist_changes) -> EditorSessionResult override;
-  auto Patch(EditorAdjustmentPatch patch) -> EditorSessionResult;
-  auto GestureCommit(EditorAdjustmentPatch patch) -> EditorSessionResult;
+  auto Patch(EditorAdjustmentPatch patch) -> EditorSessionResult override;
+  auto GestureCommit(EditorAdjustmentPatch patch) -> EditorSessionResult override;
   /// Legacy convenience: field key only.
   auto Patch(std::string patch_key) -> EditorSessionResult;
   auto GestureCommit(std::string patch_key) -> EditorSessionResult;

@@ -1,0 +1,26 @@
+<!--
+  Source: Lucide Icons (https://lucide.dev/icons/rotate-ccw) — rotate-ccw
+  License: ISC (https://lucide.dev/license)
+  Category: Editor / Adjustment reset affordance
+  Icon name: rotate-ccw (counterclockwise circular arrow)
+  Added: 2026-07-20 for Phase 6A (per-field reset on AdjustmentSlider / group
+         reset on AdjustmentGroup). No existing panel_icons asset had the reset
+         meaning (retry.svg is the retry affordance, not reset). Stroke-width
+         matches the repo panel_icons convention (1.5) for visual consistency
+         with adjustments.svg / crop.svg / versions.svg.
+-->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 24 24"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="1.5"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <path stroke="none" d="M0 0h24v24H0z" fill="none" />
+  <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+  <path d="M3 3v5h5" />
+</svg>

@@ -1776,6 +1776,7 @@ add_library(AlbumBackendLib STATIC
     ui/alcedo_main/album_backend/nikon_he_recovery_controller.cpp
     ui/alcedo_main/album_backend/editor_controller.cpp
     ui/alcedo_main/album_backend/editor_session_controller.cpp
+    ui/alcedo_main/album_backend/editor_adjustment_models.cpp
     ui/alcedo_main/album_backend/editor_session_production.cpp
     ui/alcedo_main/album_backend/workspace_router.cpp
     ui/alcedo_main/album_backend/adjustment_transfer_controller.cpp
@@ -1805,6 +1806,8 @@ add_library(AlbumBackendLib STATIC
     include/ui/alcedo_main/album_backend/nikon_he_recovery_types.hpp
     include/ui/alcedo_main/album_backend/editor_controller.hpp
     include/ui/alcedo_main/album_backend/editor_session_controller.hpp
+    include/ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp
+    include/ui/alcedo_main/album_backend/editor_adjustment_models.hpp
     include/ui/alcedo_main/album_backend/editor_session_production.hpp
     include/ui/alcedo_main/album_backend/workspace_router.hpp
     include/ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp
@@ -2101,6 +2104,12 @@ qt_add_qml_module(alcedo_main
         ui/alcedo_main/qml/EditorFilmstrip.qml
         ui/alcedo_main/qml/EditorHistoryVersionsRail.qml
         ui/alcedo_main/qml/EditorAdjustmentStack.qml
+        ui/alcedo_main/qml/AdjustmentSlider.qml
+        ui/alcedo_main/qml/AdjustmentField.qml
+        ui/alcedo_main/qml/AdjustmentToggle.qml
+        ui/alcedo_main/qml/AdjustmentCombo.qml
+        ui/alcedo_main/qml/AdjustmentGroup.qml
+        ui/alcedo_main/qml/AdjustmentResetButton.qml
     RESOURCES
         ui/alcedo_main/qml/util/qmldir
 )

@@ -2035,6 +2035,12 @@ and their loading or destruction cannot synchronously wait for scene-graph work.
 
 ### Phase 6A - Shared adjustment interfaces and QML controls
 
+**Status: complete (2026-07-20).** The shared typed-model + QML-control foundation
+that Phase 6B–6F consume is in place. Models own the gesture lifecycle in
+testable C++ (one settled `submitPatch` per completed gesture); the QML controls
+bind to them and drive the lifecycle; a narrow submitter seam closes the gap
+where `Patch`/`GestureCommit` existed on the backend but were not QML-reachable.
+
 Deliverables:
 
 - Define focused typed models for values, ranges, enum choices, enabled state, defaults, validation,
@@ -2048,6 +2054,78 @@ Acceptance:
 - Shared controls generate one committed transaction per completed gesture.
 - Keyboard editing, pointer dragging, reset, focus, accessibility, and invalid values have focused
   component tests.
+
+Implementation closeout:
+
+- Backend interface fix: `IEditorSessionBackend` gained `Patch(EditorAdjustmentPatch)`
+  and `GestureCommit(EditorAdjustmentPatch)` virtuals with default-rejection bodies
+  (mirroring `RequestViewChange`); `EditorSessionService::Patch`/`GestureCommit` are
+  now `override`. The controller held `IEditorSessionBackend*`, so the QML-reachable
+  patch path could not compile before this addition.
+- Narrow submitter seam `IEditorAdjustmentSubmitter` (`submitPatch(fieldKey, paramsJson,
+  settled)` + `canEdit()`) in `editor_adjustment_submitter.hpp`. `EditorSessionController`
+  multi-inherits it (one QObject base + the non-QObject interface is the standard Qt
+  pattern) and exposes `Q_PROPERTY(bool canEdit)` + `Q_INVOKABLE bool submitPatch(...)`.
+  `submitPatch` builds an `EditorAdjustmentPatch` and routes `settled ? GestureCommit :
+  Patch` through the backend; returns false when `canEdit()` is false (no image / not
+  Interactive). `RegisterEditorAdjustmentQmlTypes()` is called from
+  `ApplicationModuleHost`'s constructor.
+- Typed models (`editor_adjustment_models.{hpp,cpp}`, AlbumBackendLib, registered via
+  `qmlRegisterType`): `EditorAdjustmentModelBase` (fieldKey/label/enabled/submitter
+  QObject* property → `dynamic_cast` cross-cast/optional `paramsBuilder` QJSValue/
+  `submitNow` with a defensive `canEdit()` check) and three concrete models.
+  - `EditorAdjustmentValueModel`: value/defaultValue/minimum/maximum/step/precision/
+    suffix/valid/errorMessage/gestureActive. The `value` Q_PROPERTY WRITE is a plain
+    no-submit setter (programmatic load); user edits go through `editValue` (keyboard/
+    wheel: interactive patch + a debounced settled commit), `beginGesture`/
+    `updateGesture`/`commitGesture` (pointer drag: interactive per update, one settled
+    on release), `commitImmediately` (Enter / focus-out), `reset`, and `setInvalid`
+    (non-numeric field entry: `valid=false`, no submit). A `QTimer` stabilization
+    (default 180 ms; C++-only `setDebounceIntervalMs(0)` for tests) plus the
+    `settledCommitted` signal make the debounced settled commit deterministic under
+    `QSignalSpy::wait` / `ProcessEvents`. Clamps to [minimum, maximum] before submit.
+  - `EditorAdjustmentEnumModel`: entries/currentIndex/currentValue/defaultIndex;
+    `selectIndex` commits one settled transaction; `setCurrentIndex` is the plain
+    load setter.
+  - `EditorAdjustmentToggleModel`: value/defaultValue; `commitValue`/`toggle` commit
+    one settled transaction; `setValue` is the plain load setter.
+  - Default params JSON is `{"value": v}` / `{"index": i,"value": s}` / `{"value": b}`
+    (built with `QJsonDocument`); the optional `paramsBuilder` QJSValue lets Phase 6B+
+    panels customize the operator-specific shape.
+- Shared QML controls (added to `qt_add_qml_module(alcedo_main QML_FILES)`, all use
+  `appTheme` directly — not a `theme` mirror — and carry `objectName` for tests):
+  `AdjustmentSlider.qml` (label + numeric `TextField` + styled `Slider` +
+  `AdjustmentResetButton`; one-way `Slider.value: model.value` with a `!pressed`-guarded
+  `Connections.onValueChanged` sync so drag and programmatic load do not feedback-loop;
+  `Keys.onLeft/RightPressed` → `editValue` with `event.accepted` to suppress the
+  default Slider key handling; `onEditingFinished` → `editValue + commitImmediately`
+  or `setInvalid`), `AdjustmentField.qml` (standalone numeric field), `AdjustmentToggle.qml`
+  (`Switch` → `commitValue`), `AdjustmentCombo.qml` (`ComboBox` → `selectIndex`),
+  `AdjustmentGroup.qml` (wraps `CollapsibleSection` + optional group-reset), and
+  `AdjustmentResetButton.qml` (compact `IconActionButton` with the new
+  `panel_icons/reset.svg` — Lucide `rotate-ccw`, ISC, stroke-width 1.5 to match the
+  repo panel_icons convention; registered in `resource.qrc`).
+- Tests: `EditorAdjustmentModelTest` (12 cases, `ui_test_main.cpp` — no GPU/QML) drives
+  the models directly with a `RecordingSubmitter` fake: drag gesture (interactive per
+  update + one settled on commit), wheel burst (interactive per value + one settled
+  after debounce via `QSignalSpy::wait`), keyboard `commitImmediately`, reset, clamping,
+  invalid (`setInvalid` → no submit), enum/toggle one-settled-per-change, `canEdit()`
+  gating, latest-value-wins, mid-gesture session loss drops the settled silently, and
+  `hasPendingSettled`. `EditorAdjustmentControlQmlTest` (7 cases, `widget_test_main.cpp`
+  + offscreen) loads the controls from source via an inline `Loader` harness (mirrors
+  `GlobalSearchDialogQmlTest`) with the models as C++ context properties: slider
+  keyboard arrow, field typing + Enter, reset click, invalid field, disabled model,
+  toggle click, and combo activation.
+- Verification (Windows MSVC debug, 2026-07-20): `EditorAdjustmentModelTest` 12/12,
+  `EditorAdjustmentControlQmlTest` 7/7, `alcedo_main` links with the 6 new QML files
+  compiled into the `Alcedo.Main` module (qmlcachegen, no errors). Phase 5 regression
+  green: `EditorSessionServiceTest` 44/44, `EditorSessionControllerPhase5ATest` 16/16,
+  `WorkspaceShellTest` 42/43. The single `WorkspaceShellTest` failure
+  (`DeletingCurrentEditorImageDropsEditorToEmptyState`, `has_image()` false after
+  `OpenEditor` on a real seeded project — "Image controller: failed to load image
+  bytes") is pre-existing: reproduced at clean HEAD via stash/rebuild/rerun, so it is
+  a fixture/environment issue in the production open path, not a Phase 6A regression.
+  `git diff --check` clean; new files are LF.
 
 ### Phase 6B - Tone panel
 
