@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <iostream>
 #include <utility>
 
 namespace alcedo {
@@ -332,8 +333,8 @@ auto EditorSessionService::BeginSaveForSession(std::uint64_t   session_generatio
 
   bool started_async = true;
   if (dependencies_.journal) {
-    started_async = dependencies_.journal->CommitJournalAsync(element_id, session_generation,
-                                                               on_commit);
+    started_async =
+        dependencies_.journal->CommitJournalAsync(element_id, session_generation, on_commit);
   } else {
     on_commit(EditorJournalCommitOutcome{true, true, false, 0, 0, {}});
   }
@@ -409,10 +410,10 @@ void EditorSessionService::HandleJournalCommit(std::uint64_t              sessio
 void EditorSessionService::HandleMaterialization(std::uint64_t                session_generation,
                                                  EditorMaterializeOutcome outcome) {
   std::scoped_lock lock(mutex_);
-  NotifySaveFinished(session_generation, outcome.accepted && outcome.materialized,
+  NotifySaveFinished(
+      session_generation, outcome.accepted && outcome.materialized,
                      outcome.error.empty()
-                         ? (outcome.materialized ? "Editor session materialized"
-                                                  : "Editor materialization failed")
+          ? (outcome.materialized ? "Editor session materialized" : "Editor materialization failed")
                          : outcome.error);
 }
 
@@ -511,15 +512,30 @@ auto EditorSessionService::HandleOpenOrSwitch(const EditorSessionIntent& intent,
   first_frame_presented_       = false;
   quality_base_routed_         = false;
   first_frame_route_time_.reset();
-  first_frame_time_ms_         = -1.0;
+  first_frame_time_ms_ = -1.0;
   // Adjustment state is image-scoped. An empty snapshot means a clean image;
   // never inherit the previous image's params.
-  adjustment_snapshot_         = intent.adjustment;
+  adjustment_snapshot_ = intent.adjustment;
 
   const EditorSessionState acquire_state =
       is_switch ? EditorSessionState::Switching : EditorSessionState::Acquiring;
   TransitionTo(acquire_state, EditorSessionResultKind::StateChanged,
                is_switch ? "Switching image" : "Acquiring image");
+
+  // Phase 5H-Fix: run journal recovery + materialization so the editor starts
+  // from the durable DuckDB state before services cache pipeline/history guards.
+  // The journal port emits a diagnostic bundle on failure.
+  if (dependencies_.journal) {
+    std::string recover_error;
+    const auto  recovered = dependencies_.journal->RecoverAndMaterialize(
+        intent.element_id, identity_.session_generation, &recover_error);
+    if (!recovered.accepted) {
+      identity_.element_id = 0;
+      identity_.image_id   = 0;
+      return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                          recover_error.empty() ? "Editor journal recovery failed" : recover_error);
+    }
+  }
 
   std::string error;
   if (!AcquireGuards(intent.element_id, &error)) {
@@ -852,6 +868,53 @@ auto EditorSessionService::Redo() -> EditorSessionResult {
   return Submit(EditorSessionIntent{EditorSessionIntentKind::Redo});
 }
 
+auto EditorSessionService::RecordFinalizedEdit(const EditTransaction& transaction,
+                                               std::string*           error) -> bool {
+  std::scoped_lock lock(mutex_);
+  if (!dependencies_.journal || state_ != EditorSessionState::Interactive || !has_image()) {
+    if (error) {
+      *error = "Finalized edit requires an active journaled image";
+    }
+    return false;
+  }
+  return dependencies_.journal->RecordEdit(identity_.element_id, identity_.session_generation,
+                                           transaction, error);
+}
+
+auto EditorSessionService::RecordHistoryCursorMove(std::uint64_t from_cursor,
+                                                   std::uint64_t to_cursor, std::string* error)
+    -> bool {
+  std::scoped_lock lock(mutex_);
+  if (!dependencies_.journal || state_ != EditorSessionState::Interactive || !has_image()) {
+    if (error) {
+      *error = "History cursor move requires an active journaled image";
+    }
+    return false;
+  }
+  if (from_cursor == to_cursor) {
+    return true;
+  }
+  return dependencies_.journal->RecordCursorMove(identity_.element_id, identity_.session_generation,
+                                                 from_cursor, to_cursor, error);
+}
+
+auto EditorSessionService::RecordTimelineRewrite(const Hash128&         expected_timeline_hash,
+                                                 const Hash128&         discarded_tail_hash,
+                                                 std::uint64_t          retained_cursor,
+                                                 const EditTransaction& replacement,
+                                                 std::string*           error) -> bool {
+  std::scoped_lock lock(mutex_);
+  if (!dependencies_.journal || state_ != EditorSessionState::Interactive || !has_image()) {
+    if (error) {
+      *error = "Timeline rewrite requires an active journaled image";
+    }
+    return false;
+  }
+  return dependencies_.journal->RecordRewriteTimeline(
+      identity_.element_id, identity_.session_generation, expected_timeline_hash,
+      discarded_tail_hash, retained_cursor, replacement, error);
+}
+
 auto EditorSessionService::Discard() -> EditorSessionResult {
   return Submit(EditorSessionIntent{EditorSessionIntentKind::Discard});
 }
@@ -860,7 +923,7 @@ auto EditorSessionService::Shutdown() -> EditorSessionResult {
   return Submit(EditorSessionIntent{EditorSessionIntentKind::Shutdown});
 }
 
-auto EditorSessionService::RequestViewChange(EditorRenderReason reason,
+auto EditorSessionService::RequestViewChange(EditorRenderReason                  reason,
                                              std::optional<ViewportRenderRegion> region)
     -> EditorSessionResult {
   EditorSessionIntent intent;
@@ -1003,6 +1066,9 @@ void EditorSessionService::NotifyRenderResult(const EditorRenderResult& render_r
   }
 
   if (render_result.kind == EditorRenderResultKind::Failed) {
+    std::cerr << "[dbg2] NotifyRenderResult FAILED state=" << static_cast<int>(state_)
+              << " matches_first=" << MatchesActiveFirstFrame(render_result)
+              << " msg=" << render_result.message << "\n";
     if (state_ == EditorSessionState::Loading && MatchesActiveFirstFrame(render_result)) {
       TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
                    render_result.message.empty() ? "Render failed" : render_result.message);
@@ -1029,8 +1095,7 @@ void EditorSessionService::NotifyRenderResult(const EditorRenderResult& render_r
       first_frame_presented_ = true;
       if (first_frame_route_time_.has_value()) {
         const auto elapsed = std::chrono::steady_clock::now() - *first_frame_route_time_;
-        first_frame_time_ms_ =
-            std::chrono::duration<double, std::milli>(elapsed).count();
+        first_frame_time_ms_ = std::chrono::duration<double, std::milli>(elapsed).count();
       }
       TryEnterInteractiveFromFirstFrame(render_result);
     }

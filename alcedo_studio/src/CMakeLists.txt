@@ -1836,6 +1836,7 @@ target_link_libraries(AlbumBackendLib
         AdjustmentTransferService
         EditHistoryMgmtService
         EditorSessionService
+        EditorHistoryMaterializer
         ThumbnailService
         SemanticGenerationService
         ImageAnalysisService

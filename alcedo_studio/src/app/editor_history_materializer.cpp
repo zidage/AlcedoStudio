@@ -49,6 +49,85 @@ auto LastDurableOperationSequence(const EditorTransactionJournal& journal) -> st
   return durable;
 }
 
+struct JournalEpochInfo {
+  bool          compacted                      = false;
+  std::uint64_t generation                     = 0;
+  std::uint64_t previous_materialized_sequence = 0;
+};
+
+auto InspectJournalEpoch(const EditorTransactionJournal& journal,
+                         const EditorJournalIdentity& expected_identity, JournalEpochInfo* info,
+                         std::string* error) -> bool {
+  if (info == nullptr) {
+    return false;
+  }
+  *info              = {};
+  const auto decoded = journal.DecodeRecordChain();
+  if (decoded.records.empty()) {
+    info->generation = expected_identity.journal_generation;
+    return true;
+  }
+  info->generation = decoded.records.front().identity.journal_generation;
+  for (const auto& record : decoded.records) {
+    if (record.identity.element_id != expected_identity.element_id ||
+        record.identity.journal_generation != info->generation) {
+      if (error) {
+        *error = "journal record identity or generation mismatch";
+      }
+      return false;
+    }
+  }
+  if (info->generation != expected_identity.journal_generation) {
+    if (error) {
+      *error = "journal generation does not match materialize request";
+    }
+    return false;
+  }
+  const auto& first = decoded.records.front();
+  if (first.record_type == EditorJournalRecordType::CompactionCheckpoint) {
+    if (!first.marker.has_value()) {
+      if (error) {
+        *error = "compaction checkpoint payload is missing";
+      }
+      return false;
+    }
+    info->compacted                      = true;
+    info->previous_materialized_sequence = first.marker->last_valid_sequence;
+  }
+  return true;
+}
+
+auto ValidateCompactionTransition(const JournalEpochInfo&                      epoch,
+                                  const std::optional<EditorRecoveryMetadata>& stored,
+                                  std::string*                                 error) -> bool {
+  if (!stored.has_value()) {
+    if (epoch.compacted) {
+      if (error) {
+        *error = "compacted journal has no stored materialized base";
+      }
+      return false;
+    }
+    return true;
+  }
+  if (stored->journal_generation == epoch.generation) {
+    return true;
+  }
+  if (!epoch.compacted) {
+    if (error) {
+      *error = "journal generation changed without a compaction checkpoint";
+    }
+    return false;
+  }
+  if (epoch.generation != stored->journal_generation + 1 ||
+      epoch.previous_materialized_sequence != stored->materialized_operation_sequence) {
+    if (error) {
+      *error = "compaction checkpoint does not continue the stored materialized head";
+    }
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 EditorHistoryMaterializer::EditorHistoryMaterializer(std::shared_ptr<StorageService> storage)
@@ -63,10 +142,10 @@ auto EditorHistoryMaterializer::LoadRecoveryMetadata(sl_element_id_t element_id)
   return storage_->GetElementController().GetEditorRecoveryMetadata(element_id);
 }
 
-auto EditorHistoryMaterializer::Materialize(const EditorMaterializeRequest& request,
-                                            EditorTransactionJournal* journal,
+auto EditorHistoryMaterializer::Materialize(const EditorMaterializeRequest&     request,
+                                            EditorTransactionJournal*           journal,
                                             const std::shared_ptr<EditHistory>& history,
-                                            const nlohmann::json& pipeline_params,
+                                            const nlohmann::json&               pipeline_params,
                                             std::string* error) -> EditorMaterializeResult {
   EditorMaterializeResult result;
   if (!history || !journal) {
@@ -84,12 +163,21 @@ auto EditorHistoryMaterializer::Materialize(const EditorMaterializeRequest& requ
     return result;
   }
 
-  auto& active = ResolveVersion(*history, request.identity);
+  auto&      active = ResolveVersion(*history, request.identity);
 
   const auto stored_metadata =
       storage_->GetElementController().GetEditorRecoveryMetadata(request.identity.element_id);
+  JournalEpochInfo epoch;
+  if (!InspectJournalEpoch(*journal, request.identity, &epoch, error) ||
+      !ValidateCompactionTransition(epoch, stored_metadata, error)) {
+    result.error = error != nullptr && !error->empty() ? *error : "invalid journal epoch";
+    return result;
+  }
+  const bool same_generation =
+      stored_metadata.has_value() &&
+      stored_metadata->journal_generation == request.identity.journal_generation;
   const std::uint64_t already_materialized =
-      stored_metadata.has_value() ? stored_metadata->materialized_operation_sequence : 0;
+      same_generation ? stored_metadata->materialized_operation_sequence : 0;
 
   if (request.validate_expected_materialized_head) {
     if (already_materialized != request.expected_materialized_operation_sequence) {
@@ -109,16 +197,23 @@ auto EditorHistoryMaterializer::Materialize(const EditorMaterializeRequest& requ
     }
   }
 
-  const std::uint64_t durable_from_journal = LastDurableOperationSequence(*journal);
-  const std::uint64_t target_sequence =
-      request.target_operation_sequence == 0 ? durable_from_journal
-                                             : request.target_operation_sequence;
+  const std::uint64_t      durable_from_journal = LastDurableOperationSequence(*journal);
+  const std::uint64_t      target_sequence      = request.target_operation_sequence == 0
+                                                      ? durable_from_journal
+                                                      : request.target_operation_sequence;
 
-  // Reconstruct from the committed journal chain, capped at the requested
-  // durable operation sequence so unflushed in-memory batches are excluded.
+  // A compacted journal is a new generation whose record sequence restarts at
+  // one. Seed it from the DuckDB projection and REDO only operations in the new
+  // generation; otherwise replay the original generation from its beginning.
   JournalTimelineSimulator simulator(request.identity);
-  const auto replay =
-      simulator.ReplayCommittedThroughOperationSequence(*journal, target_sequence);
+  EditorJournalApplyResult replay;
+  if (epoch.compacted) {
+    simulator.SeedMaterializedState(request.identity, active.GetAllEditTransactions(),
+                                    active.GetCursor(), already_materialized, pipeline_params);
+    replay = simulator.ReplayCommittedAfterMaterialized(*journal);
+  } else {
+    replay = simulator.ReplayCommittedThroughOperationSequence(*journal, target_sequence);
+  }
   if (replay.status != EditorJournalApplyStatus::Applied &&
       replay.status != EditorJournalApplyStatus::IgnoredAlreadyMaterialized) {
     result.error = replay.message.empty() ? "materialize journal REDO failed" : replay.message;
@@ -140,6 +235,18 @@ auto EditorHistoryMaterializer::Materialize(const EditorMaterializeRequest& requ
     head_params = *simulator.head_pipeline_params();
   }
 
+  const Hash128 chain_hash = simulator.TimelineHash();
+  if (same_generation && stored_metadata.has_value() && target_sequence <= already_materialized &&
+      (stored_metadata->transaction_chain_hash == Hash128{} ||
+       stored_metadata->transaction_chain_hash == chain_hash)) {
+    result.accepted                        = true;
+    result.materialized                    = false;
+    result.materialized_operation_sequence = already_materialized;
+    result.transaction_chain_hash          = chain_hash;
+    result.pipeline_parameter_hash         = ComputePipelineParameterHash(head_params);
+    return result;
+  }
+
   WorkingVersion working{request.identity.element_id, active.GetVersionID(), head_params,
                          simulator.transactions(), simulator.cursor()};
   history->UpdateVersionFromWorkingVersion(active.GetVersionID(), working, head_params);
@@ -153,7 +260,7 @@ auto EditorHistoryMaterializer::Materialize(const EditorMaterializeRequest& requ
   metadata.version_id                      = active.GetVersionID();
   metadata.journal_generation              = request.identity.journal_generation;
   metadata.materialized_operation_sequence = target_sequence;
-  metadata.transaction_chain_hash          = simulator.TimelineHash();
+  metadata.transaction_chain_hash          = chain_hash;
   metadata.pipeline_parameter_hash         = ComputePipelineParameterHash(head_params);
 
   std::string storage_error;
@@ -176,7 +283,7 @@ auto EditorHistoryMaterializer::Materialize(const EditorMaterializeRequest& requ
 
 auto EditorHistoryMaterializer::RecoverAndMaterialize(
     const EditorJournalIdentity& identity, EditorTransactionJournal* journal,
-    const std::shared_ptr<EditHistory>& history,
+    const std::shared_ptr<EditHistory>&  history,
     const std::optional<nlohmann::json>& stored_pipeline_params, std::string* error)
     -> EditorMaterializeResult {
   EditorMaterializeResult result;
@@ -189,21 +296,42 @@ auto EditorHistoryMaterializer::RecoverAndMaterialize(
   }
 
   EditorRecoveryMetadata stored{};
-  if (const auto metadata =
-          storage_->GetElementController().GetEditorRecoveryMetadata(identity.element_id)) {
-    stored = *metadata;
+  const auto             stored_metadata =
+      storage_->GetElementController().GetEditorRecoveryMetadata(identity.element_id);
+  if (stored_metadata.has_value()) {
+    stored = *stored_metadata;
   } else {
     stored.element_id         = identity.element_id;
     stored.version_id         = identity.version_id;
     stored.journal_generation = identity.journal_generation;
   }
 
-  auto& active = ResolveVersion(*history, identity);
+  auto&            active = ResolveVersion(*history, identity);
 
-  // Full REDO from the committed journal record chain. DuckDB recovery metadata
-  // decides whether the reconstructed head still needs materialization.
+  JournalEpochInfo epoch;
+  if (!InspectJournalEpoch(*journal, identity, &epoch, error) ||
+      !ValidateCompactionTransition(epoch, stored_metadata, error)) {
+    result.error = error != nullptr && !error->empty() ? *error : "invalid journal epoch";
+    return result;
+  }
+  const bool same_generation =
+      !stored_metadata.has_value() || stored.journal_generation == identity.journal_generation;
+  const std::uint64_t local_materialized_sequence =
+      same_generation ? stored.materialized_operation_sequence : 0;
+
+  // Seed the simulator from the DuckDB-materialized Version projection so a
+  // compacted journal (which omits prior edit records behind a checkpoint)
+  // preserves the durable transaction chain instead of replacing it with an
+  // empty timeline, and so recovery REDOs only journal-committed operations
+  // after the stored materialized head. The caller must pass a history loaded
+  // from DuckDB so the seed reflects the durable state.
   JournalTimelineSimulator recovered(identity);
-  const auto replay = recovered.ReplayCommittedRecordChain(*journal);
+  recovered.SeedMaterializedState(
+      identity, active.GetAllEditTransactions(), active.GetCursor(), local_materialized_sequence,
+      stored_pipeline_params.has_value() ? std::optional<nlohmann::json>(*stored_pipeline_params)
+                                         : std::nullopt);
+
+  const auto replay = recovered.ReplayCommittedAfterMaterialized(*journal);
   if (replay.status != EditorJournalApplyStatus::Applied &&
       replay.status != EditorJournalApplyStatus::IgnoredAlreadyMaterialized) {
     result.error = replay.message.empty() ? "journal recovery REDO failed" : replay.message;
@@ -216,10 +344,12 @@ auto EditorHistoryMaterializer::RecoverAndMaterialize(
   const std::uint64_t durable_op = LastDurableOperationSequence(*journal);
   const Hash128       chain_hash = recovered.TimelineHash();
 
-  if (durable_op <= stored.materialized_operation_sequence &&
-      (stored.transaction_chain_hash == Hash128{} ||
-       stored.transaction_chain_hash == chain_hash)) {
+  if (same_generation && durable_op <= stored.materialized_operation_sequence &&
+      (stored.transaction_chain_hash == Hash128{} || stored.transaction_chain_hash == chain_hash)) {
     // Already materialized; keep live history aligned with the reconstructed head.
+    // This branch does not write DuckDB, so materialized is false: callers gate
+    // thumbnail invalidation (and compaction) on a real DuckDB advance, not on a
+    // no-op recovery that confirmed the durable head already matches.
     nlohmann::json head_params =
         recovered.head_pipeline_params().value_or(stored_pipeline_params.value_or(
             active.GetMaterializedParams().value_or(history->GetImportPipelineParams())));
@@ -228,7 +358,7 @@ auto EditorHistoryMaterializer::RecoverAndMaterialize(
     history->UpdateVersionFromWorkingVersion(active.GetVersionID(), working, head_params);
 
     result.accepted                        = true;
-    result.materialized                    = true;
+    result.materialized                    = false;
     result.materialized_operation_sequence = stored.materialized_operation_sequence;
     result.transaction_chain_hash          = chain_hash;
     result.pipeline_parameter_hash         = ComputePipelineParameterHash(head_params);

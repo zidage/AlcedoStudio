@@ -1930,12 +1930,12 @@ Acceptance:
 
 ### Phase 5H - Recovery, compaction, and injected storage failures
 
-**Status: complete (2026-07-20).** `EditorHistoryMaterializer` owns REDO through a durable operation
-sequence and a single DuckDB transaction that updates Version history, pipeline params, and
-`EditorRecoveryMetadata` together. `EditorJournalWriter` owns create-new compaction with verify +
-atomic replace, and `InjectedEditorJournalFile` covers short write, failed flush, failed replace,
-and checksum corruption. Recovery reconstructs from the committed journal chain; failed validation
-preserves the original bytes in a diagnostic bundle.
+**Status: complete after Phase 5H-Fix (2026-07-20).** `EditorHistoryMaterializer` owns REDO through a
+durable operation sequence and a single DuckDB transaction that updates Version history, pipeline
+params, and `EditorRecoveryMetadata` together. `EditorJournalWriter` owns create-new compaction with
+verify + atomic replace, and `InjectedEditorJournalFile` covers short write, failed flush, failed
+replace, and checksum corruption. Recovery reconstructs from the committed journal chain; failed
+validation preserves the original bytes in a diagnostic bundle.
 
 Deliverables:
 
@@ -1959,6 +1959,30 @@ Acceptance:
 - [x] Materialization interrupted after journal durability reconstructs the same history/pipeline head.
 - [x] A process termination between history and pipeline writes cannot expose mismatched state because
   both writes and recovery metadata share one DuckDB transaction.
+
+### Phase 5H-Fix - Review findings
+
+- **Status: complete (2026-07-20).** Production session recovery now runs before pipeline/history
+  guards are cached; finalized edit, cursor move, and timeline rewrite operations pass through the
+  session service into the image-scoped production writer. Compaction advances the journal
+  generation, validates its stored DuckDB base, and keeps the in-memory writer synchronized with
+  the atomically replaced file.
+- [x] Connect `EditorHistoryMaterializer` to the production editor session through storage, durable
+  history, and pipeline resolvers supplied by `ApplicationModuleHost`.
+- [x] Queue finalized edits, cursor moves, and timeline rewrites through `EditorSessionService` into
+  `EditorJournalWriter`; recover and materialize before acquiring image guards on open.
+- [x] Recover the last complete committed batch when a valid journal prefix ends in a partial or
+  damaged record, while preserving the original bytes for diagnosis.
+- [x] Seed recovery from the DuckDB-materialized transaction chain for compacted journals. Advance
+  the journal generation at compaction so later records cannot collide with pre-compaction sequence
+  values (`EditAfterCompactionMaterializesOnTopOfTheStoredTransactionChain`).
+- [x] Re-read and byte-verify the compact file after create + flush and before atomic replacement;
+  reject short or corrupted compact writes without replacing the active journal.
+- [x] Replace journals atomically on Windows with `ReplaceFileW` / write-through `MoveFileExW`, then
+  reopen the active handle before publishing the in-memory compacted generation.
+- [x] Emit diagnostic bundles from writer-open corruption and production replay failure paths.
+- [x] Inject duplicated records and a pre-commit DuckDB failure; verify last-complete-batch recovery
+  and rollback of history, pipeline, and recovery metadata together.
 
 ### Phase 5I - Reproducible forced-termination fuzz harness
 

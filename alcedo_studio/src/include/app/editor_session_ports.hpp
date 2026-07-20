@@ -18,6 +18,9 @@
 
 namespace alcedo {
 
+class EditTransaction;
+class Hash128;
+
 /// Narrow ports used by EditorSessionService. Production implementations wrap
 /// PipelineMgmtService / EditHistoryMgmtService / BackgroundTaskController /
 /// journal storage. Tests inject fakes. The service never exposes these ports
@@ -116,6 +119,37 @@ class IEditorJournalPort {
   virtual auto Materialize(sl_element_id_t /*element_id*/, std::uint64_t /*session_generation*/,
                            std::string* /*error*/) -> EditorMaterializeOutcome {
     return EditorMaterializeOutcome{true, true, 0, {}};
+  }
+
+  /// Recover the durable journal head for an image and materialize any REDO'd
+  /// journal-committed operations into DuckDB. Called when an image is opened so
+  /// the editor starts from the recovered durable state. The default is a no-op
+  /// for bootstrap ports that have no journal.
+  virtual auto RecoverAndMaterialize(sl_element_id_t /*element_id*/,
+                                     std::uint64_t /*session_generation*/, std::string* /*error*/)
+      -> EditorMaterializeOutcome {
+    return EditorMaterializeOutcome{true, true, 0, {}};
+  }
+
+  /// Queue one finalized edit-history operation in the image journal. These
+  /// methods perform no file I/O; CommitJournal owns the durability barrier.
+  virtual auto RecordEdit(sl_element_id_t /*element_id*/, std::uint64_t /*session_generation*/,
+                          const EditTransaction& /*transaction*/, std::string* /*error*/) -> bool {
+    return true;
+  }
+  virtual auto RecordCursorMove(sl_element_id_t /*element_id*/,
+                                std::uint64_t /*session_generation*/, std::uint64_t /*from_cursor*/,
+                                std::uint64_t /*to_cursor*/, std::string* /*error*/) -> bool {
+    return true;
+  }
+  virtual auto RecordRewriteTimeline(sl_element_id_t /*element_id*/,
+                                     std::uint64_t /*session_generation*/,
+                                     const Hash128& /*expected_timeline_hash*/,
+                                     const Hash128& /*discarded_tail_hash*/,
+                                     std::uint64_t /*retained_cursor*/,
+                                     const EditTransaction& /*replacement*/, std::string* /*error*/)
+      -> bool {
+    return true;
   }
 
   /// Async adapters own their worker and invoke the callback after the typed

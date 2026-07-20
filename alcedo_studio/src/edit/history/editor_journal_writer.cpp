@@ -4,8 +4,6 @@
 
 #include "edit/history/editor_journal_writer.hpp"
 
-#include "edit/history/editor_journal_recovery.hpp"
-
 #include <algorithm>
 #include <chrono>
 #include <fstream>
@@ -13,12 +11,15 @@
 #include <stdexcept>
 #include <utility>
 
+#include "edit/history/editor_journal_recovery.hpp"
+
 #ifdef _WIN32
 #include <windows.h>
 #else
-#include <cerrno>
 #include <fcntl.h>
 #include <unistd.h>
+
+#include <cerrno>
 #endif
 
 namespace alcedo {
@@ -28,9 +29,40 @@ auto ErrorText(const char* operation, const std::filesystem::path& path) -> std:
   return std::string(operation) + " editor journal file " + path.string();
 }
 
+auto ReadJournalU32(const std::uint8_t* data) -> std::uint32_t {
+  return static_cast<std::uint32_t>(data[0]) | (static_cast<std::uint32_t>(data[1]) << 8) |
+         (static_cast<std::uint32_t>(data[2]) << 16) | (static_cast<std::uint32_t>(data[3]) << 24);
+}
+
+/// Insert a verbatim copy of the framed record at `record_index` immediately
+/// after itself, producing a same-sequence duplicate that recovery must reject
+/// as a sequence gap. Returns the modified bytes.
+auto DuplicateRecord(const std::vector<std::uint8_t>& bytes, std::size_t record_index)
+    -> std::vector<std::uint8_t> {
+  constexpr std::size_t kHeaderMin = 8;
+  std::size_t           offset     = 0;
+  std::size_t           record_no  = 0;
+  while (offset + kHeaderMin <= bytes.size()) {
+    const auto record_length = ReadJournalU32(bytes.data() + offset + 4);
+    if (record_length < kHeaderMin || offset + record_length > bytes.size()) {
+      break;
+    }
+    if (record_no == record_index) {
+      std::vector<std::uint8_t> out = bytes;
+      out.insert(out.begin() + static_cast<std::ptrdiff_t>(offset + record_length),
+                 bytes.begin() + static_cast<std::ptrdiff_t>(offset),
+                 bytes.begin() + static_cast<std::ptrdiff_t>(offset + record_length));
+      return out;
+    }
+    offset += record_length;
+    ++record_no;
+  }
+  return bytes;
+}
+
 auto IsValidBatchCommit(const std::vector<EditorJournalDecodedRecord>& records,
-                        const EditorJournalDecodedRecord&              record,
-                        std::uint64_t previous_commit) -> bool {
+                        const EditorJournalDecodedRecord& record, std::uint64_t previous_commit)
+    -> bool {
   if (record.record_type != EditorJournalRecordType::JournalBatchCommit ||
       !record.batch_commit.has_value()) {
     return false;
@@ -61,8 +93,7 @@ auto IsValidBatchCommit(const std::vector<EditorJournalDecodedRecord>& records,
 
 }  // namespace
 
-FileEditorJournalFile::FileEditorJournalFile(std::filesystem::path path)
-    : path_(std::move(path)) {
+FileEditorJournalFile::FileEditorJournalFile(std::filesystem::path path) : path_(std::move(path)) {
   if (path_.empty()) {
     throw std::invalid_argument("FileEditorJournalFile requires a path");
   }
@@ -71,10 +102,9 @@ FileEditorJournalFile::FileEditorJournalFile(std::filesystem::path path)
   }
 
 #ifdef _WIN32
-  const HANDLE handle = CreateFileW(
-      path_.wstring().c_str(), GENERIC_READ | GENERIC_WRITE,
-      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_ALWAYS,
-      FILE_ATTRIBUTE_NORMAL, nullptr);
+  const HANDLE handle = CreateFileW(path_.wstring().c_str(), GENERIC_READ | GENERIC_WRITE,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                    OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
   if (handle == INVALID_HANDLE_VALUE) {
     throw std::runtime_error(ErrorText("open", path_));
   }
@@ -107,8 +137,8 @@ FileEditorJournalFile::~FileEditorJournalFile() {
 #endif
 }
 
-auto FileEditorJournalFile::Append(const std::uint8_t* data, std::size_t size,
-                                   std::size_t* written, std::string* error) -> bool {
+auto FileEditorJournalFile::Append(const std::uint8_t* data, std::size_t size, std::size_t* written,
+                                   std::string* error) -> bool {
   if (written == nullptr) {
     if (error) {
       *error = "editor journal append received a null write-count pointer";
@@ -214,6 +244,135 @@ auto FileEditorJournalFile::ReadAll(std::string* error)
   return bytes;
 }
 
+auto FileEditorJournalFile::ReadAllFrom(const std::filesystem::path& path, std::string* error)
+    -> std::optional<std::vector<std::uint8_t>> {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) {
+    if (error) {
+      *error = ErrorText("read", path);
+    }
+    return std::nullopt;
+  }
+  input.seekg(0, std::ios::end);
+  const auto end = input.tellg();
+  if (end < 0) {
+    if (error) {
+      *error = ErrorText("seek", path);
+    }
+    return std::nullopt;
+  }
+  input.seekg(0, std::ios::beg);
+  std::vector<std::uint8_t> bytes(static_cast<std::size_t>(end));
+  if (!bytes.empty()) {
+    input.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+    if (!input) {
+      if (error) {
+        *error = ErrorText("read", path);
+      }
+      return std::nullopt;
+    }
+  }
+  return bytes;
+}
+
+auto FileEditorJournalFile::Truncate(std::size_t byte_count, std::string* error) -> bool {
+#ifdef _WIN32
+  if (handle_ == nullptr) {
+    if (error) {
+      *error = "editor journal file is closed";
+    }
+    return false;
+  }
+  const HANDLE  handle = static_cast<HANDLE>(handle_);
+  LARGE_INTEGER position;
+  position.QuadPart = static_cast<LONGLONG>(byte_count);
+  if (!SetFilePointerEx(handle, position, nullptr, FILE_BEGIN) || !SetEndOfFile(handle)) {
+    if (error) {
+      *error = "editor journal truncate failed";
+    }
+    return false;
+  }
+  // Reposition at the new end so subsequent appends follow the valid prefix.
+  LARGE_INTEGER zero{};
+  if (!SetFilePointerEx(handle, zero, nullptr, FILE_END)) {
+    if (error) {
+      *error = "editor journal seek-after-truncate failed";
+    }
+    return false;
+  }
+  return true;
+#else
+  if (file_descriptor_ < 0) {
+    if (error) {
+      *error = "editor journal file is closed";
+    }
+    return false;
+  }
+  if (::ftruncate(file_descriptor_, static_cast<off_t>(byte_count)) != 0) {
+    if (error) {
+      *error = "editor journal truncate failed";
+    }
+    return false;
+  }
+  // O_APPEND forces writes to the current end regardless of offset.
+  return true;
+#endif
+}
+
+auto FileEditorJournalFile::Reopen(std::string* error) -> bool {
+#ifdef _WIN32
+  if (handle_ != nullptr) {
+    CloseHandle(static_cast<HANDLE>(handle_));
+    handle_ = nullptr;
+  }
+  const HANDLE handle = CreateFileW(path_.wstring().c_str(), GENERIC_READ | GENERIC_WRITE,
+                                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                                    OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (handle == INVALID_HANDLE_VALUE) {
+    if (error) {
+      *error = ErrorText("reopen", path_);
+    }
+    return false;
+  }
+  handle_ = handle;
+  LARGE_INTEGER end{};
+  if (!SetFilePointerEx(handle, end, nullptr, FILE_END)) {
+    CloseHandle(handle);
+    handle_ = nullptr;
+    if (error) {
+      *error = ErrorText("seek", path_);
+    }
+    return false;
+  }
+  return true;
+#else
+  if (file_descriptor_ >= 0) {
+    ::close(file_descriptor_);
+    file_descriptor_ = -1;
+  }
+  file_descriptor_ = ::open(path_.c_str(), O_CREAT | O_RDWR | O_APPEND, 0644);
+  if (file_descriptor_ < 0) {
+    if (error) {
+      *error = ErrorText("reopen", path_);
+    }
+    return false;
+  }
+  return true;
+#endif
+}
+
+auto FileEditorJournalFile::RemovePath(const std::filesystem::path& path, std::string* error)
+    -> bool {
+  std::error_code ec;
+  if (!std::filesystem::exists(path, ec) || std::filesystem::remove(path, ec)) {
+    return true;
+  }
+  if (error) {
+    *error = "failed to remove journal sibling: " + ec.message();
+  }
+  return false;
+}
+
 auto FileEditorJournalFile::CreateExclusive(const std::filesystem::path& path,
                                             const std::uint8_t* data, std::size_t size,
                                             std::string* error) -> bool {
@@ -228,8 +387,8 @@ auto FileEditorJournalFile::CreateExclusive(const std::filesystem::path& path,
     }
   }
 #ifdef _WIN32
-  const HANDLE handle = CreateFileW(
-      path.wstring().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+  const HANDLE handle = CreateFileW(path.wstring().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr);
   if (handle == INVALID_HANDLE_VALUE) {
     if (error) {
       *error = ErrorText("create-exclusive", path);
@@ -295,13 +454,33 @@ auto FileEditorJournalFile::CreateExclusive(const std::filesystem::path& path,
 auto FileEditorJournalFile::AtomicReplace(const std::filesystem::path& source,
                                           const std::filesystem::path& destination,
                                           std::string*                 error) -> bool {
+#ifdef _WIN32
+  // Atomically replace the active journal with the verified compact sibling
+  // without a delete-then-rename gap. ReplaceFileW preserves the destination
+  // on failure and requires it to exist; MoveFileExW with MOVEFILE_REPLACE_EXISTING
+  // handles both the existing and missing-destination cases on the same volume.
+  // A crash or failure in either leaves the previous active journal recoverable.
+  if (ReplaceFileW(destination.wstring().c_str(), source.wstring().c_str(), nullptr,
+                   REPLACEFILE_WRITE_THROUGH, nullptr, nullptr)) {
+    return true;
+  }
+  const DWORD replace_error = GetLastError();
+  if (replace_error == ERROR_FILE_NOT_FOUND) {
+    // First compaction: no active journal to replace. Move the compact file
+    // into place atomically on the same volume.
+    if (MoveFileExW(source.wstring().c_str(), destination.wstring().c_str(),
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+      return true;
+    }
+  }
+  if (error) {
+    *error = "atomic journal replace failed (Win32 error " + std::to_string(GetLastError()) + ")";
+  }
+  return false;
+#else
+  // POSIX rename is atomic and replaces an existing destination.
   std::error_code ec;
   std::filesystem::rename(source, destination, ec);
-  if (ec) {
-    // Windows cannot rename over an existing file; remove destination first.
-    std::filesystem::remove(destination, ec);
-    std::filesystem::rename(source, destination, ec);
-  }
   if (ec) {
     if (error) {
       *error = "atomic journal replace failed: " + ec.message();
@@ -309,27 +488,17 @@ auto FileEditorJournalFile::AtomicReplace(const std::filesystem::path& source,
     return false;
   }
   return true;
+#endif
 }
 
 auto FileEditorJournalFile::FlushDirectory(const std::filesystem::path& directory,
                                            std::string* error) -> bool {
 #ifdef _WIN32
-  const HANDLE handle = CreateFileW(
-      directory.wstring().c_str(), GENERIC_READ,
-      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
-      FILE_FLAG_BACKUP_SEMANTICS, nullptr);
-  if (handle == INVALID_HANDLE_VALUE) {
-    if (error) {
-      *error = ErrorText("open directory", directory);
-    }
-    return false;
-  }
-  const bool ok = FlushFileBuffers(handle) != 0;
-  CloseHandle(handle);
-  if (!ok && error) {
-    *error = ErrorText("flush directory", directory);
-  }
-  return ok;
+  // ReplaceFileW / MoveFileExW use their write-through flags in AtomicReplace.
+  // FlushFileBuffers does not support directory handles reliably on Windows.
+  (void)directory;
+  (void)error;
+  return true;
 #else
   const int fd = ::open(directory.c_str(), O_RDONLY | O_DIRECTORY);
   if (fd < 0) {
@@ -381,12 +550,48 @@ auto InjectedEditorJournalFile::Flush(std::string* error) -> bool {
 auto InjectedEditorJournalFile::ReadAll(std::string* /*error*/)
     -> std::optional<std::vector<std::uint8_t>> {
   auto copy = bytes_;
+  if (duplicate_record_on_read && !copy.empty()) {
+    copy = DuplicateRecord(copy, duplicate_record_index);
+  }
   if (corrupt_on_read && !copy.empty()) {
     const auto offset =
         corrupt_on_read_offset < copy.size() ? corrupt_on_read_offset : (copy.size() - 1);
     copy[offset] ^= 0xFFu;
   }
   return copy;
+}
+
+auto InjectedEditorJournalFile::ReadAllFrom(const std::filesystem::path& path, std::string* error)
+    -> std::optional<std::vector<std::uint8_t>> {
+  const auto it = compact_files_.find(path.string());
+  if (it == compact_files_.end()) {
+    if (error) {
+      *error = "compact journal not found";
+    }
+    return std::nullopt;
+  }
+  return it->second;
+}
+
+auto InjectedEditorJournalFile::Truncate(std::size_t byte_count, std::string* /*error*/) -> bool {
+  ++truncate_calls;
+  if (byte_count > bytes_.size()) {
+    bytes_.resize(byte_count, 0);
+  } else {
+    bytes_.resize(byte_count);
+  }
+  return true;
+}
+
+auto InjectedEditorJournalFile::Reopen(std::string* error) -> bool {
+  ++reopen_calls;
+  if (fail_reopen) {
+    if (error) {
+      *error = "injected reopen failure";
+    }
+    return false;
+  }
+  return true;
 }
 
 auto InjectedEditorJournalFile::CreateExclusive(const std::filesystem::path& path,
@@ -410,7 +615,23 @@ auto InjectedEditorJournalFile::CreateExclusive(const std::filesystem::path& pat
   if (data != nullptr && size > 0) {
     body.assign(data, data + size);
   }
+  // Simulate a damaged or short compact-file write so the post-write re-read
+  // verification fails and compaction refuses to replace the active journal.
+  if (short_compact_write_bytes != 0 && body.size() > short_compact_write_bytes) {
+    body.resize(short_compact_write_bytes);
+  }
+  if (corrupt_compact_on_write && !body.empty()) {
+    const auto offset =
+        corrupt_compact_offset < body.size() ? corrupt_compact_offset : (body.size() - 1);
+    body[offset] ^= 0xA5u;
+  }
   compact_files_[key] = std::move(body);
+  return true;
+}
+
+auto InjectedEditorJournalFile::RemovePath(const std::filesystem::path& path,
+                                           std::string* /*error*/) -> bool {
+  compact_files_.erase(path.string());
   return true;
 }
 
@@ -462,13 +683,32 @@ EditorJournalWriter::EditorJournalWriter(std::shared_ptr<IEditorJournalFile> fil
     if (!error.empty()) {
       throw std::runtime_error(error);
     }
-  } else if (!journal_->LoadBytes(*bytes, &error)) {
-    throw std::runtime_error(error.empty() ? "failed to load editor journal" : error);
+  } else {
+    bool truncated = false;
+    if (!journal_->LoadBytes(*bytes, &error, &truncated)) {
+      // No valid prefix: preserve the original bytes and fail the open. Silently
+      // replacing a fully corrupt journal with an empty one would turn a real
+      // recovery failure into apparent success and could overwrite DuckDB state.
+      EmitLoadDiagnostic(file_->path(), *bytes,
+                         error.empty() ? "corrupt journal with no valid prefix" : error);
+      throw std::runtime_error(error.empty() ? "corrupt journal with no valid prefix" : error);
+    } else if (truncated) {
+      // A valid prefix exists; the damaged tail was truncated in memory.
+      // Preserve the original bytes for diagnosis and truncate the on-disk
+      // file to the valid prefix so subsequent appends follow it.
+      EmitLoadDiagnostic(file_->path(), *bytes, error);
+      std::string truncate_error;
+      if (!file_->Truncate(journal_->size(), &truncate_error)) {
+        throw std::runtime_error(truncate_error.empty()
+                                     ? "failed to truncate corrupt editor journal tail"
+                                     : truncate_error);
+      }
+    }
   }
   InitializeStateFromJournal();
 }
 
-EditorJournalWriter::EditorJournalWriter(EditorTransactionJournal* journal,
+EditorJournalWriter::EditorJournalWriter(EditorTransactionJournal*           journal,
                                          std::shared_ptr<IEditorJournalFile> file)
     : file_(std::move(file)), journal_(journal != nullptr ? journal : &owned_journal_) {
   if (!file_) {
@@ -477,17 +717,34 @@ EditorJournalWriter::EditorJournalWriter(EditorTransactionJournal* journal,
   InitializeStateFromJournal();
 }
 
-EditorJournalWriter::EditorJournalWriter(EditorJournalIdentity identity,
-                                         std::filesystem::path path)
+EditorJournalWriter::EditorJournalWriter(EditorJournalIdentity identity, std::filesystem::path path)
     : EditorJournalWriter(std::make_shared<FileEditorJournalFile>(std::move(path))) {
-  identity_ = identity;
+  if (identity_.element_id == 0) {
+    identity_ = identity;
+  } else {
+    if (identity_.element_id != identity.element_id ||
+        (identity.version_id != Hash128{} && identity_.version_id != identity.version_id)) {
+      throw std::runtime_error("editor journal identity does not match the existing file");
+    }
+    identity_.session_generation = identity.session_generation;
+  }
 }
 
 auto EditorJournalWriter::state() const -> EditorJournalWriterState {
   std::scoped_lock lock(mutex_);
-  auto state = state_;
+  auto             state     = state_;
   state.next_record_sequence = journal_->next_sequence();
   return state;
+}
+
+auto EditorJournalWriter::identity() const -> EditorJournalIdentity {
+  std::scoped_lock lock(mutex_);
+  return identity_;
+}
+
+auto EditorJournalWriter::path() const -> std::filesystem::path {
+  std::scoped_lock lock(mutex_);
+  return file_ ? file_->path() : std::filesystem::path{};
 }
 
 auto EditorJournalWriter::has_pending_batch() const -> bool {
@@ -502,6 +759,14 @@ auto EditorJournalWriter::last_error() const -> std::string {
 
 auto EditorJournalWriter::SetIdentity(EditorJournalIdentity identity) -> bool {
   std::scoped_lock lock(mutex_);
+  if (identity_.element_id == identity.element_id && identity_.version_id == identity.version_id &&
+      identity_.session_generation == identity.session_generation &&
+      identity_.journal_generation == identity.journal_generation) {
+    // Re-setting the same identity is a no-op and safe with a pending batch.
+    // This lets a caller RecordEdit then CommitJournal through the same writer
+    // without WriterFor rejecting the second lookup.
+    return true;
+  }
   if (pending_.active || pending_.first_sequence != 0) {
     SetError("cannot change editor journal identity with a pending batch");
     return false;
@@ -540,8 +805,8 @@ auto EditorJournalWriter::CanQueue(const EditorJournalIdentity& identity) -> boo
 }
 
 auto EditorJournalWriter::QueueRecord(EditorJournalIdentity identity, std::uint64_t sequence,
-                                      bool edit_history_operation,
-                                      std::size_t start_offset) -> std::uint64_t {
+                                      bool edit_history_operation, std::size_t start_offset)
+    -> std::uint64_t {
   if (pending_.first_sequence == 0) {
     pending_.start_offset = start_offset;
     pending_.first_sequence = sequence;
@@ -566,8 +831,8 @@ auto EditorJournalWriter::AppendEdit(const EditorJournalIdentity& identity,
 }
 
 auto EditorJournalWriter::AppendCursorMove(const EditorJournalIdentity& identity,
-                                           std::uint64_t from_cursor,
-                                           std::uint64_t to_cursor) -> std::uint64_t {
+                                           std::uint64_t from_cursor, std::uint64_t to_cursor)
+    -> std::uint64_t {
   std::scoped_lock lock(mutex_);
   if (!CanQueue(identity)) {
     return 0;
@@ -577,24 +842,27 @@ auto EditorJournalWriter::AppendCursorMove(const EditorJournalIdentity& identity
   return QueueRecord(identity, sequence, true, start_offset);
 }
 
-auto EditorJournalWriter::AppendRewriteTimeline(
-    const EditorJournalIdentity& identity, const Hash128& expected_timeline_hash,
-    const Hash128& discarded_tail_hash, std::uint64_t retained_cursor,
-    const EditTransaction& replacement) -> std::uint64_t {
+auto EditorJournalWriter::AppendRewriteTimeline(const EditorJournalIdentity& identity,
+                                                const Hash128&               expected_timeline_hash,
+                                                const Hash128&               discarded_tail_hash,
+                                                std::uint64_t                retained_cursor,
+                                                const EditTransaction&       replacement)
+    -> std::uint64_t {
   std::scoped_lock lock(mutex_);
   if (!CanQueue(identity)) {
     return 0;
   }
   const auto start_offset = journal_->size();
-  const auto sequence = journal_->AppendRewriteTimeline(identity, expected_timeline_hash,
-                                                        discarded_tail_hash, retained_cursor,
-                                                        replacement);
+  const auto sequence     = journal_->AppendRewriteTimeline(
+      identity, expected_timeline_hash, discarded_tail_hash, retained_cursor, replacement);
   return QueueRecord(identity, sequence, true, start_offset);
 }
 
-auto EditorJournalWriter::AppendMaterializedHead(
-    const EditorJournalIdentity& identity, const Hash128& timeline_hash,
-    std::uint64_t applied_cursor, const nlohmann::json& head_pipeline_params) -> std::uint64_t {
+auto EditorJournalWriter::AppendMaterializedHead(const EditorJournalIdentity& identity,
+                                                 const Hash128&               timeline_hash,
+                                                 std::uint64_t                applied_cursor,
+                                                 const nlohmann::json&        head_pipeline_params)
+    -> std::uint64_t {
   std::scoped_lock lock(mutex_);
   if (!CanQueue(identity)) {
     return 0;
@@ -606,15 +874,15 @@ auto EditorJournalWriter::AppendMaterializedHead(
 }
 
 auto EditorJournalWriter::AppendRecoveryMarker(const EditorJournalIdentity& identity,
-                                               std::uint64_t last_valid_sequence,
-                                               std::string note) -> std::uint64_t {
+                                               std::uint64_t last_valid_sequence, std::string note)
+    -> std::uint64_t {
   std::scoped_lock lock(mutex_);
   if (!CanQueue(identity)) {
     return 0;
   }
   const auto start_offset = journal_->size();
-  const auto sequence = journal_->AppendRecoveryMarker(identity, last_valid_sequence,
-                                                       std::move(note));
+  const auto sequence =
+      journal_->AppendRecoveryMarker(identity, last_valid_sequence, std::move(note));
   return QueueRecord(identity, sequence, false, start_offset);
 }
 
@@ -645,8 +913,8 @@ auto EditorJournalWriter::PreparePendingBatch() -> bool {
   const auto batch_sequence = journal_->AppendJournalBatchCommit(identity_, payload);
   pending_.payload                 = payload;
   pending_.batch_commit_sequence   = batch_sequence;
-  pending_.bytes.assign(journal_->bytes().begin() +
-                            static_cast<std::ptrdiff_t>(pending_.start_offset),
+  pending_.bytes.assign(
+      journal_->bytes().begin() + static_cast<std::ptrdiff_t>(pending_.start_offset),
                         journal_->bytes().end());
   pending_.write_offset = 0;
   pending_.active       = true;
@@ -781,11 +1049,26 @@ void EditorJournalWriter::InitializeStateFromJournal() {
 
 void EditorJournalWriter::SetError(std::string error) { last_error_ = std::move(error); }
 
-auto EditorJournalWriter::CompactToMaterializedHead(
-    const EditorJournalIdentity& identity, const Hash128& timeline_hash,
-    std::uint64_t applied_cursor, const nlohmann::json& head_pipeline_params,
-    const std::filesystem::path& active_path, const std::filesystem::path& compact_path,
-    std::string* error) -> bool {
+void EditorJournalWriter::EmitLoadDiagnostic(const std::filesystem::path&     journal_path,
+                                             const std::vector<std::uint8_t>& original_bytes,
+                                             const std::string&               reason) {
+  if (journal_path.empty()) {
+    // In-memory test doubles have no on-disk path to preserve a bundle next to.
+    return;
+  }
+  std::string diag_error;
+  (void)WriteEditorJournalDiagnosticBundle(
+      journal_path, original_bytes, reason.empty() ? "editor journal recovery failure" : reason,
+      &diag_error);
+}
+
+auto EditorJournalWriter::CompactToMaterializedHead(const EditorJournalIdentity& identity,
+                                                    const Hash128&               timeline_hash,
+                                                    std::uint64_t                applied_cursor,
+                                                    const nlohmann::json& head_pipeline_params,
+                                                    const std::filesystem::path& active_path,
+                                                    const std::filesystem::path& compact_path,
+                                                    std::string*                 error) -> bool {
   std::scoped_lock lock(mutex_);
   if (pending_.active || pending_.first_sequence != 0) {
     SetError("cannot compact editor journal with a pending batch");
@@ -801,12 +1084,20 @@ auto EditorJournalWriter::CompactToMaterializedHead(
     }
     return false;
   }
+  if (identity.element_id != identity_.element_id || identity.version_id != identity_.version_id ||
+      identity.journal_generation != identity_.journal_generation + 1) {
+    SetError("compaction requires the next journal generation for the same image and version");
+    if (error) {
+      *error = last_error_;
+    }
+    return false;
+  }
 
   // Compaction replaces the append-only growth with a verified checkpoint. DuckDB
   // recovery metadata remains authoritative for the transaction chain; the compact
   // journal only records that physical omission of prior rewrite tails completed.
   EditorTransactionJournal compact_journal;
-  const auto checkpoint_seq = compact_journal.AppendCompactionCheckpoint(
+  const auto               checkpoint_seq = compact_journal.AppendCompactionCheckpoint(
       identity, state_.durable_operation_sequence,
       "compact-to-materialized-head timeline=" + timeline_hash.ToString() +
           " cursor=" + std::to_string(applied_cursor) +
@@ -816,7 +1107,7 @@ auto EditorJournalWriter::CompactToMaterializedHead(
   payload.first_covered_sequence         = 1;
   payload.last_covered_sequence          = checkpoint_seq;
   payload.last_operation_sequence        = 0;
-  payload.record_chain_hash = ComputeEditorJournalRecordChainHash(
+  payload.record_chain_hash              = ComputeEditorJournalRecordChainHash(
       compact_journal.DecodeRecordChain().records, checkpoint_seq);
   const auto commit_seq = compact_journal.AppendJournalBatchCommit(identity, payload);
   (void)commit_seq;
@@ -834,7 +1125,7 @@ auto EditorJournalWriter::CompactToMaterializedHead(
     return false;
   }
   JournalTimelineSimulator verify(identity);
-  const auto replay = verify.ReplayCommittedRecordChain(compact_journal);
+  const auto               replay = verify.ReplayCommittedRecordChain(compact_journal);
   if (replay.status != EditorJournalApplyStatus::Applied) {
     SetError(replay.message.empty() ? "compact journal failed verification" : replay.message);
     if (error) {
@@ -852,17 +1143,32 @@ auto EditorJournalWriter::CompactToMaterializedHead(
     }
     return false;
   }
-  if (!file_->AtomicReplace(compact_path, active_path, &io_error)) {
-    SetError(io_error.empty() ? "failed to replace active journal" : io_error);
+  // Verify the persisted compact file by reading it back after the flush. A
+  // short or damaged write that the in-memory verification could not see must
+  // not replace the active journal. The active journal is untouched on failure.
+  const auto reread = file_->ReadAllFrom(compact_path, &io_error);
+  if (!reread.has_value() || *reread != compact_journal.bytes()) {
+    SetError(io_error.empty() ? "compact journal verify-after-write failed" : io_error);
+    (void)file_->RemovePath(compact_path, &io_error);
     if (error) {
       *error = last_error_;
     }
     return false;
   }
-  const auto directory =
-      active_path.has_parent_path() ? active_path.parent_path() : std::filesystem::path(".");
-  if (!file_->FlushDirectory(directory, &io_error)) {
-    SetError(io_error.empty() ? "failed to flush journal directory" : io_error);
+  if (!file_->AtomicReplace(compact_path, active_path, &io_error)) {
+    SetError(io_error.empty() ? "failed to replace active journal" : io_error);
+    (void)file_->RemovePath(compact_path, &io_error);
+    if (error) {
+      *error = last_error_;
+    }
+    return false;
+  }
+  // The atomic replace moved the compact data into the active path; the original
+  // handle now refers to the unlinked original. Reopen so subsequent appends
+  // follow the new compact data, then sync the in-memory model before any later
+  // durability step can report failure.
+  if (!file_->Reopen(&io_error)) {
+    SetError(io_error.empty() ? "failed to reopen editor journal after compaction" : io_error);
     if (error) {
       *error = last_error_;
     }
@@ -878,6 +1184,16 @@ auto EditorJournalWriter::CompactToMaterializedHead(
   }
   identity_ = identity;
   InitializeStateFromJournal();
+
+  const auto directory =
+      active_path.has_parent_path() ? active_path.parent_path() : std::filesystem::path(".");
+  if (!file_->FlushDirectory(directory, &io_error)) {
+    SetError(io_error.empty() ? "failed to flush journal directory" : io_error);
+    if (error) {
+      *error = last_error_;
+    }
+    return false;
+  }
   last_error_.clear();
   return true;
 }

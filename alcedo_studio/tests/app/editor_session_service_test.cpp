@@ -6,8 +6,8 @@
 
 #include <gtest/gtest.h>
 
-#include <memory>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -116,11 +116,20 @@ class FakeJournalPort final : public IEditorJournalPort {
   bool fail_finalize = false;
   bool fail_barrier  = false;
   bool fail_discard  = false;
+  bool                        fail_recover         = false;
   bool async_commit  = false;
   bool async_materialize = false;
   int  finalize_count = 0;
   int  barrier_count = 0;
   int  discard_count = 0;
+  int                         recover_count        = 0;
+  int                         edit_record_count    = 0;
+  int                         cursor_record_count  = 0;
+  int                         rewrite_record_count = 0;
+  sl_element_id_t             last_recover_element = 0;
+  std::uint64_t               last_recover_session = 0;
+  std::uint64_t               last_cursor_from     = 0;
+  std::uint64_t               last_cursor_to       = 0;
   EditorJournalCommitCallback pending_commit;
   EditorMaterializeCallback   pending_materialize;
 
@@ -135,6 +144,20 @@ class FakeJournalPort final : public IEditorJournalPort {
     return true;
   }
 
+  auto RecoverAndMaterialize(sl_element_id_t element_id, std::uint64_t session_generation,
+                             std::string* error) -> EditorMaterializeOutcome override {
+    ++recover_count;
+    last_recover_element = element_id;
+    last_recover_session = session_generation;
+    if (fail_recover) {
+      if (error) {
+        *error = "journal recovery failed";
+      }
+      return {false, false, 0, "journal recovery failed"};
+    }
+    return {true, true, 0, {}};
+  }
+
   auto AppendBarrier(sl_element_id_t, std::uint64_t, std::string* error) -> bool override {
     ++barrier_count;
     if (fail_barrier) {
@@ -143,6 +166,26 @@ class FakeJournalPort final : public IEditorJournalPort {
       }
       return false;
     }
+    return true;
+  }
+
+  auto RecordEdit(sl_element_id_t, std::uint64_t, const EditTransaction&, std::string*)
+      -> bool override {
+    ++edit_record_count;
+    return true;
+  }
+
+  auto RecordCursorMove(sl_element_id_t, std::uint64_t, std::uint64_t from_cursor,
+                        std::uint64_t to_cursor, std::string*) -> bool override {
+    ++cursor_record_count;
+    last_cursor_from = from_cursor;
+    last_cursor_to   = to_cursor;
+    return true;
+  }
+
+  auto RecordRewriteTimeline(sl_element_id_t, std::uint64_t, const Hash128&, const Hash128&,
+                             std::uint64_t, const EditTransaction&, std::string*) -> bool override {
+    ++rewrite_record_count;
     return true;
   }
 
@@ -176,8 +219,8 @@ class FakeJournalPort final : public IEditorJournalPort {
   void CompleteMaterialization(bool materialized, std::string error = {}) {
     ASSERT_TRUE(static_cast<bool>(pending_materialize));
     auto callback = std::move(pending_materialize);
-    callback(EditorMaterializeOutcome{true, materialized, materialized ? 1u : 0u,
-                                      std::move(error)});
+    callback(
+        EditorMaterializeOutcome{true, materialized, materialized ? 1u : 0u, std::move(error)});
   }
 
   auto DiscardUnflushed(sl_element_id_t, std::string* error) -> bool override {
@@ -331,6 +374,44 @@ TEST_F(EditorSessionServiceTest, OpenAcquiresGuardsRoutesInitialRenderAndLeavesL
   EXPECT_EQ(render_->submitted.front().reason, EditorRenderReason::InitialFrame);
   EXPECT_EQ(render_->submitted.front().quality, EditorRenderQuality::Interactive);
   EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
+}
+
+TEST_F(EditorSessionServiceTest, OpenRunsJournalRecoveryBeforeFirstFrame) {
+  // Phase 5H-Fix: opening an image runs RecoverAndMaterialize through the
+  // journal port so the editor starts from the durable DuckDB state.
+  const auto result = service_->Open(100, 200);
+  EXPECT_EQ(journal_->recover_count, 1);
+  EXPECT_EQ(journal_->last_recover_element, static_cast<sl_element_id_t>(100));
+  EXPECT_EQ(journal_->last_recover_session, service_->identity().session_generation);
+  EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
+  EXPECT_EQ(service_->state(), EditorSessionState::Loading);
+}
+
+TEST_F(EditorSessionServiceTest, FailedJournalRecoveryTransitionsToFailedWithoutGuards) {
+  journal_->fail_recover = true;
+  const auto result      = service_->Open(100, 200);
+  EXPECT_EQ(journal_->recover_count, 1);
+  EXPECT_EQ(result.kind, EditorSessionResultKind::Failed);
+  EXPECT_EQ(service_->state(), EditorSessionState::Failed);
+  EXPECT_FALSE(service_->has_image());
+  // Recovery runs before service guards are acquired, so no stale pre-recovery
+  // history or pipeline object can enter the service caches.
+  EXPECT_TRUE(render_->submitted.empty());
+  EXPECT_EQ(pipeline_->acquire_count, 0);
+  EXPECT_EQ(pipeline_->release_count, 0);
+}
+
+TEST_F(EditorSessionServiceTest, FinalizedHistoryCursorMoveReachesTheJournalPort) {
+  service_->Open(100, 200);
+  PresentFirstFrame(*service_);
+  ASSERT_EQ(service_->state(), EditorSessionState::Interactive);
+
+  std::string error;
+  EXPECT_TRUE(service_->RecordHistoryCursorMove(2, 1, &error)) << error;
+
+  EXPECT_EQ(journal_->cursor_record_count, 1);
+  EXPECT_EQ(journal_->last_cursor_from, 2u);
+  EXPECT_EQ(journal_->last_cursor_to, 1u);
 }
 
 TEST_F(EditorSessionServiceTest, InitialRenderWaitsForARealPresentationTarget) {
@@ -1031,8 +1112,8 @@ TEST_F(EditorSessionServiceTest, ViewChangeBurstKeepsNewestDetailAndCancelsPrior
 
   std::uint64_t last_request_id = 0;
   for (int i = 0; i < 6; ++i) {
-    const auto result = runtime->service->RequestViewChange(EditorRenderReason::DetailRefresh,
-                                                            MakeRegion(i));
+    const auto result =
+        runtime->service->RequestViewChange(EditorRenderReason::DetailRefresh, MakeRegion(i));
     ASSERT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
     last_request_id = result.render_request_id;
   }

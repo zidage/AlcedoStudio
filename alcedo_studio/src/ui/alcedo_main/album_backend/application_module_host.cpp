@@ -7,8 +7,8 @@
 #include <QCoreApplication>
 #include <QDeadlineTimer>
 #include <QEventLoop>
-#include <cstdint>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 
@@ -105,6 +105,46 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
         return nullptr;
       }
       return project_->handler().project()->GetImagePoolService();
+    };
+    production_services.storage_service = [this]() -> std::shared_ptr<alcedo::StorageService> {
+      if (!project_ || !project_->handler().project()) {
+        return nullptr;
+      }
+      return project_->handler().project()->GetStorageService();
+    };
+    production_services.load_history =
+        [this](sl_element_id_t element_id) -> std::shared_ptr<alcedo::EditHistory> {
+      if (!project_ || !project_->handler().project()) {
+        return nullptr;
+      }
+      auto storage = project_->handler().project()->GetStorageService();
+      if (!storage) {
+        return nullptr;
+      }
+      try {
+        auto history = storage->GetElementController().GetEditHistoryByFileId(element_id);
+        // A fresh image has no durable history row yet; recovery layers on top
+        // of a fresh EditHistory so a crash before the first materialize can still
+        // REDO its journal-committed operations.
+        return history ? history : std::make_shared<alcedo::EditHistory>(element_id);
+      } catch (...) {
+        return nullptr;
+      }
+    };
+    production_services.load_pipeline =
+        [this](sl_element_id_t element_id) -> std::shared_ptr<alcedo::CPUPipelineExecutor> {
+      if (!project_ || !project_->handler().project()) {
+        return nullptr;
+      }
+      auto storage = project_->handler().project()->GetStorageService();
+      if (!storage) {
+        return nullptr;
+      }
+      try {
+        return storage->GetElementController().GetPipelineByElementId(element_id);
+      } catch (...) {
+        return nullptr;
+      }
     };
     production_services.journal_path = [this](sl_element_id_t element_id) {
       if (!project_) {

@@ -155,8 +155,8 @@ struct EditorJournalApplyResult {
 [[nodiscard]] auto DecodeEditorJournalMarkerPayload(const std::vector<std::uint8_t>& bytes,
                                                     EditorJournalMarkerPayload* out,
                                                     std::string* error) -> bool;
-[[nodiscard]] auto DecodeEditorJournalBatchCommitPayload(
-    const std::vector<std::uint8_t>& bytes, EditorJournalBatchCommitPayload* out,
+[[nodiscard]] auto DecodeEditorJournalBatchCommitPayload(const std::vector<std::uint8_t>& bytes,
+                                                         EditorJournalBatchCommitPayload* out,
     std::string* error) -> bool;
 
 /// Frames one complete journal record. Returns empty on encode failure.
@@ -182,8 +182,7 @@ struct EditorJournalDecodeRecordChainResult {
 /// The sequence is mixed into the chain so reordering records cannot preserve
 /// the same value.
 [[nodiscard]] auto ComputeEditorJournalRecordChainHash(
-    const std::vector<EditorJournalDecodedRecord>& records,
-    std::uint64_t                                 last_sequence) -> Hash128;
+    const std::vector<EditorJournalDecodedRecord>& records, std::uint64_t last_sequence) -> Hash128;
 
 [[nodiscard]] auto IsEditorJournalEditHistoryRecord(EditorJournalRecordType type) -> bool;
 
@@ -205,7 +204,16 @@ class EditorTransactionJournal final {
   /// Replace the in-memory log with bytes read from an existing journal file.
   /// Unlike AppendRaw, this also advances the next sequence after the valid
   /// decoded prefix and is therefore intended for journal recovery/bootstrap.
-  auto LoadBytes(const std::vector<std::uint8_t>& data, std::string* error = nullptr) -> bool;
+  ///
+  /// Recovery tolerates a partial or damaged tail: when the byte stream has a
+  /// valid record prefix followed by a corrupt/incomplete record, the damaged
+  /// tail is truncated to `valid_chain_byte_count` and the function returns
+  /// true so the caller can recover from the last complete batch. `error`
+  /// carries the decode reason and `truncated_corrupt_tail` is set so the caller
+  /// can emit a diagnostic bundle and truncate the on-disk file to match. A
+  /// fully corrupt stream (no valid prefix) returns false.
+  auto               LoadBytes(const std::vector<std::uint8_t>& data, std::string* error = nullptr,
+                               bool* truncated_corrupt_tail = nullptr) -> bool;
 
   /// Remove an uncommitted in-memory tail without changing the valid prefix.
   auto Truncate(std::size_t byte_count, std::string* error = nullptr) -> bool;
@@ -219,16 +227,15 @@ class EditorTransactionJournal final {
                              const Hash128& discarded_tail_hash, std::uint64_t retained_cursor,
                              const EditTransaction& replacement) -> std::uint64_t;
   auto AppendMaterializedHead(const EditorJournalIdentity& identity, const Hash128& timeline_hash,
-                              std::uint64_t applied_cursor, const nlohmann::json& head_pipeline_params)
-      -> std::uint64_t;
-  auto AppendRecoveryMarker(const EditorJournalIdentity& identity, std::uint64_t last_valid_sequence,
-                            std::string note) -> std::uint64_t;
+                              std::uint64_t         applied_cursor,
+                              const nlohmann::json& head_pipeline_params) -> std::uint64_t;
+  auto AppendRecoveryMarker(const EditorJournalIdentity& identity,
+                            std::uint64_t last_valid_sequence, std::string note) -> std::uint64_t;
   auto AppendCompactionCheckpoint(const EditorJournalIdentity& identity,
                                   std::uint64_t last_valid_sequence, std::string note)
       -> std::uint64_t;
   auto AppendJournalBatchCommit(const EditorJournalIdentity& identity,
-                                const EditorJournalBatchCommitPayload& payload)
-      -> std::uint64_t;
+                                              const EditorJournalBatchCommitPayload& payload) -> std::uint64_t;
 
   [[nodiscard]] auto DecodeRecordChain() const -> EditorJournalDecodeRecordChainResult;
 

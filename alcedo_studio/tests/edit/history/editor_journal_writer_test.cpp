@@ -2,17 +2,21 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include "edit/history/editor_journal_writer.hpp"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "edit/history/edit_transaction.hpp"
-#include "edit/history/editor_journal_writer.hpp"
 #include "edit/history/editor_transaction_journal.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "type/hash_type.hpp"
@@ -41,8 +45,8 @@ struct MemoryJournalFile final : IEditorJournalFile {
   int                       flush_calls  = 0;
   bool                      fail_flush   = false;
 
-  auto Append(const std::uint8_t* data, std::size_t size, std::size_t* written,
-              std::string* error) -> bool override {
+  auto Append(const std::uint8_t* data, std::size_t size, std::size_t* written, std::string* error)
+      -> bool override {
     ++append_calls;
     if (written == nullptr) {
       if (error) {
@@ -207,6 +211,57 @@ TEST_F(EditorJournalWriterTest, DiscardQueuedTailRestoresTheLastCommittedPrefix)
   EXPECT_EQ(journal_.size(), committed_size);
   EXPECT_EQ(journal_.next_sequence(), 3u);
   EXPECT_EQ(journal_.DecodeRecordChain().records.size(), 2u);
+}
+
+// Phase 5H-Fix #6: journal replacement must be atomic on Windows so a crash or
+// rename failure cannot leave a gap with no active journal. ReplaceFileW /
+// MoveFileExW(MOVEFILE_REPLACE_EXISTING) replace the destination without a
+// delete-then-rename pair, and preserve the destination on failure.
+TEST(EditorJournalFileAtomicReplaceTest, AtomicallyReplacesExistingDestination) {
+  const auto      dir = std::filesystem::temp_directory_path() / "alcedo_journal_atomic_replace";
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
+  std::filesystem::create_directories(dir, ec);
+  const auto active  = dir / "active.wal";
+  const auto compact = dir / "active.wal.compact";
+  {
+    std::ofstream out(active, std::ios::binary | std::ios::trunc);
+    out << "active-bytes";
+  }
+  {
+    std::ofstream out(compact, std::ios::binary | std::ios::trunc);
+    out << "compact-bytes";
+  }
+  FileEditorJournalFile file(active);
+  std::string           error;
+  EXPECT_TRUE(file.AtomicReplace(compact, active, &error)) << error;
+  std::ifstream in(active, std::ios::binary);
+  std::string   content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  EXPECT_EQ(content, "compact-bytes");
+  EXPECT_FALSE(std::filesystem::exists(compact));
+  std::filesystem::remove_all(dir, ec);
+}
+
+TEST(EditorJournalFileAtomicReplaceTest, PreservesDestinationWhenSourceMissing) {
+  const auto dir = std::filesystem::temp_directory_path() / "alcedo_journal_atomic_replace_fail";
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
+  std::filesystem::create_directories(dir, ec);
+  const auto active  = dir / "active.wal";
+  const auto compact = dir / "missing.wal.compact";  // does not exist
+  {
+    std::ofstream out(active, std::ios::binary | std::ios::trunc);
+    out << "active-bytes";
+  }
+  FileEditorJournalFile file(active);
+  std::string           error;
+  EXPECT_FALSE(file.AtomicReplace(compact, active, &error));
+  EXPECT_FALSE(error.empty());
+  // The destination is preserved — no delete-then-rename gap.
+  std::ifstream in(active, std::ios::binary);
+  std::string   content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  EXPECT_EQ(content, "active-bytes");
+  std::filesystem::remove_all(dir, ec);
 }
 
 }  // namespace alcedo

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -70,6 +71,7 @@ class ElementController {
   EditHistoryService history_service_;
   PipelineService    pipeline_service_;
   EditHistoryService edit_history_service_;
+  std::function<void()> materialize_pre_commit_hook_{};
 
   // Insert the element row plus its child rows (file binding / folder content /
   // edit history). Does not touch sync_flag_ and does not manage a transaction, so
@@ -153,8 +155,15 @@ class ElementController {
                               const EditorRecoveryMetadata& recovery_metadata,
                               std::string* error = nullptr) -> bool;
 
-  auto GetEditorRecoveryMetadata(sl_element_id_t file_id)
-      -> std::optional<EditorRecoveryMetadata>;
+  auto GetEditorRecoveryMetadata(sl_element_id_t file_id) -> std::optional<EditorRecoveryMetadata>;
+
+  /// Test-only seam: a hook invoked after the history, pipeline, and recovery
+  /// metadata writes inside `MaterializeEditorState` but before the transaction
+  /// commits. Throwing from the hook forces a rollback so tests can prove all
+  /// three writes roll back together. Production leaves it unset.
+  void SetMaterializePreCommitHook(std::function<void()> hook) {
+    materialize_pre_commit_hook_ = std::move(hook);
+  }
 
   auto GetEditHistoryService() -> std::shared_ptr<EditHistoryService>;
 

@@ -118,7 +118,8 @@ auto JoinIds(std::span<const sl_element_id_t> ids) -> std::string {
   return out;
 }
 
-void DeleteSemanticAndAiRowsForFiles(duckdb_connection conn, std::span<const sl_element_id_t> file_ids) {
+void DeleteSemanticAndAiRowsForFiles(duckdb_connection                conn,
+                                     std::span<const sl_element_id_t> file_ids) {
   if (file_ids.empty()) {
     return;
   }
@@ -624,10 +625,10 @@ auto FromRecoveryMapperParams(EditorRecoveryMetadataMapperParams&& params)
 }
 }  // namespace
 
-auto ElementController::MaterializeEditorState(
-    const std::shared_ptr<EditHistory>& history,
+auto ElementController::MaterializeEditorState(const std::shared_ptr<EditHistory>&         history,
     const std::shared_ptr<CPUPipelineExecutor>& pipeline,
-    const EditorRecoveryMetadata& recovery_metadata, std::string* error) -> bool {
+                                               const EditorRecoveryMetadata& recovery_metadata,
+                                               std::string*                  error) -> bool {
   if (!history || !pipeline) {
     if (error) {
       *error = "MaterializeEditorState requires history and pipeline";
@@ -655,6 +656,10 @@ auto ElementController::MaterializeEditorState(
       pipeline_service_.UpdatePipelineParamByFileId(recovery_metadata.element_id, pipeline);
       EditorRecoveryMetadataMapper mapper(guard_.conn_);
       mapper.Update(recovery_metadata.element_id, ToRecoveryMapperParams(recovery_metadata));
+      if (materialize_pre_commit_hook_) {
+        // Test seam: throw here to prove the three writes roll back together.
+        materialize_pre_commit_hook_();
+      }
       if (duckorm::commit_transaction(guard_.conn_) != DuckDBSuccess) {
         duckorm::rollback_transaction(guard_.conn_);
         if (error) {

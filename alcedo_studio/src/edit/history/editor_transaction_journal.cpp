@@ -12,8 +12,7 @@
 namespace alcedo {
 namespace {
 
-constexpr std::size_t kFixedHeaderBytes =
-    4 +  // magic
+constexpr std::size_t kFixedHeaderBytes = 4 +  // magic
     4 +  // record_length
     2 +  // format_version
     2 +  // record_type
@@ -72,8 +71,7 @@ void AppendBytes(std::vector<std::uint8_t>* out, const std::uint8_t* data, std::
 }
 
 auto ReadU16(const std::uint8_t* data) -> std::uint16_t {
-  return static_cast<std::uint16_t>(data[0]) |
-         (static_cast<std::uint16_t>(data[1]) << 8);
+  return static_cast<std::uint16_t>(data[0]) | (static_cast<std::uint16_t>(data[1]) << 8);
 }
 
 auto ReadU32(const std::uint8_t* data) -> std::uint32_t {
@@ -220,8 +218,8 @@ auto FillTypedPayload(EditorJournalDecodedRecord* record, std::string* error) ->
 
 }  // namespace
 
-auto ComputeEditorTimelineHash(const std::vector<EditTransaction>& transactions,
-                               std::size_t                         cursor) -> Hash128 {
+auto ComputeEditorTimelineHash(const std::vector<EditTransaction>& transactions, std::size_t cursor)
+    -> Hash128 {
   if (transactions.empty()) {
     const std::uint64_t c = static_cast<std::uint64_t>(cursor);
     return Hash128::Compute(&c, sizeof(c));
@@ -275,8 +273,8 @@ auto EncodeEditorJournalRewriteTimelinePayload(const EditorJournalRewriteTimelin
   return out;
 }
 
-auto EncodeEditorJournalMaterializedHeadPayload(
-    const EditorJournalMaterializedHeadPayload& payload) -> std::vector<std::uint8_t> {
+auto EncodeEditorJournalMaterializedHeadPayload(const EditorJournalMaterializedHeadPayload& payload)
+    -> std::vector<std::uint8_t> {
   std::vector<std::uint8_t> out;
   AppendHash(&out, payload.timeline_hash);
   AppendU64(&out, payload.applied_cursor);
@@ -381,7 +379,8 @@ auto DecodeEditorJournalMaterializedHeadPayload(const std::vector<std::uint8_t>&
     }
     return false;
   }
-  std::vector<std::uint8_t> params(bytes.begin() + static_cast<std::ptrdiff_t>(offset), bytes.end());
+  std::vector<std::uint8_t> params(bytes.begin() + static_cast<std::ptrdiff_t>(offset),
+                                   bytes.end());
   return BytesToJson(params, &out->head_pipeline_params, error);
 }
 
@@ -400,8 +399,8 @@ auto DecodeEditorJournalMarkerPayload(const std::vector<std::uint8_t>& bytes,
 }
 
 auto DecodeEditorJournalBatchCommitPayload(const std::vector<std::uint8_t>& bytes,
-                                           EditorJournalBatchCommitPayload* out,
-                                           std::string* error) -> bool {
+                                           EditorJournalBatchCommitPayload* out, std::string* error)
+    -> bool {
   constexpr std::size_t kPayloadBytes = 8 * 4 + 16;
   if (out == nullptr || bytes.size() != kPayloadBytes) {
     if (error) {
@@ -444,8 +443,7 @@ auto EncodeEditorJournalRecord(EditorJournalRecordType type, std::uint64_t seque
   AppendU32(&out, static_cast<std::uint32_t>(payload_bytes.size()));
   AppendBytes(&out, payload_bytes.data(), payload_bytes.size());
 
-  const Hash128 payload_checksum =
-      Hash128::Compute(payload_bytes.data(), payload_bytes.size());
+  const Hash128 payload_checksum = Hash128::Compute(payload_bytes.data(), payload_bytes.size());
   AppendHash(&out, payload_checksum);
 
   const Hash128 record_checksum = Hash128::Compute(out.data(), out.size());
@@ -502,20 +500,16 @@ auto DecodeEditorJournalRecordChain(const std::uint8_t* data, std::size_t size)
     }
 
     const std::uint8_t* payload_ptr = rec + kFixedHeaderBytes;
-    const Hash128       payload_checksum =
-        ReadHash(rec + kFixedHeaderBytes + payload_size);
-    const Hash128 record_checksum =
-        ReadHash(rec + kFixedHeaderBytes + payload_size + 16);
+    const Hash128       payload_checksum = ReadHash(rec + kFixedHeaderBytes + payload_size);
+    const Hash128       record_checksum  = ReadHash(rec + kFixedHeaderBytes + payload_size + 16);
 
-    const Hash128 expected_payload =
-        Hash128::Compute(payload_ptr, payload_size);
+    const Hash128       expected_payload = Hash128::Compute(payload_ptr, payload_size);
     if (expected_payload != payload_checksum) {
       result.stopped_on_corrupt_record = true;
       result.message                   = "payload checksum mismatch";
       break;
     }
-    const Hash128 expected_record =
-        Hash128::Compute(rec, kFixedHeaderBytes + payload_size + 16);
+    const Hash128 expected_record = Hash128::Compute(rec, kFixedHeaderBytes + payload_size + 16);
     if (expected_record != record_checksum) {
       result.stopped_on_corrupt_record = true;
       result.message                   = "record checksum mismatch";
@@ -532,10 +526,8 @@ auto DecodeEditorJournalRecordChain(const std::uint8_t* data, std::size_t size)
       result.message                   = "journal record sequence gap";
       break;
     }
-    decoded.identity.element_id =
-        static_cast<sl_element_id_t>(ReadU64(rec + 20));
-    decoded.identity.version_id =
-        Hash128(ReadU64(rec + 28), ReadU64(rec + 36));
+    decoded.identity.element_id         = static_cast<sl_element_id_t>(ReadU64(rec + 20));
+    decoded.identity.version_id         = Hash128(ReadU64(rec + 28), ReadU64(rec + 36));
     decoded.identity.session_generation = ReadU64(rec + 44);
     decoded.identity.journal_generation = ReadU64(rec + 52);
     decoded.payload_checksum            = payload_checksum;
@@ -545,8 +537,7 @@ auto DecodeEditorJournalRecordChain(const std::uint8_t* data, std::size_t size)
     std::string typed_error;
     if (!FillTypedPayload(&decoded, &typed_error)) {
       result.stopped_on_corrupt_record = true;
-      result.message                   = typed_error.empty() ? "typed payload decode failed"
-                                                            : typed_error;
+      result.message = typed_error.empty() ? "typed payload decode failed" : typed_error;
       break;
     }
 
@@ -559,17 +550,15 @@ auto DecodeEditorJournalRecordChain(const std::uint8_t* data, std::size_t size)
   return result;
 }
 
-auto ComputeEditorJournalRecordChainHash(
-    const std::vector<EditorJournalDecodedRecord>& records, std::uint64_t last_sequence)
-    -> Hash128 {
+auto ComputeEditorJournalRecordChainHash(const std::vector<EditorJournalDecodedRecord>& records,
+                                         std::uint64_t last_sequence) -> Hash128 {
   Hash128 chain{};
   for (const auto& record : records) {
     if (record.sequence > last_sequence ||
         record.record_type == EditorJournalRecordType::JournalBatchCommit) {
       continue;
     }
-    const Hash128 sequence_hash =
-        Hash128::Compute(&record.sequence, sizeof(record.sequence));
+    const Hash128 sequence_hash = Hash128::Compute(&record.sequence, sizeof(record.sequence));
     chain = Hash128::Blend(chain, Hash128::Blend(sequence_hash, record.record_checksum));
   }
   return chain;
@@ -593,16 +582,32 @@ void EditorTransactionJournal::AppendRaw(const std::uint8_t* data, std::size_t s
   bytes_.insert(bytes_.end(), data, data + size);
 }
 
-auto EditorTransactionJournal::LoadBytes(const std::vector<std::uint8_t>& data,
-                                         std::string*                   error) -> bool {
+auto EditorTransactionJournal::LoadBytes(const std::vector<std::uint8_t>& data, std::string* error,
+                                         bool* truncated_corrupt_tail) -> bool {
   Clear();
   AppendRaw(data.data(), data.size());
   const auto decoded = DecodeRecordChain();
-  if (decoded.stopped_on_corrupt_record) {
-    if (error) {
-      *error = decoded.message.empty() ? "corrupt journal" : decoded.message;
+  if (decoded.stopped_on_corrupt_record || decoded.stopped_on_incomplete_tail) {
+    if (truncated_corrupt_tail) {
+      *truncated_corrupt_tail = true;
     }
-    return false;
+    if (decoded.valid_chain_byte_count == 0) {
+      // No valid prefix can be recovered. Clear the in-memory decoder state and
+      // let the file-backed writer surface the failure without altering disk.
+      Clear();
+      if (error) {
+        *error = decoded.message.empty() ? "corrupt journal with no valid prefix" : decoded.message;
+      }
+      return false;
+    }
+    // A valid prefix exists. Truncate the damaged tail so recovery can use the
+    // last complete batch commit. The caller preserves the original bytes in a
+    // diagnostic bundle and truncates the on-disk file to match the prefix.
+    bytes_.resize(decoded.valid_chain_byte_count);
+    if (error) {
+      *error = decoded.message.empty() ? "journal ended with a partial or damaged record"
+                                       : decoded.message;
+    }
   }
   if (decoded.records.empty()) {
     next_sequence_ = 1;
@@ -643,8 +648,7 @@ auto EditorTransactionJournal::AppendFramed(EditorJournalRecordType type,
 }
 
 auto EditorTransactionJournal::AppendEdit(const EditorJournalIdentity& identity,
-                                          const EditTransaction&       transaction)
-    -> std::uint64_t {
+                                          const EditTransaction& transaction) -> std::uint64_t {
   EditorJournalEditAppendPayload payload;
   payload.transaction = transaction;
   if (!payload.transaction.HasTransactionHash()) {
@@ -664,10 +668,12 @@ auto EditorTransactionJournal::AppendCursorMove(const EditorJournalIdentity& ide
                       EncodeEditorJournalCursorMovePayload(payload));
 }
 
-auto EditorTransactionJournal::AppendRewriteTimeline(
-    const EditorJournalIdentity& identity, const Hash128& expected_timeline_hash,
-    const Hash128& discarded_tail_hash, std::uint64_t retained_cursor,
-    const EditTransaction& replacement) -> std::uint64_t {
+auto EditorTransactionJournal::AppendRewriteTimeline(const EditorJournalIdentity& identity,
+                                                     const Hash128&         expected_timeline_hash,
+                                                     const Hash128&         discarded_tail_hash,
+                                                     std::uint64_t          retained_cursor,
+                                                     const EditTransaction& replacement)
+    -> std::uint64_t {
   EditorJournalRewriteTimelinePayload payload;
   payload.expected_timeline_hash = expected_timeline_hash;
   payload.discarded_tail_hash    = discarded_tail_hash;
@@ -680,9 +686,11 @@ auto EditorTransactionJournal::AppendRewriteTimeline(
                       EncodeEditorJournalRewriteTimelinePayload(payload));
 }
 
-auto EditorTransactionJournal::AppendMaterializedHead(
-    const EditorJournalIdentity& identity, const Hash128& timeline_hash,
-    std::uint64_t applied_cursor, const nlohmann::json& head_pipeline_params) -> std::uint64_t {
+auto EditorTransactionJournal::AppendMaterializedHead(const EditorJournalIdentity& identity,
+                                                      const Hash128&               timeline_hash,
+                                                      std::uint64_t                applied_cursor,
+                                                      const nlohmann::json& head_pipeline_params)
+    -> std::uint64_t {
   EditorJournalMaterializedHeadPayload payload;
   payload.timeline_hash         = timeline_hash;
   payload.applied_cursor        = applied_cursor;
@@ -718,8 +726,7 @@ auto EditorTransactionJournal::AppendJournalBatchCommit(
                       EncodeEditorJournalBatchCommitPayload(payload));
 }
 
-auto EditorTransactionJournal::DecodeRecordChain() const
-    -> EditorJournalDecodeRecordChainResult {
+auto EditorTransactionJournal::DecodeRecordChain() const -> EditorJournalDecodeRecordChainResult {
   return DecodeEditorJournalRecordChain(bytes_.data(), bytes_.size());
 }
 
@@ -859,8 +866,8 @@ auto JournalTimelineSimulator::ApplyDecodedRecord(const EditorJournalDecodedReco
         NoteTransactionId(transactions_[i].GetTransactionID());
       }
 
-      transactions_.erase(transactions_.begin() +
-                              static_cast<std::ptrdiff_t>(payload.retained_cursor),
+      transactions_.erase(
+          transactions_.begin() + static_cast<std::ptrdiff_t>(payload.retained_cursor),
                           transactions_.end());
 
       EditTransaction replacement = payload.replacement;
@@ -974,8 +981,8 @@ auto ReplayDecodedRecords(JournalTimelineSimulator* simulator,
     return last;
   }
 
-  const bool has_any_batch_commit = std::any_of(
-      decoded.records.begin(), decoded.records.end(), [](const auto& record) {
+  const bool has_any_batch_commit =
+      std::any_of(decoded.records.begin(), decoded.records.end(), [](const auto& record) {
         return record.record_type == EditorJournalRecordType::JournalBatchCommit;
       });
   if (has_any_batch_commit && valid_commit_sequences.empty()) {
@@ -1078,8 +1085,7 @@ auto JournalTimelineSimulator::ReplayCommittedThroughOperationSequence(
             payload.record_chain_hash) {
       continue;
     }
-    if (max_operation_sequence != 0 &&
-        payload.last_operation_sequence > max_operation_sequence) {
+    if (max_operation_sequence != 0 && payload.last_operation_sequence > max_operation_sequence) {
       // An unflushed or not-yet-materializable batch: stop accepting later commits.
       break;
     }
@@ -1240,10 +1246,9 @@ void WorkingVersionJournalRecorder::RecordAfterAppend(
   (void)after_cursor;
 
   if (before_cursor < before_transactions.size()) {
-    const Hash128 expected =
-        ComputeEditorTimelineHash(before_transactions, before_cursor);
-    const Hash128 discarded = ComputeEditorTransactionSpanHash(
-        before_transactions, before_cursor, before_transactions.size());
+    const Hash128 expected  = ComputeEditorTimelineHash(before_transactions, before_cursor);
+    const Hash128 discarded = ComputeEditorTransactionSpanHash(before_transactions, before_cursor,
+                                                               before_transactions.size());
     journal_->AppendRewriteTimeline(identity_, expected, discarded, before_cursor, appended);
     return;
   }

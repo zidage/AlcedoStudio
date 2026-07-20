@@ -37,22 +37,58 @@ class IEditorJournalFile {
     return std::nullopt;
   }
 
+  /// Read a sibling path back after a create-exclusive write so the caller can
+  /// verify the persisted bytes before atomic replace. Default returns nullopt
+  /// so append-only test doubles stay narrow.
+  virtual auto ReadAllFrom(const std::filesystem::path& /*path*/, std::string* error)
+      -> std::optional<std::vector<std::uint8_t>> {
+    if (error) {
+      *error = "ReadAllFrom is not supported by this journal file port";
+    }
+    return std::nullopt;
+  }
+
+  /// The on-disk path this port is bound to, or an empty path for in-memory
+  /// test doubles. Used by the writer to emit diagnostic bundles next to the
+  /// active journal when recovery cannot validate a record.
+  [[nodiscard]] virtual auto path() const -> std::filesystem::path { return {}; }
+
+  /// Truncate the active file to `byte_count` after recovery discards a
+  /// corrupt tail, so subsequent appends follow the valid prefix instead of
+  /// the damaged bytes. Default returns false for append-only test doubles.
+  virtual auto               Truncate(std::size_t /*byte_count*/, std::string* error) -> bool {
+    if (error) {
+      *error = "Truncate is not supported by this journal file port";
+    }
+    return false;
+  }
+
+  /// Reopen the active handle after an atomic replace so the writer appends to
+  /// the new file data rather than the unlinked original. Default is a no-op
+  /// for in-memory test doubles.
+  virtual auto Reopen(std::string* /*error*/) -> bool { return true; }
+
   /// Write a brand-new sibling journal (create-new compaction path). Default
   /// returns false so append-only test doubles stay narrow.
-  virtual auto CreateExclusive(const std::filesystem::path& /*path*/,
-                               const std::uint8_t* /*data*/, std::size_t /*size*/,
-                               std::string* error) -> bool {
+  virtual auto CreateExclusive(const std::filesystem::path& /*path*/, const std::uint8_t* /*data*/,
+                               std::size_t /*size*/, std::string* error) -> bool {
     if (error) {
       *error = "CreateExclusive is not supported by this journal file port";
     }
     return false;
   }
 
+  /// Remove a sibling compact file whose post-write verification failed so a
+  /// later compaction can create it again. Default is a no-op success.
+  virtual auto RemovePath(const std::filesystem::path& /*path*/, std::string* /*error*/) -> bool {
+    return true;
+  }
+
   /// Atomically replace the active journal path with a previously verified
   /// compact sibling. Default returns false.
   virtual auto AtomicReplace(const std::filesystem::path& /*source*/,
-                             const std::filesystem::path& /*destination*/,
-                             std::string* error) -> bool {
+                             const std::filesystem::path& /*destination*/, std::string* error)
+      -> bool {
     if (error) {
       *error = "AtomicReplace is not supported by this journal file port";
     }
@@ -61,8 +97,8 @@ class IEditorJournalFile {
 
   /// Flush the containing directory after create/replace on platforms that
   /// require explicit directory durability. Default is a no-op success.
-  virtual auto FlushDirectory(const std::filesystem::path& /*directory*/,
-                              std::string* /*error*/) -> bool {
+  virtual auto FlushDirectory(const std::filesystem::path& /*directory*/, std::string* /*error*/)
+      -> bool {
     return true;
   }
 };
@@ -77,31 +113,49 @@ class InjectedEditorJournalFile final : public IEditorJournalFile {
   int         flush_calls               = 0;
   int         create_calls              = 0;
   int         replace_calls             = 0;
+  int         truncate_calls            = 0;
+  int         reopen_calls              = 0;
   bool        fail_flush                = false;
   bool        fail_create               = false;
   bool        fail_replace              = false;
   bool        fail_directory_flush      = false;
+  bool        fail_reopen               = false;
   bool        corrupt_on_read           = false;
   std::size_t corrupt_on_read_offset    = 0;
+  /// Duplicate the framed record at `duplicate_record_index` on `ReadAll` so
+  /// recovery sees a same-sequence record and stops at the last valid batch
+  /// before it.
+  bool        duplicate_record_on_read  = false;
+  std::size_t duplicate_record_index    = 0;
+  /// Corrupt the compact bytes stored by `CreateExclusive` so the post-write
+  /// re-read verification fails and compaction refuses to replace the active
+  /// journal.
+  bool        corrupt_compact_on_write  = false;
+  std::size_t corrupt_compact_offset    = 0;
+  /// Truncate the compact bytes stored by `CreateExclusive` to
+  /// `short_compact_write_bytes` so the post-write re-read verification fails.
+  std::size_t short_compact_write_bytes = 0;
 
   auto bytes() const -> const std::vector<std::uint8_t>& { return bytes_; }
-  auto compact_files() const
-      -> const std::unordered_map<std::string, std::vector<std::uint8_t>>& {
+  auto compact_files() const -> const std::unordered_map<std::string, std::vector<std::uint8_t>>& {
     return compact_files_;
   }
   void SetBytes(std::vector<std::uint8_t> bytes) { bytes_ = std::move(bytes); }
 
-  auto Append(const std::uint8_t* data, std::size_t size, std::size_t* written,
-              std::string* error) -> bool override;
+  auto Append(const std::uint8_t* data, std::size_t size, std::size_t* written, std::string* error)
+      -> bool override;
   auto Flush(std::string* error) -> bool override;
   auto ReadAll(std::string* error) -> std::optional<std::vector<std::uint8_t>> override;
+  auto ReadAllFrom(const std::filesystem::path& path, std::string* error)
+      -> std::optional<std::vector<std::uint8_t>> override;
+  auto Truncate(std::size_t byte_count, std::string* error) -> bool override;
+  auto Reopen(std::string* error) -> bool override;
   auto CreateExclusive(const std::filesystem::path& path, const std::uint8_t* data,
                        std::size_t size, std::string* error) -> bool override;
-  auto AtomicReplace(const std::filesystem::path& source,
-                     const std::filesystem::path& destination, std::string* error)
-      -> bool override;
-  auto FlushDirectory(const std::filesystem::path& directory, std::string* error)
-      -> bool override;
+  auto RemovePath(const std::filesystem::path& path, std::string* error) -> bool override;
+  auto AtomicReplace(const std::filesystem::path& source, const std::filesystem::path& destination,
+                     std::string* error) -> bool override;
+  auto FlushDirectory(const std::filesystem::path& directory, std::string* error) -> bool override;
 
  private:
   std::vector<std::uint8_t>                              bytes_;
@@ -118,17 +172,21 @@ class FileEditorJournalFile final : public IEditorJournalFile {
   FileEditorJournalFile(const FileEditorJournalFile&)            = delete;
   FileEditorJournalFile& operator=(const FileEditorJournalFile&) = delete;
 
-  auto Append(const std::uint8_t* data, std::size_t size, std::size_t* written,
-              std::string* error) -> bool override;
+  auto Append(const std::uint8_t* data, std::size_t size, std::size_t* written, std::string* error)
+      -> bool override;
   auto Flush(std::string* error) -> bool override;
   auto ReadAll(std::string* error) -> std::optional<std::vector<std::uint8_t>> override;
+  auto ReadAllFrom(const std::filesystem::path& path, std::string* error)
+      -> std::optional<std::vector<std::uint8_t>> override;
+  [[nodiscard]] auto path() const -> std::filesystem::path override { return path_; }
+  auto               Truncate(std::size_t byte_count, std::string* error) -> bool override;
+  auto               Reopen(std::string* error) -> bool override;
   auto CreateExclusive(const std::filesystem::path& path, const std::uint8_t* data,
                        std::size_t size, std::string* error) -> bool override;
-  auto AtomicReplace(const std::filesystem::path& source,
-                     const std::filesystem::path& destination, std::string* error)
-      -> bool override;
-  auto FlushDirectory(const std::filesystem::path& directory, std::string* error)
-      -> bool override;
+  auto RemovePath(const std::filesystem::path& path, std::string* error) -> bool override;
+  auto AtomicReplace(const std::filesystem::path& source, const std::filesystem::path& destination,
+                     std::string* error) -> bool override;
+  auto FlushDirectory(const std::filesystem::path& directory, std::string* error) -> bool override;
 
  private:
   std::filesystem::path path_;
@@ -165,8 +223,7 @@ struct EditorJournalCommitResult {
 class EditorJournalWriter final {
  public:
   explicit EditorJournalWriter(std::shared_ptr<IEditorJournalFile> file);
-  EditorJournalWriter(EditorTransactionJournal* journal,
-                      std::shared_ptr<IEditorJournalFile> file);
+  EditorJournalWriter(EditorTransactionJournal* journal, std::shared_ptr<IEditorJournalFile> file);
   EditorJournalWriter(EditorJournalIdentity identity, std::filesystem::path path);
 
   EditorJournalWriter(const EditorJournalWriter&)            = delete;
@@ -175,6 +232,8 @@ class EditorJournalWriter final {
   [[nodiscard]] auto journal() const -> const EditorTransactionJournal& { return *journal_; }
   [[nodiscard]] auto mutable_journal() -> EditorTransactionJournal& { return *journal_; }
   [[nodiscard]] auto state() const -> EditorJournalWriterState;
+  [[nodiscard]] auto   identity() const -> EditorJournalIdentity;
+  [[nodiscard]] auto   path() const -> std::filesystem::path;
   [[nodiscard]] auto has_pending_batch() const -> bool;
   [[nodiscard]] auto last_error() const -> std::string;
 
@@ -195,8 +254,7 @@ class EditorJournalWriter final {
                               std::uint64_t applied_cursor,
                               const nlohmann::json& head_pipeline_params) -> std::uint64_t;
   auto AppendRecoveryMarker(const EditorJournalIdentity& identity,
-                            std::uint64_t last_valid_sequence, std::string note)
-      -> std::uint64_t;
+                            std::uint64_t last_valid_sequence, std::string note) -> std::uint64_t;
 
   /// Flush all queued operation records as one batch. Calling it again after a
   /// failed write/flush resumes the same batch instead of duplicating frames.
@@ -220,9 +278,8 @@ class EditorJournalWriter final {
 
   /// Preserve the original journal bytes under a diagnostic path when recovery
   /// cannot validate a record chain. Returns the diagnostic path on success.
-  auto EmitDiagnosticBundle(const std::filesystem::path& journal_path,
-                            const std::string& reason, std::string* error = nullptr)
-      -> std::optional<std::filesystem::path>;
+  auto EmitDiagnosticBundle(const std::filesystem::path& journal_path, const std::string& reason,
+                            std::string* error = nullptr) -> std::optional<std::filesystem::path>;
 
  private:
   struct PendingBatch {
@@ -244,6 +301,13 @@ class EditorJournalWriter final {
   auto FinishPending() -> EditorJournalCommitResult;
   void InitializeStateFromJournal();
   void SetError(std::string error);
+
+  /// Preserve the original journal bytes in a diagnostic bundle next to the
+  /// active journal when recovery cannot validate a record. No-op when the
+  /// file port has no on-disk path (in-memory test doubles).
+  void EmitLoadDiagnostic(const std::filesystem::path&     journal_path,
+                          const std::vector<std::uint8_t>& original_bytes,
+                          const std::string&               reason);
 
   std::shared_ptr<IEditorJournalFile> file_;
   EditorTransactionJournal            owned_journal_;

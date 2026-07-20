@@ -48,6 +48,23 @@ class IEditorSessionBackend {
   virtual auto Discard() -> EditorSessionResult                                               = 0;
   virtual auto Undo() -> EditorSessionResult                                                  = 0;
   virtual auto Redo() -> EditorSessionResult                                                  = 0;
+  /// Record finalized WorkingVersion mutations immediately. The methods queue
+  /// checksummed journal records but leave file I/O to the session save path.
+  virtual auto RecordFinalizedEdit(const EditTransaction& /*transaction*/, std::string* /*error*/)
+      -> bool {
+    return false;
+  }
+  virtual auto RecordHistoryCursorMove(std::uint64_t /*from_cursor*/, std::uint64_t /*to_cursor*/,
+                                       std::string* /*error*/) -> bool {
+    return false;
+  }
+  virtual auto RecordTimelineRewrite(const Hash128& /*expected_timeline_hash*/,
+                                     const Hash128& /*discarded_tail_hash*/,
+                                     std::uint64_t /*retained_cursor*/,
+                                     const EditTransaction& /*replacement*/, std::string* /*error*/)
+      -> bool {
+    return false;
+  }
   /// Phase 5D: route a viewport/geometry view change (zoom/pan/resize/crop/
   /// rotation/ROI) through the same coordinator used for the first frame. The
   /// optional region is the visible viewport ROI (attached to DetailRefresh
@@ -161,6 +178,13 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto GestureCommit(std::string patch_key) -> EditorSessionResult;
   auto Undo() -> EditorSessionResult override;
   auto Redo() -> EditorSessionResult override;
+  auto RecordFinalizedEdit(const EditTransaction& transaction, std::string* error) -> bool override;
+  auto RecordHistoryCursorMove(std::uint64_t from_cursor, std::uint64_t to_cursor,
+                               std::string* error) -> bool override;
+  auto RecordTimelineRewrite(const Hash128& expected_timeline_hash,
+                             const Hash128& discarded_tail_hash, std::uint64_t retained_cursor,
+                             const EditTransaction& replacement, std::string* error)
+      -> bool override;
   auto Discard() -> EditorSessionResult override;
   auto Shutdown() -> EditorSessionResult override;
   /// Phase 5D: route a viewport/geometry view change through the coordinator.
@@ -214,10 +238,8 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto CoordinatorBusy() const -> bool;
   auto BeginSaveForSession(std::uint64_t session_generation, sl_element_id_t element_id,
                            std::string* error) -> bool;
-  void HandleJournalCommit(std::uint64_t session_generation,
-                           EditorJournalCommitOutcome outcome);
-  void HandleMaterialization(std::uint64_t session_generation,
-                             EditorMaterializeOutcome outcome);
+  void HandleJournalCommit(std::uint64_t session_generation, EditorJournalCommitOutcome outcome);
+  void HandleMaterialization(std::uint64_t session_generation, EditorMaterializeOutcome outcome);
   auto SealCurrentSession(bool persist_changes, bool start_background_save, std::string* error)
       -> bool;
   void               ResetActiveImageState();

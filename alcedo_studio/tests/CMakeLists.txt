@@ -1054,6 +1054,38 @@ if(WIN32)
   endif()
 endif()
 
+# Phase 5H-Fix: production journal port wires EditorHistoryMaterializer into the
+# real editor session (materialize/recover/compact) and exposes the edit-recording
+# seams. Links AlbumBackendLib (Qt) + a real ProjectService for DuckDB round-trip.
+add_executable(EditorSessionProductionJournalPortTest
+    edit/history/editor_session_production_journal_test.cpp)
+target_include_directories(EditorSessionProductionJournalPortTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorSessionProductionJournalPortTest
+  AlbumBackendLib
+  EditorHistoryMaterializer
+  ProjectService
+  EditHistory
+  GTest::gtest_main)
+gtest_discover_tests(EditorSessionProductionJournalPortTest
+  TEST_PREFIX "EditorSessionProductionJournalPortTest."
+  PROPERTIES LABELS "ci_core_flow")
+if(WIN32)
+  if(TARGET alcedo_lensfun)
+    add_custom_command(TARGET EditorSessionProductionJournalPortTest POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "$<TARGET_FILE:alcedo_lensfun>"
+              "$<TARGET_FILE_DIR:EditorSessionProductionJournalPortTest>/lensfun.dll"
+      VERBATIM)
+  endif()
+  if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
+    add_custom_command(TARGET EditorSessionProductionJournalPortTest POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll"
+              "$<TARGET_FILE_DIR:EditorSessionProductionJournalPortTest>/duckdb.dll"
+      VERBATIM)
+  endif()
+endif()
+
 add_executable(ProjectServiceTest app/project_service_test.cpp)
 target_include_directories(ProjectServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ProjectServiceTest ProjectService GTest::gtest_main)
