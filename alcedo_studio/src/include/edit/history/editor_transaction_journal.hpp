@@ -149,16 +149,16 @@ struct EditorJournalApplyResult {
 
 /// Decode complete, checksum-valid records from an append-only byte stream.
 /// Stops at the first incomplete or corrupt tail without consuming it.
-struct EditorJournalDecodePrefixResult {
+struct EditorJournalDecodeRecordChainResult {
   std::vector<EditorJournalDecodedRecord> records;
-  std::size_t                             valid_byte_count = 0;
+  std::size_t                             valid_chain_byte_count = 0;
   bool                                    stopped_on_incomplete_tail = false;
   bool                                    stopped_on_corrupt_record  = false;
   std::string                             message;
 };
 
-[[nodiscard]] auto DecodeEditorJournalValidPrefix(const std::uint8_t* data, std::size_t size)
-    -> EditorJournalDecodePrefixResult;
+[[nodiscard]] auto DecodeEditorJournalRecordChain(const std::uint8_t* data, std::size_t size)
+    -> EditorJournalDecodeRecordChainResult;
 
 /// Append-only in-memory journal log (file durability is Phase 5G/5H).
 class EditorTransactionJournal final {
@@ -190,7 +190,7 @@ class EditorTransactionJournal final {
                                   std::uint64_t last_valid_sequence, std::string note)
       -> std::uint64_t;
 
-  [[nodiscard]] auto DecodeValidPrefix() const -> EditorJournalDecodePrefixResult;
+  [[nodiscard]] auto DecodeRecordChain() const -> EditorJournalDecodeRecordChainResult;
 
  private:
   auto AppendFramed(EditorJournalRecordType type, const EditorJournalIdentity& identity,
@@ -227,7 +227,7 @@ class JournalTimelineSimulator final {
 
   [[nodiscard]] auto ApplyDecodedRecord(const EditorJournalDecodedRecord& record)
       -> EditorJournalApplyResult;
-  [[nodiscard]] auto ReplayValidPrefix(const EditorTransactionJournal& journal)
+  [[nodiscard]] auto ReplayRecordChain(const EditorTransactionJournal& journal)
       -> EditorJournalApplyResult;
 
   /// Allocate the next transaction id. Never reuses ids at or below the high-water mark,

@@ -142,7 +142,7 @@ TEST_F(EditorTransactionJournalTest, EditAEditBUndoAppendCReplaysAsAThenC) {
   EXPECT_FALSE(working.RedoNextTransaction(*pipeline_));  // B unavailable
 
   JournalTimelineSimulator sim(identity_);
-  const auto replay = sim.ReplayValidPrefix(journal_);
+  const auto replay = sim.ReplayRecordChain(journal_);
   EXPECT_EQ(replay.status, EditorJournalApplyStatus::Applied);
 
   ExpectSnapshotsEqual(SnapshotWorking(working), SnapshotSimulator(sim));
@@ -165,7 +165,7 @@ TEST_F(EditorTransactionJournalTest, EditAEditBUndoRedoReplaysAsAThenB) {
   EXPECT_EQ(working.GetCursor(), 2u);
 
   JournalTimelineSimulator sim(identity_);
-  ASSERT_EQ(sim.ReplayValidPrefix(journal_).status, EditorJournalApplyStatus::Applied);
+  ASSERT_EQ(sim.ReplayRecordChain(journal_).status, EditorJournalApplyStatus::Applied);
   ExpectSnapshotsEqual(SnapshotWorking(working), SnapshotSimulator(sim));
 }
 
@@ -193,7 +193,7 @@ TEST_F(EditorTransactionJournalTest, RewriteTimelineAtomicallyDropsRedoTailAndAp
 
   AppendWorkingEdit(&working, &recorder, MakeExposureTx(9.0f));
 
-  const auto decoded = journal_.DecodeValidPrefix();
+  const auto decoded = journal_.DecodeRecordChain();
   ASSERT_FALSE(decoded.stopped_on_incomplete_tail);
   ASSERT_FALSE(decoded.stopped_on_corrupt_record);
   ASSERT_GE(decoded.records.size(), 4u);
@@ -206,7 +206,7 @@ TEST_F(EditorTransactionJournalTest, RewriteTimelineAtomicallyDropsRedoTailAndAp
   EXPECT_EQ(rewrite.rewrite_timeline->retained_cursor, 1u);
 
   JournalTimelineSimulator sim(identity_);
-  ASSERT_EQ(sim.ReplayValidPrefix(journal_).status, EditorJournalApplyStatus::Applied);
+  ASSERT_EQ(sim.ReplayRecordChain(journal_).status, EditorJournalApplyStatus::Applied);
   EXPECT_EQ(sim.transactions().size(), 2u);
   EXPECT_EQ(sim.cursor(), 2u);
   EXPECT_EQ(sim.transactions()[1].GetTxOperatorType(), OperatorType::EXPOSURE);
@@ -223,7 +223,7 @@ TEST_F(EditorTransactionJournalTest, PartialRewriteTimelineLeavesPriorTimelineUn
   AppendWorkingEdit(&working, &recorder, MakeContrastTx(2.0f));
   UndoWorking(&working, &recorder);
 
-  // Build a complete RewriteTimeline record, then append only a truncated prefix.
+  // Build a complete RewriteTimeline record, then append only a truncated record fragment.
   EditTransaction replacement = MakeExposureTx(5.0f);
   replacement.SetTransactionID(99);
   replacement.GenerateTransactionHash();
@@ -242,7 +242,7 @@ TEST_F(EditorTransactionJournalTest, PartialRewriteTimelineLeavesPriorTimelineUn
   ASSERT_GT(framed.size(), 16u);
   journal_.AppendRaw(framed.data(), framed.size() / 2);
 
-  const auto decoded = journal_.DecodeValidPrefix();
+  const auto decoded = journal_.DecodeRecordChain();
   EXPECT_TRUE(decoded.stopped_on_incomplete_tail);
   // Complete prior records remain; incomplete rewrite is not observed.
   EXPECT_EQ(decoded.records.size(), 3u);
@@ -251,14 +251,14 @@ TEST_F(EditorTransactionJournalTest, PartialRewriteTimelineLeavesPriorTimelineUn
   }
 
   JournalTimelineSimulator sim(identity_);
-  ASSERT_EQ(sim.ReplayValidPrefix(journal_).status, EditorJournalApplyStatus::Applied);
-  // Prior valid prefix: A, B, undo => [A,B] cursor 1. B is still present for redo.
+  ASSERT_EQ(sim.ReplayRecordChain(journal_).status, EditorJournalApplyStatus::Applied);
+  // Prior valid record chain: A, B, undo => [A,B] cursor 1. B is still present for redo.
   EXPECT_EQ(sim.transactions().size(), 2u);
   EXPECT_EQ(sim.cursor(), 1u);
   EXPECT_EQ(sim.transactions()[1].GetTxOperatorType(), OperatorType::CONTRAST);
 }
 
-TEST_F(EditorTransactionJournalTest, HashMismatchRejectsWholeRewriteAndLeavesPrefixUnchanged) {
+TEST_F(EditorTransactionJournalTest, HashMismatchRejectsWholeRewriteAndLeavesRecordChainUnchanged) {
   EditorTransactionJournal journal;
 
   EditTransaction a = MakeExposureTx(1.0f);
@@ -273,7 +273,7 @@ TEST_F(EditorTransactionJournalTest, HashMismatchRejectsWholeRewriteAndLeavesPre
   journal.AppendCursorMove(identity_, 2, 1);
 
   JournalTimelineSimulator sim(identity_);
-  ASSERT_EQ(sim.ReplayValidPrefix(journal).status, EditorJournalApplyStatus::Applied);
+  ASSERT_EQ(sim.ReplayRecordChain(journal).status, EditorJournalApplyStatus::Applied);
   const auto before = SnapshotSimulator(sim);
   EXPECT_EQ(before.cursor, 1u);
   EXPECT_EQ(before.tx_ids.size(), 2u);
@@ -284,7 +284,7 @@ TEST_F(EditorTransactionJournalTest, HashMismatchRejectsWholeRewriteAndLeavesPre
   // Wrong expected hash; sequence continues after the prior three records.
   journal.AppendRewriteTimeline(identity_, Hash128(1, 2), Hash128{}, 1, bad);
 
-  const auto decoded = journal.DecodeValidPrefix();
+  const auto decoded = journal.DecodeRecordChain();
   ASSERT_EQ(decoded.records.size(), 4u);
   const auto apply = sim.ApplyDecodedRecord(decoded.records.back());
   EXPECT_EQ(apply.status, EditorJournalApplyStatus::RejectedHashMismatch);
@@ -302,7 +302,7 @@ TEST_F(EditorTransactionJournalTest, TransactionIdsNeverReusedAfterRewrite) {
   AppendWorkingEdit(&working, &recorder, MakeExposureTx(3.0f));  // id 3, drops id 2
 
   JournalTimelineSimulator sim(identity_);
-  ASSERT_EQ(sim.ReplayValidPrefix(journal_).status, EditorJournalApplyStatus::Applied);
+  ASSERT_EQ(sim.ReplayRecordChain(journal_).status, EditorJournalApplyStatus::Applied);
 
   const auto next_from_sim = sim.AllocateTransactionId();
   EXPECT_GT(next_from_sim, 2u);
@@ -327,7 +327,7 @@ TEST_F(EditorTransactionJournalTest, WorkingVersionJournalAndSimulatorSharePipel
                                   pipeline_->ExportPipelineParams());
 
   JournalTimelineSimulator sim(identity_);
-  ASSERT_EQ(sim.ReplayValidPrefix(journal_).status, EditorJournalApplyStatus::Applied);
+  ASSERT_EQ(sim.ReplayRecordChain(journal_).status, EditorJournalApplyStatus::Applied);
   ExpectSnapshotsEqual(SnapshotWorking(working), SnapshotSimulator(sim));
   ASSERT_TRUE(sim.head_pipeline_params().has_value());
   ASSERT_TRUE(working.GetHeadPipelineParams().has_value());
@@ -367,7 +367,7 @@ TEST_F(EditorTransactionJournalTest, CursorMovesAndTimelineRewriteReplayToIndepe
   AppendWorkingEdit(&working, &recorder, MakeContrastTx(4.0f));  // rewrite remaining redo
 
   JournalTimelineSimulator sim(identity_);
-  ASSERT_EQ(sim.ReplayValidPrefix(journal_).status, EditorJournalApplyStatus::Applied);
+  ASSERT_EQ(sim.ReplayRecordChain(journal_).status, EditorJournalApplyStatus::Applied);
   ExpectSnapshotsEqual(SnapshotWorking(working), SnapshotSimulator(sim));
   // A, B, then rewrite of the remaining redo tail into contrast => [A, B, contrast].
   EXPECT_EQ(sim.transactions().size(), 3u);
@@ -381,9 +381,9 @@ TEST_F(EditorTransactionJournalTest, RecordRoundTripPreservesChecksumsAndIdentit
   tx.GenerateTransactionHash();
   journal_.AppendEdit(identity_, tx);
 
-  const auto decoded = journal_.DecodeValidPrefix();
+  const auto decoded = journal_.DecodeRecordChain();
   ASSERT_EQ(decoded.records.size(), 1u);
-  EXPECT_EQ(decoded.valid_byte_count, journal_.size());
+  EXPECT_EQ(decoded.valid_chain_byte_count, journal_.size());
   EXPECT_FALSE(decoded.stopped_on_incomplete_tail);
   EXPECT_EQ(decoded.records[0].identity.element_id, identity_.element_id);
   EXPECT_EQ(decoded.records[0].identity.version_id, identity_.version_id);
@@ -393,7 +393,7 @@ TEST_F(EditorTransactionJournalTest, RecordRoundTripPreservesChecksumsAndIdentit
   EXPECT_EQ(decoded.records[0].edit_append->transaction.GetTransactionHash(), tx.GetTransactionHash());
 }
 
-TEST_F(EditorTransactionJournalTest, EditorTransactionJournalReplaysCommittedGenerationsInOrder) {
+TEST_F(EditorTransactionJournalTest, EditorTransactionJournalReplaysRecordSequencesInOrder) {
   EditTransaction a = MakeExposureTx(1.0f);
   a.SetTransactionID(1);
   a.GenerateTransactionHash();
@@ -404,7 +404,7 @@ TEST_F(EditorTransactionJournalTest, EditorTransactionJournalReplaysCommittedGen
   journal_.AppendEdit(identity_, b);
 
   JournalTimelineSimulator sim(identity_);
-  ASSERT_EQ(sim.ReplayValidPrefix(journal_).status, EditorJournalApplyStatus::Applied);
+  ASSERT_EQ(sim.ReplayRecordChain(journal_).status, EditorJournalApplyStatus::Applied);
   EXPECT_EQ(sim.last_sequence(), 2u);
   EXPECT_EQ(sim.transactions().size(), 2u);
   EXPECT_EQ(sim.cursor(), 2u);
@@ -422,13 +422,13 @@ TEST_F(EditorTransactionJournalTest, EditorTransactionJournalIgnoresAlreadyMater
   // is still after the head but the materialize marker covers prior work. Here we append a new
   // edit after materialize (normal) and also verify replaying twice is safe.
   JournalTimelineSimulator sim(identity_);
-  ASSERT_EQ(sim.ReplayValidPrefix(journal_).status, EditorJournalApplyStatus::Applied);
+  ASSERT_EQ(sim.ReplayRecordChain(journal_).status, EditorJournalApplyStatus::Applied);
   EXPECT_EQ(sim.materialized_sequence(), 2u);
   EXPECT_EQ(sim.transactions().size(), 1u);
 
   // Replay again on a fresh simulator remains deterministic.
   JournalTimelineSimulator sim2(identity_);
-  ASSERT_EQ(sim2.ReplayValidPrefix(journal_).status, EditorJournalApplyStatus::Applied);
+  ASSERT_EQ(sim2.ReplayRecordChain(journal_).status, EditorJournalApplyStatus::Applied);
   ExpectSnapshotsEqual(SnapshotSimulator(sim), SnapshotSimulator(sim2));
 }
 

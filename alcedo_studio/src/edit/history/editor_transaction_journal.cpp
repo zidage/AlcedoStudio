@@ -410,9 +410,9 @@ auto EncodeEditorJournalRecord(EditorJournalRecordType type, std::uint64_t seque
   return out;
 }
 
-auto DecodeEditorJournalValidPrefix(const std::uint8_t* data, std::size_t size)
-    -> EditorJournalDecodePrefixResult {
-  EditorJournalDecodePrefixResult result;
+auto DecodeEditorJournalRecordChain(const std::uint8_t* data, std::size_t size)
+    -> EditorJournalDecodeRecordChainResult {
+  EditorJournalDecodeRecordChainResult result;
   std::size_t                     offset = 0;
 
   while (offset < size) {
@@ -503,7 +503,7 @@ auto DecodeEditorJournalValidPrefix(const std::uint8_t* data, std::size_t size)
 
     result.records.push_back(std::move(decoded));
     offset += record_length;
-    result.valid_byte_count = offset;
+    result.valid_chain_byte_count = offset;
   }
 
   return result;
@@ -600,8 +600,9 @@ auto EditorTransactionJournal::AppendCompactionCheckpoint(const EditorJournalIde
                       EncodeEditorJournalMarkerPayload(payload));
 }
 
-auto EditorTransactionJournal::DecodeValidPrefix() const -> EditorJournalDecodePrefixResult {
-  return DecodeEditorJournalValidPrefix(bytes_.data(), bytes_.size());
+auto EditorTransactionJournal::DecodeRecordChain() const
+    -> EditorJournalDecodeRecordChainResult {
+  return DecodeEditorJournalRecordChain(bytes_.data(), bytes_.size());
 }
 
 JournalTimelineSimulator::JournalTimelineSimulator(EditorJournalIdentity identity)
@@ -793,9 +794,9 @@ auto JournalTimelineSimulator::ApplyDecodedRecord(const EditorJournalDecodedReco
   return result;
 }
 
-auto JournalTimelineSimulator::ReplayValidPrefix(const EditorTransactionJournal& journal)
+auto JournalTimelineSimulator::ReplayRecordChain(const EditorTransactionJournal& journal)
     -> EditorJournalApplyResult {
-  const auto decoded = journal.DecodeValidPrefix();
+  const auto decoded = journal.DecodeRecordChain();
   EditorJournalApplyResult last;
   last.status = EditorJournalApplyStatus::Applied;
   for (const auto& record : decoded.records) {

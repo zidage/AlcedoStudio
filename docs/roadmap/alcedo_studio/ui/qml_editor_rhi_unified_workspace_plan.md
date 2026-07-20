@@ -4,8 +4,8 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-19 to complete Phase 5F redo-only journal record format, RewriteTimeline,
-and independent timeline simulator after Phase 5E production interaction cutover/hardening.
+Last revised: 2026-07-20 to lock journal durability, DuckDB materialization, and shared Paste/Merge
+semantics after completion of the Phase 5F in-memory record format.
 
 Affected areas:
 
@@ -319,9 +319,14 @@ moving them behind clean interfaces; do not preserve their QWidget ownership gra
 
 ### Save, journal, and version semantics
 
+The detailed recovery and version-transfer design is defined in
+[Editor History Durability and Version Transfer Design](editor_history_durability_and_version_transfer_design.md).
+Later phases must use its terminology, flush procedure, recovery rules, and shared Library/Editor
+Paste/Merge path.
+
 - Editing is autosave-first. There is no primary Save/Cancel dialog workflow.
-- A completed user gesture creates one coalesced redo-only edit transaction. Slider samples during a
-  drag do not each become durable transactions; release or an idle coalescing boundary commits the
+- A finalized edit command creates one coalesced redo-only `EditTransaction`. Slider samples during
+  a drag do not each become transactions; release or an idle coalescing boundary finalizes the
   latest value.
 - Each journal record contains image/element identity, base version identity, session identity,
   monotonically increasing generation, operation payload, and integrity metadata.
@@ -344,8 +349,9 @@ moving them behind clean interfaces; do not preserve their QWidget ownership gra
   overlap when their resource locks do not conflict.
 - A durable redo journal is sufficient to reconstruct the resulting version. Recovery replays only
   records newer than the persisted base/head generation and is idempotent.
-- Successful materialization advances the image's persisted head, flushes the current transaction,
-  schedules thumbnail invalidation/regeneration, and begins a fresh transaction boundary.
+- A `JournalBatchCommit` plus `FlushFileBuffers`/`fsync` makes finalized transactions eligible for
+  recovery. Successful DuckDB materialization atomically advances history, active pipeline, and
+  recovery metadata, then schedules thumbnail invalidation/regeneration.
 - On abnormal termination, the next project open automatically replays valid redo-only records and
   marks the recovered head in history. Corrupt or base-mismatched records stop recovery for that
   image and surface a diagnostic; they are never applied partially.
@@ -547,7 +553,7 @@ Filmstrip and live-search switching must not serialize save then load on the GUI
 
 ```text
 Focused(image A)
-  -> seal active gesture and capture transaction generation N
+  -> finalize the open edit command and capture transaction generation N
   -> enqueue A journal/save barrier with image-scoped write lock
   -> invalidate A render generation and release UI ownership of its session
   -> acquire B pipeline/history guards with image-scoped read/write lock
@@ -1834,14 +1840,22 @@ On-disk flush, background autosave, recovery, and compaction remain Phase 5G–5
 
 Product boundary locked for later filmstrip transfer (not implemented here):
 
-- **Paste** (`AdjustmentVersionApplyMode::kPaste`): create a new user-visible Version carrying one
-  edit transaction per transferred operator. Version creation is an atomic history operation
-  outside the working journal sequence; the journal flushes on image/workspace switch.
-- **Merge** (`AdjustmentVersionApplyMode::kMerge`): apply the package onto the current pipeline and
-  commit a new Version that stores only materialized final params (no per-operator transactions).
-  Same Version-commit boundary as today; not a multi-step working-journal rewrite story.
+- Before Paste or Merge, finalize the open edit command, journal-commit every resulting transaction,
+  and atomically materialize the active Version and pipeline. Library and Editor then invoke the
+  same `AdjustmentTransferService` operation.
+- **Paste** (`AdjustmentVersionApplyMode::kPaste`): create a new user-visible Version with an empty
+  transaction chain based on the target image's import/default pipeline, then append one incoming
+  transaction per transferred operator. It does not inherit active-Version adjustments.
+- **Merge** (`AdjustmentVersionApplyMode::kMerge`): create a new user-visible Version by copying the
+  active Version's applied transaction chain, excluding its redo chain, then append the incoming
+  transactions. This is copy semantics until a persisted version graph exists.
+- Version publication remains outside the editor journal only because one DuckDB transaction writes
+  the new Version, active-Version selection, final pipeline params, and new journal generation.
 - Interactive undo/redo and append-behind-cursor continue to use journal `CursorMove` /
   `EditAppend` / `RewriteTimeline` on the active working timeline after checkout.
+
+The exact algorithms and crash behavior are defined in
+[Editor History Durability and Version Transfer Design](editor_history_durability_and_version_transfer_design.md).
 
 Deliverables:
 
@@ -1851,7 +1865,8 @@ Deliverables:
 - [x] Records for edit append, cursor move, atomic `RewriteTimeline`, materialized-head marker,
   recovery marker, and compaction checkpoint.
 - [x] `RewriteTimeline` validates the expected timeline hash and discarded-tail hash, retains the
-  requested cursor prefix, and appends the replacement edit as one logical mutation.
+  transaction chain from its start through the requested cursor, and appends the replacement edit
+  as one logical mutation.
 - [x] Journal bytes stay append-only. A rewrite is a logical tombstone; only verified compaction can
   physically omit discarded tail records (5H).
 - [x] Transaction ID high-water after rewrite so discarded-tail IDs are never reused.
@@ -1864,8 +1879,8 @@ Acceptance:
   to redo (`EditAEditBUndoAppendCReplaysAsAThenC`).
 - [x] `edit A, edit B, undo, redo` replays as `[A, B]` with the cursor at two
   (`EditAEditBUndoRedoReplaysAsAThenB`).
-- [x] A hash mismatch rejects the whole rewrite and leaves the prior valid prefix unchanged
-  (`HashMismatchRejectsWholeRewriteAndLeavesPrefixUnchanged`).
+- [x] A hash mismatch rejects the whole rewrite and leaves the prior valid record chain unchanged
+  (`HashMismatchRejectsWholeRewriteAndLeavesRecordChainUnchanged`).
 - [x] A partial `RewriteTimeline` record is ignored as an incomplete tail; replay never observes
   “B discarded but C absent” (`PartialRewriteTimelineLeavesPriorTimelineUnchanged`).
 - [x] WorkingVersion, journal replay, and the independent timeline simulator produce identical
@@ -1878,11 +1893,18 @@ Acceptance:
 
 Deliverables:
 
-- Register journal flush, version materialization, thumbnail invalidation, image load, and preview
+- Extend the Phase 5F format with `JournalBatchCommit`. The image-scoped writer appends complete
+  operation records plus one batch commit record, calls `FlushFileBuffers`/`fsync`, and advances the
+  durable batch-commit and operation sequences only after that flush succeeds.
+- Recovery ignores complete operation records that are not covered by a valid batch commit record.
+- Replace `IEditorJournalPort::AppendBarrier` with typed finalize, journal-commit, and materialize
+  operations so callers cannot confuse the three states.
+- Register journal commit, version materialization, thumbnail invalidation, image load, and preview
   render through the existing background-task module.
 - Implement image-scoped locks so saving A can overlap loading/rendering B without sharing a mutable
   pipeline guard.
-- On image/workspace/app transition, seal the current gesture, enqueue its durability barrier,
+- On image/workspace/app transition, finalize the current edit command, enqueue its durability
+  barrier,
   invalidate its render generation, and begin the next permitted load immediately.
 - Make stale journal, thumbnail, scope, and render completions validate image and generation before
   publishing.
@@ -1892,6 +1914,8 @@ Acceptance:
 
 - Leaving an image, leaving EditorWorkspace, and orderly application exit durably save the latest
   coalesced transaction without GUI-thread I/O.
+- A short write or failed file flush does not advance the durable batch-commit or operation
+  sequence, materialize the affected transactions, or report save success.
 - The next image begins loading before the previous image's save completes when locks permit.
 - An older async save completion cannot overwrite a newer generation.
 - Discard removes only the current unflushed transaction; published versions remain available
@@ -1901,7 +1925,11 @@ Acceptance:
 
 Deliverables:
 
-- Implement idempotent replay from the latest verified checkpoint and valid journal prefix.
+- Add one DuckDB storage operation that atomically updates active Version history, active pipeline
+  params, and recovery metadata on one connection. Separate `SaveHistory()` and `SavePipeline()`
+  calls are forbidden for editor materialization and Version publication.
+- Implement idempotent replay from the stored materialized head and the valid committed journal
+  record chain.
 - Implement compaction as create-new, flush, verify, atomic replace, and directory durability steps;
   never rewrite the active file in place.
 - Add injectable file operations for short write, failed flush, failed atomic replace, checksum
@@ -1915,6 +1943,8 @@ Acceptance:
 - Replaying the same journal twice is idempotent.
 - A failed compaction leaves the previous journal recoverable.
 - Materialization interrupted after journal durability reconstructs the same history/pipeline head.
+- A process termination between history and pipeline writes cannot expose mismatched state because
+  both writes and recovery metadata share one DuckDB transaction.
 
 ### Phase 5I - Reproducible forced-termination fuzz harness
 
@@ -1934,7 +1964,8 @@ Deliverables:
 
 Acceptance:
 
-- Recovery always yields a valid journal prefix and a state allowed by the durability boundary.
+- Recovery always yields a valid committed journal record chain and a state allowed by the
+  durability boundary.
 - A discarded redo tail never reappears after restart or compaction.
 - Transaction IDs, cursor, timeline hash, version head, and pipeline params match the oracle.
 - The harness reproduces a failure from its emitted seed and operation list without timing sleeps.
@@ -2072,12 +2103,16 @@ Deliverables:
 - Distinguish user-visible Versions from working-timeline cursor moves and journal-only
   `RewriteTimeline` records.
 - Surface recovered heads without exposing internal journal records as edit rows.
+- Route Editor Paste/Merge through the same `AdjustmentTransferService` operation used by Library,
+  including journal commit/materialization preparation and atomic Version publication.
 
 Acceptance:
 
 - Version create, checkout, rename, remove, reconstruction, and alternate-look behavior match the
   current editor.
 - Timeline rewrite never creates an implicit Version or corrupts an existing Version hash.
+- Paste starts from the image import/default pipeline; Merge copies only the active applied
+  transaction chain; both append incoming transactions and publish a matching active pipeline.
 
 ### Phase 7B - Histogram and waveform scope module
 
@@ -2289,7 +2324,7 @@ Extend the existing viewer geometry coverage and add focused tests such as:
 - `DirectPresenterRejectsPriorImageAfterGenerationChange`
 - `DirectPresenterRecyclesSlotAfterProducerAndRendererComplete`
 - `HiddenViewportWakesOutstandingTargetWaitWithLifecycleResult`
-- `EditorTransactionJournalReplaysCommittedGenerationsInOrder`
+- `EditorTransactionJournalReplaysRecordSequencesInOrder`
 - `EditorTransactionJournalIgnoresAlreadyMaterializedRecords`
 - `RewriteTimelineAtomicallyDropsRedoTailAndAppendsReplacement`
 - `PartialRewriteTimelineLeavesPriorTimelineUnchanged`
