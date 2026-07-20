@@ -1027,6 +1027,18 @@ target_link_libraries(EditorJournalWriterTest EditHistory GTest::gtest_main)
 gtest_discover_tests(EditorJournalWriterTest TEST_PREFIX "EditorJournalWriterTest."
   PROPERTIES LABELS "ci_core_flow")
 
+# Phase 5I: deterministic seeded WAL restart/fault framework. This deliberately
+# stays test-side and dependency-free; scheduled CI can increase the step count.
+add_executable(EditorJournalFuzzFrameworkTest
+  edit/history/editor_journal_fuzz_framework.cpp
+  edit/history/editor_journal_fuzz_test.cpp)
+target_include_directories(EditorJournalFuzzFrameworkTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorJournalFuzzFrameworkTest EditHistory GTest::gtest_main)
+target_compile_definitions(EditorJournalFuzzFrameworkTest PRIVATE
+  EDITOR_JOURNAL_FUZZ_CORPUS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/edit/history/editor_journal_fuzz_seeds.txt")
+gtest_discover_tests(EditorJournalFuzzFrameworkTest TEST_PREFIX "EditorJournalFuzzFrameworkTest."
+  PROPERTIES LABELS "ci_core_flow")
+
 # Phase 5H: recovery REDO, atomic DuckDB materialization, compaction, fault injection.
 add_executable(EditorHistoryMaterializerTest edit/history/editor_history_materializer_test.cpp)
 target_include_directories(EditorHistoryMaterializerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
@@ -1874,6 +1886,7 @@ alcedo_assign_test_category(ci_core ALCEDO_BUILD_CI_TESTS alcedo_tests_ci_core
   SleeveFilesystemCiTest
   PipelineServiceTest
   EditHistoryMgmtServiceTest
+  EditorJournalFuzzFrameworkTest
   CropRotateOpTest
   SemanticGrpcDependencySmokeTest
   AiSidecarRuntimeServiceTest

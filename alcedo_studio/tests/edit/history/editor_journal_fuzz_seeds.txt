@@ -1,0 +1,6 @@
+# Regression seeds for EditorJournalFuzzFrameworkTest.
+1
+7
+1597463007
+3737844653
+4207849484

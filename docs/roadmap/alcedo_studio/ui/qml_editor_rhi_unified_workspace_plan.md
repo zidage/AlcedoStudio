@@ -1986,28 +1986,40 @@ Acceptance:
 
 ### Phase 5I - Reproducible forced-termination fuzz harness
 
+**Status: complete (2026-07-20).** `EditorJournalFuzzFrameworkTest` provides the repository-owned,
+dependency-free seeded runner. It exercises the production journal writer/decoder, the independent
+timeline simulator, mid-frame append cutoffs, failed flushes, verified compaction, and a real child
+process terminated after the last durable batch. Fixed seeds live in
+`editor_journal_fuzz_seeds.txt`; scheduled C++ CI runs 128 fresh 256-operation seeds twice weekly.
+
 Deliverables:
 
-- Build an ad-hoc parent/child fuzz runner with no new fuzzing-library dependency.
-- Generate seeded sequences of edit, undo, redo, `RewriteTimeline`, switch image, search replacement,
+- [x] Build an ad-hoc parent/child fuzz runner with no new fuzzing-library dependency.
+- [x] Generate seeded sequences of edit, undo, redo, `RewriteTimeline`, switch image, search replacement,
   workspace change, autosave, materialize, compact, and shutdown operations.
-- Have the child emit named crash points around record header/payload/checksum writes, flush,
+- [x] Have the child emit named crash points around record header/payload/checksum writes, flush,
   head-marker update, materialization, thumbnail invalidation, compaction replace, and image switch.
-- Let the parent randomly terminate the child at those points, restart it, recover, and compare the
+- [x] Let the parent terminate the child at the selected seeded point, restart it, recover, and compare the
   result with the independent reference timeline model.
-- Combine process termination with the Phase 5H in-process file/task fault injectors.
-- Print and persist the seed, minimized operation sequence, crash point, backend-independent journal
+- [x] Combine process termination with the Phase 5H in-process file/task fault injectors. The
+  `max_total_append_bytes` cutoff leaves deterministic header/payload/checksum tails; the existing
+  flush and compaction injectors cover the later durability boundaries.
+- [x] Print and persist the seed, minimized crash-prefix operation sequence, crash point,
+  backend-independent journal
   fixture, and expected/actual state for every failure.
-- Keep a checked-in regression-seed corpus and run fresh bounded random seeds in scheduled CI.
+- [x] Keep a checked-in regression-seed corpus and run fresh bounded random seeds in scheduled CI.
 
 Acceptance:
 
-- Recovery always yields a valid committed journal record chain and a state allowed by the
+- [x] Recovery always yields a valid committed journal record chain and a state allowed by the
   durability boundary.
-- A discarded redo tail never reappears after restart or compaction.
-- Transaction IDs, cursor, timeline hash, version head, and pipeline params match the oracle.
-- The harness reproduces a failure from its emitted seed and operation list without timing sleeps.
-- The fixed regression corpus passes in ordinary presubmit tests; the larger randomized run is a
+- [x] A discarded redo tail never reappears after restart or compaction
+  (`CompactionNeverRestoresDiscardedRedoTail`).
+- [x] Transaction IDs, cursor, timeline hash, version head, and pipeline params match the oracle and
+  the Phase 5H materializer recovery projection.
+- [x] The harness reproduces a failure from its emitted seed and operation list without timing sleeps
+  (`NamedCrashPointsProduceReproducibleRecovery`).
+- [x] The fixed regression corpus passes in ordinary presubmit tests; the larger randomized run is a
   required scheduled job.
 
 ### Phase 6 - Adjustment panels and shared QML controls

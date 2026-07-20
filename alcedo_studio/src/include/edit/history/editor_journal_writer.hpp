@@ -109,6 +109,8 @@ class InjectedEditorJournalFile final : public IEditorJournalFile {
   explicit InjectedEditorJournalFile(std::vector<std::uint8_t> initial = {});
 
   std::size_t max_write                 = 0;
+  std::size_t max_total_append_bytes    = 0;
+  std::size_t total_appended_bytes      = 0;
   int         append_calls              = 0;
   int         flush_calls               = 0;
   int         create_calls              = 0;

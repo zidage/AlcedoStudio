@@ -528,11 +528,21 @@ auto InjectedEditorJournalFile::Append(const std::uint8_t* data, std::size_t siz
     }
     return false;
   }
-  const auto count = max_write == 0 ? size : (size < max_write ? size : max_write);
-  if (data != nullptr && count > 0) {
-    bytes_.insert(bytes_.end(), data, data + count);
+  if (max_total_append_bytes != 0 && total_appended_bytes >= max_total_append_bytes) {
+    *written = 0;
+    if (error) {
+      *error = "injected append termination";
+    }
+    return false;
   }
-  *written = count;
+  const auto count     = max_write == 0 ? size : (size < max_write ? size : max_write);
+  const auto remaining = max_total_append_bytes - total_appended_bytes;
+  const auto accepted  = max_total_append_bytes == 0 || count < remaining ? count : remaining;
+  if (data != nullptr && accepted > 0) {
+    bytes_.insert(bytes_.end(), data, data + accepted);
+  }
+  total_appended_bytes += accepted;
+  *written = accepted;
   return true;
 }
 
