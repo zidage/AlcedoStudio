@@ -6,9 +6,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_types.hpp"
@@ -62,13 +64,96 @@ class IEditorTaskPort {
   virtual void EndTask(std::uint64_t task_id, bool success, const std::string& message)        = 0;
 };
 
-/// Redo-only journal port. Phase 5F owns the durable format; Phase 5A only needs
-/// a seam so the session service never reaches storage from the UI module.
+struct EditorJournalCommitOutcome {
+  bool          accepted = false;
+  bool          durable  = false;
+  bool          pending  = false;
+  std::uint64_t durable_batch_commit_sequence = 0;
+  std::uint64_t durable_operation_sequence    = 0;
+  std::string   error;
+};
+
+struct EditorMaterializeOutcome {
+  bool          accepted = false;
+  bool          materialized = false;
+  std::uint64_t materialized_operation_sequence = 0;
+  std::string   error;
+};
+
+using EditorJournalCommitCallback = std::function<void(EditorJournalCommitOutcome)>;
+using EditorMaterializeCallback   = std::function<void(EditorMaterializeOutcome)>;
+
+/// Typed persistence boundary for one image-scoped editor session. The
+/// compatibility AppendBarrier shim is intentionally below the typed methods;
+/// new callers cannot accidentally combine finalize, journal durability, and
+/// materialization in one service call.
 class IEditorJournalPort {
  public:
-  virtual ~IEditorJournalPort()                                                         = default;
-  virtual auto AppendBarrier(sl_element_id_t element_id, std::uint64_t session_generation,
-                             std::string* error) -> bool                                = 0;
+  virtual ~IEditorJournalPort() = default;
+
+  /// Finalize the open edit command. This boundary is synchronous and must not
+  /// perform file or database I/O.
+  virtual auto FinalizeEdit(sl_element_id_t /*element_id*/, std::uint64_t /*session_generation*/,
+                            std::string* /*error*/) -> bool {
+    return true;
+  }
+
+  /// Commit queued journal records. The default implementation adapts old test
+  /// ports that only override AppendBarrier.
+  virtual auto CommitJournal(sl_element_id_t element_id, std::uint64_t session_generation,
+                             std::string* error) -> EditorJournalCommitOutcome {
+    EditorJournalCommitOutcome outcome;
+    outcome.accepted = true;
+    outcome.durable  = AppendBarrier(element_id, session_generation, error);
+    if (!outcome.durable) {
+      outcome.error = error != nullptr ? *error : "Journal commit failed";
+    }
+    return outcome;
+  }
+
+  /// Materialize journal-committed records into the durable history/pipeline
+  /// projection. The default is a no-op for bootstrap ports.
+  virtual auto Materialize(sl_element_id_t /*element_id*/, std::uint64_t /*session_generation*/,
+                           std::string* /*error*/) -> EditorMaterializeOutcome {
+    return EditorMaterializeOutcome{true, true, 0, {}};
+  }
+
+  /// Async adapters own their worker and invoke the callback after the typed
+  /// operation reaches its terminal state. Defaults are synchronous so legacy
+  /// fakes remain deterministic.
+  virtual auto CommitJournalAsync(sl_element_id_t element_id, std::uint64_t session_generation,
+                                  EditorJournalCommitCallback callback) -> bool {
+    std::string error;
+    auto        outcome = CommitJournal(element_id, session_generation, &error);
+    if (outcome.error.empty()) {
+      outcome.error = std::move(error);
+    }
+    if (callback) {
+      callback(std::move(outcome));
+    }
+    return true;
+  }
+
+  virtual auto MaterializeAsync(sl_element_id_t element_id, std::uint64_t session_generation,
+                                EditorMaterializeCallback callback) -> bool {
+    std::string error;
+    auto        outcome = Materialize(element_id, session_generation, &error);
+    if (outcome.error.empty()) {
+      outcome.error = std::move(error);
+    }
+    if (callback) {
+      callback(std::move(outcome));
+    }
+    return true;
+  }
+
+  /// Legacy compatibility hook for Phase 5F test doubles. Production and new
+  /// tests should override CommitJournal/CommitJournalAsync instead.
+  virtual auto AppendBarrier(sl_element_id_t /*element_id*/, std::uint64_t /*session_generation*/,
+                             std::string* /*error*/) -> bool {
+    return true;
+  }
+
   virtual auto DiscardUnflushed(sl_element_id_t element_id, std::string* error) -> bool = 0;
 };
 

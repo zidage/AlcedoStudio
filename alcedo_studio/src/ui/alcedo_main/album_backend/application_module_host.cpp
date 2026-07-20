@@ -7,7 +7,9 @@
 #include <QCoreApplication>
 #include <QDeadlineTimer>
 #include <QEventLoop>
+#include <cstdint>
 #include <chrono>
+#include <filesystem>
 #include <string>
 
 #include "app/editor_session_bootstrap.hpp"
@@ -104,13 +106,37 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       }
       return project_->handler().project()->GetImagePoolService();
     };
+    production_services.journal_path = [this](sl_element_id_t element_id) {
+      if (!project_) {
+        return std::filesystem::path{};
+      }
+      auto root = project_->handler().db_path().parent_path();
+      if (root.empty()) {
+        root = project_->handler().workspace_dir();
+      }
+      if (root.empty()) {
+        return std::filesystem::path{};
+      }
+      return root / "editor-journal" /
+             ("image-" + std::to_string(static_cast<std::uint64_t>(element_id)) + ".wal");
+    };
+    production_services.invalidate_thumbnail = [this](sl_element_id_t element_id) {
+      if (!project_) {
+        return;
+      }
+      if (auto thumbnails = project_->handler().thumbnail_service()) {
+        thumbnails->InvalidateThumbnail(element_id);
+      }
+    };
     production_pipeline->SetServices(production_services);
     production_history->SetServices(production_services);
     production_scheduler->SetServices(production_services);
+    auto production_journal =
+        std::make_shared<EditorSessionProductionJournalPort>(production_services);
 
     editor_session_runtime_ = alcedo::EditorSessionRuntime::CreateWithPorts(
-        production_pipeline, production_history, production_tasks,
-        std::make_shared<alcedo::EditorSessionBootstrapJournalPort>(), production_scheduler);
+        production_pipeline, production_history, production_tasks, production_journal,
+        production_scheduler);
     production_scheduler->SetCoordinator(editor_session_runtime_->coordinator);
     editor_session_production_scheduler_ = std::move(production_scheduler);
   }

@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <memory>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -112,10 +113,28 @@ class FakeTaskPort final : public IEditorTaskPort {
 
 class FakeJournalPort final : public IEditorJournalPort {
  public:
+  bool fail_finalize = false;
   bool fail_barrier  = false;
   bool fail_discard  = false;
+  bool async_commit  = false;
+  bool async_materialize = false;
+  int  finalize_count = 0;
   int  barrier_count = 0;
   int  discard_count = 0;
+  EditorJournalCommitCallback pending_commit;
+  EditorMaterializeCallback   pending_materialize;
+
+  auto FinalizeEdit(sl_element_id_t, std::uint64_t, std::string* error) -> bool override {
+    ++finalize_count;
+    if (fail_finalize) {
+      if (error) {
+        *error = "journal finalize failed";
+      }
+      return false;
+    }
+    return true;
+  }
+
   auto AppendBarrier(sl_element_id_t, std::uint64_t, std::string* error) -> bool override {
     ++barrier_count;
     if (fail_barrier) {
@@ -126,6 +145,41 @@ class FakeJournalPort final : public IEditorJournalPort {
     }
     return true;
   }
+
+  auto CommitJournalAsync(sl_element_id_t element_id, std::uint64_t session_generation,
+                          EditorJournalCommitCallback callback) -> bool override {
+    if (!async_commit) {
+      return IEditorJournalPort::CommitJournalAsync(element_id, session_generation,
+                                                     std::move(callback));
+    }
+    pending_commit = std::move(callback);
+    return true;
+  }
+
+  auto MaterializeAsync(sl_element_id_t element_id, std::uint64_t session_generation,
+                        EditorMaterializeCallback callback) -> bool override {
+    if (!async_materialize) {
+      return IEditorJournalPort::MaterializeAsync(element_id, session_generation,
+                                                   std::move(callback));
+    }
+    pending_materialize = std::move(callback);
+    return true;
+  }
+
+  void CompleteCommit(bool durable, std::string error = {}) {
+    ASSERT_TRUE(static_cast<bool>(pending_commit));
+    auto callback = std::move(pending_commit);
+    callback(EditorJournalCommitOutcome{true, durable, !durable, durable ? 2u : 0u,
+                                        durable ? 1u : 0u, std::move(error)});
+  }
+
+  void CompleteMaterialization(bool materialized, std::string error = {}) {
+    ASSERT_TRUE(static_cast<bool>(pending_materialize));
+    auto callback = std::move(pending_materialize);
+    callback(EditorMaterializeOutcome{true, materialized, materialized ? 1u : 0u,
+                                      std::move(error)});
+  }
+
   auto DiscardUnflushed(sl_element_id_t, std::string* error) -> bool override {
     ++discard_count;
     if (fail_discard) {
@@ -408,9 +462,8 @@ TEST_F(EditorSessionServiceTest, SwitchCancelsPriorSessionAndSealsJournal) {
 }
 
 TEST_F(EditorSessionServiceTest, SealCompletesEditorSaveTaskImmediately) {
-  // Phase 5E production cutover: seal persists through guard release and ends
-  // the editor_save background task in the same operation. True overlapping
-  // async materialization remains Phase 5G.
+  // The compatibility adapter used by this fake completes synchronously;
+  // production uses the asynchronous journal/materialization path.
   service_->Open(1, 2);
   PresentFirstFrame(*service_);
 
@@ -607,6 +660,74 @@ TEST_F(EditorSessionServiceTest, SwitchStopsWhenJournalOrSaveTaskCannotStart) {
   EXPECT_EQ(task_failure.kind, EditorSessionResultKind::Failed);
   EXPECT_EQ(service_->identity().element_id, 1u);
   EXPECT_EQ(pipeline_->release_count, 0);
+}
+
+TEST_F(EditorSessionServiceTest, SwitchStartsNextImageBeforePriorMaterializationCompletes) {
+  service_->Open(1, 2);
+  PresentFirstFrame(*service_);
+  const auto generation_a = service_->identity().session_generation;
+
+  journal_->async_commit       = true;
+  journal_->async_materialize = true;
+  const auto switched = service_->Switch(3, 4);
+
+  EXPECT_EQ(switched.kind, EditorSessionResultKind::RenderRouted);
+  EXPECT_EQ(service_->identity().element_id, 3u);
+  EXPECT_EQ(service_->state(), EditorSessionState::Loading);
+  EXPECT_EQ(pipeline_->release_count, 1);
+  EXPECT_TRUE(tasks_->ended_ids.empty());
+  ASSERT_FALSE(render_->submitted.empty());
+  EXPECT_EQ(render_->submitted.back().image_id, 4u);
+  EXPECT_TRUE(static_cast<bool>(journal_->pending_commit));
+
+  journal_->CompleteCommit(true);
+  EXPECT_TRUE(static_cast<bool>(journal_->pending_materialize));
+  EXPECT_TRUE(tasks_->ended_ids.empty());
+  EXPECT_EQ(service_->state(), EditorSessionState::Loading);
+
+  const auto result_count_before_a_materialization = service_->results().size();
+  PresentFirstFrame(*service_);
+  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+  journal_->CompleteMaterialization(true);
+  ASSERT_EQ(tasks_->ended_ids.size(), 1u);
+  EXPECT_EQ(service_->results().size(), result_count_before_a_materialization + 3u);
+
+  // A's completion is terminal and cannot alter B after the materialization
+  // callback has already been consumed.
+  service_->NotifySaveFinished(generation_a, false, "late duplicate failure");
+  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+  EXPECT_EQ(tasks_->ended_ids.size(), 1u);
+}
+
+TEST_F(EditorSessionServiceTest, FinalizeFailureKeepsCurrentImageGuards) {
+  service_->Open(1, 2);
+  PresentFirstFrame(*service_);
+  journal_->fail_finalize = true;
+
+  const auto result = service_->Switch(3, 4);
+
+  EXPECT_EQ(result.kind, EditorSessionResultKind::Failed);
+  EXPECT_EQ(service_->identity().element_id, 1u);
+  EXPECT_EQ(pipeline_->release_count, 0);
+  EXPECT_EQ(journal_->finalize_count, 1);
+  EXPECT_TRUE(render_->cancelled_sessions.empty());
+}
+
+TEST_F(EditorSessionServiceTest, LateMaterializationFailureDoesNotFailNewImage) {
+  service_->Open(1, 2);
+  PresentFirstFrame(*service_);
+  journal_->async_commit       = true;
+  journal_->async_materialize = true;
+  service_->Switch(3, 4);
+
+  journal_->CompleteCommit(true);
+  journal_->CompleteMaterialization(false, "A materialization failed");
+
+  EXPECT_EQ(service_->identity().element_id, 3u);
+  EXPECT_EQ(service_->state(), EditorSessionState::Loading);
+  PresentFirstFrame(*service_);
+  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+  EXPECT_EQ(tasks_->ended_ids.size(), 1u);
 }
 
 TEST_F(EditorSessionServiceTest, SaveStartedIsReportedWhileStateIsSaving) {

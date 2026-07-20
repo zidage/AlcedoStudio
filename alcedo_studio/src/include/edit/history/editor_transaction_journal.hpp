@@ -37,6 +37,7 @@ enum class EditorJournalRecordType : std::uint16_t {
   MaterializedHead     = 4,
   RecoveryMarker       = 5,
   CompactionCheckpoint = 6,
+  JournalBatchCommit   = 7,
 };
 
 struct EditorJournalIdentity {
@@ -75,6 +76,17 @@ struct EditorJournalMarkerPayload {
   std::string   note;
 };
 
+/// Durability boundary for one append-only journal batch. The commit record is
+/// itself framed and checksummed, but its covered records are eligible for
+/// recovery only after the writer successfully flushes the file.
+struct EditorJournalBatchCommitPayload {
+  std::uint64_t previous_batch_commit_sequence = 0;
+  std::uint64_t first_covered_sequence         = 0;
+  std::uint64_t last_covered_sequence          = 0;
+  std::uint64_t last_operation_sequence        = 0;
+  Hash128       record_chain_hash{};
+};
+
 struct EditorJournalDecodedRecord {
   std::uint32_t             record_length      = 0;
   std::uint16_t             format_version     = 0;
@@ -90,6 +102,7 @@ struct EditorJournalDecodedRecord {
   std::optional<EditorJournalRewriteTimelinePayload>  rewrite_timeline;
   std::optional<EditorJournalMaterializedHeadPayload> materialized_head;
   std::optional<EditorJournalMarkerPayload>           marker;
+  std::optional<EditorJournalBatchCommitPayload>      batch_commit;
 };
 
 enum class EditorJournalApplyStatus {
@@ -124,6 +137,8 @@ struct EditorJournalApplyResult {
     const EditorJournalMaterializedHeadPayload& payload) -> std::vector<std::uint8_t>;
 [[nodiscard]] auto EncodeEditorJournalMarkerPayload(const EditorJournalMarkerPayload& payload)
     -> std::vector<std::uint8_t>;
+[[nodiscard]] auto EncodeEditorJournalBatchCommitPayload(
+    const EditorJournalBatchCommitPayload& payload) -> std::vector<std::uint8_t>;
 
 [[nodiscard]] auto DecodeEditorJournalEditAppendPayload(const std::vector<std::uint8_t>& bytes,
                                                         EditorJournalEditAppendPayload* out,
@@ -140,6 +155,9 @@ struct EditorJournalApplyResult {
 [[nodiscard]] auto DecodeEditorJournalMarkerPayload(const std::vector<std::uint8_t>& bytes,
                                                     EditorJournalMarkerPayload* out,
                                                     std::string* error) -> bool;
+[[nodiscard]] auto DecodeEditorJournalBatchCommitPayload(
+    const std::vector<std::uint8_t>& bytes, EditorJournalBatchCommitPayload* out,
+    std::string* error) -> bool;
 
 /// Frames one complete journal record. Returns empty on encode failure.
 [[nodiscard]] auto EncodeEditorJournalRecord(EditorJournalRecordType type, std::uint64_t sequence,
@@ -160,7 +178,18 @@ struct EditorJournalDecodeRecordChainResult {
 [[nodiscard]] auto DecodeEditorJournalRecordChain(const std::uint8_t* data, std::size_t size)
     -> EditorJournalDecodeRecordChainResult;
 
-/// Append-only in-memory journal log (file durability is Phase 5G/5H).
+/// Cumulative checksum of the non-commit records through `last_sequence`.
+/// The sequence is mixed into the chain so reordering records cannot preserve
+/// the same value.
+[[nodiscard]] auto ComputeEditorJournalRecordChainHash(
+    const std::vector<EditorJournalDecodedRecord>& records,
+    std::uint64_t                                 last_sequence) -> Hash128;
+
+[[nodiscard]] auto IsEditorJournalEditHistoryRecord(EditorJournalRecordType type) -> bool;
+
+/// Append-only in-memory journal log. File durability is owned by
+/// EditorJournalWriter; this class remains useful as the deterministic record
+/// and replay model in tests.
 class EditorTransactionJournal final {
  public:
   [[nodiscard]] auto empty() const -> bool { return bytes_.empty(); }
@@ -172,6 +201,14 @@ class EditorTransactionJournal final {
 
   /// Append raw framed bytes (used by tests to inject truncated tails).
   void AppendRaw(const std::uint8_t* data, std::size_t size);
+
+  /// Replace the in-memory log with bytes read from an existing journal file.
+  /// Unlike AppendRaw, this also advances the next sequence after the valid
+  /// decoded prefix and is therefore intended for journal recovery/bootstrap.
+  auto LoadBytes(const std::vector<std::uint8_t>& data, std::string* error = nullptr) -> bool;
+
+  /// Remove an uncommitted in-memory tail without changing the valid prefix.
+  auto Truncate(std::size_t byte_count, std::string* error = nullptr) -> bool;
 
   auto AppendEdit(const EditorJournalIdentity& identity, const EditTransaction& transaction)
       -> std::uint64_t;
@@ -188,6 +225,9 @@ class EditorTransactionJournal final {
                             std::string note) -> std::uint64_t;
   auto AppendCompactionCheckpoint(const EditorJournalIdentity& identity,
                                   std::uint64_t last_valid_sequence, std::string note)
+      -> std::uint64_t;
+  auto AppendJournalBatchCommit(const EditorJournalIdentity& identity,
+                                const EditorJournalBatchCommitPayload& payload)
       -> std::uint64_t;
 
   [[nodiscard]] auto DecodeRecordChain() const -> EditorJournalDecodeRecordChainResult;
@@ -228,6 +268,13 @@ class JournalTimelineSimulator final {
   [[nodiscard]] auto ApplyDecodedRecord(const EditorJournalDecodedRecord& record)
       -> EditorJournalApplyResult;
   [[nodiscard]] auto ReplayRecordChain(const EditorTransactionJournal& journal)
+      -> EditorJournalApplyResult;
+
+  /// Replay only records covered by a valid JournalBatchCommit. If a journal
+  /// contains no batch commits, this retains Phase 5F's in-memory format
+  /// behavior for backwards-compatible unit fixtures; on-disk recovery must
+  /// use a journal with a commit record.
+  [[nodiscard]] auto ReplayCommittedRecordChain(const EditorTransactionJournal& journal)
       -> EditorJournalApplyResult;
 
   /// Allocate the next transaction id. Never reuses ids at or below the high-water mark,

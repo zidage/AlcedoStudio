@@ -203,6 +203,14 @@ auto FillTypedPayload(EditorJournalDecodedRecord* record, std::string* error) ->
       record->marker = std::move(payload);
       return true;
     }
+    case EditorJournalRecordType::JournalBatchCommit: {
+      EditorJournalBatchCommitPayload payload;
+      if (!DecodeEditorJournalBatchCommitPayload(record->payload_bytes, &payload, error)) {
+        return false;
+      }
+      record->batch_commit = std::move(payload);
+      return true;
+    }
   }
   if (error) {
     *error = "unknown journal record type";
@@ -284,6 +292,18 @@ auto EncodeEditorJournalMarkerPayload(const EditorJournalMarkerPayload& payload)
   AppendU64(&out, payload.last_valid_sequence);
   const auto note = EncodeStringPayload(payload.note);
   AppendBytes(&out, note.data(), note.size());
+  return out;
+}
+
+auto EncodeEditorJournalBatchCommitPayload(const EditorJournalBatchCommitPayload& payload)
+    -> std::vector<std::uint8_t> {
+  std::vector<std::uint8_t> out;
+  out.reserve(8 * 4 + 16);
+  AppendU64(&out, payload.previous_batch_commit_sequence);
+  AppendU64(&out, payload.first_covered_sequence);
+  AppendU64(&out, payload.last_covered_sequence);
+  AppendU64(&out, payload.last_operation_sequence);
+  AppendHash(&out, payload.record_chain_hash);
   return out;
 }
 
@@ -379,6 +399,29 @@ auto DecodeEditorJournalMarkerPayload(const std::vector<std::uint8_t>& bytes,
   return DecodeStringPayload(bytes.data(), bytes.size(), &offset, &out->note, error);
 }
 
+auto DecodeEditorJournalBatchCommitPayload(const std::vector<std::uint8_t>& bytes,
+                                           EditorJournalBatchCommitPayload* out,
+                                           std::string* error) -> bool {
+  constexpr std::size_t kPayloadBytes = 8 * 4 + 16;
+  if (out == nullptr || bytes.size() != kPayloadBytes) {
+    if (error) {
+      *error = "journal-batch-commit payload size mismatch";
+    }
+    return false;
+  }
+  std::size_t offset = 0;
+  out->previous_batch_commit_sequence = ReadU64(bytes.data() + offset);
+  offset += 8;
+  out->first_covered_sequence = ReadU64(bytes.data() + offset);
+  offset += 8;
+  out->last_covered_sequence = ReadU64(bytes.data() + offset);
+  offset += 8;
+  out->last_operation_sequence = ReadU64(bytes.data() + offset);
+  offset += 8;
+  out->record_chain_hash = ReadHash(bytes.data() + offset);
+  return true;
+}
+
 auto EncodeEditorJournalRecord(EditorJournalRecordType type, std::uint64_t sequence,
                                const EditorJournalIdentity&     identity,
                                const std::vector<std::uint8_t>& payload_bytes)
@@ -414,6 +457,7 @@ auto DecodeEditorJournalRecordChain(const std::uint8_t* data, std::size_t size)
     -> EditorJournalDecodeRecordChainResult {
   EditorJournalDecodeRecordChainResult result;
   std::size_t                     offset = 0;
+  std::uint64_t                   expected_sequence = 1;
 
   while (offset < size) {
     const std::size_t remaining = size - offset;
@@ -483,6 +527,11 @@ auto DecodeEditorJournalRecordChain(const std::uint8_t* data, std::size_t size)
     decoded.format_version = format_version;
     decoded.record_type    = static_cast<EditorJournalRecordType>(record_type_raw);
     decoded.sequence       = ReadU64(rec + 12);
+    if (decoded.sequence != expected_sequence) {
+      result.stopped_on_corrupt_record = true;
+      result.message                   = "journal record sequence gap";
+      break;
+    }
     decoded.identity.element_id =
         static_cast<sl_element_id_t>(ReadU64(rec + 20));
     decoded.identity.version_id =
@@ -504,9 +553,32 @@ auto DecodeEditorJournalRecordChain(const std::uint8_t* data, std::size_t size)
     result.records.push_back(std::move(decoded));
     offset += record_length;
     result.valid_chain_byte_count = offset;
+    ++expected_sequence;
   }
 
   return result;
+}
+
+auto ComputeEditorJournalRecordChainHash(
+    const std::vector<EditorJournalDecodedRecord>& records, std::uint64_t last_sequence)
+    -> Hash128 {
+  Hash128 chain{};
+  for (const auto& record : records) {
+    if (record.sequence > last_sequence ||
+        record.record_type == EditorJournalRecordType::JournalBatchCommit) {
+      continue;
+    }
+    const Hash128 sequence_hash =
+        Hash128::Compute(&record.sequence, sizeof(record.sequence));
+    chain = Hash128::Blend(chain, Hash128::Blend(sequence_hash, record.record_checksum));
+  }
+  return chain;
+}
+
+auto IsEditorJournalEditHistoryRecord(EditorJournalRecordType type) -> bool {
+  return type == EditorJournalRecordType::EditAppend ||
+         type == EditorJournalRecordType::CursorMove ||
+         type == EditorJournalRecordType::RewriteTimeline;
 }
 
 void EditorTransactionJournal::Clear() {
@@ -519,6 +591,45 @@ void EditorTransactionJournal::AppendRaw(const std::uint8_t* data, std::size_t s
     return;
   }
   bytes_.insert(bytes_.end(), data, data + size);
+}
+
+auto EditorTransactionJournal::LoadBytes(const std::vector<std::uint8_t>& data,
+                                         std::string*                   error) -> bool {
+  Clear();
+  AppendRaw(data.data(), data.size());
+  const auto decoded = DecodeRecordChain();
+  if (decoded.stopped_on_corrupt_record) {
+    if (error) {
+      *error = decoded.message.empty() ? "corrupt journal" : decoded.message;
+    }
+    return false;
+  }
+  if (decoded.records.empty()) {
+    next_sequence_ = 1;
+  } else {
+    next_sequence_ = decoded.records.back().sequence + 1;
+  }
+  return true;
+}
+
+auto EditorTransactionJournal::Truncate(std::size_t byte_count, std::string* error) -> bool {
+  if (byte_count > bytes_.size()) {
+    if (error) {
+      *error = "cannot extend journal with truncate";
+    }
+    return false;
+  }
+  const auto decoded = DecodeEditorJournalRecordChain(bytes_.data(), byte_count);
+  if (decoded.stopped_on_corrupt_record || decoded.valid_chain_byte_count != byte_count) {
+    if (error) {
+      *error = decoded.message.empty() ? "journal truncate would leave a corrupt prefix"
+                                       : decoded.message;
+    }
+    return false;
+  }
+  bytes_.resize(byte_count);
+  next_sequence_ = decoded.records.empty() ? 1 : decoded.records.back().sequence + 1;
+  return true;
 }
 
 auto EditorTransactionJournal::AppendFramed(EditorJournalRecordType type,
@@ -598,6 +709,13 @@ auto EditorTransactionJournal::AppendCompactionCheckpoint(const EditorJournalIde
   payload.note                = std::move(note);
   return AppendFramed(EditorJournalRecordType::CompactionCheckpoint, identity,
                       EncodeEditorJournalMarkerPayload(payload));
+}
+
+auto EditorTransactionJournal::AppendJournalBatchCommit(
+    const EditorJournalIdentity& identity, const EditorJournalBatchCommitPayload& payload)
+    -> std::uint64_t {
+  return AppendFramed(EditorJournalRecordType::JournalBatchCommit, identity,
+                      EncodeEditorJournalBatchCommitPayload(payload));
 }
 
 auto EditorTransactionJournal::DecodeRecordChain() const
@@ -784,6 +902,17 @@ auto JournalTimelineSimulator::ApplyDecodedRecord(const EditorJournalDecodedReco
       }
       break;
     }
+    case EditorJournalRecordType::JournalBatchCommit: {
+      if (!record.batch_commit.has_value()) {
+        result.status  = EditorJournalApplyStatus::RejectedInvalidPayload;
+        result.message = "missing journal-batch-commit payload";
+        return result;
+      }
+      // The replay driver validates the covered range and cumulative checksum
+      // because that requires the surrounding record chain. Applying the
+      // control record itself only advances the observed sequence.
+      break;
+    }
   }
 
   if (identity_.element_id == 0) {
@@ -794,23 +923,111 @@ auto JournalTimelineSimulator::ApplyDecodedRecord(const EditorJournalDecodedReco
   return result;
 }
 
-auto JournalTimelineSimulator::ReplayRecordChain(const EditorTransactionJournal& journal)
-    -> EditorJournalApplyResult {
-  const auto decoded = journal.DecodeRecordChain();
+namespace {
+
+auto ReplayDecodedRecords(JournalTimelineSimulator* simulator,
+                          const EditorJournalDecodeRecordChainResult& decoded,
+                          bool require_batch_commit) -> EditorJournalApplyResult {
   EditorJournalApplyResult last;
   last.status = EditorJournalApplyStatus::Applied;
+
+  std::vector<std::uint64_t> valid_commit_sequences;
+  std::uint64_t              previous_valid_commit = 0;
   for (const auto& record : decoded.records) {
-    last = ApplyDecodedRecord(record);
+    if (record.record_type != EditorJournalRecordType::JournalBatchCommit) {
+      continue;
+    }
+    if (!record.batch_commit.has_value()) {
+      continue;
+    }
+    const auto& payload = *record.batch_commit;
+    const auto  expected_first = previous_valid_commit + 1;
+    if (payload.previous_batch_commit_sequence != previous_valid_commit ||
+        payload.first_covered_sequence != expected_first ||
+        payload.last_covered_sequence != record.sequence - 1 ||
+        payload.first_covered_sequence > payload.last_covered_sequence ||
+        payload.last_operation_sequence > payload.last_covered_sequence ||
+        ComputeEditorJournalRecordChainHash(decoded.records, payload.last_covered_sequence) !=
+            payload.record_chain_hash) {
+      continue;
+    }
+
+    std::uint64_t last_operation_sequence = 0;
+    for (const auto& covered : decoded.records) {
+      if (covered.sequence < payload.first_covered_sequence ||
+          covered.sequence > payload.last_covered_sequence ||
+          !IsEditorJournalEditHistoryRecord(covered.record_type)) {
+        continue;
+      }
+      last_operation_sequence = covered.sequence;
+    }
+    if (last_operation_sequence != payload.last_operation_sequence) {
+      continue;
+    }
+    previous_valid_commit = record.sequence;
+    valid_commit_sequences.push_back(record.sequence);
+  }
+
+  if (require_batch_commit && valid_commit_sequences.empty()) {
+    last.status  = EditorJournalApplyStatus::RejectedInvalidPayload;
+    last.message = "journal has no valid batch commit";
+    return last;
+  }
+
+  const bool has_any_batch_commit = std::any_of(
+      decoded.records.begin(), decoded.records.end(), [](const auto& record) {
+        return record.record_type == EditorJournalRecordType::JournalBatchCommit;
+      });
+  if (has_any_batch_commit && valid_commit_sequences.empty()) {
+    last.status  = EditorJournalApplyStatus::RejectedInvalidPayload;
+    last.message = "journal has no valid batch commit";
+    return last;
+  }
+
+  const std::uint64_t last_committed_sequence =
+      valid_commit_sequences.empty() ? 0 : valid_commit_sequences.back() - 1;
+
+  for (const auto& record : decoded.records) {
+    if (record.record_type == EditorJournalRecordType::JournalBatchCommit) {
+      if (std::find(valid_commit_sequences.begin(), valid_commit_sequences.end(),
+                    record.sequence) != valid_commit_sequences.end()) {
+        last = simulator->ApplyDecodedRecord(record);
+        if (last.status != EditorJournalApplyStatus::Applied &&
+            last.status != EditorJournalApplyStatus::IgnoredAlreadyMaterialized) {
+          return last;
+        }
+      }
+      continue;
+    }
+    if (!valid_commit_sequences.empty() && record.sequence > last_committed_sequence) {
+      continue;
+    }
+    last = simulator->ApplyDecodedRecord(record);
     if (last.status != EditorJournalApplyStatus::Applied &&
         last.status != EditorJournalApplyStatus::IgnoredAlreadyMaterialized) {
       return last;
     }
   }
-  if (decoded.stopped_on_corrupt_record) {
+
+  if (decoded.stopped_on_corrupt_record && valid_commit_sequences.empty()) {
     last.status  = EditorJournalApplyStatus::RejectedInvalidPayload;
     last.message = decoded.message.empty() ? "corrupt journal tail" : decoded.message;
   }
   return last;
+}
+
+}  // namespace
+
+auto JournalTimelineSimulator::ReplayRecordChain(const EditorTransactionJournal& journal)
+    -> EditorJournalApplyResult {
+  Reset(identity_);
+  return ReplayDecodedRecords(this, journal.DecodeRecordChain(), false);
+}
+
+auto JournalTimelineSimulator::ReplayCommittedRecordChain(const EditorTransactionJournal& journal)
+    -> EditorJournalApplyResult {
+  Reset(identity_);
+  return ReplayDecodedRecords(this, journal.DecodeRecordChain(), true);
 }
 
 WorkingVersionJournalRecorder::WorkingVersionJournalRecorder(EditorTransactionJournal* journal,

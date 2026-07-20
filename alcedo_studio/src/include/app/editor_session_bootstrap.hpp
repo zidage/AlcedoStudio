@@ -75,9 +75,13 @@ class EditorSessionBootstrapTaskPort final : public IEditorTaskPort {
 
 class EditorSessionBootstrapJournalPort final : public IEditorJournalPort {
  public:
-  auto AppendBarrier(sl_element_id_t /*element_id*/, std::uint64_t /*session_generation*/,
-                     std::string* /*error*/) -> bool override {
-    return true;
+  auto CommitJournal(sl_element_id_t /*element_id*/, std::uint64_t /*session_generation*/,
+                     std::string* /*error*/) -> EditorJournalCommitOutcome override {
+    return {true, true, false, 0, 0, {}};
+  }
+  auto Materialize(sl_element_id_t /*element_id*/, std::uint64_t /*session_generation*/,
+                   std::string* /*error*/) -> EditorMaterializeOutcome override {
+    return {true, true, 0, {}};
   }
   auto DiscardUnflushed(sl_element_id_t /*element_id*/, std::string* /*error*/) -> bool override {
     return true;

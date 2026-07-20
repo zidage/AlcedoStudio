@@ -5,13 +5,53 @@
 #include "app/editor_session_service.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <utility>
 
 namespace alcedo {
 
+struct EditorSessionService::AsyncCallbackGate {
+  auto Enter() -> bool {
+    std::scoped_lock lock(mutex);
+    if (stopping) {
+      return false;
+    }
+    ++active_callbacks;
+    return true;
+  }
+
+  void Leave() {
+    std::scoped_lock lock(mutex);
+    if (active_callbacks > 0) {
+      --active_callbacks;
+    }
+    if (stopping && active_callbacks == 0) {
+      condition.notify_all();
+    }
+  }
+
+  void StopAndWait() {
+    std::unique_lock lock(mutex);
+    stopping = true;
+    condition.wait(lock, [this] { return active_callbacks == 0; });
+  }
+
+  std::mutex              mutex;
+  std::condition_variable condition;
+  std::size_t             active_callbacks = 0;
+  bool                    stopping         = false;
+};
+
 EditorSessionService::EditorSessionService(Dependencies dependencies)
-    : dependencies_(std::move(dependencies)) {}
+    : dependencies_(std::move(dependencies)),
+      callback_gate_(std::make_shared<AsyncCallbackGate>()) {}
+
+EditorSessionService::~EditorSessionService() {
+  if (callback_gate_) {
+    callback_gate_->StopAndWait();
+  }
+}
 
 void EditorSessionService::SetResultObserver(ResultObserver observer) {
   std::scoped_lock lock(mutex_);
@@ -260,7 +300,7 @@ auto EditorSessionService::BeginSaveForSession(std::uint64_t   session_generatio
       return false;
     }
   }
-  pending_saves_.push_back(PendingSave{session_generation, task_id});
+  pending_saves_.push_back(PendingSave{session_generation, element_id, task_id});
   state_ = EditorSessionState::Saving;
   EditorSessionResult started;
   started.kind     = EditorSessionResultKind::SaveStarted;
@@ -269,7 +309,111 @@ auto EditorSessionService::BeginSaveForSession(std::uint64_t   session_generatio
   started.task_id  = task_id;
   started.message  = "Save started";
   Emit(std::move(started));
+
+  struct StartObservation {
+    std::atomic<bool> completed{false};
+    std::atomic<bool> commit_succeeded{true};
+    std::string       error;
+  };
+  const auto observation = std::make_shared<StartObservation>();
+  const auto gate        = callback_gate_;
+  const auto on_commit   = [this, gate, observation,
+                          session_generation](EditorJournalCommitOutcome outcome) {
+    observation->error = outcome.error;
+    observation->commit_succeeded.store(outcome.accepted && outcome.durable,
+                                        std::memory_order_release);
+    observation->completed.store(true, std::memory_order_release);
+    if (!gate || !gate->Enter()) {
+      return;
+    }
+    HandleJournalCommit(session_generation, std::move(outcome));
+    gate->Leave();
+  };
+
+  bool started_async = true;
+  if (dependencies_.journal) {
+    started_async = dependencies_.journal->CommitJournalAsync(element_id, session_generation,
+                                                               on_commit);
+  } else {
+    on_commit(EditorJournalCommitOutcome{true, true, false, 0, 0, {}});
+  }
+  if (!started_async) {
+    if (!observation->completed.load(std::memory_order_acquire)) {
+      auto it = std::find_if(pending_saves_.begin(), pending_saves_.end(),
+                             [session_generation](const PendingSave& save) {
+                               return save.session_generation == session_generation;
+                             });
+      if (it != pending_saves_.end()) {
+        const auto failed_task_id = it->task_id;
+        pending_saves_.erase(it);
+        if (dependencies_.tasks && failed_task_id != 0) {
+          dependencies_.tasks->EndTask(failed_task_id, false, "Journal commit could not start");
+        }
+      }
+    }
+    if (error) {
+      *error = observation->error.empty() ? "Journal commit could not start" : observation->error;
+    }
+    return false;
+  }
+
+  // Legacy ports complete synchronously. Preserve their historical failure
+  // behavior so a failed barrier keeps the old image active; true async ports
+  // return before this observation is completed and let B proceed.
+  if (observation->completed.load(std::memory_order_acquire) &&
+      !observation->commit_succeeded.load(std::memory_order_acquire)) {
+    if (error) {
+      *error = observation->error.empty() ? "Journal commit failed" : observation->error;
+    }
+    return false;
+  }
   return true;
+}
+
+void EditorSessionService::HandleJournalCommit(std::uint64_t              session_generation,
+                                               EditorJournalCommitOutcome outcome) {
+  std::scoped_lock lock(mutex_);
+  auto pending = std::find_if(pending_saves_.begin(), pending_saves_.end(),
+                              [session_generation](const PendingSave& save) {
+                                return save.session_generation == session_generation;
+                              });
+  if (pending == pending_saves_.end()) {
+    return;
+  }
+  if (!outcome.accepted || !outcome.durable) {
+    NotifySaveFinished(session_generation, false,
+                       outcome.error.empty() ? "Journal commit failed" : outcome.error);
+    return;
+  }
+
+  if (!dependencies_.journal) {
+    NotifySaveFinished(session_generation, true, "Journal commit complete");
+    return;
+  }
+
+  const auto gate = callback_gate_;
+  const bool started = dependencies_.journal->MaterializeAsync(
+      pending->element_id, session_generation,
+      [this, gate, session_generation](EditorMaterializeOutcome materialized) mutable {
+        if (!gate || !gate->Enter()) {
+          return;
+        }
+        HandleMaterialization(session_generation, std::move(materialized));
+        gate->Leave();
+      });
+  if (!started) {
+    NotifySaveFinished(session_generation, false, "Materialization could not start");
+  }
+}
+
+void EditorSessionService::HandleMaterialization(std::uint64_t                session_generation,
+                                                 EditorMaterializeOutcome outcome) {
+  std::scoped_lock lock(mutex_);
+  NotifySaveFinished(session_generation, outcome.accepted && outcome.materialized,
+                     outcome.error.empty()
+                         ? (outcome.materialized ? "Editor session materialized"
+                                                  : "Editor materialization failed")
+                         : outcome.error);
 }
 
 auto EditorSessionService::SealCurrentSession(bool persist_changes, bool start_background_save,
@@ -279,8 +423,8 @@ auto EditorSessionService::SealCurrentSession(bool persist_changes, bool start_b
   }
 
   if (persist_changes) {
-    if (dependencies_.journal && !dependencies_.journal->AppendBarrier(
-                                     identity_.element_id, identity_.session_generation, error)) {
+    if (dependencies_.journal && !dependencies_.journal->FinalizeEdit(
+                                      identity_.element_id, identity_.session_generation, error)) {
       return false;
     }
     if (start_background_save &&
@@ -298,32 +442,6 @@ auto EditorSessionService::SealCurrentSession(bool persist_changes, bool start_b
     dependencies_.render->CancelSessionAndWait(identity_.session_generation);
   }
   ReleaseGuards();
-  // Phase 5E production cutover: pipeline/history release is the durable save
-  // path today (SavePipeline/SaveHistory). Complete any pending editor_save
-  // task immediately so BackgroundTaskController does not retain a running
-  // orphan. Phase 5G may replace this with true async materialization.
-  if (persist_changes && start_background_save) {
-    const std::uint64_t sealed_generation = identity_.session_generation;
-    // Finish without re-entering Seal: NotifySaveFinished only ends the task.
-    auto it = std::find_if(pending_saves_.begin(), pending_saves_.end(),
-                           [sealed_generation](const PendingSave& save) {
-                             return save.session_generation == sealed_generation;
-                           });
-    if (it != pending_saves_.end()) {
-      const std::uint64_t task_id = it->task_id;
-      pending_saves_.erase(it);
-      if (dependencies_.tasks) {
-        dependencies_.tasks->EndTask(task_id, true, "Editor session sealed");
-      }
-      EditorSessionResult finished;
-      finished.kind     = EditorSessionResultKind::SaveFinished;
-      finished.state    = state_;
-      finished.identity = identity_;
-      finished.task_id  = task_id;
-      finished.message  = "Editor session sealed";
-      Emit(std::move(finished));
-    }
-  }
   return true;
 }
 
@@ -556,7 +674,7 @@ auto EditorSessionService::HandleShutdown() -> EditorSessionResult {
     return Reject("Already shutting down");
   }
   std::string error;
-  if (!SealCurrentSession(/*persist_changes=*/true, /*start_background_save=*/false, &error)) {
+  if (!SealCurrentSession(/*persist_changes=*/true, /*start_background_save=*/true, &error)) {
     return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
                         error.empty() ? "Failed to seal editor session for shutdown" : error);
   }
@@ -811,14 +929,23 @@ void EditorSessionService::NotifySaveFinished(std::uint64_t session_generation, 
   if (dependencies_.tasks) {
     dependencies_.tasks->EndTask(task_id, success, message);
   }
+  const bool is_current_session = session_generation == identity_.session_generation &&
+                                  identity_.element_id != 0 && identity_.image_id != 0;
+  if (!is_current_session) {
+    // The task belongs to a sealed image. Its background task still needs to
+    // reach a terminal state, but its result must not be published as if it
+    // described the image that is active now.
+    return;
+  }
   if (!success) {
-    last_error_ = message.empty() ? "Save failed" : message;
+    const std::string failure = message.empty() ? "Save failed" : message;
+    last_error_ = failure;
     EditorSessionResult result;
     result.kind     = EditorSessionResultKind::Failed;
     result.state    = state_;
     result.identity = identity_;
     result.task_id  = task_id;
-    result.message  = last_error_;
+    result.message  = failure;
     Emit(std::move(result));
     return;
   }

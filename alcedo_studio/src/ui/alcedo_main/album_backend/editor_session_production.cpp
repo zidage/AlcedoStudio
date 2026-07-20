@@ -4,6 +4,9 @@
 
 #include "ui/alcedo_main/album_backend/editor_session_production.hpp"
 
+#include <QMetaObject>
+#include <QThread>
+
 #include <algorithm>
 #include <thread>
 #include <utility>
@@ -63,23 +66,11 @@ void EditorSessionProductionPipelinePort::Release(const alcedo::EditorPipelineGu
   if (!guard.valid) {
     return;
   }
-  std::shared_ptr<alcedo::PipelineGuard> held;
-  std::shared_ptr<alcedo::PipelineMgmtService> service;
   {
     std::scoped_lock lock(mutex_);
     auto             it = guards_.find(guard.element_id);
     if (it != guards_.end()) {
-      held = it->second;
       guards_.erase(it);
-    }
-    if (services_.pipeline_service) {
-      service = services_.pipeline_service();
-    }
-  }
-  if (service && held) {
-    try {
-      service->SavePipeline(held);
-    } catch (...) {
     }
   }
 }
@@ -200,9 +191,234 @@ void EditorSessionProductionTaskPort::EndTask(std::uint64_t task_id, bool succes
   if (!tasks || ui_id.isEmpty()) {
     return;
   }
-  tasks->FinishTask(ui_id,
-                    success ? BackgroundTaskState::Succeeded : BackgroundTaskState::Failed,
-                    QString::fromUtf8(message.c_str()));
+  const auto final_state =
+      success ? BackgroundTaskState::Succeeded : BackgroundTaskState::Failed;
+  const auto detail = QString::fromUtf8(message.c_str());
+  auto       finish = [tasks, ui_id, final_state, detail] {
+    tasks->FinishTask(ui_id, final_state, detail);
+  };
+  if (QThread::currentThread() == tasks->thread()) {
+    finish();
+  } else {
+    QMetaObject::invokeMethod(tasks, std::move(finish), Qt::QueuedConnection);
+  }
+}
+
+// ── Production journal port ────────────────────────────────────────────────
+
+EditorSessionProductionJournalPort::EditorSessionProductionJournalPort(
+    EditorSessionProductionServices services)
+    : services_(std::move(services)) {}
+
+EditorSessionProductionJournalPort::~EditorSessionProductionJournalPort() {
+  std::vector<std::jthread> workers;
+  {
+    std::scoped_lock lock(mutex_);
+    shutting_down_ = true;
+    workers.swap(workers_);
+  }
+  // Join outside mutex_ so a completion cannot deadlock while it reports its
+  // terminal state through the session service.
+  workers.clear();
+}
+
+void EditorSessionProductionJournalPort::SetServices(EditorSessionProductionServices services) {
+  std::scoped_lock lock(mutex_);
+  services_ = std::move(services);
+}
+
+auto EditorSessionProductionJournalPort::HasJournalPathResolver() const -> bool {
+  std::scoped_lock lock(mutex_);
+  return static_cast<bool>(services_.journal_path);
+}
+
+auto EditorSessionProductionJournalPort::ImageLockFor(sl_element_id_t element_id)
+    -> std::shared_ptr<std::mutex> {
+  std::scoped_lock lock(mutex_);
+  auto             it = image_locks_.find(element_id);
+  if (it != image_locks_.end()) {
+    return it->second;
+  }
+  auto image_lock = std::make_shared<std::mutex>();
+  image_locks_.emplace(element_id, image_lock);
+  return image_lock;
+}
+
+auto EditorSessionProductionJournalPort::FinalizeEdit(sl_element_id_t /*element_id*/,
+                                                      std::uint64_t /*session_generation*/,
+                                                      std::string* /*error*/) -> bool {
+  // The current session service owns the provisional edit coalescer. This
+  // boundary intentionally performs no file or database work.
+  return true;
+}
+
+auto EditorSessionProductionJournalPort::WriterFor(
+    sl_element_id_t element_id, std::uint64_t session_generation, std::string* error)
+    -> std::shared_ptr<alcedo::EditorJournalWriter> {
+  std::scoped_lock lock(mutex_);
+  if (!services_.journal_path) {
+    return nullptr;
+  }
+
+  auto existing = writers_.find(element_id);
+  const alcedo::EditorJournalIdentity identity{element_id, {}, session_generation, 1};
+  if (existing != writers_.end()) {
+    if (!existing->second->SetIdentity(identity)) {
+      if (error) {
+        *error = existing->second->last_error();
+      }
+      return nullptr;
+    }
+    return existing->second;
+  }
+
+  std::filesystem::path path;
+  try {
+    path = services_.journal_path(element_id);
+  } catch (const std::exception& ex) {
+    if (error) {
+      *error = ex.what();
+    }
+    return nullptr;
+  } catch (...) {
+    if (error) {
+      *error = "Failed to resolve editor journal path";
+    }
+    return nullptr;
+  }
+  if (path.empty()) {
+    return nullptr;
+  }
+
+  try {
+    auto writer = std::make_shared<alcedo::EditorJournalWriter>(identity, std::move(path));
+    writers_.emplace(element_id, writer);
+    return writer;
+  } catch (const std::exception& ex) {
+    if (error) {
+      *error = ex.what();
+    }
+  } catch (...) {
+    if (error) {
+      *error = "Failed to open editor journal";
+    }
+  }
+  return nullptr;
+}
+
+auto EditorSessionProductionJournalPort::CommitJournal(
+    sl_element_id_t element_id, std::uint64_t session_generation, std::string* error)
+    -> alcedo::EditorJournalCommitOutcome {
+  // No project/workspace path means this is the same non-persistent shell mode
+  // used by the bootstrap runtime. Once a path exists, all file I/O is owned by
+  // EditorJournalWriter.
+  if (!HasJournalPathResolver()) {
+    return {true, true, false, 0, 0, {}};
+  }
+  const auto image_lock = ImageLockFor(element_id);
+  std::scoped_lock image_guard(*image_lock);
+  auto writer = WriterFor(element_id, session_generation, error);
+  if (!writer) {
+    return {false, false, false, 0, 0,
+            error != nullptr && !error->empty() ? *error : "Editor journal unavailable"};
+  }
+  const auto result = writer->CommitQueued();
+  return {result.accepted,
+          result.durable,
+          result.pending,
+          result.batch_commit_sequence,
+          result.durable_operation_sequence,
+          result.error};
+}
+
+auto EditorSessionProductionJournalPort::CommitJournalAsync(
+    sl_element_id_t element_id, std::uint64_t session_generation,
+    alcedo::EditorJournalCommitCallback callback) -> bool {
+  std::scoped_lock lock(mutex_);
+  if (shutting_down_) {
+    return false;
+  }
+  std::jthread worker([this, element_id, session_generation, callback = std::move(callback)]() mutable {
+    std::string error;
+    auto        outcome = CommitJournal(element_id, session_generation, &error);
+    if (outcome.error.empty()) {
+      outcome.error = std::move(error);
+    }
+    if (callback) {
+      callback(std::move(outcome));
+    }
+  });
+  workers_.push_back(std::move(worker));
+  return true;
+}
+
+auto EditorSessionProductionJournalPort::Materialize(
+    sl_element_id_t element_id, std::uint64_t session_generation, std::string* error)
+    -> alcedo::EditorMaterializeOutcome {
+  const auto image_lock = ImageLockFor(element_id);
+  std::scoped_lock image_guard(*image_lock);
+  std::function<alcedo::EditorMaterializeOutcome(sl_element_id_t, std::uint64_t, std::string*)>
+      materializer;
+  {
+    std::scoped_lock lock(mutex_);
+    materializer = services_.materialize_editor_session;
+  }
+  auto outcome = materializer ? materializer(element_id, session_generation, error)
+                              : alcedo::EditorMaterializeOutcome{true, true, 0, {}};
+  if (outcome.accepted && outcome.materialized) {
+    std::function<void(sl_element_id_t)> invalidate_thumbnail;
+    {
+      std::scoped_lock lock(mutex_);
+      invalidate_thumbnail = services_.invalidate_thumbnail;
+    }
+    if (invalidate_thumbnail) {
+      try {
+        invalidate_thumbnail(element_id);
+      } catch (...) {
+        // Thumbnail invalidation is an acceleration step. A committed
+        // history/pipeline projection remains durable if it cannot run.
+      }
+    }
+  }
+  return outcome;
+}
+
+auto EditorSessionProductionJournalPort::MaterializeAsync(
+    sl_element_id_t element_id, std::uint64_t session_generation,
+    alcedo::EditorMaterializeCallback callback) -> bool {
+  std::scoped_lock lock(mutex_);
+  if (shutting_down_) {
+    return false;
+  }
+  std::jthread worker(
+      [this, element_id, session_generation, callback = std::move(callback)]() mutable {
+        std::string error;
+        auto        outcome = Materialize(element_id, session_generation, &error);
+        if (outcome.error.empty()) {
+          outcome.error = std::move(error);
+        }
+        if (callback) {
+          callback(std::move(outcome));
+        }
+      });
+  workers_.push_back(std::move(worker));
+  return true;
+}
+
+auto EditorSessionProductionJournalPort::DiscardUnflushed(sl_element_id_t element_id,
+                                                          std::string*    error) -> bool {
+  const auto image_lock = ImageLockFor(element_id);
+  std::scoped_lock image_guard(*image_lock);
+  std::shared_ptr<alcedo::EditorJournalWriter> writer;
+  {
+    std::scoped_lock lock(mutex_);
+    auto             it = writers_.find(element_id);
+    if (it == writers_.end()) {
+      return true;
+    }
+    writer = it->second;
+  }
+  return writer->DiscardQueued(error);
 }
 
 // ── History port ────────────────────────────────────────────────────────────
@@ -222,23 +438,11 @@ void EditorSessionProductionHistoryPort::Release(const alcedo::EditorHistoryGuar
   if (!guard.valid) {
     return;
   }
-  std::shared_ptr<alcedo::EditHistoryGuard> held;
-  std::shared_ptr<alcedo::EditHistoryMgmtService> service;
   {
     std::scoped_lock lock(mutex_);
     auto             it = guards_.find(guard.element_id);
     if (it != guards_.end()) {
-      held = it->second;
       guards_.erase(it);
-    }
-    if (services_.history_service) {
-      service = services_.history_service();
-    }
-  }
-  if (service && held) {
-    try {
-      service->SaveHistory(held);
-    } catch (...) {
     }
   }
 }

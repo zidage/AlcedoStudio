@@ -9,6 +9,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -23,6 +24,7 @@
 #include "app/editor_session_ports.hpp"
 #include "app/history_mgmt_service.hpp"
 #include "app/pipeline_service.hpp"
+#include "edit/history/editor_journal_writer.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 
@@ -43,6 +45,10 @@ struct EditorSessionProductionServices {
   std::function<std::shared_ptr<alcedo::PipelineMgmtService>()>    pipeline_service;
   std::function<std::shared_ptr<alcedo::EditHistoryMgmtService>()> history_service;
   std::function<std::shared_ptr<alcedo::ImagePoolService>()>       image_pool;
+  std::function<std::filesystem::path(sl_element_id_t)>             journal_path;
+  std::function<alcedo::EditorMaterializeOutcome(sl_element_id_t, std::uint64_t, std::string*)>
+      materialize_editor_session;
+  std::function<void(sl_element_id_t)>                               invalidate_thumbnail;
 };
 
 /// Production pipeline port: acquires real PipelineGuards when services exist;
@@ -85,6 +91,43 @@ class EditorSessionProductionTaskPort final : public alcedo::IEditorTaskPort {
   mutable std::mutex                                mutex_;
   std::uint64_t                                     next_id_ = 0;
   std::unordered_map<std::uint64_t, QString>        active_task_ids_;
+};
+
+/// Production journal port. One EditorJournalWriter is retained per image so
+/// an A save can flush independently while the session service loads B.
+/// Materialization is supplied as a narrow application callback; when no
+/// project is open the port preserves the bootstrap no-op behavior.
+class EditorSessionProductionJournalPort final : public alcedo::IEditorJournalPort {
+ public:
+  explicit EditorSessionProductionJournalPort(EditorSessionProductionServices services = {});
+  ~EditorSessionProductionJournalPort() override;
+
+  void SetServices(EditorSessionProductionServices services);
+
+  auto FinalizeEdit(sl_element_id_t element_id, std::uint64_t session_generation,
+                    std::string* error) -> bool override;
+  auto CommitJournal(sl_element_id_t element_id, std::uint64_t session_generation,
+                     std::string* error) -> alcedo::EditorJournalCommitOutcome override;
+  auto CommitJournalAsync(sl_element_id_t element_id, std::uint64_t session_generation,
+                          alcedo::EditorJournalCommitCallback callback) -> bool override;
+  auto Materialize(sl_element_id_t element_id, std::uint64_t session_generation,
+                   std::string* error) -> alcedo::EditorMaterializeOutcome override;
+  auto MaterializeAsync(sl_element_id_t element_id, std::uint64_t session_generation,
+                        alcedo::EditorMaterializeCallback callback) -> bool override;
+  auto DiscardUnflushed(sl_element_id_t element_id, std::string* error) -> bool override;
+
+ private:
+  auto WriterFor(sl_element_id_t element_id, std::uint64_t session_generation,
+                 std::string* error) -> std::shared_ptr<alcedo::EditorJournalWriter>;
+  auto ImageLockFor(sl_element_id_t element_id) -> std::shared_ptr<std::mutex>;
+  [[nodiscard]] auto HasJournalPathResolver() const -> bool;
+
+  EditorSessionProductionServices                                  services_{};
+  mutable std::mutex                                               mutex_;
+  std::unordered_map<sl_element_id_t, std::shared_ptr<alcedo::EditorJournalWriter>> writers_;
+  std::unordered_map<sl_element_id_t, std::shared_ptr<std::mutex>> image_locks_;
+  std::vector<std::jthread>                                        workers_;
+  bool                                                             shutting_down_ = false;
 };
 
 /// Production history port: real EditHistoryMgmtService when available.

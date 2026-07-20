@@ -5,6 +5,7 @@
 #pragma once
 
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -100,6 +101,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   using ResultObserver = std::function<void(const EditorSessionResult&)>;
 
   explicit EditorSessionService(Dependencies dependencies);
+  ~EditorSessionService() override;
 
   void               SetResultObserver(ResultObserver observer);
   void               SetChangeNotifier(ChangeNotifier notifier) override;
@@ -180,8 +182,11 @@ class EditorSessionService final : public IEditorSessionBackend {
       -> std::optional<EditorRenderIntent>;
 
  private:
+  struct AsyncCallbackGate;
+
   struct PendingSave {
     std::uint64_t session_generation = 0;
+    sl_element_id_t element_id       = 0;
     std::uint64_t task_id            = 0;
   };
 
@@ -209,6 +214,10 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto CoordinatorBusy() const -> bool;
   auto BeginSaveForSession(std::uint64_t session_generation, sl_element_id_t element_id,
                            std::string* error) -> bool;
+  void HandleJournalCommit(std::uint64_t session_generation,
+                           EditorJournalCommitOutcome outcome);
+  void HandleMaterialization(std::uint64_t session_generation,
+                             EditorMaterializeOutcome outcome);
   auto SealCurrentSession(bool persist_changes, bool start_background_save, std::string* error)
       -> bool;
   void               ResetActiveImageState();
@@ -233,6 +242,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   std::vector<EditorSessionResult>  results_;
   /// Concurrent in-flight saves keyed by the sealed session generation (A→B→C).
   std::vector<PendingSave>          pending_saves_;
+  std::shared_ptr<AsyncCallbackGate> callback_gate_;
   EditorRenderAdjustmentSnapshot    adjustment_snapshot_{};
   std::uint64_t                     first_frame_request_id_ = 0;
   std::uint64_t                     quality_base_request_id_ = 0;

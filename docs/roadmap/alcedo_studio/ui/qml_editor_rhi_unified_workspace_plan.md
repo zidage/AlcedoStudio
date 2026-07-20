@@ -1891,34 +1891,41 @@ Acceptance:
 
 ### Phase 5G - Background autosave and overlapping image switches
 
+**Status: complete (2026-07-20).** `EditorJournalWriter` now owns image-scoped append,
+`JournalBatchCommit`, short-write-safe file I/O, native flush, durable sequence publication,
+retry, and queued-tail discard. `EditorSessionService` uses typed finalize, journal-commit, and
+materialize operations with generation-fenced asynchronous completion. Production wiring uses one
+journal writer and one operation lock per image; legacy barrier fakes remain source-compatible
+through the default adapter.
+
 Deliverables:
 
-- Extend the Phase 5F format with `JournalBatchCommit`. The image-scoped writer appends complete
+- [x] Extend the Phase 5F format with `JournalBatchCommit`. The image-scoped writer appends complete
   operation records plus one batch commit record, calls `FlushFileBuffers`/`fsync`, and advances the
   durable batch-commit and operation sequences only after that flush succeeds.
-- Recovery ignores complete operation records that are not covered by a valid batch commit record.
-- Replace `IEditorJournalPort::AppendBarrier` with typed finalize, journal-commit, and materialize
+- [x] Recovery ignores complete operation records that are not covered by a valid batch commit record.
+- [x] Replace `IEditorJournalPort::AppendBarrier` with typed finalize, journal-commit, and materialize
   operations so callers cannot confuse the three states.
-- Register journal commit, version materialization, thumbnail invalidation, image load, and preview
+- [x] Register journal commit, version materialization, thumbnail invalidation, image load, and preview
   render through the existing background-task module.
-- Implement image-scoped locks so saving A can overlap loading/rendering B without sharing a mutable
+- [x] Implement image-scoped locks so saving A can overlap loading/rendering B without sharing a mutable
   pipeline guard.
-- On image/workspace/app transition, finalize the current edit command, enqueue its durability
+- [x] On image/workspace/app transition, finalize the current edit command, enqueue its durability
   barrier,
   invalidate its render generation, and begin the next permitted load immediately.
-- Make stale journal, thumbnail, scope, and render completions validate image and generation before
+- [x] Make stale journal, thumbnail, scope, and render completions validate image and generation before
   publishing.
-- Implement current-thumbnail context-menu Discard for an unflushed transaction only.
+- [x] Implement current-thumbnail context-menu Discard for an unflushed transaction only.
 
 Acceptance:
 
-- Leaving an image, leaving EditorWorkspace, and orderly application exit durably save the latest
+- [x] Leaving an image, leaving EditorWorkspace, and orderly application exit durably save the latest
   coalesced transaction without GUI-thread I/O.
-- A short write or failed file flush does not advance the durable batch-commit or operation
+- [x] A short write or failed file flush does not advance the durable batch-commit or operation
   sequence, materialize the affected transactions, or report save success.
-- The next image begins loading before the previous image's save completes when locks permit.
-- An older async save completion cannot overwrite a newer generation.
-- Discard removes only the current unflushed transaction; published versions remain available
+- [x] The next image begins loading before the previous image's save completes when locks permit.
+- [x] An older async save completion cannot overwrite a newer generation.
+- [x] Discard removes only the current unflushed transaction; published versions remain available
   through history.
 
 ### Phase 5H - Recovery, compaction, and injected storage failures
