@@ -28,16 +28,16 @@ enum class RenderType {
 };
 
 struct RenderDesc {
-  RenderType render_type_  = RenderType::FAST_PREVIEW;
+  RenderType           render_type_         = RenderType::FAST_PREVIEW;
 
-  int        x_            = 0;
-  int        y_            = 0;
-  float      scale_factor_x_ = 1.0f;
-  float      scale_factor_y_ = 1.0f;
-  bool       use_viewport_region_ = true;
-  FramePreviewMetadata frame_metadata_ = {};
-  uint32_t   max_edge_     = 1024;       // max edge for thumbnail/export resize
-  DecodeRes   decode_res_   = DecodeRes::QUARTER;  // RAW decode resolution for thumbnails
+  int                  x_                   = 0;
+  int                  y_                   = 0;
+  float                scale_factor_x_      = 1.0f;
+  float                scale_factor_y_      = 1.0f;
+  bool                 use_viewport_region_ = true;
+  FramePreviewMetadata frame_metadata_      = {};
+  uint32_t             max_edge_            = 1024;       // max edge for thumbnail/export resize
+  DecodeRes            decode_res_ = DecodeRes::QUARTER;  // RAW decode resolution for thumbnails
 };
 
 struct TaskOptions {
@@ -57,14 +57,17 @@ struct PipelineTask {
   std::shared_ptr<std::promise<std::shared_ptr<ImageBuffer>>> result_;    // used for blocking tasks
   std::optional<std::function<void(ImageBuffer&)>>            callback_;  // used for callback tasks
   std::optional<std::function<void(ImageBuffer&, uint32_t)>>
-              seq_callback_;  // used for callback tasks
-  std::optional<std::function<bool(PipelineTask&)>>            prepare_;
-  std::function<bool()> cancel_requested_;
+                                                    seq_callback_;  // used for callback tasks
+  std::optional<std::function<bool(PipelineTask&)>> prepare_;
+  // Runs after PipelineScheduler acquires pipeline_executor_->GetRenderLock().
+  // Use for request-specific executor mutations that must be atomic with Apply().
+  std::optional<std::function<bool(PipelineTask&)>> prepare_with_render_lock_;
+  std::function<bool()>                             cancel_requested_;
 
-  TaskOptions options_;
+  TaskOptions                                       options_;
 
-  void        SetExecutorRenderParams();
-  void        ResetPreviewRenderParams();
-  void        ResetThumbnailRenderParams();
+  void                                              SetExecutorRenderParams();
+  void                                              ResetPreviewRenderParams();
+  void                                              ResetThumbnailRenderParams();
 };
 };  // namespace alcedo

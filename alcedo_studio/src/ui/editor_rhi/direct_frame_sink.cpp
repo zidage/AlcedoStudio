@@ -310,7 +310,14 @@ void DirectFrameSink::UnmapResource() {
     lease.sync_value = snap->native.sync_value;
     lease.lifetime_token = std::make_shared<LeaseLifetimeToken>();
     (void)ProducerReleaseWritable(lease);
-    (void)ProducerWaitWritableComplete(lease);
+    // CUDA's producer already synchronizes its dedicated render stream before
+    // UnmapResource. A second cudaDeviceSynchronize here stalls on unrelated
+    // thumbnail/import streams and made every slider frame pay a global GPU
+    // barrier. OpenCL release remains asynchronous and still needs completion
+    // before Qt samples the shared GL texture.
+    if (lease.writable_kind == LeaseWritableResourceKind::OpenClImage) {
+      (void)ProducerWaitWritableComplete(lease);
+    }
   }
   item_->present_queue()->EndWrite(slot_index);
 

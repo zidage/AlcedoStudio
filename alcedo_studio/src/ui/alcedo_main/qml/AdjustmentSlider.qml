@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Shared numeric adjustment slider + field + reset (Phase 6A). Binds to an
+// Shared numeric adjustment slider + field + reset. Binds to an
 // EditorAdjustmentValueModel and drives its gesture lifecycle:
 //   - Pointer drag: beginGesture → updateGesture (per move) → commitGesture.
 //   - Keyboard arrows on the slider: editValue (interactive + debounced settled).
@@ -16,9 +16,9 @@ import QtQuick.Layouts
 // field is managed imperatively (no text binding) so user typing and external
 // loads do not feedback-loop.
 //
-// Visuals use appTheme tokens only (DESIGN.md). Invalid input recolors the
-// track, field border, and text to dangerColor; the model's valid flag is the
-// source of truth and is cleared by the next valid editValue/setValue.
+// The two-line geometry mirrors the legacy QWidget editor: label/value above a
+// full-width 22 px slider. The painted handle stays compact while the complete
+// slider row remains draggable.
 Item {
     id: root
     objectName: "adjustmentSlider"
@@ -27,15 +27,17 @@ Item {
 
     readonly property color colText: appTheme.textColor
     readonly property color colMuted: appTheme.textMutedColor
-    readonly property color colAccent: appTheme.accentColor
+    readonly property color colPositive: appTheme.editorSliderPositiveColor
+    readonly property color colNegative: appTheme.editorSliderNegativeColor
     readonly property color colDanger: appTheme.dangerColor
-    readonly property color colTrack: appTheme.dividerColor
-    readonly property color colHandle: appTheme.cardSurfaceColor
-    readonly property color colFieldBorder: (root.model && !root.model.valid)
-                                             ? appTheme.dangerColor
-                                             : appTheme.dividerColor
+    readonly property color colTrack: appTheme.editorSliderTrackColor
+    readonly property color colHandle: appTheme.editorSliderHandleColor
+    readonly property color colHandleBorder: appTheme.editorSliderHandleBorderColor
+    readonly property bool centered: root.model
+                                     && root.model.minimum < 0
+                                     && root.model.maximum > 0
 
-    implicitHeight: sliderRow.implicitHeight
+    implicitHeight: sliderColumn.implicitHeight
     Layout.fillWidth: true
 
     function formatValue(v) {
@@ -73,30 +75,106 @@ Item {
 
     onModelChanged: syncField()
 
-    RowLayout {
-        id: sliderRow
+    ColumnLayout {
+        id: sliderColumn
         anchors.fill: parent
-        spacing: appTheme.spaceSm
+        spacing: 2
 
-        Label {
-            Layout.preferredWidth: 76
-            text: root.model ? root.model.label : ""
-            color: root.colText
-            font.pixelSize: appTheme.fontSizeBody
-            elide: Text.ElideRight
-            visible: root.model && root.model.label && root.model.label.length > 0
-            Accessible.name: root.model ? root.model.label : ""
+        RowLayout {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 18
+            spacing: appTheme.spaceSm
+
+            Label {
+                Layout.fillWidth: true
+                text: root.model ? root.model.label : ""
+                color: root.colText
+                font.pixelSize: appTheme.fontSizeCaption
+                elide: Text.ElideRight
+                visible: root.model && root.model.label && root.model.label.length > 0
+                Accessible.name: root.model ? root.model.label : ""
+            }
+
+            TextField {
+                id: valueField
+                objectName: "adjustmentSliderField"
+                Layout.preferredWidth: 56
+                Layout.preferredHeight: 18
+                leftPadding: 2
+                rightPadding: 2
+                topPadding: 0
+                bottomPadding: 0
+                text: ""
+                color: (root.model && !root.model.valid) ? root.colDanger : root.colMuted
+                font.pixelSize: appTheme.fontSizeCaption
+                horizontalAlignment: TextInput.AlignRight
+                verticalAlignment: TextInput.AlignVCenter
+                selectByMouse: true
+                enabled: root.model && root.model.enabled
+                activeFocusOnTab: true
+                Accessible.role: Accessible.EditableText
+                Accessible.name: root.model ? root.model.label : ""
+
+                background: Rectangle {
+                    color: "transparent"
+                    border.width: valueField.activeFocus || (root.model && !root.model.valid) ? 1 : 0
+                    border.color: (root.model && !root.model.valid)
+                                  ? root.colDanger
+                                  : root.colMuted
+                    radius: appTheme.controlRadiusSmall
+                }
+
+                Component.onCompleted: root.syncField()
+                onActiveFocusChanged: {
+                    if (activeFocus) {
+                        selectAll()
+                    } else if (root.model) {
+                        valueField.text = root.formatValue(root.model.value)
+                    }
+                }
+                onEditingFinished: {
+                    if (!root.model) {
+                        return
+                    }
+                    var parsed = root.parseField(valueField.text)
+                    if (!parsed.ok) {
+                        root.model.setInvalid(parsed.outOfRange
+                                              ? qsTr("Out of range")
+                                              : qsTr("Invalid number"))
+                        valueField.text = root.formatValue(root.model.value)
+                    } else {
+                        root.model.editValue(parsed.value)
+                        root.model.commitImmediately()
+                        valueField.text = root.formatValue(root.model.value)
+                    }
+                }
+
+                Connections {
+                    target: root.model
+                    function onValueChanged() { root.syncField() }
+                    function onValidChanged() { root.syncField() }
+                }
+            }
+
+            AdjustmentResetButton {
+                model: root.model
+                Layout.preferredWidth: 18
+                Layout.preferredHeight: 18
+            }
         }
 
         Slider {
             id: slider
             objectName: "adjustmentSliderHandle"
             Layout.fillWidth: true
-            Layout.preferredHeight: 28
+            Layout.preferredHeight: 22
             enabled: root.model && root.model.enabled
             from: root.model ? root.model.minimum : 0
             to: root.model ? root.model.maximum : 1
             stepSize: root.model ? root.model.step : 0
+            snapMode: Slider.SnapAlways
+            live: true
+            touchDragThreshold: 0
             value: root.model ? root.model.value : 0
             activeFocusOnTab: true
             Accessible.role: Accessible.Slider
@@ -136,30 +214,58 @@ Item {
             }
 
             background: Rectangle {
-                x: slider.leftPadding
-                y: slider.topPadding + slider.availableHeight / 2 - 2
-                width: slider.availableWidth
-                height: 4
-                radius: 2
+                readonly property real zeroPosition: root.centered
+                    ? (-root.model.minimum / (root.model.maximum - root.model.minimum))
+                    : 0
+                readonly property real startPosition: root.centered ? zeroPosition : 0
+
+                x: slider.leftPadding + 10
+                y: slider.topPadding + slider.availableHeight / 2 - height / 2
+                width: Math.max(0, slider.availableWidth - 20)
+                height: 10
+                radius: 5
                 color: root.colTrack
-            }
-            contentItem: Rectangle {
-                x: slider.leftPadding
-                y: slider.topPadding + slider.availableHeight / 2 - 2
-                width: slider.visualPosition * slider.availableWidth
-                height: 4
-                radius: 2
-                color: (root.model && !root.model.valid) ? root.colDanger : root.colAccent
+
+                Rectangle {
+                    x: Math.min(parent.startPosition, slider.visualPosition) * parent.width
+                    y: 1
+                    width: Math.abs(slider.visualPosition - parent.startPosition) * parent.width
+                    height: parent.height - 2
+                    radius: 4
+                    color: (root.model && !root.model.valid)
+                           ? root.colDanger
+                           : (slider.value < 0 ? root.colNegative : root.colPositive)
+                }
+
+                Rectangle {
+                    visible: root.centered
+                    x: parent.zeroPosition * parent.width
+                    y: 1
+                    width: 1
+                    height: parent.height - 2
+                    color: root.colMuted
+                    opacity: 0.45
+                }
             }
             handle: Rectangle {
-                x: slider.leftPadding + slider.visualPosition * (slider.availableWidth - width)
+                x: slider.leftPadding + 2
+                   + slider.visualPosition * (slider.availableWidth - width - 4)
                 y: slider.topPadding + slider.availableHeight / 2 - height / 2
-                width: 14
-                height: 14
-                radius: 7
+                width: 16
+                height: 16
+                radius: 8
                 color: root.colHandle
                 border.width: 1
-                border.color: root.colMuted
+                border.color: root.colHandleBorder
+
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: -2
+                    radius: width / 2
+                    color: "transparent"
+                    border.width: slider.activeFocus ? 1 : 0
+                    border.color: slider.value < 0 ? root.colNegative : root.colPositive
+                }
             }
 
             Connections {
@@ -175,66 +281,5 @@ Item {
             }
         }
 
-        TextField {
-            id: valueField
-            objectName: "adjustmentSliderField"
-            Layout.preferredWidth: 64
-            text: ""
-            color: (root.model && !root.model.valid) ? root.colDanger : root.colText
-            font.pixelSize: appTheme.fontSizeBody
-            horizontalAlignment: TextInput.AlignRight
-            selectByMouse: true
-            enabled: root.model && root.model.enabled
-            activeFocusOnTab: true
-            Accessible.role: Accessible.EditableText
-            Accessible.name: root.model ? root.model.label : ""
-
-            background: Rectangle {
-                radius: appTheme.controlRadiusSmall
-                color: appTheme.bgBaseColor
-                border.width: 1
-                border.color: root.colFieldBorder
-            }
-
-            Component.onCompleted: root.syncField()
-            onActiveFocusChanged: {
-                if (activeFocus) {
-                    selectAll()
-                } else if (root.model) {
-                    // Revert display if the user defocused without committing.
-                    valueField.text = root.formatValue(root.model.value)
-                }
-            }
-            onEditingFinished: {
-                if (!root.model) {
-                    return
-                }
-                var parsed = root.parseField(valueField.text)
-                if (!parsed.ok) {
-                    root.model.setInvalid(parsed.outOfRange
-                                          ? qsTr("Out of range")
-                                          : qsTr("Invalid number"))
-                    valueField.text = root.formatValue(root.model.value)
-                } else {
-                    root.model.editValue(parsed.value)
-                    root.model.commitImmediately()
-                    valueField.text = root.formatValue(root.model.value)
-                }
-            }
-
-            Connections {
-                target: root.model
-                function onValueChanged() {
-                    root.syncField()
-                }
-                function onValidChanged() {
-                    root.syncField()
-                }
-            }
-        }
-
-        AdjustmentResetButton {
-            model: root.model
-        }
     }
 }

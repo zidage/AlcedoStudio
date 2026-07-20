@@ -909,6 +909,29 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
   EXPECT_GE(viewport->presentedFrameCount(), 2u);
   EXPECT_GE(written_frame_count.load(std::memory_order_acquire), 2);
 
+  // Continuous adjustment regression: pointer moves submit interactive patches
+  // without a settled/release event. At least one FAST frame must be composed
+  // while the gesture is still active. The GUI-thread submit path also marks
+  // QQuickRhiItem dirty once per move so the ready queue cannot wait behind the
+  // mouse-release event.
+  const auto composed_before_drag = viewport->presentedFrameCount();
+  const auto wakeups_before_drag = viewport->adjustmentFrameRequestCount();
+  ASSERT_TRUE(session->submitPatch(QStringLiteral("exposure"),
+                                   QStringLiteral(R"({"value":0.10})"), false));
+  ASSERT_TRUE(session->submitPatch(QStringLiteral("exposure"),
+                                   QStringLiteral(R"({"value":0.20})"), false));
+  ASSERT_TRUE(session->submitPatch(QStringLiteral("exposure"),
+                                   QStringLiteral(R"({"value":0.30})"), false));
+  EXPECT_EQ(viewport->adjustmentFrameRequestCount(), wakeups_before_drag + 3);
+  const auto interactive_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(15);
+  while (viewport->presentedFrameCount() <= composed_before_drag &&
+         std::chrono::steady_clock::now() < interactive_deadline) {
+    ProcessEvents(20);
+  }
+  EXPECT_GT(viewport->presentedFrameCount(), composed_before_drag)
+      << "Interactive adjustment did not compose until a settled gesture";
+
   // A→B→A: late frame from the first A session must not replace the current A.
   const auto gen_a1 = session->session_generation();
   loaded->host.workspace_router()->OpenEditor(8, 80);

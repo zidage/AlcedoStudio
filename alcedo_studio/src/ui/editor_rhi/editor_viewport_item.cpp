@@ -205,6 +205,12 @@ void EditorViewportItem::requestPresentUpdate() {
   requestPresentUpdateOnGuiThread();
 }
 
+void EditorViewportItem::prepareForAdjustmentFrame() {
+  adjustment_frame_requested_.store(true, std::memory_order_release);
+  adjustment_frame_request_count_.fetch_add(1, std::memory_order_acq_rel);
+  requestPresentUpdateOnGuiThread();
+}
+
 void EditorViewportItem::refreshPresentationAvailability() {
   if (isVisible() && window() && window()->visibility() != QWindow::Hidden &&
       window()->visibility() != QWindow::Minimized) {

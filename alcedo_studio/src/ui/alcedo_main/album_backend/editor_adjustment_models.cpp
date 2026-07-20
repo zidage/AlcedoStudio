@@ -13,6 +13,9 @@
 #include <algorithm>
 #include <cmath>
 
+#include "ui/alcedo_main/album_backend/editor_tone_curve_item.hpp"
+#include "ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
+
 namespace alcedo::ui {
 
 // ── EditorAdjustmentModelBase ───────────────────────────────────────────────
@@ -385,6 +388,8 @@ void RegisterEditorAdjustmentQmlTypes() {
                                               "EditorAdjustmentEnumModel");
   qmlRegisterType<EditorAdjustmentToggleModel>("Alcedo.Main", 1, 0,
                                                "EditorAdjustmentToggleModel");
+  qmlRegisterType<EditorToneCurveModel>("Alcedo.Main", 1, 0, "EditorToneCurveModel");
+  qmlRegisterType<EditorToneCurveItem>("Alcedo.Main", 1, 0, "EditorToneCurveItem");
 }
 
 }  // namespace alcedo::ui

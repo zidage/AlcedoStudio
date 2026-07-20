@@ -6,8 +6,14 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
+#include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -58,8 +64,8 @@ auto MakeIntent(EditorRenderQuality quality, EditorRenderPriority priority,
 // sets frame_role/replacement_key like a service-produced intent.
 auto MakeViewIntent(EditorRenderReason reason, EditorRenderQuality quality,
                     EditorRenderPriority priority = EditorRenderPriority::Normal,
-                    std::uint64_t          session_gen = 1, std::uint64_t render_gen = 1,
-                    std::uint64_t          view_gen    = 1) -> EditorRenderIntent {
+                    std::uint64_t session_gen = 1, std::uint64_t render_gen = 1,
+                    std::uint64_t view_gen = 1) -> EditorRenderIntent {
   EditorRenderIntent intent = MakeIntent(quality, priority, session_gen, render_gen, view_gen);
   intent.reason             = reason;
   return intent;
@@ -103,12 +109,12 @@ TEST_F(EditorRenderCoordinatorTest, ReplacesPendingWorkWithSameReplacementKey) {
   // test must use a reason that enqueues. MakeIntent defaults to
   // InteractiveAdjustment, which produces a pending "interactive" entry that a
   // newer same-key submit replaces.
-  auto older             = MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Low);
+  auto       older       = MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Low);
   const auto pending_old = coordinator_->Submit(older);
   EXPECT_EQ(pending_old.kind, EditorRenderResultKind::RequestAccepted);
   EXPECT_EQ(coordinator_->pending_count(), 1u);
 
-  auto newer             = MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::High);
+  auto       newer       = MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::High);
   const auto pending_new = coordinator_->Submit(newer);
   EXPECT_EQ(pending_new.kind, EditorRenderResultKind::RequestAccepted);
   EXPECT_EQ(coordinator_->pending_count(), 1u);
@@ -163,8 +169,7 @@ TEST_F(EditorRenderCoordinatorTest, CancelSessionDropsPendingAndInflight) {
 }
 
 TEST_F(EditorRenderCoordinatorTest, CancelSessionAndWaitJoinsTheMatchingSchedulerWork) {
-  coordinator_->Submit(
-      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
+  coordinator_->Submit(MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
 
   coordinator_->CancelSessionAndWait(1);
 
@@ -240,6 +245,69 @@ TEST_F(EditorRenderCoordinatorTest, ObserverRunsAfterQueueStateIsStable) {
   EXPECT_TRUE(coordinator_->has_inflight());
   EXPECT_EQ(coordinator_->last_scheduled_request_id(), accepted.request_id);
   EXPECT_EQ(coordinator_->pending_count(), 0u);
+}
+
+TEST_F(EditorRenderCoordinatorTest, ConcurrentSubmitReturnsWhileAnotherThreadIsBlockedInObserver) {
+  std::mutex              observer_mutex;
+  std::condition_variable observer_entered;
+  std::condition_variable release_observer;
+  bool                    observer_is_blocked = false;
+  bool                    observer_can_return = false;
+
+  coordinator_->SetResultObserver([&](const EditorRenderResult&) {
+    std::unique_lock lock(observer_mutex);
+    observer_is_blocked = true;
+    observer_entered.notify_one();
+    release_observer.wait(lock, [&] { return observer_can_return; });
+  });
+
+  std::jthread first_submit([&] {
+    coordinator_->Submit(
+        MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
+  });
+
+  bool         entered = false;
+  {
+    std::unique_lock lock(observer_mutex);
+    entered = observer_entered.wait_for(lock, std::chrono::seconds(2),
+                                        [&] { return observer_is_blocked; });
+  }
+  EXPECT_TRUE(entered);
+
+  std::atomic<bool> second_returned = false;
+  std::jthread      second_submit([&] {
+    coordinator_->Submit(
+        MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
+    second_returned.store(true, std::memory_order_release);
+  });
+
+  const auto        deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!second_returned.load(std::memory_order_acquire) &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::yield();
+  }
+  EXPECT_TRUE(second_returned.load(std::memory_order_acquire));
+
+  {
+    std::scoped_lock lock(observer_mutex);
+    observer_can_return = true;
+  }
+  release_observer.notify_one();
+}
+
+TEST_F(EditorRenderCoordinatorTest, ObserverExceptionDoesNotDisableLaterDelivery) {
+  coordinator_->SetResultObserver(
+      [](const EditorRenderResult&) { throw std::runtime_error("observer failed"); });
+  EXPECT_THROW(coordinator_->Submit(
+                   MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal)),
+               std::runtime_error);
+
+  int delivered = 0;
+  coordinator_->SetResultObserver([&](const EditorRenderResult&) { ++delivered; });
+  auto next            = MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal);
+  next.replacement_key = "after-observer-failure";
+  EXPECT_EQ(coordinator_->Submit(next).kind, EditorRenderResultKind::RequestAccepted);
+  EXPECT_GT(delivered, 0);
 }
 
 TEST(EditorRenderCoordinatorLifetimeTest, LateTokenCancellationIgnoresDestroyedCoordinator) {
@@ -376,6 +444,35 @@ TEST_F(EditorRenderCoordinatorTest,
   EXPECT_EQ(inflight.kind, EditorRenderResultKind::RequestAccepted);
 }
 
+TEST_F(EditorRenderCoordinatorTest,
+       AdjustmentBurstKeepsRunningFastFrameAndSchedulesOnlyLatestPendingValue) {
+  const auto first = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1, 1, 1));
+  ASSERT_TRUE(coordinator_->has_inflight());
+
+  coordinator_->SetActiveGenerations(
+      1, 2, 1, EditorRenderSupersessionPolicy::PreserveInflightFullFrame);
+  EXPECT_TRUE(coordinator_->has_inflight());
+  EXPECT_TRUE(scheduler_->cancelled_.empty());
+
+  const auto middle = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1, 2, 1));
+  ASSERT_EQ(coordinator_->pending_count(), 1u);
+
+  coordinator_->SetActiveGenerations(
+      1, 3, 1, EditorRenderSupersessionPolicy::PreserveInflightFullFrame);
+  const auto latest = coordinator_->Submit(
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1, 3, 1));
+  ASSERT_EQ(coordinator_->pending_count(), 1u);
+  EXPECT_TRUE(scheduler_->cancelled_.empty());
+
+  coordinator_->NotifySchedulerCompleted(first.request_id, true);
+
+  ASSERT_EQ(scheduler_->scheduled_.size(), 2u);
+  EXPECT_EQ(scheduler_->scheduled_.back().request_id, latest.request_id);
+  EXPECT_NE(scheduler_->scheduled_.back().request_id, middle.request_id);
+}
+
 TEST_F(EditorRenderCoordinatorTest, ViewGenerationAdvanceCancelsOnlyDetailPatch) {
   // Phase 5D D2: a view-generation advance (zoom/pan/resize/ROI) only obsoletes
   // view-dependent DetailPatch work. Full-frame renders (InteractivePrimary /
@@ -395,8 +492,8 @@ TEST_F(EditorRenderCoordinatorTest, ViewGenerationAdvanceCancelsOnlyDetailPatch)
   EXPECT_TRUE(coordinator_->has_inflight());
   EXPECT_EQ(coordinator_->pending_count(), 0u);
 
-  bool detail_cancelled       = false;
-  bool interactive_cancelled  = false;
+  bool detail_cancelled      = false;
+  bool interactive_cancelled = false;
   for (const auto& r : coordinator_->results()) {
     if (r.kind != EditorRenderResultKind::Cancelled) {
       continue;
@@ -432,11 +529,11 @@ TEST_F(EditorRenderCoordinatorTest, ViewGenerationAdvanceKeepsFullFramePendingCa
   // higher-role full-frame (InteractivePrimary, role 3) to in-flight, leaving
   // the QualityBase pending. Both full-frames survive (one in-flight, one
   // pending); neither is cancelled.
-  EXPECT_TRUE(coordinator_->has_inflight());    // detail cancelled; full-frame promoted
+  EXPECT_TRUE(coordinator_->has_inflight());     // detail cancelled; full-frame promoted
   EXPECT_EQ(coordinator_->pending_count(), 1u);  // one full-frame pending, one in-flight
 
-  bool  detail_cancelled      = false;
-  int   full_frame_cancelled  = 0;
+  bool detail_cancelled     = false;
+  int  full_frame_cancelled = 0;
   for (const auto& r : coordinator_->results()) {
     if (r.kind != EditorRenderResultKind::Cancelled) {
       continue;
@@ -545,9 +642,9 @@ TEST_F(EditorRenderCoordinatorTest, ViewGenerationCancelDoesNotDeadlockOnTokenRe
       }
     }
 
-    std::vector<EditorRenderRequest>                                       scheduled_;
-    std::vector<std::uint64_t>                                             cancelled_;
-    std::uint64_t                                                          next_job_ = 0;
+    std::vector<EditorRenderRequest>                                                  scheduled_;
+    std::vector<std::uint64_t>                                                        cancelled_;
+    std::uint64_t                                                                     next_job_ = 0;
     std::unordered_map<std::uint64_t, std::shared_ptr<EditorRenderCancellationToken>> tokens_;
   };
 
@@ -556,7 +653,7 @@ TEST_F(EditorRenderCoordinatorTest, ViewGenerationCancelDoesNotDeadlockOnTokenRe
   coord->SetActiveGenerations(1, 1, 1);
 
   auto first = MakeViewIntent(EditorRenderReason::DetailRefresh, EditorRenderQuality::Detail);
-  first.cancellation = std::make_shared<EditorRenderCancellationToken>();
+  first.cancellation  = std::make_shared<EditorRenderCancellationToken>();
   const auto accepted = coord->Submit(first);
   ASSERT_EQ(accepted.kind, EditorRenderResultKind::RequestAccepted);
   ASSERT_TRUE(coord->has_inflight());
@@ -575,7 +672,7 @@ TEST_F(EditorRenderCoordinatorTest, ViewGenerationCancelDoesNotDeadlockOnTokenRe
   auto second = MakeViewIntent(EditorRenderReason::DetailRefresh, EditorRenderQuality::Detail,
                                EditorRenderPriority::Normal, 1, 1, 2);
   second.cancellation = std::make_shared<EditorRenderCancellationToken>();
-  const auto next = coord->Submit(second);
+  const auto next     = coord->Submit(second);
   EXPECT_EQ(next.kind, EditorRenderResultKind::RequestAccepted);
   EXPECT_TRUE(coord->has_inflight());
   ASSERT_EQ(reentrant->scheduled_.size(), 2u);
@@ -641,8 +738,8 @@ TEST_F(EditorRenderCoordinatorTest, InteractiveNotBlockedBehindOutdatedDetail) {
 
   const auto interactive = coordinator_->Submit(
       MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
-  const auto detail = coordinator_->Submit(
-      MakeIntent(EditorRenderQuality::Detail, EditorRenderPriority::High));
+  const auto detail =
+      coordinator_->Submit(MakeIntent(EditorRenderQuality::Detail, EditorRenderPriority::High));
   ASSERT_EQ(coordinator_->pending_count(), 2u);
 
   coordinator_->NotifySchedulerCompleted(inflight_id, true);
@@ -661,8 +758,8 @@ TEST_F(EditorRenderCoordinatorTest, DiagnosticsTrackRejectReplaceCancelAndSubmit
   auto first = coordinator_->Submit(
       MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
   ASSERT_EQ(first.kind, EditorRenderResultKind::RequestAccepted);
-  auto older = coordinator_->Submit(
-      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Low));
+  auto older =
+      coordinator_->Submit(MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Low));
   auto newer = coordinator_->Submit(
       MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::High));
   EXPECT_EQ(older.kind, EditorRenderResultKind::RequestAccepted);

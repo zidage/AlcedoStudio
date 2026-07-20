@@ -44,10 +44,13 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
 
   void SetResultObserver(ResultObserver observer);
 
-  /// Active image/session/view generations. Older intents are rejected on submit;
-  /// advancing also cancels obsolete pending and in-flight work (Phase 5A-Fix).
+  /// Active image/session/view generations. Older pending intents are removed.
+  /// Interactive adjustment bursts may preserve an already-running full frame
+  /// so FAST_PREVIEW can finish while the newest pending request is coalesced.
   void SetActiveGenerations(std::uint64_t session_generation, std::uint64_t render_generation,
-                            std::uint64_t view_generation) override;
+                            std::uint64_t view_generation,
+                            EditorRenderSupersessionPolicy policy =
+                                EditorRenderSupersessionPolicy::CancelObsolete) override;
 
   [[nodiscard]] auto session_generation() const -> std::uint64_t {
     std::scoped_lock lock(mutex_);
@@ -98,12 +101,12 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   /// Phase 5D/5E: aggregate busy/reason/rejection summary for QML. Never
   /// exposes pipeline task objects.
   [[nodiscard]] auto diagnostics() const -> EditorRenderCoordinatorDiagnostics override {
-    std::scoped_lock lock(mutex_);
+    std::scoped_lock                   lock(mutex_);
     EditorRenderCoordinatorDiagnostics diag;
-    diag.has_inflight                 = inflight_.has_value();
-    diag.pending_count                = pending_.size();
-    diag.inflight_reason              = inflight_ ? std::make_optional(inflight_->request.intent.reason)
-                                                  : std::nullopt;
+    diag.has_inflight  = inflight_.has_value();
+    diag.pending_count = pending_.size();
+    diag.inflight_reason =
+        inflight_ ? std::make_optional(inflight_->request.intent.reason) : std::nullopt;
     diag.replaced_count               = replaced_count_;
     diag.cancelled_count              = cancelled_count_;
     diag.last_error                   = last_error_;
@@ -136,7 +139,8 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   /// Cancel obsolete pending/in-flight work under mutex_. Returns a scheduler
   /// job id that must be cancelled only after releasing mutex_ (token callbacks
   /// re-enter CancelRequest).
-  auto CancelObsoleteForActiveGenerations() -> std::uint64_t;
+  auto CancelObsoleteForActiveGenerations(EditorRenderSupersessionPolicy policy)
+      -> std::uint64_t;
   [[nodiscard]] auto IsObsolete(const EditorRenderIntent& intent) const -> bool;
   void               Emit(EditorRenderResult result);
   void               DeliverPendingResults();
@@ -171,7 +175,7 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   std::optional<FrameRole>                      last_submitted_frame_role_;
   std::optional<EditorRenderReason>             last_submitted_render_reason_;
   mutable std::mutex                            mutex_;
-  std::recursive_mutex                          delivery_mutex_;
+  bool                                          delivery_in_progress_ = false;
 };
 
 }  // namespace alcedo

@@ -290,6 +290,29 @@ TEST_F(EditorRealRawGpuE2eTest,
                           std::chrono::minutes(2)))
         << "QualityBase was not composed after InteractivePrimary";
 
+    if (i == 0) {
+      // Keep the adjustment gesture open: no settled patch or pointer release
+      // is sent. The QQuickRhiItem must still synchronize and compose a FAST
+      // frame while QualityBase and the zoom DetailPatch have already exercised
+      // the other presentation layers.
+      const auto composed_before_drag = viewport->presentedFrameCount();
+      const auto wakeups_before_drag = viewport->adjustmentFrameRequestCount();
+      auto* session = host.editor_session();
+      ASSERT_NE(session, nullptr);
+      ASSERT_TRUE(session->submitPatch(QStringLiteral("exposure"),
+                                       QStringLiteral(R"({"value":0.10})"), false));
+      ASSERT_TRUE(session->submitPatch(QStringLiteral("exposure"),
+                                       QStringLiteral(R"({"value":0.20})"), false));
+      ASSERT_TRUE(session->submitPatch(QStringLiteral("exposure"),
+                                       QStringLiteral(R"({"value":0.30})"), false));
+      EXPECT_EQ(viewport->adjustmentFrameRequestCount(), wakeups_before_drag + 3);
+      ASSERT_TRUE(WaitUntil([&] { return viewport->presentedFrameCount() > composed_before_drag; },
+                            std::chrono::minutes(2)))
+          << "FAST adjustment frame was not composed before gesture release; status="
+          << viewport->statusText().toStdString()
+          << " liveTargets=" << viewport->liveTargetCount();
+    }
+
     EXPECT_EQ(viewport->lastPresentedImageGeneration(),
               host.editor_session()->session_generation());
     EXPECT_EQ(viewport->imageIdentity(), key.image_id);

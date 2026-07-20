@@ -237,7 +237,10 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto Emit(EditorSessionResult result) -> EditorSessionResult;
   void ReleaseGuards();
   auto AcquireGuards(sl_element_id_t element_id, std::string* error) -> bool;
-  auto RouteInitialRender(EditorRenderReason reason) -> std::uint64_t;
+  auto RouteInitialRender(
+      EditorRenderReason reason,
+      EditorRenderSupersessionPolicy policy = EditorRenderSupersessionPolicy::CancelObsolete)
+      -> std::uint64_t;
   /// After the InteractivePrimary first frame is presented, enqueue the normal
   /// QualityBase follow-up. Never a prerequisite for leaving Loading.
   auto RouteQualityBaseFollowUp() -> std::uint64_t;

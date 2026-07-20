@@ -262,6 +262,8 @@ class EditorSessionProductionSchedulerPort final
   std::unordered_map<std::uint64_t, PendingPresentation>  pending_presentations_;
   std::vector<alcedo::EditorRenderRequest>                scheduled_;
   std::vector<std::jthread>                               workers_;
+  image_id_t                                               cached_input_image_id_ = 0;
+  std::shared_ptr<alcedo::ImageBuffer>                     cached_input_;
   bool                                                    shutting_down_ = false;
 };
 

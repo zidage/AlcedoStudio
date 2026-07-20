@@ -113,15 +113,15 @@ class FakeTaskPort final : public IEditorTaskPort {
 
 class FakeJournalPort final : public IEditorJournalPort {
  public:
-  bool fail_finalize = false;
-  bool fail_barrier  = false;
-  bool fail_discard  = false;
+  bool                        fail_finalize        = false;
+  bool                        fail_barrier         = false;
+  bool                        fail_discard         = false;
   bool                        fail_recover         = false;
-  bool async_commit  = false;
-  bool async_materialize = false;
-  int  finalize_count = 0;
-  int  barrier_count = 0;
-  int  discard_count = 0;
+  bool                        async_commit         = false;
+  bool                        async_materialize    = false;
+  int                         finalize_count       = 0;
+  int                         barrier_count        = 0;
+  int                         discard_count        = 0;
   int                         recover_count        = 0;
   int                         edit_record_count    = 0;
   int                         cursor_record_count  = 0;
@@ -193,7 +193,7 @@ class FakeJournalPort final : public IEditorJournalPort {
                           EditorJournalCommitCallback callback) -> bool override {
     if (!async_commit) {
       return IEditorJournalPort::CommitJournalAsync(element_id, session_generation,
-                                                     std::move(callback));
+                                                    std::move(callback));
     }
     pending_commit = std::move(callback);
     return true;
@@ -203,7 +203,7 @@ class FakeJournalPort final : public IEditorJournalPort {
                         EditorMaterializeCallback callback) -> bool override {
     if (!async_materialize) {
       return IEditorJournalPort::MaterializeAsync(element_id, session_generation,
-                                                   std::move(callback));
+                                                  std::move(callback));
     }
     pending_materialize = std::move(callback);
     return true;
@@ -245,6 +245,8 @@ class RecordingRenderPort final : public IEditorRenderSubmitPort {
   std::uint64_t                   active_session = 0;
   std::uint64_t                   active_render  = 0;
   std::uint64_t                   active_view    = 0;
+  EditorRenderSupersessionPolicy  last_supersession_policy =
+      EditorRenderSupersessionPolicy::CancelObsolete;
 
   auto Submit(const EditorRenderIntent& intent) -> EditorRenderResult override {
     submitted.push_back(intent);
@@ -263,10 +265,12 @@ class RecordingRenderPort final : public IEditorRenderSubmitPort {
     waited_sessions.push_back(session_generation);
   }
   void SetActiveGenerations(std::uint64_t session_generation, std::uint64_t render_generation,
-                            std::uint64_t view_generation) override {
+                            std::uint64_t view_generation,
+                            EditorRenderSupersessionPolicy policy) override {
     active_session = session_generation;
     active_render  = render_generation;
     active_view    = view_generation;
+    last_supersession_policy = policy;
   }
 };
 
@@ -352,14 +356,14 @@ auto DriveRuntimeToInteractive(EditorSessionRuntime& runtime) -> std::uint64_t {
 
 auto MakeRegion(int x) -> ViewportRenderRegion {
   ViewportRenderRegion region{};
-  region.x_               = x;
-  region.y_               = 0;
-  region.scale_x_         = 2.0f;
-  region.scale_y_         = 2.0f;
-  region.reference_width_ = 640;
+  region.x_                = x;
+  region.y_                = 0;
+  region.scale_x_          = 2.0f;
+  region.scale_y_          = 2.0f;
+  region.reference_width_  = 640;
   region.reference_height_ = 480;
-  region.target_width_    = 320;
-  region.target_height_   = 240;
+  region.target_width_     = 320;
+  region.target_height_    = 240;
   return region;
 }
 
@@ -589,6 +593,8 @@ TEST_F(EditorSessionServiceTest, PatchAndGestureCommitRouteThroughRenderPortOnly
   service_->Patch(patch);
   ASSERT_EQ(render_->submitted.size(), 1u);
   EXPECT_EQ(render_->submitted.back().reason, EditorRenderReason::InteractiveAdjustment);
+  EXPECT_EQ(render_->last_supersession_policy,
+            EditorRenderSupersessionPolicy::PreserveInflightFullFrame);
   EXPECT_EQ(render_->submitted.back().adjustment.params_json, R"({"exposure":1.0})");
   ASSERT_FALSE(render_->submitted.back().adjustment.patches.empty());
   EXPECT_EQ(render_->submitted.back().adjustment.patches.back().field_key, "exposure");
@@ -597,6 +603,26 @@ TEST_F(EditorSessionServiceTest, PatchAndGestureCommitRouteThroughRenderPortOnly
   service_->GestureCommit(patch);
   ASSERT_EQ(render_->submitted.size(), 2u);
   EXPECT_EQ(render_->submitted.back().reason, EditorRenderReason::SettledAdjustment);
+  EXPECT_EQ(render_->last_supersession_policy,
+            EditorRenderSupersessionPolicy::PreserveInflightFullFrame);
+}
+
+TEST_F(EditorSessionServiceTest, RepeatedInteractivePatchesKeepOnlyLatestValuePerField) {
+  service_->Open(1, 2);
+  PresentFirstFrame(*service_);
+
+  EditorAdjustmentPatch patch;
+  patch.field_key = "exposure";
+  for (int value = 0; value < 50; ++value) {
+    patch.params_json = std::string{"{\"exposure\":"} + std::to_string(value) + "}";
+    service_->Patch(patch);
+  }
+
+  const auto snapshot = service_->adjustment_snapshot();
+  ASSERT_EQ(snapshot.patches.size(), 1u);
+  EXPECT_EQ(snapshot.patches.front().field_key, "exposure");
+  EXPECT_EQ(snapshot.patches.front().params_json, R"({"exposure":49})");
+  EXPECT_EQ(snapshot.fingerprint, "exposure");
 }
 
 TEST_F(EditorSessionServiceTest, PatchWhileLoadingIsRejectedWithoutCancellingFirstFrame) {
@@ -746,11 +772,11 @@ TEST_F(EditorSessionServiceTest, SwitchStopsWhenJournalOrSaveTaskCannotStart) {
 TEST_F(EditorSessionServiceTest, SwitchStartsNextImageBeforePriorMaterializationCompletes) {
   service_->Open(1, 2);
   PresentFirstFrame(*service_);
-  const auto generation_a = service_->identity().session_generation;
+  const auto generation_a     = service_->identity().session_generation;
 
-  journal_->async_commit       = true;
+  journal_->async_commit      = true;
   journal_->async_materialize = true;
-  const auto switched = service_->Switch(3, 4);
+  const auto switched         = service_->Switch(3, 4);
 
   EXPECT_EQ(switched.kind, EditorSessionResultKind::RenderRouted);
   EXPECT_EQ(service_->identity().element_id, 3u);
@@ -785,7 +811,7 @@ TEST_F(EditorSessionServiceTest, FinalizeFailureKeepsCurrentImageGuards) {
   PresentFirstFrame(*service_);
   journal_->fail_finalize = true;
 
-  const auto result = service_->Switch(3, 4);
+  const auto result       = service_->Switch(3, 4);
 
   EXPECT_EQ(result.kind, EditorSessionResultKind::Failed);
   EXPECT_EQ(service_->identity().element_id, 1u);
@@ -797,7 +823,7 @@ TEST_F(EditorSessionServiceTest, FinalizeFailureKeepsCurrentImageGuards) {
 TEST_F(EditorSessionServiceTest, LateMaterializationFailureDoesNotFailNewImage) {
   service_->Open(1, 2);
   PresentFirstFrame(*service_);
-  journal_->async_commit       = true;
+  journal_->async_commit      = true;
   journal_->async_materialize = true;
   service_->Switch(3, 4);
 

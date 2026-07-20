@@ -9,6 +9,7 @@
 #include <QString>
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 
@@ -98,6 +99,15 @@ class EditorViewportItem : public QQuickRhiItem {
   Q_INVOKABLE void refreshPresentationAvailability();
   // Request a render-thread pass only when content/state actually changed.
   void requestPresentUpdate();
+  // Called synchronously from the GUI-thread adjustment submit path. Marks the
+  // item dirty before the pointer event returns, so Qt Quick's next scene-graph
+  // frame can recycle stale presentation slots even if a worker-thread ready
+  // notification is still queued behind continuous input events.
+  void prepareForAdjustmentFrame();
+
+  [[nodiscard]] auto adjustmentFrameRequestCount() const -> std::uint64_t {
+    return adjustment_frame_request_count_.load(std::memory_order_acquire);
+  }
 
   // Called by the application composition root before loading QML. The
   // registration is idempotent and also makes visible-window QML tests use the
@@ -123,6 +133,9 @@ class EditorViewportItem : public QQuickRhiItem {
   [[nodiscard]] auto presentationRequested() const -> bool {
     return presentation_requested_.load(std::memory_order_acquire);
   }
+  [[nodiscard]] auto takeAdjustmentFrameRequest() -> bool {
+    return adjustment_frame_requested_.exchange(false, std::memory_order_acq_rel);
+  }
   void resumePresentation();
   void setBackendName(const QString& name);
   void setStatusText(const QString& text);
@@ -141,6 +154,8 @@ class EditorViewportItem : public QQuickRhiItem {
   std::atomic<qulonglong> image_generation_{0};
   std::atomic<int> view_state_push_count_{0};
   std::atomic<bool> presentation_requested_{false};
+  std::atomic<bool> adjustment_frame_requested_{false};
+  std::atomic<std::uint64_t> adjustment_frame_request_count_{0};
   QQuickWindow* attached_window_ = nullptr;
   QMetaObject::Connection window_visibility_connection_;
   QMetaObject::Connection scene_graph_invalidated_connection_;

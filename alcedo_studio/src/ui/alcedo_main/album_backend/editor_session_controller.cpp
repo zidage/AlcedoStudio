@@ -528,6 +528,15 @@ bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, 
   if (!can_edit()) {
     return false;
   }
+  // QQuickRhiItem::synchronize only runs after the item is marked dirty. Do
+  // this on the GUI thread while handling the pointer move, before the worker
+  // can block waiting for a recyclable direct-present slot. The worker's
+  // NotifyFrameReady update remains the completion-side wakeup.
+  auto* viewport =
+      qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
+  if (viewport) {
+    viewport->prepareForAdjustmentFrame();
+  }
   alcedo::EditorAdjustmentPatch patch;
   patch.field_key   = fieldKey.toStdString();
   patch.params_json = paramsJson.toStdString();

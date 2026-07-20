@@ -11,9 +11,7 @@
 // activation; QSignalSpy catches the debounced settled commit through the event
 // loop. No GPU is required (offscreen QPA).
 
-#include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
-#include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
-#include "ui/alcedo_main/app_theme.hpp"
+#include <gtest/gtest.h>
 
 #include <QApplication>
 #include <QEventLoop>
@@ -33,15 +31,16 @@
 #include <QUrl>
 #include <QVariantList>
 #include <QVariantMap>
-
-#include <gtest/gtest.h>
-
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <vector>
+
+#include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
+#include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
+#include "ui/alcedo_main/app_theme.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -68,16 +67,17 @@ class RecordingSubmitter : public QObject, public IEditorAdjustmentSubmitter {
   auto canEdit() const -> bool override { return canEditState; }
 
   auto settledCount() const -> int {
-    return static_cast<int>(std::count_if(calls.begin(), calls.end(),
-                                           [](const Call& c) { return c.settled; }));
+    return static_cast<int>(
+        std::count_if(calls.begin(), calls.end(), [](const Call& c) { return c.settled; }));
   }
   auto interactiveCount() const -> int {
-    return static_cast<int>(std::count_if(calls.begin(), calls.end(),
-                                          [](const Call& c) { return !c.settled; }));
+    return static_cast<int>(
+        std::count_if(calls.begin(), calls.end(), [](const Call& c) { return !c.settled; }));
   }
   auto settledForField(const QString& field) const -> int {
-    return static_cast<int>(std::count_if(
-        calls.begin(), calls.end(), [&](const Call& c) { return c.settled && c.fieldKey == field; }));
+    return static_cast<int>(std::count_if(calls.begin(), calls.end(), [&](const Call& c) {
+      return c.settled && c.fieldKey == field;
+    }));
   }
   static auto numericValue(const QString& params) -> double {
     return QJsonDocument::fromJson(params.toUtf8()).object().value("value").toDouble();
@@ -197,21 +197,20 @@ ApplicationWindow {
 
 // Per-test setup: fresh submitter + models + engine + loaded harness.
 struct Harness {
-  RecordingSubmitter             submitter;
-  EditorAdjustmentValueModel     exposure;
-  EditorAdjustmentToggleModel    toggle;
-  EditorAdjustmentEnumModel      combo;
-  QQmlApplicationEngine          engine;
-  QQuickWindow*                  window = nullptr;
-  QStringList                    warnings;
+  RecordingSubmitter          submitter;
+  EditorAdjustmentValueModel  exposure;
+  EditorAdjustmentToggleModel toggle;
+  EditorAdjustmentEnumModel   combo;
+  QQmlApplicationEngine       engine;
+  QQuickWindow*               window = nullptr;
+  QStringList                 warnings;
 
   Harness() {
-    QObject::connect(&engine, &QQmlEngine::warnings,
-                     [this](const QList<QQmlError>& ws) {
-                       for (const auto& w : ws) {
-                         warnings << w.toString();
-                       }
-                     });
+    QObject::connect(&engine, &QQmlEngine::warnings, [this](const QList<QQmlError>& ws) {
+      for (const auto& w : ws) {
+        warnings << w.toString();
+      }
+    });
     exposure.setFieldKey("exposure");
     exposure.setLabel("Exposure");
     exposure.setMinimum(-5.0);
@@ -247,8 +246,7 @@ struct Harness {
     AppTheme::Instance().setReduceMotion(true);
     engine.addImportPath(QStringLiteral("qrc:/"));
     engine.addImportPath(SrcQmlDir());
-    engine.rootContext()->setContextProperty(QStringLiteral("appTheme"),
-                                             &AppTheme::Instance());
+    engine.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
     engine.rootContext()->setContextProperty(QStringLiteral("exposureModel"), &exposure);
     engine.rootContext()->setContextProperty(QStringLiteral("toggleModel"), &toggle);
     engine.rootContext()->setContextProperty(QStringLiteral("comboModel"), &combo);
@@ -280,7 +278,8 @@ auto centerInWindow(QQuickItem* item) -> QPoint {
 
 // Slider keyboard arrow adjusts the value and submits an interactive patch,
 // then one settled patch after the debounce fires.
-TEST(EditorAdjustmentControlQmlTest, SliderKeyboardArrowAdjustsValueAndSubmitsInteractiveThenSettled) {
+TEST(EditorAdjustmentControlQmlTest,
+     SliderKeyboardArrowAdjustsValueAndSubmitsInteractiveThenSettled) {
   Harness h;
   ASSERT_NE(h.window, nullptr) << "QML harness failed to load. Warnings:\n"
                                << h.warnings.join(QStringLiteral("\n")).toStdString();
@@ -299,6 +298,29 @@ TEST(EditorAdjustmentControlQmlTest, SliderKeyboardArrowAdjustsValueAndSubmitsIn
   EXPECT_GT(h.exposure.value(), 0.0);
   EXPECT_EQ(h.submitter.settledForField(QStringLiteral("exposure")), 1);
   EXPECT_FALSE(h.exposure.hasPendingSettled());
+}
+
+TEST(EditorAdjustmentControlQmlTest, PointerDragSubmitsPreviewAndOneSettledValue) {
+  Harness h;
+  ASSERT_NE(h.window, nullptr) << "QML harness failed to load. Warnings:\n"
+                               << h.warnings.join(QStringLiteral("\n")).toStdString();
+  auto* slider = h.find(QStringLiteral("testSlider"));
+  ASSERT_NE(slider, nullptr);
+  auto* control = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderHandle"));
+  ASSERT_NE(control, nullptr);
+
+  const QPoint start =
+      control->mapToScene(QPointF(control->width() * 0.5, control->height() * 0.5)).toPoint();
+  const QPoint end =
+      control->mapToScene(QPointF(control->width() * 0.8, control->height() * 0.5)).toPoint();
+  QTest::mousePress(h.window, Qt::LeftButton, {}, start);
+  QTest::mouseMove(h.window, end, 20);
+  QTest::mouseRelease(h.window, Qt::LeftButton, {}, end);
+  ProcessEvents(100);
+
+  EXPECT_GT(h.submitter.interactiveCount(), 0);
+  EXPECT_EQ(h.submitter.settledForField(QStringLiteral("exposure")), 1);
+  EXPECT_GT(h.exposure.value(), 0.0);
 }
 
 // Field typing + Enter commits one settled transaction with the typed value.
@@ -392,15 +414,14 @@ TEST(EditorAdjustmentControlQmlTest, AdjustmentToggleClickSubmitsOneSettled) {
   ProcessEvents(50);
   EXPECT_EQ(h.submitter.settledForField(QStringLiteral("lens_calib_enabled")), 1);
   EXPECT_TRUE(h.toggle.value());
-  EXPECT_TRUE(RecordingSubmitter::boolValue(
-      [&] {
-        for (auto it = h.submitter.calls.rbegin(); it != h.submitter.calls.rend(); ++it) {
-          if (it->settled && it->fieldKey == QStringLiteral("lens_calib_enabled")) {
-            return it->params;
-          }
-        }
-        return QString{};
-      }()));
+  EXPECT_TRUE(RecordingSubmitter::boolValue([&] {
+    for (auto it = h.submitter.calls.rbegin(); it != h.submitter.calls.rend(); ++it) {
+      if (it->settled && it->fieldKey == QStringLiteral("lens_calib_enabled")) {
+        return it->params;
+      }
+    }
+    return QString{};
+  }()));
 }
 
 // Combo activation commits one settled transaction with the selected index.
@@ -413,8 +434,7 @@ TEST(EditorAdjustmentControlQmlTest, AdjustmentComboActivatedSubmitsOneSettled) 
   auto* combo = comboItem->findChild<QQuickItem*>(QStringLiteral("adjustmentCombo"));
   ASSERT_NE(combo, nullptr);
   // Emit activated(1) to drive the onActivated → selectIndex wiring.
-  ASSERT_TRUE(QMetaObject::invokeMethod(combo, "activated", Qt::DirectConnection,
-                                        Q_ARG(int, 1)));
+  ASSERT_TRUE(QMetaObject::invokeMethod(combo, "activated", Qt::DirectConnection, Q_ARG(int, 1)));
   ProcessEvents(50);
   EXPECT_EQ(h.submitter.settledForField(QStringLiteral("color_temp_mode")), 1);
   EXPECT_EQ(h.combo.currentIndex(), 1);

@@ -218,6 +218,11 @@ struct EditorRenderCoordinatorDiagnostics {
   std::size_t                       presented_count = 0;
 };
 
+enum class EditorRenderSupersessionPolicy : std::uint8_t {
+  CancelObsolete = 0,
+  PreserveInflightFullFrame,
+};
+
 /// Sole path from the session service into pipeline work. Production wraps
 /// EditorRenderCoordinator; tests may inject a recording stub.
 class IEditorRenderSubmitPort {
@@ -233,7 +238,9 @@ class IEditorRenderSubmitPort {
   }
   virtual void SetActiveGenerations(std::uint64_t session_generation,
                                     std::uint64_t render_generation,
-                                    std::uint64_t view_generation)            = 0;
+                                    std::uint64_t view_generation,
+                                    EditorRenderSupersessionPolicy policy =
+                                        EditorRenderSupersessionPolicy::CancelObsolete) = 0;
   /// Phase 5D diagnostics. Default impls report an idle coordinator so test
   /// fakes that do not override them stay QML-idle.
   [[nodiscard]] virtual auto diagnostics() const -> EditorRenderCoordinatorDiagnostics {

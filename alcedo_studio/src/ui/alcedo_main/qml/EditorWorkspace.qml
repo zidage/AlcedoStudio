@@ -30,6 +30,12 @@ Item {
     readonly property int controlRadius: theme ? theme.controlRadius : 10
     readonly property string headlineFont: theme ? theme.headlineFontFamily : appTheme.headlineFontFamily
     readonly property bool hasImage: editorSession ? editorSession.hasImage : false
+    readonly property var renderDiagnostics: editorSession ? editorSession.renderDiagnostics : ({})
+    readonly property string inflightRenderReason: renderDiagnostics.inflightReason || ""
+    readonly property bool adjustmentRenderBusy: editorSession
+                                                 && editorSession.renderBusy
+                                                 && (inflightRenderReason === "InteractiveAdjustment"
+                                                     || inflightRenderReason === "SettledAdjustment")
     readonly property int focusedElementId: workspaceRouter ? Number(workspaceRouter.elementId) : 0
     readonly property int focusedImageId: workspaceRouter ? Number(workspaceRouter.imageId) : 0
 
@@ -219,6 +225,21 @@ Item {
                                 && editorViewportItem.presentationAvailable
                                 && root.editorSession
                                 && root.editorSession.renderBusy
+                                && !root.adjustmentRenderBusy
+                        running: visible
+                        z: 3
+                    }
+
+                    BusyIndicator {
+                        objectName: "editorAdjustmentRenderBusyIndicator"
+                        anchors.top: parent.top
+                        anchors.right: parent.right
+                        anchors.margins: appTheme.spaceSm
+                        width: 18
+                        height: 18
+                        visible: root.hasImage
+                                 && editorViewportItem.presentationAvailable
+                                 && root.adjustmentRenderBusy
                         running: visible
                         z: 3
                     }

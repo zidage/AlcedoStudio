@@ -1387,6 +1387,15 @@ def_library(EditorHistoryMaterializer
     PUBLIC_DEPS ProjectService EditHistory StorageService
 )
 
+# Applies render-intent adjustment snapshots to a pipeline executor. Kept below
+# the UI layer so production rendering and focused tests share one mapping.
+def_library(EditorAdjustmentPipeline
+    SOURCES
+        app/editor_adjustment_pipeline.cpp
+        include/app/editor_adjustment_pipeline.hpp
+    PUBLIC_DEPS EditPipeline JSON
+)
+
 # Phase 5A: application-layer editor session + unified render-intent coordinator.
 # No QWidget, QML, or AlbumBackend dependency. UI modules submit intents only.
 # Reusable library: no Widgets link (Phase 5A-Fix build check).
@@ -1777,6 +1786,10 @@ add_library(AlbumBackendLib STATIC
     ui/alcedo_main/album_backend/editor_controller.cpp
     ui/alcedo_main/album_backend/editor_session_controller.cpp
     ui/alcedo_main/album_backend/editor_adjustment_models.cpp
+    ui/alcedo_main/album_backend/editor_tone_curve_model.cpp
+    ui/alcedo_main/album_backend/editor_tone_curve_item.cpp
+    # Pure tone-curve math (shared with the legacy QWidget curve editor).
+    ui/alcedo_main/editor_dialog/modules/curve.cpp
     ui/alcedo_main/album_backend/editor_session_production.cpp
     ui/alcedo_main/album_backend/workspace_router.cpp
     ui/alcedo_main/album_backend/adjustment_transfer_controller.cpp
@@ -1808,6 +1821,9 @@ add_library(AlbumBackendLib STATIC
     include/ui/alcedo_main/album_backend/editor_session_controller.hpp
     include/ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp
     include/ui/alcedo_main/album_backend/editor_adjustment_models.hpp
+    include/ui/alcedo_main/album_backend/editor_tone_curve_model.hpp
+    include/ui/alcedo_main/album_backend/editor_tone_curve_item.hpp
+    include/ui/alcedo_main/editor_dialog/modules/curve.hpp
     include/ui/alcedo_main/album_backend/editor_session_production.hpp
     include/ui/alcedo_main/album_backend/workspace_router.hpp
     include/ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp
@@ -1839,6 +1855,7 @@ target_link_libraries(AlbumBackendLib
         AdjustmentTransferService
         EditHistoryMgmtService
         EditorSessionService
+        EditorAdjustmentPipeline
         EditorHistoryMaterializer
         ThumbnailService
         SemanticGenerationService
@@ -1884,7 +1901,7 @@ if(ALCEDO_REAL_WIDGET_EDITOR)
         ui/alcedo_main/editor_dialog/modules/histogram.cpp
         ui/alcedo_main/editor_dialog/modules/color_temp.cpp
         ui/alcedo_main/editor_dialog/modules/color_wheel.cpp
-        ui/alcedo_main/editor_dialog/modules/curve.cpp
+        # curve.cpp lives in AlbumBackendLib (Phase 6B tone-curve model/item share it).
         ui/alcedo_main/editor_dialog/modules/lens_calib.cpp
         ui/alcedo_main/editor_dialog/modules/lut_catalog.cpp
         ui/alcedo_main/editor_dialog/modules/geometry.cpp
@@ -2104,6 +2121,7 @@ qt_add_qml_module(alcedo_main
         ui/alcedo_main/qml/EditorFilmstrip.qml
         ui/alcedo_main/qml/EditorHistoryVersionsRail.qml
         ui/alcedo_main/qml/EditorAdjustmentStack.qml
+        ui/alcedo_main/qml/EditorTonePanel.qml
         ui/alcedo_main/qml/AdjustmentSlider.qml
         ui/alcedo_main/qml/AdjustmentField.qml
         ui/alcedo_main/qml/AdjustmentToggle.qml

@@ -12,19 +12,19 @@
 #include <mutex>
 #include <string>
 
-#include "utils/profiler/profiler.hpp"
 #include "image/image_buffer.hpp"
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_task.hpp"
+#include "utils/profiler/profiler.hpp"
 
 namespace alcedo {
 namespace {
-constexpr float kRotationPreviewEpsilon = 1e-4f;
-constexpr float kFullFrameRegionEpsilon = 1e-4f;
-constexpr int   kFastPreviewMaxLongEdge = 2560;
+constexpr float kRotationPreviewEpsilon        = 1e-4f;
+constexpr float kFullFrameRegionEpsilon        = 1e-4f;
+constexpr int   kFastPreviewMaxLongEdge        = 2560;
 constexpr int   kQualityBasePreviewMaxLongEdge = 4096;
-constexpr int   kHsReferenceMaskMaxLongEdge = 2048;
-constexpr int   kFullResPreviewMaxLongEdge = 8192;
+constexpr int   kHsReferenceMaskMaxLongEdge    = 2048;
+constexpr int   kFullResPreviewMaxLongEdge     = 8192;
 
 auto HasActiveGeometryRotation(const std::shared_ptr<CPUPipelineExecutor>& pipeline_executor)
     -> bool {
@@ -32,7 +32,7 @@ auto HasActiveGeometryRotation(const std::shared_ptr<CPUPipelineExecutor>& pipel
     return false;
   }
 
-  auto& geometry_stage = pipeline_executor->GetStage(PipelineStageName::Geometry_Adjustment);
+  auto&      geometry_stage = pipeline_executor->GetStage(PipelineStageName::Geometry_Adjustment);
   const auto crop_rotate_op = geometry_stage.GetOperator(OperatorType::CROP_ROTATE);
   if (!crop_rotate_op.has_value() || crop_rotate_op.value() == nullptr) {
     return false;
@@ -70,14 +70,14 @@ void HashJson(std::uint64_t& seed, const nlohmann::json& value) {
   HashCombine(seed, std::hash<std::string>{}(value.dump()));
 }
 
-void HashStageOperator(std::uint64_t& seed,
+void HashStageOperator(std::uint64_t&                              seed,
                        const std::shared_ptr<CPUPipelineExecutor>& pipeline_executor,
                        PipelineStageName stage_name, OperatorType op_type) {
   if (!pipeline_executor) {
     return;
   }
 
-  auto& stage = pipeline_executor->GetStage(stage_name);
+  auto&      stage = pipeline_executor->GetStage(stage_name);
   const auto entry = stage.GetOperator(op_type);
   if (!entry.has_value() || entry.value() == nullptr) {
     HashCombine(seed, 0);
@@ -92,8 +92,8 @@ void HashStageOperator(std::uint64_t& seed,
 }
 
 auto BuildRenderSourceCacheKey(const PipelineTask& task) -> std::uint64_t {
-  std::uint64_t key = 0xa44b4e45f2f8891fULL;
-  bool has_stable_source_identity = false;
+  std::uint64_t key                        = 0xa44b4e45f2f8891fULL;
+  bool          has_stable_source_identity = false;
   if (task.pipeline_executor_) {
     const auto bound_file = task.pipeline_executor_->GetBoundFile();
     HashCombine(key, static_cast<std::uint64_t>(bound_file));
@@ -112,8 +112,8 @@ auto BuildRenderSourceCacheKey(const PipelineTask& task) -> std::uint64_t {
   if (!has_stable_source_identity) {
     HashCombine(key,
                 static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(task.input_.get())));
-    HashCombine(key, static_cast<std::uint64_t>(
-                         reinterpret_cast<std::uintptr_t>(task.input_desc_.get())));
+    HashCombine(
+        key, static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(task.input_desc_.get())));
   }
   HashStageOperator(key, task.pipeline_executor_, PipelineStageName::Image_Loading,
                     OperatorType::RAW_DECODE);
@@ -149,7 +149,7 @@ auto ViewportTargetLongEdge(const std::optional<ViewportRenderRegion>& viewport_
   return std::max(viewport_region->target_width_, viewport_region->target_height_);
 }
 
-auto MetadataFromRegion(const FramePreviewMetadata& base_metadata,
+auto MetadataFromRegion(const FramePreviewMetadata&                base_metadata,
                         const std::optional<ViewportRenderRegion>& viewport_region, int region_x,
                         int region_y, float region_scale_x, float region_scale_y)
     -> FramePreviewMetadata {
@@ -172,18 +172,16 @@ auto RenderFrameRoleId(FrameRole role) -> int {
 }
 
 void SetNextFrameMetadata(const std::shared_ptr<CPUPipelineExecutor>& pipeline_executor,
-                          const FramePreviewMetadata& metadata) {
+                          const FramePreviewMetadata&                 metadata) {
   if (!pipeline_executor) {
     return;
   }
-  pipeline_executor->GetGlobalParams().render_frame_role_ =
-      RenderFrameRoleId(metadata.frame_role);
+  pipeline_executor->GetGlobalParams().render_frame_role_ = RenderFrameRoleId(metadata.frame_role);
   pipeline_executor->SetNextFramePreviewMetadata(metadata);
 }
 
 auto LoadViewportRegion(const std::shared_ptr<CPUPipelineExecutor>& pipeline_executor,
-                        bool should_use_viewport_region)
-    -> std::optional<ViewportRenderRegion> {
+                        bool should_use_viewport_region) -> std::optional<ViewportRenderRegion> {
   if (!pipeline_executor || !should_use_viewport_region) {
     return std::nullopt;
   }
@@ -198,45 +196,42 @@ void PipelineTask::SetExecutorRenderParams() {
   pipeline_executor_->SetCancelRequested(cancel_requested_);
   pipeline_executor_->GetGlobalParams().render_source_cache_key_ = BuildRenderSourceCacheKey(*this);
   pipeline_executor_->GetGlobalParams().render_hs_preserve_source_detail_ = false;
-  pipeline_executor_->GetGlobalParams().render_hs_can_seed_reference_ = false;
+  pipeline_executor_->GetGlobalParams().render_hs_can_seed_reference_     = false;
   pipeline_executor_->GetGlobalParams().render_hs_reference_max_long_edge_ =
       kHsReferenceMaskMaxLongEdge;
-  auto& desc = options_.render_desc_;
-  const auto requested_render_type = desc.render_type_;
+  auto&      desc                         = options_.render_desc_;
+  const auto requested_render_type        = desc.render_type_;
 
   // Keep explicit full-res/export requests authoritative.
   // Even when the executor sits in FAST_PREVIEW baseline, callers still need
   // FULL_RES_PREVIEW/FULL_RES_EXPORT to be honored (slider release/undo/version switch/crop/LUT).
-  const bool rotation_active_fast_preview =
-      (requested_render_type == RenderType::FAST_PREVIEW) &&
-      HasActiveGeometryRotation(pipeline_executor_);
+  const bool rotation_active_fast_preview = (requested_render_type == RenderType::FAST_PREVIEW) &&
+                                            HasActiveGeometryRotation(pipeline_executor_);
 
-  int   region_x       = desc.x_;
-  int   region_y       = desc.y_;
-  float region_scale_x = desc.scale_factor_x_;
-  float region_scale_y = desc.scale_factor_y_;
-  int   region_reference_width = 0;
-  int   region_reference_height = 0;
-  const bool viewport_region_render =
-      (requested_render_type == RenderType::FAST_PREVIEW ||
-       requested_render_type == RenderType::DETAIL_ROI_PREVIEW) &&
-      desc.use_viewport_region_;
-  const auto viewport_region =
-      LoadViewportRegion(pipeline_executor_, viewport_region_render &&
-                                                !rotation_active_fast_preview);
+  int        region_x                = desc.x_;
+  int        region_y                = desc.y_;
+  float      region_scale_x          = desc.scale_factor_x_;
+  float      region_scale_y          = desc.scale_factor_y_;
+  int        region_reference_width  = 0;
+  int        region_reference_height = 0;
+  const bool viewport_region_render  = (requested_render_type == RenderType::FAST_PREVIEW ||
+                                       requested_render_type == RenderType::DETAIL_ROI_PREVIEW) &&
+                                      desc.use_viewport_region_;
+  const auto viewport_region = LoadViewportRegion(
+      pipeline_executor_, viewport_region_render && !rotation_active_fast_preview);
   if (viewport_region.has_value()) {
-    region_x       = viewport_region->x_;
-    region_y       = viewport_region->y_;
-    region_scale_x = viewport_region->scale_x_;
-    region_scale_y = viewport_region->scale_y_;
-    region_reference_width = viewport_region->reference_width_;
+    region_x                = viewport_region->x_;
+    region_y                = viewport_region->y_;
+    region_scale_x          = viewport_region->scale_x_;
+    region_scale_y          = viewport_region->scale_y_;
+    region_reference_width  = viewport_region->reference_width_;
     region_reference_height = viewport_region->reference_height_;
   }
 
   FramePreviewMetadata frame_metadata = desc.frame_metadata_;
 
   if (requested_render_type == RenderType::FAST_PREVIEW) {
-    frame_metadata.frame_role = FrameRole::InteractivePrimary;
+    frame_metadata.frame_role    = FrameRole::InteractivePrimary;
     const bool full_frame_region = region_x == 0 && region_y == 0 &&
                                    region_scale_x >= (1.0f - kFullFrameRegionEpsilon) &&
                                    region_scale_y >= (1.0f - kFullFrameRegionEpsilon);
@@ -245,7 +240,7 @@ void PipelineTask::SetExecutorRenderParams() {
       // stay aligned with the rotated result.
       pipeline_executor_->SetNextFramePresentationMode(FramePresentationMode::ViewportTransformed);
       pipeline_executor_->GetGlobalParams().render_hs_can_seed_reference_ = true;
-      frame_metadata.source_roi_norm = {};
+      frame_metadata.source_roi_norm                                      = {};
       SetNextFrameMetadata(pipeline_executor_, frame_metadata);
       pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Bilinear);
       pipeline_executor_->SetRenderRegion(0, 0, 1.0f, 1.0f);
@@ -257,9 +252,8 @@ void PipelineTask::SetExecutorRenderParams() {
     }
 
     pipeline_executor_->SetNextFramePresentationMode(FramePresentationMode::RoiFrame);
-    frame_metadata =
-        MetadataFromRegion(frame_metadata, viewport_region, region_x, region_y, region_scale_x,
-                           region_scale_y);
+    frame_metadata = MetadataFromRegion(frame_metadata, viewport_region, region_x, region_y,
+                                        region_scale_x, region_scale_y);
     SetNextFrameMetadata(pipeline_executor_, frame_metadata);
     pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Bilinear);
     pipeline_executor_->SetRenderRegion(region_x, region_y, region_scale_x, region_scale_y,
@@ -286,13 +280,11 @@ void PipelineTask::SetExecutorRenderParams() {
     return;
   }
   if (requested_render_type == RenderType::DETAIL_ROI_PREVIEW) {
-    frame_metadata.frame_role =
-        (region_scale_x < (1.0f - 1e-4f) || region_scale_y < (1.0f - 1e-4f))
-            ? FrameRole::DetailPatch
-            : FrameRole::QualityBase;
-    frame_metadata =
-        MetadataFromRegion(frame_metadata, viewport_region, region_x, region_y, region_scale_x,
-                           region_scale_y);
+    frame_metadata.frame_role = (region_scale_x < (1.0f - 1e-4f) || region_scale_y < (1.0f - 1e-4f))
+                                    ? FrameRole::DetailPatch
+                                    : FrameRole::QualityBase;
+    frame_metadata = MetadataFromRegion(frame_metadata, viewport_region, region_x, region_y,
+                                        region_scale_x, region_scale_y);
     pipeline_executor_->SetNextFramePresentationMode(FramePresentationMode::ViewportTransformed);
     SetNextFrameMetadata(pipeline_executor_, frame_metadata);
     pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Area);
@@ -334,7 +326,7 @@ void PipelineTask::SetExecutorRenderParams() {
   }
   if (requested_render_type == RenderType::FULL_RES_EXPORT) {
     pipeline_executor_->GetGlobalParams().render_hs_preserve_source_detail_ = true;
-    pipeline_executor_->GetGlobalParams().render_hs_can_seed_reference_ = true;
+    pipeline_executor_->GetGlobalParams().render_hs_can_seed_reference_     = true;
     pipeline_executor_->SetNextFramePresentationMode(FramePresentationMode::ViewportTransformed);
     SetNextFrameMetadata(pipeline_executor_, frame_metadata);
     pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Area);
@@ -492,11 +484,27 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
         }
         if (task.input_) {
           std::unique_lock<std::mutex> render_lock;
-          auto& render_desc = task.options_.render_desc_;
-          IFrameSink* saved_frame_sink = nullptr;
+          auto&                        render_desc      = task.options_.render_desc_;
+          IFrameSink*                  saved_frame_sink = nullptr;
 
           if (task.pipeline_executor_) {
             render_lock = std::unique_lock<std::mutex>(task.pipeline_executor_->GetRenderLock());
+
+            if (task.prepare_with_render_lock_) {
+              bool prepared = false;
+              try {
+                prepared = (*task.prepare_with_render_lock_)(task);
+              } catch (...) {
+                notify_thumbnail_failure_callbacks();
+                set_blocking_exception();
+                return;
+              }
+              if (!prepared) {
+                notify_thumbnail_failure_callbacks();
+                set_blocking_value(nullptr);
+                return;
+              }
+            }
 
             // Thumbnail and export tasks must not interact with any editor-owned
             // frame sink that may still be attached to a cached pipeline.
@@ -525,8 +533,7 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
           // path, including exceptions thrown after detaching.
           // Uses a non-null sentinel so unique_ptr's destructor invokes the deleter.
           auto sink_guard = std::unique_ptr<void, std::function<void(void*)>>(
-              reinterpret_cast<void*>(1),
-              [&restore_frame_sink](void*) { restore_frame_sink(); });
+              reinterpret_cast<void*>(1), [&restore_frame_sink](void*) { restore_frame_sink(); });
 
           task.SetExecutorRenderParams();
 
@@ -537,7 +544,7 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
             return;
           }
 
-          auto result = task.pipeline_executor_->Apply(task.input_);
+          auto result         = task.pipeline_executor_->Apply(task.input_);
           bool result_has_cpu = false;
           if (result && result->cpu_data_valid_) {
             try {
@@ -546,18 +553,15 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
               result_has_cpu = false;
             }
           }
-          const bool require_gpu_valid =
-              (render_desc.render_type_ != RenderType::THUMBNAIL);
+          const bool require_gpu_valid = (render_desc.render_type_ != RenderType::THUMBNAIL);
           const bool result_valid_for_copy =
               result && result_has_cpu && (!require_gpu_valid || result->gpu_data_valid_);
 
           if (render_desc.render_type_ == RenderType::FAST_PREVIEW ||
               render_desc.render_type_ == RenderType::QUALITY_BASE_PREVIEW ||
               render_desc.render_type_ == RenderType::DETAIL_ROI_PREVIEW ||
-              render_desc.render_type_ == RenderType::FULL_RES_PREVIEW ||
-              !result_valid_for_copy) {
-            if (render_desc.render_type_ == RenderType::THUMBNAIL &&
-                !result_valid_for_copy) {
+              render_desc.render_type_ == RenderType::FULL_RES_PREVIEW || !result_valid_for_copy) {
+            if (render_desc.render_type_ == RenderType::THUMBNAIL && !result_valid_for_copy) {
               notify_thumbnail_failure_callbacks();
             }
             set_blocking_value(result);

@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include <QObject>
 #include <QColor>
 #include <QFont>
+#include <QObject>
 #include <QString>
 #include <QVariantList>
 
@@ -45,7 +45,8 @@ class AppTheme final : public QObject {
   Q_PROPERTY(QColor glassStrokeColor READ glassStrokeColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor overlayColor READ overlayColor NOTIFY ThemeChanged)
   Q_PROPERTY(int panelRadius READ panelRadius NOTIFY ThemeChanged)
-  Q_PROPERTY(int currentThemeIndex READ currentThemeIndex WRITE setCurrentThemeIndex NOTIFY ThemeChanged)
+  Q_PROPERTY(
+      int currentThemeIndex READ currentThemeIndex WRITE setCurrentThemeIndex NOTIFY ThemeChanged)
   Q_PROPERTY(QVariantList availableThemes READ availableThemes CONSTANT)
 
   // ── Design tokens — structural (theme-invariant) ─────────────────────────
@@ -110,6 +111,12 @@ class AppTheme final : public QObject {
   // Opaque disabled surface: cardSurfaceColor blended with bgCanvasColor so a
   // disabled panel shell reads as a single concrete fill rather than 0.55 opacity.
   Q_PROPERTY(QColor disabledSurfaceColor READ disabledSurfaceColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor editorSliderTrackColor READ editorSliderTrackColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor editorSliderPositiveColor READ editorSliderPositiveColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor editorSliderNegativeColor READ editorSliderNegativeColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor editorSliderHandleColor READ editorSliderHandleColor NOTIFY ThemeChanged)
+  Q_PROPERTY(
+      QColor editorSliderHandleBorderColor READ editorSliderHandleBorderColor NOTIFY ThemeChanged)
 
  public:
   enum class FontRole : int {
@@ -147,8 +154,8 @@ class AppTheme final : public QObject {
   static auto EditorLabelStyle(const QColor& color) -> QString;
   static auto EditorPrimaryButtonStyle(bool include_disabled = false) -> QString;
   static auto EditorSecondaryButtonStyle() -> QString;
-  static auto EditorPanelToggleStyle(bool active, bool is_first = false,
-                                     bool is_last = false) -> QString;
+  static auto EditorPanelToggleStyle(bool active, bool is_first = false, bool is_last = false)
+      -> QString;
   static auto EditorMethodCardStyle(bool active) -> QString;
   static auto EditorComboBoxStyle() -> QString;
   static auto EditorSpinBoxStyle() -> QString;
@@ -163,81 +170,86 @@ class AppTheme final : public QObject {
   static auto EditorSliderHandleColor() -> QColor;
   static auto EditorSliderHandleBorderColor() -> QColor;
 
-  auto uiFontFamily() const -> QString;
-  auto headlineFontFamily() const -> QString;
-  auto dataFontFamily() const -> QString;
-  auto monoFontFamily() const -> QString;
-  auto appVersion() const -> QString;
+  auto        uiFontFamily() const -> QString;
+  auto        headlineFontFamily() const -> QString;
+  auto        dataFontFamily() const -> QString;
+  auto        monoFontFamily() const -> QString;
+  auto        appVersion() const -> QString;
 
-  auto toneGold() const -> QColor;
-  auto toneWine() const -> QColor;
-  auto toneSteel() const -> QColor;
-  auto toneGraphite() const -> QColor;
-  auto toneMist() const -> QColor;
+  auto        toneGold() const -> QColor;
+  auto        toneWine() const -> QColor;
+  auto        toneSteel() const -> QColor;
+  auto        toneGraphite() const -> QColor;
+  auto        toneMist() const -> QColor;
 
-  auto bgCanvasColor() const -> QColor;
-  auto bgDeepColor() const -> QColor;
-  auto bgBaseColor() const -> QColor;
-  auto bgPanelColor() const -> QColor;
-  auto textColor() const -> QColor;
-  auto textMutedColor() const -> QColor;
-  auto iconColor() const -> QColor;
-  auto accentColor() const -> QColor;
-  auto accentSecondaryColor() const -> QColor;
-  auto dangerColor() const -> QColor;
-  auto dangerTintColor() const -> QColor;
-  auto selectedTintColor() const -> QColor;
-  auto hoverColor() const -> QColor;
-  auto dividerColor() const -> QColor;
-  auto glassPanelColor() const -> QColor;
-  auto glassStrokeColor() const -> QColor;
-  auto overlayColor() const -> QColor;
-  auto panelRadius() const -> int;
+  auto        bgCanvasColor() const -> QColor;
+  auto        bgDeepColor() const -> QColor;
+  auto        bgBaseColor() const -> QColor;
+  auto        bgPanelColor() const -> QColor;
+  auto        textColor() const -> QColor;
+  auto        textMutedColor() const -> QColor;
+  auto        iconColor() const -> QColor;
+  auto        accentColor() const -> QColor;
+  auto        accentSecondaryColor() const -> QColor;
+  auto        dangerColor() const -> QColor;
+  auto        dangerTintColor() const -> QColor;
+  auto        selectedTintColor() const -> QColor;
+  auto        hoverColor() const -> QColor;
+  auto        dividerColor() const -> QColor;
+  auto        glassPanelColor() const -> QColor;
+  auto        glassStrokeColor() const -> QColor;
+  auto        overlayColor() const -> QColor;
+  auto        panelRadius() const -> int;
 
-  auto controlRadius() const -> int;
-  auto controlRadiusSmall() const -> int;
-  auto badgeRadius() const -> int;
-  auto iconOpticalSize() const -> int;
-  auto iconOpticalSizeCompact() const -> int;
-  auto iconSourceSize() const -> int;
-  auto iconSourceSizeCompact() const -> int;
-  auto iconButtonHitSize() const -> int;
-  auto iconButtonHitSizeCompact() const -> int;
-  auto editorSidePanelWidth() const -> int;
-  auto editorSidePanelWidthMin() const -> int;
-  auto editorSidePanelWidthMax() const -> int;
-  auto editorScopeHeight() const -> int;
-  auto editorScopeHeightMin() const -> int;
-  auto lineHeightCaption() const -> int;
-  auto lineHeightBody() const -> int;
-  auto lineHeightTitle() const -> int;
-  auto lineHeightSection() const -> int;
-  auto lineHeightHeadline() const -> int;
-  auto spaceXs() const -> int;
-  auto spaceSm() const -> int;
-  auto spaceMd() const -> int;
-  auto spaceLg() const -> int;
-  auto spaceXl() const -> int;
-  auto motionFoldOpenMs() const -> int;
-  auto motionFoldCloseMs() const -> int;
-  auto motionFadeMs() const -> int;
-  auto reduceMotion() const -> bool;
-  void setReduceMotion(bool enabled);
-  auto fontSizeCaption() const -> int;
-  auto fontSizeBody() const -> int;
-  auto fontSizeTitle() const -> int;
-  auto fontSizeSection() const -> int;
-  auto fontSizeHeadline() const -> int;
-  auto fontWeightRegular() const -> int;
-  auto fontWeightStrong() const -> int;
-  auto fontWeightHeading() const -> int;
-  auto cardSurfaceColor() const -> QColor;
-  auto cardBorderColor() const -> QColor;
-  auto buttonIdleFillColor() const -> QColor;
-  auto buttonHoveredFillColor() const -> QColor;
-  auto buttonPressedFillColor() const -> QColor;
-  auto buttonSelectedFillColor() const -> QColor;
-  auto disabledSurfaceColor() const -> QColor;
+  auto        controlRadius() const -> int;
+  auto        controlRadiusSmall() const -> int;
+  auto        badgeRadius() const -> int;
+  auto        iconOpticalSize() const -> int;
+  auto        iconOpticalSizeCompact() const -> int;
+  auto        iconSourceSize() const -> int;
+  auto        iconSourceSizeCompact() const -> int;
+  auto        iconButtonHitSize() const -> int;
+  auto        iconButtonHitSizeCompact() const -> int;
+  auto        editorSidePanelWidth() const -> int;
+  auto        editorSidePanelWidthMin() const -> int;
+  auto        editorSidePanelWidthMax() const -> int;
+  auto        editorScopeHeight() const -> int;
+  auto        editorScopeHeightMin() const -> int;
+  auto        lineHeightCaption() const -> int;
+  auto        lineHeightBody() const -> int;
+  auto        lineHeightTitle() const -> int;
+  auto        lineHeightSection() const -> int;
+  auto        lineHeightHeadline() const -> int;
+  auto        spaceXs() const -> int;
+  auto        spaceSm() const -> int;
+  auto        spaceMd() const -> int;
+  auto        spaceLg() const -> int;
+  auto        spaceXl() const -> int;
+  auto        motionFoldOpenMs() const -> int;
+  auto        motionFoldCloseMs() const -> int;
+  auto        motionFadeMs() const -> int;
+  auto        reduceMotion() const -> bool;
+  void        setReduceMotion(bool enabled);
+  auto        fontSizeCaption() const -> int;
+  auto        fontSizeBody() const -> int;
+  auto        fontSizeTitle() const -> int;
+  auto        fontSizeSection() const -> int;
+  auto        fontSizeHeadline() const -> int;
+  auto        fontWeightRegular() const -> int;
+  auto        fontWeightStrong() const -> int;
+  auto        fontWeightHeading() const -> int;
+  auto        cardSurfaceColor() const -> QColor;
+  auto        cardBorderColor() const -> QColor;
+  auto        buttonIdleFillColor() const -> QColor;
+  auto        buttonHoveredFillColor() const -> QColor;
+  auto        buttonPressedFillColor() const -> QColor;
+  auto        buttonSelectedFillColor() const -> QColor;
+  auto        disabledSurfaceColor() const -> QColor;
+  auto        editorSliderTrackColor() const -> QColor { return EditorSliderTrackColor(); }
+  auto        editorSliderPositiveColor() const -> QColor { return EditorSliderAccentColor(true); }
+  auto        editorSliderNegativeColor() const -> QColor { return EditorSliderAccentColor(false); }
+  auto        editorSliderHandleColor() const -> QColor { return EditorSliderHandleColor(); }
+  auto editorSliderHandleBorderColor() const -> QColor { return EditorSliderHandleBorderColor(); }
 
   auto currentThemeIndex() const -> int;
   void setCurrentThemeIndex(int index);
@@ -251,13 +263,13 @@ class AppTheme final : public QObject {
  private:
   explicit AppTheme(QObject* parent = nullptr);
 
-  static auto ResolveRole(QWidget* widget) -> FontRole;
+  static auto  ResolveRole(QWidget* widget) -> FontRole;
 
-  int current_theme_index_ = 0;
+  int          current_theme_index_  = 0;
   // Lazy-loaded from QSettings("ui/reduceMotion") on first read so the
   // singleton is safe to construct before QCoreApplication org/app are set.
   mutable bool reduce_motion_loaded_ = false;
-  mutable bool reduce_motion_ = false;
+  mutable bool reduce_motion_        = false;
 };
 
 }  // namespace alcedo::ui

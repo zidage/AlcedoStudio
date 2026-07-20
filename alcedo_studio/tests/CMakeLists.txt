@@ -782,6 +782,12 @@ target_link_libraries(EditorPipelineIoTest
 )
 gtest_discover_tests(EditorPipelineIoTest TEST_PREFIX "EditorPipelineIoTest.")
 
+add_executable(EditorAdjustmentPipelineTest app/editor_adjustment_pipeline_test.cpp)
+target_include_directories(EditorAdjustmentPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorAdjustmentPipelineTest
+    PRIVATE GTest::gtest_main EditorAdjustmentPipeline Operators EditPipeline JSON)
+gtest_discover_tests(EditorAdjustmentPipelineTest TEST_PREFIX "EditorAdjustmentPipelineTest.")
+
 add_executable(CropRotateOpTest edit/operators/geometry/crop_rotate_op_test.cpp)
 target_include_directories(CropRotateOpTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(CropRotateOpTest PRIVATE GTest::gtest_main Operators ${ALCEDO_TEST_OPENCV_MIN_DEPS})
@@ -1736,6 +1742,48 @@ target_compile_definitions(EditorAdjustmentControlQmlTest
 )
 gtest_discover_tests(EditorAdjustmentControlQmlTest TEST_PREFIX "EditorAdjustmentControlQmlTest.")
 
+# Phase 6B: tone-curve model (gesture lifecycle + operator params JSON).
+add_executable(EditorToneCurveModelTest
+    ui/editor_tone_curve_model_test.cpp
+    ui/ui_test_main.cpp
+    ui/editor_dialog_stub.cpp
+)
+target_include_directories(EditorToneCurveModelTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorToneCurveModelTest
+  PRIVATE
+    AlbumBackendLib
+    GTest::gtest
+    JSON
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Qml
+    Qt6::Quick
+    Qt6::Test
+    Qt6::Widgets
+)
+gtest_discover_tests(EditorToneCurveModelTest TEST_PREFIX "EditorToneCurveModelTest.")
+
+# Phase 6B: pure tone-curve scene geometry (no QQuickWindow / GPU).
+add_executable(EditorToneCurveGeometryTest
+    ui/editor_tone_curve_geometry_test.cpp
+    ui/ui_test_main.cpp
+    ui/editor_dialog_stub.cpp
+)
+target_include_directories(EditorToneCurveGeometryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorToneCurveGeometryTest
+  PRIVATE
+    AlbumBackendLib
+    GTest::gtest
+    JSON
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Qml
+    Qt6::Quick
+    Qt6::Test
+    Qt6::Widgets
+)
+gtest_discover_tests(EditorToneCurveGeometryTest TEST_PREFIX "EditorToneCurveGeometryTest.")
+
 add_executable(EditorRealRawGpuE2eTest
     ui/editor_real_raw_gpu_e2e_test.cpp
     ui/editor_dialog_stub.cpp
@@ -1885,6 +1933,7 @@ alcedo_assign_test_category(ui ALCEDO_BUILD_UI_TESTS alcedo_tests_ui
   ToneCurveWidgetTest
   LutCatalogTest
   EditorPipelineIoTest
+  EditorAdjustmentPipelineTest
   AlbumBackendImportTest
   AlbumBackendProjectTest
   AlbumBackendFolderTest
@@ -1903,6 +1952,8 @@ alcedo_assign_test_category(ui ALCEDO_BUILD_UI_TESTS alcedo_tests_ui
   WorkspaceShellTest
   EditorAdjustmentModelTest
   EditorAdjustmentControlQmlTest
+  EditorToneCurveModelTest
+  EditorToneCurveGeometryTest
   LanguageManagerTest
 )
 

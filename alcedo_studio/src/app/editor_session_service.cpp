@@ -187,7 +187,9 @@ auto EditorSessionService::first_frame_time_ms() const -> double {
   return first_frame_time_ms_;
 }
 
-auto EditorSessionService::RouteInitialRender(EditorRenderReason reason) -> std::uint64_t {
+auto EditorSessionService::RouteInitialRender(EditorRenderReason reason,
+                                              EditorRenderSupersessionPolicy policy)
+    -> std::uint64_t {
   if (!PresentationTargetReady()) {
     pending_initial_reason_ = reason;
     return 0;
@@ -200,7 +202,8 @@ auto EditorSessionService::RouteInitialRender(EditorRenderReason reason) -> std:
     return 0;
   }
   dependencies_.render->SetActiveGenerations(
-      identity_.session_generation, identity_.render_generation, identity_.view_generation);
+      identity_.session_generation, identity_.render_generation, identity_.view_generation,
+      policy);
   const EditorRenderResult routed = dependencies_.render->Submit(*intent);
   if (routed.kind == EditorRenderResultKind::RequestAccepted) {
     if (reason == EditorRenderReason::InitialFrame || reason == EditorRenderReason::ImageSwitch ||
@@ -237,10 +240,10 @@ auto EditorSessionService::RouteQualityBaseFollowUp() -> std::uint64_t {
     return 0;
   }
   // Force QualityBase regardless of MakeRenderIntent reason defaults.
-  intent->quality          = EditorRenderQuality::Quality;
-  intent->frame_role       = FrameRole::QualityBase;
-  intent->priority         = EditorRenderPriority::Normal;
-  intent->replacement_key  = DefaultReplacementKey(EditorRenderQuality::Quality);
+  intent->quality         = EditorRenderQuality::Quality;
+  intent->frame_role      = FrameRole::QualityBase;
+  intent->priority        = EditorRenderPriority::Normal;
+  intent->replacement_key = DefaultReplacementKey(EditorRenderQuality::Quality);
   FillRenderIntentDefaults(*intent);
 
   dependencies_.render->SetActiveGenerations(
@@ -322,7 +325,7 @@ auto EditorSessionService::BeginSaveForSession(std::uint64_t   session_generatio
                           session_generation](EditorJournalCommitOutcome outcome) {
     observation->error = outcome.error;
     observation->commit_succeeded.store(outcome.accepted && outcome.durable,
-                                        std::memory_order_release);
+                                          std::memory_order_release);
     observation->completed.store(true, std::memory_order_release);
     if (!gate || !gate->Enter()) {
       return;
@@ -374,8 +377,8 @@ auto EditorSessionService::BeginSaveForSession(std::uint64_t   session_generatio
 void EditorSessionService::HandleJournalCommit(std::uint64_t              session_generation,
                                                EditorJournalCommitOutcome outcome) {
   std::scoped_lock lock(mutex_);
-  auto pending = std::find_if(pending_saves_.begin(), pending_saves_.end(),
-                              [session_generation](const PendingSave& save) {
+  auto             pending = std::find_if(pending_saves_.begin(), pending_saves_.end(),
+                                          [session_generation](const PendingSave& save) {
                                 return save.session_generation == session_generation;
                               });
   if (pending == pending_saves_.end()) {
@@ -392,7 +395,7 @@ void EditorSessionService::HandleJournalCommit(std::uint64_t              sessio
     return;
   }
 
-  const auto gate = callback_gate_;
+  const auto gate    = callback_gate_;
   const bool started = dependencies_.journal->MaterializeAsync(
       pending->element_id, session_generation,
       [this, gate, session_generation](EditorMaterializeOutcome materialized) mutable {
@@ -407,14 +410,14 @@ void EditorSessionService::HandleJournalCommit(std::uint64_t              sessio
   }
 }
 
-void EditorSessionService::HandleMaterialization(std::uint64_t                session_generation,
+void EditorSessionService::HandleMaterialization(std::uint64_t            session_generation,
                                                  EditorMaterializeOutcome outcome) {
   std::scoped_lock lock(mutex_);
   NotifySaveFinished(
       session_generation, outcome.accepted && outcome.materialized,
-                     outcome.error.empty()
+      outcome.error.empty()
           ? (outcome.materialized ? "Editor session materialized" : "Editor materialization failed")
-                         : outcome.error);
+          : outcome.error);
 }
 
 auto EditorSessionService::SealCurrentSession(bool persist_changes, bool start_background_save,
@@ -425,7 +428,7 @@ auto EditorSessionService::SealCurrentSession(bool persist_changes, bool start_b
 
   if (persist_changes) {
     if (dependencies_.journal && !dependencies_.journal->FinalizeEdit(
-                                      identity_.element_id, identity_.session_generation, error)) {
+                                     identity_.element_id, identity_.session_generation, error)) {
       return false;
     }
     if (start_background_save &&
@@ -447,18 +450,18 @@ auto EditorSessionService::SealCurrentSession(bool persist_changes, bool start_b
 }
 
 void EditorSessionService::ResetActiveImageState() {
-  identity_.element_id         = 0;
-  identity_.image_id           = 0;
-  identity_.render_generation  = 0;
-  identity_.view_generation    = 0;
-  adjustment_snapshot_         = {};
-  first_frame_request_id_      = 0;
-  quality_base_request_id_     = 0;
-  image_acquired_              = false;
-  first_frame_completed_       = false;
-  first_frame_submitted_       = false;
-  first_frame_presented_       = false;
-  quality_base_routed_         = false;
+  identity_.element_id        = 0;
+  identity_.image_id          = 0;
+  identity_.render_generation = 0;
+  identity_.view_generation   = 0;
+  adjustment_snapshot_        = {};
+  first_frame_request_id_     = 0;
+  quality_base_request_id_    = 0;
+  image_acquired_             = false;
+  first_frame_completed_      = false;
+  first_frame_submitted_      = false;
+  first_frame_presented_      = false;
+  quality_base_routed_        = false;
   pending_initial_reason_.reset();
   first_frame_route_time_.reset();
   first_frame_time_ms_ = -1.0;
@@ -500,17 +503,17 @@ auto EditorSessionService::HandleOpenOrSwitch(const EditorSessionIntent& intent,
   }
 
   ++identity_.session_generation;
-  identity_.element_id         = intent.element_id;
-  identity_.image_id           = intent.image_id;
-  identity_.render_generation  = identity_.session_generation;
-  identity_.view_generation    = 1;
-  image_acquired_              = false;
-  first_frame_request_id_      = 0;
-  quality_base_request_id_     = 0;
-  first_frame_completed_       = false;
-  first_frame_submitted_       = false;
-  first_frame_presented_       = false;
-  quality_base_routed_         = false;
+  identity_.element_id        = intent.element_id;
+  identity_.image_id          = intent.image_id;
+  identity_.render_generation = identity_.session_generation;
+  identity_.view_generation   = 1;
+  image_acquired_             = false;
+  first_frame_request_id_     = 0;
+  quality_base_request_id_    = 0;
+  first_frame_completed_      = false;
+  first_frame_submitted_      = false;
+  first_frame_presented_      = false;
+  quality_base_routed_        = false;
   first_frame_route_time_.reset();
   first_frame_time_ms_ = -1.0;
   // Adjustment state is image-scoped. An empty snapshot means a clean image;
@@ -589,25 +592,31 @@ auto EditorSessionService::HandlePatch(const EditorSessionIntent& intent, bool s
     adjustment_snapshot_ = intent.adjustment;
   } else if (!patch.field_key.empty()) {
     ++adjustment_snapshot_.snapshot_generation;
-    adjustment_snapshot_.patches.push_back(patch);
+    const auto existing = std::find_if(
+        adjustment_snapshot_.patches.begin(), adjustment_snapshot_.patches.end(),
+        [&](const EditorAdjustmentPatch& current) { return current.field_key == patch.field_key; });
+    if (existing == adjustment_snapshot_.patches.end()) {
+      adjustment_snapshot_.patches.push_back(patch);
+    } else {
+      *existing = patch;
+    }
     if (!patch.params_json.empty()) {
       adjustment_snapshot_.params_json = patch.params_json;
     }
-    if (adjustment_snapshot_.fingerprint.empty()) {
-      adjustment_snapshot_.fingerprint = patch.field_key;
-    } else {
-      adjustment_snapshot_.fingerprint += "|" + patch.field_key;
+    adjustment_snapshot_.fingerprint.clear();
+    for (const auto& current : adjustment_snapshot_.patches) {
+      if (!adjustment_snapshot_.fingerprint.empty()) {
+        adjustment_snapshot_.fingerprint += "|";
+      }
+      adjustment_snapshot_.fingerprint += current.field_key;
     }
   }
 
   ++identity_.render_generation;
-  if (dependencies_.render) {
-    dependencies_.render->SetActiveGenerations(
-        identity_.session_generation, identity_.render_generation, identity_.view_generation);
-  }
   const auto reason =
       settled ? EditorRenderReason::SettledAdjustment : EditorRenderReason::InteractiveAdjustment;
-  const auto request_id = RouteInitialRender(reason);
+  const auto request_id = RouteInitialRender(
+      reason, EditorRenderSupersessionPolicy::PreserveInflightFullFrame);
   if (request_id == 0) {
     return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
                         "Adjustment render could not be scheduled");
@@ -1002,7 +1011,7 @@ void EditorSessionService::NotifySaveFinished(std::uint64_t session_generation, 
   }
   if (!success) {
     const std::string failure = message.empty() ? "Save failed" : message;
-    last_error_ = failure;
+    last_error_               = failure;
     EditorSessionResult result;
     result.kind     = EditorSessionResultKind::Failed;
     result.state    = state_;
@@ -1094,7 +1103,7 @@ void EditorSessionService::NotifyRenderResult(const EditorRenderResult& render_r
       }
       first_frame_presented_ = true;
       if (first_frame_route_time_.has_value()) {
-        const auto elapsed = std::chrono::steady_clock::now() - *first_frame_route_time_;
+        const auto elapsed   = std::chrono::steady_clock::now() - *first_frame_route_time_;
         first_frame_time_ms_ = std::chrono::duration<double, std::milli>(elapsed).count();
       }
       TryEnterInteractiveFromFirstFrame(render_result);

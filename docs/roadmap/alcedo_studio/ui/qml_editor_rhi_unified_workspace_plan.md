@@ -4,8 +4,8 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-20 to lock journal durability, DuckDB materialization, and shared Paste/Merge
-semantics after completion of the Phase 5F in-memory record format.
+Last revised: 2026-07-20 after Phase 6B Tone panel (sliders + scene-graph curve editor)
+on the Phase 6A typed-model foundation.
 
 Affected areas:
 
@@ -2117,9 +2117,9 @@ Implementation closeout:
   keyboard arrow, field typing + Enter, reset click, invalid field, disabled model,
   toggle click, and combo activation.
 - Verification (Windows MSVC debug, 2026-07-20): `EditorAdjustmentModelTest` 12/12,
-  `EditorAdjustmentControlQmlTest` 7/7, `alcedo_main` links with the 6 new QML files
+  `EditorAdjustmentControlQmlTest` 8/8, `alcedo_main` links with the 6 new QML files
   compiled into the `Alcedo.Main` module (qmlcachegen, no errors). Phase 5 regression
-  green: `EditorSessionServiceTest` 44/44, `EditorSessionControllerPhase5ATest` 16/16,
+  green: `EditorSessionServiceTest` 45/45, `EditorSessionControllerPhase5ATest` 16/16,
   `WorkspaceShellTest` 42/43. The single `WorkspaceShellTest` failure
   (`DeletingCurrentEditorImageDropsEditorToEmptyState`, `has_image()` false after
   `OpenEditor` on a real seeded project — "Image controller: failed to load image
@@ -2128,6 +2128,13 @@ Implementation closeout:
   `git diff --check` clean; new files are LF.
 
 ### Phase 6B - Tone panel
+
+**Status: complete (2026-07-20).** The QML Tone panel ports the six primary tone
+sliders and the tone-curve editor onto the Phase 6A typed-model / submitter
+foundation. Operator-shaped params JSON matches the legacy
+`pipeline_io::ParamsForField` / `curve::CurveControlPointsToParams` shapes so
+settled patches are journal- and pipeline-ready through the Phase 5 session
+route. Curve gestures and scene geometry have deterministic unit tests.
 
 Deliverables:
 
@@ -2140,6 +2147,102 @@ Acceptance:
 - Every Tone value and curve operation round-trips through pipeline, journal, undo/redo, recovery,
   and reconstructed version.
 - Curve gestures have deterministic model and visual geometry tests.
+
+Implementation closeout:
+
+- `EditorTonePanel.qml` replaces the empty Tone page in `EditorAdjustmentStack`.
+  Six `EditorAdjustmentValueModel` instances bind `AdjustmentSlider` controls
+  with legacy ranges (exposure −10…10 step 0.01 default 1.5; contrast /
+  highlights / shadows / whites / blacks −100…100 step 1 default 0) and
+  operator-shaped `paramsBuilder` payloads:
+  `{"exposure":v}`, `{"contrast":v}`, `{"highlights":v}`, `{"shadows":v}`,
+  `{"white":v}`, `{"black":v}`. Field keys match adjustment-transfer /
+  operator script names (`white` / `black`, not whites/blacks).
+  `controlsEnabled` gates model `enabled` so empty-editor state blocks submits.
+- `EditorToneCurveModel` (AlbumBackendLib, registered as `Alcedo.Main`
+  type) owns ordered control points, insert / remove / drag / reset, and
+  submits `{"curve":{"size":N,"points":[{"x","y"},…]}}` through
+  `IEditorAdjustmentSubmitter`. Load uses `setControlPoints` / `setPoints`
+  (no submit); user edits go through the gesture invokables. Normalization,
+  spacing, endpoint pin rules, and max point count reuse
+  `curve::NormalizeCurveControlPoints` / `kCurveMaxControlPoints`.
+- `EditorToneCurveItem` (`QQuickItem` + retained `QSGGeometryNode` content)
+  draws plot, grid, identity diagonal, Hermite samples, and handles. Pure
+  helpers `ToneCurvePlotRect` / `ToneCurveToWidgetPoint` /
+  `ToneCurveToNormalizedPoint` / `ToneCurveHitTestPoint` /
+  `BuildToneCurveSceneGeometry` share the legacy ToneCurveWidget plot padding
+  (22/14/12/24) so geometry tests are GPU-free. Pointer: left drag / insert,
+  right-click remove interior point, double-click reset. Colors bind from
+  `appTheme` / panel theme tokens (no hard-coded product palette in QML).
+- Fold objectName `editorAdjustmentGroupShell_tone` is preserved on the Tone
+  `CollapsibleSection` so Phase 4C `AdjustmentSectionFoldDriverPreservesPanelSelection`
+  keeps working. Curve section uses `editorToneCurveGroup` +
+  `editorToneCurveItem` / `toneCurveResetButton` objectNames for tests.
+- `curve.cpp` moved into `AlbumBackendLib` (shared by the QML curve path and
+  the legacy QWidget editor via link); removed the duplicate from
+  `ALCEDO_EDITOR_DIALOG_SRCS` to avoid ODR when `alcedo_main` links the lib.
+- Tests: `EditorToneCurveModelTest` (8 cases — default params shape, drag
+  interactive+settled, insert+drag, remove, reset, canEdit gating, load-only
+  setControlPoints, endpoint horizontal move ordering);
+  `EditorToneCurveGeometryTest` (5 cases — plot padding, normalized↔widget
+  round-trip, hit test, Hermite scene samples/handles, lifted-black semantics).
+- Verification (Windows MSVC debug, 2026-07-20): `EditorToneCurveModelTest`
+  8/8, `EditorToneCurveGeometryTest` 5/5, Phase 6A regression
+  `EditorAdjustmentModelTest` 12/12 + `EditorAdjustmentControlQmlTest` 8/8,
+  WorkspaceShell tone-adjacent cases green
+  (`EditorDesktopOrderIsHistoryCenterAdjustments`,
+  `AdjustmentPanelsSwitchAndSurviveWorkspaceRoundTrip`,
+  `AdjustmentSectionFoldDriverPreservesPanelSelection`,
+  `AdjustmentStackBackgroundFillsHaveAlpha255`,
+  `DisabledAdjustmentStackUsesOpaqueSurfaceNotParentOpacity`).
+  `alcedo_main` links with `EditorTonePanel.qml` in the `Alcedo.Main` module
+  (qmlcachegen clean).
+- Post-integration correction (2026-07-20): production render requests now apply
+  their adjustment snapshot to the matching pipeline operators while holding the
+  executor render lock. Previously the QML/session path produced the expected JSON
+  and render intents, but `TryProducePipelineFrame` rendered the unchanged executor,
+  so dragging a Tone slider could not change the image. `EditorAdjustmentPipelineTest`
+  verifies the exposure/contrast mapping and latest-value behavior (3/3).
+- Continuous input correction (2026-07-20): coordinator result delivery now uses a
+  single non-blocking delivery owner instead of holding a delivery mutex across the
+  session observer. This removes the worker-observer/session-submit lock inversion
+  that could freeze the second slider update and leave `renderBusy` active. The
+  concurrent blocked-observer and observer-exception regressions pass in
+  `EditorRenderCoordinatorTest`; session patch compaction keeps only the latest value
+  per field (`EditorSessionServiceTest` 45/45).
+- FAST preview correction (2026-07-20): adjustment Patch and GestureCommit routing
+  preserve the currently running full-frame InteractivePrimary / QualityBase request
+  when a newer render generation arrives. Repeated pointer moves replace the queued
+  request with the newest adjustment snapshot, then schedule that snapshot as soon as
+  the running FAST frame finishes. This restores the legacy editor's continuous-preview
+  behavior instead of cancelling every in-flight FAST frame until pointer release.
+  DetailPatch remains cancellable so obsolete ROI work cannot delay interactive frames.
+  `AdjustmentBurstKeepsRunningFastFrameAndSchedulesOnlyLatestPendingValue` and the
+  delivery regressions pass in `EditorRenderCoordinatorTest` (29/29).
+- Qt Quick presentation correction (2026-07-20): every GUI-thread adjustment submit
+  marks `EditorViewportItem` dirty with `QQuickRhiItem::update()` before dispatching
+  pipeline work. This guarantees that `QQuickRhiItemRenderer::synchronize()` can run
+  during an open pointer gesture instead of waiting for the release event. The
+  synchronization step keeps the visible primary layer, releases the unselected
+  Interactive/Quality slot and stale DetailPatch, and thereby restores a writable
+  direct-present slot for the next FAST frame. Sampled-texture changes rebuild only
+  the shader resource bindings because their layout is unchanged; the compatible
+  graphics pipeline is reused.
+- Adjustment-path performance correction (2026-07-20): the production scheduler
+  caches the active image's RAW input buffer instead of reloading it for every FAST
+  or Quality frame. CUDA unmap no longer performs a second device-wide
+  `cudaDeviceSynchronize()` after the pipeline's stream synchronization, so unrelated
+  CUDA work cannot extend presentation completion. Adjustment InteractivePrimary
+  requests are also excluded from one-shot first-frame acknowledgement tracking;
+  only InitialFrame, ImageSwitch, and Retry remain pending until first composition.
+- Window-level verification (Windows MSVC debug, CUDA/D3D11, 2026-07-20):
+  `EditorRealRawGpuE2eTest.RealRawGpuFramesRemainAcknowledgedAcrossSustainedImageSwitches`
+  submits three exposure patches without any settled patch or pointer release and
+  requires `presentedFrameCount()` to increase while the gesture remains open. It
+  passes with one real RAW image switch. `WorkspaceShellTest` contains the same
+  no-release composition regression; `EditorAdjustmentControlQmlTest` 8/8 verifies
+  pointer preview plus exactly one settled value. Coordinator 29/29, session 45/45,
+  and adjustment pipeline 3/3 regressions also pass.
 
 ### Phase 6C - Look panel
 

@@ -136,7 +136,6 @@ void EditorViewportRenderer::releaseLayer(LayerState& layer) {
   // safe even when no replacement frame is available yet.
   if (layer.texture &&
       (bound_primary_texture_ == layer.texture || bound_detail_texture_ == layer.texture)) {
-    destroyResource(pipeline_);
     destroyResource(shader_resource_bindings_);
     bound_primary_texture_ = nullptr;
     bound_detail_texture_  = nullptr;
@@ -246,6 +245,28 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
     image_generation_ = next_image_generation;
     image_identity_   = next_image_identity;
     content_dirty_    = true;
+  }
+
+  if (item_->takeAdjustmentFrameRequest()) {
+    // The old QRhiWidget presenter kept one active full-frame slot and made the
+    // other direct-present slots writable. The first QML port retained one slot
+    // for every layer, so Interactive + Quality + Detail could consume all
+    // three slots and force the next FAST_PREVIEW to wait for a scene-graph
+    // pass. Keep the currently visible primary but release stale auxiliary
+    // layers before the producer starts its next frame.
+    const LayerState* visible_primary = selectedPrimaryLayer();
+    auto&             interactive =
+        layers_[layerIndex(LayerId::InteractivePrimary)];
+    auto& quality = layers_[layerIndex(LayerId::QualityBase)];
+    auto& detail  = layers_[layerIndex(LayerId::DetailPatch)];
+    if (visible_primary != &interactive) {
+      releaseLayer(interactive);
+    }
+    if (visible_primary != &quality) {
+      releaseLayer(quality);
+    }
+    releaseLayer(detail);
+    content_dirty_ = true;
   }
 
   const auto next_view = item_->viewStateSnapshot();
@@ -667,7 +688,6 @@ auto EditorViewportRenderer::selectedDetailLayer() const -> const LayerState* {
 
 void EditorViewportRenderer::recreateShaderResources(QRhiTexture* primary, QRhiTexture* detail) {
   destroyResource(shader_resource_bindings_);
-  destroyResource(pipeline_);
   if (!rhi_ || !uniform_buffer_ || !primary_sampler_ || !detail_sampler_ || !primary || !detail) {
     bound_primary_texture_ = nullptr;
     bound_detail_texture_ = nullptr;
@@ -686,6 +706,10 @@ void EditorViewportRenderer::recreateShaderResources(QRhiTexture* primary, QRhiT
     destroyResource(shader_resource_bindings_);
     return;
   }
+  // Every frame uses the same binding layout (one UBO + two sampled textures),
+  // so an existing graphics pipeline remains compatible with the replacement
+  // bindings. Rebuilding it for every triple-buffer slot rotation was pure
+  // render-thread overhead during slider drags.
   bound_primary_texture_ = primary;
   bound_detail_texture_ = detail;
 }

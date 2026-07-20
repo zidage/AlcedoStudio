@@ -300,6 +300,15 @@ Item {
                     }
                 }
 
+                // Phase 6B: production Tone panel. Other panels keep the empty
+                // shell until their Phase 6 ports land.
+                EditorTonePanel {
+                    objectName: "editorAdjustmentPanel_tone"
+                    theme: root.theme
+                    editorSession: root.editorSession
+                    controlsEnabled: root.controlsEnabled
+                }
+
                 component EmptyAdjustmentPage: Item {
                     property string panelKey: "tone"
 
@@ -350,10 +359,6 @@ Item {
                     }
                 }
 
-                EmptyAdjustmentPage {
-                    objectName: "editorAdjustmentPanel_tone"
-                    panelKey: "tone"
-                }
                 EmptyAdjustmentPage {
                     objectName: "editorAdjustmentPanel_look"
                     panelKey: "look"
