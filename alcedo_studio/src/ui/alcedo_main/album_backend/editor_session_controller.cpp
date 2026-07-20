@@ -541,7 +541,7 @@ bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, 
   patch.field_key   = fieldKey.toStdString();
   patch.params_json = paramsJson.toStdString();
   patch.settled     = settled;
-  const auto result = settled ? session_backend_->GestureCommit(patch)
+  const auto result = settled ? session_backend_->CommitAdjustment(patch)
                               : session_backend_->Patch(patch);
   return result.kind != alcedo::EditorSessionResultKind::Rejected;
 }

@@ -1742,7 +1742,7 @@ target_compile_definitions(EditorAdjustmentControlQmlTest
 )
 gtest_discover_tests(EditorAdjustmentControlQmlTest TEST_PREFIX "EditorAdjustmentControlQmlTest.")
 
-# Phase 6B: tone-curve model (gesture lifecycle + operator params JSON).
+# Phase 6B: tone-curve model (pointer-drag behavior + operator params JSON).
 add_executable(EditorToneCurveModelTest
     ui/editor_tone_curve_model_test.cpp
     ui/ui_test_main.cpp

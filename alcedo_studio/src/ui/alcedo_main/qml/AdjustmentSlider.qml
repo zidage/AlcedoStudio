@@ -3,12 +3,12 @@ import QtQuick.Controls
 import QtQuick.Layouts
 
 // Shared numeric adjustment slider + field + reset. Binds to an
-// EditorAdjustmentValueModel and drives its gesture lifecycle:
-//   - Pointer drag: beginGesture → updateGesture (per move) → commitGesture.
+// EditorAdjustmentValueModel and drives its pointer-drag state:
+//   - Pointer drag: beginDrag -> updateDrag (per move) -> finishDrag.
 //   - Keyboard arrows on the slider: editValue (interactive + debounced settled).
 //   - Field typing + Enter / focus-out: editValue + commitImmediately.
 //   - Reset button: reset (settled immediately).
-// One committed transaction per completed gesture is guaranteed by the model.
+// One committed transaction per completed drag is guaranteed by the model.
 //
 // Value sync: the slider follows model.value, but while the user drags
 // (pressed) the slider owns its value and onMoved pushes it to the model; the
@@ -188,14 +188,14 @@ Item {
                     return
                 }
                 if (pressed) {
-                    root.model.beginGesture()
+                    root.model.beginDrag()
                 } else {
-                    root.model.commitGesture()
+                    root.model.finishDrag()
                 }
             }
             onMoved: {
                 if (root.model) {
-                    root.model.updateGesture(slider.value)
+                    root.model.updateDrag(slider.value)
                 }
             }
             Keys.onLeftPressed: function (event) {

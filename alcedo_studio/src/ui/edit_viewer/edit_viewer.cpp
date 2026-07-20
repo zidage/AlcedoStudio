@@ -170,7 +170,7 @@ class EditViewerOverlayWidget final : public QWidget {
  protected:
   bool event(QEvent* event) override {
     if (event->type() == QEvent::NativeGesture) {
-      owner_.HandleOverlayNativeGesture(static_cast<QNativeGestureEvent*>(event));
+      owner_.HandleOverlayNativeInput(static_cast<QNativeGestureEvent*>(event));
       return true;
     }
     return QWidget::event(event);
@@ -747,7 +747,7 @@ void QtEditViewer::HandleOverlayWheel(QWheelEvent* event) {
   event->accept();
 }
 
-void QtEditViewer::HandleOverlayNativeGesture(QNativeGestureEvent* event) {
+void QtEditViewer::HandleOverlayNativeInput(QNativeGestureEvent* event) {
   if (event->gestureType() == Qt::ZoomNativeGesture) {
     StopZoomAnimation();
     const float value = static_cast<float>(event->value());

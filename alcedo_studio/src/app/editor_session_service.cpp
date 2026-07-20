@@ -801,7 +801,7 @@ auto EditorSessionService::Submit(const EditorSessionIntent& intent) -> EditorSe
       return HandleClose(intent.persist_changes);
     case EditorSessionIntentKind::Patch:
       return HandlePatch(intent, /*settled=*/false);
-    case EditorSessionIntentKind::GestureCommit:
+    case EditorSessionIntentKind::CommitAdjustment:
       return HandlePatch(intent, /*settled=*/true);
     case EditorSessionIntentKind::Undo:
       return HandleUndoRedo(/*undo=*/true);
@@ -849,9 +849,9 @@ auto EditorSessionService::Patch(EditorAdjustmentPatch patch) -> EditorSessionRe
   return Submit(intent);
 }
 
-auto EditorSessionService::GestureCommit(EditorAdjustmentPatch patch) -> EditorSessionResult {
+auto EditorSessionService::CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult {
   EditorSessionIntent intent;
-  intent.kind  = EditorSessionIntentKind::GestureCommit;
+  intent.kind  = EditorSessionIntentKind::CommitAdjustment;
   intent.patch = std::move(patch);
   return Submit(intent);
 }
@@ -862,11 +862,11 @@ auto EditorSessionService::Patch(std::string patch_key) -> EditorSessionResult {
   return Patch(std::move(patch));
 }
 
-auto EditorSessionService::GestureCommit(std::string patch_key) -> EditorSessionResult {
+auto EditorSessionService::CommitAdjustment(std::string patch_key) -> EditorSessionResult {
   EditorAdjustmentPatch patch;
   patch.field_key = std::move(patch_key);
   patch.settled   = true;
-  return GestureCommit(std::move(patch));
+  return CommitAdjustment(std::move(patch));
 }
 
 auto EditorSessionService::Undo() -> EditorSessionResult {

@@ -33,7 +33,7 @@ enum class EditorSessionIntentKind : std::uint8_t {
   Switch,
   Close,
   Patch,
-  GestureCommit,
+  CommitAdjustment,
   Undo,
   Redo,
   Discard,
@@ -68,7 +68,7 @@ struct EditorSessionIntent {
   EditorSessionIntentKind        kind       = EditorSessionIntentKind::Open;
   sl_element_id_t                element_id = 0;
   image_id_t                     image_id   = 0;
-  /// Full adjustment patch for Patch / GestureCommit (field + params).
+  /// Full adjustment patch for Patch / CommitAdjustment (field + params).
   EditorAdjustmentPatch          patch{};
   /// Optional full snapshot when the producer already has one.
   EditorRenderAdjustmentSnapshot adjustment{};

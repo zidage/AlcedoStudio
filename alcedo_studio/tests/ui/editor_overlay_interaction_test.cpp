@@ -395,22 +395,22 @@ TEST(EditorOverlayInteractionTest, PinchAndTrackpadPanUpdateViewTransform) {
 }
 
 TEST(EditorOverlayInteractionTest, PinchAbsoluteToSurvivesScaleResetWithoutFitSnap) {
-  // Qt PinchHandler.scale resets to 1.0 between gestures. Incremental
+  // Qt PinchHandler.scale resets to 1.0 between pinch sequences. Incremental
   // scale/lastScale ratios mis-handle that reset and can multiply zoom by
   // ~1/previousEndScale, snapping to FIT. Absolute handlePinchTo (as used by
-  // EditorWorkspace.qml) keeps zoom continuous across gesture restarts.
+  // EditorWorkspace.qml) keeps zoom continuous across pinch restarts.
   EditorInteractionController controller;
   controller.setViewportMetrics(800, 600, 1.0);
   ConfigureImage(controller);
   controller.applyViewTransformForTest(2.0f, 0.0f, 0.0f);
 
-  // First gesture: baseZoom=2, scale 1.0 → 1.3
+  // First pinch: baseZoom=2, scale 1.0 -> 1.3
   controller.handlePinchTo(400, 300, 2.0f * 1.0f);
   EXPECT_NEAR(controller.zoom(), 2.0f, 1.0e-3f);
   controller.handlePinchTo(400, 300, 2.0f * 1.3f);
   EXPECT_NEAR(controller.zoom(), 2.6f, 1.0e-3f);
 
-  // Second gesture restart: re-base at current zoom with scale=1.0 (no change),
+  // Second pinch restart: re-base at current zoom with scale=1.0 (no change),
   // then pinch in further. Must not go to FIT.
   const float second_base = controller.zoom();
   controller.handlePinchTo(400, 300, second_base * 1.0f);
@@ -635,7 +635,7 @@ TEST(EditorOverlayInteractionTest, ApplyViewStatePushesRegionAndInteractiveFlags
   EXPECT_NEAR(sink_state.snapshot.view_transform.pan.y(), controller.panY(), 1.0e-4f);
 }
 
-TEST(EditorOverlayInteractionTest, SingleViewStatePushPerGestureDespiteDualSignals) {
+TEST(EditorOverlayInteractionTest, SingleViewStatePushPerInputSequenceDespiteDualSignals) {
   EditorInteractionController controller;
   controller.setViewportMetrics(800, 600, 1.0);
   ConfigureImage(controller, 4000, 3000);
@@ -992,7 +992,7 @@ TEST(EditorOverlayInteractionTest, OverlayRebuildsCoalesceAcrossMultiSignalBurst
   overlay.refreshFromInteraction();
   const int rebuilds_before = overlay.geometryRebuildCount();
 
-  // One gesture emits crop + view + overlay signals; coalesced rebuild schedules once.
+  // One drag emits crop + view + overlay signals; coalesced rebuild schedules once.
   controller.setCropRectNormalized(QRectF(0.2, 0.2, 0.5, 0.5));
   controller.applyViewTransformForTest(1.5f, 0.05f, 0.0f);
 

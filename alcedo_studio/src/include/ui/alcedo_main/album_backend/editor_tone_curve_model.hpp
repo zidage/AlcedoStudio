@@ -13,22 +13,22 @@
 namespace alcedo::ui {
 
 /// Phase 6B tone-curve adjustment model. Owns ordered control points in
-/// normalized [0, 1]×[0, 1] space, the pointer-drag gesture lifecycle, insert/
+/// normalized [0, 1]×[0, 1] space, pointer-drag state, insert/
 /// remove, and reset. Submits operator-shaped params JSON through the same
 /// `IEditorAdjustmentSubmitter` seam as the numeric models:
 ///   {"curve":{"size":N,"points":[{"x":…,"y":…},…]}}
-/// One `settled=true` submit per completed gesture; interactive previews use
+/// One `settled=true` submit per completed drag; interactive previews use
 /// `settled=false` while dragging.
 ///
 /// Point ordering, spacing, and endpoint rules match `curve::NormalizeCurveControlPoints`
 /// and the legacy `ToneCurveWidget`. Load uses `setPoints` (no submit); user
-/// edits go through the invokable gesture / mutation methods.
+/// edits go through the invokable drag and mutation methods.
 class EditorToneCurveModel : public EditorAdjustmentModelBase {
   Q_OBJECT
   Q_PROPERTY(QVariantList points READ points NOTIFY pointsChanged)
   Q_PROPERTY(int pointCount READ pointCount NOTIFY pointsChanged)
   Q_PROPERTY(int activeIndex READ activeIndex NOTIFY activeIndexChanged)
-  Q_PROPERTY(bool gestureActive READ gestureActive NOTIFY gestureActiveChanged)
+  Q_PROPERTY(bool dragActive READ dragActive NOTIFY dragActiveChanged)
   Q_PROPERTY(int maxControlPoints READ maxControlPoints CONSTANT)
 
  public:
@@ -39,7 +39,7 @@ class EditorToneCurveModel : public EditorAdjustmentModelBase {
     return static_cast<int>(points_.size());
   }
   [[nodiscard]] auto activeIndex() const -> int { return activeIndex_; }
-  [[nodiscard]] auto gestureActive() const -> bool { return gestureActive_; }
+  [[nodiscard]] auto dragActive() const -> bool { return dragActive_; }
   [[nodiscard]] static auto maxControlPoints() -> int;
 
   /// Plain load setter: normalize + replace points. Does NOT submit.
@@ -49,11 +49,11 @@ class EditorToneCurveModel : public EditorAdjustmentModelBase {
   [[nodiscard]] auto controlPoints() const -> const std::vector<QPointF>& { return points_; }
 
   /// Begin a drag on an existing handle (or after insert). No submit yet.
-  Q_INVOKABLE void beginGesture(int index);
+  Q_INVOKABLE void beginDrag(int index);
   /// Move the active handle to normalized (x, y); submits interactive preview.
-  Q_INVOKABLE void updateGesture(double x, double y);
+  Q_INVOKABLE void updateDrag(double x, double y);
   /// End the drag; submits one settled transaction.
-  Q_INVOKABLE void commitGesture();
+  Q_INVOKABLE void finishDrag();
   /// Insert a control point at normalized (x, y) (if spacing allows), start a
   /// drag on it, and submit one interactive preview.
   Q_INVOKABLE int insertPoint(double x, double y);
@@ -68,7 +68,7 @@ class EditorToneCurveModel : public EditorAdjustmentModelBase {
  signals:
   void pointsChanged();
   void activeIndexChanged();
-  void gestureActiveChanged();
+  void dragActiveChanged();
   /// Emitted when a settled commit lands (drag release, remove, reset).
   void settledCommitted();
 
@@ -82,7 +82,7 @@ class EditorToneCurveModel : public EditorAdjustmentModelBase {
 
   std::vector<QPointF> points_;
   int                  activeIndex_   = -1;
-  bool                 gestureActive_ = false;
+  bool                 dragActive_ = false;
 };
 
 }  // namespace alcedo::ui

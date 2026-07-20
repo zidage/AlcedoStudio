@@ -28,7 +28,7 @@ Expected global behavior:
 | --- | --- | --- |
 | Exposure drag preview | Drag exposure without releasing. | Viewer updates with fast preview. No transaction is appended while dragging. |
 | Exposure release commit | Release exposure after changing it. | One `EXPOSURE` transaction is appended in `Basic_Adjustment`; quality preview is scheduled. |
-| Contrast reset | Change contrast, use reset gesture. | Contrast returns to default and commits once if the value changed. |
+| Contrast reset | Change contrast, then activate reset. | Contrast returns to default and commits once if the value changed. |
 | Highlights and shadows | Change highlights and shadows separately. | Each field commits its own operator params and undo reverses one transaction at a time. |
 | Whites and blacks | Change whites and blacks separately. | Global-param scaled mapping remains equivalent to current behavior. |
 | Curve edit preview | Move a curve control point. | Viewer previews the curve while editing. |

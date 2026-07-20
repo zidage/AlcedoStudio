@@ -16,12 +16,12 @@ class QTimer;
 namespace alcedo::ui {
 
 /// Phase 6A typed adjustment models. Focused QObjects carrying value/range/enum/
-/// toggle state, defaults, validation, and the gesture lifecycle (begin/update/
-/// commit). The models submit one `EditorAdjustmentPatch` at a time through the
+/// toggle state, defaults, validation, and pointer-drag state. The models submit
+/// one `EditorAdjustmentPatch` at a time through the
 /// `IEditorAdjustmentSubmitter` seam; they never touch the pipeline scheduler,
 /// the render coordinator, or the journal. One `settled=true` submit per
-/// completed gesture is the contract — interactive previews during a gesture
-/// use `settled=false` and are coalesced by the Phase 5D coordinator.
+/// completed pointer drag is required. Interactive previews while dragging use
+/// `settled=false` and are coalesced by the Phase 5D coordinator.
 ///
 /// `fieldKey` is the stable history identifier; `label` is the display name the
 /// panel shows. The history layer derives the human-readable row label from
@@ -30,7 +30,7 @@ namespace alcedo::ui {
 /// Load vs edit: each model's Q_PROPERTY WRITE setter is a plain no-submit
 /// setter (programmatic load from session state). User edits go through the
 /// Q_INVOKABLE methods (`editValue` / `selectIndex` / `commitValue` and the
-/// gesture lifecycle), which submit. This prevents spurious commits and feedback
+/// pointer-drag methods), which submit. This prevents spurious commits and feedback
 /// loops when the panel binds the model to session state.
 
 class EditorAdjustmentModelBase : public QObject {
@@ -96,8 +96,8 @@ class EditorAdjustmentModelBase : public QObject {
 };
 
 /// Numeric adjustment (exposure, contrast, saturation, …). Owns the pointer
-/// drag gesture lifecycle and a debounced settled commit for keyboard/wheel
-/// bursts. One settled transaction per completed gesture.
+/// drag state and a debounced settled commit for keyboard/wheel bursts. One
+/// settled transaction per completed drag.
 class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   Q_OBJECT
   Q_PROPERTY(double value READ value WRITE setValue NOTIFY valueChanged)
@@ -110,7 +110,7 @@ class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   Q_PROPERTY(QString suffix READ suffix WRITE setSuffix NOTIFY suffixChanged)
   Q_PROPERTY(bool valid READ valid NOTIFY validChanged)
   Q_PROPERTY(QString errorMessage READ errorMessage NOTIFY validChanged)
-  Q_PROPERTY(bool gestureActive READ gestureActive NOTIFY gestureActiveChanged)
+  Q_PROPERTY(bool dragActive READ dragActive NOTIFY dragActiveChanged)
 
  public:
   explicit EditorAdjustmentValueModel(QObject* parent = nullptr);
@@ -133,13 +133,13 @@ class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   void setSuffix(const QString& s);
   [[nodiscard]] bool valid() const { return valid_; }
   [[nodiscard]] QString errorMessage() const { return errorMessage_; }
-  [[nodiscard]] bool gestureActive() const { return gestureActive_; }
+  [[nodiscard]] bool dragActive() const { return dragActive_; }
 
-  // Pointer-drag gesture lifecycle. updateGesture submits an interactive
-  // preview (settled=false); commitGesture submits one settled transaction.
-  Q_INVOKABLE void beginGesture();
-  Q_INVOKABLE void updateGesture(double v);
-  Q_INVOKABLE void commitGesture();
+  // Pointer-drag input. updateDrag submits an interactive preview
+  // (settled=false); finishDrag submits one settled transaction.
+  Q_INVOKABLE void beginDrag();
+  Q_INVOKABLE void updateDrag(double v);
+  Q_INVOKABLE void finishDrag();
   // User edit (keyboard / wheel): interactive preview + a debounced settled
   // commit. One settled transaction per stabilized burst.
   Q_INVOKABLE void editValue(double v);
@@ -165,7 +165,7 @@ class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   void precisionChanged();
   void suffixChanged();
   void validChanged();
-  void gestureActiveChanged();
+  void dragActiveChanged();
   /// Emitted when a settled commit lands (drag release, debounce fire, reset,
   /// or commitImmediately). Tests QSignalSpy::wait on this.
   void settledCommitted();
@@ -190,7 +190,7 @@ class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   QString suffix_;
   bool valid_ = true;
   QString errorMessage_;
-  bool gestureActive_ = false;
+  bool dragActive_ = false;
 };
 
 /// Enum adjustment (color-temp mode, demosaic method, …). A user selection

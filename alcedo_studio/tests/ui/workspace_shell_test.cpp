@@ -911,7 +911,7 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
 
   // Continuous adjustment regression: pointer moves submit interactive patches
   // without a settled/release event. At least one FAST frame must be composed
-  // while the gesture is still active. The GUI-thread submit path also marks
+  // while the pointer drag is still active. The GUI-thread submit path also marks
   // QQuickRhiItem dirty once per move so the ready queue cannot wait behind the
   // mouse-release event.
   const auto composed_before_drag = viewport->presentedFrameCount();
@@ -930,7 +930,7 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
     ProcessEvents(20);
   }
   EXPECT_GT(viewport->presentedFrameCount(), composed_before_drag)
-      << "Interactive adjustment did not compose until a settled gesture";
+      << "Interactive adjustment did not compose until pointer release";
 
   // A→B→A: late frame from the first A session must not replace the current A.
   const auto gen_a1 = session->session_generation();
@@ -1020,7 +1020,7 @@ TEST_F(WorkspaceShellTests, EditorViewportReceivesRealPointerAndWheelEvents) {
   EXPECT_TRUE(interaction->interactionEnabled());
   EXPECT_GE(interaction->zoom(), alcedo::ViewTransformController::kMinInteractiveZoom);
   EXPECT_LE(interaction->zoom(), alcedo::ViewTransformController::kMaxInteractiveZoom);
-  // At least one of pan/zoom should have moved for a meaningful gesture sequence.
+  // At least one of pan/zoom should have moved for a meaningful input sequence.
   const bool zoomed = std::abs(interaction->zoom() - zoom_before) > 1.0e-3f;
   const bool panned =
       std::abs(interaction->panX()) > 1.0e-4f || std::abs(interaction->panY()) > 1.0e-4f;

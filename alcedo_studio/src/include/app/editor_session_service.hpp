@@ -58,11 +58,11 @@ class IEditorSessionBackend {
     result.message = "Patch not supported by this backend";
     return result;
   }
-  virtual auto GestureCommit(EditorAdjustmentPatch /*patch*/) -> EditorSessionResult {
+  virtual auto CommitAdjustment(EditorAdjustmentPatch /*patch*/) -> EditorSessionResult {
     EditorSessionResult result;
     result.kind    = EditorSessionResultKind::Rejected;
     result.state   = EditorSessionState::NoImage;
-    result.message = "Gesture commit not supported by this backend";
+    result.message = "Adjustment commit not supported by this backend";
     return result;
   }
   /// Record finalized WorkingVersion mutations immediately. The methods queue
@@ -189,10 +189,10 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
   auto Close(bool persist_changes) -> EditorSessionResult override;
   auto Patch(EditorAdjustmentPatch patch) -> EditorSessionResult override;
-  auto GestureCommit(EditorAdjustmentPatch patch) -> EditorSessionResult override;
+  auto CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult override;
   /// Legacy convenience: field key only.
   auto Patch(std::string patch_key) -> EditorSessionResult;
-  auto GestureCommit(std::string patch_key) -> EditorSessionResult;
+  auto CommitAdjustment(std::string patch_key) -> EditorSessionResult;
   auto Undo() -> EditorSessionResult override;
   auto Redo() -> EditorSessionResult override;
   auto RecordFinalizedEdit(const EditTransaction& transaction, std::string* error) -> bool override;

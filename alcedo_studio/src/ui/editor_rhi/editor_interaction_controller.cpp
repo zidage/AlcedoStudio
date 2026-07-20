@@ -839,7 +839,7 @@ void EditorInteractionController::interruptZoomAnimation() {
     zoom_animation_->stop();
   }
   // Cancel an armed single-click zoom toggle. Trackpad pinch/wheel often follows
-  // a press/release that scheduled the click-toggle timer; if it fires mid-gesture
+  // a press/release that scheduled the click-toggle timer; if it fires during the pinch
   // it animates toward 2x / restore (often FIT) and fights the live zoom.
   if (click_toggle_timer_) {
     click_toggle_timer_->stop();

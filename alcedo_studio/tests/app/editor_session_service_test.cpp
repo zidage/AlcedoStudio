@@ -582,7 +582,7 @@ TEST_F(EditorSessionServiceTest, StaleSaveFinishedAfterSealIsIgnored) {
   EXPECT_EQ(tasks_->ended_ids.size(), 1u);
 }
 
-TEST_F(EditorSessionServiceTest, PatchAndGestureCommitRouteThroughRenderPortOnly) {
+TEST_F(EditorSessionServiceTest, PatchAndCommittedAdjustmentRouteThroughRenderPortOnly) {
   service_->Open(1, 2);
   PresentFirstFrame(*service_);
   render_->submitted.clear();
@@ -600,7 +600,7 @@ TEST_F(EditorSessionServiceTest, PatchAndGestureCommitRouteThroughRenderPortOnly
   EXPECT_EQ(render_->submitted.back().adjustment.patches.back().field_key, "exposure");
 
   patch.settled = true;
-  service_->GestureCommit(patch);
+  service_->CommitAdjustment(patch);
   ASSERT_EQ(render_->submitted.size(), 2u);
   EXPECT_EQ(render_->submitted.back().reason, EditorRenderReason::SettledAdjustment);
   EXPECT_EQ(render_->last_supersession_policy,

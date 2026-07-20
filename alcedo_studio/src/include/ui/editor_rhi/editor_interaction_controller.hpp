@@ -162,7 +162,7 @@ class EditorInteractionController : public QObject {
   Q_INVOKABLE void handleRelease(qreal x, qreal y, int button);
   Q_INVOKABLE void handleDoubleTap(qreal x, qreal y);
   // angleDeltaY: wheel angle delta (typically ±120). pixel deltas for trackpad pan.
-  // modifiers: Qt::KeyboardModifiers. synthesized=true for trackpad gestures.
+  // modifiers: Qt::KeyboardModifiers. synthesized=true for trackpad input.
   Q_INVOKABLE void handleWheel(qreal x, qreal y, int angleDeltaY, int pixelDeltaX, int pixelDeltaY,
                                int modifiers, bool synthesized);
   // Relative pinch step (ZoomNativeGesture-style): zoom *= (1 + scaleDelta).

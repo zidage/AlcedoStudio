@@ -77,7 +77,7 @@ class CropInteractionController {
   QPointF      drag_anchor_widget_pos_{};
   QRectF       drag_origin_rect_{};
   // Crop rect present at press, before Create/Move provisional mutation. Cancel
-  // restores this so disabling the tool mid-gesture never leaves a half-built rect.
+  // restores this so disabling the tool during a drag never leaves a half-built rect.
   QRectF       drag_pre_press_rect_{0.0, 0.0, 1.0, 1.0};
   float        drag_pre_press_rotation_ = 0.0f;
   QPointF      drag_fixed_corner_uv_{};

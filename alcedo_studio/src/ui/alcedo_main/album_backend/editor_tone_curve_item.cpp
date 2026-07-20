@@ -386,7 +386,7 @@ void EditorToneCurveItem::mousePressEvent(QMouseEvent* event) {
   const int hit =
       ToneCurveHitTestPoint(pos, model_->controlPoints(), last_geometry_.plot_rect);
   if (hit >= 0) {
-    model_->beginGesture(hit);
+    model_->beginDrag(hit);
     dragging_ = true;
     event->accept();
     return;
@@ -404,13 +404,13 @@ void EditorToneCurveItem::mousePressEvent(QMouseEvent* event) {
 }
 
 void EditorToneCurveItem::mouseMoveEvent(QMouseEvent* event) {
-  if (!event || !dragging_ || !model_ || !model_->gestureActive()) {
+  if (!event || !dragging_ || !model_ || !model_->dragActive()) {
     QQuickItem::mouseMoveEvent(event);
     return;
   }
   const QPointF normalized =
       ToneCurveToNormalizedPoint(event->position(), last_geometry_.plot_rect);
-  model_->updateGesture(normalized.x(), normalized.y());
+  model_->updateDrag(normalized.x(), normalized.y());
   event->accept();
 }
 
@@ -419,8 +419,8 @@ void EditorToneCurveItem::mouseReleaseEvent(QMouseEvent* event) {
     QQuickItem::mouseReleaseEvent(event);
     return;
   }
-  if (dragging_ && model_ && model_->gestureActive()) {
-    model_->commitGesture();
+  if (dragging_ && model_ && model_->dragActive()) {
+    model_->finishDrag();
   }
   dragging_ = false;
   event->accept();

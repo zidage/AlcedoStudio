@@ -4,8 +4,8 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-20 after Phase 6B Tone panel (sliders + scene-graph curve editor)
-on the Phase 6A typed-model foundation.
+Last revised: 2026-07-20 after adding Phase 6C for active-version parameter loading,
+panel state distribution, and edit persistence. The former Phase 6C-6G moved to 6D-6H.
 
 Affected areas:
 
@@ -99,6 +99,10 @@ secondary action on the current filmstrip thumbnail's context menu only.
   crop/rotate, zoom/pan, ROI/detail patch, LUT browsing, history/versioning, histogram/waveform,
   export, and editor shortcuts are all required.
 - Do not name a test, target, file, or document with the repository-banned vague test term.
+- Do not use `hydration`, `hydrate`, `gesture`, or derived forms in project-authored names or
+  prose. Name the concrete action: read, load, populate, apply, drag, pinch, input sequence,
+  pointer release, or settled edit. External framework identifiers that require their exact
+  spelling are the only exception and must not spread into Alcedo-owned API names.
 
 Intermediate phases may coexist with the old implementation on the development branch so the work
 can compile, but they are not separate product modes. No backend flag may select old versus new UI.
@@ -880,7 +884,7 @@ Deliverables:
 - Keep logical coordinates, item coordinates, physical pixels, source-image coordinates, and cropped
   output coordinates explicit in APIs and tests.
 - Preserve zoom-at-cursor, pan clamping, fit modes, crop-handle hit priority, cursor shapes, and
-  native trackpad gestures.
+  native trackpad input.
 - Keep spinner/status and text overlays as ordinary QML.
 
 Acceptance:
@@ -946,7 +950,7 @@ Implementation closeout:
 - Production attach surface prepared but not yet used by a production frame producer: the session
   holds the viewport, resolves `IFrameSink*`, advances image/session generation on every Open, and
   rebinds across A→B→A without rebuilding the QML workspace.
-- Interaction: full state push once per gesture; image-switch resets crop/ROI/mode;
+- Interaction: full state push once per input sequence; image-switch resets crop/ROI/mode;
   render reference follows `EnsureSize` / `targetSizeRequested`.
 - Overlay: non-overlapping dim mask, outward round caps, coalesced rebuilds.
 - QML: PointHandlers unchanged; DPR via screen property binding; session identity key
@@ -1395,7 +1399,7 @@ Deliverables:
   browser data out of `editor_dialog/` belongs to the matching Phase 6 panel work, where each old
   and new path can be compared while the real controls are moved.
 - Acquire pipeline/history guards inside the service; never expose them to the QML module.
-- Define typed intents/results for open, switch, patch, gesture commit, undo, redo, discard, and
+- Define typed intents/results for open, switch, patch, committed adjustment, undo, redo, discard, and
   shutdown.
 - Extract the reusable scheduling policy from the legacy `EditorRenderCoordinator`, but do not move
   its QWidget, `QtEditViewer`, spinner, or dialog callbacks into the new service.
@@ -1677,7 +1681,7 @@ Acceptance:
 
 ### Phase 5D - Unified adjustment, zoom, pan, resize, and quality scheduling
 
-**Status: complete (2026-07-18).** Adjustment, gesture, zoom, pan, resize,
+**Status: complete (2026-07-18).** Adjustment, pointer input, zoom, pan, resize,
 crop/rotation, ROI detail, undo/redo, and retry now flow through typed
 `EditorRenderIntent`s handled by the same `EditorRenderCoordinator` used for the
 first frame; no panel, viewport handler, history controller, or image loader can
@@ -1713,14 +1717,14 @@ EditorSessionControllerPhase5ATest.
 
 Deliverables:
 
-- Route adjustment preview, gesture completion, zoom, pan, viewport resize, crop/rotation, ROI,
+- Route adjustment preview, settled adjustment, zoom, pan, viewport resize, crop/rotation, ROI,
   undo/redo, and retry through typed intents handled by the same coordinator used for the first
   frame.
 - Let the coordinator decide whether a view change can reuse the current full frame, needs a new
   InteractivePrimary render, or should wait briefly and request a DetailPatch. Input handlers only
   report the new view; they do not choose or submit pipeline tasks.
 - Coalesce repeated slider and pointer updates by image/session and intent replacement key. Keep the
-  newest useful interactive request, then request QualityBase after the gesture settles.
+  newest useful interactive request, then request QualityBase after the input settles.
 - Define one priority order for visible work: missing first frame, current interactive response,
   settled QualityBase, current detail patch, then background/non-visible work.
 - Attach frame role, request reason, image/session generation, adjustment generation, view
@@ -1821,7 +1825,7 @@ Acceptance:
 - Diagnostics and tests can explain why each render was requested, replaced, cancelled, presented,
   or rejected. **Covered by coordinator diagnostics tests and QML-facing `renderDiagnostics`.**
 - Every inherited Phase 3-Fix interaction test fails when its own QML operation is disabled; passing
-  another operation in the same gesture sequence cannot hide the failure.
+  another operation in the same input sequence cannot hide the failure.
   **Controller-level operations remain separately asserted.**
 - Overlay capture comparisons verify the actual dim mask, crop border, grid, grips, rotate handle,
   and ROI bounds, not only triangle counts or selected sample points.
@@ -2036,37 +2040,37 @@ and their loading or destruction cannot synchronously wait for scene-graph work.
 ### Phase 6A - Shared adjustment interfaces and QML controls
 
 **Status: complete (2026-07-20).** The shared typed-model + QML-control foundation
-that Phase 6B–6F consume is in place. Models own the gesture lifecycle in
-testable C++ (one settled `submitPatch` per completed gesture); the QML controls
-bind to them and drive the lifecycle; a narrow submitter seam closes the gap
-where `Patch`/`GestureCommit` existed on the backend but were not QML-reachable.
+that Phase 6B-6H consume is in place. Models own pointer-drag state in testable
+C++ (one settled `submitPatch` per completed drag); the QML controls drive those
+methods; a narrow submitter interface closes the gap where `Patch` and
+`CommitAdjustment` existed on the backend but were not QML-reachable.
 
 Deliverables:
 
 - Define focused typed models for values, ranges, enum choices, enabled state, defaults, validation,
-  reset, gesture begin/update/commit, and history labels.
+  reset, drag begin/update/finish, and history labels.
 - Build shared QML numeric slider/field, toggle, combo, collapsible group, reset affordance, and
   validation components.
-- Preserve interactive-preview coalescing and full-quality render after gesture stabilization.
+- Preserve interactive-preview coalescing and full-quality render after input stabilization.
 
 Acceptance:
 
-- Shared controls generate one committed transaction per completed gesture.
+- Shared controls generate one committed transaction per completed drag or stabilized input burst.
 - Keyboard editing, pointer dragging, reset, focus, accessibility, and invalid values have focused
   component tests.
 
 Implementation closeout:
 
 - Backend interface fix: `IEditorSessionBackend` gained `Patch(EditorAdjustmentPatch)`
-  and `GestureCommit(EditorAdjustmentPatch)` virtuals with default-rejection bodies
-  (mirroring `RequestViewChange`); `EditorSessionService::Patch`/`GestureCommit` are
+  and `CommitAdjustment(EditorAdjustmentPatch)` virtuals with default-rejection bodies
+  (mirroring `RequestViewChange`); `EditorSessionService::Patch`/`CommitAdjustment` are
   now `override`. The controller held `IEditorSessionBackend*`, so the QML-reachable
   patch path could not compile before this addition.
 - Narrow submitter seam `IEditorAdjustmentSubmitter` (`submitPatch(fieldKey, paramsJson,
   settled)` + `canEdit()`) in `editor_adjustment_submitter.hpp`. `EditorSessionController`
   multi-inherits it (one QObject base + the non-QObject interface is the standard Qt
   pattern) and exposes `Q_PROPERTY(bool canEdit)` + `Q_INVOKABLE bool submitPatch(...)`.
-  `submitPatch` builds an `EditorAdjustmentPatch` and routes `settled ? GestureCommit :
+  `submitPatch` builds an `EditorAdjustmentPatch` and routes `settled ? CommitAdjustment :
   Patch` through the backend; returns false when `canEdit()` is false (no image / not
   Interactive). `RegisterEditorAdjustmentQmlTypes()` is called from
   `ApplicationModuleHost`'s constructor.
@@ -2075,10 +2079,10 @@ Implementation closeout:
   QObject* property → `dynamic_cast` cross-cast/optional `paramsBuilder` QJSValue/
   `submitNow` with a defensive `canEdit()` check) and three concrete models.
   - `EditorAdjustmentValueModel`: value/defaultValue/minimum/maximum/step/precision/
-    suffix/valid/errorMessage/gestureActive. The `value` Q_PROPERTY WRITE is a plain
+    suffix/valid/errorMessage/dragActive. The `value` Q_PROPERTY WRITE is a plain
     no-submit setter (programmatic load); user edits go through `editValue` (keyboard/
-    wheel: interactive patch + a debounced settled commit), `beginGesture`/
-    `updateGesture`/`commitGesture` (pointer drag: interactive per update, one settled
+    wheel: interactive patch + a debounced settled commit), `beginDrag`/
+    `updateDrag`/`finishDrag` (pointer drag: interactive per update, one settled
     on release), `commitImmediately` (Enter / focus-out), `reset`, and `setInvalid`
     (non-numeric field entry: `valid=false`, no submit). A `QTimer` stabilization
     (default 180 ms; C++-only `setDebounceIntervalMs(0)` for tests) plus the
@@ -2106,11 +2110,11 @@ Implementation closeout:
   `panel_icons/reset.svg` — Lucide `rotate-ccw`, ISC, stroke-width 1.5 to match the
   repo panel_icons convention; registered in `resource.qrc`).
 - Tests: `EditorAdjustmentModelTest` (12 cases, `ui_test_main.cpp` — no GPU/QML) drives
-  the models directly with a `RecordingSubmitter` fake: drag gesture (interactive per
+  the models directly with a `RecordingSubmitter` fake: pointer drag (interactive per
   update + one settled on commit), wheel burst (interactive per value + one settled
   after debounce via `QSignalSpy::wait`), keyboard `commitImmediately`, reset, clamping,
   invalid (`setInvalid` → no submit), enum/toggle one-settled-per-change, `canEdit()`
-  gating, latest-value-wins, mid-gesture session loss drops the settled silently, and
+  gating, latest-value-wins, session loss during a drag drops the settled silently, and
   `hasPendingSettled`. `EditorAdjustmentControlQmlTest` (7 cases, `widget_test_main.cpp`
   + offscreen) loads the controls from source via an inline `Loader` harness (mirrors
   `GlobalSearchDialogQmlTest`) with the models as C++ context properties: slider
@@ -2134,7 +2138,7 @@ sliders and the tone-curve editor onto the Phase 6A typed-model / submitter
 foundation. Operator-shaped params JSON matches the legacy
 `pipeline_io::ParamsForField` / `curve::CurveControlPointsToParams` shapes so
 settled patches are journal- and pipeline-ready through the Phase 5 session
-route. Curve gestures and scene geometry have deterministic unit tests.
+route. Curve pointer input and scene geometry have deterministic unit tests.
 
 Deliverables:
 
@@ -2146,7 +2150,7 @@ Acceptance:
 
 - Every Tone value and curve operation round-trips through pipeline, journal, undo/redo, recovery,
   and reconstructed version.
-- Curve gestures have deterministic model and visual geometry tests.
+- Curve pointer input has deterministic model and visual geometry tests.
 
 Implementation closeout:
 
@@ -2163,7 +2167,7 @@ Implementation closeout:
   type) owns ordered control points, insert / remove / drag / reset, and
   submits `{"curve":{"size":N,"points":[{"x","y"},…]}}` through
   `IEditorAdjustmentSubmitter`. Load uses `setControlPoints` / `setPoints`
-  (no submit); user edits go through the gesture invokables. Normalization,
+  (no submit); user edits go through the drag and mutation invokables. Normalization,
   spacing, endpoint pin rules, and max point count reuse
   `curve::NormalizeCurveControlPoints` / `kCurveMaxControlPoints`.
 - `EditorToneCurveItem` (`QQuickItem` + retained `QSGGeometryNode` content)
@@ -2210,7 +2214,7 @@ Implementation closeout:
   concurrent blocked-observer and observer-exception regressions pass in
   `EditorRenderCoordinatorTest`; session patch compaction keeps only the latest value
   per field (`EditorSessionServiceTest` 45/45).
-- FAST preview correction (2026-07-20): adjustment Patch and GestureCommit routing
+- FAST preview correction (2026-07-20): adjustment Patch and CommitAdjustment routing
   preserve the currently running full-frame InteractivePrimary / QualityBase request
   when a newer render generation arrives. Repeated pointer moves replace the queued
   request with the newest adjustment snapshot, then schedule that snapshot as soon as
@@ -2222,7 +2226,7 @@ Implementation closeout:
 - Qt Quick presentation correction (2026-07-20): every GUI-thread adjustment submit
   marks `EditorViewportItem` dirty with `QQuickRhiItem::update()` before dispatching
   pipeline work. This guarantees that `QQuickRhiItemRenderer::synchronize()` can run
-  during an open pointer gesture instead of waiting for the release event. The
+  during an open pointer drag instead of waiting for the release event. The
   synchronization step keeps the visible primary layer, releases the unselected
   Interactive/Quality slot and stale DetailPatch, and thereby restores a writable
   direct-present slot for the next FAST frame. Sampled-texture changes rebuild only
@@ -2238,13 +2242,70 @@ Implementation closeout:
 - Window-level verification (Windows MSVC debug, CUDA/D3D11, 2026-07-20):
   `EditorRealRawGpuE2eTest.RealRawGpuFramesRemainAcknowledgedAcrossSustainedImageSwitches`
   submits three exposure patches without any settled patch or pointer release and
-  requires `presentedFrameCount()` to increase while the gesture remains open. It
+  requires `presentedFrameCount()` to increase while the drag remains open. It
   passes with one real RAW image switch. `WorkspaceShellTest` contains the same
   no-release composition regression; `EditorAdjustmentControlQmlTest` 8/8 verifies
   pointer preview plus exactly one settled value. Coordinator 29/29, session 45/45,
   and adjustment pipeline 3/3 regressions also pass.
 
-### Phase 6C - Look panel
+### Phase 6C - Active-version parameter loading and panel state distribution
+
+This phase repairs the missing state path exposed by the Tone panel before any additional
+adjustment panel is ported. The session service remains the only owner of the current image's
+authoritative adjustment snapshot. QML receives a read-only copy through
+`EditorSessionController`; no panel reads history, pipeline, storage, or journal services directly.
+
+Panel API:
+
+- Every adjustment panel implements `loadFromSnapshot(snapshot)`.
+- The method reads only that panel's fields and updates its typed models through their no-submit
+  setters. It never calls `submitPatch`, schedules rendering, or writes history.
+- A panel may split parsing into private helpers, but `loadFromSnapshot` is the single public entry
+  used by the adjustment stack.
+- Reapplying the same snapshot is idempotent and does not create edits, restart debounce timers, or
+  change focus.
+
+Central distribution:
+
+- Extend the session backend with a read-only authoritative adjustment snapshot and monotonically
+  increasing revision. Populate it from the active Version and its materialized pipeline params
+  immediately after history and pipeline acquisition succeeds.
+- Expose the snapshot and revision through `EditorSessionController` as QML-readable properties.
+- `EditorAdjustmentStack` owns the explicit panel list and is the only QML component that distributes
+  a new snapshot. It calls `loadFromSnapshot` when the session generation changes, when the snapshot
+  revision changes, and when a panel instance is created after deferred loading.
+- Keep the snapshot shape field-oriented and independent of panel layout. Each entry carries the
+  field key, operator params, and enabled state required to reconstruct a control value.
+- Unknown fields remain available for later panels; one panel must not delete or rewrite another
+  panel's entries.
+
+Edit persistence repair:
+
+- Replace the render-only settled path with `CommitAdjustment`. The first interactive patch for a
+  field records its prior operator params and enabled state; subsequent preview patches replace only
+  the pending after-state; the settled edit creates exactly one `EditTransaction`.
+- Append that transaction to the image journal and the active working Version before reporting a
+  successful committed adjustment. The render snapshot, history cursor, and pending transaction
+  must describe the same after-state.
+- Treat `EditorMaterializeOutcome{accepted=true, materialized=false}` as a successful no-change save.
+  `materialized` reports whether DuckDB advanced, not whether the operation succeeded.
+- Surface commit and save errors through the editor status area and background-task details. A
+  `Failed` session result must not be returned to QML as a successful submit.
+
+Acceptance:
+
+- Opening or switching to an edited image fills Tone values and curve points from the active Version
+  before controls become editable.
+- `loadFromSnapshot` for every registered panel performs no submit and is safe to call repeatedly.
+- Drag exposure, release, switch images, reopen, and verify the active Version, pipeline params,
+  journal replay, rendered frame, and Tone slider all contain the same value.
+- Undo, redo, Version checkout, recovery, and timeline replacement publish a new revision and update
+  every live panel without binding loops.
+- Saving with no new edit finishes successfully and reports that no database update was required.
+- Focused unit, QML, session, journal, and reopen tests cover the complete path instead of testing
+  panel submission, rendering, and journal writing as disconnected pieces.
+
+### Phase 6D - Look panel
 
 Deliverables:
 
@@ -2259,7 +2320,7 @@ Acceptance:
   recovered-journal parity.
 - Trackball and LUT interactions have deterministic controller and QML tests.
 
-### Phase 6D - Display Transform panel
+### Phase 6E - Display Transform panel
 
 Deliverables:
 
@@ -2274,7 +2335,7 @@ Acceptance:
 - HDR intent changes request display transitions without directly touching a window or swapchain from
   QML.
 
-### Phase 6E - Geometry panel
+### Phase 6F - Geometry panel
 
 Deliverables:
 
@@ -2284,10 +2345,10 @@ Deliverables:
 
 Acceptance:
 
-- Panel edits and direct overlay gestures stay bidirectionally consistent without binding loops.
+- Panel edits and direct overlay drags stay bidirectionally consistent without binding loops.
 - Undo/redo/rewrite/recovery restores both pipeline geometry and overlay geometry exactly.
 
-### Phase 6F - RAW Decode panel
+### Phase 6G - RAW Decode panel
 
 Deliverables:
 
@@ -2300,7 +2361,7 @@ Acceptance:
 - Supported and unsupported RAW fixtures expose the correct controls and values.
 - Every RAW Decode edit survives save, replay, version reconstruction, image switch, and reopen.
 
-### Phase 6G - Cross-panel integration and shortcuts
+### Phase 6H - Cross-panel integration and shortcuts
 
 Deliverables:
 

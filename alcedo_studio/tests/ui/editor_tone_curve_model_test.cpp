@@ -3,7 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 // Phase 6B unit tests for EditorToneCurveModel: point ordering, insert/remove,
-// drag gesture (interactive per move + one settled on commit), reset, and the
+// pointer drag (interactive per move + one settled on release), reset, and the
 // operator-shaped params JSON that matches curve::CurveControlPointsToParams /
 // pipeline ParamsForField(Curve). No QML or GPU.
 
@@ -111,15 +111,15 @@ TEST(EditorToneCurveModelTest, DefaultIsLinearIdentityAndMatchesOperatorParamsSh
   EXPECT_EQ(expected["curve"]["size"].get<size_t>(), 2u);
 }
 
-TEST(EditorToneCurveModelTest, DragGestureSubmitsInteractiveThenOneSettled) {
+TEST(EditorToneCurveModelTest, PointerDragSubmitsInteractiveThenOneSettled) {
   RecordingSubmitter sub;
   auto               model = MakeCurveModel(sub);
   QSignalSpy         settled(model.get(), &EditorToneCurveModel::settledCommitted);
 
-  model->beginGesture(0);
-  model->updateGesture(0.0, 0.25);
-  model->updateGesture(0.0, 0.40);
-  model->commitGesture();
+  model->beginDrag(0);
+  model->updateDrag(0.0, 0.25);
+  model->updateDrag(0.0, 0.40);
+  model->finishDrag();
 
   EXPECT_GE(sub.interactiveCount(), 1);
   EXPECT_EQ(sub.settledCount(), 1);
@@ -140,12 +140,12 @@ TEST(EditorToneCurveModelTest, InsertInteriorPointThenDragCommitsOnce) {
   const int idx = model->insertPoint(0.5, 0.35);
   ASSERT_GE(idx, 0);
   EXPECT_EQ(model->pointCount(), 3);
-  EXPECT_TRUE(model->gestureActive());
+  EXPECT_TRUE(model->dragActive());
   EXPECT_EQ(sub.interactiveCount(), 1);
   EXPECT_EQ(sub.settledCount(), 0);
 
-  model->updateGesture(0.5, 0.55);
-  model->commitGesture();
+  model->updateDrag(0.5, 0.55);
+  model->finishDrag();
   EXPECT_EQ(sub.settledCount(), 1);
 
   const auto points = ParsePoints(sub.lastSettledParams());
@@ -188,9 +188,9 @@ TEST(EditorToneCurveModelTest, CanEditFalseDropsSubmits) {
   auto               model = MakeCurveModel(sub);
   sub.canEditState         = false;
 
-  model->beginGesture(1);
-  model->updateGesture(1.0, 0.7);
-  model->commitGesture();
+  model->beginDrag(1);
+  model->updateDrag(1.0, 0.7);
+  model->finishDrag();
   EXPECT_TRUE(sub.calls.empty());
 }
 
@@ -209,9 +209,9 @@ TEST(EditorToneCurveModelTest, EndpointHorizontalMoveKeepsOrdering) {
       {QPointF(0.0, 0.0), QPointF(0.25, 0.25), QPointF(0.75, 0.75), QPointF(1.0, 1.0)});
   sub.calls.clear();
 
-  model->beginGesture(0);
-  model->updateGesture(0.18, 0.22);
-  model->commitGesture();
+  model->beginDrag(0);
+  model->updateDrag(0.18, 0.22);
+  model->finishDrag();
 
   ASSERT_GE(model->controlPoints().size(), 2u);
   EXPECT_NEAR(model->controlPoints().front().x(), 0.18, 1e-3);

@@ -12,8 +12,9 @@ namespace alcedo::ui {
 /// submit one adjustment patch at a time. `EditorSessionController` implements
 /// this; tests inject a fake. The models never touch the pipeline scheduler,
 /// the render coordinator, or the journal — they only call this seam, which
-/// forwards to `EditorSessionService::Patch` (interactive) or `GestureCommit`
-/// (settled). One `settled=true` call per completed gesture is the contract.
+/// forwards to `EditorSessionService::Patch` (interactive) or `CommitAdjustment`
+/// (settled). One `settled=true` call per completed pointer drag or stabilized
+/// keyboard/wheel input sequence is required.
 class IEditorAdjustmentSubmitter {
  public:
   virtual ~IEditorAdjustmentSubmitter() = default;

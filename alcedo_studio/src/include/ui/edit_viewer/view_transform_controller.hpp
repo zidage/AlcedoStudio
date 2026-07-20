@@ -61,7 +61,7 @@ class ViewTransformController {
                        const QPointF& anchor_widget_pos) -> ViewTransformResult;
 
   // Absolute pinch target (preferred for Qt PinchHandler). PinchHandler.scale is
-  // cumulative from gesture start and resets to 1.0 between gestures; applying
+  // cumulative from pinch start and resets to 1.0 between pinch sequences; applying
   // incremental scale/lastScale ratios on that reset produces a large negative
   // step that snaps the view to FIT. Callers should pass start_zoom * (scale /
   // start_scale) instead.
@@ -94,7 +94,7 @@ class ViewTransformController {
 
   // Drop a pending single-click zoom toggle (timer must be stopped by the caller).
   // Pinch / wheel zoom must cancel an armed click-toggle so a trackpad press that
-  // preceded the gesture cannot later animate the view back toward FIT / 2x.
+  // preceded the pinch cannot later animate the view back toward FIT / 2x.
   void CancelPendingClickToggle();
 
   auto ApplyAnimationProgress(ViewerState& state, const ViewportWidgetInfo& widget_info,

@@ -306,7 +306,7 @@ auto ViewTransformController::ApplyViewTransform(ViewerState& state,
   const auto  previous     = state.GetViewTransform();
   state.SetViewTransform(clamped_zoom, clamped_pan);
 
-  // Request a repaint only when the transform actually changed. A zoom gesture
+  // Request a repaint only when the transform actually changed. A zoom input
   // that clamps to the current limit (e.g. Ctrl+wheel zoom-in already at
   // kMaxInteractiveZoom, or zoom-out already at fit) leaves zoom and pan
   // unchanged; routing a DetailRefresh for that no-op drives the render

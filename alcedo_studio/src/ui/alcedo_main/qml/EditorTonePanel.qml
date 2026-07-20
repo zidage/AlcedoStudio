@@ -6,7 +6,7 @@ import Alcedo.Main 1.0
 // Phase 6B Tone panel: exposure / contrast / highlights / shadows / whites /
 // blacks + tone-curve editor. Values and curve points submit through the
 // EditorSessionController submitter seam (operator-shaped params JSON). Models
-// own the gesture lifecycle (one settled transaction per completed gesture).
+// own pointer-drag state (one settled transaction per completed drag).
 // No pipeline/scheduler calls from this file.
 Item {
     id: root

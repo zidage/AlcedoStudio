@@ -80,24 +80,24 @@ void EditorToneCurveModel::setPoints(const QVariantList& points) {
 
 void EditorToneCurveModel::setControlPoints(const std::vector<QPointF>& points) {
   applyNormalized(points);
-  if (gestureActive_) {
-    gestureActive_ = false;
-    emit gestureActiveChanged();
+  if (dragActive_) {
+    dragActive_ = false;
+    emit dragActiveChanged();
   }
   setActiveIndex(-1);
 }
 
-void EditorToneCurveModel::beginGesture(int index) {
+void EditorToneCurveModel::beginDrag(int index) {
   if (index < 0 || index >= static_cast<int>(points_.size())) {
     return;
   }
-  gestureActive_ = true;
+  dragActive_ = true;
   setActiveIndex(index);
-  emit gestureActiveChanged();
+  emit dragActiveChanged();
 }
 
-void EditorToneCurveModel::updateGesture(double x, double y) {
-  if (!gestureActive_ || activeIndex_ < 0) {
+void EditorToneCurveModel::updateDrag(double x, double y) {
+  if (!dragActive_ || activeIndex_ < 0) {
     return;
   }
   if (!moveActivePoint(x, y)) {
@@ -106,12 +106,12 @@ void EditorToneCurveModel::updateGesture(double x, double y) {
   submitInteractive();
 }
 
-void EditorToneCurveModel::commitGesture() {
-  if (!gestureActive_) {
+void EditorToneCurveModel::finishDrag() {
+  if (!dragActive_) {
     return;
   }
-  gestureActive_ = false;
-  emit gestureActiveChanged();
+  dragActive_ = false;
+  emit dragActiveChanged();
   submitSettled();
   emit settledCommitted();
 }
@@ -143,10 +143,10 @@ auto EditorToneCurveModel::insertPoint(double x, double y) -> int {
   const QPointF target(x, y);
   const int     idx = FindClosestPointIndex(normalized, target);
   points_           = normalized;
-  gestureActive_    = true;
+  dragActive_       = true;
   setActiveIndex(idx);
   emit pointsChanged();
-  emit gestureActiveChanged();
+  emit dragActiveChanged();
   submitInteractive();
   return idx;
 }
@@ -162,10 +162,10 @@ auto EditorToneCurveModel::removePoint(int index) -> bool {
     return false;
   }
   points_        = normalized;
-  gestureActive_ = false;
+  dragActive_    = false;
   setActiveIndex(-1);
   emit pointsChanged();
-  emit gestureActiveChanged();
+  emit dragActiveChanged();
   submitSettled();
   emit settledCommitted();
   return true;
@@ -173,14 +173,14 @@ auto EditorToneCurveModel::removePoint(int index) -> bool {
 
 void EditorToneCurveModel::reset() {
   const auto defaults = curve::DefaultCurveControlPoints();
-  if (curve::CurveControlPointsEqual(defaults, points_) && !gestureActive_) {
+  if (curve::CurveControlPointsEqual(defaults, points_) && !dragActive_) {
     return;
   }
   points_        = defaults;
-  gestureActive_ = false;
+  dragActive_    = false;
   setActiveIndex(-1);
   emit pointsChanged();
-  emit gestureActiveChanged();
+  emit dragActiveChanged();
   submitSettled();
   emit settledCommitted();
 }

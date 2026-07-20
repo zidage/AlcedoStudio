@@ -111,7 +111,7 @@
 - **Forward matrix support for RAW color**: Added forward matrix to the RAW color context and metadata extraction pipeline for improved color accuracy on supported cameras. (`0578f9d`)
 - **DNG import and metadata improvements**: Optimized DNG file import performance, enhanced UI components, added DNG metadata extraction tests, and improved the DNG Converter recovery menu design. (`614bac2`, `ef33ff67`, `7481f37`)
 - **Clarity operator improvements**: Improved Clarity operator quality and aligned its behavior between macOS and Windows. (`d7a79fe`, `efd30e4`)
-- **Gesture operations on viewer**: Added pinch-to-zoom and pan gesture support to the image viewer. (`37f58f7`)
+- **Viewer pointer operations**: Added pinch-to-zoom and pan input support to the image viewer. (`37f58f7`)
 - **OCIO configuration enhancements**: Improved OCIO configuration handling and cross-platform path management. (`26096ac`)
 - **LUT search and panel updates**: Added search support to the LUT selector and refreshed the LUT selection panel UI. (`5bb41c4`, `992bcd3`)
 - **Inference backend migrated to ONNX**: Replaced the previous inference sidecar backend with ONNX Runtime. (`cf3a12e`)

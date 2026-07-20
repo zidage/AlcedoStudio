@@ -159,18 +159,18 @@ void EditorAdjustmentValueModel::setSuffix(const QString& s) {
   emit suffixChanged();
 }
 
-void EditorAdjustmentValueModel::beginGesture() {
-  if (gestureActive_) {
+void EditorAdjustmentValueModel::beginDrag() {
+  if (dragActive_) {
     return;
   }
   // A drag supersedes any pending keyboard/wheel settled commit.
   debounceTimer_->stop();
-  gestureActive_ = true;
-  emit gestureActiveChanged();
+  dragActive_ = true;
+  emit dragActiveChanged();
 }
 
-void EditorAdjustmentValueModel::updateGesture(double v) {
-  if (!gestureActive_) {
+void EditorAdjustmentValueModel::updateDrag(double v) {
+  if (!dragActive_) {
     return;
   }
   if (!applyValue(v)) {
@@ -179,12 +179,12 @@ void EditorAdjustmentValueModel::updateGesture(double v) {
   submitInteractive(value_);
 }
 
-void EditorAdjustmentValueModel::commitGesture() {
-  if (!gestureActive_) {
+void EditorAdjustmentValueModel::finishDrag() {
+  if (!dragActive_) {
     return;
   }
-  gestureActive_ = false;
-  emit gestureActiveChanged();
+  dragActive_ = false;
+  emit dragActiveChanged();
   submitSettled(value_);
   emit settledCommitted();
 }
@@ -208,9 +208,9 @@ void EditorAdjustmentValueModel::commitImmediately() {
 
 void EditorAdjustmentValueModel::reset() {
   debounceTimer_->stop();
-  if (gestureActive_) {
-    gestureActive_ = false;
-    emit gestureActiveChanged();
+  if (dragActive_) {
+    dragActive_ = false;
+    emit dragActiveChanged();
   }
   const bool changed = applyValue(defaultValue_);
   if (!changed) {

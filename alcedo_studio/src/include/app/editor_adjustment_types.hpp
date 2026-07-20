@@ -20,7 +20,7 @@ struct EditorAdjustmentPatch {
   std::string field_key;
   /// Serialized operator/panel parameters (JSON text).
   std::string params_json;
-  /// True when the gesture has settled (quality ladder); false while dragging.
+  /// True when the input sequence has settled (quality ladder); false while dragging.
   bool settled = false;
 
   auto operator==(const EditorAdjustmentPatch& other) const -> bool = default;

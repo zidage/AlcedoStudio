@@ -391,11 +391,11 @@ Item {
                         id: viewportPinch
                         enabled: root.hasImage
                         target: null
-                        // Absolute mapping from gesture start. PinchHandler.scale is
-                        // cumulative for the active gesture and resets to 1.0 when a
+                        // Absolute mapping from pinch start. PinchHandler.scale is
+                        // cumulative for the active pinch and resets to 1.0 when a
                         // new pinch begins. Incremental lastScale ratios mis-handle
                         // that reset (scale→1 with lastScale still at the previous
-                        // gesture's end value) and apply a large negative step that
+                        // prior pinch's end value) and apply a large negative step that
                         // snaps zoom to FIT. Cmd+scroll does not use this path.
                         property real _baseZoom: 1.0
                         property real _baseScale: 1.0
@@ -417,7 +417,7 @@ Item {
                             }
                             var safeBase = Math.max(_baseScale, 1e-6)
                             var factor = scale / safeBase
-                            // Scale re-baselined mid-gesture (Qt reset to ~1.0 while we
+                            // Scale re-baselined during the pinch (Qt reset to ~1.0 while we
                             // still held a larger base): re-anchor instead of applying
                             // a catastrophic zoom-out (factor ≈ 1/previousEndScale).
                             if (factor < 0.55 && Math.abs(scale - 1.0) < 0.08 && safeBase > 1.05) {
@@ -431,7 +431,7 @@ Item {
                         }
                     }
 
-                    // Phase 5D: gesturePolicy DragThreshold so a left-button drag
+                    // Phase 5D: TapHandler.gesturePolicy uses DragThreshold so a left-button drag
                     // (now owned by viewportPanDrag above) cancels the tap instead
                     // of being held as a would-be double-tap. A clean double-click
                     // (two clicks without a drag) still fires onDoubleTapped and

@@ -2,8 +2,8 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-// Phase 6A unit tests for the typed adjustment models. Verifies the gesture
-// lifecycle contract (one settled transaction per completed gesture), the
+// Phase 6A unit tests for the typed adjustment models. Verifies pointer-drag
+// behavior (one settled transaction per completed drag), the
 // debounced settled commit for keyboard/wheel bursts, clamping, validation,
 // enum/toggle commits, canEdit gating, and the load-vs-edit separation. The
 // models are exercised directly in C++ with a recording submitter fake; no QML
@@ -137,17 +137,17 @@ auto makeToggleModel(RecordingSubmitter& sub) -> std::unique_ptr<EditorAdjustmen
 
 // 1. A pointer drag submits one interactive patch per update and exactly one
 // settled patch on release.
-TEST(EditorAdjustmentModelTest, DragGestureSubmitsInteractivePerUpdateAndOneSettledOnCommit) {
+TEST(EditorAdjustmentModelTest, PointerDragSubmitsInteractivePerUpdateAndOneSettledOnRelease) {
   RecordingSubmitter sub;
   auto m = makeValueModel(sub);
-  m->beginGesture();
-  m->updateGesture(0.1);
-  m->updateGesture(0.2);
-  m->updateGesture(0.3);
-  m->commitGesture();
+  m->beginDrag();
+  m->updateDrag(0.1);
+  m->updateDrag(0.2);
+  m->updateDrag(0.3);
+  m->finishDrag();
   EXPECT_EQ(sub.interactiveCount(), 3);
   EXPECT_EQ(sub.settledCount(), 1);
-  EXPECT_FALSE(m->gestureActive());
+  EXPECT_FALSE(m->dragActive());
   EXPECT_DOUBLE_EQ(RecordingSubmitter::numericValue(sub.lastSettledParams()), 0.3);
 }
 
@@ -257,12 +257,12 @@ TEST(EditorAdjustmentModelTest, NoSubmitWhenSubmitterCanEditFalse) {
   RecordingSubmitter sub;
   sub.canEditState = false;
   auto m = makeValueModel(sub);
-  m->beginGesture();
-  m->updateGesture(0.5);
-  m->commitGesture();
+  m->beginDrag();
+  m->updateDrag(0.5);
+  m->finishDrag();
   EXPECT_EQ(sub.calls.size(), 0u);
   EXPECT_DOUBLE_EQ(m->value(), 0.5);
-  EXPECT_FALSE(m->gestureActive());
+  EXPECT_FALSE(m->dragActive());
 }
 
 // 10. The settled commit carries the latest value when multiple edits land
@@ -280,18 +280,18 @@ TEST(EditorAdjustmentModelTest, LatestValueWinsWhenMultipleUpdatesBeforeSettled)
   EXPECT_DOUBLE_EQ(m->value(), 0.8);
 }
 
-// 11. If the session becomes non-editable mid-gesture, the settled commit on
-// release is dropped silently (documented limitation); the gesture still ends.
-TEST(EditorAdjustmentModelTest, CommitGestureAfterSessionLostDropsSettledSilently) {
+// 11. If the session becomes non-editable during a drag, the settled commit on
+// release is dropped silently (documented limitation); the drag still ends.
+TEST(EditorAdjustmentModelTest, FinishDragAfterSessionLostDropsSettledSilently) {
   RecordingSubmitter sub;
   auto m = makeValueModel(sub);
-  m->beginGesture();
-  m->updateGesture(0.5);
+  m->beginDrag();
+  m->updateDrag(0.5);
   EXPECT_EQ(sub.interactiveCount(), 1);
-  sub.canEditState = false;  // session lost mid-gesture
-  m->commitGesture();
+  sub.canEditState = false;  // session lost during the drag
+  m->finishDrag();
   EXPECT_EQ(sub.settledCount(), 0);
-  EXPECT_FALSE(m->gestureActive());
+  EXPECT_FALSE(m->dragActive());
 }
 
 // 12. hasPendingSettled tracks the debounce timer: false at rest, true after an

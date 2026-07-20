@@ -81,7 +81,7 @@ class EditorViewportItem : public QQuickRhiItem {
     return present_queue_;
   }
   // Diagnostics: how many times setViewState was entered (tests assert once
-  // per user gesture / metrics change).
+  // per user input sequence / metrics change).
   [[nodiscard]] auto viewStatePushCount() const -> int {
     return view_state_push_count_.load(std::memory_order_acquire);
   }
