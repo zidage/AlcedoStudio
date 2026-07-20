@@ -970,6 +970,7 @@ set(HISTORY_SRCS
     edit/history/edit_transaction.cpp
     edit/history/editor_transaction_journal.cpp
     edit/history/editor_journal_writer.cpp
+    edit/history/editor_journal_recovery.cpp
 )
 
 def_library(EditHistory
@@ -1019,6 +1020,7 @@ set(MAPPER_SRCS
     storage/mapper/image/image_mapper.cpp
     storage/mapper/sleeve/filter/filter_mapper.cpp
     storage/mapper/sleeve/edit_history/history_mapper.cpp
+    storage/mapper/sleeve/edit_history/recovery_metadata_mapper.cpp
     storage/mapper/pipeline/pipeline_mapper.cpp
 )
 
@@ -1377,6 +1379,12 @@ def_library(AdjustmentTransferService
 def_library(EditHistoryMgmtService
     SOURCES app/history_mgmt_service.cpp
     PUBLIC_DEPS ProjectService EditHistory
+)
+
+# Phase 5H: atomic DuckDB materialization + journal recovery REDO owner.
+def_library(EditorHistoryMaterializer
+    SOURCES app/editor_history_materializer.cpp
+    PUBLIC_DEPS ProjectService EditHistory StorageService
 )
 
 # Phase 5A: application-layer editor session + unified render-intent coordinator.

@@ -143,6 +143,17 @@ class DBController {
   // inserts and re-stamped on each upsert, so it doubles as last-write time. Rating is
   // NOT part of full-text search: it is stored here only, and the search-document
   // builder (sleeve_filter_service) intentionally reads the understanding table alone.
+  // Phase 5H: editor recovery metadata for atomic history/pipeline materialization.
+  // CREATE IF NOT EXISTS so existing project databases gain the table in place.
+  constexpr static const char* editor_recovery_metadata_table_query =
+      "CREATE TABLE IF NOT EXISTS EditorRecoveryMetadata ("
+      "file_id BIGINT PRIMARY KEY,"
+      "version_id VARCHAR NOT NULL DEFAULT '',"
+      "journal_generation UBIGINT NOT NULL DEFAULT 0,"
+      "materialized_operation_sequence UBIGINT NOT NULL DEFAULT 0,"
+      "transaction_chain_hash VARCHAR NOT NULL DEFAULT '',"
+      "pipeline_parameter_hash VARCHAR NOT NULL DEFAULT '');";
+
   constexpr static const char* ai_annotation_table_query =
       "CREATE TABLE IF NOT EXISTS AiImageUnderstanding ("
       "file_id BIGINT NOT NULL,"

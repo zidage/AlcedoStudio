@@ -4,7 +4,10 @@
 
 #include "edit/history/editor_journal_writer.hpp"
 
+#include "edit/history/editor_journal_recovery.hpp"
+
 #include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <limits>
 #include <stdexcept>
@@ -209,6 +212,241 @@ auto FileEditorJournalFile::ReadAll(std::string* error)
     }
   }
   return bytes;
+}
+
+auto FileEditorJournalFile::CreateExclusive(const std::filesystem::path& path,
+                                            const std::uint8_t* data, std::size_t size,
+                                            std::string* error) -> bool {
+  if (path.has_parent_path()) {
+    std::error_code ec;
+    std::filesystem::create_directories(path.parent_path(), ec);
+    if (ec) {
+      if (error) {
+        *error = "failed to create journal parent directory: " + ec.message();
+      }
+      return false;
+    }
+  }
+#ifdef _WIN32
+  const HANDLE handle = CreateFileW(
+      path.wstring().c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+  if (handle == INVALID_HANDLE_VALUE) {
+    if (error) {
+      *error = ErrorText("create-exclusive", path);
+    }
+    return false;
+  }
+  std::size_t offset = 0;
+  while (offset < size) {
+    const auto remaining = size - offset;
+    const auto max_dword = static_cast<std::size_t>((std::numeric_limits<DWORD>::max)());
+    const DWORD request  = static_cast<DWORD>(remaining < max_dword ? remaining : max_dword);
+    DWORD       actual   = 0;
+    if (!WriteFile(handle, data + offset, request, &actual, nullptr) || actual == 0) {
+      CloseHandle(handle);
+      if (error) {
+        *error = ErrorText("write compact", path);
+      }
+      return false;
+    }
+    offset += actual;
+  }
+  if (!FlushFileBuffers(handle)) {
+    CloseHandle(handle);
+    if (error) {
+      *error = ErrorText("flush compact", path);
+    }
+    return false;
+  }
+  CloseHandle(handle);
+  return true;
+#else
+  const int fd = ::open(path.c_str(), O_CREAT | O_EXCL | O_WRONLY, 0644);
+  if (fd < 0) {
+    if (error) {
+      *error = ErrorText("create-exclusive", path);
+    }
+    return false;
+  }
+  std::size_t offset = 0;
+  while (offset < size) {
+    const auto actual = ::write(fd, data + offset, size - offset);
+    if (actual <= 0) {
+      ::close(fd);
+      if (error) {
+        *error = ErrorText("write compact", path);
+      }
+      return false;
+    }
+    offset += static_cast<std::size_t>(actual);
+  }
+  if (::fsync(fd) != 0) {
+    ::close(fd);
+    if (error) {
+      *error = ErrorText("flush compact", path);
+    }
+    return false;
+  }
+  ::close(fd);
+  return true;
+#endif
+}
+
+auto FileEditorJournalFile::AtomicReplace(const std::filesystem::path& source,
+                                          const std::filesystem::path& destination,
+                                          std::string*                 error) -> bool {
+  std::error_code ec;
+  std::filesystem::rename(source, destination, ec);
+  if (ec) {
+    // Windows cannot rename over an existing file; remove destination first.
+    std::filesystem::remove(destination, ec);
+    std::filesystem::rename(source, destination, ec);
+  }
+  if (ec) {
+    if (error) {
+      *error = "atomic journal replace failed: " + ec.message();
+    }
+    return false;
+  }
+  return true;
+}
+
+auto FileEditorJournalFile::FlushDirectory(const std::filesystem::path& directory,
+                                           std::string* error) -> bool {
+#ifdef _WIN32
+  const HANDLE handle = CreateFileW(
+      directory.wstring().c_str(), GENERIC_READ,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+  if (handle == INVALID_HANDLE_VALUE) {
+    if (error) {
+      *error = ErrorText("open directory", directory);
+    }
+    return false;
+  }
+  const bool ok = FlushFileBuffers(handle) != 0;
+  CloseHandle(handle);
+  if (!ok && error) {
+    *error = ErrorText("flush directory", directory);
+  }
+  return ok;
+#else
+  const int fd = ::open(directory.c_str(), O_RDONLY | O_DIRECTORY);
+  if (fd < 0) {
+    if (error) {
+      *error = ErrorText("open directory", directory);
+    }
+    return false;
+  }
+  const bool ok = ::fsync(fd) == 0;
+  ::close(fd);
+  if (!ok && error) {
+    *error = ErrorText("flush directory", directory);
+  }
+  return ok;
+#endif
+}
+
+InjectedEditorJournalFile::InjectedEditorJournalFile(std::vector<std::uint8_t> initial)
+    : bytes_(std::move(initial)) {}
+
+auto InjectedEditorJournalFile::Append(const std::uint8_t* data, std::size_t size,
+                                       std::size_t* written, std::string* error) -> bool {
+  ++append_calls;
+  if (written == nullptr) {
+    if (error) {
+      *error = "missing write count";
+    }
+    return false;
+  }
+  const auto count = max_write == 0 ? size : (size < max_write ? size : max_write);
+  if (data != nullptr && count > 0) {
+    bytes_.insert(bytes_.end(), data, data + count);
+  }
+  *written = count;
+  return true;
+}
+
+auto InjectedEditorJournalFile::Flush(std::string* error) -> bool {
+  ++flush_calls;
+  if (fail_flush) {
+    if (error) {
+      *error = "injected flush failure";
+    }
+    return false;
+  }
+  return true;
+}
+
+auto InjectedEditorJournalFile::ReadAll(std::string* /*error*/)
+    -> std::optional<std::vector<std::uint8_t>> {
+  auto copy = bytes_;
+  if (corrupt_on_read && !copy.empty()) {
+    const auto offset =
+        corrupt_on_read_offset < copy.size() ? corrupt_on_read_offset : (copy.size() - 1);
+    copy[offset] ^= 0xFFu;
+  }
+  return copy;
+}
+
+auto InjectedEditorJournalFile::CreateExclusive(const std::filesystem::path& path,
+                                                const std::uint8_t* data, std::size_t size,
+                                                std::string* error) -> bool {
+  ++create_calls;
+  if (fail_create) {
+    if (error) {
+      *error = "injected create failure";
+    }
+    return false;
+  }
+  const auto key = path.string();
+  if (compact_files_.contains(key)) {
+    if (error) {
+      *error = "compact journal already exists";
+    }
+    return false;
+  }
+  std::vector<std::uint8_t> body;
+  if (data != nullptr && size > 0) {
+    body.assign(data, data + size);
+  }
+  compact_files_[key] = std::move(body);
+  return true;
+}
+
+auto InjectedEditorJournalFile::AtomicReplace(const std::filesystem::path& source,
+                                              const std::filesystem::path& destination,
+                                              std::string* error) -> bool {
+  ++replace_calls;
+  if (fail_replace) {
+    if (error) {
+      *error = "injected atomic replace failure";
+    }
+    return false;
+  }
+  const auto source_key = source.string();
+  auto       it         = compact_files_.find(source_key);
+  if (it == compact_files_.end()) {
+    if (error) {
+      *error = "compact source missing";
+    }
+    return false;
+  }
+  bytes_ = it->second;
+  compact_files_.erase(it);
+  (void)destination;
+  return true;
+}
+
+auto InjectedEditorJournalFile::FlushDirectory(const std::filesystem::path& /*directory*/,
+                                               std::string* error) -> bool {
+  if (fail_directory_flush) {
+    if (error) {
+      *error = "injected directory flush failure";
+    }
+    return false;
+  }
+  return true;
 }
 
 EditorJournalWriter::EditorJournalWriter(std::shared_ptr<IEditorJournalFile> file)
@@ -542,5 +780,113 @@ void EditorJournalWriter::InitializeStateFromJournal() {
 }
 
 void EditorJournalWriter::SetError(std::string error) { last_error_ = std::move(error); }
+
+auto EditorJournalWriter::CompactToMaterializedHead(
+    const EditorJournalIdentity& identity, const Hash128& timeline_hash,
+    std::uint64_t applied_cursor, const nlohmann::json& head_pipeline_params,
+    const std::filesystem::path& active_path, const std::filesystem::path& compact_path,
+    std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
+  if (pending_.active || pending_.first_sequence != 0) {
+    SetError("cannot compact editor journal with a pending batch");
+    if (error) {
+      *error = last_error_;
+    }
+    return false;
+  }
+  if (!file_) {
+    SetError("editor journal file port is missing");
+    if (error) {
+      *error = last_error_;
+    }
+    return false;
+  }
+
+  // Compaction replaces the append-only growth with a verified checkpoint. DuckDB
+  // recovery metadata remains authoritative for the transaction chain; the compact
+  // journal only records that physical omission of prior rewrite tails completed.
+  EditorTransactionJournal compact_journal;
+  const auto checkpoint_seq = compact_journal.AppendCompactionCheckpoint(
+      identity, state_.durable_operation_sequence,
+      "compact-to-materialized-head timeline=" + timeline_hash.ToString() +
+          " cursor=" + std::to_string(applied_cursor) +
+          " params=" + ComputePipelineParameterHash(head_pipeline_params).ToString());
+  EditorJournalBatchCommitPayload payload;
+  payload.previous_batch_commit_sequence = 0;
+  payload.first_covered_sequence         = 1;
+  payload.last_covered_sequence          = checkpoint_seq;
+  payload.last_operation_sequence        = 0;
+  payload.record_chain_hash = ComputeEditorJournalRecordChainHash(
+      compact_journal.DecodeRecordChain().records, checkpoint_seq);
+  const auto commit_seq = compact_journal.AppendJournalBatchCommit(identity, payload);
+  (void)commit_seq;
+
+  // Verify the compact body before touching the active file.
+  const auto decoded = compact_journal.DecodeRecordChain();
+  if (decoded.stopped_on_corrupt_record || decoded.records.size() != 2 ||
+      decoded.records[0].record_type != EditorJournalRecordType::CompactionCheckpoint ||
+      decoded.records[1].record_type != EditorJournalRecordType::JournalBatchCommit ||
+      !IsValidBatchCommit(decoded.records, decoded.records[1], 0)) {
+    SetError(decoded.message.empty() ? "compact journal failed verification" : decoded.message);
+    if (error) {
+      *error = last_error_;
+    }
+    return false;
+  }
+  JournalTimelineSimulator verify(identity);
+  const auto replay = verify.ReplayCommittedRecordChain(compact_journal);
+  if (replay.status != EditorJournalApplyStatus::Applied) {
+    SetError(replay.message.empty() ? "compact journal failed verification" : replay.message);
+    if (error) {
+      *error = last_error_;
+    }
+    return false;
+  }
+
+  std::string io_error;
+  if (!file_->CreateExclusive(compact_path, compact_journal.bytes().data(),
+                              compact_journal.bytes().size(), &io_error)) {
+    SetError(io_error.empty() ? "failed to create compact journal" : io_error);
+    if (error) {
+      *error = last_error_;
+    }
+    return false;
+  }
+  if (!file_->AtomicReplace(compact_path, active_path, &io_error)) {
+    SetError(io_error.empty() ? "failed to replace active journal" : io_error);
+    if (error) {
+      *error = last_error_;
+    }
+    return false;
+  }
+  const auto directory =
+      active_path.has_parent_path() ? active_path.parent_path() : std::filesystem::path(".");
+  if (!file_->FlushDirectory(directory, &io_error)) {
+    SetError(io_error.empty() ? "failed to flush journal directory" : io_error);
+    if (error) {
+      *error = last_error_;
+    }
+    return false;
+  }
+
+  if (!journal_->LoadBytes(compact_journal.bytes(), &io_error)) {
+    SetError(io_error.empty() ? "failed to reload compact journal" : io_error);
+    if (error) {
+      *error = last_error_;
+    }
+    return false;
+  }
+  identity_ = identity;
+  InitializeStateFromJournal();
+  last_error_.clear();
+  return true;
+}
+
+auto EditorJournalWriter::EmitDiagnosticBundle(const std::filesystem::path& journal_path,
+                                               const std::string& reason, std::string* error)
+    -> std::optional<std::filesystem::path> {
+  std::scoped_lock lock(mutex_);
+  return WriteEditorJournalDiagnosticBundle(journal_path, journal_->bytes(), reason, error);
+}
 
 }  // namespace alcedo

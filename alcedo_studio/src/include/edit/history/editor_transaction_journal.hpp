@@ -277,6 +277,29 @@ class JournalTimelineSimulator final {
   [[nodiscard]] auto ReplayCommittedRecordChain(const EditorTransactionJournal& journal)
       -> EditorJournalApplyResult;
 
+  /// Seed the simulator from a DuckDB-materialized Version projection. Used by
+  /// recovery to REDO only journal-committed edit-history operations after
+  /// `materialized_operation_sequence`.
+  void SeedMaterializedState(EditorJournalIdentity identity,
+                             std::vector<EditTransaction> transactions, std::size_t cursor,
+                             std::uint64_t                materialized_operation_sequence,
+                             std::optional<nlohmann::json> head_pipeline_params = std::nullopt);
+
+  /// REDO journal-committed edit-history operations strictly after the seeded
+  /// materialized operation sequence. Does not Reset(); callers must Seed first
+  /// (or accept an empty base). Control records at or before the materialization
+  /// point are ignored; later batch commits remain validated by the commit chain.
+  [[nodiscard]] auto ReplayCommittedAfterMaterialized(const EditorTransactionJournal& journal)
+      -> EditorJournalApplyResult;
+
+  /// Like ReplayCommittedRecordChain, but ignores edit-history operations whose
+  /// record sequence is greater than `max_operation_sequence` (and their later
+  /// batch commits). Used when an in-memory journal still holds an unflushed
+  /// batch that must not be materialized.
+  [[nodiscard]] auto ReplayCommittedThroughOperationSequence(
+      const EditorTransactionJournal& journal, std::uint64_t max_operation_sequence)
+      -> EditorJournalApplyResult;
+
   /// Allocate the next transaction id. Never reuses ids at or below the high-water mark,
   /// including ids that belonged to a discarded redo tail.
   [[nodiscard]] auto AllocateTransactionId() -> tx_id_t;

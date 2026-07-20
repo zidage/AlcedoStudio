@@ -1027,6 +1027,33 @@ target_link_libraries(EditorJournalWriterTest EditHistory GTest::gtest_main)
 gtest_discover_tests(EditorJournalWriterTest TEST_PREFIX "EditorJournalWriterTest."
   PROPERTIES LABELS "ci_core_flow")
 
+# Phase 5H: recovery REDO, atomic DuckDB materialization, compaction, fault injection.
+add_executable(EditorHistoryMaterializerTest edit/history/editor_history_materializer_test.cpp)
+target_include_directories(EditorHistoryMaterializerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorHistoryMaterializerTest
+  EditorHistoryMaterializer
+  ProjectService
+  EditHistory
+  GTest::gtest_main)
+gtest_discover_tests(EditorHistoryMaterializerTest TEST_PREFIX "EditorHistoryMaterializerTest."
+  PROPERTIES LABELS "ci_core_flow")
+if(WIN32)
+  if(TARGET alcedo_lensfun)
+    add_custom_command(TARGET EditorHistoryMaterializerTest POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "$<TARGET_FILE:alcedo_lensfun>"
+              "$<TARGET_FILE_DIR:EditorHistoryMaterializerTest>/lensfun.dll"
+      VERBATIM)
+  endif()
+  if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
+    add_custom_command(TARGET EditorHistoryMaterializerTest POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll"
+              "$<TARGET_FILE_DIR:EditorHistoryMaterializerTest>/duckdb.dll"
+      VERBATIM)
+  endif()
+endif()
+
 add_executable(ProjectServiceTest app/project_service_test.cpp)
 target_include_directories(ProjectServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ProjectServiceTest ProjectService GTest::gtest_main)

@@ -1930,27 +1930,34 @@ Acceptance:
 
 ### Phase 5H - Recovery, compaction, and injected storage failures
 
+**Status: complete (2026-07-20).** `EditorHistoryMaterializer` owns REDO through a durable operation
+sequence and a single DuckDB transaction that updates Version history, pipeline params, and
+`EditorRecoveryMetadata` together. `EditorJournalWriter` owns create-new compaction with verify +
+atomic replace, and `InjectedEditorJournalFile` covers short write, failed flush, failed replace,
+and checksum corruption. Recovery reconstructs from the committed journal chain; failed validation
+preserves the original bytes in a diagnostic bundle.
+
 Deliverables:
 
-- Add one DuckDB storage operation that atomically updates active Version history, active pipeline
+- [x] Add one DuckDB storage operation that atomically updates active Version history, active pipeline
   params, and recovery metadata on one connection. Separate `SaveHistory()` and `SavePipeline()`
   calls are forbidden for editor materialization and Version publication.
-- Implement idempotent replay from the stored materialized head and the valid committed journal
+- [x] Implement idempotent replay from the stored materialized head and the valid committed journal
   record chain.
-- Implement compaction as create-new, flush, verify, atomic replace, and directory durability steps;
+- [x] Implement compaction as create-new, flush, verify, atomic replace, and directory durability steps;
   never rewrite the active file in place.
-- Add injectable file operations for short write, failed flush, failed atomic replace, checksum
+- [x] Add injectable file operations for short write, failed flush, failed atomic replace, checksum
   corruption, stale head marker, duplicated record, and reordered task completion.
-- Preserve the original journal and emit a diagnostic bundle when recovery cannot validate a record.
+- [x] Preserve the original journal and emit a diagnostic bundle when recovery cannot validate a record.
 
 Acceptance:
 
-- Every injected failure recovers to either the state before or after one complete record, never a
+- [x] Every injected failure recovers to either the state before or after one complete record, never a
   hybrid.
-- Replaying the same journal twice is idempotent.
-- A failed compaction leaves the previous journal recoverable.
-- Materialization interrupted after journal durability reconstructs the same history/pipeline head.
-- A process termination between history and pipeline writes cannot expose mismatched state because
+- [x] Replaying the same journal twice is idempotent.
+- [x] A failed compaction leaves the previous journal recoverable.
+- [x] Materialization interrupted after journal durability reconstructs the same history/pipeline head.
+- [x] A process termination between history and pipeline writes cannot expose mismatched state because
   both writes and recovery metadata share one DuckDB transaction.
 
 ### Phase 5I - Reproducible forced-termination fuzz harness

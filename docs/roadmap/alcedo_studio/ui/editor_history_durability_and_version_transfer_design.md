@@ -112,25 +112,22 @@ Control-record sequences must never be mistaken for materialized edit-history op
 ## Current implementation differences
 
 Phase 5F completed checksummed in-memory record framing, atomic `RewriteTimeline`, record-chain
-validation, and the independent simulator. It did not complete file durability or atomic DuckDB
-materialization.
+validation, and the independent simulator. Phase 5G completed `EditorJournalWriter`,
+`JournalBatchCommit`, file flush, and durable sequence publication. Phase 5H completed
+`EditorHistoryMaterializer`, atomic DuckDB materialization with `EditorRecoveryMetadata`, journal
+recovery REDO, create-new compaction, injectable file faults, and diagnostic bundles.
 
-The following current behaviors must change in their owning later phases:
+The following behaviors remain for later shared adjustment-transfer integration:
 
 - `AdjustmentTransferService::Apply(kPaste)` currently uses the live target pipeline as the new
   Version base. The required base is the target image's import/default pipeline.
 - `AdjustmentTransferService::Apply(kMerge)` currently creates a transaction-free materialized
   Version. It must instead copy the active applied transaction chain and append incoming
   transactions.
-- `SaveHistory()` and `SavePipeline()` currently issue independent database updates. Editor
-  materialization and Version publication require one DuckDB transaction on one connection.
-- `IEditorJournalPort::AppendBarrier` currently combines several meanings. Phase 5G replaces it
-  with typed finalize, journal-commit, and materialize operations.
-- `EditorTransactionJournal` is currently in-memory and has no `JournalBatchCommit` record. Phase 5G
-  adds the writer, batch commit record, file flush, and durable sequence.
+- Paste/Merge Version publication should call the same atomic history/pipeline/recovery path as
+  editor materialization rather than separate `SaveHistory()` / `SavePipeline()` service calls.
 
-These differences do not reopen the completed Phase 5F timeline algorithm. They define required
-Phase 5G durability work and later shared adjustment-transfer integration.
+These differences do not reopen the completed Phase 5F–5H recovery journal algorithm.
 
 ## Exact journal flush procedure
 

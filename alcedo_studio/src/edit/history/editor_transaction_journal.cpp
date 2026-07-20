@@ -1030,6 +1030,201 @@ auto JournalTimelineSimulator::ReplayCommittedRecordChain(const EditorTransactio
   return ReplayDecodedRecords(this, journal.DecodeRecordChain(), true);
 }
 
+void JournalTimelineSimulator::SeedMaterializedState(
+    EditorJournalIdentity identity, std::vector<EditTransaction> transactions, std::size_t cursor,
+    std::uint64_t materialized_operation_sequence,
+    std::optional<nlohmann::json> head_pipeline_params) {
+  identity_              = identity;
+  transactions_          = std::move(transactions);
+  cursor_                = cursor;
+  if (cursor_ > transactions_.size()) {
+    cursor_ = transactions_.size();
+  }
+  tx_id_high_water_      = 0;
+  for (const auto& tx : transactions_) {
+    NoteTransactionId(tx.GetTransactionID());
+  }
+  // last_sequence tracks the highest observed record sequence. Seeding from the
+  // materialized edit-history operation sequence lets recovery apply only later
+  // journal-committed operations without replaying the already-materialized prefix.
+  last_sequence_         = materialized_operation_sequence;
+  materialized_sequence_ = materialized_operation_sequence;
+  head_pipeline_params_  = std::move(head_pipeline_params);
+}
+
+auto JournalTimelineSimulator::ReplayCommittedThroughOperationSequence(
+    const EditorTransactionJournal& journal, std::uint64_t max_operation_sequence)
+    -> EditorJournalApplyResult {
+  Reset(identity_);
+  const auto decoded = journal.DecodeRecordChain();
+  EditorJournalApplyResult last;
+  last.status = EditorJournalApplyStatus::Applied;
+
+  std::vector<std::uint64_t> valid_commit_sequences;
+  std::uint64_t              previous_valid_commit = 0;
+  for (const auto& record : decoded.records) {
+    if (record.record_type != EditorJournalRecordType::JournalBatchCommit ||
+        !record.batch_commit.has_value()) {
+      continue;
+    }
+    const auto& payload        = *record.batch_commit;
+    const auto  expected_first = previous_valid_commit + 1;
+    if (payload.previous_batch_commit_sequence != previous_valid_commit ||
+        payload.first_covered_sequence != expected_first ||
+        payload.last_covered_sequence != record.sequence - 1 ||
+        payload.first_covered_sequence > payload.last_covered_sequence ||
+        payload.last_operation_sequence > payload.last_covered_sequence ||
+        ComputeEditorJournalRecordChainHash(decoded.records, payload.last_covered_sequence) !=
+            payload.record_chain_hash) {
+      continue;
+    }
+    if (max_operation_sequence != 0 &&
+        payload.last_operation_sequence > max_operation_sequence) {
+      // An unflushed or not-yet-materializable batch: stop accepting later commits.
+      break;
+    }
+    std::uint64_t last_operation_sequence = 0;
+    for (const auto& covered : decoded.records) {
+      if (covered.sequence < payload.first_covered_sequence ||
+          covered.sequence > payload.last_covered_sequence ||
+          !IsEditorJournalEditHistoryRecord(covered.record_type)) {
+        continue;
+      }
+      last_operation_sequence = covered.sequence;
+    }
+    if (last_operation_sequence != payload.last_operation_sequence) {
+      continue;
+    }
+    previous_valid_commit = record.sequence;
+    valid_commit_sequences.push_back(record.sequence);
+  }
+
+  const std::uint64_t last_committed_sequence =
+      valid_commit_sequences.empty() ? 0 : valid_commit_sequences.back() - 1;
+
+  for (const auto& record : decoded.records) {
+    if (!valid_commit_sequences.empty() && record.sequence > last_committed_sequence) {
+      continue;
+    }
+    if (record.record_type == EditorJournalRecordType::JournalBatchCommit) {
+      if (std::find(valid_commit_sequences.begin(), valid_commit_sequences.end(),
+                    record.sequence) != valid_commit_sequences.end()) {
+        last = ApplyDecodedRecord(record);
+        if (last.status != EditorJournalApplyStatus::Applied &&
+            last.status != EditorJournalApplyStatus::IgnoredAlreadyMaterialized) {
+          return last;
+        }
+      }
+      continue;
+    }
+    last = ApplyDecodedRecord(record);
+    if (last.status != EditorJournalApplyStatus::Applied &&
+        last.status != EditorJournalApplyStatus::IgnoredAlreadyMaterialized) {
+      return last;
+    }
+  }
+  return last;
+}
+
+auto JournalTimelineSimulator::ReplayCommittedAfterMaterialized(
+    const EditorTransactionJournal& journal) -> EditorJournalApplyResult {
+  const auto decoded = journal.DecodeRecordChain();
+  EditorJournalApplyResult last;
+  last.status = EditorJournalApplyStatus::Applied;
+
+  std::vector<std::uint64_t> valid_commit_sequences;
+  std::uint64_t              previous_valid_commit = 0;
+  for (const auto& record : decoded.records) {
+    if (record.record_type != EditorJournalRecordType::JournalBatchCommit ||
+        !record.batch_commit.has_value()) {
+      continue;
+    }
+    const auto& payload        = *record.batch_commit;
+    const auto  expected_first = previous_valid_commit + 1;
+    if (payload.previous_batch_commit_sequence != previous_valid_commit ||
+        payload.first_covered_sequence != expected_first ||
+        payload.last_covered_sequence != record.sequence - 1 ||
+        payload.first_covered_sequence > payload.last_covered_sequence ||
+        payload.last_operation_sequence > payload.last_covered_sequence ||
+        ComputeEditorJournalRecordChainHash(decoded.records, payload.last_covered_sequence) !=
+            payload.record_chain_hash) {
+      continue;
+    }
+    std::uint64_t last_operation_sequence = 0;
+    for (const auto& covered : decoded.records) {
+      if (covered.sequence < payload.first_covered_sequence ||
+          covered.sequence > payload.last_covered_sequence ||
+          !IsEditorJournalEditHistoryRecord(covered.record_type)) {
+        continue;
+      }
+      last_operation_sequence = covered.sequence;
+    }
+    if (last_operation_sequence != payload.last_operation_sequence) {
+      continue;
+    }
+    previous_valid_commit = record.sequence;
+    valid_commit_sequences.push_back(record.sequence);
+  }
+
+  if (valid_commit_sequences.empty() &&
+      std::any_of(decoded.records.begin(), decoded.records.end(), [](const auto& record) {
+        return record.record_type == EditorJournalRecordType::JournalBatchCommit;
+      })) {
+    last.status  = EditorJournalApplyStatus::RejectedInvalidPayload;
+    last.message = "journal has no valid batch commit";
+    return last;
+  }
+
+  const std::uint64_t last_committed_sequence =
+      valid_commit_sequences.empty() ? 0 : valid_commit_sequences.back() - 1;
+
+  for (const auto& record : decoded.records) {
+    if (!valid_commit_sequences.empty() && record.sequence > last_committed_sequence) {
+      continue;
+    }
+    if (record.record_type == EditorJournalRecordType::JournalBatchCommit) {
+      // Commit records are validation-only during recovery REDO.
+      if (record.sequence > last_sequence_) {
+        last_sequence_ = record.sequence;
+      }
+      continue;
+    }
+    if (IsEditorJournalEditHistoryRecord(record.record_type)) {
+      if (record.sequence <= materialized_sequence_) {
+        if (record.sequence > last_sequence_) {
+          last_sequence_ = record.sequence;
+        }
+        continue;
+      }
+      last = ApplyDecodedRecord(record);
+      if (last.status != EditorJournalApplyStatus::Applied &&
+          last.status != EditorJournalApplyStatus::IgnoredAlreadyMaterialized) {
+        return last;
+      }
+      continue;
+    }
+    // MaterializedHead / markers after the materialization point are optional
+    // diagnostics; apply when they post-date the seed so hashes stay consistent.
+    if (record.sequence <= materialized_sequence_) {
+      if (record.sequence > last_sequence_) {
+        last_sequence_ = record.sequence;
+      }
+      continue;
+    }
+    last = ApplyDecodedRecord(record);
+    if (last.status != EditorJournalApplyStatus::Applied &&
+        last.status != EditorJournalApplyStatus::IgnoredAlreadyMaterialized) {
+      return last;
+    }
+  }
+
+  if (decoded.stopped_on_corrupt_record && valid_commit_sequences.empty()) {
+    last.status  = EditorJournalApplyStatus::RejectedInvalidPayload;
+    last.message = decoded.message.empty() ? "corrupt journal tail" : decoded.message;
+  }
+  return last;
+}
+
 WorkingVersionJournalRecorder::WorkingVersionJournalRecorder(EditorTransactionJournal* journal,
                                                              EditorJournalIdentity     identity)
     : journal_(journal), identity_(identity) {}
