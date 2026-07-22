@@ -6,6 +6,7 @@
 
 #include <format>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
@@ -17,6 +18,49 @@ auto MakeStringPtr(std::string value) -> std::unique_ptr<std::string> {
   // Always allocate a string (possibly empty). DuckORM's select path constructs
   // std::string from duckdb_value_varchar without a null check, so SQL NULL is unsafe.
   return std::make_unique<std::string>(std::move(value));
+}
+
+auto MakeSerializedPipelineState(const root_id_t& root_id,
+                                 const nlohmann::json& pipeline_params)
+    -> nlohmann::json {
+  return nlohmann::json{{"state_format_version", 1},
+                        {"root_id", root_id.ToString()},
+                        {"head_commit_hash", ""},
+                        {"transaction_chain_hash", ComputeRootChainHash(root_id).ToString()},
+                        {"pipeline_params", pipeline_params}};
+}
+
+auto MakeRootSerializedPipelineState(const nlohmann::json& pipeline_params,
+                                     const std::optional<nlohmann::json>& raw_color_context)
+    -> nlohmann::json {
+  nlohmann::json state{{"state_format_version", 1}, {"pipeline_params", pipeline_params}};
+  state["raw_color_context"] = raw_color_context.value_or(nullptr);
+  return state;
+}
+
+auto SqlQuote(std::string_view value) -> std::string {
+  std::string quoted;
+  quoted.reserve(value.size() + 2);
+  quoted.push_back('\'');
+  for (const char ch : value) {
+    if (ch == '\'') {
+      quoted.push_back('\'');
+    }
+    quoted.push_back(ch);
+  }
+  quoted.push_back('\'');
+  return quoted;
+}
+
+void ExecuteOrThrow(duckdb_connection conn, const std::string& sql) {
+  duckdb_result result;
+  if (duckdb_query(conn, sql.c_str(), &result) != DuckDBSuccess) {
+    const char* error = duckdb_result_error(&result);
+    const std::string message = error ? error : "CommitGraphService query failed";
+    duckdb_destroy_result(&result);
+    throw std::runtime_error(message);
+  }
+  duckdb_destroy_result(&result);
 }
 
 auto QueryUint64(duckdb_connection conn, const std::string& sql) -> std::uint64_t {
@@ -104,11 +148,11 @@ auto CommitGraphService::ToImageEditStateParams(const ImageEditState& state)
       MakeStringPtr(HeadCommitHashToStorage(state.materialized_head_commit_hash));
   params.materialized_transaction_chain_hash =
       MakeStringPtr(state.materialized_transaction_chain_hash.ToString());
-  if (state.stored_pipeline_projection.has_value()) {
-    params.stored_pipeline_projection =
-        MakeStringPtr(state.stored_pipeline_projection->dump());
+  if (state.serialized_pipeline_state.has_value()) {
+    params.serialized_pipeline_state =
+        MakeStringPtr(state.serialized_pipeline_state->dump());
   } else {
-    params.stored_pipeline_projection = MakeStringPtr(std::string{"null"});
+    params.serialized_pipeline_state = MakeStringPtr(std::string{"null"});
   }
   params.project_schema_version = state.project_schema_version;
   return params;
@@ -127,10 +171,10 @@ auto CommitGraphService::FromImageEditStateParams(ImageEditStateMapperParams&& p
   state.materialized_transaction_chain_hash = Hash128::FromString(
       params.materialized_transaction_chain_hash ? *params.materialized_transaction_chain_hash
                                                  : std::string{});
-  if (params.stored_pipeline_projection && !params.stored_pipeline_projection->empty() &&
-      *params.stored_pipeline_projection != "null") {
-    state.stored_pipeline_projection =
-        nlohmann::json::parse(*params.stored_pipeline_projection);
+  if (params.serialized_pipeline_state && !params.serialized_pipeline_state->empty() &&
+      *params.serialized_pipeline_state != "null") {
+    state.serialized_pipeline_state =
+        nlohmann::json::parse(*params.serialized_pipeline_state);
   }
   state.project_schema_version = params.project_schema_version;
   return state;
@@ -207,6 +251,52 @@ auto CommitGraphService::GetImageEditState(sl_element_id_t element_id)
   return FromImageEditStateParams(std::move(rows.front()));
 }
 
+void CommitGraphService::InsertRootSerializedPipelineState(
+    const root_id_t& root_id, sl_element_id_t element_id,
+    const nlohmann::json& serialized_pipeline_state) {
+  ExecuteOrThrow(conn_, std::format(
+                            "INSERT INTO PipelineRoot "
+                            "(root_id, element_id, serialized_pipeline_state) "
+                            "VALUES ({}, {}, CAST({} AS JSON));",
+                            SqlQuote(root_id.ToString()), element_id,
+                            SqlQuote(serialized_pipeline_state.dump())));
+}
+
+auto CommitGraphService::GetRootSerializedPipelineState(sl_element_id_t element_id,
+                                                        const root_id_t& root_id)
+    -> std::optional<nlohmann::json> {
+  duckdb_result result;
+  const auto sql = std::format("SELECT element_id, serialized_pipeline_state::VARCHAR "
+                               "FROM PipelineRoot "
+                               "WHERE root_id={};",
+                               SqlQuote(root_id.ToString()));
+  if (duckdb_query(conn_, sql.c_str(), &result) != DuckDBSuccess) {
+    const char* error = duckdb_result_error(&result);
+    const std::string message = error ? error : "CommitGraphService root state query failed";
+    duckdb_destroy_result(&result);
+    throw std::runtime_error(message);
+  }
+  if (duckdb_row_count(&result) == 0) {
+    duckdb_destroy_result(&result);
+    return std::nullopt;
+  }
+  const auto stored_element_id = static_cast<sl_element_id_t>(duckdb_value_int64(&result, 0, 0));
+  if (stored_element_id != element_id) {
+    duckdb_destroy_result(&result);
+    throw std::runtime_error("CommitGraphService: root belongs to a different image");
+  }
+  char* raw = duckdb_value_varchar(&result, 1, 0);
+  const std::string encoded = raw ? raw : "";
+  if (raw) {
+    duckdb_free(raw);
+  }
+  duckdb_destroy_result(&result);
+  if (encoded.empty()) {
+    throw std::runtime_error("CommitGraphService: root serialized pipeline state is empty");
+  }
+  return nlohmann::json::parse(encoded);
+}
+
 void CommitGraphService::Materialize(const CommitGraphMaterialization& materialization) {
   // Validate fully before any DuckDB write so a bad capture leaves prior rows unchanged.
   materialization.Validate();
@@ -251,6 +341,38 @@ auto CommitGraphService::CreateEmptyPersisted(sl_element_id_t element_id,
   auto graph          = CommitGraph::CreateEmpty(element_id, std::move(default_display_name));
   auto materialization = graph.CaptureMaterialization();
   Materialize(materialization);
+  graph.ApplyMaterializedState(materialization.image_state);
+  return graph;
+}
+
+auto CommitGraphService::CreateRootPipelinePersisted(
+    sl_element_id_t element_id, const nlohmann::json& root_pipeline_params,
+    std::optional<nlohmann::json> raw_color_context,
+    std::string default_display_name) -> CommitGraph {
+  if (GetImageEditState(element_id).has_value()) {
+    throw std::runtime_error("CommitGraphService: image root already exists");
+  }
+
+  auto graph = CommitGraph::CreateEmpty(element_id, std::move(default_display_name));
+  auto materialization = graph.CaptureMaterializationWithSerializedPipelineState(
+      MakeSerializedPipelineState(graph.GetRootId(), root_pipeline_params));
+  materialization.Validate();
+
+  duckorm::begin_transaction(conn_);
+  try {
+    InsertRootSerializedPipelineState(
+        graph.GetRootId(), element_id,
+        MakeRootSerializedPipelineState(root_pipeline_params, raw_color_context));
+    for (const auto& ref : materialization.version_refs) {
+      UpsertVersionRef(ref);
+    }
+    UpsertImageEditState(materialization.image_state);
+    duckorm::commit_transaction(conn_);
+  } catch (...) {
+    duckorm::rollback_transaction(conn_);
+    throw;
+  }
+
   graph.ApplyMaterializedState(materialization.image_state);
   return graph;
 }

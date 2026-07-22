@@ -26,7 +26,7 @@ This document separates three concerns that were previously all described as jou
 3. DuckDB owns database-page recovery and its own physical WAL.
 
 The application recovery log is not a second user history. It durably records changes to the
-active `WorkingVersion` so that the stored `Version` and pipeline projection can be reconstructed
+active `WorkingVersion` so that the stored `Version` and serialized pipeline state can be reconstructed
 after process termination. User Undo/Redo remains part of edit history and must not be confused
 with recovery UNDO.
 

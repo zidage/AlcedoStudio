@@ -2,8 +2,8 @@
 
 Date: 2026-07-22
 
-Status: approved design; 6C-1, 6C-2, and 6C-2-Fix implemented at the infrastructure level.
-6C-3 production pipeline work may proceed on the corrected graph/materialization API.
+Status: approved design; 6C-1, 6C-2, 6C-2-Fix, and 6C-3 implemented.
+6C-4 production journal cutover may proceed on the validated serialized pipeline state API.
 
 Related documents:
 
@@ -19,7 +19,7 @@ target data model and product behavior are defined here.
 ## Outcome
 
 Replace the current history implementation with a small Git-like commit graph and make the pipeline
-snapshot, active Version, recovery journal, stored pipeline projection, adjustment panels, and
+snapshot, active Version, recovery journal, serialized pipeline state, adjustment panels, and
 rendered frame agree on one checked-out head.
 
 The editor continues to keep one live pipeline snapshot for the focused image. A slider drag changes
@@ -51,13 +51,13 @@ or journal layouts.
   commits applied to the pipeline. This is intentionally not called a Merkle root.
 - **Pipeline snapshot**: the complete live runtime aggregate managed by `PipelineMgmtService`,
   including operator state, execution structure, kernel launchers, and current transient cache state.
-- **Stored pipeline projection**: the serializable pipeline state stored in DuckDB and used to rebuild
+- **Serialized pipeline state**: the operator state stored in DuckDB and used to rebuild
   a live pipeline snapshot. Runtime GPU handles, launchers, cache contents, and scheduler-selected
   cache policy are not persisted as history and are not hashed.
 - **Save checkpoint**: the short-lived global editor save state that prevents image selection, Version
   checkout, and workspace switching until the current committed journal prefix has been materialized.
 - **Materialize**: insert journaled commit objects and atomically advance the checked-out Version ref,
-  stored pipeline projection, and recovery metadata in DuckDB.
+  serialized pipeline state, and recovery metadata in DuckDB.
 
 Use `save checkpoint` consistently for this workflow: the current committed state is stored before
 the requested navigation continues.
@@ -90,7 +90,7 @@ ImageEditState
   active_version_id
   materialized_head_commit_hash
   materialized_transaction_chain_hash
-  stored_pipeline_projection
+  serialized_pipeline_state
   project_schema_version
 ```
 
@@ -193,7 +193,7 @@ executor graph, operator instances, launchers, and the transient cache state sel
 `pipeline_scheduler.cpp`. Cache policy, resize/crop scheduling state, GPU handles, and cache contents
 remain runtime concerns and are excluded from the commit and chain hashes.
 
-The stored pipeline projection is an acceleration cache. On editor open or Version checkout,
+The serialized pipeline state is an acceleration cache. On editor open or Version checkout,
 `PipelineMgmtService` validates:
 
 - root ID;
@@ -201,13 +201,13 @@ The stored pipeline projection is an acceleration cache. On editor open or Versi
 - materialized transaction-chain hash.
 
 If all three match the checked-out Version, the service rebuilds the live runtime snapshot from the
-stored projection. If they do not match, it reconstructs from root and first-parent commits, replaces
-the stale stored projection on the next save, and emits a diagnostic. Missing or invalid reachable
+serialized state. If they do not match, it reconstructs from root and first-parent commits, replaces
+the stale serialized state on the next save, and emits a diagnostic. Missing or invalid reachable
 commit objects are data corruption and must fail the open instead of silently selecting another
 Version.
 
 `thumbnail_service.cpp` does not perform this validation. Thumbnail work consumes the stored
-projection selected by the save path; the editor open/checkout path owns history validation.
+serialized state selected by the save path; the editor open/checkout path owns history validation.
 
 ## Edit, save, and navigation flow
 
@@ -236,7 +236,7 @@ While a save checkpoint owns the global save lock:
   `interaction_policy_controller.cpp` with a localized reason;
 - a requested image/workspace transition remains pending and resumes only after save success;
 - the GUI thread does not wait on DuckDB or file I/O;
-- the service captures the committed pipeline projection, working head, and chain hash together
+- the service captures the committed serialized pipeline state, working head, and chain hash together
   before starting DuckDB I/O;
 - current-image preview may continue after that capture, but a finalized edit commit is queued behind
   the global save lock and becomes the first record of the next journal prefix;
@@ -249,7 +249,7 @@ busy flag.
 ### DuckDB materialization
 
 Materialization does not replay commits into or otherwise manipulate a pipeline. At save-checkpoint
-start, `PipelineMgmtService` exports one immutable serializable projection from the committed live
+start, `PipelineMgmtService` exports one immutable serialized state from the committed live
 snapshot together with its working head and transaction-chain hash. This is persistence input, not a
 second live executor. The materializer recomputes commit hashes, validates head moves, and advances
 the journal state only; the final journal head/hash must match the captured pipeline head/hash.
@@ -263,7 +263,7 @@ One DuckDB transaction performs all of the following:
 4. Advance the journal head/hash through commits and head moves in record order.
 5. Compare the computed head/hash with the captured committed pipeline head/hash.
 6. Move the checked-out Version ref to the final commit hash.
-7. Store the captured matching pipeline projection.
+7. Store the captured matching serialized pipeline state.
 8. Advance recovery metadata and commit.
 
 No save path may update history and pipeline through separate DuckDB transactions.
@@ -285,7 +285,7 @@ resume a pending navigation request.
 Focused image A
   -> finalize A's open edit command if required
   -> start a save checkpoint and acquire the global save lock
-  -> capture A's committed pipeline projection, head, and chain hash
+  -> capture A's committed serialized pipeline state, head, and chain hash
   -> materialize A journal into DuckDB
   -> truncate A journal
   -> return A's live pipeline snapshot to PipelineMgmtService
@@ -326,7 +326,7 @@ Paste is branch replacement, not cherry-pick:
 2. Start an independent target-local branch at the target image root.
 3. Convert the incoming adjustment package into a forward-replayable commit chain against that root.
 4. Create a new Version ref pointing to that branch head.
-5. Atomically set it as the active Version and store its matching pipeline projection.
+5. Atomically set it as the active Version and store its matching serialized pipeline state.
 6. Checkout the new Version.
 
 The pasted branch never inherits commits from the previously active Version. If an existing Version
@@ -344,7 +344,7 @@ Merge preserves both branches:
 5. Create one merge commit whose first parent is the current Version head and whose second parent is
    the incoming branch head.
 6. Store the complete resolved field delta in that merge commit.
-7. Advance the current Version ref to the merge commit and store the matching projection in one
+7. Advance the current Version ref to the merge commit and store the matching serialized state in one
    DuckDB transaction.
 
 Canceling conflict resolution creates no merge commit and moves no ref. Reconstruction follows the
@@ -418,7 +418,7 @@ Deliverables:
   `materialized_transaction_chain_hash`.
 - Replace or restrict the generic full-graph save entrypoint with a materialization input that
   captures the checked-out Version ID, final materialized head, recomputed transaction-chain hash,
-  and stored pipeline projection as one immutable value. Validate their agreement before starting
+  and serialized pipeline state as one immutable value. Validate their agreement before starting
   DuckDB writes, then store them in one transaction.
 - Make graph load validate the complete reachable structure before returning a usable graph:
   every first and second parent must exist, belong to the same root, and satisfy commit-kind parent
@@ -449,7 +449,7 @@ Acceptance:
 - Attempting to persist a Version head that disagrees with the materialized head or chain hash
   fails before the DuckDB transaction commits and leaves all prior rows unchanged.
 - A valid materialization advances the commit rows, checked-out Version head, image materialized
-  head, transaction-chain hash, and stored projection together; close and recreate `DBController`,
+  head, transaction-chain hash, and serialized pipeline state together; close and recreate `DBController`,
   then load and verify the same values.
 - Loading fails immediately when any reachable first parent or merge second parent is missing,
   belongs to another root, or violates the Edit/Merge parent rules.
@@ -459,7 +459,7 @@ Acceptance:
   canonical bytes. Reordering equivalent Merge field inputs does not change the payload/hash, while
   swapping merge parents does.
 - Repository call-site scans find no persistence path that can atomically store mutually
-  inconsistent Version head, materialized head, chain hash, or projection values.
+  inconsistent Version head, materialized head, chain hash, or serialized state values.
 
 ### Phase 6C-3 - Immutable root and pipeline snapshot validation
 
@@ -467,7 +467,7 @@ Deliverables:
 
 - Persist the image-specific root produced after import metadata resolution.
 - Extend the live pipeline snapshot with root ID, working head, and transaction-chain hash.
-- Teach `PipelineMgmtService` to accept a matching stored projection or rebuild from root and commit
+- Teach `PipelineMgmtService` to accept matching serialized state or rebuild from root and commit
   graph on mismatch.
 - Keep scheduler cache policy, temporary resize/crop state, GPU handles, and cache contents outside
   history hashing.
@@ -475,7 +475,7 @@ Deliverables:
 Acceptance:
 
 - Matching root/head/chain opens without full replay.
-- A stale stored projection rebuilds to the checked-out Version and is marked for later replacement.
+- Stale serialized state rebuilds to the checked-out Version and is replaced when the guard returns.
 - A missing reachable commit fails with a diagnostic.
 - Thumbnail generation does not duplicate editor history validation.
 
@@ -502,8 +502,8 @@ Deliverables:
 
 - Add the project-wide editor save coordinator.
 - Publish editor navigation locks through `InteractionPolicyController`.
-- Capture the committed live pipeline projection/head/hash without constructing a second live
-  executor, then materialize commits, Version head, that projection, and recovery metadata in one
+- Capture the committed live serialized pipeline state/head/hash without constructing a second live
+  executor, then materialize commits, Version head, that state, and recovery metadata in one
   DuckDB transaction.
 - Truncate the materialized journal after DuckDB success and recover safely from the DB-commit/
   truncate window.
@@ -514,7 +514,7 @@ Acceptance:
 - Image B does not begin loading before image A's save finishes.
 - Materialization performs no pipeline replay or pipeline mutation; it only verifies the journal
   fold against the captured pipeline head/hash.
-- Failure before DuckDB commit leaves the prior Version head and projection.
+- Failure before DuckDB commit leaves the prior Version head and serialized pipeline state.
 - Failure after DuckDB commit but before truncation does not replay a commit twice.
 - Saving with no journal changes succeeds without moving the Version head.
 
@@ -594,7 +594,7 @@ Use one real RAW image and deterministic clocks:
 1. import the image and record its immutable root;
 2. drag exposure through multiple preview values and release once;
 3. verify one journaled edit commit and one live chain-hash advance;
-4. autosave and verify the commit row, Version head, stored projection, recovery metadata, and
+4. autosave and verify the commit row, Version head, serialized pipeline state, recovery metadata, and
    truncated journal;
 5. undo, redo, undo, then edit contrast and verify the old redo child becomes unreachable;
 6. create a second Version, checkout it, and verify reconstruction from root;

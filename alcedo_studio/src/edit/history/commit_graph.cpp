@@ -329,22 +329,24 @@ auto BuildMaterializationBase(const CommitGraph& graph, const ImageEditState& st
 }  // namespace
 
 auto CommitGraph::CaptureMaterialization() const -> CommitGraphMaterialization {
-  // Preserve the current stored projection; do not treat absence of an argument as clear.
+  // Preserve the current serialized state; do not treat absence of an argument as clear.
   auto materialization = BuildMaterializationBase(*this, state_);
   materialization.Validate();
   return materialization;
 }
 
-auto CommitGraph::CaptureMaterializationWithProjection(
-    std::optional<nlohmann::json> stored_pipeline_projection) const -> CommitGraphMaterialization {
-  auto materialization                                   = BuildMaterializationBase(*this, state_);
-  materialization.image_state.stored_pipeline_projection = std::move(stored_pipeline_projection);
+auto CommitGraph::CaptureMaterializationWithSerializedPipelineState(
+    std::optional<nlohmann::json> serialized_pipeline_state) const
+    -> CommitGraphMaterialization {
+  auto materialization                                  = BuildMaterializationBase(*this, state_);
+  materialization.image_state.serialized_pipeline_state = std::move(serialized_pipeline_state);
   materialization.Validate();
   return materialization;
 }
 
-auto CommitGraph::CaptureMaterializationClearingProjection() const -> CommitGraphMaterialization {
-  return CaptureMaterializationWithProjection(std::nullopt);
+auto CommitGraph::CaptureMaterializationClearingSerializedPipelineState() const
+    -> CommitGraphMaterialization {
+  return CaptureMaterializationWithSerializedPipelineState(std::nullopt);
 }
 
 void CommitGraph::ApplyMaterializedState(const ImageEditState& materialized_state) {

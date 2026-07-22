@@ -84,7 +84,7 @@ void EditorController::OpenEditor(uint elementId, uint imageId) {
   FinalizeEditorSession(true);
 
   try {
-    auto pipeline_guard = psvc->LoadPipeline(elementId);
+    auto pipeline_guard = psvc->LoadEditorPipeline(elementId);
     if (!pipeline_guard || !pipeline_guard->pipeline_) {
       throw std::runtime_error("Pipeline is unavailable.");
     }

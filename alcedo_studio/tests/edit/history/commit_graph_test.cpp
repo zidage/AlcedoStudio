@@ -297,7 +297,7 @@ TEST(EditCommitHashing, NonReplayableOperatorAndStageSentinelsAreRejected) {
   EXPECT_THROW(MakeEditAt(Hash128{1, 2}, std::nullopt, 3, payload), std::runtime_error);
 }
 
-TEST(CommitGraphProjectionCapture, DefaultCapturePreservesProjectionAndClearIsExplicit) {
+TEST(CommitGraphSerializedStateCapture, DefaultCapturePreservesStateAndClearIsExplicit) {
   edit_history_test::CommitClockAccess::ResetGlobal(0);
   auto graph  = CommitGraph::CreateEmpty(77);
   auto commit = MakeEditAt(graph.GetRootId(), std::nullopt, CommitClock::NextGlobal(1),
@@ -305,17 +305,18 @@ TEST(CommitGraphProjectionCapture, DefaultCapturePreservesProjectionAndClearIsEx
   ASSERT_TRUE(graph.InsertCommit(commit));
   graph.MoveWorkingHead(graph.GetActiveVersionId(), commit.GetCommitHash());
 
-  const nlohmann::json projection = nlohmann::json{{"exposure", 0.2f}};
-  auto                 with_proj  = graph.CaptureMaterializationWithProjection(projection);
-  graph.ApplyMaterializedState(with_proj.image_state);
-  ASSERT_TRUE(graph.GetImageEditState().stored_pipeline_projection.has_value());
+  const nlohmann::json serialized_state = nlohmann::json{{"exposure", 0.2f}};
+  auto with_state =
+      graph.CaptureMaterializationWithSerializedPipelineState(serialized_state);
+  graph.ApplyMaterializedState(with_state.image_state);
+  ASSERT_TRUE(graph.GetImageEditState().serialized_pipeline_state.has_value());
 
   auto preserved = graph.CaptureMaterialization();
-  ASSERT_TRUE(preserved.image_state.stored_pipeline_projection.has_value());
-  EXPECT_EQ(*preserved.image_state.stored_pipeline_projection, projection);
+  ASSERT_TRUE(preserved.image_state.serialized_pipeline_state.has_value());
+  EXPECT_EQ(*preserved.image_state.serialized_pipeline_state, serialized_state);
 
-  auto cleared = graph.CaptureMaterializationClearingProjection();
-  EXPECT_FALSE(cleared.image_state.stored_pipeline_projection.has_value());
+  auto cleared = graph.CaptureMaterializationClearingSerializedPipelineState();
+  EXPECT_FALSE(cleared.image_state.serialized_pipeline_state.has_value());
 }
 
 TEST(CommitGraphMaterializedState, FailedApplyLeavesPriorStateUnchanged) {
@@ -491,22 +492,23 @@ TEST_F(CommitGraphPersistenceTests, TwoVersionRefsShareOneStoredCommitRow) {
   graph.MoveWorkingHead(graph.GetActiveVersionId(), commit.GetCommitHash());
   graph.CreateVersionRefAtHead("SharedHead", commit.GetCommitHash());
 
-  const nlohmann::json projection      = nlohmann::json{{"exposure", 1.25f}};
-  auto                 materialization = graph.CaptureMaterializationWithProjection(projection);
+  const nlohmann::json serialized_state = nlohmann::json{{"exposure", 1.25f}};
+  auto materialization =
+      graph.CaptureMaterializationWithSerializedPipelineState(serialized_state);
   ASSERT_NO_THROW(service.Materialize(materialization));
   graph.ApplyMaterializedState(materialization.image_state);
   EXPECT_EQ(service.CountCommitsForRoot(graph.GetRootId()), 1u);
   EXPECT_EQ(service.ListVersionRefsForElement(1001).size(), 2u);
-  ASSERT_TRUE(graph.GetImageEditState().stored_pipeline_projection.has_value());
-  EXPECT_EQ(*graph.GetImageEditState().stored_pipeline_projection, projection);
+  ASSERT_TRUE(graph.GetImageEditState().serialized_pipeline_state.has_value());
+  EXPECT_EQ(*graph.GetImageEditState().serialized_pipeline_state, serialized_state);
 
-  // Default capture must preserve the existing projection, not clear it.
+  // Default capture must preserve the existing serialized state, not clear it.
   ASSERT_NO_THROW(service.Materialize(graph.CaptureMaterialization()));
   EXPECT_EQ(service.CountCommitsForRoot(graph.GetRootId()), 1u);
   auto reloaded = service.LoadGraph(1001);
   ASSERT_TRUE(reloaded.has_value());
-  ASSERT_TRUE(reloaded->GetImageEditState().stored_pipeline_projection.has_value());
-  EXPECT_EQ(*reloaded->GetImageEditState().stored_pipeline_projection, projection);
+  ASSERT_TRUE(reloaded->GetImageEditState().serialized_pipeline_state.has_value());
+  EXPECT_EQ(*reloaded->GetImageEditState().serialized_pipeline_state, serialized_state);
 }
 
 TEST_F(CommitGraphPersistenceTests, InconsistentMaterializationLeavesPriorRowsUnchanged) {
@@ -544,7 +546,7 @@ TEST_F(CommitGraphPersistenceTests, MaterializationSurvivesDbControllerRecreate)
   commit_hash_t              head_hash{};
   transaction_chain_hash_t   chain_hash{};
   std::vector<commit_hash_t> first_parent_order;
-  nlohmann::json             projection = nlohmann::json{{"contrast", 0.5f}};
+  nlohmann::json             serialized_state = nlohmann::json{{"contrast", 0.5f}};
 
   {
     auto               guard = db_->GetConnectionGuard();
@@ -566,7 +568,8 @@ TEST_F(CommitGraphPersistenceTests, MaterializationSurvivesDbControllerRecreate)
     first_parent_order   = graph.FirstParentChain(c2.GetCommitHash());
     chain_hash           = graph.ChainHashForHead(c2.GetCommitHash());
 
-    auto materialization = graph.CaptureMaterializationWithProjection(projection);
+    auto materialization =
+        graph.CaptureMaterializationWithSerializedPipelineState(serialized_state);
     service.Materialize(materialization);
   }
 
@@ -589,8 +592,8 @@ TEST_F(CommitGraphPersistenceTests, MaterializationSurvivesDbControllerRecreate)
     EXPECT_EQ(loaded->GetImageEditState().materialized_transaction_chain_hash, chain_hash);
     EXPECT_EQ(loaded->FirstParentChain(head_hash), first_parent_order);
     EXPECT_EQ(loaded->ChainHashForHead(head_hash), chain_hash);
-    ASSERT_TRUE(loaded->GetImageEditState().stored_pipeline_projection.has_value());
-    EXPECT_EQ(*loaded->GetImageEditState().stored_pipeline_projection, projection);
+    ASSERT_TRUE(loaded->GetImageEditState().serialized_pipeline_state.has_value());
+    EXPECT_EQ(*loaded->GetImageEditState().serialized_pipeline_state, serialized_state);
   }
 }
 

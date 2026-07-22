@@ -70,8 +70,12 @@ class DBController {
       "active_version_id VARCHAR NOT NULL,"
       "materialized_head_commit_hash VARCHAR,"
       "materialized_transaction_chain_hash VARCHAR NOT NULL,"
-      "stored_pipeline_projection JSON,"
-      "project_schema_version INTEGER NOT NULL);";
+      "serialized_pipeline_state JSON,"
+      "project_schema_version INTEGER NOT NULL);"
+      "CREATE TABLE PipelineRoot ("
+      "root_id VARCHAR PRIMARY KEY,"
+      "element_id BIGINT UNIQUE NOT NULL,"
+      "serialized_pipeline_state JSON NOT NULL);";
 
   constexpr static const char* semantic_table_query =
       "CREATE TABLE IF NOT EXISTS SemanticModel ("
@@ -208,8 +212,12 @@ class DBController {
       "active_version_id VARCHAR NOT NULL,"
       "materialized_head_commit_hash VARCHAR,"
       "materialized_transaction_chain_hash VARCHAR NOT NULL,"
-      "stored_pipeline_projection JSON,"
-      "project_schema_version INTEGER NOT NULL);";
+      "serialized_pipeline_state JSON,"
+      "project_schema_version INTEGER NOT NULL);"
+      "CREATE TABLE IF NOT EXISTS PipelineRoot ("
+      "root_id VARCHAR PRIMARY KEY,"
+      "element_id BIGINT UNIQUE NOT NULL,"
+      "serialized_pipeline_state JSON NOT NULL);";
 
   constexpr static const char* ai_annotation_table_query =
       "CREATE TABLE IF NOT EXISTS AiImageUnderstanding ("

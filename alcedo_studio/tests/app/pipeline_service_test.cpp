@@ -4,9 +4,10 @@
 
 #include "app/pipeline_service.hpp"
 
+#include <duckdb.h>
 #include <gtest/gtest.h>
-
 #include <filesystem>
+#include <format>
 #include <memory>
 #include <atomic>
 #include <random>
@@ -15,10 +16,13 @@
 #include <vector>
 
 #include "app/project_service.hpp"
+#include "edit/history/commit_graph.hpp"
+#include "edit/history/edit_commit.hpp"
 #include "edit/operators/op_base.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "sleeve/storage_service.hpp"
+#include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
 #include "utils/clock/time_provider.hpp"
 
 namespace alcedo {
@@ -656,5 +660,231 @@ TEST_F(PipelineServiceTests, LoadPipelineSnapshotFallbackRepairsAndReleasesPin) 
   ps.SavePipeline(g);
 
   EXPECT_NO_THROW(ps.ReleasePipelineSnapshot(snap));
+}
+
+TEST_F(PipelineServiceTests, EditorLoadUsesMatchingSerializedStateWithoutReconstruction) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService first(project.GetStorageService());
+
+  auto initial = first.LoadEditorPipeline(701);
+  ASSERT_NE(initial, nullptr);
+  ASSERT_NE(initial->pipeline_, nullptr);
+  EXPECT_NE(initial->root_id_, Hash128{});
+  EXPECT_FALSE(initial->working_head_commit_hash_.has_value());
+  EXPECT_EQ(initial->transaction_chain_hash_, ComputeRootChainHash(initial->root_id_));
+  EXPECT_FALSE(initial->serialized_state_needs_writeback_);
+  const auto expected_params = initial->pipeline_->ExportPipelineParams();
+  first.SavePipeline(initial);
+
+  // A new service instance forces the editor path to read the serialized state rather than
+  // reusing the first service's cache entry.
+  PipelineMgmtService reopened(project.GetStorageService());
+  auto                loaded = reopened.LoadEditorPipeline(701);
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_EQ(loaded->root_id_, initial->root_id_);
+  EXPECT_EQ(loaded->working_head_commit_hash_, std::nullopt);
+  EXPECT_EQ(loaded->transaction_chain_hash_, ComputeRootChainHash(initial->root_id_));
+  EXPECT_FALSE(loaded->serialized_state_needs_writeback_);
+  EXPECT_EQ(loaded->pipeline_->ExportPipelineParams(), expected_params);
+  reopened.SavePipeline(loaded);
+}
+
+TEST_F(PipelineServiceTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService first(project.GetStorageService());
+
+  auto initial = first.LoadEditorPipeline(702);
+  ASSERT_NE(initial, nullptr);
+  const auto root_id = initial->root_id_;
+  first.SavePipeline(initial);
+
+  commit_hash_t            expected_head{};
+  transaction_chain_hash_t expected_chain{};
+  {
+    auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto db_lock  = db_guard.Lock();
+    CommitGraphService graph_service(db_guard.conn_);
+    auto graph = graph_service.LoadGraph(702);
+    ASSERT_TRUE(graph.has_value());
+
+    OrdinaryEditPayload payload;
+    payload.operator_type   = OperatorType::EXPOSURE;
+    payload.stage_name      = PipelineStageName::Basic_Adjustment;
+    payload.field_name      = "exposure";
+    payload.before_value    = 1.5f;
+    payload.after_value     = 2.0f;
+    payload.before_enabled  = true;
+    payload.after_enabled   = true;
+    auto commit = EditCommit::MakeEdit(graph->GetRootId(), std::nullopt, std::move(payload));
+    expected_head = commit.GetCommitHash();
+    ASSERT_TRUE(graph->InsertCommit(std::move(commit)));
+    graph->MoveWorkingHead(graph->GetActiveVersionId(), expected_head);
+    expected_chain = graph->ChainHashForHead(expected_head);
+
+    // This is an untagged serialized state. Its graph state remains valid, but the editor must
+    // reject it and replay the new first-parent commit from the immutable root.
+    graph_service.Materialize(graph->CaptureMaterializationWithSerializedPipelineState(
+        nlohmann::json{{"legacy", true}}));
+  }
+
+  PipelineMgmtService reopened(project.GetStorageService());
+  auto                rebuilt = reopened.LoadEditorPipeline(702);
+  ASSERT_NE(rebuilt, nullptr);
+  EXPECT_EQ(rebuilt->root_id_, root_id);
+  EXPECT_EQ(rebuilt->working_head_commit_hash_, expected_head);
+  EXPECT_EQ(rebuilt->transaction_chain_hash_, expected_chain);
+  EXPECT_TRUE(rebuilt->serialized_state_needs_writeback_);
+  EXPECT_EQ(rebuilt->pipeline_->ExportPipelineParams()["Basic Adjustment"]["Basic Adjustment"]
+                                          ["exposure"]["params"]["exposure"],
+            2.0f);
+  reopened.SavePipeline(rebuilt);
+
+  PipelineMgmtService after_writeback(project.GetStorageService());
+  auto                matched = after_writeback.LoadEditorPipeline(702);
+  ASSERT_NE(matched, nullptr);
+  EXPECT_FALSE(matched->serialized_state_needs_writeback_);
+  EXPECT_EQ(matched->working_head_commit_hash_, expected_head);
+  EXPECT_EQ(matched->transaction_chain_hash_, expected_chain);
+  EXPECT_EQ(matched->pipeline_->ExportPipelineParams()["Basic Adjustment"]["Basic Adjustment"]
+                                               ["exposure"]["params"]["exposure"],
+            2.0f);
+  after_writeback.SavePipeline(matched);
+}
+
+TEST_F(PipelineServiceTests, ImmutableRootRestoresImportedRawColorAndLensState) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService first(project.GetStorageService());
+
+  RawRuntimeColorContext raw_context;
+  raw_context.valid_                        = true;
+  raw_context.output_in_camera_space_       = true;
+  raw_context.camera_make_                  = "Alcedo Camera Co";
+  raw_context.camera_model_                 = "Root State Test";
+  raw_context.lens_metadata_valid_           = true;
+  raw_context.lens_make_                     = "Alcedo Optics";
+  raw_context.lens_model_                    = "Fixed 35";
+  raw_context.focal_length_mm_               = 35.0f;
+  raw_context.color_matrices_valid_          = true;
+  raw_context.color_matrix_1_[0]             = 0.625;
+  raw_context.dng_warp_rectilinear_present_  = true;
+  raw_context.dng_warp_rectilinear_applied_  = true;
+
+  auto initial = first.LoadPipeline(704);
+  ASSERT_NE(initial, nullptr);
+  initial->pipeline_->InjectRawMetadata(raw_context);
+  first.InitializeImageRoot(initial, &raw_context);
+  const auto root_id = initial->root_id_;
+  first.SavePipeline(initial);
+
+  {
+    auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto db_lock  = db_guard.Lock();
+    CommitGraphService graph_service(db_guard.conn_);
+    const auto encoded = graph_service.GetRootSerializedPipelineState(704, root_id);
+    ASSERT_TRUE(encoded.has_value());
+    ASSERT_TRUE(encoded->contains("raw_color_context"));
+    EXPECT_EQ((*encoded)["raw_color_context"]["CameraModel"], "Root State Test");
+    EXPECT_TRUE((*encoded)["raw_color_context"]["DngWarpRectilinearPresent"]);
+    EXPECT_TRUE((*encoded)["raw_color_context"]["DngWarpRectilinearApplied"]);
+  }
+
+  PipelineMgmtService reopened(project.GetStorageService());
+  auto                loaded = reopened.LoadEditorPipeline(704);
+  ASSERT_NE(loaded, nullptr);
+  const auto& global = loaded->pipeline_->GetGlobalParams();
+  EXPECT_TRUE(global.raw_runtime_valid_);
+  EXPECT_EQ(global.raw_camera_make_, "Alcedo Camera Co");
+  EXPECT_EQ(global.raw_camera_model_, "Root State Test");
+  EXPECT_TRUE(global.raw_color_matrices_valid_);
+  EXPECT_DOUBLE_EQ(global.raw_color_matrix_1_[0], 0.625);
+  reopened.SavePipeline(loaded);
+}
+
+TEST_F(PipelineServiceTests, RootStateRejectsDifferentImageOwner) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService pipelines(project.GetStorageService());
+
+  auto first = pipelines.LoadEditorPipeline(705);
+  auto second = pipelines.LoadEditorPipeline(706);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+
+  auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+  auto db_lock  = db_guard.Lock();
+  CommitGraphService graph_service(db_guard.conn_);
+  EXPECT_THROW(graph_service.GetRootSerializedPipelineState(706, first->root_id_),
+               std::runtime_error);
+  db_lock.unlock();
+  pipelines.SavePipeline(first);
+  pipelines.SavePipeline(second);
+}
+
+TEST_F(PipelineServiceTests, SyncPipelineDoesNotPersistUnrelatedDirtyGuards) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService pipelines(project.GetStorageService());
+
+  auto requested = pipelines.LoadPipeline(707);
+  auto unrelated = pipelines.LoadPipeline(708);
+  ASSERT_NE(requested, nullptr);
+  ASSERT_NE(unrelated, nullptr);
+  requested->dirty_ = true;
+  unrelated->dirty_ = true;
+
+  pipelines.SyncPipeline(707);
+  EXPECT_FALSE(requested->dirty_);
+  EXPECT_TRUE(unrelated->dirty_);
+
+  pipelines.SavePipeline(requested);
+  unrelated->dirty_ = false;
+  pipelines.SavePipeline(unrelated);
+}
+
+TEST_F(PipelineServiceTests, EditorLoadReportsMissingReachableCommit) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService first(project.GetStorageService());
+  auto                initial = first.LoadEditorPipeline(703);
+  ASSERT_NE(initial, nullptr);
+  first.SavePipeline(initial);
+
+  commit_hash_t missing_hash{};
+  {
+    auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto db_lock  = db_guard.Lock();
+    CommitGraphService graph_service(db_guard.conn_);
+    auto graph = graph_service.LoadGraph(703);
+    ASSERT_TRUE(graph.has_value());
+
+    OrdinaryEditPayload payload;
+    payload.operator_type   = OperatorType::EXPOSURE;
+    payload.stage_name      = PipelineStageName::Basic_Adjustment;
+    payload.field_name      = "exposure";
+    payload.before_value    = 1.5f;
+    payload.after_value     = 2.0f;
+    payload.before_enabled  = true;
+    payload.after_enabled   = true;
+    auto commit = EditCommit::MakeEdit(graph->GetRootId(), std::nullopt, std::move(payload));
+    missing_hash = commit.GetCommitHash();
+    ASSERT_TRUE(graph->InsertCommit(std::move(commit)));
+    graph->MoveWorkingHead(graph->GetActiveVersionId(), missing_hash);
+    graph_service.Materialize(graph->CaptureMaterialization());
+
+    duckdb_result result;
+    ASSERT_EQ(duckdb_query(
+                  db_guard.conn_,
+                  std::format("DELETE FROM EditCommit WHERE commit_hash='{}';",
+                              missing_hash.ToString())
+                      .c_str(),
+                  &result),
+              DuckDBSuccess);
+    duckdb_destroy_result(&result);
+  }
+
+  PipelineMgmtService reopened(project.GetStorageService());
+  try {
+    (void)reopened.LoadEditorPipeline(703);
+    FAIL() << "expected missing first-parent commit to reject editor open";
+  } catch (const std::runtime_error& error) {
+    EXPECT_NE(std::string(error.what()).find("missing"), std::string::npos);
+  }
 }
 }  // namespace alcedo

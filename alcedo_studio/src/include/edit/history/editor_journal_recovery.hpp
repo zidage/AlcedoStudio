@@ -15,7 +15,7 @@
 
 namespace alcedo {
 
-/// DuckDB recovery metadata projection for one image/journal generation.
+/// DuckDB recovery metadata state for one image/journal generation.
 struct EditorRecoveryMetadata {
   sl_element_id_t element_id                      = 0;
   Hash128         version_id{};

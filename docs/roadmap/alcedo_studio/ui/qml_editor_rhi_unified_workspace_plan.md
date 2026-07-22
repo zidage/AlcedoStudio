@@ -349,7 +349,7 @@ checkout, Paste/Merge, locking, or journal truncation semantics.
 - Image B does not begin loading until image A's save checkpoint finishes. The earlier overlapping
   save/load target is superseded.
 - One DuckDB transaction inserts journaled commit objects, moves the active Version head, stores the
-  matching pipeline projection, and advances recovery metadata.
+  matching serialized pipeline state, and advances recovery metadata.
 - After DuckDB succeeds, the saved journal prefix is truncated. Recovery uses the stored
   materialized head to ignore a prefix left behind by interruption between database commit and
   truncation.
@@ -562,7 +562,7 @@ but the GUI thread never waits on file or DuckDB I/O.
 Focused(image A)
   -> finalize the open edit command
   -> start A save checkpoint and disable editor navigation
-  -> materialize A commits, Version head, pipeline projection, and recovery metadata
+  -> materialize A commits, Version head, serialized pipeline state, and recovery metadata
   -> truncate A journal and return A's live pipeline snapshot
   -> invalidate A render generation and finish the save checkpoint
   -> acquire or rebuild B's live pipeline snapshot
@@ -2611,7 +2611,7 @@ Extend the existing viewer geometry coverage and add focused tests such as:
 - `EditAfterUndoCreatesNewChildAndClearsRedoPath`
 - `DatabaseCommitBeforeLogTruncateDoesNotReplayCommitTwice`
 - `ImageSwitchWaitsForPreviousSaveCheckpointBeforeLoading`
-- `StaleStoredPipelineProjectionRebuildsFromRootAndFirstParents`
+- `StaleSerializedPipelineStateRebuildsFromRootAndFirstParents`
 - `LiveSearchRemovalSelectsNearestSurvivingElement`
 - `EmptySearchResultsKeepEditorWorkspaceOpen`
 - `DiscardReloadsMaterializedHeadAndDropsOnlyUnmaterializedCommit`
@@ -2806,7 +2806,7 @@ transitions must be queryable by the harness without scraping human-readable log
 | Search removes the active image mid-edit | Finalize the edit, complete a save checkpoint, then select the nearest survivor or empty state |
 | Journal prefix replays twice after DuckDB commit | Stored materialized head/sequence, commit hashes, and interruption tests around direct truncation |
 | Undo then edit preserves an abandoned redo path | Move the same Version ref to the new child, clear the redo stack, and collect unreachable commits on clean exit |
-| Stored pipeline projection disagrees with history | Validate root/head/chain on editor open and rebuild from root plus first parents |
+| Serialized pipeline state disagrees with history | Validate root/head/chain on editor open and rebuild from root plus first parents |
 | Global save lock makes navigation appear frozen | Publish explicit disabled capabilities and saving reason; never block the GUI thread on I/O |
 | ApplicationModuleHost becomes another god object | Typed module properties only, narrow constructor injection, no behavior forwarding, no friend access, isolated module tests |
 | Main.qml becomes another monolith | Thin Main, QML WorkspaceHost, C++ route state, independent workspace components |

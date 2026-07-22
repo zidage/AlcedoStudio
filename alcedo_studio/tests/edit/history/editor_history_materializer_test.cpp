@@ -46,7 +46,7 @@ auto MakeExposureTransaction(float exposure, tx_id_t id) -> EditTransaction {
 }
 
 auto MakePipelineParams(float exposure) -> nlohmann::json {
-  // Build a real pipeline projection so DuckDB round-trips a complete params object.
+  // Build real serialized pipeline state so DuckDB round-trips a complete params object.
   CPUPipelineExecutor exec;
   auto& stage = exec.GetStage(PipelineStageName::Basic_Adjustment);
   auto  op    = stage.GetOperator(OperatorType::EXPOSURE);

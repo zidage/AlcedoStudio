@@ -22,7 +22,7 @@ namespace alcedo {
  * @brief One immutable capture of the values materialization will write to DuckDB together.
  *
  * Working-head moves must not use this structure. Callers build it only when the checked-out
- * Version head, recomputed chain hash, and projection are known to agree.
+ * Version head, recomputed chain hash, and serialized pipeline state are known to agree.
  */
 struct CommitGraphMaterialization {
   ImageEditState          image_state{};
@@ -103,15 +103,17 @@ class CommitGraph {
   auto ChainHashForHead(const head_commit_hash_t& head) const -> transaction_chain_hash_t;
   auto ChainHashForVersion(const version_ref_id_t& version_id) const -> transaction_chain_hash_t;
 
-  /// Capture materialization keeping ImageEditState.stored_pipeline_projection unchanged.
+  /// Capture materialization keeping ImageEditState.serialized_pipeline_state unchanged.
   auto CaptureMaterialization() const -> CommitGraphMaterialization;
 
-  /// Capture materialization with an explicit pipeline projection value (including nullopt clear).
-  auto CaptureMaterializationWithProjection(
-      std::optional<nlohmann::json> stored_pipeline_projection) const -> CommitGraphMaterialization;
+  /// Capture materialization with an explicit serialized pipeline state value.
+  auto CaptureMaterializationWithSerializedPipelineState(
+      std::optional<nlohmann::json> serialized_pipeline_state) const
+      -> CommitGraphMaterialization;
 
-  /// Capture materialization and clear any stored pipeline projection.
-  auto CaptureMaterializationClearingProjection() const -> CommitGraphMaterialization;
+  /// Capture materialization and clear any serialized pipeline state.
+  auto CaptureMaterializationClearingSerializedPipelineState() const
+      -> CommitGraphMaterialization;
 
   /// Apply a successful materialization result to the in-memory ImageEditState only.
   void ApplyMaterializedState(const ImageEditState& materialized_state);

@@ -4,16 +4,21 @@
 
 #include "app/pipeline_service.hpp"
 
+#include <algorithm>
 #include <cstdint>
+#include <exception>
 #include <format>
 #include <memory>
 #include <mutex>
-#include <algorithm>
+#include <optional>
 #include <span>
 #include <string>
 
 #include "edit/pipeline/default_pipeline_params.hpp"
+#include "edit/history/commit_graph.hpp"
+#include "edit/history/edit_commit.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
+#include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -145,6 +150,177 @@ void ResetTransientPreviewState(CPUPipelineExecutor& exec) {
   exec.SetEnableCache(true);
   exec.SetDecodeRes(DecodeRes::FULL);
 }
+
+constexpr std::uint32_t kSerializedPipelineStateFormatVersion = 1;
+constexpr const char*   kSerializedPipelineStateFormatKey     = "state_format_version";
+constexpr const char*   kSerializedPipelineStateRootKey       = "root_id";
+constexpr const char*   kSerializedPipelineStateHeadKey       = "head_commit_hash";
+constexpr const char*   kSerializedPipelineStateChainKey      = "transaction_chain_hash";
+constexpr const char*   kSerializedPipelineStateParamsKey     = "pipeline_params";
+constexpr const char*   kRootRawColorContextKey                = "raw_color_context";
+
+struct DecodedSerializedPipelineState {
+  root_id_t                root_id{};
+  head_commit_hash_t       head_commit_hash = std::nullopt;
+  transaction_chain_hash_t transaction_chain_hash{};
+  nlohmann::json           pipeline_params;
+};
+
+struct DecodedRootPipelineState {
+  nlohmann::json                        pipeline_params;
+  std::optional<RawRuntimeColorContext> raw_color_context;
+};
+
+auto MakeSerializedPipelineState(const PipelineGuard& guard,
+                                 const nlohmann::json& pipeline_params) -> nlohmann::json {
+  return nlohmann::json{
+      {kSerializedPipelineStateFormatKey, kSerializedPipelineStateFormatVersion},
+      {kSerializedPipelineStateRootKey, guard.root_id_.ToString()},
+      {kSerializedPipelineStateHeadKey,
+       HeadCommitHashToStorage(guard.working_head_commit_hash_)},
+      {kSerializedPipelineStateChainKey, guard.transaction_chain_hash_.ToString()},
+      {kSerializedPipelineStateParamsKey, pipeline_params}};
+}
+
+auto DecodeSerializedPipelineState(const nlohmann::json& encoded)
+    -> std::optional<DecodedSerializedPipelineState> {
+  if (!encoded.is_object() ||
+      encoded.value(kSerializedPipelineStateFormatKey, 0u) !=
+          kSerializedPipelineStateFormatVersion ||
+      !encoded.contains(kSerializedPipelineStateRootKey) ||
+      !encoded.contains(kSerializedPipelineStateHeadKey) ||
+      !encoded.contains(kSerializedPipelineStateChainKey) ||
+      !encoded.contains(kSerializedPipelineStateParamsKey) ||
+      !encoded.at(kSerializedPipelineStateRootKey).is_string() ||
+      !encoded.at(kSerializedPipelineStateHeadKey).is_string() ||
+      !encoded.at(kSerializedPipelineStateChainKey).is_string()) {
+    return std::nullopt;
+  }
+
+  try {
+    DecodedSerializedPipelineState state;
+    state.root_id =
+        Hash128::FromString(encoded.at(kSerializedPipelineStateRootKey).get<std::string>());
+    state.head_commit_hash = HeadCommitHashFromStorage(
+        encoded.at(kSerializedPipelineStateHeadKey).get<std::string>());
+    state.transaction_chain_hash = Hash128::FromString(
+        encoded.at(kSerializedPipelineStateChainKey).get<std::string>());
+    state.pipeline_params = encoded.at(kSerializedPipelineStateParamsKey);
+    return state;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+auto DecodeRootPipelineState(const nlohmann::json& encoded)
+    -> std::optional<DecodedRootPipelineState> {
+  if (!encoded.is_object() ||
+      encoded.value(kSerializedPipelineStateFormatKey, 0u) !=
+          kSerializedPipelineStateFormatVersion ||
+      !encoded.contains(kSerializedPipelineStateParamsKey)) {
+    return std::nullopt;
+  }
+
+  try {
+    DecodedRootPipelineState state;
+    state.pipeline_params = encoded.at(kSerializedPipelineStateParamsKey);
+    if (encoded.contains(kRootRawColorContextKey) &&
+        !encoded.at(kRootRawColorContextKey).is_null()) {
+      RawRuntimeColorContext context;
+      if (!RawColorContextFromJson(encoded.at(kRootRawColorContextKey), context)) {
+        return std::nullopt;
+      }
+      state.raw_color_context = std::move(context);
+    }
+    return state;
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+void SetPipelineHistoryState(PipelineGuard& guard, const CommitGraph& graph) {
+  guard.root_id_                          = graph.GetRootId();
+  guard.working_head_commit_hash_         = graph.GetActiveVersionRef().head_commit_hash;
+  guard.transaction_chain_hash_           = graph.ChainHashForHead(guard.working_head_commit_hash_);
+  guard.serialized_state_needs_writeback_ = false;
+}
+
+void ImportSerializedPipelineState(
+    CPUPipelineExecutor& exec, const nlohmann::json& pipeline_params,
+    const std::optional<RawRuntimeColorContext>& raw_color_context,
+    AcceleratorBackendPreference accelerator_preference) {
+  exec.ImportPipelineParams(pipeline_params);
+  exec.SetAcceleratorBackendPreference(accelerator_preference);
+  ResetTransientPreviewState(exec);
+  EnsureDefaultOutputTransform(exec);
+  EnsureDefaultRawDecode(exec);
+  EnsureDefaultColorTemp(exec);
+  EnsureDefaultLensCalib(exec);
+  ResyncGlobalParamsFromOperators(exec);
+  if (raw_color_context.has_value()) {
+    exec.InjectRawMetadata(*raw_color_context);
+  }
+}
+
+void ApplyCommitField(CPUPipelineExecutor& exec, OperatorType operator_type,
+                      PipelineStageName stage_name, const std::string& field_name,
+                      const nlohmann::json& value, bool enabled) {
+  if (field_name.empty()) {
+    throw std::runtime_error("Pipeline reconstruction encountered an empty edit field");
+  }
+
+  auto&          stage = exec.GetStage(stage_name);
+  nlohmann::json params = nlohmann::json::object();
+  const auto     entry  = stage.GetOperator(operator_type);
+  if (entry.has_value() && entry.value() && entry.value()->op_) {
+    params = entry.value()->op_->GetParams();
+  }
+  if (!params.is_object()) {
+    throw std::runtime_error("Pipeline reconstruction requires object operator parameters");
+  }
+
+  if (field_name.front() == '/') {
+    params[nlohmann::json::json_pointer(field_name)] = value;
+  } else {
+    params[field_name] = value;
+  }
+
+  auto& global_params = exec.GetGlobalParams();
+  stage.SetOperator(operator_type, std::move(params), global_params);
+  stage.EnableOperator(operator_type, enabled, global_params);
+}
+
+void ApplyCommit(CPUPipelineExecutor& exec, const EditCommit& commit) {
+  if (commit.GetKind() == EditCommitKind::kEdit) {
+    const auto payload = OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON());
+    ApplyCommitField(exec, payload.operator_type, payload.stage_name, payload.field_name,
+                     payload.after_value, payload.after_enabled);
+    return;
+  }
+
+  if (commit.GetKind() == EditCommitKind::kMerge) {
+    const auto payload = MergeEditPayload::FromJSON(commit.GetPayloadJSON());
+    for (const auto& field : payload.fields) {
+      ApplyCommitField(exec, field.operator_type, field.stage_name, field.field_name,
+                       field.resolved_value, field.resolved_enabled);
+    }
+    return;
+  }
+
+  throw std::runtime_error("Pipeline reconstruction encountered an unknown commit kind");
+}
+
+void RebuildPipelineFromRoot(CPUPipelineExecutor& exec, const CommitGraph& graph,
+                             const DecodedRootPipelineState& root_state,
+                             AcceleratorBackendPreference accelerator_preference) {
+  ImportSerializedPipelineState(exec, root_state.pipeline_params, root_state.raw_color_context,
+                                accelerator_preference);
+  for (const auto& commit_hash :
+       graph.FirstParentChain(graph.GetActiveVersionRef().head_commit_hash)) {
+    ApplyCommit(exec, graph.GetCommit(commit_hash));
+  }
+  exec.SetExecutionStages();
+}
 }  // namespace
 
 void PipelineMgmtService::HandleEviction(sl_element_id_t evicted_id) {
@@ -272,6 +448,128 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
   throw std::runtime_error("[ERROR] PipelineMgmtService: Failed to load pipeline.");
 }
 
+void PipelineMgmtService::InitializeImageRoot(const std::shared_ptr<PipelineGuard>& pipeline,
+                                              const RawRuntimeColorContext* raw_color_context) {
+  if (!pipeline || !pipeline->pipeline_) {
+    throw std::runtime_error("PipelineMgmtService: cannot initialize a null pipeline root");
+  }
+
+  std::unique_lock<std::mutex> service_lock(lock_);
+
+  nlohmann::json root_params;
+  {
+    std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
+    root_params = pipeline->pipeline_->ExportPipelineParams();
+  }
+
+  auto db_guard = storage_service_->GetDBController().GetConnectionGuard();
+  auto db_lock  = db_guard.Lock();
+  CommitGraphService graph_service(db_guard.conn_);
+  auto               state = graph_service.GetImageEditState(pipeline->id_);
+  if (!state.has_value()) {
+    auto graph = graph_service.CreateRootPipelinePersisted(
+        pipeline->id_, root_params,
+        raw_color_context ? std::optional<nlohmann::json>(RawColorContextToJson(*raw_color_context))
+                          : std::nullopt);
+    SetPipelineHistoryState(*pipeline, graph);
+    return;
+  }
+
+  auto graph = graph_service.LoadGraph(pipeline->id_);
+  if (!graph.has_value()) {
+    throw std::runtime_error(
+        "PipelineMgmtService: image edit state disappeared while loading root");
+  }
+  if (!graph_service
+           .GetRootSerializedPipelineState(pipeline->id_, graph->GetRootId())
+           .has_value()) {
+    throw std::runtime_error(
+        "PipelineMgmtService: immutable root state is missing for image " +
+        std::to_string(pipeline->id_));
+  }
+  SetPipelineHistoryState(*pipeline, *graph);
+}
+
+auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard> {
+  auto pipeline = LoadPipeline(id);
+  try {
+    InitializeImageRoot(pipeline);
+
+    std::unique_lock<std::mutex> service_lock(lock_);
+    auto db_guard = storage_service_->GetDBController().GetConnectionGuard();
+    auto db_lock  = db_guard.Lock();
+    CommitGraphService graph_service(db_guard.conn_);
+    auto graph = graph_service.LoadGraph(id);
+    if (!graph.has_value()) {
+      throw std::runtime_error("PipelineMgmtService: image edit state is missing after root setup");
+    }
+    const auto root_encoded_state =
+        graph_service.GetRootSerializedPipelineState(id, graph->GetRootId());
+    if (!root_encoded_state.has_value()) {
+      throw std::runtime_error("PipelineMgmtService: immutable root state is missing for image " +
+                               std::to_string(id));
+    }
+    const auto root_state = DecodeRootPipelineState(*root_encoded_state);
+    if (!root_state.has_value()) {
+      throw std::runtime_error("PipelineMgmtService: immutable root state is invalid for image " +
+                               std::to_string(id));
+    }
+
+    const auto& state = graph->GetImageEditState();
+    const auto expected_head = graph->GetActiveVersionRef().head_commit_hash;
+    const auto expected_chain = graph->ChainHashForHead(expected_head);
+    if (state.root_id != graph->GetRootId() ||
+        state.materialized_head_commit_hash != expected_head ||
+        state.materialized_transaction_chain_hash != expected_chain) {
+      throw std::runtime_error(
+          "PipelineMgmtService: stored image edit state does not match the active Version");
+    }
+
+    SetPipelineHistoryState(*pipeline, *graph);
+    bool accepted_serialized_state = false;
+    if (state.serialized_pipeline_state.has_value()) {
+      const auto stored = DecodeSerializedPipelineState(*state.serialized_pipeline_state);
+      if (stored.has_value() && stored->root_id == graph->GetRootId() &&
+          stored->head_commit_hash == expected_head &&
+          stored->transaction_chain_hash == expected_chain) {
+        try {
+          std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
+          ImportSerializedPipelineState(*pipeline->pipeline_, stored->pipeline_params,
+                                        root_state->raw_color_context, accelerator_preference_);
+          pipeline->pipeline_->SetExecutionStages();
+          accepted_serialized_state = true;
+        } catch (...) {
+          // Serialized state that cannot build an executor is stale. Rebuild from immutable
+          // history below and write the corrected state when the guard is returned.
+          accepted_serialized_state = false;
+        }
+      }
+    }
+
+    if (!accepted_serialized_state) {
+      std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
+      RebuildPipelineFromRoot(*pipeline->pipeline_, *graph, *root_state,
+                              accelerator_preference_);
+      pipeline->serialized_state_needs_writeback_ = true;
+    }
+    return pipeline;
+  } catch (const std::exception& e) {
+    try {
+      SavePipeline(pipeline);
+    } catch (...) {
+    }
+    throw std::runtime_error("[ERROR] PipelineMgmtService: editor history validation failed for " +
+                             std::to_string(id) + ": " + e.what());
+  } catch (...) {
+    try {
+      SavePipeline(pipeline);
+    } catch (...) {
+    }
+    throw std::runtime_error("[ERROR] PipelineMgmtService: editor history validation failed for " +
+                             std::to_string(id) + ": unknown error");
+  }
+}
+
 void PipelineMgmtService::SavePipeline(std::shared_ptr<PipelineGuard> pipeline) {
   if (!pipeline) {
     return;
@@ -279,6 +577,42 @@ void PipelineMgmtService::SavePipeline(std::shared_ptr<PipelineGuard> pipeline) 
 
   std::unique_lock<std::mutex> guard(lock_);
   storage_service_->RememberLivePipeline(pipeline->id_, pipeline->pipeline_);
+
+  const bool will_release_last_pin = pipeline->pin_count_ <= 1;
+  if (will_release_last_pin && pipeline->serialized_state_needs_writeback_) {
+    try {
+      nlohmann::json pipeline_params;
+      {
+        std::unique_lock<std::mutex> render_guard(pipeline->pipeline_->GetRenderLock());
+        pipeline_params = pipeline->pipeline_->ExportPipelineParams();
+      }
+
+      auto db_guard = storage_service_->GetDBController().GetConnectionGuard();
+      auto db_lock  = db_guard.Lock();
+      CommitGraphService graph_service(db_guard.conn_);
+      auto               graph = graph_service.LoadGraph(pipeline->id_);
+      if (!graph.has_value()) {
+        throw std::runtime_error(
+            "PipelineMgmtService: cannot write serialized state without an edit graph");
+      }
+
+      const auto expected_head  = graph->GetActiveVersionRef().head_commit_hash;
+      const auto expected_chain = graph->ChainHashForHead(expected_head);
+      if (graph->GetRootId() != pipeline->root_id_ ||
+          expected_head != pipeline->working_head_commit_hash_ ||
+          expected_chain != pipeline->transaction_chain_hash_) {
+        throw std::runtime_error(
+            "PipelineMgmtService: live history identity changed before serialized state writeback");
+      }
+
+      graph_service.Materialize(graph->CaptureMaterializationWithSerializedPipelineState(
+          MakeSerializedPipelineState(*pipeline, pipeline_params)));
+      pipeline->serialized_state_needs_writeback_ = false;
+    } catch (...) {
+      // This state accelerates editor open but is not the history source of truth. Keep the flag
+      // set so the next guard release retries without leaking the pipeline pin.
+    }
+  }
 
   if (pipeline->pin_count_ > 0) {
     pipeline->pin_count_--;
@@ -377,6 +711,21 @@ void PipelineMgmtService::Sync() {
       pipeline_guard->dirty_ = false;
     }
   }
+}
+
+void PipelineMgmtService::SyncPipeline(sl_element_id_t id) {
+  std::unique_lock<std::mutex> guard(lock_);
+  const auto                   it = loaded_pipelines_.find(id);
+  if (it == loaded_pipelines_.end() || !it->second || !it->second->pipeline_ ||
+      !it->second->dirty_) {
+    return;
+  }
+
+  auto& pipeline_guard = it->second;
+  std::unique_lock<std::mutex> render_guard(pipeline_guard->pipeline_->GetRenderLock());
+  storage_service_->GetElementController().UpdatePipelineByElementId(
+      id, pipeline_guard->pipeline_);
+  pipeline_guard->dirty_ = false;
 }
 
 auto PipelineMgmtService::LoadPipelineSnapshot(sl_element_id_t id, image_id_t image_id,

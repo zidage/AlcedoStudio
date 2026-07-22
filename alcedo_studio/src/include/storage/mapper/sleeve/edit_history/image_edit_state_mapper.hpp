@@ -21,7 +21,7 @@ namespace alcedo {
 //   active_version_id VARCHAR NOT NULL,
 //   materialized_head_commit_hash VARCHAR,
 //   materialized_transaction_chain_hash VARCHAR NOT NULL,
-//   stored_pipeline_projection JSON,
+//   serialized_pipeline_state JSON,
 //   project_schema_version INTEGER NOT NULL);
 struct ImageEditStateMapperParams {
   sl_element_id_t              element_id = 0;
@@ -29,7 +29,7 @@ struct ImageEditStateMapperParams {
   std::unique_ptr<std::string> active_version_id;
   std::unique_ptr<std::string> materialized_head_commit_hash;
   std::unique_ptr<std::string> materialized_transaction_chain_hash;
-  std::unique_ptr<std::string> stored_pipeline_projection;
+  std::unique_ptr<std::string> serialized_pipeline_state;
   std::uint32_t                project_schema_version = 0;
 };
 
@@ -46,7 +46,7 @@ class ImageEditStateMapper
       FIELD(ImageEditStateMapperParams, active_version_id, VARCHAR),
       FIELD(ImageEditStateMapperParams, materialized_head_commit_hash, VARCHAR),
       FIELD(ImageEditStateMapperParams, materialized_transaction_chain_hash, VARCHAR),
-      FIELD(ImageEditStateMapperParams, stored_pipeline_projection, JSON),
+      FIELD(ImageEditStateMapperParams, serialized_pipeline_state, JSON),
       FIELD(ImageEditStateMapperParams, project_schema_version, UINT32)};
 
  public:

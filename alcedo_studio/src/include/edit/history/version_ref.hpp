@@ -34,7 +34,7 @@ struct VersionRef {
 };
 
 /**
- * @brief Per-image edit state coordinating the root, active Version, and stored projection.
+ * @brief Per-image edit state coordinating the root, active Version, and serialized pipeline state.
  *
  * Production editing is not yet routed through this structure; it is the target schema for the
  * mini-Git history model.
@@ -45,7 +45,7 @@ struct ImageEditState {
   version_ref_id_t           active_version_id{};
   head_commit_hash_t         materialized_head_commit_hash = std::nullopt;
   transaction_chain_hash_t   materialized_transaction_chain_hash{};
-  std::optional<nlohmann::json> stored_pipeline_projection = std::nullopt;
+  std::optional<nlohmann::json> serialized_pipeline_state = std::nullopt;
   std::uint32_t              project_schema_version        = kImageEditSchemaVersion;
 
   auto ToJSON() const -> nlohmann::json;

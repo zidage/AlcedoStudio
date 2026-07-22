@@ -46,11 +46,12 @@ void LoadJsonArray(const json& value, const char* key, T* dst, const int count) 
     dst[i] = array[static_cast<size_t>(i)].get<T>();
   }
 }
+}  // namespace
 
-auto RawContextToJson(const RawRuntimeColorContext& ctx) -> json {
+auto RawColorContextToJson(const RawRuntimeColorContext& ctx) -> json {
   json value;
-  value["Valid"]               = ctx.valid_;
-  value["OutputInCameraSpace"] = ctx.output_in_camera_space_;
+  value["Valid"]                      = ctx.valid_;
+  value["OutputInCameraSpace"]        = ctx.output_in_camera_space_;
   value["CamMul"]              = MakeJsonArray(ctx.cam_mul_, 3);
   value["PreMul"]              = MakeJsonArray(ctx.pre_mul_, 3);
   value["CamXyz"]              = MakeJsonArray(ctx.cam_xyz_, 9);
@@ -62,12 +63,14 @@ auto RawContextToJson(const RawRuntimeColorContext& ctx) -> json {
   value["LensModel"]           = ctx.lens_model_;
   value["FocalLengthMm"]       = ctx.focal_length_mm_;
   value["ApertureFNumber"]     = ctx.aperture_f_number_;
-  value["FocusDistanceM"]      = ctx.focus_distance_m_;
-  value["Focal35mmMm"]         = ctx.focal_35mm_mm_;
-  value["CropFactorHint"]      = ctx.crop_factor_hint_;
-  value["ColorMatricesValid"]  = ctx.color_matrices_valid_;
-  value["ColorMatrix1"]        = MakeJsonArray(ctx.color_matrix_1_, 9);
-  value["ColorMatrix2"]        = MakeJsonArray(ctx.color_matrix_2_, 9);
+  value["FocusDistanceM"]             = ctx.focus_distance_m_;
+  value["Focal35mmMm"]                = ctx.focal_35mm_mm_;
+  value["CropFactorHint"]             = ctx.crop_factor_hint_;
+  value["DngWarpRectilinearPresent"] = ctx.dng_warp_rectilinear_present_;
+  value["DngWarpRectilinearApplied"]  = ctx.dng_warp_rectilinear_applied_;
+  value["ColorMatricesValid"]         = ctx.color_matrices_valid_;
+  value["ColorMatrix1"]               = MakeJsonArray(ctx.color_matrix_1_, 9);
+  value["ColorMatrix2"]               = MakeJsonArray(ctx.color_matrix_2_, 9);
   value["ForwardMatricesValid"] = ctx.forward_matrices_valid_;
   value["ForwardMatrix1"]       = MakeJsonArray(ctx.forward_matrix_1_, 9);
   value["ForwardMatrix2"]       = MakeJsonArray(ctx.forward_matrix_2_, 9);
@@ -79,7 +82,7 @@ auto RawContextToJson(const RawRuntimeColorContext& ctx) -> json {
   return value;
 }
 
-auto RawContextFromJson(const json& value, RawRuntimeColorContext& ctx) -> bool {
+auto RawColorContextFromJson(const json& value, RawRuntimeColorContext& ctx) -> bool {
   if (!value.is_object()) {
     return false;
   }
@@ -97,10 +100,12 @@ auto RawContextFromJson(const json& value, RawRuntimeColorContext& ctx) -> bool 
   ctx.lens_model_             = value.value("LensModel", std::string{});
   ctx.focal_length_mm_        = value.value("FocalLengthMm", 0.0f);
   ctx.aperture_f_number_      = value.value("ApertureFNumber", 0.0f);
-  ctx.focus_distance_m_       = value.value("FocusDistanceM", 0.0f);
-  ctx.focal_35mm_mm_          = value.value("Focal35mmMm", 0.0f);
-  ctx.crop_factor_hint_       = value.value("CropFactorHint", 0.0f);
-  ctx.color_matrices_valid_   = value.value("ColorMatricesValid", false);
+  ctx.focus_distance_m_              = value.value("FocusDistanceM", 0.0f);
+  ctx.focal_35mm_mm_                 = value.value("Focal35mmMm", 0.0f);
+  ctx.crop_factor_hint_              = value.value("CropFactorHint", 0.0f);
+  ctx.dng_warp_rectilinear_present_ = value.value("DngWarpRectilinearPresent", false);
+  ctx.dng_warp_rectilinear_applied_ = value.value("DngWarpRectilinearApplied", false);
+  ctx.color_matrices_valid_          = value.value("ColorMatricesValid", false);
   LoadJsonArray(value, "ColorMatrix1", ctx.color_matrix_1_, 9);
   LoadJsonArray(value, "ColorMatrix2", ctx.color_matrix_2_, 9);
   ctx.forward_matrices_valid_ = value.value("ForwardMatricesValid", false);
@@ -116,7 +121,6 @@ auto RawContextFromJson(const json& value, RawRuntimeColorContext& ctx) -> bool 
          !ctx.camera_make_.empty() ||
          !ctx.camera_model_.empty();
 }
-}  // namespace
 
 Image::Image(image_id_t image_id) : image_id_(image_id) {}
 
@@ -187,7 +191,7 @@ auto Image::ExifToJson() -> std::string {
   }
 
   if (has_raw_color_context_) {
-    exif_json_[kRawRuntimeContextJsonKey] = RawContextToJson(raw_color_context_);
+    exif_json_[kRawRuntimeContextJsonKey] = RawColorContextToJson(raw_color_context_);
   }
 
   has_exif_json_ = true;
@@ -203,7 +207,7 @@ void Image::JsonToExif(std::string json_str) {
     raw_color_context_ = {};
     has_raw_color_context_ =
         exif_json_.contains(kRawRuntimeContextJsonKey) &&
-        RawContextFromJson(exif_json_[kRawRuntimeContextJsonKey], raw_color_context_);
+        RawColorContextFromJson(exif_json_[kRawRuntimeContextJsonKey], raw_color_context_);
   } catch (nlohmann::json::parse_error& e) {
     throw std::runtime_error("[ERROR] Image: JSON parse error, " + std::string(e.what()));
   } catch (std::exception& e) {

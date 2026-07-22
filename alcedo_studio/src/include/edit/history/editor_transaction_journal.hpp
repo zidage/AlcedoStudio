@@ -284,7 +284,7 @@ class JournalTimelineSimulator final {
   [[nodiscard]] auto ReplayCommittedRecordChain(const EditorTransactionJournal& journal)
       -> EditorJournalApplyResult;
 
-  /// Seed the simulator from a DuckDB-materialized Version projection. Used by
+  /// Seed the simulator from a DuckDB-materialized Version state. Used by
   /// recovery to REDO only journal-committed edit-history operations after
   /// `materialized_operation_sequence`.
   void SeedMaterializedState(EditorJournalIdentity identity,

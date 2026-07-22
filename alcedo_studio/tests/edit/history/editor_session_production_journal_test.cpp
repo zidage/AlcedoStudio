@@ -137,6 +137,26 @@ TEST_F(EditorSessionProductionJournalPortTest, RecordEditAndCommitDurablyAppendT
   EXPECT_GT(committed.durable_operation_sequence, 0u);
 }
 
+TEST_F(EditorSessionProductionJournalPortTest, PipelinePortReleaseReturnsServicePin) {
+  auto pipeline_service = std::make_shared<alcedo::PipelineMgmtService>(storage_);
+  auto services         = MakeServices();
+  services.pipeline_service = [pipeline_service]() { return pipeline_service; };
+
+  alcedo::ui::EditorSessionProductionPipelinePort pipeline_port;
+  pipeline_port.SetServices(std::move(services));
+  std::string                                     error;
+  const auto handle = pipeline_port.Acquire(file_id_, &error);
+  ASSERT_TRUE(handle.valid);
+
+  auto loaded = pipeline_port.EnsureLoaded(file_id_, &error);
+  ASSERT_NE(loaded, nullptr) << error;
+  EXPECT_EQ(loaded->pin_count_, 1u);
+
+  pipeline_port.Release(handle);
+  EXPECT_EQ(loaded->pin_count_, 0u);
+  EXPECT_EQ(pipeline_port.CurrentGuard(file_id_), nullptr);
+}
+
 TEST_F(EditorSessionProductionJournalPortTest,
        SessionServiceQueuesEditCursorMoveAndTimelineRewriteInProductionWriter) {
   auto scheduler = std::make_shared<alcedo::EditorSessionBootstrapSchedulerPort>();

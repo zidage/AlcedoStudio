@@ -24,7 +24,7 @@ namespace alcedo {
  * @brief Persist and reload the mini-Git commit graph for one image.
  *
  * Persistence only accepts a validated CommitGraphMaterialization so Version head, materialized
- * head, chain hash, and projection cannot be written as mutually inconsistent values.
+ * head, chain hash, and serialized pipeline state cannot be written as mutually inconsistent values.
  */
 class CommitGraphService {
  public:
@@ -39,6 +39,10 @@ class CommitGraphService {
   auto ListVersionRefsForElement(sl_element_id_t element_id) -> std::vector<VersionRef>;
   auto GetImageEditState(sl_element_id_t element_id) -> std::optional<ImageEditState>;
 
+  /// Read the immutable root state and verify that it belongs to the requested image.
+  auto GetRootSerializedPipelineState(sl_element_id_t element_id, const root_id_t& root_id)
+      -> std::optional<nlohmann::json>;
+
   /// Atomically materialize commits, Version refs, and ImageEditState from a validated capture.
   /// Fails before commit when the capture is inconsistent; prior rows remain unchanged.
   void Materialize(const CommitGraphMaterialization& materialization);
@@ -50,6 +54,14 @@ class CommitGraphService {
   auto CreateEmptyPersisted(sl_element_id_t element_id,
                             std::string default_display_name = "Default") -> CommitGraph;
 
+  /// Create an empty graph and its immutable base pipeline in one DuckDB transaction.
+  /// The supplied params are the image state after import metadata resolution and are never
+  /// overwritten by this service.
+  auto CreateRootPipelinePersisted(sl_element_id_t element_id,
+                                   const nlohmann::json& root_pipeline_params,
+                                   std::optional<nlohmann::json> raw_color_context = std::nullopt,
+                                   std::string default_display_name = "Default") -> CommitGraph;
+
  private:
   duckdb_connection&   conn_;
   EditCommitMapper     commit_mapper_;
@@ -58,6 +70,8 @@ class CommitGraphService {
 
   void UpsertVersionRef(const VersionRef& version_ref);
   void UpsertImageEditState(const ImageEditState& state);
+  void InsertRootSerializedPipelineState(const root_id_t& root_id, sl_element_id_t element_id,
+                                         const nlohmann::json& serialized_pipeline_state);
 
   static auto ToCommitParams(const EditCommit& commit) -> EditCommitMapperParams;
   static auto FromCommitParams(EditCommitMapperParams&& params) -> EditCommit;

@@ -6,10 +6,15 @@
 
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <span>
+#include <string>
 #include <unordered_map>
 
 #include "app/image_pool_service.hpp"
+#include "decoders/processor/raw_color_context.hpp"
+#include "edit/history/commit_types.hpp"
 #include "edit/pipeline/pipeline_accelerator.hpp"
 #include "edit/pipeline/pipeline.hpp"
 #include "json.hpp"
@@ -26,6 +31,13 @@ struct PipelineGuard {
   bool                                 dirty_  = false;
   bool                                 pinned_ = false;
   size_t                               pin_count_ = 0;
+
+  // The editor's live runtime snapshot. These values describe history only;
+  // executor stages, GPU resources, and render/cache state stay on pipeline_.
+  root_id_t                            root_id_{};
+  head_commit_hash_t                   working_head_commit_hash_ = std::nullopt;
+  transaction_chain_hash_t             transaction_chain_hash_{};
+  bool                                 serialized_state_needs_writeback_ = false;
 };
 
 // Phase 3: a read-only clone of a pipeline's params captured into an independent
@@ -66,6 +78,19 @@ class PipelineMgmtService final {
 
   auto LoadPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
 
+  /// Load an editor pipeline and validate its serialized state against the immutable commit graph.
+  /// Matching state is imported directly. Stale state is rebuilt from the persisted root and
+  /// first-parent commits and written back when the guard is returned.
+  /// Thumbnail and export callers must continue to use LoadPipeline so they do not repeat this
+  /// editor-only history validation.
+  auto LoadEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
+
+  /// Persist the current metadata-resolved pipeline as the immutable root for a newly imported
+  /// image. Calling this again for an image that already has a root verifies and loads that root;
+  /// it never replaces the stored root state.
+  void InitializeImageRoot(const std::shared_ptr<PipelineGuard>& pipeline,
+                           const RawRuntimeColorContext* raw_color_context = nullptr);
+
   void DeletePipeline(sl_element_id_t id);
   void DeletePipelines(std::span<const sl_element_id_t> ids);
 
@@ -75,6 +100,9 @@ class PipelineMgmtService final {
   }
 
   void Sync();
+
+  /// Persist only the requested live pipeline. This avoids saving unrelated dirty editor state.
+  void SyncPipeline(sl_element_id_t id);
 
   // Phase 3: capture a read-only snapshot of the current pipeline state without
   // pinning the live guard, forcing it to disk, or touching dirty state. The

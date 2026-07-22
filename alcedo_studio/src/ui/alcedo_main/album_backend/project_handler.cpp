@@ -11,6 +11,7 @@
 #include <thread>
 
 #include "app/project_package_service.hpp"
+#include "image/image.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 
@@ -141,7 +142,26 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
           result->project_->GetSleeveService(), result->project_->GetImagePoolService(),
           result->pipeline_, result->history_, result->project_->GetProjectUUID());
       result->import_ = std::make_unique<ImportServiceImpl>(
-          result->project_->GetSleeveService(), result->project_->GetImagePoolService());
+          result->project_->GetSleeveService(), result->project_->GetImagePoolService(),
+          [pipeline = result->pipeline_](sl_element_id_t element_id,
+                                         const std::shared_ptr<Image>& image) {
+            if (!pipeline) {
+              throw std::runtime_error("Pipeline service is unavailable during root creation");
+            }
+            auto guard = pipeline->LoadPipeline(element_id);
+            if (!guard || !guard->pipeline_) {
+              throw std::runtime_error("Pipeline is unavailable during root creation");
+            }
+            if (image && image->HasRawColorContext()) {
+              guard->pipeline_->InjectRawMetadata(image->GetRawColorContext());
+            }
+            pipeline->InitializeImageRoot(
+                guard, image && image->HasRawColorContext() ? &image->GetRawColorContext()
+                                                            : nullptr);
+            guard->dirty_ = true;
+            pipeline->SyncPipeline(element_id);
+            pipeline->SavePipeline(guard);
+          });
       result->export_ = std::make_shared<ExportService>(result->project_->GetSleeveService(),
                                                         result->project_->GetImagePoolService(),
                                                         result->pipeline_);

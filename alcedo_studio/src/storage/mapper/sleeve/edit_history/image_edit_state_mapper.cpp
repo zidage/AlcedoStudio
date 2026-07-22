@@ -22,13 +22,13 @@ auto ImageEditStateMapper::FromRawData(std::vector<duckorm::VarTypes>&& data)
       std::get_if<std::unique_ptr<std::string>>(&data[3]);
   auto* materialized_transaction_chain_hash =
       std::get_if<std::unique_ptr<std::string>>(&data[4]);
-  auto* stored_pipeline_projection =
+  auto* serialized_pipeline_state =
       std::get_if<std::unique_ptr<std::string>>(&data[5]);
   auto* project_schema_version = std::get_if<std::uint32_t>(&data[6]);
 
   if (element_id == nullptr || root_id == nullptr || active_version_id == nullptr ||
       materialized_head_commit_hash == nullptr ||
-      materialized_transaction_chain_hash == nullptr || stored_pipeline_projection == nullptr ||
+      materialized_transaction_chain_hash == nullptr || serialized_pipeline_state == nullptr ||
       project_schema_version == nullptr) {
     throw std::runtime_error(
         "Encountering unmatched types when parsing ImageEditState from the DB");
@@ -39,7 +39,7 @@ auto ImageEditStateMapper::FromRawData(std::vector<duckorm::VarTypes>&& data)
           std::move(*active_version_id),
           std::move(*materialized_head_commit_hash),
           std::move(*materialized_transaction_chain_hash),
-          std::move(*stored_pipeline_projection),
+          std::move(*serialized_pipeline_state),
           *project_schema_version};
 }
 

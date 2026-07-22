@@ -71,8 +71,8 @@ auto ImageEditState::ToJSON() const -> nlohmann::json {
   j["materialized_head_commit_hash"]      = HeadCommitHashToStorage(materialized_head_commit_hash);
   j["materialized_transaction_chain_hash"] = materialized_transaction_chain_hash.ToString();
   j["project_schema_version"]             = project_schema_version;
-  if (stored_pipeline_projection.has_value()) {
-    j["stored_pipeline_projection"] = *stored_pipeline_projection;
+  if (serialized_pipeline_state.has_value()) {
+    j["serialized_pipeline_state"] = *serialized_pipeline_state;
   }
   return j;
 }
@@ -88,8 +88,8 @@ auto ImageEditState::FromJSON(const nlohmann::json& j) -> ImageEditState {
   state.materialized_transaction_chain_hash =
       Hash128::FromString(j.at("materialized_transaction_chain_hash").get<std::string>());
   state.project_schema_version = j.value("project_schema_version", kImageEditSchemaVersion);
-  if (j.contains("stored_pipeline_projection")) {
-    state.stored_pipeline_projection = j.at("stored_pipeline_projection");
+  if (j.contains("serialized_pipeline_state")) {
+    state.serialized_pipeline_state = j.at("serialized_pipeline_state");
   }
   return state;
 }
@@ -113,7 +113,7 @@ auto CreateEmptyImageEditState(sl_element_id_t element_id, std::string default_d
   state.active_version_id                    = default_ref.version_id;
   state.materialized_head_commit_hash        = std::nullopt;
   state.materialized_transaction_chain_hash  = ComputeRootChainHash(state.root_id);
-  state.stored_pipeline_projection           = std::nullopt;
+  state.serialized_pipeline_state            = std::nullopt;
   state.project_schema_version               = kImageEditSchemaVersion;
 
   return {std::move(state), std::move(default_ref)};

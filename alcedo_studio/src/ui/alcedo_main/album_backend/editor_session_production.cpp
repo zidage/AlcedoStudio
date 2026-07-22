@@ -72,12 +72,21 @@ void EditorSessionProductionPipelinePort::Release(const alcedo::EditorPipelineGu
   if (!guard.valid) {
     return;
   }
+  std::shared_ptr<alcedo::PipelineGuard>       loaded_guard;
+  std::shared_ptr<alcedo::PipelineMgmtService> service;
   {
     std::scoped_lock lock(mutex_);
     auto             it = guards_.find(guard.element_id);
     if (it != guards_.end()) {
+      loaded_guard = it->second;
       guards_.erase(it);
     }
+    if (services_.pipeline_service) {
+      service = services_.pipeline_service();
+    }
+  }
+  if (service && loaded_guard) {
+    service->SavePipeline(std::move(loaded_guard));
   }
 }
 
@@ -112,7 +121,7 @@ auto EditorSessionProductionPipelinePort::EnsureLoaded(sl_element_id_t element_i
     return nullptr;
   }
   try {
-    auto guard = service->LoadPipeline(element_id);
+    auto guard = service->LoadEditorPipeline(element_id);
     if (!guard || !guard->pipeline_) {
       if (error) {
         *error = "Failed to load pipeline for editor session";
@@ -667,7 +676,7 @@ void EditorSessionProductionJournalPort::InvalidateThumbnail(sl_element_id_t ele
       invalidate_thumbnail(element_id);
     } catch (...) {
       // Thumbnail invalidation is an acceleration step. A committed
-      // history/pipeline projection remains durable if it cannot run.
+      // history and serialized pipeline state remain durable if it cannot run.
     }
   }
 }
