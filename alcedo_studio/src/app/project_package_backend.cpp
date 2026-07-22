@@ -966,10 +966,16 @@ auto UnpackProjectToWorkspace(const std::filesystem::path& packedPath,
     return false;
   }
   if (!metadata.is_object() || !metadata.contains("project_file_version") ||
-      !metadata.at("project_file_version").is_string() ||
-      !ProjectVersionIsSupported(metadata.at("project_file_version").get<std::string>())) {
+      !metadata.at("project_file_version").is_string()) {
     if (errorOut) {
-      *errorOut = Tr("Packed project metadata version is not supported.");
+      *errorOut = Tr("Incompatible project format: packed project metadata version is missing.");
+    }
+    return false;
+  }
+  if (!ProjectVersionIsSupported(metadata.at("project_file_version").get<std::string>())) {
+    if (errorOut) {
+      *errorOut = Tr("Incompatible project format: packed project metadata version is not "
+                     "supported. Older project packages are not migrated.");
     }
     return false;
   }

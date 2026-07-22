@@ -27,9 +27,11 @@ constexpr std::array<char, 8> kPackedProjectMagic{
     {'P', 'U', 'E', 'R', 'H', 'P', 'K', '1'}};
 constexpr uint32_t kPackedProjectVersion = 3;
 constexpr uint64_t kMaxPackedComponentBytes = 2ULL * 1024ULL * 1024ULL * 1024ULL;
-constexpr std::string_view kProjectFileVersion = "0.2.5";
-constexpr std::string_view kMinSupportedProjectFileVersion = "0.2.5";
-constexpr std::string_view kMaxSupportedProjectFileVersion = "0.2.5";
+// 0.3.0 is a destructive history-format cutover: mini-Git commit graph replaces the
+// array-and-cursor Version timeline. Older project packages are rejected with no migration.
+constexpr std::string_view kProjectFileVersion = "0.3.0";
+constexpr std::string_view kMinSupportedProjectFileVersion = "0.3.0";
+constexpr std::string_view kMaxSupportedProjectFileVersion = "0.3.0";
 
 auto IsMetadataJsonPath(const std::filesystem::path& path) -> bool;
 auto IsPackedProjectPath(const std::filesystem::path& path) -> bool;

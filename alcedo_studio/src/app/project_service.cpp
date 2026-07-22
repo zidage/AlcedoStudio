@@ -378,7 +378,9 @@ auto ComputeProjectDataSummary(StorageService& storage_service) -> nlohmann::jso
       {"ComboFolder", "combo_id"},
       {"Filter", "combo_id"},
       {"EditHistory", "file_id"},
-      {"Version", "hash"},
+      {"VersionRef", "version_id"},
+      {"EditCommit", "commit_hash"},
+      {"ImageEditState", "element_id"},
       {"PipelineParam", "file_id"},
       {"SemanticModel", nullptr},
       {"SemanticImageEmbedding", "file_id"},
@@ -526,11 +528,19 @@ void ProjectService::LoadProject(const std::filesystem::path& meta_path) {
 
   if (!metadata.contains("project_file_version") ||
       !metadata.at("project_file_version").is_string()) {
-    throw std::runtime_error("Project metadata version is missing");
+    throw std::runtime_error(
+        "Incompatible project format: project metadata version is missing. "
+        "This build does not migrate older project packages.");
   }
-  if (!project_pack::ProjectVersionIsSupported(
-          metadata.at("project_file_version").get<std::string>())) {
-    throw std::runtime_error("Project metadata version is not supported");
+  {
+    const auto file_version = metadata.at("project_file_version").get<std::string>();
+    if (!project_pack::ProjectVersionIsSupported(file_version)) {
+      throw std::runtime_error(
+          "Incompatible project format: project file version '" + file_version +
+          "' is not supported (required " +
+          std::string(project_pack::kMinSupportedProjectFileVersion) + "). "
+          "This build does not migrate older history, pipeline, or journal layouts.");
+    }
   }
 
   if (metadata.contains("project_uuid") && metadata.at("project_uuid").is_string()) {

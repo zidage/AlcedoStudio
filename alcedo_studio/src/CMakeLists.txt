@@ -971,6 +971,9 @@ set(HISTORY_SRCS
     edit/history/editor_transaction_journal.cpp
     edit/history/editor_journal_writer.cpp
     edit/history/editor_journal_recovery.cpp
+    edit/history/version_ref.cpp
+    edit/history/edit_commit.cpp
+    edit/history/commit_graph.cpp
 )
 
 def_library(EditHistory
@@ -1021,6 +1024,9 @@ set(MAPPER_SRCS
     storage/mapper/sleeve/filter/filter_mapper.cpp
     storage/mapper/sleeve/edit_history/history_mapper.cpp
     storage/mapper/sleeve/edit_history/recovery_metadata_mapper.cpp
+    storage/mapper/sleeve/edit_history/edit_commit_mapper.cpp
+    storage/mapper/sleeve/edit_history/version_ref_mapper.cpp
+    storage/mapper/sleeve/edit_history/image_edit_state_mapper.cpp
     storage/mapper/pipeline/pipeline_mapper.cpp
 )
 
@@ -1055,6 +1061,7 @@ set(SERVICE_SRCS
     storage/service/sleeve/element/file_service.cpp
     storage/service/sleeve/element/folder_service.cpp
     storage/service/sleeve/edit_history/history_service.cpp
+    storage/service/sleeve/edit_history/commit_graph_service.cpp
     storage/service/pipeline/pipeline_service.cpp
 )
 

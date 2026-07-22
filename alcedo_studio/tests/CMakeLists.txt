@@ -1019,7 +1019,23 @@ target_link_libraries(VersionHashTest EditHistory GTest::gtest_main)
 gtest_discover_tests(VersionHashTest TEST_PREFIX "VersionHashTest."
   PROPERTIES LABELS "ci_core_flow")
 
-# Phase 5F: redo-only journal record format, RewriteTimeline, independent timeline simulator.
+add_executable(CommitGraphTest edit/history/commit_graph_test.cpp)
+target_include_directories(CommitGraphTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(CommitGraphTest ProjectService EditHistory StorageService GTest::gtest_main)
+gtest_discover_tests(CommitGraphTest TEST_PREFIX "CommitGraphTest."
+  PROPERTIES LABELS "ci_core_flow;edit;history;commit_graph")
+if(WIN32)
+  alcedo_copy_duckdb_extensions(CommitGraphTest)
+  if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
+    add_custom_command(TARGET CommitGraphTest POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll"
+              "$<TARGET_FILE_DIR:CommitGraphTest>/duckdb.dll"
+      VERBATIM)
+  endif()
+endif()
+
+# Redo-only journal record format, RewriteTimeline, independent timeline simulator.
 add_executable(EditorTransactionJournalTest edit/history/editor_transaction_journal_test.cpp)
 target_include_directories(EditorTransactionJournalTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorTransactionJournalTest EditHistory GTest::gtest_main)
@@ -1925,6 +1941,8 @@ alcedo_assign_test_category(edit ALCEDO_BUILD_EDIT_TESTS alcedo_tests_edit
   HalationOpTest
   CropRotateOpTest
   PipelineFrameSinkTest
+  VersionHashTest
+  CommitGraphTest
 )
 
 alcedo_assign_test_category(ui ALCEDO_BUILD_UI_TESTS alcedo_tests_ui
