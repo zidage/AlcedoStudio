@@ -974,6 +974,7 @@ set(HISTORY_SRCS
     edit/history/version_ref.cpp
     edit/history/edit_commit.cpp
     edit/history/commit_graph.cpp
+    edit/history/mini_git_working_history.cpp
 )
 
 def_library(EditHistory

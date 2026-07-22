@@ -86,8 +86,8 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   // runtime. The production scheduler accepts intents without completing when
   // no real image path / test producer is available (shell-compatible Loading).
   {
-    auto production_pipeline  = std::make_shared<EditorSessionProductionPipelinePort>();
-    auto production_history   = std::make_shared<EditorSessionProductionHistoryPort>();
+    auto production_pipeline = std::make_shared<EditorSessionProductionPipelinePort>();
+    auto production_history  = std::make_shared<EditorSessionProductionHistoryPort>();
     auto production_tasks =
         std::make_shared<EditorSessionProductionTaskPort>(background_tasks_.get());
     auto production_scheduler = std::make_shared<EditorSessionProductionSchedulerPort>();
@@ -97,6 +97,11 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     production_services.pipeline_service =
         [this]() -> std::shared_ptr<alcedo::PipelineMgmtService> {
       return project_ ? project_->handler().pipeline_service() : nullptr;
+    };
+    production_services.load_editor_pipeline_guard =
+        [this](sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGuard> {
+      auto service = project_ ? project_->handler().pipeline_service() : nullptr;
+      return service ? service->LoadEditorPipeline(element_id) : nullptr;
     };
     production_services.history_service =
         [this]() -> std::shared_ptr<alcedo::EditHistoryMgmtService> {
@@ -162,6 +167,20 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
       return root / "editor-journal" /
              ("image-" + std::to_string(static_cast<std::uint64_t>(element_id)) + ".wal");
     };
+    production_services.mini_git_journal_path = [this](sl_element_id_t element_id) {
+      if (!project_) {
+        return std::filesystem::path{};
+      }
+      auto root = project_->handler().db_path().parent_path();
+      if (root.empty()) {
+        root = project_->handler().workspace_dir();
+      }
+      if (root.empty()) {
+        return std::filesystem::path{};
+      }
+      return root / "editor-journal" /
+             ("image-" + std::to_string(static_cast<std::uint64_t>(element_id)) + ".mini-git.wal");
+    };
     production_services.invalidate_thumbnail = [this](sl_element_id_t element_id) {
       if (!project_) {
         return;
@@ -172,6 +191,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     };
     production_pipeline->SetServices(production_services);
     production_history->SetServices(production_services);
+    production_history->SetPipelinePort(production_pipeline);
     production_scheduler->SetServices(production_services);
     auto production_journal =
         std::make_shared<EditorSessionProductionJournalPort>(production_services);

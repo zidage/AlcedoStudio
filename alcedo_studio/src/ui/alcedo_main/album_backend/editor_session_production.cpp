@@ -17,6 +17,7 @@
 #include "edit/frame_presentation_types.hpp"
 #include "edit/history/editor_journal_recovery.hpp"
 #include "edit/history/editor_transaction_journal.hpp"
+#include "edit/history/mini_git_working_history.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
@@ -107,21 +108,23 @@ auto EditorSessionProductionPipelinePort::EnsureLoaded(sl_element_id_t element_i
       return it->second;
     }
   }
-  std::shared_ptr<alcedo::PipelineMgmtService> service;
+  std::function<std::shared_ptr<alcedo::PipelineGuard>(sl_element_id_t)> guard_loader;
+  std::shared_ptr<alcedo::PipelineMgmtService>                           service;
   {
     std::scoped_lock lock(mutex_);
+    guard_loader = services_.load_editor_pipeline_guard;
     if (services_.pipeline_service) {
       service = services_.pipeline_service();
     }
   }
-  if (!service) {
+  if (!guard_loader && !service) {
     if (error) {
       *error = "Pipeline service is unavailable";
     }
     return nullptr;
   }
   try {
-    auto guard = service->LoadEditorPipeline(element_id);
+    auto guard = guard_loader ? guard_loader(element_id) : service->LoadEditorPipeline(element_id);
     if (!guard || !guard->pipeline_) {
       if (error) {
         *error = "Failed to load pipeline for editor session";
@@ -708,14 +711,223 @@ void EditorSessionProductionJournalPort::EmitRecoveryDiagnostic(
 
 // ── History port ────────────────────────────────────────────────────────────
 
+struct EditorSessionProductionHistoryPort::WorkingState {
+  std::mutex                                                             mutex;
+  std::shared_ptr<alcedo::PipelineGuard>                                 pipeline_guard;
+  std::shared_ptr<alcedo::MiniGitJournal>                                journal;
+  std::unique_ptr<alcedo::MiniGitWorkingHistory>                         history;
+  std::unordered_map<std::string, alcedo::EditorAdjustmentOperatorState> pending_before;
+  alcedo::EditorRenderAdjustmentSnapshot                                 committed_snapshot;
+};
+
+namespace {
+
+auto EnabledForAdjustmentParams(const nlohmann::json& params) -> bool {
+  if (params.is_object() && params.contains("enabled") && params.at("enabled").is_boolean()) {
+    return params.at("enabled").get<bool>();
+  }
+  if (params.is_object() && params.size() == 1 && params.begin().value().is_object()) {
+    const auto& nested = params.begin().value();
+    if (nested.contains("enabled") && nested.at("enabled").is_boolean()) {
+      return nested.at("enabled").get<bool>();
+    }
+  }
+  return true;
+}
+
+void UpsertCommittedSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
+                             const std::string& field_key, const nlohmann::json& params) {
+  if (snapshot == nullptr) {
+    return;
+  }
+  alcedo::EditorAdjustmentPatch patch{field_key, params.is_null() ? std::string{} : params.dump(),
+                                      true};
+  auto                          existing = std::find_if(
+      snapshot->patches.begin(), snapshot->patches.end(),
+      [&](const alcedo::EditorAdjustmentPatch& current) { return current.field_key == field_key; });
+  if (existing == snapshot->patches.end()) {
+    snapshot->patches.push_back(std::move(patch));
+  } else {
+    *existing = std::move(patch);
+  }
+  ++snapshot->snapshot_generation;
+  snapshot->params_json = params.is_null() ? std::string{} : params.dump();
+  snapshot->fingerprint.clear();
+  for (const auto& current : snapshot->patches) {
+    if (!snapshot->fingerprint.empty()) {
+      snapshot->fingerprint += "|";
+    }
+    snapshot->fingerprint += current.field_key;
+  }
+}
+
+auto ApplyCommittedPayload(alcedo::PipelineGuard&                  guard,
+                           alcedo::EditorRenderAdjustmentSnapshot* snapshot,
+                           const alcedo::OrdinaryEditPayload& payload, bool use_after_value,
+                           std::string* error) -> bool {
+  if (!guard.pipeline_) {
+    if (error) *error = "Editor pipeline is unavailable";
+    return false;
+  }
+  const auto field_key =
+      alcedo::EditorAdjustmentFieldKey(payload.stage_name, payload.operator_type);
+  if (!field_key.has_value()) {
+    if (error) *error = "Committed adjustment does not map to a QML editor field";
+    return false;
+  }
+  const auto spec = alcedo::ResolveEditorAdjustmentField(*field_key);
+  if (!spec.has_value()) {
+    if (error) *error = "Committed adjustment field mapping is unavailable";
+    return false;
+  }
+  alcedo::EditorAdjustmentOperatorState state;
+  state.params  = use_after_value ? payload.after_value : payload.before_value;
+  state.enabled = use_after_value ? payload.after_enabled : payload.before_enabled;
+  std::unique_lock<std::mutex> render_lock(guard.pipeline_->GetRenderLock());
+  if (!alcedo::ApplyEditorAdjustmentOperatorState(*guard.pipeline_, *spec, state, error)) {
+    return false;
+  }
+  UpsertCommittedSnapshot(snapshot, *field_key, state.params);
+  return true;
+}
+
+auto ApplyRecoveredRecord(alcedo::PipelineGuard&                  guard,
+                          alcedo::EditorRenderAdjustmentSnapshot* snapshot,
+                          alcedo::CommitGraph*                    replay_graph,
+                          const alcedo::MiniGitJournalRecord& record, std::string* error) -> bool {
+  if (replay_graph == nullptr) {
+    if (error) *error = "Recovery commit graph is unavailable";
+    return false;
+  }
+  if (record.kind == alcedo::MiniGitJournalRecordKind::kEditCommit &&
+      record.edit_commit.has_value()) {
+    const auto payload =
+        alcedo::OrdinaryEditPayload::FromJSON(record.edit_commit->GetPayloadJSON());
+    if (!ApplyCommittedPayload(guard, snapshot, payload, true, error)) {
+      return false;
+    }
+  } else if (record.kind == alcedo::MiniGitJournalRecordKind::kHeadMove) {
+    const auto source_head = replay_graph->GetActiveVersionRef().head_commit_hash;
+    if (source_head.has_value()) {
+      const auto& source = replay_graph->GetCommit(*source_head);
+      if (record.target_head == source.GetFirstParentHash()) {
+        const auto payload = alcedo::OrdinaryEditPayload::FromJSON(source.GetPayloadJSON());
+        if (!ApplyCommittedPayload(guard, snapshot, payload, false, error)) {
+          return false;
+        }
+      } else if (record.target_head.has_value()) {
+        const auto& target  = replay_graph->GetCommit(*record.target_head);
+        const auto  payload = alcedo::OrdinaryEditPayload::FromJSON(target.GetPayloadJSON());
+        if (!ApplyCommittedPayload(guard, snapshot, payload, true, error)) {
+          return false;
+        }
+      }
+    } else if (record.target_head.has_value()) {
+      const auto& target  = replay_graph->GetCommit(*record.target_head);
+      const auto  payload = alcedo::OrdinaryEditPayload::FromJSON(target.GetPayloadJSON());
+      if (!ApplyCommittedPayload(guard, snapshot, payload, true, error)) {
+        return false;
+      }
+    }
+  }
+  return alcedo::MiniGitWorkingHistory::Replay(*replay_graph, {record}, error);
+}
+
+}  // namespace
+
 void EditorSessionProductionHistoryPort::SetServices(EditorSessionProductionServices services) {
   std::scoped_lock lock(mutex_);
   services_ = std::move(services);
 }
 
-auto EditorSessionProductionHistoryPort::Acquire(sl_element_id_t element_id, std::string* /*error*/)
+void EditorSessionProductionHistoryPort::SetPipelinePort(
+    std::shared_ptr<EditorSessionProductionPipelinePort> pipeline_port) {
+  std::scoped_lock lock(mutex_);
+  pipeline_port_ = std::move(pipeline_port);
+}
+
+auto EditorSessionProductionHistoryPort::EnsureWorkingState(sl_element_id_t element_id,
+                                                            std::string*    error)
+    -> std::shared_ptr<WorkingState> {
+  std::shared_ptr<EditorSessionProductionPipelinePort>  pipeline_port;
+  std::function<std::filesystem::path(sl_element_id_t)> journal_path;
+  {
+    std::scoped_lock lock(mutex_);
+    const auto       existing = working_states_.find(element_id);
+    if (existing != working_states_.end()) {
+      return existing->second;
+    }
+    pipeline_port = pipeline_port_.lock();
+    journal_path  = services_.mini_git_journal_path;
+  }
+  if (!pipeline_port) {
+    if (error) *error = "Editor production pipeline port is unavailable";
+    return nullptr;
+  }
+  auto guard = pipeline_port->EnsureLoaded(element_id, error);
+  if (!guard || !guard->pipeline_ || !guard->commit_graph_) {
+    if (error && error->empty()) *error = "Editor mini-Git pipeline state is unavailable";
+    return nullptr;
+  }
+
+  std::filesystem::path path;
+  if (journal_path) {
+    path = journal_path(element_id);
+  }
+  auto journal = std::make_shared<alcedo::MiniGitJournal>(std::move(path));
+  if (!journal->Load(error)) {
+    return nullptr;
+  }
+
+  auto state            = std::make_shared<WorkingState>();
+  state->pipeline_guard = guard;
+  state->journal        = journal;
+  auto replay_graph     = *guard->commit_graph_;
+  auto validated_graph  = replay_graph;
+  if (!alcedo::MiniGitWorkingHistory::Replay(validated_graph, journal->records(), error)) {
+    return nullptr;
+  }
+  for (const auto& record : journal->records()) {
+    if (!ApplyRecoveredRecord(*guard, &state->committed_snapshot, &replay_graph, record, error)) {
+      return nullptr;
+    }
+  }
+  *guard->commit_graph_            = std::move(replay_graph);
+  guard->working_head_commit_hash_ = guard->commit_graph_->GetActiveVersionRef().head_commit_hash;
+  guard->transaction_chain_hash_ =
+      guard->commit_graph_->ChainHashForHead(guard->working_head_commit_hash_);
+  guard->dirty_ = !journal->records().empty();
+  if (!journal->records().empty()) {
+    guard->pipeline_->SetExecutionStages();
+  }
+  state->history = std::make_unique<alcedo::MiniGitWorkingHistory>(guard->commit_graph_, journal);
+
+  std::scoped_lock lock(mutex_);
+  const auto [it, inserted] = working_states_.emplace(element_id, state);
+  return inserted ? state : it->second;
+}
+
+auto EditorSessionProductionHistoryPort::Acquire(sl_element_id_t element_id, std::string* error)
     -> alcedo::EditorHistoryGuardHandle {
-  // Mirror pipeline: non-blocking open; real LoadHistory is on demand later.
+  std::function<std::shared_ptr<alcedo::PipelineGuard>(sl_element_id_t)> direct_loader;
+  std::function<std::shared_ptr<alcedo::PipelineMgmtService>()>          service_loader;
+  {
+    std::scoped_lock lock(mutex_);
+    direct_loader  = services_.load_editor_pipeline_guard;
+    service_loader = services_.pipeline_service;
+  }
+  const bool has_real_pipeline =
+      static_cast<bool>(direct_loader) || (service_loader && static_cast<bool>(service_loader()));
+  if (has_real_pipeline) {
+    std::string prepare_error;
+    if (!EnsureWorkingState(element_id, &prepare_error)) {
+      if (error) {
+        *error = prepare_error.empty() ? "Editor mini-Git history initialization failed"
+                                       : std::move(prepare_error);
+      }
+      return {};
+    }
+  }
   return alcedo::EditorHistoryGuardHandle{element_id, true};
 }
 
@@ -725,32 +937,151 @@ void EditorSessionProductionHistoryPort::Release(const alcedo::EditorHistoryGuar
   }
   {
     std::scoped_lock lock(mutex_);
-    auto             it = guards_.find(guard.element_id);
+    working_states_.erase(guard.element_id);
+    auto it = guards_.find(guard.element_id);
     if (it != guards_.end()) {
       guards_.erase(it);
     }
   }
 }
 
-auto EditorSessionProductionHistoryPort::Undo(const alcedo::EditorHistoryGuardHandle& /*guard*/,
-                                              std::string* /*error*/) -> bool {
-  // Full undo/redo against WorkingVersion + pipeline is Phase 5C. Phase 5B only
-  // needs the history guard so open/first-frame can run.
+auto EditorSessionProductionHistoryPort::CaptureAdjustmentBeforePreview(
+    const alcedo::EditorHistoryGuardHandle& guard, const alcedo::EditorAdjustmentPatch& patch,
+    std::string* error) -> bool {
+  auto state = EnsureWorkingState(guard.element_id, error);
+  if (!state) {
+    return false;
+  }
+  std::scoped_lock state_lock(state->mutex);
+  if (state->pending_before.contains(patch.field_key)) {
+    return true;
+  }
+  alcedo::EditorAdjustmentOperatorState before;
+  std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
+  if (!alcedo::ReadEditorAdjustmentOperatorState(*state->pipeline_guard->pipeline_, patch.field_key,
+                                                 &before, error)) {
+    return false;
+  }
+  state->pending_before.emplace(patch.field_key, std::move(before));
   return true;
 }
 
-auto EditorSessionProductionHistoryPort::Redo(const alcedo::EditorHistoryGuardHandle& /*guard*/,
-                                              std::string* /*error*/) -> bool {
+auto EditorSessionProductionHistoryPort::CommitAdjustment(
+    const alcedo::EditorHistoryGuardHandle& guard, const alcedo::EditorAdjustmentPatch& patch,
+    std::string* error) -> bool {
+  auto state = EnsureWorkingState(guard.element_id, error);
+  if (!state) {
+    return false;
+  }
+  std::scoped_lock state_lock(state->mutex);
+  const auto       spec = alcedo::ResolveEditorAdjustmentField(patch.field_key);
+  if (!spec.has_value()) {
+    if (error) *error = "Unknown editor adjustment field: " + patch.field_key;
+    return false;
+  }
+  auto before = state->pending_before.find(patch.field_key);
+  if (before == state->pending_before.end()) {
+    if (error) *error = "Settled adjustment has no captured committed state";
+    return false;
+  }
+
+  nlohmann::json after_params;
+  try {
+    after_params = nlohmann::json::parse(patch.params_json);
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+  if (!after_params.is_object()) {
+    if (error) *error = "Editor adjustment params must be a JSON object";
+    return false;
+  }
+
+  alcedo::OrdinaryEditPayload payload;
+  payload.operator_type  = spec->operator_type;
+  payload.stage_name     = spec->stage_name;
+  payload.field_name     = "$operator_params";
+  payload.before_value   = before->second.params;
+  payload.after_value    = after_params;
+  payload.before_enabled = before->second.enabled;
+  payload.after_enabled  = EnabledForAdjustmentParams(after_params);
+
+  {
+    alcedo::EditorAdjustmentOperatorState after{after_params, payload.after_enabled};
+    std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
+    if (!alcedo::ApplyEditorAdjustmentOperatorState(*state->pipeline_guard->pipeline_, *spec, after,
+                                                    error)) {
+      return false;
+    }
+  }
+  const auto append = state->history->AppendEdit(std::move(payload));
+  if (!append.committed) {
+    if (error) *error = append.error;
+    return false;
+  }
+  state->pipeline_guard->dirty_                    = true;
+  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
+  state->pipeline_guard->transaction_chain_hash_   = state->history->transaction_chain_hash();
+  UpsertCommittedSnapshot(&state->committed_snapshot, patch.field_key, after_params);
+  state->pending_before.erase(before);
+  return true;
+}
+
+auto EditorSessionProductionHistoryPort::Undo(const alcedo::EditorHistoryGuardHandle& guard,
+                                              std::string* error) -> bool {
+  auto state = EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  std::scoped_lock state_lock(state->mutex);
+  const auto       result = state->history->Undo();
+  if (!result.error.empty()) {
+    if (error) *error = result.error;
+    return false;
+  }
+  if (!result.moved || !result.selected_commit.has_value()) return true;
+  const auto payload =
+      alcedo::OrdinaryEditPayload::FromJSON(result.selected_commit->GetPayloadJSON());
+  if (!ApplyCommittedPayload(*state->pipeline_guard, &state->committed_snapshot, payload, false,
+                             error)) {
+    return false;
+  }
+  state->pipeline_guard->dirty_                    = true;
+  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
+  state->pipeline_guard->transaction_chain_hash_   = state->history->transaction_chain_hash();
+  state->pending_before.clear();
+  return true;
+}
+
+auto EditorSessionProductionHistoryPort::Redo(const alcedo::EditorHistoryGuardHandle& guard,
+                                              std::string* error) -> bool {
+  auto state = EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  std::scoped_lock state_lock(state->mutex);
+  const auto       result = state->history->Redo();
+  if (!result.error.empty()) {
+    if (error) *error = result.error;
+    return false;
+  }
+  if (!result.moved || !result.selected_commit.has_value()) return true;
+  const auto payload =
+      alcedo::OrdinaryEditPayload::FromJSON(result.selected_commit->GetPayloadJSON());
+  if (!ApplyCommittedPayload(*state->pipeline_guard, &state->committed_snapshot, payload, true,
+                             error)) {
+    return false;
+  }
+  state->pipeline_guard->dirty_                    = true;
+  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
+  state->pipeline_guard->transaction_chain_hash_   = state->history->transaction_chain_hash();
+  state->pending_before.clear();
   return true;
 }
 
 auto EditorSessionProductionHistoryPort::ReadAdjustmentSnapshot(
-    const alcedo::EditorHistoryGuardHandle& /*guard*/,
-    alcedo::EditorRenderAdjustmentSnapshot* snapshot, std::string* /*error*/) -> bool {
-  if (snapshot) {
-    // Full history→adjustment mapping is Phase 5C/6; empty means unedited.
-    *snapshot = {};
-  }
+    const alcedo::EditorHistoryGuardHandle& guard, alcedo::EditorRenderAdjustmentSnapshot* snapshot,
+    std::string* error) -> bool {
+  auto state = EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  std::scoped_lock state_lock(state->mutex);
+  if (snapshot) *snapshot = state->committed_snapshot;
   return true;
 }
 

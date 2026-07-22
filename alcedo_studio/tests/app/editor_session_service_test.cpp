@@ -40,8 +40,11 @@ class FakePipelinePort final : public IEditorPipelinePort {
 class FakeHistoryPort final : public IEditorHistoryPort {
  public:
   bool                           fail_acquire  = false;
+  bool                           fail_commit   = false;
   bool                           fail_undo     = false;
   bool                           fail_snapshot = false;
+  int                            capture_count = 0;
+  int                            commit_count  = 0;
   int                            undo_count    = 0;
   int                            redo_count    = 0;
   EditorRenderAdjustmentSnapshot current_snapshot{};
@@ -57,6 +60,25 @@ class FakeHistoryPort final : public IEditorHistoryPort {
     return EditorHistoryGuardHandle{element_id, true};
   }
   void Release(const EditorHistoryGuardHandle&) override {}
+  auto CaptureAdjustmentBeforePreview(const EditorHistoryGuardHandle&,
+                                      const EditorAdjustmentPatch& patch, std::string*)
+      -> bool override {
+    ++capture_count;
+    last_captured_patch = patch;
+    return true;
+  }
+  auto CommitAdjustment(const EditorHistoryGuardHandle&, const EditorAdjustmentPatch& patch,
+                        std::string* error) -> bool override {
+    ++commit_count;
+    last_committed_patch = patch;
+    if (fail_commit) {
+      if (error) {
+        *error = "mini-Git journal append failed";
+      }
+      return false;
+    }
+    return true;
+  }
   auto Undo(const EditorHistoryGuardHandle&, std::string* error) -> bool override {
     ++undo_count;
     if (fail_undo) {
@@ -85,6 +107,9 @@ class FakeHistoryPort final : public IEditorHistoryPort {
     }
     return true;
   }
+
+  EditorAdjustmentPatch last_captured_patch{};
+  EditorAdjustmentPatch last_committed_patch{};
 };
 
 class FakeTaskPort final : public IEditorTaskPort {
@@ -265,11 +290,11 @@ class RecordingRenderPort final : public IEditorRenderSubmitPort {
     waited_sessions.push_back(session_generation);
   }
   void SetActiveGenerations(std::uint64_t session_generation, std::uint64_t render_generation,
-                            std::uint64_t view_generation,
+                            std::uint64_t                  view_generation,
                             EditorRenderSupersessionPolicy policy) override {
-    active_session = session_generation;
-    active_render  = render_generation;
-    active_view    = view_generation;
+    active_session           = session_generation;
+    active_render            = render_generation;
+    active_view              = view_generation;
     last_supersession_policy = policy;
   }
 };
@@ -582,7 +607,7 @@ TEST_F(EditorSessionServiceTest, StaleSaveFinishedAfterSealIsIgnored) {
   EXPECT_EQ(tasks_->ended_ids.size(), 1u);
 }
 
-TEST_F(EditorSessionServiceTest, PatchAndCommittedAdjustmentRouteThroughRenderPortOnly) {
+TEST_F(EditorSessionServiceTest, InteractiveSamplesAndSettledAdjustmentUseOneHistoryCommit) {
   service_->Open(1, 2);
   PresentFirstFrame(*service_);
   render_->submitted.clear();
@@ -605,6 +630,30 @@ TEST_F(EditorSessionServiceTest, PatchAndCommittedAdjustmentRouteThroughRenderPo
   EXPECT_EQ(render_->submitted.back().reason, EditorRenderReason::SettledAdjustment);
   EXPECT_EQ(render_->last_supersession_policy,
             EditorRenderSupersessionPolicy::PreserveInflightFullFrame);
+  EXPECT_EQ(history_->capture_count, 2);
+  EXPECT_EQ(history_->commit_count, 1);
+  EXPECT_EQ(history_->last_committed_patch.field_key, "exposure");
+  EXPECT_TRUE(history_->last_committed_patch.settled);
+}
+
+TEST_F(EditorSessionServiceTest, SettledCommitFailureDoesNotRouteASettledRender) {
+  service_->Open(1, 2);
+  PresentFirstFrame(*service_);
+  render_->submitted.clear();
+
+  EditorAdjustmentPatch patch{"exposure", R"({"exposure":0.5})", false};
+  ASSERT_NE(service_->Patch(patch).kind, EditorSessionResultKind::Rejected);
+  ASSERT_EQ(render_->submitted.size(), 1u);
+
+  history_->fail_commit = true;
+  patch.params_json     = R"({"exposure":0.75})";
+  const auto result     = service_->CommitAdjustment(patch);
+
+  EXPECT_EQ(result.kind, EditorSessionResultKind::Rejected);
+  EXPECT_EQ(result.message, "mini-Git journal append failed");
+  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+  EXPECT_EQ(history_->commit_count, 1);
+  EXPECT_EQ(render_->submitted.size(), 1u);
 }
 
 TEST_F(EditorSessionServiceTest, RepeatedInteractivePatchesKeepOnlyLatestValuePerField) {
@@ -623,6 +672,11 @@ TEST_F(EditorSessionServiceTest, RepeatedInteractivePatchesKeepOnlyLatestValuePe
   EXPECT_EQ(snapshot.patches.front().field_key, "exposure");
   EXPECT_EQ(snapshot.patches.front().params_json, R"({"exposure":49})");
   EXPECT_EQ(snapshot.fingerprint, "exposure");
+  EXPECT_EQ(history_->commit_count, 0);
+
+  patch.settled = true;
+  service_->CommitAdjustment(patch);
+  EXPECT_EQ(history_->commit_count, 1);
 }
 
 TEST_F(EditorSessionServiceTest, PatchWhileLoadingIsRejectedWithoutCancellingFirstFrame) {

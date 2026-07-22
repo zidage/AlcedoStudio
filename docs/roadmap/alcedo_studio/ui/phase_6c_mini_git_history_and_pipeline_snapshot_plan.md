@@ -2,8 +2,9 @@
 
 Date: 2026-07-22
 
-Status: approved design; 6C-1, 6C-2, 6C-2-Fix, and 6C-3 implemented.
-6C-4 production journal cutover may proceed on the validated serialized pipeline state API.
+Status: approved design; 6C-1, 6C-2, 6C-2-Fix, 6C-3, and 6C-4 implemented.
+6C-5 global save checkpoint and materialization may proceed on the validated serialized pipeline
+state and mini-Git journal APIs.
 
 Related documents:
 

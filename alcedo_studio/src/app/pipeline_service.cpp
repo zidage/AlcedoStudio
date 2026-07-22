@@ -14,9 +14,9 @@
 #include <span>
 #include <string>
 
-#include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_commit.hpp"
+#include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
 #include "type/type.hpp"
@@ -50,12 +50,12 @@ void EnsureDefaultColorTemp(CPUPipelineExecutor& exec) {
     return;
   }
 
-  std::string mode = "as_shot";
-  float       cct  = 6500.0f;
-  float       tint = 0.0f;
+  std::string mode      = "as_shot";
+  float       cct       = 6500.0f;
+  float       tint      = 0.0f;
 
-  auto& raw_stage = exec.GetStage(PipelineStageName::Image_Loading);
-  auto  raw_entry = raw_stage.GetOperator(OperatorType::RAW_DECODE);
+  auto&       raw_stage = exec.GetStage(PipelineStageName::Image_Loading);
+  auto        raw_entry = raw_stage.GetOperator(OperatorType::RAW_DECODE);
   if (raw_entry.has_value() && raw_entry.value() && raw_entry.value()->op_) {
     const nlohmann::json raw_params = raw_entry.value()->op_->GetParams();
     if (raw_params.contains("raw") && raw_params["raw"].is_object()) {
@@ -72,11 +72,7 @@ void EnsureDefaultColorTemp(CPUPipelineExecutor& exec) {
 
   nlohmann::json color_temp_params;
   color_temp_params["color_temp"] = {
-      {"mode", mode},
-      {"cct", cct},
-      {"tint", tint},
-      {"resolved_cct", cct},
-      {"resolved_tint", tint},
+      {"mode", mode}, {"cct", cct}, {"tint", tint}, {"resolved_cct", cct}, {"resolved_tint", tint},
   };
   to_ws_stage.SetOperator(OperatorType::COLOR_TEMP, color_temp_params, global_params);
 }
@@ -157,7 +153,7 @@ constexpr const char*   kSerializedPipelineStateRootKey       = "root_id";
 constexpr const char*   kSerializedPipelineStateHeadKey       = "head_commit_hash";
 constexpr const char*   kSerializedPipelineStateChainKey      = "transaction_chain_hash";
 constexpr const char*   kSerializedPipelineStateParamsKey     = "pipeline_params";
-constexpr const char*   kRootRawColorContextKey                = "raw_color_context";
+constexpr const char*   kRootRawColorContextKey               = "raw_color_context";
 
 struct DecodedSerializedPipelineState {
   root_id_t                root_id{};
@@ -171,13 +167,12 @@ struct DecodedRootPipelineState {
   std::optional<RawRuntimeColorContext> raw_color_context;
 };
 
-auto MakeSerializedPipelineState(const PipelineGuard& guard,
-                                 const nlohmann::json& pipeline_params) -> nlohmann::json {
+auto MakeSerializedPipelineState(const PipelineGuard& guard, const nlohmann::json& pipeline_params)
+    -> nlohmann::json {
   return nlohmann::json{
       {kSerializedPipelineStateFormatKey, kSerializedPipelineStateFormatVersion},
       {kSerializedPipelineStateRootKey, guard.root_id_.ToString()},
-      {kSerializedPipelineStateHeadKey,
-       HeadCommitHashToStorage(guard.working_head_commit_hash_)},
+      {kSerializedPipelineStateHeadKey, HeadCommitHashToStorage(guard.working_head_commit_hash_)},
       {kSerializedPipelineStateChainKey, guard.transaction_chain_hash_.ToString()},
       {kSerializedPipelineStateParamsKey, pipeline_params}};
 }
@@ -201,10 +196,10 @@ auto DecodeSerializedPipelineState(const nlohmann::json& encoded)
     DecodedSerializedPipelineState state;
     state.root_id =
         Hash128::FromString(encoded.at(kSerializedPipelineStateRootKey).get<std::string>());
-    state.head_commit_hash = HeadCommitHashFromStorage(
-        encoded.at(kSerializedPipelineStateHeadKey).get<std::string>());
-    state.transaction_chain_hash = Hash128::FromString(
-        encoded.at(kSerializedPipelineStateChainKey).get<std::string>());
+    state.head_commit_hash =
+        HeadCommitHashFromStorage(encoded.at(kSerializedPipelineStateHeadKey).get<std::string>());
+    state.transaction_chain_hash =
+        Hash128::FromString(encoded.at(kSerializedPipelineStateChainKey).get<std::string>());
     state.pipeline_params = encoded.at(kSerializedPipelineStateParamsKey);
     return state;
   } catch (...) {
@@ -243,12 +238,12 @@ void SetPipelineHistoryState(PipelineGuard& guard, const CommitGraph& graph) {
   guard.working_head_commit_hash_         = graph.GetActiveVersionRef().head_commit_hash;
   guard.transaction_chain_hash_           = graph.ChainHashForHead(guard.working_head_commit_hash_);
   guard.serialized_state_needs_writeback_ = false;
+  guard.commit_graph_                     = std::make_shared<CommitGraph>(graph);
 }
 
-void ImportSerializedPipelineState(
-    CPUPipelineExecutor& exec, const nlohmann::json& pipeline_params,
-    const std::optional<RawRuntimeColorContext>& raw_color_context,
-    AcceleratorBackendPreference accelerator_preference) {
+void ImportSerializedPipelineState(CPUPipelineExecutor& exec, const nlohmann::json& pipeline_params,
+                                   const std::optional<RawRuntimeColorContext>& raw_color_context,
+                                   AcceleratorBackendPreference accelerator_preference) {
   exec.ImportPipelineParams(pipeline_params);
   exec.SetAcceleratorBackendPreference(accelerator_preference);
   ResetTransientPreviewState(exec);
@@ -269,7 +264,7 @@ void ApplyCommitField(CPUPipelineExecutor& exec, OperatorType operator_type,
     throw std::runtime_error("Pipeline reconstruction encountered an empty edit field");
   }
 
-  auto&          stage = exec.GetStage(stage_name);
+  auto&          stage  = exec.GetStage(stage_name);
   nlohmann::json params = nlohmann::json::object();
   const auto     entry  = stage.GetOperator(operator_type);
   if (entry.has_value() && entry.value() && entry.value()->op_) {
@@ -279,7 +274,12 @@ void ApplyCommitField(CPUPipelineExecutor& exec, OperatorType operator_type,
     throw std::runtime_error("Pipeline reconstruction requires object operator parameters");
   }
 
-  if (field_name.front() == '/') {
+  if (field_name == "$operator_params") {
+    if (!value.is_object()) {
+      throw std::runtime_error("Pipeline reconstruction requires object operator parameters");
+    }
+    params = value;
+  } else if (field_name.front() == '/') {
     params[nlohmann::json::json_pointer(field_name)] = value;
   } else {
     params[field_name] = value;
@@ -312,7 +312,7 @@ void ApplyCommit(CPUPipelineExecutor& exec, const EditCommit& commit) {
 
 void RebuildPipelineFromRoot(CPUPipelineExecutor& exec, const CommitGraph& graph,
                              const DecodedRootPipelineState& root_state,
-                             AcceleratorBackendPreference accelerator_preference) {
+                             AcceleratorBackendPreference    accelerator_preference) {
   ImportSerializedPipelineState(exec, root_state.pipeline_params, root_state.raw_color_context,
                                 accelerator_preference);
   for (const auto& commit_hash :
@@ -326,9 +326,8 @@ void RebuildPipelineFromRoot(CPUPipelineExecutor& exec, const CommitGraph& graph
 void PipelineMgmtService::HandleEviction(sl_element_id_t evicted_id) {
   // If the would-be evicted pipeline is pinned, keep it and evict another entry instead.
   // This avoids unbounded cache growth during batch export when a pipeline is temporarily pinned.
-  sl_element_id_t candidate = evicted_id;
-  const size_t    max_attempts =
-      loaded_pipelines_.empty() ? 1 : (loaded_pipelines_.size() + 1);
+  sl_element_id_t candidate    = evicted_id;
+  const size_t    max_attempts = loaded_pipelines_.empty() ? 1 : (loaded_pipelines_.size() + 1);
 
   for (size_t attempt = 0; attempt < max_attempts; ++attempt) {
     auto it = loaded_pipelines_.find(candidate);
@@ -404,7 +403,7 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
       if (!pipeline) {
         pipeline = storage_service_->GetElementController().GetPipelineByElementId(id);
       }
-      pipeline_guard = std::make_shared<PipelineGuard>();
+      pipeline_guard         = std::make_shared<PipelineGuard>();
       pipeline_guard->dirty_ = false;
     } catch (std::exception& e) {
       throw std::runtime_error(
@@ -429,7 +428,8 @@ auto PipelineMgmtService::LoadPipeline(sl_element_id_t id) -> std::shared_ptr<Pi
     ResyncGlobalParamsFromOperators(*pipeline);
     storage_service_->RememberLivePipeline(id, pipeline);
 
-    pipeline->SetExecutionStages(); // TODO: Use service as the only way to set/reset execution stages
+    pipeline
+        ->SetExecutionStages();  // TODO: Use service as the only way to set/reset execution stages
     pipeline_guard->pipeline_              = std::move(pipeline);
     pipeline_guard->id_                    = id;
     pipeline_guard->pinned_                = true;
@@ -456,14 +456,14 @@ void PipelineMgmtService::InitializeImageRoot(const std::shared_ptr<PipelineGuar
 
   std::unique_lock<std::mutex> service_lock(lock_);
 
-  nlohmann::json root_params;
+  nlohmann::json               root_params;
   {
     std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
     root_params = pipeline->pipeline_->ExportPipelineParams();
   }
 
-  auto db_guard = storage_service_->GetDBController().GetConnectionGuard();
-  auto db_lock  = db_guard.Lock();
+  auto               db_guard = storage_service_->GetDBController().GetConnectionGuard();
+  auto               db_lock  = db_guard.Lock();
   CommitGraphService graph_service(db_guard.conn_);
   auto               state = graph_service.GetImageEditState(pipeline->id_);
   if (!state.has_value()) {
@@ -480,12 +480,10 @@ void PipelineMgmtService::InitializeImageRoot(const std::shared_ptr<PipelineGuar
     throw std::runtime_error(
         "PipelineMgmtService: image edit state disappeared while loading root");
   }
-  if (!graph_service
-           .GetRootSerializedPipelineState(pipeline->id_, graph->GetRootId())
+  if (!graph_service.GetRootSerializedPipelineState(pipeline->id_, graph->GetRootId())
            .has_value()) {
-    throw std::runtime_error(
-        "PipelineMgmtService: immutable root state is missing for image " +
-        std::to_string(pipeline->id_));
+    throw std::runtime_error("PipelineMgmtService: immutable root state is missing for image " +
+                             std::to_string(pipeline->id_));
   }
   SetPipelineHistoryState(*pipeline, *graph);
 }
@@ -496,10 +494,10 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
     InitializeImageRoot(pipeline);
 
     std::unique_lock<std::mutex> service_lock(lock_);
-    auto db_guard = storage_service_->GetDBController().GetConnectionGuard();
-    auto db_lock  = db_guard.Lock();
+    auto               db_guard = storage_service_->GetDBController().GetConnectionGuard();
+    auto               db_lock  = db_guard.Lock();
     CommitGraphService graph_service(db_guard.conn_);
-    auto graph = graph_service.LoadGraph(id);
+    auto               graph = graph_service.LoadGraph(id);
     if (!graph.has_value()) {
       throw std::runtime_error("PipelineMgmtService: image edit state is missing after root setup");
     }
@@ -515,9 +513,9 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
                                std::to_string(id));
     }
 
-    const auto& state = graph->GetImageEditState();
-    const auto expected_head = graph->GetActiveVersionRef().head_commit_hash;
-    const auto expected_chain = graph->ChainHashForHead(expected_head);
+    const auto& state          = graph->GetImageEditState();
+    const auto  expected_head  = graph->GetActiveVersionRef().head_commit_hash;
+    const auto  expected_chain = graph->ChainHashForHead(expected_head);
     if (state.root_id != graph->GetRootId() ||
         state.materialized_head_commit_hash != expected_head ||
         state.materialized_transaction_chain_hash != expected_chain) {
@@ -548,8 +546,7 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
 
     if (!accepted_serialized_state) {
       std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
-      RebuildPipelineFromRoot(*pipeline->pipeline_, *graph, *root_state,
-                              accelerator_preference_);
+      RebuildPipelineFromRoot(*pipeline->pipeline_, *graph, *root_state, accelerator_preference_);
       pipeline->serialized_state_needs_writeback_ = true;
     }
     return pipeline;
@@ -587,8 +584,8 @@ void PipelineMgmtService::SavePipeline(std::shared_ptr<PipelineGuard> pipeline) 
         pipeline_params = pipeline->pipeline_->ExportPipelineParams();
       }
 
-      auto db_guard = storage_service_->GetDBController().GetConnectionGuard();
-      auto db_lock  = db_guard.Lock();
+      auto               db_guard = storage_service_->GetDBController().GetConnectionGuard();
+      auto               db_lock  = db_guard.Lock();
       CommitGraphService graph_service(db_guard.conn_);
       auto               graph = graph_service.LoadGraph(pipeline->id_);
       if (!graph.has_value()) {
@@ -682,8 +679,7 @@ void PipelineMgmtService::DeletePipelines(std::span<const sl_element_id_t> ids) 
   }
 }
 
-void PipelineMgmtService::SetAcceleratorBackendPreference(
-    AcceleratorBackendPreference preference) {
+void PipelineMgmtService::SetAcceleratorBackendPreference(AcceleratorBackendPreference preference) {
   std::unique_lock<std::mutex> guard(lock_);
   if (accelerator_preference_ == preference) {
     return;
@@ -721,15 +717,14 @@ void PipelineMgmtService::SyncPipeline(sl_element_id_t id) {
     return;
   }
 
-  auto& pipeline_guard = it->second;
+  auto&                        pipeline_guard = it->second;
   std::unique_lock<std::mutex> render_guard(pipeline_guard->pipeline_->GetRenderLock());
-  storage_service_->GetElementController().UpdatePipelineByElementId(
-      id, pipeline_guard->pipeline_);
+  storage_service_->GetElementController().UpdatePipelineByElementId(id, pipeline_guard->pipeline_);
   pipeline_guard->dirty_ = false;
 }
 
 auto PipelineMgmtService::LoadPipelineSnapshot(sl_element_id_t id, image_id_t image_id,
-                                                std::string* error)
+                                               std::string* error)
     -> std::shared_ptr<PipelineSnapshot> {
   std::shared_ptr<CPUPipelineExecutor> live_exec;
 
@@ -737,7 +732,7 @@ auto PipelineMgmtService::LoadPipelineSnapshot(sl_element_id_t id, image_id_t im
   // The copy keeps the executor alive even if the guard is evicted mid-capture.
   {
     std::unique_lock<std::mutex> g(lock_);
-    auto                          it = loaded_pipelines_.find(id);
+    auto                         it = loaded_pipelines_.find(id);
     if (it != loaded_pipelines_.end() && it->second && it->second->pipeline_) {
       live_exec = it->second->pipeline_;
     }

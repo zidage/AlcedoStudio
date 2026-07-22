@@ -36,8 +36,8 @@ struct VersionRef {
 /**
  * @brief Per-image edit state coordinating the root, active Version, and serialized pipeline state.
  *
- * Production editing is not yet routed through this structure; it is the target schema for the
- * mini-Git history model.
+ * Editor commits move a working Version head while the materialized fields remain at the latest
+ * save checkpoint until the later materialization package writes them together.
  */
 struct ImageEditState {
   sl_element_id_t            element_id = 0;

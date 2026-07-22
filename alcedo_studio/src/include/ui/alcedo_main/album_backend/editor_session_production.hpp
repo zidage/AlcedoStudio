@@ -34,6 +34,7 @@ namespace alcedo {
 class ImagePoolService;
 class ProjectService;
 class EditorHistoryMaterializer;
+class MiniGitWorkingHistory;
 }  // namespace alcedo
 
 namespace alcedo::ui {
@@ -45,20 +46,24 @@ using EditorFrameSinkResolver = std::function<alcedo::IFrameSink*()>;
 
 /// Optional project services for real pipeline open (null when no project).
 struct EditorSessionProductionServices {
-  std::function<std::shared_ptr<alcedo::PipelineMgmtService>()>    pipeline_service;
-  std::function<std::shared_ptr<alcedo::EditHistoryMgmtService>()> history_service;
-  std::function<std::shared_ptr<alcedo::ImagePoolService>()>       image_pool;
+  std::function<std::shared_ptr<alcedo::PipelineMgmtService>()>          pipeline_service;
+  /// Direct guard resolver used by the unified QML editor and focused tests.
+  /// Production delegates to PipelineMgmtService::LoadEditorPipeline.
+  std::function<std::shared_ptr<alcedo::PipelineGuard>(sl_element_id_t)> load_editor_pipeline_guard;
+  std::function<std::shared_ptr<alcedo::EditHistoryMgmtService>()>       history_service;
+  std::function<std::shared_ptr<alcedo::ImagePoolService>()>             image_pool;
   /// StorageService used to construct the EditorHistoryMaterializer that owns
   /// the atomic history/pipeline/recovery-metadata DuckDB write.
-  std::function<std::shared_ptr<alcedo::StorageService>()>                     storage_service;
+  std::function<std::shared_ptr<alcedo::StorageService>()>               storage_service;
   /// Load the durable EditHistory for an image from DuckDB (used by recovery
   /// and materialization so the journal REDO layers on top of the real state).
-  std::function<std::shared_ptr<alcedo::EditHistory>(sl_element_id_t)>         load_history;
+  std::function<std::shared_ptr<alcedo::EditHistory>(sl_element_id_t)>   load_history;
   /// Load the durable CPUPipelineExecutor for an image (nullptr when the image
   /// has no stored pipeline, e.g. a fresh import).
   std::function<std::shared_ptr<alcedo::CPUPipelineExecutor>(sl_element_id_t)> load_pipeline;
-  std::function<std::filesystem::path(sl_element_id_t)>             journal_path;
-  std::function<void(sl_element_id_t)>                               invalidate_thumbnail;
+  std::function<std::filesystem::path(sl_element_id_t)>                        journal_path;
+  std::function<std::filesystem::path(sl_element_id_t)> mini_git_journal_path;
+  std::function<void(sl_element_id_t)>                  invalidate_thumbnail;
 };
 
 /// Production pipeline port: acquires real PipelineGuards when services exist;
@@ -69,7 +74,7 @@ class EditorSessionProductionPipelinePort final : public alcedo::IEditorPipeline
 
   auto Acquire(sl_element_id_t element_id, std::string* error)
       -> alcedo::EditorPipelineGuardHandle override;
-  void Release(const alcedo::EditorPipelineGuardHandle& guard) override;
+  void               Release(const alcedo::EditorPipelineGuardHandle& guard) override;
 
   [[nodiscard]] auto CurrentGuard(sl_element_id_t element_id) const
       -> std::shared_ptr<alcedo::PipelineGuard>;
@@ -80,8 +85,8 @@ class EditorSessionProductionPipelinePort final : public alcedo::IEditorPipeline
       -> std::shared_ptr<alcedo::PipelineGuard>;
 
  private:
-  EditorSessionProductionServices                                         services_{};
-  mutable std::mutex                                                      mutex_;
+  EditorSessionProductionServices                                             services_{};
+  mutable std::mutex                                                          mutex_;
   std::unordered_map<sl_element_id_t, std::shared_ptr<alcedo::PipelineGuard>> guards_;
 };
 
@@ -97,10 +102,10 @@ class EditorSessionProductionTaskPort final : public alcedo::IEditorTaskPort {
   void EndTask(std::uint64_t task_id, bool success, const std::string& message) override;
 
  private:
-  BackgroundTaskController*                         background_tasks_ = nullptr;
-  mutable std::mutex                                mutex_;
-  std::uint64_t                                     next_id_ = 0;
-  std::unordered_map<std::uint64_t, QString>        active_task_ids_;
+  BackgroundTaskController*                  background_tasks_ = nullptr;
+  mutable std::mutex                         mutex_;
+  std::uint64_t                              next_id_ = 0;
+  std::unordered_map<std::uint64_t, QString> active_task_ids_;
 };
 
 /// Production journal port. One EditorJournalWriter is retained per image so
@@ -144,7 +149,7 @@ class EditorSessionProductionJournalPort final : public alcedo::IEditorJournalPo
  private:
   auto WriterFor(sl_element_id_t element_id, std::uint64_t session_generation, std::string* error)
       -> std::shared_ptr<alcedo::EditorJournalWriter>;
-  auto ImageLockFor(sl_element_id_t element_id) -> std::shared_ptr<std::mutex>;
+  auto               ImageLockFor(sl_element_id_t element_id) -> std::shared_ptr<std::mutex>;
   [[nodiscard]] auto HasJournalPathResolver() const -> bool;
   auto               EnsureMaterializer() -> std::shared_ptr<alcedo::EditorHistoryMaterializer>;
   auto               LoadHeadPipelineParams(sl_element_id_t                             element_id,
@@ -157,24 +162,31 @@ class EditorSessionProductionJournalPort final : public alcedo::IEditorJournalPo
   void EmitRecoveryDiagnostic(sl_element_id_t element_id, const alcedo::EditorJournalWriter& writer,
                               const std::string& reason);
 
-  EditorSessionProductionServices                                  services_{};
-  mutable std::mutex                                               mutex_;
+  EditorSessionProductionServices                                                   services_{};
+  mutable std::mutex                                                                mutex_;
   std::unordered_map<sl_element_id_t, std::shared_ptr<alcedo::EditorJournalWriter>> writers_;
-  std::unordered_map<sl_element_id_t, std::shared_ptr<std::mutex>> image_locks_;
+  std::unordered_map<sl_element_id_t, std::shared_ptr<std::mutex>>                  image_locks_;
   std::shared_ptr<alcedo::EditorHistoryMaterializer>                                materializer_;
   std::shared_ptr<alcedo::StorageService> materializer_storage_;
-  std::vector<std::jthread>                                        workers_;
-  bool                                                             shutting_down_ = false;
+  std::vector<std::jthread>               workers_;
+  bool                                    shutting_down_ = false;
 };
 
 /// Production history port: real EditHistoryMgmtService when available.
 class EditorSessionProductionHistoryPort final : public alcedo::IEditorHistoryPort {
  public:
   void SetServices(EditorSessionProductionServices services);
+  void SetPipelinePort(std::shared_ptr<EditorSessionProductionPipelinePort> pipeline_port);
 
   auto Acquire(sl_element_id_t element_id, std::string* error)
       -> alcedo::EditorHistoryGuardHandle override;
   void Release(const alcedo::EditorHistoryGuardHandle& guard) override;
+  auto CaptureAdjustmentBeforePreview(const alcedo::EditorHistoryGuardHandle& guard,
+                                      const alcedo::EditorAdjustmentPatch&    patch,
+                                      std::string* error) -> bool override;
+  auto CommitAdjustment(const alcedo::EditorHistoryGuardHandle& guard,
+                        const alcedo::EditorAdjustmentPatch& patch, std::string* error)
+      -> bool override;
   auto Undo(const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool override;
   auto Redo(const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool override;
   auto ReadAdjustmentSnapshot(const alcedo::EditorHistoryGuardHandle& guard,
@@ -182,9 +194,16 @@ class EditorSessionProductionHistoryPort final : public alcedo::IEditorHistoryPo
       -> bool override;
 
  private:
-  EditorSessionProductionServices services_{};
-  mutable std::mutex              mutex_;
+  struct WorkingState;
+
+  auto EnsureWorkingState(sl_element_id_t element_id, std::string* error)
+      -> std::shared_ptr<WorkingState>;
+
+  EditorSessionProductionServices                                                services_{};
+  mutable std::mutex                                                             mutex_;
+  std::weak_ptr<EditorSessionProductionPipelinePort>                             pipeline_port_;
   std::unordered_map<sl_element_id_t, std::shared_ptr<alcedo::EditHistoryGuard>> guards_;
+  std::unordered_map<sl_element_id_t, std::shared_ptr<WorkingState>>             working_states_;
 };
 
 /// Optional test/harness producer: write real pixel data into the production sink.
@@ -227,10 +246,10 @@ class EditorSessionProductionSchedulerPort final
 
  private:
   struct Job {
-    std::uint64_t              job_id    = 0;
+    std::uint64_t               job_id = 0;
     alcedo::EditorRenderRequest request{};
-    bool                       cancelled = false;
-    bool                       running   = false;
+    bool                        cancelled = false;
+    bool                        running   = false;
   };
 
   struct PendingPresentation {
@@ -249,22 +268,22 @@ class EditorSessionProductionSchedulerPort final
                    std::string message);
   void RemoveJob(std::uint64_t job_id);
 
-  std::shared_ptr<alcedo::PipelineScheduler>              pipeline_scheduler_;
-  std::weak_ptr<alcedo::EditorRenderCoordinator>          coordinator_;
-  EditorFrameSinkResolver                                 sink_resolver_;
-  std::shared_ptr<EditorSessionProductionPipelinePort>    pipeline_port_;
-  EditorSessionProductionServices                         services_{};
-  EditorTestFrameProducer                                 test_producer_;
-  mutable std::mutex                                      mutex_;
-  std::condition_variable                                 jobs_changed_;
-  std::uint64_t                                           next_job_id_ = 0;
-  std::unordered_map<std::uint64_t, Job>                  jobs_;
-  std::unordered_map<std::uint64_t, PendingPresentation>  pending_presentations_;
-  std::vector<alcedo::EditorRenderRequest>                scheduled_;
-  std::vector<std::jthread>                               workers_;
-  image_id_t                                               cached_input_image_id_ = 0;
-  std::shared_ptr<alcedo::ImageBuffer>                     cached_input_;
-  bool                                                    shutting_down_ = false;
+  std::shared_ptr<alcedo::PipelineScheduler>             pipeline_scheduler_;
+  std::weak_ptr<alcedo::EditorRenderCoordinator>         coordinator_;
+  EditorFrameSinkResolver                                sink_resolver_;
+  std::shared_ptr<EditorSessionProductionPipelinePort>   pipeline_port_;
+  EditorSessionProductionServices                        services_{};
+  EditorTestFrameProducer                                test_producer_;
+  mutable std::mutex                                     mutex_;
+  std::condition_variable                                jobs_changed_;
+  std::uint64_t                                          next_job_id_ = 0;
+  std::unordered_map<std::uint64_t, Job>                 jobs_;
+  std::unordered_map<std::uint64_t, PendingPresentation> pending_presentations_;
+  std::vector<alcedo::EditorRenderRequest>               scheduled_;
+  std::vector<std::jthread>                              workers_;
+  image_id_t                                             cached_input_image_id_ = 0;
+  std::shared_ptr<alcedo::ImageBuffer>                   cached_input_;
+  bool                                                   shutting_down_ = false;
 };
 
 }  // namespace alcedo::ui

@@ -6,17 +6,21 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
 
+#include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_history_materializer.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/project_service.hpp"
+#include "edit/history/commit_graph.hpp"
 #include "edit/history/edit_history.hpp"
 #include "edit/history/edit_transaction.hpp"
 #include "edit/history/editor_journal_writer.hpp"
 #include "edit/history/editor_transaction_journal.hpp"
+#include "edit/history/mini_git_working_history.hpp"
 #include "edit/history/version.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
@@ -52,6 +56,19 @@ auto MakePipelineParams(float exposure) -> nlohmann::json {
   auto params                    = exec.ExportPipelineParams();
   params["alcedo_test_exposure"] = exposure;
   return params;
+}
+
+auto MakeMiniGitPipelineGuard(sl_element_id_t element_id)
+    -> std::shared_ptr<alcedo::PipelineGuard> {
+  auto guard       = std::make_shared<alcedo::PipelineGuard>();
+  guard->id_       = element_id;
+  guard->pipeline_ = std::make_shared<alcedo::CPUPipelineExecutor>();
+  guard->commit_graph_ =
+      std::make_shared<alcedo::CommitGraph>(alcedo::CommitGraph::CreateEmpty(element_id));
+  guard->root_id_                  = guard->commit_graph_->GetRootId();
+  guard->working_head_commit_hash_ = std::nullopt;
+  guard->transaction_chain_hash_   = alcedo::ComputeRootChainHash(guard->root_id_);
+  return guard;
 }
 
 class EditorSessionProductionJournalPortTest : public ::testing::Test {
@@ -138,14 +155,14 @@ TEST_F(EditorSessionProductionJournalPortTest, RecordEditAndCommitDurablyAppendT
 }
 
 TEST_F(EditorSessionProductionJournalPortTest, PipelinePortReleaseReturnsServicePin) {
-  auto pipeline_service = std::make_shared<alcedo::PipelineMgmtService>(storage_);
-  auto services         = MakeServices();
+  auto pipeline_service     = std::make_shared<alcedo::PipelineMgmtService>(storage_);
+  auto services             = MakeServices();
   services.pipeline_service = [pipeline_service]() { return pipeline_service; };
 
   alcedo::ui::EditorSessionProductionPipelinePort pipeline_port;
   pipeline_port.SetServices(std::move(services));
-  std::string                                     error;
-  const auto handle = pipeline_port.Acquire(file_id_, &error);
+  std::string error;
+  const auto  handle = pipeline_port.Acquire(file_id_, &error);
   ASSERT_TRUE(handle.valid);
 
   auto loaded = pipeline_port.EnsureLoaded(file_id_, &error);
@@ -155,6 +172,177 @@ TEST_F(EditorSessionProductionJournalPortTest, PipelinePortReleaseReturnsService
   pipeline_port.Release(handle);
   EXPECT_EQ(loaded->pin_count_, 0u);
   EXPECT_EQ(pipeline_port.CurrentGuard(file_id_), nullptr);
+}
+
+TEST_F(EditorSessionProductionJournalPortTest,
+       QmlPreviewSamplesAndSettledReleaseCreateOneMiniGitCommit) {
+  auto guard                          = MakeMiniGitPipelineGuard(file_id_);
+  auto services                       = MakeServices();
+  services.load_editor_pipeline_guard = [guard](sl_element_id_t) { return guard; };
+  const auto mini_git_path            = journal_dir_ / "image-42.mini-git.wal";
+  services.mini_git_journal_path      = [mini_git_path](sl_element_id_t) { return mini_git_path; };
+
+  auto pipeline_port                  = std::make_shared<EditorSessionProductionPipelinePort>();
+  pipeline_port->SetServices(services);
+  EditorSessionProductionHistoryPort history_port;
+  history_port.SetServices(services);
+  history_port.SetPipelinePort(pipeline_port);
+
+  std::string error;
+  const auto  handle = history_port.Acquire(file_id_, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const alcedo::EditorAdjustmentPatch first_preview{"exposure", R"({"exposure":0.25})", false};
+  const alcedo::EditorAdjustmentPatch second_preview{"exposure", R"({"exposure":0.5})", false};
+  const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":0.75})", true};
+  ASSERT_TRUE(history_port.CaptureAdjustmentBeforePreview(handle, first_preview, &error)) << error;
+  ASSERT_TRUE(history_port.CaptureAdjustmentBeforePreview(handle, second_preview, &error)) << error;
+  ASSERT_TRUE(history_port.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
+  ASSERT_TRUE(history_port.CommitAdjustment(handle, settled, &error)) << error;
+
+  ASSERT_EQ(guard->commit_graph_->CommitCount(), 1u);
+  ASSERT_TRUE(guard->working_head_commit_hash_.has_value());
+  EXPECT_EQ(guard->working_head_commit_hash_,
+            guard->commit_graph_->GetActiveVersionRef().head_commit_hash);
+  EXPECT_EQ(guard->transaction_chain_hash_,
+            guard->commit_graph_->ChainHashForHead(guard->working_head_commit_hash_));
+
+  alcedo::MiniGitJournal reopened(mini_git_path);
+  ASSERT_TRUE(reopened.Load(&error)) << error;
+  ASSERT_EQ(reopened.records().size(), 1u);
+  EXPECT_EQ(reopened.records().front().kind, alcedo::MiniGitJournalRecordKind::kEditCommit);
+
+  ASSERT_TRUE(history_port.Undo(handle, &error)) << error;
+  EXPECT_FALSE(guard->working_head_commit_hash_.has_value());
+  ASSERT_TRUE(history_port.Redo(handle, &error)) << error;
+  EXPECT_TRUE(guard->working_head_commit_hash_.has_value());
+}
+
+TEST_F(EditorSessionProductionJournalPortTest,
+       QmlSessionMultipleInteractiveSamplesCommitOneMiniGitEdit) {
+  auto guard                          = MakeMiniGitPipelineGuard(file_id_);
+  auto services                       = MakeServices();
+  services.load_editor_pipeline_guard = [guard](sl_element_id_t) { return guard; };
+  const auto mini_git_path            = journal_dir_ / "image-42.session.mini-git.wal";
+  services.mini_git_journal_path      = [mini_git_path](sl_element_id_t) { return mini_git_path; };
+
+  auto pipeline_port                  = std::make_shared<EditorSessionProductionPipelinePort>();
+  pipeline_port->SetServices(services);
+  auto history_port = std::make_shared<EditorSessionProductionHistoryPort>();
+  history_port->SetServices(services);
+  history_port->SetPipelinePort(pipeline_port);
+  auto scheduler = std::make_shared<alcedo::EditorSessionBootstrapSchedulerPort>();
+  auto runtime   = alcedo::EditorSessionRuntime::CreateWithPorts(
+      pipeline_port, history_port, std::make_shared<alcedo::EditorSessionBootstrapTaskPort>(),
+      std::make_shared<alcedo::EditorSessionBootstrapJournalPort>(), scheduler);
+
+  runtime->service->SetPresentationSinkId(1);
+  runtime->service->SetPresentationSize(640, 480);
+  runtime->service->Open(file_id_, 7);
+  ASSERT_FALSE(scheduler->scheduled().empty());
+  const auto request_id = scheduler->scheduled().front().request_id;
+  runtime->coordinator->NotifySchedulerCompleted(request_id, true);
+  runtime->coordinator->NotifyFrameSubmitted(request_id);
+  runtime->coordinator->NotifyFramePresented(request_id);
+  ASSERT_EQ(runtime->service->state(), alcedo::EditorSessionState::Interactive);
+
+  for (int sample = 1; sample <= 20; ++sample) {
+    alcedo::EditorAdjustmentPatch preview{
+        "exposure", std::string{"{\"exposure\":"} + std::to_string(sample / 20.0) + "}", false};
+    EXPECT_NE(runtime->service->Patch(std::move(preview)).kind,
+              alcedo::EditorSessionResultKind::Rejected);
+  }
+  alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":1.0})", true};
+  EXPECT_NE(runtime->service->CommitAdjustment(std::move(settled)).kind,
+            alcedo::EditorSessionResultKind::Rejected);
+
+  EXPECT_EQ(guard->commit_graph_->CommitCount(), 1u);
+  alcedo::MiniGitJournal reopened(mini_git_path);
+  std::string            error;
+  ASSERT_TRUE(reopened.Load(&error)) << error;
+  ASSERT_EQ(reopened.records().size(), 1u);
+  EXPECT_EQ(reopened.records().front().kind, alcedo::MiniGitJournalRecordKind::kEditCommit);
+}
+
+TEST_F(EditorSessionProductionJournalPortTest,
+       MiniGitJournalFailureLeavesQmlWorkingHeadAndChainAtRoot) {
+  auto guard                          = MakeMiniGitPipelineGuard(file_id_);
+  auto services                       = MakeServices();
+  services.load_editor_pipeline_guard = [guard](sl_element_id_t) { return guard; };
+  const auto blocked_parent           = journal_dir_ / "not-a-directory";
+  {
+    std::ofstream blocker(blocked_parent, std::ios::binary);
+    ASSERT_TRUE(blocker.is_open());
+    blocker << "block";
+  }
+  services.mini_git_journal_path = [blocked_parent](sl_element_id_t) {
+    return blocked_parent / "image-42.mini-git.wal";
+  };
+
+  auto pipeline_port = std::make_shared<EditorSessionProductionPipelinePort>();
+  pipeline_port->SetServices(services);
+  EditorSessionProductionHistoryPort history_port;
+  history_port.SetServices(services);
+  history_port.SetPipelinePort(pipeline_port);
+
+  std::string error;
+  const auto  handle = history_port.Acquire(file_id_, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":1.0})", true};
+  ASSERT_TRUE(history_port.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
+  EXPECT_FALSE(history_port.CommitAdjustment(handle, settled, &error));
+  EXPECT_FALSE(error.empty());
+  EXPECT_EQ(guard->commit_graph_->CommitCount(), 0u);
+  EXPECT_FALSE(guard->working_head_commit_hash_.has_value());
+  EXPECT_EQ(guard->transaction_chain_hash_, alcedo::ComputeRootChainHash(guard->root_id_));
+}
+
+TEST_F(EditorSessionProductionJournalPortTest,
+       ReopeningQmlHistoryReplaysMiniGitJournalIntoPipelineAndHead) {
+  const auto mini_git_path            = journal_dir_ / "image-42.recovery.mini-git.wal";
+  auto       services                 = MakeServices();
+  services.mini_git_journal_path      = [mini_git_path](sl_element_id_t) { return mini_git_path; };
+
+  auto       first_guard              = MakeMiniGitPipelineGuard(file_id_);
+  const auto recovery_base            = *first_guard->commit_graph_;
+  services.load_editor_pipeline_guard = [first_guard](sl_element_id_t) { return first_guard; };
+  auto first_pipeline_port            = std::make_shared<EditorSessionProductionPipelinePort>();
+  first_pipeline_port->SetServices(services);
+  {
+    EditorSessionProductionHistoryPort history_port;
+    history_port.SetServices(services);
+    history_port.SetPipelinePort(first_pipeline_port);
+    std::string error;
+    const auto  handle = history_port.Acquire(file_id_, &error);
+    ASSERT_TRUE(handle.valid) << error;
+    const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":1.25})", true};
+    ASSERT_TRUE(history_port.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
+    ASSERT_TRUE(history_port.CommitAdjustment(handle, settled, &error)) << error;
+  }
+
+  auto recovered_guard           = MakeMiniGitPipelineGuard(file_id_);
+  recovered_guard->commit_graph_ = std::make_shared<alcedo::CommitGraph>(recovery_base);
+  recovered_guard->root_id_      = recovery_base.GetRootId();
+  recovered_guard->transaction_chain_hash_ =
+      alcedo::ComputeRootChainHash(recovered_guard->root_id_);
+  services.load_editor_pipeline_guard = [recovered_guard](sl_element_id_t) {
+    return recovered_guard;
+  };
+  auto recovered_pipeline_port = std::make_shared<EditorSessionProductionPipelinePort>();
+  recovered_pipeline_port->SetServices(services);
+  EditorSessionProductionHistoryPort recovered_history;
+  recovered_history.SetServices(services);
+  recovered_history.SetPipelinePort(recovered_pipeline_port);
+  std::string error;
+  const auto  recovered_handle = recovered_history.Acquire(file_id_, &error);
+  ASSERT_TRUE(recovered_handle.valid) << error;
+
+  ASSERT_EQ(recovered_guard->commit_graph_->CommitCount(), 1u);
+  EXPECT_TRUE(recovered_guard->working_head_commit_hash_.has_value());
+  alcedo::EditorAdjustmentOperatorState exposure;
+  ASSERT_TRUE(alcedo::ReadEditorAdjustmentOperatorState(*recovered_guard->pipeline_, "exposure",
+                                                        &exposure, &error))
+      << error;
+  EXPECT_FLOAT_EQ(exposure.params.at("exposure").get<float>(), 1.25f);
 }
 
 TEST_F(EditorSessionProductionJournalPortTest,
@@ -243,7 +431,7 @@ TEST_F(EditorSessionProductionJournalPortTest, MaterializeWithoutNewOperationsDo
 
   {
     alcedo::EditorJournalWriter after_first_materialize({file_id_, {}, 1, 1}, journal_path_);
-    const auto decoded = after_first_materialize.journal().DecodeRecordChain();
+    const auto                  decoded = after_first_materialize.journal().DecodeRecordChain();
     ASSERT_FALSE(decoded.records.empty());
     EXPECT_EQ(decoded.records.front().identity.journal_generation, 2u);
   }

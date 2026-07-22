@@ -23,6 +23,7 @@
 #include "edit/history/commit_clock_test_access.hpp"
 #include "edit/history/commit_types.hpp"
 #include "edit/history/edit_commit.hpp"
+#include "edit/history/mini_git_working_history.hpp"
 #include "edit/history/version_ref.hpp"
 #include "edit/operators/op_base.hpp"
 #include "storage/controller/db_controller.hpp"
@@ -68,6 +69,16 @@ auto MakeMergeAt(root_id_t root_id, head_commit_hash_t first_parent, commit_hash
       root_id, std::move(first_parent), second_parent, created_at_ns, std::move(payload));
 }
 
+class RejectingMiniGitJournal final : public IMiniGitJournalAppender {
+ public:
+  auto Append(const MiniGitJournalRecord&, std::string* error) -> bool override {
+    if (error != nullptr) {
+      *error = "injected journal append failure";
+    }
+    return false;
+  }
+};
+
 }  // namespace
 
 // 6C-1 empty-state boundary: infrastructure helper only. Production root creation after import
@@ -107,6 +118,137 @@ TEST(CommitGraphEmptyState, VersionIdStaysUnchangedWhenWorkingHeadMoves) {
   EXPECT_FALSE(graph.GetImageEditState().materialized_head_commit_hash.has_value());
   EXPECT_EQ(graph.GetImageEditState().materialized_transaction_chain_hash,
             ComputeRootChainHash(graph.GetRootId()));
+}
+
+TEST(MiniGitWorkingHistory, PointerReleaseCreatesExactlyOneImmutableEditCommit) {
+  auto graph   = std::make_shared<CommitGraph>(CommitGraph::CreateEmpty(708));
+  auto journal = std::make_shared<MiniGitJournal>();
+  MiniGitWorkingHistory history(graph, journal);
+
+  // A drag may render many previews, but it calls AppendEdit once when its
+  // pointer release finalizes the operator value.
+  const auto result = history.AppendEdit(MakeExposurePayload(0.0f, 0.75f));
+
+  ASSERT_TRUE(result.committed) << result.error;
+  ASSERT_TRUE(result.commit.has_value());
+  EXPECT_EQ(graph->CommitCount(), 1u);
+  ASSERT_EQ(journal->records().size(), 1u);
+  EXPECT_EQ(journal->records().front().kind, MiniGitJournalRecordKind::kEditCommit);
+  EXPECT_EQ(history.working_head(), result.commit->GetCommitHash());
+  EXPECT_EQ(history.transaction_chain_hash(),
+            FoldTransactionChainHash(ComputeRootChainHash(graph->GetRootId()),
+                                     result.commit->GetCommitHash()));
+}
+
+TEST(MiniGitWorkingHistory, FailedJournalAppendLeavesWorkingHeadAndCommitGraphUnchanged) {
+  auto graph = std::make_shared<CommitGraph>(CommitGraph::CreateEmpty(709));
+  MiniGitWorkingHistory history(graph, std::make_shared<RejectingMiniGitJournal>());
+  const auto root_chain = ComputeRootChainHash(graph->GetRootId());
+
+  const auto result = history.AppendEdit(MakeExposurePayload(0.0f, 1.0f));
+
+  EXPECT_FALSE(result.committed);
+  EXPECT_EQ(result.error, "injected journal append failure");
+  EXPECT_FALSE(history.working_head().has_value());
+  EXPECT_EQ(history.transaction_chain_hash(), root_chain);
+  EXPECT_EQ(graph->CommitCount(), 0u);
+  EXPECT_FALSE(graph->GetActiveVersionRef().head_commit_hash.has_value());
+}
+
+TEST(MiniGitWorkingHistory, UndoRedoAndEditAfterUndoUseHeadMovesWithoutRewritingCommits) {
+  auto graph   = std::make_shared<CommitGraph>(CommitGraph::CreateEmpty(710));
+  auto journal = std::make_shared<MiniGitJournal>();
+  MiniGitWorkingHistory history(graph, journal);
+
+  const auto first  = history.AppendEdit(MakeExposurePayload(0.0f, 0.5f));
+  const auto second = history.AppendEdit(MakeContrastPayload(0.0f, 0.25f));
+  ASSERT_TRUE(first.committed) << first.error;
+  ASSERT_TRUE(second.committed) << second.error;
+
+  const auto undo = history.Undo();
+  ASSERT_TRUE(undo.moved) << undo.error;
+  ASSERT_EQ(history.working_head(), first.commit->GetCommitHash());
+  EXPECT_EQ(history.redo_count(), 1u);
+
+  const auto redo = history.Redo();
+  ASSERT_TRUE(redo.moved) << redo.error;
+  ASSERT_EQ(history.working_head(), second.commit->GetCommitHash());
+
+  ASSERT_TRUE(history.Undo().moved);
+  const auto replacement = history.AppendEdit(MakeContrastPayload(0.0f, 0.9f));
+  ASSERT_TRUE(replacement.committed) << replacement.error;
+  EXPECT_EQ(history.redo_count(), 0u);
+  EXPECT_EQ(graph->CommitCount(), 3u);
+  EXPECT_NE(replacement.commit->GetCommitHash(), second.commit->GetCommitHash());
+  EXPECT_NE(graph->FindCommit(second.commit->GetCommitHash()), nullptr);
+  EXPECT_EQ(journal->records().at(2).kind, MiniGitJournalRecordKind::kHeadMove);
+  EXPECT_EQ(journal->records().at(3).kind, MiniGitJournalRecordKind::kHeadMove);
+  EXPECT_EQ(journal->records().at(4).kind, MiniGitJournalRecordKind::kHeadMove);
+  EXPECT_EQ(journal->records().at(5).kind, MiniGitJournalRecordKind::kEditCommit);
+}
+
+TEST(MiniGitWorkingHistory, RecoveryReplaysJournaledHeadMovesToTheSelectedCommit) {
+  auto graph   = std::make_shared<CommitGraph>(CommitGraph::CreateEmpty(711));
+  auto journal = std::make_shared<MiniGitJournal>();
+  MiniGitWorkingHistory history(graph, journal);
+  const CommitGraph recovery_base = *graph;
+
+  const auto first  = history.AppendEdit(MakeExposurePayload(0.0f, 0.4f));
+  const auto second = history.AppendEdit(MakeContrastPayload(0.0f, 0.2f));
+  ASSERT_TRUE(first.committed) << first.error;
+  ASSERT_TRUE(second.committed) << second.error;
+  ASSERT_TRUE(history.Undo().moved);
+
+  auto        recovered = recovery_base;
+  std::string error;
+  ASSERT_TRUE(MiniGitWorkingHistory::Replay(recovered, journal->records(), &error)) << error;
+  ASSERT_EQ(recovered.GetActiveVersionRef().head_commit_hash, first.commit->GetCommitHash());
+  EXPECT_EQ(recovered.ChainHashForHead(recovered.GetActiveVersionRef().head_commit_hash),
+            history.transaction_chain_hash());
+  EXPECT_EQ(recovered.CommitCount(), 2u);
+}
+
+TEST(MiniGitWorkingHistory, ChecksumValidatedJournalFileRestoresCommitAndHeadMoveRecords) {
+  const auto journal_path = std::filesystem::temp_directory_path() /
+                            "alcedo-mini-git-journal-round-trip.wal";
+  std::error_code ignored;
+  std::filesystem::remove(journal_path, ignored);
+
+  auto graph = std::make_shared<CommitGraph>(CommitGraph::CreateEmpty(712));
+  {
+    auto journal = std::make_shared<MiniGitJournal>(journal_path);
+    MiniGitWorkingHistory history(graph, journal);
+    ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 0.6f)).committed);
+    ASSERT_TRUE(history.Undo().moved);
+  }
+
+  MiniGitJournal reopened(journal_path);
+  std::string    error;
+  ASSERT_TRUE(reopened.Load(&error)) << error;
+  ASSERT_EQ(reopened.records().size(), 2u);
+  EXPECT_EQ(reopened.records().front().kind, MiniGitJournalRecordKind::kEditCommit);
+  EXPECT_EQ(reopened.records().back().kind, MiniGitJournalRecordKind::kHeadMove);
+
+  std::filesystem::remove(journal_path, ignored);
+}
+
+TEST(MiniGitWorkingHistory, CorruptJournalChecksumIsRejectedBeforeRecoveryReplaysRecords) {
+  const auto journal_path = std::filesystem::temp_directory_path() /
+                            "alcedo-mini-git-journal-corrupt-checksum.wal";
+  std::error_code ignored;
+  std::filesystem::remove(journal_path, ignored);
+
+  {
+    std::ofstream output(journal_path, std::ios::binary);
+    ASSERT_TRUE(output.is_open());
+    output << R"({"record":{"format_version":1},"checksum":"00000000000000000000000000000000"})";
+  }
+  MiniGitJournal reopened(journal_path);
+  std::string    error;
+  EXPECT_FALSE(reopened.Load(&error));
+  EXPECT_NE(error.find("checksum"), std::string::npos);
+
+  std::filesystem::remove(journal_path, ignored);
 }
 
 TEST(VersionRefCreation, ExplicitRootAndActiveHeadAreUnambiguousWhenActiveIsNonRoot) {

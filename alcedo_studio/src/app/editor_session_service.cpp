@@ -187,7 +187,7 @@ auto EditorSessionService::first_frame_time_ms() const -> double {
   return first_frame_time_ms_;
 }
 
-auto EditorSessionService::RouteInitialRender(EditorRenderReason reason,
+auto EditorSessionService::RouteInitialRender(EditorRenderReason             reason,
                                               EditorRenderSupersessionPolicy policy)
     -> std::uint64_t {
   if (!PresentationTargetReady()) {
@@ -202,8 +202,7 @@ auto EditorSessionService::RouteInitialRender(EditorRenderReason reason,
     return 0;
   }
   dependencies_.render->SetActiveGenerations(
-      identity_.session_generation, identity_.render_generation, identity_.view_generation,
-      policy);
+      identity_.session_generation, identity_.render_generation, identity_.view_generation, policy);
   const EditorRenderResult routed = dependencies_.render->Submit(*intent);
   if (routed.kind == EditorRenderResultKind::RequestAccepted) {
     if (reason == EditorRenderReason::InitialFrame || reason == EditorRenderReason::ImageSwitch ||
@@ -548,6 +547,19 @@ auto EditorSessionService::HandleOpenOrSwitch(const EditorSessionIntent& intent,
                         error.empty() ? "Failed to acquire pipeline/history guards" : error);
   }
 
+  EditorRenderAdjustmentSnapshot history_snapshot;
+  if (!dependencies_.history->ReadAdjustmentSnapshot(history_guard_, &history_snapshot, &error)) {
+    ReleaseGuards();
+    identity_.element_id = 0;
+    identity_.image_id   = 0;
+    return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                        error.empty() ? "Failed to read editor history state" : error);
+  }
+  if (!history_snapshot.params_json.empty() || !history_snapshot.patches.empty() ||
+      !history_snapshot.fingerprint.empty()) {
+    adjustment_snapshot_ = std::move(history_snapshot);
+  }
+
   TransitionTo(EditorSessionState::Loading, EditorSessionResultKind::StateChanged, "Loading image");
   // Guards succeeded: the image is ready to render. Interactive still waits for
   // the first compatible frame (Phase 5B open path).
@@ -587,6 +599,21 @@ auto EditorSessionService::HandlePatch(const EditorSessionIntent& intent, bool s
 
   EditorAdjustmentPatch patch = intent.patch;
   patch.settled               = settled;
+  if (patch.field_key.empty()) {
+    return Reject("Adjustment patch requires a field key");
+  }
+  if (!dependencies_.history || !history_guard_.valid) {
+    return Reject("Adjustment history is unavailable");
+  }
+  std::string history_error;
+  if (!dependencies_.history->CaptureAdjustmentBeforePreview(history_guard_, patch,
+                                                             &history_error)) {
+    return Reject(history_error.empty() ? "Failed to capture committed adjustment state"
+                                        : history_error);
+  }
+  if (settled && !dependencies_.history->CommitAdjustment(history_guard_, patch, &history_error)) {
+    return Reject(history_error.empty() ? "Failed to commit settled adjustment" : history_error);
+  }
   if (!intent.adjustment.params_json.empty() || !intent.adjustment.patches.empty() ||
       !intent.adjustment.fingerprint.empty()) {
     adjustment_snapshot_ = intent.adjustment;
@@ -615,8 +642,8 @@ auto EditorSessionService::HandlePatch(const EditorSessionIntent& intent, bool s
   ++identity_.render_generation;
   const auto reason =
       settled ? EditorRenderReason::SettledAdjustment : EditorRenderReason::InteractiveAdjustment;
-  const auto request_id = RouteInitialRender(
-      reason, EditorRenderSupersessionPolicy::PreserveInflightFullFrame);
+  const auto request_id =
+      RouteInitialRender(reason, EditorRenderSupersessionPolicy::PreserveInflightFullFrame);
   if (request_id == 0) {
     return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
                         "Adjustment render could not be scheduled");

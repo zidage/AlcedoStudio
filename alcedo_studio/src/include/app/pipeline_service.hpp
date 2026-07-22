@@ -14,9 +14,10 @@
 
 #include "app/image_pool_service.hpp"
 #include "decoders/processor/raw_color_context.hpp"
+#include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
-#include "edit/pipeline/pipeline_accelerator.hpp"
 #include "edit/pipeline/pipeline.hpp"
+#include "edit/pipeline/pipeline_accelerator.hpp"
 #include "json.hpp"
 #include "renderer/pipeline_scheduler.hpp"
 #include "sleeve/storage_service.hpp"
@@ -28,8 +29,8 @@ namespace alcedo {
 struct PipelineGuard {
   std::shared_ptr<CPUPipelineExecutor> pipeline_;
   sl_element_id_t                      id_;
-  bool                                 dirty_  = false;
-  bool                                 pinned_ = false;
+  bool                                 dirty_     = false;
+  bool                                 pinned_    = false;
   size_t                               pin_count_ = 0;
 
   // The editor's live runtime snapshot. These values describe history only;
@@ -38,6 +39,11 @@ struct PipelineGuard {
   head_commit_hash_t                   working_head_commit_hash_ = std::nullopt;
   transaction_chain_hash_t             transaction_chain_hash_{};
   bool                                 serialized_state_needs_writeback_ = false;
+
+  // The validated graph backing the focused editor pipeline. Its Version ref
+  // advances for journaled edits while ImageEditState.materialized_* remains
+  // at the last DuckDB checkpoint.
+  std::shared_ptr<CommitGraph>         commit_graph_;
 };
 
 // Phase 3: a read-only clone of a pipeline's params captured into an independent
@@ -65,7 +71,7 @@ class PipelineMgmtService final {
 
   AcceleratorBackendPreference accelerator_preference_ = AcceleratorBackendPreference::Auto;
 
-  void HandleEviction(sl_element_id_t evicted_id);
+  void                         HandleEviction(sl_element_id_t evicted_id);
 
  public:
   PipelineMgmtService() = delete;
@@ -74,27 +80,27 @@ class PipelineMgmtService final {
         pipeline_cache_(default_cache_capacity_),
         loaded_pipelines_() {}
 
-  void SavePipeline(std::shared_ptr<PipelineGuard> pipeline);
+  void               SavePipeline(std::shared_ptr<PipelineGuard> pipeline);
 
-  auto LoadPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
+  auto               LoadPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
 
   /// Load an editor pipeline and validate its serialized state against the immutable commit graph.
   /// Matching state is imported directly. Stale state is rebuilt from the persisted root and
   /// first-parent commits and written back when the guard is returned.
   /// Thumbnail and export callers must continue to use LoadPipeline so they do not repeat this
   /// editor-only history validation.
-  auto LoadEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
+  auto               LoadEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
 
   /// Persist the current metadata-resolved pipeline as the immutable root for a newly imported
   /// image. Calling this again for an image that already has a root verifies and loads that root;
   /// it never replaces the stored root state.
-  void InitializeImageRoot(const std::shared_ptr<PipelineGuard>& pipeline,
-                           const RawRuntimeColorContext* raw_color_context = nullptr);
+  void               InitializeImageRoot(const std::shared_ptr<PipelineGuard>& pipeline,
+                                         const RawRuntimeColorContext*         raw_color_context = nullptr);
 
-  void DeletePipeline(sl_element_id_t id);
-  void DeletePipelines(std::span<const sl_element_id_t> ids);
+  void               DeletePipeline(sl_element_id_t id);
+  void               DeletePipelines(std::span<const sl_element_id_t> ids);
 
-  void SetAcceleratorBackendPreference(AcceleratorBackendPreference preference);
+  void               SetAcceleratorBackendPreference(AcceleratorBackendPreference preference);
   [[nodiscard]] auto GetAcceleratorBackendPreference() const -> AcceleratorBackendPreference {
     return accelerator_preference_;
   }
@@ -110,8 +116,8 @@ class PipelineMgmtService final {
   // live pipeline. May briefly block on the live executor's render lock
   // (serializes with an in-flight editor render on the same executor). Returns
   // nullptr and writes *error on failure.
-  auto LoadPipelineSnapshot(sl_element_id_t id, image_id_t image_id,
-                           std::string* error) -> std::shared_ptr<PipelineSnapshot>;
+  auto LoadPipelineSnapshot(sl_element_id_t id, image_id_t image_id, std::string* error)
+      -> std::shared_ptr<PipelineSnapshot>;
 
   // Release the snapshot executor's intermediate buffers (mirrors SavePipeline's
   // last-pin cleanup). Safe to call from the snapshot's task callback; the

@@ -20,6 +20,7 @@ namespace alcedo {
 
 class EditTransaction;
 class Hash128;
+struct EditorAdjustmentPatch;
 
 /// Narrow ports used by EditorSessionService. Production implementations wrap
 /// PipelineMgmtService / EditHistoryMgmtService / BackgroundTaskController /
@@ -48,8 +49,24 @@ class IEditorHistoryPort {
  public:
   virtual ~IEditorHistoryPort() = default;
   virtual auto Acquire(sl_element_id_t element_id, std::string* error)
-      -> EditorHistoryGuardHandle                                                      = 0;
-  virtual void Release(const EditorHistoryGuardHandle& guard)                          = 0;
+      -> EditorHistoryGuardHandle                             = 0;
+  virtual void Release(const EditorHistoryGuardHandle& guard) = 0;
+  /// Capture the committed operator state before the first interactive preview
+  /// for one input sequence. Repeated preview samples for the same field must
+  /// preserve the original captured state.
+  virtual auto CaptureAdjustmentBeforePreview(const EditorHistoryGuardHandle& /*guard*/,
+                                              const EditorAdjustmentPatch& /*patch*/,
+                                              std::string* /*error*/) -> bool {
+    return true;
+  }
+  /// Finalize one settled adjustment into the checked-out Version's working
+  /// history. Production appends the mini-Git journal record before advancing
+  /// the working head and transaction-chain hash.
+  virtual auto CommitAdjustment(const EditorHistoryGuardHandle& /*guard*/,
+                                const EditorAdjustmentPatch& /*patch*/, std::string* /*error*/)
+      -> bool {
+    return true;
+  }
   virtual auto Undo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool = 0;
   virtual auto Redo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool = 0;
   /// Read the adjustment state after a history operation. History remains the
@@ -68,17 +85,17 @@ class IEditorTaskPort {
 };
 
 struct EditorJournalCommitOutcome {
-  bool          accepted = false;
-  bool          durable  = false;
-  bool          pending  = false;
+  bool          accepted                      = false;
+  bool          durable                       = false;
+  bool          pending                       = false;
   std::uint64_t durable_batch_commit_sequence = 0;
   std::uint64_t durable_operation_sequence    = 0;
   std::string   error;
 };
 
 struct EditorMaterializeOutcome {
-  bool          accepted = false;
-  bool          materialized = false;
+  bool          accepted                        = false;
+  bool          materialized                    = false;
   std::uint64_t materialized_operation_sequence = 0;
   std::string   error;
 };
@@ -196,8 +213,8 @@ class IEditorJournalPort {
 /// (Phase 5E). QML never observes pipeline task objects — only this aggregate
 /// busy/reason/rejection summary.
 struct EditorRenderCoordinatorDiagnostics {
-  bool                              has_inflight    = false;
-  std::size_t                       pending_count   = 0;
+  bool                              has_inflight  = false;
+  std::size_t                       pending_count = 0;
   std::optional<EditorRenderReason> inflight_reason{};
   std::size_t                       replaced_count  = 0;
   std::size_t                       cancelled_count = 0;
@@ -236,11 +253,10 @@ class IEditorRenderSubmitPort {
   virtual void CancelSessionAndWait(std::uint64_t session_generation) {
     CancelSession(session_generation);
   }
-  virtual void SetActiveGenerations(std::uint64_t session_generation,
-                                    std::uint64_t render_generation,
-                                    std::uint64_t view_generation,
-                                    EditorRenderSupersessionPolicy policy =
-                                        EditorRenderSupersessionPolicy::CancelObsolete) = 0;
+  virtual void SetActiveGenerations(
+      std::uint64_t session_generation, std::uint64_t render_generation,
+      std::uint64_t                  view_generation,
+      EditorRenderSupersessionPolicy policy = EditorRenderSupersessionPolicy::CancelObsolete) = 0;
   /// Phase 5D diagnostics. Default impls report an idle coordinator so test
   /// fakes that do not override them stay QML-idle.
   [[nodiscard]] virtual auto diagnostics() const -> EditorRenderCoordinatorDiagnostics {

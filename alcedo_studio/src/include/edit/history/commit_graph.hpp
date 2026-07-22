@@ -36,8 +36,9 @@ struct CommitGraphMaterialization {
 /**
  * @brief In-memory immutable commit graph plus Version refs for one image.
  *
- * Commit objects are stored once by hash. Multiple Version refs may share the same head and
- * ancestry without duplicating rows. Production editing is not yet routed through this graph.
+ * Commit objects are stored once by hash. Multiple Version refs may share one head and
+ * ancestry without duplicating rows. Production edits advance only a working head here;
+ * materialized state advances later through an explicit checkpoint capture.
  *
  * Working heads live on VersionRef. ImageEditState.materialized_* advances only via an explicit
  * materialization capture, never by MoveWorkingHead alone.
