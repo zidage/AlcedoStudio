@@ -2,11 +2,19 @@
 
 Date: 2026-07-20
 
-Status: locked design for Phase 5G-5I and later editor/library adjustment transfer work.
+Status: historical design for the completed Phase 5F-5I implementation.
+
+Phase 6C supersedes this document's array-owned Version timeline, `WorkingVersion`, cursor,
+`RewriteTimeline`, image-scoped overlapping save, journal compaction, and Paste/Merge behavior. The
+authoritative replacement is
+[Phase 6C Mini-Git History and Pipeline Snapshot Plan](phase_6c_mini_git_history_and_pipeline_snapshot_plan.md).
+This document remains as a record of the earlier recovery implementation and its failure analysis;
+it must not be used to define new history APIs or product behavior.
 
 Related roadmap:
 
 - [QML Editor and Qt RHI Unified Workspace Refactor Plan](qml_editor_rhi_unified_workspace_plan.md)
+- [Phase 6C Mini-Git History and Pipeline Snapshot Plan](phase_6c_mini_git_history_and_pipeline_snapshot_plan.md)
 
 ## Purpose
 
@@ -85,11 +93,11 @@ Open edit command
 ```
 
 The editor may render provisional and finalized state before it is durable. The UI must expose
-pending-save or save-error state until the journal writer reports success. Image switch, workspace
-exit, application shutdown, Paste, and Merge establish a durability barrier: they finalize the
-open edit command and wait asynchronously for the journal batch commit before releasing the image
-write lock or starting an operation that depends on the saved state. The GUI thread never waits on
-file I/O.
+pending-save or save-error state until the journal writer reports success. In this historical
+Phase 5 design, image switch, workspace exit, application shutdown, Paste, and Merge first complete
+a save checkpoint: they finalize the open edit command and wait asynchronously for the journal batch
+commit before releasing the image write lock or starting an operation that depends on the saved
+state. The GUI thread never waits on file I/O.
 
 Maintain separate monotonically increasing values per image/journal generation:
 

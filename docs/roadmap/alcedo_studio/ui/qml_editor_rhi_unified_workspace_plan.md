@@ -4,8 +4,8 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-20 after adding Phase 6C for active-version parameter loading,
-panel state distribution, and edit persistence. The former Phase 6C-6G moved to 6D-6H.
+Last revised: 2026-07-22 after replacing Phase 6C with the mini-Git history, pipeline snapshot,
+save-checkpoint, checkout, and panel-state plan. The former Phase 6C-6G remain 6D-6H.
 
 Affected areas:
 
@@ -54,10 +54,10 @@ Backend selection is a startup decision. There is no UI hot-switch. Unsupported 
 before the first `QQuickWindow` is created and report a concrete startup error.
 
 The refactor preserves every current editor capability before cutover. It also replaces the current
-close-and-save dialog lifecycle with non-blocking, redo-only transaction journaling. Leaving an
-image, leaving the editor workspace, or exiting the application automatically flushes the current
-image transaction through the existing background-task infrastructure. Explicit Discard is a
-secondary action on the current filmstrip thumbnail's context menu only.
+close-and-save dialog lifecycle with timestamped edit commits, Version branches, recovery journaling,
+and background save checkpoints. Leaving an image, leaving the editor workspace, or exiting the
+application stores the current committed journal prefix before the transition continues. Explicit
+Discard is a secondary action on the current filmstrip thumbnail's context menu only.
 
 ## Non-negotiable constraints
 
@@ -99,10 +99,9 @@ secondary action on the current filmstrip thumbnail's context menu only.
   crop/rotate, zoom/pan, ROI/detail patch, LUT browsing, history/versioning, histogram/waveform,
   export, and editor shortcuts are all required.
 - Do not name a test, target, file, or document with the repository-banned vague test term.
-- Do not use `hydration`, `hydrate`, `gesture`, or derived forms in project-authored names or
-  prose. Name the concrete action: read, load, populate, apply, drag, pinch, input sequence,
-  pointer release, or settled edit. External framework identifiers that require their exact
-  spelling are the only exception and must not spread into Alcedo-owned API names.
+- Use concrete operation names such as read, load, populate, apply, drag, pinch, input sequence,
+  pointer release, or settled edit. External framework identifiers that require exact spelling must
+  remain isolated at their call sites and must not spread into Alcedo-owned API names.
 
 Intermediate phases may coexist with the old implementation on the development branch so the work
 can compile, but they are not separate product modes. No backend flag may select old versus new UI.
@@ -323,46 +322,48 @@ moving them behind clean interfaces; do not preserve their QWidget ownership gra
 
 ### Save, journal, and version semantics
 
-The detailed recovery and version-transfer design is defined in
-[Editor History Durability and Version Transfer Design](editor_history_durability_and_version_transfer_design.md).
-Later phases must use its terminology, flush procedure, recovery rules, and shared Library/Editor
-Paste/Merge path.
+The authoritative target design and implementation breakdown are defined in
+[Phase 6C Mini-Git History and Pipeline Snapshot Plan](phase_6c_mini_git_history_and_pipeline_snapshot_plan.md).
+The earlier
+[Editor History Durability and Version Transfer Design](editor_history_durability_and_version_transfer_design.md)
+records the completed Phase 5 implementation but no longer defines the target Version model,
+checkout, Paste/Merge, locking, or journal truncation semantics.
 
 - Editing is autosave-first. There is no primary Save/Cancel dialog workflow.
-- A finalized edit command creates one coalesced redo-only `EditTransaction`. Slider samples during
-  a drag do not each become transactions; release or an idle coalescing boundary finalizes the
-  latest value.
-- Each journal record contains image/element identity, base version identity, session identity,
-  monotonically increasing generation, operation payload, and integrity metadata.
-- Undo and redo append explicit cursor-move records. They do not mutate the durable journal in
-  place.
-- Appending an edit while the working cursor is behind the transaction tail appends one atomic,
-  journal-only `RewriteTimeline` control record. It contains the version identity, expected timeline
-  hash, retained cursor, discarded-tail hash, and replacement `EditTransaction`. Replay validates
-  the expected hashes, logically tombstones the old redo tail, and appends the replacement as one
-  mutation; it must never expose a state where the tail was removed but the replacement is absent.
-- `RewriteTimeline` is not an `EditTransaction`, is not rendered as a user edit, and does not create
-  a hidden Version. The discarded redo tail is unavailable after the rewrite; existing user-visible
-  Versions remain the mechanism for preserving alternate looks.
-- Journal storage stays append-only. Timeline rewrites become physical deletion only when a verified
-  compaction checkpoint replaces the old journal.
-- Journal appends and project persistence run through the background-task scheduler. Older async
-  completions are forbidden from overwriting a newer generation.
-- Switching image, changing workspace, or exiting issues a durability barrier for the current
-  transaction and immediately starts the next allowed work. Image save and next-image load/render
-  overlap when their resource locks do not conflict.
-- A durable redo journal is sufficient to reconstruct the resulting version. Recovery replays only
-  records newer than the persisted base/head generation and is idempotent.
-- A `JournalBatchCommit` plus `FlushFileBuffers`/`fsync` makes finalized transactions eligible for
-  recovery. Successful DuckDB materialization atomically advances history, active pipeline, and
-  recovery metadata, then schedules thumbnail invalidation/regeneration.
-- On abnormal termination, the next project open automatically replays valid redo-only records and
-  marks the recovered head in history. Corrupt or base-mismatched records stop recovery for that
-  image and surface a diagnostic; they are never applied partially.
+- `Version` is a stable named branch/ref. `HEAD` identifies the checked-out Version, and the ref
+  points to an immutable edit commit.
+- An edit commit has one ordered parent; a merge commit has the current head as first parent and the
+  incoming root-relative branch as second parent. A high-resolution timestamp is part of the commit
+  object and hash.
+- A finalized edit command creates one commit. Slider samples during a drag modify only the live
+  pipeline; pointer release or an idle boundary appends the commit to the recovery journal and folds
+  the live pipeline's incremental transaction-chain hash.
+- The pipeline is not hashed from params JSON, cache policy, GPU handles, launchers, or scheduler
+  state. The root ID and ordered commit hashes are the integrity input.
+- Undo moves the working head to its first parent. Redo follows the in-memory redo path. Editing
+  after undo clears that path and creates a new child on the same Version. Undo and Redo append
+  reflog-like head-move recovery records; they do not create edit commits.
+- One global editor save lock serializes materialization. While a save checkpoint is active,
+  filmstrip selection, workspace switching, Version checkout, Paste, and Merge are disabled through
+  `InteractionPolicyController`.
+- Image B does not begin loading until image A's save checkpoint finishes. The earlier overlapping
+  save/load target is superseded.
+- One DuckDB transaction inserts journaled commit objects, moves the active Version head, stores the
+  matching pipeline projection, and advances recovery metadata.
+- After DuckDB succeeds, the saved journal prefix is truncated. Recovery uses the stored
+  materialized head to ignore a prefix left behind by interruption between database commit and
+  truncation.
+- Checkout validates root ID, head commit hash, and transaction-chain hash. A stale stored pipeline
+  projection is rebuilt from the immutable root and first-parent chain.
+- `thumbnail_service.cpp` consumes the saved projection and does not duplicate editor history
+  validation.
+- Paste creates and checks out a new branch from the target image root. Merge creates a two-parent
+  commit whose complete per-field result comes from UI conflict resolution.
+- Clean project exit removes commit objects unreachable from every Version head through either
+  parent.
 - Explicit Discard exists only in the current editor-filmstrip thumbnail context menu and is enabled
-  only for an unflushed current transaction. It cancels that transaction and reloads the durable
-  head. Once an autosave has published a version, the user returns through version history instead
-  of destructive discard.
+  only for an unmaterialized current commit. Once a save checkpoint advances the Version, the user
+  returns through Version history.
 
 ### HDR and display state
 
@@ -479,11 +480,11 @@ Main workspace navigation:
 `EditorSessionService`:
 
 - is the application-layer owner of the active image session;
-- acquires pipeline/history guards, applies typed adjustment patches, sequences generations, and
-  coordinates save/switch/recovery;
+- acquires the live pipeline snapshot and checked-out Version ref, applies typed adjustment patches,
+  sequences generations, and coordinates commits, save checkpoints, checkout, switch, and recovery;
 - calls existing application services rather than allowing UI code to reach storage directly;
-- registers save/load/render operations with the background-task system and declares per-image
-  resource locks.
+- registers save/load/render operations with the background-task system and publishes the global
+  editor save lock plus explicit interaction capabilities.
 
 `EditorRenderCoordinator`:
 
@@ -501,8 +502,9 @@ Main workspace navigation:
 
 `EditorTransactionJournal`:
 
-- appends redo-only records with checksums and monotonic generations;
-- supports durable barriers, replay, commit/head markers, and safe truncation;
+- appends complete timestamped edit commits with expected/result transaction-chain hashes;
+- supports replay from the stored Version head and direct truncation after a successful DuckDB
+  materialization;
 - never records intermediate slider samples or renderer-only state such as zoom/pan.
 
 Direct presenter:
@@ -553,20 +555,24 @@ The exact spelling may follow the existing command-line parser, but the semantic
 
 ## Image switch state machine
 
-Filmstrip and live-search switching must not serialize save then load on the GUI thread.
+Filmstrip and live-search switching serialize save then load through the global editor save lock,
+but the GUI thread never waits on file or DuckDB I/O.
 
 ```text
 Focused(image A)
-  -> finalize the open edit command and capture transaction generation N
-  -> enqueue A journal/save barrier with image-scoped write lock
-  -> invalidate A render generation and release UI ownership of its session
-  -> acquire B pipeline/history guards with image-scoped read/write lock
+  -> finalize the open edit command
+  -> start A save checkpoint and disable editor navigation
+  -> materialize A commits, Version head, pipeline projection, and recovery metadata
+  -> truncate A journal and return A's live pipeline snapshot
+  -> invalidate A render generation and finish the save checkpoint
+  -> acquire or rebuild B's live pipeline snapshot
+  -> validate B root, head, and transaction-chain hash
   -> request B interactive preview
   -> publish B only when its metadata and first compatible frame are ready
 
-A save and B load/render may overlap.
-Stale A frames, scope results, thumbnail completions, and journal completions carry A identity and
-generation and cannot mutate B.
+B load/render does not start before A's save checkpoint completes. Stale A frames, scope results,
+thumbnail completions, and journal completions still carry A identity and generation and cannot
+mutate B.
 ```
 
 If the next element is removed before it becomes active, cancel that generation and resolve the new
@@ -1842,7 +1848,12 @@ checksummed framing, atomic `RewriteTimeline` validation, and an independent
 rewrite / materialize head) so WorkingVersion state, journal replay, and the simulator agree.
 On-disk flush, background autosave, recovery, and compaction remain Phase 5G–5I.
 
-Product boundary locked for later filmstrip transfer (not implemented here):
+**Phase 6C replacement:** this section records the completed implementation only. Phase 6C removes
+production `WorkingVersion`, cursor records, and `RewriteTimeline` in favor of immutable parent-linked
+commits, a Version head, an in-memory redo path, and exit-time unreachable-commit collection. The
+Paste/Merge boundary below is also replaced by the dedicated Phase 6C plan.
+
+Historical Phase 5 product boundary, superseded before implementation:
 
 - Before Paste or Merge, finalize the open edit command, journal-commit every resulting transaction,
   and atomically materialize the active Version and pipeline. Library and Editor then invoke the
@@ -1858,8 +1869,10 @@ Product boundary locked for later filmstrip transfer (not implemented here):
 - Interactive undo/redo and append-behind-cursor continue to use journal `CursorMove` /
   `EditAppend` / `RewriteTimeline` on the active working timeline after checkout.
 
-The exact algorithms and crash behavior are defined in
+These historical algorithms and failure cases are recorded in
 [Editor History Durability and Version Transfer Design](editor_history_durability_and_version_transfer_design.md).
+The replacement behavior is defined in
+[Phase 6C Mini-Git History and Pipeline Snapshot Plan](phase_6c_mini_git_history_and_pipeline_snapshot_plan.md).
 
 Deliverables:
 
@@ -1902,6 +1915,10 @@ materialize operations with generation-fenced asynchronous completion. Productio
 journal writer and one operation lock per image; legacy barrier fakes remain source-compatible
 through the default adapter.
 
+**Phase 6C replacement:** the completed overlapping image-save/load behavior is not the target
+architecture. Phase 6C introduces one global editor save lock; image B starts only after image A's
+save checkpoint, journal truncation, and pipeline return complete.
+
 Deliverables:
 
 - [x] Extend the Phase 5F format with `JournalBatchCommit`. The image-scoped writer appends complete
@@ -1914,8 +1931,8 @@ Deliverables:
   render through the existing background-task module.
 - [x] Implement image-scoped locks so saving A can overlap loading/rendering B without sharing a mutable
   pipeline guard.
-- [x] On image/workspace/app transition, finalize the current edit command, enqueue its durability
-  barrier,
+- [x] On image/workspace/app transition, finalize the current edit command, enqueue its save
+  checkpoint,
   invalidate its render generation, and begin the next permitted load immediately.
 - [x] Make stale journal, thumbnail, scope, and render completions validate image and generation before
   publishing.
@@ -2248,62 +2265,28 @@ Implementation closeout:
   pointer preview plus exactly one settled value. Coordinator 29/29, session 45/45,
   and adjustment pipeline 3/3 regressions also pass.
 
-### Phase 6C - Active-version parameter loading and panel state distribution
+### Phase 6C - Mini-Git history, pipeline snapshots, and panel state
 
-This phase repairs the missing state path exposed by the Tone panel before any additional
-adjustment panel is ported. The session service remains the only owner of the current image's
-authoritative adjustment snapshot. QML receives a read-only copy through
-`EditorSessionController`; no panel reads history, pipeline, storage, or journal services directly.
+The previous one-step Phase 6C was too broad and depended on the wrong Version model. Its replacement
+is the standalone
+[Phase 6C Mini-Git History and Pipeline Snapshot Plan](phase_6c_mini_git_history_and_pipeline_snapshot_plan.md),
+which is authoritative for architecture, ordering, deliverables, and acceptance.
 
-Panel API:
+Phase 6C is now split into nine ordered work packages:
 
-- Every adjustment panel implements `loadFromSnapshot(snapshot)`.
-- The method reads only that panel's fields and updates its typed models through their no-submit
-  setters. It never calls `submitPatch`, schedules rendering, or writes history.
-- A panel may split parsing into private helpers, but `loadFromSnapshot` is the single public entry
-  used by the adjustment stack.
-- Reapplying the same snapshot is idempotent and does not create edits, restart debounce timers, or
-  change focus.
+1. destructive schema boundary and Git vocabulary;
+2. immutable one/two-parent commit graph and incremental hashes;
+3. immutable image root and pipeline snapshot validation;
+4. pointer-release commits and journal cutover;
+5. global save checkpoint, DuckDB materialization, and log truncation;
+6. checkout, image/workspace switching, and unreachable-commit collection;
+7. read-only panel state publication;
+8. root-relative Paste and UI-resolved two-parent Merge; and
+9. recovery, thumbnail, and destructive-cutover qualification.
 
-Central distribution:
-
-- Extend the session backend with a read-only authoritative adjustment snapshot and monotonically
-  increasing revision. Populate it from the active Version and its materialized pipeline params
-  immediately after history and pipeline acquisition succeeds.
-- Expose the snapshot and revision through `EditorSessionController` as QML-readable properties.
-- `EditorAdjustmentStack` owns the explicit panel list and is the only QML component that distributes
-  a new snapshot. It calls `loadFromSnapshot` when the session generation changes, when the snapshot
-  revision changes, and when a panel instance is created after deferred loading.
-- Keep the snapshot shape field-oriented and independent of panel layout. Each entry carries the
-  field key, operator params, and enabled state required to reconstruct a control value.
-- Unknown fields remain available for later panels; one panel must not delete or rewrite another
-  panel's entries.
-
-Edit persistence repair:
-
-- Replace the render-only settled path with `CommitAdjustment`. The first interactive patch for a
-  field records its prior operator params and enabled state; subsequent preview patches replace only
-  the pending after-state; the settled edit creates exactly one `EditTransaction`.
-- Append that transaction to the image journal and the active working Version before reporting a
-  successful committed adjustment. The render snapshot, history cursor, and pending transaction
-  must describe the same after-state.
-- Treat `EditorMaterializeOutcome{accepted=true, materialized=false}` as a successful no-change save.
-  `materialized` reports whether DuckDB advanced, not whether the operation succeeded.
-- Surface commit and save errors through the editor status area and background-task details. A
-  `Failed` session result must not be returned to QML as a successful submit.
-
-Acceptance:
-
-- Opening or switching to an edited image fills Tone values and curve points from the active Version
-  before controls become editable.
-- `loadFromSnapshot` for every registered panel performs no submit and is safe to call repeatedly.
-- Drag exposure, release, switch images, reopen, and verify the active Version, pipeline params,
-  journal replay, rendered frame, and Tone slider all contain the same value.
-- Undo, redo, Version checkout, recovery, and timeline replacement publish a new revision and update
-  every live panel without binding loops.
-- Saving with no new edit finishes successfully and reports that no database update was required.
-- Focused unit, QML, session, journal, and reopen tests cover the complete path instead of testing
-  panel submission, rendering, and journal writing as disconnected pieces.
+No Phase 6D panel work starts until Phase 6C-1 through 6C-7 pass. Phase 6C-8 may expose the typed
+Merge resolution interface before Phase 7A supplies the final history UI. Phase 6C-9 is required
+before Phase 6C is marked complete.
 
 ### Phase 6D - Look panel
 
@@ -2346,7 +2329,8 @@ Deliverables:
 Acceptance:
 
 - Panel edits and direct overlay drags stay bidirectionally consistent without binding loops.
-- Undo/redo/rewrite/recovery restores both pipeline geometry and overlay geometry exactly.
+- Undo/redo, edit-after-undo, checkout, and recovery restore both pipeline geometry and overlay
+  geometry exactly.
 
 ### Phase 6G - RAW Decode panel
 
@@ -2368,7 +2352,8 @@ Deliverables:
 - Integrate panel ordering, collapse state, scroll/focus behavior, and global reset semantics.
 - Port editor shortcuts through the central shortcut registry with focus-aware suppression in text
   fields.
-- Exercise undo followed by an edit in a different panel to force cross-panel `RewriteTimeline`.
+- Exercise undo followed by an edit in a different panel to create a new child commit and abandon
+  the old redo path.
 
 Acceptance:
 
@@ -2378,7 +2363,7 @@ Acceptance:
 ### Phase 7 - Remaining editor workflow modules
 
 The former Phase 6 follows the adjustment-panel port so History/Versions, scopes, filmstrip, search,
-and lifecycle UI reuse the same visual, motion, session, and durability rules.
+and lifecycle UI reuse the same visual, motion, session, and save-checkpoint rules.
 
 Scopes and custom overlay nodes have their own render-thread state and synchronization snapshots.
 They may observe copied frame metadata or dedicated analyzer output, but must not borrow the
@@ -2392,19 +2377,22 @@ Deliverables:
 
 - Port history/version cards, create/rename/remove/select, branch navigation, and checkout to QML
   backed by typed models.
-- Distinguish user-visible Versions from working-timeline cursor moves and journal-only
-  `RewriteTimeline` records.
+- Present each Version as a stable named ref pointing to an immutable commit head; do not expose the
+  recovery journal as user history.
+- Present first-parent history and two-parent merge provenance without offering detached-HEAD
+  editing.
 - Surface recovered heads without exposing internal journal records as edit rows.
 - Route Editor Paste/Merge through the same `AdjustmentTransferService` operation used by Library,
-  including journal commit/materialization preparation and atomic Version publication.
+  including save-checkpoint preparation, root-relative Paste checkout, typed field conflict
+  resolution, and atomic Version/head publication.
 
 Acceptance:
 
-- Version create, checkout, rename, remove, reconstruction, and alternate-look behavior match the
-  current editor.
-- Timeline rewrite never creates an implicit Version or corrupts an existing Version hash.
-- Paste starts from the image import/default pipeline; Merge copies only the active applied
-  transaction chain; both append incoming transactions and publish a matching active pipeline.
+- Version create, checkout, rename, remove, reconstruction, and alternate-look behavior use stable
+  Version IDs and immutable commit objects.
+- Paste starts a new branch at the image root and checks it out without inheriting the old head.
+- Merge advances the current Version with an ordered two-parent commit only after the UI resolves
+  every conflicting field.
 
 ### Phase 7B - Histogram and waveform scope module
 
@@ -2426,7 +2414,7 @@ Acceptance:
 Deliverables:
 
 - Implement `EditorFilmstripModel` from the active library element list.
-- Add selection, keyboard navigation, thumbnail state, render/save badges, and current-transaction
+- Add selection, keyboard navigation, thumbnail state, render/save badges, and current-commit
   context menu.
 - Implement the downward-collapsing dock, persistent handle, saved expanded height, and preference
   restoration.
@@ -2437,7 +2425,8 @@ Acceptance:
 
 - Collapse/expand preserves current image, scroll position, selection, save state, and keyboard focus.
 - Repeated animation and workspace switching do not leak delegates or trigger image reloads.
-- Discard is visible only where specified and only when the current transaction is eligible.
+- Discard is visible only where specified and only when the current unmaterialized commit is
+  eligible.
 
 ### Phase 7D - Live search editor integration
 
@@ -2463,7 +2452,7 @@ Deliverables:
 - Complete no-image, loading, saving, recovered, unsupported, and error states.
 - Open EditorWorkspace with no image and keep controls disabled until a valid session exists.
 - Integrate return-to-library context, workspace shutdown, and application shutdown with the
-  autosave barrier and task policy.
+  save checkpoint and task policy.
 
 Acceptance:
 
@@ -2616,19 +2605,19 @@ Extend the existing viewer geometry coverage and add focused tests such as:
 - `DirectPresenterRejectsPriorImageAfterGenerationChange`
 - `DirectPresenterRecyclesSlotAfterProducerAndRendererComplete`
 - `HiddenViewportWakesOutstandingTargetWaitWithLifecycleResult`
-- `EditorTransactionJournalReplaysRecordSequencesInOrder`
-- `EditorTransactionJournalIgnoresAlreadyMaterializedRecords`
-- `RewriteTimelineAtomicallyDropsRedoTailAndAppendsReplacement`
-- `PartialRewriteTimelineLeavesPriorTimelineUnchanged`
-- `CursorMovesAndTimelineRewriteReplayToReferenceModel`
-- `OlderAsyncFlushCannotOverwriteNewerEditorGeneration`
-- `ImageSwitchStartsNextLoadBeforePreviousSaveCompletes`
+- `TimestampDistinguishesEqualEditsFromTheSameParent`
+- `TwoVersionRefsShareOneCommitObjectWithoutDuplicatingRows`
+- `PipelineAndVersionFoldTheSameTransactionChainHash`
+- `EditAfterUndoCreatesNewChildAndClearsRedoPath`
+- `DatabaseCommitBeforeLogTruncateDoesNotReplayCommitTwice`
+- `ImageSwitchWaitsForPreviousSaveCheckpointBeforeLoading`
+- `StaleStoredPipelineProjectionRebuildsFromRootAndFirstParents`
 - `LiveSearchRemovalSelectsNearestSurvivingElement`
 - `EmptySearchResultsKeepEditorWorkspaceOpen`
-- `DiscardReloadsDurableHeadAndDropsOnlyUnflushedTransaction`
+- `DiscardReloadsMaterializedHeadAndDropsOnlyUnmaterializedCommit`
 - `ApplicationModuleHostConstructsAndDestroysModulesInDependencyOrder`
 
-Use fake clocks, explicit executors, barriers, and deterministic generation IDs. Do not use sleeps to
+Use fake clocks, explicit executors, latches, and deterministic generation IDs. Do not use sleeps to
 prove concurrency ordering.
 
 ### 2. QML component and interaction tests
@@ -2686,21 +2675,23 @@ Create a temporary project from a real RAW fixture and drive the application-lev
 
 1. open the library and enter EditorWorkspace;
 2. adjust exposure, curve, color, geometry, RAW Decode, and display transform;
-3. append two edits, undo one, append a replacement from another panel, and verify the resulting
-   `RewriteTimeline` removes the redo tail;
+3. append two commits, undo one, append a new child from another panel, and verify the old redo child
+   is unreachable from the Version head;
 4. verify interactive and full-quality generations;
 5. collapse and restore the filmstrip without losing selection or session state;
-6. switch to another filmstrip image while the first autosave is delayed by a test barrier;
-7. verify the second image starts rendering before the first save barrier is released;
+6. request another filmstrip image while the first save checkpoint is delayed by a test latch;
+7. verify filmstrip/workspace navigation remains disabled and the second image does not start
+   loading until the checkpoint finishes;
 8. replace the filmstrip with live search results, remove the focused image, then produce an empty
    result;
 9. leave and reopen EditorWorkspace;
-10. reconstruct history from the redo journal and verify pipeline values/version identity;
+10. reconstruct from root and first-parent commits and verify pipeline values, Version ID, head, and
+    transaction-chain hash;
 11. verify thumbnail invalidation and regeneration;
-12. exercise version checkout/branching and export.
+12. exercise root-relative Paste, UI-resolved two-parent Merge, Version checkout, and export.
 
-Run a second process that terminates after journal durability but before version materialization,
-then verify automatic recovery in a fresh process.
+Run a second process that terminates after journal append, after DuckDB commit, and during log
+truncation, then verify automatic recovery in a fresh process.
 
 ### 5. Forced-termination and storage-fault fuzz harness
 
@@ -2718,11 +2709,12 @@ Maintain a small repository-owned framework rather than adding a general-purpose
 - a reducer removes operations while preserving the failure so the saved regression case is small;
 - fixed seeds run in presubmit; fresh bounded random seeds and all crash points run in scheduled CI.
 
-The operation generator must cover edits across every migrated panel, repeated undo/redo, append
-after undo, multiple `RewriteTimeline` operations, version checkout, image switch, live-search list
-replacement, filmstrip collapse, workspace switch, autosave, materialization, compaction, and
-shutdown. The oracle verifies cursor, logical transaction list, discarded-tail hashes, transaction
-IDs, version/hash identity, pipeline params, and durable generation.
+The operation generator must cover edits across every migrated panel, repeated undo/redo, edit after
+undo, one- and two-parent commits, Version checkout, Paste, field-resolved Merge, image switch,
+live-search list replacement, filmstrip collapse, workspace switch, autosave, materialization, direct
+log truncation, clean-exit garbage collection, and shutdown. The oracle verifies root ID, active
+Version ID, head commit, both parent links, reachable commit set, transaction-chain hash, pipeline
+projection, panel state, journal prefix, and materialized sequence.
 
 No test relies on timing sleeps. Seed and crash-point selection are explicit inputs so every failure
 is locally reproducible.
@@ -2753,7 +2745,7 @@ Measure rather than infer:
 - GUI-thread event handling during adjustment drags;
 - render-thread frame time and missed frames;
 - pipeline completion-to-presentation latency;
-- image switch latency with overlapping save/load;
+- save-checkpoint duration and image switch latency after serialized save/load;
 - journal append/materialization latency and queue depth;
 - GPU/CPU memory and live native-resource counts;
 - HDR/SDR transition duration.
@@ -2795,7 +2787,8 @@ Log structured, non-sensitive diagnostics for:
   presentation-consumer availability transitions;
 - current image render generation and presented layer generation;
 - stale frame/scope/journal completion drops;
-- journal durable/materialized head per image;
+- active Version ID, working/materialized commit head, transaction-chain hash, journal prefix, and
+  save-checkpoint state;
 - requested and actual SDR/HDR display state, swapchain format, screen, and down-transform reason;
 - surface, scene graph, and native-resource recreation.
 
@@ -2810,9 +2803,11 @@ transitions must be queryable by the harness without scraping human-readable log
 | Render-thread/native-resource race | Bounded slots, explicit producer/renderer ownership, generation rejection, deterministic teardown tests |
 | CUDA uses a different adapter from Qt | Select LUID before first window; fail startup on mismatch |
 | OpenCL/GL sharing depends on context/share group | Create and validate the share topology at startup; require the sharing extension; no host-copy path |
-| Search removes the active image mid-edit | Seal/autosave by identity and generation, then nearest-survivor or empty-state transition |
-| Redo journal replays twice or out of order | Base/head IDs, monotonic generations, checksum, idempotent materialization markers |
-| Undo then append resurrects a discarded redo tail | Atomic hash-checked `RewriteTimeline`, append-only tombstone semantics, reference-model and forced-close fuzzing |
+| Search removes the active image mid-edit | Finalize the edit, complete a save checkpoint, then select the nearest survivor or empty state |
+| Journal prefix replays twice after DuckDB commit | Stored materialized head/sequence, commit hashes, and interruption tests around direct truncation |
+| Undo then edit preserves an abandoned redo path | Move the same Version ref to the new child, clear the redo stack, and collect unreachable commits on clean exit |
+| Stored pipeline projection disagrees with history | Validate root/head/chain on editor open and rebuild from root plus first parents |
+| Global save lock makes navigation appear frozen | Publish explicit disabled capabilities and saving reason; never block the GUI thread on I/O |
 | ApplicationModuleHost becomes another god object | Typed module properties only, narrow constructor injection, no behavior forwarding, no friend access, isolated module tests |
 | Main.qml becomes another monolith | Thin Main, QML WorkspaceHost, C++ route state, independent workspace components |
 | Whole-window HDR changes UI appearance | Linear scene target plus explicit final output transform and UI reference-white tests |
@@ -2831,10 +2826,11 @@ This roadmap is complete only when:
 - CUDA/D3D11, OpenCL/OpenGL, and Metal present native GPU output through QQuickRhiItem with no host
   presentation copy;
 - every existing editor feature passes parity qualification;
-- redo-only autosave, recovery, image switching, workspace switching, and shutdown pass the
-  deterministic, injected-failure, and process-termination fuzz harnesses;
-- undo followed by append is persisted as atomic `RewriteTimeline` and never resurrects its discarded
-  redo tail;
+- timestamped edit commits, Version refs, save checkpoints, recovery, image switching, workspace
+  switching, and shutdown pass the deterministic, injected-failure, and process-termination fuzz
+  harnesses;
+- undo followed by edit moves the same Version to a new child, clears the redo path, and leaves no
+  unreachable commit after clean-exit collection;
 - overlays and scopes are scene graph/QML content, not QWidget/QPainter content;
 - whole-window HDR/SDR transitions use the owned render host, preserve macOS EDR behavior, and apply
   the defined Windows OpenGL down-transform only when true HDR is unsupported;
