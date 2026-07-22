@@ -74,6 +74,14 @@ class IEditorHistoryPort {
   virtual auto ReadAdjustmentSnapshot(const EditorHistoryGuardHandle& guard,
                                       EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
       -> bool = 0;
+
+  /// Phase 6C-5: capture the committed live serialized pipeline state, working
+  /// head, chain hash, and journal records without constructing a second live
+  /// executor. Must run before guards are released for a save checkpoint.
+  virtual auto CaptureSaveCheckpoint(const EditorHistoryGuardHandle& /*guard*/,
+                                     std::string* /*error*/) -> bool {
+    return true;
+  }
 };
 
 class IEditorTaskPort {

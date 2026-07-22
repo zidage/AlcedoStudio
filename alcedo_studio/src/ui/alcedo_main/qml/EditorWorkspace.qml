@@ -13,6 +13,14 @@ Item {
     property var theme: null
     property var workspaceRouter: appModules.workspaceRouter
     property var editorSession: appModules.editorSession
+    property var interactionPolicy: appModules.interactionPolicy
+
+    // Decoupled Phase 6C-5 navigation gates — not inlined into panel layout code.
+    EditorNavigationPolicy {
+        id: editorNavigationPolicy
+        interactionPolicy: root.interactionPolicy
+        editorSession: root.editorSession
+    }
 
     readonly property color colPanel: theme ? theme.colGlassPanel : "#1C1C1D"
     readonly property color colStroke: theme ? theme.colGlassStroke : Qt.rgba(1, 1, 1, 0.08)
@@ -75,9 +83,7 @@ Item {
                 Layout.fillHeight: true
                 theme: root.theme
                 editorSession: root.editorSession
-                // Rail stays usable without an image so empty-state navigation
-                // can still open/collapse the panels; bodies show empty hints.
-                controlsEnabled: true
+                navigationPolicy: editorNavigationPolicy
             }
 
             // Center column: viewport + filmstrip
@@ -623,10 +629,10 @@ Item {
                     Layout.preferredHeight: editorFilmstrip.dockHeight
                     theme: root.theme
                     editorSession: root.editorSession
+                    navigationPolicy: editorNavigationPolicy
                     // Phase 1B: empty model; position/count remain defined for handle UI.
                     currentIndex: root.hasImage ? 1 : 0
                     totalCount: root.hasImage ? 1 : 0
-                    saveInProgress: false
                 }
             }
 

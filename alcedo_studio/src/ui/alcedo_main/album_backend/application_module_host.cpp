@@ -195,6 +195,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     production_scheduler->SetServices(production_services);
     auto production_journal =
         std::make_shared<EditorSessionProductionJournalPort>(production_services);
+    production_journal->SetHistoryPort(production_history);
 
     editor_session_runtime_ = alcedo::EditorSessionRuntime::CreateWithPorts(
         production_pipeline, production_history, production_tasks, production_journal,

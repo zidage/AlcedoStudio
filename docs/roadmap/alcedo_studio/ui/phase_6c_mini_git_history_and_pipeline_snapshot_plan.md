@@ -2,9 +2,9 @@
 
 Date: 2026-07-22
 
-Status: approved design; 6C-1, 6C-2, 6C-2-Fix, 6C-3, and 6C-4 implemented.
-6C-5 global save checkpoint and materialization may proceed on the validated serialized pipeline
-state and mini-Git journal APIs.
+Status: approved design; 6C-1, 6C-2, 6C-2-Fix, 6C-3, 6C-4, and 6C-5 implemented.
+6C-5-Fix is a blocking qualification and maintainability correction package. Do not begin 6C-6
+checkout, session switching, or garbage collection until every 6C-5-Fix stage is complete.
 
 Related documents:
 
@@ -518,6 +518,450 @@ Acceptance:
 - Failure before DuckDB commit leaves the prior Version head and serialized pipeline state.
 - Failure after DuckDB commit but before truncation does not replay a commit twice.
 - Saving with no journal changes succeeds without moving the Version head.
+
+### Phase 6C-5-Fix - Save checkpoint qualification and maintainability corrections
+
+This is a blocking correction package discovered during the 6C-5 review. The focused tests added in
+6C-5 pass, but they do not yet prove the complete production path from editor navigation through
+capture, materialization, journal truncation, thumbnail invalidation, and navigation resumption. The
+review also found that the purported concurrent coordinator test is single-threaded, the `phase6c`
+CTest label selects no tests, newly added files do not pass the repository formatter, and several
+changed files exceed 1000 physical lines.
+
+Implement the stages below in order. Each stage must leave its named tests green before the next
+stage starts. Do not interpret a passing direct materializer test as proof that the production ports,
+QML entrypoints, or asynchronous completion path work.
+
+#### Mandatory change-size and review discipline
+
+- Every lettered Fix stage below (`Fix-1A`, `Fix-1B`, and so on) is an independent implementation,
+  verification, and commit unit.
+- The hard size limit for one lettered stage is 500 changed lines, calculated as additions plus
+  deletions across source, tests, QML, CMake, and documentation relative to that stage's starting
+  commit.
+- If a stage reaches or is projected to reach more than 500 changed lines, stop and split it again by
+  responsibility before continuing. Name the children with another suffix such as `Fix-3B-1` and
+  `Fix-3B-2`, give each child its own tests and acceptance items, and keep each child at or below 500
+  changed lines.
+- Do not evade the limit by postponing tests, mixing unrelated cleanup into another stage, reformatting
+  unrelated files, or treating file extraction as outside the count. A detected pure rename may use
+  Git's rename accounting, but edits made during the move count normally.
+- At the end of every lettered stage, record `git diff --numstat` totals and complete physical LOC for
+  every changed file. A changed file above 1000 physical lines requires an immediate split plan in the
+  same stage; do not defer that decision to the final cleanup.
+- Judge behavior only from executed tests and runtime evidence. Source inspection may produce naming,
+  responsibility, performance, documentation, or missing-test findings, but it must not be reported as
+  proof of behavioral correctness.
+
+#### Review-skill requirement mapping
+
+Every requirement from `$grill-code-review` has an owning stage:
+
+| Review requirement | Owning Fix stages |
+| --- | --- |
+| Read scope, design, changed files, acceptance criteria, and complete LOC | Fix-1A and every stage exit |
+| Keep observed failures, coverage gaps, and maintainability findings separate | Fix-1A and Fix-6I |
+| Basic and invariant unit tests | Fix-1B, Fix-2A, Fix-3A |
+| Boundary, malformed-input, stale-state, and safety tests | Fix-2C, Fix-4B, Fix-4D |
+| State transitions, retry, cancellation, partial failure, and idempotence | Fix-2B, Fix-3C, Fix-4B, Fix-4C |
+| Real persistence, reopen, thread, and production-port integration | Fix-1B, Fix-1C, Fix-4B, Fix-4C |
+| End-to-end user actions and externally visible ordering | Fix-5B and Fix-5C |
+| Concurrency, bounded work, large inputs, and performance evidence | Fix-2A, Fix-4D, Fix-6H |
+| Reusable fixture without repeated environment setup | Fix-1B and Fix-1C |
+| Split oversized or mixed-responsibility test files | Fix-1D and Fix-6G |
+| Clear established naming without metaphors or duplicate state | Fix-2C, Fix-3A, Fix-6G |
+| Small, explicit responsibilities and maintainable asynchronous ownership | Fix-2A through Fix-3C and Fix-6A through Fix-6F |
+| Avoid busy waits, broad lock scopes, repeated graph copies, and unbounded work | Fix-2A, Fix-4D, Fix-6H |
+| Report per-file LOC and split files above 1000 lines | every stage exit and Fix-6A through Fix-6G |
+| Document success/failure call chains | Fix-6H |
+| Doxygen-compatible documentation for every changed function | every implementation stage, audited in Fix-6H |
+| Record commands, counts, skipped tests, limitations, and residual risk | every stage exit and Fix-6I |
+
+#### Phase 6C-5-Fix-1 - Executable test suite and shared integration fixture
+
+Goal: make the correction suite selectable, deterministic, and reusable before changing runtime
+ownership.
+
+Mandatory stage split:
+
+- **Fix-1A - Test discovery and evidence baseline:** correct labels, add non-empty label assertions,
+  record the acceptance matrix, and record the initial LOC/diff inventory.
+- **Fix-1B - Project and persistence fixture:** add temporary project/database, two image roots,
+  deterministic clocks, reopen helpers, and durable-state inspection.
+- **Fix-1C - Asynchronous and UI fixture collaborators:** add the controllable executor, failure-point
+  controls, thumbnail event spy, production ports, task registry, and interaction policy wiring.
+- **Fix-1D - Focused test targets and file split:** move save-checkpoint service tests out of the
+  oversized file and register the five focused targets. Do not add new runtime behavior here.
+
+Each sub-stage must stay within the 500-line limit. If the shared fixture cannot fit, split persistence
+setup from editor-runtime setup rather than creating one oversized support file.
+
+Implementation:
+
+- Fix `alcedo_studio/tests/CMakeLists.txt` so `ctest -L phase6c` and
+  `ctest -L phase6c_5_fix` both select a non-empty set. Do not pass a semicolon-expanded property list
+  that CTest interprets as unrelated property/value pairs.
+- Add a configure-time or test-time assertion that both label selections contain tests. A mistyped
+  label must fail CI instead of silently running zero tests.
+- Create one shared `EditorSaveCheckpointIntegrationFixture` that owns:
+  - a temporary project database and journal directory;
+  - two image elements with distinct roots and default Version refs;
+  - deterministic commit timestamps;
+  - real `StorageService`, commit-graph persistence, production pipeline/history/journal/task ports,
+    `EditorSessionService`, and `InteractionPolicyController`;
+  - a controllable asynchronous executor that can stop before commit, after commit, and before
+    truncation without wall-clock sleeps;
+  - a thumbnail invalidation spy that records element IDs and ordering;
+  - helpers to open A, commit an adjustment, request navigation to B, reopen the project, and inspect
+    the durable Version/head/hash/serialized state.
+- Put the fixture in a small shared test support file. Do not repeat project, graph, pipeline, journal,
+  and temporary-directory construction in every test.
+- Move save-checkpoint cases out of the 1000-line
+  `tests/app/editor_session_service_test.cpp` into a focused
+  `tests/app/editor_session_save_checkpoint_test.cpp`. Preserve behavior-oriented test names.
+- Add focused test targets instead of adding more unrelated functions to an existing large test
+  binary:
+  - `EditorSaveCheckpointCoordinatorTest`;
+  - `EditorSaveCheckpointCaptureTest`;
+  - `EditorMiniGitMaterializerFailureTest`;
+  - `EditorSaveCheckpointIntegrationTest`;
+  - `EditorSaveCheckpointQmlTest`.
+- Format all new and changed C++ files before considering this stage complete.
+
+Acceptance:
+
+- `ctest --test-dir build/debug -L phase6c -N` lists at least one test.
+- `ctest --test-dir build/debug -L phase6c_5_fix -N` lists every correction target above.
+- Running either label with `--output-on-failure` executes tests rather than reporting
+  `No tests were found`.
+- The shared fixture can create, close, reopen, and delete its project without leaked tasks, guards,
+  files, or threads.
+- No test uses timing sleeps to coordinate save completion or failure points.
+
+#### Phase 6C-5-Fix-2 - Project-owned checkpoint lease and journal-prefix ownership
+
+Goal: make one explicit owner cover the complete save interval and make the captured journal prefix
+unambiguous.
+
+Mandatory stage split:
+
+- **Fix-2A - Coordinator and lease:** inject the project-owned coordinator, implement blocking RAII
+  ownership, remove the busy loop, and add real threaded exclusion/teardown tests.
+- **Fix-2B - Journal-prefix rotation:** make capture/append/truncate share one prefix owner and add
+  capture-then-edit, failure-retention, and retry tests.
+- **Fix-2C - Capture state cleanup:** remove redundant flags, unused fields, dead wrappers, and
+  duplicate truncation surfaces; add contradictory/empty capture boundary tests.
+
+Implementation:
+
+- Replace the process-static coordinator and `yield` retry loop with one coordinator owned by the
+  open project/editor runtime and injected into the production save path.
+- Introduce a movable RAII checkpoint lease. The lease must be acquired before the live snapshot and
+  journal prefix are captured and remain owned through:
+  1. committed live-state capture;
+  2. DuckDB materialization;
+  3. journal truncation and flush;
+  4. thumbnail invalidation scheduling;
+  5. publication of the terminal save result.
+- Do not busy-wait. Waiting workers must block on a standard synchronization primitive, and shutdown
+  must be able to cancel or join them deterministically.
+- Define one explicit state sequence such as `Idle -> Capturing -> Materializing -> Finishing -> Idle`.
+  Publish state changes only from the coordinator; do not infer checkpoint ownership from a generic
+  busy flag.
+- Make the journal prefix an immutable captured value with an explicit sequence range. Capture and
+  append must use the same prefix mutex so a finalized edit cannot enter the file being truncated.
+- A finalized edit that arrives after capture must wait behind the checkpoint lease and become the
+  first record of the next prefix after successful truncation. It must never be silently added to the
+  captured prefix or deleted by truncation.
+- If materialization or truncation fails, retain the captured prefix for retry. Do not consume or
+  discard the capture before the terminal result is known.
+- Remove redundant or unused state and APIs while establishing this ownership:
+  - derive the empty-prefix case from the captured record range instead of storing a separate
+    `no_journal_changes` boolean;
+  - either validate `session_generation` as part of capture identity or remove it;
+  - remove `MaterializeValidatedGraph`, `SetRecords`, and duplicate truncation helpers unless the new
+    call chain gives them one concrete responsibility.
+
+Required tests:
+
+- `TwoImagesCompetingForCheckpointNeverMaterializeConcurrently` uses two real threads and a barrier;
+  it asserts the maximum simultaneous materialization count is one.
+- `CheckpointLeaseReleasesAfterSuccessFailureExceptionAndMove` covers every RAII exit.
+- `SecondImageCannotAcquireCheckpointUntilFirstFinishes` proves project-wide rather than per-image
+  serialization.
+- `EditFinalizedAfterCaptureStartsNextJournalPrefix` proves exact record membership before and after
+  truncation.
+- `FailedCheckpointRetainsCapturedPrefixForRetry` retries the same prefix and observes one durable
+  commit.
+- `ShutdownJoinsCheckpointWaitersWithoutBusyLoop` uses deterministic notification rather than sleeps.
+
+Acceptance:
+
+- Production code contains no `std::this_thread::yield()` acquisition loop for editor saving.
+- The checkpoint lease has one documented owner at every asynchronous boundary.
+- Threaded tests demonstrate exclusion and forward progress; a sequential `TryAcquire` test is not
+  sufficient.
+- A captured prefix and a next prefix cannot reference the same journal record sequence.
+
+#### Phase 6C-5-Fix-3 - Typed production handoff and navigation state machine
+
+Goal: connect the real editor session to the mini-Git materializer without hidden side maps, legacy
+journal work, positional booleans, or success fallbacks.
+
+Mandatory stage split:
+
+- **Fix-3A - Typed capture and materialization request:** change the history and journal interfaces,
+  pass capture ownership explicitly, validate identity, and remove the element-keyed rendezvous.
+- **Fix-3B - Production mini-Git routing:** select only the mini-Git path for configured projects,
+  reject missing storage/materializer state, and prove the legacy journal receives no records.
+- **Fix-3C - Pending navigation state machine:** replace positional booleans, define second-request and
+  close/shutdown behavior, and make completion callbacks idempotent.
+
+Implementation:
+
+- Change `IEditorHistoryPort::CaptureSaveCheckpoint` to return a typed result containing either an
+  immutable `EditorMiniGitSaveCapture` or an error. Do not store the only copy in a hidden
+  element-keyed map followed by a separate `TakeSaveCapture` call.
+- Pass that captured value explicitly into the asynchronous materialization request. The request must
+  preserve element ID, session generation when retained, Version ID, root ID, working head, chain
+  hash, serialized pipeline state, journal sequence range, and journal path.
+- When a mini-Git journal resolver is configured, route production save and recovery exclusively
+  through the mini-Git path. Do not also commit the previous transaction-array journal. Bootstrap
+  harnesses may use explicit no-project adapters, but a configured project must not report success
+  when storage, the capture, or the materializer is missing.
+- Replace `PendingNavigation` positional booleans with a typed request kind and named data. Support
+  exactly one pending transition. A second image, workspace, Version, Paste, Merge, or close request
+  while saving must be rejected with the checkpoint reason and must not replace the first request.
+- Keep the GUI thread free of DuckDB and file I/O. Only the short live-state capture may run before
+  dispatch, and its render-lock duration must be measured in a focused test.
+- Make success and failure completion idempotent. Duplicate or stale callbacks must not reopen an
+  image, release a newer session's guards, end a task twice, or publish a second terminal result.
+- Preserve image A's pipeline/history guards until the complete checkpoint succeeds. Release A only
+  immediately before beginning B's recovery/acquisition path.
+
+Required tests:
+
+- `ProductionSessionCapturesAndMaterializesOneMiniGitPrefixBeforeLoadingB` uses the shared fixture and
+  no manually assembled capture.
+- `CaptureFailureKeepsAInteractiveAndDoesNotStartSaveTaskOrLoadB` asserts guards and visible state.
+- `MissingProjectStorageFailsConfiguredMiniGitSave` rejects instead of returning a no-op success.
+- `SecondNavigationDuringCheckpointIsRejectedAndOriginalTargetStillResumes` covers request ownership.
+- `CloseAndShutdownDuringCheckpointHaveOneDeterministicTerminalPath` covers teardown.
+- `DuplicateAndStaleSaveCallbacksCannotResumeNavigationTwice` covers callback identity.
+- `ProductionMiniGitSaveDoesNotWriteLegacyTransactionJournal` checks the real selected files and
+  services.
+
+Acceptance:
+
+- Repository call-site scans find no production `TakeSaveCapture` rendezvous or configured-project
+  success fallback caused by a missing materializer.
+- One typed request visibly connects capture to materialization in the call chain.
+- Image B recovery, guard acquisition, and first render are all absent until A reports a complete
+  checkpoint.
+- The previous transaction-array journal receives no records during a mini-Git save.
+
+#### Phase 6C-5-Fix-4 - Transaction, truncation, and recovery failure qualification
+
+Goal: prove every persistence boundary using real reopen checks and deterministic failure injection.
+
+Mandatory stage split:
+
+- **Fix-4A - Failure-point interfaces:** add narrow storage and journal-file seams plus parameterized
+  failure identifiers, without changing success behavior.
+- **Fix-4B - Pre-commit atomicity:** cover every pre-commit failure and full durable-state comparison
+  after recreating storage objects.
+- **Fix-4C - Post-commit cleanup and retry:** cover original journal bytes, truncate/open/flush
+  failures, typed partial outcomes, retry, and duplicate suppression.
+- **Fix-4D - Journal variants and scale:** cover mixed head moves, stale/malformed/duplicate records,
+  empty prefixes, large prefixes, strict no-pipeline spies, and recorded resource measurements.
+
+Implementation:
+
+- Add narrow failure-injection seams around the storage transaction and journal file operations.
+  Keep them in test adapters or small interfaces; do not add test conditionals throughout production
+  logic.
+- Exercise failures before transaction start, after commit-object insertion, before Version/state
+  update, before DuckDB commit, after DuckDB commit, during journal open-for-truncate, and during
+  journal flush.
+- For every failure before DuckDB commit, close and recreate `DBController`, then verify that commit
+  rows, Version head, materialized head, chain hash, serialized pipeline state, and recovery metadata
+  all retain their prior values.
+- For failure after DuckDB commit but before successful truncation, return a typed result that
+  distinguishes `database_committed` from `checkpoint_completed`. Keep navigation blocked for that
+  attempt, retain the journal bytes, and let a retry/reopen recognize the already-materialized prefix,
+  truncate it, and complete without a duplicate commit.
+- Do not reproduce the crash window by first completing a successful truncation and then rewriting a
+  synthetic journal. Stop the real production path at the failure point while the original journal
+  remains on disk.
+- Validate empty, one-edit, many-edit, edit/head-move mixtures, stale source head, stale chain hash,
+  duplicate record, malformed record, missing target commit, and a large journal prefix.
+- Keep materialization pipeline-free. Add spies that fail the test if materialization requests
+  pipeline replay, changes operator state, builds execution stages, or creates a second executor.
+- Report truncation and flush failures; do not ignore their error values.
+
+Required tests:
+
+- `EachPreCommitFailureLeavesAllDurableStateUnchangedAfterReopen` is parameterized by the pre-commit
+  failure points.
+- `CommitSucceededButTruncateFailedRetriesWithoutDuplicateCommit` uses the original journal bytes.
+- `FlushFailureLeavesCheckpointIncompleteAndRecoverable` verifies the typed partial result.
+- `MixedEditAndHeadMovePrefixMaterializesToCapturedHeadAndChain` covers non-trivial journal order.
+- `MalformedOrStalePrefixWritesNoRows` covers safety checks without making them the whole suite.
+- `MaterializerNeverCallsPipelineReplayOrMutation` uses strict spies.
+- `EmptyPrefixRefreshesOnlyMatchingSerializedStateWithoutMovingVersionHead` reopens and compares all
+  fields.
+- `LargePrefixMaterializesWithinRecordedTimeAndMemoryTargets` records a baseline without a fragile
+  machine-specific absolute threshold.
+
+Acceptance:
+
+- Every failure point has an assertion on all durable fields, not only commit count.
+- Recovery is tested by destroying and recreating the project/storage objects.
+- No journal cleanup error is discarded.
+- The same already-committed prefix can be presented repeatedly without adding a second commit row or
+  moving the Version twice.
+
+#### Phase 6C-5-Fix-5 - User-visible locks, thumbnail ordering, and end-to-end navigation
+
+Goal: prove the five locked user behaviors and the complete A-to-B result through their real UI and
+production collaborators.
+
+Mandatory stage split:
+
+- **Fix-5A - Production lock publication:** test the real task port, policy propagation, task
+  completion, and per-capability C++ behavior.
+- **Fix-5B - QML capability bindings and reasons:** remove session-state permission fallbacks, bind
+  each action narrowly, expose localized reasons, and test the five real QML entrypoints.
+- **Fix-5C - Thumbnail and A-to-B end-to-end sequence:** add the ordered production event log, failure
+  assertions, successful navigation, first-frame presentation, and reopen verification.
+
+Implementation:
+
+- Make `EditorSessionProductionTaskPort::BeginTask` the tested producer of editor-save locks. The
+  test must observe those locks through `BackgroundTaskController` and
+  `InteractionPolicyController`; do not register equivalent locks directly in the test.
+- Keep `InteractionPolicyController` as the sole authority for editor navigation capabilities.
+  Remove QML fallbacks that infer permissions from `sessionState == Saving`.
+- Bind separate capabilities to the actual actions they guard. Do not use `canCheckoutVersion` to
+  disable unrelated history browsing, and do not name a general selection block `saveInProgress`.
+- Surface the localized blocking reason through tooltip, accessibility description, or the existing
+  snackbar path for filmstrip selection, workspace switch, Version checkout, Paste, and Merge.
+- Schedule thumbnail invalidation only after DuckDB commit and successful journal truncation/flush.
+  A failed or incomplete checkpoint must not invalidate the thumbnail. A retry that completes must
+  invalidate exactly once for image A before navigation resumes.
+- Add an end-to-end sequence using two real image elements:
+  1. open A;
+  2. commit an adjustment;
+  3. request B from the user-facing entrypoint;
+  4. stop materialization and assert all five capabilities are disabled with a reason;
+  5. assert B has no recovery, guard, render, or presentation activity;
+  6. finish persistence and truncation;
+  7. assert A thumbnail invalidation occurs;
+  8. assert locks clear;
+  9. assert B opens and presents its first frame;
+  10. reopen the project and compare A's Version head, chain hash, serialized state, and adjustment.
+
+Required tests:
+
+- `ProductionEditorSaveTaskPublishesAndClearsAllFiveNavigationLocks` starts and ends the real task.
+- `EachBlockedQmlActionShowsTheSaveReasonAndPerformsNoBackendCall` covers all five actions.
+- `FailedCheckpointKeepsThumbnailAndPendingTargetUntouched` covers failure ordering.
+- `SuccessfulCheckpointInvalidatesAOnceBeforeBStartsLoading` asserts an ordered event log.
+- `AToBSaveAndReopenPreservesAHeadChainStateAndAdjustment` is the required end-to-end test.
+- `HistoryBrowsingRemainsAvailableWhenOnlyVersionCheckoutIsLocked` prevents over-broad UI gating.
+
+Acceptance:
+
+- The UI tests exercise actual QML action entrypoints, not only C++ capability getters.
+- Every disabled action exposes a non-empty localized reason.
+- The event log orders DuckDB commit, journal truncate/flush, thumbnail invalidation, lock release,
+  B acquisition, and B first render exactly as specified.
+- Failure paths make zero B backend calls and zero thumbnail invalidation calls.
+
+#### Phase 6C-5-Fix-6 - File decomposition, documentation, and performance evidence
+
+Goal: leave the corrected save path small enough for an AI agent or human to navigate safely.
+
+Mandatory stage split:
+
+- **Fix-6A - Production task and pipeline port extraction:** move only those two responsibilities and
+  preserve behavior with existing tests.
+- **Fix-6B - Production history port extraction:** move history and capture code with no behavior
+  change.
+- **Fix-6C - Production journal/materializer port extraction:** move persistence orchestration and
+  keep its tests green.
+- **Fix-6D - Production scheduler extraction:** move scheduling/rendering code separately; if the move
+  exceeds 500 changed lines after Git rename accounting, split scheduler helpers from worker
+  lifecycle.
+- **Fix-6E - Session save-state extraction:** separate save/navigation completion from lifecycle and
+  render routing.
+- **Fix-6F - QML root decomposition:** extract workspace navigation and adjustment transfer in
+  separate commits.
+- **Fix-6G - CMake, test-file, naming, and dead-API cleanup:** split registries by subsystem, finish
+  test-file decomposition, and remove misleading or unused surfaces.
+- **Fix-6H - Doxygen, call chains, formatting, and performance evidence:** document every changed
+  function, publish success/failure chains, format the complete scope, and record non-trivial
+  performance measurements.
+- **Fix-6I - Final evidence report:** run the full matrix and record commands, pass/fail/skip counts,
+  per-file LOC, per-stage diff totals, environmental limitations, and remaining risks before changing
+  the Status line.
+
+File extraction is not permission for a large commit. Each port, QML responsibility, registry, and
+documentation pass remains an independent stage subject to the 500-line limit.
+
+Implementation:
+
+- Split `editor_session_production.cpp` by production port responsibility. Put pipeline, history,
+  journal/materialization, task, and scheduler implementations in separate files. Keep the mini-Git
+  capture/materialization bridge with the journal/history boundary, not with rendering.
+- Split the save-checkpoint state machine from `editor_session_service.cpp` so editor lifecycle,
+  render routing, and save/navigation completion no longer share one large implementation file.
+- Split `Main.qml` workspace navigation and adjustment-transfer actions into focused components or
+  controllers. Keep the root window responsible for composition rather than feature logic.
+- Split source and test CMake registration into subsystem include files while preserving target names
+  and labels.
+- Keep every changed implementation and test file below 1000 physical lines unless a generated or
+  declarative registry has a written responsibility-based reason to remain larger.
+- Remove dead wrappers and misleading state. Prefer names such as `selectionBlocked`,
+  `versionCheckoutEnabled`, `capturedPrefix`, and `checkpointLease` when they match the final
+  responsibility; do not introduce metaphors or duplicate synonyms.
+- Add Doxygen-compatible documentation to every new or changed C++ function in this correction
+  package. Each comment must cover purpose, parameters, return value, preconditions, ownership,
+  side effects, thread affinity or thread safety, and failure behavior where applicable. QML helper
+  functions must carry the equivalent concise documentation in the local convention.
+- Document the final success and failure call chains beside the owning service interfaces so later
+  work does not have to reconstruct the asynchronous ownership from implementations.
+- Add a benchmark or recorded performance test for large graph/prefix materialization. Measure graph
+  copies, database-lock duration, capture render-lock duration, elapsed time, and peak memory. Move
+  journal folding outside the database lock when the measured/structural dependency allows it.
+- Run the repository formatter and remove every changed-line violation.
+
+Acceptance:
+
+- No changed non-generated source or test file exceeds 1000 physical lines without an explicit
+  responsibility-based exception in this plan.
+- `clang-format --dry-run --Werror --style=file` passes for every changed C++ file.
+- No changed function lacks the required Doxygen-compatible description.
+- Repository searches find no unused 6C-5-Fix API, positional navigation booleans, hidden capture
+  rendezvous, or busy-wait save loop.
+- The performance result records inputs and measurements and does not rely on a trivial one-commit
+  graph.
+
+#### Phase 6C-5-Fix exit gate
+
+6C-5-Fix is complete only when all of the following are true:
+
+- all Fix-1 through Fix-6 acceptance items pass;
+- the production A-to-B test covers capture, DuckDB transaction, original journal truncation,
+  thumbnail invalidation, lock release, B acquisition, B first render, and reopen verification;
+- threaded tests prove global exclusion and next-prefix behavior;
+- every specified failure point preserves or recovers the exact durable state;
+- `ctest --test-dir build/debug -L phase6c --output-on-failure` executes a non-empty green suite;
+- `ctest --test-dir build/debug -L phase6c_5_fix --output-on-failure` executes a non-empty green suite;
+- relevant broader editor, history, storage, interaction-policy, and workspace tests remain green;
+- formatting, roadmap terminology, project terminology, test naming, LOC, and documentation checks
+  pass; and
+- this document's Status line is updated to mark 6C-5-Fix implemented before 6C-6 begins.
 
 ### Phase 6C-6 - Checkout, session switching, and garbage collection
 

@@ -16,7 +16,12 @@ Item {
 
     property var theme: null
     property var editorSession: null
-    property bool controlsEnabled: true
+    // Phase 6C-5: Version checkout is disabled while a save checkpoint holds locks.
+    property var navigationPolicy: null
+    property bool controlsEnabled: navigationPolicy ? navigationPolicy.canCheckoutVersion : true
+    readonly property string checkoutDisabledReason: navigationPolicy
+                                                     ? String(navigationPolicy.checkoutVersionReason || "")
+                                                     : ""
 
     readonly property color colText: theme ? theme.colText : "#F5F1EA"
     readonly property color colMuted: theme ? theme.colTextMuted : "#AAA59D"

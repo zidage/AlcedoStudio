@@ -669,6 +669,22 @@ ApplicationWindow {
         if (!root.pendingAdjustmentPasteTargets || root.pendingAdjustmentPasteTargets.length === 0) {
             return
         }
+        // Phase 6C-5: Paste is blocked with a reason while a save checkpoint runs.
+        if (appModules.interactionPolicy && !appModules.interactionPolicy.canPasteAdjustments) {
+            const reason = String(appModules.interactionPolicy.pasteAdjustmentsReason || "")
+            if (reason.length > 0) {
+                root.showSnackbar(reason)
+            }
+            return
+        }
+        if (appModules.interactionPolicy && !appModules.interactionPolicy.canMergeAdjustments
+                && String(adjustmentTransferDialog.pasteStrategy || "") === "merge") {
+            const reason = String(appModules.interactionPolicy.mergeAdjustmentsReason || "")
+            if (reason.length > 0) {
+                root.showSnackbar(reason)
+            }
+            return
+        }
         adjustmentTransferDialog.mode = "paste"
         adjustmentTransferDialog.pasteStrategy = "merge"
         adjustmentTransferDialog.sourceTitle =
@@ -1385,6 +1401,8 @@ ApplicationWindow {
                             padding: 0
                             display: AbstractButton.IconOnly
                             enabled: workspaceSwitch.navEnabled
+                                     && (!appModules.interactionPolicy
+                                         || appModules.interactionPolicy.canSwitchWorkspace)
                             activeFocusOnTab: true
                             readonly property bool isActive: appModules.workspaceRouter.workspace === "library"
                             // The sliding thumb supplies the selected surface; icon
@@ -1408,6 +1426,10 @@ ApplicationWindow {
                             Accessible.name: libraryNavButton.actionName
                             Accessible.role: Accessible.Button
                             onClicked: {
+                                if (appModules.interactionPolicy
+                                        && !appModules.interactionPolicy.canSwitchWorkspace) {
+                                    return
+                                }
                                 if (appModules.workspaceRouter.workspace !== "library") {
                                     appModules.workspaceRouter.openLibrary()
                                 }
@@ -1423,6 +1445,8 @@ ApplicationWindow {
                             padding: 0
                             display: AbstractButton.IconOnly
                             enabled: workspaceSwitch.navEnabled
+                                     && (!appModules.interactionPolicy
+                                         || appModules.interactionPolicy.canSwitchWorkspace)
                             activeFocusOnTab: true
                             readonly property bool isActive: appModules.workspaceRouter.workspace === "editor"
                             // See libraryNavButton: no per-segment hover/press fill.
@@ -1450,6 +1474,10 @@ ApplicationWindow {
                             // while already active is a no-op so the session is
                             // preserved.
                             onClicked: {
+                                if (appModules.interactionPolicy
+                                        && !appModules.interactionPolicy.canSwitchWorkspace) {
+                                    return
+                                }
                                 if (appModules.workspaceRouter.workspace !== "editor") {
                                     const lastEl = Number(appModules.editorSession.lastElementId || 0)
                                     const lastImg = Number(appModules.editorSession.lastImageId || 0)

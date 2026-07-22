@@ -18,6 +18,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "app/editor_mini_git_materializer.hpp"
 #include "app/editor_render_coordinator.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_ports.hpp"
@@ -40,6 +41,7 @@ class MiniGitWorkingHistory;
 namespace alcedo::ui {
 
 class BackgroundTaskController;
+class EditorSessionProductionHistoryPort;
 
 /// Resolves the active production presentation sink for a render intent.
 using EditorFrameSinkResolver = std::function<alcedo::IFrameSink*()>;
@@ -119,6 +121,7 @@ class EditorSessionProductionJournalPort final : public alcedo::IEditorJournalPo
   ~EditorSessionProductionJournalPort() override;
 
   void SetServices(EditorSessionProductionServices services);
+  void SetHistoryPort(std::weak_ptr<EditorSessionProductionHistoryPort> history_port);
 
   auto FinalizeEdit(sl_element_id_t element_id, std::uint64_t session_generation,
                     std::string* error) -> bool override;
@@ -161,6 +164,11 @@ class EditorSessionProductionJournalPort final : public alcedo::IEditorJournalPo
   void InvalidateThumbnail(sl_element_id_t element_id);
   void EmitRecoveryDiagnostic(sl_element_id_t element_id, const alcedo::EditorJournalWriter& writer,
                               const std::string& reason);
+  auto EnsureMiniGitMaterializer() -> std::shared_ptr<alcedo::EditorMiniGitMaterializer>;
+  auto MaterializeMiniGit(sl_element_id_t element_id, std::uint64_t session_generation,
+                          std::string* error) -> alcedo::EditorMaterializeOutcome;
+  auto RecoverMiniGit(sl_element_id_t element_id, std::string* error)
+      -> alcedo::EditorMaterializeOutcome;
 
   EditorSessionProductionServices                                                   services_{};
   mutable std::mutex                                                                mutex_;
@@ -168,8 +176,11 @@ class EditorSessionProductionJournalPort final : public alcedo::IEditorJournalPo
   std::unordered_map<sl_element_id_t, std::shared_ptr<std::mutex>>                  image_locks_;
   std::shared_ptr<alcedo::EditorHistoryMaterializer>                                materializer_;
   std::shared_ptr<alcedo::StorageService> materializer_storage_;
-  std::vector<std::jthread>               workers_;
-  bool                                    shutting_down_ = false;
+  std::shared_ptr<alcedo::EditorMiniGitMaterializer> mini_git_materializer_;
+  std::shared_ptr<alcedo::StorageService>            mini_git_materializer_storage_;
+  std::weak_ptr<EditorSessionProductionHistoryPort>  history_port_;
+  std::vector<std::jthread>                          workers_;
+  bool                                               shutting_down_ = false;
 };
 
 /// Production history port: real EditHistoryMgmtService when available.
@@ -192,6 +203,13 @@ class EditorSessionProductionHistoryPort final : public alcedo::IEditorHistoryPo
   auto ReadAdjustmentSnapshot(const alcedo::EditorHistoryGuardHandle& guard,
                               alcedo::EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
       -> bool override;
+  auto CaptureSaveCheckpoint(const alcedo::EditorHistoryGuardHandle& guard, std::string* error)
+      -> bool override;
+
+  /// Take ownership of a capture produced by CaptureSaveCheckpoint for the
+  /// matching element (consumed by the journal materialize path).
+  auto TakeSaveCapture(sl_element_id_t element_id)
+      -> std::optional<alcedo::EditorMiniGitSaveCapture>;
 
  private:
   struct WorkingState;
@@ -204,6 +222,7 @@ class EditorSessionProductionHistoryPort final : public alcedo::IEditorHistoryPo
   std::weak_ptr<EditorSessionProductionPipelinePort>                             pipeline_port_;
   std::unordered_map<sl_element_id_t, std::shared_ptr<alcedo::EditHistoryGuard>> guards_;
   std::unordered_map<sl_element_id_t, std::shared_ptr<WorkingState>>             working_states_;
+  std::unordered_map<sl_element_id_t, alcedo::EditorMiniGitSaveCapture>          save_captures_;
 };
 
 /// Optional test/harness producer: write real pixel data into the production sink.

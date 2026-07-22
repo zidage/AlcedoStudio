@@ -383,4 +383,86 @@ auto MiniGitWorkingHistory::Replay(CommitGraph&                             grap
   return true;
 }
 
+auto MiniGitWorkingHistory::ReplaySkippingMaterializedPrefix(
+    CommitGraph& graph, const std::vector<MiniGitJournalRecord>& records,
+    std::size_t* applied_from_index, std::string* error) -> bool {
+  if (records.empty()) {
+    if (applied_from_index != nullptr) {
+      *applied_from_index = 0;
+    }
+    return true;
+  }
+
+  const auto stored_head  = graph.GetActiveVersionRef().head_commit_hash;
+  const auto stored_chain = graph.ChainHashForHead(stored_head);
+
+  // Fast path: the first record continues from the stored head.
+  if (records.front().expected_source_head == stored_head &&
+      records.front().expected_source_chain_hash == stored_chain) {
+    if (applied_from_index != nullptr) {
+      *applied_from_index = 0;
+    }
+    return Replay(graph, records, error);
+  }
+
+  // Crash window: DuckDB already holds the fold result and the journal still
+  // contains the fully materialized prefix. Every edit commit must already be
+  // present and the last record must land on the stored head/chain.
+  for (const auto& record : records) {
+    if (record.kind == MiniGitJournalRecordKind::kEditCommit) {
+      if (!record.edit_commit.has_value() ||
+          graph.FindCommit(record.edit_commit->GetCommitHash()) == nullptr) {
+        SetError(error,
+                 "mini-Git journal has an unmaterialized commit that does not continue the "
+                 "stored head");
+        return false;
+      }
+    } else if (record.kind == MiniGitJournalRecordKind::kHeadMove) {
+      if (record.target_head.has_value() && graph.FindCommit(*record.target_head) == nullptr) {
+        SetError(error,
+                 "mini-Git journal head-move target is missing from the materialized graph");
+        return false;
+      }
+    }
+  }
+  if (records.back().target_head != stored_head ||
+      records.back().target_chain_hash != stored_chain) {
+    SetError(error,
+             "mini-Git journal cannot be aligned with the stored materialized head for recovery");
+    return false;
+  }
+  // Entire journal is already reflected by DuckDB; nothing to fold.
+  if (applied_from_index != nullptr) {
+    *applied_from_index = records.size();
+  }
+  return true;
+}
+
+auto MiniGitJournal::TruncateMaterialized(std::string* error) -> bool {
+  try {
+    records_.clear();
+    if (path_.empty()) {
+      return true;
+    }
+    if (std::filesystem::exists(path_)) {
+      std::ofstream output(path_, std::ios::binary | std::ios::trunc);
+      if (!output.is_open()) {
+        SetError(error, "mini-Git journal file could not be truncated");
+        return false;
+      }
+      output.flush();
+      if (!output.good()) {
+        SetError(error, "mini-Git journal file truncate failed");
+        return false;
+      }
+    }
+    return true;
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
+  } catch (...) {
+    SetError(error, "mini-Git journal truncate failed");
+  }
+  return false;
+}
+
 }  // namespace alcedo

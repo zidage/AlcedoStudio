@@ -1395,6 +1395,13 @@ def_library(EditorHistoryMaterializer
     PUBLIC_DEPS ProjectService EditHistory StorageService
 )
 
+# Phase 6C-5: mini-Git journal fold validation, global save lock, DuckDB
+# materialization, and journal truncation after success.
+def_library(EditorMiniGitMaterializer
+    SOURCES app/editor_mini_git_materializer.cpp
+    PUBLIC_DEPS ProjectService EditHistory StorageService
+)
+
 # Applies render-intent adjustment snapshots to a pipeline executor. Kept below
 # the UI layer so production rendering and focused tests share one mapping.
 def_library(EditorAdjustmentPipeline
@@ -1865,6 +1872,7 @@ target_link_libraries(AlbumBackendLib
         EditorSessionService
         EditorAdjustmentPipeline
         EditorHistoryMaterializer
+        EditorMiniGitMaterializer
         ThumbnailService
         SemanticGenerationService
         ImageAnalysisService
@@ -2126,6 +2134,7 @@ qt_add_qml_module(alcedo_main
         ui/alcedo_main/qml/WorkspaceHost.qml
         ui/alcedo_main/qml/LibraryWorkspace.qml
         ui/alcedo_main/qml/EditorWorkspace.qml
+        ui/alcedo_main/qml/EditorNavigationPolicy.qml
         ui/alcedo_main/qml/EditorFilmstrip.qml
         ui/alcedo_main/qml/EditorHistoryVersionsRail.qml
         ui/alcedo_main/qml/EditorAdjustmentStack.qml

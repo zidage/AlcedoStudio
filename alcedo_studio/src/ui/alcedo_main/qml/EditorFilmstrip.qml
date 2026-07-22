@@ -12,11 +12,22 @@ Item {
 
     property var theme: null
     property var editorSession: null
+    // Phase 6C-5: optional EditorNavigationPolicy / InteractionPolicy adapter.
+    property var navigationPolicy: null
     property bool collapsed: editorSession ? editorSession.filmstripCollapsed : false
     property real expandedHeight: editorSession ? editorSession.filmstripExpandedHeight : 128
     property int currentIndex: 0
     property int totalCount: 0
-    property bool saveInProgress: false
+    property bool saveInProgress: navigationPolicy
+                                  ? (navigationPolicy.saveCheckpointActive
+                                     || !navigationPolicy.canSelectEditorImage)
+                                  : (editorSession
+                                     && String(editorSession.sessionState || "") === "Saving")
+    property bool selectionEnabled: navigationPolicy ? navigationPolicy.canSelectEditorImage
+                                                     : !saveInProgress
+    property string selectionDisabledReason: navigationPolicy
+                                             ? String(navigationPolicy.selectEditorImageReason || "")
+                                             : (saveInProgress ? qsTr("Saving editor changes") : "")
     property bool hasImage: editorSession ? editorSession.hasImage : false
 
     readonly property real handleHeight: 28
@@ -73,6 +84,13 @@ Item {
     signal collapseRequested()
     signal toggleRequested()
     signal imageActivated(int index)
+
+    function activateImage(index) {
+        if (!selectionEnabled) {
+            return
+        }
+        root.imageActivated(index)
+    }
 
     // Layout.preferredHeight binds to dockHeight so collapse releases vertical space
     // to the viewport without destroying the filmstrip identity or model later.

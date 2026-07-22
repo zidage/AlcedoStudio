@@ -231,6 +231,16 @@ class EditorSessionService final : public IEditorSessionBackend {
     std::uint64_t task_id            = 0;
   };
 
+  /// Phase 6C-5: navigation requested while a save checkpoint is in progress.
+  /// Image B does not begin loading until A's materialization finishes.
+  struct PendingNavigation {
+    sl_element_id_t element_id = 0;
+    image_id_t      image_id   = 0;
+    bool            is_switch  = false;
+    bool            is_close   = false;
+    bool            persist    = true;
+  };
+
   auto TransitionTo(EditorSessionState next, EditorSessionResultKind kind, std::string message = {})
       -> EditorSessionResult;
   auto Reject(std::string message) -> EditorSessionResult;
@@ -262,6 +272,8 @@ class EditorSessionService final : public IEditorSessionBackend {
   void HandleMaterialization(std::uint64_t session_generation, EditorMaterializeOutcome outcome);
   auto SealCurrentSession(bool persist_changes, bool start_background_save, std::string* error)
       -> bool;
+  auto ContinueOpenOrSwitch(sl_element_id_t element_id, image_id_t image_id, bool is_switch)
+      -> EditorSessionResult;
   void               ResetActiveImageState();
   void               RoutePendingInitialRender();
   [[nodiscard]] auto PresentationTargetReady() const -> bool;
@@ -270,6 +282,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// Mark the image ready to render after pipeline/history guards succeed.
   /// First-frame Interactive still requires complete→submit→present.
   void               MarkImageAcquiredAfterGuards();
+  void               ResumePendingNavigationAfterSave(bool save_succeeded, std::string message);
 
   Dependencies       dependencies_;
   ResultObserver     observer_;
@@ -282,8 +295,9 @@ class EditorSessionService final : public IEditorSessionBackend {
   EditorHistoryGuardHandle          history_guard_{};
   std::string                       last_error_;
   std::vector<EditorSessionResult>  results_;
-  /// Concurrent in-flight saves keyed by the sealed session generation (A→B→C).
+  /// At most one project-wide save checkpoint at a time (Phase 6C-5).
   std::vector<PendingSave>          pending_saves_;
+  std::optional<PendingNavigation>  pending_navigation_;
   std::shared_ptr<AsyncCallbackGate> callback_gate_;
   EditorRenderAdjustmentSnapshot    adjustment_snapshot_{};
   std::uint64_t                     first_frame_request_id_ = 0;

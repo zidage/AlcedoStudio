@@ -57,9 +57,20 @@ class MiniGitJournal final : public IMiniGitJournalAppender {
   /// journal is an empty prefix; a malformed record is corruption.
   auto Load(std::string* error) -> bool;
 
+  /// After DuckDB materialization succeeds, discard the materialized prefix so
+  /// the next save starts from an empty journal. Safe to call when the journal
+  /// is already empty. Does not rewrite commit objects.
+  auto TruncateMaterialized(std::string* error) -> bool;
+
+  /// Replace the in-memory record list after a successful fold that skipped an
+  /// already-materialized prefix (DB-commit / truncate crash window).
+  void SetRecords(std::vector<MiniGitJournalRecord> records) { records_ = std::move(records); }
+
   [[nodiscard]] auto records() const -> const std::vector<MiniGitJournalRecord>& {
     return records_;
   }
+
+  [[nodiscard]] auto path() const -> const std::filesystem::path& { return path_; }
 
  private:
   std::filesystem::path             path_;
@@ -109,6 +120,15 @@ class MiniGitWorkingHistory final {
   /// restart because it is an in-memory convenience, not persisted state.
   static auto        Replay(CommitGraph& graph, const std::vector<MiniGitJournalRecord>& records,
                             std::string* error) -> bool;
+
+  /// Like Replay, but skips a leading prefix already reflected by the stored
+  /// materialized head (crash after DuckDB commit before journal truncation).
+  /// Returns the index of the first applied record (records.size() when all
+  /// were already materialized).
+  static auto ReplaySkippingMaterializedPrefix(CommitGraph&                             graph,
+                                               const std::vector<MiniGitJournalRecord>& records,
+                                               std::size_t* applied_from_index,
+                                               std::string* error) -> bool;
 
  private:
   auto AppendHeadMove(head_commit_hash_t target_head, transaction_chain_hash_t target_chain,

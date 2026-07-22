@@ -425,13 +425,25 @@ auto EditorSessionService::SealCurrentSession(bool persist_changes, bool start_b
     return true;
   }
 
+  // Capture the sealed session generation before any async/sync save callback
+  // can advance identity_ to a pending navigation target.
+  const std::uint64_t sealed_session_generation = identity_.session_generation;
+  const bool          had_pending_navigation    = pending_navigation_.has_value();
+
   if (persist_changes) {
     if (dependencies_.journal && !dependencies_.journal->FinalizeEdit(
                                      identity_.element_id, identity_.session_generation, error)) {
       return false;
     }
+    // Phase 6C-5: capture committed live serialized pipeline state/head/hash
+    // before any DuckDB I/O and before guards are released.
+    if (dependencies_.history && history_guard_.valid) {
+      if (!dependencies_.history->CaptureSaveCheckpoint(history_guard_, error)) {
+        return false;
+      }
+    }
     if (start_background_save &&
-        !BeginSaveForSession(identity_.session_generation, identity_.element_id, error)) {
+        !BeginSaveForSession(sealed_session_generation, identity_.element_id, error)) {
       return false;
     }
   } else if (dependencies_.journal &&
@@ -439,11 +451,21 @@ auto EditorSessionService::SealCurrentSession(bool persist_changes, bool start_b
     return false;
   }
 
-  if (dependencies_.render && identity_.session_generation != 0) {
-    // Teardown order (Phase 5E): cancel obsolete work and wait until session
-    // workers leave IFrameSink before the presentation consumer is destroyed.
-    dependencies_.render->CancelSessionAndWait(identity_.session_generation);
+  // Always cancel the sealed image's render session (not a post-resume identity).
+  if (dependencies_.render && sealed_session_generation != 0) {
+    dependencies_.render->CancelSessionAndWait(sealed_session_generation);
   }
+
+  // Sync save + pending navigation already resumed (opened B or closed). Guards
+  // were released inside ResumePendingNavigationAfterSave.
+  if (had_pending_navigation && !pending_navigation_.has_value() && pending_saves_.empty()) {
+    return true;
+  }
+  // Async save still running: keep pipeline/history guards until materialize finishes.
+  if (start_background_save && !pending_saves_.empty()) {
+    return true;
+  }
+  // Discard / no-save paths release immediately.
   ReleaseGuards();
   return true;
 }
@@ -464,6 +486,77 @@ void EditorSessionService::ResetActiveImageState() {
   pending_initial_reason_.reset();
   first_frame_route_time_.reset();
   first_frame_time_ms_ = -1.0;
+}
+
+auto EditorSessionService::ContinueOpenOrSwitch(sl_element_id_t element_id, image_id_t image_id,
+                                                bool is_switch) -> EditorSessionResult {
+  ++identity_.session_generation;
+  identity_.element_id        = element_id;
+  identity_.image_id          = image_id;
+  identity_.render_generation = identity_.session_generation;
+  identity_.view_generation   = 1;
+  image_acquired_             = false;
+  first_frame_request_id_     = 0;
+  quality_base_request_id_    = 0;
+  first_frame_completed_      = false;
+  first_frame_submitted_      = false;
+  first_frame_presented_      = false;
+  quality_base_routed_        = false;
+  first_frame_route_time_.reset();
+  first_frame_time_ms_ = -1.0;
+  // Adjustment state is image-scoped. An empty snapshot means a clean image;
+  // never inherit the previous image's params.
+  adjustment_snapshot_ = {};
+
+  const EditorSessionState acquire_state =
+      is_switch ? EditorSessionState::Switching : EditorSessionState::Acquiring;
+  TransitionTo(acquire_state, EditorSessionResultKind::StateChanged,
+               is_switch ? "Switching image" : "Acquiring image");
+
+  // Phase 5H-Fix / 6C-5: recover leftover journal after a DB-commit/truncate crash
+  // window, then open from the durable DuckDB state.
+  if (dependencies_.journal) {
+    std::string recover_error;
+    const auto  recovered = dependencies_.journal->RecoverAndMaterialize(
+        element_id, identity_.session_generation, &recover_error);
+    if (!recovered.accepted) {
+      identity_.element_id = 0;
+      identity_.image_id   = 0;
+      return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                          recover_error.empty() ? "Editor journal recovery failed" : recover_error);
+    }
+  }
+
+  std::string error;
+  if (!AcquireGuards(element_id, &error)) {
+    identity_.element_id = 0;
+    identity_.image_id   = 0;
+    return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                        error.empty() ? "Failed to acquire pipeline/history guards" : error);
+  }
+
+  EditorRenderAdjustmentSnapshot history_snapshot;
+  if (!dependencies_.history->ReadAdjustmentSnapshot(history_guard_, &history_snapshot, &error)) {
+    ReleaseGuards();
+    identity_.element_id = 0;
+    identity_.image_id   = 0;
+    return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                        error.empty() ? "Failed to read editor history state" : error);
+  }
+  if (!history_snapshot.params_json.empty() || !history_snapshot.patches.empty() ||
+      !history_snapshot.fingerprint.empty()) {
+    adjustment_snapshot_ = std::move(history_snapshot);
+  }
+
+  TransitionTo(EditorSessionState::Loading, EditorSessionResultKind::StateChanged, "Loading image");
+  MarkImageAcquiredAfterGuards();
+  const auto request_id = RouteInitialRender(is_switch ? EditorRenderReason::ImageSwitch
+                                                       : EditorRenderReason::InitialFrame);
+  if (request_id == 0 && PresentationTargetReady()) {
+    return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                        "First frame could not be scheduled");
+  }
+  return results_.back();
 }
 
 auto EditorSessionService::HandleOpenOrSwitch(const EditorSessionIntent& intent, bool is_switch)
@@ -490,96 +583,116 @@ auto EditorSessionService::HandleOpenOrSwitch(const EditorSessionIntent& intent,
     return Emit(std::move(result));
   }
 
-  // Seal the prior image before acquiring the next one. Workspace routing calls
-  // Switch directly, so this is the single A→B lifecycle path.
+  // Reject concurrent navigation while a save checkpoint is outstanding.
+  if (pending_navigation_.has_value() || !pending_saves_.empty()) {
+    return Reject("Editor save checkpoint is in progress");
+  }
+
+  // Seal the prior image before acquiring the next one. Phase 6C-5: image B
+  // does not begin loading until image A's save finishes.
   if (identity_.session_generation != 0 && (identity_.element_id != 0 || identity_.image_id != 0)) {
+    pending_navigation_ =
+        PendingNavigation{intent.element_id, intent.image_id, is_switch, false, true};
     std::string seal_error;
     if (!SealCurrentSession(/*persist_changes=*/true, /*start_background_save=*/true,
                             &seal_error)) {
+      pending_navigation_.reset();
       return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
                           seal_error.empty() ? "Failed to save current image" : seal_error);
     }
-  }
-
-  ++identity_.session_generation;
-  identity_.element_id        = intent.element_id;
-  identity_.image_id          = intent.image_id;
-  identity_.render_generation = identity_.session_generation;
-  identity_.view_generation   = 1;
-  image_acquired_             = false;
-  first_frame_request_id_     = 0;
-  quality_base_request_id_    = 0;
-  first_frame_completed_      = false;
-  first_frame_submitted_      = false;
-  first_frame_presented_      = false;
-  quality_base_routed_        = false;
-  first_frame_route_time_.reset();
-  first_frame_time_ms_ = -1.0;
-  // Adjustment state is image-scoped. An empty snapshot means a clean image;
-  // never inherit the previous image's params.
-  adjustment_snapshot_ = intent.adjustment;
-
-  const EditorSessionState acquire_state =
-      is_switch ? EditorSessionState::Switching : EditorSessionState::Acquiring;
-  TransitionTo(acquire_state, EditorSessionResultKind::StateChanged,
-               is_switch ? "Switching image" : "Acquiring image");
-
-  // Phase 5H-Fix: run journal recovery + materialization so the editor starts
-  // from the durable DuckDB state before services cache pipeline/history guards.
-  // The journal port emits a diagnostic bundle on failure.
-  if (dependencies_.journal) {
-    std::string recover_error;
-    const auto  recovered = dependencies_.journal->RecoverAndMaterialize(
-        intent.element_id, identity_.session_generation, &recover_error);
-    if (!recovered.accepted) {
-      identity_.element_id = 0;
-      identity_.image_id   = 0;
-      return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
-                          recover_error.empty() ? "Editor journal recovery failed" : recover_error);
+    // Async save still running: stay on A (Saving) until materialization completes.
+    if (!pending_saves_.empty()) {
+      EditorSessionResult waiting;
+      waiting.kind     = EditorSessionResultKind::SaveStarted;
+      waiting.state    = EditorSessionState::Saving;
+      waiting.identity = identity_;
+      waiting.message  = "Waiting for save checkpoint before loading the next image";
+      return Emit(std::move(waiting));
     }
-  }
-
-  std::string error;
-  if (!AcquireGuards(intent.element_id, &error)) {
-    identity_.element_id = 0;
-    identity_.image_id   = 0;
-    return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
-                        error.empty() ? "Failed to acquire pipeline/history guards" : error);
-  }
-
-  EditorRenderAdjustmentSnapshot history_snapshot;
-  if (!dependencies_.history->ReadAdjustmentSnapshot(history_guard_, &history_snapshot, &error)) {
+    // Sync save completed inside BeginSaveForSession; NotifySaveFinished already
+    // resumed navigation via ResumePendingNavigationAfterSave.
+    if (identity_.element_id == intent.element_id && identity_.image_id == intent.image_id) {
+      return results_.empty() ? Reject("Save checkpoint completed without opening the next image")
+                              : results_.back();
+    }
+    pending_navigation_.reset();
     ReleaseGuards();
-    identity_.element_id = 0;
-    identity_.image_id   = 0;
-    return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
-                        error.empty() ? "Failed to read editor history state" : error);
-  }
-  if (!history_snapshot.params_json.empty() || !history_snapshot.patches.empty() ||
-      !history_snapshot.fingerprint.empty()) {
-    adjustment_snapshot_ = std::move(history_snapshot);
+    return ContinueOpenOrSwitch(intent.element_id, intent.image_id, is_switch);
   }
 
-  TransitionTo(EditorSessionState::Loading, EditorSessionResultKind::StateChanged, "Loading image");
-  // Guards succeeded: the image is ready to render. Interactive still waits for
-  // the first compatible frame (Phase 5B open path).
-  MarkImageAcquiredAfterGuards();
-  const auto request_id = RouteInitialRender(is_switch ? EditorRenderReason::ImageSwitch
-                                                       : EditorRenderReason::InitialFrame);
-  if (request_id == 0 && PresentationTargetReady()) {
-    return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
-                        "First frame could not be scheduled");
+  return ContinueOpenOrSwitch(intent.element_id, intent.image_id, is_switch);
+}
+
+void EditorSessionService::ResumePendingNavigationAfterSave(bool save_succeeded,
+                                                            std::string message) {
+  if (!pending_navigation_.has_value()) {
+    return;
   }
-  return results_.back();
+  const auto pending = *pending_navigation_;
+  pending_navigation_.reset();
+
+  if (!save_succeeded) {
+    // Failure before DuckDB commit leaves the prior image guards and session in
+    // place. Do not open the pending target.
+    TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                 message.empty() ? "Save checkpoint failed" : std::move(message));
+    return;
+  }
+
+  // Return the sealed image's live snapshot to PipelineMgmtService only after a
+  // successful materialization, then open the pending target.
+  ReleaseGuards();
+
+  if (pending.is_close) {
+    ResetActiveImageState();
+    TransitionTo(EditorSessionState::NoImage, EditorSessionResultKind::StateChanged,
+                 pending.persist ? "Editor session closed" : "Editor changes discarded");
+    return;
+  }
+
+  ContinueOpenOrSwitch(pending.element_id, pending.image_id, pending.is_switch);
 }
 
 auto EditorSessionService::HandleClose(bool persist_changes) -> EditorSessionResult {
   if (state_ == EditorSessionState::ShuttingDown) {
     return Reject("Cannot close while shutting down");
   }
+  if (pending_navigation_.has_value() || !pending_saves_.empty()) {
+    return Reject("Editor save checkpoint is in progress");
+  }
+
+  if (persist_changes && identity_.element_id != 0 && identity_.image_id != 0) {
+    pending_navigation_ = PendingNavigation{0, 0, false, true, true};
+    std::string error;
+    if (!SealCurrentSession(/*persist_changes=*/true, /*start_background_save=*/true, &error)) {
+      pending_navigation_.reset();
+      return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
+                          error.empty() ? "Failed to close editor session" : error);
+    }
+    if (!pending_saves_.empty()) {
+      EditorSessionResult waiting;
+      waiting.kind     = EditorSessionResultKind::SaveStarted;
+      waiting.state    = EditorSessionState::Saving;
+      waiting.identity = identity_;
+      waiting.message  = "Waiting for save checkpoint before closing";
+      return Emit(std::move(waiting));
+    }
+    // Sync save already resumed the close via ResumePendingNavigationAfterSave.
+    if (state_ == EditorSessionState::NoImage) {
+      return results_.empty()
+                 ? TransitionTo(EditorSessionState::NoImage, EditorSessionResultKind::StateChanged,
+                                "Editor session closed")
+                 : results_.back();
+    }
+    pending_navigation_.reset();
+    ReleaseGuards();
+    ResetActiveImageState();
+    return TransitionTo(EditorSessionState::NoImage, EditorSessionResultKind::StateChanged,
+                        "Editor session closed");
+  }
 
   std::string error;
-  if (!SealCurrentSession(persist_changes, /*start_background_save=*/persist_changes, &error)) {
+  if (!SealCurrentSession(persist_changes, /*start_background_save=*/false, &error)) {
     return TransitionTo(EditorSessionState::Failed, EditorSessionResultKind::Failed,
                         error.empty() ? "Failed to close editor session" : error);
   }
@@ -1028,12 +1141,27 @@ void EditorSessionService::NotifySaveFinished(std::uint64_t session_generation, 
   if (dependencies_.tasks) {
     dependencies_.tasks->EndTask(task_id, success, message);
   }
+
+  // Phase 6C-5: a pending navigation/close waits on this save checkpoint.
+  if (pending_navigation_.has_value()) {
+    EditorSessionResult finished;
+    finished.kind     = success ? EditorSessionResultKind::SaveFinished
+                                : EditorSessionResultKind::Failed;
+    finished.state    = state_;
+    finished.identity = identity_;
+    finished.task_id  = task_id;
+    finished.message  = message.empty()
+                            ? (success ? "Editor session materialized" : "Save failed")
+                            : message;
+    Emit(std::move(finished));
+    ResumePendingNavigationAfterSave(success, message);
+    return;
+  }
+
   const bool is_current_session = session_generation == identity_.session_generation &&
                                   identity_.element_id != 0 && identity_.image_id != 0;
   if (!is_current_session) {
-    // The task belongs to a sealed image. Its background task still needs to
-    // reach a terminal state, but its result must not be published as if it
-    // described the image that is active now.
+    // Already released the sealed image; task terminal only.
     return;
   }
   if (!success) {

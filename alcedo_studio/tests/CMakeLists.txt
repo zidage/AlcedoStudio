@@ -1088,6 +1088,28 @@ if(WIN32)
   endif()
 endif()
 
+# Phase 6C-5: mini-Git save checkpoint materialization, truncation, recovery.
+add_executable(EditorMiniGitMaterializerTest edit/history/editor_mini_git_materializer_test.cpp)
+target_include_directories(EditorMiniGitMaterializerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorMiniGitMaterializerTest
+  EditorMiniGitMaterializer
+  ProjectService
+  EditHistory
+  StorageService
+  GTest::gtest_main)
+gtest_discover_tests(EditorMiniGitMaterializerTest TEST_PREFIX "EditorMiniGitMaterializerTest."
+  PROPERTIES LABELS "ci_core_flow;edit;history;phase6c")
+if(WIN32)
+  alcedo_copy_duckdb_extensions(EditorMiniGitMaterializerTest)
+  if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
+    add_custom_command(TARGET EditorMiniGitMaterializerTest POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll"
+              "$<TARGET_FILE_DIR:EditorMiniGitMaterializerTest>/duckdb.dll"
+      VERBATIM)
+  endif()
+endif()
+
 # Phase 5H-Fix: production journal port wires EditorHistoryMaterializer into the
 # real editor session (materialize/recover/compact) and exposes the edit-recording
 # seams. Links AlbumBackendLib (Qt) + a real ProjectService for DuckDB round-trip.

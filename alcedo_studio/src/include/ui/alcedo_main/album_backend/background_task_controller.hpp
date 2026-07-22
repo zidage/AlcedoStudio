@@ -61,6 +61,12 @@ enum class InteractionCapability {
   ChangeModelDownloadSettings,
   DeleteImages,
   CloseProject,
+  /// Phase 6C-5: editor navigation locked while a global save checkpoint runs.
+  SelectEditorImage,
+  SwitchWorkspace,
+  CheckoutVersion,
+  PasteAdjustments,
+  MergeAdjustments,
 };
 
 /// One interaction lock published by a running task. `element_id_ == 0` means

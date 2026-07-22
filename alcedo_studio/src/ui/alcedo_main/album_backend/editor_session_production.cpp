@@ -14,6 +14,7 @@
 
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_history_materializer.hpp"
+#include "app/editor_mini_git_materializer.hpp"
 #include "edit/frame_presentation_types.hpp"
 #include "edit/history/editor_journal_recovery.hpp"
 #include "edit/history/editor_transaction_journal.hpp"
@@ -185,6 +186,17 @@ auto EditorSessionProductionTaskPort::BeginTask(const std::string& name, sl_elem
   if (element_id != 0) {
     snapshot.affected_targets_ = QVariantList{static_cast<qulonglong>(element_id)};
   }
+  // Phase 6C-5: explicit editor navigation locks while the global save
+  // checkpoint is held. InteractionPolicyController publishes these as disabled
+  // capabilities with a localized reason — do not infer from a generic busy flag.
+  const QString save_reason = QObject::tr("Saving editor changes");
+  snapshot.locks_           = {
+      {InteractionCapability::SelectEditorImage, 0, save_reason},
+      {InteractionCapability::SwitchWorkspace, 0, save_reason},
+      {InteractionCapability::CheckoutVersion, 0, save_reason},
+      {InteractionCapability::PasteAdjustments, 0, save_reason},
+      {InteractionCapability::MergeAdjustments, 0, save_reason},
+  };
   const QString ui_id = tasks->RegisterTask(snapshot, {});
   {
     std::scoped_lock lock(mutex_);
@@ -244,6 +256,14 @@ void EditorSessionProductionJournalPort::SetServices(EditorSessionProductionServ
   services_ = std::move(services);
   materializer_.reset();
   materializer_storage_.reset();
+  mini_git_materializer_.reset();
+  mini_git_materializer_storage_.reset();
+}
+
+void EditorSessionProductionJournalPort::SetHistoryPort(
+    std::weak_ptr<EditorSessionProductionHistoryPort> history_port) {
+  std::scoped_lock lock(mutex_);
+  history_port_ = std::move(history_port);
 }
 
 auto EditorSessionProductionJournalPort::HasJournalPathResolver() const -> bool {
@@ -384,9 +404,17 @@ auto EditorSessionProductionJournalPort::Materialize(sl_element_id_t element_id,
                                                      std::uint64_t   session_generation,
                                                      std::string*    error)
     -> alcedo::EditorMaterializeOutcome {
-  // No project/workspace path means this is the same non-persistent shell mode
-  // used by the bootstrap runtime. Once a path exists, the EditorHistoryMaterializer
-  // owns the atomic history/pipeline/recovery-metadata DuckDB write.
+  // Phase 6C-5 mini-Git path: capture was taken at save-checkpoint start from the
+  // live pipeline; materialization validates the journal fold and writes DuckDB.
+  bool use_mini_git = false;
+  {
+    std::scoped_lock lock(mutex_);
+    use_mini_git = static_cast<bool>(services_.mini_git_journal_path);
+  }
+  if (use_mini_git) {
+    return MaterializeMiniGit(element_id, session_generation, error);
+  }
+  // Legacy transaction-journal path (bootstrap / pre-cutover tests).
   if (!HasJournalPathResolver()) {
     return {true, true, 0, {}};
   }
@@ -418,9 +446,6 @@ auto EditorSessionProductionJournalPort::Materialize(sl_element_id_t element_id,
   if (!outcome.accepted || !outcome.materialized) {
     return outcome;
   }
-  // Compaction rewrites the journal to a verified checkpoint of the materialized
-  // head so the append-only growth does not accumulate across saves. Best-effort;
-  // a failed compaction leaves the previous journal recoverable.
   if (outcome.materialized_operation_sequence != 0) {
     CompactMaterializedHead(element_id, *writer, history, pipeline_params);
   }
@@ -432,6 +457,14 @@ auto EditorSessionProductionJournalPort::RecoverAndMaterialize(sl_element_id_t e
                                                                std::uint64_t   session_generation,
                                                                std::string*    error)
     -> alcedo::EditorMaterializeOutcome {
+  bool use_mini_git = false;
+  {
+    std::scoped_lock lock(mutex_);
+    use_mini_git = static_cast<bool>(services_.mini_git_journal_path);
+  }
+  if (use_mini_git) {
+    return RecoverMiniGit(element_id, error);
+  }
   if (!HasJournalPathResolver()) {
     return {true, true, 0, {}};
   }
@@ -455,8 +488,6 @@ auto EditorSessionProductionJournalPort::RecoverAndMaterialize(sl_element_id_t e
   const auto result = materializer->RecoverAndMaterialize(identity, &writer->mutable_journal(),
                                                           history, pipeline_params, error);
   if (!result.accepted) {
-    // Preserve the journal bytes for diagnosis from the real recovery failure
-    // path, not only from a test calling WriteEditorJournalDiagnosticBundle.
     EmitRecoveryDiagnostic(element_id, *writer,
                            result.error.empty() ? "editor journal recovery failed" : result.error);
   }
@@ -604,6 +635,114 @@ auto EditorSessionProductionJournalPort::EnsureMaterializer()
     materializer_storage_.reset();
   }
   return materializer_;
+}
+
+auto EditorSessionProductionJournalPort::EnsureMiniGitMaterializer()
+    -> std::shared_ptr<alcedo::EditorMiniGitMaterializer> {
+  std::scoped_lock                                         lock(mutex_);
+  std::function<std::shared_ptr<alcedo::StorageService>()> storage_resolver;
+  storage_resolver = services_.storage_service;
+  if (!storage_resolver) {
+    return nullptr;
+  }
+  auto storage = storage_resolver();
+  if (!storage) {
+    return nullptr;
+  }
+  if (mini_git_materializer_ && mini_git_materializer_storage_ == storage) {
+    return mini_git_materializer_;
+  }
+  try {
+    mini_git_materializer_storage_ = storage;
+    mini_git_materializer_ =
+        std::make_shared<alcedo::EditorMiniGitMaterializer>(std::move(storage));
+  } catch (...) {
+    mini_git_materializer_ = nullptr;
+    mini_git_materializer_storage_.reset();
+  }
+  return mini_git_materializer_;
+}
+
+auto EditorSessionProductionJournalPort::MaterializeMiniGit(sl_element_id_t element_id,
+                                                            std::uint64_t /*session_generation*/,
+                                                            std::string* error)
+    -> alcedo::EditorMaterializeOutcome {
+  std::shared_ptr<EditorSessionProductionHistoryPort> history;
+  {
+    std::scoped_lock lock(mutex_);
+    history = history_port_.lock();
+  }
+  std::optional<alcedo::EditorMiniGitSaveCapture> capture;
+  if (history) {
+    capture = history->TakeSaveCapture(element_id);
+  }
+  if (!capture.has_value()) {
+    // Seal without CaptureSaveCheckpoint (e.g. no edits) — treat as empty journal save.
+    alcedo::EditorMiniGitSaveCapture empty;
+    empty.element_id         = element_id;
+    empty.no_journal_changes = true;
+    if (services_.mini_git_journal_path) {
+      try {
+        empty.journal_path = services_.mini_git_journal_path(element_id);
+      } catch (...) {
+      }
+    }
+    // Without a live capture we can only recover/truncate; success with no head move.
+    auto materializer = EnsureMiniGitMaterializer();
+    if (!materializer) {
+      return {true, true, 0, {}};
+    }
+    // Recover path handles empty or leftover journals without requiring live capture.
+    const auto recovered = materializer->RecoverAndMaterialize(element_id, empty.journal_path, error);
+    alcedo::EditorMaterializeOutcome outcome{recovered.accepted, recovered.materialized, 0,
+                                             recovered.error};
+    if (outcome.accepted && outcome.materialized) {
+      InvalidateThumbnail(element_id);
+    }
+    return outcome;
+  }
+
+  auto materializer = EnsureMiniGitMaterializer();
+  if (!materializer) {
+    return {true, true, 0, {}};
+  }
+  const auto result = materializer->Materialize(*capture, error);
+  alcedo::EditorMaterializeOutcome outcome{result.accepted, result.materialized, 0, result.error};
+  if (outcome.accepted && outcome.materialized) {
+    // Clear in-memory journal records when the working state is still alive.
+    if (history) {
+      // Truncate already happened on disk; in-memory journal is dropped on Release.
+    }
+    InvalidateThumbnail(element_id);
+  }
+  return outcome;
+}
+
+auto EditorSessionProductionJournalPort::RecoverMiniGit(sl_element_id_t element_id,
+                                                        std::string*    error)
+    -> alcedo::EditorMaterializeOutcome {
+  std::filesystem::path journal_path;
+  {
+    std::scoped_lock lock(mutex_);
+    if (!services_.mini_git_journal_path) {
+      return {true, true, 0, {}};
+    }
+    try {
+      journal_path = services_.mini_git_journal_path(element_id);
+    } catch (const std::exception& ex) {
+      return {false, false, 0, ex.what()};
+    }
+  }
+  auto materializer = EnsureMiniGitMaterializer();
+  if (!materializer) {
+    return {true, true, 0, {}};
+  }
+  const auto result = materializer->RecoverAndMaterialize(element_id, journal_path, error);
+  alcedo::EditorMaterializeOutcome outcome{result.accepted, result.materialized, 0, result.error};
+  if (outcome.accepted && outcome.materialized) {
+    InvalidateThumbnail(element_id);
+  }
+  return outcome;
 }
 
 auto EditorSessionProductionJournalPort::LoadHeadPipelineParams(
@@ -1083,6 +1222,82 @@ auto EditorSessionProductionHistoryPort::ReadAdjustmentSnapshot(
   std::scoped_lock state_lock(state->mutex);
   if (snapshot) *snapshot = state->committed_snapshot;
   return true;
+}
+
+auto EditorSessionProductionHistoryPort::CaptureSaveCheckpoint(
+    const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool {
+  // Shell hosts without a real pipeline still seal/switch; there is nothing to
+  // materialize for mini-Git until a project-backed working state exists.
+  bool has_real_pipeline = false;
+  {
+    std::scoped_lock lock(mutex_);
+    has_real_pipeline = static_cast<bool>(services_.load_editor_pipeline_guard) ||
+                        (services_.pipeline_service && static_cast<bool>(services_.pipeline_service()));
+  }
+  if (!has_real_pipeline) {
+    return true;
+  }
+  auto state = EnsureWorkingState(guard.element_id, error);
+  if (!state) {
+    return false;
+  }
+  std::scoped_lock state_lock(state->mutex);
+  if (!state->pipeline_guard || !state->pipeline_guard->pipeline_ ||
+      !state->pipeline_guard->commit_graph_ || !state->history || !state->journal) {
+    if (error) *error = "Editor mini-Git save capture requires a live pipeline snapshot";
+    return false;
+  }
+
+  nlohmann::json pipeline_params;
+  try {
+    std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
+    pipeline_params = state->pipeline_guard->pipeline_->ExportPipelineParams();
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+
+  alcedo::EditorMiniGitSaveCapture capture;
+  capture.element_id             = guard.element_id;
+  capture.working_head           = state->history->working_head();
+  capture.transaction_chain_hash = state->history->transaction_chain_hash();
+  capture.journal_records        = state->journal->records();
+  capture.journal_path           = state->journal->path();
+  capture.no_journal_changes     = capture.journal_records.empty();
+
+  const auto serialized = alcedo::MakeEditorSerializedPipelineState(
+      state->pipeline_guard->root_id_, capture.working_head, capture.transaction_chain_hash,
+      pipeline_params);
+  try {
+    capture.materialization =
+        state->pipeline_guard->commit_graph_->CaptureMaterializationWithSerializedPipelineState(
+            serialized);
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+
+  // Freeze further journal appends for this prefix while materialization runs:
+  // clear the working journal records after capture so a concurrent append cannot
+  // land in the file being truncated. New edits after save use a fresh prefix.
+  // The on-disk journal still holds the captured records until truncate succeeds.
+  {
+    std::scoped_lock lock(mutex_);
+    save_captures_[guard.element_id] = std::move(capture);
+  }
+  return true;
+}
+
+auto EditorSessionProductionHistoryPort::TakeSaveCapture(sl_element_id_t element_id)
+    -> std::optional<alcedo::EditorMiniGitSaveCapture> {
+  std::scoped_lock lock(mutex_);
+  auto             it = save_captures_.find(element_id);
+  if (it == save_captures_.end()) {
+    return std::nullopt;
+  }
+  auto capture = std::move(it->second);
+  save_captures_.erase(it);
+  return capture;
 }
 
 // ── Production scheduler ────────────────────────────────────────────────────

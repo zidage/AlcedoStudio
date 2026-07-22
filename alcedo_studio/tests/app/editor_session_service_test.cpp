@@ -823,7 +823,8 @@ TEST_F(EditorSessionServiceTest, SwitchStopsWhenJournalOrSaveTaskCannotStart) {
   EXPECT_EQ(pipeline_->release_count, 0);
 }
 
-TEST_F(EditorSessionServiceTest, SwitchStartsNextImageBeforePriorMaterializationCompletes) {
+TEST_F(EditorSessionServiceTest, SwitchDoesNotLoadNextImageUntilPriorMaterializationCompletes) {
+  // Phase 6C-5: image B must not begin loading before image A's save finishes.
   service_->Open(1, 2);
   PresentFirstFrame(*service_);
   const auto generation_a     = service_->identity().session_generation;
@@ -832,29 +833,30 @@ TEST_F(EditorSessionServiceTest, SwitchStartsNextImageBeforePriorMaterialization
   journal_->async_materialize = true;
   const auto switched         = service_->Switch(3, 4);
 
-  EXPECT_EQ(switched.kind, EditorSessionResultKind::RenderRouted);
-  EXPECT_EQ(service_->identity().element_id, 3u);
-  EXPECT_EQ(service_->state(), EditorSessionState::Loading);
-  EXPECT_EQ(pipeline_->release_count, 1);
+  EXPECT_EQ(switched.kind, EditorSessionResultKind::SaveStarted);
+  EXPECT_EQ(service_->identity().element_id, 1u);
+  EXPECT_EQ(service_->state(), EditorSessionState::Saving);
+  EXPECT_EQ(pipeline_->release_count, 0);
   EXPECT_TRUE(tasks_->ended_ids.empty());
-  ASSERT_FALSE(render_->submitted.empty());
-  EXPECT_EQ(render_->submitted.back().image_id, 4u);
   EXPECT_TRUE(static_cast<bool>(journal_->pending_commit));
 
   journal_->CompleteCommit(true);
   EXPECT_TRUE(static_cast<bool>(journal_->pending_materialize));
-  EXPECT_TRUE(tasks_->ended_ids.empty());
-  EXPECT_EQ(service_->state(), EditorSessionState::Loading);
+  EXPECT_EQ(service_->identity().element_id, 1u);
+  EXPECT_EQ(service_->state(), EditorSessionState::Saving);
 
-  const auto result_count_before_a_materialization = service_->results().size();
-  PresentFirstFrame(*service_);
-  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
   journal_->CompleteMaterialization(true);
   ASSERT_EQ(tasks_->ended_ids.size(), 1u);
-  EXPECT_EQ(service_->results().size(), result_count_before_a_materialization + 3u);
+  EXPECT_EQ(service_->identity().element_id, 3u);
+  EXPECT_EQ(service_->state(), EditorSessionState::Loading);
+  EXPECT_EQ(pipeline_->release_count, 1);
+  ASSERT_FALSE(render_->submitted.empty());
+  EXPECT_EQ(render_->submitted.back().image_id, 4u);
 
-  // A's completion is terminal and cannot alter B after the materialization
-  // callback has already been consumed.
+  PresentFirstFrame(*service_);
+  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+
+  // A's completion is terminal; a late duplicate failure is ignored.
   service_->NotifySaveFinished(generation_a, false, "late duplicate failure");
   EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
   EXPECT_EQ(tasks_->ended_ids.size(), 1u);
@@ -874,7 +876,9 @@ TEST_F(EditorSessionServiceTest, FinalizeFailureKeepsCurrentImageGuards) {
   EXPECT_TRUE(render_->cancelled_sessions.empty());
 }
 
-TEST_F(EditorSessionServiceTest, LateMaterializationFailureDoesNotFailNewImage) {
+TEST_F(EditorSessionServiceTest, LateMaterializationFailureKeepsPriorImageAndBlocksNextLoad) {
+  // Phase 6C-5: failure before DuckDB materialization finishes leaves the prior
+  // image session failed and never opens B.
   service_->Open(1, 2);
   PresentFirstFrame(*service_);
   journal_->async_commit      = true;
@@ -884,10 +888,8 @@ TEST_F(EditorSessionServiceTest, LateMaterializationFailureDoesNotFailNewImage) 
   journal_->CompleteCommit(true);
   journal_->CompleteMaterialization(false, "A materialization failed");
 
-  EXPECT_EQ(service_->identity().element_id, 3u);
-  EXPECT_EQ(service_->state(), EditorSessionState::Loading);
-  PresentFirstFrame(*service_);
-  EXPECT_EQ(service_->state(), EditorSessionState::Interactive);
+  EXPECT_EQ(service_->identity().element_id, 1u);
+  EXPECT_EQ(service_->state(), EditorSessionState::Failed);
   EXPECT_EQ(tasks_->ended_ids.size(), 1u);
 }
 
