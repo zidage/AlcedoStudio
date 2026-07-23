@@ -15,12 +15,14 @@ namespace alcedo {
 EditorSessionNavigationController::EditorSessionNavigationController(
     EditorSessionLifecycle& lifecycle, EditorSaveCheckpointService& save_service,
     EditorSessionRenderController& render, EditorSessionEditController& edit,
-    IEditorJournalPort* journal, IEditorHistoryPort* history)
+    IEditorJournalPort* journal, IEditorCheckpointStore* checkpoint_store,
+    IEditorHistoryPort* history)
     : lifecycle_(lifecycle),
       save_service_(save_service),
       render_(render),
       edit_(edit),
       journal_(journal),
+      checkpoint_store_(checkpoint_store),
       history_(history) {}
 
 auto EditorSessionNavigationController::RequestOpenOrSwitch(sl_element_id_t element_id,
@@ -218,9 +220,20 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
     }
     if (history_ != nullptr && lifecycle_.has_history_guard()) {
       std::string error;
-      if (!history_->CaptureSaveCheckpoint(lifecycle_.history_guard(), &error)) {
+      auto        capture = history_->CaptureSaveCheckpoint(lifecycle_.history_guard(), &error);
+      if (!error.empty()) {
         return CheckpointTicket{};
       }
+      SaveCheckpointRequest req;
+      req.element_id         = identity.element_id;
+      req.session_generation = identity.session_generation;
+      req.capture            = std::move(capture);
+      lifecycle_.BeginCheckpoint();
+      if (!start_background_save) {
+        return CheckpointTicket{};
+      }
+      return save_service_.Start(
+          std::move(req), [this](const SaveCheckpointResult& r) { OnCheckpointFinished(r); });
     }
     if (start_background_save) {
       SaveCheckpointRequest req;
@@ -242,7 +255,7 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
 void EditorSessionNavigationController::ContinueToTarget(sl_element_id_t element_id,
                                                          image_id_t image_id, bool is_switch) {
   std::string error;
-  if (!lifecycle_.BeginAcquire(element_id, image_id, is_switch, journal_, &error)) {
+  if (!lifecycle_.BeginAcquire(element_id, image_id, is_switch, checkpoint_store_, &error)) {
     lifecycle_.Fail(error);
     return;
   }

@@ -14,7 +14,11 @@
 
 #include "app/editor_session_bootstrap.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
-#include "ui/alcedo_main/album_backend/editor_session_production.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_checkpoint_store.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_journal_writer_port.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_task_port.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_thumbnail_port.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 
@@ -81,107 +85,72 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   adjustment_transfer_ = std::make_unique<AdjustmentTransferController>(
       project_.get(), library_.get(), import_export_.get(), this);
   RecordConstruction("AdjustmentTransferController", adjustment_transfer_.get());
-  // Phase 5B/5E: wire production first-frame ports, direct presentation, and
+  // Phase 5B/5E: wire runtime first-frame ports, direct presentation, and
   // BackgroundTaskController-backed editor_save registration into the session
-  // runtime. The production scheduler accepts intents without completing when
+  // runtime. The session scheduler accepts intents without completing when
   // no real image path / test producer is available (shell-compatible Loading).
   {
-    auto production_pipeline = std::make_shared<EditorSessionProductionPipelinePort>();
-    auto production_history  = std::make_shared<EditorSessionProductionHistoryPort>();
-    auto production_tasks =
-        std::make_shared<EditorSessionProductionTaskPort>(background_tasks_.get());
-    auto production_scheduler = std::make_shared<EditorSessionProductionSchedulerPort>();
-    production_scheduler->SetPipelinePort(production_pipeline);
+    auto session_pipeline  = std::make_shared<EditorSessionPipelinePort>();
+    auto session_history   = std::make_shared<EditorSessionHistoryPort>();
+    auto session_tasks     = std::make_shared<EditorSessionTaskPort>(background_tasks_.get());
+    auto session_scheduler = std::make_shared<EditorSessionRenderSchedulerPort>();
+    session_scheduler->SetPipelinePort(session_pipeline);
 
-    EditorSessionProductionServices production_services;
-    production_services.pipeline_service =
-        [this]() -> std::shared_ptr<alcedo::PipelineMgmtService> {
+    EditorSessionPipelineServices pipeline_services;
+    pipeline_services.pipeline_service = [this]() -> std::shared_ptr<alcedo::PipelineMgmtService> {
       return project_ ? project_->handler().pipeline_service() : nullptr;
     };
-    production_services.load_editor_pipeline_guard =
+    pipeline_services.load_editor_pipeline_guard =
         [this](sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGuard> {
       auto service = project_ ? project_->handler().pipeline_service() : nullptr;
       return service ? service->LoadEditorPipeline(element_id) : nullptr;
     };
-    production_services.history_service =
-        [this]() -> std::shared_ptr<alcedo::EditHistoryMgmtService> {
-      return project_ ? project_->handler().history_service() : nullptr;
-    };
-    production_services.image_pool = [this]() -> std::shared_ptr<alcedo::ImagePoolService> {
+    std::function<std::shared_ptr<alcedo::ImagePoolService>()> image_pool =
+        [this]() -> std::shared_ptr<alcedo::ImagePoolService> {
       if (!project_ || !project_->handler().project()) {
         return nullptr;
       }
       return project_->handler().project()->GetImagePoolService();
     };
-    production_services.storage_service = [this]() -> std::shared_ptr<alcedo::StorageService> {
+    std::function<std::shared_ptr<alcedo::StorageService>()> storage_service =
+        [this]() -> std::shared_ptr<alcedo::StorageService> {
       if (!project_ || !project_->handler().project()) {
         return nullptr;
       }
       return project_->handler().project()->GetStorageService();
     };
-    production_services.load_history =
-        [this](sl_element_id_t element_id) -> std::shared_ptr<alcedo::EditHistory> {
-      if (!project_ || !project_->handler().project()) {
-        return nullptr;
-      }
-      auto storage = project_->handler().project()->GetStorageService();
-      if (!storage) {
-        return nullptr;
-      }
-      try {
-        auto history = storage->GetElementController().GetEditHistoryByFileId(element_id);
-        // A fresh image has no durable history row yet; recovery layers on top
-        // of a fresh EditHistory so a crash before the first materialize can still
-        // REDO its journal-committed operations.
-        return history ? history : std::make_shared<alcedo::EditHistory>(element_id);
-      } catch (...) {
-        return nullptr;
-      }
-    };
-    production_services.load_pipeline =
-        [this](sl_element_id_t element_id) -> std::shared_ptr<alcedo::CPUPipelineExecutor> {
-      if (!project_ || !project_->handler().project()) {
-        return nullptr;
-      }
-      auto storage = project_->handler().project()->GetStorageService();
-      if (!storage) {
-        return nullptr;
-      }
-      try {
-        return storage->GetElementController().GetPipelineByElementId(element_id);
-      } catch (...) {
-        return nullptr;
-      }
-    };
-    production_services.journal_path = [this](sl_element_id_t element_id) {
-      if (!project_) {
-        return std::filesystem::path{};
-      }
-      auto root = project_->handler().db_path().parent_path();
-      if (root.empty()) {
-        root = project_->handler().workspace_dir();
-      }
-      if (root.empty()) {
-        return std::filesystem::path{};
-      }
-      return root / "editor-journal" /
-             ("image-" + std::to_string(static_cast<std::uint64_t>(element_id)) + ".wal");
-    };
-    production_services.mini_git_journal_path = [this](sl_element_id_t element_id) {
-      if (!project_) {
-        return std::filesystem::path{};
-      }
-      auto root = project_->handler().db_path().parent_path();
-      if (root.empty()) {
-        root = project_->handler().workspace_dir();
-      }
-      if (root.empty()) {
-        return std::filesystem::path{};
-      }
-      return root / "editor-journal" /
-             ("image-" + std::to_string(static_cast<std::uint64_t>(element_id)) + ".mini-git.wal");
-    };
-    production_services.invalidate_thumbnail = [this](sl_element_id_t element_id) {
+    std::function<std::filesystem::path(sl_element_id_t)> journal_path =
+        [this](sl_element_id_t element_id) {
+          if (!project_) {
+            return std::filesystem::path{};
+          }
+          auto root = project_->handler().db_path().parent_path();
+          if (root.empty()) {
+            root = project_->handler().workspace_dir();
+          }
+          if (root.empty()) {
+            return std::filesystem::path{};
+          }
+          return root / "editor-journal" /
+                 ("image-" + std::to_string(static_cast<std::uint64_t>(element_id)) + ".wal");
+        };
+    std::function<std::filesystem::path(sl_element_id_t)> mini_git_journal_path =
+        [this](sl_element_id_t element_id) {
+          if (!project_) {
+            return std::filesystem::path{};
+          }
+          auto root = project_->handler().db_path().parent_path();
+          if (root.empty()) {
+            root = project_->handler().workspace_dir();
+          }
+          if (root.empty()) {
+            return std::filesystem::path{};
+          }
+          return root / "editor-journal" /
+                 ("image-" + std::to_string(static_cast<std::uint64_t>(element_id)) +
+                  ".mini-git.wal");
+        };
+    auto invalidate_thumbnail = [this](sl_element_id_t element_id) {
       if (!project_) {
         return;
       }
@@ -189,27 +158,30 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
         thumbnails->InvalidateThumbnail(element_id);
       }
     };
-    production_pipeline->SetServices(production_services);
-    production_history->SetServices(production_services);
-    production_history->SetPipelinePort(production_pipeline);
-    production_scheduler->SetServices(production_services);
-    auto production_journal =
-        std::make_shared<EditorSessionProductionJournalPort>(production_services);
-    production_journal->SetHistoryPort(production_history);
+    session_pipeline->SetServices(std::move(pipeline_services));
+    session_history->SetServices(EditorSessionHistoryPort::Services{mini_git_journal_path});
+    session_history->SetPipelinePort(session_pipeline);
+    session_scheduler->SetServices(EditorSessionSchedulerServices{image_pool});
+    auto session_journal = std::make_shared<EditorSessionJournalWriterPort>(
+        EditorSessionJournalWriterPort::Services{journal_path});
+    auto session_checkpoint = std::make_shared<EditorSessionCheckpointStore>();
+    session_checkpoint->SetServices(
+        EditorSessionCheckpointStore::Services{storage_service, mini_git_journal_path});
+    auto session_thumbnail  = std::make_shared<EditorSessionThumbnailPort>(invalidate_thumbnail);
 
     editor_session_runtime_ = alcedo::EditorSessionRuntime::CreateWithPorts(
-        production_pipeline, production_history, production_tasks, production_journal,
-        production_scheduler);
-    production_scheduler->SetCoordinator(editor_session_runtime_->coordinator);
-    editor_session_production_scheduler_ = std::move(production_scheduler);
+        session_pipeline, session_history, session_tasks, session_journal, session_scheduler,
+        session_checkpoint, session_thumbnail);
+    session_scheduler->SetCoordinator(editor_session_runtime_->coordinator);
+    editor_session_scheduler_ = std::move(session_scheduler);
   }
   RecordConstruction("EditorSessionService", editor_session_runtime_->service.get());
   RecordConstruction("EditorRenderCoordinator", editor_session_runtime_->coordinator.get());
   editor_session_ = std::make_unique<EditorSessionController>(
       editor_.get(), editor_session_runtime_->service.get(), this);
   RecordConstruction("EditorSessionController", editor_session_.get());
-  if (editor_session_production_scheduler_) {
-    editor_session_production_scheduler_->SetSinkResolver([this]() -> alcedo::IFrameSink* {
+  if (editor_session_scheduler_) {
+    editor_session_scheduler_->SetSinkResolver([this]() -> alcedo::IFrameSink* {
       return editor_session_ ? editor_session_->presentation_frame_sink() : nullptr;
     });
   }

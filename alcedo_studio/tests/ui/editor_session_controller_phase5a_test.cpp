@@ -447,8 +447,8 @@ TEST(EditorSessionControllerPhase5ATest, QmlEditorPathDoesNotIncludePipelineSche
       "editor_controller.hpp",
       "editor_dialog/render/editor_render_coordinator",
       "editor_dialog\\render\\editor_render_coordinator",
-      "editor_session_production.cpp",
-      "editor_session_production.hpp",
+      "editor_session_render_scheduler_port.cpp",
+      "editor_session_render_scheduler_port.hpp",
   };
 
   const std::vector<std::string> forbidden = {

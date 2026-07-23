@@ -547,9 +547,9 @@ The required success call chain is:
 
 `QML action -> EditorSessionController::Open -> EditorSessionService facade ->`
 `EditorSessionNavigationController -> EditorSaveCheckpointService ->`
-`EditorSessionProductionHistoryPort::CaptureSaveCheckpoint(A) ->`
-`EditorSessionProductionCheckpointStore -> EditorMiniGitMaterializer -> DuckDB transaction ->`
-`journal truncate -> EditorSessionProductionThumbnailPort::Invalidate(A) -> finish editor-save task ->`
+`EditorSessionHistoryPort::CaptureSaveCheckpoint(A) ->`
+`EditorSessionCheckpointStore -> EditorMiniGitMaterializer -> DuckDB transaction ->`
+`journal truncate -> EditorSessionThumbnailPort::Invalidate(A) -> finish editor-save task ->`
 `EditorSessionNavigationController -> EditorSessionLifecycle::ReleaseImage(A) -> AcquireImage(B)`.
 
 The required failure call chain is:
@@ -567,7 +567,7 @@ only for their current assertions.
 | --- | --- | --- |
 | `EditorMiniGitMaterializerTest` | Empty journal, one edit, one rejected capture, one recovery attempt, and basic lock acquisition. | Its lock test is sequential rather than concurrent; the recovery test recreates journal bytes after a successful save; no production port or reopen-wide field comparison. |
 | `EditorSessionServiceTest` | Fake ports show that B waits for A's asynchronous materialization and that failure keeps A. | No real Mini-Git capture, DuckDB transaction, journal file, thumbnail service, or QML entrypoint. |
-| `AlbumBackendInteractionPolicyTest` | A manually registered task disables five C++ capability getters and returns reasons. | It does not start the task through `EditorSessionProductionTaskPort` and does not click the five QML actions. |
+| `AlbumBackendInteractionPolicyTest` | A manually registered task disables five C++ capability getters and returns reasons. | It does not start the task through `EditorSessionTaskPort` and does not click the five QML actions. |
 | `WorkspaceShellTest` | Existing workspace and editor shell behaviors remain green. | It has no checkpoint lock test and is already large, so new checkpoint cases belong in a new module test file. |
 
 Passing the first column may not be used as a substitute for the missing evidence in the last column.
@@ -580,7 +580,7 @@ this section are relative to `alcedo_studio/` unless explicitly stated otherwise
 | Current file | Current LOC | Work allowed in this qualification |
 | --- | ---: | --- |
 | `src/app/editor_mini_git_materializer.cpp` | 337 | Keep the completed coordinator split, then separate journal folding, DuckDB writing, and recovery into collaborating types. |
-| `src/ui/alcedo_main/album_backend/editor_session_production.cpp` | 1833 | Create real Mini-Git history/checkpoint/thumbnail adapter types; leave unrelated pipeline, task, legacy journal, and scheduler behavior for later plans. |
+| `src/ui/alcedo_main/album_backend/editor_session_{history,journal_writer,thumbnail,pipeline,task,render_scheduler}_port.cpp` plus `editor_session_checkpoint_store.cpp` | 1387 total | Responsibility-named adapters replace the retired 1835-line mixed source; each implementation remains below 500 lines. |
 | `src/app/editor_session_service.cpp` | 1287 | Replace the god class with lifecycle, navigation, save-checkpoint, edit, and render modules; leave a thin `IEditorSessionBackend` facade. |
 | `src/ui/alcedo_main/album_backend/interaction_policy_controller.cpp` | 365 | Keep one file; clean only the five checkpoint-related capabilities. |
 | `src/ui/alcedo_main/qml/EditorNavigationPolicy.qml` | 50 | Remove duplicated policy/fallback state; do not create another wrapper with the same data. |
@@ -832,8 +832,8 @@ Checklist:
 
 ##### Phase 1C - Decompose Mini-Git persistence and production adapters into types
 
-The same rule applies here: `editor_session_production_checkpoint.cpp` must not remain a file of member
-definitions for several pre-existing large classes.
+The same rule applies here: checkpoint materialization must not remain a file of member definitions
+for several pre-existing large classes.
 
 ###### Phase 1C-1 - Split fold, DuckDB write, and recovery
 
@@ -869,64 +869,91 @@ Checklist:
 - [ ] Add `EditorMiniGitJournalFoldTest`, `EditorMiniGitCommitWriterTest`, and
       `EditorMiniGitJournalRecoveryTest`; keep `EditorMiniGitMaterializerTest` for facade integration.
 
-###### Phase 1C-2 - Replace the production journal god class with narrow adapters
+###### Phase 1C-2 - Replace the mixed editor-session composition with narrow adapters
 
 Files:
 
-- new `src/include/ui/alcedo_main/album_backend/editor_session_production_history_port.hpp`
-- new `src/ui/alcedo_main/album_backend/editor_session_production_history_port.cpp`
-- new `src/include/ui/alcedo_main/album_backend/editor_session_production_journal_writer_port.hpp`
-- new `src/ui/alcedo_main/album_backend/editor_session_production_journal_writer_port.cpp`
-- new `src/include/ui/alcedo_main/album_backend/editor_session_production_checkpoint_store.hpp`
-- new `src/ui/alcedo_main/album_backend/editor_session_production_checkpoint_store.cpp`
-- new `src/include/ui/alcedo_main/album_backend/editor_session_production_thumbnail_port.hpp`
-- new `src/ui/alcedo_main/album_backend/editor_session_production_thumbnail_port.cpp`
+- new `src/include/ui/alcedo_main/album_backend/editor_session_history_port.hpp`
+- new `src/ui/alcedo_main/album_backend/editor_session_history_port.cpp`
+- new `src/include/ui/alcedo_main/album_backend/editor_session_journal_writer_port.hpp`
+- new `src/ui/alcedo_main/album_backend/editor_session_journal_writer_port.cpp`
+- new `src/include/ui/alcedo_main/album_backend/editor_session_checkpoint_store.hpp`
+- new `src/ui/alcedo_main/album_backend/editor_session_checkpoint_store.cpp`
+- new `src/include/ui/alcedo_main/album_backend/editor_session_thumbnail_port.hpp`
+- new `src/ui/alcedo_main/album_backend/editor_session_thumbnail_port.cpp`
+- new `src/include/ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp`
+- new `src/ui/alcedo_main/album_backend/editor_session_pipeline_port.cpp`
+- new `src/include/ui/alcedo_main/album_backend/editor_session_task_port.hpp`
+- new `src/ui/alcedo_main/album_backend/editor_session_task_port.cpp`
+- new `src/include/ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp`
+- new `src/ui/alcedo_main/album_backend/editor_session_render_scheduler_port.cpp`
 - `src/include/app/editor_session_ports.hpp`
-- `src/include/ui/alcedo_main/album_backend/editor_session_production.hpp`
-- `src/ui/alcedo_main/album_backend/editor_session_production.cpp`
-- remove temporary `src/ui/alcedo_main/album_backend/editor_session_production_checkpoint.cpp`
 - `src/CMakeLists.txt`
+- `tests/CMakeLists.txt`
 
 Responsibilities:
 
-This is the only `editor_session_production` decomposition owned by the Phase 6C-5 qualification.
-Extract only the save-checkpoint responsibilities below. Pipeline loading, task publication, legacy
-journal compatibility, render scheduling, and other production wiring remain in the existing
-composition until a later roadmap phase demonstrates that they need their own state-owning modules.
-Do not expand this phase merely to reduce the original file's line count.
+The permanent modules are named after their responsibilities. The original 1,835-line file had
+pipeline loading, task publication, journal writing, Mini-Git history, checkpoint materialization,
+thumbnail invalidation, and render scheduling in one compilation unit. Each extracted type below
+owns its own state and has a narrow dependency surface; no class is retained under a phase or
+environment label.
 
-- `EditorSessionProductionHistoryPort` owns `MiniGitWorkingHistory`, history guards, adjustment
+- `EditorSessionHistoryPort` owns `MiniGitWorkingHistory`, history guards, adjustment
   commits, undo/redo, and immutable checkpoint capture. Capture returns the value directly; it stores
   no side-map for another class to take later.
-- `EditorSessionProductionJournalWriterPort` owns journal lookup, per-image journal synchronization,
+- `EditorSessionJournalWriterPort` owns journal lookup, per-image journal synchronization,
   finalized edit/head-move append, and discard of uncommitted records. It performs no DuckDB
   materialization, recovery, thumbnail invalidation, or task publication.
-- `EditorSessionProductionCheckpointStore` implements a new `IEditorCheckpointStore`. It accepts an
+- `EditorSessionCheckpointStore` implements a new `IEditorCheckpointStore`. It accepts an
   immutable capture and calls the materializer/recovery facade. It owns no live history or QML task.
-- `EditorSessionProductionThumbnailPort` implements a narrow thumbnail invalidation port. It contains
+- `EditorSessionThumbnailPort` implements a narrow thumbnail invalidation port. It contains
   the only call from this save path to `ThumbnailService::InvalidateThumbnail`.
+- `EditorSessionPipelinePort` owns loaded pipeline guards and pipeline-service save/release calls.
+- `EditorSessionTaskPort` owns task IDs and BackgroundTaskController publication only.
+- `EditorSessionRenderSchedulerPort` owns render jobs, presentation acknowledgements, and worker
+  lifetime only.
 
 Checklist:
 
-- [ ] Split the current broad `IEditorJournalPort` into the writer API required by edit finalization
+- [x] Split the current broad `IEditorJournalPort` into the writer API required by edit finalization
       and `IEditorCheckpointStore` required by save/recovery. Do not leave default successful
       materialization methods on the writer interface.
-- [ ] Move writer lookup, image locks, finalize/append/head-move/discard methods to
-      `EditorSessionProductionJournalWriterPort`.
-- [ ] Delete `EditorSessionProductionJournalPort` after its production call sites move. The old
+- [x] Move writer lookup, image locks, finalize/append/head-move/discard methods to
+      `EditorSessionJournalWriterPort`.
+- [x] Delete the old combined journal port after its call sites move. The old
       transaction-array materialization/compaction route is not part of the new project format; remove
       it when call-site search confirms no target-architecture caller. If a historical test still needs
       it, keep a test-only legacy adapter rather than wiring it into the production session.
-- [ ] Move still-relevant cases from `EditorSessionProductionJournalPortTest` to the history, journal
+- [x] Move still-relevant cases from the old combined journal-port test to the history, journal
       writer, or checkpoint-store target that owns the behavior. Remove obsolete legacy cases with an
       explicit old-schema reason and record the before/after discovered test counts.
-- [ ] Remove `TakeSaveCapture` and `save_captures_`; capture ownership travels in function arguments.
-- [ ] Do not move unrelated pipeline, task, legacy journal, or scheduler behavior merely to reduce
-      `editor_session_production.cpp` LOC. Record those remaining responsibilities for later work.
-- [ ] Add `EditorSessionProductionHistoryPortTest`,
-      `EditorSessionProductionJournalWriterPortTest`,
-      `EditorSessionProductionCheckpointStoreTest`, and
-      `EditorSessionProductionThumbnailPortTest` with one real behavior per adapter.
+- [x] Remove `TakeSaveCapture` and `save_captures_`; capture ownership travels in function arguments.
+- [x] Move pipeline, task, and scheduler behavior into responsibility-named modules without changing
+      their ownership or execution path; record their focused tests in the module targets.
+- [x] Add `EditorSessionHistoryPortTest`, `EditorSessionJournalWriterPortTest`,
+      `EditorSessionCheckpointStoreTest`, and `EditorSessionThumbnailPortTest` with real behavior per
+      adapter.
+- [x] Add direct focused coverage for `EditorSessionPipelinePort`, `EditorSessionTaskPort`, and
+      `EditorSessionRenderSchedulerPort`; their tests verify guard caching/release, all five save
+      locks/task completion, and frame submission/identity-checked presentation acknowledgement.
+
+Implementation record (2026-07-23): the method counts below exclude constructors, destructors, and
+inherited virtual declarations; they count the public operations and private helpers declared by each
+new type. The old combined journal/thumbnail tests discovered 16 cases (12 + 4); the seven
+responsibility targets now discover 18 cases (3 + 4 + 2 + 3 + 2 + 2 + 2), with the additional two
+cases covering the newly isolated pipeline/task/scheduler state.
+
+| Type | Implementation LOC | Public operations | Private helpers | Focused target |
+| --- | ---: | ---: | ---: | --- |
+| `EditorSessionHistoryPort` | 408 | 10 | 1 | `EditorSessionHistoryPortTest` (4) |
+| `EditorSessionJournalWriterPort` | 196 | 8 | 3 | `EditorSessionJournalWriterPortTest` (3) |
+| `EditorSessionCheckpointStore` | 111 | 4 | 2 | `EditorSessionCheckpointStoreTest` (2) |
+| `EditorSessionThumbnailPort` | 25 | 1 | 0 | `EditorSessionThumbnailPortTest` (3) |
+| `EditorSessionPipelinePort` | 93 | 5 | 0 | `EditorSessionPipelinePortTest` (2) |
+| `EditorSessionTaskPort` | 93 | 3 | 0 | `EditorSessionTaskPortTest` (2) |
+| `EditorSessionRenderSchedulerPort` | 461 | 11 | 4 | `EditorSessionRenderSchedulerPortTest` (2) |
+| **Total** | **1387** | **42** | **10** | **18 discovered cases** |
 
 ##### Phase 1D - Extract the Phase 6 QML actions into components
 
@@ -1092,7 +1119,7 @@ Files:
 - `src/include/app/editor_mini_git_materializer.hpp`
 - `src/include/app/editor_session_ports.hpp`
 - `src/edit/history/mini_git_working_history.cpp`
-- `src/ui/alcedo_main/album_backend/editor_session_production_history_port.cpp`
+- `src/ui/alcedo_main/album_backend/editor_session_history_port.cpp`
 - `tests/edit/history/editor_save_checkpoint_capture_test.cpp`
 - `tests/CMakeLists.txt`
 
@@ -1133,11 +1160,11 @@ Files:
 - `src/include/app/editor_session_ports.hpp`
 - `src/include/app/editor_save_checkpoint_service.hpp`
 - `src/app/editor_save_checkpoint_service.cpp`
-- `src/include/ui/alcedo_main/album_backend/editor_session_production_history_port.hpp`
-- `src/ui/alcedo_main/album_backend/editor_session_production_history_port.cpp`
-- `src/include/ui/alcedo_main/album_backend/editor_session_production_checkpoint_store.hpp`
-- `src/ui/alcedo_main/album_backend/editor_session_production_checkpoint_store.cpp`
-- `tests/edit/history/editor_session_production_checkpoint_store_test.cpp`
+- `src/include/ui/alcedo_main/album_backend/editor_session_history_port.hpp`
+- `src/ui/alcedo_main/album_backend/editor_session_history_port.cpp`
+- `src/include/ui/alcedo_main/album_backend/editor_session_checkpoint_store.hpp`
+- `src/ui/alcedo_main/album_backend/editor_session_checkpoint_store.cpp`
+- `tests/edit/history/editor_session_checkpoint_store_test.cpp`
 - `tests/CMakeLists.txt`
 
 Checklist:
@@ -1281,7 +1308,7 @@ already committed prefix repeatedly does not create another commit or move the V
 
 Files:
 
-- `src/ui/alcedo_main/album_backend/editor_session_production.cpp`
+- `src/ui/alcedo_main/album_backend/editor_session_task_port.cpp`
 - `src/ui/alcedo_main/album_backend/background_task_controller.cpp`
 - `src/ui/alcedo_main/album_backend/interaction_policy_controller.cpp`
 - `tests/ui/album_backend_interaction_policy_test.cpp`
@@ -1289,7 +1316,7 @@ Files:
 Checklist:
 
 - [ ] Start a checkpoint through `EditorSaveCheckpointService`; verify it calls
-      `EditorSessionProductionTaskPort::BeginTask("editor_save", A)`. The test must not register a
+      `EditorSessionTaskPort::BeginTask("editor_save", A)`. The test must not register a
       hand-built equivalent task directly in `BackgroundTaskController`.
 - [ ] Observe `SelectEditorImage`, `SwitchWorkspace`, `CheckoutVersion`, `PasteAdjustments`, and
       `MergeAdjustments` through the real `InteractionPolicyController` getters and reason getters.
@@ -1383,10 +1410,10 @@ still needed, return it to Phase 1 and review it there.
 - [ ] `EditorMiniGitCommitWriterTest`.
 - [ ] `EditorMiniGitJournalRecoveryTest`.
 - [ ] `EditorMiniGitMaterializerTest`.
-- [ ] `EditorSessionProductionHistoryPortTest`.
-- [ ] `EditorSessionProductionJournalWriterPortTest`.
-- [ ] `EditorSessionProductionCheckpointStoreTest`.
-- [ ] `EditorSessionProductionThumbnailPortTest`.
+- [ ] `EditorSessionHistoryPortTest`.
+- [ ] `EditorSessionJournalWriterPortTest`.
+- [ ] `EditorSessionCheckpointStoreTest`.
+- [ ] `EditorSessionThumbnailPortTest`.
 - [ ] `AlbumBackendInteractionPolicyTest`.
 - [ ] `EditorWorkspaceNavigationQmlTest`.
 - [ ] `EditorAdjustmentTransferActionsQmlTest`.
@@ -1404,7 +1431,7 @@ limitation for every target. Do not report a compiled but unexecuted target as p
 - [ ] Search for removed names: `ScopedLock`, `MaterializeValidatedGraph`, `TakeSaveCapture`,
       `no_journal_changes`, `saveInProgress`, and checkpoint-related `controlsEnabled`.
 - [ ] Verify temporary same-class split files `editor_session_checkpoint.cpp` and
-      `editor_session_production_checkpoint.cpp` no longer exist. Their behavior must live in the
+      the retired combined checkpoint source no longer exists. Its behavior must live in the
       owning component types named in Phase 1.
 - [ ] Search for `std::this_thread::yield()` in the save-checkpoint path.
 - [ ] Record total LOC and diff LOC for every changed file. For a file above 1000 lines, state which

@@ -10,11 +10,14 @@
 #include <string>
 
 #include "app/ai_provider_profile.hpp"
+#include "app/editor_session_bootstrap.hpp"
 #include "app/image_analysis_service.hpp"
 #include "app/model_download_service.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_controller.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp"
 #include "ui/alcedo_main/album_backend/folder_controller.hpp"
 #include "ui/alcedo_main/album_backend/image_analysis_controller.hpp"
 #include "ui/alcedo_main/album_backend/image_analysis_sink.hpp"
@@ -29,9 +32,6 @@
 #include "ui/alcedo_main/album_backend/search_controller.hpp"
 #include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
 #include "ui/alcedo_main/album_backend/stats_engine.hpp"
-#include "app/editor_session_bootstrap.hpp"
-#include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
-#include "ui/alcedo_main/album_backend/editor_session_production.hpp"
 #include "ui/alcedo_main/album_backend/workspace_router.hpp"
 
 namespace alcedo::ui {
@@ -129,10 +129,9 @@ class ApplicationModuleHost final : public QObject {
   [[nodiscard]] auto editor_render_coordinator() -> alcedo::EditorRenderCoordinator* {
     return editor_session_runtime_ ? editor_session_runtime_->coordinator.get() : nullptr;
   }
-  /// Phase 5B production first-frame scheduler (null when runtime uses bootstrap only).
-  [[nodiscard]] auto editor_session_production_scheduler()
-      -> EditorSessionProductionSchedulerPort* {
-    return editor_session_production_scheduler_.get();
+  /// First-frame scheduler (null when runtime uses bootstrap only).
+  [[nodiscard]] auto editor_session_scheduler() -> EditorSessionRenderSchedulerPort* {
+    return editor_session_scheduler_.get();
   }
 
   // Explicitly idempotent so the application can shut down modules before the
@@ -165,10 +164,10 @@ class ApplicationModuleHost final : public QObject {
   std::unique_ptr<NikonHeRecoveryController>         nikon_he_recovery_;
   std::unique_ptr<EditorController>                  editor_;
   std::unique_ptr<AdjustmentTransferController>      adjustment_transfer_;
-  std::unique_ptr<alcedo::EditorSessionRuntime>          editor_session_runtime_;
-  std::shared_ptr<EditorSessionProductionSchedulerPort>  editor_session_production_scheduler_;
-  std::unique_ptr<EditorSessionController>               editor_session_;
-  std::unique_ptr<WorkspaceRouter>                       workspace_router_;
+  std::unique_ptr<alcedo::EditorSessionRuntime>      editor_session_runtime_;
+  std::shared_ptr<EditorSessionRenderSchedulerPort>  editor_session_scheduler_;
+  std::unique_ptr<EditorSessionController>           editor_session_;
+  std::unique_ptr<WorkspaceRouter>                   workspace_router_;
 
   LifecycleObserver lifecycle_observer_{};
   bool              shutting_down_ = false;

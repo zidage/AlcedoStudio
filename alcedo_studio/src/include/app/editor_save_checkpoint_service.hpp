@@ -20,10 +20,10 @@ namespace alcedo {
 /// controller uses this to correlate async completions with the save that
 /// started them. A default-constructed ticket is invalid.
 struct CheckpointTicket {
-  std::uint64_t request_id         = 0;
-  std::uint64_t session_generation = 0;
-  sl_element_id_t element_id       = 0;
-  std::uint64_t task_id            = 0;
+  std::uint64_t      request_id         = 0;
+  std::uint64_t      session_generation = 0;
+  sl_element_id_t    element_id         = 0;
+  std::uint64_t      task_id            = 0;
   [[nodiscard]] auto valid() const -> bool { return request_id != 0; }
 };
 
@@ -31,8 +31,9 @@ struct CheckpointTicket {
 /// controller after finalizing the open edit command and capturing the live
 /// serialized pipeline state.
 struct SaveCheckpointRequest {
-  sl_element_id_t element_id       = 0;
-  std::uint64_t   session_generation = 0;
+  sl_element_id_t                                 element_id         = 0;
+  std::uint64_t                                   session_generation = 0;
+  std::shared_ptr<const EditorMiniGitSaveCapture> capture;
 };
 
 /// Outcome of one save checkpoint. The completion callback receives this
@@ -41,10 +42,10 @@ struct SaveCheckpointRequest {
 /// CheckpointTicket returned by Start so the caller can correlate.
 struct SaveCheckpointResult {
   std::uint64_t request_id           = 0;
-  std::uint64_t session_generation    = 0;
-  std::uint64_t task_id               = 0;
-  bool         checkpoint_completed   = false;
-  std::string  error;
+  std::uint64_t session_generation   = 0;
+  std::uint64_t task_id              = 0;
+  bool          checkpoint_completed = false;
+  std::string   error;
 };
 
 /// Invoked exactly once when the save checkpoint reaches its terminal state.
@@ -57,8 +58,10 @@ using SaveCheckpointCompletion = std::function<void(const SaveCheckpointResult&)
 class EditorSaveCheckpointService final {
  public:
   struct Dependencies {
-    std::shared_ptr<IEditorJournalPort> journal;
-    std::shared_ptr<IEditorTaskPort>    tasks;
+    std::shared_ptr<IEditorJournalPort>     journal;
+    std::shared_ptr<IEditorCheckpointStore> checkpoint_store;
+    std::shared_ptr<IEditorThumbnailPort>   thumbnails;
+    std::shared_ptr<IEditorTaskPort>        tasks;
   };
 
   explicit EditorSaveCheckpointService(Dependencies dependencies);
@@ -73,26 +76,26 @@ class EditorSaveCheckpointService final {
   /// invoked exactly once, either synchronously (legacy synchronous journal
   /// ports) or asynchronously. On synchronous failure the ticket is invalid
   /// and completion was already invoked with checkpoint_completed=false.
-  auto Start(const SaveCheckpointRequest& request, SaveCheckpointCompletion completion)
+  auto Start(SaveCheckpointRequest request, SaveCheckpointCompletion completion)
       -> CheckpointTicket;
 
   /// Stop accepting new callbacks and join/cancel outstanding work. After this
   /// returns, no completion callback will fire.
-  void CancelAndWait();
+  void               CancelAndWait();
 
   /// Invoked by the navigation controller when a checkpoint completes. The
   /// service ends the task and invokes the stored completion callback. Stale
   /// completions (no matching ticket) are silently ignored.
-  void OnCheckpointFinished(const SaveCheckpointResult& result);
+  void               OnCheckpointFinished(const SaveCheckpointResult& result);
 
   /// True while at least one save checkpoint is outstanding. Diagnostics only.
   [[nodiscard]] auto active() const -> bool;
 
  private:
   struct AsyncCallbackGate {
-    auto Enter() -> bool;
-    void Leave();
-    void StopAndWait();
+    auto                    Enter() -> bool;
+    void                    Leave();
+    void                    StopAndWait();
     std::mutex              mutex;
     std::condition_variable condition;
     std::size_t             active_callbacks = 0;
@@ -100,19 +103,20 @@ class EditorSaveCheckpointService final {
   };
 
   struct PendingSave {
-    std::uint64_t            request_id         = 0;
-    std::uint64_t            session_generation = 0;
-    sl_element_id_t          element_id         = 0;
-    std::uint64_t            task_id            = 0;
-    SaveCheckpointCompletion completion;
+    std::uint64_t                                   request_id         = 0;
+    std::uint64_t                                   session_generation = 0;
+    sl_element_id_t                                 element_id         = 0;
+    std::uint64_t                                   task_id            = 0;
+    std::shared_ptr<const EditorMiniGitSaveCapture> capture;
+    SaveCheckpointCompletion                        completion;
   };
 
   void HandleJournalCommit(std::uint64_t request_id, EditorJournalCommitOutcome outcome,
                            SaveCheckpointCompletion completion);
   void HandleMaterialization(std::uint64_t request_id, EditorMaterializeOutcome outcome,
-                              SaveCheckpointCompletion completion);
-  void FinishSave(std::uint64_t request_id, std::uint64_t session_generation,
-                  std::uint64_t task_id, bool checkpoint_completed, std::string message,
+                             SaveCheckpointCompletion completion);
+  void FinishSave(std::uint64_t request_id, std::uint64_t session_generation, std::uint64_t task_id,
+                  bool checkpoint_completed, std::string message,
                   SaveCheckpointCompletion completion);
   auto TakePendingSave(std::uint64_t request_id, std::uint64_t* task_id,
                        SaveCheckpointCompletion* completion) -> bool;

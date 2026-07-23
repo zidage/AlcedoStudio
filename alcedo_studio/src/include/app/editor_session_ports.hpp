@@ -20,6 +20,7 @@ namespace alcedo {
 
 class EditTransaction;
 class Hash128;
+struct EditorMiniGitSaveCapture;
 struct EditorAdjustmentPatch;
 
 /// Narrow ports used by EditorSessionService. Production implementations wrap
@@ -75,12 +76,13 @@ class IEditorHistoryPort {
                                       EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
       -> bool = 0;
 
-  /// Phase 6C-5: capture the committed live serialized pipeline state, working
-  /// head, chain hash, and journal records without constructing a second live
-  /// executor. Must run before guards are released for a save checkpoint.
+  /// Capture the immutable live history prefix that a save checkpoint must
+  /// persist. The caller owns the returned value and passes it directly to the
+  /// checkpoint store; this port keeps no deferred capture side table.
   virtual auto CaptureSaveCheckpoint(const EditorHistoryGuardHandle& /*guard*/,
-                                     std::string* /*error*/) -> bool {
-    return true;
+                                     std::string* /*error*/)
+      -> std::shared_ptr<const EditorMiniGitSaveCapture> {
+    return nullptr;
   }
 };
 
@@ -111,10 +113,9 @@ struct EditorMaterializeOutcome {
 using EditorJournalCommitCallback = std::function<void(EditorJournalCommitOutcome)>;
 using EditorMaterializeCallback   = std::function<void(EditorMaterializeOutcome)>;
 
-/// Typed persistence boundary for one image-scoped editor session. The
-/// compatibility AppendBarrier shim is intentionally below the typed methods;
-/// new callers cannot accidentally combine finalize, journal durability, and
-/// materialization in one service call.
+/// Typed journal-writer boundary for one image-scoped editor session. Database
+/// materialization and recovery belong to IEditorCheckpointStore, so this
+/// interface contains only journal append, durability, and discard operations.
 class IEditorJournalPort {
  public:
   virtual ~IEditorJournalPort() = default;
@@ -139,23 +140,6 @@ class IEditorJournalPort {
     return outcome;
   }
 
-  /// Materialize journal-committed records into the durable history/pipeline
-  /// projection. The default is a no-op for bootstrap ports.
-  virtual auto Materialize(sl_element_id_t /*element_id*/, std::uint64_t /*session_generation*/,
-                           std::string* /*error*/) -> EditorMaterializeOutcome {
-    return EditorMaterializeOutcome{true, true, 0, {}};
-  }
-
-  /// Recover the durable journal head for an image and materialize any REDO'd
-  /// journal-committed operations into DuckDB. Called when an image is opened so
-  /// the editor starts from the recovered durable state. The default is a no-op
-  /// for bootstrap ports that have no journal.
-  virtual auto RecoverAndMaterialize(sl_element_id_t /*element_id*/,
-                                     std::uint64_t /*session_generation*/, std::string* /*error*/)
-      -> EditorMaterializeOutcome {
-    return EditorMaterializeOutcome{true, true, 0, {}};
-  }
-
   /// Queue one finalized edit-history operation in the image journal. These
   /// methods perform no file I/O; CommitJournal owns the durability barrier.
   virtual auto RecordEdit(sl_element_id_t /*element_id*/, std::uint64_t /*session_generation*/,
@@ -177,9 +161,9 @@ class IEditorJournalPort {
     return true;
   }
 
-  /// Async adapters own their worker and invoke the callback after the typed
-  /// operation reaches its terminal state. Defaults are synchronous so legacy
-  /// fakes remain deterministic.
+  /// Async adapters invoke the callback after the journal durability operation
+  /// reaches its terminal state. The default is synchronous for deterministic
+  /// test ports.
   virtual auto CommitJournalAsync(sl_element_id_t element_id, std::uint64_t session_generation,
                                   EditorJournalCommitCallback callback) -> bool {
     std::string error;
@@ -193,21 +177,8 @@ class IEditorJournalPort {
     return true;
   }
 
-  virtual auto MaterializeAsync(sl_element_id_t element_id, std::uint64_t session_generation,
-                                EditorMaterializeCallback callback) -> bool {
-    std::string error;
-    auto        outcome = Materialize(element_id, session_generation, &error);
-    if (outcome.error.empty()) {
-      outcome.error = std::move(error);
-    }
-    if (callback) {
-      callback(std::move(outcome));
-    }
-    return true;
-  }
-
-  /// Legacy compatibility hook for Phase 5F test doubles. Production and new
-  /// tests should override CommitJournal/CommitJournalAsync instead.
+  /// Legacy compatibility hook for Phase 5F test doubles. Runtime and new tests
+  /// should override CommitJournal/CommitJournalAsync instead.
   virtual auto AppendBarrier(sl_element_id_t /*element_id*/, std::uint64_t /*session_generation*/,
                              std::string* /*error*/) -> bool {
     return true;
@@ -222,15 +193,17 @@ class IEditorCheckpointStore {
  public:
   virtual ~IEditorCheckpointStore() = default;
 
-  virtual auto Materialize(sl_element_id_t /*element_id*/, std::uint64_t /*session_generation*/,
+  /// Persist one immutable capture. The store may truncate the captured
+  /// journal prefix only after the database write succeeds.
+  virtual auto Materialize(std::shared_ptr<const EditorMiniGitSaveCapture> /*capture*/,
                            std::string* /*error*/) -> EditorMaterializeOutcome {
     return EditorMaterializeOutcome{true, true, 0, {}};
   }
 
-  virtual auto MaterializeAsync(sl_element_id_t element_id, std::uint64_t session_generation,
-                                EditorMaterializeCallback callback) -> bool {
+  virtual auto MaterializeAsync(std::shared_ptr<const EditorMiniGitSaveCapture> capture,
+                                EditorMaterializeCallback                       callback) -> bool {
     std::string error;
-    auto        outcome = Materialize(element_id, session_generation, &error);
+    auto        outcome = Materialize(std::move(capture), &error);
     if (outcome.error.empty()) outcome.error = std::move(error);
     if (callback) callback(std::move(outcome));
     return true;

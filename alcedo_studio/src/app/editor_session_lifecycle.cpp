@@ -12,7 +12,7 @@ EditorSessionLifecycle::EditorSessionLifecycle(Dependencies dependencies)
     : deps_(std::move(dependencies)) {}
 
 auto EditorSessionLifecycle::BeginAcquire(sl_element_id_t element_id, image_id_t image_id,
-                                          bool is_switch, IEditorJournalPort* journal,
+                                          bool is_switch, IEditorCheckpointStore* checkpoint_store,
                                           std::string* error) -> bool {
   std::scoped_lock lock(mutex_);
   ++identity_.session_generation;
@@ -23,13 +23,13 @@ auto EditorSessionLifecycle::BeginAcquire(sl_element_id_t element_id, image_id_t
   state_ = is_switch ? EditorSessionState::Switching : EditorSessionState::Acquiring;
   last_error_.clear();
 
-  if (journal != nullptr) {
+  if (checkpoint_store != nullptr) {
     std::string recover_error;
-    const auto  recovered =
-        journal->RecoverAndMaterialize(element_id, identity_.session_generation, &recover_error);
+    const auto  recovered = checkpoint_store->RecoverAndMaterialize(
+        element_id, identity_.session_generation, &recover_error);
     if (!recovered.accepted) {
-      state_          = EditorSessionState::Failed;
-      last_error_     = recover_error.empty() ? "Editor journal recovery failed" : recover_error;
+      state_      = EditorSessionState::Failed;
+      last_error_ = recover_error.empty() ? "Editor journal recovery failed" : recover_error;
       identity_.element_id = 0;
       identity_.image_id   = 0;
       if (error) {
@@ -82,7 +82,7 @@ void EditorSessionLifecycle::KeepCurrentAfterCheckpointFailure(std::string messa
 
 auto EditorSessionLifecycle::ReleaseAfterCheckpoint() -> ReleaseOutcome {
   std::scoped_lock lock(mutex_);
-  ReleaseOutcome outcome;
+  ReleaseOutcome   outcome;
   outcome.identity = identity_;
   if (deps_.history && history_guard_.valid) {
     deps_.history->Release(history_guard_);
@@ -91,8 +91,8 @@ auto EditorSessionLifecycle::ReleaseAfterCheckpoint() -> ReleaseOutcome {
   if (deps_.pipeline && pipeline_guard_.valid) {
     deps_.pipeline->Release(pipeline_guard_);
   }
-  pipeline_guard_    = {};
-  outcome.released   = true;
+  pipeline_guard_  = {};
+  outcome.released = true;
   return outcome;
 }
 
@@ -126,8 +126,7 @@ void EditorSessionLifecycle::BeginShutdown() {
   state_                      = EditorSessionState::ShuttingDown;
 }
 
-auto EditorSessionLifecycle::MarkFirstFramePresented()
-    -> std::optional<EditorSessionIdentity> {
+auto EditorSessionLifecycle::MarkFirstFramePresented() -> std::optional<EditorSessionIdentity> {
   std::scoped_lock lock(mutex_);
   if (state_ != EditorSessionState::Loading && state_ != EditorSessionState::Acquiring &&
       state_ != EditorSessionState::Switching) {

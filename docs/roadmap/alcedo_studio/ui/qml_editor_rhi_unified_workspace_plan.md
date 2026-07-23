@@ -1500,7 +1500,7 @@ Implementation notes:
 **Status: service flow complete; presentation backend superseded by Phase 5C (2026-07-18).**
 Production open/first-frame path is owned by
 `EditorSessionService` + app-layer `EditorRenderCoordinator` +
-`EditorSessionProductionSchedulerPort`. Opening marks the image acquired after
+`EditorSessionRenderSchedulerPort`. Opening marks the image acquired after
 guards, routes InteractivePrimary when the presentation sink and size are ready,
 stays Loading until complete→submit→present, then enters Interactive and queues
 QualityBase. Equal-output-size image switches re-emit `targetSizeRequested` and
@@ -1542,8 +1542,9 @@ Implementation closeout:
 
 - Session: `MarkImageAcquiredAfterGuards` after successful open/switch; first-frame gate unchanged;
   `RouteQualityBaseFollowUp` after InteractivePrimary presentation.
-- Production ports: `editor_session_production.{hpp,cpp}` — pipeline/history soft-acquire on Open,
-  lazy `EnsureLoaded` + real `PipelineScheduler` only when producing; test producer hook for shell
+- Session role ports: `editor_session_pipeline_port.*`, `editor_session_history_port.*`, and
+  `editor_session_render_scheduler_port.*` — pipeline/history soft-acquire on Open, lazy
+  `EnsureLoaded` + real `PipelineScheduler` only when producing; test producer hook for shell
   first-frame proof; presentation sink resolver from `EditorSessionController`.
 - Geometry: `LeaseFrameSink::EnsureSize` re-emits on image generation/identity change even when
   width/height match; `forceRenderReferenceSize` + QML `onTargetSizeRequested` force-apply.
@@ -1774,7 +1775,7 @@ Current production route (do not reintroduce lease/broker presentation):
 EditorSessionController / interaction / panels
   -> EditorSessionService (typed intents only)
   -> EditorRenderCoordinator (sole scheduler owner)
-  -> EditorSessionProductionSchedulerPort
+  -> EditorSessionRenderSchedulerPort
   -> DirectFrameSink / DirectPresentQueue
   -> EditorViewportRenderer (scene-graph import + QQuickRhiItem pass)
 ```
@@ -1783,7 +1784,7 @@ Deliverables:
 
 - Connect the coordinator to the production pipeline guards, background-task registration, and the
   Phase 5C direct presentation sink behind `EditorViewportItem`. **Done:** production pipeline/history
-  ports, `EditorSessionProductionTaskPort` → `BackgroundTaskController` (`EditorSave`), and
+  ports, `EditorSessionTaskPort` → `BackgroundTaskController` (`EditorSave`), and
   `presentation_frame_sink()` → `DirectFrameSink`.
 - Remove or disable every QML-editor path that directly attaches its own sink, creates an editor
   render task, or independently decides preview timing. Keep only the coordinator-owned route.

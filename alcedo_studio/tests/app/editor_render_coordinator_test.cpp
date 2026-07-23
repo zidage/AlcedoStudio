@@ -636,7 +636,7 @@ TEST_F(EditorRenderCoordinatorTest, ViewGenerationCancelDoesNotDeadlockOnTokenRe
       cancelled_.push_back(job_id);
       auto it = tokens_.find(job_id);
       if (it != tokens_.end() && it->second) {
-        // Mirrors EditorSessionProductionSchedulerPort::Cancel: token Cancel
+        // Mirrors EditorSessionRenderSchedulerPort::Cancel: token Cancel
         // invokes the coordinator's CancelRequest re-entry path.
         it->second->Cancel();
       }

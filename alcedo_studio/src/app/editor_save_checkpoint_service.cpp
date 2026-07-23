@@ -49,7 +49,7 @@ EditorSaveCheckpointService::~EditorSaveCheckpointService() {
   }
 }
 
-auto EditorSaveCheckpointService::Start(const SaveCheckpointRequest& request,
+auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
                                         SaveCheckpointCompletion completion) -> CheckpointTicket {
   std::uint64_t task_id = 0;
   if (deps_.tasks) {
@@ -74,7 +74,7 @@ auto EditorSaveCheckpointService::Start(const SaveCheckpointRequest& request,
   {
     std::scoped_lock lock(mutex_);
     pending_saves_.push_back(PendingSave{request_id, request.session_generation, request.element_id,
-                                         task_id, completion});
+                                         task_id, std::move(request.capture), completion});
   }
 
   struct StartObservation {
@@ -175,11 +175,12 @@ void EditorSaveCheckpointService::OnCheckpointFinished(const SaveCheckpointResul
 void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t              request_id,
                                                       EditorJournalCommitOutcome outcome,
                                                       SaveCheckpointCompletion   completion) {
-  std::uint64_t   task_id           = 0;
-  sl_element_id_t element_id        = 0;
-  std::uint64_t   session_gen       = 0;
-  bool            found             = false;
-  bool            start_materialize = false;
+  std::uint64_t                                   task_id           = 0;
+  sl_element_id_t                                 element_id        = 0;
+  std::uint64_t                                   session_gen       = 0;
+  bool                                            found             = false;
+  bool                                            start_materialize = false;
+  std::shared_ptr<const EditorMiniGitSaveCapture> capture;
   {
     std::scoped_lock lock(mutex_);
     auto             it = std::find_if(
@@ -195,10 +196,12 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
 
     if (!outcome.accepted || !outcome.durable) {
       pending_saves_.erase(it);
-    } else if (!deps_.journal) {
-      pending_saves_.erase(it);
     } else {
-      start_materialize = true;
+      capture           = it->capture;
+      start_materialize = static_cast<bool>(capture) && static_cast<bool>(deps_.checkpoint_store);
+      if (!start_materialize) {
+        pending_saves_.erase(it);
+      }
     }
   }
 
@@ -208,8 +211,8 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
 
   if (start_materialize) {
     const auto gate    = callback_gate_;
-    const bool started = deps_.journal->MaterializeAsync(
-        element_id, session_gen,
+    const bool started = deps_.checkpoint_store->MaterializeAsync(
+        capture,
         [this, gate, request_id, completion](EditorMaterializeOutcome materialized) mutable {
           if (!gate || !gate->Enter()) {
             return;
@@ -238,9 +241,10 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
 void EditorSaveCheckpointService::HandleMaterialization(std::uint64_t            request_id,
                                                         EditorMaterializeOutcome outcome,
                                                         SaveCheckpointCompletion completion) {
-  std::uint64_t task_id     = 0;
-  std::uint64_t session_gen = 0;
-  bool          found       = false;
+  std::uint64_t   task_id     = 0;
+  sl_element_id_t element_id  = 0;
+  std::uint64_t   session_gen = 0;
+  bool            found       = false;
   {
     std::scoped_lock lock(mutex_);
     auto             it = std::find_if(
@@ -251,6 +255,7 @@ void EditorSaveCheckpointService::HandleMaterialization(std::uint64_t           
     }
     found       = true;
     task_id     = it->task_id;
+    element_id  = it->element_id;
     session_gen = it->session_generation;
     pending_saves_.erase(it);
   }
@@ -262,6 +267,9 @@ void EditorSaveCheckpointService::HandleMaterialization(std::uint64_t           
       outcome.error.empty()
           ? (outcome.materialized ? "Editor session materialized" : "Editor materialization failed")
           : outcome.error;
+  if (ok && deps_.thumbnails) {
+    deps_.thumbnails->Invalidate(element_id);
+  }
   FinishSave(request_id, session_gen, task_id, ok, msg, completion);
 }
 

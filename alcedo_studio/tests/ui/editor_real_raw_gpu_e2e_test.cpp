@@ -176,13 +176,13 @@ TEST_F(EditorRealRawGpuE2eTest,
           QStringLiteral("editorInteractionController"));
       ASSERT_NE(interaction, nullptr);
       const auto scheduled_before_zoom =
-          host.editor_session_production_scheduler()->last_scheduled().size();
+          host.editor_session_scheduler()->last_scheduled().size();
 
       interaction->handleDoubleTap(viewport->width() * 0.5, viewport->height() * 0.5);
 
       ASSERT_TRUE(WaitUntil(
           [&] {
-            const auto requests = host.editor_session_production_scheduler()->last_scheduled();
+            const auto requests = host.editor_session_scheduler()->last_scheduled();
             return requests.size() > scheduled_before_zoom &&
                    requests.back().intent.reason == EditorRenderReason::DetailRefresh &&
                    requests.back().intent.frame_role == FrameRole::DetailPatch;
@@ -191,8 +191,7 @@ TEST_F(EditorRealRawGpuE2eTest,
           << "Settled double-click zoom did not reach the production scheduler as DetailPatch; "
           << "session=" << EditorSessionStateName(host.editor_session_service()->state());
 
-      const auto detail_request =
-          host.editor_session_production_scheduler()->last_scheduled().back();
+      const auto detail_request = host.editor_session_scheduler()->last_scheduled().back();
       ASSERT_TRUE(detail_request.intent.view_region.has_value());
       EXPECT_LT(detail_request.intent.view_region->scale_x_, 1.0f);
       EXPECT_LT(detail_request.intent.view_region->scale_y_, 1.0f);
@@ -214,7 +213,7 @@ TEST_F(EditorRealRawGpuE2eTest,
       ProcessEvents(250);
 
       const auto scheduled_before_pan =
-          host.editor_session_production_scheduler()->last_scheduled().size();
+          host.editor_session_scheduler()->last_scheduled().size();
       const auto center_x = viewport->width() * 0.5;
       const auto center_y = viewport->height() * 0.5;
       interaction->handlePress(center_x, center_y, static_cast<int>(Qt::LeftButton));
@@ -224,13 +223,12 @@ TEST_F(EditorRealRawGpuE2eTest,
 
       ASSERT_TRUE(WaitUntil(
           [&] {
-            return host.editor_session_production_scheduler()->last_scheduled().size() >
+            return host.editor_session_scheduler()->last_scheduled().size() >
                    scheduled_before_pan;
           },
           std::chrono::seconds(5)))
           << "Settled pan did not schedule a replacement DetailPatch";
-      const auto panned_detail =
-          host.editor_session_production_scheduler()->last_scheduled().back();
+      const auto panned_detail = host.editor_session_scheduler()->last_scheduled().back();
       ASSERT_EQ(panned_detail.intent.frame_role, FrameRole::DetailPatch);
       EXPECT_NE(panned_detail.request_id, detail_request.request_id);
       ASSERT_TRUE(WaitUntil(
@@ -263,7 +261,7 @@ TEST_F(EditorRealRawGpuE2eTest,
                  host.editor_session_service()->state() == EditorSessionState::Failed;
         },
         std::chrono::minutes(2)));
-    const auto scheduled = host.editor_session_production_scheduler()->last_scheduled();
+    const auto scheduled = host.editor_session_scheduler()->last_scheduled();
     const auto* last_intent = scheduled.empty() ? nullptr : &scheduled.back().intent;
     ASSERT_TRUE(first_frame_ready())
         << host.editor_session_service()->last_error() << " backend="
@@ -327,12 +325,13 @@ TEST_F(EditorRealRawGpuE2eTest,
       });
   // Phase 5C: exactly one first-frame composition confirmation per image open.
   EXPECT_GE(presented_count, switch_count);
-  EXPECT_EQ(host.editor_session_production_scheduler()->pending_present_request_id(), 0u);
+  EXPECT_EQ(host.editor_session_scheduler()->pending_present_request_id(), 0u);
 
   host.workspace_router()->OpenLibrary();
   ProcessEvents(200);
   EXPECT_FALSE(host.editor_session()->presentation_viewport_bound());
-  EXPECT_TRUE(warnings.empty()) << (warnings.empty() ? std::string{} : warnings.front().toString().toStdString());
+  EXPECT_TRUE(warnings.empty()) << (warnings.empty() ? std::string{}
+                                                     : warnings.front().toString().toStdString());
 }
 
 }  // namespace

@@ -1890,10 +1890,13 @@ add_library(AlbumBackendLib STATIC
     ui/alcedo_main/album_backend/editor_tone_curve_item.cpp
     # Pure tone-curve math (shared with the legacy QWidget curve editor).
     ui/alcedo_main/editor_dialog/modules/curve.cpp
-    ui/alcedo_main/album_backend/editor_session_production.cpp
-    ui/alcedo_main/album_backend/editor_session_production_journal_writer_port.cpp
-    ui/alcedo_main/album_backend/editor_session_production_checkpoint_store.cpp
-    ui/alcedo_main/album_backend/editor_session_production_thumbnail_port.cpp
+    ui/alcedo_main/album_backend/editor_session_pipeline_port.cpp
+    ui/alcedo_main/album_backend/editor_session_task_port.cpp
+    ui/alcedo_main/album_backend/editor_session_history_port.cpp
+    ui/alcedo_main/album_backend/editor_session_journal_writer_port.cpp
+    ui/alcedo_main/album_backend/editor_session_checkpoint_store.cpp
+    ui/alcedo_main/album_backend/editor_session_thumbnail_port.cpp
+    ui/alcedo_main/album_backend/editor_session_render_scheduler_port.cpp
     ui/alcedo_main/album_backend/workspace_router.cpp
     ui/alcedo_main/album_backend/adjustment_transfer_controller.cpp
     # Phase 5B: reusable dialog-free pipeline helpers for the QML open path.
@@ -1927,10 +1930,13 @@ add_library(AlbumBackendLib STATIC
     include/ui/alcedo_main/album_backend/editor_tone_curve_model.hpp
     include/ui/alcedo_main/album_backend/editor_tone_curve_item.hpp
     include/ui/alcedo_main/editor_dialog/modules/curve.hpp
-    include/ui/alcedo_main/album_backend/editor_session_production.hpp
-    include/ui/alcedo_main/album_backend/editor_session_production_journal_writer_port.hpp
-    include/ui/alcedo_main/album_backend/editor_session_production_checkpoint_store.hpp
-    include/ui/alcedo_main/album_backend/editor_session_production_thumbnail_port.hpp
+    include/ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp
+    include/ui/alcedo_main/album_backend/editor_session_task_port.hpp
+    include/ui/alcedo_main/album_backend/editor_session_history_port.hpp
+    include/ui/alcedo_main/album_backend/editor_session_journal_writer_port.hpp
+    include/ui/alcedo_main/album_backend/editor_session_checkpoint_store.hpp
+    include/ui/alcedo_main/album_backend/editor_session_thumbnail_port.hpp
+    include/ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp
     include/ui/alcedo_main/album_backend/workspace_router.hpp
     include/ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp
     include/ui/alcedo_main/editor_dialog/controllers/image_controller.hpp

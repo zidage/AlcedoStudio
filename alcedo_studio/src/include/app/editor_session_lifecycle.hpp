@@ -17,7 +17,7 @@ namespace alcedo {
 /// so the facade can decide how to publish the result without reading private
 /// state. Only the success path contains a usable identity snapshot.
 struct AcquireImageOutcome {
-  bool                  accepted   = false;
+  bool                  accepted = false;
   EditorSessionIdentity identity{};
   std::string           error;
 };
@@ -25,7 +25,7 @@ struct AcquireImageOutcome {
 /// Outcome of a save-seal operation. Returned by Lifecycle::SealForCheckpoint
 /// so the facade can publish the SaveStarted result.
 struct SealOutcome {
-  bool                  accepted   = false;
+  bool                  accepted = false;
   EditorSessionIdentity identity{};
   std::string           error;
 };
@@ -54,55 +54,55 @@ class EditorSessionLifecycle final {
   /// Acquiring (open) or Switching (switch), and recover the journal. On
   /// recovery failure, transitions to Failed and returns false. The caller is
   /// responsible for acquiring guards after this succeeds.
-  auto BeginAcquire(sl_element_id_t element_id, image_id_t image_id, bool is_switch,
-                    IEditorJournalPort* journal, std::string* error) -> bool;
+  auto               BeginAcquire(sl_element_id_t element_id, image_id_t image_id, bool is_switch,
+                                  IEditorCheckpointStore* checkpoint_store, std::string* error) -> bool;
 
   /// Acquire pipeline and history guards for the current image. Returns false
   /// and transitions to Failed on failure. Must be called after BeginAcquire.
-  auto AcquireGuards(std::string* error) -> bool;
+  auto               AcquireGuards(std::string* error) -> bool;
 
   /// Mark the image ready after guards succeed. Stays in Loading until the
   /// first frame is presented. Returns the identity snapshot for event
   /// publication.
-  auto MarkImageReady() -> EditorSessionIdentity;
+  auto               MarkImageReady() -> EditorSessionIdentity;
 
   /// Keep the current image after a save-checkpoint failure. Transitions to
   /// Failed with the given message. Guards are retained.
-  void KeepCurrentAfterCheckpointFailure(std::string message);
+  void               KeepCurrentAfterCheckpointFailure(std::string message);
 
   /// Release the current image's guards after a successful checkpoint. Returns
   /// the released identity for diagnostics.
-  auto ReleaseAfterCheckpoint() -> ReleaseOutcome;
+  auto               ReleaseAfterCheckpoint() -> ReleaseOutcome;
 
   /// Release the current image's guards immediately (discard / no-save paths).
-  void ReleaseGuards();
+  void               ReleaseGuards();
 
   /// Complete a close after a successful checkpoint: clear identity and
   /// transition to NoImage.
-  void CompleteClose();
+  void               CompleteClose();
 
   /// Begin shutdown: the caller seals first, then calls this to clear state
   /// and transition to ShuttingDown.
-  void BeginShutdown();
+  void               BeginShutdown();
 
   /// Mark the first frame presented and transition to Interactive. Returns
   /// the identity snapshot if the transition happened, nullopt otherwise.
-  auto MarkFirstFramePresented() -> std::optional<EditorSessionIdentity>;
+  auto               MarkFirstFramePresented() -> std::optional<EditorSessionIdentity>;
 
   /// Retry from Failed after a discard: transition to Loading.
-  void BeginRetryFromDiscard();
+  void               BeginRetryFromDiscard();
 
   /// Transition to Saving. Called by the save controller when a checkpoint
   /// starts.
-  void BeginCheckpoint();
+  void               BeginCheckpoint();
 
   /// Transition back to Interactive after a successful checkpoint with no
   /// pending navigation.
-  void CompleteCheckpoint();
+  void               CompleteCheckpoint();
 
   /// Fail the current session with an error message. Used by render and save
   /// controllers when a failure should transition to Failed.
-  void Fail(std::string message);
+  void               Fail(std::string message);
 
   /// Read-only snapshot of the current state. Thread-safe.
   [[nodiscard]] auto state() const -> EditorSessionState;
@@ -124,10 +124,10 @@ class EditorSessionLifecycle final {
 
   /// Advance the render generation for a content-changing edit or geometry
   /// change. Returns the new render generation.
-  auto AdvanceRenderGeneration() -> std::uint64_t;
+  auto               AdvanceRenderGeneration() -> std::uint64_t;
   /// Advance the view generation for a pure view transform or detail refresh.
   /// Returns the new view generation.
-  auto AdvanceViewGeneration() -> std::uint64_t;
+  auto               AdvanceViewGeneration() -> std::uint64_t;
 
   /// True when the element/image matches the current identity. Used by the
   /// render controller to filter stale results.
@@ -135,13 +135,13 @@ class EditorSessionLifecycle final {
                                      std::uint64_t session_generation) const -> bool;
 
  private:
-  Dependencies                deps_;
+  Dependencies                 deps_;
   mutable std::recursive_mutex mutex_;
-  EditorSessionState          state_     = EditorSessionState::NoImage;
-  EditorSessionIdentity       identity_{};
-  EditorPipelineGuardHandle   pipeline_guard_{};
-  EditorHistoryGuardHandle    history_guard_{};
-  std::string                 last_error_;
+  EditorSessionState           state_ = EditorSessionState::NoImage;
+  EditorSessionIdentity        identity_{};
+  EditorPipelineGuardHandle    pipeline_guard_{};
+  EditorHistoryGuardHandle     history_guard_{};
+  std::string                  last_error_;
 };
 
 }  // namespace alcedo

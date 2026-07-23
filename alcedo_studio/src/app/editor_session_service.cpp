@@ -17,8 +17,9 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
     : dependencies_(std::move(dependencies)),
       lifecycle_(
           EditorSessionLifecycle::Dependencies{dependencies_.pipeline, dependencies_.history}),
-      save_service_(
-          EditorSaveCheckpointService::Dependencies{dependencies_.journal, dependencies_.tasks}),
+      save_service_(EditorSaveCheckpointService::Dependencies{
+          dependencies_.journal, dependencies_.checkpoint_store, dependencies_.thumbnails,
+          dependencies_.tasks}),
       render_(EditorSessionRenderController::Dependencies{
           dependencies_.render,
           [this](const EditorRenderEvent& event) {
@@ -68,7 +69,7 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
       edit_(
           EditorSessionEditController::Dependencies{dependencies_.history, dependencies_.journal}),
       navigation_(lifecycle_, save_service_, render_, edit_, dependencies_.journal.get(),
-                  dependencies_.history.get()) {}
+                  dependencies_.checkpoint_store.get(), dependencies_.history.get()) {}
 
 EditorSessionService::~EditorSessionService() { save_service_.CancelAndWait(); }
 

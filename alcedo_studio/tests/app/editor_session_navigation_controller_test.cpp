@@ -19,6 +19,12 @@
 namespace alcedo {
 namespace {
 
+auto MakeOpaqueCapture() -> std::shared_ptr<const EditorMiniGitSaveCapture> {
+  static const int token = 0;
+  return {reinterpret_cast<const EditorMiniGitSaveCapture*>(&token),
+          [](const EditorMiniGitSaveCapture*) {}};
+}
+
 class FakePipelinePort final : public IEditorPipelinePort {
  public:
   auto Acquire(sl_element_id_t element_id, std::string*) -> EditorPipelineGuardHandle override {
@@ -42,7 +48,11 @@ class FakeHistoryPort final : public IEditorHistoryPort {
                               std::string*) -> bool override {
     return true;
   }
-  int acquire_count = 0;
+  int  acquire_count = 0;
+  auto CaptureSaveCheckpoint(const EditorHistoryGuardHandle&, std::string*)
+      -> std::shared_ptr<const EditorMiniGitSaveCapture> override {
+    return MakeOpaqueCapture();
+  }
 };
 
 class FakeTaskPort final : public IEditorTaskPort {
@@ -73,7 +83,6 @@ class FakeJournalPort final : public IEditorJournalPort {
   bool                        async_commit = false;
   bool                        fail_barrier = false;
   EditorJournalCommitCallback pending_commit;
-  EditorMaterializeCallback   pending_materialize;
   bool                        finalize_succeeds = true;
 
   auto FinalizeEdit(sl_element_id_t, std::uint64_t, std::string* error) -> bool override {
@@ -100,37 +109,45 @@ class FakeJournalPort final : public IEditorJournalPort {
     pending_commit = std::move(callback);
     return true;
   }
-  auto MaterializeAsync(sl_element_id_t element_id, std::uint64_t session_generation,
-                        EditorMaterializeCallback callback) -> bool override {
-    if (async_commit) {
-      pending_materialize = std::move(callback);
-      return true;
-    }
-    return IEditorJournalPort::MaterializeAsync(element_id, session_generation,
-                                                std::move(callback));
-  }
   void CompleteCommit(bool durable) {
     ASSERT_TRUE(static_cast<bool>(pending_commit));
     auto cb = std::move(pending_commit);
     cb(EditorJournalCommitOutcome{
         true, durable, !durable, durable ? 2u : 0u, durable ? 1u : 0u, {}});
   }
+  auto DiscardUnflushed(sl_element_id_t, std::string*) -> bool override { return true; }
+};
+
+class FakeCheckpointStore final : public IEditorCheckpointStore {
+ public:
+  EditorMaterializeCallback pending_materialize;
+
+  auto MaterializeAsync(std::shared_ptr<const EditorMiniGitSaveCapture> capture,
+                        EditorMaterializeCallback                       callback) -> bool override {
+    if (async_materialize) {
+      pending_materialize = std::move(callback);
+      return true;
+    }
+    return IEditorCheckpointStore::MaterializeAsync(std::move(capture), std::move(callback));
+  }
+
   void CompleteMaterialization(bool materialized, std::string error = {}) {
     ASSERT_TRUE(static_cast<bool>(pending_materialize));
     auto cb = std::move(pending_materialize);
     cb(EditorMaterializeOutcome{true, materialized, materialized ? 1u : 0u, std::move(error)});
   }
-  auto DiscardUnflushed(sl_element_id_t, std::string*) -> bool override { return true; }
+  bool async_materialize = false;
 };
 
 class EditorSessionNavigationControllerTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    pipeline_    = std::make_shared<FakePipelinePort>();
-    history_     = std::make_shared<FakeHistoryPort>();
-    tasks_       = std::make_shared<FakeTaskPort>();
-    journal_     = std::make_shared<FakeJournalPort>();
-    render_port_ = std::make_shared<FakeRenderPort>();
+    pipeline_         = std::make_shared<FakePipelinePort>();
+    history_          = std::make_shared<FakeHistoryPort>();
+    tasks_            = std::make_shared<FakeTaskPort>();
+    journal_          = std::make_shared<FakeJournalPort>();
+    checkpoint_store_ = std::make_shared<FakeCheckpointStore>();
+    render_port_      = std::make_shared<FakeRenderPort>();
 
     EditorSessionLifecycle::Dependencies life_deps;
     life_deps.pipeline = pipeline_;
@@ -138,9 +155,10 @@ class EditorSessionNavigationControllerTest : public ::testing::Test {
     lifecycle_         = std::make_unique<EditorSessionLifecycle>(std::move(life_deps));
 
     EditorSaveCheckpointService::Dependencies save_deps;
-    save_deps.journal = journal_;
-    save_deps.tasks   = tasks_;
-    save_service_     = std::make_unique<EditorSaveCheckpointService>(std::move(save_deps));
+    save_deps.journal          = journal_;
+    save_deps.checkpoint_store = checkpoint_store_;
+    save_deps.tasks            = tasks_;
+    save_service_ = std::make_unique<EditorSaveCheckpointService>(std::move(save_deps));
 
     EditorSessionRenderController::Dependencies render_deps{
         render_port_,
@@ -152,7 +170,8 @@ class EditorSessionNavigationControllerTest : public ::testing::Test {
     edit_ = std::make_unique<EditorSessionEditController>(std::move(edit_deps));
 
     nav_  = std::make_unique<EditorSessionNavigationController>(
-        *lifecycle_, *save_service_, *render_, *edit_, journal_.get(), history_.get());
+        *lifecycle_, *save_service_, *render_, *edit_, journal_.get(), checkpoint_store_.get(),
+        history_.get());
   }
 
   void OpenA() {
@@ -167,6 +186,7 @@ class EditorSessionNavigationControllerTest : public ::testing::Test {
   std::shared_ptr<FakeHistoryPort>                   history_;
   std::shared_ptr<FakeTaskPort>                      tasks_;
   std::shared_ptr<FakeJournalPort>                   journal_;
+  std::shared_ptr<FakeCheckpointStore>               checkpoint_store_;
   std::shared_ptr<FakeRenderPort>                    render_port_;
   std::unique_ptr<EditorSessionLifecycle>            lifecycle_;
   std::unique_ptr<EditorSaveCheckpointService>       save_service_;
@@ -187,7 +207,8 @@ TEST_F(EditorSessionNavigationControllerTest, OpenWithNoPriorImageCompletesSynch
 }
 
 TEST_F(EditorSessionNavigationControllerTest, SwitchToBWaitsForASaveCheckpoint) {
-  journal_->async_commit = true;
+  journal_->async_commit               = true;
+  checkpoint_store_->async_materialize = true;
   OpenA();
 
   const auto result = nav_->RequestOpenOrSwitch(3, 4, true);
@@ -198,7 +219,7 @@ TEST_F(EditorSessionNavigationControllerTest, SwitchToBWaitsForASaveCheckpoint) 
 
   // Simulate successful save completion.
   journal_->CompleteCommit(true);
-  journal_->CompleteMaterialization(true);
+  checkpoint_store_->CompleteMaterialization(true);
   // The navigation controller's OnCheckpointFinished is the callback registered
   // by SealAndStartSave. Since the save was async, the callback fires when
   // CompleteMaterialization finishes. Let the save service process it.
@@ -211,21 +232,23 @@ TEST_F(EditorSessionNavigationControllerTest, SwitchToBWaitsForASaveCheckpoint) 
 }
 
 TEST_F(EditorSessionNavigationControllerTest, SaveFailureKeepsAAndDiscardsPendingAction) {
-  journal_->async_commit = true;
+  journal_->async_commit               = true;
+  checkpoint_store_->async_materialize = true;
   OpenA();
 
   const auto result = nav_->RequestOpenOrSwitch(3, 4, true);
   EXPECT_TRUE(result.waiting_for_checkpoint);
 
   journal_->CompleteCommit(true);
-  journal_->CompleteMaterialization(false, "A materialization failed");
+  checkpoint_store_->CompleteMaterialization(false, "A materialization failed");
   // OnCheckpointFinished processes the failure. The prior image A remains.
   EXPECT_FALSE(nav_->has_pending_action());
   EXPECT_EQ(lifecycle_->state(), EditorSessionState::Failed);
 }
 
 TEST_F(EditorSessionNavigationControllerTest, SecondActionDoesNotReplaceOriginalTarget) {
-  journal_->async_commit = true;
+  journal_->async_commit               = true;
+  checkpoint_store_->async_materialize = true;
   OpenA();
 
   const auto first = nav_->RequestOpenOrSwitch(3, 4, true);
@@ -247,7 +270,8 @@ TEST_F(EditorSessionNavigationControllerTest, CloseWithNoPriorImageCompletesSync
 }
 
 TEST_F(EditorSessionNavigationControllerTest, CloseWaitsForSaveThenCompletes) {
-  journal_->async_commit = true;
+  journal_->async_commit               = true;
+  checkpoint_store_->async_materialize = true;
   OpenA();
 
   const auto result = nav_->RequestClose(true);
@@ -255,7 +279,7 @@ TEST_F(EditorSessionNavigationControllerTest, CloseWaitsForSaveThenCompletes) {
   EXPECT_TRUE(nav_->has_pending_action());
 
   journal_->CompleteCommit(true);
-  journal_->CompleteMaterialization(true);
+  checkpoint_store_->CompleteMaterialization(true);
   // OnCheckpointFinished should have processed the result.
   EXPECT_FALSE(nav_->has_pending_action());
 }
@@ -321,7 +345,8 @@ TEST_F(EditorSessionNavigationControllerTest, SyncCloseCompletesImmediately) {
 // ── Stale completions ───────────────────────────────────────────────────────
 
 TEST_F(EditorSessionNavigationControllerTest, StaleCompletionWithWrongRequestIdKeepsPendingAction) {
-  journal_->async_commit = true;
+  journal_->async_commit               = true;
+  checkpoint_store_->async_materialize = true;
   OpenA();
 
   const auto result = nav_->RequestOpenOrSwitch(3, 4, true);
@@ -341,14 +366,15 @@ TEST_F(EditorSessionNavigationControllerTest, StaleCompletionWithWrongRequestIdK
 
   // Complete the real save.
   journal_->CompleteCommit(true);
-  journal_->CompleteMaterialization(true);
+  checkpoint_store_->CompleteMaterialization(true);
   EXPECT_FALSE(nav_->has_pending_action());
   EXPECT_EQ(lifecycle_->identity().element_id, static_cast<sl_element_id_t>(3));
 }
 
 TEST_F(EditorSessionNavigationControllerTest,
        StaleCompletionWithWrongSessionGenerationKeepsPendingAction) {
-  journal_->async_commit = true;
+  journal_->async_commit               = true;
+  checkpoint_store_->async_materialize = true;
   OpenA();
 
   const auto result = nav_->RequestOpenOrSwitch(3, 4, true);

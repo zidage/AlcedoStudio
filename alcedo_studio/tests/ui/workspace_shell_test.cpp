@@ -41,7 +41,7 @@
 #include "app/editor_render_intent.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
-#include "ui/alcedo_main/album_backend/editor_session_production.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp"
 #include "ui/album_backend_seeded_project_fixture.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/alcedo_main/editor_dialog/editor_dialog.hpp"
@@ -810,11 +810,11 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
 
-  auto* production_scheduler = loaded->host.editor_session_production_scheduler();
-  ASSERT_NE(production_scheduler, nullptr);
+  auto* scheduler = loaded->host.editor_session_scheduler();
+  ASSERT_NE(scheduler, nullptr);
 
   std::atomic<int> written_frame_count{0};
-  production_scheduler->SetTestFrameProducer(
+  scheduler->SetTestFrameProducer(
       [&written_frame_count](alcedo::IFrameSink* sink,
                              const alcedo::EditorRenderRequest& request) -> bool {
         if (!sink) {

@@ -1221,48 +1221,123 @@ if(WIN32)
   endif()
 endif()
 
-# Phase 5H-Fix: production journal port wires EditorHistoryMaterializer into the
-# real editor session (materialize/recover/compact) and exposes the edit-recording
-# seams. Links AlbumBackendLib (Qt) + a real ProjectService for DuckDB round-trip.
-add_executable(EditorSessionProductionJournalPortTest
-    edit/history/editor_session_production_journal_test.cpp)
-target_include_directories(EditorSessionProductionJournalPortTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditorSessionProductionJournalPortTest
+# Journal writer port tests cover append ordering, durability, and discard.
+# The target links AlbumBackendLib for the same writer implementation used by the
+# application and a real ProjectService for its storage-backed environment.
+add_executable(EditorSessionJournalWriterPortTest
+    edit/history/editor_session_journal_writer_port_test.cpp)
+target_include_directories(EditorSessionJournalWriterPortTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorSessionJournalWriterPortTest
   AlbumBackendLib
-  EditorHistoryMaterializer
   ProjectService
   EditHistory
   GTest::gtest_main)
-gtest_discover_tests(EditorSessionProductionJournalPortTest
-  TEST_PREFIX "EditorSessionProductionJournalPortTest."
-  PROPERTIES LABELS "ci_core_flow")
+gtest_discover_tests(EditorSessionJournalWriterPortTest
+  TEST_PREFIX "EditorSessionJournalWriterPortTest."
+  PROPERTIES LABELS "editor_history;editor_session")
 if(WIN32)
   if(TARGET alcedo_lensfun)
-    add_custom_command(TARGET EditorSessionProductionJournalPortTest POST_BUILD
+    add_custom_command(TARGET EditorSessionJournalWriterPortTest POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
               "$<TARGET_FILE:alcedo_lensfun>"
-              "$<TARGET_FILE_DIR:EditorSessionProductionJournalPortTest>/lensfun.dll"
+              "$<TARGET_FILE_DIR:EditorSessionJournalWriterPortTest>/lensfun.dll"
       VERBATIM)
   endif()
   if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
-    add_custom_command(TARGET EditorSessionProductionJournalPortTest POST_BUILD
+    add_custom_command(TARGET EditorSessionJournalWriterPortTest POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
               "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll"
-              "$<TARGET_FILE_DIR:EditorSessionProductionJournalPortTest>/duckdb.dll"
+              "$<TARGET_FILE_DIR:EditorSessionJournalWriterPortTest>/duckdb.dll"
+      VERBATIM)
+  endif()
+endif()
+
+# Editor session history owns Mini-Git working state and immutable captures.
+add_executable(EditorSessionHistoryPortTest
+    edit/history/editor_session_history_port_test.cpp)
+target_include_directories(EditorSessionHistoryPortTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorSessionHistoryPortTest
+  AlbumBackendLib
+  ProjectService
+  EditHistory
+  GTest::gtest_main)
+gtest_discover_tests(EditorSessionHistoryPortTest
+  TEST_PREFIX "EditorSessionHistoryPortTest."
+  PROPERTIES LABELS "editor_history;editor_session")
+if(WIN32)
+  if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
+    add_custom_command(TARGET EditorSessionHistoryPortTest POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll"
+              "$<TARGET_FILE_DIR:EditorSessionHistoryPortTest>/duckdb.dll"
+      VERBATIM)
+  endif()
+endif()
+
+# Checkpoint storage owns Mini-Git materialization and recovery.
+add_executable(EditorSessionCheckpointStoreTest
+    edit/history/editor_session_checkpoint_store_test.cpp)
+target_include_directories(EditorSessionCheckpointStoreTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorSessionCheckpointStoreTest
+  AlbumBackendLib
+  ProjectService
+  EditHistory
+  GTest::gtest_main)
+gtest_discover_tests(EditorSessionCheckpointStoreTest
+  TEST_PREFIX "EditorSessionCheckpointStoreTest."
+  PROPERTIES LABELS "editor_history;editor_session")
+if(WIN32)
+  if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
+    add_custom_command(TARGET EditorSessionCheckpointStoreTest POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll"
+              "$<TARGET_FILE_DIR:EditorSessionCheckpointStoreTest>/duckdb.dll"
       VERBATIM)
   endif()
 endif()
 
 # Phase 6C-5: thumbnail invalidation port unit tests (no project/database needed).
-add_executable(EditorSessionProductionThumbnailPortTest
-    ui/editor_session_production_thumbnail_port_test.cpp)
-target_include_directories(EditorSessionProductionThumbnailPortTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditorSessionProductionThumbnailPortTest
+add_executable(EditorSessionThumbnailPortTest
+    ui/editor_session_thumbnail_port_test.cpp)
+target_include_directories(EditorSessionThumbnailPortTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorSessionThumbnailPortTest
   AlbumBackendLib
   GTest::gtest_main)
-gtest_discover_tests(EditorSessionProductionThumbnailPortTest
-  TEST_PREFIX "EditorSessionProductionThumbnailPortTest."
-  PROPERTIES LABELS "ci_core_flow;editor_session")
+gtest_discover_tests(EditorSessionThumbnailPortTest
+  TEST_PREFIX "EditorSessionThumbnailPortTest."
+  PROPERTIES LABELS "editor_session")
+
+# Pipeline guard and task publication ports own their state independently.
+add_executable(EditorSessionPipelinePortTest
+    ui/editor_session_pipeline_port_test.cpp)
+target_include_directories(EditorSessionPipelinePortTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorSessionPipelinePortTest
+  AlbumBackendLib
+  EditHistory
+  GTest::gtest_main)
+gtest_discover_tests(EditorSessionPipelinePortTest
+  TEST_PREFIX "EditorSessionPipelinePortTest."
+  PROPERTIES LABELS "editor_session")
+
+add_executable(EditorSessionTaskPortTest
+    ui/editor_session_task_port_test.cpp)
+target_include_directories(EditorSessionTaskPortTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorSessionTaskPortTest
+  AlbumBackendLib
+  GTest::gtest_main)
+gtest_discover_tests(EditorSessionTaskPortTest
+  TEST_PREFIX "EditorSessionTaskPortTest."
+  PROPERTIES LABELS "editor_session")
+
+add_executable(EditorSessionRenderSchedulerPortTest
+    ui/editor_session_render_scheduler_port_test.cpp)
+target_include_directories(EditorSessionRenderSchedulerPortTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorSessionRenderSchedulerPortTest
+  AlbumBackendLib
+  GTest::gtest_main)
+gtest_discover_tests(EditorSessionRenderSchedulerPortTest
+  TEST_PREFIX "EditorSessionRenderSchedulerPortTest."
+  PROPERTIES LABELS "editor_session")
 
 add_executable(ProjectServiceTest app/project_service_test.cpp)
 target_include_directories(ProjectServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
