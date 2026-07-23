@@ -216,6 +216,40 @@ class IEditorJournalPort {
   virtual auto DiscardUnflushed(sl_element_id_t element_id, std::string* error) -> bool = 0;
 };
 
+/// Phase 6C-5: narrow checkpoint store for save/recovery. Accepts an immutable
+/// capture and drives materialization through the Mini-Git materializer facade.
+class IEditorCheckpointStore {
+ public:
+  virtual ~IEditorCheckpointStore() = default;
+
+  virtual auto Materialize(sl_element_id_t /*element_id*/, std::uint64_t /*session_generation*/,
+                           std::string* /*error*/) -> EditorMaterializeOutcome {
+    return EditorMaterializeOutcome{true, true, 0, {}};
+  }
+
+  virtual auto MaterializeAsync(sl_element_id_t element_id, std::uint64_t session_generation,
+                                EditorMaterializeCallback callback) -> bool {
+    std::string error;
+    auto        outcome = Materialize(element_id, session_generation, &error);
+    if (outcome.error.empty()) outcome.error = std::move(error);
+    if (callback) callback(std::move(outcome));
+    return true;
+  }
+
+  virtual auto RecoverAndMaterialize(sl_element_id_t /*element_id*/,
+                                     std::uint64_t /*session_generation*/, std::string* /*error*/)
+      -> EditorMaterializeOutcome {
+    return EditorMaterializeOutcome{true, true, 0, {}};
+  }
+};
+
+/// Phase 6C-5: narrow thumbnail invalidation port.
+class IEditorThumbnailPort {
+ public:
+  virtual ~IEditorThumbnailPort()                     = default;
+  virtual void Invalidate(sl_element_id_t element_id) = 0;
+};
+
 /// Coordinator-facing diagnostics exposed to the session service for QML
 /// spinner/progress/error display (Phase 5D) and production cutover inspection
 /// (Phase 5E). QML never observes pipeline task objects — only this aggregate
@@ -252,10 +286,9 @@ enum class EditorRenderSupersessionPolicy : std::uint8_t {
 /// to the render controller; the render controller does not read adjustment
 /// state from any other component.
 struct EditorRenderCommand {
-  EditorRenderReason             reason     = EditorRenderReason::InitialFrame;
-  EditorRenderAdjustmentSnapshot adjustment{};
-  EditorRenderSupersessionPolicy policy =
-      EditorRenderSupersessionPolicy::CancelObsolete;
+  EditorRenderReason                  reason = EditorRenderReason::InitialFrame;
+  EditorRenderAdjustmentSnapshot      adjustment{};
+  EditorRenderSupersessionPolicy      policy = EditorRenderSupersessionPolicy::CancelObsolete;
   std::optional<ViewportRenderRegion> view_region;
 };
 

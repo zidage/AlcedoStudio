@@ -1451,13 +1451,37 @@ def_library(EditorSessionEditController
     PRIVATE_DEPS EditHistory
 )
 
-# Phase 6C-5: mini-Git journal fold validation, DuckDB materialization, and
-# journal truncation after success. Global save locking lives in
+# Phase 6C-5: pure journal fold algorithm. Replays MiniGitJournalRecord entries
+# against a CommitGraph without any database or file I/O.
+def_library(EditorMiniGitJournalFold
+    SOURCES app/editor_mini_git_journal_fold.cpp
+    PUBLIC_DEPS EditHistory
+)
+
+# Phase 6C-5: single DuckDB transaction writer for commit objects, Version refs,
+# ImageEditState, and serialized pipeline state. No pipeline replay or mutation.
+def_library(EditorMiniGitCommitWriter
+    SOURCES app/editor_mini_git_commit_writer.cpp
+    PUBLIC_DEPS ProjectService EditHistory StorageService
+)
+
+# Phase 6C-5: journal recovery: loads an existing journal, detects already-
+# materialized prefixes, folds remaining records, writes via CommitWriter, and
+# truncates the journal file after success.
+def_library(EditorMiniGitJournalRecovery
+    SOURCES app/editor_mini_git_journal_recovery.cpp
+    PUBLIC_DEPS EditHistory StorageService
+    PRIVATE_DEPS EditorMiniGitJournalFold EditorMiniGitCommitWriter
+)
+
+# Phase 6C-5: thin facade composing journal fold, DuckDB materialization, and
+# journal recovery + truncation. Global save locking lives in
 # EditorSaveCheckpointCoordinator.
 def_library(EditorMiniGitMaterializer
     SOURCES app/editor_mini_git_materializer.cpp
     PUBLIC_DEPS ProjectService EditHistory StorageService
-    PRIVATE_DEPS EditorSaveCheckpointCoordinator
+    PRIVATE_DEPS EditorSaveCheckpointCoordinator EditorMiniGitJournalFold
+                EditorMiniGitCommitWriter EditorMiniGitJournalRecovery
 )
 
 # Applies render-intent adjustment snapshots to a pipeline executor. Kept below
@@ -1867,6 +1891,9 @@ add_library(AlbumBackendLib STATIC
     # Pure tone-curve math (shared with the legacy QWidget curve editor).
     ui/alcedo_main/editor_dialog/modules/curve.cpp
     ui/alcedo_main/album_backend/editor_session_production.cpp
+    ui/alcedo_main/album_backend/editor_session_production_journal_writer_port.cpp
+    ui/alcedo_main/album_backend/editor_session_production_checkpoint_store.cpp
+    ui/alcedo_main/album_backend/editor_session_production_thumbnail_port.cpp
     ui/alcedo_main/album_backend/workspace_router.cpp
     ui/alcedo_main/album_backend/adjustment_transfer_controller.cpp
     # Phase 5B: reusable dialog-free pipeline helpers for the QML open path.
@@ -1901,6 +1928,9 @@ add_library(AlbumBackendLib STATIC
     include/ui/alcedo_main/album_backend/editor_tone_curve_item.hpp
     include/ui/alcedo_main/editor_dialog/modules/curve.hpp
     include/ui/alcedo_main/album_backend/editor_session_production.hpp
+    include/ui/alcedo_main/album_backend/editor_session_production_journal_writer_port.hpp
+    include/ui/alcedo_main/album_backend/editor_session_production_checkpoint_store.hpp
+    include/ui/alcedo_main/album_backend/editor_session_production_thumbnail_port.hpp
     include/ui/alcedo_main/album_backend/workspace_router.hpp
     include/ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp
     include/ui/alcedo_main/editor_dialog/controllers/image_controller.hpp

@@ -1142,7 +1142,63 @@ if(WIN32)
   endif()
 endif()
 
-# Phase 6C-5: mini-Git save checkpoint materialization, truncation, recovery.
+# Phase 6C-5: pure journal fold algorithm tests (no database or file I/O).
+add_executable(EditorMiniGitJournalFoldTest edit/history/editor_mini_git_journal_fold_test.cpp)
+target_include_directories(EditorMiniGitJournalFoldTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorMiniGitJournalFoldTest
+  EditorMiniGitJournalFold
+  EditHistory
+  GTest::gtest_main)
+gtest_discover_tests(EditorMiniGitJournalFoldTest TEST_PREFIX "EditorMiniGitJournalFoldTest."
+  PROPERTIES LABELS "ci_core_flow;edit;history")
+
+# Phase 6C-5: commit writer DuckDB transaction tests.
+add_executable(EditorMiniGitCommitWriterTest edit/history/editor_mini_git_commit_writer_test.cpp)
+target_include_directories(EditorMiniGitCommitWriterTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorMiniGitCommitWriterTest
+  EditorMiniGitCommitWriter
+  ProjectService
+  EditHistory
+  StorageService
+  GTest::gtest_main)
+gtest_discover_tests(EditorMiniGitCommitWriterTest TEST_PREFIX "EditorMiniGitCommitWriterTest."
+  PROPERTIES LABELS "ci_core_flow;edit;history")
+if(WIN32)
+  alcedo_copy_duckdb_extensions(EditorMiniGitCommitWriterTest)
+  if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
+    add_custom_command(TARGET EditorMiniGitCommitWriterTest POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll"
+              "$<TARGET_FILE_DIR:EditorMiniGitCommitWriterTest>/duckdb.dll"
+      VERBATIM)
+  endif()
+endif()
+
+# Phase 6C-5: journal recovery tests (load, detect materialized prefix, truncate).
+add_executable(EditorMiniGitJournalRecoveryTest edit/history/editor_mini_git_journal_recovery_test.cpp)
+target_include_directories(EditorMiniGitJournalRecoveryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorMiniGitJournalRecoveryTest
+  EditorMiniGitJournalRecovery
+  EditorMiniGitJournalFold
+  EditorMiniGitCommitWriter
+  ProjectService
+  EditHistory
+  StorageService
+  GTest::gtest_main)
+gtest_discover_tests(EditorMiniGitJournalRecoveryTest TEST_PREFIX "EditorMiniGitJournalRecoveryTest."
+  PROPERTIES LABELS "ci_core_flow;edit;history")
+if(WIN32)
+  alcedo_copy_duckdb_extensions(EditorMiniGitJournalRecoveryTest)
+  if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
+    add_custom_command(TARGET EditorMiniGitJournalRecoveryTest POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll"
+              "$<TARGET_FILE_DIR:EditorMiniGitJournalRecoveryTest>/duckdb.dll"
+      VERBATIM)
+  endif()
+endif()
+
+# Phase 6C-5: mini-Git save checkpoint materialization facade tests.
 add_executable(EditorMiniGitMaterializerTest edit/history/editor_mini_git_materializer_test.cpp)
 target_include_directories(EditorMiniGitMaterializerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorMiniGitMaterializerTest
@@ -1196,6 +1252,17 @@ if(WIN32)
       VERBATIM)
   endif()
 endif()
+
+# Phase 6C-5: thumbnail invalidation port unit tests (no project/database needed).
+add_executable(EditorSessionProductionThumbnailPortTest
+    ui/editor_session_production_thumbnail_port_test.cpp)
+target_include_directories(EditorSessionProductionThumbnailPortTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorSessionProductionThumbnailPortTest
+  AlbumBackendLib
+  GTest::gtest_main)
+gtest_discover_tests(EditorSessionProductionThumbnailPortTest
+  TEST_PREFIX "EditorSessionProductionThumbnailPortTest."
+  PROPERTIES LABELS "ci_core_flow;editor_session")
 
 add_executable(ProjectServiceTest app/project_service_test.cpp)
 target_include_directories(ProjectServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})

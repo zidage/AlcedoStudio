@@ -11,6 +11,8 @@
 #include <string>
 #include <vector>
 
+#include "app/editor_mini_git_commit_writer.hpp"
+#include "app/editor_mini_git_journal_recovery.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "json.hpp"
@@ -18,6 +20,8 @@
 #include "type/type.hpp"
 
 namespace alcedo {
+
+class EditorSaveCheckpointCoordinator;
 
 /// Immutable capture taken at save-checkpoint start from the live pipeline
 /// snapshot. Materialization never rebuilds or mutates a pipeline executor; it
@@ -60,15 +64,17 @@ struct EditorMiniGitMaterializeResult {
   std::string error;
 };
 
-/// Coordinator that serializes editor save checkpoints. Defined in
-/// editor_save_checkpoint_coordinator.hpp; held by the materializer as a shared
-/// instance.
-class EditorSaveCheckpointCoordinator;
-
-/// Pure history materialization for the mini-Git journal. Does not touch
-/// pipeline executors, GPU state, or render caches.
+/// Thin facade for mini-Git journal materialization. Composes
+/// EditorMiniGitJournalFold (pure algorithm), EditorMiniGitCommitWriter
+/// (DuckDB transaction), and EditorMiniGitJournalRecovery (recovery +
+/// truncation). This class owns no mutable state beyond its dependencies;
+/// the three composed types own their own state.
+///
+/// Thread context: call Materialize / RecoverAndMaterialize from the save
+/// worker thread while the global save lock is held.
 class EditorMiniGitMaterializer final {
  public:
+  /// @param storage  Non-null StorageService used by the composed types.
   explicit EditorMiniGitMaterializer(std::shared_ptr<StorageService> storage);
 
   /// Validate the journal fold against the capture and write commits, Version
@@ -95,19 +101,9 @@ class EditorMiniGitMaterializer final {
  private:
   std::shared_ptr<StorageService>                  storage_;
   std::shared_ptr<EditorSaveCheckpointCoordinator> coordinator_;
+  std::unique_ptr<EditorMiniGitCommitWriter>       writer_;
+  std::unique_ptr<EditorMiniGitJournalRecovery>    recovery_;
 };
-
-/// Fold journal records onto a graph loaded from DuckDB. Already-materialized
-/// prefixes (crash after DuckDB commit, before truncate) are skipped when the
-/// stored head has already advanced past them. Does not mutate pipelines.
-auto FoldMiniGitJournalFromMaterializedBase(CommitGraph&                             graph,
-                                            const std::vector<MiniGitJournalRecord>& records,
-                                            std::string*                             error) -> bool;
-
-/// Truncate a mini-Git journal file and clear its in-memory records after a
-/// successful DuckDB materialization.
-auto TruncateMiniGitJournal(MiniGitJournal& journal, std::string* error) -> bool;
-auto TruncateMiniGitJournalFile(const std::filesystem::path& path, std::string* error) -> bool;
 
 /// Build a serialized pipeline state document from live guard fields (no second executor).
 auto MakeEditorSerializedPipelineState(const root_id_t& root_id, head_commit_hash_t head,
