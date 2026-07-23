@@ -77,12 +77,28 @@ class IEditorHistoryPort {
       -> bool = 0;
 
   /// Capture the immutable live history prefix that a save checkpoint must
-  /// persist. The caller owns the returned value and passes it directly to the
-  /// checkpoint store; this port keeps no deferred capture side table.
+  /// persist. Production copies journal records and their inclusive sequence
+  /// range under the journal mutex used by append/truncate, together with
+  /// element/Version/root IDs, working head, chain hash, serialized pipeline
+  /// state, and journal path. The caller owns the returned value and passes it
+  /// directly to the checkpoint store; this port keeps no deferred capture side
+  /// table. An empty journal yields nullopt sequence bounds — do not invent a
+  /// second empty-flag.
   virtual auto CaptureSaveCheckpoint(const EditorHistoryGuardHandle& /*guard*/,
                                      std::string* /*error*/)
       -> std::shared_ptr<const EditorMiniGitSaveCapture> {
     return nullptr;
+  }
+
+  /// Drop the live (and durable) journal prefix through last_sequence after a
+  /// successful DuckDB materialize so the next same-session capture does not
+  /// re-save already-materialized records. Materializer truncates by path; this
+  /// keeps the in-memory MiniGitJournal that still owns append state in sync.
+  /// Default is a no-op for fakes that do not hold a journal.
+  virtual auto DiscardMaterializedJournalThrough(const EditorHistoryGuardHandle& /*guard*/,
+                                                 std::uint64_t /*last_sequence*/,
+                                                 std::string* /*error*/) -> bool {
+    return true;
   }
 };
 

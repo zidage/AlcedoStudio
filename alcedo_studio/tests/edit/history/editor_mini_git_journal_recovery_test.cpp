@@ -127,14 +127,10 @@ TEST_F(EditorMiniGitJournalRecoveryTest, AlreadyMaterializedJournalDoesNotDuplic
     ASSERT_TRUE(write_result.accepted) << write_result.error;
   }
 
-  // Rewrite the journal records (simulating crash after DuckDB commit, before truncate).
-  {
-    MiniGitJournal leftover(journal_path_);
-    std::string    append_error;
-    for (const auto& record : journal->records()) {
-      ASSERT_TRUE(leftover.Append(record, &append_error)) << append_error;
-    }
-  }
+  // Journal file is intentionally left intact: DuckDB already holds the fold
+  // result, and recovery must skip that prefix then truncate without
+  // re-inserting commits. Do not re-append; that would invent a second sequence
+  // range on top of the original leftover bytes.
 
   // Recovery should skip the already-materialized prefix and truncate.
   std::string error;

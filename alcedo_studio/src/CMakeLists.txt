@@ -1429,6 +1429,7 @@ def_library(EditorSessionNavigationController
         include/app/editor_session_navigation_controller.hpp
     PRIVATE_DEPS EditorSessionLifecycle EditorSaveCheckpointService
                 EditorSessionRenderController EditorSessionEditController
+                EditorMiniGitMaterializer
 )
 
 # Editor session render controller. Owns presentation sink/

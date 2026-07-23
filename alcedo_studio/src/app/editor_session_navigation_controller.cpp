@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "app/editor_mini_git_materializer.hpp"
 #include "app/editor_session_edit_controller.hpp"
 #include "app/editor_session_lifecycle.hpp"
 #include "app/editor_session_render_controller.hpp"
@@ -185,6 +186,16 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
     return;
   }
 
+  // Materializer truncates the durable journal by path. Drop the matching live
+  // prefix while the history guard is still held so a same-session capture does
+  // not re-include already-materialized sequences.
+  if (result.last_journal_sequence.has_value() && history_ != nullptr &&
+      lifecycle_.has_history_guard()) {
+    std::string discard_error;
+    (void)history_->DiscardMaterializedJournalThrough(
+        lifecycle_.history_guard(), *result.last_journal_sequence, &discard_error);
+  }
+
   lifecycle_.ReleaseAfterCheckpoint();
 
   if (pending.kind == PendingEditorActionKind::CloseEditor) {
@@ -235,7 +246,10 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
       req.element_id         = identity.element_id;
       req.session_generation = identity.session_generation;
       req.capture            = std::move(capture);
-      req.save_lock          = std::move(save_lock);
+      if (req.capture && req.capture->has_journal_range()) {
+        req.last_journal_sequence = req.capture->last_journal_sequence;
+      }
+      req.save_lock = std::move(save_lock);
       lifecycle_.BeginCheckpoint();
       if (!start_background_save) {
         return CheckpointTicket{};

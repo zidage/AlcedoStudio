@@ -12,6 +12,7 @@
 #include <stdexcept>
 
 #include "app/editor_mini_git_materializer.hpp"
+#include "app/editor_save_checkpoint_coordinator.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "app/project_service.hpp"
 #include "edit/history/commit_graph.hpp"
@@ -51,13 +52,19 @@ class EditorSessionCheckpointStoreTest : public ::testing::Test {
     alcedo::CommitGraphService graph_service(guard.conn_);
     graph_ = std::make_shared<alcedo::CommitGraph>(
         graph_service.CreateEmptyPersisted(element_id_, "Default"));
-    store_ = std::make_unique<EditorSessionCheckpointStore>();
+    save_coordinator_ = std::make_shared<alcedo::EditorSaveCheckpointCoordinator>();
+    store_            = std::make_unique<EditorSessionCheckpointStore>();
     store_->SetServices(EditorSessionCheckpointStore::Services{
-        [this] { return storage_; }, [this](sl_element_id_t) { return journal_path_; }});
+        [this] { return storage_; }, [this](sl_element_id_t) { return journal_path_; },
+        save_coordinator_});
   }
 
   void TearDown() override {
     store_.reset();
+    if (save_coordinator_) {
+      save_coordinator_->Shutdown();
+    }
+    save_coordinator_.reset();
     storage_.reset();
     project_.reset();
     std::error_code ec;
@@ -72,12 +79,17 @@ class EditorSessionCheckpointStoreTest : public ::testing::Test {
     if (!history.AppendEdit(MakeExposurePayload(0.0f, 1.25f)).committed) {
       throw std::runtime_error("failed to append test capture");
     }
+    const auto                       snapshot = journal->Snapshot();
     alcedo::EditorMiniGitSaveCapture capture;
     capture.element_id             = element_id_;
+    capture.version_id             = graph_->GetActiveVersionId();
+    capture.root_id                = graph_->GetRootId();
     capture.working_head           = history.working_head();
     capture.transaction_chain_hash = history.transaction_chain_hash();
-    capture.journal_records        = journal->records();
+    capture.journal_records        = snapshot.records;
     capture.journal_path           = journal_path_;
+    capture.first_journal_sequence = snapshot.first_sequence;
+    capture.last_journal_sequence  = snapshot.last_sequence;
     const auto serialized          = alcedo::MakeEditorSerializedPipelineState(
         graph_->GetRootId(), capture.working_head, capture.transaction_chain_hash,
         nlohmann::json{{"exposure", 1.25f}});
@@ -85,14 +97,15 @@ class EditorSessionCheckpointStoreTest : public ::testing::Test {
     return capture;
   }
 
-  static constexpr sl_element_id_t              element_id_ = 42;
-  std::filesystem::path                         db_path_;
-  std::filesystem::path                         meta_path_;
-  std::filesystem::path                         journal_path_;
-  std::unique_ptr<alcedo::ProjectService>       project_;
-  std::shared_ptr<alcedo::StorageService>       storage_;
-  std::shared_ptr<alcedo::CommitGraph>          graph_;
-  std::unique_ptr<EditorSessionCheckpointStore> store_;
+  static constexpr sl_element_id_t                                 element_id_ = 42;
+  std::filesystem::path                                            db_path_;
+  std::filesystem::path                                            meta_path_;
+  std::filesystem::path                                            journal_path_;
+  std::unique_ptr<alcedo::ProjectService>                          project_;
+  std::shared_ptr<alcedo::StorageService>                          storage_;
+  std::shared_ptr<alcedo::CommitGraph>                             graph_;
+  std::shared_ptr<alcedo::EditorSaveCheckpointCoordinator>         save_coordinator_;
+  std::unique_ptr<EditorSessionCheckpointStore>                    store_;
 };
 
 TEST_F(EditorSessionCheckpointStoreTest, MaterializePersistsCaptureBeforeTruncatingJournal) {

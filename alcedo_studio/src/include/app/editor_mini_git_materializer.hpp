@@ -28,24 +28,35 @@ class EditorSaveCheckpointCoordinator;
 /// only validates the journal fold against these values and writes DuckDB.
 ///
 /// Owner/lifetime: built by the save path on the caller/GUI thread while the
-/// project-owned SaveCheckpointLock is held, then copied into the worker
-/// request. journal_records is a snapshot of the exact prefix being saved; an
-/// edit finalized after capture must not appear in this range and must not be
-/// removed by truncating it.
+/// project-owned SaveCheckpointLock is held and the journal mutex is held for
+/// the Snapshot() copy, then moved into the worker request. journal_records is
+/// the exact inclusive sequence range being saved; an edit finalized after
+/// capture must not appear in this range and must not be removed by truncating
+/// through last_journal_sequence. On any failure the captured bytes and range
+/// remain on disk for retry. journal_records.empty() means there is no sequence
+/// range and no journal fold work — no separate flag is required.
 struct EditorMiniGitSaveCapture {
   sl_element_id_t                   element_id         = 0;
   std::uint64_t                     session_generation = 0;
-  head_commit_hash_t                working_head       = std::nullopt;
+  version_ref_id_t                  version_id{};
+  root_id_t                         root_id{};
+  head_commit_hash_t                working_head = std::nullopt;
   transaction_chain_hash_t          transaction_chain_hash{};
   /// Full capture of commits + Version refs + ImageEditState with serialized
   /// pipeline state. Built from the live CommitGraph without a second executor.
   CommitGraphMaterialization        materialization{};
   std::vector<MiniGitJournalRecord> journal_records;
   std::filesystem::path             journal_path;
-  /// True when the journal records have already been materialized (the
-  /// in-memory journal contains no new commits or head moves that require
-  /// a DuckDB write). Materialization still succeeds and truncates nothing.
-  bool                              journal_already_materialized = false;
+  /// Inclusive journal sequence range covered by journal_records. Both nullopt
+  /// when journal_records is empty; both set when non-empty.
+  std::optional<std::uint64_t>      first_journal_sequence;
+  std::optional<std::uint64_t>      last_journal_sequence;
+
+  /// @return true when first/last form a non-empty inclusive sequence range.
+  [[nodiscard]] auto has_journal_range() const -> bool {
+    return first_journal_sequence.has_value() && last_journal_sequence.has_value() &&
+           !journal_records.empty();
+  }
 };
 
 /// Outcome of one Materialize / RecoverAndMaterialize call.

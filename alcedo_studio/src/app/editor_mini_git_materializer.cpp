@@ -22,6 +22,81 @@ void SetError(std::string* error, std::string message) {
   }
 }
 
+/// Reject captures whose identity or sequence range is inconsistent before any
+/// DuckDB write. Empty journals must not claim a sequence range; non-empty
+/// journals must list contiguous records matching first/last.
+auto ValidateSaveCapture(const EditorMiniGitSaveCapture& capture, std::string* error) -> bool {
+  if (capture.element_id == 0) {
+    SetError(error, "mini-Git materialize requires an element id");
+    return false;
+  }
+  if (capture.materialization.image_state.element_id != capture.element_id) {
+    SetError(error, "mini-Git capture element id does not match materialization state");
+    return false;
+  }
+  if (capture.root_id != capture.materialization.image_state.root_id) {
+    SetError(error, "mini-Git capture root id does not match materialization state");
+    return false;
+  }
+  if (capture.version_id != capture.materialization.image_state.active_version_id) {
+    SetError(error, "mini-Git capture version id does not match materialization state");
+    return false;
+  }
+
+  if (capture.journal_records.empty()) {
+    if (capture.first_journal_sequence.has_value() || capture.last_journal_sequence.has_value()) {
+      SetError(error, "empty mini-Git journal must not claim a sequence range");
+      return false;
+    }
+    return true;
+  }
+
+  if (!capture.first_journal_sequence.has_value() || !capture.last_journal_sequence.has_value()) {
+    SetError(error, "non-empty mini-Git journal requires first and last sequence numbers");
+    return false;
+  }
+  if (*capture.first_journal_sequence == 0 || *capture.last_journal_sequence == 0 ||
+      *capture.first_journal_sequence > *capture.last_journal_sequence) {
+    SetError(error, "mini-Git journal sequence range is invalid");
+    return false;
+  }
+  if (capture.journal_records.front().sequence != *capture.first_journal_sequence ||
+      capture.journal_records.back().sequence != *capture.last_journal_sequence) {
+    SetError(error, "mini-Git journal records do not match the captured sequence range");
+    return false;
+  }
+  std::uint64_t expected = *capture.first_journal_sequence;
+  for (const auto& record : capture.journal_records) {
+    if (record.sequence != expected) {
+      SetError(error, "mini-Git journal capture sequence numbers are not contiguous");
+      return false;
+    }
+    ++expected;
+  }
+  if (expected - 1 != *capture.last_journal_sequence) {
+    SetError(error, "mini-Git journal capture sequence range length mismatch");
+    return false;
+  }
+  return true;
+}
+
+/// Truncate only the captured inclusive sequence range on the journal path so
+/// any post-capture append remains durable for the next checkpoint.
+auto TruncateCapturedJournalRange(const EditorMiniGitSaveCapture& capture, std::string* error)
+    -> bool {
+  if (!capture.has_journal_range()) {
+    return true;
+  }
+  if (capture.journal_path.empty()) {
+    return true;
+  }
+  MiniGitJournal journal(capture.journal_path);
+  if (!journal.Load(error)) {
+    return false;
+  }
+  return journal.TruncateThroughSequence(*capture.last_journal_sequence, error);
+}
+
 }  // namespace
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -61,9 +136,8 @@ auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capt
   // Do not re-acquire here — a second AcquireBlocking would deadlock on the
   // same coordinator while the service still owns the lock.
   EditorMiniGitMaterializeResult result;
-  if (capture.element_id == 0) {
-    SetError(error, "mini-Git materialize requires an element id");
-    result.error = error != nullptr ? *error : "missing element";
+  if (!ValidateSaveCapture(capture, error)) {
+    result.error = error != nullptr ? *error : "invalid capture";
     return result;
   }
 
@@ -75,7 +149,7 @@ auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capt
     return result;
   }
 
-  bool head_moved = !capture.journal_already_materialized && !capture.journal_records.empty();
+  bool head_moved = !capture.journal_records.empty();
 
   try {
     auto               db_guard = storage_->GetDBController().GetConnectionGuard();
@@ -96,7 +170,7 @@ auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capt
       const auto prior_head  = folded.GetActiveVersionRef().head_commit_hash;
       const auto prior_chain = folded.ChainHashForHead(prior_head);
 
-      if (capture.journal_already_materialized || capture.journal_records.empty()) {
+      if (capture.journal_records.empty()) {
         // Saving with no journal changes succeeds without moving the Version head.
         if (prior_head != capture.working_head || prior_chain != capture.transaction_chain_hash) {
           SetError(error,
@@ -147,10 +221,17 @@ auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capt
     return result;
   }
 
-  // Truncate only after DuckDB success. Failure here leaves a recoverable
-  // redundant journal prefix; recovery skips already-materialized records.
+  // Truncate only the captured sequence prefix after DuckDB success. Failure
+  // here leaves a recoverable redundant prefix; recovery skips already-
+  // materialized records. Post-capture sequences remain on disk.
   std::string truncate_error;
-  (void)EditorMiniGitJournalRecovery::TruncateJournalFile(capture.journal_path, &truncate_error);
+  if (!TruncateCapturedJournalRange(capture, &truncate_error)) {
+    // DuckDB already committed; surface truncate detail but still report
+    // materialization success so recovery can clean the leftover prefix.
+    if (error != nullptr && error->empty()) {
+      *error = truncate_error;
+    }
+  }
 
   result.accepted     = true;
   result.materialized = true;

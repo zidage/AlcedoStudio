@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -40,6 +41,10 @@ struct SaveCheckpointRequest {
   sl_element_id_t                                 element_id         = 0;
   std::uint64_t                                   session_generation = 0;
   std::shared_ptr<const EditorMiniGitSaveCapture> capture;
+  /// Inclusive last journal sequence from capture when the range is non-empty.
+  /// Filled by the caller that built the capture so this service need not depend
+  /// on the Mini-Git materializer type definition.
+  std::optional<std::uint64_t> last_journal_sequence;
   /// Pre-acquired project-wide save lock (from TryAcquireSaveLock). When empty,
   /// Start attempts TryAcquire itself. Ownership moves into the service for the
   /// full journal / materialize / thumbnail / completion path.
@@ -56,6 +61,11 @@ struct SaveCheckpointResult {
   std::uint64_t task_id              = 0;
   bool          checkpoint_completed = false;
   std::string   error;
+  /// Inclusive last journal sequence materialized by this checkpoint when the
+  /// capture had a non-empty range. Callers (navigation) use this to drop the
+  /// matching live journal prefix so same-session captures stay consistent with
+  /// the on-disk truncate performed by the materializer.
+  std::optional<std::uint64_t> last_journal_sequence;
 };
 
 /// Invoked exactly once when the save checkpoint reaches its terminal state.
@@ -134,6 +144,7 @@ class EditorSaveCheckpointService final {
     sl_element_id_t                                       element_id         = 0;
     std::uint64_t                                         task_id            = 0;
     std::shared_ptr<const EditorMiniGitSaveCapture>       capture;
+    std::optional<std::uint64_t>                          last_journal_sequence;
     /// Held until the terminal completion callback returns.
     EditorSaveCheckpointCoordinator::SaveCheckpointLock   save_lock;
     SaveCheckpointCompletion                              completion;
@@ -146,7 +157,8 @@ class EditorSaveCheckpointService final {
   void FinishSave(std::uint64_t request_id, std::uint64_t session_generation, std::uint64_t task_id,
                   bool checkpoint_completed, std::string message,
                   SaveCheckpointCompletion                              completion,
-                  EditorSaveCheckpointCoordinator::SaveCheckpointLock&& save_lock);
+                  EditorSaveCheckpointCoordinator::SaveCheckpointLock&& save_lock,
+                  std::optional<std::uint64_t> last_journal_sequence = std::nullopt);
   auto TakePendingSave(std::uint64_t request_id, std::uint64_t* task_id,
                        SaveCheckpointCompletion*                          completion,
                        EditorSaveCheckpointCoordinator::SaveCheckpointLock* save_lock) -> bool;

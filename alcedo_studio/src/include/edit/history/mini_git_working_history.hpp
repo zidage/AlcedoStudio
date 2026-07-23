@@ -4,8 +4,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -25,12 +27,28 @@ enum class MiniGitJournalRecordKind : std::uint8_t {
 };
 
 struct MiniGitJournalRecord {
+  /// Monotonic journal sequence assigned by MiniGitJournal::Append. Sequences
+  /// start at 1; 0 means unset (not yet appended). Capture and truncation use
+  /// inclusive [first, last] sequence ranges over these values.
+  std::uint64_t             sequence             = 0;
   MiniGitJournalRecordKind  kind                 = MiniGitJournalRecordKind::kEditCommit;
   head_commit_hash_t        expected_source_head = std::nullopt;
   transaction_chain_hash_t  expected_source_chain_hash{};
   head_commit_hash_t        target_head = std::nullopt;
   transaction_chain_hash_t  target_chain_hash{};
   std::optional<EditCommit> edit_commit = std::nullopt;
+};
+
+/// Immutable snapshot of journal records taken under the journal mutex.
+///
+/// first_sequence / last_sequence form an inclusive range when records is
+/// non-empty; both are nullopt when the journal has no records. Callers copy
+/// this value into a save worker and must not hold live journal locks across
+/// DuckDB or other long work.
+struct MiniGitJournalSnapshot {
+  std::vector<MiniGitJournalRecord> records;
+  std::optional<std::uint64_t>      first_sequence;
+  std::optional<std::uint64_t>      last_sequence;
 };
 
 /// Narrow append seam for the durable journal writer. The working-history
@@ -46,6 +64,10 @@ class IMiniGitJournalAppender {
 /// Deterministic append-only journal used by the editor before Phase 6C-5
 /// materialization owns file truncation. It also provides the recovery input
 /// used by focused history tests.
+///
+/// One mutex serializes Append, Snapshot, Load, and range truncation so a save
+/// capture and a concurrent append cannot interleave mid-snapshot, and so
+/// truncating a captured prefix cannot delete a later sequence.
 class MiniGitJournal final : public IMiniGitJournalAppender {
  public:
   MiniGitJournal() = default;
@@ -57,24 +79,43 @@ class MiniGitJournal final : public IMiniGitJournalAppender {
   /// journal is an empty prefix; a malformed record is corruption.
   auto Load(std::string* error) -> bool;
 
-  /// After DuckDB materialization succeeds, discard the materialized prefix so
-  /// the next save starts from an empty journal. Safe to call when the journal
-  /// is already empty. Does not rewrite commit objects.
+  /// Copy all in-memory records and their inclusive sequence range under the
+  /// journal mutex. An empty journal returns empty records and nullopt range.
+  [[nodiscard]] auto Snapshot() const -> MiniGitJournalSnapshot;
+
+  /// After DuckDB materialization succeeds, discard every durable record with
+  /// sequence <= last_sequence, rewriting the journal file to keep any later
+  /// records. Safe when the journal is empty or last_sequence is below every
+  /// stored sequence. Does not rewrite commit objects. Sequence numbers are
+  /// never reused.
+  auto TruncateThroughSequence(std::uint64_t last_sequence, std::string* error) -> bool;
+
+  /// Discard the entire journal (memory + file). Used when recovery proves the
+  /// whole file is already reflected by DuckDB. Prefer TruncateThroughSequence
+  /// for normal save checkpoints that must preserve post-capture edits.
   auto TruncateMaterialized(std::string* error) -> bool;
 
   /// Replace the in-memory record list after a successful fold that skipped an
   /// already-materialized prefix (DB-commit / truncate crash window).
-  void SetRecords(std::vector<MiniGitJournalRecord> records) { records_ = std::move(records); }
+  void SetRecords(std::vector<MiniGitJournalRecord> records);
 
-  [[nodiscard]] auto records() const -> const std::vector<MiniGitJournalRecord>& {
-    return records_;
-  }
+  /// Copy of current records (locks the journal). Prefer Snapshot when the
+  /// sequence range is also required.
+  [[nodiscard]] auto records() const -> std::vector<MiniGitJournalRecord>;
 
   [[nodiscard]] auto path() const -> const std::filesystem::path& { return path_; }
 
+  /// Next sequence that Append will assign. Diagnostics only.
+  [[nodiscard]] auto next_sequence() const -> std::uint64_t;
+
  private:
+  auto RewriteFileUnlocked(std::string* error) -> bool;
+  auto AppendUnlocked(const MiniGitJournalRecord& record, std::string* error) -> bool;
+
+  mutable std::mutex                mutex_;
   std::filesystem::path             path_;
   std::vector<MiniGitJournalRecord> records_;
+  std::uint64_t                     next_sequence_ = 1;
 };
 
 struct MiniGitEditAppendResult {

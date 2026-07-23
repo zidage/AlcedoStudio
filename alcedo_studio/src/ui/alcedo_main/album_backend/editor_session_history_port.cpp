@@ -174,12 +174,13 @@ auto EditorSessionHistoryPort::EnsureWorkingState(sl_element_id_t element_id, st
   auto state            = std::make_shared<WorkingState>();
   state->pipeline_guard = guard;
   state->journal        = journal;
-  auto replay_graph     = *guard->commit_graph_;
-  auto validated_graph  = replay_graph;
-  if (!alcedo::MiniGitWorkingHistory::Replay(validated_graph, journal->records(), error)) {
+  auto       replay_graph    = *guard->commit_graph_;
+  auto       validated_graph = replay_graph;
+  const auto journal_records = journal->records();
+  if (!alcedo::MiniGitWorkingHistory::Replay(validated_graph, journal_records, error)) {
     return nullptr;
   }
-  for (const auto& record : journal->records()) {
+  for (const auto& record : journal_records) {
     if (!ApplyRecoveredRecord(*guard, &state->committed_snapshot, &replay_graph, record, error)) {
       return nullptr;
     }
@@ -188,8 +189,8 @@ auto EditorSessionHistoryPort::EnsureWorkingState(sl_element_id_t element_id, st
   guard->working_head_commit_hash_ = guard->commit_graph_->GetActiveVersionRef().head_commit_hash;
   guard->transaction_chain_hash_ =
       guard->commit_graph_->ChainHashForHead(guard->working_head_commit_hash_);
-  guard->dirty_ = !journal->records().empty();
-  if (!journal->records().empty()) guard->pipeline_->SetExecutionStages();
+  guard->dirty_ = !journal_records.empty();
+  if (!journal_records.empty()) guard->pipeline_->SetExecutionStages();
   state->history = std::make_unique<alcedo::MiniGitWorkingHistory>(guard->commit_graph_, journal);
 
   std::scoped_lock lock(mutex_);
@@ -384,14 +385,22 @@ auto EditorSessionHistoryPort::CaptureSaveCheckpoint(const alcedo::EditorHistory
     return nullptr;
   }
 
+  // Snapshot journal records under the journal mutex before releasing live
+  // history access. Post-capture appends get later sequences and must not enter
+  // this range or be deleted when the capture is truncated.
+  const auto journal_snapshot = state->journal->Snapshot();
+
   alcedo::EditorMiniGitSaveCapture capture;
-  capture.element_id                   = guard.element_id;
-  capture.working_head                 = state->history->working_head();
-  capture.transaction_chain_hash       = state->history->transaction_chain_hash();
-  capture.journal_records              = state->journal->records();
-  capture.journal_path                 = state->journal->path();
-  capture.journal_already_materialized = capture.journal_records.empty();
-  const auto serialized                = alcedo::MakeEditorSerializedPipelineState(
+  capture.element_id             = guard.element_id;
+  capture.version_id             = state->pipeline_guard->commit_graph_->GetActiveVersionId();
+  capture.root_id                = state->pipeline_guard->root_id_;
+  capture.working_head           = state->history->working_head();
+  capture.transaction_chain_hash = state->history->transaction_chain_hash();
+  capture.journal_records        = journal_snapshot.records;
+  capture.journal_path           = state->journal->path();
+  capture.first_journal_sequence = journal_snapshot.first_sequence;
+  capture.last_journal_sequence  = journal_snapshot.last_sequence;
+  const auto serialized          = alcedo::MakeEditorSerializedPipelineState(
       state->pipeline_guard->root_id_, capture.working_head, capture.transaction_chain_hash,
       pipeline_params);
   try {
@@ -403,6 +412,23 @@ auto EditorSessionHistoryPort::CaptureSaveCheckpoint(const alcedo::EditorHistory
     return nullptr;
   }
   return std::make_shared<const alcedo::EditorMiniGitSaveCapture>(std::move(capture));
+}
+
+auto EditorSessionHistoryPort::DiscardMaterializedJournalThrough(
+    const alcedo::EditorHistoryGuardHandle& guard, std::uint64_t last_sequence, std::string* error)
+    -> bool {
+  if (last_sequence == 0) {
+    if (error) *error = "DiscardMaterializedJournalThrough requires a non-zero sequence";
+    return false;
+  }
+  auto state = EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  std::scoped_lock state_lock(state->mutex);
+  if (!state->journal) {
+    if (error) *error = "Mini-Git journal is unavailable for prefix discard";
+    return false;
+  }
+  return state->journal->TruncateThroughSequence(last_sequence, error);
 }
 
 }  // namespace alcedo::ui

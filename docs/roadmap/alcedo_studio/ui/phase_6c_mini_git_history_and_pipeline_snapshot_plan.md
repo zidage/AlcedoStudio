@@ -3,9 +3,9 @@
 Date: 2026-07-22
 
 Status: approved design; 6C-1, 6C-2, 6C-2-Fix, 6C-3, 6C-4, and 6C-5 implemented.
-Phase 6C-5 qualification Phase 1 and Phase 2A are implemented. The remaining qualification
-phases (2B onward) are blocking. Do not begin 6C-6 checkout, session switching, or garbage
-collection until every qualification phase is complete.
+Phase 6C-5 qualification Phase 1, Phase 2A, and Phase 2B are implemented. The remaining
+qualification phases (3A onward) are blocking. Do not begin 6C-6 checkout, session switching,
+or garbage collection until every qualification phase is complete.
 
 Related documents:
 
@@ -1154,24 +1154,25 @@ Files:
 
 Checklist:
 
-- [ ] Give `EditorMiniGitSaveCapture` an explicit first and last journal sequence number, plus element
+- [x] Give `EditorMiniGitSaveCapture` an explicit first and last journal sequence number, plus element
       ID, Version ID, root ID, working head, transaction-chain hash, serialized pipeline state, and
       journal path.
-- [ ] Remove `no_journal_changes`; `journal_records.empty()` already answers that question.
-- [ ] Capture the records and sequence numbers while holding the same journal mutex used by append and
+- [x] Remove `no_journal_changes` / `journal_already_materialized`; `journal_records.empty()` already
+      answers that question.
+- [x] Capture the records and sequence numbers while holding the same journal mutex used by append and
       truncate. Copy the immutable capture into the worker request, then release live history access.
-- [ ] If a finalized edit arrives after capture, it must not appear in the captured range and must not
+- [x] If a finalized edit arrives after capture, it must not appear in the captured range and must not
       be removed by truncating that range. Because the global save lock also blocks navigation, the
       edit either waits or becomes the first record after the checkpoint completes.
-- [ ] On any failure, keep the captured journal bytes and sequence range available for retry.
+- [x] On any failure, keep the captured journal bytes and sequence range available for retry.
 
 Add target `EditorSaveCheckpointCaptureTest` with these tests:
 
-- [ ] `EmptyJournalCaptureHasNoSequenceRangeAndDoesNotNeedAnotherFlag`.
-- [ ] `CaptureContainsElementVersionRootHeadHashStateAndExactRecords`.
-- [ ] `EditAppendedAfterCaptureIsNotDeletedWithCapturedRecords`.
-- [ ] `FailedCheckpointKeepsTheCapturedRecordsForRetry`.
-- [ ] `MismatchedElementVersionRootOrSequenceRangeStartsNoMaterialization` as a parameterized test.
+- [x] `EmptyJournalCaptureHasNoSequenceRangeAndDoesNotNeedAnotherFlag`.
+- [x] `CaptureContainsElementVersionRootHeadHashStateAndExactRecords`.
+- [x] `EditAppendedAfterCaptureIsNotDeletedWithCapturedRecords`.
+- [x] `FailedCheckpointKeepsTheCapturedRecordsForRetry`.
+- [x] `MismatchedElementVersionRootOrSequenceRangeStartsNoMaterialization` as a parameterized test.
 
 Phase 2 is complete when both new targets pass repeatedly, Thread Sanitizer is run where available, no
 busy-wait remains, and the updated call-chain comment names the owner of the save lock and capture at

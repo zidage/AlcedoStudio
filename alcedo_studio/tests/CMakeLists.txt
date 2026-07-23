@@ -1237,6 +1237,32 @@ if(WIN32)
   endif()
 endif()
 
+# Exact journal-range capture: sequence bounds, post-capture append survival, mismatch rejection.
+add_executable(EditorSaveCheckpointCaptureTest
+  edit/history/editor_save_checkpoint_capture_test.cpp)
+target_include_directories(EditorSaveCheckpointCaptureTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorSaveCheckpointCaptureTest
+  EditorSessionTestSupport
+  EditorMiniGitMaterializer
+  EditorSaveCheckpointCoordinator
+  ProjectService
+  EditHistory
+  StorageService
+  GTest::gtest_main)
+gtest_discover_tests(EditorSaveCheckpointCaptureTest TEST_PREFIX "EditorSaveCheckpointCaptureTest."
+  PROPERTIES LABELS "ci_core_flow;edit;history;editor_history")
+if(WIN32)
+  alcedo_copy_duckdb_extensions(EditorSaveCheckpointCaptureTest)
+  if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
+    add_custom_command(TARGET EditorSaveCheckpointCaptureTest POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll"
+              "$<TARGET_FILE_DIR:EditorSaveCheckpointCaptureTest>/duckdb.dll"
+      VERBATIM)
+  endif()
+endif()
+
 # Phase 6C-5: mini-Git save checkpoint materialization facade tests.
 add_executable(EditorMiniGitMaterializerTest edit/history/editor_mini_git_materializer_test.cpp)
 target_include_directories(EditorMiniGitMaterializerTest
@@ -2310,6 +2336,7 @@ alcedo_assign_test_category(app ALCEDO_BUILD_APP_TESTS alcedo_tests_app
   EditorRenderCoordinatorTest
   EditorSaveCheckpointCoordinatorTest
   EditorSaveCheckpointServiceTest
+  EditorSaveCheckpointCaptureTest
   EditorSessionLifecycleTest
   EditorSessionNavigationControllerTest
   EditorSessionRenderControllerTest

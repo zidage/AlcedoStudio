@@ -4,6 +4,7 @@
 
 #include "edit/history/mini_git_working_history.hpp"
 
+#include <algorithm>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -32,7 +33,8 @@ auto DecodeHead(const nlohmann::json& value) -> head_commit_hash_t {
 }
 
 auto RecordToJSON(const MiniGitJournalRecord& record) -> nlohmann::json {
-  nlohmann::json j{{"format_version", 1},
+  nlohmann::json j{{"format_version", 2},
+                   {"sequence", record.sequence},
                    {"kind", static_cast<int>(record.kind)},
                    {"expected_source_head", EncodeHead(record.expected_source_head)},
                    {"expected_source_chain_hash", record.expected_source_chain_hash.ToString()},
@@ -44,14 +46,26 @@ auto RecordToJSON(const MiniGitJournalRecord& record) -> nlohmann::json {
 }
 
 auto RecordFromJSON(const nlohmann::json& j) -> MiniGitJournalRecord {
-  if (!j.is_object() || j.value("format_version", 0) != 1 || !j.contains("kind") ||
-      !j.contains("expected_source_head") || !j.contains("expected_source_chain_hash") ||
-      !j.contains("target_head") || !j.contains("target_chain_hash") ||
-      !j.contains("edit_commit")) {
+  if (!j.is_object() || !j.contains("kind") || !j.contains("expected_source_head") ||
+      !j.contains("expected_source_chain_hash") || !j.contains("target_head") ||
+      !j.contains("target_chain_hash") || !j.contains("edit_commit")) {
     throw std::runtime_error("mini-Git journal record has an incompatible shape");
   }
+  const int format_version = j.value("format_version", 0);
+  if (format_version != 1 && format_version != 2) {
+    throw std::runtime_error("mini-Git journal record has an incompatible format version");
+  }
   MiniGitJournalRecord record;
-  const int            kind = j.at("kind").get<int>();
+  if (format_version >= 2) {
+    if (!j.contains("sequence") || !j.at("sequence").is_number_unsigned()) {
+      throw std::runtime_error("mini-Git journal record is missing a sequence number");
+    }
+    record.sequence = j.at("sequence").get<std::uint64_t>();
+    if (record.sequence == 0) {
+      throw std::runtime_error("mini-Git journal record sequence must be non-zero");
+    }
+  }
+  const int kind = j.at("kind").get<int>();
   if (kind == static_cast<int>(MiniGitJournalRecordKind::kEditCommit)) {
     record.kind = MiniGitJournalRecordKind::kEditCommit;
   } else if (kind == static_cast<int>(MiniGitJournalRecordKind::kHeadMove)) {
@@ -147,10 +161,13 @@ auto ValidateAndApplyRecord(CommitGraph& graph, const MiniGitJournalRecord& reco
 
 }  // namespace
 
-auto MiniGitJournal::Append(const MiniGitJournalRecord& record, std::string* error) -> bool {
+auto MiniGitJournal::AppendUnlocked(const MiniGitJournalRecord& record, std::string* error)
+    -> bool {
   try {
+    MiniGitJournalRecord stored = record;
+    stored.sequence             = next_sequence_;
     if (!path_.empty()) {
-      const auto           payload  = RecordToJSON(record);
+      const auto           payload  = RecordToJSON(stored);
       const auto           checksum = ChecksumFor(payload);
       const nlohmann::json frame{{"record", payload}, {"checksum", checksum.ToString()}};
       const auto           parent = path_.parent_path();
@@ -169,7 +186,8 @@ auto MiniGitJournal::Append(const MiniGitJournalRecord& record, std::string* err
         return false;
       }
     }
-    records_.push_back(record);
+    records_.push_back(std::move(stored));
+    ++next_sequence_;
     return true;
   } catch (const std::exception& e) {
     SetError(error, e.what());
@@ -179,8 +197,16 @@ auto MiniGitJournal::Append(const MiniGitJournalRecord& record, std::string* err
   return false;
 }
 
+auto MiniGitJournal::Append(const MiniGitJournalRecord& record, std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
+  return AppendUnlocked(record, error);
+}
+
 auto MiniGitJournal::Load(std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
   if (path_.empty() || !std::filesystem::exists(path_)) {
+    records_.clear();
+    next_sequence_ = 1;
     return true;
   }
   try {
@@ -191,7 +217,9 @@ auto MiniGitJournal::Load(std::string* error) -> bool {
     }
     std::vector<MiniGitJournalRecord> loaded;
     std::string                       line;
-    std::size_t                       line_number = 0;
+    std::size_t                       line_number    = 0;
+    std::uint64_t                     next_sequence  = 1;
+    std::uint64_t                     fallback_index = 0;
     while (std::getline(input, line)) {
       ++line_number;
       if (line.empty()) {
@@ -208,18 +236,144 @@ auto MiniGitJournal::Load(std::string* error) -> bool {
         throw std::runtime_error("mini-Git journal checksum mismatch at line " +
                                  std::to_string(line_number));
       }
-      loaded.push_back(RecordFromJSON(frame.at("record")));
+      auto record = RecordFromJSON(frame.at("record"));
+      // format_version 1 files predate durable sequence numbers; assign a
+      // stable load-time sequence so capture/truncate still have a range.
+      if (record.sequence == 0) {
+        record.sequence = ++fallback_index;
+      }
+      if (!loaded.empty() && record.sequence <= loaded.back().sequence) {
+        throw std::runtime_error("mini-Git journal sequence is not strictly increasing at line " +
+                                 std::to_string(line_number));
+      }
+      next_sequence = std::max(next_sequence, record.sequence + 1);
+      loaded.push_back(std::move(record));
     }
     if (!input.eof()) {
       SetError(error, "mini-Git journal file read failed");
       return false;
     }
-    records_ = std::move(loaded);
+    records_       = std::move(loaded);
+    next_sequence_ = next_sequence;
     return true;
   } catch (const std::exception& e) {
     SetError(error, e.what());
   } catch (...) {
     SetError(error, "mini-Git journal recovery failed");
+  }
+  return false;
+}
+
+auto MiniGitJournal::Snapshot() const -> MiniGitJournalSnapshot {
+  std::scoped_lock       lock(mutex_);
+  MiniGitJournalSnapshot snapshot;
+  snapshot.records = records_;
+  if (!records_.empty()) {
+    snapshot.first_sequence = records_.front().sequence;
+    snapshot.last_sequence  = records_.back().sequence;
+  }
+  return snapshot;
+}
+
+auto MiniGitJournal::records() const -> std::vector<MiniGitJournalRecord> {
+  std::scoped_lock lock(mutex_);
+  return records_;
+}
+
+auto MiniGitJournal::next_sequence() const -> std::uint64_t {
+  std::scoped_lock lock(mutex_);
+  return next_sequence_;
+}
+
+void MiniGitJournal::SetRecords(std::vector<MiniGitJournalRecord> records) {
+  std::scoped_lock lock(mutex_);
+  records_ = std::move(records);
+  std::uint64_t next = 1;
+  for (const auto& record : records_) {
+    if (record.sequence >= next) {
+      next = record.sequence + 1;
+    }
+  }
+  next_sequence_ = next;
+}
+
+auto MiniGitJournal::RewriteFileUnlocked(std::string* error) -> bool {
+  if (path_.empty()) {
+    return true;
+  }
+  try {
+    const auto parent = path_.parent_path();
+    if (!parent.empty()) {
+      std::filesystem::create_directories(parent);
+    }
+    std::ofstream output(path_, std::ios::binary | std::ios::trunc);
+    if (!output.is_open()) {
+      SetError(error, "mini-Git journal file could not be rewritten");
+      return false;
+    }
+    for (const auto& record : records_) {
+      const auto           payload  = RecordToJSON(record);
+      const auto           checksum = ChecksumFor(payload);
+      const nlohmann::json frame{{"record", payload}, {"checksum", checksum.ToString()}};
+      output << frame.dump() << '\n';
+    }
+    output.flush();
+    if (!output.good()) {
+      SetError(error, "mini-Git journal file rewrite failed");
+      return false;
+    }
+    return true;
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
+  } catch (...) {
+    SetError(error, "mini-Git journal rewrite failed");
+  }
+  return false;
+}
+
+auto MiniGitJournal::TruncateThroughSequence(std::uint64_t last_sequence, std::string* error)
+    -> bool {
+  std::scoped_lock lock(mutex_);
+  try {
+    records_.erase(std::remove_if(records_.begin(), records_.end(),
+                                  [last_sequence](const MiniGitJournalRecord& record) {
+                                    return record.sequence <= last_sequence;
+                                  }),
+                   records_.end());
+    return RewriteFileUnlocked(error);
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
+  } catch (...) {
+    SetError(error, "mini-Git journal range truncate failed");
+  }
+  return false;
+}
+
+auto MiniGitJournal::TruncateMaterialized(std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
+  try {
+    records_.clear();
+    // Keep next_sequence_ so later appends never reuse a truncated sequence.
+    if (path_.empty()) {
+      return true;
+    }
+    if (std::filesystem::exists(path_)) {
+      std::ofstream output(path_, std::ios::binary | std::ios::trunc);
+      if (!output.is_open()) {
+        SetError(error, "mini-Git journal file could not be truncated");
+        return false;
+      }
+      output.flush();
+      if (!output.good()) {
+        SetError(error, "mini-Git journal file truncate failed");
+        return false;
+      }
+    }
+    return true;
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
+  } catch (...) {
+    SetError(error, "mini-Git journal truncate failed");
   }
   return false;
 }
@@ -436,33 +590,6 @@ auto MiniGitWorkingHistory::ReplaySkippingMaterializedPrefix(
     *applied_from_index = records.size();
   }
   return true;
-}
-
-auto MiniGitJournal::TruncateMaterialized(std::string* error) -> bool {
-  try {
-    records_.clear();
-    if (path_.empty()) {
-      return true;
-    }
-    if (std::filesystem::exists(path_)) {
-      std::ofstream output(path_, std::ios::binary | std::ios::trunc);
-      if (!output.is_open()) {
-        SetError(error, "mini-Git journal file could not be truncated");
-        return false;
-      }
-      output.flush();
-      if (!output.good()) {
-        SetError(error, "mini-Git journal file truncate failed");
-        return false;
-      }
-    }
-    return true;
-  } catch (const std::exception& e) {
-    SetError(error, e.what());
-  } catch (...) {
-    SetError(error, "mini-Git journal truncate failed");
-  }
-  return false;
 }
 
 }  // namespace alcedo

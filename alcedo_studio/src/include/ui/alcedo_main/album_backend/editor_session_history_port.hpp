@@ -57,6 +57,11 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
   /// Return an immutable save capture with all records needed by the store.
   auto CaptureSaveCheckpoint(const alcedo::EditorHistoryGuardHandle& guard, std::string* error)
       -> std::shared_ptr<const alcedo::EditorMiniGitSaveCapture> override;
+  /// Truncate the live Mini-Git journal through last_sequence after a successful
+  /// materialize so same-session captures no longer include that prefix.
+  auto DiscardMaterializedJournalThrough(const alcedo::EditorHistoryGuardHandle& guard,
+                                         std::uint64_t last_sequence, std::string* error)
+      -> bool override;
 
  private:
   struct WorkingState;

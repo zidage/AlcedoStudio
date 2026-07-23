@@ -91,14 +91,18 @@ auto EditorMiniGitProjectFixture::AppendExposureEdit(sl_element_id_t element_id,
 
 auto EditorMiniGitProjectFixture::CaptureWorkingState(sl_element_id_t element_id, float exposure)
     -> EditorMiniGitSaveCapture {
-  auto&                    runtime = RuntimeFor(element_id);
+  auto&                    runtime  = RuntimeFor(element_id);
+  const auto               snapshot = runtime.journal->Snapshot();
   EditorMiniGitSaveCapture capture;
   capture.element_id             = element_id;
+  capture.version_id             = runtime.graph->GetActiveVersionId();
+  capture.root_id                = runtime.graph->GetRootId();
   capture.working_head           = runtime.history->working_head();
   capture.transaction_chain_hash = runtime.history->transaction_chain_hash();
-  capture.journal_records        = runtime.journal->records();
+  capture.journal_records        = snapshot.records;
   capture.journal_path           = runtime.journal_path;
-  capture.journal_already_materialized = capture.journal_records.empty();
+  capture.first_journal_sequence = snapshot.first_sequence;
+  capture.last_journal_sequence  = snapshot.last_sequence;
   const auto serialized          = MakeEditorSerializedPipelineState(
       runtime.graph->GetRootId(), capture.working_head, capture.transaction_chain_hash,
       nlohmann::json{{"exposure", exposure}});
@@ -194,7 +198,19 @@ auto EditorMiniGitProjectFixture::MaterializeUnderSaveLock(const EditorMiniGitSa
     result.error = error != nullptr ? *error : "save lock unavailable";
     return result;
   }
-  return materializer_->Materialize(capture, error);
+  auto result = materializer_->Materialize(capture, error);
+  // Match production: after durable truncate by path, drop the same prefix from
+  // the live MiniGitJournal so same-session captures stay consistent.
+  if (result.accepted && result.materialized && capture.has_journal_range()) {
+    std::string discard_error;
+    if (!RuntimeFor(capture.element_id)
+             .journal->TruncateThroughSequence(*capture.last_journal_sequence, &discard_error)) {
+      if (error != nullptr && error->empty()) {
+        *error = discard_error;
+      }
+    }
+  }
+  return result;
 }
 
 void EditorMiniGitProjectFixture::CreatePersistedImage(ImageRuntime&       runtime,

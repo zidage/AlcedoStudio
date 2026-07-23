@@ -80,22 +80,59 @@ TEST_F(EditorSessionHistoryPortTest, SettledAdjustmentCreatesOneCommitAndUndoRed
   EXPECT_TRUE(guard_->working_head_commit_hash_.has_value());
 }
 
-TEST_F(EditorSessionHistoryPortTest, CaptureReturnsStateAndRecordsWithoutDeferredOwnership) {
+TEST_F(EditorSessionHistoryPortTest,
+       ProductionHistoryPortCaptureContainsElementVersionRootHeadHashStateSequenceRangeAndRecords) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);
   ASSERT_TRUE(handle.valid) << error;
-  const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":1.25})", true};
-  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
-  ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
+  const alcedo::EditorAdjustmentPatch first{"exposure", R"({"exposure":0.5})", true};
+  const alcedo::EditorAdjustmentPatch second{"exposure", R"({"exposure":1.25})", true};
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, first, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, first, &error)) << error;
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, second, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, second, &error)) << error;
 
+  // Production entry surface — not the project fixture helper.
   auto capture = history_.CaptureSaveCheckpoint(handle, &error);
   ASSERT_TRUE(static_cast<bool>(capture)) << error;
   EXPECT_EQ(capture->element_id, 42u);
+  EXPECT_EQ(capture->version_id, guard_->commit_graph_->GetActiveVersionId());
+  EXPECT_EQ(capture->root_id, guard_->root_id_);
+  EXPECT_EQ(capture->version_id, capture->materialization.image_state.active_version_id);
+  EXPECT_EQ(capture->root_id, capture->materialization.image_state.root_id);
   EXPECT_EQ(capture->journal_path, journal_path_);
-  EXPECT_EQ(capture->journal_records.size(), 1u);
+  ASSERT_EQ(capture->journal_records.size(), 2u);
+  ASSERT_TRUE(capture->has_journal_range());
+  EXPECT_EQ(*capture->first_journal_sequence, 1u);
+  EXPECT_EQ(*capture->last_journal_sequence, 2u);
+  EXPECT_EQ(capture->journal_records.front().sequence, 1u);
+  EXPECT_EQ(capture->journal_records.back().sequence, 2u);
   EXPECT_EQ(capture->working_head, guard_->working_head_commit_hash_);
   EXPECT_EQ(capture->transaction_chain_hash, guard_->transaction_chain_hash_);
   EXPECT_EQ(capture->materialization.image_state.element_id, 42u);
+  ASSERT_TRUE(capture->materialization.image_state.serialized_pipeline_state.has_value());
+}
+
+TEST_F(EditorSessionHistoryPortTest,
+       DiscardMaterializedJournalThroughDropsLivePrefixForSameSessionCapture) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":0.9})", true};
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
+
+  auto first = history_.CaptureSaveCheckpoint(handle, &error);
+  ASSERT_TRUE(static_cast<bool>(first)) << error;
+  ASSERT_TRUE(first->has_journal_range());
+  ASSERT_TRUE(history_.DiscardMaterializedJournalThrough(handle, *first->last_journal_sequence,
+                                                         &error))
+      << error;
+
+  auto second = history_.CaptureSaveCheckpoint(handle, &error);
+  ASSERT_TRUE(static_cast<bool>(second)) << error;
+  EXPECT_TRUE(second->journal_records.empty());
+  EXPECT_FALSE(second->has_journal_range());
 }
 
 TEST_F(EditorSessionHistoryPortTest, JournalAppendFailureKeepsWorkingHeadAtRoot) {
