@@ -1,0 +1,371 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#pragma once
+
+/// @file editor_session_test_ports.hpp
+/// @brief Small reusable fake editor-session ports for focused module tests.
+///
+/// These types are not fixtures and do not own multi-module scenario state. Each
+/// component fixture constructs only the fakes its module requires.
+
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "app/editor_session_ports.hpp"
+
+namespace alcedo::test {
+
+/// Opaque non-null capture pointer used when tests do not need a real Mini-Git
+/// capture payload. The deleter is a no-op; the static token is process-lifetime.
+inline auto MakeOpaqueSaveCapture() -> std::shared_ptr<const EditorMiniGitSaveCapture> {
+  static const int token = 0;
+  return {reinterpret_cast<const EditorMiniGitSaveCapture*>(&token),
+          [](const EditorMiniGitSaveCapture*) {}};
+}
+
+/// Fake pipeline port that records acquire/release counts and optional failures.
+class FakeEditorPipelinePort final : public IEditorPipelinePort {
+ public:
+  bool fail_acquire  = false;
+  int  acquire_count = 0;
+  int  release_count = 0;
+  std::vector<sl_element_id_t> acquired_ids;
+  std::vector<sl_element_id_t> released_ids;
+
+  auto Acquire(sl_element_id_t element_id, std::string* error)
+      -> EditorPipelineGuardHandle override {
+    ++acquire_count;
+    acquired_ids.push_back(element_id);
+    if (fail_acquire) {
+      if (error != nullptr) {
+        *error = "pipeline acquire failed";
+      }
+      return {};
+    }
+    return EditorPipelineGuardHandle{element_id, true};
+  }
+
+  void Release(const EditorPipelineGuardHandle& guard) override {
+    ++release_count;
+    released_ids.push_back(guard.element_id);
+  }
+};
+
+/// Fake history port covering acquire/release, edit commit, undo/redo, snapshot,
+/// and immutable save-checkpoint capture.
+class FakeEditorHistoryPort final : public IEditorHistoryPort {
+ public:
+  bool fail_acquire   = false;
+  bool fail_commit    = false;
+  bool fail_undo      = false;
+  bool fail_snapshot  = false;
+  bool fail_capture   = false;
+  int  acquire_count  = 0;
+  int  release_count  = 0;
+  int  capture_count  = 0;
+  int  commit_count   = 0;
+  int  undo_count     = 0;
+  int  redo_count     = 0;
+  int  checkpoint_capture_count = 0;
+  EditorRenderAdjustmentSnapshot current_snapshot{};
+  EditorAdjustmentPatch          last_captured_patch{};
+  EditorAdjustmentPatch          last_committed_patch{};
+  std::shared_ptr<const EditorMiniGitSaveCapture> next_capture = MakeOpaqueSaveCapture();
+
+  auto Acquire(sl_element_id_t element_id, std::string* error)
+      -> EditorHistoryGuardHandle override {
+    ++acquire_count;
+    if (fail_acquire) {
+      if (error != nullptr) {
+        *error = "history acquire failed";
+      }
+      return {};
+    }
+    return EditorHistoryGuardHandle{element_id, true};
+  }
+
+  void Release(const EditorHistoryGuardHandle&) override { ++release_count; }
+
+  auto CaptureAdjustmentBeforePreview(const EditorHistoryGuardHandle&,
+                                      const EditorAdjustmentPatch& patch, std::string*)
+      -> bool override {
+    ++capture_count;
+    last_captured_patch = patch;
+    return true;
+  }
+
+  auto CommitAdjustment(const EditorHistoryGuardHandle&, const EditorAdjustmentPatch& patch,
+                        std::string* error) -> bool override {
+    ++commit_count;
+    last_committed_patch = patch;
+    if (fail_commit) {
+      if (error != nullptr) {
+        *error = "mini-Git journal append failed";
+      }
+      return false;
+    }
+    return true;
+  }
+
+  auto Undo(const EditorHistoryGuardHandle&, std::string* error) -> bool override {
+    ++undo_count;
+    if (fail_undo) {
+      if (error != nullptr) {
+        *error = "undo failed";
+      }
+      return false;
+    }
+    return true;
+  }
+
+  auto Redo(const EditorHistoryGuardHandle&, std::string*) -> bool override {
+    ++redo_count;
+    return true;
+  }
+
+  auto ReadAdjustmentSnapshot(const EditorHistoryGuardHandle&,
+                              EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
+      -> bool override {
+    if (fail_snapshot) {
+      if (error != nullptr) {
+        *error = "snapshot read failed";
+      }
+      return false;
+    }
+    if (snapshot != nullptr) {
+      *snapshot = current_snapshot;
+    }
+    return true;
+  }
+
+  auto CaptureSaveCheckpoint(const EditorHistoryGuardHandle&, std::string* error)
+      -> std::shared_ptr<const EditorMiniGitSaveCapture> override {
+    ++checkpoint_capture_count;
+    if (fail_capture) {
+      if (error != nullptr) {
+        *error = "history capture failed";
+      }
+      return nullptr;
+    }
+    return next_capture;
+  }
+};
+
+/// Fake task port that records begin/end outcomes and optional begin failure.
+class FakeEditorTaskPort final : public IEditorTaskPort {
+ public:
+  bool                       fail_begin  = false;
+  int                        begin_count = 0;
+  int                        end_count   = 0;
+  std::vector<std::uint64_t> begun_ids;
+  std::vector<std::uint64_t> ended_ids;
+  std::vector<bool>          ended_success;
+  std::vector<std::string>   ended_messages;
+  std::uint64_t              next_id = 1;
+
+  auto BeginTask(const std::string& /*name*/, sl_element_id_t /*element_id*/)
+      -> std::uint64_t override {
+    ++begin_count;
+    if (fail_begin) {
+      return 0;
+    }
+    const auto id = next_id++;
+    begun_ids.push_back(id);
+    return id;
+  }
+
+  void EndTask(std::uint64_t task_id, bool success, const std::string& message) override {
+    ++end_count;
+    ended_ids.push_back(task_id);
+    ended_success.push_back(success);
+    ended_messages.push_back(message);
+  }
+};
+
+/// Fake journal writer port with optional async commit and barrier failures.
+class FakeEditorJournalPort final : public IEditorJournalPort {
+ public:
+  bool                        fail_barrier      = false;
+  bool                        fail_commit_start = false;
+  bool                        async_commit      = false;
+  bool                        finalize_succeeds = true;
+  int                         barrier_count     = 0;
+  int                         discard_count     = 0;
+  int                         edit_record_count = 0;
+  int                         cursor_record_count = 0;
+  std::uint64_t               last_cursor_from  = 0;
+  std::uint64_t               last_cursor_to    = 0;
+  EditorJournalCommitCallback pending_commit;
+
+  auto FinalizeEdit(sl_element_id_t, std::uint64_t, std::string* error) -> bool override {
+    if (!finalize_succeeds) {
+      if (error != nullptr) {
+        *error = "finalize failed";
+      }
+      return false;
+    }
+    return true;
+  }
+
+  auto AppendBarrier(sl_element_id_t, std::uint64_t, std::string* error) -> bool override {
+    ++barrier_count;
+    if (fail_barrier) {
+      if (error != nullptr) {
+        *error = "journal barrier failed";
+      }
+      return false;
+    }
+    return true;
+  }
+
+  auto CommitJournalAsync(sl_element_id_t element_id, std::uint64_t session_generation,
+                          EditorJournalCommitCallback callback) -> bool override {
+    if (fail_commit_start) {
+      return false;
+    }
+    if (!async_commit) {
+      return IEditorJournalPort::CommitJournalAsync(element_id, session_generation,
+                                                    std::move(callback));
+    }
+    pending_commit = std::move(callback);
+    return true;
+  }
+
+  /// Completes a pending async journal commit. Durable true maps to a successful
+  /// journal durability barrier that later materialization may truncate.
+  void CompleteCommit(bool durable, std::string error = {}) {
+    auto callback = std::move(pending_commit);
+    if (!callback) {
+      return;
+    }
+    callback(EditorJournalCommitOutcome{true, durable, !durable, durable ? 2u : 0u,
+                                        durable ? 1u : 0u, std::move(error)});
+  }
+
+  auto DiscardUnflushed(sl_element_id_t, std::string*) -> bool override {
+    ++discard_count;
+    return true;
+  }
+
+  auto RecordEdit(sl_element_id_t, std::uint64_t, const EditTransaction&, std::string*)
+      -> bool override {
+    ++edit_record_count;
+    return true;
+  }
+
+  auto RecordCursorMove(sl_element_id_t, std::uint64_t, std::uint64_t from_cursor,
+                        std::uint64_t to_cursor, std::string*) -> bool override {
+    ++cursor_record_count;
+    last_cursor_from = from_cursor;
+    last_cursor_to   = to_cursor;
+    return true;
+  }
+};
+
+/// Fake checkpoint store with optional async materialization and start failure.
+class FakeEditorCheckpointStore final : public IEditorCheckpointStore {
+ public:
+  bool                      async_materialize      = false;
+  bool                      fail_materialize_start = false;
+  bool                      fail_materialize       = false;
+  int                       materialize_count      = 0;
+  EditorMaterializeCallback pending_materialize;
+
+  auto MaterializeAsync(std::shared_ptr<const EditorMiniGitSaveCapture> capture,
+                        EditorMaterializeCallback                       callback) -> bool override {
+    ++materialize_count;
+    if (fail_materialize_start) {
+      return false;
+    }
+    if (!async_materialize) {
+      if (fail_materialize) {
+        if (callback) {
+          callback(EditorMaterializeOutcome{true, false, 0, "materialization failed"});
+        }
+        return true;
+      }
+      return IEditorCheckpointStore::MaterializeAsync(std::move(capture), std::move(callback));
+    }
+    pending_materialize = std::move(callback);
+    return true;
+  }
+
+  /// Completes a pending async materialization. Materialized true means DuckDB
+  /// write and subsequent journal-prefix truncate both succeeded.
+  void CompleteMaterialization(bool materialized, std::string error = {}) {
+    auto callback = std::move(pending_materialize);
+    if (!callback) {
+      return;
+    }
+    callback(
+        EditorMaterializeOutcome{true, materialized, materialized ? 1u : 0u, std::move(error)});
+  }
+};
+
+/// Fake thumbnail invalidation port that records element ids.
+class FakeEditorThumbnailPort final : public IEditorThumbnailPort {
+ public:
+  int                         invalidate_count = 0;
+  std::vector<sl_element_id_t> invalidated_ids;
+
+  void Invalidate(sl_element_id_t element_id) override {
+    ++invalidate_count;
+    invalidated_ids.push_back(element_id);
+  }
+};
+
+/// Fake render submit port used only when a constructor requires a render peer.
+/// It does not model GPU work; navigation fixtures keep this private.
+class FakeEditorRenderSubmitPort final : public IEditorRenderSubmitPort {
+ public:
+  int cancel_count = 0;
+  int submit_count = 0;
+
+  void CancelSessionAndWait(std::uint64_t) override { ++cancel_count; }
+  void CancelSession(std::uint64_t) override { ++cancel_count; }
+  auto Submit(const EditorRenderIntent&) -> EditorRenderResult override {
+    ++submit_count;
+    EditorRenderResult result;
+    result.kind       = EditorRenderResultKind::RequestAccepted;
+    result.request_id = static_cast<std::uint64_t>(submit_count);
+    return result;
+  }
+  void SetActiveGenerations(std::uint64_t, std::uint64_t, std::uint64_t,
+                            EditorRenderSupersessionPolicy) override {}
+};
+
+/// Lightweight coordinator test double for save-lock diagnostics in fixtures.
+/// Production lock ownership remains EditorSaveCheckpointCoordinator; this type
+/// only records acquire/release attempts for unit scenarios that need a spy.
+class FakeSaveCheckpointCoordinator final {
+ public:
+  int             acquire_count = 0;
+  int             release_count = 0;
+  sl_element_id_t active_element_id = 0;
+  bool            saving = false;
+
+  /// Records an acquire attempt and returns whether the fake currently allows it.
+  auto TryAcquire(sl_element_id_t element_id) -> bool {
+    ++acquire_count;
+    if (saving) {
+      return false;
+    }
+    saving = true;
+    active_element_id = element_id;
+    return true;
+  }
+
+  /// Records a release for the active element.
+  void Release(sl_element_id_t /*element_id*/) {
+    ++release_count;
+    saving = false;
+    active_element_id = 0;
+  }
+};
+
+}  // namespace alcedo::test

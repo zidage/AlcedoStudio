@@ -8,121 +8,38 @@
 
 #include <atomic>
 #include <barrier>
-#include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <memory>
 #include <semaphore>
-#include <string>
 #include <thread>
 
 #include "app/editor_save_checkpoint_coordinator.hpp"
-#include "app/project_service.hpp"
-#include "edit/history/commit_clock_test_access.hpp"
-#include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
-#include "edit/operators/operator_registeration.hpp"
-#include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
-#include "utils/clock/time_provider.hpp"
+#include "support/editor_mini_git_project_fixture.hpp"
 
 namespace alcedo {
 namespace {
 
-auto MakeExposurePayload(float before, float after) -> OrdinaryEditPayload {
-  OrdinaryEditPayload payload;
-  payload.operator_type  = OperatorType::EXPOSURE;
-  payload.stage_name     = PipelineStageName::Basic_Adjustment;
-  payload.field_name     = "$operator_params";
-  payload.before_value   = nlohmann::json{{"exposure", before}};
-  payload.after_value    = nlohmann::json{{"exposure", after}};
-  payload.before_enabled = true;
-  payload.after_enabled  = true;
-  return payload;
-}
-
-}  // namespace
-
 class EditorMiniGitMaterializerTest : public ::testing::Test {
  protected:
-  void SetUp() override {
-    TimeProvider::Refresh();
-    RegisterAllOperators();
-    edit_history_test::CommitClockAccess::ResetGlobal(0);
-    const auto stamp =
-        std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
-    const auto temp = std::filesystem::temp_directory_path();
-    db_path_        = temp / ("mini_git_mat_" + stamp + ".db");
-    meta_path_      = temp / ("mini_git_mat_" + stamp + ".json");
-    journal_path_   = temp / ("mini_git_mat_" + stamp + ".mini-git.wal");
-    std::error_code ec;
-    std::filesystem::remove(db_path_, ec);
-    std::filesystem::remove(meta_path_, ec);
-    std::filesystem::remove(journal_path_, ec);
+  void SetUp() override { project_.SetUp(); }
+  void TearDown() override { project_.TearDown(); }
 
-    project_ = std::make_unique<ProjectService>(db_path_, meta_path_);
-    storage_ = project_->GetStorageService();
-    {
-      auto               guard = storage_->GetDBController().GetConnectionGuard();
-      auto               lock  = guard.Lock();
-      CommitGraphService graph_service(guard.conn_);
-      graph_ =
-          std::make_shared<CommitGraph>(graph_service.CreateEmptyPersisted(element_id_, "Default"));
-    }
-    materializer_ = std::make_unique<EditorMiniGitMaterializer>(storage_);
-  }
-
-  void TearDown() override {
-    materializer_.reset();
-    storage_.reset();
-    project_.reset();
-    std::error_code ec;
-    std::filesystem::remove(db_path_, ec);
-    std::filesystem::remove(meta_path_, ec);
-    std::filesystem::remove(journal_path_, ec);
-  }
-
-  auto CaptureFromWorkingHistory(MiniGitWorkingHistory& history, MiniGitJournal& journal,
-                                 float exposure) -> EditorMiniGitSaveCapture {
-    EditorMiniGitSaveCapture capture;
-    capture.element_id                   = element_id_;
-    capture.working_head                 = history.working_head();
-    capture.transaction_chain_hash       = history.transaction_chain_hash();
-    capture.journal_records              = journal.records();
-    capture.journal_path                 = journal_path_;
-    capture.journal_already_materialized = capture.journal_records.empty();
-    const auto serialized                = MakeEditorSerializedPipelineState(
-        graph_->GetRootId(), capture.working_head, capture.transaction_chain_hash,
-        nlohmann::json{{"exposure", exposure}});
-    capture.materialization = graph_->CaptureMaterializationWithSerializedPipelineState(serialized);
-    return capture;
-  }
-
-  sl_element_id_t                            element_id_ = 42;
-  std::filesystem::path                      db_path_;
-  std::filesystem::path                      meta_path_;
-  std::filesystem::path                      journal_path_;
-  std::unique_ptr<ProjectService>            project_;
-  std::shared_ptr<StorageService>            storage_;
-  std::shared_ptr<CommitGraph>               graph_;
-  std::unique_ptr<EditorMiniGitMaterializer> materializer_;
+  test::EditorMiniGitProjectFixture project_;
 };
 
 TEST_F(EditorMiniGitMaterializerTest, EmptyJournalSucceedsWithoutMovingVersionHead) {
-  auto                  journal = std::make_shared<MiniGitJournal>(journal_path_);
-  MiniGitWorkingHistory history(graph_, journal);
-  const auto            prior_head = graph_->GetActiveVersionRef().head_commit_hash;
-  auto                  capture    = CaptureFromWorkingHistory(history, *journal, 0.0f);
+  const auto prior_head =
+      project_.graph(test::EditorMiniGitProjectFixture::kElementA)->GetActiveVersionRef().head_commit_hash;
+  auto        capture = project_.CaptureWorkingState(test::EditorMiniGitProjectFixture::kElementA, 0.0f);
 
-  std::string           error;
-  const auto            result = materializer_->Materialize(capture, &error);
+  std::string error;
+  const auto  result = project_.materializer().Materialize(capture, &error);
   ASSERT_TRUE(result.accepted) << error << " / " << result.error;
   ASSERT_TRUE(result.materialized);
   EXPECT_FALSE(result.head_moved);
 
-  auto               guard = storage_->GetDBController().GetConnectionGuard();
-  auto               lock  = guard.Lock();
-  CommitGraphService graph_service(guard.conn_);
-  auto               stored = graph_service.LoadGraph(element_id_);
+  auto stored = project_.LoadStoredGraph(test::EditorMiniGitProjectFixture::kElementA);
   ASSERT_TRUE(stored.has_value());
   EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, prior_head);
   EXPECT_EQ(stored->CommitCount(), 0u);
@@ -130,28 +47,23 @@ TEST_F(EditorMiniGitMaterializerTest, EmptyJournalSucceedsWithoutMovingVersionHe
 
 TEST_F(EditorMiniGitMaterializerTest,
        MaterializeWritesCommitVersionAndSerializedStateThenTruncates) {
-  auto                  journal = std::make_shared<MiniGitJournal>(journal_path_);
-  MiniGitWorkingHistory history(graph_, journal);
-  ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 1.25f)).committed);
-  auto capture = CaptureFromWorkingHistory(history, *journal, 1.25f);
+  ASSERT_TRUE(project_.AppendExposureEdit(test::EditorMiniGitProjectFixture::kElementA, 0.0f, 1.25f));
+  auto capture = project_.CaptureWorkingState(test::EditorMiniGitProjectFixture::kElementA, 1.25f);
   ASSERT_FALSE(capture.journal_records.empty());
-  ASSERT_TRUE(std::filesystem::exists(journal_path_));
+  ASSERT_TRUE(std::filesystem::exists(
+      project_.journal_path(test::EditorMiniGitProjectFixture::kElementA)));
 
   std::string error;
-  const auto  result = materializer_->Materialize(capture, &error);
+  const auto  result = project_.materializer().Materialize(capture, &error);
   ASSERT_TRUE(result.accepted) << error << " / " << result.error;
   ASSERT_TRUE(result.materialized);
   EXPECT_TRUE(result.head_moved);
 
-  // Journal truncated after DuckDB success.
-  MiniGitJournal reopened(journal_path_);
-  ASSERT_TRUE(reopened.Load(&error)) << error;
-  EXPECT_TRUE(reopened.records().empty());
+  const auto records =
+      project_.ReadJournalRecords(test::EditorMiniGitProjectFixture::kElementA, &error);
+  EXPECT_TRUE(records.empty()) << error;
 
-  auto               guard = storage_->GetDBController().GetConnectionGuard();
-  auto               lock  = guard.Lock();
-  CommitGraphService graph_service(guard.conn_);
-  auto               stored = graph_service.LoadGraph(element_id_);
+  auto stored = project_.LoadStoredGraph(test::EditorMiniGitProjectFixture::kElementA);
   ASSERT_TRUE(stored.has_value());
   EXPECT_EQ(stored->CommitCount(), 1u);
   EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, capture.working_head);
@@ -166,57 +78,70 @@ TEST_F(EditorMiniGitMaterializerTest,
 }
 
 TEST_F(EditorMiniGitMaterializerTest, FailureBeforeDuckDBCommitLeavesPriorHeadUnchanged) {
-  auto                  journal = std::make_shared<MiniGitJournal>(journal_path_);
-  MiniGitWorkingHistory history(graph_, journal);
-  ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 0.5f)).committed);
-  auto capture         = CaptureFromWorkingHistory(history, *journal, 0.5f);
-
-  // Corrupt the capture head so journal fold validation rejects before DuckDB write.
+  ASSERT_TRUE(project_.AppendExposureEdit(test::EditorMiniGitProjectFixture::kElementA, 0.0f, 0.5f));
+  auto capture         = project_.CaptureWorkingState(test::EditorMiniGitProjectFixture::kElementA, 0.5f);
   capture.working_head = Hash128{0xdead, 0xbeef};
 
   std::string error;
-  const auto  result = materializer_->Materialize(capture, &error);
+  const auto  result = project_.materializer().Materialize(capture, &error);
   EXPECT_FALSE(result.accepted);
   EXPECT_FALSE(result.materialized);
 
-  auto               guard = storage_->GetDBController().GetConnectionGuard();
-  auto               lock  = guard.Lock();
-  CommitGraphService graph_service(guard.conn_);
-  auto               stored = graph_service.LoadGraph(element_id_);
+  auto stored = project_.LoadStoredGraph(test::EditorMiniGitProjectFixture::kElementA);
   ASSERT_TRUE(stored.has_value());
   EXPECT_EQ(stored->CommitCount(), 0u);
   EXPECT_FALSE(stored->GetActiveVersionRef().head_commit_hash.has_value());
 }
 
 TEST_F(EditorMiniGitMaterializerTest, CrashAfterDuckDBBeforeTruncateDoesNotReplayCommitTwice) {
-  auto                  journal = std::make_shared<MiniGitJournal>(journal_path_);
-  MiniGitWorkingHistory history(graph_, journal);
-  ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 0.75f)).committed);
-  auto        capture = CaptureFromWorkingHistory(history, *journal, 0.75f);
+  ASSERT_TRUE(project_.AppendExposureEdit(test::EditorMiniGitProjectFixture::kElementA, 0.0f, 0.75f));
+  auto        capture = project_.CaptureWorkingState(test::EditorMiniGitProjectFixture::kElementA, 0.75f);
 
   std::string error;
-  ASSERT_TRUE(materializer_->Materialize(capture, &error).accepted) << error;
+  ASSERT_TRUE(project_.materializer().Materialize(capture, &error).accepted) << error;
 
-  // Simulate leftover journal after DB commit by rewriting the captured records.
   {
-    MiniGitJournal leftover(journal_path_);
+    MiniGitJournal leftover(
+        project_.journal_path(test::EditorMiniGitProjectFixture::kElementA));
     for (const auto& record : capture.journal_records) {
       ASSERT_TRUE(leftover.Append(record, &error)) << error;
     }
   }
 
-  const auto recovered = materializer_->RecoverAndMaterialize(element_id_, journal_path_, &error);
+  const auto recovered = project_.materializer().RecoverAndMaterialize(
+      test::EditorMiniGitProjectFixture::kElementA,
+      project_.journal_path(test::EditorMiniGitProjectFixture::kElementA), &error);
   ASSERT_TRUE(recovered.accepted) << error << " / " << recovered.error;
   EXPECT_FALSE(recovered.head_moved);
 
-  auto               guard = storage_->GetDBController().GetConnectionGuard();
-  auto               lock  = guard.Lock();
-  CommitGraphService graph_service(guard.conn_);
-  EXPECT_EQ(graph_service.CountCommitsForRoot(graph_->GetRootId()), 1u);
+  EXPECT_EQ(project_.CountStoredCommits(test::EditorMiniGitProjectFixture::kElementA), 1u);
+  const auto records =
+      project_.ReadJournalRecords(test::EditorMiniGitProjectFixture::kElementA, &error);
+  EXPECT_TRUE(records.empty()) << error;
+}
 
-  MiniGitJournal reopened(journal_path_);
-  ASSERT_TRUE(reopened.Load(&error)) << error;
-  EXPECT_TRUE(reopened.records().empty());
+TEST_F(EditorMiniGitMaterializerTest, DistinctRootsKeepImageAAndImageBIsolated) {
+  ASSERT_TRUE(project_.AppendExposureEdit(test::EditorMiniGitProjectFixture::kElementA, 0.0f, 1.0f));
+  ASSERT_TRUE(project_.AppendExposureEdit(test::EditorMiniGitProjectFixture::kElementB, 0.0f, 2.0f));
+  auto capture_a = project_.CaptureWorkingState(test::EditorMiniGitProjectFixture::kElementA, 1.0f);
+  auto capture_b = project_.CaptureWorkingState(test::EditorMiniGitProjectFixture::kElementB, 2.0f);
+
+  std::string error;
+  ASSERT_TRUE(project_.materializer().Materialize(capture_a, &error).accepted) << error;
+  ASSERT_TRUE(project_.materializer().Materialize(capture_b, &error).accepted) << error;
+
+  EXPECT_NE(project_.root_id(test::EditorMiniGitProjectFixture::kElementA),
+            project_.root_id(test::EditorMiniGitProjectFixture::kElementB));
+  EXPECT_EQ(project_.CountStoredCommits(test::EditorMiniGitProjectFixture::kElementA), 1u);
+  EXPECT_EQ(project_.CountStoredCommits(test::EditorMiniGitProjectFixture::kElementB), 1u);
+
+  project_.CloseAndReopenProject();
+  auto stored_a = project_.LoadStoredGraph(test::EditorMiniGitProjectFixture::kElementA);
+  auto stored_b = project_.LoadStoredGraph(test::EditorMiniGitProjectFixture::kElementB);
+  ASSERT_TRUE(stored_a.has_value());
+  ASSERT_TRUE(stored_b.has_value());
+  EXPECT_EQ(stored_a->CommitCount(), 1u);
+  EXPECT_EQ(stored_b->CommitCount(), 1u);
 }
 
 TEST_F(EditorMiniGitMaterializerTest, GlobalSaveLockSerializesBlockingWaiters) {
@@ -228,7 +153,7 @@ TEST_F(EditorMiniGitMaterializerTest, GlobalSaveLockSerializesBlockingWaiters) {
   std::atomic<int>                maximum_owners{0};
   std::atomic<bool>               every_waiter_owned{true};
 
-  const auto                      wait_for_lock = [&](sl_element_id_t element_id) {
+  const auto wait_for_lock = [&](sl_element_id_t element_id) {
     start.arrive_and_wait();
     auto lock = coordinator.AcquireBlocking(element_id);
     if (!lock.owns_lock()) {
@@ -261,4 +186,5 @@ TEST_F(EditorMiniGitMaterializerTest, GlobalSaveLockSerializesBlockingWaiters) {
   EXPECT_FALSE(coordinator.is_saving());
 }
 
+}  // namespace
 }  // namespace alcedo

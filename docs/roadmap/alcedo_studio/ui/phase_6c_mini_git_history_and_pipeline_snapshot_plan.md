@@ -1027,57 +1027,76 @@ Files to add:
 
 `EditorMiniGitProjectFixture` must provide:
 
-- [ ] one unique temporary directory containing a project database, project metadata file, and
+- [x] one unique temporary directory containing a project database, project metadata file, and
       per-image Mini-Git journals;
-- [ ] real `ProjectService`, `StorageService`, `CommitGraphService`, and persisted default Versions for
+- [x] real `ProjectService`, `StorageService`, `CommitGraphService`, and persisted default Versions for
       image A and image B, with different element IDs and root IDs;
-- [ ] deterministic commit timestamps through `CommitClockAccess`, not wall-clock sleeps;
-- [ ] helpers named `AppendExposureEdit`, `CaptureWorkingState`, `CloseAndReopenProject`,
+- [x] deterministic commit timestamps through `CommitClockAccess`, not wall-clock sleeps;
+- [x] helpers named `AppendExposureEdit`, `CaptureWorkingState`, `CloseAndReopenProject`,
       `LoadStoredGraph`, `ReadJournalRecords`, and `CountStoredCommits`;
-- [ ] teardown that destroys materializer/storage/project objects before removing files.
+- [x] teardown that destroys materializer/storage/project objects before removing files.
 
 `EditorSaveCheckpointFixture` must provide only:
 
-- [ ] history capture, checkpoint store, task, thumbnail, and coordinator test doubles;
-- [ ] helpers named `StartCheckpoint`, `CompleteDatabaseWrite`, `CompleteJournalTruncate`, and
+- [x] history capture, checkpoint store, task, thumbnail, and coordinator test doubles;
+- [x] helpers named `StartCheckpoint`, `CompleteDatabaseWrite`, `CompleteJournalTruncate`, and
       `CancelAndWait`;
-- [ ] switches for capture, task-start, journal-commit, and materialization failure.
+- [x] switches for capture, task-start, journal-commit, and materialization failure.
 
 `EditorSessionNavigationFixture` must provide only:
 
-- [ ] a real `EditorSessionNavigationController` with lifecycle and save-checkpoint collaborators;
-- [ ] fixed identities for A and B and helpers named `OpenA`, `RequestSwitchToB`,
+- [x] a real `EditorSessionNavigationController` with lifecycle and save-checkpoint collaborators;
+- [x] fixed identities for A and B and helpers named `OpenA`, `RequestSwitchToB`,
       `CompleteCheckpoint`, and `FailCheckpoint`;
-- [ ] an ordered event vector containing `checkpoint_a`, `release_a`, and `acquire_b`;
-- [ ] no render port, adjustment snapshot, DuckDB project, or QML engine.
+- [x] an ordered event vector containing `checkpoint_a`, `release_a`, and `acquire_b`;
+- [x] no render port, adjustment snapshot, DuckDB project, or QML engine.
 
 `editor_session_test_ports.hpp` contains small reusable fake port types, not a fixture and not shared
 mutable scenario state. Each component fixture constructs only the fakes its module requires.
 
 `MainQmlTestFixture` must provide:
 
-- [ ] the `LoadedMainWindow`, `MainQmlUrl`, and `LoadMainWindow` setup currently repeated or private in
+- [x] the `LoadedMainWindow`, `MainQmlUrl`, and `LoadMainWindow` setup currently repeated or private in
       `workspace_shell_test.cpp`;
-- [ ] a real `ApplicationModuleHost`, `BackgroundTaskController`, and
+- [x] a real `ApplicationModuleHost`, `BackgroundTaskController`, and
       `InteractionPolicyController`, plus helpers to find the five guarded QML entrypoints;
-- [ ] no production behavior changes and no copied second implementation of application startup.
+- [x] no production behavior changes and no copied second implementation of application startup.
 
 Test-file split and registration:
 
-- [ ] Move every test from `editor_session_service_test.cpp` to the module that owns the asserted
+- [x] Move every test from `editor_session_service_test.cpp` to the module that owns the asserted
       behavior: lifecycle/open/guard tests, navigation/save-order tests, edit/history tests,
       render/first-frame/view-change tests, or facade routing tests.
-- [ ] Delete the old monolithic test file once its test-count inventory reaches zero. Do not keep it as
+- [x] Delete the old monolithic test file once its test-count inventory reaches zero. Do not keep it as
       an unsorted destination for future cases.
-- [ ] Register the six module targets named above. Target names describe software modules, not roadmap
+- [x] Register the six module targets named above. Target names describe software modules, not roadmap
       phases.
-- [ ] Use CTest labels `editor_history`, `editor_session`, `interaction_policy`, and `workspace_qml`.
+- [x] Use CTest labels `editor_history`, `editor_session`, `interaction_policy`, and `workspace_qml`.
       Remove `phase6c`. Labels are only a convenient module filter; stage acceptance also runs the
       named executables directly, so an empty label cannot be mistaken for passing tests.
-- [ ] Record a source-test-to-destination-test table and compare discovered test counts before/after.
+- [x] Record a source-test-to-destination-test table and compare discovered test counts before/after.
       No test may disappear or be weakened during the split.
-- [ ] Reject a fixture that constructs lifecycle, checkpoint, edit, render, QML, and DuckDB together.
+- [x] Reject a fixture that constructs lifecycle, checkpoint, edit, render, QML, and DuckDB together.
       That is a test-side god object; only the later integration fixture may compose the full path.
+
+Implementation record (2026-07-23): the monolithic `editor_session_service_test.cpp` is absent (already
+split in 1B). Phase 1E adds focused fixtures under `tests/support/` and `MainQmlTestFixture`, rewires
+module tests to those fixtures, and registers `EditorSessionTestSupport`. Source-to-destination inventory
+for the former session-service cases:
+
+| Destination target | Discovered cases (1E) | Ownership |
+| --- | ---: | --- |
+| `EditorSessionLifecycleTest` | 17 | open/guard/state transitions |
+| `EditorSessionNavigationControllerTest` | 13 | A-to-B save order, close, stale tickets |
+| `EditorSessionEditControllerTest` | 10 | patch/undo/discard/journal record routing |
+| `EditorSessionRenderControllerTest` | 11 | first-frame, quality base, view change |
+| `EditorSessionServiceFacadeTest` | 4 | facade Open/Shutdown/result ordering |
+| `EditorSaveCheckpointServiceTest` | 8 | save task/journal/materialize completion |
+| **Total module cases** | **63** | no monolithic residual file |
+
+Additional fixture consumers: `EditorMiniGitMaterializerTest` now uses `EditorMiniGitProjectFixture`
+(6 cases including dual-root isolation). Labels applied: `editor_session`, `editor_history`,
+`interaction_policy`, `workspace_qml`. No `phase6c` label remains on these targets.
 
 Phase 1 is complete only when all five sub-stages build, the existing behavior tests remain green, all
 changed C++ files pass `clang-format --dry-run --Werror --style=file`, every changed function has the

@@ -10,132 +10,31 @@
 #include <string>
 
 #include "app/editor_session_lifecycle.hpp"
-#include "app/editor_session_ports.hpp"
 #include "edit/history/edit_transaction.hpp"
 #include "edit/operators/op_base.hpp"
 #include "json.hpp"
+#include "support/editor_session_test_ports.hpp"
 
 namespace alcedo {
 namespace {
 
-class FakePipelinePort final : public IEditorPipelinePort {
- public:
-  auto Acquire(sl_element_id_t element_id, std::string*) -> EditorPipelineGuardHandle override {
-    return {element_id, true};
-  }
-  void Release(const EditorPipelineGuardHandle&) override {}
-};
-
-class FakeHistoryPort final : public IEditorHistoryPort {
- public:
-  bool                           fail_commit   = false;
-  bool                           fail_undo     = false;
-  bool                           fail_snapshot = false;
-  int                            capture_count = 0;
-  int                            commit_count  = 0;
-  int                            undo_count    = 0;
-  int                            redo_count    = 0;
-  EditorRenderAdjustmentSnapshot current_snapshot{};
-
-  auto Acquire(sl_element_id_t element_id, std::string*) -> EditorHistoryGuardHandle override {
-    return {element_id, true};
-  }
-  void Release(const EditorHistoryGuardHandle&) override {}
-  auto CaptureAdjustmentBeforePreview(const EditorHistoryGuardHandle&,
-                                      const EditorAdjustmentPatch& patch, std::string*)
-      -> bool override {
-    ++capture_count;
-    last_captured_patch = patch;
-    return true;
-  }
-  auto CommitAdjustment(const EditorHistoryGuardHandle&, const EditorAdjustmentPatch& patch,
-                        std::string* error) -> bool override {
-    ++commit_count;
-    last_committed_patch = patch;
-    if (fail_commit) {
-      if (error) {
-        *error = "mini-Git journal append failed";
-      }
-      return false;
-    }
-    return true;
-  }
-  auto Undo(const EditorHistoryGuardHandle&, std::string* error) -> bool override {
-    ++undo_count;
-    if (fail_undo) {
-      if (error) {
-        *error = "undo failed";
-      }
-      return false;
-    }
-    return true;
-  }
-  auto Redo(const EditorHistoryGuardHandle&, std::string*) -> bool override {
-    ++redo_count;
-    return true;
-  }
-  auto ReadAdjustmentSnapshot(const EditorHistoryGuardHandle&,
-                              EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
-      -> bool override {
-    if (fail_snapshot) {
-      if (error) {
-        *error = "snapshot read failed";
-      }
-      return false;
-    }
-    if (snapshot) {
-      *snapshot = current_snapshot;
-    }
-    return true;
-  }
-  EditorAdjustmentPatch last_captured_patch{};
-  EditorAdjustmentPatch last_committed_patch{};
-};
-
-class FakeJournalPort final : public IEditorJournalPort {
- public:
-  int           discard_count       = 0;
-  int           edit_record_count   = 0;
-  int           cursor_record_count = 0;
-  std::uint64_t last_cursor_from    = 0;
-  std::uint64_t last_cursor_to      = 0;
-
-  auto          DiscardUnflushed(sl_element_id_t, std::string*) -> bool override {
-    ++discard_count;
-    return true;
-  }
-  auto RecordEdit(sl_element_id_t, std::uint64_t, const EditTransaction&, std::string*)
-      -> bool override {
-    ++edit_record_count;
-    return true;
-  }
-  auto RecordCursorMove(sl_element_id_t, std::uint64_t, std::uint64_t from_cursor,
-                        std::uint64_t to_cursor, std::string*) -> bool override {
-    ++cursor_record_count;
-    last_cursor_from = from_cursor;
-    last_cursor_to   = to_cursor;
-    return true;
-  }
-};
-
 class EditorSessionEditControllerTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    pipeline_ = std::make_shared<FakePipelinePort>();
-    history_  = std::make_shared<FakeHistoryPort>();
-    journal_  = std::make_shared<FakeJournalPort>();
+    pipeline_ = std::make_shared<test::FakeEditorPipelinePort>();
+    history_  = std::make_shared<test::FakeEditorHistoryPort>();
+    journal_  = std::make_shared<test::FakeEditorJournalPort>();
 
     EditorSessionLifecycle::Dependencies life_deps;
     life_deps.pipeline = pipeline_;
     life_deps.history  = history_;
     lifecycle_         = std::make_unique<EditorSessionLifecycle>(std::move(life_deps));
 
-    // Set up an interactive image via the semantic lifecycle API.
     std::string error;
     ASSERT_TRUE(lifecycle_->BeginAcquire(1, 2, false, nullptr, &error)) << error;
     ASSERT_TRUE(lifecycle_->AcquireGuards(&error)) << error;
     lifecycle_->MarkImageReady();
-    lifecycle_->MarkFirstFramePresented();  // transitions to Interactive
+    lifecycle_->MarkFirstFramePresented();
 
     EditorSessionEditController::Dependencies edit_deps{history_, journal_};
     edit_ = std::make_unique<EditorSessionEditController>(std::move(edit_deps));
@@ -144,11 +43,11 @@ class EditorSessionEditControllerTest : public ::testing::Test {
   auto guard() const -> EditorHistoryGuardHandle { return lifecycle_->history_guard(); }
   auto identity() const -> EditorSessionIdentity { return lifecycle_->identity(); }
 
-  std::shared_ptr<FakePipelinePort>            pipeline_;
-  std::shared_ptr<FakeHistoryPort>             history_;
-  std::shared_ptr<FakeJournalPort>             journal_;
-  std::unique_ptr<EditorSessionLifecycle>      lifecycle_;
-  std::unique_ptr<EditorSessionEditController> edit_;
+  std::shared_ptr<test::FakeEditorPipelinePort> pipeline_;
+  std::shared_ptr<test::FakeEditorHistoryPort>  history_;
+  std::shared_ptr<test::FakeEditorJournalPort>  journal_;
+  std::unique_ptr<EditorSessionLifecycle>       lifecycle_;
+  std::unique_ptr<EditorSessionEditController>  edit_;
 };
 
 TEST_F(EditorSessionEditControllerTest, InteractiveAndSettledPatchUseOneHistoryCommit) {
@@ -156,7 +55,7 @@ TEST_F(EditorSessionEditControllerTest, InteractiveAndSettledPatchUseOneHistoryC
   patch.field_key   = "exposure";
   patch.params_json = R"({"exposure":1.0})";
 
-  auto r1           = edit_->HandlePatch(patch, false, guard(), identity());
+  auto r1 = edit_->HandlePatch(patch, false, guard(), identity());
   EXPECT_EQ(r1.kind, EditorEditOutcome::Kind::RenderRouted);
   EXPECT_EQ(r1.reason, EditorRenderReason::InteractiveAdjustment);
   EXPECT_EQ(history_->capture_count, 1);

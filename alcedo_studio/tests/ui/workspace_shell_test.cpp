@@ -7,20 +7,14 @@
 /// prefs, project-switch session seal, library view-state restore, real QML
 /// interaction entrypoints, and Phase 4C visual/motion contracts.
 
-#include "ui/album_backend_test_fixture.hpp"
+#include "ui/main_qml_test_fixture.hpp"
 
 #include <QColor>
 #include <QPoint>
-#include <QQmlApplicationEngine>
-#include <QQmlContext>
-#include <QQmlError>
 #include <QQuickItem>
-#include <QQuickStyle>
-#include <QQuickWindow>
 #include <QSettings>
 #include <QTest>
 #include <QTimer>
-#include <QUrl>
 #include <QVariant>
 #include <QWheelEvent>
 
@@ -35,7 +29,6 @@
 #include <cmath>
 #include <filesystem>
 #include <memory>
-#include <sstream>
 #include <vector>
 
 #include "app/editor_render_intent.hpp"
@@ -45,7 +38,6 @@
 #include "ui/album_backend_seeded_project_fixture.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/alcedo_main/editor_dialog/editor_dialog.hpp"
-#include "ui/alcedo_main/language_manager.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/edit_viewer/view_transform_controller.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
@@ -55,29 +47,6 @@
 
 namespace alcedo::ui::test {
 namespace {
-
-auto MainQmlUrl() -> QUrl {
-  const auto path = std::filesystem::path(ALCEDO_TEST_SRC_DIR) / "ui" / "alcedo_main" / "qml" /
-                    "Main.qml";
-#ifdef _WIN32
-  return QUrl::fromLocalFile(QString::fromStdWString(path.wstring()));
-#else
-  return QUrl::fromLocalFile(QString::fromStdString(path.string()));
-#endif
-}
-
-class LoadedMainWindow {
- public:
-  ApplicationModuleHost host;
-  alcedo::ui::LanguageManager language_manager{QCoreApplication::instance()};
-  QQmlApplicationEngine engine;
-  std::vector<QQmlError> qml_warnings;
-  QQuickWindow* window = nullptr;
-
-  LoadedMainWindow() = default;
-  LoadedMainWindow(const LoadedMainWindow&) = delete;
-  LoadedMainWindow& operator=(const LoadedMainWindow&) = delete;
-};
 
 class ScopedIniSettings {
  public:
@@ -147,105 +116,7 @@ void SeedLibraryThumbnails(ApplicationModuleHost& host, int count, int content_h
   Q_UNUSED(content_height_hint);
 }
 
-class WorkspaceShellTests : public ApplicationModuleHostTestFixture {
- protected:
-  // Phase 4C: ordinary workflow tests force reduced motion so geometry /
-  // visibility assertions observe terminal state without wall-clock fold timing.
-  // Motion-progress tests opt out via setReduceMotion(false) and driveFoldProgress.
-  void ForceReducedMotionForWorkflowTests() {
-    alcedo::ui::AppTheme::Instance().setReduceMotion(true);
-  }
-
-  auto LoadMainWindow(bool create_project = true) -> std::unique_ptr<LoadedMainWindow> {
-    auto loaded = std::make_unique<LoadedMainWindow>();
-    alcedo::ui::AppTheme::RegisterFonts();
-    ForceReducedMotionForWorkflowTests();
-    if (create_project) {
-      EXPECT_TRUE(CreateTestProject(loaded->host));
-    }
-
-    alcedo::ui::AppTheme::SetEffectiveLanguageCode(
-        loaded->language_manager.EffectiveLanguageCode());
-    QQuickStyle::setStyle(QStringLiteral("Material"));
-
-    loaded->engine.addImportPath(QStringLiteral("qrc:/"));
-    loaded->language_manager.AttachEngine(&loaded->engine);
-    loaded->engine.rootContext()->setContextProperty(QStringLiteral("appModules"),
-                                                      &loaded->host);
-    loaded->engine.rootContext()->setContextProperty(QStringLiteral("appTheme"),
-                                                      &alcedo::ui::AppTheme::Instance());
-    loaded->engine.rootContext()->setContextProperty(QStringLiteral("languageManager"),
-                                                      &loaded->language_manager);
-
-    QObject::connect(&loaded->engine, &QQmlEngine::warnings,
-                     [raw = loaded.get()](const QList<QQmlError>& warnings) {
-                       raw->qml_warnings.insert(raw->qml_warnings.end(), warnings.begin(),
-                                                warnings.end());
-                     });
-
-    loaded->engine.load(MainQmlUrl());
-    if (loaded->engine.rootObjects().empty()) {
-      std::ostringstream errors;
-      for (const auto& warning : loaded->qml_warnings) {
-        errors << warning.toString().toStdString() << '\n';
-      }
-      ADD_FAILURE() << errors.str();
-      return loaded;
-    }
-    loaded->window = qobject_cast<QQuickWindow*>(loaded->engine.rootObjects().front());
-    if (loaded->window) {
-      loaded->window->show();
-      loaded->window->requestActivate();
-    }
-    return loaded;
-  }
-
-  // Load Main.qml with a pre-built packed project (e.g. a seeded synthetic image)
-  // already loaded into the host. The project is loaded BEFORE the QML engine so
-  // the window inits with serviceReady == true (nav enabled, no welcome dialog).
-  auto LoadMainWindowWithPackedProject(const std::filesystem::path& packedPath)
-      -> std::unique_ptr<LoadedMainWindow> {
-    auto loaded = std::make_unique<LoadedMainWindow>();
-    alcedo::ui::AppTheme::RegisterFonts();
-    ForceReducedMotionForWorkflowTests();
-    EXPECT_TRUE(LoadPackedProject(loaded->host, packedPath));
-
-    alcedo::ui::AppTheme::SetEffectiveLanguageCode(
-        loaded->language_manager.EffectiveLanguageCode());
-    QQuickStyle::setStyle(QStringLiteral("Material"));
-
-    loaded->engine.addImportPath(QStringLiteral("qrc:/"));
-    loaded->language_manager.AttachEngine(&loaded->engine);
-    loaded->engine.rootContext()->setContextProperty(QStringLiteral("appModules"),
-                                                      &loaded->host);
-    loaded->engine.rootContext()->setContextProperty(QStringLiteral("appTheme"),
-                                                      &alcedo::ui::AppTheme::Instance());
-    loaded->engine.rootContext()->setContextProperty(QStringLiteral("languageManager"),
-                                                      &loaded->language_manager);
-
-    QObject::connect(&loaded->engine, &QQmlEngine::warnings,
-                     [raw = loaded.get()](const QList<QQmlError>& warnings) {
-                       raw->qml_warnings.insert(raw->qml_warnings.end(), warnings.begin(),
-                                                warnings.end());
-                     });
-
-    loaded->engine.load(MainQmlUrl());
-    if (loaded->engine.rootObjects().empty()) {
-      std::ostringstream errors;
-      for (const auto& warning : loaded->qml_warnings) {
-        errors << warning.toString().toStdString() << '\n';
-      }
-      ADD_FAILURE() << errors.str();
-      return loaded;
-    }
-    loaded->window = qobject_cast<QQuickWindow*>(loaded->engine.rootObjects().front());
-    if (loaded->window) {
-      loaded->window->show();
-      loaded->window->requestActivate();
-    }
-    return loaded;
-  }
-};
+class WorkspaceShellTests : public MainQmlTestFixture {};
 
 TEST_F(WorkspaceShellTests, WorkspaceRouterOpensEmptyEditorAndReturnsToLibrary) {
   ASSERT_TRUE(QCoreApplication::instance());

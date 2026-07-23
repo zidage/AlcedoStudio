@@ -1,0 +1,162 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#include "support/editor_session_navigation_fixture.hpp"
+
+#include <stdexcept>
+#include <utility>
+
+namespace alcedo::test {
+
+void EditorSessionNavigationFixture::SetUp() {
+  events_.clear();
+  pipeline_         = std::make_shared<TrackingPipelinePort>(this);
+  history_          = std::make_shared<TrackingHistoryPort>(this);
+  tasks_            = std::make_shared<FakeEditorTaskPort>();
+  journal_          = std::make_shared<FakeEditorJournalPort>();
+  checkpoint_store_ = std::make_shared<FakeEditorCheckpointStore>();
+  render_submit_    = std::make_shared<FakeEditorRenderSubmitPort>();
+
+  EditorSessionLifecycle::Dependencies life_deps;
+  life_deps.pipeline = pipeline_;
+  life_deps.history  = history_;
+  lifecycle_         = std::make_unique<EditorSessionLifecycle>(std::move(life_deps));
+
+  EditorSaveCheckpointService::Dependencies save_deps;
+  save_deps.journal          = journal_;
+  save_deps.checkpoint_store = checkpoint_store_;
+  save_deps.tasks            = tasks_;
+  save_service_              = std::make_unique<EditorSaveCheckpointService>(std::move(save_deps));
+
+  // Render/edit exist only to satisfy the navigation constructor. They are not
+  // part of this fixture's public surface and do not open GPU or DuckDB paths.
+  EditorSessionRenderController::Dependencies render_deps{render_submit_,
+                                                          [](const EditorRenderEvent&) {}};
+  render_ = std::make_unique<EditorSessionRenderController>(std::move(render_deps));
+
+  EditorSessionEditController::Dependencies edit_deps{history_, journal_};
+  edit_ = std::make_unique<EditorSessionEditController>(std::move(edit_deps));
+
+  nav_ = std::make_unique<EditorSessionNavigationController>(
+      *lifecycle_, *save_service_, *render_, *edit_, journal_.get(), checkpoint_store_.get(),
+      history_.get());
+}
+
+void EditorSessionNavigationFixture::TearDown() {
+  if (save_service_) {
+    save_service_->CancelAndWait();
+  }
+  nav_.reset();
+  edit_.reset();
+  render_.reset();
+  save_service_.reset();
+  lifecycle_.reset();
+  render_submit_.reset();
+  checkpoint_store_.reset();
+  journal_.reset();
+  tasks_.reset();
+  history_.reset();
+  pipeline_.reset();
+  events_.clear();
+}
+
+void EditorSessionNavigationFixture::RecordEvent(std::string name) {
+  events_.push_back(std::move(name));
+}
+
+void EditorSessionNavigationFixture::OpenA() {
+  std::string error;
+  if (!lifecycle_->BeginAcquire(kElementA, kImageA, false, nullptr, &error)) {
+    throw std::runtime_error("OpenA BeginAcquire failed: " + error);
+  }
+  if (!lifecycle_->AcquireGuards(&error)) {
+    throw std::runtime_error("OpenA AcquireGuards failed: " + error);
+  }
+  lifecycle_->MarkImageReady();
+  lifecycle_->MarkFirstFramePresented();
+}
+
+auto EditorSessionNavigationFixture::RequestSwitchToB() -> NavigationOutcome {
+  journal_->async_commit               = true;
+  checkpoint_store_->async_materialize = true;
+  return nav_->RequestOpenOrSwitch(kElementB, kImageB, true);
+}
+
+void EditorSessionNavigationFixture::CompleteCheckpoint() {
+  journal_->CompleteCommit(true);
+  checkpoint_store_->CompleteMaterialization(true);
+}
+
+void EditorSessionNavigationFixture::FailCheckpoint(std::string error) {
+  journal_->CompleteCommit(true);
+  checkpoint_store_->CompleteMaterialization(false, std::move(error));
+}
+
+auto EditorSessionNavigationFixture::TrackingPipelinePort::Acquire(sl_element_id_t element_id,
+                                                                   std::string*    error)
+    -> EditorPipelineGuardHandle {
+  auto handle = inner.Acquire(element_id, error);
+  if (handle.valid && element_id == kElementB && owner_ != nullptr) {
+    owner_->RecordEvent("acquire_b");
+  }
+  return handle;
+}
+
+void EditorSessionNavigationFixture::TrackingPipelinePort::Release(
+    const EditorPipelineGuardHandle& guard) {
+  if (guard.valid && guard.element_id == kElementA && owner_ != nullptr) {
+    owner_->RecordEvent("release_a");
+  }
+  inner.Release(guard);
+}
+
+auto EditorSessionNavigationFixture::TrackingHistoryPort::Acquire(sl_element_id_t element_id,
+                                                                  std::string*    error)
+    -> EditorHistoryGuardHandle {
+  return inner.Acquire(element_id, error);
+}
+
+void EditorSessionNavigationFixture::TrackingHistoryPort::Release(
+    const EditorHistoryGuardHandle& guard) {
+  inner.Release(guard);
+}
+
+auto EditorSessionNavigationFixture::TrackingHistoryPort::CaptureAdjustmentBeforePreview(
+    const EditorHistoryGuardHandle& guard, const EditorAdjustmentPatch& patch, std::string* error)
+    -> bool {
+  return inner.CaptureAdjustmentBeforePreview(guard, patch, error);
+}
+
+auto EditorSessionNavigationFixture::TrackingHistoryPort::CommitAdjustment(
+    const EditorHistoryGuardHandle& guard, const EditorAdjustmentPatch& patch, std::string* error)
+    -> bool {
+  return inner.CommitAdjustment(guard, patch, error);
+}
+
+auto EditorSessionNavigationFixture::TrackingHistoryPort::Undo(const EditorHistoryGuardHandle& guard,
+                                                               std::string* error) -> bool {
+  return inner.Undo(guard, error);
+}
+
+auto EditorSessionNavigationFixture::TrackingHistoryPort::Redo(const EditorHistoryGuardHandle& guard,
+                                                               std::string* error) -> bool {
+  return inner.Redo(guard, error);
+}
+
+auto EditorSessionNavigationFixture::TrackingHistoryPort::ReadAdjustmentSnapshot(
+    const EditorHistoryGuardHandle& guard, EditorRenderAdjustmentSnapshot* snapshot,
+    std::string* error) -> bool {
+  return inner.ReadAdjustmentSnapshot(guard, snapshot, error);
+}
+
+auto EditorSessionNavigationFixture::TrackingHistoryPort::CaptureSaveCheckpoint(
+    const EditorHistoryGuardHandle& guard, std::string* error)
+    -> std::shared_ptr<const EditorMiniGitSaveCapture> {
+  if (guard.valid && guard.element_id == kElementA && owner_ != nullptr) {
+    owner_->RecordEvent("checkpoint_a");
+  }
+  return inner.CaptureSaveCheckpoint(guard, error);
+}
+
+}  // namespace alcedo::test

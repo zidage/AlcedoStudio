@@ -9,62 +9,16 @@
 #include <memory>
 #include <string>
 
-#include "app/editor_session_ports.hpp"
+#include "support/editor_session_test_ports.hpp"
 
 namespace alcedo {
 namespace {
 
-class FakePipelinePort final : public IEditorPipelinePort {
- public:
-  bool fail_acquire  = false;
-  int  acquire_count = 0;
-  int  release_count = 0;
-
-  auto Acquire(sl_element_id_t element_id, std::string* error)
-      -> EditorPipelineGuardHandle override {
-    ++acquire_count;
-    if (fail_acquire) {
-      if (error) {
-        *error = "pipeline acquire failed";
-      }
-      return {};
-    }
-    return EditorPipelineGuardHandle{element_id, true};
-  }
-  void Release(const EditorPipelineGuardHandle&) override { ++release_count; }
-};
-
-class FakeHistoryPort final : public IEditorHistoryPort {
- public:
-  bool fail_acquire  = false;
-  int  acquire_count = 0;
-  int  release_count = 0;
-
-  auto Acquire(sl_element_id_t element_id, std::string* error)
-      -> EditorHistoryGuardHandle override {
-    ++acquire_count;
-    if (fail_acquire) {
-      if (error) {
-        *error = "history acquire failed";
-      }
-      return {};
-    }
-    return EditorHistoryGuardHandle{element_id, true};
-  }
-  void Release(const EditorHistoryGuardHandle&) override { ++release_count; }
-  auto Undo(const EditorHistoryGuardHandle&, std::string*) -> bool override { return true; }
-  auto Redo(const EditorHistoryGuardHandle&, std::string*) -> bool override { return true; }
-  auto ReadAdjustmentSnapshot(const EditorHistoryGuardHandle&, EditorRenderAdjustmentSnapshot*,
-                              std::string*) -> bool override {
-    return true;
-  }
-};
-
 class EditorSessionLifecycleTest : public ::testing::Test {
  protected:
   void SetUp() override {
-    pipeline_ = std::make_shared<FakePipelinePort>();
-    history_  = std::make_shared<FakeHistoryPort>();
+    pipeline_ = std::make_shared<test::FakeEditorPipelinePort>();
+    history_  = std::make_shared<test::FakeEditorHistoryPort>();
 
     EditorSessionLifecycle::Dependencies deps;
     deps.pipeline = pipeline_;
@@ -72,21 +26,18 @@ class EditorSessionLifecycleTest : public ::testing::Test {
     lifecycle_    = std::make_unique<EditorSessionLifecycle>(std::move(deps));
   }
 
-  /// Helper: fully acquire an interactive image.
   void OpenImage(sl_element_id_t eid = 100, image_id_t iid = 200) {
     std::string error;
     ASSERT_TRUE(lifecycle_->BeginAcquire(eid, iid, false, nullptr, &error)) << error;
     ASSERT_TRUE(lifecycle_->AcquireGuards(&error)) << error;
     lifecycle_->MarkImageReady();
-    lifecycle_->MarkFirstFramePresented();  // → Interactive
+    lifecycle_->MarkFirstFramePresented();
   }
 
-  std::shared_ptr<FakePipelinePort>       pipeline_;
-  std::shared_ptr<FakeHistoryPort>        history_;
-  std::unique_ptr<EditorSessionLifecycle> lifecycle_;
+  std::shared_ptr<test::FakeEditorPipelinePort> pipeline_;
+  std::shared_ptr<test::FakeEditorHistoryPort>  history_;
+  std::unique_ptr<EditorSessionLifecycle>       lifecycle_;
 };
-
-// ── Acquire ──────────────────────────────────────────────────────────────────
 
 TEST_F(EditorSessionLifecycleTest, BeginAcquireAndAcquireGuardsSucceed) {
   std::string error;
@@ -128,8 +79,6 @@ TEST_F(EditorSessionLifecycleTest, HistoryAcquireFailureReleasesPipelineGuard) {
   EXPECT_EQ(lifecycle_->state(), EditorSessionState::Failed);
 }
 
-// ── Release ──────────────────────────────────────────────────────────────────
-
 TEST_F(EditorSessionLifecycleTest, ReleaseGuardsReleasesBothExactlyOnce) {
   ASSERT_TRUE(lifecycle_->BeginAcquire(100, 200, false, nullptr, nullptr));
   ASSERT_TRUE(lifecycle_->AcquireGuards(nullptr));
@@ -137,7 +86,6 @@ TEST_F(EditorSessionLifecycleTest, ReleaseGuardsReleasesBothExactlyOnce) {
   EXPECT_EQ(pipeline_->release_count, 1);
   EXPECT_EQ(history_->release_count, 1);
   EXPECT_FALSE(lifecycle_->has_history_guard());
-  // Second release is idempotent.
   lifecycle_->ReleaseGuards();
   EXPECT_EQ(pipeline_->release_count, 1);
   EXPECT_EQ(history_->release_count, 1);
@@ -153,8 +101,6 @@ TEST_F(EditorSessionLifecycleTest, ReleaseAfterCheckpointReleasesAndReturnsIdent
   EXPECT_EQ(history_->release_count, 1);
   EXPECT_FALSE(lifecycle_->has_history_guard());
 }
-
-// ── State transitions ────────────────────────────────────────────────────────
 
 TEST_F(EditorSessionLifecycleTest, FullAcquireToInteractiveSequence) {
   OpenImage();
@@ -173,7 +119,6 @@ TEST_F(EditorSessionLifecycleTest, SameImageReopenAdvancesSessionGeneration) {
   EXPECT_EQ(gen1.render_generation, 1u);
   EXPECT_EQ(gen1.view_generation, 1u);
 
-  // Second BeginAcquire for same image advances generation.
   ASSERT_TRUE(lifecycle_->BeginAcquire(1, 2, false, nullptr, nullptr));
   const auto gen2 = lifecycle_->identity();
   EXPECT_EQ(gen2.session_generation, 2u);
@@ -187,7 +132,6 @@ TEST_F(EditorSessionLifecycleTest, FailedSwitchKeepsCurrentImage) {
   lifecycle_->KeepCurrentAfterCheckpointFailure("save failed");
   EXPECT_EQ(lifecycle_->state(), EditorSessionState::Failed);
   EXPECT_EQ(lifecycle_->last_error(), "save failed");
-  // Identity is preserved.
   EXPECT_EQ(lifecycle_->identity().element_id, static_cast<sl_element_id_t>(1));
 }
 
@@ -230,8 +174,8 @@ TEST_F(EditorSessionLifecycleTest, CompleteCheckpointReturnsToInteractive) {
 TEST_F(EditorSessionLifecycleTest, MatchesIdentityFiltersCorrectly) {
   OpenImage(100, 200);
   EXPECT_TRUE(lifecycle_->MatchesIdentity(100, 200, 1));
-  EXPECT_FALSE(lifecycle_->MatchesIdentity(100, 200, 2));  // wrong generation
-  EXPECT_FALSE(lifecycle_->MatchesIdentity(99, 200, 1));   // wrong element
+  EXPECT_FALSE(lifecycle_->MatchesIdentity(100, 200, 2));
+  EXPECT_FALSE(lifecycle_->MatchesIdentity(99, 200, 1));
 }
 
 TEST_F(EditorSessionLifecycleTest, BeginAcquireSwitchSetsSwitchingState) {

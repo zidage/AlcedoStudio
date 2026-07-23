@@ -966,18 +966,43 @@ target_link_libraries(EditorRenderCoordinatorTest EditorSessionService GTest::gt
 gtest_discover_tests(EditorRenderCoordinatorTest TEST_PREFIX "EditorRenderCoordinatorTest."
   PROPERTIES LABELS "ci_core_flow")
 
+# Focused editor-session / Mini-Git test fixtures (no production behavior).
+add_library(EditorSessionTestSupport STATIC
+  support/editor_mini_git_project_fixture.cpp
+  support/editor_save_checkpoint_fixture.cpp
+  support/editor_session_navigation_fixture.cpp
+)
+target_include_directories(EditorSessionTestSupport
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorSessionTestSupport
+  PUBLIC
+    EditorSaveCheckpointService
+    EditorSessionLifecycle
+    EditorSessionNavigationController
+    EditorSessionEditController
+    EditorSessionRenderController
+    EditorMiniGitMaterializer
+    ProjectService
+    EditHistory
+    StorageService
+    GTest::gtest
+)
+
 # EditorSaveCheckpointService owns save work (task, journal
 # commit, materialization). Focused unit tests with fake ports.
 add_executable(EditorSaveCheckpointServiceTest app/editor_save_checkpoint_service_test.cpp)
-target_include_directories(EditorSaveCheckpointServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditorSaveCheckpointServiceTest EditorSaveCheckpointService GTest::gtest_main)
+target_include_directories(EditorSaveCheckpointServiceTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorSaveCheckpointServiceTest
+  EditorSessionTestSupport EditorSaveCheckpointService GTest::gtest_main)
 gtest_discover_tests(EditorSaveCheckpointServiceTest TEST_PREFIX "EditorSaveCheckpointServiceTest."
   PROPERTIES LABELS "ci_core_flow;editor_session")
 
 # EditorSessionLifecycle owns state, identity, guards, and
 # error. Focused unit tests with fake ports.
 add_executable(EditorSessionLifecycleTest app/editor_session_lifecycle_test.cpp)
-target_include_directories(EditorSessionLifecycleTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorSessionLifecycleTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorSessionLifecycleTest EditorSessionLifecycle GTest::gtest_main)
 gtest_discover_tests(EditorSessionLifecycleTest TEST_PREFIX "EditorSessionLifecycleTest."
   PROPERTIES LABELS "ci_core_flow;editor_session")
@@ -986,8 +1011,10 @@ gtest_discover_tests(EditorSessionLifecycleTest TEST_PREFIX "EditorSessionLifecy
 # close actions. Focused unit tests with fake ports and a real save service.
 add_executable(EditorSessionNavigationControllerTest
     app/editor_session_navigation_controller_test.cpp)
-target_include_directories(EditorSessionNavigationControllerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorSessionNavigationControllerTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorSessionNavigationControllerTest
+    EditorSessionTestSupport
     EditorSessionNavigationController EditorSaveCheckpointService EditorSessionLifecycle
     GTest::gtest_main)
 gtest_discover_tests(EditorSessionNavigationControllerTest
@@ -1008,7 +1035,8 @@ gtest_discover_tests(EditorSessionRenderControllerTest
 # EditorSessionEditController owns adjustment/history
 # operations. Focused unit tests with fake ports.
 add_executable(EditorSessionEditControllerTest app/editor_session_edit_controller_test.cpp)
-target_include_directories(EditorSessionEditControllerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorSessionEditControllerTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorSessionEditControllerTest
     EditorSessionEditController EditorSessionLifecycle EditHistory
     GTest::gtest_main)
@@ -1200,8 +1228,10 @@ endif()
 
 # Phase 6C-5: mini-Git save checkpoint materialization facade tests.
 add_executable(EditorMiniGitMaterializerTest edit/history/editor_mini_git_materializer_test.cpp)
-target_include_directories(EditorMiniGitMaterializerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorMiniGitMaterializerTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorMiniGitMaterializerTest
+  EditorSessionTestSupport
   EditorMiniGitMaterializer
   EditorSaveCheckpointCoordinator
   ProjectService
@@ -1209,7 +1239,7 @@ target_link_libraries(EditorMiniGitMaterializerTest
   StorageService
   GTest::gtest_main)
 gtest_discover_tests(EditorMiniGitMaterializerTest TEST_PREFIX "EditorMiniGitMaterializerTest."
-  PROPERTIES LABELS "ci_core_flow;edit;history")
+  PROPERTIES LABELS "ci_core_flow;edit;history;editor_history")
 if(WIN32)
   alcedo_copy_duckdb_extensions(EditorMiniGitMaterializerTest)
   if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
@@ -1757,7 +1787,7 @@ def_ui_test(AlbumBackendThumbnailTest album_backend_thumbnail_test.cpp)
 def_ui_test(AlbumBackendI18nTest album_backend_i18n_test.cpp)
 def_ui_test(AlbumBackendCiWorkflowTest album_backend_ci_workflow_test.cpp "ci_raw_flow")
 def_ui_test(AlbumBackendBackgroundTaskTest album_backend_background_task_test.cpp)
-def_ui_test(AlbumBackendInteractionPolicyTest album_backend_interaction_policy_test.cpp)
+def_ui_test(AlbumBackendInteractionPolicyTest album_backend_interaction_policy_test.cpp "interaction_policy")
 def_ui_test(AlbumBackendDbWriteBarrierTest album_backend_db_write_barrier_test.cpp)
 def_ui_test(ApplicationModuleHostLifecycleTest application_module_host_lifecycle_test.cpp)
 def_ui_test(ApplicationModuleHostShutdownTest application_module_host_shutdown_test.cpp)
@@ -1895,6 +1925,7 @@ gtest_discover_tests(MainQmlWorkflowTest TEST_PREFIX "MainQmlWorkflowTest.")
 
 add_executable(WorkspaceShellTest
     ui/workspace_shell_test.cpp
+    ui/main_qml_test_fixture.cpp
     ui/widget_test_main.cpp
     ui/editor_dialog_stub.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
@@ -1921,7 +1952,8 @@ target_link_libraries(WorkspaceShellTest
 target_compile_definitions(WorkspaceShellTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(WorkspaceShellTest TEST_PREFIX "WorkspaceShellTest.")
+gtest_discover_tests(WorkspaceShellTest TEST_PREFIX "WorkspaceShellTest."
+  PROPERTIES LABELS "workspace_qml")
 
 # Phase 6A: typed adjustment models (no GPU/QML rendering; QSignalSpy drives the
 # debounce timer deterministically via the event loop).
@@ -2265,6 +2297,12 @@ alcedo_assign_test_category(app ALCEDO_BUILD_APP_TESTS alcedo_tests_app
   PipelineServiceTest
   EditHistoryMgmtServiceTest
   EditorRenderCoordinatorTest
+  EditorSaveCheckpointServiceTest
+  EditorSessionLifecycleTest
+  EditorSessionNavigationControllerTest
+  EditorSessionRenderControllerTest
+  EditorSessionEditControllerTest
+  EditorSessionServiceFacadeTest
   EditorSessionControllerPhase5ATest
   SemanticGenerationServiceTest
   ThumbnailServiceTest
