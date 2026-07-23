@@ -41,8 +41,7 @@ void EditorSaveCheckpointService::AsyncCallbackGate::StopAndWait() {
 // ── EditorSaveCheckpointService ──────────────────────────────────────────────
 
 EditorSaveCheckpointService::EditorSaveCheckpointService(Dependencies dependencies)
-    : deps_(std::move(dependencies)),
-      callback_gate_(std::make_shared<AsyncCallbackGate>()) {}
+    : deps_(std::move(dependencies)), callback_gate_(std::make_shared<AsyncCallbackGate>()) {}
 
 EditorSaveCheckpointService::~EditorSaveCheckpointService() {
   if (callback_gate_) {
@@ -50,18 +49,17 @@ EditorSaveCheckpointService::~EditorSaveCheckpointService() {
   }
 }
 
-auto EditorSaveCheckpointService::Start(const SaveCheckpointRequest&  request,
-                                        SaveCheckpointCompletion    completion)
-    -> CheckpointTicket {
+auto EditorSaveCheckpointService::Start(const SaveCheckpointRequest& request,
+                                        SaveCheckpointCompletion completion) -> CheckpointTicket {
   std::uint64_t task_id = 0;
   if (deps_.tasks) {
     task_id = deps_.tasks->BeginTask("editor_save", request.element_id);
     if (task_id == 0) {
       if (completion) {
         SaveCheckpointResult result;
-        result.session_generation  = request.session_generation;
+        result.session_generation   = request.session_generation;
         result.checkpoint_completed = false;
-        result.error               = "Failed to start editor save task";
+        result.error                = "Failed to start editor save task";
         completion(result);
       }
       return CheckpointTicket{};
@@ -75,8 +73,8 @@ auto EditorSaveCheckpointService::Start(const SaveCheckpointRequest&  request,
 
   {
     std::scoped_lock lock(mutex_);
-    pending_saves_.push_back(PendingSave{request_id, request.session_generation,
-                                         request.element_id, task_id, completion});
+    pending_saves_.push_back(PendingSave{request_id, request.session_generation, request.element_id,
+                                         task_id, completion});
   }
 
   struct StartObservation {
@@ -87,10 +85,10 @@ auto EditorSaveCheckpointService::Start(const SaveCheckpointRequest&  request,
   const auto observation = std::make_shared<StartObservation>();
   const auto gate        = callback_gate_;
   const auto on_commit   = [this, gate, observation, request_id,
-                            completion](EditorJournalCommitOutcome outcome) {
+                          completion](EditorJournalCommitOutcome outcome) {
     observation->error = outcome.error;
     observation->commit_succeeded.store(outcome.accepted && outcome.durable,
-                                        std::memory_order_release);
+                                          std::memory_order_release);
     observation->completed.store(true, std::memory_order_release);
     if (!gate || !gate->Enter()) {
       return;
@@ -101,8 +99,8 @@ auto EditorSaveCheckpointService::Start(const SaveCheckpointRequest&  request,
 
   bool started_async = true;
   if (deps_.journal) {
-    started_async =
-        deps_.journal->CommitJournalAsync(request.element_id, request.session_generation, on_commit);
+    started_async = deps_.journal->CommitJournalAsync(request.element_id,
+                                                      request.session_generation, on_commit);
   } else {
     on_commit(EditorJournalCommitOutcome{true, true, false, 0, 0, {}});
   }
@@ -117,12 +115,12 @@ auto EditorSaveCheckpointService::Start(const SaveCheckpointRequest&  request,
       }
       if (rolled_completion) {
         SaveCheckpointResult result;
-        result.request_id          = request_id;
-        result.session_generation  = request.session_generation;
-        result.task_id             = rolled_task_id;
+        result.request_id           = request_id;
+        result.session_generation   = request.session_generation;
+        result.task_id              = rolled_task_id;
         result.checkpoint_completed = false;
-        result.error = observation->error.empty() ? "Journal commit could not start"
-                                                  : observation->error;
+        result.error =
+            observation->error.empty() ? "Journal commit could not start" : observation->error;
         rolled_completion(result);
       }
     }
@@ -153,9 +151,10 @@ void EditorSaveCheckpointService::OnCheckpointFinished(const SaveCheckpointResul
   std::uint64_t            task_id = 0;
   {
     std::scoped_lock lock(mutex_);
-    auto it = std::find_if(pending_saves_.begin(), pending_saves_.end(),
-                           [&result](const PendingSave& save) {
-                             return save.request_id == result.request_id;
+    auto             it = std::find_if(pending_saves_.begin(), pending_saves_.end(),
+                                       [&result](const PendingSave& save) {
+                             return save.request_id == result.request_id &&
+                                    save.session_generation == result.session_generation;
                            });
     if (it == pending_saves_.end()) {
       return;
@@ -166,27 +165,26 @@ void EditorSaveCheckpointService::OnCheckpointFinished(const SaveCheckpointResul
   }
   if (deps_.tasks && task_id != 0) {
     deps_.tasks->EndTask(task_id, result.checkpoint_completed,
-                        result.error.empty() ? "checkpoint finished" : result.error);
+                         result.error.empty() ? "checkpoint finished" : result.error);
   }
   if (completion) {
     completion(result);
   }
 }
 
-void EditorSaveCheckpointService::HandleJournalCommit(
-    std::uint64_t request_id, EditorJournalCommitOutcome outcome,
-    SaveCheckpointCompletion completion) {
-  std::uint64_t   task_id       = 0;
-  sl_element_id_t element_id    = 0;
-  std::uint64_t   session_gen   = 0;
-  bool            found         = false;
+void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t              request_id,
+                                                      EditorJournalCommitOutcome outcome,
+                                                      SaveCheckpointCompletion   completion) {
+  std::uint64_t   task_id           = 0;
+  sl_element_id_t element_id        = 0;
+  std::uint64_t   session_gen       = 0;
+  bool            found             = false;
   bool            start_materialize = false;
   {
     std::scoped_lock lock(mutex_);
-    auto it = std::find_if(pending_saves_.begin(), pending_saves_.end(),
-                           [request_id](const PendingSave& save) {
-                             return save.request_id == request_id;
-                           });
+    auto             it = std::find_if(
+        pending_saves_.begin(), pending_saves_.end(),
+        [request_id](const PendingSave& save) { return save.request_id == request_id; });
     if (it == pending_saves_.end()) {
       return;
     }
@@ -209,7 +207,7 @@ void EditorSaveCheckpointService::HandleJournalCommit(
   }
 
   if (start_materialize) {
-    const auto gate = callback_gate_;
+    const auto gate    = callback_gate_;
     const bool started = deps_.journal->MaterializeAsync(
         element_id, session_gen,
         [this, gate, request_id, completion](EditorMaterializeOutcome materialized) mutable {
@@ -220,36 +218,34 @@ void EditorSaveCheckpointService::HandleJournalCommit(
           gate->Leave();
         });
     if (!started) {
-      std::uint64_t late_task_id = 0;
+      std::uint64_t            late_task_id = 0;
       SaveCheckpointCompletion late_completion;
       if (TakePendingSave(request_id, &late_task_id, &late_completion)) {
-        FinishSave(request_id, session_gen, late_task_id, false,
-                   "Materialization could not start", late_completion);
+        FinishSave(request_id, session_gen, late_task_id, false, "Materialization could not start",
+                   late_completion);
       }
     }
     return;
   }
 
-  const bool ok = outcome.accepted && outcome.durable;
-  const std::string msg =
-      outcome.error.empty()
-          ? (ok ? "Journal commit complete" : "Journal commit failed")
-          : outcome.error;
+  const bool        ok  = outcome.accepted && outcome.durable;
+  const std::string msg = outcome.error.empty()
+                              ? (ok ? "Journal commit complete" : "Journal commit failed")
+                              : outcome.error;
   FinishSave(request_id, session_gen, task_id, ok, msg, completion);
 }
 
-void EditorSaveCheckpointService::HandleMaterialization(
-    std::uint64_t request_id, EditorMaterializeOutcome outcome,
-    SaveCheckpointCompletion completion) {
+void EditorSaveCheckpointService::HandleMaterialization(std::uint64_t            request_id,
+                                                        EditorMaterializeOutcome outcome,
+                                                        SaveCheckpointCompletion completion) {
   std::uint64_t task_id     = 0;
   std::uint64_t session_gen = 0;
   bool          found       = false;
   {
     std::scoped_lock lock(mutex_);
-    auto it = std::find_if(pending_saves_.begin(), pending_saves_.end(),
-                           [request_id](const PendingSave& save) {
-                             return save.request_id == request_id;
-                           });
+    auto             it = std::find_if(
+        pending_saves_.begin(), pending_saves_.end(),
+        [request_id](const PendingSave& save) { return save.request_id == request_id; });
     if (it == pending_saves_.end()) {
       return;
     }
@@ -261,7 +257,7 @@ void EditorSaveCheckpointService::HandleMaterialization(
   if (!found) {
     return;
   }
-  const bool ok = outcome.accepted && outcome.materialized;
+  const bool        ok = outcome.accepted && outcome.materialized;
   const std::string msg =
       outcome.error.empty()
           ? (outcome.materialized ? "Editor session materialized" : "Editor materialization failed")
@@ -269,10 +265,9 @@ void EditorSaveCheckpointService::HandleMaterialization(
   FinishSave(request_id, session_gen, task_id, ok, msg, completion);
 }
 
-void EditorSaveCheckpointService::FinishSave(std::uint64_t            request_id,
-                                             std::uint64_t            session_generation,
-                                             std::uint64_t            task_id,
-                                             bool                     checkpoint_completed,
+void EditorSaveCheckpointService::FinishSave(std::uint64_t request_id,
+                                             std::uint64_t session_generation,
+                                             std::uint64_t task_id, bool checkpoint_completed,
                                              std::string              message,
                                              SaveCheckpointCompletion completion) {
   if (deps_.tasks && task_id != 0) {
@@ -280,23 +275,21 @@ void EditorSaveCheckpointService::FinishSave(std::uint64_t            request_id
   }
   if (completion) {
     SaveCheckpointResult result;
-    result.request_id          = request_id;
-    result.session_generation  = session_generation;
-    result.task_id             = task_id;
+    result.request_id           = request_id;
+    result.session_generation   = session_generation;
+    result.task_id              = task_id;
     result.checkpoint_completed = checkpoint_completed;
-    result.error               = std::move(message);
+    result.error                = std::move(message);
     completion(result);
   }
 }
 
-auto EditorSaveCheckpointService::TakePendingSave(std::uint64_t            request_id,
-                                                   std::uint64_t*           task_id,
-                                                   SaveCheckpointCompletion* completion) -> bool {
+auto EditorSaveCheckpointService::TakePendingSave(std::uint64_t request_id, std::uint64_t* task_id,
+                                                  SaveCheckpointCompletion* completion) -> bool {
   std::scoped_lock lock(mutex_);
-  auto it = std::find_if(pending_saves_.begin(), pending_saves_.end(),
-                         [request_id](const PendingSave& save) {
-                           return save.request_id == request_id;
-                         });
+  auto             it =
+      std::find_if(pending_saves_.begin(), pending_saves_.end(),
+                   [request_id](const PendingSave& save) { return save.request_id == request_id; });
   if (it == pending_saves_.end()) {
     return false;
   }

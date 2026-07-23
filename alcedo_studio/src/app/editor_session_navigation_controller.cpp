@@ -13,12 +13,9 @@
 namespace alcedo {
 
 EditorSessionNavigationController::EditorSessionNavigationController(
-    EditorSessionLifecycle&           lifecycle,
-    EditorSaveCheckpointService&      save_service,
-    EditorSessionRenderController&   render,
-    EditorSessionEditController&      edit,
-    IEditorJournalPort*               journal,
-    IEditorHistoryPort*               history)
+    EditorSessionLifecycle& lifecycle, EditorSaveCheckpointService& save_service,
+    EditorSessionRenderController& render, EditorSessionEditController& edit,
+    IEditorJournalPort* journal, IEditorHistoryPort* history)
     : lifecycle_(lifecycle),
       save_service_(save_service),
       render_(render),
@@ -27,10 +24,9 @@ EditorSessionNavigationController::EditorSessionNavigationController(
       history_(history) {}
 
 auto EditorSessionNavigationController::RequestOpenOrSwitch(sl_element_id_t element_id,
-                                                            image_id_t      image_id,
-                                                            bool            is_switch)
+                                                            image_id_t image_id, bool is_switch)
     -> NavigationOutcome {
-  std::scoped_lock lock(mutex_);
+  std::scoped_lock  lock(mutex_);
   NavigationOutcome outcome;
 
   if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
@@ -49,15 +45,14 @@ auto EditorSessionNavigationController::RequestOpenOrSwitch(sl_element_id_t elem
   const auto current_state    = lifecycle_.state();
 
   // Same image already open: no-op.
-  if (current_identity.element_id == element_id &&
-      current_identity.image_id == image_id &&
+  if (current_identity.element_id == element_id && current_identity.image_id == image_id &&
       (current_state == EditorSessionState::Loading ||
        current_state == EditorSessionState::Interactive ||
        current_state == EditorSessionState::Acquiring ||
        current_state == EditorSessionState::Switching ||
        current_state == EditorSessionState::Saving)) {
     outcome.completed_synchronously = true;
-    outcome.same_image_noop        = true;
+    outcome.same_image_noop         = true;
     outcome.message                 = "Image already open";
     return outcome;
   }
@@ -65,8 +60,12 @@ auto EditorSessionNavigationController::RequestOpenOrSwitch(sl_element_id_t elem
   // Seal the prior image before acquiring the next one.
   if (current_identity.session_generation != 0 &&
       (current_identity.element_id != 0 || current_identity.image_id != 0)) {
-    pending_action_ = PendingEditorAction{PendingEditorActionKind::SwitchImage, element_id,
-                                          image_id, is_switch, true, CheckpointTicket{}};
+    pending_action_   = PendingEditorAction{PendingEditorActionKind::SwitchImage,
+                                          element_id,
+                                          image_id,
+                                          is_switch,
+                                          true,
+                                          CheckpointTicket{}};
     const auto ticket = SealAndStartSave(true, true);
     if (!ticket.valid()) {
       pending_action_.reset();
@@ -74,18 +73,21 @@ auto EditorSessionNavigationController::RequestOpenOrSwitch(sl_element_id_t elem
       outcome.message = "Failed to save current image";
       return outcome;
     }
-    pending_action_->ticket                   = ticket;
-    outcome.ticket                            = ticket;
-    outcome.sealed_session_generation         = current_identity.session_generation;
-    if (save_service_.active()) {
-      outcome.waiting_for_checkpoint = true;
+    // If pending_action_ was cleared during SealAndStartSave, the
+    // OnCheckpointFinished callback ran synchronously inside
+    // SaveCheckpointService::Start. The save completed immediately.
+    if (!pending_action_.has_value()) {
+      outcome.ticket                    = ticket;
+      outcome.sealed_session_generation = current_identity.session_generation;
+    } else {
+      pending_action_->ticket           = ticket;
+      outcome.ticket                    = ticket;
+      outcome.sealed_session_generation = current_identity.session_generation;
+      outcome.waiting_for_checkpoint    = true;
       outcome.message = "Waiting for save checkpoint before loading the next image";
       return outcome;
     }
-    // Sync save completed. Resume immediately.
-    pending_action_.reset();
-    lifecycle_.ReleaseAfterCheckpoint();
-    ContinueToTarget(element_id, image_id, is_switch);
+    // Synchronous save: OnCheckpointFinished already released guards.
     outcome.completed_synchronously = true;
     outcome.message                 = "Switched to next image";
     return outcome;
@@ -99,7 +101,7 @@ auto EditorSessionNavigationController::RequestOpenOrSwitch(sl_element_id_t elem
 }
 
 auto EditorSessionNavigationController::RequestClose(bool persist_changes) -> NavigationOutcome {
-  std::scoped_lock lock(mutex_);
+  std::scoped_lock  lock(mutex_);
   NavigationOutcome outcome;
 
   if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
@@ -116,9 +118,8 @@ auto EditorSessionNavigationController::RequestClose(bool persist_changes) -> Na
 
   const auto current_identity = lifecycle_.identity();
   if (persist_changes && current_identity.element_id != 0 && current_identity.image_id != 0) {
-    pending_action_ =
-        PendingEditorAction{PendingEditorActionKind::CloseEditor, 0, 0, false, true,
-                            CheckpointTicket{}};
+    pending_action_ = PendingEditorAction{
+        PendingEditorActionKind::CloseEditor, 0, 0, false, true, CheckpointTicket{}};
     const auto ticket = SealAndStartSave(true, true);
     if (!ticket.valid()) {
       pending_action_.reset();
@@ -126,17 +127,18 @@ auto EditorSessionNavigationController::RequestClose(bool persist_changes) -> Na
       outcome.message = "Failed to close editor session";
       return outcome;
     }
-    pending_action_->ticket                   = ticket;
-    outcome.ticket                            = ticket;
-    outcome.sealed_session_generation         = current_identity.session_generation;
-    if (save_service_.active()) {
-      outcome.waiting_for_checkpoint = true;
-      outcome.message                = "Waiting for save checkpoint before closing";
+    if (!pending_action_.has_value()) {
+      outcome.ticket                    = ticket;
+      outcome.sealed_session_generation = current_identity.session_generation;
+    } else {
+      pending_action_->ticket           = ticket;
+      outcome.ticket                    = ticket;
+      outcome.sealed_session_generation = current_identity.session_generation;
+      outcome.waiting_for_checkpoint    = true;
+      outcome.message                   = "Waiting for save checkpoint before closing";
       return outcome;
     }
-    // Sync save completed.
-    lifecycle_.ReleaseAfterCheckpoint();
-    ContinueToClose(persist_changes);
+    // Synchronous save: OnCheckpointFinished already released guards.
     outcome.completed_synchronously = true;
     outcome.message                 = "Editor session closed";
     return outcome;
@@ -157,23 +159,27 @@ auto EditorSessionNavigationController::RequestClose(bool persist_changes) -> Na
   return outcome;
 }
 
-void EditorSessionNavigationController::OnCheckpointFinished(
-    const SaveCheckpointResult& result) {
+void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpointResult& result) {
   std::scoped_lock lock(mutex_);
   if (!pending_action_.has_value()) {
     return;
   }
   const auto pending = *pending_action_;
-  // Correlate by request id and session generation.
-  if (pending.ticket.request_id != result.request_id ||
-      pending.ticket.session_generation != result.session_generation) {
+  // When the ticket has not been set yet (request_id == 0), the completion
+  // callback fired synchronously inside SaveCheckpointService::Start before
+  // the caller obtained the ticket. Accept the result unconditionally.
+  // Otherwise, correlate by request_id and session_generation to reject
+  // stale completions from earlier saves.
+  if (pending.ticket.request_id != 0 &&
+      (pending.ticket.request_id != result.request_id ||
+       pending.ticket.session_generation != result.session_generation)) {
     return;
   }
   pending_action_.reset();
 
   if (!result.checkpoint_completed) {
-    lifecycle_.KeepCurrentAfterCheckpointFailure(
-        result.error.empty() ? "Save checkpoint failed" : result.error);
+    lifecycle_.KeepCurrentAfterCheckpointFailure(result.error.empty() ? "Save checkpoint failed"
+                                                                      : result.error);
     return;
   }
 
@@ -218,13 +224,11 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
     }
     if (start_background_save) {
       SaveCheckpointRequest req;
-      req.element_id        = identity.element_id;
+      req.element_id         = identity.element_id;
       req.session_generation = identity.session_generation;
       lifecycle_.BeginCheckpoint();
-      return save_service_.Start(req,
-                                 [this](const SaveCheckpointResult& r) {
-                                   OnCheckpointFinished(r);
-                                 });
+      return save_service_.Start(
+          req, [this](const SaveCheckpointResult& r) { OnCheckpointFinished(r); });
     }
   } else if (journal_ != nullptr) {
     std::string error;
@@ -236,8 +240,7 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
 }
 
 void EditorSessionNavigationController::ContinueToTarget(sl_element_id_t element_id,
-                                                         image_id_t      image_id,
-                                                         bool            is_switch) {
+                                                         image_id_t image_id, bool is_switch) {
   std::string error;
   if (!lifecycle_.BeginAcquire(element_id, image_id, is_switch, journal_, &error)) {
     lifecycle_.Fail(error);
@@ -267,9 +270,9 @@ void EditorSessionNavigationController::ContinueToTarget(sl_element_id_t element
   render_.MarkImageAcquired();
 
   EditorRenderCommand command;
-  command.reason     = is_switch ? EditorRenderReason::ImageSwitch : EditorRenderReason::InitialFrame;
+  command.reason = is_switch ? EditorRenderReason::ImageSwitch : EditorRenderReason::InitialFrame;
   command.adjustment = edit_.adjustment_snapshot();
-  render_.RouteInitialRender(command);
+  render_.RouteInitialRender(command, lifecycle_.identity());
 }
 
 void EditorSessionNavigationController::ContinueToClose(bool persist_changes) {

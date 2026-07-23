@@ -175,7 +175,7 @@ class EditorSessionProductionJournalPort final : public alcedo::IEditorJournalPo
   std::unordered_map<sl_element_id_t, std::shared_ptr<alcedo::EditorJournalWriter>> writers_;
   std::unordered_map<sl_element_id_t, std::shared_ptr<std::mutex>>                  image_locks_;
   std::shared_ptr<alcedo::EditorHistoryMaterializer>                                materializer_;
-  std::shared_ptr<alcedo::StorageService> materializer_storage_;
+  std::shared_ptr<alcedo::StorageService>            materializer_storage_;
   std::shared_ptr<alcedo::EditorMiniGitMaterializer> mini_git_materializer_;
   std::shared_ptr<alcedo::StorageService>            mini_git_materializer_storage_;
   std::weak_ptr<EditorSessionProductionHistoryPort>  history_port_;
@@ -206,9 +206,9 @@ class EditorSessionProductionHistoryPort final : public alcedo::IEditorHistoryPo
   auto CaptureSaveCheckpoint(const alcedo::EditorHistoryGuardHandle& guard, std::string* error)
       -> bool override;
 
-  /// Take ownership of a capture produced by CaptureSaveCheckpoint for the
-  /// matching element (consumed by the journal materialize path).
-  auto TakeSaveCapture(sl_element_id_t element_id)
+  /// Consume a capture produced by CaptureSaveCheckpoint for the matching
+  /// element (the capture is moved out and the internal storage is cleared).
+  auto ConsumeSaveCapture(sl_element_id_t element_id)
       -> std::optional<alcedo::EditorMiniGitSaveCapture>;
 
  private:

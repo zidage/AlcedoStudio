@@ -15,8 +15,6 @@
 #include "app/editor_session_types.hpp"
 #include "type/type.hpp"
 
-#include <expected>
-
 namespace alcedo {
 
 /// Typed render events returned by the render controller to the facade. The
@@ -31,15 +29,15 @@ enum class EditorRenderEventKind : std::uint8_t {
 };
 
 struct EditorRenderEvent {
-  EditorRenderEventKind         kind       = EditorRenderEventKind::RenderRouted;
-  std::uint64_t                 request_id = 0;
-  EditorSessionState            state      = EditorSessionState::NoImage;
-  EditorSessionIdentity         identity{};
-  EditorRenderReason            reason     = EditorRenderReason::ZoomPan;
-  std::string                   message;
+  EditorRenderEventKind kind       = EditorRenderEventKind::RenderRouted;
+  std::uint64_t         request_id = 0;
+  EditorSessionState    state      = EditorSessionState::NoImage;
+  EditorSessionIdentity identity{};
+  EditorRenderReason    reason = EditorRenderReason::ZoomPan;
+  std::string           message;
   /// When FirstFramePresented, the identity at the time of presentation.
   /// The facade uses this to transition lifecycle to Interactive.
-  EditorSessionIdentity         presented_identity{};
+  EditorSessionIdentity presented_identity{};
 };
 
 /// Owns the render and first-frame state for the focused editor session.
@@ -54,7 +52,6 @@ class EditorSessionRenderController final {
 
   struct Dependencies {
     std::shared_ptr<IEditorRenderSubmitPort> render;
-    EditorSessionLifecycle&                  lifecycle;
     EventCallback                            on_event;
   };
 
@@ -64,20 +61,26 @@ class EditorSessionRenderController final {
   EditorSessionRenderController(const EditorSessionRenderController&)            = delete;
   EditorSessionRenderController& operator=(const EditorSessionRenderController&) = delete;
 
-  void SetPresentationSinkId(PresentationSinkId sink_id);
-  void SetPresentationSize(int width, int height);
+  void                           SetPresentationSinkId(PresentationSinkId sink_id);
+  void                           SetPresentationSize(int width, int height);
 
-  /// Route the initial render for a new image. Takes the adjustment snapshot
-  /// as an immutable input so this controller does not read edit state.
-  auto RouteInitialRender(const EditorRenderCommand& command) -> std::uint64_t;
+  /// Route the initial render for a new image. Accepts the session identity
+  /// and state as immutable inputs from the facade; does not read lifecycle.
+  auto RouteInitialRender(const EditorRenderCommand& command, const EditorSessionIdentity& identity)
+      -> std::uint64_t;
 
-  /// Route a view change. Takes the adjustment snapshot as an immutable input.
-  auto RouteViewChange(const EditorRenderCommand& command) -> EditorRenderEvent;
+  /// Route a view change. The facade provides identity and state after
+  /// advancing generations. Does not read or mutate lifecycle state.
+  auto RouteViewChange(const EditorRenderCommand& command, const EditorSessionIdentity& identity,
+                       EditorSessionState state) -> EditorRenderEvent;
 
-  /// Feed a render result from the coordinator. Updates the first-frame gate,
-  /// transitions to Interactive when the first frame is presented, and
-  /// announces render-busy transitions.
-  void NotifyRenderResult(const EditorRenderResult& render_result);
+  /// Feed a render result from the coordinator. The facade provides the
+  /// session identity and state for filtering and first-frame gate updates.
+  /// When the first frame is presented, emits a FirstFramePresented event
+  /// with the identity snapshot; the facade is responsible for applying the
+  /// Interactive lifecycle transition.
+  void NotifyRenderResult(const EditorRenderResult&    render_result,
+                          const EditorSessionIdentity& identity, EditorSessionState state);
 
   /// True when the presentation target (sink + dimensions) is ready.
   [[nodiscard]] auto PresentationTargetReady() const -> bool;
@@ -100,37 +103,41 @@ class EditorSessionRenderController final {
 
   /// Reset the first-frame and render state for a new image. Called by the
   /// facade when opening or switching images.
-  void ResetForNewImage();
+  void               ResetForNewImage();
 
   /// Mark the image as acquired after guards succeed. Stays in Loading until
   /// the first frame is presented.
-  void MarkImageAcquired();
+  void               MarkImageAcquired();
 
   /// Cancel the active render session. Called by the facade during seal/close.
-  void CancelSessionAndWait(std::uint64_t session_generation);
+  void               CancelSessionAndWait(std::uint64_t session_generation);
 
  private:
-  /// Build a fully-stamped render intent from the command. Returns nullopt
-  /// when no image is active.
-  [[nodiscard]] auto MakeRenderIntent(const EditorRenderCommand& command) const
+  /// Build a fully-stamped render intent from the command and identity.
+  /// Returns nullopt when the identity does not represent an active image.
+  [[nodiscard]] auto MakeRenderIntent(const EditorRenderCommand&   command,
+                                      const EditorSessionIdentity& identity) const
       -> std::optional<EditorRenderIntent>;
-  /// Attempt to enter Interactive when all first-frame conditions are met.
-  void TryEnterInteractiveFromFirstFrame();
-  /// Check if a render result matches the active first-frame request.
-  [[nodiscard]] auto MatchesActiveFirstFrame(const EditorRenderResult& render_result) const
-      -> bool;
+  /// Emit a FirstFramePresented event when all first-frame conditions are met.
+  /// The facade applies the Interactive lifecycle transition in its handler.
+  void                TryEnterInteractiveFromFirstFrame(const EditorSessionIdentity& identity);
+  /// Check if a render result matches the active first-frame request and the
+  /// provided identity.
+  [[nodiscard]] auto  MatchesActiveFirstFrame(const EditorRenderResult&    render_result,
+                                              const EditorSessionIdentity& identity) const -> bool;
   /// Route a pending initial render if the presentation target becomes ready.
-  void RoutePendingInitialRender(const EditorRenderCommand& command);
+  void                RoutePendingInitialRender(const EditorRenderCommand&   command,
+                                                const EditorSessionIdentity& identity);
   /// Aggregate coordinator in-flight/pending state.
-  [[nodiscard]] auto CoordinatorBusy() const -> bool;
+  [[nodiscard]] auto  CoordinatorBusy() const -> bool;
   /// Emit a render event to the facade.
-  void EmitEvent(EditorRenderEvent event);
+  void                EmitEvent(EditorRenderEvent event);
 
-  struct Dependencies                deps_;
+  struct Dependencies deps_;
   mutable std::recursive_mutex      mutex_;
-  PresentationSinkId                presentation_sink_id_     = 0;
-  int                               presentation_width_       = 0;
-  int                               presentation_height_      = 0;
+  PresentationSinkId                presentation_sink_id_    = 0;
+  int                               presentation_width_      = 0;
+  int                               presentation_height_     = 0;
   std::uint64_t                     first_frame_request_id_  = 0;
   std::uint64_t                     quality_base_request_id_ = 0;
   bool                              image_acquired_          = false;
@@ -142,7 +149,11 @@ class EditorSessionRenderController final {
   EditorRenderAdjustmentSnapshot    pending_initial_adjustment_;
   EditorRenderSupersessionPolicy    pending_initial_policy_ =
       EditorRenderSupersessionPolicy::CancelObsolete;
-  bool last_notified_render_busy_ = false;
+  /// Identity at the time the first frame was routed. Used to correlate the
+  /// first-frame complete→submit→present gate and to emit the
+  /// FirstFramePresented event with the correct identity snapshot.
+  EditorSessionIdentity                                pending_session_identity_{};
+  bool                                                 last_notified_render_busy_ = false;
   std::optional<std::chrono::steady_clock::time_point> first_frame_route_time_{};
   double                                               first_frame_time_ms_ = -1.0;
 };

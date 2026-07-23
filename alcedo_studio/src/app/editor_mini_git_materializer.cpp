@@ -30,8 +30,7 @@ auto SharedCoordinator() -> std::shared_ptr<EditorSaveCheckpointCoordinator> {
 
 auto MakeEditorSerializedPipelineState(const root_id_t& root_id, head_commit_hash_t head,
                                        const transaction_chain_hash_t& chain,
-                                       const nlohmann::json&           pipeline_params)
-    -> nlohmann::json {
+                                       const nlohmann::json& pipeline_params) -> nlohmann::json {
   return nlohmann::json{{"state_format_version", 1},
                         {"root_id", root_id.ToString()},
                         {"head_commit_hash", HeadCommitHashToStorage(head)},
@@ -41,7 +40,7 @@ auto MakeEditorSerializedPipelineState(const root_id_t& root_id, head_commit_has
 
 auto FoldMiniGitJournalFromMaterializedBase(CommitGraph&                             graph,
                                             const std::vector<MiniGitJournalRecord>& records,
-                                            std::string*                             error) -> bool {
+                                            std::string* error) -> bool {
   std::size_t applied_from = 0;
   return MiniGitWorkingHistory::ReplaySkippingMaterializedPrefix(graph, records, &applied_from,
                                                                  error);
@@ -85,8 +84,7 @@ EditorMiniGitMaterializer::EditorMiniGitMaterializer(std::shared_ptr<StorageServ
 }
 
 auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capture,
-                                            std::string*                    error)
-    -> EditorMiniGitMaterializeResult {
+                                            std::string* error) -> EditorMiniGitMaterializeResult {
   EditorMiniGitMaterializeResult result;
   if (capture.element_id == 0) {
     SetError(error, "mini-Git materialize requires an element id");
@@ -104,7 +102,7 @@ auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capt
     return result;
   }
 
-  bool head_moved = !capture.no_journal_changes && !capture.journal_records.empty();
+  bool head_moved = !capture.journal_already_materialized && !capture.journal_records.empty();
 
   try {
     auto               db_guard = storage_->GetDBController().GetConnectionGuard();
@@ -121,7 +119,7 @@ auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capt
       const auto prior_head  = folded.GetActiveVersionRef().head_commit_hash;
       const auto prior_chain = folded.ChainHashForHead(prior_head);
 
-      if (capture.no_journal_changes || capture.journal_records.empty()) {
+      if (capture.journal_already_materialized || capture.journal_records.empty()) {
         // Saving with no journal changes succeeds without moving the Version head.
         if (prior_head != capture.working_head || prior_chain != capture.transaction_chain_hash) {
           SetError(error,
@@ -129,9 +127,9 @@ auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capt
           result.error = error != nullptr ? *error : "head mismatch on empty journal";
           return result;
         }
-        auto materialization = capture.materialization;
-        materialization.image_state.materialized_head_commit_hash         = prior_head;
-        materialization.image_state.materialized_transaction_chain_hash   = prior_chain;
+        auto materialization                                            = capture.materialization;
+        materialization.image_state.materialized_head_commit_hash       = prior_head;
+        materialization.image_state.materialized_transaction_chain_hash = prior_chain;
         // Keep Version refs at the stored heads; only refresh serialized state.
         materialization.Validate();
         graph_service.Materialize(materialization);
@@ -139,21 +137,20 @@ auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capt
       } else {
         // Pure journal fold — no pipeline replay or mutation.
         std::string fold_error;
-        if (!FoldMiniGitJournalFromMaterializedBase(folded, capture.journal_records,
-                                                    &fold_error)) {
+        if (!FoldMiniGitJournalFromMaterializedBase(folded, capture.journal_records, &fold_error)) {
           SetError(error, fold_error.empty() ? "mini-Git journal fold failed" : fold_error);
           result.error = error != nullptr ? *error : fold_error;
           return result;
         }
         const auto folded_head  = folded.GetActiveVersionRef().head_commit_hash;
         const auto folded_chain = folded.ChainHashForHead(folded_head);
-        if (folded_head != capture.working_head ||
-            folded_chain != capture.transaction_chain_hash) {
+        if (folded_head != capture.working_head || folded_chain != capture.transaction_chain_hash) {
           SetError(error, "mini-Git journal fold does not match the captured pipeline head/hash");
           result.error = error != nullptr ? *error : "journal fold mismatch";
           return result;
         }
-        head_moved = prior_head != capture.working_head || prior_chain != capture.transaction_chain_hash;
+        head_moved =
+            prior_head != capture.working_head || prior_chain != capture.transaction_chain_hash;
         graph_service.Materialize(capture.materialization);
       }
     }
@@ -208,7 +205,7 @@ auto EditorMiniGitMaterializer::RecoverAndMaterialize(sl_element_id_t           
       return result;
     }
 
-    auto        folded = *stored_graph;
+    auto        folded      = *stored_graph;
     const auto  prior_head  = folded.GetActiveVersionRef().head_commit_hash;
     const auto  prior_chain = folded.ChainHashForHead(prior_head);
     std::string fold_error;

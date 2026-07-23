@@ -136,32 +136,21 @@ class EditorSaveCheckpointServiceTest : public ::testing::Test {
 
 // ── Tests ────────────────────────────────────────────────────────────────────
 
-TEST_F(EditorSaveCheckpointServiceTest, TaskBeginFailureStartReturnsFalseAndNoCompletion) {
+TEST_F(EditorSaveCheckpointServiceTest, TaskBeginFailureReturnsInvalidTicket) {
   tasks_->fail_begin                     = true;
 
-  bool                 started_called    = false;
-  std::uint64_t        started_task_id   = 999;
   bool                 completion_called = false;
   SaveCheckpointResult completion_result;
 
-  const auto           ok = service_->Start(
-      MakeRequest(),
-      [&](std::uint64_t task_id) {
-        started_called  = true;
-        started_task_id = task_id;
-      },
-      [&](const SaveCheckpointResult& result) {
-        completion_called = true;
-        completion_result = result;
-      });
+  const auto ticket = service_->Start(MakeRequest(), [&](const SaveCheckpointResult& result) {
+    completion_called = true;
+    completion_result = result;
+  });
 
-  EXPECT_FALSE(ok);
-  EXPECT_FALSE(started_called);
-  // The save service invokes completion with a failure result so the caller
-  // can record the failure reason, but Start still returns false.
+  EXPECT_FALSE(ticket.valid());
   EXPECT_TRUE(completion_called);
   EXPECT_FALSE(completion_result.checkpoint_completed);
-  EXPECT_EQ(completion_result.task_id, 0u);
+  EXPECT_EQ(completion_result.error, "Failed to start editor save task");
   EXPECT_EQ(tasks_->end_count, 0);
 }
 
@@ -169,25 +158,17 @@ TEST_F(EditorSaveCheckpointServiceTest, AsynchronousSuccessEndsTaskAndCompletesC
   journal_->async_commit                 = true;
   journal_->async_materialize            = true;
 
-  bool                 started_called    = false;
-  std::uint64_t        started_task_id   = 0;
   bool                 completion_called = false;
   SaveCheckpointResult completion_result;
 
-  const auto           ok = service_->Start(
-      MakeRequest(),
-      [&](std::uint64_t task_id) {
-        started_called  = true;
-        started_task_id = task_id;
-      },
-      [&](const SaveCheckpointResult& result) {
-        completion_called = true;
-        completion_result = result;
-      });
+  const auto ticket = service_->Start(MakeRequest(), [&](const SaveCheckpointResult& result) {
+    completion_called = true;
+    completion_result = result;
+  });
 
-  EXPECT_TRUE(ok);
-  EXPECT_TRUE(started_called);
-  EXPECT_NE(started_task_id, 0u);
+  EXPECT_TRUE(ticket.valid());
+  EXPECT_NE(ticket.task_id, 0u);
+  EXPECT_EQ(ticket.session_generation, 7u);
   EXPECT_FALSE(completion_called);
   EXPECT_TRUE(service_->active());
 
@@ -198,7 +179,7 @@ TEST_F(EditorSaveCheckpointServiceTest, AsynchronousSuccessEndsTaskAndCompletesC
   journal_->CompleteMaterialization(true);
   EXPECT_TRUE(completion_called);
   EXPECT_TRUE(completion_result.checkpoint_completed);
-  EXPECT_EQ(completion_result.task_id, started_task_id);
+  EXPECT_EQ(completion_result.task_id, ticket.task_id);
   EXPECT_EQ(tasks_->end_count, 1);
   EXPECT_TRUE(tasks_->ended_success.front());
   EXPECT_FALSE(service_->active());
@@ -211,12 +192,10 @@ TEST_F(EditorSaveCheckpointServiceTest, AsynchronousMaterializationFailureReport
   bool                 completion_called = false;
   SaveCheckpointResult completion_result;
 
-  service_->Start(
-      MakeRequest(), [](std::uint64_t) {},
-      [&](const SaveCheckpointResult& result) {
-        completion_called = true;
-        completion_result = result;
-      });
+  service_->Start(MakeRequest(), [&](const SaveCheckpointResult& result) {
+    completion_called = true;
+    completion_result = result;
+  });
 
   journal_->CompleteCommit(true);
   journal_->CompleteMaterialization(false, "A materialization failed");
@@ -229,17 +208,20 @@ TEST_F(EditorSaveCheckpointServiceTest, AsynchronousMaterializationFailureReport
   EXPECT_FALSE(service_->active());
 }
 
-TEST_F(EditorSaveCheckpointServiceTest, StaleExternalCompletionIsIgnored) {
-  journal_->async_commit      = true;
-  journal_->async_materialize = true;
+TEST_F(EditorSaveCheckpointServiceTest, StaleOnCheckpointFinishedIsIgnored) {
+  journal_->async_commit       = true;
+  journal_->async_materialize  = true;
 
-  bool completion_called      = false;
-  service_->Start(
-      MakeRequest(), [](std::uint64_t) {},
-      [&](const SaveCheckpointResult&) { completion_called = true; });
+  bool       completion_called = false;
+  const auto ticket            = service_->Start(
+      MakeRequest(), [&](const SaveCheckpointResult&) { completion_called = true; });
 
-  // External completion for a session generation that has no pending save.
-  service_->NotifyExternalCompletion(999, true, "stale");
+  // A result for a request_id that has no pending save is silently ignored.
+  SaveCheckpointResult stale;
+  stale.request_id           = 999;  // different from ticket.request_id
+  stale.session_generation   = 7;
+  stale.checkpoint_completed = true;
+  service_->OnCheckpointFinished(stale);
   EXPECT_FALSE(completion_called);
   EXPECT_TRUE(service_->active());
 
@@ -250,19 +232,23 @@ TEST_F(EditorSaveCheckpointServiceTest, StaleExternalCompletionIsIgnored) {
   EXPECT_FALSE(service_->active());
 }
 
-TEST_F(EditorSaveCheckpointServiceTest, DuplicateExternalCompletionDoesNotDoubleEndTask) {
+TEST_F(EditorSaveCheckpointServiceTest, DuplicateOnCheckpointFinishedDoesNotDoubleEndTask) {
   journal_->async_commit      = true;
   journal_->async_materialize = true;
 
-  service_->Start(MakeRequest(), [](std::uint64_t) {}, [](const SaveCheckpointResult&) {});
+  const auto ticket           = service_->Start(MakeRequest(), [](const SaveCheckpointResult&) {});
 
   journal_->CompleteCommit(true);
   journal_->CompleteMaterialization(true);
   ASSERT_EQ(tasks_->end_count, 1);
 
-  // Duplicate external completion for the same session generation: the pending
-  // save was already erased, so this is a no-op.
-  service_->NotifyExternalCompletion(7, true, "duplicate");
+  // Duplicate completion for the same request_id: the pending save was already
+  // erased, so this is a no-op.
+  SaveCheckpointResult dup;
+  dup.request_id           = ticket.request_id;
+  dup.session_generation   = ticket.session_generation;
+  dup.checkpoint_completed = true;
+  service_->OnCheckpointFinished(dup);
   EXPECT_EQ(tasks_->end_count, 1);
 }
 
@@ -271,15 +257,11 @@ TEST_F(EditorSaveCheckpointServiceTest, CancelAndWaitStopsCallbacksAndJoins) {
   journal_->async_materialize = true;
 
   bool completion_called      = false;
-  service_->Start(
-      MakeRequest(), [](std::uint64_t) {},
-      [&](const SaveCheckpointResult&) { completion_called = true; });
+  service_->Start(MakeRequest(), [&](const SaveCheckpointResult&) { completion_called = true; });
 
   service_->CancelAndWait();
   // After CancelAndWait, completing the journal should not invoke the
-  // completion callback because the gate rejects new entries. The commit
-  // callback fires but HandleJournalCommit is never reached, so
-  // MaterializeAsync is never started.
+  // completion callback because the gate rejects new entries.
   journal_->CompleteCommit(true);
   EXPECT_FALSE(static_cast<bool>(journal_->pending_materialize));
   EXPECT_FALSE(completion_called);
@@ -291,12 +273,10 @@ TEST_F(EditorSaveCheckpointServiceTest, MaterializeStartFailureCompletesWithFail
 
   bool                 completion_called = false;
   SaveCheckpointResult completion_result;
-  service_->Start(
-      MakeRequest(), [](std::uint64_t) {},
-      [&](const SaveCheckpointResult& result) {
-        completion_called = true;
-        completion_result = result;
-      });
+  service_->Start(MakeRequest(), [&](const SaveCheckpointResult& result) {
+    completion_called = true;
+    completion_result = result;
+  });
 
   journal_->CompleteCommit(true);
   EXPECT_TRUE(completion_called);
@@ -304,6 +284,30 @@ TEST_F(EditorSaveCheckpointServiceTest, MaterializeStartFailureCompletesWithFail
   EXPECT_EQ(completion_result.error, "Materialization could not start");
   EXPECT_EQ(tasks_->end_count, 1);
   EXPECT_FALSE(tasks_->ended_success.front());
+}
+
+TEST_F(EditorSaveCheckpointServiceTest, StaleSessionGenerationIsIgnoredByOnCheckpointFinished) {
+  journal_->async_commit       = true;
+  journal_->async_materialize  = true;
+
+  bool       completion_called = false;
+  const auto ticket            = service_->Start(
+      MakeRequest(), [&](const SaveCheckpointResult&) { completion_called = true; });
+
+  // A result with a different session_generation must not consume the pending
+  // save even when its request_id matches.
+  SaveCheckpointResult mismatched;
+  mismatched.request_id           = ticket.request_id;
+  mismatched.session_generation   = 99;  // wrong session
+  mismatched.checkpoint_completed = true;
+  service_->OnCheckpointFinished(mismatched);
+  EXPECT_FALSE(completion_called);
+  EXPECT_TRUE(service_->active());
+
+  journal_->CompleteCommit(true);
+  journal_->CompleteMaterialization(true);
+  EXPECT_TRUE(completion_called);
+  EXPECT_FALSE(service_->active());
 }
 
 }  // namespace

@@ -3,8 +3,8 @@
 Date: 2026-07-22
 
 Status: approved design; 6C-1, 6C-2, 6C-2-Fix, 6C-3, 6C-4, and 6C-5 implemented.
-6C-5-Fix is a blocking implementation and test checklist. Do not begin 6C-6 checkout, session
-switching, or garbage collection until every 6C-5-Fix stage is complete.
+The Phase 6C-5 qualification plan below is blocking. Do not begin 6C-6 checkout, session
+switching, or garbage collection until every qualification phase is complete.
 
 Related documents:
 
@@ -519,7 +519,7 @@ Acceptance:
 - Failure after DuckDB commit but before truncation does not replay a commit twice.
 - Saving with no journal changes succeeds without moving the Version head.
 
-### Phase 6C-5-Fix - Executable checklist for the save checkpoint
+### Phase 6C-5 qualification plan
 
 This section is a work order, not a design essay. An implementer should be able to take one checkbox,
 open the named files, make the stated change, and run the named tests without guessing what
@@ -563,7 +563,7 @@ The required failure call chain is:
 The review baseline executed 75 related discovered tests and all passed. That is useful evidence, but
 only for their current assertions.
 
-| Existing target | Current useful evidence | Missing evidence that this Fix must add |
+| Existing target | Current useful evidence | Missing evidence that this qualification must add |
 | --- | --- | --- |
 | `EditorMiniGitMaterializerTest` | Empty journal, one edit, one rejected capture, one recovery attempt, and basic lock acquisition. | Its lock test is sequential rather than concurrent; the recovery test recreates journal bytes after a successful save; no production port or reopen-wide field comparison. |
 | `EditorSessionServiceTest` | Fake ports show that B waits for A's asynchronous materialization and that failure keeps A. | No real Mini-Git capture, DuckDB transaction, journal file, thumbnail service, or QML entrypoint. |
@@ -574,10 +574,10 @@ Passing the first column may not be used as a substitute for the missing evidenc
 
 #### Scope: what may be decomposed now
 
-Only code added or directly expanded for the 6C-5 save checkpoint belongs to this Fix. All paths in
+Only code added or directly expanded for the 6C-5 save checkpoint belongs to this qualification. All paths in
 this section are relative to `alcedo_studio/` unless explicitly stated otherwise.
 
-| Current file | Current LOC | Work allowed in this Fix |
+| Current file | Current LOC | Work allowed in this qualification |
 | --- | ---: | --- |
 | `src/app/editor_mini_git_materializer.cpp` | 337 | Keep the completed coordinator split, then separate journal folding, DuckDB writing, and recovery into collaborating types. |
 | `src/ui/alcedo_main/album_backend/editor_session_production.cpp` | 1833 | Create real Mini-Git history/checkpoint/thumbnail adapter types; leave unrelated pipeline, task, legacy journal, and scheduler behavior for later plans. |
@@ -589,9 +589,9 @@ this section are relative to `alcedo_studio/` unless explicitly stated otherwise
 | `tests/ui/workspace_shell_test.cpp` | 2426 | Move only its Main-QML loading setup into a reusable fixture; do not reorganize its existing UI cases. |
 | `tests/CMakeLists.txt` | 2063 | Register the new module test targets; do not reorganize unrelated targets. |
 
-This Fix fully decomposes `EditorSessionService` because its responsibilities cannot be separated by
+This qualification fully decomposes `EditorSessionService` because its responsibilities cannot be separated by
 moving member definitions alone. For other 1000+ line files, decompose the Phase 6 types and behaviors
-named above. Record unrelated old responsibilities as follow-up work instead of expanding this Fix into
+named above. Record unrelated old responsibilities as follow-up work instead of expanding this qualification into
 a repository-wide rewrite.
 
 #### Rules for every checklist stage
@@ -616,16 +616,16 @@ a repository-wide rewrite.
   purpose, inputs, result, side effects, owner/lifetime, thread or callback context, and failure result;
   it does not repeat the function name.
 
-#### Fix-1 - Replace god classes with modules that own their own state
+#### Phase 1 - Replace god classes with modules that own their own state
 
-Fix-1 changes file ownership, names, comments, and test setup. It must not intentionally change save
+Phase 1 changes file ownership, names, comments, and test setup. It must not intentionally change save
 behavior. Run the existing tests after every move so later failures can be attributed to later behavior
 changes.
 
-##### Fix-1A - Separate checkpoint locking from Mini-Git persistence (implementation present)
+##### Phase 1A - Separate checkpoint locking from Mini-Git persistence (implementation present)
 
 The current workspace already contains this extraction. Keep it as the baseline for the remaining
-Fix-1 work. Before committing it, record the named test result; do not treat file presence as test
+Phase 1 work. Before committing it, record the named test result; do not treat file presence as test
 evidence.
 
 Files:
@@ -654,14 +654,14 @@ Checklist:
       truncated when they return.
 - [ ] Run `EditorMiniGitMaterializerTest` before and after the move. The same five tests must pass.
 
-##### Fix-1B - Decompose `EditorSessionService` into collaborating types
+##### Phase 1B - Decompose `EditorSessionService` into collaborating types
 
 The untracked `src/app/editor_session_checkpoint.cpp` is not the target design: it still implements
 `EditorSessionService::...` and reaches every private field of the parent class. Replace that temporary
 split with the modules below. Each numbered item is a separate review unit, normally near the 500-line
 target.
 
-###### Fix-1B-1 - `EditorSaveCheckpointService` owns save work
+###### Phase 1B-1 - `EditorSaveCheckpointService` owns save work
 
 Files:
 
@@ -699,7 +699,7 @@ Checklist:
 - [ ] Add `EditorSaveCheckpointServiceTest` for start failure, asynchronous success, asynchronous
       failure, stale completion, duplicate completion, and `CancelAndWait`.
 
-###### Fix-1B-2 - `EditorSessionLifecycle` owns the current image and guards
+###### Phase 1B-2 - `EditorSessionLifecycle` owns the current image and guards
 
 Files:
 
@@ -726,7 +726,7 @@ Checklist:
 - [ ] Add `EditorSessionLifecycleTest` for acquire success/failure, release exactly once, same-image
       reopen, failed switch retaining A, and shutdown.
 
-###### Fix-1B-3 - `EditorSessionNavigationController` owns pending A-to-B/close actions
+###### Phase 1B-3 - `EditorSessionNavigationController` owns pending A-to-B/close actions
 
 Files:
 
@@ -754,7 +754,7 @@ Checklist:
 - [ ] Add `EditorSessionNavigationControllerTest` for open, A-to-B success, save failure, second
       request, close, shutdown, and stale completion.
 
-###### Fix-1B-4 - `EditorSessionRenderController` owns render and first-frame state
+###### Phase 1B-4 - `EditorSessionRenderController` owns render and first-frame state
 
 Files:
 
@@ -783,7 +783,7 @@ Checklist:
 - [ ] Add `EditorSessionRenderControllerTest` by moving the current first-frame, view-change,
       supersession, stale-render, and timing cases out of `editor_session_service_test.cpp`.
 
-###### Fix-1B-5 - `EditorSessionEditController` owns adjustment/history operations
+###### Phase 1B-5 - `EditorSessionEditController` owns adjustment/history operations
 
 Files:
 
@@ -807,7 +807,7 @@ Checklist:
 - [ ] Add `EditorSessionEditControllerTest` by moving adjustment, undo/redo, discard, and history-record
       cases out of `editor_session_service_test.cpp`.
 
-###### Fix-1B-6 - Reduce `EditorSessionService` to a facade
+###### Phase 1B-6 - Reduce `EditorSessionService` to a facade
 
 Files:
 
@@ -830,12 +830,12 @@ Checklist:
       of lifecycle, save, navigation, edit, and render ownership fails this stage even if its file is
       under 1000 lines.
 
-##### Fix-1C - Decompose Mini-Git persistence and production adapters into types
+##### Phase 1C - Decompose Mini-Git persistence and production adapters into types
 
 The same rule applies here: `editor_session_production_checkpoint.cpp` must not remain a file of member
 definitions for several pre-existing large classes.
 
-###### Fix-1C-1 - Split fold, DuckDB write, and recovery
+###### Phase 1C-1 - Split fold, DuckDB write, and recovery
 
 Files:
 
@@ -869,7 +869,7 @@ Checklist:
 - [ ] Add `EditorMiniGitJournalFoldTest`, `EditorMiniGitCommitWriterTest`, and
       `EditorMiniGitJournalRecoveryTest`; keep `EditorMiniGitMaterializerTest` for facade integration.
 
-###### Fix-1C-2 - Replace the production journal god class with narrow adapters
+###### Phase 1C-2 - Replace the production journal god class with narrow adapters
 
 Files:
 
@@ -888,6 +888,12 @@ Files:
 - `src/CMakeLists.txt`
 
 Responsibilities:
+
+This is the only `editor_session_production` decomposition owned by the Phase 6C-5 qualification.
+Extract only the save-checkpoint responsibilities below. Pipeline loading, task publication, legacy
+journal compatibility, render scheduling, and other production wiring remain in the existing
+composition until a later roadmap phase demonstrates that they need their own state-owning modules.
+Do not expand this phase merely to reduce the original file's line count.
 
 - `EditorSessionProductionHistoryPort` owns `MiniGitWorkingHistory`, history guards, adjustment
   commits, undo/redo, and immutable checkpoint capture. Capture returns the value directly; it stores
@@ -922,7 +928,7 @@ Checklist:
       `EditorSessionProductionCheckpointStoreTest`, and
       `EditorSessionProductionThumbnailPortTest` with one real behavior per adapter.
 
-##### Fix-1D - Extract the Phase 6 QML actions into components
+##### Phase 1D - Extract the Phase 6 QML actions into components
 
 Files:
 
@@ -963,7 +969,7 @@ Checklist:
       `EditorAdjustmentTransferActionsQmlTest`; keep the later end-to-end test for their composition in
       `Main.qml`.
 
-##### Fix-1E - Create module-specific fixtures and test targets
+##### Phase 1E - Create module-specific fixtures and test targets
 
 This stage creates test infrastructure only. It does not add failure policies or change production
 behavior.
@@ -1037,15 +1043,15 @@ Test-file split and registration:
 - [ ] Reject a fixture that constructs lifecycle, checkpoint, edit, render, QML, and DuckDB together.
       That is a test-side god object; only the later integration fixture may compose the full path.
 
-Fix-1 is complete only when all five sub-stages build, the existing behavior tests remain green, all
+Phase 1 is complete only when all five sub-stages build, the existing behavior tests remain green, all
 changed C++ files pass `clang-format --dry-run --Werror --style=file`, every changed function has the
 required Doxygen description, and no new module reaches into another module's private state.
 
-#### Fix-2 - Make the global save lock and captured journal range unambiguous
+#### Phase 2 - Make the global save lock and captured journal range unambiguous
 
 This stage fixes only ownership and concurrency. It does not yet change DuckDB failure behavior or QML.
 
-##### Fix-2A - One project-owned global save lock
+##### Phase 2A - One project-owned global save lock
 
 Files:
 
@@ -1079,7 +1085,7 @@ Add target `EditorSaveCheckpointCoordinatorTest` with these tests:
 - [ ] `WaitingSaveStopsCleanlyWhenProjectShutsDown`: no sleep; use a condition/barrier to prove the
       waiter exits and no thread remains joinable.
 
-##### Fix-2B - Capture one exact journal range
+##### Phase 2B - Capture one exact journal range
 
 Files:
 
@@ -1111,16 +1117,16 @@ Add target `EditorSaveCheckpointCaptureTest` with these tests:
 - [ ] `FailedCheckpointKeepsTheCapturedRecordsForRetry`.
 - [ ] `MismatchedElementVersionRootOrSequenceRangeStartsNoMaterialization` as a parameterized test.
 
-Fix-2 is complete when both new targets pass repeatedly, Thread Sanitizer is run where available, no
+Phase 2 is complete when both new targets pass repeatedly, Thread Sanitizer is run where available, no
 busy-wait remains, and the updated call-chain comment names the owner of the save lock and capture at
 each callback boundary.
 
-#### Fix-3 - Connect the new modules with typed values
+#### Phase 3 - Connect the new modules with typed values
 
-Fix-1 establishes ownership. Fix-3 changes the behavior between those modules without putting the
+Phase 1 establishes ownership. Phase 3 changes the behavior between those modules without putting the
 logic back into the facade.
 
-##### Fix-3A - Pass capture directly from history to checkpoint storage
+##### Phase 3A - Pass capture directly from history to checkpoint storage
 
 Files:
 
@@ -1153,7 +1159,7 @@ Required tests:
 - [ ] `MiniGitCheckpointDoesNotInvokeLegacyMaterializer`.
 - [ ] `CaptureFailureWritesNothingAndLeavesJournalBytes`.
 
-##### Fix-3B - Qualify navigation behavior through its owning controller
+##### Phase 3B - Qualify navigation behavior through its owning controller
 
 Files:
 
@@ -1183,15 +1189,15 @@ Required tests:
 - [ ] `DuplicateOrStaleCompletionCannotResumeBOrFinishTaskTwice`.
 - [ ] `CloseAndShutdownEachProduceOneTerminalResult`.
 
-Fix-3 is complete when call-site search finds no `TakeSaveCapture`, side map, positional pending-action
+Phase 3 is complete when call-site search finds no `TakeSaveCapture`, side map, positional pending-action
 initializer, or checkpoint business rule inside `EditorSessionService`.
 
-#### Fix-4 - Grill DuckDB commit, journal truncation, and reopen recovery
+#### Phase 4 - Grill DuckDB commit, journal truncation, and reopen recovery
 
 Use real project files from `EditorMiniGitProjectFixture`. A test that only checks an in-memory graph
 does not prove persistence.
 
-##### Fix-4A - Basic and non-trivial successful saves
+##### Phase 4A - Basic and non-trivial successful saves
 
 Files:
 
@@ -1209,7 +1215,7 @@ Checklist:
       values must remain distinct commits because their timestamps differ.
 - [ ] Add a strict pipeline spy and `MaterializationDoesNotReplayOrModifyTheLivePipeline`.
 
-##### Fix-4B - Fail before DuckDB commit
+##### Phase 4B - Fail before DuckDB commit
 
 Files:
 
@@ -1232,7 +1238,7 @@ Checklist:
       values from before the attempt.
 - [ ] Assert that no thumbnail invalidation and no B load event occurred.
 
-##### Fix-4C - Fail after DuckDB commit but before journal cleanup
+##### Phase 4C - Fail after DuckDB commit but before journal cleanup
 
 Files:
 
@@ -1253,7 +1259,7 @@ Checklist:
 - [ ] Add `JournalFlushFailureRemainsIncompleteAndRecoversOnReopen`.
 - [ ] Run the same recovery twice and assert the commit count and Version head move only once.
 
-##### Fix-4D - Invalid and large inputs
+##### Phase 4D - Invalid and large inputs
 
 Add stale/malformed fold cases to `EditorMiniGitJournalFoldTest` and missing-target/retry/scale cases to
 `EditorMiniGitJournalRecoveryTest`:
@@ -1265,13 +1271,13 @@ Add stale/malformed fold cases to `EditorMiniGitJournalFoldTest` and missing-tar
       elapsed time and peak test-process memory as diagnostic output, but do not use a machine-specific
       time limit as the only assertion.
 
-Fix-4 is complete when fold, commit-writer, recovery, and materializer-facade targets pass; every
+Phase 4 is complete when fold, commit-writer, recovery, and materializer-facade targets pass; every
 persistence assertion is made after a real reopen; no journal-file error is ignored; and presenting an
 already committed prefix repeatedly does not create another commit or move the Version again.
 
-#### Fix-5 - Prove the real UI locks and the complete A-to-B workflow
+#### Phase 5 - Prove the real UI locks and the complete A-to-B workflow
 
-##### Fix-5A - The real editor-save task publishes the five locks
+##### Phase 5A - The real editor-save task publishes the five locks
 
 Files:
 
@@ -1293,7 +1299,7 @@ Checklist:
 - [ ] Keep history browsing enabled when only `CheckoutVersion` is locked; add
       `VersionCheckoutLockDoesNotDisableHistoryBrowsing`.
 
-##### Fix-5B - Exercise the actual QML entrypoints
+##### Phase 5B - Exercise the actual QML entrypoints
 
 Files:
 
@@ -1316,14 +1322,14 @@ and zero backend calls:
 - [ ] filmstrip `activateImage(index)` does not emit `imageActivated`;
 - [ ] Library/Editor workspace button click does not call `WorkspaceRouter`;
 - [ ] `EditorHistoryVersionsRail.versionCheckoutEnabled` is false while the History panel can still
-      open. Version checkout UI belongs to 6C-6; do not invent that control in this Fix;
+      open. Version checkout UI belongs to 6C-6; do not invent that control in this qualification;
 - [ ] `requestPasteAdjustments()` does not open the dialog or call the adjustment-transfer backend;
 - [ ] Merge strategy does not call the adjustment-transfer backend.
 
 Then finish the task and repeat one allowed action from each component to prove the controls recover.
 Checking only `InteractionPolicyController` getters is not enough for this stage.
 
-##### Fix-5C - One production-style A-to-B integration test
+##### Phase 5C - One production-style A-to-B integration test
 
 Files:
 
@@ -1351,14 +1357,14 @@ Add target `EditorCheckpointNavigationTest` and one readable test,
 Add the paired failure test `FailedCheckpointKeepsAOpenAndDoesNotTouchBOrThumbnail`, stopping before
 DuckDB commit and asserting zero B and thumbnail events.
 
-Fix-5 is complete only when the C++ policy tests, QML action tests, and production-style integration
+Phase 5 is complete only when the C++ policy tests, QML action tests, and production-style integration
 test all pass. A controller-only test cannot substitute for QML coverage, and a direct materializer
 test cannot substitute for the A-to-B workflow.
 
-#### Fix-6 - Run the final evidence checklist
+#### Phase 6 - Run the final evidence checklist
 
-Fix-6 is verification, not a place to postpone cleanup. If a large rename, fixture, or file move is
-still needed, return it to Fix-1 and review it there.
+Phase 6 is verification, not a place to postpone cleanup. If a large rename, fixture, or file move is
+still needed, return it to Phase 1 and review it there.
 
 ##### Build and run the named module targets
 
@@ -1393,16 +1399,16 @@ limitation for every target. Do not report a compiled but unexecuted target as p
 
 ##### Review the final code shape
 
-- [ ] Run `clang-format --dry-run --Werror --style=file` on every C++ file changed by Fix-1 through
-      Fix-5.
+- [ ] Run `clang-format --dry-run --Werror --style=file` on every C++ file changed by Phase 1 through
+      Phase 5.
 - [ ] Search for removed names: `ScopedLock`, `MaterializeValidatedGraph`, `TakeSaveCapture`,
       `no_journal_changes`, `saveInProgress`, and checkpoint-related `controlsEnabled`.
 - [ ] Verify temporary same-class split files `editor_session_checkpoint.cpp` and
       `editor_session_production_checkpoint.cpp` no longer exist. Their behavior must live in the
-      owning component types named in Fix-1.
+      owning component types named in Phase 1.
 - [ ] Search for `std::this_thread::yield()` in the save-checkpoint path.
 - [ ] Record total LOC and diff LOC for every changed file. For a file above 1000 lines, state which
-      responsibilities remain. Do not split old out-of-scope responsibilities merely to close this Fix.
+      responsibilities remain. Do not split old out-of-scope responsibilities merely to close this qualification.
 - [ ] For every changed class, list the mutable fields it owns and its single reason to change. Fail
       the audit if two modules share mutable state, a facade owns component state, or a new class mixes
       lifecycle, save, navigation, edit, render, persistence, or QML policy responsibilities.
@@ -1419,7 +1425,7 @@ limitation for every target. Do not report a compiled but unexecuted target as p
       record without a documented reason, broad database-lock scope, or unbounded worker creation.
 - [ ] Put each optimization and its before/after measurement in the same review unit.
 
-#### Phase 6C-5-Fix completion checklist
+#### Phase 6C-5 qualification completion checklist
 
 - [ ] A real threaded test proves that only one global save checkpoint runs at a time.
 - [ ] A captured journal range cannot delete an edit outside that range.

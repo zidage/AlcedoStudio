@@ -2,15 +2,20 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
+#include "app/editor_mini_git_materializer.hpp"
+
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <barrier>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <semaphore>
 #include <string>
+#include <thread>
 
-#include "app/editor_mini_git_materializer.hpp"
 #include "app/editor_save_checkpoint_coordinator.hpp"
 #include "app/project_service.hpp"
 #include "edit/history/commit_clock_test_access.hpp"
@@ -60,8 +65,8 @@ class EditorMiniGitMaterializerTest : public ::testing::Test {
       auto               guard = storage_->GetDBController().GetConnectionGuard();
       auto               lock  = guard.Lock();
       CommitGraphService graph_service(guard.conn_);
-      graph_ = std::make_shared<CommitGraph>(
-          graph_service.CreateEmptyPersisted(element_id_, "Default"));
+      graph_ =
+          std::make_shared<CommitGraph>(graph_service.CreateEmptyPersisted(element_id_, "Default"));
     }
     materializer_ = std::make_unique<EditorMiniGitMaterializer>(storage_);
   }
@@ -79,38 +84,37 @@ class EditorMiniGitMaterializerTest : public ::testing::Test {
   auto CaptureFromWorkingHistory(MiniGitWorkingHistory& history, MiniGitJournal& journal,
                                  float exposure) -> EditorMiniGitSaveCapture {
     EditorMiniGitSaveCapture capture;
-    capture.element_id             = element_id_;
-    capture.working_head           = history.working_head();
-    capture.transaction_chain_hash = history.transaction_chain_hash();
-    capture.journal_records        = journal.records();
-    capture.journal_path           = journal_path_;
-    capture.no_journal_changes     = capture.journal_records.empty();
-    const auto serialized          = MakeEditorSerializedPipelineState(
+    capture.element_id                   = element_id_;
+    capture.working_head                 = history.working_head();
+    capture.transaction_chain_hash       = history.transaction_chain_hash();
+    capture.journal_records              = journal.records();
+    capture.journal_path                 = journal_path_;
+    capture.journal_already_materialized = capture.journal_records.empty();
+    const auto serialized                = MakeEditorSerializedPipelineState(
         graph_->GetRootId(), capture.working_head, capture.transaction_chain_hash,
         nlohmann::json{{"exposure", exposure}});
-    capture.materialization =
-        graph_->CaptureMaterializationWithSerializedPipelineState(serialized);
+    capture.materialization = graph_->CaptureMaterializationWithSerializedPipelineState(serialized);
     return capture;
   }
 
-  sl_element_id_t                         element_id_ = 42;
-  std::filesystem::path                   db_path_;
-  std::filesystem::path                   meta_path_;
-  std::filesystem::path                   journal_path_;
-  std::unique_ptr<ProjectService>         project_;
-  std::shared_ptr<StorageService>         storage_;
-  std::shared_ptr<CommitGraph>            graph_;
+  sl_element_id_t                            element_id_ = 42;
+  std::filesystem::path                      db_path_;
+  std::filesystem::path                      meta_path_;
+  std::filesystem::path                      journal_path_;
+  std::unique_ptr<ProjectService>            project_;
+  std::shared_ptr<StorageService>            storage_;
+  std::shared_ptr<CommitGraph>               graph_;
   std::unique_ptr<EditorMiniGitMaterializer> materializer_;
 };
 
 TEST_F(EditorMiniGitMaterializerTest, EmptyJournalSucceedsWithoutMovingVersionHead) {
-  auto journal = std::make_shared<MiniGitJournal>(journal_path_);
+  auto                  journal = std::make_shared<MiniGitJournal>(journal_path_);
   MiniGitWorkingHistory history(graph_, journal);
-  const auto prior_head = graph_->GetActiveVersionRef().head_commit_hash;
-  auto       capture    = CaptureFromWorkingHistory(history, *journal, 0.0f);
+  const auto            prior_head = graph_->GetActiveVersionRef().head_commit_hash;
+  auto                  capture    = CaptureFromWorkingHistory(history, *journal, 0.0f);
 
-  std::string error;
-  const auto  result = materializer_->Materialize(capture, &error);
+  std::string           error;
+  const auto            result = materializer_->Materialize(capture, &error);
   ASSERT_TRUE(result.accepted) << error << " / " << result.error;
   ASSERT_TRUE(result.materialized);
   EXPECT_FALSE(result.head_moved);
@@ -124,8 +128,9 @@ TEST_F(EditorMiniGitMaterializerTest, EmptyJournalSucceedsWithoutMovingVersionHe
   EXPECT_EQ(stored->CommitCount(), 0u);
 }
 
-TEST_F(EditorMiniGitMaterializerTest, MaterializeWritesCommitVersionAndSerializedStateThenTruncates) {
-  auto journal = std::make_shared<MiniGitJournal>(journal_path_);
+TEST_F(EditorMiniGitMaterializerTest,
+       MaterializeWritesCommitVersionAndSerializedStateThenTruncates) {
+  auto                  journal = std::make_shared<MiniGitJournal>(journal_path_);
   MiniGitWorkingHistory history(graph_, journal);
   ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 1.25f)).committed);
   auto capture = CaptureFromWorkingHistory(history, *journal, 1.25f);
@@ -153,16 +158,18 @@ TEST_F(EditorMiniGitMaterializerTest, MaterializeWritesCommitVersionAndSerialize
   EXPECT_EQ(stored->GetImageEditState().materialized_transaction_chain_hash,
             capture.transaction_chain_hash);
   ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
-  EXPECT_FLOAT_EQ(
-      stored->GetImageEditState().serialized_pipeline_state->at("pipeline_params").at("exposure").get<float>(),
-      1.25f);
+  EXPECT_FLOAT_EQ(stored->GetImageEditState()
+                      .serialized_pipeline_state->at("pipeline_params")
+                      .at("exposure")
+                      .get<float>(),
+                  1.25f);
 }
 
 TEST_F(EditorMiniGitMaterializerTest, FailureBeforeDuckDBCommitLeavesPriorHeadUnchanged) {
-  auto journal = std::make_shared<MiniGitJournal>(journal_path_);
+  auto                  journal = std::make_shared<MiniGitJournal>(journal_path_);
   MiniGitWorkingHistory history(graph_, journal);
   ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 0.5f)).committed);
-  auto capture = CaptureFromWorkingHistory(history, *journal, 0.5f);
+  auto capture         = CaptureFromWorkingHistory(history, *journal, 0.5f);
 
   // Corrupt the capture head so journal fold validation rejects before DuckDB write.
   capture.working_head = Hash128{0xdead, 0xbeef};
@@ -181,12 +188,11 @@ TEST_F(EditorMiniGitMaterializerTest, FailureBeforeDuckDBCommitLeavesPriorHeadUn
   EXPECT_FALSE(stored->GetActiveVersionRef().head_commit_hash.has_value());
 }
 
-TEST_F(EditorMiniGitMaterializerTest,
-       CrashAfterDuckDBBeforeTruncateDoesNotReplayCommitTwice) {
-  auto journal = std::make_shared<MiniGitJournal>(journal_path_);
+TEST_F(EditorMiniGitMaterializerTest, CrashAfterDuckDBBeforeTruncateDoesNotReplayCommitTwice) {
+  auto                  journal = std::make_shared<MiniGitJournal>(journal_path_);
   MiniGitWorkingHistory history(graph_, journal);
   ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 0.75f)).committed);
-  auto capture = CaptureFromWorkingHistory(history, *journal, 0.75f);
+  auto        capture = CaptureFromWorkingHistory(history, *journal, 0.75f);
 
   std::string error;
   ASSERT_TRUE(materializer_->Materialize(capture, &error).accepted) << error;
@@ -213,15 +219,46 @@ TEST_F(EditorMiniGitMaterializerTest,
   EXPECT_TRUE(reopened.records().empty());
 }
 
-TEST_F(EditorMiniGitMaterializerTest, GlobalSaveLockSerializesConcurrentMaterializations) {
+TEST_F(EditorMiniGitMaterializerTest, GlobalSaveLockSerializesBlockingWaiters) {
   EditorSaveCheckpointCoordinator coordinator;
-  auto                            first = coordinator.TryAcquire(1);
-  ASSERT_TRUE(first.owns_lock());
-  auto second = coordinator.TryAcquire(2);
-  EXPECT_FALSE(second.owns_lock());
-  first.Release();
-  second = coordinator.TryAcquire(2);
-  EXPECT_TRUE(second.owns_lock());
+  std::barrier                    start(3);
+  std::binary_semaphore           acquired(0);
+  std::binary_semaphore           release_owner(0);
+  std::atomic<int>                active_owners{0};
+  std::atomic<int>                maximum_owners{0};
+  std::atomic<bool>               every_waiter_owned{true};
+
+  const auto                      wait_for_lock = [&](sl_element_id_t element_id) {
+    start.arrive_and_wait();
+    auto lock = coordinator.AcquireBlocking(element_id);
+    if (!lock.owns_lock()) {
+      every_waiter_owned.store(false);
+    }
+    const auto owners  = active_owners.fetch_add(1) + 1;
+    auto       maximum = maximum_owners.load();
+    while (owners > maximum && !maximum_owners.compare_exchange_weak(maximum, owners)) {
+    }
+    acquired.release();
+    release_owner.acquire();
+    active_owners.fetch_sub(1);
+  };
+
+  std::thread first(wait_for_lock, 1);
+  std::thread second(wait_for_lock, 2);
+  start.arrive_and_wait();
+
+  acquired.acquire();
+  EXPECT_EQ(active_owners.load(), 1);
+  release_owner.release();
+  acquired.acquire();
+  EXPECT_EQ(active_owners.load(), 1);
+  release_owner.release();
+
+  first.join();
+  second.join();
+  EXPECT_TRUE(every_waiter_owned.load());
+  EXPECT_EQ(maximum_owners.load(), 1);
+  EXPECT_FALSE(coordinator.is_saving());
 }
 
 }  // namespace alcedo

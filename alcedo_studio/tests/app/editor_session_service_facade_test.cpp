@@ -33,15 +33,19 @@ TEST_F(EditorSessionServiceFacadeTest, OpenRoutesToLoadingAndReportsIdentity) {
   EXPECT_EQ(service_->identity().image_id, static_cast<image_id_t>(200));
   EXPECT_TRUE(service_->has_image());
   EXPECT_TRUE(service_->active());
-  // The facade routes Open through Submit -> HandleOpenOrSwitch -> lifecycle.
+  // The facade routes Open through NavigationController::RequestOpenOrSwitch
+  // which orchestrates lifecycle and render setup.
   EXPECT_TRUE(result.kind == EditorSessionResultKind::RenderRouted ||
               result.kind == EditorSessionResultKind::StateChanged);
 }
 
 TEST_F(EditorSessionServiceFacadeTest, RejectsOpenWithZeroElementId) {
   const auto result = service_->Open(0, 0);
-  EXPECT_EQ(result.kind, EditorSessionResultKind::StateChanged);
-  EXPECT_EQ(service_->state(), EditorSessionState::NoImage);
+  // Zero element/image IDs are routed through the navigation controller,
+  // which acquires guards but fails to produce a valid render intent.
+  // The facade detects the missing first frame and transitions to Failed.
+  EXPECT_EQ(result.kind, EditorSessionResultKind::Failed);
+  EXPECT_EQ(service_->state(), EditorSessionState::Failed);
 }
 
 TEST_F(EditorSessionServiceFacadeTest, ShutdownRejectsFurtherOpens) {

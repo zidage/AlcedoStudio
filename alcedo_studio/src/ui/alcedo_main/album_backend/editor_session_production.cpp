@@ -674,13 +674,13 @@ auto EditorSessionProductionJournalPort::MaterializeMiniGit(sl_element_id_t elem
   }
   std::optional<alcedo::EditorMiniGitSaveCapture> capture;
   if (history) {
-    capture = history->TakeSaveCapture(element_id);
+    capture = history->ConsumeSaveCapture(element_id);
   }
   if (!capture.has_value()) {
     // Seal without CaptureSaveCheckpoint (e.g. no edits) — treat as empty journal save.
     alcedo::EditorMiniGitSaveCapture empty;
-    empty.element_id         = element_id;
-    empty.no_journal_changes = true;
+    empty.element_id                   = element_id;
+    empty.journal_already_materialized = true;
     if (services_.mini_git_journal_path) {
       try {
         empty.journal_path = services_.mini_git_journal_path(element_id);
@@ -693,7 +693,8 @@ auto EditorSessionProductionJournalPort::MaterializeMiniGit(sl_element_id_t elem
       return {true, true, 0, {}};
     }
     // Recover path handles empty or leftover journals without requiring live capture.
-    const auto recovered = materializer->RecoverAndMaterialize(element_id, empty.journal_path, error);
+    const auto recovered =
+        materializer->RecoverAndMaterialize(element_id, empty.journal_path, error);
     alcedo::EditorMaterializeOutcome outcome{recovered.accepted, recovered.materialized, 0,
                                              recovered.error};
     if (outcome.accepted && outcome.materialized) {
@@ -706,7 +707,7 @@ auto EditorSessionProductionJournalPort::MaterializeMiniGit(sl_element_id_t elem
   if (!materializer) {
     return {true, true, 0, {}};
   }
-  const auto result = materializer->Materialize(*capture, error);
+  const auto                       result = materializer->Materialize(*capture, error);
   alcedo::EditorMaterializeOutcome outcome{result.accepted, result.materialized, 0, result.error};
   if (outcome.accepted && outcome.materialized) {
     // Clear in-memory journal records when the working state is still alive.
@@ -1231,8 +1232,9 @@ auto EditorSessionProductionHistoryPort::CaptureSaveCheckpoint(
   bool has_real_pipeline = false;
   {
     std::scoped_lock lock(mutex_);
-    has_real_pipeline = static_cast<bool>(services_.load_editor_pipeline_guard) ||
-                        (services_.pipeline_service && static_cast<bool>(services_.pipeline_service()));
+    has_real_pipeline =
+        static_cast<bool>(services_.load_editor_pipeline_guard) ||
+        (services_.pipeline_service && static_cast<bool>(services_.pipeline_service()));
   }
   if (!has_real_pipeline) {
     return true;
@@ -1258,14 +1260,14 @@ auto EditorSessionProductionHistoryPort::CaptureSaveCheckpoint(
   }
 
   alcedo::EditorMiniGitSaveCapture capture;
-  capture.element_id             = guard.element_id;
-  capture.working_head           = state->history->working_head();
-  capture.transaction_chain_hash = state->history->transaction_chain_hash();
-  capture.journal_records        = state->journal->records();
-  capture.journal_path           = state->journal->path();
-  capture.no_journal_changes     = capture.journal_records.empty();
+  capture.element_id                   = guard.element_id;
+  capture.working_head                 = state->history->working_head();
+  capture.transaction_chain_hash       = state->history->transaction_chain_hash();
+  capture.journal_records              = state->journal->records();
+  capture.journal_path                 = state->journal->path();
+  capture.journal_already_materialized = capture.journal_records.empty();
 
-  const auto serialized = alcedo::MakeEditorSerializedPipelineState(
+  const auto serialized                = alcedo::MakeEditorSerializedPipelineState(
       state->pipeline_guard->root_id_, capture.working_head, capture.transaction_chain_hash,
       pipeline_params);
   try {
@@ -1288,7 +1290,7 @@ auto EditorSessionProductionHistoryPort::CaptureSaveCheckpoint(
   return true;
 }
 
-auto EditorSessionProductionHistoryPort::TakeSaveCapture(sl_element_id_t element_id)
+auto EditorSessionProductionHistoryPort::ConsumeSaveCapture(sl_element_id_t element_id)
     -> std::optional<alcedo::EditorMiniGitSaveCapture> {
   std::scoped_lock lock(mutex_);
   auto             it = save_captures_.find(element_id);

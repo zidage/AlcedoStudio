@@ -4,13 +4,14 @@
 
 #pragma once
 
+#include <condition_variable>
 #include <mutex>
 
 #include "type/type.hpp"  // sl_element_id_t
 
 namespace alcedo {
 
-/// Project-wide editor save checkpoint coordinator for Phase 6C-5.
+/// Project-wide editor save checkpoint coordinator.
 ///
 /// Owns the single global save lock that serializes editor materialization so
 /// only one image save checkpoint runs at a time. The coordinator performs no
@@ -45,7 +46,7 @@ class EditorSaveCheckpointCoordinator final {
     /// Relinquish ownership immediately. Idempotent; the destructor also calls
     /// it, so explicit Release() is only needed for early release before scope
     /// exit.
-    void Release();
+    void               Release();
 
    private:
     EditorSaveCheckpointCoordinator* owner_      = nullptr;
@@ -63,24 +64,29 @@ class EditorSaveCheckpointCoordinator final {
   /// True while a save checkpoint owns the lock. Diagnostics only.
   [[nodiscard]] auto is_saving() const -> bool;
 
+  /// Block the calling thread until the global save lock is acquired. Uses a
+  /// condition variable to avoid busy-waiting. Must not be called from the
+  /// GUI thread. Returns a lock whose owns_lock() is always true.
+  [[nodiscard]] auto AcquireBlocking(sl_element_id_t element_id) -> SaveCheckpointLock;
+
  private:
   friend class SaveCheckpointLock;
-  void Release(sl_element_id_t element_id);
+  void                    Release(sl_element_id_t element_id);
 
-  mutable std::mutex mutex_;
-  bool               saving_         = false;
-  sl_element_id_t    active_element_ = 0;
+  mutable std::mutex      mutex_;
+  std::condition_variable condition_;
+  bool                    saving_         = false;
+  sl_element_id_t         active_element_ = 0;
 };
 
 /// Block the calling thread until the global save lock is acquired for
 /// element_id, then return ownership. Returns a lock whose owns_lock() is true.
 ///
 /// Caller context: the save worker thread (or any thread permitted to block);
-/// never the GUI thread. Side effects: yields to the scheduler while another
-/// checkpoint owns the lock. Failure result: cannot fail; it only returns once
-/// ownership is obtained.
-auto AcquireGlobalSaveLock(EditorSaveCheckpointCoordinator& coordinator,
-                           sl_element_id_t                  element_id)
+/// never the GUI thread. Side effects: waits on the coordinator condition
+/// variable while another checkpoint owns the lock. Failure result: cannot
+/// fail; it only returns once ownership is obtained.
+auto AcquireGlobalSaveLock(EditorSaveCheckpointCoordinator& coordinator, sl_element_id_t element_id)
     -> EditorSaveCheckpointCoordinator::SaveCheckpointLock;
 
 }  // namespace alcedo

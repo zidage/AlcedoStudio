@@ -130,37 +130,25 @@ class EditorSessionEditControllerTest : public ::testing::Test {
     life_deps.history  = history_;
     lifecycle_         = std::make_unique<EditorSessionLifecycle>(std::move(life_deps));
 
-    // Set up an interactive image.
-    lifecycle_->AdvanceSessionGeneration(1, 2);
-    lifecycle_->AcquireGuards(1, nullptr);
-    lifecycle_->TransitionTo(EditorSessionState::Interactive, EditorSessionResultKind::ImageReady,
-                             "ready");
+    // Set up an interactive image via the semantic lifecycle API.
+    std::string error;
+    ASSERT_TRUE(lifecycle_->BeginAcquire(1, 2, false, nullptr, &error)) << error;
+    ASSERT_TRUE(lifecycle_->AcquireGuards(&error)) << error;
+    lifecycle_->MarkImageReady();
+    lifecycle_->MarkFirstFramePresented();  // transitions to Interactive
 
-    render_request_count_ = 0;
-    last_render_reason_   = EditorRenderReason::ZoomPan;
-
-    EditorSessionEditController::Dependencies edit_deps{
-        history_,
-        journal_,
-        *lifecycle_,
-        [this](EditorRenderReason reason, EditorRenderSupersessionPolicy) {
-          ++render_request_count_;
-          last_render_reason_ = reason;
-          return render_request_id_;
-        },
-    };
+    EditorSessionEditController::Dependencies edit_deps{history_, journal_};
     edit_ = std::make_unique<EditorSessionEditController>(std::move(edit_deps));
   }
+
+  auto guard() const -> EditorHistoryGuardHandle { return lifecycle_->history_guard(); }
+  auto identity() const -> EditorSessionIdentity { return lifecycle_->identity(); }
 
   std::shared_ptr<FakePipelinePort>            pipeline_;
   std::shared_ptr<FakeHistoryPort>             history_;
   std::shared_ptr<FakeJournalPort>             journal_;
   std::unique_ptr<EditorSessionLifecycle>      lifecycle_;
   std::unique_ptr<EditorSessionEditController> edit_;
-
-  int                                          render_request_count_ = 0;
-  EditorRenderReason                           last_render_reason_   = EditorRenderReason::ZoomPan;
-  std::uint64_t                                render_request_id_    = 1;
 };
 
 TEST_F(EditorSessionEditControllerTest, InteractiveAndSettledPatchUseOneHistoryCommit) {
@@ -168,16 +156,16 @@ TEST_F(EditorSessionEditControllerTest, InteractiveAndSettledPatchUseOneHistoryC
   patch.field_key   = "exposure";
   patch.params_json = R"({"exposure":1.0})";
 
-  auto r1           = edit_->HandlePatch(patch, false);
-  EXPECT_EQ(r1.kind, EditorEditResultKind::RenderRouted);
-  EXPECT_EQ(last_render_reason_, EditorRenderReason::InteractiveAdjustment);
+  auto r1           = edit_->HandlePatch(patch, false, guard(), identity());
+  EXPECT_EQ(r1.kind, EditorEditOutcome::Kind::RenderRouted);
+  EXPECT_EQ(r1.reason, EditorRenderReason::InteractiveAdjustment);
   EXPECT_EQ(history_->capture_count, 1);
   EXPECT_EQ(history_->commit_count, 0);
 
   patch.settled = true;
-  auto r2       = edit_->HandlePatch(patch, true);
-  EXPECT_EQ(r2.kind, EditorEditResultKind::RenderRouted);
-  EXPECT_EQ(last_render_reason_, EditorRenderReason::SettledAdjustment);
+  auto r2       = edit_->HandlePatch(patch, true, guard(), identity());
+  EXPECT_EQ(r2.kind, EditorEditOutcome::Kind::RenderRouted);
+  EXPECT_EQ(r2.reason, EditorRenderReason::SettledAdjustment);
   EXPECT_EQ(history_->capture_count, 2);
   EXPECT_EQ(history_->commit_count, 1);
   EXPECT_EQ(history_->last_committed_patch.field_key, "exposure");
@@ -187,11 +175,10 @@ TEST_F(EditorSessionEditControllerTest, InteractiveAndSettledPatchUseOneHistoryC
 TEST_F(EditorSessionEditControllerTest, SettledCommitFailureReturnsRejected) {
   history_->fail_commit = true;
   EditorAdjustmentPatch patch{"exposure", R"({"exposure":0.5})", true};
-  auto                  result = edit_->HandlePatch(patch, true);
-  EXPECT_EQ(result.kind, EditorEditResultKind::Rejected);
+  auto                  result = edit_->HandlePatch(patch, true, guard(), identity());
+  EXPECT_EQ(result.kind, EditorEditOutcome::Kind::Rejected);
   EXPECT_EQ(result.message, "mini-Git journal append failed");
   EXPECT_EQ(history_->commit_count, 1);
-  EXPECT_EQ(render_request_count_, 0);
 }
 
 TEST_F(EditorSessionEditControllerTest, RepeatedInteractivePatchesKeepLatestValuePerField) {
@@ -199,7 +186,7 @@ TEST_F(EditorSessionEditControllerTest, RepeatedInteractivePatchesKeepLatestValu
   patch.field_key = "exposure";
   for (int value = 0; value < 50; ++value) {
     patch.params_json = std::string{"{\"exposure\":"} + std::to_string(value) + "}";
-    edit_->HandlePatch(patch, false);
+    edit_->HandlePatch(patch, false, guard(), identity());
   }
   const auto snapshot = edit_->adjustment_snapshot();
   ASSERT_EQ(snapshot.patches.size(), 1u);
@@ -208,30 +195,27 @@ TEST_F(EditorSessionEditControllerTest, RepeatedInteractivePatchesKeepLatestValu
   EXPECT_EQ(history_->commit_count, 0);
 
   patch.settled = true;
-  edit_->HandlePatch(patch, true);
+  edit_->HandlePatch(patch, true, guard(), identity());
   EXPECT_EQ(history_->commit_count, 1);
 }
 
-TEST_F(EditorSessionEditControllerTest, UndoAdvancesRenderGenerationAndRoutes) {
-  const auto render_before = lifecycle_->identity().render_generation;
-  auto       result        = edit_->HandleUndoRedo(true);
-  EXPECT_EQ(result.kind, EditorEditResultKind::Accepted);
+TEST_F(EditorSessionEditControllerTest, UndoAdvancesAndRoutes) {
+  auto result = edit_->HandleUndoRedo(true, guard(), identity());
+  EXPECT_EQ(result.kind, EditorEditOutcome::Kind::Accepted);
   EXPECT_EQ(history_->undo_count, 1);
-  EXPECT_GT(lifecycle_->identity().render_generation, render_before);
-  EXPECT_EQ(last_render_reason_, EditorRenderReason::UndoRedo);
 }
 
 TEST_F(EditorSessionEditControllerTest, UndoFailureReturnsFailed) {
   history_->fail_undo = true;
-  auto result         = edit_->HandleUndoRedo(true);
-  EXPECT_EQ(result.kind, EditorEditResultKind::Failed);
+  auto result         = edit_->HandleUndoRedo(true, guard(), identity());
+  EXPECT_EQ(result.kind, EditorEditOutcome::Kind::Failed);
   EXPECT_EQ(result.message, "undo failed");
 }
 
 TEST_F(EditorSessionEditControllerTest, DiscardUsesJournalPortAndRestoresSnapshot) {
   history_->current_snapshot.params_json = R"({"contrast":0.0})";
-  auto result                            = edit_->HandleDiscard();
-  EXPECT_EQ(result.kind, EditorEditResultKind::Accepted);
+  auto result = edit_->HandleDiscard(guard(), identity(), EditorSessionState::Interactive);
+  EXPECT_EQ(result.kind, EditorEditOutcome::Kind::Accepted);
   EXPECT_EQ(journal_->discard_count, 1);
   EXPECT_EQ(edit_->adjustment_snapshot().params_json, R"({"contrast":0.0})");
 }
@@ -240,25 +224,29 @@ TEST_F(EditorSessionEditControllerTest, RecordFinalizedEditReachesJournalPort) {
   EditTransaction txn{TransactionType::_EDIT, OperatorType::EXPOSURE,
                       PipelineStageName::Basic_Adjustment, nlohmann::json{{"exposure", 1.0}}};
   std::string     error;
-  EXPECT_TRUE(edit_->RecordFinalizedEdit(txn, &error)) << error;
+  EXPECT_TRUE(edit_->RecordFinalizedEdit(txn, identity(), &error)) << error;
   EXPECT_EQ(journal_->edit_record_count, 1);
 }
 
 TEST_F(EditorSessionEditControllerTest, RecordHistoryCursorMoveReachesJournalPort) {
   std::string error;
-  EXPECT_TRUE(edit_->RecordHistoryCursorMove(2, 1, &error)) << error;
+  EXPECT_TRUE(edit_->RecordHistoryCursorMove(2, 1, identity(), &error)) << error;
   EXPECT_EQ(journal_->cursor_record_count, 1);
   EXPECT_EQ(journal_->last_cursor_from, 2u);
   EXPECT_EQ(journal_->last_cursor_to, 1u);
 }
 
-TEST_F(EditorSessionEditControllerTest, PatchWhileNotInteractiveIsRejected) {
-  lifecycle_->TransitionTo(EditorSessionState::Loading, EditorSessionResultKind::StateChanged,
-                           "Loading");
-  EditorAdjustmentPatch patch{"exposure", R"({"exposure":1.0})", false};
-  auto                  result = edit_->HandlePatch(patch, false);
-  EXPECT_EQ(result.kind, EditorEditResultKind::Rejected);
-  EXPECT_EQ(render_request_count_, 0);
+TEST_F(EditorSessionEditControllerTest, PatchWithEmptyFieldKeyIsRejected) {
+  EditorAdjustmentPatch patch{"", R"({})", false};
+  auto                  result = edit_->HandlePatch(patch, false, guard(), identity());
+  EXPECT_EQ(result.kind, EditorEditOutcome::Kind::Rejected);
+}
+
+TEST_F(EditorSessionEditControllerTest, PatchWithoutValidGuardIsRejected) {
+  EditorHistoryGuardHandle invalid_guard{};
+  EditorAdjustmentPatch    patch{"exposure", R"({"exposure":1.0})", false};
+  auto                     result = edit_->HandlePatch(patch, false, invalid_guard, identity());
+  EXPECT_EQ(result.kind, EditorEditOutcome::Kind::Rejected);
 }
 
 }  // namespace

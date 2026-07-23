@@ -28,18 +28,19 @@ namespace alcedo {
 /// being saved; an edit finalized after capture must not appear in this range
 /// and must not be removed by truncating it.
 struct EditorMiniGitSaveCapture {
-  sl_element_id_t              element_id = 0;
-  std::uint64_t                session_generation = 0;
-  head_commit_hash_t           working_head = std::nullopt;
-  transaction_chain_hash_t     transaction_chain_hash{};
+  sl_element_id_t                   element_id         = 0;
+  std::uint64_t                     session_generation = 0;
+  head_commit_hash_t                working_head       = std::nullopt;
+  transaction_chain_hash_t          transaction_chain_hash{};
   /// Full capture of commits + Version refs + ImageEditState with serialized
   /// pipeline state. Built from the live CommitGraph without a second executor.
-  CommitGraphMaterialization   materialization{};
+  CommitGraphMaterialization        materialization{};
   std::vector<MiniGitJournalRecord> journal_records;
-  std::filesystem::path        journal_path;
-  /// True when the journal is empty and the live head already equals the stored
-  /// materialized head. Materialization still succeeds and truncates nothing.
-  bool                         no_journal_changes = false;
+  std::filesystem::path             journal_path;
+  /// True when the journal records have already been materialized (the
+  /// in-memory journal contains no new commits or head moves that require
+  /// a DuckDB write). Materialization still succeeds and truncates nothing.
+  bool                              journal_already_materialized = false;
 };
 
 /// Outcome of one Materialize / RecoverAndMaterialize call.
@@ -92,7 +93,7 @@ class EditorMiniGitMaterializer final {
                              std::string* error = nullptr) -> EditorMiniGitMaterializeResult;
 
  private:
-  std::shared_ptr<StorageService>       storage_;
+  std::shared_ptr<StorageService>                  storage_;
   std::shared_ptr<EditorSaveCheckpointCoordinator> coordinator_;
 };
 
@@ -111,7 +112,6 @@ auto TruncateMiniGitJournalFile(const std::filesystem::path& path, std::string* 
 /// Build a serialized pipeline state document from live guard fields (no second executor).
 auto MakeEditorSerializedPipelineState(const root_id_t& root_id, head_commit_hash_t head,
                                        const transaction_chain_hash_t& chain,
-                                       const nlohmann::json&           pipeline_params)
-    -> nlohmann::json;
+                                       const nlohmann::json& pipeline_params) -> nlohmann::json;
 
 }  // namespace alcedo

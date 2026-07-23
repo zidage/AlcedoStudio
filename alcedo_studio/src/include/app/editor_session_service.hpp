@@ -25,18 +25,18 @@ namespace alcedo {
 /// EditorSessionService; tests may inject a recording fake.
 class IEditorSessionBackend {
  public:
-  virtual ~IEditorSessionBackend() = default;
+  virtual ~IEditorSessionBackend()                                     = default;
 
-  using ChangeNotifier = std::function<void()>;
+  using ChangeNotifier                                                 = std::function<void()>;
 
   [[nodiscard]] virtual auto state() const -> EditorSessionState       = 0;
   [[nodiscard]] virtual auto identity() const -> EditorSessionIdentity = 0;
   [[nodiscard]] virtual auto active() const -> bool                    = 0;
   [[nodiscard]] virtual auto has_image() const -> bool                 = 0;
-  [[nodiscard]] virtual auto last_error() const -> std::string        = 0;
+  [[nodiscard]] virtual auto last_error() const -> std::string         = 0;
 
   /// Optional: notified after state/identity changes from async results.
-  virtual void SetChangeNotifier(ChangeNotifier notifier) {
+  virtual void               SetChangeNotifier(ChangeNotifier notifier) {
     change_notifier_ = std::move(notifier);
   }
 
@@ -122,8 +122,8 @@ class EditorSessionService final : public IEditorSessionBackend {
   explicit EditorSessionService(Dependencies dependencies);
   ~EditorSessionService() override;
 
-  void SetResultObserver(ResultObserver observer);
-  void SetChangeNotifier(ChangeNotifier notifier) override;
+  void               SetResultObserver(ResultObserver observer);
+  void               SetChangeNotifier(ChangeNotifier notifier) override;
 
   [[nodiscard]] auto state() const -> EditorSessionState override { return lifecycle_.state(); }
   [[nodiscard]] auto identity() const -> EditorSessionIdentity override {
@@ -164,8 +164,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto CommitAdjustment(std::string patch_key) -> EditorSessionResult;
   auto Undo() -> EditorSessionResult override;
   auto Redo() -> EditorSessionResult override;
-  auto RecordFinalizedEdit(const EditTransaction& transaction, std::string* error)
-      -> bool override;
+  auto RecordFinalizedEdit(const EditTransaction& transaction, std::string* error) -> bool override;
   auto RecordHistoryCursorMove(std::uint64_t from_cursor, std::uint64_t to_cursor,
                                std::string* error) -> bool override;
   auto RecordTimelineRewrite(const Hash128& expected_timeline_hash,
@@ -184,28 +183,34 @@ class EditorSessionService final : public IEditorSessionBackend {
     return render_.first_frame_time_ms();
   }
 
+  /// Accept an asynchronous image-acquisition completion for the active
+  /// session generation. Stale generations and states outside image loading
+  /// are ignored. A failed acquisition releases guards and publishes failure;
+  /// success keeps the session loading until its first frame is presented.
   void NotifyImageAcquired(std::uint64_t session_generation, bool success,
                            std::string message = {});
-  void NotifySaveFinished(std::uint64_t session_generation, bool success, std::string message = {});
   void NotifyRenderResult(const EditorRenderResult& render_result) {
-    render_.NotifyRenderResult(render_result);
+    render_.NotifyRenderResult(render_result, lifecycle_.identity(), lifecycle_.state());
   }
 
  private:
   /// Publish a result to the observer and change-notifier. The only state the
   /// facade owns is the result history and observer registration.
-  auto Emit(EditorSessionResult result) -> EditorSessionResult;
-  auto Reject(std::string message) -> EditorSessionResult;
+  auto                              Emit(EditorSessionResult result) -> EditorSessionResult;
+  auto                              Reject(std::string message) -> EditorSessionResult;
+  /// Transition lifecycle to Failed and emit a Failed result. Used when a
+  /// navigation or save failure requires the session to enter the Failed state.
+  auto                              Fail(std::string message) -> EditorSessionResult;
 
-  Dependencies                            dependencies_;
-  ResultObserver                          observer_;
-  EditorSessionLifecycle                  lifecycle_;
-  EditorSaveCheckpointService             save_service_;
-  EditorSessionNavigationController       navigation_;
-  EditorSessionRenderController           render_;
-  EditorSessionEditController             edit_;
-  std::vector<EditorSessionResult>        results_;
-  mutable std::mutex                      results_mutex_;
+  Dependencies                      dependencies_;
+  ResultObserver                    observer_;
+  EditorSessionLifecycle            lifecycle_;
+  EditorSaveCheckpointService       save_service_;
+  EditorSessionRenderController     render_;
+  EditorSessionEditController       edit_;
+  EditorSessionNavigationController navigation_;
+  std::vector<EditorSessionResult>  results_;
+  mutable std::mutex                results_mutex_;
 };
 
 }  // namespace alcedo

@@ -966,13 +966,7 @@ target_link_libraries(EditorRenderCoordinatorTest EditorSessionService GTest::gt
 gtest_discover_tests(EditorRenderCoordinatorTest TEST_PREFIX "EditorRenderCoordinatorTest."
   PROPERTIES LABELS "ci_core_flow")
 
-add_executable(EditorSessionServiceTest app/editor_session_service_test.cpp)
-target_include_directories(EditorSessionServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditorSessionServiceTest EditorSessionService GTest::gtest_main)
-gtest_discover_tests(EditorSessionServiceTest TEST_PREFIX "EditorSessionServiceTest."
-  PROPERTIES LABELS "ci_core_flow")
-
-# Phase 6C-5-Fix-1B-1: EditorSaveCheckpointService owns save work (task, journal
+# EditorSaveCheckpointService owns save work (task, journal
 # commit, materialization). Focused unit tests with fake ports.
 add_executable(EditorSaveCheckpointServiceTest app/editor_save_checkpoint_service_test.cpp)
 target_include_directories(EditorSaveCheckpointServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
@@ -980,7 +974,7 @@ target_link_libraries(EditorSaveCheckpointServiceTest EditorSaveCheckpointServic
 gtest_discover_tests(EditorSaveCheckpointServiceTest TEST_PREFIX "EditorSaveCheckpointServiceTest."
   PROPERTIES LABELS "ci_core_flow;editor_session")
 
-# Phase 6C-5-Fix-1B-2: EditorSessionLifecycle owns state, identity, guards, and
+# EditorSessionLifecycle owns state, identity, guards, and
 # error. Focused unit tests with fake ports.
 add_executable(EditorSessionLifecycleTest app/editor_session_lifecycle_test.cpp)
 target_include_directories(EditorSessionLifecycleTest PUBLIC ${ALCEDO_INCLUDE_DIR})
@@ -988,7 +982,7 @@ target_link_libraries(EditorSessionLifecycleTest EditorSessionLifecycle GTest::g
 gtest_discover_tests(EditorSessionLifecycleTest TEST_PREFIX "EditorSessionLifecycleTest."
   PROPERTIES LABELS "ci_core_flow;editor_session")
 
-# Phase 6C-5-Fix-1B-3: EditorSessionNavigationController owns pending A-to-B/
+# EditorSessionNavigationController owns pending A-to-B/
 # close actions. Focused unit tests with fake ports and a real save service.
 add_executable(EditorSessionNavigationControllerTest
     app/editor_session_navigation_controller_test.cpp)
@@ -1000,7 +994,7 @@ gtest_discover_tests(EditorSessionNavigationControllerTest
     TEST_PREFIX "EditorSessionNavigationControllerTest."
     PROPERTIES LABELS "ci_core_flow;editor_session")
 
-# Phase 6C-5-Fix-1B-4: EditorSessionRenderController owns render/first-frame
+# EditorSessionRenderController owns render/first-frame
 # state. Focused unit tests with a real coordinator and bootstrap scheduler.
 add_executable(EditorSessionRenderControllerTest app/editor_session_render_controller_test.cpp)
 target_include_directories(EditorSessionRenderControllerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
@@ -1011,7 +1005,7 @@ gtest_discover_tests(EditorSessionRenderControllerTest
     TEST_PREFIX "EditorSessionRenderControllerTest."
     PROPERTIES LABELS "ci_core_flow;editor_session")
 
-# Phase 6C-5-Fix-1B-5: EditorSessionEditController owns adjustment/history
+# EditorSessionEditController owns adjustment/history
 # operations. Focused unit tests with fake ports.
 add_executable(EditorSessionEditControllerTest app/editor_session_edit_controller_test.cpp)
 target_include_directories(EditorSessionEditControllerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
@@ -1022,7 +1016,7 @@ gtest_discover_tests(EditorSessionEditControllerTest
     TEST_PREFIX "EditorSessionEditControllerTest."
     PROPERTIES LABELS "ci_core_flow;editor_session")
 
-# Phase 6C-5-Fix-1B-6: EditorSessionService facade routing tests. Limited to
+# EditorSessionService facade routing tests. Limited to
 # routing and externally visible result ordering; component behavior belongs in
 # the five module test targets above.
 add_executable(EditorSessionServiceFacadeTest app/editor_session_service_facade_test.cpp)
@@ -1159,7 +1153,7 @@ target_link_libraries(EditorMiniGitMaterializerTest
   StorageService
   GTest::gtest_main)
 gtest_discover_tests(EditorMiniGitMaterializerTest TEST_PREFIX "EditorMiniGitMaterializerTest."
-  PROPERTIES LABELS "ci_core_flow;edit;history;phase6c")
+  PROPERTIES LABELS "ci_core_flow;edit;history")
 if(WIN32)
   alcedo_copy_duckdb_extensions(EditorMiniGitMaterializerTest)
   if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
@@ -2065,7 +2059,6 @@ alcedo_assign_test_category(app ALCEDO_BUILD_APP_TESTS alcedo_tests_app
   PipelineServiceTest
   EditHistoryMgmtServiceTest
   EditorRenderCoordinatorTest
-  EditorSessionServiceTest
   EditorSessionControllerPhase5ATest
   SemanticGenerationServiceTest
   ThumbnailServiceTest

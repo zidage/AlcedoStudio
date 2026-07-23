@@ -4,8 +4,6 @@
 
 #include "app/editor_save_checkpoint_coordinator.hpp"
 
-#include <thread>
-
 namespace alcedo {
 
 // ── SaveCheckpointLock ──────────────────────────────────────────────────────
@@ -22,8 +20,8 @@ EditorSaveCheckpointCoordinator::SaveCheckpointLock::SaveCheckpointLock(
   other.owns_       = false;
 }
 
-auto EditorSaveCheckpointCoordinator::SaveCheckpointLock::operator=(SaveCheckpointLock&& other)
-    noexcept -> SaveCheckpointLock& {
+auto EditorSaveCheckpointCoordinator::SaveCheckpointLock::operator=(
+    SaveCheckpointLock&& other) noexcept -> SaveCheckpointLock& {
   if (this != &other) {
     Release();
     owner_            = other.owner_;
@@ -60,12 +58,15 @@ auto EditorSaveCheckpointCoordinator::TryAcquire(sl_element_id_t element_id) -> 
 }
 
 void EditorSaveCheckpointCoordinator::Release(sl_element_id_t element_id) {
-  std::scoped_lock lock(mutex_);
-  if (!saving_ || active_element_ != element_id) {
-    return;
+  {
+    std::scoped_lock lock(mutex_);
+    if (!saving_ || active_element_ != element_id) {
+      return;
+    }
+    saving_         = false;
+    active_element_ = 0;
   }
-  saving_         = false;
-  active_element_ = 0;
+  condition_.notify_one();
 }
 
 auto EditorSaveCheckpointCoordinator::active_element_id() const -> sl_element_id_t {
@@ -78,17 +79,22 @@ auto EditorSaveCheckpointCoordinator::is_saving() const -> bool {
   return saving_;
 }
 
-// ── Blocking acquire helper ─────────────────────────────────────────────────
+// ── Blocking acquire ────────────────────────────────────────────────────────
 
-auto AcquireGlobalSaveLock(EditorSaveCheckpointCoordinator& coordinator,
-                           sl_element_id_t                  element_id)
+auto EditorSaveCheckpointCoordinator::AcquireBlocking(sl_element_id_t element_id)
+    -> SaveCheckpointLock {
+  std::unique_lock lock(mutex_);
+  condition_.wait(lock, [this] { return !saving_; });
+  saving_         = true;
+  active_element_ = element_id;
+  return SaveCheckpointLock(this, element_id, true);
+}
+
+// ── Free-function wrapper (kept for backward compatibility) ──────────────────
+
+auto AcquireGlobalSaveLock(EditorSaveCheckpointCoordinator& coordinator, sl_element_id_t element_id)
     -> EditorSaveCheckpointCoordinator::SaveCheckpointLock {
-  auto save_lock = coordinator.TryAcquire(element_id);
-  while (!save_lock.owns_lock()) {
-    std::this_thread::yield();
-    save_lock = coordinator.TryAcquire(element_id);
-  }
-  return save_lock;
+  return coordinator.AcquireBlocking(element_id);
 }
 
 }  // namespace alcedo
