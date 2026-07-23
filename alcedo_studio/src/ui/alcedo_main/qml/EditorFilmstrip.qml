@@ -12,22 +12,18 @@ Item {
 
     property var theme: null
     property var editorSession: null
-    // Phase 6C-5: optional EditorNavigationPolicy / InteractionPolicy adapter.
-    property var navigationPolicy: null
+    // InteractionPolicyController is the authoritative save-checkpoint gate.
+    property var interactionPolicy: null
     property bool collapsed: editorSession ? editorSession.filmstripCollapsed : false
     property real expandedHeight: editorSession ? editorSession.filmstripExpandedHeight : 128
     property int currentIndex: 0
     property int totalCount: 0
-    property bool saveInProgress: navigationPolicy
-                                  ? (navigationPolicy.saveCheckpointActive
-                                     || !navigationPolicy.canSelectEditorImage)
-                                  : (editorSession
-                                     && String(editorSession.sessionState || "") === "Saving")
-    property bool selectionEnabled: navigationPolicy ? navigationPolicy.canSelectEditorImage
-                                                     : !saveInProgress
-    property string selectionDisabledReason: navigationPolicy
-                                             ? String(navigationPolicy.selectEditorImageReason || "")
-                                             : (saveInProgress ? qsTr("Saving editor changes") : "")
+    readonly property bool selectionEnabled: interactionPolicy
+                                             ? Boolean(interactionPolicy.canSelectEditorImage)
+                                             : true
+    readonly property string selectionDisabledReason: interactionPolicy
+                                                     ? String(interactionPolicy.selectEditorImageReason || "")
+                                                     : ""
     property bool hasImage: editorSession ? editorSession.hasImage : false
 
     readonly property real handleHeight: 28
@@ -85,6 +81,8 @@ Item {
     signal toggleRequested()
     signal imageActivated(int index)
 
+    // Emits an image request only when the authoritative policy permits it.
+    // Blocked requests have no signal side effect.
     function activateImage(index) {
         if (!selectionEnabled) {
             return
@@ -218,11 +216,14 @@ Item {
                 }
 
                 Label {
-                    visible: root.saveInProgress
+                    visible: !root.selectionEnabled
+                             && root.selectionDisabledReason.length > 0
                     Layout.alignment: Qt.AlignVCenter
-                    text: qsTr("Saving…")
+                    Layout.maximumWidth: 180
+                    text: root.selectionDisabledReason
                     color: root.colAccent
                     font.pixelSize: appTheme.fontSizeCaption
+                    elide: Text.ElideRight
                 }
             }
 

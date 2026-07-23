@@ -961,7 +961,7 @@ Files:
 
 - new `src/ui/alcedo_main/qml/EditorWorkspaceNavigation.qml`
 - new `src/ui/alcedo_main/qml/EditorAdjustmentTransferActions.qml`
-- `src/ui/alcedo_main/qml/EditorNavigationPolicy.qml`
+- deleted `src/ui/alcedo_main/qml/EditorNavigationPolicy.qml`
 - `src/ui/alcedo_main/qml/EditorWorkspace.qml`
 - `src/ui/alcedo_main/qml/EditorFilmstrip.qml`
 - `src/ui/alcedo_main/qml/EditorHistoryVersionsRail.qml`
@@ -984,17 +984,26 @@ Responsibilities:
 
 Checklist:
 
-- [ ] Delete `EditorNavigationPolicy.qml` after its consumers bind to the authoritative
+- [x] Delete `EditorNavigationPolicy.qml` after its consumers bind to the authoritative
       `InteractionPolicyController`; a QML mirror of the same five values is not a module.
-- [ ] Move only the Phase 6 workspace button block from `Main.qml` into
+- [x] Move only the Phase 6 workspace button block from `Main.qml` into
       `EditorWorkspaceNavigation.qml`. Leave unrelated global window/navigation behavior in `Main.qml`.
-- [ ] Move only `requestPasteAdjustments` and the Merge permission branch into
+- [x] Move only `requestPasteAdjustments` and the Merge permission branch into
       `EditorAdjustmentTransferActions.qml`; pass the existing dialog/backend as explicit properties.
-- [ ] Do not create one new QML controller containing workspace, filmstrip, Version, Paste, and Merge.
+- [x] Do not create one new QML controller containing workspace, filmstrip, Version, Paste, and Merge.
       That would reproduce the god component under a new name.
-- [ ] Add component tests `EditorWorkspaceNavigationQmlTest` and
+- [x] Add component tests `EditorWorkspaceNavigationQmlTest` and
       `EditorAdjustmentTransferActionsQmlTest`; keep the later end-to-end test for their composition in
       `Main.qml`.
+
+Verification record (2026-07-23): `EditorWorkspaceNavigationQmlTest` discovers and passes 3 cases;
+`EditorAdjustmentTransferActionsQmlTest` discovers and passes 4 cases. The focused CTest run passes
+7/7 cases, `MainQmlWorkflowTest` passes its production window case, and the `alcedo_main` target
+builds successfully. The final full `WorkspaceShellTest` run discovers 44 cases: 41 pass, 2 fail,
+and 1 is skipped by the offscreen platform. The remaining failures are
+`EditorSessionControllerTracksSessionWithoutLegacyModal` (backend close state) and
+`ProductionFrameSinkAcceptsThreeLayerFrameSubmissions` (production frame image identity); the run
+emits no QML warnings.
 
 ##### Phase 1E - Create module-specific fixtures and test targets
 

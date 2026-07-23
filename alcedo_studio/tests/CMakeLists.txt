@@ -1977,6 +1977,68 @@ target_compile_definitions(EditorAdjustmentControlQmlTest
 )
 gtest_discover_tests(EditorAdjustmentControlQmlTest TEST_PREFIX "EditorAdjustmentControlQmlTest.")
 
+# Phase 1D: extracted editor action components. Each target loads one QML
+# component from source with only explicit fake collaborators.
+add_executable(EditorWorkspaceNavigationQmlTest
+    ui/editor_workspace_navigation_qml_test.cpp
+    ui/widget_test_main.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorWorkspaceNavigationQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorWorkspaceNavigationQmlTest
+    PRIVATE
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorWorkspaceNavigationQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+gtest_discover_tests(EditorWorkspaceNavigationQmlTest
+    TEST_PREFIX "EditorWorkspaceNavigationQmlTest."
+    PROPERTIES LABELS "workspace_qml"
+)
+
+add_executable(EditorAdjustmentTransferActionsQmlTest
+    ui/editor_adjustment_transfer_actions_qml_test.cpp
+    ui/widget_test_main.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorAdjustmentTransferActionsQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorAdjustmentTransferActionsQmlTest
+    PRIVATE
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorAdjustmentTransferActionsQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+gtest_discover_tests(EditorAdjustmentTransferActionsQmlTest
+    TEST_PREFIX "EditorAdjustmentTransferActionsQmlTest."
+    PROPERTIES LABELS "workspace_qml"
+)
+
 # Phase 6B: tone-curve model (pointer-drag behavior + operator params JSON).
 add_executable(EditorToneCurveModelTest
     ui/editor_tone_curve_model_test.cpp
@@ -2189,6 +2251,8 @@ alcedo_assign_test_category(ui ALCEDO_BUILD_UI_TESTS alcedo_tests_ui
   WorkspaceShellTest
   EditorAdjustmentModelTest
   EditorAdjustmentControlQmlTest
+  EditorWorkspaceNavigationQmlTest
+  EditorAdjustmentTransferActionsQmlTest
   EditorToneCurveModelTest
   EditorToneCurveGeometryTest
   LanguageManagerTest

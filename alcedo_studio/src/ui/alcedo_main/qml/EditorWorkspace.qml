@@ -15,13 +15,6 @@ Item {
     property var editorSession: appModules.editorSession
     property var interactionPolicy: appModules.interactionPolicy
 
-    // Decoupled Phase 6C-5 navigation gates — not inlined into panel layout code.
-    EditorNavigationPolicy {
-        id: editorNavigationPolicy
-        interactionPolicy: root.interactionPolicy
-        editorSession: root.editorSession
-    }
-
     readonly property color colPanel: theme ? theme.colGlassPanel : "#1C1C1D"
     readonly property color colStroke: theme ? theme.colGlassStroke : Qt.rgba(1, 1, 1, 0.08)
     readonly property color colText: theme ? theme.colText : "#F5F1EA"
@@ -37,7 +30,13 @@ Item {
     readonly property int panelRadius: theme ? theme.panelRadius : 12
     readonly property int controlRadius: theme ? theme.controlRadius : 10
     readonly property string headlineFont: theme ? theme.headlineFontFamily : appTheme.headlineFontFamily
-    readonly property bool hasImage: editorSession ? editorSession.hasImage : false
+    // The session backend may finish closing after the router has entered the
+    // explicit empty-editor route; require both sources to agree before
+    // exposing image-only controls or presentation state.
+    readonly property bool hasImage: editorSession
+                                     && editorSession.hasImage
+                                     && focusedElementId > 0
+                                     && focusedImageId > 0
     readonly property var renderDiagnostics: editorSession ? editorSession.renderDiagnostics : ({})
     readonly property string inflightRenderReason: renderDiagnostics.inflightReason || ""
     readonly property bool adjustmentRenderBusy: editorSession
@@ -83,7 +82,7 @@ Item {
                 Layout.fillHeight: true
                 theme: root.theme
                 editorSession: root.editorSession
-                navigationPolicy: editorNavigationPolicy
+                interactionPolicy: root.interactionPolicy
             }
 
             // Center column: viewport + filmstrip
@@ -578,9 +577,23 @@ Item {
                                 + ":" + root.editorSession.imageId
                                 + ":" + (root.editorSession.active ? "1" : "0")
                     }
+
+                    // Binding the viewport can notify the session immediately;
+                    // defer the reset until the current property evaluation ends.
+                    Timer {
+                        id: sessionResetTimer
+                        interval: 0
+                        repeat: false
+                        onTriggered: {
+                            if (viewportSlot.sessionIdentityKey.length > 0) {
+                                viewportSlot.resetAndSyncForImageSession()
+                            }
+                        }
+                    }
+
                     onSessionIdentityKeyChanged: {
                         if (sessionIdentityKey.length > 0) {
-                            resetAndSyncForImageSession()
+                            sessionResetTimer.restart()
                         }
                     }
 
@@ -629,7 +642,7 @@ Item {
                     Layout.preferredHeight: editorFilmstrip.dockHeight
                     theme: root.theme
                     editorSession: root.editorSession
-                    navigationPolicy: editorNavigationPolicy
+                    interactionPolicy: root.interactionPolicy
                     // Phase 1B: empty model; position/count remain defined for handle UI.
                     currentIndex: root.hasImage ? 1 : 0
                     totalCount: root.hasImage ? 1 : 0

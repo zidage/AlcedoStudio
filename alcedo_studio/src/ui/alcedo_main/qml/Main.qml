@@ -662,39 +662,6 @@ ApplicationWindow {
         adjustmentTransferDialog.open()
     }
 
-    function requestPasteAdjustments() {
-        if (!appModules.adjustmentTransfer.packageAvailable) {
-            return
-        }
-        if (!root.pendingAdjustmentPasteTargets || root.pendingAdjustmentPasteTargets.length === 0) {
-            return
-        }
-        // Phase 6C-5: Paste is blocked with a reason while a save checkpoint runs.
-        if (appModules.interactionPolicy && !appModules.interactionPolicy.canPasteAdjustments) {
-            const reason = String(appModules.interactionPolicy.pasteAdjustmentsReason || "")
-            if (reason.length > 0) {
-                root.showSnackbar(reason)
-            }
-            return
-        }
-        if (appModules.interactionPolicy && !appModules.interactionPolicy.canMergeAdjustments
-                && String(adjustmentTransferDialog.pasteStrategy || "") === "merge") {
-            const reason = String(appModules.interactionPolicy.mergeAdjustmentsReason || "")
-            if (reason.length > 0) {
-                root.showSnackbar(reason)
-            }
-            return
-        }
-        adjustmentTransferDialog.mode = "paste"
-        adjustmentTransferDialog.pasteStrategy = "merge"
-        adjustmentTransferDialog.sourceTitle =
-                appModules.adjustmentTransfer.packageSourceTitle
-        adjustmentTransferDialog.targetCount = root.pendingAdjustmentPasteTargets.length
-        adjustmentTransferDialog.adjustmentRows =
-                appModules.adjustmentTransfer.packageSummary
-        adjustmentTransferDialog.open()
-    }
-
     readonly property alias exportQueueState: exportQueueStateObj
     readonly property alias selectionState: selectionStateObj
     readonly property alias importDialog: importDialogObj
@@ -896,17 +863,23 @@ ApplicationWindow {
             }
         }
         onPasteAccepted: function(strategy) {
-            const result = appModules.adjustmentTransfer.Paste(
-                root.pendingAdjustmentPasteTargets,
-                strategy)
-            if (result && result.message) {
-                root.showSnackbar(result.message)
-            }
+            adjustmentTransferActions.applyPaste(strategy)
             root.pendingAdjustmentPasteTargets = []
         }
         onPasteDiscarded: {
             appModules.adjustmentTransfer.Discard()
             root.pendingAdjustmentPasteTargets = []
+        }
+    }
+
+    EditorAdjustmentTransferActions {
+        id: adjustmentTransferActions
+        adjustmentTransfer: appModules.adjustmentTransfer
+        adjustmentTransferDialog: adjustmentTransferDialog
+        interactionPolicy: appModules.interactionPolicy
+        pendingTargets: root.pendingAdjustmentPasteTargets
+        onMessageRequested: function(message) {
+            root.showSnackbar(message)
         }
     }
 
@@ -947,7 +920,7 @@ ApplicationWindow {
                 return
             }
             if (actionId === "paste-adjustments") {
-                requestPasteAdjustments()
+                adjustmentTransferActions.requestPasteAdjustments()
                 return
             }
             if (actionId === "delete") {
@@ -1332,165 +1305,17 @@ ApplicationWindow {
                 }
                 Item { Layout.preferredWidth: 12 }
 
-                // ── Workspace navigation (Library / Editor) ─────────────────
-                // Persistent shared navigation, visible in the same position in
-                // both workspaces. A compact inset track carries the two icon
-                // segments; its hit area remains 40 px high while the painted
-                // control and SVGs stay deliberately smaller.
-                // Return-to-library is owned here, not by an editor-local control.
-                Item {
+                EditorWorkspaceNavigation {
                     id: workspaceSwitch
                     objectName: "workspaceSwitch"
                     Layout.preferredWidth: 112
                     Layout.preferredHeight: 40
-
-                    readonly property bool navEnabled: appModules.project.serviceReady
-                    readonly property int opticalIconSize: appTheme.iconOpticalSizeCompact
-
-                    Rectangle {
-                        id: wsTrack
-                        objectName: "workspaceSwitchTrack"
-                        anchors.centerIn: parent
-                        width: parent.width - 4
-                        height: 32
-                        radius: appTheme.controlRadiusSmall
-                        color: Qt.rgba(root.colBgBase.r, root.colBgBase.g, root.colBgBase.b, 0.98)
-                        border.width: 1
-                        border.color: root.colDivider
-                        opacity: workspaceSwitch.navEnabled ? 1.0 : 0.45
-                    }
-
-                    Rectangle {
-                        id: wsThumb
-                        objectName: "workspaceSwitchThumb"
-                        width: wsTrack.width / 2 - 2
-                        height: wsTrack.height - 4
-                        y: wsTrack.y + 2
-                        x: appModules.workspaceRouter.workspace === "library"
-                           ? wsTrack.x + 2
-                           : wsTrack.x + wsTrack.width - width - 2
-                        radius: appTheme.controlRadiusSmall - 2
-                        color: root.colAccentPrimary
-                        border.width: 1
-                        border.color: Qt.rgba(
-                            root.colAccentSecondary.r,
-                            root.colAccentSecondary.g,
-                            root.colAccentSecondary.b,
-                            0.52)
-                        opacity: workspaceSwitch.navEnabled ? 1.0 : 0.45
-                        // The thumb carries the selected workspace surface and
-                        // slides between segments. Reduced motion snaps it.
-                        Behavior on x {
-                            NumberAnimation {
-                                duration: appTheme.reduceMotion ? 0 : appTheme.motionFoldOpenMs
-                                easing.type: Easing.OutCubic
-                            }
-                        }
-                    }
-
-                    Row {
-                        anchors.fill: parent
-                        spacing: 0
-
-                        Button {
-                            id: libraryNavButton
-                            objectName: "libraryNavButton"
-                            width: parent.width / 2
-                            height: parent.height
-                            flat: true
-                            padding: 0
-                            display: AbstractButton.IconOnly
-                            enabled: workspaceSwitch.navEnabled
-                                     && (!appModules.interactionPolicy
-                                         || appModules.interactionPolicy.canSwitchWorkspace)
-                            activeFocusOnTab: true
-                            readonly property bool isActive: appModules.workspaceRouter.workspace === "library"
-                            // The sliding thumb supplies the selected surface; icon
-                            // tint keeps the inactive action quiet and brightens on
-                            // hover without adding a second painted well.
-                            readonly property string actionName: qsTr("Library")
-                            HoverHandler { id: libraryNavHover }
-                            icon.source: "qrc:/panel_icons/layout-grid.svg"
-                            icon.width: workspaceSwitch.opticalIconSize
-                            icon.height: workspaceSwitch.opticalIconSize
-                            icon.color: !enabled
-                                        ? root.withAlpha(root.colText, 0.30)
-                                        : (isActive || hovered ? root.colText : root.colTextMuted)
-                            Material.foreground: icon.color
-                            background: Rectangle {
-                                color: "transparent"
-                                radius: 4
-                            }
-                            ToolTip.visible: libraryNavHover.hovered
-                            ToolTip.text: libraryNavButton.actionName
-                            Accessible.name: libraryNavButton.actionName
-                            Accessible.role: Accessible.Button
-                            onClicked: {
-                                if (appModules.interactionPolicy
-                                        && !appModules.interactionPolicy.canSwitchWorkspace) {
-                                    return
-                                }
-                                if (appModules.workspaceRouter.workspace !== "library") {
-                                    appModules.workspaceRouter.openLibrary()
-                                }
-                            }
-                        }
-
-                        Button {
-                            id: editorNavButton
-                            objectName: "editorNavButton"
-                            width: parent.width / 2
-                            height: parent.height
-                            flat: true
-                            padding: 0
-                            display: AbstractButton.IconOnly
-                            enabled: workspaceSwitch.navEnabled
-                                     && (!appModules.interactionPolicy
-                                         || appModules.interactionPolicy.canSwitchWorkspace)
-                            activeFocusOnTab: true
-                            readonly property bool isActive: appModules.workspaceRouter.workspace === "editor"
-                            // See libraryNavButton: no per-segment hover/press fill.
-                            readonly property string actionName: qsTr("Editor")
-                            HoverHandler { id: editorNavHover }
-                            icon.source: "qrc:/panel_icons/adjustments.svg"
-                            icon.width: workspaceSwitch.opticalIconSize
-                            icon.height: workspaceSwitch.opticalIconSize
-                            icon.color: !enabled
-                                        ? root.withAlpha(root.colText, 0.30)
-                                        : (isActive || hovered ? root.colText : root.colTextMuted)
-                            Material.foreground: icon.color
-                            background: Rectangle {
-                                color: "transparent"
-                                radius: 4
-                            }
-                            ToolTip.visible: editorNavHover.hovered
-                            ToolTip.text: editorNavButton.actionName
-                            Accessible.name: editorNavButton.actionName
-                            Accessible.role: Accessible.Button
-                            // Editor activates with no selected image unless the user
-                            // was just editing one: re-entry restores the last-edited
-                            // image when it still exists, so an image -> library ->
-                            // editor round-trip returns to the same image. Clicking
-                            // while already active is a no-op so the session is
-                            // preserved.
-                            onClicked: {
-                                if (appModules.interactionPolicy
-                                        && !appModules.interactionPolicy.canSwitchWorkspace) {
-                                    return
-                                }
-                                if (appModules.workspaceRouter.workspace !== "editor") {
-                                    const lastEl = Number(appModules.editorSession.lastElementId || 0)
-                                    const lastImg = Number(appModules.editorSession.lastImageId || 0)
-                                    if (lastEl > 0 && lastImg > 0
-                                            && root.editorImageStillExists(lastEl)) {
-                                        appModules.workspaceRouter.openEditor(lastEl, lastImg)
-                                    } else {
-                                        appModules.workspaceRouter.openEditor(0, 0)
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    theme: root
+                    workspaceRouter: appModules.workspaceRouter
+                    interactionPolicy: appModules.interactionPolicy
+                    editorSession: appModules.editorSession
+                    editorImageExists: root.editorImageStillExists
+                    navigationEnabled: appModules.project.serviceReady
                 }
 
                 Rectangle {

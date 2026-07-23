@@ -16,12 +16,15 @@ Item {
 
     property var theme: null
     property var editorSession: null
-    // Phase 6C-5: Version checkout is disabled while a save checkpoint holds locks.
-    property var navigationPolicy: null
-    property bool controlsEnabled: navigationPolicy ? navigationPolicy.canCheckoutVersion : true
-    readonly property string checkoutDisabledReason: navigationPolicy
-                                                     ? String(navigationPolicy.checkoutVersionReason || "")
-                                                     : ""
+    // Version checkout is the only rail action gated by the policy. History
+    // browsing remains available while checkout is blocked.
+    property var interactionPolicy: null
+    readonly property bool versionCheckoutEnabled: interactionPolicy
+                                                  ? Boolean(interactionPolicy.canCheckoutVersion)
+                                                  : true
+    readonly property string versionCheckoutDisabledReason: interactionPolicy
+                                                            ? String(interactionPolicy.checkoutVersionReason || "")
+                                                            : ""
 
     readonly property color colText: theme ? theme.colText : "#F5F1EA"
     readonly property color colMuted: theme ? theme.colTextMuted : "#AAA59D"
@@ -125,7 +128,7 @@ Item {
                 id: historyRailButton
                 objectName: "editorHistoryRailButton"
                 compact: true
-                enabled: root.controlsEnabled
+                enabled: true
                 selected: root.activePage === "history"
                 iconSrc: "qrc:/history_icons/git-commit-horizontal.svg"
                 iconColorDefault: root.colMuted
@@ -140,7 +143,7 @@ Item {
                 id: versionsRailButton
                 objectName: "editorVersionsRailButton"
                 compact: true
-                enabled: root.controlsEnabled
+                enabled: root.versionCheckoutEnabled
                 selected: root.activePage === "versions"
                 // Phase 4D: Tabler versions icon replaces palette.svg.
                 iconSrc: "qrc:/panel_icons/versions.svg"
@@ -205,9 +208,7 @@ Item {
                     width: parent.width - 16
                     wrapMode: Text.WordWrap
                     horizontalAlignment: Text.AlignHCenter
-                    text: root.controlsEnabled
-                          ? qsTr("No edit history yet")
-                          : qsTr("Select an image to view history")
+                    text: qsTr("No edit history yet")
                     color: root.colMuted
                     font.pixelSize: appTheme.fontSizeBody
                 }
@@ -224,9 +225,11 @@ Item {
                     width: parent.width - 16
                     wrapMode: Text.WordWrap
                     horizontalAlignment: Text.AlignHCenter
-                    text: root.controlsEnabled
+                    text: root.versionCheckoutEnabled
                           ? qsTr("No versions yet")
-                          : qsTr("Select an image to view versions")
+                          : (root.versionCheckoutDisabledReason.length > 0
+                             ? root.versionCheckoutDisabledReason
+                             : qsTr("Version checkout is unavailable"))
                     color: root.colMuted
                     font.pixelSize: appTheme.fontSizeBody
                 }
