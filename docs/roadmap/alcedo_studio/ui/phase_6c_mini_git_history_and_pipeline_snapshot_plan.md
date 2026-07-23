@@ -3,8 +3,9 @@
 Date: 2026-07-22
 
 Status: approved design; 6C-1, 6C-2, 6C-2-Fix, 6C-3, 6C-4, and 6C-5 implemented.
-Phase 6C-5 qualification Phase 1, Phase 2A, and Phase 2B are implemented. The remaining
-qualification phases (3A onward) are blocking. Do not begin 6C-6 checkout, session switching,
+Phase 6C-5 qualification Phase 1, Phase 2A, and Phase 2B are implemented. Phase 3 is the next
+blocking build-configuration ownership stage; the former Phase 3 begins at Phase 4. Do not begin
+6C-6 checkout, session switching,
 or garbage collection until every qualification phase is complete.
 
 Related documents:
@@ -1178,12 +1179,247 @@ Phase 2 is complete when both new targets pass repeatedly, Thread Sanitizer is r
 busy-wait remains, and the updated call-chain comment names the owner of the save lock and capture at
 each callback boundary.
 
-#### Phase 3 - Connect the new modules with typed values
+#### Phase 3 - Give CMake files domain ownership
 
-Phase 1 establishes ownership. Phase 3 changes the behavior between those modules without putting the
+This is a build-graph refactor only. It changes neither Mini-Git behavior nor C++/QML ownership,
+target names, public headers, test names, CTest labels, compiler flags, generated artifacts, or
+link directions. Its purpose is to stop Phase 6C work from extending two mixed root manifests.
+The former typed-value work is Phase 4 after this stage.
+
+##### Baseline and ownership boundary
+
+The current first-party manifests are already above the review threshold:
+
+| File | Current LOC | Mixed responsibilities that must be separated |
+| --- | ---: | --- |
+| `src/CMakeLists.txt` | 2464 | target helper definition, platform/backend switches, source lists, generated protobuf/shader work, app services, UI libraries, QML module, executable packaging |
+| `tests/CMakeLists.txt` | 2400 | test switches, category aggregate targets, test helper functions, every domain's executable declarations, discovery, resource copy rules, and category membership |
+
+`src/third_party/` already has its own build manifests, but no first-party `src/app`, `src/ui`,
+`tests/app`, or `tests/ui` manifest currently owns its local targets. Moving lines into a second
+large root-adjacent file would not fix the ownership problem. Each new manifest owns the target
+declarations for one source domain; the root files only assemble the graph.
+
+| Owner | New or retained file | Owns | Must not own |
+| --- | --- | --- | --- |
+| Source build root | `src/CMakeLists.txt` | immutable source-root paths, common helper inclusion, platform-wide feature values, and ordered `add_subdirectory` calls | first-party library/executable source lists or their target-link rules |
+| Source target helper | `src/cmake/AlcedoTargetHelpers.cmake` | `def_library` implementation and common include-directory behavior | a concrete app/UI target or a platform feature decision |
+| Application services | `src/app/CMakeLists.txt` | every target whose primary implementation is under `src/app/` or public API under `src/include/app/`, including the editor-session and Mini-Git service targets | UI target declarations or a dependency from app to a UI target |
+| UI composition root | `src/ui/CMakeLists.txt` | ordering of UI subdomains only | long source/QML lists |
+| Editor RHI | `src/ui/editor_rhi/CMakeLists.txt` | RHI viewport, harness, shaders, backend-specific RHI setup, and developer harness targets | album-shell or QML application target details |
+| Alcedo UI shell | `src/ui/alcedo_main/CMakeLists.txt` | `UiLocalization`, `BackgroundTaskController`, `AlbumBackendLib`, editor-dialog source selection, `alcedo_main`, QML files, translations, and platform packaging rules | app-service source lists |
+| Test build root | `tests/CMakeLists.txt` | test-root paths, test feature options, aggregate category targets, common helper inclusion, and ordered `add_subdirectory` calls | individual test executable declarations, `gtest_discover_tests`, or per-target copy commands |
+| Test registration helper | `tests/cmake/AlcedoTestRegistration.cmake` | category registration, DuckDB extension copy helpers, and shared test-target setup | lists of application/UI test source files |
+| Application tests | `tests/app/CMakeLists.txt` | all targets with test sources under `tests/app/`, their discovery, labels, fixtures, resource copies, and category registration | UI/QML test executable definitions |
+| UI tests | `tests/ui/CMakeLists.txt` | all targets with test sources under `tests/ui/`, the album-backend helper, QML resources, discovery, labels, and category registration | app-service test executable definitions |
+| Edit/history tests | `tests/edit/CMakeLists.txt` | Mini-Git persistence, capture, and edit-pipeline test declarations under `tests/edit/` | app/UI target declarations |
+
+The remaining first-party source and test domains follow the same boundary in Phase 3D:
+`concurrency`, `cuda`, `decoders`, `edit`, `image`, `io`, `metal`, `nn`, `opencl`, `renderer`,
+`sidecar_client`, `sleeve`, `storage`, and `utils` under `src`; and the existing direct test domains
+under `tests` (`ci`, `cuda`, `decoders`, `gui_pocs`, `image`, `io`, `metal`, `ml_ops`, `opencl`,
+`perf`, `raw`, `resources`, `sleeve`, `storage`, `support`, and `utils`). A `CMakeLists.txt` is added
+only where that domain actually declares a target; source files and fixtures stay where they are.
+
+Build ownership and observable result must be traceable through this chain:
+
+`top-level CMake -> src root -> owning source manifest -> named library/executable -> tests root -> owning test manifest -> gtest discovery/manual CTest entry -> CTest category aggregate`.
+
+##### Build-context rules
+
+- [ ] Before the first source `add_subdirectory`, define `ALCEDO_SRC_ROOT`,
+      `ALCEDO_INCLUDE_ROOT`, and `ALCEDO_BINARY_ROOT`. Before the first test `add_subdirectory`,
+      define `ALCEDO_TEST_ROOT` and `ALCEDO_TEST_SUPPORT_ROOT`. Child manifests may read these
+      values but may not overwrite them.
+- [ ] Move the current `def_library` macro into `src/cmake/AlcedoTargetHelpers.cmake`. Its public
+      include path must use `${ALCEDO_INCLUDE_ROOT}`, never a relative `include` path that changes
+      meaning in a child directory.
+- [ ] Move `alcedo_assign_test_category`, DuckDB copy helpers, and reusable test setup into
+      `tests/cmake/AlcedoTestRegistration.cmake`. The root test manifest contains no function or
+      macro definition after this stage.
+- [ ] Replace the trailing hand-maintained category target lists with one
+      `alcedo_register_test_target(<target> <category>...)` call adjacent to each test declaration.
+      The helper applies the existing build option, `EXCLUDE_FROM_ALL` behavior, and dependencies on
+      `alcedo_tests_all` and the named category aggregate. A target in more than one category is
+      registered once per category at that same declaration.
+- [ ] Keep all existing `gtest_discover_tests`, explicit `add_test`, labels, working directories,
+      timeouts, resource copies, platform guards, and target names unchanged. Category registration
+      changes build aggregation only; it must not rewrite CTest names or labels.
+- [ ] Do not pass target lists through `PARENT_SCOPE`, a directory property, or a mutable global list.
+      CMake targets are global by design; their source list, link rules, discovery, and category
+      membership remain adjacent in the owning manifest.
+- [ ] Use `${ALCEDO_SRC_ROOT}`, `${ALCEDO_TEST_ROOT}`, or a path local to the owning manifest for
+      every moved path. Audit every use of `CMAKE_CURRENT_SOURCE_DIR`, `CMAKE_CURRENT_BINARY_DIR`,
+      and `CMAKE_CURRENT_LIST_DIR`; retain a local value only when that directory is intentionally
+      the source of the path.
+
+##### Phase 3A - Freeze the build graph before relocation
+
+Files:
+
+- `src/CMakeLists.txt`
+- `tests/CMakeLists.txt`
+- new `src/cmake/AlcedoTargetHelpers.cmake`
+- new `tests/cmake/AlcedoTestRegistration.cmake`
+
+Checklist:
+
+- [ ] Configure the existing `win_debug` build before changing a manifest. Record the exact CMake
+      version, generator, configured feature values, and the current values of every
+      `ALCEDO_BUILD_*` option.
+- [ ] Capture the pre-change target manifest with
+      `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target help` and the pre-change CTest
+      manifest with `ctest --test-dir build/debug --show-only=json-v1`. Store both comparison outputs
+      outside source control with the review evidence; do not add machine-specific build output to
+      the repository.
+- [ ] Build a declaration inventory before moving code. For every existing first-party target, record
+      target name, owning source/test domain, source paths, public/private dependencies, platform
+      guard, generated inputs, post-build work, CTest discovery style, labels, and category
+      membership. A target may have exactly one owning CMake manifest.
+- [ ] Derive the `add_subdirectory` order from the current declaration order and `if(TARGET ...)`
+      checks. Do not choose alphabetical order. Every target referenced by an existing conditional
+      must be defined at the same point relative to that conditional after the split.
+- [ ] Establish the shared helper files and root path values without moving a target. Configure once
+      and compare the target and CTest manifests to the baseline before continuing.
+
+Required evidence:
+
+| Acceptance criterion | Required proof | Reject the stage when |
+| --- | --- | --- |
+| Existing developer target names remain usable | Pre/post target manifests have the same first-party target set | any production, test, aggregate, or harness target disappears or is renamed |
+| CTest behavior remains discoverable | Pre/post JSON manifests have the same test names, labels, working directories, and timeouts | discovery changes, a manual CTest entry disappears, or a label changes |
+| Global setup has one owner | Root manifests contain only setup and composition after the final substage | a root manifest still declares a first-party library/test executable or a shared helper function |
+
+##### Phase 3B - Move application and UI source target declarations intact
+
+Files:
+
+- new `src/app/CMakeLists.txt`
+- new `src/ui/CMakeLists.txt`
+- new `src/ui/editor_rhi/CMakeLists.txt`
+- new `src/ui/alcedo_main/CMakeLists.txt`
+- `src/CMakeLists.txt`
+- `src/cmake/AlcedoTargetHelpers.cmake`
+
+Checklist:
+
+- [ ] Move each complete app target declaration, including its source/header list, compile
+      definitions, platform branches, generated protobuf inputs, post-build work, and link rules,
+      into `src/app/CMakeLists.txt`. This includes the editor-session, save-checkpoint, Mini-Git,
+      project, import/export, thumbnail, semantic, image-analysis, and AI service targets whose
+      implementation/API ownership is app. `ProjectService` may continue to compile the existing
+      `ui/alcedo_main/album_backend/path_utils.cpp` until a separate source-ownership change; this
+      phase neither moves that file nor introduces an app-to-UI target dependency.
+- [ ] Keep `src/ui/CMakeLists.txt` as an assembly file that adds `editor_rhi` before `alcedo_main`.
+      Move all `EditorRhi*` target declarations and shader setup into the former. Move
+      `UiLocalization`, `BackgroundTaskController`, `AlbumBackendLib`, dialog source selection,
+      `alcedo_main`, QML-module registration, translations, application icons, and finalization into
+      the latter.
+- [ ] Preserve the exact `ALCEDO_REAL_WIDGET_EDITOR`, CUDA, OpenCL, Metal, Windows, and Apple
+      branches around the targets they currently affect. Do not centralize feature branches merely
+      because their source files now live in different manifests.
+- [ ] Make every moved path explicit and stable in its new directory scope. Generated protobuf and
+      shader paths must continue to use the same binary directory and must not be duplicated.
+- [ ] Build `alcedo_main`, `AlbumBackendLib`, `EditorRhiViewport`, `EditorRhiHarness`, and
+      `EditorSessionService` after this substage. A successful configure alone is not sufficient.
+
+##### Phase 3C - Put Phase 6C test registration beside the owning tests
+
+Files:
+
+- new `tests/app/CMakeLists.txt`
+- new `tests/ui/CMakeLists.txt`
+- new `tests/edit/CMakeLists.txt`
+- `tests/CMakeLists.txt`
+- `tests/cmake/AlcedoTestRegistration.cmake`
+
+Checklist:
+
+- [ ] Move the app test declarations and their fixture/resource setup into `tests/app/CMakeLists.txt`.
+      This includes `EditorSaveCheckpointCoordinatorTest`, `EditorSaveCheckpointServiceTest`,
+      `EditorSessionLifecycleTest`, `EditorSessionNavigationControllerTest`,
+      `EditorSessionRenderControllerTest`, `EditorSessionEditControllerTest`, and
+      `EditorSessionServiceFacadeTest`, together with the existing app service tests in that folder.
+- [ ] Move the UI test declarations into `tests/ui/CMakeLists.txt`. This includes the album-backend,
+      session-port, QML action, workspace-shell, RHI, and editor adjustment targets. Keep the
+      `def_ui_test` helper local to this manifest or make it a focused helper in the test CMake module;
+      it must not return to `tests/CMakeLists.txt`.
+- [ ] Move Mini-Git history/capture declarations such as `EditorSaveCheckpointCaptureTest`,
+      `EditorMiniGitJournalFoldTest`, `EditorMiniGitCommitWriterTest`,
+      `EditorMiniGitJournalRecoveryTest`, and `EditorMiniGitMaterializerTest` into
+      `tests/edit/CMakeLists.txt`; retain their current test-source paths and focused fixtures.
+- [ ] Register every moved target with `alcedo_register_test_target` immediately after its discovery
+      and any post-build copy rule. Preserve targets that belong to a second aggregate such as a CI
+      category by registering that additional category at the same location.
+- [ ] Verify that no test target becomes hidden by default unintentionally: the old option value must
+      produce the same `EXCLUDE_FROM_ALL`, `EXCLUDE_FROM_DEFAULT_BUILD`, category aggregate, and
+      `alcedo_tests_all` membership as before the split.
+
+##### Phase 3D - Complete the first-party root split
+
+Files:
+
+- new or retained first-party `src/<domain>/CMakeLists.txt` files for every remaining target-owning
+      domain named in the ownership boundary above
+- new or retained `tests/<domain>/CMakeLists.txt` files for every remaining target-owning test domain
+      named in the ownership boundary above
+- `src/CMakeLists.txt`
+- `tests/CMakeLists.txt`
+
+Checklist:
+
+- [ ] Move the remaining first-party source target declarations one domain at a time. Each change
+      moves whole target declarations and leaves third-party build files untouched.
+- [ ] Move the remaining test target declarations one test domain at a time. A target whose source
+      file is outside its behavioral domain keeps the owner documented in the declaration inventory;
+      do not duplicate it in two manifests.
+- [ ] Keep a module CMake file below 500 lines where responsibility permits. A file may exceed that
+      guide only for one coherent target with a generated-file list or a complete QML resource list;
+      record why it cannot be divided without scattering that target's build definition.
+- [ ] Do not split a single target's source list across arbitrary phase-named files. When a target is
+      genuinely too large, split it only by a stable target boundary such as editor RHI versus the
+      Alcedo UI shell, not by physical line count.
+- [ ] Reduce both root manifests to path/setup values, helper inclusion, aggregate target creation,
+      and ordered `add_subdirectory` calls. The source root has no direct first-party
+      `add_library`/`add_executable`; the test root has no direct first-party
+      `add_library`/`add_executable` or `gtest_discover_tests`.
+
+##### Phase 3E - Prove configuration, build, discovery, and category behavior
+
+Run the named targets with the MSVC wrapper. Configure first, then build each target rather than
+claiming success from a configure-only result:
+
+- [ ] `cmd /c scripts\msvc_env.cmd --preset win_debug`.
+- [ ] `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_main`.
+- [ ] `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSaveCheckpointCoordinatorTest`.
+- [ ] `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSaveCheckpointServiceTest`.
+- [ ] `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSaveCheckpointCaptureTest`.
+- [ ] `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSessionNavigationControllerTest`.
+- [ ] `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorMiniGitMaterializerTest`.
+- [ ] `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorWorkspaceNavigationQmlTest`.
+- [ ] `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_tests_app` and
+      `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_tests_ui`.
+- [ ] Run the corresponding focused tests with
+      `ctest --test-dir build/debug --output-on-failure -R "EditorSaveCheckpoint|EditorSession|EditorMiniGit|EditorWorkspaceNavigation"`
+      and record test count, passed/failed/skipped count, and any environment-dependent skips.
+- [ ] Re-capture `--target help` and `ctest --show-only=json-v1`; compare both to the Phase 3A
+      baseline. Diff only source/build paths that necessarily reflect the new CMake directory, not
+      target or test identity.
+- [ ] On macOS or the macOS CI worker, configure `macos_debug` and build `alcedo_main` plus one
+      affected UI test target. Record that platform separately; Windows evidence does not prove the
+      Apple icon, bundle, Metal, or finalization paths.
+
+Phase 3 is complete only when the manifest comparison is clean, the named production and test targets
+build, the focused tests execute successfully, all category aggregate memberships match their baseline,
+and the root manifests have the restricted responsibilities above. No C++/QML behavior change may be
+claimed as part of this phase.
+
+#### Phase 4 - Connect the new modules with typed values
+
+Phase 1 establishes ownership. Phase 4 changes the behavior between those modules without putting the
 logic back into the facade.
 
-##### Phase 3A - Pass capture directly from history to checkpoint storage
+##### Phase 4A - Pass capture directly from history to checkpoint storage
 
 Files:
 
@@ -1216,7 +1452,7 @@ Required tests:
 - [ ] `MiniGitCheckpointDoesNotInvokeLegacyMaterializer`.
 - [ ] `CaptureFailureWritesNothingAndLeavesJournalBytes`.
 
-##### Phase 3B - Qualify navigation behavior through its owning controller
+##### Phase 4B - Qualify navigation behavior through its owning controller
 
 Files:
 
@@ -1246,15 +1482,15 @@ Required tests:
 - [ ] `DuplicateOrStaleCompletionCannotResumeBOrFinishTaskTwice`.
 - [ ] `CloseAndShutdownEachProduceOneTerminalResult`.
 
-Phase 3 is complete when call-site search finds no `TakeSaveCapture`, side map, positional pending-action
+Phase 4 is complete when call-site search finds no `TakeSaveCapture`, side map, positional pending-action
 initializer, or checkpoint business rule inside `EditorSessionService`.
 
-#### Phase 4 - Grill DuckDB commit, journal truncation, and reopen recovery
+#### Phase 5 - Grill DuckDB commit, journal truncation, and reopen recovery
 
 Use real project files from `EditorMiniGitProjectFixture`. A test that only checks an in-memory graph
 does not prove persistence.
 
-##### Phase 4A - Basic and non-trivial successful saves
+##### Phase 5A - Basic and non-trivial successful saves
 
 Files:
 
@@ -1272,7 +1508,7 @@ Checklist:
       values must remain distinct commits because their timestamps differ.
 - [ ] Add a strict pipeline spy and `MaterializationDoesNotReplayOrModifyTheLivePipeline`.
 
-##### Phase 4B - Fail before DuckDB commit
+##### Phase 5B - Fail before DuckDB commit
 
 Files:
 
@@ -1295,7 +1531,7 @@ Checklist:
       values from before the attempt.
 - [ ] Assert that no thumbnail invalidation and no B load event occurred.
 
-##### Phase 4C - Fail after DuckDB commit but before journal cleanup
+##### Phase 5C - Fail after DuckDB commit but before journal cleanup
 
 Files:
 
@@ -1316,7 +1552,7 @@ Checklist:
 - [ ] Add `JournalFlushFailureRemainsIncompleteAndRecoversOnReopen`.
 - [ ] Run the same recovery twice and assert the commit count and Version head move only once.
 
-##### Phase 4D - Invalid and large inputs
+##### Phase 5D - Invalid and large inputs
 
 Add stale/malformed fold cases to `EditorMiniGitJournalFoldTest` and missing-target/retry/scale cases to
 `EditorMiniGitJournalRecoveryTest`:
@@ -1328,13 +1564,13 @@ Add stale/malformed fold cases to `EditorMiniGitJournalFoldTest` and missing-tar
       elapsed time and peak test-process memory as diagnostic output, but do not use a machine-specific
       time limit as the only assertion.
 
-Phase 4 is complete when fold, commit-writer, recovery, and materializer-facade targets pass; every
+Phase 5 is complete when fold, commit-writer, recovery, and materializer-facade targets pass; every
 persistence assertion is made after a real reopen; no journal-file error is ignored; and presenting an
 already committed prefix repeatedly does not create another commit or move the Version again.
 
-#### Phase 5 - Prove the real UI locks and the complete A-to-B workflow
+#### Phase 6 - Prove the real UI locks and the complete A-to-B workflow
 
-##### Phase 5A - The real editor-save task publishes the five locks
+##### Phase 6A - The real editor-save task publishes the five locks
 
 Files:
 
@@ -1356,7 +1592,7 @@ Checklist:
 - [ ] Keep history browsing enabled when only `CheckoutVersion` is locked; add
       `VersionCheckoutLockDoesNotDisableHistoryBrowsing`.
 
-##### Phase 5B - Exercise the actual QML entrypoints
+##### Phase 6B - Exercise the actual QML entrypoints
 
 Files:
 
@@ -1386,7 +1622,7 @@ and zero backend calls:
 Then finish the task and repeat one allowed action from each component to prove the controls recover.
 Checking only `InteractionPolicyController` getters is not enough for this stage.
 
-##### Phase 5C - One production-style A-to-B integration test
+##### Phase 6C - One production-style A-to-B integration test
 
 Files:
 
@@ -1414,13 +1650,13 @@ Add target `EditorCheckpointNavigationTest` and one readable test,
 Add the paired failure test `FailedCheckpointKeepsAOpenAndDoesNotTouchBOrThumbnail`, stopping before
 DuckDB commit and asserting zero B and thumbnail events.
 
-Phase 5 is complete only when the C++ policy tests, QML action tests, and production-style integration
+Phase 6 is complete only when the C++ policy tests, QML action tests, and production-style integration
 test all pass. A controller-only test cannot substitute for QML coverage, and a direct materializer
 test cannot substitute for the A-to-B workflow.
 
-#### Phase 6 - Run the final evidence checklist
+#### Phase 7 - Run the final evidence checklist
 
-Phase 6 is verification, not a place to postpone cleanup. If a large rename, fixture, or file move is
+Phase 7 is verification, not a place to postpone cleanup. If a large rename, fixture, or file move is
 still needed, return it to Phase 1 and review it there.
 
 ##### Build and run the named module targets
@@ -1457,7 +1693,7 @@ limitation for every target. Do not report a compiled but unexecuted target as p
 ##### Review the final code shape
 
 - [ ] Run `clang-format --dry-run --Werror --style=file` on every C++ file changed by Phase 1 through
-      Phase 5.
+      Phase 6.
 - [ ] Search for removed names: `ScopedLock`, `MaterializeValidatedGraph`, `TakeSaveCapture`,
       `no_journal_changes`, `saveInProgress`, and checkpoint-related `controlsEnabled`.
 - [ ] Verify temporary same-class split files `editor_session_checkpoint.cpp` and
