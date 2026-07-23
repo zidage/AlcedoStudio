@@ -248,6 +248,17 @@ enum class EditorRenderSupersessionPolicy : std::uint8_t {
   PreserveInflightFullFrame,
 };
 
+/// Immutable render command. Built by the facade or edit controller and passed
+/// to the render controller; the render controller does not read adjustment
+/// state from any other component.
+struct EditorRenderCommand {
+  EditorRenderReason             reason     = EditorRenderReason::InitialFrame;
+  EditorRenderAdjustmentSnapshot adjustment{};
+  EditorRenderSupersessionPolicy policy =
+      EditorRenderSupersessionPolicy::CancelObsolete;
+  std::optional<ViewportRenderRegion> view_region;
+};
+
 /// Sole path from the session service into pipeline work. Production wraps
 /// EditorRenderCoordinator; tests may inject a recording stub.
 class IEditorRenderSubmitPort {

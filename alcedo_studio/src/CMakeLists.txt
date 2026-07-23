@@ -1395,11 +1395,67 @@ def_library(EditorHistoryMaterializer
     PUBLIC_DEPS ProjectService EditHistory StorageService
 )
 
-# Phase 6C-5: mini-Git journal fold validation, global save lock, DuckDB
-# materialization, and journal truncation after success.
+# Phase 6C-5: project-wide editor save checkpoint lock. One job only — allow a
+# single save checkpoint at a time and release ownership on every return path.
+def_library(EditorSaveCheckpointCoordinator
+    SOURCES app/editor_save_checkpoint_coordinator.cpp
+)
+
+# Phase 6C-5-Fix-1B-1: editor save checkpoint work owner. Starts the background
+# task, commits the journal, and drives DuckDB materialization. Knows nothing
+# about image B, pending navigation, or render state.
+def_library(EditorSaveCheckpointService
+    SOURCES
+        app/editor_save_checkpoint_service.cpp
+        include/app/editor_save_checkpoint_service.hpp
+)
+
+# Phase 6C-5-Fix-1B-2: editor session lifecycle owner. Owns session state,
+# identity, pipeline/history guards, and the last error. Does not save, publish
+# tasks, submit renders, apply edits, or remember image B.
+def_library(EditorSessionLifecycle
+    SOURCES
+        app/editor_session_lifecycle.cpp
+        include/app/editor_session_lifecycle.hpp
+)
+
+# Phase 6C-5-Fix-1B-3: editor session navigation controller. Owns pending
+# A-to-B/close actions and the save-checkpoint navigation orchestration. Calls
+# lifecycle and save service through their public APIs only.
+def_library(EditorSessionNavigationController
+    SOURCES
+        app/editor_session_navigation_controller.cpp
+        include/app/editor_session_navigation_controller.hpp
+    PRIVATE_DEPS EditorSessionLifecycle EditorSaveCheckpointService
+)
+
+# Phase 6C-5-Fix-1B-4: editor session render controller. Owns presentation sink/
+# dimensions, first-frame gate, quality-base follow-up, view-change routing,
+# render-busy notifications, and first-frame timing.
+def_library(EditorSessionRenderController
+    SOURCES
+        app/editor_session_render_controller.cpp
+        include/app/editor_session_render_controller.hpp
+    PRIVATE_DEPS EditorSessionLifecycle
+)
+
+# Phase 6C-5-Fix-1B-5: editor session edit controller. Owns adjustment snapshot,
+# provisional/settled patch routing, undo/redo, discard, and finalized edit/
+# head-move/timeline-rewrite recording.
+def_library(EditorSessionEditController
+    SOURCES
+        app/editor_session_edit_controller.cpp
+        include/app/editor_session_edit_controller.hpp
+    PRIVATE_DEPS EditorSessionLifecycle EditHistory
+)
+
+# Phase 6C-5: mini-Git journal fold validation, DuckDB materialization, and
+# journal truncation after success. Global save locking lives in
+# EditorSaveCheckpointCoordinator.
 def_library(EditorMiniGitMaterializer
     SOURCES app/editor_mini_git_materializer.cpp
     PUBLIC_DEPS ProjectService EditHistory StorageService
+    PRIVATE_DEPS EditorSaveCheckpointCoordinator
 )
 
 # Applies render-intent adjustment snapshots to a pipeline executor. Kept below
@@ -1426,7 +1482,10 @@ def_library(EditorSessionService
         include/app/editor_render_coordinator.hpp
         include/app/editor_session_bootstrap.hpp
         include/edit/frame_presentation_types.hpp
-    # Header-only frame types; no link dependencies (no UI, no Widgets).
+    PRIVATE_DEPS EditorSaveCheckpointService EditorSessionLifecycle
+                EditorSessionNavigationController EditorSessionRenderController
+                EditorSessionEditController
+    # No Qt Widgets link (Phase 5A-Fix build check).
 )
 
 def_library(ImportService

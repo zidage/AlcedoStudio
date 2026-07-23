@@ -5,9 +5,9 @@
 #include "app/editor_mini_git_materializer.hpp"
 
 #include <fstream>
-#include <thread>
 #include <utility>
 
+#include "app/editor_save_checkpoint_coordinator.hpp"
 #include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
 
 namespace alcedo {
@@ -24,85 +24,7 @@ auto SharedCoordinator() -> std::shared_ptr<EditorSaveCheckpointCoordinator> {
   return coordinator;
 }
 
-auto AcquireGlobalSaveLock(EditorSaveCheckpointCoordinator& coordinator,
-                           sl_element_id_t                  element_id)
-    -> EditorSaveCheckpointCoordinator::ScopedLock {
-  auto save_lock = coordinator.TryAcquire(element_id);
-  while (!save_lock.owns_lock()) {
-    std::this_thread::yield();
-    save_lock = coordinator.TryAcquire(element_id);
-  }
-  return save_lock;
-}
-
 }  // namespace
-
-// ── Global save coordinator ─────────────────────────────────────────────────
-
-EditorSaveCheckpointCoordinator::ScopedLock::ScopedLock(EditorSaveCheckpointCoordinator* owner,
-                                                        sl_element_id_t element_id, bool acquired)
-    : owner_(owner), element_id_(element_id), owns_(acquired) {}
-
-EditorSaveCheckpointCoordinator::ScopedLock::ScopedLock(ScopedLock&& other) noexcept
-    : owner_(other.owner_), element_id_(other.element_id_), owns_(other.owns_) {
-  other.owner_      = nullptr;
-  other.element_id_ = 0;
-  other.owns_       = false;
-}
-
-auto EditorSaveCheckpointCoordinator::ScopedLock::operator=(ScopedLock&& other) noexcept
-    -> ScopedLock& {
-  if (this != &other) {
-    Release();
-    owner_            = other.owner_;
-    element_id_       = other.element_id_;
-    owns_             = other.owns_;
-    other.owner_      = nullptr;
-    other.element_id_ = 0;
-    other.owns_       = false;
-  }
-  return *this;
-}
-
-EditorSaveCheckpointCoordinator::ScopedLock::~ScopedLock() { Release(); }
-
-void EditorSaveCheckpointCoordinator::ScopedLock::Release() {
-  if (owns_ && owner_ != nullptr) {
-    owner_->Release(element_id_);
-    owns_ = false;
-  }
-  owner_      = nullptr;
-  element_id_ = 0;
-}
-
-auto EditorSaveCheckpointCoordinator::TryAcquire(sl_element_id_t element_id) -> ScopedLock {
-  std::scoped_lock lock(mutex_);
-  if (saving_) {
-    return ScopedLock(this, element_id, false);
-  }
-  saving_         = true;
-  active_element_ = element_id;
-  return ScopedLock(this, element_id, true);
-}
-
-void EditorSaveCheckpointCoordinator::Release(sl_element_id_t element_id) {
-  std::scoped_lock lock(mutex_);
-  if (!saving_ || active_element_ != element_id) {
-    return;
-  }
-  saving_         = false;
-  active_element_ = 0;
-}
-
-auto EditorSaveCheckpointCoordinator::active_element_id() const -> sl_element_id_t {
-  std::scoped_lock lock(mutex_);
-  return active_element_;
-}
-
-auto EditorSaveCheckpointCoordinator::is_saving() const -> bool {
-  std::scoped_lock lock(mutex_);
-  return saving_;
-}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -160,14 +82,6 @@ EditorMiniGitMaterializer::EditorMiniGitMaterializer(std::shared_ptr<StorageServ
   if (!storage_) {
     throw std::invalid_argument("EditorMiniGitMaterializer requires StorageService");
   }
-}
-
-auto EditorMiniGitMaterializer::MaterializeValidatedGraph(const EditorMiniGitSaveCapture& capture,
-                                                          CommitGraph& /*folded_graph*/,
-                                                          std::string* error)
-    -> EditorMiniGitMaterializeResult {
-  // Kept for the header API; Materialize owns the full path.
-  return Materialize(capture, error);
 }
 
 auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capture,

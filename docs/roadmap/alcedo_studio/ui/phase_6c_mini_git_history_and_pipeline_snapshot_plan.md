@@ -3,8 +3,8 @@
 Date: 2026-07-22
 
 Status: approved design; 6C-1, 6C-2, 6C-2-Fix, 6C-3, 6C-4, and 6C-5 implemented.
-6C-5-Fix is a blocking qualification and maintainability correction package. Do not begin 6C-6
-checkout, session switching, or garbage collection until every 6C-5-Fix stage is complete.
+6C-5-Fix is a blocking implementation and test checklist. Do not begin 6C-6 checkout, session
+switching, or garbage collection until every 6C-5-Fix stage is complete.
 
 Related documents:
 
@@ -519,449 +519,927 @@ Acceptance:
 - Failure after DuckDB commit but before truncation does not replay a commit twice.
 - Saving with no journal changes succeeds without moving the Version head.
 
-### Phase 6C-5-Fix - Save checkpoint qualification and maintainability corrections
+### Phase 6C-5-Fix - Executable checklist for the save checkpoint
 
-This is a blocking correction package discovered during the 6C-5 review. The focused tests added in
-6C-5 pass, but they do not yet prove the complete production path from editor navigation through
-capture, materialization, journal truncation, thumbnail invalidation, and navigation resumption. The
-review also found that the purported concurrent coordinator test is single-threaded, the `phase6c`
-CTest label selects no tests, newly added files do not pass the repository formatter, and several
-changed files exceed 1000 physical lines.
+This section is a work order, not a design essay. An implementer should be able to take one checkbox,
+open the named files, make the stated change, and run the named tests without guessing what
+"cleanup", "fixture", or "responsibility" means.
 
-Implement the stages below in order. Each stage must leave its named tests green before the next
-stage starts. Do not interpret a passing direct materializer test as proof that the production ports,
-QML entrypoints, or asynchronous completion path work.
+#### The user behavior being protected
 
-#### Mandatory change-size and review discipline
+Use image A as the image currently open in the editor and image B as the requested next image.
 
-- Every lettered Fix stage below (`Fix-1A`, `Fix-1B`, and so on) is an independent implementation,
-  verification, and commit unit.
-- The hard size limit for one lettered stage is 500 changed lines, calculated as additions plus
-  deletions across source, tests, QML, CMake, and documentation relative to that stage's starting
-  commit.
-- If a stage reaches or is projected to reach more than 500 changed lines, stop and split it again by
-  responsibility before continuing. Name the children with another suffix such as `Fix-3B-1` and
-  `Fix-3B-2`, give each child its own tests and acceptance items, and keep each child at or below 500
-  changed lines.
-- Do not evade the limit by postponing tests, mixing unrelated cleanup into another stage, reformatting
-  unrelated files, or treating file extraction as outside the count. A detected pure rename may use
-  Git's rename accounting, but edits made during the move count normally.
-- At the end of every lettered stage, record `git diff --numstat` totals and complete physical LOC for
-  every changed file. A changed file above 1000 physical lines requires an immediate split plan in the
-  same stage; do not defer that decision to the final cleanup.
-- Judge behavior only from executed tests and runtime evidence. Source inspection may produce naming,
-  responsibility, performance, documentation, or missing-test findings, but it must not be reported as
-  proof of behavioral correctness.
+1. The user changes an adjustment on A. Preview updates may happen continuously, but releasing the
+   control appends one Mini-Git commit to A's journal.
+2. The user selects B, switches workspace, checks out another Version, pastes adjustments, or merges
+   adjustments.
+3. The editor starts one global save checkpoint. Those five actions are temporarily disabled and show
+   the reason `Saving editor changes`.
+4. The checkpoint captures A's working head, transaction-chain hash, serialized pipeline state, and
+   the exact journal records being saved. It does not replay or modify the live pipeline.
+5. A worker writes the commits, current Version head, chain hash, and serialized state in one DuckDB
+   transaction. After that transaction succeeds, it truncates the saved journal records.
+6. The editor invalidates A's thumbnail, finishes the background task, and only then starts loading B.
+7. If any save step fails, A remains the active image, B is not loaded, and the journal remains usable
+   for retry or reopen recovery.
 
-#### Review-skill requirement mapping
+The required success call chain is:
 
-Every requirement from `$grill-code-review` has an owning stage:
+`QML action -> EditorSessionController::Open -> EditorSessionService facade ->`
+`EditorSessionNavigationController -> EditorSaveCheckpointService ->`
+`EditorSessionProductionHistoryPort::CaptureSaveCheckpoint(A) ->`
+`EditorSessionProductionCheckpointStore -> EditorMiniGitMaterializer -> DuckDB transaction ->`
+`journal truncate -> EditorSessionProductionThumbnailPort::Invalidate(A) -> finish editor-save task ->`
+`EditorSessionNavigationController -> EditorSessionLifecycle::ReleaseImage(A) -> AcquireImage(B)`.
 
-| Review requirement | Owning Fix stages |
-| --- | --- |
-| Read scope, design, changed files, acceptance criteria, and complete LOC | Fix-1A and every stage exit |
-| Keep observed failures, coverage gaps, and maintainability findings separate | Fix-1A and Fix-6I |
-| Basic and invariant unit tests | Fix-1B, Fix-2A, Fix-3A |
-| Boundary, malformed-input, stale-state, and safety tests | Fix-2C, Fix-4B, Fix-4D |
-| State transitions, retry, cancellation, partial failure, and idempotence | Fix-2B, Fix-3C, Fix-4B, Fix-4C |
-| Real persistence, reopen, thread, and production-port integration | Fix-1B, Fix-1C, Fix-4B, Fix-4C |
-| End-to-end user actions and externally visible ordering | Fix-5B and Fix-5C |
-| Concurrency, bounded work, large inputs, and performance evidence | Fix-2A, Fix-4D, Fix-6H |
-| Reusable fixture without repeated environment setup | Fix-1B and Fix-1C |
-| Split oversized or mixed-responsibility test files | Fix-1D and Fix-6G |
-| Clear established naming without metaphors or duplicate state | Fix-2C, Fix-3A, Fix-6G |
-| Small, explicit responsibilities and maintainable asynchronous ownership | Fix-2A through Fix-3C and Fix-6A through Fix-6F |
-| Avoid busy waits, broad lock scopes, repeated graph copies, and unbounded work | Fix-2A, Fix-4D, Fix-6H |
-| Report per-file LOC and split files above 1000 lines | every stage exit and Fix-6A through Fix-6G |
-| Document success/failure call chains | Fix-6H |
-| Doxygen-compatible documentation for every changed function | every implementation stage, audited in Fix-6H |
-| Record commands, counts, skipped tests, limitations, and residual risk | every stage exit and Fix-6I |
+The required failure call chain is:
 
-#### Phase 6C-5-Fix-1 - Executable test suite and shared integration fixture
+`capture/write/truncate failure -> EditorSaveCheckpointService returns failure -> finish editor-save`
+`task as failed -> EditorSessionNavigationController keeps A in EditorSessionLifecycle -> do not`
+`invalidate A -> do not call B acquire/recovery/render -> retain the journal for retry`.
 
-Goal: make the correction suite selectable, deterministic, and reusable before changing runtime
-ownership.
+#### What the current tests prove, and what they do not prove
 
-Mandatory stage split:
+The review baseline executed 75 related discovered tests and all passed. That is useful evidence, but
+only for their current assertions.
 
-- **Fix-1A - Test discovery and evidence baseline:** correct labels, add non-empty label assertions,
-  record the acceptance matrix, and record the initial LOC/diff inventory.
-- **Fix-1B - Project and persistence fixture:** add temporary project/database, two image roots,
-  deterministic clocks, reopen helpers, and durable-state inspection.
-- **Fix-1C - Asynchronous and UI fixture collaborators:** add the controllable executor, failure-point
-  controls, thumbnail event spy, production ports, task registry, and interaction policy wiring.
-- **Fix-1D - Focused test targets and file split:** move save-checkpoint service tests out of the
-  oversized file and register the five focused targets. Do not add new runtime behavior here.
+| Existing target | Current useful evidence | Missing evidence that this Fix must add |
+| --- | --- | --- |
+| `EditorMiniGitMaterializerTest` | Empty journal, one edit, one rejected capture, one recovery attempt, and basic lock acquisition. | Its lock test is sequential rather than concurrent; the recovery test recreates journal bytes after a successful save; no production port or reopen-wide field comparison. |
+| `EditorSessionServiceTest` | Fake ports show that B waits for A's asynchronous materialization and that failure keeps A. | No real Mini-Git capture, DuckDB transaction, journal file, thumbnail service, or QML entrypoint. |
+| `AlbumBackendInteractionPolicyTest` | A manually registered task disables five C++ capability getters and returns reasons. | It does not start the task through `EditorSessionProductionTaskPort` and does not click the five QML actions. |
+| `WorkspaceShellTest` | Existing workspace and editor shell behaviors remain green. | It has no checkpoint lock test and is already large, so new checkpoint cases belong in a new module test file. |
 
-Each sub-stage must stay within the 500-line limit. If the shared fixture cannot fit, split persistence
-setup from editor-runtime setup rather than creating one oversized support file.
+Passing the first column may not be used as a substitute for the missing evidence in the last column.
 
-Implementation:
+#### Scope: what may be decomposed now
 
-- Fix `alcedo_studio/tests/CMakeLists.txt` so `ctest -L phase6c` and
-  `ctest -L phase6c_5_fix` both select a non-empty set. Do not pass a semicolon-expanded property list
-  that CTest interprets as unrelated property/value pairs.
-- Add a configure-time or test-time assertion that both label selections contain tests. A mistyped
-  label must fail CI instead of silently running zero tests.
-- Create one shared `EditorSaveCheckpointIntegrationFixture` that owns:
-  - a temporary project database and journal directory;
-  - two image elements with distinct roots and default Version refs;
-  - deterministic commit timestamps;
-  - real `StorageService`, commit-graph persistence, production pipeline/history/journal/task ports,
-    `EditorSessionService`, and `InteractionPolicyController`;
-  - a controllable asynchronous executor that can stop before commit, after commit, and before
-    truncation without wall-clock sleeps;
-  - a thumbnail invalidation spy that records element IDs and ordering;
-  - helpers to open A, commit an adjustment, request navigation to B, reopen the project, and inspect
-    the durable Version/head/hash/serialized state.
-- Put the fixture in a small shared test support file. Do not repeat project, graph, pipeline, journal,
-  and temporary-directory construction in every test.
-- Move save-checkpoint cases out of the 1000-line
-  `tests/app/editor_session_service_test.cpp` into a focused
-  `tests/app/editor_session_save_checkpoint_test.cpp`. Preserve behavior-oriented test names.
-- Add focused test targets instead of adding more unrelated functions to an existing large test
-  binary:
-  - `EditorSaveCheckpointCoordinatorTest`;
-  - `EditorSaveCheckpointCaptureTest`;
-  - `EditorMiniGitMaterializerFailureTest`;
-  - `EditorSaveCheckpointIntegrationTest`;
-  - `EditorSaveCheckpointQmlTest`.
-- Format all new and changed C++ files before considering this stage complete.
+Only code added or directly expanded for the 6C-5 save checkpoint belongs to this Fix. All paths in
+this section are relative to `alcedo_studio/` unless explicitly stated otherwise.
 
-Acceptance:
+| Current file | Current LOC | Work allowed in this Fix |
+| --- | ---: | --- |
+| `src/app/editor_mini_git_materializer.cpp` | 337 | Keep the completed coordinator split, then separate journal folding, DuckDB writing, and recovery into collaborating types. |
+| `src/ui/alcedo_main/album_backend/editor_session_production.cpp` | 1833 | Create real Mini-Git history/checkpoint/thumbnail adapter types; leave unrelated pipeline, task, legacy journal, and scheduler behavior for later plans. |
+| `src/app/editor_session_service.cpp` | 1287 | Replace the god class with lifecycle, navigation, save-checkpoint, edit, and render modules; leave a thin `IEditorSessionBackend` facade. |
+| `src/ui/alcedo_main/album_backend/interaction_policy_controller.cpp` | 365 | Keep one file; clean only the five checkpoint-related capabilities. |
+| `src/ui/alcedo_main/qml/EditorNavigationPolicy.qml` | 50 | Remove duplicated policy/fallback state; do not create another wrapper with the same data. |
+| `src/ui/alcedo_main/qml/Main.qml` | 2206 | Extract the Phase 6 workspace and adjustment-transfer actions into real QML components; do not split unrelated window behavior. |
+| `tests/app/editor_session_service_test.cpp` | 1229 | Divide all service tests by the new lifecycle/navigation/checkpoint/edit/render/facade modules. |
+| `tests/ui/workspace_shell_test.cpp` | 2426 | Move only its Main-QML loading setup into a reusable fixture; do not reorganize its existing UI cases. |
+| `tests/CMakeLists.txt` | 2063 | Register the new module test targets; do not reorganize unrelated targets. |
 
-- `ctest --test-dir build/debug -L phase6c -N` lists at least one test.
-- `ctest --test-dir build/debug -L phase6c_5_fix -N` lists every correction target above.
-- Running either label with `--output-on-failure` executes tests rather than reporting
-  `No tests were found`.
-- The shared fixture can create, close, reopen, and delete its project without leaked tasks, guards,
-  files, or threads.
-- No test uses timing sleeps to coordinate save completion or failure points.
+This Fix fully decomposes `EditorSessionService` because its responsibilities cannot be separated by
+moving member definitions alone. For other 1000+ line files, decompose the Phase 6 types and behaviors
+named above. Record unrelated old responsibilities as follow-up work instead of expanding this Fix into
+a repository-wide rewrite.
 
-#### Phase 6C-5-Fix-2 - Project-owned checkpoint lease and journal-prefix ownership
+#### Rules for every checklist stage
 
-Goal: make one explicit owner cover the complete save interval and make the captured journal prefix
-unambiguous.
+- Complete stages in order. Every stage is independently buildable and reviewable.
+- Aim for about 500 changed lines per stage. This is a review target, not a hard cap. Keep a larger
+  atomic change together when splitting would separate an implementation from its tests; record why.
+- Record `git diff --numstat` and full LOC for every file touched by the stage.
+- A module split must create a type with its own state and public API. Moving `GodClass::Method` into a
+  second `.cpp`, adding a `friend`, or passing a pointer to the parent class does not count.
+- Each mutable field has one owning module. Do not replace one god class with a shared mutable
+  `Context`/`State` struct accessed by every module, and do not share the parent mutex across modules.
+- Components communicate through typed requests, results, and completion callbacks. A facade may own
+  the components and publish results, but it must not reimplement their business rules.
+- Use module names, never development-phase names, for tests and CTest labels: `editor_history`,
+  `editor_session`, `interaction_policy`, and `workspace_qml`. Remove the `phase6c` label.
+- Judge behavior from executed tests. Source inspection is used only for naming, file ownership,
+  documentation, and performance review.
+- In each stage report, separate `Observed failure` (an executed check failed), `Coverage gap` (the
+  named behavior has no test yet), and `Style/maintainability` (a source-structure finding).
+- Add or update Doxygen comments in the same stage as a function changes. A useful comment explains
+  purpose, inputs, result, side effects, owner/lifetime, thread or callback context, and failure result;
+  it does not repeat the function name.
 
-Mandatory stage split:
+#### Fix-1 - Replace god classes with modules that own their own state
 
-- **Fix-2A - Coordinator and lease:** inject the project-owned coordinator, implement blocking RAII
-  ownership, remove the busy loop, and add real threaded exclusion/teardown tests.
-- **Fix-2B - Journal-prefix rotation:** make capture/append/truncate share one prefix owner and add
-  capture-then-edit, failure-retention, and retry tests.
-- **Fix-2C - Capture state cleanup:** remove redundant flags, unused fields, dead wrappers, and
-  duplicate truncation surfaces; add contradictory/empty capture boundary tests.
+Fix-1 changes file ownership, names, comments, and test setup. It must not intentionally change save
+behavior. Run the existing tests after every move so later failures can be attributed to later behavior
+changes.
 
-Implementation:
+##### Fix-1A - Separate checkpoint locking from Mini-Git persistence (implementation present)
 
-- Replace the process-static coordinator and `yield` retry loop with one coordinator owned by the
-  open project/editor runtime and injected into the production save path.
-- Introduce a movable RAII checkpoint lease. The lease must be acquired before the live snapshot and
-  journal prefix are captured and remain owned through:
-  1. committed live-state capture;
-  2. DuckDB materialization;
-  3. journal truncation and flush;
-  4. thumbnail invalidation scheduling;
-  5. publication of the terminal save result.
-- Do not busy-wait. Waiting workers must block on a standard synchronization primitive, and shutdown
-  must be able to cancel or join them deterministically.
-- Define one explicit state sequence such as `Idle -> Capturing -> Materializing -> Finishing -> Idle`.
-  Publish state changes only from the coordinator; do not infer checkpoint ownership from a generic
-  busy flag.
-- Make the journal prefix an immutable captured value with an explicit sequence range. Capture and
-  append must use the same prefix mutex so a finalized edit cannot enter the file being truncated.
-- A finalized edit that arrives after capture must wait behind the checkpoint lease and become the
-  first record of the next prefix after successful truncation. It must never be silently added to the
-  captured prefix or deleted by truncation.
-- If materialization or truncation fails, retain the captured prefix for retry. Do not consume or
-  discard the capture before the terminal result is known.
-- Remove redundant or unused state and APIs while establishing this ownership:
-  - derive the empty-prefix case from the captured record range instead of storing a separate
-    `no_journal_changes` boolean;
-  - either validate `session_generation` as part of capture identity or remove it;
-  - remove `MaterializeValidatedGraph`, `SetRecords`, and duplicate truncation helpers unless the new
-    call chain gives them one concrete responsibility.
+The current workspace already contains this extraction. Keep it as the baseline for the remaining
+Fix-1 work. Before committing it, record the named test result; do not treat file presence as test
+evidence.
+
+Files:
+
+- `src/include/app/editor_mini_git_materializer.hpp`
+- `src/app/editor_mini_git_materializer.cpp`
+- new `src/include/app/editor_save_checkpoint_coordinator.hpp`
+- new `src/app/editor_save_checkpoint_coordinator.cpp`
+- `src/CMakeLists.txt`
+
+Checklist:
+
+- [ ] Move `EditorSaveCheckpointCoordinator` and its move-only lock object into the new coordinator
+      files. This module has one job: allow only one project save checkpoint at a time and release that
+      ownership on every return, exception, move, and shutdown path.
+- [ ] Leave `EditorMiniGitSaveCapture`, `EditorMiniGitMaterializeResult`, journal folding, DuckDB writes,
+      recovery, and journal truncation in the materializer files. That module has one job: turn one
+      already-captured Mini-Git journal prefix into durable history state.
+- [ ] Keep `FoldMiniGitJournalFromMaterializedBase` private to the materializer unless another production
+      caller exists. Do not create a third file for one helper.
+- [ ] Rename `ScopedLock` to `SaveCheckpointLock`; `ScopedLock` does not say what it protects.
+- [ ] Remove `MaterializeValidatedGraph` if call-site search still shows that it only calls
+      `Materialize`. A second name for the same operation adds no information.
+- [ ] Add Doxygen comments to the coordinator, lock, capture, result, `Materialize`, and
+      `RecoverAndMaterialize`. State which thread may call them and whether the journal has been
+      truncated when they return.
+- [ ] Run `EditorMiniGitMaterializerTest` before and after the move. The same five tests must pass.
+
+##### Fix-1B - Decompose `EditorSessionService` into collaborating types
+
+The untracked `src/app/editor_session_checkpoint.cpp` is not the target design: it still implements
+`EditorSessionService::...` and reaches every private field of the parent class. Replace that temporary
+split with the modules below. Each numbered item is a separate review unit, normally near the 500-line
+target.
+
+###### Fix-1B-1 - `EditorSaveCheckpointService` owns save work
+
+Files:
+
+- new `src/include/app/editor_save_checkpoint_service.hpp`
+- new `src/app/editor_save_checkpoint_service.cpp`
+- `src/include/app/editor_session_ports.hpp`
+- `src/include/app/editor_session_service.hpp`
+- remove temporary `src/app/editor_session_checkpoint.cpp` after its logic has moved
+- `src/CMakeLists.txt`
+
+State owned only by `EditorSaveCheckpointService`:
+
+- the callback shutdown gate;
+- active save request ID and session generation;
+- background task ID;
+- the immutable capture passed to persistence;
+- save completion/cancellation state.
+
+Public API:
+
+- `Start(SaveCheckpointRequest, SaveCheckpointCompletion)` starts capture and persistence;
+- `CancelAndWait()` stops new callbacks and joins/cancels outstanding work;
+- `active()` is diagnostics only and does not grant ownership.
+
+Checklist:
+
+- [ ] Move the behavior currently in `BeginSaveForSession`, `HandleJournalCommit`, and
+      `HandleMaterialization` into this new class, not merely into a new file.
+- [ ] The class depends on history capture, checkpoint persistence, task publication, thumbnail
+      invalidation, and the project-owned save coordinator through narrow ports.
+- [ ] It does not know image B, pending navigation, session guards, render generations, adjustment
+      state, or `EditorSessionService`.
+- [ ] The completion callback returns a typed `SaveCheckpointResult` containing request ID, source
+      session generation, database/truncation outcome, and error.
+- [ ] Add `EditorSaveCheckpointServiceTest` for start failure, asynchronous success, asynchronous
+      failure, stale completion, duplicate completion, and `CancelAndWait`.
+
+###### Fix-1B-2 - `EditorSessionLifecycle` owns the current image and guards
+
+Files:
+
+- new `src/include/app/editor_session_lifecycle.hpp`
+- new `src/app/editor_session_lifecycle.cpp`
+- `src/include/app/editor_session_service.hpp`
+- `src/app/editor_session_service.cpp`
+- `src/CMakeLists.txt`
+
+State owned only by `EditorSessionLifecycle`:
+
+- `EditorSessionState` and `EditorSessionIdentity`;
+- pipeline and history guard handles;
+- current error;
+- acquisition/release state for the current image.
+
+Checklist:
+
+- [ ] Move `AcquireGuards`, `ReleaseGuards`, `ResetActiveImageState`, image-acquired handling, and the
+      guard portion of open/close/shutdown into this type.
+- [ ] Expose named operations such as `AcquireImage`, `MarkImageReady`, `ReleaseImage`, and
+      `KeepCurrentImageAfterFailure`; do not expose mutable fields or the lifecycle mutex.
+- [ ] This type does not save, publish background tasks, submit renders, apply edits, or remember B.
+- [ ] Add `EditorSessionLifecycleTest` for acquire success/failure, release exactly once, same-image
+      reopen, failed switch retaining A, and shutdown.
+
+###### Fix-1B-3 - `EditorSessionNavigationController` owns pending A-to-B/close actions
+
+Files:
+
+- new `src/include/app/editor_session_navigation_controller.hpp`
+- new `src/app/editor_session_navigation_controller.cpp`
+- `src/include/app/editor_session_service.hpp`
+- `src/app/editor_session_service.cpp`
+- `src/CMakeLists.txt`
+
+State owned only by `EditorSessionNavigationController`:
+
+- `PendingEditorAction` with a named kind (`SwitchImage` or `CloseEditor`) and target data;
+- the checkpoint request ID associated with that action.
+
+Checklist:
+
+- [ ] Move the orchestration currently spread across `HandleOpenOrSwitch`, `HandleClose`,
+      `SealCurrentSession`, `ContinueOpenOrSwitch`, and `ResumePendingNavigationAfterSave` into this
+      controller.
+- [ ] It calls `EditorSaveCheckpointService` and `EditorSessionLifecycle` through their public APIs.
+      It never accesses their fields or mutexes.
+- [ ] It owns the rule "A remains acquired until its checkpoint succeeds; then release A and acquire
+      B" and the rule "failure keeps A and discards the pending transition".
+- [ ] It rejects a second pending action without replacing the original target.
+- [ ] Add `EditorSessionNavigationControllerTest` for open, A-to-B success, save failure, second
+      request, close, shutdown, and stale completion.
+
+###### Fix-1B-4 - `EditorSessionRenderController` owns render and first-frame state
+
+Files:
+
+- new `src/include/app/editor_session_render_controller.hpp`
+- new `src/app/editor_session_render_controller.cpp`
+- `src/include/app/editor_session_service.hpp`
+- `src/app/editor_session_service.cpp`
+- `src/CMakeLists.txt`
+
+State owned only by `EditorSessionRenderController`:
+
+- presentation sink and dimensions;
+- first-frame and quality-base request IDs;
+- acquired/completed/submitted/presented flags;
+- pending initial render reason;
+- render-busy notification state and first-frame timing.
+
+Checklist:
+
+- [ ] Move `MakeRenderIntent`, initial/quality render routing, view-change routing, render diagnostics,
+      first-frame matching, and `NotifyRenderResult` behavior into this type.
+- [ ] Pass an immutable `EditorSessionIdentity` snapshot into render requests. Do not let this module
+      mutate lifecycle or edit state.
+- [ ] Return typed render events (`FirstFramePresented`, `RenderFailed`, and so on) to the facade or
+      navigation controller.
+- [ ] Add `EditorSessionRenderControllerTest` by moving the current first-frame, view-change,
+      supersession, stale-render, and timing cases out of `editor_session_service_test.cpp`.
+
+###### Fix-1B-5 - `EditorSessionEditController` owns adjustment/history operations
+
+Files:
+
+- new `src/include/app/editor_session_edit_controller.hpp`
+- new `src/app/editor_session_edit_controller.cpp`
+- `src/include/app/editor_session_service.hpp`
+- `src/app/editor_session_service.cpp`
+- `src/CMakeLists.txt`
+
+State owned only by `EditorSessionEditController`:
+
+- current `EditorRenderAdjustmentSnapshot`;
+- provisional/settled adjustment data required between input and history commit.
+
+Checklist:
+
+- [ ] Move patch, settled commit, undo, redo, discard, finalized edit, head-move, and timeline-rewrite
+      routing into this type.
+- [ ] It receives the active history guard as a value/handle from lifecycle and requests render through
+      a typed callback; it does not own session identity, guards, or render state.
+- [ ] Add `EditorSessionEditControllerTest` by moving adjustment, undo/redo, discard, and history-record
+      cases out of `editor_session_service_test.cpp`.
+
+###### Fix-1B-6 - Reduce `EditorSessionService` to a facade
+
+Files:
+
+- `src/include/app/editor_session_service.hpp`
+- `src/app/editor_session_service.cpp`
+- `tests/app/editor_session_service_facade_test.cpp`
+- `tests/CMakeLists.txt`
+
+Checklist:
+
+- [ ] `EditorSessionService` continues to implement `IEditorSessionBackend`, owns the five components,
+      routes public calls, and publishes observer/change notifications.
+- [ ] Remove component-owned fields and methods from the facade header. In particular, it must not own
+      guards, pending saves/actions, callback gates, adjustment snapshots, or first-frame flags.
+- [ ] Do not add `friend` declarations, a shared mutable `EditorSessionContext`, or callbacks that take
+      `EditorSessionService*`.
+- [ ] Keep facade tests limited to routing and externally visible result ordering. Component behavior
+      belongs in the five module test targets above.
+- [ ] Record final LOC and public/private method counts for every new type. Any type with more than one
+      of lifecycle, save, navigation, edit, and render ownership fails this stage even if its file is
+      under 1000 lines.
+
+##### Fix-1C - Decompose Mini-Git persistence and production adapters into types
+
+The same rule applies here: `editor_session_production_checkpoint.cpp` must not remain a file of member
+definitions for several pre-existing large classes.
+
+###### Fix-1C-1 - Split fold, DuckDB write, and recovery
+
+Files:
+
+- new `src/include/app/editor_mini_git_journal_fold.hpp`
+- new `src/app/editor_mini_git_journal_fold.cpp`
+- new `src/include/app/editor_mini_git_commit_writer.hpp`
+- new `src/app/editor_mini_git_commit_writer.cpp`
+- new `src/include/app/editor_mini_git_journal_recovery.hpp`
+- new `src/app/editor_mini_git_journal_recovery.cpp`
+- `src/include/app/editor_mini_git_materializer.hpp`
+- `src/app/editor_mini_git_materializer.cpp`
+- `src/CMakeLists.txt`
+
+Responsibilities:
+
+- `FoldMiniGitJournalFromMaterializedBase` is a pure algorithm: validate/replay records into a graph
+  value and return the folded head/hash. It performs no database or file I/O.
+- `EditorMiniGitCommitWriter` owns one DuckDB transaction that inserts commit objects and updates the
+  Version head, chain hash, serialized pipeline state, and recovery metadata.
+- `EditorMiniGitJournalRecovery` loads an existing journal, detects an already-written prefix, invokes
+  the writer when needed, and truncates/flushes only the saved records.
+- `EditorMiniGitMaterializer` may remain only as a thin facade composing those three operations. It
+  must not own their mutable state or duplicate their logic.
+
+Checklist:
+
+- [ ] Give each type its own constructor dependencies and tests. Do not give them access to the
+      materializer's private members through `friend`.
+- [ ] Keep journal file handles in recovery, DuckDB connection/transaction state in the writer, and
+      fold inputs/outputs as ordinary immutable values.
+- [ ] Add `EditorMiniGitJournalFoldTest`, `EditorMiniGitCommitWriterTest`, and
+      `EditorMiniGitJournalRecoveryTest`; keep `EditorMiniGitMaterializerTest` for facade integration.
+
+###### Fix-1C-2 - Replace the production journal god class with narrow adapters
+
+Files:
+
+- new `src/include/ui/alcedo_main/album_backend/editor_session_production_history_port.hpp`
+- new `src/ui/alcedo_main/album_backend/editor_session_production_history_port.cpp`
+- new `src/include/ui/alcedo_main/album_backend/editor_session_production_journal_writer_port.hpp`
+- new `src/ui/alcedo_main/album_backend/editor_session_production_journal_writer_port.cpp`
+- new `src/include/ui/alcedo_main/album_backend/editor_session_production_checkpoint_store.hpp`
+- new `src/ui/alcedo_main/album_backend/editor_session_production_checkpoint_store.cpp`
+- new `src/include/ui/alcedo_main/album_backend/editor_session_production_thumbnail_port.hpp`
+- new `src/ui/alcedo_main/album_backend/editor_session_production_thumbnail_port.cpp`
+- `src/include/app/editor_session_ports.hpp`
+- `src/include/ui/alcedo_main/album_backend/editor_session_production.hpp`
+- `src/ui/alcedo_main/album_backend/editor_session_production.cpp`
+- remove temporary `src/ui/alcedo_main/album_backend/editor_session_production_checkpoint.cpp`
+- `src/CMakeLists.txt`
+
+Responsibilities:
+
+- `EditorSessionProductionHistoryPort` owns `MiniGitWorkingHistory`, history guards, adjustment
+  commits, undo/redo, and immutable checkpoint capture. Capture returns the value directly; it stores
+  no side-map for another class to take later.
+- `EditorSessionProductionJournalWriterPort` owns journal lookup, per-image journal synchronization,
+  finalized edit/head-move append, and discard of uncommitted records. It performs no DuckDB
+  materialization, recovery, thumbnail invalidation, or task publication.
+- `EditorSessionProductionCheckpointStore` implements a new `IEditorCheckpointStore`. It accepts an
+  immutable capture and calls the materializer/recovery facade. It owns no live history or QML task.
+- `EditorSessionProductionThumbnailPort` implements a narrow thumbnail invalidation port. It contains
+  the only call from this save path to `ThumbnailService::InvalidateThumbnail`.
+
+Checklist:
+
+- [ ] Split the current broad `IEditorJournalPort` into the writer API required by edit finalization
+      and `IEditorCheckpointStore` required by save/recovery. Do not leave default successful
+      materialization methods on the writer interface.
+- [ ] Move writer lookup, image locks, finalize/append/head-move/discard methods to
+      `EditorSessionProductionJournalWriterPort`.
+- [ ] Delete `EditorSessionProductionJournalPort` after its production call sites move. The old
+      transaction-array materialization/compaction route is not part of the new project format; remove
+      it when call-site search confirms no target-architecture caller. If a historical test still needs
+      it, keep a test-only legacy adapter rather than wiring it into the production session.
+- [ ] Move still-relevant cases from `EditorSessionProductionJournalPortTest` to the history, journal
+      writer, or checkpoint-store target that owns the behavior. Remove obsolete legacy cases with an
+      explicit old-schema reason and record the before/after discovered test counts.
+- [ ] Remove `TakeSaveCapture` and `save_captures_`; capture ownership travels in function arguments.
+- [ ] Do not move unrelated pipeline, task, legacy journal, or scheduler behavior merely to reduce
+      `editor_session_production.cpp` LOC. Record those remaining responsibilities for later work.
+- [ ] Add `EditorSessionProductionHistoryPortTest`,
+      `EditorSessionProductionJournalWriterPortTest`,
+      `EditorSessionProductionCheckpointStoreTest`, and
+      `EditorSessionProductionThumbnailPortTest` with one real behavior per adapter.
+
+##### Fix-1D - Extract the Phase 6 QML actions into components
+
+Files:
+
+- new `src/ui/alcedo_main/qml/EditorWorkspaceNavigation.qml`
+- new `src/ui/alcedo_main/qml/EditorAdjustmentTransferActions.qml`
+- `src/ui/alcedo_main/qml/EditorNavigationPolicy.qml`
+- `src/ui/alcedo_main/qml/EditorWorkspace.qml`
+- `src/ui/alcedo_main/qml/EditorFilmstrip.qml`
+- `src/ui/alcedo_main/qml/EditorHistoryVersionsRail.qml`
+- `src/ui/alcedo_main/qml/Main.qml`
+- `src/CMakeLists.txt`
+
+Responsibilities:
+
+- `InteractionPolicyController` remains one cohesive C++ type: it translates active task locks into
+  capability booleans and reasons. Its 365 lines do not justify splitting one responsibility into five
+  tiny controllers.
+- `EditorWorkspaceNavigation.qml` owns the Library/Editor buttons, current-workspace presentation, and
+  the `SwitchWorkspace` permission check. It does not know Paste, Merge, history, or filmstrip state.
+- `EditorAdjustmentTransferActions.qml` owns Paste/Merge permission checks and opening the existing
+  adjustment-transfer dialog. It does not own workspace navigation or persistence.
+- `EditorFilmstrip.qml` owns image-selection presentation and emits an activation request only when
+  `canSelectEditorImage` is true.
+- `EditorHistoryVersionsRail.qml` keeps history browsing separate from the future Version checkout
+  capability.
+
+Checklist:
+
+- [ ] Delete `EditorNavigationPolicy.qml` after its consumers bind to the authoritative
+      `InteractionPolicyController`; a QML mirror of the same five values is not a module.
+- [ ] Move only the Phase 6 workspace button block from `Main.qml` into
+      `EditorWorkspaceNavigation.qml`. Leave unrelated global window/navigation behavior in `Main.qml`.
+- [ ] Move only `requestPasteAdjustments` and the Merge permission branch into
+      `EditorAdjustmentTransferActions.qml`; pass the existing dialog/backend as explicit properties.
+- [ ] Do not create one new QML controller containing workspace, filmstrip, Version, Paste, and Merge.
+      That would reproduce the god component under a new name.
+- [ ] Add component tests `EditorWorkspaceNavigationQmlTest` and
+      `EditorAdjustmentTransferActionsQmlTest`; keep the later end-to-end test for their composition in
+      `Main.qml`.
+
+##### Fix-1E - Create module-specific fixtures and test targets
+
+This stage creates test infrastructure only. It does not add failure policies or change production
+behavior.
+
+Files to add:
+
+- `tests/support/editor_mini_git_project_fixture.hpp/.cpp`
+- `tests/support/editor_save_checkpoint_fixture.hpp/.cpp`
+- `tests/support/editor_session_navigation_fixture.hpp/.cpp`
+- `tests/support/editor_session_test_ports.hpp`
+- `tests/ui/main_qml_test_fixture.hpp/.cpp`
+- `tests/app/editor_save_checkpoint_service_test.cpp`
+- `tests/app/editor_session_lifecycle_test.cpp`
+- `tests/app/editor_session_navigation_controller_test.cpp`
+- `tests/app/editor_session_edit_controller_test.cpp`
+- `tests/app/editor_session_render_controller_test.cpp`
+- `tests/app/editor_session_service_facade_test.cpp`
+- `tests/CMakeLists.txt`
+
+`EditorMiniGitProjectFixture` must provide:
+
+- [ ] one unique temporary directory containing a project database, project metadata file, and
+      per-image Mini-Git journals;
+- [ ] real `ProjectService`, `StorageService`, `CommitGraphService`, and persisted default Versions for
+      image A and image B, with different element IDs and root IDs;
+- [ ] deterministic commit timestamps through `CommitClockAccess`, not wall-clock sleeps;
+- [ ] helpers named `AppendExposureEdit`, `CaptureWorkingState`, `CloseAndReopenProject`,
+      `LoadStoredGraph`, `ReadJournalRecords`, and `CountStoredCommits`;
+- [ ] teardown that destroys materializer/storage/project objects before removing files.
+
+`EditorSaveCheckpointFixture` must provide only:
+
+- [ ] history capture, checkpoint store, task, thumbnail, and coordinator test doubles;
+- [ ] helpers named `StartCheckpoint`, `CompleteDatabaseWrite`, `CompleteJournalTruncate`, and
+      `CancelAndWait`;
+- [ ] switches for capture, task-start, journal-commit, and materialization failure.
+
+`EditorSessionNavigationFixture` must provide only:
+
+- [ ] a real `EditorSessionNavigationController` with lifecycle and save-checkpoint collaborators;
+- [ ] fixed identities for A and B and helpers named `OpenA`, `RequestSwitchToB`,
+      `CompleteCheckpoint`, and `FailCheckpoint`;
+- [ ] an ordered event vector containing `checkpoint_a`, `release_a`, and `acquire_b`;
+- [ ] no render port, adjustment snapshot, DuckDB project, or QML engine.
+
+`editor_session_test_ports.hpp` contains small reusable fake port types, not a fixture and not shared
+mutable scenario state. Each component fixture constructs only the fakes its module requires.
+
+`MainQmlTestFixture` must provide:
+
+- [ ] the `LoadedMainWindow`, `MainQmlUrl`, and `LoadMainWindow` setup currently repeated or private in
+      `workspace_shell_test.cpp`;
+- [ ] a real `ApplicationModuleHost`, `BackgroundTaskController`, and
+      `InteractionPolicyController`, plus helpers to find the five guarded QML entrypoints;
+- [ ] no production behavior changes and no copied second implementation of application startup.
+
+Test-file split and registration:
+
+- [ ] Move every test from `editor_session_service_test.cpp` to the module that owns the asserted
+      behavior: lifecycle/open/guard tests, navigation/save-order tests, edit/history tests,
+      render/first-frame/view-change tests, or facade routing tests.
+- [ ] Delete the old monolithic test file once its test-count inventory reaches zero. Do not keep it as
+      an unsorted destination for future cases.
+- [ ] Register the six module targets named above. Target names describe software modules, not roadmap
+      phases.
+- [ ] Use CTest labels `editor_history`, `editor_session`, `interaction_policy`, and `workspace_qml`.
+      Remove `phase6c`. Labels are only a convenient module filter; stage acceptance also runs the
+      named executables directly, so an empty label cannot be mistaken for passing tests.
+- [ ] Record a source-test-to-destination-test table and compare discovered test counts before/after.
+      No test may disappear or be weakened during the split.
+- [ ] Reject a fixture that constructs lifecycle, checkpoint, edit, render, QML, and DuckDB together.
+      That is a test-side god object; only the later integration fixture may compose the full path.
+
+Fix-1 is complete only when all five sub-stages build, the existing behavior tests remain green, all
+changed C++ files pass `clang-format --dry-run --Werror --style=file`, every changed function has the
+required Doxygen description, and no new module reaches into another module's private state.
+
+#### Fix-2 - Make the global save lock and captured journal range unambiguous
+
+This stage fixes only ownership and concurrency. It does not yet change DuckDB failure behavior or QML.
+
+##### Fix-2A - One project-owned global save lock
+
+Files:
+
+- `src/include/app/editor_save_checkpoint_coordinator.hpp`
+- `src/app/editor_save_checkpoint_coordinator.cpp`
+- `src/include/app/editor_save_checkpoint_service.hpp`
+- `src/app/editor_save_checkpoint_service.cpp`
+- `src/ui/alcedo_main/album_backend/application_module_host.cpp`
+- `tests/app/editor_save_checkpoint_coordinator_test.cpp`
+- `tests/app/editor_save_checkpoint_service_test.cpp`
+- `tests/CMakeLists.txt`
+
+Checklist:
+
+- [ ] Remove the function-static coordinator currently returned by `SharedCoordinator()`.
+- [ ] Construct one `EditorSaveCheckpointCoordinator` with the open editor/project services in
+      `ApplicationModuleHost`, then inject that shared instance into `EditorSaveCheckpointService`.
+- [ ] Acquire a `SaveCheckpointLock` before capturing A. Keep it until DuckDB write, journal
+      truncation, thumbnail invalidation scheduling, and the terminal callback have all finished.
+- [ ] Wait with `std::condition_variable` or an equivalent blocking primitive. Delete the
+      `std::this_thread::yield()` loop. Shutdown must wake and join/cancel waiting work.
+- [ ] Do not expose a second boolean such as `isSaving` as ownership. The move-only lock object is the
+      owner; `active_element_id()` is diagnostics only.
+
+Add target `EditorSaveCheckpointCoordinatorTest` with these tests:
+
+- [ ] `TwoThreadsCannotOwnTheGlobalSaveLockAtTheSameTime`: use two real threads, a barrier, and an
+      atomic active-owner count; assert the maximum is exactly one.
+- [ ] `SaveCheckpointLockReleasesAfterSuccessFailureExceptionAndMove`: exercise normal destruction,
+      explicit failure return, thrown exception, move construction, and move assignment.
+- [ ] `WaitingSaveStopsCleanlyWhenProjectShutsDown`: no sleep; use a condition/barrier to prove the
+      waiter exits and no thread remains joinable.
+
+##### Fix-2B - Capture one exact journal range
+
+Files:
+
+- `src/include/app/editor_mini_git_materializer.hpp`
+- `src/include/app/editor_session_ports.hpp`
+- `src/edit/history/mini_git_working_history.cpp`
+- `src/ui/alcedo_main/album_backend/editor_session_production_history_port.cpp`
+- `tests/edit/history/editor_save_checkpoint_capture_test.cpp`
+- `tests/CMakeLists.txt`
+
+Checklist:
+
+- [ ] Give `EditorMiniGitSaveCapture` an explicit first and last journal sequence number, plus element
+      ID, Version ID, root ID, working head, transaction-chain hash, serialized pipeline state, and
+      journal path.
+- [ ] Remove `no_journal_changes`; `journal_records.empty()` already answers that question.
+- [ ] Capture the records and sequence numbers while holding the same journal mutex used by append and
+      truncate. Copy the immutable capture into the worker request, then release live history access.
+- [ ] If a finalized edit arrives after capture, it must not appear in the captured range and must not
+      be removed by truncating that range. Because the global save lock also blocks navigation, the
+      edit either waits or becomes the first record after the checkpoint completes.
+- [ ] On any failure, keep the captured journal bytes and sequence range available for retry.
+
+Add target `EditorSaveCheckpointCaptureTest` with these tests:
+
+- [ ] `EmptyJournalCaptureHasNoSequenceRangeAndDoesNotNeedAnotherFlag`.
+- [ ] `CaptureContainsElementVersionRootHeadHashStateAndExactRecords`.
+- [ ] `EditAppendedAfterCaptureIsNotDeletedWithCapturedRecords`.
+- [ ] `FailedCheckpointKeepsTheCapturedRecordsForRetry`.
+- [ ] `MismatchedElementVersionRootOrSequenceRangeStartsNoMaterialization` as a parameterized test.
+
+Fix-2 is complete when both new targets pass repeatedly, Thread Sanitizer is run where available, no
+busy-wait remains, and the updated call-chain comment names the owner of the save lock and capture at
+each callback boundary.
+
+#### Fix-3 - Connect the new modules with typed values
+
+Fix-1 establishes ownership. Fix-3 changes the behavior between those modules without putting the
+logic back into the facade.
+
+##### Fix-3A - Pass capture directly from history to checkpoint storage
+
+Files:
+
+- `src/include/app/editor_session_ports.hpp`
+- `src/include/app/editor_save_checkpoint_service.hpp`
+- `src/app/editor_save_checkpoint_service.cpp`
+- `src/include/ui/alcedo_main/album_backend/editor_session_production_history_port.hpp`
+- `src/ui/alcedo_main/album_backend/editor_session_production_history_port.cpp`
+- `src/include/ui/alcedo_main/album_backend/editor_session_production_checkpoint_store.hpp`
+- `src/ui/alcedo_main/album_backend/editor_session_production_checkpoint_store.cpp`
+- `tests/edit/history/editor_session_production_checkpoint_store_test.cpp`
+- `tests/CMakeLists.txt`
+
+Checklist:
+
+- [ ] `IEditorHistoryPort::CaptureSaveCheckpoint` returns either an immutable
+      `EditorMiniGitSaveCapture` or an error.
+- [ ] `IEditorCheckpointStore::SaveAsync` takes that capture by value and owns it until completion.
+- [ ] `EditorSaveCheckpointService` is the only orchestrator between capture, store, thumbnail, and
+      task completion.
+- [ ] Delete `TakeSaveCapture`, `save_captures_`, and every element-ID rendezvous map.
+- [ ] A configured project with missing history/store/storage fails; no module reports a successful
+      no-op.
+- [ ] The Mini-Git path does not call the legacy transaction-array materializer.
 
 Required tests:
 
-- `TwoImagesCompetingForCheckpointNeverMaterializeConcurrently` uses two real threads and a barrier;
-  it asserts the maximum simultaneous materialization count is one.
-- `CheckpointLeaseReleasesAfterSuccessFailureExceptionAndMove` covers every RAII exit.
-- `SecondImageCannotAcquireCheckpointUntilFirstFinishes` proves project-wide rather than per-image
-  serialization.
-- `EditFinalizedAfterCaptureStartsNextJournalPrefix` proves exact record membership before and after
-  truncation.
-- `FailedCheckpointRetainsCapturedPrefixForRetry` retries the same prefix and observes one durable
-  commit.
-- `ShutdownJoinsCheckpointWaitersWithoutBusyLoop` uses deterministic notification rather than sleeps.
+- [ ] `ProductionCaptureValueReachesCheckpointStoreWithoutSideMap`.
+- [ ] `ConfiguredProjectWithoutHistoryStoreOrStorageFails`.
+- [ ] `MiniGitCheckpointDoesNotInvokeLegacyMaterializer`.
+- [ ] `CaptureFailureWritesNothingAndLeavesJournalBytes`.
 
-Acceptance:
+##### Fix-3B - Qualify navigation behavior through its owning controller
 
-- Production code contains no `std::this_thread::yield()` acquisition loop for editor saving.
-- The checkpoint lease has one documented owner at every asynchronous boundary.
-- Threaded tests demonstrate exclusion and forward progress; a sequential `TryAcquire` test is not
-  sufficient.
-- A captured prefix and a next prefix cannot reference the same journal record sequence.
+Files:
 
-#### Phase 6C-5-Fix-3 - Typed production handoff and navigation state machine
+- `src/include/app/editor_session_navigation_controller.hpp`
+- `src/app/editor_session_navigation_controller.cpp`
+- `src/include/app/editor_save_checkpoint_service.hpp`
+- `src/app/editor_save_checkpoint_service.cpp`
+- `tests/app/editor_session_navigation_controller_test.cpp`
+- `tests/app/editor_save_checkpoint_service_test.cpp`
 
-Goal: connect the real editor session to the mini-Git materializer without hidden side maps, legacy
-journal work, positional booleans, or success fallbacks.
+Checklist:
 
-Mandatory stage split:
-
-- **Fix-3A - Typed capture and materialization request:** change the history and journal interfaces,
-  pass capture ownership explicitly, validate identity, and remove the element-keyed rendezvous.
-- **Fix-3B - Production mini-Git routing:** select only the mini-Git path for configured projects,
-  reject missing storage/materializer state, and prove the legacy journal receives no records.
-- **Fix-3C - Pending navigation state machine:** replace positional booleans, define second-request and
-  close/shutdown behavior, and make completion callbacks idempotent.
-
-Implementation:
-
-- Change `IEditorHistoryPort::CaptureSaveCheckpoint` to return a typed result containing either an
-  immutable `EditorMiniGitSaveCapture` or an error. Do not store the only copy in a hidden
-  element-keyed map followed by a separate `TakeSaveCapture` call.
-- Pass that captured value explicitly into the asynchronous materialization request. The request must
-  preserve element ID, session generation when retained, Version ID, root ID, working head, chain
-  hash, serialized pipeline state, journal sequence range, and journal path.
-- When a mini-Git journal resolver is configured, route production save and recovery exclusively
-  through the mini-Git path. Do not also commit the previous transaction-array journal. Bootstrap
-  harnesses may use explicit no-project adapters, but a configured project must not report success
-  when storage, the capture, or the materializer is missing.
-- Replace `PendingNavigation` positional booleans with a typed request kind and named data. Support
-  exactly one pending transition. A second image, workspace, Version, Paste, Merge, or close request
-  while saving must be rejected with the checkpoint reason and must not replace the first request.
-- Keep the GUI thread free of DuckDB and file I/O. Only the short live-state capture may run before
-  dispatch, and its render-lock duration must be measured in a focused test.
-- Make success and failure completion idempotent. Duplicate or stale callbacks must not reopen an
-  image, release a newer session's guards, end a task twice, or publish a second terminal result.
-- Preserve image A's pipeline/history guards until the complete checkpoint succeeds. Release A only
-  immediately before beginning B's recovery/acquisition path.
+- [ ] One `PendingEditorAction` stores a named kind and target. A second request cannot replace it.
+- [ ] Navigation keeps A's lifecycle acquisition until `SaveCheckpointResult::checkpoint_completed`
+      is true, then releases A and acquires B.
+- [ ] Capture, write, or truncate failure keeps A and clears the failed pending action without any B
+      recovery/render request.
+- [ ] The save service ignores duplicate/stale storage callbacks by checkpoint request ID; navigation
+      ignores results for an older session generation.
+- [ ] Close waits for its checkpoint. Shutdown calls `CancelAndWait` and publishes one terminal result.
 
 Required tests:
 
-- `ProductionSessionCapturesAndMaterializesOneMiniGitPrefixBeforeLoadingB` uses the shared fixture and
-  no manually assembled capture.
-- `CaptureFailureKeepsAInteractiveAndDoesNotStartSaveTaskOrLoadB` asserts guards and visible state.
-- `MissingProjectStorageFailsConfiguredMiniGitSave` rejects instead of returning a no-op success.
-- `SecondNavigationDuringCheckpointIsRejectedAndOriginalTargetStillResumes` covers request ownership.
-- `CloseAndShutdownDuringCheckpointHaveOneDeterministicTerminalPath` covers teardown.
-- `DuplicateAndStaleSaveCallbacksCannotResumeNavigationTwice` covers callback identity.
-- `ProductionMiniGitSaveDoesNotWriteLegacyTransactionJournal` checks the real selected files and
-  services.
+- [ ] `SwitchToBWaitsForACommitTruncateAndThumbnailCompletion`.
+- [ ] `CheckpointFailureKeepsAAndNeverAcquiresB`.
+- [ ] `SecondActionDoesNotReplaceOriginalTargetB`.
+- [ ] `DuplicateOrStaleCompletionCannotResumeBOrFinishTaskTwice`.
+- [ ] `CloseAndShutdownEachProduceOneTerminalResult`.
 
-Acceptance:
+Fix-3 is complete when call-site search finds no `TakeSaveCapture`, side map, positional pending-action
+initializer, or checkpoint business rule inside `EditorSessionService`.
 
-- Repository call-site scans find no production `TakeSaveCapture` rendezvous or configured-project
-  success fallback caused by a missing materializer.
-- One typed request visibly connects capture to materialization in the call chain.
-- Image B recovery, guard acquisition, and first render are all absent until A reports a complete
-  checkpoint.
-- The previous transaction-array journal receives no records during a mini-Git save.
+#### Fix-4 - Grill DuckDB commit, journal truncation, and reopen recovery
 
-#### Phase 6C-5-Fix-4 - Transaction, truncation, and recovery failure qualification
+Use real project files from `EditorMiniGitProjectFixture`. A test that only checks an in-memory graph
+does not prove persistence.
 
-Goal: prove every persistence boundary using real reopen checks and deterministic failure injection.
+##### Fix-4A - Basic and non-trivial successful saves
 
-Mandatory stage split:
+Files:
 
-- **Fix-4A - Failure-point interfaces:** add narrow storage and journal-file seams plus parameterized
-  failure identifiers, without changing success behavior.
-- **Fix-4B - Pre-commit atomicity:** cover every pre-commit failure and full durable-state comparison
-  after recreating storage objects.
-- **Fix-4C - Post-commit cleanup and retry:** cover original journal bytes, truncate/open/flush
-  failures, typed partial outcomes, retry, and duplicate suppression.
-- **Fix-4D - Journal variants and scale:** cover mixed head moves, stale/malformed/duplicate records,
-  empty prefixes, large prefixes, strict no-pipeline spies, and recorded resource measurements.
+- `tests/edit/history/editor_mini_git_materializer_test.cpp`
+- `tests/support/editor_mini_git_project_fixture.hpp/.cpp`
 
-Implementation:
+Checklist:
 
-- Add narrow failure-injection seams around the storage transaction and journal file operations.
-  Keep them in test adapters or small interfaces; do not add test conditionals throughout production
-  logic.
-- Exercise failures before transaction start, after commit-object insertion, before Version/state
-  update, before DuckDB commit, after DuckDB commit, during journal open-for-truncate, and during
-  journal flush.
-- For every failure before DuckDB commit, close and recreate `DBController`, then verify that commit
-  rows, Version head, materialized head, chain hash, serialized pipeline state, and recovery metadata
-  all retain their prior values.
-- For failure after DuckDB commit but before successful truncation, return a typed result that
-  distinguishes `database_committed` from `checkpoint_completed`. Keep navigation blocked for that
-  attempt, retain the journal bytes, and let a retry/reopen recognize the already-materialized prefix,
-  truncate it, and complete without a duplicate commit.
-- Do not reproduce the crash window by first completing a successful truncation and then rewriting a
-  synthetic journal. Stop the real production path at the failure point while the original journal
-  remains on disk.
-- Validate empty, one-edit, many-edit, edit/head-move mixtures, stale source head, stale chain hash,
-  duplicate record, malformed record, missing target commit, and a large journal prefix.
-- Keep materialization pipeline-free. Add spies that fail the test if materialization requests
-  pipeline replay, changes operator state, builds execution stages, or creates a second executor.
-- Report truncation and flush failures; do not ignore their error values.
+- [ ] Keep `EmptyJournalSucceedsWithoutMovingVersionHead`, but also assert the stored chain hash and
+      serialized pipeline state after closing and reopening the project.
+- [ ] Keep one-edit coverage with `OneEditWritesCommitAdvancesVersionStoresStateAndTruncatesJournal`.
+- [ ] Add `EditHeadMoveAndEditMaterializeInOrderToCapturedHeadAndHash`; this is the ordinary
+      non-trivial history case and prevents the suite from testing only empty input and rejection.
+- [ ] Add `ManyEditsWithRepeatedFieldsPreserveEveryCommitIdentityAndFinalState`; repeated exposure
+      values must remain distinct commits because their timestamps differ.
+- [ ] Add a strict pipeline spy and `MaterializationDoesNotReplayOrModifyTheLivePipeline`.
 
-Required tests:
+##### Fix-4B - Fail before DuckDB commit
 
-- `EachPreCommitFailureLeavesAllDurableStateUnchangedAfterReopen` is parameterized by the pre-commit
-  failure points.
-- `CommitSucceededButTruncateFailedRetriesWithoutDuplicateCommit` uses the original journal bytes.
-- `FlushFailureLeavesCheckpointIncompleteAndRecoverable` verifies the typed partial result.
-- `MixedEditAndHeadMovePrefixMaterializesToCapturedHeadAndChain` covers non-trivial journal order.
-- `MalformedOrStalePrefixWritesNoRows` covers safety checks without making them the whole suite.
-- `MaterializerNeverCallsPipelineReplayOrMutation` uses strict spies.
-- `EmptyPrefixRefreshesOnlyMatchingSerializedStateWithoutMovingVersionHead` reopens and compares all
-  fields.
-- `LargePrefixMaterializesWithinRecordedTimeAndMemoryTargets` records a baseline without a fragile
-  machine-specific absolute threshold.
+Files:
 
-Acceptance:
+- `src/include/app/editor_mini_git_commit_writer.hpp`
+- `src/app/editor_mini_git_commit_writer.cpp`
+- `tests/edit/history/editor_mini_git_commit_writer_test.cpp`
+- `tests/CMakeLists.txt`
 
-- Every failure point has an assertion on all durable fields, not only commit count.
-- Recovery is tested by destroying and recreating the project/storage objects.
-- No journal cleanup error is discarded.
-- The same already-committed prefix can be presented repeatedly without adding a second commit row or
-  moving the Version twice.
+Checklist:
 
-#### Phase 6C-5-Fix-5 - User-visible locks, thumbnail ordering, and end-to-end navigation
+- [ ] Register `EditorMiniGitCommitWriterTest` with the `editor_history` CTest label and reuse
+      `EditorMiniGitProjectFixture`; do not duplicate project/database setup from the basic test file.
+- [ ] Add one narrow failure-injection interface around these steps: begin transaction, insert commit
+      objects, update Version head/state, and commit the DuckDB transaction. Production code must not
+      contain test-only `if` branches.
+- [ ] Add parameterized test
+      `FailureBeforeDuckDbCommitLeavesEveryDurableFieldUnchangedAfterReopen`.
+- [ ] For each failure point, close and reopen the project, then compare commit count, Version head,
+      materialized head, transaction-chain hash, serialized pipeline state, and journal bytes with the
+      values from before the attempt.
+- [ ] Assert that no thumbnail invalidation and no B load event occurred.
 
-Goal: prove the five locked user behaviors and the complete A-to-B result through their real UI and
-production collaborators.
+##### Fix-4C - Fail after DuckDB commit but before journal cleanup
 
-Mandatory stage split:
+Files:
 
-- **Fix-5A - Production lock publication:** test the real task port, policy propagation, task
-  completion, and per-capability C++ behavior.
-- **Fix-5B - QML capability bindings and reasons:** remove session-state permission fallbacks, bind
-  each action narrowly, expose localized reasons, and test the five real QML entrypoints.
-- **Fix-5C - Thumbnail and A-to-B end-to-end sequence:** add the ordered production event log, failure
-  assertions, successful navigation, first-frame presentation, and reopen verification.
+- `src/include/app/editor_mini_git_journal_recovery.hpp`
+- `src/app/editor_mini_git_journal_recovery.cpp`
+- `tests/edit/history/editor_mini_git_journal_recovery_test.cpp`
 
-Implementation:
+Checklist:
 
-- Make `EditorSessionProductionTaskPort::BeginTask` the tested producer of editor-save locks. The
-  test must observe those locks through `BackgroundTaskController` and
-  `InteractionPolicyController`; do not register equivalent locks directly in the test.
-- Keep `InteractionPolicyController` as the sole authority for editor navigation capabilities.
-  Remove QML fallbacks that infer permissions from `sessionState == Saving`.
-- Bind separate capabilities to the actual actions they guard. Do not use `canCheckoutVersion` to
-  disable unrelated history browsing, and do not name a general selection block `saveInProgress`.
-- Surface the localized blocking reason through tooltip, accessibility description, or the existing
-  snackbar path for filmstrip selection, workspace switch, Version checkout, Paste, and Merge.
-- Schedule thumbnail invalidation only after DuckDB commit and successful journal truncation/flush.
-  A failed or incomplete checkpoint must not invalidate the thumbnail. A retry that completes must
-  invalidate exactly once for image A before navigation resumes.
-- Add an end-to-end sequence using two real image elements:
-  1. open A;
-  2. commit an adjustment;
-  3. request B from the user-facing entrypoint;
-  4. stop materialization and assert all five capabilities are disabled with a reason;
-  5. assert B has no recovery, guard, render, or presentation activity;
-  6. finish persistence and truncation;
-  7. assert A thumbnail invalidation occurs;
-  8. assert locks clear;
-  9. assert B opens and presents its first frame;
-  10. reopen the project and compare A's Version head, chain hash, serialized state, and adjustment.
+- [ ] Make `EditorMiniGitMaterializeResult` distinguish `database_committed` from
+      `checkpoint_completed`.
+- [ ] Add failure points for opening the journal for truncation, truncating the captured range, and
+      flushing the file.
+- [ ] Stop the actual save at those points. Do not simulate the state by completing a save and writing
+      journal records back afterward.
+- [ ] Add `DuckDbCommittedButTruncateFailedRetriesWithoutDuplicateCommit` using the original journal
+      bytes.
+- [ ] Add `JournalFlushFailureRemainsIncompleteAndRecoversOnReopen`.
+- [ ] Run the same recovery twice and assert the commit count and Version head move only once.
 
-Required tests:
+##### Fix-4D - Invalid and large inputs
 
-- `ProductionEditorSaveTaskPublishesAndClearsAllFiveNavigationLocks` starts and ends the real task.
-- `EachBlockedQmlActionShowsTheSaveReasonAndPerformsNoBackendCall` covers all five actions.
-- `FailedCheckpointKeepsThumbnailAndPendingTargetUntouched` covers failure ordering.
-- `SuccessfulCheckpointInvalidatesAOnceBeforeBStartsLoading` asserts an ordered event log.
-- `AToBSaveAndReopenPreservesAHeadChainStateAndAdjustment` is the required end-to-end test.
-- `HistoryBrowsingRemainsAvailableWhenOnlyVersionCheckoutIsLocked` prevents over-broad UI gating.
+Add stale/malformed fold cases to `EditorMiniGitJournalFoldTest` and missing-target/retry/scale cases to
+`EditorMiniGitJournalRecoveryTest`:
 
-Acceptance:
+- [ ] `StaleSourceHeadOrChainHashWritesNothing`.
+- [ ] `MalformedDuplicateOrOutOfOrderRecordWritesNothing`.
+- [ ] `MissingTargetCommitWritesNothing`.
+- [ ] `LargeJournalPrefixHasLinearRecordVisitsAndBoundedCopies` using instrumented counters. Record
+      elapsed time and peak test-process memory as diagnostic output, but do not use a machine-specific
+      time limit as the only assertion.
 
-- The UI tests exercise actual QML action entrypoints, not only C++ capability getters.
-- Every disabled action exposes a non-empty localized reason.
-- The event log orders DuckDB commit, journal truncate/flush, thumbnail invalidation, lock release,
-  B acquisition, and B first render exactly as specified.
-- Failure paths make zero B backend calls and zero thumbnail invalidation calls.
+Fix-4 is complete when fold, commit-writer, recovery, and materializer-facade targets pass; every
+persistence assertion is made after a real reopen; no journal-file error is ignored; and presenting an
+already committed prefix repeatedly does not create another commit or move the Version again.
 
-#### Phase 6C-5-Fix-6 - File decomposition, documentation, and performance evidence
+#### Fix-5 - Prove the real UI locks and the complete A-to-B workflow
 
-Goal: leave the corrected save path small enough for an AI agent or human to navigate safely.
+##### Fix-5A - The real editor-save task publishes the five locks
 
-Mandatory stage split:
+Files:
 
-- **Fix-6A - Production task and pipeline port extraction:** move only those two responsibilities and
-  preserve behavior with existing tests.
-- **Fix-6B - Production history port extraction:** move history and capture code with no behavior
-  change.
-- **Fix-6C - Production journal/materializer port extraction:** move persistence orchestration and
-  keep its tests green.
-- **Fix-6D - Production scheduler extraction:** move scheduling/rendering code separately; if the move
-  exceeds 500 changed lines after Git rename accounting, split scheduler helpers from worker
-  lifecycle.
-- **Fix-6E - Session save-state extraction:** separate save/navigation completion from lifecycle and
-  render routing.
-- **Fix-6F - QML root decomposition:** extract workspace navigation and adjustment transfer in
-  separate commits.
-- **Fix-6G - CMake, test-file, naming, and dead-API cleanup:** split registries by subsystem, finish
-  test-file decomposition, and remove misleading or unused surfaces.
-- **Fix-6H - Doxygen, call chains, formatting, and performance evidence:** document every changed
-  function, publish success/failure chains, format the complete scope, and record non-trivial
-  performance measurements.
-- **Fix-6I - Final evidence report:** run the full matrix and record commands, pass/fail/skip counts,
-  per-file LOC, per-stage diff totals, environmental limitations, and remaining risks before changing
-  the Status line.
+- `src/ui/alcedo_main/album_backend/editor_session_production.cpp`
+- `src/ui/alcedo_main/album_backend/background_task_controller.cpp`
+- `src/ui/alcedo_main/album_backend/interaction_policy_controller.cpp`
+- `tests/ui/album_backend_interaction_policy_test.cpp`
 
-File extraction is not permission for a large commit. Each port, QML responsibility, registry, and
-documentation pass remains an independent stage subject to the 500-line limit.
+Checklist:
 
-Implementation:
+- [ ] Start a checkpoint through `EditorSaveCheckpointService`; verify it calls
+      `EditorSessionProductionTaskPort::BeginTask("editor_save", A)`. The test must not register a
+      hand-built equivalent task directly in `BackgroundTaskController`.
+- [ ] Observe `SelectEditorImage`, `SwitchWorkspace`, `CheckoutVersion`, `PasteAdjustments`, and
+      `MergeAdjustments` through the real `InteractionPolicyController` getters and reason getters.
+- [ ] Finish the task as success, failure, and cancellation; all five locks must clear exactly once.
+- [ ] Add `ProductionEditorSaveTaskPublishesAndClearsFiveCheckpointLocks` to
+      `AlbumBackendInteractionPolicyTest`.
+- [ ] Keep history browsing enabled when only `CheckoutVersion` is locked; add
+      `VersionCheckoutLockDoesNotDisableHistoryBrowsing`.
 
-- Split `editor_session_production.cpp` by production port responsibility. Put pipeline, history,
-  journal/materialization, task, and scheduler implementations in separate files. Keep the mini-Git
-  capture/materialization bridge with the journal/history boundary, not with rendering.
-- Split the save-checkpoint state machine from `editor_session_service.cpp` so editor lifecycle,
-  render routing, and save/navigation completion no longer share one large implementation file.
-- Split `Main.qml` workspace navigation and adjustment-transfer actions into focused components or
-  controllers. Keep the root window responsible for composition rather than feature logic.
-- Split source and test CMake registration into subsystem include files while preserving target names
-  and labels.
-- Keep every changed implementation and test file below 1000 physical lines unless a generated or
-  declarative registry has a written responsibility-based reason to remain larger.
-- Remove dead wrappers and misleading state. Prefer names such as `selectionBlocked`,
-  `versionCheckoutEnabled`, `capturedPrefix`, and `checkpointLease` when they match the final
-  responsibility; do not introduce metaphors or duplicate synonyms.
-- Add Doxygen-compatible documentation to every new or changed C++ function in this correction
-  package. Each comment must cover purpose, parameters, return value, preconditions, ownership,
-  side effects, thread affinity or thread safety, and failure behavior where applicable. QML helper
-  functions must carry the equivalent concise documentation in the local convention.
-- Document the final success and failure call chains beside the owning service interfaces so later
-  work does not have to reconstruct the asynchronous ownership from implementations.
-- Add a benchmark or recorded performance test for large graph/prefix materialization. Measure graph
-  copies, database-lock duration, capture render-lock duration, elapsed time, and peak memory. Move
-  journal folding outside the database lock when the measured/structural dependency allows it.
-- Run the repository formatter and remove every changed-line violation.
+##### Fix-5B - Exercise the actual QML entrypoints
 
-Acceptance:
+Files:
 
-- No changed non-generated source or test file exceeds 1000 physical lines without an explicit
-  responsibility-based exception in this plan.
-- `clang-format --dry-run --Werror --style=file` passes for every changed C++ file.
-- No changed function lacks the required Doxygen-compatible description.
-- Repository searches find no unused 6C-5-Fix API, positional navigation booleans, hidden capture
-  rendezvous, or busy-wait save loop.
-- The performance result records inputs and measurements and does not rely on a trivial one-commit
-  graph.
+- `src/ui/alcedo_main/qml/EditorWorkspaceNavigation.qml`
+- `src/ui/alcedo_main/qml/EditorAdjustmentTransferActions.qml`
+- `src/ui/alcedo_main/qml/EditorFilmstrip.qml`
+- `src/ui/alcedo_main/qml/EditorHistoryVersionsRail.qml`
+- `src/ui/alcedo_main/qml/EditorWorkspace.qml`
+- `src/ui/alcedo_main/qml/Main.qml`
+- new `tests/ui/editor_workspace_navigation_qml_test.cpp`
+- new `tests/ui/editor_adjustment_transfer_actions_qml_test.cpp`
+- new `tests/ui/editor_checkpoint_qml_integration_test.cpp`
+- `tests/ui/main_qml_test_fixture.hpp/.cpp`
+- `tests/CMakeLists.txt`
 
-#### Phase 6C-5-Fix exit gate
+Run the focused component targets first, then `EditorCheckpointQmlIntegrationTest`. For each action
+below, start a real editor-save task, invoke the named QML entrypoint, and assert both a non-empty reason
+and zero backend calls:
 
-6C-5-Fix is complete only when all of the following are true:
+- [ ] filmstrip `activateImage(index)` does not emit `imageActivated`;
+- [ ] Library/Editor workspace button click does not call `WorkspaceRouter`;
+- [ ] `EditorHistoryVersionsRail.versionCheckoutEnabled` is false while the History panel can still
+      open. Version checkout UI belongs to 6C-6; do not invent that control in this Fix;
+- [ ] `requestPasteAdjustments()` does not open the dialog or call the adjustment-transfer backend;
+- [ ] Merge strategy does not call the adjustment-transfer backend.
 
-- all Fix-1 through Fix-6 acceptance items pass;
-- the production A-to-B test covers capture, DuckDB transaction, original journal truncation,
-  thumbnail invalidation, lock release, B acquisition, B first render, and reopen verification;
-- threaded tests prove global exclusion and next-prefix behavior;
-- every specified failure point preserves or recovers the exact durable state;
-- `ctest --test-dir build/debug -L phase6c --output-on-failure` executes a non-empty green suite;
-- `ctest --test-dir build/debug -L phase6c_5_fix --output-on-failure` executes a non-empty green suite;
-- relevant broader editor, history, storage, interaction-policy, and workspace tests remain green;
-- formatting, roadmap terminology, project terminology, test naming, LOC, and documentation checks
-  pass; and
-- this document's Status line is updated to mark 6C-5-Fix implemented before 6C-6 begins.
+Then finish the task and repeat one allowed action from each component to prove the controls recover.
+Checking only `InteractionPolicyController` getters is not enough for this stage.
+
+##### Fix-5C - One production-style A-to-B integration test
+
+Files:
+
+- new `tests/integration/editor_checkpoint_navigation_test.cpp`
+- `tests/support/editor_mini_git_project_fixture.hpp/.cpp`
+- `tests/ui/main_qml_test_fixture.hpp/.cpp`
+- `tests/CMakeLists.txt`
+
+Add target `EditorCheckpointNavigationTest` and one readable test,
+`SwitchFromAToBAfterCheckpointPersistsAAndPresentsB`, with this checklist:
+
+- [ ] Create a real temporary project with image A and image B.
+- [ ] Open A and present its first frame.
+- [ ] Commit one exposure adjustment on A and verify one journal record exists.
+- [ ] Request B through the existing `EditorSessionController::Open(B)` entrypoint. Full filmstrip
+      population belongs to 6C-6; do not add it here merely to make this test possible.
+- [ ] Pause the controllable worker before DuckDB commit. Assert five UI actions are blocked and B has
+      no acquire, recovery, render, or presentation event.
+- [ ] Continue the worker. Assert event order:
+      `duckdb_commit_a -> journal_truncate_a -> thumbnail_invalidate_a -> task_finish_a ->`
+      `acquire_b -> first_frame_b`.
+- [ ] Close and reopen the project. Assert A's Version head, transaction-chain hash, serialized
+      pipeline state, and exposure value match the state captured before switching.
+
+Add the paired failure test `FailedCheckpointKeepsAOpenAndDoesNotTouchBOrThumbnail`, stopping before
+DuckDB commit and asserting zero B and thumbnail events.
+
+Fix-5 is complete only when the C++ policy tests, QML action tests, and production-style integration
+test all pass. A controller-only test cannot substitute for QML coverage, and a direct materializer
+test cannot substitute for the A-to-B workflow.
+
+#### Fix-6 - Run the final evidence checklist
+
+Fix-6 is verification, not a place to postpone cleanup. If a large rename, fixture, or file move is
+still needed, return it to Fix-1 and review it there.
+
+##### Build and run the named module targets
+
+- [ ] Build each target with the repository MSVC wrapper, replacing `<TargetName>` with the exact name
+      from the list below:
+      `cmd /c scripts\msvc_env.cmd --build build\debug --target <TargetName>`.
+- [ ] `EditorSaveCheckpointCoordinatorTest`.
+- [ ] `EditorSaveCheckpointServiceTest`.
+- [ ] `EditorSaveCheckpointCaptureTest`.
+- [ ] `EditorSessionLifecycleTest`.
+- [ ] `EditorSessionNavigationControllerTest`.
+- [ ] `EditorSessionEditControllerTest`.
+- [ ] `EditorSessionRenderControllerTest`.
+- [ ] `EditorSessionServiceFacadeTest`.
+- [ ] `EditorMiniGitJournalFoldTest`.
+- [ ] `EditorMiniGitCommitWriterTest`.
+- [ ] `EditorMiniGitJournalRecoveryTest`.
+- [ ] `EditorMiniGitMaterializerTest`.
+- [ ] `EditorSessionProductionHistoryPortTest`.
+- [ ] `EditorSessionProductionJournalWriterPortTest`.
+- [ ] `EditorSessionProductionCheckpointStoreTest`.
+- [ ] `EditorSessionProductionThumbnailPortTest`.
+- [ ] `AlbumBackendInteractionPolicyTest`.
+- [ ] `EditorWorkspaceNavigationQmlTest`.
+- [ ] `EditorAdjustmentTransferActionsQmlTest`.
+- [ ] `EditorCheckpointQmlIntegrationTest`.
+- [ ] `EditorCheckpointNavigationTest`.
+- [ ] Run the pre-existing `WorkspaceShellTest` regression target after its shared QML fixture move.
+
+Record the exact command, discovered test count, passed/failed/skipped count, and any environmental
+limitation for every target. Do not report a compiled but unexecuted target as passing.
+
+##### Review the final code shape
+
+- [ ] Run `clang-format --dry-run --Werror --style=file` on every C++ file changed by Fix-1 through
+      Fix-5.
+- [ ] Search for removed names: `ScopedLock`, `MaterializeValidatedGraph`, `TakeSaveCapture`,
+      `no_journal_changes`, `saveInProgress`, and checkpoint-related `controlsEnabled`.
+- [ ] Verify temporary same-class split files `editor_session_checkpoint.cpp` and
+      `editor_session_production_checkpoint.cpp` no longer exist. Their behavior must live in the
+      owning component types named in Fix-1.
+- [ ] Search for `std::this_thread::yield()` in the save-checkpoint path.
+- [ ] Record total LOC and diff LOC for every changed file. For a file above 1000 lines, state which
+      responsibilities remain. Do not split old out-of-scope responsibilities merely to close this Fix.
+- [ ] For every changed class, list the mutable fields it owns and its single reason to change. Fail
+      the audit if two modules share mutable state, a facade owns component state, or a new class mixes
+      lifecycle, save, navigation, edit, render, persistence, or QML policy responsibilities.
+- [ ] Verify every changed C++ function has a useful Doxygen comment and every changed QML function has
+      a concise purpose/input/blocked-result comment.
+- [ ] Verify the call chain at the start of this section matches the final function names.
+
+##### Performance evidence
+
+- [ ] Run the large-prefix test with a realistic count such as 10,000 records.
+- [ ] Record record visits, graph copies, database-lock duration, capture duration, elapsed time, peak
+      memory, and maximum waiting workers.
+- [ ] Fix only measured problems: repeated full-graph copies, more than one pass over each journal
+      record without a documented reason, broad database-lock scope, or unbounded worker creation.
+- [ ] Put each optimization and its before/after measurement in the same review unit.
+
+#### Phase 6C-5-Fix completion checklist
+
+- [ ] A real threaded test proves that only one global save checkpoint runs at a time.
+- [ ] A captured journal range cannot delete an edit outside that range.
+- [ ] The production path passes one typed capture from history, through
+      `EditorSaveCheckpointService`, to `IEditorCheckpointStore`; no side map remains.
+- [ ] Basic, mixed-history, invalid-input, pre-commit failure, post-commit failure, retry, reopen, and
+      large-prefix tests pass.
+- [ ] The five real QML actions are blocked with a reason during save and recover afterward.
+- [ ] The A-to-B integration test proves DuckDB commit, journal truncation, A thumbnail invalidation,
+      task completion, B acquisition, B first frame, and A state after reopen.
+- [ ] The failure integration test proves no B call and no thumbnail invalidation.
+- [ ] Test files are divided by module. Focused fixtures create only their module collaborators; only
+      the integration fixture composes lifecycle, checkpoint, edit, render, QML, and persistence.
+- [ ] `EditorSessionService` is a facade, not the owner of guards, pending save/navigation, callback
+      shutdown, adjustment snapshots, or render/first-frame state.
+- [ ] Mini-Git folding, DuckDB writing, recovery, production history capture, checkpoint storage, and
+      thumbnail invalidation have separate types with no private-state reach-through.
+- [ ] Naming, LOC analysis, Doxygen comments, formatter, terminology scans, and recorded performance
+      evidence are complete.
+- [ ] Update this document's Status only after every box above has executable evidence.
 
 ### Phase 6C-6 - Checkout, session switching, and garbage collection
 

@@ -11,6 +11,7 @@
 #include <string>
 
 #include "app/editor_mini_git_materializer.hpp"
+#include "app/editor_save_checkpoint_coordinator.hpp"
 #include "app/project_service.hpp"
 #include "edit/history/commit_clock_test_access.hpp"
 #include "edit/history/commit_graph.hpp"

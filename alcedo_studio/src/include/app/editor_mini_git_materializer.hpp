@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -23,6 +22,11 @@ namespace alcedo {
 /// Immutable capture taken at save-checkpoint start from the live pipeline
 /// snapshot. Materialization never rebuilds or mutates a pipeline executor; it
 /// only validates the journal fold against these values and writes DuckDB.
+///
+/// Owner/lifetime: built by the save path on the caller/GUI thread, then copied
+/// into the worker request. journal_records is a snapshot of the exact prefix
+/// being saved; an edit finalized after capture must not appear in this range
+/// and must not be removed by truncating it.
 struct EditorMiniGitSaveCapture {
   sl_element_id_t              element_id = 0;
   std::uint64_t                session_generation = 0;
@@ -38,6 +42,15 @@ struct EditorMiniGitSaveCapture {
   bool                         no_journal_changes = false;
 };
 
+/// Outcome of one Materialize / RecoverAndMaterialize call.
+///
+/// - accepted: the capture was structurally valid and reached the DuckDB write
+///   step. False means validation rejected before any durable write.
+/// - materialized: DuckDB transaction committed. On success, the journal file
+///   has been truncated for the saved prefix unless the result reports failure.
+/// - head_moved: the checked-out Version head advanced (false for an empty
+///   journal or a no-op recovery that only truncated leftover bytes).
+/// - error: human-readable failure detail when accepted/materialized is false.
 struct EditorMiniGitMaterializeResult {
   bool        accepted     = false;
   bool        materialized = false;
@@ -46,45 +59,10 @@ struct EditorMiniGitMaterializeResult {
   std::string error;
 };
 
-/// Project-wide editor save coordinator for Phase 6C-5.
-///
-/// Serializes materialization so only one image save owns the global save lock
-/// at a time. Capture happens outside DuckDB I/O; materialize validates the
-/// journal fold, writes commits/Version/serialized state in one transaction,
-/// then truncates the materialized journal prefix.
-class EditorSaveCheckpointCoordinator final {
- public:
-  class ScopedLock {
-   public:
-    ScopedLock() = default;
-    ScopedLock(EditorSaveCheckpointCoordinator* owner, sl_element_id_t element_id, bool acquired);
-    ScopedLock(const ScopedLock&)            = delete;
-    ScopedLock& operator=(const ScopedLock&) = delete;
-    ScopedLock(ScopedLock&& other) noexcept;
-    ScopedLock& operator=(ScopedLock&& other) noexcept;
-    ~ScopedLock();
-
-    [[nodiscard]] auto owns_lock() const -> bool { return owns_; }
-    void               Release();
-
-   private:
-    EditorSaveCheckpointCoordinator* owner_      = nullptr;
-    sl_element_id_t                  element_id_ = 0;
-    bool                             owns_       = false;
-  };
-
-  [[nodiscard]] auto TryAcquire(sl_element_id_t element_id) -> ScopedLock;
-  [[nodiscard]] auto active_element_id() const -> sl_element_id_t;
-  [[nodiscard]] auto is_saving() const -> bool;
-
- private:
-  friend class ScopedLock;
-  void Release(sl_element_id_t element_id);
-
-  mutable std::mutex mutex_;
-  bool               saving_         = false;
-  sl_element_id_t    active_element_ = 0;
-};
+/// Coordinator that serializes editor save checkpoints. Defined in
+/// editor_save_checkpoint_coordinator.hpp; held by the materializer as a shared
+/// instance.
+class EditorSaveCheckpointCoordinator;
 
 /// Pure history materialization for the mini-Git journal. Does not touch
 /// pipeline executors, GPU state, or render caches.
@@ -92,23 +70,28 @@ class EditorMiniGitMaterializer final {
  public:
   explicit EditorMiniGitMaterializer(std::shared_ptr<StorageService> storage);
 
-  /// Validate journal fold against the capture and write DuckDB in one
-  /// transaction. Truncates the journal file only after DuckDB success.
+  /// Validate the journal fold against the capture and write commits, Version
+  /// head, serialized pipeline state, and recovery metadata in one DuckDB
+  /// transaction. Truncates the saved journal prefix only after DuckDB success.
+  ///
+  /// Caller thread: the save worker (the global save lock is acquired here).
+  /// On return the journal file is truncated iff materialized is true; on any
+  /// failure the journal is left untouched and usable for retry or recovery.
+  /// No pipeline executor is replayed or mutated.
   auto Materialize(const EditorMiniGitSaveCapture& capture, std::string* error = nullptr)
       -> EditorMiniGitMaterializeResult;
 
-  /// Recover: load DuckDB graph, skip already-materialized journal prefix, fold
-  /// remaining records, materialize, then truncate. Safe across the DB-commit /
-  /// truncate crash window (no double commit insert).
+  /// Recover from the DB-commit / truncate crash window: load the DuckDB graph,
+  /// skip the already-materialized journal prefix, fold remaining records,
+  /// materialize, then truncate. Never inserts a commit twice.
+  ///
+  /// Caller thread: editor open / recovery path. On return the journal file is
+  /// truncated iff materialized is true; on failure the journal is left intact.
+  /// No pipeline executor is replayed or mutated.
   auto RecoverAndMaterialize(sl_element_id_t element_id, const std::filesystem::path& journal_path,
                              std::string* error = nullptr) -> EditorMiniGitMaterializeResult;
 
  private:
-  auto MaterializeValidatedGraph(const EditorMiniGitSaveCapture& capture,
-                                 CommitGraph&                    folded_graph,
-                                 std::string*                    error)
-      -> EditorMiniGitMaterializeResult;
-
   std::shared_ptr<StorageService>       storage_;
   std::shared_ptr<EditorSaveCheckpointCoordinator> coordinator_;
 };

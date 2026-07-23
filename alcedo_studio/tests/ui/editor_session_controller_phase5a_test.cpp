@@ -120,18 +120,18 @@ class FakeSessionBackend final : public IEditorSessionBackend {
     return result;
   }
 
-  auto Undo() -> EditorSessionResult override { return Discard(); }
-  auto Redo() -> EditorSessionResult override { return Discard(); }
+  auto                                Undo() -> EditorSessionResult override { return Discard(); }
+  auto                                Redo() -> EditorSessionResult override { return Discard(); }
 
   // Phase 5D: record view-change routing so tests can assert the controller
   // forwards intents (and only intents) to the backend without bypassing it.
-  bool                               view_change_recorded = false;
-  EditorRenderReason                 view_change_reason = EditorRenderReason::ZoomPan;
+  bool                                view_change_recorded = false;
+  EditorRenderReason                  view_change_reason   = EditorRenderReason::ZoomPan;
   std::optional<ViewportRenderRegion> view_change_region{std::nullopt};
-  bool                               render_busy_ = false;
+  bool                                render_busy_ = false;
 
-  auto RequestViewChange(EditorRenderReason reason,
-                         std::optional<ViewportRenderRegion> region) -> EditorSessionResult override {
+  auto RequestViewChange(EditorRenderReason reason, std::optional<ViewportRenderRegion> region)
+      -> EditorSessionResult override {
     view_change_recorded = true;
     view_change_reason   = reason;
     view_change_region   = std::move(region);
@@ -144,7 +144,7 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto render_busy() const -> bool override { return render_busy_; }
 
   // Test helper: simulate async Interactive transition from first frame.
-  void SimulateFirstFramePresented() {
+  void               SimulateFirstFramePresented() {
     state_ = EditorSessionState::Interactive;
     NotifyChange();
   }
@@ -286,8 +286,8 @@ TEST(EditorSessionControllerPhase5ATest, SubmitViewChangeIsNoOpWithoutImage) {
   FakeSessionBackend      backend;
   EditorSessionController controller(nullptr, &backend);
   EXPECT_FALSE(controller.has_image());
-  controller.submitViewChange(static_cast<int>(
-      alcedo::editor_rhi::EditorInteractionController::ViewChangeKind::ZoomPan));
+  controller.submitViewChange(
+      static_cast<int>(alcedo::editor_rhi::EditorInteractionController::ViewChangeKind::ZoomPan));
   EXPECT_FALSE(backend.view_change_recorded);
 }
 
@@ -523,11 +523,11 @@ TEST(EditorSessionControllerPhase5ATest, EditorSessionServiceCMakeDoesNotLinkQtW
   const std::string block =
       text.substr(start, next == std::string::npos ? std::string::npos : next - start);
   // Match real link dependency tokens, not comments that mention Widgets.
-  // Require an empty dependency list (no PUBLIC/PRIVATE dep args after SOURCES).
+  // The facade may declare PRIVATE_DEPS on internal module libraries
+  // (EditorSaveCheckpointService, EditorSessionLifecycle, etc.) as part of
+  // Fix-1B; it must never link Qt Widgets or expose PUBLIC_DEPS.
   EXPECT_EQ(block.find("PUBLIC_DEPS"), std::string::npos)
       << "EditorSessionService must not declare PUBLIC_DEPS";
-  EXPECT_EQ(block.find("PRIVATE_DEPS"), std::string::npos)
-      << "EditorSessionService must not declare PRIVATE_DEPS";
   EXPECT_EQ(block.find("Qt6::Widgets"), std::string::npos)
       << "EditorSessionService must not link Qt6::Widgets";
   EXPECT_EQ(block.find("Qt5::Widgets"), std::string::npos);
