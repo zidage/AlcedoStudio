@@ -15,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "app/editor_save_checkpoint_coordinator.hpp"
 #include "app/editor_save_checkpoint_service.hpp"
 #include "app/editor_session_edit_controller.hpp"
 #include "app/editor_session_lifecycle.hpp"
@@ -116,6 +117,7 @@ class EditorSessionNavigationFixture {
   std::shared_ptr<FakeEditorJournalPort>             journal_;
   std::shared_ptr<FakeEditorCheckpointStore>         checkpoint_store_;
   std::shared_ptr<FakeEditorRenderSubmitPort>        render_submit_;
+  std::shared_ptr<EditorSaveCheckpointCoordinator>   save_coordinator_;
   std::unique_ptr<EditorSessionLifecycle>            lifecycle_;
   std::unique_ptr<EditorSaveCheckpointService>       save_service_;
   std::unique_ptr<EditorSessionRenderController>     render_;

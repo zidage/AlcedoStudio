@@ -18,6 +18,7 @@
 
 namespace alcedo {
 class EditorMiniGitMaterializer;
+class EditorSaveCheckpointCoordinator;
 class StorageService;
 }  // namespace alcedo
 
@@ -34,6 +35,8 @@ class EditorSessionCheckpointStore final : public alcedo::IEditorCheckpointStore
     std::function<std::shared_ptr<alcedo::StorageService>()> storage_service;
     /// Resolve the per-image journal path used during recovery.
     std::function<std::filesystem::path(sl_element_id_t)>    mini_git_journal_path;
+    /// Project-owned global save lock shared with EditorSaveCheckpointService.
+    std::shared_ptr<alcedo::EditorSaveCheckpointCoordinator> save_coordinator;
   };
 
   /// Construct an unconfigured checkpoint store.

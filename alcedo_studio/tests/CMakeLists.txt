@@ -988,6 +988,17 @@ target_link_libraries(EditorSessionTestSupport
     GTest::gtest
 )
 
+# EditorSaveCheckpointCoordinator owns the project-wide save lock only.
+add_executable(EditorSaveCheckpointCoordinatorTest
+  app/editor_save_checkpoint_coordinator_test.cpp)
+target_include_directories(EditorSaveCheckpointCoordinatorTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorSaveCheckpointCoordinatorTest
+  EditorSaveCheckpointCoordinator GTest::gtest_main)
+gtest_discover_tests(EditorSaveCheckpointCoordinatorTest
+  TEST_PREFIX "EditorSaveCheckpointCoordinatorTest."
+  PROPERTIES LABELS "ci_core_flow;editor_session")
+
 # EditorSaveCheckpointService owns save work (task, journal
 # commit, materialization). Focused unit tests with fake ports.
 add_executable(EditorSaveCheckpointServiceTest app/editor_save_checkpoint_service_test.cpp)
@@ -2297,6 +2308,7 @@ alcedo_assign_test_category(app ALCEDO_BUILD_APP_TESTS alcedo_tests_app
   PipelineServiceTest
   EditHistoryMgmtServiceTest
   EditorRenderCoordinatorTest
+  EditorSaveCheckpointCoordinatorTest
   EditorSaveCheckpointServiceTest
   EditorSessionLifecycleTest
   EditorSessionNavigationControllerTest

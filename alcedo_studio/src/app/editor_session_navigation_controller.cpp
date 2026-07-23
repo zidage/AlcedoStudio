@@ -218,6 +218,13 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
         return CheckpointTicket{};
       }
     }
+    // Project-owned global save lock is taken before capture so journal prefix
+    // capture, DuckDB materialize, truncate, thumbnail, and terminal callback
+    // share one ownership interval (Phase 2A).
+    auto save_lock = save_service_.TryAcquireSaveLock(identity.element_id);
+    if (!save_lock.owns_lock()) {
+      return CheckpointTicket{};
+    }
     if (history_ != nullptr && lifecycle_.has_history_guard()) {
       std::string error;
       auto        capture = history_->CaptureSaveCheckpoint(lifecycle_.history_guard(), &error);
@@ -228,6 +235,7 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
       req.element_id         = identity.element_id;
       req.session_generation = identity.session_generation;
       req.capture            = std::move(capture);
+      req.save_lock          = std::move(save_lock);
       lifecycle_.BeginCheckpoint();
       if (!start_background_save) {
         return CheckpointTicket{};
@@ -239,9 +247,10 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
       SaveCheckpointRequest req;
       req.element_id         = identity.element_id;
       req.session_generation = identity.session_generation;
+      req.save_lock          = std::move(save_lock);
       lifecycle_.BeginCheckpoint();
       return save_service_.Start(
-          req, [this](const SaveCheckpointResult& r) { OnCheckpointFinished(r); });
+          std::move(req), [this](const SaveCheckpointResult& r) { OnCheckpointFinished(r); });
     }
   } else if (journal_ != nullptr) {
     std::string error;

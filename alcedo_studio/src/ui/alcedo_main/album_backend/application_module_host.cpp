@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <string>
 
+#include "app/editor_save_checkpoint_coordinator.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_checkpoint_store.hpp"
@@ -164,19 +165,26 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     session_scheduler->SetServices(EditorSessionSchedulerServices{image_pool});
     auto session_journal = std::make_shared<EditorSessionJournalWriterPort>(
         EditorSessionJournalWriterPort::Services{journal_path});
+    // One project-owned global save lock for capture → materialize → terminal
+    // callback. Shared by EditorSaveCheckpointService and Mini-Git materializer.
+    auto save_coordinator   = std::make_shared<alcedo::EditorSaveCheckpointCoordinator>();
     auto session_checkpoint = std::make_shared<EditorSessionCheckpointStore>();
-    session_checkpoint->SetServices(
-        EditorSessionCheckpointStore::Services{storage_service, mini_git_journal_path});
+    session_checkpoint->SetServices(EditorSessionCheckpointStore::Services{
+        storage_service, mini_git_journal_path, save_coordinator});
     auto session_thumbnail  = std::make_shared<EditorSessionThumbnailPort>(invalidate_thumbnail);
 
     editor_session_runtime_ = alcedo::EditorSessionRuntime::CreateWithPorts(
         session_pipeline, session_history, session_tasks, session_journal, session_scheduler,
-        session_checkpoint, session_thumbnail);
+        session_checkpoint, session_thumbnail, save_coordinator);
     session_scheduler->SetCoordinator(editor_session_runtime_->coordinator);
     editor_session_scheduler_ = std::move(session_scheduler);
   }
   RecordConstruction("EditorSessionService", editor_session_runtime_->service.get());
   RecordConstruction("EditorRenderCoordinator", editor_session_runtime_->coordinator.get());
+  if (editor_session_runtime_ && editor_session_runtime_->save_coordinator) {
+    RecordConstruction("EditorSaveCheckpointCoordinator",
+                       editor_session_runtime_->save_coordinator.get());
+  }
   editor_session_ = std::make_unique<EditorSessionController>(
       editor_.get(), editor_session_runtime_->service.get(), this);
   RecordConstruction("EditorSessionController", editor_session_.get());
@@ -336,6 +344,11 @@ void ApplicationModuleHost::ShutdownModules() {
   shutting_down_ = true;
 
   try {
+    // Wake blocked save-lock waiters before tearing down editor session work so
+    // recovery / materialize threads can exit and join cleanly.
+    if (editor_session_runtime_ && editor_session_runtime_->save_coordinator) {
+      editor_session_runtime_->save_coordinator->Shutdown();
+    }
     if (background_tasks_) {
       background_tasks_->CancelAll();
     }
@@ -411,6 +424,11 @@ ApplicationModuleHost::~ApplicationModuleHost() {
   destroy(workspace_router_, "WorkspaceRouter");
   destroy(editor_session_, "EditorSessionController");
   if (editor_session_runtime_) {
+    if (editor_session_runtime_->save_coordinator) {
+      editor_session_runtime_->save_coordinator->Shutdown();
+      RecordDestruction("EditorSaveCheckpointCoordinator",
+                        editor_session_runtime_->save_coordinator.get());
+    }
     RecordDestruction("EditorRenderCoordinator", editor_session_runtime_->coordinator.get());
     RecordDestruction("EditorSessionService", editor_session_runtime_->service.get());
     editor_session_runtime_.reset();

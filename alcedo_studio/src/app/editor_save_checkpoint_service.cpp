@@ -44,13 +44,40 @@ EditorSaveCheckpointService::EditorSaveCheckpointService(Dependencies dependenci
     : deps_(std::move(dependencies)), callback_gate_(std::make_shared<AsyncCallbackGate>()) {}
 
 EditorSaveCheckpointService::~EditorSaveCheckpointService() {
-  if (callback_gate_) {
-    callback_gate_->StopAndWait();
+  CancelAndWait();
+}
+
+auto EditorSaveCheckpointService::TryAcquireSaveLock(sl_element_id_t element_id)
+    -> EditorSaveCheckpointCoordinator::SaveCheckpointLock {
+  if (!deps_.save_coordinator) {
+    return EditorSaveCheckpointCoordinator::SaveCheckpointLock{};
   }
+  return deps_.save_coordinator->TryAcquire(element_id);
 }
 
 auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
                                         SaveCheckpointCompletion completion) -> CheckpointTicket {
+  // Hold the project-owned save lock for the entire Start → terminal-callback
+  // interval. Prefer a pre-acquired lock (taken before capture on the GUI
+  // thread); otherwise TryAcquire here. Never block the GUI thread.
+  EditorSaveCheckpointCoordinator::SaveCheckpointLock save_lock = std::move(request.save_lock);
+  if (!save_lock.owns_lock() && deps_.save_coordinator) {
+    save_lock = deps_.save_coordinator->TryAcquire(request.element_id);
+  }
+  if (deps_.save_coordinator && !save_lock.owns_lock()) {
+    if (completion) {
+      SaveCheckpointResult result;
+      result.session_generation   = request.session_generation;
+      result.checkpoint_completed = false;
+      result.error =
+          deps_.save_coordinator->is_shutdown()
+              ? "Editor save checkpoint coordinator is shutting down"
+              : "Another editor save checkpoint already owns the global save lock";
+      completion(result);
+    }
+    return CheckpointTicket{};
+  }
+
   std::uint64_t task_id = 0;
   if (deps_.tasks) {
     task_id = deps_.tasks->BeginTask("editor_save", request.element_id);
@@ -60,6 +87,8 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
         result.session_generation   = request.session_generation;
         result.checkpoint_completed = false;
         result.error                = "Failed to start editor save task";
+        // Release lock before invoking completion so navigation can retry.
+        save_lock.Release();
         completion(result);
       }
       return CheckpointTicket{};
@@ -74,7 +103,8 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
   {
     std::scoped_lock lock(mutex_);
     pending_saves_.push_back(PendingSave{request_id, request.session_generation, request.element_id,
-                                         task_id, std::move(request.capture), completion});
+                                         task_id, std::move(request.capture), std::move(save_lock),
+                                         completion});
   }
 
   struct StartObservation {
@@ -88,7 +118,7 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
                           completion](EditorJournalCommitOutcome outcome) {
     observation->error = outcome.error;
     observation->commit_succeeded.store(outcome.accepted && outcome.durable,
-                                          std::memory_order_release);
+                                        std::memory_order_release);
     observation->completed.store(true, std::memory_order_release);
     if (!gate || !gate->Enter()) {
       return;
@@ -107,10 +137,11 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
 
   if (!started_async) {
     if (!observation->completed.load(std::memory_order_acquire)) {
-      std::uint64_t            rolled_task_id = 0;
-      SaveCheckpointCompletion rolled_completion;
-      if (TakePendingSave(request_id, &rolled_task_id, &rolled_completion) && deps_.tasks &&
-          rolled_task_id != 0) {
+      std::uint64_t                                       rolled_task_id = 0;
+      SaveCheckpointCompletion                            rolled_completion;
+      EditorSaveCheckpointCoordinator::SaveCheckpointLock rolled_lock;
+      if (TakePendingSave(request_id, &rolled_task_id, &rolled_completion, &rolled_lock) &&
+          deps_.tasks && rolled_task_id != 0) {
         deps_.tasks->EndTask(rolled_task_id, false, "Journal commit could not start");
       }
       if (rolled_completion) {
@@ -121,6 +152,8 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
         result.checkpoint_completed = false;
         result.error =
             observation->error.empty() ? "Journal commit could not start" : observation->error;
+        // Release lock before completion so the caller can observe a free lock.
+        rolled_lock.Release();
         rolled_completion(result);
       }
     }
@@ -136,6 +169,14 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
 }
 
 void EditorSaveCheckpointService::CancelAndWait() {
+  std::vector<PendingSave> abandoned;
+  {
+    std::scoped_lock lock(mutex_);
+    abandoned.swap(pending_saves_);
+  }
+  // Destroy pending locks before waiting on the callback gate so blocked
+  // AcquireBlocking waiters (recovery / other projects) can proceed.
+  abandoned.clear();
   if (callback_gate_) {
     callback_gate_->StopAndWait();
   }
@@ -147,8 +188,9 @@ auto EditorSaveCheckpointService::active() const -> bool {
 }
 
 void EditorSaveCheckpointService::OnCheckpointFinished(const SaveCheckpointResult& result) {
-  SaveCheckpointCompletion completion;
-  std::uint64_t            task_id = 0;
+  SaveCheckpointCompletion                            completion;
+  EditorSaveCheckpointCoordinator::SaveCheckpointLock save_lock;
+  std::uint64_t                                       task_id = 0;
   {
     std::scoped_lock lock(mutex_);
     auto             it = std::find_if(pending_saves_.begin(), pending_saves_.end(),
@@ -161,6 +203,7 @@ void EditorSaveCheckpointService::OnCheckpointFinished(const SaveCheckpointResul
     }
     task_id    = it->task_id;
     completion = it->completion;
+    save_lock  = std::move(it->save_lock);
     pending_saves_.erase(it);
   }
   if (deps_.tasks && task_id != 0) {
@@ -170,6 +213,7 @@ void EditorSaveCheckpointService::OnCheckpointFinished(const SaveCheckpointResul
   if (completion) {
     completion(result);
   }
+  // Lock released when save_lock leaves this scope, after the terminal callback.
 }
 
 void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t              request_id,
@@ -181,6 +225,7 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
   bool                                            found             = false;
   bool                                            start_materialize = false;
   std::shared_ptr<const EditorMiniGitSaveCapture> capture;
+  EditorSaveCheckpointCoordinator::SaveCheckpointLock early_lock;
   {
     std::scoped_lock lock(mutex_);
     auto             it = std::find_if(
@@ -195,11 +240,13 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
     session_gen = it->session_generation;
 
     if (!outcome.accepted || !outcome.durable) {
+      early_lock = std::move(it->save_lock);
       pending_saves_.erase(it);
     } else {
       capture           = it->capture;
       start_materialize = static_cast<bool>(capture) && static_cast<bool>(deps_.checkpoint_store);
       if (!start_materialize) {
+        early_lock = std::move(it->save_lock);
         pending_saves_.erase(it);
       }
     }
@@ -221,11 +268,12 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
           gate->Leave();
         });
     if (!started) {
-      std::uint64_t            late_task_id = 0;
-      SaveCheckpointCompletion late_completion;
-      if (TakePendingSave(request_id, &late_task_id, &late_completion)) {
+      std::uint64_t                                       late_task_id = 0;
+      SaveCheckpointCompletion                            late_completion;
+      EditorSaveCheckpointCoordinator::SaveCheckpointLock late_lock;
+      if (TakePendingSave(request_id, &late_task_id, &late_completion, &late_lock)) {
         FinishSave(request_id, session_gen, late_task_id, false, "Materialization could not start",
-                   late_completion);
+                   late_completion, std::move(late_lock));
       }
     }
     return;
@@ -235,16 +283,17 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
   const std::string msg = outcome.error.empty()
                               ? (ok ? "Journal commit complete" : "Journal commit failed")
                               : outcome.error;
-  FinishSave(request_id, session_gen, task_id, ok, msg, completion);
+  FinishSave(request_id, session_gen, task_id, ok, msg, completion, std::move(early_lock));
 }
 
 void EditorSaveCheckpointService::HandleMaterialization(std::uint64_t            request_id,
                                                         EditorMaterializeOutcome outcome,
                                                         SaveCheckpointCompletion completion) {
-  std::uint64_t   task_id     = 0;
-  sl_element_id_t element_id  = 0;
-  std::uint64_t   session_gen = 0;
-  bool            found       = false;
+  std::uint64_t                                       task_id     = 0;
+  sl_element_id_t                                     element_id  = 0;
+  std::uint64_t                                       session_gen = 0;
+  bool                                                found       = false;
+  EditorSaveCheckpointCoordinator::SaveCheckpointLock save_lock;
   {
     std::scoped_lock lock(mutex_);
     auto             it = std::find_if(
@@ -257,6 +306,7 @@ void EditorSaveCheckpointService::HandleMaterialization(std::uint64_t           
     task_id     = it->task_id;
     element_id  = it->element_id;
     session_gen = it->session_generation;
+    save_lock   = std::move(it->save_lock);
     pending_saves_.erase(it);
   }
   if (!found) {
@@ -270,14 +320,13 @@ void EditorSaveCheckpointService::HandleMaterialization(std::uint64_t           
   if (ok && deps_.thumbnails) {
     deps_.thumbnails->Invalidate(element_id);
   }
-  FinishSave(request_id, session_gen, task_id, ok, msg, completion);
+  FinishSave(request_id, session_gen, task_id, ok, msg, completion, std::move(save_lock));
 }
 
-void EditorSaveCheckpointService::FinishSave(std::uint64_t request_id,
-                                             std::uint64_t session_generation,
-                                             std::uint64_t task_id, bool checkpoint_completed,
-                                             std::string              message,
-                                             SaveCheckpointCompletion completion) {
+void EditorSaveCheckpointService::FinishSave(
+    std::uint64_t request_id, std::uint64_t session_generation, std::uint64_t task_id,
+    bool checkpoint_completed, std::string message, SaveCheckpointCompletion completion,
+    EditorSaveCheckpointCoordinator::SaveCheckpointLock&& save_lock) {
   if (deps_.tasks && task_id != 0) {
     deps_.tasks->EndTask(task_id, checkpoint_completed, message);
   }
@@ -290,10 +339,14 @@ void EditorSaveCheckpointService::FinishSave(std::uint64_t request_id,
     result.error                = std::move(message);
     completion(result);
   }
+  // Explicit release after the terminal callback so the ownership interval
+  // includes EndTask + completion. Destructor would also release.
+  save_lock.Release();
 }
 
-auto EditorSaveCheckpointService::TakePendingSave(std::uint64_t request_id, std::uint64_t* task_id,
-                                                  SaveCheckpointCompletion* completion) -> bool {
+auto EditorSaveCheckpointService::TakePendingSave(
+    std::uint64_t request_id, std::uint64_t* task_id, SaveCheckpointCompletion* completion,
+    EditorSaveCheckpointCoordinator::SaveCheckpointLock* save_lock) -> bool {
   std::scoped_lock lock(mutex_);
   auto             it =
       std::find_if(pending_saves_.begin(), pending_saves_.end(),
@@ -306,6 +359,9 @@ auto EditorSaveCheckpointService::TakePendingSave(std::uint64_t request_id, std:
   }
   if (completion) {
     *completion = std::move(it->completion);
+  }
+  if (save_lock) {
+    *save_lock = std::move(it->save_lock);
   }
   pending_saves_.erase(it);
   return true;

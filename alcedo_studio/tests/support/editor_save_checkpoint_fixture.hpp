@@ -14,6 +14,7 @@
 #include <memory>
 #include <string>
 
+#include "app/editor_save_checkpoint_coordinator.hpp"
 #include "app/editor_save_checkpoint_service.hpp"
 #include "support/editor_session_test_ports.hpp"
 
@@ -28,7 +29,8 @@ class EditorSaveCheckpointFixture {
   EditorSaveCheckpointFixture(const EditorSaveCheckpointFixture&)            = delete;
   EditorSaveCheckpointFixture& operator=(const EditorSaveCheckpointFixture&) = delete;
 
-  /// Construct fake ports and the real EditorSaveCheckpointService.
+  /// Construct fake ports, a real project-owned coordinator, and the real
+  /// EditorSaveCheckpointService.
   ///
   /// Side effects: creates shared_ptr fakes and wires service dependencies.
   void SetUp();
@@ -37,6 +39,7 @@ class EditorSaveCheckpointFixture {
   void TearDown();
 
   /// Start one save checkpoint with the configured capture and completion sink.
+  /// Acquires the project-owned SaveCheckpointLock before Start (production path).
   ///
   /// @param element_id         Image element under save.
   /// @param session_generation Session generation stamped on the request.
@@ -66,7 +69,7 @@ class EditorSaveCheckpointFixture {
   }
   [[nodiscard]] auto thumbnails() -> FakeEditorThumbnailPort& { return *thumbnails_; }
   [[nodiscard]] auto history() -> FakeEditorHistoryPort& { return *history_; }
-  [[nodiscard]] auto coordinator() -> FakeSaveCheckpointCoordinator& { return *coordinator_; }
+  [[nodiscard]] auto coordinator() -> EditorSaveCheckpointCoordinator& { return *coordinator_; }
 
   /// When true, StartCheckpoint builds a request with a null capture.
   bool fail_capture = false;
@@ -80,13 +83,13 @@ class EditorSaveCheckpointFixture {
  private:
   auto MakeCapture() const -> std::shared_ptr<const EditorMiniGitSaveCapture>;
 
-  std::shared_ptr<FakeEditorTaskPort>          tasks_;
-  std::shared_ptr<FakeEditorJournalPort>       journal_;
-  std::shared_ptr<FakeEditorCheckpointStore>   checkpoint_store_;
-  std::shared_ptr<FakeEditorThumbnailPort>     thumbnails_;
-  std::shared_ptr<FakeEditorHistoryPort>       history_;
-  std::unique_ptr<FakeSaveCheckpointCoordinator> coordinator_;
-  std::unique_ptr<EditorSaveCheckpointService> service_;
+  std::shared_ptr<FakeEditorTaskPort>                tasks_;
+  std::shared_ptr<FakeEditorJournalPort>             journal_;
+  std::shared_ptr<FakeEditorCheckpointStore>         checkpoint_store_;
+  std::shared_ptr<FakeEditorThumbnailPort>           thumbnails_;
+  std::shared_ptr<FakeEditorHistoryPort>             history_;
+  std::shared_ptr<EditorSaveCheckpointCoordinator>   coordinator_;
+  std::unique_ptr<EditorSaveCheckpointService>       service_;
 };
 
 }  // namespace alcedo::test

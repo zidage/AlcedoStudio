@@ -49,12 +49,37 @@ void EditorSaveCheckpointCoordinator::SaveCheckpointLock::Release() {
 
 auto EditorSaveCheckpointCoordinator::TryAcquire(sl_element_id_t element_id) -> SaveCheckpointLock {
   std::scoped_lock lock(mutex_);
-  if (saving_) {
+  if (shutting_down_ || saving_) {
     return SaveCheckpointLock(this, element_id, false);
   }
   saving_         = true;
   active_element_ = element_id;
   return SaveCheckpointLock(this, element_id, true);
+}
+
+auto EditorSaveCheckpointCoordinator::AcquireBlocking(sl_element_id_t element_id)
+    -> SaveCheckpointLock {
+  std::unique_lock lock(mutex_);
+  condition_.wait(lock, [this] { return !saving_ || shutting_down_; });
+  if (shutting_down_) {
+    return SaveCheckpointLock(this, element_id, false);
+  }
+  saving_         = true;
+  active_element_ = element_id;
+  return SaveCheckpointLock(this, element_id, true);
+}
+
+void EditorSaveCheckpointCoordinator::Shutdown() {
+  {
+    std::scoped_lock lock(mutex_);
+    shutting_down_ = true;
+  }
+  condition_.notify_all();
+}
+
+auto EditorSaveCheckpointCoordinator::is_shutdown() const -> bool {
+  std::scoped_lock lock(mutex_);
+  return shutting_down_;
 }
 
 void EditorSaveCheckpointCoordinator::Release(sl_element_id_t element_id) {
@@ -79,18 +104,7 @@ auto EditorSaveCheckpointCoordinator::is_saving() const -> bool {
   return saving_;
 }
 
-// ── Blocking acquire ────────────────────────────────────────────────────────
-
-auto EditorSaveCheckpointCoordinator::AcquireBlocking(sl_element_id_t element_id)
-    -> SaveCheckpointLock {
-  std::unique_lock lock(mutex_);
-  condition_.wait(lock, [this] { return !saving_; });
-  saving_         = true;
-  active_element_ = element_id;
-  return SaveCheckpointLock(this, element_id, true);
-}
-
-// ── Free-function wrapper (kept for backward compatibility) ──────────────────
+// ── Free-function wrapper ───────────────────────────────────────────────────
 
 auto AcquireGlobalSaveLock(EditorSaveCheckpointCoordinator& coordinator, sl_element_id_t element_id)
     -> EditorSaveCheckpointCoordinator::SaveCheckpointLock {

@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "app/editor_mini_git_materializer.hpp"
+#include "app/editor_save_checkpoint_coordinator.hpp"
 #include "app/project_service.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
@@ -89,9 +90,18 @@ class EditorMiniGitProjectFixture {
   /// Count commit rows stored for the root of the given element.
   auto CountStoredCommits(sl_element_id_t element_id) -> std::uint64_t;
 
+  /// Run Materialize while holding the project-owned save lock for the capture
+  /// element. Matches the production precondition that EditorSaveCheckpointService
+  /// holds the lock across materialization.
+  auto MaterializeUnderSaveLock(const EditorMiniGitSaveCapture& capture,
+                                std::string* error = nullptr) -> EditorMiniGitMaterializeResult;
+
   [[nodiscard]] auto project() -> ProjectService& { return *project_; }
   [[nodiscard]] auto storage() -> const std::shared_ptr<StorageService>& { return storage_; }
   [[nodiscard]] auto materializer() -> EditorMiniGitMaterializer& { return *materializer_; }
+  [[nodiscard]] auto save_coordinator() -> EditorSaveCheckpointCoordinator& {
+    return *save_coordinator_;
+  }
   [[nodiscard]] auto root_dir() const -> const std::filesystem::path& { return root_dir_; }
   [[nodiscard]] auto db_path() const -> const std::filesystem::path& { return db_path_; }
   [[nodiscard]] auto meta_path() const -> const std::filesystem::path& { return meta_path_; }
@@ -122,11 +132,12 @@ class EditorMiniGitProjectFixture {
   std::filesystem::path                      root_dir_;
   std::filesystem::path                      db_path_;
   std::filesystem::path                      meta_path_;
-  std::unique_ptr<ProjectService>            project_;
-  std::shared_ptr<StorageService>            storage_;
-  std::unique_ptr<EditorMiniGitMaterializer> materializer_;
-  ImageRuntime                               image_a_;
-  ImageRuntime                               image_b_;
+  std::unique_ptr<ProjectService>                      project_;
+  std::shared_ptr<StorageService>                      storage_;
+  std::shared_ptr<EditorSaveCheckpointCoordinator>     save_coordinator_;
+  std::unique_ptr<EditorMiniGitMaterializer>           materializer_;
+  ImageRuntime                                         image_a_;
+  ImageRuntime                                         image_b_;
 };
 
 }  // namespace alcedo::test

@@ -22,11 +22,6 @@ void SetError(std::string* error, std::string message) {
   }
 }
 
-auto SharedCoordinator() -> std::shared_ptr<EditorSaveCheckpointCoordinator> {
-  static auto coordinator = std::make_shared<EditorSaveCheckpointCoordinator>();
-  return coordinator;
-}
-
 }  // namespace
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -43,26 +38,34 @@ auto MakeEditorSerializedPipelineState(const root_id_t& root_id, head_commit_has
 
 // ── Materializer ────────────────────────────────────────────────────────────
 
-EditorMiniGitMaterializer::EditorMiniGitMaterializer(std::shared_ptr<StorageService> storage)
+EditorMiniGitMaterializer::EditorMiniGitMaterializer(
+    std::shared_ptr<StorageService>                  storage,
+    std::shared_ptr<EditorSaveCheckpointCoordinator> coordinator)
     : storage_(std::move(storage)),
-      coordinator_(SharedCoordinator()),
+      coordinator_(std::move(coordinator)),
       writer_(std::make_unique<EditorMiniGitCommitWriter>(storage_)),
       recovery_(std::make_unique<EditorMiniGitJournalRecovery>(storage_)) {
   if (!storage_) {
     throw std::invalid_argument("EditorMiniGitMaterializer requires StorageService");
   }
+  if (!coordinator_) {
+    throw std::invalid_argument(
+        "EditorMiniGitMaterializer requires a project-owned EditorSaveCheckpointCoordinator");
+  }
 }
 
 auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capture,
                                             std::string* error) -> EditorMiniGitMaterializeResult {
+  // Precondition: the project-owned SaveCheckpointLock is already held by
+  // EditorSaveCheckpointService (or a focused test that serializes access).
+  // Do not re-acquire here — a second AcquireBlocking would deadlock on the
+  // same coordinator while the service still owns the lock.
   EditorMiniGitMaterializeResult result;
   if (capture.element_id == 0) {
     SetError(error, "mini-Git materialize requires an element id");
     result.error = error != nullptr ? *error : "missing element";
     return result;
   }
-
-  auto save_lock = AcquireGlobalSaveLock(*coordinator_, capture.element_id);
 
   try {
     capture.materialization.Validate();
@@ -161,13 +164,20 @@ auto EditorMiniGitMaterializer::RecoverAndMaterialize(sl_element_id_t           
     -> EditorMiniGitMaterializeResult {
   EditorMiniGitMaterializeResult result;
 
-  auto                           save_lock = AcquireGlobalSaveLock(*coordinator_, element_id);
+  // Recovery is not driven by EditorSaveCheckpointService, so it must take the
+  // project-owned lock itself. AcquireBlocking exits cleanly after Shutdown().
+  auto save_lock = coordinator_->AcquireBlocking(element_id);
+  if (!save_lock.owns_lock()) {
+    SetError(error, "project save checkpoint coordinator is shutting down");
+    result.error = error != nullptr ? *error : "save coordinator shutting down";
+    return result;
+  }
 
-  auto recovery_result                     = recovery_->Recover(element_id, journal_path, error);
-  result.accepted                          = recovery_result.accepted;
-  result.materialized                      = recovery_result.materialized;
-  result.error                             = recovery_result.error;
-  result.head_moved                        = recovery_result.materialized;
+  auto recovery_result = recovery_->Recover(element_id, journal_path, error);
+  result.accepted      = recovery_result.accepted;
+  result.materialized  = recovery_result.materialized;
+  result.error         = recovery_result.error;
+  result.head_moved    = recovery_result.materialized;
   return result;
 }
 

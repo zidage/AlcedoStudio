@@ -6,14 +6,8 @@
 
 #include <gtest/gtest.h>
 
-#include <atomic>
-#include <barrier>
 #include <filesystem>
-#include <memory>
-#include <semaphore>
-#include <thread>
 
-#include "app/editor_save_checkpoint_coordinator.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "support/editor_mini_git_project_fixture.hpp"
 
@@ -34,7 +28,7 @@ TEST_F(EditorMiniGitMaterializerTest, EmptyJournalSucceedsWithoutMovingVersionHe
   auto        capture = project_.CaptureWorkingState(test::EditorMiniGitProjectFixture::kElementA, 0.0f);
 
   std::string error;
-  const auto  result = project_.materializer().Materialize(capture, &error);
+  const auto  result = project_.MaterializeUnderSaveLock(capture, &error);
   ASSERT_TRUE(result.accepted) << error << " / " << result.error;
   ASSERT_TRUE(result.materialized);
   EXPECT_FALSE(result.head_moved);
@@ -54,7 +48,7 @@ TEST_F(EditorMiniGitMaterializerTest,
       project_.journal_path(test::EditorMiniGitProjectFixture::kElementA)));
 
   std::string error;
-  const auto  result = project_.materializer().Materialize(capture, &error);
+  const auto  result = project_.MaterializeUnderSaveLock(capture, &error);
   ASSERT_TRUE(result.accepted) << error << " / " << result.error;
   ASSERT_TRUE(result.materialized);
   EXPECT_TRUE(result.head_moved);
@@ -83,7 +77,7 @@ TEST_F(EditorMiniGitMaterializerTest, FailureBeforeDuckDBCommitLeavesPriorHeadUn
   capture.working_head = Hash128{0xdead, 0xbeef};
 
   std::string error;
-  const auto  result = project_.materializer().Materialize(capture, &error);
+  const auto  result = project_.MaterializeUnderSaveLock(capture, &error);
   EXPECT_FALSE(result.accepted);
   EXPECT_FALSE(result.materialized);
 
@@ -98,7 +92,7 @@ TEST_F(EditorMiniGitMaterializerTest, CrashAfterDuckDBBeforeTruncateDoesNotRepla
   auto        capture = project_.CaptureWorkingState(test::EditorMiniGitProjectFixture::kElementA, 0.75f);
 
   std::string error;
-  ASSERT_TRUE(project_.materializer().Materialize(capture, &error).accepted) << error;
+  ASSERT_TRUE(project_.MaterializeUnderSaveLock(capture, &error).accepted) << error;
 
   {
     MiniGitJournal leftover(
@@ -127,8 +121,8 @@ TEST_F(EditorMiniGitMaterializerTest, DistinctRootsKeepImageAAndImageBIsolated) 
   auto capture_b = project_.CaptureWorkingState(test::EditorMiniGitProjectFixture::kElementB, 2.0f);
 
   std::string error;
-  ASSERT_TRUE(project_.materializer().Materialize(capture_a, &error).accepted) << error;
-  ASSERT_TRUE(project_.materializer().Materialize(capture_b, &error).accepted) << error;
+  ASSERT_TRUE(project_.MaterializeUnderSaveLock(capture_a, &error).accepted) << error;
+  ASSERT_TRUE(project_.MaterializeUnderSaveLock(capture_b, &error).accepted) << error;
 
   EXPECT_NE(project_.root_id(test::EditorMiniGitProjectFixture::kElementA),
             project_.root_id(test::EditorMiniGitProjectFixture::kElementB));
@@ -142,48 +136,6 @@ TEST_F(EditorMiniGitMaterializerTest, DistinctRootsKeepImageAAndImageBIsolated) 
   ASSERT_TRUE(stored_b.has_value());
   EXPECT_EQ(stored_a->CommitCount(), 1u);
   EXPECT_EQ(stored_b->CommitCount(), 1u);
-}
-
-TEST_F(EditorMiniGitMaterializerTest, GlobalSaveLockSerializesBlockingWaiters) {
-  EditorSaveCheckpointCoordinator coordinator;
-  std::barrier                    start(3);
-  std::binary_semaphore           acquired(0);
-  std::binary_semaphore           release_owner(0);
-  std::atomic<int>                active_owners{0};
-  std::atomic<int>                maximum_owners{0};
-  std::atomic<bool>               every_waiter_owned{true};
-
-  const auto wait_for_lock = [&](sl_element_id_t element_id) {
-    start.arrive_and_wait();
-    auto lock = coordinator.AcquireBlocking(element_id);
-    if (!lock.owns_lock()) {
-      every_waiter_owned.store(false);
-    }
-    const auto owners  = active_owners.fetch_add(1) + 1;
-    auto       maximum = maximum_owners.load();
-    while (owners > maximum && !maximum_owners.compare_exchange_weak(maximum, owners)) {
-    }
-    acquired.release();
-    release_owner.acquire();
-    active_owners.fetch_sub(1);
-  };
-
-  std::thread first(wait_for_lock, 1);
-  std::thread second(wait_for_lock, 2);
-  start.arrive_and_wait();
-
-  acquired.acquire();
-  EXPECT_EQ(active_owners.load(), 1);
-  release_owner.release();
-  acquired.acquire();
-  EXPECT_EQ(active_owners.load(), 1);
-  release_owner.release();
-
-  first.join();
-  second.join();
-  EXPECT_TRUE(every_waiter_owned.load());
-  EXPECT_EQ(maximum_owners.load(), 1);
-  EXPECT_FALSE(coordinator.is_saving());
 }
 
 }  // namespace

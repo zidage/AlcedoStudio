@@ -23,10 +23,12 @@ void EditorSessionNavigationFixture::SetUp() {
   life_deps.history  = history_;
   lifecycle_         = std::make_unique<EditorSessionLifecycle>(std::move(life_deps));
 
+  save_coordinator_ = std::make_shared<EditorSaveCheckpointCoordinator>();
   EditorSaveCheckpointService::Dependencies save_deps;
   save_deps.journal          = journal_;
   save_deps.checkpoint_store = checkpoint_store_;
   save_deps.tasks            = tasks_;
+  save_deps.save_coordinator = save_coordinator_;
   save_service_              = std::make_unique<EditorSaveCheckpointService>(std::move(save_deps));
 
   // Render/edit exist only to satisfy the navigation constructor. They are not
@@ -47,11 +49,15 @@ void EditorSessionNavigationFixture::TearDown() {
   if (save_service_) {
     save_service_->CancelAndWait();
   }
+  if (save_coordinator_) {
+    save_coordinator_->Shutdown();
+  }
   nav_.reset();
   edit_.reset();
   render_.reset();
   save_service_.reset();
   lifecycle_.reset();
+  save_coordinator_.reset();
   render_submit_.reset();
   checkpoint_store_.reset();
   journal_.reset();

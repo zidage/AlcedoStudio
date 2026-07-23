@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 
+#include "app/editor_save_checkpoint_coordinator.hpp"
 #include "app/editor_session_ports.hpp"
 #include "type/type.hpp"
 
@@ -28,12 +29,21 @@ struct CheckpointTicket {
 };
 
 /// Request to start one editor save checkpoint. Built by the navigation
-/// controller after finalizing the open edit command and capturing the live
-/// serialized pipeline state.
+/// controller after acquiring the project-owned SaveCheckpointLock, finalizing
+/// the open edit command, and capturing the live serialized pipeline state.
+///
+/// Call-chain ownership: Navigation acquires the lock via
+/// EditorSaveCheckpointService::TryAcquireSaveLock before capture, moves that
+/// lock into this request, and Start owns it until the terminal completion
+/// callback returns.
 struct SaveCheckpointRequest {
   sl_element_id_t                                 element_id         = 0;
   std::uint64_t                                   session_generation = 0;
   std::shared_ptr<const EditorMiniGitSaveCapture> capture;
+  /// Pre-acquired project-wide save lock (from TryAcquireSaveLock). When empty,
+  /// Start attempts TryAcquire itself. Ownership moves into the service for the
+  /// full journal / materialize / thumbnail / completion path.
+  EditorSaveCheckpointCoordinator::SaveCheckpointLock save_lock;
 };
 
 /// Outcome of one save checkpoint. The completion callback receives this
@@ -55,13 +65,19 @@ using SaveCheckpointCompletion = std::function<void(const SaveCheckpointResult&)
 /// commit, and DuckDB materialization. Does not know about image B, pending
 /// navigation, session guards, render generations, adjustment state, or the
 /// facade. The completion callback is the sole channel back to the caller.
+///
+/// Global save lock: the project-owned EditorSaveCheckpointCoordinator is
+/// injected at construction. A SaveCheckpointLock is held from Start until the
+/// terminal callback returns (success, failure, cancel, or exception path).
 class EditorSaveCheckpointService final {
  public:
   struct Dependencies {
-    std::shared_ptr<IEditorJournalPort>     journal;
-    std::shared_ptr<IEditorCheckpointStore> checkpoint_store;
-    std::shared_ptr<IEditorThumbnailPort>   thumbnails;
-    std::shared_ptr<IEditorTaskPort>        tasks;
+    std::shared_ptr<IEditorJournalPort>               journal;
+    std::shared_ptr<IEditorCheckpointStore>           checkpoint_store;
+    std::shared_ptr<IEditorThumbnailPort>             thumbnails;
+    std::shared_ptr<IEditorTaskPort>                  tasks;
+    /// Project-owned global save lock. Shared with EditorMiniGitMaterializer.
+    std::shared_ptr<EditorSaveCheckpointCoordinator> save_coordinator;
   };
 
   explicit EditorSaveCheckpointService(Dependencies dependencies);
@@ -70,17 +86,27 @@ class EditorSaveCheckpointService final {
   EditorSaveCheckpointService(const EditorSaveCheckpointService&)            = delete;
   EditorSaveCheckpointService& operator=(const EditorSaveCheckpointService&) = delete;
 
+  /// Non-blocking attempt to take the project-owned save lock for element_id.
+  /// Call on the GUI thread before CaptureSaveCheckpoint so capture and the
+  /// subsequent Start share one ownership interval. Returns a lock whose
+  /// owns_lock() is false when another checkpoint owns the lock or Shutdown
+  /// has begun. The move-only lock is the ownership authority.
+  [[nodiscard]] auto TryAcquireSaveLock(sl_element_id_t element_id)
+      -> EditorSaveCheckpointCoordinator::SaveCheckpointLock;
+
   /// Begin one save checkpoint: start the background task, then commit the
-  /// journal and materialize. Returns a valid CheckpointTicket on success, or
-  /// an invalid ticket with an error on failure. The completion callback is
-  /// invoked exactly once, either synchronously (legacy synchronous journal
-  /// ports) or asynchronously. On synchronous failure the ticket is invalid
-  /// and completion was already invoked with checkpoint_completed=false.
+  /// journal and materialize. Holds the project-owned SaveCheckpointLock (from
+  /// the request or acquired here) until the terminal completion returns.
+  /// Returns a valid CheckpointTicket on success, or an invalid ticket with an
+  /// error on failure. The completion callback is invoked exactly once, either
+  /// synchronously (legacy synchronous journal ports) or asynchronously. On
+  /// synchronous failure the ticket is invalid and completion was already
+  /// invoked with checkpoint_completed=false.
   auto Start(SaveCheckpointRequest request, SaveCheckpointCompletion completion)
       -> CheckpointTicket;
 
   /// Stop accepting new callbacks and join/cancel outstanding work. After this
-  /// returns, no completion callback will fire.
+  /// returns, no completion callback will fire. Pending save locks are released.
   void               CancelAndWait();
 
   /// Invoked by the navigation controller when a checkpoint completes. The
@@ -103,12 +129,14 @@ class EditorSaveCheckpointService final {
   };
 
   struct PendingSave {
-    std::uint64_t                                   request_id         = 0;
-    std::uint64_t                                   session_generation = 0;
-    sl_element_id_t                                 element_id         = 0;
-    std::uint64_t                                   task_id            = 0;
-    std::shared_ptr<const EditorMiniGitSaveCapture> capture;
-    SaveCheckpointCompletion                        completion;
+    std::uint64_t                                         request_id         = 0;
+    std::uint64_t                                         session_generation = 0;
+    sl_element_id_t                                       element_id         = 0;
+    std::uint64_t                                         task_id            = 0;
+    std::shared_ptr<const EditorMiniGitSaveCapture>       capture;
+    /// Held until the terminal completion callback returns.
+    EditorSaveCheckpointCoordinator::SaveCheckpointLock   save_lock;
+    SaveCheckpointCompletion                              completion;
   };
 
   void HandleJournalCommit(std::uint64_t request_id, EditorJournalCommitOutcome outcome,
@@ -117,9 +145,11 @@ class EditorSaveCheckpointService final {
                              SaveCheckpointCompletion completion);
   void FinishSave(std::uint64_t request_id, std::uint64_t session_generation, std::uint64_t task_id,
                   bool checkpoint_completed, std::string message,
-                  SaveCheckpointCompletion completion);
+                  SaveCheckpointCompletion                              completion,
+                  EditorSaveCheckpointCoordinator::SaveCheckpointLock&& save_lock);
   auto TakePendingSave(std::uint64_t request_id, std::uint64_t* task_id,
-                       SaveCheckpointCompletion* completion) -> bool;
+                       SaveCheckpointCompletion*                          completion,
+                       EditorSaveCheckpointCoordinator::SaveCheckpointLock* save_lock) -> bool;
 
   Dependencies                       deps_;
   std::shared_ptr<AsyncCallbackGate> callback_gate_;

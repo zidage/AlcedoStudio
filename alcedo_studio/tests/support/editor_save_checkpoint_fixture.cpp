@@ -14,19 +14,23 @@ void EditorSaveCheckpointFixture::SetUp() {
   checkpoint_store_ = std::make_shared<FakeEditorCheckpointStore>();
   thumbnails_       = std::make_shared<FakeEditorThumbnailPort>();
   history_          = std::make_shared<FakeEditorHistoryPort>();
-  coordinator_      = std::make_unique<FakeSaveCheckpointCoordinator>();
+  coordinator_      = std::make_shared<EditorSaveCheckpointCoordinator>();
 
   EditorSaveCheckpointService::Dependencies deps;
   deps.journal          = journal_;
   deps.checkpoint_store = checkpoint_store_;
   deps.thumbnails       = thumbnails_;
   deps.tasks            = tasks_;
+  deps.save_coordinator = coordinator_;
   service_              = std::make_unique<EditorSaveCheckpointService>(std::move(deps));
 }
 
 void EditorSaveCheckpointFixture::TearDown() {
   if (service_) {
     service_->CancelAndWait();
+  }
+  if (coordinator_) {
+    coordinator_->Shutdown();
   }
   service_.reset();
   coordinator_.reset();
@@ -56,14 +60,19 @@ auto EditorSaveCheckpointFixture::StartCheckpoint(sl_element_id_t         elemen
   // Materialization failure is applied by CompleteDatabaseWrite; start failure is
   // an explicit switch on checkpoint_store_->fail_materialize_start.
 
-  if (coordinator_) {
-    coordinator_->TryAcquire(element_id);
+  // Acquire the project-owned lock before building the request, matching the
+  // production navigation path (lock before capture, hold until terminal).
+  auto save_lock = service_->TryAcquireSaveLock(element_id);
+  if (!save_lock.owns_lock() && !fail_task_start) {
+    // Leave Start to report coordinator contention when the test needs a
+    // failure path; still attempt Start so service diagnostics stay consistent.
   }
 
   SaveCheckpointRequest request;
   request.element_id         = element_id;
   request.session_generation = session_generation;
   request.capture            = MakeCapture();
+  request.save_lock          = std::move(save_lock);
   return service_->Start(std::move(request), std::move(completion));
 }
 
@@ -85,17 +94,11 @@ void EditorSaveCheckpointFixture::CompleteDatabaseWrite(bool materialized, std::
     }
   }
   checkpoint_store_->CompleteMaterialization(materialized, std::move(error));
-  if (coordinator_ && coordinator_->saving) {
-    coordinator_->Release(coordinator_->active_element_id);
-  }
 }
 
 void EditorSaveCheckpointFixture::CancelAndWait() {
   if (service_) {
     service_->CancelAndWait();
-  }
-  if (coordinator_ && coordinator_->saving) {
-    coordinator_->Release(coordinator_->active_element_id);
   }
 }
 

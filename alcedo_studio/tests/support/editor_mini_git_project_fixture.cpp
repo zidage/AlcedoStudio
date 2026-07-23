@@ -160,9 +160,10 @@ auto EditorMiniGitProjectFixture::RuntimeFor(sl_element_id_t element_id) const
 }
 
 void EditorMiniGitProjectFixture::OpenProjectObjects() {
-  project_      = std::make_unique<ProjectService>(db_path_, meta_path_);
-  storage_      = project_->GetStorageService();
-  materializer_ = std::make_unique<EditorMiniGitMaterializer>(storage_);
+  project_          = std::make_unique<ProjectService>(db_path_, meta_path_);
+  storage_          = project_->GetStorageService();
+  save_coordinator_ = std::make_shared<EditorSaveCheckpointCoordinator>();
+  materializer_     = std::make_unique<EditorMiniGitMaterializer>(storage_, save_coordinator_);
 }
 
 void EditorMiniGitProjectFixture::CloseProjectObjects() {
@@ -173,8 +174,27 @@ void EditorMiniGitProjectFixture::CloseProjectObjects() {
   image_a_.graph.reset();
   image_b_.graph.reset();
   materializer_.reset();
+  if (save_coordinator_) {
+    save_coordinator_->Shutdown();
+  }
+  save_coordinator_.reset();
   storage_.reset();
   project_.reset();
+}
+
+auto EditorMiniGitProjectFixture::MaterializeUnderSaveLock(const EditorMiniGitSaveCapture& capture,
+                                                           std::string* error)
+    -> EditorMiniGitMaterializeResult {
+  auto lock = save_coordinator_->AcquireBlocking(capture.element_id);
+  if (!lock.owns_lock()) {
+    if (error != nullptr) {
+      *error = "save coordinator refused MaterializeUnderSaveLock";
+    }
+    EditorMiniGitMaterializeResult result;
+    result.error = error != nullptr ? *error : "save lock unavailable";
+    return result;
+  }
+  return materializer_->Materialize(capture, error);
 }
 
 void EditorMiniGitProjectFixture::CreatePersistedImage(ImageRuntime&       runtime,

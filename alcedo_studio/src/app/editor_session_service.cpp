@@ -19,7 +19,7 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
           EditorSessionLifecycle::Dependencies{dependencies_.pipeline, dependencies_.history}),
       save_service_(EditorSaveCheckpointService::Dependencies{
           dependencies_.journal, dependencies_.checkpoint_store, dependencies_.thumbnails,
-          dependencies_.tasks}),
+          dependencies_.tasks, dependencies_.save_coordinator}),
       render_(EditorSessionRenderController::Dependencies{
           dependencies_.render,
           [this](const EditorRenderEvent& event) {

@@ -3,8 +3,9 @@
 Date: 2026-07-22
 
 Status: approved design; 6C-1, 6C-2, 6C-2-Fix, 6C-3, 6C-4, and 6C-5 implemented.
-The Phase 6C-5 qualification plan below is blocking. Do not begin 6C-6 checkout, session
-switching, or garbage collection until every qualification phase is complete.
+Phase 6C-5 qualification Phase 1 and Phase 2A are implemented. The remaining qualification
+phases (2B onward) are blocking. Do not begin 6C-6 checkout, session switching, or garbage
+collection until every qualification phase is complete.
 
 Related documents:
 
@@ -1121,23 +1122,23 @@ Files:
 
 Checklist:
 
-- [ ] Remove the function-static coordinator currently returned by `SharedCoordinator()`.
-- [ ] Construct one `EditorSaveCheckpointCoordinator` with the open editor/project services in
+- [x] Remove the function-static coordinator currently returned by `SharedCoordinator()`.
+- [x] Construct one `EditorSaveCheckpointCoordinator` with the open editor/project services in
       `ApplicationModuleHost`, then inject that shared instance into `EditorSaveCheckpointService`.
-- [ ] Acquire a `SaveCheckpointLock` before capturing A. Keep it until DuckDB write, journal
+- [x] Acquire a `SaveCheckpointLock` before capturing A. Keep it until DuckDB write, journal
       truncation, thumbnail invalidation scheduling, and the terminal callback have all finished.
-- [ ] Wait with `std::condition_variable` or an equivalent blocking primitive. Delete the
+- [x] Wait with `std::condition_variable` or an equivalent blocking primitive. Delete the
       `std::this_thread::yield()` loop. Shutdown must wake and join/cancel waiting work.
-- [ ] Do not expose a second boolean such as `isSaving` as ownership. The move-only lock object is the
+- [x] Do not expose a second boolean such as `isSaving` as ownership. The move-only lock object is the
       owner; `active_element_id()` is diagnostics only.
 
 Add target `EditorSaveCheckpointCoordinatorTest` with these tests:
 
-- [ ] `TwoThreadsCannotOwnTheGlobalSaveLockAtTheSameTime`: use two real threads, a barrier, and an
+- [x] `TwoThreadsCannotOwnTheGlobalSaveLockAtTheSameTime`: use two real threads, a barrier, and an
       atomic active-owner count; assert the maximum is exactly one.
-- [ ] `SaveCheckpointLockReleasesAfterSuccessFailureExceptionAndMove`: exercise normal destruction,
+- [x] `SaveCheckpointLockReleasesAfterSuccessFailureExceptionAndMove`: exercise normal destruction,
       explicit failure return, thrown exception, move construction, and move assignment.
-- [ ] `WaitingSaveStopsCleanlyWhenProjectShutsDown`: no sleep; use a condition/barrier to prove the
+- [x] `WaitingSaveStopsCleanlyWhenProjectShutsDown`: no sleep; use a condition/barrier to prove the
       waiter exits and no thread remains joinable.
 
 ##### Phase 2B - Capture one exact journal range

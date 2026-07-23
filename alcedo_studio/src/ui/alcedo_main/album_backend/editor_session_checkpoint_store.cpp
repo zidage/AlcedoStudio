@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "app/editor_mini_git_materializer.hpp"
+#include "app/editor_save_checkpoint_coordinator.hpp"
 
 namespace alcedo::ui {
 
@@ -31,12 +32,14 @@ auto EditorSessionCheckpointStore::EnsureMaterializer()
     -> std::shared_ptr<alcedo::EditorMiniGitMaterializer> {
   std::scoped_lock lock(mutex_);
   if (!services_.storage_service) return nullptr;
+  if (!services_.save_coordinator) return nullptr;
   auto storage = services_.storage_service();
   if (!storage) return nullptr;
   if (materializer_ && materializer_storage_ == storage) return materializer_;
   try {
     materializer_storage_ = storage;
-    materializer_         = std::make_shared<alcedo::EditorMiniGitMaterializer>(std::move(storage));
+    materializer_         = std::make_shared<alcedo::EditorMiniGitMaterializer>(
+        std::move(storage), services_.save_coordinator);
   } catch (...) {
     materializer_.reset();
     materializer_storage_.reset();

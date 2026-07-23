@@ -110,13 +110,15 @@ class IEditorSessionBackend {
 class EditorSessionService final : public IEditorSessionBackend {
  public:
   struct Dependencies {
-    std::shared_ptr<IEditorPipelinePort>     pipeline;
-    std::shared_ptr<IEditorHistoryPort>      history;
-    std::shared_ptr<IEditorTaskPort>         tasks;
-    std::shared_ptr<IEditorJournalPort>      journal;
-    std::shared_ptr<IEditorCheckpointStore>  checkpoint_store;
-    std::shared_ptr<IEditorThumbnailPort>    thumbnails;
-    std::shared_ptr<IEditorRenderSubmitPort> render;
+    std::shared_ptr<IEditorPipelinePort>                 pipeline;
+    std::shared_ptr<IEditorHistoryPort>                  history;
+    std::shared_ptr<IEditorTaskPort>                     tasks;
+    std::shared_ptr<IEditorJournalPort>                  journal;
+    std::shared_ptr<IEditorCheckpointStore>              checkpoint_store;
+    std::shared_ptr<IEditorThumbnailPort>                thumbnails;
+    std::shared_ptr<IEditorRenderSubmitPort>             render;
+    /// Project-owned global save lock shared with Mini-Git materialization.
+    std::shared_ptr<EditorSaveCheckpointCoordinator>    save_coordinator;
   };
 
   using ResultObserver = std::function<void(const EditorSessionResult&)>;

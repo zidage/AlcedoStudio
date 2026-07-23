@@ -1408,6 +1408,7 @@ def_library(EditorSaveCheckpointService
     SOURCES
         app/editor_save_checkpoint_service.cpp
         include/app/editor_save_checkpoint_service.hpp
+    PUBLIC_DEPS EditorSaveCheckpointCoordinator
 )
 
 # Editor session lifecycle owner. Owns session state,

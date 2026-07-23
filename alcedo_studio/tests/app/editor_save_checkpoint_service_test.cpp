@@ -164,5 +164,65 @@ TEST_F(EditorSaveCheckpointServiceTest, StaleSessionGenerationIsIgnoredByOnCheck
   EXPECT_FALSE(fixture_.service().active());
 }
 
+/// The project-owned save lock is held from Start through the terminal callback.
+TEST_F(EditorSaveCheckpointServiceTest, GlobalSaveLockHeldUntilTerminalCallback) {
+  bool completion_called = false;
+  const auto ticket =
+      fixture_.StartCheckpoint(42, 7, [&](const SaveCheckpointResult&) { completion_called = true; });
+  ASSERT_TRUE(ticket.valid());
+  EXPECT_TRUE(fixture_.coordinator().is_saving());
+  EXPECT_EQ(fixture_.coordinator().active_element_id(), 42u);
+
+  fixture_.CompleteJournalTruncate(true);
+  EXPECT_FALSE(completion_called);
+  EXPECT_TRUE(fixture_.coordinator().is_saving());
+
+  fixture_.CompleteDatabaseWrite(true);
+  EXPECT_TRUE(completion_called);
+  EXPECT_FALSE(fixture_.coordinator().is_saving());
+  EXPECT_EQ(fixture_.coordinator().active_element_id(), 0u);
+}
+
+/// A second Start cannot take the global lock while the first save still owns it.
+TEST_F(EditorSaveCheckpointServiceTest, SecondStartFailsWhileGlobalSaveLockIsHeld) {
+  bool first_done  = false;
+  bool second_done = false;
+  SaveCheckpointResult second_result;
+
+  const auto first =
+      fixture_.StartCheckpoint(42, 7, [&](const SaveCheckpointResult&) { first_done = true; });
+  ASSERT_TRUE(first.valid());
+  EXPECT_TRUE(fixture_.coordinator().is_saving());
+
+  const auto second = fixture_.StartCheckpoint(43, 8, [&](const SaveCheckpointResult& result) {
+    second_done   = true;
+    second_result = result;
+  });
+  EXPECT_FALSE(second.valid());
+  EXPECT_TRUE(second_done);
+  EXPECT_FALSE(second_result.checkpoint_completed);
+  EXPECT_NE(second_result.error.find("global save lock"), std::string::npos);
+
+  fixture_.CompleteJournalTruncate(true);
+  fixture_.CompleteDatabaseWrite(true);
+  EXPECT_TRUE(first_done);
+  EXPECT_FALSE(fixture_.coordinator().is_saving());
+}
+
+/// CancelAndWait releases the project-owned save lock without firing completion.
+TEST_F(EditorSaveCheckpointServiceTest, CancelAndWaitReleasesGlobalSaveLock) {
+  bool completion_called = false;
+  ASSERT_TRUE(fixture_
+                  .StartCheckpoint(42, 7, [&](const SaveCheckpointResult&) {
+                    completion_called = true;
+                  })
+                  .valid());
+  EXPECT_TRUE(fixture_.coordinator().is_saving());
+
+  fixture_.CancelAndWait();
+  EXPECT_FALSE(completion_called);
+  EXPECT_FALSE(fixture_.coordinator().is_saving());
+}
+
 }  // namespace
 }  // namespace alcedo

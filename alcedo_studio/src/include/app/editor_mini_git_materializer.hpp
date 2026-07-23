@@ -27,10 +27,11 @@ class EditorSaveCheckpointCoordinator;
 /// snapshot. Materialization never rebuilds or mutates a pipeline executor; it
 /// only validates the journal fold against these values and writes DuckDB.
 ///
-/// Owner/lifetime: built by the save path on the caller/GUI thread, then copied
-/// into the worker request. journal_records is a snapshot of the exact prefix
-/// being saved; an edit finalized after capture must not appear in this range
-/// and must not be removed by truncating it.
+/// Owner/lifetime: built by the save path on the caller/GUI thread while the
+/// project-owned SaveCheckpointLock is held, then copied into the worker
+/// request. journal_records is a snapshot of the exact prefix being saved; an
+/// edit finalized after capture must not appear in this range and must not be
+/// removed by truncating it.
 struct EditorMiniGitSaveCapture {
   sl_element_id_t                   element_id         = 0;
   std::uint64_t                     session_generation = 0;
@@ -70,21 +71,29 @@ struct EditorMiniGitMaterializeResult {
 /// truncation). This class owns no mutable state beyond its dependencies;
 /// the three composed types own their own state.
 ///
-/// Thread context: call Materialize / RecoverAndMaterialize from the save
-/// worker thread while the global save lock is held.
+/// Thread context: call Materialize from the save worker while the
+/// project-owned SaveCheckpointLock is already held by
+/// EditorSaveCheckpointService (Materialize does not re-acquire). Call
+/// RecoverAndMaterialize from the recovery path; it acquires the project-owned
+/// lock with AcquireBlocking and releases it before returning.
 class EditorMiniGitMaterializer final {
  public:
-  /// @param storage  Non-null StorageService used by the composed types.
-  explicit EditorMiniGitMaterializer(std::shared_ptr<StorageService> storage);
+  /// @param storage      Non-null StorageService used by the composed types.
+  /// @param coordinator  Project-owned save lock. Required; materialization and
+  ///                     recovery share one coordinator per open project.
+  EditorMiniGitMaterializer(std::shared_ptr<StorageService>                  storage,
+                            std::shared_ptr<EditorSaveCheckpointCoordinator> coordinator);
 
   /// Validate the journal fold against the capture and write commits, Version
   /// head, serialized pipeline state, and recovery metadata in one DuckDB
   /// transaction. Truncates the saved journal prefix only after DuckDB success.
   ///
-  /// Caller thread: the save worker (the global save lock is acquired here).
-  /// On return the journal file is truncated iff materialized is true; on any
-  /// failure the journal is left untouched and usable for retry or recovery.
-  /// No pipeline executor is replayed or mutated.
+  /// Caller thread: the save worker. Precondition: the project-owned
+  /// SaveCheckpointLock for capture.element_id is already held by the save
+  /// orchestrator (this method does not acquire it). On return the journal file
+  /// is truncated iff materialized is true; on any failure the journal is left
+  /// untouched and usable for retry or recovery. No pipeline executor is
+  /// replayed or mutated.
   auto Materialize(const EditorMiniGitSaveCapture& capture, std::string* error = nullptr)
       -> EditorMiniGitMaterializeResult;
 
@@ -92,9 +101,11 @@ class EditorMiniGitMaterializer final {
   /// skip the already-materialized journal prefix, fold remaining records,
   /// materialize, then truncate. Never inserts a commit twice.
   ///
-  /// Caller thread: editor open / recovery path. On return the journal file is
-  /// truncated iff materialized is true; on failure the journal is left intact.
-  /// No pipeline executor is replayed or mutated.
+  /// Caller thread: editor open / recovery path. Acquires the project-owned
+  /// save lock with AcquireBlocking and holds it until return. On shutdown the
+  /// lock is not granted and recovery fails without mutating DuckDB or the
+  /// journal. On success the journal file is truncated iff materialized is
+  /// true; on failure the journal is left intact.
   auto RecoverAndMaterialize(sl_element_id_t element_id, const std::filesystem::path& journal_path,
                              std::string* error = nullptr) -> EditorMiniGitMaterializeResult;
 
