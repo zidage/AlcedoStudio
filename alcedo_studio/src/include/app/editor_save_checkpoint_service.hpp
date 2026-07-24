@@ -35,8 +35,7 @@ struct CheckpointTicket {
 ///
 /// Call-chain ownership: Navigation acquires the lock via
 /// EditorSaveCheckpointService::TryAcquireSaveLock before capture, moves that
-/// lock into this request, and Start owns it until the terminal completion
-/// callback returns.
+/// lock into this request, and Start owns it through the durable save work.
 struct SaveCheckpointRequest {
   sl_element_id_t                                 element_id         = 0;
   std::uint64_t                                   session_generation = 0;
@@ -77,8 +76,10 @@ using SaveCheckpointCompletion = std::function<void(const SaveCheckpointResult&)
 /// facade. The completion callback is the sole channel back to the caller.
 ///
 /// Global save lock: the project-owned EditorSaveCheckpointCoordinator is
-/// injected at construction. A SaveCheckpointLock is held from Start until the
-/// terminal callback returns (success, failure, cancel, or exception path).
+/// injected at construction. A SaveCheckpointLock is held from Start through
+/// durable journal commit, materialization, and thumbnail invalidation. It is
+/// released before the terminal callback so navigation may recover another
+/// image through the same coordinator.
 class EditorSaveCheckpointService final {
  public:
   struct Dependencies {
@@ -106,7 +107,8 @@ class EditorSaveCheckpointService final {
 
   /// Begin one save checkpoint: start the background task, then commit the
   /// journal and materialize. Holds the project-owned SaveCheckpointLock (from
-  /// the request or acquired here) until the terminal completion returns.
+  /// the request or acquired here) through durable save work, then releases it
+  /// before the terminal completion callback.
   /// Returns a valid CheckpointTicket on success, or an invalid ticket with an
   /// error on failure. The completion callback is invoked exactly once, either
   /// synchronously (legacy synchronous journal ports) or asynchronously. On
@@ -147,7 +149,7 @@ class EditorSaveCheckpointService final {
     std::uint64_t                                         task_id            = 0;
     std::shared_ptr<const EditorMiniGitSaveCapture>       capture;
     std::optional<std::uint64_t>                          last_journal_sequence;
-    /// Held until the terminal completion callback returns.
+    /// Held through durable save work; released before terminal completion.
     EditorSaveCheckpointCoordinator::SaveCheckpointLock   save_lock;
     SaveCheckpointCompletion                              completion;
   };

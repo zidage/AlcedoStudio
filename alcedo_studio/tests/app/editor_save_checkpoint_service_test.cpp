@@ -176,11 +176,14 @@ TEST_F(EditorSaveCheckpointServiceTest, StaleSessionGenerationIsIgnoredByOnCheck
   EXPECT_FALSE(fixture_.service().active());
 }
 
-/// The project-owned save lock is held from Start through the terminal callback.
-TEST_F(EditorSaveCheckpointServiceTest, GlobalSaveLockHeldUntilTerminalCallback) {
-  bool completion_called = false;
-  const auto ticket =
-      fixture_.StartCheckpoint(42, 7, [&](const SaveCheckpointResult&) { completion_called = true; });
+/// Navigation callbacks can recover the next image through the same coordinator.
+TEST_F(EditorSaveCheckpointServiceTest, GlobalSaveLockReleasesBeforeTerminalCallback) {
+  bool       completion_called           = false;
+  bool       lock_released_in_completion = false;
+  const auto ticket = fixture_.StartCheckpoint(42, 7, [&](const SaveCheckpointResult&) {
+    completion_called           = true;
+    lock_released_in_completion = !fixture_.coordinator().is_saving();
+  });
   ASSERT_TRUE(ticket.valid());
   EXPECT_TRUE(fixture_.coordinator().is_saving());
   EXPECT_EQ(fixture_.coordinator().active_element_id(), 42u);
@@ -191,6 +194,7 @@ TEST_F(EditorSaveCheckpointServiceTest, GlobalSaveLockHeldUntilTerminalCallback)
 
   fixture_.CompleteDatabaseWrite(true);
   EXPECT_TRUE(completion_called);
+  EXPECT_TRUE(lock_released_in_completion);
   EXPECT_FALSE(fixture_.coordinator().is_saving());
   EXPECT_EQ(fixture_.coordinator().active_element_id(), 0u);
 }
@@ -323,4 +327,3 @@ TEST_F(EditorSaveCheckpointServiceTest, CapturePointerReachesCheckpointStoreWith
 
 }  // namespace
 }  // namespace alcedo
-

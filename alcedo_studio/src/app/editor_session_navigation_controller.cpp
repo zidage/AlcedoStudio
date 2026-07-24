@@ -241,8 +241,8 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
       }
     }
     // Project-owned global save lock is taken before capture so journal prefix
-    // capture, DuckDB materialize, truncate, thumbnail, and terminal callback
-    // share one ownership interval (Phase 2A).
+    // capture, DuckDB materialize, truncate, and thumbnail invalidation share
+    // one ownership interval (Phase 2A).
     auto save_lock = save_service_.TryAcquireSaveLock(identity.element_id);
     if (!save_lock.owns_lock()) {
       return CheckpointTicket{};

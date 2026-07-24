@@ -57,9 +57,10 @@ auto EditorSaveCheckpointService::TryAcquireSaveLock(sl_element_id_t element_id)
 
 auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
                                         SaveCheckpointCompletion completion) -> CheckpointTicket {
-  // Hold the project-owned save lock for the entire Start → terminal-callback
-  // interval. Prefer a pre-acquired lock (taken before capture on the GUI
-  // thread); otherwise TryAcquire here. Never block the GUI thread.
+  // Hold the project-owned save lock through journal commit, materialization,
+  // and thumbnail invalidation. Prefer a pre-acquired lock (taken before
+  // capture on the GUI thread); otherwise TryAcquire here. Never block the GUI
+  // thread.
   EditorSaveCheckpointCoordinator::SaveCheckpointLock save_lock = std::move(request.save_lock);
   if (!save_lock.owns_lock() && deps_.save_coordinator) {
     save_lock = deps_.save_coordinator->TryAcquire(request.element_id);
@@ -227,10 +228,10 @@ void EditorSaveCheckpointService::OnCheckpointFinished(const SaveCheckpointResul
     deps_.tasks->EndTask(task_id, result.checkpoint_completed,
                          result.error.empty() ? "checkpoint finished" : result.error);
   }
+  save_lock.Release();
   if (completion) {
     completion(result);
   }
-  // Lock released when save_lock leaves this scope, after the terminal callback.
 }
 
 void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t              request_id,
@@ -365,6 +366,10 @@ void EditorSaveCheckpointService::FinishSave(
   if (deps_.tasks && task_id != 0) {
     deps_.tasks->EndTask(task_id, checkpoint_completed, message);
   }
+  // Navigation completion may open another image and recover its Mini-Git
+  // journal. That recovery takes the same coordinator, so release after all
+  // durable save work and before invoking the callback.
+  save_lock.Release();
   if (completion) {
     SaveCheckpointResult result;
     result.request_id             = request_id;
@@ -375,9 +380,6 @@ void EditorSaveCheckpointService::FinishSave(
     result.last_journal_sequence  = last_journal_sequence;
     completion(result);
   }
-  // Explicit release after the terminal callback so the ownership interval
-  // includes EndTask + completion. Destructor would also release.
-  save_lock.Release();
 }
 
 auto EditorSaveCheckpointService::TakePendingSave(

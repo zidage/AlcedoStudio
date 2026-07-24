@@ -18,7 +18,9 @@ namespace alcedo {
 /// DuckDB I/O, journal folding, or pipeline work; it only grants or withholds
 /// ownership. Callers acquire a SaveCheckpointLock before capturing a Mini-Git
 /// journal prefix and hold it until DuckDB write, journal truncation, thumbnail
-/// invalidation scheduling, and the terminal callback have all finished.
+/// invalidation scheduling, and durable save work have all finished. Terminal
+/// callbacks run after release so image navigation may acquire the same lock
+/// for Mini-Git recovery.
 ///
 /// Ownership model: the move-only SaveCheckpointLock is the sole ownership
 /// authority. active_element_id() and is_saving() are diagnostics only and must
