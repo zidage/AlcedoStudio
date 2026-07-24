@@ -88,6 +88,17 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Aggregate coordinator diagnostics (reason, replace/cancel counts, last
   // rejection, last submitted role). Never includes pipeline task pointers.
   Q_PROPERTY(QVariantMap renderDiagnostics READ render_diagnostics NOTIFY StateChanged)
+  /// Phase 6C-7: read-only field-value snapshot for panel loading. Keys are
+  /// stable field identifiers (e.g. "exposure", "contrast"); values are the
+  /// parsed JSON params. Published after open, checkout, undo, redo, recovery,
+  /// Paste, and Merge. Panels load from this snapshot via loadFromSnapshot().
+  Q_PROPERTY(QVariantMap adjustmentSnapshot READ adjustment_snapshot NOTIFY
+                 AdjustmentSnapshotChanged)
+  /// Monotonic revision counter incremented on every snapshot publication.
+  /// Panels use this to skip re-loading an already-applied snapshot.
+  Q_PROPERTY(quint64 snapshotRevision READ snapshot_revision NOTIFY
+                 AdjustmentSnapshotChanged)
+
 
  public:
   explicit EditorSessionController(EditorController* editor = nullptr, QObject* parent = nullptr);
@@ -114,6 +125,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] double     filmstrip_expanded_height() const { return filmstrip_expanded_height_; }
   [[nodiscard]] QString    active_adjustment_panel() const { return active_adjustment_panel_; }
   [[nodiscard]] QString    history_panel_page() const { return history_panel_page_; }
+  // Phase 6C-7: load panel state from the backend adjustment snapshot.
+  [[nodiscard]] auto adjustment_snapshot() const -> QVariantMap;
+  [[nodiscard]] auto snapshot_revision() const -> quint64 { return snapshot_revision_; }
+
   [[nodiscard]] bool       presentation_viewport_bound() const {
     return presentation_viewport_ != nullptr;
   }
@@ -178,6 +193,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
 
  signals:
   void StateChanged();
+  // Phase 6C-7: emitted when the backend adjustment snapshot is published.
+  void AdjustmentSnapshotChanged();
+
   void FilmstripUiChanged();
   void DesktopUiChanged();
   void PresentationBindingChanged();
@@ -208,6 +226,14 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   alcedo::EditorSessionState     session_state_             = alcedo::EditorSessionState::NoImage;
   bool                           filmstrip_collapsed_       = false;
   double                         filmstrip_expanded_height_ = 128.0;
+  // Phase 6C-7: cached adjustment snapshot + monotonic revision.
+  mutable QVariantMap adjustment_snapshot_;
+  quint64              snapshot_revision_ = 0;
+  /// Convert EditorRenderAdjustmentSnapshot patches into a QVariantMap keyed
+  /// by field_key with parsed JSON values suitable for QML model loading.
+  [[nodiscard]] static auto
+      BuildSnapshotMap(const alcedo::EditorRenderAdjustmentSnapshot& snapshot) -> QVariantMap;
+
   QString                        active_adjustment_panel_   = QStringLiteral("tone");
   QString                        history_panel_page_;
   QPointer<QObject>              presentation_viewport_;

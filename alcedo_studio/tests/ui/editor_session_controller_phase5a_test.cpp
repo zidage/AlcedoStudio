@@ -121,6 +121,16 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   }
 
   auto                                Undo() -> EditorSessionResult override { return Discard(); }
+
+  // Phase 6C-7: snapshot publication for panel state loading.
+  EditorRenderAdjustmentSnapshot current_snapshot_;
+  auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot override {
+    return current_snapshot_;
+  }
+  void SetAdjustmentSnapshot(EditorRenderAdjustmentSnapshot snapshot) {
+    current_snapshot_ = std::move(snapshot);
+  }
+
   auto                                Redo() -> EditorSessionResult override { return Discard(); }
 
   // Phase 5D: record view-change routing so tests can assert the controller
@@ -533,6 +543,116 @@ TEST(EditorSessionControllerPhase5ATest, EditorSessionServiceCMakeDoesNotLinkQtW
   EXPECT_EQ(block.find("Qt5::Widgets"), std::string::npos);
   EXPECT_NE(block.find("no Widgets"), std::string::npos);
 }
+
+// ── Phase 6C-7: adjustment snapshot publication ────────────────────────
+
+TEST(EditorSessionControllerPhase5ATest, SnapshotRevisionStartsAtZero) {
+  EditorSessionController controller(static_cast<EditorController*>(nullptr));
+  EXPECT_EQ(controller.snapshot_revision(), 0u);
+  EXPECT_TRUE(controller.adjustment_snapshot().isEmpty());
+}
+
+TEST(EditorSessionControllerPhase5ATest, BackendSnapshotIsPublishedToController) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(nullptr, &backend);
+
+  EditorRenderAdjustmentSnapshot snap;
+  snap.patches = {
+      EditorAdjustmentPatch{"exposure", R"({"exposure":1.5})", true},
+      EditorAdjustmentPatch{"contrast", R"({"contrast":18.0})", true},
+  };
+  snap.snapshot_generation = 1;
+  backend.SetAdjustmentSnapshot(snap);
+
+  backend.NotifyWithoutStateChange();
+
+  EXPECT_GE(controller.snapshot_revision(), 1u);
+  const auto map = controller.adjustment_snapshot();
+  EXPECT_TRUE(map.contains(QStringLiteral("exposure")));
+  EXPECT_TRUE(map.contains(QStringLiteral("contrast")));
+}
+
+TEST(EditorSessionControllerPhase5ATest, SnapshotRevisionIncrementsOnChange) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(nullptr, &backend);
+
+  EditorRenderAdjustmentSnapshot snap1;
+  snap1.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":0.0})", true}};
+  backend.SetAdjustmentSnapshot(snap1);
+  backend.NotifyWithoutStateChange();
+  const auto rev1 = controller.snapshot_revision();
+  EXPECT_GE(rev1, 1u);
+
+  EditorRenderAdjustmentSnapshot snap2;
+  snap2.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":1.5})", true}};
+  backend.SetAdjustmentSnapshot(snap2);
+  backend.NotifyWithoutStateChange();
+
+  EXPECT_GT(controller.snapshot_revision(), rev1);
+}
+
+TEST(EditorSessionControllerPhase5ATest, SameSnapshotDoesNotIncrementRevision) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(nullptr, &backend);
+
+  EditorRenderAdjustmentSnapshot snap;
+  snap.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":0.75})", true}};
+  backend.SetAdjustmentSnapshot(snap);
+  backend.NotifyWithoutStateChange();
+  const auto rev1 = controller.snapshot_revision();
+
+  backend.NotifyWithoutStateChange();
+  EXPECT_EQ(controller.snapshot_revision(), rev1);
+}
+
+TEST(EditorSessionControllerPhase5ATest, NoBackendReturnsEmptySnapshot) {
+  EditorSessionController controller(static_cast<EditorController*>(nullptr));
+  controller.Open(1, 2);
+  EXPECT_TRUE(controller.has_image());
+  EXPECT_TRUE(controller.adjustment_snapshot().isEmpty());
+  EXPECT_EQ(controller.snapshot_revision(), 0u);
+}
+
+TEST(EditorSessionControllerPhase5ATest, SnapshotSignalFiresOnChange) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(nullptr, &backend);
+
+  int signal_count = 0;
+  QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
+                   [&] { ++signal_count; });
+
+  EditorRenderAdjustmentSnapshot snap;
+  snap.patches = {EditorAdjustmentPatch{"contrast", R"({"contrast":10.0})", true}};
+  backend.SetAdjustmentSnapshot(snap);
+  backend.NotifyWithoutStateChange();
+  EXPECT_GE(signal_count, 1);
+
+  const auto before = signal_count;
+  backend.NotifyWithoutStateChange();
+  EXPECT_EQ(signal_count, before);
+
+  snap.patches = {EditorAdjustmentPatch{"contrast", R"({"contrast":42.0})", true}};
+  backend.SetAdjustmentSnapshot(snap);
+  backend.NotifyWithoutStateChange();
+  EXPECT_GT(signal_count, before);
+}
+
+TEST(EditorSessionControllerPhase5ATest, SnapshotIncludesParsedJsonValues) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(nullptr, &backend);
+
+  EditorRenderAdjustmentSnapshot snap;
+  snap.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":-1.75})", true}};
+  backend.SetAdjustmentSnapshot(snap);
+  backend.NotifyWithoutStateChange();
+
+  const auto map = controller.adjustment_snapshot();
+  ASSERT_TRUE(map.contains(QStringLiteral("exposure")));
+  const auto entry = map[QStringLiteral("exposure")].toMap();
+  ASSERT_TRUE(entry.contains(QStringLiteral("exposure")));
+  EXPECT_DOUBLE_EQ(entry[QStringLiteral("exposure")].toDouble(), -1.75);
+}
+
 
 }  // namespace
 }  // namespace alcedo::ui

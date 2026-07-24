@@ -54,6 +54,57 @@ Item {
         wireEnabled()
     }
 
+
+    /// Phase 6C-7: load tone adjustment values from a snapshot map produced
+    /// by EditorSessionController. Idempotent: uses plain setters (no submit)
+    /// and only updates values that differ. Re-applying the same snapshot
+    /// produces no commit, render request, timer restart, or focus change.
+    function loadFromSnapshot(snapshot) {
+        if (snapshot === undefined || snapshot === null) return
+        loadModelFromSnapshot(exposureModel, "exposure", snapshot)
+        loadModelFromSnapshot(contrastModel, "contrast", snapshot)
+        loadModelFromSnapshot(highlightsModel, "highlights", snapshot)
+        loadModelFromSnapshot(shadowsModel, "shadows", snapshot)
+        loadModelFromSnapshot(whitesModel, "white", snapshot)
+        loadModelFromSnapshot(blacksModel, "black", snapshot)
+        loadCurveFromSnapshot(curveModel, "curve", snapshot)
+    }
+
+    /// Set a numeric model value from a snapshot entry. The snapshot stores
+    /// operator-shaped params as a QVariantMap, e.g. {"exposure": 1.5}.
+    /// The key inside the params map matches the fieldKey.
+    function loadModelFromSnapshot(model, fieldKey, snapshot) {
+        if (!model || !fieldKey || !snapshot) return
+        const entry = snapshot[fieldKey]
+        if (entry === undefined) return
+        // entry is a QVariantMap like {"exposure": 1.5}
+        const val = entry[fieldKey]
+        if (val === undefined) return
+        const num = Number(val)
+        if (isNaN(num)) return
+        // Plain setter — no submit, no render request.
+        // Only assign if the value actually differs to avoid noise.
+        if (Math.abs(model.value - num) > (model.step * 0.1)) {
+            model.value = num
+        }
+    }
+
+    /// Load curve control points from the snapshot.
+    function loadCurveFromSnapshot(model, fieldKey, snapshot) {
+        if (!model || !fieldKey || !snapshot) return
+        const entry = snapshot[fieldKey]
+        if (entry === undefined) return
+        // Curve params: {"points": [[x1,y1], [x2,y2], ...]}
+        const points = entry.points
+        if (points === undefined || !Array.isArray(points)) return
+        if (points.length < 2) return
+        // Convert to QPointF-compatible format for setPoints
+        const qmlPoints = points.map(function (p) {
+            return Qt.point(p[0], p[1])
+        })
+        model.setPoints(qmlPoints)
+    }
+
     EditorAdjustmentValueModel {
         id: exposureModel
         objectName: "toneExposureModel"

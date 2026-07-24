@@ -55,6 +55,26 @@ Item {
     Layout.maximumWidth: maximumPanelWidth
     Layout.fillHeight: true
 
+    // Phase 6C-7: last applied snapshot revision for idempotent reload.
+    property int lastAppliedRevision: 0
+
+    /// Load panel values from the editor session adjustment snapshot.
+    /// Idempotent: re-applying the same revision has no effect. Each panel
+    /// extracts its owned field keys from the snapshot map.
+    function loadFromSnapshot(snapshot) {
+        if (!editorSession) return
+        const rev = editorSession.snapshotRevision
+        if (rev === root.lastAppliedRevision) return
+        root.lastAppliedRevision = rev
+        if (snapshot === undefined || snapshot === null) return
+        // Distribute to each panel body. Only Tone is wired today;
+        // Look / Display / Geometry / RAW join in their Phase 6 ports.
+        if (typeof tonePanel.loadFromSnapshot === "function") {
+            tonePanel.loadFromSnapshot(snapshot)
+        }
+    }
+
+
     function selectPanel(panel) {
         if (!editorSession) {
             return
@@ -303,6 +323,7 @@ Item {
                 // Phase 6B: production Tone panel. Other panels keep the empty
                 // shell until their Phase 6 ports land.
                 EditorTonePanel {
+                    id: tonePanel
                     objectName: "editorAdjustmentPanel_tone"
                     theme: root.theme
                     editorSession: root.editorSession
@@ -376,6 +397,21 @@ Item {
                     panelKey: "raw"
                 }
             }
+        }
+    }
+
+    // Phase 6C-7: auto-load panel state when the backend publishes a snapshot.
+    Connections {
+        target: root.editorSession
+        function onAdjustmentSnapshotChanged() {
+            root.loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
+        }
+    }
+    // Also load on initial binding when editorSession changes.
+    onEditorSessionChanged: {
+        root.lastAppliedRevision = 0
+        if (root.editorSession) {
+            root.loadFromSnapshot(root.editorSession.adjustmentSnapshot)
         }
     }
 }

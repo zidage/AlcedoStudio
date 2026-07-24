@@ -34,6 +34,13 @@ class IEditorSessionBackend {
   [[nodiscard]] virtual auto active() const -> bool                    = 0;
   [[nodiscard]] virtual auto has_image() const -> bool                 = 0;
   [[nodiscard]] virtual auto last_error() const -> std::string         = 0;
+  /// Read-only snapshot of the committed editor adjustment state (panel values,
+  /// not runtime pipeline handles). Returns the default-constructed empty
+  /// snapshot when the backend has no image or the history port is unavailable.
+  [[nodiscard]] virtual auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot {
+    return {};
+  }
+
 
   /// Optional: notified after state/identity changes from async results.
   virtual void               SetChangeNotifier(ChangeNotifier notifier) {
@@ -151,7 +158,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto first_frame_request_id() const -> std::uint64_t {
     return render_.first_frame_request_id();
   }
-  [[nodiscard]] auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot {
+  [[nodiscard]] auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot override {
     return edit_.adjustment_snapshot();
   }
   [[nodiscard]] auto presentation_sink_id() const -> PresentationSinkId {

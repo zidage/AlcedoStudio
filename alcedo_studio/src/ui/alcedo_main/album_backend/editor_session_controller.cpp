@@ -6,6 +6,10 @@
 
 #include <QSettings>
 #include <QThread>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+
 #include <QtGlobal>
 #include <cstdint>
 
@@ -93,6 +97,15 @@ void EditorSessionController::OnBackendChanged() {
   }
   SyncIdentityFromBackend();
   SyncViewportIdentity();
+
+  // Phase 6C-7: publish the adjustment snapshot from the backend.
+  const auto render_snapshot = session_backend_->adjustment_snapshot();
+  auto       panel_snapshot  = BuildSnapshotMap(render_snapshot);
+  if (panel_snapshot != adjustment_snapshot_) {
+    adjustment_snapshot_ = std::move(panel_snapshot);
+    ++snapshot_revision_;
+    emit AdjustmentSnapshotChanged();
+  }
   emit StateChanged();
 }
 
@@ -661,5 +674,29 @@ void EditorSessionController::SaveDesktopUiPrefs() const {
   settings.setValue(QLatin1String(kActiveAdjustmentPanelKey), active_adjustment_panel_);
   settings.sync();
 }
+
+auto EditorSessionController::adjustment_snapshot() const -> QVariantMap {
+  return adjustment_snapshot_;
+}
+
+auto EditorSessionController::BuildSnapshotMap(
+    const alcedo::EditorRenderAdjustmentSnapshot& snapshot) -> QVariantMap {
+  QVariantMap map;
+  for (const auto& patch : snapshot.patches) {
+    QJsonParseError error;
+    const auto      json_bytes = QByteArray::fromStdString(patch.params_json);
+    auto            doc        = QJsonDocument::fromJson(json_bytes, &error);
+    if (error.error != QJsonParseError::NoError || !doc.isObject()) {
+      continue;
+    }
+    const auto obj = doc.object();
+    if (obj.isEmpty()) {
+      continue;
+    }
+    map.insert(QString::fromStdString(patch.field_key), obj.toVariantMap());
+  }
+  return map;
+}
+
 
 }  // namespace alcedo::ui

@@ -5,8 +5,8 @@ Date: 2026-07-24
 Status: approved design; 6C-1, 6C-2, 6C-2-Fix, 6C-3, 6C-4, 6C-5, 6C-6, and Phase 3 (3A–3E) are
 implemented. Phase 6C-5 qualification Phases 1, 2A, 2B, Phase 3, Phase 4 (4A–4B typed-value
 wiring), Phase 5 (5A–5D DuckDB/materialization), and Phase 6 (6A–6C policy/QML/integration)
-are implemented. Phase 6C-5 qualification Phase 7 final evidence checklist remains open.
-Phase 6C-7 panel state publication is next.
+are implemented. Phase 6C-7 panel state publication is complete.
+Phase 6C-8 Paste, Merge, and history integration is next.
 
 Related documents:
 
@@ -2239,6 +2239,65 @@ Acceptance:
 - Reapplying a snapshot produces no commit, render request, timer restart, or focus change.
 - Pipeline values, rendered frame, panel values, working head, and chain hash remain equal after every
   state-changing operation.
+
+##### Phase 6C-7 completion record (2026-07-24)
+
+**Status:** complete
+
+**Primary success call chain:**
+
+```text
+Open(image) / CheckoutVersion / Undo / Redo
+  -> EditorSessionService::Emit(result)
+  -> NotifyChange()
+  -> EditorSessionController::OnBackendChanged()
+  -> queries IEditorSessionBackend::adjustment_snapshot()
+  -> BuildSnapshotMap(EditorRenderAdjustmentSnapshot) -> QVariantMap
+  -> compares with cached snapshot; if changed, increments snapshot_revision_
+  -> emit AdjustmentSnapshotChanged()
+  -> QML EditorAdjustmentStack.onAdjustmentSnapshotChanged()
+  -> loadFromSnapshot(snapshot)
+  -> distribution to tonePanel.loadFromSnapshot(snapshot)
+  -> loadModelFromSnapshot / loadCurveFromSnapshot (plain setters, no submit)
+```
+
+**Primary no-op chain (idempotent re-apply):**
+
+```text
+Same snapshot re-published (no change in backend)
+  -> BuildSnapshotMap returns equal QVariantMap
+  -> OnBackendChanged skips emit (revision unchanged)
+
+QML re-applies same revision
+  -> loadFromSnapshot checks rev === lastAppliedRevision -> return early
+  -> no model setter call, no commit, no render request, no timer restart
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| SnapshotRevisionStartsAtZero | EditorSessionControllerPhase5ATest | PASS |
+| BackendSnapshotIsPublishedToController | EditorSessionControllerPhase5ATest | PASS |
+| SnapshotRevisionIncrementsOnChange | EditorSessionControllerPhase5ATest | PASS |
+| SameSnapshotDoesNotIncrementRevision | EditorSessionControllerPhase5ATest | PASS |
+| NoBackendReturnsEmptySnapshot | EditorSessionControllerPhase5ATest | PASS |
+| SnapshotSignalFiresOnChange | EditorSessionControllerPhase5ATest | PASS |
+| SnapshotIncludesParsedJsonValues | EditorSessionControllerPhase5ATest | PASS |
+
+Commands:
+`cmd.exe /c "scripts\msvc_env.cmd --build --preset win_debug --target EditorSessionControllerPhase5ATest --parallel 4"`
+`build\debug\alcedo_studio\tests\app\EditorSessionControllerPhase5ATest_runtime\EditorSessionControllerPhase5ATest.exe --gtest_filter=*Snapshot*:*Phase6*`
+Suite totals: 7/7 new tests PASS; full suite 22/23 PASS (1 pre-existing failure unrelated to this change).
+
+**LOC note:**
+No changed file exceeds 1000 LOC. Largest: editor_session_controller_phase5a_test.cpp at 668 LOC (+125 diff); editor_session_controller.cpp at 705 LOC (+40 diff).
+
+**Residual gaps:**
+- Full panel integration test (editor open -> snapshot fills Tone QML values) requires real pipeline; deferred to Phase 6C-9 e2e qualification.
+- Distribution to Look/Display/Geometry/RAW panels deferred to their Phase 6 ports; only Tone is wired.
+- Paste/Merge snapshot publication deferred to Phase 6C-8; infrastructure (NotifyChange -> OnBackendChanged -> publish) is in place.
+
 
 ### Phase 6C-8 - Paste, Merge, and history integration
 
