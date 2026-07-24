@@ -132,7 +132,8 @@ alcedo_register_test_target(EditorSaveCheckpointServiceTest app ci_core)
 add_executable(EditorSessionLifecycleTest ${ALCEDO_TEST_ROOT}/app/editor_session_lifecycle_test.cpp)
 target_include_directories(EditorSessionLifecycleTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
-target_link_libraries(EditorSessionLifecycleTest EditorSessionLifecycle GTest::gtest_main)
+target_link_libraries(EditorSessionLifecycleTest EditorSessionLifecycle GTest::gtest_main
+  xxHash::xxhash)
 gtest_discover_tests(EditorSessionLifecycleTest TEST_PREFIX "EditorSessionLifecycleTest."
   PROPERTIES LABELS "ci_core_flow;editor_session")
 alcedo_register_test_target(EditorSessionLifecycleTest app ci_core)

@@ -216,7 +216,7 @@ TEST_F(EditorMiniGitJournalRecoveryTest, MissingTargetCommitWritesNothing) {
 /// super-linear result would indicate unbounded work. Record elapsed time and
 /// peak process memory as diagnostic output.
 TEST_F(EditorMiniGitJournalRecoveryTest, LargeJournalPrefixHasLinearRecordVisitsAndBoundedCopies) {
-  constexpr std::size_t kRecordCount = 200;
+  constexpr std::size_t kRecordCount = 10000;
 
   auto                  journal = std::make_shared<MiniGitJournal>(journal_path_);
   MiniGitWorkingHistory history(graph_, journal);

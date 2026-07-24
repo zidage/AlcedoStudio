@@ -93,6 +93,19 @@ gtest_discover_tests(EditorSessionThumbnailPortTest
   PROPERTIES LABELS "editor_session")
 alcedo_register_test_target(EditorSessionThumbnailPortTest ui)
 
+# Phase 6C-5: per-image journal writer port. Owns writer lookup, locks,
+# append, and durability barrier. No database or QML dependency.
+add_executable(EditorSessionJournalWriterPortTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_session_journal_writer_port_test.cpp)
+target_include_directories(EditorSessionJournalWriterPortTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorSessionJournalWriterPortTest
+  AlbumBackendLib
+  GTest::gtest_main)
+gtest_discover_tests(EditorSessionJournalWriterPortTest
+  TEST_PREFIX "EditorSessionJournalWriterPortTest."
+  PROPERTIES LABELS "editor_session")
+alcedo_register_test_target(EditorSessionJournalWriterPortTest ui)
+
 # Pipeline guard and task publication ports own their state independently.
 add_executable(EditorSessionPipelinePortTest
     ${ALCEDO_TEST_ROOT}/ui/editor_session_pipeline_port_test.cpp)
