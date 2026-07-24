@@ -63,17 +63,42 @@ struct EditorMiniGitSaveCapture {
 ///
 /// - accepted: the capture was structurally valid and reached the DuckDB write
 ///   step. False means validation rejected before any durable write.
-/// - materialized: DuckDB transaction committed. On success, the journal file
-///   has been truncated for the saved prefix unless the result reports failure.
+/// - database_committed: the DuckDB transaction committed successfully. True
+///   does not guarantee the journal was truncated; check materialized for that.
+/// - materialized: full checkpoint completed — database committed AND journal
+///   truncated. False after DuckDB success means recovery is needed.
 /// - head_moved: the checked-out Version head advanced (false for an empty
 ///   journal or a no-op recovery that only truncated leftover bytes).
-/// - error: human-readable failure detail when accepted/materialized is false.
+/// - error: human-readable failure detail when accepted/database_committed is false.
 struct EditorMiniGitMaterializeResult {
-  bool        accepted     = false;
-  bool        materialized = false;
+  bool        accepted            = false;
+  bool        database_committed  = false;
+  bool        materialized        = false;
   /// False when the journal was empty and the Version head was not rewritten.
-  bool        head_moved   = false;
+  bool        head_moved          = false;
   std::string error;
+};
+
+/// Failure-injection hook for journal truncation durability tests. Production
+/// uses the no-op default; tests subclass to simulate truncation failures after
+/// a successful DuckDB commit.
+class IJournalTruncationHook {
+ public:
+  virtual ~IJournalTruncationHook() = default;
+
+  /// Called just before the journal file is opened for truncation. Return false
+  /// to simulate a failure to open the journal after DuckDB commit.
+  virtual auto OnBeforeTruncate(const std::filesystem::path& /*journal_path*/,
+                                std::string* /*error*/) -> bool {
+    return true;
+  }
+
+  /// Called just after truncation completes. Return false to simulate a flush
+  /// or post-truncation failure (DuckDB already committed, recovery needed).
+  virtual auto OnAfterTruncate(const std::filesystem::path& /*journal_path*/,
+                               std::string* /*error*/) -> bool {
+    return true;
+  }
 };
 
 /// Thin facade for mini-Git journal materialization. Composes
@@ -120,11 +145,21 @@ class EditorMiniGitMaterializer final {
   auto RecoverAndMaterialize(sl_element_id_t element_id, const std::filesystem::path& journal_path,
                              std::string* error = nullptr) -> EditorMiniGitMaterializeResult;
 
+  /// Install a failure-injection hook on the internal CommitWriter. Ownership
+  /// stays with the caller; pass nullptr to restore the production default.
+  /// The hook pointer must outlive this materializer.
+  void SetWriteHook(ICommitWriterWriteHook* hook) { writer_->SetWriteHook(hook); }
+
+  /// Install a failure-injection hook for journal truncation. Ownership stays
+  /// with the caller; pass nullptr to restore the production default.
+  void SetTruncationHook(IJournalTruncationHook* hook) { truncation_hook_ = hook; }
+
  private:
   std::shared_ptr<StorageService>                  storage_;
   std::shared_ptr<EditorSaveCheckpointCoordinator> coordinator_;
   std::unique_ptr<EditorMiniGitCommitWriter>       writer_;
   std::unique_ptr<EditorMiniGitJournalRecovery>    recovery_;
+  IJournalTruncationHook*                          truncation_hook_ = nullptr;
 };
 
 /// Build a serialized pipeline state document from live guard fields (no second executor).

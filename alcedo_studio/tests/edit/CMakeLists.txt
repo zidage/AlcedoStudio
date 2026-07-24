@@ -39,19 +39,33 @@ target_link_libraries(EditorMiniGitJournalFoldTest
   GTest::gtest_main)
 gtest_discover_tests(EditorMiniGitJournalFoldTest TEST_PREFIX "EditorMiniGitJournalFoldTest."
   PROPERTIES LABELS "ci_core_flow;edit;history")
+if(WIN32)
+  alcedo_copy_duckdb_extensions(EditorMiniGitJournalFoldTest)
+  if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
+    add_custom_command(TARGET EditorMiniGitJournalFoldTest POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll"
+              "$<TARGET_FILE_DIR:EditorMiniGitJournalFoldTest>/duckdb.dll"
+      VERBATIM)
+  endif()
+endif()
 alcedo_register_test_target(EditorMiniGitJournalFoldTest edit)
 
-# Phase 6C-5: commit writer DuckDB transaction tests.
+# Phase 6C-5: commit writer DuckDB transaction tests with failure injection.
 add_executable(EditorMiniGitCommitWriterTest ${ALCEDO_TEST_ROOT}/edit/history/editor_mini_git_commit_writer_test.cpp)
-target_include_directories(EditorMiniGitCommitWriterTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_include_directories(EditorMiniGitCommitWriterTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorMiniGitCommitWriterTest
+  EditorSessionTestSupport
   EditorMiniGitCommitWriter
+  EditorMiniGitMaterializer
+  EditorSaveCheckpointCoordinator
   ProjectService
   EditHistory
   StorageService
   GTest::gtest_main)
 gtest_discover_tests(EditorMiniGitCommitWriterTest TEST_PREFIX "EditorMiniGitCommitWriterTest."
-  PROPERTIES LABELS "ci_core_flow;edit;history")
+  PROPERTIES LABELS "ci_core_flow;edit;history;editor_history")
 if(WIN32)
   alcedo_copy_duckdb_extensions(EditorMiniGitCommitWriterTest)
   if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")

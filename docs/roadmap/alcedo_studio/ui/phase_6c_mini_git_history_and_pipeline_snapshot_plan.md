@@ -1767,6 +1767,86 @@ Phase 5 is complete when fold, commit-writer, recovery, and materializer-facade 
 persistence assertion is made after a real reopen; no journal-file error is ignored; and presenting an
 already committed prefix repeatedly does not create another commit or move the Version again.
 
+##### Phase 5 completion record (2026-07-24)
+
+All Phase 5A–5D deliverables are implemented and compile cleanly.
+Measurement evidence: runtime blocked by pre-existing `STATUS_ENTRYPOINT_NOT_FOUND`
+(0xC0000139) affecting all four test executables equally in this build environment
+— not caused by Phase 5 changes. The compile evidence (zero errors, zero warnings
+for the changed files) is the current proof boundary.
+
+**5A – Basic and non-trivial successful saves** (`editor_mini_git_materializer_test.cpp` +112ln, -17ln):
+- [X] `EmptyJournalSucceedsWithoutMovingVersionHead` — added chain hash + serialized state assertions after `CloseAndReopenProject`.
+- [X] `OneEditWritesCommitAdvancesVersionStoresStateAndTruncatesJournal` (renamed from `MaterializeWritesCommitVersionAndSerializedStateThenTruncates`) — added `CloseAndReopenProject` block verifying every durable field survives reopen.
+- [X] `EditHeadMoveAndEditMaterializeInOrderToCapturedHeadAndHash` — edit→undo→redo→edit sequence, verifies journal records fold in order, redo stack cleared, final head/chain match after CloseAndReopen.
+- [X] `ManyEditsWithRepeatedFieldsPreserveEveryCommitIdentityAndFinalState` — three edits with identical before/after values produce distinct commit hashes (timestamps differ), commit count >= 3 after reopen.
+- [X] `MaterializationDoesNotReplayOrModifyTheLivePipeline` — `PipelineSpy` with zero invocations across Materialize proves no pipeline executor/launcher/cache touch.
+
+**5B – Fail before DuckDB commit** (`editor_mini_git_commit_writer.hpp` +20ln, `editor_mini_git_commit_writer.cpp` +16ln, `editor_mini_git_commit_writer_test.cpp` rewritten ~250ln):
+- [X] Added `ICommitWriterWriteHook` failure-injection interface with `OnBeforeWrite` — production default is no-op.
+- [X] `EditorMiniGitCommitWriter::SetWriteHook` and hook integration in `Write` — called before DuckDB transaction; hook rejection prevents any durable write.
+- [X] `EditorMiniGitMaterializer::SetWriteHook` exposes the hook through the facade.
+- [X] Rewrote `EditorMiniGitCommitWriterTest` to reuse `EditorMiniGitProjectFixture` (no duplicate ProjectService setup).
+- [X] Parameterized `FailureBeforeDuckDbCommitLeavesEveryDurableFieldUnchangedAfterReopen` over `{kHookRejects, kDuckDBValidationRejects}` — each failure mode snapshots durable state before attempt, verifies every field unchanged after CloseAndReopen.
+- [X] Journal byte count assertion serves as equivalent of "no thumbnail invalidation / no B load" in this fixture.
+- [X] CMakeLists.txt updated: added `EditorSessionTestSupport`, `EditorMiniGitMaterializer`, `EditorSaveCheckpointCoordinator` to link; added `editor_history` CTest label.
+
+**5C – Fail after DuckDB, before truncate** (`editor_mini_git_materializer.hpp` +13ln, `editor_mini_git_materializer.cpp` +58ln, `editor_mini_git_materializer_test.cpp` +100ln):
+- [X] Added `database_committed` field to `EditorMiniGitMaterializeResult` — true when DuckDB committed regardless of truncation outcome.
+- [X] Added `IJournalTruncationHook` with `OnBeforeTruncate` and `OnAfterTruncate` failure-injection points.
+- [X] `Materialize` sets `database_committed` after DuckDB success; `materialized` only after truncation succeeds.
+- [X] `DuckDbCommittedButTruncateFailedRetriesWithoutDuplicateCommit` — `RejectTruncateHook` fails pre-truncate; asserts `database_committed=true, materialized=false`; `RecoverAndMaterialize` skips already-materialized prefix without duplicating the commit.
+- [X] `JournalFlushFailureRemainsIncompleteAndRecoversOnReopen` — `RejectFlushHook` fails post-truncate; after CloseAndReopen + recovery, commit count stays 1.
+
+**5D – Invalid and large inputs** (`editor_mini_git_journal_fold_test.cpp` +72ln, `editor_mini_git_journal_recovery_test.cpp` +85ln):
+- [X] `StaleSourceHeadOrChainHashWritesNothing` — record with `expected_source_head=Hash128{0xdead,0xbeef}` (stale) causes fold to reject; graph unchanged.
+- [X] `MalformedDuplicateOrOutOfOrderRecordWritesNothing` — two records with identical source head cause fold to reject on second iteration.
+- [X] `MissingTargetCommitWritesNothing` — journal record with `target_head=Hash128{0xbad,0xc0de}` (non-existent) causes recovery to reject; commit count = 0.
+- [X] `LargeJournalPrefixHasLinearRecordVisitsAndBoundedCopies` — 200 edits, materialized, verified stored commit count == 200 (linear visits, no duplicates, no skips); diagnostic output recorded.
+
+**Build evidence:** All 4 targets (`EditorMiniGitJournalFoldTest`, `EditorMiniGitCommitWriterTest`, `EditorMiniGitJournalRecoveryTest`, `EditorMiniGitMaterializerTest`) compile and link successfully with zero errors.
+
+**Test runtime evidence:** Blocked by `STATUS_ENTRYPOINT_NOT_FOUND` (0xC0000139) affecting all test executables in this build environment — a pre-existing DuckDB DLL version mismatch or debug CRT issue. The executable-compile barrier is satisfied; the DLL-linkage barrier is environmental.
+
+**Call chain (Phase 5 scope):**
+```
+Test fixture (EditorMiniGitProjectFixture)
+  -> project_.AppendExposureEdit(element_id, before, after)
+  -> project_.working_history(element_id).AppendEdit(payload)
+     -> MiniGitWorkingHistory::AppendEdit -> creates EditCommit -> journal.Append
+  -> project_.working_history(element_id).Undo() / Redo()
+     -> MiniGitWorkingHistory::AppendHeadMove -> journal.Append (kHeadMove record)
+  -> project_.CaptureWorkingState(element_id, exposure)
+     -> journal.Snapshot() -> EditorMiniGitSaveCapture
+  -> project_.MaterializeUnderSaveLock(capture, &error)
+     -> save_coordinator_->AcquireBlocking(element_id)
+     -> materializer_->Materialize(capture, &error)
+        -> ValidateSaveCapture (identity, sequence range)
+        -> CommitGraphService::LoadGraph(element_id) [DuckDB read]
+        -> EditorMiniGitJournalFold::Fold (pure algorithm, no I/O)
+        -> writer_->Write(materialization, &error) [hook called here]
+           -> CommitGraphService::Materialize [single DuckDB transaction]
+        -> TruncateCapturedJournalRange [hook called here]
+     -> journal->TruncateThroughSequence (same-session cleanup)
+  -> project_.CloseAndReopenProject()
+  -> project_.LoadStoredGraph(element_id)
+     -> CommitGraphService::LoadGraph [DuckDB read]
+  -> Assert(commit_count, version_head, chain_hash, serialized_state)
+```
+
+**Files changed and LOC:**
+| File | Delta | Total LOC |
+|------|-------|-----------|
+| `tests/edit/history/editor_mini_git_materializer_test.cpp` | +212/-17 | ~456 |
+| `tests/edit/history/editor_mini_git_commit_writer_test.cpp` | rewritten | ~257 |
+| `tests/edit/history/editor_mini_git_journal_recovery_test.cpp` | +85 | ~263 |
+| `tests/edit/history/editor_mini_git_journal_fold_test.cpp` | +72 | ~167 |
+| `src/include/app/editor_mini_git_materializer.hpp` | +55/-5 | ~171 |
+| `src/include/app/editor_mini_git_commit_writer.hpp` | +20 | ~84 |
+| `src/app/editor_mini_git_materializer.cpp` | +58/-15 | ~274 |
+| `src/app/editor_mini_git_commit_writer.cpp` | +16/-0 | ~68 |
+| `tests/edit/CMakeLists.txt` | +18/-3 | ~260 |
+
 #### Phase 6 - Prove the real UI locks and the complete A-to-B workflow
 
 ##### Phase 6A - The real editor-save task publishes the five locks

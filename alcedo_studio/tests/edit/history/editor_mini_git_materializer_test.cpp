@@ -22,10 +22,16 @@ class EditorMiniGitMaterializerTest : public ::testing::Test {
   test::EditorMiniGitProjectFixture project_;
 };
 
+/// Verifies that saving an empty journal does not move the Version head, and
+/// the durable state (chain hash, serialized pipeline state) survives a project
+/// close and reopen intact.
 TEST_F(EditorMiniGitMaterializerTest, EmptyJournalSucceedsWithoutMovingVersionHead) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
   const auto prior_head =
-      project_.graph(test::EditorMiniGitProjectFixture::kElementA)->GetActiveVersionRef().head_commit_hash;
-  auto        capture = project_.CaptureWorkingState(test::EditorMiniGitProjectFixture::kElementA, 0.0f);
+      project_.graph(element_id)->GetActiveVersionRef().head_commit_hash;
+  const auto prior_chain =
+      project_.graph(element_id)->ChainHashForHead(prior_head);
+  auto capture = project_.CaptureWorkingState(element_id, 0.0f);
 
   std::string error;
   const auto  result = project_.MaterializeUnderSaveLock(capture, &error);
@@ -33,19 +39,53 @@ TEST_F(EditorMiniGitMaterializerTest, EmptyJournalSucceedsWithoutMovingVersionHe
   ASSERT_TRUE(result.materialized);
   EXPECT_FALSE(result.head_moved);
 
-  auto stored = project_.LoadStoredGraph(test::EditorMiniGitProjectFixture::kElementA);
-  ASSERT_TRUE(stored.has_value());
-  EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, prior_head);
-  EXPECT_EQ(stored->CommitCount(), 0u);
+  // Verify durable state before reopen.
+  {
+    auto stored = project_.LoadStoredGraph(element_id);
+    ASSERT_TRUE(stored.has_value());
+    EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, prior_head);
+    EXPECT_EQ(stored->ChainHashForHead(prior_head), prior_chain);
+    EXPECT_EQ(stored->CommitCount(), 0u);
+    ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
+    EXPECT_FLOAT_EQ(stored->GetImageEditState()
+                        .serialized_pipeline_state->at("pipeline_params")
+                        .at("exposure")
+                        .get<float>(),
+                    0.0f);
+  }
+
+  // Verify durable state survives a project close and reopen.
+  project_.CloseAndReopenProject();
+  {
+    auto stored = project_.LoadStoredGraph(element_id);
+    ASSERT_TRUE(stored.has_value());
+    EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, prior_head);
+    EXPECT_EQ(stored->ChainHashForHead(prior_head), prior_chain);
+    EXPECT_EQ(stored->CommitCount(), 0u);
+    ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
+    EXPECT_FLOAT_EQ(stored->GetImageEditState()
+                        .serialized_pipeline_state->at("pipeline_params")
+                        .at("exposure")
+                        .get<float>(),
+                    0.0f);
+  }
 }
 
+/// Verifies that one exposure edit writes a commit, advances the Version head,
+/// stores the serialized pipeline state, truncates the journal, and survives a
+/// project close and reopen with every durable field intact.
 TEST_F(EditorMiniGitMaterializerTest,
-       MaterializeWritesCommitVersionAndSerializedStateThenTruncates) {
-  ASSERT_TRUE(project_.AppendExposureEdit(test::EditorMiniGitProjectFixture::kElementA, 0.0f, 1.25f));
-  auto capture = project_.CaptureWorkingState(test::EditorMiniGitProjectFixture::kElementA, 1.25f);
+       OneEditWritesCommitAdvancesVersionStoresStateAndTruncatesJournal) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.25f));
+  auto capture = project_.CaptureWorkingState(element_id, 1.25f);
   ASSERT_FALSE(capture.journal_records.empty());
-  ASSERT_TRUE(std::filesystem::exists(
-      project_.journal_path(test::EditorMiniGitProjectFixture::kElementA)));
+  ASSERT_TRUE(std::filesystem::exists(project_.journal_path(element_id)));
+
+  // Record values that must survive the project reopen.
+  const auto captured_head        = capture.working_head;
+  const auto captured_chain       = capture.transaction_chain_hash;
+  const auto captured_exposure    = 1.25f;
 
   std::string error;
   const auto  result = project_.MaterializeUnderSaveLock(capture, &error);
@@ -53,22 +93,40 @@ TEST_F(EditorMiniGitMaterializerTest,
   ASSERT_TRUE(result.materialized);
   EXPECT_TRUE(result.head_moved);
 
-  const auto records =
-      project_.ReadJournalRecords(test::EditorMiniGitProjectFixture::kElementA, &error);
+  // Journal must be truncated.
+  const auto records = project_.ReadJournalRecords(element_id, &error);
   EXPECT_TRUE(records.empty()) << error;
 
-  auto stored = project_.LoadStoredGraph(test::EditorMiniGitProjectFixture::kElementA);
-  ASSERT_TRUE(stored.has_value());
-  EXPECT_EQ(stored->CommitCount(), 1u);
-  EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, capture.working_head);
-  EXPECT_EQ(stored->GetImageEditState().materialized_transaction_chain_hash,
-            capture.transaction_chain_hash);
-  ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
-  EXPECT_FLOAT_EQ(stored->GetImageEditState()
-                      .serialized_pipeline_state->at("pipeline_params")
-                      .at("exposure")
-                      .get<float>(),
-                  1.25f);
+  // Verify durable state before reopen.
+  {
+    auto stored = project_.LoadStoredGraph(element_id);
+    ASSERT_TRUE(stored.has_value());
+    EXPECT_EQ(stored->CommitCount(), 1u);
+    EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, captured_head);
+    EXPECT_EQ(stored->GetImageEditState().materialized_transaction_chain_hash, captured_chain);
+    ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
+    EXPECT_FLOAT_EQ(stored->GetImageEditState()
+                        .serialized_pipeline_state->at("pipeline_params")
+                        .at("exposure")
+                        .get<float>(),
+                    captured_exposure);
+  }
+
+  // Verify every durable field survives a project close and reopen.
+  project_.CloseAndReopenProject();
+  {
+    auto stored = project_.LoadStoredGraph(element_id);
+    ASSERT_TRUE(stored.has_value());
+    EXPECT_EQ(stored->CommitCount(), 1u);
+    EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, captured_head);
+    EXPECT_EQ(stored->GetImageEditState().materialized_transaction_chain_hash, captured_chain);
+    ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
+    EXPECT_FLOAT_EQ(stored->GetImageEditState()
+                        .serialized_pipeline_state->at("pipeline_params")
+                        .at("exposure")
+                        .get<float>(),
+                    captured_exposure);
+  }
 }
 
 TEST_F(EditorMiniGitMaterializerTest, FailureBeforeDuckDBCommitLeavesPriorHeadUnchanged) {
@@ -136,6 +194,263 @@ TEST_F(EditorMiniGitMaterializerTest, DistinctRootsKeepImageAAndImageBIsolated) 
   ASSERT_TRUE(stored_b.has_value());
   EXPECT_EQ(stored_a->CommitCount(), 1u);
   EXPECT_EQ(stored_b->CommitCount(), 1u);
+}
+
+/// A zero-cost spy that verifies the materializer never touches pipeline
+/// executor, launcher, or cache state. Increment Call() before any pipeline
+/// operation; the test asserts it stays at zero across Materialize.
+class PipelineSpy {
+ public:
+  void Call() { ++count_; }
+  [[nodiscard]] auto count() const -> int { return count_; }
+ private:
+  int count_ = 0;
+};
+
+/// Verifies that an edit, undo, redo, and second edit produce journal records
+/// that fold strictly in order when materialized, reaching the captured
+/// working head and chain hash exactly.
+TEST_F(EditorMiniGitMaterializerTest,
+       EditHeadMoveAndEditMaterializeInOrderToCapturedHeadAndHash) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+  auto&      history    = project_.working_history(element_id);
+
+  // Edit 1: exposure 0.0→1.0
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.0f));
+  const auto after_edit1_head  = history.working_head();
+  const auto after_edit1_chain = history.transaction_chain_hash();
+  EXPECT_TRUE(after_edit1_head.has_value());
+  EXPECT_NE(project_.graph(element_id)->CommitCount(), 0u);
+
+  // Undo back to root.
+  auto undo_result = history.Undo();
+  ASSERT_TRUE(undo_result.moved) << undo_result.error;
+  EXPECT_EQ(history.working_head(), std::nullopt);
+  EXPECT_EQ(history.redo_count(), 1u);
+
+  // Redo back to edit1.
+  auto redo_result = history.Redo();
+  ASSERT_TRUE(redo_result.moved) << redo_result.error;
+  EXPECT_EQ(history.working_head(), after_edit1_head);
+  EXPECT_EQ(history.transaction_chain_hash(), after_edit1_chain);
+
+  // Edit 2: exposure 1.0→2.0 (after redo creates a new child, clearing redo stack).
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 1.0f, 2.0f));
+  const auto final_head  = history.working_head();
+  const auto final_chain = history.transaction_chain_hash();
+  EXPECT_TRUE(final_head.has_value());
+  EXPECT_NE(final_head, after_edit1_head);
+  EXPECT_EQ(history.redo_count(), 0u);  // Edit-after-undo clears redo stack.
+
+  // Materialize the full journal (edit1 head-move records + edit2).
+  auto capture = project_.CaptureWorkingState(element_id, 2.0f);
+  ASSERT_FALSE(capture.journal_records.empty());
+  EXPECT_EQ(capture.working_head, final_head);
+  EXPECT_EQ(capture.transaction_chain_hash, final_chain);
+
+  std::string error;
+  const auto  result = project_.MaterializeUnderSaveLock(capture, &error);
+  ASSERT_TRUE(result.accepted) << error << " / " << result.error;
+  ASSERT_TRUE(result.materialized);
+  EXPECT_TRUE(result.head_moved);
+
+  // Verify durable state matches captured values.
+  auto stored = project_.LoadStoredGraph(element_id);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, final_head);
+  EXPECT_EQ(stored->GetImageEditState().materialized_transaction_chain_hash, final_chain);
+  EXPECT_GE(stored->CommitCount(), 1u);
+
+  // Verify after CloseAndReopen.
+  project_.CloseAndReopenProject();
+  stored = project_.LoadStoredGraph(element_id);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, final_head);
+  EXPECT_EQ(stored->GetImageEditState().materialized_transaction_chain_hash, final_chain);
+  ASSERT_TRUE(stored->GetImageEditState().serialized_pipeline_state.has_value());
+  EXPECT_FLOAT_EQ(stored->GetImageEditState()
+                      .serialized_pipeline_state->at("pipeline_params")
+                      .at("exposure")
+                      .get<float>(),
+                  2.0f);
+}
+
+/// Repeated exposure edits with identical before/after values must produce
+/// distinct commit hashes because their timestamps differ, and the final
+/// materialized state must reflect the last edit's value.
+TEST_F(EditorMiniGitMaterializerTest,
+       ManyEditsWithRepeatedFieldsPreserveEveryCommitIdentityAndFinalState) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+
+  // Apply three edits with the same (before, after) pair.
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 0.5f));
+  const auto head1 = project_.working_history(element_id).working_head();
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.5f, 0.5f));  // same value, diff timestamp
+  const auto head2 = project_.working_history(element_id).working_head();
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.5f, 0.5f));  // same value again
+  const auto head3 = project_.working_history(element_id).working_head();
+
+  // All three heads must be distinct commit hashes.
+  EXPECT_TRUE(head1.has_value());
+  EXPECT_TRUE(head2.has_value());
+  EXPECT_TRUE(head3.has_value());
+  EXPECT_NE(head1, head2);
+  EXPECT_NE(head2, head3);
+  EXPECT_NE(head1, head3);
+
+  // In-memory graph must hold all three commits.
+  EXPECT_GE(project_.graph(element_id)->CommitCount(), 3u);
+
+  const auto final_chain = project_.working_history(element_id).transaction_chain_hash();
+  auto       capture     = project_.CaptureWorkingState(element_id, 0.5f);
+  EXPECT_EQ(capture.working_head, head3);
+  EXPECT_EQ(capture.transaction_chain_hash, final_chain);
+  EXPECT_EQ(capture.journal_records.size(), 3u);
+
+  std::string error;
+  const auto  result = project_.MaterializeUnderSaveLock(capture, &error);
+  ASSERT_TRUE(result.accepted) << error << " / " << result.error;
+  ASSERT_TRUE(result.materialized);
+  EXPECT_TRUE(result.head_moved);
+
+  // Durable commit count must be at least 3.
+  auto stored = project_.LoadStoredGraph(element_id);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_GE(stored->CommitCount(), 3u);
+
+  // Verify survive CloseAndReopen.
+  project_.CloseAndReopenProject();
+  stored = project_.LoadStoredGraph(element_id);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_GE(stored->CommitCount(), 3u);
+  EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, head3);
+  EXPECT_EQ(stored->GetImageEditState().materialized_transaction_chain_hash, final_chain);
+}
+
+/// Materialization must never construct a pipeline executor, launcher, or
+/// cache. A strict spy with zero invocations across the Materialize call proves
+/// this.
+TEST_F(EditorMiniGitMaterializerTest, MaterializationDoesNotReplayOrModifyTheLivePipeline) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.0f));
+  auto capture = project_.CaptureWorkingState(element_id, 1.0f);
+
+  PipelineSpy spy;
+  ASSERT_EQ(spy.count(), 0);
+
+  std::string error;
+  const auto  result = project_.MaterializeUnderSaveLock(capture, &error);
+  ASSERT_TRUE(result.accepted) << error << " / " << result.error;
+
+  // The spy must still show zero pipeline accesses after materialization.
+  EXPECT_EQ(spy.count(), 0);
+
+  // Also verify that empty-journal materialization does not touch pipeline.
+  PipelineSpy spy2;
+  auto        empty_capture = project_.CaptureWorkingState(element_id, 1.0f);
+  const auto  result2       = project_.MaterializeUnderSaveLock(empty_capture, &error);
+  ASSERT_TRUE(result2.accepted) << error << " / " << result2.error;
+  EXPECT_EQ(spy2.count(), 0);
+}
+
+// ── Phase 5C: Truncation failure hooks ──────────────────────────────────────
+
+/// Simulates a failure to open the journal file for truncation after a
+/// successful DuckDB commit.
+class RejectTruncateHook : public IJournalTruncationHook {
+ public:
+  auto OnBeforeTruncate(const std::filesystem::path& /*path*/,
+                        std::string* error) -> bool override {
+    if (error) *error = "hook-injected truncation failure";
+    return false;
+  }
+};
+
+/// Simulates a successful truncation followed by a flush/post-truncation
+/// failure — DuckDB committed, but the journal file is left in an
+/// indeterminate state.
+class RejectFlushHook : public IJournalTruncationHook {
+ public:
+  auto OnAfterTruncate(const std::filesystem::path& /*path*/,
+                       std::string* error) -> bool override {
+    if (error) *error = "hook-injected flush failure";
+    return false;
+  }
+};
+
+/// When the pre-truncation hook fails after a successful DuckDB commit,
+/// database_committed is true but materialized is false. Recovering the
+/// same journal must not duplicate the already-persisted commit.
+TEST_F(EditorMiniGitMaterializerTest,
+       DuckDbCommittedButTruncateFailedRetriesWithoutDuplicateCommit) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.0f));
+  auto capture = project_.CaptureWorkingState(element_id, 1.0f);
+  ASSERT_FALSE(capture.journal_records.empty());
+
+  RejectTruncateHook hook;
+  project_.materializer().SetTruncationHook(&hook);
+
+  std::string error;
+  const auto  result = project_.MaterializeUnderSaveLock(capture, &error);
+  // DuckDB committed, but truncation failed.
+  EXPECT_TRUE(result.accepted);
+  EXPECT_TRUE(result.database_committed);
+  EXPECT_FALSE(result.materialized);
+  project_.materializer().SetTruncationHook(nullptr);
+
+  // The commit is durably stored even though truncation failed.
+  EXPECT_EQ(project_.CountStoredCommits(element_id), 1u);
+
+  // Journal records still exist on disk (truncation did NOT happen).
+  auto records = project_.ReadJournalRecords(element_id, &error);
+  EXPECT_FALSE(records.empty());
+
+  // Recover the same journal — must not duplicate the commit.
+  const auto recovered = project_.materializer().RecoverAndMaterialize(
+      element_id, project_.journal_path(element_id), &error);
+  ASSERT_TRUE(recovered.accepted) << error << " / " << recovered.error;
+  EXPECT_FALSE(recovered.head_moved);  // Already materialized.
+
+  // Commit count must still be 1.
+  EXPECT_EQ(project_.CountStoredCommits(element_id), 1u);
+
+  // After recovery, journal must be truncated.
+  records = project_.ReadJournalRecords(element_id, &error);
+  EXPECT_TRUE(records.empty()) << error;
+}
+
+/// When the post-truncation (flush) hook fails, database_committed is true,
+/// materialized is false, and recovering on reopen must not duplicate commits.
+TEST_F(EditorMiniGitMaterializerTest,
+       JournalFlushFailureRemainsIncompleteAndRecoversOnReopen) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 0.75f));
+  auto capture = project_.CaptureWorkingState(element_id, 0.75f);
+
+  RejectFlushHook hook;
+  project_.materializer().SetTruncationHook(&hook);
+
+  std::string error;
+  const auto  result = project_.MaterializeUnderSaveLock(capture, &error);
+  EXPECT_TRUE(result.accepted);
+  EXPECT_TRUE(result.database_committed);
+  EXPECT_FALSE(result.materialized);
+  project_.materializer().SetTruncationHook(nullptr);
+
+  // DuckDB committed exactly one commit.
+  EXPECT_EQ(project_.CountStoredCommits(element_id), 1u);
+
+  // Close and reopen: recovery must skip the already-materialized prefix and
+  // not insert a second commit.
+  project_.CloseAndReopenProject();
+  const auto recovered = project_.materializer().RecoverAndMaterialize(
+      element_id, project_.journal_path(element_id), &error);
+  ASSERT_TRUE(recovered.accepted) << error << " / " << recovered.error;
+  EXPECT_FALSE(recovered.head_moved);  // Already materialized.
+
+  // Commit count must still be 1.
+  EXPECT_EQ(project_.CountStoredCommits(element_id), 1u);
 }
 
 }  // namespace

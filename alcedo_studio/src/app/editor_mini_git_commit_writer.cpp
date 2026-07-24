@@ -20,6 +20,7 @@ EditorMiniGitCommitWriter::EditorMiniGitCommitWriter(std::shared_ptr<StorageServ
 
 auto EditorMiniGitCommitWriter::Write(const CommitGraphMaterialization& materialization,
                                       std::string*                      error) -> WriteResult {
+  // Validate the materialization struct before any DuckDB interaction.
   try {
     materialization.Validate();
   } catch (const std::exception& e) {
@@ -28,6 +29,18 @@ auto EditorMiniGitCommitWriter::Write(const CommitGraphMaterialization& material
     result.error    = e.what();
     if (error) *error = result.error;
     return result;
+  }
+
+  // Pre-write hook: failure here simulates a failure before any durable writes.
+  if (write_hook_ != nullptr) {
+    std::string hook_error;
+    if (!write_hook_->OnBeforeWrite(materialization, &hook_error)) {
+      WriteResult result;
+      result.accepted = false;
+      result.error    = hook_error.empty() ? "write hook rejected" : std::move(hook_error);
+      if (error) *error = result.error;
+      return result;
+    }
   }
 
   try {

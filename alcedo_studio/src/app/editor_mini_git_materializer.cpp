@@ -221,21 +221,55 @@ auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capt
     return result;
   }
 
-  // Truncate only the captured sequence prefix after DuckDB success. Failure
-  // here leaves a recoverable redundant prefix; recovery skips already-
-  // materialized records. Post-capture sequences remain on disk.
-  std::string truncate_error;
-  if (!TruncateCapturedJournalRange(capture, &truncate_error)) {
-    // DuckDB already committed; surface truncate detail but still report
-    // materialization success so recovery can clean the leftover prefix.
-    if (error != nullptr && error->empty()) {
-      *error = truncate_error;
+  // DuckDB transaction committed successfully.
+  result.accepted           = true;
+  result.database_committed = true;
+  result.head_moved         = head_moved;
+
+  // Truncate only the captured sequence prefix after DuckDB success.
+  // Distinguish between DB-committed (safe) and fully materialized (journal
+  // also truncated). Failure here means recovery will skip the redundant
+  // prefix on the next open.
+  bool truncation_succeeded = false;
+  if (capture.has_journal_range() && !capture.journal_path.empty()) {
+    // Pre-truncation hook: simulate failure to open the journal.
+    if (truncation_hook_ != nullptr) {
+      std::string hook_error;
+      if (!truncation_hook_->OnBeforeTruncate(capture.journal_path, &hook_error)) {
+        if (error != nullptr && error->empty()) {
+          *error = hook_error;
+        }
+        result.materialized = false;
+        return result;
+      }
     }
+
+    std::string truncate_error;
+    truncation_succeeded = TruncateCapturedJournalRange(capture, &truncate_error);
+    if (!truncation_succeeded) {
+      if (error != nullptr && error->empty()) {
+        *error = truncate_error;
+      }
+    }
+
+    // Post-truncation hook: simulate flush failure.
+    if (truncation_succeeded && truncation_hook_ != nullptr) {
+      std::string hook_error;
+      if (!truncation_hook_->OnAfterTruncate(capture.journal_path, &hook_error)) {
+        if (error != nullptr && error->empty()) {
+          *error = hook_error;
+        }
+        truncation_succeeded = false;
+        result.materialized  = false;
+        return result;
+      }
+    }
+  } else {
+    // Empty journal or no journal path: nothing to truncate.
+    truncation_succeeded = true;
   }
 
-  result.accepted     = true;
-  result.materialized = true;
-  result.head_moved   = head_moved;
+  result.materialized = truncation_succeeded;
   return result;
 }
 
