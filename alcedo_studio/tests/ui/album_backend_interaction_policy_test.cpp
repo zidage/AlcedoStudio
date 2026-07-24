@@ -10,6 +10,7 @@
 #include "ui/album_backend_test_fixture.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/album_backend/interaction_policy_controller.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_task_port.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -317,6 +318,86 @@ TEST_F(ApplicationModuleHostInteractionPolicyTests, NaturalLanguageSearchGate_Di
   policy.SetNaturalLanguageSearchEnabled(false);
   EXPECT_TRUE(policy.CanChangeSearchFieldFilters());
   EXPECT_TRUE(policy.SearchFieldFiltersReason().isEmpty());
+}
+
+TEST_F(ApplicationModuleHostInteractionPolicyTests,
+       ProductionEditorSaveTaskPublishesAndClearsFiveCheckpointLocks) {
+  BackgroundTaskController    registry;
+  InteractionPolicyController policy(&registry);
+  EditorSessionTaskPort       task_port(&registry);
+  constexpr uint64_t          kElementA = 101;
+  const QString               expected_reason = QStringLiteral("Saving editor changes");
+
+  // ── Begin task publishes all five checkpoint locks ──
+  const auto task_id = task_port.BeginTask("editor_save", kElementA);
+  EXPECT_NE(task_id, 0u);
+
+  EXPECT_FALSE(policy.CanSelectEditorImage());
+  EXPECT_FALSE(policy.CanSwitchWorkspace());
+  EXPECT_FALSE(policy.CanCheckoutVersion());
+  EXPECT_FALSE(policy.CanPasteAdjustments());
+  EXPECT_FALSE(policy.CanMergeAdjustments());
+  EXPECT_EQ(policy.SelectEditorImageReason(), expected_reason);
+  EXPECT_EQ(policy.SwitchWorkspaceReason(), expected_reason);
+  EXPECT_EQ(policy.CheckoutVersionReason(), expected_reason);
+  EXPECT_EQ(policy.PasteAdjustmentsReason(), expected_reason);
+  EXPECT_EQ(policy.MergeAdjustmentsReason(), expected_reason);
+
+  // Non-checkpoint capabilities remain enabled.
+  EXPECT_TRUE(policy.CanChangeSemanticModel());
+  EXPECT_TRUE(policy.CanRunSemanticGeneration());
+
+  // ── End task as success clears all five locks ──
+  task_port.EndTask(task_id, true, "");
+  EXPECT_TRUE(policy.CanSelectEditorImage());
+  EXPECT_TRUE(policy.CanSwitchWorkspace());
+  EXPECT_TRUE(policy.CanCheckoutVersion());
+  EXPECT_TRUE(policy.CanPasteAdjustments());
+  EXPECT_TRUE(policy.CanMergeAdjustments());
+
+  // ── Failure also clears locks ──
+  const auto task2 = task_port.BeginTask("editor_save", kElementA);
+  EXPECT_FALSE(policy.CanSelectEditorImage());
+  task_port.EndTask(task2, false, "save error");
+  EXPECT_TRUE(policy.CanSelectEditorImage());
+  EXPECT_TRUE(policy.CanSwitchWorkspace());
+  EXPECT_TRUE(policy.CanCheckoutVersion());
+  EXPECT_TRUE(policy.CanPasteAdjustments());
+  EXPECT_TRUE(policy.CanMergeAdjustments());
+
+  // ── Cancellation (task removed from registry) clears locks ──
+  task_port.BeginTask("editor_save", kElementA);
+  EXPECT_FALSE(policy.CanSelectEditorImage());
+  const auto ui_id = registry.ActiveLocks().front().task_id_;
+  EXPECT_FALSE(ui_id.isEmpty());
+  registry.FinishTask(ui_id, BackgroundTaskState::Canceled);
+  EXPECT_TRUE(policy.CanSelectEditorImage());
+}
+
+TEST_F(ApplicationModuleHostInteractionPolicyTests,
+       VersionCheckoutLockDoesNotDisableHistoryBrowsing) {
+  BackgroundTaskController    registry;
+  InteractionPolicyController policy(&registry);
+  const QString               reason = QStringLiteral("Saving editor changes");
+  RegisterLockedTask(registry, BackgroundTaskKind::EditorSave,
+                     {Lock(InteractionCapability::CheckoutVersion, 0, reason)});
+
+  // Only CheckoutVersion is locked; all other editor capabilities remain available.
+  EXPECT_FALSE(policy.CanCheckoutVersion());
+  EXPECT_EQ(policy.CheckoutVersionReason(), reason);
+
+  EXPECT_TRUE(policy.CanSelectEditorImage());
+  EXPECT_TRUE(policy.CanSwitchWorkspace());
+  EXPECT_TRUE(policy.CanPasteAdjustments());
+  EXPECT_TRUE(policy.CanMergeAdjustments());
+
+  // General editor capabilities are not affected by a CheckoutVersion-only lock.
+  policy.SetFocusedElementId(42);
+  EXPECT_TRUE(policy.CanEditFocusedDescription());
+  EXPECT_TRUE(policy.CanEditFocusedRating());
+  EXPECT_TRUE(policy.CanEditFocusedRatingReason());
+  EXPECT_TRUE(policy.CanChangeSemanticModel());
+  EXPECT_TRUE(policy.CanRunSemanticGeneration());
 }
 
 }  // namespace

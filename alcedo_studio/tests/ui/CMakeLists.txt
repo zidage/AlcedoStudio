@@ -177,6 +177,7 @@ alcedo_register_test_target(AlbumBackendBackgroundTaskTest ui)
 
 def_ui_test(AlbumBackendInteractionPolicyTest album_backend_interaction_policy_test.cpp "interaction_policy")
 alcedo_register_test_target(AlbumBackendInteractionPolicyTest ui)
+alcedo_copy_windows_test_runtime_dlls(AlbumBackendInteractionPolicyTest)
 
 def_ui_test(AlbumBackendDbWriteBarrierTest album_backend_db_write_barrier_test.cpp)
 alcedo_register_test_target(AlbumBackendDbWriteBarrierTest ui)
@@ -320,6 +321,42 @@ target_compile_definitions(MainQmlWorkflowTest
 )
 gtest_discover_tests(MainQmlWorkflowTest TEST_PREFIX "MainQmlWorkflowTest.")
 alcedo_register_test_target(MainQmlWorkflowTest ui)
+
+# Phase 6C-5 Phase 6B: QML entry surfaces blocked during save and recovered after.
+add_executable(EditorCheckpointQmlIntegrationTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_checkpoint_qml_integration_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/main_qml_test_fixture.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorCheckpointQmlIntegrationTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorCheckpointQmlIntegrationTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorCheckpointQmlIntegrationTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+gtest_discover_tests(EditorCheckpointQmlIntegrationTest
+    TEST_PREFIX "EditorCheckpointQmlIntegrationTest."
+    PROPERTIES LABELS "workspace_qml;interaction_policy")
+alcedo_register_test_target(EditorCheckpointQmlIntegrationTest ui)
+alcedo_copy_windows_test_runtime_dlls(EditorCheckpointQmlIntegrationTest)
 
 add_executable(WorkspaceShellTest
     ${ALCEDO_TEST_ROOT}/ui/workspace_shell_test.cpp
@@ -593,3 +630,39 @@ target_link_libraries(LanguageManagerTest
 )
 gtest_discover_tests(LanguageManagerTest TEST_PREFIX "LanguageManagerTest.")
 alcedo_register_test_target(LanguageManagerTest ui)
+
+# Phase 6C-5 Phase 6C: production-style A-to-B integration test.
+add_executable(EditorCheckpointNavigationTest
+    ${ALCEDO_TEST_ROOT}/integration/editor_checkpoint_navigation_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/main_qml_test_fixture.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorCheckpointNavigationTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorCheckpointNavigationTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorCheckpointNavigationTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+gtest_discover_tests(EditorCheckpointNavigationTest
+    TEST_PREFIX "EditorCheckpointNavigationTest."
+    PROPERTIES LABELS "workspace_qml;interaction_policy;integration")
+alcedo_register_test_target(EditorCheckpointNavigationTest ui)
+alcedo_copy_windows_test_runtime_dlls(EditorCheckpointNavigationTest)
