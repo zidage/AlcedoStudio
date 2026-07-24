@@ -112,15 +112,22 @@ auto ValidateAndApplyRecord(CommitGraph& graph, const MiniGitJournalRecord& reco
       SetError(error, e.what());
       return false;
     }
-    if (commit.GetKind() != EditCommitKind::kEdit || commit.GetRootId() != graph.GetRootId() ||
+    const bool is_edit  = commit.GetKind() == EditCommitKind::kEdit;
+    const bool is_merge = commit.GetKind() == EditCommitKind::kMerge;
+    if ((!is_edit && !is_merge) || commit.GetRootId() != graph.GetRootId() ||
         commit.GetFirstParentHash() != source_head ||
         record.target_head != commit.GetCommitHash()) {
-      SetError(error, "mini-Git edit record does not continue the checked-out first-parent path");
+      SetError(error, "mini-Git commit record does not continue the checked-out first-parent path");
+      return false;
+    }
+    if (is_merge && commit.GetSecondParentHash().has_value() &&
+        graph.FindCommit(*commit.GetSecondParentHash()) == nullptr) {
+      SetError(error, "mini-Git merge record second parent is missing from the commit graph");
       return false;
     }
     if (record.target_chain_hash !=
         FoldTransactionChainHash(source_chain, commit.GetCommitHash())) {
-      SetError(error, "mini-Git edit record has an invalid resulting chain hash");
+      SetError(error, "mini-Git commit record has an invalid resulting chain hash");
       return false;
     }
     try {
@@ -434,6 +441,55 @@ auto MiniGitWorkingHistory::AppendEdit(OrdinaryEditPayload payload) -> MiniGitEd
   } catch (const std::exception& e) {
     // A journaled record that cannot be reflected in the working graph is a
     // corruption-level condition. Do not claim the live working head advanced.
+    result.error = e.what();
+  }
+  return result;
+}
+
+auto MiniGitWorkingHistory::AppendMerge(commit_hash_t second_parent, MergeEditPayload payload)
+    -> MiniGitEditAppendResult {
+  MiniGitEditAppendResult result;
+  const auto              source_head  = working_head();
+  const auto              source_chain = transaction_chain_hash();
+
+  // Second parent must already exist in the graph.
+  if (graph_->FindCommit(second_parent) == nullptr) {
+    result.error = "mini-Git merge second parent is not in the commit graph";
+    return result;
+  }
+
+  EditCommit commit;
+  try {
+    commit = EditCommit::MakeMerge(graph_->GetRootId(), source_head, second_parent,
+                                   std::move(payload));
+  } catch (const std::exception& e) {
+    result.error = e.what();
+    return result;
+  }
+
+  const auto target_chain = FoldTransactionChainHash(source_chain, commit.GetCommitHash());
+  MiniGitJournalRecord record;
+  record.kind                       = MiniGitJournalRecordKind::kEditCommit;
+  record.expected_source_head       = source_head;
+  record.expected_source_chain_hash = source_chain;
+  record.target_head                = commit.GetCommitHash();
+  record.target_chain_hash          = target_chain;
+  record.edit_commit                = commit;
+
+  if (!journal_->Append(record, &result.error)) {
+    if (result.error.empty()) {
+      result.error = "mini-Git journal rejected merge commit";
+    }
+    return result;
+  }
+
+  try {
+    (void)graph_->InsertCommit(commit);
+    graph_->MoveWorkingHead(graph_->GetActiveVersionId(), commit.GetCommitHash());
+    redo_stack_.clear();
+    result.committed = true;
+    result.commit    = std::move(commit);
+  } catch (const std::exception& e) {
     result.error = e.what();
   }
   return result;

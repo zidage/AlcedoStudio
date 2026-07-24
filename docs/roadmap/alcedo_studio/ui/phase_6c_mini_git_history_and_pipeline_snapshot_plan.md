@@ -5,8 +5,9 @@ Date: 2026-07-24
 Status: approved design; 6C-1, 6C-2, 6C-2-Fix, 6C-3, 6C-4, 6C-5, 6C-6, and Phase 3 (3A–3E) are
 implemented. Phase 6C-5 qualification Phases 1, 2A, 2B, Phase 3, Phase 4 (4A–4B typed-value
 wiring), Phase 5 (5A–5D DuckDB/materialization), and Phase 6 (6A–6C policy/QML/integration)
-are implemented. Phase 6C-7 panel state publication is complete.
-Phase 6C-8 Paste, Merge, and history integration is next.
+are implemented. Phase 6C-7 panel state publication is complete. Phase 6C-8 Paste, Merge,
+and history integration is complete.
+Phase 6C-9 Recovery, thumbnail, and destructive-cutover qualification is next.
 
 Related documents:
 
@@ -2314,6 +2315,30 @@ Acceptance:
 - Merge moves the current Version only after every conflict has a UI-provided resolution.
 - Canceling Merge writes no commit or ref change.
 - Merge reconstruction uses the stored resolved payload and produces the same pipeline after reopen.
+
+##### Phase 6C-8 completion record (2026-07-24)
+
+**Status:** complete
+
+**Primary success call chain (Paste):**
+
+QML Paste action -> AdjustmentTransferController::PasteViaMiniGit -> PipelineMgmtService::LoadPipeline -> AdjustmentTransferService::PasteAsRootRelativeVersion -> BuildRootRelativeCommits -> CommitGraph::InsertCommit + CreateVersionRefAtHead
+
+**Primary success call chain (Merge, UI deferred to Phase 7A):**
+
+InitiateMerge -> BuildRootRelativeCommits (incoming branch) -> pipeline load + per-field conflict detection -> CompleteMerge -> EditCommit::MakeMerge (two-parent merge commit) -> CommitGraph::InsertCommit + MoveWorkingHead
+
+**Primary failure call chain (cancel):**
+
+CancelMerge -> no commit created, no ref moved -> incoming branch commits remain as unreachable
+
+**Tests executed:**
+
+AdjustmentTransferServiceMiniGitTest (7/7 PASS), AdjustmentTransferServiceTest (7/7 PASS), EditorMiniGitMaterializerTest (5/5 PASS)
+
+**Changed files:** mini_git_working_history.hpp/cpp, adjustment_transfer_service.hpp/cpp, adjustment_transfer_controller.hpp/cpp, adjustment_transfer_service_mini_git_test.cpp, tests/app/CMakeLists.txt
+
+**Residual gaps:** Merge conflict UI deferred to Phase 7A; serialized pipeline state storage deferred to Phase 6C-9; controller Merge path uses old EditHistoryMgmtService fallback until Phase 7A conflict UI is wired.
 
 ### Phase 6C-9 - Recovery, thumbnail, and destructive-cutover qualification
 

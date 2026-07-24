@@ -38,6 +38,17 @@ class AdjustmentTransferController final : public QObject {
   Q_INVOKABLE QVariantMap Paste(const QVariantList& targetEntries, const QString& strategy);
   Q_INVOKABLE void        Discard();
 
+  // --- Phase 6C-8 private helpers ---
+
+  /// Paste adjustments to every target using the Mini-Git commit graph path.
+  /// Each target gets a new root-relative Version.
+  auto PasteViaMiniGit(const std::vector<sl_element_id_t>& ids,
+                       PipelineMgmtService& pipeline_service) -> QVariantMap;
+
+  /// Shared post-apply processing: thumbnail invalidation, HDR metadata refresh,
+  /// and project persistence.
+  void PostProcessApplyResult(const AdjustmentApplyResult& result, bool merge_strategy);
+
  signals:
   void PackageChanged();
 

@@ -147,6 +147,12 @@ class MiniGitWorkingHistory final {
   [[nodiscard]] auto redo_count() const -> std::size_t { return redo_stack_.size(); }
 
   auto               AppendEdit(OrdinaryEditPayload payload) -> MiniGitEditAppendResult;
+  /// Create a merge commit whose first parent is the current working head and whose second
+  /// parent is the incoming branch head. The merge commit stores the resolved field delta
+  /// and folds into the first-parent chain hash. Journal append and head advance follows
+  /// the same pattern as AppendEdit.
+  auto               AppendMerge(commit_hash_t second_parent, MergeEditPayload payload)
+      -> MiniGitEditAppendResult;
   auto               Undo() -> MiniGitHeadMoveResult;
   auto               Redo() -> MiniGitHeadMoveResult;
 

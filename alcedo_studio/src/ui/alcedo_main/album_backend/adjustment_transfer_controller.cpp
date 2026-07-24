@@ -455,10 +455,6 @@ auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, cons
   if (!pipeline_service) {
     return ErrorResult(Tr("Pipeline service is unavailable."));
   }
-  auto history_service = project_->handler().history_service();
-  if (!history_service) {
-    return ErrorResult(Tr("Edit history service is unavailable."));
-  }
 
   const auto targets = import_export_->CollectExportTargets(targetEntries);
   const auto ids     = MakeTargetIds(targets);
@@ -466,19 +462,141 @@ auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, cons
     return ErrorResult(Tr("No target images selected."));
   }
 
+  const bool merge_strategy = strategy != QStringLiteral("paste");
+
+  // Phase 6C-8: For Paste, use the Mini-Git path. Merge with conflict resolution
+  // will be wired in Phase 7A when the UI dialog is ready.
+  if (!merge_strategy) {
+    return PasteViaMiniGit(ids, *pipeline_service);
+  }
+
+  // Merge: fall back to the old history-based path until Phase 7A conflict UI.
+  auto history_service = project_->handler().history_service();
+  if (!history_service) {
+    return ErrorResult(Tr("Edit history service is unavailable."));
+  }
+
   try {
-    const bool merge_strategy = strategy != QStringLiteral("paste");
-    const auto result         = AdjustmentTransferService::Apply(
+    const auto result = AdjustmentTransferService::Apply(
         *pipeline_service, *history_service, ids, *copied_package_,
-        (merge_strategy ? Tr("Merged Adjustments") : Tr("Pasted Adjustments")).toStdString(),
-        merge_strategy ? AdjustmentVersionApplyMode::kMerge : AdjustmentVersionApplyMode::kPaste);
-    auto thumbnail_service = project_->handler().thumbnail_service();
-    bool hdr_metadata_dirty = false;
-    for (sl_element_id_t element_id : result.applied_ids_) {
-      const auto*      item     = library_->FindAlbumItem(element_id);
-      const image_id_t image_id = item != nullptr ? item->image_id : 0;
-      if (image_id != 0) {
-        try {
+        Tr("Merged Adjustments").toStdString(),
+        AdjustmentVersionApplyMode::kMerge);
+    PostProcessApplyResult(result, merge_strategy);
+    QVariantMap response = SuccessResult(Tr("Adjustments merged."));
+    response.insert("appliedCount", static_cast<int>(result.applied_ids_.size()));
+    response.insert("unchangedCount", static_cast<int>(result.unchanged_ids_.size()));
+    response.insert("failureCount", static_cast<int>(result.failures_.size()));
+    return response;
+  } catch (...) {
+    return ErrorResult(CurrentExceptionText("Failed to merge adjustments."));
+  }
+}
+
+auto AdjustmentTransferController::PasteViaMiniGit(
+    const std::vector<sl_element_id_t>& ids,
+    PipelineMgmtService& pipeline_service) -> QVariantMap {
+  AdjustmentApplyResult result;
+  for (sl_element_id_t element_id : ids) {
+    if (element_id == 0) {
+      continue;
+    }
+
+    std::shared_ptr<PipelineGuard> guard;
+    try {
+      guard = pipeline_service.LoadPipeline(element_id);
+    } catch (const std::exception& e) {
+      result.failures_.push_back({element_id, e.what()});
+      continue;
+    }
+    if (!guard || !guard->pipeline_) {
+      result.failures_.push_back({element_id, "Pipeline was not available."});
+      continue;
+    }
+
+    // Use the commit graph attached to the pipeline guard.
+    CommitGraph* graph = nullptr;
+    if (guard->commit_graph_) {
+      graph = guard->commit_graph_.get();
+    }
+
+    if (graph == nullptr) {
+      // Fall back to the old history path if no Mini-Git graph is available.
+      auto history_service = project_->handler().history_service();
+      if (!history_service) {
+        result.failures_.push_back({element_id, "No history service available for paste."});
+        pipeline_service.SavePipeline(guard);
+        continue;
+      }
+      std::vector<sl_element_id_t> single{ element_id };
+      try {
+        auto single_result = AdjustmentTransferService::Apply(
+            pipeline_service, *history_service, single, *copied_package_,
+            Tr("Pasted Adjustments").toStdString(),
+            AdjustmentVersionApplyMode::kPaste);
+        result.applied_ids_.insert(result.applied_ids_.end(),
+                                   single_result.applied_ids_.begin(),
+                                   single_result.applied_ids_.end());
+        result.unchanged_ids_.insert(result.unchanged_ids_.end(),
+                                     single_result.unchanged_ids_.begin(),
+                                     single_result.unchanged_ids_.end());
+        result.failures_.insert(result.failures_.end(),
+                                single_result.failures_.begin(),
+                                single_result.failures_.end());
+      } catch (...) {
+        pipeline_service.SavePipeline(guard);
+        continue;
+      }
+      continue;
+    }
+
+    // Mini-Git paste path.
+    try {
+      auto paste_result = AdjustmentTransferService::PasteAsRootRelativeVersion(
+          *graph, pipeline_service, element_id, *copied_package_,
+          Tr("Pasted Adjustments").toStdString());
+      if (paste_result.pasted) {
+        guard->dirty_                       = true;
+        guard->working_head_commit_hash_    = paste_result.new_head;
+        guard->transaction_chain_hash_      = graph->ChainHashForHead(paste_result.new_head);
+        guard->serialized_state_needs_writeback_ = true;
+        result.applied_ids_.push_back(element_id);
+      } else {
+        result.failures_.push_back({element_id, paste_result.error});
+      }
+    } catch (const std::exception& e) {
+      result.failures_.push_back({element_id, e.what()});
+    }
+    pipeline_service.SavePipeline(guard);
+  }
+
+  pipeline_service.Sync();
+  PostProcessApplyResult(result, false);
+
+  QVariantList failures;
+  for (const auto& failure : result.failures_) {
+    failures.push_back(QVariantMap{{"elementId", static_cast<uint>(failure.file_id_)},
+                                   {"message", QString::fromStdString(failure.message_)}});
+  }
+
+  QVariantMap response = SuccessResult(Tr("Adjustments pasted."));
+  response.insert("appliedCount", static_cast<int>(result.applied_ids_.size()));
+  response.insert("unchangedCount", static_cast<int>(result.unchanged_ids_.size()));
+  response.insert("failureCount", static_cast<int>(result.failures_.size()));
+  response.insert("failures", failures);
+  return response;
+}
+
+void AdjustmentTransferController::PostProcessApplyResult(
+    const AdjustmentApplyResult& result, bool /*merge_strategy*/) {
+  auto thumbnail_service = project_->handler().thumbnail_service();
+  bool hdr_metadata_dirty = false;
+  for (sl_element_id_t element_id : result.applied_ids_) {
+    const auto*      item     = library_->FindAlbumItem(element_id);
+    const image_id_t image_id = item != nullptr ? item->image_id : 0;
+    if (image_id != 0) {
+      try {
+        auto pipeline_service = project_->handler().pipeline_service();
+        if (pipeline_service) {
           auto guard = pipeline_service->LoadPipeline(element_id);
           if (guard && guard->pipeline_) {
             const bool is_hdr = IsHdrExportEotf(
@@ -487,49 +605,33 @@ auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, cons
             library_->PersistImageHdrFlag(element_id, image_id, is_hdr);
             hdr_metadata_dirty = true;
           }
-        } catch (...) {
         }
-      }
-      if (thumbnail_service) {
-        try {
-          thumbnail_service->InvalidateThumbnail(element_id);
-        } catch (...) {
-        }
-      }
-      if (image_id != 0) {
-        if (!library_->thumbs().RefreshCurrentThumbnail(element_id, image_id)) {
-          library_->thumbs().UpdateThumbnailState(element_id, QString(), false, false);
-        }
+      } catch (...) {
       }
     }
-    if (hdr_metadata_dirty) {
-      if (auto project = project_->handler().project()) {
-        try {
-          project->GetImagePoolService()->SyncWithStorage();
-          QString ignored_error;
-          if (project_->handler().PersistCurrentProjectState()) {
-            (void)project_->handler().PackageCurrentProjectFiles(&ignored_error);
-          }
-        } catch (...) {
-        }
+    if (thumbnail_service) {
+      try {
+        thumbnail_service->InvalidateThumbnail(element_id);
+      } catch (...) {
       }
     }
-
-    QVariantList failures;
-    for (const auto& failure : result.failures_) {
-      failures.push_back(QVariantMap{{"elementId", static_cast<uint>(failure.file_id_)},
-                                     {"message", QString::fromStdString(failure.message_)}});
+    if (image_id != 0) {
+      if (!library_->thumbs().RefreshCurrentThumbnail(element_id, image_id)) {
+        library_->thumbs().UpdateThumbnailState(element_id, QString(), false, false);
+      }
     }
-
-    QVariantMap response =
-        SuccessResult(merge_strategy ? Tr("Adjustments merged.") : Tr("Adjustments pasted."));
-    response.insert("appliedCount", static_cast<int>(result.applied_ids_.size()));
-    response.insert("unchangedCount", static_cast<int>(result.unchanged_ids_.size()));
-    response.insert("failureCount", static_cast<int>(result.failures_.size()));
-    response.insert("failures", failures);
-    return response;
-  } catch (...) {
-    return ErrorResult(CurrentExceptionText("Failed to paste adjustments."));
+  }
+  if (hdr_metadata_dirty) {
+    if (auto project = project_->handler().project()) {
+      try {
+        project->GetImagePoolService()->SyncWithStorage();
+        QString ignored_error;
+        if (project_->handler().PersistCurrentProjectState()) {
+          (void)project_->handler().PackageCurrentProjectFiles(&ignored_error);
+        }
+      } catch (...) {
+      }
+    }
   }
 }
 
