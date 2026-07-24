@@ -1,3 +1,15 @@
+# ==============================================================================
+# Build-context roots (Phase 3A). Immutable for child manifests; set before any
+# first-party test add_subdirectory. Legacy ALCEDO_*_DIR aliases keep existing
+# path references stable until domain manifests adopt ALCEDO_TEST_ROOT.
+# ==============================================================================
+set(ALCEDO_TEST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
+set(ALCEDO_TEST_SUPPORT_ROOT "${ALCEDO_TEST_ROOT}/support")
+set(ALCEDO_ROOT_DIR "${ALCEDO_TEST_ROOT}/..")
+set(ALCEDO_SRC_DIR "${ALCEDO_ROOT_DIR}/src")
+set(ALCEDO_INCLUDE_DIR "${ALCEDO_SRC_DIR}/include")
+set(ALCEDO_TEST_DIR "${ALCEDO_TEST_ROOT}")
+
 # Not used by now, but kept for future test cases
 add_library(MemLeakDect INTERFACE leak_detector/memory_leak_detector.hpp)
 target_link_libraries(MemLeakDect INTERFACE GTest::gtest_main)
@@ -7,11 +19,6 @@ set(ALCEDO_TEST_OPENCV_MIN_DEPS
     opencv_imgproc
     opencv_imgcodecs
 )
-
-set(ALCEDO_ROOT_DIR "${CMAKE_CURRENT_LIST_DIR}/..")
-set(ALCEDO_SRC_DIR "${ALCEDO_ROOT_DIR}/src")
-set(ALCEDO_INCLUDE_DIR "${ALCEDO_SRC_DIR}/include")
-set(ALCEDO_TEST_DIR "${ALCEDO_ROOT_DIR}/tests")
 
 include(GoogleTest)
 set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
@@ -51,55 +58,7 @@ add_custom_target(alcedo_tests_ci_core)
 add_custom_target(alcedo_tests_ci_raw)
 add_custom_target(alcedo_tests_ci_metal)
 
-function(alcedo_assign_test_category category option_name category_target)
-  foreach(test_target IN LISTS ARGN)
-    if(TARGET ${test_target})
-      if(NOT ${option_name} OR NOT ALCEDO_BUILD_TESTS_BY_DEFAULT)
-        set_target_properties(${test_target} PROPERTIES
-          EXCLUDE_FROM_ALL TRUE
-          EXCLUDE_FROM_DEFAULT_BUILD TRUE
-        )
-      endif()
-      if(${option_name})
-        if(ALCEDO_BUILD_TESTS_BY_DEFAULT)
-          set_target_properties(${test_target} PROPERTIES
-            EXCLUDE_FROM_ALL FALSE
-            EXCLUDE_FROM_DEFAULT_BUILD FALSE
-          )
-        endif()
-        add_dependencies(${category_target} ${test_target})
-        add_dependencies(alcedo_tests_all ${test_target})
-      endif()
-    endif()
-  endforeach()
-endfunction()
-
-function(alcedo_copy_duckdb_extension target_name extension_path extension_file_name)
-  if(TARGET ${target_name} AND NOT "${extension_path}" STREQUAL "" AND EXISTS "${extension_path}")
-    add_custom_command(TARGET ${target_name} POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E make_directory
-              "$<TARGET_FILE_DIR:${target_name}>/duckdb_extensions"
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              "${extension_path}"
-              "$<TARGET_FILE_DIR:${target_name}>/duckdb_extensions/${extension_file_name}"
-      VERBATIM)
-  endif()
-endfunction()
-
-function(alcedo_copy_duckdb_extensions target_name)
-  alcedo_copy_duckdb_extension(${target_name}
-    "${ALCEDO_DUCKDB_VSS_EXTENSION}"
-    "vss.duckdb_extension")
-  alcedo_copy_duckdb_extension(${target_name}
-    "${ALCEDO_DUCKDB_FTS_EXTENSION}"
-    "fts.duckdb_extension")
-endfunction()
-
-function(alcedo_copy_duckdb_fts_extension target_name)
-  alcedo_copy_duckdb_extension(${target_name}
-    "${ALCEDO_DUCKDB_FTS_EXTENSION}"
-    "fts.duckdb_extension")
-endfunction()
+include("${ALCEDO_TEST_ROOT}/cmake/AlcedoTestRegistration.cmake")
 
 add_executable(SampleTest sample_test.cpp)
 target_link_libraries(SampleTest PRIVATE GTest::gtest_main)

@@ -1,21 +1,13 @@
 # ==============================================================================
-# Helper Macro to reduce boilerplate
+# Build-context roots (Phase 3A). Immutable for child manifests; set before any
+# first-party add_subdirectory. ALCEDO_INCLUDE_ROOT is the stable public header
+# root used by def_library (never a directory-relative "include").
 # ==============================================================================
-# Usage: def_library(Name SOURCES src1 src2 PUBLIC_DEPS lib1 PRIVATE_DEPS lib2)
-macro(def_library target_name)
-    cmake_parse_arguments(ARG "" "" "SOURCES;PUBLIC_DEPS;PRIVATE_DEPS" ${ARGN})
-    
-    add_library(${target_name} ${ARG_SOURCES})
-    target_include_directories(${target_name} PUBLIC include)
-    
-    if(ARG_PUBLIC_DEPS)
-        target_link_libraries(${target_name} PUBLIC ${ARG_PUBLIC_DEPS})
-    endif()
-    
-    if(ARG_PRIVATE_DEPS)
-        target_link_libraries(${target_name} PRIVATE ${ARG_PRIVATE_DEPS})
-    endif()
-endmacro()
+set(ALCEDO_SRC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
+set(ALCEDO_INCLUDE_ROOT "${ALCEDO_SRC_ROOT}/include")
+set(ALCEDO_BINARY_ROOT "${CMAKE_CURRENT_BINARY_DIR}")
+
+include("${ALCEDO_SRC_ROOT}/cmake/AlcedoTargetHelpers.cmake")
 
 # ==============================================================================
 # 1. Utilities
@@ -551,7 +543,7 @@ if(ALCEDO_OPENCL_ENABLED)
     list(APPEND IMAGE_BUFFER_SRCS image/opencl_image.cpp)
 endif()
 add_library(ImageBuffer ${IMAGE_BUFFER_SRCS})
-target_include_directories(ImageBuffer PUBLIC include)
+target_include_directories(ImageBuffer PUBLIC "${ALCEDO_INCLUDE_ROOT}")
 
 # Common dependencies
 set(IMAGE_BUFFER_DEPS Exiv2 ${ALCEDO_OPENCV_CORE_DEPS} libraw::raw_r TimeProvider JSON StrConv)

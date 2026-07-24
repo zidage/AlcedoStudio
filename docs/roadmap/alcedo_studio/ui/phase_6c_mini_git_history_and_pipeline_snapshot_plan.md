@@ -3,9 +3,9 @@
 Date: 2026-07-22
 
 Status: approved design; 6C-1, 6C-2, 6C-2-Fix, 6C-3, 6C-4, and 6C-5 implemented.
-Phase 6C-5 qualification Phase 1, Phase 2A, and Phase 2B are implemented. Phase 3 is the next
-blocking build-configuration ownership stage; the former Phase 3 begins at Phase 4. Do not begin
-6C-6 checkout, session switching,
+Phase 6C-5 qualification Phase 1, Phase 2A, Phase 2B, and Phase 3A are implemented. Phase 3B is
+the next build-configuration ownership stage (move app/UI source target declarations); the former
+typed-value Phase 3 begins at Phase 4. Do not begin 6C-6 checkout, session switching,
 or garbage collection until every qualification phase is complete.
 
 Related documents:
@@ -1188,31 +1188,34 @@ The former typed-value work is Phase 4 after this stage.
 
 ##### Baseline and ownership boundary
 
-The current first-party manifests are already above the review threshold:
+First-party manifests live under `alcedo_studio/` (top-level CMake adds
+`alcedo_studio/src` and `alcedo_studio/tests`). Phase 3A freezes that tree before relocation.
+LOC after Phase 3A helper extraction (still above the review threshold):
 
-| File | Current LOC | Mixed responsibilities that must be separated |
+| File | LOC after 3A | Mixed responsibilities that must still be separated |
 | --- | ---: | --- |
-| `src/CMakeLists.txt` | 2464 | target helper definition, platform/backend switches, source lists, generated protobuf/shader work, app services, UI libraries, QML module, executable packaging |
-| `tests/CMakeLists.txt` | 2400 | test switches, category aggregate targets, test helper functions, every domain's executable declarations, discovery, resource copy rules, and category membership |
+| `alcedo_studio/src/CMakeLists.txt` | 2266 | platform/backend switches, source lists, generated protobuf/shader work, app services, UI libraries, QML module, executable packaging (helper macro extracted) |
+| `alcedo_studio/tests/CMakeLists.txt` | 2156 | test switches, category aggregate targets, every domain's executable declarations, discovery, resource copy rules, and trailing category membership lists (registration functions extracted) |
 
-`src/third_party/` already has its own build manifests, but no first-party `src/app`, `src/ui`,
-`tests/app`, or `tests/ui` manifest currently owns its local targets. Moving lines into a second
+`alcedo_studio/src/third_party/` already has its own build manifests, but no first-party
+`alcedo_studio/src/app`, `alcedo_studio/src/ui`, `alcedo_studio/tests/app`, or
+`alcedo_studio/tests/ui` manifest currently owns its local targets. Moving lines into a second
 large root-adjacent file would not fix the ownership problem. Each new manifest owns the target
 declarations for one source domain; the root files only assemble the graph.
 
 | Owner | New or retained file | Owns | Must not own |
 | --- | --- | --- | --- |
-| Source build root | `src/CMakeLists.txt` | immutable source-root paths, common helper inclusion, platform-wide feature values, and ordered `add_subdirectory` calls | first-party library/executable source lists or their target-link rules |
-| Source target helper | `src/cmake/AlcedoTargetHelpers.cmake` | `def_library` implementation and common include-directory behavior | a concrete app/UI target or a platform feature decision |
-| Application services | `src/app/CMakeLists.txt` | every target whose primary implementation is under `src/app/` or public API under `src/include/app/`, including the editor-session and Mini-Git service targets | UI target declarations or a dependency from app to a UI target |
-| UI composition root | `src/ui/CMakeLists.txt` | ordering of UI subdomains only | long source/QML lists |
-| Editor RHI | `src/ui/editor_rhi/CMakeLists.txt` | RHI viewport, harness, shaders, backend-specific RHI setup, and developer harness targets | album-shell or QML application target details |
-| Alcedo UI shell | `src/ui/alcedo_main/CMakeLists.txt` | `UiLocalization`, `BackgroundTaskController`, `AlbumBackendLib`, editor-dialog source selection, `alcedo_main`, QML files, translations, and platform packaging rules | app-service source lists |
-| Test build root | `tests/CMakeLists.txt` | test-root paths, test feature options, aggregate category targets, common helper inclusion, and ordered `add_subdirectory` calls | individual test executable declarations, `gtest_discover_tests`, or per-target copy commands |
-| Test registration helper | `tests/cmake/AlcedoTestRegistration.cmake` | category registration, DuckDB extension copy helpers, and shared test-target setup | lists of application/UI test source files |
-| Application tests | `tests/app/CMakeLists.txt` | all targets with test sources under `tests/app/`, their discovery, labels, fixtures, resource copies, and category registration | UI/QML test executable definitions |
-| UI tests | `tests/ui/CMakeLists.txt` | all targets with test sources under `tests/ui/`, the album-backend helper, QML resources, discovery, labels, and category registration | app-service test executable definitions |
-| Edit/history tests | `tests/edit/CMakeLists.txt` | Mini-Git persistence, capture, and edit-pipeline test declarations under `tests/edit/` | app/UI target declarations |
+| Source build root | `alcedo_studio/src/CMakeLists.txt` | immutable source-root paths, common helper inclusion, platform-wide feature values, and ordered `add_subdirectory` calls | first-party library/executable source lists or their target-link rules |
+| Source target helper | `alcedo_studio/src/cmake/AlcedoTargetHelpers.cmake` | `def_library` implementation and common include-directory behavior | a concrete app/UI target or a platform feature decision |
+| Application services | `alcedo_studio/src/app/CMakeLists.txt` | every target whose primary implementation is under `src/app/` or public API under `src/include/app/`, including the editor-session and Mini-Git service targets | UI target declarations or a dependency from app to a UI target |
+| UI composition root | `alcedo_studio/src/ui/CMakeLists.txt` | ordering of UI subdomains only | long source/QML lists |
+| Editor RHI | `alcedo_studio/src/ui/editor_rhi/CMakeLists.txt` | RHI viewport, harness, shaders, backend-specific RHI setup, and developer harness targets | album-shell or QML application target details |
+| Alcedo UI shell | `alcedo_studio/src/ui/alcedo_main/CMakeLists.txt` | `UiLocalization`, `BackgroundTaskController`, `AlbumBackendLib`, editor-dialog source selection, `alcedo_main`, QML files, translations, and platform packaging rules | app-service source lists |
+| Test build root | `alcedo_studio/tests/CMakeLists.txt` | test-root paths, test feature options, aggregate category targets, common helper inclusion, and ordered `add_subdirectory` calls | individual test executable declarations, `gtest_discover_tests`, or per-target copy commands |
+| Test registration helper | `alcedo_studio/tests/cmake/AlcedoTestRegistration.cmake` | category registration, DuckDB extension copy helpers, and shared test-target setup | lists of application/UI test source files |
+| Application tests | `alcedo_studio/tests/app/CMakeLists.txt` | all targets with test sources under `tests/app/`, their discovery, labels, fixtures, resource copies, and category registration | UI/QML test executable definitions |
+| UI tests | `alcedo_studio/tests/ui/CMakeLists.txt` | all targets with test sources under `tests/ui/`, the album-backend helper, QML resources, discovery, labels, and category registration | app-service test executable definitions |
+| Edit/history tests | `alcedo_studio/tests/edit/CMakeLists.txt` | Mini-Git persistence, capture, and edit-pipeline test declarations under `tests/edit/` | app/UI target declarations |
 
 The remaining first-party source and test domains follow the same boundary in Phase 3D:
 `concurrency`, `cuda`, `decoders`, `edit`, `image`, `io`, `metal`, `nn`, `opencl`, `renderer`,
@@ -1227,59 +1230,62 @@ Build ownership and observable result must be traceable through this chain:
 
 ##### Build-context rules
 
-- [ ] Before the first source `add_subdirectory`, define `ALCEDO_SRC_ROOT`,
+- [x] Before the first source `add_subdirectory`, define `ALCEDO_SRC_ROOT`,
       `ALCEDO_INCLUDE_ROOT`, and `ALCEDO_BINARY_ROOT`. Before the first test `add_subdirectory`,
       define `ALCEDO_TEST_ROOT` and `ALCEDO_TEST_SUPPORT_ROOT`. Child manifests may read these
-      values but may not overwrite them.
-- [ ] Move the current `def_library` macro into `src/cmake/AlcedoTargetHelpers.cmake`. Its public
-      include path must use `${ALCEDO_INCLUDE_ROOT}`, never a relative `include` path that changes
-      meaning in a child directory.
-- [ ] Move `alcedo_assign_test_category`, DuckDB copy helpers, and reusable test setup into
-      `tests/cmake/AlcedoTestRegistration.cmake`. The root test manifest contains no function or
-      macro definition after this stage.
+      values but may not overwrite them. *(Phase 3A: defined at the top of the source and test
+      roots; no first-party `add_subdirectory` yet.)*
+- [x] Move the current `def_library` macro into `alcedo_studio/src/cmake/AlcedoTargetHelpers.cmake`.
+      Its public include path must use `${ALCEDO_INCLUDE_ROOT}`, never a relative `include` path that
+      changes meaning in a child directory.
+- [x] Move `alcedo_assign_test_category`, DuckDB copy helpers, and reusable test setup into
+      `alcedo_studio/tests/cmake/AlcedoTestRegistration.cmake`. *(Phase 3A: those functions left the
+      root. `def_ui_test` remains in the test root until Phase 3C moves it with UI tests.)*
 - [ ] Replace the trailing hand-maintained category target lists with one
       `alcedo_register_test_target(<target> <category>...)` call adjacent to each test declaration.
       The helper applies the existing build option, `EXCLUDE_FROM_ALL` behavior, and dependencies on
       `alcedo_tests_all` and the named category aggregate. A target in more than one category is
-      registered once per category at that same declaration.
-- [ ] Keep all existing `gtest_discover_tests`, explicit `add_test`, labels, working directories,
+      registered once per category at that same declaration. *(Phase 3A: helper exists; trailing
+      lists still call `alcedo_assign_test_category`. Phase 3C converts declarations as they move.)*
+- [x] Keep all existing `gtest_discover_tests`, explicit `add_test`, labels, working directories,
       timeouts, resource copies, platform guards, and target names unchanged. Category registration
-      changes build aggregation only; it must not rewrite CTest names or labels.
-- [ ] Do not pass target lists through `PARENT_SCOPE`, a directory property, or a mutable global list.
+      changes build aggregation only; it must not rewrite CTest names or labels. *(Verified by
+      Phase 3A pre/post CTest identity compare.)*
+- [x] Do not pass target lists through `PARENT_SCOPE`, a directory property, or a mutable global list.
       CMake targets are global by design; their source list, link rules, discovery, and category
       membership remain adjacent in the owning manifest.
 - [ ] Use `${ALCEDO_SRC_ROOT}`, `${ALCEDO_TEST_ROOT}`, or a path local to the owning manifest for
       every moved path. Audit every use of `CMAKE_CURRENT_SOURCE_DIR`, `CMAKE_CURRENT_BINARY_DIR`,
       and `CMAKE_CURRENT_LIST_DIR`; retain a local value only when that directory is intentionally
-      the source of the path.
+      the source of the path. *(Phase 3B–3D when targets relocate.)*
 
 ##### Phase 3A - Freeze the build graph before relocation
 
 Files:
 
-- `src/CMakeLists.txt`
-- `tests/CMakeLists.txt`
-- new `src/cmake/AlcedoTargetHelpers.cmake`
-- new `tests/cmake/AlcedoTestRegistration.cmake`
+- `alcedo_studio/src/CMakeLists.txt`
+- `alcedo_studio/tests/CMakeLists.txt`
+- new `alcedo_studio/src/cmake/AlcedoTargetHelpers.cmake`
+- new `alcedo_studio/tests/cmake/AlcedoTestRegistration.cmake`
 
 Checklist:
 
-- [ ] Configure the existing `win_debug` build before changing a manifest. Record the exact CMake
+- [x] Configure the existing `win_debug` build before changing a manifest. Record the exact CMake
       version, generator, configured feature values, and the current values of every
       `ALCEDO_BUILD_*` option.
-- [ ] Capture the pre-change target manifest with
+- [x] Capture the pre-change target manifest with
       `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target help` and the pre-change CTest
       manifest with `ctest --test-dir build/debug --show-only=json-v1`. Store both comparison outputs
       outside source control with the review evidence; do not add machine-specific build output to
       the repository.
-- [ ] Build a declaration inventory before moving code. For every existing first-party target, record
+- [x] Build a declaration inventory before moving code. For every existing first-party target, record
       target name, owning source/test domain, source paths, public/private dependencies, platform
       guard, generated inputs, post-build work, CTest discovery style, labels, and category
       membership. A target may have exactly one owning CMake manifest.
-- [ ] Derive the `add_subdirectory` order from the current declaration order and `if(TARGET ...)`
+- [x] Derive the `add_subdirectory` order from the current declaration order and `if(TARGET ...)`
       checks. Do not choose alphabetical order. Every target referenced by an existing conditional
       must be defined at the same point relative to that conditional after the split.
-- [ ] Establish the shared helper files and root path values without moving a target. Configure once
+- [x] Establish the shared helper files and root path values without moving a target. Configure once
       and compare the target and CTest manifests to the baseline before continuing.
 
 Required evidence:
@@ -1289,6 +1295,114 @@ Required evidence:
 | Existing developer target names remain usable | Pre/post target manifests have the same first-party target set | any production, test, aggregate, or harness target disappears or is renamed |
 | CTest behavior remains discoverable | Pre/post JSON manifests have the same test names, labels, working directories, and timeouts | discovery changes, a manual CTest entry disappears, or a label changes |
 | Global setup has one owner | Root manifests contain only setup and composition after the final substage | a root manifest still declares a first-party library/test executable or a shared helper function |
+
+###### Phase 3A frozen results (2026-07-24)
+
+Machine-local review evidence (not committed): `tmp/phase3a_baseline/` (pre-change) and
+`tmp/phase3a_post/` (after helper extraction + reconfigure). Full target help, CTest JSON, option
+dumps, declaration CSVs, and diffs live there.
+
+**Configure baseline (`win_debug`)**
+
+| Field | Frozen value |
+| --- | --- |
+| CMake | 3.26.3 |
+| Generator | Ninja |
+| `CMAKE_BUILD_TYPE` | Debug |
+| Compiler | MSVC 14.44 (`cl.exe` Hostx64/x64) |
+| Qt prefix (configure) | `D:/Qt/6.9.3/msvc2022_64/lib/cmake` (cache may also resolve `D:/misc/Qt/6.9.3/...`) |
+| `ALCEDO_ENABLE_CUDA` | ON |
+| `ALCEDO_ENABLE_OPENCL` | ON |
+| `ALCEDO_ENABLE_METAL` | OFF |
+| `ALCEDO_ENABLE_WEBGPU` | OFF |
+| `ALCEDO_REAL_WIDGET_EDITOR` | ON on this Windows Qt build (set in top-level CMake, not a cache option) |
+| `ALCEDO_BUILD_TESTS` | ON |
+| `ALCEDO_BUILD_TESTS_BY_DEFAULT` | ON |
+| `ALCEDO_BUILD_CORE_TESTS` | ON |
+| `ALCEDO_BUILD_IMAGE_TESTS` | ON |
+| `ALCEDO_BUILD_IO_TESTS` | ON |
+| `ALCEDO_BUILD_RAW_TESTS` | ON |
+| `ALCEDO_BUILD_GPU_TESTS` | ON |
+| `ALCEDO_BUILD_EDIT_TESTS` | ON |
+| `ALCEDO_BUILD_UI_TESTS` | ON |
+| `ALCEDO_BUILD_APP_TESTS` | ON |
+| `ALCEDO_BUILD_STORAGE_TESTS` | ON |
+| `ALCEDO_BUILD_DEMO_TARGETS` | OFF |
+| `ALCEDO_BUILD_CI_TESTS` | OFF |
+| `ALCEDO_BUILD_SEMANTIC_SIDECAR` | ON |
+| `ALCEDO_BUILD_ARIA2C_FETCH` | ON |
+
+**Manifest compare (pre helper extract → post helper extract, same `win_debug` tree)**
+
+| Artifact | Pre | Post | Diff |
+| --- | ---: | ---: | --- |
+| Ninja simple phony target names | 1173 | 1173 | 0 missing, 0 added |
+| CTest discovered test names | 1300 | 1300 | 0 missing, 0 added |
+| CTest labels / working directory / timeout identity | 1300 | 1300 | 0 after normalizing label separators |
+| `ALCEDO_BUILD_*` cache options | — | — | 0 changed |
+
+Key targets present after reconfigure: `alcedo_main`, `AlbumBackendLib`, `EditViewer`,
+`EditorRhiViewport`, `EditorRhiHarness`, `EditorSessionService`, `EditorMiniGitMaterializer`,
+`EditorSaveCheckpointCoordinatorTest`, `alcedo_tests_app`, `alcedo_tests_ui`.
+
+**Helper and root-path freeze (no target moved)**
+
+| Item | Location / value |
+| --- | --- |
+| `ALCEDO_SRC_ROOT` | `${CMAKE_CURRENT_SOURCE_DIR}` of `alcedo_studio/src` |
+| `ALCEDO_INCLUDE_ROOT` | `${ALCEDO_SRC_ROOT}/include` |
+| `ALCEDO_BINARY_ROOT` | `${CMAKE_CURRENT_BINARY_DIR}` of `alcedo_studio/src` |
+| `ALCEDO_TEST_ROOT` | `${CMAKE_CURRENT_SOURCE_DIR}` of `alcedo_studio/tests` |
+| `ALCEDO_TEST_SUPPORT_ROOT` | `${ALCEDO_TEST_ROOT}/support` |
+| `def_library` | `alcedo_studio/src/cmake/AlcedoTargetHelpers.cmake` (public includes use `ALCEDO_INCLUDE_ROOT`) |
+| `alcedo_assign_test_category`, DuckDB copy helpers, `alcedo_register_test_target` | `alcedo_studio/tests/cmake/AlcedoTestRegistration.cmake` |
+| Legacy test path aliases | `ALCEDO_ROOT_DIR`, `ALCEDO_SRC_DIR`, `ALCEDO_INCLUDE_DIR`, `ALCEDO_TEST_DIR` kept equal to the new roots for existing path lines |
+
+**Declaration inventory (CSV under `tmp/phase3a_baseline/`)**
+
+| Kind | Count | Owner today |
+| --- | ---: | --- |
+| First-party source library/executable declarations inventoried | 91 | `alcedo_studio/src/CMakeLists.txt` |
+| Test library/executable/custom declarations inventoried | 152 | `alcedo_studio/tests/CMakeLists.txt` |
+
+Domain first-appearance order in the source root (not alphabetical; early `UiLocalization` makes
+`ui/alcedo_main` appear before mid-file app targets):
+
+`concurrency → opencl → utils → nn → cuda → ui/alcedo_main → metal → image → decoders → storage → edit → app → sidecar_client → ui/editor_rhi`
+
+Frozen **composition order for Phase 3B/3D `add_subdirectory`** (dependency-preserving; UI shell
+last among first-party code):
+
+1. `concurrency`, `utils`, `cuda`, `opencl`, `metal`, `nn`, `image`
+2. `decoders`, `edit`, `sleeve`, `storage`, `io`, `sidecar_client`
+3. `app` (after storage/edit deps exist)
+4. `ui/editor_rhi` then `ui/alcedo_main` (plan-required RHI-before-shell order)
+5. packaging / install only after `alcedo_main` exists
+
+`if(TARGET ...)` guards that fix relative order after the split:
+
+- `if(TARGET puerhlab_lensfun_build)` around Operators lensfun wiring
+- `if(TARGET EditViewer)` before Editor RHI / widget-editor paths that link it
+- `if(TARGET alcedo_main AND ALCEDO_DUCKDB_...)` for DuckDB extension post-build copy
+
+Test domain first-appearance order (category aggregates stay in the test root):
+
+`ui → raw → app → cuda → image → metal → sleeve → edit → io → utils → opencl → ci`
+
+Phase 6C-focused owner map for later moves (single owner each):
+
+| Target | Owning domain / future manifest |
+| --- | --- |
+| `EditorSaveCheckpointCoordinator`, `EditorSaveCheckpointService`, `EditorSession*`, Mini-Git service libs, other `src/app/*` services | `app` → `alcedo_studio/src/app/CMakeLists.txt` |
+| `EditorRhiContracts`, `EditorRhiViewport`, `EditorRhiHarnessLib`, `EditorRhiHarness` | `ui/editor_rhi` |
+| `UiLocalization`, `BackgroundTaskController`, `AlbumBackendLib`, `EditViewer`, `alcedo_main` | `ui/alcedo_main` |
+| `EditorSaveCheckpointCoordinatorTest`, `EditorSaveCheckpointServiceTest`, `EditorSession*Test` (app folder) | `tests/app` |
+| Album-backend / QML / RHI UI tests under `tests/ui/` | `tests/ui` |
+| `EditorSaveCheckpointCaptureTest`, `EditorMiniGit*Test`, other `tests/edit/history/*` | `tests/edit` |
+
+Phase 3A is complete: baseline and post-extract target/CTest sets match, helpers and root paths are
+in place, and no production target declaration moved. Phase 3B may begin moving app/UI source
+declarations into domain manifests.
 
 ##### Phase 3B - Move application and UI source target declarations intact
 
