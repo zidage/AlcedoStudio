@@ -363,9 +363,12 @@ auto EditorSessionHistoryPort::CaptureSaveCheckpoint(const alcedo::EditorHistory
     std::scoped_lock lock(mutex_);
     journal_path = services_.mini_git_journal_path;
   }
-  // Bootstrap history has no durable capture. The save service treats this as
-  // a successful no-op and still completes the task ordering.
-  if (!journal_path) return nullptr;
+  // Fail closed: a configured editor session must resolve a Mini-Git journal
+  // path. Missing configuration is not a successful empty capture.
+  if (!journal_path) {
+    if (error) *error = "Mini-Git journal path is unavailable";
+    return nullptr;
+  }
 
   auto state = EnsureWorkingState(guard.element_id, error);
   if (!state) return nullptr;

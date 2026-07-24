@@ -274,23 +274,50 @@ class FakeEditorCheckpointStore final : public IEditorCheckpointStore {
   bool                      fail_materialize_start = false;
   bool                      fail_materialize       = false;
   int                       materialize_count      = 0;
-  EditorMaterializeCallback pending_materialize;
+  /// Last capture pointer received by Materialize/MaterializeAsync (ownership
+  /// is not taken beyond the call; the shared_ptr is retained for identity checks).
+  std::shared_ptr<const EditorMiniGitSaveCapture> last_capture;
+  EditorMaterializeCallback                       pending_materialize;
+
+  auto Materialize(std::shared_ptr<const EditorMiniGitSaveCapture> capture, std::string* error)
+      -> EditorMaterializeOutcome override {
+    ++materialize_count;
+    last_capture = capture;
+    if (!capture) {
+      if (error != nullptr) {
+        *error = "Save capture is required";
+      }
+      return {false, false, 0, "Save capture is required"};
+    }
+    if (fail_materialize) {
+      if (error != nullptr) {
+        *error = "materialization failed";
+      }
+      return {true, false, 0, "materialization failed"};
+    }
+    return {true, true, 1, {}};
+  }
 
   auto MaterializeAsync(std::shared_ptr<const EditorMiniGitSaveCapture> capture,
                         EditorMaterializeCallback                       callback) -> bool override {
-    ++materialize_count;
     if (fail_materialize_start) {
+      ++materialize_count;
+      last_capture = capture;
       return false;
     }
     if (!async_materialize) {
-      if (fail_materialize) {
-        if (callback) {
-          callback(EditorMaterializeOutcome{true, false, 0, "materialization failed"});
-        }
-        return true;
+      std::string error;
+      auto        outcome = Materialize(std::move(capture), &error);
+      if (outcome.error.empty()) {
+        outcome.error = std::move(error);
       }
-      return IEditorCheckpointStore::MaterializeAsync(std::move(capture), std::move(callback));
+      if (callback) {
+        callback(std::move(outcome));
+      }
+      return true;
     }
+    ++materialize_count;
+    last_capture        = capture;
     pending_materialize = std::move(callback);
     return true;
   }

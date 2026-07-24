@@ -115,8 +115,10 @@ class EditorSaveCheckpointService final {
   auto Start(SaveCheckpointRequest request, SaveCheckpointCompletion completion)
       -> CheckpointTicket;
 
-  /// Stop accepting new callbacks and join/cancel outstanding work. After this
-  /// returns, no completion callback will fire. Pending save locks are released.
+  /// Stop accepting new callbacks, publish one terminal cancellation result for
+  /// each abandoned in-flight save (checkpoint_completed=false), release those
+  /// save locks, and join outstanding gate work. After this returns, a later
+  /// storage/journal completion cannot finish the same task again.
   void               CancelAndWait();
 
   /// Invoked by the navigation controller when a checkpoint completes. The

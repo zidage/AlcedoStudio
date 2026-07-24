@@ -8,7 +8,8 @@
 /// @brief Focused fixture for EditorSessionNavigationController A-to-B save order.
 ///
 /// Constructs a real navigation controller with lifecycle and save-checkpoint
-/// collaborators. Records ordered events checkpoint_a / release_a / acquire_b.
+/// collaborators. Records ordered events:
+///   checkpoint_a → commit → truncate → thumbnail → release_a → acquire_b
 /// Does not own DuckDB projects, QML engines, or public render infrastructure.
 
 #include <memory>
@@ -63,10 +64,12 @@ class EditorSessionNavigationFixture {
   [[nodiscard]] auto save_service() -> EditorSaveCheckpointService& { return *save_service_; }
   [[nodiscard]] auto pipeline() -> FakeEditorPipelinePort& { return pipeline_->inner; }
   [[nodiscard]] auto history() -> FakeEditorHistoryPort& { return history_->inner; }
-  [[nodiscard]] auto journal() -> FakeEditorJournalPort& { return *journal_; }
+  [[nodiscard]] auto journal() -> FakeEditorJournalPort& { return journal_->inner; }
   [[nodiscard]] auto checkpoint_store() -> FakeEditorCheckpointStore& {
-    return *checkpoint_store_;
+    return checkpoint_store_->inner;
   }
+  [[nodiscard]] auto thumbnails() -> FakeEditorThumbnailPort& { return thumbnails_->inner; }
+  [[nodiscard]] auto tasks() -> FakeEditorTaskPort& { return *tasks_; }
 
  private:
   void RecordEvent(std::string name);
@@ -111,11 +114,58 @@ class EditorSessionNavigationFixture {
     EditorSessionNavigationFixture* owner_ = nullptr;
   };
 
+  /// Journal port that records "commit" when CommitJournalAsync is invoked.
+  class TrackingJournalPort final : public IEditorJournalPort {
+   public:
+    explicit TrackingJournalPort(EditorSessionNavigationFixture* owner) : owner_(owner) {}
+    auto FinalizeEdit(sl_element_id_t element_id, std::uint64_t session_generation,
+                      std::string* error) -> bool override;
+    auto CommitJournalAsync(sl_element_id_t element_id, std::uint64_t session_generation,
+                            EditorJournalCommitCallback callback) -> bool override;
+    auto DiscardUnflushed(sl_element_id_t element_id, std::string* error) -> bool override;
+
+    FakeEditorJournalPort inner;
+
+   private:
+    EditorSessionNavigationFixture* owner_ = nullptr;
+  };
+
+  /// Checkpoint store that records "truncate" when MaterializeAsync is invoked
+  /// (production truncate runs after DuckDB commit inside the materializer).
+  class TrackingCheckpointStore final : public IEditorCheckpointStore {
+   public:
+    explicit TrackingCheckpointStore(EditorSessionNavigationFixture* owner) : owner_(owner) {}
+    auto MaterializeAsync(std::shared_ptr<const EditorMiniGitSaveCapture> capture,
+                          EditorMaterializeCallback                       callback) -> bool override;
+    auto Materialize(std::shared_ptr<const EditorMiniGitSaveCapture> capture, std::string* error)
+        -> EditorMaterializeOutcome override;
+    auto RecoverAndMaterialize(sl_element_id_t element_id, std::uint64_t session_generation,
+                               std::string* error) -> EditorMaterializeOutcome override;
+
+    FakeEditorCheckpointStore inner;
+
+   private:
+    EditorSessionNavigationFixture* owner_ = nullptr;
+  };
+
+  /// Thumbnail port that records "thumbnail" when A is invalidated after save.
+  class TrackingThumbnailPort final : public IEditorThumbnailPort {
+   public:
+    explicit TrackingThumbnailPort(EditorSessionNavigationFixture* owner) : owner_(owner) {}
+    void Invalidate(sl_element_id_t element_id) override;
+
+    FakeEditorThumbnailPort inner;
+
+   private:
+    EditorSessionNavigationFixture* owner_ = nullptr;
+  };
+
   std::shared_ptr<TrackingPipelinePort>              pipeline_;
   std::shared_ptr<TrackingHistoryPort>               history_;
   std::shared_ptr<FakeEditorTaskPort>                tasks_;
-  std::shared_ptr<FakeEditorJournalPort>             journal_;
-  std::shared_ptr<FakeEditorCheckpointStore>         checkpoint_store_;
+  std::shared_ptr<TrackingJournalPort>               journal_;
+  std::shared_ptr<TrackingCheckpointStore>           checkpoint_store_;
+  std::shared_ptr<TrackingThumbnailPort>             thumbnails_;
   std::shared_ptr<FakeEditorRenderSubmitPort>        render_submit_;
   std::shared_ptr<EditorSaveCheckpointCoordinator>   save_coordinator_;
   std::unique_ptr<EditorSessionLifecycle>            lifecycle_;

@@ -175,8 +175,24 @@ void EditorSaveCheckpointService::CancelAndWait() {
     std::scoped_lock lock(mutex_);
     abandoned.swap(pending_saves_);
   }
-  // Destroy pending locks before waiting on the callback gate so blocked
-  // AcquireBlocking waiters (recovery / other projects) can proceed.
+  // Publish exactly one terminal cancellation per abandoned request before
+  // joining in-flight callbacks. Later storage/journal completions find no
+  // matching pending entry and cannot finish the task a second time.
+  for (auto& save : abandoned) {
+    if (deps_.tasks && save.task_id != 0) {
+      deps_.tasks->EndTask(save.task_id, false, "Editor save checkpoint cancelled");
+    }
+    if (save.completion) {
+      SaveCheckpointResult result;
+      result.request_id           = save.request_id;
+      result.session_generation   = save.session_generation;
+      result.task_id              = save.task_id;
+      result.checkpoint_completed = false;
+      result.error                = "Editor save checkpoint cancelled";
+      save.save_lock.Release();
+      save.completion(result);
+    }
+  }
   abandoned.clear();
   if (callback_gate_) {
     callback_gate_->StopAndWait();
@@ -244,11 +260,17 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
       early_lock = std::move(it->save_lock);
       pending_saves_.erase(it);
     } else {
-      capture           = it->capture;
-      start_materialize = static_cast<bool>(capture) && static_cast<bool>(deps_.checkpoint_store);
-      if (!start_materialize) {
+      capture = it->capture;
+      // Fail closed: a durable journal without an immutable capture or without a
+      // checkpoint store must not report a successful no-op materialization.
+      if (!deps_.checkpoint_store) {
         early_lock = std::move(it->save_lock);
         pending_saves_.erase(it);
+      } else if (!capture) {
+        early_lock = std::move(it->save_lock);
+        pending_saves_.erase(it);
+      } else {
+        start_materialize = true;
       }
     }
   }
@@ -280,10 +302,18 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
     return;
   }
 
-  const bool        ok  = outcome.accepted && outcome.durable;
-  const std::string msg = outcome.error.empty()
-                              ? (ok ? "Journal commit complete" : "Journal commit failed")
-                              : outcome.error;
+  // Journal failed, or durable journal without capture/store (fail-closed).
+  std::string msg;
+  bool        ok = false;
+  if (!outcome.accepted || !outcome.durable) {
+    msg = outcome.error.empty() ? "Journal commit failed" : outcome.error;
+  } else if (!deps_.checkpoint_store) {
+    msg = "Editor checkpoint store is unavailable";
+  } else if (!capture) {
+    msg = "Save capture is required";
+  } else {
+    msg = outcome.error.empty() ? "Journal commit failed" : outcome.error;
+  }
   FinishSave(request_id, session_gen, task_id, ok, msg, completion, std::move(early_lock));
 }
 

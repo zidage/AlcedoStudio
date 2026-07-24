@@ -4,6 +4,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include "support/editor_session_navigation_fixture.hpp"
 
 namespace alcedo {
@@ -28,7 +30,10 @@ TEST_F(EditorSessionNavigationControllerTest, OpenWithNoPriorImageCompletesSynch
   EXPECT_EQ(fixture_.lifecycle().identity().image_id, static_cast<image_id_t>(20));
 }
 
-TEST_F(EditorSessionNavigationControllerTest, SwitchToBWaitsForASaveCheckpoint) {
+/// Phase 4B: A→B waits for journal commit, materialize/truncate, and thumbnail
+/// invalidation before releasing A and acquiring B.
+TEST_F(EditorSessionNavigationControllerTest,
+       SwitchToBWaitsForACommitTruncateAndThumbnailCompletion) {
   fixture_.OpenA();
 
   const auto result = fixture_.RequestSwitchToB();
@@ -36,21 +41,33 @@ TEST_F(EditorSessionNavigationControllerTest, SwitchToBWaitsForASaveCheckpoint) 
   EXPECT_FALSE(result.completed_synchronously);
   EXPECT_TRUE(fixture_.nav().has_pending_action());
   EXPECT_TRUE(result.ticket.valid());
-  ASSERT_FALSE(fixture_.events().empty());
-  EXPECT_EQ(fixture_.events().front(), "checkpoint_a");
+  ASSERT_GE(fixture_.events().size(), 2u);
+  EXPECT_EQ(fixture_.events()[0], "checkpoint_a");
+  EXPECT_EQ(fixture_.events()[1], "commit");
+  // Materialize/truncate has not started until journal durability completes.
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "truncate"), 0);
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "thumbnail"), 0);
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "acquire_b"), 0);
 
   fixture_.CompleteCheckpoint();
   EXPECT_FALSE(fixture_.nav().has_pending_action());
   EXPECT_TRUE(fixture_.lifecycle().has_image());
   EXPECT_EQ(fixture_.lifecycle().identity().element_id,
             test::EditorSessionNavigationFixture::kElementB);
-  ASSERT_GE(fixture_.events().size(), 3u);
+
+  ASSERT_EQ(fixture_.events().size(), 6u);
   EXPECT_EQ(fixture_.events()[0], "checkpoint_a");
-  EXPECT_EQ(fixture_.events()[1], "release_a");
-  EXPECT_EQ(fixture_.events()[2], "acquire_b");
+  EXPECT_EQ(fixture_.events()[1], "commit");
+  EXPECT_EQ(fixture_.events()[2], "truncate");
+  EXPECT_EQ(fixture_.events()[3], "thumbnail");
+  EXPECT_EQ(fixture_.events()[4], "release_a");
+  EXPECT_EQ(fixture_.events()[5], "acquire_b");
+  EXPECT_EQ(fixture_.thumbnails().invalidate_count, 1);
+  EXPECT_EQ(fixture_.thumbnails().invalidated_ids.front(),
+            test::EditorSessionNavigationFixture::kElementA);
 }
 
-TEST_F(EditorSessionNavigationControllerTest, SaveFailureKeepsAAndDiscardsPendingAction) {
+TEST_F(EditorSessionNavigationControllerTest, CheckpointFailureKeepsAAndNeverAcquiresB) {
   fixture_.OpenA();
 
   const auto result = fixture_.RequestSwitchToB();
@@ -61,9 +78,13 @@ TEST_F(EditorSessionNavigationControllerTest, SaveFailureKeepsAAndDiscardsPendin
   EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::Failed);
   EXPECT_EQ(fixture_.lifecycle().identity().element_id,
             test::EditorSessionNavigationFixture::kElementA);
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "acquire_b"), 0);
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "release_a"), 0);
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "thumbnail"), 0);
+  EXPECT_EQ(fixture_.pipeline().acquire_count, 1);
 }
 
-TEST_F(EditorSessionNavigationControllerTest, SecondActionDoesNotReplaceOriginalTarget) {
+TEST_F(EditorSessionNavigationControllerTest, SecondActionDoesNotReplaceOriginalTargetB) {
   fixture_.OpenA();
 
   const auto first = fixture_.RequestSwitchToB();
@@ -74,6 +95,11 @@ TEST_F(EditorSessionNavigationControllerTest, SecondActionDoesNotReplaceOriginal
   EXPECT_TRUE(second.rejected);
   EXPECT_EQ(second.message, "Editor save checkpoint is in progress");
   EXPECT_TRUE(fixture_.nav().has_pending_action());
+
+  fixture_.CompleteCheckpoint();
+  EXPECT_EQ(fixture_.lifecycle().identity().element_id,
+            test::EditorSessionNavigationFixture::kElementB);
+  EXPECT_NE(fixture_.lifecycle().identity().element_id, static_cast<sl_element_id_t>(5));
 }
 
 TEST_F(EditorSessionNavigationControllerTest, CloseWithNoPriorImageCompletesSynchronously) {
@@ -203,6 +229,97 @@ TEST_F(EditorSessionNavigationControllerTest,
 
   EXPECT_TRUE(fixture_.nav().has_pending_action());
   EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::Saving);
+}
+
+/// Phase 4B: duplicate/stale completions must not resume B or finish the task twice.
+TEST_F(EditorSessionNavigationControllerTest,
+       DuplicateOrStaleCompletionCannotResumeBOrFinishTaskTwice) {
+  fixture_.OpenA();
+  const auto switch_result = fixture_.RequestSwitchToB();
+  ASSERT_TRUE(switch_result.waiting_for_checkpoint);
+  ASSERT_TRUE(switch_result.ticket.valid());
+
+  const int ends_before = fixture_.tasks().end_count;
+  fixture_.CompleteCheckpoint();
+  EXPECT_EQ(fixture_.lifecycle().identity().element_id,
+            test::EditorSessionNavigationFixture::kElementB);
+  EXPECT_EQ(fixture_.tasks().end_count, ends_before + 1);
+  const auto b_generation = fixture_.lifecycle().identity().session_generation;
+
+  // Stale success for the completed request must not re-acquire or re-finish.
+  SaveCheckpointResult stale;
+  stale.request_id           = switch_result.ticket.request_id;
+  stale.session_generation   = switch_result.ticket.session_generation;
+  stale.checkpoint_completed = true;
+  fixture_.nav().OnCheckpointFinished(stale);
+  fixture_.save_service().OnCheckpointFinished(stale);
+
+  EXPECT_EQ(fixture_.lifecycle().identity().element_id,
+            test::EditorSessionNavigationFixture::kElementB);
+  EXPECT_EQ(fixture_.lifecycle().identity().session_generation, b_generation);
+  EXPECT_EQ(fixture_.tasks().end_count, ends_before + 1);
+  EXPECT_EQ(fixture_.pipeline().acquire_count, 2);
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "acquire_b"), 1);
+}
+
+/// Phase 4B: close waits for its checkpoint; CancelAndWait publishes one terminal.
+TEST_F(EditorSessionNavigationControllerTest, CloseAndShutdownEachProduceOneTerminalResult) {
+  // Close path: one terminal after commit+materialize.
+  fixture_.OpenA();
+  int  close_terminals = 0;
+  bool close_ok        = false;
+  fixture_.journal().async_commit               = true;
+  fixture_.checkpoint_store().async_materialize = true;
+  // SealAndStartSave wires OnCheckpointFinished; count via task ends + lifecycle.
+  const auto close_outcome = fixture_.nav().RequestClose(true);
+  ASSERT_TRUE(close_outcome.waiting_for_checkpoint);
+  ASSERT_TRUE(close_outcome.ticket.valid());
+  const int ends_before_close = fixture_.tasks().end_count;
+  fixture_.CompleteCheckpoint();
+  EXPECT_FALSE(fixture_.nav().has_pending_action());
+  EXPECT_EQ(fixture_.tasks().end_count, ends_before_close + 1);
+  close_terminals = fixture_.tasks().end_count - ends_before_close;
+  close_ok        = fixture_.tasks().ended_success.back();
+  EXPECT_EQ(close_terminals, 1);
+  EXPECT_TRUE(close_ok);
+
+  // Shutdown/cancel path: one terminal cancellation; late completions do not double-end.
+  fixture_.TearDown();
+  fixture_.SetUp();
+  fixture_.OpenA();
+  const auto switch_result = fixture_.RequestSwitchToB();
+  ASSERT_TRUE(switch_result.waiting_for_checkpoint);
+  int cancel_terminals = 0;
+  bool cancel_completed = true;
+  // Replace is not possible; CancelAndWait invokes the navigation completion once.
+  const int ends_before_cancel = fixture_.tasks().end_count;
+  fixture_.save_service().CancelAndWait();
+  EXPECT_EQ(fixture_.tasks().end_count, ends_before_cancel + 1);
+  cancel_terminals  = fixture_.tasks().end_count - ends_before_cancel;
+  cancel_completed  = fixture_.tasks().ended_success.back();
+  EXPECT_EQ(cancel_terminals, 1);
+  EXPECT_FALSE(cancel_completed);
+  // Late journal/materialize completions must not finish the task again.
+  fixture_.journal().CompleteCommit(true);
+  fixture_.checkpoint_store().CompleteMaterialization(true);
+  EXPECT_EQ(fixture_.tasks().end_count, ends_before_cancel + 1);
+  EXPECT_EQ(fixture_.lifecycle().identity().element_id,
+            test::EditorSessionNavigationFixture::kElementA);
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "acquire_b"), 0);
+}
+
+TEST_F(EditorSessionNavigationControllerTest, CaptureFailureKeepsAAndNeverStartsSave) {
+  fixture_.OpenA();
+  fixture_.history().fail_capture = true;
+
+  const auto result = fixture_.RequestSwitchToB();
+  EXPECT_TRUE(result.failed);
+  EXPECT_FALSE(result.waiting_for_checkpoint);
+  EXPECT_FALSE(fixture_.nav().has_pending_action());
+  EXPECT_EQ(fixture_.lifecycle().identity().element_id,
+            test::EditorSessionNavigationFixture::kElementA);
+  EXPECT_EQ(fixture_.checkpoint_store().materialize_count, 0);
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "acquire_b"), 0);
 }
 
 }  // namespace

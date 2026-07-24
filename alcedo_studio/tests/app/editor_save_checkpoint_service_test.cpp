@@ -119,13 +119,25 @@ TEST_F(EditorSaveCheckpointServiceTest, DuplicateOnCheckpointFinishedDoesNotDoub
 }
 
 TEST_F(EditorSaveCheckpointServiceTest, CancelAndWaitStopsCallbacksAndJoins) {
-  bool completion_called = false;
-  fixture_.StartCheckpoint(42, 7, [&](const SaveCheckpointResult&) { completion_called = true; });
+  int                  completion_count = 0;
+  SaveCheckpointResult completion_result;
+  fixture_.StartCheckpoint(42, 7, [&](const SaveCheckpointResult& result) {
+    ++completion_count;
+    completion_result = result;
+  });
 
   fixture_.CancelAndWait();
+  // Exactly one terminal cancellation; later journal/materialize cannot complete again.
+  EXPECT_EQ(completion_count, 1);
+  EXPECT_FALSE(completion_result.checkpoint_completed);
+  EXPECT_NE(completion_result.error.find("cancelled"), std::string::npos);
+  EXPECT_EQ(fixture_.tasks().end_count, 1);
+  EXPECT_FALSE(fixture_.tasks().ended_success.front());
+
   fixture_.CompleteJournalTruncate(true);
   EXPECT_FALSE(static_cast<bool>(fixture_.checkpoint_store().pending_materialize));
-  EXPECT_FALSE(completion_called);
+  EXPECT_EQ(completion_count, 1);
+  EXPECT_EQ(fixture_.tasks().end_count, 1);
 }
 
 TEST_F(EditorSaveCheckpointServiceTest, MaterializeStartFailureCompletesWithFailure) {
@@ -209,20 +221,106 @@ TEST_F(EditorSaveCheckpointServiceTest, SecondStartFailsWhileGlobalSaveLockIsHel
   EXPECT_FALSE(fixture_.coordinator().is_saving());
 }
 
-/// CancelAndWait releases the project-owned save lock without firing completion.
+/// CancelAndWait releases the project-owned save lock and publishes one terminal.
 TEST_F(EditorSaveCheckpointServiceTest, CancelAndWaitReleasesGlobalSaveLock) {
-  bool completion_called = false;
+  int completion_count = 0;
   ASSERT_TRUE(fixture_
                   .StartCheckpoint(42, 7, [&](const SaveCheckpointResult&) {
-                    completion_called = true;
+                    ++completion_count;
                   })
                   .valid());
   EXPECT_TRUE(fixture_.coordinator().is_saving());
 
   fixture_.CancelAndWait();
-  EXPECT_FALSE(completion_called);
+  EXPECT_EQ(completion_count, 1);
   EXPECT_FALSE(fixture_.coordinator().is_saving());
+}
+
+/// Phase 4A: missing capture must not report a successful no-op after journal durability.
+TEST_F(EditorSaveCheckpointServiceTest, ConfiguredProjectWithoutHistoryStoreOrStorageFails) {
+  fixture_.fail_capture = true;
+  bool                 done = false;
+  SaveCheckpointResult result;
+  ASSERT_TRUE(fixture_
+                  .StartCheckpoint(42, 7, [&](const SaveCheckpointResult& r) {
+                    done   = true;
+                    result = r;
+                  })
+                  .valid());
+  fixture_.CompleteJournalTruncate(true);
+  EXPECT_TRUE(done);
+  EXPECT_FALSE(result.checkpoint_completed);
+  EXPECT_NE(result.error.find("capture"), std::string::npos);
+  EXPECT_EQ(fixture_.checkpoint_store().materialize_count, 0);
+  EXPECT_EQ(fixture_.tasks().end_count, 1);
+  EXPECT_FALSE(fixture_.tasks().ended_success.front());
+}
+
+TEST_F(EditorSaveCheckpointServiceTest, MissingCheckpointStoreFailsAfterDurableJournal) {
+  auto journal          = std::make_shared<test::FakeEditorJournalPort>();
+  auto tasks            = std::make_shared<test::FakeEditorTaskPort>();
+  auto coordinator      = std::make_shared<EditorSaveCheckpointCoordinator>();
+  auto thumbnails       = std::make_shared<test::FakeEditorThumbnailPort>();
+  journal->async_commit = true;
+
+  EditorSaveCheckpointService::Dependencies deps;
+  deps.journal          = journal;
+  deps.tasks            = tasks;
+  deps.save_coordinator = coordinator;
+  deps.checkpoint_store = nullptr;
+  deps.thumbnails       = thumbnails;
+  EditorSaveCheckpointService service(std::move(deps));
+
+  bool                 done = false;
+  SaveCheckpointResult result;
+  auto                 save_lock = service.TryAcquireSaveLock(42);
+  ASSERT_TRUE(save_lock.owns_lock());
+  SaveCheckpointRequest request;
+  request.element_id         = 42;
+  request.session_generation = 7;
+  request.capture            = test::MakeOpaqueSaveCapture();
+  request.save_lock          = std::move(save_lock);
+  const auto ticket =
+      service.Start(std::move(request), [&](const SaveCheckpointResult& r) {
+        done   = true;
+        result = r;
+      });
+  ASSERT_TRUE(ticket.valid());
+  journal->CompleteCommit(true);
+  EXPECT_TRUE(done);
+  EXPECT_FALSE(result.checkpoint_completed);
+  EXPECT_NE(result.error.find("store"), std::string::npos);
+  EXPECT_EQ(tasks->end_count, 1);
+  EXPECT_FALSE(tasks->ended_success.front());
+  service.CancelAndWait();
+  coordinator->Shutdown();
+}
+
+TEST_F(EditorSaveCheckpointServiceTest, CapturePointerReachesCheckpointStoreWithoutSideMap) {
+  bool                 done = false;
+  SaveCheckpointResult result;
+  const auto           capture = test::MakeOpaqueSaveCapture();
+  auto                 save_lock = fixture_.service().TryAcquireSaveLock(42);
+  ASSERT_TRUE(save_lock.owns_lock());
+  SaveCheckpointRequest request;
+  request.element_id         = 42;
+  request.session_generation = 7;
+  request.capture            = capture;
+  request.save_lock          = std::move(save_lock);
+  const auto ticket =
+      fixture_.service().Start(std::move(request), [&](const SaveCheckpointResult& r) {
+        done   = true;
+        result = r;
+      });
+  ASSERT_TRUE(ticket.valid());
+  fixture_.CompleteJournalTruncate(true);
+  EXPECT_EQ(fixture_.checkpoint_store().last_capture.get(), capture.get());
+  fixture_.CompleteDatabaseWrite(true);
+  EXPECT_TRUE(done);
+  EXPECT_TRUE(result.checkpoint_completed);
+  EXPECT_EQ(fixture_.checkpoint_store().materialize_count, 1);
 }
 
 }  // namespace
 }  // namespace alcedo
+

@@ -128,6 +128,34 @@ TEST_F(EditorSessionCheckpointStoreTest, MaterializePersistsCaptureBeforeTruncat
   EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, capture.working_head);
 }
 
+/// Phase 4A: immutable capture ownership travels as a function argument into the
+/// store; no element-ID side map or TakeSaveCapture is involved.
+TEST_F(EditorSessionCheckpointStoreTest, ProductionCaptureValueReachesCheckpointStoreWithoutSideMap) {
+  const auto capture = CaptureEdit();
+  auto owned = std::make_shared<const alcedo::EditorMiniGitSaveCapture>(capture);
+  const auto* raw = owned.get();
+  const auto  head = owned->working_head;
+  const auto  last = *owned->last_journal_sequence;
+
+  std::string error;
+  const auto  result = store_->Materialize(owned, &error);
+  ASSERT_TRUE(result.accepted) << error << " / " << result.error;
+  ASSERT_TRUE(result.materialized);
+  // Caller still owns the shared capture after Materialize (store does not
+  // take exclusive ownership via a side channel).
+  EXPECT_EQ(owned.get(), raw);
+  EXPECT_EQ(owned->working_head, head);
+  EXPECT_EQ(*owned->last_journal_sequence, last);
+  EXPECT_EQ(owned.use_count(), 1);
+
+  auto                       guard = storage_->GetDBController().GetConnectionGuard();
+  auto                       lock  = guard.Lock();
+  alcedo::CommitGraphService graph_service(guard.conn_);
+  const auto                 stored = graph_service.LoadGraph(element_id_);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, head);
+}
+
 TEST_F(EditorSessionCheckpointStoreTest, RecoveryUsesConfiguredImageJournalPathAndTruncatesPrefix) {
   const auto  capture = CaptureEdit();
   std::string error;
@@ -145,6 +173,80 @@ TEST_F(EditorSessionCheckpointStoreTest, RecoveryUsesConfiguredImageJournalPathA
   alcedo::MiniGitJournal reopened(journal_path_);
   ASSERT_TRUE(reopened.Load(&error)) << error;
   EXPECT_TRUE(reopened.records().empty());
+}
+
+/// Phase 4A: null capture and missing storage fail; never report a silent success.
+TEST_F(EditorSessionCheckpointStoreTest, ConfiguredProjectWithoutHistoryStoreOrStorageFails) {
+  std::string error;
+  const auto  null_result = store_->Materialize(nullptr, &error);
+  EXPECT_FALSE(null_result.accepted);
+  EXPECT_FALSE(null_result.materialized);
+  EXPECT_FALSE(error.empty());
+
+  EditorSessionCheckpointStore unconfigured;
+  error.clear();
+  const auto capture = CaptureEdit();
+  const auto no_storage =
+      unconfigured.Materialize(std::make_shared<const alcedo::EditorMiniGitSaveCapture>(capture),
+                               &error);
+  EXPECT_FALSE(no_storage.accepted);
+  EXPECT_FALSE(no_storage.materialized);
+  EXPECT_NE(error.find("unavailable"), std::string::npos);
+}
+
+/// Phase 4A: store materializes only through Mini-Git (commit graph + truncate).
+/// The legacy transaction-array materializer is never used on this path.
+TEST_F(EditorSessionCheckpointStoreTest, MiniGitCheckpointDoesNotInvokeLegacyMaterializer) {
+  const auto  capture = CaptureEdit();
+  std::string error;
+  const auto  result = store_->Materialize(
+      std::make_shared<const alcedo::EditorMiniGitSaveCapture>(capture), &error);
+  ASSERT_TRUE(result.accepted) << error << " / " << result.error;
+  ASSERT_TRUE(result.materialized);
+
+  // Mini-Git durable state: one content-addressed commit, active Version head,
+  // and truncated journal. Legacy transaction-array materialization does not
+  // write CommitGraph commit objects.
+  auto                       guard = storage_->GetDBController().GetConnectionGuard();
+  auto                       lock  = guard.Lock();
+  alcedo::CommitGraphService graph_service(guard.conn_);
+  const auto                 stored = graph_service.LoadGraph(element_id_);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_EQ(stored->CommitCount(), 1u);
+  EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, capture.working_head);
+  EXPECT_EQ(stored->GetImageEditState().materialized_head_commit_hash, capture.working_head);
+
+  alcedo::MiniGitJournal reopened(journal_path_);
+  ASSERT_TRUE(reopened.Load(&error)) << error;
+  EXPECT_TRUE(reopened.records().empty());
+}
+
+/// Phase 4A: capture failure / rejected materialize writes nothing and keeps journal bytes.
+TEST_F(EditorSessionCheckpointStoreTest, CaptureFailureWritesNothingAndLeavesJournalBytes) {
+  auto        capture = CaptureEdit();
+  ASSERT_TRUE(capture.has_journal_range());
+  const auto preserved_size = capture.journal_records.size();
+  const auto preserved_last = *capture.last_journal_sequence;
+
+  // Corrupt the captured head so fold validation rejects before DuckDB commit.
+  capture.working_head = alcedo::Hash128{0xdead, 0xbeef};
+  std::string error;
+  const auto  result = store_->Materialize(
+      std::make_shared<const alcedo::EditorMiniGitSaveCapture>(capture), &error);
+  EXPECT_FALSE(result.accepted);
+  EXPECT_FALSE(result.materialized);
+
+  alcedo::MiniGitJournal remaining(journal_path_);
+  ASSERT_TRUE(remaining.Load(&error)) << error;
+  EXPECT_EQ(remaining.records().size(), preserved_size);
+  EXPECT_EQ(remaining.records().back().sequence, preserved_last);
+
+  auto                       guard = storage_->GetDBController().GetConnectionGuard();
+  auto                       lock  = guard.Lock();
+  alcedo::CommitGraphService graph_service(guard.conn_);
+  const auto                 stored = graph_service.LoadGraph(element_id_);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_EQ(stored->CommitCount(), 0u);
 }
 
 }  // namespace

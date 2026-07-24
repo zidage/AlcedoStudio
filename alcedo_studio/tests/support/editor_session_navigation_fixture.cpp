@@ -14,8 +14,9 @@ void EditorSessionNavigationFixture::SetUp() {
   pipeline_         = std::make_shared<TrackingPipelinePort>(this);
   history_          = std::make_shared<TrackingHistoryPort>(this);
   tasks_            = std::make_shared<FakeEditorTaskPort>();
-  journal_          = std::make_shared<FakeEditorJournalPort>();
-  checkpoint_store_ = std::make_shared<FakeEditorCheckpointStore>();
+  journal_          = std::make_shared<TrackingJournalPort>(this);
+  checkpoint_store_ = std::make_shared<TrackingCheckpointStore>(this);
+  thumbnails_       = std::make_shared<TrackingThumbnailPort>(this);
   render_submit_    = std::make_shared<FakeEditorRenderSubmitPort>();
 
   EditorSessionLifecycle::Dependencies life_deps;
@@ -27,6 +28,7 @@ void EditorSessionNavigationFixture::SetUp() {
   EditorSaveCheckpointService::Dependencies save_deps;
   save_deps.journal          = journal_;
   save_deps.checkpoint_store = checkpoint_store_;
+  save_deps.thumbnails       = thumbnails_;
   save_deps.tasks            = tasks_;
   save_deps.save_coordinator = save_coordinator_;
   save_service_              = std::make_unique<EditorSaveCheckpointService>(std::move(save_deps));
@@ -59,6 +61,7 @@ void EditorSessionNavigationFixture::TearDown() {
   lifecycle_.reset();
   save_coordinator_.reset();
   render_submit_.reset();
+  thumbnails_.reset();
   checkpoint_store_.reset();
   journal_.reset();
   tasks_.reset();
@@ -84,19 +87,19 @@ void EditorSessionNavigationFixture::OpenA() {
 }
 
 auto EditorSessionNavigationFixture::RequestSwitchToB() -> NavigationOutcome {
-  journal_->async_commit               = true;
-  checkpoint_store_->async_materialize = true;
+  journal_->inner.async_commit               = true;
+  checkpoint_store_->inner.async_materialize = true;
   return nav_->RequestOpenOrSwitch(kElementB, kImageB, true);
 }
 
 void EditorSessionNavigationFixture::CompleteCheckpoint() {
-  journal_->CompleteCommit(true);
-  checkpoint_store_->CompleteMaterialization(true);
+  journal_->inner.CompleteCommit(true);
+  checkpoint_store_->inner.CompleteMaterialization(true);
 }
 
 void EditorSessionNavigationFixture::FailCheckpoint(std::string error) {
-  journal_->CompleteCommit(true);
-  checkpoint_store_->CompleteMaterialization(false, std::move(error));
+  journal_->inner.CompleteCommit(true);
+  checkpoint_store_->inner.CompleteMaterialization(false, std::move(error));
 }
 
 auto EditorSessionNavigationFixture::TrackingPipelinePort::Acquire(sl_element_id_t element_id,
@@ -163,6 +166,57 @@ auto EditorSessionNavigationFixture::TrackingHistoryPort::CaptureSaveCheckpoint(
     owner_->RecordEvent("checkpoint_a");
   }
   return inner.CaptureSaveCheckpoint(guard, error);
+}
+
+auto EditorSessionNavigationFixture::TrackingJournalPort::FinalizeEdit(
+    sl_element_id_t element_id, std::uint64_t session_generation, std::string* error) -> bool {
+  return inner.FinalizeEdit(element_id, session_generation, error);
+}
+
+auto EditorSessionNavigationFixture::TrackingJournalPort::CommitJournalAsync(
+    sl_element_id_t element_id, std::uint64_t session_generation,
+    EditorJournalCommitCallback callback) -> bool {
+  if (owner_ != nullptr) {
+    owner_->RecordEvent("commit");
+  }
+  return inner.CommitJournalAsync(element_id, session_generation, std::move(callback));
+}
+
+auto EditorSessionNavigationFixture::TrackingJournalPort::DiscardUnflushed(sl_element_id_t element_id,
+                                                                           std::string*    error)
+    -> bool {
+  return inner.DiscardUnflushed(element_id, error);
+}
+
+auto EditorSessionNavigationFixture::TrackingCheckpointStore::MaterializeAsync(
+    std::shared_ptr<const EditorMiniGitSaveCapture> capture, EditorMaterializeCallback callback)
+    -> bool {
+  if (owner_ != nullptr) {
+    owner_->RecordEvent("truncate");
+  }
+  return inner.MaterializeAsync(std::move(capture), std::move(callback));
+}
+
+auto EditorSessionNavigationFixture::TrackingCheckpointStore::Materialize(
+    std::shared_ptr<const EditorMiniGitSaveCapture> capture, std::string* error)
+    -> EditorMaterializeOutcome {
+  if (owner_ != nullptr) {
+    owner_->RecordEvent("truncate");
+  }
+  return inner.Materialize(std::move(capture), error);
+}
+
+auto EditorSessionNavigationFixture::TrackingCheckpointStore::RecoverAndMaterialize(
+    sl_element_id_t element_id, std::uint64_t session_generation, std::string* error)
+    -> EditorMaterializeOutcome {
+  return inner.RecoverAndMaterialize(element_id, session_generation, error);
+}
+
+void EditorSessionNavigationFixture::TrackingThumbnailPort::Invalidate(sl_element_id_t element_id) {
+  if (element_id == kElementA && owner_ != nullptr) {
+    owner_->RecordEvent("thumbnail");
+  }
+  inner.Invalidate(element_id);
 }
 
 }  // namespace alcedo::test

@@ -180,5 +180,34 @@ TEST_F(EditorSessionHistoryPortTest, ReopenReplaysJournalIntoWorkingPipeline) {
   EXPECT_TRUE(reopened_guard->working_head_commit_hash_.has_value());
 }
 
+/// Phase 4A: capture returns an owned value; a second capture does not require a
+/// side-map TakeSaveCapture, and the same shared_ptr identity reaches a store.
+TEST_F(EditorSessionHistoryPortTest, ProductionCaptureValueReachesCheckpointStoreWithoutSideMap) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":0.85})", true};
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
+
+  auto first = history_.CaptureSaveCheckpoint(handle, &error);
+  ASSERT_TRUE(static_cast<bool>(first)) << error;
+  ASSERT_TRUE(first->has_journal_range());
+  const auto* first_raw = first.get();
+  const auto  first_head = first->working_head;
+  const auto  first_last = *first->last_journal_sequence;
+
+  // Ownership travels as a function argument. The history port keeps no
+  // element-ID side map: a second capture returns an independent value.
+  auto second = history_.CaptureSaveCheckpoint(handle, &error);
+  ASSERT_TRUE(static_cast<bool>(second)) << error;
+  EXPECT_NE(second.get(), first_raw);
+  EXPECT_EQ(second->working_head, first_head);
+  EXPECT_EQ(*second->last_journal_sequence, first_last);
+  // First capture remains valid after the second (no Take/rendezvous).
+  EXPECT_EQ(first.get(), first_raw);
+  EXPECT_EQ(first->journal_records.size(), second->journal_records.size());
+}
+
 }  // namespace
 }  // namespace alcedo::ui

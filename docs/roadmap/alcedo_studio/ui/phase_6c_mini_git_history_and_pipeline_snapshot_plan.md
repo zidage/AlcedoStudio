@@ -3,9 +3,9 @@
 Date: 2026-07-24
 
 Status: approved design; 6C-1, 6C-2, 6C-2-Fix, 6C-3, 6C-4, 6C-5, and Phase 3 (3A–3E) are
-implemented. Phase 6C-5 qualification Phases 1, 2A, 2B are implemented; Phase 4 begins the
-typed-value behaviour changes. Do not begin 6C-6 checkout, session switching, or garbage
-collection until every qualification phase is complete.
+implemented. Phase 6C-5 qualification Phases 1, 2A, 2B, and Phase 4 (4A–4B typed-value wiring)
+are implemented. Do not begin 6C-6 checkout, session switching, or garbage collection until
+every qualification phase is complete.
 
 Related documents:
 
@@ -1534,26 +1534,29 @@ Files:
 - `src/include/ui/alcedo_main/album_backend/editor_session_checkpoint_store.hpp`
 - `src/ui/alcedo_main/album_backend/editor_session_checkpoint_store.cpp`
 - `tests/edit/history/editor_session_checkpoint_store_test.cpp`
-- `tests/CMakeLists.txt`
+- `tests/edit/history/editor_session_history_port_test.cpp`
+- `tests/app/editor_save_checkpoint_service_test.cpp`
+- `tests/ui/CMakeLists.txt`
 
 Checklist:
 
-- [ ] `IEditorHistoryPort::CaptureSaveCheckpoint` returns either an immutable
+- [x] `IEditorHistoryPort::CaptureSaveCheckpoint` returns either an immutable
       `EditorMiniGitSaveCapture` or an error.
-- [ ] `IEditorCheckpointStore::SaveAsync` takes that capture by value and owns it until completion.
-- [ ] `EditorSaveCheckpointService` is the only orchestrator between capture, store, thumbnail, and
+- [x] `IEditorCheckpointStore::MaterializeAsync` (production name; same ownership as plan
+      `SaveAsync`) takes that capture by value/shared ownership and owns it until completion.
+- [x] `EditorSaveCheckpointService` is the only orchestrator between capture, store, thumbnail, and
       task completion.
-- [ ] Delete `TakeSaveCapture`, `save_captures_`, and every element-ID rendezvous map.
-- [ ] A configured project with missing history/store/storage fails; no module reports a successful
+- [x] Delete `TakeSaveCapture`, `save_captures_`, and every element-ID rendezvous map.
+- [x] A configured project with missing history/store/storage fails; no module reports a successful
       no-op.
-- [ ] The Mini-Git path does not call the legacy transaction-array materializer.
+- [x] The Mini-Git path does not call the legacy transaction-array materializer.
 
 Required tests:
 
-- [ ] `ProductionCaptureValueReachesCheckpointStoreWithoutSideMap`.
-- [ ] `ConfiguredProjectWithoutHistoryStoreOrStorageFails`.
-- [ ] `MiniGitCheckpointDoesNotInvokeLegacyMaterializer`.
-- [ ] `CaptureFailureWritesNothingAndLeavesJournalBytes`.
+- [x] `ProductionCaptureValueReachesCheckpointStoreWithoutSideMap`.
+- [x] `ConfiguredProjectWithoutHistoryStoreOrStorageFails`.
+- [x] `MiniGitCheckpointDoesNotInvokeLegacyMaterializer`.
+- [x] `CaptureFailureWritesNothingAndLeavesJournalBytes`.
 
 ##### Phase 4B - Qualify navigation behavior through its owning controller
 
@@ -1563,30 +1566,123 @@ Files:
 - `src/app/editor_session_navigation_controller.cpp`
 - `src/include/app/editor_save_checkpoint_service.hpp`
 - `src/app/editor_save_checkpoint_service.cpp`
+- `src/app/editor_session_service.cpp` (Shutdown uses `CancelAndWait` only)
 - `tests/app/editor_session_navigation_controller_test.cpp`
 - `tests/app/editor_save_checkpoint_service_test.cpp`
+- `tests/support/editor_session_navigation_fixture.hpp/.cpp`
 
 Checklist:
 
-- [ ] One `PendingEditorAction` stores a named kind and target. A second request cannot replace it.
-- [ ] Navigation keeps A's lifecycle acquisition until `SaveCheckpointResult::checkpoint_completed`
+- [x] One `PendingEditorAction` stores a named kind and target. A second request cannot replace it.
+- [x] Navigation keeps A's lifecycle acquisition until `SaveCheckpointResult::checkpoint_completed`
       is true, then releases A and acquires B.
-- [ ] Capture, write, or truncate failure keeps A and clears the failed pending action without any B
+- [x] Capture, write, or truncate failure keeps A and clears the failed pending action without any B
       recovery/render request.
-- [ ] The save service ignores duplicate/stale storage callbacks by checkpoint request ID; navigation
+- [x] The save service ignores duplicate/stale storage callbacks by checkpoint request ID; navigation
       ignores results for an older session generation.
-- [ ] Close waits for its checkpoint. Shutdown calls `CancelAndWait` and publishes one terminal result.
+- [x] Close waits for its checkpoint. Shutdown calls `CancelAndWait` and publishes one terminal result.
 
 Required tests:
 
-- [ ] `SwitchToBWaitsForACommitTruncateAndThumbnailCompletion`.
-- [ ] `CheckpointFailureKeepsAAndNeverAcquiresB`.
-- [ ] `SecondActionDoesNotReplaceOriginalTargetB`.
-- [ ] `DuplicateOrStaleCompletionCannotResumeBOrFinishTaskTwice`.
-- [ ] `CloseAndShutdownEachProduceOneTerminalResult`.
+- [x] `SwitchToBWaitsForACommitTruncateAndThumbnailCompletion`.
+- [x] `CheckpointFailureKeepsAAndNeverAcquiresB`.
+- [x] `SecondActionDoesNotReplaceOriginalTargetB`.
+- [x] `DuplicateOrStaleCompletionCannotResumeBOrFinishTaskTwice`.
+- [x] `CloseAndShutdownEachProduceOneTerminalResult`.
 
 Phase 4 is complete when call-site search finds no `TakeSaveCapture`, side map, positional pending-action
 initializer, or checkpoint business rule inside `EditorSessionService`.
+
+##### Phase 4 completion record (2026-07-24)
+
+**Status:** complete for 4A + 4B typed-value wiring and navigation qualification.
+
+**Primary success call chain (image A → B):**
+
+```text
+QML / facade Open|Switch
+  -> EditorSessionNavigationController::RequestOpenOrSwitch
+  -> SealAndStartSave:
+       TryAcquireSaveLock
+       -> IEditorHistoryPort::CaptureSaveCheckpoint(A)   // owned shared_ptr, no side map
+       -> EditorSaveCheckpointService::Start(request{capture, lock})
+  -> CommitJournalAsync
+  -> IEditorCheckpointStore::MaterializeAsync(capture)
+       -> EditorMiniGitMaterializer::Materialize (DuckDB + journal truncate)
+  -> IEditorThumbnailPort::Invalidate(A)
+  -> FinishSave(checkpoint_completed=true)  // EndTask + completion once
+  -> EditorSessionNavigationController::OnCheckpointFinished
+       -> DiscardMaterializedJournalThrough (live prefix)
+       -> ReleaseAfterCheckpoint (A)
+       -> ContinueToTarget(B) / AcquireGuards(B) / first render
+```
+
+**Primary failure call chain:**
+
+```text
+capture failure (null / error)
+  -> SealAndStartSave returns invalid ticket
+  -> pending action cleared; A kept; B never acquired; store not called
+
+OR durable journal without capture or without checkpoint store
+  -> EditorSaveCheckpointService FinishSave(checkpoint_completed=false)
+  -> OnCheckpointFinished keeps A; no thumbnail; no B acquire
+
+OR MaterializeAsync rejects / materialize fails
+  -> FinishSave(false); journal bytes retained for retry
+  -> OnCheckpointFinished keeps A; no release/acquire B
+```
+
+**Shutdown call chain:**
+
+```text
+EditorSessionService::Shutdown
+  -> EditorSaveCheckpointService::CancelAndWait
+       // one terminal cancellation per abandoned request_id
+  -> ClearPendingAction
+  -> lifecycle_.BeginShutdown
+  -> one StateChanged result
+```
+
+**What was proven (executed tests):**
+
+| Required name | Target | Result |
+| --- | --- | --- |
+| `ProductionCaptureValueReachesCheckpointStoreWithoutSideMap` | `EditorSessionCheckpointStoreTest` + `EditorSessionHistoryPortTest` | PASS |
+| `ConfiguredProjectWithoutHistoryStoreOrStorageFails` | `EditorSaveCheckpointServiceTest` + `EditorSessionCheckpointStoreTest` | PASS |
+| `MiniGitCheckpointDoesNotInvokeLegacyMaterializer` | `EditorSessionCheckpointStoreTest` | PASS |
+| `CaptureFailureWritesNothingAndLeavesJournalBytes` | `EditorSessionCheckpointStoreTest` | PASS |
+| `SwitchToBWaitsForACommitTruncateAndThumbnailCompletion` | `EditorSessionNavigationControllerTest` | PASS |
+| `CheckpointFailureKeepsAAndNeverAcquiresB` | `EditorSessionNavigationControllerTest` | PASS |
+| `SecondActionDoesNotReplaceOriginalTargetB` | `EditorSessionNavigationControllerTest` | PASS |
+| `DuplicateOrStaleCompletionCannotResumeBOrFinishTaskTwice` | `EditorSessionNavigationControllerTest` | PASS |
+| `CloseAndShutdownEachProduceOneTerminalResult` | `EditorSessionNavigationControllerTest` | PASS |
+
+Suite totals observed: save-service 14/14, navigation 16/16, checkpoint-store 6/6, history-port 6/6.
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target …`
+then run the four executables under `build/debug/alcedo_studio/tests/` (shared runtime DLL dir).
+
+Call-site search under `alcedo_studio/src` and production tests: zero `TakeSaveCapture` /
+`save_captures_` production hits (mentions only in test comments denying side maps).
+`EditorSessionService` facade has no capture maps, pending-action business rules, or materialize
+orchestration beyond routing to navigation/save modules.
+
+**API note:** production uses `Materialize` / `MaterializeAsync` with capture-by-ownership rather than
+the plan prose name `SaveAsync`. Semantics match; rename deferred to avoid churn.
+
+**Residual gaps deferred to Phase 5+:**
+
+- DuckDB failure-injection at begin-transaction / commit boundaries and reopen-wide field comparison.
+- Journal truncate/recovery proofs with real project reopen after process kill windows.
+- Large-journal scaling and concurrent save-lock stress beyond unit fixtures.
+- Real QML five-lock e2e and full A→B UI workflow (Phase 6).
+- 6C-6 checkout, session switching product features, garbage collection.
+
+**LOC note (grill-code-review):** changed production modules remain under 1000 LOC each
+(`editor_save_checkpoint_service.cpp` ~406, `editor_session_navigation_controller.cpp` ~316,
+`editor_session_history_port.cpp` ~437, `editor_session_checkpoint_store.cpp` ~121). Navigation unit
+fixture records ordered events (`checkpoint_a` → `commit` → `truncate` → `thumbnail` →
+`release_a` → `acquire_b`) without a god application graph.
 
 #### Phase 5 - Grill DuckDB commit, journal truncation, and reopen recovery
 

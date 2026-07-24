@@ -59,17 +59,30 @@ endif()
 alcedo_register_test_target(EditorSessionJournalWriterPortTest ui)
 
 # Editor session history owns Mini-Git working state and immutable captures.
+# Link the production adapters directly (not AlbumBackendLib) so the binary does
+# not pull the full QML/Qt shell graph into a unit-test process.
 add_executable(EditorSessionHistoryPortTest
-    ${ALCEDO_TEST_ROOT}/edit/history/editor_session_history_port_test.cpp)
-target_include_directories(EditorSessionHistoryPortTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_session_history_port_test.cpp
+    ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_history_port.cpp
+    ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_pipeline_port.cpp)
+target_include_directories(EditorSessionHistoryPortTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorSessionHistoryPortTest
-  AlbumBackendLib
-  ProjectService
+  EditorAdjustmentPipeline
+  EditorMiniGitMaterializer
+  PipelineMgmtService
   EditHistory
+  EditPipeline
+  Operators
   GTest::gtest_main)
+# Land next to the shared tests runtime DLLs (not the heavier ui/ shell DLL set).
+set_target_properties(EditorSessionHistoryPortTest PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/alcedo_studio/tests")
 gtest_discover_tests(EditorSessionHistoryPortTest
   TEST_PREFIX "EditorSessionHistoryPortTest."
-  PROPERTIES LABELS "editor_history;editor_session")
+  PROPERTIES LABELS "editor_history;editor_session;ci_core_flow")
 if(WIN32)
   if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
     add_custom_command(TARGET EditorSessionHistoryPortTest POST_BUILD
@@ -82,18 +95,29 @@ endif()
 alcedo_register_test_target(EditorSessionHistoryPortTest ui)
 
 # Checkpoint storage owns Mini-Git materialization and recovery.
+# Same direct-adapter link rule as history port: avoid AlbumBackendLib for unit runs.
 add_executable(EditorSessionCheckpointStoreTest
-    ${ALCEDO_TEST_ROOT}/edit/history/editor_session_checkpoint_store_test.cpp)
-target_include_directories(EditorSessionCheckpointStoreTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+    ${ALCEDO_TEST_ROOT}/edit/history/editor_session_checkpoint_store_test.cpp
+    ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_checkpoint_store.cpp)
+target_include_directories(EditorSessionCheckpointStoreTest
+  PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorSessionCheckpointStoreTest
-  AlbumBackendLib
+  EditorMiniGitMaterializer
+  EditorSaveCheckpointCoordinator
   ProjectService
   EditHistory
+  StorageService
+  Operators
   GTest::gtest_main)
+set_target_properties(EditorSessionCheckpointStoreTest PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
+  RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/alcedo_studio/tests")
 gtest_discover_tests(EditorSessionCheckpointStoreTest
   TEST_PREFIX "EditorSessionCheckpointStoreTest."
-  PROPERTIES LABELS "editor_history;editor_session")
+  PROPERTIES LABELS "editor_history;editor_session;ci_core_flow")
 if(WIN32)
+  alcedo_copy_duckdb_extensions(EditorSessionCheckpointStoreTest)
   if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
     add_custom_command(TARGET EditorSessionCheckpointStoreTest POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different

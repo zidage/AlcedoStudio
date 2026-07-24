@@ -434,10 +434,11 @@ auto EditorSessionService::Shutdown() -> EditorSessionResult {
   if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
     return Reject("Already shutting down");
   }
-  const auto outcome = navigation_.RequestClose(true);
-  if (outcome.failed) {
-    return Fail(outcome.message);
-  }
+  // Cancel outstanding save work and wait for callback drain. CancelAndWait
+  // publishes one terminal cancellation per in-flight checkpoint; navigation
+  // keeps image A on that failure path and clears the pending action.
+  save_service_.CancelAndWait();
+  navigation_.ClearPendingAction();
   lifecycle_.BeginShutdown();
   EditorSessionResult result;
   result.kind     = EditorSessionResultKind::StateChanged;

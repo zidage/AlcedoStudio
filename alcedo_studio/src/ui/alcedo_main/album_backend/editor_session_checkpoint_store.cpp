@@ -68,12 +68,19 @@ auto EditorSessionCheckpointStore::ResolveJournalPath(sl_element_id_t element_id
 auto EditorSessionCheckpointStore::Materialize(
     std::shared_ptr<const alcedo::EditorMiniGitSaveCapture> capture, std::string* error)
     -> alcedo::EditorMaterializeOutcome {
-  if (!capture) return {true, true, 0, {}};
+  // Fail closed: null capture is not an empty-journal success. Empty journals
+  // still produce a non-null capture value from the history port.
+  if (!capture) {
+    if (error) *error = "Save capture is required";
+    return {false, false, 0, error != nullptr ? *error : "Save capture is required"};
+  }
   auto materializer = EnsureMaterializer();
   if (!materializer) {
     if (error) *error = "Mini-Git storage is unavailable";
     return {false, false, 0, error != nullptr ? *error : "Mini-Git storage is unavailable"};
   }
+  // Production path: Mini-Git materializer only. The legacy transaction-array
+  // EditorHistoryMaterializer is never constructed or invoked from this store.
   const auto result = materializer->Materialize(*capture, error);
   return {result.accepted, result.materialized, result.materialized ? 1u : 0u, result.error};
 }

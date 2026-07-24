@@ -236,36 +236,31 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
     if (!save_lock.owns_lock()) {
       return CheckpointTicket{};
     }
-    if (history_ != nullptr && lifecycle_.has_history_guard()) {
-      std::string error;
-      auto        capture = history_->CaptureSaveCheckpoint(lifecycle_.history_guard(), &error);
-      if (!error.empty()) {
-        return CheckpointTicket{};
-      }
-      SaveCheckpointRequest req;
-      req.element_id         = identity.element_id;
-      req.session_generation = identity.session_generation;
-      req.capture            = std::move(capture);
-      if (req.capture && req.capture->has_journal_range()) {
-        req.last_journal_sequence = req.capture->last_journal_sequence;
-      }
-      req.save_lock = std::move(save_lock);
-      lifecycle_.BeginCheckpoint();
-      if (!start_background_save) {
-        return CheckpointTicket{};
-      }
-      return save_service_.Start(
-          std::move(req), [this](const SaveCheckpointResult& r) { OnCheckpointFinished(r); });
+    // Fail closed: a configured session must have history and produce an
+    // immutable capture. Missing history or a null capture is not a silent
+    // successful save without materialization.
+    if (history_ == nullptr || !lifecycle_.has_history_guard()) {
+      return CheckpointTicket{};
     }
-    if (start_background_save) {
-      SaveCheckpointRequest req;
-      req.element_id         = identity.element_id;
-      req.session_generation = identity.session_generation;
-      req.save_lock          = std::move(save_lock);
-      lifecycle_.BeginCheckpoint();
-      return save_service_.Start(
-          std::move(req), [this](const SaveCheckpointResult& r) { OnCheckpointFinished(r); });
+    std::string error;
+    auto        capture = history_->CaptureSaveCheckpoint(lifecycle_.history_guard(), &error);
+    if (!capture || !error.empty()) {
+      return CheckpointTicket{};
     }
+    if (!start_background_save) {
+      return CheckpointTicket{};
+    }
+    SaveCheckpointRequest req;
+    req.element_id         = identity.element_id;
+    req.session_generation = identity.session_generation;
+    req.capture            = std::move(capture);
+    if (req.capture->has_journal_range()) {
+      req.last_journal_sequence = req.capture->last_journal_sequence;
+    }
+    req.save_lock = std::move(save_lock);
+    lifecycle_.BeginCheckpoint();
+    return save_service_.Start(std::move(req),
+                               [this](const SaveCheckpointResult& r) { OnCheckpointFinished(r); });
   } else if (journal_ != nullptr) {
     std::string error;
     if (!journal_->DiscardUnflushed(identity.element_id, &error)) {
