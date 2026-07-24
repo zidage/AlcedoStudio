@@ -64,28 +64,15 @@ if(ALCEDO_CUDA_ENABLED AND ALCEDO_OPENCL_ENABLED)
   add_executable(OpenClCudaPipelineCompareTest ${ALCEDO_TEST_ROOT}/raw/opencl_cuda_pipeline_compare_test.cpp)
   target_include_directories(OpenClCudaPipelineCompareTest PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(OpenClCudaPipelineCompareTest PRIVATE GTest::gtest_main Operators RawProcessor OpenClGeometryUtils OpenClProgramLibrary ${ALCEDO_TEST_OPENCV_MIN_DEPS})
-  if(WIN32 AND TARGET alcedo_lensfun)
-    add_custom_command(TARGET OpenClCudaPipelineCompareTest POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              "$<TARGET_FILE:alcedo_lensfun>"
-              "$<TARGET_FILE_DIR:OpenClCudaPipelineCompareTest>/lensfun.dll"
-      VERBATIM
-    )
-  endif()
+  # Overwrite vcpkg applocal lensfun with third_party alcedo_lensfun after link.
+  alcedo_copy_windows_test_runtime_dlls(OpenClCudaPipelineCompareTest)
   gtest_discover_tests(OpenClCudaPipelineCompareTest TEST_PREFIX "OpenClCudaCompare.")
   alcedo_register_test_target(OpenClCudaPipelineCompareTest raw gpu)
 
   add_executable(OpenClCudaFullPipelineBenchmark ${ALCEDO_TEST_ROOT}/raw/opencl_cuda_full_pipeline_benchmark.cpp)
   target_include_directories(OpenClCudaFullPipelineBenchmark PUBLIC ${ALCEDO_INCLUDE_DIR})
   target_link_libraries(OpenClCudaFullPipelineBenchmark PRIVATE GTest::gtest_main Operators RawProcessor OpenClProgramLibrary EditPipeline PipelineScheduler ThreadPool ${ALCEDO_TEST_OPENCV_MIN_DEPS})
-  if(WIN32 AND TARGET alcedo_lensfun)
-    add_custom_command(TARGET OpenClCudaFullPipelineBenchmark POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              "$<TARGET_FILE:alcedo_lensfun>"
-              "$<TARGET_FILE_DIR:OpenClCudaFullPipelineBenchmark>/lensfun.dll"
-      VERBATIM
-    )
-  endif()
+  alcedo_copy_windows_test_runtime_dlls(OpenClCudaFullPipelineBenchmark)
   gtest_discover_tests(OpenClCudaFullPipelineBenchmark TEST_PREFIX "OpenClCudaBenchmark.")
   alcedo_register_test_target(OpenClCudaFullPipelineBenchmark raw gpu)
 endif()

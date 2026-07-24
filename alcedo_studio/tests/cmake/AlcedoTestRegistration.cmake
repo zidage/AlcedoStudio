@@ -53,6 +53,38 @@ function(alcedo_copy_duckdb_fts_extension target_name)
     "fts.duckdb_extension")
 endfunction()
 
+# Windows runtime DLLs that must sit next to test executables.
+#
+# Order matters: vcpkg's toolchain attaches applocal.ps1 as a POST_BUILD step that
+# copies every DLL from vcpkg/installed/.../bin, including vcpkg's lensfun.dll.
+# Production code links the in-tree third_party lensfun (alcedo_lensfun /
+# puerhlab_lensfun). The two ABIs are not interchangeable — loading the vcpkg
+# DLL yields STATUS_ENTRYPOINT_NOT_FOUND (0xC0000139) for lf_db_create and friends.
+#
+# This helper must be called AFTER target_link_libraries so its POST_BUILD steps
+# run after applocal and overwrite lensfun.dll with the correct third_party build.
+# Also copies the vendored duckdb.dll and optional DuckDB extensions.
+function(alcedo_copy_windows_test_runtime_dlls target_name)
+  if(NOT WIN32 OR NOT TARGET ${target_name})
+    return()
+  endif()
+  if(TARGET alcedo_lensfun)
+    add_custom_command(TARGET ${target_name} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "$<TARGET_FILE:alcedo_lensfun>"
+              "$<TARGET_FILE_DIR:${target_name}>/lensfun.dll"
+      VERBATIM)
+  endif()
+  if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
+    add_custom_command(TARGET ${target_name} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll"
+              "$<TARGET_FILE_DIR:${target_name}>/duckdb.dll"
+      VERBATIM)
+  endif()
+  alcedo_copy_duckdb_extensions(${target_name})
+endfunction()
+
 # Register one test executable with one or more category aggregates.
 # Call adjacent to the test declaration (Phase 3C+). Category names match the
 # trailing alcedo_assign_test_category groups in tests/CMakeLists.txt:

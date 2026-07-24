@@ -82,23 +82,7 @@ target_link_libraries(EditHistoryMgmtServiceTest ProjectService EditHistoryMgmtS
 gtest_discover_tests(EditHistoryMgmtServiceTest TEST_PREFIX "EditHistoryMgmtServiceTest."
   PROPERTIES LABELS "ci_core_flow")
 
-if(WIN32)
-  target_link_libraries(EditHistoryMgmtServiceTest)
-  if(TARGET alcedo_lensfun)
-    add_custom_command(TARGET EditHistoryMgmtServiceTest POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              "$<TARGET_FILE:alcedo_lensfun>"
-              "$<TARGET_FILE_DIR:EditHistoryMgmtServiceTest>/lensfun.dll"
-      VERBATIM)
-  endif()
-  if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
-    add_custom_command(TARGET EditHistoryMgmtServiceTest POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll"
-              "$<TARGET_FILE_DIR:EditHistoryMgmtServiceTest>/duckdb.dll"
-      VERBATIM)
-  endif()
-endif()
+alcedo_copy_windows_test_runtime_dlls(EditHistoryMgmtServiceTest)
 alcedo_register_test_target(EditHistoryMgmtServiceTest app ci_core)
 
 # Phase 5A: application-layer editor session + render coordinator (no GPU/QML).
@@ -246,23 +230,7 @@ target_link_libraries(ProjectServiceTest ProjectService GTest::gtest_main)
 gtest_discover_tests(ProjectServiceTest TEST_PREFIX "ProjectServiceTest."
   PROPERTIES LABELS "ci_core_flow")
 
-if(WIN32)
-  target_link_libraries(ProjectServiceTest)
-  if(TARGET alcedo_lensfun)
-    add_custom_command(TARGET ProjectServiceTest POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              "$<TARGET_FILE:alcedo_lensfun>"
-              "$<TARGET_FILE_DIR:ProjectServiceTest>/lensfun.dll"
-      VERBATIM)
-  endif()
-  if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
-    add_custom_command(TARGET ProjectServiceTest POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll"
-              "$<TARGET_FILE_DIR:ProjectServiceTest>/duckdb.dll"
-      VERBATIM)
-  endif()
-endif()
+alcedo_copy_windows_test_runtime_dlls(ProjectServiceTest)
 alcedo_register_test_target(ProjectServiceTest app ci_core)
 
 add_executable(AiSidecarFakeRuntime ${ALCEDO_TEST_ROOT}/app/ai_sidecar_fake_runtime_main.cpp)
@@ -386,23 +354,7 @@ add_executable(HsResearchExportTool ${ALCEDO_TEST_ROOT}/app/hs_research_export_t
 target_include_directories(HsResearchExportTool PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(HsResearchExportTool PRIVATE ExportService ProjectService ImportService ImageWriter ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 
-if(WIN32)
-  target_link_libraries(HsResearchExportTool)
-  if(TARGET alcedo_lensfun)
-    add_custom_command(TARGET HsResearchExportTool POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              "$<TARGET_FILE:alcedo_lensfun>"
-              "$<TARGET_FILE_DIR:HsResearchExportTool>/lensfun.dll"
-      VERBATIM)
-  endif()
-  if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
-    add_custom_command(TARGET HsResearchExportTool POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll"
-              "$<TARGET_FILE_DIR:HsResearchExportTool>/duckdb.dll"
-      VERBATIM)
-  endif()
-endif()
+alcedo_copy_windows_test_runtime_dlls(HsResearchExportTool)
 alcedo_register_test_target(HsResearchExportTool app)
 
 add_executable(ThumbnailAlbumQtDemo ${ALCEDO_TEST_ROOT}/app/thumbnail_album_qt_demo.cpp)

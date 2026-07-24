@@ -40,22 +40,8 @@ target_link_libraries(EditorSessionJournalWriterPortTest
 gtest_discover_tests(EditorSessionJournalWriterPortTest
   TEST_PREFIX "EditorSessionJournalWriterPortTest."
   PROPERTIES LABELS "editor_history;editor_session")
-if(WIN32)
-  if(TARGET alcedo_lensfun)
-    add_custom_command(TARGET EditorSessionJournalWriterPortTest POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              "$<TARGET_FILE:alcedo_lensfun>"
-              "$<TARGET_FILE_DIR:EditorSessionJournalWriterPortTest>/lensfun.dll"
-      VERBATIM)
-  endif()
-  if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
-    add_custom_command(TARGET EditorSessionJournalWriterPortTest POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll"
-              "$<TARGET_FILE_DIR:EditorSessionJournalWriterPortTest>/duckdb.dll"
-      VERBATIM)
-  endif()
-endif()
+# After target_link_libraries: overwrite vcpkg applocal lensfun + copy duckdb.
+alcedo_copy_windows_test_runtime_dlls(EditorSessionJournalWriterPortTest)
 alcedo_register_test_target(EditorSessionJournalWriterPortTest ui)
 
 # Editor session history owns Mini-Git working state and immutable captures.
@@ -83,15 +69,8 @@ set_target_properties(EditorSessionHistoryPortTest PROPERTIES
 gtest_discover_tests(EditorSessionHistoryPortTest
   TEST_PREFIX "EditorSessionHistoryPortTest."
   PROPERTIES LABELS "editor_history;editor_session;ci_core_flow")
-if(WIN32)
-  if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
-    add_custom_command(TARGET EditorSessionHistoryPortTest POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll"
-              "$<TARGET_FILE_DIR:EditorSessionHistoryPortTest>/duckdb.dll"
-      VERBATIM)
-  endif()
-endif()
+# Lands in the shared tests/ dir; still overwrite vcpkg applocal lensfun there.
+alcedo_copy_windows_test_runtime_dlls(EditorSessionHistoryPortTest)
 alcedo_register_test_target(EditorSessionHistoryPortTest ui)
 
 # Checkpoint storage owns Mini-Git materialization and recovery.
@@ -116,16 +95,7 @@ set_target_properties(EditorSessionCheckpointStoreTest PROPERTIES
 gtest_discover_tests(EditorSessionCheckpointStoreTest
   TEST_PREFIX "EditorSessionCheckpointStoreTest."
   PROPERTIES LABELS "editor_history;editor_session;ci_core_flow")
-if(WIN32)
-  alcedo_copy_duckdb_extensions(EditorSessionCheckpointStoreTest)
-  if(EXISTS "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll")
-    add_custom_command(TARGET EditorSessionCheckpointStoreTest POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              "${CMAKE_SOURCE_DIR}/alcedo_studio/third_party/libduckdb-windows/duckdb.dll"
-              "$<TARGET_FILE_DIR:EditorSessionCheckpointStoreTest>/duckdb.dll"
-      VERBATIM)
-  endif()
-endif()
+alcedo_copy_windows_test_runtime_dlls(EditorSessionCheckpointStoreTest)
 alcedo_register_test_target(EditorSessionCheckpointStoreTest ui)
 
 # Phase 6C-5: thumbnail invalidation port unit tests (no project/database needed).

@@ -95,35 +95,32 @@ TEST_F(EditorMiniGitJournalFoldTest, FoldWithNullErrorDoesNotCrash) {
   EXPECT_TRUE(result.accepted);
 }
 
-/// A journal record whose expected_source_head is stale (does not match the
-/// current graph head) must cause the fold to reject without modifying the
-/// graph.
+/// A journal record whose expected_source_head / chain hash does not match the
+/// fold graph head must reject without modifying that graph.
+///
+/// Important construction rule: fold against a graph that still sits at the
+/// pre-edit head. Folding a record whose target already matches a post-edit
+/// head is the crash-window recovery path (already-materialized prefix), not
+/// the forward stale-source rejection path.
 TEST_F(EditorMiniGitJournalFoldTest, StaleSourceHeadOrChainHashWritesNothing) {
+  // Snapshot the empty/root graph before any journal work.
+  auto       fold_graph    = *graph_;
+  const auto prior_head    = fold_graph.GetActiveVersionRef().head_commit_hash;
+  const auto prior_commits = fold_graph.CommitCount();
+
   auto                  journal = std::make_shared<MiniGitJournal>();
   MiniGitWorkingHistory history(graph_, journal);
   ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 1.0f)).committed);
+  ASSERT_FALSE(journal->records().empty());
 
-  // Capture the fold graph before the fold attempt.
-  auto        fold_graph    = *graph_;
-  const auto  prior_head    = fold_graph.GetActiveVersionRef().head_commit_hash;
-  const auto  prior_chain   = fold_graph.ChainHashForHead(prior_head);
-  const auto  prior_commits = fold_graph.CommitCount();
-
-  // Build a record with a stale expected_source_head: a hash that does not
-  // match the graph's current head. The record is otherwise structurally valid.
-  MiniGitJournalRecord stale_record;
-  stale_record.kind                   = MiniGitJournalRecordKind::kEditCommit;
-  stale_record.expected_source_head   = Hash128{0xdead, 0xbeef};  // Stale.
-  stale_record.expected_source_chain_hash = prior_chain;
-  stale_record.edit_commit            = journal->records().front().edit_commit;
-  stale_record.target_head            = journal->records().front().target_head;
-  stale_record.target_chain_hash      = journal->records().front().target_chain_hash;
-
-  std::vector<MiniGitJournalRecord> records;
-  records.push_back(stale_record);
+  // Structurally valid edit payload, but source head/chain claim a state that
+  // never existed on fold_graph (still at root).
+  MiniGitJournalRecord stale_record = journal->records().front();
+  stale_record.expected_source_head       = Hash128{0xdead, 0xbeef};
+  stale_record.expected_source_chain_hash = Hash128{0xcafe, 0xbabe};
 
   std::string error;
-  auto        result = EditorMiniGitJournalFold::Fold(fold_graph, records, &error);
+  auto        result = EditorMiniGitJournalFold::Fold(fold_graph, {stale_record}, &error);
   EXPECT_FALSE(result.accepted);
   EXPECT_FALSE(result.error.empty());
 
@@ -132,31 +129,22 @@ TEST_F(EditorMiniGitJournalFoldTest, StaleSourceHeadOrChainHashWritesNothing) {
   EXPECT_EQ(fold_graph.CommitCount(), prior_commits);
 }
 
-/// Records that form a duplicate application (same expected source head on
-/// consecutive records, or a chain hash that does not match the computed fold)
-/// must cause the fold to reject without writing anything to the graph.
+/// Two consecutive records that both claim the same source head must reject on
+/// the second application: the first advances the head, so the second is stale.
+/// Fold starts from the pre-edit graph so the first record is a true forward
+/// apply rather than an already-materialized recovery skip.
 TEST_F(EditorMiniGitJournalFoldTest, MalformedDuplicateOrOutOfOrderRecordWritesNothing) {
+  auto fold_graph = *graph_;  // Root / pre-edit snapshot.
+
   auto                  journal = std::make_shared<MiniGitJournal>();
   MiniGitWorkingHistory history(graph_, journal);
   ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 1.0f)).committed);
+  ASSERT_FALSE(journal->records().empty());
 
   const auto& valid_record = journal->records().front();
 
-  // Build two records that both try to apply from the SAME source head. The
-  // first will succeed; the second must fail because the graph head has already
-  // advanced.
-  MiniGitJournalRecord dup;
-  dup.kind                   = MiniGitJournalRecordKind::kEditCommit;
-  dup.expected_source_head   = valid_record.expected_source_head;
-  dup.expected_source_chain_hash = valid_record.expected_source_chain_hash;
-  dup.edit_commit            = valid_record.edit_commit;
-  dup.target_head            = valid_record.target_head;
-  dup.target_chain_hash      = valid_record.target_chain_hash;
-
-  auto fold_graph = *graph_;
-  std::vector<MiniGitJournalRecord> records;
-  records.push_back(dup);
-  records.push_back(dup);  // Second copy with same source head → stale on second iteration.
+  // Same source head twice: first applies from root; second is out of order.
+  std::vector<MiniGitJournalRecord> records{valid_record, valid_record};
 
   std::string error;
   auto        result = EditorMiniGitJournalFold::Fold(fold_graph, records, &error);
