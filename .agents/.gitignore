@@ -1,0 +1,5 @@
+# Local agent state — keep skills shareable with the repo.
+*
+!skills/
+!skills/**
+!.gitignore

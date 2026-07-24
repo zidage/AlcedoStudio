@@ -1298,9 +1298,9 @@ Required evidence:
 
 ###### Phase 3A frozen results (2026-07-24)
 
-Machine-local review evidence (not committed): `tmp/phase3a_baseline/` (pre-change) and
-`tmp/phase3a_post/` (after helper extraction + reconfigure). Full target help, CTest JSON, option
-dumps, declaration CSVs, and diffs live there.
+Machine-local review evidence (not committed): `build/tmp/phase3a_baseline/` (pre-change) and
+`build/tmp/phase3a_post/` (after helper extraction + reconfigure). Full target help, CTest JSON,
+option dumps, declaration CSVs, and diffs live there.
 
 **Configure baseline (`win_debug`)**
 
@@ -1358,7 +1358,7 @@ Key targets present after reconfigure: `alcedo_main`, `AlbumBackendLib`, `EditVi
 | `alcedo_assign_test_category`, DuckDB copy helpers, `alcedo_register_test_target` | `alcedo_studio/tests/cmake/AlcedoTestRegistration.cmake` |
 | Legacy test path aliases | `ALCEDO_ROOT_DIR`, `ALCEDO_SRC_DIR`, `ALCEDO_INCLUDE_DIR`, `ALCEDO_TEST_DIR` kept equal to the new roots for existing path lines |
 
-**Declaration inventory (CSV under `tmp/phase3a_baseline/`)**
+**Declaration inventory (CSV under `build/tmp/phase3a_baseline/`)**
 
 | Kind | Count | Owner today |
 | --- | ---: | --- |

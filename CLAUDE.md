@@ -6,6 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Alcedo Studio** is a RAW photo editor and digital asset management (DAM) system written in C++20. It features CUDA-accelerated (Windows) and Metal-accelerated (macOS) image processing, a DuckDB-backed asset management system ("Sleeve"), and a Qt 6 UI combining QML (album browser) and Qt Widgets (editor).
 
+## Temporary files
+
+Do not put temporary directories, build logs, harness dumps, one-off scripts, or review
+evidence at the repository root. Use **`build/tmp/`** only (create if needed). See
+`AGENTS.md` for the full rule. Agent tool caches (`.uv-cache/`, `.uv-python/`,
+`.scratch/`, `skills-lock.json`) are gitignored; skills under `.claude/skills/`,
+`.codex/skills/`, and `.agents/skills/` remain trackable.
+
 ## Build Commands
 
 ### Windows (MSVC + CUDA)

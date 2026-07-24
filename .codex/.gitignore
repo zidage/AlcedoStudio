@@ -1,0 +1,5 @@
+# Local Codex state — keep skills shareable with the repo.
+*
+!skills/
+!skills/**
+!.gitignore

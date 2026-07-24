@@ -1111,11 +1111,22 @@ vcpkg
 
 *.local.json
 
-# Ignore skills for coding agents
-/.*/skills/
+# ---------------------------------------------------------------------------
+# Agent tooling / local caches
+# Skills under .claude/skills, .codex/skills, and .agents/skills stay trackable
+# via nested .gitignore in each of those directories (do not ignore whole dirs
+# here; a parent ignore cannot be undone for children).
+# ---------------------------------------------------------------------------
+.uv-cache/
+.uv-python/
+.scratch/
+skills-lock.json
 
-# Ignore agent guidance files
-AGENTS.md
+# Project temporary workspace: build logs, one-off scripts, review dumps, etc.
+# Always use build/tmp/ — never create /tmp or loose temp files at the repo root.
+# (build/ is already ignored above; this documents the convention and covers a
+# root-level tmp/ if one is created by mistake.)
+/tmp/
 
 # Social media publish materials (not tracked)
 /docs/social_media_pub/
