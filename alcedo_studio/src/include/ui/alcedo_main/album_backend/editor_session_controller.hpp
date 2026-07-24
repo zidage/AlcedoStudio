@@ -135,6 +135,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] auto       canEdit() const -> bool override { return can_edit(); }
 
   Q_INVOKABLE void   Open(uint elementId = 0, uint imageId = 0);
+  /// Check out a named Version by its hex version_id. Completes a save checkpoint
+  /// first, then rebuilds the pipeline from root + first-parent commits.
+  Q_INVOKABLE void   CheckoutVersion(const QString& versionId);
   Q_INVOKABLE void   Close();
   Q_INVOKABLE void   Shutdown();
   void               Finalize(bool persistChanges);

@@ -393,6 +393,10 @@ void ApplicationModuleHost::ShutdownModules() {
       auto psvc = project_->handler().pipeline_service();
       if (psvc) {
         psvc->Sync();
+        // Clean-exit Mini-Git garbage collection: delete EditCommit rows not
+        // reachable from any Version head (including abandoned redo paths).
+        // Abnormal shutdown must not run this path.
+        (void)psvc->CollectUnreachableEditCommits();
       }
       (void)project_->handler().PurgeUninstalledSemanticModels();
       if (project_->handler().PersistCurrentProjectState()) {

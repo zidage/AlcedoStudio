@@ -13,6 +13,7 @@
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_service.hpp"
 #include "edit/frame_presentation_types.hpp"
+#include "type/hash_type.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
@@ -237,6 +238,23 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
   Q_UNUSED(editor_);
   SyncViewportIdentity();
   emit StateChanged();
+}
+
+void EditorSessionController::CheckoutVersion(const QString& versionId) {
+  if (!session_backend_) {
+    return;
+  }
+  if (versionId.trimmed().isEmpty()) {
+    return;
+  }
+  try {
+    const auto version_id = alcedo::Hash128::FromString(versionId.trimmed().toStdString());
+    session_backend_->CheckoutVersion(version_id);
+    SyncIdentityFromBackend();
+    emit StateChanged();
+  } catch (const std::exception&) {
+    // Invalid hex identity: leave the session on the prior Version.
+  }
 }
 
 void EditorSessionController::Close() {

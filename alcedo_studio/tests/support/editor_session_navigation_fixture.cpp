@@ -92,6 +92,13 @@ auto EditorSessionNavigationFixture::RequestSwitchToB() -> NavigationOutcome {
   return nav_->RequestOpenOrSwitch(kElementB, kImageB, true);
 }
 
+auto EditorSessionNavigationFixture::RequestCheckoutVersion(const version_ref_id_t& version_id)
+    -> NavigationOutcome {
+  journal_->inner.async_commit               = true;
+  checkpoint_store_->inner.async_materialize = true;
+  return nav_->RequestCheckoutVersion(version_id);
+}
+
 void EditorSessionNavigationFixture::CompleteCheckpoint() {
   journal_->inner.CompleteCommit(true);
   checkpoint_store_->inner.CompleteMaterialization(true);
@@ -166,6 +173,14 @@ auto EditorSessionNavigationFixture::TrackingHistoryPort::CaptureSaveCheckpoint(
     owner_->RecordEvent("checkpoint_a");
   }
   return inner.CaptureSaveCheckpoint(guard, error);
+}
+
+auto EditorSessionNavigationFixture::TrackingHistoryPort::CheckoutVersion(
+    const EditorHistoryGuardHandle& guard, const Hash128& version_id, std::string* error) -> bool {
+  if (owner_ != nullptr) {
+    owner_->RecordEvent("checkout_version");
+  }
+  return inner.CheckoutVersion(guard, version_id, error);
 }
 
 auto EditorSessionNavigationFixture::TrackingJournalPort::FinalizeEdit(

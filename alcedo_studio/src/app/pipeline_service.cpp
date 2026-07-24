@@ -652,6 +652,122 @@ void PipelineMgmtService::SavePipeline(std::shared_ptr<PipelineGuard> pipeline) 
   }
 }
 
+auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& pipeline,
+                                          const version_ref_id_t& version_id, std::string* error)
+    -> bool {
+  if (!pipeline || !pipeline->pipeline_ || !pipeline->commit_graph_) {
+    if (error != nullptr) {
+      *error = "PipelineMgmtService: checkout requires a loaded editor pipeline with a commit graph";
+    }
+    return false;
+  }
+
+  auto& graph = *pipeline->commit_graph_;
+  const auto prior_version_id = graph.GetActiveVersionId();
+  if (prior_version_id == version_id) {
+    // Already on the requested Version: refresh head/chain and succeed without rebuild.
+    pipeline->working_head_commit_hash_ = graph.GetActiveVersionRef().head_commit_hash;
+    pipeline->transaction_chain_hash_ =
+        graph.ChainHashForHead(pipeline->working_head_commit_hash_);
+    return true;
+  }
+
+  try {
+    (void)graph.GetVersionRef(version_id);
+  } catch (const std::exception& ex) {
+    if (error != nullptr) {
+      *error = ex.what();
+    }
+    return false;
+  }
+
+  DecodedRootPipelineState root_state;
+  {
+    std::unique_lock<std::mutex> service_lock(lock_);
+    auto               db_guard = storage_service_->GetDBController().GetConnectionGuard();
+    auto               db_lock  = db_guard.Lock();
+    CommitGraphService graph_service(db_guard.conn_);
+    const auto root_encoded =
+        graph_service.GetRootSerializedPipelineState(pipeline->id_, graph.GetRootId());
+    if (!root_encoded.has_value()) {
+      if (error != nullptr) {
+        *error = "PipelineMgmtService: immutable root state is missing for checkout";
+      }
+      return false;
+    }
+    auto decoded = DecodeRootPipelineState(*root_encoded);
+    if (!decoded.has_value()) {
+      if (error != nullptr) {
+        *error = "PipelineMgmtService: immutable root state is invalid for checkout";
+      }
+      return false;
+    }
+    root_state = std::move(*decoded);
+  }
+
+  // Snapshot the live executor so a failed rebuild can restore the prior pipeline.
+  nlohmann::json prior_params;
+  {
+    std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
+    prior_params = pipeline->pipeline_->ExportPipelineParams();
+  }
+  const auto prior_head  = pipeline->working_head_commit_hash_;
+  const auto prior_chain = pipeline->transaction_chain_hash_;
+
+  graph.SetActiveVersionId(version_id);
+
+  try {
+    std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
+    RebuildPipelineFromRoot(*pipeline->pipeline_, graph, root_state, accelerator_preference_);
+    pipeline->working_head_commit_hash_ = graph.GetActiveVersionRef().head_commit_hash;
+    pipeline->transaction_chain_hash_ =
+        graph.ChainHashForHead(pipeline->working_head_commit_hash_);
+    pipeline->serialized_state_needs_writeback_ = true;
+    pipeline->dirty_                            = true;
+    return true;
+  } catch (const std::exception& ex) {
+    // Fail closed: restore the prior Version and prior pipeline contents.
+    try {
+      graph.SetActiveVersionId(prior_version_id);
+      std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
+      ImportSerializedPipelineState(*pipeline->pipeline_, prior_params, root_state.raw_color_context,
+                                    accelerator_preference_);
+      pipeline->pipeline_->SetExecutionStages();
+      pipeline->working_head_commit_hash_ = prior_head;
+      pipeline->transaction_chain_hash_   = prior_chain;
+    } catch (...) {
+      // Best-effort restore; still report the original checkout failure.
+    }
+    if (error != nullptr) {
+      *error = std::string("PipelineMgmtService: checkout rebuild failed: ") + ex.what();
+    }
+    return false;
+  } catch (...) {
+    try {
+      graph.SetActiveVersionId(prior_version_id);
+      std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
+      ImportSerializedPipelineState(*pipeline->pipeline_, prior_params, root_state.raw_color_context,
+                                    accelerator_preference_);
+      pipeline->pipeline_->SetExecutionStages();
+      pipeline->working_head_commit_hash_ = prior_head;
+      pipeline->transaction_chain_hash_   = prior_chain;
+    } catch (...) {
+    }
+    if (error != nullptr) {
+      *error = "PipelineMgmtService: checkout rebuild failed with an unknown error";
+    }
+    return false;
+  }
+}
+
+auto PipelineMgmtService::CollectUnreachableEditCommits() -> std::size_t {
+  std::unique_lock<std::mutex> service_lock(lock_);
+  auto               db_guard = storage_service_->GetDBController().GetConnectionGuard();
+  auto               db_lock  = db_guard.Lock();
+  CommitGraphService graph_service(db_guard.conn_);
+  return graph_service.DeleteUnreachableCommitsForProject();
+}
+
 void PipelineMgmtService::DeletePipeline(sl_element_id_t id) {
   std::unique_lock<std::mutex> guard(lock_);
   pipeline_cache_.RemoveRecord(id);

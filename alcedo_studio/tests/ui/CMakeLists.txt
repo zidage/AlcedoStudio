@@ -1,3 +1,6 @@
+# Windows lensfun/duckdb runtime fixup for every EXECUTABLE in this directory.
+include("${ALCEDO_TEST_ROOT}/cmake/AlcedoTestRegistration.cmake")
+
 # Macro to reduce boilerplate for UI test targets.
 macro(def_ui_test TARGET_NAME SOURCE_FILE)
     add_executable(${TARGET_NAME}
@@ -40,8 +43,6 @@ target_link_libraries(EditorSessionJournalWriterPortTest
 gtest_discover_tests(EditorSessionJournalWriterPortTest
   TEST_PREFIX "EditorSessionJournalWriterPortTest."
   PROPERTIES LABELS "editor_history;editor_session")
-# After target_link_libraries: overwrite vcpkg applocal lensfun + copy duckdb.
-alcedo_copy_windows_test_runtime_dlls(EditorSessionJournalWriterPortTest)
 alcedo_register_test_target(EditorSessionJournalWriterPortTest ui)
 
 # Editor session history owns Mini-Git working state and immutable captures.
@@ -70,7 +71,6 @@ gtest_discover_tests(EditorSessionHistoryPortTest
   TEST_PREFIX "EditorSessionHistoryPortTest."
   PROPERTIES LABELS "editor_history;editor_session;ci_core_flow")
 # Lands in the shared tests/ dir; still overwrite vcpkg applocal lensfun there.
-alcedo_copy_windows_test_runtime_dlls(EditorSessionHistoryPortTest)
 alcedo_register_test_target(EditorSessionHistoryPortTest ui)
 
 # Checkpoint storage owns Mini-Git materialization and recovery.
@@ -95,7 +95,6 @@ set_target_properties(EditorSessionCheckpointStoreTest PROPERTIES
 gtest_discover_tests(EditorSessionCheckpointStoreTest
   TEST_PREFIX "EditorSessionCheckpointStoreTest."
   PROPERTIES LABELS "editor_history;editor_session;ci_core_flow")
-alcedo_copy_windows_test_runtime_dlls(EditorSessionCheckpointStoreTest)
 alcedo_register_test_target(EditorSessionCheckpointStoreTest ui)
 
 # Phase 6C-5: thumbnail invalidation port unit tests (no project/database needed).
@@ -177,8 +176,6 @@ alcedo_register_test_target(AlbumBackendBackgroundTaskTest ui)
 
 def_ui_test(AlbumBackendInteractionPolicyTest album_backend_interaction_policy_test.cpp "interaction_policy")
 alcedo_register_test_target(AlbumBackendInteractionPolicyTest ui)
-alcedo_copy_windows_test_runtime_dlls(AlbumBackendInteractionPolicyTest)
-
 def_ui_test(AlbumBackendDbWriteBarrierTest album_backend_db_write_barrier_test.cpp)
 alcedo_register_test_target(AlbumBackendDbWriteBarrierTest ui)
 
@@ -356,8 +353,6 @@ gtest_discover_tests(EditorCheckpointQmlIntegrationTest
     TEST_PREFIX "EditorCheckpointQmlIntegrationTest."
     PROPERTIES LABELS "workspace_qml;interaction_policy")
 alcedo_register_test_target(EditorCheckpointQmlIntegrationTest ui)
-alcedo_copy_windows_test_runtime_dlls(EditorCheckpointQmlIntegrationTest)
-
 add_executable(WorkspaceShellTest
     ${ALCEDO_TEST_ROOT}/ui/workspace_shell_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/main_qml_test_fixture.cpp
@@ -665,4 +660,3 @@ gtest_discover_tests(EditorCheckpointNavigationTest
     TEST_PREFIX "EditorCheckpointNavigationTest."
     PROPERTIES LABELS "workspace_qml;interaction_policy;integration")
 alcedo_register_test_target(EditorCheckpointNavigationTest ui)
-alcedo_copy_windows_test_runtime_dlls(EditorCheckpointNavigationTest)

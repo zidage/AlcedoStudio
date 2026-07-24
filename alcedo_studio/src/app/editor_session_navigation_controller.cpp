@@ -63,13 +63,14 @@ auto EditorSessionNavigationController::RequestOpenOrSwitch(sl_element_id_t elem
   // Seal the prior image before acquiring the next one.
   if (current_identity.session_generation != 0 &&
       (current_identity.element_id != 0 || current_identity.image_id != 0)) {
-    pending_action_   = PendingEditorAction{PendingEditorActionKind::SwitchImage,
-                                          element_id,
-                                          image_id,
-                                          is_switch,
-                                          true,
-                                          CheckpointTicket{}};
-    const auto ticket = SealAndStartSave(true, true);
+    PendingEditorAction pending;
+    pending.kind       = PendingEditorActionKind::SwitchImage;
+    pending.element_id = element_id;
+    pending.image_id   = image_id;
+    pending.is_switch  = is_switch;
+    pending.persist    = true;
+    pending_action_    = pending;
+    const auto ticket  = SealAndStartSave(true, true);
     if (!ticket.valid()) {
       pending_action_.reset();
       outcome.failed  = true;
@@ -121,8 +122,10 @@ auto EditorSessionNavigationController::RequestClose(bool persist_changes) -> Na
 
   const auto current_identity = lifecycle_.identity();
   if (persist_changes && current_identity.element_id != 0 && current_identity.image_id != 0) {
-    pending_action_ = PendingEditorAction{
-        PendingEditorActionKind::CloseEditor, 0, 0, false, true, CheckpointTicket{}};
+    PendingEditorAction pending;
+    pending.kind    = PendingEditorActionKind::CloseEditor;
+    pending.persist = true;
+    pending_action_ = pending;
     const auto ticket = SealAndStartSave(true, true);
     if (!ticket.valid()) {
       pending_action_.reset();
@@ -194,6 +197,14 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
     std::string discard_error;
     (void)history_->DiscardMaterializedJournalThrough(
         lifecycle_.history_guard(), *result.last_journal_sequence, &discard_error);
+  }
+
+  if (pending.kind == PendingEditorActionKind::CheckoutVersion) {
+    // Stay on the same image: complete the save without releasing guards, then
+    // rebuild the pipeline for the requested Version.
+    lifecycle_.CompleteCheckpoint();
+    ContinueCheckoutVersion(pending.version_id);
+    return;
   }
 
   lifecycle_.ReleaseAfterCheckpoint();
@@ -311,6 +322,107 @@ void EditorSessionNavigationController::ContinueToClose(bool persist_changes) {
   edit_.ClearSnapshot();
   render_.ResetForNewImage();
   (void)persist_changes;
+}
+
+auto EditorSessionNavigationController::RequestCheckoutVersion(const version_ref_id_t& version_id)
+    -> NavigationOutcome {
+  std::scoped_lock  lock(mutex_);
+  NavigationOutcome outcome;
+
+  if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
+    outcome.rejected = true;
+    outcome.message  = "Cannot checkout Version while shutting down";
+    return outcome;
+  }
+  if (pending_action_.has_value()) {
+    outcome.rejected = true;
+    outcome.message  = "Editor save checkpoint is in progress";
+    return outcome;
+  }
+  if (!lifecycle_.has_history_guard() || history_ == nullptr) {
+    outcome.failed  = true;
+    outcome.message = "Version checkout requires an open editor history session";
+    return outcome;
+  }
+
+  const auto current_identity = lifecycle_.identity();
+  if (current_identity.element_id == 0 || current_identity.image_id == 0) {
+    outcome.failed  = true;
+    outcome.message = "Version checkout requires an open image";
+    return outcome;
+  }
+
+  // Always complete a save checkpoint first (plan: checkout only for a Version
+  // ref and always after save). An empty journal still acquires the global lock
+  // and runs a no-op materialization path.
+  PendingEditorAction pending;
+  pending.kind       = PendingEditorActionKind::CheckoutVersion;
+  pending.element_id = current_identity.element_id;
+  pending.image_id   = current_identity.image_id;
+  pending.persist    = true;
+  pending.version_id = version_id;
+  pending_action_    = pending;
+
+  const auto ticket = SealAndStartSave(true, true);
+  if (!ticket.valid()) {
+    pending_action_.reset();
+    outcome.failed  = true;
+    outcome.message = "Failed to save current image before Version checkout";
+    return outcome;
+  }
+  if (!pending_action_.has_value()) {
+    // Synchronous save already finished ContinueCheckoutVersion.
+    outcome.ticket                    = ticket;
+    outcome.sealed_session_generation = current_identity.session_generation;
+    outcome.completed_synchronously   = true;
+    outcome.message                   = "Checked out Version";
+    return outcome;
+  }
+  pending_action_->ticket           = ticket;
+  outcome.ticket                    = ticket;
+  outcome.sealed_session_generation = current_identity.session_generation;
+  outcome.waiting_for_checkpoint    = true;
+  outcome.message = "Waiting for save checkpoint before Version checkout";
+  return outcome;
+}
+
+void EditorSessionNavigationController::ContinueCheckoutVersion(
+    const version_ref_id_t& version_id) {
+  if (!lifecycle_.has_history_guard() || history_ == nullptr) {
+    lifecycle_.Fail("Version checkout lost the history guard after save");
+    return;
+  }
+
+  std::string error;
+  if (!history_->CheckoutVersion(lifecycle_.history_guard(), version_id, &error)) {
+    lifecycle_.Fail(error.empty() ? "Version checkout failed" : error);
+    return;
+  }
+
+  EditorRenderAdjustmentSnapshot history_snapshot;
+  if (!history_->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &history_snapshot, &error)) {
+    lifecycle_.Fail(error.empty() ? "Failed to read snapshot after Version checkout" : error);
+    return;
+  }
+  if (!history_snapshot.params_json.empty() || !history_snapshot.patches.empty() ||
+      !history_snapshot.fingerprint.empty()) {
+    edit_.set_adjustment_snapshot(std::move(history_snapshot));
+  } else {
+    edit_.ClearSnapshot();
+  }
+
+  // Stay Interactive on the same image. Route a first frame for the new head
+  // without releasing pipeline ownership.
+  if (lifecycle_.state() != EditorSessionState::Interactive) {
+    lifecycle_.MarkImageReady();
+  }
+  render_.ResetForNewImage();
+  render_.MarkImageAcquired();
+
+  EditorRenderCommand command;
+  command.reason     = EditorRenderReason::InitialFrame;
+  command.adjustment = edit_.adjustment_snapshot();
+  render_.RouteInitialRender(command, lifecycle_.identity());
 }
 
 }  // namespace alcedo

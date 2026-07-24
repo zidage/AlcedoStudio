@@ -11,6 +11,7 @@
 
 #include "app/editor_save_checkpoint_service.hpp"
 #include "app/editor_session_types.hpp"
+#include "edit/history/commit_types.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -27,6 +28,7 @@ class IEditorHistoryPort;
 enum class PendingEditorActionKind : std::uint8_t {
   SwitchImage = 0,
   CloseEditor,
+  CheckoutVersion,
 };
 
 /// A pending navigation action captured while a save checkpoint is in progress.
@@ -38,6 +40,8 @@ struct PendingEditorAction {
   image_id_t              image_id   = 0;
   bool                    is_switch  = false;
   bool                    persist    = true;
+  /// Target Version for CheckoutVersion actions. Zero means unset.
+  version_ref_id_t        version_id{};
   CheckpointTicket        ticket{};
 };
 
@@ -96,6 +100,12 @@ class EditorSessionNavigationController final {
   /// starts a save checkpoint and captures the pending close action.
   auto               RequestClose(bool persist_changes) -> NavigationOutcome;
 
+  /// Request to check out another Version on the currently open image. Always
+  /// completes a save checkpoint first (even when the journal is empty) so the
+  /// working head is durable before reconstruction. Rebuilds the pipeline from
+  /// root + first-parent chain only after the checkpoint succeeds.
+  auto RequestCheckoutVersion(const version_ref_id_t& version_id) -> NavigationOutcome;
+
   /// Resume the pending navigation after a save checkpoint completed. Called
   /// by the facade when the save service invokes its completion callback. On
   /// success, releases the prior image's guards, loads the adjustment snapshot
@@ -120,6 +130,8 @@ class EditorSessionNavigationController final {
   void ContinueToTarget(sl_element_id_t element_id, image_id_t image_id, bool is_switch);
   /// Continue to a close after a successful save.
   void ContinueToClose(bool persist_changes);
+  /// Continue Version checkout after a successful save on the current image.
+  void ContinueCheckoutVersion(const version_ref_id_t& version_id);
 
   EditorSessionLifecycle&            lifecycle_;
   EditorSaveCheckpointService&       save_service_;

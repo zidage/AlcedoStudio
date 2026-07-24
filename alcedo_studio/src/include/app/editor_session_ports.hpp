@@ -76,6 +76,19 @@ class IEditorHistoryPort {
                                       EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
       -> bool = 0;
 
+  /// Switch the checked-out Version after a successful save checkpoint. Rebuilds
+  /// the live pipeline from root + first-parent chain and refreshes the
+  /// adjustment snapshot. Default rejects so fakes must opt in.
+  /// Fail closed: prior Version and pipeline remain published on failure.
+  /// `version_id` is a Version ref identity (Hash128 / version_ref_id_t).
+  virtual auto CheckoutVersion(const EditorHistoryGuardHandle& /*guard*/,
+                               const Hash128& /*version_id*/, std::string* error) -> bool {
+    if (error != nullptr) {
+      *error = "Version checkout is not supported by this history port";
+    }
+    return false;
+  }
+
   /// Capture the immutable live history prefix that a save checkpoint must
   /// persist. Production copies journal records and their inclusive sequence
   /// range under the journal mutex used by append/truncate, together with

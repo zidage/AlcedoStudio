@@ -84,6 +84,53 @@ TEST_F(EditorSessionNavigationControllerTest, CheckpointFailureKeepsAAndNeverAcq
   EXPECT_EQ(fixture_.pipeline().acquire_count, 1);
 }
 
+/// Phase 6C-6: Version checkout always completes a save checkpoint first, then
+/// rebuilds on the same image without releasing A or acquiring B.
+TEST_F(EditorSessionNavigationControllerTest,
+       CheckoutVersionSavesFirstThenRebuildsWithoutReleasingImage) {
+  fixture_.OpenA();
+  const auto target_version = Hash128{0xabcdef01ULL, 0x23456789ULL};
+
+  const auto result = fixture_.RequestCheckoutVersion(target_version);
+  EXPECT_TRUE(result.waiting_for_checkpoint);
+  EXPECT_TRUE(fixture_.nav().has_pending_action());
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "checkout_version"), 0);
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "release_a"), 0);
+
+  fixture_.CompleteCheckpoint();
+  EXPECT_FALSE(fixture_.nav().has_pending_action());
+  EXPECT_EQ(fixture_.lifecycle().identity().element_id,
+            test::EditorSessionNavigationFixture::kElementA);
+  EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::Interactive);
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "release_a"), 0);
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "acquire_b"), 0);
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "checkout_version"), 1);
+  EXPECT_EQ(fixture_.history().checkout_count, 1);
+  EXPECT_EQ(fixture_.history().last_checkout_version, target_version);
+  EXPECT_EQ(fixture_.history().release_count, 0);
+}
+
+/// Phase 6C-6: failed checkout rebuild keeps the image and does not expose a
+/// partial pipeline (history port fails closed; navigation marks Failed).
+TEST_F(EditorSessionNavigationControllerTest,
+       FailedCheckoutKeepsImageAndDoesNotReleaseOrSwitch) {
+  fixture_.OpenA();
+  fixture_.history().fail_checkout = true;
+  const auto target_version        = Hash128{0x11111111ULL, 0x22222222ULL};
+
+  const auto result = fixture_.RequestCheckoutVersion(target_version);
+  EXPECT_TRUE(result.waiting_for_checkpoint);
+  fixture_.CompleteCheckpoint();
+
+  EXPECT_FALSE(fixture_.nav().has_pending_action());
+  EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::Failed);
+  EXPECT_EQ(fixture_.lifecycle().identity().element_id,
+            test::EditorSessionNavigationFixture::kElementA);
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "release_a"), 0);
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "acquire_b"), 0);
+  EXPECT_EQ(fixture_.history().checkout_count, 1);
+}
+
 TEST_F(EditorSessionNavigationControllerTest, SecondActionDoesNotReplaceOriginalTargetB) {
   fixture_.OpenA();
 

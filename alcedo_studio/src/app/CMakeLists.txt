@@ -235,6 +235,7 @@ def_library(EditorSessionNavigationController
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_navigation_controller.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_navigation_controller.hpp"
+    PUBLIC_DEPS EditHistory
     PRIVATE_DEPS EditorSessionLifecycle EditorSaveCheckpointService
                  EditorSessionRenderController EditorSessionEditController
                  EditorMiniGitMaterializer
@@ -295,6 +296,7 @@ def_library(EditorSessionService
         "${ALCEDO_INCLUDE_ROOT}/app/editor_render_coordinator.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_bootstrap.hpp"
         "${ALCEDO_INCLUDE_ROOT}/edit/frame_presentation_types.hpp"
+    PUBLIC_DEPS EditHistory
     PRIVATE_DEPS EditorSaveCheckpointService EditorSessionLifecycle
                  EditorSessionNavigationController EditorSessionRenderController
                  EditorSessionEditController

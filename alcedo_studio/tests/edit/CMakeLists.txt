@@ -12,8 +12,6 @@ target_link_libraries(EditorHistoryMaterializerTest
   GTest::gtest_main)
 gtest_discover_tests(EditorHistoryMaterializerTest TEST_PREFIX "EditorHistoryMaterializerTest."
   PROPERTIES LABELS "ci_core_flow")
-# After target_link_libraries: overwrite vcpkg applocal lensfun + copy duckdb.
-alcedo_copy_windows_test_runtime_dlls(EditorHistoryMaterializerTest)
 alcedo_register_test_target(EditorHistoryMaterializerTest edit)
 
 # Phase 6C-5: pure journal fold algorithm tests (no database or file I/O).
@@ -25,9 +23,6 @@ target_link_libraries(EditorMiniGitJournalFoldTest
   GTest::gtest_main)
 gtest_discover_tests(EditorMiniGitJournalFoldTest TEST_PREFIX "EditorMiniGitJournalFoldTest."
   PROPERTIES LABELS "ci_core_flow;edit;history")
-# Fold links EditHistory -> Operators -> lensfun. Without the third_party overwrite,
-# vcpkg applocal leaves a wrong lensfun.dll and the process fails with 0xC0000139.
-alcedo_copy_windows_test_runtime_dlls(EditorMiniGitJournalFoldTest)
 alcedo_register_test_target(EditorMiniGitJournalFoldTest edit)
 
 # Phase 6C-5: commit writer DuckDB transaction tests with failure injection.
@@ -45,7 +40,6 @@ target_link_libraries(EditorMiniGitCommitWriterTest
   GTest::gtest_main)
 gtest_discover_tests(EditorMiniGitCommitWriterTest TEST_PREFIX "EditorMiniGitCommitWriterTest."
   PROPERTIES LABELS "ci_core_flow;edit;history;editor_history")
-alcedo_copy_windows_test_runtime_dlls(EditorMiniGitCommitWriterTest)
 alcedo_register_test_target(EditorMiniGitCommitWriterTest edit)
 
 # Phase 6C-5: journal recovery tests (load, detect materialized prefix, truncate).
@@ -61,7 +55,6 @@ target_link_libraries(EditorMiniGitJournalRecoveryTest
   GTest::gtest_main)
 gtest_discover_tests(EditorMiniGitJournalRecoveryTest TEST_PREFIX "EditorMiniGitJournalRecoveryTest."
   PROPERTIES LABELS "ci_core_flow;edit;history")
-alcedo_copy_windows_test_runtime_dlls(EditorMiniGitJournalRecoveryTest)
 alcedo_register_test_target(EditorMiniGitJournalRecoveryTest edit)
 
 # Exact journal-range capture: sequence bounds, post-capture append survival, mismatch rejection.
@@ -79,7 +72,6 @@ target_link_libraries(EditorSaveCheckpointCaptureTest
   GTest::gtest_main)
 gtest_discover_tests(EditorSaveCheckpointCaptureTest TEST_PREFIX "EditorSaveCheckpointCaptureTest."
   PROPERTIES LABELS "ci_core_flow;edit;history;editor_history")
-alcedo_copy_windows_test_runtime_dlls(EditorSaveCheckpointCaptureTest)
 alcedo_register_test_target(EditorSaveCheckpointCaptureTest edit)
 
 # Phase 6C-5: mini-Git save checkpoint materialization facade tests.
@@ -96,7 +88,6 @@ target_link_libraries(EditorMiniGitMaterializerTest
   GTest::gtest_main)
 gtest_discover_tests(EditorMiniGitMaterializerTest TEST_PREFIX "EditorMiniGitMaterializerTest."
   PROPERTIES LABELS "ci_core_flow;edit;history;editor_history")
-alcedo_copy_windows_test_runtime_dlls(EditorMiniGitMaterializerTest)
 alcedo_register_test_target(EditorMiniGitMaterializerTest edit)
 
 # Tone mapping ownership: op assignment, op-array roundtrip, JSON.
@@ -174,7 +165,6 @@ target_include_directories(CommitGraphTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(CommitGraphTest ProjectService EditHistory StorageService GTest::gtest_main)
 gtest_discover_tests(CommitGraphTest TEST_PREFIX "CommitGraphTest."
   PROPERTIES LABELS "ci_core_flow;edit;history;commit_graph")
-alcedo_copy_windows_test_runtime_dlls(CommitGraphTest)
 alcedo_register_test_target(CommitGraphTest edit)
 
 # Redo-only journal record format, RewriteTimeline, independent timeline simulator.

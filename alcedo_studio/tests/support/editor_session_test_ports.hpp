@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "app/editor_session_ports.hpp"
+#include "type/hash_type.hpp"
 
 namespace alcedo::test {
 
@@ -72,6 +73,9 @@ class FakeEditorHistoryPort final : public IEditorHistoryPort {
   int  undo_count     = 0;
   int  redo_count     = 0;
   int  checkpoint_capture_count = 0;
+  int  checkout_count           = 0;
+  bool fail_checkout            = false;
+  Hash128 last_checkout_version{};
   EditorRenderAdjustmentSnapshot current_snapshot{};
   EditorAdjustmentPatch          last_captured_patch{};
   EditorAdjustmentPatch          last_committed_patch{};
@@ -153,6 +157,19 @@ class FakeEditorHistoryPort final : public IEditorHistoryPort {
       return nullptr;
     }
     return next_capture;
+  }
+
+  auto CheckoutVersion(const EditorHistoryGuardHandle&, const Hash128& version_id,
+                       std::string* error) -> bool override {
+    ++checkout_count;
+    last_checkout_version = version_id;
+    if (fail_checkout) {
+      if (error != nullptr) {
+        *error = "version checkout rebuild failed";
+      }
+      return false;
+    }
+    return true;
   }
 };
 

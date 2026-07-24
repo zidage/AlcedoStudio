@@ -44,6 +44,14 @@ class IEditorSessionBackend {
   virtual void SetPresentationSize(int width, int height)                                     = 0;
   virtual auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult   = 0;
   virtual auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult = 0;
+  /// Check out another Version on the open image after a save checkpoint.
+  virtual auto CheckoutVersion(const version_ref_id_t& /*version_id*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind    = EditorSessionResultKind::Rejected;
+    result.state   = EditorSessionState::NoImage;
+    result.message = "Version checkout is not supported by this backend";
+    return result;
+  }
   virtual auto Close(bool persist_changes) -> EditorSessionResult                             = 0;
   virtual auto Shutdown() -> EditorSessionResult                                              = 0;
   virtual auto Discard() -> EditorSessionResult                                               = 0;
@@ -161,6 +169,7 @@ class EditorSessionService final : public IEditorSessionBackend {
 
   auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
   auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
+  auto CheckoutVersion(const version_ref_id_t& version_id) -> EditorSessionResult override;
   auto Close(bool persist_changes) -> EditorSessionResult override;
   auto Patch(EditorAdjustmentPatch patch) -> EditorSessionResult override;
   auto CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult override;

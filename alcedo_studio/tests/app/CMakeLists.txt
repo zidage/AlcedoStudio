@@ -13,9 +13,6 @@ add_executable(ImportServiceTest ${ALCEDO_TEST_ROOT}/app/import_service_test.cpp
 target_include_directories(ImportServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ImportServiceTest ImportService ProjectService GTest::gtest_main)
 
-if(WIN32)
-  target_link_libraries(ImportServiceTest)
-endif()
 alcedo_register_test_target(ImportServiceTest app)
 
 add_executable(SleeveServiceTest ${ALCEDO_TEST_ROOT}/app/sleeve_service_test.cpp)
@@ -26,9 +23,6 @@ target_link_libraries(SleeveServiceTest
   EditHistoryMgmtService
   GTest::gtest_main)
 
-if(WIN32)
-  target_link_libraries(SleeveServiceTest)
-endif()
 alcedo_register_test_target(SleeveServiceTest app)
 
 add_executable(FilterServiceTest ${ALCEDO_TEST_ROOT}/app/filter_service_test.cpp)
@@ -36,9 +30,6 @@ target_include_directories(FilterServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(FilterServiceTest ImportService ProjectService SleeveFilterService GTest::gtest_main)
 gtest_discover_tests(FilterServiceTest TEST_PREFIX "FilterServiceTest.")
 
-if(WIN32)
-  target_link_libraries(FilterServiceTest)
-endif()
 alcedo_copy_duckdb_fts_extension(FilterServiceTest)
 alcedo_register_test_target(FilterServiceTest app)
 
@@ -54,9 +45,6 @@ target_link_libraries(PipelineServiceTest ProjectService PipelineMgmtService GTe
 gtest_discover_tests(PipelineServiceTest TEST_PREFIX "PipelineServiceTest."
   PROPERTIES LABELS "ci_core_flow")
 
-if(WIN32)
-  target_link_libraries(PipelineServiceTest)
-endif()
 alcedo_register_test_target(PipelineServiceTest app ci_core)
 
 add_executable(AdjustmentTransferServiceTest ${ALCEDO_TEST_ROOT}/app/adjustment_transfer_service_test.cpp)
@@ -71,9 +59,6 @@ target_link_libraries(AdjustmentTransferServiceTest
 gtest_discover_tests(AdjustmentTransferServiceTest TEST_PREFIX "AdjustmentTransferServiceTest."
   PROPERTIES LABELS "ci_core_flow")
 
-if(WIN32)
-  target_link_libraries(AdjustmentTransferServiceTest)
-endif()
 alcedo_register_test_target(AdjustmentTransferServiceTest app ci_core)
 
 add_executable(EditHistoryMgmtServiceTest ${ALCEDO_TEST_ROOT}/app/history_mgmt_service_test.cpp)
@@ -81,8 +66,6 @@ target_include_directories(EditHistoryMgmtServiceTest PUBLIC ${ALCEDO_INCLUDE_DI
 target_link_libraries(EditHistoryMgmtServiceTest ProjectService EditHistoryMgmtService GTest::gtest_main)
 gtest_discover_tests(EditHistoryMgmtServiceTest TEST_PREFIX "EditHistoryMgmtServiceTest."
   PROPERTIES LABELS "ci_core_flow")
-
-alcedo_copy_windows_test_runtime_dlls(EditHistoryMgmtServiceTest)
 alcedo_register_test_target(EditHistoryMgmtServiceTest app ci_core)
 
 # Phase 5A: application-layer editor session + render coordinator (no GPU/QML).
@@ -229,8 +212,6 @@ target_include_directories(ProjectServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ProjectServiceTest ProjectService GTest::gtest_main)
 gtest_discover_tests(ProjectServiceTest TEST_PREFIX "ProjectServiceTest."
   PROPERTIES LABELS "ci_core_flow")
-
-alcedo_copy_windows_test_runtime_dlls(ProjectServiceTest)
 alcedo_register_test_target(ProjectServiceTest app ci_core)
 
 add_executable(AiSidecarFakeRuntime ${ALCEDO_TEST_ROOT}/app/ai_sidecar_fake_runtime_main.cpp)
@@ -329,9 +310,6 @@ add_executable(ThumbnailServiceTest ${ALCEDO_TEST_ROOT}/app/thumbnail_service_te
 target_include_directories(ThumbnailServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ThumbnailServiceTest ThumbnailService ProjectService ImportService GTest::gtest_main)
 
-if(WIN32)
-  target_link_libraries(ThumbnailServiceTest)
-endif()
 alcedo_register_test_target(ThumbnailServiceTest app)
 
 add_executable(ThumbnailDiskCacheServiceTest ${ALCEDO_TEST_ROOT}/app/thumbnail_disk_cache_service_test.cpp)
@@ -345,16 +323,11 @@ target_include_directories(ExportServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ExportServiceTest ExportService ProjectService ImportService GTest::gtest_main ImageWriter ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 gtest_discover_tests(ExportServiceTest TEST_PREFIX "ExportServiceTest.")
 
-if(WIN32)
-  target_link_libraries(ExportServiceTest)
-endif()
 alcedo_register_test_target(ExportServiceTest app)
 
 add_executable(HsResearchExportTool ${ALCEDO_TEST_ROOT}/app/hs_research_export_tool.cpp)
 target_include_directories(HsResearchExportTool PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(HsResearchExportTool PRIVATE ExportService ProjectService ImportService ImageWriter ${ALCEDO_TEST_OPENCV_MIN_DEPS})
-
-alcedo_copy_windows_test_runtime_dlls(HsResearchExportTool)
 alcedo_register_test_target(HsResearchExportTool app)
 
 add_executable(ThumbnailAlbumQtDemo ${ALCEDO_TEST_ROOT}/app/thumbnail_album_qt_demo.cpp)

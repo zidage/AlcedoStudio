@@ -11,6 +11,7 @@
 #include <unordered_map>
 
 #include "app/editor_session_ports.hpp"
+#include "type/hash_type.hpp"
 
 namespace alcedo {
 class PipelineMgmtService;
@@ -48,6 +49,11 @@ class EditorSessionPipelinePort final : public alcedo::IEditorPipelinePort {
   /// Resolve and cache the real pipeline guard used by history and rendering.
   auto EnsureLoaded(sl_element_id_t element_id, std::string* error)
       -> std::shared_ptr<alcedo::PipelineGuard>;
+
+  /// Switch the loaded editor pipeline to another Version via root + first-parent
+  /// rebuild. Fail closed: the prior Version and pipeline remain published.
+  auto CheckoutVersion(sl_element_id_t element_id, const alcedo::Hash128& version_id,
+                       std::string* error) -> bool;
 
  private:
   EditorSessionPipelineServices                                               services_{};

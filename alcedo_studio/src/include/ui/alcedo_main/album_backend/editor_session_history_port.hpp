@@ -50,6 +50,9 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
   auto Undo(const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool override;
   /// Move the working head to the redo child and apply the after value.
   auto Redo(const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool override;
+  /// Switch the checked-out Version, rebuild the live pipeline, refresh the snapshot.
+  auto CheckoutVersion(const alcedo::EditorHistoryGuardHandle& guard,
+                       const alcedo::Hash128& version_id, std::string* error) -> bool override;
   /// Return the committed adjustment snapshot for rendering and the UI.
   auto ReadAdjustmentSnapshot(const alcedo::EditorHistoryGuardHandle& guard,
                               alcedo::EditorRenderAdjustmentSnapshot* snapshot, std::string* error)

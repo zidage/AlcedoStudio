@@ -90,4 +90,25 @@ auto EditorSessionPipelinePort::EnsureLoaded(sl_element_id_t element_id, std::st
   return nullptr;
 }
 
+auto EditorSessionPipelinePort::CheckoutVersion(sl_element_id_t element_id,
+                                                const alcedo::Hash128& version_id,
+                                                std::string* error) -> bool {
+  auto guard = EnsureLoaded(element_id, error);
+  if (!guard) {
+    return false;
+  }
+  std::shared_ptr<alcedo::PipelineMgmtService> service;
+  {
+    std::scoped_lock lock(mutex_);
+    if (services_.pipeline_service) {
+      service = services_.pipeline_service();
+    }
+  }
+  if (!service) {
+    if (error) *error = "Pipeline service is unavailable for Version checkout";
+    return false;
+  }
+  return service->CheckoutVersion(guard, version_id, error);
+}
+
 }  // namespace alcedo::ui

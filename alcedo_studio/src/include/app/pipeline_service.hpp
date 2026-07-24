@@ -97,6 +97,26 @@ class PipelineMgmtService final {
   void               InitializeImageRoot(const std::shared_ptr<PipelineGuard>& pipeline,
                                          const RawRuntimeColorContext*         raw_color_context = nullptr);
 
+  /// Switch the live editor pipeline to another Version on the same image.
+  ///
+  /// Preconditions: `pipeline` is a loaded editor guard with a commit graph. The caller has already
+  /// completed a save checkpoint so the working journal is empty for this image.
+  ///
+  /// Behavior: sets the active Version, rebuilds the executor from the immutable root plus the
+  /// first-parent chain under the render lock, then updates working head and chain hash. On any
+  /// failure the prior Version remains active and the prior pipeline is restored — never publishes
+  /// a partially reconstructed pipeline.
+  ///
+  /// @return true when the Version and pipeline both match the checked-out head.
+  auto CheckoutVersion(const std::shared_ptr<PipelineGuard>& pipeline,
+                       const version_ref_id_t& version_id, std::string* error = nullptr) -> bool;
+
+  /// Clean project-exit garbage collection: mark from every Version head through both parents and
+  /// delete unreachable EditCommit rows. Must run only after the final successful save; abnormal
+  /// shutdown must not call this.
+  /// @return number of deleted commit rows.
+  auto CollectUnreachableEditCommits() -> std::size_t;
+
   void               DeletePipeline(sl_element_id_t id);
   void               DeletePipelines(std::span<const sl_element_id_t> ids);
 

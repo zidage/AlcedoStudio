@@ -52,6 +52,9 @@ class EditorSessionNavigationFixture {
   /// Request a switch from A to B. Starts a save checkpoint when A is open.
   auto RequestSwitchToB() -> NavigationOutcome;
 
+  /// Request Version checkout on the open image. Starts a save checkpoint first.
+  auto RequestCheckoutVersion(const version_ref_id_t& version_id) -> NavigationOutcome;
+
   /// Complete the in-flight save successfully (journal durable + materialize).
   void CompleteCheckpoint();
 
@@ -107,6 +110,8 @@ class EditorSessionNavigationFixture {
         -> bool override;
     auto CaptureSaveCheckpoint(const EditorHistoryGuardHandle& guard, std::string* error)
         -> std::shared_ptr<const EditorMiniGitSaveCapture> override;
+    auto CheckoutVersion(const EditorHistoryGuardHandle& guard, const Hash128& version_id,
+                         std::string* error) -> bool override;
 
     FakeEditorHistoryPort inner;
 

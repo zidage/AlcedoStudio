@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <utility>
+#include <vector>
 
 #include "utils/clock/time_provider.hpp"
 
@@ -289,6 +290,64 @@ auto CommitGraph::FirstParentChain(const head_commit_hash_t& head) const
     current = commit->GetFirstParentHash();
   }
   return std::vector<commit_hash_t>(reverse_path.rbegin(), reverse_path.rend());
+}
+
+auto CommitGraph::CollectReachableCommitHashes() const -> std::unordered_set<commit_hash_t> {
+  std::unordered_set<commit_hash_t> reachable;
+  std::vector<commit_hash_t>        stack;
+  stack.reserve(commits_.size());
+
+  for (const auto& [version_id, ref] : version_refs_) {
+    (void)version_id;
+    if (ref.head_commit_hash.has_value()) {
+      stack.push_back(*ref.head_commit_hash);
+    }
+  }
+
+  while (!stack.empty()) {
+    const auto hash = stack.back();
+    stack.pop_back();
+    if (!reachable.insert(hash).second) {
+      continue;
+    }
+    const auto* commit = FindCommit(hash);
+    if (commit == nullptr) {
+      throw std::runtime_error("CommitGraph: reachable mark found a missing commit");
+    }
+    if (commit->GetFirstParentHash().has_value()) {
+      stack.push_back(*commit->GetFirstParentHash());
+    }
+    if (commit->GetSecondParentHash().has_value()) {
+      stack.push_back(*commit->GetSecondParentHash());
+    }
+  }
+  return reachable;
+}
+
+auto CommitGraph::ListUnreachableCommitHashes() const -> std::vector<commit_hash_t> {
+  const auto reachable = CollectReachableCommitHashes();
+  std::vector<commit_hash_t> unreachable;
+  unreachable.reserve(commits_.size() > reachable.size() ? commits_.size() - reachable.size() : 0);
+  for (const auto& [hash, commit] : commits_) {
+    (void)commit;
+    if (reachable.find(hash) == reachable.end()) {
+      unreachable.push_back(hash);
+    }
+  }
+  return unreachable;
+}
+
+void CommitGraph::EraseUnreachableCommits(const std::vector<commit_hash_t>& hashes) {
+  if (hashes.empty()) {
+    return;
+  }
+  const auto reachable = CollectReachableCommitHashes();
+  for (const auto& hash : hashes) {
+    if (reachable.find(hash) != reachable.end()) {
+      throw std::runtime_error("CommitGraph: refused to erase a reachable commit");
+    }
+    commits_.erase(hash);
+  }
 }
 
 auto CommitGraph::ChainHashForHead(const head_commit_hash_t& head) const

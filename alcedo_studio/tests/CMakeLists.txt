@@ -76,11 +76,11 @@ add_subdirectory(cuda)
 add_subdirectory(ci)
 add_subdirectory(app)
 
-# ==============================================================================
-# Phase 3D test domain manifests
-# ==============================================================================
-
-
-# Category aggregate membership is now registered via alcedo_register_test_target
-# in each domain manifest. The root keeps only infrastructure.
+# Category aggregate membership is registered via alcedo_register_test_target
+# in each domain manifest. The root keeps infrastructure only.
+#
+# Windows lensfun/duckdb test runtime fixup is scheduled automatically when a
+# domain includes AlcedoTestRegistration.cmake (or calls
+# alcedo_register_test_target). Do not hand-roll POST_BUILD DLL copies in domain
+# manifests — that opt-in pattern is why 0xC0000139 kept returning for new tests.
 

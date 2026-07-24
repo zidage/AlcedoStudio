@@ -194,6 +194,57 @@ auto EditorSessionService::Open(sl_element_id_t element_id, image_id_t image_id)
   return Emit(std::move(result));
 }
 
+auto EditorSessionService::CheckoutVersion(const version_ref_id_t& version_id)
+    -> EditorSessionResult {
+  const auto outcome = navigation_.RequestCheckoutVersion(version_id);
+  if (outcome.rejected) {
+    return Reject(outcome.message);
+  }
+  if (outcome.failed) {
+    return Fail(outcome.message);
+  }
+  if (outcome.waiting_for_checkpoint) {
+    EditorSessionResult waiting;
+    waiting.kind     = EditorSessionResultKind::SaveStarted;
+    waiting.state    = lifecycle_.state();
+    waiting.identity = lifecycle_.identity();
+    waiting.task_id  = outcome.ticket.task_id;
+    waiting.message  = outcome.message;
+    return Emit(std::move(waiting));
+  }
+  if (outcome.ticket.valid()) {
+    EditorSessionResult started;
+    started.kind     = EditorSessionResultKind::SaveStarted;
+    started.state    = lifecycle_.state();
+    started.identity = lifecycle_.identity();
+    started.task_id  = outcome.ticket.task_id;
+    started.message  = "Save started";
+    Emit(std::move(started));
+  }
+  if (lifecycle_.state() == EditorSessionState::Failed) {
+    return Fail(lifecycle_.last_error().empty() ? outcome.message : lifecycle_.last_error());
+  }
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = outcome.message;
+  if (outcome.ticket.valid()) {
+    EditorSessionResult finished;
+    finished.kind     = EditorSessionResultKind::SaveFinished;
+    finished.state    = lifecycle_.state();
+    finished.identity = lifecycle_.identity();
+    finished.task_id  = outcome.ticket.task_id;
+    finished.message  = "Editor session materialized";
+    Emit(std::move(finished));
+  }
+  if (render_.first_frame_request_id() != 0) {
+    result.kind              = EditorSessionResultKind::RenderRouted;
+    result.render_request_id = render_.first_frame_request_id();
+  }
+  return Emit(std::move(result));
+}
+
 auto EditorSessionService::Switch(sl_element_id_t element_id, image_id_t image_id)
     -> EditorSessionResult {
   const auto outcome = navigation_.RequestOpenOrSwitch(element_id, image_id, true);

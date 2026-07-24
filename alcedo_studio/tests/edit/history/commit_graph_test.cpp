@@ -185,6 +185,60 @@ TEST(MiniGitWorkingHistory, UndoRedoAndEditAfterUndoUseHeadMovesWithoutRewriting
   EXPECT_EQ(journal->records().at(3).kind, MiniGitJournalRecordKind::kHeadMove);
   EXPECT_EQ(journal->records().at(4).kind, MiniGitJournalRecordKind::kHeadMove);
   EXPECT_EQ(journal->records().at(5).kind, MiniGitJournalRecordKind::kEditCommit);
+
+  // Phase 6C-6: after edit-after-undo the abandoned redo child is unreachable from
+  // every Version head. Clean-exit garbage collection must collect it.
+  const auto unreachable = graph->ListUnreachableCommitHashes();
+  ASSERT_EQ(unreachable.size(), 1u);
+  EXPECT_EQ(unreachable.front(), second.commit->GetCommitHash());
+  graph->EraseUnreachableCommits(unreachable);
+  EXPECT_EQ(graph->FindCommit(second.commit->GetCommitHash()), nullptr);
+  EXPECT_EQ(graph->CommitCount(), 2u);
+  EXPECT_NE(graph->FindCommit(first.commit->GetCommitHash()), nullptr);
+  EXPECT_NE(graph->FindCommit(replacement.commit->GetCommitHash()), nullptr);
+}
+
+TEST(CommitGraphReachability, MergeSecondParentRemainsReachableForGarbageCollection) {
+  edit_history_test::CommitClockAccess::ResetGlobal(0);
+  auto graph = CommitGraph::CreateEmpty(720);
+  auto main  = MakeEditAt(graph.GetRootId(), std::nullopt, CommitClock::NextGlobal(1000),
+                          MakeExposurePayload(0.0f, 1.0f));
+  ASSERT_TRUE(graph.InsertCommit(main));
+  graph.MoveWorkingHead(graph.GetActiveVersionId(), main.GetCommitHash());
+
+  auto branch = MakeEditAt(graph.GetRootId(), std::nullopt, CommitClock::NextGlobal(2000),
+                           MakeContrastPayload(0.0f, 0.5f));
+  ASSERT_TRUE(graph.InsertCommit(branch));
+
+  MergeEditPayload merge_payload;
+  MergeFieldDelta  field;
+  field.operator_type     = OperatorType::EXPOSURE;
+  field.stage_name        = PipelineStageName::Basic_Adjustment;
+  field.field_name        = "exposure";
+  field.resolved_value    = 1.0f;
+  field.resolved_enabled  = true;
+  merge_payload.fields.push_back(field);
+  auto merge = MakeMergeAt(graph.GetRootId(), main.GetCommitHash(), branch.GetCommitHash(),
+                           CommitClock::NextGlobal(3000), merge_payload);
+  ASSERT_TRUE(graph.InsertCommit(merge));
+  graph.MoveWorkingHead(graph.GetActiveVersionId(), merge.GetCommitHash());
+
+  EXPECT_TRUE(graph.ListUnreachableCommitHashes().empty());
+  const auto reachable = graph.CollectReachableCommitHashes();
+  EXPECT_EQ(reachable.count(main.GetCommitHash()), 1u);
+  EXPECT_EQ(reachable.count(branch.GetCommitHash()), 1u);
+  EXPECT_EQ(reachable.count(merge.GetCommitHash()), 1u);
+}
+
+TEST(CommitGraphReachability, EraseUnreachableCommitsRefusesReachableHash) {
+  edit_history_test::CommitClockAccess::ResetGlobal(0);
+  auto graph  = CommitGraph::CreateEmpty(721);
+  auto commit = MakeEditAt(graph.GetRootId(), std::nullopt, CommitClock::NextGlobal(1000),
+                           MakeExposurePayload(0.0f, 0.3f));
+  ASSERT_TRUE(graph.InsertCommit(commit));
+  graph.MoveWorkingHead(graph.GetActiveVersionId(), commit.GetCommitHash());
+  EXPECT_THROW(graph.EraseUnreachableCommits({commit.GetCommitHash()}), std::runtime_error);
+  EXPECT_NE(graph.FindCommit(commit.GetCommitHash()), nullptr);
 }
 
 TEST(MiniGitWorkingHistory, RecoveryReplaysJournaledHeadMovesToTheSelectedCommit) {

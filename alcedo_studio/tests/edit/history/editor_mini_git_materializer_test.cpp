@@ -9,6 +9,7 @@
 #include <filesystem>
 
 #include "edit/history/mini_git_working_history.hpp"
+#include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
 #include "support/editor_mini_git_project_fixture.hpp"
 
 namespace alcedo {
@@ -451,6 +452,96 @@ TEST_F(EditorMiniGitMaterializerTest,
 
   // Commit count must still be 1.
   EXPECT_EQ(project_.CountStoredCommits(element_id), 1u);
+}
+
+/// Phase 6C-6: A→B→A restores A's Version head, chain hash, and serialized exposure
+/// after materializing A and reopening the project (B is a separate image identity).
+TEST_F(EditorMiniGitMaterializerTest,
+       SwitchFromAToBToARestoresVersionRootHeadChainAndSerializedState) {
+  const auto element_a = test::EditorMiniGitProjectFixture::kElementA;
+  const auto element_b = test::EditorMiniGitProjectFixture::kElementB;
+
+  ASSERT_TRUE(project_.AppendExposureEdit(element_a, 0.0f, 1.5f));
+  auto capture_a = project_.CaptureWorkingState(element_a, 1.5f);
+  const auto head_a  = capture_a.working_head;
+  const auto chain_a = capture_a.transaction_chain_hash;
+  const auto root_a  = project_.root_id(element_a);
+  const auto version_a =
+      project_.graph(element_a)->GetActiveVersionId();
+
+  std::string error;
+  ASSERT_TRUE(project_.MaterializeUnderSaveLock(capture_a, &error).accepted) << error;
+
+  // Image B save path: empty journal materialization (simulates opening B after A saved).
+  auto capture_b = project_.CaptureWorkingState(element_b, 0.0f);
+  ASSERT_TRUE(project_.MaterializeUnderSaveLock(capture_b, &error).accepted) << error;
+
+  // Return to A via project reopen (durable A state is authoritative).
+  project_.CloseAndReopenProject();
+  auto stored_a = project_.LoadStoredGraph(element_a);
+  ASSERT_TRUE(stored_a.has_value());
+  EXPECT_EQ(stored_a->GetRootId(), root_a);
+  EXPECT_EQ(stored_a->GetActiveVersionId(), version_a);
+  EXPECT_EQ(stored_a->GetActiveVersionRef().head_commit_hash, head_a);
+  EXPECT_EQ(stored_a->GetImageEditState().materialized_transaction_chain_hash, chain_a);
+  ASSERT_TRUE(stored_a->GetImageEditState().serialized_pipeline_state.has_value());
+  EXPECT_FLOAT_EQ(stored_a->GetImageEditState()
+                      .serialized_pipeline_state->at("pipeline_params")
+                      .at("exposure")
+                      .get<float>(),
+                  1.5f);
+
+  // B remains independent.
+  auto stored_b = project_.LoadStoredGraph(element_b);
+  ASSERT_TRUE(stored_b.has_value());
+  EXPECT_NE(stored_b->GetRootId(), root_a);
+  EXPECT_FALSE(stored_b->GetActiveVersionRef().head_commit_hash.has_value());
+}
+
+/// Phase 6C-6: edit-after-undo leaves an abandoned redo commit; clean-exit GC deletes it.
+TEST_F(EditorMiniGitMaterializerTest,
+       EditAfterUndoAbandonsRedoPathAndCleanExitCollectsUnreachableCommit) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+  auto&      history    = project_.working_history(element_id);
+
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.0f));
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 1.0f, 2.0f));
+  const auto abandoned_head = history.working_head();
+  ASSERT_TRUE(abandoned_head.has_value());
+
+  ASSERT_TRUE(history.Undo().moved);
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 1.0f, 3.0f));
+  const auto kept_head = history.working_head();
+  ASSERT_TRUE(kept_head.has_value());
+  EXPECT_NE(kept_head, abandoned_head);
+
+  auto capture = project_.CaptureWorkingState(element_id, 3.0f);
+  std::string error;
+  ASSERT_TRUE(project_.MaterializeUnderSaveLock(capture, &error).accepted) << error;
+
+  // Before GC both the abandoned redo child and the replacement exist.
+  EXPECT_GE(project_.CountStoredCommits(element_id), 2u);
+  {
+    auto stored = project_.LoadStoredGraph(element_id);
+    ASSERT_TRUE(stored.has_value());
+    EXPECT_NE(stored->FindCommit(*abandoned_head), nullptr);
+    EXPECT_NE(stored->FindCommit(*kept_head), nullptr);
+    const auto unreachable = stored->ListUnreachableCommitHashes();
+    ASSERT_EQ(unreachable.size(), 1u);
+    EXPECT_EQ(unreachable.front(), *abandoned_head);
+  }
+
+  auto               db_guard = project_.storage()->GetDBController().GetConnectionGuard();
+  auto               db_lock  = db_guard.Lock();
+  CommitGraphService graph_service(db_guard.conn_);
+  EXPECT_EQ(graph_service.DeleteUnreachableCommits(element_id), 1u);
+
+  auto stored = graph_service.LoadGraph(element_id);
+  ASSERT_TRUE(stored.has_value());
+  EXPECT_EQ(stored->FindCommit(*abandoned_head), nullptr);
+  EXPECT_NE(stored->FindCommit(*kept_head), nullptr);
+  EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, kept_head);
+  EXPECT_TRUE(stored->ListUnreachableCommitHashes().empty());
 }
 
 }  // namespace

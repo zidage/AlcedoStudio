@@ -345,6 +345,56 @@ auto EditorSessionHistoryPort::Redo(const alcedo::EditorHistoryGuardHandle& guar
   return true;
 }
 
+auto EditorSessionHistoryPort::CheckoutVersion(const alcedo::EditorHistoryGuardHandle& guard,
+                                               const alcedo::Hash128& version_id,
+                                               std::string* error) -> bool {
+  auto state = EnsureWorkingState(guard.element_id, error);
+  if (!state) {
+    return false;
+  }
+  std::shared_ptr<EditorSessionPipelinePort> pipeline_port;
+  {
+    std::scoped_lock lock(mutex_);
+    pipeline_port = pipeline_port_.lock();
+  }
+  if (!pipeline_port) {
+    if (error) *error = "Editor pipeline port is unavailable for Version checkout";
+    return false;
+  }
+
+  std::scoped_lock state_lock(state->mutex);
+  // Rebuild the live pipeline under the render lock first. Fail closed keeps the
+  // prior Version active and the prior executor contents published.
+  if (!pipeline_port->CheckoutVersion(guard.element_id, version_id, error)) {
+    return false;
+  }
+  // Clear the in-memory redo stack after a successful Version switch. Detached
+  // HEAD editing is not supported; SelectVersion only adjusts redo state here
+  // because CheckoutVersion already moved the active Version ref.
+  if (!state->history->SelectVersion(version_id, error)) {
+    return false;
+  }
+  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
+  state->pipeline_guard->transaction_chain_hash_   = state->history->transaction_chain_hash();
+  state->pending_before.clear();
+
+  // Refresh the committed snapshot from the rebuilt executor so panels and the
+  // first post-checkout frame observe the same values as the pipeline.
+  nlohmann::json pipeline_params;
+  try {
+    std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
+    pipeline_params = state->pipeline_guard->pipeline_->ExportPipelineParams();
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+  state->committed_snapshot                  = {};
+  state->committed_snapshot.params_json      = pipeline_params.dump();
+  state->committed_snapshot.fingerprint      = state->pipeline_guard->transaction_chain_hash_.ToString();
+  ++state->committed_snapshot.snapshot_generation;
+  return true;
+}
+
 auto EditorSessionHistoryPort::ReadAdjustmentSnapshot(
     const alcedo::EditorHistoryGuardHandle& guard, alcedo::EditorRenderAdjustmentSnapshot* snapshot,
     std::string* error) -> bool {

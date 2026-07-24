@@ -336,6 +336,47 @@ auto CommitGraphService::LoadGraph(sl_element_id_t element_id) -> std::optional<
   return CommitGraph::FromParts(std::move(*state), std::move(refs), std::move(commits));
 }
 
+auto CommitGraphService::ListImageElementIds() -> std::vector<sl_element_id_t> {
+  auto rows = image_edit_state_mapper_.Get("1=1");
+  std::vector<sl_element_id_t> ids;
+  ids.reserve(rows.size());
+  for (auto& row : rows) {
+    ids.push_back(row.element_id);
+  }
+  return ids;
+}
+
+auto CommitGraphService::DeleteUnreachableCommits(sl_element_id_t element_id) -> std::size_t {
+  auto graph = LoadGraph(element_id);
+  if (!graph.has_value()) {
+    return 0;
+  }
+  const auto unreachable = graph->ListUnreachableCommitHashes();
+  if (unreachable.empty()) {
+    return 0;
+  }
+
+  duckorm::begin_transaction(conn_);
+  try {
+    for (const auto& hash : unreachable) {
+      commit_mapper_.Remove(hash.ToString());
+    }
+    duckorm::commit_transaction(conn_);
+  } catch (...) {
+    duckorm::rollback_transaction(conn_);
+    throw;
+  }
+  return unreachable.size();
+}
+
+auto CommitGraphService::DeleteUnreachableCommitsForProject() -> std::size_t {
+  std::size_t total = 0;
+  for (const auto element_id : ListImageElementIds()) {
+    total += DeleteUnreachableCommits(element_id);
+  }
+  return total;
+}
+
 auto CommitGraphService::CreateEmptyPersisted(sl_element_id_t element_id,
                                               std::string default_display_name) -> CommitGraph {
   auto graph          = CommitGraph::CreateEmpty(element_id, std::move(default_display_name));
