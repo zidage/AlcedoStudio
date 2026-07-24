@@ -537,26 +537,6 @@ auto EditorSessionService::RequestViewChange(EditorRenderReason                 
   return Emit(std::move(result));
 }
 
-auto EditorSessionService::RecordFinalizedEdit(const EditTransaction& transaction,
-                                               std::string*           error) -> bool {
-  return edit_.RecordFinalizedEdit(transaction, lifecycle_.identity(), error);
-}
-
-auto EditorSessionService::RecordHistoryCursorMove(std::uint64_t from_cursor,
-                                                   std::uint64_t to_cursor, std::string* error)
-    -> bool {
-  return edit_.RecordHistoryCursorMove(from_cursor, to_cursor, lifecycle_.identity(), error);
-}
-
-auto EditorSessionService::RecordTimelineRewrite(const Hash128&         expected_timeline_hash,
-                                                 const Hash128&         discarded_tail_hash,
-                                                 std::uint64_t          retained_cursor,
-                                                 const EditTransaction& replacement,
-                                                 std::string*           error) -> bool {
-  return edit_.RecordTimelineRewrite(expected_timeline_hash, discarded_tail_hash, retained_cursor,
-                                     replacement, lifecycle_.identity(), error);
-}
-
 void EditorSessionService::NotifyImageAcquired(std::uint64_t session_generation, bool success,
                                                std::string message) {
   const auto identity = lifecycle_.identity();

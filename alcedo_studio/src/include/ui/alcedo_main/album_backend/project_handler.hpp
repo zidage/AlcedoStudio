@@ -49,9 +49,6 @@ class ProjectHandler {
   [[nodiscard]] auto pipeline_service() const -> const std::shared_ptr<PipelineMgmtService>& {
     return pipeline_service_;
   }
-  [[nodiscard]] auto history_service() const -> const std::shared_ptr<EditHistoryMgmtService>& {
-    return history_service_;
-  }
   [[nodiscard]] auto thumbnail_service() const -> const std::shared_ptr<ThumbnailService>& {
     return thumbnail_service_;
   }
@@ -81,7 +78,6 @@ class ProjectHandler {
 
   std::shared_ptr<ProjectService>         project_{};
   std::shared_ptr<PipelineMgmtService>    pipeline_service_{};
-  std::shared_ptr<EditHistoryMgmtService> history_service_{};
   std::shared_ptr<ThumbnailService>       thumbnail_service_{};
   std::unique_ptr<ImportServiceImpl>      import_service_{};
   std::shared_ptr<ExportService>          export_service_{};

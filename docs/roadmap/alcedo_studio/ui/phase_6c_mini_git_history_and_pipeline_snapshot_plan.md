@@ -6,8 +6,8 @@ Status: approved design; 6C-1, 6C-2, 6C-2-Fix, 6C-3, 6C-4, 6C-5, 6C-6, and Phase
 implemented. Phase 6C-5 qualification Phases 1, 2A, 2B, Phase 3, Phase 4 (4A–4B typed-value
 wiring), Phase 5 (5A–5D DuckDB/materialization), and Phase 6 (6A–6C policy/QML/integration)
 are implemented. Phase 6C-7 panel state publication is complete. Phase 6C-8 Paste, Merge,
-and history integration is complete.
-Phase 6C-9 Recovery, thumbnail, and destructive-cutover qualification is next.
+and history integration is complete. Phase 6C-9 Recovery, thumbnail, and destructive-cutover
+qualification is complete for the active QML editor path.
 
 Related documents:
 
@@ -2395,3 +2395,60 @@ Phase 6C is complete only when:
 - clean project exit removes commits unreachable from every Version and merge parent;
 - panel loading is read-only and idempotent; and
 - old project files are rejected with no migration or compatibility path.
+
+##### Phase 6C-9 completion record (2026-07-24)
+
+**Status:** complete for recovery, thumbnail, graph deletion, and active-QML cutover.
+
+**Primary success call chain:**
+
+```text
+Settled editor adjustment
+  -> EditorSessionHistoryPort::CommitAdjustment
+  -> MiniGitWorkingHistory::AppendEdit / Undo / Redo
+  -> MiniGitJournal::Append
+  -> CaptureSaveCheckpoint
+  -> EditorMiniGitMaterializer::Materialize
+  -> CommitGraphService::Materialize + durable-prefix truncation
+  -> EditorSaveCheckpointService::HandleMaterialization
+  -> IEditorThumbnailPort::RefreshAfterMaterialization
+  -> ApplicationModuleHost queued LibraryModule thumbnail refresh
+```
+
+**Primary recovery / failure call chain:**
+
+```text
+Process stops after DuckDB commit, before truncation, then later records are appended
+  -> RecoverAndMaterialize
+  -> ReplaySkippingMaterializedPrefix finds the longest durable head/chain prefix
+  -> replays only the unmaterialized suffix
+  -> truncates the recovered journal range
+  -> one durable active head, with no duplicate commit
+
+Checkpoint materialization failure
+  -> EditorSaveCheckpointService::HandleMaterialization
+  -> no thumbnail refresh
+  -> terminal failed task and retained current editor image
+```
+
+**What was proven (executed tests):**
+
+| Behavior | Target / binary | Result |
+| --- | --- | --- |
+| append, DuckDB, truncate, reopen, and mixed durable-prefix recovery | `EditorMiniGitMaterializerTest`, `EditorMiniGitJournalRecoveryTest` | PASS, 13/13 and 9/9 |
+| active QML Mini-Git capture, replay, sequence truncation, and reopen | `EditorSessionHistoryPortTest` | PASS, 6/6 |
+| successful checkpoint refreshes once; failed checkpoint refreshes zero times | `EditorSaveCheckpointServiceTest`, `EditorSessionThumbnailPortTest` | PASS, 14/14 and 3/3 |
+| save navigation, stale callbacks, and terminal ordering | `EditorSessionNavigationControllerTest`, `EditorSessionEditControllerTest` | PASS, 18/18 and 8/8 |
+| root/head thumbnail disk keys after pipeline-row removal | `ThumbnailServiceTests.DiskCacheTracksRootAndActiveHeadAndServesAfterPipelineIsRemoved` | PASS, 1/1 |
+| per-image Mini-Git graph deletion and UI image deletion path | `CommitGraphPersistenceTests.DeleteGraphForElementRemovesOnlyTheDeletedImagesGraphAndImmutableRoot`, `PipelineServiceTests.DeletePipelinesRemovesTheDeletedImagesMiniGitGraphOnly`, `AlbumBackendImageDeleteTest` | PASS, 1/1, 1/1, and 9/9 |
+| Paste/Merge and semantic service regressions | `AdjustmentTransferServiceMiniGitTest`, `SemanticGenerationServiceTest` | PASS, 13/13 and 13/13 |
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target AlbumBackendLib --target PipelineServiceTest --target ThumbnailServiceTest --target CommitGraphTest --target EditorMiniGitMaterializerTest --target EditorMiniGitJournalRecoveryTest --target EditorSaveCheckpointServiceTest --target EditorSessionThumbnailPortTest --target EditorSessionNavigationControllerTest --target EditorSessionEditControllerTest --target AdjustmentTransferServiceMiniGitTest --target SemanticGenerationServiceTest --target AlbumBackendImageDeleteTest`; `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionHistoryPortTest`; each listed test binary was then executed directly with GoogleTest, using exact filters for the three named persistence/cache criteria.
+
+Suite totals: 109/109 test cases passed; no test was skipped.
+
+**Checklist / exit condition:** checked for the active QML editor: forced-termination recovery selects a single head, checkpoint success gates thumbnail refresh, cache keys use persisted root/head state, true image deletion removes only that image's graph, and searches find no current-session `WorkingVersion`, cursor, or timeline-rewrite API.
+
+**LOC note (grill-code-review):** changed `thumbnail_service.cpp` is 1086 lines and `thumbnail_service_test.cpp` is 2682 lines; both were already multi-purpose files. The added persisted-key assertions remain in their existing disk-cache behavior section. `image_controller.cpp` (1484) and `semantic_generation_service_test.cpp` (1193) are also above the review threshold but only carry small compatibility edits here; no artificial method-file split was added.
+
+**Residual gaps:** a full ApplicationModuleHost save-to-LibraryModule signal test has not been added; executed tests prove the checkpoint success/failure gate and thumbnail-port callback separately. Legacy QWidget and old history-library sources remain intentionally outside this active-QML cutover, as directed; the active QML editor boundary scan is clean.

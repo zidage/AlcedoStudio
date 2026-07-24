@@ -78,21 +78,6 @@ class IEditorSessionBackend {
     result.message = "Adjustment commit not supported by this backend";
     return result;
   }
-  virtual auto RecordFinalizedEdit(const EditTransaction& /*transaction*/, std::string* /*error*/)
-      -> bool {
-    return false;
-  }
-  virtual auto RecordHistoryCursorMove(std::uint64_t /*from_cursor*/, std::uint64_t /*to_cursor*/,
-                                       std::string* /*error*/) -> bool {
-    return false;
-  }
-  virtual auto RecordTimelineRewrite(const Hash128& /*expected_timeline_hash*/,
-                                     const Hash128& /*discarded_tail_hash*/,
-                                     std::uint64_t /*retained_cursor*/,
-                                     const EditTransaction& /*replacement*/, std::string* /*error*/)
-      -> bool {
-    return false;
-  }
   virtual auto RequestViewChange(EditorRenderReason /*reason*/,
                                  std::optional<ViewportRenderRegion> /*region*/)
       -> EditorSessionResult {
@@ -184,13 +169,6 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto CommitAdjustment(std::string patch_key) -> EditorSessionResult;
   auto Undo() -> EditorSessionResult override;
   auto Redo() -> EditorSessionResult override;
-  auto RecordFinalizedEdit(const EditTransaction& transaction, std::string* error) -> bool override;
-  auto RecordHistoryCursorMove(std::uint64_t from_cursor, std::uint64_t to_cursor,
-                               std::string* error) -> bool override;
-  auto RecordTimelineRewrite(const Hash128& expected_timeline_hash,
-                             const Hash128& discarded_tail_hash, std::uint64_t retained_cursor,
-                             const EditTransaction& replacement, std::string* error)
-      -> bool override;
   auto Discard() -> EditorSessionResult override;
   auto Shutdown() -> EditorSessionResult override;
   auto RequestViewChange(EditorRenderReason reason, std::optional<ViewportRenderRegion> region)

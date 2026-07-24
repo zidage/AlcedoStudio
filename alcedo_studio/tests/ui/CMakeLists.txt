@@ -29,22 +29,6 @@ macro(def_ui_test TARGET_NAME SOURCE_FILE)
 endmacro()
 
 
-# Journal writer port tests cover append ordering, durability, and discard.
-# The target links AlbumBackendLib for the same writer implementation used by the
-# application and a real ProjectService for its storage-backed environment.
-add_executable(EditorSessionJournalWriterPortTest
-    ${ALCEDO_TEST_ROOT}/edit/history/editor_session_journal_writer_port_test.cpp)
-target_include_directories(EditorSessionJournalWriterPortTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditorSessionJournalWriterPortTest
-  AlbumBackendLib
-  ProjectService
-  EditHistory
-  GTest::gtest_main)
-gtest_discover_tests(EditorSessionJournalWriterPortTest
-  TEST_PREFIX "EditorSessionJournalWriterPortTest."
-  PROPERTIES LABELS "editor_history;editor_session")
-alcedo_register_test_target(EditorSessionJournalWriterPortTest ui)
-
 # Editor session history owns Mini-Git working state and immutable captures.
 # Link the production adapters directly (not AlbumBackendLib) so the binary does
 # not pull the full QML/Qt shell graph into a unit-test process.

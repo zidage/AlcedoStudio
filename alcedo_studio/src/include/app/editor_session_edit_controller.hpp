@@ -17,9 +17,6 @@
 
 namespace alcedo {
 
-class EditTransaction;
-class Hash128;
-
 /// Outcome of an edit operation. The facade maps this to an EditorSessionResult
 /// and passes the render command to the render controller.
 struct EditorEditOutcome {
@@ -66,21 +63,6 @@ class EditorSessionEditController final {
   auto HandleDiscard(const EditorHistoryGuardHandle& guard,
                      const EditorSessionIdentity& identity,
                      EditorSessionState current_state) -> EditorEditOutcome;
-
-  /// Record a finalized edit transaction to the journal.
-  auto RecordFinalizedEdit(const EditTransaction& transaction,
-                           const EditorSessionIdentity& identity, std::string* error) -> bool;
-
-  /// Record a history cursor move to the journal.
-  auto RecordHistoryCursorMove(std::uint64_t from_cursor, std::uint64_t to_cursor,
-                               const EditorSessionIdentity& identity, std::string* error) -> bool;
-
-  /// Record a timeline rewrite to the journal.
-  auto RecordTimelineRewrite(const Hash128& expected_timeline_hash,
-                             const Hash128& discarded_tail_hash,
-                             std::uint64_t  retained_cursor,
-                             const EditTransaction& replacement,
-                             const EditorSessionIdentity& identity, std::string* error) -> bool;
 
   /// Read-only snapshot of the current adjustment state.
   [[nodiscard]] auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot;

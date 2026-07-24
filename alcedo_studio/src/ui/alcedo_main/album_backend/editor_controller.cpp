@@ -10,12 +10,11 @@
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 
 #include "app/pipeline_service.hpp"
+#include "app/render_service.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "io/image/image_loader.hpp"
 #include "edit/operators/utils/color_utils.hpp"
-#include "ui/alcedo_main/editor_dialog/editor_dialog.hpp"
 
-#include <QApplication>
 #include <QCoreApplication>
 
 #include <chrono>
@@ -69,9 +68,8 @@ void EditorController::OpenEditor(uint elementId, uint imageId) {
   }
 
   const auto& psvc = project_->handler().pipeline_service();
-  auto  proj = project_->handler().project();
-  const auto& hsvc = project_->handler().history_service();
-  if (!psvc || !proj || !hsvc) {
+  auto        proj = project_->handler().project();
+  if (!psvc || !proj) {
     editor_status_text_ = PL_TEXT("Editor service is unavailable.");
     emit EditorStateChanged();
     return;
@@ -84,14 +82,9 @@ void EditorController::OpenEditor(uint elementId, uint imageId) {
   FinalizeEditorSession(true);
 
   try {
-    auto pipeline_guard = psvc->LoadEditorPipeline(elementId);
-    if (!pipeline_guard || !pipeline_guard->pipeline_) {
+    editor_pipeline_guard_ = psvc->LoadEditorPipeline(elementId);
+    if (!editor_pipeline_guard_ || !editor_pipeline_guard_->pipeline_) {
       throw std::runtime_error("Pipeline is unavailable.");
-    }
-
-    auto history_guard = hsvc->LoadHistory(elementId);
-    if (!history_guard || !history_guard->history_) {
-      throw std::runtime_error("History is unavailable.");
     }
 
     editor_element_id_ = elementId;
@@ -102,58 +95,29 @@ void EditorController::OpenEditor(uint elementId, uint imageId) {
     } else {
       editor_title_text_ = PL_TEXT("Editing %1", PL_TEXT("image #%1", imageId).Render());
     }
+    if (!LoadEditorStateFromPipeline()) {
+      throw std::runtime_error("Failed to read editor pipeline state.");
+    }
+    editor_initial_state_ = editor_state_;
+    SetupEditorPipeline();
+    editor_scheduler_ = RenderService::GetPreviewScheduler();
+
     editor_status_text_ = PL_TEXT("Opening editor...");
     editor_active_ = true;
     editor_busy_   = false;
     emit EditorStateChanged();
-
-    const bool opened = OpenEditorDialog(proj->GetImagePoolService(), pipeline_guard, hsvc,
-                                         history_guard, elementId, imageId,
-                                         QApplication::activeWindow());
-
-    if (!opened) {
-      editor_status_text_ = PL_TEXT("This build does not include the editor backend yet.");
-    } else {
-      psvc->SavePipeline(pipeline_guard);
-      psvc->Sync();
-      hsvc->SaveHistory(history_guard);
-      hsvc->Sync();
-      library_->PersistImageHdrFlag(
-          elementId, imageId,
-          IsHdrExportEotf(pipeline_guard->pipeline_->GetGlobalParams().to_output_params_.eotf_));
-      proj->GetImagePoolService()->SyncWithStorage();
-      QString ignored_error;
-      if (project_->handler().PersistCurrentProjectState()) {
-        (void)project_->handler().PackageCurrentProjectFiles(&ignored_error);
-      }
-
-      const auto& tsvc = project_->handler().thumbnail_service();
-      if (tsvc) {
-        try {
-          tsvc->InvalidateThumbnail(elementId);
-        } catch (...) {
-        }
-        if (!library_->thumbs().RefreshCurrentThumbnail(elementId, imageId)) {
-          library_->thumbs().UpdateThumbnailState(elementId, QString(), false, false);
-        }
-      }
-
-      editor_status_text_ = PL_TEXT("Editor closed. Changes saved.");
-    }
+    QueueEditorRender(RenderType::FAST_PREVIEW);
   } catch (const std::exception& e) {
+    editor_pipeline_guard_.reset();
+    editor_base_task_ = PipelineTask{};
     editor_status_text_ = PL_TEXT("Failed to open editor: %1", QString::fromUtf8(e.what()));
+    editor_active_     = false;
+    editor_busy_       = false;
+    editor_element_id_ = 0;
+    editor_image_id_   = 0;
+    editor_title_text_ = {};
+    emit EditorStateChanged();
   }
-
-  if (!editor_preview_url_.isEmpty()) {
-    editor_preview_url_.clear();
-    emit EditorPreviewChanged();
-  }
-  editor_active_     = false;
-  editor_busy_       = false;
-  editor_element_id_ = 0;
-  editor_image_id_   = 0;
-  editor_title_text_ = {};
-  emit EditorStateChanged();
 }
 
 void EditorController::CloseEditor() {

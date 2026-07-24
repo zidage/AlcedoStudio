@@ -464,32 +464,12 @@ auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, cons
 
   const bool merge_strategy = strategy != QStringLiteral("paste");
 
-  // Phase 6C-8: For Paste, use the Mini-Git path. Merge with conflict resolution
-  // will be wired in Phase 7A when the UI dialog is ready.
+  // Paste is root-relative. Merge requires a per-field resolution request and
+  // therefore cannot silently substitute the obsolete transaction-array path.
   if (!merge_strategy) {
     return PasteViaMiniGit(ids, *pipeline_service);
   }
-
-  // Merge: fall back to the old history-based path until Phase 7A conflict UI.
-  auto history_service = project_->handler().history_service();
-  if (!history_service) {
-    return ErrorResult(Tr("Edit history service is unavailable."));
-  }
-
-  try {
-    const auto result = AdjustmentTransferService::Apply(
-        *pipeline_service, *history_service, ids, *copied_package_,
-        Tr("Merged Adjustments").toStdString(),
-        AdjustmentVersionApplyMode::kMerge);
-    PostProcessApplyResult(result, merge_strategy);
-    QVariantMap response = SuccessResult(Tr("Adjustments merged."));
-    response.insert("appliedCount", static_cast<int>(result.applied_ids_.size()));
-    response.insert("unchangedCount", static_cast<int>(result.unchanged_ids_.size()));
-    response.insert("failureCount", static_cast<int>(result.failures_.size()));
-    return response;
-  } catch (...) {
-    return ErrorResult(CurrentExceptionText("Failed to merge adjustments."));
-  }
+  return ErrorResult(Tr("Merge requires per-field conflict resolutions."));
 }
 
 auto AdjustmentTransferController::PasteViaMiniGit(
@@ -503,7 +483,7 @@ auto AdjustmentTransferController::PasteViaMiniGit(
 
     std::shared_ptr<PipelineGuard> guard;
     try {
-      guard = pipeline_service.LoadPipeline(element_id);
+      guard = pipeline_service.LoadEditorPipeline(element_id);
     } catch (const std::exception& e) {
       result.failures_.push_back({element_id, e.what()});
       continue;
@@ -520,32 +500,8 @@ auto AdjustmentTransferController::PasteViaMiniGit(
     }
 
     if (graph == nullptr) {
-      // Fall back to the old history path if no Mini-Git graph is available.
-      auto history_service = project_->handler().history_service();
-      if (!history_service) {
-        result.failures_.push_back({element_id, "No history service available for paste."});
-        pipeline_service.SavePipeline(guard);
-        continue;
-      }
-      std::vector<sl_element_id_t> single{ element_id };
-      try {
-        auto single_result = AdjustmentTransferService::Apply(
-            pipeline_service, *history_service, single, *copied_package_,
-            Tr("Pasted Adjustments").toStdString(),
-            AdjustmentVersionApplyMode::kPaste);
-        result.applied_ids_.insert(result.applied_ids_.end(),
-                                   single_result.applied_ids_.begin(),
-                                   single_result.applied_ids_.end());
-        result.unchanged_ids_.insert(result.unchanged_ids_.end(),
-                                     single_result.unchanged_ids_.begin(),
-                                     single_result.unchanged_ids_.end());
-        result.failures_.insert(result.failures_.end(),
-                                single_result.failures_.begin(),
-                                single_result.failures_.end());
-      } catch (...) {
-        pipeline_service.SavePipeline(guard);
-        continue;
-      }
+      result.failures_.push_back({element_id, "Mini-Git graph was not available for paste."});
+      pipeline_service.SavePipeline(guard);
       continue;
     }
 

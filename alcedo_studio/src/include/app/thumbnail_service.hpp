@@ -18,7 +18,6 @@
 #include "type/type.hpp"
 
 namespace alcedo {
-class EditHistoryMgmtService;
 class ThumbnailDiskCacheService;
 }  // namespace alcedo
 
@@ -69,7 +68,7 @@ class ThumbnailService {
   ThumbnailService(std::shared_ptr<SleeveServiceImpl>      sleeve_service,
                    std::shared_ptr<ImagePoolService>       image_pool_service,
                    std::shared_ptr<PipelineMgmtService>    pipeline_service,
-                   std::shared_ptr<EditHistoryMgmtService> history_service      = nullptr,
+                   std::shared_ptr<StorageService>          storage_service      = nullptr,
                    const std::string&                      project_uuid         = {},
                    const std::filesystem::path&            thumbnail_cache_root = {});
   ~ThumbnailService() = default;

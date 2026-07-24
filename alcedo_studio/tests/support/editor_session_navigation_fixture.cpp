@@ -227,11 +227,12 @@ auto EditorSessionNavigationFixture::TrackingCheckpointStore::RecoverAndMaterial
   return inner.RecoverAndMaterialize(element_id, session_generation, error);
 }
 
-void EditorSessionNavigationFixture::TrackingThumbnailPort::Invalidate(sl_element_id_t element_id) {
+void EditorSessionNavigationFixture::TrackingThumbnailPort::RefreshAfterMaterialization(
+    sl_element_id_t element_id) {
   if (element_id == kElementA && owner_ != nullptr) {
     owner_->RecordEvent("thumbnail");
   }
-  inner.Invalidate(element_id);
+  inner.RefreshAfterMaterialization(element_id);
 }
 
 }  // namespace alcedo::test

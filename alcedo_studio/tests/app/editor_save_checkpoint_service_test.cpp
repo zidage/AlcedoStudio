@@ -61,6 +61,9 @@ TEST_F(EditorSaveCheckpointServiceTest, AsynchronousSuccessEndsTaskAndCompletesC
   EXPECT_EQ(fixture_.tasks().end_count, 1);
   EXPECT_TRUE(fixture_.tasks().ended_success.front());
   EXPECT_FALSE(fixture_.service().active());
+  EXPECT_EQ(fixture_.thumbnails().refresh_count, 1);
+  ASSERT_EQ(fixture_.thumbnails().refreshed_ids.size(), 1u);
+  EXPECT_EQ(fixture_.thumbnails().refreshed_ids.front(), 42u);
 }
 
 TEST_F(EditorSaveCheckpointServiceTest, AsynchronousMaterializationFailureReportsFailure) {
@@ -81,6 +84,7 @@ TEST_F(EditorSaveCheckpointServiceTest, AsynchronousMaterializationFailureReport
   EXPECT_EQ(fixture_.tasks().end_count, 1);
   EXPECT_FALSE(fixture_.tasks().ended_success.front());
   EXPECT_FALSE(fixture_.service().active());
+  EXPECT_EQ(fixture_.thumbnails().refresh_count, 0);
 }
 
 TEST_F(EditorSaveCheckpointServiceTest, StaleOnCheckpointFinishedIsIgnored) {
@@ -296,6 +300,7 @@ TEST_F(EditorSaveCheckpointServiceTest, MissingCheckpointStoreFailsAfterDurableJ
   EXPECT_NE(result.error.find("store"), std::string::npos);
   EXPECT_EQ(tasks->end_count, 1);
   EXPECT_FALSE(tasks->ended_success.front());
+  EXPECT_EQ(thumbnails->refresh_count, 0);
   service.CancelAndWait();
   coordinator->Shutdown();
 }

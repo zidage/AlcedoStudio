@@ -10,7 +10,6 @@
 #include <string>
 #include <vector>
 
-#include "app/history_mgmt_service.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
 #include "edit/history/edit_commit.hpp"
@@ -113,11 +112,6 @@ struct AdjustmentPasteResult {
   std::string       error;
 };
 
-enum class AdjustmentVersionApplyMode {
-  kPaste,
-  kMerge,
-};
-
 class AdjustmentTransferService final {
  public:
   AdjustmentTransferService() = delete;
@@ -144,16 +138,6 @@ class AdjustmentTransferService final {
   [[nodiscard]] static auto Apply(PipelineMgmtService&             pipeline_service,
                                   std::span<const sl_element_id_t> target_ids,
                                   const AdjustmentTransferPackage& package)
-      -> AdjustmentApplyResult;
-
-  // Creates a new active version for each changed target and checkouts the target image to that
-  // version. kPaste records one edit transaction per applied transfer entry. kMerge materializes
-  // the merged final pipeline params into a transaction-free version.
-  [[nodiscard]] static auto Apply(
-      PipelineMgmtService& pipeline_service, EditHistoryMgmtService& history_service,
-      std::span<const sl_element_id_t> target_ids, const AdjustmentTransferPackage& package,
-      std::string                version_display_name = "",
-      AdjustmentVersionApplyMode mode                 = AdjustmentVersionApplyMode::kPaste)
       -> AdjustmentApplyResult;
 
   // --- Phase 6C-8: Mini-Git Paste and Merge ---

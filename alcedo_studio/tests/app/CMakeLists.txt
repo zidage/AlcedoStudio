@@ -47,20 +47,6 @@ gtest_discover_tests(PipelineServiceTest TEST_PREFIX "PipelineServiceTest."
 
 alcedo_register_test_target(PipelineServiceTest app ci_core)
 
-add_executable(AdjustmentTransferServiceTest ${ALCEDO_TEST_ROOT}/app/adjustment_transfer_service_test.cpp)
-target_include_directories(AdjustmentTransferServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(AdjustmentTransferServiceTest
-  AdjustmentTransferService
-  ProjectService
-  PipelineMgmtService
-  EditHistoryMgmtService
-  GTest::gtest_main
-)
-gtest_discover_tests(AdjustmentTransferServiceTest TEST_PREFIX "AdjustmentTransferServiceTest."
-  PROPERTIES LABELS "ci_core_flow")
-
-alcedo_register_test_target(AdjustmentTransferServiceTest app ci_core)
-
 # Phase 6C-8: Mini-Git-based Paste and Merge tests using the project fixture.
 add_executable(AdjustmentTransferServiceMiniGitTest
   ${ALCEDO_TEST_ROOT}/app/adjustment_transfer_service_mini_git_test.cpp)

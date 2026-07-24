@@ -12,7 +12,7 @@
 namespace alcedo::ui {
 namespace {
 
-TEST(EditorSessionThumbnailPortTest, InvokesCallbackOnInvalidate) {
+TEST(EditorSessionThumbnailPortTest, InvokesCallbackAfterMaterialization) {
   std::atomic<sl_element_id_t> last_id{0};
   std::atomic<int>             call_count{0};
   EditorSessionThumbnailPort   port([&](sl_element_id_t element_id) {
@@ -20,23 +20,23 @@ TEST(EditorSessionThumbnailPortTest, InvokesCallbackOnInvalidate) {
     call_count.fetch_add(1);
   });
 
-  port.Invalidate(42);
+  port.RefreshAfterMaterialization(42);
   EXPECT_EQ(last_id.load(), 42u);
   EXPECT_EQ(call_count.load(), 1);
-  port.Invalidate(99);
+  port.RefreshAfterMaterialization(99);
   EXPECT_EQ(last_id.load(), 99u);
   EXPECT_EQ(call_count.load(), 2);
 }
 
 TEST(EditorSessionThumbnailPortTest, NullCallbackIsNoOp) {
   EditorSessionThumbnailPort port(nullptr);
-  EXPECT_NO_THROW(port.Invalidate(1));
+  EXPECT_NO_THROW(port.RefreshAfterMaterialization(1));
 }
 
 TEST(EditorSessionThumbnailPortTest, CallbackFailureDoesNotEscape) {
   EditorSessionThumbnailPort port(
       [&](sl_element_id_t) { throw std::runtime_error("thumbnail failure"); });
-  EXPECT_NO_THROW(port.Invalidate(1));
+  EXPECT_NO_THROW(port.RefreshAfterMaterialization(1));
 }
 
 }  // namespace

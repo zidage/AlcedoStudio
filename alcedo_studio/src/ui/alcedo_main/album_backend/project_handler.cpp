@@ -55,7 +55,6 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
 
   auto old_project   = project_;
   auto old_pipeline  = pipeline_service_;
-  auto old_history   = history_service_;
   auto old_thumbnail = thumbnail_service_;
   auto old_meta      = meta_path_;
   auto old_package   = project_package_path_;
@@ -63,7 +62,7 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
 
   QPointer<ProjectModule> self(&project_module_);
   std::thread([self, request_id, old_project = std::move(old_project),
-               old_pipeline = std::move(old_pipeline), old_history = std::move(old_history),
+               old_pipeline = std::move(old_pipeline),
                old_thumbnail = std::move(old_thumbnail), old_meta = std::move(old_meta),
                old_package = std::move(old_package), old_workspace = std::move(old_workspace),
                dbPath, metaPath, packagePath, workspaceDir, recentProjectPath, openMode,
@@ -73,7 +72,6 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
       QString                                 error_{};
       std::shared_ptr<ProjectService>         project_{};
       std::shared_ptr<PipelineMgmtService>    pipeline_{};
-      std::shared_ptr<EditHistoryMgmtService> history_{};
       std::shared_ptr<ThumbnailService>       thumbnail_{};
       std::unique_ptr<ImportServiceImpl>      import_{};
       std::shared_ptr<ExportService>          export_{};
@@ -90,9 +88,6 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
     try {
       if (old_pipeline) {
         old_pipeline->Sync();
-      }
-      if (old_history) {
-        old_history->Sync();
       }
       if (old_thumbnail) {
         auto stats = old_thumbnail->GetDiskCacheStats();
@@ -137,10 +132,9 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
       result->project_   = std::make_shared<ProjectService>(dbPath, metaPath, openMode);
       result->pipeline_  = std::make_shared<PipelineMgmtService>(result->project_->GetStorageService());
       result->pipeline_->SetAcceleratorBackendPreference(accelerator_preference);
-      result->history_   = std::make_shared<EditHistoryMgmtService>(result->project_->GetStorageService());
       result->thumbnail_ = std::make_shared<ThumbnailService>(
           result->project_->GetSleeveService(), result->project_->GetImagePoolService(),
-          result->pipeline_, result->history_, result->project_->GetProjectUUID());
+          result->pipeline_, result->project_->GetStorageService(), result->project_->GetProjectUUID());
       result->import_ = std::make_unique<ImportServiceImpl>(
           result->project_->GetSleeveService(), result->project_->GetImagePoolService(),
           [pipeline = result->pipeline_](sl_element_id_t element_id,
@@ -217,7 +211,6 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
 
           ph.project_               = std::move(result->project_);
           ph.pipeline_service_      = std::move(result->pipeline_);
-          ph.history_service_       = std::move(result->history_);
           ph.thumbnail_service_     = std::move(result->thumbnail_);
           ph.import_service_        = std::move(result->import_);
           ph.export_service_        = std::move(result->export_);
@@ -289,9 +282,6 @@ bool ProjectHandler::PersistCurrentProjectState() {
   try {
     if (pipeline_service_) {
       pipeline_service_->Sync();
-    }
-    if (history_service_) {
-      history_service_->Sync();
     }
     if (thumbnail_service_) {
       auto stats = thumbnail_service_->GetDiskCacheStats();

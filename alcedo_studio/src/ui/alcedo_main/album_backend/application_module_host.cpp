@@ -151,13 +151,26 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
                  ("image-" + std::to_string(static_cast<std::uint64_t>(element_id)) +
                   ".mini-git.wal");
         };
-    auto invalidate_thumbnail = [this](sl_element_id_t element_id) {
-      if (!project_) {
+    auto refresh_focused_thumbnail = [library = QPointer<LibraryModule>(library_.get())](
+                                       sl_element_id_t element_id) {
+      if (!library) {
         return;
       }
-      if (auto thumbnails = project_->handler().thumbnail_service()) {
-        thumbnails->InvalidateThumbnail(element_id);
-      }
+      QMetaObject::invokeMethod(
+          library,
+          [library, element_id] {
+            if (!library || library->project() == nullptr) {
+              return;
+            }
+            if (auto thumbnails = library->project()->handler().thumbnail_service()) {
+              thumbnails->InvalidateThumbnail(element_id);
+            }
+            const auto* item = library->FindAlbumItem(element_id);
+            if (item != nullptr) {
+              (void)library->thumbs().RefreshCurrentThumbnail(element_id, item->image_id);
+            }
+          },
+          Qt::QueuedConnection);
     };
     session_pipeline->SetServices(std::move(pipeline_services));
     session_history->SetServices(EditorSessionHistoryPort::Services{mini_git_journal_path});
@@ -171,7 +184,8 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     auto session_checkpoint = std::make_shared<EditorSessionCheckpointStore>();
     session_checkpoint->SetServices(EditorSessionCheckpointStore::Services{
         storage_service, mini_git_journal_path, save_coordinator});
-    auto session_thumbnail  = std::make_shared<EditorSessionThumbnailPort>(invalidate_thumbnail);
+    auto session_thumbnail =
+        std::make_shared<EditorSessionThumbnailPort>(std::move(refresh_focused_thumbnail));
 
     editor_session_runtime_ = alcedo::EditorSessionRuntime::CreateWithPorts(
         session_pipeline, session_history, session_tasks, session_journal, session_scheduler,

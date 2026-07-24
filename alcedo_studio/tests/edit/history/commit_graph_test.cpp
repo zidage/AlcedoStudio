@@ -810,6 +810,36 @@ TEST_F(CommitGraphPersistenceTests, EmptyPersistedImageHasRootAndDefaultVersionR
   EXPECT_EQ(loaded->GetAllVersionRefs().size(), 1u);
 }
 
+TEST_F(CommitGraphPersistenceTests,
+       DeleteGraphForElementRemovesOnlyTheDeletedImagesGraphAndImmutableRoot) {
+  auto               guard = db_->GetConnectionGuard();
+  auto               lock  = guard.Lock();
+  CommitGraphService service(guard.conn_);
+
+  auto deleted = service.CreateRootPipelinePersisted(5005, {{"exposure", 0.0f}});
+  auto commit = MakeEditAt(deleted.GetRootId(), std::nullopt, CommitClock::NextGlobal(1),
+                           MakeExposurePayload(0.0f, 0.75f));
+  ASSERT_TRUE(deleted.InsertCommit(commit));
+  deleted.MoveWorkingHead(deleted.GetActiveVersionId(), commit.GetCommitHash());
+  const auto deleted_root = deleted.GetRootId();
+  service.Materialize(
+      deleted.CaptureMaterializationWithSerializedPipelineState({{"exposure", 0.75f}}));
+
+  auto retained = service.CreateRootPipelinePersisted(5006, {{"contrast", 0.0f}});
+  const auto retained_root = retained.GetRootId();
+
+  ASSERT_NO_THROW(service.DeleteGraphForElement(5005));
+  EXPECT_FALSE(service.GetImageEditState(5005).has_value());
+  EXPECT_TRUE(service.ListVersionRefsForElement(5005).empty());
+  EXPECT_EQ(service.CountCommitsForRoot(deleted_root), 0u);
+  EXPECT_FALSE(service.GetRootSerializedPipelineState(5005, deleted_root).has_value());
+
+  auto retained_graph = service.LoadGraph(5006);
+  ASSERT_TRUE(retained_graph.has_value());
+  EXPECT_EQ(retained_graph->GetRootId(), retained_root);
+  EXPECT_TRUE(service.GetRootSerializedPipelineState(5006, retained_root).has_value());
+}
+
 class ProjectSchemaBoundaryTests : public ::testing::Test {
  protected:
   std::filesystem::path db_path_;

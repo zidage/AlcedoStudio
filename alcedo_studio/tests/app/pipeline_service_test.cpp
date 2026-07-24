@@ -689,6 +689,31 @@ TEST_F(PipelineServiceTests, EditorLoadUsesMatchingSerializedStateWithoutReconst
   reopened.SavePipeline(loaded);
 }
 
+TEST_F(PipelineServiceTests, DeletePipelinesRemovesTheDeletedImagesMiniGitGraphOnly) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService pipelines(project.GetStorageService());
+
+  auto deleted = pipelines.LoadEditorPipeline(711);
+  auto retained = pipelines.LoadEditorPipeline(712);
+  ASSERT_NE(deleted, nullptr);
+  ASSERT_NE(retained, nullptr);
+  const auto deleted_root = deleted->root_id_;
+  const auto retained_root = retained->root_id_;
+  pipelines.SavePipeline(deleted);
+  pipelines.SavePipeline(retained);
+
+  const std::vector<sl_element_id_t> deleted_ids = {711};
+  pipelines.DeletePipelines(deleted_ids);
+
+  auto               db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+  auto               db_lock  = db_guard.Lock();
+  CommitGraphService graph_service(db_guard.conn_);
+  EXPECT_FALSE(graph_service.GetImageEditState(711).has_value());
+  EXPECT_FALSE(graph_service.GetRootSerializedPipelineState(711, deleted_root).has_value());
+  EXPECT_TRUE(graph_service.LoadGraph(712).has_value());
+  EXPECT_TRUE(graph_service.GetRootSerializedPipelineState(712, retained_root).has_value());
+}
+
 TEST_F(PipelineServiceTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorageService());

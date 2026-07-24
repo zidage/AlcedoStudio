@@ -790,6 +790,17 @@ void PipelineMgmtService::DeletePipelines(std::span<const sl_element_id_t> ids) 
     storage_service_->ForgetLivePipeline(id);
   }
   try {
+    auto               db_guard = storage_service_->GetDBController().GetConnectionGuard();
+    auto               db_lock  = db_guard.Lock();
+    CommitGraphService graph_service(db_guard.conn_);
+    for (const auto id : ids) {
+      if (id != 0) {
+        graph_service.DeleteGraphForElement(id);
+      }
+    }
+  } catch (...) {
+  }
+  try {
     storage_service_->GetElementController().RemovePipelinesByElementIds(ids);
   } catch (...) {
   }

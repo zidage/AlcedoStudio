@@ -158,53 +158,6 @@ auto EditorSessionEditController::HandleDiscard(const EditorHistoryGuardHandle& 
   return outcome;
 }
 
-auto EditorSessionEditController::RecordFinalizedEdit(
-    const EditTransaction& transaction, const EditorSessionIdentity& identity,
-    std::string* error) -> bool {
-  std::scoped_lock lock(mutex_);
-  if (!deps_.journal) {
-    if (error) {
-      *error = "Finalized edit requires an active journaled image";
-    }
-    return false;
-  }
-  return deps_.journal->RecordEdit(identity.element_id, identity.session_generation, transaction,
-                                   error);
-}
-
-auto EditorSessionEditController::RecordHistoryCursorMove(
-    std::uint64_t from_cursor, std::uint64_t to_cursor,
-    const EditorSessionIdentity& identity, std::string* error) -> bool {
-  std::scoped_lock lock(mutex_);
-  if (!deps_.journal) {
-    if (error) {
-      *error = "History cursor move requires an active journaled image";
-    }
-    return false;
-  }
-  if (from_cursor == to_cursor) {
-    return true;
-  }
-  return deps_.journal->RecordCursorMove(identity.element_id, identity.session_generation,
-                                         from_cursor, to_cursor, error);
-}
-
-auto EditorSessionEditController::RecordTimelineRewrite(
-    const Hash128& expected_timeline_hash, const Hash128& discarded_tail_hash,
-    std::uint64_t  retained_cursor, const EditTransaction& replacement,
-    const EditorSessionIdentity& identity, std::string* error) -> bool {
-  std::scoped_lock lock(mutex_);
-  if (!deps_.journal) {
-    if (error) {
-      *error = "Timeline rewrite requires an active journaled image";
-    }
-    return false;
-  }
-  return deps_.journal->RecordRewriteTimeline(identity.element_id, identity.session_generation,
-                                                expected_timeline_hash, discarded_tail_hash,
-                                                retained_cursor, replacement, error);
-}
-
 auto EditorSessionEditController::adjustment_snapshot() const
     -> EditorRenderAdjustmentSnapshot {
   std::scoped_lock lock(mutex_);

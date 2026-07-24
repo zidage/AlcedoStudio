@@ -9,16 +9,16 @@
 namespace alcedo::ui {
 
 EditorSessionThumbnailPort::EditorSessionThumbnailPort(
-    std::function<void(sl_element_id_t)> invalidate_thumbnail)
-    : invalidate_thumbnail_(std::move(invalidate_thumbnail)) {}
+    std::function<void(sl_element_id_t)> refresh_thumbnail)
+    : refresh_thumbnail_(std::move(refresh_thumbnail)) {}
 
-void EditorSessionThumbnailPort::Invalidate(sl_element_id_t element_id) {
-  if (!invalidate_thumbnail_) return;
+void EditorSessionThumbnailPort::RefreshAfterMaterialization(sl_element_id_t element_id) {
+  if (!refresh_thumbnail_) return;
   try {
-    invalidate_thumbnail_(element_id);
+    refresh_thumbnail_(element_id);
   } catch (...) {
-    // A thumbnail is an acceleration cache; a committed checkpoint remains
-    // valid when its invalidation callback cannot run.
+    // A thumbnail is an acceleration cache; a durable checkpoint remains
+    // valid when its refresh callback cannot run.
   }
 }
 

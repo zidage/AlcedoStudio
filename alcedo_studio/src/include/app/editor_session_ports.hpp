@@ -18,15 +18,13 @@
 
 namespace alcedo {
 
-class EditTransaction;
 class Hash128;
 struct EditorMiniGitSaveCapture;
 struct EditorAdjustmentPatch;
 
 /// Narrow ports used by EditorSessionService. Production implementations wrap
-/// PipelineMgmtService / EditHistoryMgmtService / BackgroundTaskController /
-/// journal storage. Tests inject fakes. The service never exposes these ports
-/// to QML modules.
+/// PipelineMgmtService, Mini-Git journal storage, thumbnail work, and background tasks.
+/// Tests inject fakes. The service never exposes these ports to QML modules.
 
 struct EditorPipelineGuardHandle {
   sl_element_id_t element_id = 0;
@@ -169,27 +167,6 @@ class IEditorJournalPort {
     return outcome;
   }
 
-  /// Queue one finalized edit-history operation in the image journal. These
-  /// methods perform no file I/O; CommitJournal owns the durability barrier.
-  virtual auto RecordEdit(sl_element_id_t /*element_id*/, std::uint64_t /*session_generation*/,
-                          const EditTransaction& /*transaction*/, std::string* /*error*/) -> bool {
-    return true;
-  }
-  virtual auto RecordCursorMove(sl_element_id_t /*element_id*/,
-                                std::uint64_t /*session_generation*/, std::uint64_t /*from_cursor*/,
-                                std::uint64_t /*to_cursor*/, std::string* /*error*/) -> bool {
-    return true;
-  }
-  virtual auto RecordRewriteTimeline(sl_element_id_t /*element_id*/,
-                                     std::uint64_t /*session_generation*/,
-                                     const Hash128& /*expected_timeline_hash*/,
-                                     const Hash128& /*discarded_tail_hash*/,
-                                     std::uint64_t /*retained_cursor*/,
-                                     const EditTransaction& /*replacement*/, std::string* /*error*/)
-      -> bool {
-    return true;
-  }
-
   /// Async adapters invoke the callback after the journal durability operation
   /// reaches its terminal state. The default is synchronous for deterministic
   /// test ports.
@@ -245,11 +222,15 @@ class IEditorCheckpointStore {
   }
 };
 
-/// Phase 6C-5: narrow thumbnail invalidation port.
+/// Schedules a refresh for the currently focused thumbnail after a durable
+/// checkpoint. Failed checkpoints must not call this port.
 class IEditorThumbnailPort {
  public:
-  virtual ~IEditorThumbnailPort()                     = default;
-  virtual void Invalidate(sl_element_id_t element_id) = 0;
+  virtual ~IEditorThumbnailPort() = default;
+
+  /// Invalidate cached pixels and schedule a new render only when the image
+  /// remains focused in a thumbnail surface.
+  virtual void RefreshAfterMaterialization(sl_element_id_t element_id) = 0;
 };
 
 /// Coordinator-facing diagnostics exposed to the session service for QML

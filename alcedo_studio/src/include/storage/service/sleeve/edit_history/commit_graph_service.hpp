@@ -62,6 +62,12 @@ class CommitGraphService {
   /// @return total commit rows deleted across the project.
   auto DeleteUnreachableCommitsForProject() -> std::size_t;
 
+  /// Delete every persisted Mini-Git row owned by one image.
+  ///
+  /// This is used only after the image itself has been removed from the project. The Version refs,
+  /// commit objects, image state, and immutable root snapshot are removed in one transaction.
+  void DeleteGraphForElement(sl_element_id_t element_id);
+
   /// Persist an empty image edit state (infrastructure bootstrap helper).
   auto CreateEmptyPersisted(sl_element_id_t element_id,
                             std::string default_display_name = "Default") -> CommitGraph;

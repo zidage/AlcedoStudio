@@ -11,18 +11,18 @@
 
 namespace alcedo::ui {
 
-/// Owns the single thumbnail invalidation callback used after a checkpoint
-/// succeeds. It has no knowledge of history, storage, tasks, or rendering.
+/// Owns the thumbnail refresh callback used after a checkpoint succeeds. It
+/// has no knowledge of history, storage, tasks, or rendering.
 class EditorSessionThumbnailPort final : public alcedo::IEditorThumbnailPort {
  public:
-  /// Construct a port around the thumbnail invalidation callback.
-  explicit EditorSessionThumbnailPort(std::function<void(sl_element_id_t)> invalidate_thumbnail);
+  /// Construct a port around the focused-thumbnail refresh callback.
+  explicit EditorSessionThumbnailPort(std::function<void(sl_element_id_t)> refresh_thumbnail);
 
-  /// Invalidate the thumbnail for one image after a successful checkpoint.
-  void Invalidate(sl_element_id_t element_id) override;
+  /// Refresh one image's focused thumbnail after a successful checkpoint.
+  void RefreshAfterMaterialization(sl_element_id_t element_id) override;
 
  private:
-  std::function<void(sl_element_id_t)> invalidate_thumbnail_;
+  std::function<void(sl_element_id_t)> refresh_thumbnail_;
 };
 
 }  // namespace alcedo::ui

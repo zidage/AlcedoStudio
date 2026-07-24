@@ -352,7 +352,7 @@ void EditorSaveCheckpointService::HandleMaterialization(std::uint64_t           
           ? (outcome.materialized ? "Editor session materialized" : "Editor materialization failed")
           : outcome.error;
   if (ok && deps_.thumbnails) {
-    deps_.thumbnails->Invalidate(element_id);
+    deps_.thumbnails->RefreshAfterMaterialization(element_id);
   }
   FinishSave(request_id, session_gen, task_id, ok, msg, completion, std::move(save_lock),
              ok ? last_journal_sequence : std::nullopt);

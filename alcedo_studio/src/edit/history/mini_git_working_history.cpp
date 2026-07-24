@@ -606,46 +606,52 @@ auto MiniGitWorkingHistory::ReplaySkippingMaterializedPrefix(
   const auto stored_head  = graph.GetActiveVersionRef().head_commit_hash;
   const auto stored_chain = graph.ChainHashForHead(stored_head);
 
-  // Fast path: the first record continues from the stored head.
-  if (records.front().expected_source_head == stored_head &&
-      records.front().expected_source_chain_hash == stored_chain) {
-    if (applied_from_index != nullptr) {
-      *applied_from_index = 0;
+  // A normal save starts at the durable head. When a process stops after the
+  // DuckDB transaction but before truncation, the journal starts earlier and
+  // may also contain edits appended after the checkpoint capture. Find the
+  // longest durable prefix whose final head is the stored head, then replay
+  // only the remaining suffix.
+  std::size_t durable_prefix_size = 0;
+  for (std::size_t index = 0; index < records.size(); ++index) {
+    const auto& record = records[index];
+    if (index != 0 &&
+        (record.expected_source_head != records[index - 1].target_head ||
+         record.expected_source_chain_hash != records[index - 1].target_chain_hash)) {
+      SetError(error, "mini-Git journal records are not a contiguous head sequence");
+      return false;
     }
-    return Replay(graph, records, error);
-  }
 
-  // Crash window: DuckDB already holds the fold result and the journal still
-  // contains the fully materialized prefix. Every edit commit must already be
-  // present and the last record must land on the stored head/chain.
-  for (const auto& record : records) {
     if (record.kind == MiniGitJournalRecordKind::kEditCommit) {
       if (!record.edit_commit.has_value() ||
           graph.FindCommit(record.edit_commit->GetCommitHash()) == nullptr) {
-        SetError(error,
-                 "mini-Git journal has an unmaterialized commit that does not continue the "
-                 "stored head");
-        return false;
+        break;
       }
     } else if (record.kind == MiniGitJournalRecordKind::kHeadMove) {
       if (record.target_head.has_value() && graph.FindCommit(*record.target_head) == nullptr) {
-        SetError(error,
-                 "mini-Git journal head-move target is missing from the materialized graph");
-        return false;
+        break;
       }
     }
+
+    if (record.target_head == stored_head && record.target_chain_hash == stored_chain) {
+      durable_prefix_size = index + 1;
+    }
   }
-  if (records.back().target_head != stored_head ||
-      records.back().target_chain_hash != stored_chain) {
+
+  if (durable_prefix_size == 0 &&
+      (records.front().expected_source_head != stored_head ||
+       records.front().expected_source_chain_hash != stored_chain)) {
     SetError(error,
              "mini-Git journal cannot be aligned with the stored materialized head for recovery");
     return false;
   }
-  // Entire journal is already reflected by DuckDB; nothing to fold.
+
   if (applied_from_index != nullptr) {
-    *applied_from_index = records.size();
+    *applied_from_index = durable_prefix_size;
   }
-  return true;
+  return Replay(graph, std::vector<MiniGitJournalRecord>(
+                           records.begin() + static_cast<std::ptrdiff_t>(durable_prefix_size),
+                           records.end()),
+                error);
 }
 
 }  // namespace alcedo

@@ -153,11 +153,11 @@ class EditorSessionNavigationFixture {
     EditorSessionNavigationFixture* owner_ = nullptr;
   };
 
-  /// Thumbnail port that records "thumbnail" when A is invalidated after save.
+  /// Thumbnail port that records "thumbnail" when A is refreshed after save.
   class TrackingThumbnailPort final : public IEditorThumbnailPort {
    public:
     explicit TrackingThumbnailPort(EditorSessionNavigationFixture* owner) : owner_(owner) {}
-    void Invalidate(sl_element_id_t element_id) override;
+    void RefreshAfterMaterialization(sl_element_id_t element_id) override;
 
     FakeEditorThumbnailPort inner;
 

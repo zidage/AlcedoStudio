@@ -52,21 +52,6 @@ class EditorSessionJournalWriterPort final : public alcedo::IEditorJournalPort {
                           alcedo::EditorJournalCommitCallback callback) -> bool override;
   /// Discard records that have not crossed the durability barrier.
   auto DiscardUnflushed(sl_element_id_t element_id, std::string* error) -> bool override;
-  /// Queue one finalized edit transaction for the next barrier.
-  auto RecordEdit(sl_element_id_t element_id, std::uint64_t session_generation,
-                  const alcedo::EditTransaction& transaction, std::string* error) -> bool override;
-  /// Queue one cursor move for the next barrier.
-  auto RecordCursorMove(sl_element_id_t element_id, std::uint64_t session_generation,
-                        std::uint64_t from_cursor, std::uint64_t to_cursor, std::string* error)
-      -> bool override;
-  /// Queue a timeline rewrite that replaces the discarded redo tail.
-  auto RecordRewriteTimeline(sl_element_id_t element_id, std::uint64_t session_generation,
-                             const alcedo::Hash128&         expected_timeline_hash,
-                             const alcedo::Hash128&         discarded_tail_hash,
-                             std::uint64_t                  retained_cursor,
-                             const alcedo::EditTransaction& replacement, std::string* error)
-      -> bool override;
-
  private:
   auto WriterFor(sl_element_id_t element_id, std::uint64_t session_generation, std::string* error)
       -> std::shared_ptr<alcedo::EditorJournalWriter>;

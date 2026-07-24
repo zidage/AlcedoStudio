@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <deque>
 #include <exception>
+#include <fstream>
 #include <thread>
 #include <filesystem>
 #include <functional>
@@ -28,10 +29,12 @@
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "app/sleeve_service.hpp"
+#include "edit/history/edit_commit.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_scheduler.hpp"
+#include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
 #include "type/type.hpp"
 #include "utils/cache/lru_cache.hpp"
 #include "utils/clock/time_provider.hpp"
@@ -1092,7 +1095,8 @@ TEST_F(ThumbnailServiceTests, AnalysisRenditionRendersWithoutSavePipelineOnLiveG
   pipeline_service->SavePipeline(live_guard);  // release the test's pin
 }
 
-TEST_F(ThumbnailServiceTests, DiskCacheHitServesAfterPipelineIsRemoved) {
+TEST_F(ThumbnailServiceTests,
+       DiskCacheTracksRootAndActiveHeadAndServesAfterPipelineIsRemoved) {
   const auto raw_path =
       std::filesystem::path(TEST_IMG_PATH) / "raw" / "bad_dng" / "bad_color_dng.dng";
   if (!std::filesystem::exists(raw_path)) {
@@ -1140,12 +1144,26 @@ TEST_F(ThumbnailServiceTests, DiskCacheHitServesAfterPipelineIsRemoved) {
   const auto element_id = snapshot.created_.front().element_id_;
   const auto image_id   = snapshot.created_.front().image_id_;
 
+  auto root_pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorageService());
+  auto root_guard = root_pipeline_service->LoadEditorPipeline(element_id);
+  ASSERT_NE(root_guard, nullptr);
+  root_pipeline_service->SavePipeline(root_guard);
+
+  root_id_t root_id{};
+  {
+    auto               db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto               db_lock  = db_guard.Lock();
+    CommitGraphService graph_service(db_guard.conn_);
+    auto               graph = graph_service.LoadGraph(element_id);
+    ASSERT_TRUE(graph.has_value());
+    root_id = graph->GetRootId();
+  }
+
   uint64_t first_hash = 0;
   {
     auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorageService());
-    auto history_service  = std::make_shared<EditHistoryMgmtService>(project.GetStorageService());
     ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service,
-                                       history_service, project.GetProjectUUID(), cache_root);
+                                       project.GetStorageService(), project.GetProjectUUID(), cache_root);
 
     auto guard = GetThumbnailBlocking(thumbnail_service, element_id, image_id, true,
                                       ThumbnailResolution::k256);
@@ -1156,15 +1174,74 @@ TEST_F(ThumbnailServiceTests, DiskCacheHitServesAfterPipelineIsRemoved) {
     thumbnail_service.ReleaseThumbnail(ThumbnailCacheKey{element_id, ThumbnailResolution::k256});
   }
 
+  const auto metadata_path = cache_root / project.GetProjectUUID() / "cache_metadata.json";
+  {
+    std::ifstream metadata_file(metadata_path);
+    ASSERT_TRUE(metadata_file.good());
+    nlohmann::json metadata;
+    metadata_file >> metadata;
+    ASSERT_EQ(metadata["entries"].size(), 1u);
+    EXPECT_EQ(metadata["entries"][0]["edit_version_hash"].get<std::string>(),
+              root_id.ToString());
+  }
+
+  commit_hash_t active_head{};
+  {
+    auto               db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto               db_lock  = db_guard.Lock();
+    CommitGraphService graph_service(db_guard.conn_);
+    auto               graph = graph_service.LoadGraph(element_id);
+    ASSERT_TRUE(graph.has_value());
+
+    OrdinaryEditPayload payload;
+    payload.operator_type  = OperatorType::EXPOSURE;
+    payload.stage_name     = PipelineStageName::Basic_Adjustment;
+    payload.field_name     = "exposure";
+    payload.before_value   = 0.0f;
+    payload.after_value    = 0.25f;
+    payload.before_enabled = true;
+    payload.after_enabled  = true;
+    auto commit = EditCommit::MakeEdit(graph->GetRootId(), std::nullopt, std::move(payload));
+    active_head = commit.GetCommitHash();
+    ASSERT_TRUE(graph->InsertCommit(std::move(commit)));
+    graph->MoveWorkingHead(graph->GetActiveVersionId(), active_head);
+    graph_service.Materialize(
+        graph->CaptureMaterializationWithSerializedPipelineState({{"thumbnail_test", true}}));
+  }
+
+  {
+    auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorageService());
+    ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service,
+                                       project.GetStorageService(), project.GetProjectUUID(), cache_root);
+    auto guard = GetThumbnailBlocking(thumbnail_service, element_id, image_id, true,
+                                      ThumbnailResolution::k256);
+    ASSERT_NE(guard, nullptr);
+    ASSERT_NE(guard->thumbnail_buffer_, nullptr);
+    thumbnail_service.ReleaseThumbnail(ThumbnailCacheKey{element_id, ThumbnailResolution::k256});
+  }
+
+  {
+    std::ifstream metadata_file(metadata_path);
+    ASSERT_TRUE(metadata_file.good());
+    nlohmann::json metadata;
+    metadata_file >> metadata;
+    ASSERT_EQ(metadata["entries"].size(), 2u);
+    std::unordered_set<std::string> cache_hashes;
+    for (const auto& entry : metadata["entries"]) {
+      cache_hashes.insert(entry["edit_version_hash"].get<std::string>());
+    }
+    EXPECT_TRUE(cache_hashes.contains(root_id.ToString()));
+    EXPECT_TRUE(cache_hashes.contains(active_head.ToString()));
+  }
+
   auto deleting_pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorageService());
   deleting_pipeline_service->DeletePipeline(element_id);
   deleting_pipeline_service->Sync();
 
   {
     auto pipeline_service = std::make_shared<PipelineMgmtService>(project.GetStorageService());
-    auto history_service  = std::make_shared<EditHistoryMgmtService>(project.GetStorageService());
     ThumbnailService thumbnail_service(project.GetSleeveService(), img_pool, pipeline_service,
-                                       history_service, project.GetProjectUUID(), cache_root);
+                                       project.GetStorageService(), project.GetProjectUUID(), cache_root);
 
     auto guard = GetThumbnailBlocking(thumbnail_service, element_id, image_id, true,
                                       ThumbnailResolution::k256);

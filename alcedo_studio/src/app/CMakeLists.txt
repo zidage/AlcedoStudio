@@ -310,7 +310,7 @@ def_library(ImportService
 def_library(ThumbnailService
     SOURCES "${ALCEDO_APP_ROOT}/thumbnail_service.cpp"
     PUBLIC_DEPS EditPipeline ThreadPool StrConv ImagePoolService PipelineMgmtService
-                ThumbnailDiskCacheService EditHistoryMgmtService
+                ThumbnailDiskCacheService StorageService
 )
 
 def_library(SemanticGenerationService

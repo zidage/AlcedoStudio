@@ -119,22 +119,6 @@ TEST_F(EditorSessionEditControllerTest, DiscardUsesJournalPortAndRestoresSnapsho
   EXPECT_EQ(edit_->adjustment_snapshot().params_json, R"({"contrast":0.0})");
 }
 
-TEST_F(EditorSessionEditControllerTest, RecordFinalizedEditReachesJournalPort) {
-  EditTransaction txn{TransactionType::_EDIT, OperatorType::EXPOSURE,
-                      PipelineStageName::Basic_Adjustment, nlohmann::json{{"exposure", 1.0}}};
-  std::string     error;
-  EXPECT_TRUE(edit_->RecordFinalizedEdit(txn, identity(), &error)) << error;
-  EXPECT_EQ(journal_->edit_record_count, 1);
-}
-
-TEST_F(EditorSessionEditControllerTest, RecordHistoryCursorMoveReachesJournalPort) {
-  std::string error;
-  EXPECT_TRUE(edit_->RecordHistoryCursorMove(2, 1, identity(), &error)) << error;
-  EXPECT_EQ(journal_->cursor_record_count, 1);
-  EXPECT_EQ(journal_->last_cursor_from, 2u);
-  EXPECT_EQ(journal_->last_cursor_to, 1u);
-}
-
 TEST_F(EditorSessionEditControllerTest, PatchWithEmptyFieldKeyIsRejected) {
   EditorAdjustmentPatch patch{"", R"({})", false};
   auto                  result = edit_->HandlePatch(patch, false, guard(), identity());

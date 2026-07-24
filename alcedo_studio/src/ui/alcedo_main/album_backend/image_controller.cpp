@@ -827,7 +827,6 @@ auto ImageController::DeleteTargets(const std::vector<DeleteTarget>& targets)
   auto image_pool   = proj->GetImagePoolService();
   auto export_svc   = ph.export_service();
   auto pipeline_svc = ph.pipeline_service();
-  auto history_svc  = ph.history_service();
 
   if (!browse) {
     const auto msg = PL_TEXT("Image service is unavailable.");
@@ -889,12 +888,6 @@ auto ImageController::DeleteTargets(const std::vector<DeleteTarget>& targets)
   if (!cleanup_element_ids.empty() && pipeline_svc) {
     try {
       pipeline_svc->DeletePipelines(cleanup_element_ids);
-    } catch (...) {
-    }
-  }
-  if (!cleanup_element_ids.empty() && history_svc) {
-    try {
-      history_svc->DeleteHistories(cleanup_element_ids);
     } catch (...) {
     }
   }

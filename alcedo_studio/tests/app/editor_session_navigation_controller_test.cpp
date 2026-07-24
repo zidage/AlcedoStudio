@@ -31,7 +31,7 @@ TEST_F(EditorSessionNavigationControllerTest, OpenWithNoPriorImageCompletesSynch
 }
 
 /// Phase 4B: A→B waits for journal commit, materialize/truncate, and thumbnail
-/// invalidation before releasing A and acquiring B.
+/// refresh before releasing A and acquiring B.
 TEST_F(EditorSessionNavigationControllerTest,
        SwitchToBWaitsForACommitTruncateAndThumbnailCompletion) {
   fixture_.OpenA();
@@ -62,8 +62,8 @@ TEST_F(EditorSessionNavigationControllerTest,
   EXPECT_EQ(fixture_.events()[3], "thumbnail");
   EXPECT_EQ(fixture_.events()[4], "release_a");
   EXPECT_EQ(fixture_.events()[5], "acquire_b");
-  EXPECT_EQ(fixture_.thumbnails().invalidate_count, 1);
-  EXPECT_EQ(fixture_.thumbnails().invalidated_ids.front(),
+  EXPECT_EQ(fixture_.thumbnails().refresh_count, 1);
+  EXPECT_EQ(fixture_.thumbnails().refreshed_ids.front(),
             test::EditorSessionNavigationFixture::kElementA);
 }
 
@@ -81,6 +81,7 @@ TEST_F(EditorSessionNavigationControllerTest, CheckpointFailureKeepsAAndNeverAcq
   EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "acquire_b"), 0);
   EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "release_a"), 0);
   EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "thumbnail"), 0);
+  EXPECT_EQ(fixture_.thumbnails().refresh_count, 0);
   EXPECT_EQ(fixture_.pipeline().acquire_count, 1);
 }
 

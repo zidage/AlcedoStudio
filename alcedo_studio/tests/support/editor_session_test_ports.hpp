@@ -213,10 +213,6 @@ class FakeEditorJournalPort final : public IEditorJournalPort {
   bool                        finalize_succeeds = true;
   int                         barrier_count     = 0;
   int                         discard_count     = 0;
-  int                         edit_record_count = 0;
-  int                         cursor_record_count = 0;
-  std::uint64_t               last_cursor_from  = 0;
-  std::uint64_t               last_cursor_to    = 0;
   EditorJournalCommitCallback pending_commit;
 
   auto FinalizeEdit(sl_element_id_t, std::uint64_t, std::string* error) -> bool override {
@@ -269,19 +265,6 @@ class FakeEditorJournalPort final : public IEditorJournalPort {
     return true;
   }
 
-  auto RecordEdit(sl_element_id_t, std::uint64_t, const EditTransaction&, std::string*)
-      -> bool override {
-    ++edit_record_count;
-    return true;
-  }
-
-  auto RecordCursorMove(sl_element_id_t, std::uint64_t, std::uint64_t from_cursor,
-                        std::uint64_t to_cursor, std::string*) -> bool override {
-    ++cursor_record_count;
-    last_cursor_from = from_cursor;
-    last_cursor_to   = to_cursor;
-    return true;
-  }
 };
 
 /// Fake checkpoint store with optional async materialization and start failure.
@@ -351,15 +334,15 @@ class FakeEditorCheckpointStore final : public IEditorCheckpointStore {
   }
 };
 
-/// Fake thumbnail invalidation port that records element ids.
+/// Fake focused-thumbnail refresh port that records element ids.
 class FakeEditorThumbnailPort final : public IEditorThumbnailPort {
  public:
-  int                         invalidate_count = 0;
-  std::vector<sl_element_id_t> invalidated_ids;
+  int                         refresh_count = 0;
+  std::vector<sl_element_id_t> refreshed_ids;
 
-  void Invalidate(sl_element_id_t element_id) override {
-    ++invalidate_count;
-    invalidated_ids.push_back(element_id);
+  void RefreshAfterMaterialization(sl_element_id_t element_id) override {
+    ++refresh_count;
+    refreshed_ids.push_back(element_id);
   }
 };
 

@@ -377,6 +377,26 @@ auto CommitGraphService::DeleteUnreachableCommitsForProject() -> std::size_t {
   return total;
 }
 
+void CommitGraphService::DeleteGraphForElement(sl_element_id_t element_id) {
+  const auto state = GetImageEditState(element_id);
+  if (!state.has_value()) {
+    return;
+  }
+
+  duckorm::begin_transaction(conn_);
+  try {
+    version_ref_mapper_.RemoveByClause(std::format("element_id={}", element_id));
+    commit_mapper_.RemoveByClause(
+        std::format("root_id={}", SqlQuote(state->root_id.ToString())));
+    image_edit_state_mapper_.Remove(element_id);
+    ExecuteOrThrow(conn_, std::format("DELETE FROM PipelineRoot WHERE element_id={};", element_id));
+    duckorm::commit_transaction(conn_);
+  } catch (...) {
+    duckorm::rollback_transaction(conn_);
+    throw;
+  }
+}
+
 auto CommitGraphService::CreateEmptyPersisted(sl_element_id_t element_id,
                                               std::string default_display_name) -> CommitGraph {
   auto graph          = CommitGraph::CreateEmpty(element_id, std::move(default_display_name));

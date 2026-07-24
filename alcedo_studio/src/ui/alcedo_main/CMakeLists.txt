@@ -235,10 +235,8 @@ target_link_libraries(AlbumBackendLib
         ExportService
         PipelineMgmtService
         AdjustmentTransferService
-        EditHistoryMgmtService
         EditorSessionService
         EditorAdjustmentPipeline
-        EditorHistoryMaterializer
         EditorMiniGitMaterializer
         ThumbnailService
         SemanticGenerationService
@@ -451,6 +449,10 @@ target_link_libraries(alcedo_main
         Qt6::Svg
         Qt6::QuickEffects
 )
+
+if(ALCEDO_REAL_WIDGET_EDITOR)
+    target_link_libraries(alcedo_main PRIVATE EditHistoryMgmtService)
+endif()
 
 if(WIN32 AND ALCEDO_OPENCL_ENABLED)
     target_link_libraries(alcedo_main PRIVATE OpenGL::GL)
