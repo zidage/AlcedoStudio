@@ -1,13 +1,11 @@
 # Phase 6C Mini-Git History and Pipeline Snapshot Plan
 
-Date: 2026-07-22
+Date: 2026-07-24
 
-Status: approved design; 6C-1, 6C-2, 6C-2-Fix, 6C-3, 6C-4, and 6C-5 implemented.
-Phase 6C-5 qualification Phase 1, Phase 2A, Phase 2B, Phase 3A, Phase 3B, Phase 3C,
-and Phase 3D are implemented. Phase 3E verification confirms configure and build
-with all domain manifests enabled.
-The former typed-value Phase 3 begins at Phase 4. Do not begin 6C-6 checkout,
-session switching, or garbage collection until every qualification phase is complete.
+Status: approved design; 6C-1, 6C-2, 6C-2-Fix, 6C-3, 6C-4, 6C-5, and Phase 3 (3A–3E) are
+implemented. Phase 6C-5 qualification Phases 1, 2A, 2B are implemented; Phase 4 begins the
+typed-value behaviour changes. Do not begin 6C-6 checkout, session switching, or garbage
+collection until every qualification phase is complete.
 
 Related documents:
 
