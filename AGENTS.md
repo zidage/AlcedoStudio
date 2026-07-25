@@ -177,6 +177,17 @@ Use when working on alcedo with CMake on Windows/MSVC, especially when the user 
 **Rules:**
 - Append user-provided `-D...` cache entries to the configure command after the preset.
 - If the user asks for a `cmake --build build/...` style command, translate it to the wrapper form instead of changing the build intent.
+
+### alcedo-qml-ui
+Use when adding or editing Alcedo QML under `alcedo_main` (workspace, editor adjustment panels, LUT/Tone/Look, AppTheme / DESIGN.md VI, toolbar SVGs, snapshot restore). Canonical path: `.agents/skills/alcedo-qml-ui/SKILL.md` (junctions under `.claude/skills/` and `.codex/skills/`).
+
+**Rules (summary — full skill is authoritative):**
+- Production style is **Basic**, never Material for dense editor chrome.
+- All colors/spaces/radii/type/icon sizes come from `appTheme` + `DESIGN.md`; new values go into AppTheme and DESIGN in the same change.
+- Prefer `IconActionButton` over Material/Controls Button for structural SVGs.
+- Each adjustment panel owns `loadFromSnapshot`; bind selection via a panel-level `selectedPath` (or equivalent) property so workspace re-entry restores highlight.
+- Do not rebuild lists or force `ListView.Contain` on click selection (contentY jumps).
+- Register new QML in `ALCEDO_MAIN_QML_FILES`; panel keys must be accepted by `NormalizeAdjustmentPanel`.
 - If the wrapper fails before reaching CMake, inspect `scripts/msvc_env.cmd` before changing presets or toolchain arguments.
 
 ### raw-processor-module

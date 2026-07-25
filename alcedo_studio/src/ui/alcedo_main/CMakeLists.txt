@@ -521,6 +521,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorTonePanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorLookPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/LUTPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorDisplayTransformPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentSlider.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentField.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentToggle.qml"

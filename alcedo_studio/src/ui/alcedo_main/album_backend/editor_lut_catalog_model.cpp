@@ -86,6 +86,11 @@ bool EditorLutCatalogModel::isFavoritePath(const QString& path) const {
 }
 
 void EditorLutCatalogModel::setSelectedPath(const QString& path) {
+  // Load-only path writes often re-apply the same snapshot value after a
+  // settled select. Skip work and signals so QML does not rebuild or twitch.
+  if (path == selectedPath_) {
+    return;
+  }
   selectedPath_     = path;
   selectedPathUtf8_ = QStringToUtf8(path);
   applySelectionHighlight();

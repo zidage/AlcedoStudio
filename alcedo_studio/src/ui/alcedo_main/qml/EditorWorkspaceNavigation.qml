@@ -1,11 +1,13 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Controls.Material
-import QtQuick.Layouts
 
 // Shared Library/Editor navigation for the application header. The router,
 // policy, and editor re-entry lookup are explicit inputs so this component
 // owns only workspace navigation and its permission gate.
+//
+// VI (DESIGN.md): monochrome capsule — sunken bgBase track, sliding light
+// selected well (editorListSelectedFill), dark ink on the active segment.
+// No Material style; no accent blue thumb.
 Item {
     id: root
     objectName: "editorWorkspaceNavigation"
@@ -29,14 +31,17 @@ Item {
     readonly property int opticalIconSize: appTheme.iconOpticalSizeCompact
 
     implicitWidth: 112
-    implicitHeight: 40
+    implicitHeight: appTheme.iconButtonHitSizeCompact
 
-    readonly property color colBgBase: theme ? theme.colBgBase : "#242424"
-    readonly property color colDivider: theme ? theme.colDivider : Qt.rgba(1, 1, 1, 0.08)
-    readonly property color colText: theme ? theme.colText : "#E0E0E0"
-    readonly property color colTextMuted: theme ? theme.colTextMuted : "#888888"
-    readonly property color colAccentPrimary: theme ? theme.colAccentPrimary : "#6892B9"
-    readonly property color colAccentSecondary: theme ? theme.colAccentSecondary : "#76A0C7"
+    // Track / chrome (theme mirror falls back to appTheme tokens).
+    readonly property color colBgBase: theme ? theme.colBgBase : appTheme.bgBaseColor
+    readonly property color colDivider: theme ? theme.colDivider : appTheme.dividerColor
+    readonly property color colText: theme ? theme.colText : appTheme.textColor
+    readonly property color colTextMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
+    readonly property color colIcon: appTheme.iconColor
+    // Monochrome selected well (same family as LUT rows / method segments).
+    readonly property color colSelectedFill: appTheme.editorListSelectedFillColor
+    readonly property color colSelectedInk: appTheme.editorListSelectedInkColor
 
     function withAlpha(colorValue, alphaValue) {
         return Qt.rgba(colorValue.r, colorValue.g, colorValue.b, alphaValue)
@@ -85,8 +90,8 @@ Item {
             id: wsTrack
             objectName: "workspaceSwitchTrack"
             anchors.centerIn: parent
-            width: parent.width - 4
-            height: 32
+            width: parent.width - appTheme.spaceXs
+            height: root.opticalIconSize + appTheme.spaceMd
             radius: appTheme.controlRadiusSmall
             color: root.colBgBase
             border.width: 1
@@ -94,19 +99,19 @@ Item {
             opacity: root.navigationEnabled ? 1.0 : 0.45
         }
 
+        // Sliding monochrome selected well — only selected-workspace surface.
         Rectangle {
             id: wsThumb
             objectName: "workspaceSwitchThumb"
-            width: wsTrack.width / 2 - 2
-            height: wsTrack.height - 4
-            y: wsTrack.y + 2
+            width: wsTrack.width / 2 - appTheme.spaceXs
+            height: wsTrack.height - appTheme.spaceXs
+            y: wsTrack.y + appTheme.spaceXs / 2
             x: root.currentWorkspace === "library"
-               ? wsTrack.x + 2
-               : wsTrack.x + wsTrack.width - width - 2
-            radius: appTheme.controlRadiusSmall - 2
-            color: root.colAccentPrimary
-            border.width: 1
-            border.color: root.colAccentSecondary
+               ? wsTrack.x + appTheme.spaceXs / 2
+               : wsTrack.x + wsTrack.width - width - appTheme.spaceXs / 2
+            radius: Math.max(2, appTheme.controlRadiusSmall - 2)
+            color: root.colSelectedFill
+            border.width: 0
             opacity: root.navigationEnabled ? 1.0 : 0.45
 
             Behavior on x {
@@ -133,20 +138,21 @@ Item {
                 activeFocusOnTab: true
                 readonly property bool isActive: root.currentWorkspace === "library"
                 readonly property string actionName: qsTr("Library")
+                // Active icon sits on the light well → dark ink; idle → muted.
+                readonly property color glyphColor: !enabled
+                    ? root.withAlpha(root.colTextMuted, 0.45)
+                    : (isActive ? root.colSelectedInk
+                                : (hovered ? root.colText : root.colIcon))
 
                 HoverHandler { id: libraryNavHover }
 
                 icon.source: "qrc:/panel_icons/layout-grid.svg"
                 icon.width: root.opticalIconSize
                 icon.height: root.opticalIconSize
-                icon.color: !enabled
-                            ? root.withAlpha(root.colText, 0.30)
-                            : (isActive || hovered ? root.colText : root.colTextMuted)
-                Material.foreground: icon.color
-                background: Rectangle {
-                    color: "transparent"
-                    radius: 4
-                }
+                icon.color: libraryNavButton.glyphColor
+                // Capsule exception (DESIGN.md): no hover/press/focus fill —
+                // the sliding thumb is the only selected surface.
+                background: Item {}
                 ToolTip.visible: libraryNavHover.hovered
                 ToolTip.text: libraryNavButton.actionName
                 Accessible.name: libraryNavButton.actionName
@@ -167,20 +173,18 @@ Item {
                 activeFocusOnTab: true
                 readonly property bool isActive: root.currentWorkspace === "editor"
                 readonly property string actionName: qsTr("Editor")
+                readonly property color glyphColor: !enabled
+                    ? root.withAlpha(root.colTextMuted, 0.45)
+                    : (isActive ? root.colSelectedInk
+                                : (hovered ? root.colText : root.colIcon))
 
                 HoverHandler { id: editorNavHover }
 
                 icon.source: "qrc:/panel_icons/adjustments.svg"
                 icon.width: root.opticalIconSize
                 icon.height: root.opticalIconSize
-                icon.color: !enabled
-                            ? root.withAlpha(root.colText, 0.30)
-                            : (isActive || hovered ? root.colText : root.colTextMuted)
-                Material.foreground: icon.color
-                background: Rectangle {
-                    color: "transparent"
-                    radius: 4
-                }
+                icon.color: editorNavButton.glyphColor
+                background: Item {}
                 ToolTip.visible: editorNavHover.hovered
                 ToolTip.text: editorNavButton.actionName
                 Accessible.name: editorNavButton.actionName

@@ -473,6 +473,41 @@ gtest_discover_tests(EditorAdjustmentSnapshotQmlTest
     TEST_PREFIX "EditorAdjustmentSnapshotQmlTest.")
 alcedo_register_test_target(EditorAdjustmentSnapshotQmlTest ui)
 
+# Display Transform QML snapshot: verifies ODT params populate the
+# Display Transform panel on first bind and method/space/EOTF changes.
+add_executable(EditorDisplayTransformSnapshotQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_display_transform_snapshot_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorDisplayTransformSnapshotQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorDisplayTransformSnapshotQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorDisplayTransformSnapshotQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+gtest_discover_tests(EditorDisplayTransformSnapshotQmlTest
+    TEST_PREFIX "EditorDisplayTransformSnapshotQmlTest.")
+alcedo_register_test_target(EditorDisplayTransformSnapshotQmlTest ui)
+
+
 # Real-project regression: replay production Main.qml Copy/Paste and verify
 # that a reopened target publishes the saved Tone values to its QML models.
 add_executable(EditorAdjustmentTransferRealProjectE2eTest

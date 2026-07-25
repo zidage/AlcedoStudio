@@ -86,6 +86,9 @@ Item {
         if (typeof lutPanel.loadFromSnapshot === "function") {
             lutPanel.loadFromSnapshot(snapshot)
         }
+        if (typeof displayPanel.loadFromSnapshot === "function") {
+            displayPanel.loadFromSnapshot(snapshot)
+        }
     }
 
 
@@ -154,9 +157,9 @@ Item {
                 }
             }
 
-            // Compact adjustment navbar: sunken track + sliding selection window
-            // (same family as Main.qml workspaceSwitchThumb). 40 px hits, 18 px
-            // SVGs; the thumb — not per-button fill — is the selected surface.
+            // Compact adjustment navbar: sunken track + monochrome sliding well
+            // (DESIGN.md — same B&W language as workspace capsule / method segments).
+            // Thumb is the only selected surface; segment buttons stay transparent.
             Rectangle {
                 id: adjustmentNav
                 objectName: "editorAdjustmentNav"
@@ -171,6 +174,7 @@ Item {
                 // math to NaN and the SVG icons "fall out" of the track.
                 readonly property int navHit: appTheme.iconButtonHitSizeCompact
                 readonly property int navSpacing: 2
+                readonly property int navTrackInset: appTheme.spaceXs
                 readonly property int navIndex: {
                     switch (root.activePanel) {
                     case "look": return 1
@@ -181,10 +185,12 @@ Item {
                     default: return 0
                     }
                 }
-                // Chrome size mirrors IconActionButton compact wells (optical+8 / hit-8).
+                // Thumb leaves track inset so the light well is not flush to the
+                // sunken chrome edge (matches workspace capsule / method track).
                 readonly property int thumbSize: Math.min(
-                    navHit,
-                    Math.max(appTheme.iconOpticalSizeCompact + 8, navHit - 8))
+                    navHit - navTrackInset,
+                    Math.max(appTheme.iconOpticalSizeCompact + appTheme.spaceSm,
+                             navHit - appTheme.spaceSm - navTrackInset))
 
                 Item {
                     id: navHost
@@ -193,10 +199,7 @@ Item {
                     height: adjustmentNav.navHit
                     opacity: root.controlsEnabled ? 1.0 : 0.55
 
-                    // Sliding selection window under the icons. Buttons must use
-                    // transparent chrome — an opaque fillIdle (even track-matched)
-                    // completely covers this thumb so you only see a blue slab
-                    // sliding in the 2 px gaps between segments.
+                    // Sliding monochrome selected well under the icons.
                     Rectangle {
                         id: navThumb
                         objectName: "editorAdjustmentNavThumb"
@@ -204,14 +207,8 @@ Item {
                         width: adjustmentNav.thumbSize
                         height: adjustmentNav.thumbSize
                         radius: Math.max(4, appTheme.controlRadiusSmall - 2)
-                        color: root.colAccent
-                        border.width: 1
-                        border.color: {
-                            const s = theme && theme.colAccentSecondary
-                                      ? theme.colAccentSecondary
-                                      : appTheme.accentSecondaryColor
-                            return Qt.rgba(s.r, s.g, s.b, 0.52)
-                        }
+                        color: appTheme.editorListSelectedFillColor
+                        border.width: 0
                         y: (parent.height - height) / 2
                         x: adjustmentNav.navIndex
                            * (adjustmentNav.navHit + adjustmentNav.navSpacing)
@@ -267,16 +264,18 @@ Item {
                         z: 1
                         spacing: adjustmentNav.navSpacing
 
-                        // Capsule rule (workspace switch): no per-button fill.
-                        // Transparent wells let the accent thumb read as the
-                        // selected surface under the SVG; only the icon sits above.
+                        // Capsule rule: no per-button fill. Active glyph uses
+                        // inverted ink on the light well; idle uses muted icon.
                         component NavIconButton: IconActionButton {
                             compact: true
                             enabled: root.controlsEnabled
                             showHoverFill: false
-                            showFocusRing: true
-                            iconColorDefault: selected ? "#FFFFFF" : root.colMuted
+                            showFocusRing: false
+                            iconColorDefault: selected
+                                              ? appTheme.editorListSelectedInkColor
+                                              : root.colMuted
                             iconColorMuted: root.colMuted
+                            iconColorSelected: appTheme.editorListSelectedInkColor
                             fillIdle: "transparent"
                             fillSelected: "transparent"
                         }
@@ -424,9 +423,12 @@ Item {
                     }
                 }
 
-                EmptyAdjustmentPage {
+                EditorDisplayTransformPanel {
+                    id: displayPanel
                     objectName: "editorAdjustmentPanel_display"
-                    panelKey: "display"
+                    theme: root.theme
+                    editorSession: root.editorSession
+                    controlsEnabled: root.controlsEnabled
                 }
                 EmptyAdjustmentPage {
                     objectName: "editorAdjustmentPanel_geometry"

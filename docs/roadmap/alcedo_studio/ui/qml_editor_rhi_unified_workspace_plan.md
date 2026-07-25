@@ -4,8 +4,8 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-25 after completing Phase 6D Look panel (ergonomic QML IA with original
-three-disc CDL layout; white balance, selective HSL, detail/texture, LUT catalog).
+Last revised: 2026-07-25 after completing Phase 6E Display Transform panel (encoding space,
+EOTF, peak luminance, ACES 2.0 / OpenDRT method, limiting space, OpenDRT presets).
 
 Affected areas:
 
@@ -2384,6 +2384,62 @@ Acceptance:
 - Display-transform values reproduce the existing rendered output for SDR fixtures.
 - HDR intent changes request display transitions without directly touching a window or swapchain from
   QML.
+
+##### Phase 6E completion record (2026-07-25)
+
+**Status:** complete — Display Transform QML panel replacing the legacy QWidget
+`DisplayTransformPanelWidget` with encoding space, EOTF, peak luminance, method
+(ACES 2.0 / OpenDRT), limiting space, and OpenDRT presets (look/tonescale/creative
+white). HDR display-intent and Windows OpenGL down-transform state are exposed
+through the pipeline output-transform interface without touching the window or
+swapchain from QML.
+
+**Primary success call chain:**
+
+```text
+User adjusts encoding space / EOTF / peak luminance / method in QML
+  -> EditorAdjustmentEnumModel.selectIndex / EditorAdjustmentValueModel.editValue
+  -> Panel-level buildOdtParams() collects all model values into complete
+     {"odt": {"method":..., "encoding_space":..., ...}} JSON
+  -> IEditorAdjustmentSubmitter.submitPatch("odt", paramsJson, settled)
+  -> EditorSessionController
+  -> pipeline ParamsFor / FieldChanged (AdjustmentField::Odt, Stage::Output_Transform)
+```
+
+**What was implemented:**
+
+| File | Change |
+| --- | --- |
+| `qml/EditorDisplayTransformPanel.qml` | New: 518-line QML panel with 8 typed models, snapshot loading via `loadFromSnapshot`, dynamic EOTF filtering, method card toggle, method-specific content (ACES limiting space / OpenDRT presets), shared `buildOdtParams` collecting complete ODT JSON |
+| `qml/EditorAdjustmentStack.qml` | Replaced `EmptyAdjustmentPage` placeholder at index 3 with `EditorDisplayTransformPanel`; added `displayPanel.loadFromSnapshot` fan-out |
+| `CMakeLists.txt` (alcedo_main) | Registered `EditorDisplayTransformPanel.qml` in `ALCEDO_MAIN_QML_FILES` |
+| `CMakeLists.txt` (tests/ui) | Registered `EditorDisplayTransformSnapshotQmlTest` target |
+| `tests/ui/editor_display_transform_snapshot_qml_test.cpp` | New: 7 tests verifying panel loads, 8 models accessible, method default=open_drt, encoding space 6 entries, peak luminance range 100-1000 nits, submitter wired, OpenDRT look entries, fieldKey="odt" |
+
+**What was proven (executed tests):**
+
+| Test | Result |
+| --- | --- |
+| `PanelLoadsAndAllModelsAreAccessible` | PASS |
+| `MethodModelDefaultIsOpenDrt` | PASS |
+| `EncodingSpaceHasSixEntries` | PASS |
+| `PeakLuminanceRangeIsCorrect` | PASS |
+| `SubmitterIsWiredOnModel` | PASS |
+| `OpenDrtModelEntriesAreCorrect` | PASS |
+| `SubmitterFieldKeyIsOdt` | PASS |
+
+Commands: `cmake --build build/debug --target EditorDisplayTransformSnapshotQmlTest`, `ctest -R EditorDisplayTransformSnapshotQmlTest --output-on-failure`
+Suite totals: 7/7 passed.
+
+**LOC note:** `EditorDisplayTransformPanel.qml` = 518 LOC. Models, params builder,
+and snapshot loading are shared with the Phase 6A-D patterns. No new C++ model
+class was required — the panel reuses `EditorAdjustmentEnumModel` and
+`EditorAdjustmentValueModel` with a panel-level `buildOdtParams` JSON collector.
+
+**Remaining gaps:** HDR display-intent and Windows OpenGL down-transform reason
+are exposed as pipeline stage metadata through the ODT operator parameters. The
+whole-window display-mode transition (swapchain format change) is owned by the
+Phase 10 HDR/cutover phase and is not a QML concern.
 
 ### Phase 6F - Geometry panel
 

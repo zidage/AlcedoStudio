@@ -92,6 +92,33 @@ well. Type badges use a white chip (`editorSliderHandleColor`) on dark rows and
 invert to ink-on-bone when the row is selected. Do not reintroduce ad-hoc
 `#D8D4CD` / `Qt.rgba` star or badge colors in feature QML.
 
+**List well inset (required):** the light selected bar must **not** flush the
+sunken track border. Use `spaceXs` as list track padding (`ListView` margins)
+and as inter-row gap (`ListView.spacing`) so track color frames every well.
+
+**LUT selection chrome (required):** one sliding `editorLutSelectionChrome`
+rectangle parented to `ListView.contentItem` paints the light well. Do **not**
+per-row `opacity` fills — recycled delegates start already selected so
+`Behavior on opacity` never runs. Nearby selection moves animate `y`
+(`motionFoldOpenMs`, `OutCubic`); long jumps (distance > viewport height) snap
+`y` and fade opacity in. Snapshot echo must **not** call catalog `refresh`
+when the path is already in the model (that reassigns the list and hitch
+`contentY`). Hover wells use the same inset geometry.
+
+**Monochrome segmented controls (family):** three chrome sites share one language:
+
+| Site | Track | Sliding / selected well | Active glyph / label |
+| --- | --- | --- | --- |
+| Library/Editor capsule | `bgBaseColor` | `editorListSelectedFillColor` | `editorListSelectedInkColor` |
+| Adjustment panel navbar | `bgBaseColor` | same fill (no accent blue) | same ink on selected icon |
+| Display method segments | `bgBaseColor` | same fill | same ink on selected label |
+
+Rules for all three: no `accentColor` slab; transparent segment chrome (thumb
+or well is the only selected surface); idle icons/text `iconColor` /
+`textMutedColor`; thumb/well leaves a small track inset (`spaceXs` optical
+margin). Adjustment navbar keeps OutBack slide + land scale; method segments
+and list wells use opacity fade where motion is short.
+
 **Selection restore rule (adjustment panels):** each panel exposes
 `loadFromSnapshot(snapshot)` and reads selection/values from the session
 snapshot on `Component.onCompleted`, `onEditorSessionChanged`, and the stack’s
@@ -212,10 +239,20 @@ Non-Tabler assets are preserved for established Alcedo-specific actions
 - **Library/Editor capsule exception:** segments draw **no** hover fill, press
   fill, or focus ring. The sliding `workspaceSwitchThumb` is the **only**
   selected-workspace indication. Hover still drives tooltips.
-- **Adjustment navbar sliding window:** the five-item Tone/Look/… track uses a
-  sliding accent thumb (`editorAdjustmentNavThumb`) as the only selected surface
-  (OutBack slide + land scale; `reduceMotion` snaps). Segment buttons keep
-  track-matched fills and brighten the icon on the active item.
+  **Monochrome VI:** track = `bgBaseColor`; thumb = `editorListSelectedFillColor`
+  (light bone well); active segment icon ink = `editorListSelectedInkColor`;
+  idle icons = `iconColor` / hover `textColor`. Do **not** paint the thumb with
+  `accentColor` (no blue slab).
+- **Adjustment navbar sliding window:** Tone/Look/LUT/Display/Geometry/RAW track
+  uses the **same monochrome thumb** (`editorAdjustmentNavThumb` =
+  `editorListSelectedFillColor`, no accent border). Active segment icon ink =
+  `editorListSelectedInkColor`; idle = `textMutedColor`. Segment buttons:
+  transparent wells, **no** hover fill, **no** focus ring (capsule family).
+  Motion: OutBack slide on `x` + land scale pulse; `reduceMotion` snaps.
+  Thumb size is inset from the hit cell (`spaceXs`) so the well is not flush
+  with the sunken track edge.
+- **Display method segments:** shared sunk track + monochrome inverted wells
+  (see Display Transform panel); title-only, medium height, always expanded.
 
 ---
 
@@ -227,8 +264,8 @@ Non-Tabler assets are preserved for established Alcedo-specific actions
 | Loading | Muted status label (e.g. viewport “Preparing…”) |
 | Error | `dangerColor` / `dangerTintColor` — no ad-hoc reds |
 | Disabled | Muted icon/text tint + `enabled: false`; editor shells keep card surface (no parent opacity, no second shell tone) |
-| Selected | `buttonSelectedFillColor` well on icon actions (fill only — SVG tint stays default); library uses `selectedTintColor`; dense catalog rows use `editorListSelectedFillColor` + inverted ink/stars |
-| Hover | Quiet `buttonHoveredFillColor` well unless capsule exception applies |
+| Selected | Dense catalogs + segmented capsules: `editorListSelectedFillColor` well + `editorListSelectedInkColor` ink (B&W). Icon actions outside capsules may still use `buttonSelectedFillColor` (fill only). Library cards use `selectedTintColor`. Never use cool blue accent as a selected slab in editor chrome. |
+| Hover | Quiet `buttonHoveredFillColor` well unless capsule exception applies (Library/Editor and adjustment nav segments: tooltip only) |
 
 ---
 
@@ -256,11 +293,19 @@ blocking. Session identity is never recreated by a fold.
 
 | Token | Value | Use |
 | --- | --- | --- |
-| `motionFoldOpenMs` | 200 | Opening fold (emphasized) |
+| `motionFoldOpenMs` | 200 | Opening fold (emphasized); also capsule thumb slide floor |
 | `motionFoldCloseMs` | 160 | Closing fold (slightly faster) |
-| `motionFadeMs` | 120 | Short fades |
-| Easing | `Easing.OutCubic` | Open and close |
-| `reduceMotion` | `QSettings("ui/reduceMotion")` | When true, all fold/fade durations resolve to **0**; final state unchanged |
+| `motionFadeMs` | 120 | Short fades — **LUT list selected well opacity** |
+| Easing | `Easing.OutCubic` | Open/close and list selection fade |
+| `reduceMotion` | `QSettings("ui/reduceMotion")` | When true, all fold/fade/slide durations resolve to **0**; final state unchanged |
+
+**Monochrome selection motion:**
+
+| Surface | Motion | Notes |
+| --- | --- | --- |
+| LUT list selected well | Single sliding chrome: nearby `y` slide (`motionFoldOpenMs`); long jump snaps + opacity fade-in | Never per-delegate opacity; never flush to track; no catalog refresh on same-path snapshot echo |
+| Workspace + adjustment thumbs | Slide on `x` (OutBack, land scale pulse) | Documented capsule exception to “no overshoot” for mechanical feel |
+| Display method segments | Instant fill swap (optional future fade) | Title-only wells inside shared track |
 
 **Fold rules (History/Versions, filmstrip, collapsible adjustment section):**
 

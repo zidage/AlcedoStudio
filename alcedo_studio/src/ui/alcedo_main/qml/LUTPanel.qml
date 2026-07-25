@@ -52,6 +52,11 @@ Item {
     readonly property int entryRowHeight: appTheme.lineHeightBody
                                           + appTheme.lineHeightCaption
                                           + appTheme.spaceSm
+    // Inset of the monochrome selected well from the sunken list track edge
+    // (DESIGN.md listRowInset — never flush to the track border).
+    readonly property int listRowInset: appTheme.spaceXs
+    // Vertical gap between wells (track color shows through).
+    readonly property int listRowGap: appTheme.spaceXs
 
     // Test/introspection surface (scroll contract).
     readonly property alias listView: lutView
@@ -80,6 +85,13 @@ Item {
     property var lutEntries: []
     property real _pendingRestoreContentY: -1
     property bool _ensureSelectedIfOffscreen: false
+
+    // Sliding monochrome selection chrome (content coordinates). Driven by an
+    // explicit NumberAnimation on the chrome item — not Behavior + root binding
+    // (that path restarts mid-flight and pays extra binding churn per frame).
+    property int selectionWellIndex: -1
+    property real selectionChromeOpacity: 0
+    property int _selectionChromePrevIndex: -1
 
     function formatFileSize(bytes) {
         if (!bytes || bytes === 0)
@@ -124,6 +136,71 @@ Item {
         return -1
     }
 
+    function selectionWellYForIndex(idx) {
+        if (idx < 0)
+            return 0
+        return idx * (root.entryRowHeight + root.listRowGap)
+    }
+
+    /// True when the live catalog already lists this path (or None).
+    function modelContainsPath(path) {
+        if (!root.lutModel)
+            return false
+        var want = root.normalizePath(path)
+        if (want.length === 0)
+            return true
+        var entries = root.lutModel.entries
+        if (!entries)
+            return false
+        for (var i = 0; i < entries.length; ++i) {
+            var e = entries[i]
+            if (e && root.normalizePath(e.path) === want)
+                return true
+        }
+        return false
+    }
+
+    /// Drive the sliding selection well. Nearby moves animate from the chrome's
+    /// *current* y (not a root target binding). Long jumps snap + fade in.
+    function syncSelectionChrome() {
+        if (!selectionChrome)
+            return
+        var idx = root.indexOfSelectedEntry()
+        // Same index: keep whatever animation is in flight; do not restart.
+        if (idx === root.selectionWellIndex && idx >= 0
+                && !selectionChromeSlide.running) {
+            root.selectionChromeOpacity = 1
+            return
+        }
+        root.selectionWellIndex = idx
+        if (idx < 0) {
+            selectionChromeSlide.stop()
+            root.selectionChromeOpacity = 0
+            root._selectionChromePrevIndex = -1
+            return
+        }
+        var newY = root.selectionWellYForIndex(idx)
+        var prev = root._selectionChromePrevIndex
+        var fromY = selectionChrome.y
+        var dist = Math.abs(newY - fromY)
+        var viewH = lutView ? Math.max(lutView.height, 1) : 1
+        var longJump = prev < 0 || dist > viewH
+        selectionChromeSlide.stop()
+        if (appTheme.reduceMotion || longJump) {
+            selectionChrome.y = newY
+            root.selectionChromeOpacity = 0
+            selectionChromeFadeIn.restart()
+        } else {
+            // Short, linear-ish ease: OutCubic over 200ms on a busy GUI thread
+            // (history submit + every row rebinding ink) reads as hitchy.
+            selectionChromeSlide.from = fromY
+            selectionChromeSlide.to = newY
+            selectionChromeSlide.start()
+            root.selectionChromeOpacity = 1
+        }
+        root._selectionChromePrevIndex = idx
+    }
+
     /// True when this entry is the active selection. Callers in bindings must
     /// also touch `root.selectedPath` so the binding re-evaluates on change.
     function isPathSelected(path, kind) {
@@ -144,6 +221,7 @@ Item {
             return
         if (snapshot === undefined || snapshot === null) {
             root.lutModel.selectedPath = ""
+            root.syncSelectionChrome()
             return
         }
         const entry = snapshot.lut !== undefined ? snapshot.lut : snapshot.ocio_lmt
@@ -157,10 +235,31 @@ Item {
         } else if (entry.path !== undefined) {
             path = String(entry.path)
         }
-        // Load path first so catalog missing-current placeholders resolve.
+        // Load-only write. Do NOT refresh on every snapshot echo — that rebuilds
+        // the catalog, reassigns lutEntries, and makes contentY hitch (抽搐).
+        // Refresh only when the path is missing so a missing-current row can
+        // materialize.
         root.lutModel.selectedPath = path
-        if (typeof root.lutModel.refresh === "function")
+        if (path.length > 0 && !root.modelContainsPath(path)
+                && typeof root.lutModel.refresh === "function") {
             root.lutModel.refresh(false)
+        }
+        root.syncSelectionChrome()
+    }
+
+    function entriesFingerprint(list) {
+        if (!list || !list.length)
+            return ""
+        var s = ""
+        for (var i = 0; i < list.length; ++i) {
+            var e = list[i]
+            if (!e) {
+                s += "?;"
+                continue
+            }
+            s += String(e.kind || "") + "|" + String(e.path || "") + ";"
+        }
+        return s
     }
 
     /// Rebuild sorted/filtered entries.
@@ -170,9 +269,11 @@ Item {
         var preserveY = lutView ? lutView.contentY : 0
         var source = root.lutModel ? root.lutModel.entries : []
         if (!source || !source.length) {
-            root.lutEntries = []
+            if (root.lutEntries.length !== 0)
+                root.lutEntries = []
             root._pendingRestoreContentY = -1
             root._ensureSelectedIfOffscreen = false
+            root.syncSelectionChrome()
             return
         }
 
@@ -204,6 +305,13 @@ Item {
             })
         }
 
+        // Skip ListView model reassignment when membership/order is unchanged —
+        // reassigning the JS array rebuilds delegates and hitches contentY.
+        if (root.entriesFingerprint(filtered) === root.entriesFingerprint(root.lutEntries)) {
+            root.syncSelectionChrome()
+            return
+        }
+
         root._pendingRestoreContentY = preserveY
         root._ensureSelectedIfOffscreen = !!ensureSelectedIfOffscreen
         root.lutEntries = filtered
@@ -218,6 +326,7 @@ Item {
             lutView.contentY = Math.max(0, Math.min(root._pendingRestoreContentY, maxY))
             root._pendingRestoreContentY = -1
         }
+        root.syncSelectionChrome()
         if (!root._ensureSelectedIfOffscreen)
             return
         root._ensureSelectedIfOffscreen = false
@@ -266,10 +375,33 @@ Item {
         function onEntriesChanged() {
             root.rebuildEntries(false)
         }
+        function onSelectedPathChanged() {
+            // Selection-only: move chrome, never rebuild the list.
+            root.syncSelectionChrome()
+        }
         function onFavoritePathsChanged() {
             if (root.showFavoritesOnly)
                 root.rebuildEntries(true)
         }
+    }
+
+    NumberAnimation {
+        id: selectionChromeFadeIn
+        target: root
+        property: "selectionChromeOpacity"
+        to: 1
+        duration: appTheme.reduceMotion ? 0 : appTheme.motionFadeMs
+        easing.type: Easing.OutQuad
+    }
+
+    NumberAnimation {
+        id: selectionChromeSlide
+        target: selectionChrome
+        property: "y"
+        // Snappier than motionFoldOpenMs: the slide shares the GUI thread with
+        // selectPath→submit and N× delegate ink rebinds.
+        duration: appTheme.reduceMotion ? 0 : 140
+        easing.type: Easing.OutQuad
     }
 
     Component.onCompleted: {
@@ -540,9 +672,9 @@ Item {
                 id: lutView
                 objectName: "editorLutListView"
                 anchors.fill: parent
-                anchors.margins: appTheme.spaceXs / 2
+                anchors.margins: root.listRowInset
                 model: root.lutEntries
-                spacing: 1
+                spacing: root.listRowGap
                 boundsBehavior: Flickable.StopAtBounds
                 flickableDirection: Flickable.VerticalFlick
                 pressDelay: 0
@@ -553,9 +685,37 @@ Item {
                     padding: 0
                 }
 
-                delegate: Rectangle {
+                // Single sliding selected well under rows (not per-delegate fill).
+                // Parent is contentItem so y scrolls with the list. y is owned by
+                // selectionChromeSlide (not a binding) so frames stay independent
+                // of root property writes during the move.
+                Rectangle {
+                    id: selectionChrome
+                    objectName: "editorLutSelectionChrome"
+                    parent: lutView.contentItem
+                    z: 0
+                    width: lutView.width
+                    height: root.entryRowHeight
+                    x: 0
+                    y: 0
+                    radius: root.badgeRadius
+                    color: root.colSelectedFill
+                    opacity: root.selectionChromeOpacity
+                    visible: root.selectionWellIndex >= 0
+                    enabled: false
+                    // Cache the well as a texture so each animation frame is a
+                    // transform/composite, not a full path rebuild of the fill.
+                    layer.enabled: true
+                    layer.smooth: true
+                }
+
+                // Outer Item owns ListView cell geometry; track margins + row
+                // gap keep wells off the sunken track edge.
+                delegate: Item {
                     id: entryDelegate
                     required property var modelData
+                    // ListView index — keep required so recycling stays stable.
+                    required property int index
                     readonly property bool isNone: modelData.kind === "none"
                     readonly property bool isFile: modelData.kind === "file"
                     readonly property bool isMissing: modelData.kind === "missing"
@@ -575,77 +735,83 @@ Item {
                         var paths = root.lutModel ? root.lutModel.favoritePaths : []
                         return entryPath.length > 0 && paths && paths.indexOf(entryPath) >= 0
                     }
-                    readonly property color rowBg: {
-                        if (entrySelected && entrySelectable)
-                            return root.colSelectedFill
-                        if (entryHover.containsMouse && entrySelectable)
-                            return appTheme.buttonHoveredFillColor
-                        return root.colBase
-                    }
+                    // Ink/badge invert with the sliding well; fill is not painted
+                    // on the row (selectionChrome owns the light bar).
+                    readonly property bool showSelectedWell: entrySelected && entrySelectable
                     readonly property color titleColor: {
-                        if (entrySelected && entrySelectable)
+                        if (showSelectedWell)
                             return root.colSelectedInk
                         if (!entryValid)
                             return root.colInvalid
                         return root.colText
                     }
                     readonly property color secondaryColor: {
-                        if (entrySelected && entrySelectable)
+                        if (showSelectedWell)
                             return root.colSelectedInk
                         if (!entryValid)
                             return root.colInvalid
                         return root.colMuted
                     }
                     readonly property color starColor: {
-                        if (entrySelected && entrySelectable)
+                        if (showSelectedWell)
                             return entryFav ? root.colFavoriteActiveOnSelected
                                             : root.colFavoriteIdleOnSelected
                         return entryFav ? root.colFavoriteActive : root.colFavoriteIdle
                     }
                     // Type badge: white chip on dark rows; ink chip on selected.
                     readonly property color badgeFill: {
-                        if (entrySelected && entrySelectable)
+                        if (showSelectedWell)
                             return root.colSelectedInk
                         return root.colBadgeFill
                     }
                     readonly property color badgeTextColor: {
-                        if (entrySelected && entrySelectable)
+                        if (showSelectedWell)
                             return root.colSelectedFill
                         return root.colBadgeInk
                     }
                     readonly property color badgeBorderColor: {
-                        if (entrySelected && entrySelectable)
+                        if (showSelectedWell)
                             return root.colSelectedInk
                         return root.colCardBorder
                     }
 
                     objectName: "editorLutEntry"
-                    width: lutView.width - appTheme.spaceXs
+                    width: lutView.width
                     height: root.entryRowHeight
-                    x: appTheme.spaceXs / 2
-                    radius: root.badgeRadius
-                    color: rowBg
+                    // Above the sliding selection chrome.
+                    z: 1
 
-                    MouseArea {
-                        id: entryHover
-                        objectName: "editorLutEntryHit"
+                    Rectangle {
+                        id: entryWell
+                        objectName: "editorLutEntryWell"
                         anchors.fill: parent
-                        enabled: entrySelectable
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (root.lutModel)
-                                root.lutModel.selectPath(entryPath)
+                        radius: root.badgeRadius
+                        color: entryHover.containsMouse && entrySelectable && !showSelectedWell
+                               ? appTheme.buttonHoveredFillColor
+                               : "transparent"
+                        border.width: 0
+
+                        MouseArea {
+                            id: entryHover
+                            objectName: "editorLutEntryHit"
+                            anchors.fill: parent
+                            enabled: entrySelectable
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (root.lutModel)
+                                    root.lutModel.selectPath(entryPath)
+                            }
                         }
-                    }
 
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: appTheme.spaceSm
-                        anchors.rightMargin: appTheme.spaceSm
-                        anchors.topMargin: appTheme.spaceXs / 2
-                        anchors.bottomMargin: appTheme.spaceXs / 2
-                        spacing: appTheme.spaceXs
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.leftMargin: appTheme.spaceSm
+                            anchors.rightMargin: appTheme.spaceSm
+                            anchors.topMargin: appTheme.spaceXs / 2
+                            anchors.bottomMargin: appTheme.spaceXs / 2
+                            spacing: appTheme.spaceXs
+                            z: 1
 
                         // Favorite star: glyph only, no hover well.
                         Item {
@@ -694,9 +860,10 @@ Item {
                                 color: entryDelegate.titleColor
                                 font.family: appTheme.uiFontFamily
                                 font.pixelSize: appTheme.fontSizeBody
-                                font.weight: entrySelected
-                                             ? appTheme.fontWeightStrong
-                                             : appTheme.fontWeightRegular
+                                // Weight stays constant: flipping Strong/Regular on
+                                // select forces text re-layout on two rows while the
+                                // chrome is sliding (main-thread hitch).
+                                font.weight: appTheme.fontWeightRegular
                                 elide: Text.ElideRight
                             }
 
@@ -762,10 +929,11 @@ Item {
                                 font.weight: appTheme.fontWeightRegular
                             }
                         }
-                    }
-                }
-            }
-        }
+                        } // RowLayout
+                    } // entryWell
+                } // entryDelegate
+            } // lutView
+        } // sunken list track
 
         RowLayout {
             Layout.fillWidth: true
