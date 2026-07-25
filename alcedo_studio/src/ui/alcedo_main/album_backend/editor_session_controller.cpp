@@ -634,6 +634,10 @@ auto EditorSessionController::NormalizeAdjustmentPanel(const QString& panel) -> 
   if (key == QLatin1String("look") || key == QLatin1String("color")) {
     return QStringLiteral("look");
   }
+  if (key == QLatin1String("lut") || key == QLatin1String("lmt") ||
+      key == QLatin1String("ocio_lmt")) {
+    return QStringLiteral("lut");
+  }
   if (key == QLatin1String("display") || key == QLatin1String("drt") ||
       key == QLatin1String("displayrenderingtransform")) {
     return QStringLiteral("display");

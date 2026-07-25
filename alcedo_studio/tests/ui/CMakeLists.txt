@@ -661,6 +661,39 @@ target_link_libraries(EditorCdlTrackballGeometryTest
 gtest_discover_tests(EditorCdlTrackballGeometryTest TEST_PREFIX "EditorCdlTrackballGeometryTest.")
 alcedo_register_test_target(EditorCdlTrackballGeometryTest ui)
 
+# LUT panel QML: selection scroll contract, favorites, filter, appTheme VI tokens.
+add_executable(EditorLutPanelQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_lut_panel_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorLutPanelQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorLutPanelQmlTest
+    PRIVATE
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorLutPanelQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+set_target_properties(EditorLutPanelQmlTest PROPERTIES AUTOMOC ON)
+gtest_discover_tests(EditorLutPanelQmlTest
+    TEST_PREFIX "EditorLutPanelQmlTest."
+    PROPERTIES LABELS "workspace_qml;lut_panel"
+)
+alcedo_register_test_target(EditorLutPanelQmlTest ui)
+
 # Phase 6D Look panel interaction reproduction (layout, drag, double-click, flick).
 add_executable(EditorLookPanelInteractionTest
     ${ALCEDO_TEST_ROOT}/ui/editor_look_panel_interaction_test.cpp

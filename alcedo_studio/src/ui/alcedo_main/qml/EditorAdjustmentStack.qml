@@ -1,11 +1,11 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import Alcedo.Main 1.0
 
 // Right-side editor tools: histogram/waveform scope slot, adjustment navbar,
-// and stacked panel bodies for Tone / Look / Display Transform / Geometry /
-// RAW Decode. Phase 4B finalizes navigation, ordering, selection, collapse,
-// and sizing; real controls arrive in Phase 6. Phase 4C adds a collapsible
+// and stacked panel bodies for Tone / Look / LUT / Display Transform / Geometry /
+// RAW Decode.
 // section shell that proves the shared fold motion contract.
 // Phase 4D: every surface, button fill, and disabled state uses opaque named
 // theme colors (alpha 255). No parent-shell opacity, withAlpha(…), Qt.rgba(…,
@@ -57,6 +57,14 @@ Item {
     // Phase 6C-7: last applied snapshot revision for idempotent reload.
     property int lastAppliedRevision: -1
 
+    // LUT catalog model shared between EditorLookPanel and LUTPanel.
+    EditorLutCatalogModel {
+        id: lutModel
+        objectName: "adjustmentStackLutModel"
+        submitter: root.editorSession
+    }
+
+
     /// Load panel values from the editor session adjustment snapshot.
     /// Idempotent: re-applying the same revision has no effect. Each panel
     /// extracts its owned field keys from the snapshot map.
@@ -66,13 +74,17 @@ Item {
         if (rev === root.lastAppliedRevision) return
         root.lastAppliedRevision = rev
         if (snapshot === undefined || snapshot === null) return
-        // Distribute to each panel body. Tone + Look are wired; Display /
-        // Geometry / RAW join in their Phase 6 ports.
+        // Each panel owns its snapshot fields (Tone / Look / LUT). Do not
+        // special-case LUT only at the stack — that path is easy to skip on
+        // workspace re-entry and leaves the list without a selected row.
         if (typeof tonePanel.loadFromSnapshot === "function") {
             tonePanel.loadFromSnapshot(snapshot)
         }
         if (typeof lookPanel.loadFromSnapshot === "function") {
             lookPanel.loadFromSnapshot(snapshot)
+        }
+        if (typeof lutPanel.loadFromSnapshot === "function") {
+            lutPanel.loadFromSnapshot(snapshot)
         }
     }
 
@@ -87,6 +99,7 @@ Item {
     function panelTitle(key) {
         switch (key) {
         case "look": return qsTr("Look")
+        case "lut": return qsTr("LUT")
         case "display": return qsTr("Display Transform")
         case "geometry": return qsTr("Geometry")
         case "raw": return qsTr("RAW Decode")
@@ -154,14 +167,17 @@ Item {
                 border.width: 1
                 border.color: root.colCardBorder
 
+                // Square hit + inter-icon gap. Deleting these collapses the thumb
+                // math to NaN and the SVG icons "fall out" of the track.
                 readonly property int navHit: appTheme.iconButtonHitSizeCompact
                 readonly property int navSpacing: 2
                 readonly property int navIndex: {
                     switch (root.activePanel) {
                     case "look": return 1
-                    case "display": return 2
-                    case "geometry": return 3
-                    case "raw": return 4
+                    case "lut": return 2
+                    case "display": return 3
+                    case "geometry": return 4
+                    case "raw": return 5
                     default: return 0
                     }
                 }
@@ -280,6 +296,13 @@ Item {
                             onClicked: root.selectPanel("look")
                         }
                         NavIconButton {
+                            objectName: "editorAdjustmentNav_lut"
+                            selected: root.activePanel === "lut"
+                            iconSrc: "qrc:/panel_icons/box.svg"
+                            actionName: qsTr("LUT")
+                            onClicked: root.selectPanel("lut")
+                        }
+                        NavIconButton {
                             objectName: "editorAdjustmentNav_display"
                             selected: root.activePanel === "display"
                             iconSrc: "qrc:/panel_icons/color-filter.svg"
@@ -315,9 +338,10 @@ Item {
                 currentIndex: {
                     switch (root.activePanel) {
                     case "look": return 1
-                    case "display": return 2
-                    case "geometry": return 3
-                    case "raw": return 4
+                    case "lut": return 2
+                    case "display": return 3
+                    case "geometry": return 4
+                    case "raw": return 5
                     default: return 0
                     }
                 }
@@ -337,6 +361,16 @@ Item {
                     objectName: "editorAdjustmentPanel_look"
                     theme: root.theme
                     editorSession: root.editorSession
+                    controlsEnabled: root.controlsEnabled
+                    lutModel: lutModel
+                }
+
+                LUTPanel {
+                    id: lutPanel
+                    objectName: "editorAdjustmentPanel_lut"
+                    theme: root.theme
+                    editorSession: root.editorSession
+                    lutModel: lutModel
                     controlsEnabled: root.controlsEnabled
                 }
 
@@ -419,6 +453,14 @@ Item {
     onEditorSessionChanged: {
         root.lastAppliedRevision = -1
         if (root.editorSession) {
+            root.loadFromSnapshot(root.editorSession.adjustmentSnapshot)
+        }
+    }
+    // createWithInitialProperties / first frame: session may already be set
+    // without a change signal. Match Tone/Look panels and always attempt load.
+    Component.onCompleted: {
+        if (root.editorSession) {
+            root.lastAppliedRevision = -1
             root.loadFromSnapshot(root.editorSession.adjustmentSnapshot)
         }
     }

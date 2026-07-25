@@ -342,6 +342,68 @@ TEST(EditorLookModelTest, LutClearSelectionCommitsEmptyPath) {
   EXPECT_TRUE(model.selectedPath().isEmpty());
 }
 
+TEST(EditorLookModelTest, LutSelectPathDoesNotEmitEntriesChanged) {
+  // Selection must not rebuild the catalog entry list. Emitting entriesChanged
+  // on every click forces QML ListViews to reset contentY and pin the selected
+  // row to the bottom of the viewport.
+  EditorLutCatalogModel model;
+  QSignalSpy entries_spy(&model, &EditorLutCatalogModel::entriesChanged);
+  QSignalSpy selected_spy(&model, &EditorLutCatalogModel::selectedPathChanged);
+  ASSERT_TRUE(entries_spy.isValid());
+  ASSERT_TRUE(selected_spy.isValid());
+
+  model.selectPath(QStringLiteral("D:/fake/look.cube"));
+  EXPECT_EQ(selected_spy.count(), 1);
+  EXPECT_EQ(entries_spy.count(), 0);
+  EXPECT_EQ(model.selectedPath(), QStringLiteral("D:/fake/look.cube"));
+
+  // Second select of a different path still must not rebuild entries.
+  model.selectPath(QStringLiteral("D:/fake/other.cube"));
+  EXPECT_EQ(selected_spy.count(), 2);
+  EXPECT_EQ(entries_spy.count(), 0);
+}
+
+TEST(EditorLookModelTest, LutSetSelectedPathDoesNotEmitEntriesChanged) {
+  EditorLutCatalogModel model;
+  QSignalSpy entries_spy(&model, &EditorLutCatalogModel::entriesChanged);
+  model.setSelectedPath(QStringLiteral("D:/fake/load_only.cube"));
+  EXPECT_EQ(entries_spy.count(), 0);
+  EXPECT_EQ(model.selectedPath(), QStringLiteral("D:/fake/load_only.cube"));
+}
+
+TEST(EditorLookModelTest, LutFavoriteToggleRoundTripsInMemory) {
+  EditorLutCatalogModel model;
+  const QString path = QStringLiteral("D:/fake/favorite.cube");
+  EXPECT_FALSE(model.isFavoritePath(path));
+  EXPECT_FALSE(model.isFavoritePath(QString()));
+  EXPECT_FALSE(model.isFavoritePath(QStringLiteral("   ")));
+
+  QSignalSpy fav_spy(&model, &EditorLutCatalogModel::favoritePathsChanged);
+  ASSERT_TRUE(fav_spy.isValid());
+
+  model.toggleFavoritePath(path);
+  EXPECT_EQ(fav_spy.count(), 1);
+  EXPECT_TRUE(model.isFavoritePath(path));
+  EXPECT_TRUE(model.favoritePaths().contains(path));
+
+  model.toggleFavoritePath(path);
+  EXPECT_EQ(fav_spy.count(), 2);
+  EXPECT_FALSE(model.isFavoritePath(path));
+  EXPECT_FALSE(model.favoritePaths().contains(path));
+}
+
+TEST(EditorLookModelTest, LutFilterRebuildsEntriesAndEmitsEntriesChanged) {
+  EditorLutCatalogModel model;
+  QSignalSpy entries_spy(&model, &EditorLutCatalogModel::entriesChanged);
+  model.setFilterText(QStringLiteral("no-match-zzzz"));
+  EXPECT_GE(entries_spy.count(), 1);
+  // Filter is applied; selection is independent of the filtered view size.
+  model.selectPath(QStringLiteral("D:/fake/still_select.cube"));
+  const int after_filter = entries_spy.count();
+  model.selectPath(QStringLiteral("D:/fake/still_select_2.cube"));
+  EXPECT_EQ(entries_spy.count(), after_filter);
+}
+
 // ── Vibrance operator round-trip ───────────────────────────────────────────
 
 TEST(EditorLookModelTest, VibranceSetGetParamsPreservesUiValue) {

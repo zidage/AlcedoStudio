@@ -4,9 +4,11 @@
 
 #pragma once
 
+#include <QStringList>
+#include <QVariantList>
 #include <string>
 
-#include <QVariantList>
+#include <QSettings>
 
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/editor_dialog/modules/lut_catalog.hpp"
@@ -26,13 +28,15 @@ class EditorLutCatalogModel : public EditorAdjustmentModelBase {
   Q_PROPERTY(QString statusText READ statusText NOTIFY catalogChanged)
   Q_PROPERTY(bool canOpenDirectory READ canOpenDirectory NOTIFY catalogChanged)
   Q_PROPERTY(QString filterText READ filterText WRITE setFilterText NOTIFY filterTextChanged)
+  Q_PROPERTY(QStringList favoritePaths READ favoritePaths WRITE setFavoritePaths NOTIFY favoritePathsChanged)
 
  public:
   explicit EditorLutCatalogModel(QObject* parent = nullptr);
+  ~EditorLutCatalogModel() override;
 
   [[nodiscard]] auto entries() const -> QVariantList { return entries_; }
   [[nodiscard]] auto selectedPath() const -> QString { return selectedPath_; }
-  /// Plain load setter. Does not submit. Refreshes selection highlight.
+  /// Load-only selection: updates selectedPath/selectedIndex without submitting.
   void setSelectedPath(const QString& path);
   [[nodiscard]] auto selectedIndex() const -> int { return selectedIndex_; }
   [[nodiscard]] auto directoryText() const -> QString { return directoryText_; }
@@ -40,10 +44,13 @@ class EditorLutCatalogModel : public EditorAdjustmentModelBase {
   [[nodiscard]] auto canOpenDirectory() const -> bool { return canOpenDirectory_; }
   [[nodiscard]] auto filterText() const -> QString { return filterText_; }
   void setFilterText(const QString& text);
+  [[nodiscard]] auto favoritePaths() const -> QStringList { return favoritePaths_; }
+  void setFavoritePaths(const QStringList& paths);
 
   /// Rescan the LUT directory. force=true invalidates the catalog cache.
   Q_INVOKABLE void refresh(bool force = false);
   /// User selection: commit one settled LUT transaction when the path changes.
+  /// Does not emit entriesChanged (selection is via selectedPathChanged only).
   Q_INVOKABLE void selectPath(const QString& path);
   /// Move selection by step among selectable entries; commits when path changes.
   Q_INVOKABLE bool selectRelative(int step);
@@ -52,6 +59,10 @@ class EditorLutCatalogModel : public EditorAdjustmentModelBase {
   [[nodiscard]] Q_INVOKABLE QString defaultLutPath() const;
   /// Absolute filesystem directory for "Open folder". Empty when unavailable.
   [[nodiscard]] Q_INVOKABLE QString directoryPath() const;
+  /// Toggle a path's favorite status and persist via QSettings.
+  Q_INVOKABLE void toggleFavoritePath(const QString& path);
+  /// True when path is present in the persisted favoritePaths list.
+  Q_INVOKABLE bool isFavoritePath(const QString& path) const;
 
  signals:
   void entriesChanged();
@@ -60,12 +71,15 @@ class EditorLutCatalogModel : public EditorAdjustmentModelBase {
   void filterTextChanged();
   void settledCommitted();
   void openFolderRequested(const QString& path);
+  void favoritePathsChanged();
 
  private:
   void rebuildEntriesView();
   void applySelectionHighlight();
   void submitSettled();
   [[nodiscard]] auto buildParamsJson() const -> QString;
+  void loadFavoriteSettings();
+  void saveFavoriteSettings() const;
 
   lut_catalog::LutCatalog catalog_{};
   QVariantList            entries_;
@@ -76,6 +90,7 @@ class EditorLutCatalogModel : public EditorAdjustmentModelBase {
   bool                    canOpenDirectory_  = false;
   QString                 filterText_;
   std::string             selectedPathUtf8_;
+  QStringList             favoritePaths_{};
 };
 
 }  // namespace alcedo::ui

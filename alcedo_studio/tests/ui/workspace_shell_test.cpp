@@ -1574,9 +1574,11 @@ TEST_F(WorkspaceShellTests, AdjustmentPanelsSwitchAndSurviveWorkspaceRoundTrip) 
   ASSERT_NE(session, nullptr);
   EXPECT_EQ(session->active_adjustment_panel(), QStringLiteral("tone"));
 
-  const QStringList panels = {QStringLiteral("tone"), QStringLiteral("look"),
-                              QStringLiteral("display"), QStringLiteral("geometry"),
-                              QStringLiteral("raw")};
+  // Order matches EditorAdjustmentStack navbar + StackLayout indices:
+  // tone=0, look=1, lut=2, display=3, geometry=4, raw=5.
+  const QStringList panels = {QStringLiteral("tone"),     QStringLiteral("look"),
+                              QStringLiteral("lut"),      QStringLiteral("display"),
+                              QStringLiteral("geometry"), QStringLiteral("raw")};
   for (const auto& panel : panels) {
     auto* nav = loaded->window->findChild<QQuickItem*>(
         QStringLiteral("editorAdjustmentNav_") + panel);
@@ -1610,7 +1612,7 @@ TEST_F(WorkspaceShellTests, AdjustmentPanelsSwitchAndSurviveWorkspaceRoundTrip) 
   auto* stack =
       loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentPanelStack"));
   ASSERT_NE(stack, nullptr);
-  EXPECT_EQ(stack->property("currentIndex").toInt(), 3);
+  EXPECT_EQ(stack->property("currentIndex").toInt(), 4);
 
   loaded.reset();
   {

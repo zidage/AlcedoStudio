@@ -76,6 +76,29 @@ and notify via `ThemeChanged`.
 | **Button pressed fill** | **`buttonPressedFillColor`** | **Opaque pressed-state fill** (= hover well) |
 | **Button selected fill** | **`buttonSelectedFillColor`** | **Opaque selected-state fill** (= pressed / hover well) |
 | **Disabled surface** | **`disabledSurfaceColor`** | **Reserved muted shell token** (not used for editor side-panel shells) |
+| **List selected fill** | **`editorListSelectedFillColor`** | **Monochrome light well for dense catalog rows** (LUT browser, inverted selection) |
+| **List selected ink** | **`editorListSelectedInkColor`** | **Text / icon ink on the light selected well** (= `bgBaseColor`) |
+| **List favorite idle** | **`editorListFavoriteIdleColor`** | **Unstarred glyph on sunken (dark) rows** |
+| **List favorite active** | **`editorListFavoriteActiveColor`** | **Starred glyph on sunken rows** (`accentColor` / toneGold) |
+| **List favorite idle on selected** | **`editorListFavoriteIdleOnSelectedColor`** | **Unstarred glyph inverted on the light well** |
+| **List favorite active on selected** | **`editorListFavoriteActiveOnSelectedColor`** | **Starred glyph inverted on the light well** (full ink) |
+
+**Monochrome inverted list selection:** dense catalogs (LUT panel first) keep a
+black-and-white row language — sunken `bgBaseColor` track, light
+`editorListSelectedFillColor` bar, `editorListSelectedInkColor` for title and
+secondary copy. Favorite stars **invert with the row**: muted light idle + gold
+active on dark rows; muted ink idle + full ink active on the selected light
+well. Type badges use a white chip (`editorSliderHandleColor`) on dark rows and
+invert to ink-on-bone when the row is selected. Do not reintroduce ad-hoc
+`#D8D4CD` / `Qt.rgba` star or badge colors in feature QML.
+
+**Selection restore rule (adjustment panels):** each panel exposes
+`loadFromSnapshot(snapshot)` and reads selection/values from the session
+snapshot on `Component.onCompleted`, `onEditorSessionChanged`, and the stack’s
+`AdjustmentSnapshotChanged` fan-out. List selection highlight must bind a
+panel-level `selectedPath` (or equivalent) property — do not hide the
+dependency inside a JS helper alone, or re-entry after a workspace switch will
+leave the list without a selected row.
 
 **Surface equality rule:** History/Versions rail and panel, adjustment shell,
 filmstrip dock, and editor viewport placeholder all resolve base fill through
@@ -204,7 +227,7 @@ Non-Tabler assets are preserved for established Alcedo-specific actions
 | Loading | Muted status label (e.g. viewport “Preparing…”) |
 | Error | `dangerColor` / `dangerTintColor` — no ad-hoc reds |
 | Disabled | Muted icon/text tint + `enabled: false`; editor shells keep card surface (no parent opacity, no second shell tone) |
-| Selected | `buttonSelectedFillColor` well on icon actions (fill only — SVG tint stays default); library uses `selectedTintColor` |
+| Selected | `buttonSelectedFillColor` well on icon actions (fill only — SVG tint stays default); library uses `selectedTintColor`; dense catalog rows use `editorListSelectedFillColor` + inverted ink/stars |
 | Hover | Quiet `buttonHoveredFillColor` well unless capsule exception applies |
 
 ---

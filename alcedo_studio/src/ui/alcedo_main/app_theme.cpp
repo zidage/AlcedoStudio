@@ -906,6 +906,42 @@ auto AppTheme::EditorSliderHandleBorderColor() -> QColor {
   return WithAlpha(AppTheme::Instance().bgCanvasColor(), 228);
 }
 
+// Monochrome inverted list selection: light bone well on sunken tracks
+// (same family as the historical LUT/Look #D8D4CD bar). Ink is the deep
+// base so title/secondary copy invert cleanly. Favorite stars use a light
+// muted idle on dark rows and the same ink (muted/full) on the selected
+// well so the glyph never disappears into the bar.
+auto AppTheme::editorListSelectedFillColor() const -> QColor {
+  // Warm bone, slightly lifted from handle white so selected rows read as a
+  // solid light slab rather than a cool slider accent.
+  return Blend(EditorSliderHandleColor(), QColor(0xD8, 0xD4, 0xCD), 0.55);
+}
+
+auto AppTheme::editorListSelectedInkColor() const -> QColor {
+  return bgBaseColor();
+}
+
+auto AppTheme::editorListFavoriteIdleColor() const -> QColor {
+  // Opaque stand-in for the former rgba(1,1,1,0.25) idle star on dark rows.
+  return Blend(bgBaseColor(), textColor(), 0.28);
+}
+
+auto AppTheme::editorListFavoriteActiveColor() const -> QColor {
+  // Gold accent when starred on the sunken (dark) track.
+  return accentColor();
+}
+
+auto AppTheme::editorListFavoriteIdleOnSelectedColor() const -> QColor {
+  // Inverted idle: muted ink on the light selected well.
+  return Blend(editorListSelectedFillColor(), editorListSelectedInkColor(), 0.38);
+}
+
+auto AppTheme::editorListFavoriteActiveOnSelectedColor() const -> QColor {
+  // Inverted active: full ink on the light well (true invert of light-on-dark).
+  // Keeps the star legible; gold-on-bone was too low-contrast for a selected row.
+  return editorListSelectedInkColor();
+}
+
 auto AppTheme::uiFontFamily() const -> QString {
   RegisterFonts();
   return ActiveUiFamily(FontState());

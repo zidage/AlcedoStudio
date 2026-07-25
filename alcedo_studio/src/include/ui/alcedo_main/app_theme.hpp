@@ -117,6 +117,18 @@ class AppTheme final : public QObject {
   Q_PROPERTY(QColor editorSliderHandleColor READ editorSliderHandleColor NOTIFY ThemeChanged)
   Q_PROPERTY(
       QColor editorSliderHandleBorderColor READ editorSliderHandleBorderColor NOTIFY ThemeChanged)
+  // Monochrome inverted list rows (dense catalogs: LUT browser, etc.).
+  // Selected well is a light bone bar on the sunken track; text and favorite
+  // stars invert ink on that well so they stay readable without ad-hoc rgba.
+  Q_PROPERTY(QColor editorListSelectedFillColor READ editorListSelectedFillColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor editorListSelectedInkColor READ editorListSelectedInkColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor editorListFavoriteIdleColor READ editorListFavoriteIdleColor NOTIFY ThemeChanged)
+  Q_PROPERTY(
+      QColor editorListFavoriteActiveColor READ editorListFavoriteActiveColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor editorListFavoriteIdleOnSelectedColor READ editorListFavoriteIdleOnSelectedColor
+                 NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor editorListFavoriteActiveOnSelectedColor READ
+                 editorListFavoriteActiveOnSelectedColor NOTIFY ThemeChanged)
 
  public:
   enum class FontRole : int {
@@ -250,6 +262,12 @@ class AppTheme final : public QObject {
   auto        editorSliderNegativeColor() const -> QColor { return EditorSliderAccentColor(false); }
   auto        editorSliderHandleColor() const -> QColor { return EditorSliderHandleColor(); }
   auto editorSliderHandleBorderColor() const -> QColor { return EditorSliderHandleBorderColor(); }
+  auto        editorListSelectedFillColor() const -> QColor;
+  auto        editorListSelectedInkColor() const -> QColor;
+  auto        editorListFavoriteIdleColor() const -> QColor;
+  auto        editorListFavoriteActiveColor() const -> QColor;
+  auto        editorListFavoriteIdleOnSelectedColor() const -> QColor;
+  auto        editorListFavoriteActiveOnSelectedColor() const -> QColor;
 
   auto currentThemeIndex() const -> int;
   void setCurrentThemeIndex(int index);

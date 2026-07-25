@@ -5,7 +5,8 @@ import Alcedo.Main 1.0
 
 // Phase 6D Look panel — ergonomic IA over the production operator set:
 // White Balance first, global color amount, selective HSL, original three-disc
-// CDL trackballs (Gamma top / Lift+Gain bottom), detail + texture, then LUT.
+// CDL trackballs (Gamma top / Lift+Gain bottom), detail + texture.
+// LUT moved to its own standalone panel (LUTPanel.qml).
 // Values submit through the EditorSessionController submitter seam only.
 Item {
     id: root
@@ -13,6 +14,7 @@ Item {
 
     property var theme: null
     property var editorSession: null
+    property var lutModel: null
     property bool controlsEnabled: true
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
@@ -47,7 +49,6 @@ Item {
         sharpenModel.enabled = on
         filmGrainModel.enabled = on
         halationModel.enabled = on
-        lutModel.enabled = on
     }
 
     onControlsEnabledChanged: wireEnabled()
@@ -68,7 +69,6 @@ Item {
         loadSharpenFromSnapshot(snapshot)
         loadNestedStrength(filmGrainModel, "film_grain", "strength", snapshot)
         loadNestedStrength(halationModel, "halation", "strength", snapshot)
-        loadLutFromSnapshot(snapshot)
     }
 
     function loadModelFromSnapshot(model, fieldKey, snapshot) {
@@ -197,22 +197,6 @@ Item {
         applyWheel("gain", cw.gain)
     }
 
-    function loadLutFromSnapshot(snapshot) {
-        if (!snapshot)
-            return
-        const entry = snapshot.lut !== undefined ? snapshot.lut : snapshot.ocio_lmt
-        if (entry === undefined)
-            return
-        var path = ""
-        if (typeof entry === "string")
-            path = entry
-        else if (entry.ocio_lmt !== undefined)
-            path = String(entry.ocio_lmt)
-        else if (entry.path !== undefined)
-            path = String(entry.path)
-        lutModel.setSelectedPath(path)
-        lutModel.refresh(false)
-    }
 
     EditorColorTempModel {
         id: colorTempModel
@@ -312,11 +296,6 @@ Item {
         paramsBuilder: function (v) {
             return JSON.stringify({ halation: { strength: v } })
         }
-    }
-    EditorLutCatalogModel {
-        id: lutModel
-        objectName: "lookLutModel"
-        submitter: root.editorSession
     }
 
     component SectionShell: CollapsibleSection {
@@ -1013,115 +992,6 @@ Item {
                 }
             }
 
-            // ── LUT ───────────────────────────────────────────────────────
-            SectionShell {
-                objectName: "editorAdjustmentGroupShell_look_lut"
-                title: qsTr("LUT")
-                expanded: true
-                bodyContentHeight: lutBody.implicitHeight + 8
-
-                ColumnLayout {
-                    id: lutBody
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.top: parent.top
-                    anchors.margins: 6
-                    spacing: 8
-
-                    Text {
-                        Layout.fillWidth: true
-                        text: lutModel.directoryText
-                        color: root.colMuted
-                        font.pixelSize: appTheme.fontSizeCaption
-                        elide: Text.ElideMiddle
-                    }
-                    Text {
-                        Layout.fillWidth: true
-                        text: lutModel.statusText
-                        color: root.colMuted
-                        font.pixelSize: appTheme.fontSizeCaption
-                    }
-
-                    TextField {
-                        id: lutFilter
-                        objectName: "lookLutFilterField"
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: 28
-                        padding: 6
-                        placeholderText: qsTr("Filter LUTs")
-                        color: root.colText
-                        placeholderTextColor: root.colMuted
-                        enabled: root.controlsEnabled
-                        onTextChanged: lutModel.filterText = text
-                        background: Rectangle {
-                            color: root.colBase
-                            border.width: 1
-                            border.color: root.colCardBorder
-                            radius: 6
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.fillWidth: true
-                        spacing: 6
-                        ActionChip {
-                            label: qsTr("Refresh")
-                            chipEnabled: root.controlsEnabled
-                            onActivated: lutModel.refresh(true)
-                        }
-                        ActionChip {
-                            label: qsTr("Open folder")
-                            chipEnabled: root.controlsEnabled && lutModel.canOpenDirectory
-                            onActivated: Qt.openUrlExternally("file:///" + lutModel.directoryPath())
-                        }
-                        Item { Layout.fillWidth: true }
-                    }
-
-                    ListView {
-                        id: lutList
-                        objectName: "lookLutList"
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: Math.min(200, Math.max(72, count * 36))
-                        clip: true
-                        model: lutModel.entries
-                        spacing: 2
-                        boundsBehavior: Flickable.StopAtBounds
-                        delegate: Rectangle {
-                            width: lutList.width
-                            height: 34
-                            radius: 6
-                            color: modelData.selected ? root.colFill : root.colBase
-                            border.color: root.colCardBorder
-                            opacity: modelData.selectable ? 1.0 : 0.5
-                            Column {
-                                anchors.fill: parent
-                                anchors.margins: 6
-                                spacing: 0
-                                Text {
-                                    width: parent.width
-                                    text: modelData.displayName
-                                    color: modelData.selected ? root.colBase : root.colText
-                                    elide: Text.ElideRight
-                                    font.pixelSize: appTheme.fontSizeBody
-                                }
-                                Text {
-                                    width: parent.width
-                                    text: modelData.secondaryText || modelData.statusText || ""
-                                    color: modelData.selected ? root.colBase : root.colMuted
-                                    elide: Text.ElideRight
-                                    font.pixelSize: appTheme.fontSizeCaption
-                                    visible: text.length > 0
-                                }
-                            }
-                            MouseArea {
-                                anchors.fill: parent
-                                enabled: root.controlsEnabled && modelData.selectable
-                                onClicked: lutModel.selectPath(modelData.path)
-                            }
-                        }
-                    }
-                }
-            }
 
             // Preserve Phase 4C fold objectName for Look panel selection tests.
             Item {

@@ -43,7 +43,46 @@ auto KindString(lut_catalog::LutCatalogEntryKind kind) -> QString {
 EditorLutCatalogModel::EditorLutCatalogModel(QObject* parent) : EditorAdjustmentModelBase(parent) {
   setFieldKey(QStringLiteral("lut"));
   setLabel(QStringLiteral("LUT"));
+  loadFavoriteSettings();
   refresh(false);
+}
+
+EditorLutCatalogModel::~EditorLutCatalogModel() = default;
+
+void EditorLutCatalogModel::loadFavoriteSettings() {
+  QSettings settings;
+  favoritePaths_ = settings.value(QStringLiteral("editor/lutPanel/favoritePaths")).toStringList();
+}
+
+void EditorLutCatalogModel::saveFavoriteSettings() const {
+  QSettings settings;
+  settings.setValue(QStringLiteral("editor/lutPanel/favoritePaths"), favoritePaths_);
+}
+
+void EditorLutCatalogModel::setFavoritePaths(const QStringList& paths) {
+  if (favoritePaths_ == paths)
+    return;
+  favoritePaths_ = paths;
+  saveFavoriteSettings();
+  emit favoritePathsChanged();
+}
+
+void EditorLutCatalogModel::toggleFavoritePath(const QString& path) {
+  const QString trimmed = path.trimmed();
+  if (trimmed.isEmpty())
+    return;
+  const int idx = favoritePaths_.indexOf(trimmed);
+  if (idx >= 0) {
+    favoritePaths_.removeAt(idx);
+  } else {
+    favoritePaths_.append(trimmed);
+  }
+  saveFavoriteSettings();
+  emit favoritePathsChanged();
+}
+
+bool EditorLutCatalogModel::isFavoritePath(const QString& path) const {
+  return !path.trimmed().isEmpty() && favoritePaths_.contains(path.trimmed());
 }
 
 void EditorLutCatalogModel::setSelectedPath(const QString& path) {
@@ -151,6 +190,19 @@ void EditorLutCatalogModel::rebuildEntriesView() {
     map.insert(QStringLiteral("statusText"), entry.status_text_);
     map.insert(QStringLiteral("selectable"), entry.selectable_);
     map.insert(QStringLiteral("valid"), entry.valid_);
+    map.insert(QStringLiteral("fileSize"), static_cast<qlonglong>(entry.file_size_bytes_));
+    map.insert(QStringLiteral("lutEdge"), entry.edge3d_);
+    map.insert(QStringLiteral("lutSize1d"), entry.size1d_);
+    map.insert(QStringLiteral("modifiedTimeSortKey"), entry.modified_time_sort_key_);
+    {
+      QString typeText;
+      if (entry.edge3d_ > 0) {
+        typeText = QStringLiteral("3D %1").arg(entry.edge3d_);
+      } else if (entry.size1d_ > 0) {
+        typeText = QStringLiteral("1D %1").arg(entry.size1d_);
+      }
+      map.insert(QStringLiteral("lutTypeBadge"), typeText);
+    }
     map.insert(QStringLiteral("selected"), entry.path_ == selectedPathUtf8_ ||
                                                (entry.kind_ == lut_catalog::LutCatalogEntryKind::None &&
                                                 selectedPathUtf8_.empty()));
@@ -161,6 +213,11 @@ void EditorLutCatalogModel::rebuildEntriesView() {
 }
 
 void EditorLutCatalogModel::applySelectionHighlight() {
+  // Update selected flags and selectedIndex only. Do not emit entriesChanged:
+  // a full list reset on every click makes QML ListViews rebuild, jump
+  // contentY, and pin the selected row to the bottom of the viewport.
+  // Selection is communicated via selectedPathChanged; UIs should derive
+  // highlight from selectedPath / selectedIndex.
   selectedIndex_ = -1;
   for (int i = 0; i < entries_.size(); ++i) {
     auto map = entries_[i].toMap();
@@ -175,7 +232,6 @@ void EditorLutCatalogModel::applySelectionHighlight() {
       selectedIndex_ = i;
     }
   }
-  emit entriesChanged();
 }
 
 void EditorLutCatalogModel::submitSettled() { submitNow(buildParamsJson(), true); }
