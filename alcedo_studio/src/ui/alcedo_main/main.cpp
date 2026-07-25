@@ -104,6 +104,7 @@ int main(int argc, char* argv[]) {
 
   // Parse --editor-backend before QApplication so ShareOpenGLContexts can be set
   // when OpenCL is selected. Backend application runs after QApplication exists.
+  // const auto backend_parse = alcedo::editor_rhi::ParseEditorBackendArgs(argc, argv);
   const auto backend_parse = alcedo::editor_rhi::ParseEditorBackendArgs(argc, argv);
   if (backend_parse.present && !backend_parse.error.empty()) {
     qCritical("Invalid --editor-backend: %s", backend_parse.error.c_str());
@@ -123,6 +124,7 @@ int main(int argc, char* argv[]) {
   if (editor_backend == alcedo::editor_rhi::EditorBackend::OpenCl) {
     QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
   }
+
 
   alcedo::TimeProvider::Refresh();
   alcedo::RegisterAllOperators();

@@ -407,6 +407,8 @@ Item {
     }
 
     // Phase 6C-7: auto-load panel state when the backend publishes a snapshot.
+    // Interactive submitPatch no longer emits this on every pointer move (session
+    // controller suppresses the echo). Settled / undo / image-switch still publish.
     Connections {
         target: root.editorSession
         function onAdjustmentSnapshotChanged() {

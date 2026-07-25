@@ -229,6 +229,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Phase 6C-7: cached adjustment snapshot + monotonic revision.
   mutable QVariantMap adjustment_snapshot_;
   quint64              snapshot_revision_ = 0;
+  /// When true, OnBackendChanged still refreshes the cached snapshot map but
+  /// does not emit AdjustmentSnapshotChanged. Used for interactive submitPatch
+  /// so pointer moves do not re-enter QML loadFromSnapshot on every tick.
+  bool suppress_snapshot_publish_ = false;
   /// Convert EditorRenderAdjustmentSnapshot patches into a QVariantMap keyed
   /// by field_key with parsed JSON values suitable for QML model loading.
   [[nodiscard]] static auto

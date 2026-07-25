@@ -14,6 +14,7 @@
 #include <QObject>
 #include <QThread>
 #include <QTimer>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -160,6 +161,48 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   }
 
   void NotifyWithoutStateChange() { NotifyChange(); }
+
+  // Phase 6D multi-slider: Patch/Commit update the live snapshot and NotifyChange
+  // the same way EditorSessionService::Emit does after HandlePatch.
+  int patch_count  = 0;
+  int commit_count = 0;
+
+  auto Patch(EditorAdjustmentPatch patch) -> EditorSessionResult override {
+    ++patch_count;
+    UpsertSnapshotPatch(std::move(patch));
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::RenderRouted;
+    result.state    = state_;
+    result.identity = identity_;
+    NotifyChange();
+    return result;
+  }
+
+  auto CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult override {
+    ++commit_count;
+    UpsertSnapshotPatch(std::move(patch));
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::RenderRouted;
+    result.state    = state_;
+    result.identity = identity_;
+    NotifyChange();
+    return result;
+  }
+
+ private:
+  void UpsertSnapshotPatch(EditorAdjustmentPatch patch) {
+    auto& patches = current_snapshot_.patches;
+    const auto it =
+        std::find_if(patches.begin(), patches.end(), [&](const EditorAdjustmentPatch& p) {
+          return p.field_key == patch.field_key;
+        });
+    if (it == patches.end()) {
+      patches.push_back(std::move(patch));
+    } else {
+      *it = std::move(patch);
+    }
+    ++current_snapshot_.snapshot_generation;
+  }
 };
 
 TEST(EditorSessionControllerPhase5ATest, RoutesOpenThroughInjectedFakeBackend) {
@@ -614,6 +657,86 @@ TEST(EditorSessionControllerPhase5ATest, NoBackendReturnsEmptySnapshot) {
 }
 
 TEST(EditorSessionControllerPhase5ATest, SnapshotSignalFiresOnChange) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(nullptr, &backend);
+
+  int signal_count = 0;
+  QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
+                   [&] { ++signal_count; });
+
+  EditorRenderAdjustmentSnapshot snap;
+  snap.patches = {EditorAdjustmentPatch{"contrast", R"({"contrast":10.0})", true}};
+  backend.SetAdjustmentSnapshot(snap);
+  backend.NotifyWithoutStateChange();
+  EXPECT_GE(signal_count, 1);
+}
+
+TEST(EditorSessionControllerPhase5ATest,
+     InteractiveSubmitPatchDoesNotEmitAdjustmentSnapshotChanged) {
+  // Repro: multi-slider handoff freezes when every interactive submitPatch
+  // emits AdjustmentSnapshotChanged → QML loadFromSnapshot on the GUI stack.
+  FakeSessionBackend backend;
+  backend.state_ = EditorSessionState::Interactive;
+  backend.identity_.element_id        = 1;
+  backend.identity_.image_id          = 2;
+  backend.identity_.session_generation = 1;
+  EditorSessionController controller(nullptr, &backend);
+
+  int snapshot_signals = 0;
+  int state_signals    = 0;
+  QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
+                   [&] { ++snapshot_signals; });
+  QObject::connect(&controller, &EditorSessionController::StateChanged, [&] { ++state_signals; });
+
+  // Rapid interactive moves across two fields (saturation then vibrance).
+  for (int i = 1; i <= 8; ++i) {
+    ASSERT_TRUE(controller.submitPatch(
+        QStringLiteral("saturation"),
+        QStringLiteral("{\"saturation\":%1}").arg(i * 5), false));
+  }
+  for (int i = 1; i <= 8; ++i) {
+    ASSERT_TRUE(controller.submitPatch(
+        QStringLiteral("vibrance"),
+        QStringLiteral("{\"vibrance\":%1}").arg(i * 3), false));
+  }
+
+  EXPECT_EQ(backend.patch_count, 16);
+  EXPECT_EQ(snapshot_signals, 0)
+      << "interactive submitPatch must not flood AdjustmentSnapshotChanged "
+         "(each emit re-enters QML loadFromSnapshot during pointer moves)";
+  EXPECT_GE(state_signals, 1) << "StateChanged must still fire for renderBusy bindings";
+  // Cache stays warm so a later external NotifyChange does not look brand-new
+  // unless params actually change again.
+  EXPECT_GE(controller.snapshot_revision(), 1u);
+  EXPECT_TRUE(controller.adjustment_snapshot().contains(QStringLiteral("saturation")));
+  EXPECT_TRUE(controller.adjustment_snapshot().contains(QStringLiteral("vibrance")));
+}
+
+TEST(EditorSessionControllerPhase5ATest, SettledSubmitPatchEmitsAdjustmentSnapshotChanged) {
+  FakeSessionBackend backend;
+  backend.state_ = EditorSessionState::Interactive;
+  backend.identity_.element_id         = 1;
+  backend.identity_.image_id           = 2;
+  backend.identity_.session_generation = 1;
+  EditorSessionController controller(nullptr, &backend);
+
+  int snapshot_signals = 0;
+  QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
+                   [&] { ++snapshot_signals; });
+
+  // Interactive first (no signal), then settled (must signal for panel sync).
+  ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
+                                     QStringLiteral("{\"exposure\":0.5}"), false));
+  EXPECT_EQ(snapshot_signals, 0);
+
+  ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
+                                     QStringLiteral("{\"exposure\":0.8}"), true));
+  EXPECT_GE(snapshot_signals, 1)
+      << "settled submitPatch must publish AdjustmentSnapshotChanged";
+  EXPECT_EQ(backend.commit_count, 1);
+}
+
+TEST(EditorSessionControllerPhase5ATest, SnapshotSignalDoesNotRetriggerOnSameNotify) {
   FakeSessionBackend      backend;
   EditorSessionController controller(nullptr, &backend);
 

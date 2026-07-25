@@ -87,12 +87,16 @@ Item {
     }
 
     Rectangle {
+        id: sectionChrome
+        objectName: "collapsibleSectionChrome"
         anchors.fill: parent
         radius: appTheme.controlRadiusSmall
         // Phase 4D: opaque disabled surface (was opacity: 0.55 on the shell).
+        // Look/Tone panels stay borderless — surface separation comes from
+        // spacing and header typography, not a card stroke.
         color: root.controlsEnabled ? root.surfaceColor : root.disabledSurfaceColor
-        border.width: 1
-        border.color: root.borderColor
+        border.width: 0
+        border.color: "transparent"
 
         ColumnLayout {
             anchors.fill: parent

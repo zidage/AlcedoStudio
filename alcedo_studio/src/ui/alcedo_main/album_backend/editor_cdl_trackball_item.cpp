@@ -369,9 +369,13 @@ void EditorCdlTrackballItem::mousePressEvent(QMouseEvent* event) {
     QQuickItem::mousePressEvent(event);
     return;
   }
-  dragging_ = true;
-  const QPointF n = CdlTrackballToNormalizedPoint(event->position(), last_disc_rect_);
+  dragging_  = true;
+  discMoved_ = false;
+  // Click-to-position: sample on press. updateDiscDrag only marks the gesture
+  // moved (and submits) when the disc value actually changes — so a double-click
+  // on an unchanged point does not settle before resetWheel.
   model_->beginDiscDrag(wheel_role_);
+  const QPointF n = CdlTrackballToNormalizedPoint(event->position(), last_disc_rect_);
   model_->updateDiscDrag(wheel_role_, n.x(), n.y());
   event->accept();
 }
@@ -382,6 +386,7 @@ void EditorCdlTrackballItem::mouseMoveEvent(QMouseEvent* event) {
     return;
   }
   const QPointF n = CdlTrackballToNormalizedPoint(event->position(), last_disc_rect_);
+  discMoved_      = true;
   model_->updateDiscDrag(wheel_role_, n.x(), n.y());
   event->accept();
 }
@@ -393,10 +398,13 @@ void EditorCdlTrackballItem::mouseReleaseEvent(QMouseEvent* event) {
   }
   dragging_ = false;
   if (model_) {
-    const QPointF n = CdlTrackballToNormalizedPoint(event->position(), last_disc_rect_);
-    model_->updateDiscDrag(wheel_role_, n.x(), n.y());
+    if (discMoved_) {
+      const QPointF n = CdlTrackballToNormalizedPoint(event->position(), last_disc_rect_);
+      model_->updateDiscDrag(wheel_role_, n.x(), n.y());
+    }
     model_->finishDiscDrag();
   }
+  discMoved_ = false;
   event->accept();
 }
 
@@ -408,7 +416,8 @@ void EditorCdlTrackballItem::mouseDoubleClickEvent(QMouseEvent* event) {
   // Abort any open press/drag from the double-click sequence. resetWheel()
   // clears model drag state and commits the identity wheel once — do not call
   // finishDiscDrag here (that would settle the pre-reset disc position first).
-  dragging_ = false;
+  dragging_  = false;
+  discMoved_ = false;
   model_->resetWheel(wheel_role_);
   event->accept();
 }

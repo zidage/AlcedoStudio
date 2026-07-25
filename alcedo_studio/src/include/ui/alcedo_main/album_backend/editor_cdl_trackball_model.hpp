@@ -125,6 +125,8 @@ class EditorCdlTrackballModel : public EditorAdjustmentModelBase {
   WheelId dragWheel_  = WheelId::Lift;
   bool    draggingDisc_ = false;
   bool    draggingMaster_ = false;
+  /// True once updateDisc/Master changed state in the open gesture.
+  bool    dragMoved_ = false;
 };
 
 }  // namespace alcedo::ui

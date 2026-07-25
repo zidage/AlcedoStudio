@@ -6,10 +6,13 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <mutex>
+#include <thread>
 
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_mini_git_materializer.hpp"
@@ -78,6 +81,75 @@ TEST_F(EditorSessionHistoryPortTest, SettledAdjustmentCreatesOneCommitAndUndoRed
   EXPECT_FALSE(guard_->working_head_commit_hash_.has_value());
   ASSERT_TRUE(history_.Redo(handle, &error)) << error;
   EXPECT_TRUE(guard_->working_head_commit_hash_.has_value());
+}
+
+TEST_F(EditorSessionHistoryPortTest,
+       CaptureAndCommitDoNotBlockGuiWhilePipelineRenderLockHeld) {
+  // Multi-slider hang repro: worker holds GetRenderLock() for a long Apply
+  // (and may wait on the GUI for present). Capture/Commit on the "GUI" thread
+  // must not block on that lock — otherwise finish(A) / start(B) freezes the UI.
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+
+  // Seed committed snapshot so Capture prefers it (no lock).
+  {
+    const alcedo::EditorAdjustmentPatch seed{"saturation", R"({"saturation":0})", true};
+    ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, seed, &error)) << error;
+    ASSERT_TRUE(history_.CommitAdjustment(handle, seed, &error)) << error;
+  }
+
+  std::atomic<bool> worker_ready{false};
+  std::atomic<bool> release_worker{false};
+  std::thread       worker([&] {
+    std::unique_lock<std::mutex> held(guard_->pipeline_->GetRenderLock());
+    worker_ready.store(true);
+    while (!release_worker.load()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  });
+  const auto ready_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!worker_ready.load() && std::chrono::steady_clock::now() < ready_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  ASSERT_TRUE(worker_ready.load());
+
+  // Rapid multi-field handoff while the lock is held for ~seconds.
+  const auto t0 = std::chrono::steady_clock::now();
+  const alcedo::EditorAdjustmentPatch sat_preview{"saturation", R"({"saturation":20})", false};
+  const alcedo::EditorAdjustmentPatch sat_settled{"saturation", R"({"saturation":40})", true};
+  const alcedo::EditorAdjustmentPatch vib_preview{"vibrance", R"({"vibrance":10})", false};
+  const alcedo::EditorAdjustmentPatch vib_settled{"vibrance", R"({"vibrance":30})", true};
+
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, sat_preview, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, sat_settled, &error)) << error;
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, vib_preview, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, vib_settled, &error)) << error;
+
+  const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              std::chrono::steady_clock::now() - t0)
+                              .count();
+  EXPECT_LT(elapsed_ms, 250)
+      << "Capture/Commit blocked " << elapsed_ms
+      << "ms while render lock held (GUI multi-slider hang class)";
+
+  release_worker.store(true);
+  if (worker.joinable()) {
+    worker.join();
+  }
+
+  alcedo::EditorRenderAdjustmentSnapshot snap;
+  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &snap, &error)) << error;
+  // Both fields should be in the committed snapshot after non-blocking commits.
+  bool has_sat = false;
+  bool has_vib = false;
+  for (const auto& p : snap.patches) {
+    if (p.field_key == "saturation") has_sat = true;
+    if (p.field_key == "vibrance") has_vib = true;
+  }
+  EXPECT_TRUE(has_sat);
+  EXPECT_TRUE(has_vib);
 }
 
 TEST_F(EditorSessionHistoryPortTest,

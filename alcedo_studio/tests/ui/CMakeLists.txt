@@ -696,6 +696,52 @@ gtest_discover_tests(EditorLookPanelInteractionTest
 )
 alcedo_register_test_target(EditorLookPanelInteractionTest ui)
 
+# Qt Quick Test: multi-slider user ops through production session/history path.
+# QML under tests/ui/qml/tst_*.qml; C++ wires EditorSessionController + real
+# EditorSessionHistoryPort + pipeline guard + contended render worker.
+add_executable(EditorMultiSliderQuickTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_multi_slider_quicktest.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorMultiSliderQuickTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorMultiSliderQuickTest
+    PRIVATE
+        AlbumBackendLib
+        Operators
+        EditPipeline
+        EditHistory
+        EditorAdjustmentPipeline
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickTest
+        Qt6::Test
+        Qt6::Widgets
+)
+# QUICK_TEST_SOURCE_DIR → directory containing tst_*.qml
+target_compile_definitions(EditorMultiSliderQuickTest
+    PRIVATE
+        ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+        QUICK_TEST_SOURCE_DIR="${ALCEDO_TEST_ROOT}/ui/qml"
+)
+# Quick Test discovers tests at runtime from QML; register one ctest entry.
+add_test(NAME EditorMultiSliderQuickTest
+    COMMAND EditorMultiSliderQuickTest
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:EditorMultiSliderQuickTest>
+)
+set_tests_properties(EditorMultiSliderQuickTest PROPERTIES
+    LABELS "workspace_qml;look_panel;quicktest"
+    TIMEOUT 600
+)
+alcedo_register_test_target(EditorMultiSliderQuickTest ui)
+
 add_executable(EditorRealRawGpuE2eTest
     ${ALCEDO_TEST_ROOT}/ui/editor_real_raw_gpu_e2e_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp

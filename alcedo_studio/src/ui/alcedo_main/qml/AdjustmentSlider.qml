@@ -4,7 +4,8 @@ import QtQuick.Layouts
 
 // Shared numeric adjustment slider + field. Binds to an
 // EditorAdjustmentValueModel and drives its pointer-drag state:
-//   - Pointer drag: beginDrag -> updateDrag (per move) -> finishDrag.
+//   - Handle drag only: beginDrag -> updateDrag (per move) -> finishDrag.
+//   - Track click does NOT jump the value (no absolute seek).
 //   - Double-click the slider (no drag movement): reset to default.
 //   - Keyboard arrows on the slider: editValue (interactive + debounced settled).
 //   - Field typing + Enter / focus-out: editValue + commitImmediately.
@@ -37,6 +38,8 @@ Item {
 
     readonly property int handleSize: 22
     readonly property int sliderRowHeight: 32
+    /// Hit radius around the handle center for starting a drag (px).
+    readonly property int handleHitPad: 12
 
     // Double-click detection without TapHandler (TapHandler steals the grab and
     // breaks continuous drag + real double-clicks on some styles).
@@ -44,6 +47,7 @@ Item {
     property double _pressValue: 0
     property double _lastClickMs: 0
     property var _savedFlickableInteractive: null
+    property bool _handleDragging: false
 
     implicitHeight: sliderColumn.implicitHeight
     Layout.fillWidth: true
@@ -96,30 +100,57 @@ Item {
         }
     }
 
-    function handlePressChanged(pressed) {
-        if (!root.model)
-            return
-        if (pressed) {
-            root._gestureMoved = false
-            root._pressValue = slider.value
-            root.lockFlickable(true)
-            root.model.beginDrag()
-        } else {
-            // Double-click: second press/release without movement within 350ms.
-            var now = Date.now()
-            var isDouble = !root._gestureMoved
-                    && (now - root._lastClickMs) < 350
-                    && Math.abs(slider.value - root._pressValue)
-                       <= Math.max(root.model.step * 0.5, 1e-9)
-            root._lastClickMs = now
+    function handleCenterX() {
+        return slider.leftPadding
+                + slider.visualPosition * (slider.availableWidth - root.handleSize)
+                + root.handleSize * 0.5
+    }
 
-            root.model.finishDrag()
-            root.lockFlickable(false)
+    function isNearHandle(localX) {
+        return Math.abs(localX - handleCenterX())
+                <= Math.max(root.handleSize * 0.5 + root.handleHitPad, 16)
+    }
 
-            if (isDouble && root.model.enabled) {
-                root.model.reset()
-            }
+    function valueFromLocalX(localX) {
+        var edge = root.handleSize * 0.5
+        var trackW = Math.max(1e-6, slider.availableWidth - root.handleSize)
+        var pos = (localX - slider.leftPadding - edge) / trackW
+        pos = Math.max(0, Math.min(1, pos))
+        var v = slider.from + pos * (slider.to - slider.from)
+        if (root.model && root.model.step > 0) {
+            v = Math.round(v / root.model.step) * root.model.step
         }
+        if (root.model) {
+            v = Math.max(root.model.minimum, Math.min(root.model.maximum, v))
+        }
+        return v
+    }
+
+    function finishPointerGesture() {
+        if (!root.model) {
+            root.lockFlickable(false)
+            root._handleDragging = false
+            return
+        }
+        // Double-click: second press/release without movement within 350ms.
+        var now = Date.now()
+        var isDouble = !root._gestureMoved
+                && (now - root._lastClickMs) < 350
+                && Math.abs(slider.value - root._pressValue)
+                   <= Math.max(root.model.step * 0.5, 1e-9)
+        root._lastClickMs = now
+        root.lockFlickable(false)
+
+        if (isDouble && root.model.enabled) {
+            // Reset clears any open drag and owns the single settled commit.
+            root.model.reset()
+            slider.value = root.model.value
+        } else if (root._handleDragging) {
+            root.model.finishDrag()
+            slider.value = root.model.value
+        }
+        // Track press without handle drag: no value change, no submit.
+        root._handleDragging = false
     }
 
     onModelChanged: syncField()
@@ -225,19 +256,15 @@ Item {
             rightPadding: 0
             topPadding: 0
             bottomPadding: 0
+            // Swallow Controls.Slider's built-in absolute seek; pointer input is
+            // owned by sliderInput (handle-drag only).
+            hoverEnabled: false
             Accessible.role: Accessible.Slider
             Accessible.name: root.model ? root.model.label : ""
             Accessible.description: root.model
-                ? qsTr("Adjust %1. Double-click to reset.").arg(root.model.label)
+                ? qsTr("Drag the handle to adjust %1. Double-click to reset.").arg(root.model.label)
                 : ""
 
-            onPressedChanged: root.handlePressChanged(pressed)
-            onMoved: {
-                root._gestureMoved = true
-                if (root.model) {
-                    root.model.updateDrag(slider.value)
-                }
-            }
             Keys.onLeftPressed: function (event) {
                 if (root.model) {
                     var v = Math.max(root.model.minimum, slider.value - root.model.step)
@@ -304,15 +331,64 @@ Item {
                     height: root.handleSize + 10
                     radius: width / 2
                     color: "transparent"
-                    border.width: slider.activeFocus || slider.pressed ? 1 : 0
+                    border.width: slider.activeFocus || root._handleDragging ? 1 : 0
                     border.color: root.colFill
+                }
+            }
+
+            // Owns pointer input so Controls.Slider cannot jump-to-click on the track.
+            MouseArea {
+                id: sliderInput
+                objectName: "adjustmentSliderInput"
+                anchors.fill: parent
+                enabled: root.model && root.model.enabled
+                preventStealing: true
+                hoverEnabled: false
+                acceptedButtons: Qt.LeftButton
+                cursorShape: root._handleDragging ? Qt.ClosedHandCursor : Qt.ArrowCursor
+
+                onPressed: function (mouse) {
+                    if (!root.model) {
+                        mouse.accepted = true
+                        return
+                    }
+                    slider.forceActiveFocus()
+                    root._gestureMoved = false
+                    root._pressValue = slider.value
+                    root.lockFlickable(true)
+                    if (root.isNearHandle(mouse.x)) {
+                        root._handleDragging = true
+                        root.model.beginDrag()
+                        // Keep value at press — no absolute jump toward click.
+                    } else {
+                        // Track press: swallow event, no beginDrag, no value change.
+                        root._handleDragging = false
+                    }
+                    mouse.accepted = true
+                }
+                onPositionChanged: function (mouse) {
+                    if (!root._handleDragging || !root.model)
+                        return
+                    root._gestureMoved = true
+                    var v = root.valueFromLocalX(mouse.x)
+                    slider.value = v
+                    root.model.updateDrag(v)
+                }
+                onReleased: function (/*mouse*/) {
+                    root.finishPointerGesture()
+                }
+                onCanceled: {
+                    if (root._handleDragging && root.model)
+                        root.model.finishDrag()
+                    root._handleDragging = false
+                    root.lockFlickable(false)
                 }
             }
 
             Connections {
                 target: root.model
                 function onValueChanged() {
-                    if (!slider.pressed && root.model) {
+                    if (!root._handleDragging && root.model) {
                         slider.value = root.model.value
                     }
                 }

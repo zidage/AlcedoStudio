@@ -96,6 +96,7 @@ class EditorCdlTrackballItem : public QQuickItem {
   int                      geometry_revision_ = 0;
   bool                     geometry_dirty_    = true;
   bool                     dragging_          = false;
+  bool                     discMoved_         = false;
 
   QColor background_color_      = QColor(0x0F, 0x0F, 0x0F);
   QColor rim_color_             = QColor(0x2A, 0x2A, 0x2A);

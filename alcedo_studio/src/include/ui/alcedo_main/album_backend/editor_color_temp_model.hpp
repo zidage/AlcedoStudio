@@ -102,6 +102,10 @@ class EditorColorTempModel : public EditorAdjustmentModelBase {
   bool       supported_   = true;
   bool       dragActive_  = false;
   DragTarget dragTarget_  = DragTarget::None;
+  /// True once updateCct*/updateTint* changed a value in the open gesture.
+  /// Empty click halves of a double-click must not settle on finish*.
+  bool cctDragMoved_  = false;
+  bool tintDragMoved_ = false;
 };
 
 }  // namespace alcedo::ui

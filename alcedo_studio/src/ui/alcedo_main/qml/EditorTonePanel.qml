@@ -76,6 +76,9 @@ Item {
     /// The key inside the params map matches the fieldKey.
     function loadModelFromSnapshot(model, fieldKey, snapshot) {
         if (!model || !fieldKey || !snapshot) return
+        // In-flight pointer drag owns the value; snapshot echo must not fight it
+        // (multi-slider handoff / settled publish while another slider is live).
+        if (model.dragActive) return
         const entry = snapshot[fieldKey]
         if (entry === undefined) return
         // entry is a QVariantMap like {"exposure": 1.5}

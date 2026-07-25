@@ -74,6 +74,9 @@ Item {
     function loadModelFromSnapshot(model, fieldKey, snapshot) {
         if (!model || !fieldKey || !snapshot)
             return
+        // In-flight pointer drag owns the value; snapshot echo must not fight it.
+        if (model.dragActive)
+            return
         const entry = snapshot[fieldKey]
         if (entry === undefined)
             return
@@ -126,6 +129,10 @@ Item {
     function loadColorTempFromSnapshot(snapshot) {
         if (!snapshot || snapshot.color_temp === undefined)
             return
+        // Continuous CCT/tint drag must not be aborted by the interactive
+        // snapshot echo (EditorAdjustmentStack onAdjustmentSnapshotChanged).
+        if (colorTempModel.dragActive)
+            return
         const entry = snapshot.color_temp
         const ct = entry.color_temp !== undefined ? entry.color_temp : entry
         if (!ct)
@@ -166,6 +173,8 @@ Item {
 
     function loadCdlFromSnapshot(snapshot) {
         if (!snapshot || snapshot.color_wheel === undefined)
+            return
+        if (cdlModel.dragActive)
             return
         const entry = snapshot.color_wheel
         const cw = entry.color_wheel !== undefined ? entry.color_wheel : entry
@@ -411,8 +420,10 @@ Item {
         Layout.fillWidth: true
         Layout.preferredHeight: root.sliderRowHeight
         implicitHeight: root.sliderRowHeight
-        // Seed once; then press owns the value until release.
-        value: externalValue
+        // Seed once via Component.onCompleted / externalValue — do not bind
+        // `value: externalValue` permanently (that fights continuous drag and
+        // can leave the handle stale after reset once the binding is broken).
+        Component.onCompleted: value = externalValue
 
         onExternalValueChanged: {
             if (!pressed)
@@ -432,6 +443,10 @@ Item {
             }
         }
 
+        function syncFromExternal() {
+            value = externalValue
+        }
+
         onPressedChanged: {
             if (pressed) {
                 _gestureMoved = false
@@ -444,10 +459,17 @@ Item {
                         && (now - _lastClickMs) < 350
                         && Math.abs(value - _pressValue) <= Math.max(stepSize * 0.5, 1e-9)
                 _lastClickMs = now
-                onFinish()
                 lockScroll(false)
-                if (isDouble && enabled)
+                if (isDouble && enabled) {
+                    // Skip finish settle on the empty second click; reset owns
+                    // the single settled commit (avoids back-to-back history
+                    // commits while a render may hold the pipeline lock).
                     onReset()
+                    syncFromExternal()
+                } else {
+                    onFinish()
+                    syncFromExternal()
+                }
             }
         }
         onMoved: {

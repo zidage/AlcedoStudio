@@ -98,13 +98,19 @@ void EditorSessionController::OnBackendChanged() {
   SyncIdentityFromBackend();
   SyncViewportIdentity();
 
-  // Phase 6C-7: publish the adjustment snapshot from the backend.
+  // Phase 6C-7: keep the cached snapshot map warm on every backend change, but
+  // only emit AdjustmentSnapshotChanged when not suppressed. Interactive
+  // submitPatch suppresses the emit so each pointer move does not re-enter
+  // EditorAdjustmentStack.loadFromSnapshot (QML signal storm → GUI stall when
+  // switching sliders rapidly while history/render also touch the pipeline).
   const auto render_snapshot = session_backend_->adjustment_snapshot();
   auto       panel_snapshot  = BuildSnapshotMap(render_snapshot);
   if (panel_snapshot != adjustment_snapshot_) {
     adjustment_snapshot_ = std::move(panel_snapshot);
     ++snapshot_revision_;
-    emit AdjustmentSnapshotChanged();
+    if (!suppress_snapshot_publish_) {
+      emit AdjustmentSnapshotChanged();
+    }
   }
   emit StateChanged();
 }
@@ -572,8 +578,18 @@ bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, 
   patch.field_key   = fieldKey.toStdString();
   patch.params_json = paramsJson.toStdString();
   patch.settled     = settled;
+  // Typed models already own the live value during a pointer drag. Echoing the
+  // full adjustment snapshot into QML on every interactive patch forces
+  // loadFromSnapshot across Tone+Look while the mouse handler is still on the
+  // stack. Rapid handoff (finish slider A → drag slider B) multiplies that with
+  // history capture/commit under the pipeline render lock and freezes the GUI.
+  const bool previous_suppress = suppress_snapshot_publish_;
+  if (!settled) {
+    suppress_snapshot_publish_ = true;
+  }
   const auto result = settled ? session_backend_->CommitAdjustment(patch)
                               : session_backend_->Patch(patch);
+  suppress_snapshot_publish_ = previous_suppress;
   return result.kind != alcedo::EditorSessionResultKind::Rejected;
 }
 

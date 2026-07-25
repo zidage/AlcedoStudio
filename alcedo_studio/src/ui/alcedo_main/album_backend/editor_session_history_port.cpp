@@ -273,12 +273,53 @@ auto EditorSessionHistoryPort::CaptureAdjustmentBeforePreview(
   if (!state) return false;
   std::scoped_lock state_lock(state->mutex);
   if (state->pending_before.contains(patch.field_key)) return true;
+
+  // Prefer the committed snapshot for "before" so the GUI-thread submit path
+  // never blocks on pipeline_->GetRenderLock(). The scheduler holds that lock
+  // for the entire Apply (including frame present). Blocking here while a
+  // worker also needs the GUI for present is a classic multi-slider deadlock:
+  // finish slider A / start slider B freezes with the render spinner still on.
   alcedo::EditorAdjustmentOperatorState before;
-  std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
-  if (!alcedo::ReadEditorAdjustmentOperatorState(*state->pipeline_guard->pipeline_, patch.field_key,
-                                                 &before, error)) {
-    return false;
+  bool                                  resolved = false;
+  for (const auto& committed : state->committed_snapshot.patches) {
+    if (committed.field_key != patch.field_key) {
+      continue;
+    }
+    try {
+      before.params = committed.params_json.empty()
+                          ? nlohmann::json(nullptr)
+                          : nlohmann::json::parse(committed.params_json);
+    } catch (const std::exception& ex) {
+      if (error) *error = ex.what();
+      return false;
+    }
+    before.enabled = EnabledForAdjustmentParams(before.params);
+    resolved       = true;
+    break;
   }
+
+  if (!resolved) {
+    if (!state->pipeline_guard || !state->pipeline_guard->pipeline_) {
+      if (error) *error = "Editor pipeline is unavailable for adjustment capture";
+      return false;
+    }
+    // Fallback only when the field was never snapshotted. Use try_lock — never
+    // wait for a mid-flight Apply on the GUI thread.
+    std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock(),
+                                             std::try_to_lock);
+    if (render_lock.owns_lock()) {
+      if (!alcedo::ReadEditorAdjustmentOperatorState(*state->pipeline_guard->pipeline_,
+                                                     patch.field_key, &before, error)) {
+        return false;
+      }
+    } else {
+      // Pipeline is rendering; record an empty-object before rather than freeze.
+      // The next settled commit still pairs with whatever after-params arrive.
+      before.params  = nlohmann::json::object();
+      before.enabled = true;
+    }
+  }
+
   state->pending_before.emplace(patch.field_key, std::move(before));
   return true;
 }
@@ -319,14 +360,22 @@ auto EditorSessionHistoryPort::CommitAdjustment(const alcedo::EditorHistoryGuard
   payload.after_value    = after_params;
   payload.before_enabled = before->second.enabled;
   payload.after_enabled  = EnabledForAdjustmentParams(after_params);
-  {
+
+  // Apply to the live executor only if the render lock is free. Never block the
+  // GUI on a long Apply/present. The next routed render re-applies the full
+  // adjustment snapshot under prepare_with_render_lock on the worker.
+  if (state->pipeline_guard && state->pipeline_guard->pipeline_) {
     alcedo::EditorAdjustmentOperatorState after{after_params, payload.after_enabled};
-    std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
-    if (!alcedo::ApplyEditorAdjustmentOperatorState(*state->pipeline_guard->pipeline_, *spec, after,
-                                                    error)) {
-      return false;
+    std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock(),
+                                             std::try_to_lock);
+    if (render_lock.owns_lock()) {
+      if (!alcedo::ApplyEditorAdjustmentOperatorState(*state->pipeline_guard->pipeline_, *spec,
+                                                      after, error)) {
+        return false;
+      }
     }
   }
+
   const auto append = state->history->AppendEdit(std::move(payload));
   if (!append.committed) {
     if (error) *error = append.error;

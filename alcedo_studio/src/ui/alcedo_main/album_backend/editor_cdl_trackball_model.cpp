@@ -114,6 +114,7 @@ void EditorCdlTrackballModel::beginDiscDrag(const QString& wheel) {
   dragActive_     = true;
   draggingDisc_   = true;
   draggingMaster_ = false;
+  dragMoved_      = false;
   dragWheel_      = *id;
   emit dragActiveChanged();
 }
@@ -126,7 +127,14 @@ void EditorCdlTrackballModel::updateDiscDrag(const QString& wheel, double x, dou
   if (!id.has_value() || *id != dragWheel_) {
     return;
   }
+  auto&       state = wheelState(*id);
+  const auto  next  = color_wheel::ClampDiscPoint(QPointF(x, y));
+  if (std::abs(next.x() - state.disc_position_.x()) < 1e-6 &&
+      std::abs(next.y() - state.disc_position_.y()) < 1e-6) {
+    return;
+  }
   applyDisc(*id, x, y);
+  dragMoved_ = true;
   submitInteractive();
 }
 
@@ -136,7 +144,13 @@ void EditorCdlTrackballModel::finishDiscDrag() {
   }
   dragActive_     = false;
   draggingDisc_   = false;
+  const bool moved = dragMoved_;
+  dragMoved_       = false;
   emit dragActiveChanged();
+  // Empty click / double-click press half: no settle. resetWheel owns reset.
+  if (!moved) {
+    return;
+  }
   submitSettled();
   emit settledCommitted();
 }
@@ -149,6 +163,7 @@ void EditorCdlTrackballModel::beginMasterDrag(const QString& wheel) {
   dragActive_     = true;
   draggingMaster_ = true;
   draggingDisc_   = false;
+  dragMoved_      = false;
   dragWheel_      = *id;
   emit dragActiveChanged();
 }
@@ -161,7 +176,14 @@ void EditorCdlTrackballModel::updateMasterDragUi(const QString& wheel, int ui_va
   if (!id.has_value() || *id != dragWheel_) {
     return;
   }
+  auto&       state = wheelState(*id);
+  const float sign  = invertDelta(*id) ? -1.0f : 1.0f;
+  const float next  = color_wheel::CdlSliderUiToMaster(ui_value) * sign;
+  if (std::abs(next - state.master_offset_) < 1e-6f) {
+    return;
+  }
   applyMasterUi(*id, ui_value);
+  dragMoved_ = true;
   submitInteractive();
 }
 
@@ -171,7 +193,12 @@ void EditorCdlTrackballModel::finishMasterDrag() {
   }
   dragActive_     = false;
   draggingMaster_ = false;
+  const bool moved = dragMoved_;
+  dragMoved_       = false;
   emit dragActiveChanged();
+  if (!moved) {
+    return;
+  }
   submitSettled();
   emit settledCommitted();
 }
@@ -187,6 +214,7 @@ void EditorCdlTrackballModel::resetWheel(const QString& wheel) {
     dragActive_     = false;
     draggingDisc_   = false;
     draggingMaster_ = false;
+    dragMoved_      = false;
     emit dragActiveChanged();
   }
   CdlWheelState defaults =
@@ -204,6 +232,7 @@ void EditorCdlTrackballModel::resetAll() {
     dragActive_     = false;
     draggingDisc_   = false;
     draggingMaster_ = false;
+    dragMoved_      = false;
     emit dragActiveChanged();
   }
   lift_  = DefaultLiftWheelState();

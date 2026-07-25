@@ -142,7 +142,10 @@ void EditorColorTempModel::selectMode(int index) {
   emit settledCommitted();
 }
 
-void EditorColorTempModel::beginCctDrag() { setDragActive(true, DragTarget::Cct); }
+void EditorColorTempModel::beginCctDrag() {
+  cctDragMoved_ = false;
+  setDragActive(true, DragTarget::Cct);
+}
 
 void EditorColorTempModel::updateCctDrag(double kelvin) {
   if (!dragActive_ || dragTarget_ != DragTarget::Cct) {
@@ -154,6 +157,7 @@ void EditorColorTempModel::updateCctDrag(double kelvin) {
     return;
   }
   cct_ = next;
+  cctDragMoved_ = true;
   emit cctChanged();
   submitInteractive();
 }
@@ -167,11 +171,21 @@ void EditorColorTempModel::finishCctDrag() {
     return;
   }
   setDragActive(false, DragTarget::None);
+  // Empty press/release (including the first half of a double-click) must not
+  // settle — reset() owns the double-click commit. Settling here + reset causes
+  // back-to-back history commits while a render may hold the pipeline lock.
+  if (!cctDragMoved_) {
+    return;
+  }
+  cctDragMoved_ = false;
   submitSettled();
   emit settledCommitted();
 }
 
-void EditorColorTempModel::beginTintDrag() { setDragActive(true, DragTarget::Tint); }
+void EditorColorTempModel::beginTintDrag() {
+  tintDragMoved_ = false;
+  setDragActive(true, DragTarget::Tint);
+}
 
 void EditorColorTempModel::updateTintDrag(double value) {
   if (!dragActive_ || dragTarget_ != DragTarget::Tint) {
@@ -183,6 +197,7 @@ void EditorColorTempModel::updateTintDrag(double value) {
     return;
   }
   tint_ = next;
+  tintDragMoved_ = true;
   emit tintChanged();
   submitInteractive();
 }
@@ -192,6 +207,10 @@ void EditorColorTempModel::finishTintDrag() {
     return;
   }
   setDragActive(false, DragTarget::None);
+  if (!tintDragMoved_) {
+    return;
+  }
+  tintDragMoved_ = false;
   submitSettled();
   emit settledCommitted();
 }
@@ -229,8 +248,11 @@ void EditorColorTempModel::commitImmediately() {
 }
 
 void EditorColorTempModel::reset() {
+  cctDragMoved_  = false;
+  tintDragMoved_ = false;
   if (modeIndex_ == 0 && std::abs(cct_ - asShotCct_) < 1e-6 &&
       std::abs(tint_ - asShotTint_) < 1e-6) {
+    setDragActive(false, DragTarget::None);
     return;
   }
   modeIndex_ = 0;
@@ -248,13 +270,18 @@ auto EditorColorTempModel::paramsJson() const -> QString { return buildParamsJso
 
 void EditorColorTempModel::loadFromParams(const QString& mode, double cct, double tint,
                                           bool supported) {
+  // Interactive submit echoes AdjustmentSnapshotChanged → loadFromSnapshot while
+  // the pointer drag is still open. Aborting drag here turns continuous CCT
+  // motion into a single click (updateCctDrag no-ops once dragActive is false).
+  if (dragActive_) {
+    return;
+  }
   supported_ = supported;
   modeIndex_ = ModeIndexFromString(mode);
   asShotCct_ = ClampCct(modeIndex_ == 0 ? cct : asShotCct_);
   asShotTint_ = ClampTint(modeIndex_ == 0 ? tint : asShotTint_);
   cct_        = ClampCct(cct);
   tint_       = ClampTint(tint);
-  setDragActive(false, DragTarget::None);
   emit supportedChanged();
   emit modeIndexChanged();
   emit asShotCctChanged();
