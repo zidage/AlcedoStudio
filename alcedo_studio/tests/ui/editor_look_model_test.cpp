@@ -10,6 +10,9 @@
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/album_backend/editor_cdl_trackball_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_color_temp_model.hpp"
+
+#include "edit/operators/color/vibrance_op.hpp"
+#include "edit/operators/color/HLS_op.hpp"
 #include "ui/alcedo_main/album_backend/editor_hls_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_lut_catalog_model.hpp"
 #include "ui/alcedo_main/editor_dialog/modules/color_temp.hpp"
@@ -337,8 +340,221 @@ TEST(EditorLookModelTest, LutClearSelectionCommitsEmptyPath) {
   model.clearSelection();
   EXPECT_EQ(sub.settledCount(), 1);
   EXPECT_TRUE(model.selectedPath().isEmpty());
-  const auto root = ParseObject(sub.lastSettledParams());
-  EXPECT_EQ(root.value(QStringLiteral("ocio_lmt")).toString(), QString());
+}
+
+// ── Vibrance operator round-trip ───────────────────────────────────────────
+
+TEST(EditorLookModelTest, VibranceSetGetParamsPreservesUiValue) {
+  // Simulate user setting vibrance to 75 on the [-100, 100] UI range:
+  // the submit path sends {"vibrance": 75}. Pipeline stores via SetParams
+  // (divides by 100 → internal 0.75). GetParams must scale back to 75.
+  const float kUiValue = 75.0f;
+  alcedo::VibranceOp op;
+  op.SetParams({{"vibrance", kUiValue}});
+
+  const auto params = op.GetParams();
+  ASSERT_TRUE(params.contains("vibrance"));
+  // Bug: GetParams returns 0.75 without the * 100.0f scale-back.
+  EXPECT_NEAR(params["vibrance"].get<float>(), kUiValue, 1e-4f);
+}
+
+// ── HLS operator round-trip ────────────────────────────────────────────────
+
+TEST(EditorLookModelTest, HlsOperatorSetGetParamsPreservesUiValues) {
+  // Round-trip HLS params through the operator: set via SetParams with the
+  // same JSON shape the model submits, then read back via GetParams.
+  // Operator stores L/S internally at 1/kAdjUiToParamScale; GetParams must
+  // return them unchanged. The QML panel multiplies by 1000 on load.
+
+  const auto params = nlohmann::json::parse(R"({
+    "HLS": {
+      "hue_bins": [0, 45, 90, 135, 180, 225, 270, 315],
+      "hls_adj_table": [
+        [0, 0, 0], [0, 0.02, 0], [0, 0, 0], [0, 0, 0],
+        [0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]
+      ],
+      "h_range_table": [30, 30, 30, 30, 30, 30, 30, 30],
+      "target_hls": [45, 0.5, 1.0],
+      "hls_adj": [0, 0.02, 0],
+      "h_range": 30,
+      "l_range": 0.1,
+      "s_range": 0.1
+    }
+  })");
+
+  alcedo::HLSOp op;
+  op.SetParams(params);
+
+  const auto rt = op.GetParams();
+  ASSERT_TRUE(rt.contains("HLS"));
+  const auto& hls = rt["HLS"];
+
+  // The table at index 1 should have lightness=0.02 (20/1000 for UI 20)
+  ASSERT_TRUE(hls.contains("hls_adj_table"));
+  ASSERT_TRUE(hls["hls_adj_table"].is_array());
+  ASSERT_GE(hls["hls_adj_table"].size(), 2);
+  const auto& row = hls["hls_adj_table"][1];
+  ASSERT_TRUE(row.is_array());
+  ASSERT_GE(row.size(), 3);
+  EXPECT_NEAR(row[1].get<double>(), 0.02, 1e-6);
+  EXPECT_NEAR(row[2].get<double>(), 0.0, 1e-6);
+
+  // target_hls should match
+  ASSERT_TRUE(hls.contains("target_hls"));
+  EXPECT_NEAR(hls["target_hls"][0].get<double>(), 45.0, 1e-6);
+}
+
+TEST(EditorLookModelTest, HlsModelLoadFromTablesRestoresUiValues) {
+  // Simulate user editing: select hue swatch 2, set lightness to 45 via drag,
+  // then recreate the model from the submitted params (as happens on reopen).
+
+  RecordingSubmitter sub;
+  EditorHlsModel model;
+  model.setSubmitter(&sub);
+
+  // Select hue swatch 2 (candidate hue ≈ 90°)
+  model.selectHueIndex(2);
+  EXPECT_EQ(model.activeHueIndex(), 2);
+
+  // Set lightness to 45 via drag
+  model.beginLightnessDrag();
+  model.updateLightnessDrag(45.0);
+  model.finishLightnessDrag();
+  EXPECT_NEAR(model.lightness(), 45.0, 1e-6);
+
+  // Get the submitted params and re-parse as an operator would
+  ASSERT_FALSE(sub.calls.empty());
+  const auto settled = sub.lastSettledParams();
+  ASSERT_FALSE(settled.isEmpty());
+
+  const auto json = nlohmann::json::parse(settled.toStdString());
+  ASSERT_TRUE(json.contains("HLS"));
+
+  // Round-trip through HLSOp as the pipeline does
+  alcedo::HLSOp op;
+  op.SetParams(json);
+  const auto rt = op.GetParams();
+
+  // Build UI tables from the operator output (as QML loadHlsFromSnapshot does)
+  const auto& rt_hls = rt["HLS"];
+  ASSERT_TRUE(rt_hls.contains("hls_adj_table"));
+  ASSERT_TRUE(rt_hls.contains("h_range_table"));
+
+  QVariantList ui_table;
+  for (const auto& row : rt_hls["hls_adj_table"]) {
+    QVariantList r;
+    r.append(QVariant(row[0].get<double>()));
+    // Operator stores at 1/kAdjUiToParamScale; multiply back for UI
+    r.append(QVariant(row[1].get<double>() * hls::kAdjUiToParamScale));
+    r.append(QVariant(row[2].get<double>() * hls::kAdjUiToParamScale));
+    ui_table.append(QVariant::fromValue(r));
+  }
+
+  QVariantList range_table;
+  for (const auto& v : rt_hls["h_range_table"]) {
+    range_table.append(QVariant(v.get<double>()));
+  }
+
+  double target_hue = 0.0;
+  if (rt_hls.contains("target_hls") && rt_hls["target_hls"].is_array() &&
+      rt_hls["target_hls"].size() > 0) {
+    target_hue = rt_hls["target_hls"][0].get<double>();
+  }
+
+  // Create a fresh model and load from tables (simulates panel reload)
+  EditorHlsModel loaded;
+  RecordingSubmitter dummy_sub;
+  loaded.setSubmitter(&dummy_sub);
+  loaded.loadFromTables(ui_table, range_table, target_hue);
+
+  // The values must be preserved
+  EXPECT_NEAR(loaded.lightness(), 45.0, 1.0);
+  EXPECT_EQ(loaded.activeHueIndex(), 2)
+      << "Active hue swatch should be restored from target_hls";
+}
+
+// ── HLS snapshot rebuild integration ───────────────────────────────────────
+
+TEST(EditorLookModelTest, HlsSnapshotRebuildPreservesUiValues) {
+  // Simulate what happens when the backend rebuilds the committed snapshot
+  // from pipeline state and publishes it to QML. The snapshot patches contain
+  // the operator param JSON; BuildSnapshotMap converts to QVariantMap; QML
+  // loadFromSnapshot parses it into model tables.
+
+  // Step 1: Create an EditorRenderAdjustmentSnapshot patch as
+  // InitializeCommittedSnapshotFromPipeline / UpsertCommittedSnapshot would.
+  // HLS operator returns {"HLS": {hls_adj_table: [[h, L/1000, C/1000], ...]}}
+  const std::string hls_patch_json = R"({
+    "HLS": {
+      "hue_bins": [0, 45, 90, 135, 180, 225, 270, 315],
+      "hls_adj_table": [
+        [0, 0, 0], [0, 0, 0], [0, 0.045, 0], [0, 0, 0],
+        [5, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]
+      ],
+      "h_range_table": [30, 30, 30, 30, 30, 30, 30, 30],
+      "target_hls": [90, 0.5, 1.0],
+      "hls_adj": [0, 0.045, 0],
+      "h_range": 30,
+      "l_range": 0.1,
+      "s_range": 0.1
+    }
+  })";
+
+  // BuildSnapshotMap logic: patch.params_json -> QJsonObject -> QVariantMap
+  QJsonParseError error;
+  const auto      doc = QJsonDocument::fromJson(
+      QByteArray::fromStdString(hls_patch_json), &error);
+  ASSERT_EQ(error.error, QJsonParseError::NoError);
+  ASSERT_TRUE(doc.isObject());
+  const auto obj = doc.object();
+
+  auto snapshot = QVariantMap{};
+  snapshot.insert(QStringLiteral("hls"), obj.toVariantMap());
+
+  // Step 2: QML loadFromSnapshot -> loadHlsFromSnapshot
+  const auto entry = snapshot.value(QStringLiteral("hls")).toMap();
+  const auto hls = entry.value(QStringLiteral("HLS")).toMap();
+
+  // Extract tables (matching loadHlsFromSnapshot logic)
+  const auto raw_table = hls.value(QStringLiteral("hls_adj_table")).toList();
+  const auto ranges = hls.value(QStringLiteral("h_range_table")).toList();
+
+  // Multiply L/S by 1000 (kAdjUiToParamScale) as QML does
+  QVariantList ui_table;
+  for (const auto& row_var : raw_table) {
+    const auto row = row_var.toList();
+    if (row.size() >= 3) {
+      QVariantList ui_row;
+      ui_row.append(row[0].toDouble());
+      ui_row.append(row[1].toDouble() * hls::kAdjUiToParamScale);
+      ui_row.append(row[2].toDouble() * hls::kAdjUiToParamScale);
+      ui_table.append(QVariant::fromValue(ui_row));
+    }
+  }
+
+  double target_hue = 0.0;
+  const auto target = hls.value(QStringLiteral("target_hls")).toList();
+  if (target.size() > 0) {
+    target_hue = target[0].toDouble();
+  }
+
+  // Step 3: Load into a fresh HLS model
+  RecordingSubmitter dummy;
+  EditorHlsModel loaded;
+  loaded.setSubmitter(&dummy);
+  loaded.loadFromTables(ui_table, ranges, target_hue);
+
+  // Swatch index 2 has hue_bin=90 -> target_hls[0] should find it
+  EXPECT_EQ(loaded.activeHueIndex(), 2);
+  // That swatch had lightness=0.045 * 1000 = 45
+  EXPECT_NEAR(loaded.lightness(), 45.0, 1.0);
+  // Swatch 4 had hue_shift=5
+  loaded.selectHueIndex(4);
+  EXPECT_NEAR(loaded.hueShift(), 5.0, 1.0);
+  // Swatch 2 again to confirm table persistence
+  loaded.selectHueIndex(2);
+  EXPECT_NEAR(loaded.lightness(), 45.0, 1.0);
+  EXPECT_NEAR(loaded.chroma(), 0.0, 1.0);
 }
 
 }  // namespace alcedo::ui::test

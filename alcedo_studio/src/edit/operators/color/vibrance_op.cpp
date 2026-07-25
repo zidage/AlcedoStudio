@@ -73,7 +73,9 @@ void VibranceOp::ApplyGPU(std::shared_ptr<ImageBuffer> input) {
 
 auto VibranceOp::GetParams() const -> nlohmann::json {
   nlohmann::json o;
-  o[script_name_] = vibrance_offset_;
+  // SetParams divides the UI value by 100 for internal [-1, 1] range;
+  // scale back to [-100, 100] so GetParams matches the submitted value.
+  o[script_name_] = vibrance_offset_ * 100.0f;
 
   return o;
 }

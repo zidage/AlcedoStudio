@@ -161,8 +161,12 @@ Item {
         var uiTable = []
         for (var i = 0; i < table.length; ++i) {
             var row = table[i]
-            if (Array.isArray(row) && row.length >= 3) {
-                uiTable.push([row[0], row[1] * 1000.0, row[2] * 1000.0])
+            // Qt 6.9 QML does not fully unwrap nested QVariantList (from
+            // BuildSnapshotMap) to native JS Arrays — Array.isArray(row) is
+            // false even though row supports indexed access and has .length.
+            // Check via typeof to handle both native Arrays and QVariantList.
+            if (row && typeof row[0] !== "undefined" && typeof row[1] !== "undefined" && typeof row[2] !== "undefined") {
+                uiTable.push([Number(row[0]), Number(row[1]) * 1000.0, Number(row[2]) * 1000.0])
             }
         }
         var target = 0
