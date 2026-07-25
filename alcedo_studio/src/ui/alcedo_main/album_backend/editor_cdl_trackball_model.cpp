@@ -181,6 +181,14 @@ void EditorCdlTrackballModel::resetWheel(const QString& wheel) {
   if (!id.has_value()) {
     return;
   }
+  // Double-click arrives while a press/drag may still be open. Clear drag state
+  // before submitting so finishDiscDrag cannot re-enter submit afterward.
+  if (dragActive_) {
+    dragActive_     = false;
+    draggingDisc_   = false;
+    draggingMaster_ = false;
+    emit dragActiveChanged();
+  }
   CdlWheelState defaults =
       (*id == WheelId::Lift) ? DefaultLiftWheelState() : DefaultGammaGainWheelState();
   auto& state = wheelState(*id);
@@ -192,6 +200,12 @@ void EditorCdlTrackballModel::resetWheel(const QString& wheel) {
 }
 
 void EditorCdlTrackballModel::resetAll() {
+  if (dragActive_) {
+    dragActive_     = false;
+    draggingDisc_   = false;
+    draggingMaster_ = false;
+    emit dragActiveChanged();
+  }
   lift_  = DefaultLiftWheelState();
   gamma_ = DefaultGammaGainWheelState();
   gain_  = DefaultGammaGainWheelState();

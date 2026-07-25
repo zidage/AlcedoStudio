@@ -23,8 +23,10 @@ namespace alcedo::ui {
 namespace {
 
 constexpr qreal kDiscInset = 3.0;
-constexpr int   kHandleFan = 16;
+constexpr int   kHandleFan = 48;
 constexpr qreal kPi        = 3.14159265358979323846;
+// Soft edge width in supersampled pixels for anti-aliased disc perimeter.
+constexpr float kSoftEdgePx = 1.75f;
 
 void FillSolidGeometry(QSGGeometry* geometry, const std::vector<QPointF>& points,
                        QSGGeometry::DrawingMode mode, qreal line_width) {
@@ -97,22 +99,34 @@ auto BuildWheelImage(int size) -> QImage {
   const float radius = static_cast<float>(size) * 0.5f;
   const float cx     = radius - 0.5f;
   const float cy     = radius - 0.5f;
+  // Soft edge in normalized units so the rim does not stair-step.
+  const float soft   = std::clamp(kSoftEdgePx / std::max(radius, 1.0f), 0.002f, 0.08f);
   for (int y = 0; y < size; ++y) {
     auto* row = reinterpret_cast<QRgb*>(image.scanLine(y));
     for (int x = 0; x < size; ++x) {
       const float dx = (static_cast<float>(x) - cx) / std::max(radius, 1.0f);
       const float dy = (cy - static_cast<float>(y)) / std::max(radius, 1.0f);
       const float r  = std::sqrt(dx * dx + dy * dy);
-      if (r > 1.0f) {
+      if (r >= 1.0f + soft) {
         row[x] = qRgba(0, 0, 0, 0);
         continue;
+      }
+      float alpha = 1.0f;
+      if (r > 1.0f - soft) {
+        // Linear falloff across the rim (premultiplied later).
+        alpha = std::clamp((1.0f + soft - r) / (2.0f * soft), 0.0f, 1.0f);
       }
       float h = std::atan2(dy, dx) / (2.0f * std::numbers::pi_v<float>);
       if (h < 0.0f) {
         h += 1.0f;
       }
-      const QColor color = QColor::fromHsvF(h, std::clamp(r, 0.0f, 1.0f), 1.0f);
-      row[x]             = qRgba(color.red(), color.green(), color.blue(), 255);
+      const float sat           = std::clamp(r, 0.0f, 1.0f);
+      const QColor color        = QColor::fromHsvF(h, sat, 1.0f);
+      const int    a            = static_cast<int>(std::lround(alpha * 255.0f));
+      const int    pr           = (color.red() * a + 127) / 255;
+      const int    pg           = (color.green() * a + 127) / 255;
+      const int    pb           = (color.blue() * a + 127) / 255;
+      row[x]                    = qRgba(pr, pg, pb, a);
     }
   }
   return image;
@@ -164,6 +178,8 @@ EditorCdlTrackballItem::EditorCdlTrackballItem(QQuickItem* parent) : QQuickItem(
   setAcceptedMouseButtons(Qt::LeftButton);
   setAcceptHoverEvents(true);
   setCursor(Qt::CrossCursor);
+  setAntialiasing(true);
+  setSmooth(true);
   setImplicitWidth(140);
   setImplicitHeight(140);
 }
@@ -279,7 +295,11 @@ auto EditorCdlTrackballItem::currentDiscPosition() const -> QPointF {
 void EditorCdlTrackballItem::rebuildGeometry() {
   last_disc_rect_    = CdlTrackballDiscRect(width(), height());
   last_handle_point_ = CdlTrackballToWidgetPoint(currentDiscPosition(), last_disc_rect_);
-  const int size     = static_cast<int>(std::lround(last_disc_rect_.width()));
+  // Supersample at least 2× (or the window DPR) so the disc rim and hue field
+  // stay anti-aliased when downscaled into the item rect.
+  const qreal dpr =
+      (window() != nullptr) ? std::max<qreal>(2.0, window()->effectiveDevicePixelRatio()) : 2.0;
+  const int size = std::max(1, static_cast<int>(std::lround(last_disc_rect_.width() * dpr)));
   if (wheel_cache_.isNull() || wheel_cache_.width() != size) {
     wheel_cache_ = BuildWheelImage(size);
   }
@@ -310,15 +330,18 @@ auto EditorCdlTrackballItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeD
   }
   if (window() && !wheel_cache_.isNull()) {
     delete root->owned_texture;
-    root->owned_texture = window()->createTextureFromImage(wheel_cache_);
+    root->owned_texture = window()->createTextureFromImage(
+        wheel_cache_, QQuickWindow::TextureHasAlphaChannel);
     root->texture->setTexture(root->owned_texture);
     root->texture->setRect(last_disc_rect_);
     root->texture->setFiltering(QSGTexture::Linear);
   }
 
+  // Rim is soft-edged inside the supersampled texture; keep a light stroke for
+  // contrast on dark panels without introducing hard 1-px jaggies.
   std::vector<QPointF> rim_segs;
-  AppendRing(rim_segs, last_disc_rect_);
-  UpsertSolidNode(root, root->rim, rim_segs, rim_color_, QSGGeometry::DrawLines, 1.5);
+  AppendRing(rim_segs, last_disc_rect_, 96);
+  UpsertSolidNode(root, root->rim, rim_segs, rim_color_, QSGGeometry::DrawLines, 1.0);
 
   std::vector<QPointF> cross;
   const QPointF        c = last_disc_rect_.center();
@@ -329,13 +352,12 @@ auto EditorCdlTrackballItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeD
   UpsertSolidNode(root, root->cross, cross, crosshair_color_, QSGGeometry::DrawLines, 1.0);
 
   std::vector<QPointF> handle_tris;
-  AppendDisc(handle_tris, last_handle_point_, 6.0);
+  AppendDisc(handle_tris, last_handle_point_, 6.5);
   UpsertSolidNode(root, root->handle, handle_tris, handle_color_, QSGGeometry::DrawTriangles);
 
   std::vector<QPointF> outline_segs;
-  AppendRing(outline_segs, QRectF(last_handle_point_.x() - 9.0, last_handle_point_.y() - 9.0, 18.0,
-                                  18.0),
-             24);
+  AppendRing(outline_segs,
+             QRectF(last_handle_point_.x() - 9.5, last_handle_point_.y() - 9.5, 19.0, 19.0), 48);
   UpsertSolidNode(root, root->outline, outline_segs, handle_outline_color_,
                   QSGGeometry::DrawLines, 1.0);
 
@@ -383,6 +405,9 @@ void EditorCdlTrackballItem::mouseDoubleClickEvent(QMouseEvent* event) {
     QQuickItem::mouseDoubleClickEvent(event);
     return;
   }
+  // Abort any open press/drag from the double-click sequence. resetWheel()
+  // clears model drag state and commits the identity wheel once — do not call
+  // finishDiscDrag here (that would settle the pre-reset disc position first).
   dragging_ = false;
   model_->resetWheel(wheel_role_);
   event->accept();

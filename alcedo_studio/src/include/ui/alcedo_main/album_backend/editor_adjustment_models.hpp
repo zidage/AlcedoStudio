@@ -191,6 +191,10 @@ class EditorAdjustmentValueModel : public EditorAdjustmentModelBase {
   bool valid_ = true;
   QString errorMessage_;
   bool dragActive_ = false;
+  /// True when updateDrag changed the value during the current gesture. A
+  /// press+release without movement (including half of a double-click) must not
+  /// emit a settled commit; double-click reset owns that path instead.
+  bool dragMoved_ = false;
 };
 
 /// Enum adjustment (color-temp mode, demosaic method, …). A user selection

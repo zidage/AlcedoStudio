@@ -2,40 +2,48 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 
-// Shared numeric adjustment slider + field + reset. Binds to an
+// Shared numeric adjustment slider + field. Binds to an
 // EditorAdjustmentValueModel and drives its pointer-drag state:
 //   - Pointer drag: beginDrag -> updateDrag (per move) -> finishDrag.
+//   - Double-click the slider (no drag movement): reset to default.
 //   - Keyboard arrows on the slider: editValue (interactive + debounced settled).
 //   - Field typing + Enter / focus-out: editValue + commitImmediately.
-//   - Reset button: reset (settled immediately).
 // One committed transaction per completed drag is guaranteed by the model.
 //
-// Value sync: the slider follows model.value, but while the user drags
-// (pressed) the slider owns its value and onMoved pushes it to the model; the
-// model→slider sync is suppressed during press to avoid fighting the drag. The
-// field is managed imperatively (no text binding) so user typing and external
-// loads do not feedback-loop.
+// Visual language: monochrome (no blue accent fill). Larger handle + hit row
+// for reliable pointer grabbing. No separate reset button — double-click resets.
 //
-// The two-line geometry mirrors the legacy QWidget editor: label/value above a
-// full-width 22 px slider. The painted handle stays compact while the complete
-// slider row remains draggable.
+// Optional `flickable`: when set, its `interactive` is cleared for the duration
+// of a press so parent scroll areas cannot steal the drag.
 Item {
     id: root
     objectName: "adjustmentSlider"
 
     property var model: null
+    /// Optional parent Flickable/ListView to lock while the slider is pressed.
+    property var flickable: null
 
     readonly property color colText: appTheme.textColor
     readonly property color colMuted: appTheme.textMutedColor
-    readonly property color colPositive: appTheme.editorSliderPositiveColor
-    readonly property color colNegative: appTheme.editorSliderNegativeColor
     readonly property color colDanger: appTheme.dangerColor
-    readonly property color colTrack: appTheme.editorSliderTrackColor
-    readonly property color colHandle: appTheme.editorSliderHandleColor
-    readonly property color colHandleBorder: appTheme.editorSliderHandleBorderColor
+    readonly property color colTrack: "#2C2D2F"
+    readonly property color colFill: "#D8D4CD"
+    readonly property color colHandle: "#F5F1EA"
+    readonly property color colHandleBorder: "#1A1B1C"
+    readonly property color colZero: "#6A6761"
     readonly property bool centered: root.model
                                      && root.model.minimum < 0
                                      && root.model.maximum > 0
+
+    readonly property int handleSize: 22
+    readonly property int sliderRowHeight: 32
+
+    // Double-click detection without TapHandler (TapHandler steals the grab and
+    // breaks continuous drag + real double-clicks on some styles).
+    property bool _gestureMoved: false
+    property double _pressValue: 0
+    property double _lastClickMs: 0
+    property var _savedFlickableInteractive: null
 
     implicitHeight: sliderColumn.implicitHeight
     Layout.fillWidth: true
@@ -73,12 +81,53 @@ Item {
         }
     }
 
+    function lockFlickable(lock) {
+        if (!root.flickable)
+            return
+        if (lock) {
+            if (root._savedFlickableInteractive === null)
+                root._savedFlickableInteractive = root.flickable.interactive
+            root.flickable.interactive = false
+        } else {
+            if (root._savedFlickableInteractive !== null) {
+                root.flickable.interactive = root._savedFlickableInteractive
+                root._savedFlickableInteractive = null
+            }
+        }
+    }
+
+    function handlePressChanged(pressed) {
+        if (!root.model)
+            return
+        if (pressed) {
+            root._gestureMoved = false
+            root._pressValue = slider.value
+            root.lockFlickable(true)
+            root.model.beginDrag()
+        } else {
+            // Double-click: second press/release without movement within 350ms.
+            var now = Date.now()
+            var isDouble = !root._gestureMoved
+                    && (now - root._lastClickMs) < 350
+                    && Math.abs(slider.value - root._pressValue)
+                       <= Math.max(root.model.step * 0.5, 1e-9)
+            root._lastClickMs = now
+
+            root.model.finishDrag()
+            root.lockFlickable(false)
+
+            if (isDouble && root.model.enabled) {
+                root.model.reset()
+            }
+        }
+    }
+
     onModelChanged: syncField()
 
     ColumnLayout {
         id: sliderColumn
         anchors.fill: parent
-        spacing: 2
+        spacing: 4
 
         RowLayout {
             Layout.fillWidth: true
@@ -155,19 +204,13 @@ Item {
                     function onValidChanged() { root.syncField() }
                 }
             }
-
-            AdjustmentResetButton {
-                model: root.model
-                Layout.preferredWidth: 18
-                Layout.preferredHeight: 18
-            }
         }
 
         Slider {
             id: slider
             objectName: "adjustmentSliderHandle"
             Layout.fillWidth: true
-            Layout.preferredHeight: 22
+            Layout.preferredHeight: root.sliderRowHeight
             enabled: root.model && root.model.enabled
             from: root.model ? root.model.minimum : 0
             to: root.model ? root.model.maximum : 1
@@ -177,23 +220,20 @@ Item {
             touchDragThreshold: 0
             value: root.model ? root.model.value : 0
             activeFocusOnTab: true
+            padding: 0
+            leftPadding: 0
+            rightPadding: 0
+            topPadding: 0
+            bottomPadding: 0
             Accessible.role: Accessible.Slider
             Accessible.name: root.model ? root.model.label : ""
             Accessible.description: root.model
-                ? qsTr("Adjust %1").arg(root.model.label)
+                ? qsTr("Adjust %1. Double-click to reset.").arg(root.model.label)
                 : ""
 
-            onPressedChanged: {
-                if (!root.model) {
-                    return
-                }
-                if (pressed) {
-                    root.model.beginDrag()
-                } else {
-                    root.model.finishDrag()
-                }
-            }
+            onPressedChanged: root.handlePressChanged(pressed)
             onMoved: {
+                root._gestureMoved = true
                 if (root.model) {
                     root.model.updateDrag(slider.value)
                 }
@@ -218,68 +258,65 @@ Item {
                     ? (-root.model.minimum / (root.model.maximum - root.model.minimum))
                     : 0
                 readonly property real startPosition: root.centered ? zeroPosition : 0
+                readonly property real edge: root.handleSize * 0.5
 
-                x: slider.leftPadding + 10
+                x: slider.leftPadding + edge
                 y: slider.topPadding + slider.availableHeight / 2 - height / 2
-                width: Math.max(0, slider.availableWidth - 20)
-                height: 10
-                radius: 5
+                width: Math.max(0, slider.availableWidth - root.handleSize)
+                height: 6
+                radius: 3
                 color: root.colTrack
 
                 Rectangle {
                     x: Math.min(parent.startPosition, slider.visualPosition) * parent.width
-                    y: 1
+                    y: 0
                     width: Math.abs(slider.visualPosition - parent.startPosition) * parent.width
-                    height: parent.height - 2
-                    radius: 4
-                    color: (root.model && !root.model.valid)
-                           ? root.colDanger
-                           : (slider.value < 0 ? root.colNegative : root.colPositive)
+                    height: parent.height
+                    radius: 3
+                    color: (root.model && !root.model.valid) ? root.colDanger : root.colFill
                 }
 
                 Rectangle {
                     visible: root.centered
                     x: parent.zeroPosition * parent.width
-                    y: 1
+                    y: 0
                     width: 1
-                    height: parent.height - 2
-                    color: root.colMuted
-                    opacity: 0.45
+                    height: parent.height
+                    color: root.colZero
                 }
             }
             handle: Rectangle {
-                x: slider.leftPadding + 2
-                   + slider.visualPosition * (slider.availableWidth - width - 4)
+                x: slider.leftPadding
+                   + slider.visualPosition * (slider.availableWidth - width)
                 y: slider.topPadding + slider.availableHeight / 2 - height / 2
-                width: 16
-                height: 16
-                radius: 8
+                implicitWidth: root.handleSize
+                implicitHeight: root.handleSize
+                width: root.handleSize
+                height: root.handleSize
+                radius: width / 2
                 color: root.colHandle
                 border.width: 1
                 border.color: root.colHandleBorder
 
                 Rectangle {
-                    anchors.fill: parent
-                    anchors.margins: -2
+                    anchors.centerIn: parent
+                    width: root.handleSize + 10
+                    height: root.handleSize + 10
                     radius: width / 2
                     color: "transparent"
-                    border.width: slider.activeFocus ? 1 : 0
-                    border.color: slider.value < 0 ? root.colNegative : root.colPositive
+                    border.width: slider.activeFocus || slider.pressed ? 1 : 0
+                    border.color: root.colFill
                 }
             }
 
             Connections {
                 target: root.model
                 function onValueChanged() {
-                    // Re-sync the slider to the model when the model changes
-                    // externally (load, reset, undo/redo). While the user is
-                    // dragging (pressed) the slider owns its value.
                     if (!slider.pressed && root.model) {
                         slider.value = root.model.value
                     }
                 }
             }
         }
-
     }
 }

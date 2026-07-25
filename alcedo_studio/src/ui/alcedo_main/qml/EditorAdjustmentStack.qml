@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Controls.Material
 import QtQuick.Layouts
 
 // Right-side editor tools: histogram/waveform scope slot, adjustment navbar,

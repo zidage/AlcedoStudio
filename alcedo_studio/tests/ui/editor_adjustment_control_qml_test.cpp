@@ -342,8 +342,9 @@ TEST(EditorAdjustmentControlQmlTest, TextFieldTypingCommitsSettledOnEnter) {
   EXPECT_DOUBLE_EQ(h.exposure.value(), 0.5);
 }
 
-// Reset button click restores the default and commits one settled transaction.
-TEST(EditorAdjustmentControlQmlTest, ResetButtonClickRestoresDefaultAndSubmitsOneSettled) {
+// Double-click on the slider restores the default and commits one settled
+// transaction (replaces the removed per-field reset button).
+TEST(EditorAdjustmentControlQmlTest, DoubleClickSliderRestoresDefaultAndSubmitsOneSettled) {
   Harness h;
   ASSERT_NE(h.window, nullptr) << "QML harness failed to load. Warnings:\n"
                                << h.warnings.join(QStringLiteral("\n")).toStdString();
@@ -352,9 +353,10 @@ TEST(EditorAdjustmentControlQmlTest, ResetButtonClickRestoresDefaultAndSubmitsOn
   // Move the value away from default first via the model (programmatic, no submit).
   h.exposure.setValue(0.7);
   ASSERT_EQ(h.submitter.calls.size(), 0u);
-  auto* reset = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentResetButton"));
-  ASSERT_NE(reset, nullptr);
-  QTest::mouseClick(h.window, Qt::LeftButton, {}, centerInWindow(reset));
+  auto* handle = slider->findChild<QQuickItem*>(QStringLiteral("adjustmentSliderHandle"));
+  ASSERT_NE(handle, nullptr);
+  const QPoint pos = centerInWindow(handle);
+  QTest::mouseDClick(h.window, Qt::LeftButton, {}, pos);
   ProcessEvents(50);
   EXPECT_EQ(h.submitter.settledForField(QStringLiteral("exposure")), 1);
   EXPECT_DOUBLE_EQ(h.exposure.value(), 0.0);

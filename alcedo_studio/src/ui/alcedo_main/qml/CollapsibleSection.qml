@@ -38,6 +38,10 @@ Item {
     readonly property real bodyHeight: Math.max(0, bodyContentHeight) * foldProgress
     readonly property real sectionHeight: headerHeight + bodyHeight
 
+    // Children of CollapsibleSection { ... } must land in the body slot, not as
+    // siblings of the chrome Rectangle (that stacked content on top of the title).
+    default property alias contentData: bodyContent.data
+
     implicitHeight: sectionHeight
     implicitWidth: 200
     Layout.fillWidth: true
@@ -192,10 +196,9 @@ Item {
                 opacity: root.foldProgress
                 clip: true
 
-                // Callers inject content via default property alias.
-                default property alias contentData: bodyContent.data
                 Item {
                     id: bodyContent
+                    objectName: "collapsibleSectionBodyContent"
                     anchors.fill: parent
                     anchors.margins: appTheme.spaceSm
                 }

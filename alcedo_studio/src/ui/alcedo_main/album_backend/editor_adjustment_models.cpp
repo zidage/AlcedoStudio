@@ -171,6 +171,7 @@ void EditorAdjustmentValueModel::beginDrag() {
   // A drag supersedes any pending keyboard/wheel settled commit.
   debounceTimer_->stop();
   dragActive_ = true;
+  dragMoved_  = false;
   emit dragActiveChanged();
 }
 
@@ -181,6 +182,7 @@ void EditorAdjustmentValueModel::updateDrag(double v) {
   if (!applyValue(v)) {
     return;
   }
+  dragMoved_ = true;
   submitInteractive(value_);
 }
 
@@ -190,6 +192,11 @@ void EditorAdjustmentValueModel::finishDrag() {
   }
   dragActive_ = false;
   emit dragActiveChanged();
+  // Click without movement: no settled commit (double-click reset uses reset()).
+  if (!dragMoved_) {
+    return;
+  }
+  dragMoved_ = false;
   submitSettled(value_);
   emit settledCommitted();
 }
@@ -215,6 +222,7 @@ void EditorAdjustmentValueModel::reset() {
   debounceTimer_->stop();
   if (dragActive_) {
     dragActive_ = false;
+    dragMoved_  = false;
     emit dragActiveChanged();
   }
   const bool changed = applyValue(defaultValue_);

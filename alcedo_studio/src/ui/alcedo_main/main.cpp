@@ -174,7 +174,10 @@ int main(int argc, char* argv[]) {
                          language_manager.EffectiveLanguageCode());
                      alcedo::ui::AppTheme::ApplyApplicationFont(app);
                    });
-  QQuickStyle::setStyle("Material");
+  // Basic (not Material): Material injects large paddings, ripples, and layered
+  // chrome that break dense editor adjustment panels. Controls paint their own
+  // backgrounds; Basic leaves those custom surfaces alone.
+  QQuickStyle::setStyle("Basic");
 
   alcedo::ui::ApplicationModuleHost app_modules;
   RegisterApplicationModuleTypes();
