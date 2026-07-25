@@ -13,6 +13,11 @@
 #include <algorithm>
 #include <cmath>
 
+#include "ui/alcedo_main/album_backend/editor_cdl_trackball_item.hpp"
+#include "ui/alcedo_main/album_backend/editor_cdl_trackball_model.hpp"
+#include "ui/alcedo_main/album_backend/editor_color_temp_model.hpp"
+#include "ui/alcedo_main/album_backend/editor_hls_model.hpp"
+#include "ui/alcedo_main/album_backend/editor_lut_catalog_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_tone_curve_item.hpp"
 #include "ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
 
@@ -390,6 +395,11 @@ void RegisterEditorAdjustmentQmlTypes() {
                                                "EditorAdjustmentToggleModel");
   qmlRegisterType<EditorToneCurveModel>("Alcedo.Main", 1, 0, "EditorToneCurveModel");
   qmlRegisterType<EditorToneCurveItem>("Alcedo.Main", 1, 0, "EditorToneCurveItem");
+  qmlRegisterType<EditorColorTempModel>("Alcedo.Main", 1, 0, "EditorColorTempModel");
+  qmlRegisterType<EditorHlsModel>("Alcedo.Main", 1, 0, "EditorHlsModel");
+  qmlRegisterType<EditorCdlTrackballModel>("Alcedo.Main", 1, 0, "EditorCdlTrackballModel");
+  qmlRegisterType<EditorCdlTrackballItem>("Alcedo.Main", 1, 0, "EditorCdlTrackballItem");
+  qmlRegisterType<EditorLutCatalogModel>("Alcedo.Main", 1, 0, "EditorLutCatalogModel");
 }
 
 }  // namespace alcedo::ui

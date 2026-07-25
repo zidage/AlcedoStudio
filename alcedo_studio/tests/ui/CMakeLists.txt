@@ -617,6 +617,50 @@ target_link_libraries(EditorToneCurveGeometryTest
 gtest_discover_tests(EditorToneCurveGeometryTest TEST_PREFIX "EditorToneCurveGeometryTest.")
 alcedo_register_test_target(EditorToneCurveGeometryTest ui)
 
+# Phase 6D: Look panel typed models (WB / HSL / CDL / LUT) — no QML/GPU.
+add_executable(EditorLookModelTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_look_model_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
+)
+target_include_directories(EditorLookModelTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorLookModelTest
+  PRIVATE
+    AlbumBackendLib
+    GTest::gtest
+    JSON
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Qml
+    Qt6::Quick
+    Qt6::Test
+    Qt6::Widgets
+)
+gtest_discover_tests(EditorLookModelTest TEST_PREFIX "EditorLookModelTest.")
+alcedo_register_test_target(EditorLookModelTest ui)
+
+# Phase 6D: pure CDL trackball disc geometry (no QQuickWindow / GPU).
+add_executable(EditorCdlTrackballGeometryTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_cdl_trackball_geometry_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
+)
+target_include_directories(EditorCdlTrackballGeometryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorCdlTrackballGeometryTest
+  PRIVATE
+    AlbumBackendLib
+    GTest::gtest
+    JSON
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Qml
+    Qt6::Quick
+    Qt6::Test
+    Qt6::Widgets
+)
+gtest_discover_tests(EditorCdlTrackballGeometryTest TEST_PREFIX "EditorCdlTrackballGeometryTest.")
+alcedo_register_test_target(EditorCdlTrackballGeometryTest ui)
+
 add_executable(EditorRealRawGpuE2eTest
     ${ALCEDO_TEST_ROOT}/ui/editor_real_raw_gpu_e2e_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp

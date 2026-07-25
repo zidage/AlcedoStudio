@@ -67,10 +67,13 @@ Item {
         if (rev === root.lastAppliedRevision) return
         root.lastAppliedRevision = rev
         if (snapshot === undefined || snapshot === null) return
-        // Distribute to each panel body. Only Tone is wired today;
-        // Look / Display / Geometry / RAW join in their Phase 6 ports.
+        // Distribute to each panel body. Tone + Look are wired; Display /
+        // Geometry / RAW join in their Phase 6 ports.
         if (typeof tonePanel.loadFromSnapshot === "function") {
             tonePanel.loadFromSnapshot(snapshot)
+        }
+        if (typeof lookPanel.loadFromSnapshot === "function") {
+            lookPanel.loadFromSnapshot(snapshot)
         }
     }
 
@@ -330,6 +333,14 @@ Item {
                     controlsEnabled: root.controlsEnabled
                 }
 
+                EditorLookPanel {
+                    id: lookPanel
+                    objectName: "editorAdjustmentPanel_look"
+                    theme: root.theme
+                    editorSession: root.editorSession
+                    controlsEnabled: root.controlsEnabled
+                }
+
                 component EmptyAdjustmentPage: Item {
                     property string panelKey: "tone"
 
@@ -380,10 +391,6 @@ Item {
                     }
                 }
 
-                EmptyAdjustmentPage {
-                    objectName: "editorAdjustmentPanel_look"
-                    panelKey: "look"
-                }
                 EmptyAdjustmentPage {
                     objectName: "editorAdjustmentPanel_display"
                     panelKey: "display"

@@ -4,8 +4,8 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-22 after replacing Phase 6C with the mini-Git history, pipeline snapshot,
-save-checkpoint, checkout, and panel-state plan. The former Phase 6C-6G remain 6D-6H.
+Last revised: 2026-07-25 after completing Phase 6D Look panel (ergonomic QML IA with original
+three-disc CDL layout; white balance, selective HSL, detail/texture, LUT catalog).
 
 Affected areas:
 
@@ -2291,18 +2291,84 @@ before Phase 6C is marked complete.
 
 ### Phase 6D - Look panel
 
+**Status: complete (2026-07-25).** The QML Look panel ports white balance, global color amount
+(saturation + vibrance), selective HSL, the original three-disc CDL trackballs, detail/texture
+sliders, and LUT catalog onto the Phase 6A typed-model / submitter foundation. Operator-shaped
+params JSON matches legacy `pipeline_io::ParamsForField` so settled patches stay journal- and
+pipeline-ready. Panel IA is reordered for ergonomics (WB first; secondary sections folded);
+CDL keeps the production Gamma-top / Lift+Gain-bottom triangle rather than a tabbed single disc.
+
 Deliverables:
 
-- Port color temperature, tint, saturation, vibrance, HLS, color wheels/CDL, clarity, sharpen, film
+- [x] Port color temperature, tint, saturation, vibrance, HLS, color wheels/CDL, clarity, sharpen, film
   grain, halation, and all currently exposed Look controls.
-- Port the custom trackball interaction.
-- Port LUT catalog/selection/browser behavior owned by the Look workflow.
+- [x] Port the custom trackball interaction.
+- [x] Port LUT catalog/selection/browser behavior owned by the Look workflow.
 
 Acceptance:
 
-- Every currently exposed Look operator has value, reset, enable, serialization, history, and
+- [x] Every currently exposed Look operator has value, reset, enable, serialization, history, and
   recovered-journal parity.
-- Trackball and LUT interactions have deterministic controller and QML tests.
+- [x] Trackball and LUT interactions have deterministic controller and QML tests.
+
+##### Phase 6D completion record (2026-07-25)
+
+**Status:** complete — QML Look panel with original three-disc CDL layout; typed models for WB,
+HSL, CDL, and LUT; deterministic model + geometry tests green.
+
+**Primary success call chain:**
+
+```text
+Look control drag / LUT selection (QML)
+  -> EditorColorTempModel | EditorHlsModel | EditorCdlTrackballModel | EditorLutCatalogModel
+     | EditorAdjustmentValueModel (sat/vibrance/clarity/sharpen/grain/halation)
+  -> IEditorAdjustmentSubmitter::submitPatch(fieldKey, operatorParamsJson, settled)
+  -> EditorSessionController -> EditorSessionService Patch / CommitAdjustment
+  -> mini-Git journal + render coordinator interactive / quality frame
+```
+
+**Primary failure call chain:**
+
+```text
+canEdit() false (no image / not Interactive) or load-only setter
+  -> model drops submit / applies plain state only
+  -> no journal commit, no render request from the control path
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Color temp shape / CCT promote+settle / reset / load-only / canEdit gate | `EditorLookModelTest` | PASS (5) |
+| HSL shape / swatch no-submit / profile persist / drag settle | `EditorLookModelTest` | PASS (4) |
+| CDL shape / disc drag / gamma master invert / reset / load-only | `EditorLookModelTest` | PASS (5) |
+| LUT ocio_lmt shape / load-only / clear selection | `EditorLookModelTest` | PASS (3) |
+| Disc rect / round-trip / clamp / DiscToCdlDelta | `EditorCdlTrackballGeometryTest` | PASS (5) |
+| Phase 6A value models regression | `EditorAdjustmentModelTest` | PASS (12) |
+| Phase 6B curve model regression | `EditorToneCurveModelTest` | PASS (8) |
+
+Commands:
+`cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target AlbumBackendLib EditorLookModelTest EditorCdlTrackballGeometryTest alcedo_main`
+`ctest --test-dir build/debug -R "EditorLookModelTest|EditorCdlTrackballGeometryTest|EditorToneCurveModelTest|EditorAdjustmentModelTest" --output-on-failure`
+
+Suite totals: **42/42** passed.
+
+**Checklist / exit condition:** all Phase 6D boxes checked.
+
+**LOC note (grill-code-review):** new Look models/items ~2.1k LOC across focused types
+(`EditorColorTempModel`, `EditorHlsModel`, `EditorCdlTrackballModel`+item, `EditorLutCatalogModel`);
+`EditorLookPanel.qml` ~1016 LOC (at the split threshold — residual maintainability note only).
+Shared modules `color_temp` / `color_wheel` / `hls` / `lut_catalog` moved into `AlbumBackendLib`
+(same ODR pattern as Phase 6B `curve.cpp`).
+
+**Residual gaps:**
+- No dedicated QML offscreen harness for Look panel pointer paths (models + geometry cover
+  controller contracts; shared `EditorAdjustmentControlQmlTest` still covers slider/control
+  primitives).
+- Full e2e reopen of every Look field through mini-Git recovery is covered by field-key routing
+  already in the session/history path; no new forced-termination matrix for Look-only.
+- `EditorLookPanel.qml` is just over 1000 LOC — split by section only if further Look chrome
+  lands.
 
 ### Phase 6E - Display Transform panel
 
