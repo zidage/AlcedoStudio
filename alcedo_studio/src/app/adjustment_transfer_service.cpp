@@ -562,7 +562,10 @@ auto AdjustmentTransferService::BuildRootRelativeCommits(
     OrdinaryEditPayload payload;
     payload.operator_type  = entry.operator_type_;
     payload.stage_name     = entry.stage_;
-    payload.field_name     = OperatorScriptName(entry.operator_type_);
+    // Transfer entries contain the complete operator parameter object. Mark the
+    // commit as a full operator replacement so pipeline reconstruction does not
+    // nest that object under the operator name.
+    payload.field_name     = "$operator_params";
     payload.before_value   = nlohmann::json(nullptr);
     payload.before_enabled = false;
     payload.after_value    = entry.params_;
@@ -738,7 +741,7 @@ auto AdjustmentTransferService::CompleteMerge(
     MergeFieldDelta delta;
     delta.operator_type    = conflict->operator_type;
     delta.stage_name       = conflict->stage;
-    delta.field_name       = OperatorScriptName(conflict->operator_type);
+    delta.field_name       = "$operator_params";
     delta.resolved_value   = resolution.resolved_value;
     delta.resolved_enabled = resolution.resolved_enabled;
     merge_payload.fields.push_back(std::move(delta));

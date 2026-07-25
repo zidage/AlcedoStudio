@@ -587,23 +587,43 @@ void PipelineMgmtService::SavePipeline(std::shared_ptr<PipelineGuard> pipeline) 
       auto               db_guard = storage_service_->GetDBController().GetConnectionGuard();
       auto               db_lock  = db_guard.Lock();
       CommitGraphService graph_service(db_guard.conn_);
-      auto               graph = graph_service.LoadGraph(pipeline->id_);
-      if (!graph.has_value()) {
+      auto stored_graph = graph_service.LoadGraph(pipeline->id_);
+      if (!stored_graph.has_value()) {
         throw std::runtime_error(
             "PipelineMgmtService: cannot write serialized state without an edit graph");
       }
 
-      const auto expected_head  = graph->GetActiveVersionRef().head_commit_hash;
-      const auto expected_chain = graph->ChainHashForHead(expected_head);
-      if (graph->GetRootId() != pipeline->root_id_ ||
-          expected_head != pipeline->working_head_commit_hash_ ||
-          expected_chain != pipeline->transaction_chain_hash_) {
+      // A newly pasted Version only exists in the live graph until this checkpoint.
+      // Still compare the graph's last materialized state with DuckDB before writing it so a
+      // different writer cannot be silently replaced by this serialized pipeline state.
+      const auto& graph = pipeline->commit_graph_ ? *pipeline->commit_graph_ : *stored_graph;
+
+      const auto expected_head  = graph.GetActiveVersionRef().head_commit_hash;
+      const auto expected_chain = graph.ChainHashForHead(expected_head);
+      if (graph.GetElementId() != pipeline->id_ || graph.GetRootId() != pipeline->root_id_ ||
+           expected_head != pipeline->working_head_commit_hash_ ||
+           expected_chain != pipeline->transaction_chain_hash_) {
         throw std::runtime_error(
             "PipelineMgmtService: live history identity changed before serialized state writeback");
       }
 
-      graph_service.Materialize(graph->CaptureMaterializationWithSerializedPipelineState(
-          MakeSerializedPipelineState(*pipeline, pipeline_params)));
+      const auto& stored_state = stored_graph->GetImageEditState();
+      const auto& graph_state  = graph.GetImageEditState();
+      if (stored_state.root_id != graph_state.root_id ||
+          stored_state.active_version_id != graph_state.active_version_id ||
+          stored_state.materialized_head_commit_hash != graph_state.materialized_head_commit_hash ||
+          stored_state.materialized_transaction_chain_hash !=
+              graph_state.materialized_transaction_chain_hash) {
+        throw std::runtime_error(
+            "PipelineMgmtService: persisted history changed before serialized state writeback");
+      }
+
+      const auto materialization = graph.CaptureMaterializationWithSerializedPipelineState(
+          MakeSerializedPipelineState(*pipeline, pipeline_params));
+      graph_service.Materialize(materialization);
+      if (pipeline->commit_graph_) {
+        pipeline->commit_graph_->ApplyMaterializedState(materialization.image_state);
+      }
       pipeline->serialized_state_needs_writeback_ = false;
     } catch (...) {
       // This state accelerates editor open but is not the history source of truth. Keep the flag
@@ -755,6 +775,90 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
     }
     if (error != nullptr) {
       *error = "PipelineMgmtService: checkout rebuild failed with an unknown error";
+    }
+    return false;
+  }
+}
+
+auto PipelineMgmtService::RebuildActiveEditorPipeline(
+    const std::shared_ptr<PipelineGuard>& pipeline, std::string* error) -> bool {
+  if (!pipeline || !pipeline->pipeline_ || !pipeline->commit_graph_) {
+    if (error != nullptr) {
+      *error =
+          "PipelineMgmtService: active Version rebuild requires a loaded editor pipeline with a "
+          "commit graph";
+    }
+    return false;
+  }
+
+  auto& graph = *pipeline->commit_graph_;
+  DecodedRootPipelineState root_state;
+  {
+    std::unique_lock<std::mutex> service_lock(lock_);
+    auto               db_guard = storage_service_->GetDBController().GetConnectionGuard();
+    auto               db_lock  = db_guard.Lock();
+    CommitGraphService graph_service(db_guard.conn_);
+    const auto root_encoded =
+        graph_service.GetRootSerializedPipelineState(pipeline->id_, graph.GetRootId());
+    if (!root_encoded.has_value()) {
+      if (error != nullptr) {
+        *error = "PipelineMgmtService: immutable root state is missing for active Version rebuild";
+      }
+      return false;
+    }
+    auto decoded = DecodeRootPipelineState(*root_encoded);
+    if (!decoded.has_value()) {
+      if (error != nullptr) {
+        *error = "PipelineMgmtService: immutable root state is invalid for active Version rebuild";
+      }
+      return false;
+    }
+    root_state = std::move(*decoded);
+  }
+
+  nlohmann::json prior_params;
+  {
+    std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
+    prior_params = pipeline->pipeline_->ExportPipelineParams();
+  }
+  const auto prior_head  = pipeline->working_head_commit_hash_;
+  const auto prior_chain = pipeline->transaction_chain_hash_;
+
+  try {
+    std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
+    RebuildPipelineFromRoot(*pipeline->pipeline_, graph, root_state, accelerator_preference_);
+    pipeline->working_head_commit_hash_ = graph.GetActiveVersionRef().head_commit_hash;
+    pipeline->transaction_chain_hash_ =
+        graph.ChainHashForHead(pipeline->working_head_commit_hash_);
+    pipeline->serialized_state_needs_writeback_ = true;
+    pipeline->dirty_                            = true;
+    return true;
+  } catch (const std::exception& ex) {
+    try {
+      std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
+      ImportSerializedPipelineState(*pipeline->pipeline_, prior_params, root_state.raw_color_context,
+                                    accelerator_preference_);
+      pipeline->pipeline_->SetExecutionStages();
+      pipeline->working_head_commit_hash_ = prior_head;
+      pipeline->transaction_chain_hash_   = prior_chain;
+    } catch (...) {
+    }
+    if (error != nullptr) {
+      *error = std::string("PipelineMgmtService: active Version rebuild failed: ") + ex.what();
+    }
+    return false;
+  } catch (...) {
+    try {
+      std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
+      ImportSerializedPipelineState(*pipeline->pipeline_, prior_params, root_state.raw_color_context,
+                                    accelerator_preference_);
+      pipeline->pipeline_->SetExecutionStages();
+      pipeline->working_head_commit_hash_ = prior_head;
+      pipeline->transaction_chain_hash_   = prior_chain;
+    } catch (...) {
+    }
+    if (error != nullptr) {
+      *error = "PipelineMgmtService: active Version rebuild failed with an unknown error";
     }
     return false;
   }

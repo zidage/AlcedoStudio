@@ -506,20 +506,31 @@ auto AdjustmentTransferController::PasteViaMiniGit(
     }
 
     // Mini-Git paste path.
+    const auto graph_before_paste = *graph;
     try {
       auto paste_result = AdjustmentTransferService::PasteAsRootRelativeVersion(
           *graph, pipeline_service, element_id, *copied_package_,
           Tr("Pasted Adjustments").toStdString());
       if (paste_result.pasted) {
-        guard->dirty_                       = true;
-        guard->working_head_commit_hash_    = paste_result.new_head;
-        guard->transaction_chain_hash_      = graph->ChainHashForHead(paste_result.new_head);
-        guard->serialized_state_needs_writeback_ = true;
-        result.applied_ids_.push_back(element_id);
+        std::string rebuild_error;
+        if (!pipeline_service.RebuildActiveEditorPipeline(guard, &rebuild_error)) {
+          *graph = graph_before_paste;
+          result.failures_.push_back(
+              {element_id, rebuild_error.empty() ? "Failed to rebuild pasted pipeline"
+                                                  : std::move(rebuild_error)});
+        } else {
+          guard->dirty_                    = true;
+          guard->working_head_commit_hash_ = paste_result.new_head;
+          guard->transaction_chain_hash_   = graph->ChainHashForHead(paste_result.new_head);
+          guard->serialized_state_needs_writeback_ = true;
+          result.applied_ids_.push_back(element_id);
+        }
       } else {
+        *graph = graph_before_paste;
         result.failures_.push_back({element_id, paste_result.error});
       }
     } catch (const std::exception& e) {
+      *graph = graph_before_paste;
       result.failures_.push_back({element_id, e.what()});
     }
     pipeline_service.SavePipeline(guard);

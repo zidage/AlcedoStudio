@@ -52,6 +52,7 @@ Item {
         whitesModel.value = whitesModel.defaultValue
         blacksModel.value = blacksModel.defaultValue
         wireEnabled()
+        loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
     }
 
 

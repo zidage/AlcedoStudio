@@ -111,6 +111,12 @@ class PipelineMgmtService final {
   auto CheckoutVersion(const std::shared_ptr<PipelineGuard>& pipeline,
                        const version_ref_id_t& version_id, std::string* error = nullptr) -> bool;
 
+  /// Rebuild the executor from the immutable root and the first-parent chain of the
+  /// currently active Version. The caller may use this after changing the in-memory graph
+  /// before the graph is materialized.
+  auto RebuildActiveEditorPipeline(const std::shared_ptr<PipelineGuard>& pipeline,
+                                   std::string* error = nullptr) -> bool;
+
   /// Clean project-exit garbage collection: mark from every Version head through both parents and
   /// delete unreachable EditCommit rows. Must run only after the final successful save; abnormal
   /// shutdown must not call this.

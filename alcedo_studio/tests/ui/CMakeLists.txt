@@ -439,6 +439,76 @@ target_compile_definitions(EditorAdjustmentControlQmlTest
 gtest_discover_tests(EditorAdjustmentControlQmlTest TEST_PREFIX "EditorAdjustmentControlQmlTest.")
 alcedo_register_test_target(EditorAdjustmentControlQmlTest ui)
 
+# Phase 6C-7: an already-restored snapshot must populate the QML Tone panel
+# during its first editor binding, without emitting a new adjustment patch.
+add_executable(EditorAdjustmentSnapshotQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_snapshot_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorAdjustmentSnapshotQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorAdjustmentSnapshotQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorAdjustmentSnapshotQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+gtest_discover_tests(EditorAdjustmentSnapshotQmlTest
+    TEST_PREFIX "EditorAdjustmentSnapshotQmlTest.")
+alcedo_register_test_target(EditorAdjustmentSnapshotQmlTest ui)
+
+# Real-project regression: replay production Main.qml Copy/Paste and verify
+# that a reopened target publishes the saved Tone values to its QML models.
+add_executable(EditorAdjustmentTransferRealProjectE2eTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_transfer_real_project_e2e_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/main_qml_test_fixture.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorAdjustmentTransferRealProjectE2eTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorAdjustmentTransferRealProjectE2eTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorAdjustmentTransferRealProjectE2eTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+gtest_discover_tests(EditorAdjustmentTransferRealProjectE2eTest
+    TEST_PREFIX "EditorAdjustmentTransferRealProjectE2eTest."
+    PROPERTIES LABELS "workspace_qml;real_project")
+alcedo_register_test_target(EditorAdjustmentTransferRealProjectE2eTest ui)
+
 # Phase 1D: extracted editor action components. Each target loads one QML
 # component from source with only explicit fake collaborators.
 add_executable(EditorWorkspaceNavigationQmlTest

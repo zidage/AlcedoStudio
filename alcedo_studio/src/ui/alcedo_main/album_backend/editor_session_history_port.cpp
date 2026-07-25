@@ -5,6 +5,8 @@
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
 
 #include <algorithm>
+#include <array>
+#include <string_view>
 #include <utility>
 
 #include "app/editor_adjustment_pipeline.hpp"
@@ -38,6 +40,16 @@ auto EnabledForAdjustmentParams(const nlohmann::json& params) -> bool {
   }
   return true;
 }
+
+// These are the stable field names shared by the editor models and the
+// adjustment-transfer/history services. The loaded pipeline is the durable
+// source of truth after a checkpoint; journal replay only contains edits made
+// after that checkpoint.
+constexpr std::array<std::string_view, 21> kEditorSnapshotFields = {
+    "exposure",   "contrast",   "white",      "black",      "shadows",   "highlights",
+    "curve",      "saturation", "vibrance",   "hls",        "color_wheel", "lut",
+    "clarity",    "sharpen",    "odt",        "film_grain", "halation",  "crop_rotate",
+    "raw_decode", "lens_calib", "color_temp"};
 
 void UpsertCommittedSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
                              const std::string& field_key, const nlohmann::json& params) {
@@ -124,6 +136,34 @@ auto ApplyRecoveredRecord(alcedo::PipelineGuard&                  guard,
   return alcedo::MiniGitWorkingHistory::Replay(*replay_graph, {record}, error);
 }
 
+auto InitializeCommittedSnapshotFromPipeline(
+    alcedo::PipelineGuard& guard, alcedo::EditorRenderAdjustmentSnapshot* snapshot,
+    std::string* error) -> bool {
+  if (snapshot == nullptr || !guard.pipeline_) {
+    if (error) *error = "Editor pipeline is unavailable for snapshot initialization";
+    return false;
+  }
+
+  std::unique_lock<std::mutex> render_lock(guard.pipeline_->GetRenderLock());
+  *snapshot = {};
+  for (const auto field_key : kEditorSnapshotFields) {
+    alcedo::EditorAdjustmentOperatorState state;
+    if (!alcedo::ReadEditorAdjustmentOperatorState(*guard.pipeline_, std::string(field_key), &state,
+                                                   error)) {
+      return false;
+    }
+    // Missing optional operators are left out; the QML model then retains its
+    // declared baseline instead of receiving an empty JSON value.
+    if (state.params.is_object()) {
+      UpsertCommittedSnapshot(snapshot, std::string(field_key), state.params);
+    }
+  }
+  // Keep a complete serialized state as a fallback for render consumers. The
+  // field patches above are what the QML panel projection reads.
+  snapshot->params_json = guard.pipeline_->ExportPipelineParams().dump();
+  return true;
+}
+
 }  // namespace
 
 void EditorSessionHistoryPort::SetServices(Services services) {
@@ -174,6 +214,9 @@ auto EditorSessionHistoryPort::EnsureWorkingState(sl_element_id_t element_id, st
   auto state            = std::make_shared<WorkingState>();
   state->pipeline_guard = guard;
   state->journal        = journal;
+  if (!InitializeCommittedSnapshotFromPipeline(*guard, &state->committed_snapshot, error)) {
+    return nullptr;
+  }
   auto       replay_graph    = *guard->commit_graph_;
   auto       validated_graph = replay_graph;
   const auto journal_records = journal->records();

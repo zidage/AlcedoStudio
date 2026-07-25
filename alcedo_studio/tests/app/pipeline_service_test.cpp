@@ -776,6 +776,74 @@ TEST_F(PipelineServiceTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
   after_writeback.SavePipeline(matched);
 }
 
+TEST_F(PipelineServiceTests,
+       SerializedStateWritebackRejectsAConcurrentMaterializedHistoryChange) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService pipelines(project.GetStorageService());
+
+  auto local = pipelines.LoadEditorPipeline(703);
+  ASSERT_NE(local, nullptr);
+  ASSERT_NE(local->commit_graph_, nullptr);
+  const auto root_id = local->root_id_;
+
+  OrdinaryEditPayload local_payload;
+  local_payload.operator_type   = OperatorType::EXPOSURE;
+  local_payload.stage_name      = PipelineStageName::Basic_Adjustment;
+  local_payload.field_name      = "$operator_params";
+  local_payload.before_value    = nlohmann::json{{"exposure", 0.0f}};
+  local_payload.after_value     = nlohmann::json{{"exposure", 1.0f}};
+  local_payload.before_enabled  = true;
+  local_payload.after_enabled   = true;
+  const auto local_version = local->commit_graph_->CreateVersionRefAtRoot("Local Writeback");
+  auto local_commit = EditCommit::MakeEdit(root_id, std::nullopt, std::move(local_payload));
+  const auto local_head = local_commit.GetCommitHash();
+  ASSERT_TRUE(local->commit_graph_->InsertCommit(std::move(local_commit)));
+  local->commit_graph_->MoveWorkingHead(local_version, local_head);
+  local->commit_graph_->SetActiveVersionId(local_version);
+  local->working_head_commit_hash_ = local_head;
+  local->transaction_chain_hash_   = local->commit_graph_->ChainHashForHead(local_head);
+  local->serialized_state_needs_writeback_ = true;
+
+  commit_hash_t remote_head{};
+  {
+    auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto db_lock  = db_guard.Lock();
+    CommitGraphService graph_service(db_guard.conn_);
+    auto remote_graph = graph_service.LoadGraph(703);
+    ASSERT_TRUE(remote_graph.has_value());
+
+    OrdinaryEditPayload remote_payload;
+    remote_payload.operator_type   = OperatorType::EXPOSURE;
+    remote_payload.stage_name      = PipelineStageName::Basic_Adjustment;
+    remote_payload.field_name      = "$operator_params";
+    remote_payload.before_value    = nlohmann::json{{"exposure", 0.0f}};
+    remote_payload.after_value     = nlohmann::json{{"exposure", 2.0f}};
+    remote_payload.before_enabled  = true;
+    remote_payload.after_enabled   = true;
+    auto remote_commit = EditCommit::MakeEdit(root_id, std::nullopt, std::move(remote_payload));
+    remote_head = remote_commit.GetCommitHash();
+    ASSERT_TRUE(remote_graph->InsertCommit(std::move(remote_commit)));
+    remote_graph->MoveWorkingHead(remote_graph->GetActiveVersionId(), remote_head);
+    graph_service.Materialize(remote_graph->CaptureMaterialization());
+  }
+
+  pipelines.SavePipeline(local);
+  EXPECT_TRUE(local->serialized_state_needs_writeback_);
+
+  {
+    auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto db_lock  = db_guard.Lock();
+    CommitGraphService graph_service(db_guard.conn_);
+    const auto persisted = graph_service.LoadGraph(703);
+    ASSERT_TRUE(persisted.has_value());
+    EXPECT_EQ(persisted->GetActiveVersionRef().head_commit_hash, remote_head);
+    EXPECT_NE(persisted->GetActiveVersionRef().head_commit_hash, local_head);
+  }
+
+  // The test deliberately leaves the local writeback rejected; do not retry it during teardown.
+  local->serialized_state_needs_writeback_ = false;
+}
+
 TEST_F(PipelineServiceTests, ImmutableRootRestoresImportedRawColorAndLensState) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorageService());

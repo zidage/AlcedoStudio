@@ -3,7 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 /// @file editor_adjustment_transfer_actions_qml_test.cpp
-/// @brief Verifies Paste/Merge policy checks at the extracted QML action boundary.
+/// @brief Verifies the executable Paste action at the extracted QML action boundary.
 
 #include <gtest/gtest.h>
 
@@ -80,7 +80,7 @@ ApplicationWindow {
     property QtObject dialog: QtObject {
         objectName: "adjustmentTransferDialog"
         property string mode: "copy"
-        property string pasteStrategy: "merge"
+        property string pasteStrategy: "paste"
         property string sourceTitle: ""
         property int targetCount: 0
         property var adjustmentRows: []
@@ -209,7 +209,8 @@ void InvokeStrategy(QObject* object, const QString& strategy) {
                                         Q_ARG(QVariant, QVariant(strategy))));
 }
 
-TEST(EditorAdjustmentTransferActionsQmlTest, AllowedPasteOpensDialogAndCallsBackendWithTargets) {
+TEST(EditorAdjustmentTransferActionsQmlTest,
+     DefaultPasteUsesRootRelativeStrategyAndCallsBackendWithTargets) {
   EditorAdjustmentTransferActionsQmlHarness harness;
   ASSERT_NE(harness.window, nullptr) << harness.warnings.join('\n').toStdString();
   ASSERT_TRUE(harness.warnings.isEmpty()) << harness.warnings.join('\n').toStdString();
@@ -222,14 +223,14 @@ TEST(EditorAdjustmentTransferActionsQmlTest, AllowedPasteOpensDialogAndCallsBack
 
   InvokeNoArg(actions, "requestPasteAdjustments");
   EXPECT_EQ(dialog->property("mode").toString(), QStringLiteral("paste"));
-  EXPECT_EQ(dialog->property("pasteStrategy").toString(), QStringLiteral("merge"));
+  EXPECT_EQ(dialog->property("pasteStrategy").toString(), QStringLiteral("paste"));
   EXPECT_EQ(dialog->property("sourceTitle").toString(), QStringLiteral("Copied source"));
   EXPECT_EQ(dialog->property("targetCount").toInt(), 2);
   EXPECT_EQ(dialog->property("openCount").toInt(), 1);
 
-  InvokeStrategy(actions, QStringLiteral("merge"));
+  InvokeStrategy(actions, QStringLiteral("paste"));
   EXPECT_EQ(harness.transfer_fake.paste_call_count(), 1);
-  EXPECT_EQ(harness.transfer_fake.last_strategy(), QStringLiteral("merge"));
+  EXPECT_EQ(harness.transfer_fake.last_strategy(), QStringLiteral("paste"));
   EXPECT_EQ(harness.transfer_fake.last_targets().size(), 2);
 }
 
@@ -285,7 +286,7 @@ TEST(EditorAdjustmentTransferActionsQmlTest, PolicyBlocksPasteAtOpenAndRecoversA
 }
 
 TEST(EditorAdjustmentTransferActionsQmlTest,
-     MergePolicyBlocksCommitWithoutBackendCallAndAllowsPaste) {
+     DeferredMergeIsNotDispatchedAndPasteRemainsAvailable) {
   EditorAdjustmentTransferActionsQmlHarness harness;
   ASSERT_NE(harness.window, nullptr) << harness.warnings.join('\n').toStdString();
   ASSERT_TRUE(harness.warnings.isEmpty()) << harness.warnings.join('\n').toStdString();
@@ -296,11 +297,8 @@ TEST(EditorAdjustmentTransferActionsQmlTest,
   ASSERT_NE(transfer, nullptr);
   ASSERT_NE(policy, nullptr);
 
-  policy->setProperty("canMergeAdjustments", false);
-  ProcessEvents(10);
   InvokeStrategy(actions, QStringLiteral("merge"));
   EXPECT_EQ(harness.transfer_fake.paste_call_count(), 0);
-  EXPECT_EQ(harness.window->property("lastMessage").toString(), QStringLiteral("Merge is blocked"));
 
   InvokeStrategy(actions, QStringLiteral("paste"));
   EXPECT_EQ(harness.transfer_fake.paste_call_count(), 1);

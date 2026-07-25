@@ -56,7 +56,7 @@ Item {
     Layout.fillHeight: true
 
     // Phase 6C-7: last applied snapshot revision for idempotent reload.
-    property int lastAppliedRevision: 0
+    property int lastAppliedRevision: -1
 
     /// Load panel values from the editor session adjustment snapshot.
     /// Idempotent: re-applying the same revision has no effect. Each panel
@@ -409,7 +409,7 @@ Item {
     }
     // Also load on initial binding when editorSession changes.
     onEditorSessionChanged: {
-        root.lastAppliedRevision = 0
+        root.lastAppliedRevision = -1
         if (root.editorSession) {
             root.loadFromSnapshot(root.editorSession.adjustmentSnapshot)
         }
