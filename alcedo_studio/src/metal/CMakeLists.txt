@@ -4,21 +4,30 @@ if(ALCEDO_METAL_ENABLED)
         cmake_policy(SET CMP0116 NEW)
     endif()
 
+    # Metallib/air outputs live under ALCEDO_BINARY_ROOT (src/ binary tree), not
+    # CMAKE_CURRENT_BINARY_DIR (this domain's metal/ subdir). Paths must also be
+    # CACHE INTERNAL so sibling domains (decoders, edit) can bake them into
+    # compile definitions — ordinary set() is directory-local after Phase 3.
     set(METAL_UTILS_SRC "${ALCEDO_SRC_ROOT}/metal/metal_utils/metal_convert.metal")
-    set(METAL_UTILS_AIR "${CMAKE_CURRENT_BINARY_DIR}/metal/metal_utils/metal_convert.air")
-    set(METAL_UTILS_METALLIB "${CMAKE_CURRENT_BINARY_DIR}/metal/metal_utils/metal_convert.metallib")
+    set(METAL_UTILS_AIR "${ALCEDO_BINARY_ROOT}/metal/metal_utils/metal_convert.air")
+    set(METAL_UTILS_METALLIB "${ALCEDO_BINARY_ROOT}/metal/metal_utils/metal_convert.metallib"
+        CACHE INTERNAL "Metal convert utils metallib path" FORCE)
     set(METAL_GEOMETRY_UTILS_SRC "${ALCEDO_SRC_ROOT}/metal/metal_utils/geometry_utils.metal")
-    set(METAL_GEOMETRY_UTILS_AIR "${CMAKE_CURRENT_BINARY_DIR}/metal/metal_utils/geometry_utils.air")
-    set(METAL_GEOMETRY_UTILS_METALLIB "${CMAKE_CURRENT_BINARY_DIR}/metal/metal_utils/geometry_utils.metallib")
+    set(METAL_GEOMETRY_UTILS_AIR "${ALCEDO_BINARY_ROOT}/metal/metal_utils/geometry_utils.air")
+    set(METAL_GEOMETRY_UTILS_METALLIB "${ALCEDO_BINARY_ROOT}/metal/metal_utils/geometry_utils.metallib"
+        CACHE INTERNAL "Metal geometry utils metallib path" FORCE)
     set(METAL_LENS_CALIB_SRC "${ALCEDO_SRC_ROOT}/edit/operators/geometry/metal_shader/lens_calib.metal")
-    set(METAL_LENS_CALIB_AIR "${CMAKE_CURRENT_BINARY_DIR}/edit/operators/geometry/metal_shader/lens_calib.air")
-    set(METAL_LENS_CALIB_METALLIB "${CMAKE_CURRENT_BINARY_DIR}/edit/operators/geometry/metal_shader/lens_calib.metallib")
+    set(METAL_LENS_CALIB_AIR "${ALCEDO_BINARY_ROOT}/edit/operators/geometry/metal_shader/lens_calib.air")
+    set(METAL_LENS_CALIB_METALLIB "${ALCEDO_BINARY_ROOT}/edit/operators/geometry/metal_shader/lens_calib.metallib"
+        CACHE INTERNAL "Metal lens calibration metallib path" FORCE)
     set(METAL_FUSED_PIPELINE_SRC "${ALCEDO_SRC_ROOT}/edit/pipeline/metal_shader/fused_pipeline.metal")
-    set(METAL_FUSED_PIPELINE_AIR "${CMAKE_CURRENT_BINARY_DIR}/edit/pipeline/metal_shader/fused_pipeline.air")
-    set(METAL_FUSED_PIPELINE_METALLIB "${CMAKE_CURRENT_BINARY_DIR}/edit/pipeline/metal_shader/fused_pipeline.metallib")
+    set(METAL_FUSED_PIPELINE_AIR "${ALCEDO_BINARY_ROOT}/edit/pipeline/metal_shader/fused_pipeline.air")
+    set(METAL_FUSED_PIPELINE_METALLIB "${ALCEDO_BINARY_ROOT}/edit/pipeline/metal_shader/fused_pipeline.metallib"
+        CACHE INTERNAL "Metal fused pipeline metallib path" FORCE)
     set(METAL_SCOPE_ANALYZER_SRC "${ALCEDO_SRC_ROOT}/edit/scope/metal_shader/scope_analyzer.metal")
-    set(METAL_SCOPE_ANALYZER_AIR "${CMAKE_CURRENT_BINARY_DIR}/edit/scope/metal_shader/scope_analyzer.air")
-    set(METAL_SCOPE_ANALYZER_METALLIB "${CMAKE_CURRENT_BINARY_DIR}/edit/scope/metal_shader/scope_analyzer.metallib")
+    set(METAL_SCOPE_ANALYZER_AIR "${ALCEDO_BINARY_ROOT}/edit/scope/metal_shader/scope_analyzer.air")
+    set(METAL_SCOPE_ANALYZER_METALLIB "${ALCEDO_BINARY_ROOT}/edit/scope/metal_shader/scope_analyzer.metallib"
+        CACHE INTERNAL "Metal scope analyzer metallib path" FORCE)
     set(METAL_FUSED_PIPELINE_DEPS
         "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/common.metal"
         "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/basic.metal"
@@ -31,23 +40,29 @@ if(ALCEDO_METAL_ENABLED)
         "${ALCEDO_SRC_ROOT}/edit/operators/GPU_kernels/metal_shader/halation.metal"
     )
     set(METAL_TO_LINEAR_REF_SRC "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_shader/to_linear_ref.metal")
-    set(METAL_TO_LINEAR_REF_AIR "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/to_linear_ref.air")
-    set(METAL_TO_LINEAR_REF_METALLIB "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/to_linear_ref.metallib")
+    set(METAL_TO_LINEAR_REF_AIR "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/to_linear_ref.air")
+    set(METAL_TO_LINEAR_REF_METALLIB "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/to_linear_ref.metallib"
+        CACHE INTERNAL "Metal ToLinearRef metallib path" FORCE)
     set(METAL_DEBAYER_RCD_SRC "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_shader/debayer_rcd.metal")
-    set(METAL_DEBAYER_RCD_AIR "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/debayer_rcd.air")
-    set(METAL_DEBAYER_RCD_METALLIB "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/debayer_rcd.metallib")
+    set(METAL_DEBAYER_RCD_AIR "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/debayer_rcd.air")
+    set(METAL_DEBAYER_RCD_METALLIB "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/debayer_rcd.metallib"
+        CACHE INTERNAL "Metal Debayer RCD metallib path" FORCE)
     set(METAL_CVT_REF_SPACE_SRC "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_shader/cvt_ref_space.metal")
-    set(METAL_CVT_REF_SPACE_AIR "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/cvt_ref_space.air")
-    set(METAL_CVT_REF_SPACE_METALLIB "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/cvt_ref_space.metallib")
+    set(METAL_CVT_REF_SPACE_AIR "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/cvt_ref_space.air")
+    set(METAL_CVT_REF_SPACE_METALLIB "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/cvt_ref_space.metallib"
+        CACHE INTERNAL "Metal ConvertToRefSpace metallib path" FORCE)
     set(METAL_HIGHLIGHT_RECONSTRUCT_SRC "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_shader/highlight_reconstruct.metal")
-    set(METAL_HIGHLIGHT_RECONSTRUCT_AIR "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/highlight_reconstruct.air")
-    set(METAL_HIGHLIGHT_RECONSTRUCT_METALLIB "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/highlight_reconstruct.metallib")
+    set(METAL_HIGHLIGHT_RECONSTRUCT_AIR "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/highlight_reconstruct.air")
+    set(METAL_HIGHLIGHT_RECONSTRUCT_METALLIB "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/highlight_reconstruct.metallib"
+        CACHE INTERNAL "Metal HighlightReconstruct metallib path" FORCE)
     set(METAL_XTRANS_INTERPOLATE_SRC "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_shader/xtrans_interpolate.metal")
-    set(METAL_XTRANS_INTERPOLATE_AIR "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/xtrans_interpolate.air")
-    set(METAL_XTRANS_INTERPOLATE_METALLIB "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/xtrans_interpolate.metallib")
+    set(METAL_XTRANS_INTERPOLATE_AIR "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/xtrans_interpolate.air")
+    set(METAL_XTRANS_INTERPOLATE_METALLIB "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/xtrans_interpolate.metallib"
+        CACHE INTERNAL "Metal X-Trans interpolate metallib path" FORCE)
     set(METAL_DEMOSAICNET_IO_SRC "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_shader/demosaicnet_io.metal")
-    set(METAL_DEMOSAICNET_IO_AIR "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/demosaicnet_io.air")
-    set(METAL_DEMOSAICNET_IO_METALLIB "${CMAKE_CURRENT_BINARY_DIR}/decoders/processor/operators/gpu/metal_shader/demosaicnet_io.metallib")
+    set(METAL_DEMOSAICNET_IO_AIR "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/demosaicnet_io.air")
+    set(METAL_DEMOSAICNET_IO_METALLIB "${ALCEDO_BINARY_ROOT}/decoders/processor/operators/gpu/metal_shader/demosaicnet_io.metallib"
+        CACHE INTERNAL "Metal DemosaicNet IO metallib path" FORCE)
     find_program(ALCEDO_XCRUN_EXECUTABLE xcrun REQUIRED)
     execute_process(
         COMMAND ${ALCEDO_XCRUN_EXECUTABLE} --sdk macosx --find metal
@@ -273,20 +288,21 @@ if(ALCEDO_METAL_ENABLED)
         "${METAL_DEMOSAICNET_IO_METALLIB}"
     )
     set(ALCEDO_METAL_RUNTIME_LIBS "${ALCEDO_METAL_RUNTIME_LIBS}" CACHE INTERNAL
-        "Metal shader libraries required at runtime."
+        "Metal shader libraries required at runtime." FORCE
     )
 
-    def_library(MetalContext SOURCES metal/metal_context.cpp)
+    # Source paths are relative to ALCEDO_SRC_ROOT (this file lives under metal/).
+    def_library(MetalContext SOURCES "${ALCEDO_SRC_ROOT}/metal/metal_context.cpp")
     target_link_libraries(MetalContext PUBLIC alcedo::metal_cpp)
-    def_library(MetalImage SOURCES image/metal_image.cpp PUBLIC_DEPS MetalContext alcedo::metal_cpp ${ALCEDO_OPENCV_CORE_DEPS})
+    def_library(MetalImage SOURCES "${ALCEDO_SRC_ROOT}/image/metal_image.cpp" PUBLIC_DEPS MetalContext alcedo::metal_cpp ${ALCEDO_OPENCV_CORE_DEPS})
     def_library(MetalUtils
-        SOURCES metal/metal_utils/metal_convert_utils.cpp
+        SOURCES "${ALCEDO_SRC_ROOT}/metal/metal_utils/metal_convert_utils.cpp"
         PUBLIC_DEPS MetalContext MetalImage alcedo::metal_cpp ${ALCEDO_OPENCV_CORE_DEPS}
     )
     add_dependencies(MetalUtils MetalUtilsShaders)
     target_compile_definitions(MetalUtils PRIVATE ALCEDO_METAL_UTILS_METALLIB_PATH="${METAL_UTILS_METALLIB}")
     def_library(MetalGeometryUtils
-        SOURCES metal/metal_utils/geometry_utils.cpp
+        SOURCES "${ALCEDO_SRC_ROOT}/metal/metal_utils/geometry_utils.cpp"
         PUBLIC_DEPS MetalImage alcedo::metal_cpp ${ALCEDO_OPENCV_CORE_DEPS} libraw::raw_r
     )
     add_dependencies(MetalGeometryUtils MetalGeometryUtilsShaders)
@@ -295,8 +311,8 @@ if(ALCEDO_METAL_ENABLED)
     # Fixed Metal MPSGraph DemosaicNet modules and lazy model cache.
     def_library(MetalDemosaicNet
         SOURCES
-            decoders/processor/nn/metal_demosaicnet_module.mm
-            decoders/processor/nn/metal_demosaicnet_cache.mm
+            "${ALCEDO_SRC_ROOT}/decoders/processor/nn/metal_demosaicnet_module.mm"
+            "${ALCEDO_SRC_ROOT}/decoders/processor/nn/metal_demosaicnet_cache.mm"
         PUBLIC_DEPS
             MetalContext
             NnSafetensors
@@ -311,8 +327,8 @@ if(ALCEDO_METAL_ENABLED)
         $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
     )
     set_source_files_properties(
-        decoders/processor/nn/metal_demosaicnet_module.mm
-        decoders/processor/nn/metal_demosaicnet_cache.mm
+        "${ALCEDO_SRC_ROOT}/decoders/processor/nn/metal_demosaicnet_module.mm"
+        "${ALCEDO_SRC_ROOT}/decoders/processor/nn/metal_demosaicnet_cache.mm"
         PROPERTIES
             COMPILE_FLAGS "-fobjc-arc"
             LANGUAGE OBJCXX
@@ -328,8 +344,8 @@ if(ALCEDO_METAL_ENABLED)
     # Tile IO orchestration + product RAW Neural entry (hard-fail).
     def_library(MetalDemosaicNetEntry
         SOURCES
-            decoders/processor/nn/metal_demosaicnet_tiled.mm
-            decoders/processor/operators/gpu/metal_demosaicnet.cpp
+            "${ALCEDO_SRC_ROOT}/decoders/processor/nn/metal_demosaicnet_tiled.mm"
+            "${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/metal_demosaicnet.cpp"
         PUBLIC_DEPS
             MetalDemosaicNet
             MetalImage
@@ -347,7 +363,7 @@ if(ALCEDO_METAL_ENABLED)
         $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>
     )
     set_source_files_properties(
-        decoders/processor/nn/metal_demosaicnet_tiled.mm
+        "${ALCEDO_SRC_ROOT}/decoders/processor/nn/metal_demosaicnet_tiled.mm"
         PROPERTIES
             COMPILE_FLAGS "-fobjc-arc"
             LANGUAGE OBJCXX
