@@ -4,8 +4,8 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-25 after completing Phase 6E Display Transform panel (encoding space,
-EOTF, peak luminance, ACES 2.0 / OpenDRT method, limiting space, OpenDRT presets).
+Last revised: 2026-07-26 after completing Phase 6F Geometry panel and correcting its delayed
+image-size and source-frame preview synchronization.
 
 Affected areas:
 
@@ -2363,7 +2363,7 @@ Shared modules `color_temp` / `color_wheel` / `hls` / `lut_catalog` moved into `
 
 **Residual gaps:**
 - No dedicated QML offscreen harness for Look panel pointer paths (models + geometry cover
-  controller contracts; shared `EditorAdjustmentControlQmlTest` still covers slider/control
+  controller interfaces; shared `EditorAdjustmentControlQmlTest` still covers slider/control
   primitives).
 - Full e2e reopen of every Look field through mini-Git recovery is covered by field-key routing
   already in the session/history path; no new forced-termination matrix for Look-only.
@@ -2454,6 +2454,65 @@ Acceptance:
 - Panel edits and direct overlay drags stay bidirectionally consistent without binding loops.
 - Undo/redo, edit-after-undo, checkout, and recovery restore both pipeline geometry and overlay
   geometry exactly.
+
+##### Phase 6F completion record (2026-07-26)
+
+**Status:** complete — Geometry QML now replaces the stack placeholder with crop/rotate controls,
+aspect-preserving normalized-rectangle math, overlay synchronization, reset behavior, and lens
+calibration catalog controls.
+
+**Primary success call chain:**
+
+```text
+QML crop/rotate/lens edit
+  -> typed adjustment models and EditorGeometryPanel buildCropParams/buildLensParams
+  -> IEditorAdjustmentSubmitter.submitPatch("crop_rotate"/"lens_calib", paramsJson, settled)
+  -> EditorSessionController -> session backend Patch/CommitAdjustment
+  -> pipeline field routing and crop/lens operators
+QML geometry-panel activation or settled snapshot publication
+  -> guarded EditorInteractionController crop-tool/overlay setters
+  -> cropRectCommitted/cropRotationCommitted from direct overlay input
+  -> guarded panel-model update -> the same submitPatch path
+  -> EditorInteractionController CropRotate view-change routing for render invalidation
+```
+
+**What was implemented:**
+
+| File | Change |
+| --- | --- |
+| `qml/EditorGeometryPanel.qml` | New geometry panel with crop rectangle, rotation, aspect presets/custom ratio, expand-to-fit, reset, lens enable/brand/model controls, snapshot loading, and guarded overlay event synchronization |
+| `album_backend/editor_geometry_math.*` | QML adapter over the existing normalized crop equations and aspect catalog used by the legacy geometry path |
+| `album_backend/editor_lens_catalog_model.*` | QML read-only catalog adapter with metadata fallback entries and complete default lens parameter preservation |
+| `qml/EditorAdjustmentStack.qml` / `qml/EditorWorkspace.qml` | Replaced the geometry placeholder and passed the production interaction controller into the panel |
+| `CMakeLists.txt` (alcedo_main) | Registered the panel and shared geometry/lens modules in `AlbumBackendLib`; kept the widget path on the same implementations |
+| `tests/ui/editor_geometry_math_test.cpp` | Three tests for preset catalog parity, normalized bounds/aspect resizing, and lens default JSON shape |
+| `tests/ui/editor_geometry_panel_qml_test.cpp` | Six QML tests for typed models, snapshot restore without submission, slider settlement, overlay release, aspect-preset resizing, and lens catalog selection |
+
+**What was proven (executed tests):**
+
+| Test | Result |
+| --- | --- |
+| `EditorGeometryMathTest` | 3/3 passed |
+| `EditorGeometryPanelQmlTest` | 6/6 passed |
+| Existing adjustment/control/workspace QML regression targets | 37/37 passed across 6 targets |
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target alcedo_main EditorGeometryMathTest EditorGeometryPanelQmlTest`; direct GTest execution of the two new binaries plus the six rebuilt QML regression targets.
+
+**Post-completion correction (2026-07-26):** Geometry-panel render intents now carry a
+`geometry_overlay_only` flag. The unified session scheduler keeps the crop/rotate parameters
+installed for the next full render but disables `CROP_ROTATE` while the source-frame overlay owns
+the preview, matching the legacy Widget interaction with the pipeline. Entering or leaving the
+panel requests a full-frame refresh. `EditorWorkspace` uses the first render-reference dimensions
+as a temporary image-size fallback and retries the metadata query, so delayed image metadata cannot
+leave the overlay scene empty. The crop setters exposed to QML are invokable, and the retry timer
+uses its owning item explicitly; production `WorkspaceShellTest` loading therefore completes
+without geometry-panel QML warnings.
+
+**Correction verification:** `EditorAdjustmentPipelineTest` 4/4, `EditorSessionRenderControllerTest`
+12/12, `EditorSessionControllerPhase5ATest` 27/27, `EditorOverlayInteractionTest` 36/36,
+`EditorGeometryPanelQmlTest` 6/6, and the six existing adjustment/control/workspace QML targets
+37/37. The rebuilt `WorkspaceShellTest` reached all 44 cases with 40 passed, one hardware-path
+skip, and three unrelated workspace assertions remaining outside this correction.
 
 ### Phase 6G - RAW Decode panel
 

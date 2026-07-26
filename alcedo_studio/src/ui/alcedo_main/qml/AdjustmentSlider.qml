@@ -27,11 +27,11 @@ Item {
     readonly property color colText: appTheme.textColor
     readonly property color colMuted: appTheme.textMutedColor
     readonly property color colDanger: appTheme.dangerColor
-    readonly property color colTrack: "#2C2D2F"
-    readonly property color colFill: "#D8D4CD"
-    readonly property color colHandle: "#F5F1EA"
-    readonly property color colHandleBorder: "#1A1B1C"
-    readonly property color colZero: "#6A6761"
+    readonly property color colTrack: appTheme.editorSliderTrackColor
+    readonly property color colFill: appTheme.editorSliderHandleColor
+    readonly property color colHandle: appTheme.editorSliderHandleColor
+    readonly property color colHandleBorder: appTheme.editorSliderHandleBorderColor
+    readonly property color colZero: appTheme.textMutedColor
     readonly property bool centered: root.model
                                      && root.model.minimum < 0
                                      && root.model.maximum > 0
@@ -40,13 +40,17 @@ Item {
     readonly property int sliderRowHeight: 32
     /// Hit radius around the handle center for starting a drag (px).
     readonly property int handleHitPad: 12
+    /// Pointer gain for handle drag. Full-track mouse travel maps to this fraction
+    /// of the value range (0.32 ≈ 3× slower than absolute 1:1 mapping).
+    readonly property real pointerGain: 0.32
 
     // Double-click detection without TapHandler (TapHandler steals the grab and
     // breaks continuous drag + real double-clicks on some styles).
     property bool _gestureMoved: false
     property double _pressValue: 0
+    property double _pressLocalX: 0
     property double _lastClickMs: 0
-    property var _savedFlickableInteractive: null
+    property bool _flickableLocked: false
     property bool _handleDragging: false
 
     implicitHeight: sliderColumn.implicitHeight
@@ -88,15 +92,29 @@ Item {
     function lockFlickable(lock) {
         if (!root.flickable)
             return
-        if (lock) {
-            if (root._savedFlickableInteractive === null)
-                root._savedFlickableInteractive = root.flickable.interactive
-            root.flickable.interactive = false
-        } else {
-            if (root._savedFlickableInteractive !== null) {
-                root.flickable.interactive = root._savedFlickableInteractive
-                root._savedFlickableInteractive = null
+        // Prefer refcounted API so interleaved slider/CDL locks cannot restore a
+        // stale false and permanently kill wheel/flick scrolling.
+        if (typeof root.flickable.beginInputLock === "function"
+                && typeof root.flickable.endInputLock === "function") {
+            if (lock) {
+                if (!root._flickableLocked) {
+                    root.flickable.beginInputLock()
+                    root._flickableLocked = true
+                }
+            } else if (root._flickableLocked) {
+                root.flickable.endInputLock()
+                root._flickableLocked = false
             }
+            return
+        }
+        // Fallback without refcount: never re-apply a saved false (that is the
+        // stuck-scroll bug after nested locks). Always re-enable on unlock.
+        if (lock) {
+            root.flickable.interactive = false
+            root._flickableLocked = true
+        } else {
+            root.flickable.interactive = true
+            root._flickableLocked = false
         }
     }
 
@@ -112,11 +130,28 @@ Item {
     }
 
     function valueFromLocalX(localX) {
+        // Absolute mapping (kept for keyboard/tests that need a track position).
         var edge = root.handleSize * 0.5
         var trackW = Math.max(1e-6, slider.availableWidth - root.handleSize)
         var pos = (localX - slider.leftPadding - edge) / trackW
         pos = Math.max(0, Math.min(1, pos))
         var v = slider.from + pos * (slider.to - slider.from)
+        if (root.model && root.model.step > 0) {
+            v = Math.round(v / root.model.step) * root.model.step
+        }
+        if (root.model) {
+            v = Math.max(root.model.minimum, Math.min(root.model.maximum, v))
+        }
+        return v
+    }
+
+    /// Relative drag from press with pointerGain: full-track mouse travel only
+    /// spans `pointerGain` of the value range (decelerated feel).
+    function valueFromDragDelta(localX) {
+        var trackW = Math.max(1e-6, slider.availableWidth - root.handleSize)
+        var dx = localX - root._pressLocalX
+        var range = slider.to - slider.from
+        var v = root._pressValue + (dx / trackW) * range * root.pointerGain
         if (root.model && root.model.step > 0) {
             v = Math.round(v / root.model.step) * root.model.step
         }
@@ -355,6 +390,7 @@ Item {
                     slider.forceActiveFocus()
                     root._gestureMoved = false
                     root._pressValue = slider.value
+                    root._pressLocalX = mouse.x
                     root.lockFlickable(true)
                     if (root.isNearHandle(mouse.x)) {
                         root._handleDragging = true
@@ -370,7 +406,7 @@ Item {
                     if (!root._handleDragging || !root.model)
                         return
                     root._gestureMoved = true
-                    var v = root.valueFromLocalX(mouse.x)
+                    var v = root.valueFromDragDelta(mouse.x)
                     slider.value = v
                     root.model.updateDrag(v)
                 }

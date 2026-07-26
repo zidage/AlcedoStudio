@@ -373,7 +373,8 @@ Item {
 
     // Generic monochrome slider for Look-only controls (CCT/tint/HSL/master).
     // Owns its value during press (no model→value binding fight). Double-click
-    // without movement resets. Locks lookScroll while pressed.
+    // without movement resets. Locks lookScroll while pressed. Pointer drag uses
+    // the same decelerated relative mapping as AdjustmentSlider (pointerGain).
     component MonoSlider: Slider {
         id: mono
         property var gradientStops: null
@@ -383,11 +384,15 @@ Item {
         property var onReset: function () {}
         // External load value; applied only when not pressed.
         property real externalValue: 0
+        /// Full-track mouse travel maps to this fraction of the value range.
+        property real pointerGain: 0.32
 
         property bool _gestureMoved: false
         property real _pressValue: 0
+        property real _pressLocalX: 0
         property double _lastClickMs: 0
-        property var _savedFlickInteractive: null
+        property bool _scrollLocked: false
+        property bool _handleDragging: false
 
         from: 0
         to: 1
@@ -400,6 +405,8 @@ Item {
         rightPadding: 0
         topPadding: 0
         bottomPadding: 0
+        // Controls.Slider absolute seek is disabled; MouseArea owns pointer drag.
+        hoverEnabled: false
         Layout.fillWidth: true
         Layout.preferredHeight: root.sliderRowHeight
         implicitHeight: root.sliderRowHeight
@@ -409,7 +416,7 @@ Item {
         Component.onCompleted: value = externalValue
 
         onExternalValueChanged: {
-            if (!pressed)
+            if (!_handleDragging)
                 value = externalValue
         }
 
@@ -417,12 +424,13 @@ Item {
             if (!lookScroll)
                 return
             if (lock) {
-                if (_savedFlickInteractive === null)
-                    _savedFlickInteractive = lookScroll.interactive
-                lookScroll.interactive = false
-            } else if (_savedFlickInteractive !== null) {
-                lookScroll.interactive = _savedFlickInteractive
-                _savedFlickInteractive = null
+                if (!_scrollLocked) {
+                    lookScroll.beginInputLock()
+                    _scrollLocked = true
+                }
+            } else if (_scrollLocked) {
+                lookScroll.endInputLock()
+                _scrollLocked = false
             }
         }
 
@@ -430,34 +438,42 @@ Item {
             value = externalValue
         }
 
-        onPressedChanged: {
-            if (pressed) {
-                _gestureMoved = false
-                _pressValue = value
-                lockScroll(true)
-                onBegin()
-            } else {
-                var now = Date.now()
-                var isDouble = !_gestureMoved
-                        && (now - _lastClickMs) < 350
-                        && Math.abs(value - _pressValue) <= Math.max(stepSize * 0.5, 1e-9)
-                _lastClickMs = now
-                lockScroll(false)
-                if (isDouble && enabled) {
-                    // Skip finish settle on the empty second click; reset owns
-                    // the single settled commit (avoids back-to-back history
-                    // commits while a render may hold the pipeline lock).
-                    onReset()
-                    syncFromExternal()
-                } else {
-                    onFinish()
-                    syncFromExternal()
-                }
-            }
+        function handleCenterX() {
+            return mono.leftPadding
+                    + mono.visualPosition * (mono.availableWidth - root.handleSize)
+                    + root.handleSize * 0.5
         }
-        onMoved: {
-            _gestureMoved = true
-            onUpdate(value)
+
+        function isNearHandle(localX) {
+            return Math.abs(localX - handleCenterX())
+                    <= Math.max(root.handleSize * 0.5 + 12, 16)
+        }
+
+        function valueFromDragDelta(localX) {
+            var trackW = Math.max(1e-6, mono.availableWidth - root.handleSize)
+            var dx = localX - mono._pressLocalX
+            var range = mono.to - mono.from
+            var v = mono._pressValue + (dx / trackW) * range * mono.pointerGain
+            if (mono.stepSize > 0)
+                v = Math.round(v / mono.stepSize) * mono.stepSize
+            return Math.max(mono.from, Math.min(mono.to, v))
+        }
+
+        function finishPointerGesture() {
+            var now = Date.now()
+            var isDouble = !_gestureMoved
+                    && (now - _lastClickMs) < 350
+                    && Math.abs(value - _pressValue) <= Math.max(stepSize * 0.5, 1e-9)
+            _lastClickMs = now
+            lockScroll(false)
+            if (isDouble && enabled) {
+                onReset()
+                syncFromExternal()
+            } else if (_handleDragging) {
+                onFinish()
+                syncFromExternal()
+            }
+            _handleDragging = false
         }
 
         background: Rectangle {
@@ -491,6 +507,46 @@ Item {
             color: root.colHandle
             border.width: 1
             border.color: root.colHandleBorder
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            enabled: mono.enabled
+            preventStealing: true
+            hoverEnabled: false
+            acceptedButtons: Qt.LeftButton
+            cursorShape: mono._handleDragging ? Qt.ClosedHandCursor : Qt.ArrowCursor
+
+            onPressed: function (mouse) {
+                mono._gestureMoved = false
+                mono._pressValue = mono.value
+                mono._pressLocalX = mouse.x
+                mono.lockScroll(true)
+                if (mono.isNearHandle(mouse.x)) {
+                    mono._handleDragging = true
+                    mono.onBegin()
+                } else {
+                    mono._handleDragging = false
+                }
+                mouse.accepted = true
+            }
+            onPositionChanged: function (mouse) {
+                if (!mono._handleDragging)
+                    return
+                mono._gestureMoved = true
+                var v = mono.valueFromDragDelta(mouse.x)
+                mono.value = v
+                mono.onUpdate(v)
+            }
+            onReleased: function (/*mouse*/) {
+                mono.finishPointerGesture()
+            }
+            onCanceled: {
+                if (mono._handleDragging)
+                    mono.onFinish()
+                mono._handleDragging = false
+                mono.lockScroll(false)
+            }
         }
     }
 
@@ -619,24 +675,22 @@ Item {
         }
     }
 
-    // CDL disc/master drags must not scroll the panel.
-    property var _cdlSavedFlickInteractive: null
+    // CDL disc/master drags must not scroll the panel (refcount via lookScroll).
     Connections {
         target: cdlModel
         function onDragActiveChanged() {
-            if (cdlModel.dragActive) {
-                if (root._cdlSavedFlickInteractive === null)
-                    root._cdlSavedFlickInteractive = lookScroll.interactive
-                lookScroll.interactive = false
-            } else if (root._cdlSavedFlickInteractive !== null) {
-                lookScroll.interactive = root._cdlSavedFlickInteractive
-                root._cdlSavedFlickInteractive = null
-            }
+            if (!lookScroll)
+                return
+            if (cdlModel.dragActive)
+                lookScroll.beginInputLock()
+            else
+                lookScroll.endInputLock()
         }
     }
 
     Flickable {
         id: lookScroll
+        objectName: "editorLookPanelScroll"
         anchors.fill: parent
         contentWidth: width
         contentHeight: lookColumn.implicitHeight
@@ -645,6 +699,38 @@ Item {
         flickableDirection: Flickable.VerticalFlick
         // Press-delay gives child sliders first chance at the grab before flick.
         pressDelay: 0
+
+        property int inputLockCount: 0
+        function beginInputLock() {
+            if (inputLockCount === 0)
+                interactive = false
+            inputLockCount += 1
+        }
+        function endInputLock() {
+            if (inputLockCount > 0)
+                inputLockCount -= 1
+            if (inputLockCount <= 0) {
+                inputLockCount = 0
+                interactive = true
+            }
+        }
+
+        // Wheel over child sliders must still scroll the panel.
+        WheelHandler {
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            grabPermissions: PointerHandler.CanTakeOverFromItems
+                             | PointerHandler.CanTakeOverFromHandlersOfDifferentType
+                             | PointerHandler.ApprovesTakeOverByAnything
+            onWheel: function (event) {
+                var step = event.pixelDelta.y !== 0
+                           ? event.pixelDelta.y
+                           : event.angleDelta.y / 120 * 48
+                var maxY = Math.max(0, lookScroll.contentHeight - lookScroll.height)
+                lookScroll.contentY = Math.max(0, Math.min(maxY, lookScroll.contentY - step))
+                event.accepted = true
+            }
+        }
+
         ScrollBar.vertical: ScrollBar {
             policy: ScrollBar.AsNeeded
             padding: 0

@@ -50,4 +50,8 @@ auto ApplyEditorAdjustmentSnapshot(CPUPipelineExecutor&                  executo
                                    const EditorRenderAdjustmentSnapshot& snapshot,
                                    std::string*                          error) -> bool;
 
+/// Disable the geometry operator for an overlay editing preview while keeping
+/// its parameters installed on the executor for the next full render.
+void DisableEditorGeometryOperatorForOverlay(CPUPipelineExecutor& executor);
+
 }  // namespace alcedo

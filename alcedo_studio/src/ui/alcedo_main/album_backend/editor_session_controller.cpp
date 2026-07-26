@@ -44,6 +44,10 @@ EditorSessionController::EditorSessionController(EditorController*              
     : QObject(parent), editor_(editor), session_backend_(session_backend) {
   LoadFilmstripUiPrefs();
   LoadDesktopUiPrefs();
+  if (session_backend_) {
+    session_backend_->SetGeometryOverlayActive(active_adjustment_panel_ ==
+                                               QLatin1String("geometry"));
+  }
   InstallBackendNotifier();
 }
 
@@ -86,6 +90,8 @@ void EditorSessionController::SetSessionBackend(alcedo::IEditorSessionBackend* s
   }
   session_backend_ = session_backend;
   if (session_backend_) {
+    session_backend_->SetGeometryOverlayActive(active_adjustment_panel_ ==
+                                               QLatin1String("geometry"));
     InstallBackendNotifier();
     SyncIdentityFromBackend();
   }
@@ -669,6 +675,13 @@ void EditorSessionController::set_active_adjustment_panel(const QString& panel) 
   }
   active_adjustment_panel_ = normalized;
   SaveDesktopUiPrefs();
+  if (session_backend_) {
+    session_backend_->SetGeometryOverlayActive(normalized == QLatin1String("geometry"));
+    if (session_backend_->has_image() &&
+        session_backend_->state() == alcedo::EditorSessionState::Interactive) {
+      session_backend_->RequestViewChange(alcedo::EditorRenderReason::CropRotate, std::nullopt);
+    }
+  }
   emit DesktopUiChanged();
 }
 

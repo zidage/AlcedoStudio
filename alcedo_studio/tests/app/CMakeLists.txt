@@ -9,6 +9,19 @@ target_link_libraries(EditorAdjustmentPipelineTest
 gtest_discover_tests(EditorAdjustmentPipelineTest TEST_PREFIX "EditorAdjustmentPipelineTest.")
 alcedo_register_test_target(EditorAdjustmentPipelineTest app)
 
+# Geometry overlay preview: crop disable + bilinear GPU resize path that the
+# unified scheduler runs when the Geometry panel owns the source-frame overlay.
+add_executable(EditorGeometryOverlayPipelineTest
+    ${ALCEDO_TEST_ROOT}/app/editor_geometry_overlay_pipeline_test.cpp)
+target_include_directories(EditorGeometryOverlayPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorGeometryOverlayPipelineTest
+    PRIVATE GTest::gtest_main EditorAdjustmentPipeline Operators EditPipeline JSON
+            ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+gtest_discover_tests(EditorGeometryOverlayPipelineTest
+    TEST_PREFIX "EditorGeometryOverlayPipelineTest."
+    PROPERTIES LABELS "app;geometry;gpu")
+alcedo_register_test_target(EditorGeometryOverlayPipelineTest app)
+
 add_executable(ImportServiceTest ${ALCEDO_TEST_ROOT}/app/import_service_test.cpp)
 target_include_directories(ImportServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ImportServiceTest ImportService ProjectService GTest::gtest_main)

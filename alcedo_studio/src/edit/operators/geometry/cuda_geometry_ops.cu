@@ -9,9 +9,9 @@
 #include <opencv2/core/cuda.hpp>
 #include <opencv2/core/cuda_types.hpp>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
-#include "decoders/processor/operators/gpu/cuda_raw_proc_utils.hpp"
 #include "edit/operators/geometry/cuda_geometry_ops.hpp"
 
 namespace alcedo {
@@ -19,6 +19,37 @@ namespace CUDA {
 namespace {
 
 constexpr float kEps = 1e-8f;
+
+// Geometry kernels must not abort the process (the shared CUDA_CHECK helper
+// calls exit). Surface launch/runtime failures as exceptions so the editor
+// render path can fail a single job and recover.
+#define ALCEDO_CUDA_GEOMETRY_CHECK(call)                                                          \
+  do {                                                                                            \
+    const cudaError_t alcedo_cuda_err = (call);                                                   \
+    if (alcedo_cuda_err != cudaSuccess) {                                                         \
+      throw std::runtime_error(std::string("CUDA geometry error: ") +                             \
+                               cudaGetErrorString(alcedo_cuda_err) + " at " + __FILE__ + ":" +  \
+                               std::to_string(__LINE__));                                         \
+    }                                                                                             \
+  } while (0)
+
+void ClearStickyCudaError() {
+  // A prior async failure can stick as "invalid argument" on the next kernel
+  // launch check. Clear it so geometry operators report their own failures.
+  (void)cudaGetLastError();
+}
+
+void ValidateResizeLaunch(const cv::cuda::GpuMat& src, cv::Size dst_size, const char* api) {
+  if (src.empty() || src.data == nullptr || src.cols <= 0 || src.rows <= 0) {
+    throw std::runtime_error(std::string(api) + ": source GpuMat is empty");
+  }
+  if (dst_size.width <= 0 || dst_size.height <= 0) {
+    throw std::runtime_error(std::string(api) + ": destination size must be positive");
+  }
+  if (src.step < static_cast<size_t>(src.cols) * src.elemSize()) {
+    throw std::runtime_error(std::string(api) + ": source step is smaller than row byte width");
+  }
+}
 
 template <typename T>
 struct PixelOps;
@@ -216,6 +247,8 @@ __global__ void ResizeAreaKernel(const cv::cuda::PtrStepSz<PixelT> src,
 
 template <typename PixelT>
 void Downsample2xBoxTyped(const cv::cuda::GpuMat& src, cv::cuda::GpuMat& dst) {
+  ValidateResizeLaunch(src, cv::Size((src.cols + 1) / 2, (src.rows + 1) / 2),
+                       "CUDA::Downsample2xBox");
   const int dst_w = (src.cols + 1) / 2;
   const int dst_h = (src.rows + 1) / 2;
 
@@ -227,8 +260,9 @@ void Downsample2xBoxTyped(const cv::cuda::GpuMat& src, cv::cuda::GpuMat& dst) {
   const dim3 block(16, 16);
   const dim3 grid((dst.cols + block.x - 1) / block.x, (dst.rows + block.y - 1) / block.y);
 
+  ClearStickyCudaError();
   Downsample2xBoxKernel<PixelT><<<grid, block>>>(src, dst);
-  CUDA_CHECK(cudaGetLastError());
+  ALCEDO_CUDA_GEOMETRY_CHECK(cudaGetLastError());
 }
 
 template <typename PixelT>
@@ -247,9 +281,10 @@ __global__ void ResizeLinearKernel(const cv::cuda::PtrStepSz<PixelT> src,
 
 template <typename PixelT>
 void ResizeLinearTyped(const cv::cuda::GpuMat& src, cv::cuda::GpuMat& dst, cv::Size dst_size) {
+  ValidateResizeLaunch(src, dst_size, "CUDA::ResizeLinear");
   dst.create(dst_size.height, dst_size.width, src.type());
-  if (dst_size.width <= 0 || dst_size.height <= 0) {
-    return;
+  if (dst.empty() || dst.data == nullptr) {
+    throw std::runtime_error("CUDA::ResizeLinear: failed to allocate destination GpuMat");
   }
 
   const float scale_x = static_cast<float>(src.cols) / static_cast<float>(dst_size.width);
@@ -258,9 +293,13 @@ void ResizeLinearTyped(const cv::cuda::GpuMat& src, cv::cuda::GpuMat& dst, cv::S
   const dim3 block(16, 16);
   const dim3 grid((dst_size.width + block.x - 1) / block.x,
                   (dst_size.height + block.y - 1) / block.y);
+  if (grid.x == 0 || grid.y == 0) {
+    throw std::runtime_error("CUDA::ResizeLinear: invalid launch grid");
+  }
 
+  ClearStickyCudaError();
   ResizeLinearKernel<PixelT><<<grid, block>>>(src, dst, scale_x, scale_y);
-  CUDA_CHECK(cudaGetLastError());
+  ALCEDO_CUDA_GEOMETRY_CHECK(cudaGetLastError());
 }
 
 inline auto ShouldContinueDownsample2x(const cv::Size& current, const cv::Size& target) -> bool {
@@ -339,9 +378,10 @@ auto MakeBorderValue<float4>(const cv::Scalar& scalar) -> float4 {
 
 template <typename PixelT>
 void ResizeAreaApproxTyped(const cv::cuda::GpuMat& src, cv::cuda::GpuMat& dst, cv::Size dst_size) {
+  ValidateResizeLaunch(src, dst_size, "CUDA::ResizeAreaApprox");
   dst.create(dst_size.height, dst_size.width, src.type());
-  if (dst_size.width <= 0 || dst_size.height <= 0) {
-    return;
+  if (dst.empty() || dst.data == nullptr) {
+    throw std::runtime_error("CUDA::ResizeAreaApprox: failed to allocate destination GpuMat");
   }
 
   const float scale_x = static_cast<float>(src.cols) / static_cast<float>(dst_size.width);
@@ -350,15 +390,19 @@ void ResizeAreaApproxTyped(const cv::cuda::GpuMat& src, cv::cuda::GpuMat& dst, c
   const dim3 block(16, 16);
   const dim3 grid((dst_size.width + block.x - 1) / block.x,
                   (dst_size.height + block.y - 1) / block.y);
+  if (grid.x == 0 || grid.y == 0) {
+    throw std::runtime_error("CUDA::ResizeAreaApprox: invalid launch grid");
+  }
 
+  ClearStickyCudaError();
   if (scale_x <= 1.0f || scale_y <= 1.0f) {
     ResizeLinearKernel<PixelT><<<grid, block>>>(src, dst, scale_x, scale_y);
-    CUDA_CHECK(cudaGetLastError());
+    ALCEDO_CUDA_GEOMETRY_CHECK(cudaGetLastError());
     return;
   }
 
   ResizeAreaKernel<PixelT><<<grid, block>>>(src, dst, scale_x, scale_y);
-  CUDA_CHECK(cudaGetLastError());
+  ALCEDO_CUDA_GEOMETRY_CHECK(cudaGetLastError());
 }
 
 template <typename PixelT>
@@ -393,9 +437,10 @@ void WarpAffineLinearTyped(const cv::cuda::GpuMat& src, cv::cuda::GpuMat& dst,
   const dim3  grid((out_size.width + block.x - 1) / block.x,
                    (out_size.height + block.y - 1) / block.y);
 
+  ClearStickyCudaError();
   WarpAffineLinearKernel<PixelT><<<grid, block>>>(src, dst, m00, m01, m02, m10, m11, m12,
                                                   MakeBorderValue<PixelT>(border_value));
-  CUDA_CHECK(cudaGetLastError());
+  ALCEDO_CUDA_GEOMETRY_CHECK(cudaGetLastError());
 }
 
 }  // namespace

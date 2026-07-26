@@ -80,12 +80,17 @@ auto EditorSessionRenderController::MakeRenderIntent(const EditorRenderCommand& 
   intent.frame_role           = FrameRoleForQuality(intent.quality);
   intent.replacement_key      = DefaultReplacementKey(intent.quality);
   intent.adjustment           = command.adjustment;
-  intent.requested_width      = presentation_width_;
-  intent.requested_height     = presentation_height_;
+  intent.geometry_overlay_only = geometry_overlay_active_.load(std::memory_order_acquire);
+  intent.requested_width     = presentation_width_;
+  intent.requested_height    = presentation_height_;
   intent.presentation_sink_id = presentation_sink_id_;
   intent.cancellation         = std::make_shared<EditorRenderCancellationToken>();
   FillRenderIntentDefaults(intent);
   return intent;
+}
+
+void EditorSessionRenderController::SetGeometryOverlayActive(bool active) {
+  geometry_overlay_active_.store(active, std::memory_order_release);
 }
 
 auto EditorSessionRenderController::RouteInitialRender(const EditorRenderCommand&   command,

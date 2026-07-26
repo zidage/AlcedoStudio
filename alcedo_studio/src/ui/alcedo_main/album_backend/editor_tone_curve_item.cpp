@@ -20,12 +20,21 @@
 namespace alcedo::ui {
 namespace {
 
-constexpr qreal kPlotLeft   = 22.0;
-constexpr qreal kPlotTop    = 14.0;
-constexpr qreal kPlotRight  = 12.0;
-constexpr qreal kPlotBottom = 24.0;
-constexpr int   kHandleFan  = 16;
+// Tight plot insets — the previous 22/12/14/24 left too much dead chrome and
+// made the interactive area feel cramped in the side panel.
+constexpr qreal kPlotLeft   = 8.0;
+constexpr qreal kPlotTop    = 8.0;
+constexpr qreal kPlotRight  = 8.0;
+constexpr qreal kPlotBottom = 8.0;
+constexpr int   kHandleFan  = 20;
 constexpr qreal kPi         = 3.14159265358979323846;
+// GL lineWidth is ignored on modern core profiles; draw the curve as a solid
+// triangle ribbon instead (half-width in item px).
+constexpr qreal kCurveHalfWidth = 1.75;
+constexpr qreal kHitRadius      = 14.0;
+// Pointer gain < 1: mouse motion is decelerated for finer curve control.
+// Full plot drag maps to this fraction of normalized [0,1] (≈3× slower than 1:1).
+constexpr qreal kPointerGain = 0.32;
 
 void FillSolidGeometry(QSGGeometry* geometry, const std::vector<QPointF>& points,
                        QSGGeometry::DrawingMode mode, qreal line_width) {
@@ -60,6 +69,34 @@ void AppendRect(std::vector<QPointF>& tris, const QRectF& r) {
   tris.push_back(tl);
   tris.push_back(br);
   tris.push_back(bl);
+}
+
+void AppendStrokeRibbon(std::vector<QPointF>& tris, const std::vector<QPointF>& samples,
+                        qreal half_width) {
+  if (samples.size() < 2 || half_width <= 0.0) {
+    return;
+  }
+  for (size_t i = 0; i + 1 < samples.size(); ++i) {
+    const QPointF a = samples[i];
+    const QPointF b = samples[i + 1];
+    const qreal   dx = b.x() - a.x();
+    const qreal   dy = b.y() - a.y();
+    const qreal   len = std::hypot(dx, dy);
+    if (len < 1.0e-6) {
+      continue;
+    }
+    const QPointF n(-dy / len * half_width, dx / len * half_width);
+    const QPointF a0 = a + n;
+    const QPointF a1 = a - n;
+    const QPointF b0 = b + n;
+    const QPointF b1 = b - n;
+    tris.push_back(a0);
+    tris.push_back(b0);
+    tris.push_back(b1);
+    tris.push_back(a0);
+    tris.push_back(b1);
+    tris.push_back(a1);
+  }
 }
 
 void UpsertSolidNode(QSGNode* root, QSGGeometryNode*& slot, const std::vector<QPointF>& points,
@@ -172,6 +209,7 @@ struct EditorToneCurveItem::CurveRootNode : public QSGNode {
   QSGGeometryNode* grid       = nullptr;
   QSGGeometryNode* diagonal   = nullptr;
   QSGGeometryNode* curve      = nullptr;
+  QSGGeometryNode* outlines   = nullptr;
   QSGGeometryNode* handles    = nullptr;
   QSGGeometryNode* active     = nullptr;
 };
@@ -181,7 +219,7 @@ EditorToneCurveItem::EditorToneCurveItem(QQuickItem* parent) : QQuickItem(parent
   setAcceptedMouseButtons(Qt::LeftButton | Qt::RightButton);
   setAcceptHoverEvents(true);
   setCursor(QCursor(Qt::CrossCursor));
-  setImplicitHeight(220);
+  setImplicitHeight(280);
   setImplicitWidth(200);
   setClip(true);
 }
@@ -289,9 +327,9 @@ void EditorToneCurveItem::bindModel(EditorToneCurveModel* model) {
   connect(model_, &EditorToneCurveModel::activeIndexChanged, this,
           &EditorToneCurveItem::onModelPointsChanged);
   connect(model_, &EditorToneCurveModel::enabledChanged, this, [this]() {
-    setEnabled(model_ ? model_->enabled() : true);
+    setAcceptedMouseButtons(model_ && model_->enabled() ? (Qt::LeftButton | Qt::RightButton)
+                                                        : Qt::MouseButtons{});
   });
-  setEnabled(model_->enabled());
 }
 
 void EditorToneCurveItem::onModelPointsChanged() { rebuildGeometry(); }
@@ -337,20 +375,26 @@ auto EditorToneCurveItem::updatePaintNode(QSGNode* old_node, UpdatePaintNodeData
                   QSGGeometry::DrawLines, 1.0);
   UpsertSolidNode(root, root->diagonal, last_geometry_.diagonal, diagonal_color_,
                   QSGGeometry::DrawLines, 1.0);
-  UpsertSolidNode(root, root->curve, last_geometry_.curve_samples, curve_color_,
-                  QSGGeometry::DrawLineStrip, 2.0);
 
+  std::vector<QPointF> curve_tris;
+  AppendStrokeRibbon(curve_tris, last_geometry_.curve_samples, kCurveHalfWidth);
+  UpsertSolidNode(root, root->curve, curve_tris, curve_color_, QSGGeometry::DrawTriangles);
+
+  std::vector<QPointF> outline_tris;
   std::vector<QPointF> handle_tris;
   std::vector<QPointF> active_tris;
   for (size_t i = 0; i < last_geometry_.handles.size(); ++i) {
     const bool  active = static_cast<int>(i) == last_geometry_.active_index;
-    const qreal radius = active ? 5.5 : 4.5;
+    const qreal radius = active ? 6.5 : 5.5;
+    AppendDisc(outline_tris, last_geometry_.handles[i], radius + 1.5);
     if (active) {
       AppendDisc(active_tris, last_geometry_.handles[i], radius);
     } else {
       AppendDisc(handle_tris, last_geometry_.handles[i], radius);
     }
   }
+  UpsertSolidNode(root, root->outlines, outline_tris, handle_outline_color_,
+                  QSGGeometry::DrawTriangles);
   UpsertSolidNode(root, root->handles, handle_tris, handle_color_, QSGGeometry::DrawTriangles);
   UpsertSolidNode(root, root->active, active_tris, handle_active_color_,
                   QSGGeometry::DrawTriangles);
@@ -366,8 +410,8 @@ void EditorToneCurveItem::mousePressEvent(QMouseEvent* event) {
 
   const QPointF pos = event->position();
   if (event->button() == Qt::RightButton) {
-    const int hit =
-        ToneCurveHitTestPoint(pos, model_->controlPoints(), last_geometry_.plot_rect);
+    const int hit = ToneCurveHitTestPoint(pos, model_->controlPoints(), last_geometry_.plot_rect,
+                                          kHitRadius);
     if (hit > 0 && hit + 1 < model_->pointCount()) {
       model_->removePoint(hit);
       dragging_ = false;
@@ -383,11 +427,13 @@ void EditorToneCurveItem::mousePressEvent(QMouseEvent* event) {
     return;
   }
 
-  const int hit =
-      ToneCurveHitTestPoint(pos, model_->controlPoints(), last_geometry_.plot_rect);
+  const int hit = ToneCurveHitTestPoint(pos, model_->controlPoints(), last_geometry_.plot_rect,
+                                        kHitRadius);
   if (hit >= 0) {
     model_->beginDrag(hit);
-    dragging_ = true;
+    dragging_                 = true;
+    drag_origin_widget_       = pos;
+    drag_origin_normalized_   = model_->controlPoints()[static_cast<size_t>(hit)];
     event->accept();
     return;
   }
@@ -400,6 +446,10 @@ void EditorToneCurveItem::mousePressEvent(QMouseEvent* event) {
   const QPointF normalized = ToneCurveToNormalizedPoint(pos, last_geometry_.plot_rect);
   const int     inserted   = model_->insertPoint(normalized.x(), normalized.y());
   dragging_                = inserted >= 0;
+  if (dragging_) {
+    drag_origin_widget_     = pos;
+    drag_origin_normalized_ = model_->controlPoints()[static_cast<size_t>(inserted)];
+  }
   event->accept();
 }
 
@@ -408,9 +458,15 @@ void EditorToneCurveItem::mouseMoveEvent(QMouseEvent* event) {
     QQuickItem::mouseMoveEvent(event);
     return;
   }
-  const QPointF normalized =
-      ToneCurveToNormalizedPoint(event->position(), last_geometry_.plot_rect);
-  model_->updateDrag(normalized.x(), normalized.y());
+  // Relative drag with pointer gain: pointer motion is decelerated so fine
+  // curve shaping does not require microscopic hand movements.
+  const QPointF abs_norm = ToneCurveToNormalizedPoint(event->position(), last_geometry_.plot_rect);
+  const QPointF press_norm =
+      ToneCurveToNormalizedPoint(drag_origin_widget_, last_geometry_.plot_rect);
+  const QPointF delta = abs_norm - press_norm;
+  const QPointF target(drag_origin_normalized_.x() + delta.x() * kPointerGain,
+                       drag_origin_normalized_.y() + delta.y() * kPointerGain);
+  model_->updateDrag(target.x(), target.y());
   event->accept();
 }
 

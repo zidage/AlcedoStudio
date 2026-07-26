@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMetaType>
 #include <QVariantMap>
 
 #include <algorithm>
@@ -33,14 +34,42 @@ auto VariantListToPoints(const QVariantList& list) -> std::vector<QPointF> {
   std::vector<QPointF> points;
   points.reserve(static_cast<size_t>(list.size()));
   for (const QVariant& v : list) {
-    const QVariantMap m = v.toMap();
-    if (!m.contains(QStringLiteral("x")) || !m.contains(QStringLiteral("y"))) {
+    if (v.canConvert<QPointF>()) {
+      points.push_back(v.toPointF());
       continue;
     }
-    points.emplace_back(m.value(QStringLiteral("x")).toDouble(),
-                        m.value(QStringLiteral("y")).toDouble());
+    if (v.typeId() == QMetaType::QVariantList || v.canConvert<QVariantList>()) {
+      const QVariantList pair = v.toList();
+      if (pair.size() >= 2) {
+        points.emplace_back(pair.at(0).toDouble(), pair.at(1).toDouble());
+        continue;
+      }
+    }
+    const QVariantMap m = v.toMap();
+    if (m.contains(QStringLiteral("x")) && m.contains(QStringLiteral("y"))) {
+      points.emplace_back(m.value(QStringLiteral("x")).toDouble(),
+                          m.value(QStringLiteral("y")).toDouble());
+    }
   }
   return points;
+}
+
+auto PointsFromSnapshotEntry(const QVariantMap& entry) -> std::vector<QPointF> {
+  // Snapshot key "curve" stores the full operator params:
+  //   {"curve":{"size":N,"points":[{"x":…,"y":…},…]}}
+  // Also accept the inner object directly.
+  QVariantMap curve = entry;
+  if (entry.contains(QStringLiteral("curve"))) {
+    const QVariant nested = entry.value(QStringLiteral("curve"));
+    if (nested.canConvert<QVariantMap>()) {
+      curve = nested.toMap();
+    }
+  }
+  const QVariant points_var = curve.value(QStringLiteral("points"));
+  if (!points_var.isValid()) {
+    return {};
+  }
+  return VariantListToPoints(points_var.toList());
 }
 
 auto FindClosestPointIndex(const std::vector<QPointF>& points, const QPointF& target) -> int {
@@ -76,6 +105,17 @@ auto EditorToneCurveModel::points() const -> QVariantList { return PointsToVaria
 
 void EditorToneCurveModel::setPoints(const QVariantList& points) {
   setControlPoints(VariantListToPoints(points));
+}
+
+void EditorToneCurveModel::loadFromSnapshotEntry(const QVariantMap& entry) {
+  if (dragActive_) {
+    return;
+  }
+  const auto points = PointsFromSnapshotEntry(entry);
+  if (points.size() < 2) {
+    return;
+  }
+  setControlPoints(points);
 }
 
 void EditorToneCurveModel::setControlPoints(const std::vector<QPointF>& points) {

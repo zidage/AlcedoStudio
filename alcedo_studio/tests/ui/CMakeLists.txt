@@ -507,6 +507,83 @@ gtest_discover_tests(EditorDisplayTransformSnapshotQmlTest
     TEST_PREFIX "EditorDisplayTransformSnapshotQmlTest.")
 alcedo_register_test_target(EditorDisplayTransformSnapshotQmlTest ui)
 
+# Phase 6F: shared crop equations and QML-facing lens catalog adapter.
+add_executable(EditorGeometryMathTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_geometry_math_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
+)
+target_include_directories(EditorGeometryMathTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorGeometryMathTest
+  PRIVATE
+    AlbumBackendLib
+    GTest::gtest
+    JSON
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Qml
+    Qt6::Quick
+    Qt6::Test
+    Qt6::Widgets
+)
+gtest_discover_tests(EditorGeometryMathTest TEST_PREFIX "EditorGeometryMathTest.")
+alcedo_register_test_target(EditorGeometryMathTest ui)
+
+# Phase 6F: Geometry panel snapshot, overlay synchronization, and patch shape.
+add_executable(EditorGeometryPanelQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_geometry_panel_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorGeometryPanelQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorGeometryPanelQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorGeometryPanelQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+gtest_discover_tests(EditorGeometryPanelQmlTest
+    TEST_PREFIX "EditorGeometryPanelQmlTest."
+    PROPERTIES LABELS "workspace_qml;geometry_panel")
+alcedo_register_test_target(EditorGeometryPanelQmlTest ui)
+
+# Geometry overlay draft: crop-frame edits must not emit CropRotate view routing.
+add_executable(EditorGeometryOverlayDraftRoutingTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_geometry_overlay_draft_routing_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+)
+target_include_directories(EditorGeometryOverlayDraftRoutingTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+)
+target_link_libraries(EditorGeometryOverlayDraftRoutingTest
+    PRIVATE
+        EditorRhiViewport
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+)
+gtest_discover_tests(EditorGeometryOverlayDraftRoutingTest
+    TEST_PREFIX "EditorGeometryOverlayDraftRoutingTest."
+    PROPERTIES LABELS "geometry_overlay;interaction")
+alcedo_register_test_target(EditorGeometryOverlayDraftRoutingTest ui)
+
 
 # Real-project regression: replay production Main.qml Copy/Paste and verify
 # that a reopened target publishes the saved Tone values to its QML models.

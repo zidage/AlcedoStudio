@@ -44,6 +44,10 @@ class EditorToneCurveModel : public EditorAdjustmentModelBase {
 
   /// Plain load setter: normalize + replace points. Does NOT submit.
   Q_INVOKABLE void setPoints(const QVariantList& points);
+  /// Load-only from a snapshot map entry. Accepts either the nested operator
+  /// shape `{"curve":{"points":[{"x":…,"y":…}]}}` or the inner object with
+  /// `points`. No submit.
+  Q_INVOKABLE void loadFromSnapshotEntry(const QVariantMap& entry);
   /// C++ load path used by tests and panel controllers.
   void setControlPoints(const std::vector<QPointF>& points);
   [[nodiscard]] auto controlPoints() const -> const std::vector<QPointF>& { return points_; }

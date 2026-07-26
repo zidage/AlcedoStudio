@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <functional>
@@ -63,6 +64,8 @@ class EditorSessionRenderController final {
 
   void                           SetPresentationSinkId(PresentationSinkId sink_id);
   void                           SetPresentationSize(int width, int height);
+  /// Select source-frame rendering while the geometry panel owns the overlay.
+  void                           SetGeometryOverlayActive(bool active);
 
   /// Route the initial render for a new image. Accepts the session identity
   /// and state as immutable inputs from the facade; does not read lifecycle.
@@ -156,6 +159,7 @@ class EditorSessionRenderController final {
   bool                                                 last_notified_render_busy_ = false;
   std::optional<std::chrono::steady_clock::time_point> first_frame_route_time_{};
   double                                               first_frame_time_ms_ = -1.0;
+  std::atomic<bool>                                    geometry_overlay_active_{false};
 };
 
 }  // namespace alcedo

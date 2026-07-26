@@ -133,11 +133,15 @@ class EditorInteractionController : public QObject {
   [[nodiscard]] auto overlayGeometryValid() const -> bool;
   [[nodiscard]] auto interactionEnabled() const -> bool { return interaction_enabled_; }
 
-  void setCropToolEnabled(bool enabled);
-  void setCropOverlayVisible(bool visible);
-  void setCropRectNormalized(const QRectF& rect);
-  void setCropRotationDegrees(float degrees);
+  Q_INVOKABLE void setCropToolEnabled(bool enabled);
+  Q_INVOKABLE void setCropOverlayVisible(bool visible);
+  Q_INVOKABLE void setCropRectNormalized(const QRectF& rect);
+  Q_INVOKABLE void setCropRotationDegrees(float degrees);
   Q_INVOKABLE void setCropAspectLock(bool enabled, float aspect_ratio);
+  // When false, crop/rotation/view setters still update state and overlay
+  // signals but do not emit viewChangeReported. Geometry panel enter/leave
+  // uses this so EditorSessionController owns the single source-frame refresh.
+  Q_INVOKABLE void setViewChangeRoutingEnabled(bool enabled);
   void setPresentationMode(int mode);
   void setDetailRoiVisible(bool visible);
   void setDetailRoiNormalized(const QRectF& rect_uv);

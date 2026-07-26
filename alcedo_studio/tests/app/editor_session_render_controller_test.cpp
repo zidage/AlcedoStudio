@@ -102,6 +102,15 @@ TEST_F(EditorSessionRenderControllerTest, RouteInitialRenderSchedulesInteractive
   EXPECT_NE(render_->first_frame_request_id(), 0u);
 }
 
+TEST_F(EditorSessionRenderControllerTest, GeometryOverlayFlagIsStampedOnRenderIntent) {
+  render_->SetGeometryOverlayActive(true);
+  OpenImage();
+
+  auto* sched = dynamic_cast<EditorSessionBootstrapSchedulerPort*>(scheduler_.get());
+  ASSERT_FALSE(sched->scheduled().empty());
+  EXPECT_TRUE(sched->scheduled().front().intent.geometry_overlay_only);
+}
+
 TEST_F(EditorSessionRenderControllerTest, FirstFramePresentationEmitsEvent) {
   OpenImage();
   EXPECT_LT(render_->first_frame_time_ms(), 0.0);

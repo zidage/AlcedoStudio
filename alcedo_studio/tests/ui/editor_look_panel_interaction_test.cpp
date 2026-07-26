@@ -758,6 +758,22 @@ ApplicationWindow {
         contentHeight: 1200
         clip: true
         flickableDirection: Flickable.VerticalFlick
+        interactive: true
+
+        property int inputLockCount: 0
+        function beginInputLock() {
+            if (inputLockCount === 0)
+                interactive = false
+            inputLockCount += 1
+        }
+        function endInputLock() {
+            if (inputLockCount > 0)
+                inputLockCount -= 1
+            if (inputLockCount <= 0) {
+                inputLockCount = 0
+                interactive = true
+            }
+        }
 
         Column {
             width: parent.width
@@ -814,11 +830,14 @@ TEST(EditorLookPanelInteractionTest, VerticalSliderDragDoesNotScrollParentFlicka
   ASSERT_NE(handle, nullptr);
 
   const qreal y0 = scroller->property("contentY").toReal();
-  const QPoint start = MapToWindow(handle, 0.2, 0.5);
+  // Press on the handle center (value is mid-range), not the track.
+  const QPoint start = MapToWindow(handle, 0.5, 0.5);
   const QPoint end(start.x() + 80, start.y() + 30);  // diagonal: horizontal value + vertical scroll risk
 
   QTest::mousePress(window, Qt::LeftButton, Qt::NoModifier, start);
   ProcessEvents(20);
+  EXPECT_FALSE(scroller->property("interactive").toBool())
+      << "press should lock parent flick while the handle is grabbed";
   for (int i = 1; i <= 8; ++i) {
     const qreal t = static_cast<qreal>(i) / 8.0;
     QPoint p(start.x() + static_cast<int>((end.x() - start.x()) * t),
@@ -834,6 +853,62 @@ TEST(EditorLookPanelInteractionTest, VerticalSliderDragDoesNotScrollParentFlicka
                             << " while dragging the slider";
   // Slider should still have accepted the drag (value changed).
   EXPECT_NE(model.value(), 0.0);
+  // Critical regression: unlock must restore interactive so wheel/flick still work.
+  EXPECT_TRUE(scroller->property("interactive").toBool())
+      << "slider drag left Flickable.interactive=false (panel scroll stuck)";
+  EXPECT_EQ(scroller->property("inputLockCount").toInt(), 0);
+}
+
+TEST(EditorLookPanelInteractionTest, NestedInputLocksDoNotLeaveFlickableUninteractive) {
+  // Repro for "adjust anything → wheel scroll dies": lock A saves interactive=false
+  // from lock B, then A unlock restores false permanently. Refcount must survive.
+  RecordingSubmitter submitter;
+  EditorAdjustmentValueModel model;
+  model.setFieldKey(QStringLiteral("exposure"));
+  model.setMinimum(-2);
+  model.setMaximum(2);
+  model.setDefaultValue(0);
+  model.setStep(0.05);
+  model.setSubmitter(&submitter);
+  model.setValue(0);
+
+  QQmlApplicationEngine engine;
+  engine.rootContext()->setContextProperty(
+      QStringLiteral("appTheme"), QVariant::fromValue(static_cast<QObject*>(&AppTheme::Instance())));
+  engine.rootContext()->setContextProperty(QStringLiteral("exposureModel"), &model);
+  engine.rootContext()->setContextProperty(
+      QStringLiteral("sliderSourceUrl"),
+      QUrl::fromLocalFile(SrcQmlDir() + QStringLiteral("/AdjustmentSlider.qml")));
+  engine.loadData(QByteArray(kFlickSliderHarness));
+  ASSERT_FALSE(engine.rootObjects().isEmpty());
+  auto* window = qobject_cast<QQuickWindow*>(engine.rootObjects().constFirst());
+  ASSERT_NE(window, nullptr);
+  window->show();
+  ASSERT_TRUE(QTest::qWaitForWindowExposed(window));
+  ProcessEvents(80);
+
+  auto* scroller = window->findChild<QQuickItem*>(QStringLiteral("scroller"));
+  ASSERT_NE(scroller, nullptr);
+  ASSERT_TRUE(scroller->property("interactive").toBool());
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(scroller, "beginInputLock"));
+  ASSERT_TRUE(QMetaObject::invokeMethod(scroller, "beginInputLock"));
+  EXPECT_FALSE(scroller->property("interactive").toBool());
+  EXPECT_EQ(scroller->property("inputLockCount").toInt(), 2);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(scroller, "endInputLock"));
+  EXPECT_FALSE(scroller->property("interactive").toBool())
+      << "first unlock of nested locks must keep scroll disabled";
+  EXPECT_EQ(scroller->property("inputLockCount").toInt(), 1);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(scroller, "endInputLock"));
+  EXPECT_TRUE(scroller->property("interactive").toBool());
+  EXPECT_EQ(scroller->property("inputLockCount").toInt(), 0);
+
+  // Extra unlocks must not go negative / leave interactive false.
+  ASSERT_TRUE(QMetaObject::invokeMethod(scroller, "endInputLock"));
+  EXPECT_TRUE(scroller->property("interactive").toBool());
+  EXPECT_EQ(scroller->property("inputLockCount").toInt(), 0);
 }
 
 // ── 7. Production path: snapshot echo during CCT drag ───────────────────────

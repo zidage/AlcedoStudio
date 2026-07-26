@@ -172,8 +172,12 @@ void EditorInteractionController::setCropRectNormalized(const QRectF& rect) {
   emit overlayGeometryChanged();
   emit viewStateChanged();
   emit zoomLabelChanged();
-  // Phase 5D: programmatic crop-rect change is a content change → CropRotate.
-  emitViewChange(ViewChangeKind::CropRotate);
+  // Geometry-panel draft: the crop rect is an on-screen overlay only. Pipeline
+  // content changes when the panel commits (leave / Enter), not on every draft
+  // write. Routing CropRotate here would thrash InteractivePrimary renders.
+  if (!crop.overlay_visible) {
+    emitViewChange(ViewChangeKind::CropRotate);
+  }
 }
 
 void EditorInteractionController::setCropRotationDegrees(float degrees) {
@@ -190,8 +194,10 @@ void EditorInteractionController::setCropRotationDegrees(float degrees) {
   emit cropRotationCommitted(normalized, true);
   emit overlayGeometryChanged();
   emit viewStateChanged();
-  // Phase 5D: programmatic rotation change is a content change → CropRotate.
-  emitViewChange(ViewChangeKind::CropRotate);
+  // Same draft rule as setCropRectNormalized: overlay-visible edits stay local.
+  if (!crop.overlay_visible) {
+    emitViewChange(ViewChangeKind::CropRotate);
+  }
 }
 
 void EditorInteractionController::setCropAspectLock(bool enabled, float aspect_ratio) {
@@ -206,6 +212,10 @@ void EditorInteractionController::setCropAspectLock(bool enabled, float aspect_r
   emit cropChanged();
   emit overlayGeometryChanged();
   emit viewStateChanged();
+}
+
+void EditorInteractionController::setViewChangeRoutingEnabled(bool enabled) {
+  suppress_view_change_routing_ = !enabled;
 }
 
 void EditorInteractionController::setPresentationMode(int mode) {
@@ -795,11 +805,12 @@ void EditorInteractionController::applyCropInteractionResult(const CropInteracti
     emit overlayGeometryChanged();
     emit viewStateChanged();
   }
-  // Phase 5D: a crop rect or rotation change is a content change — the
-  // coordinator must schedule a fresh InteractivePrimary (no reuse). Emitted
-  // after viewStateChanged so the QML view push lands first. Drag moves report
-  // the change repeatedly; the session/coordinator coalesce them.
-  if (result.rect_changed.has_value() || result.rotation_changed.has_value()) {
+  // Crop-frame drag is pure UI while the geometry overlay is open: QSG redraws
+  // the handles over the source-frame preview. Pipeline bake happens only on
+  // geometry confirm (panel leave / Enter). When the overlay is closed a crop
+  // change is real content and must route CropRotate.
+  if ((result.rect_changed.has_value() || result.rotation_changed.has_value()) &&
+      !viewer_state_.GetCropOverlay().overlay_visible) {
     emitViewChange(ViewChangeKind::CropRotate);
   }
 }
@@ -870,6 +881,11 @@ void EditorInteractionController::emitViewChange(ViewChangeKind kind) {
   // Phase 5D: report the view change for render routing. Emitted by callers
   // AFTER viewStateChanged so the QML push of the new view to the viewport (and
   // its DirectFrameSink region) lands before the session routes the intent.
+  // Suppress during zoom animation and panel-driven overlay state sync so the
+  // session controller remains the single owner of the source-frame refresh.
+  if (suppress_view_change_routing_) {
+    return;
+  }
   emit viewChangeReported(static_cast<int>(kind));
 }
 

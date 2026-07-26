@@ -395,14 +395,18 @@ auto EditorSessionRenderSchedulerPort::TryProducePipelineFrame(
     task.options_.is_callback_                                         = false;
     task.options_.is_seq_callback_                                     = false;
     task.options_.is_blocking_                                         = true;
-    task.prepare_with_render_lock_ = [snapshot = request.intent.adjustment,
-                                      sink](alcedo::PipelineTask& locked_task) {
+    task.prepare_with_render_lock_ = [snapshot              = request.intent.adjustment, sink,
+                                      geometry_overlay_only = request.intent.geometry_overlay_only](
+                                         alcedo::PipelineTask& locked_task) {
       auto locked_exec = locked_task.pipeline_executor_;
       if (!locked_exec) return false;
       std::string apply_error;
       if (!alcedo::ApplyEditorAdjustmentSnapshot(*locked_exec, snapshot, &apply_error)) {
         throw std::runtime_error(apply_error.empty() ? "Failed to apply editor adjustment"
                                                      : apply_error);
+      }
+      if (geometry_overlay_only) {
+        alcedo::DisableEditorGeometryOperatorForOverlay(*locked_exec);
       }
       controllers::EnsureLoadingOperatorDefaults(locked_exec);
       controllers::AttachExecutionStages(locked_exec, sink);

@@ -85,5 +85,30 @@ TEST_F(EditorAdjustmentPipelineTest, RejectsUnknownFieldWithoutMutatingKnownOper
             before);
 }
 
+TEST_F(EditorAdjustmentPipelineTest, GeometryOverlayPreviewKeepsCropParametersButDisablesOperator) {
+  CPUPipelineExecutor executor;
+  executor.ResetToCleanBaselineAdjustments();
+
+  EditorRenderAdjustmentSnapshot snapshot;
+  snapshot.patches = {EditorAdjustmentPatch{
+      "crop_rotate",
+      R"({"crop_rotate":{"enabled":true,"angle_degrees":35.0,"enable_crop":true,"crop_rect":{"x":0.1,"y":0.1,"w":0.7,"h":0.7}}})",
+      false}};
+
+  std::string error;
+  ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, snapshot, &error)) << error;
+  auto& stage = executor.GetStage(PipelineStageName::Geometry_Adjustment);
+  ASSERT_TRUE(stage.GetOperator(OperatorType::CROP_ROTATE).has_value());
+  EXPECT_TRUE(stage.GetOperator(OperatorType::CROP_ROTATE).value()->enable_);
+
+  DisableEditorGeometryOperatorForOverlay(executor);
+
+  const auto crop = stage.GetOperator(OperatorType::CROP_ROTATE);
+  ASSERT_TRUE(crop.has_value());
+  EXPECT_FALSE(crop.value()->enable_);
+  EXPECT_FLOAT_EQ(crop.value()->op_->GetParams()["crop_rotate"]["angle_degrees"].get<float>(),
+                  35.0f);
+}
+
 }  // namespace
 }  // namespace alcedo

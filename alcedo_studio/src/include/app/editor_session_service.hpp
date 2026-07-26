@@ -49,6 +49,9 @@ class IEditorSessionBackend {
 
   virtual void SetPresentationSinkId(PresentationSinkId sink_id)                              = 0;
   virtual void SetPresentationSize(int width, int height)                                     = 0;
+  /// Keep geometry editing on the source-frame overlay until the panel closes.
+  /// Backends that do not render through the unified session path may ignore it.
+  virtual void SetGeometryOverlayActive(bool /*active*/) {}
   virtual auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult   = 0;
   virtual auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult = 0;
   /// Check out another Version on the open image after a save checkpoint.
@@ -158,6 +161,7 @@ class EditorSessionService final : public IEditorSessionBackend {
     render_.SetPresentationSize(width, height);
     NotifyChange();
   }
+  void SetGeometryOverlayActive(bool active) override { render_.SetGeometryOverlayActive(active); }
 
   auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
   auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;

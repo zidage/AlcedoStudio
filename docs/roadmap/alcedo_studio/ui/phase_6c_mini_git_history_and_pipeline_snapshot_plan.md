@@ -1395,7 +1395,7 @@ Phase 6C-focused owner map for later moves (single owner each):
 | Target | Owning domain / future manifest |
 | --- | --- |
 | `EditorSaveCheckpointCoordinator`, `EditorSaveCheckpointService`, `EditorSession*`, Mini-Git service libs, other `src/app/*` services | `app` → `alcedo_studio/src/app/CMakeLists.txt` |
-| `EditorRhiContracts`, `EditorRhiViewport`, `EditorRhiHarnessLib`, `EditorRhiHarness` | `ui/editor_rhi` |
+| RHI controller support, `EditorRhiViewport`, `EditorRhiHarnessLib`, `EditorRhiHarness` | `ui/editor_rhi` |
 | `UiLocalization`, `BackgroundTaskController`, `AlbumBackendLib`, `EditViewer`, `alcedo_main` | `ui/alcedo_main` |
 | `EditorSaveCheckpointCoordinatorTest`, `EditorSaveCheckpointServiceTest`, `EditorSession*Test` (app folder) | `tests/app` |
 | Album-backend / QML / RHI UI tests under `tests/ui/` | `tests/ui` |

@@ -16,13 +16,15 @@ Item {
     property var editorSession: null
     property bool controlsEnabled: true
 
-    readonly property color colText: theme ? theme.colText : appTheme.textColor
-    readonly property color colMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
-    readonly property color colAccent: theme ? theme.colAccentPrimary : appTheme.accentColor
-    readonly property color colCardSurface: theme ? theme.colCardSurface : appTheme.cardSurfaceColor
-    readonly property color colCardBorder: theme ? theme.colCardBorder : appTheme.cardBorderColor
-    readonly property color colBase: theme ? theme.colBgBase : appTheme.bgBaseColor
-    readonly property color colHover: theme ? theme.colHover : appTheme.hoverColor
+    // Prefer appTheme tokens so panel chrome tracks the active theme even when
+    // the optional `theme` bag is incomplete or uses stale aliases.
+    readonly property color colText: appTheme.textColor
+    readonly property color colMuted: appTheme.textMutedColor
+    readonly property color colAccent: appTheme.accentColor
+    readonly property color colCardSurface: appTheme.cardSurfaceColor
+    readonly property color colCardBorder: appTheme.cardBorderColor
+    readonly property color colBase: appTheme.bgBaseColor
+    readonly property color colHover: appTheme.hoverColor
 
     // Operator-shaped params builders (Phase 6A default is {"value": v}).
     function numericParams(key, v) {
@@ -94,19 +96,36 @@ Item {
     }
 
     /// Load curve control points from the snapshot.
+    /// Snapshot shape matches the operator params published by the session:
+    ///   snapshot.curve = { curve: { size, points: [{x,y}, ...] } }
     function loadCurveFromSnapshot(model, fieldKey, snapshot) {
         if (!model || !fieldKey || !snapshot) return
+        if (model.dragActive) return
         const entry = snapshot[fieldKey]
-        if (entry === undefined) return
-        // Curve params: {"points": [[x1,y1], [x2,y2], ...]}
-        const points = entry.points
-        if (points === undefined || !Array.isArray(points)) return
-        if (points.length < 2) return
-        // Convert to QPointF-compatible format for setPoints
-        const qmlPoints = points.map(function (p) {
-            return Qt.point(p[0], p[1])
-        })
-        model.setPoints(qmlPoints)
+        if (entry === undefined || entry === null) return
+        if (typeof model.loadFromSnapshotEntry === "function") {
+            model.loadFromSnapshotEntry(entry)
+            return
+        }
+        // Fallback for older fakes: unwrap nested {"curve":{…}} and setPoints.
+        var curve = entry
+        if (entry[fieldKey] !== undefined)
+            curve = entry[fieldKey]
+        const points = curve.points
+        if (points === undefined) return
+        var list = []
+        for (var i = 0; i < points.length; ++i) {
+            var p = points[i]
+            if (p === undefined || p === null) continue
+            var x = p.x !== undefined ? Number(p.x)
+                  : (p[0] !== undefined ? Number(p[0]) : NaN)
+            var y = p.y !== undefined ? Number(p.y)
+                  : (p[1] !== undefined ? Number(p[1]) : NaN)
+            if (!isFinite(x) || !isFinite(y)) continue
+            list.push({ x: x, y: y })
+        }
+        if (list.length < 2) return
+        model.setPoints(list)
     }
 
     EditorAdjustmentValueModel {
@@ -200,136 +219,187 @@ Item {
         shadowsModel, whitesModel, blacksModel
     ]
 
-    ColumnLayout {
+    Flickable {
+        id: toneScroll
+        objectName: "editorTonePanelScroll"
         anchors.fill: parent
-        spacing: appTheme.spaceSm
+        clip: true
+        contentWidth: width
+        contentHeight: toneColumn.implicitHeight + appTheme.spaceMd
+        boundsBehavior: Flickable.StopAtBounds
+        flickableDirection: Flickable.VerticalFlick
 
-        Label {
-            Layout.fillWidth: true
-            text: qsTr("Tone")
-            color: root.colText
-            font.pixelSize: appTheme.fontSizeTitle
-            font.weight: appTheme.fontWeightHeading
+        // Refcounted press locks from sliders/curve so nested unlock cannot leave
+        // interactive permanently false (breaks wheel scroll after an edit).
+        property int inputLockCount: 0
+        function beginInputLock() {
+            if (inputLockCount === 0)
+                interactive = false
+            inputLockCount += 1
         }
-
-        // Fold reference objectName preserved for WorkspaceShellTests.
-        CollapsibleSection {
-            id: toneGroup
-            objectName: "editorAdjustmentGroupShell_tone"
-            Layout.fillWidth: true
-            title: qsTr("Tone")
-            expanded: true
-            controlsEnabled: root.controlsEnabled
-            surfaceColor: root.colCardSurface
-            disabledSurfaceColor: root.colCardSurface
-            borderColor: root.colCardBorder
-            textColor: root.colText
-            mutedColor: root.colMuted
-            hoverColor: root.colHover
-            accentColor: root.colAccent
-            bodyContentHeight: toneControls.implicitHeight + appTheme.spaceSm
-
-            ColumnLayout {
-                id: toneControls
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.margins: appTheme.spaceXs
-                spacing: appTheme.spaceSm
-
-                AdjustmentSlider {
-                    objectName: "toneExposureSlider"
-                    Layout.fillWidth: true
-                    model: exposureModel
-                }
-                AdjustmentSlider {
-                    objectName: "toneContrastSlider"
-                    Layout.fillWidth: true
-                    model: contrastModel
-                }
-                AdjustmentSlider {
-                    objectName: "toneHighlightsSlider"
-                    Layout.fillWidth: true
-                    model: highlightsModel
-                }
-                AdjustmentSlider {
-                    objectName: "toneShadowsSlider"
-                    Layout.fillWidth: true
-                    model: shadowsModel
-                }
-                AdjustmentSlider {
-                    objectName: "toneWhitesSlider"
-                    Layout.fillWidth: true
-                    model: whitesModel
-                }
-                AdjustmentSlider {
-                    objectName: "toneBlacksSlider"
-                    Layout.fillWidth: true
-                    model: blacksModel
-                }
+        function endInputLock() {
+            if (inputLockCount > 0)
+                inputLockCount -= 1
+            if (inputLockCount <= 0) {
+                inputLockCount = 0
+                interactive = true
             }
         }
 
-        CollapsibleSection {
-            id: curveGroup
-            objectName: "editorToneCurveGroup"
-            Layout.fillWidth: true
-            title: qsTr("Tone Curve")
-            expanded: true
-            controlsEnabled: root.controlsEnabled
-            surfaceColor: root.colCardSurface
-            disabledSurfaceColor: root.colCardSurface
-            borderColor: root.colCardBorder
-            textColor: root.colText
-            mutedColor: root.colMuted
-            hoverColor: root.colHover
-            accentColor: root.colAccent
-            bodyContentHeight: curveBody.implicitHeight + appTheme.spaceSm
+        // Wheel over Controls.Slider children must still scroll the panel.
+        WheelHandler {
+            acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+            grabPermissions: PointerHandler.CanTakeOverFromItems
+                             | PointerHandler.CanTakeOverFromHandlersOfDifferentType
+                             | PointerHandler.ApprovesTakeOverByAnything
+            onWheel: function (event) {
+                var step = event.pixelDelta.y !== 0
+                           ? event.pixelDelta.y
+                           : event.angleDelta.y / 120 * 48
+                var maxY = Math.max(0, toneScroll.contentHeight - toneScroll.height)
+                toneScroll.contentY = Math.max(0, Math.min(maxY, toneScroll.contentY - step))
+                event.accepted = true
+            }
+        }
 
-            ColumnLayout {
-                id: curveBody
-                anchors.left: parent.left
-                anchors.right: parent.right
-                anchors.top: parent.top
-                anchors.margins: appTheme.spaceXs
-                spacing: appTheme.spaceXs
+        ColumnLayout {
+            id: toneColumn
+            width: toneScroll.width
+            spacing: appTheme.spaceSm
 
-                EditorToneCurveItem {
-                    id: curveItem
-                    objectName: "editorToneCurveItem"
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: 220
-                    model: curveModel
-                    backgroundColor: root.colCardSurface
-                    plotColor: root.colBase
-                    gridColor: root.colCardBorder
-                    diagonalColor: root.colMuted
-                    curveColor: root.colAccent
-                    handleColor: root.colText
-                    handleActiveColor: root.colAccent
-                    handleOutlineColor: root.colAccent
-                }
+            Label {
+                Layout.fillWidth: true
+                text: qsTr("Tone")
+                color: root.colText
+                font.pixelSize: appTheme.fontSizeTitle
+                font.weight: appTheme.fontWeightHeading
+            }
 
-                RowLayout {
-                    Layout.fillWidth: true
+            // Fold reference objectName preserved for WorkspaceShellTests.
+            CollapsibleSection {
+                id: toneGroup
+                objectName: "editorAdjustmentGroupShell_tone"
+                Layout.fillWidth: true
+                title: qsTr("Tone")
+                expanded: true
+                controlsEnabled: root.controlsEnabled
+                surfaceColor: root.colCardSurface
+                disabledSurfaceColor: root.colCardSurface
+                borderColor: root.colCardBorder
+                textColor: root.colText
+                mutedColor: root.colMuted
+                hoverColor: root.colHover
+                accentColor: root.colAccent
+                bodyContentHeight: toneControls.implicitHeight + appTheme.spaceSm
+
+                ColumnLayout {
+                    id: toneControls
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: appTheme.spaceXs
                     spacing: appTheme.spaceSm
 
-                    Label {
+                    AdjustmentSlider {
+                        objectName: "toneExposureSlider"
                         Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: qsTr("Left click/drag to shape. Right click a point to remove. Double click to reset.")
-                        color: root.colMuted
-                        font.pixelSize: appTheme.fontSizeCaption
+                        model: exposureModel
+                        flickable: toneScroll
+                    }
+                    AdjustmentSlider {
+                        objectName: "toneContrastSlider"
+                        Layout.fillWidth: true
+                        model: contrastModel
+                        flickable: toneScroll
+                    }
+                    AdjustmentSlider {
+                        objectName: "toneHighlightsSlider"
+                        Layout.fillWidth: true
+                        model: highlightsModel
+                        flickable: toneScroll
+                    }
+                    AdjustmentSlider {
+                        objectName: "toneShadowsSlider"
+                        Layout.fillWidth: true
+                        model: shadowsModel
+                        flickable: toneScroll
+                    }
+                    AdjustmentSlider {
+                        objectName: "toneWhitesSlider"
+                        Layout.fillWidth: true
+                        model: whitesModel
+                        flickable: toneScroll
+                    }
+                    AdjustmentSlider {
+                        objectName: "toneBlacksSlider"
+                        Layout.fillWidth: true
+                        model: blacksModel
+                        flickable: toneScroll
+                    }
+                }
+            }
+
+            CollapsibleSection {
+                id: curveGroup
+                objectName: "editorToneCurveGroup"
+                Layout.fillWidth: true
+                title: qsTr("Tone Curve")
+                expanded: true
+                controlsEnabled: root.controlsEnabled
+                surfaceColor: root.colCardSurface
+                disabledSurfaceColor: root.colCardSurface
+                borderColor: root.colCardBorder
+                textColor: root.colText
+                mutedColor: root.colMuted
+                hoverColor: root.colHover
+                accentColor: root.colAccent
+                bodyContentHeight: curveBody.implicitHeight + appTheme.spaceSm
+
+                ColumnLayout {
+                    id: curveBody
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: appTheme.spaceXs
+                    spacing: appTheme.spaceXs
+
+                    EditorToneCurveItem {
+                        id: curveItem
+                        objectName: "editorToneCurveItem"
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 300
+                        Layout.minimumHeight: 260
+                        model: curveModel
+                        // Monochrome only — same family as AdjustmentSlider (no accent gold/blue).
+                        backgroundColor: appTheme.cardSurfaceColor
+                        plotColor: appTheme.bgBaseColor
+                        gridColor: appTheme.cardBorderColor
+                        diagonalColor: appTheme.textMutedColor
+                        curveColor: appTheme.editorSliderHandleColor
+                        handleColor: appTheme.editorSliderHandleColor
+                        handleActiveColor: appTheme.textColor
+                        handleOutlineColor: appTheme.editorSliderHandleBorderColor
                     }
 
-                    AdjustmentResetButton {
-                        objectName: "toneCurveResetButton"
-                        model: curveModel
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: appTheme.spaceSm
+
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.WordWrap
+                            text: qsTr("Left click/drag to shape. Right click a point to remove. Double click to reset.")
+                            color: root.colMuted
+                            font.pixelSize: appTheme.fontSizeCaption
+                        }
+
+                        AdjustmentResetButton {
+                            objectName: "toneCurveResetButton"
+                            model: curveModel
+                        }
                     }
                 }
             }
         }
-
-        Item { Layout.fillHeight: true }
     }
 }

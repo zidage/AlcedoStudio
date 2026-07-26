@@ -156,6 +156,8 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_session_controller.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_adjustment_models.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_geometry_math.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_lens_catalog_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_tone_curve_model.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_tone_curve_item.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_color_temp_model.cpp"
@@ -165,6 +167,9 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_UI_SHELL_ROOT}/album_backend/editor_lut_catalog_model.cpp"
     # Pure tone-curve math shared with the legacy QWidget curve editor.
     "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/curve.cpp"
+    # Geometry and lens catalog math are shared by QML and the legacy editor.
+    "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/geometry.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/lens_calib.cpp"
     # Look-panel shared math / catalog (also used by the legacy QWidget editor).
     "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/color_temp.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/color_wheel.cpp"
@@ -207,6 +212,8 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_geometry_math.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_lens_catalog_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_tone_curve_item.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_color_temp_model.hpp"
@@ -299,9 +306,8 @@ if(ALCEDO_REAL_WIDGET_EDITOR)
         "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/render/editor_render_coordinator.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/session/editor_adjustment_session.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/histogram.cpp"
-        # color_temp / color_wheel / hls / lut_catalog / curve live in AlbumBackendLib.
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/lens_calib.cpp"
-        "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/geometry.cpp"
+        # color_temp / color_wheel / hls / lut_catalog / curve / geometry /
+        # lens_calib live in AlbumBackendLib.
         "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/pipeline_io.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/modules/versioning.cpp"
         "${ALCEDO_UI_SHELL_ROOT}/editor_dialog/scope/scope_panel.cpp"
@@ -522,6 +528,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorLookPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/LUTPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorDisplayTransformPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorGeometryPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentSlider.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentField.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentToggle.qml"

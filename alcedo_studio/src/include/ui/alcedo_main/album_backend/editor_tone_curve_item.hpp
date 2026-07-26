@@ -125,15 +125,18 @@ class EditorToneCurveItem : public QQuickItem {
   int                    geometry_revision_    = 0;
   bool                   geometry_dirty_       = true;
   bool                   dragging_             = false;
+  QPointF                drag_origin_widget_{};
+  QPointF                drag_origin_normalized_{};
 
+  // Defaults match AppTheme monochrome slider family (no accent gold/blue).
   QColor background_color_     = QColor(0x16, 0x17, 0x19);
   QColor plot_color_           = QColor(0x11, 0x12, 0x14);
   QColor grid_color_           = QColor(0x3A, 0x3B, 0x3D);
   QColor diagonal_color_       = QColor(0xAA, 0xA5, 0x9D);
-  QColor curve_color_          = QColor(0x45, 0x7B, 0x9D);
-  QColor handle_color_         = QColor(0xF5, 0xF1, 0xEA);
-  QColor handle_active_color_  = QColor(0x45, 0x7B, 0x9D);
-  QColor handle_outline_color_ = QColor(0x45, 0x7B, 0x9D);
+  QColor curve_color_          = QColor(0xF1, 0xEE, 0xEA);  // editorSliderHandleColor
+  QColor handle_color_         = QColor(0xF1, 0xEE, 0xEA);
+  QColor handle_active_color_  = QColor(0xF5, 0xF1, 0xEA);  // text / bright bone
+  QColor handle_outline_color_ = QColor(0x1A, 0x1B, 0x1C);
 };
 
 }  // namespace alcedo::ui

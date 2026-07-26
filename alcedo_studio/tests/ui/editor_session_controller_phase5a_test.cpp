@@ -140,6 +140,9 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   EditorRenderReason                  view_change_reason   = EditorRenderReason::ZoomPan;
   std::optional<ViewportRenderRegion> view_change_region{std::nullopt};
   bool                                render_busy_ = false;
+  bool                                geometry_overlay_active = false;
+
+  void SetGeometryOverlayActive(bool active) override { geometry_overlay_active = active; }
 
   auto RequestViewChange(EditorRenderReason reason, std::optional<ViewportRenderRegion> region)
       -> EditorSessionResult override {
@@ -342,6 +345,45 @@ TEST(EditorSessionControllerPhase5ATest, SubmitViewChangeIsNoOpWithoutImage) {
   controller.submitViewChange(
       static_cast<int>(alcedo::editor_rhi::EditorInteractionController::ViewChangeKind::ZoomPan));
   EXPECT_FALSE(backend.view_change_recorded);
+}
+
+TEST(EditorSessionControllerPhase5ATest, GeometryPanelSelectionUsesSourceFramePreview) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(nullptr, &backend);
+
+  controller.Open(7, 8);
+  EXPECT_FALSE(backend.geometry_overlay_active);
+
+  // Panel selection while still Loading only flips the overlay flag; the
+  // source-frame refresh waits for Interactive (see next assertion block).
+  controller.set_active_adjustment_panel(QStringLiteral("geometry"));
+  EXPECT_TRUE(backend.geometry_overlay_active);
+  EXPECT_FALSE(backend.view_change_recorded);
+
+  controller.set_active_adjustment_panel(QStringLiteral("tone"));
+  EXPECT_FALSE(backend.geometry_overlay_active);
+}
+
+TEST(EditorSessionControllerPhase5ATest,
+     GeometryPanelSelectionWhileInteractiveRequestsCropRotateRefresh) {
+  FakeSessionBackend      backend;
+  EditorSessionController controller(nullptr, &backend);
+
+  controller.Open(7, 8);
+  backend.SimulateFirstFramePresented();
+  ASSERT_EQ(backend.state(), EditorSessionState::Interactive);
+
+  backend.view_change_recorded = false;
+  controller.set_active_adjustment_panel(QStringLiteral("geometry"));
+  EXPECT_TRUE(backend.geometry_overlay_active);
+  EXPECT_TRUE(backend.view_change_recorded);
+  EXPECT_EQ(backend.view_change_reason, EditorRenderReason::CropRotate);
+
+  backend.view_change_recorded = false;
+  controller.set_active_adjustment_panel(QStringLiteral("tone"));
+  EXPECT_FALSE(backend.geometry_overlay_active);
+  EXPECT_TRUE(backend.view_change_recorded);
+  EXPECT_EQ(backend.view_change_reason, EditorRenderReason::CropRotate);
 }
 
 TEST(EditorSessionControllerPhase5ATest, RenderBusyReflectsBackendDiagnostics) {
@@ -566,8 +608,19 @@ TEST(EditorSessionControllerPhase5ATest, Phase5AAppHeadersDoNotIncludeUi) {
 }
 
 TEST(EditorSessionControllerPhase5ATest, EditorSessionServiceCMakeDoesNotLinkQtWidgets) {
-  const fs::path    cmake = fs::path(ALCEDO_REPO_ROOT) / "alcedo_studio/src/CMakeLists.txt";
-  const std::string text  = ReadFileText(cmake.string());
+  const fs::path    repo_root = fs::path(ALCEDO_REPO_ROOT);
+  const std::vector<fs::path> cmake_files = {
+      repo_root / "alcedo_studio/src/app/CMakeLists.txt",
+      repo_root / "alcedo_studio/src/CMakeLists.txt",
+  };
+  std::string text;
+  for (const auto& cmake : cmake_files) {
+    const std::string candidate = ReadFileText(cmake.string());
+    if (candidate.find("def_library(EditorSessionService") != std::string::npos) {
+      text = candidate;
+      break;
+    }
+  }
   ASSERT_FALSE(text.empty());
 
   const auto start = text.find("def_library(EditorSessionService");

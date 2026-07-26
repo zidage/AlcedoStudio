@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import QtQuick.Controls.Material
 import QtQuick.Layouts
 import Alcedo.Main 1.0
 
@@ -169,7 +168,7 @@ Item {
                             if (root.editorSession) {
                                 root.editorSession.bindInteractionController(editorInteraction)
                             }
-                            viewportSlot.syncImageGeometry()
+                            viewportSlot.requestImageGeometrySync()
                         }
                         Component.onDestruction: {
                             if (root.editorSession) {
@@ -190,7 +189,17 @@ Item {
                         // resetPresentationStateForNewImage before the first frame.
                         onTargetSizeRequested: function (w, h) {
                             if (w > 0 && h > 0) {
+                                // The source-size query can race the first
+                                // pipeline frame. The render-reference frame
+                                // still carries the correct aspect, so use it
+                                // as a temporary image-size fallback and let
+                                // the metadata query replace it when ready.
+                                if (editorInteraction.imageWidth <= 0
+                                        || editorInteraction.imageHeight <= 0) {
+                                    editorInteraction.setImageSize(w, h)
+                                }
                                 editorInteraction.setRenderReferenceSize(w, h)
+                                viewportSlot.requestImageGeometrySync()
                             }
                         }
                     }
@@ -471,6 +480,12 @@ Item {
                                 // 1:1 (actual pixels). Pro-editor convention.
                                 editorInteraction.zoomToActualPixels()
                                 event.accepted = true
+                            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                                // Geometry confirm: bake draft crop and return to Tone.
+                                if (typeof adjustmentStack.confirmGeometryAndReturnToTone === "function"
+                                        && adjustmentStack.confirmGeometryAndReturnToTone()) {
+                                    event.accepted = true
+                                }
                             }
                         }
 
@@ -520,21 +535,23 @@ Item {
                         if (!root.hasImage) {
                             editorInteraction.resetPresentationStateForNewImage()
                             editorInteraction.setImageSize(0, 0)
+                            editorInteraction.setRenderReferenceSize(0, 0)
+                            imageGeometryRetryTimer.stop()
                             return
                         }
                         // Drop previous image crop/ROI/mode before applying new geometry.
                         editorInteraction.resetPresentationStateForNewImage()
-                        syncImageGeometry()
+                        requestImageGeometrySync()
                     }
 
                     function syncImageGeometry() {
                         if (!root.hasImage) {
                             editorInteraction.setImageSize(0, 0)
                             editorInteraction.setRenderReferenceSize(0, 0)
-                            return
+                            return false
                         }
                         if (!appModules || !appModules.images) {
-                            return
+                            return false
                         }
                         var size = appModules.images.GetImagePixelSize(
                                     root.focusedElementId, root.focusedImageId)
@@ -546,6 +563,32 @@ Item {
                                     editorInteraction.renderReferenceHeight <= 0) {
                                 editorInteraction.setRenderReferenceSize(size.width, size.height)
                             }
+                            return true
+                        }
+                        return false
+                    }
+
+                    function requestImageGeometrySync() {
+                        viewportSlot.imageGeometryRetryCount = 0
+                        if (syncImageGeometry() || !root.hasImage) {
+                            imageGeometryRetryTimer.stop()
+                            return
+                        }
+                        imageGeometryRetryTimer.start()
+                    }
+
+                    property int imageGeometryRetryCount: 0
+                    Timer {
+                        id: imageGeometryRetryTimer
+                        interval: 100
+                        repeat: true
+                        onTriggered: {
+                            if (viewportSlot.syncImageGeometry() || !root.hasImage
+                                    || viewportSlot.imageGeometryRetryCount >= 50) {
+                                stop()
+                                return
+                            }
+                            viewportSlot.imageGeometryRetryCount += 1
                         }
                     }
 
@@ -630,7 +673,7 @@ Item {
                         refreshTrackedScreen()
                         syncViewportMetrics()
                         ensurePresentationBinding()
-                        syncImageGeometry()
+                        requestImageGeometrySync()
                     }
                     onWidthChanged: syncViewportMetrics()
                     onHeightChanged: syncViewportMetrics()
@@ -655,8 +698,22 @@ Item {
                 Layout.fillHeight: true
                 theme: root.theme
                 editorSession: root.editorSession
+                interaction: editorInteraction
                 controlsEnabled: root.hasImage
             }
+        }
+    }
+
+    // Geometry confirm (legacy Enter / numpad Enter). Lives on the workspace so
+    // it still works when focus is on the right panel rather than the viewport.
+    Shortcut {
+        sequences: [ "Return", "Enter" ]
+        enabled: root.hasImage
+                 && root.editorSession
+                 && String(root.editorSession.activeAdjustmentPanel || "") === "geometry"
+        onActivated: {
+            if (typeof adjustmentStack.confirmGeometryAndReturnToTone === "function")
+                adjustmentStack.confirmGeometryAndReturnToTone()
         }
     }
 }

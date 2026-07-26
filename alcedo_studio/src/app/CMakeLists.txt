@@ -296,8 +296,9 @@ def_library(EditorSessionService
         "${ALCEDO_INCLUDE_ROOT}/app/editor_render_coordinator.hpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_bootstrap.hpp"
         "${ALCEDO_INCLUDE_ROOT}/edit/frame_presentation_types.hpp"
-    PUBLIC_DEPS EditHistory
-    PRIVATE_DEPS EditorSaveCheckpointService EditorSessionLifecycle
+    # The session facade is application-only; no Widgets dependency belongs
+    # on this target or on its public link interface.
+    PRIVATE_DEPS EditHistory EditorSaveCheckpointService EditorSessionLifecycle
                  EditorSessionNavigationController EditorSessionRenderController
                  EditorSessionEditController
 )

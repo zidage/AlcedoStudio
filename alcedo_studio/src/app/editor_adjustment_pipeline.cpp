@@ -249,4 +249,10 @@ auto ApplyEditorAdjustmentSnapshot(CPUPipelineExecutor&                  executo
   }
 }
 
+void DisableEditorGeometryOperatorForOverlay(CPUPipelineExecutor& executor) {
+  auto& stage   = executor.GetStage(PipelineStageName::Geometry_Adjustment);
+  auto& globals = executor.GetGlobalParams();
+  stage.EnableOperator(OperatorType::CROP_ROTATE, false, globals);
+}
+
 }  // namespace alcedo

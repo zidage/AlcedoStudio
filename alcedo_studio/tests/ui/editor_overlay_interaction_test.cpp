@@ -1079,13 +1079,13 @@ TEST(EditorOverlayInteractionTest, ViewChangeReportedForZoomPanCropRotateAndResi
   ASSERT_FALSE(spy.empty());
   EXPECT_EQ(last_kind(), static_cast<int>(EditorInteractionController::ViewChangeKind::ZoomPan));
 
-  // Crop rect change → rendered content changes → CropRotate.
+  // Crop rect change with overlay closed → baked content changes → CropRotate.
   spy.clear();
   controller.setCropRectNormalized(QRectF(0.25, 0.25, 0.5, 0.5));
   ASSERT_FALSE(spy.empty());
   EXPECT_EQ(last_kind(), static_cast<int>(EditorInteractionController::ViewChangeKind::CropRotate));
 
-  // Crop rotation change → rendered content changes → CropRotate.
+  // Crop rotation change with overlay closed → CropRotate.
   spy.clear();
   controller.setCropRotationDegrees(15.0f);
   ASSERT_FALSE(spy.empty());
@@ -1097,6 +1097,58 @@ TEST(EditorOverlayInteractionTest, ViewChangeReportedForZoomPanCropRotateAndResi
   controller.setViewportMetrics(1024, 768, 1.0);
   ASSERT_FALSE(spy.empty());
   EXPECT_EQ(last_kind(), static_cast<int>(EditorInteractionController::ViewChangeKind::Resize));
+}
+
+TEST(EditorOverlayInteractionTest,
+     GeometryOverlayCropDraftDoesNotRouteCropRotateViewChanges) {
+  // While the geometry overlay is open, crop-frame edits are pure UI over the
+  // source-frame preview. Pipeline bake is owned by panel confirm (leave/Enter).
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  ConfigureImage(controller, 400, 300);
+  controller.setCropToolEnabled(true);
+  controller.setCropOverlayVisible(true);
+
+  QSignalSpy spy(&controller, &EditorInteractionController::viewChangeReported);
+  ASSERT_TRUE(spy.isValid());
+  QSignalSpy rect_spy(&controller, &EditorInteractionController::cropRectCommitted);
+  ASSERT_TRUE(rect_spy.isValid());
+  QSignalSpy rot_spy(&controller, &EditorInteractionController::cropRotationCommitted);
+  ASSERT_TRUE(rot_spy.isValid());
+
+  controller.setCropRectNormalized(QRectF(0.25, 0.25, 0.5, 0.5));
+  EXPECT_NEAR(controller.cropRectNormalized().x(), 0.25, 1e-4);
+  EXPECT_GE(rect_spy.count(), 1);
+  EXPECT_TRUE(spy.empty()) << "draft overlay rect must not emit viewChangeReported";
+
+  spy.clear();
+  controller.setCropRotationDegrees(12.0f);
+  EXPECT_NEAR(controller.cropRotationDegrees(), 12.0f, 1e-4f);
+  EXPECT_GE(rot_spy.count(), 1);
+  EXPECT_TRUE(spy.empty()) << "draft overlay rotation must not emit viewChangeReported";
+
+  // Drag a new crop rect over the source frame; intermediate moves + release
+  // must stay local (no CropRotate routing).
+  spy.clear();
+  rect_spy.clear();
+  const QPointF start = controller.imageUvToItemPoint(0.1, 0.1);
+  const QPointF end   = controller.imageUvToItemPoint(0.4, 0.45);
+  ASSERT_FALSE(start.isNull());
+  ASSERT_FALSE(end.isNull());
+  controller.handlePress(start.x(), start.y(), static_cast<int>(Qt::LeftButton));
+  controller.handleMove(end.x(), end.y(), static_cast<int>(Qt::LeftButton));
+  controller.handleRelease(end.x(), end.y(), static_cast<int>(Qt::LeftButton));
+  EXPECT_GE(rect_spy.count(), 1);
+  EXPECT_TRUE(spy.empty()) << "crop-frame drag must not route pipeline view changes";
+
+  // Closing the overlay restores content routing for subsequent crop commits.
+  controller.setCropOverlayVisible(false);
+  controller.setCropToolEnabled(false);
+  spy.clear();
+  controller.setCropRectNormalized(QRectF(0.1, 0.1, 0.8, 0.8));
+  ASSERT_FALSE(spy.empty());
+  EXPECT_EQ(spy.takeLast().at(0).toInt(),
+            static_cast<int>(EditorInteractionController::ViewChangeKind::CropRotate));
 }
 
 }  // namespace alcedo::editor_rhi

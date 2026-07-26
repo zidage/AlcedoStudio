@@ -21,6 +21,7 @@ Item {
 
     property var theme: null
     property var editorSession: null
+    property var interaction: null
     property bool controlsEnabled: true
 
     // ── Opaque semantic colors (no alpha derivations) ─────────────────────
@@ -29,7 +30,7 @@ Item {
     readonly property color colCardBorder: theme ? theme.colCardBorder : Qt.rgba(1, 1, 1, 0.08)
     readonly property color colText: theme ? theme.colText : "#F5F1EA"
     readonly property color colMuted: theme ? theme.colTextMuted : "#AAA59D"
-    readonly property color colAccent: theme ? theme.colAccentPrimary : "#457B9D"
+    readonly property color colAccent: theme ? theme.colAccentPrimary : appTheme.accentColor
     // Sunken inset for scope + nav track (interactive well, not a second card).
     readonly property color colBase: theme ? theme.colBgBase : "#161719"
     readonly property int panelRadius: theme ? theme.panelRadius : 12
@@ -89,6 +90,9 @@ Item {
         if (typeof displayPanel.loadFromSnapshot === "function") {
             displayPanel.loadFromSnapshot(snapshot)
         }
+        if (typeof geometryPanel.loadFromSnapshot === "function") {
+            geometryPanel.loadFromSnapshot(snapshot)
+        }
     }
 
 
@@ -96,7 +100,24 @@ Item {
         if (!editorSession) {
             return
         }
+        // Leaving Geometry must commit the draft crop before the session turns
+        // off geometry_overlay_only and requests the bake refresh.
+        if (root.activePanel === "geometry" && String(panel).toLowerCase() !== "geometry") {
+            if (typeof geometryPanel.confirmPendingCrop === "function")
+                geometryPanel.confirmPendingCrop()
+        }
         editorSession.activeAdjustmentPanel = panel
+    }
+
+    /// Enter / Return while Geometry is active: commit draft crop and return to Tone.
+    function confirmGeometryAndReturnToTone() {
+        if (root.activePanel !== "geometry")
+            return false
+        if (typeof geometryPanel.confirmAndReturnToTone === "function") {
+            geometryPanel.confirmAndReturnToTone()
+            return true
+        }
+        return false
     }
 
     function panelTitle(key) {
@@ -326,9 +347,8 @@ Item {
                 }
             }
 
-            // Stacked panel bodies. Navigation and sizing are final; content is
-            // intentionally empty until each panel is ported. Explicit children
-            // (not Repeater) keep StackLayout indices stable for tests.
+            // Stacked panel bodies. Explicit children keep StackLayout indices
+            // stable while each panel owns its snapshot fields.
             StackLayout {
                 id: panelStack
                 objectName: "editorAdjustmentPanelStack"
@@ -345,8 +365,7 @@ Item {
                     }
                 }
 
-                // Phase 6B: production Tone panel. Other panels keep the empty
-                // shell until their Phase 6 ports land.
+                // Phase 6B: production Tone panel.
                 EditorTonePanel {
                     id: tonePanel
                     objectName: "editorAdjustmentPanel_tone"
@@ -430,9 +449,14 @@ Item {
                     editorSession: root.editorSession
                     controlsEnabled: root.controlsEnabled
                 }
-                EmptyAdjustmentPage {
+                EditorGeometryPanel {
+                    id: geometryPanel
                     objectName: "editorAdjustmentPanel_geometry"
-                    panelKey: "geometry"
+                    theme: root.theme
+                    editorSession: root.editorSession
+                    interaction: root.interaction
+                    controlsEnabled: root.controlsEnabled
+                    panelActive: root.activePanel === "geometry"
                 }
                 EmptyAdjustmentPage {
                     objectName: "editorAdjustmentPanel_raw"
