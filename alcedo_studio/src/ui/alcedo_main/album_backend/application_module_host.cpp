@@ -15,6 +15,7 @@
 #include "app/editor_save_checkpoint_coordinator.hpp"
 #include "app/editor_session_bootstrap.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
+#include "ui/alcedo_main/album_backend/editor_history_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_checkpoint_store.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_history_port.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_journal_writer_port.hpp"
@@ -31,6 +32,7 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
     : QObject(parent), lifecycle_observer_(std::move(observer)) {
   alcedo::editor_rhi::RegisterEditorViewportQmlTypes();
   alcedo::ui::RegisterEditorAdjustmentQmlTypes();
+  alcedo::ui::RegisterEditorHistoryQmlTypes();
   background_tasks_ = std::make_unique<BackgroundTaskController>();
   RecordConstruction("BackgroundTaskController", background_tasks_.get());
   interaction_policy_ =
@@ -151,27 +153,27 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
                  ("image-" + std::to_string(static_cast<std::uint64_t>(element_id)) +
                   ".mini-git.wal");
         };
-    auto refresh_focused_thumbnail = [library = QPointer<LibraryModule>(library_.get())](
-                                       sl_element_id_t element_id) {
-      if (!library) {
-        return;
-      }
-      QMetaObject::invokeMethod(
-          library,
-          [library, element_id] {
-            if (!library || library->project() == nullptr) {
-              return;
-            }
-            if (auto thumbnails = library->project()->handler().thumbnail_service()) {
-              thumbnails->InvalidateThumbnail(element_id);
-            }
-            const auto* item = library->FindAlbumItem(element_id);
-            if (item != nullptr) {
-              (void)library->thumbs().RefreshCurrentThumbnail(element_id, item->image_id);
-            }
-          },
-          Qt::QueuedConnection);
-    };
+    auto refresh_focused_thumbnail =
+        [library = QPointer<LibraryModule>(library_.get())](sl_element_id_t element_id) {
+          if (!library) {
+            return;
+          }
+          QMetaObject::invokeMethod(
+              library,
+              [library, element_id] {
+                if (!library || library->project() == nullptr) {
+                  return;
+                }
+                if (auto thumbnails = library->project()->handler().thumbnail_service()) {
+                  thumbnails->InvalidateThumbnail(element_id);
+                }
+                const auto* item = library->FindAlbumItem(element_id);
+                if (item != nullptr) {
+                  (void)library->thumbs().RefreshCurrentThumbnail(element_id, item->image_id);
+                }
+              },
+              Qt::QueuedConnection);
+        };
     session_pipeline->SetServices(std::move(pipeline_services));
     session_history->SetServices(EditorSessionHistoryPort::Services{mini_git_journal_path});
     session_history->SetPipelinePort(session_pipeline);

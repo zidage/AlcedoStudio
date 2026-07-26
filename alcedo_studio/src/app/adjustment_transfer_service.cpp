@@ -504,7 +504,7 @@ auto UniqueVersionDisplayNameForGraph(const CommitGraph& graph, const std::strin
   bool              base_exists = false;
   int               max_suffix  = 1;
 
-  const std::string prefix = base_name + " (";
+  const std::string prefix      = base_name + " (";
   for (const auto& [id, ref] : graph.GetAllVersionRefs()) {
     const std::string& existing_name = ref.display_name;
     if (existing_name == base_name) {
@@ -545,9 +545,9 @@ auto MergeConflictFieldKey(const AdjustmentTransferEntry& entry) -> std::string 
 
 }  // namespace
 
-auto AdjustmentTransferService::BuildRootRelativeCommits(
-    const AdjustmentTransferPackage& package,
-    const root_id_t& root_id) -> std::vector<EditCommit> {
+auto AdjustmentTransferService::BuildRootRelativeCommits(const AdjustmentTransferPackage& package,
+                                                         const root_id_t&                 root_id)
+    -> std::vector<EditCommit> {
   std::vector<EditCommit> commits;
   commits.reserve(package.operators_.size());
 
@@ -571,18 +571,16 @@ auto AdjustmentTransferService::BuildRootRelativeCommits(
     payload.after_value    = entry.params_;
     payload.after_enabled  = entry.enabled_;
 
-    auto commit = EditCommit::MakeEdit(root_id, parent, std::move(payload));
-    parent      = commit.GetCommitHash();
+    auto commit            = EditCommit::MakeEdit(root_id, parent, std::move(payload));
+    parent                 = commit.GetCommitHash();
     commits.push_back(std::move(commit));
   }
   return commits;
 }
 
 auto AdjustmentTransferService::PasteAsRootRelativeVersion(
-    CommitGraph& graph,
-    [[maybe_unused]] PipelineMgmtService& pipeline_service,
-    [[maybe_unused]] sl_element_id_t element_id,
-    const AdjustmentTransferPackage& package,
+    CommitGraph& graph, [[maybe_unused]] PipelineMgmtService& pipeline_service,
+    [[maybe_unused]] sl_element_id_t element_id, const AdjustmentTransferPackage& package,
     std::string version_display_name) -> AdjustmentPasteResult {
   AdjustmentPasteResult result;
   if (package.Empty()) {
@@ -603,8 +601,8 @@ auto AdjustmentTransferService::PasteAsRootRelativeVersion(
   }
 
   const auto new_head = commits.back().GetCommitHash();
-  const auto display_name = UniqueVersionDisplayNameForGraph(
-      graph, version_display_name, "Pasted Adjustments");
+  const auto display_name =
+      UniqueVersionDisplayNameForGraph(graph, version_display_name, "Pasted Adjustments");
   const auto new_version_id = graph.CreateVersionRefAtHead(display_name, new_head);
   graph.SetActiveVersionId(new_version_id);
 
@@ -614,12 +612,12 @@ auto AdjustmentTransferService::PasteAsRootRelativeVersion(
   return result;
 }
 
-auto AdjustmentTransferService::InitiateMerge(
-    CommitGraph& graph,
-    PipelineMgmtService& pipeline_service,
-    sl_element_id_t element_id,
-    const AdjustmentTransferPackage& package,
-    std::string incoming_version_display_name) -> AdjustmentMergePreview {
+auto AdjustmentTransferService::InitiateMerge(CommitGraph&                     graph,
+                                              PipelineMgmtService&             pipeline_service,
+                                              sl_element_id_t                  element_id,
+                                              const AdjustmentTransferPackage& package,
+                                              std::string incoming_version_display_name)
+    -> AdjustmentMergePreview {
   AdjustmentMergePreview preview;
   if (package.Empty()) {
     preview.error = "Adjustment transfer package is empty";
@@ -639,8 +637,8 @@ auto AdjustmentTransferService::InitiateMerge(
   preview.incoming_head = incoming_commits.back().GetCommitHash();
 
   // Create a temporary Version ref for the incoming branch.
-  const auto incoming_display_name = UniqueVersionDisplayNameForGraph(
-      graph, incoming_version_display_name, "Merged Adjustments");
+  const auto incoming_display_name =
+      UniqueVersionDisplayNameForGraph(graph, incoming_version_display_name, "Merged Adjustments");
   preview.incoming_version_id =
       graph.CreateVersionRefAtHead(incoming_display_name, preview.incoming_head);
 
@@ -666,12 +664,12 @@ auto AdjustmentTransferService::InitiateMerge(
         continue;
       }
 
-      auto&       stage = guard->pipeline_->GetStage(entry.stage_);
-      const auto  current = stage.GetOperator(entry.operator_type_);
-      const bool  has_current =
+      auto&      stage   = guard->pipeline_->GetStage(entry.stage_);
+      const auto current = stage.GetOperator(entry.operator_type_);
+      const bool has_current =
           current.has_value() && current.value() != nullptr && current.value()->op_ != nullptr;
 
-      nlohmann::json current_value = nlohmann::json(nullptr);
+      nlohmann::json current_value   = nlohmann::json(nullptr);
       bool           current_enabled = false;
       if (has_current) {
         current_value   = current.value()->op_->GetParams();
@@ -687,9 +685,9 @@ auto AdjustmentTransferService::InitiateMerge(
       // Conflict: value or enabled state differs.
       if (current_value != incoming_value || current_enabled != entry.enabled_) {
         AdjustmentMergeConflict conflict;
-        conflict.stage         = entry.stage_;
-        conflict.operator_type = entry.operator_type_;
-        conflict.field_key     = MergeConflictFieldKey(entry);
+        conflict.stage          = entry.stage_;
+        conflict.operator_type  = entry.operator_type_;
+        conflict.field_key      = MergeConflictFieldKey(entry);
         conflict.current_value  = std::move(current_value);
         conflict.incoming_value = std::move(incoming_value);
         preview.conflicts.push_back(std::move(conflict));
@@ -703,9 +701,8 @@ auto AdjustmentTransferService::InitiateMerge(
 }
 
 auto AdjustmentTransferService::CompleteMerge(
-    CommitGraph& graph,
-    [[maybe_unused]] PipelineMgmtService& pipeline_service,
-    const AdjustmentMergePreview& preview,
+    CommitGraph& graph, [[maybe_unused]] PipelineMgmtService& pipeline_service,
+    const AdjustmentMergePreview&                 preview,
     const std::vector<AdjustmentMergeResolution>& resolutions) -> AdjustmentMergeResult {
   AdjustmentMergeResult result;
   if (!preview.error.empty()) {
@@ -718,7 +715,7 @@ auto AdjustmentTransferService::CompleteMerge(
   }
 
   // Build the MergeEditPayload from the resolutions.
-  MergeEditPayload merge_payload;
+  MergeEditPayload                merge_payload;
   std::unordered_set<std::string> resolved_keys;
 
   for (const auto& resolution : resolutions) {
@@ -747,8 +744,7 @@ auto AdjustmentTransferService::CompleteMerge(
     merge_payload.fields.push_back(std::move(delta));
   }
 
-  if (preview.has_conflicts &&
-      merge_payload.fields.size() != preview.conflicts.size()) {
+  if (preview.has_conflicts && merge_payload.fields.size() != preview.conflicts.size()) {
     result.error = "Not all merge conflicts were resolved";
     return result;
   }
@@ -756,8 +752,9 @@ auto AdjustmentTransferService::CompleteMerge(
   // Create the merge commit.
   EditCommit merge_commit;
   try {
-    merge_commit = EditCommit::MakeMerge(graph.GetRootId(), graph.GetActiveVersionRef().head_commit_hash,
-                                         preview.incoming_head, std::move(merge_payload));
+    merge_commit =
+        EditCommit::MakeMerge(graph.GetRootId(), graph.GetActiveVersionRef().head_commit_hash,
+                              preview.incoming_head, std::move(merge_payload));
   } catch (const std::exception& e) {
     result.error = std::string("Failed to create merge commit: ") + e.what();
     return result;
@@ -765,6 +762,12 @@ auto AdjustmentTransferService::CompleteMerge(
 
   (void)graph.InsertCommit(merge_commit);
   graph.MoveWorkingHead(graph.GetActiveVersionId(), merge_commit.GetCommitHash());
+  // The incoming branch is an implementation detail of conflict resolution.
+  // Its commits remain reachable through the merge's ordered second parent,
+  // but the temporary Version ref must not become a user-facing Version row.
+  if (preview.incoming_version_id != version_ref_id_t{}) {
+    (void)graph.RemoveVersionRef(preview.incoming_version_id);
+  }
 
   result.merged            = true;
   result.active_version_id = graph.GetActiveVersionId();
@@ -772,12 +775,15 @@ auto AdjustmentTransferService::CompleteMerge(
   return result;
 }
 
-void AdjustmentTransferService::CancelMerge(CommitGraph& graph,
-                                            [[maybe_unused]] AdjustmentMergePreview& preview) {
-  // No commit or ref change. The incoming branch commits remain in the graph
-  // as unreachable objects that will be collected on clean project exit.
-  // The active Version is not moved.
-  (void)graph;
+void AdjustmentTransferService::CancelMerge(CommitGraph& graph, AdjustmentMergePreview& preview) {
+  // The temporary incoming branch is not a user-visible Version. Remove its
+  // ref on cancellation; the immutable incoming commits remain unreachable
+  // objects for clean-exit collection, and the active Version is untouched.
+  if (preview.incoming_version_id != version_ref_id_t{}) {
+    (void)graph.RemoveVersionRef(preview.incoming_version_id);
+  }
+  preview.incoming_version_id = {};
+  preview.incoming_head       = {};
 }
 
 }  // namespace alcedo

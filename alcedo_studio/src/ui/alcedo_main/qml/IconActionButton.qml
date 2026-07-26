@@ -42,7 +42,8 @@ Item {
     property color iconColorSelected: iconColorDefault
     // Phase 4D: opaque idle fill (was "transparent").
     property color fillIdle: appTheme.buttonIdleFillColor
-    property color fillHover: appTheme.hoverColor
+    property color fillHover: appTheme.buttonHoveredFillColor
+    property color fillPressed: appTheme.buttonPressedFillColor
     property color fillSelected: appTheme.buttonSelectedFillColor
     property color focusRingColor: appTheme.accentColor
 
@@ -100,10 +101,10 @@ Item {
             return control.fillIdle
         }
         if (pressArea.pressed) {
-            return appTheme.buttonPressedFillColor
+            return control.fillPressed
         }
         if (hover.hovered || pressArea.containsMouse) {
-            return appTheme.buttonHoveredFillColor
+            return control.fillHover
         }
         return control.fillIdle
     }

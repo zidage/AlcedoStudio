@@ -73,6 +73,7 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int editorSidePanelWidth READ editorSidePanelWidth CONSTANT)
   Q_PROPERTY(int editorSidePanelWidthMin READ editorSidePanelWidthMin CONSTANT)
   Q_PROPERTY(int editorSidePanelWidthMax READ editorSidePanelWidthMax CONSTANT)
+  Q_PROPERTY(int editorMergeDialogWidth READ editorMergeDialogWidth CONSTANT)
   Q_PROPERTY(int editorScopeHeight READ editorScopeHeight CONSTANT)
   Q_PROPERTY(int editorScopeHeightMin READ editorScopeHeightMin CONSTANT)
   // Line heights (px) for QML Label lineHeight when using fixed pixel sizes.
@@ -120,9 +121,11 @@ class AppTheme final : public QObject {
   // Monochrome inverted list rows (dense catalogs: LUT browser, etc.).
   // Selected well is a light bone bar on the sunken track; text and favorite
   // stars invert ink on that well so they stay readable without ad-hoc rgba.
-  Q_PROPERTY(QColor editorListSelectedFillColor READ editorListSelectedFillColor NOTIFY ThemeChanged)
+  Q_PROPERTY(
+      QColor editorListSelectedFillColor READ editorListSelectedFillColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor editorListSelectedInkColor READ editorListSelectedInkColor NOTIFY ThemeChanged)
-  Q_PROPERTY(QColor editorListFavoriteIdleColor READ editorListFavoriteIdleColor NOTIFY ThemeChanged)
+  Q_PROPERTY(
+      QColor editorListFavoriteIdleColor READ editorListFavoriteIdleColor NOTIFY ThemeChanged)
   Q_PROPERTY(
       QColor editorListFavoriteActiveColor READ editorListFavoriteActiveColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor editorListFavoriteIdleOnSelectedColor READ editorListFavoriteIdleOnSelectedColor
@@ -225,6 +228,7 @@ class AppTheme final : public QObject {
   auto        editorSidePanelWidth() const -> int;
   auto        editorSidePanelWidthMin() const -> int;
   auto        editorSidePanelWidthMax() const -> int;
+  auto        editorMergeDialogWidth() const -> int;
   auto        editorScopeHeight() const -> int;
   auto        editorScopeHeightMin() const -> int;
   auto        lineHeightCaption() const -> int;
@@ -262,12 +266,12 @@ class AppTheme final : public QObject {
   auto        editorSliderNegativeColor() const -> QColor { return EditorSliderAccentColor(false); }
   auto        editorSliderHandleColor() const -> QColor { return EditorSliderHandleColor(); }
   auto editorSliderHandleBorderColor() const -> QColor { return EditorSliderHandleBorderColor(); }
-  auto        editorListSelectedFillColor() const -> QColor;
-  auto        editorListSelectedInkColor() const -> QColor;
-  auto        editorListFavoriteIdleColor() const -> QColor;
-  auto        editorListFavoriteActiveColor() const -> QColor;
-  auto        editorListFavoriteIdleOnSelectedColor() const -> QColor;
-  auto        editorListFavoriteActiveOnSelectedColor() const -> QColor;
+  auto editorListSelectedFillColor() const -> QColor;
+  auto editorListSelectedInkColor() const -> QColor;
+  auto editorListFavoriteIdleColor() const -> QColor;
+  auto editorListFavoriteActiveColor() const -> QColor;
+  auto editorListFavoriteIdleOnSelectedColor() const -> QColor;
+  auto editorListFavoriteActiveOnSelectedColor() const -> QColor;
 
   auto currentThemeIndex() const -> int;
   void setCurrentThemeIndex(int index);

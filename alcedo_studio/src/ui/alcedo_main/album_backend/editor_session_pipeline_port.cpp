@@ -50,6 +50,12 @@ auto EditorSessionPipelinePort::CurrentGuard(sl_element_id_t element_id) const
   return it == guards_.end() ? nullptr : it->second;
 }
 
+auto EditorSessionPipelinePort::PipelineService() const
+    -> std::shared_ptr<alcedo::PipelineMgmtService> {
+  std::scoped_lock lock(mutex_);
+  return services_.pipeline_service ? services_.pipeline_service() : nullptr;
+}
+
 auto EditorSessionPipelinePort::EnsureLoaded(sl_element_id_t element_id, std::string* error)
     -> std::shared_ptr<alcedo::PipelineGuard> {
   {
@@ -90,9 +96,9 @@ auto EditorSessionPipelinePort::EnsureLoaded(sl_element_id_t element_id, std::st
   return nullptr;
 }
 
-auto EditorSessionPipelinePort::CheckoutVersion(sl_element_id_t element_id,
+auto EditorSessionPipelinePort::CheckoutVersion(sl_element_id_t        element_id,
                                                 const alcedo::Hash128& version_id,
-                                                std::string* error) -> bool {
+                                                std::string*           error) -> bool {
   auto guard = EnsureLoaded(element_id, error);
   if (!guard) {
     return false;

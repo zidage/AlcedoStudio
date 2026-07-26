@@ -39,6 +39,7 @@ add_executable(EditorSessionHistoryPortTest
 target_include_directories(EditorSessionHistoryPortTest
   PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
 target_link_libraries(EditorSessionHistoryPortTest
+  AdjustmentTransferService
   EditorAdjustmentPipeline
   EditorMiniGitMaterializer
   PipelineMgmtService
@@ -438,6 +439,41 @@ target_compile_definitions(EditorAdjustmentControlQmlTest
 )
 gtest_discover_tests(EditorAdjustmentControlQmlTest TEST_PREFIX "EditorAdjustmentControlQmlTest.")
 alcedo_register_test_target(EditorAdjustmentControlQmlTest ui)
+
+# Phase 7A: user-driven Version/history rail flows through the production QML
+# component, typed EditorHistoryModel, and a recording session/transfer seam.
+add_executable(EditorHistoryVersionsRailQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_history_versions_rail_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorHistoryVersionsRailQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorHistoryVersionsRailQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorHistoryVersionsRailQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+gtest_discover_tests(EditorHistoryVersionsRailQmlTest
+    TEST_PREFIX "EditorHistoryVersionsRailQmlTest."
+    PROPERTIES LABELS "workspace_qml;editor_history")
+alcedo_register_test_target(EditorHistoryVersionsRailQmlTest ui)
 
 # Phase 6C-7: an already-restored snapshot must populate the QML Tone panel
 # during its first editor binding, without emitting a new adjustment patch.

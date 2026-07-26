@@ -173,6 +173,7 @@ the two side columns read as one family.
 | `editorSidePanelWidth` | 320 | Preferred width: adjustment stack + History/Versions expanded panel |
 | `editorSidePanelWidthMin` | 260 | Adjustment stack minimum (narrow-window floor) |
 | `editorSidePanelWidthMax` | 460 | Adjustment stack maximum |
+| `editorMergeDialogWidth` | 560 | Merge conflict resolution dialog |
 | `editorScopeHeight` | 160 | Histogram / waveform slot preferred height |
 | `editorScopeHeightMin` | 128 | Histogram / waveform slot minimum height |
 

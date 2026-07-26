@@ -7,9 +7,11 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "app/adjustment_transfer_types.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_save_checkpoint_service.hpp"
 #include "app/editor_session_edit_controller.hpp"
@@ -40,15 +42,15 @@ class IEditorSessionBackend {
   [[nodiscard]] virtual auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot {
     return {};
   }
-
+  [[nodiscard]] virtual auto history_snapshot() -> EditorHistorySnapshot { return {}; }
 
   /// Optional: notified after state/identity changes from async results.
   virtual void               SetChangeNotifier(ChangeNotifier notifier) {
     change_notifier_ = std::move(notifier);
   }
 
-  virtual void SetPresentationSinkId(PresentationSinkId sink_id)                              = 0;
-  virtual void SetPresentationSize(int width, int height)                                     = 0;
+  virtual void SetPresentationSinkId(PresentationSinkId sink_id) = 0;
+  virtual void SetPresentationSize(int width, int height)        = 0;
   /// Keep geometry editing on the source-frame overlay until the panel closes.
   /// Backends that do not render through the unified session path may ignore it.
   virtual void SetGeometryOverlayActive(bool /*active*/) {}
@@ -62,11 +64,71 @@ class IEditorSessionBackend {
     result.message = "Version checkout is not supported by this backend";
     return result;
   }
-  virtual auto Close(bool persist_changes) -> EditorSessionResult                             = 0;
-  virtual auto Shutdown() -> EditorSessionResult                                              = 0;
-  virtual auto Discard() -> EditorSessionResult                                               = 0;
-  virtual auto Undo() -> EditorSessionResult                                                  = 0;
-  virtual auto Redo() -> EditorSessionResult                                                  = 0;
+  virtual auto CreateVersion(std::string /*display_name*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Version creation is not supported by this backend";
+    return result;
+  }
+  virtual auto RenameVersion(const version_ref_id_t& /*version_id*/, std::string /*display_name*/)
+      -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Version rename is not supported by this backend";
+    return result;
+  }
+  virtual auto RemoveVersion(const version_ref_id_t& /*version_id*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Version removal is not supported by this backend";
+    return result;
+  }
+  virtual auto PasteAdjustments(const AdjustmentTransferPackage& /*package*/,
+                                std::string /*version_display_name*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Editor Paste is not supported by this backend";
+    return result;
+  }
+  virtual auto BeginMerge(const AdjustmentTransferPackage& /*package*/,
+                          AdjustmentMergePreview* /*preview*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Editor Merge is not supported by this backend";
+    return result;
+  }
+  virtual auto CompleteMerge(const std::vector<AdjustmentMergeResolution>& /*resolutions*/)
+      -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Editor Merge is not supported by this backend";
+    return result;
+  }
+  virtual auto CancelMerge() -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Editor Merge cancellation is not supported by this backend";
+    return result;
+  }
+  virtual auto Close(bool persist_changes) -> EditorSessionResult = 0;
+  virtual auto Shutdown() -> EditorSessionResult                  = 0;
+  virtual auto Discard() -> EditorSessionResult                   = 0;
+  virtual auto Undo() -> EditorSessionResult                      = 0;
+  virtual auto Redo() -> EditorSessionResult                      = 0;
   virtual auto Patch(EditorAdjustmentPatch /*patch*/) -> EditorSessionResult {
     EditorSessionResult result;
     result.kind    = EditorSessionResultKind::Rejected;
@@ -113,15 +175,15 @@ class IEditorSessionBackend {
 class EditorSessionService final : public IEditorSessionBackend {
  public:
   struct Dependencies {
-    std::shared_ptr<IEditorPipelinePort>                 pipeline;
-    std::shared_ptr<IEditorHistoryPort>                  history;
-    std::shared_ptr<IEditorTaskPort>                     tasks;
-    std::shared_ptr<IEditorJournalPort>                  journal;
-    std::shared_ptr<IEditorCheckpointStore>              checkpoint_store;
-    std::shared_ptr<IEditorThumbnailPort>                thumbnails;
-    std::shared_ptr<IEditorRenderSubmitPort>             render;
+    std::shared_ptr<IEditorPipelinePort>             pipeline;
+    std::shared_ptr<IEditorHistoryPort>              history;
+    std::shared_ptr<IEditorTaskPort>                 tasks;
+    std::shared_ptr<IEditorJournalPort>              journal;
+    std::shared_ptr<IEditorCheckpointStore>          checkpoint_store;
+    std::shared_ptr<IEditorThumbnailPort>            thumbnails;
+    std::shared_ptr<IEditorRenderSubmitPort>         render;
     /// Project-owned global save lock shared with Mini-Git materialization.
-    std::shared_ptr<EditorSaveCheckpointCoordinator>    save_coordinator;
+    std::shared_ptr<EditorSaveCheckpointCoordinator> save_coordinator;
   };
 
   using ResultObserver = std::function<void(const EditorSessionResult&)>;
@@ -149,6 +211,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot override {
     return edit_.adjustment_snapshot();
   }
+  [[nodiscard]] auto history_snapshot() -> EditorHistorySnapshot override;
   [[nodiscard]] auto presentation_sink_id() const -> PresentationSinkId {
     return render_.presentation_sink_id();
   }
@@ -166,6 +229,17 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
   auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
   auto CheckoutVersion(const version_ref_id_t& version_id) -> EditorSessionResult override;
+  auto CreateVersion(std::string display_name) -> EditorSessionResult override;
+  auto RenameVersion(const version_ref_id_t& version_id, std::string display_name)
+      -> EditorSessionResult override;
+  auto RemoveVersion(const version_ref_id_t& version_id) -> EditorSessionResult override;
+  auto PasteAdjustments(const AdjustmentTransferPackage& package, std::string version_display_name)
+      -> EditorSessionResult override;
+  auto BeginMerge(const AdjustmentTransferPackage& package, AdjustmentMergePreview* preview)
+      -> EditorSessionResult override;
+  auto CompleteMerge(const std::vector<AdjustmentMergeResolution>& resolutions)
+      -> EditorSessionResult override;
+  auto CancelMerge() -> EditorSessionResult override;
   auto Close(bool persist_changes) -> EditorSessionResult override;
   auto Patch(EditorAdjustmentPatch patch) -> EditorSessionResult override;
   auto CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult override;
@@ -198,11 +272,17 @@ class EditorSessionService final : public IEditorSessionBackend {
  private:
   /// Publish a result to the observer and change-notifier. The only state the
   /// facade owns is the result history and observer registration.
-  auto                              Emit(EditorSessionResult result) -> EditorSessionResult;
-  auto                              Reject(std::string message) -> EditorSessionResult;
+  auto Emit(EditorSessionResult result) -> EditorSessionResult;
+  auto Reject(std::string message) -> EditorSessionResult;
   /// Transition lifecycle to Failed and emit a Failed result. Used when a
   /// navigation or save failure requires the session to enter the Failed state.
-  auto                              Fail(std::string message) -> EditorSessionResult;
+  auto Fail(std::string message) -> EditorSessionResult;
+  /// Persist a graph mutation through the same journal/materialization path as
+  /// ordinary editor saves. The completion callback publishes the mutation
+  /// only after the checkpoint succeeds.
+  auto StartHistoryCheckpoint(std::string success_message, bool route_render)
+      -> EditorSessionResult;
+  auto                              CancelPendingMergeForNavigation(std::string* error) -> bool;
 
   Dependencies                      dependencies_;
   ResultObserver                    observer_;
@@ -213,6 +293,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   EditorSessionNavigationController navigation_;
   std::vector<EditorSessionResult>  results_;
   mutable std::mutex                results_mutex_;
+  std::unique_ptr<AdjustmentMergePreview> pending_merge_preview_;
 };
 
 }  // namespace alcedo

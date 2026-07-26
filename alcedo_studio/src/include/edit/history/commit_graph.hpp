@@ -93,6 +93,10 @@ class CommitGraph {
   auto CreateVersionRefAtActiveHead(std::string display_name, std::time_t created_at = 0)
       -> version_ref_id_t;
 
+  /// Remove a non-active named Version ref. The graph always retains at least
+  /// one ref, and an active ref must be checked out elsewhere first.
+  auto RemoveVersionRef(const version_ref_id_t& version_id) -> bool;
+
   /// Move only the in-memory working head. Does not advance ImageEditState materialized fields.
   void MoveWorkingHead(const version_ref_id_t& version_id, head_commit_hash_t new_head,
                        std::time_t updated_at = 0);
@@ -110,7 +114,7 @@ class CommitGraph {
 
   /// Remove the given commit hashes from the in-memory table. Callers must only
   /// pass unreachable commits; reachable deletions throw.
-  void EraseUnreachableCommits(const std::vector<commit_hash_t>& hashes);
+  void               EraseUnreachableCommits(const std::vector<commit_hash_t>& hashes);
 
   auto ChainHashForHead(const head_commit_hash_t& head) const -> transaction_chain_hash_t;
   auto ChainHashForVersion(const version_ref_id_t& version_id) const -> transaction_chain_hash_t;
@@ -120,12 +124,10 @@ class CommitGraph {
 
   /// Capture materialization with an explicit serialized pipeline state value.
   auto CaptureMaterializationWithSerializedPipelineState(
-      std::optional<nlohmann::json> serialized_pipeline_state) const
-      -> CommitGraphMaterialization;
+      std::optional<nlohmann::json> serialized_pipeline_state) const -> CommitGraphMaterialization;
 
   /// Capture materialization and clear any serialized pipeline state.
-  auto CaptureMaterializationClearingSerializedPipelineState() const
-      -> CommitGraphMaterialization;
+  auto CaptureMaterializationClearingSerializedPipelineState() const -> CommitGraphMaterialization;
 
   /// Apply a successful materialization result to the in-memory ImageEditState only.
   void ApplyMaterializedState(const ImageEditState& materialized_state);

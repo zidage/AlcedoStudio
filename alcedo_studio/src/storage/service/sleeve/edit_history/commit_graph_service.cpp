@@ -20,8 +20,7 @@ auto MakeStringPtr(std::string value) -> std::unique_ptr<std::string> {
   return std::make_unique<std::string>(std::move(value));
 }
 
-auto MakeSerializedPipelineState(const root_id_t& root_id,
-                                 const nlohmann::json& pipeline_params)
+auto MakeSerializedPipelineState(const root_id_t& root_id, const nlohmann::json& pipeline_params)
     -> nlohmann::json {
   return nlohmann::json{{"state_format_version", 1},
                         {"root_id", root_id.ToString()},
@@ -30,7 +29,7 @@ auto MakeSerializedPipelineState(const root_id_t& root_id,
                         {"pipeline_params", pipeline_params}};
 }
 
-auto MakeRootSerializedPipelineState(const nlohmann::json& pipeline_params,
+auto MakeRootSerializedPipelineState(const nlohmann::json&                pipeline_params,
                                      const std::optional<nlohmann::json>& raw_color_context)
     -> nlohmann::json {
   nlohmann::json state{{"state_format_version", 1}, {"pipeline_params", pipeline_params}};
@@ -55,7 +54,7 @@ auto SqlQuote(std::string_view value) -> std::string {
 void ExecuteOrThrow(duckdb_connection conn, const std::string& sql) {
   duckdb_result result;
   if (duckdb_query(conn, sql.c_str(), &result) != DuckDBSuccess) {
-    const char* error = duckdb_result_error(&result);
+    const char*       error   = duckdb_result_error(&result);
     const std::string message = error ? error : "CommitGraphService query failed";
     duckdb_destroy_result(&result);
     throw std::runtime_error(message);
@@ -88,29 +87,27 @@ CommitGraphService::CommitGraphService(duckdb_connection& conn)
 
 auto CommitGraphService::ToCommitParams(const EditCommit& commit) -> EditCommitMapperParams {
   EditCommitMapperParams params;
-  params.commit_hash       = MakeStringPtr(commit.GetCommitHash().ToString());
-  params.root_id           = MakeStringPtr(commit.GetRootId().ToString());
-  params.first_parent_hash = MakeStringPtr(HeadCommitHashToStorage(commit.GetFirstParentHash()));
-  params.second_parent_hash = MakeStringPtr(
-      commit.GetSecondParentHash().has_value() ? commit.GetSecondParentHash()->ToString()
-                                               : std::string{});
-  params.created_at_ns = commit.GetCreatedAtNs();
-  params.kind          = static_cast<std::uint32_t>(commit.GetKind());
-  params.edit_payload  = MakeStringPtr(commit.GetPayloadJSON().dump());
+  params.commit_hash        = MakeStringPtr(commit.GetCommitHash().ToString());
+  params.root_id            = MakeStringPtr(commit.GetRootId().ToString());
+  params.first_parent_hash  = MakeStringPtr(HeadCommitHashToStorage(commit.GetFirstParentHash()));
+  params.second_parent_hash = MakeStringPtr(commit.GetSecondParentHash().has_value()
+                                                ? commit.GetSecondParentHash()->ToString()
+                                                : std::string{});
+  params.created_at_ns      = commit.GetCreatedAtNs();
+  params.kind               = static_cast<std::uint32_t>(commit.GetKind());
+  params.edit_payload       = MakeStringPtr(commit.GetPayloadJSON().dump());
   return params;
 }
 
 auto CommitGraphService::FromCommitParams(EditCommitMapperParams&& params) -> EditCommit {
   nlohmann::json j;
-  j["commit_hash"] = params.commit_hash ? *params.commit_hash : std::string{};
-  j["root_id"]     = params.root_id ? *params.root_id : std::string{};
-  j["first_parent_hash"] =
-      params.first_parent_hash ? *params.first_parent_hash : std::string{};
-  j["second_parent_hash"] =
-      params.second_parent_hash ? *params.second_parent_hash : std::string{};
-  j["created_at_ns"] = params.created_at_ns;
-  j["kind"]          = static_cast<int>(params.kind);
-  j["edit_payload"]  = nlohmann::json::parse(params.edit_payload ? *params.edit_payload : "{}");
+  j["commit_hash"]        = params.commit_hash ? *params.commit_hash : std::string{};
+  j["root_id"]            = params.root_id ? *params.root_id : std::string{};
+  j["first_parent_hash"]  = params.first_parent_hash ? *params.first_parent_hash : std::string{};
+  j["second_parent_hash"] = params.second_parent_hash ? *params.second_parent_hash : std::string{};
+  j["created_at_ns"]      = params.created_at_ns;
+  j["kind"]               = static_cast<int>(params.kind);
+  j["edit_payload"] = nlohmann::json::parse(params.edit_payload ? *params.edit_payload : "{}");
   return EditCommit::FromJSON(j);
 }
 
@@ -127,12 +124,11 @@ auto CommitGraphService::ToVersionRefParams(const VersionRef& ref) -> VersionRef
 
 auto CommitGraphService::FromVersionRefParams(VersionRefMapperParams&& params) -> VersionRef {
   VersionRef ref;
-  ref.version_id =
-      Hash128::FromString(params.version_id ? *params.version_id : std::string{});
-  ref.element_id       = params.element_id;
-  ref.display_name     = params.display_name ? *params.display_name : std::string{};
-  ref.head_commit_hash = HeadCommitHashFromStorage(
-      params.head_commit_hash ? *params.head_commit_hash : std::string{});
+  ref.version_id   = Hash128::FromString(params.version_id ? *params.version_id : std::string{});
+  ref.element_id   = params.element_id;
+  ref.display_name = params.display_name ? *params.display_name : std::string{};
+  ref.head_commit_hash =
+      HeadCommitHashFromStorage(params.head_commit_hash ? *params.head_commit_hash : std::string{});
   ref.created_at = static_cast<std::time_t>(params.created_at_unix);
   ref.updated_at = static_cast<std::time_t>(params.updated_at_unix);
   return ref;
@@ -149,8 +145,7 @@ auto CommitGraphService::ToImageEditStateParams(const ImageEditState& state)
   params.materialized_transaction_chain_hash =
       MakeStringPtr(state.materialized_transaction_chain_hash.ToString());
   if (state.serialized_pipeline_state.has_value()) {
-    params.serialized_pipeline_state =
-        MakeStringPtr(state.serialized_pipeline_state->dump());
+    params.serialized_pipeline_state = MakeStringPtr(state.serialized_pipeline_state->dump());
   } else {
     params.serialized_pipeline_state = MakeStringPtr(std::string{"null"});
   }
@@ -166,15 +161,13 @@ auto CommitGraphService::FromImageEditStateParams(ImageEditStateMapperParams&& p
   state.active_version_id =
       Hash128::FromString(params.active_version_id ? *params.active_version_id : std::string{});
   state.materialized_head_commit_hash = HeadCommitHashFromStorage(
-      params.materialized_head_commit_hash ? *params.materialized_head_commit_hash
-                                           : std::string{});
+      params.materialized_head_commit_hash ? *params.materialized_head_commit_hash : std::string{});
   state.materialized_transaction_chain_hash = Hash128::FromString(
       params.materialized_transaction_chain_hash ? *params.materialized_transaction_chain_hash
                                                  : std::string{});
   if (params.serialized_pipeline_state && !params.serialized_pipeline_state->empty() &&
       *params.serialized_pipeline_state != "null") {
-    state.serialized_pipeline_state =
-        nlohmann::json::parse(*params.serialized_pipeline_state);
+    state.serialized_pipeline_state = nlohmann::json::parse(*params.serialized_pipeline_state);
   }
   state.project_schema_version = params.project_schema_version;
   return state;
@@ -195,8 +188,7 @@ auto CommitGraphService::InsertCommitIfAbsent(const EditCommit& commit) -> bool 
 }
 
 auto CommitGraphService::GetCommit(const commit_hash_t& commit_hash) -> std::optional<EditCommit> {
-  auto rows =
-      commit_mapper_.Get(std::format("commit_hash='{}'", commit_hash.ToString()).c_str());
+  auto rows = commit_mapper_.Get(std::format("commit_hash='{}'", commit_hash.ToString()).c_str());
   if (rows.empty()) {
     return std::nullopt;
   }
@@ -208,9 +200,8 @@ auto CommitGraphService::CountCommits() -> std::uint64_t {
 }
 
 auto CommitGraphService::CountCommitsForRoot(const root_id_t& root_id) -> std::uint64_t {
-  return QueryUint64(
-      conn_,
-      std::format("SELECT COUNT(*) FROM EditCommit WHERE root_id='{}';", root_id.ToString()));
+  return QueryUint64(conn_, std::format("SELECT COUNT(*) FROM EditCommit WHERE root_id='{}';",
+                                        root_id.ToString()));
 }
 
 void CommitGraphService::UpsertVersionRef(const VersionRef& version_ref) {
@@ -254,24 +245,24 @@ auto CommitGraphService::GetImageEditState(sl_element_id_t element_id)
 void CommitGraphService::InsertRootSerializedPipelineState(
     const root_id_t& root_id, sl_element_id_t element_id,
     const nlohmann::json& serialized_pipeline_state) {
-  ExecuteOrThrow(conn_, std::format(
-                            "INSERT INTO PipelineRoot "
-                            "(root_id, element_id, serialized_pipeline_state) "
-                            "VALUES ({}, {}, CAST({} AS JSON));",
-                            SqlQuote(root_id.ToString()), element_id,
-                            SqlQuote(serialized_pipeline_state.dump())));
+  ExecuteOrThrow(conn_, std::format("INSERT INTO PipelineRoot "
+                                    "(root_id, element_id, serialized_pipeline_state) "
+                                    "VALUES ({}, {}, CAST({} AS JSON));",
+                                    SqlQuote(root_id.ToString()), element_id,
+                                    SqlQuote(serialized_pipeline_state.dump())));
 }
 
-auto CommitGraphService::GetRootSerializedPipelineState(sl_element_id_t element_id,
+auto CommitGraphService::GetRootSerializedPipelineState(sl_element_id_t  element_id,
                                                         const root_id_t& root_id)
     -> std::optional<nlohmann::json> {
   duckdb_result result;
-  const auto sql = std::format("SELECT element_id, serialized_pipeline_state::VARCHAR "
-                               "FROM PipelineRoot "
-                               "WHERE root_id={};",
-                               SqlQuote(root_id.ToString()));
+  const auto    sql = std::format(
+      "SELECT element_id, serialized_pipeline_state::VARCHAR "
+         "FROM PipelineRoot "
+         "WHERE root_id={};",
+      SqlQuote(root_id.ToString()));
   if (duckdb_query(conn_, sql.c_str(), &result) != DuckDBSuccess) {
-    const char* error = duckdb_result_error(&result);
+    const char*       error   = duckdb_result_error(&result);
     const std::string message = error ? error : "CommitGraphService root state query failed";
     duckdb_destroy_result(&result);
     throw std::runtime_error(message);
@@ -285,7 +276,7 @@ auto CommitGraphService::GetRootSerializedPipelineState(sl_element_id_t element_
     duckdb_destroy_result(&result);
     throw std::runtime_error("CommitGraphService: root belongs to a different image");
   }
-  char* raw = duckdb_value_varchar(&result, 1, 0);
+  char*             raw     = duckdb_value_varchar(&result, 1, 0);
   const std::string encoded = raw ? raw : "";
   if (raw) {
     duckdb_free(raw);
@@ -306,6 +297,14 @@ void CommitGraphService::Materialize(const CommitGraphMaterialization& materiali
     for (const auto& commit : materialization.commits) {
       InsertCommitIfAbsent(commit);
     }
+    std::string keep_version_ids;
+    for (std::size_t index = 0; index < materialization.version_refs.size(); ++index) {
+      if (index != 0) keep_version_ids += ", ";
+      keep_version_ids += SqlQuote(materialization.version_refs[index].version_id.ToString());
+    }
+    ExecuteOrThrow(
+        conn_, std::format("DELETE FROM VersionRef WHERE element_id={} AND version_id NOT IN ({});",
+                           materialization.image_state.element_id, keep_version_ids));
     for (const auto& ref : materialization.version_refs) {
       UpsertVersionRef(ref);
     }
@@ -337,7 +336,7 @@ auto CommitGraphService::LoadGraph(sl_element_id_t element_id) -> std::optional<
 }
 
 auto CommitGraphService::ListImageElementIds() -> std::vector<sl_element_id_t> {
-  auto rows = image_edit_state_mapper_.Get("1=1");
+  auto                         rows = image_edit_state_mapper_.Get("1=1");
   std::vector<sl_element_id_t> ids;
   ids.reserve(rows.size());
   for (auto& row : rows) {
@@ -386,8 +385,7 @@ void CommitGraphService::DeleteGraphForElement(sl_element_id_t element_id) {
   duckorm::begin_transaction(conn_);
   try {
     version_ref_mapper_.RemoveByClause(std::format("element_id={}", element_id));
-    commit_mapper_.RemoveByClause(
-        std::format("root_id={}", SqlQuote(state->root_id.ToString())));
+    commit_mapper_.RemoveByClause(std::format("root_id={}", SqlQuote(state->root_id.ToString())));
     image_edit_state_mapper_.Remove(element_id);
     ExecuteOrThrow(conn_, std::format("DELETE FROM PipelineRoot WHERE element_id={};", element_id));
     duckorm::commit_transaction(conn_);
@@ -398,8 +396,8 @@ void CommitGraphService::DeleteGraphForElement(sl_element_id_t element_id) {
 }
 
 auto CommitGraphService::CreateEmptyPersisted(sl_element_id_t element_id,
-                                              std::string default_display_name) -> CommitGraph {
-  auto graph          = CommitGraph::CreateEmpty(element_id, std::move(default_display_name));
+                                              std::string     default_display_name) -> CommitGraph {
+  auto graph           = CommitGraph::CreateEmpty(element_id, std::move(default_display_name));
   auto materialization = graph.CaptureMaterialization();
   Materialize(materialization);
   graph.ApplyMaterializedState(materialization.image_state);
@@ -408,13 +406,13 @@ auto CommitGraphService::CreateEmptyPersisted(sl_element_id_t element_id,
 
 auto CommitGraphService::CreateRootPipelinePersisted(
     sl_element_id_t element_id, const nlohmann::json& root_pipeline_params,
-    std::optional<nlohmann::json> raw_color_context,
-    std::string default_display_name) -> CommitGraph {
+    std::optional<nlohmann::json> raw_color_context, std::string default_display_name)
+    -> CommitGraph {
   if (GetImageEditState(element_id).has_value()) {
     throw std::runtime_error("CommitGraphService: image root already exists");
   }
 
-  auto graph = CommitGraph::CreateEmpty(element_id, std::move(default_display_name));
+  auto graph           = CommitGraph::CreateEmpty(element_id, std::move(default_display_name));
   auto materialization = graph.CaptureMaterializationWithSerializedPipelineState(
       MakeSerializedPipelineState(graph.GetRootId(), root_pipeline_params));
   materialization.Validate();

@@ -6,9 +6,11 @@
 
 #include <algorithm>
 #include <array>
+#include <ctime>
 #include <string_view>
 #include <utility>
 
+#include "app/adjustment_transfer_service.hpp"
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_mini_git_materializer.hpp"
 #include "app/pipeline_service.hpp"
@@ -24,6 +26,7 @@ struct EditorSessionHistoryPort::WorkingState {
   std::unique_ptr<alcedo::MiniGitWorkingHistory>                         history;
   std::unordered_map<std::string, alcedo::EditorAdjustmentOperatorState> pending_before;
   alcedo::EditorRenderAdjustmentSnapshot                                 committed_snapshot;
+  bool                                                                   recovered_head = false;
 };
 
 namespace {
@@ -46,9 +49,9 @@ auto EnabledForAdjustmentParams(const nlohmann::json& params) -> bool {
 // source of truth after a checkpoint; journal replay only contains edits made
 // after that checkpoint.
 constexpr std::array<std::string_view, 21> kEditorSnapshotFields = {
-    "exposure",   "contrast",   "white",      "black",      "shadows",   "highlights",
-    "curve",      "saturation", "vibrance",   "hls",        "color_wheel", "lut",
-    "clarity",    "sharpen",    "odt",        "film_grain", "halation",  "crop_rotate",
+    "exposure",   "contrast",   "white",     "black",      "shadows",     "highlights",
+    "curve",      "saturation", "vibrance",  "hls",        "color_wheel", "lut",
+    "clarity",    "sharpen",    "odt",       "film_grain", "halation",    "crop_rotate",
     "raw_decode", "lens_calib", "color_temp"};
 
 void UpsertCommittedSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
@@ -71,6 +74,79 @@ void UpsertCommittedSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
     if (!snapshot->fingerprint.empty()) snapshot->fingerprint += "|";
     snapshot->fingerprint += current.field_key;
   }
+}
+
+auto CommitFieldKey(const alcedo::EditCommit& commit) -> std::string {
+  if (commit.GetKind() == alcedo::EditCommitKind::kMerge) {
+    return "merge";
+  }
+  try {
+    const auto payload = alcedo::OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON());
+    const auto key = alcedo::EditorAdjustmentFieldKey(payload.stage_name, payload.operator_type);
+    return key.has_value() ? *key : std::string{};
+  } catch (...) {
+    return {};
+  }
+}
+
+auto CommitLabel(const alcedo::EditCommit& commit) -> std::string {
+  if (commit.GetKind() == alcedo::EditCommitKind::kMerge) {
+    return "Merge";
+  }
+  const auto key = CommitFieldKey(commit);
+  return key.empty() ? "Edit" : key;
+}
+
+auto VersionNameExists(const alcedo::CommitGraph& graph, const std::string& name,
+                       const alcedo::version_ref_id_t* ignored = nullptr) -> bool {
+  for (const auto& [id, version] : graph.GetAllVersionRefs()) {
+    if (ignored != nullptr && id == *ignored) continue;
+    if (version.display_name == name) return true;
+  }
+  return false;
+}
+
+auto UniqueVersionName(const alcedo::CommitGraph& graph, std::string requested,
+                       const alcedo::version_ref_id_t* ignored = nullptr) -> std::string {
+  const auto first = requested.find_first_not_of(" \t\r\n");
+  const auto last  = requested.find_last_not_of(" \t\r\n");
+  requested =
+      first == std::string::npos ? std::string{} : requested.substr(first, last - first + 1);
+  if (requested.empty()) requested = "Version";
+  if (!VersionNameExists(graph, requested, ignored)) return requested;
+  for (std::size_t suffix = 2;; ++suffix) {
+    auto candidate = requested + " " + std::to_string(suffix);
+    if (!VersionNameExists(graph, candidate, ignored)) return candidate;
+  }
+}
+
+auto InitializeCommittedSnapshotFromPipeline(alcedo::PipelineGuard&                  guard,
+                                             alcedo::EditorRenderAdjustmentSnapshot* snapshot,
+                                             std::string*                            error) -> bool;
+
+void RestoreGraphAndPipeline(alcedo::CommitGraph& graph, const alcedo::CommitGraph& prior_graph,
+                             alcedo::PipelineMgmtService&                  pipeline_service,
+                             const std::shared_ptr<alcedo::PipelineGuard>& pipeline_guard,
+                             const alcedo::head_commit_hash_t&             prior_head,
+                             const alcedo::transaction_chain_hash_t& prior_chain, bool prior_dirty,
+                             bool prior_serialized_state_needs_writeback) {
+  graph = prior_graph;
+  std::string ignored_error;
+  (void)pipeline_service.RebuildActiveEditorPipeline(pipeline_guard, &ignored_error);
+  pipeline_guard->working_head_commit_hash_         = prior_head;
+  pipeline_guard->transaction_chain_hash_           = prior_chain;
+  pipeline_guard->dirty_                            = prior_dirty;
+  pipeline_guard->serialized_state_needs_writeback_ = prior_serialized_state_needs_writeback;
+}
+
+auto ReadPipelineSnapshot(alcedo::PipelineGuard&                  guard,
+                          alcedo::EditorRenderAdjustmentSnapshot* snapshot, std::string* error)
+    -> bool {
+  if (snapshot == nullptr || !guard.pipeline_) {
+    if (error) *error = "Editor pipeline is unavailable for history operation";
+    return false;
+  }
+  return InitializeCommittedSnapshotFromPipeline(guard, snapshot, error);
 }
 
 auto ApplyCommittedPayload(alcedo::PipelineGuard&                  guard,
@@ -136,9 +212,9 @@ auto ApplyRecoveredRecord(alcedo::PipelineGuard&                  guard,
   return alcedo::MiniGitWorkingHistory::Replay(*replay_graph, {record}, error);
 }
 
-auto InitializeCommittedSnapshotFromPipeline(
-    alcedo::PipelineGuard& guard, alcedo::EditorRenderAdjustmentSnapshot* snapshot,
-    std::string* error) -> bool {
+auto InitializeCommittedSnapshotFromPipeline(alcedo::PipelineGuard&                  guard,
+                                             alcedo::EditorRenderAdjustmentSnapshot* snapshot,
+                                             std::string* error) -> bool {
   if (snapshot == nullptr || !guard.pipeline_) {
     if (error) *error = "Editor pipeline is unavailable for snapshot initialization";
     return false;
@@ -232,7 +308,8 @@ auto EditorSessionHistoryPort::EnsureWorkingState(sl_element_id_t element_id, st
   guard->working_head_commit_hash_ = guard->commit_graph_->GetActiveVersionRef().head_commit_hash;
   guard->transaction_chain_hash_ =
       guard->commit_graph_->ChainHashForHead(guard->working_head_commit_hash_);
-  guard->dirty_ = !journal_records.empty();
+  guard->dirty_         = !journal_records.empty();
+  state->recovered_head = !journal_records.empty();
   if (!journal_records.empty()) guard->pipeline_->SetExecutionStages();
   state->history = std::make_unique<alcedo::MiniGitWorkingHistory>(guard->commit_graph_, journal);
 
@@ -286,9 +363,8 @@ auto EditorSessionHistoryPort::CaptureAdjustmentBeforePreview(
       continue;
     }
     try {
-      before.params = committed.params_json.empty()
-                          ? nlohmann::json(nullptr)
-                          : nlohmann::json::parse(committed.params_json);
+      before.params = committed.params_json.empty() ? nlohmann::json(nullptr)
+                                                    : nlohmann::json::parse(committed.params_json);
     } catch (const std::exception& ex) {
       if (error) *error = ex.what();
       return false;
@@ -386,6 +462,7 @@ auto EditorSessionHistoryPort::CommitAdjustment(const alcedo::EditorHistoryGuard
   state->pipeline_guard->transaction_chain_hash_   = state->history->transaction_chain_hash();
   UpsertCommittedSnapshot(&state->committed_snapshot, patch.field_key, after_params);
   state->pending_before.erase(before);
+  state->recovered_head = false;
   return true;
 }
 
@@ -410,6 +487,7 @@ auto EditorSessionHistoryPort::Undo(const alcedo::EditorHistoryGuardHandle& guar
   state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
   state->pipeline_guard->transaction_chain_hash_   = state->history->transaction_chain_hash();
   state->pending_before.clear();
+  state->recovered_head = false;
   return true;
 }
 
@@ -434,11 +512,12 @@ auto EditorSessionHistoryPort::Redo(const alcedo::EditorHistoryGuardHandle& guar
   state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
   state->pipeline_guard->transaction_chain_hash_   = state->history->transaction_chain_hash();
   state->pending_before.clear();
+  state->recovered_head = false;
   return true;
 }
 
 auto EditorSessionHistoryPort::CheckoutVersion(const alcedo::EditorHistoryGuardHandle& guard,
-                                               const alcedo::Hash128& version_id,
+                                               const alcedo::Hash128&                  version_id,
                                                std::string* error) -> bool {
   auto state = EnsureWorkingState(guard.element_id, error);
   if (!state) {
@@ -480,10 +559,338 @@ auto EditorSessionHistoryPort::CheckoutVersion(const alcedo::EditorHistoryGuardH
     if (error) *error = ex.what();
     return false;
   }
-  state->committed_snapshot                  = {};
-  state->committed_snapshot.params_json      = pipeline_params.dump();
-  state->committed_snapshot.fingerprint      = state->pipeline_guard->transaction_chain_hash_.ToString();
+  state->committed_snapshot             = {};
+  state->committed_snapshot.params_json = pipeline_params.dump();
+  state->committed_snapshot.fingerprint = state->pipeline_guard->transaction_chain_hash_.ToString();
   ++state->committed_snapshot.snapshot_generation;
+  state->recovered_head = false;
+  return true;
+}
+
+auto EditorSessionHistoryPort::ReadHistorySnapshot(const alcedo::EditorHistoryGuardHandle& guard,
+                                                   alcedo::EditorHistorySnapshot*          snapshot,
+                                                   std::string* error) -> bool {
+  auto state = EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  std::scoped_lock state_lock(state->mutex);
+  if (snapshot == nullptr || !state->pipeline_guard || !state->pipeline_guard->commit_graph_ ||
+      !state->history) {
+    if (error) *error = "Editor history graph is unavailable";
+    return false;
+  }
+
+  const auto&                   graph             = *state->pipeline_guard->commit_graph_;
+  const auto                    active_version_id = graph.GetActiveVersionId();
+  const auto                    active_head       = graph.GetActiveVersionRef().head_commit_hash;
+  alcedo::EditorHistorySnapshot projection;
+  projection.active_version_id = active_version_id;
+  projection.active_head       = active_head;
+  projection.recovered_head    = state->recovered_head;
+  projection.can_undo          = active_head.has_value();
+  projection.can_redo          = state->history->redo_count() > 0;
+
+  projection.versions.reserve(graph.GetAllVersionRefs().size());
+  for (const auto& [version_id, version] : graph.GetAllVersionRefs()) {
+    projection.versions.push_back({version_id, version.display_name, version.head_commit_hash,
+                                   version.created_at, version.updated_at,
+                                   version_id == active_version_id});
+  }
+  std::sort(projection.versions.begin(), projection.versions.end(),
+            [](const auto& left, const auto& right) {
+              if (left.created_at != right.created_at) return left.created_at < right.created_at;
+              return left.version_id.ToString() < right.version_id.ToString();
+            });
+
+  if (active_head.has_value()) {
+    const auto chain = graph.FirstParentChain(active_head);
+    projection.commits.reserve(chain.size());
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+      const auto&                 commit = graph.GetCommit(*it);
+      alcedo::EditorHistoryCommit row;
+      row.commit_hash        = commit.GetCommitHash();
+      row.first_parent_hash  = commit.GetFirstParentHash();
+      row.second_parent_hash = commit.GetSecondParentHash();
+      row.kind               = commit.GetKind();
+      row.created_at_ns      = commit.GetCreatedAtNs();
+      row.field_key          = CommitFieldKey(commit);
+      row.label              = CommitLabel(commit);
+      row.current            = true;
+      projection.commits.push_back(std::move(row));
+    }
+  }
+  *snapshot = std::move(projection);
+  return true;
+}
+
+auto EditorSessionHistoryPort::CreateVersion(const alcedo::EditorHistoryGuardHandle& guard,
+                                             std::string                             display_name,
+                                             alcedo::version_ref_id_t*               version_id,
+                                             std::string* error) -> bool {
+  auto state = EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  std::scoped_lock state_lock(state->mutex);
+  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_) {
+    if (error) *error = "Editor history graph is unavailable";
+    return false;
+  }
+  auto& graph = *state->pipeline_guard->commit_graph_;
+  try {
+    const auto created =
+        graph.CreateVersionRefAtActiveHead(UniqueVersionName(graph, std::move(display_name)));
+    if (version_id) *version_id = created;
+    state->pipeline_guard->dirty_                    = true;
+    state->pipeline_guard->working_head_commit_hash_ = graph.GetActiveVersionRef().head_commit_hash;
+    state->pipeline_guard->transaction_chain_hash_ =
+        graph.ChainHashForHead(state->pipeline_guard->working_head_commit_hash_);
+    state->pipeline_guard->serialized_state_needs_writeback_ = true;
+    state->recovered_head                                    = false;
+    return true;
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+}
+
+auto EditorSessionHistoryPort::RenameVersion(const alcedo::EditorHistoryGuardHandle& guard,
+                                             const alcedo::Hash128&                  version_id,
+                                             std::string display_name, std::string* error) -> bool {
+  auto state = EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  std::scoped_lock state_lock(state->mutex);
+  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_) {
+    if (error) *error = "Editor history graph is unavailable";
+    return false;
+  }
+  auto& graph = *state->pipeline_guard->commit_graph_;
+  try {
+    auto&      ref                = graph.GetVersionRef(version_id);
+    const auto name               = UniqueVersionName(graph, std::move(display_name), &version_id);
+    ref.display_name              = name;
+    ref.updated_at                = std::time(nullptr);
+    state->pipeline_guard->dirty_ = true;
+    state->pipeline_guard->working_head_commit_hash_ = graph.GetActiveVersionRef().head_commit_hash;
+    state->pipeline_guard->transaction_chain_hash_ =
+        graph.ChainHashForHead(state->pipeline_guard->working_head_commit_hash_);
+    state->pipeline_guard->serialized_state_needs_writeback_ = true;
+    state->recovered_head                                    = false;
+    return true;
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+}
+
+auto EditorSessionHistoryPort::RemoveVersion(const alcedo::EditorHistoryGuardHandle& guard,
+                                             const alcedo::Hash128& version_id, std::string* error)
+    -> bool {
+  auto state = EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  std::scoped_lock state_lock(state->mutex);
+  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_) {
+    if (error) *error = "Editor history graph is unavailable";
+    return false;
+  }
+  if (!state->pipeline_guard->commit_graph_->RemoveVersionRef(version_id)) {
+    if (error) {
+      *error = "The active Version or the final remaining Version cannot be removed";
+    }
+    return false;
+  }
+  state->pipeline_guard->dirty_ = true;
+  state->pipeline_guard->working_head_commit_hash_ =
+      state->pipeline_guard->commit_graph_->GetActiveVersionRef().head_commit_hash;
+  state->pipeline_guard->transaction_chain_hash_ =
+      state->pipeline_guard->commit_graph_->ChainHashForHead(
+          state->pipeline_guard->working_head_commit_hash_);
+  state->pipeline_guard->serialized_state_needs_writeback_ = true;
+  state->recovered_head                                    = false;
+  return true;
+}
+
+auto EditorSessionHistoryPort::PasteAdjustments(const alcedo::EditorHistoryGuardHandle&  guard,
+                                                const alcedo::AdjustmentTransferPackage& package,
+                                                std::string                    version_display_name,
+                                                alcedo::AdjustmentPasteResult* result,
+                                                std::string*                   error) -> bool {
+  auto state = EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  auto pipeline_port    = pipeline_port_.lock();
+  auto pipeline_service = pipeline_port ? pipeline_port->PipelineService() : nullptr;
+  if (!pipeline_service) {
+    if (error) *error = "Pipeline service is unavailable for editor Paste";
+    return false;
+  }
+  std::scoped_lock state_lock(state->mutex);
+  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_) {
+    if (error) *error = "Editor history graph is unavailable";
+    return false;
+  }
+  auto&      graph            = *state->pipeline_guard->commit_graph_;
+  const auto graph_before     = graph;
+  const auto prior_head       = state->pipeline_guard->working_head_commit_hash_;
+  const auto prior_chain      = state->pipeline_guard->transaction_chain_hash_;
+  const bool prior_dirty      = state->pipeline_guard->dirty_;
+  const bool prior_serialized = state->pipeline_guard->serialized_state_needs_writeback_;
+  const auto prior_snapshot   = state->committed_snapshot;
+  alcedo::AdjustmentPasteResult paste_result;
+  try {
+    paste_result = alcedo::AdjustmentTransferService::PasteAsRootRelativeVersion(
+        graph, *pipeline_service, guard.element_id, package, std::move(version_display_name));
+  } catch (const std::exception& ex) {
+    RestoreGraphAndPipeline(*state->pipeline_guard->commit_graph_, graph_before, *pipeline_service,
+                            state->pipeline_guard, prior_head, prior_chain, prior_dirty,
+                            prior_serialized);
+    if (error) *error = ex.what();
+    return false;
+  }
+  if (!paste_result.pasted) {
+    if (error) *error = paste_result.error;
+    return false;
+  }
+  std::string rebuild_error;
+  if (!pipeline_service->RebuildActiveEditorPipeline(state->pipeline_guard, &rebuild_error)) {
+    RestoreGraphAndPipeline(graph, graph_before, *pipeline_service, state->pipeline_guard,
+                            prior_head, prior_chain, prior_dirty, prior_serialized);
+    if (error)
+      *error =
+          rebuild_error.empty() ? "Failed to rebuild pasted pipeline" : std::move(rebuild_error);
+    return false;
+  }
+  state->pipeline_guard->dirty_                    = true;
+  state->pipeline_guard->working_head_commit_hash_ = paste_result.new_head;
+  state->pipeline_guard->transaction_chain_hash_   = graph.ChainHashForHead(paste_result.new_head);
+  state->pipeline_guard->serialized_state_needs_writeback_ = true;
+  if (!ReadPipelineSnapshot(*state->pipeline_guard, &state->committed_snapshot, error)) {
+    RestoreGraphAndPipeline(graph, graph_before, *pipeline_service, state->pipeline_guard,
+                            prior_head, prior_chain, prior_dirty, prior_serialized);
+    state->committed_snapshot = prior_snapshot;
+    return false;
+  }
+  if (result) *result = paste_result;
+  state->pending_before.clear();
+  state->recovered_head = false;
+  return true;
+}
+
+auto EditorSessionHistoryPort::BeginMerge(const alcedo::EditorHistoryGuardHandle&  guard,
+                                          const alcedo::AdjustmentTransferPackage& package,
+                                          std::string incoming_version_display_name,
+                                          alcedo::AdjustmentMergePreview* preview,
+                                          std::string*                    error) -> bool {
+  auto state = EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  auto pipeline_port    = pipeline_port_.lock();
+  auto pipeline_service = pipeline_port ? pipeline_port->PipelineService() : nullptr;
+  if (!pipeline_service) {
+    if (error) *error = "Pipeline service is unavailable for editor Merge";
+    return false;
+  }
+  if (preview == nullptr) {
+    if (error) *error = "Merge preview storage is required";
+    return false;
+  }
+  std::scoped_lock state_lock(state->mutex);
+  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_) {
+    if (error) *error = "Editor history graph is unavailable";
+    return false;
+  }
+  auto&      graph         = *state->pipeline_guard->commit_graph_;
+  const auto graph_before  = graph;
+  auto       merge_preview = alcedo::AdjustmentTransferService::InitiateMerge(
+      graph, *pipeline_service, guard.element_id, package,
+      std::move(incoming_version_display_name));
+  if (!merge_preview.error.empty()) {
+    graph = graph_before;
+    if (error) *error = merge_preview.error;
+    return false;
+  }
+  *preview                                         = std::move(merge_preview);
+  state->pipeline_guard->dirty_                    = true;
+  state->pipeline_guard->working_head_commit_hash_ = graph.GetActiveVersionRef().head_commit_hash;
+  state->pipeline_guard->transaction_chain_hash_ =
+      graph.ChainHashForHead(state->pipeline_guard->working_head_commit_hash_);
+  state->pipeline_guard->serialized_state_needs_writeback_ = true;
+  return true;
+}
+
+auto EditorSessionHistoryPort::CompleteMerge(
+    const alcedo::EditorHistoryGuardHandle& guard, const alcedo::AdjustmentMergePreview& preview,
+    const std::vector<alcedo::AdjustmentMergeResolution>& resolutions,
+    alcedo::AdjustmentMergeResult* result, std::string* error) -> bool {
+  auto state = EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  auto pipeline_port    = pipeline_port_.lock();
+  auto pipeline_service = pipeline_port ? pipeline_port->PipelineService() : nullptr;
+  if (!pipeline_service) {
+    if (error) *error = "Pipeline service is unavailable for editor Merge";
+    return false;
+  }
+  std::scoped_lock state_lock(state->mutex);
+  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_) {
+    if (error) *error = "Editor history graph is unavailable";
+    return false;
+  }
+  auto&      graph            = *state->pipeline_guard->commit_graph_;
+  const auto graph_before     = graph;
+  const auto prior_head       = state->pipeline_guard->working_head_commit_hash_;
+  const auto prior_chain      = state->pipeline_guard->transaction_chain_hash_;
+  const bool prior_dirty      = state->pipeline_guard->dirty_;
+  const bool prior_serialized = state->pipeline_guard->serialized_state_needs_writeback_;
+  const auto prior_snapshot   = state->committed_snapshot;
+  alcedo::AdjustmentMergeResult merge_result;
+  try {
+    merge_result = alcedo::AdjustmentTransferService::CompleteMerge(graph, *pipeline_service,
+                                                                    preview, resolutions);
+  } catch (const std::exception& ex) {
+    RestoreGraphAndPipeline(graph, graph_before, *pipeline_service, state->pipeline_guard,
+                            prior_head, prior_chain, prior_dirty, prior_serialized);
+    if (error) *error = ex.what();
+    return false;
+  }
+  if (!merge_result.merged) {
+    if (error) *error = merge_result.error;
+    return false;
+  }
+  std::string rebuild_error;
+  if (!pipeline_service->RebuildActiveEditorPipeline(state->pipeline_guard, &rebuild_error)) {
+    RestoreGraphAndPipeline(graph, graph_before, *pipeline_service, state->pipeline_guard,
+                            prior_head, prior_chain, prior_dirty, prior_serialized);
+    if (error)
+      *error =
+          rebuild_error.empty() ? "Failed to rebuild merged pipeline" : std::move(rebuild_error);
+    return false;
+  }
+  state->pipeline_guard->dirty_                    = true;
+  state->pipeline_guard->working_head_commit_hash_ = merge_result.merge_commit_hash;
+  state->pipeline_guard->transaction_chain_hash_ =
+      graph.ChainHashForHead(merge_result.merge_commit_hash);
+  state->pipeline_guard->serialized_state_needs_writeback_ = true;
+  if (!ReadPipelineSnapshot(*state->pipeline_guard, &state->committed_snapshot, error)) {
+    RestoreGraphAndPipeline(graph, graph_before, *pipeline_service, state->pipeline_guard,
+                            prior_head, prior_chain, prior_dirty, prior_serialized);
+    state->committed_snapshot = prior_snapshot;
+    return false;
+  }
+  if (result) *result = merge_result;
+  state->pending_before.clear();
+  state->recovered_head = false;
+  return true;
+}
+
+auto EditorSessionHistoryPort::CancelMerge(const alcedo::EditorHistoryGuardHandle& guard,
+                                           const alcedo::AdjustmentMergePreview&   preview,
+                                           std::string*                            error) -> bool {
+  auto state = EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  std::scoped_lock state_lock(state->mutex);
+  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_) {
+    if (error) *error = "Editor history graph is unavailable";
+    return false;
+  }
+  auto mutable_preview = preview;
+  alcedo::AdjustmentTransferService::CancelMerge(*state->pipeline_guard->commit_graph_,
+                                                 mutable_preview);
+  state->pipeline_guard->serialized_state_needs_writeback_ = true;
   return true;
 }
 
@@ -533,7 +940,7 @@ auto EditorSessionHistoryPort::CaptureSaveCheckpoint(const alcedo::EditorHistory
   // Snapshot journal records under the journal mutex before releasing live
   // history access. Post-capture appends get later sequences and must not enter
   // this range or be deleted when the capture is truncated.
-  const auto journal_snapshot = state->journal->Snapshot();
+  const auto                       journal_snapshot = state->journal->Snapshot();
 
   alcedo::EditorMiniGitSaveCapture capture;
   capture.element_id             = guard.element_id;

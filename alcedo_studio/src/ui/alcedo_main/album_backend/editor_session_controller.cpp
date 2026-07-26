@@ -4,12 +4,11 @@
 
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 
-#include <QSettings>
-#include <QThread>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QJsonArray>
-
+#include <QSettings>
+#include <QThread>
 #include <QtGlobal>
 #include <cstdint>
 
@@ -20,9 +19,9 @@
 #include "type/hash_type.hpp"
 #include "ui/alcedo_main/album_backend/editor_controller.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
+#include "ui/editor_rhi/direct_frame_sink.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
-#include "ui/editor_rhi/direct_frame_sink.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -34,7 +33,7 @@ constexpr double kFilmstripExpandedHeightMin     = 72.0;
 constexpr double kFilmstripExpandedHeightMax     = 320.0;
 constexpr double kFilmstripExpandedHeightDefault = 128.0;
 
-auto EmptyRawDecodeCapabilities() -> QVariantMap {
+auto             EmptyRawDecodeCapabilities() -> QVariantMap {
   return {
       {QStringLiteral("rawSource"), false},
       {QStringLiteral("available"), false},
@@ -42,7 +41,7 @@ auto EmptyRawDecodeCapabilities() -> QVariantMap {
       {QStringLiteral("neuralEngineAvailable"), false},
       {QStringLiteral("highlightsAvailable"), false},
       {QStringLiteral("unavailableReason"),
-       QStringLiteral("Select a RAW image to enable RAW Decode.")},
+                   QStringLiteral("Select a RAW image to enable RAW Decode.")},
       {QStringLiteral("methodValues"), QVariantList{}},
       {QStringLiteral("rawDefaultParamsJson"), QString{}},
   };
@@ -137,6 +136,7 @@ void EditorSessionController::OnBackendChanged() {
     }
   }
   emit StateChanged();
+  emit HistoryChanged();
 }
 
 auto EditorSessionController::active() const -> bool {
@@ -198,8 +198,8 @@ void EditorSessionController::SyncIdentityFromBackend() {
 }
 
 void EditorSessionController::SyncRawDecodeCapabilities() {
-  const QVariantMap next = editor_ ? editor_->RawDecodeCapabilitiesForImage(image_id())
-                                   : EmptyRawDecodeCapabilities();
+  const QVariantMap next =
+      editor_ ? editor_->RawDecodeCapabilitiesForImage(image_id()) : EmptyRawDecodeCapabilities();
   if (next == raw_decode_capabilities_) {
     return;
   }
@@ -260,9 +260,9 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
     if (elementId > 0 && imageId > 0) {
       if (auto* item =
               qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
-        const bool same_image =
-            session_backend_->has_image() && session_backend_->identity().element_id == elementId &&
-            session_backend_->identity().image_id == imageId;
+        const bool same_image = session_backend_->has_image() &&
+                                session_backend_->identity().element_id == elementId &&
+                                session_backend_->identity().image_id == imageId;
         item->setImageIdentity(static_cast<qulonglong>(imageId));
         item->setImageGeneration(static_cast<qulonglong>(
             session_backend_->identity().session_generation + (same_image ? 0 : 1)));
@@ -305,9 +305,53 @@ void EditorSessionController::CheckoutVersion(const QString& versionId) {
     session_backend_->CheckoutVersion(version_id);
     SyncIdentityFromBackend();
     emit StateChanged();
+    emit HistoryChanged();
   } catch (const std::exception&) {
     // Invalid hex identity: leave the session on the prior Version.
   }
+}
+
+void EditorSessionController::CreateVersion(const QString& displayName) {
+  if (!session_backend_ || displayName.trimmed().isEmpty()) return;
+  session_backend_->CreateVersion(displayName.trimmed().toStdString());
+  emit StateChanged();
+  emit HistoryChanged();
+}
+
+void EditorSessionController::RenameVersion(const QString& versionId, const QString& displayName) {
+  if (!session_backend_ || versionId.trimmed().isEmpty() || displayName.trimmed().isEmpty()) return;
+  try {
+    const auto id = alcedo::Hash128::FromString(versionId.trimmed().toStdString());
+    session_backend_->RenameVersion(id, displayName.trimmed().toStdString());
+    emit StateChanged();
+    emit HistoryChanged();
+  } catch (const std::exception&) {
+  }
+}
+
+void EditorSessionController::RemoveVersion(const QString& versionId) {
+  if (!session_backend_ || versionId.trimmed().isEmpty()) return;
+  try {
+    const auto id = alcedo::Hash128::FromString(versionId.trimmed().toStdString());
+    session_backend_->RemoveVersion(id);
+    emit StateChanged();
+    emit HistoryChanged();
+  } catch (const std::exception&) {
+  }
+}
+
+void EditorSessionController::Undo() {
+  if (!session_backend_) return;
+  session_backend_->Undo();
+  emit StateChanged();
+  emit HistoryChanged();
+}
+
+void EditorSessionController::Redo() {
+  if (!session_backend_) return;
+  session_backend_->Redo();
+  emit StateChanged();
+  emit HistoryChanged();
 }
 
 void EditorSessionController::Close() {
@@ -316,8 +360,7 @@ void EditorSessionController::Close() {
     return;
   }
   if (session_backend_) {
-    if (auto* item =
-            qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
+    if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
       item->suspendPresentation();
     }
     session_backend_->Close(/*persist_changes=*/true);
@@ -332,8 +375,7 @@ void EditorSessionController::Close() {
 
 void EditorSessionController::Shutdown() {
   if (session_backend_) {
-    if (auto* item =
-            qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
+    if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
       item->suspendPresentation();
     }
     session_backend_->Shutdown();
@@ -351,8 +393,7 @@ void EditorSessionController::Finalize(bool persistChanges) {
   // Finalize closes the active image through the lifecycle owner. The QML
   // viewport unbinds itself when the workspace visual tree is destroyed.
   if (session_backend_) {
-    if (auto* item =
-            qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
+    if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
       item->suspendPresentation();
     }
     session_backend_->Close(persistChanges);
@@ -523,8 +564,7 @@ auto EditorSessionController::render_diagnostics() const -> QVariantMap {
   out.insert(QStringLiteral("acceptedCount"), static_cast<qulonglong>(diag.accepted_count));
   out.insert(QStringLiteral("failedCount"), static_cast<qulonglong>(diag.failed_count));
   out.insert(QStringLiteral("presentedCount"), static_cast<qulonglong>(diag.presented_count));
-  out.insert(QStringLiteral("sessionGeneration"),
-             static_cast<qulonglong>(diag.session_generation));
+  out.insert(QStringLiteral("sessionGeneration"), static_cast<qulonglong>(diag.session_generation));
   out.insert(QStringLiteral("renderGeneration"), static_cast<qulonglong>(diag.render_generation));
   out.insert(QStringLiteral("viewGeneration"), static_cast<qulonglong>(diag.view_generation));
   out.insert(QStringLiteral("lastError"), QString::fromUtf8(diag.last_error.c_str()));
@@ -606,15 +646,14 @@ bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, 
   // this on the GUI thread while handling the pointer move, before the worker
   // can block waiting for a recyclable direct-present slot. The worker's
   // NotifyFrameReady update remains the completion-side wakeup.
-  auto* viewport =
-      qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
+  auto* viewport = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
   if (viewport) {
     viewport->prepareForAdjustmentFrame();
   }
   alcedo::EditorAdjustmentPatch patch;
-  patch.field_key   = fieldKey.toStdString();
-  patch.params_json = paramsJson.toStdString();
-  patch.settled     = settled;
+  patch.field_key              = fieldKey.toStdString();
+  patch.params_json            = paramsJson.toStdString();
+  patch.settled                = settled;
   // Typed models already own the live value during a pointer drag. Echoing the
   // full adjustment snapshot into QML on every interactive patch forces
   // loadFromSnapshot across Tone+Look while the mouse handler is still on the
@@ -624,8 +663,8 @@ bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, 
   if (!settled) {
     suppress_snapshot_publish_ = true;
   }
-  const auto result = settled ? session_backend_->CommitAdjustment(patch)
-                              : session_backend_->Patch(patch);
+  const auto result =
+      settled ? session_backend_->CommitAdjustment(patch) : session_backend_->Patch(patch);
   suppress_snapshot_publish_ = previous_suppress;
   return result.kind != alcedo::EditorSessionResultKind::Rejected;
 }
@@ -743,6 +782,36 @@ auto EditorSessionController::adjustment_snapshot() const -> QVariantMap {
   return adjustment_snapshot_;
 }
 
+auto EditorSessionController::history_snapshot() const -> alcedo::EditorHistorySnapshot {
+  return session_backend_ ? session_backend_->history_snapshot() : alcedo::EditorHistorySnapshot{};
+}
+
+auto EditorSessionController::PasteAdjustmentPackage(
+    const alcedo::AdjustmentTransferPackage& package, const QString& versionDisplayName)
+    -> alcedo::EditorSessionResult {
+  if (!session_backend_) return {};
+  return session_backend_->PasteAdjustments(package, versionDisplayName.toStdString());
+}
+
+auto EditorSessionController::BeginMergeAdjustmentPackage(
+    const alcedo::AdjustmentTransferPackage& package, alcedo::AdjustmentMergePreview* preview)
+    -> alcedo::EditorSessionResult {
+  if (!session_backend_) return {};
+  return session_backend_->BeginMerge(package, preview);
+}
+
+auto EditorSessionController::CompleteMergeAdjustments(
+    const std::vector<alcedo::AdjustmentMergeResolution>& resolutions)
+    -> alcedo::EditorSessionResult {
+  if (!session_backend_) return {};
+  return session_backend_->CompleteMerge(resolutions);
+}
+
+auto EditorSessionController::CancelMergeAdjustments() -> alcedo::EditorSessionResult {
+  if (!session_backend_) return {};
+  return session_backend_->CancelMerge();
+}
+
 auto EditorSessionController::BuildSnapshotMap(
     const alcedo::EditorRenderAdjustmentSnapshot& snapshot) -> QVariantMap {
   QVariantMap map;
@@ -761,6 +830,5 @@ auto EditorSessionController::BuildSnapshotMap(
   }
   return map;
 }
-
 
 }  // namespace alcedo::ui

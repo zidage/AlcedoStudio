@@ -2,14 +2,13 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include "app/adjustment_transfer_service.hpp"
-
-#include "app/pipeline_service.hpp"
 #include <gtest/gtest.h>
 
 #include <algorithm>
 #include <string>
 
+#include "app/adjustment_transfer_service.hpp"
+#include "app/pipeline_service.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
 #include "edit/history/edit_commit.hpp"
@@ -82,14 +81,15 @@ class AdjustmentTransferPasteMergeTest : public ::testing::Test {
     project_.TearDown();
   }
 
-  test::EditorMiniGitProjectFixture  project_;
+  test::EditorMiniGitProjectFixture    project_;
   std::unique_ptr<PipelineMgmtService> pipeline_service_;
 };
 
 /// Paste creates a new root-relative Version that does not inherit the previously
 /// active Version's commits. The old Version keeps its head and ancestry; the new
 /// Version has only the pasted commits rooted at the image root.
-TEST_F(AdjustmentTransferPasteMergeTest, PasteCreatesRootRelativeVersionWithoutInheritingPriorCommits) {
+TEST_F(AdjustmentTransferPasteMergeTest,
+       PasteCreatesRootRelativeVersionWithoutInheritingPriorCommits) {
   const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
   auto*      graph      = project_.graph(element_id).get();
   ASSERT_NE(graph, nullptr);
@@ -111,8 +111,7 @@ TEST_F(AdjustmentTransferPasteMergeTest, PasteCreatesRootRelativeVersionWithoutI
   // Paste a contrast adjustment as a new Version.
   auto contrast_pkg = MakeContrastPackage(0.5f);
   auto paste_result = AdjustmentTransferService::PasteAsRootRelativeVersion(
-      *graph, *pipeline_service_, element_id,
-      contrast_pkg, "Pasted Contrast");
+      *graph, *pipeline_service_, element_id, contrast_pkg, "Pasted Contrast");
   ASSERT_TRUE(paste_result.pasted) << paste_result.error;
 
   // The new Version is now active.
@@ -142,13 +141,12 @@ TEST_F(AdjustmentTransferPasteMergeTest, PasteCreatesRootRelativeVersionWithoutI
 
 /// Paste with an empty package returns an error.
 TEST_F(AdjustmentTransferPasteMergeTest, PasteWithEmptyPackageReturnsError) {
-  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
-  auto*      graph      = project_.graph(element_id).get();
+  const auto                element_id = test::EditorMiniGitProjectFixture::kElementA;
+  auto*                     graph      = project_.graph(element_id).get();
 
   AdjustmentTransferPackage empty_pkg;
-  auto result = AdjustmentTransferService::PasteAsRootRelativeVersion(
-      *graph, *pipeline_service_, element_id,
-      empty_pkg, "Empty Paste");
+  auto                      result = AdjustmentTransferService::PasteAsRootRelativeVersion(
+      *graph, *pipeline_service_, element_id, empty_pkg, "Empty Paste");
   EXPECT_FALSE(result.pasted);
   EXPECT_FALSE(result.error.empty());
 }
@@ -168,10 +166,9 @@ TEST_F(AdjustmentTransferPasteMergeTest, InitiateMergeDetectsConflictsWhenValues
   EXPECT_EQ(graph->CommitCount(), 1u);
 
   // Initiate a merge with a different exposure value.
-  auto pkg = MakeExposurePackage(2.0f);
-  auto preview = AdjustmentTransferService::InitiateMerge(
-      *graph, *pipeline_service_, element_id,
-      pkg, "Merge Exposure");
+  auto pkg     = MakeExposurePackage(2.0f);
+  auto preview = AdjustmentTransferService::InitiateMerge(*graph, *pipeline_service_, element_id,
+                                                          pkg, "Merge Exposure");
 
   ASSERT_TRUE(preview.error.empty()) << preview.error;
   // The current pipeline has exposure=1.0, incoming has exposure=2.0 — conflict expected.
@@ -190,10 +187,9 @@ TEST_F(AdjustmentTransferPasteMergeTest, InitiateMergeDetectsNoConflictsWhenValu
   ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.5f));
 
   // Initiate a merge with the same exposure value.
-  auto pkg = MakeExposurePackage(1.5f);
-  auto preview = AdjustmentTransferService::InitiateMerge(
-      *graph, *pipeline_service_, element_id,
-      pkg, "Merge Exposure");
+  auto pkg     = MakeExposurePackage(1.5f);
+  auto preview = AdjustmentTransferService::InitiateMerge(*graph, *pipeline_service_, element_id,
+                                                          pkg, "Merge Exposure");
 
   ASSERT_TRUE(preview.error.empty()) << preview.error;
   EXPECT_FALSE(preview.has_conflicts);
@@ -208,16 +204,15 @@ TEST_F(AdjustmentTransferPasteMergeTest, CompleteMergeFailsWithUnresolvedConflic
   ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.0f));
   const auto head_before = graph->GetActiveVersionRef().head_commit_hash;
 
-  auto pkg = MakeExposurePackage(2.0f);
-  auto preview = AdjustmentTransferService::InitiateMerge(
-      *graph, *pipeline_service_, element_id,
-      pkg, "Merge Exposure");
+  auto       pkg         = MakeExposurePackage(2.0f);
+  auto preview = AdjustmentTransferService::InitiateMerge(*graph, *pipeline_service_, element_id,
+                                                          pkg, "Merge Exposure");
   ASSERT_TRUE(preview.has_conflicts);
 
   // CompleteMerge with empty resolutions should fail.
   std::vector<AdjustmentMergeResolution> empty_resolutions;
-  auto result = AdjustmentTransferService::CompleteMerge(
-      *graph, *pipeline_service_, preview, empty_resolutions);
+  auto result = AdjustmentTransferService::CompleteMerge(*graph, *pipeline_service_, preview,
+                                                         empty_resolutions);
   EXPECT_FALSE(result.merged);
   EXPECT_FALSE(result.error.empty());
 
@@ -238,27 +233,26 @@ TEST_F(AdjustmentTransferPasteMergeTest, CompleteMergeCreatesTwoParentCommitWith
   ASSERT_TRUE(current_head.has_value());
   const auto version_id_before = graph->GetActiveVersionId();
 
-  auto pkg = MakeExposurePackage(2.0f);
-  auto preview = AdjustmentTransferService::InitiateMerge(
-      *graph, *pipeline_service_, element_id,
-      pkg, "Merge Exposure");
+  auto       pkg               = MakeExposurePackage(2.0f);
+  auto preview = AdjustmentTransferService::InitiateMerge(*graph, *pipeline_service_, element_id,
+                                                          pkg, "Merge Exposure");
   ASSERT_TRUE(preview.has_conflicts);
   ASSERT_EQ(preview.conflicts.size(), 1u);
 
   // Resolve with incoming value.
   std::vector<AdjustmentMergeResolution> resolutions;
   resolutions.push_back({
-      .field_key       = preview.conflicts[0].field_key,
-      .resolved_value  = preview.conflicts[0].incoming_value,
+      .field_key        = preview.conflicts[0].field_key,
+      .resolved_value   = preview.conflicts[0].incoming_value,
       .resolved_enabled = true,
   });
 
-  auto result = AdjustmentTransferService::CompleteMerge(
-      *graph, *pipeline_service_, preview, resolutions);
+  auto result =
+      AdjustmentTransferService::CompleteMerge(*graph, *pipeline_service_, preview, resolutions);
   ASSERT_TRUE(result.merged) << result.error;
 
   // Verify the merge commit.
-  const auto merge_hash = result.merge_commit_hash;
+  const auto  merge_hash   = result.merge_commit_hash;
   const auto& merge_commit = graph->GetCommit(merge_hash);
   EXPECT_EQ(merge_commit.GetKind(), EditCommitKind::kMerge);
   EXPECT_EQ(merge_commit.GetFirstParentHash(), current_head);
@@ -267,6 +261,7 @@ TEST_F(AdjustmentTransferPasteMergeTest, CompleteMergeCreatesTwoParentCommitWith
   // The active Version advanced to the merge commit.
   EXPECT_EQ(graph->GetActiveVersionId(), version_id_before);  // same Version ID
   EXPECT_EQ(graph->GetActiveVersionRef().head_commit_hash, merge_hash);
+  EXPECT_THROW(graph->GetVersionRef(preview.incoming_version_id), std::runtime_error);
 
   // The merge commit is in the first-parent chain.
   auto chain = graph->FirstParentChain(merge_hash);
@@ -283,14 +278,13 @@ TEST_F(AdjustmentTransferPasteMergeTest, CancelMergeLeavesNoCommitOrRefChange) {
   auto*      graph      = project_.graph(element_id).get();
 
   ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.0f));
-  const auto head_before       = graph->GetActiveVersionRef().head_commit_hash;
-  const auto version_id_before = graph->GetActiveVersionId();
+  const auto head_before         = graph->GetActiveVersionRef().head_commit_hash;
+  const auto version_id_before   = graph->GetActiveVersionId();
   const auto commit_count_before = graph->CommitCount();
 
-  auto pkg = MakeContrastPackage(0.5f);
-  auto preview = AdjustmentTransferService::InitiateMerge(
-      *graph, *pipeline_service_, element_id,
-      pkg, "Merge Contrast");
+  auto       pkg                 = MakeContrastPackage(0.5f);
+  auto preview = AdjustmentTransferService::InitiateMerge(*graph, *pipeline_service_, element_id,
+                                                          pkg, "Merge Contrast");
   ASSERT_TRUE(preview.error.empty()) << preview.error;
 
   AdjustmentTransferService::CancelMerge(*graph, preview);
@@ -306,18 +300,17 @@ TEST_F(AdjustmentTransferPasteMergeTest, CancelMergeLeavesNoCommitOrRefChange) {
   EXPECT_GT(graph->CommitCount(), commit_count_before);
 }
 
-
 // ============================================================================
 // Robustness / edge case tests
 // ============================================================================
 
 /// Multi-operator paste creates a commit chain with correct parent linkage.
 TEST_F(AdjustmentTransferPasteMergeTest, MultiOperatorPasteCreatesCorrectlyLinkedCommitChain) {
-  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
-  auto*      graph      = project_.graph(element_id).get();
+  const auto element_id   = test::EditorMiniGitProjectFixture::kElementA;
+  auto*      graph        = project_.graph(element_id).get();
 
-  auto pkg = MakeExposureContrastPackage(1.5f, 0.3f);
-  auto paste_result = AdjustmentTransferService::PasteAsRootRelativeVersion(
+  auto       pkg          = MakeExposureContrastPackage(1.5f, 0.3f);
+  auto       paste_result = AdjustmentTransferService::PasteAsRootRelativeVersion(
       *graph, *pipeline_service_, element_id, pkg, "Multi Paste");
   ASSERT_TRUE(paste_result.pasted) << paste_result.error;
 
@@ -338,15 +331,15 @@ TEST_F(AdjustmentTransferPasteMergeTest, RepeatedPasteCreatesDistinctVersionRef)
   const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
   auto*      graph      = project_.graph(element_id).get();
 
-  auto pkg = MakeExposurePackage(1.0f);
+  auto       pkg        = MakeExposurePackage(1.0f);
 
-  auto first = AdjustmentTransferService::PasteAsRootRelativeVersion(
+  auto       first      = AdjustmentTransferService::PasteAsRootRelativeVersion(
       *graph, *pipeline_service_, element_id, pkg, "First Paste");
   ASSERT_TRUE(first.pasted);
   const auto first_version_id = first.new_version_id;
 
   // Second paste with the same package.
-  auto second = AdjustmentTransferService::PasteAsRootRelativeVersion(
+  auto       second           = AdjustmentTransferService::PasteAsRootRelativeVersion(
       *graph, *pipeline_service_, element_id, pkg, "Second Paste");
   ASSERT_TRUE(second.pasted);
 
@@ -359,45 +352,45 @@ TEST_F(AdjustmentTransferPasteMergeTest, RepeatedPasteCreatesDistinctVersionRef)
 
 /// CompleteMerge with an errored preview rejects the call immediately.
 TEST_F(AdjustmentTransferPasteMergeTest, CompleteMergeWithErroredPreviewRejectsImmediately) {
-  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
-  auto*      graph      = project_.graph(element_id).get();
+  const auto             element_id = test::EditorMiniGitProjectFixture::kElementA;
+  auto*                  graph      = project_.graph(element_id).get();
 
   AdjustmentMergePreview errored_preview;
   errored_preview.error = "Simulated initiation failure";
 
   std::vector<AdjustmentMergeResolution> resolutions;
-  auto result = AdjustmentTransferService::CompleteMerge(
-      *graph, *pipeline_service_, errored_preview, resolutions);
+  auto result = AdjustmentTransferService::CompleteMerge(*graph, *pipeline_service_,
+                                                         errored_preview, resolutions);
   EXPECT_FALSE(result.merged);
   EXPECT_FALSE(result.error.empty());
 }
 
 /// InitiateMerge with an empty package returns an error without modifying the graph.
 TEST_F(AdjustmentTransferPasteMergeTest, InitiateMergeWithEmptyPackageReturnsError) {
-  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
-  auto*      graph      = project_.graph(element_id).get();
-  const auto commit_count_before = graph->CommitCount();
+  const auto                element_id          = test::EditorMiniGitProjectFixture::kElementA;
+  auto*                     graph               = project_.graph(element_id).get();
+  const auto                commit_count_before = graph->CommitCount();
 
   AdjustmentTransferPackage empty_pkg;
-  auto preview = AdjustmentTransferService::InitiateMerge(
-      *graph, *pipeline_service_, element_id, empty_pkg, "Empty Merge");
+  auto preview = AdjustmentTransferService::InitiateMerge(*graph, *pipeline_service_, element_id,
+                                                          empty_pkg, "Empty Merge");
   EXPECT_FALSE(preview.error.empty());
   EXPECT_EQ(graph->CommitCount(), commit_count_before);  // No commits inserted
 }
 
 /// Paste does not affect other Versions in the graph.
 TEST_F(AdjustmentTransferPasteMergeTest, PasteDoesNotAffectOtherVersions) {
-  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
-  auto*      graph      = project_.graph(element_id).get();
+  const auto element_id          = test::EditorMiniGitProjectFixture::kElementA;
+  auto*      graph               = project_.graph(element_id).get();
 
   const auto original_version_id = graph->GetActiveVersionId();
 
   // Create a second Version manually (at root).
-  auto second_version_id = graph->CreateVersionRefAtHead("Second", std::nullopt);
+  auto       second_version_id   = graph->CreateVersionRefAtHead("Second", std::nullopt);
 
   // Paste onto the active Version.
   graph->SetActiveVersionId(original_version_id);
-  auto pkg = MakeExposurePackage(2.0f);
+  auto pkg          = MakeExposurePackage(2.0f);
   auto paste_result = AdjustmentTransferService::PasteAsRootRelativeVersion(
       *graph, *pipeline_service_, element_id, pkg, "Pasted");
   ASSERT_TRUE(paste_result.pasted);
@@ -415,23 +408,23 @@ TEST_F(AdjustmentTransferPasteMergeTest, MergeCommitAppearsInFirstParentChain) {
 
   ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.0f));
 
-  auto pkg = MakeExposurePackage(2.0f);
-  auto preview = AdjustmentTransferService::InitiateMerge(
-      *graph, *pipeline_service_, element_id, pkg, "Merge Chain Test");
+  auto pkg     = MakeExposurePackage(2.0f);
+  auto preview = AdjustmentTransferService::InitiateMerge(*graph, *pipeline_service_, element_id,
+                                                          pkg, "Merge Chain Test");
   ASSERT_TRUE(preview.has_conflicts);
 
   std::vector<AdjustmentMergeResolution> resolutions;
   resolutions.push_back({
-      .field_key       = preview.conflicts[0].field_key,
-      .resolved_value  = preview.conflicts[0].incoming_value,
+      .field_key        = preview.conflicts[0].field_key,
+      .resolved_value   = preview.conflicts[0].incoming_value,
       .resolved_enabled = true,
   });
-  auto result = AdjustmentTransferService::CompleteMerge(
-      *graph, *pipeline_service_, preview, resolutions);
+  auto result =
+      AdjustmentTransferService::CompleteMerge(*graph, *pipeline_service_, preview, resolutions);
   ASSERT_TRUE(result.merged);
 
   // The merge commit must be in the first-parent chain.
-  auto chain = graph->FirstParentChain(graph->GetActiveVersionRef().head_commit_hash);
+  auto chain       = graph->FirstParentChain(graph->GetActiveVersionRef().head_commit_hash);
   bool found_merge = false;
   for (const auto& hash : chain) {
     if (hash == result.merge_commit_hash) {

@@ -11,7 +11,9 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
+#include "app/editor_history_types.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_types.hpp"
 #include "type/type.hpp"
@@ -21,6 +23,11 @@ namespace alcedo {
 class Hash128;
 struct EditorMiniGitSaveCapture;
 struct EditorAdjustmentPatch;
+struct AdjustmentTransferPackage;
+struct AdjustmentMergePreview;
+struct AdjustmentMergeResolution;
+struct AdjustmentMergeResult;
+struct AdjustmentPasteResult;
 
 /// Narrow ports used by EditorSessionService. Production implementations wrap
 /// PipelineMgmtService, Mini-Git journal storage, thumbnail work, and background tasks.
@@ -84,6 +91,64 @@ class IEditorHistoryPort {
     if (error != nullptr) {
       *error = "Version checkout is not supported by this history port";
     }
+    return false;
+  }
+
+  /// Read named Version refs and the active Version's first-parent commit path.
+  /// Journal frames are an internal recovery mechanism and are never returned
+  /// as user-facing rows.
+  virtual auto ReadHistorySnapshot(const EditorHistoryGuardHandle& /*guard*/,
+                                   EditorHistorySnapshot* /*snapshot*/, std::string* error)
+      -> bool {
+    if (error != nullptr) {
+      *error = "Editor history projection is not supported by this history port";
+    }
+    return false;
+  }
+
+  virtual auto CreateVersion(const EditorHistoryGuardHandle& /*guard*/,
+                             std::string /*display_name*/, version_ref_id_t* /*version_id*/,
+                             std::string* error) -> bool {
+    if (error != nullptr) *error = "Version creation is not supported by this history port";
+    return false;
+  }
+  virtual auto RenameVersion(const EditorHistoryGuardHandle& /*guard*/,
+                             const Hash128& /*version_id*/, std::string /*display_name*/,
+                             std::string* error) -> bool {
+    if (error != nullptr) *error = "Version rename is not supported by this history port";
+    return false;
+  }
+  virtual auto RemoveVersion(const EditorHistoryGuardHandle& /*guard*/,
+                             const Hash128& /*version_id*/, std::string* error) -> bool {
+    if (error != nullptr) *error = "Version removal is not supported by this history port";
+    return false;
+  }
+
+  virtual auto PasteAdjustments(const EditorHistoryGuardHandle& /*guard*/,
+                                const AdjustmentTransferPackage& /*package*/,
+                                std::string /*version_display_name*/,
+                                AdjustmentPasteResult* /*result*/, std::string* error) -> bool {
+    if (error != nullptr) *error = "Editor Paste is not supported by this history port";
+    return false;
+  }
+  virtual auto BeginMerge(const EditorHistoryGuardHandle& /*guard*/,
+                          const AdjustmentTransferPackage& /*package*/,
+                          std::string /*incoming_version_display_name*/,
+                          AdjustmentMergePreview* /*preview*/, std::string* error) -> bool {
+    if (error != nullptr) *error = "Editor Merge is not supported by this history port";
+    return false;
+  }
+  virtual auto CompleteMerge(const EditorHistoryGuardHandle& /*guard*/,
+                             const AdjustmentMergePreview& /*preview*/,
+                             const std::vector<AdjustmentMergeResolution>& /*resolutions*/,
+                             AdjustmentMergeResult* /*result*/, std::string* error) -> bool {
+    if (error != nullptr) *error = "Editor Merge is not supported by this history port";
+    return false;
+  }
+  virtual auto CancelMerge(const EditorHistoryGuardHandle& /*guard*/,
+                           const AdjustmentMergePreview& /*preview*/, std::string* error) -> bool {
+    if (error != nullptr)
+      *error = "Editor Merge cancellation is not supported by this history port";
     return false;
   }
 
@@ -226,7 +291,7 @@ class IEditorCheckpointStore {
 /// checkpoint. Failed checkpoints must not call this port.
 class IEditorThumbnailPort {
  public:
-  virtual ~IEditorThumbnailPort() = default;
+  virtual ~IEditorThumbnailPort()                                      = default;
 
   /// Invalidate cached pixels and schedule a new render only when the image
   /// remains focused in a thumbnail surface.

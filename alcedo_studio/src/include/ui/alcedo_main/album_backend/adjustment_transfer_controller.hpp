@@ -36,6 +36,11 @@ class AdjustmentTransferController final : public QObject {
   Q_INVOKABLE QVariantMap PrepareCopy(uint elementId);
   Q_INVOKABLE QVariantMap Copy(uint elementId, const QVariantList& selectedKeys);
   Q_INVOKABLE QVariantMap Paste(const QVariantList& targetEntries, const QString& strategy);
+  Q_INVOKABLE QVariantMap PasteIntoEditor(QObject* editorSession);
+  Q_INVOKABLE QVariantMap BeginMergeIntoEditor(QObject* editorSession);
+  Q_INVOKABLE QVariantMap CompleteMergeIntoEditor(QObject* editorSession,
+                                                  const QVariantList& resolutions);
+  Q_INVOKABLE QVariantMap CancelMergeIntoEditor(QObject* editorSession);
   Q_INVOKABLE void        Discard();
 
   // --- Phase 6C-8 private helpers ---

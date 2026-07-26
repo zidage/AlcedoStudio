@@ -5,6 +5,11 @@
 #include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
 
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
+#include <QJsonValue>
 #include <algorithm>
 #include <array>
 #include <memory>
@@ -16,10 +21,11 @@
 #include "edit/operators/utils/color_utils.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
-#include "ui/alcedo_main/album_backend/project_module.hpp"
-#include "ui/alcedo_main/album_backend/library_module.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 
 namespace alcedo::ui {
@@ -97,6 +103,47 @@ auto SuccessResult(const QString& message = {}) -> QVariantMap {
   if (!message.isEmpty()) {
     result.insert("message", message);
   }
+  return result;
+}
+
+auto SessionResultMap(const alcedo::EditorSessionResult& result) -> QVariantMap {
+  const bool success = result.kind != alcedo::EditorSessionResultKind::Rejected &&
+                       result.kind != alcedo::EditorSessionResultKind::Failed;
+  return {{"success", success},
+          {"message", QString::fromStdString(result.message)},
+          {"kind", static_cast<int>(result.kind)}};
+}
+
+auto JsonToVariant(const nlohmann::json& value) -> QVariant {
+  const auto document = QJsonDocument::fromJson(QByteArray::fromStdString(value.dump()));
+  if (document.isObject() || document.isArray()) return document.toVariant();
+  if (value.is_boolean()) return value.get<bool>();
+  if (value.is_number()) return value.get<double>();
+  if (value.is_string()) return QString::fromStdString(value.get<std::string>());
+  return {};
+}
+
+auto PreviewMap(const alcedo::AdjustmentMergePreview& preview) -> QVariantMap {
+  QVariantList conflicts;
+  conflicts.reserve(static_cast<qsizetype>(preview.conflicts.size()));
+  for (const auto& conflict : preview.conflicts) {
+    conflicts.push_back(QVariantMap{
+        {"fieldKey", QString::fromStdString(conflict.field_key)},
+        {"currentValue", JsonToVariant(conflict.current_value)},
+        {"incomingValue", JsonToVariant(conflict.incoming_value)},
+        {"currentEnabled", true},
+        {"incomingEnabled", true},
+    });
+  }
+  QVariantMap result{
+      {"success", preview.error.empty()},
+      {"hasConflicts", preview.has_conflicts},
+      {"conflicts", conflicts},
+      {"incomingVersionId", QString::fromStdString(preview.incoming_version_id.ToString())},
+      {"incomingHead", preview.incoming_head != alcedo::commit_hash_t{}
+                           ? QString::fromStdString(preview.incoming_head.ToString())
+                           : QString{}}};
+  if (!preview.error.empty()) result.insert("message", QString::fromStdString(preview.error));
   return result;
 }
 
@@ -327,9 +374,10 @@ auto MakeTargetIds(const std::vector<ExportTarget>& targets) -> std::vector<sl_e
 
 }  // namespace
 
-AdjustmentTransferController::AdjustmentTransferController(
-    ProjectModule* project, LibraryModule* library, ImportExportHandler* import_export,
-    QObject* parent)
+AdjustmentTransferController::AdjustmentTransferController(ProjectModule*       project,
+                                                           LibraryModule*       library,
+                                                           ImportExportHandler* import_export,
+                                                           QObject*             parent)
     : QObject(parent), project_(project), library_(library), import_export_(import_export) {}
 
 auto AdjustmentTransferController::PrepareCopy(uint elementId) -> QVariantMap {
@@ -472,9 +520,73 @@ auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, cons
   return ErrorResult(Tr("Merge requires per-field conflict resolutions."));
 }
 
-auto AdjustmentTransferController::PasteViaMiniGit(
-    const std::vector<sl_element_id_t>& ids,
-    PipelineMgmtService& pipeline_service) -> QVariantMap {
+auto AdjustmentTransferController::PasteIntoEditor(QObject* editorSession) -> QVariantMap {
+  if (!copied_package_.has_value()) return ErrorResult(Tr("No copied adjustments."));
+  auto* session = qobject_cast<EditorSessionController*>(editorSession);
+  if (!session) return ErrorResult(Tr("Editor session is unavailable."));
+  return SessionResultMap(
+      session->PasteAdjustmentPackage(*copied_package_, Tr("Pasted Adjustments")));
+}
+
+auto AdjustmentTransferController::BeginMergeIntoEditor(QObject* editorSession) -> QVariantMap {
+  if (!copied_package_.has_value()) return ErrorResult(Tr("No copied adjustments."));
+  auto* session = qobject_cast<EditorSessionController*>(editorSession);
+  if (!session) return ErrorResult(Tr("Editor session is unavailable."));
+  AdjustmentMergePreview preview;
+  const auto             result = session->BeginMergeAdjustmentPackage(*copied_package_, &preview);
+  auto                   map    = SessionResultMap(result);
+  if (map.value("success").toBool()) {
+    const auto preview_map = PreviewMap(preview);
+    for (auto it = preview_map.cbegin(); it != preview_map.cend(); ++it)
+      map.insert(it.key(), it.value());
+  }
+  return map;
+}
+
+auto AdjustmentTransferController::CompleteMergeIntoEditor(QObject*            editorSession,
+                                                           const QVariantList& resolutions)
+    -> QVariantMap {
+  auto* session = qobject_cast<EditorSessionController*>(editorSession);
+  if (!session) return ErrorResult(Tr("Editor session is unavailable."));
+  std::vector<AdjustmentMergeResolution> typed_resolutions;
+  typed_resolutions.reserve(static_cast<std::size_t>(resolutions.size()));
+  for (const auto& value : resolutions) {
+    const auto map       = value.toMap();
+    const auto field_key = map.value("fieldKey").toString().trimmed();
+    if (field_key.isEmpty()) continue;
+    AdjustmentMergeResolution resolution;
+    resolution.field_key        = field_key.toStdString();
+    resolution.resolved_enabled = map.value("resolvedEnabled", true).toBool();
+    const auto resolved_value   = map.value("resolvedValue");
+    const auto qvalue           = QJsonValue::fromVariant(resolved_value);
+    if (qvalue.isObject() || qvalue.isArray()) {
+      const auto document =
+          qvalue.isObject() ? QJsonDocument(qvalue.toObject()) : QJsonDocument(qvalue.toArray());
+      resolution.resolved_value =
+          nlohmann::json::parse(document.toJson(QJsonDocument::Compact).toStdString());
+    } else if (qvalue.isBool()) {
+      resolution.resolved_value = qvalue.toBool();
+    } else if (qvalue.isDouble()) {
+      resolution.resolved_value = qvalue.toDouble();
+    } else if (qvalue.isString()) {
+      resolution.resolved_value = qvalue.toString().toStdString();
+    } else {
+      resolution.resolved_value = nullptr;
+    }
+    typed_resolutions.push_back(std::move(resolution));
+  }
+  return SessionResultMap(session->CompleteMergeAdjustments(typed_resolutions));
+}
+
+auto AdjustmentTransferController::CancelMergeIntoEditor(QObject* editorSession) -> QVariantMap {
+  auto* session = qobject_cast<EditorSessionController*>(editorSession);
+  if (!session) return ErrorResult(Tr("Editor session is unavailable."));
+  return SessionResultMap(session->CancelMergeAdjustments());
+}
+
+auto AdjustmentTransferController::PasteViaMiniGit(const std::vector<sl_element_id_t>& ids,
+                                                   PipelineMgmtService& pipeline_service)
+    -> QVariantMap {
   AdjustmentApplyResult result;
   for (sl_element_id_t element_id : ids) {
     if (element_id == 0) {
@@ -515,13 +627,13 @@ auto AdjustmentTransferController::PasteViaMiniGit(
         std::string rebuild_error;
         if (!pipeline_service.RebuildActiveEditorPipeline(guard, &rebuild_error)) {
           *graph = graph_before_paste;
-          result.failures_.push_back(
-              {element_id, rebuild_error.empty() ? "Failed to rebuild pasted pipeline"
-                                                  : std::move(rebuild_error)});
+          result.failures_.push_back({element_id, rebuild_error.empty()
+                                                      ? "Failed to rebuild pasted pipeline"
+                                                      : std::move(rebuild_error)});
         } else {
-          guard->dirty_                    = true;
-          guard->working_head_commit_hash_ = paste_result.new_head;
-          guard->transaction_chain_hash_   = graph->ChainHashForHead(paste_result.new_head);
+          guard->dirty_                            = true;
+          guard->working_head_commit_hash_         = paste_result.new_head;
+          guard->transaction_chain_hash_           = graph->ChainHashForHead(paste_result.new_head);
           guard->serialized_state_needs_writeback_ = true;
           result.applied_ids_.push_back(element_id);
         }
@@ -553,9 +665,9 @@ auto AdjustmentTransferController::PasteViaMiniGit(
   return response;
 }
 
-void AdjustmentTransferController::PostProcessApplyResult(
-    const AdjustmentApplyResult& result, bool /*merge_strategy*/) {
-  auto thumbnail_service = project_->handler().thumbnail_service();
+void AdjustmentTransferController::PostProcessApplyResult(const AdjustmentApplyResult& result,
+                                                          bool /*merge_strategy*/) {
+  auto thumbnail_service  = project_->handler().thumbnail_service();
   bool hdr_metadata_dirty = false;
   for (sl_element_id_t element_id : result.applied_ids_) {
     const auto*      item     = library_->FindAlbumItem(element_id);
@@ -566,8 +678,8 @@ void AdjustmentTransferController::PostProcessApplyResult(
         if (pipeline_service) {
           auto guard = pipeline_service->LoadPipeline(element_id);
           if (guard && guard->pipeline_) {
-            const bool is_hdr = IsHdrExportEotf(
-                guard->pipeline_->GetGlobalParams().to_output_params_.eotf_);
+            const bool is_hdr =
+                IsHdrExportEotf(guard->pipeline_->GetGlobalParams().to_output_params_.eotf_);
             pipeline_service->SavePipeline(guard);
             library_->PersistImageHdrFlag(element_id, image_id, is_hdr);
             hdr_metadata_dirty = true;

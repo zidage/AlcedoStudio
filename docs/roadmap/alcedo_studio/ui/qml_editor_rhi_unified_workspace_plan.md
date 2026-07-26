@@ -2627,6 +2627,61 @@ Acceptance:
 - Merge advances the current Version with an ordered two-parent commit only after the UI resolves
   every conflicting field.
 
+##### Phase 7A completion record (2026-07-26)
+
+**Status:** complete. The history rail now uses typed graph projections and visible QML actions for
+named Version refs, first-parent history, recovery notices, root-relative Paste, and per-field Merge
+resolution. Production navigation keeps the stable Version identity while rebuilding the pipeline
+from the immutable root and selected first-parent path.
+
+Primary success call chains:
+
+- Version UI: `EditorHistoryVersionsRail.qml` -> `EditorHistoryModel` /
+  `EditorVersionListModel` -> `EditorSessionController` -> `EditorSessionService` ->
+  `EditorSessionHistoryPort` -> `CommitGraph`.
+- Version selection VI: rail controls, Version cards, History cards, action wells, and focus rings
+  use `appTheme.editorListSelectedFillColor` / `appTheme.editorListSelectedInkColor`; the editor
+  rail no longer uses accent or generic button-selected color for its selected state.
+- History projection: `ReadHistorySnapshot()` returns named Version refs and the active
+  first-parent path; merge rows retain the ordered second parent; recovered journal frames remain
+  behind the recovery notice and are not emitted as edit rows.
+- Paste: `AdjustmentTransferController::PasteIntoEditor()` -> typed session controller ->
+  `EditorSessionService::PasteAdjustments()` ->
+  `AdjustmentTransferService::PasteAsRootRelativeVersion()` -> active-pipeline rebuild -> save
+  checkpoint.
+- Merge: `BeginMergeIntoEditor()` -> `InitiateMerge()` -> typed conflict rows ->
+  `CompleteMergeIntoEditor()` -> `CompleteMerge()` -> ordered two-parent commit -> active-pipeline
+  rebuild -> save checkpoint. The temporary incoming Version ref is removed after completion,
+  cancellation, or navigation away from the pending resolution.
+- Materialization: graph VersionRef rows are reconciled for the image in one storage transaction,
+  so removed temporary refs do not reappear after reload.
+
+Executed evidence:
+
+| Evidence | Command | Result |
+| --- | --- | --- |
+| Windows production build and QML cache/link path | `cmd /c scripts\\msvc_env.cmd --build --preset win_debug --parallel 4 --target alcedo_main EditorHistoryVersionsRailQmlTest` | Passed; `alcedo_main.exe` and `EditorHistoryVersionsRailQmlTest.exe` linked |
+| Visible QML behavior | `ctest --test-dir build/debug -R "EditorHistoryVersionsRailQmlTest" --output-on-failure` | 4/4 passed: stable-ID checkout; monochrome selected-card/title rendering; typed name create/rename/remove; visible Undo/Redo; visible Paste/Merge with ComboBox resolution; recovery and second-parent rendering |
+| Production graph and transfer behavior | `ctest --test-dir build/debug -R "EditorSessionHistoryPortTest|AdjustmentTransferServiceMiniGitTest|CommitGraphTest" --output-on-failure` | 54/54 passed |
+| Formatting and repository terminology audit | `clang-format --dry-run --Werror --style=file <changed C++ files>` plus roadmap/source searches | Passed; no new forbidden roadmap or project terminology |
+
+The QML tests load the production rail and drive it with `QTest::mouseClick()` and
+`QTest::keyClick()`. Assertions observe rendered controls, dialog state, stable IDs, visible
+recovery/merge text, and the typed controller seam; they do not call controller slots as a
+substitute for user input. The harness uses fake session/transfer objects only at the existing
+QObject boundary, while the graph, reconstruction, root-relative Paste, and two-parent Merge
+semantics run through the production C++ tests above.
+
+Exit checklist:
+
+- [x] Typed Version and commit projections are registered with `Alcedo.Main` and included in the
+  production target.
+- [x] History/Versions rail uses Basic controls, AppTheme tokens, stable row identities, and no
+  model reset for unchanged graph rows.
+- [x] Editor Paste/Merge uses the shared AdjustmentTransferService operations and the editor save
+  checkpoint route.
+- [x] UI behavior and production C++ evidence are green on the Windows debug preset.
+
 ### Phase 7B - Histogram and waveform scope module
 
 Deliverables:

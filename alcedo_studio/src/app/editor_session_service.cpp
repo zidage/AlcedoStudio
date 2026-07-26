@@ -4,8 +4,10 @@
 
 #include "app/editor_session_service.hpp"
 
+#include <algorithm>
 #include <utility>
 
+#include "app/editor_mini_git_materializer.hpp"
 #include "app/editor_session_edit_controller.hpp"
 #include "app/editor_session_lifecycle.hpp"
 #include "app/editor_session_navigation_controller.hpp"
@@ -120,6 +122,10 @@ auto EditorSessionService::Fail(std::string message) -> EditorSessionResult {
 
 auto EditorSessionService::Open(sl_element_id_t element_id, image_id_t image_id)
     -> EditorSessionResult {
+  std::string merge_error;
+  if (!CancelPendingMergeForNavigation(&merge_error)) {
+    return Reject(std::move(merge_error));
+  }
   const auto outcome = navigation_.RequestOpenOrSwitch(element_id, image_id, false);
   if (outcome.rejected) {
     return Reject(outcome.message);
@@ -196,6 +202,10 @@ auto EditorSessionService::Open(sl_element_id_t element_id, image_id_t image_id)
 
 auto EditorSessionService::CheckoutVersion(const version_ref_id_t& version_id)
     -> EditorSessionResult {
+  std::string merge_error;
+  if (!CancelPendingMergeForNavigation(&merge_error)) {
+    return Reject(std::move(merge_error));
+  }
   const auto outcome = navigation_.RequestCheckoutVersion(version_id);
   if (outcome.rejected) {
     return Reject(outcome.message);
@@ -245,8 +255,277 @@ auto EditorSessionService::CheckoutVersion(const version_ref_id_t& version_id)
   return Emit(std::move(result));
 }
 
+auto EditorSessionService::history_snapshot() -> EditorHistorySnapshot {
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) return {};
+  std::string           error;
+  EditorHistorySnapshot snapshot;
+  if (!dependencies_.history->ReadHistorySnapshot(lifecycle_.history_guard(), &snapshot, &error)) {
+    return {};
+  }
+  if (pending_merge_preview_) {
+    const auto hidden_id = pending_merge_preview_->incoming_version_id;
+    snapshot.versions.erase(std::remove_if(snapshot.versions.begin(), snapshot.versions.end(),
+                                           [&hidden_id](const EditorHistoryVersion& version) {
+                                             return version.version_id == hidden_id;
+                                           }),
+                            snapshot.versions.end());
+  }
+  return snapshot;
+}
+
+auto EditorSessionService::CancelPendingMergeForNavigation(std::string* error) -> bool {
+  if (!pending_merge_preview_) return true;
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
+    if (error) *error = "Cannot discard the pending editor merge without a history guard";
+    return false;
+  }
+  if (!dependencies_.history->CancelMerge(lifecycle_.history_guard(), *pending_merge_preview_,
+                                          error)) {
+    if (error && error->empty()) *error = "Failed to discard the pending editor merge";
+    return false;
+  }
+  pending_merge_preview_.reset();
+  return true;
+}
+
+auto EditorSessionService::CreateVersion(std::string display_name) -> EditorSessionResult {
+  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
+    return Reject("Version creation requires an interactive session");
+  }
+  version_ref_id_t version_id;
+  std::string      error;
+  if (!dependencies_.history->CreateVersion(lifecycle_.history_guard(), std::move(display_name),
+                                            &version_id, &error)) {
+    return Reject(error.empty() ? "Version creation failed" : std::move(error));
+  }
+  return StartHistoryCheckpoint("Version created", false);
+}
+
+auto EditorSessionService::RenameVersion(const version_ref_id_t& version_id,
+                                         std::string display_name) -> EditorSessionResult {
+  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
+    return Reject("Version rename requires an interactive session");
+  }
+  std::string error;
+  if (!dependencies_.history->RenameVersion(lifecycle_.history_guard(), version_id,
+                                            std::move(display_name), &error)) {
+    return Reject(error.empty() ? "Version rename failed" : std::move(error));
+  }
+  return StartHistoryCheckpoint("Version renamed", false);
+}
+
+auto EditorSessionService::RemoveVersion(const version_ref_id_t& version_id)
+    -> EditorSessionResult {
+  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
+    return Reject("Version removal requires an interactive session");
+  }
+  std::string error;
+  if (!dependencies_.history->RemoveVersion(lifecycle_.history_guard(), version_id, &error)) {
+    return Reject(error.empty() ? "Version removal failed" : std::move(error));
+  }
+  return StartHistoryCheckpoint("Version removed", false);
+}
+
+auto EditorSessionService::PasteAdjustments(const AdjustmentTransferPackage& package,
+                                            std::string                      version_display_name)
+    -> EditorSessionResult {
+  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
+    return Reject("Paste requires an interactive session");
+  }
+  AdjustmentPasteResult paste_result;
+  std::string           error;
+  if (!dependencies_.history->PasteAdjustments(lifecycle_.history_guard(), package,
+                                               std::move(version_display_name), &paste_result,
+                                               &error)) {
+    return Reject(error.empty() ? "Editor Paste failed" : std::move(error));
+  }
+  return StartHistoryCheckpoint("Adjustments pasted", true);
+}
+
+auto EditorSessionService::BeginMerge(const AdjustmentTransferPackage& package,
+                                      AdjustmentMergePreview* preview) -> EditorSessionResult {
+  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
+    return Reject("Merge requires an interactive session");
+  }
+  if (pending_merge_preview_) {
+    return Reject("A merge is already awaiting resolution");
+  }
+  if (preview == nullptr) {
+    return Reject("Merge preview storage is required");
+  }
+  AdjustmentMergePreview next_preview;
+  std::string            error;
+  if (!dependencies_.history->BeginMerge(lifecycle_.history_guard(), package,
+                                         "Incoming Adjustments", &next_preview, &error)) {
+    return Reject(error.empty() ? "Editor Merge failed to start" : std::move(error));
+  }
+  const bool has_conflicts = next_preview.has_conflicts;
+  pending_merge_preview_   = std::make_unique<AdjustmentMergePreview>(std::move(next_preview));
+  *preview                 = *pending_merge_preview_;
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = has_conflicts ? "Merge requires field resolutions" : "Merge is ready to apply";
+  return Emit(std::move(result));
+}
+
+auto EditorSessionService::CompleteMerge(const std::vector<AdjustmentMergeResolution>& resolutions)
+    -> EditorSessionResult {
+  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
+    return Reject("Merge completion requires an interactive session");
+  }
+  if (!pending_merge_preview_) {
+    return Reject("No merge is awaiting resolution");
+  }
+  AdjustmentMergeResult merge_result;
+  std::string           error;
+  if (!dependencies_.history->CompleteMerge(lifecycle_.history_guard(), *pending_merge_preview_,
+                                            resolutions, &merge_result, &error)) {
+    return Reject(error.empty() ? "Merge could not be completed" : std::move(error));
+  }
+  pending_merge_preview_.reset();
+  return StartHistoryCheckpoint("Adjustments merged", true);
+}
+
+auto EditorSessionService::CancelMerge() -> EditorSessionResult {
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
+    return Reject("No active editor merge");
+  }
+  if (!pending_merge_preview_) {
+    return Reject("No merge is awaiting resolution");
+  }
+  std::string error;
+  if (!dependencies_.history->CancelMerge(lifecycle_.history_guard(), *pending_merge_preview_,
+                                          &error)) {
+    return Reject(error.empty() ? "Merge cancellation failed" : std::move(error));
+  }
+  pending_merge_preview_.reset();
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Merge cancelled";
+  return Emit(std::move(result));
+}
+
+auto EditorSessionService::StartHistoryCheckpoint(std::string success_message, bool route_render)
+    -> EditorSessionResult {
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
+    return Reject("Editor history is unavailable");
+  }
+  if (navigation_.has_pending_action() || save_service_.active()) {
+    return Reject("Editor save checkpoint is in progress");
+  }
+
+  const auto identity = lifecycle_.identity();
+  if (dependencies_.journal) {
+    std::string finalize_error;
+    if (!dependencies_.journal->FinalizeEdit(identity.element_id, identity.session_generation,
+                                             &finalize_error)) {
+      return Reject(finalize_error.empty() ? "Editor command could not be finalized"
+                                           : std::move(finalize_error));
+    }
+  }
+  auto save_lock = save_service_.TryAcquireSaveLock(identity.element_id);
+  if (!save_lock.owns_lock()) {
+    return Reject("Another editor save checkpoint is in progress");
+  }
+  std::string capture_error;
+  auto        capture =
+      dependencies_.history->CaptureSaveCheckpoint(lifecycle_.history_guard(), &capture_error);
+  if (!capture || !capture_error.empty()) {
+    return Reject(capture_error.empty() ? "Editor history capture failed"
+                                        : std::move(capture_error));
+  }
+
+  auto                  completed = std::make_shared<std::optional<EditorSessionResult>>();
+  SaveCheckpointRequest request;
+  request.element_id         = identity.element_id;
+  request.session_generation = identity.session_generation;
+  request.capture            = std::move(capture);
+  if (request.capture->has_journal_range()) {
+    request.last_journal_sequence = request.capture->last_journal_sequence;
+  }
+  request.save_lock = std::move(save_lock);
+  lifecycle_.BeginCheckpoint();
+  const auto ticket = save_service_.Start(
+      std::move(request), [this, completed, success_message = std::move(success_message),
+                           route_render](const SaveCheckpointResult& result) mutable {
+        EditorSessionResult published;
+        published.identity = lifecycle_.identity();
+        published.state    = lifecycle_.state();
+        published.task_id  = result.task_id;
+        if (!result.checkpoint_completed) {
+          lifecycle_.KeepCurrentAfterCheckpointFailure(
+              result.error.empty() ? "Editor save checkpoint failed" : result.error);
+          published.kind    = EditorSessionResultKind::Failed;
+          published.state   = lifecycle_.state();
+          published.message = lifecycle_.last_error();
+          *completed        = published;
+          Emit(std::move(published));
+          return;
+        }
+        if (result.last_journal_sequence.has_value()) {
+          std::string discard_error;
+          (void)dependencies_.history->DiscardMaterializedJournalThrough(
+              lifecycle_.history_guard(), *result.last_journal_sequence, &discard_error);
+        }
+        lifecycle_.CompleteCheckpoint();
+        if (route_render) {
+          EditorRenderAdjustmentSnapshot snapshot;
+          std::string                    snapshot_error;
+          if (!dependencies_.history->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &snapshot,
+                                                             &snapshot_error)) {
+            lifecycle_.Fail(snapshot_error.empty() ? "Failed to publish editor history snapshot"
+                                                   : snapshot_error);
+            published.kind    = EditorSessionResultKind::Failed;
+            published.state   = lifecycle_.state();
+            published.message = lifecycle_.last_error();
+            *completed        = published;
+            Emit(std::move(published));
+            return;
+          }
+          edit_.set_adjustment_snapshot(std::move(snapshot));
+          lifecycle_.AdvanceRenderGeneration();
+          EditorRenderCommand command;
+          command.reason     = EditorRenderReason::InitialFrame;
+          command.adjustment = edit_.adjustment_snapshot();
+          render_.RouteInitialRender(command, lifecycle_.identity());
+          published.kind              = EditorSessionResultKind::RenderRouted;
+          published.render_request_id = render_.first_frame_request_id();
+        } else {
+          published.kind = EditorSessionResultKind::Accepted;
+        }
+        published.state    = lifecycle_.state();
+        published.identity = lifecycle_.identity();
+        published.message  = success_message;
+        *completed         = published;
+        Emit(std::move(published));
+      });
+
+  if (completed->has_value()) {
+    return completed->value();
+  }
+  if (!ticket.valid()) {
+    lifecycle_.KeepCurrentAfterCheckpointFailure("Editor save checkpoint could not start");
+    return Reject("Editor save checkpoint could not start");
+  }
+  EditorSessionResult started;
+  started.kind     = EditorSessionResultKind::SaveStarted;
+  started.state    = lifecycle_.state();
+  started.identity = lifecycle_.identity();
+  started.task_id  = ticket.task_id;
+  started.message  = "Waiting for editor history checkpoint";
+  return Emit(std::move(started));
+}
+
 auto EditorSessionService::Switch(sl_element_id_t element_id, image_id_t image_id)
     -> EditorSessionResult {
+  std::string merge_error;
+  if (!CancelPendingMergeForNavigation(&merge_error)) {
+    return Reject(std::move(merge_error));
+  }
   const auto outcome = navigation_.RequestOpenOrSwitch(element_id, image_id, true);
   if (outcome.rejected) {
     return Reject(outcome.message);
@@ -319,6 +598,10 @@ auto EditorSessionService::Switch(sl_element_id_t element_id, image_id_t image_i
 }
 
 auto EditorSessionService::Close(bool persist_changes) -> EditorSessionResult {
+  std::string merge_error;
+  if (!CancelPendingMergeForNavigation(&merge_error)) {
+    return Reject(std::move(merge_error));
+  }
   const auto outcome = navigation_.RequestClose(persist_changes);
   if (outcome.rejected) {
     return Reject(outcome.message);
@@ -457,6 +740,10 @@ auto EditorSessionService::Discard() -> EditorSessionResult {
   if (state != EditorSessionState::Interactive && state != EditorSessionState::Failed) {
     return Reject("Discard requires an image with an active history session");
   }
+  std::string merge_error;
+  if (!CancelPendingMergeForNavigation(&merge_error)) {
+    return Reject(std::move(merge_error));
+  }
   const auto guard   = lifecycle_.history_guard();
   const auto ident   = lifecycle_.identity();
   const auto outcome = edit_.HandleDiscard(guard, ident, state);
@@ -484,6 +771,10 @@ auto EditorSessionService::Discard() -> EditorSessionResult {
 auto EditorSessionService::Shutdown() -> EditorSessionResult {
   if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
     return Reject("Already shutting down");
+  }
+  std::string merge_error;
+  if (!CancelPendingMergeForNavigation(&merge_error)) {
+    return Reject(std::move(merge_error));
   }
   // Cancel outstanding save work and wait for callback drain. CancelAndWait
   // publishes one terminal cancellation per in-flight checkpoint; navigation

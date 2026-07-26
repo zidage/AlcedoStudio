@@ -259,6 +259,13 @@ auto CommitGraph::CreateVersionRefAtActiveHead(std::string display_name, std::ti
                                   created_at);
 }
 
+auto CommitGraph::RemoveVersionRef(const version_ref_id_t& version_id) -> bool {
+  if (version_refs_.size() <= 1 || version_id == state_.active_version_id) {
+    return false;
+  }
+  return version_refs_.erase(version_id) != 0;
+}
+
 void CommitGraph::MoveWorkingHead(const version_ref_id_t& version_id, head_commit_hash_t new_head,
                                   std::time_t updated_at) {
   if (new_head.has_value() && commits_.find(*new_head) == commits_.end()) {
@@ -325,7 +332,7 @@ auto CommitGraph::CollectReachableCommitHashes() const -> std::unordered_set<com
 }
 
 auto CommitGraph::ListUnreachableCommitHashes() const -> std::vector<commit_hash_t> {
-  const auto reachable = CollectReachableCommitHashes();
+  const auto                 reachable = CollectReachableCommitHashes();
   std::vector<commit_hash_t> unreachable;
   unreachable.reserve(commits_.size() > reachable.size() ? commits_.size() - reachable.size() : 0);
   for (const auto& [hash, commit] : commits_) {
@@ -395,8 +402,7 @@ auto CommitGraph::CaptureMaterialization() const -> CommitGraphMaterialization {
 }
 
 auto CommitGraph::CaptureMaterializationWithSerializedPipelineState(
-    std::optional<nlohmann::json> serialized_pipeline_state) const
-    -> CommitGraphMaterialization {
+    std::optional<nlohmann::json> serialized_pipeline_state) const -> CommitGraphMaterialization {
   auto materialization                                  = BuildMaterializationBase(*this, state_);
   materialization.image_state.serialized_pipeline_state = std::move(serialized_pipeline_state);
   materialization.Validate();

@@ -12,6 +12,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "app/adjustment_transfer_types.hpp"
 #include "app/editor_session_ports.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp"
 
@@ -53,6 +54,34 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
   /// Switch the checked-out Version, rebuild the live pipeline, refresh the snapshot.
   auto CheckoutVersion(const alcedo::EditorHistoryGuardHandle& guard,
                        const alcedo::Hash128& version_id, std::string* error) -> bool override;
+  /// Project the named refs and active first-parent path for the QML model.
+  auto ReadHistorySnapshot(const alcedo::EditorHistoryGuardHandle& guard,
+                           alcedo::EditorHistorySnapshot* snapshot, std::string* error)
+      -> bool override;
+  /// Create a named ref at the current working head.
+  auto CreateVersion(const alcedo::EditorHistoryGuardHandle& guard, std::string display_name,
+                     alcedo::version_ref_id_t* version_id, std::string* error) -> bool override;
+  auto RenameVersion(const alcedo::EditorHistoryGuardHandle& guard,
+                     const alcedo::Hash128& version_id, std::string display_name,
+                     std::string* error) -> bool override;
+  auto RemoveVersion(const alcedo::EditorHistoryGuardHandle& guard,
+                     const alcedo::Hash128& version_id, std::string* error) -> bool override;
+  /// Apply one copied package through the editor's checked-out graph.
+  auto PasteAdjustments(const alcedo::EditorHistoryGuardHandle&  guard,
+                        const alcedo::AdjustmentTransferPackage& package,
+                        std::string version_display_name, alcedo::AdjustmentPasteResult* result,
+                        std::string* error) -> bool override;
+  auto BeginMerge(const alcedo::EditorHistoryGuardHandle&  guard,
+                  const alcedo::AdjustmentTransferPackage& package,
+                  std::string                              incoming_version_display_name,
+                  alcedo::AdjustmentMergePreview* preview, std::string* error) -> bool override;
+  auto CompleteMerge(const alcedo::EditorHistoryGuardHandle&               guard,
+                     const alcedo::AdjustmentMergePreview&                 preview,
+                     const std::vector<alcedo::AdjustmentMergeResolution>& resolutions,
+                     alcedo::AdjustmentMergeResult* result, std::string* error) -> bool override;
+  auto CancelMerge(const alcedo::EditorHistoryGuardHandle& guard,
+                   const alcedo::AdjustmentMergePreview& preview, std::string* error)
+      -> bool override;
   /// Return the committed adjustment snapshot for rendering and the UI.
   auto ReadAdjustmentSnapshot(const alcedo::EditorHistoryGuardHandle& guard,
                               alcedo::EditorRenderAdjustmentSnapshot* snapshot, std::string* error)

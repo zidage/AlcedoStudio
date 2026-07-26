@@ -82,6 +82,7 @@ Item {
                 theme: root.theme
                 editorSession: root.editorSession
                 interactionPolicy: root.interactionPolicy
+                adjustmentTransfer: appModules.adjustmentTransfer
             }
 
             // Center column: viewport + filmstrip

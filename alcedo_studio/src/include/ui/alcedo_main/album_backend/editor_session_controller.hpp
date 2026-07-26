@@ -4,13 +4,16 @@
 
 #pragma once
 
-#include <QObject>
 #include <QMetaObject>
+#include <QObject>
 #include <QPointer>
 #include <QString>
 #include <QVariantMap>
 #include <QtGlobal>
+#include <vector>
 
+#include "app/adjustment_transfer_types.hpp"
+#include "app/editor_history_types.hpp"
 #include "app/editor_session_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 
@@ -92,18 +95,16 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// stable field identifiers (e.g. "exposure", "contrast"); values are the
   /// parsed JSON params. Published after open, checkout, undo, redo, recovery,
   /// Paste, and Merge. Panels load from this snapshot via loadFromSnapshot().
-  Q_PROPERTY(QVariantMap adjustmentSnapshot READ adjustment_snapshot NOTIFY
-                 AdjustmentSnapshotChanged)
+  Q_PROPERTY(
+      QVariantMap adjustmentSnapshot READ adjustment_snapshot NOTIFY AdjustmentSnapshotChanged)
   /// Monotonic revision counter incremented on every snapshot publication.
   /// Panels use this to skip re-loading an already-applied snapshot.
-  Q_PROPERTY(quint64 snapshotRevision READ snapshot_revision NOTIFY
-                 AdjustmentSnapshotChanged)
+  Q_PROPERTY(quint64 snapshotRevision READ snapshot_revision NOTIFY AdjustmentSnapshotChanged)
   /// Read-only RAW panel capability map resolved by the application layer.
   /// The panel consumes this map; it does not inspect image metadata or build
   /// flags directly.
   Q_PROPERTY(QVariantMap rawDecodeCapabilities READ raw_decode_capabilities NOTIFY
                  RawDecodeCapabilitiesChanged)
-
 
  public:
   explicit EditorSessionController(EditorController* editor = nullptr, QObject* parent = nullptr);
@@ -131,36 +132,42 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] QString    active_adjustment_panel() const { return active_adjustment_panel_; }
   [[nodiscard]] QString    history_panel_page() const { return history_panel_page_; }
   // Phase 6C-7: load panel state from the backend adjustment snapshot.
-  [[nodiscard]] auto adjustment_snapshot() const -> QVariantMap;
-  [[nodiscard]] auto snapshot_revision() const -> quint64 { return snapshot_revision_; }
-  [[nodiscard]] auto raw_decode_capabilities() const -> QVariantMap {
+  [[nodiscard]] auto       adjustment_snapshot() const -> QVariantMap;
+  [[nodiscard]] auto       snapshot_revision() const -> quint64 { return snapshot_revision_; }
+  [[nodiscard]] auto       history_snapshot() const -> alcedo::EditorHistorySnapshot;
+  [[nodiscard]] auto       raw_decode_capabilities() const -> QVariantMap {
     return raw_decode_capabilities_;
   }
 
-  [[nodiscard]] bool       presentation_viewport_bound() const {
+  [[nodiscard]] bool presentation_viewport_bound() const {
     return presentation_viewport_ != nullptr;
   }
   // Phase 5D: true when the coordinator has in-flight/pending render work.
-  [[nodiscard]] bool       render_busy() const;
+  [[nodiscard]] bool        render_busy() const;
   // Phase 5E diagnostics surface for QML and integration tests.
-  [[nodiscard]] QString    last_error() const;
-  [[nodiscard]] double     first_frame_time_ms() const;
+  [[nodiscard]] QString     last_error() const;
+  [[nodiscard]] double      first_frame_time_ms() const;
   [[nodiscard]] QVariantMap render_diagnostics() const;
   // Phase 6A: true when an image is open and the session is Interactive.
-  [[nodiscard]] bool       can_edit() const;
+  [[nodiscard]] bool        can_edit() const;
 
   // Phase 6A: IEditorAdjustmentSubmitter. The typed adjustment models call
   // submitPatch to route one patch through the session service (interactive
   // preview when settled=false, one committed transaction when settled=true).
   // The same method is the QML-visible entry (Q_INVOKABLE) and the interface
   // override; both forward to the same backend call.
-  Q_INVOKABLE bool          submitPatch(QString fieldKey, QString paramsJson, bool settled) override;
-  [[nodiscard]] auto       canEdit() const -> bool override { return can_edit(); }
+  Q_INVOKABLE bool   submitPatch(QString fieldKey, QString paramsJson, bool settled) override;
+  [[nodiscard]] auto canEdit() const -> bool override { return can_edit(); }
 
   Q_INVOKABLE void   Open(uint elementId = 0, uint imageId = 0);
   /// Check out a named Version by its hex version_id. Completes a save checkpoint
   /// first, then rebuilds the pipeline from root + first-parent commits.
   Q_INVOKABLE void   CheckoutVersion(const QString& versionId);
+  Q_INVOKABLE void   CreateVersion(const QString& displayName);
+  Q_INVOKABLE void   RenameVersion(const QString& versionId, const QString& displayName);
+  Q_INVOKABLE void   RemoveVersion(const QString& versionId);
+  Q_INVOKABLE void   Undo();
+  Q_INVOKABLE void   Redo();
   Q_INVOKABLE void   Close();
   Q_INVOKABLE void   Shutdown();
   void               Finalize(bool persistChanges);
@@ -186,6 +193,15 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // InteractivePrimary vs. DetailPatch (D2). No-op without a backend/image.
   Q_INVOKABLE void   submitViewChange(int kind);
 
+  auto               PasteAdjustmentPackage(const alcedo::AdjustmentTransferPackage& package,
+                                            const QString& versionDisplayName) -> alcedo::EditorSessionResult;
+  auto               BeginMergeAdjustmentPackage(const alcedo::AdjustmentTransferPackage& package,
+                                                 alcedo::AdjustmentMergePreview*          preview)
+      -> alcedo::EditorSessionResult;
+  auto CompleteMergeAdjustments(const std::vector<alcedo::AdjustmentMergeResolution>& resolutions)
+      -> alcedo::EditorSessionResult;
+  auto               CancelMergeAdjustments() -> alcedo::EditorSessionResult;
+
   // Bound QQuickRhiItem (EditorViewportItem). QPointer may clear after destroy.
   [[nodiscard]] auto presentation_viewport() const -> QObject*;
 
@@ -201,6 +217,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
 
  signals:
   void StateChanged();
+  void HistoryChanged();
   // Phase 6C-7: emitted when the backend adjustment snapshot is published.
   void AdjustmentSnapshotChanged();
   void RawDecodeCapabilitiesChanged();
@@ -237,23 +254,23 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   bool                           filmstrip_collapsed_       = false;
   double                         filmstrip_expanded_height_ = 128.0;
   // Phase 6C-7: cached adjustment snapshot + monotonic revision.
-  mutable QVariantMap adjustment_snapshot_;
-  quint64              snapshot_revision_ = 0;
-  QVariantMap          raw_decode_capabilities_;
+  mutable QVariantMap            adjustment_snapshot_;
+  quint64                        snapshot_revision_ = 0;
+  QVariantMap                    raw_decode_capabilities_;
   /// When true, OnBackendChanged still refreshes the cached snapshot map but
   /// does not emit AdjustmentSnapshotChanged. Used for interactive submitPatch
   /// so pointer moves do not re-enter QML loadFromSnapshot on every tick.
-  bool suppress_snapshot_publish_ = false;
+  bool                           suppress_snapshot_publish_ = false;
   /// Convert EditorRenderAdjustmentSnapshot patches into a QVariantMap keyed
   /// by field_key with parsed JSON values suitable for QML model loading.
-  [[nodiscard]] static auto
-      BuildSnapshotMap(const alcedo::EditorRenderAdjustmentSnapshot& snapshot) -> QVariantMap;
+  [[nodiscard]] static auto BuildSnapshotMap(const alcedo::EditorRenderAdjustmentSnapshot& snapshot)
+      -> QVariantMap;
 
-  QString                        active_adjustment_panel_   = QStringLiteral("tone");
-  QString                        history_panel_page_;
-  QPointer<QObject>              presentation_viewport_;
-  QPointer<QObject>              interaction_controller_;
-  QMetaObject::Connection        interaction_view_change_connection_;
+  QString                 active_adjustment_panel_ = QStringLiteral("tone");
+  QString                 history_panel_page_;
+  QPointer<QObject>       presentation_viewport_;
+  QPointer<QObject>       interaction_controller_;
+  QMetaObject::Connection interaction_view_change_connection_;
 };
 
 }  // namespace alcedo::ui

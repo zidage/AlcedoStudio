@@ -222,20 +222,21 @@ def_library(EditorSaveCheckpointService
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_save_checkpoint_service.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_save_checkpoint_service.hpp"
-    PUBLIC_DEPS EditorSaveCheckpointCoordinator
+    PUBLIC_DEPS EditorSaveCheckpointCoordinator xxHash
 )
 
 def_library(EditorSessionLifecycle
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_lifecycle.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_lifecycle.hpp"
+    PUBLIC_DEPS xxHash
 )
 
 def_library(EditorSessionNavigationController
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_navigation_controller.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_navigation_controller.hpp"
-    PUBLIC_DEPS EditHistory
+    PUBLIC_DEPS EditHistory xxHash
     PRIVATE_DEPS EditorSessionLifecycle EditorSaveCheckpointService
                  EditorSessionRenderController EditorSessionEditController
                  EditorMiniGitMaterializer
@@ -245,12 +246,14 @@ def_library(EditorSessionRenderController
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_render_controller.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_render_controller.hpp"
+    PUBLIC_DEPS xxHash
 )
 
 def_library(EditorSessionEditController
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_edit_controller.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_edit_controller.hpp"
+    PUBLIC_DEPS xxHash
     PRIVATE_DEPS EditHistory
 )
 
@@ -298,7 +301,8 @@ def_library(EditorSessionService
         "${ALCEDO_INCLUDE_ROOT}/edit/frame_presentation_types.hpp"
     # The session facade is application-only; no Widgets dependency belongs
     # on this target or on its public link interface.
-    PRIVATE_DEPS EditHistory EditorSaveCheckpointService EditorSessionLifecycle
+    PUBLIC_DEPS xxHash
+    PRIVATE_DEPS EditHistory EditorMiniGitMaterializer EditorSaveCheckpointService EditorSessionLifecycle
                  EditorSessionNavigationController EditorSessionRenderController
                  EditorSessionEditController
 )
