@@ -18,6 +18,7 @@
 #include "app/editor_session_service.hpp"
 #include "edit/frame_presentation_types.hpp"
 #include "type/hash_type.hpp"
+#include "ui/alcedo_main/album_backend/editor_controller.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
@@ -32,6 +33,20 @@ constexpr auto   kActiveAdjustmentPanelKey       = "editor/activeAdjustmentPanel
 constexpr double kFilmstripExpandedHeightMin     = 72.0;
 constexpr double kFilmstripExpandedHeightMax     = 320.0;
 constexpr double kFilmstripExpandedHeightDefault = 128.0;
+
+auto EmptyRawDecodeCapabilities() -> QVariantMap {
+  return {
+      {QStringLiteral("rawSource"), false},
+      {QStringLiteral("available"), false},
+      {QStringLiteral("metadataAvailable"), false},
+      {QStringLiteral("neuralEngineAvailable"), false},
+      {QStringLiteral("highlightsAvailable"), false},
+      {QStringLiteral("unavailableReason"),
+       QStringLiteral("Select a RAW image to enable RAW Decode.")},
+      {QStringLiteral("methodValues"), QVariantList{}},
+      {QStringLiteral("rawDefaultParamsJson"), QString{}},
+  };
+}
 
 }  // namespace
 
@@ -49,6 +64,7 @@ EditorSessionController::EditorSessionController(EditorController*              
                                                QLatin1String("geometry"));
   }
   InstallBackendNotifier();
+  SyncRawDecodeCapabilities();
 }
 
 EditorSessionController::~EditorSessionController() {
@@ -95,6 +111,7 @@ void EditorSessionController::SetSessionBackend(alcedo::IEditorSessionBackend* s
     InstallBackendNotifier();
     SyncIdentityFromBackend();
   }
+  SyncRawDecodeCapabilities();
 }
 
 void EditorSessionController::OnBackendChanged() {
@@ -102,6 +119,7 @@ void EditorSessionController::OnBackendChanged() {
     return;
   }
   SyncIdentityFromBackend();
+  SyncRawDecodeCapabilities();
   SyncViewportIdentity();
 
   // Phase 6C-7: keep the cached snapshot map warm on every backend change, but
@@ -177,6 +195,16 @@ void EditorSessionController::SyncIdentityFromBackend() {
   session_state_      = session_backend_->state();
   // active_ is workspace membership owned by Open/Close/Finalize, not by
   // backend NoImage vs Loading (empty editor remains active).
+}
+
+void EditorSessionController::SyncRawDecodeCapabilities() {
+  const QVariantMap next = editor_ ? editor_->RawDecodeCapabilitiesForImage(image_id())
+                                   : EmptyRawDecodeCapabilities();
+  if (next == raw_decode_capabilities_) {
+    return;
+  }
+  raw_decode_capabilities_ = next;
+  emit RawDecodeCapabilitiesChanged();
 }
 
 void EditorSessionController::ApplyOpenLocal(uint elementId, uint imageId) {
@@ -260,7 +288,7 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
     ApplyOpenLocal(elementId, imageId);
   }
 
-  Q_UNUSED(editor_);
+  SyncRawDecodeCapabilities();
   SyncViewportIdentity();
   emit StateChanged();
 }
@@ -297,6 +325,7 @@ void EditorSessionController::Close() {
   } else {
     ApplyCloseLocal();
   }
+  SyncRawDecodeCapabilities();
   active_ = false;
   emit StateChanged();
 }
@@ -313,6 +342,7 @@ void EditorSessionController::Shutdown() {
     ApplyCloseLocal();
     session_state_ = alcedo::EditorSessionState::ShuttingDown;
   }
+  SyncRawDecodeCapabilities();
   active_ = false;
   emit StateChanged();
 }
@@ -327,6 +357,7 @@ void EditorSessionController::Finalize(bool persistChanges) {
     }
     session_backend_->Close(persistChanges);
     SyncIdentityFromBackend();
+    SyncRawDecodeCapabilities();
     active_ = false;
     emit StateChanged();
     return;

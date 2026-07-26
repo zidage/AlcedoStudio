@@ -898,7 +898,7 @@ Item {
                 objectName: "editorAdjustmentGroupShell_geometry_lens"
                 Layout.fillWidth: true
                 title: qsTr("Lens Calibration")
-                expanded: false
+                expanded: true
                 controlsEnabled: root.controlsEnabled
                 surfaceColor: root.colCardSurface
                 disabledSurfaceColor: root.colCardSurface

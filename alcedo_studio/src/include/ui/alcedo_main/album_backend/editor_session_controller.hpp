@@ -98,6 +98,11 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// Panels use this to skip re-loading an already-applied snapshot.
   Q_PROPERTY(quint64 snapshotRevision READ snapshot_revision NOTIFY
                  AdjustmentSnapshotChanged)
+  /// Read-only RAW panel capability map resolved by the application layer.
+  /// The panel consumes this map; it does not inspect image metadata or build
+  /// flags directly.
+  Q_PROPERTY(QVariantMap rawDecodeCapabilities READ raw_decode_capabilities NOTIFY
+                 RawDecodeCapabilitiesChanged)
 
 
  public:
@@ -128,6 +133,9 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Phase 6C-7: load panel state from the backend adjustment snapshot.
   [[nodiscard]] auto adjustment_snapshot() const -> QVariantMap;
   [[nodiscard]] auto snapshot_revision() const -> quint64 { return snapshot_revision_; }
+  [[nodiscard]] auto raw_decode_capabilities() const -> QVariantMap {
+    return raw_decode_capabilities_;
+  }
 
   [[nodiscard]] bool       presentation_viewport_bound() const {
     return presentation_viewport_ != nullptr;
@@ -195,6 +203,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void StateChanged();
   // Phase 6C-7: emitted when the backend adjustment snapshot is published.
   void AdjustmentSnapshotChanged();
+  void RawDecodeCapabilitiesChanged();
 
   void FilmstripUiChanged();
   void DesktopUiChanged();
@@ -207,6 +216,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                           LoadDesktopUiPrefs();
   void                           SaveDesktopUiPrefs() const;
   void                           SyncIdentityFromBackend();
+  void                           SyncRawDecodeCapabilities();
   void                           ApplyOpenLocal(uint elementId, uint imageId);
   void                           ApplyCloseLocal();
   void                           SyncViewportIdentity();
@@ -229,6 +239,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Phase 6C-7: cached adjustment snapshot + monotonic revision.
   mutable QVariantMap adjustment_snapshot_;
   quint64              snapshot_revision_ = 0;
+  QVariantMap          raw_decode_capabilities_;
   /// When true, OnBackendChanged still refreshes the cached snapshot map but
   /// does not emit AdjustmentSnapshotChanged. Used for interactive submitPatch
   /// so pointer moves do not re-enter QML loadFromSnapshot on every tick.

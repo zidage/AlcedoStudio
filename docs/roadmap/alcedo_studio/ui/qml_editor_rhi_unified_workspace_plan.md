@@ -2527,6 +2527,57 @@ Acceptance:
 - Supported and unsupported RAW fixtures expose the correct controls and values.
 - Every RAW Decode edit survives save, replay, version reconstruction, image switch, and reopen.
 
+##### Phase 6G completion record (2026-07-26)
+
+**Status:** complete — the unified workspace now uses a production `EditorRawDecodePanel` in
+place of the RAW stack placeholder.
+
+**Implemented:**
+
+- Ported Method (`Default`, `Legacy`, and capability-gated `Neural Engine`), highlight
+  reconstruction, reset behavior, and RAW-source control availability. Lens Calibration remains
+  owned by Geometry and is now expanded by default; RAW no longer duplicates that section.
+- Added the application-side `raw_decode::Capabilities` resolver and exposed its read-only result
+  through `EditorSessionController::rawDecodeCapabilities`; the resolver recognizes imported RAW
+  paths even when persisted image type is still default, and missing runtime metadata no longer
+  disables RAW controls. QML does not inspect image metadata, build flags, or pipeline services.
+- RAW patches retain the complete current/default operator parameter object before replacing the
+  edited fields, so decode backend, white-balance, resolution, and other pipeline values are not
+  discarded. The existing session patch/commit route continues to drive pipeline operator
+  replacement, history, and render invalidation.
+- Registered `EditorRawDecodePanel.qml` in the production QML module and connected it to the
+  stack-level snapshot loader.
+
+**Primary call chains:**
+
+- Capability: `EditorSessionController::SyncRawDecodeCapabilities` →
+  `EditorController::RawDecodeCapabilitiesForImage` →
+  `raw_decode::FromImageMetadata` (image type plus source path) → read-only QML capability map.
+- User edit: `AdjustmentCombo`/`AdjustmentToggle` input → typed adjustment model →
+  `EditorSessionController::submitPatch` → `EditorSessionService::Patch` or
+  `CommitAdjustment` → `EditorAdjustmentPipeline` image-loading operator update.
+- Restore: backend snapshot publication → `EditorAdjustmentStack::loadFromSnapshot` →
+  `EditorRawDecodePanel::loadFromSnapshot` → property-only model writes; restoration emits no
+  new edit.
+
+**Executed evidence:**
+
+| Test or build | Result |
+| --- | --- |
+| `EditorRawDecodePanelQmlTest` | 5/5 passed |
+| Unified adjustment/workspace/session regression set | 58/58 passed |
+| `alcedo_main` Windows debug build | passed; QML cache generated for `EditorRawDecodePanel` |
+
+The RAW QML tests use actual mouse and keyboard input against the production ComboBox and Switch
+components. They cover unsupported capability maps, missing-metadata RAW controls, complete RAW
+parameter payloads, the absence of duplicated Lens Calibration, save/replay, Version
+reconstruction, image switching, reopening, and the no-submit restore rule.
+
+**Exit checklist:** both Phase 6G acceptance items passed. Added production and test code is
+focused on the panel, capability facade, snapshot loading, and their CMake registration; no
+unrelated editor modules were rewritten. Remaining cross-panel sequencing and shortcut work is
+reserved for Phase 6H.
+
 ### Phase 6H - Cross-panel integration and shortcuts
 
 Deliverables:

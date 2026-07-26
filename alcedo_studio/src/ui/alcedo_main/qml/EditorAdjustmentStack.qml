@@ -93,6 +93,9 @@ Item {
         if (typeof geometryPanel.loadFromSnapshot === "function") {
             geometryPanel.loadFromSnapshot(snapshot)
         }
+        if (typeof rawPanel.loadFromSnapshot === "function") {
+            rawPanel.loadFromSnapshot(snapshot)
+        }
     }
 
 
@@ -458,9 +461,12 @@ Item {
                     controlsEnabled: root.controlsEnabled
                     panelActive: root.activePanel === "geometry"
                 }
-                EmptyAdjustmentPage {
+                EditorRawDecodePanel {
+                    id: rawPanel
                     objectName: "editorAdjustmentPanel_raw"
-                    panelKey: "raw"
+                    theme: root.theme
+                    editorSession: root.editorSession
+                    controlsEnabled: root.controlsEnabled
                 }
             }
         }

@@ -563,6 +563,41 @@ gtest_discover_tests(EditorGeometryPanelQmlTest
     PROPERTIES LABELS "workspace_qml;geometry_panel")
 alcedo_register_test_target(EditorGeometryPanelQmlTest ui)
 
+# Phase 6G: RAW Decode capability gating, user input, complete operator params,
+# and session snapshot replay through the production QML panel.
+add_executable(EditorRawDecodePanelQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_raw_decode_panel_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorRawDecodePanelQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorRawDecodePanelQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorRawDecodePanelQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+gtest_discover_tests(EditorRawDecodePanelQmlTest
+    TEST_PREFIX "EditorRawDecodePanelQmlTest."
+    PROPERTIES LABELS "workspace_qml;raw_decode_panel")
+alcedo_register_test_target(EditorRawDecodePanelQmlTest ui)
+
 # Geometry overlay draft: crop-frame edits must not emit CropRotate view routing.
 add_executable(EditorGeometryOverlayDraftRoutingTest
     ${ALCEDO_TEST_ROOT}/ui/editor_geometry_overlay_draft_routing_test.cpp

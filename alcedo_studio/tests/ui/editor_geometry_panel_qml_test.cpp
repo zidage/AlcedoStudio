@@ -272,6 +272,10 @@ TEST(EditorGeometryPanelQmlTest, GeometryPanelExposesTypedModelsAndEnablesOverla
   ASSERT_NE(harness.findObject<QObject>(QStringLiteral("geometryAspectModel")), nullptr);
   ASSERT_NE(harness.findObject<QObject>(QStringLiteral("geometryRotationModel")), nullptr);
   ASSERT_NE(harness.findObject<QObject>(QStringLiteral("geometryLensEnabledModel")), nullptr);
+  auto* lens_section =
+      harness.findObject<QObject>(QStringLiteral("editorAdjustmentGroupShell_geometry_lens"));
+  ASSERT_NE(lens_section, nullptr);
+  EXPECT_TRUE(lens_section->property("expanded").toBool());
   EXPECT_TRUE(interaction.cropToolEnabled());
   EXPECT_TRUE(interaction.cropOverlayVisible());
 }

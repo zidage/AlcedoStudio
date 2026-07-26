@@ -13,6 +13,9 @@ Item {
     objectName: "adjustmentCombo"
 
     property var model: null
+    // Panels may expose a stable object name for behavior tests and
+    // accessibility tooling without changing the shared wrapper name.
+    property string controlObjectName: "adjustmentCombo"
 
     implicitHeight: comboRow.implicitHeight
     Layout.fillWidth: true
@@ -43,7 +46,7 @@ Item {
 
         ComboBox {
             id: combo
-            objectName: "adjustmentCombo"
+            objectName: root.controlObjectName
             Layout.fillWidth: true
             Layout.preferredHeight: 28
             enabled: root.model && root.model.enabled
