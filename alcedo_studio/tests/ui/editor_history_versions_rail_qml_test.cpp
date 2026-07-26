@@ -483,10 +483,9 @@ TEST_F(EditorHistoryVersionsRailQmlTest, ClickingNamedVersionChecksOutStableVers
   Click(window_, Find(QStringLiteral("editorVersionsRailButton")));
   auto cards = Cards();
   ASSERT_EQ(cards.size(), 2);
-  const auto  selected_fill  = AppTheme::Instance().editorListSelectedFillColor();
-  const auto  selected_ink   = AppTheme::Instance().editorListSelectedInkColor();
-  QQuickItem* selected_card  = nullptr;
-  QQuickItem* alternate_card = nullptr;
+  const auto  selected_outline = AppTheme::Instance().textColor();
+  QQuickItem* selected_card    = nullptr;
+  QQuickItem* alternate_card   = nullptr;
   for (auto* card : cards) {
     if (card->property("versionActive").toBool()) {
       selected_card = card;
@@ -496,15 +495,19 @@ TEST_F(EditorHistoryVersionsRailQmlTest, ClickingNamedVersionChecksOutStableVers
   }
   ASSERT_NE(selected_card, nullptr);
   ASSERT_NE(alternate_card, nullptr);
-  EXPECT_EQ(selected_card->property("color").value<QColor>(), selected_fill);
+  EXPECT_EQ(selected_card->property("color").value<QColor>(),
+            AppTheme::Instance().cardSurfaceColor());
+  EXPECT_EQ(selected_card->property("selectionOutlineColor").value<QColor>(), selected_outline);
   ASSERT_NE(selected_card->findChild<QQuickItem*>(QStringLiteral("editorVersionTitle")), nullptr);
   EXPECT_EQ(selected_card->findChild<QQuickItem*>(QStringLiteral("editorVersionTitle"))
                 ->property("color")
                 .value<QColor>(),
-            selected_ink);
+            selected_outline);
   auto* versions_button = Find(QStringLiteral("editorVersionsRailButton"));
   ASSERT_NE(versions_button, nullptr);
-  EXPECT_EQ(versions_button->property("fillSelected").value<QColor>(), selected_fill);
+  EXPECT_TRUE(versions_button->property("selectedOutline").toBool());
+  EXPECT_EQ(versions_button->property("fillSelected").value<QColor>(),
+            AppTheme::Instance().cardSurfaceColor());
   const QString alternate_id = alternate_card->property("versionId").toString();
   ASSERT_FALSE(alternate_id.isEmpty());
 
@@ -575,9 +578,10 @@ TEST_F(EditorHistoryVersionsRailQmlTest, HistoryToolbarUndoAndRedoFollowUserClic
   auto* history_card = Find(QStringLiteral("editorHistoryCard"));
   ASSERT_NE(history_card, nullptr);
   EXPECT_EQ(history_card->property("color").value<QColor>(),
-            AppTheme::Instance().editorListSelectedFillColor());
-  EXPECT_EQ(merge_title->property("color").value<QColor>(),
-            AppTheme::Instance().editorListSelectedInkColor());
+            AppTheme::Instance().cardSurfaceColor());
+  EXPECT_EQ(history_card->property("selectionOutlineColor").value<QColor>(),
+            AppTheme::Instance().textColor());
+  EXPECT_EQ(merge_title->property("color").value<QColor>(), AppTheme::Instance().textColor());
 
   Click(window_, undo);
   EXPECT_EQ(backend_.undo_count(), 1);

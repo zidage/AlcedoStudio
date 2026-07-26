@@ -29,6 +29,11 @@ Item {
     // forcing a square hitSize (legacy segmented rows; default false).
     property bool stretchInLayout: false
     property bool selected: false
+    // History/version rails use an outline-only selected state so the active
+    // tool stays quiet against the card surface. Other callers retain the
+    // existing filled selected state by leaving this disabled.
+    property bool selectedOutline: false
+    property color selectedOutlineColor: appTheme.textColor
     property bool showHoverFill: true
     property bool showFocusRing: true
     property string actionName: ""
@@ -95,6 +100,9 @@ Item {
             return control.fillIdle
         }
         if (control.selected) {
+            if (control.selectedOutline) {
+                return control.fillIdle
+            }
             return control.fillSelected
         }
         if (!control.showHoverFill) {
@@ -171,9 +179,13 @@ Item {
         anchors.centerIn: parent
         radius: appTheme.controlRadiusSmall
         color: control._fillColor
-        border.width: (control.showFocusRing && control.enabled && control.activeFocus) ? 1 : 0
-        border.color: Qt.rgba(control.focusRingColor.r, control.focusRingColor.g,
-                              control.focusRingColor.b, 0.60)
+        border.width: control.selected && control.selectedOutline
+                      ? 1
+                      : ((control.showFocusRing && control.enabled && control.activeFocus) ? 1 : 0)
+        border.color: control.selected && control.selectedOutline
+                      ? control.selectedOutlineColor
+                      : Qt.rgba(control.focusRingColor.r, control.focusRingColor.g,
+                                control.focusRingColor.b, 0.60)
     }
 
     ColorImage {

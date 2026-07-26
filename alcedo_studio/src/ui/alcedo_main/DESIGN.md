@@ -92,6 +92,13 @@ well. Type badges use a white chip (`editorSliderHandleColor`) on dark rows and
 invert to ink-on-bone when the row is selected. Do not reintroduce ad-hoc
 `#D8D4CD` / `Qt.rgba` star or badge colors in feature QML.
 
+**History/Versions outline selection:** the transaction timeline, named Version
+cards, and their persistent rail buttons keep `cardSurfaceColor` and use the
+primary text token as a quiet 1 px outline for the active item. They do not use
+the filled `editorListSelectedFillColor` well; that filled selection remains
+reserved for dense catalog rows such as LUT and is unchanged by the
+History/Versions refactor.
+
 **List well inset (required):** the light selected bar must **not** flush the
 sunken track border. Use `spaceXs` as list track padding (`ListView` margins)
 and as inter-row gap (`ListView.spacing`) so track color frames every well.

@@ -526,6 +526,8 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentTransferActions.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorFilmstrip.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryVersionsRail.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryTransactionsPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorVersionsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentStack.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorTonePanel.qml"
