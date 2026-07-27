@@ -459,6 +459,107 @@ Exit condition:
 - exactly one commit card has the white current outline;
 - no QML color, spacing, radius, type, or icon-size literal is introduced.
 
+##### Phase 2 completion record (2026-07-27)
+
+**Status:** complete — the history projection carries the semantic before/after payload, a pure
+presentation helper formats user-facing text without QML parsing JSON, exactly one row is
+`Current`, and the transaction card renders "Exposure / 0.00 → +0.35" with the commit hash in a
+tooltip and merge provenance in a compact secondary well.
+
+**Primary success call chain:**
+
+```text
+EditCommit ordinary/merge payload
+  -> EditorSessionHistoryPort::ReadHistorySnapshot
+  -> CommitRowFromEdit(commit, position) carries field_key + before/after JSON + enabled + position
+  -> EditorHistoryCommit (serialized before_value_json/after_value_json, no JSON dep in header)
+  -> EditorHistoryModel::RebuildPresentations
+  -> PresentEditorHistoryCommit (pure helper) -> display_name + before_text/after_text/delta_text + icon_key
+  -> EditorHistoryTransactionsPanel renders "Exposure / 0.00 → +0.35", hash in tooltip
+```
+
+**Primary edge / failure call chain:**
+
+```text
+Image root (no working head):
+  -> first-parent chain empty -> no Current row; redo suffix emitted as Future rows
+  -> exactly one Current only when a working head exists; zero Current at root
+Merge commit:
+  -> field_key = "merge", before/after JSON empty, merge_field_keys populated
+  -> PresentEditorHistoryCommit returns is_merge = true + compact merge_summary
+  -> QML renders merge title + secondary provenance well, no before/after value line
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `HistoryProjectionPublishesDisplayNameBeforeValueAndAfterValue` | `EditorSessionHistoryPortTest` | PASS |
+| `HistoryProjectionMarksOnlyWorkingHeadCurrentAndIncludesRedoSuffix` | `EditorSessionHistoryPortTest` | PASS |
+| `EditorHistoryCommitPresentationTest.FormatsNumericBooleanPathEnumAndCompoundAdjustments` | `EditorSessionHistoryPortTest` | PASS |
+| `NonCurrentCardsRenderBeforeAfterValueText` | `EditorHistoryTransactionsPanelQmlTest` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionHistoryPortTest EditorHistoryTransactionsPanelQmlTest
+ctest --test-dir build/debug -R "HistoryProjectionPublishesDisplayNameBeforeValueAndAfterValue|HistoryProjectionMarksOnlyWorkingHeadCurrentAndIncludesRedoSuffix|FormatsNumericBooleanPathEnumAndCompoundAdjustments|NonCurrentCardsRenderBeforeAfterValueText" --output-on-failure
+```
+
+Suite totals: port 3/3 + QML 5/5 passed (0 failed, 0 skipped).
+
+**Post-record amendment (2026-07-27):** the original record over-claimed the QML value line.
+`HistoryProjectionPublishesDisplayNameBeforeValueAndAfterValue` only inspects the head commit,
+so it did not catch that non-current (Applied/Future) transaction cards rendered an empty value
+line: the `editorHistoryCommitValue` Label used a multi-statement JS-block `text` binding
+(`qsTr("%1 → %2").arg(before, after)`) that did not re-evaluate for non-head delegates, even though
+the delegate's `transactionBefore/After/Delta` properties were populated. Fix: bind `text` directly
+to `transactionDelegate.transactionDelta`, the authoritative `delta_text` the presentation helper
+already computes ("0 → +12", "0 → +0.35", after-only, On/Off). Added
+`NonCurrentCardsRenderBeforeAfterValueText` as a regression test asserting the contrast card shows
+"0 → +12" and the exposure card shows "0 → +0.35". Verified: `EditorHistoryTransactionsPanelQmlTest`
+5/5, `EditorVersionsPanelQmlTest` 8/8, and the Phase 2 port unit tests 3/3 still pass; `alcedo_main`
+rebuilt at 2026-07-27 11:24 with the fixed QML embedded.
+
+**Checklist / exit condition:** all met.
+
+- [x] names are user-facing and capitalized (asserted: Exposure, LUT, ODT, Crop / Rotate, Merge)
+- [x] before/after values are present for every supported adjustment (numeric, boolean, path, enum,
+  compound) — now asserted for non-current cards too via `NonCurrentCardsRenderBeforeAfterValueText`
+- [x] exactly one commit card has the white current outline (`current_count == 1`; QML
+  `border.color = root.colText` for the current row, `appTheme.cardBorderColor` otherwise)
+- [x] no QML color, spacing, radius, type, or icon-size literal is introduced — every color, space,
+  radius, font family/size/weight, and icon source resolves through `appTheme` tokens or the
+  passed-in `theme`. The single `spacing: 0` in the history `ListView` is a structural no-op between
+  delegates; the visible row gap comes from `appTheme.spaceSm` inside the delegate height, matching
+  existing list patterns.
+
+**LOC note (grill-code-review):**
+
+| File | LOC |
+| --- | ---: |
+| `editor_history_types.hpp` | 80 |
+| `editor_history_commit_presentation.hpp` | 58 |
+| `editor_history_commit_presentation.cpp` | 762 |
+| `editor_history_models.hpp` | 144 |
+| `editor_history_models.cpp` | 280 |
+| `EditorHistoryTransactionsPanel.qml` | 514 |
+| `editor_session_history_port.cpp` | 1297 |
+| `editor_session_history_port_test.cpp` | 473 |
+| `editor_history_transactions_panel_qml_test.cpp` | 233 |
+
+`editor_session_history_port.cpp` (1297 LOC) exceeds the ~1000 LOC guardrail the plan sets for it
+("do not add UI formatting; extract pure projection/presentation work"). Phase 2 satisfies that
+direction: the port fills raw projection data only and the pure presentation helper
+(`editor_history_commit_presentation.cpp`, 762 LOC) owns payload-to-display conversion, unit-testable
+without the session, graph, pipeline, or QML engine. The port's growth is the read-only projection
+plus the Phase 3 `MoveHeadToCommit` plumbing layered on the same file.
+
+**Remaining gaps:** none for Phase 2 after the post-record amendment. The presentation helper's
+`OperatorDisplayName` / `OperatorIconResource` switches mirror the legacy `history_cards.cpp` maps;
+a drift test covers the known mappings, and consolidating the two switches is deferred to a later
+cleanup pass (same note as the P1 record). Real-RAW end-to-end qualification is Phase 7, not Phase 2.
+
 ### Phase 3 — implement one-operation history jumps [DONE: mid-apply failure parity with Undo/Redo]
 
 Files:

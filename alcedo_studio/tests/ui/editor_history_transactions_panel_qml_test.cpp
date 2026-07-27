@@ -203,5 +203,31 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest,
             QStringLiteral("branchFromCommit"));
 }
 
+TEST_F(EditorHistoryTransactionsPanelQmlTest,
+       NonCurrentCardsRenderBeforeAfterValueText) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenHistoryPage();
+  // Fixture seeds merge(Current) + contrast(Applied) + exposure(Applied). Every
+  // non-current edit card must render its before/after value line, not only the
+  // head. Regression: the value label previously stayed empty for non-current
+  // cards because the JS-block text binding did not re-evaluate; it now binds
+  // directly to the authoritative delta_text the presentation helper computes.
+  for (auto* delegate : HistoryCards()) {
+    if (delegate->property("mergeTransaction").toBool()) continue;
+    if (delegate->property("currentTransaction").toBool()) continue;
+    auto* value_label =
+        delegate->findChild<QQuickItem*>(QStringLiteral("editorHistoryCommitValue"));
+    ASSERT_NE(value_label, nullptr);
+    const QString text = value_label->property("text").toString();
+    EXPECT_FALSE(text.isEmpty()) << "non-current edit card missing before/after value text";
+    const QString name = delegate->property("transactionDisplayName").toString();
+    if (name == QStringLiteral("Contrast")) {
+      EXPECT_EQ(text, QStringLiteral("0 \u2192 +12")) << "contrast card value line";
+    } else if (name == QStringLiteral("Exposure")) {
+      EXPECT_EQ(text, QStringLiteral("0 \u2192 +0.35")) << "exposure card value line";
+    }
+  }
+}
+
 }  // namespace
 }  // namespace alcedo::ui::test

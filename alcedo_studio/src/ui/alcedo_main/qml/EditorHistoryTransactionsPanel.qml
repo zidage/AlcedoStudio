@@ -438,18 +438,7 @@ Item {
                                 objectName: "editorHistoryCommitValue"
                                 Layout.fillWidth: true
                                 visible: !transactionDelegate.mergeTransaction
-                                text: {
-                                    if (transactionDelegate.transactionBefore.length > 0
-                                            && transactionDelegate.transactionAfter.length > 0) {
-                                        return qsTr("%1 \u2192 %2")
-                                            .arg(transactionDelegate.transactionBefore,
-                                                 transactionDelegate.transactionAfter)
-                                    }
-                                    if (transactionDelegate.transactionAfter.length > 0) {
-                                        return transactionDelegate.transactionAfter
-                                    }
-                                    return transactionDelegate.transactionDelta
-                                }
+                                text: transactionDelegate.transactionDelta
                                 color: root.colMuted
                                 elide: Text.ElideRight
                                 font.family: appTheme.dataFontFamily
