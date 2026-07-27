@@ -10,6 +10,9 @@
 
 #include <QDebug>
 #include <QMetaObject>
+#include "utils/diagnostics/app_logging.hpp"
+
+using alcedo::diag::editorPresentLog;
 
 namespace alcedo::editor_rhi {
 
@@ -157,17 +160,17 @@ auto LeaseFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain) -> 
     // and this producer resumes from that explicit result without polling.
     item_->broker()->NoteTargetRequest(request);
     item_->requestPresentUpdate();
-    qInfo("[EditorPresent] producer waiting for native target %dx%d image=%llu generation=%llu",
+    qCDebug(editorPresentLog, "[EditorPresent] producer waiting for native target %dx%d image=%llu generation=%llu",
           request.dimensions.width, request.dimensions.height,
           static_cast<unsigned long long>(request.image_identity),
           static_cast<unsigned long long>(request.image_generation));
     lease = item_->broker()->WaitAcquireWritableTarget(request);
     if (!lease.has_value()) {
-      qWarning("[EditorPresent] native target handshake failed %dx%d", request.dimensions.width,
+      qCWarning(editorPresentLog, "[EditorPresent] native target handshake failed %dx%d", request.dimensions.width,
                request.dimensions.height);
       return {};
     }
-    qInfo("[EditorPresent] producer acquired native target %dx%d", request.dimensions.width,
+    qCDebug(editorPresentLog, "[EditorPresent] producer acquired native target %dx%d", request.dimensions.width,
           request.dimensions.height);
   }
 
@@ -261,7 +264,7 @@ void LeaseFrameSink::NotifyFrameReady() {
   }
   if (item_) {
     if (item_->submitCompletedFrame(frame)) {
-      qWarning("[EditorPresent] submitted frame request=%llu image=%llu generation=%llu",
+      qCDebug(editorPresentLog, "[EditorPresent] submitted frame request=%llu image=%llu generation=%llu",
                static_cast<unsigned long long>(frame.presentation_request_id),
                static_cast<unsigned long long>(frame.generation.image_identity),
                static_cast<unsigned long long>(frame.generation.image_generation));

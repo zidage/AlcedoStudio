@@ -20,6 +20,9 @@
 #include "ui/edit_viewer/viewport_mapper.hpp"
 #include "ui/editor_rhi/native_resource_counters.hpp"
 
+#include "utils/diagnostics/app_logging.hpp"
+
+using alcedo::diag::editorPresentLog;
 namespace alcedo::editor_rhi {
 namespace {
 
@@ -206,7 +209,7 @@ void EditorViewportRenderer::initialize(QRhiCommandBuffer* /*command_buffer*/) {
     rhi_     = next_rhi;
     backend_ = BackendForRhi(rhi_);
     adapter_ = MakeLeaseTargetAdapter(backend_);
-    qInfo("[EditorPresent] render thread initialized backend=%s", ToString(backend_));
+    qCDebug(editorPresentLog, "[EditorPresent] render thread initialized backend=%s", ToString(backend_));
     if (item_) {
       item_->setBackendName(QString::fromUtf8(ToString(backend_)));
       item_->setStatusText(QStringLiteral("render thread initialized (%1)")
@@ -219,7 +222,7 @@ void EditorViewportRenderer::initialize(QRhiCommandBuffer* /*command_buffer*/) {
 void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
   item_ = qobject_cast<EditorViewportItem*>(item);
   if (!item_) {
-    qWarning("[EditorPresent] synchronize received incompatible item");
+    qCWarning(editorPresentLog, "[EditorPresent] synchronize received incompatible item");
     return;
   }
   if (present_queue_ != item_->present_queue()) {
@@ -360,7 +363,7 @@ void EditorViewportRenderer::fulfillTargetRequests() {
   if (requests.empty()) {
     return;
   }
-  qInfo("[EditorPresent] fulfilling %zu target request(s), image=%llu generation=%llu",
+  qCDebug(editorPresentLog, "[EditorPresent] fulfilling %zu target request(s), image=%llu generation=%llu",
         requests.size(), static_cast<unsigned long long>(image_identity_),
         static_cast<unsigned long long>(image_generation_));
 
@@ -406,7 +409,7 @@ void EditorViewportRenderer::fulfillTargetRequests() {
                                         RoleToLeaseLayer(request.frame_role));
     if (!lease.has_value()) {
       target_error_ = adapter_->lastError();
-      qWarning("[EditorPresent] target allocation failed %dx%d: %s", request.width, request.height,
+      qCWarning(editorPresentLog, "[EditorPresent] target allocation failed %dx%d: %s", request.width, request.height,
                target_error_.c_str());
       present_queue_->FailSizeRequest(request);
       if (item_) {
@@ -437,14 +440,14 @@ void EditorViewportRenderer::fulfillTargetRequests() {
         }
       }
       if (!published) {
-        qWarning("[EditorPresent] queue rejected target %dx%d", request.width, request.height);
+        qCWarning(editorPresentLog, "[EditorPresent] queue rejected target %dx%d", request.width, request.height);
         adapter_->DestroyTarget(*lease);
         present_queue_->FailSizeRequest(request);
         continue;
       }
     }
     owned_natives_.push_back(*lease);
-    qInfo("[EditorPresent] published native target %dx%d slot=%d", request.width, request.height,
+    qCDebug(editorPresentLog, "[EditorPresent] published native target %dx%d slot=%d", request.width, request.height,
           slot_index);
     target_error_.clear();
     content_dirty_ = true;
@@ -463,7 +466,7 @@ void EditorViewportRenderer::consumeDirectFrames() {
     if (!frame.has_value()) {
       continue;
     }
-    qInfo("[EditorPresent] consuming frame request=%llu image=%llu generation=%llu size=%dx%d",
+    qCDebug(editorPresentLog, "[EditorPresent] consuming frame request=%llu image=%llu generation=%llu size=%dx%d",
           static_cast<unsigned long long>(frame->slot.preview_metadata.presentation_request_id),
           static_cast<unsigned long long>(frame->slot.image_identity),
           static_cast<unsigned long long>(frame->slot.image_generation), frame->slot.width,
@@ -475,7 +478,7 @@ void EditorViewportRenderer::consumeDirectFrames() {
         rhi_->newTexture(QRhiTexture::RGBA32F, QSize(frame->slot.width, frame->slot.height), 1);
     if (!texture ||
         !texture->createFrom({static_cast<quint64>(frame->slot.native.native_handle), 0})) {
-      qWarning("[EditorPresent] QRhi import failed for request=%llu handle=%llu",
+      qCWarning(editorPresentLog, "[EditorPresent] QRhi import failed for request=%llu handle=%llu",
                static_cast<unsigned long long>(
                    frame->slot.preview_metadata.presentation_request_id),
                static_cast<unsigned long long>(frame->slot.native.native_handle));
@@ -521,7 +524,7 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
       continue;
     }
     const FrameRole role = frame.preview_metadata.frame_role;
-    qInfo("[EditorPresent] consuming Metal import request=%llu image=%llu generation=%llu "
+    qCDebug(editorPresentLog, "[EditorPresent] consuming Metal import request=%llu image=%llu generation=%llu "
           "size=%dx%d handle=%llu",
           static_cast<unsigned long long>(frame.preview_metadata.presentation_request_id),
           static_cast<unsigned long long>(frame.image_identity),
@@ -555,7 +558,7 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
     if (!texture ||
         !texture->createFrom(
             {static_cast<quint64>(frame.texture_handle), frame.native_layout})) {
-      qWarning("[EditorPresent] QRhi Metal import failed for request=%llu handle=%llu",
+      qCWarning(editorPresentLog, "[EditorPresent] QRhi Metal import failed for request=%llu handle=%llu",
                static_cast<unsigned long long>(frame.preview_metadata.presentation_request_id),
                static_cast<unsigned long long>(frame.texture_handle));
       destroyResource(texture);

@@ -16,6 +16,9 @@
 #include "ui/editor_rhi/direct_frame_sink.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_viewport_renderer.hpp"
+#include "utils/diagnostics/app_logging.hpp"
+
+using alcedo::diag::editorPresentLog;
 
 namespace alcedo::editor_rhi {
 
@@ -241,7 +244,7 @@ void EditorViewportItem::requestPresentUpdateOnGuiThread() {
 auto EditorViewportItem::createRenderer() -> QQuickRhiItemRenderer* {
   // Renderer destruction must not shut down the present queue; the item keeps
   // it for scene-graph recreation.
-  qInfo("[EditorPresent] creating QQuickRhiItem renderer image=%llu generation=%llu",
+  qCDebug(editorPresentLog, "[EditorPresent] creating QQuickRhiItem renderer image=%llu generation=%llu",
         static_cast<unsigned long long>(imageIdentity()),
         static_cast<unsigned long long>(imageGeneration()));
   return new EditorViewportRenderer();

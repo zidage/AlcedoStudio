@@ -14,6 +14,9 @@
 #include <QThread>
 
 #include <utility>
+#include "utils/diagnostics/app_logging.hpp"
+
+using alcedo::diag::editorPresentLog;
 
 namespace alcedo::editor_rhi {
 
@@ -108,15 +111,15 @@ auto DirectFrameSink::ReserveWritableSlot(int width, int height) -> std::optiona
   }
   queue->NoteSizeRequest(request);
   item_->requestPresentUpdate();
-  qInfo("[EditorPresent] producer waiting for native target %dx%d image=%llu generation=%llu",
+  qCDebug(editorPresentLog, "[EditorPresent] producer waiting for native target %dx%d image=%llu generation=%llu",
         width, height, static_cast<unsigned long long>(image_identity),
         static_cast<unsigned long long>(image_generation));
   auto slot = queue->WaitForWritableSlot(request);
   if (!slot.has_value()) {
-    qWarning("[EditorPresent] native target handshake failed %dx%d", width, height);
+    qCWarning(editorPresentLog, "[EditorPresent] native target handshake failed %dx%d", width, height);
     return std::nullopt;
   }
-  qInfo("[EditorPresent] producer acquired native target %dx%d slot=%d", width, height, *slot);
+  qCDebug(editorPresentLog, "[EditorPresent] producer acquired native target %dx%d slot=%d", width, height, *slot);
   return slot;
 }
 
@@ -352,7 +355,7 @@ void DirectFrameSink::NotifyFrameReady() {
     return;
   }
   item_->present_queue()->NotifyReady(slot_index, mode, metadata);
-  qInfo("[EditorPresent] submitted frame request=%llu image=%llu generation=%llu slot=%d",
+  qCDebug(editorPresentLog, "[EditorPresent] submitted frame request=%llu image=%llu generation=%llu slot=%d",
         static_cast<unsigned long long>(metadata.presentation_request_id),
         static_cast<unsigned long long>(item_->imageIdentity()),
         static_cast<unsigned long long>(item_->imageGeneration()), slot_index);
@@ -366,11 +369,11 @@ void DirectFrameSink::SubmitHostFrame(const ViewerFrame&) {
 #ifdef HAVE_METAL
 void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
   if (!frame || !item_) {
-    qWarning("[EditorPresent] SubmitMetalFrame rejected: invalid frame or item");
+    qCWarning(editorPresentLog, "[EditorPresent] SubmitMetalFrame rejected: invalid frame or item");
     return;
   }
   if (!IsMetalPresentPath()) {
-    qWarning("[EditorPresent] SubmitMetalFrame ignored: active backend is not Metal");
+    qCWarning(editorPresentLog, "[EditorPresent] SubmitMetalFrame ignored: active backend is not Metal");
     return;
   }
 
@@ -404,7 +407,7 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
     imported.sequence = ++imported_sequence_;
     const auto layer = LayerIndexForRole(imported.preview_metadata.frame_role);
     if (pending_imported_[layer].has_value()) {
-      qInfo("[EditorPresent] superseding pending Metal import role=%d request=%llu",
+      qCDebug(editorPresentLog, "[EditorPresent] superseding pending Metal import role=%d request=%llu",
             static_cast<int>(imported.preview_metadata.frame_role),
             static_cast<unsigned long long>(
                 pending_imported_[layer]->preview_metadata.presentation_request_id));
@@ -427,7 +430,7 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
     }
   }
 
-  qInfo("[EditorPresent] queued Metal import request=%llu image=%llu generation=%llu size=%dx%d "
+  qCDebug(editorPresentLog, "[EditorPresent] queued Metal import request=%llu image=%llu generation=%llu size=%dx%d "
         "handle=%llu (zero-copy)",
         static_cast<unsigned long long>(request_id),
         static_cast<unsigned long long>(item_->imageIdentity()),
