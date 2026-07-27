@@ -38,8 +38,12 @@ auto EditorSessionTaskPort::BeginTask(const std::string& name, sl_element_id_t e
   BackgroundTaskSnapshot snapshot;
   snapshot.kind_             = BackgroundTaskKind::EditorSave;
   snapshot.state_            = BackgroundTaskState::Running;
-  snapshot.title_            = QString::fromUtf8(name.empty() ? "editor_save" : name.c_str());
-  snapshot.detail_           = QObject::tr("Saving editor changes");
+  // The internal task name "editor_save" is never user-facing; publish a
+  // localized Editor Save title so the bar/popover never surface the key.
+  snapshot.title_  = (name.empty() || name == "editor_save")
+                         ? QObject::tr("Editor Save")
+                         : QString::fromUtf8(name.c_str());
+  snapshot.detail_ = QObject::tr("Saving editor changes");
   snapshot.progress_percent_ = -1;
   snapshot.cancelable_       = false;
   snapshot.shutdown_policy_  = BackgroundTaskShutdownPolicy::WaitForFinish;

@@ -21,6 +21,7 @@
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
+#include "ui/alcedo_main/album_backend/editor_history_commit_presentation.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -36,6 +37,23 @@ auto MakeMiniGitPipelineGuard(sl_element_id_t element_id)
   guard->transaction_chain_hash_   = alcedo::ComputeRootChainHash(guard->root_id_);
   guard->working_head_commit_hash_ = std::nullopt;
   return guard;
+}
+
+auto CommitSettled(EditorSessionHistoryPort& port, const alcedo::EditorHistoryGuardHandle& handle,
+                   const std::string& field, const std::string& after_json, std::string* error)
+    -> bool {
+  alcedo::EditorAdjustmentPatch preview{field, after_json, false};
+  if (!port.CaptureAdjustmentBeforePreview(handle, preview, error)) return false;
+  alcedo::EditorAdjustmentPatch settled{field, after_json, true};
+  return port.CommitAdjustment(handle, settled, error);
+}
+
+auto PatchValue(const alcedo::EditorRenderAdjustmentSnapshot& snapshot, const std::string& field)
+    -> std::string {
+  for (const auto& patch : snapshot.patches) {
+    if (patch.field_key == field) return patch.params_json;
+  }
+  return {};
 }
 
 class EditorSessionHistoryPortTest : public ::testing::Test {
@@ -279,6 +297,176 @@ TEST_F(EditorSessionHistoryPortTest, ProductionCaptureValueReachesCheckpointStor
   // First capture remains valid after the second (no Take/rendezvous).
   EXPECT_EQ(first.get(), first_raw);
   EXPECT_EQ(first->journal_records.size(), second->journal_records.size());
+}
+
+TEST_F(EditorSessionHistoryPortTest, HistoryProjectionPublishesDisplayNameBeforeValueAndAfterValue) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  ASSERT_TRUE(CommitSettled(history_, handle, "exposure", R"({"exposure":0.35})", &error)) << error;
+  ASSERT_TRUE(CommitSettled(history_, handle, "exposure", R"({"exposure":0.46})", &error)) << error;
+
+  alcedo::EditorHistorySnapshot snapshot;
+  ASSERT_TRUE(history_.ReadHistorySnapshot(handle, &snapshot, &error)) << error;
+  ASSERT_EQ(snapshot.commits.size(), 2u);
+  // Newest-first: the head commit is the second exposure edit.
+  const auto& head = snapshot.commits.front();
+  EXPECT_EQ(head.field_key, "exposure");
+  EXPECT_EQ(head.position, alcedo::EditorHistoryTimelinePosition::Current);
+  EXPECT_NE(head.before_value_json.find("0.35"), std::string::npos);
+  EXPECT_NE(head.after_value_json.find("0.46"), std::string::npos);
+
+  const auto pres = PresentEditorHistoryCommit(head.field_key, head.before_value_json,
+                                               head.after_value_json, head.before_enabled,
+                                               head.after_enabled, head.kind, head.merge_field_keys);
+  EXPECT_EQ(pres.display_name.toStdString(), "Exposure");
+  EXPECT_EQ(pres.before_text.toStdString(), "+0.35");
+  EXPECT_EQ(pres.after_text.toStdString(), "+0.46");
+  EXPECT_FALSE(pres.icon_key.isEmpty());
+  EXPECT_FALSE(pres.is_merge);
+}
+
+TEST_F(EditorSessionHistoryPortTest,
+       HistoryProjectionMarksOnlyWorkingHeadCurrentAndIncludesRedoSuffix) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  ASSERT_TRUE(CommitSettled(history_, handle, "exposure", R"({"exposure":0.35})", &error)) << error;
+  ASSERT_TRUE(CommitSettled(history_, handle, "contrast", R"({"contrast":12.0})", &error)) << error;
+  ASSERT_TRUE(CommitSettled(history_, handle, "saturation", R"({"saturation":8.0})", &error)) << error;
+  // Move back one hop: head = contrast, saturation enters the redo suffix.
+  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
+
+  alcedo::EditorHistorySnapshot snapshot;
+  ASSERT_TRUE(history_.ReadHistorySnapshot(handle, &snapshot, &error)) << error;
+  EXPECT_TRUE(snapshot.can_undo);
+  EXPECT_TRUE(snapshot.can_redo);
+  std::size_t current_count = 0;
+  std::size_t future_count  = 0;
+  std::size_t applied_count = 0;
+  alcedo::commit_hash_t current_hash;
+  for (const auto& row : snapshot.commits) {
+    switch (row.position) {
+      case alcedo::EditorHistoryTimelinePosition::Current:
+        ++current_count;
+        current_hash = row.commit_hash;
+        break;
+      case alcedo::EditorHistoryTimelinePosition::Future:
+        ++future_count;
+        break;
+      case alcedo::EditorHistoryTimelinePosition::Applied:
+        ++applied_count;
+        break;
+    }
+  }
+  EXPECT_EQ(current_count, 1u);
+  EXPECT_EQ(future_count, 1u);
+  EXPECT_EQ(applied_count, 1u);
+  // The single Current row is the actual working head (contrast), not the root.
+  ASSERT_TRUE(guard_->working_head_commit_hash_.has_value());
+  EXPECT_EQ(current_hash, *guard_->working_head_commit_hash_);
+}
+
+TEST_F(EditorSessionHistoryPortTest,
+       MoveHeadToAncestorThenRedoDescendantPublishesOneFinalSnapshot) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  ASSERT_TRUE(CommitSettled(history_, handle, "exposure", R"({"exposure":0.35})", &error)) << error;
+  ASSERT_TRUE(CommitSettled(history_, handle, "contrast", R"({"contrast":12.0})", &error)) << error;
+  ASSERT_TRUE(CommitSettled(history_, handle, "saturation", R"({"saturation":8.0})", &error)) << error;
+  // Walk the first-parent chain (root -> head) to find the ancestor and head hashes.
+  const auto chain = guard_->commit_graph_->FirstParentChain(guard_->working_head_commit_hash_);
+  ASSERT_FALSE(chain.empty());
+  const auto exposure_id   = guard_->commit_graph_->GetCommit(chain.front()).GetCommitHash();
+  const auto saturation_id = guard_->commit_graph_->GetCommit(chain.back()).GetCommitHash();
+
+  auto count_positions = [](const alcedo::EditorHistorySnapshot& s) {
+    struct Counts {
+      std::size_t current = 0, future = 0, applied = 0;
+    } counts;
+    for (const auto& row : s.commits) {
+      switch (row.position) {
+        case alcedo::EditorHistoryTimelinePosition::Current: ++counts.current; break;
+        case alcedo::EditorHistoryTimelinePosition::Future: ++counts.future; break;
+        case alcedo::EditorHistoryTimelinePosition::Applied: ++counts.applied; break;
+      }
+    }
+    return counts;
+  };
+
+  // Backward multi-step: head -> exposure in one operation. The redo suffix
+  // keeps contrast + saturation as Future rows.
+  ASSERT_TRUE(history_.MoveHeadToCommit(handle, exposure_id, &error)) << error;
+  EXPECT_EQ(guard_->working_head_commit_hash_.value(), exposure_id);
+  alcedo::EditorHistorySnapshot backward_projection;
+  ASSERT_TRUE(history_.ReadHistorySnapshot(handle, &backward_projection, &error)) << error;
+  const auto backward_counts = count_positions(backward_projection);
+  EXPECT_EQ(backward_counts.current, 1u);
+  EXPECT_EQ(backward_counts.future, 2u);
+  EXPECT_EQ(backward_counts.applied, 0u);
+  alcedo::EditorRenderAdjustmentSnapshot backward_snapshot;
+  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &backward_snapshot, &error)) << error;
+  EXPECT_EQ(PatchValue(backward_snapshot, "exposure"), R"({"exposure":0.35})");
+
+  // Forward multi-step: head -> saturation in one operation, consuming the suffix.
+  ASSERT_TRUE(history_.MoveHeadToCommit(handle, saturation_id, &error)) << error;
+  EXPECT_EQ(guard_->working_head_commit_hash_.value(), saturation_id);
+  alcedo::EditorHistorySnapshot forward_projection;
+  ASSERT_TRUE(history_.ReadHistorySnapshot(handle, &forward_projection, &error)) << error;
+  const auto forward_counts = count_positions(forward_projection);
+  EXPECT_EQ(forward_counts.current, 1u);
+  EXPECT_EQ(forward_counts.future, 0u);
+  EXPECT_EQ(forward_counts.applied, 2u);
+  alcedo::EditorRenderAdjustmentSnapshot forward_snapshot;
+  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &forward_snapshot, &error)) << error;
+  EXPECT_EQ(PatchValue(forward_snapshot, "saturation"), R"({"saturation":8.0})");
+  EXPECT_EQ(PatchValue(forward_snapshot, "contrast"), R"({"contrast":12.0})");
+}
+
+TEST(EditorHistoryCommitPresentationTest, FormatsNumericBooleanPathEnumAndCompoundAdjustments) {
+  // Numeric slider.
+  auto exposure = PresentEditorHistoryCommit("exposure", R"({"exposure":0.0})", R"({"exposure":0.35})",
+                                              true, true, alcedo::EditCommitKind::kEdit);
+  EXPECT_EQ(exposure.display_name.toStdString(), "Exposure");
+  EXPECT_EQ(exposure.before_text.toStdString(), "0");
+  EXPECT_EQ(exposure.after_text.toStdString(), "+0.35");
+
+  // Boolean toggle (RAW highlights reconstruct).
+  auto raw =
+      PresentEditorHistoryCommit("raw_decode", R"({"raw":{"highlights_reconstruct":false}})",
+                                 R"({"raw":{"highlights_reconstruct":true}})", true, true,
+                                 alcedo::EditCommitKind::kEdit);
+  // Path (LUT file).
+  auto lut = PresentEditorHistoryCommit("lut", R"({"ocio_lmt":"C:/looks/old.cube"})",
+                                        R"({"ocio_lmt":"C:/looks/teal.cube"})", true, true,
+                                        alcedo::EditCommitKind::kEdit);
+  EXPECT_EQ(lut.display_name.toStdString(), "LUT");
+  EXPECT_EQ(lut.before_text.toStdString(), "old.cube");
+  EXPECT_EQ(lut.after_text.toStdString(), "teal.cube");
+
+  // Enum (ODT output target).
+  auto odt = PresentEditorHistoryCommit(
+      "odt", R"({"odt":{"encoding_space":"REC709","encoding_eotf":"GAMMA_2_2","peak_luminance":1000}})",
+      R"({"odt":{"encoding_space":"DISPLAY_P3","encoding_eotf":"GAMMA_2_4","peak_luminance":1000}})",
+      true, true, alcedo::EditCommitKind::kEdit);
+  EXPECT_EQ(odt.display_name.toStdString(), "ODT");
+  EXPECT_EQ(odt.before_text.toStdString(), "Rec.709 / Gamma 2.2");
+  EXPECT_EQ(odt.after_text.toStdString(), "Display P3 / Gamma 2.4");
+
+  // Compound (crop/rotate angle).
+  auto crop = PresentEditorHistoryCommit("crop_rotate", R"({"crop_rotate":{"angle_degrees":0.0}})",
+                                         R"({"crop_rotate":{"angle_degrees":12.0}})", true, true,
+                                         alcedo::EditCommitKind::kEdit);
+  EXPECT_EQ(crop.display_name.toStdString(), "Crop / Rotate");
+  EXPECT_EQ(crop.after_text.toStdString(), "+12\u00b0");
+
+  // Merge commit provenance.
+  auto merge = PresentEditorHistoryCommit("merge", "", "", true, true,
+                                          alcedo::EditCommitKind::kMerge, {"exposure", "contrast"});
+  EXPECT_TRUE(merge.is_merge);
+  EXPECT_EQ(merge.display_name.toStdString(), "Merge");
+  EXPECT_EQ(merge.merge_summary.toStdString(), "Resolved 2 fields");
 }
 
 }  // namespace

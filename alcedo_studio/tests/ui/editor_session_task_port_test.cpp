@@ -42,5 +42,27 @@ TEST(EditorSessionTaskPortTest, MissingControllerStillReturnsLocalTaskId) {
   EXPECT_NO_THROW(port.EndTask(task_id, false, "failed"));
 }
 
+TEST(EditorSessionTaskPortTest, EditorSaveTaskUsesUserFacingTitleAndShowsTerminalFailureDetail) {
+  BackgroundTaskController tasks;
+  EditorSessionTaskPort    port(&tasks);
+
+  const auto task_id = port.BeginTask("editor_save", 42);
+  ASSERT_NE(task_id, 0u);
+  ASSERT_EQ(tasks.Tasks().size(), 1);
+  const auto running = tasks.Tasks().first().toMap();
+  // The internal "editor_save" key must never reach QML; the title is localized.
+  EXPECT_EQ(running.value("title").toString(), QStringLiteral("Editor Save"));
+  EXPECT_NE(running.value("title").toString(), QStringLiteral("editor_save"));
+  EXPECT_EQ(running.value("kind").toString(), QStringLiteral("editorSave"));
+
+  const QString backend_error = QStringLiteral("DuckDB materialize failed: disk full");
+  port.EndTask(task_id, false, backend_error.toStdString());
+  ASSERT_EQ(tasks.Tasks().size(), 1);
+  const auto failed = tasks.Tasks().first().toMap();
+  EXPECT_EQ(failed.value("state").toString(), QStringLiteral("failed"));
+  // The terminal failure detail is the exact backend message, shown in the bar.
+  EXPECT_EQ(failed.value("detail").toString(), backend_error);
+}
+
 }  // namespace
 }  // namespace alcedo::ui

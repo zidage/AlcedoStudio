@@ -569,6 +569,90 @@ auto MiniGitWorkingHistory::Redo() -> MiniGitHeadMoveResult {
   return result;
 }
 
+auto MiniGitWorkingHistory::MoveHeadToCommit(const commit_hash_t& target, std::string* error)
+    -> MiniGitHeadMoveResult {
+  MiniGitHeadMoveResult result;
+  const auto            source_head = working_head();
+  if (source_head == target) {
+    return result;  // No-op: target is already the working head.
+  }
+
+  // Backward: target is an ancestor of the working head on the first-parent
+  // chain. FirstParentChain returns root->head order, so the commits between
+  // target and the head are the suffix after target.
+  if (source_head.has_value()) {
+    const auto chain    = graph_->FirstParentChain(source_head);
+    const auto target_it = std::find(chain.begin(), chain.end(), target);
+    if (target_it != chain.end()) {
+      std::vector<commit_hash_t> traversed_hashes(chain.begin() + (target_it - chain.begin()) + 1,
+                                                  chain.end());
+      // traversed_hashes is [target.child, ..., head] in root->head order; reverse to
+      // [head, ..., target.child] so the caller applies before-values newest-first and
+      // target.child lands at the back() of the redo suffix.
+      std::reverse(traversed_hashes.begin(), traversed_hashes.end());
+      result.backward = true;
+      for (const auto& hash : traversed_hashes) {
+        result.traversed_commits.push_back(graph_->GetCommit(hash));
+      }
+      result.selected_commit = graph_->GetCommit(target);
+
+      auto move = AppendHeadMove(head_commit_hash_t{target}, graph_->ChainHashForHead(target),
+                                 nullptr);
+      if (!move.error.empty()) {
+        result.error             = move.error;
+        result.traversed_commits.clear();
+        result.selected_commit.reset();
+        return result;
+      }
+      for (const auto& hash : traversed_hashes) {
+        redo_stack_.push_back(hash);
+      }
+      result.moved = true;
+      return result;
+    }
+  }
+
+  // Forward: target must be a member of the in-memory redo suffix. The suffix
+  // is stored furthest-future-first with back() the immediate child of the
+  // head; the apply order is therefore back()->target (oldest first).
+  const auto redo_it = std::find(redo_stack_.begin(), redo_stack_.end(), target);
+  if (redo_it != redo_stack_.end()) {
+    std::vector<commit_hash_t> traversed_hashes(redo_it, redo_stack_.end());
+    std::reverse(traversed_hashes.begin(), traversed_hashes.end());
+    head_commit_hash_t prev = source_head;
+    for (const auto& hash : traversed_hashes) {
+      const auto& commit = graph_->GetCommit(hash);
+      if (commit.GetFirstParentHash() != prev) {
+        SetError(error, "mini-Git redo suffix is not a contiguous chain to the target commit");
+        return result;
+      }
+      prev = hash;
+    }
+    result.backward = false;
+    for (const auto& hash : traversed_hashes) {
+      result.traversed_commits.push_back(graph_->GetCommit(hash));
+    }
+    result.selected_commit = graph_->GetCommit(target);
+
+    auto move = AppendHeadMove(head_commit_hash_t{target}, graph_->ChainHashForHead(target),
+                               nullptr);
+    if (!move.error.empty()) {
+      result.error             = move.error;
+      result.traversed_commits.clear();
+      result.selected_commit.reset();
+      return result;
+    }
+    // Consume the suffix up to and including target; keep the more-future prefix.
+    redo_stack_.erase(redo_it, redo_stack_.end());
+    result.moved = true;
+    return result;
+  }
+
+  SetError(error,
+           "Commit is not on the active Version's first-parent path or redo suffix");
+  return result;
+}
+
 auto MiniGitWorkingHistory::SelectVersion(const version_ref_id_t& version_id, std::string* error)
     -> bool {
   try {

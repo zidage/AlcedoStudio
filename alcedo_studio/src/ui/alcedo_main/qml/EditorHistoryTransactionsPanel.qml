@@ -200,8 +200,19 @@ Item {
             objectName: "editorHistoryStatus"
             Layout.fillWidth: true
             visible: text.length > 0
-            text: root.statusMessage
-            color: root.colMuted
+            // Surface the typed operation result (pending/success/error) from the
+            // session controller. A paste/merge status takes precedence; otherwise
+            // the last history operation message is shown, red on failure.
+            text: {
+                if (root.statusMessage.length > 0) return root.statusMessage
+                if (root.editorSession && root.editorSession.lastHistoryMessage
+                        && root.editorSession.lastHistoryMessage.length > 0) {
+                    return root.editorSession.lastHistoryMessage
+                }
+                return ""
+            }
+            color: (root.editorSession && root.editorSession.lastHistoryFailed)
+                   ? appTheme.dangerColor : root.colMuted
             elide: Text.ElideRight
             font.family: appTheme.uiFontFamily
             font.pixelSize: appTheme.fontSizeCaption
@@ -235,13 +246,34 @@ Item {
                     objectName: "editorHistoryTransactionDelegate"
                     width: historyList.width
                     property bool currentTransaction: Boolean(current)
-                    property bool mergeTransaction: String(commitKind || "") === "merge"
-                    property string transactionField: String(fieldKey || "")
-                    property string transactionLabel: String(label || "")
+                    property bool mergeTransaction: Boolean(isMerge)
                     property string transactionId: String(commitId || "")
+                    property string transactionDisplayName: String(displayName || "")
+                    property string transactionBefore: String(beforeText || "")
+                    property string transactionAfter: String(afterText || "")
+                    property string transactionDelta: String(deltaText || "")
+                    property string transactionPosition: String(timelinePosition || "applied")
+                    property string transactionMergeSummary: String(mergeSummary || "")
                     property string secondParent: String(secondParentId || "")
                     property string transactionTime: root.relativeTime(createdAtNs)
+                    property bool futureRow: transactionPosition === "future"
+                    property bool canMove: root.editorSession && root.editorSession.canEdit
+                                           && transactionId.length > 0 && !currentTransaction
                     height: transactionCard.height + appTheme.spaceSm
+
+                    function activateMove() {
+                        if (transactionDelegate.canMove && root.historyModel) {
+                            root.historyModel.moveHeadToCommit(transactionDelegate.transactionId)
+                        }
+                    }
+
+                    function activateBranch() {
+                        if (root.historyModel && root.editorSession && root.editorSession.canEdit
+                                && transactionDelegate.transactionId.length > 0) {
+                            root.historyModel.branchFromCommit(
+                                transactionDelegate.transactionId, qsTr("Branch"))
+                        }
+                    }
 
                     Rectangle {
                         anchors.left: parent.left
@@ -275,10 +307,8 @@ Item {
                         anchors.leftMargin: appTheme.spaceXl
                         anchors.right: parent.right
                         height: transactionDelegate.mergeTransaction
-                                ? appTheme.spaceXl * 7
-                                : (transactionDelegate.transactionField.length > 0
-                                   ? appTheme.spaceXl * 5
-                                   : appTheme.spaceXl * 4)
+                                ? appTheme.spaceXl * 6
+                                : appTheme.spaceXl * 5
                         radius: appTheme.controlRadiusSmall
                         color: root.colCardSurface
                         property color selectionOutlineColor: transactionDelegate.currentTransaction
@@ -286,6 +316,39 @@ Item {
                         border.width: 1
                         border.color: selectionOutlineColor
                         clip: true
+                        activeFocusOnTab: true
+                        Accessible.role: Accessible.ListItem
+                        Accessible.name: transactionDelegate.transactionDisplayName
+                        Accessible.description: transactionDelegate.transactionDelta.length > 0
+                                                 ? transactionDelegate.transactionDelta
+                                                 : transactionDelegate.transactionId
+                        ToolTip.text: transactionDelegate.transactionId.length > 0
+                                      ? qsTr("Commit %1").arg(transactionDelegate.transactionId)
+                                      : ""
+                        ToolTip.visible: cardMouseArea.containsMouse
+                        ToolTip.delay: 500
+                        Keys.onEnterPressed: {
+                            transactionDelegate.activateMove()
+                            event.accepted = true
+                        }
+                        Keys.onReturnPressed: {
+                            transactionDelegate.activateMove()
+                            event.accepted = true
+                        }
+                        Keys.onSpacePressed: {
+                            transactionDelegate.activateMove()
+                            event.accepted = true
+                        }
+
+                        MouseArea {
+                            id: cardMouseArea
+                            objectName: "editorHistoryCardMouseArea"
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: transactionDelegate.canMove
+                                        ? Qt.PointingHandCursor : Qt.ArrowCursor
+                            onClicked: transactionDelegate.activateMove()
+                        }
 
                         ColumnLayout {
                             anchors.fill: parent
@@ -300,12 +363,13 @@ Item {
                                     objectName: "editorHistoryCommitTitle"
                                     Layout.fillWidth: true
                                     text: transactionDelegate.mergeTransaction
-                                          ? qsTr("Merge · second parent %1")
+                                          ? qsTr("Merge \u00b7 second parent %1")
                                             .arg(transactionDelegate.secondParent.slice(0, 8))
-                                          : (transactionDelegate.transactionLabel.length > 0
-                                             ? transactionDelegate.transactionLabel
+                                          : (transactionDelegate.transactionDisplayName.length > 0
+                                             ? transactionDelegate.transactionDisplayName
                                              : qsTr("Adjustment"))
-                                    color: root.colText
+                                    color: transactionDelegate.futureRow ? root.colMuted
+                                                                         : root.colText
                                     elide: Text.ElideRight
                                     font.family: appTheme.uiFontFamily
                                     font.pixelSize: appTheme.fontSizeTitle
@@ -324,69 +388,74 @@ Item {
                             }
 
                             Label {
+                                objectName: "editorHistoryCommitValue"
                                 Layout.fillWidth: true
-                                text: transactionDelegate.mergeTransaction
-                                      ? qsTr("Resolved changes from the incoming branch.")
-                                      : (transactionDelegate.transactionField.length > 0
-                                         ? qsTr("Applied %1 adjustment.")
-                                           .arg(transactionDelegate.transactionField)
-                                         : qsTr("Committed editor changes."))
+                                visible: !transactionDelegate.mergeTransaction
+                                text: {
+                                    if (transactionDelegate.transactionBefore.length > 0
+                                            && transactionDelegate.transactionAfter.length > 0) {
+                                        return qsTr("%1 \u2192 %2")
+                                            .arg(transactionDelegate.transactionBefore,
+                                                 transactionDelegate.transactionAfter)
+                                    }
+                                    if (transactionDelegate.transactionAfter.length > 0) {
+                                        return transactionDelegate.transactionAfter
+                                    }
+                                    return transactionDelegate.transactionDelta
+                                }
                                 color: root.colMuted
-                                wrapMode: Text.WordWrap
                                 elide: Text.ElideRight
-                                font.family: appTheme.uiFontFamily
+                                font.family: appTheme.dataFontFamily
                                 font.pixelSize: appTheme.fontSizeBody
                             }
 
                             Rectangle {
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: appTheme.spaceXl * 3
+                                Layout.preferredHeight: appTheme.spaceXl * 2
                                 visible: transactionDelegate.mergeTransaction
                                 radius: appTheme.badgeRadius
                                 color: appTheme.bgBaseColor
                                 border.width: 1
                                 border.color: root.colCardBorder
 
-                                Column {
+                                Label {
                                     anchors.fill: parent
                                     anchors.margins: appTheme.spaceSm
-                                    spacing: appTheme.spaceXs
-
-                                    Label {
-                                        width: parent.width
-                                        text: transactionDelegate.transactionField.length > 0
-                                              ? qsTr("Changed field · %1")
-                                                .arg(transactionDelegate.transactionField)
-                                              : qsTr("Changed fields")
-                                        color: root.colText
-                                        elide: Text.ElideRight
-                                        font.family: appTheme.uiFontFamily
-                                        font.pixelSize: appTheme.fontSizeCaption
-                                    }
-
-                                    Label {
-                                        width: parent.width
-                                        text: qsTr("Parent %1")
-                                              .arg(transactionDelegate.secondParent.slice(0, 8))
-                                        color: root.colMuted
-                                        elide: Text.ElideRight
-                                        font.family: appTheme.dataFontFamily
-                                        font.pixelSize: appTheme.fontSizeCaption
-                                    }
+                                    verticalAlignment: Text.AlignVCenter
+                                    text: transactionDelegate.transactionMergeSummary.length > 0
+                                          ? transactionDelegate.transactionMergeSummary
+                                          : qsTr("Resolved incoming adjustments")
+                                    color: root.colText
+                                    elide: Text.ElideRight
+                                    font.family: appTheme.uiFontFamily
+                                    font.pixelSize: appTheme.fontSizeCaption
                                 }
                             }
 
-                            Label {
+                            RowLayout {
                                 Layout.fillWidth: true
-                                text: transactionDelegate.transactionId.length > 0
-                                      ? qsTr("Commit %1")
-                                        .arg(transactionDelegate.transactionId.slice(0, 8))
-                                      : ""
-                                visible: text.length > 0
-                                color: root.colMuted
-                                elide: Text.ElideRight
-                                font.family: appTheme.dataFontFamily
-                                font.pixelSize: appTheme.fontSizeCaption
+                                spacing: appTheme.spaceXs
+
+                                Item { Layout.fillWidth: true }
+
+                                IconActionButton {
+                                    objectName: "editorHistoryBranchButton"
+                                    compact: true
+                                    visible: root.editorSession && root.editorSession.canEdit
+                                            && transactionDelegate.transactionId.length > 0
+                                            && !transactionDelegate.currentTransaction
+                                    enabled: visible
+                                    iconSrc: "qrc:/panel_icons/git-branch.svg"
+                                    iconColorDefault: root.colMuted
+                                    iconColorMuted: root.colMuted
+                                    fillIdle: root.colCardSurface
+                                    fillHover: appTheme.buttonHoveredFillColor
+                                    fillPressed: appTheme.buttonPressedFillColor
+                                    fillSelected: appTheme.buttonSelectedFillColor
+                                    focusRingColor: root.colText
+                                    actionName: qsTr("Branch Here from this commit")
+                                    onClicked: transactionDelegate.activateBranch()
+                                }
                             }
                         }
                     }

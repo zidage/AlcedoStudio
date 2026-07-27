@@ -2,7 +2,10 @@
 
 Date: 2026-07-26
 
-Status: P0 completed on 2026-07-26; P1/P2 remain
+Status (2026-07-27): Phase 2, 3, 4 done; Phase 5 mostly done (structured diagnostics incomplete);
+Phase 1 substantially done (11/13 listed tests; rail test-file split deferred); Phase 6 (P2
+Version-panel UI) and Phase 7 (real-RAW end-to-end qualification) remain open. Priority axis: P0
+done 2026-07-26, P1 done 2026-07-27, P2 open. See "Phase completion status" for the mapping.
 
 Baseline:
 
@@ -291,9 +294,98 @@ Dependency direction:
 - `PipelineMgmtService` builds a candidate pipeline before publication.
 - QML never creates refs, chooses parent hashes, or mutates redo state.
 
-## Implementation phases
+## Phase completion status
 
-### Phase 1 — add failing evidence before changing behavior
+This plan has two axes that must not be conflated:
+
+- **Priority axis (P0/P1/P2)** — the seven audited problems grouped by urgency. Completion records
+  are filed per priority (`P0 completion record`, `P1 completion record` below).
+- **Implementation axis (Phase 1-7)** — the ordered build steps. A priority can span several
+  phases, and a phase can serve several priorities.
+
+Phase status against executable evidence (audited 2026-07-27):
+
+| Phase | Responsibility | Status | Key evidence | Open gap |
+| --- | --- | --- | --- | --- |
+| 1 | Failing evidence before behavior change | Partial (11/13 tests) | 11 of 13 listed tests exist and pass; `EditorSessionTaskPortTest` now builds and runs | 2 Phase-6-behavior tests (`InlineVersionDraftAcceptsEnterAndEscapeWithoutDialog`, `ActiveVersionUsesOutlineWithoutStopPlaybackAction`) absent; test-first ordering relaxed (tests written alongside implementation); rail test file not split into transactions/versions targets |
+| 2 | History projection + card content | Done | `HistoryProjectionPublishesDisplayNameBeforeValueAndAfterValue`, `HistoryProjectionMarksOnlyWorkingHeadCurrentAndIncludesRedoSuffix`, `EditorHistoryCommitPresentationTest.FormatsNumericBooleanPathEnumAndCompoundAdjustments`; `EditorHistoryTransactionsPanel.qml` renders `Exposure / 0.00 -> +0.35` | none |
+| 3 | One-operation history jumps | Done (residual) | `MoveHeadToAncestorThenRedoDescendantPublishesOneFinalSnapshot`, `HistoryCardClickMovesToCommitAndBranchButtonUsesSelectedCommitId`; `MiniGitWorkingHistory::MoveHeadToCommit` writes one head-move record and routes one render; `ApplyRecoveredRecord` re-walks every hop on reopen | mid-apply operator failure leaves the head moved with a partial pipeline (documented residual, parity with single-step Undo/Redo); merge hops skip the per-field delta on the live snapshot |
+| 4 | Split New Version / Branch Here | Done | `CreateRootVersionChecksOutRootAndNextCommitBelongsToNewVersion`, `BranchFromSelectedCommitChecksOutNamedRefWithoutDetachedHead`, `CreateOrBranchFailureRestoresPriorRefPipelineSnapshotAndFrame`; `createRootVersion`/`branchFromCommit` model methods; no QML-facing active-head creation remains | none |
+| 5 | Retained-image failure + error reporting | Mostly done | `RetainedImageFailure` state; `FailedVersionCheckoutKeepsHasImageAndLastFrameVisible`; `SaveFailureRetryThenSwitchAcquiresRequestedImage`, `SaveFailureDiscardThenSwitchClearsJournalAndAcquiresRequestedImage`; `EditorSaveRecoveryBar.qml` (Retry Save / Discard and Continue / Cancel); `tr("Editor Save")` + bar/popover failure detail; `ProductionEditorSaveTaskPublishesAndClearsFiveCheckpointLocks` (locks clear on success/fail/cancel); `DuplicateOrStaleCompletionCannotResumeBOrFinishTaskTwice` | change 9 structured diagnostics incomplete: typed result carries action/state/kind/task_id/render_request_id/element-or-image id/message but not current/requested Version ID or checkpoint stage |
+| 6 | Version panel UI | Open (P2) | Branch Here button placed on each eligible transaction card (P1) | modal `editorVersionNameDialog` still present; `stop.svg` still on the Version card; no inline draft row; outline-only selection unverified |
+| 7 | End-to-end qualification | Open | none | real-RAW 14-step sequence not run; the `EditorHistoryTransactionsPanelQmlTest`/`EditorVersionsPanelQmlTest` targets referenced by the Phase 7 commands do not exist yet (they depend on the Phase 6 rail-file split) |
+
+Priority to phase mapping: P0 = Phase 4 + Phase 5 (retained-image parts); P1 = Phase 2 + Phase 3 +
+Phase 5 (error-reporting parts); P2 = Phase 6. Phase 1 is the shared evidence foundation; Phase 7 is
+the shared end-to-end gate.
+
+## Open findings (grill review, 2026-07-27)
+
+Status audit of the Phase axis. No test failed this turn; the items below are coverage gaps and a
+plan-self issue.
+
+1. Coverage gap — Phase 7 verification commands reference targets that do not exist.
+   `EditorHistoryTransactionsPanelQmlTest` and `EditorVersionsPanelQmlTest` (cited in the Phase 7
+   `cmake --build`/`ctest` block) are absent from `tests/ui/CMakeLists.txt`; only
+   `EditorHistoryVersionsRailQmlTest` is registered. Following the Phase 7 commands verbatim fails
+   at configure/build. Fix: create the split targets as part of Phase 6, or correct the Phase 7
+   commands to the existing target until the split lands.
+
+2. Coverage gap — Phase 5 change 9 (structured diagnostics) is half-implemented.
+   `EditorSessionController::PublishHistoryResult` carries action/state/kind/task_id/
+   render_request_id/element-or-image id/message, but not the current Version ID, requested Version
+   ID, or checkpoint stage that change 9 requires. The "status chrome states what failed and why"
+   exit condition is met by the message field; the richer structured diagnostics are not. Decide:
+   implement the remaining fields or explicitly descope change 9.
+
+3. Coverage gap — Phase 1 is 11/13 and was not test-first.
+   `InlineVersionDraftAcceptsEnterAndEscapeWithoutDialog` and
+   `ActiveVersionUsesOutlineWithoutStopPlaybackAction` are absent (they probe Phase 6 behavior). The
+   Phase 1 exit condition "every new test fails for the intended missing behavior before production
+   changes" was relaxed — tests were written alongside implementation. The two missing tests belong
+   to Phase 6 and should land with it.
+
+4. Style/maintainability — the plan conflated the priority axis (P0/P1/P2) with the implementation
+   axis (Phase 1-7). Corrected this turn: the Status line, the "Phase completion status" overview,
+   and the per-phase heading tags now keep the two axes distinct.
+
+## Remaining work
+
+Completed phases (2, 3, 4) and the mostly-completed Phase 5 are documented in the
+`P0 completion record` and `P1 completion record` below. The actionable items, ordered by
+dependency:
+
+### Residual fixes (independent of Phase 6/7)
+
+- Phase 5 change 9: add current/requested Version ID and checkpoint stage to the typed operation
+  result, or explicitly descope change 9 and update its exit condition.
+- Phase 3 residual (documented, accepted): mid-apply operator failure during a multi-step
+  `MoveHeadToCommit` leaves the head moved with a partial pipeline — parity with single-step
+  Undo/Redo. No action unless Undo/Redo parity is itself raised.
+
+### Phase 6 — Version panel UI (open, P2)
+
+Spec: see "Phase 6 — finish the Version panel UI" in the reference section below. Lands with it:
+
+- the two missing Phase 1 tests (`InlineVersionDraftAcceptsEnterAndEscapeWithoutDialog`,
+  `ActiveVersionUsesOutlineWithoutStopPlaybackAction`);
+- the split of `editor_history_versions_rail_qml_test.cpp` into
+  `EditorHistoryTransactionsPanelQmlTest` + `EditorVersionsPanelQmlTest` targets, which also
+  resolves Open finding 1.
+
+Exit conditions: no naming dialog; no stop-playback glyph; white outline-only selection; keyboard,
+tooltip, focus, disabled, and accessibility states covered by QML tests.
+
+### Phase 7 — end-to-end qualification (open, gated on Phase 6)
+
+Spec: see "Phase 7 — end-to-end qualification" in the reference section below. Run the 14-step
+real-RAW sequence with a deterministic commit clock. Before running, correct the Phase 7
+build/test commands to the targets that will exist after the Phase 6 split (or to
+`EditorHistoryVersionsRailQmlTest` as an interim).
+
+## Implementation phase specifications (reference)
+
+### Phase 1 — add failing evidence before changing behavior [PARTIAL: 11/13 tests; split deferred]
 
 Files:
 
@@ -332,7 +424,7 @@ Exit condition:
 - existing tests remain registered;
 - `EditorSessionTaskPortTest` is built and executed instead of reported as `_NOT_BUILT`.
 
-### Phase 2 — repair the history projection and card content
+### Phase 2 — repair the history projection and card content [DONE]
 
 Files:
 
@@ -375,7 +467,7 @@ Exit condition:
 - exactly one commit card has the white current outline;
 - no QML color, spacing, radius, type, or icon-size literal is introduced.
 
-### Phase 3 — implement one-operation history jumps
+### Phase 3 — implement one-operation history jumps [DONE: mid-apply failure parity with Undo/Redo]
 
 Files:
 
@@ -410,7 +502,7 @@ Exit condition:
 - one action creates one head-move record and one final render;
 - replay/reopen selects the same head and reconstructs the same pipeline.
 
-### Phase 4 — split New Version from Branch Here
+### Phase 4 — split New Version from Branch Here [DONE]
 
 Files:
 
@@ -449,7 +541,7 @@ Exit condition:
 - the next edit advances only the new Version;
 - reopen preserves the new ref, active head, and rendered pipeline.
 
-### Phase 5 — repair retained-image failure and error reporting
+### Phase 5 — repair retained-image failure and error reporting [MOSTLY DONE: structured diagnostics incomplete]
 
 Files:
 
@@ -490,7 +582,7 @@ Exit condition:
 - status chrome states what failed and why;
 - task locks clear exactly once on every terminal path.
 
-### Phase 6 — finish the Version panel UI
+### Phase 6 — finish the Version panel UI [OPEN: P2]
 
 Files:
 
@@ -522,7 +614,7 @@ Exit condition:
 - selected Version uses white outline only;
 - keyboard, tooltip, focus, disabled, and accessibility states are covered by QML tests.
 
-### Phase 7 — end-to-end qualification
+### Phase 7 — end-to-end qualification [OPEN: real-RAW sequence not run]
 
 Use a real RAW image and deterministic commit clock:
 
@@ -786,3 +878,166 @@ include the existing uncommitted P0 implementation that this turn continued.
 - Production root/branch orchestration is covered through the navigation fake, while the real
   persistence boundary is covered by `PipelineServiceTest`; a future full-phase integration pass
   should combine both with a real session port and a real-RAW reopen sequence.
+
+## P1 completion record — 2026-07-27
+
+P1 is complete: multi-step history navigation, rich before/after projection, and typed
+operation-result UI are implemented and covered by executable evidence. P2 (inline Version draft
+and Version-card action cleanup) remains intentionally open; this record does not claim completion
+of the full Phase 7A repair.
+
+### Success and failure call chains
+
+History projection and card content:
+
+```text
+EditCommit ordinary/merge payload
+  -> EditorSessionHistoryPort::ReadHistorySnapshot
+  -> CommitRowFromEdit(commit, position) carries field_key + before/after JSON + enabled + position
+  -> EditorHistoryCommit (serialized before_value_json/after_value_json, no JSON dep in header)
+  -> EditorHistoryModel::RebuildPresentations
+  -> PresentEditorHistoryCommit (pure helper) -> display_name + before_text/after_text/delta_text + icon_key
+  -> EditorHistoryTransactionsPanel renders "Exposure / 0.00 → +0.35", hash in tooltip
+```
+
+One-operation history jump (card click):
+
+```text
+Card click / Enter / Space
+  -> EditorHistoryModel::moveHeadToCommit(commit_id)
+  -> EditorSessionController::MoveHeadToCommit
+  -> EditorSessionService::MoveHeadToCommit
+  -> EditorSessionEditController::HandleMoveHeadToCommit
+  -> EditorSessionHistoryPort::MoveHeadToCommit
+  -> MiniGitWorkingHistory::MoveHeadToCommit (ancestry/redo validation, one head-move journal record)
+  -> apply traversed before/after deltas to pipeline + committed_snapshot
+  -> publish one final adjustment snapshot + route one render
+  -> EditorSessionController::PublishHistoryResult (typed result at QML boundary)
+```
+
+Failure (invalid target / apply failure):
+
+```text
+MoveHeadToCommit target not on first-parent path or redo suffix
+  -> MiniGitWorkingHistory rejects without moving graph, journal, or redo suffix
+  -> port returns false; prior head/redo/snapshot/frame unchanged
+```
+
+Typed operation result at the QML boundary:
+
+```text
+EditorSessionController::{Undo,Redo,MoveHeadToCommit,CheckoutVersion,CreateRootVersion,
+  BranchFromCommit,RenameVersion,RemoveVersion}
+  -> capture EditorSessionResult
+  -> PublishHistoryResult(action, state, kind, task_id, render_request_id, element/image id, message)
+  -> emit HistoryOperationFinished
+  -> EditorHistoryTransactionsPanel status label binds lastHistoryMessage / lastHistoryFailed
+```
+
+Editor Save title and failure detail:
+
+```text
+save starts
+  -> EditorSessionTaskPort::BeginTask("editor_save", ...)
+  -> snapshot.title = tr("Editor Save"); snapshot.detail = tr("Saving editor changes")
+save fails
+  -> EditorSessionTaskPort::EndTask(id, false, backend_error)
+  -> BackgroundTaskController::FinishTask(Failed, backend_error)
+  -> BackgroundTaskBar shows "Editor Save · <backend_error>" when primary.state == "failed"
+  -> BackgroundTaskPopover shows kind badge + title + detail (error)
+```
+
+### Executable evidence
+
+The following P1 behavior tests pass:
+
+- `HistoryProjectionPublishesDisplayNameBeforeValueAndAfterValue`
+- `HistoryProjectionMarksOnlyWorkingHeadCurrentAndIncludesRedoSuffix`
+- `MoveHeadToAncestorThenRedoDescendantPublishesOneFinalSnapshot`
+- `HistoryCardClickMovesToCommitAndBranchButtonUsesSelectedCommitId`
+- `EditorSaveTaskUsesUserFacingTitleAndShowsTerminalFailureDetail`
+- `EditorHistoryCommitPresentationTest.FormatsNumericBooleanPathEnumAndCompoundAdjustments`
+
+The card-click test also asserts the typed operation result is published
+(`last_history_result.action == "moveHeadToCommit"` / `"branchFromCommit"`,
+`last_history_failed == false`). The projection tests assert the production payload maps to a
+capitalized display name, before/after values, exactly one Current row, and the redo suffix as
+Future rows. The move test asserts backward and forward multi-step jumps in one operation, the
+redo suffix reconstructed deterministically, and the final adjustment snapshot reflects the target
+head.
+
+The real-RAW sequence (Phase 7) was not run for this P1 change: the repaired paths operate on an
+already loaded editor history/pipeline and do not change RAW decoding. Real-RAW reopen/render
+evidence remains part of the later full Phase 7A acceptance work.
+
+Exact verification commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target alcedo_main EditorSessionHistoryPortTest EditorHistoryVersionsRailQmlTest EditorSessionTaskPortTest CommitGraphTest EditorSessionLifecycleTest EditorSessionNavigationControllerTest EditorSessionControllerPhase5ATest
+
+ctest --test-dir build/debug -R "EditorSessionHistoryPortTest|EditorHistoryVersionsRailQmlTest|EditorSessionTaskPortTest|CommitGraphTest|EditorSessionLifecycleTest|EditorSessionNavigationControllerTest|EditorSessionControllerPhase5ATest" --output-on-failure
+
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target WorkspaceShellTest EditorWorkspaceNavigationQmlTest EditorSessionServiceFacadeTest PipelineServiceTest
+
+ctest --test-dir build/debug -R "WorkspaceShellTest|EditorWorkspaceNavigationQmlTest|EditorSessionServiceFacadeTest|PipelineServiceTest" --output-on-failure
+```
+
+Result: the wrapper build exited successfully; the P1 ctest set passed 123/123 with 0 failures and
+0 skipped; the broader regression set passed 73/73 (`WorkspaceShellTest` 47/47,
+`EditorWorkspaceNavigationQmlTest` 3/3, `EditorSessionServiceFacadeTest` 23/23,
+`PipelineServiceTest` included) with the existing hardware-gated
+`ProductionFirstFramePathWritesAndSubmitsRealFrameData` case skipped and the two fuzz/thread
+cases disabled as before. No P0 regression was introduced.
+
+### Changed files and LOC
+
+Current file LOC (P1 changes are layered on the uncommitted P0 baseline).
+
+| File | LOC | P1 change |
+| --- | ---: | ---: |
+| `alcedo_studio/src/include/app/editor_history_types.hpp` | 80 | +43/-8 (timeline position enum, before/after JSON strings, merge field keys; dropped label/current) |
+| `alcedo_studio/src/include/ui/alcedo_main/album_backend/editor_history_commit_presentation.hpp` | 58 | +58/-0 (new, pure helper API) |
+| `alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_commit_presentation.cpp` | 762 | +762/-0 (new, per-operator value formatting ported from history_cards.cpp) |
+| `alcedo_studio/src/include/ui/alcedo_main/album_backend/editor_history_models.hpp` | 144 | +38/-1 (presentation roles, moveHeadToCommit, presentations_ storage) |
+| `alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_models.cpp` | 280 | +72/-12 (presentation roles, RebuildPresentations, moveHeadToCommit, timeline position) |
+| `alcedo_studio/src/include/ui/alcedo_main/album_backend/editor_session_history_port.hpp` | 124 | +5/-0 (MoveHeadToCommit override) |
+| `alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_history_port.cpp` | 1297 | +96/-25 (CommitRowFromEdit, redo suffix in projection, MoveHeadToCommit, multi-step ApplyRecoveredRecord) |
+| `alcedo_studio/src/include/edit/history/mini_git_working_history.hpp` | 212 | +30/-0 (MoveHeadToCommit, RedoSuffix, traversed_commits/backward result fields) |
+| `alcedo_studio/src/edit/history/mini_git_working_history.cpp` | 741 | +83/-0 (MoveHeadToCommit ancestry/redo validation + redo reconstruction) |
+| `alcedo_studio/src/include/app/editor_session_ports.hpp` | 398 | +12/-0 (IEditorHistoryPort::MoveHeadToCommit) |
+| `alcedo_studio/src/include/app/editor_session_service.hpp` | 367 | +18/-0 (IEditorSessionBackend::MoveHeadToCommit, EditorSessionService::MoveHeadToCommit) |
+| `alcedo_studio/src/app/editor_session_service.cpp` | 944 | +24/-0 (MoveHeadToCommit facade) |
+| `alcedo_studio/src/include/app/editor_session_edit_controller.hpp` | 90 | +6/-0 (HandleMoveHeadToCommit) |
+| `alcedo_studio/src/app/editor_session_edit_controller.cpp` | 213 | +35/-0 (HandleMoveHeadToCommit) |
+| `alcedo_studio/src/include/ui/alcedo_main/album_backend/editor_session_controller.hpp` | 301 | +22/-0 (lastHistory* properties/signal, MoveHeadToCommit, PublishHistoryResult) |
+| `alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_controller.cpp` | 916 | +66/-22 (capture + publish typed result for every history op, MoveHeadToCommit, PublishHistoryResult) |
+| `alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_task_port.cpp` | 97 | +6/-2 (localized Editor Save title) |
+| `alcedo_studio/src/ui/alcedo_main/qml/BackgroundTaskBar.qml` | 151 | +14/-2 (editorSave kind label, failure detail in compact bar) |
+| `alcedo_studio/src/ui/alcedo_main/qml/BackgroundTaskPopover.qml` | 185 | +1/-0 (editorSave kind label) |
+| `alcedo_studio/src/ui/alcedo_main/qml/EditorHistoryTransactionsPanel.qml` | 478 | +210/-160 (before/after value line, Branch Here button, card click/Enter/Space, hash tooltip, status binds typed result) |
+| `alcedo_studio/src/ui/alcedo_main/CMakeLists.txt` | 778 | +2/-0 (presentation helper source + header) |
+| `alcedo_studio/tests/ui/CMakeLists.txt` | 1072 | +1/-0 (presentation helper linked into EditorSessionHistoryPortTest) |
+| `alcedo_studio/tests/edit/history/editor_session_history_port_test.cpp` | 428 | +131/-0 (projection, current/redo-suffix, and multi-step move tests + helpers) |
+| `alcedo_studio/tests/ui/editor_history_versions_rail_qml_test.cpp` | 867 | +96/-12 (MakeCommit/snapshot updated to new struct, MoveHeadToCommit + branch recording in fake backend, card-click + branch-button test, HistoryCards helper) |
+| `alcedo_studio/tests/ui/editor_session_task_port_test.cpp` | 68 | +21/-0 (Editor Save title + terminal failure detail test) |
+
+### Remaining scope and risks
+
+- P2 inline Version draft, stop-playback glyph removal, and the formal split of
+  `editor_history_versions_rail_qml_test.cpp` into transactions/versions panel files remain open.
+  The P1 transactions-panel tests were added to the existing rail test file (which already covered
+  both panels per P0) rather than performing the file split, to avoid disrupting the shared QML
+  harness; the split is deferred to P2, which owns the versions panel.
+- `MoveHeadToCommit` validates the target and journals one head-move record before applying the
+  traversed deltas, matching the existing single-step Undo/Redo apply-after-move pattern. A
+  mid-apply operator failure (exceptional) would leave the head moved with a partial pipeline, the
+  same residual risk as Undo/Redo; the candidate-pipeline-before-publication guarantee is fully met
+  for the invalid-target case (the common failure mode).
+- Multi-step moves that traverse a merge commit skip the merge's per-field delta on the live
+  snapshot (merges have no single before/after value); the head, chain, redo suffix, and journal
+  are still correct, and the next full-frame render re-applies the committed snapshot. Recovery
+  (`ApplyRecoveredRecord`) walks every hop of a multi-step head-move record so reopen reconstructs
+  the same head and snapshot.
+- The presentation helper's `OperatorDisplayName` / `OperatorIconResource` switches mirror the
+  legacy `history_cards.cpp` maps; a drift test asserts a few known mappings, but the two switches
+  should be consolidated in a later cleanup pass.

@@ -106,6 +106,12 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// flags directly.
   Q_PROPERTY(QVariantMap rawDecodeCapabilities READ raw_decode_capabilities NOTIFY
                  RawDecodeCapabilitiesChanged)
+  /// Phase 7A P1: typed result of the last history/Version operation, published
+  /// at the QML boundary so the owning panel can show pending/success/error
+  /// state instead of discarding the backend EditorSessionResult.
+  Q_PROPERTY(QString lastHistoryMessage READ last_history_message NOTIFY HistoryOperationFinished)
+  Q_PROPERTY(bool lastHistoryFailed READ last_history_failed NOTIFY HistoryOperationFinished)
+  Q_PROPERTY(QVariantMap lastHistoryResult READ last_history_result NOTIFY HistoryOperationFinished)
 
  public:
   explicit EditorSessionController(EditorController* editor = nullptr, QObject* parent = nullptr);
@@ -150,6 +156,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] QString     last_error() const;
   [[nodiscard]] double      first_frame_time_ms() const;
   [[nodiscard]] QVariantMap render_diagnostics() const;
+  // Phase 7A P1: typed result of the last history/Version operation.
+  [[nodiscard]] QString     last_history_message() const { return last_history_message_; }
+  [[nodiscard]] bool        last_history_failed() const { return last_history_failed_; }
+  [[nodiscard]] QVariantMap last_history_result() const { return last_history_result_; }
   // Phase 6A: true when an image is open and the session is Interactive.
   [[nodiscard]] bool        can_edit() const;
 
@@ -174,6 +184,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_INVOKABLE void   RemoveVersion(const QString& versionId);
   Q_INVOKABLE void   Undo();
   Q_INVOKABLE void   Redo();
+  Q_INVOKABLE void   MoveHeadToCommit(const QString& commitId);
   Q_INVOKABLE void   Close();
   Q_INVOKABLE void   Shutdown();
   void               Finalize(bool persistChanges);
@@ -232,6 +243,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void DesktopUiChanged();
   void PresentationBindingChanged();
   void LastEditedImageChanged();
+  // Phase 7A P1: emitted with the typed result of a history/Version operation.
+  void HistoryOperationFinished();
 
  private:
   void                           LoadFilmstripUiPrefs();
@@ -244,6 +257,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                           ApplyCloseLocal();
   void                           SyncViewportIdentity();
   void                           InstallBackendNotifier();
+  void                           PublishHistoryResult(const alcedo::EditorSessionResult& result,
+                                                     const QString&                   action);
   [[nodiscard]] static auto      NormalizeAdjustmentPanel(const QString& panel) -> QString;
   [[nodiscard]] static auto      NormalizeHistoryPanelPage(const QString& page) -> QString;
 
@@ -267,6 +282,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// does not emit AdjustmentSnapshotChanged. Used for interactive submitPatch
   /// so pointer moves do not re-enter QML loadFromSnapshot on every tick.
   bool                           suppress_snapshot_publish_ = false;
+  // Phase 7A P1: typed result of the last history/Version operation.
+  QString                        last_history_message_;
+  bool                           last_history_failed_ = false;
+  QVariantMap                    last_history_result_;
   /// Convert EditorRenderAdjustmentSnapshot patches into a QVariantMap keyed
   /// by field_key with parsed JSON values suitable for QML model loading.
   [[nodiscard]] static auto BuildSnapshotMap(const alcedo::EditorRenderAdjustmentSnapshot& snapshot)

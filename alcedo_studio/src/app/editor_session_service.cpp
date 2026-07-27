@@ -791,6 +791,31 @@ auto EditorSessionService::Redo() -> EditorSessionResult {
   return Emit(std::move(result));
 }
 
+auto EditorSessionService::MoveHeadToCommit(const commit_hash_t& commit_id)
+    -> EditorSessionResult {
+  if (lifecycle_.state() != EditorSessionState::Interactive) {
+    return Reject("Editor head move requires interactive state");
+  }
+  const auto guard   = lifecycle_.history_guard();
+  const auto ident   = lifecycle_.identity();
+  const auto outcome = edit_.HandleMoveHeadToCommit(commit_id, guard, ident);
+  if (outcome.kind == EditorEditOutcome::Kind::Rejected) {
+    return Reject(outcome.message);
+  }
+  if (outcome.kind == EditorEditOutcome::Kind::Failed) {
+    return Reject(outcome.message);
+  }
+  lifecycle_.AdvanceRenderGeneration();
+  const auto move_identity = lifecycle_.identity();
+  render_.RouteInitialRender(outcome.render_command, move_identity);
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = move_identity;
+  result.message  = outcome.message;
+  return Emit(std::move(result));
+}
+
 auto EditorSessionService::Discard() -> EditorSessionResult {
   const auto state = lifecycle_.state();
   if (state != EditorSessionState::Interactive && state != EditorSessionState::Failed) {

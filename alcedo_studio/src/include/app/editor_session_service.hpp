@@ -170,6 +170,17 @@ class IEditorSessionBackend {
   virtual auto Discard() -> EditorSessionResult                   = 0;
   virtual auto Undo() -> EditorSessionResult                      = 0;
   virtual auto Redo() -> EditorSessionResult                      = 0;
+  /// Phase 7A P1: move the working head to an explicit commit in one operation.
+  /// The target must be an ancestor of the working head or a member of the
+  /// in-memory redo suffix. Default rejects so fakes opt in.
+  virtual auto MoveHeadToCommit(const commit_hash_t& /*commit_id*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Editor head move is not supported by this backend";
+    return result;
+  }
   virtual auto Patch(EditorAdjustmentPatch /*patch*/) -> EditorSessionResult {
     EditorSessionResult result;
     result.kind    = EditorSessionResultKind::Rejected;
@@ -303,6 +314,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto CommitAdjustment(std::string patch_key) -> EditorSessionResult;
   auto Undo() -> EditorSessionResult override;
   auto Redo() -> EditorSessionResult override;
+  auto MoveHeadToCommit(const commit_hash_t& commit_id) -> EditorSessionResult override;
   auto Discard() -> EditorSessionResult override;
   auto Shutdown() -> EditorSessionResult override;
   auto RequestViewChange(EditorRenderReason reason, std::optional<ViewportRenderRegion> region)

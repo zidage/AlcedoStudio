@@ -75,6 +75,18 @@ class IEditorHistoryPort {
   }
   virtual auto Undo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool = 0;
   virtual auto Redo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool = 0;
+  /// Move the working head to an explicit commit in one operation. The target
+  /// must be an ancestor of the working head (backward) or a member of the
+  /// in-memory redo suffix (forward); otherwise the call fails without moving.
+  /// On success the caller applies the returned traversed deltas and routes a
+  /// single render. Fail closed: prior head/redo/snapshot remain on failure.
+  virtual auto MoveHeadToCommit(const EditorHistoryGuardHandle& /*guard*/,
+                                const commit_hash_t& /*commit_id*/, std::string* error) -> bool {
+    if (error != nullptr) {
+      *error = "Head move is not supported by this history port";
+    }
+    return false;
+  }
   /// Read the adjustment state after a history operation. History remains the
   /// source of truth; the session service must not guess the resulting params.
   virtual auto ReadAdjustmentSnapshot(const EditorHistoryGuardHandle& guard,

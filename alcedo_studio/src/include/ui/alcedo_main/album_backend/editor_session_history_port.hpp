@@ -51,6 +51,11 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
   auto Undo(const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool override;
   /// Move the working head to the redo child and apply the after value.
   auto Redo(const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool override;
+  /// Move the working head to an explicit commit in one operation (Phase 7A
+  /// P1). Applies the traversed before/after deltas and routes one render.
+  auto MoveHeadToCommit(const alcedo::EditorHistoryGuardHandle& guard,
+                        const alcedo::commit_hash_t& commit_id, std::string* error)
+      -> bool override;
   /// Switch the checked-out Version, rebuild the live pipeline, refresh the snapshot.
   auto CheckoutVersion(const alcedo::EditorHistoryGuardHandle& guard,
                        const alcedo::Hash128& version_id, std::string* error) -> bool override;

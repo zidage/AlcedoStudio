@@ -27,6 +27,18 @@ auto SameCommitIdentity(const alcedo::EditorHistoryCommit& left,
   return left.commit_hash == right.commit_hash;
 }
 
+auto TimelinePositionName(alcedo::EditorHistoryTimelinePosition position) -> QString {
+  switch (position) {
+    case alcedo::EditorHistoryTimelinePosition::Applied:
+      return QStringLiteral("applied");
+    case alcedo::EditorHistoryTimelinePosition::Current:
+      return QStringLiteral("current");
+    case alcedo::EditorHistoryTimelinePosition::Future:
+      return QStringLiteral("future");
+  }
+  return QStringLiteral("applied");
+}
+
 }  // namespace
 
 EditorVersionListModel::EditorVersionListModel(QObject* parent) : QAbstractListModel(parent) {}
@@ -113,11 +125,14 @@ auto EditorHistoryModel::rowCount(const QModelIndex& parent) const -> int {
 
 auto EditorHistoryModel::data(const QModelIndex& index, int role) const -> QVariant {
   if (!index.isValid() || index.row() < 0 || index.row() >= rowCount()) return {};
-  const auto& row = commits_[static_cast<std::size_t>(index.row())];
+  const auto  row_index = static_cast<std::size_t>(index.row());
+  const auto& row       = commits_[row_index];
+  const auto& pres      = presentations_[row_index];
   switch (role) {
     case Qt::DisplayRole:
     case LabelRole:
-      return QString::fromStdString(row.label);
+    case DisplayNameRole:
+      return pres.display_name;
     case CommitIdRole:
       return QString::fromStdString(row.commit_hash.ToString());
     case FirstParentIdRole:
@@ -134,7 +149,21 @@ auto EditorHistoryModel::data(const QModelIndex& index, int role) const -> QVari
     case FieldKeyRole:
       return QString::fromStdString(row.field_key);
     case CurrentRole:
-      return row.current;
+      return row.position == alcedo::EditorHistoryTimelinePosition::Current;
+    case TimelinePositionRole:
+      return TimelinePositionName(row.position);
+    case BeforeTextRole:
+      return pres.before_text;
+    case AfterTextRole:
+      return pres.after_text;
+    case DeltaTextRole:
+      return pres.delta_text;
+    case IconKeyRole:
+      return pres.icon_key;
+    case IsMergeRole:
+      return pres.is_merge;
+    case MergeSummaryRole:
+      return pres.merge_summary;
     default:
       return {};
   }
@@ -148,7 +177,15 @@ auto EditorHistoryModel::roleNames() const -> QHash<int, QByteArray> {
           {CreatedAtNsRole, "createdAtNs"},
           {LabelRole, "label"},
           {FieldKeyRole, "fieldKey"},
-          {CurrentRole, "current"}};
+          {CurrentRole, "current"},
+          {DisplayNameRole, "displayName"},
+          {BeforeTextRole, "beforeText"},
+          {AfterTextRole, "afterText"},
+          {DeltaTextRole, "deltaText"},
+          {IconKeyRole, "iconKey"},
+          {TimelinePositionRole, "timelinePosition"},
+          {IsMergeRole, "isMerge"},
+          {MergeSummaryRole, "mergeSummary"}};
 }
 
 void EditorHistoryModel::SetSnapshot(alcedo::EditorHistorySnapshot snapshot) {
@@ -159,12 +196,14 @@ void EditorHistoryModel::SetSnapshot(alcedo::EditorHistorySnapshot snapshot) {
       std::equal(snapshot.commits.begin(), snapshot.commits.end(), commits_.begin(),
                  SameCommitIdentity)) {
     commits_ = std::move(snapshot.commits);
+    RebuildPresentations();
     if (!commits_.empty()) {
       emit dataChanged(index(0), index(rowCount() - 1));
     }
   } else {
     beginResetModel();
     commits_ = std::move(snapshot.commits);
+    RebuildPresentations();
     endResetModel();
   }
   versions_->SetRows(std::move(snapshot.versions));
@@ -173,6 +212,16 @@ void EditorHistoryModel::SetSnapshot(alcedo::EditorHistorySnapshot snapshot) {
   recovered_head_    = snapshot.recovered_head;
   active_version_id_ = active_version_id;
   emit StateChanged();
+}
+
+void EditorHistoryModel::RebuildPresentations() {
+  presentations_.clear();
+  presentations_.reserve(commits_.size());
+  for (const auto& commit : commits_) {
+    presentations_.push_back(PresentEditorHistoryCommit(
+        commit.field_key, commit.before_value_json, commit.after_value_json,
+        commit.before_enabled, commit.after_enabled, commit.kind, commit.merge_field_keys));
+  }
 }
 
 void EditorHistoryModel::refresh() {
@@ -190,6 +239,11 @@ void EditorHistoryModel::undo() {
 
 void EditorHistoryModel::redo() {
   if (editor_session_) editor_session_->Redo();
+  refresh();
+}
+
+void EditorHistoryModel::moveHeadToCommit(const QString& commitId) {
+  if (editor_session_) editor_session_->MoveHeadToCommit(commitId);
   refresh();
 }
 

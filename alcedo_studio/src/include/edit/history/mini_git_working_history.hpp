@@ -127,6 +127,15 @@ struct MiniGitEditAppendResult {
 struct MiniGitHeadMoveResult {
   bool                      moved = false;
   std::optional<EditCommit> selected_commit;
+  /// Commits between the source head and the target head, in the order the
+  /// caller must apply them to a pipeline/snapshot. Empty for single-step
+  /// Undo/Redo (which only need `selected_commit`). Populated by
+  /// MoveHeadToCommit so one user jump publishes one final snapshot.
+  std::vector<EditCommit>   traversed_commits;
+  /// True when the move is backward (target is an ancestor of the source head).
+  /// The caller applies before-values of `traversed_commits`; false means
+  /// forward (redo suffix) and the caller applies after-values.
+  bool                      backward = false;
   std::string               error;
 };
 
@@ -145,6 +154,10 @@ class MiniGitWorkingHistory final {
   [[nodiscard]] auto working_head() const -> head_commit_hash_t;
   [[nodiscard]] auto transaction_chain_hash() const -> transaction_chain_hash_t;
   [[nodiscard]] auto redo_count() const -> std::size_t { return redo_stack_.size(); }
+  /// In-memory redo suffix in furthest-future-first order; back() is the
+  /// immediate child of the working head. Used by the history projection to
+  /// publish future rows and by MoveHeadToCommit to validate forward targets.
+  [[nodiscard]] auto RedoSuffix() const -> std::vector<commit_hash_t> { return redo_stack_; }
 
   auto               AppendEdit(OrdinaryEditPayload payload) -> MiniGitEditAppendResult;
   /// Create a merge commit whose first parent is the current working head and whose second
@@ -155,6 +168,16 @@ class MiniGitWorkingHistory final {
       -> MiniGitEditAppendResult;
   auto               Undo() -> MiniGitHeadMoveResult;
   auto               Redo() -> MiniGitHeadMoveResult;
+  /// Move the working head to an explicit commit in one operation. The target
+  /// must be an ancestor of the working head (backward) or a member of the
+  /// in-memory redo suffix (forward); otherwise the move is rejected without
+  /// changing the graph, journal, or redo suffix. Backward moves push the
+  /// traversed commits onto the redo suffix in deterministic order; forward
+  /// moves consume the redo suffix up to and including the target. Exactly one
+  /// head-move journal record is appended. `traversed_commits` is populated in
+  /// apply order with `backward` selecting before vs. after values.
+  auto               MoveHeadToCommit(const commit_hash_t& target, std::string* error)
+      -> MiniGitHeadMoveResult;
 
   /// Select another named Version after the caller has completed the save
   /// checkpoint. This does not reconstruct a pipeline; checkout owns that in

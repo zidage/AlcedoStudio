@@ -58,6 +58,12 @@ class EditorSessionEditController final {
   auto HandleUndoRedo(bool undo, const EditorHistoryGuardHandle& guard,
                       const EditorSessionIdentity& identity) -> EditorEditOutcome;
 
+  /// Move the working head to an explicit commit in one operation (Phase 7A
+  /// P1). The history port applies the traversed before/after deltas; this
+  /// reads the resulting snapshot and returns one render command.
+  auto HandleMoveHeadToCommit(const commit_hash_t& target, const EditorHistoryGuardHandle& guard,
+                              const EditorSessionIdentity& identity) -> EditorEditOutcome;
+
   /// Discard unflushed edits and restore the history snapshot. Returns a render
   /// command with Retry (from Failed) or SettledAdjustment (from Interactive).
   auto HandleDiscard(const EditorHistoryGuardHandle& guard,

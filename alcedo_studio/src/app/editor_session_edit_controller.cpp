@@ -112,6 +112,41 @@ auto EditorSessionEditController::HandleUndoRedo(bool undo,
   return outcome;
 }
 
+auto EditorSessionEditController::HandleMoveHeadToCommit(const commit_hash_t& target,
+                                                         const EditorHistoryGuardHandle& guard,
+                                                         const EditorSessionIdentity& identity)
+    -> EditorEditOutcome {
+  std::scoped_lock lock(mutex_);
+  EditorEditOutcome outcome;
+  outcome.identity = identity;
+
+  if (!deps_.history || !guard.valid) {
+    outcome.kind    = EditorEditOutcome::Kind::Rejected;
+    outcome.message = "History port unavailable";
+    return outcome;
+  }
+  std::string error;
+  if (!deps_.history->MoveHeadToCommit(guard, target, &error)) {
+    outcome.kind    = EditorEditOutcome::Kind::Failed;
+    outcome.message = error.empty() ? "Editor head move failed" : error;
+    return outcome;
+  }
+  EditorRenderAdjustmentSnapshot snapshot;
+  if (!deps_.history->ReadAdjustmentSnapshot(guard, &snapshot, &error)) {
+    outcome.kind    = EditorEditOutcome::Kind::Failed;
+    outcome.message = error.empty() ? "Failed to read history adjustment state" : error;
+    return outcome;
+  }
+  adjustment_snapshot_ = std::move(snapshot);
+
+  outcome.kind                      = EditorEditOutcome::Kind::Accepted;
+  outcome.reason                    = EditorRenderReason::UndoRedo;
+  outcome.message                   = "Editor head moved";
+  outcome.render_command.reason     = EditorRenderReason::UndoRedo;
+  outcome.render_command.adjustment = adjustment_snapshot_;
+  return outcome;
+}
+
 auto EditorSessionEditController::HandleDiscard(const EditorHistoryGuardHandle& guard,
                                                 const EditorSessionIdentity&    identity,
                                                 EditorSessionState              current_state)

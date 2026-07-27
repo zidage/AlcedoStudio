@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "app/editor_history_types.hpp"
+#include "ui/alcedo_main/album_backend/editor_history_commit_presentation.hpp"
 
 namespace alcedo::ui {
 
@@ -76,6 +77,17 @@ class EditorHistoryModel : public QAbstractListModel {
     LabelRole,
     FieldKeyRole,
     CurrentRole,
+    // Phase 7A P1: presentation roles derived from the semantic payload by the
+    // pure PresentEditorHistoryCommit helper. QML renders these strings and
+    // never parses commit JSON.
+    DisplayNameRole,
+    BeforeTextRole,
+    AfterTextRole,
+    DeltaTextRole,
+    IconKeyRole,
+    TimelinePositionRole,
+    IsMergeRole,
+    MergeSummaryRole,
   };
 
   explicit EditorHistoryModel(QObject* parent = nullptr);
@@ -98,6 +110,7 @@ class EditorHistoryModel : public QAbstractListModel {
   Q_INVOKABLE void   refresh();
   Q_INVOKABLE void   undo();
   Q_INVOKABLE void   redo();
+  Q_INVOKABLE void   moveHeadToCommit(const QString& commitId);
   Q_INVOKABLE void   checkoutVersion(const QString& versionId);
   Q_INVOKABLE void   createRootVersion(const QString& displayName);
   Q_INVOKABLE void   branchFromCommit(const QString& commitId, const QString& displayName);
@@ -111,13 +124,15 @@ class EditorHistoryModel : public QAbstractListModel {
  private:
   void                                     SetSnapshot(alcedo::EditorHistorySnapshot snapshot);
   void                                     DisconnectSession();
+  void                                     RebuildPresentations();
 
   QObject*                                 editor_session_object_ = nullptr;
   EditorSessionController*                 editor_session_        = nullptr;
   QMetaObject::Connection                  state_connection_;
   QMetaObject::Connection                  history_connection_;
   EditorVersionListModel*                  versions_ = nullptr;
-  std::vector<alcedo::EditorHistoryCommit> commits_;
+  std::vector<alcedo::EditorHistoryCommit>             commits_;
+  std::vector<EditorHistoryCommitPresentation>         presentations_;
   bool                                     can_undo_       = false;
   bool                                     can_redo_       = false;
   bool                                     recovered_head_ = false;

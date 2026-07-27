@@ -89,12 +89,43 @@ auto CommitFieldKey(const alcedo::EditCommit& commit) -> std::string {
   }
 }
 
-auto CommitLabel(const alcedo::EditCommit& commit) -> std::string {
+auto CommitRowFromEdit(const alcedo::EditCommit&                commit,
+                       alcedo::EditorHistoryTimelinePosition    position)
+    -> alcedo::EditorHistoryCommit {
+  alcedo::EditorHistoryCommit row;
+  row.commit_hash        = commit.GetCommitHash();
+  row.first_parent_hash  = commit.GetFirstParentHash();
+  row.second_parent_hash = commit.GetSecondParentHash();
+  row.kind               = commit.GetKind();
+  row.created_at_ns      = commit.GetCreatedAtNs();
+  row.position           = position;
   if (commit.GetKind() == alcedo::EditCommitKind::kMerge) {
-    return "Merge";
+    row.field_key = "merge";
+    try {
+      const auto merge_payload = alcedo::MergeEditPayload::FromJSON(commit.GetPayloadJSON());
+      row.merge_field_keys.reserve(merge_payload.fields.size());
+      for (const auto& delta : merge_payload.fields) {
+        const auto key = alcedo::EditorAdjustmentFieldKey(delta.stage_name, delta.operator_type);
+        row.merge_field_keys.push_back(key.value_or(delta.field_name));
+      }
+    } catch (...) {
+    }
+    return row;
   }
-  const auto key = CommitFieldKey(commit);
-  return key.empty() ? "Edit" : key;
+  try {
+    const auto payload = alcedo::OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON());
+    const auto key     = alcedo::EditorAdjustmentFieldKey(payload.stage_name, payload.operator_type);
+    row.field_key      = key.value_or(std::string{});
+    row.before_value_json = payload.before_value.is_null() ? std::string{}
+                                                            : payload.before_value.dump();
+    row.after_value_json  = payload.after_value.is_null() ? std::string{}
+                                                           : payload.after_value.dump();
+    row.before_enabled = payload.before_enabled;
+    row.after_enabled  = payload.after_enabled;
+  } catch (...) {
+    row.field_key = CommitFieldKey(commit);
+  }
+  return row;
 }
 
 auto VersionNameExists(const alcedo::CommitGraph& graph, const std::string& name,
@@ -193,20 +224,46 @@ auto ApplyRecoveredRecord(alcedo::PipelineGuard&                  guard,
     if (!ApplyCommittedPayload(guard, snapshot, payload, true, error)) return false;
   } else if (record.kind == alcedo::MiniGitJournalRecordKind::kHeadMove) {
     const auto source_head = replay_graph->GetActiveVersionRef().head_commit_hash;
-    if (source_head) {
-      const auto& source = replay_graph->GetCommit(*source_head);
-      if (record.target_head == source.GetFirstParentHash()) {
-        const auto payload = alcedo::OrdinaryEditPayload::FromJSON(source.GetPayloadJSON());
-        if (!ApplyCommittedPayload(guard, snapshot, payload, false, error)) return false;
-      } else if (record.target_head) {
-        const auto& target  = replay_graph->GetCommit(*record.target_head);
-        const auto  payload = alcedo::OrdinaryEditPayload::FromJSON(target.GetPayloadJSON());
+    // A head-move record may span multiple first-parent hops (Phase 7A P1
+    // MoveHeadToCommit). Rebuild the snapshot by walking every hop: apply
+    // before-values for a backward move (target is an ancestor, including the
+    // root) and after-values for a forward move (target is a descendant). The
+    // single-step Undo/Redo records are the one-hop special case.
+    bool backward = false;
+    if (record.target_head.has_value()) {
+      if (source_head.has_value()) {
+        const auto source_chain = replay_graph->FirstParentChain(source_head);
+        backward = std::find(source_chain.begin(), source_chain.end(), *record.target_head) !=
+                   source_chain.end();
+      }
+    } else {
+      backward = source_head.has_value();  // target is the image root
+    }
+    if (backward) {
+      if (source_head.has_value()) {
+        const auto chain = replay_graph->FirstParentChain(source_head);  // root -> source
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it) {       // source -> root
+          if (record.target_head.has_value() && *it == *record.target_head) break;
+          const auto& commit = replay_graph->GetCommit(*it);
+          if (commit.GetKind() == alcedo::EditCommitKind::kMerge) continue;
+          const auto payload = alcedo::OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON());
+          if (!ApplyCommittedPayload(guard, snapshot, payload, false, error)) return false;
+        }
+      }
+    } else if (record.target_head.has_value()) {
+      const auto chain = replay_graph->FirstParentChain(*record.target_head);  // root -> target
+      std::vector<alcedo::commit_hash_t> forward;
+      for (auto it = chain.rbegin(); it != chain.rend(); ++it) {  // target -> root
+        if (source_head.has_value() && *it == *source_head) break;
+        forward.push_back(*it);
+      }
+      std::reverse(forward.begin(), forward.end());  // source.child (or root) -> target
+      for (const auto& hash : forward) {
+        const auto& commit = replay_graph->GetCommit(hash);
+        if (commit.GetKind() == alcedo::EditCommitKind::kMerge) continue;
+        const auto payload = alcedo::OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON());
         if (!ApplyCommittedPayload(guard, snapshot, payload, true, error)) return false;
       }
-    } else if (record.target_head) {
-      const auto& target  = replay_graph->GetCommit(*record.target_head);
-      const auto  payload = alcedo::OrdinaryEditPayload::FromJSON(target.GetPayloadJSON());
-      if (!ApplyCommittedPayload(guard, snapshot, payload, true, error)) return false;
     }
   }
   return alcedo::MiniGitWorkingHistory::Replay(*replay_graph, {record}, error);
@@ -516,6 +573,44 @@ auto EditorSessionHistoryPort::Redo(const alcedo::EditorHistoryGuardHandle& guar
   return true;
 }
 
+auto EditorSessionHistoryPort::MoveHeadToCommit(const alcedo::EditorHistoryGuardHandle& guard,
+                                                const alcedo::commit_hash_t&            commit_id,
+                                                std::string*                            error) -> bool {
+  auto state = EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  std::scoped_lock state_lock(state->mutex);
+  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+    if (error) *error = "Editor history graph is unavailable";
+    return false;
+  }
+  auto result = state->history->MoveHeadToCommit(commit_id, error);
+  if (!result.error.empty()) {
+    if (error) *error = result.error;
+    return false;
+  }
+  if (!result.moved) return true;  // No-op: target was already the working head.
+  // One user jump publishes one final snapshot: apply every traversed ordinary
+  // edit's before (backward) or after (forward) value in order. Merge commits
+  // in the traversed range are skipped here; their resolved fields are rebuilt
+  // by the next full-frame render from the committed snapshot.
+  for (const auto& commit : result.traversed_commits) {
+    if (commit.GetKind() == alcedo::EditCommitKind::kMerge) {
+      continue;
+    }
+    const auto payload = alcedo::OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON());
+    if (!ApplyCommittedPayload(*state->pipeline_guard, &state->committed_snapshot, payload,
+                               /*use_after_value=*/!result.backward, error)) {
+      return false;
+    }
+  }
+  state->pipeline_guard->dirty_                    = true;
+  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
+  state->pipeline_guard->transaction_chain_hash_   = state->history->transaction_chain_hash();
+  state->pending_before.clear();
+  state->recovered_head = false;
+  return true;
+}
+
 auto EditorSessionHistoryPort::CheckoutVersion(const alcedo::EditorHistoryGuardHandle& guard,
                                                const alcedo::Hash128&                  version_id,
                                                std::string* error) -> bool {
@@ -638,21 +733,23 @@ auto EditorSessionHistoryPort::ReadHistorySnapshot(const alcedo::EditorHistoryGu
               return left.version_id.ToString() < right.version_id.ToString();
             });
 
+  // Visible timeline: in-memory redo suffix (future, newest on top), then the
+  // applied first-parent chain with the working head marked Current. At the
+  // image root (no head) only the redo suffix, if any, is shown; no row is
+  // Current.
+  const auto redo_suffix = state->history->RedoSuffix();
+  projection.commits.reserve(redo_suffix.size() + (active_head.has_value() ? 1 : 0));
+  for (const auto& hash : redo_suffix) {
+    projection.commits.push_back(CommitRowFromEdit(graph.GetCommit(hash),
+                                                   alcedo::EditorHistoryTimelinePosition::Future));
+  }
   if (active_head.has_value()) {
     const auto chain = graph.FirstParentChain(active_head);
-    projection.commits.reserve(chain.size());
     for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-      const auto&                 commit = graph.GetCommit(*it);
-      alcedo::EditorHistoryCommit row;
-      row.commit_hash        = commit.GetCommitHash();
-      row.first_parent_hash  = commit.GetFirstParentHash();
-      row.second_parent_hash = commit.GetSecondParentHash();
-      row.kind               = commit.GetKind();
-      row.created_at_ns      = commit.GetCreatedAtNs();
-      row.field_key          = CommitFieldKey(commit);
-      row.label              = CommitLabel(commit);
-      row.current            = true;
-      projection.commits.push_back(std::move(row));
+      const auto position = (it == chain.rbegin())
+                                ? alcedo::EditorHistoryTimelinePosition::Current
+                                : alcedo::EditorHistoryTimelinePosition::Applied;
+      projection.commits.push_back(CommitRowFromEdit(graph.GetCommit(*it), position));
     }
   }
   *snapshot = std::move(projection);

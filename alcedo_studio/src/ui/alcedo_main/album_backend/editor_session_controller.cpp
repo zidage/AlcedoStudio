@@ -306,10 +306,11 @@ void EditorSessionController::CheckoutVersion(const QString& versionId) {
   }
   try {
     const auto version_id = alcedo::Hash128::FromString(versionId.trimmed().toStdString());
-    session_backend_->CheckoutVersion(version_id);
+    auto       result     = session_backend_->CheckoutVersion(version_id);
     SyncIdentityFromBackend();
     emit StateChanged();
     emit HistoryChanged();
+    PublishHistoryResult(result, QStringLiteral("checkoutVersion"));
   } catch (const std::exception&) {
     // Invalid hex identity: leave the session on the prior Version.
   }
@@ -317,10 +318,11 @@ void EditorSessionController::CheckoutVersion(const QString& versionId) {
 
 void EditorSessionController::CreateRootVersion(const QString& displayName) {
   if (!session_backend_ || displayName.trimmed().isEmpty()) return;
-  session_backend_->CreateRootVersion(displayName.trimmed().toStdString());
+  auto result = session_backend_->CreateRootVersion(displayName.trimmed().toStdString());
   SyncIdentityFromBackend();
   emit StateChanged();
   emit HistoryChanged();
+  PublishHistoryResult(result, QStringLiteral("createRootVersion"));
 }
 
 void EditorSessionController::BranchFromCommit(const QString& commitId,
@@ -328,10 +330,11 @@ void EditorSessionController::BranchFromCommit(const QString& commitId,
   if (!session_backend_ || commitId.trimmed().isEmpty() || displayName.trimmed().isEmpty()) return;
   try {
     const auto id = alcedo::Hash128::FromString(commitId.trimmed().toStdString());
-    session_backend_->BranchFromCommit(id, displayName.trimmed().toStdString());
+    auto       result = session_backend_->BranchFromCommit(id, displayName.trimmed().toStdString());
     SyncIdentityFromBackend();
     emit StateChanged();
     emit HistoryChanged();
+    PublishHistoryResult(result, QStringLiteral("branchFromCommit"));
   } catch (const std::exception&) {
   }
 }
@@ -364,9 +367,10 @@ void EditorSessionController::RenameVersion(const QString& versionId, const QStr
   if (!session_backend_ || versionId.trimmed().isEmpty() || displayName.trimmed().isEmpty()) return;
   try {
     const auto id = alcedo::Hash128::FromString(versionId.trimmed().toStdString());
-    session_backend_->RenameVersion(id, displayName.trimmed().toStdString());
+    auto       result = session_backend_->RenameVersion(id, displayName.trimmed().toStdString());
     emit StateChanged();
     emit HistoryChanged();
+    PublishHistoryResult(result, QStringLiteral("renameVersion"));
   } catch (const std::exception&) {
   }
 }
@@ -375,25 +379,61 @@ void EditorSessionController::RemoveVersion(const QString& versionId) {
   if (!session_backend_ || versionId.trimmed().isEmpty()) return;
   try {
     const auto id = alcedo::Hash128::FromString(versionId.trimmed().toStdString());
-    session_backend_->RemoveVersion(id);
+    auto       result = session_backend_->RemoveVersion(id);
     emit StateChanged();
     emit HistoryChanged();
+    PublishHistoryResult(result, QStringLiteral("removeVersion"));
   } catch (const std::exception&) {
   }
 }
 
 void EditorSessionController::Undo() {
   if (!session_backend_) return;
-  session_backend_->Undo();
+  auto result = session_backend_->Undo();
   emit StateChanged();
   emit HistoryChanged();
+  PublishHistoryResult(result, QStringLiteral("undo"));
 }
 
 void EditorSessionController::Redo() {
   if (!session_backend_) return;
-  session_backend_->Redo();
+  auto result = session_backend_->Redo();
   emit StateChanged();
   emit HistoryChanged();
+  PublishHistoryResult(result, QStringLiteral("redo"));
+}
+
+void EditorSessionController::MoveHeadToCommit(const QString& commitId) {
+  if (!session_backend_ || commitId.trimmed().isEmpty()) return;
+  try {
+    const auto id = alcedo::Hash128::FromString(commitId.trimmed().toStdString());
+    auto       result = session_backend_->MoveHeadToCommit(id);
+    SyncIdentityFromBackend();
+    emit StateChanged();
+    emit HistoryChanged();
+    PublishHistoryResult(result, QStringLiteral("moveHeadToCommit"));
+  } catch (...) {
+    return;
+  }
+}
+
+void EditorSessionController::PublishHistoryResult(const alcedo::EditorSessionResult& result,
+                                                   const QString&                   action) {
+  QVariantMap map;
+  map.insert(QStringLiteral("action"), action);
+  map.insert(QStringLiteral("state"),
+             QString::fromStdString(alcedo::EditorSessionStateName(result.state)));
+  map.insert(QStringLiteral("kind"), static_cast<int>(result.kind));
+  map.insert(QStringLiteral("taskId"), static_cast<qulonglong>(result.task_id));
+  map.insert(QStringLiteral("renderRequestId"), static_cast<qulonglong>(result.render_request_id));
+  map.insert(QStringLiteral("elementId"), static_cast<uint>(result.identity.element_id));
+  map.insert(QStringLiteral("imageId"), static_cast<uint>(result.identity.image_id));
+  map.insert(QStringLiteral("message"), QString::fromStdString(result.message));
+  last_history_result_  = map;
+  last_history_message_ = QString::fromStdString(result.message);
+  last_history_failed_  = (result.kind == alcedo::EditorSessionResultKind::Failed ||
+                           result.kind == alcedo::EditorSessionResultKind::Rejected);
+  emit HistoryOperationFinished();
 }
 
 void EditorSessionController::Close() {

@@ -62,9 +62,16 @@ Item {
                 // Prefix the primary task title with its kind so the bar itself
                 // disambiguates concurrent tasks (e.g. "AI Analysis · Analyzing..."
                 // vs "Semantic Labels · Generating..."), matching the popover badge.
+                // When the primary task failed, surface the failure detail (the
+                // backend error) instead of the stale running title.
                 text: {
                     if (!(root.primary && root.primary.title)) return qsTr("Background tasks")
                     const kl = root.kindLabel(root.primary.kind)
+                    if (root.primary.state === "failed"
+                            && root.primary.detail && root.primary.detail.length > 0) {
+                        return kl.length > 0 ? (kl + " · " + root.primary.detail)
+                                             : root.primary.detail
+                    }
                     return kl.length > 0 ? (kl + " · " + root.primary.title) : root.primary.title
                 }
                 color: appTheme.textColor
@@ -128,6 +135,7 @@ Item {
         if (kind === "semanticGeneration") return qsTr("Semantic Labels")
         if (kind === "modelActivation") return qsTr("Model Activation")
         if (kind === "modelDownload") return qsTr("Model Download")
+        if (kind === "editorSave") return qsTr("Editor Save")
         if (kind === "import") return qsTr("Import")
         if (kind === "export") return qsTr("Export")
         return ""

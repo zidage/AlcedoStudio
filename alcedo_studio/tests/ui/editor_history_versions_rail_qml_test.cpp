@@ -48,19 +48,25 @@ auto MakeVersion(const Hash128& id, std::string name, const head_commit_hash_t& 
   return version;
 }
 
-auto MakeCommit(const Hash128& id, std::string label, std::string field_key,
+auto MakeCommit(const Hash128& id, std::string field_key, std::string before_value_json,
+                std::string after_value_json,
                 const head_commit_hash_t&     first_parent  = std::nullopt,
                 const std::optional<Hash128>& second_parent = std::nullopt,
-                EditCommitKind                kind = EditCommitKind::kEdit) -> EditorHistoryCommit {
+                EditCommitKind                kind = EditCommitKind::kEdit,
+                EditorHistoryTimelinePosition position = EditorHistoryTimelinePosition::Applied)
+    -> EditorHistoryCommit {
   EditorHistoryCommit commit;
   commit.commit_hash        = id;
   commit.first_parent_hash  = first_parent;
   commit.second_parent_hash = second_parent;
   commit.kind               = kind;
   commit.created_at_ns      = id.low64();
-  commit.label              = std::move(label);
   commit.field_key          = std::move(field_key);
-  commit.current            = true;
+  commit.before_value_json  = std::move(before_value_json);
+  commit.after_value_json   = std::move(after_value_json);
+  commit.before_enabled     = true;
+  commit.after_enabled      = true;
+  commit.position           = position;
   return commit;
 }
 
@@ -81,10 +87,12 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
         MakeVersion(second_version, "Alternate Look", first_commit, false),
     };
     snapshot_.commits = {
-        MakeCommit(merge_commit, "Merge", "merge", second_commit, incoming_commit,
-                   EditCommitKind::kMerge),
-        MakeCommit(second_commit, "Contrast", "contrast", first_commit),
-        MakeCommit(first_commit, "Exposure", "exposure"),
+        MakeCommit(merge_commit, "merge", std::string{}, std::string{}, second_commit,
+                   incoming_commit, EditCommitKind::kMerge,
+                   EditorHistoryTimelinePosition::Current),
+        MakeCommit(second_commit, "contrast", R"({"contrast":0.0})", R"({"contrast":12.0})",
+                   first_commit),
+        MakeCommit(first_commit, "exposure", R"({"exposure":0.0})", R"({"exposure":0.35})"),
     };
     snapshot_.recovered_head = true;
     snapshot_.can_undo       = true;
@@ -154,7 +162,9 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     snapshot_.versions.push_back(MakeVersion(id, std::move(display_name), commit_id, true));
     snapshot_.active_version_id = id;
     snapshot_.active_head       = commit_id;
+    last_branch_commit_         = commit_id;
     last_created_id_            = id;
+    ++branch_count_;
     ++create_count_;
     NotifyChange();
     return Accepted("Branch created");
@@ -261,6 +271,19 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     return Accepted("Redone");
   }
 
+  auto MoveHeadToCommit(const commit_hash_t& commit_id) -> EditorSessionResult override {
+    ++move_head_count_;
+    last_move_head_commit_ = commit_id;
+    snapshot_.active_head  = commit_id;
+    for (auto& commit : snapshot_.commits) {
+      commit.position = (commit.commit_hash == commit_id)
+                            ? EditorHistoryTimelinePosition::Current
+                            : EditorHistoryTimelinePosition::Applied;
+    }
+    NotifyChange();
+    return Accepted("Head moved");
+  }
+
   [[nodiscard]] auto history_snapshot() -> EditorHistorySnapshot override { return snapshot_; }
 
   [[nodiscard]] auto last_checkout_id() const -> Hash128 { return last_checkout_id_; }
@@ -282,6 +305,10 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto retry_save_count() const -> int { return retry_save_count_; }
   [[nodiscard]] auto discard_count() const -> int { return discard_count_; }
   [[nodiscard]] auto cancel_recovery_count() const -> int { return cancel_recovery_count_; }
+  [[nodiscard]] auto move_head_count() const -> int { return move_head_count_; }
+  [[nodiscard]] auto branch_count() const -> int { return branch_count_; }
+  [[nodiscard]] auto last_move_head_commit() const -> Hash128 { return last_move_head_commit_; }
+  [[nodiscard]] auto last_branch_commit() const -> Hash128 { return last_branch_commit_; }
 
   void SetRecovery(bool pending, std::string error = {}) {
     recovery_pending_ = pending;
@@ -314,10 +341,14 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   Hash128               last_created_id_;
   Hash128               last_rename_id_;
   Hash128               last_removed_id_;
+  Hash128               last_move_head_commit_;
+  Hash128               last_branch_commit_;
   int                   checkout_count_              = 0;
   int                   create_count_                = 0;
   int                   rename_count_                = 0;
   int                   remove_count_                = 0;
+  int                   move_head_count_             = 0;
+  int                   branch_count_                = 0;
   int                   undo_count_                  = 0;
   int                   redo_count_                  = 0;
   int                   paste_count_                 = 0;
@@ -556,6 +587,21 @@ class EditorHistoryVersionsRailQmlTest : public ::testing::Test {
     return cards;
   }
 
+  auto HistoryCards() -> QList<QQuickItem*> {
+    QList<QQuickItem*>               delegates;
+    std::function<void(QQuickItem*)> visit = [&](QQuickItem* parent) {
+      if (parent == nullptr) return;
+      for (auto* child : parent->childItems()) {
+        if (child->objectName() == QStringLiteral("editorHistoryTransactionDelegate")) {
+          delegates.push_back(child);
+        }
+        visit(child);
+      }
+    };
+    if (window_ != nullptr) visit(window_->contentItem());
+    return delegates;
+  }
+
   RecordingEditorSessionBackend backend_;
   EditorSessionController       controller_{nullptr, &backend_};
   RecordingInteractionPolicy    policy_;
@@ -763,6 +809,63 @@ TEST_F(EditorHistoryVersionsRailQmlTest, PasteAndMergeUseVisibleActionsAndResolv
   EXPECT_EQ(transfer_.complete_merge_count(), 1);
   EXPECT_EQ(transfer_.last_resolution_count(), 1);
   EXPECT_EQ(transfer_.last_resolution().value(QStringLiteral("resolvedValue")).toDouble(), 1.0);
+}
+
+TEST_F(EditorHistoryVersionsRailQmlTest,
+       HistoryCardClickMovesToCommitAndBranchButtonUsesSelectedCommitId) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  Click(window_, Find(QStringLiteral("editorHistoryRailButton")));
+
+  // Wait for a non-current history card to move the working head in one operation.
+  auto find_move_delegate = [&]() -> QQuickItem* {
+    for (auto* delegate : HistoryCards()) {
+      if (!delegate->property("currentTransaction").toBool() &&
+          delegate->property("transactionId").toString().length() > 0) {
+        return delegate;
+      }
+    }
+    return nullptr;
+  };
+  QQuickItem* move_target = nullptr;
+  QTRY_VERIFY_WITH_TIMEOUT((move_target = find_move_delegate()) != nullptr, 2000);
+  const QString move_id = move_target->property("transactionId").toString();
+  auto* move_card = move_target->findChild<QQuickItem*>(QStringLiteral("editorHistoryCard"));
+  ASSERT_NE(move_card, nullptr);
+  Click(window_, move_card);
+  EXPECT_EQ(backend_.move_head_count(), 1);
+  EXPECT_EQ(QString::fromStdString(backend_.last_move_head_commit().ToString()), move_id);
+  // The typed operation result is published at the QML boundary.
+  EXPECT_EQ(controller_.last_history_result().value(QStringLiteral("action")).toString(),
+            QStringLiteral("moveHeadToCommit"));
+  EXPECT_FALSE(controller_.last_history_failed());
+
+  // After the move, the model resets; wait for a non-current delegate whose Branch Here
+  // button is visible and enabled before clicking, so the re-render never races the click.
+  auto find_branch_delegate = [&]() -> QQuickItem* {
+    for (auto* delegate : HistoryCards()) {
+      if (delegate->property("currentTransaction").toBool()) continue;
+      if (delegate->property("transactionId").toString().length() == 0) continue;
+      auto* btn = delegate->findChild<QQuickItem*>(QStringLiteral("editorHistoryBranchButton"));
+      if (btn != nullptr && btn->property("visible").toBool() && btn->isEnabled()) {
+        return delegate;
+      }
+    }
+    return nullptr;
+  };
+  QQuickItem* branch_target = nullptr;
+  QTRY_VERIFY_WITH_TIMEOUT((branch_target = find_branch_delegate()) != nullptr, 2000);
+  const QString branch_id = branch_target->property("transactionId").toString();
+  auto* branch_button =
+      branch_target->findChild<QQuickItem*>(QStringLiteral("editorHistoryBranchButton"));
+  ASSERT_NE(branch_button, nullptr);
+  // Emit the button's clicked signal directly; this triggers the same onClicked
+  // handler as a mouse press without the flaky delegate-geometry race.
+  QVERIFY(QMetaObject::invokeMethod(branch_button, "clicked", Qt::DirectConnection));
+  ProcessEvents();
+  EXPECT_EQ(backend_.branch_count(), 1);
+  EXPECT_EQ(QString::fromStdString(backend_.last_branch_commit().ToString()), branch_id);
+  EXPECT_EQ(controller_.last_history_result().value(QStringLiteral("action")).toString(),
+            QStringLiteral("branchFromCommit"));
 }
 
 }  // namespace

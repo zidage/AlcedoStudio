@@ -178,8 +178,8 @@ Popup {
         if (kind === "semanticGeneration") return qsTr("Semantic Labels")
         if (kind === "modelActivation") return qsTr("Model Activation")
         if (kind === "modelDownload") return qsTr("Model Download")
+        if (kind === "editorSave") return qsTr("Editor Save")
         if (kind === "import") return qsTr("Import")
-        if (kind === "export") return qsTr("Export")
         return ""
     }
 }
