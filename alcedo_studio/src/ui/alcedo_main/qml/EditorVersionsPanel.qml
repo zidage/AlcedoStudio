@@ -27,6 +27,10 @@ Item {
     property string draftVersionId: ""
     property string draftOriginalText: ""
     property bool draftSubmitPending: false
+    // Correlated operation id for the in-flight create/rename. Only the matching
+    // terminal HistoryOperationFinished may close or fail this draft (R4).
+    property var draftPendingOperationId: null
+    property string draftError: ""
     property real _preservedContentY: 0
     property bool _restoringContentY: false
 
@@ -72,6 +76,8 @@ Item {
         }
         root.draftRenameMode = false
         root.draftVersionId = ""
+        root.draftError = ""
+        root.draftPendingOperationId = null
         root.draftOriginalText = qsTr("Version %1").arg(root.historyModel.versions.count + 1)
         versionNameField.text = root.draftOriginalText
         root.draftVisible = true
@@ -83,6 +89,8 @@ Item {
             return
         root.draftRenameMode = true
         root.draftVersionId = versionId
+        root.draftError = ""
+        root.draftPendingOperationId = null
         root.draftOriginalText = displayName
         versionNameField.text = displayName
         root.draftVisible = true
@@ -96,7 +104,29 @@ Item {
         root.draftRenameMode = false
         root.draftVersionId = ""
         root.draftOriginalText = ""
+        root.draftPendingOperationId = null
+        root.draftError = ""
         versionNameField.text = ""
+    }
+
+    function closeDraftAfterSuccess() {
+        root.draftSubmitPending = false
+        root.draftVisible = false
+        root.draftRenameMode = false
+        root.draftVersionId = ""
+        root.draftOriginalText = ""
+        root.draftPendingOperationId = null
+        root.draftError = ""
+        versionNameField.text = ""
+        root.restoreListScroll()
+    }
+
+    function keepDraftAfterFailure(message) {
+        root.draftSubmitPending = false
+        root.draftPendingOperationId = null
+        root.draftError = String(message || qsTr("Version operation failed"))
+        root.restoreListScroll()
+        draftFocusTimer.restart()
     }
 
     function commitDraft(requireChanged) {
@@ -114,6 +144,8 @@ Item {
 
         // Pending-save lock: keep the field, block duplicate submit.
         root.draftSubmitPending = true
+        root.draftError = ""
+        root.draftPendingOperationId = null
         root.captureListScroll()
         if (root.draftRenameMode) {
             root.historyModel.renameVersion(root.draftVersionId, name)
@@ -127,31 +159,32 @@ Item {
         // Synchronous paths finish immediately. Async SaveStarted keeps the
         // field open with draftSubmitPending until HistoryOperationFinished.
         if (!root.editorSession) {
-            root.draftSubmitPending = false
-            root.draftVisible = false
-            root.draftRenameMode = false
-            root.draftVersionId = ""
-            root.draftOriginalText = ""
-            versionNameField.text = ""
-            root.restoreListScroll()
+            root.closeDraftAfterSuccess()
             return
         }
         var result = root.editorSession.lastHistoryResult || {}
         var action = String(result.action || "")
         var kind = Number(result.kind !== undefined ? result.kind : -1)
         var isVersionAction = action === "createRootVersion" || action === "renameVersion"
+        var operationId = result.operationId
         // SaveStarted = 4 (EditorSessionResultKind::SaveStarted). Field stays
-        // until a terminal HistoryOperationFinished.
+        // until a terminal HistoryOperationFinished for this operation id.
         if (isVersionAction && kind === 4) {
+            root.draftPendingOperationId = operationId
             root.restoreListScroll()
             return
         }
+        if (isVersionAction && (kind === 6 || kind === 7)) {
+            // Failed / Rejected: keep the entered name and show the reason.
+            root.keepDraftAfterFailure(result.message || root.editorSession.lastHistoryMessage)
+            return
+        }
+        if (isVersionAction) {
+            root.closeDraftAfterSuccess()
+            return
+        }
+        // Unrelated history result: release the submit lock but keep the draft.
         root.draftSubmitPending = false
-        root.draftVisible = false
-        root.draftRenameMode = false
-        root.draftVersionId = ""
-        root.draftOriginalText = ""
-        versionNameField.text = ""
         root.restoreListScroll()
     }
 
@@ -192,17 +225,20 @@ Item {
             var action = String(result.action || "")
             if (action !== "createRootVersion" && action !== "renameVersion")
                 return
+            // Stale completion for another draft must not close this one.
+            if (root.draftPendingOperationId !== null
+                    && result.operationId !== undefined
+                    && result.operationId !== root.draftPendingOperationId)
+                return
             var kind = Number(result.kind !== undefined ? result.kind : -1)
             // Keep waiting while a save checkpoint is still running.
             if (kind === 4)
                 return
-            root.draftSubmitPending = false
-            root.draftVisible = false
-            root.draftRenameMode = false
-            root.draftVersionId = ""
-            root.draftOriginalText = ""
-            versionNameField.text = ""
-            root.restoreListScroll()
+            if (kind === 6 || kind === 7) {
+                root.keepDraftAfterFailure(result.message || root.editorSession.lastHistoryMessage)
+                return
+            }
+            root.closeDraftAfterSuccess()
         }
     }
 
@@ -283,7 +319,10 @@ Item {
             Layout.fillWidth: true
             Layout.preferredHeight: root.draftVisible
                                     ? (appTheme.spaceXl * 2 + appTheme.spaceSm
-                                       + appTheme.spaceMd + appTheme.fontSizeCaption)
+                                       + appTheme.spaceMd + appTheme.fontSizeCaption
+                                       + (root.draftError.length > 0
+                                          ? (appTheme.spaceXs + appTheme.fontSizeCaption * 2)
+                                          : 0))
                                     : 0
             clip: true
             visible: root.draftVisible || height > 0
@@ -381,6 +420,17 @@ Item {
                                     : qsTr("Accept New Version")
                         onClicked: root.commitDraft(false)
                     }
+                }
+
+                Label {
+                    objectName: "editorVersionDraftError"
+                    Layout.fillWidth: true
+                    visible: root.draftError.length > 0
+                    text: root.draftError
+                    color: appTheme.dangerColor
+                    wrapMode: Text.WordWrap
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeCaption
                 }
             }
         }

@@ -15,6 +15,7 @@ using rail_harness::FindVisualItem;
 using rail_harness::ProcessEvents;
 using rail_harness::RailQmlFixture;
 using rail_harness::RecoveryBarUrl;
+using rail_harness::TypeText;
 using rail_harness::kRecoveryHarnessQml;
 
 class EditorHistoryTransactionsPanelQmlTest : public RailQmlFixture {};
@@ -193,14 +194,32 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest,
   auto* branch_button =
       branch_target->findChild<QQuickItem*>(QStringLiteral("editorHistoryBranchButton"));
   ASSERT_NE(branch_button, nullptr);
-  // Emit the button's clicked signal directly; this triggers the same onClicked
-  // handler as a mouse press without the flaky delegate-geometry race.
+  // Branch Here opens an inline name draft; it must not hard-submit a fixed name.
   QVERIFY(QMetaObject::invokeMethod(branch_button, "clicked", Qt::DirectConnection));
+  ProcessEvents();
+  EXPECT_EQ(backend_.branch_count(), 0) << "opening Branch Here must not submit until named";
+  auto* page = Find(QStringLiteral("editorHistoryPageBody"));
+  ASSERT_NE(page, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(page->property("branchDraftVisible").toBool(), 1000);
+  EXPECT_EQ(page->property("branchDraftCommitId").toString(), branch_id);
+  auto* field = Find(QStringLiteral("editorHistoryBranchNameField"));
+  ASSERT_NE(field, nullptr);
+  field->forceActiveFocus();
+  ProcessEvents();
+  // QTest key events type lowercase latin letters; selectAll on open replaces the
+  // generated "Branch" seed with the typed name.
+  TypeText(window_, QStringLiteral("namedbranch"));
+  auto* accept = Find(QStringLiteral("editorHistoryBranchAcceptButton"));
+  ASSERT_NE(accept, nullptr);
+  QVERIFY(QMetaObject::invokeMethod(accept, "clicked", Qt::DirectConnection));
   ProcessEvents();
   EXPECT_EQ(backend_.branch_count(), 1);
   EXPECT_EQ(QString::fromStdString(backend_.last_branch_commit().ToString()), branch_id);
+  EXPECT_EQ(QString::fromStdString(backend_.last_branch_name()), QStringLiteral("namedbranch"));
   EXPECT_EQ(controller_.last_history_result().value(QStringLiteral("action")).toString(),
             QStringLiteral("branchFromCommit"));
+  EXPECT_TRUE(controller_.last_history_result().contains(QStringLiteral("operationId")));
+  QTRY_VERIFY_WITH_TIMEOUT(!page->property("branchDraftVisible").toBool(), 2000);
 }
 
 TEST_F(EditorHistoryTransactionsPanelQmlTest,

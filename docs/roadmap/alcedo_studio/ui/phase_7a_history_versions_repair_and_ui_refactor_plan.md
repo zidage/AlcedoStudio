@@ -2,7 +2,7 @@
 
 Date: 2026-07-26
 Re-audited: 2026-07-27
-Status: **REOPENED — R2 audit is partial; R3 history-port split is pending; product workflow and performance are not accepted**
+Status: **REOPENED — R0–R4 implemented (R2 residual contention evidence); R5 atomic Mini-Git transitions next; R6–R7 product/performance qualification remaining**
 
 The earlier Phase 7A completion labels were based mainly on focused unit tests and QML fakes. They
 remain useful historical evidence, but they do not prove the production Version workflow. Current
@@ -972,6 +972,106 @@ Exit:
 - stale completion cannot close another draft;
 - no internal task key is user-facing;
 - no controller validation failure is silent.
+
+##### Phase R4 completion record (2026-07-27)
+
+**Status:** complete — correlated async history/Version operation events at the QML boundary,
+without enlarging `EditorSessionController` into a god class.
+
+**Primary success call chain:**
+
+```text
+QML createRootVersion / branchFromCommit / checkoutVersion (etc.)
+  -> EditorSessionController invokable
+  -> EditorHistoryOperationPublisher::AllocateOperationId + PublishInvokableReturn
+  -> HistoryOperationFinished (SaveStarted, non-terminal; operationId + action)
+  -> IEditorSessionBackend / EditorSessionService checkpoint worker
+  -> Emit(SaveFinished|Failed|Accepted|...)
+  -> SetResultObserver -> EditorSessionController::OnBackendSessionResult
+  -> EditorHistoryOperationPublisher::CorrelateObservedResult (same operationId, taskId match)
+  -> HistoryOperationFinished (terminal)
+  -> EditorVersionsPanel / EditorHistoryTransactionsPanel draft close or status update
+```
+
+**Primary failure call chain:**
+
+```text
+invalid Version/commit hex OR empty name OR missing backend
+  -> PublishHistoryRejected (terminal Rejected, exact message)
+  -> HistoryOperationFinished
+  -> draft stays open with draftError / status (no silent catch)
+
+async checkpoint failure
+  -> Emit(Failed, exact backend message, task_id)
+  -> CorrelateObservedResult
+  -> terminal failed event reuses pending operationId + action + selectedId
+  -> draft keeps entered name and shows exact reason
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `AllocatesMonotonicOperationIdsAndPublishesRejectedTerminal` | EditorHistoryOperationPublisherTest | PASS |
+| `SaveStartedKeepsPendingAndTerminalSaveFinishedReusesOperationId` | EditorHistoryOperationPublisherTest | PASS |
+| `StaleTaskIdCompletionIsIgnoredAndFailedKeepsFailureFlag` | EditorHistoryOperationPublisherTest | PASS |
+| `SynchronousAcceptedIsImmediatelyTerminal` | EditorHistoryOperationPublisherTest | PASS |
+| `AsyncRootVersionCompletionClosesMatchingDraft` | EditorSessionControllerPhase5ATest | PASS |
+| `AsyncRootVersionFailureShowsExactBackendMessage` | EditorSessionControllerPhase5ATest | PASS |
+| `AsyncBranchFailureKeepsSelectedCommitAndShowsExactBackendMessage` | EditorSessionControllerPhase5ATest | PASS |
+| `InvalidVersionOrCommitIdPublishesRejectedTerminalResult` | EditorSessionControllerPhase5ATest | PASS |
+| EditorSessionControllerPhase5ATest (full) | EditorSessionControllerPhase5ATest | 35/35 PASS |
+| EditorVersionsPanelQmlTest (full) | EditorVersionsPanelQmlTest | 8/8 PASS |
+| `HistoryCardClickMovesToCommitAndBranchButtonUsesSelectedCommitId` (inline Branch Here draft) | EditorHistoryTransactionsPanelQmlTest | PASS |
+| EditorHistoryTransactionsPanelQmlTest (full) | EditorHistoryTransactionsPanelQmlTest | 5/5 PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorHistoryOperationPublisherTest --target EditorSessionControllerPhase5ATest --target EditorVersionsPanelQmlTest --target EditorHistoryTransactionsPanelQmlTest
+ctest --test-dir build/debug -R "EditorHistoryOperationPublisherTest|EditorSessionControllerPhase5ATest|EditorVersionsPanelQmlTest|EditorHistoryTransactionsPanelQmlTest" --output-on-failure
+```
+
+Suite totals: **52/52 PASS**.
+
+**Checklist / exit condition:**
+
+- [x] QML receives start and terminal events for real asynchronous actions
+- [x] failed New Version and Branch Here surface the exact backend reason (draft error / status)
+- [x] stale completion cannot close another draft (`operationId` + checkpoint `taskId`)
+- [x] no internal task key is user-facing (message text only; `taskId` stays in the typed map)
+- [x] no controller validation failure is silent (invalid hex / empty name / missing backend → Rejected)
+- [x] Branch Here uses an inline name draft instead of hard-coded unobservable submit
+- [x] `HistoryOperationEvent` + operation-id allocation exist as a focused publisher module
+
+**LOC note (grill-code-review):**
+
+| File | LOC |
+| --- | ---: |
+| `editor_history_operation_publisher.hpp/.cpp` (new) | 78 + 129 |
+| `editor_session_types.hpp` | 190 |
+| `editor_session_service.hpp/.cpp` | 382 + 920 |
+| `editor_session_controller.hpp/.cpp` | 294 + 968 |
+| `EditorVersionsPanel.qml` | 597 |
+| `EditorHistoryTransactionsPanel.qml` | 686 |
+| `editor_history_operation_publisher_test.cpp` (new) | 112 |
+
+Correlation / event mapping lives in `EditorHistoryOperationPublisher` (single
+responsibility: operation ids, pending async, last published map). The controller only
+installs the result observer, routes invokables, and emits QML signals — it does not
+absorb checkpoint, Mini-Git, or pipeline rules. Controller `.cpp` remains under 1000 LOC
+and lost the inline QVariantMap construction for history results.
+
+**Residual gaps:**
+
+- Empty-history-snapshot port failures still collapse to an empty projection at the history
+  port (not a controller invokable path); typed projection errors remain for later evidence
+  if R7 needs them.
+- Atomic Mini-Git rollback of redo/journal/pipeline on injected failure is **R5**.
+- Full production QML→DuckDB create/branch/checkout sequence is **R7**.
+- `EditorSaveRecoveryBar` continues to bind `lastError` / recovery invokables; Retry /
+  Discard / Cancel now also publish terminal history operation events through the same
+  correlator (covered at the controller publisher path; no new recovery QML assertion added).
 
 ### R5 — make Mini-Git transitions atomic in memory and storage
 

@@ -98,8 +98,10 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
 EditorSessionService::~EditorSessionService() { save_service_.CancelAndWait(); }
 
 void EditorSessionService::SetResultObserver(ResultObserver observer) {
+  // Observer delivery is GUI-thread serialized by the controller's install path;
+  // still take results_mutex_ so concurrent Emit and SetResultObserver stay safe.
   std::scoped_lock lock(results_mutex_);
-  observer_ = std::move(observer);
+  IEditorSessionBackend::SetResultObserver(std::move(observer));
 }
 
 void EditorSessionService::SetChangeNotifier(ChangeNotifier notifier) {
@@ -111,9 +113,7 @@ auto EditorSessionService::Emit(EditorSessionResult result) -> EditorSessionResu
     std::scoped_lock lock(results_mutex_);
     results_.push_back(result);
   }
-  if (observer_) {
-    observer_(result);
-  }
+  NotifyResult(result);
   NotifyChange();
   return result;
 }

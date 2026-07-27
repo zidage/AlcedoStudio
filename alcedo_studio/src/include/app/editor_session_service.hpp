@@ -30,7 +30,12 @@ class IEditorSessionBackend {
  public:
   virtual ~IEditorSessionBackend()                                     = default;
 
-  using ChangeNotifier                                                 = std::function<void()>;
+  using ChangeNotifier = std::function<void()>;
+  /// Optional: notified for every typed session result that crosses Emit /
+  /// NotifyResult. Phase 7A R4 uses this so the controller can publish a
+  /// correlated terminal HistoryOperationEvent after an async save checkpoint
+  /// completes. Does not replace SetChangeNotifier.
+  using ResultObserver = std::function<void(const EditorSessionResult&)>;
 
   [[nodiscard]] virtual auto state() const -> EditorSessionState       = 0;
   [[nodiscard]] virtual auto identity() const -> EditorSessionIdentity = 0;
@@ -55,8 +60,15 @@ class IEditorSessionBackend {
   [[nodiscard]] virtual auto history_snapshot() -> EditorHistorySnapshot { return {}; }
 
   /// Optional: notified after state/identity changes from async results.
-  virtual void               SetChangeNotifier(ChangeNotifier notifier) {
+  virtual void SetChangeNotifier(ChangeNotifier notifier) {
     change_notifier_ = std::move(notifier);
+  }
+
+  /// Optional: notified for each typed EditorSessionResult published by the
+  /// backend. Production installs this from EditorSessionController. Fakes may
+  /// call NotifyResult from CompletePendingVersionOp-style helpers.
+  virtual void SetResultObserver(ResultObserver observer) {
+    result_observer_ = std::move(observer);
   }
 
   virtual void SetPresentationSinkId(PresentationSinkId sink_id) = 0;
@@ -226,7 +238,17 @@ class IEditorSessionBackend {
     }
   }
 
+  /// Deliver a typed session result to the installed observer. Does not call
+  /// NotifyChange — callers that also mutate visible state should NotifyChange
+  /// separately (or go through EditorSessionService::Emit).
+  void NotifyResult(const EditorSessionResult& result) {
+    if (result_observer_) {
+      result_observer_(result);
+    }
+  }
+
   ChangeNotifier change_notifier_;
+  ResultObserver result_observer_;
 };
 
 /// Thin facade that owns five focused collaborators and routes typed intents.
@@ -247,13 +269,11 @@ class EditorSessionService final : public IEditorSessionBackend {
     std::shared_ptr<EditorSaveCheckpointCoordinator> save_coordinator;
   };
 
-  using ResultObserver = std::function<void(const EditorSessionResult&)>;
-
   explicit EditorSessionService(Dependencies dependencies);
   ~EditorSessionService() override;
 
-  void               SetResultObserver(ResultObserver observer);
-  void               SetChangeNotifier(ChangeNotifier notifier) override;
+  void SetResultObserver(ResultObserver observer) override;
+  void SetChangeNotifier(ChangeNotifier notifier) override;
 
   [[nodiscard]] auto state() const -> EditorSessionState override { return lifecycle_.state(); }
   [[nodiscard]] auto identity() const -> EditorSessionIdentity override {
@@ -371,7 +391,6 @@ class EditorSessionService final : public IEditorSessionBackend {
   void BumpHistoryRevision() { history_revision_.fetch_add(1, std::memory_order_acq_rel); }
 
   Dependencies                      dependencies_;
-  ResultObserver                    observer_;
   EditorSessionLifecycle            lifecycle_;
   EditorSaveCheckpointService       save_service_;
   EditorSessionRenderController     render_;

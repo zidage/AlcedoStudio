@@ -16,6 +16,7 @@
 #include "app/editor_history_types.hpp"
 #include "app/editor_session_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
+#include "ui/alcedo_main/album_backend/editor_history_operation_publisher.hpp"
 
 namespace alcedo {
 class IFrameSink;
@@ -156,10 +157,15 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] QString     last_error() const;
   [[nodiscard]] double      first_frame_time_ms() const;
   [[nodiscard]] QVariantMap render_diagnostics() const;
-  // Phase 7A P1: typed result of the last history/Version operation.
-  [[nodiscard]] QString     last_history_message() const { return last_history_message_; }
-  [[nodiscard]] bool        last_history_failed() const { return last_history_failed_; }
-  [[nodiscard]] QVariantMap last_history_result() const { return last_history_result_; }
+  // Phase 7A R4: typed result of the last history/Version operation, owned by
+  // EditorHistoryOperationPublisher (not ad-hoc controller fields).
+  [[nodiscard]] QString     last_history_message() const {
+    return history_ops_.last_published().message;
+  }
+  [[nodiscard]] bool last_history_failed() const { return history_ops_.last_published().failed; }
+  [[nodiscard]] QVariantMap last_history_result() const {
+    return history_ops_.last_published().map;
+  }
   // Phase 6A: true when an image is open and the session is Interactive.
   [[nodiscard]] bool        can_edit() const;
 
@@ -257,13 +263,25 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                           ApplyCloseLocal();
   void                           SyncViewportIdentity();
   void                           InstallBackendNotifier();
-  void                           PublishHistoryResult(const alcedo::EditorSessionResult& result,
-                                                     const QString&                   action);
+  /// Apply a publisher event to QML properties and emit HistoryOperationFinished.
+  void                           ApplyPublishedHistory(
+      const EditorHistoryOperationPublisher::Published& published);
+  /// Reject at the controller boundary without calling the backend.
+  void PublishHistoryRejected(const QString& action, const QString& message,
+                              const QString& selected_id = {});
+  /// Publish the invokable return value and track async pending when needed.
+  void PublishHistoryInvokableReturn(const QString& action, const alcedo::EditorSessionResult& result,
+                                     const QString& selected_id = {});
+  /// Correlate an async backend result observer delivery to a pending action.
+  void OnBackendSessionResult(const alcedo::EditorSessionResult& result);
   [[nodiscard]] static auto      NormalizeAdjustmentPanel(const QString& panel) -> QString;
   [[nodiscard]] static auto      NormalizeHistoryPanelPage(const QString& page) -> QString;
 
   EditorController*              editor_                    = nullptr;
   alcedo::IEditorSessionBackend* session_backend_           = nullptr;
+  /// Focused correlator for history/Version operation events (R4). Owns
+  /// operation ids, pending-async state, and the last published map.
+  EditorHistoryOperationPublisher history_ops_;
   // Local mirror when no backend is injected (legacy shell tests).
   bool                           active_                    = false;
   uint                           element_id_                = 0;
@@ -282,10 +300,6 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// does not emit AdjustmentSnapshotChanged. Used for interactive submitPatch
   /// so pointer moves do not re-enter QML loadFromSnapshot on every tick.
   bool                           suppress_snapshot_publish_ = false;
-  // Phase 7A P1: typed result of the last history/Version operation.
-  QString                        last_history_message_;
-  bool                           last_history_failed_ = false;
-  QVariantMap                    last_history_result_;
   // Phase 7A R2: last history revision observed from the backend. OnBackendChanged
   // emits HistoryChanged only when the backend's history_revision advances, so
   // render/preview/task notifications no longer trigger a history projection.

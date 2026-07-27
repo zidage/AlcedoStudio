@@ -106,6 +106,64 @@ struct EditorSessionResult {
   std::string             message;
 };
 
+/// Stage of a user-initiated history / Version operation as it crosses the
+/// async save-checkpoint boundary. Non-terminal stages may repeat; exactly one
+/// terminal event is published per allocated `operation_id`.
+enum class HistoryOperationStage : std::uint8_t {
+  Requested = 0,
+  Saving,
+  Completed,
+};
+
+/// Correlated operation event published at the session/QML boundary.
+///
+/// One user action allocates one `operation_id`. Zero or more non-terminal
+/// events may follow (typically `Saving` / `SaveStarted`). Exactly one terminal
+/// event is published for success, rejection, failure, cancellation, retry, or
+/// discard. Stale completions are ignored by matching `operation_id` with the
+/// checkpoint `task_id` when both are known.
+struct HistoryOperationEvent {
+  std::uint64_t           operation_id      = 0;
+  /// Stable action key shared with QML (`createRootVersion`, `branchFromCommit`,
+  /// `checkoutVersion`, `renameVersion`, `removeVersion`, `undo`, `redo`,
+  /// `moveHeadToCommit`, `retrySave`, `discardAndContinue`,
+  /// `cancelPendingNavigation`).
+  std::string             action;
+  HistoryOperationStage   stage             = HistoryOperationStage::Requested;
+  bool                    terminal          = false;
+  EditorSessionResultKind result_kind       = EditorSessionResultKind::Accepted;
+  EditorSessionState      state             = EditorSessionState::NoImage;
+  sl_element_id_t         element_id        = 0;
+  image_id_t              image_id          = 0;
+  std::uint64_t           checkpoint_task_id = 0;
+  std::uint64_t           render_request_id = 0;
+  /// Selected Version / commit hex identity when the action carries one.
+  std::string             selected_id;
+  std::string             message;
+};
+
+/// True when a session result kind ends a history/Version operation for UI.
+[[nodiscard]] inline auto EditorSessionResultIsTerminal(EditorSessionResultKind kind) -> bool {
+  switch (kind) {
+    case EditorSessionResultKind::SaveStarted:
+      return false;
+    case EditorSessionResultKind::Accepted:
+    case EditorSessionResultKind::StateChanged:
+    case EditorSessionResultKind::ImageReady:
+    case EditorSessionResultKind::RenderRouted:
+    case EditorSessionResultKind::SaveFinished:
+    case EditorSessionResultKind::Failed:
+    case EditorSessionResultKind::Rejected:
+      return true;
+  }
+  return true;
+}
+
+/// True when the result marks a failed or rejected history/Version outcome.
+[[nodiscard]] inline auto EditorSessionResultIsFailure(EditorSessionResultKind kind) -> bool {
+  return kind == EditorSessionResultKind::Failed || kind == EditorSessionResultKind::Rejected;
+}
+
 [[nodiscard]] inline auto EditorSessionStateName(EditorSessionState state) -> const char* {
   switch (state) {
     case EditorSessionState::NoImage:

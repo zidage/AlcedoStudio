@@ -227,6 +227,23 @@ gtest_discover_tests(EditorSessionControllerPhase5ATest
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(EditorSessionControllerPhase5ATest app ci_core)
 
+# Phase 7A R4: focused history-operation correlator (no full session graph).
+add_executable(EditorHistoryOperationPublisherTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_history_operation_publisher_test.cpp
+    ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_operation_publisher.cpp
+    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
+)
+target_include_directories(EditorHistoryOperationPublisherTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(EditorHistoryOperationPublisherTest
+  PRIVATE
+    GTest::gtest
+    Qt6::Core
+)
+gtest_discover_tests(EditorHistoryOperationPublisherTest
+  TEST_PREFIX "EditorHistoryOperationPublisherTest."
+  PROPERTIES LABELS "ci_core_flow;editor_history")
+alcedo_register_test_target(EditorHistoryOperationPublisherTest app ci_core)
+
 add_executable(ProjectServiceTest ${ALCEDO_TEST_ROOT}/app/project_service_test.cpp)
 target_include_directories(ProjectServiceTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(ProjectServiceTest ProjectService GTest::gtest_main)

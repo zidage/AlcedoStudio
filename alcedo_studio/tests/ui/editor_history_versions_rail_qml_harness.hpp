@@ -161,6 +161,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
 
   auto BranchFromCommit(const commit_hash_t& commit_id, std::string display_name)
       -> EditorSessionResult override {
+    last_branch_name_ = display_name;
     const auto id = StableId(next_version_id_++);
     for (auto& version : snapshot_.versions) version.active = false;
     snapshot_.versions.push_back(MakeVersion(id, std::move(display_name), commit_id, true));
@@ -318,6 +319,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto branch_count() const -> int { return branch_count_; }
   [[nodiscard]] auto last_move_head_commit() const -> Hash128 { return last_move_head_commit_; }
   [[nodiscard]] auto last_branch_commit() const -> Hash128 { return last_branch_commit_; }
+  [[nodiscard]] auto last_branch_name() const -> const std::string& { return last_branch_name_; }
   [[nodiscard]] auto blocked_create_count() const -> int { return blocked_create_count_; }
   [[nodiscard]] auto blocked_rename_count() const -> int { return blocked_rename_count_; }
 
@@ -367,6 +369,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   Hash128               last_removed_id_;
   Hash128               last_move_head_commit_;
   Hash128               last_branch_commit_;
+  std::string           last_branch_name_;
   int                   checkout_count_              = 0;
   int                   create_count_                = 0;
   int                   rename_count_                = 0;

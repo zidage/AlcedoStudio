@@ -234,7 +234,10 @@ class FakeSessionBackend final : public IEditorSessionBackend {
     if (!async_version_ops_) return IEditorSessionBackend::CreateRootVersion(std::move(display_name));
     ++create_root_count_;
     last_action_ = QStringLiteral("createRootVersion");
-    return MakeSaveStarted();
+    auto result  = MakeSaveStarted();
+    result.task_id = ++next_task_id_;
+    pending_task_id_ = result.task_id;
+    return result;
   }
 
   auto BranchFromCommit(const commit_hash_t& commit_id, std::string display_name)
@@ -242,32 +245,44 @@ class FakeSessionBackend final : public IEditorSessionBackend {
     if (!async_version_ops_) return IEditorSessionBackend::BranchFromCommit(commit_id, std::move(display_name));
     ++branch_count_;
     last_action_ = QStringLiteral("branchFromCommit");
-    return MakeSaveStarted();
+    auto result  = MakeSaveStarted();
+    result.task_id = ++next_task_id_;
+    pending_task_id_ = result.task_id;
+    return result;
   }
 
   auto CheckoutVersion(const version_ref_id_t& version_id) -> EditorSessionResult override {
     if (!async_version_ops_) return IEditorSessionBackend::CheckoutVersion(version_id);
     ++checkout_async_count_;
     last_action_ = QStringLiteral("checkoutVersion");
-    return MakeSaveStarted();
+    auto result  = MakeSaveStarted();
+    result.task_id = ++next_task_id_;
+    pending_task_id_ = result.task_id;
+    return result;
   }
 
-  /// Deterministic async completion: records the terminal outcome and
-  /// NotifyChange() the same way EditorSessionService::Emit does when the save
-  /// worker finishes. The defect under test is that EditorSessionController does
-  /// not install the service result observer, so this terminal outcome never
-  /// reaches the QML boundary as a correlated HistoryOperationFinished.
+  /// Deterministic async completion: mirrors EditorSessionService::Emit by
+  /// delivering a terminal EditorSessionResult through the installed result
+  /// observer, bumping history_revision, and notifying state change.
   void CompletePendingVersionOp(bool success, std::string message) {
     pending_success_ = success;
     pending_message_ = std::move(message);
     has_pending_     = true;
-    // Phase 7A R2: the durable mutation lands at completion, so bump the
-    // history revision here. The terminal HistoryOperationFinished is still
-    // not published (the R3 defect); only the revision-driven HistoryChanged
-    // fires, which is the correct history-projection signal.
     ++history_revision_;
+
+    EditorSessionResult terminal;
+    terminal.kind     = success ? EditorSessionResultKind::SaveFinished
+                                : EditorSessionResultKind::Failed;
+    terminal.state    = state_;
+    terminal.identity = identity_;
+    terminal.task_id  = pending_task_id_;
+    terminal.message  = pending_message_;
+    NotifyResult(terminal);
     NotifyChange();
   }
+
+  std::uint64_t next_task_id_    = 100;
+  std::uint64_t pending_task_id_ = 0;
  private:
   void UpsertSnapshotPatch(EditorAdjustmentPatch patch) {
     auto& patches = current_snapshot_.patches;
@@ -1016,16 +1031,23 @@ TEST(EditorSessionControllerPhase5ATest, AsyncRootVersionCompletionClosesMatchin
             QStringLiteral("createRootVersion"));
   EXPECT_EQ(controller.last_history_result().value("kind").toInt(),
             static_cast<int>(EditorSessionResultKind::SaveStarted));
+  const auto operation_id =
+      controller.last_history_result().value(QStringLiteral("operationId")).toULongLong();
+  EXPECT_GT(operation_id, 0u);
+  EXPECT_FALSE(controller.last_history_result().value(QStringLiteral("terminal")).toBool());
 
   // Deterministic async completion of the save checkpoint. The QML inline draft
-  // closes on the terminal HistoryOperationFinished for this operation id; this
-  // controller-level assertion proves that terminal event must arrive (R3 repair).
+  // closes on the terminal HistoryOperationFinished for this operation id.
   backend.CompletePendingVersionOp(true, "Editor session materialized");
 
   EXPECT_EQ(finished, 2) << "async completion must publish a terminal event";
   EXPECT_EQ(controller.last_history_result().value("kind").toInt(),
             static_cast<int>(EditorSessionResultKind::SaveFinished))
       << "async completion must publish a terminal SaveFinished, not SaveStarted";
+  EXPECT_EQ(controller.last_history_result().value(QStringLiteral("operationId")).toULongLong(),
+            operation_id)
+      << "terminal event must reuse the starting operation id";
+  EXPECT_TRUE(controller.last_history_result().value(QStringLiteral("terminal")).toBool());
   EXPECT_EQ(controller.last_history_message().toStdString(), "Editor session materialized")
       << "the terminal event must carry the exact backend message";
 }
@@ -1070,7 +1092,9 @@ TEST(EditorSessionControllerPhase5ATest,
   controller.BranchFromCommit(selected_commit, QStringLiteral("Branch Look"));
   ASSERT_EQ(finished, 1);
   EXPECT_EQ(backend.branch_count_, 1);
-  EXPECT_EQ(controller.element_id(), 84u);
+  // identity = {element_id=42, image_id=84, ...}; session must stay on the open image.
+  EXPECT_EQ(controller.element_id(), 42u);
+  EXPECT_EQ(controller.image_id(), 84u);
 
   backend.CompletePendingVersionOp(false, "branch creation failed: selected commit missing");
 
@@ -1081,10 +1105,13 @@ TEST(EditorSessionControllerPhase5ATest,
   EXPECT_EQ(controller.last_history_message().toStdString(),
             "branch creation failed: selected commit missing")
       << "the terminal event must carry the exact backend failure message";
-  // The selected commit must survive the failed branch (no live mutation
+  // The open-image identity must survive the failed branch (no live mutation
   // before the durable candidate succeeds). The QML-level selectedCommitId
   // preservation is asserted in R5 alongside the inline draft flow.
-  EXPECT_EQ(controller.element_id(), 84u);
+  EXPECT_EQ(controller.element_id(), 42u);
+  EXPECT_EQ(controller.image_id(), 84u);
+  EXPECT_EQ(controller.last_history_result().value(QStringLiteral("selectedId")).toString(),
+            selected_commit);
 }
 
 TEST(EditorSessionControllerPhase5ATest,
