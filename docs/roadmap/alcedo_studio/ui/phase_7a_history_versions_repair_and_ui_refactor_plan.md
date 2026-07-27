@@ -2,7 +2,7 @@
 
 Date: 2026-07-26
 Re-audited: 2026-07-27
-Status: **REOPENED — R2 audit is partial; product workflow and performance are not accepted**
+Status: **REOPENED — R2 audit is partial; R3 history-port split is pending; product workflow and performance are not accepted**
 
 The earlier Phase 7A completion labels were based mainly on focused unit tests and QML fakes. They
 remain useful historical evidence, but they do not prove the production Version workflow. Current
@@ -120,7 +120,7 @@ Out of scope:
 To avoid the earlier confusion between priority and implementation phases:
 
 - `S0`, `S1`, and `S2` are **severity**, not implementation phases.
-- `R0` through `R6` are ordered **repair stages**.
+- `R0` through `R7` are ordered **repair stages**.
 - Historical commit messages containing `P0`, `P1`, or `P2` are identifiers only and do not describe
   the remaining work.
 
@@ -460,9 +460,9 @@ Exit:
 
 **Status:** partial — 10 of 11 failing tests added and verified RED against the
 intended current defect; `LateCheckoutFailurePreservesRedoSuffixAndJournalBytes`
-is deferred to R6 because it requires injecting a failure at DuckDB publication
+is deferred to R7 because it requires injecting a failure at DuckDB publication
 (or snapshot read) after `SelectVersion` clears the redo suffix, and that
-failure-injection fixture is exactly what R6 builds. No wall-clock sleeps drive
+failure-injection fixture is exactly what R7 builds. No wall-clock sleeps drive
 any test; async completion is driven by an explicit `CompletePendingVersionOp`
 drain, never a synchronous fake completion.
 
@@ -521,7 +521,7 @@ Asserts the merge-resolved field value; currently the pre-merge value.
 | `HeadMoveApplyFailurePreservesHeadRedoPipelineSnapshotAndJournal` | EditorSessionHistoryPortTest | FAIL (intended) |
 | `MoveAcrossMergeReconstructsResolvedFields` | EditorSessionHistoryPortTest | FAIL (intended) |
 | `DefaultLoggingWritesNoPerFramePresentationInfo` | EditorAppLoggingTest | PASS (made green by R1) |
-| `LateCheckoutFailurePreservesRedoSuffixAndJournalBytes` | EditorSessionHistoryPortTest | DEFERRED to R6 (needs persistence failure injection) |
+| `LateCheckoutFailurePreservesRedoSuffixAndJournalBytes` | EditorSessionHistoryPortTest | DEFERRED to R7 (needs persistence failure injection) |
 
 Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionControllerPhase5ATest --target EditorSessionHistoryPortTest --target EditorAppLoggingTest`
 Suite totals: EditorSessionControllerPhase5ATest 28 PASS / 7 FAIL (the 7 new R0 tests); EditorSessionHistoryPortTest 11 PASS / 2 FAIL (the 2 new R0 tests); EditorAppLoggingTest 4 PASS.
@@ -534,7 +534,7 @@ async Version-op counters (`create_root_count_`, `branch_count_`,
 `app_logging`. No counter relies on wall-clock time.
 
 **Checklist / exit condition:** 10/11 tests fail for the intended current defect;
-1 (`LateCheckoutFailurePreservesRedoSuffixAndJournalBytes`) deferred to R6 per its
+1 (`LateCheckoutFailurePreservesRedoSuffixAndJournalBytes`) deferred to R7 per its
 failure-injection scope. No test relies on wall-clock sleeps; no fake completes an
 asynchronous action synchronously (`CompletePendingVersionOp` is an explicit drain).
 
@@ -543,14 +543,14 @@ asynchronous action synchronously (`CompletePendingVersionOp` is an explicit dra
 test). No production behavior changed in R0.
 
 **Remaining gaps:** `LateCheckoutFailurePreservesRedoSuffixAndJournalBytes` requires
-R6's controllable production fixture (real `EditorSessionHistoryPort` +
+R7's controllable production fixture (real `EditorSessionHistoryPort` +
 `PipelineMgmtService` + DuckDB + a forced persistence/snapshot-read failure after
 `SelectVersion` clears redo). The redo-clear-then-no-rollback mechanism is already
 confirmed in source (`MiniGitWorkingHistory::SelectVersion` clears `redo_stack_`;
 `RestoreGraphAndPipeline` restores graph/pipeline/snapshot/pending/recovered but
 not the redo suffix).
 
-**Source-verified R6 blocker (2026-07-27 re-audit):** the late failure cannot be
+**Source-verified R7 blocker (2026-07-27 re-audit):** the late failure cannot be
 manufactured from any normal op sequence. `PersistEditorHistoryState`
 (`pipeline_service.cpp:726-729`) writes DuckDB and then calls
 `commit_graph_->ApplyMaterializedState`, so a successful persist always syncs the
@@ -562,7 +562,7 @@ rebuild paths cannot be faked. `StorageService::GetDBController()` is non-virtua
 and returns a concrete `DBController&` member, so subclassing cannot inject a
 failing DuckDB connection either. The sole reachable late failure is a controllable
 DuckDB write failure inside `graph_service.Materialize` after `SelectVersion`
-clears redo — i.e. R6's "Inject failure at DuckDB publication" fixture. Every
+clears redo — i.e. R7's "Inject failure at DuckDB publication" fixture. Every
 injection seam has been source-verified closed in R0's scope.
 
 ### R1 — remove logging from the frame budget
@@ -727,8 +727,8 @@ DuckDB/persistence path while measuring GUI projection latency is still absent.
 | `RenderBusyAndFrameCompletionDoNotRefreshHistoryModels` | PASS for the measured renderer notification; zero history signals, refreshes, or reads |
 | Four history projection/presentation tests in `EditorSessionHistoryPortTest` | PASS 4/4 |
 | `EditorVersionsPanelQmlTest` and `EditorHistoryTransactionsPanelQmlTest` | PASS 13/13; includes `VersionListPreservesContentYAcrossCreateRenameAndCheckout` |
-| `EditorSessionControllerPhase5ATest` with the four known R0/R3 red cases excluded | PASS 31/31 |
-| Selected regression set (`CommitGraphTest`, history port, navigation, controller, and both QML targets) | 112/114 passed; two observed R4 failures remain: failed head move mutates graph/journal state, and cross-merge reconstruction returns the pre-merge exposure |
+| `EditorSessionControllerPhase5ATest` with the four known R0/R4 red cases excluded | PASS 31/31 |
+| Selected regression set (`CommitGraphTest`, history port, navigation, controller, and both QML targets) | 112/114 passed; two observed R5 failures remain: failed head move mutates graph/journal state, and cross-merge reconstruction returns the pre-merge exposure |
 | `alcedo_main` production target | PASS; linked successfully with the revised service and QML module |
 
 **Exact verification commands:**
@@ -782,12 +782,64 @@ have inline comments; no standalone generated API reference was added.
   `WorkingState` mutex; source inspection alone cannot close that exit item.
 - Add a dedicated renderer route/frame-completion counter test and a cache-hit counter if the
   performance target requires instrumentation rather than source/model evidence.
-- Keep the two observed history-port failures with R4: failed head-move rollback and merge-aware
+- Keep the two observed history-port failures with R5: failed head-move rollback and merge-aware
   reconstruction.
-- Keep the four known `EditorSessionControllerPhase5ATest` asynchronous-result failures with R0/R3;
+- Keep the four known `EditorSessionControllerPhase5ATest` asynchronous-result failures with R0/R4;
   they are not R2 evidence and were not changed here.
 
-### R3 — publish exact asynchronous operation results
+### R3 — split `EditorSessionHistoryPort` by responsibility
+
+Goal: reduce the 1,245-line history-port implementation into cohesive internal units while keeping
+the existing `IEditorHistoryPort` API and all application-service call sites stable. The split must
+make ownership and lock boundaries visible; it must not move history reads or Mini-Git behavior into
+QML or the editor controller.
+
+Files:
+
+- `alcedo_studio/src/include/ui/alcedo_main/album_backend/editor_session_history_port.hpp`
+- `alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_history_port.cpp`
+- new internal history-port headers and sources under
+  `alcedo_studio/src/{include,ui}/alcedo_main/album_backend/`
+- the owning `CMakeLists.txt` source registration
+- `EditorSessionHistoryPortTest`, controller/navigation fixtures, and the multi-slider test
+
+Required split:
+
+1. Keep `EditorSessionHistoryPort` as the narrow façade implementing `IEditorHistoryPort`; it owns
+   dependency wiring and delegates operations, but does not contain Mini-Git traversal, payload
+   presentation, merge resolution, or checkpoint persistence algorithms.
+2. Extract per-image `WorkingState` ownership, acquisition/release, service-path resolution, and
+   pipeline-guard access into a history-state unit. Every helper receives an explicit state/guard
+   context and uses the established mutex boundary.
+3. Extract `ReadHistorySnapshot` and `ReadAdjustmentSnapshot` into a projection unit. It must copy
+   mutable graph values under the short state lock, then sort, parse, and format outside that lock.
+4. Extract adjustment capture, settled commit, Undo, Redo, explicit head movement, and Version
+   checkout into a mutation/navigation unit. It must preserve the existing render and revision
+   publication call chain.
+5. Extract root Version creation, selected-commit branching, rename, and removal into a Version
+   reference unit; extract Paste and Begin/Complete/Cancel Merge into a transfer unit.
+6. Extract `CaptureSaveCheckpoint` and `DiscardMaterializedJournalThrough` into a checkpoint unit.
+   Save captures remain immutable and transferred to the save service without a deferred side map.
+7. Register each new source in CMake, keep the helpers free of QML/QObject dependencies, and retain
+   inline API comments for every new public or internal boundary that needs caller guidance.
+
+Exit:
+
+- `IEditorHistoryPort` and `EditorSessionService` call sites require no UI-facing API change;
+- `editor_session_history_port.cpp` is a delegation façade of at most 400 lines, with no Mini-Git
+  traversal or payload-formatting implementation left in it;
+- each extracted unit has one primary responsibility and an explicit dependency direction;
+- projection parsing/presentation remains outside the `WorkingState` mutex, while all graph/state
+  access remains protected by the owning state unit;
+- history, navigation, controller, QML, and multi-slider tests pass with the split implementation;
+- new unit tests cover each extracted unit's success and failure path, including save capture,
+  merge cancellation, invalid IDs, projection ordering, and lock-safe source copying;
+- no duplicate `WorkingState`, revision publication, journal path, or pipeline-guard ownership is
+  introduced by the split;
+- the completion record lists the new files, primary call chains, exact commands, and per-target
+  pass/fail totals.
+
+### R4 — publish exact asynchronous operation results
 
 Files:
 
@@ -821,7 +873,7 @@ Exit:
 - no internal task key is user-facing;
 - no controller validation failure is silent.
 
-### R4 — make Mini-Git transitions atomic in memory and storage
+### R5 — make Mini-Git transitions atomic in memory and storage
 
 Files:
 
@@ -856,7 +908,7 @@ Exit:
 - multi-step move and Undo/Redo have the same atomic behavior;
 - merge traversal reproduces the selected commit's pipeline.
 
-### R5 — finish QML lifecycle and list performance
+### R6 — finish QML lifecycle and list performance
 
 Files:
 
@@ -885,7 +937,7 @@ Exit:
 - no complex history subtree animates opacity;
 - existing interaction tests and new lifecycle/performance tests pass.
 
-### R6 — production integration and performance qualification
+### R7 — production integration and performance qualification
 
 Build a production-path fixture with real:
 
@@ -993,7 +1045,7 @@ ctest --test-dir build/debug -R "CommitGraphTest|EditorSessionHistoryPortTest|Ed
 ```
 
 Add and run the new logging, operation-event, production Version workflow, and performance targets
-created by R0–R6. Run test targets sequentially if any legacy target still uses a shared external
+created by R0–R7. Run test targets sequentially if any legacy target still uses a shared external
 temporary database; the new fixture itself must use a unique `build/tmp/<test-name>/` path.
 
 ## Implementation order and completion rules
@@ -1003,14 +1055,17 @@ Order is mandatory:
 1. R0 failing evidence;
 2. R1 logging;
 3. R2 revision/projection decoupling;
-4. R3 operation events and errors;
-5. R4 prepared Mini-Git transitions;
-6. R5 QML lifecycle;
-7. R6 production qualification.
+4. R3 history-port split;
+5. R4 operation events and errors;
+6. R5 prepared Mini-Git transitions;
+7. R6 QML lifecycle;
+8. R7 production qualification.
 
 R1 and R2 may be implemented in separate commits after R0 because their code ownership does not
-overlap materially. R3 must land before R4 so every new failure path is visible. R4 must land before
-R5 final QML assertions because QML pending/error behavior depends on the terminal operation event.
+overlap materially. R3 must land before R4 so operation-event changes use stable history-port
+boundaries. R4 must land before R5 so every new failure path is visible before atomic Mini-Git
+transitions. R4 must also land before R6 final QML assertions because QML pending/error behavior
+depends on the terminal operation event. R5 and R6 must land before R7 production qualification.
 
 The repair is complete only when:
 
