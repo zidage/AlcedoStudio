@@ -469,5 +469,165 @@ TEST(EditorHistoryCommitPresentationTest, FormatsNumericBooleanPathEnumAndCompou
   EXPECT_EQ(merge.merge_summary.toStdString(), "Resolved 2 fields");
 }
 
+// ---------------------------------------------------------------------------
+// Phase 7A R0: failing evidence for Mini-Git atomicity. These tests assert the
+// repaired target behavior and fail against the current defect where head moves
+// and merge traversal mutate durable/live state before the full target pipeline
+// is known to succeed.
+// ---------------------------------------------------------------------------
+
+TEST_F(EditorSessionHistoryPortTest,
+       HeadMoveApplyFailurePreservesHeadRedoPipelineSnapshotAndJournal) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+
+  // Seed one settled exposure edit so the working head and committed snapshot
+  // are well-defined before the failing move.
+  ASSERT_TRUE(CommitSettled(history_, handle, "exposure", R"({"exposure":0.5})", &error))
+      << error;
+  const auto c1 = *guard_->working_head_commit_hash_;
+  ASSERT_TRUE(guard_->commit_graph_->FindCommit(c1) != nullptr);
+
+  // Insert an in-graph commit whose payload does not map to any QML editor field.
+  // MoveHeadToCommit across it must therefore fail ApplyCommittedPayload. The
+  // current defect appends the head-move journal record and advances the graph
+  // head before the apply is known to succeed, so the failed move leaves the
+  // head/redo/journal mutated.
+  // Insert an in-graph ordinary commit whose (stage, operator) pair does not
+  // map to any QML editor field (EXPOSURE belongs to Basic_Adjustment, not
+  // To_WorkingSpace). MoveHeadToCommit across it therefore fails
+  // ApplyCommittedPayload at field-key resolution. The current defect appends
+  // the head-move journal record and advances the graph head before the apply
+  // is known to succeed, so the failed move leaves head/redo/journal mutated.
+  alcedo::OrdinaryEditPayload bad_payload;
+  bad_payload.operator_type  = alcedo::OperatorType::EXPOSURE;
+  bad_payload.stage_name     = alcedo::PipelineStageName::To_WorkingSpace;
+  bad_payload.field_name      = "bogus_field";
+  bad_payload.after_value     = nlohmann::json::parse(R"({"exposure":0.0})");
+  bad_payload.after_enabled   = true;
+  auto bad_commit = alcedo::EditCommit::MakeEdit(guard_->commit_graph_->GetRootId(), c1,
+                                                 std::move(bad_payload));
+  bad_commit.FinalizeHash();
+  ASSERT_TRUE(guard_->commit_graph_->InsertCommit(std::move(bad_commit)));
+  const auto active_version = guard_->commit_graph_->GetActiveVersionId();
+  alcedo::head_commit_hash_t bad_head = std::nullopt;
+  for (const auto& [hash, commit] : guard_->commit_graph_->GetAllCommits()) {
+    if (commit.GetKind() == alcedo::EditCommitKind::kEdit &&
+        commit.GetFirstParentHash() == c1 &&
+        commit.GetPayloadJSON().contains("field_name") &&
+        commit.GetPayloadJSON()["field_name"] == "bogus_field") {
+      bad_head = hash;
+      break;
+    }
+  }
+  ASSERT_TRUE(bad_head.has_value()) << "could not locate the inserted bogus commit";
+  guard_->commit_graph_->MoveWorkingHead(active_version, bad_head);
+
+  const auto journal_records_before = [&] {
+    alcedo::MiniGitJournal j(journal_path_);
+    std::string            load_error;
+    if (!j.Load(&load_error)) return std::size_t{0};
+    return j.records().size();
+  }();
+
+  // The move across the bogus commit must fail and leave the full working-state
+  // tuple unchanged (R4 prepared-transition target).
+  EXPECT_FALSE(history_.MoveHeadToCommit(handle, c1, &error))
+      << "a head move across an unmappable commit must fail";
+
+  EXPECT_EQ(guard_->commit_graph_->GetActiveVersionRef().head_commit_hash, bad_head)
+      << "a failed head move must not advance the graph head";
+
+  alcedo::EditorHistorySnapshot snapshot;
+  ASSERT_TRUE(history_.ReadHistorySnapshot(handle, &snapshot, &error)) << error;
+  const auto future_rows = std::count_if(
+      snapshot.commits.begin(), snapshot.commits.end(),
+      [](const alcedo::EditorHistoryCommit& row) {
+        return row.position == alcedo::EditorHistoryTimelinePosition::Future;
+      });
+  EXPECT_EQ(future_rows, 0) << "a failed head move must not push a redo suffix";
+
+  const auto journal_records_after = [&] {
+    alcedo::MiniGitJournal j(journal_path_);
+    std::string            load_error;
+    if (!j.Load(&load_error)) return std::size_t{0};
+    return j.records().size();
+  }();
+  EXPECT_EQ(journal_records_after, journal_records_before)
+      << "a failed head move must not append a journal record";
+}
+
+TEST_F(EditorSessionHistoryPortTest, MoveAcrossMergeReconstructsResolvedFields) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+
+  // Seed one settled exposure edit (C1) on the active first-parent chain.
+  ASSERT_TRUE(CommitSettled(history_, handle, "exposure", R"({"exposure":0.5})", &error))
+      << error;
+  const auto c1 = *guard_->working_head_commit_hash_;
+  const auto active_version = guard_->commit_graph_->GetActiveVersionId();
+  const auto root_id = guard_->commit_graph_->GetRootId();
+
+  // Create a second parent (C2) on a parallel root branch for the merge.
+  alcedo::OrdinaryEditPayload contrast_payload;
+  contrast_payload.operator_type = alcedo::OperatorType::CONTRAST;
+  contrast_payload.stage_name     = alcedo::PipelineStageName::Basic_Adjustment;
+  contrast_payload.field_name      = "contrast";
+  contrast_payload.after_value      = nlohmann::json::parse(R"({"contrast":0.3})");
+  contrast_payload.after_enabled    = true;
+  auto c2_commit = alcedo::EditCommit::MakeEdit(root_id, std::nullopt, std::move(contrast_payload));
+  c2_commit.FinalizeHash();
+  ASSERT_TRUE(guard_->commit_graph_->InsertCommit(std::move(c2_commit)));
+  alcedo::commit_hash_t c2{};
+  for (const auto& [hash, commit] : guard_->commit_graph_->GetAllCommits()) {
+    if (commit.GetKind() == alcedo::EditCommitKind::kEdit && !commit.GetFirstParentHash().has_value() &&
+        commit.GetPayloadJSON().contains("field_name") &&
+        commit.GetPayloadJSON()["field_name"] == "contrast") {
+      c2 = hash;
+      break;
+    }
+  }
+  ASSERT_NE(c2, alcedo::commit_hash_t{}) << "could not locate the second parent commit";
+
+  // Create a merge commit M (first parent C1, second parent C2) carrying a
+  // resolved exposure value distinct from C1.
+  alcedo::MergeEditPayload merge_payload;
+  alcedo::MergeFieldDelta  field;
+  field.operator_type    = alcedo::OperatorType::EXPOSURE;
+  field.stage_name        = alcedo::PipelineStageName::Basic_Adjustment;
+  field.field_name        = "exposure";
+  field.resolved_value     = nlohmann::json::parse(R"({"exposure":0.9})");
+  field.resolved_enabled   = true;
+  merge_payload.fields.push_back(field);
+  merge_payload.CanonicalizeAndValidate();
+  auto merge = alcedo::EditCommit::MakeMerge(root_id, c1, c2, std::move(merge_payload));
+  merge.FinalizeHash();
+  ASSERT_TRUE(guard_->commit_graph_->InsertCommit(std::move(merge)));
+  alcedo::commit_hash_t merge_hash{};
+  for (const auto& [hash, commit] : guard_->commit_graph_->GetAllCommits()) {
+    if (commit.GetKind() == alcedo::EditCommitKind::kMerge &&
+        commit.GetFirstParentHash() == c1) {
+      merge_hash = hash;
+      break;
+    }
+  }
+  ASSERT_NE(merge_hash, alcedo::commit_hash_t{}) << "could not locate the merge commit";
+  guard_->commit_graph_->MoveWorkingHead(active_version, merge_hash);
+
+  // Move back to C1 (the merge lands in the redo suffix), then forward to the
+  // merge. The forward move must reconstruct the merge's resolved exposure.
+  ASSERT_TRUE(history_.MoveHeadToCommit(handle, c1, &error)) << error;
+  alcedo::EditorRenderAdjustmentSnapshot baseline_snapshot;
+  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &baseline_snapshot, &error)) << error;
+  EXPECT_EQ(PatchValue(baseline_snapshot, "exposure"), R"({"exposure":0.5})");
+
+  ASSERT_TRUE(history_.MoveHeadToCommit(handle, merge_hash, &error)) << error;
+  alcedo::EditorRenderAdjustmentSnapshot resolved_snapshot;
+  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &resolved_snapshot, &error)) << error;
+  EXPECT_EQ(PatchValue(resolved_snapshot, "exposure"), R"({"exposure":0.9})")
+      << "moving forward across a merge must reconstruct the merge-resolved field values";
+}
 }  // namespace
 }  // namespace alcedo::ui

@@ -25,6 +25,7 @@
 #include "app/editor_session_service.hpp"
 #include "app/editor_session_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
+#include "ui/alcedo_main/album_backend/editor_history_models.hpp"
 #include "ui/alcedo_main/album_backend/workspace_router.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 
@@ -192,6 +193,67 @@ class FakeSessionBackend final : public IEditorSessionBackend {
     return result;
   }
 
+  // Phase 7A R0: deterministic counters + async Version-operation modeling for
+  // terminal-event evidence. Async completion is driven by an explicit test
+  // call (CompletePendingVersionOp), never a wall-clock sleep and never a fake
+  // that completes synchronously inside the Q_INVOKABLE call.
+  int     history_snapshot_count_ = 0;
+  bool    async_version_ops_      = false;
+  int     create_root_count_       = 0;
+  int     branch_count_             = 0;
+  int     checkout_async_count_    = 0;
+  QString last_action_;
+  std::string pending_message_;
+  bool        pending_success_ = false;
+  bool        has_pending_     = false;
+
+  auto history_snapshot() -> EditorHistorySnapshot override {
+    ++history_snapshot_count_;
+    return {};
+  }
+
+  auto MakeSaveStarted() const -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::SaveStarted;
+    result.state    = state_;
+    result.identity = identity_;
+    result.message  = "Save started";
+    return result;
+  }
+
+  auto CreateRootVersion(std::string display_name) -> EditorSessionResult override {
+    if (!async_version_ops_) return IEditorSessionBackend::CreateRootVersion(std::move(display_name));
+    ++create_root_count_;
+    last_action_ = QStringLiteral("createRootVersion");
+    return MakeSaveStarted();
+  }
+
+  auto BranchFromCommit(const commit_hash_t& commit_id, std::string display_name)
+      -> EditorSessionResult override {
+    if (!async_version_ops_) return IEditorSessionBackend::BranchFromCommit(commit_id, std::move(display_name));
+    ++branch_count_;
+    last_action_ = QStringLiteral("branchFromCommit");
+    return MakeSaveStarted();
+  }
+
+  auto CheckoutVersion(const version_ref_id_t& version_id) -> EditorSessionResult override {
+    if (!async_version_ops_) return IEditorSessionBackend::CheckoutVersion(version_id);
+    ++checkout_async_count_;
+    last_action_ = QStringLiteral("checkoutVersion");
+    return MakeSaveStarted();
+  }
+
+  /// Deterministic async completion: records the terminal outcome and
+  /// NotifyChange() the same way EditorSessionService::Emit does when the save
+  /// worker finishes. The defect under test is that EditorSessionController does
+  /// not install the service result observer, so this terminal outcome never
+  /// reaches the QML boundary as a correlated HistoryOperationFinished.
+  void CompletePendingVersionOp(bool success, std::string message) {
+    pending_success_ = success;
+    pending_message_ = std::move(message);
+    has_pending_     = true;
+    NotifyChange();
+  }
  private:
   void UpsertSnapshotPatch(EditorAdjustmentPatch patch) {
     auto& patches = current_snapshot_.patches;
@@ -830,5 +892,204 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotIncludesParsedJsonValues) {
 }
 
 
+// ---------------------------------------------------------------------------
+// Phase 7A R0: failing evidence for the history-notification amplification,
+// lost async terminal results, and swallowed validation errors. Each test
+// asserts the repaired target behavior and fails against the current defect.
+// Counters are deterministic (lambda signal counters + FakeSessionBackend
+// counters); no wall-clock sleeps; async completion is driven by an explicit
+// test call (CompletePendingVersionOp), never a synchronous fake completion.
+// ---------------------------------------------------------------------------
+
+TEST(EditorSessionControllerPhase5ATest,
+     InteractivePreviewDoesNotPublishHistoryRevisionOrReadHistorySnapshot) {
+  FakeSessionBackend backend;
+  backend.state_    = EditorSessionState::Interactive;
+  backend.identity_ = {42, 84, 1, 1, 1};
+  EditorSessionController controller(nullptr, &backend);
+  EditorHistoryModel       model;
+  model.setEditorSession(&controller);
+
+  int history_signals = 0;
+  int model_refreshes  = 0;
+  QObject::connect(&controller, &EditorSessionController::HistoryChanged, [&] { ++history_signals; });
+  QObject::connect(&model, &EditorHistoryModel::StateChanged, [&] { ++model_refreshes; });
+  backend.history_snapshot_count_ = 0;
+
+  ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
+                                      QStringLiteral(R"({"exposure":0.5})"), false));
+
+  EXPECT_EQ(history_signals, 0) << "interactive preview must not emit HistoryChanged";
+  EXPECT_EQ(model_refreshes, 0) << "interactive preview must not refresh the history model";
+  EXPECT_EQ(backend.history_snapshot_count_, 0)
+      << "interactive preview must not read a history snapshot";
+}
+
+TEST(EditorSessionControllerPhase5ATest,
+     SettledCommitPublishesOneHistoryRevisionAndOneProjection) {
+  FakeSessionBackend backend;
+  backend.state_    = EditorSessionState::Interactive;
+  backend.identity_ = {42, 84, 1, 1, 1};
+  EditorSessionController controller(nullptr, &backend);
+  EditorHistoryModel       model;
+  model.setEditorSession(&controller);
+
+  int history_signals = 0;
+  int model_refreshes  = 0;
+  QObject::connect(&controller, &EditorSessionController::HistoryChanged, [&] { ++history_signals; });
+  QObject::connect(&model, &EditorHistoryModel::StateChanged, [&] { ++model_refreshes; });
+  backend.history_snapshot_count_ = 0;
+
+  ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
+                                      QStringLiteral(R"({"exposure":0.8})"), true));
+
+  EXPECT_EQ(history_signals, 1) << "one settled commit publishes one history revision";
+  EXPECT_EQ(model_refreshes, 1) << "one settled commit performs one projection";
+  EXPECT_EQ(backend.history_snapshot_count_, 1)
+      << "one settled commit reads one history snapshot";
+}
+
+TEST(EditorSessionControllerPhase5ATest, RenderBusyAndFrameCompletionDoNotRefreshHistoryModels) {
+  FakeSessionBackend backend;
+  backend.state_    = EditorSessionState::Interactive;
+  backend.identity_ = {42, 84, 1, 1, 1};
+  EditorSessionController controller(nullptr, &backend);
+  EditorHistoryModel       model;
+  model.setEditorSession(&controller);
+
+  int history_signals = 0;
+  int model_refreshes  = 0;
+  QObject::connect(&controller, &EditorSessionController::HistoryChanged, [&] { ++history_signals; });
+  QObject::connect(&model, &EditorHistoryModel::StateChanged, [&] { ++model_refreshes; });
+
+  // Settle the session to Interactive (first-frame presented) before measuring.
+  backend.SimulateFirstFramePresented();
+  history_signals = 0;
+  model_refreshes = 0;
+  backend.history_snapshot_count_ = 0;
+
+  // A render-busy toggle is a renderer notification, not a history mutation.
+  backend.render_busy_ = true;
+  backend.NotifyWithoutStateChange();
+
+  EXPECT_EQ(history_signals, 0) << "render-busy must not emit HistoryChanged";
+  EXPECT_EQ(model_refreshes, 0) << "render-busy must not refresh the history model";
+  EXPECT_EQ(backend.history_snapshot_count_, 0)
+      << "render-busy must not read a history snapshot";
+}
+
+TEST(EditorSessionControllerPhase5ATest, AsyncRootVersionCompletionClosesMatchingDraft) {
+  FakeSessionBackend backend;
+  backend.state_            = EditorSessionState::Interactive;
+  backend.identity_         = {42, 84, 1, 1, 1};
+  backend.async_version_ops_ = true;
+  EditorSessionController controller(nullptr, &backend);
+
+  int finished = 0;
+  QObject::connect(&controller, &EditorSessionController::HistoryOperationFinished,
+                   [&] { ++finished; });
+
+  controller.CreateRootVersion(QStringLiteral("New Look"));
+  ASSERT_EQ(finished, 1) << "the immediate SaveStarted result must publish one event";
+  EXPECT_EQ(controller.last_history_result().value("action").toString(),
+            QStringLiteral("createRootVersion"));
+  EXPECT_EQ(controller.last_history_result().value("kind").toInt(),
+            static_cast<int>(EditorSessionResultKind::SaveStarted));
+
+  // Deterministic async completion of the save checkpoint. The QML inline draft
+  // closes on the terminal HistoryOperationFinished for this operation id; this
+  // controller-level assertion proves that terminal event must arrive (R3 repair).
+  backend.CompletePendingVersionOp(true, "Editor session materialized");
+
+  EXPECT_EQ(finished, 2) << "async completion must publish a terminal event";
+  EXPECT_EQ(controller.last_history_result().value("kind").toInt(),
+            static_cast<int>(EditorSessionResultKind::SaveFinished))
+      << "async completion must publish a terminal SaveFinished, not SaveStarted";
+  EXPECT_EQ(controller.last_history_message().toStdString(), "Editor session materialized")
+      << "the terminal event must carry the exact backend message";
+}
+
+TEST(EditorSessionControllerPhase5ATest, AsyncRootVersionFailureShowsExactBackendMessage) {
+  FakeSessionBackend backend;
+  backend.state_            = EditorSessionState::Interactive;
+  backend.identity_         = {42, 84, 1, 1, 1};
+  backend.async_version_ops_ = true;
+  EditorSessionController controller(nullptr, &backend);
+
+  int finished = 0;
+  QObject::connect(&controller, &EditorSessionController::HistoryOperationFinished,
+                   [&] { ++finished; });
+
+  controller.CreateRootVersion(QStringLiteral("Broken Root"));
+  ASSERT_EQ(finished, 1);
+
+  backend.CompletePendingVersionOp(false, "root Version creation failed: disk full");
+
+  EXPECT_EQ(finished, 2) << "async failure must publish a terminal event";
+  EXPECT_TRUE(controller.last_history_failed())
+      << "async failure must mark the result failed at the QML boundary";
+  EXPECT_EQ(controller.last_history_message().toStdString(),
+            "root Version creation failed: disk full")
+      << "the terminal event must carry the exact backend failure message";
+}
+
+TEST(EditorSessionControllerPhase5ATest,
+     AsyncBranchFailureKeepsSelectedCommitAndShowsExactBackendMessage) {
+  FakeSessionBackend backend;
+  backend.state_            = EditorSessionState::Interactive;
+  backend.identity_         = {42, 84, 1, 1, 1};
+  backend.async_version_ops_ = true;
+  EditorSessionController controller(nullptr, &backend);
+  const QString selected_commit = QStringLiteral("abcdef0123456789fedcba9876543210");
+
+  int finished = 0;
+  QObject::connect(&controller, &EditorSessionController::HistoryOperationFinished,
+                   [&] { ++finished; });
+
+  controller.BranchFromCommit(selected_commit, QStringLiteral("Branch Look"));
+  ASSERT_EQ(finished, 1);
+  EXPECT_EQ(backend.branch_count_, 1);
+  EXPECT_EQ(controller.element_id(), 84u);
+
+  backend.CompletePendingVersionOp(false, "branch creation failed: selected commit missing");
+
+  EXPECT_EQ(finished, 2) << "async branch failure must publish a terminal event";
+  EXPECT_EQ(controller.last_history_result().value("action").toString(),
+            QStringLiteral("branchFromCommit"));
+  EXPECT_TRUE(controller.last_history_failed());
+  EXPECT_EQ(controller.last_history_message().toStdString(),
+            "branch creation failed: selected commit missing")
+      << "the terminal event must carry the exact backend failure message";
+  // The selected commit must survive the failed branch (no live mutation
+  // before the durable candidate succeeds). The QML-level selectedCommitId
+  // preservation is asserted in R5 alongside the inline draft flow.
+  EXPECT_EQ(controller.element_id(), 84u);
+}
+
+TEST(EditorSessionControllerPhase5ATest,
+     InvalidVersionOrCommitIdPublishesRejectedTerminalResult) {
+  FakeSessionBackend backend;
+  backend.state_    = EditorSessionState::Interactive;
+  backend.identity_ = {42, 84, 1, 1, 1};
+  EditorSessionController controller(nullptr, &backend);
+
+  int finished = 0;
+  QObject::connect(&controller, &EditorSessionController::HistoryOperationFinished,
+                   [&] { ++finished; });
+
+  controller.CheckoutVersion(QStringLiteral("not-a-hex-version-id"));
+  EXPECT_EQ(finished, 1)
+      << "an invalid Version id must publish a terminal rejected result, not fail silently";
+  EXPECT_TRUE(controller.last_history_failed());
+  EXPECT_EQ(controller.last_history_result().value("action").toString(),
+            QStringLiteral("checkoutVersion"));
+  EXPECT_FALSE(controller.last_history_message().isEmpty());
+
+  controller.MoveHeadToCommit(QStringLiteral("zzz"));
+  EXPECT_EQ(finished, 2)
+      << "an invalid commit id must publish a terminal rejected result, not fail silently";
+  EXPECT_EQ(controller.last_history_result().value("action").toString(),
+            QStringLiteral("moveHeadToCommit"));
+}
 }  // namespace
 }  // namespace alcedo::ui
