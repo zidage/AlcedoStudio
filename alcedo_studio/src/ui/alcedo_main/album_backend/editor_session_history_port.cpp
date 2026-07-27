@@ -704,53 +704,83 @@ auto EditorSessionHistoryPort::ReadHistorySnapshot(const alcedo::EditorHistoryGu
                                                    std::string* error) -> bool {
   auto state = EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  std::scoped_lock state_lock(state->mutex);
-  if (snapshot == nullptr || !state->pipeline_guard || !state->pipeline_guard->commit_graph_ ||
-      !state->history) {
-    if (error) *error = "Editor history graph is unavailable";
-    return false;
+  // Phase 7A R2: copy the projection source under a short lock, then parse
+  // every commit payload outside the lock. The copy makes the lock boundary
+  // explicit: after the short WorkingState critical section, the GUI
+  // projection never dereferences the live graph or parses payloads while the
+  // mutex is held. DuckDB persistence can therefore only overlap the short
+  // source-copy section, not the full presentation pass.
+  struct ProjectionCommitSource {
+    alcedo::EditCommit                       commit;
+    alcedo::EditorHistoryTimelinePosition    position;
+  };
+  alcedo::version_ref_id_t             active_version_id{};
+  alcedo::head_commit_hash_t           active_head = std::nullopt;
+  bool                                 recovered_head = false;
+  bool                                 can_redo       = false;
+  std::vector<alcedo::EditorHistoryVersion> versions;
+  std::vector<ProjectionCommitSource>       commit_sources;
+  {
+    std::scoped_lock state_lock(state->mutex);
+    if (snapshot == nullptr || !state->pipeline_guard || !state->pipeline_guard->commit_graph_ ||
+        !state->history) {
+      if (error) *error = "Editor history graph is unavailable";
+      return false;
+    }
+    const auto& graph = *state->pipeline_guard->commit_graph_;
+    active_version_id = graph.GetActiveVersionId();
+    active_head       = graph.GetActiveVersionRef().head_commit_hash;
+    recovered_head    = state->recovered_head;
+    can_redo          = state->history->redo_count() > 0;
+
+    const auto& all_refs = graph.GetAllVersionRefs();
+    versions.reserve(all_refs.size());
+    for (const auto& [version_id, version] : all_refs) {
+      versions.push_back({version_id, version.display_name, version.head_commit_hash,
+                          version.created_at, version.updated_at,
+                          version_id == active_version_id});
+    }
+    const auto redo_suffix = state->history->RedoSuffix();
+    std::vector<alcedo::commit_hash_t> chain;
+    if (active_head.has_value()) {
+      chain = graph.FirstParentChain(active_head);
+    }
+
+    commit_sources.reserve(redo_suffix.size() + chain.size());
+    for (const auto& hash : redo_suffix) {
+      commit_sources.push_back(
+          {graph.GetCommit(hash), alcedo::EditorHistoryTimelinePosition::Future});
+    }
+    if (active_head.has_value()) {
+      for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+        const auto position = (it == chain.rbegin())
+                                  ? alcedo::EditorHistoryTimelinePosition::Current
+                                  : alcedo::EditorHistoryTimelinePosition::Applied;
+        commit_sources.push_back({graph.GetCommit(*it), position});
+      }
+    }
   }
 
-  const auto&                   graph             = *state->pipeline_guard->commit_graph_;
-  const auto                    active_version_id = graph.GetActiveVersionId();
-  const auto                    active_head       = graph.GetActiveVersionRef().head_commit_hash;
   alcedo::EditorHistorySnapshot projection;
   projection.active_version_id = active_version_id;
   projection.active_head       = active_head;
-  projection.recovered_head    = state->recovered_head;
+  projection.recovered_head    = recovered_head;
   projection.can_undo          = active_head.has_value();
-  projection.can_redo          = state->history->redo_count() > 0;
+  projection.can_redo          = can_redo;
 
-  projection.versions.reserve(graph.GetAllVersionRefs().size());
-  for (const auto& [version_id, version] : graph.GetAllVersionRefs()) {
-    projection.versions.push_back({version_id, version.display_name, version.head_commit_hash,
-                                   version.created_at, version.updated_at,
-                                   version_id == active_version_id});
-  }
-  std::sort(projection.versions.begin(), projection.versions.end(),
-            [](const auto& left, const auto& right) {
-              if (left.created_at != right.created_at) return left.created_at < right.created_at;
-              return left.version_id.ToString() < right.version_id.ToString();
-            });
+  std::sort(versions.begin(), versions.end(), [](const auto& left, const auto& right) {
+    if (left.created_at != right.created_at) return left.created_at < right.created_at;
+    return left.version_id.ToString() < right.version_id.ToString();
+  });
+  projection.versions = std::move(versions);
 
   // Visible timeline: in-memory redo suffix (future, newest on top), then the
   // applied first-parent chain with the working head marked Current. At the
   // image root (no head) only the redo suffix, if any, is shown; no row is
-  // Current.
-  const auto redo_suffix = state->history->RedoSuffix();
-  projection.commits.reserve(redo_suffix.size() + (active_head.has_value() ? 1 : 0));
-  for (const auto& hash : redo_suffix) {
-    projection.commits.push_back(CommitRowFromEdit(graph.GetCommit(hash),
-                                                   alcedo::EditorHistoryTimelinePosition::Future));
-  }
-  if (active_head.has_value()) {
-    const auto chain = graph.FirstParentChain(active_head);
-    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-      const auto position = (it == chain.rbegin())
-                                ? alcedo::EditorHistoryTimelinePosition::Current
-                                : alcedo::EditorHistoryTimelinePosition::Applied;
-      projection.commits.push_back(CommitRowFromEdit(graph.GetCommit(*it), position));
-    }
+  // Current. Commit payload parsing runs outside the WorkingState mutex.
+  projection.commits.reserve(commit_sources.size());
+  for (const auto& source : commit_sources) {
+    projection.commits.push_back(CommitRowFromEdit(source.commit, source.position));
   }
   *snapshot = std::move(projection);
   return true;

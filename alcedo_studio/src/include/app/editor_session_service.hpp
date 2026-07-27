@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -43,6 +44,14 @@ class IEditorSessionBackend {
   [[nodiscard]] virtual auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot {
     return {};
   }
+  /// Monotonic counter incremented only when history-display-affecting state
+  /// changes (active Version ID, a Version ref creation/removal/rename/head
+  /// move, working head or redo suffix, visible commit set, recovered-head
+  /// marker). Render-busy, frame-ready, progress, preview, viewport, and
+  /// task-detail notifications do not increment it. The controller compares it
+  /// across backend change notifications to emit one dedicated history signal
+  /// instead of refreshing on every renderer event.
+  [[nodiscard]] virtual auto history_revision() const -> std::uint64_t { return 0; }
   [[nodiscard]] virtual auto history_snapshot() -> EditorHistorySnapshot { return {}; }
 
   /// Optional: notified after state/identity changes from async results.
@@ -263,6 +272,9 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot override {
     return edit_.adjustment_snapshot();
   }
+  [[nodiscard]] auto history_revision() const -> std::uint64_t override {
+    return history_revision_.load(std::memory_order_acquire);
+  }
   [[nodiscard]] auto history_snapshot() -> EditorHistorySnapshot override;
   [[nodiscard]] auto presentation_sink_id() const -> PresentationSinkId {
     return render_.presentation_sink_id();
@@ -350,7 +362,13 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// only after the checkpoint succeeds.
   auto StartHistoryCheckpoint(std::string success_message, bool route_render)
       -> EditorSessionResult;
-  auto                              CancelPendingMergeForNavigation(std::string* error) -> bool;
+  auto CancelPendingMergeForNavigation(std::string* error) -> bool;
+  /// Increment the history revision so the controller emits one dedicated
+  /// history signal on the next change notification. Call only at points where
+  /// history-display-affecting state actually changed (settled commit, head
+  /// move, Version ref change, image open/close, recovery). Never call for
+  /// interactive preview, render routing, view changes, or presentation size.
+  void BumpHistoryRevision() { history_revision_.fetch_add(1, std::memory_order_acq_rel); }
 
   Dependencies                      dependencies_;
   ResultObserver                    observer_;
@@ -362,6 +380,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   std::vector<EditorSessionResult>  results_;
   mutable std::mutex                results_mutex_;
   std::unique_ptr<AdjustmentMergePreview> pending_merge_preview_;
+  std::atomic<std::uint64_t>          history_revision_{0};
 };
 
 }  // namespace alcedo

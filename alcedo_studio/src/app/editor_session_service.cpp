@@ -85,6 +85,7 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
         result.kind = EditorSessionResultKind::Accepted;
       }
       result.message = completion.message;
+      BumpHistoryRevision();
     } else {
       result.kind    = EditorSessionResultKind::Failed;
       result.state   = lifecycle_.state();
@@ -146,6 +147,7 @@ auto EditorSessionService::Fail(std::string message) -> EditorSessionResult {
   result.state    = lifecycle_.state();
   result.identity = lifecycle_.identity();
   result.message  = std::move(message);
+  BumpHistoryRevision();
   return Emit(std::move(result));
 }
 
@@ -194,6 +196,7 @@ auto EditorSessionService::FinishVersionNavigation(const NavigationOutcome& outc
     finished.message  = "Editor session materialized";
     Emit(std::move(finished));
   }
+  BumpHistoryRevision();
   return Emit(std::move(result));
 }
 
@@ -274,6 +277,7 @@ auto EditorSessionService::Open(sl_element_id_t element_id, image_id_t image_id)
     finished.message  = "Editor session materialized";
     Emit(std::move(finished));
   }
+  BumpHistoryRevision();
   return Emit(std::move(result));
 }
 
@@ -354,6 +358,7 @@ auto EditorSessionService::CancelPendingNavigation() -> EditorSessionResult {
   result.state    = lifecycle_.state();
   result.identity = lifecycle_.identity();
   result.message  = "Pending navigation cancelled";
+  BumpHistoryRevision();
   return Emit(std::move(result));
 }
 
@@ -367,6 +372,7 @@ auto EditorSessionService::RenameVersion(const version_ref_id_t& version_id,
                                             std::move(display_name), &error)) {
     return Reject(error.empty() ? "Version rename failed" : std::move(error));
   }
+  BumpHistoryRevision();
   return StartHistoryCheckpoint("Version renamed", false);
 }
 
@@ -379,6 +385,7 @@ auto EditorSessionService::RemoveVersion(const version_ref_id_t& version_id)
   if (!dependencies_.history->RemoveVersion(lifecycle_.history_guard(), version_id, &error)) {
     return Reject(error.empty() ? "Version removal failed" : std::move(error));
   }
+  BumpHistoryRevision();
   return StartHistoryCheckpoint("Version removed", false);
 }
 
@@ -395,6 +402,7 @@ auto EditorSessionService::PasteAdjustments(const AdjustmentTransferPackage& pac
                                                &error)) {
     return Reject(error.empty() ? "Editor Paste failed" : std::move(error));
   }
+  BumpHistoryRevision();
   return StartHistoryCheckpoint("Adjustments pasted", true);
 }
 
@@ -423,6 +431,10 @@ auto EditorSessionService::BeginMerge(const AdjustmentTransferPackage& package,
   result.state    = lifecycle_.state();
   result.identity = lifecycle_.identity();
   result.message  = has_conflicts ? "Merge requires field resolutions" : "Merge is ready to apply";
+  // The pending merge hides its incoming Version from the history projection;
+  // publish that visible-set change without waiting for the eventual merge
+  // checkpoint.
+  BumpHistoryRevision();
   return Emit(std::move(result));
 }
 
@@ -441,6 +453,7 @@ auto EditorSessionService::CompleteMerge(const std::vector<AdjustmentMergeResolu
     return Reject(error.empty() ? "Merge could not be completed" : std::move(error));
   }
   pending_merge_preview_.reset();
+  BumpHistoryRevision();
   return StartHistoryCheckpoint("Adjustments merged", true);
 }
 
@@ -462,6 +475,7 @@ auto EditorSessionService::CancelMerge() -> EditorSessionResult {
   result.state    = lifecycle_.state();
   result.identity = lifecycle_.identity();
   result.message  = "Merge cancelled";
+  BumpHistoryRevision();
   return Emit(std::move(result));
 }
 
@@ -650,6 +664,7 @@ auto EditorSessionService::Switch(sl_element_id_t element_id, image_id_t image_i
     finished.message  = "Editor session materialized";
     Emit(std::move(finished));
   }
+  BumpHistoryRevision();
   return Emit(std::move(result));
 }
 
@@ -679,6 +694,7 @@ auto EditorSessionService::Close(bool persist_changes) -> EditorSessionResult {
   result.state    = lifecycle_.state();
   result.identity = lifecycle_.identity();
   result.message  = outcome.message;
+  BumpHistoryRevision();
   return Emit(std::move(result));
 }
 
@@ -727,6 +743,7 @@ auto EditorSessionService::CommitAdjustment(EditorAdjustmentPatch patch) -> Edit
   result.state    = lifecycle_.state();
   result.identity = route_identity;
   result.message  = outcome.message;
+  BumpHistoryRevision();
   return Emit(std::move(result));
 }
 
@@ -764,6 +781,7 @@ auto EditorSessionService::Undo() -> EditorSessionResult {
   result.state    = lifecycle_.state();
   result.identity = undo_identity;
   result.message  = outcome.message;
+  BumpHistoryRevision();
   return Emit(std::move(result));
 }
 
@@ -788,6 +806,7 @@ auto EditorSessionService::Redo() -> EditorSessionResult {
   result.state    = lifecycle_.state();
   result.identity = redo_identity;
   result.message  = outcome.message;
+  BumpHistoryRevision();
   return Emit(std::move(result));
 }
 
@@ -813,6 +832,7 @@ auto EditorSessionService::MoveHeadToCommit(const commit_hash_t& commit_id)
   result.state    = lifecycle_.state();
   result.identity = move_identity;
   result.message  = outcome.message;
+  BumpHistoryRevision();
   return Emit(std::move(result));
 }
 
@@ -846,6 +866,7 @@ auto EditorSessionService::Discard() -> EditorSessionResult {
   result.state    = lifecycle_.state();
   result.identity = lifecycle_.identity();
   result.message  = outcome.message;
+  BumpHistoryRevision();
   return Emit(std::move(result));
 }
 
@@ -868,6 +889,7 @@ auto EditorSessionService::Shutdown() -> EditorSessionResult {
   result.state    = lifecycle_.state();
   result.identity = lifecycle_.identity();
   result.message  = "Shutting down";
+  BumpHistoryRevision();
   return Emit(std::move(result));
 }
 

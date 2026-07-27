@@ -2,7 +2,7 @@
 
 Date: 2026-07-26
 Re-audited: 2026-07-27
-Status: **REOPENED — product workflow and performance are not accepted**
+Status: **REOPENED — R2 audit is partial; product workflow and performance are not accepted**
 
 The earlier Phase 7A completion labels were based mainly on focused unit tests and QML fakes. They
 remain useful historical evidence, but they do not prove the production Version workflow. Current
@@ -683,6 +683,109 @@ Exit:
 - render route/busy/complete events perform zero history reads;
 - no GUI history read waits behind DuckDB persistence;
 - Version/history list scroll positions remain stable without reset workarounds on data-only changes.
+
+##### R2 completion record — 2026-07-27
+
+**Status:** **PARTIAL** — the revision/projection separation, source-copy boundary, presentation
+cache, and incremental model updates pass the scoped evidence below. The persistence-contention
+criterion and the full renderer event matrix still need dedicated runtime evidence, so R2 is not
+marked complete.
+
+**Primary success call chain:**
+
+```text
+settled edit or history mutation
+  -> EditorSessionService::BumpHistoryRevision + Emit/NotifyChange
+  -> EditorSessionController::OnBackendChanged compares history_revision
+  -> HistoryChanged
+  -> EditorHistoryModel::refresh -> history_snapshot
+  -> ApplyCommits/EditorVersionListModel::SetRows
+  -> cached presentation + targeted Qt model notification where identities stay stable
+```
+
+**Primary non-history notification path:**
+
+```text
+interactive preview, render-busy, or frame notification without a revision change
+  -> EditorSessionController::OnBackendChanged mirrors session state and emits StateChanged
+  -> EditorHistoryModel is not connected to StateChanged
+  -> no history_snapshot read and no history projection
+```
+
+**Projection lock boundary:** `ReadHistorySnapshot` now copies version metadata, timeline
+positions, and `EditCommit` values while holding the short `WorkingState` mutex section, then
+sorts and parses only the copied values after unlocking. This removes live-graph dereferences and
+payload presentation work from the long critical section. A runtime test that holds the
+DuckDB/persistence path while measuring GUI projection latency is still absent.
+
+**Evidence matrix:**
+
+| Evidence | Result |
+| --- | --- |
+| `InteractivePreviewDoesNotPublishHistoryRevisionOrReadHistorySnapshot` — 100 previews against 100 history rows | PASS; zero history signals, model refreshes, or history reads |
+| `SettledCommitPublishesOneHistoryRevisionAndOneProjection` | PASS; one revision signal, one model projection, one snapshot read |
+| `RenderBusyAndFrameCompletionDoNotRefreshHistoryModels` | PASS for the measured renderer notification; zero history signals, refreshes, or reads |
+| Four history projection/presentation tests in `EditorSessionHistoryPortTest` | PASS 4/4 |
+| `EditorVersionsPanelQmlTest` and `EditorHistoryTransactionsPanelQmlTest` | PASS 13/13; includes `VersionListPreservesContentYAcrossCreateRenameAndCheckout` |
+| `EditorSessionControllerPhase5ATest` with the four known R0/R3 red cases excluded | PASS 31/31 |
+| Selected regression set (`CommitGraphTest`, history port, navigation, controller, and both QML targets) | 112/114 passed; two observed R4 failures remain: failed head move mutates graph/journal state, and cross-merge reconstruction returns the pre-merge exposure |
+| `alcedo_main` production target | PASS; linked successfully with the revised service and QML module |
+
+**Exact verification commands:**
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionControllerPhase5ATest
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionHistoryPortTest
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorVersionsPanelQmlTest
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorHistoryTransactionsPanelQmlTest
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target alcedo_main
+ctest --test-dir build/debug -R 'EditorSessionControllerPhase5ATest\.(EditorSessionControllerPhase5ATest\.)?(InteractivePreviewDoesNotPublishHistoryRevisionOrReadHistorySnapshot|SettledCommitPublishesOneHistoryRevisionAndOneProjection|RenderBusyAndFrameCompletionDoNotRefreshHistoryModels)' --output-on-failure
+ctest --test-dir build/debug -R 'EditorSessionHistoryPortTest\.(EditorSessionHistoryPortTest\.)?(HistoryProjectionPublishesDisplayNameBeforeValueAndAfterValue|HistoryProjectionMarksOnlyWorkingHeadCurrentAndIncludesRedoSuffix|MoveHeadToAncestorThenRedoDescendantPublishesOneFinalSnapshot|EditorHistoryCommitPresentationTest\.FormatsNumericBooleanPathEnumAndCompoundAdjustments)|EditorVersionsPanelQmlTest|EditorHistoryTransactionsPanelQmlTest' --output-on-failure
+ctest --test-dir build/debug -R 'EditorSessionControllerPhase5ATest' -E 'AsyncRootVersion|AsyncBranchFailure|InvalidVersionOrCommitId' --output-on-failure
+ctest --test-dir build/debug -R 'CommitGraphTest|EditorSessionHistoryPortTest|EditorSessionNavigationControllerTest|EditorSessionControllerPhase5ATest|EditorHistoryTransactionsPanelQmlTest|EditorVersionsPanelQmlTest' -E 'AsyncRootVersion|AsyncBranchFailure|InvalidVersionOrCommitId' --output-on-failure
+git diff --check
+```
+
+**Exit checklist:**
+
+- [x] 100 interactive previews with a 100-commit projection perform zero history reads.
+- [x] One settled commit publishes one revision and one projection.
+- [ ] The focused test proves the render-busy path, but a separate counter test for render-route and frame-completion events is still required.
+- [ ] No GUI history read waits behind DuckDB persistence is not established by a runtime contention test; the source-copy critical section is now short and explicit.
+- [x] The production Version list keeps `contentY` through create, rename, and checkout in the passing QML flow; data-only rows use targeted notifications.
+
+**Changed-scope and size review:** the R2 patch contains 9 repository files, `+280/-109` lines.
+The unrelated pre-existing `AdjustmentSlider.qml` change is intentionally excluded from this
+record and from the R2 commit.
+
+| File | Current LOC | Diff |
+| --- | ---: | ---: |
+| `alcedo_studio/src/app/editor_session_service.cpp` | 920 | +22/-0 |
+| `alcedo_studio/src/include/app/editor_session_service.hpp` | 364 | +20/-1 |
+| `alcedo_studio/src/include/ui/alcedo_main/album_backend/editor_session_controller.hpp` | 280 | +4/-0 |
+| `alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_controller.cpp` | 834 | +12/-12 |
+| `alcedo_studio/src/include/ui/alcedo_main/album_backend/editor_history_models.hpp` | 131 | +12/-2 |
+| `alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_models.cpp` | 294 | +92/-38 |
+| `alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_history_port.cpp` | 1,245 | +65/-36 |
+| `alcedo_studio/tests/ui/editor_history_versions_rail_qml_harness.hpp` | 573 | +29/-17 |
+| `alcedo_studio/tests/ui/editor_session_controller_phase5a_test.cpp` | 959 | +24/-3 |
+
+`editor_session_history_port.cpp` remains a large mixed-responsibility file; the R2 patch keeps
+the projection change local and does not expand that refactor. The phase 5A test file also mixes
+controller routing, R2 counters, and known asynchronous-result red cases; splitting those fixtures
+would improve ownership but is outside this acceptance pass. New public revision/signal symbols
+have inline comments; no standalone generated API reference was added.
+
+**Residuals:**
+
+- Add a runtime contention test that measures history projection while persistence owns the
+  `WorkingState` mutex; source inspection alone cannot close that exit item.
+- Add a dedicated renderer route/frame-completion counter test and a cache-hit counter if the
+  performance target requires instrumentation rather than source/model evidence.
+- Keep the two observed history-port failures with R4: failed head-move rollback and merge-aware
+  reconstruction.
+- Keep the four known `EditorSessionControllerPhase5ATest` asynchronous-result failures with R0/R3;
+  they are not R2 evidence and were not changed here.
 
 ### R3 — publish exact asynchronous operation results
 

@@ -9,6 +9,7 @@
 #include <QObject>
 #include <QString>
 #include <QVariant>
+#include <unordered_map>
 #include <vector>
 
 #include "app/editor_history_types.hpp"
@@ -124,15 +125,24 @@ class EditorHistoryModel : public QAbstractListModel {
  private:
   void                                     SetSnapshot(alcedo::EditorHistorySnapshot snapshot);
   void                                     DisconnectSession();
-  void                                     RebuildPresentations();
+  /// Resolve the presentation for one commit, reusing a cached entry when the
+  /// immutable commit hash matches. Avoids re-parsing commit JSON on every
+  /// projection for unchanged rows.
+  auto                                     PresentationFor(const alcedo::EditorHistoryCommit& commit)
+      -> EditorHistoryCommitPresentation;
+  /// Apply a new commit list with incremental row operations: insert/remove
+  /// only the changed rows and emit targeted dataChanged for position/role
+  /// changes instead of resetting or repainting the whole list.
+  void                                     ApplyCommits(std::vector<alcedo::EditorHistoryCommit> commits);
 
   QObject*                                 editor_session_object_ = nullptr;
   EditorSessionController*                 editor_session_        = nullptr;
-  QMetaObject::Connection                  state_connection_;
   QMetaObject::Connection                  history_connection_;
   EditorVersionListModel*                  versions_ = nullptr;
   std::vector<alcedo::EditorHistoryCommit>             commits_;
   std::vector<EditorHistoryCommitPresentation>         presentations_;
+  std::unordered_map<alcedo::commit_hash_t, EditorHistoryCommitPresentation>
+                                                      presentation_cache_;
   bool                                     can_undo_       = false;
   bool                                     can_redo_       = false;
   bool                                     recovered_head_ = false;

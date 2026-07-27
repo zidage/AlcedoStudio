@@ -286,6 +286,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QString                        last_history_message_;
   bool                           last_history_failed_ = false;
   QVariantMap                    last_history_result_;
+  // Phase 7A R2: last history revision observed from the backend. OnBackendChanged
+  // emits HistoryChanged only when the backend's history_revision advances, so
+  // render/preview/task notifications no longer trigger a history projection.
+  std::uint64_t last_history_revision_ = 0;
   /// Convert EditorRenderAdjustmentSnapshot patches into a QVariantMap keyed
   /// by field_key with parsed JSON values suitable for QML model loading.
   [[nodiscard]] static auto BuildSnapshotMap(const alcedo::EditorRenderAdjustmentSnapshot& snapshot)

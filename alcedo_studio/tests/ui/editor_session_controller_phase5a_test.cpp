@@ -185,6 +185,10 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   auto CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult override {
     ++commit_count;
     UpsertSnapshotPatch(std::move(patch));
+    // Phase 7A R2: a settled commit mutates history, so bump the revision the
+    // same way EditorSessionService::CommitAdjustment does. Interactive Patch
+    // below does not bump, so previews stay off the history projection path.
+    ++history_revision_;
     EditorSessionResult result;
     result.kind     = EditorSessionResultKind::RenderRouted;
     result.state    = state_;
@@ -198,6 +202,11 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   // call (CompletePendingVersionOp), never a wall-clock sleep and never a fake
   // that completes synchronously inside the Q_INVOKABLE call.
   int     history_snapshot_count_ = 0;
+  EditorHistorySnapshot history_projection_;
+  // Phase 7A R2: monotonic history revision; bumped on settled commit and on
+  // async Version-op completion so the controller emits one HistoryChanged.
+  std::uint64_t history_revision_ = 0;
+  [[nodiscard]] auto history_revision() const -> std::uint64_t override { return history_revision_; }
   bool    async_version_ops_      = false;
   int     create_root_count_       = 0;
   int     branch_count_             = 0;
@@ -209,7 +218,7 @@ class FakeSessionBackend final : public IEditorSessionBackend {
 
   auto history_snapshot() -> EditorHistorySnapshot override {
     ++history_snapshot_count_;
-    return {};
+    return history_projection_;
   }
 
   auto MakeSaveStarted() const -> EditorSessionResult {
@@ -252,6 +261,11 @@ class FakeSessionBackend final : public IEditorSessionBackend {
     pending_success_ = success;
     pending_message_ = std::move(message);
     has_pending_     = true;
+    // Phase 7A R2: the durable mutation lands at completion, so bump the
+    // history revision here. The terminal HistoryOperationFinished is still
+    // not published (the R3 defect); only the revision-driven HistoryChanged
+    // fires, which is the correct history-projection signal.
+    ++history_revision_;
     NotifyChange();
   }
  private:
@@ -906,9 +920,14 @@ TEST(EditorSessionControllerPhase5ATest,
   FakeSessionBackend backend;
   backend.state_    = EditorSessionState::Interactive;
   backend.identity_ = {42, 84, 1, 1, 1};
+  backend.history_projection_.commits.resize(100);
+  for (std::size_t i = 0; i < backend.history_projection_.commits.size(); ++i) {
+    backend.history_projection_.commits[i].commit_hash = Hash128(i + 1, 0);
+  }
   EditorSessionController controller(nullptr, &backend);
   EditorHistoryModel       model;
   model.setEditorSession(&controller);
+  ASSERT_EQ(model.count(), 100);
 
   int history_signals = 0;
   int model_refreshes  = 0;
@@ -916,8 +935,10 @@ TEST(EditorSessionControllerPhase5ATest,
   QObject::connect(&model, &EditorHistoryModel::StateChanged, [&] { ++model_refreshes; });
   backend.history_snapshot_count_ = 0;
 
-  ASSERT_TRUE(controller.submitPatch(QStringLiteral("exposure"),
-                                      QStringLiteral(R"({"exposure":0.5})"), false));
+  for (int i = 0; i < 100; ++i) {
+    ASSERT_TRUE(controller.submitPatch(
+        QStringLiteral("exposure"), QStringLiteral(R"({"exposure":0.5})"), false));
+  }
 
   EXPECT_EQ(history_signals, 0) << "interactive preview must not emit HistoryChanged";
   EXPECT_EQ(model_refreshes, 0) << "interactive preview must not refresh the history model";

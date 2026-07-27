@@ -117,7 +117,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     identity_.image_id   = image_id;
     has_image_           = true;
     state_               = EditorSessionState::Interactive;
-    NotifyChange();
+    NotifyHistoryChange();
     return Accepted("Opened");
   }
 
@@ -136,7 +136,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     snapshot_.active_head       = it->head_commit_hash;
     last_checkout_id_           = version_id;
     ++checkout_count_;
-    NotifyChange();
+    NotifyHistoryChange();
     return Accepted("Checked out");
   }
 
@@ -155,7 +155,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     snapshot_.recovered_head    = false;
     last_created_id_            = id;
     ++create_count_;
-    NotifyChange();
+    NotifyHistoryChange();
     return Accepted("Root Version created");
   }
 
@@ -170,7 +170,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     last_created_id_            = id;
     ++branch_count_;
     ++create_count_;
-    NotifyChange();
+    NotifyHistoryChange();
     return Accepted("Branch created");
   }
 
@@ -187,7 +187,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     it->display_name = std::move(display_name);
     last_rename_id_  = version_id;
     ++rename_count_;
-    NotifyChange();
+    NotifyHistoryChange();
     return Accepted("Version renamed");
   }
 
@@ -199,14 +199,14 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     snapshot_.versions.erase(it);
     last_removed_id_ = version_id;
     ++remove_count_;
-    NotifyChange();
+    NotifyHistoryChange();
     return Accepted("Version removed");
   }
 
   auto PasteAdjustments(const AdjustmentTransferPackage&, std::string)
       -> EditorSessionResult override {
     ++paste_count_;
-    NotifyChange();
+    NotifyHistoryChange();
     return Accepted("Adjustments pasted");
   }
 
@@ -220,12 +220,12 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
       -> EditorSessionResult override {
     last_merge_resolution_count_ = resolutions.size();
     ++complete_merge_count_;
-    NotifyChange();
+    NotifyHistoryChange();
     return Accepted("Merge completed");
   }
 
   auto CancelMerge() -> EditorSessionResult override {
-    NotifyChange();
+    NotifyHistoryChange();
     return Accepted("Merge cancelled");
   }
 
@@ -233,7 +233,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     ++retry_save_count_;
     recovery_pending_ = false;
     last_error_.clear();
-    NotifyChange();
+    NotifyHistoryChange();
     return Accepted("Save retried");
   }
 
@@ -241,7 +241,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     ++discard_count_;
     recovery_pending_ = false;
     last_error_.clear();
-    NotifyChange();
+    NotifyHistoryChange();
     return Accepted("Discarded and continued");
   }
 
@@ -249,14 +249,14 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     ++cancel_recovery_count_;
     recovery_pending_ = false;
     last_error_.clear();
-    NotifyChange();
+    NotifyHistoryChange();
     return Accepted("Pending navigation cancelled");
   }
 
   auto Close(bool) -> EditorSessionResult override {
     state_     = EditorSessionState::NoImage;
     has_image_ = false;
-    NotifyChange();
+    NotifyHistoryChange();
     return Accepted("Closed");
   }
 
@@ -267,7 +267,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     ++undo_count_;
     snapshot_.can_undo = false;
     snapshot_.can_redo = true;
-    NotifyChange();
+    NotifyHistoryChange();
     return Accepted("Undone");
   }
 
@@ -275,7 +275,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     ++redo_count_;
     snapshot_.can_undo = true;
     snapshot_.can_redo = false;
-    NotifyChange();
+    NotifyHistoryChange();
     return Accepted("Redone");
   }
 
@@ -288,11 +288,12 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
                             ? EditorHistoryTimelinePosition::Current
                             : EditorHistoryTimelinePosition::Applied;
     }
-    NotifyChange();
+    NotifyHistoryChange();
     return Accepted("Head moved");
   }
 
   [[nodiscard]] auto history_snapshot() -> EditorHistorySnapshot override { return snapshot_; }
+  [[nodiscard]] auto history_revision() const -> std::uint64_t override { return history_revision_; }
 
   [[nodiscard]] auto last_checkout_id() const -> Hash128 { return last_checkout_id_; }
   [[nodiscard]] auto last_created_id() const -> Hash128 { return last_created_id_; }
@@ -323,7 +324,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   void SetRecovery(bool pending, std::string error = {}) {
     recovery_pending_ = pending;
     last_error_       = std::move(error);
-    NotifyChange();
+    NotifyHistoryChange();
   }
 
   void SetBlockVersionOps(bool block) { block_version_ops_ = block; }
@@ -343,6 +344,17 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     result.kind = EditorSessionResultKind::Rejected;
     return result;
   }
+
+  /// Bump the history revision then notify, mirroring EditorSessionService's
+  /// BumpHistoryRevision + NotifyChange on history-display-affecting changes.
+  /// Every NotifyChange in this fake follows a real mutation, so the
+  /// controller emits exactly one HistoryChanged per mutation.
+  void NotifyHistoryChange() {
+    ++history_revision_;
+    NotifyChange();
+  }
+
+  std::uint64_t         history_revision_            = 0;
 
   EditorSessionState    state_     = EditorSessionState::Interactive;
   bool                  has_image_ = true;

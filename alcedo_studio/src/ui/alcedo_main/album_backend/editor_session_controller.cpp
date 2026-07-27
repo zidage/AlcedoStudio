@@ -136,7 +136,18 @@ void EditorSessionController::OnBackendChanged() {
     }
   }
   emit StateChanged();
-  emit HistoryChanged();
+  // Phase 7A R2: emit the dedicated history signal only when the backend's
+  // monotonic history_revision advances. Render-busy, frame-ready, preview,
+  // progress, viewport, and task-detail notifications leave the revision
+  // unchanged, so EditorHistoryModel no longer projects on every renderer
+  // event. Settled commits, head moves, Version ref changes, image open/close,
+  // and recovery each bump the revision once and trigger exactly one
+  // projection.
+  const auto history_revision = session_backend_->history_revision();
+  if (history_revision != last_history_revision_) {
+    last_history_revision_ = history_revision;
+    emit HistoryChanged();
+  }
 }
 
 auto EditorSessionController::active() const -> bool {
@@ -309,7 +320,6 @@ void EditorSessionController::CheckoutVersion(const QString& versionId) {
     auto       result     = session_backend_->CheckoutVersion(version_id);
     SyncIdentityFromBackend();
     emit StateChanged();
-    emit HistoryChanged();
     PublishHistoryResult(result, QStringLiteral("checkoutVersion"));
   } catch (const std::exception&) {
     // Invalid hex identity: leave the session on the prior Version.
@@ -321,7 +331,6 @@ void EditorSessionController::CreateRootVersion(const QString& displayName) {
   auto result = session_backend_->CreateRootVersion(displayName.trimmed().toStdString());
   SyncIdentityFromBackend();
   emit StateChanged();
-  emit HistoryChanged();
   PublishHistoryResult(result, QStringLiteral("createRootVersion"));
 }
 
@@ -333,7 +342,6 @@ void EditorSessionController::BranchFromCommit(const QString& commitId,
     auto       result = session_backend_->BranchFromCommit(id, displayName.trimmed().toStdString());
     SyncIdentityFromBackend();
     emit StateChanged();
-    emit HistoryChanged();
     PublishHistoryResult(result, QStringLiteral("branchFromCommit"));
   } catch (const std::exception&) {
   }
@@ -344,7 +352,6 @@ void EditorSessionController::RetrySave() {
   session_backend_->RetrySave();
   SyncIdentityFromBackend();
   emit StateChanged();
-  emit HistoryChanged();
 }
 
 void EditorSessionController::DiscardAndContinue() {
@@ -352,7 +359,6 @@ void EditorSessionController::DiscardAndContinue() {
   session_backend_->DiscardAndContinue();
   SyncIdentityFromBackend();
   emit StateChanged();
-  emit HistoryChanged();
 }
 
 void EditorSessionController::CancelPendingNavigation() {
@@ -360,7 +366,6 @@ void EditorSessionController::CancelPendingNavigation() {
   session_backend_->CancelPendingNavigation();
   SyncIdentityFromBackend();
   emit StateChanged();
-  emit HistoryChanged();
 }
 
 void EditorSessionController::RenameVersion(const QString& versionId, const QString& displayName) {
@@ -369,7 +374,6 @@ void EditorSessionController::RenameVersion(const QString& versionId, const QStr
     const auto id = alcedo::Hash128::FromString(versionId.trimmed().toStdString());
     auto       result = session_backend_->RenameVersion(id, displayName.trimmed().toStdString());
     emit StateChanged();
-    emit HistoryChanged();
     PublishHistoryResult(result, QStringLiteral("renameVersion"));
   } catch (const std::exception&) {
   }
@@ -381,7 +385,6 @@ void EditorSessionController::RemoveVersion(const QString& versionId) {
     const auto id = alcedo::Hash128::FromString(versionId.trimmed().toStdString());
     auto       result = session_backend_->RemoveVersion(id);
     emit StateChanged();
-    emit HistoryChanged();
     PublishHistoryResult(result, QStringLiteral("removeVersion"));
   } catch (const std::exception&) {
   }
@@ -391,7 +394,6 @@ void EditorSessionController::Undo() {
   if (!session_backend_) return;
   auto result = session_backend_->Undo();
   emit StateChanged();
-  emit HistoryChanged();
   PublishHistoryResult(result, QStringLiteral("undo"));
 }
 
@@ -399,7 +401,6 @@ void EditorSessionController::Redo() {
   if (!session_backend_) return;
   auto result = session_backend_->Redo();
   emit StateChanged();
-  emit HistoryChanged();
   PublishHistoryResult(result, QStringLiteral("redo"));
 }
 
@@ -410,7 +411,6 @@ void EditorSessionController::MoveHeadToCommit(const QString& commitId) {
     auto       result = session_backend_->MoveHeadToCommit(id);
     SyncIdentityFromBackend();
     emit StateChanged();
-    emit HistoryChanged();
     PublishHistoryResult(result, QStringLiteral("moveHeadToCommit"));
   } catch (...) {
     return;

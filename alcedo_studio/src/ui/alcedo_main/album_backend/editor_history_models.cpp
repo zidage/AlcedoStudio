@@ -76,15 +76,28 @@ auto EditorVersionListModel::roleNames() const -> QHash<int, QByteArray> {
 }
 
 void EditorVersionListModel::SetRows(std::vector<alcedo::EditorHistoryVersion> rows) {
+  // Same Version IDs in the same order: only per-row data (display name, head,
+  // active flag, updated_at) may have changed. Emit targeted dataChanged for
+  // the affected rows instead of repainting the whole list so checkout/rename
+  // keep the Versions scroll position stable.
   if (rows.size() == rows_.size() &&
       std::equal(rows.begin(), rows.end(), rows_.begin(), SameVersionIdentity)) {
-    rows_ = std::move(rows);
-    if (!rows_.empty()) {
-      emit dataChanged(index(0), index(rowCount() - 1));
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+      const auto& next  = rows[i];
+      const auto& prev  = rows_[i];
+      const bool changed = prev.display_name != next.display_name ||
+                           prev.head_commit_hash != next.head_commit_hash ||
+                           prev.active != next.active || prev.updated_at != next.updated_at;
+      rows_[i] = std::move(next);
+      if (changed) {
+        const auto row = static_cast<int>(i);
+        emit dataChanged(index(row), index(row));
+      }
     }
     return;
   }
 
+  // Structural change (added/removed/reordered Version ref): reset.
   beginResetModel();
   rows_ = std::move(rows);
   endResetModel();
@@ -98,9 +111,7 @@ EditorHistoryModel::EditorHistoryModel(QObject* parent) : QAbstractListModel(par
 EditorHistoryModel::~EditorHistoryModel() { DisconnectSession(); }
 
 void EditorHistoryModel::DisconnectSession() {
-  if (state_connection_) QObject::disconnect(state_connection_);
   if (history_connection_) QObject::disconnect(history_connection_);
-  state_connection_   = {};
   history_connection_ = {};
 }
 
@@ -110,8 +121,9 @@ void EditorHistoryModel::setEditorSession(QObject* session) {
   editor_session_object_ = session;
   editor_session_        = qobject_cast<EditorSessionController*>(session);
   if (editor_session_) {
-    state_connection_   = connect(editor_session_, &EditorSessionController::StateChanged, this,
-                                  &EditorHistoryModel::refresh);
+    // Phase 7A R2: project only on the dedicated history signal (driven by the
+    // backend's monotonic history_revision), never on the broad StateChanged
+    // that fires for every render/preview/task notification.
     history_connection_ = connect(editor_session_, &EditorSessionController::HistoryChanged, this,
                                   &EditorHistoryModel::refresh);
   }
@@ -189,23 +201,8 @@ auto EditorHistoryModel::roleNames() const -> QHash<int, QByteArray> {
 }
 
 void EditorHistoryModel::SetSnapshot(alcedo::EditorHistorySnapshot snapshot) {
-  const bool    has_versions = !snapshot.versions.empty();
-  const QString active_version_id =
-      has_versions ? QString::fromStdString(snapshot.active_version_id.ToString()) : QString{};
-  if (snapshot.commits.size() == commits_.size() &&
-      std::equal(snapshot.commits.begin(), snapshot.commits.end(), commits_.begin(),
-                 SameCommitIdentity)) {
-    commits_ = std::move(snapshot.commits);
-    RebuildPresentations();
-    if (!commits_.empty()) {
-      emit dataChanged(index(0), index(rowCount() - 1));
-    }
-  } else {
-    beginResetModel();
-    commits_ = std::move(snapshot.commits);
-    RebuildPresentations();
-    endResetModel();
-  }
+  const QString active_version_id = QString::fromStdString(snapshot.active_version_id.ToString());
+  ApplyCommits(std::move(snapshot.commits));
   versions_->SetRows(std::move(snapshot.versions));
   can_undo_          = snapshot.can_undo;
   can_redo_          = snapshot.can_redo;
@@ -214,14 +211,74 @@ void EditorHistoryModel::SetSnapshot(alcedo::EditorHistorySnapshot snapshot) {
   emit StateChanged();
 }
 
-void EditorHistoryModel::RebuildPresentations() {
-  presentations_.clear();
-  presentations_.reserve(commits_.size());
-  for (const auto& commit : commits_) {
-    presentations_.push_back(PresentEditorHistoryCommit(
-        commit.field_key, commit.before_value_json, commit.after_value_json,
-        commit.before_enabled, commit.after_enabled, commit.kind, commit.merge_field_keys));
+auto EditorHistoryModel::PresentationFor(const alcedo::EditorHistoryCommit& commit)
+    -> EditorHistoryCommitPresentation {
+  if (const auto it = presentation_cache_.find(commit.commit_hash);
+      it != presentation_cache_.end()) {
+    return it->second;
   }
+  auto pres = PresentEditorHistoryCommit(
+      commit.field_key, commit.before_value_json, commit.after_value_json,
+      commit.before_enabled, commit.after_enabled, commit.kind, commit.merge_field_keys);
+  presentation_cache_.emplace(commit.commit_hash, pres);
+  return pres;
+}
+
+void EditorHistoryModel::ApplyCommits(std::vector<alcedo::EditorHistoryCommit> commits) {
+  // Same commit identities in the same order: only timeline positions may have
+  // changed (a head move within the visible set). Refresh the cached rows and
+  // emit targeted dataChanged for the rows whose position changed instead of
+  // repainting the whole list. Scroll position stays stable on data-only moves.
+  if (commits.size() == commits_.size() &&
+      std::equal(commits.begin(), commits.end(), commits_.begin(), SameCommitIdentity)) {
+    for (std::size_t i = 0; i < commits.size(); ++i) {
+      const auto old_position = commits_[i].position;
+      commits_[i]        = commits[i];
+      presentations_[i]  = PresentationFor(commits_[i]);
+      if (commits_[i].position != old_position) {
+        const auto row = static_cast<int>(i);
+        emit dataChanged(index(row), index(row));
+      }
+    }
+    return;
+  }
+
+  // Append path: the existing rows are a prefix of the new list. A settled edit
+  // advances the head: the prior current row becomes applied and one new
+  // current row is appended. Update the prior current row in place, then insert
+  // the new tail instead of resetting the list.
+  if (!commits_.empty() && commits.size() > commits_.size() &&
+      std::equal(commits_.begin(), commits_.end(), commits.begin(), SameCommitIdentity)) {
+    const auto prior_current = static_cast<std::size_t>(commits_.size() - 1);
+    const auto old_position  = commits_[prior_current].position;
+    commits_[prior_current]       = commits[prior_current];
+    presentations_[prior_current] = PresentationFor(commits_[prior_current]);
+    if (commits_[prior_current].position != old_position) {
+      emit dataChanged(index(static_cast<int>(prior_current)),
+                       index(static_cast<int>(prior_current)));
+    }
+    const auto first_new = static_cast<int>(commits_.size());
+    const auto last_new  = static_cast<int>(commits.size() - 1);
+    beginInsertRows({}, first_new, last_new);
+    for (auto i = commits_.size(); i < commits.size(); ++i) {
+      presentations_.push_back(PresentationFor(commits[i]));
+      commits_.push_back(std::move(commits[i]));
+    }
+    endInsertRows();
+    return;
+  }
+
+  // Structural change (checkout, branch, redo-suffix reorder, first projection):
+  // reset the list and rebind presentations through the hash cache so unchanged
+  // commits reuse their cached presentation.
+  beginResetModel();
+  commits_.clear();
+  presentations_.clear();
+  for (auto& commit : commits) {
+    presentations_.push_back(PresentationFor(commit));
+    commits_.push_back(std::move(commit));
+  }
+  endResetModel();
 }
 
 void EditorHistoryModel::refresh() {
@@ -233,44 +290,41 @@ void EditorHistoryModel::refresh() {
 }
 
 void EditorHistoryModel::undo() {
+  // The backend bumps history_revision on a successful head move; the
+  // dedicated HistoryChanged signal drives exactly one projection. No direct
+  // refresh here avoids the triple-projection defect (StateChanged +
+  // HistoryChanged + direct refresh).
   if (editor_session_) editor_session_->Undo();
-  refresh();
 }
 
 void EditorHistoryModel::redo() {
   if (editor_session_) editor_session_->Redo();
-  refresh();
 }
 
 void EditorHistoryModel::moveHeadToCommit(const QString& commitId) {
   if (editor_session_) editor_session_->MoveHeadToCommit(commitId);
-  refresh();
 }
 
 void EditorHistoryModel::checkoutVersion(const QString& versionId) {
   if (editor_session_) editor_session_->CheckoutVersion(versionId);
-  refresh();
 }
 
 void EditorHistoryModel::createRootVersion(const QString& displayName) {
   if (editor_session_) editor_session_->CreateRootVersion(displayName);
-  refresh();
 }
 
 void EditorHistoryModel::branchFromCommit(const QString& commitId, const QString& displayName) {
   if (editor_session_) editor_session_->BranchFromCommit(commitId, displayName);
-  refresh();
 }
 
 void EditorHistoryModel::renameVersion(const QString& versionId, const QString& displayName) {
   if (editor_session_) editor_session_->RenameVersion(versionId, displayName);
-  refresh();
 }
 
 void EditorHistoryModel::removeVersion(const QString& versionId) {
   if (editor_session_) editor_session_->RemoveVersion(versionId);
-  refresh();
 }
+
 
 void RegisterEditorHistoryQmlTypes() {
   qmlRegisterType<EditorHistoryModel>("Alcedo.Main", 1, 0, "EditorHistoryModel");
