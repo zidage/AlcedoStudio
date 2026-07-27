@@ -35,6 +35,13 @@ endmacro()
 add_executable(EditorSessionHistoryPortTest
     ${ALCEDO_TEST_ROOT}/edit/history/editor_session_history_port_test.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_history_port.cpp
+    ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_state_detail.cpp
+    ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_shared_helpers.cpp
+    ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_projection.cpp
+    ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_mutation.cpp
+    ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_version_refs.cpp
+    ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_transfer.cpp
+    ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_checkpoint.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_commit_presentation.cpp
     ${CMAKE_SOURCE_DIR}/alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_pipeline_port.cpp)
 target_include_directories(EditorSessionHistoryPortTest

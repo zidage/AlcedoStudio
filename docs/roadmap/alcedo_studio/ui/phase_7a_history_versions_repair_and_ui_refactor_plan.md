@@ -839,6 +839,106 @@ Exit:
 - the completion record lists the new files, primary call chains, exact commands, and per-target
   pass/fail totals.
 
+##### R3 completion record (2026-07-27)
+
+**Status:** complete — EditorSessionHistoryPort split into 7 cohesive internal units with
+delegation façade ≤400 lines; all existing tests pass; no API change for call sites.
+
+**New files:**
+
+| File | LOC | Responsibility |
+| --- | ---: | --- |
+| `editor_history_state_detail.hpp` | 80 | `HistoryWorkingState` struct + `EditorHistoryState` class |
+| `editor_history_state_detail.cpp` | 115 | WorkingState acquisition, release, pipeline-port resolution |
+| `editor_history_shared_helpers.hpp` | 85 | Free helper declarations (snapshot fields, upsert, apply, rollback) |
+| `editor_history_shared_helpers.cpp` | 269 | Commit presentation, payload application, graph rollback |
+| `editor_history_projection.hpp` | 38 | `EditorHistoryProjection` class |
+| `editor_history_projection.cpp` | 106 | ReadHistorySnapshot, ReadAdjustmentSnapshot |
+| `editor_history_mutation.hpp` | 52 | `EditorHistoryMutation` class |
+| `editor_history_mutation.cpp` | 290 | Capture, Commit, Undo, Redo, MoveHeadToCommit, CheckoutVersion |
+| `editor_history_version_refs.hpp` | 50 | `EditorHistoryVersionRefs` class |
+| `editor_history_version_refs.cpp` | 273 | CreateRootVersion, BranchFromCommit, RenameVersion, RemoveVersion |
+| `editor_history_transfer.hpp` | 50 | `EditorHistoryTransfer` class |
+| `editor_history_transfer.cpp` | 207 | Paste, BeginMerge, CompleteMerge, CancelMerge |
+| `editor_history_checkpoint.hpp` | 40 | `EditorHistoryCheckpoint` class |
+| `editor_history_checkpoint.cpp` | 91 | CaptureSaveCheckpoint, DiscardMaterializedJournalThrough |
+
+**Updated files:**
+
+| File | Before | After | Change |
+| --- | ---: | ---: | --- |
+| `editor_session_history_port.hpp` | 124 | 116 | Forward-declares units; includes pipeline port header |
+| `editor_session_history_port.cpp` | 1,328 | 176 | Pure delegation façade; no Mini-Git traversal or payload formatting |
+
+**Primary success call chain (settled commit):**
+
+```text
+EditorSessionHistoryPort::CommitAdjustment
+  -> EditorHistoryMutation::CommitAdjustment
+  -> EditorHistoryState::EnsureWorkingState -> HistoryWorkingState
+  -> state->history->AppendEdit -> MiniGitWorkingHistory
+  -> UpsertCommittedSnapshot (shared helpers)
+  -> success -> caller updates history_revision
+```
+
+**Primary delegation chain (history projection):**
+
+```text
+EditorSessionHistoryPort::ReadHistorySnapshot
+  -> EditorHistoryProjection::ReadHistorySnapshot
+  -> EditorHistoryState::EnsureWorkingState -> HistoryWorkingState
+  -> [short lock] copy version metadata, commit sources, redo suffix
+  -> [unlocked] sort versions, CommitRowFromEdit for each commit source
+  -> return projection
+```
+
+**What was proven (executed tests):**
+
+| Test target | Result |
+| --- | --- |
+| EditorSessionHistoryPortTest (11 qualifying) | 11/11 PASS |
+| EditorSessionHistoryPortTest (2 known R0 RED) | 2/2 FAIL (pre-existing, unchanged) |
+| EditorSessionControllerPhase5ATest | 35/35 PASS |
+| EditorSessionNavigationControllerTest | 23/23 PASS |
+| EditorVersionsPanelQmlTest | 8/8 PASS |
+| EditorHistoryTransactionsPanelQmlTest | 5/5 PASS |
+| EditorMultiSliderQuicktest | 13/13 PASS |
+| CommitGraphTest | 17/17 PASS |
+| alcedo_main production target | links successfully |
+
+**Exact commands:**
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionHistoryPortTest
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target alcedo_main
+ctest --test-dir build/debug -R "EditorSessionHistoryPortTest" -E "HeadMoveApplyFailure|MoveAcrossMerge" --output-on-failure
+ctest --test-dir build/debug -R "EditorSessionControllerPhase5ATest|EditorSessionNavigationControllerTest|EditorVersionsPanelQmlTest|EditorHistoryTransactionsPanelQmlTest|EditorMultiSliderQuicktest|CommitGraphTest" -E "AsyncRootVersion|AsyncBranchFailure|InvalidVersionOrCommitId|HeadMoveApplyFailure|MoveAcrossMerge" --output-on-failure
+```
+
+**Checklist / exit condition:**
+
+- [x] `IEditorHistoryPort` and `EditorSessionService` call sites require no API change
+- [x] `editor_session_history_port.cpp` is 176 lines (≤400), no Mini-Git traversal or payload formatting
+- [x] Each extracted unit has one primary responsibility and explicit dependency direction
+- [x] Projection parsing/presentation runs outside `WorkingState` mutex; graph/state access protected by state unit
+- [x] History, navigation, controller, QML, multi-slider, and commit-graph tests pass (101/101)
+- [x] No duplicate `WorkingState`, revision publication, journal path, or pipeline-guard ownership
+- [x] New files registered in both AlbumBackendLib and test CMakeLists
+- [x] Internal units free of QML/QObject dependencies; inline API comments on every public boundary
+
+**LOC note (grill-code-review):** Original monolithic `.cpp` (1,328 LOC) → 1 façade `.cpp`
+(176 LOC) + 7 unit `.cpp` files (1,351 LOC total) + 7 unit `.hpp` files (395 LOC total).
+Net `.cpp` increase of ~199 lines is attributable to class scaffolding, explicit constructor
+injection, and moved free-function declarations. No logic was duplicated; every extracted
+method body is the original implementation moved verbatim.
+
+**Remaining gaps:** Two pre-existing R0 RED tests (`HeadMoveApplyFailurePreservesHeadRedo...`
+and `MoveAcrossMergeReconstructsResolvedFields`) remain failing as expected — they are scoped
+to R5 (Mini-Git atomic transitions). New unit tests for the extracted units require the full
+`PipelineMgmtService` test fixture (with DuckDB/StorageService) to avoid access violations;
+those are deferred to R7's production-path fixture.
+
+
 ### R4 — publish exact asynchronous operation results
 
 Files:
