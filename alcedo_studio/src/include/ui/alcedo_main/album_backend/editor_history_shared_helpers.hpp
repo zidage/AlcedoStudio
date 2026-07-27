@@ -68,13 +68,32 @@ auto ApplyCommittedPayload(alcedo::PipelineGuard& guard,
                            const alcedo::OrdinaryEditPayload& payload, bool use_after_value,
                            std::string* error) -> bool;
 
+/// Apply one first-parent history commit (ordinary or merge) to the live pipeline
+/// and committed snapshot. When `use_after_value` is true, ordinary after-values and
+/// merge resolved fields are applied. When false, ordinary before-values are applied
+/// and each merge field is restored from the first-parent chain before that merge.
+auto ApplyHistoryCommit(alcedo::PipelineGuard& guard,
+                        alcedo::EditorRenderAdjustmentSnapshot* snapshot,
+                        const alcedo::CommitGraph& graph, const alcedo::EditCommit& commit,
+                        bool use_after_value, std::string* error) -> bool;
+
+/// Apply every commit in a prepared head-move traversal. Does not touch the
+/// journal, graph head, or redo selection.
+auto ApplyPreparedHeadMovePipeline(alcedo::PipelineGuard& guard,
+                                   alcedo::EditorRenderAdjustmentSnapshot* snapshot,
+                                   const alcedo::CommitGraph& graph,
+                                   const alcedo::MiniGitPreparedHeadMove& prepared,
+                                   std::string* error) -> bool;
+
 /// Apply a recovered journal record to the pipeline and snapshot.
 auto ApplyRecoveredRecord(alcedo::PipelineGuard& guard,
                           alcedo::EditorRenderAdjustmentSnapshot* snapshot,
                           alcedo::CommitGraph* replay_graph,
                           const alcedo::MiniGitJournalRecord& record, std::string* error) -> bool;
 
-/// Roll back the graph and pipeline guard to a prior state.
+/// Best-effort restore used only when a named-ref path mutated a live graph
+/// copy after preparation. Prefer prepared candidate publication so this is
+/// unused on the success path.
 void RestoreGraphAndPipeline(alcedo::CommitGraph& graph, const alcedo::CommitGraph& prior_graph,
                              alcedo::PipelineMgmtService& pipeline_service,
                              const std::shared_ptr<alcedo::PipelineGuard>& pipeline_guard,

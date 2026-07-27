@@ -197,6 +197,171 @@ auto ApplyCommittedPayload(alcedo::PipelineGuard& guard,
   return true;
 }
 
+namespace {
+
+/// Last first-parent write to (stage, operator) on or before `head`. Used when
+/// undoing a merge field that has no stored before-value.
+auto ResolveFieldAtHead(const alcedo::CommitGraph& graph, const alcedo::head_commit_hash_t& head,
+                        alcedo::OperatorType operator_type, alcedo::PipelineStageName stage_name,
+                        alcedo::EditorAdjustmentOperatorState* out, std::string* error) -> bool {
+  if (out == nullptr) {
+    if (error) *error = "Field resolve output is null";
+    return false;
+  }
+  const auto chain = graph.FirstParentChain(head);
+  for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+    const auto& commit = graph.GetCommit(*it);
+    if (commit.GetKind() == alcedo::EditCommitKind::kEdit) {
+      try {
+        const auto payload = alcedo::OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON());
+        if (payload.operator_type == operator_type && payload.stage_name == stage_name) {
+          out->params  = payload.after_value;
+          out->enabled = payload.after_enabled;
+          return true;
+        }
+      } catch (const std::exception& ex) {
+        if (error) *error = ex.what();
+        return false;
+      }
+    } else if (commit.GetKind() == alcedo::EditCommitKind::kMerge) {
+      try {
+        const auto payload = alcedo::MergeEditPayload::FromJSON(commit.GetPayloadJSON());
+        for (const auto& field : payload.fields) {
+          if (field.operator_type == operator_type && field.stage_name == stage_name) {
+            out->params  = field.resolved_value;
+            out->enabled = field.resolved_enabled;
+            return true;
+          }
+        }
+      } catch (const std::exception& ex) {
+        if (error) *error = ex.what();
+        return false;
+      }
+    }
+  }
+  // No write on the chain: treat as empty object defaults for the editor field.
+  out->params  = nlohmann::json::object();
+  out->enabled = true;
+  return true;
+}
+
+auto ApplyOperatorState(alcedo::PipelineGuard& guard,
+                        alcedo::EditorRenderAdjustmentSnapshot* snapshot,
+                        alcedo::PipelineStageName stage_name, alcedo::OperatorType operator_type,
+                        const alcedo::EditorAdjustmentOperatorState& state, std::string* error)
+    -> bool {
+  if (!guard.pipeline_) {
+    if (error) *error = "Editor pipeline is unavailable";
+    return false;
+  }
+  const auto field_key = alcedo::EditorAdjustmentFieldKey(stage_name, operator_type);
+  if (!field_key.has_value()) {
+    if (error) *error = "Committed adjustment does not map to a QML editor field";
+    return false;
+  }
+  const auto spec = alcedo::ResolveEditorAdjustmentField(*field_key);
+  if (!spec.has_value()) {
+    if (error) *error = "Committed adjustment field mapping is unavailable";
+    return false;
+  }
+  std::unique_lock<std::mutex> render_lock(guard.pipeline_->GetRenderLock());
+  if (!alcedo::ApplyEditorAdjustmentOperatorState(*guard.pipeline_, *spec, state, error)) {
+    return false;
+  }
+  UpsertCommittedSnapshot(snapshot, *field_key, state.params);
+  return true;
+}
+
+}  // namespace
+
+auto ApplyHistoryCommit(alcedo::PipelineGuard& guard,
+                        alcedo::EditorRenderAdjustmentSnapshot* snapshot,
+                        const alcedo::CommitGraph& graph, const alcedo::EditCommit& commit,
+                        bool use_after_value, std::string* error) -> bool {
+  if (commit.GetKind() == alcedo::EditCommitKind::kEdit) {
+    try {
+      const auto payload = alcedo::OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON());
+      return ApplyCommittedPayload(guard, snapshot, payload, use_after_value, error);
+    } catch (const std::exception& ex) {
+      if (error) *error = ex.what();
+      return false;
+    }
+  }
+
+  if (commit.GetKind() == alcedo::EditCommitKind::kMerge) {
+    try {
+      const auto payload = alcedo::MergeEditPayload::FromJSON(commit.GetPayloadJSON());
+      if (use_after_value) {
+        for (const auto& field : payload.fields) {
+          alcedo::EditorAdjustmentOperatorState state{field.resolved_value, field.resolved_enabled};
+          if (!ApplyOperatorState(guard, snapshot, field.stage_name, field.operator_type, state,
+                                  error)) {
+            return false;
+          }
+        }
+        return true;
+      }
+      // Backward: restore each merge field from the first-parent head of the merge.
+      const auto parent_head = commit.GetFirstParentHash();
+      for (const auto& field : payload.fields) {
+        alcedo::EditorAdjustmentOperatorState state;
+        if (!ResolveFieldAtHead(graph, parent_head, field.operator_type, field.stage_name, &state,
+                                error)) {
+          return false;
+        }
+        if (!ApplyOperatorState(guard, snapshot, field.stage_name, field.operator_type, state,
+                                error)) {
+          return false;
+        }
+      }
+      return true;
+    } catch (const std::exception& ex) {
+      if (error) *error = ex.what();
+      return false;
+    }
+  }
+
+  if (error) *error = "Unknown history commit kind";
+  return false;
+}
+
+auto ApplyPreparedHeadMovePipeline(alcedo::PipelineGuard& guard,
+                                   alcedo::EditorRenderAdjustmentSnapshot* snapshot,
+                                   const alcedo::CommitGraph& graph,
+                                   const alcedo::MiniGitPreparedHeadMove& prepared,
+                                   std::string* error) -> bool {
+  if (prepared.is_noop || prepared.traversed_commits.empty()) {
+    return true;
+  }
+  // Capture pipeline params so a mid-traversal operator failure leaves the live
+  // executor unchanged. Graph/journal/redo are still untouched at this stage.
+  nlohmann::json prior_params;
+  if (guard.pipeline_) {
+    std::unique_lock<std::mutex> render_lock(guard.pipeline_->GetRenderLock());
+    prior_params = guard.pipeline_->ExportPipelineParams();
+  }
+  const auto prior_snapshot = snapshot != nullptr ? *snapshot : alcedo::EditorRenderAdjustmentSnapshot{};
+
+  for (const auto& commit : prepared.traversed_commits) {
+    if (!ApplyHistoryCommit(guard, snapshot, graph, commit, /*use_after_value=*/!prepared.backward,
+                            error)) {
+      if (guard.pipeline_ && !prior_params.is_null()) {
+        try {
+          std::unique_lock<std::mutex> render_lock(guard.pipeline_->GetRenderLock());
+          guard.pipeline_->ImportPipelineParams(prior_params);
+        } catch (...) {
+          // Best-effort pipeline restore; the failure reason is already set.
+        }
+      }
+      if (snapshot != nullptr) {
+        *snapshot = prior_snapshot;
+      }
+      return false;
+    }
+  }
+  return true;
+}
+
 auto ApplyRecoveredRecord(alcedo::PipelineGuard& guard,
                           alcedo::EditorRenderAdjustmentSnapshot* snapshot,
                           alcedo::CommitGraph* replay_graph,
@@ -206,9 +371,10 @@ auto ApplyRecoveredRecord(alcedo::PipelineGuard& guard,
     return false;
   }
   if (record.kind == alcedo::MiniGitJournalRecordKind::kEditCommit && record.edit_commit) {
-    const auto payload =
-        alcedo::OrdinaryEditPayload::FromJSON(record.edit_commit->GetPayloadJSON());
-    if (!ApplyCommittedPayload(guard, snapshot, payload, true, error)) return false;
+    if (!ApplyHistoryCommit(guard, snapshot, *replay_graph, *record.edit_commit,
+                            /*use_after_value=*/true, error)) {
+      return false;
+    }
   } else if (record.kind == alcedo::MiniGitJournalRecordKind::kHeadMove) {
     const auto source_head = replay_graph->GetActiveVersionRef().head_commit_hash;
     bool backward = false;
@@ -227,9 +393,10 @@ auto ApplyRecoveredRecord(alcedo::PipelineGuard& guard,
         for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
           if (record.target_head.has_value() && *it == *record.target_head) break;
           const auto& commit = replay_graph->GetCommit(*it);
-          if (commit.GetKind() == alcedo::EditCommitKind::kMerge) continue;
-          const auto payload = alcedo::OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON());
-          if (!ApplyCommittedPayload(guard, snapshot, payload, false, error)) return false;
+          if (!ApplyHistoryCommit(guard, snapshot, *replay_graph, commit,
+                                  /*use_after_value=*/false, error)) {
+            return false;
+          }
         }
       }
     } else if (record.target_head.has_value()) {
@@ -242,9 +409,10 @@ auto ApplyRecoveredRecord(alcedo::PipelineGuard& guard,
       std::reverse(forward.begin(), forward.end());
       for (const auto& hash : forward) {
         const auto& commit = replay_graph->GetCommit(hash);
-        if (commit.GetKind() == alcedo::EditCommitKind::kMerge) continue;
-        const auto payload = alcedo::OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON());
-        if (!ApplyCommittedPayload(guard, snapshot, payload, true, error)) return false;
+        if (!ApplyHistoryCommit(guard, snapshot, *replay_graph, commit,
+                                /*use_after_value=*/true, error)) {
+          return false;
+        }
       }
     }
   }

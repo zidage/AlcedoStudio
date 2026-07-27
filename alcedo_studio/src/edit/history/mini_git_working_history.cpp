@@ -404,40 +404,90 @@ auto MiniGitWorkingHistory::transaction_chain_hash() const -> transaction_chain_
   return graph_->ChainHashForHead(working_head());
 }
 
-auto MiniGitWorkingHistory::AppendEdit(OrdinaryEditPayload payload) -> MiniGitEditAppendResult {
-  MiniGitEditAppendResult result;
-  const auto              source_head  = working_head();
-  const auto              source_chain = transaction_chain_hash();
-  EditCommit              commit;
+auto MiniGitWorkingHistory::WorkingSelection() const -> MiniGitWorkingSelection {
+  return MiniGitWorkingSelection{.redo_suffix = redo_stack_};
+}
+
+void MiniGitWorkingHistory::PublishWorkingSelection(MiniGitWorkingSelection selection) {
+  redo_stack_ = std::move(selection.redo_suffix);
+}
+
+auto MiniGitWorkingHistory::PrepareAppendEdit(OrdinaryEditPayload payload) const
+    -> MiniGitPreparedEdit {
+  MiniGitPreparedEdit prepared;
+  const auto          source_head  = working_head();
+  const auto          source_chain = transaction_chain_hash();
   try {
-    commit = EditCommit::MakeEdit(graph_->GetRootId(), source_head, std::move(payload));
+    prepared.commit = EditCommit::MakeEdit(graph_->GetRootId(), source_head, std::move(payload));
   } catch (const std::exception& e) {
-    result.error = e.what();
-    return result;
+    prepared.error = e.what();
+    return prepared;
   }
 
-  const auto target_chain = FoldTransactionChainHash(source_chain, commit.GetCommitHash());
-  MiniGitJournalRecord record;
-  record.kind                       = MiniGitJournalRecordKind::kEditCommit;
-  record.expected_source_head       = source_head;
-  record.expected_source_chain_hash = source_chain;
-  record.target_head                = commit.GetCommitHash();
-  record.target_chain_hash          = target_chain;
-  record.edit_commit                = commit;
+  prepared.target_chain = FoldTransactionChainHash(source_chain, prepared.commit.GetCommitHash());
+  prepared.journal_record.kind                       = MiniGitJournalRecordKind::kEditCommit;
+  prepared.journal_record.expected_source_head       = source_head;
+  prepared.journal_record.expected_source_chain_hash = source_chain;
+  prepared.journal_record.target_head                = prepared.commit.GetCommitHash();
+  prepared.journal_record.target_chain_hash          = prepared.target_chain;
+  prepared.journal_record.edit_commit                = prepared.commit;
+  prepared.ready                                     = true;
+  return prepared;
+}
 
-  if (!journal_->Append(record, &result.error)) {
+auto MiniGitWorkingHistory::PrepareAppendMerge(commit_hash_t     second_parent,
+                                               MergeEditPayload  payload) const
+    -> MiniGitPreparedEdit {
+  MiniGitPreparedEdit prepared;
+  const auto          source_head  = working_head();
+  const auto          source_chain = transaction_chain_hash();
+  if (graph_->FindCommit(second_parent) == nullptr) {
+    prepared.error = "mini-Git merge second parent is not in the commit graph";
+    return prepared;
+  }
+  try {
+    prepared.commit = EditCommit::MakeMerge(graph_->GetRootId(), source_head, second_parent,
+                                            std::move(payload));
+  } catch (const std::exception& e) {
+    prepared.error = e.what();
+    return prepared;
+  }
+
+  prepared.target_chain = FoldTransactionChainHash(source_chain, prepared.commit.GetCommitHash());
+  prepared.journal_record.kind                       = MiniGitJournalRecordKind::kEditCommit;
+  prepared.journal_record.expected_source_head       = source_head;
+  prepared.journal_record.expected_source_chain_hash = source_chain;
+  prepared.journal_record.target_head                = prepared.commit.GetCommitHash();
+  prepared.journal_record.target_chain_hash          = prepared.target_chain;
+  prepared.journal_record.edit_commit                = prepared.commit;
+  prepared.ready                                     = true;
+  return prepared;
+}
+
+auto MiniGitWorkingHistory::PublishPreparedEdit(const MiniGitPreparedEdit& prepared)
+    -> MiniGitEditAppendResult {
+  MiniGitEditAppendResult result;
+  if (!prepared.ready) {
+    result.error = prepared.error.empty() ? "mini-Git edit is not prepared" : prepared.error;
+    return result;
+  }
+  if (prepared.journal_record.expected_source_head != working_head() ||
+      prepared.journal_record.expected_source_chain_hash != transaction_chain_hash()) {
+    result.error = "mini-Git prepared edit no longer matches the working head";
+    return result;
+  }
+  if (!journal_->Append(prepared.journal_record, &result.error)) {
     if (result.error.empty()) {
       result.error = "mini-Git journal rejected edit commit";
     }
     return result;
   }
-
   try {
-    (void)graph_->InsertCommit(commit);
-    graph_->MoveWorkingHead(graph_->GetActiveVersionId(), commit.GetCommitHash());
+    (void)graph_->InsertCommit(prepared.commit);
+    graph_->MoveWorkingHead(graph_->GetActiveVersionId(), prepared.commit.GetCommitHash());
     redo_stack_.clear();
     result.committed = true;
-    result.commit    = std::move(commit);
+    result.commit    = prepared.commit;
   } catch (const std::exception& e) {
     // A journaled record that cannot be reflected in the working graph is a
     // corruption-level condition. Do not claim the live working head advanced.
@@ -446,175 +496,128 @@ auto MiniGitWorkingHistory::AppendEdit(OrdinaryEditPayload payload) -> MiniGitEd
   return result;
 }
 
-auto MiniGitWorkingHistory::AppendMerge(commit_hash_t second_parent, MergeEditPayload payload)
-    -> MiniGitEditAppendResult {
-  MiniGitEditAppendResult result;
-  const auto              source_head  = working_head();
-  const auto              source_chain = transaction_chain_hash();
-
-  // Second parent must already exist in the graph.
-  if (graph_->FindCommit(second_parent) == nullptr) {
-    result.error = "mini-Git merge second parent is not in the commit graph";
-    return result;
-  }
-
-  EditCommit commit;
-  try {
-    commit = EditCommit::MakeMerge(graph_->GetRootId(), source_head, second_parent,
-                                   std::move(payload));
-  } catch (const std::exception& e) {
-    result.error = e.what();
-    return result;
-  }
-
-  const auto target_chain = FoldTransactionChainHash(source_chain, commit.GetCommitHash());
-  MiniGitJournalRecord record;
-  record.kind                       = MiniGitJournalRecordKind::kEditCommit;
-  record.expected_source_head       = source_head;
-  record.expected_source_chain_hash = source_chain;
-  record.target_head                = commit.GetCommitHash();
-  record.target_chain_hash          = target_chain;
-  record.edit_commit                = commit;
-
-  if (!journal_->Append(record, &result.error)) {
-    if (result.error.empty()) {
-      result.error = "mini-Git journal rejected merge commit";
-    }
-    return result;
-  }
-
-  try {
-    (void)graph_->InsertCommit(commit);
-    graph_->MoveWorkingHead(graph_->GetActiveVersionId(), commit.GetCommitHash());
-    redo_stack_.clear();
-    result.committed = true;
-    result.commit    = std::move(commit);
-  } catch (const std::exception& e) {
-    result.error = e.what();
-  }
-  return result;
+auto MiniGitWorkingHistory::AppendEdit(OrdinaryEditPayload payload) -> MiniGitEditAppendResult {
+  return PublishPreparedEdit(PrepareAppendEdit(std::move(payload)));
 }
 
-auto MiniGitWorkingHistory::AppendHeadMove(head_commit_hash_t         target_head,
-                                           transaction_chain_hash_t   target_chain,
-                                           std::optional<EditCommit>* selected_commit)
-    -> MiniGitHeadMoveResult {
-  MiniGitHeadMoveResult result;
-  const auto            source_head  = working_head();
-  const auto            source_chain = transaction_chain_hash();
-  if (source_head == target_head) {
-    return result;
-  }
+auto MiniGitWorkingHistory::AppendMerge(commit_hash_t second_parent, MergeEditPayload payload)
+    -> MiniGitEditAppendResult {
+  return PublishPreparedEdit(PrepareAppendMerge(second_parent, std::move(payload)));
+}
 
+namespace {
+
+auto MakeHeadMoveJournalRecord(const head_commit_hash_t& source_head,
+                               const transaction_chain_hash_t& source_chain,
+                               const head_commit_hash_t& target_head,
+                               const transaction_chain_hash_t& target_chain)
+    -> MiniGitJournalRecord {
   MiniGitJournalRecord record;
   record.kind                       = MiniGitJournalRecordKind::kHeadMove;
   record.expected_source_head       = source_head;
   record.expected_source_chain_hash = source_chain;
   record.target_head                = target_head;
   record.target_chain_hash          = target_chain;
-  if (!journal_->Append(record, &result.error)) {
-    if (result.error.empty()) {
-      result.error = "mini-Git journal rejected head move";
-    }
-    return result;
-  }
-
-  try {
-    if (target_head.has_value() && selected_commit != nullptr) {
-      *selected_commit = graph_->GetCommit(*target_head);
-    }
-    graph_->MoveWorkingHead(graph_->GetActiveVersionId(), target_head);
-    result.moved = true;
-    if (selected_commit != nullptr) {
-      result.selected_commit = *selected_commit;
-    }
-  } catch (const std::exception& e) {
-    result.error = e.what();
-  }
-  return result;
+  return record;
 }
 
-auto MiniGitWorkingHistory::Undo() -> MiniGitHeadMoveResult {
+}  // namespace
+
+auto MiniGitWorkingHistory::PrepareUndo() const -> MiniGitPreparedHeadMove {
+  MiniGitPreparedHeadMove prepared;
   if (!working_head().has_value()) {
-    return {};
+    prepared.ready   = true;
+    prepared.is_noop = true;
+    prepared.next_selection.redo_suffix = redo_stack_;
+    return prepared;
   }
   const auto abandoned = graph_->GetCommit(*working_head());
   const auto target    = abandoned.GetFirstParentHash();
-  auto       selected  = std::optional<EditCommit>{};
-  auto       result    = AppendHeadMove(target, graph_->ChainHashForHead(target), &selected);
-  if (result.moved) {
-    redo_stack_.push_back(abandoned.GetCommitHash());
-    result.selected_commit = abandoned;
-  }
-  return result;
+  prepared.backward    = true;
+  prepared.target_head = target;
+  prepared.target_chain = graph_->ChainHashForHead(target);
+  prepared.journal_record =
+      MakeHeadMoveJournalRecord(working_head(), transaction_chain_hash(), target,
+                                prepared.target_chain);
+  prepared.traversed_commits.push_back(abandoned);
+  prepared.selected_commit = abandoned;
+  prepared.next_selection.redo_suffix = redo_stack_;
+  prepared.next_selection.redo_suffix.push_back(abandoned.GetCommitHash());
+  prepared.ready = true;
+  return prepared;
 }
 
-auto MiniGitWorkingHistory::Redo() -> MiniGitHeadMoveResult {
+auto MiniGitWorkingHistory::PrepareRedo() const -> MiniGitPreparedHeadMove {
+  MiniGitPreparedHeadMove prepared;
   if (redo_stack_.empty()) {
-    return {};
+    prepared.ready   = true;
+    prepared.is_noop = true;
+    prepared.next_selection.redo_suffix = redo_stack_;
+    return prepared;
   }
   const auto  target = redo_stack_.back();
   const auto& commit = graph_->GetCommit(target);
   if (commit.GetFirstParentHash() != working_head()) {
-    return {.moved           = false,
-            .selected_commit = std::nullopt,
-            .error           = "mini-Git redo target is not a child of the working head"};
+    prepared.error = "mini-Git redo target is not a child of the working head";
+    return prepared;
   }
-  auto selected = std::optional<EditCommit>{};
-  auto result   = AppendHeadMove(target, graph_->ChainHashForHead(target), &selected);
-  if (result.moved) {
-    redo_stack_.pop_back();
-    result.selected_commit = commit;
-  }
-  return result;
+  prepared.backward     = false;
+  prepared.target_head  = target;
+  prepared.target_chain = graph_->ChainHashForHead(target);
+  prepared.journal_record =
+      MakeHeadMoveJournalRecord(working_head(), transaction_chain_hash(), target,
+                                prepared.target_chain);
+  prepared.traversed_commits.push_back(commit);
+  prepared.selected_commit = commit;
+  prepared.next_selection.redo_suffix = redo_stack_;
+  prepared.next_selection.redo_suffix.pop_back();
+  prepared.ready = true;
+  return prepared;
 }
 
-auto MiniGitWorkingHistory::MoveHeadToCommit(const commit_hash_t& target, std::string* error)
-    -> MiniGitHeadMoveResult {
-  MiniGitHeadMoveResult result;
-  const auto            source_head = working_head();
+auto MiniGitWorkingHistory::PrepareMoveHeadToCommit(const commit_hash_t& target) const
+    -> MiniGitPreparedHeadMove {
+  MiniGitPreparedHeadMove prepared;
+  const auto              source_head = working_head();
   if (source_head == target) {
-    return result;  // No-op: target is already the working head.
+    prepared.ready   = true;
+    prepared.is_noop = true;
+    prepared.target_head = target;
+    prepared.target_chain = graph_->ChainHashForHead(target);
+    prepared.next_selection.redo_suffix = redo_stack_;
+    return prepared;
   }
 
-  // Backward: target is an ancestor of the working head on the first-parent
-  // chain. FirstParentChain returns root->head order, so the commits between
-  // target and the head are the suffix after target.
+  // Backward: target is an ancestor of the working head on the first-parent chain.
   if (source_head.has_value()) {
-    const auto chain    = graph_->FirstParentChain(source_head);
+    const auto chain     = graph_->FirstParentChain(source_head);
     const auto target_it = std::find(chain.begin(), chain.end(), target);
     if (target_it != chain.end()) {
-      std::vector<commit_hash_t> traversed_hashes(chain.begin() + (target_it - chain.begin()) + 1,
-                                                  chain.end());
-      // traversed_hashes is [target.child, ..., head] in root->head order; reverse to
-      // [head, ..., target.child] so the caller applies before-values newest-first and
-      // target.child lands at the back() of the redo suffix.
+      std::vector<commit_hash_t> traversed_hashes(
+          chain.begin() + (target_it - chain.begin()) + 1, chain.end());
+      // [target.child, ..., head] root→head; reverse to newest-first apply order and
+      // push order so target.child lands at back() of the redo suffix.
       std::reverse(traversed_hashes.begin(), traversed_hashes.end());
-      result.backward = true;
+      prepared.backward = true;
       for (const auto& hash : traversed_hashes) {
-        result.traversed_commits.push_back(graph_->GetCommit(hash));
+        prepared.traversed_commits.push_back(graph_->GetCommit(hash));
       }
-      result.selected_commit = graph_->GetCommit(target);
-
-      auto move = AppendHeadMove(head_commit_hash_t{target}, graph_->ChainHashForHead(target),
-                                 nullptr);
-      if (!move.error.empty()) {
-        result.error             = move.error;
-        result.traversed_commits.clear();
-        result.selected_commit.reset();
-        return result;
-      }
+      prepared.selected_commit = graph_->GetCommit(target);
+      prepared.target_head     = target;
+      prepared.target_chain    = graph_->ChainHashForHead(target);
+      prepared.journal_record =
+          MakeHeadMoveJournalRecord(source_head, transaction_chain_hash(), target,
+                                    prepared.target_chain);
+      prepared.next_selection.redo_suffix = redo_stack_;
       for (const auto& hash : traversed_hashes) {
-        redo_stack_.push_back(hash);
+        prepared.next_selection.redo_suffix.push_back(hash);
       }
-      result.moved = true;
-      return result;
+      prepared.ready = true;
+      return prepared;
     }
   }
 
-  // Forward: target must be a member of the in-memory redo suffix. The suffix
-  // is stored furthest-future-first with back() the immediate child of the
-  // head; the apply order is therefore back()->target (oldest first).
+  // Forward: target must be a member of the in-memory redo suffix.
   const auto redo_it = std::find(redo_stack_.begin(), redo_stack_.end(), target);
   if (redo_it != redo_stack_.end()) {
     std::vector<commit_hash_t> traversed_hashes(redo_it, redo_stack_.end());
@@ -623,33 +626,90 @@ auto MiniGitWorkingHistory::MoveHeadToCommit(const commit_hash_t& target, std::s
     for (const auto& hash : traversed_hashes) {
       const auto& commit = graph_->GetCommit(hash);
       if (commit.GetFirstParentHash() != prev) {
-        SetError(error, "mini-Git redo suffix is not a contiguous chain to the target commit");
-        return result;
+        prepared.error =
+            "mini-Git redo suffix is not a contiguous chain to the target commit";
+        return prepared;
       }
       prev = hash;
     }
-    result.backward = false;
+    prepared.backward = false;
     for (const auto& hash : traversed_hashes) {
-      result.traversed_commits.push_back(graph_->GetCommit(hash));
+      prepared.traversed_commits.push_back(graph_->GetCommit(hash));
     }
-    result.selected_commit = graph_->GetCommit(target);
-
-    auto move = AppendHeadMove(head_commit_hash_t{target}, graph_->ChainHashForHead(target),
-                               nullptr);
-    if (!move.error.empty()) {
-      result.error             = move.error;
-      result.traversed_commits.clear();
-      result.selected_commit.reset();
-      return result;
-    }
-    // Consume the suffix up to and including target; keep the more-future prefix.
-    redo_stack_.erase(redo_it, redo_stack_.end());
-    result.moved = true;
-    return result;
+    prepared.selected_commit = graph_->GetCommit(target);
+    prepared.target_head     = target;
+    prepared.target_chain    = graph_->ChainHashForHead(target);
+    prepared.journal_record =
+        MakeHeadMoveJournalRecord(source_head, transaction_chain_hash(), target,
+                                  prepared.target_chain);
+    // Keep the more-future prefix; drop everything from target through head-child.
+    prepared.next_selection.redo_suffix.assign(redo_stack_.begin(), redo_it);
+    prepared.ready = true;
+    return prepared;
   }
 
-  SetError(error,
-           "Commit is not on the active Version's first-parent path or redo suffix");
+  prepared.error =
+      "Commit is not on the active Version's first-parent path or redo suffix";
+  return prepared;
+}
+
+auto MiniGitWorkingHistory::PublishPreparedHeadMove(const MiniGitPreparedHeadMove& prepared)
+    -> MiniGitHeadMoveResult {
+  MiniGitHeadMoveResult result;
+  if (!prepared.ready) {
+    result.error = prepared.error.empty() ? "mini-Git head move is not prepared" : prepared.error;
+    return result;
+  }
+  if (prepared.is_noop) {
+    result.moved = false;
+    result.backward = prepared.backward;
+    result.selected_commit = prepared.selected_commit;
+    result.traversed_commits = prepared.traversed_commits;
+    return result;
+  }
+  if (prepared.journal_record.expected_source_head != working_head() ||
+      prepared.journal_record.expected_source_chain_hash != transaction_chain_hash()) {
+    result.error = "mini-Git prepared head move no longer matches the working head";
+    return result;
+  }
+  if (!journal_->Append(prepared.journal_record, &result.error)) {
+    if (result.error.empty()) {
+      result.error = "mini-Git journal rejected head move";
+    }
+    return result;
+  }
+  try {
+    graph_->MoveWorkingHead(graph_->GetActiveVersionId(), prepared.target_head);
+    redo_stack_              = prepared.next_selection.redo_suffix;
+    result.moved             = true;
+    result.backward          = prepared.backward;
+    result.selected_commit   = prepared.selected_commit;
+    result.traversed_commits = prepared.traversed_commits;
+  } catch (const std::exception& e) {
+    result.error = e.what();
+  }
+  return result;
+}
+
+auto MiniGitWorkingHistory::Undo() -> MiniGitHeadMoveResult {
+  return PublishPreparedHeadMove(PrepareUndo());
+}
+
+auto MiniGitWorkingHistory::Redo() -> MiniGitHeadMoveResult {
+  return PublishPreparedHeadMove(PrepareRedo());
+}
+
+auto MiniGitWorkingHistory::MoveHeadToCommit(const commit_hash_t& target, std::string* error)
+    -> MiniGitHeadMoveResult {
+  auto prepared = PrepareMoveHeadToCommit(target);
+  if (!prepared.ready) {
+    SetError(error, prepared.error);
+    return {.moved = false, .error = prepared.error};
+  }
+  auto result = PublishPreparedHeadMove(prepared);
+  if (!result.error.empty()) {
+    SetError(error, result.error);
+  }
   return result;
 }
 

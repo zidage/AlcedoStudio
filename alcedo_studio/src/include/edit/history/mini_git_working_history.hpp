@@ -139,12 +139,55 @@ struct MiniGitHeadMoveResult {
   std::string               error;
 };
 
+/// Copyable in-memory redo selection for one checked-out Version.
+///
+/// The working head lives on the commit graph; only the unmaterialized redo
+/// suffix is owned by MiniGitWorkingHistory. Callers capture this value before
+/// a fallible named-ref transition and publish it again only on success, or
+/// restore it after a rejected prepare path.
+struct MiniGitWorkingSelection {
+  /// Furthest-future-first; back() is the immediate child of the working head.
+  std::vector<commit_hash_t> redo_suffix;
+};
+
+/// Prepared local head move that has not yet touched the journal, graph, or redo.
+///
+/// Callers must apply every payload in `traversed_commits` (ordinary and merge)
+/// to a candidate pipeline/snapshot first. Only after that validation succeeds
+/// may they call PublishPreparedHeadMove, which appends one journal record and
+/// performs a no-fail swap of head + redo.
+struct MiniGitPreparedHeadMove {
+  bool                       ready = false;
+  bool                       is_noop = false;
+  bool                       backward = false;
+  std::string                error;
+  head_commit_hash_t         target_head = std::nullopt;
+  transaction_chain_hash_t   target_chain{};
+  MiniGitJournalRecord       journal_record{};
+  /// Apply order: newest-first when backward, oldest-first when forward.
+  std::vector<EditCommit>    traversed_commits;
+  MiniGitWorkingSelection    next_selection{};
+  std::optional<EditCommit>  selected_commit;
+};
+
+/// Prepared settled edit that has not yet touched the journal, graph, or redo.
+struct MiniGitPreparedEdit {
+  bool                     ready = false;
+  std::string              error;
+  EditCommit               commit;
+  MiniGitJournalRecord     journal_record{};
+  transaction_chain_hash_t target_chain{};
+};
+
 /// In-memory working HEAD and redo selection for one checked-out Version ref.
 ///
 /// The graph owns immutable commits and mutable Version heads. This class adds
 /// only unmaterialized editor state: the redo stack and journal append order.
 /// It deliberately never updates ImageEditState.materialized_*; Phase 6C-5
 /// captures those values in one DuckDB materialization transaction.
+///
+/// Local mutations follow prepare → (caller validates pipeline) → publish so a
+/// failed operator application never leaves the journal, head, or redo advanced.
 class MiniGitWorkingHistory final {
  public:
   MiniGitWorkingHistory(std::shared_ptr<CommitGraph>             graph,
@@ -159,6 +202,23 @@ class MiniGitWorkingHistory final {
   /// publish future rows and by MoveHeadToCommit to validate forward targets.
   [[nodiscard]] auto RedoSuffix() const -> std::vector<commit_hash_t> { return redo_stack_; }
 
+  /// Copyable working selection (redo only). Pair with the graph head for a
+  /// complete local working-state capture.
+  [[nodiscard]] auto WorkingSelection() const -> MiniGitWorkingSelection;
+
+  /// No-fail redo swap used when publishing a prepared transition or restoring
+  /// a captured selection after a rejected named-ref path.
+  void               PublishWorkingSelection(MiniGitWorkingSelection selection);
+
+  /// Plan a settled edit without mutating journal/graph/redo.
+  [[nodiscard]] auto PrepareAppendEdit(OrdinaryEditPayload payload) const -> MiniGitPreparedEdit;
+  /// Plan a merge commit without mutating journal/graph/redo.
+  [[nodiscard]] auto PrepareAppendMerge(commit_hash_t second_parent,
+                                        MergeEditPayload payload) const -> MiniGitPreparedEdit;
+  /// Append one journal record, insert the commit, advance the head, and clear redo.
+  auto               PublishPreparedEdit(const MiniGitPreparedEdit& prepared)
+      -> MiniGitEditAppendResult;
+
   auto               AppendEdit(OrdinaryEditPayload payload) -> MiniGitEditAppendResult;
   /// Create a merge commit whose first parent is the current working head and whose second
   /// parent is the incoming branch head. The merge commit stores the resolved field delta
@@ -166,6 +226,20 @@ class MiniGitWorkingHistory final {
   /// the same pattern as AppendEdit.
   auto               AppendMerge(commit_hash_t second_parent, MergeEditPayload payload)
       -> MiniGitEditAppendResult;
+
+  /// Plan Undo without mutating journal/graph/redo. `traversed_commits` holds the
+  /// abandoned head commit for before-value application.
+  [[nodiscard]] auto PrepareUndo() const -> MiniGitPreparedHeadMove;
+  /// Plan Redo without mutating journal/graph/redo.
+  [[nodiscard]] auto PrepareRedo() const -> MiniGitPreparedHeadMove;
+  /// Plan an explicit multi-step head move without mutating journal/graph/redo.
+  [[nodiscard]] auto PrepareMoveHeadToCommit(const commit_hash_t& target) const
+      -> MiniGitPreparedHeadMove;
+  /// Append one head-move journal record and swap head + redo. Must only be called
+  /// after the caller has applied every payload in `prepared.traversed_commits`.
+  auto               PublishPreparedHeadMove(const MiniGitPreparedHeadMove& prepared)
+      -> MiniGitHeadMoveResult;
+
   auto               Undo() -> MiniGitHeadMoveResult;
   auto               Redo() -> MiniGitHeadMoveResult;
   /// Move the working head to an explicit commit in one operation. The target
@@ -176,12 +250,17 @@ class MiniGitWorkingHistory final {
   /// moves consume the redo suffix up to and including the target. Exactly one
   /// head-move journal record is appended. `traversed_commits` is populated in
   /// apply order with `backward` selecting before vs. after values.
+  ///
+  /// Prefer PrepareMoveHeadToCommit + PublishPreparedHeadMove when the caller
+  /// must validate pipeline application before the durable journal append.
   auto               MoveHeadToCommit(const commit_hash_t& target, std::string* error)
       -> MiniGitHeadMoveResult;
 
   /// Select another named Version after the caller has completed the save
-  /// checkpoint. This does not reconstruct a pipeline; checkout owns that in
-  /// Phase 6C-6.
+  /// checkpoint. Clears the in-memory redo suffix as part of the published
+  /// selection for the new Version. Callers that still need the prior redo on
+  /// a failure path must capture WorkingSelection() before this call.
+  /// This does not reconstruct a pipeline; checkout owns that in Phase 6C-6.
   auto               SelectVersion(const version_ref_id_t& version_id, std::string* error) -> bool;
 
   /// Replay a durable journal prefix against a graph loaded from DuckDB. The
@@ -201,9 +280,6 @@ class MiniGitWorkingHistory final {
                                                std::string* error) -> bool;
 
  private:
-  auto AppendHeadMove(head_commit_hash_t target_head, transaction_chain_hash_t target_chain,
-                      std::optional<EditCommit>* selected_commit) -> MiniGitHeadMoveResult;
-
   std::shared_ptr<CommitGraph>             graph_;
   std::shared_ptr<IMiniGitJournalAppender> journal_;
   std::vector<commit_hash_t>               redo_stack_;

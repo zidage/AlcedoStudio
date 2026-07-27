@@ -135,16 +135,23 @@ auto EditorHistoryMutation::Undo(const alcedo::EditorHistoryGuardHandle& guard,
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
   std::scoped_lock state_lock(state->mutex);
-  const auto result = state->history->Undo();
-  if (!result.error.empty()) {
-    if (error) *error = result.error;
+  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+    if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  if (!result.moved || !result.selected_commit) return true;
-  const auto payload =
-      alcedo::OrdinaryEditPayload::FromJSON(result.selected_commit->GetPayloadJSON());
-  if (!ApplyCommittedPayload(*state->pipeline_guard, &state->committed_snapshot, payload, false,
-                             error)) {
+  const auto prepared = state->history->PrepareUndo();
+  if (!prepared.ready) {
+    if (error) *error = prepared.error;
+    return false;
+  }
+  if (prepared.is_noop) return true;
+  if (!ApplyPreparedHeadMovePipeline(*state->pipeline_guard, &state->committed_snapshot,
+                                     *state->pipeline_guard->commit_graph_, prepared, error)) {
+    return false;
+  }
+  const auto published = state->history->PublishPreparedHeadMove(prepared);
+  if (!published.moved) {
+    if (error) *error = published.error.empty() ? "mini-Git undo publish failed" : published.error;
     return false;
   }
   state->pipeline_guard->dirty_ = true;
@@ -160,16 +167,23 @@ auto EditorHistoryMutation::Redo(const alcedo::EditorHistoryGuardHandle& guard,
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
   std::scoped_lock state_lock(state->mutex);
-  const auto result = state->history->Redo();
-  if (!result.error.empty()) {
-    if (error) *error = result.error;
+  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+    if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  if (!result.moved || !result.selected_commit) return true;
-  const auto payload =
-      alcedo::OrdinaryEditPayload::FromJSON(result.selected_commit->GetPayloadJSON());
-  if (!ApplyCommittedPayload(*state->pipeline_guard, &state->committed_snapshot, payload, true,
-                             error)) {
+  const auto prepared = state->history->PrepareRedo();
+  if (!prepared.ready) {
+    if (error) *error = prepared.error;
+    return false;
+  }
+  if (prepared.is_noop) return true;
+  if (!ApplyPreparedHeadMovePipeline(*state->pipeline_guard, &state->committed_snapshot,
+                                     *state->pipeline_guard->commit_graph_, prepared, error)) {
+    return false;
+  }
+  const auto published = state->history->PublishPreparedHeadMove(prepared);
+  if (!published.moved) {
+    if (error) *error = published.error.empty() ? "mini-Git redo publish failed" : published.error;
     return false;
   }
   state->pipeline_guard->dirty_ = true;
@@ -190,19 +204,24 @@ auto EditorHistoryMutation::MoveHeadToCommit(const alcedo::EditorHistoryGuardHan
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
-  auto result = state->history->MoveHeadToCommit(commit_id, error);
-  if (!result.error.empty()) {
-    if (error) *error = result.error;
+  // Prepare → apply pipeline/snapshot (fallible) → publish journal/head/redo.
+  // Failure before publish leaves the full working-state tuple unchanged.
+  const auto prepared = state->history->PrepareMoveHeadToCommit(commit_id);
+  if (!prepared.ready) {
+    if (error) *error = prepared.error;
     return false;
   }
-  if (!result.moved) return true;
-  for (const auto& commit : result.traversed_commits) {
-    if (commit.GetKind() == alcedo::EditCommitKind::kMerge) continue;
-    const auto payload = alcedo::OrdinaryEditPayload::FromJSON(commit.GetPayloadJSON());
-    if (!ApplyCommittedPayload(*state->pipeline_guard, &state->committed_snapshot, payload,
-                               /*use_after_value=*/!result.backward, error)) {
-      return false;
+  if (prepared.is_noop) return true;
+  if (!ApplyPreparedHeadMovePipeline(*state->pipeline_guard, &state->committed_snapshot,
+                                     *state->pipeline_guard->commit_graph_, prepared, error)) {
+    return false;
+  }
+  const auto published = state->history->PublishPreparedHeadMove(prepared);
+  if (!published.moved) {
+    if (error) {
+      *error = published.error.empty() ? "mini-Git head-move publish failed" : published.error;
     }
+    return false;
   }
   state->pipeline_guard->dirty_ = true;
   state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
@@ -234,7 +253,10 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
     return false;
   }
   auto& graph = *state->pipeline_guard->commit_graph_;
+  // Capture graph + redo before any live mutation. On failure, restore both so
+  // SelectVersion cannot erase the prior redo suffix.
   const auto graph_before = graph;
+  const auto prior_selection = state->history->WorkingSelection();
   const auto prior_head = state->pipeline_guard->working_head_commit_hash_;
   const auto prior_chain = state->pipeline_guard->transaction_chain_hash_;
   const bool prior_dirty = state->pipeline_guard->dirty_;
@@ -243,26 +265,29 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
   const auto prior_pending = state->pending_before;
   const bool prior_recovered = state->recovered_head;
 
+  auto restore_prior = [&] {
+    RestoreGraphAndPipeline(graph, graph_before, *pipeline_service, state->pipeline_guard,
+                            prior_head, prior_chain, prior_dirty, prior_serialized);
+    state->history->PublishWorkingSelection(prior_selection);
+    state->committed_snapshot = prior_snapshot;
+    state->pending_before = prior_pending;
+    state->recovered_head = prior_recovered;
+  };
+
   if (!pipeline_port->CheckoutVersion(guard.element_id, version_id, error)) {
+    // CheckoutVersion restores its own graph/pipeline; keep redo selection.
+    state->history->PublishWorkingSelection(prior_selection);
     return false;
   }
 
   if (!state->history->SelectVersion(version_id, error)) {
-    RestoreGraphAndPipeline(graph, graph_before, *pipeline_service, state->pipeline_guard,
-                            prior_head, prior_chain, prior_dirty, prior_serialized);
-    state->committed_snapshot = prior_snapshot;
-    state->pending_before = prior_pending;
-    state->recovered_head = prior_recovered;
+    restore_prior();
     return false;
   }
 
   alcedo::EditorRenderAdjustmentSnapshot next_snapshot;
   if (!ReadPipelineSnapshot(*state->pipeline_guard, &next_snapshot, error)) {
-    RestoreGraphAndPipeline(graph, graph_before, *pipeline_service, state->pipeline_guard,
-                            prior_head, prior_chain, prior_dirty, prior_serialized);
-    state->committed_snapshot = prior_snapshot;
-    state->pending_before = prior_pending;
-    state->recovered_head = prior_recovered;
+    restore_prior();
     return false;
   }
 
@@ -270,17 +295,16 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
   if (!pipeline_service->PersistEditorHistoryState(state->pipeline_guard,
                                                    graph_before.GetImageEditState(),
                                                    &persistence_error)) {
-    RestoreGraphAndPipeline(graph, graph_before, *pipeline_service, state->pipeline_guard,
-                            prior_head, prior_chain, prior_dirty, prior_serialized);
-    state->committed_snapshot = prior_snapshot;
-    state->pending_before = prior_pending;
-    state->recovered_head = prior_recovered;
+    restore_prior();
     if (error) *error = persistence_error;
     return false;
   }
 
+  // Durable named-ref publication succeeded: empty redo (SelectVersion) and clean flags.
   state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
   state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
+  state->pipeline_guard->dirty_ = false;
+  state->pipeline_guard->serialized_state_needs_writeback_ = false;
   state->pending_before.clear();
   state->committed_snapshot = std::move(next_snapshot);
   state->recovered_head = false;

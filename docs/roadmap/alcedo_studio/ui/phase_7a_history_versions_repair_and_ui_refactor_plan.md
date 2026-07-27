@@ -2,7 +2,7 @@
 
 Date: 2026-07-26
 Re-audited: 2026-07-27
-Status: **REOPENED — R0–R4 implemented (R2 residual contention evidence); R5 atomic Mini-Git transitions next; R6–R7 product/performance qualification remaining**
+Status: **REOPENED — R0–R5 implemented (R2 residual contention evidence); R6 QML lifecycle next; R7 product/performance qualification remaining**
 
 The earlier Phase 7A completion labels were based mainly on focused unit tests and QML fakes. They
 remain useful historical evidence, but they do not prove the production Version workflow. Current
@@ -728,7 +728,7 @@ DuckDB/persistence path while measuring GUI projection latency is still absent.
 | Four history projection/presentation tests in `EditorSessionHistoryPortTest` | PASS 4/4 |
 | `EditorVersionsPanelQmlTest` and `EditorHistoryTransactionsPanelQmlTest` | PASS 13/13; includes `VersionListPreservesContentYAcrossCreateRenameAndCheckout` |
 | `EditorSessionControllerPhase5ATest` with the four known R0/R4 red cases excluded | PASS 31/31 |
-| Selected regression set (`CommitGraphTest`, history port, navigation, controller, and both QML targets) | 112/114 passed; two observed R5 failures remain: failed head move mutates graph/journal state, and cross-merge reconstruction returns the pre-merge exposure |
+| Selected regression set (`CommitGraphTest`, history port, navigation, controller, and both QML targets) | 112/114 passed at R2 re-audit; the two head-move/merge failures were closed by R5 (see R5 completion record) |
 | `alcedo_main` production target | PASS; linked successfully with the revised service and QML module |
 
 **Exact verification commands:**
@@ -782,10 +782,10 @@ have inline comments; no standalone generated API reference was added.
   `WorkingState` mutex; source inspection alone cannot close that exit item.
 - Add a dedicated renderer route/frame-completion counter test and a cache-hit counter if the
   performance target requires instrumentation rather than source/model evidence.
-- Keep the two observed history-port failures with R5: failed head-move rollback and merge-aware
-  reconstruction.
-- Keep the four known `EditorSessionControllerPhase5ATest` asynchronous-result failures with R0/R4;
-  they are not R2 evidence and were not changed here.
+- The two history-port failures (failed head-move rollback and merge-aware reconstruction) were
+  closed by R5; see the R5 completion record.
+- The four known `EditorSessionControllerPhase5ATest` asynchronous-result cases were closed by R4;
+  they are not R2 evidence and were not changed in the R2 patch.
 
 ### R3 — split `EditorSessionHistoryPort` by responsibility
 
@@ -1107,6 +1107,104 @@ Exit:
 - failure after selecting a candidate cannot erase redo;
 - multi-step move and Undo/Redo have the same atomic behavior;
 - merge traversal reproduces the selected commit's pipeline.
+
+##### Phase R5 completion record (2026-07-27)
+
+**Status:** complete — local head/edit transitions use prepare → apply → publish; merge-aware
+payload application; copyable redo selection restored on named-ref failure; just-persisted Versions
+clear dirty/writeback. No god class: Mini-Git owns prepare/publish, shared helpers own payload
+apply, mutation/version-refs only orchestrate.
+
+**Primary success call chain (multi-step head move):**
+
+```text
+EditorSessionHistoryPort::MoveHeadToCommit
+  -> EditorHistoryMutation::MoveHeadToCommit
+  -> MiniGitWorkingHistory::PrepareMoveHeadToCommit  (no journal/graph/redo mutation)
+  -> ApplyPreparedHeadMovePipeline
+       -> ApplyHistoryCommit for each ordinary/merge payload
+  -> MiniGitWorkingHistory::PublishPreparedHeadMove
+       -> journal Append (one head-move record)
+       -> MoveWorkingHead + PublishWorkingSelection (no-fail swap)
+  -> update PipelineGuard head/chain/dirty + committed_snapshot
+```
+
+**Primary failure call chain (unmappable commit in traversal):**
+
+```text
+PrepareMoveHeadToCommit succeeds (plan only)
+  -> ApplyPreparedHeadMovePipeline
+       -> ApplyHistoryCommit fails (field does not map / operator apply fails)
+       -> restore pipeline params + prior snapshot under render lock
+  -> PublishPreparedHeadMove is not called
+  -> journal records, graph head, redo suffix, and committed snapshot unchanged
+```
+
+**Named-ref failure call chain (redo preservation):**
+
+```text
+CaptureNamedRefPrior / WorkingSelection
+  -> CreateVersionRef / CheckoutVersion / SelectVersion (SelectVersion clears redo)
+  -> late failure (snapshot or PersistEditorHistoryState)
+  -> RestoreGraphAndPipeline + PublishWorkingSelection(prior)
+  -> prior redo suffix is restored with graph/pipeline/snapshot
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target | Result |
+| --- | --- | --- |
+| `HeadMoveApplyFailurePreservesHeadRedoPipelineSnapshotAndJournal` | EditorSessionHistoryPortTest | PASS (was R0 RED) |
+| `MoveAcrossMergeReconstructsResolvedFields` | EditorSessionHistoryPortTest | PASS (was R0 RED) |
+| EditorSessionHistoryPortTest (full) | EditorSessionHistoryPortTest | 13/13 PASS |
+| CommitGraphTest | CommitGraphTest | PASS |
+| EditorMiniGitJournalFoldTest | EditorMiniGitJournalFoldTest | PASS |
+| EditorMiniGitJournalRecoveryTest | EditorMiniGitJournalRecoveryTest | PASS |
+| EditorMiniGitMaterializerTest | EditorMiniGitMaterializerTest | PASS |
+| EditorSessionNavigationControllerTest | EditorSessionNavigationControllerTest | PASS |
+| EditorSessionControllerPhase5ATest | EditorSessionControllerPhase5ATest | 35/35 PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionHistoryPortTest
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target CommitGraphTest --target EditorSessionNavigationControllerTest --target EditorSessionControllerPhase5ATest --target EditorMiniGitMaterializerTest --target EditorMiniGitJournalFoldTest --target EditorMiniGitJournalRecoveryTest
+ctest --test-dir build/debug -R "CommitGraphTest|EditorSessionHistoryPortTest|EditorSessionNavigationControllerTest|EditorSessionControllerPhase5ATest|EditorMiniGitMaterializerTest|EditorMiniGitJournalFoldTest|EditorMiniGitJournalRecoveryTest" --output-on-failure
+```
+
+Suite totals: **133/133 PASS**.
+
+**Checklist / exit condition:**
+
+- [x] injected failure before durable journal append leaves head/redo/journal/snapshot unchanged
+- [x] successful local head moves append one journal record after preparation
+- [x] multi-step Undo/Redo/MoveHead share prepare → apply → publish
+- [x] merge traversal applies resolved fields (forward) and first-parent field state (backward)
+- [x] failure after SelectVersion restores prior redo via `MiniGitWorkingSelection`
+- [x] just-persisted named-ref success clears dirty/writeback (no false dirty after create/branch/checkout)
+- [x] no god class: prepare/publish in Mini-Git; apply in shared helpers; orchestration in mutation/version-refs
+
+**LOC note (grill-code-review):**
+
+| File | Role |
+| --- | --- |
+| `mini_git_working_history.hpp/.cpp` | `MiniGitWorkingSelection`, `MiniGitPreparedHeadMove/Edit`, Prepare*/Publish* |
+| `editor_history_shared_helpers.hpp/.cpp` | `ApplyHistoryCommit`, `ApplyPreparedHeadMovePipeline` (merge-aware) |
+| `editor_history_mutation.cpp` | Undo/Redo/MoveHead/Checkout prepare→apply→publish orchestration |
+| `editor_history_version_refs.cpp` | Named-ref prior capture/restore + clean flags after persist |
+
+`EditorSessionHistoryPort` façade unchanged. Mutation and version-refs stay under ~350 LOC each.
+`RestoreGraphAndPipeline` remains only for named-ref paths that still mutate a live graph copy
+before DuckDB publication; local head moves no longer use it.
+
+**Residual gaps:**
+
+- Full candidate-graph publication without any live-graph intermediate for named-ref create/branch
+  still uses prepare-on-live-copy + restore; R7 production fixture should inject persistence
+  failures against real DuckDB to qualify that path end-to-end.
+- Paste/merge transfer paths still use `RestoreGraphAndPipeline` without a prepared Mini-Git
+  head-move record (they create commits through AdjustmentTransferService); not in R5 exit.
+- R6 QML lifecycle and R7 production qualification remain.
 
 ### R6 — finish QML lifecycle and list performance
 
