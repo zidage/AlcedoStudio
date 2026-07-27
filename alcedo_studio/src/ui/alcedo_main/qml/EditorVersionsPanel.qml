@@ -23,9 +23,10 @@ Item {
     property bool versionCheckoutEnabled: true
     property string versionCheckoutDisabledReason: ""
 
-    // Inline draft state (create + rename share one field).
+    // Inline draft state (create branch / create fork / rename share one field).
     property bool draftVisible: false
-    property bool draftRenameMode: false
+    // "branchHead" | "forkRoot" | "rename" — selects the draft's submit action.
+    property string draftMode: ""
     property string draftVersionId: ""
     property string draftOriginalText: ""
     property bool draftSubmitPending: false
@@ -35,6 +36,10 @@ Item {
     property string draftError: ""
     property real _preservedContentY: 0
     property bool _restoringContentY: false
+    // Active Version's working head commit; empty when the active Version sits at
+    // the image root. "Branch from current" is disabled while this is empty.
+    readonly property string activeVersionHeadCommit:
+        root.historyModel ? String(root.historyModel.activeVersionHeadCommit || "") : ""
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
     readonly property color colMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
@@ -75,14 +80,16 @@ Item {
         root.restoreListScroll()
     }
 
-    function openCreateVersion() {
+    function openCreateVersion(mode) {
         if (!root.historyModel || root.draftSubmitPending)
             return
-        if (root.draftVisible && !root.draftRenameMode) {
+        if (mode === "branchHead" && root.activeVersionHeadCommit.length === 0)
+            return
+        if (root.draftVisible && root.draftMode === mode) {
             draftFocusTimer.restart()
             return
         }
-        root.draftRenameMode = false
+        root.draftMode = mode
         root.draftVersionId = ""
         root.draftError = ""
         root.draftPendingOperationId = null
@@ -95,7 +102,7 @@ Item {
     function openRenameVersion(versionId, displayName) {
         if (root.draftSubmitPending)
             return
-        root.draftRenameMode = true
+        root.draftMode = "rename"
         root.draftVersionId = versionId
         root.draftError = ""
         root.draftPendingOperationId = null
@@ -109,7 +116,7 @@ Item {
         if (root.draftSubmitPending)
             return
         root.draftVisible = false
-        root.draftRenameMode = false
+        root.draftMode = ""
         root.draftVersionId = ""
         root.draftOriginalText = ""
         root.draftPendingOperationId = null
@@ -120,7 +127,7 @@ Item {
     function closeDraftAfterSuccess() {
         root.draftSubmitPending = false
         root.draftVisible = false
-        root.draftRenameMode = false
+        root.draftMode = ""
         root.draftVersionId = ""
         root.draftOriginalText = ""
         root.draftPendingOperationId = null
@@ -155,8 +162,13 @@ Item {
         root.draftError = ""
         root.draftPendingOperationId = null
         root.captureListScroll()
-        if (root.draftRenameMode) {
+        if (root.draftMode === "rename") {
             root.historyModel.renameVersion(root.draftVersionId, name)
+        } else if (root.draftMode === "branchHead") {
+            if (root.activeVersionHeadCommit.length > 0)
+                root.historyModel.branchFromCommit(root.activeVersionHeadCommit, name)
+            else
+                root.keepDraftAfterFailure(qsTr("Current version has no commit to branch from"))
         } else {
             root.historyModel.createRootVersion(name)
         }
@@ -174,6 +186,7 @@ Item {
         var action = String(result.action || "")
         var kind = Number(result.kind !== undefined ? result.kind : -1)
         var isVersionAction = action === "createRootVersion" || action === "renameVersion"
+                              || action === "branchFromCommit"
         var operationId = result.operationId
         // SaveStarted = 4 (EditorSessionResultKind::SaveStarted). Field stays
         // until a terminal HistoryOperationFinished for this operation id.
@@ -231,7 +244,8 @@ Item {
                 return
             var result = root.editorSession.lastHistoryResult || {}
             var action = String(result.action || "")
-            if (action !== "createRootVersion" && action !== "renameVersion")
+            if (action !== "createRootVersion" && action !== "renameVersion"
+                    && action !== "branchFromCommit")
                 return
             // Stale completion for another draft must not close this one.
             if (root.draftPendingOperationId !== null
@@ -301,10 +315,10 @@ Item {
             }
 
             IconActionButton {
-                objectName: "editorCreateVersionButton"
+                objectName: "editorBranchFromCurrentButton"
                 compact: true
-                enabled: root.canMutateVersions
-                iconSrc: "qrc:/panel_icons/plus.svg"
+                enabled: root.canMutateVersions && root.activeVersionHeadCommit.length > 0
+                iconSrc: "qrc:/panel_icons/branch-current.svg"
                 iconColorDefault: root.colText
                 iconColorMuted: root.colMuted
                 fillIdle: root.colCardSurface
@@ -312,8 +326,24 @@ Item {
                 fillPressed: appTheme.buttonPressedFillColor
                 fillSelected: appTheme.buttonSelectedFillColor
                 focusRingColor: root.colText
-                actionName: qsTr("Create Version")
-                onClicked: root.openCreateVersion()
+                actionName: qsTr("Branch from current commit")
+                onClicked: root.openCreateVersion("branchHead")
+            }
+
+            IconActionButton {
+                objectName: "editorForkFromRootButton"
+                compact: true
+                enabled: root.canMutateVersions
+                iconSrc: "qrc:/panel_icons/fork-root.svg"
+                iconColorDefault: root.colText
+                iconColorMuted: root.colMuted
+                fillIdle: root.colCardSurface
+                fillHover: appTheme.buttonHoveredFillColor
+                fillPressed: appTheme.buttonPressedFillColor
+                fillSelected: appTheme.buttonSelectedFillColor
+                focusRingColor: root.colText
+                actionName: qsTr("Fork new version from root")
+                onClicked: root.openCreateVersion("forkRoot")
             }
         }
 
@@ -337,7 +367,9 @@ Item {
 
                 Label {
                     Layout.fillWidth: true
-                    text: root.draftRenameMode ? qsTr("Rename Version") : qsTr("New Version")
+                    text: root.draftMode === "rename" ? qsTr("Rename Version")
+                          : root.draftMode === "branchHead" ? qsTr("Branch from current")
+                          : qsTr("Fork from root")
                     color: root.colMuted
                     font.family: appTheme.uiFontFamily
                     font.pixelSize: appTheme.fontSizeCaption
@@ -362,9 +394,11 @@ Item {
                         rightPadding: appTheme.spaceSm
                         selectionColor: appTheme.editorListSelectedFillColor
                         selectedTextColor: appTheme.editorListSelectedInkColor
-                        Accessible.name: root.draftRenameMode
+                        Accessible.name: root.draftMode === "rename"
                                          ? qsTr("Rename Version")
-                                         : qsTr("New Version name")
+                                         : (root.draftMode === "branchHead"
+                                            ? qsTr("Branch from current")
+                                            : qsTr("Fork from root"))
                         background: Rectangle {
                             implicitHeight: appTheme.spaceXl * 2 + appTheme.spaceSm
                             radius: appTheme.controlRadiusSmall
@@ -405,9 +439,11 @@ Item {
                         fillPressed: appTheme.buttonPressedFillColor
                         fillSelected: appTheme.buttonSelectedFillColor
                         focusRingColor: root.colText
-                        actionName: root.draftRenameMode
+                        actionName: root.draftMode === "rename"
                                     ? qsTr("Accept Rename")
-                                    : qsTr("Accept New Version")
+                                    : (root.draftMode === "branchHead"
+                                       ? qsTr("Accept branch from current")
+                                       : qsTr("Accept fork from root"))
                         onClicked: root.commitDraft(false)
                     }
                 }

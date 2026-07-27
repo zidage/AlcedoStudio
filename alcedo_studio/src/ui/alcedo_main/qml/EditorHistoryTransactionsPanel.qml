@@ -16,15 +16,6 @@ Item {
     property var historyModel: null
     property string statusMessage: ""
 
-    // Inline Branch Here draft: names a Version at the selected commit instead of
-    // hard-coding "Branch" with an unobservable submit result (Phase 7A R4).
-    property bool branchDraftVisible: false
-    property string branchDraftCommitId: ""
-    property string branchDraftOriginalText: ""
-    property bool branchDraftSubmitPending: false
-    property var branchDraftPendingOperationId: null
-    property string branchDraftError: ""
-
     readonly property color colText: theme ? theme.colText : appTheme.textColor
     readonly property color colMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
     readonly property color colCardSurface: theme ? theme.colCardSurface : appTheme.cardSurfaceColor
@@ -101,131 +92,6 @@ Item {
         if (ageSeconds < 3600) return qsTr("%1 min ago").arg(Math.floor(ageSeconds / 60))
         if (ageSeconds < 86400) return qsTr("%1 hr ago").arg(Math.floor(ageSeconds / 3600))
         return qsTr("%1 days ago").arg(Math.floor(ageSeconds / 86400))
-    }
-
-    function openBranchDraft(commitId) {
-        if (!root.historyModel || !root.editorSession || !root.editorSession.canEdit)
-            return
-        if (root.branchDraftSubmitPending)
-            return
-        var id = String(commitId || "").trim()
-        if (id.length === 0)
-            return
-        root.branchDraftCommitId = id
-        root.branchDraftError = ""
-        root.branchDraftPendingOperationId = null
-        root.branchDraftOriginalText = qsTr("Branch")
-        branchNameField.text = root.branchDraftOriginalText
-        root.branchDraftVisible = true
-        branchDraftFocusTimer.restart()
-    }
-
-    function cancelBranchDraft() {
-        if (root.branchDraftSubmitPending)
-            return
-        root.branchDraftVisible = false
-        root.branchDraftCommitId = ""
-        root.branchDraftOriginalText = ""
-        root.branchDraftPendingOperationId = null
-        root.branchDraftError = ""
-        branchNameField.text = ""
-    }
-
-    function closeBranchDraftAfterSuccess() {
-        root.branchDraftSubmitPending = false
-        root.branchDraftVisible = false
-        root.branchDraftCommitId = ""
-        root.branchDraftOriginalText = ""
-        root.branchDraftPendingOperationId = null
-        root.branchDraftError = ""
-        branchNameField.text = ""
-        root.statusMessage = ""
-    }
-
-    function keepBranchDraftAfterFailure(message) {
-        root.branchDraftSubmitPending = false
-        root.branchDraftPendingOperationId = null
-        root.branchDraftError = String(message || qsTr("Branch operation failed"))
-        root.statusMessage = root.branchDraftError
-        branchDraftFocusTimer.restart()
-    }
-
-    function commitBranchDraft(requireChanged) {
-        if (!root.branchDraftVisible || !root.historyModel || root.branchDraftSubmitPending)
-            return
-        var name = branchNameField.text.trim()
-        if (name.length === 0) {
-            cancelBranchDraft()
-            return
-        }
-        if (requireChanged && name === root.branchDraftOriginalText.trim()) {
-            cancelBranchDraft()
-            return
-        }
-        root.branchDraftSubmitPending = true
-        root.branchDraftError = ""
-        root.branchDraftPendingOperationId = null
-        root.statusMessage = ""
-        root.historyModel.branchFromCommit(root.branchDraftCommitId, name)
-        root.finishBranchDraftAfterSubmit()
-    }
-
-    function finishBranchDraftAfterSubmit() {
-        if (!root.editorSession) {
-            root.closeBranchDraftAfterSuccess()
-            return
-        }
-        var result = root.editorSession.lastHistoryResult || {}
-        var action = String(result.action || "")
-        var kind = Number(result.kind !== undefined ? result.kind : -1)
-        if (action !== "branchFromCommit") {
-            root.branchDraftSubmitPending = false
-            return
-        }
-        if (kind === 4) {
-            root.branchDraftPendingOperationId = result.operationId
-            return
-        }
-        if (kind === 6 || kind === 7) {
-            root.keepBranchDraftAfterFailure(result.message || root.editorSession.lastHistoryMessage)
-            return
-        }
-        root.closeBranchDraftAfterSuccess()
-    }
-
-    Timer {
-        id: branchDraftFocusTimer
-        interval: 0
-        onTriggered: {
-            if (!root.branchDraftVisible)
-                return
-            branchNameField.forceActiveFocus()
-            branchNameField.selectAll()
-        }
-    }
-
-    Connections {
-        target: root.editorSession
-        ignoreUnknownSignals: true
-        function onHistoryOperationFinished() {
-            if (!root.branchDraftSubmitPending)
-                return
-            var result = root.editorSession.lastHistoryResult || {}
-            if (String(result.action || "") !== "branchFromCommit")
-                return
-            if (root.branchDraftPendingOperationId !== null
-                    && result.operationId !== undefined
-                    && result.operationId !== root.branchDraftPendingOperationId)
-                return
-            var kind = Number(result.kind !== undefined ? result.kind : -1)
-            if (kind === 4)
-                return
-            if (kind === 6 || kind === 7) {
-                root.keepBranchDraftAfterFailure(result.message || root.editorSession.lastHistoryMessage)
-                return
-            }
-            root.closeBranchDraftAfterSuccess()
-        }
     }
 
     ColumnLayout {
@@ -354,7 +220,6 @@ Item {
             Layout.fillWidth: true
             visible: text.length > 0
             text: {
-                if (root.branchDraftError.length > 0) return root.branchDraftError
                 if (root.statusMessage.length > 0) return root.statusMessage
                 if (root.editorSession && root.editorSession.lastHistoryMessage
                         && root.editorSession.lastHistoryMessage.length > 0) {
@@ -362,102 +227,11 @@ Item {
                 }
                 return ""
             }
-            color: (root.branchDraftError.length > 0
-                    || (root.editorSession && root.editorSession.lastHistoryFailed))
+            color: (root.editorSession && root.editorSession.lastHistoryFailed)
                    ? appTheme.dangerColor : root.colMuted
             elide: Text.ElideRight
             font.family: appTheme.uiFontFamily
             font.pixelSize: appTheme.fontSizeCaption
-        }
-
-        // Inline Branch Here name draft (shared under the timeline, not a modal).
-        // Height snaps; no opacity animation on this subtree (R6).
-        Item {
-            objectName: "editorHistoryBranchDraftRow"
-            Layout.fillWidth: true
-            Layout.preferredHeight: root.branchDraftVisible
-                                    ? (appTheme.spaceXl * 2 + appTheme.spaceSm
-                                       + appTheme.spaceMd + appTheme.fontSizeCaption)
-                                    : 0
-            visible: root.branchDraftVisible
-
-            ColumnLayout {
-                anchors.fill: parent
-                spacing: appTheme.spaceXs
-
-                Label {
-                    Layout.fillWidth: true
-                    text: qsTr("Branch Here")
-                    color: root.colMuted
-                    font.family: appTheme.uiFontFamily
-                    font.pixelSize: appTheme.fontSizeCaption
-                }
-
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: appTheme.spaceSm
-
-                    TextField {
-                        id: branchNameField
-                        objectName: "editorHistoryBranchNameField"
-                        Layout.fillWidth: true
-                        Layout.preferredHeight: appTheme.spaceXl * 2 + appTheme.spaceSm
-                        enabled: root.branchDraftVisible && !root.branchDraftSubmitPending
-                        color: root.colText
-                        font.family: appTheme.uiFontFamily
-                        font.pixelSize: appTheme.fontSizeBody
-                        placeholderText: qsTr("Branch name")
-                        selectByMouse: true
-                        leftPadding: appTheme.spaceSm
-                        rightPadding: appTheme.spaceSm
-                        selectionColor: appTheme.editorListSelectedFillColor
-                        selectedTextColor: appTheme.editorListSelectedInkColor
-                        Accessible.name: qsTr("Branch Here name")
-                        background: Rectangle {
-                            implicitHeight: appTheme.spaceXl * 2 + appTheme.spaceSm
-                            radius: appTheme.controlRadiusSmall
-                            color: appTheme.bgBaseColor
-                            border.width: 1
-                            border.color: branchNameField.activeFocus
-                                          ? root.colText
-                                          : root.colCardBorder
-                            opacity: branchNameField.enabled ? 1.0 : 0.55
-                        }
-
-                        onAccepted: root.commitBranchDraft(false)
-                        Keys.onEscapePressed: function (event) {
-                            root.cancelBranchDraft()
-                            event.accepted = true
-                        }
-                        onEditingFinished: {
-                            Qt.callLater(function () {
-                                Qt.callLater(function () {
-                                    if (!root.branchDraftVisible || root.branchDraftSubmitPending)
-                                        return
-                                    root.commitBranchDraft(true)
-                                })
-                            })
-                        }
-                    }
-
-                    IconActionButton {
-                        objectName: "editorHistoryBranchAcceptButton"
-                        compact: true
-                        enabled: root.branchDraftVisible && !root.branchDraftSubmitPending
-                                 && branchNameField.text.trim().length > 0
-                        iconSrc: "qrc:/panel_icons/plus.svg"
-                        iconColorDefault: root.colText
-                        iconColorMuted: root.colMuted
-                        fillIdle: root.colCardSurface
-                        fillHover: appTheme.buttonHoveredFillColor
-                        fillPressed: appTheme.buttonPressedFillColor
-                        fillSelected: appTheme.buttonSelectedFillColor
-                        focusRingColor: root.colText
-                        actionName: qsTr("Accept Branch Here")
-                        onClicked: root.commitBranchDraft(false)
-                    }
-                }
-            }
         }
 
         Item {
@@ -565,14 +339,6 @@ Item {
                     function activateMove() {
                         if (transactionDelegate.canMove && root.historyModel) {
                             root.historyModel.moveHeadToCommit(transactionDelegate.transactionId)
-                        }
-                    }
-
-                    function activateBranch() {
-                        if (root.historyModel && root.editorSession && root.editorSession.canEdit
-                                && transactionDelegate.transactionId.length > 0
-                                && !root.branchDraftSubmitPending) {
-                            root.openBranchDraft(transactionDelegate.transactionId)
                         }
                     }
 
@@ -728,31 +494,6 @@ Item {
                                 }
                             }
 
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: appTheme.spaceXs
-
-                                Item { Layout.fillWidth: true }
-
-                                IconActionButton {
-                                    objectName: "editorHistoryBranchButton"
-                                    compact: true
-                                    visible: root.editorSession && root.editorSession.canEdit
-                                            && transactionDelegate.transactionId.length > 0
-                                            && !transactionDelegate.currentTransaction
-                                    enabled: visible
-                                    iconSrc: "qrc:/panel_icons/git-branch.svg"
-                                    iconColorDefault: root.colMuted
-                                    iconColorMuted: root.colMuted
-                                    fillIdle: root.colCardSurface
-                                    fillHover: appTheme.buttonHoveredFillColor
-                                    fillPressed: appTheme.buttonPressedFillColor
-                                    fillSelected: appTheme.buttonSelectedFillColor
-                                    focusRingColor: root.colText
-                                    actionName: qsTr("Branch Here from this commit")
-                                    onClicked: transactionDelegate.activateBranch()
-                                }
-                            }
                         }
                     }
                 }

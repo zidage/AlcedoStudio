@@ -3,7 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 /// @file editor_history_transactions_panel_qml_test.cpp
-/// @brief Production History transactions panel: toolbar, Branch Here, recovery.
+/// @brief Production History transactions panel: toolbar, recovery, card move.
 
 #include "editor_history_versions_rail_qml_harness.hpp"
 
@@ -130,8 +130,7 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest, PasteAndMergeUseVisibleActionsAndR
   EXPECT_EQ(transfer_.last_resolution().value(QStringLiteral("resolvedValue")).toDouble(), 1.0);
 }
 
-TEST_F(EditorHistoryTransactionsPanelQmlTest,
-       HistoryCardClickMovesToCommitAndBranchButtonUsesSelectedCommitId) {
+TEST_F(EditorHistoryTransactionsPanelQmlTest, HistoryCardClickMovesToCommit) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenHistoryPage();
 
@@ -158,68 +157,12 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest,
             QStringLiteral("moveHeadToCommit"));
   EXPECT_FALSE(controller_.last_history_failed());
 
-  // Branch Here stays on eligible transaction cards (not Version selection rows).
-  EXPECT_EQ(Find(QStringLiteral("editorHistoryBranchButton")) != nullptr ||
-                [&]() {
-                  for (auto* d : HistoryCards()) {
-                    if (d->findChild<QQuickItem*>(QStringLiteral("editorHistoryBranchButton")))
-                      return true;
-                  }
-                  return false;
-                }(),
-            true);
-  // No Branch Here control on Version cards.
-  OpenVersionsPage();
-  for (auto* card : Cards()) {
-    EXPECT_EQ(card->findChild<QQuickItem*>(QStringLiteral("editorHistoryBranchButton")), nullptr);
+  // No per-commit Branch Here affordance on the transaction timeline: version
+  // branching is entered only from the Versions panel.
+  for (auto* delegate : HistoryCards()) {
+    EXPECT_EQ(delegate->findChild<QQuickItem*>(QStringLiteral("editorHistoryBranchButton")),
+              nullptr);
   }
-  OpenHistoryPage();
-
-  // After the move, the model resets; wait for a non-current delegate whose Branch Here
-  // button is visible and enabled before clicking, so the re-render never races the click.
-  auto find_branch_delegate = [&]() -> QQuickItem* {
-    for (auto* delegate : HistoryCards()) {
-      if (delegate->property("currentTransaction").toBool()) continue;
-      if (delegate->property("transactionId").toString().length() == 0) continue;
-      auto* btn = delegate->findChild<QQuickItem*>(QStringLiteral("editorHistoryBranchButton"));
-      if (btn != nullptr && btn->property("visible").toBool() && btn->isEnabled()) {
-        return delegate;
-      }
-    }
-    return nullptr;
-  };
-  QQuickItem* branch_target = nullptr;
-  QTRY_VERIFY_WITH_TIMEOUT((branch_target = find_branch_delegate()) != nullptr, 2000);
-  const QString branch_id = branch_target->property("transactionId").toString();
-  auto* branch_button =
-      branch_target->findChild<QQuickItem*>(QStringLiteral("editorHistoryBranchButton"));
-  ASSERT_NE(branch_button, nullptr);
-  // Branch Here opens an inline name draft; it must not hard-submit a fixed name.
-  QVERIFY(QMetaObject::invokeMethod(branch_button, "clicked", Qt::DirectConnection));
-  ProcessEvents();
-  EXPECT_EQ(backend_.branch_count(), 0) << "opening Branch Here must not submit until named";
-  auto* page = Find(QStringLiteral("editorHistoryPageBody"));
-  ASSERT_NE(page, nullptr);
-  QTRY_VERIFY_WITH_TIMEOUT(page->property("branchDraftVisible").toBool(), 1000);
-  EXPECT_EQ(page->property("branchDraftCommitId").toString(), branch_id);
-  auto* field = Find(QStringLiteral("editorHistoryBranchNameField"));
-  ASSERT_NE(field, nullptr);
-  field->forceActiveFocus();
-  ProcessEvents();
-  // QTest key events type lowercase latin letters; selectAll on open replaces the
-  // generated "Branch" seed with the typed name.
-  TypeText(window_, QStringLiteral("namedbranch"));
-  auto* accept = Find(QStringLiteral("editorHistoryBranchAcceptButton"));
-  ASSERT_NE(accept, nullptr);
-  QVERIFY(QMetaObject::invokeMethod(accept, "clicked", Qt::DirectConnection));
-  ProcessEvents();
-  EXPECT_EQ(backend_.branch_count(), 1);
-  EXPECT_EQ(QString::fromStdString(backend_.last_branch_commit().ToString()), branch_id);
-  EXPECT_EQ(QString::fromStdString(backend_.last_branch_name()), QStringLiteral("namedbranch"));
-  EXPECT_EQ(controller_.last_history_result().value(QStringLiteral("action")).toString(),
-            QStringLiteral("branchFromCommit"));
-  EXPECT_TRUE(controller_.last_history_result().contains(QStringLiteral("operationId")));
-  QTRY_VERIFY_WITH_TIMEOUT(!page->property("branchDraftVisible").toBool(), 2000);
 }
 
 TEST_F(EditorHistoryTransactionsPanelQmlTest,

@@ -67,6 +67,7 @@ class EditorHistoryModel : public QAbstractListModel {
   Q_PROPERTY(bool canRedo READ canRedo NOTIFY StateChanged)
   Q_PROPERTY(bool recoveredHead READ recoveredHead NOTIFY StateChanged)
   Q_PROPERTY(QString activeVersionId READ activeVersionId NOTIFY StateChanged)
+  Q_PROPERTY(QString activeVersionHeadCommit READ activeVersionHeadCommit NOTIFY StateChanged)
 
  public:
   enum Role {
@@ -102,6 +103,7 @@ class EditorHistoryModel : public QAbstractListModel {
   [[nodiscard]] auto canRedo() const -> bool { return can_redo_; }
   [[nodiscard]] auto recoveredHead() const -> bool { return recovered_head_; }
   [[nodiscard]] auto activeVersionId() const -> QString { return active_version_id_; }
+  [[nodiscard]] auto activeVersionHeadCommit() const -> QString { return active_head_commit_; }
 
   [[nodiscard]] auto rowCount(const QModelIndex& parent = {}) const -> int override;
   [[nodiscard]] auto data(const QModelIndex& index, int role = Qt::DisplayRole) const
@@ -147,6 +149,7 @@ class EditorHistoryModel : public QAbstractListModel {
   bool                                     can_redo_       = false;
   bool                                     recovered_head_ = false;
   QString                                  active_version_id_;
+  QString                                  active_head_commit_;
 };
 
 void RegisterEditorHistoryQmlTypes();

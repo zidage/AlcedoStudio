@@ -67,7 +67,7 @@ TEST_F(EditorVersionsPanelQmlTest, VersionNameInputCreatesRenamesAndRemovesNamed
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
   OpenVersionsPage();
 
-  Click(window_, Find(QStringLiteral("editorCreateVersionButton")));
+  Click(window_, Find(QStringLiteral("editorForkFromRootButton")));
   auto* field = Find(QStringLiteral("editorVersionNameField"));
   ASSERT_NE(field, nullptr);
   EXPECT_TRUE(field->property("visible").toBool());
@@ -134,7 +134,7 @@ TEST_F(EditorVersionsPanelQmlTest, InlineVersionDraftAcceptsEnterAndEscapeWithou
   EXPECT_EQ(window_->findChild<QObject*>(QStringLiteral("editorVersionNameDialog")), nullptr);
   EXPECT_EQ(Find(QStringLiteral("editorVersionNameDialog")), nullptr);
 
-  Click(window_, Find(QStringLiteral("editorCreateVersionButton")));
+  Click(window_, Find(QStringLiteral("editorForkFromRootButton")));
   auto* draft_row = Find(QStringLiteral("editorVersionDraftRow"));
   auto* field     = Find(QStringLiteral("editorVersionNameField"));
   ASSERT_NE(draft_row, nullptr);
@@ -158,7 +158,7 @@ TEST_F(EditorVersionsPanelQmlTest, InlineVersionDraftAcceptsEnterAndEscapeWithou
   EXPECT_FALSE(page->property("draftVisible").toBool());
 
   // Re-open, type a name, Enter creates via the real model path.
-  Click(window_, Find(QStringLiteral("editorCreateVersionButton")));
+  Click(window_, Find(QStringLiteral("editorForkFromRootButton")));
   field = Find(QStringLiteral("editorVersionNameField"));
   ASSERT_NE(field, nullptr);
   QTRY_VERIFY_WITH_TIMEOUT(field->property("visible").toBool(), 1000);
@@ -237,7 +237,7 @@ TEST_F(EditorVersionsPanelQmlTest, InlineDraftPendingSubmitBlocksDuplicateCreate
   auto* page = Find(QStringLiteral("editorVersionsPageBody"));
   ASSERT_NE(page, nullptr);
 
-  Click(window_, Find(QStringLiteral("editorCreateVersionButton")));
+  Click(window_, Find(QStringLiteral("editorForkFromRootButton")));
   auto* field = Find(QStringLiteral("editorVersionNameField"));
   ASSERT_NE(field, nullptr);
   TypeText(window_, QStringLiteral("pendinglook"));
@@ -320,7 +320,7 @@ TEST_F(EditorVersionsPanelQmlTest,
 
   // Create via the production inline draft — grows the model (full reset path).
   const int create_before = backend_.create_count();
-  Click(window_, Find(QStringLiteral("editorCreateVersionButton")));
+  Click(window_, Find(QStringLiteral("editorForkFromRootButton")));
   auto* field = Find(QStringLiteral("editorVersionNameField"));
   ASSERT_NE(field, nullptr);
   TypeText(window_, QStringLiteral("scrollednew"));
@@ -380,7 +380,7 @@ TEST_F(EditorVersionsPanelQmlTest,
   ASSERT_NE(page, nullptr);
 
   // Focus-loss with unchanged generated name: cancel, no create.
-  Click(window_, Find(QStringLiteral("editorCreateVersionButton")));
+  Click(window_, Find(QStringLiteral("editorForkFromRootButton")));
   auto* field = Find(QStringLiteral("editorVersionNameField"));
   ASSERT_NE(field, nullptr);
   QTRY_VERIFY_WITH_TIMEOUT(field->property("visible").toBool(), 1000);
@@ -396,7 +396,7 @@ TEST_F(EditorVersionsPanelQmlTest,
   EXPECT_EQ(backend_.create_count(), 0);
 
   // Focus-loss with non-empty changed text: commit via the real model path.
-  Click(window_, Find(QStringLiteral("editorCreateVersionButton")));
+  Click(window_, Find(QStringLiteral("editorForkFromRootButton")));
   field = Find(QStringLiteral("editorVersionNameField"));
   ASSERT_NE(field, nullptr);
   QTRY_VERIFY_WITH_TIMEOUT(field->property("visible").toBool(), 1000);
@@ -420,5 +420,31 @@ TEST_F(EditorVersionsPanelQmlTest,
   EXPECT_EQ(created->property("displayName").toString(), QStringLiteral("focuscommit"));
 }
 
+TEST_F(EditorVersionsPanelQmlTest, BranchFromCurrentButtonBranchesFromActiveHeadCommit) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenVersionsPage();
+
+  // Fixture seeds the active "Base Look" Version at a non-root head commit, so
+  // the Branch-from-current affordance is enabled and submits through the real
+  // model path using that active head commit (not an arbitrary card commit).
+  auto* branch_button = Find(QStringLiteral("editorBranchFromCurrentButton"));
+  ASSERT_NE(branch_button, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(branch_button->isEnabled(), 1000);
+  Click(window_, branch_button);
+  auto* field = Find(QStringLiteral("editorVersionNameField"));
+  ASSERT_NE(field, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(field->property("visible").toBool(), 1000);
+  TypeText(window_, QStringLiteral("currentbranch"));
+  auto* accept = Find(QStringLiteral("editorVersionAcceptButton"));
+  ASSERT_NE(accept, nullptr);
+  Click(window_, accept);
+  QTRY_VERIFY_WITH_TIMEOUT(backend_.branch_count() == 1, 2000);
+  EXPECT_EQ(backend_.last_branch_commit(), StableId(13));
+  EXPECT_EQ(QString::fromStdString(backend_.last_branch_name()),
+            QStringLiteral("currentbranch"));
+  EXPECT_EQ(controller_.last_history_result().value(QStringLiteral("action")).toString(),
+            QStringLiteral("branchFromCommit"));
+  EXPECT_FALSE(controller_.last_history_failed());
+}
 }  // namespace
 }  // namespace alcedo::ui::test
