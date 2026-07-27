@@ -2,8 +2,10 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-/// @file editor_history_versions_rail_qml_test.cpp
-/// @brief Exercises the production history rail through visible QML actions.
+/// @file editor_history_versions_rail_qml_harness.hpp
+/// @brief Shared fakes and helpers for History / Versions panel QML tests.
+
+#pragma once
 
 #include <gtest/gtest.h>
 
@@ -32,12 +34,12 @@
 #include "ui/alcedo_main/app_theme.hpp"
 
 namespace alcedo::ui::test {
-namespace {
+namespace rail_harness {
 
-auto StableId(std::uint64_t value) -> Hash128 { return Hash128(value, 0); }
+inline auto StableId(std::uint64_t value) -> Hash128 { return Hash128(value, 0); }
 
-auto MakeVersion(const Hash128& id, std::string name, const head_commit_hash_t& head, bool active)
-    -> EditorHistoryVersion {
+inline auto MakeVersion(const Hash128& id, std::string name, const head_commit_hash_t& head,
+                        bool active) -> EditorHistoryVersion {
   EditorHistoryVersion version;
   version.version_id       = id;
   version.display_name     = std::move(name);
@@ -48,13 +50,13 @@ auto MakeVersion(const Hash128& id, std::string name, const head_commit_hash_t& 
   return version;
 }
 
-auto MakeCommit(const Hash128& id, std::string field_key, std::string before_value_json,
-                std::string after_value_json,
-                const head_commit_hash_t&     first_parent  = std::nullopt,
-                const std::optional<Hash128>& second_parent = std::nullopt,
-                EditCommitKind                kind = EditCommitKind::kEdit,
-                EditorHistoryTimelinePosition position = EditorHistoryTimelinePosition::Applied)
-    -> EditorHistoryCommit {
+inline auto MakeCommit(const Hash128& id, std::string field_key, std::string before_value_json,
+                       std::string after_value_json,
+                       const head_commit_hash_t&     first_parent  = std::nullopt,
+                       const std::optional<Hash128>& second_parent = std::nullopt,
+                       EditCommitKind                kind = EditCommitKind::kEdit,
+                       EditorHistoryTimelinePosition position =
+                           EditorHistoryTimelinePosition::Applied) -> EditorHistoryCommit {
   EditorHistoryCommit commit;
   commit.commit_hash        = id;
   commit.first_parent_hash  = first_parent;
@@ -73,12 +75,12 @@ auto MakeCommit(const Hash128& id, std::string field_key, std::string before_val
 class RecordingEditorSessionBackend final : public IEditorSessionBackend {
  public:
   RecordingEditorSessionBackend() {
-    const auto first_version    = StableId(1);
-    const auto second_version   = StableId(2);
-    const auto first_commit     = StableId(11);
-    const auto second_commit    = StableId(12);
-    const auto merge_commit     = StableId(13);
-    const auto incoming_commit  = StableId(14);
+    const auto first_version   = StableId(1);
+    const auto second_version  = StableId(2);
+    const auto first_commit    = StableId(11);
+    const auto second_commit   = StableId(12);
+    const auto merge_commit    = StableId(13);
+    const auto incoming_commit = StableId(14);
 
     snapshot_.active_version_id = first_version;
     snapshot_.active_head       = merge_commit;
@@ -104,13 +106,11 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     return state_ != EditorSessionState::NoImage;
   }
   [[nodiscard]] auto has_image() const -> bool override { return has_image_; }
-  [[nodiscard]] auto has_pending_recovery() const -> bool override {
-    return recovery_pending_;
-  }
+  [[nodiscard]] auto has_pending_recovery() const -> bool override { return recovery_pending_; }
   [[nodiscard]] auto last_error() const -> std::string override { return last_error_; }
 
-  void               SetPresentationSinkId(PresentationSinkId) override {}
-  void               SetPresentationSize(int, int) override {}
+  void SetPresentationSinkId(PresentationSinkId) override {}
+  void SetPresentationSize(int, int) override {}
 
   auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override {
     identity_.element_id = element_id;
@@ -141,6 +141,10 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   }
 
   auto CreateRootVersion(std::string display_name) -> EditorSessionResult override {
+    if (block_version_ops_) {
+      ++blocked_create_count_;
+      return Rejected("Version create blocked");
+    }
     const auto id = StableId(next_version_id_++);
     for (auto& version : snapshot_.versions) version.active = false;
     snapshot_.versions.push_back(MakeVersion(id, std::move(display_name), std::nullopt, true));
@@ -149,7 +153,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     snapshot_.can_undo          = false;
     snapshot_.can_redo          = false;
     snapshot_.recovered_head    = false;
-    last_created_id_ = id;
+    last_created_id_            = id;
     ++create_count_;
     NotifyChange();
     return Accepted("Root Version created");
@@ -172,6 +176,10 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
 
   auto RenameVersion(const version_ref_id_t& version_id, std::string display_name)
       -> EditorSessionResult override {
+    if (block_version_ops_) {
+      ++blocked_rename_count_;
+      return Rejected("Version rename blocked");
+    }
     const auto it =
         std::find_if(snapshot_.versions.begin(), snapshot_.versions.end(),
                      [&](const auto& version) { return version.version_id == version_id; });
@@ -309,12 +317,16 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto branch_count() const -> int { return branch_count_; }
   [[nodiscard]] auto last_move_head_commit() const -> Hash128 { return last_move_head_commit_; }
   [[nodiscard]] auto last_branch_commit() const -> Hash128 { return last_branch_commit_; }
+  [[nodiscard]] auto blocked_create_count() const -> int { return blocked_create_count_; }
+  [[nodiscard]] auto blocked_rename_count() const -> int { return blocked_rename_count_; }
 
   void SetRecovery(bool pending, std::string error = {}) {
     recovery_pending_ = pending;
     last_error_       = std::move(error);
     NotifyChange();
   }
+
+  void SetBlockVersionOps(bool block) { block_version_ops_ = block; }
 
  private:
   auto Accepted(const char* message) const -> EditorSessionResult {
@@ -357,9 +369,12 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   std::size_t           last_merge_resolution_count_ = 0;
   bool                  recovery_pending_            = false;
   std::string           last_error_;
-  int                   retry_save_count_            = 0;
-  int                   discard_count_               = 0;
-  int                   cancel_recovery_count_       = 0;
+  int                   retry_save_count_      = 0;
+  int                   discard_count_         = 0;
+  int                   cancel_recovery_count_ = 0;
+  bool                  block_version_ops_     = false;
+  int                   blocked_create_count_  = 0;
+  int                   blocked_rename_count_  = 0;
 };
 
 class RecordingInteractionPolicy final : public QObject {
@@ -377,7 +392,7 @@ class RecordingAdjustmentTransfer final : public QObject {
   Q_PROPERTY(bool packageAvailable READ packageAvailable CONSTANT)
 
  public:
-  [[nodiscard]] auto      packageAvailable() const -> bool { return true; }
+  [[nodiscard]] auto packageAvailable() const -> bool { return true; }
 
   Q_INVOKABLE QVariantMap PasteIntoEditor(QObject*) {
     ++paste_count_;
@@ -429,7 +444,7 @@ class RecordingAdjustmentTransfer final : public QObject {
   QVariantMap last_resolution_;
 };
 
-constexpr char kHarnessQml[] = R"(
+inline constexpr char kHarnessQml[] = R"(
 import QtQuick
 import QtQuick.Controls
 
@@ -460,7 +475,7 @@ ApplicationWindow {
 }
 )";
 
-constexpr char kRecoveryHarnessQml[] = R"(
+inline constexpr char kRecoveryHarnessQml[] = R"(
 import QtQuick
 import QtQuick.Controls
 
@@ -484,22 +499,22 @@ ApplicationWindow {
 }
 )";
 
-auto           QmlDirectory() -> QString {
+inline auto QmlDirectory() -> QString {
   return QString::fromStdString(
       (std::filesystem::path(ALCEDO_TEST_SRC_DIR) / "ui" / "alcedo_main" / "qml").string());
 }
 
-auto RailUrl() -> QUrl {
+inline auto RailUrl() -> QUrl {
   return QUrl::fromLocalFile(QmlDirectory() + "/EditorHistoryVersionsRail.qml");
 }
 
-auto RecoveryBarUrl() -> QUrl {
+inline auto RecoveryBarUrl() -> QUrl {
   return QUrl::fromLocalFile(QmlDirectory() + "/EditorSaveRecoveryBar.qml");
 }
 
-void ProcessEvents() { QCoreApplication::processEvents(QEventLoop::AllEvents); }
+inline void ProcessEvents() { QCoreApplication::processEvents(QEventLoop::AllEvents); }
 
-void Click(QQuickWindow* window, QQuickItem* item, QPointF local = QPointF(-1.0, -1.0)) {
+inline void Click(QQuickWindow* window, QQuickItem* item, QPointF local = QPointF(-1.0, -1.0)) {
   ASSERT_NE(window, nullptr);
   ASSERT_NE(item, nullptr);
   if (local.x() < 0.0) local = QPointF(item->width() / 2.0, item->height() / 2.0);
@@ -507,7 +522,7 @@ void Click(QQuickWindow* window, QQuickItem* item, QPointF local = QPointF(-1.0,
   ProcessEvents();
 }
 
-void TypeText(QQuickWindow* window, const QString& text) {
+inline void TypeText(QQuickWindow* window, const QString& text) {
   for (const QChar character : text) {
     if (character >= QLatin1Char('a') && character <= QLatin1Char('z')) {
       const auto key =
@@ -519,12 +534,16 @@ void TypeText(QQuickWindow* window, const QString& text) {
       QTest::keyClick(window, key, Qt::ShiftModifier);
     } else if (character == QLatin1Char(' ')) {
       QTest::keyClick(window, Qt::Key_Space);
+    } else if (character >= QLatin1Char('0') && character <= QLatin1Char('9')) {
+      const auto key =
+          static_cast<Qt::Key>(Qt::Key_0 + character.unicode() - QLatin1Char('0').unicode());
+      QTest::keyClick(window, key);
     }
   }
   ProcessEvents();
 }
 
-auto FindVisualItem(QQuickItem* parent, const QString& object_name) -> QQuickItem* {
+inline auto FindVisualItem(QQuickItem* parent, const QString& object_name) -> QQuickItem* {
   if (parent == nullptr) return nullptr;
   for (auto* child : parent->childItems()) {
     if (child->objectName() == object_name) return child;
@@ -533,7 +552,8 @@ auto FindVisualItem(QQuickItem* parent, const QString& object_name) -> QQuickIte
   return nullptr;
 }
 
-class EditorHistoryVersionsRailQmlTest : public ::testing::Test {
+/// Fixture that loads the production history/versions rail with recording fakes.
+class RailQmlFixture : public ::testing::Test {
  protected:
   void SetUp() override {
     AppTheme::RegisterFonts();
@@ -602,6 +622,10 @@ class EditorHistoryVersionsRailQmlTest : public ::testing::Test {
     return delegates;
   }
 
+  void OpenVersionsPage() { Click(window_, Find(QStringLiteral("editorVersionsRailButton"))); }
+
+  void OpenHistoryPage() { Click(window_, Find(QStringLiteral("editorHistoryRailButton"))); }
+
   RecordingEditorSessionBackend backend_;
   EditorSessionController       controller_{nullptr, &backend_};
   RecordingInteractionPolicy    policy_;
@@ -611,264 +635,5 @@ class EditorHistoryVersionsRailQmlTest : public ::testing::Test {
   QStringList                   warnings_;
 };
 
-TEST_F(EditorHistoryVersionsRailQmlTest,
-       SaveRecoveryBarShowsFailureDetailAndRoutesEveryRecoveryAction) {
-  backend_.SetRecovery(true, "A materialization failed");
-
-  QQmlApplicationEngine recovery_engine;
-  recovery_engine.addImportPath(QStringLiteral("qrc:/"));
-  recovery_engine.addImportPath(QmlDirectory());
-  recovery_engine.rootContext()->setContextProperty(QStringLiteral("appTheme"),
-                                                    &AppTheme::Instance());
-  recovery_engine.rootContext()->setContextProperty(QStringLiteral("editorSessionFake"),
-                                                    &controller_);
-  recovery_engine.rootContext()->setContextProperty(QStringLiteral("recoverySourceUrl"),
-                                                    RecoveryBarUrl());
-  recovery_engine.loadData(QByteArray{kRecoveryHarnessQml},
-                           QUrl(QStringLiteral("file:///EditorSaveRecoveryHarness.qml")));
-  ASSERT_FALSE(recovery_engine.rootObjects().empty());
-  auto* recovery_window = qobject_cast<QQuickWindow*>(recovery_engine.rootObjects().front());
-  ASSERT_NE(recovery_window, nullptr);
-  recovery_window->show();
-  ProcessEvents();
-
-  auto* recovery_bar = FindVisualItem(recovery_window->contentItem(),
-                                      QStringLiteral("editorSaveRecoveryBar"));
-  ASSERT_NE(recovery_bar, nullptr);
-  EXPECT_TRUE(recovery_bar->property("visible").toBool());
-  auto* detail = FindVisualItem(recovery_bar, QStringLiteral("editorRecoveryDetail"));
-  ASSERT_NE(detail, nullptr);
-  EXPECT_EQ(detail->property("text").toString(), QStringLiteral("A materialization failed"));
-
-  Click(recovery_window, FindVisualItem(recovery_bar, QStringLiteral("editorRecoveryRetryButton")));
-  EXPECT_EQ(backend_.retry_save_count(), 1);
-  EXPECT_FALSE(recovery_bar->property("visible").toBool());
-
-  backend_.SetRecovery(true, "Discard this failed checkpoint");
-  ProcessEvents();
-  Click(recovery_window,
-        FindVisualItem(recovery_bar, QStringLiteral("editorRecoveryDiscardButton")));
-  EXPECT_EQ(backend_.discard_count(), 1);
-  EXPECT_FALSE(recovery_bar->property("visible").toBool());
-
-  backend_.SetRecovery(true, "Cancel this pending navigation");
-  ProcessEvents();
-  Click(recovery_window,
-        FindVisualItem(recovery_bar, QStringLiteral("editorRecoveryCancelButton")));
-  EXPECT_EQ(backend_.cancel_recovery_count(), 1);
-  EXPECT_FALSE(recovery_bar->property("visible").toBool());
-}
-
-TEST_F(EditorHistoryVersionsRailQmlTest, ClickingNamedVersionChecksOutStableVersionId) {
-  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
-
-  Click(window_, Find(QStringLiteral("editorVersionsRailButton")));
-  auto cards = Cards();
-  ASSERT_EQ(cards.size(), 2);
-  const auto  selected_outline = AppTheme::Instance().textColor();
-  QQuickItem* selected_card    = nullptr;
-  QQuickItem* alternate_card   = nullptr;
-  for (auto* card : cards) {
-    if (card->property("versionActive").toBool()) {
-      selected_card = card;
-    } else {
-      alternate_card = card;
-    }
-  }
-  ASSERT_NE(selected_card, nullptr);
-  ASSERT_NE(alternate_card, nullptr);
-  EXPECT_EQ(selected_card->property("color").value<QColor>(),
-            AppTheme::Instance().cardSurfaceColor());
-  EXPECT_EQ(selected_card->property("selectionOutlineColor").value<QColor>(), selected_outline);
-  ASSERT_NE(selected_card->findChild<QQuickItem*>(QStringLiteral("editorVersionTitle")), nullptr);
-  EXPECT_EQ(selected_card->findChild<QQuickItem*>(QStringLiteral("editorVersionTitle"))
-                ->property("color")
-                .value<QColor>(),
-            selected_outline);
-  auto* versions_button = Find(QStringLiteral("editorVersionsRailButton"));
-  ASSERT_NE(versions_button, nullptr);
-  EXPECT_TRUE(versions_button->property("selectedOutline").toBool());
-  EXPECT_EQ(versions_button->property("fillSelected").value<QColor>(),
-            AppTheme::Instance().cardSurfaceColor());
-  const QString alternate_id = alternate_card->property("versionId").toString();
-  ASSERT_FALSE(alternate_id.isEmpty());
-
-  Click(window_, alternate_card, QPointF(12.0, alternate_card->height() / 2.0));
-
-  EXPECT_EQ(backend_.checkout_count(), 1);
-  EXPECT_EQ(QString::fromStdString(backend_.last_checkout_id().ToString()), alternate_id);
-  EXPECT_EQ(controller_.history_snapshot().active_version_id,
-            Hash128::FromString(alternate_id.toStdString()));
-}
-
-TEST_F(EditorHistoryVersionsRailQmlTest, VersionNameInputCreatesRenamesAndRemovesNamedVersion) {
-  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
-  Click(window_, Find(QStringLiteral("editorVersionsRailButton")));
-
-  Click(window_, Find(QStringLiteral("editorCreateVersionButton")));
-  auto* field = Find(QStringLiteral("editorVersionNameField"));
-  ASSERT_NE(field, nullptr);
-  TypeText(window_, QStringLiteral("newlook"));
-  Click(window_, Find(QStringLiteral("editorVersionAcceptButton")));
-  ASSERT_EQ(backend_.create_count(), 1);
-
-  const QString created_id = QString::fromStdString(backend_.last_created_id().ToString());
-  auto          cards      = Cards();
-  ASSERT_EQ(cards.size(), 3);
-  QQuickItem* created_card = nullptr;
-  for (auto* card : cards) {
-    if (card->property("versionId").toString() == created_id) created_card = card;
-  }
-  ASSERT_NE(created_card, nullptr);
-  EXPECT_EQ(created_card->property("displayName").toString(), QStringLiteral("newlook"));
-  EXPECT_TRUE(created_card->property("versionActive").toBool());
-  EXPECT_FALSE(controller_.history_snapshot().active_head.has_value());
-
-  Click(window_, created_card->findChild<QQuickItem*>(QStringLiteral("editorRenameVersionButton")));
-  field = Find(QStringLiteral("editorVersionNameField"));
-  ASSERT_NE(field, nullptr);
-  TypeText(window_, QStringLiteral("renamedlook"));
-  Click(window_, Find(QStringLiteral("editorVersionAcceptButton")));
-  EXPECT_EQ(backend_.rename_count(), 1);
-  EXPECT_EQ(QString::fromStdString(backend_.last_rename_id().ToString()), created_id);
-
-  cards        = Cards();
-  created_card = nullptr;
-  for (auto* card : cards) {
-    if (card->property("versionId").toString() == created_id) created_card = card;
-  }
-  ASSERT_NE(created_card, nullptr);
-  QQuickItem* removable_card = nullptr;
-  for (auto* card : cards) {
-    if (card->property("versionId").toString() != created_id) removable_card = card;
-  }
-  ASSERT_NE(removable_card, nullptr);
-  Click(window_, removable_card->findChild<QQuickItem*>(QStringLiteral("editorRemoveVersionButton")));
-  EXPECT_EQ(backend_.remove_count(), 1);
-  EXPECT_EQ(backend_.last_removed_id(), StableId(2));
-  EXPECT_EQ(Cards().size(), 2);
-}
-
-TEST_F(EditorHistoryVersionsRailQmlTest, HistoryToolbarUndoAndRedoFollowUserClicks) {
-  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
-  Click(window_, Find(QStringLiteral("editorHistoryRailButton")));
-
-  auto* undo = Find(QStringLiteral("editorHistoryUndoButton"));
-  auto* redo = Find(QStringLiteral("editorHistoryRedoButton"));
-  ASSERT_NE(undo, nullptr);
-  ASSERT_NE(redo, nullptr);
-  ASSERT_TRUE(undo->isEnabled());
-  ASSERT_FALSE(redo->isEnabled());
-  auto* recovery_notice = Find(QStringLiteral("editorHistoryRecoveryNotice"));
-  ASSERT_NE(recovery_notice, nullptr);
-  EXPECT_TRUE(recovery_notice->property("visible").toBool());
-  auto* merge_title = Find(QStringLiteral("editorHistoryCommitTitle"));
-  ASSERT_NE(merge_title, nullptr);
-  EXPECT_TRUE(merge_title->property("text").toString().contains(QStringLiteral("second parent")));
-  auto* history_card = Find(QStringLiteral("editorHistoryCard"));
-  ASSERT_NE(history_card, nullptr);
-  EXPECT_EQ(history_card->property("color").value<QColor>(),
-            AppTheme::Instance().cardSurfaceColor());
-  EXPECT_EQ(history_card->property("selectionOutlineColor").value<QColor>(),
-            AppTheme::Instance().textColor());
-  EXPECT_EQ(merge_title->property("color").value<QColor>(), AppTheme::Instance().textColor());
-
-  Click(window_, undo);
-  EXPECT_EQ(backend_.undo_count(), 1);
-  EXPECT_FALSE(Find(QStringLiteral("editorHistoryUndoButton"))->isEnabled());
-  EXPECT_TRUE(Find(QStringLiteral("editorHistoryRedoButton"))->isEnabled());
-
-  Click(window_, Find(QStringLiteral("editorHistoryRedoButton")));
-  EXPECT_EQ(backend_.redo_count(), 1);
-  EXPECT_TRUE(Find(QStringLiteral("editorHistoryUndoButton"))->isEnabled());
-  EXPECT_FALSE(Find(QStringLiteral("editorHistoryRedoButton"))->isEnabled());
-}
-
-TEST_F(EditorHistoryVersionsRailQmlTest, PasteAndMergeUseVisibleActionsAndResolveEveryField) {
-  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
-  Click(window_, Find(QStringLiteral("editorHistoryRailButton")));
-
-  Click(window_, Find(QStringLiteral("editorHistoryPasteButton")));
-  EXPECT_EQ(transfer_.paste_count(), 1);
-
-  Click(window_, Find(QStringLiteral("editorHistoryMergeButton")));
-  EXPECT_EQ(transfer_.begin_merge_count(), 1);
-  auto* dialog = window_->findChild<QObject*>(QStringLiteral("editorMergeDialog"));
-  ASSERT_NE(dialog, nullptr);
-  ASSERT_TRUE(dialog->property("visible").toBool());
-
-  QQuickItem* choice = nullptr;
-  QTRY_VERIFY_WITH_TIMEOUT((choice = Find(QStringLiteral("editorMergeConflictChoice"))) != nullptr,
-                           1000);
-  Click(window_, choice);
-  QTest::keyClick(window_, Qt::Key_Down);
-  QTest::keyClick(window_, Qt::Key_Return);
-  ProcessEvents();
-
-  Click(window_, Find(QStringLiteral("editorMergeAcceptButton")));
-  EXPECT_EQ(transfer_.complete_merge_count(), 1);
-  EXPECT_EQ(transfer_.last_resolution_count(), 1);
-  EXPECT_EQ(transfer_.last_resolution().value(QStringLiteral("resolvedValue")).toDouble(), 1.0);
-}
-
-TEST_F(EditorHistoryVersionsRailQmlTest,
-       HistoryCardClickMovesToCommitAndBranchButtonUsesSelectedCommitId) {
-  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
-  Click(window_, Find(QStringLiteral("editorHistoryRailButton")));
-
-  // Wait for a non-current history card to move the working head in one operation.
-  auto find_move_delegate = [&]() -> QQuickItem* {
-    for (auto* delegate : HistoryCards()) {
-      if (!delegate->property("currentTransaction").toBool() &&
-          delegate->property("transactionId").toString().length() > 0) {
-        return delegate;
-      }
-    }
-    return nullptr;
-  };
-  QQuickItem* move_target = nullptr;
-  QTRY_VERIFY_WITH_TIMEOUT((move_target = find_move_delegate()) != nullptr, 2000);
-  const QString move_id = move_target->property("transactionId").toString();
-  auto* move_card = move_target->findChild<QQuickItem*>(QStringLiteral("editorHistoryCard"));
-  ASSERT_NE(move_card, nullptr);
-  Click(window_, move_card);
-  EXPECT_EQ(backend_.move_head_count(), 1);
-  EXPECT_EQ(QString::fromStdString(backend_.last_move_head_commit().ToString()), move_id);
-  // The typed operation result is published at the QML boundary.
-  EXPECT_EQ(controller_.last_history_result().value(QStringLiteral("action")).toString(),
-            QStringLiteral("moveHeadToCommit"));
-  EXPECT_FALSE(controller_.last_history_failed());
-
-  // After the move, the model resets; wait for a non-current delegate whose Branch Here
-  // button is visible and enabled before clicking, so the re-render never races the click.
-  auto find_branch_delegate = [&]() -> QQuickItem* {
-    for (auto* delegate : HistoryCards()) {
-      if (delegate->property("currentTransaction").toBool()) continue;
-      if (delegate->property("transactionId").toString().length() == 0) continue;
-      auto* btn = delegate->findChild<QQuickItem*>(QStringLiteral("editorHistoryBranchButton"));
-      if (btn != nullptr && btn->property("visible").toBool() && btn->isEnabled()) {
-        return delegate;
-      }
-    }
-    return nullptr;
-  };
-  QQuickItem* branch_target = nullptr;
-  QTRY_VERIFY_WITH_TIMEOUT((branch_target = find_branch_delegate()) != nullptr, 2000);
-  const QString branch_id = branch_target->property("transactionId").toString();
-  auto* branch_button =
-      branch_target->findChild<QQuickItem*>(QStringLiteral("editorHistoryBranchButton"));
-  ASSERT_NE(branch_button, nullptr);
-  // Emit the button's clicked signal directly; this triggers the same onClicked
-  // handler as a mouse press without the flaky delegate-geometry race.
-  QVERIFY(QMetaObject::invokeMethod(branch_button, "clicked", Qt::DirectConnection));
-  ProcessEvents();
-  EXPECT_EQ(backend_.branch_count(), 1);
-  EXPECT_EQ(QString::fromStdString(backend_.last_branch_commit().ToString()), branch_id);
-  EXPECT_EQ(controller_.last_history_result().value(QStringLiteral("action")).toString(),
-            QStringLiteral("branchFromCommit"));
-}
-
-}  // namespace
+}  // namespace rail_harness
 }  // namespace alcedo::ui::test
-
-#include "editor_history_versions_rail_qml_test.moc"

@@ -2,10 +2,10 @@
 
 Date: 2026-07-26
 
-Status (2026-07-27): Phase 2, 3, 4 done; Phase 5 mostly done (structured diagnostics incomplete);
-Phase 1 substantially done (11/13 listed tests; rail test-file split deferred); Phase 6 (P2
-Version-panel UI) and Phase 7 (real-RAW end-to-end qualification) remain open. Priority axis: P0
-done 2026-07-26, P1 done 2026-07-27, P2 open. See "Phase completion status" for the mapping.
+Status (2026-07-27): Phase 2, 3, 4, 6 done; Phase 5 mostly done (structured diagnostics incomplete);
+Phase 1 complete (13/13 listed tests; rail split landed with Phase 6); Phase 7 (real-RAW
+end-to-end qualification) remains open. Priority axis: P0 done 2026-07-26, P1 done 2026-07-27,
+P2 done 2026-07-27. See "Phase completion status" for the mapping.
 
 Baseline:
 
@@ -307,13 +307,13 @@ Phase status against executable evidence (audited 2026-07-27):
 
 | Phase | Responsibility | Status | Key evidence | Open gap |
 | --- | --- | --- | --- | --- |
-| 1 | Failing evidence before behavior change | Partial (11/13 tests) | 11 of 13 listed tests exist and pass; `EditorSessionTaskPortTest` now builds and runs | 2 Phase-6-behavior tests (`InlineVersionDraftAcceptsEnterAndEscapeWithoutDialog`, `ActiveVersionUsesOutlineWithoutStopPlaybackAction`) absent; test-first ordering relaxed (tests written alongside implementation); rail test file not split into transactions/versions targets |
+| 1 | Failing evidence before behavior change | Done (13/13 tests) | All 13 listed tests exist and pass, including the two Phase-6 UI tests; rail split into `EditorHistoryTransactionsPanelQmlTest` + `EditorVersionsPanelQmlTest` | test-first ordering was relaxed historically (tests written alongside implementation) |
 | 2 | History projection + card content | Done | `HistoryProjectionPublishesDisplayNameBeforeValueAndAfterValue`, `HistoryProjectionMarksOnlyWorkingHeadCurrentAndIncludesRedoSuffix`, `EditorHistoryCommitPresentationTest.FormatsNumericBooleanPathEnumAndCompoundAdjustments`; `EditorHistoryTransactionsPanel.qml` renders `Exposure / 0.00 -> +0.35` | none |
 | 3 | One-operation history jumps | Done (residual) | `MoveHeadToAncestorThenRedoDescendantPublishesOneFinalSnapshot`, `HistoryCardClickMovesToCommitAndBranchButtonUsesSelectedCommitId`; `MiniGitWorkingHistory::MoveHeadToCommit` writes one head-move record and routes one render; `ApplyRecoveredRecord` re-walks every hop on reopen | mid-apply operator failure leaves the head moved with a partial pipeline (documented residual, parity with single-step Undo/Redo); merge hops skip the per-field delta on the live snapshot |
 | 4 | Split New Version / Branch Here | Done | `CreateRootVersionChecksOutRootAndNextCommitBelongsToNewVersion`, `BranchFromSelectedCommitChecksOutNamedRefWithoutDetachedHead`, `CreateOrBranchFailureRestoresPriorRefPipelineSnapshotAndFrame`; `createRootVersion`/`branchFromCommit` model methods; no QML-facing active-head creation remains | none |
 | 5 | Retained-image failure + error reporting | Mostly done | `RetainedImageFailure` state; `FailedVersionCheckoutKeepsHasImageAndLastFrameVisible`; `SaveFailureRetryThenSwitchAcquiresRequestedImage`, `SaveFailureDiscardThenSwitchClearsJournalAndAcquiresRequestedImage`; `EditorSaveRecoveryBar.qml` (Retry Save / Discard and Continue / Cancel); `tr("Editor Save")` + bar/popover failure detail; `ProductionEditorSaveTaskPublishesAndClearsFiveCheckpointLocks` (locks clear on success/fail/cancel); `DuplicateOrStaleCompletionCannotResumeBOrFinishTaskTwice` | change 9 structured diagnostics incomplete: typed result carries action/state/kind/task_id/render_request_id/element-or-image id/message but not current/requested Version ID or checkpoint stage |
-| 6 | Version panel UI | Open (P2) | Branch Here button placed on each eligible transaction card (P1) | modal `editorVersionNameDialog` still present; `stop.svg` still on the Version card; no inline draft row; outline-only selection unverified |
-| 7 | End-to-end qualification | Open | none | real-RAW 14-step sequence not run; the `EditorHistoryTransactionsPanelQmlTest`/`EditorVersionsPanelQmlTest` targets referenced by the Phase 7 commands do not exist yet (they depend on the Phase 6 rail-file split) |
+| 6 | Version panel UI | Done (P2) | Inline draft (Enter/Escape/focus-loss/pending); outline-only active card; `trash.svg` remove; Branch Here on history cards only; contentY preserve; split QML targets | none |
+| 7 | End-to-end qualification | Open | split targets exist (`EditorHistoryTransactionsPanelQmlTest`, `EditorVersionsPanelQmlTest`) | real-RAW 14-step sequence not run |
 
 Priority to phase mapping: P0 = Phase 4 + Phase 5 (retained-image parts); P1 = Phase 2 + Phase 3 +
 Phase 5 (error-reporting parts); P2 = Phase 6. Phase 1 is the shared evidence foundation; Phase 7 is
@@ -324,12 +324,10 @@ the shared end-to-end gate.
 Status audit of the Phase axis. No test failed this turn; the items below are coverage gaps and a
 plan-self issue.
 
-1. Coverage gap — Phase 7 verification commands reference targets that do not exist.
-   `EditorHistoryTransactionsPanelQmlTest` and `EditorVersionsPanelQmlTest` (cited in the Phase 7
-   `cmake --build`/`ctest` block) are absent from `tests/ui/CMakeLists.txt`; only
-   `EditorHistoryVersionsRailQmlTest` is registered. Following the Phase 7 commands verbatim fails
-   at configure/build. Fix: create the split targets as part of Phase 6, or correct the Phase 7
-   commands to the existing target until the split lands.
+1. ~~Coverage gap — Phase 7 verification commands reference targets that do not exist.~~
+   **Resolved in Phase 6 (2026-07-27):** `EditorHistoryTransactionsPanelQmlTest` and
+   `EditorVersionsPanelQmlTest` are registered; the monolithic
+   `EditorHistoryVersionsRailQmlTest` was removed.
 
 2. Coverage gap — Phase 5 change 9 (structured diagnostics) is half-implemented.
    `EditorSessionController::PublishHistoryResult` carries action/state/kind/task_id/
@@ -338,12 +336,10 @@ plan-self issue.
    exit condition is met by the message field; the richer structured diagnostics are not. Decide:
    implement the remaining fields or explicitly descope change 9.
 
-3. Coverage gap — Phase 1 is 11/13 and was not test-first.
-   `InlineVersionDraftAcceptsEnterAndEscapeWithoutDialog` and
-   `ActiveVersionUsesOutlineWithoutStopPlaybackAction` are absent (they probe Phase 6 behavior). The
-   Phase 1 exit condition "every new test fails for the intended missing behavior before production
-   changes" was relaxed — tests were written alongside implementation. The two missing tests belong
-   to Phase 6 and should land with it.
+3. ~~Coverage gap — Phase 1 is 11/13.~~
+   **Resolved in Phase 6 (2026-07-27):** `InlineVersionDraftAcceptsEnterAndEscapeWithoutDialog` and
+   `ActiveVersionUsesOutlineWithoutStopPlaybackAction` land and pass. Historical note: test-first
+   ordering for earlier phases was relaxed.
 
 4. Style/maintainability — the plan conflated the priority axis (P0/P1/P2) with the implementation
    axis (Phase 1-7). Corrected this turn: the Status line, the "Phase completion status" overview,
@@ -363,20 +359,16 @@ dependency:
   `MoveHeadToCommit` leaves the head moved with a partial pipeline — parity with single-step
   Undo/Redo. No action unless Undo/Redo parity is itself raised.
 
-### Phase 6 — Version panel UI (open, P2)
+### Phase 6 — Version panel UI (done, P2, 2026-07-27)
 
-Spec: see "Phase 6 — finish the Version panel UI" in the reference section below. Lands with it:
+Complete. See "Phase 6 completion record" under the Phase 6 specification. Lands:
 
-- the two missing Phase 1 tests (`InlineVersionDraftAcceptsEnterAndEscapeWithoutDialog`,
-  `ActiveVersionUsesOutlineWithoutStopPlaybackAction`);
-- the split of `editor_history_versions_rail_qml_test.cpp` into
-  `EditorHistoryTransactionsPanelQmlTest` + `EditorVersionsPanelQmlTest` targets, which also
-  resolves Open finding 1.
+- `InlineVersionDraftAcceptsEnterAndEscapeWithoutDialog`,
+  `ActiveVersionUsesOutlineWithoutStopPlaybackAction`;
+- split targets `EditorHistoryTransactionsPanelQmlTest` + `EditorVersionsPanelQmlTest`
+  (resolves Open finding 1).
 
-Exit conditions: no naming dialog; no stop-playback glyph; white outline-only selection; keyboard,
-tooltip, focus, disabled, and accessibility states covered by QML tests.
-
-### Phase 7 — end-to-end qualification (open, gated on Phase 6)
+### Phase 7 — end-to-end qualification (open)
 
 Spec: see "Phase 7 — end-to-end qualification" in the reference section below. Run the 14-step
 real-RAW sequence with a deterministic commit clock. Before running, correct the Phase 7
@@ -582,7 +574,7 @@ Exit condition:
 - status chrome states what failed and why;
 - task locks clear exactly once on every terminal path.
 
-### Phase 6 — finish the Version panel UI [OPEN: P2]
+### Phase 6 — finish the Version panel UI [DONE: P2, 2026-07-27]
 
 Files:
 
@@ -609,10 +601,102 @@ Changes:
 
 Exit condition:
 
-- no naming dialog exists;
-- no stop-playback glyph exists in Version UI;
-- selected Version uses white outline only;
-- keyboard, tooltip, focus, disabled, and accessibility states are covered by QML tests.
+- [x] no naming dialog exists;
+- [x] no stop-playback glyph exists in Version UI;
+- [x] selected Version uses white outline only;
+- [x] keyboard, tooltip, focus, disabled, and accessibility states are covered by QML tests.
+
+##### Phase 6 completion record (2026-07-27)
+
+**Status:** complete — Version-panel UI chrome (inline naming, outline selection, trash remove),
+contentY preserve, and rail test split.
+
+**Primary success call chain:**
+
+```text
+EditorVersionsPanel openCreateVersion / openRenameVersion
+  -> inline editorVersionNameField (draftVisible, no Dialog)
+  -> Enter / Accept: commitDraft(false)
+  -> draftSubmitPending = true (field stays, re-submit blocked)
+  -> EditorHistoryModel::createRootVersion | renameVersion
+  -> EditorSessionController::CreateRootVersion | RenameVersion
+  -> IEditorSessionBackend (CreateRootVersionAndCheckout / RenameVersion)
+  -> HistoryOperationFinished + lastHistoryResult
+  -> finishDraftAfterSubmit closes draft; restoreListScroll preserves contentY
+```
+
+**Primary failure / cancel call chain:**
+
+```text
+Escape or focus-loss with empty/unchanged text
+  -> cancelDraft (no backend call)
+
+draftSubmitPending already true
+  -> commitDraft returns without calling create/rename
+  -> field remains visible and disabled until terminal HistoryOperationFinished
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `InlineVersionDraftAcceptsEnterAndEscapeWithoutDialog` | `EditorVersionsPanelQmlTest` | PASS |
+| `ActiveVersionUsesOutlineWithoutStopPlaybackAction` | `EditorVersionsPanelQmlTest` | PASS |
+| `VersionNameInputCreatesRenamesAndRemovesNamedVersion` (inline path) | `EditorVersionsPanelQmlTest` | PASS |
+| `ClickingNamedVersionChecksOutStableVersionId` | `EditorVersionsPanelQmlTest` | PASS |
+| `InlineDraftPendingSubmitBlocksDuplicateCreate` | `EditorVersionsPanelQmlTest` | PASS |
+| `RenameUsesSameInlineDraftField` | `EditorVersionsPanelQmlTest` | PASS |
+| `VersionListPreservesContentYAcrossCreateRenameAndCheckout` | `EditorVersionsPanelQmlTest` | PASS |
+| `InlineDraftFocusLossCommitsChangedTextAndCancelsUnchanged` | `EditorVersionsPanelQmlTest` | PASS |
+| `HistoryCardClickMovesToCommitAndBranchButtonUsesSelectedCommitId` | `EditorHistoryTransactionsPanelQmlTest` | PASS |
+| `HistoryToolbarUndoAndRedoFollowUserClicks` | `EditorHistoryTransactionsPanelQmlTest` | PASS |
+| `PasteAndMergeUseVisibleActionsAndResolveEveryField` | `EditorHistoryTransactionsPanelQmlTest` | PASS |
+| `SaveRecoveryBarShowsFailureDetailAndRoutesEveryRecoveryAction` | `EditorHistoryTransactionsPanelQmlTest` | PASS |
+| Backend Version/history safety suite | `EditorSessionHistoryPortTest` + Lifecycle + NavigationController | PASS 52/52 |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorVersionsPanelQmlTest EditorHistoryTransactionsPanelQmlTest alcedo_main
+ctest --test-dir build/debug -R "EditorVersionsPanelQmlTest|EditorHistoryTransactionsPanelQmlTest" --output-on-failure
+ctest --test-dir build/debug -R "EditorSessionHistoryPortTest|EditorSessionLifecycleTest|EditorSessionNavigationControllerTest" --output-on-failure
+```
+
+Suite totals: QML 12/12; backend safety 52/52; build zero errors for listed targets.
+
+Scroll/focus proof: `VersionListPreservesContentYAcrossCreateRenameAndCheckout` seeds 18 rows,
+scrolls to contentY≈96, then create/rename/checkout and asserts contentY within 2 px after real
+model updates. `InlineDraftFocusLossCommitsChangedTextAndCancelsUnchanged` drives
+`editingFinished` via Accept focus steal: unchanged generated name cancels; changed text commits.
+
+contentY race fix: `captureListScroll` / `modelAboutToBeReset` set `_restoringContentY` (or
+history `restoringContentY`) **before** model mutation so a synchronous contentY jump cannot
+clobber the preserved value.
+
+Static checks (`phase6_static.txt`): no `editorVersionNameDialog`; remove uses `trash.svg` not
+`stop.svg`; Branch Here only in `EditorHistoryTransactionsPanel.qml`.
+
+**Checklist / exit condition:** all boxes checked.
+
+**LOC note (grill-code-review):**
+
+| File | LOC |
+| --- | ---: |
+| `EditorVersionsPanel.qml` | 585 |
+| `EditorHistoryTransactionsPanel.qml` | ~514 (contentY preserve + existing) |
+| `editor_versions_panel_qml_test.cpp` | ~290 |
+| `editor_history_transactions_panel_qml_test.cpp` | ~210 |
+| `editor_history_versions_rail_qml_harness.hpp` | ~630 |
+| `editor_history_versions_rail_qml_harness.cpp` | ~12 |
+| `panel_icons/trash.svg` | new asset |
+| `resource.qrc` | +trash entry |
+| `tests/ui/CMakeLists.txt` | split targets; old `EditorHistoryVersionsRailQmlTest` removed |
+
+No production file crossed ~1000 LOC. Shared harness is fixture/fakes only (not a god production module).
+
+**Residual gaps:** Phase 7 real-RAW 14-step qualification not run; Phase 5 structured Version-ID /
+checkpoint-stage diagnostics still incomplete (independent of Phase 6).
 
 ### Phase 7 — end-to-end qualification [OPEN: real-RAW sequence not run]
 

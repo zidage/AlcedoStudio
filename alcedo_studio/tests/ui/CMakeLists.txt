@@ -441,21 +441,27 @@ target_compile_definitions(EditorAdjustmentControlQmlTest
 gtest_discover_tests(EditorAdjustmentControlQmlTest TEST_PREFIX "EditorAdjustmentControlQmlTest.")
 alcedo_register_test_target(EditorAdjustmentControlQmlTest ui)
 
-# Phase 7A: user-driven Version/history rail flows through the production QML
-# component, typed EditorHistoryModel, and a recording session/transfer seam.
-add_executable(EditorHistoryVersionsRailQmlTest
-    ${ALCEDO_TEST_ROOT}/ui/editor_history_versions_rail_qml_test.cpp
+# Phase 7A / Phase 6: Versions panel (inline draft, outline selection, trash).
+set(ALCEDO_HISTORY_VERSIONS_RAIL_QML_HARNESS
+    ${ALCEDO_TEST_ROOT}/ui/editor_history_versions_rail_qml_harness.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_history_versions_rail_qml_harness.hpp
     ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
     ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
     ${ALCEDO_SRC_DIR}/config/resource.qrc
 )
-target_include_directories(EditorHistoryVersionsRailQmlTest
+
+add_executable(EditorVersionsPanelQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_versions_panel_qml_test.cpp
+    ${ALCEDO_HISTORY_VERSIONS_RAIL_QML_HARNESS}
+)
+target_include_directories(EditorVersionsPanelQmlTest
     PUBLIC ${ALCEDO_INCLUDE_DIR}
     PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_ROOT}/ui
 )
-target_link_libraries(EditorHistoryVersionsRailQmlTest
+target_link_libraries(EditorVersionsPanelQmlTest
     PRIVATE
         AlbumBackendLib
         GTest::gtest
@@ -468,13 +474,44 @@ target_link_libraries(EditorHistoryVersionsRailQmlTest
         Qt6::Svg
         Qt6::Widgets
 )
-target_compile_definitions(EditorHistoryVersionsRailQmlTest
+target_compile_definitions(EditorVersionsPanelQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(EditorHistoryVersionsRailQmlTest
-    TEST_PREFIX "EditorHistoryVersionsRailQmlTest."
+gtest_discover_tests(EditorVersionsPanelQmlTest
+    TEST_PREFIX "EditorVersionsPanelQmlTest."
+    PROPERTIES LABELS "workspace_qml;editor_history;editor_versions")
+alcedo_register_test_target(EditorVersionsPanelQmlTest ui)
+
+# Phase 7A / Phase 6: History transactions panel (toolbar, Branch Here, recovery).
+add_executable(EditorHistoryTransactionsPanelQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_history_transactions_panel_qml_test.cpp
+    ${ALCEDO_HISTORY_VERSIONS_RAIL_QML_HARNESS}
+)
+target_include_directories(EditorHistoryTransactionsPanelQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_ROOT}/ui
+)
+target_link_libraries(EditorHistoryTransactionsPanelQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorHistoryTransactionsPanelQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+gtest_discover_tests(EditorHistoryTransactionsPanelQmlTest
+    TEST_PREFIX "EditorHistoryTransactionsPanelQmlTest."
     PROPERTIES LABELS "workspace_qml;editor_history")
-alcedo_register_test_target(EditorHistoryVersionsRailQmlTest ui)
+alcedo_register_test_target(EditorHistoryTransactionsPanelQmlTest ui)
 
 # Phase 6C-7: an already-restored snapshot must populate the QML Tone panel
 # during its first editor binding, without emitting a new adjustment patch.

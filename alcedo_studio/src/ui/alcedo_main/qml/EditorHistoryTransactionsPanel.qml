@@ -240,6 +240,53 @@ Item {
                 clip: true
                 model: root.historyModel
                 spacing: 0
+                boundsBehavior: Flickable.StopAtBounds
+                // Data-only head moves and checkout-driven model refreshes must
+                // not pin the viewport to index 0 when the selection is still
+                // on-screen. Capture contentY *before* reset (modelAboutToBeReset)
+                // and freeze so a synchronous contentY jump cannot clobber it.
+                property real preservedContentY: 0
+                property bool restoringContentY: false
+
+                onContentYChanged: {
+                    if (!restoringContentY)
+                        preservedContentY = contentY
+                }
+
+                function captureScrollBeforeReset() {
+                    if (!restoringContentY)
+                        preservedContentY = contentY
+                    restoringContentY = true
+                }
+
+                function restoreScrollAfterReset() {
+                    restoringContentY = true
+                    Qt.callLater(function () {
+                        if (!historyList)
+                            return
+                        var maxY = Math.max(0, historyList.contentHeight - historyList.height)
+                        historyList.contentY = Math.max(
+                            0, Math.min(historyList.preservedContentY, maxY))
+                        historyList.restoringContentY = false
+                    })
+                }
+
+                Connections {
+                    target: root.historyModel
+                    ignoreUnknownSignals: true
+                    function onModelAboutToBeReset() {
+                        historyList.captureScrollBeforeReset()
+                    }
+                    function onModelReset() {
+                        historyList.restoreScrollAfterReset()
+                    }
+                    // StateChanged can fire without a full model reset (e.g.
+                    // dataChanged-only refresh). Restore only when already frozen.
+                    function onStateChanged() {
+                        if (historyList.restoringContentY)
+                            historyList.restoreScrollAfterReset()
+                    }
+                }
 
                 delegate: Item {
                     id: transactionDelegate
