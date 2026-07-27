@@ -1516,7 +1516,8 @@ TEST_F(WorkspaceShellTests, HistoryAndVersionsOpenSwitchAndCollapseFromLeftNavba
   ASSERT_NE(history_body, nullptr);
   EXPECT_TRUE(history_body->isVisible());
 
-  // Switch to Versions without collapsing first.
+  // Switch to Versions without collapsing first. R6: inactive body is destroyed
+  // (Loader loads only the active page), not merely hidden.
   QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(versions_btn));
   ProcessEvents(60);
   EXPECT_EQ(session->history_panel_page(), QStringLiteral("versions"));
@@ -1524,13 +1525,18 @@ TEST_F(WorkspaceShellTests, HistoryAndVersionsOpenSwitchAndCollapseFromLeftNavba
       loaded->window->findChild<QQuickItem*>(QStringLiteral("editorVersionsPageBody"));
   ASSERT_NE(versions_body, nullptr);
   EXPECT_TRUE(versions_body->isVisible());
-  EXPECT_FALSE(history_body->isVisible());
+  EXPECT_EQ(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryPageBody")),
+            nullptr);
 
   // Selecting the active action again collapses the panel; the rail remains.
   QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(versions_btn));
   ProcessEvents(60);
   EXPECT_TRUE(session->history_panel_page().isEmpty());
-  EXPECT_FALSE(panel->isVisible());
+  // Closed rail: panel shell may be non-visible / zero-width; no page bodies.
+  EXPECT_EQ(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorVersionsPageBody")),
+            nullptr);
+  EXPECT_EQ(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryPageBody")),
+            nullptr);
   EXPECT_NE(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail")), nullptr);
 
   // Re-open History, then round-trip Library and confirm in-memory page survives
@@ -1853,14 +1859,18 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   ProcessEvents(10);
   EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 0.0, 0.001);
   EXPECT_NEAR(rail->width(), rail_width, 1.0);
+  EXPECT_FALSE(rail->property("layoutExpanded").toBool());
 
-  // Intermediate 0.5 — geometry tracks progress; session page still empty until open.
+  // Intermediate 0.5 — R6: outer layout is binary full width; progress drives
+  // transform (panelSlideX) only, not interpolated Layout width.
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress",
                                         Q_ARG(QVariant, QVariant(0.5))));
   ProcessEvents(10);
   EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 0.5, 0.001);
-  const qreal mid_w = rail_width + (panel_gap + panel_width) * 0.5;
-  EXPECT_NEAR(rail->width(), mid_w, 1.5);
+  EXPECT_TRUE(rail->property("layoutExpanded").toBool());
+  const qreal full_w = rail_width + panel_gap + panel_width;
+  EXPECT_NEAR(rail->width(), full_w, 1.5);
+  EXPECT_NEAR(rail->property("panelSlideX").toReal(), -0.5 * panel_width, 1.5);
 
   // Open session page and complete the fold.
   session->set_history_panel_page(QStringLiteral("history"));
@@ -1870,9 +1880,11 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   ProcessEvents(10);
   EXPECT_EQ(session->history_panel_page(), QStringLiteral("history"));
   EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 1.0, 0.001);
-  EXPECT_NEAR(rail->width(), rail_width + panel_gap + panel_width, 1.5);
+  EXPECT_NEAR(rail->width(), full_w, 1.5);
+  EXPECT_NEAR(rail->property("panelSlideX").toReal(), 0.0, 1.0);
 
   // Rapid reverse at mid progress: session collapses immediately; driver pins mid.
+  // Layout stays terminal-expanded until progress returns to 0.
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress",
                                         Q_ARG(QVariant, QVariant(0.5))));
   ProcessEvents(10);
@@ -1880,11 +1892,13 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   ProcessEvents(10);
   EXPECT_TRUE(session->history_panel_page().isEmpty());
   EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 0.5, 0.001);
+  EXPECT_NEAR(rail->width(), full_w, 1.5);
 
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress",
                                         Q_ARG(QVariant, QVariant(0.0))));
   ProcessEvents(10);
   EXPECT_NEAR(rail->width(), rail_width, 1.0);
+  EXPECT_FALSE(rail->property("layoutExpanded").toBool());
 
   // Release driver and re-open with reduced motion → terminal bounds.
   ASSERT_TRUE(QMetaObject::invokeMethod(rail, "endFoldDrive"));
@@ -1893,7 +1907,7 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   ProcessEvents(40);
   EXPECT_EQ(session->history_panel_page(), QStringLiteral("versions"));
   EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 1.0, 0.001);
-  EXPECT_NEAR(rail->width(), rail_width + panel_gap + panel_width, 1.5);
+  EXPECT_NEAR(rail->width(), full_w, 1.5);
 
   // Rail identity preserved.
   EXPECT_NE(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail")),

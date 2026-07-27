@@ -2,7 +2,7 @@
 
 Date: 2026-07-26
 Re-audited: 2026-07-27
-Status: **REOPENED — R0–R5 implemented (R2 residual contention evidence); R6 QML lifecycle next; R7 product/performance qualification remaining**
+Status: **REOPENED — R0–R6 implemented (R2 residual contention evidence); R7 product/performance qualification remaining**
 
 The earlier Phase 7A completion labels were based mainly on focused unit tests and QML fakes. They
 remain useful historical evidence, but they do not prove the production Version workflow. Current
@@ -1204,7 +1204,7 @@ before DuckDB publication; local head moves no longer use it.
   failures against real DuckDB to qualify that path end-to-end.
 - Paste/merge transfer paths still use `RestoreGraphAndPipeline` without a prepared Mini-Git
   head-move record (they create commits through AdjustmentTransferService); not in R5 exit.
-- R6 QML lifecycle and R7 production qualification remain.
+- R7 production qualification remains.
 
 ### R6 — finish QML lifecycle and list performance
 
@@ -1234,6 +1234,74 @@ Exit:
 - fold motion does not update outer layout width every frame;
 - no complex history subtree animates opacity;
 - existing interaction tests and new lifecycle/performance tests pass.
+
+##### Phase R6 completion record (2026-07-27)
+
+**Status:** complete — Loader-only active panel body, rail-owned scroll restore, binary outer
+layout + transform-only fold, required roles + `reuseItems`, DESIGN fold rules updated.
+
+**Primary success call chain:**
+
+```text
+historyPanelPage = "history" | "versions"
+  -> EditorHistoryVersionsRail.onActivePageChanged captures prior listContentY
+  -> panelBodyLoader loads only matching Component (history/versions)
+  -> onLoaded restoreListContentY(rail-owned offset)
+  -> ListView (reuseItems + required roles) renders active delegates only
+  -> panelOpenProgress drives panelSlideX (transform); totalWidth snaps binary
+```
+
+**Primary failure call chain:**
+
+```text
+historyPanelPage = "" (collapse) or switch away from active page
+  -> captureBodyScroll / Component.onDestruction stores rail contentY
+  -> Loader.active false or sourceComponent swap destroys inactive body
+  -> no editorHistoryTransactionDelegate / editorVersionCard under closed rail
+  -> layoutExpanded false when progress hits 0 → totalWidth = railWidth only
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Closed rail owns no transaction/Version delegates | `EditorHistoryVersionsRailLifecycleQmlTest` | PASS |
+| Switch destroys inactive body + restores scroll | `EditorHistoryVersionsRailLifecycleQmlTest` | PASS |
+| Collapse destroys active body | `EditorHistoryVersionsRailLifecycleQmlTest` | PASS |
+| Binary outer layout + transform-only slide / opacity=1 | `EditorHistoryVersionsRailLifecycleQmlTest` | PASS |
+| Lists enable `reuseItems` | `EditorHistoryVersionsRailLifecycleQmlTest` | PASS |
+| Existing Versions panel interactions | `EditorVersionsPanelQmlTest` | PASS 8/8 |
+| Existing History transactions interactions | `EditorHistoryTransactionsPanelQmlTest` | PASS 5/5 |
+| Workspace history/versions open-switch-collapse + fold driver | `WorkspaceShellTest` (history-related + full suite subset) | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorHistoryVersionsRailLifecycleQmlTest EditorHistoryTransactionsPanelQmlTest EditorVersionsPanelQmlTest WorkspaceShellTest alcedo_main
+ctest --test-dir build/debug -R "EditorHistoryVersionsRailLifecycleQmlTest|EditorHistoryTransactionsPanelQmlTest|EditorVersionsPanelQmlTest|WorkspaceShellTest" --output-on-failure
+```
+
+Suite totals: lifecycle 5/5 PASS; Versions 8/8 PASS; History transactions 5/5 PASS;
+WorkspaceShellTest 43/43 ran (1 skipped pre-existing `ProductionFirstFramePath…`, 0 failed).
+
+**Checklist / exit condition:** all R6 exit boxes satisfied.
+
+**LOC note (grill-code-review):**
+
+- `EditorHistoryVersionsRail.qml` ~290 LOC (Loader + fold contract)
+- `EditorHistoryTransactionsPanel.qml` ~750 LOC (delegate required roles; no structural split needed)
+- `EditorVersionsPanel.qml` ~650 LOC
+- New `editor_history_versions_rail_lifecycle_qml_test.cpp` ~170 LOC
+- No file crossed ~1000 LOC requiring a responsibility split
+
+**Residual gaps:**
+
+- R7 production-path real RAW + DuckDB + performance counters still open.
+- Filmstrip / `CollapsibleSection` still animate height + opacity (documented DESIGN exception;
+  not in R6 exit).
+- Lifecycle fold assertions use rail `totalWidth` (layout contract); production
+  `WorkspaceShellTest.HistoryFoldDriverPins…` asserts scene width inside a real Layout.
 
 ### R7 — production integration and performance qualification
 

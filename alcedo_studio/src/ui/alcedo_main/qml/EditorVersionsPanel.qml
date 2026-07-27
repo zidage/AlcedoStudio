@@ -11,6 +11,8 @@ import Alcedo.Main 1.0
 // cancels, focus-loss commits only non-empty changed text). There is no modal
 // naming dialog. Active selection is outline-only; removal uses a labeled
 // trash action, never a stop-playback glyph.
+//
+// List scroll is restorable from the rail across Loader teardown (Phase 7A R6).
 Item {
     id: root
     objectName: "editorVersionsPageBody"
@@ -65,6 +67,12 @@ Item {
             versionList.contentY = Math.max(0, Math.min(root._preservedContentY, maxY))
             root._restoringContentY = false
         })
+    }
+
+    // Rail-owned restore after Loader reactivation (R6).
+    function restoreListContentY(y) {
+        root._preservedContentY = Math.max(0, Number(y || 0))
+        root.restoreListScroll()
     }
 
     function openCreateVersion() {
@@ -246,8 +254,6 @@ Item {
         target: root.historyModel && root.historyModel.versions
                 ? root.historyModel.versions : null
         ignoreUnknownSignals: true
-        // Capture Y while the old layout is still valid, then freeze so a
-        // synchronous contentY jump during reset cannot clobber the value.
         function onModelAboutToBeReset() {
             root.captureListScroll()
         }
@@ -255,8 +261,6 @@ Item {
             root.restoreListScroll()
         }
         function onCountChanged() {
-            // Count may change without a full reset in some paths; still restore
-            // if we already froze for an intentional mutation.
             if (root._restoringContentY)
                 root.restoreListScroll()
         }
@@ -314,6 +318,7 @@ Item {
         }
 
         // Inline draft row under the Versions header (create + rename).
+        // Height snaps; no opacity animation on this subtree (R6).
         Item {
             objectName: "editorVersionDraftRow"
             Layout.fillWidth: true
@@ -324,17 +329,7 @@ Item {
                                           ? (appTheme.spaceXs + appTheme.fontSizeCaption * 2)
                                           : 0))
                                     : 0
-            clip: true
-            visible: root.draftVisible || height > 0
-            opacity: root.draftVisible ? 1.0 : 0.0
-
-            Behavior on Layout.preferredHeight {
-                enabled: !appTheme.reduceMotion
-                NumberAnimation {
-                    duration: appTheme.reduceMotion ? 0 : appTheme.motionFoldOpenMs
-                    easing.type: Easing.OutCubic
-                }
-            }
+            visible: root.draftVisible
 
             ColumnLayout {
                 anchors.fill: parent
@@ -386,11 +381,6 @@ Item {
                             root.cancelDraft()
                             event.accepted = true
                         }
-                        // Focus loss commits only non-empty *changed* text.
-                        // Double-defer so an Accept-button click (which also
-                        // steals focus) can run commitDraft(false) first and
-                        // close the draft before this path cancels an
-                        // unchanged generated name.
                         onEditingFinished: {
                             Qt.callLater(function () {
                                 Qt.callLater(function () {
@@ -474,6 +464,7 @@ Item {
                 clip: true
                 spacing: appTheme.spaceSm
                 model: root.historyModel ? root.historyModel.versions : null
+                reuseItems: true
                 // Avoid re-anchoring the viewport to a selected index on data-only
                 // updates; outline selection never requires positionViewAtIndex.
                 boundsBehavior: Flickable.StopAtBounds
@@ -486,15 +477,19 @@ Item {
                 delegate: Rectangle {
                     id: versionCard
                     objectName: "editorVersionCard"
-                    property string versionId: model.versionId
-                    property string displayName: model.displayName
-                    property string versionHead: model.headCommitHash
-                    property bool versionActive: Boolean(model.active)
+
+                    required property string versionId
+                    required property string displayName
+                    required property string headCommitHash
+                    required property bool active
+
+                    property string versionHead: headCommitHash
+                    property bool versionActive: active
                     // Outline-only active chrome: card surface stays cardSurface;
                     // the 1 px border is the selection signal (white/text color).
                     property color selectionOutlineColor: versionActive
                                                           ? root.colText : root.colCardBorder
-                    width: versionList.width
+                    width: ListView.view ? ListView.view.width : 0
                     height: versionActive ? appTheme.spaceXl * 5 : appTheme.spaceXl * 4
                     radius: appTheme.controlRadiusSmall
                     color: root.colCardSurface
@@ -505,6 +500,9 @@ Item {
                     Accessible.description: versionActive
                                             ? qsTr("Current head Version")
                                             : qsTr("Named Version")
+
+                    ListView.onPooled: {}
+                    ListView.onReused: {}
 
                     MouseArea {
                         anchors.fill: parent

@@ -520,6 +520,37 @@ gtest_discover_tests(EditorHistoryTransactionsPanelQmlTest
     PROPERTIES LABELS "workspace_qml;editor_history")
 alcedo_register_test_target(EditorHistoryTransactionsPanelQmlTest ui)
 
+# Phase 7A R6: History/Versions rail lifecycle (Loader body, scroll restore, fold).
+add_executable(EditorHistoryVersionsRailLifecycleQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_history_versions_rail_lifecycle_qml_test.cpp
+    ${ALCEDO_HISTORY_VERSIONS_RAIL_QML_HARNESS}
+)
+target_include_directories(EditorHistoryVersionsRailLifecycleQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+    PRIVATE ${ALCEDO_TEST_ROOT}/ui
+)
+target_link_libraries(EditorHistoryVersionsRailLifecycleQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorHistoryVersionsRailLifecycleQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+gtest_discover_tests(EditorHistoryVersionsRailLifecycleQmlTest
+    TEST_PREFIX "EditorHistoryVersionsRailLifecycleQmlTest."
+    PROPERTIES LABELS "workspace_qml;editor_history;editor_versions")
+alcedo_register_test_target(EditorHistoryVersionsRailLifecycleQmlTest ui)
+
 # Phase 6C-7: an already-restored snapshot must populate the QML Tone panel
 # during its first editor binding, without emitting a new adjustment patch.
 add_executable(EditorAdjustmentSnapshotQmlTest

@@ -318,16 +318,29 @@ blocking. Session identity is never recreated by a fold.
 **Fold rules (History/Versions, filmstrip, collapsible adjustment section):**
 
 1. Logical expanded/collapsed (or session page) flips immediately.
-2. Visual `*Progress` (0→1) drives geometry **and** opacity together.
-3. Persistent rail / handle / section header stays stationary.
-4. Intermediate content is clipped (`clip: true`).
-5. Opening uses `motionFoldOpenMs`; closing uses `motionFoldCloseMs`.
-6. `reduceMotion` snaps progress to the terminal value.
-7. Tests may call `driveFoldProgress(t)` / `endFoldDrive()` to pin intermediate
-   geometry without wall-clock sleeps. Hosts expose:
-   - History/Versions: `panelOpenProgress`, `driveFoldProgress`, `endFoldDrive`
+2. Persistent rail / handle / section header stays stationary.
+3. Intermediate content is clipped (`clip: true`).
+4. Opening uses `motionFoldOpenMs`; closing uses `motionFoldCloseMs`.
+5. `reduceMotion` snaps progress to the terminal value.
+6. Tests may call `driveFoldProgress(t)` / `endFoldDrive()` to pin intermediate
+   progress without wall-clock sleeps. Hosts expose:
+   - History/Versions: `panelOpenProgress`, `panelSlideX`, `layoutExpanded`,
+     `driveFoldProgress`, `endFoldDrive`
    - Filmstrip: `dockExpandProgress`, `driveFoldProgress`, `endFoldDrive`
    - `CollapsibleSection`: `foldProgress`, `driveFoldProgress`, `endFoldDrive`
+
+**History/Versions rail (Phase 7A R6 — transform-only reveal):**
+
+1. Outer layout width is **binary** (rail-only vs rail + full panel). It snaps once
+   when the panel becomes layout-expanded or fully closed — it does **not** track
+   `panelOpenProgress` every animation frame (avoids workspace re-layout thrash).
+2. `panelOpenProgress` drives **transform-only** inner motion (`x` slide via
+   `panelSlideX`). No opacity animation on the history/Versions panel subtree.
+3. Only the active page body is loaded (`Loader`). Closed rail owns no transaction
+   or Version list delegates. Scroll offsets live on the rail and restore on
+   reactivation.
+4. Filmstrip and `CollapsibleSection` may still animate height + opacity together;
+   that exception is limited to those hosts and is not used on the history rail.
 
 ---
 

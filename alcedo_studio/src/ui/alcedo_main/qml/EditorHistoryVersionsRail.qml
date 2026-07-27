@@ -4,7 +4,12 @@ import QtQuick.Layouts
 import Alcedo.Main 1.0
 
 // Persistent left rail for the editor's independent transaction and Version
-// panels. The rail controls which panel is open; each panel owns its content.
+// panels. Only the active panel body is loaded; scroll offsets live on the rail
+// so Loader teardown/recreation restores the prior viewport (Phase 7A R6).
+//
+// Fold motion: outer layout width snaps once (open or closed). Inner reveal is
+// transform-only (x) driven by panelOpenProgress — never per-frame Layout width
+// and never opacity on the history/Versions subtree.
 Item {
     id: root
     objectName: "editorHistoryVersionsRail"
@@ -16,6 +21,11 @@ Item {
                                       ? appModules.adjustmentTransfer : null
     property bool recoveryPending: false
     property var historyModel: internalHistoryModel
+
+    // Scroll offsets stored outside Loader-owned panel bodies.
+    property real historyListContentY: 0
+    property real versionsListContentY: 0
+    property string _lastBodyPage: ""
 
     readonly property bool versionCheckoutEnabled: interactionPolicy
                                                   ? !root.recoveryPending
@@ -40,12 +50,34 @@ Item {
     readonly property int railWidth: 48
     readonly property int expandedPanelWidth: appTheme.editorSidePanelWidth
     readonly property int panelGap: appTheme.spaceSm
+
+    // Visual fold progress (0 closed → 1 open). Drives transform only.
     property real panelOpenProgress: 0
     property bool foldManualDrive: false
     property bool _motionArmed: false
     property int _foldDuration: appTheme.motionFoldOpenMs
-    readonly property real totalWidth: railWidth + (panelGap + expandedPanelWidth) * panelOpenProgress
-    readonly property string statusMessage: historyTransactionsPanel.statusMessage
+
+    // Layout width is binary: full while open or while a close animation still
+    // holds intermediate progress; never interpolated every animation frame.
+    readonly property bool layoutExpanded: root.panelExpanded || root.panelOpenProgress > 0.001
+    readonly property real totalWidth: railWidth
+                                       + (layoutExpanded ? (panelGap + expandedPanelWidth) : 0)
+    readonly property real panelSlideX: (1.0 - panelOpenProgress) * (-expandedPanelWidth)
+
+    readonly property string statusMessage: {
+        var body = panelBodyLoader.item
+        if (body && body.statusMessage !== undefined)
+            return String(body.statusMessage || "")
+        return ""
+    }
+
+    // Diagnostics / tests: body loader and delegate presence.
+    readonly property Item panelBodyItem: panelBodyLoader.item
+    readonly property bool panelBodyActive: panelBodyLoader.active
+    readonly property int panelBodyCreateCount: _panelBodyCreateCount
+    readonly property int panelBodyDestroyCount: _panelBodyDestroyCount
+    property int _panelBodyCreateCount: 0
+    property int _panelBodyDestroyCount: 0
 
     implicitWidth: totalWidth
     implicitHeight: 200
@@ -78,13 +110,47 @@ Item {
         }
     }
 
+    function captureBodyScroll() {
+        var body = panelBodyLoader.item
+        if (!body)
+            return
+        var y = 0
+        if (body.listContentY !== undefined)
+            y = Number(body.listContentY || 0)
+        if (_lastBodyPage === "history")
+            historyListContentY = y
+        else if (_lastBodyPage === "versions")
+            versionsListContentY = y
+    }
+
+    function applyBodyScrollRestore() {
+        var body = panelBodyLoader.item
+        if (!body || body.restoreListContentY === undefined)
+            return
+        var y = 0
+        if (activePage === "history")
+            y = historyListContentY
+        else if (activePage === "versions")
+            y = versionsListContentY
+        body.restoreListContentY(y)
+    }
+
+    onActivePageChanged: {
+        // Capture scroll of the body that is about to be destroyed, then track
+        // which page the next Loader instance represents.
+        captureBodyScroll()
+        _lastBodyPage = activePage
+    }
+
     onPanelExpandedChanged: {
         _foldDuration = panelExpanded ? appTheme.motionFoldOpenMs : appTheme.motionFoldCloseMs
-        if (!foldManualDrive) panelOpenProgress = panelExpanded ? 1 : 0
+        if (!foldManualDrive)
+            panelOpenProgress = panelExpanded ? 1 : 0
     }
 
     Component.onCompleted: {
         panelOpenProgress = panelExpanded ? 1 : 0
+        _lastBodyPage = activePage
         _motionArmed = true
     }
 
@@ -156,41 +222,79 @@ Item {
         }
     }
 
-    Rectangle {
-        id: historyPanel
-        objectName: "editorHistoryVersionsPanel"
+    // Panel shell: full terminal width when layoutExpanded; content slides on x.
+    Item {
+        id: historyPanelHost
+        objectName: "editorHistoryVersionsPanelHost"
         anchors.left: rail.right
-        anchors.leftMargin: root.panelGap * root.panelOpenProgress
+        anchors.leftMargin: root.layoutExpanded ? root.panelGap : 0
         anchors.top: parent.top
         anchors.bottom: parent.bottom
-        width: root.expandedPanelWidth * root.panelOpenProgress
-        visible: root.panelOpenProgress > 0.001
-        radius: root.panelRadius
-        color: root.colCardSurface
-        border.width: 1
-        border.color: root.colCardBorder
-        opacity: root.panelOpenProgress
+        width: root.layoutExpanded ? root.expandedPanelWidth : 0
+        visible: root.layoutExpanded
         clip: true
 
+        Rectangle {
+            id: historyPanel
+            objectName: "editorHistoryVersionsPanel"
+            width: root.expandedPanelWidth
+            height: parent.height
+            x: root.panelSlideX
+            radius: root.panelRadius
+            color: root.colCardSurface
+            border.width: 1
+            border.color: root.colCardBorder
+            // No opacity animation — transform-only reveal (R6).
+
+            Loader {
+                id: panelBodyLoader
+                objectName: "editorHistoryVersionsBodyLoader"
+                anchors.fill: parent
+                // Load only while the session page names a body; closed rail owns
+                // no transaction or Version delegates.
+                active: root.activePage === "history" || root.activePage === "versions"
+                asynchronous: false
+                sourceComponent: root.activePage === "history" ? historyBodyComponent
+                                 : (root.activePage === "versions" ? versionsBodyComponent
+                                                                   : null)
+
+                onLoaded: {
+                    root._panelBodyCreateCount += 1
+                    root.applyBodyScrollRestore()
+                }
+            }
+        }
+    }
+
+    Component {
+        id: historyBodyComponent
         EditorHistoryTransactionsPanel {
-            id: historyTransactionsPanel
-            anchors.fill: parent
             theme: root.theme
             editorSession: root.editorSession
             adjustmentTransfer: root.adjustmentTransfer
             historyModel: root.historyModel
-            visible: root.activePage === "history"
+            Component.onDestruction: {
+                // Capture final scroll if the rail still owns this page key.
+                if (root._lastBodyPage === "history" && listContentY !== undefined)
+                    root.historyListContentY = Number(listContentY || 0)
+                root._panelBodyDestroyCount += 1
+            }
         }
+    }
 
+    Component {
+        id: versionsBodyComponent
         EditorVersionsPanel {
-            id: versionsPanel
-            anchors.fill: parent
             theme: root.theme
             editorSession: root.editorSession
             historyModel: root.historyModel
             versionCheckoutEnabled: root.versionCheckoutEnabled
             versionCheckoutDisabledReason: root.versionCheckoutDisabledReason
-            visible: root.activePage === "versions"
+            Component.onDestruction: {
+                if (root._lastBodyPage === "versions" && listContentY !== undefined)
+                    root.versionsListContentY = Number(listContentY || 0)
+                root._panelBodyDestroyCount += 1
+            }
         }
     }
 }

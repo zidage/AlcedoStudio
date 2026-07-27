@@ -5,6 +5,7 @@ import Alcedo.Main 1.0
 
 // Transaction timeline for the editor's active Version. The rail owns the
 // typed model and only supplies the panel with the session-facing actions.
+// List scroll is restorable from the rail across Loader teardown (Phase 7A R6).
 Item {
     id: root
     objectName: "editorHistoryPageBody"
@@ -28,6 +29,24 @@ Item {
     readonly property color colMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
     readonly property color colCardSurface: theme ? theme.colCardSurface : appTheme.cardSurfaceColor
     readonly property color colCardBorder: theme ? theme.colCardBorder : appTheme.cardBorderColor
+
+    // Exposed for the rail: scroll lives on the ListView; the rail stores the
+    // value outside this body so reactivation restores the prior viewport.
+    readonly property real listContentY: historyList ? historyList.contentY : 0
+
+    function restoreListContentY(y) {
+        if (!historyList)
+            return
+        historyList.restoringContentY = true
+        historyList.preservedContentY = Math.max(0, Number(y || 0))
+        Qt.callLater(function () {
+            if (!historyList)
+                return
+            var maxY = Math.max(0, historyList.contentHeight - historyList.height)
+            historyList.contentY = Math.max(0, Math.min(historyList.preservedContentY, maxY))
+            historyList.restoringContentY = false
+        })
+    }
 
     EditorMergeDialog {
         id: mergeDialog
@@ -334,9 +353,6 @@ Item {
             objectName: "editorHistoryStatus"
             Layout.fillWidth: true
             visible: text.length > 0
-            // Surface the typed operation result (pending/success/error) from the
-            // session controller. A paste/merge status takes precedence; otherwise
-            // the last history operation message is shown, red on failure.
             text: {
                 if (root.branchDraftError.length > 0) return root.branchDraftError
                 if (root.statusMessage.length > 0) return root.statusMessage
@@ -355,6 +371,7 @@ Item {
         }
 
         // Inline Branch Here name draft (shared under the timeline, not a modal).
+        // Height snaps; no opacity animation on this subtree (R6).
         Item {
             objectName: "editorHistoryBranchDraftRow"
             Layout.fillWidth: true
@@ -362,17 +379,7 @@ Item {
                                     ? (appTheme.spaceXl * 2 + appTheme.spaceSm
                                        + appTheme.spaceMd + appTheme.fontSizeCaption)
                                     : 0
-            clip: true
-            visible: root.branchDraftVisible || height > 0
-            opacity: root.branchDraftVisible ? 1.0 : 0.0
-
-            Behavior on Layout.preferredHeight {
-                enabled: !appTheme.reduceMotion
-                NumberAnimation {
-                    duration: appTheme.reduceMotion ? 0 : appTheme.motionFoldOpenMs
-                    easing.type: Easing.OutCubic
-                }
-            }
+            visible: root.branchDraftVisible
 
             ColumnLayout {
                 anchors.fill: parent
@@ -476,6 +483,7 @@ Item {
                 model: root.historyModel
                 spacing: 0
                 boundsBehavior: Flickable.StopAtBounds
+                reuseItems: true
                 // Data-only head moves and checkout-driven model refreshes must
                 // not pin the viewport to index 0 when the selection is still
                 // on-screen. Capture contentY *before* reset (modelAboutToBeReset)
@@ -515,8 +523,6 @@ Item {
                     function onModelReset() {
                         historyList.restoreScrollAfterReset()
                     }
-                    // StateChanged can fire without a full model reset (e.g.
-                    // dataChanged-only refresh). Restore only when already frozen.
                     function onStateChanged() {
                         if (historyList.restoringContentY)
                             historyList.restoreScrollAfterReset()
@@ -526,9 +532,22 @@ Item {
                 delegate: Item {
                     id: transactionDelegate
                     objectName: "editorHistoryTransactionDelegate"
-                    width: historyList.width
-                    property bool currentTransaction: Boolean(current)
-                    property bool mergeTransaction: Boolean(isMerge)
+                    width: ListView.view ? ListView.view.width : 0
+
+                    required property bool current
+                    required property bool isMerge
+                    required property string commitId
+                    required property string displayName
+                    required property string beforeText
+                    required property string afterText
+                    required property string deltaText
+                    required property string timelinePosition
+                    required property string mergeSummary
+                    required property string secondParentId
+                    required property var createdAtNs
+
+                    property bool currentTransaction: current
+                    property bool mergeTransaction: isMerge
                     property string transactionId: String(commitId || "")
                     property string transactionDisplayName: String(displayName || "")
                     property string transactionBefore: String(beforeText || "")
@@ -555,6 +574,13 @@ Item {
                                 && !root.branchDraftSubmitPending) {
                             root.openBranchDraft(transactionDelegate.transactionId)
                         }
+                    }
+
+                    ListView.onPooled: {
+                        // Delegates are pure bindings; nothing mutable to clear.
+                    }
+                    ListView.onReused: {
+                        // Roles rebind automatically via required properties.
                     }
 
                     Rectangle {
@@ -597,7 +623,6 @@ Item {
                                                               ? root.colText : root.colCardBorder
                         border.width: 1
                         border.color: selectionOutlineColor
-                        clip: true
                         activeFocusOnTab: true
                         Accessible.role: Accessible.ListItem
                         Accessible.name: transactionDelegate.transactionDisplayName
