@@ -88,4 +88,22 @@ auto EditorHistoryCheckpoint::DiscardMaterializedJournalThrough(
   return state->journal->TruncateThroughSequence(last_sequence, error);
 }
 
+auto EditorHistoryCheckpoint::SyncMaterializedStateAfterCheckpoint(
+    const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool {
+  auto state = state_.EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  std::scoped_lock state_lock(state->mutex);
+  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_) {
+    if (error) *error = "Mini-Git commit graph is unavailable for materialized-state sync";
+    return false;
+  }
+  try {
+    state->pipeline_guard->commit_graph_->MaterializeActiveHeadInMemory();
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+  return true;
+}
+
 }  // namespace alcedo::ui

@@ -225,6 +225,29 @@ TEST_F(EditorSessionHistoryPortTest,
   EXPECT_FALSE(second->has_journal_range());
 }
 
+TEST_F(EditorSessionHistoryPortTest,
+       SyncMaterializedStateAfterCheckpointMirrorsActiveHeadIntoInMemoryState) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const alcedo::EditorAdjustmentPatch settled{"exposure", R"({"exposure":0.4})", true};
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, settled, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, settled, &error)) << error;
+
+  const auto active_head = guard_->commit_graph_->GetActiveVersionRef().head_commit_hash;
+  ASSERT_TRUE(active_head.has_value()) << "a settled commit must advance the working head";
+  // The checkpoint has not reconciled yet; the in-memory materialized head stays at root.
+  EXPECT_FALSE(guard_->commit_graph_->GetImageEditState()
+                   .materialized_head_commit_hash.has_value())
+      << "materialized head must stay at root until a checkpoint materializes it";
+
+  ASSERT_TRUE(history_.SyncMaterializedStateAfterCheckpoint(handle, &error)) << error;
+  EXPECT_EQ(guard_->commit_graph_->GetImageEditState().materialized_head_commit_hash,
+            active_head);
+  EXPECT_EQ(guard_->commit_graph_->GetImageEditState().materialized_transaction_chain_hash,
+            guard_->commit_graph_->ChainHashForHead(active_head));
+}
+
 TEST_F(EditorSessionHistoryPortTest, JournalAppendFailureKeepsWorkingHeadAtRoot) {
   history_.SetServices(
       EditorSessionHistoryPort::Services{[bad = journal_path_.parent_path() / "not-a-directory"](

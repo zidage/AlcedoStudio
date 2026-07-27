@@ -173,4 +173,9 @@ auto EditorSessionHistoryPort::DiscardMaterializedJournalThrough(
   return checkpoint_->DiscardMaterializedJournalThrough(guard, last_sequence, error);
 }
 
+auto EditorSessionHistoryPort::SyncMaterializedStateAfterCheckpoint(
+    const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool {
+  return checkpoint_->SyncMaterializedStateAfterCheckpoint(guard, error);
+}
+
 }  // namespace alcedo::ui

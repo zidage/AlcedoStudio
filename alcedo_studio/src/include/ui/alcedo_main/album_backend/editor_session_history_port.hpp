@@ -102,6 +102,8 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
   auto DiscardMaterializedJournalThrough(const alcedo::EditorHistoryGuardHandle& guard,
                                          std::uint64_t last_sequence, std::string* error)
       -> bool override;
+  auto SyncMaterializedStateAfterCheckpoint(const alcedo::EditorHistoryGuardHandle& guard,
+                                            std::string* error) -> bool override;
 
  private:
   std::unique_ptr<EditorHistoryState>        state_;

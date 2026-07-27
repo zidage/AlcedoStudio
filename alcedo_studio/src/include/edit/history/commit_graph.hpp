@@ -131,6 +131,14 @@ class CommitGraph {
 
   /// Apply a successful materialization result to the in-memory ImageEditState only.
   void ApplyMaterializedState(const ImageEditState& materialized_state);
+  /// Mirror a just-completed durable materialization of the active Version's working
+  /// head into the in-memory ImageEditState. A save checkpoint writes the active head
+  /// and its first-parent chain hash to DuckDB but does not advance the in-memory
+  /// materialized fields (only ApplyMaterializedState does, and the checkpoint path
+  /// does not call it). Calling this after a successful checkpoint restores the
+  /// invariant that in-memory ImageEditState.materialized_* agrees with DuckDB, so a
+  /// subsequent PersistEditorHistoryState guard sees the durable tuple it expects.
+  void MaterializeActiveHeadInMemory();
 
  private:
   auto           CreateVersionRefInternal(std::string display_name, head_commit_hash_t head,

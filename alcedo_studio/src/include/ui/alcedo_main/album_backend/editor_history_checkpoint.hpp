@@ -33,6 +33,13 @@ class EditorHistoryCheckpoint {
   auto DiscardMaterializedJournalThrough(const alcedo::EditorHistoryGuardHandle& guard,
                                          std::uint64_t last_sequence, std::string* error) -> bool;
 
+  /// Reconcile the in-memory ImageEditState.materialized_* with the durable tuple
+  /// a successful checkpoint just wrote to DuckDB. Advances the in-memory
+  /// materialized head/chain to the active Version's working head so a subsequent
+  /// PersistEditorHistoryState guard accepts the durable state.
+  auto SyncMaterializedStateAfterCheckpoint(const alcedo::EditorHistoryGuardHandle& guard,
+                                             std::string* error) -> bool;
+
  private:
   EditorHistoryState& state_;
 };

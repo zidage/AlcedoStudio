@@ -889,6 +889,78 @@ TEST_F(PipelineServiceTests,
   local->serialized_state_needs_writeback_ = false;
 }
 
+TEST_F(PipelineServiceTests,
+       CheckpointMaterializedStateSyncLetsVersionPersistenceGuardAcceptDurableTuple) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService pipeline_service(project.GetStorageService());
+
+  auto guard = pipeline_service.LoadEditorPipeline(720);
+  ASSERT_NE(guard, nullptr);
+  ASSERT_NE(guard->commit_graph_, nullptr);
+  const auto root_id = guard->root_id_;
+
+  // Commit an adjustment: the working head advances, but ImageEditState.materialized_*
+  // stays at root (MoveWorkingHead never advances materialized state by design).
+  OrdinaryEditPayload payload;
+  payload.operator_type  = OperatorType::EXPOSURE;
+  payload.stage_name     = PipelineStageName::Basic_Adjustment;
+  payload.field_name     = "exposure";
+  payload.before_value   = 0.0f;
+  payload.after_value    = 1.0f;
+  payload.before_enabled = true;
+  payload.after_enabled  = true;
+  auto edit = EditCommit::MakeEdit(root_id, std::nullopt, std::move(payload));
+  const auto new_head = edit.GetCommitHash();
+  ASSERT_TRUE(guard->commit_graph_->InsertCommit(std::move(edit)));
+  guard->commit_graph_->MoveWorkingHead(guard->commit_graph_->GetActiveVersionId(), new_head);
+  guard->working_head_commit_hash_ = new_head;
+  guard->transaction_chain_hash_   = guard->commit_graph_->ChainHashForHead(new_head);
+
+  // Simulate the save checkpoint: it writes the active head to DuckDB but, like the
+  // production checkpoint path, does NOT call ApplyMaterializedState, so the in-memory
+  // materialized_* stays at root while DuckDB advances to the working head.
+  {
+    auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto db_lock  = db_guard.Lock();
+    CommitGraphService graph_service(db_guard.conn_);
+    graph_service.Materialize(
+        guard->commit_graph_->CaptureMaterializationWithSerializedPipelineState(
+            nlohmann::json{{"exposure", 1.0f}}));
+  }
+
+  // DuckDB now holds the working head; the in-memory graph still reports root.
+  commit_hash_t durable_head{};
+  {
+    auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto db_lock  = db_guard.Lock();
+    CommitGraphService graph_service(db_guard.conn_);
+    auto             persisted = graph_service.LoadGraph(720);
+    ASSERT_TRUE(persisted.has_value());
+    durable_head = persisted->GetImageEditState().materialized_head_commit_hash.value();
+    ASSERT_EQ(durable_head, new_head);
+  }
+  EXPECT_EQ(guard->commit_graph_->GetImageEditState().materialized_head_commit_hash,
+            std::nullopt)
+      << "in-memory materialized head must stay stale until the post-checkpoint sync";
+
+  // Fix B: mirror the durable materialization into the in-memory state.
+  guard->commit_graph_->MaterializeActiveHeadInMemory();
+  EXPECT_EQ(guard->commit_graph_->GetImageEditState().materialized_head_commit_hash,
+            new_head);
+  EXPECT_EQ(guard->commit_graph_->GetImageEditState().materialized_transaction_chain_hash,
+            guard->transaction_chain_hash_);
+
+  // The PersistEditorHistoryState guard now sees DuckDB == expected and accepts the
+  // durable tuple. Without the sync it throws "persisted history changed before editor
+  // history persistence" — the original fork-from-root-after-edits failure.
+  std::string error;
+  EXPECT_TRUE(pipeline_service.PersistEditorHistoryState(
+      guard, guard->commit_graph_->GetImageEditState(), &error))
+      << error;
+
+  pipeline_service.SavePipeline(guard);
+}
+
 TEST_F(PipelineServiceTests, ImmutableRootRestoresImportedRawColorAndLensState) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService first(project.GetStorageService());

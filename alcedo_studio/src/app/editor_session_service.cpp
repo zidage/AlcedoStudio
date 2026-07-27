@@ -541,6 +541,15 @@ auto EditorSessionService::StartHistoryCheckpoint(std::string success_message, b
           (void)dependencies_.history->DiscardMaterializedJournalThrough(
               lifecycle_.history_guard(), *result.last_journal_sequence, &discard_error);
         }
+        // The checkpoint materialized the active head to DuckDB without advancing the
+        // in-memory ImageEditState.materialized_*. Mirror the durable tuple in memory so
+        // a later version/checkout persistence guard accepts it instead of rejecting the
+        // durable state as stale.
+        if (dependencies_.history != nullptr && lifecycle_.has_history_guard()) {
+          std::string sync_error;
+          (void)dependencies_.history->SyncMaterializedStateAfterCheckpoint(
+              lifecycle_.history_guard(), &sync_error);
+        }
         lifecycle_.CompleteCheckpoint();
         if (route_render) {
           EditorRenderAdjustmentSnapshot snapshot;

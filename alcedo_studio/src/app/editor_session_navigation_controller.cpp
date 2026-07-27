@@ -226,6 +226,15 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
     (void)history_->DiscardMaterializedJournalThrough(
         lifecycle_.history_guard(), *result.last_journal_sequence, &discard_error);
   }
+  // The checkpoint materialized the active Version's working head to DuckDB but did
+  // not advance the in-memory ImageEditState.materialized_*. Mirror the durable tuple
+  // in memory so the upcoming Continue* version/checkout persistence guard accepts it
+  // instead of rejecting the durable state as stale.
+  if (history_ != nullptr && lifecycle_.has_history_guard()) {
+    std::string sync_error;
+    (void)history_->SyncMaterializedStateAfterCheckpoint(lifecycle_.history_guard(),
+                                                         &sync_error);
+  }
 
   if (pending.kind == PendingEditorActionKind::CheckoutVersion) {
     // Stay on the same image: complete the save without releasing guards, then

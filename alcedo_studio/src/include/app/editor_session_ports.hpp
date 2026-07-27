@@ -207,6 +207,17 @@ class IEditorHistoryPort {
                                                  std::string* /*error*/) -> bool {
     return true;
   }
+  /// Reconcile the in-memory ImageEditState.materialized_* with DuckDB after a
+  /// successful save checkpoint. The checkpoint writes the active Version's working
+  /// head and first-parent chain hash to DuckDB but does not advance the in-memory
+  /// materialized fields; without this call a subsequent PersistEditorHistoryState
+  /// guard rejects the durable tuple as stale. Idempotent: a no-op when the in-memory
+  /// state already agrees with the active head. Default is a no-op for fakes that do
+  /// not hold a live commit graph.
+  virtual auto SyncMaterializedStateAfterCheckpoint(const EditorHistoryGuardHandle& /*guard*/,
+                                                     std::string* /*error*/) -> bool {
+    return true;
+  }
 };
 
 class IEditorTaskPort {

@@ -423,4 +423,16 @@ void CommitGraph::ApplyMaterializedState(const ImageEditState& materialized_stat
   state_ = materialized_state;
 }
 
+void CommitGraph::MaterializeActiveHeadInMemory() {
+  // The checkpoint materialized the active Version's working head (and its first-parent
+  // chain hash) to DuckDB. Build the matching in-memory ImageEditState and apply it through
+  // the validating path so state_.materialized_* agrees with the durable tuple.
+  auto synced = state_;
+  const auto& active = GetActiveVersionRef();
+  synced.active_version_id = active.version_id;
+  synced.materialized_head_commit_hash = active.head_commit_hash;
+  synced.materialized_transaction_chain_hash = ChainHashForHead(active.head_commit_hash);
+  ApplyMaterializedState(synced);
+}
+
 }  // namespace alcedo
