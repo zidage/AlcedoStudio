@@ -672,6 +672,71 @@ void PipelineMgmtService::SavePipeline(std::shared_ptr<PipelineGuard> pipeline) 
   }
 }
 
+auto PipelineMgmtService::PersistEditorHistoryState(
+    const std::shared_ptr<PipelineGuard>& pipeline,
+    const ImageEditState&                 expected_materialized_state,
+    std::string*                          error) -> bool {
+  if (!pipeline || !pipeline->pipeline_ || !pipeline->commit_graph_) {
+    if (error != nullptr) {
+      *error = "PipelineMgmtService: history persistence requires a loaded editor pipeline";
+    }
+    return false;
+  }
+
+  try {
+    std::unique_lock<std::mutex> service_lock(lock_);
+    storage_service_->RememberLivePipeline(pipeline->id_, pipeline->pipeline_);
+
+    nlohmann::json pipeline_params;
+    {
+      std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
+      pipeline_params = pipeline->pipeline_->ExportPipelineParams();
+    }
+
+    auto               db_guard = storage_service_->GetDBController().GetConnectionGuard();
+    auto               db_lock  = db_guard.Lock();
+    CommitGraphService graph_service(db_guard.conn_);
+    auto               stored_graph = graph_service.LoadGraph(pipeline->id_);
+    if (!stored_graph.has_value()) {
+      throw std::runtime_error("PipelineMgmtService: persisted editor graph is missing");
+    }
+
+    const auto& stored_state = stored_graph->GetImageEditState();
+    if (stored_state.element_id != expected_materialized_state.element_id ||
+        stored_state.root_id != expected_materialized_state.root_id ||
+        stored_state.active_version_id != expected_materialized_state.active_version_id ||
+        stored_state.materialized_head_commit_hash !=
+            expected_materialized_state.materialized_head_commit_hash ||
+        stored_state.materialized_transaction_chain_hash !=
+            expected_materialized_state.materialized_transaction_chain_hash) {
+      throw std::runtime_error(
+          "PipelineMgmtService: persisted history changed before editor history persistence");
+    }
+
+    const auto& graph = *pipeline->commit_graph_;
+    const auto  expected_head  = graph.GetActiveVersionRef().head_commit_hash;
+    const auto  expected_chain = graph.ChainHashForHead(expected_head);
+    if (graph.GetElementId() != pipeline->id_ || graph.GetRootId() != pipeline->root_id_ ||
+        expected_head != pipeline->working_head_commit_hash_ ||
+        expected_chain != pipeline->transaction_chain_hash_) {
+      throw std::runtime_error(
+          "PipelineMgmtService: live history identity changed before editor history persistence");
+    }
+
+    const auto materialization = graph.CaptureMaterializationWithSerializedPipelineState(
+        MakeSerializedPipelineState(*pipeline, pipeline_params));
+    graph_service.Materialize(materialization);
+    pipeline->commit_graph_->ApplyMaterializedState(materialization.image_state);
+    pipeline->serialized_state_needs_writeback_ = false;
+    return true;
+  } catch (const std::exception& ex) {
+    if (error != nullptr) *error = ex.what();
+  } catch (...) {
+    if (error != nullptr) *error = "PipelineMgmtService: editor history persistence failed";
+  }
+  return false;
+}
+
 auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& pipeline,
                                           const version_ref_id_t& version_id, std::string* error)
     -> bool {

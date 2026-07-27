@@ -67,7 +67,10 @@ class EditorSessionLifecycle final {
   auto               MarkImageReady() -> EditorSessionIdentity;
 
   /// Keep the current image after a save-checkpoint failure. Transitions to
-  /// Failed with the given message. Guards are retained.
+  /// `RetainedImageFailure` (Phase 7A repair) — a non-fatal state where the
+  /// image identity, guards, and last frame remain valid so the viewport keeps
+  /// showing the retained frame. Recovery actions resolve back to Interactive,
+  /// Saving, or the pending navigation target. Guards are retained.
   void               KeepCurrentAfterCheckpointFailure(std::string message);
 
   /// Release the current image's guards after a successful checkpoint. Returns
@@ -89,19 +92,29 @@ class EditorSessionLifecycle final {
   /// the identity snapshot if the transition happened, nullopt otherwise.
   auto               MarkFirstFramePresented() -> std::optional<EditorSessionIdentity>;
 
-  /// Retry from Failed after a discard: transition to Loading.
+  /// Retry from Failed or RetainedImageFailure after a discard: transition to
+  /// Loading so the pending target can re-acquire. From RetainedImageFailure
+  /// the guards stay held; the caller continues the navigation.
   void               BeginRetryFromDiscard();
 
   /// Transition to Saving. Called by the save controller when a checkpoint
-  /// starts.
+  /// starts, including the Retry Save recovery path from
+  /// RetainedImageFailure.
   void               BeginCheckpoint();
 
   /// Transition back to Interactive after a successful checkpoint with no
   /// pending navigation.
   void               CompleteCheckpoint();
 
+  /// Resume the Interactive state from RetainedImageFailure after the user
+  /// cancels the pending navigation (Phase 7A repair). The prior image
+  /// identity, guards, and last frame stay published. No-op from other states.
+  void               ResumeInteractiveAfterFailure();
+
   /// Fail the current session with an error message. Used by render and save
-  /// controllers when a failure should transition to Failed.
+  /// controllers when a failure should transition to the fatal `Failed` state
+  /// (no retained image). For save/checkpoint failures that should keep the
+  /// image visible, use `KeepCurrentAfterCheckpointFailure` instead.
   void               Fail(std::string message);
 
   /// Read-only snapshot of the current state. Thread-safe.

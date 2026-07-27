@@ -183,6 +183,25 @@ auto EditorSessionNavigationFixture::TrackingHistoryPort::CheckoutVersion(
   return inner.CheckoutVersion(guard, version_id, error);
 }
 
+auto EditorSessionNavigationFixture::TrackingHistoryPort::CreateRootVersionAndCheckout(
+    const EditorHistoryGuardHandle& guard, std::string display_name,
+    version_ref_id_t* version_id, std::string* error) -> bool {
+  if (owner_ != nullptr) {
+    owner_->RecordEvent("create_root_version");
+  }
+  return inner.CreateRootVersionAndCheckout(guard, std::move(display_name), version_id, error);
+}
+
+auto EditorSessionNavigationFixture::TrackingHistoryPort::BranchFromCommitAndCheckout(
+    const EditorHistoryGuardHandle& guard, const commit_hash_t& commit_id,
+    std::string display_name, version_ref_id_t* version_id, std::string* error) -> bool {
+  if (owner_ != nullptr) {
+    owner_->RecordEvent("branch_from_commit");
+  }
+  return inner.BranchFromCommitAndCheckout(guard, commit_id, std::move(display_name), version_id,
+                                           error);
+}
+
 auto EditorSessionNavigationFixture::TrackingJournalPort::FinalizeEdit(
     sl_element_id_t element_id, std::uint64_t session_generation, std::string* error) -> bool {
   return inner.FinalizeEdit(element_id, session_generation, error);

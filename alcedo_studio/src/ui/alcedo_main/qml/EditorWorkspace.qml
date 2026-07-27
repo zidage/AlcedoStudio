@@ -36,6 +36,9 @@ Item {
                                      && editorSession.hasImage
                                      && focusedElementId > 0
                                      && focusedImageId > 0
+    readonly property bool recoveryPending: !!(editorSession
+                                               && editorSession.hasPendingRecovery)
+    readonly property bool editorControlsEnabled: !!(root.hasImage && !root.recoveryPending)
     readonly property var renderDiagnostics: editorSession ? editorSession.renderDiagnostics : ({})
     readonly property string inflightRenderReason: renderDiagnostics.inflightReason || ""
     readonly property bool adjustmentRenderBusy: editorSession
@@ -83,6 +86,7 @@ Item {
                 editorSession: root.editorSession
                 interactionPolicy: root.interactionPolicy
                 adjustmentTransfer: appModules.adjustmentTransfer
+                recoveryPending: root.recoveryPending
             }
 
             // Center column: viewport + filmstrip
@@ -148,7 +152,7 @@ Item {
                     EditorInteractionController {
                         id: editorInteraction
                         objectName: "editorInteractionController"
-                        interactionEnabled: root.hasImage
+                        interactionEnabled: root.editorControlsEnabled
                     }
 
                     EditorViewportItem {
@@ -309,7 +313,7 @@ Item {
                     // not own crop math or view transform state.
                     HoverHandler {
                         id: viewportHover
-                        enabled: root.hasImage
+                        enabled: root.editorControlsEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
                         // HoverHandler owns the platform cursor (Item has no cursorShape).
                         cursorShape: editorInteraction.hasCustomCursor
@@ -327,7 +331,7 @@ Item {
                     // drag distance, which lost crop-corner hit tests and click-zoom.
                     PointHandler {
                         id: viewportPointer
-                        enabled: root.hasImage
+                        enabled: root.editorControlsEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.TouchScreen | PointerDevice.Stylus
                         acceptedButtons: Qt.LeftButton | Qt.MiddleButton
                         property int _activeButton: Qt.LeftButton
@@ -373,7 +377,7 @@ Item {
                     // a plain drag still pans.
                     DragHandler {
                         id: viewportPanDrag
-                        enabled: root.hasImage
+                        enabled: root.editorControlsEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.TouchScreen | PointerDevice.Stylus
                         acceptedButtons: Qt.LeftButton | Qt.MiddleButton
                         target: null
@@ -388,7 +392,7 @@ Item {
 
                     WheelHandler {
                         id: viewportWheel
-                        enabled: root.hasImage
+                        enabled: root.editorControlsEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
                         onWheel: function (event) {
                             var synthesized = event.pixelDelta.x !== 0 || event.pixelDelta.y !== 0
@@ -404,7 +408,7 @@ Item {
 
                     PinchHandler {
                         id: viewportPinch
-                        enabled: root.hasImage
+                        enabled: root.editorControlsEnabled
                         target: null
                         // Absolute mapping from pinch start. PinchHandler.scale is
                         // cumulative for the active pinch and resets to 1.0 when a
@@ -454,7 +458,7 @@ Item {
                     // separates pan from double-click-zoom.
                     TapHandler {
                         id: viewportDoubleTap
-                        enabled: root.hasImage
+                        enabled: root.editorControlsEnabled
                         acceptedButtons: Qt.LeftButton
                         gesturePolicy: TapHandler.DragThreshold
                         onDoubleTapped: function (eventPoint) {
@@ -474,6 +478,9 @@ Item {
                         z: 5
 
                         Keys.onPressed: function (event) {
+                            if (!root.editorControlsEnabled) {
+                                return
+                            }
                             if (event.key === Qt.Key_0 || event.key === Qt.Key_Home) {
                                 editorInteraction.resetView()
                                 event.accepted = true
@@ -700,8 +707,14 @@ Item {
                 theme: root.theme
                 editorSession: root.editorSession
                 interaction: editorInteraction
-                controlsEnabled: root.hasImage
+                controlsEnabled: root.editorControlsEnabled
             }
+        }
+
+        EditorSaveRecoveryBar {
+            id: editorSaveRecoveryBar
+            objectName: "editorSaveRecoveryBar"
+            editorSession: root.editorSession
         }
     }
 
@@ -709,7 +722,7 @@ Item {
     // it still works when focus is on the right panel rather than the viewport.
     Shortcut {
         sequences: [ "Return", "Enter" ]
-        enabled: root.hasImage
+        enabled: root.editorControlsEnabled
                  && root.editorSession
                  && String(root.editorSession.activeAdjustmentPanel || "") === "geometry"
         onActivated: {

@@ -82,6 +82,14 @@ class PipelineMgmtService final {
 
   void               SavePipeline(std::shared_ptr<PipelineGuard> pipeline);
 
+  /// Persist the current editor graph and serialized pipeline state while the
+  /// caller keeps its editor guard pinned. `expected_materialized_state` is
+  /// the state observed before the in-memory history mutation and prevents a
+  /// concurrent writer from being overwritten.
+  auto PersistEditorHistoryState(const std::shared_ptr<PipelineGuard>& pipeline,
+                                 const ImageEditState&                 expected_materialized_state,
+                                 std::string* error = nullptr) -> bool;
+
   auto               LoadPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
 
   /// Load an editor pipeline and validate its serialized state against the immutable commit graph.

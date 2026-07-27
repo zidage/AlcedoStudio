@@ -35,6 +35,7 @@ class IEditorSessionBackend {
   [[nodiscard]] virtual auto identity() const -> EditorSessionIdentity = 0;
   [[nodiscard]] virtual auto active() const -> bool                    = 0;
   [[nodiscard]] virtual auto has_image() const -> bool                 = 0;
+  [[nodiscard]] virtual auto has_pending_recovery() const -> bool { return false; }
   [[nodiscard]] virtual auto last_error() const -> std::string         = 0;
   /// Read-only snapshot of the committed editor adjustment state (panel values,
   /// not runtime pipeline handles). Returns the default-constructed empty
@@ -64,12 +65,52 @@ class IEditorSessionBackend {
     result.message = "Version checkout is not supported by this backend";
     return result;
   }
-  virtual auto CreateVersion(std::string /*display_name*/) -> EditorSessionResult {
+  /// Phase 7A: create a new Version at the image root and check it out after
+  /// a save checkpoint. Replaces the ambiguous active-head CreateVersion.
+  virtual auto CreateRootVersion(std::string /*display_name*/) -> EditorSessionResult {
     EditorSessionResult result;
     result.kind     = EditorSessionResultKind::Rejected;
     result.state    = state();
     result.identity = identity();
-    result.message  = "Version creation is not supported by this backend";
+    result.message  = "Root Version creation is not supported by this backend";
+    return result;
+  }
+  /// Phase 7A: create a new Version at an explicit commit and check it out
+  /// after a save checkpoint.
+  virtual auto BranchFromCommit(const commit_hash_t& /*commit_id*/,
+                                 std::string /*display_name*/) -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Branch creation is not supported by this backend";
+    return result;
+  }
+  /// Phase 7A: retry the save checkpoint after a retained-image failure.
+  virtual auto RetrySave() -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Retry Save is not supported by this backend";
+    return result;
+  }
+  /// Phase 7A: discard unflushed changes and continue the pending navigation.
+  virtual auto DiscardAndContinue() -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Discard and continue is not supported by this backend";
+    return result;
+  }
+  /// Phase 7A: cancel the pending navigation and resume Interactive.
+  virtual auto CancelPendingNavigation() -> EditorSessionResult {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Rejected;
+    result.state    = state();
+    result.identity = identity();
+    result.message  = "Cancel pending navigation is not supported by this backend";
     return result;
   }
   virtual auto RenameVersion(const version_ref_id_t& /*version_id*/, std::string /*display_name*/)
@@ -229,7 +270,17 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
   auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
   auto CheckoutVersion(const version_ref_id_t& version_id) -> EditorSessionResult override;
-  auto CreateVersion(std::string display_name) -> EditorSessionResult override;
+  /// Phase 7A: create a root Version and check it out.
+  auto CreateRootVersion(std::string display_name) -> EditorSessionResult override;
+  /// Phase 7A: branch from a commit and check it out.
+  auto BranchFromCommit(const commit_hash_t& commit_id, std::string display_name)
+      -> EditorSessionResult override;
+  /// Phase 7A: retry the save checkpoint after a retained-image failure.
+  auto RetrySave() -> EditorSessionResult override;
+  /// Phase 7A: discard unflushed changes and continue the pending navigation.
+  auto DiscardAndContinue() -> EditorSessionResult override;
+  /// Phase 7A: cancel the pending navigation and resume Interactive.
+  auto CancelPendingNavigation() -> EditorSessionResult override;
   auto RenameVersion(const version_ref_id_t& version_id, std::string display_name)
       -> EditorSessionResult override;
   auto RemoveVersion(const version_ref_id_t& version_id) -> EditorSessionResult override;
@@ -241,6 +292,11 @@ class EditorSessionService final : public IEditorSessionBackend {
       -> EditorSessionResult override;
   auto CancelMerge() -> EditorSessionResult override;
   auto Close(bool persist_changes) -> EditorSessionResult override;
+  [[nodiscard]] auto render_busy() const -> bool override { return render_.render_busy(); }
+  /// Phase 7A: true when the session is awaiting save-failure recovery.
+  [[nodiscard]] auto has_pending_recovery() const -> bool override {
+    return navigation_.has_pending_recovery();
+  }
   auto Patch(EditorAdjustmentPatch patch) -> EditorSessionResult override;
   auto CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult override;
   auto Patch(std::string patch_key) -> EditorSessionResult;
@@ -251,7 +307,6 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto Shutdown() -> EditorSessionResult override;
   auto RequestViewChange(EditorRenderReason reason, std::optional<ViewportRenderRegion> region)
       -> EditorSessionResult override;
-  [[nodiscard]] auto render_busy() const -> bool override { return render_.render_busy(); }
   [[nodiscard]] auto render_diagnostics() const -> EditorRenderCoordinatorDiagnostics override {
     return render_.render_diagnostics();
   }
@@ -277,6 +332,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// Transition lifecycle to Failed and emit a Failed result. Used when a
   /// navigation or save failure requires the session to enter the Failed state.
   auto Fail(std::string message) -> EditorSessionResult;
+  auto FinishVersionNavigation(const NavigationOutcome& outcome) -> EditorSessionResult;
   /// Persist a graph mutation through the same journal/materialization path as
   /// ordinary editor saves. The completion callback publishes the mutation
   /// only after the checkpoint succeeds.

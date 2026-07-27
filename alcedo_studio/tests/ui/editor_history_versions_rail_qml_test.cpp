@@ -96,7 +96,10 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     return state_ != EditorSessionState::NoImage;
   }
   [[nodiscard]] auto has_image() const -> bool override { return has_image_; }
-  [[nodiscard]] auto last_error() const -> std::string override { return {}; }
+  [[nodiscard]] auto has_pending_recovery() const -> bool override {
+    return recovery_pending_;
+  }
+  [[nodiscard]] auto last_error() const -> std::string override { return last_error_; }
 
   void               SetPresentationSinkId(PresentationSinkId) override {}
   void               SetPresentationSize(int, int) override {}
@@ -129,14 +132,32 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     return Accepted("Checked out");
   }
 
-  auto CreateVersion(std::string display_name) -> EditorSessionResult override {
+  auto CreateRootVersion(std::string display_name) -> EditorSessionResult override {
     const auto id = StableId(next_version_id_++);
-    snapshot_.versions.push_back(
-        MakeVersion(id, std::move(display_name), snapshot_.active_head, false));
+    for (auto& version : snapshot_.versions) version.active = false;
+    snapshot_.versions.push_back(MakeVersion(id, std::move(display_name), std::nullopt, true));
+    snapshot_.active_version_id = id;
+    snapshot_.active_head       = std::nullopt;
+    snapshot_.can_undo          = false;
+    snapshot_.can_redo          = false;
+    snapshot_.recovered_head    = false;
     last_created_id_ = id;
     ++create_count_;
     NotifyChange();
-    return Accepted("Version created");
+    return Accepted("Root Version created");
+  }
+
+  auto BranchFromCommit(const commit_hash_t& commit_id, std::string display_name)
+      -> EditorSessionResult override {
+    const auto id = StableId(next_version_id_++);
+    for (auto& version : snapshot_.versions) version.active = false;
+    snapshot_.versions.push_back(MakeVersion(id, std::move(display_name), commit_id, true));
+    snapshot_.active_version_id = id;
+    snapshot_.active_head       = commit_id;
+    last_created_id_            = id;
+    ++create_count_;
+    NotifyChange();
+    return Accepted("Branch created");
   }
 
   auto RenameVersion(const version_ref_id_t& version_id, std::string display_name)
@@ -190,6 +211,30 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
     return Accepted("Merge cancelled");
   }
 
+  auto RetrySave() -> EditorSessionResult override {
+    ++retry_save_count_;
+    recovery_pending_ = false;
+    last_error_.clear();
+    NotifyChange();
+    return Accepted("Save retried");
+  }
+
+  auto DiscardAndContinue() -> EditorSessionResult override {
+    ++discard_count_;
+    recovery_pending_ = false;
+    last_error_.clear();
+    NotifyChange();
+    return Accepted("Discarded and continued");
+  }
+
+  auto CancelPendingNavigation() -> EditorSessionResult override {
+    ++cancel_recovery_count_;
+    recovery_pending_ = false;
+    last_error_.clear();
+    NotifyChange();
+    return Accepted("Pending navigation cancelled");
+  }
+
   auto Close(bool) -> EditorSessionResult override {
     state_     = EditorSessionState::NoImage;
     has_image_ = false;
@@ -234,6 +279,15 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   [[nodiscard]] auto last_merge_resolution_count() const -> std::size_t {
     return last_merge_resolution_count_;
   }
+  [[nodiscard]] auto retry_save_count() const -> int { return retry_save_count_; }
+  [[nodiscard]] auto discard_count() const -> int { return discard_count_; }
+  [[nodiscard]] auto cancel_recovery_count() const -> int { return cancel_recovery_count_; }
+
+  void SetRecovery(bool pending, std::string error = {}) {
+    recovery_pending_ = pending;
+    last_error_       = std::move(error);
+    NotifyChange();
+  }
 
  private:
   auto Accepted(const char* message) const -> EditorSessionResult {
@@ -270,6 +324,11 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
   int                   begin_merge_count_           = 0;
   int                   complete_merge_count_        = 0;
   std::size_t           last_merge_resolution_count_ = 0;
+  bool                  recovery_pending_            = false;
+  std::string           last_error_;
+  int                   retry_save_count_            = 0;
+  int                   discard_count_               = 0;
+  int                   cancel_recovery_count_       = 0;
 };
 
 class RecordingInteractionPolicy final : public QObject {
@@ -370,6 +429,30 @@ ApplicationWindow {
 }
 )";
 
+constexpr char kRecoveryHarnessQml[] = R"(
+import QtQuick
+import QtQuick.Controls
+
+ApplicationWindow {
+    id: root
+    objectName: "editorSaveRecoveryHarness"
+    width: 1200
+    height: 120
+    visible: true
+
+    Loader {
+        id: recoveryLoader
+        anchors.fill: parent
+        asynchronous: false
+        source: recoverySourceUrl
+
+        onLoaded: {
+            if (item) item.editorSession = editorSessionFake
+        }
+    }
+}
+)";
+
 auto           QmlDirectory() -> QString {
   return QString::fromStdString(
       (std::filesystem::path(ALCEDO_TEST_SRC_DIR) / "ui" / "alcedo_main" / "qml").string());
@@ -377,6 +460,10 @@ auto           QmlDirectory() -> QString {
 
 auto RailUrl() -> QUrl {
   return QUrl::fromLocalFile(QmlDirectory() + "/EditorHistoryVersionsRail.qml");
+}
+
+auto RecoveryBarUrl() -> QUrl {
+  return QUrl::fromLocalFile(QmlDirectory() + "/EditorSaveRecoveryBar.qml");
 }
 
 void ProcessEvents() { QCoreApplication::processEvents(QEventLoop::AllEvents); }
@@ -429,6 +516,7 @@ class EditorHistoryVersionsRailQmlTest : public ::testing::Test {
     engine_.rootContext()->setContextProperty(QStringLiteral("interactionPolicyFake"), &policy_);
     engine_.rootContext()->setContextProperty(QStringLiteral("adjustmentTransferFake"), &transfer_);
     engine_.rootContext()->setContextProperty(QStringLiteral("railSourceUrl"), RailUrl());
+    engine_.rootContext()->setContextProperty(QStringLiteral("recoverySourceUrl"), RecoveryBarUrl());
     QObject::connect(&engine_, &QQmlEngine::warnings, [this](const QList<QQmlError>& warnings) {
       for (const auto& warning : warnings) warnings_.push_back(warning.toString());
     });
@@ -476,6 +564,54 @@ class EditorHistoryVersionsRailQmlTest : public ::testing::Test {
   QQuickWindow*                 window_ = nullptr;
   QStringList                   warnings_;
 };
+
+TEST_F(EditorHistoryVersionsRailQmlTest,
+       SaveRecoveryBarShowsFailureDetailAndRoutesEveryRecoveryAction) {
+  backend_.SetRecovery(true, "A materialization failed");
+
+  QQmlApplicationEngine recovery_engine;
+  recovery_engine.addImportPath(QStringLiteral("qrc:/"));
+  recovery_engine.addImportPath(QmlDirectory());
+  recovery_engine.rootContext()->setContextProperty(QStringLiteral("appTheme"),
+                                                    &AppTheme::Instance());
+  recovery_engine.rootContext()->setContextProperty(QStringLiteral("editorSessionFake"),
+                                                    &controller_);
+  recovery_engine.rootContext()->setContextProperty(QStringLiteral("recoverySourceUrl"),
+                                                    RecoveryBarUrl());
+  recovery_engine.loadData(QByteArray{kRecoveryHarnessQml},
+                           QUrl(QStringLiteral("file:///EditorSaveRecoveryHarness.qml")));
+  ASSERT_FALSE(recovery_engine.rootObjects().empty());
+  auto* recovery_window = qobject_cast<QQuickWindow*>(recovery_engine.rootObjects().front());
+  ASSERT_NE(recovery_window, nullptr);
+  recovery_window->show();
+  ProcessEvents();
+
+  auto* recovery_bar = FindVisualItem(recovery_window->contentItem(),
+                                      QStringLiteral("editorSaveRecoveryBar"));
+  ASSERT_NE(recovery_bar, nullptr);
+  EXPECT_TRUE(recovery_bar->property("visible").toBool());
+  auto* detail = FindVisualItem(recovery_bar, QStringLiteral("editorRecoveryDetail"));
+  ASSERT_NE(detail, nullptr);
+  EXPECT_EQ(detail->property("text").toString(), QStringLiteral("A materialization failed"));
+
+  Click(recovery_window, FindVisualItem(recovery_bar, QStringLiteral("editorRecoveryRetryButton")));
+  EXPECT_EQ(backend_.retry_save_count(), 1);
+  EXPECT_FALSE(recovery_bar->property("visible").toBool());
+
+  backend_.SetRecovery(true, "Discard this failed checkpoint");
+  ProcessEvents();
+  Click(recovery_window,
+        FindVisualItem(recovery_bar, QStringLiteral("editorRecoveryDiscardButton")));
+  EXPECT_EQ(backend_.discard_count(), 1);
+  EXPECT_FALSE(recovery_bar->property("visible").toBool());
+
+  backend_.SetRecovery(true, "Cancel this pending navigation");
+  ProcessEvents();
+  Click(recovery_window,
+        FindVisualItem(recovery_bar, QStringLiteral("editorRecoveryCancelButton")));
+  EXPECT_EQ(backend_.cancel_recovery_count(), 1);
+  EXPECT_FALSE(recovery_bar->property("visible").toBool());
+}
 
 TEST_F(EditorHistoryVersionsRailQmlTest, ClickingNamedVersionChecksOutStableVersionId) {
   ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
@@ -539,6 +675,8 @@ TEST_F(EditorHistoryVersionsRailQmlTest, VersionNameInputCreatesRenamesAndRemove
   }
   ASSERT_NE(created_card, nullptr);
   EXPECT_EQ(created_card->property("displayName").toString(), QStringLiteral("newlook"));
+  EXPECT_TRUE(created_card->property("versionActive").toBool());
+  EXPECT_FALSE(controller_.history_snapshot().active_head.has_value());
 
   Click(window_, created_card->findChild<QQuickItem*>(QStringLiteral("editorRenameVersionButton")));
   field = Find(QStringLiteral("editorVersionNameField"));
@@ -554,8 +692,14 @@ TEST_F(EditorHistoryVersionsRailQmlTest, VersionNameInputCreatesRenamesAndRemove
     if (card->property("versionId").toString() == created_id) created_card = card;
   }
   ASSERT_NE(created_card, nullptr);
-  Click(window_, created_card->findChild<QQuickItem*>(QStringLiteral("editorRemoveVersionButton")));
+  QQuickItem* removable_card = nullptr;
+  for (auto* card : cards) {
+    if (card->property("versionId").toString() != created_id) removable_card = card;
+  }
+  ASSERT_NE(removable_card, nullptr);
+  Click(window_, removable_card->findChild<QQuickItem*>(QStringLiteral("editorRemoveVersionButton")));
   EXPECT_EQ(backend_.remove_count(), 1);
+  EXPECT_EQ(backend_.last_removed_id(), StableId(2));
   EXPECT_EQ(Cards().size(), 2);
 }
 

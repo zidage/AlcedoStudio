@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -29,6 +30,10 @@ enum class PendingEditorActionKind : std::uint8_t {
   SwitchImage = 0,
   CloseEditor,
   CheckoutVersion,
+  /// Phase 7A: create a new Version at the image root, then checkout.
+  CreateRootVersionAndCheckout,
+  /// Phase 7A: branch a new Version from a selected commit, then checkout.
+  BranchFromCommitAndCheckout,
 };
 
 /// A pending navigation action captured while a save checkpoint is in progress.
@@ -42,6 +47,10 @@ struct PendingEditorAction {
   bool                    persist    = true;
   /// Target Version for CheckoutVersion actions. Zero means unset.
   version_ref_id_t        version_id{};
+  /// Phase 7A: display name for CreateRootVersion / BranchFromCommit.
+  std::string             display_name;
+  /// Phase 7A: selected commit for BranchFromCommitAndCheckout.
+  commit_hash_t           branch_commit{};
   CheckpointTicket        ticket{};
 };
 
@@ -65,6 +74,18 @@ struct NavigationOutcome {
   std::uint64_t    sealed_session_generation = 0;
   std::string      message;
 };
+
+/// Async completion outcome published by the navigation controller when an
+/// asynchronous save checkpoint + navigation finishes (Phase 7A). The facade
+/// uses this to publish the matching EditorSessionResult for the UI.
+struct NavigationCompletion {
+  bool        success  = false;
+  bool        retained_image = false;  ///< True when the image survived a failure.
+  std::string message;
+  CheckpointTicket ticket;
+};
+
+using NavigationCompletionNotifier = std::function<void(const NavigationCompletion&)>;
 
 /// Owns the pending A-to-B/close navigation orchestration. The controller
 /// calls EditorSessionLifecycle, EditorSaveCheckpointService,
@@ -106,6 +127,17 @@ class EditorSessionNavigationController final {
   /// root + first-parent chain only after the checkpoint succeeds.
   auto RequestCheckoutVersion(const version_ref_id_t& version_id) -> NavigationOutcome;
 
+  /// Phase 7A: request a new Version at the image root and check it out. Saves
+  /// the current Version first, then creates the root ref, rebuilds, and
+  /// publishes the clean root snapshot/frame.
+  auto RequestCreateRootVersion(std::string display_name) -> NavigationOutcome;
+
+  /// Phase 7A: request a new Version at an explicit commit and check it out.
+  /// Saves the current Version first, then creates the ref at the selected
+  /// commit, rebuilds, and publishes the matching snapshot/frame.
+  auto RequestBranchFromCommit(const commit_hash_t& commit_id, std::string display_name)
+      -> NavigationOutcome;
+
   /// Resume the pending navigation after a save checkpoint completed. Called
   /// by the facade when the save service invokes its completion callback. On
   /// success, releases the prior image's guards, loads the adjustment snapshot
@@ -121,6 +153,28 @@ class EditorSessionNavigationController final {
   /// reset state after a synchronous completion or a rejection.
   void               ClearPendingAction();
 
+  /// Phase 7A: register a notifier called when an async save checkpoint +
+  /// navigation finishes (success or failure). The facade uses this to publish
+  /// the matching EditorSessionResult for the UI.
+  void               SetCompletionNotifier(NavigationCompletionNotifier notifier);
+
+  /// Phase 7A: true when the session is in the RetainedImageFailure state and
+  /// a pending recovery target exists (save failure with a pending navigation).
+  [[nodiscard]] auto has_pending_recovery() const -> bool;
+
+  /// Phase 7A: retry the save checkpoint for the pending recovery target.
+  /// Returns a NavigationOutcome for the re-attempted save.
+  auto               RetrySaveAfterFailure() -> NavigationOutcome;
+
+  /// Phase 7A: discard unflushed changes and continue the pending navigation.
+  /// Clears the journal, releases the current guards, and proceeds to the
+  /// pending target. Returns a NavigationOutcome.
+  auto               DiscardAndContinueAfterFailure() -> NavigationOutcome;
+
+  /// Phase 7A: cancel the pending navigation and resume Interactive on the
+  /// retained image. No data loss: the image stays published.
+  void               CancelPendingNavigation();
+
  private:
   /// Seal the current image: finalize edit, capture checkpoint, start save.
   /// Returns a valid ticket on success.
@@ -131,7 +185,24 @@ class EditorSessionNavigationController final {
   /// Continue to a close after a successful save.
   void ContinueToClose(bool persist_changes);
   /// Continue Version checkout after a successful save on the current image.
-  void ContinueCheckoutVersion(const version_ref_id_t& version_id);
+  /// Returns false and sets error on checkout rebuild failure; the prior
+  /// Version remains active (history port fails closed).
+  auto ContinueCheckoutVersion(const version_ref_id_t& version_id, std::string* error) -> bool;
+  /// Phase 7A: continue root Version creation + checkout after a successful
+  /// save on the current image. Returns false and sets error on failure; the
+  /// provisional ref is removed and the prior ref/pipeline restored.
+  auto ContinueCreateRootVersion(std::string display_name, std::string* error) -> bool;
+  /// Phase 7A: continue branch-from-commit + checkout after a successful save.
+  /// Returns false and sets error on failure; provisional ref removed.
+  auto ContinueBranchFromCommit(const commit_hash_t& commit_id, std::string display_name,
+                                 std::string* error) -> bool;
+  /// Publish the async completion to the registered notifier (if any).
+  void NotifyCompletion(bool success, bool retained_image, std::string message,
+                        const CheckpointTicket& ticket);
+  /// Retain the current image and remember the pending target after a save or
+  /// checkpoint failure. The caller holds mutex_ so the transition and
+  /// notification stay one navigation operation.
+  void RetainPendingFailure(PendingEditorAction pending, std::string message);
 
   EditorSessionLifecycle&            lifecycle_;
   EditorSaveCheckpointService&       save_service_;
@@ -142,6 +213,10 @@ class EditorSessionNavigationController final {
   IEditorHistoryPort*                history_;
   mutable std::recursive_mutex       mutex_;
   std::optional<PendingEditorAction> pending_action_;
+  NavigationCompletionNotifier       completion_notifier_;
+  /// Phase 7A: preserved pending target while a save failure recovery is
+  /// pending. Set when OnCheckpointFinished fails; cleared by recovery actions.
+  std::optional<PendingEditorAction> pending_recovery_;
 };
 
 }  // namespace alcedo

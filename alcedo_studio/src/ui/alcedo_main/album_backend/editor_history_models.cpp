@@ -198,8 +198,13 @@ void EditorHistoryModel::checkoutVersion(const QString& versionId) {
   refresh();
 }
 
-void EditorHistoryModel::createVersion(const QString& displayName) {
-  if (editor_session_) editor_session_->CreateVersion(displayName);
+void EditorHistoryModel::createRootVersion(const QString& displayName) {
+  if (editor_session_) editor_session_->CreateRootVersion(displayName);
+  refresh();
+}
+
+void EditorHistoryModel::branchFromCommit(const QString& commitId, const QString& displayName) {
+  if (editor_session_) editor_session_->BranchFromCommit(commitId, displayName);
   refresh();
 }
 

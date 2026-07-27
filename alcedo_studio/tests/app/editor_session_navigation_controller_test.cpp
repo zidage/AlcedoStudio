@@ -75,7 +75,9 @@ TEST_F(EditorSessionNavigationControllerTest, CheckpointFailureKeepsAAndNeverAcq
 
   fixture_.FailCheckpoint("A materialization failed");
   EXPECT_FALSE(fixture_.nav().has_pending_action());
-  EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::Failed);
+  EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::RetainedImageFailure);
+  EXPECT_TRUE(fixture_.lifecycle().has_image());
+  EXPECT_TRUE(fixture_.nav().has_pending_recovery());
   EXPECT_EQ(fixture_.lifecycle().identity().element_id,
             test::EditorSessionNavigationFixture::kElementA);
   EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "acquire_b"), 0);
@@ -111,10 +113,10 @@ TEST_F(EditorSessionNavigationControllerTest,
   EXPECT_EQ(fixture_.history().release_count, 0);
 }
 
-/// Phase 6C-6: failed checkout rebuild keeps the image and does not expose a
-/// partial pipeline (history port fails closed; navigation marks Failed).
+/// Phase 7A P0: failed checkout rebuild keeps the image and does not expose a
+/// partial pipeline (history port fails closed; navigation retains recovery).
 TEST_F(EditorSessionNavigationControllerTest,
-       FailedCheckoutKeepsImageAndDoesNotReleaseOrSwitch) {
+       FailedVersionCheckoutKeepsHasImageAndLastFrameVisible) {
   fixture_.OpenA();
   fixture_.history().fail_checkout = true;
   const auto target_version        = Hash128{0x11111111ULL, 0x22222222ULL};
@@ -124,12 +126,147 @@ TEST_F(EditorSessionNavigationControllerTest,
   fixture_.CompleteCheckpoint();
 
   EXPECT_FALSE(fixture_.nav().has_pending_action());
-  EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::Failed);
+  EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::RetainedImageFailure);
+  EXPECT_TRUE(fixture_.lifecycle().has_image());
+  EXPECT_TRUE(fixture_.nav().has_pending_recovery());
   EXPECT_EQ(fixture_.lifecycle().identity().element_id,
             test::EditorSessionNavigationFixture::kElementA);
   EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "release_a"), 0);
   EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "acquire_b"), 0);
   EXPECT_EQ(fixture_.history().checkout_count, 1);
+}
+
+TEST_F(EditorSessionNavigationControllerTest, SaveFailureRetryThenSwitchAcquiresRequestedImage) {
+  fixture_.OpenA();
+  const auto first = fixture_.RequestSwitchToB();
+  ASSERT_TRUE(first.waiting_for_checkpoint);
+
+  fixture_.FailCheckpoint("A materialization failed");
+  ASSERT_EQ(fixture_.lifecycle().state(), EditorSessionState::RetainedImageFailure);
+  ASSERT_TRUE(fixture_.nav().has_pending_recovery());
+
+  const auto blocked = fixture_.nav().RequestOpenOrSwitch(5, 6, true);
+  EXPECT_TRUE(blocked.rejected);
+  EXPECT_EQ(fixture_.lifecycle().identity().element_id,
+            test::EditorSessionNavigationFixture::kElementA);
+
+  const auto retry = fixture_.nav().RetrySaveAfterFailure();
+  EXPECT_TRUE(retry.waiting_for_checkpoint);
+  EXPECT_FALSE(fixture_.nav().has_pending_recovery());
+  fixture_.CompleteCheckpoint();
+  fixture_.lifecycle().MarkFirstFramePresented();
+
+  EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::Interactive);
+  EXPECT_TRUE(fixture_.lifecycle().has_image());
+  EXPECT_EQ(fixture_.lifecycle().identity().element_id,
+            test::EditorSessionNavigationFixture::kElementB);
+  EXPECT_EQ(fixture_.lifecycle().identity().image_id,
+            test::EditorSessionNavigationFixture::kImageB);
+  EXPECT_FALSE(fixture_.nav().has_pending_action());
+  EXPECT_FALSE(fixture_.nav().has_pending_recovery());
+}
+
+TEST_F(EditorSessionNavigationControllerTest,
+       SaveFailureDiscardThenSwitchClearsJournalAndAcquiresRequestedImage) {
+  fixture_.OpenA();
+  ASSERT_TRUE(fixture_.RequestSwitchToB().waiting_for_checkpoint);
+  fixture_.FailCheckpoint("A materialization failed");
+  ASSERT_TRUE(fixture_.nav().has_pending_recovery());
+
+  const auto discard = fixture_.nav().DiscardAndContinueAfterFailure();
+  EXPECT_TRUE(discard.completed_synchronously);
+  fixture_.lifecycle().MarkFirstFramePresented();
+  EXPECT_EQ(fixture_.journal().discard_count, 1);
+  EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::Interactive);
+  EXPECT_TRUE(fixture_.lifecycle().has_image());
+  EXPECT_EQ(fixture_.lifecycle().identity().element_id,
+            test::EditorSessionNavigationFixture::kElementB);
+  EXPECT_FALSE(fixture_.nav().has_pending_recovery());
+  EXPECT_FALSE(fixture_.nav().has_pending_action());
+}
+
+TEST_F(EditorSessionNavigationControllerTest,
+       CreateRootVersionChecksOutRootAndNextCommitBelongsToNewVersion) {
+  fixture_.OpenA();
+  fixture_.journal().async_commit               = true;
+  fixture_.checkpoint_store().async_materialize = true;
+
+  const auto result = fixture_.nav().RequestCreateRootVersion("Root Look");
+  ASSERT_TRUE(result.waiting_for_checkpoint);
+  fixture_.CompleteCheckpoint();
+
+  EXPECT_EQ(fixture_.history().root_version_count, 1);
+  EXPECT_EQ(fixture_.history().active_version_id, fixture_.history().last_root_version);
+  EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::Interactive);
+  EXPECT_TRUE(fixture_.lifecycle().has_image());
+
+  EditorAdjustmentPatch patch;
+  patch.field_key = "exposure";
+  std::string error;
+  ASSERT_TRUE(fixture_.history().CommitAdjustment(fixture_.lifecycle().history_guard(), patch,
+                                                  &error))
+      << error;
+  EXPECT_EQ(fixture_.history().last_commit_version, fixture_.history().last_root_version);
+}
+
+TEST_F(EditorSessionNavigationControllerTest,
+       BranchFromSelectedCommitChecksOutNamedRefWithoutDetachedHead) {
+  fixture_.OpenA();
+  fixture_.journal().async_commit               = true;
+  fixture_.checkpoint_store().async_materialize = true;
+  const auto target_commit = commit_hash_t{0x12345678ULL, 0x90abcdefULL};
+
+  const auto result = fixture_.nav().RequestBranchFromCommit(target_commit, "Branch Look");
+  ASSERT_TRUE(result.waiting_for_checkpoint);
+  fixture_.CompleteCheckpoint();
+
+  EXPECT_EQ(fixture_.history().branch_version_count, 1);
+  EXPECT_EQ(fixture_.history().last_branch_commit, target_commit);
+  EXPECT_EQ(fixture_.history().active_version_id, fixture_.history().last_branch_version);
+  EXPECT_EQ(fixture_.history().last_commit_version, version_ref_id_t{});
+  EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::Interactive);
+  EXPECT_TRUE(fixture_.lifecycle().has_image());
+}
+
+TEST_F(EditorSessionNavigationControllerTest,
+       CreateOrBranchFailureRestoresPriorRefPipelineSnapshotAndFrame) {
+  fixture_.OpenA();
+  const auto prior_identity = fixture_.lifecycle().identity();
+  const auto prior_version  = fixture_.history().active_version_id;
+  fixture_.history().fail_root_version            = true;
+  fixture_.journal().async_commit                 = true;
+  fixture_.checkpoint_store().async_materialize   = true;
+
+  ASSERT_TRUE(fixture_.nav().RequestCreateRootVersion("Broken Root").waiting_for_checkpoint);
+  fixture_.CompleteCheckpoint();
+  EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::RetainedImageFailure);
+  EXPECT_TRUE(fixture_.lifecycle().has_image());
+  EXPECT_TRUE(fixture_.nav().has_pending_recovery());
+  EXPECT_EQ(fixture_.lifecycle().identity().element_id, prior_identity.element_id);
+  EXPECT_EQ(fixture_.lifecycle().identity().image_id, prior_identity.image_id);
+  EXPECT_EQ(fixture_.lifecycle().identity().session_generation,
+            prior_identity.session_generation);
+  EXPECT_EQ(fixture_.history().active_version_id, prior_version);
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "release_a"), 0);
+
+  fixture_.nav().CancelPendingNavigation();
+  fixture_.history().fail_root_version = false;
+  fixture_.history().fail_branch_version = true;
+  const auto target_commit = commit_hash_t{0x22222222ULL, 0x33333333ULL};
+  ASSERT_TRUE(
+      fixture_.nav().RequestBranchFromCommit(target_commit, "Broken Branch").waiting_for_checkpoint);
+  fixture_.CompleteCheckpoint();
+
+  EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::RetainedImageFailure);
+  EXPECT_TRUE(fixture_.lifecycle().has_image());
+  EXPECT_TRUE(fixture_.nav().has_pending_recovery());
+  EXPECT_EQ(fixture_.lifecycle().identity().element_id, prior_identity.element_id);
+  EXPECT_EQ(fixture_.lifecycle().identity().image_id, prior_identity.image_id);
+  EXPECT_EQ(fixture_.lifecycle().identity().session_generation,
+            prior_identity.session_generation);
+  EXPECT_EQ(fixture_.history().active_version_id, prior_version);
+  EXPECT_EQ(fixture_.history().last_branch_commit, target_commit);
+  EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "release_a"), 0);
 }
 
 TEST_F(EditorSessionNavigationControllerTest, SecondActionDoesNotReplaceOriginalTargetB) {
@@ -225,7 +362,9 @@ TEST_F(EditorSessionNavigationControllerTest, SyncSaveFailureStaysOnA) {
   EXPECT_FALSE(result.waiting_for_checkpoint);
   EXPECT_FALSE(fixture_.nav().has_pending_action());
   EXPECT_EQ(fixture_.lifecycle().identity().session_generation, gen_a);
-  EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::Failed);
+  EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::RetainedImageFailure);
+  EXPECT_TRUE(fixture_.lifecycle().has_image());
+  EXPECT_TRUE(fixture_.nav().has_pending_recovery());
 }
 
 TEST_F(EditorSessionNavigationControllerTest, SyncCloseCompletesImmediately) {

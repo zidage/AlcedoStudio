@@ -523,6 +523,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/LibraryWorkspace.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWorkspace.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWorkspaceNavigation.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorSaveRecoveryBar.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentTransferActions.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorFilmstrip.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryVersionsRail.qml"

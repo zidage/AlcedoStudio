@@ -689,6 +689,51 @@ TEST_F(PipelineServiceTests, EditorLoadUsesMatchingSerializedStateWithoutReconst
   reopened.SavePipeline(loaded);
 }
 
+TEST_F(PipelineServiceTests,
+       PersistEditorHistoryStateWritesNewActiveVersionBeforeEditorReopen) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService pipeline_service(project.GetStorageService());
+
+  auto guard = pipeline_service.LoadEditorPipeline(715);
+  ASSERT_NE(guard, nullptr);
+  ASSERT_NE(guard->commit_graph_, nullptr);
+  const auto expected_materialized_state = guard->commit_graph_->GetImageEditState();
+
+  const auto new_version = guard->commit_graph_->CreateVersionRefAtRoot("Root Version");
+  guard->commit_graph_->SetActiveVersionId(new_version);
+  guard->working_head_commit_hash_ = std::nullopt;
+  guard->transaction_chain_hash_ =
+      guard->commit_graph_->ChainHashForHead(guard->working_head_commit_hash_);
+  guard->serialized_state_needs_writeback_ = true;
+
+  std::string error;
+  ASSERT_TRUE(pipeline_service.PersistEditorHistoryState(guard, expected_materialized_state,
+                                                         &error))
+      << error;
+  EXPECT_FALSE(guard->serialized_state_needs_writeback_);
+
+  {
+    auto               db_guard =
+        project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto               db_lock  = db_guard.Lock();
+    CommitGraphService graph_service(db_guard.conn_);
+    const auto         persisted = graph_service.LoadGraph(715);
+    ASSERT_TRUE(persisted.has_value());
+    EXPECT_EQ(persisted->GetActiveVersionId(), new_version);
+    EXPECT_EQ(persisted->GetActiveVersionRef().head_commit_hash, std::nullopt);
+  }
+
+  pipeline_service.SavePipeline(guard);
+
+  PipelineMgmtService reopened_service(project.GetStorageService());
+  auto                reopened = reopened_service.LoadEditorPipeline(715);
+  ASSERT_NE(reopened, nullptr);
+  ASSERT_NE(reopened->commit_graph_, nullptr);
+  EXPECT_EQ(reopened->commit_graph_->GetActiveVersionId(), new_version);
+  EXPECT_EQ(reopened->working_head_commit_hash_, std::nullopt);
+  reopened_service.SavePipeline(reopened);
+}
+
 TEST_F(PipelineServiceTests, DeletePipelinesRemovesTheDeletedImagesMiniGitGraphOnly) {
   ProjectService      project(db_path_, meta_path_);
   PipelineMgmtService pipelines(project.GetStorageService());

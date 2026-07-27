@@ -76,7 +76,11 @@ auto EditorSessionLifecycle::MarkImageReady() -> EditorSessionIdentity {
 
 void EditorSessionLifecycle::KeepCurrentAfterCheckpointFailure(std::string message) {
   std::scoped_lock lock(mutex_);
-  state_      = EditorSessionState::Failed;
+  // Phase 7A repair: keep the image visible. RetainedImageFailure preserves
+  // identity, guards, and the last presented frame so the viewport does not
+  // fall back to the empty-editor placeholder. Recovery actions (Retry Save,
+  // Discard and Continue, Cancel) resolve from here.
+  state_      = EditorSessionState::RetainedImageFailure;
   last_error_ = std::move(message);
 }
 
@@ -150,6 +154,14 @@ void EditorSessionLifecycle::CompleteCheckpoint() {
   std::scoped_lock lock(mutex_);
   if (state_ == EditorSessionState::Saving) {
     state_ = EditorSessionState::Interactive;
+  }
+}
+
+void EditorSessionLifecycle::ResumeInteractiveAfterFailure() {
+  std::scoped_lock lock(mutex_);
+  if (state_ == EditorSessionState::RetainedImageFailure) {
+    state_ = EditorSessionState::Interactive;
+    last_error_.clear();
   }
 }
 

@@ -50,6 +50,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_OBJECT
   Q_PROPERTY(bool active READ active NOTIFY StateChanged)
   Q_PROPERTY(bool hasImage READ has_image NOTIFY StateChanged)
+  Q_PROPERTY(bool hasPendingRecovery READ has_pending_recovery NOTIFY StateChanged)
   // Phase 6A: true when an image is open and the session is Interactive, i.e.
   // adjustment controls are enabled and submitPatch will be accepted.
   Q_PROPERTY(bool canEdit READ can_edit NOTIFY StateChanged)
@@ -120,6 +121,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
 
   [[nodiscard]] bool       active() const;
   [[nodiscard]] bool       has_image() const;
+  [[nodiscard]] bool       has_pending_recovery() const;
   [[nodiscard]] uint       element_id() const;
   [[nodiscard]] uint       image_id() const;
   [[nodiscard]] uint       last_element_id() const { return last_element_id_; }
@@ -163,7 +165,11 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// Check out a named Version by its hex version_id. Completes a save checkpoint
   /// first, then rebuilds the pipeline from root + first-parent commits.
   Q_INVOKABLE void   CheckoutVersion(const QString& versionId);
-  Q_INVOKABLE void   CreateVersion(const QString& displayName);
+  Q_INVOKABLE void   CreateRootVersion(const QString& displayName);
+  Q_INVOKABLE void   BranchFromCommit(const QString& commitId, const QString& displayName);
+  Q_INVOKABLE void   RetrySave();
+  Q_INVOKABLE void   DiscardAndContinue();
+  Q_INVOKABLE void   CancelPendingNavigation();
   Q_INVOKABLE void   RenameVersion(const QString& versionId, const QString& displayName);
   Q_INVOKABLE void   RemoveVersion(const QString& versionId);
   Q_INVOKABLE void   Undo();

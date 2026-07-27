@@ -112,6 +112,13 @@ class EditorSessionNavigationFixture {
         -> std::shared_ptr<const EditorMiniGitSaveCapture> override;
     auto CheckoutVersion(const EditorHistoryGuardHandle& guard, const Hash128& version_id,
                          std::string* error) -> bool override;
+    auto CreateRootVersionAndCheckout(const EditorHistoryGuardHandle& guard, std::string display_name,
+                                      version_ref_id_t* version_id, std::string* error)
+        -> bool override;
+    auto BranchFromCommitAndCheckout(const EditorHistoryGuardHandle& guard,
+                                     const commit_hash_t& commit_id, std::string display_name,
+                                     version_ref_id_t* version_id, std::string* error)
+        -> bool override;
 
     FakeEditorHistoryPort inner;
 

@@ -301,8 +301,8 @@ def_library(EditorSessionService
         "${ALCEDO_INCLUDE_ROOT}/edit/frame_presentation_types.hpp"
     # The session facade is application-only; no Widgets dependency belongs
     # on this target or on its public link interface.
-    PUBLIC_DEPS xxHash
-    PRIVATE_DEPS EditHistory EditorMiniGitMaterializer EditorSaveCheckpointService EditorSessionLifecycle
+    PRIVATE_DEPS xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS}
+                 EditHistory EditorMiniGitMaterializer EditorSaveCheckpointService EditorSessionLifecycle
                  EditorSessionNavigationController EditorSessionRenderController
                  EditorSessionEditController
 )

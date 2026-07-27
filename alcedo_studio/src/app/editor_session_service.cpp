@@ -71,7 +71,28 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
       edit_(
           EditorSessionEditController::Dependencies{dependencies_.history, dependencies_.journal}),
       navigation_(lifecycle_, save_service_, render_, edit_, dependencies_.journal.get(),
-                  dependencies_.checkpoint_store.get(), dependencies_.history.get()) {}
+                  dependencies_.checkpoint_store.get(), dependencies_.history.get()) {
+  navigation_.SetCompletionNotifier([this](const NavigationCompletion& completion) {
+    EditorSessionResult result;
+    result.identity    = lifecycle_.identity();
+    result.state       = lifecycle_.state();
+    result.task_id     = completion.ticket.task_id;
+    if (completion.success) {
+      if (render_.first_frame_request_id() != 0) {
+        result.kind              = EditorSessionResultKind::RenderRouted;
+        result.render_request_id = render_.first_frame_request_id();
+      } else {
+        result.kind = EditorSessionResultKind::Accepted;
+      }
+      result.message = completion.message;
+    } else {
+      result.kind    = EditorSessionResultKind::Failed;
+      result.state   = lifecycle_.state();
+      result.message = completion.message;
+    }
+    Emit(std::move(result));
+  });
+}
 
 EditorSessionService::~EditorSessionService() { save_service_.CancelAndWait(); }
 
@@ -111,12 +132,68 @@ auto EditorSessionService::Reject(std::string message) -> EditorSessionResult {
 /// Transition lifecycle to Failed and emit a Failed result. Used when a
 /// navigation or save failure requires the session to enter the Failed state.
 auto EditorSessionService::Fail(std::string message) -> EditorSessionResult {
+  if (lifecycle_.state() == EditorSessionState::RetainedImageFailure) {
+    EditorSessionResult result;
+    result.kind     = EditorSessionResultKind::Failed;
+    result.state    = lifecycle_.state();
+    result.identity = lifecycle_.identity();
+    result.message  = std::move(message);
+    return result;
+  }
   lifecycle_.Fail(message);
   EditorSessionResult result;
   result.kind     = EditorSessionResultKind::Failed;
   result.state    = lifecycle_.state();
   result.identity = lifecycle_.identity();
   result.message  = std::move(message);
+  return Emit(std::move(result));
+}
+
+auto EditorSessionService::FinishVersionNavigation(const NavigationOutcome& outcome)
+    -> EditorSessionResult {
+  if (outcome.rejected) {
+    return Reject(outcome.message);
+  }
+  if (outcome.failed) {
+    return Fail(outcome.message);
+  }
+  if (outcome.waiting_for_checkpoint) {
+    EditorSessionResult waiting;
+    waiting.kind     = EditorSessionResultKind::SaveStarted;
+    waiting.state    = lifecycle_.state();
+    waiting.identity = lifecycle_.identity();
+    waiting.task_id  = outcome.ticket.task_id;
+    waiting.message  = outcome.message;
+    return Emit(std::move(waiting));
+  }
+  if (outcome.ticket.valid()) {
+    EditorSessionResult started;
+    started.kind     = EditorSessionResultKind::SaveStarted;
+    started.state    = lifecycle_.state();
+    started.identity = lifecycle_.identity();
+    started.task_id  = outcome.ticket.task_id;
+    started.message  = "Save started";
+    Emit(std::move(started));
+  }
+
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::Accepted;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = outcome.message;
+  if (render_.first_frame_request_id() != 0) {
+    result.kind              = EditorSessionResultKind::RenderRouted;
+    result.render_request_id = render_.first_frame_request_id();
+  }
+  if (outcome.ticket.valid()) {
+    EditorSessionResult finished;
+    finished.kind     = EditorSessionResultKind::SaveFinished;
+    finished.state    = lifecycle_.state();
+    finished.identity = lifecycle_.identity();
+    finished.task_id  = outcome.ticket.task_id;
+    finished.message  = "Editor session materialized";
+    Emit(std::move(finished));
+  }
   return Emit(std::move(result));
 }
 
@@ -207,52 +284,7 @@ auto EditorSessionService::CheckoutVersion(const version_ref_id_t& version_id)
     return Reject(std::move(merge_error));
   }
   const auto outcome = navigation_.RequestCheckoutVersion(version_id);
-  if (outcome.rejected) {
-    return Reject(outcome.message);
-  }
-  if (outcome.failed) {
-    return Fail(outcome.message);
-  }
-  if (outcome.waiting_for_checkpoint) {
-    EditorSessionResult waiting;
-    waiting.kind     = EditorSessionResultKind::SaveStarted;
-    waiting.state    = lifecycle_.state();
-    waiting.identity = lifecycle_.identity();
-    waiting.task_id  = outcome.ticket.task_id;
-    waiting.message  = outcome.message;
-    return Emit(std::move(waiting));
-  }
-  if (outcome.ticket.valid()) {
-    EditorSessionResult started;
-    started.kind     = EditorSessionResultKind::SaveStarted;
-    started.state    = lifecycle_.state();
-    started.identity = lifecycle_.identity();
-    started.task_id  = outcome.ticket.task_id;
-    started.message  = "Save started";
-    Emit(std::move(started));
-  }
-  if (lifecycle_.state() == EditorSessionState::Failed) {
-    return Fail(lifecycle_.last_error().empty() ? outcome.message : lifecycle_.last_error());
-  }
-  EditorSessionResult result;
-  result.kind     = EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = lifecycle_.identity();
-  result.message  = outcome.message;
-  if (outcome.ticket.valid()) {
-    EditorSessionResult finished;
-    finished.kind     = EditorSessionResultKind::SaveFinished;
-    finished.state    = lifecycle_.state();
-    finished.identity = lifecycle_.identity();
-    finished.task_id  = outcome.ticket.task_id;
-    finished.message  = "Editor session materialized";
-    Emit(std::move(finished));
-  }
-  if (render_.first_frame_request_id() != 0) {
-    result.kind              = EditorSessionResultKind::RenderRouted;
-    result.render_request_id = render_.first_frame_request_id();
-  }
-  return Emit(std::move(result));
+  return FinishVersionNavigation(outcome);
 }
 
 auto EditorSessionService::history_snapshot() -> EditorHistorySnapshot {
@@ -288,17 +320,41 @@ auto EditorSessionService::CancelPendingMergeForNavigation(std::string* error) -
   return true;
 }
 
-auto EditorSessionService::CreateVersion(std::string display_name) -> EditorSessionResult {
-  if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
-    return Reject("Version creation requires an interactive session");
+auto EditorSessionService::CreateRootVersion(std::string display_name) -> EditorSessionResult {
+  std::string merge_error;
+  if (!CancelPendingMergeForNavigation(&merge_error)) {
+    return Reject(std::move(merge_error));
   }
-  version_ref_id_t version_id;
-  std::string      error;
-  if (!dependencies_.history->CreateVersion(lifecycle_.history_guard(), std::move(display_name),
-                                            &version_id, &error)) {
-    return Reject(error.empty() ? "Version creation failed" : std::move(error));
+  return FinishVersionNavigation(navigation_.RequestCreateRootVersion(std::move(display_name)));
+}
+
+auto EditorSessionService::BranchFromCommit(const commit_hash_t& commit_id,
+                                            std::string          display_name)
+    -> EditorSessionResult {
+  std::string merge_error;
+  if (!CancelPendingMergeForNavigation(&merge_error)) {
+    return Reject(std::move(merge_error));
   }
-  return StartHistoryCheckpoint("Version created", false);
+  return FinishVersionNavigation(
+      navigation_.RequestBranchFromCommit(commit_id, std::move(display_name)));
+}
+
+auto EditorSessionService::RetrySave() -> EditorSessionResult {
+  return FinishVersionNavigation(navigation_.RetrySaveAfterFailure());
+}
+
+auto EditorSessionService::DiscardAndContinue() -> EditorSessionResult {
+  return FinishVersionNavigation(navigation_.DiscardAndContinueAfterFailure());
+}
+
+auto EditorSessionService::CancelPendingNavigation() -> EditorSessionResult {
+  navigation_.CancelPendingNavigation();
+  EditorSessionResult result;
+  result.kind     = EditorSessionResultKind::StateChanged;
+  result.state    = lifecycle_.state();
+  result.identity = lifecycle_.identity();
+  result.message  = "Pending navigation cancelled";
+  return Emit(std::move(result));
 }
 
 auto EditorSessionService::RenameVersion(const version_ref_id_t& version_id,

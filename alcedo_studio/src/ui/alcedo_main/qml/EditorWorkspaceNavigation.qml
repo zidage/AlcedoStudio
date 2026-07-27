@@ -91,7 +91,7 @@ Item {
             objectName: "workspaceSwitchTrack"
             anchors.centerIn: parent
             width: parent.width - appTheme.spaceXs
-            height: root.opticalIconSize + appTheme.spaceMd
+            height: appTheme.iconButtonHitSizeCompact - appTheme.spaceSm
             radius: appTheme.controlRadiusSmall
             color: root.colBgBase
             border.width: 1

@@ -69,7 +69,7 @@ Item {
             if (renameMode) {
                 root.historyModel.renameVersion(editVersionId, name)
             } else {
-                root.historyModel.createVersion(name)
+                root.historyModel.createRootVersion(name)
             }
         }
 

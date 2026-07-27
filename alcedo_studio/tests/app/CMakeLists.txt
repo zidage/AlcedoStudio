@@ -196,7 +196,8 @@ alcedo_register_test_target(EditorSessionEditControllerTest app ci_core)
 # the five module test targets above.
 add_executable(EditorSessionServiceFacadeTest ${ALCEDO_TEST_ROOT}/app/editor_session_service_facade_test.cpp)
 target_include_directories(EditorSessionServiceFacadeTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditorSessionServiceFacadeTest EditorSessionService GTest::gtest_main)
+target_link_libraries(EditorSessionServiceFacadeTest
+    EditorSessionService JSON xxHash ${ALCEDO_TEST_OPENCV_MIN_DEPS} GTest::gtest_main)
 gtest_discover_tests(EditorSessionServiceFacadeTest
     TEST_PREFIX "EditorSessionServiceFacadeTest."
     PROPERTIES LABELS "ci_core_flow;editor_session")

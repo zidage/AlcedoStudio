@@ -152,6 +152,10 @@ auto EditorSessionController::has_image() const -> bool {
   return active_ && element_id_ > 0 && image_id_ > 0;
 }
 
+auto EditorSessionController::has_pending_recovery() const -> bool {
+  return session_backend_ != nullptr && session_backend_->has_pending_recovery();
+}
+
 auto EditorSessionController::element_id() const -> uint {
   if (session_backend_) {
     return session_backend_->identity().element_id;
@@ -311,9 +315,47 @@ void EditorSessionController::CheckoutVersion(const QString& versionId) {
   }
 }
 
-void EditorSessionController::CreateVersion(const QString& displayName) {
+void EditorSessionController::CreateRootVersion(const QString& displayName) {
   if (!session_backend_ || displayName.trimmed().isEmpty()) return;
-  session_backend_->CreateVersion(displayName.trimmed().toStdString());
+  session_backend_->CreateRootVersion(displayName.trimmed().toStdString());
+  SyncIdentityFromBackend();
+  emit StateChanged();
+  emit HistoryChanged();
+}
+
+void EditorSessionController::BranchFromCommit(const QString& commitId,
+                                               const QString& displayName) {
+  if (!session_backend_ || commitId.trimmed().isEmpty() || displayName.trimmed().isEmpty()) return;
+  try {
+    const auto id = alcedo::Hash128::FromString(commitId.trimmed().toStdString());
+    session_backend_->BranchFromCommit(id, displayName.trimmed().toStdString());
+    SyncIdentityFromBackend();
+    emit StateChanged();
+    emit HistoryChanged();
+  } catch (const std::exception&) {
+  }
+}
+
+void EditorSessionController::RetrySave() {
+  if (!session_backend_) return;
+  session_backend_->RetrySave();
+  SyncIdentityFromBackend();
+  emit StateChanged();
+  emit HistoryChanged();
+}
+
+void EditorSessionController::DiscardAndContinue() {
+  if (!session_backend_) return;
+  session_backend_->DiscardAndContinue();
+  SyncIdentityFromBackend();
+  emit StateChanged();
+  emit HistoryChanged();
+}
+
+void EditorSessionController::CancelPendingNavigation() {
+  if (!session_backend_) return;
+  session_backend_->CancelPendingNavigation();
+  SyncIdentityFromBackend();
   emit StateChanged();
   emit HistoryChanged();
 }

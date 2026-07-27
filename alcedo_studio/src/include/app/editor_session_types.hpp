@@ -16,6 +16,13 @@ namespace alcedo {
 
 /// Explicit editor-session lifecycle states (Phase 5A).
 /// UI shell observes these; it never drives pipeline scheduling directly.
+///
+/// `RetainedImageFailure` is a non-fatal failure state introduced by Phase 7A
+/// repair: a save or Version-checkpoint failed, but the prior image identity,
+/// guards, and last presented frame are still valid. `hasImage` stays true so
+/// the viewport keeps showing the retained frame instead of the empty-editor
+/// placeholder. Recovery actions (Retry Save, Discard and Continue, Cancel)
+/// resolve back to Interactive, Saving, or the pending target.
 enum class EditorSessionState : std::uint8_t {
   NoImage = 0,
   Acquiring,
@@ -23,6 +30,7 @@ enum class EditorSessionState : std::uint8_t {
   Interactive,
   Saving,
   Switching,
+  RetainedImageFailure,
   Failed,
   ShuttingDown,
 };
@@ -112,6 +120,8 @@ struct EditorSessionResult {
       return "Saving";
     case EditorSessionState::Switching:
       return "Switching";
+    case EditorSessionState::RetainedImageFailure:
+      return "RetainedImageFailure";
     case EditorSessionState::Failed:
       return "Failed";
     case EditorSessionState::ShuttingDown:
@@ -127,6 +137,7 @@ struct EditorSessionResult {
     case EditorSessionState::Interactive:
     case EditorSessionState::Saving:
     case EditorSessionState::Switching:
+    case EditorSessionState::RetainedImageFailure:
       return true;
     case EditorSessionState::NoImage:
     case EditorSessionState::Failed:

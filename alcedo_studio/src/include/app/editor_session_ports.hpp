@@ -106,12 +106,31 @@ class IEditorHistoryPort {
     return false;
   }
 
-  virtual auto CreateVersion(const EditorHistoryGuardHandle& /*guard*/,
-                             std::string /*display_name*/, version_ref_id_t* /*version_id*/,
-                             std::string* error) -> bool {
-    if (error != nullptr) *error = "Version creation is not supported by this history port";
+  /// Phase 7A: create a new Version at the image root (null head), set it
+  /// active, rebuild the pipeline, clear redo, and publish the clean root
+  /// snapshot. The new ref replaces the ambiguous active-head creation. Fail
+  /// closed: prior ref/pipeline/snapshot remain published on failure.
+  virtual auto CreateRootVersionAndCheckout(const EditorHistoryGuardHandle& /*guard*/,
+                                             std::string /*display_name*/,
+                                             version_ref_id_t* /*version_id*/, std::string* error)
+      -> bool {
+    if (error != nullptr)
+      *error = "Root Version creation is not supported by this history port";
     return false;
   }
+  /// Phase 7A: create a new Version at an explicit commit, set it active,
+  /// rebuild the pipeline, clear redo, and publish the matching snapshot. Fail
+  /// closed: prior ref/pipeline/snapshot remain published on failure.
+  virtual auto BranchFromCommitAndCheckout(const EditorHistoryGuardHandle& /*guard*/,
+                                            const commit_hash_t& /*commit_id*/,
+                                            std::string /*display_name*/,
+                                            version_ref_id_t* /*version_id*/, std::string* error)
+      -> bool {
+    if (error != nullptr)
+      *error = "Branch creation is not supported by this history port";
+    return false;
+  }
+
   virtual auto RenameVersion(const EditorHistoryGuardHandle& /*guard*/,
                              const Hash128& /*version_id*/, std::string /*display_name*/,
                              std::string* error) -> bool {

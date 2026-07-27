@@ -130,9 +130,26 @@ TEST_F(EditorSessionLifecycleTest, FailedSwitchKeepsCurrentImage) {
   EXPECT_EQ(lifecycle_->state(), EditorSessionState::Interactive);
 
   lifecycle_->KeepCurrentAfterCheckpointFailure("save failed");
-  EXPECT_EQ(lifecycle_->state(), EditorSessionState::Failed);
+  EXPECT_EQ(lifecycle_->state(), EditorSessionState::RetainedImageFailure);
+  EXPECT_TRUE(lifecycle_->has_image());
   EXPECT_EQ(lifecycle_->last_error(), "save failed");
   EXPECT_EQ(lifecycle_->identity().element_id, static_cast<sl_element_id_t>(1));
+}
+
+TEST_F(EditorSessionLifecycleTest, RetainedImageFailureResumesInteractiveWithoutChangingIdentity) {
+  OpenImage(1, 2);
+  const auto prior_identity = lifecycle_->identity();
+
+  lifecycle_->KeepCurrentAfterCheckpointFailure("save failed");
+  lifecycle_->ResumeInteractiveAfterFailure();
+
+  EXPECT_EQ(lifecycle_->state(), EditorSessionState::Interactive);
+  EXPECT_TRUE(lifecycle_->has_image());
+  EXPECT_EQ(lifecycle_->identity().element_id, prior_identity.element_id);
+  EXPECT_EQ(lifecycle_->identity().image_id, prior_identity.image_id);
+  EXPECT_EQ(lifecycle_->identity().session_generation, prior_identity.session_generation);
+  EXPECT_EQ(lifecycle_->identity().render_generation, prior_identity.render_generation);
+  EXPECT_EQ(lifecycle_->identity().view_generation, prior_identity.view_generation);
 }
 
 TEST_F(EditorSessionLifecycleTest, BeginShutdownTransitionsToShuttingDown) {

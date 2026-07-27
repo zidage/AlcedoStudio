@@ -14,14 +14,18 @@ Item {
     property var interactionPolicy: null
     property var adjustmentTransfer: (typeof appModules !== "undefined" && appModules)
                                       ? appModules.adjustmentTransfer : null
+    property bool recoveryPending: false
     property var historyModel: internalHistoryModel
 
     readonly property bool versionCheckoutEnabled: interactionPolicy
-                                                  ? Boolean(interactionPolicy.canCheckoutVersion)
-                                                  : true
-    readonly property string versionCheckoutDisabledReason: interactionPolicy
-                                                            ? String(interactionPolicy.checkoutVersionReason || "")
-                                                            : ""
+                                                  ? !root.recoveryPending
+                                                    && Boolean(interactionPolicy.canCheckoutVersion)
+                                                  : !root.recoveryPending
+    readonly property string versionCheckoutDisabledReason: root.recoveryPending
+                                                            ? qsTr("Resolve the editor save first")
+                                                            : (interactionPolicy
+                                                               ? String(interactionPolicy.checkoutVersionReason || "")
+                                                               : "")
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
     readonly property color colMuted: theme ? theme.colTextMuted : appTheme.textMutedColor

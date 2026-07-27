@@ -58,9 +58,19 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
   auto ReadHistorySnapshot(const alcedo::EditorHistoryGuardHandle& guard,
                            alcedo::EditorHistorySnapshot* snapshot, std::string* error)
       -> bool override;
-  /// Create a named ref at the current working head.
-  auto CreateVersion(const alcedo::EditorHistoryGuardHandle& guard, std::string display_name,
-                     alcedo::version_ref_id_t* version_id, std::string* error) -> bool override;
+  /// Phase 7A: create a named ref at the image root, set it active, rebuild the
+  /// pipeline, clear redo, and publish the clean root snapshot.
+  auto CreateRootVersionAndCheckout(const alcedo::EditorHistoryGuardHandle& guard,
+                                     std::string display_name,
+                                     alcedo::version_ref_id_t* version_id,
+                                     std::string* error) -> bool override;
+  /// Phase 7A: create a named ref at an explicit commit, set it active,
+  /// rebuild the pipeline, clear redo, and publish the matching snapshot.
+  auto BranchFromCommitAndCheckout(const alcedo::EditorHistoryGuardHandle&  guard,
+                                   const alcedo::commit_hash_t&            commit_id,
+                                   std::string                              display_name,
+                                   alcedo::version_ref_id_t*                version_id,
+                                   std::string*                            error) -> bool override;
   auto RenameVersion(const alcedo::EditorHistoryGuardHandle& guard,
                      const alcedo::Hash128& version_id, std::string display_name,
                      std::string* error) -> bool override;

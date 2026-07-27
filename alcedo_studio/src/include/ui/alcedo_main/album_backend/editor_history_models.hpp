@@ -99,7 +99,8 @@ class EditorHistoryModel : public QAbstractListModel {
   Q_INVOKABLE void   undo();
   Q_INVOKABLE void   redo();
   Q_INVOKABLE void   checkoutVersion(const QString& versionId);
-  Q_INVOKABLE void   createVersion(const QString& displayName);
+  Q_INVOKABLE void   createRootVersion(const QString& displayName);
+  Q_INVOKABLE void   branchFromCommit(const QString& commitId, const QString& displayName);
   Q_INVOKABLE void   renameVersion(const QString& versionId, const QString& displayName);
   Q_INVOKABLE void   removeVersion(const QString& versionId);
 

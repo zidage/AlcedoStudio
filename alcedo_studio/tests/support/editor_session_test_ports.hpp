@@ -76,6 +76,15 @@ class FakeEditorHistoryPort final : public IEditorHistoryPort {
   int  checkout_count           = 0;
   bool fail_checkout            = false;
   Hash128 last_checkout_version{};
+  bool   fail_root_version      = false;
+  bool   fail_branch_version    = false;
+  int    root_version_count     = 0;
+  int    branch_version_count   = 0;
+  Hash128 last_root_version{0xaaaaaaaaULL, 0xbbbbbbbbULL};
+  Hash128 last_branch_version{0xccccccccULL, 0xddddddddULL};
+  commit_hash_t last_branch_commit{};
+  version_ref_id_t active_version_id{};
+  version_ref_id_t last_commit_version{};
   EditorRenderAdjustmentSnapshot current_snapshot{};
   EditorAdjustmentPatch          last_captured_patch{};
   EditorAdjustmentPatch          last_committed_patch{};
@@ -107,6 +116,7 @@ class FakeEditorHistoryPort final : public IEditorHistoryPort {
                         std::string* error) -> bool override {
     ++commit_count;
     last_committed_patch = patch;
+    last_commit_version = active_version_id;
     if (fail_commit) {
       if (error != nullptr) {
         *error = "mini-Git journal append failed";
@@ -169,6 +179,33 @@ class FakeEditorHistoryPort final : public IEditorHistoryPort {
       }
       return false;
     }
+    return true;
+  }
+
+  auto CreateRootVersionAndCheckout(const EditorHistoryGuardHandle&, std::string,
+                                    version_ref_id_t* version_id, std::string* error)
+      -> bool override {
+    ++root_version_count;
+    if (fail_root_version) {
+      if (error != nullptr) *error = "root Version creation failed";
+      return false;
+    }
+    active_version_id = last_root_version;
+    if (version_id != nullptr) *version_id = last_root_version;
+    return true;
+  }
+
+  auto BranchFromCommitAndCheckout(const EditorHistoryGuardHandle&, const commit_hash_t& commit_id,
+                                  std::string, version_ref_id_t* version_id, std::string* error)
+      -> bool override {
+    ++branch_version_count;
+    last_branch_commit = commit_id;
+    if (fail_branch_version) {
+      if (error != nullptr) *error = "branch creation failed";
+      return false;
+    }
+    active_version_id = last_branch_version;
+    if (version_id != nullptr) *version_id = last_branch_version;
     return true;
   }
 };
