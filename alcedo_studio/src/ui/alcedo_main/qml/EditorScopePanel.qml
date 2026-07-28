@@ -23,9 +23,7 @@ Item {
                                         : false
     readonly property color colBase: theme ? theme.colBgBase : appTheme.bgBaseColor
     readonly property color colCardBorder: theme ? theme.colCardBorder : appTheme.cardBorderColor
-    readonly property color colText: theme ? theme.colText : appTheme.textColor
     readonly property color colMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
-    readonly property color colHover: theme ? theme.colHover : appTheme.hoverColor
     readonly property color colSelected: appTheme.editorListSelectedFillColor
     readonly property color colSelectedInk: appTheme.editorListSelectedInkColor
     readonly property color colGrid: theme ? theme.colScopeGrid : appTheme.scopeGridColor
@@ -67,91 +65,31 @@ Item {
         anchors.fill: parent
         spacing: appTheme.spaceXs
 
-        RowLayout {
-            id: scopeToolbar
-            objectName: "editorScopeToolbar"
+        SlidingIconNav {
+            id: scopeModeNav
+            objectName: "editorScopeModeNav"
             Layout.fillWidth: true
-            Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
-            spacing: appTheme.spaceXs
-
-            Label {
-                Layout.fillWidth: true
-                text: qsTr("Scopes")
-                color: root.colText
-                font.family: theme ? theme.dataFontFamily : appTheme.dataFontFamily
-                font.pixelSize: appTheme.fontSizeCaption
-                font.weight: appTheme.fontWeightStrong
-                verticalAlignment: Text.AlignVCenter
-            }
-
-            Button {
-                id: histogramButton
-                objectName: "editorScopeModeHistogram"
-                property int viewIndex: 0
-                Layout.preferredWidth: 92
-                Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
-                text: qsTr("Histogram")
-                checkable: true
-                checked: root.scopeController ? root.scopeController.activeView === viewIndex : true
-                enabled: root.controlsEnabled
-                Accessible.role: Accessible.Button
-                Accessible.name: qsTr("Show histogram")
-                onClicked: if (root.scopeController) root.scopeController.activeView = viewIndex
-
-                background: Rectangle {
-                    radius: appTheme.controlRadiusSmall
-                    color: histogramButton.checked
-                           ? root.colSelected
-                           : (histogramButton.hovered ? root.colHover : root.colBase)
-                    border.width: 1
-                    border.color: histogramButton.checked ? root.colSelected : root.colCardBorder
-                }
-                contentItem: Text {
-                    text: histogramButton.text
-                    color: histogramButton.checked ? root.colSelectedInk : root.colMuted
-                    font.family: theme ? theme.uiFontFamily : appTheme.uiFontFamily
-                    font.pixelSize: appTheme.fontSizeCaption
-                    font.weight: histogramButton.checked
-                                ? appTheme.fontWeightStrong
-                                : appTheme.fontWeightRegular
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-            }
-
-            Button {
-                id: waveformButton
-                objectName: "editorScopeModeWaveform"
-                property int viewIndex: 1
-                Layout.preferredWidth: 92
-                Layout.preferredHeight: appTheme.iconButtonHitSizeCompact
-                text: qsTr("Waveform")
-                checkable: true
-                checked: root.scopeController ? root.scopeController.activeView === viewIndex : false
-                enabled: root.controlsEnabled
-                Accessible.role: Accessible.Button
-                Accessible.name: qsTr("Show waveform")
-                onClicked: if (root.scopeController) root.scopeController.activeView = viewIndex
-
-                background: Rectangle {
-                    radius: appTheme.controlRadiusSmall
-                    color: waveformButton.checked
-                           ? root.colSelected
-                           : (waveformButton.hovered ? root.colHover : root.colBase)
-                    border.width: 1
-                    border.color: waveformButton.checked ? root.colSelected : root.colCardBorder
-                }
-                contentItem: Text {
-                    text: waveformButton.text
-                    color: waveformButton.checked ? root.colSelectedInk : root.colMuted
-                    font.family: theme ? theme.uiFontFamily : appTheme.uiFontFamily
-                    font.pixelSize: appTheme.fontSizeCaption
-                    font.weight: waveformButton.checked
-                                ? appTheme.fontWeightStrong
-                                : appTheme.fontWeightRegular
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
+            Layout.preferredHeight: implicitHeight
+            currentKey: root.scopeController && root.scopeController.activeView === 1
+                        ? "waveform" : "histogram"
+            controlsEnabled: root.controlsEnabled
+            trackColor: root.colBase
+            trackBorderColor: root.colCardBorder
+            idleIconColor: root.colMuted
+            selectedFillColor: root.colSelected
+            selectedInkColor: root.colSelectedInk
+            thumbObjectName: "editorScopeModeNavThumb"
+            items: [
+                { key: "histogram", icon: "qrc:/panel_icons/histogram.svg",
+                  label: qsTr("Show histogram"),
+                  itemObjectName: "editorScopeModeHistogram" },
+                { key: "waveform", icon: "qrc:/panel_icons/waveform.svg",
+                  label: qsTr("Show waveform"),
+                  itemObjectName: "editorScopeModeWaveform" }
+            ]
+            onActivated: key => {
+                if (root.scopeController)
+                    root.scopeController.activeView = key === "waveform" ? 1 : 0
             }
         }
 

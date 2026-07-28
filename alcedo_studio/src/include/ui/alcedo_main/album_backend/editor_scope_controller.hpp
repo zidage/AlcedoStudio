@@ -16,6 +16,8 @@
 
 namespace alcedo::ui {
 
+class EditorScopeItem;
+
 namespace test {
 class EditorScopeControllerTestPeer;
 }  // namespace test
@@ -84,17 +86,21 @@ class EditorScopeController final : public QObject {
   void VisualActiveChanged();
   void ActiveViewChanged();
   void SnapshotChanged();
+  void FrameRequested();
 
  private:
   void pollSnapshot();
   void scheduleSnapshotRefresh();
   auto refreshSnapshotNow() -> bool;
-  auto publishSnapshot(const alcedo::ScopeRenderSnapshot&   snapshot,
-                       std::uint64_t                        expected_image_identity,
-                       std::uint64_t                        expected_image_generation,
-                       std::uint64_t                        expected_request_revision) -> bool;
+  auto publishSnapshot(alcedo::ScopeRenderSnapshot snapshot, std::uint64_t expected_image_identity,
+                       std::uint64_t expected_image_generation,
+                       std::uint64_t expected_request_revision) -> bool;
+  [[nodiscard]] auto snapshot_view() const -> const alcedo::ScopeRenderSnapshot& {
+    return snapshot_;
+  }
   void clearSnapshot();
 
+  friend class EditorScopeItem;
   friend class test::EditorScopeControllerTestPeer;
 
   std::shared_ptr<alcedo::IScopeAnalyzer>           analyzer_;

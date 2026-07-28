@@ -7,8 +7,6 @@
 /// prefs, project-switch session seal, library view-state restore, real QML
 /// interaction entrypoints, and Phase 4C visual/motion contracts.
 
-#include "ui/main_qml_test_fixture.hpp"
-
 #include <QColor>
 #include <QPoint>
 #include <QQuickItem>
@@ -18,11 +16,14 @@
 #include <QVariant>
 #include <QWheelEvent>
 
+#include "ui/main_qml_test_fixture.hpp"
+
 #ifdef HAVE_CUDA
 #include <cuda_runtime_api.h>
 #endif
 #ifdef HAVE_OPENCL
 #include <CL/cl.h>
+
 #include "opencl/opencl_context.hpp"
 #endif
 
@@ -32,18 +33,18 @@
 #include <vector>
 
 #include "app/editor_render_intent.hpp"
+#include "ui/album_backend_seeded_project_fixture.hpp"
 #include "ui/alcedo_main/album_backend/album_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp"
-#include "ui/album_backend_seeded_project_fixture.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
 #include "ui/alcedo_main/editor_dialog/editor_dialog.hpp"
 #include "ui/edit_viewer/frame_sink.hpp"
 #include "ui/edit_viewer/view_transform_controller.hpp"
+#include "ui/editor_rhi/direct_frame_sink.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
-#include "ui/editor_rhi/direct_frame_sink.hpp"
 
 namespace alcedo::ui::test {
 namespace {
@@ -77,14 +78,14 @@ class ScopedIniSettings {
     QSettings::setDefaultFormat(prev_format_);
   }
 
-  ScopedIniSettings(const ScopedIniSettings&) = delete;
+  ScopedIniSettings(const ScopedIniSettings&)            = delete;
   ScopedIniSettings& operator=(const ScopedIniSettings&) = delete;
 
  private:
-  QString prev_org_;
-  QString prev_app_;
+  QString           prev_org_;
+  QString           prev_app_;
   QSettings::Format prev_format_;
-  QString settings_root_;
+  QString           settings_root_;
 };
 
 auto CenterOfItem(QQuickItem* item) -> QPoint {
@@ -97,18 +98,18 @@ void SeedLibraryThumbnails(ApplicationModuleHost& host, int count, int content_h
   items.reserve(static_cast<size_t>(count));
   for (int i = 0; i < count; ++i) {
     AlbumItem item;
-    item.element_id = static_cast<sl_element_id_t>(1000 + i);
-    item.image_id = static_cast<image_id_t>(2000 + i);
-    item.file_id = static_cast<sl_element_id_t>(3000 + i);
-    item.file_name = QStringLiteral("test_%1.arw").arg(i);
-    item.extension = QStringLiteral("arw");
+    item.element_id     = static_cast<sl_element_id_t>(1000 + i);
+    item.image_id       = static_cast<image_id_t>(2000 + i);
+    item.file_id        = static_cast<sl_element_id_t>(3000 + i);
+    item.file_name      = QStringLiteral("test_%1.arw").arg(i);
+    item.extension      = QStringLiteral("arw");
     // Empty data URL: the grid renders placeholder cards (no decode attempt) so
     // the async QQuickImage decode-failure warning never fires. Routing, scroll,
     // and filter tests do not depend on thumbnail pixels.
     item.thumb_data_url = QString();
     items.push_back(item);
   }
-  host.library()->view_state().all_images_ = items;
+  host.library()->view_state().all_images_  = items;
   host.library()->view_state().total_count_ = items.size();
   host.library()->model().resetModel(items, items.size());
   host.library()->NotifyThumbnailsChanged();
@@ -125,7 +126,7 @@ TEST_F(WorkspaceShellTests, WorkspaceRouterOpensEmptyEditorAndReturnsToLibrary) 
   ASSERT_NE(loaded->window, nullptr);
   ProcessEvents(50);
 
-  auto* router = loaded->host.workspace_router();
+  auto* router  = loaded->host.workspace_router();
   auto* session = loaded->host.editor_session();
   ASSERT_NE(router, nullptr);
   ASSERT_NE(session, nullptr);
@@ -196,12 +197,12 @@ TEST_F(WorkspaceShellTests, RepeatedWorkspaceSwitchesReturnToObjectBaseline) {
   ProcessEvents(30);
   const int baseline_timers =
       loaded->window->findChildren<QTimer*>(Qt::FindChildrenRecursively).size();
-  const int library_creates_before = workspace_host->property("libraryCreateCount").toInt();
+  const int library_creates_before  = workspace_host->property("libraryCreateCount").toInt();
   const int library_destroys_before = workspace_host->property("libraryDestroyCount").toInt();
 
   for (int i = 0; i < 8; ++i) {
     loaded->host.workspace_router()->OpenEditor(static_cast<uint>(i + 1),
-                                                 static_cast<uint>(i + 10));
+                                                static_cast<uint>(i + 10));
     ProcessEvents(20);
     EXPECT_EQ(workspace_host->property("activeLoaderCount").toInt(), 1) << "iter " << i;
     EXPECT_NE(loaded->window->findChild<QObject*>(QStringLiteral("editorWorkspace")), nullptr);
@@ -215,13 +216,14 @@ TEST_F(WorkspaceShellTests, RepeatedWorkspaceSwitchesReturnToObjectBaseline) {
   }
 
   ProcessEvents(30);
-  const int library_creates = workspace_host->property("libraryCreateCount").toInt();
+  const int library_creates  = workspace_host->property("libraryCreateCount").toInt();
   const int library_destroys = workspace_host->property("libraryDestroyCount").toInt();
-  const int editor_creates = workspace_host->property("editorCreateCount").toInt();
-  const int editor_destroys = workspace_host->property("editorDestroyCount").toInt();
+  const int editor_creates   = workspace_host->property("editorCreateCount").toInt();
+  const int editor_destroys  = workspace_host->property("editorDestroyCount").toInt();
 
   // One live library instance remains; every prior library and every editor must be destroyed.
-  // Initial create is already in library_creates_before; 8 switches add 8 more creates and 8 destroys.
+  // Initial create is already in library_creates_before; 8 switches add 8 more creates and 8
+  // destroys.
   EXPECT_EQ(library_creates - library_creates_before, 8);
   EXPECT_EQ(library_destroys - library_destroys_before, 8);
   EXPECT_EQ(library_creates, library_destroys + 1);
@@ -263,7 +265,7 @@ TEST_F(WorkspaceShellTests, FilmstripCollapseViaKeyboardPersistsInIsolatedSettin
   EXPECT_DOUBLE_EQ(session->filmstrip_expanded_height(), 140.0);
 
   auto* filmstrip = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorFilmstrip"));
-  auto* handle = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorFilmstripHandle"));
+  auto* handle    = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorFilmstripHandle"));
   ASSERT_NE(filmstrip, nullptr);
   ASSERT_NE(handle, nullptr);
   EXPECT_TRUE(handle->activeFocusOnTab());
@@ -408,10 +410,10 @@ TEST_F(WorkspaceShellTests, InspectorAdaptiveWidthUsesWorkspaceWidthNearMinimum)
   // At the original formula, adaptive max used window width - 24 - panes.
   // After extraction, workspace width already excludes those 24px, so the formula
   // must not subtract them again.
-  const qreal left_pane = 276.0;
+  const qreal left_pane  = 276.0;
   const qreal center_min = 560.0;
-  const qreal spacing = 36.0;
-  const qreal handle = 5.0;
+  const qreal spacing    = 36.0;
+  const qreal handle     = 5.0;
 
   struct Case {
     int window_width;
@@ -424,14 +426,14 @@ TEST_F(WorkspaceShellTests, InspectorAdaptiveWidthUsesWorkspaceWidthNearMinimum)
     EXPECT_NEAR(workspace_width, static_cast<qreal>(c.window_width) - 24.0, 1.0)
         << "window " << c.window_width;
 
-    const qreal expected = std::max(
-        0.0, workspace_width - left_pane - center_min - spacing - handle);
+    const qreal expected =
+        std::max(0.0, workspace_width - left_pane - center_min - spacing - handle);
     const qreal actual = library->property("inspectorAdaptiveMaxWidth").toReal();
     EXPECT_NEAR(actual, expected, 1.0) << "window " << c.window_width;
 
     // Wrong formula that still subtracts window margins would be 24px smaller.
-    const qreal wrong = std::max(
-        0.0, workspace_width - left_pane - center_min - 24.0 - spacing - handle);
+    const qreal wrong =
+        std::max(0.0, workspace_width - left_pane - center_min - 24.0 - spacing - handle);
     if (expected > 0.0) {
       EXPECT_GT(actual + 0.5, wrong) << "window " << c.window_width;
     }
@@ -480,18 +482,18 @@ TEST_F(WorkspaceShellTests, DeferredThumbnailReleasesFlushWhenLibraryDestroyedDu
   ASSERT_NE(grid, nullptr);
 
   constexpr uint kElementId = 1000;
-  constexpr uint kImageId = 2000;
-  constexpr uint kMaxEdge = 512;
+  constexpr uint kImageId   = 2000;
+  constexpr uint kMaxEdge   = 512;
   loaded->host.library()->SetThumbnailVisible(kElementId, kImageId, true, kMaxEdge);
   ASSERT_TRUE(loaded->host.library()->thumbs().IsThumbnailPinned(kElementId));
 
   // Simulate mid-zoom deferred release: suspend bindings, queue a release, then
   // destroy the library by opening the editor before the resume timer fires.
   ASSERT_TRUE(QMetaObject::invokeMethod(grid, "beginThumbnailBindingSuspension"));
-  ASSERT_TRUE(QMetaObject::invokeMethod(
-      grid, "deferThumbnailRelease", Q_ARG(QVariant, QVariant::fromValue(kElementId)),
-      Q_ARG(QVariant, QVariant::fromValue(kImageId)),
-      Q_ARG(QVariant, QVariant::fromValue(kMaxEdge))));
+  ASSERT_TRUE(QMetaObject::invokeMethod(grid, "deferThumbnailRelease",
+                                        Q_ARG(QVariant, QVariant::fromValue(kElementId)),
+                                        Q_ARG(QVariant, QVariant::fromValue(kImageId)),
+                                        Q_ARG(QVariant, QVariant::fromValue(kMaxEdge))));
   ProcessEvents(10);
 
   loaded->host.workspace_router()->OpenEditor(kElementId, kImageId);
@@ -531,8 +533,7 @@ TEST_F(WorkspaceShellTests, RealQmlEntrypointsDriveRoutingFocusAndFilmstripHeigh
   // not an editor-local control. The editor back button no longer exists.
   EXPECT_EQ(loaded->window->findChild<QObject*>(QStringLiteral("editorBackToLibraryButton")),
             nullptr);
-  auto* library_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  auto* library_nav = loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
   ASSERT_NE(library_nav, nullptr);
   QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(library_nav));
   ProcessEvents(80);
@@ -548,7 +549,7 @@ TEST_F(WorkspaceShellTests, RealQmlEntrypointsDriveRoutingFocusAndFilmstripHeigh
   ASSERT_NE(empty, nullptr);
   EXPECT_TRUE(empty->isVisible());
 
-  auto* handle = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorFilmstripHandle"));
+  auto* handle    = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorFilmstripHandle"));
   auto* filmstrip = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorFilmstrip"));
   ASSERT_NE(handle, nullptr);
   ASSERT_NE(filmstrip, nullptr);
@@ -572,14 +573,15 @@ TEST_F(WorkspaceShellTests, PresentationViewportBindingSurvivesImageSwitchAToBTo
   ASSERT_NE(loaded->window, nullptr);
 
   auto* session = loaded->host.editor_session();
-  auto* router = loaded->host.workspace_router();
+  auto* router  = loaded->host.workspace_router();
   ASSERT_NE(session, nullptr);
   ASSERT_NE(router, nullptr);
 
   router->OpenEditor(10, 100);
   ProcessEvents(60);
   EXPECT_TRUE(session->presentation_viewport_bound());
-  auto* viewport_a = qobject_cast<editor_rhi::EditorViewportItem*>(session->presentation_viewport());
+  auto* viewport_a =
+      qobject_cast<editor_rhi::EditorViewportItem*>(session->presentation_viewport());
   ASSERT_NE(viewport_a, nullptr);
   auto* sink_a = session->presentation_frame_sink();
   ASSERT_NE(sink_a, nullptr);
@@ -593,7 +595,8 @@ TEST_F(WorkspaceShellTests, PresentationViewportBindingSurvivesImageSwitchAToBTo
   ProcessEvents(60);
   EXPECT_TRUE(session->presentation_viewport_bound())
       << "image switch must not drop the presentation binding";
-  auto* viewport_b = qobject_cast<editor_rhi::EditorViewportItem*>(session->presentation_viewport());
+  auto* viewport_b =
+      qobject_cast<editor_rhi::EditorViewportItem*>(session->presentation_viewport());
   ASSERT_NE(viewport_b, nullptr);
   EXPECT_EQ(viewport_b, viewport_a) << "same QML viewport instance";
   auto* sink_b = session->presentation_frame_sink();
@@ -638,8 +641,7 @@ TEST_F(WorkspaceShellTests, ProductionFrameSinkAcceptsThreeLayerFrameSubmissions
   ASSERT_TRUE(session->presentation_viewport_bound());
   auto* sink = session->presentation_frame_sink();
   ASSERT_NE(sink, nullptr);
-  auto* viewport =
-      qobject_cast<editor_rhi::EditorViewportItem*>(session->presentation_viewport());
+  auto* viewport = qobject_cast<editor_rhi::EditorViewportItem*>(session->presentation_viewport());
   ASSERT_NE(viewport, nullptr);
 
   // Production path: session → presentation_viewport → frameSink → EnsureSize.
@@ -651,9 +653,9 @@ TEST_F(WorkspaceShellTests, ProductionFrameSinkAcceptsThreeLayerFrameSubmissions
                              FrameRole::DetailPatch};
   for (int i = 0; i < 3; ++i) {
     FramePreviewMetadata meta;
-    meta.frame_role = roles[i];
+    meta.frame_role         = roles[i];
     meta.preview_generation = static_cast<std::uint64_t>(i + 1);
-    meta.detail_serial = static_cast<std::uint64_t>(i + 10);
+    meta.detail_serial      = static_cast<std::uint64_t>(i + 10);
     sink->SetNextFramePreviewMetadata(meta);
     sink->SetNextFramePresentationMode(i == 0 ? FramePresentationMode::RoiFrame
                                               : FramePresentationMode::FullFrame);
@@ -685,62 +687,59 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
   ASSERT_NE(scheduler, nullptr);
 
   std::atomic<int> written_frame_count{0};
-  scheduler->SetTestFrameProducer(
-      [&written_frame_count](alcedo::IFrameSink* sink,
-                             const alcedo::EditorRenderRequest& request) -> bool {
-        if (!sink) {
-          return false;
-        }
-        const int w = std::max(1, request.intent.requested_width);
-        const int h = std::max(1, request.intent.requested_height);
-        auto mapping = sink->MapResourceForWrite();
-        if (!mapping) {
-          return false;
-        }
-        std::vector<float> pixels(static_cast<size_t>(w) * static_cast<size_t>(h) * 4u, 0.0f);
-        for (int y = 0; y < h; ++y) {
-          for (int x = 0; x < w; ++x) {
-            const size_t i = (static_cast<size_t>(y) * static_cast<size_t>(w) +
-                              static_cast<size_t>(x)) *
-                             4u;
-            pixels[i + 0] = static_cast<float>(x) / static_cast<float>(w);
-            pixels[i + 1] = static_cast<float>(y) / static_cast<float>(h);
-            pixels[i + 2] = 0.25f;
-            pixels[i + 3] = 1.0f;
-          }
-        }
-        bool copied = false;
+  scheduler->SetTestFrameProducer([&written_frame_count](
+                                      alcedo::IFrameSink*                sink,
+                                      const alcedo::EditorRenderRequest& request) -> bool {
+    if (!sink) {
+      return false;
+    }
+    const int w       = std::max(1, request.intent.requested_width);
+    const int h       = std::max(1, request.intent.requested_height);
+    auto      mapping = sink->MapResourceForWrite();
+    if (!mapping) {
+      return false;
+    }
+    std::vector<float> pixels(static_cast<size_t>(w) * static_cast<size_t>(h) * 4u, 0.0f);
+    for (int y = 0; y < h; ++y) {
+      for (int x = 0; x < w; ++x) {
+        const size_t i =
+            (static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)) * 4u;
+        pixels[i + 0] = static_cast<float>(x) / static_cast<float>(w);
+        pixels[i + 1] = static_cast<float>(y) / static_cast<float>(h);
+        pixels[i + 2] = 0.25f;
+        pixels[i + 3] = 1.0f;
+      }
+    }
+    bool copied = false;
 #ifdef HAVE_CUDA
-        if (mapping.memory_domain == alcedo::FrameMemoryDomain::CudaDevice &&
-            mapping.target_type == alcedo::FrameWriteTargetType::CudaArray) {
-          const auto result = cudaMemcpy2DToArray(
-              reinterpret_cast<cudaArray_t>(mapping.image_array), 0, 0, pixels.data(),
-              static_cast<size_t>(w) * sizeof(float) * 4u,
-              static_cast<size_t>(w) * sizeof(float) * 4u, static_cast<size_t>(h),
-              cudaMemcpyHostToDevice);
-          copied = result == cudaSuccess;
-        }
+    if (mapping.memory_domain == alcedo::FrameMemoryDomain::CudaDevice &&
+        mapping.target_type == alcedo::FrameWriteTargetType::CudaArray) {
+      const auto result = cudaMemcpy2DToArray(
+          reinterpret_cast<cudaArray_t>(mapping.image_array), 0, 0, pixels.data(),
+          static_cast<size_t>(w) * sizeof(float) * 4u, static_cast<size_t>(w) * sizeof(float) * 4u,
+          static_cast<size_t>(h), cudaMemcpyHostToDevice);
+      copied = result == cudaSuccess;
+    }
 #endif
 #ifdef HAVE_OPENCL
-        if (mapping.memory_domain == alcedo::FrameMemoryDomain::OpenClDevice &&
-            mapping.target_type == alcedo::FrameWriteTargetType::OpenClImage) {
-          const size_t origin[] = {0, 0, 0};
-          const size_t region[] = {static_cast<size_t>(w), static_cast<size_t>(h), 1};
-          copied = clEnqueueWriteImage(
-                       alcedo::OpenClContext::Instance().Queue(),
-                       reinterpret_cast<cl_mem>(mapping.data), CL_TRUE, origin, region,
-                       static_cast<size_t>(w) * sizeof(float) * 4u, 0, pixels.data(), 0, nullptr,
-                       nullptr) == CL_SUCCESS;
-        }
+    if (mapping.memory_domain == alcedo::FrameMemoryDomain::OpenClDevice &&
+        mapping.target_type == alcedo::FrameWriteTargetType::OpenClImage) {
+      const size_t origin[] = {0, 0, 0};
+      const size_t region[] = {static_cast<size_t>(w), static_cast<size_t>(h), 1};
+      copied                = clEnqueueWriteImage(alcedo::OpenClContext::Instance().Queue(),
+                                                  reinterpret_cast<cl_mem>(mapping.data), CL_TRUE, origin, region,
+                                                  static_cast<size_t>(w) * sizeof(float) * 4u, 0, pixels.data(), 0,
+                                                  nullptr, nullptr) == CL_SUCCESS;
+    }
 #endif
-        sink->UnmapResource();
-        if (!copied) {
-          return false;
-        }
-        sink->NotifyFrameReady();
-        written_frame_count.fetch_add(1, std::memory_order_release);
-        return true;
-      });
+    sink->UnmapResource();
+    if (!copied) {
+      return false;
+    }
+    sink->NotifyFrameReady();
+    written_frame_count.fetch_add(1, std::memory_order_release);
+    return true;
+  });
 
   loaded->host.workspace_router()->OpenEditor(7, 70);
   const auto first_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
@@ -753,13 +752,11 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
   auto* session = loaded->host.editor_session();
   ASSERT_NE(session, nullptr);
   ASSERT_TRUE(session->presentation_viewport_bound());
-  auto* viewport =
-      qobject_cast<editor_rhi::EditorViewportItem*>(session->presentation_viewport());
+  auto* viewport = qobject_cast<editor_rhi::EditorViewportItem*>(session->presentation_viewport());
   ASSERT_NE(viewport, nullptr);
   EXPECT_EQ(viewport->imageIdentity(), 70ull);
   EXPECT_EQ(viewport->imageGeneration(), session->session_generation());
-  ASSERT_EQ(loaded->host.editor_session_service()->state(),
-            alcedo::EditorSessionState::Interactive)
+  ASSERT_EQ(loaded->host.editor_session_service()->state(), alcedo::EditorSessionState::Interactive)
       << loaded->host.editor_session_service()->last_error()
       << " backend=" << viewport->backendName().toStdString()
       << " status=" << viewport->statusText().toStdString()
@@ -786,16 +783,15 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
   // QQuickRhiItem dirty once per move so the ready queue cannot wait behind the
   // mouse-release event.
   const auto composed_before_drag = viewport->presentedFrameCount();
-  const auto wakeups_before_drag = viewport->adjustmentFrameRequestCount();
-  ASSERT_TRUE(session->submitPatch(QStringLiteral("exposure"),
-                                   QStringLiteral(R"({"value":0.10})"), false));
-  ASSERT_TRUE(session->submitPatch(QStringLiteral("exposure"),
-                                   QStringLiteral(R"({"value":0.20})"), false));
-  ASSERT_TRUE(session->submitPatch(QStringLiteral("exposure"),
-                                   QStringLiteral(R"({"value":0.30})"), false));
+  const auto wakeups_before_drag  = viewport->adjustmentFrameRequestCount();
+  ASSERT_TRUE(
+      session->submitPatch(QStringLiteral("exposure"), QStringLiteral(R"({"value":0.10})"), false));
+  ASSERT_TRUE(
+      session->submitPatch(QStringLiteral("exposure"), QStringLiteral(R"({"value":0.20})"), false));
+  ASSERT_TRUE(
+      session->submitPatch(QStringLiteral("exposure"), QStringLiteral(R"({"value":0.30})"), false));
   EXPECT_EQ(viewport->adjustmentFrameRequestCount(), wakeups_before_drag + 3);
-  const auto interactive_deadline =
-      std::chrono::steady_clock::now() + std::chrono::seconds(15);
+  const auto interactive_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
   while (viewport->presentedFrameCount() <= composed_before_drag &&
          std::chrono::steady_clock::now() < interactive_deadline) {
     ProcessEvents(20);
@@ -844,10 +840,10 @@ TEST_F(WorkspaceShellTests, EditorViewportReceivesRealPointerAndWheelEvents) {
   interaction->applyViewTransformForTest(2.0f, 0.0f, 0.0f);
   ProcessEvents(20);
 
-  const float zoom_before = interaction->zoom();
-  const float pan_x_before = interaction->panX();
-  const float pan_y_before = interaction->panY();
-  const QPoint center = CenterOfItem(viewport_item);
+  const float  zoom_before  = interaction->zoom();
+  const float  pan_x_before = interaction->panX();
+  const float  pan_y_before = interaction->panY();
+  const QPoint center       = CenterOfItem(viewport_item);
 
   // Real window mouse press/move/release (pan while zoomed).
   QTest::mousePress(loaded->window, Qt::LeftButton, Qt::NoModifier, center);
@@ -867,19 +863,16 @@ TEST_F(WorkspaceShellTests, EditorViewportReceivesRealPointerAndWheelEvents) {
   // zoom) is what catches the swallowed-pan regression — the final
   // zoomed-or-panned check alone is too weak because a swallowed drag still
   // zooms via the click toggle.
-  const bool left_drag_panned =
-      std::abs(interaction->panX() - pan_x_before) > 1.0e-4f ||
-      std::abs(interaction->panY() - pan_y_before) > 1.0e-4f;
-  EXPECT_TRUE(left_drag_panned)
-      << "left-drag pan was swallowed by the double-tap TapHandler; "
-         "panX/panY unchanged after a zoomed left-button drag";
+  const bool left_drag_panned = std::abs(interaction->panX() - pan_x_before) > 1.0e-4f ||
+                                std::abs(interaction->panY() - pan_y_before) > 1.0e-4f;
+  EXPECT_TRUE(left_drag_panned) << "left-drag pan was swallowed by the double-tap TapHandler; "
+                                   "panX/panY unchanged after a zoomed left-button drag";
 
   // Ctrl+wheel zoom at cursor through the real QML WheelHandler.
-  QPointF angle(0.0, 120.0);
-  QPointF pixel(0.0, 0.0);
-  QWheelEvent wheel(center, loaded->window->mapToGlobal(center), QPoint(),
-                    QPoint(0, 120), Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase,
-                    false);
+  QPointF     angle(0.0, 120.0);
+  QPointF     pixel(0.0, 0.0);
+  QWheelEvent wheel(center, loaded->window->mapToGlobal(center), QPoint(), QPoint(0, 120),
+                    Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase, false);
   QCoreApplication::sendEvent(loaded->window, &wheel);
   ProcessEvents(20);
 
@@ -910,10 +903,8 @@ TEST_F(WorkspaceShellTests, MainNavigationActivatesLibraryAndEditorByMouse) {
   ASSERT_NE(loaded->window, nullptr);
   ProcessEvents(50);
 
-  auto* library_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
-  auto* editor_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  auto* library_nav = loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  auto* editor_nav  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
   ASSERT_NE(library_nav, nullptr);
   ASSERT_NE(editor_nav, nullptr);
   // Navigation is persistent and visible in both workspaces.
@@ -923,8 +914,7 @@ TEST_F(WorkspaceShellTests, MainNavigationActivatesLibraryAndEditorByMouse) {
   EXPECT_TRUE(editor_nav->isEnabled());
 
   // Editor (empty) activated from the library workspace via main nav.
-  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
-                    CenterOfItem(editor_nav));
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(editor_nav));
   ProcessEvents(80);
   EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("editor"));
   EXPECT_TRUE(loaded->host.editor_session()->active());
@@ -939,8 +929,7 @@ TEST_F(WorkspaceShellTests, MainNavigationActivatesLibraryAndEditorByMouse) {
   EXPECT_FALSE(library_nav->property("isActive").toBool());
 
   // Library activated from the editor workspace via main nav.
-  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
-                    CenterOfItem(library_nav));
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(library_nav));
   ProcessEvents(80);
   EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("library"));
   EXPECT_FALSE(loaded->host.editor_session()->active());
@@ -960,10 +949,8 @@ TEST_F(WorkspaceShellTests, MainNavigationActivatesWorkspacesByKeyboard) {
   ASSERT_NE(loaded->window, nullptr);
   ProcessEvents(50);
 
-  auto* library_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
-  auto* editor_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  auto* library_nav = loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  auto* editor_nav  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
   ASSERT_NE(library_nav, nullptr);
   ASSERT_NE(editor_nav, nullptr);
   EXPECT_TRUE(library_nav->activeFocusOnTab());
@@ -1009,15 +996,13 @@ TEST_F(WorkspaceShellTests, MainNavigationEditorButtonIsNoOpWhenAlreadyActive) {
   ASSERT_EQ(loaded->host.editor_session()->element_id(), 42u);
   ASSERT_EQ(loaded->host.editor_session()->image_id(), 7u);
 
-  auto* editor_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  auto* editor_nav = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
   ASSERT_NE(editor_nav, nullptr);
   EXPECT_TRUE(editor_nav->isEnabled());
 
   // Clicking the already-active editor nav must NOT reset to the empty state;
   // the active session is preserved.
-  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
-                    CenterOfItem(editor_nav));
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(editor_nav));
   ProcessEvents(80);
   EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("editor"));
   EXPECT_TRUE(loaded->host.editor_session()->active());
@@ -1038,10 +1023,8 @@ TEST_F(WorkspaceShellTests, MainNavigationDoesNotDuplicateOrLeakAcrossSwitches) 
   ASSERT_NE(workspace_host, nullptr);
   ProcessEvents(40);
 
-  auto* library_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
-  auto* editor_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  auto* library_nav = loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  auto* editor_nav  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
   ASSERT_NE(library_nav, nullptr);
   ASSERT_NE(editor_nav, nullptr);
 
@@ -1056,30 +1039,27 @@ TEST_F(WorkspaceShellTests, MainNavigationDoesNotDuplicateOrLeakAcrossSwitches) 
   EXPECT_FALSE(loaded->window->property("libraryInspectorVisible").toBool());
 
   const int library_creates_before = workspace_host->property("libraryCreateCount").toInt();
-  const int editor_creates_before = workspace_host->property("editorCreateCount").toInt();
+  const int editor_creates_before  = workspace_host->property("editorCreateCount").toInt();
 
   for (int i = 0; i < 6; ++i) {
-    QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
-                      CenterOfItem(editor_nav));
+    QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(editor_nav));
     ProcessEvents(40);
     EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("editor"))
         << "iter " << i;
-    QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
-                      CenterOfItem(library_nav));
+    QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(library_nav));
     ProcessEvents(40);
     EXPECT_EQ(loaded->host.workspace_router()->workspace(), QStringLiteral("library"))
         << "iter " << i;
   }
 
   // Repeated switching must not duplicate the main navigation.
-  EXPECT_EQ(loaded->window->findChildren<QQuickItem*>(
-                QStringLiteral("libraryNavButton")).size(), 1);
-  EXPECT_EQ(loaded->window->findChildren<QQuickItem*>(
-                QStringLiteral("editorNavButton")).size(), 1);
+  EXPECT_EQ(loaded->window->findChildren<QQuickItem*>(QStringLiteral("libraryNavButton")).size(),
+            1);
+  EXPECT_EQ(loaded->window->findChildren<QQuickItem*>(QStringLiteral("editorNavButton")).size(), 1);
 
   // Six round trips add six editor creates and six library creates.
   const int library_creates = workspace_host->property("libraryCreateCount").toInt();
-  const int editor_creates = workspace_host->property("editorCreateCount").toInt();
+  const int editor_creates  = workspace_host->property("editorCreateCount").toInt();
   EXPECT_EQ(library_creates - library_creates_before, 6);
   EXPECT_EQ(editor_creates - editor_creates_before, 6);
 
@@ -1127,10 +1107,8 @@ TEST_F(WorkspaceShellTests, MainNavigationDisabledBeforeProjectLoad) {
   ProcessEvents(50);
 
   EXPECT_FALSE(loaded->host.project()->ServiceReady());
-  auto* library_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
-  auto* editor_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  auto* library_nav = loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  auto* editor_nav  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
   ASSERT_NE(library_nav, nullptr);
   ASSERT_NE(editor_nav, nullptr);
   // Navigation is still present (persistent chrome) but disabled.
@@ -1152,7 +1130,7 @@ TEST_F(WorkspaceShellTests, EditorNavButtonRestoresLastEditedImageAcrossLibraryR
   SeedLibraryThumbnails(loaded->host, 8);
   ProcessEvents(80);
 
-  auto* router = loaded->host.workspace_router();
+  auto* router  = loaded->host.workspace_router();
   auto* session = loaded->host.editor_session();
   ASSERT_NE(router, nullptr);
   ASSERT_NE(session, nullptr);
@@ -1171,11 +1149,9 @@ TEST_F(WorkspaceShellTests, EditorNavButtonRestoresLastEditedImageAcrossLibraryR
 
   // Real Library nav button: OpenLibrary finalizes the session but must keep
   // lastElementId/lastImageId so re-entry can restore the image.
-  auto* library_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  auto* library_nav = loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
   ASSERT_NE(library_nav, nullptr);
-  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
-                    CenterOfItem(library_nav));
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(library_nav));
   ProcessEvents(80);
   EXPECT_EQ(router->workspace(), QStringLiteral("library"));
   EXPECT_FALSE(session->active());
@@ -1183,11 +1159,9 @@ TEST_F(WorkspaceShellTests, EditorNavButtonRestoresLastEditedImageAcrossLibraryR
   EXPECT_EQ(session->last_image_id(), 2000u);
 
   // Real Editor nav button: must restore image A, not open the empty state.
-  auto* editor_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  auto* editor_nav = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
   ASSERT_NE(editor_nav, nullptr);
-  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier,
-                    CenterOfItem(editor_nav));
+  QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(editor_nav));
   ProcessEvents(80);
   EXPECT_EQ(router->workspace(), QStringLiteral("editor"));
   EXPECT_TRUE(session->active());
@@ -1206,15 +1180,15 @@ TEST_F(WorkspaceShellTests, DeletingCurrentEditorImageDropsEditorToEmptyState) {
   ASSERT_TRUE(QCoreApplication::instance());
   const auto seeded = CreateSeededPackedProject(temp_dir_);
   ASSERT_TRUE(seeded.has_value());
-  const auto file_id = static_cast<uint>(seeded->file_id_);
+  const auto file_id  = static_cast<uint>(seeded->file_id_);
   const auto image_id = static_cast<uint>(seeded->image_id_);
 
-  auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);
+  auto       loaded   = LoadMainWindowWithPackedProject(seeded->packed_path_);
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
   ProcessEvents(80);
 
-  auto* router = loaded->host.workspace_router();
+  auto* router  = loaded->host.workspace_router();
   auto* session = loaded->host.editor_session();
   ASSERT_NE(router, nullptr);
   ASSERT_NE(session, nullptr);
@@ -1233,10 +1207,9 @@ TEST_F(WorkspaceShellTests, DeletingCurrentEditorImageDropsEditorToEmptyState) {
   // Drive the real QML delete entry: set pendingDeleteTargets (as the context
   // menu / confirm dialog does) and invoke runDeleteTargets().
   QVariantList targets;
-  targets.push_back(QVariantMap{{QStringLiteral("elementId"), file_id},
-                                {QStringLiteral("imageId"), image_id}});
-  ASSERT_TRUE(loaded->window->setProperty("pendingDeleteTargets",
-                                          QVariant::fromValue(targets)));
+  targets.push_back(
+      QVariantMap{{QStringLiteral("elementId"), file_id}, {QStringLiteral("imageId"), image_id}});
+  ASSERT_TRUE(loaded->window->setProperty("pendingDeleteTargets", QVariant::fromValue(targets)));
   ASSERT_TRUE(QMetaObject::invokeMethod(loaded->window, "runDeleteTargets"));
   ProcessEvents(500);
 
@@ -1266,14 +1239,10 @@ TEST_F(WorkspaceShellTests, MainNavigationButtonsShowHoverPressAndFocusStates) {
   ASSERT_NE(loaded->window, nullptr);
   ProcessEvents(50);
 
-  auto* library_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
-  auto* editor_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
-  auto* thumb =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("workspaceSwitchThumb"));
-  auto* track =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("workspaceSwitchTrack"));
+  auto* library_nav = loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  auto* editor_nav  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  auto* thumb = loaded->window->findChild<QQuickItem*>(QStringLiteral("workspaceSwitchThumb"));
+  auto* track = loaded->window->findChild<QQuickItem*>(QStringLiteral("workspaceSwitchTrack"));
   auto* workspace_switch =
       loaded->window->findChild<QQuickItem*>(QStringLiteral("workspaceSwitch"));
   ASSERT_NE(library_nav, nullptr);
@@ -1341,24 +1310,20 @@ TEST_F(WorkspaceShellTests, LibraryScrollPositionSurvivesEditorRoundTrip) {
   SeedLibraryThumbnails(loaded->host, 80);
   ProcessEvents(80);
 
-  auto* grid =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryThumbnailGridView"));
+  auto* grid = loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryThumbnailGridView"));
   ASSERT_NE(grid, nullptr);
   ProcessEvents(40);
 
   // Scroll to a non-zero position via the real restore path; read back the
   // shell-persisted value.
-  ASSERT_TRUE(QMetaObject::invokeMethod(grid, "restoreContentY",
-                                         Q_ARG(QVariant, QVariant(200.0))));
+  ASSERT_TRUE(QMetaObject::invokeMethod(grid, "restoreContentY", Q_ARG(QVariant, QVariant(200.0))));
   ProcessEvents(80);
   const qreal persisted = loaded->window->property("libraryGridContentY").toReal();
   ASSERT_GT(persisted, 0.0) << "scroll position did not take; grid layout not ready";
 
   // Round-trip via the real nav buttons.
-  auto* editor_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
-  auto* library_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  auto* editor_nav  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  auto* library_nav = loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
   ASSERT_NE(editor_nav, nullptr);
   ASSERT_NE(library_nav, nullptr);
   QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(editor_nav));
@@ -1390,10 +1355,10 @@ TEST_F(WorkspaceShellTests, LibraryFolderFilterSurvivesEditorRoundTrip) {
   ASSERT_TRUE(QCoreApplication::instance());
   const auto seeded = CreateSeededPackedProject(temp_dir_);
   ASSERT_TRUE(seeded.has_value());
-  const auto file_id = static_cast<uint>(seeded->file_id_);
+  const auto file_id  = static_cast<uint>(seeded->file_id_);
   const auto image_id = static_cast<uint>(seeded->image_id_);
 
-  auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);
+  auto       loaded   = LoadMainWindowWithPackedProject(seeded->packed_path_);
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
   ProcessEvents(80);
@@ -1402,15 +1367,13 @@ TEST_F(WorkspaceShellTests, LibraryFolderFilterSurvivesEditorRoundTrip) {
   // Set a non-default filter: create an album, add the image, select the album.
   loaded->host.folders()->CreateFolder(QStringLiteral("AlbumA"));
   ProcessEvents(500);
-  const uint album_id =
-      FindFolderId(loaded->host.folders()->Folders(), QStringLiteral("AlbumA"));
+  const uint album_id = FindFolderId(loaded->host.folders()->Folders(), QStringLiteral("AlbumA"));
   ASSERT_NE(album_id, 0u);
 
   QVariantList targets;
-  targets.push_back(QVariantMap{{QStringLiteral("elementId"), file_id},
-                                {QStringLiteral("imageId"), image_id}});
-  const QVariantMap add_result =
-      loaded->host.images()->AddImagesToFolder(targets, album_id);
+  targets.push_back(
+      QVariantMap{{QStringLiteral("elementId"), file_id}, {QStringLiteral("imageId"), image_id}});
+  const QVariantMap add_result = loaded->host.images()->AddImagesToFolder(targets, album_id);
   ASSERT_TRUE(add_result.value(QStringLiteral("success")).toBool());
   EXPECT_EQ(add_result.value(QStringLiteral("addedCount")).toInt(), 1);
 
@@ -1419,10 +1382,8 @@ TEST_F(WorkspaceShellTests, LibraryFolderFilterSurvivesEditorRoundTrip) {
   ASSERT_EQ(loaded->host.library()->ShownCount(), 1);
 
   // Round-trip via the real nav buttons.
-  auto* editor_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
-  auto* library_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  auto* editor_nav  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  auto* library_nav = loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
   ASSERT_NE(editor_nav, nullptr);
   ASSERT_NE(library_nav, nullptr);
   QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(editor_nav));
@@ -1446,9 +1407,7 @@ TEST_F(WorkspaceShellTests, LibraryFolderFilterSurvivesEditorRoundTrip) {
 
 namespace {
 
-auto SceneX(QQuickItem* item) -> qreal {
-  return item->mapToScene(QPointF(0.0, 0.0)).x();
-}
+auto SceneX(QQuickItem* item) -> qreal { return item->mapToScene(QPointF(0.0, 0.0)).x(); }
 
 }  // namespace
 
@@ -1465,8 +1424,8 @@ TEST_F(WorkspaceShellTests, EditorDesktopOrderIsHistoryCenterAdjustments) {
 
   auto* left = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsRail"));
   auto* center = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorViewportSlot"));
-  auto* right = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
-  auto* scope = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorScopeSlot"));
+  auto* right  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
+  auto* scope  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorScopeSlot"));
   ASSERT_NE(left, nullptr);
   ASSERT_NE(center, nullptr);
   ASSERT_NE(right, nullptr);
@@ -1586,15 +1545,15 @@ TEST_F(WorkspaceShellTests, AdjustmentPanelsSwitchAndSurviveWorkspaceRoundTrip) 
                               QStringLiteral("lut"),      QStringLiteral("display"),
                               QStringLiteral("geometry"), QStringLiteral("raw")};
   for (const auto& panel : panels) {
-    auto* nav = loaded->window->findChild<QQuickItem*>(
-        QStringLiteral("editorAdjustmentNav_") + panel);
+    auto* nav =
+        loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentNav_") + panel);
     ASSERT_NE(nav, nullptr) << panel.toStdString();
     QTest::mouseClick(loaded->window, Qt::LeftButton, Qt::NoModifier, CenterOfItem(nav));
     ProcessEvents(40);
     EXPECT_EQ(session->active_adjustment_panel(), panel) << panel.toStdString();
 
-    auto* body = loaded->window->findChild<QQuickItem*>(
-        QStringLiteral("editorAdjustmentPanel_") + panel);
+    auto* body =
+        loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentPanel_") + panel);
     ASSERT_NE(body, nullptr) << panel.toStdString();
     // StackLayout keeps non-current children; active page is the one whose
     // StackLayout index matches. Prefer reading the stack currentIndex.
@@ -1612,8 +1571,7 @@ TEST_F(WorkspaceShellTests, AdjustmentPanelsSwitchAndSurviveWorkspaceRoundTrip) 
   ProcessEvents(40);
   loaded->host.workspace_router()->OpenEditor(2, 2);
   ProcessEvents(80);
-  EXPECT_EQ(loaded->host.editor_session()->active_adjustment_panel(),
-            QStringLiteral("geometry"));
+  EXPECT_EQ(loaded->host.editor_session()->active_adjustment_panel(), QStringLiteral("geometry"));
 
   auto* stack =
       loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentPanelStack"));
@@ -1641,12 +1599,10 @@ TEST_F(WorkspaceShellTests, NarrowWindowKeepsSidePanelOrderAndMinViewport) {
   ProcessEvents(60);
 
   auto* left = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsRail"));
-  auto* center = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorViewportSlot"));
-  auto* center_col =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorCenterColumn"));
-  auto* right = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
-  auto* workspace =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspace"));
+  auto* center     = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorViewportSlot"));
+  auto* center_col = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorCenterColumn"));
+  auto* right     = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
+  auto* workspace = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspace"));
   ASSERT_NE(left, nullptr);
   ASSERT_NE(center, nullptr);
   ASSERT_NE(center_col, nullptr);
@@ -1718,18 +1674,16 @@ TEST_F(WorkspaceShellTests, EditorCardSurfacesResolveThroughSharedCardFamily) {
 
   auto* theme_obj = loaded->window;
   ASSERT_NE(theme_obj, nullptr);
-  const QColor expected_surface =
-      theme_obj->property("colCardSurface").value<QColor>();
-  const QColor expected_border =
-      theme_obj->property("colCardBorder").value<QColor>();
+  const QColor expected_surface = theme_obj->property("colCardSurface").value<QColor>();
+  const QColor expected_border  = theme_obj->property("colCardBorder").value<QColor>();
   EXPECT_TRUE(expected_surface.isValid());
   EXPECT_EQ(expected_surface, alcedo::ui::AppTheme::Instance().cardSurfaceColor());
   EXPECT_EQ(expected_border, alcedo::ui::AppTheme::Instance().cardBorderColor());
 
-  auto* rail = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail"));
-  auto* stack = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
+  auto* rail      = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail"));
+  auto* stack     = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
   auto* filmstrip = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorFilmstrip"));
-  auto* viewport = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorViewportSlot"));
+  auto* viewport  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorViewportSlot"));
   ASSERT_NE(rail, nullptr);
   ASSERT_NE(stack, nullptr);
   ASSERT_NE(filmstrip, nullptr);
@@ -1741,7 +1695,7 @@ TEST_F(WorkspaceShellTests, EditorCardSurfacesResolveThroughSharedCardFamily) {
   for (QQuickItem* item : {rail, stack, filmstrip, viewport}) {
     // Parent shells pass theme; resolve colCardSurface from nearest owner.
     QObject* owner = item;
-    QColor surface;
+    QColor   surface;
     while (owner != nullptr) {
       const QVariant v = owner->property("colCardSurface");
       if (v.isValid() && v.canConvert<QColor>()) {
@@ -1788,10 +1742,8 @@ TEST_F(WorkspaceShellTests, StructuralIconActionsExposeHitOpticalAndAccessibleNa
       loaded->window->findChild<QQuickItem*>(QStringLiteral("editorVersionsRailButton"));
   auto* tone_nav =
       loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentNav_tone"));
-  auto* library_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
-  auto* editor_nav =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
+  auto* library_nav = loaded->window->findChild<QQuickItem*>(QStringLiteral("libraryNavButton"));
+  auto* editor_nav  = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorNavButton"));
   ASSERT_NE(history_btn, nullptr);
   ASSERT_NE(versions_btn, nullptr);
   ASSERT_NE(tone_nav, nullptr);
@@ -1813,8 +1765,7 @@ TEST_F(WorkspaceShellTests, StructuralIconActionsExposeHitOpticalAndAccessibleNa
   EXPECT_EQ(tone_nav->property("chromeSize").toInt(), 32);
   EXPECT_EQ(tone_nav->property("sourceSize").toInt(),
             alcedo::ui::AppTheme::Instance().iconSourceSizeCompact());
-  EXPECT_GE(tone_nav->property("sourceSize").toInt(),
-            tone_nav->property("opticalSize").toInt());
+  EXPECT_GE(tone_nav->property("sourceSize").toInt(), tone_nav->property("opticalSize").toInt());
 
   // Accessible names / tooltips present on structural actions.
   EXPECT_FALSE(history_btn->property("actionName").toString().isEmpty());
@@ -1839,23 +1790,21 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   loaded->host.workspace_router()->OpenEditor(0, 0);
   ProcessEvents(80);
 
-  auto* rail =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsRail"));
+  auto* rail = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsRail"));
   auto* session = loaded->host.editor_session();
   ASSERT_NE(rail, nullptr);
   ASSERT_NE(session, nullptr);
 
-  const int rail_width = rail->property("railWidth").toInt();
+  const int rail_width  = rail->property("railWidth").toInt();
   const int panel_width = rail->property("expandedPanelWidth").toInt();
-  const int panel_gap = rail->property("panelGap").toInt();
+  const int panel_gap   = rail->property("panelGap").toInt();
   ASSERT_GT(rail_width, 0);
   ASSERT_GT(panel_width, 0);
 
   // Start collapsed.
   session->set_history_panel_page(QString());
   ProcessEvents(20);
-  ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress",
-                                        Q_ARG(QVariant, QVariant(0.0))));
+  ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.0))));
   ProcessEvents(10);
   EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 0.0, 0.001);
   EXPECT_NEAR(rail->width(), rail_width, 1.0);
@@ -1863,8 +1812,7 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
 
   // Intermediate 0.5 — R6: outer layout is binary full width; progress drives
   // transform (panelSlideX) only, not interpolated Layout width.
-  ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress",
-                                        Q_ARG(QVariant, QVariant(0.5))));
+  ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.5))));
   ProcessEvents(10);
   EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 0.5, 0.001);
   EXPECT_TRUE(rail->property("layoutExpanded").toBool());
@@ -1875,8 +1823,7 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   // Open session page and complete the fold.
   session->set_history_panel_page(QStringLiteral("history"));
   ProcessEvents(10);
-  ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress",
-                                        Q_ARG(QVariant, QVariant(1.0))));
+  ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress", Q_ARG(QVariant, QVariant(1.0))));
   ProcessEvents(10);
   EXPECT_EQ(session->history_panel_page(), QStringLiteral("history"));
   EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 1.0, 0.001);
@@ -1885,8 +1832,7 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
 
   // Rapid reverse at mid progress: session collapses immediately; driver pins mid.
   // Layout stays terminal-expanded until progress returns to 0.
-  ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress",
-                                        Q_ARG(QVariant, QVariant(0.5))));
+  ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.5))));
   ProcessEvents(10);
   session->set_history_panel_page(QString());
   ProcessEvents(10);
@@ -1894,8 +1840,7 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   EXPECT_NEAR(rail->property("panelOpenProgress").toReal(), 0.5, 0.001);
   EXPECT_NEAR(rail->width(), full_w, 1.5);
 
-  ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress",
-                                        Q_ARG(QVariant, QVariant(0.0))));
+  ASSERT_TRUE(QMetaObject::invokeMethod(rail, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.0))));
   ProcessEvents(10);
   EXPECT_NEAR(rail->width(), rail_width, 1.0);
   EXPECT_FALSE(rail->property("layoutExpanded").toBool());
@@ -1910,8 +1855,7 @@ TEST_F(WorkspaceShellTests, HistoryFoldDriverPinsIntermediateAndTerminalGeometry
   EXPECT_NEAR(rail->width(), full_w, 1.5);
 
   // Rail identity preserved.
-  EXPECT_NE(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail")),
-            nullptr);
+  EXPECT_NE(loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail")), nullptr);
 }
 
 TEST_F(WorkspaceShellTests, FilmstripFoldDriverPinsIntermediateAndTerminalGeometry) {
@@ -1923,8 +1867,8 @@ TEST_F(WorkspaceShellTests, FilmstripFoldDriverPinsIntermediateAndTerminalGeomet
   ProcessEvents(80);
 
   auto* filmstrip = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorFilmstrip"));
-  auto* handle = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorFilmstripHandle"));
-  auto* session = loaded->host.editor_session();
+  auto* handle    = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorFilmstripHandle"));
+  auto* session   = loaded->host.editor_session();
   ASSERT_NE(filmstrip, nullptr);
   ASSERT_NE(handle, nullptr);
   ASSERT_NE(session, nullptr);
@@ -1935,17 +1879,17 @@ TEST_F(WorkspaceShellTests, FilmstripFoldDriverPinsIntermediateAndTerminalGeomet
   ASSERT_TRUE(QMetaObject::invokeMethod(filmstrip, "endFoldDrive"));
   ProcessEvents(20);
 
-  const qreal handle_h = filmstrip->property("handleHeight").toReal();
+  const qreal handle_h   = filmstrip->property("handleHeight").toReal();
   const qreal expanded_h = filmstrip->property("expandedHeight").toReal();
   ASSERT_GT(expanded_h, handle_h);
 
-  ASSERT_TRUE(QMetaObject::invokeMethod(filmstrip, "driveFoldProgress",
-                                        Q_ARG(QVariant, QVariant(1.0))));
+  ASSERT_TRUE(
+      QMetaObject::invokeMethod(filmstrip, "driveFoldProgress", Q_ARG(QVariant, QVariant(1.0))));
   ProcessEvents(10);
   EXPECT_NEAR(filmstrip->height(), expanded_h, 1.0);
 
-  ASSERT_TRUE(QMetaObject::invokeMethod(filmstrip, "driveFoldProgress",
-                                        Q_ARG(QVariant, QVariant(0.5))));
+  ASSERT_TRUE(
+      QMetaObject::invokeMethod(filmstrip, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.5))));
   ProcessEvents(10);
   const qreal mid_h = handle_h + (expanded_h - handle_h) * 0.5;
   EXPECT_NEAR(filmstrip->height(), mid_h, 1.5);
@@ -1957,8 +1901,8 @@ TEST_F(WorkspaceShellTests, FilmstripFoldDriverPinsIntermediateAndTerminalGeomet
   EXPECT_TRUE(session->filmstrip_collapsed());
   EXPECT_NEAR(filmstrip->property("dockExpandProgress").toReal(), 0.5, 0.001);
 
-  ASSERT_TRUE(QMetaObject::invokeMethod(filmstrip, "driveFoldProgress",
-                                        Q_ARG(QVariant, QVariant(0.0))));
+  ASSERT_TRUE(
+      QMetaObject::invokeMethod(filmstrip, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.0))));
   ProcessEvents(10);
   EXPECT_NEAR(filmstrip->height(), handle_h, 1.0);
   EXPECT_NEAR(handle->height(), handle_h, 1.0);
@@ -1982,33 +1926,33 @@ TEST_F(WorkspaceShellTests, AdjustmentSectionFoldDriverPreservesPanelSelection) 
   session->set_active_adjustment_panel(QStringLiteral("tone"));
   ProcessEvents(20);
 
-  auto* group = loaded->window->findChild<QQuickItem*>(
-      QStringLiteral("editorAdjustmentGroupShell_tone"));
+  auto* group =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentGroupShell_tone"));
   ASSERT_NE(group, nullptr);
 
-  const qreal header_h = group->property("headerHeight").toReal();
+  const qreal header_h       = group->property("headerHeight").toReal();
   const qreal body_content_h = group->property("bodyContentHeight").toReal();
   ASSERT_GT(header_h, 0.0);
   ASSERT_GT(body_content_h, 0.0);
 
-  ASSERT_TRUE(QMetaObject::invokeMethod(group, "driveFoldProgress",
-                                        Q_ARG(QVariant, QVariant(1.0))));
+  ASSERT_TRUE(
+      QMetaObject::invokeMethod(group, "driveFoldProgress", Q_ARG(QVariant, QVariant(1.0))));
   ProcessEvents(10);
   EXPECT_NEAR(group->height(), header_h + body_content_h, 1.5);
 
-  ASSERT_TRUE(QMetaObject::invokeMethod(group, "driveFoldProgress",
-                                        Q_ARG(QVariant, QVariant(0.0))));
+  ASSERT_TRUE(
+      QMetaObject::invokeMethod(group, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.0))));
   ProcessEvents(10);
   EXPECT_NEAR(group->height(), header_h, 1.5);
   EXPECT_NEAR(group->property("foldProgress").toReal(), 0.0, 0.001);
 
   // Intermediate + rapid expand while selection stays on tone.
-  ASSERT_TRUE(QMetaObject::invokeMethod(group, "driveFoldProgress",
-                                        Q_ARG(QVariant, QVariant(0.4))));
+  ASSERT_TRUE(
+      QMetaObject::invokeMethod(group, "driveFoldProgress", Q_ARG(QVariant, QVariant(0.4))));
   ProcessEvents(10);
   group->setProperty("expanded", true);
-  ASSERT_TRUE(QMetaObject::invokeMethod(group, "driveFoldProgress",
-                                        Q_ARG(QVariant, QVariant(1.0))));
+  ASSERT_TRUE(
+      QMetaObject::invokeMethod(group, "driveFoldProgress", Q_ARG(QVariant, QVariant(1.0))));
   ProcessEvents(10);
   EXPECT_EQ(session->active_adjustment_panel(), QStringLiteral("tone"));
   EXPECT_NEAR(group->property("foldProgress").toReal(), 1.0, 0.001);
@@ -2026,15 +1970,12 @@ TEST_F(WorkspaceShellTests, EditorVisibleCopyHasNoDeveloperPlaceholderPhrasing) 
   loaded->host.workspace_router()->OpenEditor(0, 0);
   ProcessEvents(80);
 
-  const QStringList banned = {QStringLiteral("will appear here"),
-                              QStringLiteral("TODO"),
-                              QStringLiteral("Phase 4"),
-                              QStringLiteral("placeholder"),
+  const QStringList banned = {QStringLiteral("will appear here"), QStringLiteral("TODO"),
+                              QStringLiteral("Phase 4"), QStringLiteral("placeholder"),
                               QStringLiteral("FIXME")};
 
   // Walk labels under the editor workspace and reject banned product-facing phrasing.
-  auto* workspace =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspace"));
+  auto* workspace = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorWorkspace"));
   ASSERT_NE(workspace, nullptr);
   const auto labels = workspace->findChildren<QQuickItem*>();
   for (QQuickItem* item : labels) {
@@ -2045,8 +1986,7 @@ TEST_F(WorkspaceShellTests, EditorVisibleCopyHasNoDeveloperPlaceholderPhrasing) 
     const QString lower = text.toLower();
     for (const QString& ban : banned) {
       EXPECT_FALSE(lower.contains(ban.toLower()))
-          << "Banned copy in " << item->objectName().toStdString() << ": "
-          << text.toStdString();
+          << "Banned copy in " << item->objectName().toStdString() << ": " << text.toStdString();
     }
   }
 
@@ -2066,15 +2006,14 @@ TEST_F(WorkspaceShellTests, AdjustmentStackBackgroundFillsHaveAlpha255) {
   loaded->host.workspace_router()->OpenEditor(1, 1);
   ProcessEvents(80);
 
-  auto* stack =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
+  auto* stack = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentStack"));
   ASSERT_NE(stack, nullptr);
 
   // Walk every Rectangle descendant under the adjustment stack and assert its
   // color fill is fully opaque (alpha 255). Scope slots, nav bars, panel
   // shells, and collapsible section bodies must all use concrete opaque colors.
-  const auto rects = stack->findChildren<QQuickItem*>();
-  int checked = 0;
+  const auto rects   = stack->findChildren<QQuickItem*>();
+  int        checked = 0;
   for (QQuickItem* item : rects) {
     // Only check Rectangles (the surface primitives). Skip non-surface Items
     // and interaction overlays (MouseArea, Handler, etc.).
@@ -2090,10 +2029,9 @@ TEST_F(WorkspaceShellTests, AdjustmentStackBackgroundFillsHaveAlpha255) {
       continue;
     }
     const QColor c = color_var.value<QColor>();
-    EXPECT_EQ(c.alpha(), 255)
-        << "Non-opaque surface in adjustment stack: "
-        << (obj_name.isEmpty() ? "(unnamed)" : obj_name.toStdString())
-        << " color=" << c.name(QColor::HexArgb).toStdString();
+    EXPECT_EQ(c.alpha(), 255) << "Non-opaque surface in adjustment stack: "
+                              << (obj_name.isEmpty() ? "(unnamed)" : obj_name.toStdString())
+                              << " color=" << c.name(QColor::HexArgb).toStdString();
     checked++;
   }
   EXPECT_GT(checked, 0) << "Expected at least one background Rectangle to verify";
@@ -2110,13 +2048,13 @@ TEST_F(WorkspaceShellTests, AdjustmentNavButtonsAreSquareWithSharedTokens) {
   loaded->host.workspace_router()->OpenEditor(1, 1);
   ProcessEvents(80);
 
-  const auto& theme = alcedo::ui::AppTheme::Instance();
+  const auto&       theme  = alcedo::ui::AppTheme::Instance();
   const QStringList panels = {QStringLiteral("tone"), QStringLiteral("look"),
                               QStringLiteral("display"), QStringLiteral("geometry"),
                               QStringLiteral("raw")};
   for (const auto& panel : panels) {
-    auto* nav = loaded->window->findChild<QQuickItem*>(
-        QStringLiteral("editorAdjustmentNav_") + panel);
+    auto* nav =
+        loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentNav_") + panel);
     ASSERT_NE(nav, nullptr) << panel.toStdString();
 
     // Square: width == height within 1 px (shared hitSize token).
@@ -2140,8 +2078,7 @@ TEST_F(WorkspaceShellTests, AdjustmentNavButtonsAreSquareWithSharedTokens) {
         << panel.toStdString() << " should not stretch";
 
     // Accessible name / tooltip present.
-    EXPECT_FALSE(nav->property("actionName").toString().isEmpty())
-        << panel.toStdString();
+    EXPECT_FALSE(nav->property("actionName").toString().isEmpty()) << panel.toStdString();
 
     // Keyboard reachable.
     EXPECT_TRUE(nav->activeFocusOnTab()) << panel.toStdString();
@@ -2173,6 +2110,32 @@ TEST_F(WorkspaceShellTests, AdjustmentNavContainerUsesCompactRadiusToken) {
   EXPECT_EQ(container_radius, alcedo::ui::AppTheme::Instance().controlRadiusSmall());
 }
 
+TEST_F(WorkspaceShellTests, ScopeModeNavUsesSharedIconNavigationAssets) {
+  ASSERT_TRUE(QCoreApplication::instance());
+  auto loaded = LoadMainWindow();
+  ASSERT_NE(loaded, nullptr);
+  ASSERT_NE(loaded->window, nullptr);
+  loaded->host.workspace_router()->OpenEditor(1, 1);
+  ProcessEvents(80);
+
+  auto* nav = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorScopeModeNav"));
+  auto* adjustment_nav =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorAdjustmentNav"));
+  auto* histogram =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorScopeModeHistogram"));
+  auto* waveform =
+      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorScopeModeWaveform"));
+  ASSERT_NE(nav, nullptr);
+  ASSERT_NE(adjustment_nav, nullptr);
+  ASSERT_NE(histogram, nullptr);
+  ASSERT_NE(waveform, nullptr);
+  EXPECT_NEAR(nav->width(), adjustment_nav->width(), 1.0);
+  EXPECT_TRUE(histogram->property("iconSrc").toString().endsWith(QStringLiteral("histogram.svg")));
+  EXPECT_TRUE(waveform->property("iconSrc").toString().endsWith(QStringLiteral("waveform.svg")));
+  EXPECT_TRUE(histogram->activeFocusOnTab());
+  EXPECT_TRUE(waveform->activeFocusOnTab());
+}
+
 TEST_F(WorkspaceShellTests, VersionsRailButtonUsesTablerVersionsIcon) {
   ASSERT_TRUE(QCoreApplication::instance());
   auto loaded = LoadMainWindow();
@@ -2187,8 +2150,7 @@ TEST_F(WorkspaceShellTests, VersionsRailButtonUsesTablerVersionsIcon) {
 
   const QString icon_src = versions_btn->property("iconSrc").toString();
   EXPECT_TRUE(icon_src.endsWith(QStringLiteral("versions.svg")))
-      << "Versions rail button iconSrc should be versions.svg, got: "
-      << icon_src.toStdString();
+      << "Versions rail button iconSrc should be versions.svg, got: " << icon_src.toStdString();
   EXPECT_FALSE(icon_src.contains(QStringLiteral("palette.svg")))
       << "Versions rail button must not use palette.svg";
 
@@ -2202,13 +2164,13 @@ TEST_F(WorkspaceShellTests, VersionsRailButtonUsesTablerVersionsIcon) {
 }
 
 TEST_F(WorkspaceShellTests, NewOpaqueThemeTokensExistAndHaveAlpha255) {
-  auto& theme = alcedo::ui::AppTheme::Instance();
+  auto&        theme            = alcedo::ui::AppTheme::Instance();
 
   // Phase 4D button-state fills.
-  const QColor idle = theme.buttonIdleFillColor();
-  const QColor hovered = theme.buttonHoveredFillColor();
-  const QColor pressed = theme.buttonPressedFillColor();
-  const QColor selected = theme.buttonSelectedFillColor();
+  const QColor idle             = theme.buttonIdleFillColor();
+  const QColor hovered          = theme.buttonHoveredFillColor();
+  const QColor pressed          = theme.buttonPressedFillColor();
+  const QColor selected         = theme.buttonSelectedFillColor();
   const QColor disabled_surface = theme.disabledSurfaceColor();
 
   EXPECT_EQ(idle.alpha(), 255);
@@ -2256,21 +2218,18 @@ TEST_F(WorkspaceShellTests, DisabledAdjustmentStackUsesOpaqueSurfaceNotParentOpa
   }
 
   const QColor shell_color = panel_shell->property("color").value<QColor>();
-  EXPECT_EQ(shell_color.alpha(), 255)
-      << "Disabled panel shell must be fully opaque";
+  EXPECT_EQ(shell_color.alpha(), 255) << "Disabled panel shell must be fully opaque";
   EXPECT_EQ(shell_color, alcedo::ui::AppTheme::Instance().cardSurfaceColor())
       << "Right panel shell must stay on the shared card surface when disabled";
 
-  auto* rail =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail"));
+  auto* rail = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryRail"));
   ASSERT_NE(rail, nullptr);
   const QColor rail_color = rail->property("color").value<QColor>();
   EXPECT_EQ(rail_color.alpha(), 255);
   EXPECT_EQ(rail_color, shell_color)
       << "History rail and adjustment shell must share one card surface fill";
 
-  auto* viewport =
-      loaded->window->findChild<QQuickItem*>(QStringLiteral("editorViewportSlot"));
+  auto* viewport = loaded->window->findChild<QQuickItem*>(QStringLiteral("editorViewportSlot"));
   ASSERT_NE(viewport, nullptr);
   const QColor viewport_color = viewport->property("color").value<QColor>();
   EXPECT_EQ(viewport_color, shell_color)

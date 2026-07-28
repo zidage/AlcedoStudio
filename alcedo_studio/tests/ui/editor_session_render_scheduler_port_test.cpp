@@ -118,6 +118,28 @@ TEST(EditorSessionRenderSchedulerPortTest, ViewDrivenReasonsDisableScopeFrameRep
   }
 }
 
+TEST(EditorSessionRenderSchedulerPortTest, ScopeRefreshMarksFrameAsRequestedScopeInput) {
+  auto               scheduler = std::make_shared<EditorSessionRenderSchedulerPort>();
+  RecordingFrameSink sink;
+  scheduler->SetSinkResolver([&sink] { return static_cast<alcedo::IFrameSink*>(&sink); });
+  scheduler->SetTestFrameProducer(
+      [](alcedo::IFrameSink* frame_sink, const alcedo::EditorRenderRequest&) {
+        if (!frame_sink) return false;
+        frame_sink->NotifyFrameReady();
+        return true;
+      });
+
+  auto request                   = MakeRequest(72, 32);
+  request.intent.reason          = alcedo::EditorRenderReason::ScopeRefresh;
+  request.intent.view_generation = 77;
+  ASSERT_NE(scheduler->Schedule(request), 0u);
+  scheduler->WaitForSessionIdle(32);
+
+  EXPECT_TRUE(sink.last_metadata.scope_update_allowed);
+  EXPECT_TRUE(sink.last_metadata.scope_refresh_requested);
+  EXPECT_EQ(sink.last_metadata.preview_generation, request.intent.view_generation);
+}
+
 TEST(EditorSessionRenderSchedulerPortTest, CancelledSyntheticRequestLeavesSessionIdle) {
   EditorSessionRenderSchedulerPort scheduler;
   const auto                       request = MakeRequest(44, 8);

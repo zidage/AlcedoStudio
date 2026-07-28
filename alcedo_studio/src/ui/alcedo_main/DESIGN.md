@@ -127,15 +127,16 @@ per-row `opacity` fills — recycled delegates start already selected so
 when the path is already in the model (that reassigns the list and hitch
 `contentY`). Hover wells use the same inset geometry.
 
-**Monochrome segmented controls (family):** three chrome sites share one language:
+**Monochrome segmented controls (family):** four chrome sites share one language:
 
 | Site | Track | Sliding / selected well | Active glyph / label |
 | --- | --- | --- | --- |
 | Library/Editor capsule | `bgBaseColor` | `editorListSelectedFillColor` | `editorListSelectedInkColor` |
 | Adjustment panel navbar | `bgBaseColor` | same fill (no accent blue) | same ink on selected icon |
+| Histogram/Waveform navbar | `bgBaseColor` | same fill | same ink on selected icon |
 | Display method segments | `bgBaseColor` | same fill | same ink on selected label |
 
-Rules for all three: no `accentColor` slab; transparent segment chrome (thumb
+Rules for all four: no `accentColor` slab; transparent segment chrome (thumb
 or well is the only selected surface); idle icons/text `iconColor` /
 `textMutedColor`; thumb/well leaves a small track inset (`spaceXs` optical
 margin). Adjustment navbar keeps OutBack slide + land scale; method segments
@@ -207,7 +208,7 @@ the rail-button optical balance.
 
 Scope plot colors are semantic AppTheme tokens so the scene-graph item does not
 carry palette literals into QML. They are used by both histogram lines and the
-waveform point field.
+QPainter-backed waveform density image.
 
 | Token | Use |
 | --- | --- |

@@ -57,6 +57,18 @@ EditorSessionController::EditorSessionController(EditorController*              
                                                  QObject*                       parent)
     : QObject(parent), editor_(editor), session_backend_(session_backend) {
   scope_controller_ = std::make_unique<EditorScopeController>(this);
+  connect(scope_controller_.get(), &EditorScopeController::FrameRequested, this, [this]() {
+    if (!session_backend_ || !has_image() ||
+        session_backend_->state() != alcedo::EditorSessionState::Interactive) {
+      return;
+    }
+    std::optional<alcedo::ViewportRenderRegion> region;
+    if (auto* sink = presentation_frame_sink()) {
+      region = sink->GetViewportRenderRegion();
+    }
+    session_backend_->RequestViewChange(alcedo::EditorRenderReason::ScopeRefresh,
+                                        std::move(region));
+  });
   scope_controller_->SetImageIdentity(image_id(), session_generation());
   LoadFilmstripUiPrefs();
   LoadDesktopUiPrefs();
@@ -164,7 +176,7 @@ void EditorSessionController::OnBackendChanged() {
       emit AdjustmentSnapshotChanged();
     }
   }
-  emit StateChanged();
+  emit       StateChanged();
   // Phase 7A R2: emit the dedicated history signal only when the backend's
   // monotonic history_revision advances. Render-busy, frame-ready, preview,
   // progress, viewport, and task-detail notifications leave the revision
@@ -370,8 +382,7 @@ void EditorSessionController::CheckoutVersion(const QString& versionId) {
   } catch (const std::exception& ex) {
     const QString message = QString::fromUtf8(ex.what()).trimmed();
     PublishHistoryRejected(
-        action,
-        message.isEmpty() ? QStringLiteral("Invalid Version id") : message, trimmed);
+        action, message.isEmpty() ? QStringLiteral("Invalid Version id") : message, trimmed);
   }
 }
 
@@ -411,16 +422,15 @@ void EditorSessionController::BranchFromCommit(const QString& commitId,
     return;
   }
   try {
-    const auto id = alcedo::Hash128::FromString(trimmed_commit.toStdString());
-    auto result = session_backend_->BranchFromCommit(id, name.toStdString());
+    const auto id     = alcedo::Hash128::FromString(trimmed_commit.toStdString());
+    auto       result = session_backend_->BranchFromCommit(id, name.toStdString());
     SyncIdentityFromBackend();
     emit StateChanged();
     PublishHistoryInvokableReturn(action, result, trimmed_commit);
   } catch (const std::exception& ex) {
     const QString message = QString::fromUtf8(ex.what()).trimmed();
     PublishHistoryRejected(
-        action, message.isEmpty() ? QStringLiteral("Invalid commit id") : message,
-        trimmed_commit);
+        action, message.isEmpty() ? QStringLiteral("Invalid commit id") : message, trimmed_commit);
   }
 }
 
@@ -478,9 +488,9 @@ void EditorSessionController::RenameVersion(const QString& versionId, const QStr
     return;
   }
   try {
-    const auto id = alcedo::Hash128::FromString(trimmed.toStdString());
+    const auto id     = alcedo::Hash128::FromString(trimmed.toStdString());
     auto       result = session_backend_->RenameVersion(id, name.toStdString());
-    emit StateChanged();
+    emit       StateChanged();
     PublishHistoryInvokableReturn(action, result, trimmed);
   } catch (const std::exception& ex) {
     const QString message = QString::fromUtf8(ex.what()).trimmed();
@@ -504,7 +514,7 @@ void EditorSessionController::RemoveVersion(const QString& versionId) {
   try {
     const auto id     = alcedo::Hash128::FromString(trimmed.toStdString());
     auto       result = session_backend_->RemoveVersion(id);
-    emit StateChanged();
+    emit       StateChanged();
     PublishHistoryInvokableReturn(action, result, trimmed);
   } catch (const std::exception& ex) {
     const QString message = QString::fromUtf8(ex.what()).trimmed();
@@ -570,13 +580,11 @@ void EditorSessionController::ApplyPublishedHistory(
 void EditorSessionController::PublishHistoryRejected(const QString& action, const QString& message,
                                                      const QString& selected_id) {
   const auto operation_id = history_ops_.AllocateOperationId();
-  ApplyPublishedHistory(
-      history_ops_.PublishRejected(operation_id, action, message, selected_id));
+  ApplyPublishedHistory(history_ops_.PublishRejected(operation_id, action, message, selected_id));
 }
 
 void EditorSessionController::PublishHistoryInvokableReturn(
-    const QString& action, const alcedo::EditorSessionResult& result,
-    const QString& selected_id) {
+    const QString& action, const alcedo::EditorSessionResult& result, const QString& selected_id) {
   const auto operation_id = history_ops_.AllocateOperationId();
   ApplyPublishedHistory(
       history_ops_.PublishInvokableReturn(operation_id, action, result, selected_id));
@@ -800,6 +808,8 @@ auto ReasonName(alcedo::EditorRenderReason reason) -> const char* {
       return "Retry";
     case R::CropRotate:
       return "CropRotate";
+    case R::ScopeRefresh:
+      return "ScopeRefresh";
   }
   return "Unknown";
 }

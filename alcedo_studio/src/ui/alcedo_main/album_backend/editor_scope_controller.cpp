@@ -79,10 +79,14 @@ void EditorScopeController::set_active_view(int view) {
   frame_tap_->SetScopeRequest(request_);
   clearSnapshot();
   emit ActiveViewChanged();
+  emit FrameRequested();
 }
 
 auto EditorScopeController::has_snapshot() const -> bool {
-  return snapshot_.generation != 0 && (snapshot_.histogram.valid || snapshot_.waveform.valid);
+  if (snapshot_.generation == 0) {
+    return false;
+  }
+  return active_view_ == 0 ? snapshot_.histogram.valid : snapshot_.waveform.valid;
 }
 
 void EditorScopeController::SetDownstreamSink(alcedo::IFrameSink* sink) {
@@ -130,11 +134,12 @@ auto EditorScopeController::refreshSnapshotNow() -> bool {
     return false;
   }
 
-  const auto next_snapshot = alcedo::ReadScopeRenderSnapshot(output);
+  auto next_snapshot = alcedo::ReadScopeRenderSnapshot(output);
   if (!next_snapshot.histogram.valid && !next_snapshot.waveform.valid) {
     return false;
   }
-  return publishSnapshot(next_snapshot, image_identity_, image_generation_, request_revision_);
+  return publishSnapshot(std::move(next_snapshot), image_identity_, image_generation_,
+                         request_revision_);
 }
 
 void EditorScopeController::pollSnapshot() { scheduleSnapshotRefresh(); }
@@ -194,7 +199,7 @@ void EditorScopeController::scheduleSnapshotRefresh() {
           if (!receiver || next_snapshot.generation == 0) {
             return;
           }
-          (void)receiver->publishSnapshot(next_snapshot, expected_image_identity,
+          (void)receiver->publishSnapshot(std::move(next_snapshot), expected_image_identity,
                                           expected_image_generation, expected_request_revision);
         },
         Qt::QueuedConnection);
@@ -204,10 +209,10 @@ void EditorScopeController::scheduleSnapshotRefresh() {
   });
 }
 
-auto EditorScopeController::publishSnapshot(const alcedo::ScopeRenderSnapshot&   next_snapshot,
-                                           std::uint64_t expected_image_identity,
-                                           std::uint64_t expected_image_generation,
-                                           std::uint64_t expected_request_revision) -> bool {
+auto EditorScopeController::publishSnapshot(alcedo::ScopeRenderSnapshot next_snapshot,
+                                            std::uint64_t               expected_image_identity,
+                                            std::uint64_t               expected_image_generation,
+                                            std::uint64_t expected_request_revision) -> bool {
   if (!visual_active_ || expected_request_revision != request_revision_ ||
       expected_image_identity != image_identity_ ||
       expected_image_generation != image_generation_) {
@@ -233,7 +238,7 @@ auto EditorScopeController::publishSnapshot(const alcedo::ScopeRenderSnapshot&  
     return false;
   }
 
-  snapshot_ = next_snapshot;
+  snapshot_ = std::move(next_snapshot);
   emit SnapshotChanged();
   return true;
 }

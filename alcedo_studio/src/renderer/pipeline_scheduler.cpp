@@ -254,6 +254,10 @@ void PipelineTask::SetExecutorRenderParams() {
     pipeline_executor_->SetNextFramePresentationMode(FramePresentationMode::RoiFrame);
     frame_metadata = MetadataFromRegion(frame_metadata, viewport_region, region_x, region_y,
                                         region_scale_x, region_scale_y);
+    // Incidental zoom ROI frames do not replace scope input. A mode switch is
+    // explicit, so its current FIT/ROI frame is accepted just like the
+    // deprecated QWidget request path.
+    frame_metadata.scope_update_allowed = frame_metadata.scope_refresh_requested;
     SetNextFrameMetadata(pipeline_executor_, frame_metadata);
     pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Bilinear);
     pipeline_executor_->SetRenderRegion(region_x, region_y, region_scale_x, region_scale_y,

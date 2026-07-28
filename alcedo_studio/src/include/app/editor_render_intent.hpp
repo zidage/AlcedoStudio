@@ -34,6 +34,9 @@ enum class EditorRenderReason : std::uint8_t {
   // view transform. Distinct from ZoomPan so the coordinator can decide a new
   // InteractivePrimary render instead of reusing the current full frame.
   CropRotate,
+  // A newly selected scope needs a fresh final-display frame, using the
+  // current viewport region just like the deprecated QWidget scope switch.
+  ScopeRefresh,
 };
 
 enum class EditorRenderQuality : std::uint8_t {
@@ -194,6 +197,7 @@ struct EditorRenderResult {
     case EditorRenderReason::DetailRefresh:
     case EditorRenderReason::UndoRedo:
     case EditorRenderReason::CropRotate:
+    case EditorRenderReason::ScopeRefresh:
       return EditorRenderPriority::Normal;
   }
   return EditorRenderPriority::Normal;
@@ -214,6 +218,7 @@ struct EditorRenderResult {
     case EditorRenderReason::ImageSwitch:
     case EditorRenderReason::Retry:
     case EditorRenderReason::CropRotate:
+    case EditorRenderReason::ScopeRefresh:
       return EditorRenderQuality::Interactive;
   }
   return EditorRenderQuality::Interactive;

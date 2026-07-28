@@ -172,173 +172,33 @@ Item {
                 controlsEnabled: root.controlsEnabled
             }
 
-            // Compact adjustment navbar: sunken track + monochrome sliding well
-            // (DESIGN.md — same B&W language as workspace capsule / method segments).
-            // Thumb is the only selected surface; segment buttons stay transparent.
-            Rectangle {
+            SlidingIconNav {
                 id: adjustmentNav
                 objectName: "editorAdjustmentNav"
                 Layout.fillWidth: true
-                Layout.preferredHeight: appTheme.iconButtonHitSizeCompact + appTheme.spaceXs
-                radius: appTheme.controlRadiusSmall
-                color: root.colBase
-                border.width: 1
-                border.color: root.colCardBorder
-
-                // Square hit + inter-icon gap. Deleting these collapses the thumb
-                // math to NaN and the SVG icons "fall out" of the track.
-                readonly property int navHit: appTheme.iconButtonHitSizeCompact
-                readonly property int navSpacing: 2
-                readonly property int navTrackInset: appTheme.spaceXs
-                readonly property int navIndex: {
-                    switch (root.activePanel) {
-                    case "look": return 1
-                    case "lut": return 2
-                    case "display": return 3
-                    case "geometry": return 4
-                    case "raw": return 5
-                    default: return 0
-                    }
-                }
-                // Thumb leaves track inset so the light well is not flush to the
-                // sunken chrome edge (matches workspace capsule / method track).
-                readonly property int thumbSize: Math.min(
-                    navHit - navTrackInset,
-                    Math.max(appTheme.iconOpticalSizeCompact + appTheme.spaceSm,
-                             navHit - appTheme.spaceSm - navTrackInset))
-
-                Item {
-                    id: navHost
-                    anchors.centerIn: parent
-                    width: navRow.width
-                    height: adjustmentNav.navHit
-                    opacity: root.controlsEnabled ? 1.0 : 0.55
-
-                    // Sliding monochrome selected well under the icons.
-                    Rectangle {
-                        id: navThumb
-                        objectName: "editorAdjustmentNavThumb"
-                        z: 0
-                        width: adjustmentNav.thumbSize
-                        height: adjustmentNav.thumbSize
-                        radius: Math.max(4, appTheme.controlRadiusSmall - 2)
-                        color: appTheme.editorListSelectedFillColor
-                        border.width: 0
-                        y: (parent.height - height) / 2
-                        x: adjustmentNav.navIndex
-                           * (adjustmentNav.navHit + adjustmentNav.navSpacing)
-                           + (adjustmentNav.navHit - width) / 2
-
-                        Behavior on x {
-                            enabled: !appTheme.reduceMotion
-                            NumberAnimation {
-                                duration: Math.max(appTheme.motionFoldOpenMs, 240)
-                                easing.type: Easing.OutBack
-                                easing.overshoot: 1.18
-                            }
-                        }
-
-                        // Soft land pulse so the window feels mechanical, not
-                        // just a translating rect. Skipped under reduceMotion.
-                        scale: 1.0
-                        transformOrigin: Item.Center
-
-                        Connections {
-                            target: adjustmentNav
-                            function onNavIndexChanged() {
-                                if (appTheme.reduceMotion) {
-                                    navThumb.scale = 1.0
-                                    return
-                                }
-                                thumbLandAnim.restart()
-                            }
-                        }
-
-                        SequentialAnimation {
-                            id: thumbLandAnim
-                            NumberAnimation {
-                                target: navThumb
-                                property: "scale"
-                                to: 0.90
-                                duration: 70
-                                easing.type: Easing.OutQuad
-                            }
-                            NumberAnimation {
-                                target: navThumb
-                                property: "scale"
-                                to: 1.0
-                                duration: 200
-                                easing.type: Easing.OutBack
-                                easing.overshoot: 1.4
-                            }
-                        }
-                    }
-
-                    Row {
-                        id: navRow
-                        z: 1
-                        spacing: adjustmentNav.navSpacing
-
-                        // Capsule rule: no per-button fill. Active glyph uses
-                        // inverted ink on the light well; idle uses muted icon.
-                        component NavIconButton: IconActionButton {
-                            compact: true
-                            enabled: root.controlsEnabled
-                            showHoverFill: false
-                            showFocusRing: false
-                            iconColorDefault: selected
-                                              ? appTheme.editorListSelectedInkColor
-                                              : root.colMuted
-                            iconColorMuted: root.colMuted
-                            iconColorSelected: appTheme.editorListSelectedInkColor
-                            fillIdle: "transparent"
-                            fillSelected: "transparent"
-                        }
-
-                        NavIconButton {
-                            objectName: "editorAdjustmentNav_tone"
-                            selected: root.activePanel === "tone"
-                            iconSrc: "qrc:/panel_icons/adjustments.svg"
-                            actionName: qsTr("Tone")
-                            onClicked: root.selectPanel("tone")
-                        }
-                        NavIconButton {
-                            objectName: "editorAdjustmentNav_look"
-                            selected: root.activePanel === "look"
-                            iconSrc: "qrc:/panel_icons/palette.svg"
-                            actionName: qsTr("Look")
-                            onClicked: root.selectPanel("look")
-                        }
-                        NavIconButton {
-                            objectName: "editorAdjustmentNav_lut"
-                            selected: root.activePanel === "lut"
-                            iconSrc: "qrc:/panel_icons/box.svg"
-                            actionName: qsTr("LUT")
-                            onClicked: root.selectPanel("lut")
-                        }
-                        NavIconButton {
-                            objectName: "editorAdjustmentNav_display"
-                            selected: root.activePanel === "display"
-                            iconSrc: "qrc:/panel_icons/color-filter.svg"
-                            actionName: qsTr("Display Transform")
-                            onClicked: root.selectPanel("display")
-                        }
-                        NavIconButton {
-                            objectName: "editorAdjustmentNav_geometry"
-                            selected: root.activePanel === "geometry"
-                            iconSrc: "qrc:/panel_icons/crop.svg"
-                            actionName: qsTr("Geometry")
-                            onClicked: root.selectPanel("geometry")
-                        }
-                        NavIconButton {
-                            objectName: "editorAdjustmentNav_raw"
-                            selected: root.activePanel === "raw"
-                            iconSrc: "qrc:/panel_icons/aperture.svg"
-                            actionName: qsTr("RAW Decode")
-                            onClicked: root.selectPanel("raw")
-                        }
-                    }
-                }
+                currentKey: root.activePanel
+                controlsEnabled: root.controlsEnabled
+                trackColor: root.colBase
+                trackBorderColor: root.colCardBorder
+                idleIconColor: root.colMuted
+                thumbObjectName: "editorAdjustmentNavThumb"
+                items: [
+                    { key: "tone", icon: "qrc:/panel_icons/adjustments.svg",
+                      label: qsTr("Tone"), itemObjectName: "editorAdjustmentNav_tone" },
+                    { key: "look", icon: "qrc:/panel_icons/palette.svg",
+                      label: qsTr("Look"), itemObjectName: "editorAdjustmentNav_look" },
+                    { key: "lut", icon: "qrc:/panel_icons/box.svg",
+                      label: qsTr("LUT"), itemObjectName: "editorAdjustmentNav_lut" },
+                    { key: "display", icon: "qrc:/panel_icons/color-filter.svg",
+                      label: qsTr("Display Transform"),
+                      itemObjectName: "editorAdjustmentNav_display" },
+                    { key: "geometry", icon: "qrc:/panel_icons/crop.svg",
+                      label: qsTr("Geometry"),
+                      itemObjectName: "editorAdjustmentNav_geometry" },
+                    { key: "raw", icon: "qrc:/panel_icons/aperture.svg",
+                      label: qsTr("RAW Decode"), itemObjectName: "editorAdjustmentNav_raw" }
+                ]
+                onActivated: key => root.selectPanel(key)
             }
 
             // Stacked panel bodies. Explicit children keep StackLayout indices

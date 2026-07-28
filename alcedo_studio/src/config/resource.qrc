@@ -10,6 +10,8 @@
     <file>fonts/main_Manrope.ttf</file>
     <file>panel_icons/language.svg</file>
     <file>panel_icons/adjustments.svg</file>
+    <file>panel_icons/histogram.svg</file>
+    <file>panel_icons/waveform.svg</file>
     <file>panel_icons/palette.svg</file>
     <file>panel_icons/versions.svg</file>
     <file>panel_icons/reset.svg</file>

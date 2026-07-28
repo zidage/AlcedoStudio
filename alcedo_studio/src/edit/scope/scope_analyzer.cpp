@@ -188,9 +188,11 @@ auto NormalizeWaveformToUnitRange(const std::vector<float>& rgba, int width, int
     return data;
   }
 
-  float max_value = 0.0f;
-  for (float value : rgba) {
-    max_value = std::max(max_value, value);
+  float        max_value   = 0.0f;
+  const size_t pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height);
+  for (size_t pixel = 0; pixel < pixel_count; ++pixel) {
+    const size_t index = pixel * 4U;
+    max_value          = std::max({max_value, rgba[index], rgba[index + 1U], rgba[index + 2U]});
   }
   if (max_value <= std::numeric_limits<float>::epsilon()) {
     max_value = 1.0f;

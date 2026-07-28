@@ -7,6 +7,17 @@
 #include <utility>
 
 namespace alcedo {
+namespace {
+
+auto ScopeResourceShapeMatches(const ScopeRequest& lhs, const ScopeRequest& rhs) -> bool {
+  return lhs.histogram_bins == rhs.histogram_bins && lhs.waveform_width == rhs.waveform_width &&
+         lhs.waveform_height == rhs.waveform_height &&
+         lhs.vectorscope_size == rhs.vectorscope_size &&
+         lhs.chromaticity_size == rhs.chromaticity_size &&
+         lhs.analysis_downsample == rhs.analysis_downsample;
+}
+
+}  // namespace
 
 FinalDisplayFrameTapSink::FinalDisplayFrameTapSink(IFrameSink*                     downstream_sink,
                                                    std::shared_ptr<IScopeAnalyzer> scope_analyzer)
@@ -24,17 +35,24 @@ auto FinalDisplayFrameTapSink::downstream_sink() const -> IFrameSink* {
 
 void FinalDisplayFrameTapSink::SetScopeRequest(const ScopeRequest& request) {
   FinalDisplayFrameView scope_frame;
-  bool                  active   = false;
-  bool                  deferred = false;
+  bool                  active           = false;
+  bool                  deferred         = false;
+  bool                  resize_resources = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    scope_request_ = request;
-    scope_frame    = scope_frame_;
-    active         = scope_active_;
-    deferred       = scope_analysis_deferred_;
+    resize_resources = !ScopeResourceShapeMatches(scope_request_, request);
+    scope_request_   = request;
+    scope_frame      = scope_frame_;
+    active           = scope_active_;
+    deferred         = scope_analysis_deferred_;
   }
   if (scope_analyzer_) {
-    scope_analyzer_->ResizeResources(request);
+    // Changing only the enabled plot must retain the staged full-frame input.
+    // Backend ResizeResources resets CUDA/Metal/OpenCL staging slots, which
+    // otherwise leaves a newly selected plot blank until another edit frame.
+    if (resize_resources) {
+      scope_analyzer_->ResizeResources(request);
+    }
     if (active && !deferred && scope_frame) {
       scope_analyzer_->SubmitFrame(scope_frame, request);
     }
@@ -59,7 +77,6 @@ void FinalDisplayFrameTapSink::SetScopeActive(bool active) {
     return;
   }
 
-  scope_analyzer_->ResizeResources(request);
   if (!deferred && scope_frame) {
     scope_analyzer_->SubmitFrame(scope_frame, request);
   }
@@ -184,9 +201,9 @@ void FinalDisplayFrameTapSink::SubmitFinalDisplayFrame(const FinalDisplayFrameVi
                                    : next_frame_id_++;
     }
     current_frame_ = stamped_frame;
-    request  = scope_request_;
-    active   = scope_active_;
-    deferred = scope_analysis_deferred_;
+    request        = scope_request_;
+    active         = scope_active_;
+    deferred       = scope_analysis_deferred_;
   }
 
   // Stage a stable, analyzer-owned copy NOW on the render thread, while the

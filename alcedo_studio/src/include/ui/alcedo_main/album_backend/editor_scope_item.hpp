@@ -5,9 +5,9 @@
 #pragma once
 
 #include <QColor>
+#include <QImage>
 #include <QMetaObject>
-#include <QQuickItem>
-#include <vector>
+#include <QQuickPaintedItem>
 
 #include "edit/scope/scope_analyzer.hpp"
 
@@ -15,11 +15,12 @@ namespace alcedo::ui {
 
 class EditorScopeController;
 
-/// Retained scene-graph plot for the histogram and waveform snapshots.
+/// QPainter-backed plot for histogram and waveform snapshots.
 ///
-/// Histogram channels are line geometry and waveform density is a colored
-/// point field. No QImage or per-frame CPU image upload is used by this item.
-class EditorScopeItem : public QQuickItem {
+/// This follows the proven QWidget scope path: convert the shared backend
+/// density snapshot to one small QImage, then let Qt Quick own presentation
+/// across D3D11, Metal, and OpenGL-backed windows.
+class EditorScopeItem : public QQuickPaintedItem {
   Q_OBJECT
   Q_PROPERTY(QObject* controller READ controller WRITE set_controller NOTIFY ControllerChanged)
   Q_PROPERTY(
@@ -60,29 +61,27 @@ class EditorScopeItem : public QQuickItem {
   void ColorsChanged();
 
  protected:
-  auto updatePaintNode(QSGNode* old_node, UpdatePaintNodeData* data) -> QSGNode* override;
-  void geometryChange(const QRectF& new_geometry, const QRectF& old_geometry) override;
+  void paint(QPainter* painter) override;
 
  private:
-  struct ScopeRootNode;
-  void                        bind_controller(EditorScopeController* controller);
-  void                        sync_snapshot();
-  void                        mark_scene_dirty();
+  void                    bind_controller(EditorScopeController* controller);
+  void                    sync_snapshot();
+  void                    rebuild_waveform_image(const alcedo::ScopeWaveformRenderData& waveform);
 
-  QObject*                    controller_       = nullptr;
-  EditorScopeController*      scope_controller_ = nullptr;
-  QMetaObject::Connection     snapshot_connection_{};
-  QMetaObject::Connection     active_view_connection_{};
-  QMetaObject::Connection     controller_destroyed_connection_{};
-  alcedo::ScopeRenderSnapshot snapshot_{};
-  bool                        scene_dirty_           = true;
+  QObject*                controller_       = nullptr;
+  EditorScopeController*  scope_controller_ = nullptr;
+  QMetaObject::Connection snapshot_connection_{};
+  QMetaObject::Connection active_view_connection_{};
+  QMetaObject::Connection controller_destroyed_connection_{};
+  alcedo::ScopeHistogramRenderData histogram_{};
+  QImage                           waveform_image_{};
 
-  QColor                      background_color_      = QColor(0x16, 0x17, 0x19);
-  QColor                      grid_color_            = QColor(0x3A, 0x3B, 0x3D);
-  QColor                      border_color_          = QColor(0x4A, 0x4B, 0x4D);
-  QColor                      histogram_red_color_   = QColor(0xE2, 0x8A, 0x8A);
-  QColor                      histogram_green_color_ = QColor(0xA8, 0xD6, 0x9B);
-  QColor                      histogram_blue_color_  = QColor(0x8E, 0xB9, 0xE5);
+  QColor                           background_color_      = QColor(0x16, 0x17, 0x19);
+  QColor                           grid_color_            = QColor(0x3A, 0x3B, 0x3D);
+  QColor                           border_color_          = QColor(0x4A, 0x4B, 0x4D);
+  QColor                           histogram_red_color_   = QColor(0xE2, 0x8A, 0x8A);
+  QColor                           histogram_green_color_ = QColor(0xA8, 0xD6, 0x9B);
+  QColor                           histogram_blue_color_  = QColor(0x8E, 0xB9, 0xE5);
 };
 
 }  // namespace alcedo::ui

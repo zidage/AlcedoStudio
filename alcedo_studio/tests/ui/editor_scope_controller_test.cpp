@@ -12,6 +12,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -25,8 +26,11 @@ namespace {
 
 class RecordingScopeAnalyzer final : public IScopeAnalyzer {
  public:
-  void SubmitFrame(const FinalDisplayFrameView& frame, const ScopeRequest&) override {
+  void SubmitFrame(const FinalDisplayFrameView& frame, const ScopeRequest& request) override {
     submitted_frames.push_back(frame);
+    if (on_submit) {
+      on_submit(frame, request);
+    }
   }
 
   auto GetLatestOutput() -> ScopeOutputSet override { return latest_output; }
@@ -35,10 +39,11 @@ class RecordingScopeAnalyzer final : public IScopeAnalyzer {
 
   void ReleaseResources() override { ++release_count; }
 
-  std::vector<FinalDisplayFrameView> submitted_frames;
-  ScopeOutputSet                     latest_output{};
-  int                                resize_count  = 0;
-  int                                release_count = 0;
+  std::vector<FinalDisplayFrameView>                                     submitted_frames;
+  ScopeOutputSet                                                         latest_output{};
+  std::function<void(const FinalDisplayFrameView&, const ScopeRequest&)> on_submit;
+  int                                                                    resize_count  = 0;
+  int                                                                    release_count = 0;
 };
 
 class RecordingSink final : public IFrameSink {
@@ -102,7 +107,7 @@ class StagingRecordingAnalyzer final : public IScopeAnalyzer {
     std::lock_guard<std::mutex> lock(mutex_);
     staged_inputs_.push_back(frame);
     FinalDisplayFrameView staged = frame;
-    staged.image.resource       = std::make_shared<int>(2);  // owned marker
+    staged.image.resource        = std::make_shared<int>(2);  // owned marker
     staged.ready_signal.resource = std::make_shared<int>(2);
     return staged;
   }
@@ -112,9 +117,9 @@ class StagingRecordingAnalyzer final : public IScopeAnalyzer {
     submitted_frames_.push_back(frame);
   }
 
-  auto GetLatestOutput() -> ScopeOutputSet override { return {}; }
-  void ResizeResources(const ScopeRequest&) override {}
-  void ReleaseResources() override {}
+  auto               GetLatestOutput() -> ScopeOutputSet override { return {}; }
+  void               ResizeResources(const ScopeRequest&) override {}
+  void               ReleaseResources() override {}
 
   [[nodiscard]] auto staged_inputs() const -> std::vector<FinalDisplayFrameView> {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -126,9 +131,9 @@ class StagingRecordingAnalyzer final : public IScopeAnalyzer {
   }
 
  private:
-  mutable std::mutex                   mutex_;
-  std::vector<FinalDisplayFrameView>  staged_inputs_;
-  std::vector<FinalDisplayFrameView>  submitted_frames_;
+  mutable std::mutex                 mutex_;
+  std::vector<FinalDisplayFrameView> staged_inputs_;
+  std::vector<FinalDisplayFrameView> submitted_frames_;
 };
 
 // SubmitFrame blocks until Release() so a session-exit drain test can prove
@@ -160,11 +165,11 @@ class BlockingSubmitAnalyzer final : public IScopeAnalyzer {
   }
 
  private:
-  std::mutex               mutex_;
-  std::condition_variable  cv_;
-  std::atomic_bool         release_{false};
-  std::atomic_bool         submit_started_{false};
-  std::atomic_bool         submitted_done_{false};
+  std::mutex              mutex_;
+  std::condition_variable cv_;
+  std::atomic_bool        release_{false};
+  std::atomic_bool        submit_started_{false};
+  std::atomic_bool        submitted_done_{false};
 };
 
 // Records the collect/submit call order and the generation each call produced
@@ -174,9 +179,9 @@ class SequencedAnalyzer final : public IScopeAnalyzer {
  public:
   void SubmitFrame(const FinalDisplayFrameView& frame, const ScopeRequest&) override {
     std::lock_guard<std::mutex> lock(mutex_);
-    pending_output_.generation        = ++next_gen_;
-    pending_output_.image_identity    = frame.image_identity;
-    pending_output_.image_generation  = frame.image_generation;
+    pending_output_.generation         = ++next_gen_;
+    pending_output_.image_identity     = frame.image_identity;
+    pending_output_.image_generation   = frame.image_generation;
     pending_output_.display_generation = frame.display_generation;
     call_log_.push_back("submit");
     submitted_gens_.push_back(pending_output_.generation);
@@ -189,8 +194,8 @@ class SequencedAnalyzer final : public IScopeAnalyzer {
     return pending_output_;
   }
 
-  void ResizeResources(const ScopeRequest&) override {}
-  void ReleaseResources() override {}
+  void               ResizeResources(const ScopeRequest&) override {}
+  void               ReleaseResources() override {}
 
   [[nodiscard]] auto call_log() const -> std::vector<std::string> {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -206,12 +211,12 @@ class SequencedAnalyzer final : public IScopeAnalyzer {
   }
 
  private:
-  mutable std::mutex            mutex_;
-  ScopeOutputSet               pending_output_{};
-  std::uint64_t                next_gen_ = 0;
-  std::vector<std::string>     call_log_;
-  std::vector<std::uint64_t>  collected_gens_;
-  std::vector<std::uint64_t>  submitted_gens_;
+  mutable std::mutex         mutex_;
+  ScopeOutputSet             pending_output_{};
+  std::uint64_t              next_gen_ = 0;
+  std::vector<std::string>   call_log_;
+  std::vector<std::uint64_t> collected_gens_;
+  std::vector<std::uint64_t> submitted_gens_;
 };
 
 auto MarkerValue(const std::shared_ptr<void>& resource) -> int {
@@ -226,9 +231,9 @@ auto MakeValidSnapshot(std::uint64_t generation, std::uint64_t image_identity,
   snapshot.image_identity     = image_identity;
   snapshot.image_generation   = image_generation;
   snapshot.display_generation = display_generation;
-  snapshot.histogram.bins = 4;
-  snapshot.histogram.rgb  = {0.10f, 0.25f, 0.50f, 0.75f};
-  snapshot.histogram.valid = true;
+  snapshot.histogram.bins     = 4;
+  snapshot.histogram.rgb      = {0.10f, 0.25f, 0.50f, 0.75f};
+  snapshot.histogram.valid    = true;
   return snapshot;
 }
 
@@ -287,6 +292,40 @@ TEST(EditorScopeControllerTest, ViewOnlyFrameKeepsTheLastContentFrameForScope) {
 
   ASSERT_TRUE(tap.SubmitCurrentDisplayFrameToScope());
   ASSERT_EQ(analyzer->submitted_frames.size(), 2U);
+  EXPECT_EQ(analyzer->submitted_frames.back().display_generation, 10U);
+}
+
+TEST(EditorScopeControllerTest, SwitchingPlotRetainsAndResubmitsTheStagedFullFrame) {
+  auto                     analyzer = std::make_shared<RecordingScopeAnalyzer>();
+  FinalDisplayFrameTapSink tap(nullptr, analyzer);
+  tap.SetFrameIdentity(18, 4);
+  tap.SetScopeAnalysisDeferred(true);
+  tap.SetScopeActive(true);
+
+  ScopeRequest histogram_request;
+  histogram_request.enabled_mask    = static_cast<uint32_t>(ScopeType::Histogram);
+  histogram_request.waveform_width  = 320;
+  histogram_request.waveform_height = 160;
+  tap.SetScopeRequest(histogram_request);
+  EXPECT_EQ(analyzer->resize_count, 1);
+
+  FramePreviewMetadata metadata;
+  metadata.preview_generation = 10;
+  metadata.image_identity     = 18;
+  metadata.image_generation   = 4;
+  tap.SetNextFramePreviewMetadata(metadata);
+  tap.SubmitFinalDisplayFrame(MakeFrame());
+  ASSERT_TRUE(tap.GetCurrentScopeFrameView());
+
+  ScopeRequest waveform_request = histogram_request;
+  waveform_request.enabled_mask = static_cast<uint32_t>(ScopeType::Waveform);
+  tap.SetScopeRequest(waveform_request);
+
+  // enabled_mask changes dispatch only; destroying backend slots here would
+  // invalidate the cached staged frame and leave the newly selected plot blank.
+  EXPECT_EQ(analyzer->resize_count, 1);
+  ASSERT_TRUE(tap.SubmitCurrentDisplayFrameToScope());
+  ASSERT_EQ(analyzer->submitted_frames.size(), 1U);
   EXPECT_EQ(analyzer->submitted_frames.back().display_generation, 10U);
 }
 
@@ -447,6 +486,77 @@ class EditorScopeControllerTestPeer {
   EditorScopeController& controller_;
 };
 
+TEST(EditorScopeControllerTest, SwitchingToUncomputedWaveformPublishesWaveformContent) {
+  auto                  analyzer = std::make_shared<RecordingScopeAnalyzer>();
+  EditorScopeController controller(analyzer);
+  controller.SetImageIdentity(42, 3);
+  controller.set_visual_active(true);
+  EditorScopeControllerTestPeer peer(controller);
+
+  auto* tap = dynamic_cast<FinalDisplayFrameTapSink*>(controller.frame_sink());
+  ASSERT_NE(tap, nullptr);
+  FramePreviewMetadata metadata;
+  metadata.preview_generation = 30;
+  metadata.image_identity     = 42;
+  metadata.image_generation   = 3;
+  tap->SetNextFramePreviewMetadata(metadata);
+  tap->SubmitFinalDisplayFrame(MakeFrame());
+
+  QObject::connect(&controller, &EditorScopeController::FrameRequested, &controller, [&]() {
+    FramePreviewMetadata refreshed_metadata = metadata;
+    refreshed_metadata.preview_generation   = 31;
+    tap->SetNextFramePreviewMetadata(refreshed_metadata);
+    tap->SubmitFinalDisplayFrame(MakeFrame());
+  });
+  analyzer->on_submit = [&peer](const FinalDisplayFrameView& frame, const ScopeRequest& request) {
+    if ((request.enabled_mask & static_cast<uint32_t>(ScopeType::Waveform)) == 0U) {
+      return;
+    }
+    auto waveform            = MakeValidSnapshot(10, frame.image_identity, frame.image_generation,
+                                                 frame.display_generation);
+    waveform.histogram       = {};
+    waveform.waveform.width  = 2;
+    waveform.waveform.height = 2;
+    waveform.waveform.rgba   = {0.1f, 0.2f, 0.3f, 0.4f};
+    waveform.waveform.valid  = true;
+    (void)peer.PublishSnapshot(waveform, frame.image_identity, frame.image_generation, 1);
+  };
+
+  controller.set_active_view(1);
+  (void)controller.refreshSnapshot();
+
+  ASSERT_TRUE(controller.has_snapshot());
+  const auto snapshot = controller.snapshot();
+  EXPECT_TRUE(snapshot.waveform.valid);
+  EXPECT_EQ(snapshot.waveform.width, 2);
+  EXPECT_EQ(snapshot.waveform.height, 2);
+  EXPECT_FALSE(snapshot.waveform.rgba.empty());
+  controller.set_visual_active(false);
+}
+
+TEST(EditorScopeControllerTest, InactivePlotOutputDoesNotMarkSelectedPlotReady) {
+  auto                  analyzer = std::make_shared<RecordingScopeAnalyzer>();
+  EditorScopeController controller(analyzer);
+  controller.SetImageIdentity(42, 3);
+  controller.set_visual_active(true);
+  EditorScopeControllerTestPeer peer(controller);
+
+  controller.set_active_view(1);
+  const auto histogram_only = MakeValidSnapshot(9, 42, 3, 30);
+  EXPECT_TRUE(peer.PublishSnapshot(histogram_only, 42, 3, 1));
+  EXPECT_FALSE(controller.has_snapshot());
+
+  auto waveform            = histogram_only;
+  waveform.generation      = 10;
+  waveform.waveform.width  = 2;
+  waveform.waveform.height = 2;
+  waveform.waveform.rgba   = {0.1f, 0.2f, 0.3f, 0.4f};
+  waveform.waveform.valid  = true;
+  EXPECT_TRUE(peer.PublishSnapshot(waveform, 42, 3, 1));
+  EXPECT_TRUE(controller.has_snapshot());
+  controller.set_visual_active(false);
+}
+
 TEST(EditorScopeControllerTest, DeferredScopeAnalyzesStagedFrameNotPipelineSource) {
   auto                     analyzer = std::make_shared<StagingRecordingAnalyzer>();
   FinalDisplayFrameTapSink tap(nullptr, analyzer);
@@ -573,7 +683,7 @@ TEST(EditorScopeControllerTest, ScopeWorkerDrainsBeforeSessionRelease) {
     QThread::msleep(40);
     analyzer->Release();
   });
-  const auto t0 = std::chrono::steady_clock::now();
+  const auto  t0 = std::chrono::steady_clock::now();
   controller.Shutdown();
   const auto t1 = std::chrono::steady_clock::now();
   releaser.join();

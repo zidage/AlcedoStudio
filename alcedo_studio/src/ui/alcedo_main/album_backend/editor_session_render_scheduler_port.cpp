@@ -39,12 +39,15 @@ auto RenderTypeForIntent(const alcedo::EditorRenderIntent& intent) -> alcedo::Re
 auto FrameRoleToPreviewMetadata(const alcedo::EditorRenderIntent& intent)
     -> alcedo::FramePreviewMetadata {
   alcedo::FramePreviewMetadata meta;
-  meta.frame_role           = intent.frame_role;
-  meta.preview_generation   = intent.render_generation;
-  meta.detail_serial        = 0;
-  meta.image_identity       = static_cast<std::uint64_t>(intent.image_id);
-  meta.image_generation     = intent.session_generation;
-  meta.scope_update_allowed = alcedo::ScopeUpdateAllowedForReason(intent.reason);
+  meta.frame_role              = intent.frame_role;
+  meta.preview_generation      = intent.reason == alcedo::EditorRenderReason::ScopeRefresh
+                                     ? intent.view_generation
+                                     : intent.render_generation;
+  meta.detail_serial           = 0;
+  meta.image_identity          = static_cast<std::uint64_t>(intent.image_id);
+  meta.image_generation        = intent.session_generation;
+  meta.scope_update_allowed    = alcedo::ScopeUpdateAllowedForReason(intent.reason);
+  meta.scope_refresh_requested = intent.reason == alcedo::EditorRenderReason::ScopeRefresh;
   return meta;
 }
 
@@ -403,7 +406,8 @@ auto EditorSessionRenderSchedulerPort::TryProducePipelineFrame(
     task.pipeline_executor_                 = exec;
     task.options_.render_desc_.render_type_ = RenderTypeForIntent(request.intent);
     task.options_.render_desc_.use_viewport_region_ =
-        request.intent.quality == alcedo::EditorRenderQuality::Detail;
+        request.intent.quality == alcedo::EditorRenderQuality::Detail ||
+        request.intent.reason == alcedo::EditorRenderReason::ScopeRefresh;
     task.options_.render_desc_.frame_metadata_ = FrameRoleToPreviewMetadata(request.intent);
     task.options_.render_desc_.frame_metadata_.presentation_request_id = request.request_id;
     task.options_.is_callback_                                         = false;
