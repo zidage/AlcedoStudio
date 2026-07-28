@@ -657,6 +657,9 @@ ApplicationWindow {
         }
         adjustmentTransferDialog.mode = "copy"
         adjustmentTransferDialog.sourceTitle = result.sourceTitle ? String(result.sourceTitle) : ""
+        adjustmentTransferDialog.sourceVersions = result.versions ? result.versions : []
+        adjustmentTransferDialog.selectedSourceVersionId =
+            result.activeVersionId ? String(result.activeVersionId) : ""
         adjustmentTransferDialog.targetCount = 0
         adjustmentTransferDialog.adjustmentRows = result.items ? result.items : []
         adjustmentTransferDialog.open()
@@ -854,9 +857,10 @@ ApplicationWindow {
         id: adjustmentTransferDialog
         blurSource: mainContent
         cornerRadius: root.windowCornerRadius
-        onCopyAccepted: function(selectedKeys) {
-            const result = appModules.adjustmentTransfer.Copy(
+        onCopyAccepted: function(selectedKeys, versionId) {
+            const result = appModules.adjustmentTransfer.CopyVersion(
                 Number(root.pendingAdjustmentSource.elementId),
+                versionId,
                 selectedKeys)
             if (result && result.message) {
                 root.showSnackbar(result.message)

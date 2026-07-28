@@ -390,29 +390,103 @@ auto AdjustmentTransferController::PrepareCopy(uint elementId) -> QVariantMap {
   }
 
   std::shared_ptr<PipelineGuard> guard;
+  std::optional<CommitGraph>     graph_before_inspection;
+  head_commit_hash_t             head_before_inspection = std::nullopt;
+  transaction_chain_hash_t       chain_before_inspection{};
+  bool                           dirty_before_inspection      = false;
+  bool                           serialized_before_inspection = false;
   try {
-    guard = pipeline_service->LoadPipeline(static_cast<sl_element_id_t>(elementId));
-    if (!guard || !guard->pipeline_) {
+    guard = pipeline_service->LoadEditorPipeline(static_cast<sl_element_id_t>(elementId));
+    if (!guard || !guard->pipeline_ || !guard->commit_graph_) {
       return ErrorResult(Tr("Pipeline was not available."));
     }
 
-    QVariantList rows;
-    rows.reserve(static_cast<qsizetype>(kItems.size()));
-    {
-      std::unique_lock<std::mutex> render_guard(guard->pipeline_->GetRenderLock());
-      for (const auto& spec : kItems) {
-        rows.push_back(RowFor(*guard->pipeline_, spec, spec.checked_by_default));
-      }
+    auto& graph                  = *guard->commit_graph_;
+    graph_before_inspection      = graph;
+    const auto prior_version_id  = graph.GetActiveVersionId();
+    const auto prior_head        = guard->working_head_commit_hash_;
+    const auto prior_chain       = guard->transaction_chain_hash_;
+    const bool prior_dirty       = guard->dirty_;
+    const bool prior_serialized  = guard->serialized_state_needs_writeback_;
+    head_before_inspection       = prior_head;
+    chain_before_inspection      = prior_chain;
+    dirty_before_inspection      = prior_dirty;
+    serialized_before_inspection = prior_serialized;
+
+    std::vector<VersionRef> versions;
+    versions.reserve(graph.GetAllVersionRefs().size());
+    for (const auto& [id, version] : graph.GetAllVersionRefs()) {
+      (void)id;
+      versions.push_back(version);
     }
+    std::ranges::sort(versions, [](const VersionRef& left, const VersionRef& right) {
+      if (left.created_at != right.created_at) {
+        return left.created_at < right.created_at;
+      }
+      return left.version_id.ToString() < right.version_id.ToString();
+    });
+
+    QVariantList version_rows;
+    QVariantList active_rows;
+    version_rows.reserve(static_cast<qsizetype>(versions.size()));
+    for (const auto& version : versions) {
+      graph.SetActiveVersionId(version.version_id);
+      std::string rebuild_error;
+      if (!pipeline_service->RebuildActiveEditorPipeline(guard, &rebuild_error)) {
+        throw std::runtime_error(rebuild_error.empty() ? "Failed to inspect source Version"
+                                                       : std::move(rebuild_error));
+      }
+
+      QVariantList rows;
+      rows.reserve(static_cast<qsizetype>(kItems.size()));
+      {
+        std::unique_lock<std::mutex> render_guard(guard->pipeline_->GetRenderLock());
+        for (const auto& spec : kItems) {
+          rows.push_back(RowFor(*guard->pipeline_, spec, spec.checked_by_default));
+        }
+      }
+      const bool active = version.version_id == prior_version_id;
+      if (active) {
+        active_rows = rows;
+      }
+      version_rows.push_back(
+          QVariantMap{{"versionId", QString::fromStdString(version.version_id.ToString())},
+                      {"displayName", QString::fromStdString(version.display_name)},
+                      {"updatedAt", static_cast<qlonglong>(version.updated_at)},
+                      {"active", active},
+                      {"items", rows}});
+    }
+
+    graph.SetActiveVersionId(prior_version_id);
+    std::string restore_error;
+    if (!pipeline_service->RebuildActiveEditorPipeline(guard, &restore_error)) {
+      throw std::runtime_error(restore_error.empty() ? "Failed to restore active source Version"
+                                                     : std::move(restore_error));
+    }
+    guard->working_head_commit_hash_         = prior_head;
+    guard->transaction_chain_hash_           = prior_chain;
+    guard->dirty_                            = prior_dirty;
+    guard->serialized_state_needs_writeback_ = prior_serialized;
     pipeline_service->SavePipeline(guard);
 
     QVariantMap result = SuccessResult();
     const auto* item   = library_->FindAlbumItem(static_cast<sl_element_id_t>(elementId));
     result.insert("sourceTitle", TitleForItem(item, static_cast<sl_element_id_t>(elementId)));
-    result.insert("items", rows);
+    result.insert("activeVersionId", QString::fromStdString(prior_version_id.ToString()));
+    result.insert("versions", version_rows);
+    result.insert("items", active_rows);
     return result;
   } catch (...) {
     if (guard) {
+      if (graph_before_inspection.has_value() && guard->commit_graph_) {
+        *guard->commit_graph_ = *graph_before_inspection;
+        std::string ignored_error;
+        (void)pipeline_service->RebuildActiveEditorPipeline(guard, &ignored_error);
+        guard->working_head_commit_hash_         = head_before_inspection;
+        guard->transaction_chain_hash_           = chain_before_inspection;
+        guard->dirty_                            = dirty_before_inspection;
+        guard->serialized_state_needs_writeback_ = serialized_before_inspection;
+      }
       pipeline_service->SavePipeline(guard);
     }
     return ErrorResult(CurrentExceptionText("Failed to prepare adjustment copy."));
@@ -421,6 +495,11 @@ auto AdjustmentTransferController::PrepareCopy(uint elementId) -> QVariantMap {
 
 auto AdjustmentTransferController::Copy(uint elementId, const QVariantList& selectedKeys)
     -> QVariantMap {
+  return CopyVersion(elementId, {}, selectedKeys);
+}
+
+auto AdjustmentTransferController::CopyVersion(uint elementId, const QString& versionId,
+                                               const QVariantList& selectedKeys) -> QVariantMap {
   auto pipeline_service = project_->handler().pipeline_service();
   if (!pipeline_service) {
     return ErrorResult(Tr("Pipeline service is unavailable."));
@@ -449,10 +528,39 @@ auto AdjustmentTransferController::Copy(uint elementId, const QVariantList& sele
   }
 
   std::shared_ptr<PipelineGuard> guard;
+  std::optional<CommitGraph>     graph_before_inspection;
+  head_commit_hash_t             head_before_inspection = std::nullopt;
+  transaction_chain_hash_t       chain_before_inspection{};
+  bool                           dirty_before_inspection      = false;
+  bool                           serialized_before_inspection = false;
   try {
-    guard = pipeline_service->LoadPipeline(static_cast<sl_element_id_t>(elementId));
-    if (!guard || !guard->pipeline_) {
+    guard = pipeline_service->LoadEditorPipeline(static_cast<sl_element_id_t>(elementId));
+    if (!guard || !guard->pipeline_ || !guard->commit_graph_) {
       return ErrorResult(Tr("Pipeline was not available."));
+    }
+
+    auto& graph                  = *guard->commit_graph_;
+    graph_before_inspection      = graph;
+    const auto prior_version_id  = graph.GetActiveVersionId();
+    const auto prior_head        = guard->working_head_commit_hash_;
+    const auto prior_chain       = guard->transaction_chain_hash_;
+    const bool prior_dirty       = guard->dirty_;
+    const bool prior_serialized  = guard->serialized_state_needs_writeback_;
+    head_before_inspection       = prior_head;
+    chain_before_inspection      = prior_chain;
+    dirty_before_inspection      = prior_dirty;
+    serialized_before_inspection = prior_serialized;
+
+    auto selected_version_id     = prior_version_id;
+    if (!versionId.trimmed().isEmpty()) {
+      selected_version_id = version_ref_id_t::FromString(versionId.toStdString());
+      (void)graph.GetVersionRef(selected_version_id);
+    }
+    graph.SetActiveVersionId(selected_version_id);
+    std::string rebuild_error;
+    if (!pipeline_service->RebuildActiveEditorPipeline(guard, &rebuild_error)) {
+      throw std::runtime_error(rebuild_error.empty() ? "Failed to read selected source Version"
+                                                     : std::move(rebuild_error));
     }
 
     AdjustmentTransferPackage package;
@@ -473,6 +581,17 @@ auto AdjustmentTransferController::Copy(uint elementId, const QVariantList& sele
             *spec, ValueFor(*spec, OperatorParamsFor(*guard->pipeline_, *spec), enabled)));
       }
     }
+
+    graph.SetActiveVersionId(prior_version_id);
+    std::string restore_error;
+    if (!pipeline_service->RebuildActiveEditorPipeline(guard, &restore_error)) {
+      throw std::runtime_error(restore_error.empty() ? "Failed to restore active source Version"
+                                                     : std::move(restore_error));
+    }
+    guard->working_head_commit_hash_         = prior_head;
+    guard->transaction_chain_hash_           = prior_chain;
+    guard->dirty_                            = prior_dirty;
+    guard->serialized_state_needs_writeback_ = prior_serialized;
     pipeline_service->SavePipeline(guard);
 
     copied_package_      = std::move(package);
@@ -487,6 +606,15 @@ auto AdjustmentTransferController::Copy(uint elementId, const QVariantList& sele
     return result;
   } catch (...) {
     if (guard) {
+      if (graph_before_inspection.has_value() && guard->commit_graph_) {
+        *guard->commit_graph_ = *graph_before_inspection;
+        std::string ignored_error;
+        (void)pipeline_service->RebuildActiveEditorPipeline(guard, &ignored_error);
+        guard->working_head_commit_hash_         = head_before_inspection;
+        guard->transaction_chain_hash_           = chain_before_inspection;
+        guard->dirty_                            = dirty_before_inspection;
+        guard->serialized_state_needs_writeback_ = serialized_before_inspection;
+      }
       pipeline_service->SavePipeline(guard);
     }
     return ErrorResult(CurrentExceptionText("Failed to copy adjustments."));
@@ -617,8 +745,24 @@ auto AdjustmentTransferController::PasteViaMiniGit(const std::vector<sl_element_
       continue;
     }
 
-    // Mini-Git paste path.
+    // A root-relative Paste creates both immutable commits and a named Version.
+    // That transition cannot be represented by the edit/head-move journal, so
+    // publish it through the same guarded graph materialization used by named
+    // Version operations.
     const auto graph_before_paste = *graph;
+    const auto prior_head         = guard->working_head_commit_hash_;
+    const auto prior_chain        = guard->transaction_chain_hash_;
+    const bool prior_dirty        = guard->dirty_;
+    const bool prior_serialized   = guard->serialized_state_needs_writeback_;
+    auto       restore_prior      = [&] {
+      *graph = graph_before_paste;
+      std::string ignored_error;
+      (void)pipeline_service.RebuildActiveEditorPipeline(guard, &ignored_error);
+      guard->working_head_commit_hash_         = prior_head;
+      guard->transaction_chain_hash_           = prior_chain;
+      guard->dirty_                            = prior_dirty;
+      guard->serialized_state_needs_writeback_ = prior_serialized;
+    };
     try {
       auto paste_result = AdjustmentTransferService::PasteAsRootRelativeVersion(
           *graph, pipeline_service, element_id, *copied_package_,
@@ -626,23 +770,32 @@ auto AdjustmentTransferController::PasteViaMiniGit(const std::vector<sl_element_
       if (paste_result.pasted) {
         std::string rebuild_error;
         if (!pipeline_service.RebuildActiveEditorPipeline(guard, &rebuild_error)) {
-          *graph = graph_before_paste;
+          restore_prior();
           result.failures_.push_back({element_id, rebuild_error.empty()
                                                       ? "Failed to rebuild pasted pipeline"
                                                       : std::move(rebuild_error)});
         } else {
-          guard->dirty_                            = true;
           guard->working_head_commit_hash_         = paste_result.new_head;
           guard->transaction_chain_hash_           = graph->ChainHashForHead(paste_result.new_head);
           guard->serialized_state_needs_writeback_ = true;
-          result.applied_ids_.push_back(element_id);
+          std::string persistence_error;
+          if (!pipeline_service.PersistEditorHistoryState(
+                  guard, graph_before_paste.GetImageEditState(), &persistence_error)) {
+            restore_prior();
+            result.failures_.push_back({element_id, persistence_error.empty()
+                                                        ? "Failed to persist pasted Version"
+                                                        : std::move(persistence_error)});
+          } else {
+            guard->dirty_ = false;
+            result.applied_ids_.push_back(element_id);
+          }
         }
       } else {
-        *graph = graph_before_paste;
+        restore_prior();
         result.failures_.push_back({element_id, paste_result.error});
       }
     } catch (const std::exception& e) {
-      *graph = graph_before_paste;
+      restore_prior();
       result.failures_.push_back({element_id, e.what()});
     }
     pipeline_service.SavePipeline(guard);
@@ -657,7 +810,14 @@ auto AdjustmentTransferController::PasteViaMiniGit(const std::vector<sl_element_
                                    {"message", QString::fromStdString(failure.message_)}});
   }
 
-  QVariantMap response = SuccessResult(Tr("Adjustments pasted."));
+  QVariantMap response;
+  if (result.applied_ids_.empty() && !result.failures_.empty()) {
+    response = ErrorResult(QString::fromStdString(result.failures_.front().message_));
+  } else if (!result.failures_.empty()) {
+    response = SuccessResult(Tr("Adjustments pasted with some failures."));
+  } else {
+    response = SuccessResult(Tr("Adjustments pasted."));
+  }
   response.insert("appliedCount", static_cast<int>(result.applied_ids_.size()));
   response.insert("unchangedCount", static_cast<int>(result.unchanged_ids_.size()));
   response.insert("failureCount", static_cast<int>(result.failures_.size()));

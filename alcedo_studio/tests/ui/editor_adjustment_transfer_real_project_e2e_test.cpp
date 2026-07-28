@@ -193,6 +193,9 @@ TEST_F(MainQmlTestFixture, RealPackedProjectCopyPasteReloadsToneSnapshot) {
   auto* dialog = window->findChild<QObject*>(QStringLiteral("adjustmentTransferDialog"));
   ASSERT_NE(dialog, nullptr);
   ASSERT_TRUE(dialog->property("visible").toBool() || dialog->property("opened").toBool());
+  const auto source_versions = dialog->property("sourceVersions").toList();
+  ASSERT_FALSE(source_versions.isEmpty());
+  EXPECT_FALSE(dialog->property("selectedSourceVersionId").toString().isEmpty());
 
   const auto source_rows = dialog->property("adjustmentRows").toList();
   const auto source_exposure = RowForKey(source_rows, QStringLiteral("exposure"));
@@ -247,6 +250,13 @@ TEST_F(MainQmlTestFixture, RealPackedProjectCopyPasteReloadsToneSnapshot) {
   ASSERT_TRUE(WaitUntil([&] {
     return session->has_image() && session->element_id() == target_element;
   }, 30000));
+  ASSERT_TRUE(WaitUntil([&] {
+    const auto history = session->history_snapshot();
+    return std::ranges::any_of(history.versions, [](const auto& version) {
+      return version.active && version.display_name == "Pasted Adjustments";
+    });
+  }, 5000))
+      << "Library Paste did not publish its root-relative Version to the reopened editor";
 
   auto* target_exposure_model = window->findChild<QObject*>(QStringLiteral("toneExposureModel"));
   auto* target_shadows_model = window->findChild<QObject*>(QStringLiteral("toneShadowsModel"));
@@ -302,6 +312,20 @@ TEST_F(MainQmlTestFixture, RealPackedProjectCopyPasteReloadsToneSnapshot) {
                    source_shadows.value(QStringLiteral("value")).toDouble());
   EXPECT_DOUBLE_EQ(highlights_model->property("value").toDouble(),
                    source_highlights.value(QStringLiteral("value")).toDouble());
+
+  const auto version_count_before_editor_paste = session->history_snapshot().versions.size();
+  const auto editor_paste = transfer->PasteIntoEditor(session);
+  ASSERT_TRUE(editor_paste.value(QStringLiteral("success")).toBool())
+      << editor_paste.value(QStringLiteral("message")).toString().toStdString();
+  ASSERT_TRUE(WaitUntil([&] {
+    return session->can_edit() &&
+           session->history_snapshot().versions.size() ==
+               version_count_before_editor_paste + 1;
+  }, 30000));
+  EXPECT_FALSE(session->last_history_failed())
+      << session->last_history_message().toStdString();
+  EXPECT_FALSE(session->last_error().contains(
+      QStringLiteral("mini-Git journal fold does not match")));
 }
 
 }  // namespace
