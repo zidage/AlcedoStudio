@@ -211,6 +211,18 @@ TEST_F(EditorVersionsPanelQmlTest, ActiveVersionUsesOutlineWithoutStopPlaybackAc
   EXPECT_NE(active_card->property("color").value<QColor>(),
             AppTheme::Instance().editorListSelectedFillColor());
 
+  // No "CURRENT HEAD" pill or "Checked out" copy — outline alone marks active.
+  // Single commit identity line (no dual Head + Commit labels).
+  auto* active_subtitle =
+      active_card->findChild<QQuickItem*>(QStringLiteral("editorVersionSubtitle"));
+  ASSERT_NE(active_subtitle, nullptr);
+  const QString active_sub = active_subtitle->property("text").toString();
+  EXPECT_FALSE(active_sub.contains(QStringLiteral("Checked out"), Qt::CaseInsensitive));
+  EXPECT_FALSE(active_sub.contains(QStringLiteral("CURRENT HEAD"), Qt::CaseInsensitive));
+  EXPECT_TRUE(active_sub.contains(QStringLiteral("Commit"), Qt::CaseInsensitive));
+  EXPECT_EQ(active_subtitle->property("font").value<QFont>().family(),
+            AppTheme::Instance().monoFontFamily());
+
   auto* remove_btn =
       inactive_card->findChild<QQuickItem*>(QStringLiteral("editorRemoveVersionButton"));
   ASSERT_NE(remove_btn, nullptr);

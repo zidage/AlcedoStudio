@@ -140,7 +140,7 @@ struct FontFamilies {
   QString ui_headline_zh          = QStringLiteral("Noto Sans SC");
   QString effective_language_code = QStringLiteral("en");
   QString data                    = QStringLiteral("IBM Plex Sans");
-  QString mono                    = QStringLiteral("IBM Plex Sans");
+  QString mono                    = QStringLiteral("DM Mono");
 };
 
 auto FontState() -> FontFamilies& {
@@ -334,6 +334,11 @@ void AppTheme::RegisterFonts() {
                                         QStringLiteral("Noto Sans SC"));
   families.data =
       RegisterFontResource(QStringLiteral(":/fonts/main_IBM.ttf"), QStringLiteral("IBM Plex Sans"));
+  // Minigit / diagnostic monospace only (Versions commit ids, transaction
+  // timeline hashes and before/after lines). Do not use for general metrics —
+  // those stay on dataFontFamily (IBM Plex Sans).
+  families.mono = RegisterFontResource(QStringLiteral(":/fonts/data_DMMono.ttf"),
+                                       QStringLiteral("DM Mono"));
   // Chinese fallback for the Manrope headline font. The struct default is
   // "Noto Sans SC" (same family used for the rest of the UI's Chinese text);
   // we intentionally do NOT override it with the decorative Dinglie Song
@@ -344,7 +349,6 @@ void AppTheme::RegisterFonts() {
   if (!registered_headline.isEmpty()) {
     families.ui_headline = registered_headline;
   }
-  families.mono = families.data;
 
   ApplyUiFontSubstitutions(families);
   ApplyDataFontSubstitutions(families);

@@ -78,12 +78,17 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest, HistoryToolbarUndoAndRedoFollowUse
   ASSERT_NE(redo, nullptr);
   ASSERT_TRUE(undo->isEnabled());
   ASSERT_FALSE(redo->isEnabled());
+  // Header shows the checked-out Version name, not a transaction count.
+  auto* version_label = Find(QStringLiteral("editorHistoryActiveVersionLabel"));
+  ASSERT_NE(version_label, nullptr);
+  EXPECT_EQ(version_label->property("text").toString(), QStringLiteral("Version: Base Look"));
   auto* recovery_notice = Find(QStringLiteral("editorHistoryRecoveryNotice"));
   ASSERT_NE(recovery_notice, nullptr);
   EXPECT_TRUE(recovery_notice->property("visible").toBool());
   auto* merge_title = Find(QStringLiteral("editorHistoryCommitTitle"));
   ASSERT_NE(merge_title, nullptr);
-  EXPECT_TRUE(merge_title->property("text").toString().contains(QStringLiteral("second parent")));
+  // Dense merge row: title is "Merge"; second parent lives on the hash line.
+  EXPECT_TRUE(merge_title->property("text").toString().contains(QStringLiteral("Merge")));
   auto* history_card = Find(QStringLiteral("editorHistoryCard"));
   ASSERT_NE(history_card, nullptr);
   EXPECT_EQ(history_card->property("color").value<QColor>(),
@@ -188,7 +193,36 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest,
     } else if (name == QStringLiteral("Exposure")) {
       EXPECT_EQ(text, QStringLiteral("0 \u2192 +0.35")) << "exposure card value line";
     }
+    // Minigit data lines use monoFontFamily (DM Mono).
+    EXPECT_EQ(value_label->property("font").value<QFont>().family(),
+              AppTheme::Instance().monoFontFamily());
   }
+}
+
+TEST_F(EditorHistoryTransactionsPanelQmlTest, EachTransactionCardShowsItsOwnCommitHash) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenHistoryPage();
+  int hashed_cards = 0;
+  for (auto* delegate : HistoryCards()) {
+    const QString commit_id = delegate->property("transactionId").toString();
+    if (commit_id.isEmpty()) continue;
+    if (delegate->property("mergeTransaction").toBool()) continue;
+    auto* hash_label =
+        delegate->findChild<QQuickItem*>(QStringLiteral("editorHistoryCommitHash"));
+    ASSERT_NE(hash_label, nullptr) << "transaction card missing commit hash label";
+    const QString text = hash_label->property("text").toString();
+    // Dense row shows the short hash (left half); no "Commit " prefix.
+    EXPECT_EQ(text, commit_id.left(8))
+        << "hash line must show this commit's short id, not a shared head";
+    EXPECT_EQ(hash_label->property("font").value<QFont>().family(),
+              AppTheme::Instance().monoFontFamily());
+    // LUT-density row: body + caption + spaceSm.
+    EXPECT_EQ(delegate->height(),
+              AppTheme::Instance().lineHeightBody() + AppTheme::Instance().lineHeightCaption() +
+                  AppTheme::Instance().spaceSm());
+    ++hashed_cards;
+  }
+  EXPECT_GE(hashed_cards, 1);
 }
 
 }  // namespace

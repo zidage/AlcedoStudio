@@ -21,6 +21,14 @@ Item {
     readonly property color colCardSurface: theme ? theme.colCardSurface : appTheme.cardSurfaceColor
     readonly property color colCardBorder: theme ? theme.colCardBorder : appTheme.cardBorderColor
 
+    // Dense list row (same formula as LUTPanel entry wells): body + caption + gap.
+    readonly property int entryRowHeight: appTheme.lineHeightBody
+                                          + appTheme.lineHeightCaption
+                                          + appTheme.spaceSm
+    readonly property int listRowGap: appTheme.spaceXs
+    // Timeline gutter for the rail + marker (compact, not spaceXl card inset).
+    readonly property int timelineGutter: appTheme.spaceMd + appTheme.spaceXs
+
     // Exposed for the rail: scroll lives on the ListView; the rail stores the
     // value outside this body so reactivation restores the prior viewport.
     readonly property real listContentY: historyList ? historyList.contentY : 0
@@ -119,10 +127,19 @@ Item {
                 }
 
                 Label {
+                    objectName: "editorHistoryActiveVersionLabel"
                     Layout.fillWidth: true
-                    text: qsTr("%1 transactions").arg(root.historyModel ? root.historyModel.count : 0)
+                    // Checked-out Version identity only — no transaction count.
+                    text: {
+                        var name = root.historyModel
+                                   ? String(root.historyModel.activeVersionDisplayName || "")
+                                   : ""
+                        return name.length > 0 ? qsTr("Version: %1").arg(name)
+                                               : qsTr("Version: —")
+                    }
                     color: root.colMuted
-                    font.family: appTheme.dataFontFamily
+                    elide: Text.ElideRight
+                    font.family: appTheme.uiFontFamily
                     font.pixelSize: appTheme.fontSizeCaption
                 }
             }
@@ -255,7 +272,7 @@ Item {
                 anchors.margins: appTheme.spaceXs
                 clip: true
                 model: root.historyModel
-                spacing: 0
+                spacing: root.listRowGap
                 boundsBehavior: Flickable.StopAtBounds
                 reuseItems: true
                 // Data-only head moves and checkout-driven model refreshes must
@@ -303,10 +320,13 @@ Item {
                     }
                 }
 
+                // Dense two-line wells (LUT-style). Timeline rail + marker sit
+                // in a narrow gutter; the well carries title/time then hash|delta.
                 delegate: Item {
                     id: transactionDelegate
                     objectName: "editorHistoryTransactionDelegate"
                     width: ListView.view ? ListView.view.width : 0
+                    height: root.entryRowHeight
 
                     required property bool current
                     required property bool isMerge
@@ -331,10 +351,11 @@ Item {
                     property string transactionMergeSummary: String(mergeSummary || "")
                     property string secondParent: String(secondParentId || "")
                     property string transactionTime: root.relativeTime(createdAtNs)
+                    property string shortCommitId: transactionId.length > 0
+                                                  ? transactionId.slice(0, 8) : ""
                     property bool futureRow: transactionPosition === "future"
                     property bool canMove: root.editorSession && root.editorSession.canEdit
                                            && transactionId.length > 0 && !currentTransaction
-                    height: transactionCard.height + appTheme.spaceSm
 
                     function activateMove() {
                         if (transactionDelegate.canMove && root.historyModel) {
@@ -342,29 +363,28 @@ Item {
                         }
                     }
 
-                    ListView.onPooled: {
-                        // Delegates are pure bindings; nothing mutable to clear.
-                    }
-                    ListView.onReused: {
-                        // Roles rebind automatically via required properties.
-                    }
+                    ListView.onPooled: {}
+                    ListView.onReused: {}
 
+                    // Vertical timeline rail through the list well.
                     Rectangle {
-                        anchors.left: parent.left
                         anchors.top: parent.top
                         anchors.bottom: parent.bottom
-                        anchors.leftMargin: appTheme.spaceMd
+                        anchors.left: parent.left
+                        anchors.leftMargin: appTheme.spaceSm + (appTheme.spaceXs / 2)
+                                            - 0.5
                         width: 1
                         color: root.colCardBorder
                     }
 
                     Rectangle {
                         id: transactionMarker
-                        x: appTheme.spaceMd - width / 2
-                        y: appTheme.spaceMd
+                        anchors.left: parent.left
+                        anchors.leftMargin: appTheme.spaceSm
+                        anchors.verticalCenter: parent.verticalCenter
                         width: transactionDelegate.mergeTransaction
-                               ? appTheme.spaceMd
-                               : appTheme.spaceSm
+                               ? appTheme.spaceSm + 2
+                               : appTheme.spaceXs + 2
                         height: width
                         radius: width / 2
                         color: appTheme.bgBaseColor
@@ -378,11 +398,10 @@ Item {
                         id: transactionCard
                         objectName: "editorHistoryCard"
                         anchors.left: parent.left
-                        anchors.leftMargin: appTheme.spaceXl
+                        anchors.leftMargin: root.timelineGutter
                         anchors.right: parent.right
-                        height: transactionDelegate.mergeTransaction
-                                ? appTheme.spaceXl * 6
-                                : appTheme.spaceXl * 5
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: root.entryRowHeight
                         radius: appTheme.controlRadiusSmall
                         color: root.colCardSurface
                         property color selectionOutlineColor: transactionDelegate.currentTransaction
@@ -423,34 +442,41 @@ Item {
                             onClicked: transactionDelegate.activateMove()
                         }
 
+                        // Two-line dense layout (LUT entry well pattern):
+                        //   row 1 — title ……………………… relative time
+                        //   row 2 — commit hash ……… delta / merge summary
                         ColumnLayout {
                             anchors.fill: parent
-                            anchors.margins: appTheme.spaceMd
-                            spacing: appTheme.spaceXs
+                            anchors.leftMargin: appTheme.spaceSm
+                            anchors.rightMargin: appTheme.spaceSm
+                            anchors.topMargin: appTheme.spaceXs / 2
+                            anchors.bottomMargin: appTheme.spaceXs / 2
+                            spacing: 0
 
                             RowLayout {
                                 Layout.fillWidth: true
-                                spacing: appTheme.spaceSm
+                                Layout.preferredHeight: appTheme.lineHeightBody
+                                spacing: appTheme.spaceXs
 
                                 Label {
                                     objectName: "editorHistoryCommitTitle"
                                     Layout.fillWidth: true
                                     text: transactionDelegate.mergeTransaction
-                                          ? qsTr("Merge \u00b7 second parent %1")
-                                            .arg(transactionDelegate.secondParent.slice(0, 8))
+                                          ? qsTr("Merge")
                                           : (transactionDelegate.transactionDisplayName.length > 0
                                              ? transactionDelegate.transactionDisplayName
                                              : qsTr("Adjustment"))
                                     color: transactionDelegate.futureRow ? root.colMuted
                                                                          : root.colText
                                     elide: Text.ElideRight
+                                    verticalAlignment: Text.AlignVCenter
                                     font.family: appTheme.uiFontFamily
-                                    font.pixelSize: appTheme.fontSizeTitle
-                                    font.weight: appTheme.fontWeightStrong
+                                    font.pixelSize: appTheme.fontSizeBody
+                                    font.weight: appTheme.fontWeightRegular
                                 }
 
                                 Label {
-                                    Layout.maximumWidth: appTheme.spaceXl * 4
+                                    Layout.alignment: Qt.AlignRight | Qt.AlignVCenter
                                     text: transactionDelegate.transactionTime
                                     color: root.colMuted
                                     elide: Text.ElideRight
@@ -460,40 +486,52 @@ Item {
                                 }
                             }
 
-                            Label {
-                                objectName: "editorHistoryCommitValue"
+                            RowLayout {
                                 Layout.fillWidth: true
-                                visible: !transactionDelegate.mergeTransaction
-                                text: transactionDelegate.transactionDelta
-                                color: root.colMuted
-                                elide: Text.ElideRight
-                                font.family: appTheme.dataFontFamily
-                                font.pixelSize: appTheme.fontSizeBody
-                            }
+                                Layout.preferredHeight: appTheme.lineHeightCaption
+                                spacing: appTheme.spaceXs
 
-                            Rectangle {
-                                Layout.fillWidth: true
-                                Layout.preferredHeight: appTheme.spaceXl * 2
-                                visible: transactionDelegate.mergeTransaction
-                                radius: appTheme.badgeRadius
-                                color: appTheme.bgBaseColor
-                                border.width: 1
-                                border.color: root.colCardBorder
-
+                                // Left half: commit identity (minigit mono).
                                 Label {
-                                    anchors.fill: parent
-                                    anchors.margins: appTheme.spaceSm
-                                    verticalAlignment: Text.AlignVCenter
-                                    text: transactionDelegate.transactionMergeSummary.length > 0
-                                          ? transactionDelegate.transactionMergeSummary
-                                          : qsTr("Resolved incoming adjustments")
-                                    color: root.colText
+                                    objectName: "editorHistoryCommitHash"
+                                    Layout.fillWidth: true
+                                    Layout.preferredWidth: 1
+                                    visible: transactionDelegate.shortCommitId.length > 0
+                                             || transactionDelegate.mergeTransaction
+                                    text: {
+                                        if (transactionDelegate.mergeTransaction
+                                                && transactionDelegate.secondParent.length > 0)
+                                            return qsTr("2nd %1")
+                                                   .arg(transactionDelegate.secondParent.slice(0, 8))
+                                        if (transactionDelegate.shortCommitId.length > 0)
+                                            return transactionDelegate.shortCommitId
+                                        return ""
+                                    }
+                                    color: root.colMuted
                                     elide: Text.ElideRight
-                                    font.family: appTheme.uiFontFamily
+                                    verticalAlignment: Text.AlignVCenter
+                                    font.family: appTheme.monoFontFamily
+                                    font.pixelSize: appTheme.fontSizeCaption
+                                }
+
+                                // Right half: adjustment delta or merge summary.
+                                Label {
+                                    objectName: "editorHistoryCommitValue"
+                                    Layout.fillWidth: true
+                                    Layout.preferredWidth: 1
+                                    text: transactionDelegate.mergeTransaction
+                                          ? (transactionDelegate.transactionMergeSummary.length > 0
+                                             ? transactionDelegate.transactionMergeSummary
+                                             : qsTr("Resolved adjustments"))
+                                          : transactionDelegate.transactionDelta
+                                    color: root.colMuted
+                                    elide: Text.ElideRight
+                                    horizontalAlignment: Text.AlignRight
+                                    verticalAlignment: Text.AlignVCenter
+                                    font.family: appTheme.monoFontFamily
                                     font.pixelSize: appTheme.fontSizeCaption
                                 }
                             }
-
                         }
                     }
                 }

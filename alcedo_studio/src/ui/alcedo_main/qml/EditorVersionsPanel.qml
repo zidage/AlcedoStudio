@@ -144,6 +144,43 @@ Item {
         draftFocusTimer.restart()
     }
 
+    function isVersionDraftAction(action) {
+        return action === "createRootVersion" || action === "renameVersion"
+               || action === "branchFromCommit"
+    }
+
+    // Apply the latest correlated history result to the inline draft. Create and
+    // branch already checkout the new Version on the backend before the terminal
+    // event is published; closing the draft returns the list to normal control.
+    function applyHistoryResultToDraft() {
+        if (!root.draftSubmitPending || !root.editorSession)
+            return false
+        var result = root.editorSession.lastHistoryResult || {}
+        var action = String(result.action || "")
+        if (!root.isVersionDraftAction(action))
+            return false
+        if (root.draftPendingOperationId !== null
+                && result.operationId !== undefined
+                && Number(result.operationId) !== Number(root.draftPendingOperationId))
+            return false
+        var kind = Number(result.kind !== undefined ? result.kind : -1)
+        var terminal = result.terminal === true
+        // SaveStarted = 4. Keep the field until a terminal event for this op.
+        if (!terminal && kind === 4) {
+            if (result.operationId !== undefined)
+                root.draftPendingOperationId = result.operationId
+            root.restoreListScroll()
+            return true
+        }
+        if (kind === 6 || kind === 7) {
+            root.keepDraftAfterFailure(result.message || root.editorSession.lastHistoryMessage)
+            return true
+        }
+        // Terminal success (Accepted / RenderRouted / SaveFinished / …).
+        root.closeDraftAfterSuccess()
+        return true
+    }
+
     function commitDraft(requireChanged) {
         if (!root.draftVisible || !root.historyModel || root.draftSubmitPending)
             return
@@ -182,28 +219,8 @@ Item {
             root.closeDraftAfterSuccess()
             return
         }
-        var result = root.editorSession.lastHistoryResult || {}
-        var action = String(result.action || "")
-        var kind = Number(result.kind !== undefined ? result.kind : -1)
-        var isVersionAction = action === "createRootVersion" || action === "renameVersion"
-                              || action === "branchFromCommit"
-        var operationId = result.operationId
-        // SaveStarted = 4 (EditorSessionResultKind::SaveStarted). Field stays
-        // until a terminal HistoryOperationFinished for this operation id.
-        if (isVersionAction && kind === 4) {
-            root.draftPendingOperationId = operationId
-            root.restoreListScroll()
+        if (root.applyHistoryResultToDraft())
             return
-        }
-        if (isVersionAction && (kind === 6 || kind === 7)) {
-            // Failed / Rejected: keep the entered name and show the reason.
-            root.keepDraftAfterFailure(result.message || root.editorSession.lastHistoryMessage)
-            return
-        }
-        if (isVersionAction) {
-            root.closeDraftAfterSuccess()
-            return
-        }
         // Unrelated history result: release the submit lock but keep the draft.
         root.draftSubmitPending = false
         root.restoreListScroll()
@@ -240,27 +257,16 @@ Item {
         target: root.editorSession
         ignoreUnknownSignals: true
         function onHistoryOperationFinished() {
+            root.applyHistoryResultToDraft()
+        }
+        // Fallback: when the model projects a new active Version after create
+        // (HistoryChanged) while the draft is still pending a terminal event,
+        // re-read lastHistoryResult so a missed signal cannot leave the naming
+        // row and mutation locks stuck open.
+        function onHistoryChanged() {
             if (!root.draftSubmitPending)
                 return
-            var result = root.editorSession.lastHistoryResult || {}
-            var action = String(result.action || "")
-            if (action !== "createRootVersion" && action !== "renameVersion"
-                    && action !== "branchFromCommit")
-                return
-            // Stale completion for another draft must not close this one.
-            if (root.draftPendingOperationId !== null
-                    && result.operationId !== undefined
-                    && result.operationId !== root.draftPendingOperationId)
-                return
-            var kind = Number(result.kind !== undefined ? result.kind : -1)
-            // Keep waiting while a save checkpoint is still running.
-            if (kind === 4)
-                return
-            if (kind === 6 || kind === 7) {
-                root.keepDraftAfterFailure(result.message || root.editorSession.lastHistoryMessage)
-                return
-            }
-            root.closeDraftAfterSuccess()
+            root.applyHistoryResultToDraft()
         }
     }
 
@@ -290,28 +296,14 @@ Item {
             Layout.fillWidth: true
             spacing: appTheme.spaceSm
 
-            ColumnLayout {
+            Label {
+                objectName: "editorHistoryVersionsPanelTitle"
                 Layout.fillWidth: true
-                spacing: appTheme.spaceXs
-
-                Label {
-                    objectName: "editorHistoryVersionsPanelTitle"
-                    Layout.fillWidth: true
-                    text: qsTr("Versions")
-                    color: root.colText
-                    font.family: appTheme.uiFontFamily
-                    font.pixelSize: appTheme.fontSizeSection
-                    font.weight: appTheme.fontWeightHeading
-                }
-
-                Label {
-                    Layout.fillWidth: true
-                    text: qsTr("%1 named looks").arg(root.historyModel && root.historyModel.versions
-                                                       ? root.historyModel.versions.count : 0)
-                    color: root.colMuted
-                    font.family: appTheme.dataFontFamily
-                    font.pixelSize: appTheme.fontSizeCaption
-                }
+                text: qsTr("Versions")
+                color: root.colText
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeSection
+                font.weight: appTheme.fontWeightHeading
             }
 
             IconActionButton {
@@ -461,21 +453,17 @@ Item {
             }
         }
 
-        RowLayout {
+        // Checkout-disabled reason only (no "Named looks" chrome when enabled).
+        Label {
             Layout.fillWidth: true
-
-            Label {
-                Layout.fillWidth: true
-                text: root.versionCheckoutEnabled
-                      ? qsTr("Named looks")
-                      : (root.versionCheckoutDisabledReason.length > 0
-                         ? root.versionCheckoutDisabledReason
-                         : qsTr("Version checkout is unavailable"))
-                color: root.colMuted
-                elide: Text.ElideRight
-                font.family: appTheme.uiFontFamily
-                font.pixelSize: appTheme.fontSizeCaption
-            }
+            visible: !root.versionCheckoutEnabled
+            text: root.versionCheckoutDisabledReason.length > 0
+                  ? root.versionCheckoutDisabledReason
+                  : qsTr("Version checkout is unavailable")
+            color: root.colMuted
+            elide: Text.ElideRight
+            font.family: appTheme.uiFontFamily
+            font.pixelSize: appTheme.fontSizeCaption
         }
 
         Item {
@@ -523,10 +511,12 @@ Item {
                     property bool versionActive: active
                     // Outline-only active chrome: card surface stays cardSurface;
                     // the 1 px border is the selection signal (white/text color).
+                    // No detached HEAD — the outline alone marks the checked-out
+                    // Version; no "CURRENT HEAD" pill or "Checked out" copy.
                     property color selectionOutlineColor: versionActive
                                                           ? root.colText : root.colCardBorder
                     width: ListView.view ? ListView.view.width : 0
-                    height: versionActive ? appTheme.spaceXl * 5 : appTheme.spaceXl * 4
+                    height: appTheme.spaceXl * 4
                     radius: appTheme.controlRadiusSmall
                     color: root.colCardSurface
                     border.width: 1
@@ -534,7 +524,7 @@ Item {
                     Accessible.role: Accessible.ListItem
                     Accessible.name: displayName
                     Accessible.description: versionActive
-                                            ? qsTr("Current head Version")
+                                            ? qsTr("Active Version")
                                             : qsTr("Named Version")
 
                     ListView.onPooled: {}
@@ -556,63 +546,28 @@ Item {
                         anchors.rightMargin: appTheme.spaceXs
                         spacing: appTheme.spaceXs
 
-                        RowLayout {
+                        Label {
+                            objectName: "editorVersionTitle"
                             Layout.fillWidth: true
-                            spacing: appTheme.spaceSm
-
-                            Label {
-                                objectName: "editorVersionTitle"
-                                Layout.fillWidth: true
-                                text: displayName
-                                color: root.colText
-                                elide: Text.ElideRight
-                                font.family: appTheme.uiFontFamily
-                                font.pixelSize: appTheme.fontSizeTitle
-                                font.weight: appTheme.fontWeightStrong
-                            }
-
-                            Rectangle {
-                                visible: versionActive
-                                implicitWidth: currentBadgeLabel.implicitWidth + appTheme.spaceSm
-                                implicitHeight: currentBadgeLabel.implicitHeight + appTheme.spaceXs
-                                radius: appTheme.badgeRadius
-                                color: "transparent"
-                                border.width: 1
-                                border.color: root.colText
-
-                                Label {
-                                    id: currentBadgeLabel
-                                    anchors.centerIn: parent
-                                    text: qsTr("CURRENT HEAD")
-                                    color: root.colText
-                                    font.family: appTheme.dataFontFamily
-                                    font.pixelSize: appTheme.fontSizeCaption
-                                    font.weight: appTheme.fontWeightStrong
-                                }
-                            }
+                            text: displayName
+                            color: root.colText
+                            elide: Text.ElideRight
+                            font.family: appTheme.uiFontFamily
+                            font.pixelSize: appTheme.fontSizeTitle
+                            font.weight: appTheme.fontWeightStrong
                         }
 
                         Label {
                             Layout.fillWidth: true
                             objectName: "editorVersionSubtitle"
-                            text: versionActive
-                                  ? qsTr("Checked out")
-                                  : qsTr("Head %1").arg(versionHead.length > 0
-                                                         ? versionHead.slice(0, 8)
-                                                         : qsTr("image root"))
+                            // Single identity line: the Version's head commit
+                            // (or image root). No separate "Head" + "Commit".
+                            text: versionHead.length > 0
+                                  ? qsTr("Commit %1").arg(versionHead.slice(0, 8))
+                                  : qsTr("Commit image root")
                             color: root.colMuted
                             elide: Text.ElideRight
-                            font.family: appTheme.uiFontFamily
-                            font.pixelSize: appTheme.fontSizeCaption
-                        }
-
-                        Label {
-                            Layout.fillWidth: true
-                            visible: versionHead.length > 0
-                            text: qsTr("Commit %1").arg(versionHead.slice(0, 8))
-                            color: root.colMuted
-                            elide: Text.ElideRight
-                            font.family: appTheme.dataFontFamily
+                            font.family: appTheme.monoFontFamily
                             font.pixelSize: appTheme.fontSizeCaption
                         }
                     }

@@ -68,6 +68,14 @@ TEST(EditorHistoryOperationPublisherTest,
                    .has_value());
   EXPECT_TRUE(publisher.has_pending());
 
+  // Intermediate RenderRouted from RouteInitialRender carries no checkpoint
+  // task id and must not clear the pending create/branch/checkout draft.
+  EXPECT_FALSE(publisher
+                   .CorrelateObservedResult(
+                       MakeResult(EditorSessionResultKind::RenderRouted, 0, "Render routed"))
+                   .has_value());
+  EXPECT_TRUE(publisher.has_pending());
+
   const auto finished = publisher.CorrelateObservedResult(
       MakeResult(EditorSessionResultKind::SaveFinished, 77, "Editor session materialized"));
   ASSERT_TRUE(finished.has_value());

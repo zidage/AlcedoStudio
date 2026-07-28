@@ -203,13 +203,21 @@ auto EditorHistoryModel::roleNames() const -> QHash<int, QByteArray> {
 void EditorHistoryModel::SetSnapshot(alcedo::EditorHistorySnapshot snapshot) {
   const QString active_version_id = QString::fromStdString(snapshot.active_version_id.ToString());
   const QString active_head_commit = HeadText(snapshot.active_head);
+  QString       active_display_name;
+  for (const auto& version : snapshot.versions) {
+    if (version.active || version.version_id == snapshot.active_version_id) {
+      active_display_name = QString::fromStdString(version.display_name);
+      if (version.active) break;
+    }
+  }
   ApplyCommits(std::move(snapshot.commits));
   versions_->SetRows(std::move(snapshot.versions));
-  can_undo_          = snapshot.can_undo;
-  can_redo_          = snapshot.can_redo;
-  recovered_head_    = snapshot.recovered_head;
-  active_version_id_ = active_version_id;
-  active_head_commit_ = active_head_commit;
+  can_undo_                    = snapshot.can_undo;
+  can_redo_                    = snapshot.can_redo;
+  recovered_head_              = snapshot.recovered_head;
+  active_version_id_           = active_version_id;
+  active_head_commit_          = active_head_commit;
+  active_version_display_name_ = std::move(active_display_name);
   emit StateChanged();
 }
 

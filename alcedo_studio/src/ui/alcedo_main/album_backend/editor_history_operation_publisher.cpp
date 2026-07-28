@@ -122,9 +122,18 @@ auto EditorHistoryOperationPublisher::CorrelateObservedResult(
   if (!alcedo::EditorSessionResultIsTerminal(result.kind)) {
     return std::nullopt;
   }
-  if (pending_->task_id != 0 && result.task_id != 0 && pending_->task_id != result.task_id) {
-    // Stale completion for a different checkpoint ticket.
-    return std::nullopt;
+  // Pending Version/create/branch/checkout ops always carry the save checkpoint
+  // task id. Ignore terminal noise without that id (e.g. intermediate
+  // RenderRouted from RouteInitialRender inside Continue*) so the draft stays
+  // correlated until NotifyCompletion publishes the checkpoint ticket.
+  if (pending_->task_id != 0) {
+    if (result.task_id == 0) {
+      return std::nullopt;
+    }
+    if (pending_->task_id != result.task_id) {
+      // Stale completion for a different checkpoint ticket.
+      return std::nullopt;
+    }
   }
 
   const auto operation_id = pending_->operation_id;

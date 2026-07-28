@@ -68,6 +68,8 @@ class EditorHistoryModel : public QAbstractListModel {
   Q_PROPERTY(bool recoveredHead READ recoveredHead NOTIFY StateChanged)
   Q_PROPERTY(QString activeVersionId READ activeVersionId NOTIFY StateChanged)
   Q_PROPERTY(QString activeVersionHeadCommit READ activeVersionHeadCommit NOTIFY StateChanged)
+  /// Display name of the checked-out Version (for Edit History header chrome).
+  Q_PROPERTY(QString activeVersionDisplayName READ activeVersionDisplayName NOTIFY StateChanged)
 
  public:
   enum Role {
@@ -104,6 +106,9 @@ class EditorHistoryModel : public QAbstractListModel {
   [[nodiscard]] auto recoveredHead() const -> bool { return recovered_head_; }
   [[nodiscard]] auto activeVersionId() const -> QString { return active_version_id_; }
   [[nodiscard]] auto activeVersionHeadCommit() const -> QString { return active_head_commit_; }
+  [[nodiscard]] auto activeVersionDisplayName() const -> QString {
+    return active_version_display_name_;
+  }
 
   [[nodiscard]] auto rowCount(const QModelIndex& parent = {}) const -> int override;
   [[nodiscard]] auto data(const QModelIndex& index, int role = Qt::DisplayRole) const
@@ -150,6 +155,7 @@ class EditorHistoryModel : public QAbstractListModel {
   bool                                     recovered_head_ = false;
   QString                                  active_version_id_;
   QString                                  active_head_commit_;
+  QString                                  active_version_display_name_;
 };
 
 void RegisterEditorHistoryQmlTypes();

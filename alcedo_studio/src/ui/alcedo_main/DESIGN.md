@@ -37,11 +37,26 @@ Drift checklist: `docs/roadmap/alcedo_studio/ui/qml_visual_literal_review_checkl
 | UI section | `uiFontFamily` | `fontSizeSection` (14) | `fontWeightHeading` (700) | `lineHeightSection` (20) | Panel titles |
 | UI caption | `uiFontFamily` | `fontSizeCaption` (11) | `fontWeightRegular` | `lineHeightCaption` (14) | Secondary chrome |
 | Headline | `headlineFontFamily` | `fontSizeHeadline` (22) | `fontWeightHeading` | `lineHeightHeadline` (28) | Empty-state titles |
-| Data / numeric | `dataFontFamily` | body/caption | regular/strong | matching | Tabular metrics, zoom, crop degrees |
-| Mono | `monoFontFamily` | body/caption | regular | matching | Diagnostic / mono readouts only |
+| Data / numeric | `dataFontFamily` | body/caption | regular/strong | matching | Tabular metrics, zoom, crop degrees (IBM Plex Sans) |
+| Mono (minigit) | `monoFontFamily` | body/caption | regular | matching | **Only** minigit history/Versions data: commit hashes, before/after delta lines. Family is **DM Mono** (`data_DMMono.ttf`). Do **not** use for general metrics, filmstrip counts, zoom, or crop degrees — those stay on `dataFontFamily`. |
 
 Families resolve at runtime from registered Alcedo fonts (`AppTheme::RegisterFonts`).
 Do not hardcode Inter, Roboto, Arial, or system UI fonts in feature QML.
+
+### Minigit typography
+
+The editor history / Versions rail (mini-Git) is the only product surface that
+uses monospace:
+
+| Surface | Token | What |
+| --- | --- | --- |
+| Version card commit line | `monoFontFamily` + `fontSizeCaption` | `Commit <8-hex>` or `Commit image root` |
+| Transaction card hash | `monoFontFamily` + `fontSizeCaption` | `Commit <8-hex>` per row |
+| Transaction before/after | `monoFontFamily` + `fontSizeBody` | Delta value line (`0 → +0.35`) |
+
+Version and transaction **titles**, times, and section chrome stay on
+`uiFontFamily`. Active Version is outline-only (1 px text-color border); no
+`CURRENT HEAD` pill and no separate "Checked out" / dual Head+Commit labels.
 
 ---
 

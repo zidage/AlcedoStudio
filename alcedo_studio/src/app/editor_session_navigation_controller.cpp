@@ -502,11 +502,14 @@ auto EditorSessionNavigationController::ContinueCheckoutVersion(
     edit_.ClearSnapshot();
   }
 
-  // Stay Interactive on the same image. Route a first frame for the new head
-  // without releasing pipeline ownership.
+  // Stay Interactive on the same image. Advance render generation so the
+  // coordinator cannot treat the post-checkout frame as a reuse of the prior
+  // head (same pattern as Undo / MoveHeadToCommit). Then route a first frame
+  // for the new Version head without releasing pipeline ownership.
   if (lifecycle_.state() != EditorSessionState::Interactive) {
     lifecycle_.MarkImageReady();
   }
+  lifecycle_.AdvanceRenderGeneration();
   render_.ResetForNewImage();
   render_.MarkImageAcquired();
 
@@ -552,6 +555,9 @@ auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string di
   if (lifecycle_.state() != EditorSessionState::Interactive) {
     lifecycle_.MarkImageReady();
   }
+  // Same generation advance as checkout: the new root Version must paint even
+  // when the open image identity is unchanged.
+  lifecycle_.AdvanceRenderGeneration();
   render_.ResetForNewImage();
   render_.MarkImageAcquired();
 
@@ -597,6 +603,7 @@ auto EditorSessionNavigationController::ContinueBranchFromCommit(
   if (lifecycle_.state() != EditorSessionState::Interactive) {
     lifecycle_.MarkImageReady();
   }
+  lifecycle_.AdvanceRenderGeneration();
   render_.ResetForNewImage();
   render_.MarkImageAcquired();
 

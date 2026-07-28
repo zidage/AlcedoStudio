@@ -93,6 +93,7 @@ TEST_F(EditorSessionNavigationControllerTest,
        CheckoutVersionSavesFirstThenRebuildsWithoutReleasingImage) {
   fixture_.OpenA();
   const auto target_version = Hash128{0xabcdef01ULL, 0x23456789ULL};
+  const auto prior_render_gen = fixture_.lifecycle().identity().render_generation;
 
   const auto result = fixture_.RequestCheckoutVersion(target_version);
   EXPECT_TRUE(result.waiting_for_checkpoint);
@@ -111,6 +112,9 @@ TEST_F(EditorSessionNavigationControllerTest,
   EXPECT_EQ(fixture_.history().checkout_count, 1);
   EXPECT_EQ(fixture_.history().last_checkout_version, target_version);
   EXPECT_EQ(fixture_.history().release_count, 0);
+  // Same-image Version checkout must advance render generation so the
+  // presentation path cannot keep the prior Version's frame without a re-route.
+  EXPECT_GT(fixture_.lifecycle().identity().render_generation, prior_render_gen);
 }
 
 /// Phase 7A P0: failed checkout rebuild keeps the image and does not expose a
@@ -190,6 +194,7 @@ TEST_F(EditorSessionNavigationControllerTest,
   fixture_.OpenA();
   fixture_.journal().async_commit               = true;
   fixture_.checkpoint_store().async_materialize = true;
+  const auto prior_render_gen = fixture_.lifecycle().identity().render_generation;
 
   const auto result = fixture_.nav().RequestCreateRootVersion("Root Look");
   ASSERT_TRUE(result.waiting_for_checkpoint);
@@ -199,6 +204,9 @@ TEST_F(EditorSessionNavigationControllerTest,
   EXPECT_EQ(fixture_.history().active_version_id, fixture_.history().last_root_version);
   EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::Interactive);
   EXPECT_TRUE(fixture_.lifecycle().has_image());
+  // Post-create checkout must advance render generation so the viewport
+  // cannot reuse the prior head's frame without a re-route.
+  EXPECT_GT(fixture_.lifecycle().identity().render_generation, prior_render_gen);
 
   EditorAdjustmentPatch patch;
   patch.field_key = "exposure";
