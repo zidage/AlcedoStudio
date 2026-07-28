@@ -551,6 +551,27 @@ gtest_discover_tests(EditorHistoryVersionsRailLifecycleQmlTest
     PROPERTIES LABELS "workspace_qml;editor_history;editor_versions")
 alcedo_register_test_target(EditorHistoryVersionsRailLifecycleQmlTest ui)
 
+# Phase 7B: final-display identity stamping, stale-output rejection, and
+# hidden/resume analyzer lifecycle.
+add_executable(EditorScopeControllerTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_scope_controller_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
+)
+target_include_directories(EditorScopeControllerTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorScopeControllerTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+)
+gtest_discover_tests(EditorScopeControllerTest
+    TEST_PREFIX "EditorScopeControllerTest."
+    PROPERTIES LABELS "workspace_qml;editor_scope")
+alcedo_register_test_target(EditorScopeControllerTest ui)
+
 # Phase 6C-7: an already-restored snapshot must populate the QML Tone panel
 # during its first editor binding, without emitting a new adjustment patch.
 add_executable(EditorAdjustmentSnapshotQmlTest

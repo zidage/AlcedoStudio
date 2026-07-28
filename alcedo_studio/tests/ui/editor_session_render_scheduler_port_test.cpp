@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <atomic>
 
 namespace alcedo::ui {
@@ -35,6 +36,12 @@ class RecordingFrameSink final : public alcedo::IFrameSink {
   }
   [[nodiscard]] auto width() const -> int { return width_; }
   [[nodiscard]] auto height() const -> int { return height_; }
+
+  void SetNextFramePreviewMetadata(const alcedo::FramePreviewMetadata& metadata) override {
+    last_metadata = metadata;
+  }
+
+  alcedo::FramePreviewMetadata last_metadata{};
 
  private:
   std::atomic<int> ready_count_ = 0;
@@ -86,6 +93,29 @@ TEST(EditorSessionRenderSchedulerPortTest,
   EXPECT_EQ(scheduler->pending_present_request_id(), 33u);
   scheduler->NotifyPresentationAcknowledged(33, 7, 11);
   EXPECT_EQ(scheduler->pending_present_request_id(), 0u);
+}
+
+TEST(EditorSessionRenderSchedulerPortTest, ViewDrivenReasonsDisableScopeFrameReplacement) {
+  auto               scheduler = std::make_shared<EditorSessionRenderSchedulerPort>();
+  RecordingFrameSink sink;
+  scheduler->SetSinkResolver([&sink] { return static_cast<alcedo::IFrameSink*>(&sink); });
+  scheduler->SetTestFrameProducer(
+      [](alcedo::IFrameSink* frame_sink, const alcedo::EditorRenderRequest&) {
+        if (!frame_sink) return false;
+        frame_sink->NotifyFrameReady();
+        return true;
+      });
+
+  const std::array view_reasons = {alcedo::EditorRenderReason::ZoomPan,
+                                   alcedo::EditorRenderReason::Resize,
+                                   alcedo::EditorRenderReason::DetailRefresh};
+  for (std::size_t index = 0; index < view_reasons.size(); ++index) {
+    auto request          = MakeRequest(60 + index, 20 + index);
+    request.intent.reason = view_reasons[index];
+    ASSERT_NE(scheduler->Schedule(request), 0u);
+    scheduler->WaitForSessionIdle(20 + index);
+    EXPECT_FALSE(sink.last_metadata.scope_update_allowed);
+  }
 }
 
 TEST(EditorSessionRenderSchedulerPortTest, CancelledSyntheticRequestLeavesSessionIdle) {

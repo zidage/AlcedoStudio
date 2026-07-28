@@ -44,6 +44,14 @@ struct FramePreviewMetadata {
   // identity after the frame is sampled by a render pass.
   std::uint64_t presentation_request_id = 0;
   FrameRoiRect source_roi_norm     = {};
+  // Session/image identity copied into final-display scope frames. Keeping
+  // these beside the render generation lets an analyzer reject a late frame
+  // even when the same durable image is opened again.
+  std::uint64_t image_generation = 0;
+  std::uint64_t image_identity   = 0;
+  // View-only renders (zoom/pan, resize, and detail ROI refreshes) must not
+  // replace the last content frame used by scope analysis.
+  bool scope_update_allowed = true;
 };
 
 enum class FramePresentationMode {

@@ -60,7 +60,13 @@ ApplicationWindow {
     readonly property color colCardBorder: appTheme.cardBorderColor
     // Phase 4D: opaque disabled surface (replaces opacity: 0.55 on panel shells).
     readonly property color colDisabledSurface: appTheme.disabledSurfaceColor
+    readonly property color colScopeGrid: appTheme.scopeGridColor
+    readonly property color colScopePlotBorder: appTheme.scopePlotBorderColor
+    readonly property color colScopeHistogramRed: appTheme.scopeHistogramRedColor
+    readonly property color colScopeHistogramGreen: appTheme.scopeHistogramGreenColor
+    readonly property color colScopeHistogramBlue: appTheme.scopeHistogramBlueColor
     readonly property string dataFontFamily: appTheme.dataFontFamily
+    readonly property string uiFontFamily: appTheme.uiFontFamily
     readonly property string headlineFontFamily: appTheme.headlineFontFamily
     readonly property int controlRadius: appTheme.controlRadius
     readonly property color colButtonPrimary: "#457B9D"

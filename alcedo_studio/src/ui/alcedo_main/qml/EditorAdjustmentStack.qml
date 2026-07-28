@@ -161,24 +161,15 @@ Item {
             spacing: appTheme.spaceMd
 
             // Histogram / waveform placement stays with the right-side tools.
-            Rectangle {
+            EditorScopePanel {
                 id: scopeSlot
                 objectName: "editorScopeSlot"
                 Layout.fillWidth: true
                 Layout.preferredHeight: appTheme.editorScopeHeight
                 Layout.minimumHeight: appTheme.editorScopeHeightMin
-                radius: appTheme.controlRadiusSmall
-                // Sunken inset (not a nested card of the same fill).
-                color: root.colBase
-                border.width: 1
-                border.color: root.colCardBorder
-
-                Label {
-                    anchors.centerIn: parent
-                    text: qsTr("Histogram / Waveform")
-                    color: root.colMuted
-                    font.pixelSize: appTheme.fontSizeBody
-                }
+                theme: root.theme
+                editorSession: root.editorSession
+                controlsEnabled: root.controlsEnabled
             }
 
             // Compact adjustment navbar: sunken track + monochrome sliding well

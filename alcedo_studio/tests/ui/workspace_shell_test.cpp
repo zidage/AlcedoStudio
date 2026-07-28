@@ -1701,8 +1701,8 @@ TEST_F(WorkspaceShellTests, AppThemeExposesPhase4CGeometryAndMotionTokens) {
   EXPECT_EQ(theme.editorSidePanelWidth(), 320);
   EXPECT_EQ(theme.editorSidePanelWidthMin(), 260);
   EXPECT_EQ(theme.editorSidePanelWidthMax(), 460);
-  EXPECT_EQ(theme.editorScopeHeight(), 160);
-  EXPECT_EQ(theme.editorScopeHeightMin(), 128);
+  EXPECT_EQ(theme.editorScopeHeight(), 192);
+  EXPECT_EQ(theme.editorScopeHeightMin(), 160);
   EXPECT_GE(theme.editorSidePanelWidthMax(), theme.editorSidePanelWidth());
   EXPECT_GE(theme.editorSidePanelWidth(), theme.editorSidePanelWidthMin());
   EXPECT_GE(theme.editorScopeHeight(), theme.editorScopeHeightMin());

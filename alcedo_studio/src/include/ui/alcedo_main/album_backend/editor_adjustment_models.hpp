@@ -267,8 +267,9 @@ class EditorAdjustmentToggleModel : public EditorAdjustmentModelBase {
   bool defaultValue_ = false;
 };
 
-/// Register the Phase 6A typed adjustment models with the Alcedo.Main QML
-/// module. Called from ApplicationModuleHost's constructor.
+/// Register the typed adjustment models and shared editor plot item with the
+/// Alcedo.Main QML module. Called from ApplicationModuleHost's constructor and
+/// by standalone adjustment-stack QML tests.
 void RegisterEditorAdjustmentQmlTypes();
 
 }  // namespace alcedo::ui

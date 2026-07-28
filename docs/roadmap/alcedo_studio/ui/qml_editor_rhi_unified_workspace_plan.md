@@ -2696,6 +2696,73 @@ Acceptance:
 - Histogram and waveform consume the correct final-display generation and never show a prior image
   after switching.
 - Hidden/collapsed scopes stop scheduling visual updates without corrupting the analyzer lifecycle.
+- Zoom/pan, viewport resize, and detail ROI frames leave scope on the last content-changing display
+  frame while the display continues to accept the latest view frame.
+
+##### Phase 7B completion record (2026-07-28)
+
+**Status:** complete. The unified editor now presents histogram and waveform data through a QML-facing
+scope controller and a retained scene-graph item. Scope frames carry image identity, session image
+generation, final-display generation, and analyzer generation from the render scheduler through the
+GPU analyzer backends. Image switches clear the copied snapshot and pending frame metadata before a
+new display frame can be accepted.
+
+Primary success call chains:
+
+- Presentation routing: `EditorSessionController::presentation_frame_sink()` ->
+  `EditorScopeController::frame_sink()` -> `FinalDisplayFrameTapSink` ->
+  `EditorSessionRenderSchedulerPort::FrameRoleToPreviewMetadata()` -> stamped scope eligibility ->
+  cached latest `FinalDisplayFrameView` plus the last scope-eligible content frame.
+- Asynchronous analysis/publication: `EditorScopeController::pollSnapshot()` ->
+  `QThreadPool` task -> `IScopeAnalyzer::SubmitFrame()` / `GetLatestOutput()` /
+  `ReadScopeRenderSnapshot()` -> queued `publishSnapshot()` -> `SnapshotChanged` ->
+  `EditorScopeItem::sync_snapshot()` ->
+  retained `QSGGeometryNode` histogram lines or waveform point geometry.
+- QML surface: `EditorWorkspace.qml` -> `EditorAdjustmentStack.qml` -> `EditorScopePanel.qml`;
+  Basic controls select the plot, AppTheme supplies semantic plot colors, and the scope well uses
+  horizontal top/bottom rules.
+- Visibility lifecycle: `EditorScopePanel.visualActive` controls
+  `EditorScopeController::set_visual_active()`. The tap stops analyzer submissions and the polling
+  timer while inactive, retains analyzer resources, and the next active poll submits only the most
+  recent scope-eligible content frame. View-only `ZoomPan`, `Resize`, and `DetailRefresh` frames
+  update display state without replacing that scope frame. Loader destruction also stops polling.
+
+Executed evidence:
+
+| Evidence | Command | Result |
+| --- | --- | --- |
+| Windows production build, QML cache, and type registration | `cmd /c scripts\\msvc_env.cmd --build --preset win_debug --parallel 4 --target alcedo_main EditorScopeControllerTest EditorSessionRenderSchedulerPortTest` | Passed; `alcedo_main.exe` and both scope/render-scheduler test executables linked |
+| Generation, lifecycle, deferred scheduling, and view-frame retention | `ctest --test-dir build/debug -R "EditorScopeControllerTest" --output-on-failure` | 8/8 passed: metadata stamping, view-only frame retention, hidden/resume, pending metadata invalidation, polling stop, deferred submission, prior-image rejection, and display-generation rejection |
+| Render-reason scope eligibility | `ctest --test-dir build/debug -R "EditorSessionRenderSchedulerPortTest" --output-on-failure` | 3/3 passed: content metadata remains eligible; `ZoomPan`, `Resize`, and `DetailRefresh` disable scope-frame replacement |
+| Existing direct QML stack harness | `ctest --test-dir build/debug -R "EditorAdjustmentSnapshotQmlTest" --output-on-failure` with the local Qt offscreen/QML import paths | 1/1 passed; `EditorScopeItem` is registered for standalone stack loading |
+| Diff and terminology checks | `git diff --check`; roadmap/source searches for forbidden project terms and test names | Passed; no Phase 7B violations |
+
+The retained plot uses line and colored-point scene-graph geometry. It does not create a per-frame
+`QImage` or upload a raster image from QML. `ScopeRenderSnapshot` owns copied normalized arrays, so
+the scene graph never retains analyzer-owned GPU handles.
+
+The unified workspace no longer runs scope analysis from the display submission path. The tap stamps
+and caches the latest display-frame handle while retaining the last scope-eligible content frame; a
+15 FPS worker submits a new eligible frame when one is available, calculates only the active
+histogram or waveform, and performs GPU-to-CPU readback and normalization off the GUI thread.
+`ZoomPan`, `Resize`, and `DetailRefresh` frames therefore do not trigger scope replacement. The
+default waveform request is bounded to 320 x 160. Identity, session generation, display generation,
+and request revision checks discard late work after image or plot changes.
+
+The broader `WorkspaceShellTest` invocation was also attempted with the local Qt plugin paths. Its
+existing suite remains blocked by a pre-existing `AppDialogs.qml` binding-loop warning; the failure
+does not reference the scope panel, and the focused stack harness above verifies the changed QML
+composition path.
+
+Exit checklist:
+
+- [x] Histogram/waveform analyzer outputs are copied into immutable QML-facing snapshots.
+- [x] Final-display, image/session, and analyzer generations are propagated and filtered before
+  publication.
+- [x] The dedicated scene-graph plot item avoids per-frame QImage upload.
+- [x] Hidden, collapsed, and destroyed scope surfaces stop visual scheduling without releasing
+  analyzer resources.
+- [x] Production build and focused C++/QML evidence are green on the Windows debug preset.
 
 ### Phase 7C - Collapsible editor filmstrip module
 

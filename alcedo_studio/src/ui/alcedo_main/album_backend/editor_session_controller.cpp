@@ -56,11 +56,14 @@ EditorSessionController::EditorSessionController(EditorController*              
                                                  alcedo::IEditorSessionBackend* session_backend,
                                                  QObject*                       parent)
     : QObject(parent), editor_(editor), session_backend_(session_backend) {
+  scope_controller_ = std::make_unique<EditorScopeController>(this);
+  scope_controller_->SetImageIdentity(image_id(), session_generation());
   LoadFilmstripUiPrefs();
   LoadDesktopUiPrefs();
   if (session_backend_) {
     session_backend_->SetGeometryOverlayActive(active_adjustment_panel_ ==
                                                QLatin1String("geometry"));
+    SyncIdentityFromBackend();
   }
   InstallBackendNotifier();
   SyncRawDecodeCapabilities();
@@ -132,6 +135,9 @@ void EditorSessionController::SetSessionBackend(alcedo::IEditorSessionBackend* s
                                                QLatin1String("geometry"));
     InstallBackendNotifier();
     SyncIdentityFromBackend();
+  }
+  if (scope_controller_) {
+    scope_controller_->SetImageIdentity(image_id(), session_generation());
   }
   SyncRawDecodeCapabilities();
 }
@@ -272,6 +278,9 @@ void EditorSessionController::ApplyCloseLocal() {
 }
 
 void EditorSessionController::SyncViewportIdentity() {
+  if (scope_controller_) {
+    scope_controller_->SetImageIdentity(image_id(), session_generation());
+  }
   if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
     if (has_image()) {
       item->setImageIdentity(static_cast<qulonglong>(image_id()));
@@ -296,17 +305,26 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
     // EnsureSize may publish a generation-0 target and the guaranteed first
     // frame races permanently ahead of the controller's post-call mirror.
     if (elementId > 0 && imageId > 0) {
+      const bool same_image = session_backend_->has_image() &&
+                              session_backend_->identity().element_id == elementId &&
+                              session_backend_->identity().image_id == imageId;
+      if (scope_controller_) {
+        scope_controller_->SetImageIdentity(
+            static_cast<qulonglong>(imageId),
+            static_cast<qulonglong>(session_backend_->identity().session_generation +
+                                    (same_image ? 0 : 1)));
+      }
       if (auto* item =
               qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
-        const bool same_image = session_backend_->has_image() &&
-                                session_backend_->identity().element_id == elementId &&
-                                session_backend_->identity().image_id == imageId;
         item->setImageIdentity(static_cast<qulonglong>(imageId));
         item->setImageGeneration(static_cast<qulonglong>(
             session_backend_->identity().session_generation + (same_image ? 0 : 1)));
       }
     }
     if (elementId == 0 || imageId == 0) {
+      if (scope_controller_) {
+        scope_controller_->SetImageIdentity(0, 0);
+      }
       // Empty editor is an explicit persisted close, not a fake image open.
       if (auto* item =
               qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
@@ -574,6 +592,9 @@ void EditorSessionController::OnBackendSessionResult(const alcedo::EditorSession
 }
 
 void EditorSessionController::Close() {
+  if (scope_controller_) {
+    scope_controller_->SetImageIdentity(0, 0);
+  }
   if (!active_ && element_id_ == 0 && image_id_ == 0 &&
       session_state_ == alcedo::EditorSessionState::NoImage) {
     return;
@@ -593,6 +614,9 @@ void EditorSessionController::Close() {
 }
 
 void EditorSessionController::Shutdown() {
+  if (scope_controller_) {
+    scope_controller_->SetImageIdentity(0, 0);
+  }
   if (session_backend_) {
     if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
       item->suspendPresentation();
@@ -611,6 +635,9 @@ void EditorSessionController::Shutdown() {
 void EditorSessionController::Finalize(bool persistChanges) {
   // Finalize closes the active image through the lifecycle owner. The QML
   // viewport unbinds itself when the workspace visual tree is destroyed.
+  if (scope_controller_) {
+    scope_controller_->SetImageIdentity(0, 0);
+  }
   if (session_backend_) {
     if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
       item->suspendPresentation();
@@ -640,6 +667,9 @@ void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {
   }
   presentation_viewport_ = viewportItem;
   if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(viewportItem)) {
+    if (scope_controller_) {
+      scope_controller_->SetDownstreamSink(item->frameSink());
+    }
     if (has_image()) {
       item->setImageIdentity(static_cast<qulonglong>(image_id()));
       item->setImageGeneration(session_generation());
@@ -649,6 +679,8 @@ void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {
       session_backend_->SetPresentationSinkId(
           static_cast<alcedo::PresentationSinkId>(reinterpret_cast<std::uintptr_t>(item)));
     }
+  } else if (scope_controller_) {
+    scope_controller_->SetDownstreamSink(nullptr);
   }
   emit PresentationBindingChanged();
 }
@@ -687,6 +719,9 @@ void EditorSessionController::unbindPresentationViewport() {
   if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
     item->suspendPresentation();
   }
+  if (scope_controller_) {
+    scope_controller_->SetDownstreamSink(nullptr);
+  }
   presentation_viewport_.clear();
   if (session_backend_) {
     session_backend_->SetPresentationSinkId(0);
@@ -704,6 +739,10 @@ auto EditorSessionController::presentation_frame_sink() const -> alcedo::IFrameS
   auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
   if (!item) {
     return nullptr;
+  }
+  if (scope_controller_) {
+    scope_controller_->SetDownstreamSink(item->frameSink());
+    return scope_controller_->frame_sink();
   }
   return item->frameSink();
 }

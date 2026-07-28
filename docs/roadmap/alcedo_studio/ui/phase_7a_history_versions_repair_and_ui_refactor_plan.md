@@ -1289,7 +1289,7 @@ WorkspaceShellTest 43/43 ran (1 skipped pre-existing `ProductionFirstFramePathâ€
 
 **LOC note (grill-code-review):**
 
-- `EditorHistoryVersionsRail.qml` ~290 LOC (Loader + fold contract)
+- `EditorHistoryVersionsRail.qml` ~290 LOC (Loader + fold behavior)
 - `EditorHistoryTransactionsPanel.qml` ~750 LOC (delegate required roles; no structural split needed)
 - `EditorVersionsPanel.qml` ~650 LOC
 - New `editor_history_versions_rail_lifecycle_qml_test.cpp` ~170 LOC
@@ -1300,7 +1300,7 @@ WorkspaceShellTest 43/43 ran (1 skipped pre-existing `ProductionFirstFramePathâ€
 - R7 production-path real RAW + DuckDB + performance counters still open.
 - Filmstrip / `CollapsibleSection` still animate height + opacity (documented DESIGN exception;
   not in R6 exit).
-- Lifecycle fold assertions use rail `totalWidth` (layout contract); production
+- Lifecycle fold assertions use rail `totalWidth` (layout invariant); production
   `WorkspaceShellTest.HistoryFoldDriverPinsâ€¦` asserts scene width inside a real Layout.
 
 ### R7 â€” production integration and performance qualification

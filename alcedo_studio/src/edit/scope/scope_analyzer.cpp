@@ -250,7 +250,10 @@ auto CreateDefaultScopeAnalyzer() -> std::shared_ptr<IScopeAnalyzer> {
 
 auto ReadScopeRenderSnapshot(const ScopeOutputSet& output) -> ScopeRenderSnapshot {
   ScopeRenderSnapshot snapshot;
-  snapshot.generation = output.generation;
+  snapshot.generation         = output.generation;
+  snapshot.image_identity     = output.image_identity;
+  snapshot.image_generation   = output.image_generation;
+  snapshot.display_generation = output.display_generation;
 
 #ifdef HAVE_CUDA
   if (output.histogram_valid && output.histogram_buffer &&

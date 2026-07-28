@@ -10,6 +10,7 @@
 #include <QString>
 #include <QVariantMap>
 #include <QtGlobal>
+#include <memory>
 #include <vector>
 
 #include "app/adjustment_transfer_types.hpp"
@@ -17,6 +18,7 @@
 #include "app/editor_session_types.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_operation_publisher.hpp"
+#include "ui/alcedo_main/album_backend/editor_scope_controller.hpp"
 
 namespace alcedo {
 class IFrameSink;
@@ -81,6 +83,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
                  DesktopUiChanged)
   Q_PROPERTY(bool presentationViewportBound READ presentation_viewport_bound NOTIFY
                  PresentationBindingChanged)
+  Q_PROPERTY(EditorScopeController* scopeController READ scope_controller CONSTANT)
   // Phase 5D: the render coordinator has in-flight or pending work for this
   // session. QML binds a busy indicator to it. Reflects backend render_busy()
   // (coordinator diagnostics); transitions fire StateChanged via the backend
@@ -228,7 +231,11 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Bound QQuickRhiItem (EditorViewportItem). QPointer may clear after destroy.
   [[nodiscard]] auto presentation_viewport() const -> QObject*;
 
-  // Production pipeline entry: resolves the bound viewport to its DirectFrameSink.
+  [[nodiscard]] auto scope_controller() const -> EditorScopeController* {
+    return scope_controller_.get();
+  }
+
+  // Production pipeline entry: resolves the bound viewport through the scope tap.
   // Returns null when unbound or the object is not an EditorViewportItem.
   // Callers must re-resolve after PresentationBindingChanged / StateChanged.
   [[nodiscard]] auto presentation_frame_sink() const -> alcedo::IFrameSink*;
@@ -314,6 +321,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QPointer<QObject>       presentation_viewport_;
   QPointer<QObject>       interaction_controller_;
   QMetaObject::Connection interaction_view_change_connection_;
+  mutable std::unique_ptr<EditorScopeController> scope_controller_;
 };
 
 }  // namespace alcedo::ui

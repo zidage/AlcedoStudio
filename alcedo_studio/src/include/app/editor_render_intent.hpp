@@ -227,6 +227,13 @@ struct EditorRenderResult {
   return reason == EditorRenderReason::ZoomPan || reason == EditorRenderReason::Resize;
 }
 
+/// Scope reads image content, so view-only re-sampling and view-dependent ROI
+/// refreshes retain the last content frame instead of replacing the scope input.
+[[nodiscard]] inline auto ScopeUpdateAllowedForReason(EditorRenderReason reason) -> bool {
+  return reason != EditorRenderReason::ZoomPan && reason != EditorRenderReason::Resize &&
+         reason != EditorRenderReason::DetailRefresh;
+}
+
 /// Fill role/replacement defaults derived from quality before Submit stores the
 /// intent. Producers should set reason/quality/priority (or accept reason defaults).
 inline void FillRenderIntentDefaults(EditorRenderIntent& intent) {

@@ -946,6 +946,26 @@ auto AppTheme::editorListFavoriteActiveOnSelectedColor() const -> QColor {
   return editorListSelectedInkColor();
 }
 
+auto AppTheme::scopeGridColor() const -> QColor {
+  return Blend(bgDeepColor(), textMutedColor(), 0.32);
+}
+
+auto AppTheme::scopePlotBorderColor() const -> QColor {
+  return Blend(bgBaseColor(), textMutedColor(), 0.42);
+}
+
+auto AppTheme::scopeHistogramRedColor() const -> QColor {
+  return Blend(QColor(0xE2, 0x8A, 0x8A), textColor(), 0.18);
+}
+
+auto AppTheme::scopeHistogramGreenColor() const -> QColor {
+  return Blend(QColor(0xA8, 0xD6, 0x9B), textColor(), 0.18);
+}
+
+auto AppTheme::scopeHistogramBlueColor() const -> QColor {
+  return Blend(QColor(0x8E, 0xB9, 0xE5), textColor(), 0.18);
+}
+
 auto AppTheme::uiFontFamily() const -> QString {
   RegisterFonts();
   return ActiveUiFamily(FontState());
@@ -1031,8 +1051,8 @@ auto AppTheme::editorSidePanelWidth() const -> int { return 320; }
 auto AppTheme::editorSidePanelWidthMin() const -> int { return 260; }
 auto AppTheme::editorSidePanelWidthMax() const -> int { return 460; }
 auto AppTheme::editorMergeDialogWidth() const -> int { return 560; }
-auto AppTheme::editorScopeHeight() const -> int { return 160; }
-auto AppTheme::editorScopeHeightMin() const -> int { return 128; }
+auto AppTheme::editorScopeHeight() const -> int { return 192; }
+auto AppTheme::editorScopeHeightMin() const -> int { return 160; }
 auto AppTheme::lineHeightCaption() const -> int { return 14; }
 auto AppTheme::lineHeightBody() const -> int { return 16; }
 auto AppTheme::lineHeightTitle() const -> int { return 18; }

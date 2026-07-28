@@ -20,6 +20,7 @@
 #include "ui/alcedo_main/album_backend/editor_hls_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_lens_catalog_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_lut_catalog_model.hpp"
+#include "ui/alcedo_main/album_backend/editor_scope_item.hpp"
 #include "ui/alcedo_main/album_backend/editor_tone_curve_item.hpp"
 #include "ui/alcedo_main/album_backend/editor_tone_curve_model.hpp"
 
@@ -412,6 +413,7 @@ void RegisterEditorAdjustmentQmlTypes() {
   qmlRegisterType<EditorLutCatalogModel>("Alcedo.Main", 1, 0, "EditorLutCatalogModel");
   qmlRegisterType<EditorGeometryMath>("Alcedo.Main", 1, 0, "EditorGeometryMath");
   qmlRegisterType<EditorLensCatalogModel>("Alcedo.Main", 1, 0, "EditorLensCatalogModel");
+  EditorScopeItem::RegisterQmlType();
 }
 
 }  // namespace alcedo::ui

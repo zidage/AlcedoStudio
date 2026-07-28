@@ -24,6 +24,7 @@
 
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
+#include "ui/alcedo_main/album_backend/editor_scope_controller.hpp"
 #include "ui/alcedo_main/language_manager.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/editor_startup.hpp"
@@ -69,6 +70,8 @@ void RegisterApplicationModuleTypes() {
       "Alcedo.Main", 1, 0, "AdjustmentTransferController", "Owned by ApplicationModuleHost");
   qmlRegisterUncreatableType<alcedo::ui::EditorSessionController>(
       "Alcedo.Main", 1, 0, "EditorSessionController", "Owned by ApplicationModuleHost");
+  qmlRegisterUncreatableType<alcedo::ui::EditorScopeController>(
+      "Alcedo.Main", 1, 0, "EditorScopeController", "Owned by EditorSessionController");
   qmlRegisterUncreatableType<alcedo::ui::WorkspaceRouter>(
       "Alcedo.Main", 1, 0, "WorkspaceRouter", "Owned by ApplicationModuleHost");
 }

@@ -196,12 +196,26 @@ the two side columns read as one family.
 | `editorSidePanelWidthMin` | 260 | Adjustment stack minimum (narrow-window floor) |
 | `editorSidePanelWidthMax` | 460 | Adjustment stack maximum |
 | `editorMergeDialogWidth` | 560 | Merge conflict resolution dialog |
-| `editorScopeHeight` | 160 | Histogram / waveform slot preferred height |
-| `editorScopeHeightMin` | 128 | Histogram / waveform slot minimum height |
+| `editorScopeHeight` | 192 | Histogram / waveform slot preferred height |
+| `editorScopeHeightMin` | 160 | Histogram / waveform slot minimum height |
 
 The History/Versions rail width (60 px) and rail-button hit (46 px) stay under
 Icon and action geometry; the rail width is not tokenized because it is locked to
 the rail-button optical balance.
+
+### Scope plot colors
+
+Scope plot colors are semantic AppTheme tokens so the scene-graph item does not
+carry palette literals into QML. They are used by both histogram lines and the
+waveform point field.
+
+| Token | Use |
+| --- | --- |
+| `scopeGridColor` | Plot grid lines |
+| `scopePlotBorderColor` | Horizontal plot rules |
+| `scopeHistogramRedColor` | Red channel |
+| `scopeHistogramGreenColor` | Green channel |
+| `scopeHistogramBlueColor` | Blue channel |
 
 ---
 

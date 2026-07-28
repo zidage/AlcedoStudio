@@ -12,6 +12,7 @@
 
 #include "app/editor_adjustment_pipeline.hpp"
 #include "edit/frame_presentation_types.hpp"
+#include "edit/scope/final_display_frame_tap.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "io/image/image_loader.hpp"
@@ -38,10 +39,23 @@ auto RenderTypeForIntent(const alcedo::EditorRenderIntent& intent) -> alcedo::Re
 auto FrameRoleToPreviewMetadata(const alcedo::EditorRenderIntent& intent)
     -> alcedo::FramePreviewMetadata {
   alcedo::FramePreviewMetadata meta;
-  meta.frame_role         = intent.frame_role;
-  meta.preview_generation = intent.render_generation;
-  meta.detail_serial      = 0;
+  meta.frame_role           = intent.frame_role;
+  meta.preview_generation   = intent.render_generation;
+  meta.detail_serial        = 0;
+  meta.image_identity       = static_cast<std::uint64_t>(intent.image_id);
+  meta.image_generation     = intent.session_generation;
+  meta.scope_update_allowed = alcedo::ScopeUpdateAllowedForReason(intent.reason);
   return meta;
+}
+
+auto DirectSinkFor(alcedo::IFrameSink* sink) -> alcedo::editor_rhi::DirectFrameSink* {
+  if (auto* direct_sink = dynamic_cast<alcedo::editor_rhi::DirectFrameSink*>(sink)) {
+    return direct_sink;
+  }
+  if (auto* tap = dynamic_cast<alcedo::FinalDisplayFrameTapSink*>(sink)) {
+    return dynamic_cast<alcedo::editor_rhi::DirectFrameSink*>(tap->downstream_sink());
+  }
+  return nullptr;
 }
 
 }  // namespace
@@ -254,7 +268,7 @@ void EditorSessionRenderSchedulerPort::ExecuteJob(Job job) {
     return;
   }
 
-  if (auto* direct_sink = dynamic_cast<alcedo::editor_rhi::DirectFrameSink*>(sink)) {
+  if (auto* direct_sink = DirectSinkFor(sink)) {
     direct_sink->SetFirstFrameCompositionCallback(
         [weak = weak_from_this()](std::uint64_t request_id, std::uint64_t image_generation,
                                   std::uint64_t image_identity) {
@@ -273,7 +287,7 @@ void EditorSessionRenderSchedulerPort::ExecuteJob(Job job) {
   sink->EnsureSize(std::max(1, job.request.intent.requested_width),
                    std::max(1, job.request.intent.requested_height));
 
-  auto*       direct_sink      = dynamic_cast<alcedo::editor_rhi::DirectFrameSink*>(sink);
+  auto*       direct_sink      = DirectSinkFor(sink);
   const auto  submitted_before = direct_sink ? direct_sink->submitted_frame_count() : 0;
   std::string error;
   bool        submitted = false;

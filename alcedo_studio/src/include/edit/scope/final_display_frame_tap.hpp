@@ -14,17 +14,25 @@ namespace alcedo {
 
 class FinalDisplayFrameTapSink final : public IFrameSink, public IFinalDisplayFrameProvider {
  public:
-  FinalDisplayFrameTapSink(IFrameSink* downstream_sink,
+  FinalDisplayFrameTapSink(IFrameSink*                     downstream_sink,
                            std::shared_ptr<IScopeAnalyzer> scope_analyzer);
 
-  void SetScopeRequest(const ScopeRequest& request);
-  auto GetScopeRequest() const -> ScopeRequest;
+  void               SetDownstreamSink(IFrameSink* downstream_sink);
+  void               SetScopeRequest(const ScopeRequest& request);
+  void               SetScopeActive(bool active);
+  void               SetScopeAnalysisDeferred(bool deferred);
+  void               SetFrameIdentity(uint64_t image_identity, uint64_t image_generation);
+  auto               GetScopeRequest() const -> ScopeRequest;
+  auto               SubmitCurrentDisplayFrameToScope() -> bool;
 
-  auto GetCurrentDisplayFrameView() const -> FinalDisplayFrameView override;
+  [[nodiscard]] auto downstream_sink() const -> IFrameSink*;
 
-  void EnsureSize(int width, int height) override;
-  auto MapResourceForWrite(
-      FrameMemoryDomain preferred_domain = FrameMemoryDomain::CudaDevice) -> FrameWriteMapping override;
+  auto               GetCurrentDisplayFrameView() const -> FinalDisplayFrameView override;
+  auto               GetCurrentScopeFrameView() const -> FinalDisplayFrameView;
+
+  void               EnsureSize(int width, int height) override;
+  auto MapResourceForWrite(FrameMemoryDomain preferred_domain = FrameMemoryDomain::CudaDevice)
+      -> FrameWriteMapping override;
   void UnmapResource() override;
   void NotifyFrameReady() override;
   void SubmitHostFrame(const ViewerFrame& frame) override;
@@ -41,11 +49,19 @@ class FinalDisplayFrameTapSink final : public IFrameSink, public IFinalDisplayFr
   auto GetViewerSurface() const -> const IEditViewerSurface* override;
 
  private:
-  IFrameSink*                    downstream_sink_ = nullptr;
-  std::shared_ptr<IScopeAnalyzer> scope_analyzer_ = {};
-  mutable std::mutex             mutex_{};
-  FinalDisplayFrameView          current_frame_{};
-  ScopeRequest                   scope_request_{};
+  IFrameSink*                     downstream_sink_ = nullptr;
+  std::shared_ptr<IScopeAnalyzer> scope_analyzer_  = {};
+  mutable std::mutex              mutex_{};
+  FinalDisplayFrameView           current_frame_{};
+  FinalDisplayFrameView           scope_frame_{};
+  ScopeRequest                    scope_request_{};
+  FramePreviewMetadata            pending_metadata_{};
+  bool                            pending_metadata_valid_  = false;
+  bool                            scope_active_            = false;
+  bool                            scope_analysis_deferred_ = false;
+  uint64_t                        image_identity_          = 0;
+  uint64_t                        image_generation_        = 0;
+  uint64_t                        next_frame_id_           = 1;
 };
 
 }  // namespace alcedo

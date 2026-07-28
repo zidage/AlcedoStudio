@@ -132,6 +132,11 @@ class AppTheme final : public QObject {
                  NOTIFY ThemeChanged)
   Q_PROPERTY(QColor editorListFavoriteActiveOnSelectedColor READ
                  editorListFavoriteActiveOnSelectedColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor scopeGridColor READ scopeGridColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor scopePlotBorderColor READ scopePlotBorderColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor scopeHistogramRedColor READ scopeHistogramRedColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor scopeHistogramGreenColor READ scopeHistogramGreenColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor scopeHistogramBlueColor READ scopeHistogramBlueColor NOTIFY ThemeChanged)
 
  public:
   enum class FontRole : int {
@@ -272,6 +277,11 @@ class AppTheme final : public QObject {
   auto editorListFavoriteActiveColor() const -> QColor;
   auto editorListFavoriteIdleOnSelectedColor() const -> QColor;
   auto editorListFavoriteActiveOnSelectedColor() const -> QColor;
+  auto scopeGridColor() const -> QColor;
+  auto scopePlotBorderColor() const -> QColor;
+  auto scopeHistogramRedColor() const -> QColor;
+  auto scopeHistogramGreenColor() const -> QColor;
+  auto scopeHistogramBlueColor() const -> QColor;
 
   auto currentThemeIndex() const -> int;
   void setCurrentThemeIndex(int index);
