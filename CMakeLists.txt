@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.19)
+cmake_minimum_required(VERSION 3.21)
 
 if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Darwin" AND
    (NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET OR "${CMAKE_OSX_DEPLOYMENT_TARGET}" STREQUAL ""))
@@ -38,6 +38,9 @@ option(ALCEDO_ENABLE_CUDA "Enable CUDA-accelerated pipeline backends when CUDA i
 option(ALCEDO_ENABLE_METAL "Enable Metal-accelerated pipeline backends when building on Apple platforms." ${ALCEDO_ENABLE_METAL_DEFAULT})
 option(ALCEDO_ENABLE_OPENCL "Enable OpenCL support when the OpenCL SDK/ICD loader is available." ${ALCEDO_ENABLE_OPENCL_DEFAULT})
 option(ALCEDO_ENABLE_OPENGL_EDITOR "Build the OpenGL-based editor UI when the required backend is available." ${ALCEDO_ENABLE_OPENGL_EDITOR_DEFAULT})
+option(ALCEDO_BUILD_CUDA_DLLS
+       "Build first-party CUDA implementation targets as DLLs to reduce incremental link time."
+       ${WIN32})
 option(ALCEDO_BUILD_TESTS "Build alcedo tests and demos." ON)
 option(ALCEDO_MACOS_BUNDLE
        "Build alcedo_main as a macOS .app bundle (intended for packaging/install)."

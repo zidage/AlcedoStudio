@@ -427,6 +427,30 @@ else()
     add_executable(alcedo_main ${ALCEDO_MAIN_SOURCES})
 endif()
 
+if(WIN32)
+    # Keep the development executable at the historical, stable location.
+    # CMake Tools and developers launching from the build tree must use the
+    # same executable that receives the first-party CUDA runtime DLLs.
+    set_target_properties(alcedo_main PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${ALCEDO_BINARY_ROOT}"
+    )
+
+    # Make the build-tree executable directly runnable without a shell-specific
+    # Qt environment. Packaging generates its own deployment configuration.
+    get_filename_component(_alcedo_qt_runtime_prefix
+        "${Qt6_DIR}/../../.." ABSOLUTE
+    )
+    file(GENERATE
+        OUTPUT "${ALCEDO_BINARY_ROOT}/qt.conf"
+        CONTENT
+"[Paths]
+Prefix = ${_alcedo_qt_runtime_prefix}
+Plugins = plugins
+QmlImports = qml
+"
+    )
+endif()
+
 if(APPLE)
     set(ALCEDO_MAIN_ICON_PNG "${ALCEDO_SRC_ROOT}/config/ICON/alcedo_icon.png")
     set(ALCEDO_MAIN_ICONSET_DIR "${ALCEDO_BINARY_ROOT}/alcedo_icon.iconset")
@@ -491,6 +515,8 @@ target_link_libraries(alcedo_main
         Qt6::Svg
         Qt6::QuickEffects
 )
+
+alcedo_copy_linked_runtime_dlls(alcedo_main)
 
 if(ALCEDO_REAL_WIDGET_EDITOR)
     target_link_libraries(alcedo_main PRIVATE EditHistoryMgmtService)

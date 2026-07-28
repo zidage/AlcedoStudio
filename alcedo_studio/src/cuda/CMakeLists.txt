@@ -1,6 +1,6 @@
 # CUDA target ownership.
 if(ALCEDO_CUDA_ENABLED)
-    def_library(CudaUtils
+    def_cuda_library(CudaUtils
         SOURCES
             "${ALCEDO_SRC_ROOT}/cuda/prng.cu"
             "${ALCEDO_SRC_ROOT}/cuda/nn/relu.cu"

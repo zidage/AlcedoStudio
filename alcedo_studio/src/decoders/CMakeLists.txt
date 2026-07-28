@@ -48,7 +48,7 @@ if(ALCEDO_OPENCL_ENABLED)
 endif()
 
 # RawProcessorOp Target
-def_library(RawProcessorOp
+def_cuda_library(RawProcessorOp
     SOURCES ${RAW_OP_CPU_SRCS} ${RAW_OP_GPU_SRCS}
     PUBLIC_DEPS ImageBuffer libraw::raw_r Exiv2 hwy::hwy Eigen3::Eigen
 )
@@ -127,7 +127,7 @@ if(ALCEDO_OPENCL_ENABLED)
     )
 endif()
 
-def_library(Operators
+def_cuda_library(Operators
     SOURCES ${OPERATORS_SRCS}
     PUBLIC_DEPS ImageBuffer JSON OpenColorIO::OpenColorIO hwy::hwy lensfun::lensfun
     PRIVATE_DEPS ${ALCEDO_OPENCV_IMAGE_DEPS} RawProcessor
@@ -208,7 +208,7 @@ if(ALCEDO_OPENCL_ENABLED)
     )
 endif()
 
-def_library(EditPipeline
+def_cuda_library(EditPipeline
     SOURCES ${PIPELINE_SRCS} ${GPU_PIPELINE_SRCS}
     PUBLIC_DEPS Operators
     PRIVATE_DEPS ThreadPool opencv_imgproc CudaDriverRequirements AcceleratorBackend
@@ -255,7 +255,7 @@ endif()
 # Hard-coded DemosaicNet modules + lazy model cache. Owned by the RAW CUDA backend path
 # (raw_processor_cuda.cpp / cuda_demosaicnet.cu), NOT by RawProcessorOp (legacy op facade only).
 if(ALCEDO_CUDA_ENABLED)
-    def_library(DemosaicNet
+    def_cuda_library(DemosaicNet
         SOURCES
             ${ALCEDO_SRC_ROOT}/decoders/processor/nn/demosaicnet_bayer.cu
             ${ALCEDO_SRC_ROOT}/decoders/processor/nn/demosaicnet_xtrans.cu
@@ -272,7 +272,7 @@ if(ALCEDO_CUDA_ENABLED)
 
     # Product-path Neural preprocess (phase-align + gamma) + GpuMat demosaic entry.
     # Stays on CudaDemosaicNetEntry (not generic DemosaicNet modules) so LibRaw CFA types link.
-    def_library(CudaDemosaicNetEntry
+    def_cuda_library(CudaDemosaicNetEntry
         SOURCES
             ${ALCEDO_SRC_ROOT}/decoders/processor/operators/gpu/cuda_demosaicnet.cu
             ${ALCEDO_SRC_ROOT}/decoders/processor/nn/demosaicnet_preprocess.cu

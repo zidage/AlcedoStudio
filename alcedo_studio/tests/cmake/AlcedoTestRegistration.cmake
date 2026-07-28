@@ -108,6 +108,8 @@ function(alcedo_copy_windows_test_runtime_dlls target_name)
     RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${_runtime_dir}"
   )
 
+  alcedo_copy_linked_runtime_dlls(${target_name})
+
   set(_lensfun_dll "")
   if(TARGET alcedo_lensfun)
     set(_lensfun_dll "$<TARGET_FILE:alcedo_lensfun>")
