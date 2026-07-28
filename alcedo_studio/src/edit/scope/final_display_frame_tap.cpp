@@ -184,16 +184,37 @@ void FinalDisplayFrameTapSink::SubmitFinalDisplayFrame(const FinalDisplayFrameVi
                                    : next_frame_id_++;
     }
     current_frame_ = stamped_frame;
-    if (scope_update_allowed && stamped_frame) {
-      scope_frame_ = stamped_frame;
-    }
     request  = scope_request_;
     active   = scope_active_;
     deferred = scope_analysis_deferred_;
   }
 
-  if (scope_analyzer_ && active && !deferred && scope_update_allowed && stamped_frame) {
-    scope_analyzer_->SubmitFrame(stamped_frame, request);
+  // Stage a stable, analyzer-owned copy NOW on the render thread, while the
+  // pipeline source (result_ptr / stream) is still valid. The deferred poll
+  // later analyzes this staged frame instead of the pipeline's reused scratch.
+  FinalDisplayFrameView staged_frame;
+  if (scope_analyzer_ && scope_update_allowed && stamped_frame) {
+    staged_frame = scope_analyzer_->StageFrame(stamped_frame, request);
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (staged_frame) {
+      scope_frame_ = std::move(staged_frame);
+    }
+    // Staging only failed (no idle slot / throttle / non-owning backend): keep
+    // the previous staged frame rather than the pipeline's reused source.
+  }
+
+  if (scope_analyzer_ && active && !deferred && scope_update_allowed) {
+    FinalDisplayFrameView to_submit;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      to_submit = scope_frame_;
+    }
+    if (to_submit) {
+      scope_analyzer_->SubmitFrame(to_submit, request);
+    }
   }
 }
 

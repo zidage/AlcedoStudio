@@ -47,4 +47,21 @@ struct CudaStreamSignalResource {
   cudaStream_t stream = nullptr;
 };
 
+/// Shared-ownership CUDA event wrapper. The analyzer slot and the staged
+/// FinalDisplayFrameView (via GpuSignalHandle) both hold a shared_ptr to one
+/// instance, so the event lives until the scope has finished waiting on it
+/// AND the tap has dropped the staged frame. Carries the slot index so the
+/// deferred SubmitFrame can locate the owning slot without pointer matching.
+struct CudaEventHandleResource {
+  cudaEvent_t event      = nullptr;
+  int         slot_index = -1;
+
+  ~CudaEventHandleResource() {
+    if (event) {
+      cudaEventDestroy(event);
+      event = nullptr;
+    }
+  }
+};
+
 }  // namespace alcedo::scope::cuda_detail

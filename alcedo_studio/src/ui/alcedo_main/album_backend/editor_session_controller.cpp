@@ -595,6 +595,9 @@ void EditorSessionController::Close() {
   if (scope_controller_) {
     scope_controller_->SetImageIdentity(0, 0);
   }
+  if (scope_controller_) {
+    scope_controller_->Shutdown();
+  }
   if (!active_ && element_id_ == 0 && image_id_ == 0 &&
       session_state_ == alcedo::EditorSessionState::NoImage) {
     return;
@@ -617,6 +620,9 @@ void EditorSessionController::Shutdown() {
   if (scope_controller_) {
     scope_controller_->SetImageIdentity(0, 0);
   }
+  if (scope_controller_) {
+    scope_controller_->Shutdown();
+  }
   if (session_backend_) {
     if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
       item->suspendPresentation();
@@ -637,6 +643,9 @@ void EditorSessionController::Finalize(bool persistChanges) {
   // viewport unbinds itself when the workspace visual tree is destroyed.
   if (scope_controller_) {
     scope_controller_->SetImageIdentity(0, 0);
+  }
+  if (scope_controller_) {
+    scope_controller_->Shutdown();
   }
   if (session_backend_) {
     if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {

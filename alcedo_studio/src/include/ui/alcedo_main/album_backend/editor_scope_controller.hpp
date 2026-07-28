@@ -6,6 +6,7 @@
 
 #include <QObject>
 #include <QPointer>
+#include <QThreadPool>
 #include <QTimer>
 #include <atomic>
 #include <cstdint>
@@ -14,6 +15,10 @@
 #include "edit/scope/final_display_frame_tap.hpp"
 
 namespace alcedo::ui {
+
+namespace test {
+class EditorScopeControllerTestPeer;
+}  // namespace test
 
 /// QML-facing scope presentation owner for the unified editor workspace.
 ///
@@ -36,7 +41,7 @@ class EditorScopeController final : public QObject {
   explicit EditorScopeController(QObject* parent = nullptr);
   EditorScopeController(std::shared_ptr<alcedo::IScopeAnalyzer> analyzer,
                         QObject*                                parent = nullptr);
-  ~EditorScopeController() override = default;
+  ~EditorScopeController() override;
 
   [[nodiscard]] auto visual_active() const -> bool { return visual_active_; }
   void               set_visual_active(bool active);
@@ -69,6 +74,12 @@ class EditorScopeController final : public QObject {
   /// deterministic refresh without waiting for the timer.
   Q_INVOKABLE bool   refreshSnapshot();
 
+  /// Stop polling, cancel queued refresh tasks, and block until the
+  /// in-flight scope analysis task finishes. The editor session must call
+  /// this before releasing the render pipeline so a scope worker never
+  /// touches a destroyed pipeline stream or scratch buffer.
+  void               Shutdown();
+
  signals:
   void VisualActiveChanged();
   void ActiveViewChanged();
@@ -79,16 +90,18 @@ class EditorScopeController final : public QObject {
   void scheduleSnapshotRefresh();
   auto refreshSnapshotNow() -> bool;
   auto publishSnapshot(const alcedo::ScopeRenderSnapshot&   snapshot,
-                       const alcedo::FinalDisplayFrameView& expected_frame,
                        std::uint64_t                        expected_image_identity,
                        std::uint64_t                        expected_image_generation,
                        std::uint64_t                        expected_request_revision) -> bool;
   void clearSnapshot();
 
+  friend class test::EditorScopeControllerTestPeer;
+
   std::shared_ptr<alcedo::IScopeAnalyzer>           analyzer_;
   std::unique_ptr<alcedo::FinalDisplayFrameTapSink> frame_tap_;
   alcedo::ScopeRequest                              request_{};
   QTimer                                            poll_timer_;
+  QThreadPool                                       scope_pool_;
   alcedo::ScopeRenderSnapshot                       snapshot_{};
   std::uint64_t                                     image_identity_                    = 0;
   std::uint64_t                                     image_generation_                  = 0;

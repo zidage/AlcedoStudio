@@ -149,6 +149,20 @@ class IScopeAnalyzer {
   virtual void ResizeResources(const ScopeRequest& request)                                 = 0;
 
   virtual void ReleaseResources()                                                           = 0;
+
+  /// Synchronously stage a stable, analyzer-owned copy of the final display
+  /// frame's GPU input on the render thread, while the pipeline source is
+  /// still valid. Returns a FinalDisplayFrameView backed by analyzer-owned
+  /// memory plus a readiness signal the analyzer's own execution stream can
+  /// wait on; the deferred SubmitFrame later analyzes that staged frame
+  /// without touching the pipeline's reused scratch buffers or stream.
+  /// Backends whose source is already stable (or tests that do not need
+  /// staging) keep the default, which returns the frame unchanged.
+  virtual auto StageFrame(const FinalDisplayFrameView& frame, const ScopeRequest& request)
+      -> FinalDisplayFrameView {
+    (void)request;
+    return frame;
+  }
 };
 
 class IFinalDisplayFrameProvider {

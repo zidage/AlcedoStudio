@@ -37,6 +37,19 @@ EditorScopeController::EditorScopeController(std::shared_ptr<alcedo::IScopeAnaly
   poll_timer_.setInterval(1000 / std::max(1, request_.target_fps));
   poll_timer_.setTimerType(Qt::PreciseTimer);
   connect(&poll_timer_, &QTimer::timeout, this, &EditorScopeController::pollSnapshot);
+  scope_pool_.setMaxThreadCount(1);
+}
+
+EditorScopeController::~EditorScopeController() { Shutdown(); }
+
+void EditorScopeController::Shutdown() {
+  // Stop launching new refresh work, drop queued tasks, and block until the
+  // in-flight analysis finishes. The session calls this before releasing the
+  // render pipeline so a scope worker never outlives the pipeline stream or
+  // scratch buffers it would otherwise still reference.
+  poll_timer_.stop();
+  scope_pool_.clear();
+  scope_pool_.waitForDone();
 }
 
 void EditorScopeController::set_visual_active(bool active) {
@@ -117,18 +130,11 @@ auto EditorScopeController::refreshSnapshotNow() -> bool {
     return false;
   }
 
-  const auto scope_frame = frame_tap_->GetCurrentScopeFrameView();
-  if (scope_frame.display_generation != 0 &&
-      output.display_generation != scope_frame.display_generation) {
-    return false;
-  }
-
   const auto next_snapshot = alcedo::ReadScopeRenderSnapshot(output);
   if (!next_snapshot.histogram.valid && !next_snapshot.waveform.valid) {
     return false;
   }
-  return publishSnapshot(next_snapshot, scope_frame, image_identity_, image_generation_,
-                         request_revision_);
+  return publishSnapshot(next_snapshot, image_identity_, image_generation_, request_revision_);
 }
 
 void EditorScopeController::pollSnapshot() { scheduleSnapshotRefresh(); }
@@ -157,17 +163,20 @@ void EditorScopeController::scheduleSnapshotRefresh() {
   const auto                      analyzer          = analyzer_;
   const auto                      refresh_in_flight = refresh_in_flight_;
   QPointer<EditorScopeController> receiver(this);
-  QThreadPool::globalInstance()->start([analyzer, scope_frame, request, submit_new_frame,
-                                        expected_image_identity, expected_image_generation,
-                                        expected_request_revision, refresh_in_flight, receiver]() {
+  scope_pool_.start([analyzer, scope_frame, request, submit_new_frame, expected_image_identity,
+                     expected_image_generation, expected_request_revision, refresh_in_flight,
+                     receiver]() {
     alcedo::ScopeRenderSnapshot next_snapshot;
     try {
-      if (submit_new_frame) {
-        analyzer->SubmitFrame(scope_frame, request);
-      }
+      // Collect the latest completed output for the current image first; the
+      // frame submitted below completes on a later tick, so a tick that only
+      // submits must not drop an already-finished result.
       const auto output = analyzer->GetLatestOutput();
       if (output.generation != 0) {
         next_snapshot = alcedo::ReadScopeRenderSnapshot(output);
+      }
+      if (submit_new_frame) {
+        analyzer->SubmitFrame(scope_frame, request);
       }
     } catch (...) {
       next_snapshot = {};
@@ -179,13 +188,13 @@ void EditorScopeController::scheduleSnapshotRefresh() {
     }
     const bool queued = QMetaObject::invokeMethod(
         receiver.data(),
-        [receiver, next_snapshot = std::move(next_snapshot), scope_frame, expected_image_identity,
+        [receiver, next_snapshot = std::move(next_snapshot), expected_image_identity,
          expected_image_generation, expected_request_revision, refresh_in_flight]() mutable {
           refresh_in_flight->store(false);
           if (!receiver || next_snapshot.generation == 0) {
             return;
           }
-          (void)receiver->publishSnapshot(next_snapshot, scope_frame, expected_image_identity,
+          (void)receiver->publishSnapshot(next_snapshot, expected_image_identity,
                                           expected_image_generation, expected_request_revision);
         },
         Qt::QueuedConnection);
@@ -196,10 +205,9 @@ void EditorScopeController::scheduleSnapshotRefresh() {
 }
 
 auto EditorScopeController::publishSnapshot(const alcedo::ScopeRenderSnapshot&   next_snapshot,
-                                            const alcedo::FinalDisplayFrameView& expected_frame,
-                                            std::uint64_t expected_image_identity,
-                                            std::uint64_t expected_image_generation,
-                                            std::uint64_t expected_request_revision) -> bool {
+                                           std::uint64_t expected_image_identity,
+                                           std::uint64_t expected_image_generation,
+                                           std::uint64_t expected_request_revision) -> bool {
   if (!visual_active_ || expected_request_revision != request_revision_ ||
       expected_image_identity != image_identity_ ||
       expected_image_generation != image_generation_) {
@@ -211,19 +219,13 @@ auto EditorScopeController::publishSnapshot(const alcedo::ScopeRenderSnapshot&  
        next_snapshot.image_generation != image_generation_)) {
     return false;
   }
-
-  const auto current_scope_frame = frame_tap_->GetCurrentScopeFrameView();
-  if (expected_frame.display_generation != 0 &&
-      current_scope_frame.display_generation != expected_frame.display_generation) {
-    return false;
-  }
-  if (current_scope_frame.display_generation != 0 && next_snapshot.display_generation != 0 &&
-      current_scope_frame.display_generation != next_snapshot.display_generation) {
-    return false;
-  }
   if (!next_snapshot.histogram.valid && !next_snapshot.waveform.valid) {
     return false;
   }
+  // Publish the latest completed analysis of the current image. During
+  // continuous dragging the render display_generation keeps advancing; accept
+  // a completed output whose display_generation may lag the newest frame
+  // rather than dropping every result that isn't the very latest render.
   if (next_snapshot.generation == snapshot_.generation &&
       next_snapshot.image_identity == snapshot_.image_identity &&
       next_snapshot.image_generation == snapshot_.image_generation &&

@@ -83,6 +83,16 @@ class CompositeScopeAnalyzer final : public IScopeAnalyzer {
       }
     }
   }
+  auto StageFrame(const FinalDisplayFrameView& frame, const ScopeRequest& request)
+      -> FinalDisplayFrameView override {
+    FinalDisplayFrameView staged = frame;
+    for (const auto& analyzer : analyzers_) {
+      if (analyzer) {
+        staged = analyzer->StageFrame(staged, request);
+      }
+    }
+    return staged;
+  }
 
  private:
   std::vector<std::shared_ptr<IScopeAnalyzer>> analyzers_;
