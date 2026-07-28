@@ -42,7 +42,7 @@ Item {
     readonly property int handleHitPad: 12
     /// Pointer gain for handle drag. Full-track mouse travel maps to this fraction
     /// of the value range (0.32 ≈ 3× slower than absolute 1:1 mapping).
-    readonly property real pointerGain: 0.32
+    readonly property real pointerGain: 0.52
 
     // Double-click detection without TapHandler (TapHandler steals the grab and
     // breaks continuous drag + real double-clicks on some styles).
