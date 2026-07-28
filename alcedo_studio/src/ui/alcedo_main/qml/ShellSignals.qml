@@ -1,3 +1,4 @@
+import QtQuick
 import QtQml
 
 // Centralized shell signal routing extracted from Main.qml: language reload,
@@ -6,7 +7,7 @@ import QtQml
 // session bookkeeping (importSessionObserved / exportSessionObserved /
 // lastObservedExportCompleted) lives here. `host` is Main; the controllers,
 // state objects, dialogs, and window animations are passed in as properties.
-QtObject {
+Item {
     id: root
     property var host: null
     property var imageActionsController: null

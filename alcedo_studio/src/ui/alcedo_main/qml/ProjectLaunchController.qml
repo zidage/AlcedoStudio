@@ -1,3 +1,4 @@
+import QtQuick
 import QtQml
 
 // Owns project open/create launch orchestration: the welcome-dialog visibility
@@ -6,7 +7,7 @@ import QtQml
 // State lives here; Main exposes it through aliases so existing bindings and
 // the Connections routers keep resolving. appModules is a global context
 // property; `welcomeDialog` is assigned by the host on completion.
-QtObject {
+Item {
     id: root
     property var host: null
     property var welcomeDialog: null

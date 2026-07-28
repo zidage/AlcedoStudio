@@ -1,3 +1,4 @@
+import QtQuick
 import QtQml
 
 // Album/image interaction logic extracted from Main.qml: focused-image
@@ -6,7 +7,7 @@ import QtQml
 // (Main) and is reached via `host.*`; the selection/export state objects and
 // the dialogs are passed in as properties so bare references resolve locally.
 // appModules and languageManager are global context properties.
-QtObject {
+Item {
     id: root
 
     property var host: null

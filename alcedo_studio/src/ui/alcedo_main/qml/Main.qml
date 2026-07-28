@@ -334,7 +334,6 @@ ApplicationWindow {
 
     // ── Accelerator preparation overlay ───────────────────────────────
     AcceleratorPreparationOverlay {
-        parent: Overlay.overlay
         visible: appModules.project.acceleratorPreparing
         z: 70
         theme: root
