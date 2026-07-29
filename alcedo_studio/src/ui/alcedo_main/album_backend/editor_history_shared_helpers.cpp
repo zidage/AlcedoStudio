@@ -52,6 +52,12 @@ auto StageNameForSnapshotField(const std::string& field_key) -> std::string {
   }
 }
 
+auto ScriptNameForSnapshotField(const std::string& field_key) -> std::string {
+  if (field_key == "hls") return "HLS";
+  if (field_key == "lut") return "ocio_lmt";
+  return field_key;
+}
+
 auto ReadPipelineOperatorEntry(const nlohmann::json& pipeline_params, const std::string& field_key,
                                nlohmann::json* params, bool* enabled) -> bool {
   const auto spec = alcedo::ResolveEditorAdjustmentField(field_key);
@@ -119,6 +125,36 @@ auto MakeEmptyCompleteAdjustmentSnapshot() -> alcedo::EditorRenderAdjustmentSnap
   }
   snapshot.params_json.clear();
   return snapshot;
+}
+
+auto MakePipelineParamsFromSnapshot(
+    const alcedo::EditorRenderAdjustmentSnapshot& snapshot, std::string* error)
+    -> std::optional<nlohmann::json> {
+  if (!IsCompleteAdjustmentSnapshot(snapshot, error)) return std::nullopt;
+  nlohmann::json pipeline_params = nlohmann::json::object();
+  try {
+    for (const auto field_key_view : kEditorSnapshotFields) {
+      const std::string field_key(field_key_view);
+      const auto spec = alcedo::ResolveEditorAdjustmentField(field_key);
+      const auto stage_name = StageNameForSnapshotField(field_key);
+      if (!spec.has_value() || stage_name.empty()) {
+        if (error) *error = "Unsupported editor adjustment field: " + field_key;
+        return std::nullopt;
+      }
+      alcedo::EditorAdjustmentOperatorState state;
+      if (!ReadCommittedAdjustmentState(snapshot, field_key, &state, error)) {
+        return std::nullopt;
+      }
+      pipeline_params[stage_name][stage_name][ScriptNameForSnapshotField(field_key)] = {
+          {"params", state.params},
+          {"enable", state.enabled},
+          {"type", static_cast<int>(spec->operator_type)}};
+    }
+    return pipeline_params;
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return std::nullopt;
+  }
 }
 
 auto MakeAdjustmentSnapshotFromPipelineParams(

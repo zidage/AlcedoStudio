@@ -15,6 +15,7 @@
 
 #include "app/editor_adjustment_pipeline.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
+#include "type/hash_type.hpp"
 
 namespace alcedo {
 namespace {
@@ -378,6 +379,12 @@ auto AdjustmentTransferService::ExportPackage(const AdjustmentTransferPackage& p
   };
 }
 
+auto AdjustmentTransferService::PackageFingerprint(const AdjustmentTransferPackage& package)
+    -> std::string {
+  const auto canonical = ExportPackage(package).dump();
+  return Hash128::Compute(canonical.data(), canonical.size()).ToString();
+}
+
 auto AdjustmentTransferService::Apply(PipelineExecutor&                target,
                                       const AdjustmentTransferPackage& package) -> bool {
   bool changed = false;
@@ -657,6 +664,8 @@ auto AdjustmentTransferService::InitiateMerge(CommitGraph&                     g
     preview.error = "Adjustment transfer package is empty";
     return preview;
   }
+  preview.first_parent_head          = graph.GetActiveVersionRef().head_commit_hash;
+  preview.source_package_fingerprint = PackageFingerprint(package);
 
   // Build the incoming root-relative branch.
   auto incoming_commits = BuildRootRelativeCommits(package, graph.GetRootId());
@@ -747,6 +756,8 @@ auto AdjustmentTransferService::InitiateMerge(
     preview.error = "Committed adjustment snapshot is empty";
     return preview;
   }
+  preview.first_parent_head          = graph.GetActiveVersionRef().head_commit_hash;
+  preview.source_package_fingerprint = PackageFingerprint(package);
 
   auto incoming_commits = BuildRootRelativeCommits(package, graph.GetRootId());
   if (incoming_commits.empty()) {

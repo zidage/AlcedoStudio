@@ -38,6 +38,10 @@ class AdjustmentTransferService final {
       -> AdjustmentTransferPackage;
   [[nodiscard]] static auto ExportPackage(const AdjustmentTransferPackage& package)
       -> nlohmann::json;
+  /// Stable fingerprint of the canonical package document used to reject a
+  /// merge completion that no longer belongs to its preview.
+  [[nodiscard]] static auto PackageFingerprint(const AdjustmentTransferPackage& package)
+      -> std::string;
 
   // Returns true when at least one target operator actually changed.
   static auto Apply(PipelineExecutor& target, const AdjustmentTransferPackage& package) -> bool;

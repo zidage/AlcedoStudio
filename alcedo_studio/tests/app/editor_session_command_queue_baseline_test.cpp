@@ -46,6 +46,14 @@ namespace alcedo {
 namespace {
 using namespace alcedo::test;  // controllable ports + recorder live in alcedo::test
 
+auto MakeExposureTransferPackage(double exposure) -> AdjustmentTransferPackage {
+  AdjustmentTransferPackage package;
+  package.operators_.push_back(AdjustmentTransferEntry{
+      PipelineStageName::Basic_Adjustment, OperatorType::EXPOSURE, true, false,
+      nlohmann::json{{"exposure", exposure}}});
+  return package;
+}
+
 /// Recording scheduler: accepts every render request and returns a non-zero
 /// job id so the coordinator marks it in-flight. Completion is driven manually
 /// by the test through `EditorRenderCoordinator::Notify*`.
@@ -434,6 +442,134 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   EXPECT_EQ(events[0], "save_started")
       << "dirty journal Merge must queue a save before creating the merge commit";
   EXPECT_EQ(events[1], "merge_committed");
+}
+
+/// CQ4: Paste is staged before publication. One accepted transfer owns one
+/// save capture, one checkpoint materialization, one candidate publication,
+/// and one final render route.
+TEST_F(EditorSessionCommandQueueBaselineTest,
+       DirtyPastePublishesOneCandidateAndOneFinalRender) {
+  openInteractive(10, 20);  // image A, interactive
+  service_->SetCopiedPackageAvailable(true);
+
+  std::vector<std::string> events;
+  history_->event_log                  = &events;
+  journal_->event_log                  = &events;
+  history_->dirty_journal              = true;
+  journal_->async_commit               = false;
+  checkpoint_store_->async_materialize = false;
+
+  const auto render_count_before       = scheduler_->scheduled_.size();
+  const auto capture_count_before      = history_->checkpoint_capture_count;
+  const auto materialize_count_before  = checkpoint_store_->materialize_count;
+  const auto terminal_count_before    = recorder_->terminal_count();
+  const auto result =
+      service_->PasteAdjustments(MakeExposureTransferPackage(0.75), "Pasted Version");
+  EXPECT_EQ(result.kind, EditorSessionResultKind::SaveStarted);
+
+  drainQueue();
+
+  EXPECT_EQ(history_->checkpoint_capture_count, capture_count_before + 1);
+  EXPECT_EQ(checkpoint_store_->materialize_count, materialize_count_before + 1);
+  EXPECT_EQ(history_->transfer_publication_count, 1);
+  EXPECT_EQ(scheduler_->scheduled_.size(), render_count_before + 1);
+  EXPECT_EQ(recorder_->terminal_count(), terminal_count_before + 1);
+  EXPECT_FALSE(history_->dirty_journal);
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[0], "save_started");
+  EXPECT_EQ(events[1], "version_created");
+}
+
+/// CQ4: Merge resolution is applied to the staged candidate and becomes
+/// visible only after the same single durable checkpoint/publication path.
+TEST_F(EditorSessionCommandQueueBaselineTest,
+       DirtyMergePublishesOneCandidateAndOneFinalRender) {
+  openInteractive(10, 20);  // image A, interactive
+  service_->SetCopiedPackageAvailable(true);
+
+  AdjustmentMergePreview preview;
+  ASSERT_EQ(service_->BeginMerge(MakeExposureTransferPackage(1.25), &preview).kind,
+            EditorSessionResultKind::Accepted);
+
+  std::vector<std::string> events;
+  history_->event_log                  = &events;
+  journal_->event_log                  = &events;
+  history_->dirty_journal              = true;
+  journal_->async_commit               = false;
+  checkpoint_store_->async_materialize = false;
+
+  const auto render_count_before      = scheduler_->scheduled_.size();
+  const auto capture_count_before     = history_->checkpoint_capture_count;
+  const auto materialize_count_before = checkpoint_store_->materialize_count;
+  const auto terminal_count_before    = recorder_->terminal_count();
+  const auto result = service_->CompleteMerge({});
+  EXPECT_EQ(result.kind, EditorSessionResultKind::SaveStarted);
+
+  drainQueue();
+
+  EXPECT_EQ(history_->checkpoint_capture_count, capture_count_before + 1);
+  EXPECT_EQ(checkpoint_store_->materialize_count, materialize_count_before + 1);
+  EXPECT_EQ(history_->transfer_publication_count, 1);
+  EXPECT_EQ(scheduler_->scheduled_.size(), render_count_before + 1);
+  EXPECT_EQ(recorder_->terminal_count(), terminal_count_before + 1);
+  EXPECT_FALSE(history_->dirty_journal);
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[0], "save_started");
+  EXPECT_EQ(events[1], "merge_committed");
+}
+
+/// CQ4: a checkpoint/materialization failure discards the staged candidate and
+/// leaves the published state and render schedule untouched.
+TEST_F(EditorSessionCommandQueueBaselineTest,
+       TransferMaterializationFailureRetainsPublishedStateAndRenderSchedule) {
+  openInteractive(10, 20);  // image A, interactive
+  service_->SetCopiedPackageAvailable(true);
+
+  std::vector<std::string> events;
+  history_->event_log                  = &events;
+  journal_->event_log                  = &events;
+  history_->dirty_journal              = true;
+  journal_->async_commit               = false;
+  checkpoint_store_->async_materialize = false;
+  checkpoint_store_->fail_materialize  = true;
+
+  const auto render_count_before      = scheduler_->scheduled_.size();
+  const auto terminal_count_before    = recorder_->terminal_count();
+  const auto result =
+      service_->PasteAdjustments(MakeExposureTransferPackage(0.5), "Pasted Version");
+  EXPECT_EQ(result.kind, EditorSessionResultKind::SaveStarted);
+
+  drainQueue();
+
+  EXPECT_EQ(history_->checkpoint_capture_count, 1);
+  EXPECT_EQ(checkpoint_store_->materialize_count, 1);
+  EXPECT_EQ(history_->transfer_publication_count, 0);
+  EXPECT_EQ(scheduler_->scheduled_.size(), render_count_before);
+  EXPECT_EQ(recorder_->terminal_count(), terminal_count_before + 1);
+  EXPECT_EQ(service_->state(), EditorSessionState::RetainedImageFailure);
+  EXPECT_TRUE(history_->dirty_journal);
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0], "save_started");
+}
+
+/// CQ4: a failed immutable capture is rejected before the checkpoint store is
+/// invoked, so the staged transfer cannot create a partial Version or render.
+TEST_F(EditorSessionCommandQueueBaselineTest,
+       TransferCaptureFailureRetainsPublishedStateAndRenderSchedule) {
+  openInteractive(10, 20);  // image A, interactive
+  service_->SetCopiedPackageAvailable(true);
+  history_->fail_capture = true;
+
+  const auto render_count_before = scheduler_->scheduled_.size();
+  const auto result =
+      service_->PasteAdjustments(MakeExposureTransferPackage(0.5), "Pasted Version");
+
+  EXPECT_EQ(result.kind, EditorSessionResultKind::Rejected);
+  drainQueue();
+  EXPECT_EQ(history_->checkpoint_capture_count, 1);
+  EXPECT_EQ(checkpoint_store_->materialize_count, 0);
+  EXPECT_EQ(history_->transfer_publication_count, 0);
+  EXPECT_EQ(scheduler_->scheduled_.size(), render_count_before);
 }
 
 /// Invariant: one accepted command publishes one snapshot revision carrying

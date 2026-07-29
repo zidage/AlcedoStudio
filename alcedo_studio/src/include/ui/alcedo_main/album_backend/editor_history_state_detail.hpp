@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -14,6 +15,7 @@
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_types.hpp"
+#include "edit/history/commit_graph.hpp"
 
 namespace alcedo {
 class MiniGitJournal;
@@ -25,6 +27,20 @@ class PipelineMgmtService;
 namespace alcedo::ui {
 
 class EditorSessionPipelinePort;
+
+/// Immutable graph and adjustment snapshot staged for one editor transfer.
+/// The live graph remains untouched until the durable checkpoint succeeds.
+struct HistoryTransferCandidate {
+  alcedo::EditorTransferCandidate          public_candidate;
+  alcedo::CommitGraph                      graph;
+  alcedo::EditorRenderAdjustmentSnapshot   adjustment_snapshot;
+  version_ref_id_t                         base_active_version_id{};
+  head_commit_hash_t                       base_working_head = std::nullopt;
+  transaction_chain_hash_t                 base_working_transaction_chain_hash{};
+  head_commit_hash_t                       base_materialized_head = std::nullopt;
+  transaction_chain_hash_t                 base_materialized_transaction_chain_hash{};
+  bool                                     merge = false;
+};
 
 /// Per-image history state owned by the queue-thread history unit. The command
 /// queue is the sole mutation owner for graph, redo, pending-before, and
@@ -38,6 +54,8 @@ struct HistoryWorkingState {
   alcedo::EditorRenderAdjustmentSnapshot root_snapshot;
   alcedo::EditorRenderAdjustmentSnapshot committed_snapshot;
   bool recovered_head = false;
+  std::unordered_map<std::uint64_t, HistoryTransferCandidate> transfer_candidates;
+  std::uint64_t next_transfer_candidate_id = 1;
 };
 
 /// Owns per-image WorkingState acquisition, release, and service-path

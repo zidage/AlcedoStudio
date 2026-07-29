@@ -174,6 +174,9 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
   /// current image). The CQ1 target saves such a journal before creating a
   /// new Version or merge commit.
   bool                      dirty_journal = false;
+  /// Number of staged transfer candidates that reached the one publication
+  /// step. CQ4 expects exactly one publication per accepted Paste/Merge.
+  int                       transfer_publication_count = 0;
   /// History facts projected into EditorActionInputs for CQ3 availability.
   bool                      force_can_undo = false;
   bool                      force_can_redo = false;
@@ -262,6 +265,20 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
   auto CaptureSaveCheckpoint(const EditorHistoryGuardHandle& guard, std::string* error)
       -> std::shared_ptr<const EditorMiniGitSaveCapture> override {
     return FakeEditorHistoryPort::CaptureSaveCheckpoint(guard, error);
+  }
+
+  auto PublishTransferCandidate(
+      const EditorHistoryGuardHandle& guard, const EditorTransferCandidate& candidate,
+      const AdjustmentMergePreview* preview,
+      const std::vector<AdjustmentMergeResolution>& resolutions, AdjustmentPasteResult* paste,
+      AdjustmentMergeResult* merge, std::string* error) -> bool override {
+    ++transfer_publication_count;
+    const bool published = IEditorHistoryPort::PublishTransferCandidate(
+        guard, candidate, preview, resolutions, paste, merge, error);
+    if (published) {
+      dirty_journal = false;
+    }
+    return published;
   }
 
  private:

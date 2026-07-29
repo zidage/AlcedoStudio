@@ -6,6 +6,7 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -42,6 +43,13 @@ auto MakeEmptyCompleteAdjustmentSnapshot() -> alcedo::EditorRenderAdjustmentSnap
 auto MakeAdjustmentSnapshotFromPipelineParams(
     const nlohmann::json& pipeline_params, alcedo::EditorRenderAdjustmentSnapshot* snapshot,
     std::string* error) -> bool;
+
+/// Convert a complete committed snapshot into the serialized pipeline document
+/// stored by one Mini-Git save capture. The conversion is pure and validates
+/// every supported editor field before returning.
+auto MakePipelineParamsFromSnapshot(
+    const alcedo::EditorRenderAdjustmentSnapshot& snapshot, std::string* error)
+    -> std::optional<nlohmann::json>;
 
 /// Validate that a committed snapshot has exactly one supported entry for every editor field.
 auto IsCompleteAdjustmentSnapshot(const alcedo::EditorRenderAdjustmentSnapshot& snapshot,

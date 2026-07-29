@@ -4,13 +4,16 @@
 
 #pragma once
 
+#include <cstdint>
 #include <optional>
 #include <set>
 #include <string>
 #include <vector>
 
+#include "app/editor_adjustment_types.hpp"
 #include "edit/history/commit_types.hpp"
 #include "edit/operators/op_base.hpp"
+#include "app/editor_session_request_ids.hpp"
 #include "json.hpp"
 #include "type/type.hpp"
 
@@ -29,6 +32,21 @@ struct AdjustmentTransferPackage {
   std::vector<AdjustmentTransferEntry> operators_;
 
   [[nodiscard]] auto                   Empty() const -> bool { return operators_.empty(); }
+};
+
+/// Immutable queue message naming a transfer candidate staged outside the
+/// published editor history. The history port owns the candidate graph and
+/// releases it after publication or explicit discard.
+struct EditorTransferCandidate {
+  std::uint64_t                  candidate_id = 0;
+  /// For Merge, the queue-owned opaque preview identity carried with the
+  /// candidate. Paste candidates leave this at its default value.
+  MergePreviewId                 preview_id{};
+  AdjustmentTransferPackage      package;
+  std::string                    display_name;
+  EditorRenderAdjustmentSnapshot adjustment_snapshot;
+
+  [[nodiscard]] auto valid() const -> bool { return candidate_id != 0; }
 };
 
 struct AdjustmentTransferSelection {
@@ -71,6 +89,13 @@ struct AdjustmentMergeResolution {
 };
 
 struct AdjustmentMergePreview {
+  /// Queue-owned identity of this preview. A completion must use the active
+  /// preview represented by this id; it is never regenerated from UI fields.
+  MergePreviewId                       preview_id{};
+  /// Fingerprint of the copied package used to build this preview.
+  std::string                          source_package_fingerprint;
+  /// First-parent working head observed while the preview was built.
+  head_commit_hash_t                   first_parent_head{};
   bool                                 has_conflicts = false;
   std::vector<AdjustmentMergeConflict> conflicts;
   version_ref_id_t                     incoming_version_id{};

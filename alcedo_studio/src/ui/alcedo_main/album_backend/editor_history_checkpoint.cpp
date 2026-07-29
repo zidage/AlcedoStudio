@@ -15,66 +15,6 @@
 #include "ui/alcedo_main/album_backend/editor_history_state_detail.hpp"
 
 namespace alcedo::ui {
-namespace {
-
-auto StageNameForField(const std::string& field_key) -> std::string {
-  const auto spec = alcedo::ResolveEditorAdjustmentField(field_key);
-  if (!spec.has_value()) return {};
-  switch (spec->stage_name) {
-    case alcedo::PipelineStageName::Image_Loading:
-      return "Image Loading";
-    case alcedo::PipelineStageName::Geometry_Adjustment:
-      return "Geometry Adjustment";
-    case alcedo::PipelineStageName::To_WorkingSpace:
-      return "To Working Space";
-    case alcedo::PipelineStageName::Basic_Adjustment:
-      return "Basic Adjustment";
-    case alcedo::PipelineStageName::Color_Adjustment:
-      return "Color Adjustment";
-    case alcedo::PipelineStageName::Detail_Adjustment:
-      return "Detail Adjustment";
-    case alcedo::PipelineStageName::Output_Transform:
-      return "Output Transform";
-    default:
-      return {};
-  }
-}
-
-auto ScriptNameForField(const std::string& field_key) -> std::string {
-  if (field_key == "hls") return "HLS";
-  if (field_key == "lut") return "ocio_lmt";
-  return field_key;
-}
-
-auto MakePipelineParamsFromSnapshot(const alcedo::EditorRenderAdjustmentSnapshot& snapshot,
-                                    std::string* error) -> std::optional<nlohmann::json> {
-  if (!IsCompleteAdjustmentSnapshot(snapshot, error)) return std::nullopt;
-  nlohmann::json pipeline_params = nlohmann::json::object();
-  try {
-    for (const auto field_key_view : kEditorSnapshotFields) {
-      const std::string field_key(field_key_view);
-      const auto spec = alcedo::ResolveEditorAdjustmentField(field_key);
-      const auto stage_name = StageNameForField(field_key);
-      if (!spec.has_value() || stage_name.empty()) {
-        if (error) *error = "Unsupported editor adjustment field: " + field_key;
-        return std::nullopt;
-      }
-      alcedo::EditorAdjustmentOperatorState state;
-      if (!ReadCommittedAdjustmentState(snapshot, field_key, &state, error)) return std::nullopt;
-      pipeline_params[stage_name][stage_name][ScriptNameForField(field_key)] = {
-          {"params", state.params},
-          {"enable", state.enabled},
-          {"type", static_cast<int>(spec->operator_type)}};
-    }
-    return pipeline_params;
-  } catch (const std::exception& ex) {
-    if (error) *error = ex.what();
-    return std::nullopt;
-  }
-}
-
-}  // namespace
-
 EditorHistoryCheckpoint::EditorHistoryCheckpoint(EditorHistoryState& state) : state_(state) {}
 
 auto EditorHistoryCheckpoint::CaptureSaveCheckpoint(

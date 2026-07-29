@@ -2,9 +2,9 @@
 
 Date: 2026-07-29
 
-Status: CQ3 complete — action admission unified with QML availability, operation leases,
-and scoped request-id correlation verified on 2026-07-29. CQ4 remains unblocked and
-independent.
+Status: CQ4 complete — Paste and Merge now use one staged candidate, durable checkpoint,
+publication, and render path verified on 2026-07-29. CQ5 remains blocked for transitional
+path removal and full production qualification.
 
 Primary owner: Alcedo Studio editor session and history architecture.
 
@@ -1019,7 +1019,7 @@ monolithic session snapshot or global revision introduced.
 with lease/admission helpers but remains the CQ1 facade (responsibility-based split still deferred
 to CQ4 durable-publication seam). No new file near the 1000-LOC split threshold.
 
-**Remaining gaps:** CQ4 Paste/Merge single durable publication path is still independent work.
+**Remaining gaps:** CQ5 transitional-path removal and full production qualification remain.
 Library-side Paste (`EditorAdjustmentTransferActions` / `AppDialogs`) correctly keeps
 `InteractionPolicy` + packageAvailable. Worker journal ports still accept a numeric load-id
 parameter named `session_generation` at the Mini-Git journal boundary (opaque uint64 equal to
@@ -1028,7 +1028,8 @@ QML-shell/GPU e2e suites remain environmentally blocked as in CQ1/CQ2.
 
 ## Phase CQ4 — Unify Paste and Merge into one durable publication path
 
-Status: unblocked — depends on CQ2, not CQ3. CQ3 and CQ4 may proceed independently.
+Status: complete — one staged candidate and one durable checkpoint now serve both Paste and Merge;
+verified on 2026-07-29.
 
 ### Purpose
 
@@ -1104,6 +1105,147 @@ CompleteMerge
 - direct transfer persistence and subsequent checkpoint duplication are removed;
 - batch library transfer and active-editor transfer share candidate-building code but retain their
   distinct scheduling adapters.
+
+### CQ4 completion record (2026-07-29)
+
+Status: complete.
+
+Implementation result:
+
+- `EditorSessionService` now queues Paste and Merge through candidate preparation, one immutable
+  save capture, one checkpoint materialization, one publication, and one final render route.
+- `EditorHistoryTransfer` builds Paste and Merge graphs on private copies, retains base active
+  Version/head/chain facts, validates Merge preview identity plus package fingerprint, and swaps
+  the published graph only after the checkpoint succeeds.
+- `EditorMiniGitSaveCapture` marks candidate publication and carries the prior durable tuple;
+  `EditorMiniGitMaterializer` validates the tuple and folds any captured journal prefix before a
+  DuckDB write.
+- The old direct persistence call was removed from the editor transfer orchestration. The
+  compatibility wrappers remain only at the history-port seam for existing callers and test
+  adapters; CQ5 removes those transitional paths.
+
+Primary success call chains:
+
+```text
+PasteAdjustments
+  -> PreparePaste
+  -> EditorHistoryTransfer::PreparePaste
+  -> root-relative candidate graph + adjustment snapshot
+  -> StartTransferPublication
+  -> CaptureTransferSaveCheckpoint
+  -> EditorSaveCheckpointService / Mini-Git materialization
+  -> PublishTransferCandidate
+  -> one final RouteInitialRender
+```
+
+```text
+BeginMerge
+  -> PrepareMerge
+  -> MergePreviewId + package fingerprint + first-parent/incoming facts
+CompleteMerge
+  -> ValidateMergeCandidate
+  -> CompleteMergeCandidate on the staged graph
+  -> StartTransferPublication
+  -> one candidate checkpoint/materialization
+  -> PublishTransferCandidate
+  -> one final RouteInitialRender
+```
+
+Primary failure call chains:
+
+```text
+candidate build/capture failure
+  -> DiscardTransferCandidate
+  -> no materialization, Version publication, or render
+
+stale Merge preview or active head
+  -> ValidateMergeCandidate rejects
+  -> published graph remains unchanged
+
+checkpoint/materialization failure
+  -> posted save completion
+  -> discard staged candidate
+  -> RetainedImageFailure with the prior published frame/state
+```
+
+Changed files:
+
+- `alcedo_studio/src/app/CMakeLists.txt`
+- `alcedo_studio/src/app/adjustment_transfer_service.cpp`
+- `alcedo_studio/src/app/editor_mini_git_materializer.cpp`
+- `alcedo_studio/src/app/editor_session_service.cpp`
+- `alcedo_studio/src/include/app/adjustment_transfer_service.hpp`
+- `alcedo_studio/src/include/app/adjustment_transfer_types.hpp`
+- `alcedo_studio/src/include/app/editor_mini_git_materializer.hpp`
+- `alcedo_studio/src/include/app/editor_session_ports.hpp`
+- `alcedo_studio/src/include/app/editor_session_service.hpp`
+- `alcedo_studio/src/include/ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp`
+- `alcedo_studio/src/include/ui/alcedo_main/album_backend/editor_history_state_detail.hpp`
+- `alcedo_studio/src/include/ui/alcedo_main/album_backend/editor_history_transfer.hpp`
+- `alcedo_studio/src/include/ui/alcedo_main/album_backend/editor_session_history_port.hpp`
+- `alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_checkpoint.cpp`
+- `alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_shared_helpers.cpp`
+- `alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_transfer.cpp`
+- `alcedo_studio/src/ui/alcedo_main/album_backend/editor_session_history_port.cpp`
+- `alcedo_studio/tests/app/editor_session_command_queue_baseline_test.cpp`
+- `alcedo_studio/tests/edit/history/editor_session_history_port_test.cpp`
+- `alcedo_studio/tests/support/editor_session_command_queue_test_support.hpp`
+
+What was proven:
+
+| Required behavior / command | Target / binary | Result |
+| --- | --- | --- |
+| Dirty Paste and Merge ordering, one capture/materialization/publication/render, and capture/materialization failure retention | `EditorSessionCommandQueueBaselineTest` | PASS 16/16 |
+| Candidate build failure, stale Merge rejection, staged two-parent Undo/Redo, and close/reopen identity/head/chain/snapshot equality | `EditorSessionHistoryPortTest` | PASS 24/24 after the final additions |
+| Checkpoint materialization and journal recovery regressions | `EditorSessionCheckpointStoreTest` | PASS 6/6 |
+| Whitespace and patch integrity | `git diff --check` | PASS |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --preset win_debug -DCMAKE_PREFIX_PATH="D:/Qt/6.9.3/msvc2022_64/lib/cmake"
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSessionCommandQueueBaselineTest EditorSessionHistoryPortTest --parallel 4
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSessionCheckpointStoreTest --parallel 4
+build\debug\alcedo_studio\tests\app\EditorSessionCommandQueueBaselineTest_runtime\EditorSessionCommandQueueBaselineTest.exe
+build\debug\alcedo_studio\tests\ui\EditorSessionHistoryPortTest_runtime\EditorSessionHistoryPortTest.exe
+build\debug\alcedo_studio\tests\ui\EditorSessionCheckpointStoreTest_runtime\EditorSessionCheckpointStoreTest.exe
+git diff --check
+```
+
+The three focused binaries therefore total **46/46 PASS, 0 failed, 0 skipped**. CTest discovery was
+not used for the focused totals because the pre-existing `WorkspaceShellTest` discovery process
+times out in this headless environment; direct binary execution completed normally.
+
+Checklist / exit condition:
+
+- [x] Paste and Merge are admitted as queued session commands.
+- [x] Candidate graph, Version refs, head, chain, and adjustment snapshot are built before live
+  publication.
+- [x] Merge preview identity, package fingerprint, first parent, and incoming branch are checked
+  before resolution and publication.
+- [x] One save capture and one checkpoint materialization carry the final candidate state.
+- [x] Direct transfer persistence and the old empty-journal precheck are absent from the editor
+  Paste/Merge orchestration.
+- [x] One final render is routed from the durable adjustment snapshot.
+- [x] Candidate-build, capture, stale-validation, materialization, Undo/Redo, and reopen behavior
+  have deterministic regression coverage.
+- [x] Batch transfer remains on its own scheduling adapter while using the shared transfer service
+  candidate-building primitives.
+
+LOC note: implementation changes cover 20 source/test files; the final diff stat is recorded by
+the commit that contains this completion record. The largest additions are the transfer reducer
+seam in `editor_session_service.cpp` and the staged graph implementation in
+`editor_history_transfer.cpp`; both remain single-purpose within their existing modules.
+
+Residual gaps / hand-off to CQ5:
+
+- Full QML-shell/GPU qualification and CTest discovery remain environmentally blocked by the
+  pre-existing headless `WorkspaceShellTest` issue.
+- Compatibility wrappers on `IEditorHistoryPort` and the old direct transfer methods remain until
+  CQ5 removes transitional paths.
+- Scheduler-level render rejection after a successful durable materialization still belongs in
+  CQ5 production qualification; the CQ4 path routes only after the checkpoint completion and
+  never performs a second history publication.
 
 ## Phase CQ5 — Remove transitional paths and qualify production behavior
 
@@ -1193,7 +1335,7 @@ either order before CQ5.
 - [x] CQ1 serializes all session mutations and removes inline completion re-entry.
 - [x] CQ2 removes command-thread render-lock waits.
 - [x] CQ3 derives editor action decisions from command admission and removes session generations.
-- [ ] CQ4 gives Paste and Merge one durable publication path.
+- [x] CQ4 gives Paste and Merge one durable publication path.
 - [ ] CQ5 removes transitional code and qualifies the production sequence.
 
 The work is complete only when all boxes are checked and no editor-session behavior depends on

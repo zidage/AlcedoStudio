@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "app/adjustment_transfer_types.hpp"
 #include "app/editor_history_types.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_types.hpp"
@@ -28,6 +29,7 @@ struct AdjustmentMergePreview;
 struct AdjustmentMergeResolution;
 struct AdjustmentMergeResult;
 struct AdjustmentPasteResult;
+struct EditorTransferCandidate;
 
 /// Narrow ports used by EditorSessionService. Production implementations wrap
 /// PipelineMgmtService, Mini-Git journal storage, thumbnail work, and background tasks.
@@ -194,6 +196,102 @@ class IEditorHistoryPort {
     if (error != nullptr)
       *error = "Editor Merge cancellation is not supported by this history port";
     return false;
+  }
+
+  /// Build a Paste candidate without changing the published graph, Version
+  /// selection, journal, or adjustment snapshot. The candidate is retained by
+  /// the history port until CaptureTransferSaveCheckpoint and
+  /// PublishTransferCandidate complete, or DiscardTransferCandidate is called.
+  /// Default fakes retain the command inputs and defer the legacy mutation to
+  /// PublishTransferCandidate.
+  virtual auto PreparePaste(const EditorHistoryGuardHandle& /*guard*/,
+                            const AdjustmentTransferPackage& package,
+                            std::string version_display_name,
+                            AdjustmentPasteResult* result,
+                            EditorTransferCandidate* candidate, std::string* error) -> bool {
+    if (candidate == nullptr) {
+      if (error != nullptr) *error = "Paste candidate storage is required";
+      return false;
+    }
+    candidate->package      = package;
+    candidate->display_name = std::move(version_display_name);
+    if (result != nullptr) *result = {};
+    return true;
+  }
+
+  /// Build a Merge preview and staged candidate without changing published
+  /// history. The preview records its source package and first-parent facts so
+  /// stale resolutions can be rejected before any durable work begins.
+  virtual auto PrepareMerge(const EditorHistoryGuardHandle& guard,
+                            const AdjustmentTransferPackage& package,
+                            std::string incoming_version_display_name,
+                            AdjustmentMergePreview* preview,
+                            EditorTransferCandidate* candidate, std::string* error) -> bool {
+    if (candidate == nullptr) {
+      if (error != nullptr) *error = "Merge candidate storage is required";
+      return false;
+    }
+    if (!BeginMerge(guard, package, std::move(incoming_version_display_name), preview, error)) {
+      return false;
+    }
+    candidate->package = package;
+    return true;
+  }
+
+  /// Validate that the active history still matches the staged Merge preview.
+  /// This is side-effect free and runs before conflict resolutions are applied.
+  virtual auto ValidateMergeCandidate(const EditorHistoryGuardHandle& /*guard*/,
+                                      const AdjustmentMergePreview& /*preview*/,
+                                      const EditorTransferCandidate& /*candidate*/,
+                                      std::string* /*error*/) -> bool {
+    return true;
+  }
+
+  /// Apply Merge resolutions to the staged candidate graph only. Published
+  /// history and the live adjustment snapshot remain unchanged until
+  /// PublishTransferCandidate succeeds. Test adapters that retain only the
+  /// legacy port inputs defer their observable mutation to publication.
+  virtual auto CompleteMergeCandidate(
+      const EditorHistoryGuardHandle& /*guard*/, const AdjustmentMergePreview& /*preview*/,
+      const std::vector<AdjustmentMergeResolution>& /*resolutions*/,
+      EditorTransferCandidate* candidate, AdjustmentMergeResult* result, std::string* error)
+      -> bool {
+    if (candidate == nullptr) {
+      if (error != nullptr) *error = "Merge candidate storage is required";
+      return false;
+    }
+    if (result != nullptr) *result = {};
+    return true;
+  }
+
+  /// Capture one durable publication containing the complete candidate graph,
+  /// final Version selection, final head, serialized pipeline state, and the
+  /// current journal prefix. It must not mutate published history.
+  virtual auto CaptureTransferSaveCheckpoint(
+      const EditorHistoryGuardHandle& guard, const EditorTransferCandidate& /*candidate*/,
+      std::string* error) -> std::shared_ptr<const EditorMiniGitSaveCapture> {
+    return CaptureSaveCheckpoint(guard, error);
+  }
+
+  /// Publish a previously captured candidate after its one durable write has
+  /// completed. The default adapter invokes the legacy synchronous port only
+  /// for test doubles; production ports replace the live graph atomically.
+  virtual auto PublishTransferCandidate(
+      const EditorHistoryGuardHandle& guard, const EditorTransferCandidate& candidate,
+      const AdjustmentMergePreview* preview,
+      const std::vector<AdjustmentMergeResolution>& resolutions, AdjustmentPasteResult* paste,
+      AdjustmentMergeResult* merge, std::string* error) -> bool {
+    if (preview != nullptr) {
+      return CompleteMerge(guard, *preview, resolutions, merge, error);
+    }
+    return PasteAdjustments(guard, candidate.package, candidate.display_name, paste, error);
+  }
+
+  /// Discard a staged candidate without changing published history.
+  virtual auto DiscardTransferCandidate(const EditorHistoryGuardHandle& /*guard*/,
+                                        const EditorTransferCandidate& /*candidate*/,
+                                        std::string* /*error*/) -> bool {
+    return true;
   }
 
   /// Capture the immutable live history prefix that a save checkpoint must

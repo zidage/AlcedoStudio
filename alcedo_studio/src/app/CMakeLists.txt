@@ -244,7 +244,7 @@ def_library(EditorSessionLifecycle
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_lifecycle.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_lifecycle.hpp"
-    PUBLIC_DEPS xxHash
+    PUBLIC_DEPS xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS}
 )
 
 def_library(EditorSessionNavigationController
@@ -261,14 +261,14 @@ def_library(EditorSessionRenderController
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_render_controller.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_render_controller.hpp"
-    PUBLIC_DEPS xxHash
+    PUBLIC_DEPS xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS}
 )
 
 def_library(EditorSessionEditController
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_edit_controller.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_session_edit_controller.hpp"
-    PUBLIC_DEPS xxHash
+    PUBLIC_DEPS xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS}
     PRIVATE_DEPS EditHistory
 )
 
