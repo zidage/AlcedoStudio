@@ -3,7 +3,8 @@
 Date: 2026-07-29
 
 Status: CQ2 complete — pure history snapshots, worker-only executor application, and narrowed
-pipeline cache locking verified on 2026-07-29. CQ3 unblocked.
+pipeline cache locking verified on 2026-07-29. CQ3 redesigned after architecture review: retain
+one action-decision source, remove the proposed session-wide snapshot revision and generations.
 
 Primary owner: Alcedo Studio editor session and history architecture.
 
@@ -35,6 +36,11 @@ completion is represented as a typed completion message and posted back to the s
 must never synchronously invoke session navigation, lifecycle, history publication, QML
 notification, or another user command.
 
+`EditorSessionService` remains a behavior-oriented facade rather than a state container. The queue
+reducer owns the minimum execution context required to serialize active work; history, committed
+adjustments, rendering, and persistence retain their focused domain models. CQ3 does not copy those
+models into a second session snapshot.
+
 The queue thread owns:
 
 - the current session state and identity;
@@ -42,7 +48,7 @@ The queue thread owns:
 - the accepted pipeline and history guards;
 - the active Mini-Git working selection;
 - pending navigation and merge state;
-- the immutable editor snapshot published to QML;
+- the minimal active-operation context used to decide command admissibility;
 - command ordering, replacement, rejection, and terminal result publication.
 
 Worker-owned services keep only the synchronization required for their local queues and resources.
@@ -118,7 +124,7 @@ The target disposition for each lock is:
 - Worker services may use completion functions internally, but they may only post typed completion
   values. They may not call editor-session mutation APIs.
 - CQ1 may retain compatibility signals and result objects temporarily; CQ5 removes them after QML
-  and integration tests consume the unified snapshot.
+  and integration tests consume the unified action-decision API.
 
 ## Target architecture
 
@@ -126,12 +132,14 @@ The target disposition for each lock is:
 QML / controller adapter
   -> enqueue EditorSessionCommand
   -> EditorSessionCommandQueue (one owning thread)
-       -> reduce command against EditorSessionStateData
+       -> evaluate command against the same policy used by QML availability
+       -> reduce command against minimal queue-owned context
        -> publish immediate Queued / Rejected result
        -> dispatch optional worker request
        -> wait for typed completion message
        -> reduce completion
-       -> publish one immutable EditorSessionSnapshot
+       -> publish changed domain values
+       -> recompute and publish changed action decisions once
        -> publish one terminal operation result
 
 Worker request
@@ -150,16 +158,17 @@ decoder, GPU, or render-lock waits. Tests use a deterministic manual executor.
 2. A command handler never waits for file I/O, DuckDB, image decoding, GPU work, frame presentation,
    or a pipeline render mutex.
 3. A service completion never runs inline inside the service start call.
-4. Every completion carries command ID, session generation, element ID, and relevant render or save
-   generation.
-5. Stale completions are ignored without changing the published snapshot.
+4. Every completion carries only the narrow request ID required by its worker boundary, such as
+   load request, render request, save task, or command operation ID.
+5. Stale completions are ignored when their request ID is no longer active.
 6. One accepted command publishes at most one terminal result.
-7. QML reads one immutable snapshot revision and never combines identity, lifecycle, history, and
-   availability values from different revisions.
+7. QML action availability and command admission use the same pure decision function.
 8. The live pipeline executor is a render target, not the source of truth for history before/after
    values.
 9. Paste and Merge perform one durable publication.
 10. No recursive mutex remains in editor-session lifecycle or navigation.
+11. Session identity contains domain identity only; session-wide generation, render generation,
+    view generation, and snapshot revision are not part of the public model.
 
 ## Command and completion model
 
@@ -194,8 +203,9 @@ CancelPendingNavigation
 RequestViewChange
 ```
 
-Each command carries a monotonic command ID and the snapshot revision from which the UI issued it.
-Commands that target an image or Version also carry the explicit target ID.
+Each command receives an operation ID when accepted. Commands that target an image, commit, or
+Version carry that explicit target ID. The reducer evaluates current admissibility when the command
+reaches the owner thread; the UI does not submit a snapshot revision.
 
 ### Completions
 
@@ -230,38 +240,69 @@ re-enter the queue owner.
 - Shutdown stops accepting user commands, drains or cancels worker requests according to their
   declared shutdown behavior, and then publishes `ShuttingDown`.
 
-## Target state publication
+## Target public model and asynchronous correlation
 
-The queue publishes one value:
+CQ3 does not introduce a monolithic session snapshot. Domain values keep their focused APIs:
+current image identity, lifecycle state, history projection, committed adjustment state, and
+operation results. The queue batches their notifications and publishes action decisions after the
+domain mutation is complete.
+
+Session identity contains only stable domain identity:
 
 ```cpp
-struct EditorSessionSnapshot {
-  std::uint64_t revision;
-  EditorSessionState state;
-  EditorSessionIdentity identity;
-  EditorSessionIdentity presentation_identity;
-  EditorActionAvailability actions;
-  EditorHistorySummary history;
-  EditorAdjustmentSnapshot adjustments;
-  EditorPendingOperation pending;
-  std::string error;
+struct EditorSessionIdentity {
+  sl_element_id_t element_id = 0;
+  image_id_t image_id = 0;
 };
 ```
 
-`presentation_identity` is explicit because a switch may retain image A while rendering the first
-frame for image B. The QML adapter must not reconstruct this state from separate pending fields.
+Action availability is a projection of command admissibility:
 
-`EditorActionAvailability` is computed by one reducer from:
+```cpp
+struct EditorActionDecision {
+  bool allowed = false;
+  std::string reason;
+};
+
+EditorActionDecision Evaluate(EditorAction action,
+                              const EditorCommandContext& context,
+                              const EditorActionInputs& inputs);
+```
+
+The command reducer calls the same `Evaluate` function immediately before acceptance. QML observes
+the last projected decisions and one `ActionAvailabilityChanged` signal; it does not provide an
+independent precondition.
+
+The decision inputs are:
 
 - session state;
 - active image and Version state;
 - history Undo/Redo state;
 - copied-adjustment package state;
-- pending command;
+- active operation kind;
 - external background-task restrictions.
 
-QML components bind only to this availability value. They do not combine `canEdit`, history-model
-flags, package state, and interaction-policy flags independently.
+Starting an asynchronous command creates an operation lease. Completing, cancelling, or rejecting
+that exact operation removes the lease. The lease describes which actions it blocks; code does not
+manually flip `canUndo`, `canPaste`, or similar booleans.
+
+Worker correlation uses strong, request-scoped identifiers:
+
+```text
+EditorSessionOperationId
+ImageLoadRequestId
+EditorRenderRequestId
+EditorSaveTaskId
+MergePreviewId
+```
+
+These identifiers do not describe session state, are not compared by greater-than or less-than,
+and are discarded when their request finishes or is cancelled. They remain internal to C++ worker
+boundaries and are not exposed to QML. An A→B→A sequence rejects the first A frame by matching the
+active render request, not by comparing a session generation.
+
+QML components bind only to the projected action decisions. They do not combine `canEdit`,
+history-model flags, package state, and interaction-policy flags independently.
 
 ## Phase CQ0 — Freeze current behavior with failing evidence
 
@@ -390,7 +431,9 @@ Regression check: `EditorSessionNavigationControllerTest` 23/23, `EditorSessionE
 
 - The synchronous-inline unconditional-accept at `navigation_controller.cpp:198-207` (correlation skipped when `pending.ticket.request_id == 0`) is the residual stale-completion window that test 3 cannot reproduce deterministically with single-threaded seams; CQ1 removes the inline path entirely, closing it. The 8 failing tests become the CQ1 acceptance suite.
 - CQ0 did not add a controllable render **scheduler** port (frame lifecycle is driven directly through `EditorRenderCoordinator::Notify*`, which is sufficient for CQ0). If CQ2/CQ5 need to defer render completion from the test thread, add a `ControllableSchedulerPort` then.
-- `OneSnapshotRevision…` and `OneAcceptedCommand…` assert the post-CQ3 single-snapshot / single-terminal invariants; they will only turn green once CQ1 (command ownership) and CQ3 (single snapshot) land. They are kept as CQ0 evidence because the split is already observable today at the facade boundary.
+- `OneSnapshotRevision…` is a historical test name. CQ1 makes it pass by batching one reduction's
+  visible publication; it does not require CQ3 to add a public snapshot revision.
+  `OneAcceptedCommand…` pins the single-terminal invariant owned by CQ1.
 
 
 ## Phase CQ1 — Introduce the single-thread command queue
@@ -791,31 +834,81 @@ roadmap record is an additional documentation change. The largest diffs are the 
 helper/reducer split and the pipeline-service cache-scope narrowing; they remain separate by
 responsibility and no new file approaches the repository's 1,000-LOC split threshold.
 
-## Phase CQ3 — Publish one session snapshot and one action-availability source
+## Phase CQ3 — Derive action availability from command admission and remove session generations
 
-Status: unblocked — CQ2 complete.
+Status: unblocked — CQ2 complete; architecture revised on 2026-07-29.
+
+### Necessity decision
+
+CQ3 remains necessary only as an action-admission cleanup. The previously proposed monolithic
+`EditorSessionSnapshot`, public snapshot revision, and presentation identity are rejected.
+
+The session facade should remain behavior-oriented: callers submit operations and observe focused
+results. It must not become a second state store that mirrors lifecycle, history, adjustment,
+render, and presentation data.
+
+The command queue still owns the minimal context required to serialize work. This is unavoidable
+for asynchronous operations, but it is internal execution context rather than a public session
+model.
 
 ### Purpose
 
-Prevent QML from observing mixed revisions and make every action's enabled state explainable.
+Make every editor action's enabled state exactly match whether the command queue would accept that
+action now, while removing session-wide generation counters from identity, QML, and worker
+correlation.
 
 ### Implementation
 
-1. Add `EditorSessionSnapshot` and `EditorActionAvailability`.
-2. Increment one snapshot revision after every accepted queue transition.
-3. Publish identity, lifecycle, presentation identity, history summary, pending operation, error,
-   and availability together.
-4. Replace controller getters that independently query backend identity and state with the last
-   published snapshot.
-5. Move pending presentation target ownership from `EditorSessionController` into
-   `presentation_identity`.
-6. Merge external background-task restrictions into the queue's availability reducer.
-7. Bind adjustment panels, history actions, filmstrip selection, workspace navigation, Version
-   actions, Paste, and Merge to `snapshot.actions`.
-8. Make every unavailable action expose a stable reason and blocking operation ID.
-9. Keep `InteractionPolicyController` for non-editor product actions, but remove editor-specific
-   capability decisions from QML-local expressions.
-10. Emit one snapshot-changed signal. Derive compatibility signals only while legacy QML remains.
+1. Add `EditorAction`, `EditorActionDecision`, and a pure `EditorActionPolicy::Evaluate`.
+2. Call `Evaluate` from both:
+   - the action projection published to QML;
+   - the command reducer immediately before accepting a command.
+3. Model in-flight work as queue-owned operation leases:
+   - operation ID;
+   - operation kind;
+   - explicit target identity;
+   - blocked action set;
+   - optional user-facing blocking reason.
+4. Acquire a lease only after command validation. Release that exact lease on completion,
+   cancellation, failure, or shutdown.
+5. Never mutate individual `canX` flags from operation start/finish code.
+6. Merge history facts, copied-package facts, and background-task restrictions into
+   `EditorActionInputs`. The evaluator remains side-effect free.
+7. Publish one `ActionAvailabilityChanged` event only when the evaluated decisions change.
+8. Bind adjustment panels, history actions, filmstrip selection, workspace navigation, Version
+   actions, Paste, and Merge to the projected decisions.
+9. Keep `InteractionPolicyController` for non-editor product actions. Editor command decisions
+   move to `EditorActionPolicy`.
+10. Remove `session_generation`, `render_generation`, and `view_generation` from
+    `EditorSessionIdentity` and QML properties.
+11. Replace generation-based completion checks with strong request-scoped IDs:
+    - image load completion matches `ImageLoadRequestId`;
+    - render and first-frame completion match `EditorRenderRequestId`;
+    - save completion matches `EditorSaveTaskId` plus the initiating operation ID;
+    - Merge completion matches `MergePreviewId`.
+12. Remove QML `snapshotRevision`. Adjustment panels reload only from
+    `AdjustmentSnapshotChanged`, which is emitted only when committed adjustment content changes.
+13. Move the pending presentation target from `EditorSessionController` into the active image-load
+    operation. The accepted first-frame request determines when that target becomes current.
+14. Retain focused domain notifications and the CQ1 publication batch. Do not add a global
+    session-changed revision.
+
+### Operation-driven availability
+
+The initial lease matrix is explicit:
+
+| Active operation | Availability effect |
+| --- | --- |
+| image load or running image switch | block adjustment, history, Version, Paste, and Merge commands; another selection is allowed only when the queue can replace an unstarted target |
+| save checkpoint | block adjustment, history, Version mutation, Paste, and Merge; recovery, Close, and Shutdown follow their explicit queue rules |
+| interactive or quality render | block nothing; CQ2 makes render an output effect rather than a command gate |
+| Merge preview | enable Complete Merge and Cancel Merge only for its `MergePreviewId`; invalidate them when the active head or package changes |
+| Paste or Merge materialization | block history, Version mutation, transfer, and image navigation until the durable result returns |
+| failure recovery | enable only Retry Save, Discard and Continue, Cancel, Close, and Shutdown as permitted by the recovery state |
+
+Base facts such as no active image, no Undo parent, no Redo suffix, or no copied package remain pure
+evaluator inputs. An operation adds and removes only its lease; the resulting action decisions are
+always recomputed, never restored from a saved set of booleans.
 
 ### Required QML behavior
 
@@ -825,29 +918,37 @@ enabled: editorSession.actions.canPaste
 enabled: editorSession.actions.canSelectImage
 ```
 
-QML must not add independent `canEdit`, `packageAvailable`, save-state, or history-state conditions
-to those final action values.
+QML must not add independent `canEdit`, `packageAvailable`, save-state, history-state, generation,
+or revision checks to these final decisions.
 
 ### Required tests
 
-- every published snapshot contains a matching identity, lifecycle state, presentation identity,
-  and action set;
-- all editor action buttons use the same availability revision;
-- disabled actions display the reducer's reason;
-- a background save changes all affected actions in one QML event;
-- the first accepted frame for B changes `canEdit` and B identity in the same revision;
-- no action becomes enabled from a stale history or background-task notification.
+- `CommandAcceptanceMatchesPublishedAvailabilityForEveryEditorAction`
+- `AcceptedOperationLeaseBlocksAndCompletionRestoresExactlyItsDeclaredActions`
+- `RejectedCommandDoesNotChangeAvailability`
+- `StaleImageLoadRequestCannotAcquireTheCurrentImage`
+- `StaleRenderRequestCannotPresentAFrameOrEnableEditing`
+- `ImageAtoBtoARejectsTheFirstARenderWithoutSessionGeneration`
+- `AvailabilityPublishesAtMostOncePerCommandOrCompletionReduction`
+- `BackgroundRestrictionAndHistoryFactsUseTheSameDecisionFunction`
+- `AdjustmentPanelsReloadOnlyWhenCommittedContentChanges`
+- a static QML/API check finds no `sessionGeneration`, `snapshotRevision`, or independent editor
+  action conjunctions.
 
 ### Exit criteria
 
-- `EditorSessionController::SyncIdentityFromBackend()` is removed;
+- command admission and QML availability call the same evaluator;
+- no editor operation manually pairs enable/disable writes;
+- `EditorSessionIdentity` contains only element and image identity;
+- session, render, and view generation fields are absent from the editor-session public API;
+- worker completions correlate with scoped request IDs;
 - controller-owned pending presentation fields are removed;
-- no editor QML file reconstructs action availability from multiple objects;
-- action availability has one C++ test matrix covering every lifecycle state.
+- no monolithic session snapshot or global snapshot revision is introduced;
+- action decisions have one C++ matrix covering every lifecycle and active-operation combination.
 
 ## Phase CQ4 — Unify Paste and Merge into one durable publication path
 
-Status: blocked by CQ3.
+Status: unblocked — depends on CQ2, not CQ3. CQ3 and CQ4 may proceed independently.
 
 ### Purpose
 
@@ -861,20 +962,20 @@ Remove synchronous double persistence and make dirty-current-image behavior dete
    - queue one save checkpoint;
    - retain the Paste or Merge command as the next command;
    - continue only after the matching save completion.
-3. Build Paste and Merge candidate graph, head, Version refs, and adjustment snapshot without
+3. Build Paste and Merge candidate graph, head, Version refs, and adjustment state without
    modifying published state.
-4. For Merge, store a revisioned preview token containing:
+4. For Merge, store an opaque `MergePreviewId` with:
    - source package fingerprint;
    - first-parent head;
    - incoming head;
    - conflict fields;
-   - source snapshot revision.
-5. Reject conflict resolutions when the preview token no longer matches the active head or package.
+5. Reject conflict resolutions when `MergePreviewId`, active head, or package fingerprint no longer
+   matches.
 6. Publish the candidate working state once after validation.
 7. Submit one save capture containing the final graph, head, chain, Version selection, and serialized
    pipeline state.
 8. Remove direct `PersistEditorHistoryState()` calls from editor Paste/Merge orchestration.
-9. Route exactly one render from the durable final snapshot.
+9. Route exactly one render from the durable final adjustment state.
 10. On materialization failure, retain the prior published state or enter an explicit recoverable
     pending-publication state; never expose half of a new Version.
 
@@ -886,7 +987,7 @@ ApplyPaste
   -> build root-relative candidate
   -> validate candidate
   -> one materialization request
-  -> publish active Version + snapshot
+  -> publish active Version + committed adjustment state
   -> one render
 ```
 
@@ -895,12 +996,12 @@ ApplyPaste
 ```text
 BeginMerge
   -> optional checkpoint of current journal
-  -> build revisioned preview
+  -> build preview with an opaque MergePreviewId
 CompleteMerge
-  -> validate preview token and resolutions
+  -> validate preview ID, active head, package fingerprint, and resolutions
   -> build two-parent candidate
   -> one materialization request
-  -> publish merge head + snapshot
+  -> publish merge head + committed adjustment state
   -> one render
 ```
 
@@ -939,10 +1040,11 @@ timing.
 - navigation and lifecycle recursive mutexes;
 - inline save-completion branches;
 - controller identity/state mirrors and pending presentation fields;
-- editor-specific QML availability expressions outside the snapshot reducer;
+- editor-specific QML availability expressions outside `EditorActionPolicy`;
+- session-wide generation fields and public snapshot revisions;
 - history paths that acquire the live executor render mutex on the command thread;
 - transfer paths that persist before the unified checkpoint;
-- duplicate history/result/change notifications that can be derived from snapshot revision;
+- duplicate history/result/change notifications superseded by focused domain notifications;
 - unused mutexes and compatibility adapters introduced during CQ1-CQ4.
 
 ### Production qualification sequence
@@ -963,7 +1065,7 @@ timing.
 
 - command reduction p95 below 1 ms for Preview, Commit, Undo, and Redo preparation;
 - zero command-thread waits on render, file, database, or thumbnail work;
-- one snapshot publication per state transition;
+- at most one changed action-decision publication per command or completion reduction;
 - one history projection per settled history change and zero per interactive preview;
 - at most one unstarted preview per adjustment replacement key;
 - no dropped settled commands;
@@ -977,7 +1079,8 @@ timing.
 - render scheduler and first-frame presentation tests;
 - failure-injection matrix for every worker boundary;
 - supported race-detection run;
-- before/after command latency, render count, snapshot count, and DuckDB publication count.
+- before/after command latency, render count, action-decision publication count, and DuckDB
+  publication count.
 
 ### Exit criteria
 
@@ -995,23 +1098,24 @@ The order is mandatory:
 CQ0 evidence
   -> CQ1 command ownership
   -> CQ2 render/history separation
-  -> CQ3 single snapshot and availability
-  -> CQ4 Paste/Merge publication
-  -> CQ5 cleanup and production qualification
+       -> CQ3 command-derived availability and scoped request IDs --\
+       -> CQ4 Paste/Merge publication -------------------------------+-> CQ5 cleanup
 ```
 
-CQ3 must not precede CQ1 because a unified snapshot without unified mutation ownership would only
-hide races behind a larger value object. CQ4 must not precede CQ2 because candidate publication
-cannot be safe while history correctness still depends on the live render executor.
+CQ3 must not precede CQ1 because action decisions must be evaluated by the command owner. CQ4 must
+not precede CQ2 because candidate publication cannot be safe while history correctness still
+depends on the live render executor. After CQ2, CQ3 and CQ4 are independent and may be completed in
+either order before CQ5.
 
 ## Completion checklist
 
 - [x] CQ0 records deterministic failing evidence.
 - [x] CQ1 serializes all session mutations and removes inline completion re-entry.
 - [x] CQ2 removes command-thread render-lock waits.
-- [ ] CQ3 publishes one session snapshot and one editor action source.
+- [ ] CQ3 derives editor action decisions from command admission and removes session generations.
 - [ ] CQ4 gives Paste and Merge one durable publication path.
 - [ ] CQ5 removes transitional code and qualifies the production sequence.
 
 The work is complete only when all boxes are checked and no editor-session behavior depends on
-callback timing, recursive locking, or independently sampled QML state.
+callback timing, recursive locking, generation comparison, or independently sampled QML action
+state.
