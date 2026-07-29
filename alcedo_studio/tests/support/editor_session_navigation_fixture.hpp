@@ -18,6 +18,7 @@
 
 #include "app/editor_save_checkpoint_coordinator.hpp"
 #include "app/editor_save_checkpoint_service.hpp"
+#include "app/editor_session_command_queue.hpp"
 #include "app/editor_session_edit_controller.hpp"
 #include "app/editor_session_lifecycle.hpp"
 #include "app/editor_session_navigation_controller.hpp"
@@ -29,28 +30,28 @@ namespace alcedo::test {
 /// Navigation fixture with fixed image identities A and B.
 class EditorSessionNavigationFixture {
  public:
-  static constexpr sl_element_id_t kElementA = 1;
-  static constexpr image_id_t      kImageA   = 2;
-  static constexpr sl_element_id_t kElementB = 3;
-  static constexpr image_id_t      kImageB   = 4;
+  static constexpr sl_element_id_t kElementA                                       = 1;
+  static constexpr image_id_t      kImageA                                         = 2;
+  static constexpr sl_element_id_t kElementB                                       = 3;
+  static constexpr image_id_t      kImageB                                         = 4;
 
-  EditorSessionNavigationFixture()  = default;
-  ~EditorSessionNavigationFixture() = default;
+  EditorSessionNavigationFixture()                                                 = default;
+  ~EditorSessionNavigationFixture()                                                = default;
 
   EditorSessionNavigationFixture(const EditorSessionNavigationFixture&)            = delete;
   EditorSessionNavigationFixture& operator=(const EditorSessionNavigationFixture&) = delete;
 
   /// Build lifecycle, save service, navigation controller, and private stubs.
-  void SetUp();
+  void                            SetUp();
 
   /// Cancel save work and destroy owned collaborators.
-  void TearDown();
+  void                            TearDown();
 
   /// Open image A into Interactive through the lifecycle public API.
-  void OpenA();
+  void                            OpenA();
 
   /// Request a switch from A to B. Starts a save checkpoint when A is open.
-  auto RequestSwitchToB() -> NavigationOutcome;
+  auto                            RequestSwitchToB() -> NavigationOutcome;
 
   /// Request Version checkout on the open image. Starts a save checkpoint first.
   auto RequestCheckoutVersion(const version_ref_id_t& version_id) -> NavigationOutcome;
@@ -60,6 +61,11 @@ class EditorSessionNavigationFixture {
 
   /// Complete the in-flight save as a materialization failure.
   void FailCheckpoint(std::string error = "A materialization failed");
+
+  /// Run all save completions posted to the command executor. The fixture
+  /// serializes save completion through the same manual executor the session
+  /// queue uses, so a posted completion only reduces state when this is called.
+  void Drain();
 
   [[nodiscard]] auto events() const -> const std::vector<std::string>& { return events_; }
   [[nodiscard]] auto nav() -> EditorSessionNavigationController& { return *nav_; }
@@ -75,7 +81,7 @@ class EditorSessionNavigationFixture {
   [[nodiscard]] auto tasks() -> FakeEditorTaskPort& { return *tasks_; }
 
  private:
-  void RecordEvent(std::string name);
+  void                       RecordEvent(std::string name);
 
   /// Pipeline port that records release_a / acquire_b into the event vector.
   class TrackingPipelinePort final : public IEditorPipelinePort {
@@ -83,7 +89,7 @@ class EditorSessionNavigationFixture {
     explicit TrackingPipelinePort(EditorSessionNavigationFixture* owner) : owner_(owner) {}
     auto Acquire(sl_element_id_t element_id, std::string* error)
         -> EditorPipelineGuardHandle override;
-    void Release(const EditorPipelineGuardHandle& guard) override;
+    void                   Release(const EditorPipelineGuardHandle& guard) override;
 
     FakeEditorPipelinePort inner;
 
@@ -112,9 +118,9 @@ class EditorSessionNavigationFixture {
         -> std::shared_ptr<const EditorMiniGitSaveCapture> override;
     auto CheckoutVersion(const EditorHistoryGuardHandle& guard, const Hash128& version_id,
                          std::string* error) -> bool override;
-    auto CreateRootVersionAndCheckout(const EditorHistoryGuardHandle& guard, std::string display_name,
-                                      version_ref_id_t* version_id, std::string* error)
-        -> bool override;
+    auto CreateRootVersionAndCheckout(const EditorHistoryGuardHandle& guard,
+                                      std::string display_name, version_ref_id_t* version_id,
+                                      std::string* error) -> bool override;
     auto BranchFromCommitAndCheckout(const EditorHistoryGuardHandle& guard,
                                      const commit_hash_t& commit_id, std::string display_name,
                                      version_ref_id_t* version_id, std::string* error)
@@ -148,7 +154,7 @@ class EditorSessionNavigationFixture {
    public:
     explicit TrackingCheckpointStore(EditorSessionNavigationFixture* owner) : owner_(owner) {}
     auto MaterializeAsync(std::shared_ptr<const EditorMiniGitSaveCapture> capture,
-                          EditorMaterializeCallback                       callback) -> bool override;
+                          EditorMaterializeCallback callback) -> bool override;
     auto Materialize(std::shared_ptr<const EditorMiniGitSaveCapture> capture, std::string* error)
         -> EditorMaterializeOutcome override;
     auto RecoverAndMaterialize(sl_element_id_t element_id, std::uint64_t session_generation,
@@ -164,7 +170,7 @@ class EditorSessionNavigationFixture {
   class TrackingThumbnailPort final : public IEditorThumbnailPort {
    public:
     explicit TrackingThumbnailPort(EditorSessionNavigationFixture* owner) : owner_(owner) {}
-    void RefreshAfterMaterialization(sl_element_id_t element_id) override;
+    void                    RefreshAfterMaterialization(sl_element_id_t element_id) override;
 
     FakeEditorThumbnailPort inner;
 
@@ -172,20 +178,21 @@ class EditorSessionNavigationFixture {
     EditorSessionNavigationFixture* owner_ = nullptr;
   };
 
-  std::shared_ptr<TrackingPipelinePort>              pipeline_;
-  std::shared_ptr<TrackingHistoryPort>               history_;
-  std::shared_ptr<FakeEditorTaskPort>                tasks_;
-  std::shared_ptr<TrackingJournalPort>               journal_;
-  std::shared_ptr<TrackingCheckpointStore>           checkpoint_store_;
-  std::shared_ptr<TrackingThumbnailPort>             thumbnails_;
-  std::shared_ptr<FakeEditorRenderSubmitPort>        render_submit_;
-  std::shared_ptr<EditorSaveCheckpointCoordinator>   save_coordinator_;
-  std::unique_ptr<EditorSessionLifecycle>            lifecycle_;
-  std::unique_ptr<EditorSaveCheckpointService>       save_service_;
-  std::unique_ptr<EditorSessionRenderController>     render_;
-  std::unique_ptr<EditorSessionEditController>       edit_;
-  std::unique_ptr<EditorSessionNavigationController> nav_;
-  std::vector<std::string>                           events_;
+  std::shared_ptr<TrackingPipelinePort>               pipeline_;
+  std::shared_ptr<TrackingHistoryPort>                history_;
+  std::shared_ptr<FakeEditorTaskPort>                 tasks_;
+  std::shared_ptr<TrackingJournalPort>                journal_;
+  std::shared_ptr<TrackingCheckpointStore>            checkpoint_store_;
+  std::shared_ptr<TrackingThumbnailPort>              thumbnails_;
+  std::shared_ptr<FakeEditorRenderSubmitPort>         render_submit_;
+  std::shared_ptr<EditorSaveCheckpointCoordinator>    save_coordinator_;
+  std::shared_ptr<EditorSessionManualCommandExecutor> command_executor_;
+  std::unique_ptr<EditorSessionLifecycle>             lifecycle_;
+  std::unique_ptr<EditorSaveCheckpointService>        save_service_;
+  std::unique_ptr<EditorSessionRenderController>      render_;
+  std::unique_ptr<EditorSessionEditController>        edit_;
+  std::unique_ptr<EditorSessionNavigationController>  nav_;
+  std::vector<std::string>                            events_;
 };
 
 }  // namespace alcedo::test

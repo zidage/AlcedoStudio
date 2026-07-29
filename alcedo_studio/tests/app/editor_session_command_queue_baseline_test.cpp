@@ -3,23 +3,26 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 /// @file editor_session_command_queue_baseline_test.cpp
-/// @brief CQ0 failing-evidence tests for the editor-session command-queue plan.
+/// @brief CQ0 failing-evidence / CQ1 acceptance tests for the editor-session
+///        command-queue plan.
 ///
-/// Each test asserts a post-restructure invariant from the plan and is
-/// expected to FAIL against the current (pre-CQ1) editor-session facade:
+/// Each test asserts a post-restructure invariant from the plan. Captured
+/// against the pre-CQ1 facade, 8 of 10 failed; since CQ1 they are the
+/// acceptance suite for the single-thread command queue:
 ///
-/// - inline completion: a worker completion runs session code on the
+/// - inline completion: a worker completion never runs session code on the
 ///   service-start stack (invariant 2/3);
-/// - blocking render-lock: a command-thread operation waits on the executor
-///   render mutex (invariant 2);
-/// - split snapshot: one accepted command publishes several change
-///   notifications / terminal results instead of one revision (invariant 6/7).
+/// - blocking render-lock: a command-thread operation never waits on the
+///   executor render mutex (invariant 2);
+/// - split snapshot: one accepted command publishes one change notification
+///   and one terminal result (invariant 6/7).
 ///
 /// The tests drive the real `EditorSessionService` facade through
 /// controllable ports (see editor_session_command_queue_test_support.hpp) and
 /// the real `EditorRenderCoordinator`. No test sleeps for ordering; delayed
-/// completion is driven by the test, and blocking is detected with a bounded
-/// timeout that reports the exact unfinished operation.
+/// completion is driven by the test, posted completions reduce only through
+/// `drainQueue()`, and blocking is detected with a bounded timeout that
+/// reports the exact unfinished operation.
 
 #include <gtest/gtest.h>
 
@@ -37,13 +40,11 @@
 #include "app/editor_session_bootstrap.hpp"
 #include "app/editor_session_service.hpp"
 #include "app/editor_session_types.hpp"
-
 #include "support/editor_session_command_queue_test_support.hpp"
 
 namespace alcedo {
 namespace {
 using namespace alcedo::test;  // controllable ports + recorder live in alcedo::test
-
 
 /// Recording scheduler: accepts every render request and returns a non-zero
 /// job id so the coordinator marks it in-flight. Completion is driven manually
@@ -67,18 +68,22 @@ class RecordingScheduler final : public IEditorPipelineSchedulerPort {
 
 class EditorSessionCommandQueueBaselineTest : public ::testing::Test {
  protected:
-  void SetUp() override {
-    history_         = std::make_shared<ControllableEditorHistoryPort>();
-    pipeline_        = std::make_shared<FakeEditorPipelinePort>();
-    tasks_           = std::make_shared<FakeEditorTaskPort>();
-    journal_         = std::make_shared<OrderRecordingJournalPort>();
-    scheduler_       = std::make_shared<RecordingScheduler>();
-    checkpoint_store_ = std::make_shared<FakeEditorCheckpointStore>();
-    thumbnails_      = std::make_shared<FakeEditorThumbnailPort>();
+  void SetUp() override { RebuildSession(); }
 
-    runtime_ = EditorSessionRuntime::CreateWithPorts(
-        pipeline_, history_, tasks_, journal_, scheduler_, checkpoint_store_, thumbnails_);
-    service_ = runtime_->service.get();
+  /// Rebuild the full session runtime with fresh ports and recorder. Tests
+  /// that compare two runs of the same scenario call this between runs.
+  void RebuildSession() {
+    history_          = std::make_shared<ControllableEditorHistoryPort>();
+    pipeline_         = std::make_shared<FakeEditorPipelinePort>();
+    tasks_            = std::make_shared<FakeEditorTaskPort>();
+    journal_          = std::make_shared<OrderRecordingJournalPort>();
+    scheduler_        = std::make_shared<RecordingScheduler>();
+    checkpoint_store_ = std::make_shared<FakeEditorCheckpointStore>();
+    thumbnails_       = std::make_shared<FakeEditorThumbnailPort>();
+
+    runtime_          = EditorSessionRuntime::CreateWithPorts(pipeline_, history_, tasks_, journal_,
+                                                              scheduler_, checkpoint_store_, thumbnails_);
+    service_          = runtime_->service.get();
     service_->SetPresentationSinkId(1);
     service_->SetPresentationSize(640, 480);
 
@@ -100,14 +105,50 @@ class EditorSessionCommandQueueBaselineTest : public ::testing::Test {
   }
 
   /// Drive the active first-frame request through complete->submit->present.
+  /// Each coordinator notification posts a render completion to the command
+  /// queue; the queue is drained between stages so the render controller's
+  /// complete->submit->present gate advances in order.
   void presentFirstFrame() {
+    // Run any posted save/render completions that route the first frame (a
+    // save-bounded switch routes the first frame only after its checkpoint
+    // completion reduces on the queue).
+    drainQueue();
     const auto rid = service_->first_frame_request_id();
     if (rid == 0) {
       return;
     }
     runtime_->coordinator->NotifySchedulerCompleted(rid, true);
+    drainQueue();
     runtime_->coordinator->NotifyFrameSubmitted(rid);
+    drainQueue();
     runtime_->coordinator->NotifyFramePresented(rid);
+    drainQueue();
+  }
+
+  /// Run all command/completion work posted to the session queue.
+  void drainQueue() { service_->DrainCommandQueueForTests(); }
+
+  /// Open A, switch to B, let the save finish, and present B's first frame.
+  /// `async_save` selects delayed worker completion (journal commit and
+  /// materialization complete from the test as the worker) or inline port
+  /// completion (still posted to the queue, never run on the start stack).
+  /// Returns the ordered (kind, state) result sequence the session published.
+  auto runSwitchSequence(bool async_save)
+      -> std::vector<std::pair<EditorSessionResultKind, EditorSessionState>> {
+    journal_->async_commit               = async_save;
+    checkpoint_store_->async_materialize = async_save;
+    openInteractive(10, 20);
+    (void)service_->Switch(30, 40);
+    journal_->CompleteCommit(true);
+    checkpoint_store_->CompleteMaterialization(true);
+    drainQueue();
+    presentFirstFrame();
+    std::vector<std::pair<EditorSessionResultKind, EditorSessionState>> sequence;
+    sequence.reserve(recorder_->results.size());
+    for (const auto& r : recorder_->results) {
+      sequence.emplace_back(r.kind, r.state);
+    }
+    return sequence;
   }
 
   /// Terminal results published since `baseline`.
@@ -116,15 +157,15 @@ class EditorSessionCommandQueueBaselineTest : public ::testing::Test {
   }
 
   std::shared_ptr<ControllableEditorHistoryPort> history_;
-  std::shared_ptr<FakeEditorPipelinePort>       pipeline_;
-  std::shared_ptr<FakeEditorTaskPort>           tasks_;
-  std::shared_ptr<OrderRecordingJournalPort>    journal_;
-  std::shared_ptr<RecordingScheduler>           scheduler_;
-  std::shared_ptr<FakeEditorCheckpointStore>    checkpoint_store_;
-  std::shared_ptr<FakeEditorThumbnailPort>     thumbnails_;
-  std::unique_ptr<EditorSessionRuntime>         runtime_;
-  EditorSessionService*                         service_ = nullptr;
-  std::unique_ptr<SessionResultRecorder>        recorder_;
+  std::shared_ptr<FakeEditorPipelinePort>        pipeline_;
+  std::shared_ptr<FakeEditorTaskPort>            tasks_;
+  std::shared_ptr<OrderRecordingJournalPort>     journal_;
+  std::shared_ptr<RecordingScheduler>            scheduler_;
+  std::shared_ptr<FakeEditorCheckpointStore>     checkpoint_store_;
+  std::shared_ptr<FakeEditorThumbnailPort>       thumbnails_;
+  std::unique_ptr<EditorSessionRuntime>          runtime_;
+  EditorSessionService*                          service_ = nullptr;
+  std::unique_ptr<SessionResultRecorder>         recorder_;
 };
 
 /// Invariant: a worker completion (the save checkpoint) is processed AFTER the
@@ -138,24 +179,21 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   openInteractive(10, 20);  // image A
 
   recorder_->mark_initiating();
-  const auto before = recorder_->terminal_count();
+  const auto before                    = recorder_->terminal_count();
   // Inline (synchronous) save reproduces the production journal-writer path.
-  journal_->async_commit      = false;
+  journal_->async_commit               = false;
   checkpoint_store_->async_materialize = false;
-  const auto result = service_->Switch(30, 40);  // switch to B
+  const auto result                    = service_->Switch(30, 40);  // switch to B
   recorder_->mark_returned();
 
-  EXPECT_EQ(result.kind, EditorSessionResultKind::RenderRouted);
-  // Target invariant: no save-completion processing ran on the start stack.
-  std::size_t tasked_during = 0;
-  for (const auto& r : recorder_->results_during_initiating) {
-    if (r.task_id != 0) {
-      ++tasked_during;
-    }
-  }
-  EXPECT_EQ(tasked_during, 0u)
+  EXPECT_EQ(result.kind, EditorSessionResultKind::SaveStarted);
+  // Target invariant: no terminal save-completion ran on the start stack. The
+  // save completion is posted to the command queue and reduces only on drain.
+  EXPECT_EQ(recorder_->terminal_during_initiating, 0u)
       << "save completion ran inline before Switch returned (unfinished op: B acquisition)";
-  // The command itself must publish at most one terminal result.
+  // The command publishes exactly one terminal result, delivered after the
+  // queue drains the posted save completion.
+  drainQueue();
   EXPECT_EQ(terminals_since(before), 1u)
       << "one accepted command must publish exactly one terminal result";
 }
@@ -170,9 +208,9 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   openInteractive(10, 20);  // image A
 
   // Start an async save for A; B is the pending running target.
-  journal_->async_commit      = true;
+  journal_->async_commit               = true;
   checkpoint_store_->async_materialize = true;
-  const auto switch_b = service_->Switch(30, 40);  // switch to B
+  const auto switch_b                  = service_->Switch(30, 40);  // switch to B
   ASSERT_EQ(switch_b.kind, EditorSessionResultKind::SaveStarted);
 
   // Rapidly request C while B's save is still in progress.
@@ -188,8 +226,17 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   // The running target B must still complete after its save.
   journal_->CompleteCommit(true);
   checkpoint_store_->CompleteMaterialization(true);
+  drainQueue();
   EXPECT_EQ(service_->identity().element_id, static_cast<sl_element_id_t>(30))
       << "running target B must remain the acquired image";
+
+  // The queued selection C is promoted once B's save completes: it seals B and
+  // runs its own save checkpoint before acquiring C.
+  journal_->CompleteCommit(true);
+  checkpoint_store_->CompleteMaterialization(true);
+  drainQueue();
+  EXPECT_EQ(service_->identity().element_id, static_cast<sl_element_id_t>(50))
+      << "the promoted queued selection must acquire C after B's save finishes";
 }
 
 /// Invariant: a save completion whose generation does not match the pending
@@ -203,12 +250,12 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   openInteractive(10, 20);  // image A
 
   // Start an async save for A; B pending, ticket assigned (correlated path).
-  journal_->async_commit      = true;
+  journal_->async_commit               = true;
   checkpoint_store_->async_materialize = true;
   ASSERT_EQ(service_->Switch(30, 40).kind, EditorSessionResultKind::SaveStarted);
 
   const auto identity_before = service_->identity();
-  const auto state_before     = service_->state();
+  const auto state_before    = service_->state();
 
   // While the save is pending, A's guards are retained: identity is still A
   // and the session is mid-save. No completion has fired yet.
@@ -217,9 +264,11 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   EXPECT_EQ(state_before, EditorSessionState::Saving);
 
   // Complete the real (correlated) save; only the matching generation may
-  // release A's guards and acquire B.
+  // release A's guards and acquire B. The completion is posted to the command
+  // queue and reduces on drain.
   journal_->CompleteCommit(true);
   checkpoint_store_->CompleteMaterialization(true);
+  drainQueue();
 
   EXPECT_EQ(service_->identity().element_id, static_cast<sl_element_id_t>(30))
       << "only the matching completion acquires B";
@@ -230,13 +279,12 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
 /// the active session cannot enable editing for another image. The render
 /// controller filters results by session_generation/image/element; this test
 /// pins that guard so CQ1/CQ3 keep it once completion is queue-mediated.
-TEST_F(EditorSessionCommandQueueBaselineTest,
-       StaleFirstFrameCannotEnableEditingForAnotherImage) {
+TEST_F(EditorSessionCommandQueueBaselineTest, StaleFirstFrameCannotEnableEditingForAnotherImage) {
   openInteractive(10, 20);  // image A, generation 1
-  const auto gen_a = service_->identity().session_generation;
+  const auto gen_a                     = service_->identity().session_generation;
 
   // Switch to B synchronously (inline save) and present B's first frame.
-  journal_->async_commit      = false;
+  journal_->async_commit               = false;
   checkpoint_store_->async_materialize = false;
   (void)service_->Switch(30, 40);
   presentFirstFrame();
@@ -245,10 +293,10 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
 
   // Build a stale first-frame result for A's generation and feed it through the
   // coordinator's result observer path. It must not regress identity to A.
-  const auto rid_b = service_->first_frame_request_id();
+  const auto         rid_b = service_->first_frame_request_id();
   EditorRenderResult stale;
-  stale.kind       = EditorRenderResultKind::FramePresented;
-  stale.request_id = rid_b;
+  stale.kind                      = EditorRenderResultKind::FramePresented;
+  stale.request_id                = rid_b;
   stale.intent.session_generation = gen_a;  // stale generation for A
   stale.intent.element_id         = 10;
   stale.intent.image_id           = 20;
@@ -276,17 +324,16 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   // Simulate a render worker owning the executor mid-Apply.
   std::unique_lock<std::mutex> worker_holds(render_lock);
 
-  std::atomic<int> returned{0};
-  auto             fut = std::async(std::launch::async, [&] {
+  std::atomic<int>             returned{0};
+  auto                         fut     = std::async(std::launch::async, [&] {
     (void)service_->Undo();
     returned.store(1);
   });
-  const auto status = fut.wait_for(std::chrono::milliseconds(200));
+  const auto                   status  = fut.wait_for(std::chrono::milliseconds(200));
 
   // Target invariant: Undo returns without waiting for the render lock.
-  const bool blocked = (status != std::future_status::ready);
-  EXPECT_FALSE(blocked)
-      << "Undo blocked on the executor render lock (unfinished op: Undo)";
+  const bool                   blocked = (status != std::future_status::ready);
+  EXPECT_FALSE(blocked) << "Undo blocked on the executor render lock (unfinished op: Undo)";
 
   // Release the worker hold so the blocked command can finish and the async
   // thread joins cleanly regardless of pass/fail.
@@ -310,14 +357,14 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   history_->render_lock = &render_lock;
   std::unique_lock<std::mutex> worker_holds(render_lock);
 
-  std::atomic<int> returned{0};
-  auto             fut = std::async(std::launch::async, [&] {
+  std::atomic<int>             returned{0};
+  auto                         fut     = std::async(std::launch::async, [&] {
     (void)service_->CompleteMerge({});
     returned.store(1);
   });
-  const auto status = fut.wait_for(std::chrono::milliseconds(200));
+  const auto                   status  = fut.wait_for(std::chrono::milliseconds(200));
 
-  const bool blocked = (status != std::future_status::ready);
+  const bool                   blocked = (status != std::future_status::ready);
   EXPECT_FALSE(blocked)
       << "CompleteMerge blocked on the executor render lock (unfinished op: Merge)";
 
@@ -328,21 +375,28 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
 
 /// Invariant: when the current image has a dirty journal, Paste queues a save
 /// checkpoint BEFORE creating the new Version (one durable publication). The
-/// current facade creates the Version first (history->PasteAdjustments) and
+/// pre-CQ1 facade creates the Version first (history->PasteAdjustments) and
 /// then starts the save checkpoint, so the order is [version_created,
-/// save_started] instead of [save_started, version_created].
+/// save_started] instead of [save_started, version_created]. The queued
+/// facade retains the Paste command, flushes the journal, and continues the
+/// transfer when the posted save completion reduces.
 TEST_F(EditorSessionCommandQueueBaselineTest,
        DirtyJournalPasteQueuesSaveBeforeCreatingTheNewVersion) {
   openInteractive(10, 20);  // image A, interactive
 
   std::vector<std::string> events;
-  history_->event_log     = &events;
-  journal_->event_log      = &events;
-  history_->dirty_journal  = true;
-  journal_->async_commit   = false;  // observe inline save ordering
+  history_->event_log                  = &events;
+  journal_->event_log                  = &events;
+  history_->dirty_journal              = true;
+  journal_->async_commit               = false;  // observe inline save ordering
   checkpoint_store_->async_materialize = false;
 
-  (void)service_->PasteAdjustments(AdjustmentTransferPackage{}, "Pasted Version");
+  const auto result = service_->PasteAdjustments(AdjustmentTransferPackage{}, "Pasted Version");
+  EXPECT_EQ(result.kind, EditorSessionResultKind::SaveStarted)
+      << "dirty journal Paste must start the flush checkpoint before the transfer";
+  // The flush completion is posted to the queue; reducing it resumes the
+  // retained Paste on the clean journal.
+  drainQueue();
 
   // Target order: save first, then version creation.
   ASSERT_GE(events.size(), 2u) << "Paste must produce a save and a version creation";
@@ -352,7 +406,7 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
 }
 
 /// Invariant: when the current image has a dirty journal, Merge queues a save
-/// checkpoint BEFORE creating the merge commit. The current facade commits the
+/// checkpoint BEFORE creating the merge commit. The pre-CQ1 facade commits the
 /// merge first and then starts the save, so the order is [merge_committed,
 /// save_started].
 TEST_F(EditorSessionCommandQueueBaselineTest,
@@ -364,13 +418,16 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
             EditorSessionResultKind::Accepted);
 
   std::vector<std::string> events;
-  history_->event_log     = &events;
-  journal_->event_log      = &events;
-  history_->dirty_journal  = true;
-  journal_->async_commit   = false;
+  history_->event_log                  = &events;
+  journal_->event_log                  = &events;
+  history_->dirty_journal              = true;
+  journal_->async_commit               = false;
   checkpoint_store_->async_materialize = false;
 
-  (void)service_->CompleteMerge({});
+  const auto result                    = service_->CompleteMerge({});
+  EXPECT_EQ(result.kind, EditorSessionResultKind::SaveStarted)
+      << "dirty journal Merge must start the flush checkpoint before the transfer";
+  drainQueue();
 
   ASSERT_GE(events.size(), 2u) << "Merge must produce a save and a merge commit";
   EXPECT_EQ(events[0], "save_started")
@@ -388,7 +445,7 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   openInteractive(10, 20);  // image A
 
   recorder_->mark_initiating();
-  journal_->async_commit      = false;
+  journal_->async_commit               = false;
   checkpoint_store_->async_materialize = false;
   (void)service_->Switch(30, 40);  // one accepted command: switch A->B
   recorder_->mark_returned();
@@ -419,19 +476,67 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
 /// current synchronous switch publishes the inline save-completion result AND a
 /// SaveFinished result AND the command result, so multiple terminal results
 /// arrive for one command.
-TEST_F(EditorSessionCommandQueueBaselineTest,
-       OneAcceptedCommandPublishesExactlyOneTerminalResult) {
+TEST_F(EditorSessionCommandQueueBaselineTest, OneAcceptedCommandPublishesExactlyOneTerminalResult) {
   openInteractive(10, 20);  // image A
 
   const auto terminal_before = recorder_->terminal_count();
   recorder_->mark_initiating();
-  journal_->async_commit      = false;
+  journal_->async_commit               = false;
   checkpoint_store_->async_materialize = false;
   (void)service_->Switch(30, 40);  // one accepted command: switch A->B
   recorder_->mark_returned();
+  // The save completion is posted to the queue; the command's single terminal
+  // result (the navigation completion) publishes when the queue drains.
+  drainQueue();
 
   EXPECT_EQ(terminals_since(terminal_before), 1u)
       << "one accepted command must publish exactly one terminal result";
+}
+
+/// Invariant: immediate (inline port) and delayed (async worker) completion
+/// deliver the same published snapshot sequence. Both modes post typed
+/// completions to the command queue; only the delivery timing differs, so the
+/// ordered (kind, state) result stream must be identical.
+TEST_F(EditorSessionCommandQueueBaselineTest,
+       ImmediateAndDelayedCompletionProduceTheSameSnapshotSequence) {
+  const auto seq_immediate = runSwitchSequence(false);
+
+  RebuildSession();
+  const auto seq_delayed = runSwitchSequence(true);
+
+  EXPECT_EQ(seq_immediate, seq_delayed)
+      << "immediate and delayed completion must produce the same snapshot sequence";
+}
+
+/// Invariant: Shutdown cancels an in-flight history checkpoint without letting
+/// the cancelled completion re-enter a recoverable failure state. Shutdown
+/// also stops the queue from admitting later commands, and both the Shutdown
+/// command and the cancelled checkpoint publish exactly one terminal result.
+TEST_F(EditorSessionCommandQueueBaselineTest,
+       ShutdownDuringHistoryCheckpointStaysShuttingDownAndPublishesOneCancellation) {
+  openInteractive(10, 20);  // image A, interactive
+
+  // Start a history checkpoint whose save cannot finish on its own.
+  journal_->async_commit               = true;
+  checkpoint_store_->async_materialize = true;
+  const auto paste = service_->PasteAdjustments(AdjustmentTransferPackage{}, "Pasted Version");
+  ASSERT_EQ(paste.kind, EditorSessionResultKind::SaveStarted);
+
+  const auto terminal_before = recorder_->terminal_count();
+  const auto shutdown        = service_->Shutdown();
+  EXPECT_EQ(shutdown.state, EditorSessionState::ShuttingDown);
+  drainQueue();
+
+  EXPECT_EQ(service_->state(), EditorSessionState::ShuttingDown)
+      << "the cancelled checkpoint must not re-enter RetainedImageFailure";
+  EXPECT_EQ(terminals_since(terminal_before), 2u)
+      << "Shutdown and the cancelled checkpoint each publish one terminal result";
+
+  // The queue no longer admits user commands; the rejection carries the
+  // shutting-down state rather than mutating the session.
+  const auto late = service_->Open(50, 60);
+  EXPECT_EQ(late.kind, EditorSessionResultKind::Rejected);
+  EXPECT_EQ(service_->state(), EditorSessionState::ShuttingDown);
 }
 
 }  // namespace

@@ -29,11 +29,12 @@ void EditorSessionRenderController::SetPresentationSinkId(PresentationSinkId sin
       return;
     }
     if (pending_initial_reason_.has_value()) {
-      pending_command.reason     = *pending_initial_reason_;
-      pending_command.adjustment = pending_initial_adjustment_;
-      pending_command.policy     = pending_initial_policy_;
-      pending_identity           = pending_session_identity_;
-      has_pending                = true;
+      pending_command.reason       = *pending_initial_reason_;
+      pending_command.operation_id = pending_operation_id_;
+      pending_command.adjustment   = pending_initial_adjustment_;
+      pending_command.policy       = pending_initial_policy_;
+      pending_identity             = pending_session_identity_;
+      has_pending                  = true;
     }
   }
   if (has_pending) {
@@ -50,11 +51,12 @@ void EditorSessionRenderController::SetPresentationSize(int width, int height) {
     presentation_width_  = std::max(0, width);
     presentation_height_ = std::max(0, height);
     if (pending_initial_reason_.has_value()) {
-      pending_command.reason     = *pending_initial_reason_;
-      pending_command.adjustment = pending_initial_adjustment_;
-      pending_command.policy     = pending_initial_policy_;
-      pending_identity           = pending_session_identity_;
-      has_pending                = true;
+      pending_command.reason       = *pending_initial_reason_;
+      pending_command.operation_id = pending_operation_id_;
+      pending_command.adjustment   = pending_initial_adjustment_;
+      pending_command.policy       = pending_initial_policy_;
+      pending_identity             = pending_session_identity_;
+      has_pending                  = true;
     }
   }
   if (has_pending) {
@@ -69,22 +71,23 @@ auto EditorSessionRenderController::MakeRenderIntent(const EditorRenderCommand& 
     return std::nullopt;
   }
   EditorRenderIntent intent;
-  intent.element_id           = identity.element_id;
-  intent.image_id             = identity.image_id;
-  intent.session_generation   = identity.session_generation;
-  intent.render_generation    = identity.render_generation;
-  intent.view_generation      = identity.view_generation;
-  intent.reason               = command.reason;
-  intent.quality              = DefaultQualityForReason(command.reason);
-  intent.priority             = DefaultPriorityForReason(command.reason);
-  intent.frame_role           = FrameRoleForQuality(intent.quality);
-  intent.replacement_key      = DefaultReplacementKey(intent.quality);
-  intent.adjustment           = command.adjustment;
+  intent.element_id            = identity.element_id;
+  intent.image_id              = identity.image_id;
+  intent.operation_id          = command.operation_id;
+  intent.session_generation    = identity.session_generation;
+  intent.render_generation     = identity.render_generation;
+  intent.view_generation       = identity.view_generation;
+  intent.reason                = command.reason;
+  intent.quality               = DefaultQualityForReason(command.reason);
+  intent.priority              = DefaultPriorityForReason(command.reason);
+  intent.frame_role            = FrameRoleForQuality(intent.quality);
+  intent.replacement_key       = DefaultReplacementKey(intent.quality);
+  intent.adjustment            = command.adjustment;
   intent.geometry_overlay_only = geometry_overlay_active_.load(std::memory_order_acquire);
-  intent.requested_width     = presentation_width_;
-  intent.requested_height    = presentation_height_;
-  intent.presentation_sink_id = presentation_sink_id_;
-  intent.cancellation         = std::make_shared<EditorRenderCancellationToken>();
+  intent.requested_width       = presentation_width_;
+  intent.requested_height      = presentation_height_;
+  intent.presentation_sink_id  = presentation_sink_id_;
+  intent.cancellation          = std::make_shared<EditorRenderCancellationToken>();
   FillRenderIntentDefaults(intent);
   return intent;
 }
@@ -99,6 +102,7 @@ auto EditorSessionRenderController::RouteInitialRender(const EditorRenderCommand
   if (!PresentationTargetReady()) {
     std::scoped_lock lock(mutex_);
     pending_initial_reason_     = command.reason;
+    pending_operation_id_       = command.operation_id;
     pending_initial_adjustment_ = command.adjustment;
     pending_initial_policy_     = command.policy;
     pending_session_identity_   = identity;
@@ -135,11 +139,12 @@ auto EditorSessionRenderController::RouteInitialRender(const EditorRenderCommand
     // Keep pending_initial_adjustment_ so TryEnterInteractiveFromFirstFrame
     // can use it for the QualityBase follow-up. Only reset the reason.
     EditorRenderEvent event;
-    event.kind       = EditorRenderEventKind::RenderRouted;
-    event.request_id = routed.request_id;
-    event.state      = EditorSessionState::Loading;
-    event.identity   = identity;
-    event.reason     = command.reason;
+    event.kind         = EditorRenderEventKind::RenderRouted;
+    event.operation_id = command.operation_id;
+    event.request_id   = routed.request_id;
+    event.state        = EditorSessionState::Loading;
+    event.identity     = identity;
+    event.reason       = command.reason;
     EmitEvent(std::move(event));
     return routed.request_id;
   }
@@ -185,9 +190,10 @@ auto EditorSessionRenderController::RouteViewChange(const EditorRenderCommand&  
     routed.message = "Render submit port unavailable";
   }
 
-  event.state    = state;
-  event.identity = identity;
-  event.reason   = command.reason;
+  event.state        = state;
+  event.identity     = identity;
+  event.operation_id = command.operation_id;
+  event.reason       = command.reason;
   switch (routed.kind) {
     case EditorRenderResultKind::RequestAccepted:
       event.kind       = EditorRenderEventKind::RenderRouted;
@@ -225,10 +231,11 @@ void EditorSessionRenderController::NotifyRenderResult(const EditorRenderResult&
   if (render_result.kind == EditorRenderResultKind::Failed) {
     if (state == EditorSessionState::Loading && MatchesActiveFirstFrame(render_result, identity)) {
       EditorRenderEvent event;
-      event.kind     = EditorRenderEventKind::RenderFailed;
-      event.state    = state;
-      event.identity = identity;
-      event.message  = render_result.message.empty() ? "Render failed" : render_result.message;
+      event.kind         = EditorRenderEventKind::RenderFailed;
+      event.operation_id = render_result.intent.operation_id;
+      event.state        = state;
+      event.identity     = identity;
+      event.message      = render_result.message.empty() ? "Render failed" : render_result.message;
       EmitEvent(std::move(event));
     }
     return;
@@ -288,9 +295,10 @@ void EditorSessionRenderController::NotifyRenderResult(const EditorRenderResult&
   }
   if (should_notify) {
     EditorRenderEvent event;
-    event.kind     = EditorRenderEventKind::BusyChanged;
-    event.state    = state;
-    event.identity = identity;
+    event.kind         = EditorRenderEventKind::BusyChanged;
+    event.operation_id = render_result.intent.operation_id;
+    event.state        = state;
+    event.identity     = identity;
     EmitEvent(std::move(event));
   }
 }
@@ -335,6 +343,7 @@ void EditorSessionRenderController::ResetForNewImage() {
   first_frame_presented_   = false;
   quality_base_routed_     = false;
   pending_initial_reason_.reset();
+  pending_operation_id_       = 0;
   pending_initial_adjustment_ = {};
   pending_session_identity_   = {};
   first_frame_route_time_.reset();
@@ -370,6 +379,7 @@ void EditorSessionRenderController::TryEnterInteractiveFromFirstFrame(
   // Interactive lifecycle transition and schedules the QualityBase follow-up.
   EditorRenderEvent event;
   event.kind               = EditorRenderEventKind::FirstFramePresented;
+  event.operation_id       = pending_operation_id_;
   event.state              = EditorSessionState::Interactive;
   event.identity           = identity;
   event.presented_identity = identity;
@@ -384,9 +394,10 @@ void EditorSessionRenderController::TryEnterInteractiveFromFirstFrame(
     }
   }
   EditorRenderCommand qb_command;
-  qb_command.reason     = EditorRenderReason::SettledAdjustment;
-  qb_command.adjustment = pending_initial_adjustment_;
-  auto intent           = MakeRenderIntent(qb_command, identity);
+  qb_command.operation_id = pending_operation_id_;
+  qb_command.reason       = EditorRenderReason::SettledAdjustment;
+  qb_command.adjustment   = pending_initial_adjustment_;
+  auto intent             = MakeRenderIntent(qb_command, identity);
   if (intent && deps_.render && PresentationTargetReady()) {
     intent->quality         = EditorRenderQuality::Quality;
     intent->frame_role      = FrameRole::QualityBase;
@@ -433,10 +444,11 @@ void EditorSessionRenderController::RoutePendingInitialRender(
   }
   if (RouteInitialRender(command, identity) == 0) {
     EditorRenderEvent event;
-    event.kind     = EditorRenderEventKind::RenderFailed;
-    event.state    = EditorSessionState::Loading;
-    event.identity = identity;
-    event.message  = "First frame could not be scheduled";
+    event.kind         = EditorRenderEventKind::RenderFailed;
+    event.operation_id = command.operation_id;
+    event.state        = EditorSessionState::Loading;
+    event.identity     = identity;
+    event.message      = "First frame could not be scheduled";
     EmitEvent(std::move(event));
   }
 }

@@ -7,9 +7,13 @@
 #include <QCoreApplication>
 #include <QDeadlineTimer>
 #include <QEventLoop>
+#include <QMetaObject>
+#include <QPointer>
+#include <QThread>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 
 #include "app/editor_save_checkpoint_coordinator.hpp"
@@ -25,6 +29,37 @@
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 
 namespace alcedo::ui {
+
+namespace {
+
+class QtEditorSessionCommandExecutor final : public alcedo::IEditorSessionCommandExecutor {
+ public:
+  explicit QtEditorSessionCommandExecutor(QObject* target) : target_(target) {}
+
+  void Post(std::function<void()> task) override {
+    const QPointer<QObject> target = target_;
+    if (!target || !task) {
+      return;
+    }
+    QMetaObject::invokeMethod(
+        target,
+        [target, task = std::move(task)]() mutable {
+          if (target) {
+            task();
+          }
+        },
+        Qt::QueuedConnection);
+  }
+
+  [[nodiscard]] auto IsOwnerThread() const -> bool override {
+    return target_ && QThread::currentThread() == target_->thread();
+  }
+
+ private:
+  QPointer<QObject> target_;
+};
+
+}  // namespace
 
 // ── ApplicationModuleHost ───────────────────────────────────────────────────
 
@@ -191,7 +226,8 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
 
     editor_session_runtime_ = alcedo::EditorSessionRuntime::CreateWithPorts(
         session_pipeline, session_history, session_tasks, session_journal, session_scheduler,
-        session_checkpoint, session_thumbnail, save_coordinator);
+        session_checkpoint, session_thumbnail, save_coordinator,
+        std::make_shared<QtEditorSessionCommandExecutor>(this));
     session_scheduler->SetCoordinator(editor_session_runtime_->coordinator);
     editor_session_scheduler_ = std::move(session_scheduler);
   }

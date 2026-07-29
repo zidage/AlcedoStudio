@@ -4,11 +4,12 @@
 
 #pragma once
 
+#include <cassert>
 #include <cstdint>
 #include <functional>
-#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 
 #include "app/editor_save_checkpoint_service.hpp"
 #include "app/editor_session_types.hpp"
@@ -54,13 +55,28 @@ struct PendingEditorAction {
   CheckpointTicket        ticket{};
 };
 
+/// Mutable navigation state owned by the session command reducer. The
+/// navigation helper receives this state by reference so pending actions do
+/// not live behind a second synchronization boundary.
+struct EditorSessionNavigationState {
+  std::optional<PendingEditorAction> pending_action;
+  std::optional<PendingEditorAction> pending_recovery;
+  /// Switch target queued behind a running save. A rapid second selection
+  /// replaces this (never the running target); it is promoted to
+  /// pending_action once the running save completes and the prior image is
+  /// acquired. Only SwitchImage selections queue here.
+  std::optional<PendingEditorAction> pending_next_target;
+};
+
 /// Outcome of a navigation request. The facade uses this to publish the
 /// appropriate EditorSessionResult and decide whether to wait for the save
 /// checkpoint or proceed immediately.
 struct NavigationOutcome {
   /// The pending action was captured and a save checkpoint was started.
   bool             waiting_for_checkpoint  = false;
-  /// The navigation completed synchronously (sync save or no prior image).
+  /// The navigation completed synchronously (no prior image, same-image
+  /// no-op, or a discard-and-continue path). Save-bounded navigations never
+  /// set this: their completion is posted through the command queue.
   bool             completed_synchronously = false;
   /// The request was rejected (e.g. concurrent navigation or shutdown).
   bool             rejected                = false;
@@ -79,9 +95,9 @@ struct NavigationOutcome {
 /// asynchronous save checkpoint + navigation finishes (Phase 7A). The facade
 /// uses this to publish the matching EditorSessionResult for the UI.
 struct NavigationCompletion {
-  bool        success  = false;
-  bool        retained_image = false;  ///< True when the image survived a failure.
-  std::string message;
+  bool             success        = false;
+  bool             retained_image = false;  ///< True when the image survived a failure.
+  std::string      message;
   CheckpointTicket ticket;
 };
 
@@ -103,13 +119,14 @@ class EditorSessionNavigationController final {
     std::uint64_t   session_generation    = 0;
   };
 
-  explicit EditorSessionNavigationController(EditorSessionLifecycle&        lifecycle,
-                                             EditorSaveCheckpointService&   save_service,
-                                             EditorSessionRenderController& render,
-                                             EditorSessionEditController&   edit,
-                                             IEditorJournalPort*            journal,
-                                             IEditorCheckpointStore*        checkpoint_store,
-                                             IEditorHistoryPort*            history);
+  explicit EditorSessionNavigationController(
+      EditorSessionLifecycle& lifecycle, EditorSaveCheckpointService& save_service,
+      EditorSessionRenderController& render, EditorSessionEditController& edit,
+      IEditorJournalPort* journal, IEditorCheckpointStore* checkpoint_store,
+      IEditorHistoryPort* history, EditorSessionNavigationState* state = nullptr);
+
+  /// Stamp the operation currently being reduced onto saves and render work.
+  void SetOperationId(std::uint64_t operation_id);
 
   /// Request to open or switch to a new image. If the current image has
   /// unsealed changes, starts a save checkpoint and captures the pending
@@ -119,7 +136,7 @@ class EditorSessionNavigationController final {
 
   /// Request to close the editor. If the current image has unsealed changes,
   /// starts a save checkpoint and captures the pending close action.
-  auto               RequestClose(bool persist_changes) -> NavigationOutcome;
+  auto RequestClose(bool persist_changes) -> NavigationOutcome;
 
   /// Request to check out another Version on the currently open image. Always
   /// completes a save checkpoint first (even when the journal is empty) so the
@@ -150,7 +167,7 @@ class EditorSessionNavigationController final {
   [[nodiscard]] auto has_pending_action() const -> bool;
 
   /// Clear the pending action without resuming. Used when the facade needs to
-  /// reset state after a synchronous completion or a rejection.
+  /// reset state after a rejected command.
   void               ClearPendingAction();
 
   /// Phase 7A: register a notifier called when an async save checkpoint +
@@ -195,28 +212,33 @@ class EditorSessionNavigationController final {
   /// Phase 7A: continue branch-from-commit + checkout after a successful save.
   /// Returns false and sets error on failure; provisional ref removed.
   auto ContinueBranchFromCommit(const commit_hash_t& commit_id, std::string display_name,
-                                 std::string* error) -> bool;
+                                std::string* error) -> bool;
+  /// Promote a rapid SwitchImage selection queued behind a completed switch.
+  /// Seals the just-acquired image and starts its save so the queued target
+  /// becomes the next running navigation. Called on the owner thread after the
+  /// running switch's OnCheckpointFinished publishes its completion.
+  void PromoteQueuedSwitchTarget();
   /// Publish the async completion to the registered notifier (if any).
   void NotifyCompletion(bool success, bool retained_image, std::string message,
                         const CheckpointTicket& ticket);
   /// Retain the current image and remember the pending target after a save or
-  /// checkpoint failure. The caller holds mutex_ so the transition and
-  /// notification stay one navigation operation.
+  /// checkpoint failure. Callers are already on the session owner thread.
   void RetainPendingFailure(PendingEditorAction pending, std::string message);
 
-  EditorSessionLifecycle&            lifecycle_;
-  EditorSaveCheckpointService&       save_service_;
-  EditorSessionRenderController&     render_;
-  EditorSessionEditController&       edit_;
-  IEditorJournalPort*                journal_;
-  IEditorCheckpointStore*            checkpoint_store_;
-  IEditorHistoryPort*                history_;
-  mutable std::recursive_mutex       mutex_;
-  std::optional<PendingEditorAction> pending_action_;
-  NavigationCompletionNotifier       completion_notifier_;
-  /// Phase 7A: preserved pending target while a save failure recovery is
-  /// pending. Set when OnCheckpointFinished fails; cleared by recovery actions.
-  std::optional<PendingEditorAction> pending_recovery_;
+  void AssertOwnerThread() const { assert(std::this_thread::get_id() == owner_thread_); }
+
+  EditorSessionLifecycle&        lifecycle_;
+  EditorSaveCheckpointService&   save_service_;
+  EditorSessionRenderController& render_;
+  EditorSessionEditController&   edit_;
+  IEditorJournalPort*            journal_;
+  IEditorCheckpointStore*        checkpoint_store_;
+  IEditorHistoryPort*            history_;
+  EditorSessionNavigationState   owned_state_;
+  EditorSessionNavigationState*  state_;
+  std::thread::id                owner_thread_;
+  std::uint64_t                  operation_id_ = 0;
+  NavigationCompletionNotifier   completion_notifier_;
 };
 
 }  // namespace alcedo

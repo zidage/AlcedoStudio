@@ -4,8 +4,9 @@
 
 #pragma once
 
-#include <mutex>
+#include <cassert>
 #include <string>
+#include <thread>
 
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_types.hpp"
@@ -40,7 +41,8 @@ struct ReleaseOutcome {
 /// Owns the current editor session image, identity, state, pipeline/history
 /// guards, and the last error. All state transitions are semantic: callers
 /// name the transition they want; this type validates and applies it. The
-/// facade and other controllers never access the fields or the mutex.
+/// facade and other controllers never access the fields. Every method is
+/// called on the session owner thread.
 class EditorSessionLifecycle final {
  public:
   struct Dependencies {
@@ -117,16 +119,16 @@ class EditorSessionLifecycle final {
   /// image visible, use `KeepCurrentAfterCheckpointFailure` instead.
   void               Fail(std::string message);
 
-  /// Read-only snapshot of the current state. Thread-safe.
+  /// Read-only snapshot of the current state. Owner-thread only.
   [[nodiscard]] auto state() const -> EditorSessionState;
-  /// Read-only snapshot of the current identity. Thread-safe.
+  /// Read-only snapshot of the current identity. Owner-thread only.
   [[nodiscard]] auto identity() const -> EditorSessionIdentity;
   /// True when the session has an image (Acquiring/Loading/Interactive/Saving/
   /// Switching).
   [[nodiscard]] auto has_image() const -> bool;
   /// True when the session is active (not NoImage and not ShuttingDown).
   [[nodiscard]] auto active() const -> bool;
-  /// Last error message. Thread-safe.
+  /// Last error message. Owner-thread only.
   [[nodiscard]] auto last_error() const -> std::string;
   /// The active history guard handle. Used by the edit controller and save
   /// path to commit adjustments and capture checkpoints. Returns an invalid
@@ -148,13 +150,15 @@ class EditorSessionLifecycle final {
                                      std::uint64_t session_generation) const -> bool;
 
  private:
-  Dependencies                 deps_;
-  mutable std::recursive_mutex mutex_;
-  EditorSessionState           state_ = EditorSessionState::NoImage;
-  EditorSessionIdentity        identity_{};
-  EditorPipelineGuardHandle    pipeline_guard_{};
-  EditorHistoryGuardHandle     history_guard_{};
-  std::string                  last_error_;
+  void            AssertOwnerThread() const { assert(std::this_thread::get_id() == owner_thread_); }
+
+  Dependencies    deps_;
+  std::thread::id owner_thread_;
+  EditorSessionState        state_ = EditorSessionState::NoImage;
+  EditorSessionIdentity     identity_{};
+  EditorPipelineGuardHandle pipeline_guard_{};
+  EditorHistoryGuardHandle  history_guard_{};
+  std::string               last_error_;
 };
 
 }  // namespace alcedo

@@ -30,9 +30,10 @@ enum class EditorRenderEventKind : std::uint8_t {
 };
 
 struct EditorRenderEvent {
-  EditorRenderEventKind kind       = EditorRenderEventKind::RenderRouted;
-  std::uint64_t         request_id = 0;
-  EditorSessionState    state      = EditorSessionState::NoImage;
+  EditorRenderEventKind kind         = EditorRenderEventKind::RenderRouted;
+  std::uint64_t         operation_id = 0;
+  std::uint64_t         request_id   = 0;
+  EditorSessionState    state        = EditorSessionState::NoImage;
   EditorSessionIdentity identity{};
   EditorRenderReason    reason = EditorRenderReason::ZoomPan;
   std::string           message;
@@ -149,6 +150,7 @@ class EditorSessionRenderController final {
   bool                              first_frame_presented_   = false;
   bool                              quality_base_routed_     = false;
   std::optional<EditorRenderReason> pending_initial_reason_;
+  std::uint64_t                     pending_operation_id_ = 0;
   EditorRenderAdjustmentSnapshot    pending_initial_adjustment_;
   EditorRenderSupersessionPolicy    pending_initial_policy_ =
       EditorRenderSupersessionPolicy::CancelObsolete;

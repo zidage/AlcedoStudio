@@ -138,23 +138,21 @@ class IEditorHistoryPort {
   /// snapshot. The new ref replaces the ambiguous active-head creation. Fail
   /// closed: prior ref/pipeline/snapshot remain published on failure.
   virtual auto CreateRootVersionAndCheckout(const EditorHistoryGuardHandle& /*guard*/,
-                                             std::string /*display_name*/,
-                                             version_ref_id_t* /*version_id*/, std::string* error)
+                                            std::string /*display_name*/,
+                                            version_ref_id_t* /*version_id*/, std::string* error)
       -> bool {
-    if (error != nullptr)
-      *error = "Root Version creation is not supported by this history port";
+    if (error != nullptr) *error = "Root Version creation is not supported by this history port";
     return false;
   }
   /// Phase 7A: create a new Version at an explicit commit, set it active,
   /// rebuild the pipeline, clear redo, and publish the matching snapshot. Fail
   /// closed: prior ref/pipeline/snapshot remain published on failure.
   virtual auto BranchFromCommitAndCheckout(const EditorHistoryGuardHandle& /*guard*/,
-                                            const commit_hash_t& /*commit_id*/,
-                                            std::string /*display_name*/,
-                                            version_ref_id_t* /*version_id*/, std::string* error)
+                                           const commit_hash_t& /*commit_id*/,
+                                           std::string /*display_name*/,
+                                           version_ref_id_t* /*version_id*/, std::string* error)
       -> bool {
-    if (error != nullptr)
-      *error = "Branch creation is not supported by this history port";
+    if (error != nullptr) *error = "Branch creation is not supported by this history port";
     return false;
   }
 
@@ -230,7 +228,7 @@ class IEditorHistoryPort {
   /// state already agrees with the active head. Default is a no-op for fakes that do
   /// not hold a live commit graph.
   virtual auto SyncMaterializedStateAfterCheckpoint(const EditorHistoryGuardHandle& /*guard*/,
-                                                     std::string* /*error*/) -> bool {
+                                                    std::string* /*error*/) -> bool {
     return true;
   }
 };
@@ -391,7 +389,8 @@ enum class EditorRenderSupersessionPolicy : std::uint8_t {
 /// to the render controller; the render controller does not read adjustment
 /// state from any other component.
 struct EditorRenderCommand {
-  EditorRenderReason                  reason = EditorRenderReason::InitialFrame;
+  EditorRenderReason                  reason       = EditorRenderReason::InitialFrame;
+  std::uint64_t                       operation_id = 0;
   EditorRenderAdjustmentSnapshot      adjustment{};
   EditorRenderSupersessionPolicy      policy = EditorRenderSupersessionPolicy::CancelObsolete;
   std::optional<ViewportRenderRegion> view_region;

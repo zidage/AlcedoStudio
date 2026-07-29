@@ -15,6 +15,7 @@
 #include "app/adjustment_transfer_types.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_save_checkpoint_service.hpp"
+#include "app/editor_session_command_queue.hpp"
 #include "app/editor_session_edit_controller.hpp"
 #include "app/editor_session_lifecycle.hpp"
 #include "app/editor_session_navigation_controller.hpp"
@@ -28,14 +29,14 @@ namespace alcedo {
 /// EditorSessionService; tests may inject a recording fake.
 class IEditorSessionBackend {
  public:
-  virtual ~IEditorSessionBackend()                                     = default;
+  virtual ~IEditorSessionBackend() = default;
 
-  using ChangeNotifier = std::function<void()>;
+  using ChangeNotifier             = std::function<void()>;
   /// Optional: notified for every typed session result that crosses Emit /
   /// NotifyResult. Phase 7A R4 uses this so the controller can publish a
   /// correlated terminal HistoryOperationEvent after an async save checkpoint
   /// completes. Does not replace SetChangeNotifier.
-  using ResultObserver = std::function<void(const EditorSessionResult&)>;
+  using ResultObserver             = std::function<void(const EditorSessionResult&)>;
 
   [[nodiscard]] virtual auto state() const -> EditorSessionState       = 0;
   [[nodiscard]] virtual auto identity() const -> EditorSessionIdentity = 0;
@@ -43,7 +44,7 @@ class IEditorSessionBackend {
   [[nodiscard]] virtual auto has_image() const -> bool                 = 0;
   [[nodiscard]] virtual auto has_pending_recovery() const -> bool { return false; }
   [[nodiscard]] virtual auto has_unmaterialized_changes() -> bool { return false; }
-  [[nodiscard]] virtual auto last_error() const -> std::string         = 0;
+  [[nodiscard]] virtual auto last_error() const -> std::string = 0;
   /// Read-only snapshot of the committed editor adjustment state (panel values,
   /// not runtime pipeline handles). Returns the default-constructed empty
   /// snapshot when the backend has no image or the history port is unavailable.
@@ -61,7 +62,7 @@ class IEditorSessionBackend {
   [[nodiscard]] virtual auto history_snapshot() -> EditorHistorySnapshot { return {}; }
 
   /// Optional: notified after state/identity changes from async results.
-  virtual void SetChangeNotifier(ChangeNotifier notifier) {
+  virtual void               SetChangeNotifier(ChangeNotifier notifier) {
     change_notifier_ = std::move(notifier);
   }
 
@@ -99,8 +100,8 @@ class IEditorSessionBackend {
   }
   /// Phase 7A: create a new Version at an explicit commit and check it out
   /// after a save checkpoint.
-  virtual auto BranchFromCommit(const commit_hash_t& /*commit_id*/,
-                                 std::string /*display_name*/) -> EditorSessionResult {
+  virtual auto BranchFromCommit(const commit_hash_t& /*commit_id*/, std::string /*display_name*/)
+      -> EditorSessionResult {
     EditorSessionResult result;
     result.kind     = EditorSessionResultKind::Rejected;
     result.state    = state();
@@ -268,13 +269,16 @@ class EditorSessionService final : public IEditorSessionBackend {
     std::shared_ptr<IEditorRenderSubmitPort>         render;
     /// Project-owned global save lock shared with Mini-Git materialization.
     std::shared_ptr<EditorSaveCheckpointCoordinator> save_coordinator;
+    /// Delivery port for the thread that owns the session reducer. When null,
+    /// the runtime uses a deterministic manual executor.
+    std::shared_ptr<IEditorSessionCommandExecutor>   command_executor;
   };
 
   explicit EditorSessionService(Dependencies dependencies);
   ~EditorSessionService() override;
 
-  void SetResultObserver(ResultObserver observer) override;
-  void SetChangeNotifier(ChangeNotifier notifier) override;
+  void               SetResultObserver(ResultObserver observer) override;
+  void               SetChangeNotifier(ChangeNotifier notifier) override;
 
   [[nodiscard]] auto state() const -> EditorSessionState override { return lifecycle_.state(); }
   [[nodiscard]] auto identity() const -> EditorSessionIdentity override {
@@ -300,6 +304,12 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto presentation_sink_id() const -> PresentationSinkId {
     return render_.presentation_sink_id();
   }
+  /// Test/runtime diagnostics for posted worker completions.
+  [[nodiscard]] auto command_executor() const
+      -> const std::shared_ptr<IEditorSessionCommandExecutor>& {
+    return command_queue_.executor();
+  }
+  void DrainCommandQueueForTests();
 
   void SetPresentationSinkId(PresentationSinkId sink_id) override {
     render_.SetPresentationSinkId(sink_id);
@@ -334,20 +344,20 @@ class EditorSessionService final : public IEditorSessionBackend {
       -> EditorSessionResult override;
   auto CompleteMerge(const std::vector<AdjustmentMergeResolution>& resolutions)
       -> EditorSessionResult override;
-  auto CancelMerge() -> EditorSessionResult override;
-  auto Close(bool persist_changes) -> EditorSessionResult override;
+  auto               CancelMerge() -> EditorSessionResult override;
+  auto               Close(bool persist_changes) -> EditorSessionResult override;
   [[nodiscard]] auto render_busy() const -> bool override { return render_.render_busy(); }
   /// Phase 7A: true when the session is awaiting save-failure recovery.
   [[nodiscard]] auto has_pending_recovery() const -> bool override {
     return navigation_.has_pending_recovery();
   }
   [[nodiscard]] auto has_unmaterialized_changes() -> bool override;
-  auto Patch(EditorAdjustmentPatch patch) -> EditorSessionResult override;
-  auto CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult override;
-  auto Patch(std::string patch_key) -> EditorSessionResult;
-  auto CommitAdjustment(std::string patch_key) -> EditorSessionResult;
-  auto Undo() -> EditorSessionResult override;
-  auto Redo() -> EditorSessionResult override;
+  auto               Patch(EditorAdjustmentPatch patch) -> EditorSessionResult override;
+  auto               CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult override;
+  auto               Patch(std::string patch_key) -> EditorSessionResult;
+  auto               CommitAdjustment(std::string patch_key) -> EditorSessionResult;
+  auto               Undo() -> EditorSessionResult override;
+  auto               Redo() -> EditorSessionResult override;
   auto MoveHeadToCommit(const commit_hash_t& commit_id) -> EditorSessionResult override;
   auto Discard() -> EditorSessionResult override;
   auto Shutdown() -> EditorSessionResult override;
@@ -366,11 +376,23 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// success keeps the session loading until its first frame is presented.
   void NotifyImageAcquired(std::uint64_t session_generation, bool success,
                            std::string message = {});
-  void NotifyRenderResult(const EditorRenderResult& render_result) {
-    render_.NotifyRenderResult(render_result, lifecycle_.identity(), lifecycle_.state());
-  }
+  void NotifyRenderResult(const EditorRenderResult& render_result);
 
  private:
+  using CommandReducer = std::function<EditorSessionResult(const EditorSessionCommand&)>;
+
+  /// Submit a typed command and reduce it on the session owner thread. The
+  /// result is available immediately for owner-thread callers and is a queued
+  /// acknowledgement for callers from other threads.
+  auto SubmitCommand(EditorSessionCommand command, CommandReducer reducer) -> EditorSessionResult;
+  void BeginPublication();
+  void EndPublication();
+  void PostCompletion(EditorSessionCompletion completion);
+  void HandleRenderEvent(const EditorRenderEvent& event);
+  void HandleNavigationCompletion(const NavigationCompletion& completion);
+  void HandleImageAcquiredCompletion(const EditorSessionCompletion& completion);
+  void HandleSaveCheckpointCompletion(const EditorSessionCompletion& completion);
+
   /// Publish a result to the observer and change-notifier. The only state the
   /// facade owns is the result history and observer registration.
   auto Emit(EditorSessionResult result) -> EditorSessionResult;
@@ -380,10 +402,27 @@ class EditorSessionService final : public IEditorSessionBackend {
   auto Fail(std::string message) -> EditorSessionResult;
   auto FinishVersionNavigation(const NavigationOutcome& outcome) -> EditorSessionResult;
   /// Persist a graph mutation through the same journal/materialization path as
-  /// ordinary editor saves. The completion callback publishes the mutation
-  /// only after the checkpoint succeeds.
+  /// ordinary editor saves. The terminal outcome is delivered as a typed
+  /// SaveCheckpointFinished completion and reduced on the owner thread; the
+  /// publish flavor is remembered in `pending_history_checkpoint_`.
   auto StartHistoryCheckpoint(std::string success_message, bool route_render)
       -> EditorSessionResult;
+  /// Shared machinery behind every history save checkpoint: precondition
+  /// checks, FinalizeEdit, save-lock acquisition, immutable capture, and the
+  /// save-service start whose result is posted back as SaveCheckpointFinished.
+  /// Publishes SaveStarted (or Rejected/Failed) for the current operation.
+  auto StartHistoryCheckpointSave() -> EditorSessionResult;
+  /// When the active image has an unmaterialized journal, retain the transfer
+  /// command (Paste or CompleteMerge) in queue-owned state and start one
+  /// journal-flush checkpoint. The matching save completion re-runs the
+  /// retained command, so durable Version creation never precedes the flush.
+  /// Returns the immediate result (SaveStarted/Rejected/Failed) when a flush
+  /// was started; returns std::nullopt when the journal is clean and the
+  /// caller proceeds with the transfer in this reduction.
+  auto QueueFlushBeforeTransfer(EditorSessionCommandKind               kind,
+                                const AdjustmentTransferPackage&       package,
+                                std::vector<AdjustmentMergeResolution> resolutions,
+                                std::string display_name) -> std::optional<EditorSessionResult>;
   auto CancelPendingMergeForNavigation(std::string* error) -> bool;
   /// Increment the history revision so the controller emits one dedicated
   /// history signal on the next change notification. Call only at points where
@@ -392,16 +431,42 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// interactive preview, render routing, view changes, or presentation size.
   void BumpHistoryRevision() { history_revision_.fetch_add(1, std::memory_order_acq_rel); }
 
-  Dependencies                      dependencies_;
-  EditorSessionLifecycle            lifecycle_;
-  EditorSaveCheckpointService       save_service_;
-  EditorSessionRenderController     render_;
-  EditorSessionEditController       edit_;
-  EditorSessionNavigationController navigation_;
-  std::vector<EditorSessionResult>  results_;
-  mutable std::mutex                results_mutex_;
+  /// Queue-owned publish flavor for one in-flight history save checkpoint.
+  /// Set by StartHistoryCheckpoint and consumed by the matching
+  /// SaveCheckpointFinished completion.
+  struct PendingHistoryCheckpoint {
+    bool        route_render = false;
+    std::string success_message;
+  };
+
+  /// Queue-owned retained Paste/CompleteMerge command waiting for the
+  /// dirty-journal flush checkpoint to finish. Holds immutable command inputs
+  /// only; no callbacks.
+  struct PendingTransferAfterSave {
+    EditorSessionCommandKind               kind = EditorSessionCommandKind::ApplyPaste;
+    AdjustmentTransferPackage              package;
+    std::vector<AdjustmentMergeResolution> merge_resolutions;
+    std::string                            display_name;
+  };
+
+  Dependencies                            dependencies_;
+  EditorSessionCommandQueue               command_queue_;
+  EditorSessionNavigationState            navigation_state_;
+  EditorSessionLifecycle                  lifecycle_;
+  EditorSaveCheckpointService             save_service_;
+  EditorSessionRenderController           render_;
+  EditorSessionEditController             edit_;
+  EditorSessionNavigationController       navigation_;
+  bool                                    reducing_command_     = false;
+  std::uint64_t                           current_operation_id_ = 0;
+  std::size_t                             publication_depth_    = 0;
+  bool                                    publication_dirty_    = false;
+  std::vector<EditorSessionResult>        results_;
+  mutable std::mutex                      results_mutex_;
   std::unique_ptr<AdjustmentMergePreview> pending_merge_preview_;
-  std::atomic<std::uint64_t>          history_revision_{0};
+  std::optional<PendingHistoryCheckpoint> pending_history_checkpoint_;
+  std::optional<PendingTransferAfterSave> pending_transfer_;
+  std::atomic<std::uint64_t>              history_revision_{0};
 };
 
 }  // namespace alcedo

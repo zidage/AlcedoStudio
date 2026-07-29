@@ -24,12 +24,14 @@ void EditorSessionNavigationFixture::SetUp() {
   life_deps.history  = history_;
   lifecycle_         = std::make_unique<EditorSessionLifecycle>(std::move(life_deps));
 
-  save_coordinator_ = std::make_shared<EditorSaveCheckpointCoordinator>();
+  save_coordinator_  = std::make_shared<EditorSaveCheckpointCoordinator>();
+  command_executor_  = std::make_shared<EditorSessionManualCommandExecutor>();
   EditorSaveCheckpointService::Dependencies save_deps;
   save_deps.journal          = journal_;
   save_deps.checkpoint_store = checkpoint_store_;
   save_deps.thumbnails       = thumbnails_;
   save_deps.tasks            = tasks_;
+  save_deps.command_executor = command_executor_;
   save_deps.save_coordinator = save_coordinator_;
   save_service_              = std::make_unique<EditorSaveCheckpointService>(std::move(save_deps));
 
@@ -42,7 +44,7 @@ void EditorSessionNavigationFixture::SetUp() {
   EditorSessionEditController::Dependencies edit_deps{history_, journal_};
   edit_ = std::make_unique<EditorSessionEditController>(std::move(edit_deps));
 
-  nav_ = std::make_unique<EditorSessionNavigationController>(
+  nav_  = std::make_unique<EditorSessionNavigationController>(
       *lifecycle_, *save_service_, *render_, *edit_, journal_.get(), checkpoint_store_.get(),
       history_.get());
 }
@@ -60,6 +62,7 @@ void EditorSessionNavigationFixture::TearDown() {
   save_service_.reset();
   lifecycle_.reset();
   save_coordinator_.reset();
+  command_executor_.reset();
   render_submit_.reset();
   thumbnails_.reset();
   checkpoint_store_.reset();
@@ -102,11 +105,19 @@ auto EditorSessionNavigationFixture::RequestCheckoutVersion(const version_ref_id
 void EditorSessionNavigationFixture::CompleteCheckpoint() {
   journal_->inner.CompleteCommit(true);
   checkpoint_store_->inner.CompleteMaterialization(true);
+  Drain();
 }
 
 void EditorSessionNavigationFixture::FailCheckpoint(std::string error) {
   journal_->inner.CompleteCommit(true);
   checkpoint_store_->inner.CompleteMaterialization(false, std::move(error));
+  Drain();
+}
+
+void EditorSessionNavigationFixture::Drain() {
+  if (command_executor_) {
+    command_executor_->DrainAll();
+  }
 }
 
 auto EditorSessionNavigationFixture::TrackingPipelinePort::Acquire(sl_element_id_t element_id,
@@ -150,13 +161,13 @@ auto EditorSessionNavigationFixture::TrackingHistoryPort::CommitAdjustment(
   return inner.CommitAdjustment(guard, patch, error);
 }
 
-auto EditorSessionNavigationFixture::TrackingHistoryPort::Undo(const EditorHistoryGuardHandle& guard,
-                                                               std::string* error) -> bool {
+auto EditorSessionNavigationFixture::TrackingHistoryPort::Undo(
+    const EditorHistoryGuardHandle& guard, std::string* error) -> bool {
   return inner.Undo(guard, error);
 }
 
-auto EditorSessionNavigationFixture::TrackingHistoryPort::Redo(const EditorHistoryGuardHandle& guard,
-                                                               std::string* error) -> bool {
+auto EditorSessionNavigationFixture::TrackingHistoryPort::Redo(
+    const EditorHistoryGuardHandle& guard, std::string* error) -> bool {
   return inner.Redo(guard, error);
 }
 
@@ -184,8 +195,8 @@ auto EditorSessionNavigationFixture::TrackingHistoryPort::CheckoutVersion(
 }
 
 auto EditorSessionNavigationFixture::TrackingHistoryPort::CreateRootVersionAndCheckout(
-    const EditorHistoryGuardHandle& guard, std::string display_name,
-    version_ref_id_t* version_id, std::string* error) -> bool {
+    const EditorHistoryGuardHandle& guard, std::string display_name, version_ref_id_t* version_id,
+    std::string* error) -> bool {
   if (owner_ != nullptr) {
     owner_->RecordEvent("create_root_version");
   }
@@ -193,8 +204,8 @@ auto EditorSessionNavigationFixture::TrackingHistoryPort::CreateRootVersionAndCh
 }
 
 auto EditorSessionNavigationFixture::TrackingHistoryPort::BranchFromCommitAndCheckout(
-    const EditorHistoryGuardHandle& guard, const commit_hash_t& commit_id,
-    std::string display_name, version_ref_id_t* version_id, std::string* error) -> bool {
+    const EditorHistoryGuardHandle& guard, const commit_hash_t& commit_id, std::string display_name,
+    version_ref_id_t* version_id, std::string* error) -> bool {
   if (owner_ != nullptr) {
     owner_->RecordEvent("branch_from_commit");
   }
@@ -216,9 +227,8 @@ auto EditorSessionNavigationFixture::TrackingJournalPort::CommitJournalAsync(
   return inner.CommitJournalAsync(element_id, session_generation, std::move(callback));
 }
 
-auto EditorSessionNavigationFixture::TrackingJournalPort::DiscardUnflushed(sl_element_id_t element_id,
-                                                                           std::string*    error)
-    -> bool {
+auto EditorSessionNavigationFixture::TrackingJournalPort::DiscardUnflushed(
+    sl_element_id_t element_id, std::string* error) -> bool {
   return inner.DiscardUnflushed(element_id, error);
 }
 

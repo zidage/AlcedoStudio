@@ -15,87 +15,279 @@
 
 namespace alcedo {
 
+namespace {
+
+/// Adapts save-service completion delivery to the session queue. Save ports
+/// may finish on any worker stack; this adapter ensures their callback enters
+/// the same serialized completion drain as render and image-load messages.
+class SessionQueueCompletionExecutor final : public IEditorSessionCommandExecutor {
+ public:
+  explicit SessionQueueCompletionExecutor(EditorSessionCommandQueue& queue) : queue_(queue) {}
+
+  void Post(std::function<void()> task) override { queue_.PostCompletion(std::move(task)); }
+
+  [[nodiscard]] auto IsOwnerThread() const -> bool override { return queue_.IsOwnerThread(); }
+
+ private:
+  EditorSessionCommandQueue& queue_;
+};
+
+}  // namespace
+
 EditorSessionService::EditorSessionService(Dependencies dependencies)
     : dependencies_(std::move(dependencies)),
+      command_queue_(dependencies_.command_executor),
       lifecycle_(
           EditorSessionLifecycle::Dependencies{dependencies_.pipeline, dependencies_.history}),
       save_service_(EditorSaveCheckpointService::Dependencies{
           dependencies_.journal, dependencies_.checkpoint_store, dependencies_.thumbnails,
-          dependencies_.tasks, dependencies_.save_coordinator}),
+          dependencies_.tasks, std::make_shared<SessionQueueCompletionExecutor>(command_queue_),
+          dependencies_.save_coordinator}),
       render_(EditorSessionRenderController::Dependencies{
           dependencies_.render,
           [this](const EditorRenderEvent& event) {
-            EditorSessionResult result;
-            switch (event.kind) {
-              case EditorRenderEventKind::FirstFramePresented: {
-                // Transition lifecycle to Interactive. The render controller
-                // no longer mutates lifecycle; the facade owns this transition.
-                const auto entered = lifecycle_.MarkFirstFramePresented();
-                if (entered.has_value()) {
-                  result.kind     = EditorSessionResultKind::ImageReady;
-                  result.state    = EditorSessionState::Interactive;
-                  result.identity = *entered;
-                } else {
-                  result.kind     = EditorSessionResultKind::StateChanged;
-                  result.state    = lifecycle_.state();
-                  result.identity = event.identity;
-                }
-                result.message = event.message;
-                break;
-              }
-              case EditorRenderEventKind::RenderFailed:
-                result.kind    = EditorSessionResultKind::Failed;
-                result.message = event.message;
-                break;
-              case EditorRenderEventKind::RenderRouted:
-                result.kind              = EditorSessionResultKind::RenderRouted;
-                result.render_request_id = event.request_id;
-                result.message           = event.message;
-                break;
-              case EditorRenderEventKind::RenderReused:
-                result.kind    = EditorSessionResultKind::Accepted;
-                result.message = event.message;
-                break;
-              case EditorRenderEventKind::RenderRejected:
-                result.kind    = EditorSessionResultKind::Rejected;
-                result.message = event.message;
-                break;
-              case EditorRenderEventKind::BusyChanged:
-                NotifyChange();
-                return;
-            }
-            result.state    = event.state;
-            result.identity = event.identity;
-            Emit(std::move(result));
+            EditorSessionCompletion completion;
+            completion.kind                 = EditorSessionCompletionKind::RenderResult;
+            completion.operation.command_id = event.operation_id;
+            completion.request_id           = event.request_id;
+            completion.render_event         = event;
+            completion.message              = event.message;
+            PostCompletion(std::move(completion));
           }}),
       edit_(
           EditorSessionEditController::Dependencies{dependencies_.history, dependencies_.journal}),
       navigation_(lifecycle_, save_service_, render_, edit_, dependencies_.journal.get(),
-                  dependencies_.checkpoint_store.get(), dependencies_.history.get()) {
+                  dependencies_.checkpoint_store.get(), dependencies_.history.get(),
+                  &navigation_state_) {
   navigation_.SetCompletionNotifier([this](const NavigationCompletion& completion) {
-    EditorSessionResult result;
-    result.identity    = lifecycle_.identity();
-    result.state       = lifecycle_.state();
-    result.task_id     = completion.ticket.task_id;
-    if (completion.success) {
-      if (render_.first_frame_request_id() != 0) {
-        result.kind              = EditorSessionResultKind::RenderRouted;
-        result.render_request_id = render_.first_frame_request_id();
-      } else {
-        result.kind = EditorSessionResultKind::Accepted;
-      }
-      result.message = completion.message;
-      BumpHistoryRevision();
-    } else {
-      result.kind    = EditorSessionResultKind::Failed;
-      result.state   = lifecycle_.state();
-      result.message = completion.message;
-    }
-    Emit(std::move(result));
+    EditorSessionCompletion posted;
+    posted.kind                 = EditorSessionCompletionKind::NavigationFinished;
+    posted.operation.command_id = completion.ticket.operation_id;
+    posted.request_id           = completion.ticket.request_id;
+    posted.task_id              = completion.ticket.task_id;
+    posted.session_generation   = completion.ticket.session_generation;
+    posted.element_id           = completion.ticket.element_id;
+    posted.navigation_success   = completion.success;
+    posted.retained_image       = completion.retained_image;
+    posted.message              = completion.message;
+    PostCompletion(std::move(posted));
   });
 }
 
 EditorSessionService::~EditorSessionService() { save_service_.CancelAndWait(); }
+
+void EditorSessionService::DrainCommandQueueForTests() {
+  const auto manual =
+      std::dynamic_pointer_cast<EditorSessionManualCommandExecutor>(command_queue_.executor());
+  if (manual && manual->IsOwnerThread()) {
+    manual->DrainAll();
+  }
+}
+
+auto EditorSessionService::SubmitCommand(EditorSessionCommand command, CommandReducer reducer)
+    -> EditorSessionResult {
+  if (!reducer) {
+    return {};
+  }
+  if (reducing_command_) {
+    return reducer(command);
+  }
+
+  auto       reduced_result = std::make_shared<std::optional<EditorSessionResult>>();
+  const auto submission     = command_queue_.Submit(
+      std::move(command),
+      [this, reducer = std::move(reducer), reduced_result](EditorSessionCommand queued) mutable {
+        const auto previous_operation = current_operation_id_;
+        const auto previous_reducing  = reducing_command_;
+        current_operation_id_         = queued.operation.command_id;
+        navigation_.SetOperationId(current_operation_id_);
+        reducing_command_ = true;
+        BeginPublication();
+        *reduced_result = reducer(queued);
+        EndPublication();
+        reducing_command_     = previous_reducing;
+        current_operation_id_ = previous_operation;
+      });
+
+  if (!submission.accepted) {
+    EditorSessionResult rejected;
+    rejected.kind         = EditorSessionResultKind::Rejected;
+    rejected.operation_id = submission.operation.command_id;
+    rejected.message      = "Editor session command queue is shutting down";
+    if (command_queue_.IsOwnerThread()) {
+      rejected.state    = lifecycle_.state();
+      rejected.identity = lifecycle_.identity();
+    }
+    return rejected;
+  }
+  if (reduced_result->has_value()) {
+    return reduced_result->value();
+  }
+
+  EditorSessionResult queued_result;
+  queued_result.kind         = EditorSessionResultKind::Accepted;
+  queued_result.operation_id = submission.operation.command_id;
+  queued_result.message      = "Editor session command queued";
+  return queued_result;
+}
+
+void EditorSessionService::BeginPublication() { ++publication_depth_; }
+
+void EditorSessionService::EndPublication() {
+  if (publication_depth_ == 0) {
+    return;
+  }
+  --publication_depth_;
+  if (publication_depth_ == 0 && publication_dirty_) {
+    publication_dirty_ = false;
+    NotifyChange();
+  }
+}
+
+void EditorSessionService::PostCompletion(EditorSessionCompletion completion) {
+  command_queue_.PostCompletion([this, completion = std::move(completion)]() mutable {
+    const auto previous_operation = current_operation_id_;
+    const auto previous_reducing  = reducing_command_;
+    current_operation_id_         = completion.operation.command_id != 0
+                                        ? completion.operation.command_id
+                                        : completion.render_event.operation_id;
+    navigation_.SetOperationId(current_operation_id_);
+    reducing_command_ = true;
+    BeginPublication();
+    switch (completion.kind) {
+      case EditorSessionCompletionKind::RenderResult:
+        HandleRenderEvent(completion.render_event);
+        break;
+      case EditorSessionCompletionKind::NavigationFinished:
+        HandleNavigationCompletion(NavigationCompletion{
+            completion.navigation_success, completion.retained_image, completion.message,
+            CheckpointTicket{completion.request_id, completion.operation.command_id,
+                             completion.session_generation, completion.element_id,
+                             completion.task_id}});
+        break;
+      case EditorSessionCompletionKind::ImageStateLoaded:
+        HandleImageAcquiredCompletion(completion);
+        break;
+      case EditorSessionCompletionKind::SaveCheckpointFinished:
+        HandleSaveCheckpointCompletion(completion);
+        break;
+      default:
+        break;
+    }
+    EndPublication();
+    reducing_command_     = previous_reducing;
+    current_operation_id_ = previous_operation;
+  });
+}
+
+void EditorSessionService::HandleRenderEvent(const EditorRenderEvent& event) {
+  if (event.kind == EditorRenderEventKind::BusyChanged) {
+    NotifyChange();
+    return;
+  }
+
+  EditorSessionResult result;
+  result.operation_id = event.operation_id;
+  switch (event.kind) {
+    case EditorRenderEventKind::FirstFramePresented: {
+      const auto entered = lifecycle_.MarkFirstFramePresented();
+      if (entered.has_value()) {
+        result.kind     = EditorSessionResultKind::ImageReady;
+        result.state    = EditorSessionState::Interactive;
+        result.identity = *entered;
+      } else {
+        result.kind     = EditorSessionResultKind::StateChanged;
+        result.state    = lifecycle_.state();
+        result.identity = event.identity;
+      }
+      break;
+    }
+    case EditorRenderEventKind::RenderFailed:
+      result.kind    = EditorSessionResultKind::Failed;
+      result.message = event.message;
+      break;
+    case EditorRenderEventKind::RenderRouted:
+      // The command handler (Open, navigation completion, or view change) is
+      // the authority for the render-routed terminal and carries the request
+      // id. This intermediate event must not publish a second terminal result
+      // for the same accepted command.
+      return;
+    case EditorRenderEventKind::RenderReused:
+      result.kind    = EditorSessionResultKind::Accepted;
+      result.message = event.message;
+      break;
+    case EditorRenderEventKind::RenderRejected:
+      result.kind    = EditorSessionResultKind::Rejected;
+      result.message = event.message;
+      break;
+    case EditorRenderEventKind::BusyChanged:
+      return;
+  }
+  result.state    = event.state;
+  result.identity = event.identity;
+  if (result.kind == EditorSessionResultKind::Failed) {
+    lifecycle_.Fail(result.message.empty() ? "Render failed" : result.message);
+    result.state    = lifecycle_.state();
+    result.identity = lifecycle_.identity();
+    BumpHistoryRevision();
+  }
+  Emit(std::move(result));
+}
+
+void EditorSessionService::HandleNavigationCompletion(const NavigationCompletion& completion) {
+  EditorSessionResult result;
+  result.operation_id = completion.ticket.operation_id;
+  result.identity     = lifecycle_.identity();
+  result.state        = lifecycle_.state();
+  result.task_id      = completion.ticket.task_id;
+  if (completion.success) {
+    result.kind = render_.first_frame_request_id() != 0 ? EditorSessionResultKind::RenderRouted
+                                                        : EditorSessionResultKind::Accepted;
+    result.render_request_id = render_.first_frame_request_id();
+    result.message           = completion.message;
+    BumpHistoryRevision();
+  } else {
+    result.kind    = EditorSessionResultKind::Failed;
+    result.message = completion.message;
+  }
+  Emit(std::move(result));
+}
+
+void EditorSessionService::HandleImageAcquiredCompletion(
+    const EditorSessionCompletion& completion) {
+  const auto identity = lifecycle_.identity();
+  if (identity.session_generation != completion.session_generation) {
+    return;
+  }
+  const auto state = lifecycle_.state();
+  if (state != EditorSessionState::Loading && state != EditorSessionState::Acquiring &&
+      state != EditorSessionState::Switching) {
+    return;
+  }
+  if (!completion.success) {
+    lifecycle_.ReleaseGuards();
+    render_.ResetForNewImage();
+    lifecycle_.Fail(completion.message.empty() ? "Image acquisition failed" : completion.message);
+    EditorSessionResult result;
+    result.operation_id = completion.operation.command_id;
+    result.kind         = EditorSessionResultKind::Failed;
+    result.state        = lifecycle_.state();
+    result.identity     = lifecycle_.identity();
+    result.message      = lifecycle_.last_error();
+    BumpHistoryRevision();
+    Emit(std::move(result));
+    return;
+  }
+  render_.MarkImageAcquired();
+  EditorSessionResult result;
+  result.operation_id = completion.operation.command_id;
+  result.kind         = EditorSessionResultKind::Accepted;
+  result.state        = lifecycle_.state();
+  result.identity     = identity;
+  result.message =
+      completion.message.empty() ? "Image acquired; waiting for first frame" : completion.message;
+  Emit(std::move(result));
+}
 
 void EditorSessionService::SetResultObserver(ResultObserver observer) {
   // Observer delivery is GUI-thread serialized by the controller's install path;
@@ -109,12 +301,19 @@ void EditorSessionService::SetChangeNotifier(ChangeNotifier notifier) {
 }
 
 auto EditorSessionService::Emit(EditorSessionResult result) -> EditorSessionResult {
+  if (result.operation_id == 0) {
+    result.operation_id = current_operation_id_;
+  }
   {
     std::scoped_lock lock(results_mutex_);
     results_.push_back(result);
   }
   NotifyResult(result);
-  NotifyChange();
+  if (publication_depth_ != 0) {
+    publication_dirty_ = true;
+  } else {
+    NotifyChange();
+  }
   return result;
 }
 
@@ -168,16 +367,9 @@ auto EditorSessionService::FinishVersionNavigation(const NavigationOutcome& outc
     waiting.message  = outcome.message;
     return Emit(std::move(waiting));
   }
-  if (outcome.ticket.valid()) {
-    EditorSessionResult started;
-    started.kind     = EditorSessionResultKind::SaveStarted;
-    started.state    = lifecycle_.state();
-    started.identity = lifecycle_.identity();
-    started.task_id  = outcome.ticket.task_id;
-    started.message  = "Save started";
-    Emit(std::move(started));
-  }
-
+  // Synchronous completion without a save checkpoint (no prior image or a
+  // discard-and-continue path). Save-bounded navigations return above with
+  // SaveStarted; their terminal arrives through the posted completion.
   EditorSessionResult result;
   result.kind     = EditorSessionResultKind::Accepted;
   result.state    = lifecycle_.state();
@@ -187,21 +379,21 @@ auto EditorSessionService::FinishVersionNavigation(const NavigationOutcome& outc
     result.kind              = EditorSessionResultKind::RenderRouted;
     result.render_request_id = render_.first_frame_request_id();
   }
-  if (outcome.ticket.valid()) {
-    EditorSessionResult finished;
-    finished.kind     = EditorSessionResultKind::SaveFinished;
-    finished.state    = lifecycle_.state();
-    finished.identity = lifecycle_.identity();
-    finished.task_id  = outcome.ticket.task_id;
-    finished.message  = "Editor session materialized";
-    Emit(std::move(finished));
-  }
   BumpHistoryRevision();
   return Emit(std::move(result));
 }
 
 auto EditorSessionService::Open(sl_element_id_t element_id, image_id_t image_id)
     -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind       = EditorSessionCommandKind::OpenImage;
+    command.element_id = element_id;
+    command.image_id   = image_id;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return Open(queued.element_id, queued.image_id);
+    });
+  }
   std::string merge_error;
   if (!CancelPendingMergeForNavigation(&merge_error)) {
     return Reject(std::move(merge_error));
@@ -222,17 +414,9 @@ auto EditorSessionService::Open(sl_element_id_t element_id, image_id_t image_id)
     waiting.message  = outcome.message;
     return Emit(std::move(waiting));
   }
-  // Synchronous save completed. Emit SaveStarted + SaveFinished so observers
-  // see the same event sequence as the async path.
-  if (outcome.ticket.valid()) {
-    EditorSessionResult started;
-    started.kind     = EditorSessionResultKind::SaveStarted;
-    started.state    = lifecycle_.state();
-    started.identity = lifecycle_.identity();
-    started.task_id  = outcome.ticket.task_id;
-    started.message  = "Save started";
-    Emit(std::move(started));
-  }
+  // No prior image or same-image no-op: the navigation completed synchronously
+  // without a save checkpoint. Save-bounded switches return above with
+  // SaveStarted; the terminal for those arrives through the posted completion.
   EditorSessionResult result;
   if (outcome.same_image_noop) {
     result.kind     = EditorSessionResultKind::Accepted;
@@ -267,22 +451,20 @@ auto EditorSessionService::Open(sl_element_id_t element_id, image_id_t image_id)
   result.state    = lifecycle_.state();
   result.identity = lifecycle_.identity();
   result.message  = outcome.message;
-  // Emit a SaveFinished event when the save completed synchronously.
-  if (outcome.ticket.valid()) {
-    EditorSessionResult finished;
-    finished.kind     = EditorSessionResultKind::SaveFinished;
-    finished.state    = lifecycle_.state();
-    finished.identity = lifecycle_.identity();
-    finished.task_id  = outcome.ticket.task_id;
-    finished.message  = "Editor session materialized";
-    Emit(std::move(finished));
-  }
   BumpHistoryRevision();
   return Emit(std::move(result));
 }
 
 auto EditorSessionService::CheckoutVersion(const version_ref_id_t& version_id)
     -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind       = EditorSessionCommandKind::CheckoutVersion;
+    command.version_id = version_id;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return CheckoutVersion(queued.version_id);
+    });
+  }
   std::string merge_error;
   if (!CancelPendingMergeForNavigation(&merge_error)) {
     return Reject(std::move(merge_error));
@@ -325,6 +507,14 @@ auto EditorSessionService::CancelPendingMergeForNavigation(std::string* error) -
 }
 
 auto EditorSessionService::CreateRootVersion(std::string display_name) -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::CreateRootVersion;
+    command.text = std::move(display_name);
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return CreateRootVersion(queued.text);
+    });
+  }
   std::string merge_error;
   if (!CancelPendingMergeForNavigation(&merge_error)) {
     return Reject(std::move(merge_error));
@@ -333,8 +523,16 @@ auto EditorSessionService::CreateRootVersion(std::string display_name) -> Editor
 }
 
 auto EditorSessionService::BranchFromCommit(const commit_hash_t& commit_id,
-                                            std::string          display_name)
-    -> EditorSessionResult {
+                                            std::string display_name) -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind      = EditorSessionCommandKind::BranchVersion;
+    command.commit_id = commit_id;
+    command.text      = std::move(display_name);
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return BranchFromCommit(queued.commit_id, queued.text);
+    });
+  }
   std::string merge_error;
   if (!CancelPendingMergeForNavigation(&merge_error)) {
     return Reject(std::move(merge_error));
@@ -344,14 +542,32 @@ auto EditorSessionService::BranchFromCommit(const commit_hash_t& commit_id,
 }
 
 auto EditorSessionService::RetrySave() -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::RetrySave;
+    return SubmitCommand(std::move(command),
+                         [this](const EditorSessionCommand&) { return RetrySave(); });
+  }
   return FinishVersionNavigation(navigation_.RetrySaveAfterFailure());
 }
 
 auto EditorSessionService::DiscardAndContinue() -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::DiscardAndContinue;
+    return SubmitCommand(std::move(command),
+                         [this](const EditorSessionCommand&) { return DiscardAndContinue(); });
+  }
   return FinishVersionNavigation(navigation_.DiscardAndContinueAfterFailure());
 }
 
 auto EditorSessionService::CancelPendingNavigation() -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::CancelPendingNavigation;
+    return SubmitCommand(std::move(command),
+                         [this](const EditorSessionCommand&) { return CancelPendingNavigation(); });
+  }
   navigation_.CancelPendingNavigation();
   EditorSessionResult result;
   result.kind     = EditorSessionResultKind::StateChanged;
@@ -364,6 +580,15 @@ auto EditorSessionService::CancelPendingNavigation() -> EditorSessionResult {
 
 auto EditorSessionService::RenameVersion(const version_ref_id_t& version_id,
                                          std::string display_name) -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind       = EditorSessionCommandKind::RenameVersion;
+    command.version_id = version_id;
+    command.text       = std::move(display_name);
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return RenameVersion(queued.version_id, queued.text);
+    });
+  }
   if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
     return Reject("Version rename requires an interactive session");
   }
@@ -378,6 +603,14 @@ auto EditorSessionService::RenameVersion(const version_ref_id_t& version_id,
 
 auto EditorSessionService::RemoveVersion(const version_ref_id_t& version_id)
     -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind       = EditorSessionCommandKind::RemoveVersion;
+    command.version_id = version_id;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return RemoveVersion(queued.version_id);
+    });
+  }
   if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
     return Reject("Version removal requires an interactive session");
   }
@@ -392,8 +625,23 @@ auto EditorSessionService::RemoveVersion(const version_ref_id_t& version_id)
 auto EditorSessionService::PasteAdjustments(const AdjustmentTransferPackage& package,
                                             std::string                      version_display_name)
     -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind             = EditorSessionCommandKind::ApplyPaste;
+    command.transfer_package = package;
+    command.text             = std::move(version_display_name);
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return PasteAdjustments(queued.transfer_package, queued.text);
+    });
+  }
   if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
     return Reject("Paste requires an interactive session");
+  }
+  // Dirty journal: queue the flush checkpoint first; the retained Paste runs
+  // when the matching save completion reduces (save before Version creation).
+  if (auto flush = QueueFlushBeforeTransfer(EditorSessionCommandKind::ApplyPaste, package, {},
+                                            version_display_name)) {
+    return std::move(*flush);
   }
   AdjustmentPasteResult paste_result;
   std::string           error;
@@ -408,6 +656,21 @@ auto EditorSessionService::PasteAdjustments(const AdjustmentTransferPackage& pac
 
 auto EditorSessionService::BeginMerge(const AdjustmentTransferPackage& package,
                                       AdjustmentMergePreview* preview) -> EditorSessionResult {
+  if (!reducing_command_) {
+    auto                 holder = std::make_shared<AdjustmentMergePreview>();
+    EditorSessionCommand command;
+    command.kind             = EditorSessionCommandKind::BeginMerge;
+    command.transfer_package = package;
+    command.merge_preview    = holder;
+    const auto result =
+        SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+          return BeginMerge(queued.transfer_package, queued.merge_preview.get());
+        });
+    if (preview != nullptr && command_queue_.IsOwnerThread()) {
+      *preview = *holder;
+    }
+    return result;
+  }
   if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
     return Reject("Merge requires an interactive session");
   }
@@ -440,11 +703,25 @@ auto EditorSessionService::BeginMerge(const AdjustmentTransferPackage& package,
 
 auto EditorSessionService::CompleteMerge(const std::vector<AdjustmentMergeResolution>& resolutions)
     -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind              = EditorSessionCommandKind::CompleteMerge;
+    command.merge_resolutions = resolutions;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return CompleteMerge(queued.merge_resolutions);
+    });
+  }
   if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
     return Reject("Merge completion requires an interactive session");
   }
   if (!pending_merge_preview_) {
     return Reject("No merge is awaiting resolution");
+  }
+  // Dirty journal: queue the flush checkpoint first; the retained Merge runs
+  // when the matching save completion reduces (save before the merge commit).
+  if (auto flush =
+          QueueFlushBeforeTransfer(EditorSessionCommandKind::CompleteMerge, {}, resolutions, "")) {
+    return std::move(*flush);
   }
   AdjustmentMergeResult merge_result;
   std::string           error;
@@ -458,6 +735,12 @@ auto EditorSessionService::CompleteMerge(const std::vector<AdjustmentMergeResolu
 }
 
 auto EditorSessionService::CancelMerge() -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::CancelMerge;
+    return SubmitCommand(std::move(command),
+                         [this](const EditorSessionCommand&) { return CancelMerge(); });
+  }
   if (!dependencies_.history || !lifecycle_.has_history_guard()) {
     return Reject("No active editor merge");
   }
@@ -481,6 +764,16 @@ auto EditorSessionService::CancelMerge() -> EditorSessionResult {
 
 auto EditorSessionService::StartHistoryCheckpoint(std::string success_message, bool route_render)
     -> EditorSessionResult {
+  pending_history_checkpoint_ = PendingHistoryCheckpoint{route_render, std::move(success_message)};
+  auto result                 = StartHistoryCheckpointSave();
+  if (result.kind == EditorSessionResultKind::Rejected ||
+      result.kind == EditorSessionResultKind::Failed) {
+    pending_history_checkpoint_.reset();
+  }
+  return result;
+}
+
+auto EditorSessionService::StartHistoryCheckpointSave() -> EditorSessionResult {
   if (!dependencies_.history || !lifecycle_.has_history_guard()) {
     return Reject("Editor history is unavailable");
   }
@@ -509,9 +802,9 @@ auto EditorSessionService::StartHistoryCheckpoint(std::string success_message, b
                                         : std::move(capture_error));
   }
 
-  auto                  completed = std::make_shared<std::optional<EditorSessionResult>>();
   SaveCheckpointRequest request;
   request.element_id         = identity.element_id;
+  request.operation_id       = current_operation_id_;
   request.session_generation = identity.session_generation;
   request.capture            = std::move(capture);
   if (request.capture->has_journal_range()) {
@@ -519,73 +812,22 @@ auto EditorSessionService::StartHistoryCheckpoint(std::string success_message, b
   }
   request.save_lock = std::move(save_lock);
   lifecycle_.BeginCheckpoint();
-  const auto ticket = save_service_.Start(
-      std::move(request), [this, completed, success_message = std::move(success_message),
-                           route_render](const SaveCheckpointResult& result) mutable {
-        EditorSessionResult published;
-        published.identity = lifecycle_.identity();
-        published.state    = lifecycle_.state();
-        published.task_id  = result.task_id;
-        if (!result.checkpoint_completed) {
-          lifecycle_.KeepCurrentAfterCheckpointFailure(
-              result.error.empty() ? "Editor save checkpoint failed" : result.error);
-          published.kind    = EditorSessionResultKind::Failed;
-          published.state   = lifecycle_.state();
-          published.message = lifecycle_.last_error();
-          *completed        = published;
-          Emit(std::move(published));
-          return;
-        }
-        if (result.last_journal_sequence.has_value()) {
-          std::string discard_error;
-          (void)dependencies_.history->DiscardMaterializedJournalThrough(
-              lifecycle_.history_guard(), *result.last_journal_sequence, &discard_error);
-        }
-        // The checkpoint materialized the active head to DuckDB without advancing the
-        // in-memory ImageEditState.materialized_*. Mirror the durable tuple in memory so
-        // a later version/checkout persistence guard accepts it instead of rejecting the
-        // durable state as stale.
-        if (dependencies_.history != nullptr && lifecycle_.has_history_guard()) {
-          std::string sync_error;
-          (void)dependencies_.history->SyncMaterializedStateAfterCheckpoint(
-              lifecycle_.history_guard(), &sync_error);
-        }
-        lifecycle_.CompleteCheckpoint();
-        if (route_render) {
-          EditorRenderAdjustmentSnapshot snapshot;
-          std::string                    snapshot_error;
-          if (!dependencies_.history->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &snapshot,
-                                                             &snapshot_error)) {
-            lifecycle_.Fail(snapshot_error.empty() ? "Failed to publish editor history snapshot"
-                                                   : snapshot_error);
-            published.kind    = EditorSessionResultKind::Failed;
-            published.state   = lifecycle_.state();
-            published.message = lifecycle_.last_error();
-            *completed        = published;
-            Emit(std::move(published));
-            return;
-          }
-          edit_.set_adjustment_snapshot(std::move(snapshot));
-          lifecycle_.AdvanceRenderGeneration();
-          EditorRenderCommand command;
-          command.reason     = EditorRenderReason::InitialFrame;
-          command.adjustment = edit_.adjustment_snapshot();
-          render_.RouteInitialRender(command, lifecycle_.identity());
-          published.kind              = EditorSessionResultKind::RenderRouted;
-          published.render_request_id = render_.first_frame_request_id();
-        } else {
-          published.kind = EditorSessionResultKind::Accepted;
-        }
-        published.state    = lifecycle_.state();
-        published.identity = lifecycle_.identity();
-        published.message  = success_message;
-        *completed         = published;
-        Emit(std::move(published));
+  // The save service delivers this callback through the command executor, so
+  // the lambda never runs inside Start: it posts one typed completion for the
+  // session queue and returns.
+  const auto ticket =
+      save_service_.Start(std::move(request), [this](const SaveCheckpointResult& result) mutable {
+        EditorSessionCompletion completion;
+        completion.kind                  = EditorSessionCompletionKind::SaveCheckpointFinished;
+        completion.operation.command_id  = result.operation_id;
+        completion.session_generation    = result.session_generation;
+        completion.task_id               = result.task_id;
+        completion.success               = result.checkpoint_completed;
+        completion.last_journal_sequence = result.last_journal_sequence;
+        completion.message               = result.error;
+        PostCompletion(std::move(completion));
       });
 
-  if (completed->has_value()) {
-    return completed->value();
-  }
   if (!ticket.valid()) {
     lifecycle_.KeepCurrentAfterCheckpointFailure("Editor save checkpoint could not start");
     return Reject("Editor save checkpoint could not start");
@@ -599,8 +841,154 @@ auto EditorSessionService::StartHistoryCheckpoint(std::string success_message, b
   return Emit(std::move(started));
 }
 
+void EditorSessionService::HandleSaveCheckpointCompletion(
+    const EditorSessionCompletion& completion) {
+  // Stale completions from a previous session generation are ignored without
+  // touching the published snapshot; the retained transfer, if any, dies with
+  // the generation that created it.
+  if (completion.session_generation != 0 &&
+      completion.session_generation != lifecycle_.identity().session_generation) {
+    pending_history_checkpoint_.reset();
+    pending_transfer_.reset();
+    return;
+  }
+
+  // Shutdown cancels every in-flight checkpoint (CancelAndWait posts a
+  // cancelled result). The session must stay ShuttingDown: publish one
+  // terminal cancellation for the accepted command without re-entering a
+  // recoverable failure state.
+  if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
+    pending_history_checkpoint_.reset();
+    pending_transfer_.reset();
+    EditorSessionResult published;
+    published.kind     = EditorSessionResultKind::Failed;
+    published.state    = lifecycle_.state();
+    published.identity = lifecycle_.identity();
+    published.task_id  = completion.task_id;
+    published.message =
+        completion.message.empty() ? "Editor save checkpoint cancelled" : completion.message;
+    Emit(std::move(published));
+    return;
+  }
+
+  if (!completion.success) {
+    const bool had_retained_transfer = pending_transfer_.has_value();
+    pending_history_checkpoint_.reset();
+    pending_transfer_.reset();
+    lifecycle_.KeepCurrentAfterCheckpointFailure(
+        completion.message.empty()
+            ? (had_retained_transfer ? "Editor save checkpoint failed before the pending transfer"
+                                     : "Editor save checkpoint failed")
+            : completion.message);
+    EditorSessionResult published;
+    published.kind     = EditorSessionResultKind::Failed;
+    published.state    = lifecycle_.state();
+    published.identity = lifecycle_.identity();
+    published.task_id  = completion.task_id;
+    published.message  = lifecycle_.last_error();
+    BumpHistoryRevision();
+    Emit(std::move(published));
+    return;
+  }
+
+  if (completion.last_journal_sequence.has_value()) {
+    std::string discard_error;
+    (void)dependencies_.history->DiscardMaterializedJournalThrough(
+        lifecycle_.history_guard(), *completion.last_journal_sequence, &discard_error);
+  }
+  // The checkpoint materialized the active head to DuckDB without advancing the
+  // in-memory ImageEditState.materialized_*. Mirror the durable tuple in memory so
+  // a later version/checkout persistence guard accepts it instead of rejecting the
+  // durable state as stale.
+  if (dependencies_.history != nullptr && lifecycle_.has_history_guard()) {
+    std::string sync_error;
+    (void)dependencies_.history->SyncMaterializedStateAfterCheckpoint(lifecycle_.history_guard(),
+                                                                      &sync_error);
+  }
+  lifecycle_.CompleteCheckpoint();
+
+  // A dirty-journal flush resumes the retained transfer on the now-clean
+  // journal; the transfer performs its own publication checkpoint.
+  if (pending_transfer_.has_value()) {
+    auto transfer = std::move(*pending_transfer_);
+    pending_transfer_.reset();
+    if (transfer.kind == EditorSessionCommandKind::CompleteMerge) {
+      (void)CompleteMerge(transfer.merge_resolutions);
+    } else {
+      (void)PasteAdjustments(transfer.package, std::move(transfer.display_name));
+    }
+    return;
+  }
+
+  if (!pending_history_checkpoint_.has_value()) {
+    return;
+  }
+  const auto marker = std::move(*pending_history_checkpoint_);
+  pending_history_checkpoint_.reset();
+
+  EditorSessionResult published;
+  published.identity = lifecycle_.identity();
+  published.state    = lifecycle_.state();
+  published.task_id  = completion.task_id;
+  if (marker.route_render) {
+    EditorRenderAdjustmentSnapshot snapshot;
+    std::string                    snapshot_error;
+    if (!dependencies_.history->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &snapshot,
+                                                       &snapshot_error)) {
+      lifecycle_.Fail(snapshot_error.empty() ? "Failed to publish editor history snapshot"
+                                             : snapshot_error);
+      published.kind    = EditorSessionResultKind::Failed;
+      published.state   = lifecycle_.state();
+      published.message = lifecycle_.last_error();
+      Emit(std::move(published));
+      return;
+    }
+    edit_.set_adjustment_snapshot(std::move(snapshot));
+    lifecycle_.AdvanceRenderGeneration();
+    EditorRenderCommand command;
+    command.reason       = EditorRenderReason::InitialFrame;
+    command.operation_id = current_operation_id_;
+    command.adjustment   = edit_.adjustment_snapshot();
+    render_.RouteInitialRender(command, lifecycle_.identity());
+    published.kind              = EditorSessionResultKind::RenderRouted;
+    published.render_request_id = render_.first_frame_request_id();
+  } else {
+    published.kind = EditorSessionResultKind::Accepted;
+  }
+  published.state    = lifecycle_.state();
+  published.identity = lifecycle_.identity();
+  published.message  = marker.success_message;
+  Emit(std::move(published));
+}
+
+auto EditorSessionService::QueueFlushBeforeTransfer(
+    EditorSessionCommandKind kind, const AdjustmentTransferPackage& package,
+    std::vector<AdjustmentMergeResolution> resolutions, std::string display_name)
+    -> std::optional<EditorSessionResult> {
+  if (!has_unmaterialized_changes()) {
+    return std::nullopt;
+  }
+  pending_transfer_ =
+      PendingTransferAfterSave{kind, package, std::move(resolutions), std::move(display_name)};
+  auto result = StartHistoryCheckpointSave();
+  if (result.kind == EditorSessionResultKind::Rejected ||
+      result.kind == EditorSessionResultKind::Failed) {
+    pending_transfer_.reset();
+  }
+  return result;
+}
+
 auto EditorSessionService::Switch(sl_element_id_t element_id, image_id_t image_id)
     -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind       = EditorSessionCommandKind::SelectImage;
+    command.element_id = element_id;
+    command.image_id   = image_id;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return Switch(queued.element_id, queued.image_id);
+    });
+  }
   std::string merge_error;
   if (!CancelPendingMergeForNavigation(&merge_error)) {
     return Reject(std::move(merge_error));
@@ -678,6 +1066,14 @@ auto EditorSessionService::Switch(sl_element_id_t element_id, image_id_t image_i
 }
 
 auto EditorSessionService::Close(bool persist_changes) -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind            = EditorSessionCommandKind::CloseEditor;
+    command.persist_changes = persist_changes;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return Close(queued.persist_changes);
+    });
+  }
   std::string merge_error;
   if (!CancelPendingMergeForNavigation(&merge_error)) {
     return Reject(std::move(merge_error));
@@ -708,6 +1104,14 @@ auto EditorSessionService::Close(bool persist_changes) -> EditorSessionResult {
 }
 
 auto EditorSessionService::Patch(EditorAdjustmentPatch patch) -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind  = EditorSessionCommandKind::PreviewAdjustment;
+    command.patch = std::move(patch);
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return Patch(queued.patch);
+    });
+  }
   if (lifecycle_.state() != EditorSessionState::Interactive) {
     return Reject("Patch requires an interactive session");
   }
@@ -716,12 +1120,13 @@ auto EditorSessionService::Patch(EditorAdjustmentPatch patch) -> EditorSessionRe
   }
   const auto guard   = lifecycle_.history_guard();
   const auto ident   = lifecycle_.identity();
-  const auto outcome = edit_.HandlePatch(std::move(patch), false, guard, ident);
+  auto       outcome = edit_.HandlePatch(std::move(patch), false, guard, ident);
   if (outcome.kind == EditorEditOutcome::Kind::Rejected) {
     return Reject(outcome.message);
   }
   lifecycle_.AdvanceRenderGeneration();
-  const auto route_identity = lifecycle_.identity();
+  const auto route_identity           = lifecycle_.identity();
+  outcome.render_command.operation_id = current_operation_id_;
   render_.RouteInitialRender(outcome.render_command, route_identity);
   EditorSessionResult result;
   result.kind     = EditorSessionResultKind::RenderRouted;
@@ -732,6 +1137,14 @@ auto EditorSessionService::Patch(EditorAdjustmentPatch patch) -> EditorSessionRe
 }
 
 auto EditorSessionService::CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind  = EditorSessionCommandKind::CommitAdjustment;
+    command.patch = std::move(patch);
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return CommitAdjustment(queued.patch);
+    });
+  }
   if (lifecycle_.state() != EditorSessionState::Interactive) {
     return Reject("Patch requires an interactive session");
   }
@@ -740,12 +1153,13 @@ auto EditorSessionService::CommitAdjustment(EditorAdjustmentPatch patch) -> Edit
   }
   const auto guard   = lifecycle_.history_guard();
   const auto ident   = lifecycle_.identity();
-  const auto outcome = edit_.HandlePatch(std::move(patch), true, guard, ident);
+  auto       outcome = edit_.HandlePatch(std::move(patch), true, guard, ident);
   if (outcome.kind == EditorEditOutcome::Kind::Rejected) {
     return Reject(outcome.message);
   }
   lifecycle_.AdvanceRenderGeneration();
-  const auto route_identity = lifecycle_.identity();
+  const auto route_identity           = lifecycle_.identity();
+  outcome.render_command.operation_id = current_operation_id_;
   render_.RouteInitialRender(outcome.render_command, route_identity);
   EditorSessionResult result;
   result.kind     = EditorSessionResultKind::RenderRouted;
@@ -770,12 +1184,18 @@ auto EditorSessionService::CommitAdjustment(std::string patch_key) -> EditorSess
 }
 
 auto EditorSessionService::Undo() -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::Undo;
+    return SubmitCommand(std::move(command),
+                         [this](const EditorSessionCommand&) { return Undo(); });
+  }
   if (lifecycle_.state() != EditorSessionState::Interactive) {
     return Reject("Undo requires interactive state");
   }
   const auto guard   = lifecycle_.history_guard();
   const auto ident   = lifecycle_.identity();
-  const auto outcome = edit_.HandleUndoRedo(true, guard, ident);
+  auto       outcome = edit_.HandleUndoRedo(true, guard, ident);
   if (outcome.kind == EditorEditOutcome::Kind::Rejected) {
     return Reject(outcome.message);
   }
@@ -783,7 +1203,8 @@ auto EditorSessionService::Undo() -> EditorSessionResult {
     return Reject(outcome.message);
   }
   lifecycle_.AdvanceRenderGeneration();
-  const auto undo_identity = lifecycle_.identity();
+  const auto undo_identity            = lifecycle_.identity();
+  outcome.render_command.operation_id = current_operation_id_;
   render_.RouteInitialRender(outcome.render_command, undo_identity);
   EditorSessionResult result;
   result.kind     = EditorSessionResultKind::Accepted;
@@ -795,12 +1216,18 @@ auto EditorSessionService::Undo() -> EditorSessionResult {
 }
 
 auto EditorSessionService::Redo() -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::Redo;
+    return SubmitCommand(std::move(command),
+                         [this](const EditorSessionCommand&) { return Redo(); });
+  }
   if (lifecycle_.state() != EditorSessionState::Interactive) {
     return Reject("Redo requires interactive state");
   }
   const auto guard   = lifecycle_.history_guard();
   const auto ident   = lifecycle_.identity();
-  const auto outcome = edit_.HandleUndoRedo(false, guard, ident);
+  auto       outcome = edit_.HandleUndoRedo(false, guard, ident);
   if (outcome.kind == EditorEditOutcome::Kind::Rejected) {
     return Reject(outcome.message);
   }
@@ -808,7 +1235,8 @@ auto EditorSessionService::Redo() -> EditorSessionResult {
     return Reject(outcome.message);
   }
   lifecycle_.AdvanceRenderGeneration();
-  const auto redo_identity = lifecycle_.identity();
+  const auto redo_identity            = lifecycle_.identity();
+  outcome.render_command.operation_id = current_operation_id_;
   render_.RouteInitialRender(outcome.render_command, redo_identity);
   EditorSessionResult result;
   result.kind     = EditorSessionResultKind::Accepted;
@@ -819,14 +1247,21 @@ auto EditorSessionService::Redo() -> EditorSessionResult {
   return Emit(std::move(result));
 }
 
-auto EditorSessionService::MoveHeadToCommit(const commit_hash_t& commit_id)
-    -> EditorSessionResult {
+auto EditorSessionService::MoveHeadToCommit(const commit_hash_t& commit_id) -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind      = EditorSessionCommandKind::MoveHead;
+    command.commit_id = commit_id;
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return MoveHeadToCommit(queued.commit_id);
+    });
+  }
   if (lifecycle_.state() != EditorSessionState::Interactive) {
     return Reject("Editor head move requires interactive state");
   }
   const auto guard   = lifecycle_.history_guard();
   const auto ident   = lifecycle_.identity();
-  const auto outcome = edit_.HandleMoveHeadToCommit(commit_id, guard, ident);
+  auto       outcome = edit_.HandleMoveHeadToCommit(commit_id, guard, ident);
   if (outcome.kind == EditorEditOutcome::Kind::Rejected) {
     return Reject(outcome.message);
   }
@@ -834,7 +1269,8 @@ auto EditorSessionService::MoveHeadToCommit(const commit_hash_t& commit_id)
     return Reject(outcome.message);
   }
   lifecycle_.AdvanceRenderGeneration();
-  const auto move_identity = lifecycle_.identity();
+  const auto move_identity            = lifecycle_.identity();
+  outcome.render_command.operation_id = current_operation_id_;
   render_.RouteInitialRender(outcome.render_command, move_identity);
   EditorSessionResult result;
   result.kind     = EditorSessionResultKind::Accepted;
@@ -846,6 +1282,12 @@ auto EditorSessionService::MoveHeadToCommit(const commit_hash_t& commit_id)
 }
 
 auto EditorSessionService::Discard() -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::DiscardChanges;
+    return SubmitCommand(std::move(command),
+                         [this](const EditorSessionCommand&) { return Discard(); });
+  }
   const auto state = lifecycle_.state();
   if (state != EditorSessionState::Interactive && state != EditorSessionState::Failed) {
     return Reject("Discard requires an image with an active history session");
@@ -856,7 +1298,7 @@ auto EditorSessionService::Discard() -> EditorSessionResult {
   }
   const auto guard   = lifecycle_.history_guard();
   const auto ident   = lifecycle_.identity();
-  const auto outcome = edit_.HandleDiscard(guard, ident, state);
+  auto       outcome = edit_.HandleDiscard(guard, ident, state);
   if (outcome.kind == EditorEditOutcome::Kind::Rejected) {
     return Reject(outcome.message);
   }
@@ -867,7 +1309,8 @@ auto EditorSessionService::Discard() -> EditorSessionResult {
   if (state == EditorSessionState::Failed) {
     lifecycle_.BeginRetryFromDiscard();
   }
-  const auto discard_identity = lifecycle_.identity();
+  const auto discard_identity         = lifecycle_.identity();
+  outcome.render_command.operation_id = current_operation_id_;
   render_.RouteInitialRender(outcome.render_command, discard_identity);
   EditorSessionResult result;
   result.kind     = (state == EditorSessionState::Failed) ? EditorSessionResultKind::StateChanged
@@ -888,6 +1331,12 @@ auto EditorSessionService::has_unmaterialized_changes() -> bool {
 }
 
 auto EditorSessionService::Shutdown() -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind = EditorSessionCommandKind::Shutdown;
+    return SubmitCommand(std::move(command),
+                         [this](const EditorSessionCommand&) { return Shutdown(); });
+  }
   if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
     return Reject("Already shutting down");
   }
@@ -895,12 +1344,15 @@ auto EditorSessionService::Shutdown() -> EditorSessionResult {
   if (!CancelPendingMergeForNavigation(&merge_error)) {
     return Reject(std::move(merge_error));
   }
-  // Cancel outstanding save work and wait for callback drain. CancelAndWait
-  // publishes one terminal cancellation per in-flight checkpoint; navigation
-  // keeps image A on that failure path and clears the pending action.
+  // Cancel outstanding save work. Each in-flight checkpoint publishes one
+  // terminal cancellation through the posted completion path; navigation keeps
+  // image A on that failure path and clears the pending action.
   save_service_.CancelAndWait();
   navigation_.ClearPendingAction();
   lifecycle_.BeginShutdown();
+  // The queue stops admitting user commands; already-posted worker completions
+  // still reduce so in-flight saves reach a terminal outcome.
+  command_queue_.BeginShutdown();
   EditorSessionResult result;
   result.kind     = EditorSessionResultKind::StateChanged;
   result.state    = lifecycle_.state();
@@ -913,10 +1365,20 @@ auto EditorSessionService::Shutdown() -> EditorSessionResult {
 auto EditorSessionService::RequestViewChange(EditorRenderReason                  reason,
                                              std::optional<ViewportRenderRegion> region)
     -> EditorSessionResult {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind        = EditorSessionCommandKind::RequestViewChange;
+    command.view_reason = reason;
+    command.view_region = std::move(region);
+    return SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      return RequestViewChange(queued.view_reason, queued.view_region);
+    });
+  }
   EditorRenderCommand command;
-  command.reason      = reason;
-  command.adjustment  = edit_.adjustment_snapshot();
-  command.view_region = std::move(region);
+  command.operation_id = current_operation_id_;
+  command.reason       = reason;
+  command.adjustment   = edit_.adjustment_snapshot();
+  command.view_region  = std::move(region);
   // Advance the appropriate generation before routing to the render
   // controller. The render controller no longer mutates lifecycle.
   if (reason == EditorRenderReason::CropRotate) {
@@ -950,34 +1412,32 @@ auto EditorSessionService::RequestViewChange(EditorRenderReason                 
 
 void EditorSessionService::NotifyImageAcquired(std::uint64_t session_generation, bool success,
                                                std::string message) {
-  const auto identity = lifecycle_.identity();
-  if (identity.session_generation != session_generation) {
-    return;
-  }
-  const auto state = lifecycle_.state();
-  if (state != EditorSessionState::Loading && state != EditorSessionState::Acquiring &&
-      state != EditorSessionState::Switching) {
-    return;
-  }
-  if (!success) {
-    lifecycle_.ReleaseGuards();
-    render_.ResetForNewImage();
-    lifecycle_.Fail(message.empty() ? "Image acquisition failed" : std::move(message));
-    EditorSessionResult result;
-    result.kind     = EditorSessionResultKind::Failed;
-    result.state    = lifecycle_.state();
-    result.identity = lifecycle_.identity();
-    result.message  = lifecycle_.last_error();
-    Emit(std::move(result));
-    return;
-  }
-  render_.MarkImageAcquired();
-  EditorSessionResult result;
-  result.kind     = EditorSessionResultKind::Accepted;
-  result.state    = lifecycle_.state();
-  result.identity = identity;
-  result.message = message.empty() ? "Image acquired; waiting for first frame" : std::move(message);
-  Emit(std::move(result));
+  EditorSessionCompletion completion;
+  completion.kind               = EditorSessionCompletionKind::ImageStateLoaded;
+  completion.session_generation = session_generation;
+  completion.success            = success;
+  completion.message            = std::move(message);
+  PostCompletion(std::move(completion));
+}
+
+void EditorSessionService::NotifyRenderResult(const EditorRenderResult& render_result) {
+  EditorSessionCompletion completion;
+  completion.kind                 = EditorSessionCompletionKind::RenderResult;
+  completion.operation.command_id = render_result.intent.operation_id;
+  completion.request_id           = render_result.request_id;
+  completion.render_result        = render_result;
+  command_queue_.PostCompletion([this, completion = std::move(completion)]() mutable {
+    const auto previous_operation = current_operation_id_;
+    const auto previous_reducing  = reducing_command_;
+    current_operation_id_         = completion.operation.command_id;
+    navigation_.SetOperationId(current_operation_id_);
+    reducing_command_ = true;
+    BeginPublication();
+    render_.NotifyRenderResult(completion.render_result, lifecycle_.identity(), lifecycle_.state());
+    EndPublication();
+    reducing_command_     = previous_reducing;
+    current_operation_id_ = previous_operation;
+  });
 }
 
 }  // namespace alcedo

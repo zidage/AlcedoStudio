@@ -124,6 +124,7 @@ struct EditorRenderCancellationToken {
 struct EditorRenderIntent {
   sl_element_id_t                                element_id         = 0;
   image_id_t                                     image_id           = 0;
+  std::uint64_t                                  operation_id       = 0;
   std::uint64_t                                  session_generation = 0;
   std::uint64_t                                  render_generation  = 0;
   std::uint64_t                                  view_generation    = 0;

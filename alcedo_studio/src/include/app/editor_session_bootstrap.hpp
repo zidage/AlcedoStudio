@@ -108,18 +108,21 @@ class EditorSessionBootstrapSchedulerPort final : public IEditorPipelineSchedule
 };
 
 struct EditorSessionRuntime {
-  std::shared_ptr<IEditorPipelinePort>                 pipeline;
-  std::shared_ptr<IEditorHistoryPort>                  history;
-  std::shared_ptr<IEditorTaskPort>                     tasks;
-  std::shared_ptr<IEditorJournalPort>                  journal;
-  std::shared_ptr<IEditorCheckpointStore>              checkpoint_store;
-  std::shared_ptr<IEditorThumbnailPort>                thumbnails;
-  std::shared_ptr<IEditorPipelineSchedulerPort>        scheduler;
-  std::shared_ptr<EditorRenderCoordinator>             coordinator;
+  std::shared_ptr<IEditorPipelinePort>             pipeline;
+  std::shared_ptr<IEditorHistoryPort>              history;
+  std::shared_ptr<IEditorTaskPort>                 tasks;
+  std::shared_ptr<IEditorJournalPort>              journal;
+  std::shared_ptr<IEditorCheckpointStore>          checkpoint_store;
+  std::shared_ptr<IEditorThumbnailPort>            thumbnails;
+  std::shared_ptr<IEditorPipelineSchedulerPort>    scheduler;
+  std::shared_ptr<EditorRenderCoordinator>         coordinator;
   /// One project-owned global save lock for editor checkpoints and Mini-Git
   /// recovery. Shared with EditorSaveCheckpointService and materializer ports.
-  std::shared_ptr<EditorSaveCheckpointCoordinator>    save_coordinator;
-  std::unique_ptr<EditorSessionService>                service;
+  std::shared_ptr<EditorSaveCheckpointCoordinator> save_coordinator;
+  /// Executor for the thread that owns session state. Tests use the manual
+  /// implementation; the desktop host supplies its Qt queued adapter.
+  std::shared_ptr<IEditorSessionCommandExecutor>   command_executor;
+  std::unique_ptr<EditorSessionService>            service;
 
   /// Create runtime with bootstrap ports (no DuckDB/GPU). Coordinator results
   /// are forwarded into the session service.
@@ -134,16 +137,16 @@ struct EditorSessionRuntime {
 
   /// Production (or test) ports. Same wiring as Create(). When
   /// save_coordinator is null, a fresh project-owned coordinator is created.
-  static auto CreateWithPorts(std::shared_ptr<IEditorPipelinePort>          pipeline,
-                              std::shared_ptr<IEditorHistoryPort>           history,
-                              std::shared_ptr<IEditorTaskPort>              tasks,
-                              std::shared_ptr<IEditorJournalPort>           journal,
-                              std::shared_ptr<IEditorPipelineSchedulerPort> scheduler,
-                              std::shared_ptr<IEditorCheckpointStore>       checkpoint_store =
-                                  std::make_shared<EditorSessionBootstrapCheckpointStore>(),
-                              std::shared_ptr<IEditorThumbnailPort> thumbnails = nullptr,
-                              std::shared_ptr<EditorSaveCheckpointCoordinator> save_coordinator =
-                                  nullptr) -> std::unique_ptr<EditorSessionRuntime> {
+  static auto CreateWithPorts(
+      std::shared_ptr<IEditorPipelinePort> pipeline, std::shared_ptr<IEditorHistoryPort> history,
+      std::shared_ptr<IEditorTaskPort> tasks, std::shared_ptr<IEditorJournalPort> journal,
+      std::shared_ptr<IEditorPipelineSchedulerPort> scheduler,
+      std::shared_ptr<IEditorCheckpointStore>       checkpoint_store =
+          std::make_shared<EditorSessionBootstrapCheckpointStore>(),
+      std::shared_ptr<IEditorThumbnailPort>            thumbnails       = nullptr,
+      std::shared_ptr<EditorSaveCheckpointCoordinator> save_coordinator = nullptr,
+      std::shared_ptr<IEditorSessionCommandExecutor>   command_executor = nullptr)
+      -> std::unique_ptr<EditorSessionRuntime> {
     auto runtime              = std::make_unique<EditorSessionRuntime>();
     runtime->pipeline         = std::move(pipeline);
     runtime->history          = std::move(history);
@@ -152,20 +155,24 @@ struct EditorSessionRuntime {
     runtime->checkpoint_store = std::move(checkpoint_store);
     runtime->thumbnails       = std::move(thumbnails);
     runtime->scheduler        = std::move(scheduler);
-    runtime->save_coordinator =
-        save_coordinator ? std::move(save_coordinator)
-                         : std::make_shared<EditorSaveCheckpointCoordinator>();
+    runtime->save_coordinator = save_coordinator
+                                    ? std::move(save_coordinator)
+                                    : std::make_shared<EditorSaveCheckpointCoordinator>();
+    runtime->command_executor = command_executor
+                                    ? std::move(command_executor)
+                                    : std::make_shared<EditorSessionManualCommandExecutor>();
     runtime->coordinator      = std::make_shared<EditorRenderCoordinator>(runtime->scheduler);
     EditorSessionService::Dependencies deps;
-    deps.pipeline         = runtime->pipeline;
-    deps.history          = runtime->history;
-    deps.tasks            = runtime->tasks;
-    deps.journal          = runtime->journal;
-    deps.checkpoint_store = runtime->checkpoint_store;
-    deps.thumbnails       = runtime->thumbnails;
-    deps.render           = runtime->coordinator;
-    deps.save_coordinator = runtime->save_coordinator;
-    runtime->service      = std::make_unique<EditorSessionService>(std::move(deps));
+    deps.pipeline                     = runtime->pipeline;
+    deps.history                      = runtime->history;
+    deps.tasks                        = runtime->tasks;
+    deps.journal                      = runtime->journal;
+    deps.checkpoint_store             = runtime->checkpoint_store;
+    deps.thumbnails                   = runtime->thumbnails;
+    deps.render                       = runtime->coordinator;
+    deps.save_coordinator             = runtime->save_coordinator;
+    deps.command_executor             = runtime->command_executor;
+    runtime->service                  = std::make_unique<EditorSessionService>(std::move(deps));
 
     EditorSessionService* service_ptr = runtime->service.get();
     runtime->coordinator->SetResultObserver([service_ptr](const EditorRenderResult& result) {

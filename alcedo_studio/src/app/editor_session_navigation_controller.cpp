@@ -17,19 +17,26 @@ EditorSessionNavigationController::EditorSessionNavigationController(
     EditorSessionLifecycle& lifecycle, EditorSaveCheckpointService& save_service,
     EditorSessionRenderController& render, EditorSessionEditController& edit,
     IEditorJournalPort* journal, IEditorCheckpointStore* checkpoint_store,
-    IEditorHistoryPort* history)
+    IEditorHistoryPort* history, EditorSessionNavigationState* state)
     : lifecycle_(lifecycle),
       save_service_(save_service),
       render_(render),
       edit_(edit),
       journal_(journal),
       checkpoint_store_(checkpoint_store),
-      history_(history) {}
+      history_(history),
+      state_(state != nullptr ? state : &owned_state_),
+      owner_thread_(std::this_thread::get_id()) {}
+
+void EditorSessionNavigationController::SetOperationId(std::uint64_t operation_id) {
+  AssertOwnerThread();
+  operation_id_ = operation_id;
+}
 
 auto EditorSessionNavigationController::RequestOpenOrSwitch(sl_element_id_t element_id,
                                                             image_id_t image_id, bool is_switch)
     -> NavigationOutcome {
-  std::scoped_lock  lock(mutex_);
+  AssertOwnerThread();
   NavigationOutcome outcome;
 
   if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
@@ -38,12 +45,28 @@ auto EditorSessionNavigationController::RequestOpenOrSwitch(sl_element_id_t elem
     return outcome;
   }
 
-  if (pending_action_.has_value()) {
+  if (state_->pending_action.has_value()) {
+    // A save is in progress for the running target. A rapid SwitchImage
+    // selection queues behind a running switch (replacing any earlier queued
+    // selection) and is promoted once the running save completes and the prior
+    // image is acquired. It never replaces the running target's save identity.
+    if (state_->pending_action->kind == PendingEditorActionKind::SwitchImage) {
+      PendingEditorAction queued;
+      queued.kind                    = PendingEditorActionKind::SwitchImage;
+      queued.element_id              = element_id;
+      queued.image_id                = image_id;
+      queued.is_switch               = is_switch;
+      queued.persist                 = true;
+      state_->pending_next_target    = queued;
+      outcome.waiting_for_checkpoint = true;
+      outcome.message                = "Selection queued behind the running editor save";
+      return outcome;
+    }
     outcome.rejected = true;
     outcome.message  = "Editor save checkpoint is in progress";
     return outcome;
   }
-  if (pending_recovery_.has_value()) {
+  if (state_->pending_recovery.has_value()) {
     outcome.rejected = true;
     outcome.message  = "Resolve the failed editor save before opening another image";
     return outcome;
@@ -69,43 +92,35 @@ auto EditorSessionNavigationController::RequestOpenOrSwitch(sl_element_id_t elem
   if (current_identity.session_generation != 0 &&
       (current_identity.element_id != 0 || current_identity.image_id != 0)) {
     PendingEditorAction pending;
-    pending.kind       = PendingEditorActionKind::SwitchImage;
-    pending.element_id = element_id;
-    pending.image_id   = image_id;
-    pending.is_switch  = is_switch;
-    pending.persist    = true;
-    pending_action_    = pending;
-    const auto ticket  = SealAndStartSave(true, true);
+    pending.kind           = PendingEditorActionKind::SwitchImage;
+    pending.element_id     = element_id;
+    pending.image_id       = image_id;
+    pending.is_switch      = is_switch;
+    pending.persist        = true;
+    state_->pending_action = pending;
+    const auto ticket      = SealAndStartSave(true, true);
     if (!ticket.valid()) {
-      const auto failed_pending = pending_action_.value_or(pending);
-      pending_action_.reset();
+      const auto failed_pending = state_->pending_action.value_or(pending);
+      state_->pending_action.reset();
       RetainPendingFailure(failed_pending, "Failed to save current image");
       outcome.failed  = true;
       outcome.message = lifecycle_.last_error();
       return outcome;
     }
-    if (pending_recovery_.has_value()) {
+    if (state_->pending_recovery.has_value()) {
       outcome.failed  = true;
       outcome.message = lifecycle_.last_error();
       return outcome;
     }
-    // If pending_action_ was cleared during SealAndStartSave, the
-    // OnCheckpointFinished callback ran synchronously inside
-    // SaveCheckpointService::Start. The save completed immediately.
-    if (!pending_action_.has_value()) {
-      outcome.ticket                    = ticket;
-      outcome.sealed_session_generation = current_identity.session_generation;
-    } else {
-      pending_action_->ticket           = ticket;
-      outcome.ticket                    = ticket;
-      outcome.sealed_session_generation = current_identity.session_generation;
-      outcome.waiting_for_checkpoint    = true;
-      outcome.message = "Waiting for save checkpoint before loading the next image";
-      return outcome;
-    }
-    // Synchronous save: OnCheckpointFinished already released guards.
-    outcome.completed_synchronously = true;
-    outcome.message                 = "Switched to next image";
+    // The save checkpoint completion is delivered as a typed message through the
+    // session command queue, so it never runs inline inside SealAndStartSave.
+    // pending_action stays set until OnCheckpointFinished reduces the posted
+    // completion on the session owner thread.
+    state_->pending_action->ticket    = ticket;
+    outcome.ticket                    = ticket;
+    outcome.sealed_session_generation = current_identity.session_generation;
+    outcome.waiting_for_checkpoint    = true;
+    outcome.message                   = "Waiting for save checkpoint before loading the next image";
     return outcome;
   }
 
@@ -117,7 +132,7 @@ auto EditorSessionNavigationController::RequestOpenOrSwitch(sl_element_id_t elem
 }
 
 auto EditorSessionNavigationController::RequestClose(bool persist_changes) -> NavigationOutcome {
-  std::scoped_lock  lock(mutex_);
+  AssertOwnerThread();
   NavigationOutcome outcome;
 
   if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
@@ -126,12 +141,12 @@ auto EditorSessionNavigationController::RequestClose(bool persist_changes) -> Na
     return outcome;
   }
 
-  if (pending_action_.has_value()) {
+  if (state_->pending_action.has_value()) {
     outcome.rejected = true;
     outcome.message  = "Editor save checkpoint is in progress";
     return outcome;
   }
-  if (pending_recovery_.has_value()) {
+  if (state_->pending_recovery.has_value()) {
     outcome.rejected = true;
     outcome.message  = "Resolve the failed editor save before closing the editor";
     return outcome;
@@ -140,37 +155,31 @@ auto EditorSessionNavigationController::RequestClose(bool persist_changes) -> Na
   const auto current_identity = lifecycle_.identity();
   if (persist_changes && current_identity.element_id != 0 && current_identity.image_id != 0) {
     PendingEditorAction pending;
-    pending.kind    = PendingEditorActionKind::CloseEditor;
-    pending.persist = true;
-    pending_action_ = pending;
-    const auto ticket = SealAndStartSave(true, true);
+    pending.kind           = PendingEditorActionKind::CloseEditor;
+    pending.persist        = true;
+    state_->pending_action = pending;
+    const auto ticket      = SealAndStartSave(true, true);
     if (!ticket.valid()) {
-      const auto failed_pending = pending_action_.value_or(pending);
-      pending_action_.reset();
+      const auto failed_pending = state_->pending_action.value_or(pending);
+      state_->pending_action.reset();
       RetainPendingFailure(failed_pending, "Failed to close editor session");
       outcome.failed  = true;
       outcome.message = lifecycle_.last_error();
       return outcome;
     }
-    if (pending_recovery_.has_value()) {
+    if (state_->pending_recovery.has_value()) {
       outcome.failed  = true;
       outcome.message = lifecycle_.last_error();
       return outcome;
     }
-    if (!pending_action_.has_value()) {
-      outcome.ticket                    = ticket;
-      outcome.sealed_session_generation = current_identity.session_generation;
-    } else {
-      pending_action_->ticket           = ticket;
-      outcome.ticket                    = ticket;
-      outcome.sealed_session_generation = current_identity.session_generation;
-      outcome.waiting_for_checkpoint    = true;
-      outcome.message                   = "Waiting for save checkpoint before closing";
-      return outcome;
-    }
-    // Synchronous save: OnCheckpointFinished already released guards.
-    outcome.completed_synchronously = true;
-    outcome.message                 = "Editor session closed";
+    // The save completion is delivered through the command queue and never runs
+    // inline inside SealAndStartSave, so pending_action stays set until the
+    // posted completion reduces it on the owner thread.
+    state_->pending_action->ticket    = ticket;
+    outcome.ticket                    = ticket;
+    outcome.sealed_session_generation = current_identity.session_generation;
+    outcome.waiting_for_checkpoint    = true;
+    outcome.message                   = "Waiting for save checkpoint before closing";
     return outcome;
   }
 
@@ -190,30 +199,31 @@ auto EditorSessionNavigationController::RequestClose(bool persist_changes) -> Na
 }
 
 void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpointResult& result) {
-  std::scoped_lock lock(mutex_);
-  if (!pending_action_.has_value()) {
+  AssertOwnerThread();
+  if (!state_->pending_action.has_value()) {
     return;
   }
-  const auto pending = *pending_action_;
-  // When the ticket has not been set yet (request_id == 0), the completion
-  // callback fired synchronously inside SaveCheckpointService::Start before
-  // the caller obtained the ticket. Accept the result unconditionally.
-  // Otherwise, correlate by request_id and session_generation to reject
-  // stale completions from earlier saves.
+  const auto pending = *state_->pending_action;
+  // A legacy standalone save service may still deliver a completion before its
+  // caller receives a ticket. The production session always supplies the
+  // command executor, so its ticket is populated before this method runs.
   if (pending.ticket.request_id != 0 &&
       (pending.ticket.request_id != result.request_id ||
-       pending.ticket.session_generation != result.session_generation)) {
+       pending.ticket.session_generation != result.session_generation ||
+       (pending.ticket.operation_id != 0 && result.operation_id != 0 &&
+        pending.ticket.operation_id != result.operation_id))) {
     return;
   }
-  pending_action_.reset();
+  state_->pending_action.reset();
 
   if (!result.checkpoint_completed) {
     // Phase 7A repair: preserve the pending target for recovery. The
     // lifecycle transitions to RetainedImageFailure so the image stays
     // visible while the user chooses Retry Save / Discard and Continue /
-    // Cancel.
-    RetainPendingFailure(
-        pending, result.error.empty() ? "Save checkpoint failed" : result.error);
+    // Cancel. A selection queued behind the failed save is dropped: it never
+    // changes the recovered target and is never promoted after recovery.
+    state_->pending_next_target.reset();
+    RetainPendingFailure(pending, result.error.empty() ? "Save checkpoint failed" : result.error);
     return;
   }
 
@@ -232,8 +242,7 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
   // instead of rejecting the durable state as stale.
   if (history_ != nullptr && lifecycle_.has_history_guard()) {
     std::string sync_error;
-    (void)history_->SyncMaterializedStateAfterCheckpoint(lifecycle_.history_guard(),
-                                                         &sync_error);
+    (void)history_->SyncMaterializedStateAfterCheckpoint(lifecycle_.history_guard(), &sync_error);
   }
 
   if (pending.kind == PendingEditorActionKind::CheckoutVersion) {
@@ -248,8 +257,8 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
       // so the prior Version is still active. Transition to
       // RetainedImageFailure to keep the image visible and signal the error
       // for recovery, rather than entering fatal Failed.
-      RetainPendingFailure(
-          pending, checkout_error.empty() ? "Version checkout failed" : checkout_error);
+      RetainPendingFailure(pending,
+                           checkout_error.empty() ? "Version checkout failed" : checkout_error);
     }
     return;
   }
@@ -259,8 +268,8 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
     if (ContinueCreateRootVersion(std::move(pending.display_name), &create_error)) {
       NotifyCompletion(true, false, "Created root Version", pending.ticket);
     } else {
-      RetainPendingFailure(
-          pending, create_error.empty() ? "Failed to create root Version" : create_error);
+      RetainPendingFailure(pending,
+                           create_error.empty() ? "Failed to create root Version" : create_error);
     }
     return;
   }
@@ -271,8 +280,8 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
                                  &branch_error)) {
       NotifyCompletion(true, false, "Branched from commit", pending.ticket);
     } else {
-      RetainPendingFailure(
-          pending, branch_error.empty() ? "Failed to branch from commit" : branch_error);
+      RetainPendingFailure(pending,
+                           branch_error.empty() ? "Failed to branch from commit" : branch_error);
     }
     return;
   }
@@ -287,16 +296,40 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
 
   ContinueToTarget(pending.element_id, pending.image_id, pending.is_switch);
   NotifyCompletion(true, false, "Switched to next image", pending.ticket);
+  PromoteQueuedSwitchTarget();
+}
+
+void EditorSessionNavigationController::PromoteQueuedSwitchTarget() {
+  if (!state_->pending_next_target.has_value()) {
+    return;
+  }
+  const auto next = *state_->pending_next_target;
+  state_->pending_next_target.reset();
+  state_->pending_action         = next;
+  state_->pending_action->ticket = {};
+  const auto ticket              = SealAndStartSave(true, true);
+  if (!ticket.valid()) {
+    const auto failed = state_->pending_action.value_or(next);
+    state_->pending_action.reset();
+    if (!state_->pending_recovery.has_value()) {
+      RetainPendingFailure(failed, "Failed to save before the queued selection");
+    }
+    return;
+  }
+  if (state_->pending_recovery.has_value()) {
+    return;
+  }
+  state_->pending_action->ticket = ticket;
 }
 
 auto EditorSessionNavigationController::has_pending_action() const -> bool {
-  std::scoped_lock lock(mutex_);
-  return pending_action_.has_value();
+  AssertOwnerThread();
+  return state_->pending_action.has_value();
 }
 
 void EditorSessionNavigationController::ClearPendingAction() {
-  std::scoped_lock lock(mutex_);
-  pending_action_.reset();
+  AssertOwnerThread();
+  state_->pending_action.reset();
 }
 
 auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
@@ -335,6 +368,7 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
     }
     SaveCheckpointRequest req;
     req.element_id         = identity.element_id;
+    req.operation_id       = operation_id_;
     req.session_generation = identity.session_generation;
     req.capture            = std::move(capture);
     if (req.capture->has_journal_range()) {
@@ -384,6 +418,7 @@ void EditorSessionNavigationController::ContinueToTarget(sl_element_id_t element
   render_.MarkImageAcquired();
 
   EditorRenderCommand command;
+  command.operation_id = operation_id_;
   command.reason = is_switch ? EditorRenderReason::ImageSwitch : EditorRenderReason::InitialFrame;
   command.adjustment = edit_.adjustment_snapshot();
   render_.RouteInitialRender(command, lifecycle_.identity());
@@ -398,7 +433,7 @@ void EditorSessionNavigationController::ContinueToClose(bool persist_changes) {
 
 auto EditorSessionNavigationController::RequestCheckoutVersion(const version_ref_id_t& version_id)
     -> NavigationOutcome {
-  std::scoped_lock  lock(mutex_);
+  AssertOwnerThread();
   NavigationOutcome outcome;
 
   if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
@@ -406,12 +441,12 @@ auto EditorSessionNavigationController::RequestCheckoutVersion(const version_ref
     outcome.message  = "Cannot checkout Version while shutting down";
     return outcome;
   }
-  if (pending_action_.has_value()) {
+  if (state_->pending_action.has_value()) {
     outcome.rejected = true;
     outcome.message  = "Editor save checkpoint is in progress";
     return outcome;
   }
-  if (pending_recovery_.has_value()) {
+  if (state_->pending_recovery.has_value()) {
     outcome.rejected = true;
     outcome.message  = "Resolve the failed editor save before Version checkout";
     return outcome;
@@ -433,46 +468,40 @@ auto EditorSessionNavigationController::RequestCheckoutVersion(const version_ref
   // ref and always after save). An empty journal still acquires the global lock
   // and runs a no-op materialization path.
   PendingEditorAction pending;
-  pending.kind       = PendingEditorActionKind::CheckoutVersion;
-  pending.element_id = current_identity.element_id;
-  pending.image_id   = current_identity.image_id;
-  pending.persist    = true;
-  pending.version_id = version_id;
-  pending_action_    = pending;
+  pending.kind           = PendingEditorActionKind::CheckoutVersion;
+  pending.element_id     = current_identity.element_id;
+  pending.image_id       = current_identity.image_id;
+  pending.persist        = true;
+  pending.version_id     = version_id;
+  state_->pending_action = pending;
 
-  const auto ticket = SealAndStartSave(true, true);
+  const auto ticket      = SealAndStartSave(true, true);
   if (!ticket.valid()) {
-    const auto failed_pending = pending_action_.value_or(pending);
-    pending_action_.reset();
-    RetainPendingFailure(failed_pending,
-                         "Failed to save current image before Version checkout");
+    const auto failed_pending = state_->pending_action.value_or(pending);
+    state_->pending_action.reset();
+    RetainPendingFailure(failed_pending, "Failed to save current image before Version checkout");
     outcome.failed  = true;
     outcome.message = lifecycle_.last_error();
     return outcome;
   }
-  if (pending_recovery_.has_value()) {
+  if (state_->pending_recovery.has_value()) {
     outcome.failed  = true;
     outcome.message = lifecycle_.last_error();
     return outcome;
   }
-  if (!pending_action_.has_value()) {
-    // Synchronous save already finished ContinueCheckoutVersion.
-    outcome.ticket                    = ticket;
-    outcome.sealed_session_generation = current_identity.session_generation;
-    outcome.completed_synchronously   = true;
-    outcome.message                   = "Checked out Version";
-    return outcome;
-  }
-  pending_action_->ticket           = ticket;
+  // The save completion is delivered through the command queue and never runs
+  // inline inside SealAndStartSave, so pending_action stays set until the
+  // posted completion reduces it on the owner thread.
+  state_->pending_action->ticket    = ticket;
   outcome.ticket                    = ticket;
   outcome.sealed_session_generation = current_identity.session_generation;
   outcome.waiting_for_checkpoint    = true;
-  outcome.message = "Waiting for save checkpoint before Version checkout";
+  outcome.message                   = "Waiting for save checkpoint before Version checkout";
   return outcome;
 }
 
-auto EditorSessionNavigationController::ContinueCheckoutVersion(
-    const version_ref_id_t& version_id, std::string* error) -> bool {
+auto EditorSessionNavigationController::ContinueCheckoutVersion(const version_ref_id_t& version_id,
+                                                                std::string* error) -> bool {
   if (!lifecycle_.has_history_guard() || history_ == nullptr) {
     if (error) *error = "Version checkout lost the history guard after save";
     return false;
@@ -491,8 +520,7 @@ auto EditorSessionNavigationController::ContinueCheckoutVersion(
   if (!history_->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &history_snapshot,
                                         &local_error)) {
     if (error)
-      *error = local_error.empty() ? "Failed to read snapshot after Version checkout"
-                                   : local_error;
+      *error = local_error.empty() ? "Failed to read snapshot after Version checkout" : local_error;
     return false;
   }
   if (!history_snapshot.params_json.empty() || !history_snapshot.patches.empty() ||
@@ -514,14 +542,15 @@ auto EditorSessionNavigationController::ContinueCheckoutVersion(
   render_.MarkImageAcquired();
 
   EditorRenderCommand command;
-  command.reason     = EditorRenderReason::InitialFrame;
-  command.adjustment = edit_.adjustment_snapshot();
+  command.operation_id = operation_id_;
+  command.reason       = EditorRenderReason::InitialFrame;
+  command.adjustment   = edit_.adjustment_snapshot();
   render_.RouteInitialRender(command, lifecycle_.identity());
   return true;
 }
 
-auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string display_name,
-                                                                   std::string* error) -> bool {
+auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string  display_name,
+                                                                  std::string* error) -> bool {
   if (!lifecycle_.has_history_guard() || history_ == nullptr) {
     if (error) *error = "Root Version creation lost the history guard after save";
     return false;
@@ -529,11 +558,9 @@ auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string di
 
   version_ref_id_t new_version_id;
   std::string      local_error;
-  if (!history_->CreateRootVersionAndCheckout(lifecycle_.history_guard(),
-                                               std::move(display_name), &new_version_id,
-                                               &local_error)) {
-    if (error)
-      *error = local_error.empty() ? "Failed to create root Version" : local_error;
+  if (!history_->CreateRootVersionAndCheckout(lifecycle_.history_guard(), std::move(display_name),
+                                              &new_version_id, &local_error)) {
+    if (error) *error = local_error.empty() ? "Failed to create root Version" : local_error;
     return false;
   }
 
@@ -541,8 +568,8 @@ auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string di
   if (!history_->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &history_snapshot,
                                         &local_error)) {
     if (error)
-      *error = local_error.empty() ? "Failed to read snapshot after root Version creation"
-                                   : local_error;
+      *error =
+          local_error.empty() ? "Failed to read snapshot after root Version creation" : local_error;
     return false;
   }
   if (!history_snapshot.params_json.empty() || !history_snapshot.patches.empty() ||
@@ -562,14 +589,16 @@ auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string di
   render_.MarkImageAcquired();
 
   EditorRenderCommand command;
-  command.reason     = EditorRenderReason::InitialFrame;
-  command.adjustment = edit_.adjustment_snapshot();
+  command.operation_id = operation_id_;
+  command.reason       = EditorRenderReason::InitialFrame;
+  command.adjustment   = edit_.adjustment_snapshot();
   render_.RouteInitialRender(command, lifecycle_.identity());
   return true;
 }
 
-auto EditorSessionNavigationController::ContinueBranchFromCommit(
-    const commit_hash_t& commit_id, std::string display_name, std::string* error) -> bool {
+auto EditorSessionNavigationController::ContinueBranchFromCommit(const commit_hash_t& commit_id,
+                                                                 std::string          display_name,
+                                                                 std::string* error) -> bool {
   if (!lifecycle_.has_history_guard() || history_ == nullptr) {
     if (error) *error = "Branch creation lost the history guard after save";
     return false;
@@ -578,10 +607,9 @@ auto EditorSessionNavigationController::ContinueBranchFromCommit(
   version_ref_id_t new_version_id;
   std::string      local_error;
   if (!history_->BranchFromCommitAndCheckout(lifecycle_.history_guard(), commit_id,
-                                              std::move(display_name), &new_version_id,
-                                              &local_error)) {
-    if (error)
-      *error = local_error.empty() ? "Failed to branch from commit" : local_error;
+                                             std::move(display_name), &new_version_id,
+                                             &local_error)) {
+    if (error) *error = local_error.empty() ? "Failed to branch from commit" : local_error;
     return false;
   }
 
@@ -589,8 +617,7 @@ auto EditorSessionNavigationController::ContinueBranchFromCommit(
   if (!history_->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &history_snapshot,
                                         &local_error)) {
     if (error)
-      *error = local_error.empty() ? "Failed to read snapshot after branch creation"
-                                   : local_error;
+      *error = local_error.empty() ? "Failed to read snapshot after branch creation" : local_error;
     return false;
   }
   if (!history_snapshot.params_json.empty() || !history_snapshot.patches.empty() ||
@@ -608,47 +635,48 @@ auto EditorSessionNavigationController::ContinueBranchFromCommit(
   render_.MarkImageAcquired();
 
   EditorRenderCommand command;
-  command.reason     = EditorRenderReason::InitialFrame;
-  command.adjustment = edit_.adjustment_snapshot();
+  command.operation_id = operation_id_;
+  command.reason       = EditorRenderReason::InitialFrame;
+  command.adjustment   = edit_.adjustment_snapshot();
   render_.RouteInitialRender(command, lifecycle_.identity());
   return true;
 }
 
 void EditorSessionNavigationController::SetCompletionNotifier(
     NavigationCompletionNotifier notifier) {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   completion_notifier_ = std::move(notifier);
 }
 
 void EditorSessionNavigationController::RetainPendingFailure(PendingEditorAction pending,
-                                                              std::string message) {
+                                                             std::string         message) {
   lifecycle_.KeepCurrentAfterCheckpointFailure(std::move(message));
-  pending_recovery_ = std::move(pending);
-  NotifyCompletion(false, true, lifecycle_.last_error(), pending_recovery_->ticket);
+  state_->pending_recovery = std::move(pending);
+  NotifyCompletion(false, true, lifecycle_.last_error(), state_->pending_recovery->ticket);
 }
 
 void EditorSessionNavigationController::NotifyCompletion(bool success, bool retained_image,
-                                                          std::string message,
-                                                          const CheckpointTicket& ticket) {
+                                                         std::string             message,
+                                                         const CheckpointTicket& ticket) {
   if (completion_notifier_) {
     NavigationCompletion completion;
     completion.success        = success;
-    completion.retained_image  = retained_image;
-    completion.message         = std::move(message);
-    completion.ticket          = ticket;
+    completion.retained_image = retained_image;
+    completion.message        = std::move(message);
+    completion.ticket         = ticket;
     completion_notifier_(completion);
   }
 }
 
 auto EditorSessionNavigationController::has_pending_recovery() const -> bool {
-  std::scoped_lock lock(mutex_);
-  return pending_recovery_.has_value();
+  AssertOwnerThread();
+  return state_->pending_recovery.has_value();
 }
 
 auto EditorSessionNavigationController::RetrySaveAfterFailure() -> NavigationOutcome {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   NavigationOutcome outcome;
-  if (!pending_recovery_.has_value()) {
+  if (!state_->pending_recovery.has_value()) {
     outcome.rejected = true;
     outcome.message  = "No pending recovery target";
     return outcome;
@@ -658,46 +686,42 @@ auto EditorSessionNavigationController::RetrySaveAfterFailure() -> NavigationOut
     outcome.message  = "Retry Save requires a retained-image failure state";
     return outcome;
   }
-  const auto recovery = *pending_recovery_;
-  pending_recovery_.reset();
+  const auto recovery = *state_->pending_recovery;
+  state_->pending_recovery.reset();
   // Re-attempt the save checkpoint for the same pending target.
-  pending_action_    = recovery;
-  pending_action_->ticket = {};
-  const auto ticket = SealAndStartSave(true, true);
+  state_->pending_action         = recovery;
+  state_->pending_action->ticket = {};
+  const auto ticket              = SealAndStartSave(true, true);
   if (!ticket.valid()) {
-    const auto failed_pending = pending_action_.value_or(recovery);
-    pending_action_.reset();
-    if (!pending_recovery_.has_value()) {
+    const auto failed_pending = state_->pending_action.value_or(recovery);
+    state_->pending_action.reset();
+    if (!state_->pending_recovery.has_value()) {
       RetainPendingFailure(failed_pending, "Failed to retry save");
     }
     outcome.failed  = true;
     outcome.message = lifecycle_.last_error();
     return outcome;
   }
-  if (pending_recovery_.has_value()) {
+  if (state_->pending_recovery.has_value()) {
     outcome.failed  = true;
     outcome.message = lifecycle_.last_error();
     return outcome;
   }
-  if (!pending_action_.has_value()) {
-    outcome.ticket                    = ticket;
-    outcome.sealed_session_generation = lifecycle_.identity().session_generation;
-    outcome.completed_synchronously   = true;
-    outcome.message                   = "Save retried";
-    return outcome;
-  }
-  pending_action_->ticket           = ticket;
+  // The save completion is delivered through the command queue and never runs
+  // inline inside SealAndStartSave, so pending_action stays set until the
+  // posted completion reduces it on the owner thread.
+  state_->pending_action->ticket    = ticket;
   outcome.ticket                    = ticket;
   outcome.sealed_session_generation = lifecycle_.identity().session_generation;
   outcome.waiting_for_checkpoint    = true;
-  outcome.message = "Waiting for save checkpoint retry";
+  outcome.message                   = "Waiting for save checkpoint retry";
   return outcome;
 }
 
 auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> NavigationOutcome {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   NavigationOutcome outcome;
-  if (!pending_recovery_.has_value()) {
+  if (!state_->pending_recovery.has_value()) {
     outcome.rejected = true;
     outcome.message  = "No pending recovery target";
     return outcome;
@@ -707,21 +731,21 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
     outcome.message  = "Discard requires a retained-image failure state";
     return outcome;
   }
-  const auto recovery = *pending_recovery_;
+  const auto recovery = *state_->pending_recovery;
 
   // Explicitly discard unflushed journal/working changes before continuing.
   if (journal_ != nullptr) {
     std::string discard_error;
     if (!journal_->DiscardUnflushed(lifecycle_.identity().element_id, &discard_error)) {
-      const auto message = discard_error.empty() ? "Failed to discard pending editor changes"
-                                                 : discard_error;
+      const auto message =
+          discard_error.empty() ? "Failed to discard pending editor changes" : discard_error;
       RetainPendingFailure(recovery, message);
       outcome.failed  = true;
       outcome.message = lifecycle_.last_error();
       return outcome;
     }
   }
-  pending_recovery_.reset();
+  state_->pending_recovery.reset();
 
   // Continue the pending navigation with persist=false (no save needed).
   if (recovery.kind == PendingEditorActionKind::CloseEditor) {
@@ -731,7 +755,7 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
     edit_.ClearSnapshot();
     render_.ResetForNewImage();
     outcome.completed_synchronously = true;
-    outcome.message                  = "Editor changes discarded";
+    outcome.message                 = "Editor changes discarded";
     NotifyCompletion(true, false, "Discarded and closed", recovery.ticket);
     return outcome;
   }
@@ -744,9 +768,9 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
       outcome.message                 = "Discarded and checked out Version";
       NotifyCompletion(true, false, "Discarded and checked out Version", recovery.ticket);
     } else {
-      RetainPendingFailure(
-          recovery, checkout_error.empty() ? "Version checkout failed after discard"
-                                            : checkout_error);
+      RetainPendingFailure(recovery, checkout_error.empty()
+                                         ? "Version checkout failed after discard"
+                                         : checkout_error);
       outcome.failed  = true;
       outcome.message = lifecycle_.last_error();
     }
@@ -757,12 +781,12 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
     std::string create_error;
     if (ContinueCreateRootVersion(std::move(recovery.display_name), &create_error)) {
       outcome.completed_synchronously = true;
-      outcome.message                  = "Discarded and created root Version";
+      outcome.message                 = "Discarded and created root Version";
       NotifyCompletion(true, false, "Discarded and created root Version", recovery.ticket);
     } else {
-      RetainPendingFailure(
-          recovery, create_error.empty() ? "Root Version creation failed after discard"
-                                          : create_error);
+      RetainPendingFailure(recovery, create_error.empty()
+                                         ? "Root Version creation failed after discard"
+                                         : create_error);
       outcome.failed  = true;
       outcome.message = lifecycle_.last_error();
     }
@@ -774,12 +798,11 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
     if (ContinueBranchFromCommit(recovery.branch_commit, std::move(recovery.display_name),
                                  &branch_error)) {
       outcome.completed_synchronously = true;
-      outcome.message                  = "Discarded and branched from commit";
+      outcome.message                 = "Discarded and branched from commit";
       NotifyCompletion(true, false, "Discarded and branched from commit", recovery.ticket);
     } else {
       RetainPendingFailure(
-          recovery, branch_error.empty() ? "Branch creation failed after discard"
-                                         : branch_error);
+          recovery, branch_error.empty() ? "Branch creation failed after discard" : branch_error);
       outcome.failed  = true;
       outcome.message = lifecycle_.last_error();
     }
@@ -791,14 +814,15 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
   edit_.ClearSnapshot();
   ContinueToTarget(recovery.element_id, recovery.image_id, recovery.is_switch);
   outcome.completed_synchronously = true;
-  outcome.message                  = "Discarded and switched image";
+  outcome.message                 = "Discarded and switched image";
   NotifyCompletion(true, false, "Discarded and switched image", recovery.ticket);
   return outcome;
 }
 
 void EditorSessionNavigationController::CancelPendingNavigation() {
-  std::scoped_lock lock(mutex_);
-  pending_recovery_.reset();
+  AssertOwnerThread();
+  state_->pending_recovery.reset();
+  state_->pending_next_target.reset();
   if (lifecycle_.state() == EditorSessionState::RetainedImageFailure) {
     lifecycle_.ResumeInteractiveAfterFailure();
   }
@@ -807,19 +831,19 @@ void EditorSessionNavigationController::CancelPendingNavigation() {
 
 auto EditorSessionNavigationController::RequestCreateRootVersion(std::string display_name)
     -> NavigationOutcome {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   NavigationOutcome outcome;
   if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
     outcome.rejected = true;
     outcome.message  = "Cannot create Version while shutting down";
     return outcome;
   }
-  if (pending_action_.has_value()) {
+  if (state_->pending_action.has_value()) {
     outcome.rejected = true;
     outcome.message  = "Editor save checkpoint is in progress";
     return outcome;
   }
-  if (pending_recovery_.has_value()) {
+  if (state_->pending_recovery.has_value()) {
     outcome.rejected = true;
     outcome.message  = "Resolve the failed editor save before creating a Version";
     return outcome;
@@ -836,58 +860,54 @@ auto EditorSessionNavigationController::RequestCreateRootVersion(std::string dis
     return outcome;
   }
   PendingEditorAction pending;
-  pending.kind         = PendingEditorActionKind::CreateRootVersionAndCheckout;
-  pending.element_id   = current_identity.element_id;
-  pending.image_id     = current_identity.image_id;
-  pending.persist      = true;
-  pending.display_name = std::move(display_name);
-  pending_action_      = pending;
-  const auto ticket    = SealAndStartSave(true, true);
+  pending.kind           = PendingEditorActionKind::CreateRootVersionAndCheckout;
+  pending.element_id     = current_identity.element_id;
+  pending.image_id       = current_identity.image_id;
+  pending.persist        = true;
+  pending.display_name   = std::move(display_name);
+  state_->pending_action = pending;
+  const auto ticket      = SealAndStartSave(true, true);
   if (!ticket.valid()) {
-    const auto failed_pending = pending_action_.value_or(pending);
-    pending_action_.reset();
+    const auto failed_pending = state_->pending_action.value_or(pending);
+    state_->pending_action.reset();
     RetainPendingFailure(failed_pending,
                          "Failed to save current image before root Version creation");
     outcome.failed  = true;
     outcome.message = lifecycle_.last_error();
     return outcome;
   }
-  if (pending_recovery_.has_value()) {
+  if (state_->pending_recovery.has_value()) {
     outcome.failed  = true;
     outcome.message = lifecycle_.last_error();
     return outcome;
   }
-  if (!pending_action_.has_value()) {
-    outcome.ticket                    = ticket;
-    outcome.sealed_session_generation = current_identity.session_generation;
-    outcome.completed_synchronously   = true;
-    outcome.message                   = "Created root Version";
-    return outcome;
-  }
-  pending_action_->ticket           = ticket;
+  // The save completion is delivered through the command queue and never runs
+  // inline inside SealAndStartSave, so pending_action stays set until the
+  // posted completion reduces it on the owner thread.
+  state_->pending_action->ticket    = ticket;
   outcome.ticket                    = ticket;
   outcome.sealed_session_generation = current_identity.session_generation;
   outcome.waiting_for_checkpoint    = true;
-  outcome.message = "Waiting for save checkpoint before root Version creation";
+  outcome.message                   = "Waiting for save checkpoint before root Version creation";
   return outcome;
 }
 
 auto EditorSessionNavigationController::RequestBranchFromCommit(const commit_hash_t& commit_id,
-                                                                 std::string display_name)
+                                                                std::string          display_name)
     -> NavigationOutcome {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   NavigationOutcome outcome;
   if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
     outcome.rejected = true;
     outcome.message  = "Cannot branch while shutting down";
     return outcome;
   }
-  if (pending_action_.has_value()) {
+  if (state_->pending_action.has_value()) {
     outcome.rejected = true;
     outcome.message  = "Editor save checkpoint is in progress";
     return outcome;
   }
-  if (pending_recovery_.has_value()) {
+  if (state_->pending_recovery.has_value()) {
     outcome.rejected = true;
     outcome.message  = "Resolve the failed editor save before creating a branch";
     return outcome;
@@ -904,40 +924,35 @@ auto EditorSessionNavigationController::RequestBranchFromCommit(const commit_has
     return outcome;
   }
   PendingEditorAction pending;
-  pending.kind          = PendingEditorActionKind::BranchFromCommitAndCheckout;
-  pending.element_id    = current_identity.element_id;
-  pending.image_id      = current_identity.image_id;
-  pending.persist       = true;
-  pending.branch_commit = commit_id;
-  pending.display_name  = std::move(display_name);
-  pending_action_       = pending;
-  const auto ticket     = SealAndStartSave(true, true);
+  pending.kind           = PendingEditorActionKind::BranchFromCommitAndCheckout;
+  pending.element_id     = current_identity.element_id;
+  pending.image_id       = current_identity.image_id;
+  pending.persist        = true;
+  pending.branch_commit  = commit_id;
+  pending.display_name   = std::move(display_name);
+  state_->pending_action = pending;
+  const auto ticket      = SealAndStartSave(true, true);
   if (!ticket.valid()) {
-    const auto failed_pending = pending_action_.value_or(pending);
-    pending_action_.reset();
-    RetainPendingFailure(failed_pending,
-                         "Failed to save current image before branch creation");
+    const auto failed_pending = state_->pending_action.value_or(pending);
+    state_->pending_action.reset();
+    RetainPendingFailure(failed_pending, "Failed to save current image before branch creation");
     outcome.failed  = true;
     outcome.message = lifecycle_.last_error();
     return outcome;
   }
-  if (pending_recovery_.has_value()) {
+  if (state_->pending_recovery.has_value()) {
     outcome.failed  = true;
     outcome.message = lifecycle_.last_error();
     return outcome;
   }
-  if (!pending_action_.has_value()) {
-    outcome.ticket                    = ticket;
-    outcome.sealed_session_generation = current_identity.session_generation;
-    outcome.completed_synchronously   = true;
-    outcome.message                   = "Branched from commit";
-    return outcome;
-  }
-  pending_action_->ticket           = ticket;
+  // The save completion is delivered through the command queue and never runs
+  // inline inside SealAndStartSave, so pending_action stays set until the
+  // posted completion reduces it on the owner thread.
+  state_->pending_action->ticket    = ticket;
   outcome.ticket                    = ticket;
   outcome.sealed_session_generation = current_identity.session_generation;
   outcome.waiting_for_checkpoint    = true;
-  outcome.message = "Waiting for save checkpoint before branch creation";
+  outcome.message                   = "Waiting for save checkpoint before branch creation";
   return outcome;
 }
 

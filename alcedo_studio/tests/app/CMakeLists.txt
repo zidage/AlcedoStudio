@@ -87,9 +87,12 @@ gtest_discover_tests(EditHistoryMgmtServiceTest TEST_PREFIX "EditHistoryMgmtServ
 alcedo_register_test_target(EditHistoryMgmtServiceTest app ci_core)
 
 # Phase 5A: application-layer editor session + render coordinator (no GPU/QML).
+# EditorSessionCommandQueue is linked explicitly because the service's public
+# header exposes the queue types while linking the queue library privately.
 add_executable(EditorRenderCoordinatorTest ${ALCEDO_TEST_ROOT}/app/editor_render_coordinator_test.cpp)
 target_include_directories(EditorRenderCoordinatorTest PUBLIC ${ALCEDO_INCLUDE_DIR})
-target_link_libraries(EditorRenderCoordinatorTest EditorSessionService GTest::gtest_main)
+target_link_libraries(EditorRenderCoordinatorTest
+  EditorSessionService EditorSessionCommandQueue GTest::gtest_main)
 gtest_discover_tests(EditorRenderCoordinatorTest TEST_PREFIX "EditorRenderCoordinatorTest."
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(EditorRenderCoordinatorTest app ci_core)
@@ -172,7 +175,7 @@ add_executable(EditorSessionRenderControllerTest ${ALCEDO_TEST_ROOT}/app/editor_
 target_include_directories(EditorSessionRenderControllerTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorSessionRenderControllerTest
     EditorSessionRenderController EditorSessionLifecycle EditorSessionService
-    GTest::gtest_main)
+    EditorSessionCommandQueue GTest::gtest_main)
 gtest_discover_tests(EditorSessionRenderControllerTest
     TEST_PREFIX "EditorSessionRenderControllerTest."
     PROPERTIES LABELS "ci_core_flow;editor_session")

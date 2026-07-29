@@ -73,33 +73,36 @@ struct EditorSessionIdentity {
 };
 
 struct EditorSessionIntent {
-  EditorSessionIntentKind        kind       = EditorSessionIntentKind::Open;
-  sl_element_id_t                element_id = 0;
-  image_id_t                     image_id   = 0;
+  EditorSessionIntentKind             kind       = EditorSessionIntentKind::Open;
+  sl_element_id_t                     element_id = 0;
+  image_id_t                          image_id   = 0;
   /// Full adjustment patch for Patch / CommitAdjustment (field + params).
-  EditorAdjustmentPatch          patch{};
+  EditorAdjustmentPatch               patch{};
   /// Optional full snapshot when the producer already has one.
-  EditorRenderAdjustmentSnapshot adjustment{};
+  EditorRenderAdjustmentSnapshot      adjustment{};
   /// ViewChange reason (zoom/pan/resize/crop-rotation/ROI). Ignored for other
   /// intent kinds. Phase 5D.
-  EditorRenderReason             view_reason = EditorRenderReason::ZoomPan;
+  EditorRenderReason                  view_reason = EditorRenderReason::ZoomPan;
   /// ViewChange requested region (the visible viewport ROI). Attached to the
   /// render intent for DetailRefresh so the request carries its requested
   /// region (Phase 5D D5). Nullopt for full-frame view changes.
   std::optional<ViewportRenderRegion> view_region{std::nullopt};
   /// Optional human-readable failure/context payload for tests and diagnostics.
-  std::string                    note{};
+  std::string                         note{};
   /// Close persists by default. False means discard the current unflushed edit.
-  bool                           persist_changes = true;
+  bool                                persist_changes = true;
 
   /// Convenience: field key only (maps into patch.field_key).
-  [[nodiscard]] auto             patch_key() const -> const std::string& { return patch.field_key; }
+  [[nodiscard]] auto patch_key() const -> const std::string& { return patch.field_key; }
 };
 
 struct EditorSessionResult {
   EditorSessionResultKind kind  = EditorSessionResultKind::Accepted;
   EditorSessionState      state = EditorSessionState::NoImage;
   EditorSessionIdentity   identity{};
+  /// Command that caused this result. Zero is reserved for uncorrelated
+  /// diagnostics and legacy callers.
+  std::uint64_t           operation_id      = 0;
   std::uint64_t           render_request_id = 0;
   /// Background task id for SaveStarted / SaveFinished pairing.
   std::uint64_t           task_id           = 0;
@@ -123,20 +126,20 @@ enum class HistoryOperationStage : std::uint8_t {
 /// discard. Stale completions are ignored by matching `operation_id` with the
 /// checkpoint `task_id` when both are known.
 struct HistoryOperationEvent {
-  std::uint64_t           operation_id      = 0;
+  std::uint64_t           operation_id = 0;
   /// Stable action key shared with QML (`createRootVersion`, `branchFromCommit`,
   /// `checkoutVersion`, `renameVersion`, `removeVersion`, `undo`, `redo`,
   /// `moveHeadToCommit`, `retrySave`, `discardAndContinue`,
   /// `cancelPendingNavigation`).
   std::string             action;
-  HistoryOperationStage   stage             = HistoryOperationStage::Requested;
-  bool                    terminal          = false;
-  EditorSessionResultKind result_kind       = EditorSessionResultKind::Accepted;
-  EditorSessionState      state             = EditorSessionState::NoImage;
-  sl_element_id_t         element_id        = 0;
-  image_id_t              image_id          = 0;
+  HistoryOperationStage   stage              = HistoryOperationStage::Requested;
+  bool                    terminal           = false;
+  EditorSessionResultKind result_kind        = EditorSessionResultKind::Accepted;
+  EditorSessionState      state              = EditorSessionState::NoImage;
+  sl_element_id_t         element_id         = 0;
+  image_id_t              image_id           = 0;
   std::uint64_t           checkpoint_task_id = 0;
-  std::uint64_t           render_request_id = 0;
+  std::uint64_t           render_request_id  = 0;
   /// Selected Version / commit hex identity when the action carries one.
   std::string             selected_id;
   std::string             message;

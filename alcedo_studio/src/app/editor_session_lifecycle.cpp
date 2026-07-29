@@ -9,12 +9,12 @@
 namespace alcedo {
 
 EditorSessionLifecycle::EditorSessionLifecycle(Dependencies dependencies)
-    : deps_(std::move(dependencies)) {}
+    : deps_(std::move(dependencies)), owner_thread_(std::this_thread::get_id()) {}
 
 auto EditorSessionLifecycle::BeginAcquire(sl_element_id_t element_id, image_id_t image_id,
                                           bool is_switch, IEditorCheckpointStore* checkpoint_store,
                                           std::string* error) -> bool {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   ++identity_.session_generation;
   identity_.element_id        = element_id;
   identity_.image_id          = image_id;
@@ -42,7 +42,7 @@ auto EditorSessionLifecycle::BeginAcquire(sl_element_id_t element_id, image_id_t
 }
 
 auto EditorSessionLifecycle::AcquireGuards(std::string* error) -> bool {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   if (!deps_.pipeline || !deps_.history) {
     if (error) {
       *error = "Pipeline or history port is missing";
@@ -69,13 +69,13 @@ auto EditorSessionLifecycle::AcquireGuards(std::string* error) -> bool {
 }
 
 auto EditorSessionLifecycle::MarkImageReady() -> EditorSessionIdentity {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   state_ = EditorSessionState::Loading;
   return identity_;
 }
 
 void EditorSessionLifecycle::KeepCurrentAfterCheckpointFailure(std::string message) {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   // Phase 7A repair: keep the image visible. RetainedImageFailure preserves
   // identity, guards, and the last presented frame so the viewport does not
   // fall back to the empty-editor placeholder. Recovery actions (Retry Save,
@@ -85,8 +85,8 @@ void EditorSessionLifecycle::KeepCurrentAfterCheckpointFailure(std::string messa
 }
 
 auto EditorSessionLifecycle::ReleaseAfterCheckpoint() -> ReleaseOutcome {
-  std::scoped_lock lock(mutex_);
-  ReleaseOutcome   outcome;
+  AssertOwnerThread();
+  ReleaseOutcome outcome;
   outcome.identity = identity_;
   if (deps_.history && history_guard_.valid) {
     deps_.history->Release(history_guard_);
@@ -101,7 +101,7 @@ auto EditorSessionLifecycle::ReleaseAfterCheckpoint() -> ReleaseOutcome {
 }
 
 void EditorSessionLifecycle::ReleaseGuards() {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   if (deps_.history && history_guard_.valid) {
     deps_.history->Release(history_guard_);
   }
@@ -113,7 +113,7 @@ void EditorSessionLifecycle::ReleaseGuards() {
 }
 
 void EditorSessionLifecycle::CompleteClose() {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   identity_.element_id        = 0;
   identity_.image_id          = 0;
   identity_.render_generation = 0;
@@ -122,7 +122,7 @@ void EditorSessionLifecycle::CompleteClose() {
 }
 
 void EditorSessionLifecycle::BeginShutdown() {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   identity_.element_id        = 0;
   identity_.image_id          = 0;
   identity_.render_generation = 0;
@@ -131,7 +131,7 @@ void EditorSessionLifecycle::BeginShutdown() {
 }
 
 auto EditorSessionLifecycle::MarkFirstFramePresented() -> std::optional<EditorSessionIdentity> {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   if (state_ != EditorSessionState::Loading && state_ != EditorSessionState::Acquiring &&
       state_ != EditorSessionState::Switching) {
     return std::nullopt;
@@ -141,24 +141,24 @@ auto EditorSessionLifecycle::MarkFirstFramePresented() -> std::optional<EditorSe
 }
 
 void EditorSessionLifecycle::BeginRetryFromDiscard() {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   state_ = EditorSessionState::Loading;
 }
 
 void EditorSessionLifecycle::BeginCheckpoint() {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   state_ = EditorSessionState::Saving;
 }
 
 void EditorSessionLifecycle::CompleteCheckpoint() {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   if (state_ == EditorSessionState::Saving) {
     state_ = EditorSessionState::Interactive;
   }
 }
 
 void EditorSessionLifecycle::ResumeInteractiveAfterFailure() {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   if (state_ == EditorSessionState::RetainedImageFailure) {
     state_ = EditorSessionState::Interactive;
     last_error_.clear();
@@ -166,59 +166,59 @@ void EditorSessionLifecycle::ResumeInteractiveAfterFailure() {
 }
 
 void EditorSessionLifecycle::Fail(std::string message) {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   state_      = EditorSessionState::Failed;
   last_error_ = std::move(message);
 }
 
 auto EditorSessionLifecycle::state() const -> EditorSessionState {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   return state_;
 }
 
 auto EditorSessionLifecycle::identity() const -> EditorSessionIdentity {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   return identity_;
 }
 
 auto EditorSessionLifecycle::has_image() const -> bool {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   return identity_.element_id > 0 && identity_.image_id > 0 && EditorSessionHasImage(state_);
 }
 
 auto EditorSessionLifecycle::active() const -> bool {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   return state_ != EditorSessionState::NoImage && state_ != EditorSessionState::ShuttingDown;
 }
 
 auto EditorSessionLifecycle::last_error() const -> std::string {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   return last_error_;
 }
 
 auto EditorSessionLifecycle::history_guard() const -> EditorHistoryGuardHandle {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   return history_guard_;
 }
 
 auto EditorSessionLifecycle::has_history_guard() const -> bool {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   return history_guard_.valid;
 }
 
 auto EditorSessionLifecycle::AdvanceRenderGeneration() -> std::uint64_t {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   return ++identity_.render_generation;
 }
 
 auto EditorSessionLifecycle::AdvanceViewGeneration() -> std::uint64_t {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   return ++identity_.view_generation;
 }
 
 auto EditorSessionLifecycle::MatchesIdentity(sl_element_id_t element_id, image_id_t image_id,
                                              std::uint64_t session_generation) const -> bool {
-  std::scoped_lock lock(mutex_);
+  AssertOwnerThread();
   return identity_.element_id == element_id && identity_.image_id == image_id &&
          identity_.session_generation == session_generation;
 }

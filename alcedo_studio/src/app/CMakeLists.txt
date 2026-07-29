@@ -218,11 +218,18 @@ def_library(EditorSaveCheckpointCoordinator
     SOURCES "${ALCEDO_APP_ROOT}/editor_save_checkpoint_coordinator.cpp"
 )
 
+def_library(EditorSessionCommandQueue
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_session_command_queue.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_session_command_queue.hpp"
+    PUBLIC_DEPS xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS}
+)
+
 def_library(EditorSaveCheckpointService
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_save_checkpoint_service.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_save_checkpoint_service.hpp"
-    PUBLIC_DEPS EditorSaveCheckpointCoordinator xxHash
+    PUBLIC_DEPS EditorSaveCheckpointCoordinator EditorSessionCommandQueue xxHash
 )
 
 def_library(EditorSessionLifecycle
@@ -304,7 +311,7 @@ def_library(EditorSessionService
     PRIVATE_DEPS xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS}
                  EditHistory EditorMiniGitMaterializer EditorSaveCheckpointService EditorSessionLifecycle
                  EditorSessionNavigationController EditorSessionRenderController
-                 EditorSessionEditController
+                 EditorSessionEditController EditorSessionCommandQueue
 )
 
 def_library(ImportService

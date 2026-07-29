@@ -2,7 +2,9 @@
 
 Date: 2026-07-29
 
-Status: proposed. CQ0 complete — deterministic failing evidence captured; CQ1 unblocked.
+Status: in progress. CQ0 complete — deterministic failing evidence captured. CQ1 complete —
+single-thread command queue owns all session mutation; the CQ0 failing suite is now the 12-test
+CQ1 acceptance suite. CQ2 unblocked.
 
 Primary owner: Alcedo Studio editor session and history architecture.
 
@@ -394,7 +396,8 @@ Regression check: `EditorSessionNavigationControllerTest` 23/23, `EditorSessionE
 
 ## Phase CQ1 — Introduce the single-thread command queue
 
-Status: ready (CQ0 failing evidence captured).
+Status: complete — queue owns session mutation; 12/12 acceptance tests and all pre-existing
+session suites pass.
 
 ### Purpose
 
@@ -456,6 +459,139 @@ SelectImage(B)
 - direct controller-to-navigation and controller-to-edit mutation calls are removed;
 - navigation no longer examines whether a completion happened synchronously;
 - production and tests use the same queue reducer.
+
+##### Phase CQ1 completion record (2026-07-29)
+
+**Status:** complete — `EditorSessionCommandQueue` is the sole owner of session mutation; no
+completion runs session code on a service-start stack; navigation/lifecycle recursive mutexes are
+gone; dirty-journal Paste/Merge flush before creating the Version/merge commit.
+
+**What was built (CQ0 partial → CQ1 finished):**
+
+- `EditorSessionCommandQueue` (`app/editor_session_command_queue.{hpp,cpp}`): typed
+  `EditorSessionCommand` / `EditorSessionCompletion` / `EditorSessionOperationId`, the
+  `IEditorSessionCommandExecutor` delivery port, `EditorSessionManualCommandExecutor` for tests,
+  a serialized `EnqueueAndDrain` loop that executes tasks outside its mutex, `PostCompletion`
+  (never inline, even from the owner thread), and `BeginShutdown`/`Stop` admission gating. A
+  nested submission is retained until the active reduction returns.
+- All 25 facade mutations (`Open`/`Switch`/`Close`/`Shutdown`/preview/commit/Undo/Redo/
+  MoveHead/Discard/Version ops/Paste/BeginMerge/CompleteMerge/CancelMerge/Retry/Discard-and-
+  Continue/Cancel/ViewChange) route through `SubmitCommand`; the queue stamps a monotonic command
+  ID; reductions batch observer delivery into one change notification per reduction
+  (`BeginPublication`/`EndPublication`).
+- Completion delivery is typed and posted everywhere:
+  `EditorSaveCheckpointService::DeliverCompletion` posts via the injected command executor;
+  render events and `NotifyImageAcquired` post `RenderResult`/`ImageStateLoaded`; navigation
+  completion posts `NavigationFinished`; history save checkpoints post the new
+  `SaveCheckpointFinished`. The synchronous `completed->has_value()` branch was deleted.
+- `pending_action_`, `pending_recovery_` moved into queue-owned `EditorSessionNavigationState`
+  along with the new `pending_next_target`; navigation and lifecycle `std::recursive_mutex`
+  members were replaced by owner-thread assertions.
+- A rapid second `SelectImage` queues behind the running save (`pending_next_target`) and is
+  promoted by `PromoteQueuedSwitchTarget` only after the running save completes and the prior
+  image is acquired; it cannot change the running target's save identity, and a failed running
+  save drops the queued selection.
+- Dirty current image: `QueueFlushBeforeTransfer` retains `PendingTransferAfterSave` (Paste or
+  CompleteMerge inputs, typed data only), starts one journal-flush checkpoint, and
+  `HandleSaveCheckpointCompletion` resumes the retained transfer on the clean journal after
+  `DiscardMaterializedJournalThrough` + `SyncMaterializedStateAfterCheckpoint`.
+- Stale completions are ignored: navigation correlates by ticket request ID + session generation
+  + operation ID; history checkpoints correlate by session generation. Checkpoints cancelled by
+  `Shutdown` publish one terminal cancellation while the session stays `ShuttingDown`
+  (the queue stops admitting user commands but still reduces posted completions).
+- Production wiring: `ApplicationModuleHost` supplies `QtEditorSessionCommandExecutor`
+  (`QMetaObject::invokeMethod(..., Qt::QueuedConnection)` onto the host's QObject, QPointer
+  guarded); `EditorSessionRuntime::CreateWithPorts` defaults to the manual executor for tests.
+- `EditorSessionResult` is preserved for migration and now carries `operation_id`; render
+  intents/commands and save requests/results carry `operation_id` end to end.
+
+**Primary success call chain (SelectImage A->B, save in flight):**
+
+```text
+QML -> EditorSessionController -> EditorSessionService::Switch
+  -> SubmitCommand(SelectImage, cmd N) -> queue stamps ID, reduces on owner thread
+  -> NavigationController::RequestOpenOrSwitch (owner-thread assert)
+  -> SealAndStartSave -> SaveCheckpointService::Start (save for A, operation N)
+  -> facade publishes SaveStarted; command returns
+worker: journal commit -> materialize -> SaveCheckpointService::FinishSave
+  -> DeliverCompletion posts typed completion to the queue (never inline)
+queue: OnCheckpointFinished (request/generation/operation correlated)
+  -> ReleaseAfterCheckpoint(A) -> ContinueToTarget(B) -> RouteInitialRender(B)
+  -> NavigationFinished completion posted
+queue: publishes one RenderRouted terminal (cmd N)
+  -> first-frame completions (RenderResult) -> Interactive for B, one terminal total
+```
+
+**Primary failure call chain (save checkpoint fails mid-switch):**
+
+```text
+worker failure -> posted JournalCommitFinished/MaterializationFinished(success=false)
+queue: OnCheckpointFinished -> correlation passes -> pending_next_target dropped
+  -> RetainPendingFailure -> lifecycle RetainedImageFailure (image A kept visible)
+  -> NavigationFinished completion posted -> one Failed terminal (cmd N)
+user: RetrySave | DiscardAndContinue | CancelPendingNavigation commands re-drive or clear
+  the retained navigation through the same queue; recovery paths covered by navigation tests
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| All 10 CQ0 failing-evidence names (order, stale guards, render-lock, inline completion, single revision, single terminal) | `EditorSessionCommandQueueBaselineTest` | PASS 10/10 |
+| `ImmediateAndDelayedCompletionProduceTheSameSnapshotSequence` (required: immediate == delayed snapshot sequence) | `EditorSessionCommandQueueBaselineTest` | PASS |
+| `ShutdownDuringHistoryCheckpointStaysShuttingDownAndPublishesOneCancellation` (required: shutdown rejects later commands, one terminal per accepted command) | `EditorSessionCommandQueueBaselineTest` | PASS |
+| A->B, A->B->C (rapid selection promoted after running save) | `RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection` | PASS |
+| Save failure, Retry, Discard and Continue, Cancel sequences | `EditorSessionNavigationControllerTest` (fixture drives the queue executor + `Drain()`) | PASS 23/23 |
+| Lifecycle / edit / facade / save + coordinator / render / controller regressions | `EditorSessionLifecycleTest` 18, `EditorSessionEditControllerTest` 8, `EditorSessionServiceFacadeTest` 4, `EditorSaveCheckpointServiceTest` 14, `EditorSaveCheckpointCoordinatorTest` 3, `EditorRenderCoordinatorTest` 29, `EditorSessionRenderControllerTest` 12, `EditorSessionControllerPhase5ATest` 37, `AdjustmentTransferServiceMiniGitTest` 13 | PASS 142/142 |
+| Production port adapters (history, checkpoint store, journal writer, pipeline, task, scheduler, thumbnails) and host boot with the Qt executor | 7 UI port suites + `ApplicationModuleHostLifecycleTest` | PASS 39/39 |
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target <targets> --parallel 4`;
+binaries run directly from `build/debug/alcedo_studio/tests/{app,ui}/<Name>_runtime/` (ctest
+discovery fails on the pre-existing QML-shell environment issue, so suites were executed
+directly). Suite totals: **212/212 PASS across 19 suites** (CQ1 acceptance 12/12 included).
+
+**Checklist / exit condition:** all four exit criteria met — every facade mutation is stamped
+with a queue command ID (results, render commands, save requests carry it through the worker
+boundary); no controller-to-navigation or controller-to-edit direct mutation path remains (the
+facade reducer is the only caller); the navigation "was the completion synchronous?" branches
+are deleted (`completed_synchronously` now only means no prior image, same-image no-op, or a
+discard-and-continue path); tests (manual executor) and production (Qt queued executor) run the
+same `SubmitCommand` reducer and the same `PostCompletion` drain. Required-lock result: no
+recursive mutex in navigation or lifecycle (owner-thread asserts); no callback runs session code
+before a start method returns (all completions posted); the queue never holds its mutex while
+dispatching worker requests or publishing observer events; lifecycle mutation is reachable only
+from queue reduction.
+
+**LOC note (grill-code-review):** new production `editor_session_command_queue.{hpp,cpp}` = 339
+LOC. `editor_session_navigation_controller.{hpp,cpp}` = 1105 (was 1277 pre-CQ1: recursive-mutex
+scopes and synchronous branches removed). `editor_session_service.{hpp,cpp}` = 1814, with the
+cpp at 1369 LOC — above the ~1000-LOC split threshold. The file is a single-reason facade
+(command routing + one batching publication + typed completion handlers over five collaborators
+and queue-owned pending state); splitting it in CQ1 would require exporting that shared queue
+state into a context bag, so the responsibility-based split is deferred to CQ4 where the unified
+durable-publication path is the natural seam. `clang-format -i` was applied to the 23 changed
+files per the repo `format` target, which also reflowed adjacent pre-existing lines (alignment
+churn inside the diff, no semantic change). Tests: acceptance suite 471 LOC, harness 270 LOC.
+
+**Residual gaps / hand-off to CQ2-CQ5:**
+
+- `SetPresentationSinkId` / `SetPresentationSize` / geometry overlay still call the render
+  controller directly (guarded by the render controller's own mutex; command kinds are reserved
+  in `EditorSessionCommandKind`). Normalize into queue commands in CQ5.
+- `EditorSessionRenderController` keeps its recursive mutex around scheduler-local state per the
+  disposition table; CQ2 narrows worker-side synchronization.
+- A standalone `EditorSaveCheckpointService` built without a command executor (only its legacy
+  unit tests) still delivers completions inline; the production session always injects the
+  executor.
+- `EditorSessionEditController`'s mutation mutex and history working-state mutex remain for CQ2
+  (per the disposition table) — Undo/Redo/head-move still reach the live executor through the
+  history port on the command thread; the baseline render-lock tests pass because the fake port
+  gate is never held by real CQ1 command reductions (production proof lands with CQ2).
+- QML-shell/GPU integration suites (`WorkspaceShellTest`, `EditorCheckpointNavigationTest`,
+  `EditorAdjustmentTransferRealProjectE2eTest`) cannot execute in this headless environment:
+  even `--gtest_list_tests` exits 3/hangs. Verified pre-existing (the stale pre-CQ1 binary
+  failed identically before these sources changed). Production qualification of the Qt executor
+  path is part of the CQ5 qualification sequence.
 
 ## Phase CQ2 — Remove GUI render-lock waits and narrow history ownership
 
@@ -752,7 +888,7 @@ cannot be safe while history correctness still depends on the live render execut
 ## Completion checklist
 
 - [x] CQ0 records deterministic failing evidence.
-- [ ] CQ1 serializes all session mutations and removes inline completion re-entry.
+- [x] CQ1 serializes all session mutations and removes inline completion re-entry.
 - [ ] CQ2 removes command-thread render-lock waits.
 - [ ] CQ3 publishes one session snapshot and one editor action source.
 - [ ] CQ4 gives Paste and Merge one durable publication path.

@@ -13,8 +13,8 @@ namespace {
 
 class EditorSessionNavigationControllerTest : public ::testing::Test {
  protected:
-  void SetUp() override { fixture_.SetUp(); }
-  void TearDown() override { fixture_.TearDown(); }
+  void                                 SetUp() override { fixture_.SetUp(); }
+  void                                 TearDown() override { fixture_.TearDown(); }
 
   test::EditorSessionNavigationFixture fixture_;
 };
@@ -92,10 +92,10 @@ TEST_F(EditorSessionNavigationControllerTest, CheckpointFailureKeepsAAndNeverAcq
 TEST_F(EditorSessionNavigationControllerTest,
        CheckoutVersionSavesFirstThenRebuildsWithoutReleasingImage) {
   fixture_.OpenA();
-  const auto target_version = Hash128{0xabcdef01ULL, 0x23456789ULL};
+  const auto target_version   = Hash128{0xabcdef01ULL, 0x23456789ULL};
   const auto prior_render_gen = fixture_.lifecycle().identity().render_generation;
 
-  const auto result = fixture_.RequestCheckoutVersion(target_version);
+  const auto result           = fixture_.RequestCheckoutVersion(target_version);
   EXPECT_TRUE(result.waiting_for_checkpoint);
   EXPECT_TRUE(fixture_.nav().has_pending_action());
   EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "checkout_version"), 0);
@@ -125,7 +125,7 @@ TEST_F(EditorSessionNavigationControllerTest,
   fixture_.history().fail_checkout = true;
   const auto target_version        = Hash128{0x11111111ULL, 0x22222222ULL};
 
-  const auto result = fixture_.RequestCheckoutVersion(target_version);
+  const auto result                = fixture_.RequestCheckoutVersion(target_version);
   EXPECT_TRUE(result.waiting_for_checkpoint);
   fixture_.CompleteCheckpoint();
 
@@ -194,7 +194,7 @@ TEST_F(EditorSessionNavigationControllerTest,
   fixture_.OpenA();
   fixture_.journal().async_commit               = true;
   fixture_.checkpoint_store().async_materialize = true;
-  const auto prior_render_gen = fixture_.lifecycle().identity().render_generation;
+  const auto prior_render_gen                   = fixture_.lifecycle().identity().render_generation;
 
   const auto result = fixture_.nav().RequestCreateRootVersion("Root Look");
   ASSERT_TRUE(result.waiting_for_checkpoint);
@@ -211,8 +211,8 @@ TEST_F(EditorSessionNavigationControllerTest,
   EditorAdjustmentPatch patch;
   patch.field_key = "exposure";
   std::string error;
-  ASSERT_TRUE(fixture_.history().CommitAdjustment(fixture_.lifecycle().history_guard(), patch,
-                                                  &error))
+  ASSERT_TRUE(
+      fixture_.history().CommitAdjustment(fixture_.lifecycle().history_guard(), patch, &error))
       << error;
   EXPECT_EQ(fixture_.history().last_commit_version, fixture_.history().last_root_version);
 }
@@ -222,7 +222,7 @@ TEST_F(EditorSessionNavigationControllerTest,
   fixture_.OpenA();
   fixture_.journal().async_commit               = true;
   fixture_.checkpoint_store().async_materialize = true;
-  const auto target_commit = commit_hash_t{0x12345678ULL, 0x90abcdefULL};
+  const auto target_commit                      = commit_hash_t{0x12345678ULL, 0x90abcdefULL};
 
   const auto result = fixture_.nav().RequestBranchFromCommit(target_commit, "Branch Look");
   ASSERT_TRUE(result.waiting_for_checkpoint);
@@ -239,11 +239,11 @@ TEST_F(EditorSessionNavigationControllerTest,
 TEST_F(EditorSessionNavigationControllerTest,
        CreateOrBranchFailureRestoresPriorRefPipelineSnapshotAndFrame) {
   fixture_.OpenA();
-  const auto prior_identity = fixture_.lifecycle().identity();
-  const auto prior_version  = fixture_.history().active_version_id;
-  fixture_.history().fail_root_version            = true;
-  fixture_.journal().async_commit                 = true;
-  fixture_.checkpoint_store().async_materialize   = true;
+  const auto prior_identity                     = fixture_.lifecycle().identity();
+  const auto prior_version                      = fixture_.history().active_version_id;
+  fixture_.history().fail_root_version          = true;
+  fixture_.journal().async_commit               = true;
+  fixture_.checkpoint_store().async_materialize = true;
 
   ASSERT_TRUE(fixture_.nav().RequestCreateRootVersion("Broken Root").waiting_for_checkpoint);
   fixture_.CompleteCheckpoint();
@@ -252,17 +252,17 @@ TEST_F(EditorSessionNavigationControllerTest,
   EXPECT_TRUE(fixture_.nav().has_pending_recovery());
   EXPECT_EQ(fixture_.lifecycle().identity().element_id, prior_identity.element_id);
   EXPECT_EQ(fixture_.lifecycle().identity().image_id, prior_identity.image_id);
-  EXPECT_EQ(fixture_.lifecycle().identity().session_generation,
-            prior_identity.session_generation);
+  EXPECT_EQ(fixture_.lifecycle().identity().session_generation, prior_identity.session_generation);
   EXPECT_EQ(fixture_.history().active_version_id, prior_version);
   EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "release_a"), 0);
 
   fixture_.nav().CancelPendingNavigation();
-  fixture_.history().fail_root_version = false;
+  fixture_.history().fail_root_version   = false;
   fixture_.history().fail_branch_version = true;
-  const auto target_commit = commit_hash_t{0x22222222ULL, 0x33333333ULL};
-  ASSERT_TRUE(
-      fixture_.nav().RequestBranchFromCommit(target_commit, "Broken Branch").waiting_for_checkpoint);
+  const auto target_commit               = commit_hash_t{0x22222222ULL, 0x33333333ULL};
+  ASSERT_TRUE(fixture_.nav()
+                  .RequestBranchFromCommit(target_commit, "Broken Branch")
+                  .waiting_for_checkpoint);
   fixture_.CompleteCheckpoint();
 
   EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::RetainedImageFailure);
@@ -270,8 +270,7 @@ TEST_F(EditorSessionNavigationControllerTest,
   EXPECT_TRUE(fixture_.nav().has_pending_recovery());
   EXPECT_EQ(fixture_.lifecycle().identity().element_id, prior_identity.element_id);
   EXPECT_EQ(fixture_.lifecycle().identity().image_id, prior_identity.image_id);
-  EXPECT_EQ(fixture_.lifecycle().identity().session_generation,
-            prior_identity.session_generation);
+  EXPECT_EQ(fixture_.lifecycle().identity().session_generation, prior_identity.session_generation);
   EXPECT_EQ(fixture_.history().active_version_id, prior_version);
   EXPECT_EQ(fixture_.history().last_branch_commit, target_commit);
   EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "release_a"), 0);
@@ -284,9 +283,11 @@ TEST_F(EditorSessionNavigationControllerTest, SecondActionDoesNotReplaceOriginal
   EXPECT_TRUE(first.waiting_for_checkpoint);
   EXPECT_TRUE(fixture_.nav().has_pending_action());
 
+  // A rapid second SwitchImage queues behind the running switch; it does not
+  // replace B's running save target and is not rejected.
   const auto second = fixture_.nav().RequestOpenOrSwitch(5, 6, true);
-  EXPECT_TRUE(second.rejected);
-  EXPECT_EQ(second.message, "Editor save checkpoint is in progress");
+  EXPECT_FALSE(second.rejected);
+  EXPECT_TRUE(second.waiting_for_checkpoint);
   EXPECT_TRUE(fixture_.nav().has_pending_action());
 
   fixture_.CompleteCheckpoint();
@@ -332,18 +333,25 @@ TEST_F(EditorSessionNavigationControllerTest, SameImageIsNoop) {
   EXPECT_TRUE(result.same_image_noop);
 }
 
-TEST_F(EditorSessionNavigationControllerTest, SyncSaveSwitchCompletesImmediately) {
+TEST_F(EditorSessionNavigationControllerTest, SaveCompletionDeliversThroughQueueNotInline) {
   fixture_.OpenA();
-  const auto gen_a = fixture_.lifecycle().identity().session_generation;
+  const auto gen_a                = fixture_.lifecycle().identity().session_generation;
 
-  // Default journal path is synchronous when async_commit remains false.
-  fixture_.journal().async_commit               = false;
+  // Inline (synchronous) save ports: the completion must still be posted to
+  // the command executor and reduced only when Drain runs, never inline inside
+  // SealAndStartSave.
+  fixture_.journal().async_commit = false;
   fixture_.checkpoint_store().async_materialize = false;
-  const auto result = fixture_.nav().RequestOpenOrSwitch(
-      test::EditorSessionNavigationFixture::kElementB, test::EditorSessionNavigationFixture::kImageB,
-      true);
-  EXPECT_TRUE(result.completed_synchronously);
-  EXPECT_FALSE(result.waiting_for_checkpoint);
+  const auto result =
+      fixture_.nav().RequestOpenOrSwitch(test::EditorSessionNavigationFixture::kElementB,
+                                         test::EditorSessionNavigationFixture::kImageB, true);
+  EXPECT_TRUE(result.waiting_for_checkpoint);
+  EXPECT_TRUE(fixture_.nav().has_pending_action());
+  // The inline save finished durable work, but navigation has not acquired B.
+  EXPECT_EQ(fixture_.lifecycle().identity().element_id,
+            test::EditorSessionNavigationFixture::kElementA);
+
+  fixture_.Drain();
   EXPECT_FALSE(fixture_.nav().has_pending_action());
   EXPECT_TRUE(fixture_.lifecycle().has_image());
   EXPECT_EQ(fixture_.lifecycle().identity().element_id,
@@ -355,19 +363,20 @@ TEST_F(EditorSessionNavigationControllerTest, SyncSaveSwitchCompletesImmediately
   EXPECT_EQ(fixture_.history().acquire_count, 2);
 }
 
-TEST_F(EditorSessionNavigationControllerTest, SyncSaveFailureStaysOnA) {
+TEST_F(EditorSessionNavigationControllerTest, SaveFailureRetainsImageAfterQueuedCompletion) {
   fixture_.journal().fail_barrier = true;
   fixture_.OpenA();
-  const auto gen_a = fixture_.lifecycle().identity().session_generation;
+  const auto gen_a                = fixture_.lifecycle().identity().session_generation;
 
-  fixture_.journal().async_commit               = false;
+  fixture_.journal().async_commit = false;
   fixture_.checkpoint_store().async_materialize = false;
-  const auto result = fixture_.nav().RequestOpenOrSwitch(
-      test::EditorSessionNavigationFixture::kElementB, test::EditorSessionNavigationFixture::kImageB,
-      true);
-  EXPECT_TRUE(result.failed);
-  EXPECT_FALSE(result.completed_synchronously);
-  EXPECT_FALSE(result.waiting_for_checkpoint);
+  const auto result =
+      fixture_.nav().RequestOpenOrSwitch(test::EditorSessionNavigationFixture::kElementB,
+                                         test::EditorSessionNavigationFixture::kImageB, true);
+  EXPECT_TRUE(result.waiting_for_checkpoint);
+  EXPECT_TRUE(fixture_.nav().has_pending_action());
+
+  fixture_.Drain();
   EXPECT_FALSE(fixture_.nav().has_pending_action());
   EXPECT_EQ(fixture_.lifecycle().identity().session_generation, gen_a);
   EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::RetainedImageFailure);
@@ -375,13 +384,15 @@ TEST_F(EditorSessionNavigationControllerTest, SyncSaveFailureStaysOnA) {
   EXPECT_TRUE(fixture_.nav().has_pending_recovery());
 }
 
-TEST_F(EditorSessionNavigationControllerTest, SyncCloseCompletesImmediately) {
+TEST_F(EditorSessionNavigationControllerTest, CloseCompletionDeliversThroughQueueNotInline) {
   fixture_.OpenA();
   fixture_.journal().async_commit               = false;
   fixture_.checkpoint_store().async_materialize = false;
   const auto result                             = fixture_.nav().RequestClose(true);
-  EXPECT_TRUE(result.completed_synchronously);
-  EXPECT_FALSE(result.waiting_for_checkpoint);
+  EXPECT_TRUE(result.waiting_for_checkpoint);
+  EXPECT_TRUE(fixture_.nav().has_pending_action());
+
+  fixture_.Drain();
   EXPECT_FALSE(fixture_.nav().has_pending_action());
   EXPECT_TRUE(fixture_.lifecycle().state() == EditorSessionState::NoImage ||
               fixture_.lifecycle().state() == EditorSessionState::ShuttingDown);
@@ -439,7 +450,7 @@ TEST_F(EditorSessionNavigationControllerTest,
   EXPECT_EQ(fixture_.lifecycle().identity().element_id,
             test::EditorSessionNavigationFixture::kElementB);
   EXPECT_EQ(fixture_.tasks().end_count, ends_before + 1);
-  const auto b_generation = fixture_.lifecycle().identity().session_generation;
+  const auto           b_generation = fixture_.lifecycle().identity().session_generation;
 
   // Stale success for the completed request must not re-acquire or re-finish.
   SaveCheckpointResult stale;
@@ -461,12 +472,12 @@ TEST_F(EditorSessionNavigationControllerTest,
 TEST_F(EditorSessionNavigationControllerTest, CloseAndShutdownEachProduceOneTerminalResult) {
   // Close path: one terminal after commit+materialize.
   fixture_.OpenA();
-  int  close_terminals = 0;
-  bool close_ok        = false;
+  int  close_terminals                          = 0;
+  bool close_ok                                 = false;
   fixture_.journal().async_commit               = true;
   fixture_.checkpoint_store().async_materialize = true;
   // SealAndStartSave wires OnCheckpointFinished; count via task ends + lifecycle.
-  const auto close_outcome = fixture_.nav().RequestClose(true);
+  const auto close_outcome                      = fixture_.nav().RequestClose(true);
   ASSERT_TRUE(close_outcome.waiting_for_checkpoint);
   ASSERT_TRUE(close_outcome.ticket.valid());
   const int ends_before_close = fixture_.tasks().end_count;
@@ -484,14 +495,14 @@ TEST_F(EditorSessionNavigationControllerTest, CloseAndShutdownEachProduceOneTerm
   fixture_.OpenA();
   const auto switch_result = fixture_.RequestSwitchToB();
   ASSERT_TRUE(switch_result.waiting_for_checkpoint);
-  int cancel_terminals = 0;
-  bool cancel_completed = true;
+  int       cancel_terminals   = 0;
+  bool      cancel_completed   = true;
   // Replace is not possible; CancelAndWait invokes the navigation completion once.
   const int ends_before_cancel = fixture_.tasks().end_count;
   fixture_.save_service().CancelAndWait();
   EXPECT_EQ(fixture_.tasks().end_count, ends_before_cancel + 1);
-  cancel_terminals  = fixture_.tasks().end_count - ends_before_cancel;
-  cancel_completed  = fixture_.tasks().ended_success.back();
+  cancel_terminals = fixture_.tasks().end_count - ends_before_cancel;
+  cancel_completed = fixture_.tasks().ended_success.back();
   EXPECT_EQ(cancel_terminals, 1);
   EXPECT_FALSE(cancel_completed);
   // Late journal/materialize completions must not finish the task again.
@@ -507,7 +518,7 @@ TEST_F(EditorSessionNavigationControllerTest, CaptureFailureKeepsAAndNeverStarts
   fixture_.OpenA();
   fixture_.history().fail_capture = true;
 
-  const auto result = fixture_.RequestSwitchToB();
+  const auto result               = fixture_.RequestSwitchToB();
   EXPECT_TRUE(result.failed);
   EXPECT_FALSE(result.waiting_for_checkpoint);
   EXPECT_FALSE(fixture_.nav().has_pending_action());

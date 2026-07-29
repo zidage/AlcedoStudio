@@ -653,11 +653,18 @@ TEST(EditorSessionControllerPhase5ATest, RuntimeCoordinatorPresentationUpdatesCo
   const auto request_id = bootstrap_scheduler->scheduled().front().request_id;
 
   runtime->service->NotifyImageAcquired(runtime->service->identity().session_generation, true);
+  runtime->service->DrainCommandQueueForTests();
   EXPECT_EQ(controller.session_state(), EditorSessionState::Loading);
 
+  // Render completions arrive as posted messages on the session command
+  // queue; drain between stages so the complete->submit->present gate
+  // advances in order.
   runtime->coordinator->NotifySchedulerCompleted(request_id, true);
+  runtime->service->DrainCommandQueueForTests();
   runtime->coordinator->NotifyFrameSubmitted(request_id);
+  runtime->service->DrainCommandQueueForTests();
   runtime->coordinator->NotifyFramePresented(request_id);
+  runtime->service->DrainCommandQueueForTests();
 
   EXPECT_EQ(controller.session_state(), EditorSessionState::Interactive);
   EXPECT_EQ(controller.session_state_name(), QStringLiteral("Interactive"));

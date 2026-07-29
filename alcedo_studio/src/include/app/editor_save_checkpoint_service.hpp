@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "app/editor_save_checkpoint_coordinator.hpp"
+#include "app/editor_session_command_queue.hpp"
 #include "app/editor_session_ports.hpp"
 #include "type/type.hpp"
 
@@ -23,6 +24,7 @@ namespace alcedo {
 /// started them. A default-constructed ticket is invalid.
 struct CheckpointTicket {
   std::uint64_t      request_id         = 0;
+  std::uint64_t      operation_id       = 0;
   std::uint64_t      session_generation = 0;
   sl_element_id_t    element_id         = 0;
   std::uint64_t      task_id            = 0;
@@ -37,13 +39,14 @@ struct CheckpointTicket {
 /// EditorSaveCheckpointService::TryAcquireSaveLock before capture, moves that
 /// lock into this request, and Start owns it through the durable save work.
 struct SaveCheckpointRequest {
-  sl_element_id_t                                 element_id         = 0;
-  std::uint64_t                                   session_generation = 0;
-  std::shared_ptr<const EditorMiniGitSaveCapture> capture;
+  sl_element_id_t                                     element_id         = 0;
+  std::uint64_t                                       operation_id       = 0;
+  std::uint64_t                                       session_generation = 0;
+  std::shared_ptr<const EditorMiniGitSaveCapture>     capture;
   /// Inclusive last journal sequence from capture when the range is non-empty.
   /// Filled by the caller that built the capture so this service need not depend
   /// on the Mini-Git materializer type definition.
-  std::optional<std::uint64_t> last_journal_sequence;
+  std::optional<std::uint64_t>                        last_journal_sequence;
   /// Pre-acquired project-wide save lock (from TryAcquireSaveLock). When empty,
   /// Start attempts TryAcquire itself. Ownership moves into the service for the
   /// full journal / materialize / thumbnail / completion path.
@@ -55,11 +58,12 @@ struct SaveCheckpointRequest {
 /// durable and DuckDB materialization succeeded. The request_id matches the
 /// CheckpointTicket returned by Start so the caller can correlate.
 struct SaveCheckpointResult {
-  std::uint64_t request_id           = 0;
-  std::uint64_t session_generation   = 0;
-  std::uint64_t task_id              = 0;
-  bool          checkpoint_completed = false;
-  std::string   error;
+  std::uint64_t                request_id           = 0;
+  std::uint64_t                operation_id         = 0;
+  std::uint64_t                session_generation   = 0;
+  std::uint64_t                task_id              = 0;
+  bool                         checkpoint_completed = false;
+  std::string                  error;
   /// Inclusive last journal sequence materialized by this checkpoint when the
   /// capture had a non-empty range. Callers (navigation) use this to drop the
   /// matching live journal prefix so same-session captures stay consistent with
@@ -83,10 +87,11 @@ using SaveCheckpointCompletion = std::function<void(const SaveCheckpointResult&)
 class EditorSaveCheckpointService final {
  public:
   struct Dependencies {
-    std::shared_ptr<IEditorJournalPort>               journal;
-    std::shared_ptr<IEditorCheckpointStore>           checkpoint_store;
-    std::shared_ptr<IEditorThumbnailPort>             thumbnails;
-    std::shared_ptr<IEditorTaskPort>                  tasks;
+    std::shared_ptr<IEditorJournalPort>              journal;
+    std::shared_ptr<IEditorCheckpointStore>          checkpoint_store;
+    std::shared_ptr<IEditorThumbnailPort>            thumbnails;
+    std::shared_ptr<IEditorTaskPort>                 tasks;
+    std::shared_ptr<IEditorSessionCommandExecutor>   command_executor;
     /// Project-owned global save lock. Shared with EditorMiniGitMaterializer.
     std::shared_ptr<EditorSaveCheckpointCoordinator> save_coordinator;
   };
@@ -102,7 +107,7 @@ class EditorSaveCheckpointService final {
   /// subsequent Start share one ownership interval. Returns a lock whose
   /// owns_lock() is false when another checkpoint owns the lock or Shutdown
   /// has begun. The move-only lock is the ownership authority.
-  [[nodiscard]] auto TryAcquireSaveLock(sl_element_id_t element_id)
+  [[nodiscard]] auto           TryAcquireSaveLock(sl_element_id_t element_id)
       -> EditorSaveCheckpointCoordinator::SaveCheckpointLock;
 
   /// Begin one save checkpoint: start the background task, then commit the
@@ -143,31 +148,34 @@ class EditorSaveCheckpointService final {
   };
 
   struct PendingSave {
-    std::uint64_t                                         request_id         = 0;
-    std::uint64_t                                         session_generation = 0;
-    sl_element_id_t                                       element_id         = 0;
-    std::uint64_t                                         task_id            = 0;
-    std::shared_ptr<const EditorMiniGitSaveCapture>       capture;
-    std::optional<std::uint64_t>                          last_journal_sequence;
+    std::uint64_t                                       request_id         = 0;
+    std::uint64_t                                       operation_id       = 0;
+    std::uint64_t                                       session_generation = 0;
+    sl_element_id_t                                     element_id         = 0;
+    std::uint64_t                                       task_id            = 0;
+    std::shared_ptr<const EditorMiniGitSaveCapture>     capture;
+    std::optional<std::uint64_t>                        last_journal_sequence;
     /// Held through durable save work; released before terminal completion.
-    EditorSaveCheckpointCoordinator::SaveCheckpointLock   save_lock;
-    SaveCheckpointCompletion                              completion;
+    EditorSaveCheckpointCoordinator::SaveCheckpointLock save_lock;
+    SaveCheckpointCompletion                            completion;
   };
 
-  void HandleJournalCommit(std::uint64_t request_id, EditorJournalCommitOutcome outcome,
-                           SaveCheckpointCompletion completion);
-  void HandleMaterialization(std::uint64_t request_id, EditorMaterializeOutcome outcome,
-                             SaveCheckpointCompletion completion);
-  void FinishSave(std::uint64_t request_id, std::uint64_t session_generation, std::uint64_t task_id,
-                  bool checkpoint_completed, std::string message,
-                  SaveCheckpointCompletion                              completion,
-                  EditorSaveCheckpointCoordinator::SaveCheckpointLock&& save_lock,
-                  std::optional<std::uint64_t> last_journal_sequence = std::nullopt);
-  auto TakePendingSave(std::uint64_t request_id, std::uint64_t* task_id,
-                       SaveCheckpointCompletion*                          completion,
-                       EditorSaveCheckpointCoordinator::SaveCheckpointLock* save_lock) -> bool;
+  void         HandleJournalCommit(std::uint64_t request_id, EditorJournalCommitOutcome outcome,
+                                   SaveCheckpointCompletion completion);
+  void         HandleMaterialization(std::uint64_t request_id, EditorMaterializeOutcome outcome,
+                                     SaveCheckpointCompletion completion);
+  void         DeliverCompletion(SaveCheckpointCompletion completion, SaveCheckpointResult result);
+  void         FinishSave(std::uint64_t request_id, std::uint64_t operation_id,
+                          std::uint64_t session_generation, std::uint64_t task_id,
+                          bool checkpoint_completed, std::string message,
+                          SaveCheckpointCompletion                              completion,
+                          EditorSaveCheckpointCoordinator::SaveCheckpointLock&& save_lock,
+                          std::optional<std::uint64_t> last_journal_sequence = std::nullopt);
+  auto         TakePendingSave(std::uint64_t request_id, std::uint64_t* task_id,
+                               SaveCheckpointCompletion*                            completion,
+                               EditorSaveCheckpointCoordinator::SaveCheckpointLock* save_lock) -> bool;
 
-  Dependencies                       deps_;
+  Dependencies deps_;
   std::shared_ptr<AsyncCallbackGate> callback_gate_;
   mutable std::mutex                 mutex_;
   std::vector<PendingSave>           pending_saves_;

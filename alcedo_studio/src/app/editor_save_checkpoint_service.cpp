@@ -43,9 +43,7 @@ void EditorSaveCheckpointService::AsyncCallbackGate::StopAndWait() {
 EditorSaveCheckpointService::EditorSaveCheckpointService(Dependencies dependencies)
     : deps_(std::move(dependencies)), callback_gate_(std::make_shared<AsyncCallbackGate>()) {}
 
-EditorSaveCheckpointService::~EditorSaveCheckpointService() {
-  CancelAndWait();
-}
+EditorSaveCheckpointService::~EditorSaveCheckpointService() { CancelAndWait(); }
 
 auto EditorSaveCheckpointService::TryAcquireSaveLock(sl_element_id_t element_id)
     -> EditorSaveCheckpointCoordinator::SaveCheckpointLock {
@@ -68,13 +66,13 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
   if (deps_.save_coordinator && !save_lock.owns_lock()) {
     if (completion) {
       SaveCheckpointResult result;
+      result.operation_id         = request.operation_id;
       result.session_generation   = request.session_generation;
       result.checkpoint_completed = false;
-      result.error =
-          deps_.save_coordinator->is_shutdown()
-              ? "Editor save checkpoint coordinator is shutting down"
-              : "Another editor save checkpoint already owns the global save lock";
-      completion(result);
+      result.error                = deps_.save_coordinator->is_shutdown()
+                                        ? "Editor save checkpoint coordinator is shutting down"
+                                        : "Another editor save checkpoint already owns the global save lock";
+      DeliverCompletion(std::move(completion), std::move(result));
     }
     return CheckpointTicket{};
   }
@@ -85,12 +83,13 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
     if (task_id == 0) {
       if (completion) {
         SaveCheckpointResult result;
+        result.operation_id         = request.operation_id;
         result.session_generation   = request.session_generation;
         result.checkpoint_completed = false;
         result.error                = "Failed to start editor save task";
         // Release lock before invoking completion so navigation can retry.
         save_lock.Release();
-        completion(result);
+        DeliverCompletion(std::move(completion), std::move(result));
       }
       return CheckpointTicket{};
     }
@@ -103,10 +102,10 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
 
   {
     std::scoped_lock lock(mutex_);
-    pending_saves_.push_back(PendingSave{request_id, request.session_generation, request.element_id,
-                                         task_id, std::move(request.capture),
-                                         request.last_journal_sequence, std::move(save_lock),
-                                         completion});
+    pending_saves_.push_back(PendingSave{request_id, request.operation_id,
+                                         request.session_generation, request.element_id, task_id,
+                                         std::move(request.capture), request.last_journal_sequence,
+                                         std::move(save_lock), completion});
   }
 
   struct StartObservation {
@@ -120,7 +119,7 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
                           completion](EditorJournalCommitOutcome outcome) {
     observation->error = outcome.error;
     observation->commit_succeeded.store(outcome.accepted && outcome.durable,
-                                        std::memory_order_release);
+                                          std::memory_order_release);
     observation->completed.store(true, std::memory_order_release);
     if (!gate || !gate->Enter()) {
       return;
@@ -149,6 +148,7 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
       if (rolled_completion) {
         SaveCheckpointResult result;
         result.request_id           = request_id;
+        result.operation_id         = request.operation_id;
         result.session_generation   = request.session_generation;
         result.task_id              = rolled_task_id;
         result.checkpoint_completed = false;
@@ -156,18 +156,19 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
             observation->error.empty() ? "Journal commit could not start" : observation->error;
         // Release lock before completion so the caller can observe a free lock.
         rolled_lock.Release();
-        rolled_completion(result);
+        DeliverCompletion(std::move(rolled_completion), std::move(result));
       }
     }
     return CheckpointTicket{};
   }
 
-  if (observation->completed.load(std::memory_order_acquire) &&
+  if (!deps_.command_executor && observation->completed.load(std::memory_order_acquire) &&
       !observation->commit_succeeded.load(std::memory_order_acquire)) {
     return CheckpointTicket{};
   }
 
-  return CheckpointTicket{request_id, request.session_generation, request.element_id, task_id};
+  return CheckpointTicket{request_id, request.operation_id, request.session_generation,
+                          request.element_id, task_id};
 }
 
 void EditorSaveCheckpointService::CancelAndWait() {
@@ -186,12 +187,13 @@ void EditorSaveCheckpointService::CancelAndWait() {
     if (save.completion) {
       SaveCheckpointResult result;
       result.request_id           = save.request_id;
+      result.operation_id         = save.operation_id;
       result.session_generation   = save.session_generation;
       result.task_id              = save.task_id;
       result.checkpoint_completed = false;
       result.error                = "Editor save checkpoint cancelled";
       save.save_lock.Release();
-      save.completion(result);
+      DeliverCompletion(std::move(save.completion), std::move(result));
     }
   }
   abandoned.clear();
@@ -208,7 +210,8 @@ auto EditorSaveCheckpointService::active() const -> bool {
 void EditorSaveCheckpointService::OnCheckpointFinished(const SaveCheckpointResult& result) {
   SaveCheckpointCompletion                            completion;
   EditorSaveCheckpointCoordinator::SaveCheckpointLock save_lock;
-  std::uint64_t                                       task_id = 0;
+  std::uint64_t                                       task_id      = 0;
+  std::uint64_t                                       operation_id = 0;
   {
     std::scoped_lock lock(mutex_);
     auto             it = std::find_if(pending_saves_.begin(), pending_saves_.end(),
@@ -219,9 +222,10 @@ void EditorSaveCheckpointService::OnCheckpointFinished(const SaveCheckpointResul
     if (it == pending_saves_.end()) {
       return;
     }
-    task_id    = it->task_id;
-    completion = it->completion;
-    save_lock  = std::move(it->save_lock);
+    task_id      = it->task_id;
+    operation_id = it->operation_id;
+    completion   = it->completion;
+    save_lock    = std::move(it->save_lock);
     pending_saves_.erase(it);
   }
   if (deps_.tasks && task_id != 0) {
@@ -230,19 +234,22 @@ void EditorSaveCheckpointService::OnCheckpointFinished(const SaveCheckpointResul
   }
   save_lock.Release();
   if (completion) {
-    completion(result);
+    SaveCheckpointResult delivered = result;
+    delivered.operation_id         = operation_id;
+    DeliverCompletion(std::move(completion), std::move(delivered));
   }
 }
 
 void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t              request_id,
                                                       EditorJournalCommitOutcome outcome,
                                                       SaveCheckpointCompletion   completion) {
-  std::uint64_t                                   task_id           = 0;
-  sl_element_id_t                                 element_id        = 0;
-  std::uint64_t                                   session_gen       = 0;
-  bool                                            found             = false;
-  bool                                            start_materialize = false;
-  std::shared_ptr<const EditorMiniGitSaveCapture> capture;
+  std::uint64_t                                       task_id           = 0;
+  std::uint64_t                                       operation_id      = 0;
+  sl_element_id_t                                     element_id        = 0;
+  std::uint64_t                                       session_gen       = 0;
+  bool                                                found             = false;
+  bool                                                start_materialize = false;
+  std::shared_ptr<const EditorMiniGitSaveCapture>     capture;
   EditorSaveCheckpointCoordinator::SaveCheckpointLock early_lock;
   {
     std::scoped_lock lock(mutex_);
@@ -252,10 +259,11 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
     if (it == pending_saves_.end()) {
       return;
     }
-    found       = true;
-    task_id     = it->task_id;
-    element_id  = it->element_id;
-    session_gen = it->session_generation;
+    found        = true;
+    task_id      = it->task_id;
+    operation_id = it->operation_id;
+    element_id   = it->element_id;
+    session_gen  = it->session_generation;
 
     if (!outcome.accepted || !outcome.durable) {
       early_lock = std::move(it->save_lock);
@@ -296,8 +304,8 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
       SaveCheckpointCompletion                            late_completion;
       EditorSaveCheckpointCoordinator::SaveCheckpointLock late_lock;
       if (TakePendingSave(request_id, &late_task_id, &late_completion, &late_lock)) {
-        FinishSave(request_id, session_gen, late_task_id, false, "Materialization could not start",
-                   late_completion, std::move(late_lock));
+        FinishSave(request_id, operation_id, session_gen, late_task_id, false,
+                   "Materialization could not start", late_completion, std::move(late_lock));
       }
     }
     return;
@@ -315,16 +323,18 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
   } else {
     msg = outcome.error.empty() ? "Journal commit failed" : outcome.error;
   }
-  FinishSave(request_id, session_gen, task_id, ok, msg, completion, std::move(early_lock));
+  FinishSave(request_id, operation_id, session_gen, task_id, ok, msg, completion,
+             std::move(early_lock));
 }
 
 void EditorSaveCheckpointService::HandleMaterialization(std::uint64_t            request_id,
                                                         EditorMaterializeOutcome outcome,
                                                         SaveCheckpointCompletion completion) {
-  std::uint64_t                                       task_id     = 0;
-  sl_element_id_t                                     element_id  = 0;
-  std::uint64_t                                       session_gen = 0;
-  bool                                                found       = false;
+  std::uint64_t                                       task_id      = 0;
+  std::uint64_t                                       operation_id = 0;
+  sl_element_id_t                                     element_id   = 0;
+  std::uint64_t                                       session_gen  = 0;
+  bool                                                found        = false;
   std::optional<std::uint64_t>                        last_journal_sequence;
   EditorSaveCheckpointCoordinator::SaveCheckpointLock save_lock;
   {
@@ -335,12 +345,13 @@ void EditorSaveCheckpointService::HandleMaterialization(std::uint64_t           
     if (it == pending_saves_.end()) {
       return;
     }
-    found                   = true;
-    task_id                 = it->task_id;
-    element_id              = it->element_id;
-    session_gen             = it->session_generation;
-    last_journal_sequence   = it->last_journal_sequence;
-    save_lock               = std::move(it->save_lock);
+    found                 = true;
+    task_id               = it->task_id;
+    operation_id          = it->operation_id;
+    element_id            = it->element_id;
+    session_gen           = it->session_generation;
+    last_journal_sequence = it->last_journal_sequence;
+    save_lock             = std::move(it->save_lock);
     pending_saves_.erase(it);
   }
   if (!found) {
@@ -354,13 +365,14 @@ void EditorSaveCheckpointService::HandleMaterialization(std::uint64_t           
   if (ok && deps_.thumbnails) {
     deps_.thumbnails->RefreshAfterMaterialization(element_id);
   }
-  FinishSave(request_id, session_gen, task_id, ok, msg, completion, std::move(save_lock),
-             ok ? last_journal_sequence : std::nullopt);
+  FinishSave(request_id, operation_id, session_gen, task_id, ok, msg, completion,
+             std::move(save_lock), ok ? last_journal_sequence : std::nullopt);
 }
 
 void EditorSaveCheckpointService::FinishSave(
-    std::uint64_t request_id, std::uint64_t session_generation, std::uint64_t task_id,
-    bool checkpoint_completed, std::string message, SaveCheckpointCompletion completion,
+    std::uint64_t request_id, std::uint64_t operation_id, std::uint64_t session_generation,
+    std::uint64_t task_id, bool checkpoint_completed, std::string message,
+    SaveCheckpointCompletion                              completion,
     EditorSaveCheckpointCoordinator::SaveCheckpointLock&& save_lock,
     std::optional<std::uint64_t>                          last_journal_sequence) {
   if (deps_.tasks && task_id != 0) {
@@ -372,14 +384,28 @@ void EditorSaveCheckpointService::FinishSave(
   save_lock.Release();
   if (completion) {
     SaveCheckpointResult result;
-    result.request_id             = request_id;
-    result.session_generation     = session_generation;
-    result.task_id                = task_id;
-    result.checkpoint_completed   = checkpoint_completed;
-    result.error                  = std::move(message);
-    result.last_journal_sequence  = last_journal_sequence;
-    completion(result);
+    result.request_id            = request_id;
+    result.operation_id          = operation_id;
+    result.session_generation    = session_generation;
+    result.task_id               = task_id;
+    result.checkpoint_completed  = checkpoint_completed;
+    result.error                 = std::move(message);
+    result.last_journal_sequence = last_journal_sequence;
+    DeliverCompletion(std::move(completion), std::move(result));
   }
+}
+
+void EditorSaveCheckpointService::DeliverCompletion(SaveCheckpointCompletion completion,
+                                                    SaveCheckpointResult     result) {
+  if (!completion) {
+    return;
+  }
+  if (deps_.command_executor) {
+    deps_.command_executor->Post([completion = std::move(completion),
+                                  result = std::move(result)]() mutable { completion(result); });
+    return;
+  }
+  completion(result);
 }
 
 auto EditorSaveCheckpointService::TakePendingSave(

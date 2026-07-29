@@ -24,8 +24,10 @@
 ///   durable-publication order (save-started vs. version-created/merge-
 ///   committed) and models a dirty journal for the Paste/Merge ordering tests.
 ///
-/// These types are test-only. They do not change production behavior and do
-/// not introduce a real command queue; that is CQ1.
+/// These types are test-only. They do not change production behavior. CQ1
+/// added the real `EditorSessionCommandQueue`; `SessionResultRecorder` and the
+/// controllable ports remain the acceptance harness, and posted completions
+/// now reduce through the service's `DrainCommandQueueForTests`.
 
 #include <cstdint>
 #include <functional>
@@ -36,10 +38,10 @@
 #include <utility>
 #include <vector>
 
+#include "app/adjustment_transfer_types.hpp"
 #include "app/editor_session_ports.hpp"
 #include "app/editor_session_service.hpp"
 #include "app/editor_session_types.hpp"
-#include "app/adjustment_transfer_types.hpp"
 #include "support/editor_session_test_ports.hpp"
 
 namespace alcedo {
@@ -82,7 +84,7 @@ class ManualCommandExecutor {
   [[nodiscard]] auto idle() const -> bool { return pending() == 0; }
 
  private:
-  mutable std::mutex                 mutex_;
+  mutable std::mutex                mutex_;
   std::queue<std::function<void()>> queue_;
 };
 
@@ -95,13 +97,16 @@ class SessionResultRecorder {
  public:
   std::vector<EditorSessionResult> results;
   std::vector<EditorSessionResult> results_during_initiating;
-  std::size_t                       change_notifications              = 0;
-  std::size_t                       change_notifications_during_initiating = 0;
-  std::size_t                       terminal_during_initiating        = 0;
+  std::size_t                      change_notifications                   = 0;
+  std::size_t                      change_notifications_during_initiating = 0;
+  std::size_t                      terminal_during_initiating             = 0;
 
-  void mark_initiating() {
+  void                             mark_initiating() {
     std::scoped_lock lock(mutex_);
     initiating_ = true;
+    results_during_initiating.clear();
+    change_notifications_during_initiating = 0;
+    terminal_during_initiating             = 0;
   }
   void mark_returned() {
     std::scoped_lock lock(mutex_);
@@ -164,13 +169,29 @@ class SessionResultRecorder {
 class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
  public:
   /// When non-null, gated operations block on this mutex.
-  std::mutex* render_lock = nullptr;
+  std::mutex*               render_lock   = nullptr;
   /// When non-null, durable-publication events are appended here.
-  std::vector<std::string>* event_log = nullptr;
+  std::vector<std::string>* event_log     = nullptr;
   /// True when the active image has unflushed journal records (a dirty
-  /// current image). The CQ4 target saves such a journal before creating a
+  /// current image). The CQ1 target saves such a journal before creating a
   /// new Version or merge commit.
-  bool dirty_journal = false;
+  bool                      dirty_journal = false;
+
+  /// Report the dirty journal through the same query the facade uses to gate
+  /// Paste/Merge and the discard action.
+  auto HasUnmaterializedChanges(const EditorHistoryGuardHandle& /*guard*/, std::string* /*error*/)
+      -> bool override {
+    return dirty_journal;
+  }
+
+  /// A successful save checkpoint reconciles the in-memory materialized tuple
+  /// with DuckDB, which clears the dirty-journal condition — the production
+  /// Mini-Git state then reports HasUnmaterializedChanges == false.
+  auto SyncMaterializedStateAfterCheckpoint(const EditorHistoryGuardHandle& guard,
+                                            std::string* error) -> bool override {
+    dirty_journal = false;
+    return FakeEditorHistoryPort::SyncMaterializedStateAfterCheckpoint(guard, error);
+  }
 
   auto Undo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool override {
     auto ul = lock_render();
@@ -205,19 +226,21 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
     return true;
   }
 
-  auto BeginMerge(const EditorHistoryGuardHandle& guard, const AdjustmentTransferPackage& /*package*/,
+  auto BeginMerge(const EditorHistoryGuardHandle& guard,
+                  const AdjustmentTransferPackage& /*package*/,
                   std::string /*incoming_version_display_name*/, AdjustmentMergePreview* preview,
                   std::string* error) -> bool override {
     (void)guard;
     (void)error;
     if (preview != nullptr) {
-      preview->has_conflicts = false;
+      preview->has_conflicts       = false;
       preview->incoming_version_id = Hash128{0x11111111ULL, 0x22222222ULL};
     }
     return true;
   }
 
-  auto CompleteMerge(const EditorHistoryGuardHandle& guard, const AdjustmentMergePreview& /*preview*/,
+  auto CompleteMerge(const EditorHistoryGuardHandle& guard,
+                     const AdjustmentMergePreview& /*preview*/,
                      const std::vector<AdjustmentMergeResolution>& /*resolutions*/,
                      AdjustmentMergeResult* result, std::string* error) -> bool override {
     auto ul = lock_render();
