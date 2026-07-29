@@ -231,6 +231,56 @@ auto EditorHistoryMutation::MoveHeadToCommit(const alcedo::EditorHistoryGuardHan
   return true;
 }
 
+auto EditorHistoryMutation::DiscardUnmaterializedChanges(
+    const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool {
+  auto state = state_.EnsureWorkingState(guard.element_id, error);
+  if (!state) return false;
+  std::scoped_lock state_lock(state->mutex);
+  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+    if (error) *error = "Editor history graph is unavailable";
+    return false;
+  }
+
+  const auto materialized_head =
+      state->pipeline_guard->commit_graph_->GetImageEditState().materialized_head_commit_hash;
+  while (state->history->working_head() != materialized_head) {
+    const auto prepared = materialized_head.has_value()
+                              ? state->history->PrepareMoveHeadToCommit(*materialized_head)
+                              : state->history->PrepareUndo();
+    if (!prepared.ready) {
+      if (error) *error = prepared.error;
+      return false;
+    }
+    if (prepared.is_noop) {
+      if (error) *error = "Materialized history head could not be restored";
+      return false;
+    }
+    if (!ApplyPreparedHeadMovePipeline(*state->pipeline_guard, &state->committed_snapshot,
+                                       *state->pipeline_guard->commit_graph_, prepared, error)) {
+      return false;
+    }
+    const auto published = state->history->PublishPreparedHeadMove(prepared);
+    if (!published.moved) {
+      if (error) {
+        *error = published.error.empty() ? "Discard head restore failed" : published.error;
+      }
+      return false;
+    }
+  }
+
+  if (state->journal && !state->journal->TruncateMaterialized(error)) {
+    return false;
+  }
+  state->history->PublishWorkingSelection({});
+  state->pipeline_guard->dirty_ = false;
+  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
+  state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
+  state->pipeline_guard->serialized_state_needs_writeback_ = false;
+  state->pending_before.clear();
+  state->recovered_head = false;
+  return true;
+}
+
 auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHandle& guard,
                                             const alcedo::Hash128& version_id,
                                             std::string* error) -> bool {

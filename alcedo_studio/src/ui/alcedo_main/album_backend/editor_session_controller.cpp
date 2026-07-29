@@ -458,6 +458,18 @@ void EditorSessionController::DiscardAndContinue() {
   PublishHistoryInvokableReturn(action, result);
 }
 
+void EditorSessionController::Discard() {
+  const QString action = QStringLiteral("discard");
+  if (!session_backend_) {
+    PublishHistoryRejected(action, QStringLiteral("Editor session backend is unavailable"));
+    return;
+  }
+  auto result = session_backend_->Discard();
+  SyncIdentityFromBackend();
+  emit StateChanged();
+  PublishHistoryInvokableReturn(action, result);
+}
+
 void EditorSessionController::CancelPendingNavigation() {
   const QString action = QStringLiteral("cancelPendingNavigation");
   if (!session_backend_) {
@@ -915,6 +927,14 @@ auto EditorSessionController::can_edit() const -> bool {
          session_backend_->state() == alcedo::EditorSessionState::Interactive;
 }
 
+auto EditorSessionController::can_discard_current_commit() const -> bool {
+  if (!session_backend_ || !has_image() ||
+      session_backend_->state() != alcedo::EditorSessionState::Interactive) {
+    return false;
+  }
+  return session_backend_->has_unmaterialized_changes();
+}
+
 bool EditorSessionController::submitPatch(QString fieldKey, QString paramsJson, bool settled) {
   if (!can_edit()) {
     return false;
@@ -962,6 +982,15 @@ void EditorSessionController::set_filmstrip_expanded_height(double height) {
   }
   filmstrip_expanded_height_ = clamped;
   SaveFilmstripUiPrefs();
+  emit FilmstripUiChanged();
+}
+
+void EditorSessionController::set_filmstrip_scroll_position(double position) {
+  const double clamped = qMax(0.0, position);
+  if (qFuzzyCompare(filmstrip_scroll_position_ + 1.0, clamped + 1.0)) {
+    return;
+  }
+  filmstrip_scroll_position_ = clamped;
   emit FilmstripUiChanged();
 }
 

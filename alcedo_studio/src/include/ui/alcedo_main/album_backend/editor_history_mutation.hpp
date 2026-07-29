@@ -41,6 +41,11 @@ class EditorHistoryMutation {
   auto MoveHeadToCommit(const alcedo::EditorHistoryGuardHandle& guard,
                         const alcedo::commit_hash_t& commit_id, std::string* error) -> bool;
 
+  /// Restore the active working state to the last materialized head and remove
+  /// its Mini-Git journal records.
+  auto DiscardUnmaterializedChanges(const alcedo::EditorHistoryGuardHandle& guard,
+                                    std::string* error) -> bool;
+
   /// Switch the checked-out Version, rebuild the live pipeline, refresh the snapshot.
   auto CheckoutVersion(const alcedo::EditorHistoryGuardHandle& guard,
                        const alcedo::Hash128& version_id, std::string* error) -> bool;

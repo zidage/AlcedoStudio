@@ -65,6 +65,10 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
   auto ReadHistorySnapshot(const alcedo::EditorHistoryGuardHandle& guard,
                            alcedo::EditorHistorySnapshot* snapshot, std::string* error)
       -> bool override;
+  auto HasUnmaterializedChanges(const alcedo::EditorHistoryGuardHandle& guard,
+                                std::string* error) -> bool override;
+  auto DiscardUnmaterializedChanges(const alcedo::EditorHistoryGuardHandle& guard,
+                                    std::string* error) -> bool override;
   auto CreateRootVersionAndCheckout(const alcedo::EditorHistoryGuardHandle& guard,
                                      std::string display_name,
                                      alcedo::version_ref_id_t* version_id,

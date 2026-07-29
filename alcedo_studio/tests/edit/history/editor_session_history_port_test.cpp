@@ -226,6 +226,38 @@ TEST_F(EditorSessionHistoryPortTest,
 }
 
 TEST_F(EditorSessionHistoryPortTest,
+       DiscardReturnsToMaterializedHeadAndClearsUnmaterializedHistory) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+
+  const alcedo::EditorAdjustmentPatch first{"exposure", R"({"exposure":0.4})", true};
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, first, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, first, &error)) << error;
+  ASSERT_TRUE(history_.SyncMaterializedStateAfterCheckpoint(handle, &error)) << error;
+
+  alcedo::EditorRenderAdjustmentSnapshot materialized_snapshot;
+  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &materialized_snapshot, &error)) << error;
+  const auto materialized_head = guard_->commit_graph_->GetImageEditState().materialized_head_commit_hash;
+
+  const alcedo::EditorAdjustmentPatch second{"exposure", R"({"exposure":0.9})", true};
+  ASSERT_TRUE(history_.CaptureAdjustmentBeforePreview(handle, second, &error)) << error;
+  ASSERT_TRUE(history_.CommitAdjustment(handle, second, &error)) << error;
+  EXPECT_TRUE(history_.HasUnmaterializedChanges(handle, &error)) << error;
+
+  ASSERT_TRUE(history_.DiscardUnmaterializedChanges(handle, &error)) << error;
+  EXPECT_FALSE(history_.HasUnmaterializedChanges(handle, &error)) << error;
+  EXPECT_EQ(guard_->working_head_commit_hash_, materialized_head);
+  EXPECT_FALSE(guard_->dirty_);
+  EXPECT_TRUE(guard_->commit_graph_->GetImageEditState().materialized_head_commit_hash.has_value());
+
+  alcedo::EditorRenderAdjustmentSnapshot restored_snapshot;
+  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &restored_snapshot, &error)) << error;
+  EXPECT_EQ(PatchValue(restored_snapshot, "exposure"), PatchValue(materialized_snapshot, "exposure"));
+  EXPECT_TRUE(history_.CaptureSaveCheckpoint(handle, &error)->journal_records.empty());
+}
+
+TEST_F(EditorSessionHistoryPortTest,
        SyncMaterializedStateAfterCheckpointMirrorsActiveHeadIntoInMemoryState) {
   std::string error;
   const auto  handle = history_.Acquire(42, &error);

@@ -169,6 +169,11 @@ auto EditorSessionEditController::HandleDiscard(const EditorHistoryGuardHandle& 
     }
   }
   std::string                    error;
+  if (deps_.history && !deps_.history->DiscardUnmaterializedChanges(guard, &error)) {
+    outcome.kind    = EditorEditOutcome::Kind::Failed;
+    outcome.message = error.empty() ? "Discard failed" : error;
+    return outcome;
+  }
   EditorRenderAdjustmentSnapshot snapshot;
   if (!deps_.history ||
       !deps_.history->ReadAdjustmentSnapshot(guard, &snapshot, &error)) {

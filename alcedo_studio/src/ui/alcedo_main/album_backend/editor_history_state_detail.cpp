@@ -7,6 +7,7 @@
 #include <ctime>
 
 #include "app/pipeline_service.hpp"
+#include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 #include "ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp"
@@ -104,6 +105,19 @@ auto EditorHistoryState::PipelineService() const
     -> std::shared_ptr<alcedo::PipelineMgmtService> {
   auto port = PipelinePort();
   return port ? port->PipelineService() : nullptr;
+}
+
+auto EditorHistoryState::HasUnmaterializedChanges(sl_element_id_t element_id, std::string* error)
+    -> bool {
+  auto state = EnsureWorkingState(element_id, error);
+  if (!state) return false;
+  std::scoped_lock state_lock(state->mutex);
+  if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
+    if (error) *error = "Editor history graph is unavailable";
+    return false;
+  }
+  return state->history->working_head() !=
+         state->pipeline_guard->commit_graph_->GetImageEditState().materialized_head_commit_hash;
 }
 
 auto EditorHistoryState::JournalPathResolver() const

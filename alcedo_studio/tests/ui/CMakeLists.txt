@@ -392,6 +392,45 @@ gtest_discover_tests(WorkspaceShellTest TEST_PREFIX "WorkspaceShellTest."
   PROPERTIES LABELS "workspace_qml")
 alcedo_register_test_target(WorkspaceShellTest ui)
 
+# Phase 7C: horizontal filmstrip model reuse, selection/focus, thumbnail pin
+# lifetime, collapse scroll preservation, busy badges, and current-image menu.
+add_executable(EditorFilmstripQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_filmstrip_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_filmstrip_qml_test_main.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(EditorFilmstripQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(EditorFilmstripQmlTest
+    PRIVATE
+        AlbumBackendLib
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(EditorFilmstripQmlTest
+    PRIVATE
+        ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+        ALCEDO_QT_PLUGIN_PATH="${Qt6_DIR}/../../../plugins/platforms"
+        ALCEDO_QT_QML_IMPORT_PATH="${Qt6_DIR}/../../../qml"
+)
+gtest_discover_tests(EditorFilmstripQmlTest
+    TEST_PREFIX "EditorFilmstripQmlTest."
+    PROPERTIES LABELS "workspace_qml;editor_filmstrip"
+)
+alcedo_register_test_target(EditorFilmstripQmlTest ui)
+
 # Phase 6A: typed adjustment models (no GPU/QML rendering; QSignalSpy drives the
 # debounce timer deterministically via the event loop).
 add_executable(EditorAdjustmentModelTest

@@ -879,6 +879,14 @@ auto EditorSessionService::Discard() -> EditorSessionResult {
   return Emit(std::move(result));
 }
 
+auto EditorSessionService::has_unmaterialized_changes() -> bool {
+  if (!lifecycle_.has_image() || !lifecycle_.has_history_guard() || !dependencies_.history) {
+    return false;
+  }
+  std::string error;
+  return dependencies_.history->HasUnmaterializedChanges(lifecycle_.history_guard(), &error);
+}
+
 auto EditorSessionService::Shutdown() -> EditorSessionResult {
   if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
     return Reject("Already shutting down");

@@ -42,6 +42,7 @@ class IEditorSessionBackend {
   [[nodiscard]] virtual auto active() const -> bool                    = 0;
   [[nodiscard]] virtual auto has_image() const -> bool                 = 0;
   [[nodiscard]] virtual auto has_pending_recovery() const -> bool { return false; }
+  [[nodiscard]] virtual auto has_unmaterialized_changes() -> bool { return false; }
   [[nodiscard]] virtual auto last_error() const -> std::string         = 0;
   /// Read-only snapshot of the committed editor adjustment state (panel values,
   /// not runtime pipeline handles). Returns the default-constructed empty
@@ -340,6 +341,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto has_pending_recovery() const -> bool override {
     return navigation_.has_pending_recovery();
   }
+  [[nodiscard]] auto has_unmaterialized_changes() -> bool override;
   auto Patch(EditorAdjustmentPatch patch) -> EditorSessionResult override;
   auto CommitAdjustment(EditorAdjustmentPatch patch) -> EditorSessionResult override;
   auto Patch(std::string patch_key) -> EditorSessionResult;

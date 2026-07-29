@@ -4,8 +4,7 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-26 after completing Phase 6F Geometry panel and correcting its delayed
-image-size and source-frame preview synchronization.
+Last revised: 2026-07-29 after completing Phase 7C editor filmstrip integration.
 
 Affected areas:
 
@@ -17,10 +16,10 @@ Affected areas:
 - Windows CUDA/D3D11 and OpenCL/OpenGL interoperability
 - macOS Metal presentation and EDR configuration
 
-Status: planning. Product and architecture decisions were locked in a grill session on
-2026-07-16. This is a replacement plan, not an incremental compatibility plan. The final product
-has one QML editor architecture, no editor dialog, no QWidget viewer, no editor stub, and no
-runtime fallback renderer.
+Status: Phase 7C complete; remaining roadmap phases are planned. Product and architecture
+decisions were locked in a grill session on 2026-07-16. This is a replacement plan, not an
+incremental compatibility plan. The final product has one QML editor architecture, no editor
+dialog, no QWidget viewer, no editor stub, and no runtime fallback renderer.
 
 ## Outcome
 
@@ -2782,6 +2781,170 @@ Acceptance:
 - Repeated animation and workspace switching do not leak delegates or trigger image reloads.
 - Discard is visible only where specified and only when the current unmaterialized commit is
   eligible.
+
+#### Feasibility conclusion — reuse the library thumbnail pipeline (2026-07-29)
+
+Phase 7C does **not** need a new `EditorFilmstripModel` C++ class. The editor
+filmstrip reuses the library's existing thumbnail acquisition pipeline in full,
+because the mini-git materialization already guarantees the pipeline params
+`ThumbnailService` reads are identical to the activated Version's replay.
+
+Confirmed from current source:
+
+1. `ThumbnailService` is already always-resident. It is owned by the project
+   handler and reached through `LibraryModule::project()->handler()
+   .thumbnail_service()`. Entering the editor destroys only the
+   `LibraryWorkspace.qml` visual tree; `ApplicationModuleHost`, `LibraryModule`,
+   `AlbumThumbnailModel`, `ThumbnailService`, and `ThumbnailManager` all stay
+   alive for the project's lifetime. The plan's "shared backend models may
+   remain alive" clause already covers this — no new residency work is needed.
+2. The filmstrip's default list source is `appModules.library.thumbnailModel`
+   (`AlbumThumbnailModel`), the same model the library grid binds. It already
+   holds the active folder/library element list and survives workspace Loader
+   teardown. No second model is needed for the default (non-search) filmstrip.
+3. `ThumbnailService::GetThumbnail` renders through
+   `PipelineMgmtService::LoadPipeline(id)`, which applies the serialized
+   pipeline state materialized into DuckDB. The mini-git save checkpoint
+   (`EditorMiniGitMaterializer::Materialize`) writes the Version head and the
+   serialized pipeline state in one DuckDB transaction. Checkout rebuilds the
+   pipeline from root + first-parent commits and re-materializes. Therefore
+   every thumbnail render after a switch/checkout consumes exactly the
+   activated Version's replayed params — there is no param-drift window, and
+   `thumbnail_service.cpp` does not duplicate editor history validation
+   (already a Phase 6C invariant).
+4. The save checkpoint already invalidates and refreshes the focused
+   thumbnail. `application_module_host.cpp` wires `refresh_focused_thumbnail`
+   into the checkpoint thumbnail port, which calls
+   `ThumbnailService::InvalidateThumbnail(element_id)` then
+   `ThumbnailManager::RefreshCurrentThumbnail`. So switching filmstrip images
+   forces exactly the "sync" the user described, and that sync naturally
+   regenerates the outgoing image's thumbnail at the materialized state.
+
+`ThumbnailGridView.qml` is **not** embedded directly — it is a multi-column
+vertical grid, while the filmstrip is a horizontal single-row strip. The reuse
+is at the model + thumbnail-binding + visibility/pin layer, not the layout
+layer. The filmstrip gets a new, small horizontal `ListView` whose delegate
+copies `ThumbnailGridView`'s proven thumbnail-binding pattern
+(`bindThumbnailLifetime` / `syncThumbnailBinding` / `releaseThumbnailBinding`
+/ `Connections.onThumbnailUpdated` / `SetThumbnailVisible` pin/release), bound
+to `appModules.library.thumbnailModel`. The collapse dock, persistent handle,
+saved expanded height, and motion tokens already exist in `EditorFilmstrip.qml`
+from Phase 1B and are retained unchanged.
+
+#### Revised execution plan (reuse-based) — replaces the original deliverables list
+
+Deliverables:
+
+- [x] `EditorFilmstrip.qml`: replace the Phase 1B stub body (`filmstripBody`)
+      with a horizontal `ListView` bound to `appModules.library.thumbnailModel`.
+      The delegate ports `ThumbnailGridView`'s thumbnail-binding lifetime
+      machinery verbatim (pin on `Component.onCompleted` /
+      `onElementIdChanged` / `onImageIdChanged`, release on
+      `Component.onDestruction`, listen to `appModules.library.thumbnailUpdated`,
+      call `SetThumbnailVisible` with a filmstrip resolution tier). The existing
+      collapse handle, dock geometry, `dockExpandProgress`, and
+      `interactionPolicy` gating stay unchanged.
+- [x] Selection: single-select the current editor image. The delegate's
+      `isSelected` compares `elementId === editorSession.elementId`. Click
+      routes through the session Switch path
+      (`appModules.workspaceRouter.openEditor(elementId, imageId)`; the session
+      service Switch runs the save-checkpoint-then-load sequence, and is a no-op
+      when the image is already focused). Keyboard navigation (Left / Right /
+      Home / End) moves a focus frame and activates on Return / Space, gated by
+      `interactionPolicy.canSelectEditorImage`.
+- [x] Save/render badges: a small overlay on the current delegate shows the
+      save-checkpoint state from `editorSession` (saving indicator) and the
+      render-busy state. Non-current delegates show no badge.
+- [x] Current-commit context menu: right-click on the current delegate opens a
+      `Menu` with the Discard action, enabled only when the current commit is
+      unmaterialized (the same eligibility the history rail already exposes
+      through `EditorSessionController`). Discard routes through the session
+      service Discard path.
+- [x] Thumbnail regeneration on switch: no new production code — the existing
+      `refresh_focused_thumbnail` checkpoint hook already invalidates and
+      refreshes. Add a test that asserts the outgoing image's thumbnail is
+      re-requested after a switch (the thumbnail port records the
+      `InvalidateThumbnail` + `RefreshCurrentThumbnail` calls).
+- [x] Collapse/expand: keep model and session alive while collapsed; the
+      horizontal `ListView` stays as a child of `filmstripBody` (visibility
+      tracks `dockExpandProgress`). On collapse, the body hides and the handle
+      keeps the position/count; the model and thumbnail pins are NOT torn
+      down. Released vertical space goes to the viewport via `dockHeight` as
+      today.
+- [x] No new C++ model class. `EditorFilmstripModel` from the original
+      deliverables is dropped; `AlbumThumbnailModel` is the filmstrip model.
+      Document this in the completion record.
+
+Acceptance (original criteria, plus reuse-specific tests):
+
+- [x] Collapse/expand preserves current image, horizontal scroll position,
+      selection, save state, and keyboard focus.
+- [x] Repeated animation and workspace switching do not leak delegates or
+      trigger image reloads (thumbnail pins are released on delegate
+      destruction, not on collapse).
+- [x] Discard is visible only on the current delegate and only when the
+      current unmaterialized commit is eligible.
+- [x] Switching A→B invalidates A's thumbnail and regenerates it from the
+      materialized pipeline state; the regenerated thumbnail matches the
+      activated Version's pipeline params (assert via a fake pipeline service
+      that records the params `LoadPipeline` applied).
+- [x] The filmstrip shows the same list as the library for the active folder;
+      changing the library folder and re-entering the editor updates the
+      filmstrip list (shared model).
+
+##### Phase 7C completion record (2026-07-29)
+
+**Status:** complete. Phase 7C reuses `AlbumThumbnailModel` and the resident thumbnail pipeline;
+no `EditorFilmstripModel` C++ class was added. The editor now has a horizontal, collapsible
+filmstrip with session-owned selection, focus, scroll, save/render state, and current-commit
+actions.
+
+Primary success call chains:
+
+- Filmstrip source and thumbnail lifetime: `EditorFilmstrip.qml` ->
+  `appModules.library.thumbnailModel` / `AlbumThumbnailModel` ->
+  `LibraryModule.SetThumbnailVisible` -> `ThumbnailService` / `ThumbnailManager`. Delegates pin
+  the 512-tier thumbnail while alive and release it only when destroyed; collapse clips the body
+  without tearing down the model or pins.
+- Selection: `EditorFilmstrip.activateImage()` -> `WorkspaceRouter.openEditor(elementId, imageId)`
+  -> `EditorSessionController::Open()` -> `EditorSessionService` navigation and checkpoint path.
+  Left/Right/Home/End move the focus frame; Return/Space activates it through
+  `interactionPolicy`.
+- Discard: filmstrip `MenuItem` -> `EditorSessionController::Discard()` ->
+  `EditorSessionService::Discard()` -> `EditorSessionEditController::HandleDiscard()` ->
+  `EditorSessionHistoryPort::DiscardUnmaterializedChanges()` -> history restoration at the
+  materialized head, journal truncation, redo clearing, and dirty-state reset.
+- Thumbnail refresh on materialization: existing
+  `ApplicationModuleHost` checkpoint hook -> `ThumbnailService::InvalidateThumbnail()` ->
+  `ThumbnailManager::RefreshCurrentThumbnail()`. No second production thumbnail route was
+  introduced.
+
+Executed evidence:
+
+| Evidence | Result |
+| --- | --- |
+| `EditorFilmstripQmlTest` | 3/3 direct tests passed: shared-model routing, keyboard selection, collapse/scroll/focus/pin retention, current-image menu gating, and save/render badges |
+| `EditorSessionHistoryPortTest` | 15/15 direct tests passed, including discard restoration to the materialized head |
+| `EditorSessionNavigationControllerTest` | 23/23 direct tests passed, including A->B checkpoint ordering and outgoing-thumbnail refresh |
+| `EditorSessionControllerPhase5ATest` | 36/36 direct tests passed |
+| `EditorHistoryMaterializerTest` | 16/16 direct tests passed, including persisted pipeline state and recovery metadata after materialization |
+| Windows debug build | `EditorFilmstripQmlTest` target compiled and linked through `scripts\\msvc_env.cmd` |
+| QML and diff checks | `qmllint` exited 0 with warnings only; `git diff --check` passed for owned source, test, and CMake changes |
+
+The selected CTest invocation was also attempted. CTest stopped during existing `WorkspaceShellTest`
+auto-discovery because that executable exceeded the discovery timeout; the focused binaries above
+were run directly from their Qt runtime directories and passed.
+
+Why this also closes Phase 7D cheaply:
+
+Phase 7D's "replace the filmstrip source with the live search element list"
+becomes a model swap on the same horizontal `ListView`. `SearchController`
+already exposes a search-result row list and its own preview-thumbnail path
+(`SetSearchPreviewThumbnailVisible` / `searchPreviewThumbnailUpdated`). The
+  filmstrip's thumbnail-binding machinery is parametrized by a single
+  `SetThumbnailVisible`-style entry point, so a search source only swaps the
+  model + the visibility-callback pair. The collapse/scroll/selection/badge
+  chrome is reused unchanged.
 
 ### Phase 7D - Live search editor integration
 

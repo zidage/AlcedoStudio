@@ -57,6 +57,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Phase 6A: true when an image is open and the session is Interactive, i.e.
   // adjustment controls are enabled and submitPatch will be accepted.
   Q_PROPERTY(bool canEdit READ can_edit NOTIFY StateChanged)
+  // True only while the current image has an unmaterialized working head.
+  Q_PROPERTY(bool canDiscardCurrentCommit READ can_discard_current_commit NOTIFY StateChanged)
   Q_PROPERTY(uint elementId READ element_id NOTIFY StateChanged)
   Q_PROPERTY(uint imageId READ image_id NOTIFY StateChanged)
   // Last image opened with a non-zero id. Survives Close/Finalize so re-entering
@@ -72,6 +74,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
                  FilmstripUiChanged)
   Q_PROPERTY(double filmstripExpandedHeight READ filmstrip_expanded_height WRITE
                  set_filmstrip_expanded_height NOTIFY FilmstripUiChanged)
+  Q_PROPERTY(double filmstripScrollPosition READ filmstrip_scroll_position WRITE
+                 set_filmstrip_scroll_position NOTIFY FilmstripUiChanged)
   // Active right-side adjustment panel. One of: tone, look, display, geometry, raw.
   // Survives workspace Loader teardown and application restart (QSettings).
   Q_PROPERTY(QString activeAdjustmentPanel READ active_adjustment_panel WRITE
@@ -141,6 +145,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] QString    session_state_name() const;
   [[nodiscard]] bool       filmstrip_collapsed() const { return filmstrip_collapsed_; }
   [[nodiscard]] double     filmstrip_expanded_height() const { return filmstrip_expanded_height_; }
+  [[nodiscard]] double     filmstrip_scroll_position() const { return filmstrip_scroll_position_; }
   [[nodiscard]] QString    active_adjustment_panel() const { return active_adjustment_panel_; }
   [[nodiscard]] QString    history_panel_page() const { return history_panel_page_; }
   // Phase 6C-7: load panel state from the backend adjustment snapshot.
@@ -171,6 +176,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   }
   // Phase 6A: true when an image is open and the session is Interactive.
   [[nodiscard]] bool        can_edit() const;
+  [[nodiscard]] bool        can_discard_current_commit() const;
 
   // Phase 6A: IEditorAdjustmentSubmitter. The typed adjustment models call
   // submitPatch to route one patch through the session service (interactive
@@ -188,6 +194,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_INVOKABLE void   BranchFromCommit(const QString& commitId, const QString& displayName);
   Q_INVOKABLE void   RetrySave();
   Q_INVOKABLE void   DiscardAndContinue();
+  Q_INVOKABLE void   Discard();
   Q_INVOKABLE void   CancelPendingNavigation();
   Q_INVOKABLE void   RenameVersion(const QString& versionId, const QString& displayName);
   Q_INVOKABLE void   RemoveVersion(const QString& versionId);
@@ -242,6 +249,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
 
   void               set_filmstrip_collapsed(bool collapsed);
   void               set_filmstrip_expanded_height(double height);
+  void               set_filmstrip_scroll_position(double position);
   void               set_active_adjustment_panel(const QString& panel);
   void               set_history_panel_page(const QString& page);
 
@@ -299,6 +307,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   alcedo::EditorSessionState     session_state_             = alcedo::EditorSessionState::NoImage;
   bool                           filmstrip_collapsed_       = false;
   double                         filmstrip_expanded_height_ = 128.0;
+  double                         filmstrip_scroll_position_ = 0.0;
   // Phase 6C-7: cached adjustment snapshot + monotonic revision.
   mutable QVariantMap            adjustment_snapshot_;
   quint64                        snapshot_revision_ = 0;

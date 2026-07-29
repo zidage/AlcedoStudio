@@ -118,6 +118,21 @@ class IEditorHistoryPort {
     return false;
   }
 
+  /// Return whether the active working head differs from the last materialized
+  /// head. The editor uses this to gate the current-image discard action.
+  /// Test ports that do not model Mini-Git state may keep the default false.
+  virtual auto HasUnmaterializedChanges(const EditorHistoryGuardHandle& /*guard*/,
+                                        std::string* /*error*/) -> bool {
+    return false;
+  }
+
+  /// Restore the live working state to the last materialized head and clear
+  /// its recovery journal. Test ports may keep the default no-op behavior.
+  virtual auto DiscardUnmaterializedChanges(const EditorHistoryGuardHandle& /*guard*/,
+                                            std::string* /*error*/) -> bool {
+    return true;
+  }
+
   /// Phase 7A: create a new Version at the image root (null head), set it
   /// active, rebuild the pipeline, clear redo, and publish the clean root
   /// snapshot. The new ref replaces the ambiguous active-head creation. Fail

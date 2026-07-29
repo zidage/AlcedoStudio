@@ -86,6 +86,11 @@ auto EditorSessionHistoryPort::MoveHeadToCommit(const alcedo::EditorHistoryGuard
   return mutation_->MoveHeadToCommit(guard, commit_id, error);
 }
 
+auto EditorSessionHistoryPort::DiscardUnmaterializedChanges(
+    const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool {
+  return mutation_->DiscardUnmaterializedChanges(guard, error);
+}
+
 auto EditorSessionHistoryPort::CheckoutVersion(const alcedo::EditorHistoryGuardHandle& guard,
                                                const alcedo::Hash128& version_id,
                                                std::string* error) -> bool {
@@ -96,6 +101,15 @@ auto EditorSessionHistoryPort::ReadHistorySnapshot(const alcedo::EditorHistoryGu
                                                    alcedo::EditorHistorySnapshot* snapshot,
                                                    std::string* error) -> bool {
   return projection_->ReadHistorySnapshot(guard, snapshot, error);
+}
+
+auto EditorSessionHistoryPort::HasUnmaterializedChanges(
+    const alcedo::EditorHistoryGuardHandle& guard, std::string* error) -> bool {
+  if (!guard.valid) {
+    if (error) *error = "Editor history guard is invalid";
+    return false;
+  }
+  return state_->HasUnmaterializedChanges(guard.element_id, error);
 }
 
 auto EditorSessionHistoryPort::CreateRootVersionAndCheckout(

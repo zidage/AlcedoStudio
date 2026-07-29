@@ -694,9 +694,6 @@ Item {
                     theme: root.theme
                     editorSession: root.editorSession
                     interactionPolicy: root.interactionPolicy
-                    // Phase 1B: empty model; position/count remain defined for handle UI.
-                    currentIndex: root.hasImage ? 1 : 0
-                    totalCount: root.hasImage ? 1 : 0
                 }
             }
 

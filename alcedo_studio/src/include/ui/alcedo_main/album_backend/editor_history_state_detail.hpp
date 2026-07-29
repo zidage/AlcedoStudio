@@ -66,6 +66,9 @@ class EditorHistoryState {
   /// Resolve the pipeline service through the current pipeline port.
   [[nodiscard]] auto PipelineService() const -> std::shared_ptr<alcedo::PipelineMgmtService>;
 
+  /// Compare the live working head with the last materialized head.
+  auto HasUnmaterializedChanges(sl_element_id_t element_id, std::string* error) -> bool;
+
   /// Return the journal-path resolver for checkpoint capture.
   [[nodiscard]] auto JournalPathResolver() const
       -> std::function<std::filesystem::path(sl_element_id_t)>;
