@@ -153,8 +153,7 @@ Item {
             IconActionButton {
                 objectName: "editorHistoryUndoButton"
                 compact: true
-                enabled: root.historyModel && root.historyModel.canUndo
-                         && root.editorSession && root.editorSession.canEdit
+                enabled: root.editorSession && root.editorSession.actions.canUndo
                 iconSrc: "qrc:/panel_icons/reset.svg"
                 iconColorDefault: root.colMuted
                 iconColorMuted: root.colMuted
@@ -170,8 +169,7 @@ Item {
             IconActionButton {
                 objectName: "editorHistoryRedoButton"
                 compact: true
-                enabled: root.historyModel && root.historyModel.canRedo
-                         && root.editorSession && root.editorSession.canEdit
+                enabled: root.editorSession && root.editorSession.actions.canRedo
                 iconSrc: "qrc:/panel_icons/retry.svg"
                 iconColorDefault: root.colMuted
                 iconColorMuted: root.colMuted
@@ -189,8 +187,7 @@ Item {
             IconActionButton {
                 objectName: "editorHistoryPasteButton"
                 compact: true
-                enabled: root.adjustmentTransfer && root.adjustmentTransfer.packageAvailable
-                         && root.editorSession && root.editorSession.canEdit
+                enabled: root.editorSession && root.editorSession.actions.canPaste
                 iconSrc: "qrc:/panel_icons/to_bg.svg"
                 iconColorDefault: root.colMuted
                 iconColorMuted: root.colMuted
@@ -206,8 +203,7 @@ Item {
             IconActionButton {
                 objectName: "editorHistoryMergeButton"
                 compact: true
-                enabled: root.adjustmentTransfer && root.adjustmentTransfer.packageAvailable
-                         && root.editorSession && root.editorSession.canEdit
+                enabled: root.editorSession && root.editorSession.actions.canBeginMerge
                 iconSrc: "qrc:/panel_icons/git-branch.svg"
                 iconColorDefault: root.colMuted
                 iconColorMuted: root.colMuted
@@ -354,7 +350,8 @@ Item {
                     property string shortCommitId: transactionId.length > 0
                                                   ? transactionId.slice(0, 8) : ""
                     property bool futureRow: transactionPosition === "future"
-                    property bool canMove: root.editorSession && root.editorSession.canEdit
+                    property bool canMove: root.editorSession
+                                           && root.editorSession.actions.canMoveHead
                                            && transactionId.length > 0 && !currentTransaction
 
                     function activateMove() {

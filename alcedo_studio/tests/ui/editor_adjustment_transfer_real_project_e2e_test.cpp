@@ -165,7 +165,7 @@ TEST_F(MainQmlTestFixture, RealPackedProjectCopyPasteReloadsToneSnapshot) {
     source_shadows_model = window->findChild<QObject*>(QStringLiteral("toneShadowsModel"));
     source_highlights_model =
         window->findChild<QObject*>(QStringLiteral("toneHighlightsModel"));
-    return session->snapshot_revision() > 0 && !session->adjustment_snapshot().isEmpty() &&
+    return !session->adjustment_snapshot().isEmpty() &&
            source_exposure_model != nullptr && source_shadows_model != nullptr &&
            source_highlights_model != nullptr;
   }, 30000));

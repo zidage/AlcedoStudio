@@ -64,12 +64,12 @@ enum class EditorSessionResultKind : std::uint8_t {
   Rejected,
 };
 
+/// Public session identity carries durable domain ids only. Worker correlation
+/// uses scoped request ids (`ImageLoadRequestId`, `EditorRenderRequestId`, …);
+/// session/render/view generation counters are not part of this model.
 struct EditorSessionIdentity {
-  sl_element_id_t element_id         = 0;
-  image_id_t      image_id           = 0;
-  std::uint64_t   session_generation = 0;
-  std::uint64_t   render_generation  = 0;
-  std::uint64_t   view_generation    = 0;
+  sl_element_id_t element_id = 0;
+  image_id_t      image_id   = 0;
 };
 
 struct EditorSessionIntent {

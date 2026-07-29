@@ -251,7 +251,7 @@ TEST_F(EditorRealRawGpuE2eTest,
     const auto first_frame_ready = [&] {
       return host.editor_session_service()->state() == EditorSessionState::Interactive &&
              viewport->lastPresentedImageGeneration() ==
-                 host.editor_session()->session_generation() &&
+                 viewport->imageGeneration() &&
              viewport->lastPresentedRequestId() != 0 &&
              viewport->lastPresentedRequestId() != previous_request_id;
     };
@@ -311,8 +311,7 @@ TEST_F(EditorRealRawGpuE2eTest,
           << " liveTargets=" << viewport->liveTargetCount();
     }
 
-    EXPECT_EQ(viewport->lastPresentedImageGeneration(),
-              host.editor_session()->session_generation());
+    EXPECT_EQ(viewport->lastPresentedImageGeneration(), viewport->imageGeneration());
     EXPECT_EQ(viewport->imageIdentity(), key.image_id);
     EXPECT_GT(viewport->liveTargetCount(), 0);
     EXPECT_TRUE(viewport->presentationAvailable());

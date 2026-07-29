@@ -281,7 +281,7 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
 /// pins that guard so CQ1/CQ3 keep it once completion is queue-mediated.
 TEST_F(EditorSessionCommandQueueBaselineTest, StaleFirstFrameCannotEnableEditingForAnotherImage) {
   openInteractive(10, 20);  // image A, generation 1
-  const auto gen_a                     = service_->identity().session_generation;
+  const auto load_a = service_->active_image_load_request();
 
   // Switch to B synchronously (inline save) and present B's first frame.
   journal_->async_commit               = false;
@@ -297,7 +297,7 @@ TEST_F(EditorSessionCommandQueueBaselineTest, StaleFirstFrameCannotEnableEditing
   EditorRenderResult stale;
   stale.kind                      = EditorRenderResultKind::FramePresented;
   stale.request_id                = rid_b;
-  stale.intent.session_generation = gen_a;  // stale generation for A
+  stale.intent.image_load_request_id = load_a;  // stale load request for A
   stale.intent.element_id         = 10;
   stale.intent.image_id           = 20;
   service_->NotifyRenderResult(stale);
@@ -346,6 +346,7 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
 TEST_F(EditorSessionCommandQueueBaselineTest,
        MergeWhileRenderWorkerOwnsExecutorDoesNotBlockCommandThread) {
   openInteractive(10, 20);  // image A, interactive
+  service_->SetCopiedPackageAvailable(true);
 
   AdjustmentMergePreview preview;
   ASSERT_EQ(service_->BeginMerge(AdjustmentTransferPackage{}, &preview).kind,
@@ -381,6 +382,7 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
 TEST_F(EditorSessionCommandQueueBaselineTest,
        DirtyJournalPasteQueuesSaveBeforeCreatingTheNewVersion) {
   openInteractive(10, 20);  // image A, interactive
+  service_->SetCopiedPackageAvailable(true);
 
   std::vector<std::string> events;
   history_->event_log                  = &events;
@@ -410,6 +412,7 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
 TEST_F(EditorSessionCommandQueueBaselineTest,
        DirtyJournalMergeQueuesSaveBeforeCreatingTheMergeCommit) {
   openInteractive(10, 20);  // image A, interactive
+  service_->SetCopiedPackageAvailable(true);
 
   AdjustmentMergePreview preview;
   ASSERT_EQ(service_->BeginMerge(AdjustmentTransferPackage{}, &preview).kind,
@@ -513,6 +516,7 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
 TEST_F(EditorSessionCommandQueueBaselineTest,
        ShutdownDuringHistoryCheckpointStaysShuttingDownAndPublishesOneCancellation) {
   openInteractive(10, 20);  // image A, interactive
+  service_->SetCopiedPackageAvailable(true);
 
   // Start a history checkpoint whose save cannot finish on its own.
   journal_->async_commit               = true;

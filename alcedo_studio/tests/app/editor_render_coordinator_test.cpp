@@ -48,7 +48,7 @@ auto MakeIntent(EditorRenderQuality quality, EditorRenderPriority priority,
   EditorRenderIntent intent;
   intent.element_id         = 10;
   intent.image_id           = 20;
-  intent.session_generation = session_gen;
+  intent.image_load_request_id = ImageLoadRequestId{session_gen};
   intent.render_generation  = render_gen;
   intent.view_generation    = view_gen;
   intent.quality            = quality;
@@ -771,7 +771,7 @@ TEST_F(EditorRenderCoordinatorTest, DiagnosticsTrackRejectReplaceCancelAndSubmit
     EXPECT_TRUE(diag.has_inflight);
     EXPECT_EQ(diag.pending_count, 1u);
     EXPECT_GE(diag.replaced_count, 1u);
-    EXPECT_EQ(diag.session_generation, 1u);
+    EXPECT_EQ(diag.image_load_request_id, 1u);
     EXPECT_FALSE(diag.last_rejection_reason.empty());
     EXPECT_NE(diag.last_rejection_reason.find("session"), std::string::npos);
     ASSERT_TRUE(diag.last_rejected_render_reason.has_value());

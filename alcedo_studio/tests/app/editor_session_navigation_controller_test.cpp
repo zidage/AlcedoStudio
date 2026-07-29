@@ -93,7 +93,7 @@ TEST_F(EditorSessionNavigationControllerTest,
        CheckoutVersionSavesFirstThenRebuildsWithoutReleasingImage) {
   fixture_.OpenA();
   const auto target_version   = Hash128{0xabcdef01ULL, 0x23456789ULL};
-  const auto prior_render_gen = fixture_.lifecycle().identity().render_generation;
+  const auto prior_render_gen = fixture_.render().content_generation();
 
   const auto result           = fixture_.RequestCheckoutVersion(target_version);
   EXPECT_TRUE(result.waiting_for_checkpoint);
@@ -114,7 +114,7 @@ TEST_F(EditorSessionNavigationControllerTest,
   EXPECT_EQ(fixture_.history().release_count, 0);
   // Same-image Version checkout must advance render generation so the
   // presentation path cannot keep the prior Version's frame without a re-route.
-  EXPECT_GT(fixture_.lifecycle().identity().render_generation, prior_render_gen);
+  EXPECT_GT(fixture_.render().content_generation(), prior_render_gen);
 }
 
 /// Phase 7A P0: failed checkout rebuild keeps the image and does not expose a
@@ -194,7 +194,7 @@ TEST_F(EditorSessionNavigationControllerTest,
   fixture_.OpenA();
   fixture_.journal().async_commit               = true;
   fixture_.checkpoint_store().async_materialize = true;
-  const auto prior_render_gen                   = fixture_.lifecycle().identity().render_generation;
+  const auto prior_render_gen = fixture_.render().content_generation();
 
   const auto result = fixture_.nav().RequestCreateRootVersion("Root Look");
   ASSERT_TRUE(result.waiting_for_checkpoint);
@@ -206,7 +206,7 @@ TEST_F(EditorSessionNavigationControllerTest,
   EXPECT_TRUE(fixture_.lifecycle().has_image());
   // Post-create checkout must advance render generation so the viewport
   // cannot reuse the prior head's frame without a re-route.
-  EXPECT_GT(fixture_.lifecycle().identity().render_generation, prior_render_gen);
+  EXPECT_GT(fixture_.render().content_generation(), prior_render_gen);
 
   EditorAdjustmentPatch patch;
   patch.field_key = "exposure";
@@ -239,7 +239,8 @@ TEST_F(EditorSessionNavigationControllerTest,
 TEST_F(EditorSessionNavigationControllerTest,
        CreateOrBranchFailureRestoresPriorRefPipelineSnapshotAndFrame) {
   fixture_.OpenA();
-  const auto prior_identity                     = fixture_.lifecycle().identity();
+  const auto prior_identity = fixture_.lifecycle().identity();
+  const auto prior_load     = fixture_.lifecycle().active_image_load_request();
   const auto prior_version                      = fixture_.history().active_version_id;
   fixture_.history().fail_root_version          = true;
   fixture_.journal().async_commit               = true;
@@ -252,7 +253,7 @@ TEST_F(EditorSessionNavigationControllerTest,
   EXPECT_TRUE(fixture_.nav().has_pending_recovery());
   EXPECT_EQ(fixture_.lifecycle().identity().element_id, prior_identity.element_id);
   EXPECT_EQ(fixture_.lifecycle().identity().image_id, prior_identity.image_id);
-  EXPECT_EQ(fixture_.lifecycle().identity().session_generation, prior_identity.session_generation);
+  EXPECT_EQ(fixture_.lifecycle().active_image_load_request(), prior_load);
   EXPECT_EQ(fixture_.history().active_version_id, prior_version);
   EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "release_a"), 0);
 
@@ -270,7 +271,7 @@ TEST_F(EditorSessionNavigationControllerTest,
   EXPECT_TRUE(fixture_.nav().has_pending_recovery());
   EXPECT_EQ(fixture_.lifecycle().identity().element_id, prior_identity.element_id);
   EXPECT_EQ(fixture_.lifecycle().identity().image_id, prior_identity.image_id);
-  EXPECT_EQ(fixture_.lifecycle().identity().session_generation, prior_identity.session_generation);
+  EXPECT_EQ(fixture_.lifecycle().active_image_load_request(), prior_load);
   EXPECT_EQ(fixture_.history().active_version_id, prior_version);
   EXPECT_EQ(fixture_.history().last_branch_commit, target_commit);
   EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "release_a"), 0);
@@ -335,7 +336,7 @@ TEST_F(EditorSessionNavigationControllerTest, SameImageIsNoop) {
 
 TEST_F(EditorSessionNavigationControllerTest, SaveCompletionDeliversThroughQueueNotInline) {
   fixture_.OpenA();
-  const auto gen_a                = fixture_.lifecycle().identity().session_generation;
+  const auto load_a = fixture_.lifecycle().active_image_load_request();
 
   // Inline (synchronous) save ports: the completion must still be posted to
   // the command executor and reduced only when Drain runs, never inline inside
@@ -358,7 +359,7 @@ TEST_F(EditorSessionNavigationControllerTest, SaveCompletionDeliversThroughQueue
             test::EditorSessionNavigationFixture::kElementB);
   EXPECT_EQ(fixture_.lifecycle().identity().image_id,
             test::EditorSessionNavigationFixture::kImageB);
-  EXPECT_EQ(fixture_.lifecycle().identity().session_generation, gen_a + 1);
+  EXPECT_EQ(fixture_.lifecycle().active_image_load_request().value, load_a.value + 1);
   EXPECT_EQ(fixture_.pipeline().acquire_count, 2);
   EXPECT_EQ(fixture_.history().acquire_count, 2);
 }
@@ -366,7 +367,7 @@ TEST_F(EditorSessionNavigationControllerTest, SaveCompletionDeliversThroughQueue
 TEST_F(EditorSessionNavigationControllerTest, SaveFailureRetainsImageAfterQueuedCompletion) {
   fixture_.journal().fail_barrier = true;
   fixture_.OpenA();
-  const auto gen_a                = fixture_.lifecycle().identity().session_generation;
+  const auto load_a = fixture_.lifecycle().active_image_load_request();
 
   fixture_.journal().async_commit = false;
   fixture_.checkpoint_store().async_materialize = false;
@@ -378,7 +379,7 @@ TEST_F(EditorSessionNavigationControllerTest, SaveFailureRetainsImageAfterQueued
 
   fixture_.Drain();
   EXPECT_FALSE(fixture_.nav().has_pending_action());
-  EXPECT_EQ(fixture_.lifecycle().identity().session_generation, gen_a);
+  EXPECT_EQ(fixture_.lifecycle().active_image_load_request(), load_a);
   EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::RetainedImageFailure);
   EXPECT_TRUE(fixture_.lifecycle().has_image());
   EXPECT_TRUE(fixture_.nav().has_pending_recovery());
@@ -407,7 +408,7 @@ TEST_F(EditorSessionNavigationControllerTest, StaleCompletionWithWrongRequestIdK
 
   SaveCheckpointResult stale;
   stale.request_id           = 999;
-  stale.session_generation   = fixture_.lifecycle().identity().session_generation;
+  stale.image_load_request_id = fixture_.lifecycle().active_image_load_request();
   stale.checkpoint_completed = true;
   fixture_.nav().OnCheckpointFinished(stale);
 
@@ -429,7 +430,7 @@ TEST_F(EditorSessionNavigationControllerTest,
 
   SaveCheckpointResult stale;
   stale.request_id           = 1;
-  stale.session_generation   = 99;
+  stale.image_load_request_id = ImageLoadRequestId{99};
   stale.checkpoint_completed = true;
   fixture_.nav().OnCheckpointFinished(stale);
 
@@ -450,19 +451,19 @@ TEST_F(EditorSessionNavigationControllerTest,
   EXPECT_EQ(fixture_.lifecycle().identity().element_id,
             test::EditorSessionNavigationFixture::kElementB);
   EXPECT_EQ(fixture_.tasks().end_count, ends_before + 1);
-  const auto           b_generation = fixture_.lifecycle().identity().session_generation;
+  const auto           b_load = fixture_.lifecycle().active_image_load_request();
 
   // Stale success for the completed request must not re-acquire or re-finish.
   SaveCheckpointResult stale;
   stale.request_id           = switch_result.ticket.request_id;
-  stale.session_generation   = switch_result.ticket.session_generation;
+  stale.image_load_request_id = switch_result.ticket.image_load_request_id;
   stale.checkpoint_completed = true;
   fixture_.nav().OnCheckpointFinished(stale);
   fixture_.save_service().OnCheckpointFinished(stale);
 
   EXPECT_EQ(fixture_.lifecycle().identity().element_id,
             test::EditorSessionNavigationFixture::kElementB);
-  EXPECT_EQ(fixture_.lifecycle().identity().session_generation, b_generation);
+  EXPECT_EQ(fixture_.lifecycle().active_image_load_request(), b_load);
   EXPECT_EQ(fixture_.tasks().end_count, ends_before + 1);
   EXPECT_EQ(fixture_.pipeline().acquire_count, 2);
   EXPECT_EQ(std::count(fixture_.events().begin(), fixture_.events().end(), "acquire_b"), 1);

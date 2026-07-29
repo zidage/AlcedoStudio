@@ -46,7 +46,7 @@ Item {
     readonly property color colCardSurface: theme ? theme.colCardSurface : appTheme.cardSurfaceColor
     readonly property color colCardBorder: theme ? theme.colCardBorder : appTheme.cardBorderColor
     readonly property bool canMutateVersions: root.versionCheckoutEnabled && root.editorSession
-                                              && root.editorSession.canEdit
+                                              && root.editorSession.actions.canCheckoutVersion
                                               && !root.draftSubmitPending
     readonly property real listContentY: versionList ? versionList.contentY : 0
 
@@ -310,6 +310,7 @@ Item {
                 objectName: "editorBranchFromCurrentButton"
                 compact: true
                 enabled: root.canMutateVersions && root.activeVersionHeadCommit.length > 0
+                         && root.editorSession.actions.canBranchVersion
                 iconSrc: "qrc:/panel_icons/branch-current.svg"
                 iconColorDefault: root.colText
                 iconColorMuted: root.colMuted
@@ -325,7 +326,7 @@ Item {
             IconActionButton {
                 objectName: "editorForkFromRootButton"
                 compact: true
-                enabled: root.canMutateVersions
+                enabled: root.canMutateVersions && root.editorSession.actions.canCreateRootVersion
                 iconSrc: "qrc:/panel_icons/fork-root.svg"
                 iconColorDefault: root.colText
                 iconColorMuted: root.colMuted
@@ -583,7 +584,7 @@ Item {
                         IconActionButton {
                             objectName: "editorRenameVersionButton"
                             compact: true
-                            enabled: root.canMutateVersions
+                            enabled: root.canMutateVersions && root.editorSession.actions.canRenameVersion
                             iconSrc: "qrc:/panel_icons/edit.svg"
                             iconColorDefault: root.colText
                             iconColorMuted: root.colMuted
@@ -601,7 +602,8 @@ Item {
                             compact: true
                             enabled: root.versionCheckoutEnabled && !versionActive
                                      && root.historyModel && root.historyModel.versions.count > 1
-                                     && root.editorSession && root.editorSession.canEdit
+                                     && root.editorSession
+                                     && root.editorSession.actions.canRemoveVersion
                                      && !root.draftSubmitPending
                             iconSrc: "qrc:/panel_icons/trash.svg"
                             iconColorDefault: root.colText

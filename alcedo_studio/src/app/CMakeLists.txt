@@ -233,6 +233,13 @@ def_library(EditorSaveCheckpointService
     PUBLIC_DEPS EditorSaveCheckpointCoordinator EditorSessionCommandQueue xxHash
 )
 
+def_library(EditorActionPolicy
+    SOURCES
+        "${ALCEDO_APP_ROOT}/editor_action_policy.cpp"
+        "${ALCEDO_INCLUDE_ROOT}/app/editor_action_policy.hpp"
+    PUBLIC_DEPS EditorSessionCommandQueue
+)
+
 def_library(EditorSessionLifecycle
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_session_lifecycle.cpp"
@@ -312,7 +319,7 @@ def_library(EditorSessionService
     PRIVATE_DEPS xxHash JSON ${ALCEDO_OPENCV_CORE_DEPS}
                  EditHistory EditorMiniGitMaterializer EditorSaveCheckpointService EditorSessionLifecycle
                  EditorSessionNavigationController EditorSessionRenderController
-                 EditorSessionEditController EditorSessionCommandQueue
+                 EditorSessionEditController EditorSessionCommandQueue EditorActionPolicy
 )
 
 def_library(ImportService

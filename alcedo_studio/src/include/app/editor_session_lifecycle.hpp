@@ -9,6 +9,7 @@
 #include <thread>
 
 #include "app/editor_session_ports.hpp"
+#include "app/editor_session_request_ids.hpp"
 #include "app/editor_session_types.hpp"
 #include "type/type.hpp"
 
@@ -52,10 +53,10 @@ class EditorSessionLifecycle final {
 
   explicit EditorSessionLifecycle(Dependencies dependencies);
 
-  /// Begin acquiring a new image: advance the session generation, transition to
-  /// Acquiring (open) or Switching (switch), and recover the journal. On
-  /// recovery failure, transitions to Failed and returns false. The caller is
-  /// responsible for acquiring guards after this succeeds.
+  /// Begin acquiring a new image: allocate a new image-load request id,
+  /// transition to Acquiring (open) or Switching (switch), and recover the
+  /// journal. On recovery failure, transitions to Failed and returns false.
+  /// The caller is responsible for acquiring guards after this succeeds.
   auto               BeginAcquire(sl_element_id_t element_id, image_id_t image_id, bool is_switch,
                                   IEditorCheckpointStore* checkpoint_store, std::string* error) -> bool;
 
@@ -123,6 +124,9 @@ class EditorSessionLifecycle final {
   [[nodiscard]] auto state() const -> EditorSessionState;
   /// Read-only snapshot of the current identity. Owner-thread only.
   [[nodiscard]] auto identity() const -> EditorSessionIdentity;
+  /// Opaque id for the active image-load / switch acquire. Invalid when no
+  /// image is being acquired or held.
+  [[nodiscard]] auto active_image_load_request() const -> ImageLoadRequestId;
   /// True when the session has an image (Acquiring/Loading/Interactive/Saving/
   /// Switching).
   [[nodiscard]] auto has_image() const -> bool;
@@ -137,17 +141,11 @@ class EditorSessionLifecycle final {
   /// True when the active history guard is valid.
   [[nodiscard]] auto has_history_guard() const -> bool;
 
-  /// Advance the render generation for a content-changing edit or geometry
-  /// change. Returns the new render generation.
-  auto               AdvanceRenderGeneration() -> std::uint64_t;
-  /// Advance the view generation for a pure view transform or detail refresh.
-  /// Returns the new view generation.
-  auto               AdvanceViewGeneration() -> std::uint64_t;
-
   /// True when the element/image matches the current identity. Used by the
   /// render controller to filter stale results.
-  [[nodiscard]] auto MatchesIdentity(sl_element_id_t element_id, image_id_t image_id,
-                                     std::uint64_t session_generation) const -> bool;
+  [[nodiscard]] auto MatchesIdentity(sl_element_id_t element_id, image_id_t image_id) const -> bool;
+  /// True when the completion belongs to the active image-load request.
+  [[nodiscard]] auto MatchesImageLoadRequest(ImageLoadRequestId request) const -> bool;
 
  private:
   void            AssertOwnerThread() const { assert(std::this_thread::get_id() == owner_thread_); }
@@ -156,6 +154,8 @@ class EditorSessionLifecycle final {
   std::thread::id owner_thread_;
   EditorSessionState        state_ = EditorSessionState::NoImage;
   EditorSessionIdentity     identity_{};
+  ImageLoadRequestId        active_load_request_{};
+  std::uint64_t             next_load_request_id_ = 1;
   EditorPipelineGuardHandle pipeline_guard_{};
   EditorHistoryGuardHandle  history_guard_{};
   std::string               last_error_;

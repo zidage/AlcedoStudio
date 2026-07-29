@@ -27,9 +27,9 @@ Item {
     property real versionsListContentY: 0
     property string _lastBodyPage: ""
 
-    readonly property bool versionCheckoutEnabled: interactionPolicy
+    readonly property bool versionCheckoutEnabled: editorSession
                                                   ? !root.recoveryPending
-                                                    && Boolean(interactionPolicy.canCheckoutVersion)
+                                                    && Boolean(editorSession.actions.canCheckoutVersion)
                                                   : !root.recoveryPending
     readonly property string versionCheckoutDisabledReason: root.recoveryPending
                                                             ? qsTr("Resolve the editor save first")

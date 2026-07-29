@@ -364,8 +364,8 @@ struct EditorRenderCoordinatorDiagnostics {
   std::size_t                       replaced_count  = 0;
   std::size_t                       cancelled_count = 0;
   std::string                       last_error;
-  /// Phase 5E: generations the coordinator currently accepts.
-  std::uint64_t                     session_generation = 0;
+  /// Phase 5E: stamps the coordinator currently accepts.
+  std::uint64_t                     image_load_request_id = 0;
   std::uint64_t                     render_generation  = 0;
   std::uint64_t                     view_generation    = 0;
   /// Last request that was rejected at Submit (generation/token/scheduler).

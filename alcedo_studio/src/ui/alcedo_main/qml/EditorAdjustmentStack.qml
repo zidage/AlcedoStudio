@@ -55,8 +55,8 @@ Item {
     Layout.maximumWidth: maximumPanelWidth
     Layout.fillHeight: true
 
-    // Phase 6C-7: last applied snapshot revision for idempotent reload.
-    property int lastAppliedRevision: -1
+    // Phase 6C-7: last applied snapshot content key for idempotent reload.
+    property var lastAppliedSnapshot: null
 
     // LUT catalog model shared between EditorLookPanel and LUTPanel.
     EditorLutCatalogModel {
@@ -67,14 +67,14 @@ Item {
 
 
     /// Load panel values from the editor session adjustment snapshot.
-    /// Idempotent: re-applying the same revision has no effect. Each panel
+    /// Idempotent: re-applying an equal snapshot map has no effect. Each panel
     /// extracts its owned field keys from the snapshot map.
     function loadFromSnapshot(snapshot) {
         if (!editorSession) return
-        const rev = editorSession.snapshotRevision
-        if (rev === root.lastAppliedRevision) return
-        root.lastAppliedRevision = rev
         if (snapshot === undefined || snapshot === null) return
+        const snapshotKey = JSON.stringify(snapshot)
+        if (root.lastAppliedSnapshot !== null && snapshotKey === root.lastAppliedSnapshot) return
+        root.lastAppliedSnapshot = snapshotKey
         // Each panel owns its snapshot fields (Tone / Look / LUT). Do not
         // special-case LUT only at the stack — that path is easy to skip on
         // workspace re-entry and leaves the list without a selected row.
@@ -334,7 +334,7 @@ Item {
     }
     // Also load on initial binding when editorSession changes.
     onEditorSessionChanged: {
-        root.lastAppliedRevision = -1
+        root.lastAppliedSnapshot = null
         if (root.editorSession) {
             root.loadFromSnapshot(root.editorSession.adjustmentSnapshot)
         }
@@ -343,7 +343,7 @@ Item {
     // without a change signal. Match Tone/Look panels and always attempt load.
     Component.onCompleted: {
         if (root.editorSession) {
-            root.lastAppliedRevision = -1
+            root.lastAppliedSnapshot = null
             root.loadFromSnapshot(root.editorSession.adjustmentSnapshot)
         }
     }

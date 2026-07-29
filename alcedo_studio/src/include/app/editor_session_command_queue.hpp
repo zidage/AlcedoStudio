@@ -17,6 +17,7 @@
 #include "app/adjustment_transfer_types.hpp"
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_render_controller.hpp"
+#include "app/editor_session_request_ids.hpp"
 #include "app/editor_session_types.hpp"
 #include "edit/history/commit_types.hpp"
 
@@ -24,10 +25,9 @@ namespace alcedo {
 
 /// Stable identifier assigned when a user command enters the session queue.
 struct EditorSessionOperationId {
-  std::uint64_t      command_id         = 0;
-  std::uint64_t      session_generation = 0;
-  sl_element_id_t    element_id         = 0;
-  image_id_t         image_id           = 0;
+  std::uint64_t   command_id  = 0;
+  sl_element_id_t element_id  = 0;
+  image_id_t      image_id    = 0;
 
   [[nodiscard]] auto valid() const -> bool { return command_id != 0; }
 };
@@ -116,7 +116,7 @@ struct EditorSessionCompletion {
   EditorSessionOperationId     operation{};
   std::uint64_t                request_id         = 0;
   std::uint64_t                task_id            = 0;
-  std::uint64_t                session_generation = 0;
+  ImageLoadRequestId           image_load_request{};
   sl_element_id_t              element_id         = 0;
   image_id_t                   image_id           = 0;
   bool                         success            = false;

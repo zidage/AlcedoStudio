@@ -49,15 +49,15 @@ class RecordingFrameSink final : public alcedo::IFrameSink {
   int              height_      = 0;
 };
 
-auto MakeRequest(std::uint64_t request_id, std::uint64_t session_generation)
+auto MakeRequest(std::uint64_t request_id, std::uint64_t image_load_request)
     -> alcedo::EditorRenderRequest {
   alcedo::EditorRenderRequest request;
-  request.request_id                = request_id;
-  request.intent.element_id         = 22;
-  request.intent.image_id           = 11;
-  request.intent.session_generation = session_generation;
-  request.intent.render_generation  = session_generation;
-  request.intent.view_generation    = 1;
+  request.request_id                     = request_id;
+  request.intent.element_id              = 22;
+  request.intent.image_id                = 11;
+  request.intent.image_load_request_id   = alcedo::ImageLoadRequestId{image_load_request};
+  request.intent.render_generation       = image_load_request;
+  request.intent.view_generation         = 1;
   request.intent.reason             = alcedo::EditorRenderReason::InitialFrame;
   request.intent.quality            = alcedo::EditorRenderQuality::Interactive;
   request.intent.frame_role         = alcedo::FrameRole::InteractivePrimary;

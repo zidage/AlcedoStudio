@@ -46,7 +46,7 @@ TEST_F(EditorSaveCheckpointServiceTest, AsynchronousSuccessEndsTaskAndCompletesC
 
   EXPECT_TRUE(ticket.valid());
   EXPECT_NE(ticket.task_id, 0u);
-  EXPECT_EQ(ticket.session_generation, 7u);
+  EXPECT_EQ(ticket.image_load_request_id.value, 7u);
   EXPECT_FALSE(completion_called);
   EXPECT_TRUE(fixture_.service().active());
 
@@ -94,7 +94,7 @@ TEST_F(EditorSaveCheckpointServiceTest, StaleOnCheckpointFinishedIsIgnored) {
 
   SaveCheckpointResult stale;
   stale.request_id           = 999;
-  stale.session_generation   = 7;
+  stale.image_load_request_id   = ImageLoadRequestId{7};
   stale.checkpoint_completed = true;
   fixture_.service().OnCheckpointFinished(stale);
   EXPECT_FALSE(completion_called);
@@ -116,7 +116,7 @@ TEST_F(EditorSaveCheckpointServiceTest, DuplicateOnCheckpointFinishedDoesNotDoub
 
   SaveCheckpointResult dup;
   dup.request_id           = ticket.request_id;
-  dup.session_generation   = ticket.session_generation;
+  dup.image_load_request_id   = ticket.image_load_request_id;
   dup.checkpoint_completed = true;
   fixture_.service().OnCheckpointFinished(dup);
   EXPECT_EQ(fixture_.tasks().end_count, 1);
@@ -168,7 +168,7 @@ TEST_F(EditorSaveCheckpointServiceTest, StaleSessionGenerationIsIgnoredByOnCheck
 
   SaveCheckpointResult mismatched;
   mismatched.request_id           = ticket.request_id;
-  mismatched.session_generation   = 99;
+  mismatched.image_load_request_id   = ImageLoadRequestId{99};
   mismatched.checkpoint_completed = true;
   fixture_.service().OnCheckpointFinished(mismatched);
   EXPECT_FALSE(completion_called);
@@ -285,7 +285,7 @@ TEST_F(EditorSaveCheckpointServiceTest, MissingCheckpointStoreFailsAfterDurableJ
   ASSERT_TRUE(save_lock.owns_lock());
   SaveCheckpointRequest request;
   request.element_id         = 42;
-  request.session_generation = 7;
+  request.image_load_request_id = ImageLoadRequestId{7};
   request.capture            = test::MakeOpaqueSaveCapture();
   request.save_lock          = std::move(save_lock);
   const auto ticket =
@@ -313,7 +313,7 @@ TEST_F(EditorSaveCheckpointServiceTest, CapturePointerReachesCheckpointStoreWith
   ASSERT_TRUE(save_lock.owns_lock());
   SaveCheckpointRequest request;
   request.element_id         = 42;
-  request.session_generation = 7;
+  request.image_load_request_id = ImageLoadRequestId{7};
   request.capture            = capture;
   request.save_lock          = std::move(save_lock);
   const auto ticket =

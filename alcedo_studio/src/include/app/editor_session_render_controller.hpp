@@ -13,6 +13,7 @@
 
 #include "app/editor_render_intent.hpp"
 #include "app/editor_session_ports.hpp"
+#include "app/editor_session_request_ids.hpp"
 #include "app/editor_session_types.hpp"
 #include "type/type.hpp"
 
@@ -68,23 +69,22 @@ class EditorSessionRenderController final {
   /// Select source-frame rendering while the geometry panel owns the overlay.
   void                           SetGeometryOverlayActive(bool active);
 
-  /// Route the initial render for a new image. Accepts the session identity
-  /// and state as immutable inputs from the facade; does not read lifecycle.
-  auto RouteInitialRender(const EditorRenderCommand& command, const EditorSessionIdentity& identity)
-      -> std::uint64_t;
+  /// Route the initial render for a new image. Accepts the session identity,
+  /// image-load request, and state as immutable inputs from the facade.
+  auto RouteInitialRender(const EditorRenderCommand& command, const EditorSessionIdentity& identity,
+                          ImageLoadRequestId image_load_request) -> std::uint64_t;
 
-  /// Route a view change. The facade provides identity and state after
-  /// advancing generations. Does not read or mutate lifecycle state.
+  /// Route a view change. The facade provides identity, image-load request, and
+  /// state after advancing view stamps.
   auto RouteViewChange(const EditorRenderCommand& command, const EditorSessionIdentity& identity,
-                       EditorSessionState state) -> EditorRenderEvent;
+                       ImageLoadRequestId image_load_request, EditorSessionState state)
+      -> EditorRenderEvent;
 
-  /// Feed a render result from the coordinator. The facade provides the
-  /// session identity and state for filtering and first-frame gate updates.
-  /// When the first frame is presented, emits a FirstFramePresented event
-  /// with the identity snapshot; the facade is responsible for applying the
-  /// Interactive lifecycle transition.
+  /// Feed a render result from the coordinator. The facade provides the session
+  /// identity and image-load request for filtering and first-frame gate updates.
   void NotifyRenderResult(const EditorRenderResult&    render_result,
-                          const EditorSessionIdentity& identity, EditorSessionState state);
+                          const EditorSessionIdentity& identity, ImageLoadRequestId image_load_request,
+                          EditorSessionState state);
 
   /// True when the presentation target (sink + dimensions) is ready.
   [[nodiscard]] auto PresentationTargetReady() const -> bool;
@@ -113,14 +113,22 @@ class EditorSessionRenderController final {
   /// the first frame is presented.
   void               MarkImageAcquired();
 
-  /// Cancel the active render session. Called by the facade during seal/close.
-  void               CancelSessionAndWait(std::uint64_t session_generation);
+  /// Cancel the active render session for one image-load request.
+  void               CancelSessionAndWait(ImageLoadRequestId image_load_request);
+
+  /// Advance the content stamp used for coordinator supersession after edits.
+  void               AdvanceContentGeneration();
+  /// Advance the view stamp used to obsolete DetailPatch work.
+  void               AdvanceViewGeneration();
+  [[nodiscard]] auto content_generation() const -> std::uint64_t;
+  [[nodiscard]] auto view_generation() const -> std::uint64_t;
 
  private:
   /// Build a fully-stamped render intent from the command and identity.
   /// Returns nullopt when the identity does not represent an active image.
   [[nodiscard]] auto MakeRenderIntent(const EditorRenderCommand&   command,
-                                      const EditorSessionIdentity& identity) const
+                                      const EditorSessionIdentity& identity,
+                                      ImageLoadRequestId           image_load_request) const
       -> std::optional<EditorRenderIntent>;
   /// Emit a FirstFramePresented event when all first-frame conditions are met.
   /// The facade applies the Interactive lifecycle transition in its handler.
@@ -128,10 +136,11 @@ class EditorSessionRenderController final {
   /// Check if a render result matches the active first-frame request and the
   /// provided identity.
   [[nodiscard]] auto  MatchesActiveFirstFrame(const EditorRenderResult&    render_result,
-                                              const EditorSessionIdentity& identity) const -> bool;
-  /// Route a pending initial render if the presentation target becomes ready.
+                                              const EditorSessionIdentity& identity,
+                                              ImageLoadRequestId image_load_request) const -> bool;
   void                RoutePendingInitialRender(const EditorRenderCommand&   command,
-                                                const EditorSessionIdentity& identity);
+                                                const EditorSessionIdentity& identity,
+                                                ImageLoadRequestId           image_load_request);
   /// Aggregate coordinator in-flight/pending state.
   [[nodiscard]] auto  CoordinatorBusy() const -> bool;
   /// Emit a render event to the facade.
@@ -158,6 +167,9 @@ class EditorSessionRenderController final {
   /// first-frame complete→submit→present gate and to emit the
   /// FirstFramePresented event with the correct identity snapshot.
   EditorSessionIdentity                                pending_session_identity_{};
+  ImageLoadRequestId                                   pending_image_load_request_{};
+  std::uint64_t                                        content_generation_ = 0;
+  std::uint64_t                                        view_generation_    = 1;
   bool                                                 last_notified_render_busy_ = false;
   std::optional<std::chrono::steady_clock::time_point> first_frame_route_time_{};
   double                                               first_frame_time_ms_ = -1.0;

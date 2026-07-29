@@ -45,7 +45,7 @@ auto FrameRoleToPreviewMetadata(const alcedo::EditorRenderIntent& intent)
                                      : intent.render_generation;
   meta.detail_serial           = 0;
   meta.image_identity          = static_cast<std::uint64_t>(intent.image_id);
-  meta.image_generation        = intent.session_generation;
+  meta.image_generation        = intent.image_load_request_id.value;
   meta.scope_update_allowed    = alcedo::ScopeUpdateAllowedForReason(intent.reason);
   meta.scope_refresh_requested = intent.reason == alcedo::EditorRenderReason::ScopeRefresh;
   return meta;
@@ -196,7 +196,7 @@ void EditorSessionRenderSchedulerPort::WaitForSessionIdle(std::uint64_t session_
   std::unique_lock lock(mutex_);
   jobs_changed_.wait(lock, [&] {
     return std::none_of(jobs_.begin(), jobs_.end(), [&](const auto& entry) {
-      return entry.second.request.intent.session_generation == session_generation;
+      return entry.second.request.intent.image_load_request_id.value == session_generation;
     });
   });
 }
@@ -304,7 +304,7 @@ void EditorSessionRenderSchedulerPort::ExecuteJob(Job job) {
   if (track_first_composition) {
     std::scoped_lock lock(mutex_);
     pending_presentations_[job.request.request_id] = PendingPresentation{
-        job.request.intent.session_generation, job.request.intent.image_id, false, false};
+        job.request.intent.image_load_request_id.value, job.request.intent.image_id, false, false};
   }
 
   if (test_producer) {

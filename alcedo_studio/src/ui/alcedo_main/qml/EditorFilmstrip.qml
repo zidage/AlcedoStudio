@@ -38,12 +38,16 @@ Item {
     property bool _listHadFocus: false
     property bool _restoringScroll: false
     property int contextMenuElementId: 0
-    readonly property bool selectionEnabled: interactionPolicy
-                                             ? Boolean(interactionPolicy.canSelectEditorImage)
-                                             : true
-    readonly property string selectionDisabledReason: interactionPolicy
-                                                     ? String(interactionPolicy.selectEditorImageReason || "")
-                                                     : ""
+    readonly property bool selectionEnabled: editorSession
+                                             ? Boolean(editorSession.actions.canSelectImage)
+                                             : (interactionPolicy
+                                                ? Boolean(interactionPolicy.canSelectEditorImage)
+                                                : true)
+    readonly property string selectionDisabledReason: editorSession
+                                                     ? ""
+                                                     : (interactionPolicy
+                                                        ? String(interactionPolicy.selectEditorImageReason || "")
+                                                        : "")
     property bool hasImage: editorSession ? editorSession.hasImage : false
 
     readonly property real handleHeight: 28

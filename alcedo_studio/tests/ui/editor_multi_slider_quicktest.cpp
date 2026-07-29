@@ -101,12 +101,10 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
       last_error_ = error;
     }
 
-    identity_.element_id         = 42;
-    identity_.image_id           = 84;
-    identity_.session_generation = 1;
-    identity_.render_generation  = 1;
-    identity_.view_generation    = 1;
-    state_                       = alcedo::EditorSessionState::Interactive;
+    identity_.element_id   = 42;
+    identity_.image_id     = 84;
+    image_load_request_    = alcedo::ImageLoadRequestId{1};
+    state_                 = alcedo::EditorSessionState::Interactive;
   }
 
   ~ProductionSessionBackend() override {
@@ -120,6 +118,9 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
 
   auto state() const -> alcedo::EditorSessionState override { return state_; }
   auto identity() const -> alcedo::EditorSessionIdentity override { return identity_; }
+  [[nodiscard]] auto active_image_load_request() const -> alcedo::ImageLoadRequestId override {
+    return image_load_request_;
+  }
   auto active() const -> bool override { return true; }
   auto has_image() const -> bool override { return true; }
   auto last_error() const -> std::string override { return last_error_; }
@@ -342,6 +343,7 @@ class ProductionSessionBackend final : public alcedo::IEditorSessionBackend {
   alcedo::EditorHistoryGuardHandle         handle_{};
   alcedo::EditorSessionState               state_ = alcedo::EditorSessionState::NoImage;
   alcedo::EditorSessionIdentity            identity_{};
+  alcedo::ImageLoadRequestId               image_load_request_{};
   std::string                              last_error_;
 
   int patch_count_        = 0;

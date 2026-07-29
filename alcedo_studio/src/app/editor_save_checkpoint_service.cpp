@@ -67,7 +67,7 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
     if (completion) {
       SaveCheckpointResult result;
       result.operation_id         = request.operation_id;
-      result.session_generation   = request.session_generation;
+      result.image_load_request_id = request.image_load_request_id;
       result.checkpoint_completed = false;
       result.error                = deps_.save_coordinator->is_shutdown()
                                         ? "Editor save checkpoint coordinator is shutting down"
@@ -84,7 +84,7 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
       if (completion) {
         SaveCheckpointResult result;
         result.operation_id         = request.operation_id;
-        result.session_generation   = request.session_generation;
+        result.image_load_request_id = request.image_load_request_id;
         result.checkpoint_completed = false;
         result.error                = "Failed to start editor save task";
         // Release lock before invoking completion so navigation can retry.
@@ -103,7 +103,7 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
   {
     std::scoped_lock lock(mutex_);
     pending_saves_.push_back(PendingSave{request_id, request.operation_id,
-                                         request.session_generation, request.element_id, task_id,
+                                         request.image_load_request_id, request.element_id, task_id,
                                          std::move(request.capture), request.last_journal_sequence,
                                          std::move(save_lock), completion});
   }
@@ -131,7 +131,7 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
   bool started_async = true;
   if (deps_.journal) {
     started_async = deps_.journal->CommitJournalAsync(request.element_id,
-                                                      request.session_generation, on_commit);
+                                                      request.image_load_request_id.value, on_commit);
   } else {
     on_commit(EditorJournalCommitOutcome{true, true, false, 0, 0, {}});
   }
@@ -149,7 +149,7 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
         SaveCheckpointResult result;
         result.request_id           = request_id;
         result.operation_id         = request.operation_id;
-        result.session_generation   = request.session_generation;
+        result.image_load_request_id = request.image_load_request_id;
         result.task_id              = rolled_task_id;
         result.checkpoint_completed = false;
         result.error =
@@ -167,7 +167,7 @@ auto EditorSaveCheckpointService::Start(SaveCheckpointRequest    request,
     return CheckpointTicket{};
   }
 
-  return CheckpointTicket{request_id, request.operation_id, request.session_generation,
+  return CheckpointTicket{request_id, request.operation_id, request.image_load_request_id,
                           request.element_id, task_id};
 }
 
@@ -188,7 +188,7 @@ void EditorSaveCheckpointService::CancelAndWait() {
       SaveCheckpointResult result;
       result.request_id           = save.request_id;
       result.operation_id         = save.operation_id;
-      result.session_generation   = save.session_generation;
+      result.image_load_request_id = save.image_load_request_id;
       result.task_id              = save.task_id;
       result.checkpoint_completed = false;
       result.error                = "Editor save checkpoint cancelled";
@@ -217,7 +217,7 @@ void EditorSaveCheckpointService::OnCheckpointFinished(const SaveCheckpointResul
     auto             it = std::find_if(pending_saves_.begin(), pending_saves_.end(),
                                        [&result](const PendingSave& save) {
                              return save.request_id == result.request_id &&
-                                    save.session_generation == result.session_generation;
+                                    save.image_load_request_id == result.image_load_request_id;
                            });
     if (it == pending_saves_.end()) {
       return;
@@ -246,7 +246,7 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
   std::uint64_t                                       task_id           = 0;
   std::uint64_t                                       operation_id      = 0;
   sl_element_id_t                                     element_id        = 0;
-  std::uint64_t                                       session_gen       = 0;
+  ImageLoadRequestId                                  load_request_id{};
   bool                                                found             = false;
   bool                                                start_materialize = false;
   std::shared_ptr<const EditorMiniGitSaveCapture>     capture;
@@ -263,7 +263,7 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
     task_id      = it->task_id;
     operation_id = it->operation_id;
     element_id   = it->element_id;
-    session_gen  = it->session_generation;
+    load_request_id = it->image_load_request_id;
 
     if (!outcome.accepted || !outcome.durable) {
       early_lock = std::move(it->save_lock);
@@ -304,7 +304,7 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
       SaveCheckpointCompletion                            late_completion;
       EditorSaveCheckpointCoordinator::SaveCheckpointLock late_lock;
       if (TakePendingSave(request_id, &late_task_id, &late_completion, &late_lock)) {
-        FinishSave(request_id, operation_id, session_gen, late_task_id, false,
+        FinishSave(request_id, operation_id, load_request_id, late_task_id, false,
                    "Materialization could not start", late_completion, std::move(late_lock));
       }
     }
@@ -323,7 +323,7 @@ void EditorSaveCheckpointService::HandleJournalCommit(std::uint64_t             
   } else {
     msg = outcome.error.empty() ? "Journal commit failed" : outcome.error;
   }
-  FinishSave(request_id, operation_id, session_gen, task_id, ok, msg, completion,
+  FinishSave(request_id, operation_id, load_request_id, task_id, ok, msg, completion,
              std::move(early_lock));
 }
 
@@ -333,7 +333,7 @@ void EditorSaveCheckpointService::HandleMaterialization(std::uint64_t           
   std::uint64_t                                       task_id      = 0;
   std::uint64_t                                       operation_id = 0;
   sl_element_id_t                                     element_id   = 0;
-  std::uint64_t                                       session_gen  = 0;
+  ImageLoadRequestId                                  load_request_id{};
   bool                                                found        = false;
   std::optional<std::uint64_t>                        last_journal_sequence;
   EditorSaveCheckpointCoordinator::SaveCheckpointLock save_lock;
@@ -349,7 +349,7 @@ void EditorSaveCheckpointService::HandleMaterialization(std::uint64_t           
     task_id               = it->task_id;
     operation_id          = it->operation_id;
     element_id            = it->element_id;
-    session_gen           = it->session_generation;
+    load_request_id = it->image_load_request_id;
     last_journal_sequence = it->last_journal_sequence;
     save_lock             = std::move(it->save_lock);
     pending_saves_.erase(it);
@@ -365,12 +365,12 @@ void EditorSaveCheckpointService::HandleMaterialization(std::uint64_t           
   if (ok && deps_.thumbnails) {
     deps_.thumbnails->RefreshAfterMaterialization(element_id);
   }
-  FinishSave(request_id, operation_id, session_gen, task_id, ok, msg, completion,
+  FinishSave(request_id, operation_id, load_request_id, task_id, ok, msg, completion,
              std::move(save_lock), ok ? last_journal_sequence : std::nullopt);
 }
 
 void EditorSaveCheckpointService::FinishSave(
-    std::uint64_t request_id, std::uint64_t operation_id, std::uint64_t session_generation,
+    std::uint64_t request_id, std::uint64_t operation_id, ImageLoadRequestId image_load_request_id,
     std::uint64_t task_id, bool checkpoint_completed, std::string message,
     SaveCheckpointCompletion                              completion,
     EditorSaveCheckpointCoordinator::SaveCheckpointLock&& save_lock,
@@ -386,7 +386,7 @@ void EditorSaveCheckpointService::FinishSave(
     SaveCheckpointResult result;
     result.request_id            = request_id;
     result.operation_id          = operation_id;
-    result.session_generation    = session_generation;
+    result.image_load_request_id = image_load_request_id;
     result.task_id               = task_id;
     result.checkpoint_completed  = checkpoint_completed;
     result.error                 = std::move(message);

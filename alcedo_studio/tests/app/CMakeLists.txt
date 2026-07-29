@@ -220,6 +220,19 @@ gtest_discover_tests(EditorSessionCommandQueueBaselineTest
     PROPERTIES LABELS "editor_session")
 alcedo_register_test_target(EditorSessionCommandQueueBaselineTest app)
 
+# CQ3: action-admission policy, operation leases, scoped request-id correlation.
+add_executable(EditorSessionActionPolicyCq3Test
+    ${ALCEDO_TEST_ROOT}/app/editor_session_action_policy_cq3_test.cpp)
+target_include_directories(EditorSessionActionPolicyCq3Test
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorSessionActionPolicyCq3Test
+    EditorSessionService EditorActionPolicy xxHash JSON ${ALCEDO_TEST_OPENCV_MIN_DEPS}
+    GTest::gtest_main)
+gtest_discover_tests(EditorSessionActionPolicyCq3Test
+    TEST_PREFIX "EditorSessionActionPolicyCq3Test."
+    PROPERTIES LABELS "editor_session")
+alcedo_register_test_target(EditorSessionActionPolicyCq3Test app)
+
 add_executable(EditorSessionControllerPhase5ATest
     ${ALCEDO_TEST_ROOT}/ui/editor_session_controller_phase5a_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp

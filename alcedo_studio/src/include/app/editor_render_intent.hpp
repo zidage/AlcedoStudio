@@ -13,6 +13,7 @@
 #include <string>
 
 #include "app/editor_adjustment_types.hpp"
+#include "app/editor_session_request_ids.hpp"
 #include "edit/frame_presentation_types.hpp"
 #include "type/type.hpp"
 
@@ -125,8 +126,10 @@ struct EditorRenderIntent {
   sl_element_id_t                                element_id         = 0;
   image_id_t                                     image_id           = 0;
   std::uint64_t                                  operation_id       = 0;
-  std::uint64_t                                  session_generation = 0;
+  ImageLoadRequestId                             image_load_request_id{};
+  /// Content-changing edits advance this stamp for coordinator supersession.
   std::uint64_t                                  render_generation  = 0;
+  /// View-only changes advance this stamp; obsoletes DetailPatch work only.
   std::uint64_t                                  view_generation    = 0;
   EditorRenderReason                             reason = EditorRenderReason::InitialFrame;
   EditorRenderAdjustmentSnapshot                 adjustment{};

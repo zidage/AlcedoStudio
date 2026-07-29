@@ -174,6 +174,20 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
   /// current image). The CQ1 target saves such a journal before creating a
   /// new Version or merge commit.
   bool                      dirty_journal = false;
+  /// History facts projected into EditorActionInputs for CQ3 availability.
+  bool                      force_can_undo = false;
+  bool                      force_can_redo = false;
+
+  auto ReadHistorySnapshot(const EditorHistoryGuardHandle& /*guard*/,
+                           EditorHistorySnapshot* snapshot, std::string* /*error*/) -> bool override {
+    if (snapshot == nullptr) {
+      return false;
+    }
+    *snapshot           = EditorHistorySnapshot{};
+    snapshot->can_undo  = force_can_undo;
+    snapshot->can_redo  = force_can_redo;
+    return true;
+  }
 
   /// Report the dirty journal through the same query the facade uses to gate
   /// Paste/Merge and the discard action.

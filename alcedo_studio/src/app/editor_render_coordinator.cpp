@@ -29,7 +29,7 @@ void EditorRenderCoordinator::SetResultObserver(ResultObserver observer) {
 }
 
 auto EditorRenderCoordinator::IsObsolete(const EditorRenderIntent& intent) const -> bool {
-  if (intent.session_generation != session_generation_ ||
+  if (intent.image_load_request_id.value != active_image_load_request_id_ ||
       intent.render_generation != render_generation_) {
     return true;
   }
@@ -67,7 +67,7 @@ auto EditorRenderCoordinator::CancelObsoleteForActiveGenerations(
   }
   const bool preserve_inflight_full_frame =
       inflight_ && policy == EditorRenderSupersessionPolicy::PreserveInflightFullFrame &&
-      inflight_->request.intent.session_generation == session_generation_ &&
+      inflight_->request.intent.image_load_request_id.value == active_image_load_request_id_ &&
       inflight_->request.intent.view_generation == view_generation_ &&
       inflight_->request.intent.frame_role != FrameRole::DetailPatch;
   if (inflight_ && IsObsolete(inflight_->request.intent) && !preserve_inflight_full_frame) {
@@ -86,14 +86,14 @@ auto EditorRenderCoordinator::CancelObsoleteForActiveGenerations(
   return scheduler_job_to_cancel;
 }
 
-void EditorRenderCoordinator::SetActiveGenerations(std::uint64_t session_generation,
+void EditorRenderCoordinator::SetActiveGenerations(std::uint64_t image_load_request_id,
                                                    std::uint64_t render_generation,
                                                    std::uint64_t view_generation,
                                                    EditorRenderSupersessionPolicy policy) {
   std::uint64_t scheduler_job_to_cancel = 0;
   {
     std::scoped_lock lock(mutex_);
-    session_generation_     = session_generation;
+    active_image_load_request_id_ = image_load_request_id;
     render_generation_      = render_generation;
     view_generation_        = view_generation;
     scheduler_job_to_cancel = CancelObsoleteForActiveGenerations(policy);
@@ -107,9 +107,9 @@ void EditorRenderCoordinator::SetActiveGenerations(std::uint64_t session_generat
 
 auto EditorRenderCoordinator::AcceptOrReject(const EditorRenderIntent& intent,
                                              std::string*              message) const -> bool {
-  if (intent.session_generation != session_generation_) {
+  if (intent.image_load_request_id.value != active_image_load_request_id_) {
     if (message) {
-      *message = "Rejected: session generation mismatch";
+      *message = "Rejected: image load request mismatch";
     }
     return false;
   }
@@ -364,12 +364,12 @@ auto EditorRenderCoordinator::Submit(const EditorRenderIntent& intent) -> Editor
   return result;
 }
 
-void EditorRenderCoordinator::CancelSession(std::uint64_t session_generation) {
+void EditorRenderCoordinator::CancelSession(std::uint64_t image_load_request_id) {
   std::uint64_t scheduler_job_to_cancel = 0;
   {
     std::scoped_lock lock(mutex_);
     for (auto it = pending_.begin(); it != pending_.end();) {
-      if (it->request.intent.session_generation == session_generation) {
+      if (it->request.intent.image_load_request_id.value == image_load_request_id) {
         EditorRenderResult cancelled;
         cancelled.kind       = EditorRenderResultKind::Cancelled;
         cancelled.request_id = it->request.request_id;
@@ -382,7 +382,7 @@ void EditorRenderCoordinator::CancelSession(std::uint64_t session_generation) {
         ++it;
       }
     }
-    if (inflight_ && inflight_->request.intent.session_generation == session_generation) {
+    if (inflight_ && inflight_->request.intent.image_load_request_id.value == image_load_request_id) {
       scheduler_job_to_cancel        = inflight_->scheduler_job_id;
       const std::uint64_t request_id = inflight_->request.request_id;
       EditorRenderResult  cancelled;
@@ -405,10 +405,10 @@ void EditorRenderCoordinator::CancelSession(std::uint64_t session_generation) {
   DeliverPendingResults();
 }
 
-void EditorRenderCoordinator::CancelSessionAndWait(std::uint64_t session_generation) {
-  CancelSession(session_generation);
+void EditorRenderCoordinator::CancelSessionAndWait(std::uint64_t image_load_request_id) {
+  CancelSession(image_load_request_id);
   if (scheduler_) {
-    scheduler_->WaitForSessionIdle(session_generation);
+    scheduler_->WaitForSessionIdle(image_load_request_id);
   }
 }
 

@@ -12,7 +12,7 @@
 #include <thread>
 
 #include "app/editor_save_checkpoint_service.hpp"
-#include "app/editor_session_types.hpp"
+#include "app/editor_session_request_ids.hpp"
 #include "edit/history/commit_types.hpp"
 #include "type/type.hpp"
 
@@ -86,8 +86,8 @@ struct NavigationOutcome {
   bool             same_image_noop         = false;
   /// The CheckpointTicket for correlation with OnCheckpointFinished.
   CheckpointTicket ticket;
-  /// The session generation of the image being saved.
-  std::uint64_t    sealed_session_generation = 0;
+  /// The image-load request id of the image being saved.
+  ImageLoadRequestId sealed_image_load_request_id{};
   std::string      message;
 };
 
@@ -116,7 +116,7 @@ class EditorSessionNavigationController final {
     bool            persist_changes       = true;
     bool            start_background_save = true;
     sl_element_id_t element_id            = 0;
-    std::uint64_t   session_generation    = 0;
+    ImageLoadRequestId image_load_request_id{};
   };
 
   explicit EditorSessionNavigationController(

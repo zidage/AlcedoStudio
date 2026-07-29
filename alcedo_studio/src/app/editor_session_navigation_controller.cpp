@@ -89,8 +89,7 @@ auto EditorSessionNavigationController::RequestOpenOrSwitch(sl_element_id_t elem
   }
 
   // Seal the prior image before acquiring the next one.
-  if (current_identity.session_generation != 0 &&
-      (current_identity.element_id != 0 || current_identity.image_id != 0)) {
+  if (current_identity.element_id != 0 && current_identity.image_id != 0) {
     PendingEditorAction pending;
     pending.kind           = PendingEditorActionKind::SwitchImage;
     pending.element_id     = element_id;
@@ -118,7 +117,7 @@ auto EditorSessionNavigationController::RequestOpenOrSwitch(sl_element_id_t elem
     // completion on the session owner thread.
     state_->pending_action->ticket    = ticket;
     outcome.ticket                    = ticket;
-    outcome.sealed_session_generation = current_identity.session_generation;
+    outcome.sealed_image_load_request_id = lifecycle_.active_image_load_request();
     outcome.waiting_for_checkpoint    = true;
     outcome.message                   = "Waiting for save checkpoint before loading the next image";
     return outcome;
@@ -177,7 +176,7 @@ auto EditorSessionNavigationController::RequestClose(bool persist_changes) -> Na
     // posted completion reduces it on the owner thread.
     state_->pending_action->ticket    = ticket;
     outcome.ticket                    = ticket;
-    outcome.sealed_session_generation = current_identity.session_generation;
+    outcome.sealed_image_load_request_id = lifecycle_.active_image_load_request();
     outcome.waiting_for_checkpoint    = true;
     outcome.message                   = "Waiting for save checkpoint before closing";
     return outcome;
@@ -188,7 +187,7 @@ auto EditorSessionNavigationController::RequestClose(bool persist_changes) -> Na
     std::string error;
     journal_->DiscardUnflushed(current_identity.element_id, &error);
   }
-  render_.CancelSessionAndWait(current_identity.session_generation);
+  render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
   lifecycle_.ReleaseGuards();
   lifecycle_.CompleteClose();
   edit_.ClearSnapshot();
@@ -209,7 +208,7 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
   // command executor, so its ticket is populated before this method runs.
   if (pending.ticket.request_id != 0 &&
       (pending.ticket.request_id != result.request_id ||
-       pending.ticket.session_generation != result.session_generation ||
+       pending.ticket.image_load_request_id != result.image_load_request_id ||
        (pending.ticket.operation_id != 0 && result.operation_id != 0 &&
         pending.ticket.operation_id != result.operation_id))) {
     return;
@@ -336,12 +335,13 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
                                                          bool start_background_save)
     -> CheckpointTicket {
   const auto identity = lifecycle_.identity();
-  render_.CancelSessionAndWait(identity.session_generation);
+  render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
 
   if (persist_changes) {
     if (journal_ != nullptr) {
       std::string error;
-      if (!journal_->FinalizeEdit(identity.element_id, identity.session_generation, &error)) {
+      if (!journal_->FinalizeEdit(identity.element_id, lifecycle_.active_image_load_request().value,
+                                  &error)) {
         return CheckpointTicket{};
       }
     }
@@ -369,7 +369,7 @@ auto EditorSessionNavigationController::SealAndStartSave(bool persist_changes,
     SaveCheckpointRequest req;
     req.element_id         = identity.element_id;
     req.operation_id       = operation_id_;
-    req.session_generation = identity.session_generation;
+    req.image_load_request_id = lifecycle_.active_image_load_request();
     req.capture            = std::move(capture);
     if (req.capture->has_journal_range()) {
       req.last_journal_sequence = req.capture->last_journal_sequence;
@@ -421,7 +421,7 @@ void EditorSessionNavigationController::ContinueToTarget(sl_element_id_t element
   command.operation_id = operation_id_;
   command.reason = is_switch ? EditorRenderReason::ImageSwitch : EditorRenderReason::InitialFrame;
   command.adjustment = edit_.adjustment_snapshot();
-  render_.RouteInitialRender(command, lifecycle_.identity());
+  render_.RouteInitialRender(command, lifecycle_.identity(), lifecycle_.active_image_load_request());
 }
 
 void EditorSessionNavigationController::ContinueToClose(bool persist_changes) {
@@ -494,7 +494,7 @@ auto EditorSessionNavigationController::RequestCheckoutVersion(const version_ref
   // posted completion reduces it on the owner thread.
   state_->pending_action->ticket    = ticket;
   outcome.ticket                    = ticket;
-  outcome.sealed_session_generation = current_identity.session_generation;
+  outcome.sealed_image_load_request_id = lifecycle_.active_image_load_request();
   outcome.waiting_for_checkpoint    = true;
   outcome.message                   = "Waiting for save checkpoint before Version checkout";
   return outcome;
@@ -537,7 +537,7 @@ auto EditorSessionNavigationController::ContinueCheckoutVersion(const version_re
   if (lifecycle_.state() != EditorSessionState::Interactive) {
     lifecycle_.MarkImageReady();
   }
-  lifecycle_.AdvanceRenderGeneration();
+  render_.AdvanceContentGeneration();
   render_.ResetForNewImage();
   render_.MarkImageAcquired();
 
@@ -545,7 +545,7 @@ auto EditorSessionNavigationController::ContinueCheckoutVersion(const version_re
   command.operation_id = operation_id_;
   command.reason       = EditorRenderReason::InitialFrame;
   command.adjustment   = edit_.adjustment_snapshot();
-  render_.RouteInitialRender(command, lifecycle_.identity());
+  render_.RouteInitialRender(command, lifecycle_.identity(), lifecycle_.active_image_load_request());
   return true;
 }
 
@@ -584,7 +584,7 @@ auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string  d
   }
   // Same generation advance as checkout: the new root Version must paint even
   // when the open image identity is unchanged.
-  lifecycle_.AdvanceRenderGeneration();
+  render_.AdvanceContentGeneration();
   render_.ResetForNewImage();
   render_.MarkImageAcquired();
 
@@ -592,7 +592,7 @@ auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string  d
   command.operation_id = operation_id_;
   command.reason       = EditorRenderReason::InitialFrame;
   command.adjustment   = edit_.adjustment_snapshot();
-  render_.RouteInitialRender(command, lifecycle_.identity());
+  render_.RouteInitialRender(command, lifecycle_.identity(), lifecycle_.active_image_load_request());
   return true;
 }
 
@@ -630,7 +630,7 @@ auto EditorSessionNavigationController::ContinueBranchFromCommit(const commit_ha
   if (lifecycle_.state() != EditorSessionState::Interactive) {
     lifecycle_.MarkImageReady();
   }
-  lifecycle_.AdvanceRenderGeneration();
+  render_.AdvanceContentGeneration();
   render_.ResetForNewImage();
   render_.MarkImageAcquired();
 
@@ -638,7 +638,7 @@ auto EditorSessionNavigationController::ContinueBranchFromCommit(const commit_ha
   command.operation_id = operation_id_;
   command.reason       = EditorRenderReason::InitialFrame;
   command.adjustment   = edit_.adjustment_snapshot();
-  render_.RouteInitialRender(command, lifecycle_.identity());
+  render_.RouteInitialRender(command, lifecycle_.identity(), lifecycle_.active_image_load_request());
   return true;
 }
 
@@ -712,7 +712,7 @@ auto EditorSessionNavigationController::RetrySaveAfterFailure() -> NavigationOut
   // posted completion reduces it on the owner thread.
   state_->pending_action->ticket    = ticket;
   outcome.ticket                    = ticket;
-  outcome.sealed_session_generation = lifecycle_.identity().session_generation;
+  outcome.sealed_image_load_request_id = lifecycle_.active_image_load_request();
   outcome.waiting_for_checkpoint    = true;
   outcome.message                   = "Waiting for save checkpoint retry";
   return outcome;
@@ -749,7 +749,7 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
 
   // Continue the pending navigation with persist=false (no save needed).
   if (recovery.kind == PendingEditorActionKind::CloseEditor) {
-    render_.CancelSessionAndWait(lifecycle_.identity().session_generation);
+    render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
     lifecycle_.ReleaseGuards();
     lifecycle_.CompleteClose();
     edit_.ClearSnapshot();
@@ -809,7 +809,7 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
     return outcome;
   }
   // SwitchImage: release the current image and acquire the target.
-  render_.CancelSessionAndWait(lifecycle_.identity().session_generation);
+  render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
   lifecycle_.ReleaseGuards();
   edit_.ClearSnapshot();
   ContinueToTarget(recovery.element_id, recovery.image_id, recovery.is_switch);
@@ -886,7 +886,7 @@ auto EditorSessionNavigationController::RequestCreateRootVersion(std::string dis
   // posted completion reduces it on the owner thread.
   state_->pending_action->ticket    = ticket;
   outcome.ticket                    = ticket;
-  outcome.sealed_session_generation = current_identity.session_generation;
+  outcome.sealed_image_load_request_id = lifecycle_.active_image_load_request();
   outcome.waiting_for_checkpoint    = true;
   outcome.message                   = "Waiting for save checkpoint before root Version creation";
   return outcome;
@@ -950,7 +950,7 @@ auto EditorSessionNavigationController::RequestBranchFromCommit(const commit_has
   // posted completion reduces it on the owner thread.
   state_->pending_action->ticket    = ticket;
   outcome.ticket                    = ticket;
-  outcome.sealed_session_generation = current_identity.session_generation;
+  outcome.sealed_image_load_request_id = lifecycle_.active_image_load_request();
   outcome.waiting_for_checkpoint    = true;
   outcome.message                   = "Waiting for save checkpoint before branch creation";
   return outcome;

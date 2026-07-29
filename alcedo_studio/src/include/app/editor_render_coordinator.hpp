@@ -44,17 +44,17 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
 
   void SetResultObserver(ResultObserver observer);
 
-  /// Active image/session/view generations. Older pending intents are removed.
+  /// Active image-load / content / view stamps. Older pending intents are removed.
   /// Interactive adjustment bursts may preserve an already-running full frame
   /// so FAST_PREVIEW can finish while the newest pending request is coalesced.
-  void SetActiveGenerations(std::uint64_t session_generation, std::uint64_t render_generation,
+  void SetActiveGenerations(std::uint64_t image_load_request_id, std::uint64_t render_generation,
                             std::uint64_t view_generation,
                             EditorRenderSupersessionPolicy policy =
                                 EditorRenderSupersessionPolicy::CancelObsolete) override;
 
-  [[nodiscard]] auto session_generation() const -> std::uint64_t {
+  [[nodiscard]] auto image_load_request_id() const -> std::uint64_t {
     std::scoped_lock lock(mutex_);
-    return session_generation_;
+    return active_image_load_request_id_;
   }
   [[nodiscard]] auto render_generation() const -> std::uint64_t {
     std::scoped_lock lock(mutex_);
@@ -67,9 +67,9 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
 
   auto Submit(const EditorRenderIntent& intent) -> EditorRenderResult override;
 
-  /// Cancel every pending/in-flight request for a session generation (image switch).
-  void CancelSession(std::uint64_t session_generation) override;
-  void CancelSessionAndWait(std::uint64_t session_generation) override;
+  /// Cancel every pending/in-flight request for an image-load request (image switch).
+  void CancelSession(std::uint64_t image_load_request_id) override;
+  void CancelSessionAndWait(std::uint64_t image_load_request_id) override;
 
   /// Cancel one request by id (token or explicit). Starts the next runnable request.
   auto CancelRequest(std::uint64_t request_id) -> bool;
@@ -110,7 +110,7 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
     diag.replaced_count               = replaced_count_;
     diag.cancelled_count              = cancelled_count_;
     diag.last_error                   = last_error_;
-    diag.session_generation           = session_generation_;
+    diag.image_load_request_id        = active_image_load_request_id_;
     diag.render_generation            = render_generation_;
     diag.view_generation              = view_generation_;
     diag.last_rejection_reason        = last_rejection_reason_;
@@ -152,7 +152,7 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
 
   std::shared_ptr<IEditorPipelineSchedulerPort> scheduler_;
   ResultObserver                                observer_;
-  std::uint64_t                                 session_generation_        = 0;
+  std::uint64_t                                 active_image_load_request_id_ = 0;
   std::uint64_t                                 render_generation_         = 0;
   std::uint64_t                                 view_generation_           = 0;
   std::uint64_t                                 next_request_id_           = 1;

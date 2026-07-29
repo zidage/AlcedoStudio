@@ -586,7 +586,7 @@ TEST_F(WorkspaceShellTests, PresentationViewportBindingSurvivesImageSwitchAToBTo
   auto* sink_a = session->presentation_frame_sink();
   ASSERT_NE(sink_a, nullptr);
   EXPECT_EQ(sink_a, viewport_a->frameSink());
-  const auto gen_a = session->session_generation();
+  const auto gen_a = viewport_a->imageGeneration();
   EXPECT_EQ(viewport_a->imageGeneration(), gen_a);
   EXPECT_EQ(viewport_a->imageIdentity(), 100ull);
 
@@ -602,20 +602,18 @@ TEST_F(WorkspaceShellTests, PresentationViewportBindingSurvivesImageSwitchAToBTo
   auto* sink_b = session->presentation_frame_sink();
   ASSERT_NE(sink_b, nullptr);
   EXPECT_EQ(sink_b, sink_a);
-  EXPECT_GT(session->session_generation(), gen_a);
+  EXPECT_GT(viewport_b->imageGeneration(), gen_a);
   EXPECT_EQ(viewport_b->imageIdentity(), 200ull);
-  EXPECT_EQ(viewport_b->imageGeneration(), session->session_generation());
 
   // B → A: generation advances again; late frames from first A are rejected.
-  const auto gen_b = session->session_generation();
+  const auto gen_b = viewport_b->imageGeneration();
   router->OpenEditor(10, 100);
   ProcessEvents(60);
   EXPECT_TRUE(session->presentation_viewport_bound());
   EXPECT_EQ(session->presentation_viewport(), viewport_a);
   EXPECT_EQ(session->presentation_frame_sink(), sink_a);
-  EXPECT_GT(session->session_generation(), gen_b);
+  EXPECT_GT(viewport_a->imageGeneration(), gen_b);
   EXPECT_EQ(viewport_a->imageIdentity(), 100ull);
-  EXPECT_EQ(viewport_a->imageGeneration(), session->session_generation());
 
   // Leaving the editor workspace unbinds on viewport destruction.
   router->OpenLibrary();
@@ -755,7 +753,7 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
   auto* viewport = qobject_cast<editor_rhi::EditorViewportItem*>(session->presentation_viewport());
   ASSERT_NE(viewport, nullptr);
   EXPECT_EQ(viewport->imageIdentity(), 70ull);
-  EXPECT_EQ(viewport->imageGeneration(), session->session_generation());
+  EXPECT_GT(viewport->imageGeneration(), 0ull);
   ASSERT_EQ(loaded->host.editor_session_service()->state(), alcedo::EditorSessionState::Interactive)
       << loaded->host.editor_session_service()->last_error()
       << " backend=" << viewport->backendName().toStdString()
@@ -763,7 +761,7 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
       << " available=" << viewport->presentationAvailable()
       << " live=" << viewport->liveTargetCount();
   EXPECT_GT(written_frame_count.load(std::memory_order_acquire), 0);
-  EXPECT_EQ(viewport->lastPresentedImageGeneration(), session->session_generation());
+  EXPECT_EQ(viewport->lastPresentedImageGeneration(), viewport->imageGeneration());
   EXPECT_EQ(viewport->lastPresentedRequestId(),
             loaded->host.editor_session_service()->first_frame_request_id());
 
@@ -800,14 +798,14 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
       << "Interactive adjustment did not compose until pointer release";
 
   // A→B→A: late frame from the first A session must not replace the current A.
-  const auto gen_a1 = session->session_generation();
+  const auto gen_a1 = viewport->imageGeneration();
   loaded->host.workspace_router()->OpenEditor(8, 80);
   ProcessEvents(60);
-  const auto gen_b = session->session_generation();
+  const auto gen_b = viewport->imageGeneration();
   EXPECT_GT(gen_b, gen_a1);
   loaded->host.workspace_router()->OpenEditor(7, 70);
   ProcessEvents(60);
-  const auto gen_a2 = session->session_generation();
+  const auto gen_a2 = viewport->imageGeneration();
   EXPECT_GT(gen_a2, gen_b);
   EXPECT_EQ(viewport->imageIdentity(), 70ull);
   EXPECT_EQ(viewport->imageGeneration(), gen_a2);

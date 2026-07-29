@@ -39,6 +39,8 @@ class FakeSessionBackend final : public IEditorSessionBackend {
  public:
   EditorSessionState    state_ = EditorSessionState::NoImage;
   EditorSessionIdentity identity_{};
+  ImageLoadRequestId    image_load_request_{};
+  std::uint64_t         next_image_load_request_ = 0;
   PresentationSinkId    sink_id_            = 0;
   int                   open_count          = 0;
   int                   switch_count        = 0;
@@ -54,6 +56,9 @@ class FakeSessionBackend final : public IEditorSessionBackend {
 
   auto                  state() const -> EditorSessionState override { return state_; }
   auto                  identity() const -> EditorSessionIdentity override { return identity_; }
+  [[nodiscard]] auto active_image_load_request() const -> ImageLoadRequestId override {
+    return image_load_request_;
+  }
   auto                  active() const -> bool override {
     return state_ != EditorSessionState::NoImage && state_ != EditorSessionState::ShuttingDown;
   }
@@ -74,12 +79,10 @@ class FakeSessionBackend final : public IEditorSessionBackend {
       identity_ = {};
       state_    = EditorSessionState::NoImage;
     } else {
-      ++identity_.session_generation;
-      identity_.element_id        = element_id;
-      identity_.image_id          = image_id;
-      identity_.render_generation = identity_.session_generation;
-      identity_.view_generation   = 1;
-      state_                      = EditorSessionState::Loading;
+      image_load_request_  = ImageLoadRequestId{++next_image_load_request_};
+      identity_.element_id = element_id;
+      identity_.image_id   = image_id;
+      state_               = EditorSessionState::Loading;
     }
     EditorSessionResult result;
     result.kind     = EditorSessionResultKind::StateChanged;
@@ -116,11 +119,9 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   void CompletePendingSwitch() {
     ASSERT_NE(pending_switch_element_id_, 0u);
     ASSERT_NE(pending_switch_image_id_, 0u);
-    ++identity_.session_generation;
-    identity_.element_id        = pending_switch_element_id_;
-    identity_.image_id          = pending_switch_image_id_;
-    identity_.render_generation = identity_.session_generation;
-    identity_.view_generation   = 1;
+    image_load_request_        = ImageLoadRequestId{++next_image_load_request_};
+    identity_.element_id       = pending_switch_element_id_;
+    identity_.image_id         = pending_switch_image_id_;
     pending_switch_element_id_  = 0;
     pending_switch_image_id_    = 0;
     state_                      = EditorSessionState::Switching;
@@ -194,6 +195,16 @@ class FakeSessionBackend final : public IEditorSessionBackend {
     return result;
   }
   [[nodiscard]] auto render_busy() const -> bool override { return render_busy_; }
+
+  [[nodiscard]] auto action_availability() const -> EditorActionAvailability override {
+    EditorActionAvailability availability;
+    if (state_ == EditorSessionState::Interactive && has_image()) {
+      for (std::size_t i = 0; i < EditorActionCount(); ++i) {
+        availability.decisions[i].allowed = true;
+      }
+    }
+    return availability;
+  }
 
   // Test helper: simulate async Interactive transition from first frame.
   void               SimulateFirstFramePresented() {
@@ -352,7 +363,7 @@ TEST(EditorSessionControllerPhase5ATest, RoutesOpenThroughInjectedFakeBackend) {
   EXPECT_TRUE(controller.has_image());
   EXPECT_EQ(controller.element_id(), 42u);
   EXPECT_EQ(controller.image_id(), 84u);
-  EXPECT_EQ(controller.session_generation(), 1u);
+  EXPECT_EQ(controller.viewport_identity_key().split(QLatin1Char(':')).value(1).toULongLong(), 1u);
   EXPECT_EQ(controller.session_state(), EditorSessionState::Loading);
   EXPECT_GE(state_signals, 1);
 
@@ -586,7 +597,7 @@ TEST(EditorSessionControllerPhase5ATest, WorksWithoutBackendForShellOnlyTests) {
   EditorSessionController controller(static_cast<EditorController*>(nullptr));
   controller.Open(1, 2);
   EXPECT_TRUE(controller.has_image());
-  EXPECT_EQ(controller.session_generation(), 1u);
+  EXPECT_EQ(controller.viewport_identity_key().split(QLatin1Char(':')).value(1).toULongLong(), 1u);
   controller.Close();
   EXPECT_FALSE(controller.has_image());
 }
@@ -652,7 +663,7 @@ TEST(EditorSessionControllerPhase5ATest, RuntimeCoordinatorPresentationUpdatesCo
   ASSERT_FALSE(bootstrap_scheduler->scheduled().empty());
   const auto request_id = bootstrap_scheduler->scheduled().front().request_id;
 
-  runtime->service->NotifyImageAcquired(runtime->service->identity().session_generation, true);
+  runtime->service->NotifyImageAcquired(runtime->service->active_image_load_request(), true);
   runtime->service->DrainCommandQueueForTests();
   EXPECT_EQ(controller.session_state(), EditorSessionState::Loading);
 
@@ -835,9 +846,8 @@ TEST(EditorSessionControllerPhase5ATest, EditorSessionServiceCMakeDoesNotLinkQtW
 
 // ── Phase 6C-7: adjustment snapshot publication ────────────────────────
 
-TEST(EditorSessionControllerPhase5ATest, SnapshotRevisionStartsAtZero) {
+TEST(EditorSessionControllerPhase5ATest, SnapshotStartsEmpty) {
   EditorSessionController controller(static_cast<EditorController*>(nullptr));
-  EXPECT_EQ(controller.snapshot_revision(), 0u);
   EXPECT_TRUE(controller.adjustment_snapshot().isEmpty());
 }
 
@@ -855,13 +865,12 @@ TEST(EditorSessionControllerPhase5ATest, BackendSnapshotIsPublishedToController)
 
   backend.NotifyWithoutStateChange();
 
-  EXPECT_GE(controller.snapshot_revision(), 1u);
   const auto map = controller.adjustment_snapshot();
   EXPECT_TRUE(map.contains(QStringLiteral("exposure")));
   EXPECT_TRUE(map.contains(QStringLiteral("contrast")));
 }
 
-TEST(EditorSessionControllerPhase5ATest, SnapshotRevisionIncrementsOnChange) {
+TEST(EditorSessionControllerPhase5ATest, SnapshotContentUpdatesOnChange) {
   FakeSessionBackend             backend;
   EditorSessionController        controller(nullptr, &backend);
 
@@ -869,29 +878,36 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotRevisionIncrementsOnChange) {
   snap1.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":0.0})", true}};
   backend.SetAdjustmentSnapshot(snap1);
   backend.NotifyWithoutStateChange();
-  const auto rev1 = controller.snapshot_revision();
-  EXPECT_GE(rev1, 1u);
+  const auto map1 = controller.adjustment_snapshot();
+  EXPECT_TRUE(map1.contains(QStringLiteral("exposure")));
 
   EditorRenderAdjustmentSnapshot snap2;
   snap2.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":1.5})", true}};
   backend.SetAdjustmentSnapshot(snap2);
   backend.NotifyWithoutStateChange();
 
-  EXPECT_GT(controller.snapshot_revision(), rev1);
+  const auto map2 = controller.adjustment_snapshot();
+  EXPECT_NE(map1.value(QStringLiteral("exposure")), map2.value(QStringLiteral("exposure")));
 }
 
-TEST(EditorSessionControllerPhase5ATest, SameSnapshotDoesNotIncrementRevision) {
+TEST(EditorSessionControllerPhase5ATest, SameSnapshotDoesNotReemitSignal) {
   FakeSessionBackend             backend;
   EditorSessionController        controller(nullptr, &backend);
+
+  int signal_count = 0;
+  QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
+                   [&] { ++signal_count; });
 
   EditorRenderAdjustmentSnapshot snap;
   snap.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":0.75})", true}};
   backend.SetAdjustmentSnapshot(snap);
   backend.NotifyWithoutStateChange();
-  const auto rev1 = controller.snapshot_revision();
+  const auto map1 = controller.adjustment_snapshot();
+  EXPECT_GE(signal_count, 1);
 
   backend.NotifyWithoutStateChange();
-  EXPECT_EQ(controller.snapshot_revision(), rev1);
+  EXPECT_EQ(controller.adjustment_snapshot(), map1);
+  EXPECT_EQ(signal_count, 1);
 }
 
 TEST(EditorSessionControllerPhase5ATest, NoBackendReturnsEmptySnapshot) {
@@ -899,7 +915,6 @@ TEST(EditorSessionControllerPhase5ATest, NoBackendReturnsEmptySnapshot) {
   controller.Open(1, 2);
   EXPECT_TRUE(controller.has_image());
   EXPECT_TRUE(controller.adjustment_snapshot().isEmpty());
-  EXPECT_EQ(controller.snapshot_revision(), 0u);
 }
 
 TEST(EditorSessionControllerPhase5ATest, SnapshotSignalFiresOnChange) {
@@ -923,9 +938,9 @@ TEST(EditorSessionControllerPhase5ATest,
   // emits AdjustmentSnapshotChanged → QML loadFromSnapshot on the GUI stack.
   FakeSessionBackend backend;
   backend.state_                       = EditorSessionState::Interactive;
+  backend.image_load_request_        = ImageLoadRequestId{1};
   backend.identity_.element_id         = 1;
   backend.identity_.image_id           = 2;
-  backend.identity_.session_generation = 1;
   EditorSessionController controller(nullptr, &backend);
 
   int                     snapshot_signals = 0;
@@ -951,7 +966,6 @@ TEST(EditorSessionControllerPhase5ATest,
   EXPECT_GE(state_signals, 1) << "StateChanged must still fire for renderBusy bindings";
   // Cache stays warm so a later external NotifyChange does not look brand-new
   // unless params actually change again.
-  EXPECT_GE(controller.snapshot_revision(), 1u);
   EXPECT_TRUE(controller.adjustment_snapshot().contains(QStringLiteral("saturation")));
   EXPECT_TRUE(controller.adjustment_snapshot().contains(QStringLiteral("vibrance")));
 }
@@ -959,9 +973,9 @@ TEST(EditorSessionControllerPhase5ATest,
 TEST(EditorSessionControllerPhase5ATest, SettledSubmitPatchEmitsAdjustmentSnapshotChanged) {
   FakeSessionBackend backend;
   backend.state_                       = EditorSessionState::Interactive;
+  backend.image_load_request_        = ImageLoadRequestId{1};
   backend.identity_.element_id         = 1;
   backend.identity_.image_id           = 2;
-  backend.identity_.session_generation = 1;
   EditorSessionController controller(nullptr, &backend);
 
   int                     snapshot_signals = 0;
@@ -1032,7 +1046,7 @@ TEST(EditorSessionControllerPhase5ATest,
      InteractivePreviewDoesNotPublishHistoryRevisionOrReadHistorySnapshot) {
   FakeSessionBackend backend;
   backend.state_    = EditorSessionState::Interactive;
-  backend.identity_ = {42, 84, 1, 1, 1};
+  backend.identity_ = {42, 84};
   backend.history_projection_.commits.resize(100);
   for (std::size_t i = 0; i < backend.history_projection_.commits.size(); ++i) {
     backend.history_projection_.commits[i].commit_hash = Hash128(i + 1, 0);
@@ -1063,7 +1077,7 @@ TEST(EditorSessionControllerPhase5ATest,
 TEST(EditorSessionControllerPhase5ATest, SettledCommitPublishesOneHistoryRevisionAndOneProjection) {
   FakeSessionBackend backend;
   backend.state_    = EditorSessionState::Interactive;
-  backend.identity_ = {42, 84, 1, 1, 1};
+  backend.identity_ = {42, 84};
   EditorSessionController controller(nullptr, &backend);
   EditorHistoryModel      model;
   model.setEditorSession(&controller);
@@ -1086,7 +1100,7 @@ TEST(EditorSessionControllerPhase5ATest, SettledCommitPublishesOneHistoryRevisio
 TEST(EditorSessionControllerPhase5ATest, RenderBusyAndFrameCompletionDoNotRefreshHistoryModels) {
   FakeSessionBackend backend;
   backend.state_    = EditorSessionState::Interactive;
-  backend.identity_ = {42, 84, 1, 1, 1};
+  backend.identity_ = {42, 84};
   EditorSessionController controller(nullptr, &backend);
   EditorHistoryModel      model;
   model.setEditorSession(&controller);
@@ -1115,7 +1129,7 @@ TEST(EditorSessionControllerPhase5ATest, RenderBusyAndFrameCompletionDoNotRefres
 TEST(EditorSessionControllerPhase5ATest, AsyncRootVersionCompletionClosesMatchingDraft) {
   FakeSessionBackend backend;
   backend.state_             = EditorSessionState::Interactive;
-  backend.identity_          = {42, 84, 1, 1, 1};
+  backend.identity_          = {42, 84};
   backend.async_version_ops_ = true;
   EditorSessionController controller(nullptr, &backend);
 
@@ -1153,7 +1167,7 @@ TEST(EditorSessionControllerPhase5ATest, AsyncRootVersionCompletionClosesMatchin
 TEST(EditorSessionControllerPhase5ATest, AsyncRootVersionFailureShowsExactBackendMessage) {
   FakeSessionBackend backend;
   backend.state_             = EditorSessionState::Interactive;
-  backend.identity_          = {42, 84, 1, 1, 1};
+  backend.identity_          = {42, 84};
   backend.async_version_ops_ = true;
   EditorSessionController controller(nullptr, &backend);
 
@@ -1178,7 +1192,7 @@ TEST(EditorSessionControllerPhase5ATest,
      AsyncBranchFailureKeepsSelectedCommitAndShowsExactBackendMessage) {
   FakeSessionBackend backend;
   backend.state_             = EditorSessionState::Interactive;
-  backend.identity_          = {42, 84, 1, 1, 1};
+  backend.identity_          = {42, 84};
   backend.async_version_ops_ = true;
   EditorSessionController controller(nullptr, &backend);
   const QString           selected_commit = QStringLiteral("abcdef0123456789fedcba9876543210");
@@ -1215,7 +1229,7 @@ TEST(EditorSessionControllerPhase5ATest,
 TEST(EditorSessionControllerPhase5ATest, InvalidVersionOrCommitIdPublishesRejectedTerminalResult) {
   FakeSessionBackend backend;
   backend.state_    = EditorSessionState::Interactive;
-  backend.identity_ = {42, 84, 1, 1, 1};
+  backend.identity_ = {42, 84};
   EditorSessionController controller(nullptr, &backend);
 
   int                     finished = 0;

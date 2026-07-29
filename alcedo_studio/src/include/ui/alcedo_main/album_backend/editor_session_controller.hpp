@@ -16,6 +16,7 @@
 #include "app/adjustment_transfer_types.hpp"
 #include "app/editor_history_types.hpp"
 #include "app/editor_session_types.hpp"
+#include "ui/alcedo_main/album_backend/editor_action_availability_model.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_operation_publisher.hpp"
 #include "ui/alcedo_main/album_backend/editor_scope_controller.hpp"
@@ -24,6 +25,10 @@ namespace alcedo {
 class IFrameSink;
 class IEditorSessionBackend;
 }  // namespace alcedo
+
+namespace alcedo::ui {
+class InteractionPolicyController;
+}  // namespace alcedo::ui
 
 namespace alcedo::ui {
 
@@ -66,10 +71,10 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // by clearLastEditedImage() when the image is deleted or the project switches.
   Q_PROPERTY(uint lastElementId READ last_element_id NOTIFY LastEditedImageChanged)
   Q_PROPERTY(uint lastImageId READ last_image_id NOTIFY LastEditedImageChanged)
-  // Monotonic counter advanced on every Open, including A→B→A reopens. Distinct
-  // from imageId so the viewport can reject stale frames from a prior session.
-  Q_PROPERTY(qulonglong sessionGeneration READ session_generation NOTIFY StateChanged)
+  // Composite key for QML viewport session resets (includes load-request generation).
+  Q_PROPERTY(QString viewportIdentityKey READ viewport_identity_key NOTIFY StateChanged)
   Q_PROPERTY(QString sessionState READ session_state_name NOTIFY StateChanged)
+  Q_PROPERTY(EditorActionAvailabilityModel* actions READ actions CONSTANT)
   Q_PROPERTY(bool filmstripCollapsed READ filmstrip_collapsed WRITE set_filmstrip_collapsed NOTIFY
                  FilmstripUiChanged)
   Q_PROPERTY(double filmstripExpandedHeight READ filmstrip_expanded_height WRITE
@@ -106,9 +111,6 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// Paste, and Merge. Panels load from this snapshot via loadFromSnapshot().
   Q_PROPERTY(
       QVariantMap adjustmentSnapshot READ adjustment_snapshot NOTIFY AdjustmentSnapshotChanged)
-  /// Monotonic revision counter incremented on every snapshot publication.
-  /// Panels use this to skip re-loading an already-applied snapshot.
-  Q_PROPERTY(quint64 snapshotRevision READ snapshot_revision NOTIFY AdjustmentSnapshotChanged)
   /// Read-only RAW panel capability map resolved by the application layer.
   /// The panel consumes this map; it does not inspect image metadata or build
   /// flags directly.
@@ -128,6 +130,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   ~EditorSessionController() override;
 
   void                     SetSessionBackend(alcedo::IEditorSessionBackend* session_backend);
+  void                     SetInteractionPolicy(InteractionPolicyController* interaction_policy);
+  void                     SetCopiedPackageAvailable(bool available);
 
   /// Called when the injected backend reports an async state/identity change
   /// (render presented, save finished, etc.). Mirrors backend into QML properties.
@@ -140,7 +144,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] uint       image_id() const;
   [[nodiscard]] uint       last_element_id() const { return last_element_id_; }
   [[nodiscard]] uint       last_image_id() const { return last_image_id_; }
-  [[nodiscard]] qulonglong session_generation() const;
+  [[nodiscard]] QString    viewport_identity_key() const;
   [[nodiscard]] auto       session_state() const -> alcedo::EditorSessionState;
   [[nodiscard]] QString    session_state_name() const;
   [[nodiscard]] bool       filmstrip_collapsed() const { return filmstrip_collapsed_; }
@@ -150,8 +154,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] QString    history_panel_page() const { return history_panel_page_; }
   // Phase 6C-7: load panel state from the backend adjustment snapshot.
   [[nodiscard]] auto       adjustment_snapshot() const -> QVariantMap;
-  [[nodiscard]] auto       snapshot_revision() const -> quint64 { return snapshot_revision_; }
   [[nodiscard]] auto       history_snapshot() const -> alcedo::EditorHistorySnapshot;
+  [[nodiscard]] auto       actions() -> EditorActionAvailabilityModel* { return &actions_; }
   [[nodiscard]] auto       raw_decode_capabilities() const -> QVariantMap {
     return raw_decode_capabilities_;
   }
@@ -259,6 +263,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   // Phase 6C-7: emitted when the backend adjustment snapshot is published.
   void AdjustmentSnapshotChanged();
   void RawDecodeCapabilitiesChanged();
+  void ActionAvailabilityChanged();
 
   void FilmstripUiChanged();
   void DesktopUiChanged();
@@ -276,9 +281,11 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                           SyncRawDecodeCapabilities();
   void                           ApplyOpenLocal(uint elementId, uint imageId);
   void                           ApplyCloseLocal();
-  void                           ReconcilePendingPresentationTarget();
   void                           SyncViewportIdentity();
   void                           InstallBackendNotifier();
+  void                           ApplyActionAvailability();
+  void                           SyncBackgroundActionRestrictions();
+  [[nodiscard]] qulonglong       ImageLoadGeneration() const;
   /// Apply a publisher event to QML properties and emit HistoryOperationFinished.
   void                           ApplyPublishedHistory(
       const EditorHistoryOperationPublisher::Published& published);
@@ -295,6 +302,8 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
 
   EditorController*              editor_                    = nullptr;
   alcedo::IEditorSessionBackend* session_backend_           = nullptr;
+  InteractionPolicyController*   interaction_policy_        = nullptr;
+  EditorActionAvailabilityModel  actions_;
   /// Focused correlator for history/Version operation events (R4). Owns
   /// operation ids, pending-async state, and the last published map.
   EditorHistoryOperationPublisher history_ops_;
@@ -306,18 +315,11 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   uint                           last_image_id_             = 0;
   qulonglong                     session_generation_        = 0;
   alcedo::EditorSessionState     session_state_             = alcedo::EditorSessionState::NoImage;
-  // A→B saves asynchronously while the backend still reports A/Saving. Keep
-  // the viewport stamped for B during that interval so B's first frame is not
-  // rejected as stale before the backend publishes B's acquired identity.
-  uint                           pending_presentation_element_id_ = 0;
-  uint                           pending_presentation_image_id_   = 0;
-  qulonglong                     pending_presentation_generation_ = 0;
   bool                           filmstrip_collapsed_       = false;
   double                         filmstrip_expanded_height_ = 128.0;
   double                         filmstrip_scroll_position_ = 0.0;
-  // Phase 6C-7: cached adjustment snapshot + monotonic revision.
+  // Phase 6C-7: cached adjustment snapshot for QML panel loading.
   mutable QVariantMap            adjustment_snapshot_;
-  quint64                        snapshot_revision_ = 0;
   QVariantMap                    raw_decode_capabilities_;
   /// When true, OnBackendChanged still refreshes the cached snapshot map but
   /// does not emit AdjustmentSnapshotChanged. Used for interactive submitPatch
@@ -337,6 +339,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   QPointer<QObject>       presentation_viewport_;
   QPointer<QObject>       interaction_controller_;
   QMetaObject::Connection interaction_view_change_connection_;
+  QMetaObject::Connection interaction_policy_connection_;
   mutable std::unique_ptr<EditorScopeController> scope_controller_;
 };
 

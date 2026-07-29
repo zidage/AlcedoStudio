@@ -45,7 +45,7 @@ TEST_F(EditorSessionLifecycleTest, BeginAcquireAndAcquireGuardsSucceed) {
   EXPECT_EQ(lifecycle_->state(), EditorSessionState::Acquiring);
   EXPECT_EQ(lifecycle_->identity().element_id, static_cast<sl_element_id_t>(100));
   EXPECT_EQ(lifecycle_->identity().image_id, static_cast<image_id_t>(200));
-  EXPECT_EQ(lifecycle_->identity().session_generation, 1u);
+  EXPECT_EQ(lifecycle_->active_image_load_request().value, 1u);
 
   EXPECT_TRUE(lifecycle_->AcquireGuards(&error)) << error;
   EXPECT_EQ(pipeline_->acquire_count, 1);
@@ -110,19 +110,16 @@ TEST_F(EditorSessionLifecycleTest, FullAcquireToInteractiveSequence) {
   EXPECT_TRUE(lifecycle_->last_error().empty());
 }
 
-TEST_F(EditorSessionLifecycleTest, SameImageReopenAdvancesSessionGeneration) {
+TEST_F(EditorSessionLifecycleTest, SameImageReopenAdvancesImageLoadRequest) {
   OpenImage(1, 2);
-  const auto gen1 = lifecycle_->identity();
-  EXPECT_EQ(gen1.element_id, static_cast<sl_element_id_t>(1));
-  EXPECT_EQ(gen1.image_id, static_cast<image_id_t>(2));
-  EXPECT_EQ(gen1.session_generation, 1u);
-  EXPECT_EQ(gen1.render_generation, 1u);
-  EXPECT_EQ(gen1.view_generation, 1u);
+  const auto load1 = lifecycle_->active_image_load_request();
+  EXPECT_EQ(lifecycle_->identity().element_id, static_cast<sl_element_id_t>(1));
+  EXPECT_EQ(lifecycle_->identity().image_id, static_cast<image_id_t>(2));
+  EXPECT_EQ(load1.value, 1u);
 
   ASSERT_TRUE(lifecycle_->BeginAcquire(1, 2, false, nullptr, nullptr));
-  const auto gen2 = lifecycle_->identity();
-  EXPECT_EQ(gen2.session_generation, 2u);
-  EXPECT_EQ(gen2.render_generation, 2u);
+  const auto load2 = lifecycle_->active_image_load_request();
+  EXPECT_EQ(load2.value, 2u);
 }
 
 TEST_F(EditorSessionLifecycleTest, FailedSwitchKeepsCurrentImage) {
@@ -139,6 +136,7 @@ TEST_F(EditorSessionLifecycleTest, FailedSwitchKeepsCurrentImage) {
 TEST_F(EditorSessionLifecycleTest, RetainedImageFailureResumesInteractiveWithoutChangingIdentity) {
   OpenImage(1, 2);
   const auto prior_identity = lifecycle_->identity();
+  const auto prior_load     = lifecycle_->active_image_load_request();
 
   lifecycle_->KeepCurrentAfterCheckpointFailure("save failed");
   lifecycle_->ResumeInteractiveAfterFailure();
@@ -147,9 +145,7 @@ TEST_F(EditorSessionLifecycleTest, RetainedImageFailureResumesInteractiveWithout
   EXPECT_TRUE(lifecycle_->has_image());
   EXPECT_EQ(lifecycle_->identity().element_id, prior_identity.element_id);
   EXPECT_EQ(lifecycle_->identity().image_id, prior_identity.image_id);
-  EXPECT_EQ(lifecycle_->identity().session_generation, prior_identity.session_generation);
-  EXPECT_EQ(lifecycle_->identity().render_generation, prior_identity.render_generation);
-  EXPECT_EQ(lifecycle_->identity().view_generation, prior_identity.view_generation);
+  EXPECT_EQ(lifecycle_->active_image_load_request(), prior_load);
 }
 
 TEST_F(EditorSessionLifecycleTest, BeginShutdownTransitionsToShuttingDown) {
@@ -157,16 +153,7 @@ TEST_F(EditorSessionLifecycleTest, BeginShutdownTransitionsToShuttingDown) {
   lifecycle_->BeginShutdown();
   EXPECT_EQ(lifecycle_->state(), EditorSessionState::ShuttingDown);
   EXPECT_FALSE(lifecycle_->active());
-}
-
-TEST_F(EditorSessionLifecycleTest, AdvanceRenderAndViewGenerationsAreIndependent) {
-  OpenImage(1, 2);
-  EXPECT_EQ(lifecycle_->AdvanceRenderGeneration(), 2u);
-  EXPECT_EQ(lifecycle_->AdvanceRenderGeneration(), 3u);
-  EXPECT_EQ(lifecycle_->AdvanceViewGeneration(), 2u);
-  const auto id = lifecycle_->identity();
-  EXPECT_EQ(id.render_generation, 3u);
-  EXPECT_EQ(id.view_generation, 2u);
+  EXPECT_FALSE(lifecycle_->active_image_load_request().valid());
 }
 
 TEST_F(EditorSessionLifecycleTest, FailTransitionsToFailedWithError) {
@@ -188,11 +175,17 @@ TEST_F(EditorSessionLifecycleTest, CompleteCheckpointReturnsToInteractive) {
   EXPECT_EQ(lifecycle_->state(), EditorSessionState::Interactive);
 }
 
-TEST_F(EditorSessionLifecycleTest, MatchesIdentityFiltersCorrectly) {
+TEST_F(EditorSessionLifecycleTest, MatchesIdentityFiltersByElementAndImage) {
   OpenImage(100, 200);
-  EXPECT_TRUE(lifecycle_->MatchesIdentity(100, 200, 1));
-  EXPECT_FALSE(lifecycle_->MatchesIdentity(100, 200, 2));
-  EXPECT_FALSE(lifecycle_->MatchesIdentity(99, 200, 1));
+  EXPECT_TRUE(lifecycle_->MatchesIdentity(100, 200));
+  EXPECT_FALSE(lifecycle_->MatchesIdentity(99, 200));
+}
+
+TEST_F(EditorSessionLifecycleTest, MatchesImageLoadRequestFiltersByLoadId) {
+  OpenImage(100, 200);
+  const auto load = lifecycle_->active_image_load_request();
+  EXPECT_TRUE(lifecycle_->MatchesImageLoadRequest(load));
+  EXPECT_FALSE(lifecycle_->MatchesImageLoadRequest(ImageLoadRequestId{load.value + 1}));
 }
 
 TEST_F(EditorSessionLifecycleTest, BeginAcquireSwitchSetsSwitchingState) {
@@ -207,6 +200,7 @@ TEST_F(EditorSessionLifecycleTest, CompleteCloseTransitionsToNoImage) {
   lifecycle_->CompleteClose();
   EXPECT_EQ(lifecycle_->state(), EditorSessionState::NoImage);
   EXPECT_FALSE(lifecycle_->has_image());
+  EXPECT_FALSE(lifecycle_->active_image_load_request().valid());
 }
 
 TEST_F(EditorSessionLifecycleTest, BeginRetryFromDiscardTransitionsToLoading) {

@@ -23,8 +23,10 @@ Item {
                                                ? String(workspaceRouter.workspace || "library")
                                                : "library"
     readonly property bool switchWorkspaceEnabled: navigationEnabled
-                                                   && (!interactionPolicy
-                                                       || interactionPolicy.canSwitchWorkspace)
+                                                   && (editorSession && editorSession.active
+                                                       ? Boolean(editorSession.actions.canSwitchWorkspace)
+                                                       : (!interactionPolicy
+                                                          || interactionPolicy.canSwitchWorkspace))
     readonly property string switchWorkspaceDisabledReason: interactionPolicy
                                                             ? String(interactionPolicy.switchWorkspaceReason || "")
                                                             : ""

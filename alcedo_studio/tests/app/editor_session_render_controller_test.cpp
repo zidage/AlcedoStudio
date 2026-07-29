@@ -40,7 +40,8 @@ class EditorSessionRenderControllerTest : public ::testing::Test {
     EditorSessionRenderController* render_ptr = render_.get();
     coordinator_->SetResultObserver([render_ptr, this](const EditorRenderResult& result) {
       if (render_ptr) {
-        render_ptr->NotifyRenderResult(result, lifecycle_->identity(), lifecycle_->state());
+        render_ptr->NotifyRenderResult(result, lifecycle_->identity(),
+                                       lifecycle_->active_image_load_request(), lifecycle_->state());
       }
     });
 
@@ -63,7 +64,8 @@ class EditorSessionRenderControllerTest : public ::testing::Test {
 
     EditorRenderCommand command;
     command.reason = EditorRenderReason::InitialFrame;
-    render_->RouteInitialRender(command, lifecycle_->identity());
+    render_->RouteInitialRender(command, lifecycle_->identity(),
+                                lifecycle_->active_image_load_request());
   }
 
   void PresentFirstFrame() {
@@ -146,7 +148,9 @@ TEST_F(EditorSessionRenderControllerTest, ViewChangeZoomPanIsReusedInInteractive
   EditorRenderCommand command;
   command.reason = EditorRenderReason::ZoomPan;
   const auto event =
-      render_->RouteViewChange(command, lifecycle_->identity(), EditorSessionState::Interactive);
+      render_->RouteViewChange(command, lifecycle_->identity(),
+                               lifecycle_->active_image_load_request(),
+                               EditorSessionState::Interactive);
   EXPECT_EQ(event.kind, EditorRenderEventKind::RenderReused);
   EXPECT_EQ(sched->scheduled().size(), scheduled_before);
 }
@@ -171,7 +175,9 @@ TEST_F(EditorSessionRenderControllerTest, ViewChangeDetailRefreshSchedulesDetail
   command.view_region      = region;
 
   const auto event =
-      render_->RouteViewChange(command, lifecycle_->identity(), EditorSessionState::Interactive);
+      render_->RouteViewChange(command, lifecycle_->identity(),
+                               lifecycle_->active_image_load_request(),
+                               EditorSessionState::Interactive);
   EXPECT_EQ(event.kind, EditorRenderEventKind::RenderRouted);
   ASSERT_FALSE(sched->scheduled().empty());
   const auto& scheduled = sched->scheduled().back().intent;
@@ -185,7 +191,9 @@ TEST_F(EditorSessionRenderControllerTest, ViewChangeRejectedWhenNotInteractive) 
   EditorRenderCommand command;
   command.reason = EditorRenderReason::ZoomPan;
   const auto event =
-      render_->RouteViewChange(command, lifecycle_->identity(), EditorSessionState::NoImage);
+      render_->RouteViewChange(command, lifecycle_->identity(),
+                               lifecycle_->active_image_load_request(),
+                               EditorSessionState::NoImage);
   EXPECT_EQ(event.kind, EditorRenderEventKind::RenderRejected);
 }
 
@@ -201,7 +209,9 @@ TEST_F(EditorSessionRenderControllerTest, RenderBusyTransitionsAroundViewChange)
   region.x_           = 3;
   command.view_region = region;
   const auto event =
-      render_->RouteViewChange(command, lifecycle_->identity(), EditorSessionState::Interactive);
+      render_->RouteViewChange(command, lifecycle_->identity(),
+                               lifecycle_->active_image_load_request(),
+                               EditorSessionState::Interactive);
   ASSERT_EQ(event.kind, EditorRenderEventKind::RenderRouted);
   EXPECT_TRUE(render_->render_busy());
 
@@ -227,7 +237,8 @@ TEST_F(EditorSessionRenderControllerTest, InitialRenderWithAdjustmentCarriesSnap
   patch.params_json = R"({"exposure":1.5})";
   command.adjustment.patches.push_back(patch);
 
-  const auto request_id = render_->RouteInitialRender(command, lifecycle_->identity());
+  const auto request_id = render_->RouteInitialRender(command, lifecycle_->identity(),
+                                                      lifecycle_->active_image_load_request());
   EXPECT_NE(request_id, 0u);
 
   auto* sched = dynamic_cast<EditorSessionBootstrapSchedulerPort*>(scheduler_.get());
@@ -248,7 +259,8 @@ TEST_F(EditorSessionRenderControllerTest, QualityBaseCarriesSameAdjustmentAfterF
   EditorRenderCommand command;
   command.reason                 = EditorRenderReason::InitialFrame;
   command.adjustment.params_json = R"({"saturation":0.8})";
-  render_->RouteInitialRender(command, lifecycle_->identity());
+  render_->RouteInitialRender(command, lifecycle_->identity(),
+                              lifecycle_->active_image_load_request());
 
   // Drive first-frame to completion then presentation.
   auto*      sched         = dynamic_cast<EditorSessionBootstrapSchedulerPort*>(scheduler_.get());
@@ -272,22 +284,29 @@ TEST_F(EditorSessionRenderControllerTest, StaleSessionGenerationResultDoesNotAdv
 
   EditorRenderCommand command;
   command.reason           = EditorRenderReason::InitialFrame;
-  const auto         ff_id = render_->RouteInitialRender(command, lifecycle_->identity());
+  const auto         ff_id = render_->RouteInitialRender(command, lifecycle_->identity(),
+                                                         lifecycle_->active_image_load_request());
 
   // Construct a render result referencing the stale identity.
   EditorRenderResult stale_result;
   stale_result.request_id                = ff_id;
   stale_result.kind                      = EditorRenderResultKind::RenderCompleted;
-  stale_result.intent.session_generation = 99;
+  stale_result.intent.image_load_request_id = ImageLoadRequestId{99};
   stale_result.intent.image_id           = lifecycle_->identity().image_id;
   stale_result.intent.element_id         = lifecycle_->identity().element_id;
 
   const auto accepted_before             = coordinator_->diagnostics().accepted_count;
-  render_->NotifyRenderResult(stale_result, lifecycle_->identity(), EditorSessionState::Loading);
+  render_->NotifyRenderResult(stale_result, lifecycle_->identity(),
+                              lifecycle_->active_image_load_request(),
+                              EditorSessionState::Loading);
   stale_result.kind = EditorRenderResultKind::FrameSubmitted;
-  render_->NotifyRenderResult(stale_result, lifecycle_->identity(), EditorSessionState::Loading);
+  render_->NotifyRenderResult(stale_result, lifecycle_->identity(),
+                              lifecycle_->active_image_load_request(),
+                              EditorSessionState::Loading);
   stale_result.kind = EditorRenderResultKind::FramePresented;
-  render_->NotifyRenderResult(stale_result, lifecycle_->identity(), EditorSessionState::Loading);
+  render_->NotifyRenderResult(stale_result, lifecycle_->identity(),
+                              lifecycle_->active_image_load_request(),
+                              EditorSessionState::Loading);
 
   EXPECT_TRUE(std::none_of(events_.begin(), events_.end(), [](const EditorRenderEvent& event) {
     return event.kind == EditorRenderEventKind::FirstFramePresented;
@@ -305,14 +324,16 @@ TEST_F(EditorSessionRenderControllerTest, SecondRouteInitialRenderReturnsRequest
   EditorRenderCommand cmd1;
   cmd1.reason                 = EditorRenderReason::InitialFrame;
   cmd1.adjustment.params_json = R"({"v1":1})";
-  const auto id1              = render_->RouteInitialRender(cmd1, lifecycle_->identity());
+  const auto id1              = render_->RouteInitialRender(cmd1, lifecycle_->identity(),
+                                                            lifecycle_->active_image_load_request());
   EXPECT_NE(id1, 0u);
 
   // Route a second render (e.g. undo/redo).
   EditorRenderCommand cmd2;
   cmd2.reason                 = EditorRenderReason::UndoRedo;
   cmd2.adjustment.params_json = R"({"v2":2})";
-  const auto id2              = render_->RouteInitialRender(cmd2, lifecycle_->identity());
+  const auto id2              = render_->RouteInitialRender(cmd2, lifecycle_->identity(),
+                                                            lifecycle_->active_image_load_request());
   // Undo/redo should still submit a render, just not as a first-frame.
   EXPECT_NE(id2, 0u);
 }

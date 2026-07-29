@@ -70,7 +70,7 @@ auto EditorSaveCheckpointFixture::StartCheckpoint(sl_element_id_t         elemen
 
   SaveCheckpointRequest request;
   request.element_id         = element_id;
-  request.session_generation = session_generation;
+  request.image_load_request_id = ImageLoadRequestId{session_generation};
   request.capture            = MakeCapture();
   request.save_lock          = std::move(save_lock);
   return service_->Start(std::move(request), std::move(completion));

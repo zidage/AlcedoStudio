@@ -15,6 +15,7 @@
 #include "app/editor_save_checkpoint_coordinator.hpp"
 #include "app/editor_session_command_queue.hpp"
 #include "app/editor_session_ports.hpp"
+#include "app/editor_session_request_ids.hpp"
 #include "type/type.hpp"
 
 namespace alcedo {
@@ -23,11 +24,11 @@ namespace alcedo {
 /// controller uses this to correlate async completions with the save that
 /// started them. A default-constructed ticket is invalid.
 struct CheckpointTicket {
-  std::uint64_t      request_id         = 0;
-  std::uint64_t      operation_id       = 0;
-  std::uint64_t      session_generation = 0;
-  sl_element_id_t    element_id         = 0;
-  std::uint64_t      task_id            = 0;
+  std::uint64_t        request_id           = 0;
+  std::uint64_t        operation_id         = 0;
+  ImageLoadRequestId   image_load_request_id{};
+  sl_element_id_t      element_id           = 0;
+  std::uint64_t        task_id              = 0;
   [[nodiscard]] auto valid() const -> bool { return request_id != 0; }
 };
 
@@ -39,9 +40,9 @@ struct CheckpointTicket {
 /// EditorSaveCheckpointService::TryAcquireSaveLock before capture, moves that
 /// lock into this request, and Start owns it through the durable save work.
 struct SaveCheckpointRequest {
-  sl_element_id_t                                     element_id         = 0;
-  std::uint64_t                                       operation_id       = 0;
-  std::uint64_t                                       session_generation = 0;
+  sl_element_id_t                                     element_id           = 0;
+  std::uint64_t                                       operation_id         = 0;
+  ImageLoadRequestId                                  image_load_request_id{};
   std::shared_ptr<const EditorMiniGitSaveCapture>     capture;
   /// Inclusive last journal sequence from capture when the range is non-empty.
   /// Filled by the caller that built the capture so this service need not depend
@@ -60,7 +61,7 @@ struct SaveCheckpointRequest {
 struct SaveCheckpointResult {
   std::uint64_t                request_id           = 0;
   std::uint64_t                operation_id         = 0;
-  std::uint64_t                session_generation   = 0;
+  ImageLoadRequestId           image_load_request_id{};
   std::uint64_t                task_id              = 0;
   bool                         checkpoint_completed = false;
   std::string                  error;
@@ -148,9 +149,9 @@ class EditorSaveCheckpointService final {
   };
 
   struct PendingSave {
-    std::uint64_t                                       request_id         = 0;
-    std::uint64_t                                       operation_id       = 0;
-    std::uint64_t                                       session_generation = 0;
+    std::uint64_t                                       request_id           = 0;
+    std::uint64_t                                       operation_id         = 0;
+    ImageLoadRequestId                                  image_load_request_id{};
     sl_element_id_t                                     element_id         = 0;
     std::uint64_t                                       task_id            = 0;
     std::shared_ptr<const EditorMiniGitSaveCapture>     capture;
@@ -166,7 +167,7 @@ class EditorSaveCheckpointService final {
                                      SaveCheckpointCompletion completion);
   void         DeliverCompletion(SaveCheckpointCompletion completion, SaveCheckpointResult result);
   void         FinishSave(std::uint64_t request_id, std::uint64_t operation_id,
-                          std::uint64_t session_generation, std::uint64_t task_id,
+                          ImageLoadRequestId image_load_request_id, std::uint64_t task_id,
                           bool checkpoint_completed, std::string message,
                           SaveCheckpointCompletion                              completion,
                           EditorSaveCheckpointCoordinator::SaveCheckpointLock&& save_lock,

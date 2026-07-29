@@ -160,11 +160,9 @@ Item {
                         objectName: "editorViewportItem"
                         anchors.fill: parent
                         visible: root.hasImage
-                        // imageIdentity is the durable DB id; imageGeneration is the
-                        // monotonic session counter from EditorSessionController so
-                        // A→B→A cannot accept a late frame from the first A session.
+                        // imageIdentity is the durable DB id; imageGeneration is stamped
+                        // from EditorSessionController::SyncViewportIdentity on the GUI thread.
                         imageIdentity: root.focusedImageId
-                        imageGeneration: root.editorSession ? root.editorSession.sessionGeneration : 0
                         Accessible.role: Accessible.Canvas
                         Accessible.name: qsTr("Image viewport")
 
@@ -623,10 +621,7 @@ Item {
                         if (!root.editorSession) {
                             return ""
                         }
-                        return root.editorSession.sessionGeneration
-                                + ":" + root.editorSession.elementId
-                                + ":" + root.editorSession.imageId
-                                + ":" + (root.editorSession.active ? "1" : "0")
+                        return root.editorSession.viewportIdentityKey
                     }
 
                     // Binding the viewport can notify the session immediately;

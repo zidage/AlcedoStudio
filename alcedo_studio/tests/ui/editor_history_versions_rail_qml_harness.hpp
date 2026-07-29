@@ -360,7 +360,7 @@ class RecordingEditorSessionBackend final : public IEditorSessionBackend {
 
   EditorSessionState    state_     = EditorSessionState::Interactive;
   bool                  has_image_ = true;
-  EditorSessionIdentity identity_{1, 2, 1, 1, 1};
+  EditorSessionIdentity identity_{1, 2};
   EditorHistorySnapshot snapshot_;
   std::uint64_t         next_version_id_ = 20;
   Hash128               last_checkout_id_;

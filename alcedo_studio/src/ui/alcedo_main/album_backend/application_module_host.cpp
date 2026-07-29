@@ -240,6 +240,14 @@ ApplicationModuleHost::ApplicationModuleHost(QObject* parent, LifecycleObserver 
   editor_session_ = std::make_unique<EditorSessionController>(
       editor_.get(), editor_session_runtime_->service.get(), this);
   RecordConstruction("EditorSessionController", editor_session_.get());
+  editor_session_->SetInteractionPolicy(interaction_policy_.get());
+  connect(adjustment_transfer_.get(), &AdjustmentTransferController::PackageChanged,
+          editor_session_.get(), [this]() {
+            if (editor_session_) {
+              editor_session_->SetCopiedPackageAvailable(adjustment_transfer_->package_available());
+            }
+          });
+  editor_session_->SetCopiedPackageAvailable(adjustment_transfer_->package_available());
   if (editor_session_scheduler_) {
     editor_session_scheduler_->SetSinkResolver([this]() -> alcedo::IFrameSink* {
       return editor_session_ ? editor_session_->presentation_frame_sink() : nullptr;

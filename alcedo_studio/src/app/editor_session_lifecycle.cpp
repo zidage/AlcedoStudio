@@ -15,23 +15,22 @@ auto EditorSessionLifecycle::BeginAcquire(sl_element_id_t element_id, image_id_t
                                           bool is_switch, IEditorCheckpointStore* checkpoint_store,
                                           std::string* error) -> bool {
   AssertOwnerThread();
-  ++identity_.session_generation;
-  identity_.element_id        = element_id;
-  identity_.image_id          = image_id;
-  identity_.render_generation = identity_.session_generation;
-  identity_.view_generation   = 1;
+  active_load_request_.value = next_load_request_id_++;
+  identity_.element_id       = element_id;
+  identity_.image_id         = image_id;
   state_ = is_switch ? EditorSessionState::Switching : EditorSessionState::Acquiring;
   last_error_.clear();
 
   if (checkpoint_store != nullptr) {
     std::string recover_error;
     const auto  recovered = checkpoint_store->RecoverAndMaterialize(
-        element_id, identity_.session_generation, &recover_error);
+        element_id, active_load_request_.value, &recover_error);
     if (!recovered.accepted) {
-      state_      = EditorSessionState::Failed;
-      last_error_ = recover_error.empty() ? "Editor journal recovery failed" : recover_error;
+      state_               = EditorSessionState::Failed;
+      last_error_          = recover_error.empty() ? "Editor journal recovery failed" : recover_error;
       identity_.element_id = 0;
       identity_.image_id   = 0;
+      active_load_request_ = {};
       if (error) {
         *error = last_error_;
       }
@@ -114,20 +113,18 @@ void EditorSessionLifecycle::ReleaseGuards() {
 
 void EditorSessionLifecycle::CompleteClose() {
   AssertOwnerThread();
-  identity_.element_id        = 0;
-  identity_.image_id          = 0;
-  identity_.render_generation = 0;
-  identity_.view_generation   = 0;
-  state_                      = EditorSessionState::NoImage;
+  identity_.element_id = 0;
+  identity_.image_id   = 0;
+  active_load_request_ = {};
+  state_               = EditorSessionState::NoImage;
 }
 
 void EditorSessionLifecycle::BeginShutdown() {
   AssertOwnerThread();
-  identity_.element_id        = 0;
-  identity_.image_id          = 0;
-  identity_.render_generation = 0;
-  identity_.view_generation   = 0;
-  state_                      = EditorSessionState::ShuttingDown;
+  identity_.element_id = 0;
+  identity_.image_id   = 0;
+  active_load_request_ = {};
+  state_               = EditorSessionState::ShuttingDown;
 }
 
 auto EditorSessionLifecycle::MarkFirstFramePresented() -> std::optional<EditorSessionIdentity> {
@@ -181,6 +178,11 @@ auto EditorSessionLifecycle::identity() const -> EditorSessionIdentity {
   return identity_;
 }
 
+auto EditorSessionLifecycle::active_image_load_request() const -> ImageLoadRequestId {
+  AssertOwnerThread();
+  return active_load_request_;
+}
+
 auto EditorSessionLifecycle::has_image() const -> bool {
   AssertOwnerThread();
   return identity_.element_id > 0 && identity_.image_id > 0 && EditorSessionHasImage(state_);
@@ -206,21 +208,15 @@ auto EditorSessionLifecycle::has_history_guard() const -> bool {
   return history_guard_.valid;
 }
 
-auto EditorSessionLifecycle::AdvanceRenderGeneration() -> std::uint64_t {
+auto EditorSessionLifecycle::MatchesIdentity(sl_element_id_t element_id, image_id_t image_id) const
+    -> bool {
   AssertOwnerThread();
-  return ++identity_.render_generation;
+  return identity_.element_id == element_id && identity_.image_id == image_id;
 }
 
-auto EditorSessionLifecycle::AdvanceViewGeneration() -> std::uint64_t {
+auto EditorSessionLifecycle::MatchesImageLoadRequest(ImageLoadRequestId request) const -> bool {
   AssertOwnerThread();
-  return ++identity_.view_generation;
-}
-
-auto EditorSessionLifecycle::MatchesIdentity(sl_element_id_t element_id, image_id_t image_id,
-                                             std::uint64_t session_generation) const -> bool {
-  AssertOwnerThread();
-  return identity_.element_id == element_id && identity_.image_id == image_id &&
-         identity_.session_generation == session_generation;
+  return request.valid() && request == active_load_request_;
 }
 
 }  // namespace alcedo

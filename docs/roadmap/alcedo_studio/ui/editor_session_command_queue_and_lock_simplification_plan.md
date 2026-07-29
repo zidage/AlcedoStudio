@@ -2,9 +2,9 @@
 
 Date: 2026-07-29
 
-Status: CQ2 complete — pure history snapshots, worker-only executor application, and narrowed
-pipeline cache locking verified on 2026-07-29. CQ3 redesigned after architecture review: retain
-one action-decision source, remove the proposed session-wide snapshot revision and generations.
+Status: CQ3 complete — action admission unified with QML availability, operation leases,
+and scoped request-id correlation verified on 2026-07-29. CQ4 remains unblocked and
+independent.
 
 Primary owner: Alcedo Studio editor session and history architecture.
 
@@ -836,7 +836,8 @@ responsibility and no new file approaches the repository's 1,000-LOC split thres
 
 ## Phase CQ3 — Derive action availability from command admission and remove session generations
 
-Status: unblocked — CQ2 complete; architecture revised on 2026-07-29.
+Status: complete — action admission and QML availability share `EditorActionPolicy::Evaluate`;
+session generations removed from public identity; scoped request ids correlate completions.
 
 ### Necessity decision
 
@@ -945,6 +946,85 @@ or revision checks to these final decisions.
 - controller-owned pending presentation fields are removed;
 - no monolithic session snapshot or global snapshot revision is introduced;
 - action decisions have one C++ matrix covering every lifecycle and active-operation combination.
+
+##### Phase CQ3 completion record (2026-07-29)
+
+**Status:** complete — one `EditorActionPolicy::Evaluate` gates command admission and QML
+`editorSession.actions.*`; public identity has only element/image ids; completions correlate by
+scoped request ids; no public `sessionGeneration` / `snapshotRevision`.
+
+**Primary success call chain:**
+
+```text
+QML enabled: editorSession.actions.canPaste
+  -> EditorActionAvailabilityModel (projected from EditorActionAvailability)
+  -> EditorSessionService::PublishActionAvailabilityIfChanged
+  -> EditorActionPolicy::EvaluateAll(leases, BuildActionInputs)
+
+QML Paste / controller PasteAdjustments
+  -> SubmitCommand(ApplyPaste)
+  -> owner-thread Evaluate(ApplyPaste) [same policy]
+  -> acquire PasteMaterialization / optional SaveCheckpoint lease
+  -> history transfer + durable checkpoint
+  -> release lease on SaveCheckpointFinished
+  -> EvaluateAll republishes changed decisions once
+```
+
+**Primary failure call chain:**
+
+```text
+Undo while Interactive but can_undo=false
+  -> SubmitCommand(Undo) on owner thread
+  -> Evaluate(Undo) -> denied ("Nothing to undo")
+  -> Rejected result, no lease, availability unchanged
+
+Stale ImageLoadRequestId / EditorRenderRequestId
+  -> completion posts to queue
+  -> MatchesImageLoadRequest / first_frame request_id mismatch
+  -> ignored; identity and Interactive state retained
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `CommandAcceptanceMatchesPublishedAvailabilityForEveryEditorAction` | `EditorSessionActionPolicyCq3Test` | PASS |
+| `AcceptedOperationLeaseBlocksAndCompletionRestoresExactlyItsDeclaredActions` | `EditorSessionActionPolicyCq3Test` | PASS |
+| `RejectedCommandDoesNotChangeAvailability` | `EditorSessionActionPolicyCq3Test` | PASS |
+| `StaleImageLoadRequestCannotAcquireTheCurrentImage` | `EditorSessionActionPolicyCq3Test` | PASS |
+| `StaleRenderRequestCannotPresentAFrameOrEnableEditing` | `EditorSessionActionPolicyCq3Test` | PASS |
+| `ImageAtoBtoARejectsTheFirstARenderWithoutSessionGeneration` | `EditorSessionActionPolicyCq3Test` | PASS |
+| `AvailabilityPublishesAtMostOncePerCommandOrCompletionReduction` | `EditorSessionActionPolicyCq3Test` | PASS |
+| `BackgroundRestrictionAndHistoryFactsUseTheSameDecisionFunction` | `EditorSessionActionPolicyCq3Test` | PASS |
+| `AdjustmentPanelsReloadOnlyWhenCommittedContentChanges` | `EditorSessionActionPolicyCq3Test` | PASS |
+| Static QML/API ban (`sessionGeneration` / `snapshotRevision` Q_PROPERTY) | `EditorSessionActionPolicyStaticApiBan` | PASS |
+| CQ1 baseline regression (12) | `EditorSessionCommandQueueBaselineTest` | PASS 12/12 |
+| Lifecycle request-id identity | `EditorSessionLifecycleTest` | PASS 18/18 |
+| Controller / QML projection | `EditorSessionControllerPhase5ATest` | PASS 37/37 |
+
+Commands:
+`cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSessionActionPolicyCq3Test EditorSessionCommandQueueBaselineTest EditorSessionLifecycleTest EditorSessionControllerPhase5ATest --parallel 4`
+binaries run from `build/debug/alcedo_studio/tests/app/*_runtime/`.
+Suite totals: **CQ3 10/10, baseline 12/12, lifecycle 18/18, phase5a 37/37 = 77/77 PASS**.
+
+**Checklist / exit condition:** all exit criteria met — admission and QML share `EditorActionPolicy`;
+leases recompute decisions (no manual canX pairs); `EditorSessionIdentity` is element+image only;
+session/render/view generation absent from public editor-session API and QML properties; workers
+correlate via `ImageLoadRequestId` / render request id / save task+operation / `MergePreviewId`;
+controller pending presentation moved to `pending_presentation_target()` on the service; no
+monolithic session snapshot or global revision introduced.
+
+**LOC note (grill-code-review):** new `editor_action_policy.{hpp,cpp}` ~508 LOC; request-id header
+~36 LOC; QML availability model ~101 LOC; CQ3 tests ~325 LOC. `editor_session_service.cpp` grew
+with lease/admission helpers but remains the CQ1 facade (responsibility-based split still deferred
+to CQ4 durable-publication seam). No new file near the 1000-LOC split threshold.
+
+**Remaining gaps:** CQ4 Paste/Merge single durable publication path is still independent work.
+Library-side Paste (`EditorAdjustmentTransferActions` / `AppDialogs`) correctly keeps
+`InteractionPolicy` + packageAvailable. Worker journal ports still accept a numeric load-id
+parameter named `session_generation` at the Mini-Git journal boundary (opaque uint64 equal to
+`ImageLoadRequestId.value`); that is not part of the public editor-session identity/API.
+QML-shell/GPU e2e suites remain environmentally blocked as in CQ1/CQ2.
 
 ## Phase CQ4 — Unify Paste and Merge into one durable publication path
 
@@ -1112,7 +1192,7 @@ either order before CQ5.
 - [x] CQ0 records deterministic failing evidence.
 - [x] CQ1 serializes all session mutations and removes inline completion re-entry.
 - [x] CQ2 removes command-thread render-lock waits.
-- [ ] CQ3 derives editor action decisions from command admission and removes session generations.
+- [x] CQ3 derives editor action decisions from command admission and removes session generations.
 - [ ] CQ4 gives Paste and Merge one durable publication path.
 - [ ] CQ5 removes transitional code and qualifies the production sequence.
 
