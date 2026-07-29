@@ -19,8 +19,8 @@
 ///   counts how many arrived while an initiating command was on the call
 ///   stack (the inline-completion sentinel).
 /// - `ControllableEditorHistoryPort`: a `FakeEditorHistoryPort` subclass that
-///   (a) gates the executor-owning operations behind a shared render lock so a
-///   test can reproduce GUI-side render-lock blocking, and (b) records the
+///   (a) exposes a shared worker gate that command operations deliberately do
+///   not acquire, and (b) records the
 ///   durable-publication order (save-started vs. version-created/merge-
 ///   committed) and models a dirty journal for the Paste/Merge ordering tests.
 ///
@@ -157,18 +157,16 @@ class SessionResultRecorder {
 
 /// History port used by the CQ0 baseline tests. Extends the focused fake with
 /// two controllable axes:
-/// - `render_lock`: when non-null, executor-owning operations (Undo, Redo,
-///   head move, version checkout, Paste, Merge, save-checkpoint capture)
-///   acquire this mutex first. A test that holds the lock reproduces the
-///   GUI-side render-lock wait; the command thread blocks until the lock is
-///   released.
+/// - `render_lock`: retained as a worker-owned gate for the tests. History
+///   operations intentionally do not acquire it; a test that holds the lock
+///   verifies the command path remains available.
 /// - `event_log` / `dirty_journal`: record the durable-publication order so
 ///   the Paste/Merge tests can assert save-before-create. Paste and Merge
 ///   succeed (the fake base rejects them) so the facade proceeds through the
 ///   real StartHistoryCheckpoint save path.
 class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
  public:
-  /// When non-null, gated operations block on this mutex.
+  /// Worker tests may hold this mutex while command operations are reduced.
   std::mutex*               render_lock   = nullptr;
   /// When non-null, durable-publication events are appended here.
   std::vector<std::string>* event_log     = nullptr;
@@ -194,21 +192,17 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
   }
 
   auto Undo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool override {
-    auto ul = lock_render();
     return FakeEditorHistoryPort::Undo(guard, error);
   }
   auto Redo(const EditorHistoryGuardHandle& guard, std::string* error) -> bool override {
-    auto ul = lock_render();
     return FakeEditorHistoryPort::Redo(guard, error);
   }
   auto MoveHeadToCommit(const EditorHistoryGuardHandle& guard, const commit_hash_t& commit_id,
                         std::string* error) -> bool override {
-    auto ul = lock_render();
     return FakeEditorHistoryPort::MoveHeadToCommit(guard, commit_id, error);
   }
   auto CheckoutVersion(const EditorHistoryGuardHandle& guard, const Hash128& version_id,
                        std::string* error) -> bool override {
-    auto ul = lock_render();
     return FakeEditorHistoryPort::CheckoutVersion(guard, version_id, error);
   }
 
@@ -216,7 +210,6 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
                         const AdjustmentTransferPackage& /*package*/,
                         std::string /*version_display_name*/, AdjustmentPasteResult* result,
                         std::string* error) -> bool override {
-    auto ul = lock_render();
     record("version_created");
     if (result != nullptr) {
       result->pasted = true;
@@ -243,7 +236,6 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
                      const AdjustmentMergePreview& /*preview*/,
                      const std::vector<AdjustmentMergeResolution>& /*resolutions*/,
                      AdjustmentMergeResult* result, std::string* error) -> bool override {
-    auto ul = lock_render();
     record("merge_committed");
     if (result != nullptr) {
       result->merged = true;
@@ -255,18 +247,10 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
 
   auto CaptureSaveCheckpoint(const EditorHistoryGuardHandle& guard, std::string* error)
       -> std::shared_ptr<const EditorMiniGitSaveCapture> override {
-    auto ul = lock_render();
     return FakeEditorHistoryPort::CaptureSaveCheckpoint(guard, error);
   }
 
  private:
-  [[nodiscard]] auto lock_render() -> std::unique_lock<std::mutex> {
-    if (render_lock != nullptr) {
-      return std::unique_lock<std::mutex>(*render_lock);
-    }
-    return std::unique_lock<std::mutex>();
-  }
-
   void record(std::string event) {
     if (event_log != nullptr) {
       event_log->push_back(std::move(event));

@@ -5,7 +5,6 @@
 #include "ui/alcedo_main/album_backend/editor_history_projection.hpp"
 
 #include <algorithm>
-#include <mutex>
 
 #include "app/pipeline_service.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
@@ -31,44 +30,41 @@ auto EditorHistoryProjection::ReadHistorySnapshot(
   bool can_redo = false;
   std::vector<alcedo::EditorHistoryVersion> versions;
   std::vector<ProjectionCommitSource> commit_sources;
-  {
-    std::scoped_lock state_lock(state->mutex);
-    if (snapshot == nullptr || !state->pipeline_guard || !state->pipeline_guard->commit_graph_ ||
-        !state->history) {
-      if (error) *error = "Editor history graph is unavailable";
-      return false;
-    }
-    const auto& graph = *state->pipeline_guard->commit_graph_;
-    active_version_id = graph.GetActiveVersionId();
-    active_head = graph.GetActiveVersionRef().head_commit_hash;
-    recovered_head = state->recovered_head;
-    can_redo = state->history->redo_count() > 0;
+  if (snapshot == nullptr || !state->pipeline_guard || !state->pipeline_guard->commit_graph_ ||
+      !state->history) {
+    if (error) *error = "Editor history graph is unavailable";
+    return false;
+  }
+  const auto& graph = *state->pipeline_guard->commit_graph_;
+  active_version_id = graph.GetActiveVersionId();
+  active_head = graph.GetActiveVersionRef().head_commit_hash;
+  recovered_head = state->recovered_head;
+  can_redo = state->history->redo_count() > 0;
 
-    const auto& all_refs = graph.GetAllVersionRefs();
-    versions.reserve(all_refs.size());
-    for (const auto& [version_id, version] : all_refs) {
-      versions.push_back({version_id, version.display_name, version.head_commit_hash,
-                          version.created_at, version.updated_at,
-                          version_id == active_version_id});
-    }
-    const auto redo_suffix = state->history->RedoSuffix();
-    std::vector<alcedo::commit_hash_t> chain;
-    if (active_head.has_value()) {
-      chain = graph.FirstParentChain(active_head);
-    }
+  const auto& all_refs = graph.GetAllVersionRefs();
+  versions.reserve(all_refs.size());
+  for (const auto& [version_id, version] : all_refs) {
+    versions.push_back({version_id, version.display_name, version.head_commit_hash,
+                        version.created_at, version.updated_at,
+                        version_id == active_version_id});
+  }
+  const auto redo_suffix = state->history->RedoSuffix();
+  std::vector<alcedo::commit_hash_t> chain;
+  if (active_head.has_value()) {
+    chain = graph.FirstParentChain(active_head);
+  }
 
-    commit_sources.reserve(redo_suffix.size() + chain.size());
-    for (const auto& hash : redo_suffix) {
-      commit_sources.push_back(
-          {graph.GetCommit(hash), alcedo::EditorHistoryTimelinePosition::Future});
-    }
-    if (active_head.has_value()) {
-      for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
-        const auto position = (it == chain.rbegin())
-                                  ? alcedo::EditorHistoryTimelinePosition::Current
-                                  : alcedo::EditorHistoryTimelinePosition::Applied;
-        commit_sources.push_back({graph.GetCommit(*it), position});
-      }
+  commit_sources.reserve(redo_suffix.size() + chain.size());
+  for (const auto& hash : redo_suffix) {
+    commit_sources.push_back(
+        {graph.GetCommit(hash), alcedo::EditorHistoryTimelinePosition::Future});
+  }
+  if (active_head.has_value()) {
+    for (auto it = chain.rbegin(); it != chain.rend(); ++it) {
+      const auto position = (it == chain.rbegin())
+                                ? alcedo::EditorHistoryTimelinePosition::Current
+                                : alcedo::EditorHistoryTimelinePosition::Applied;
+      commit_sources.push_back({graph.GetCommit(*it), position});
     }
   }
 
@@ -98,8 +94,11 @@ auto EditorHistoryProjection::ReadAdjustmentSnapshot(
     alcedo::EditorRenderAdjustmentSnapshot* snapshot, std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  std::scoped_lock state_lock(state->mutex);
-  if (snapshot) *snapshot = state->committed_snapshot;
+  if (snapshot == nullptr) {
+    if (error) *error = "Adjustment snapshot output is null";
+    return false;
+  }
+  *snapshot = state->committed_snapshot;
   return true;
 }
 

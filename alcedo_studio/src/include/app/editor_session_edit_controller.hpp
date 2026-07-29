@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <functional>
-#include <mutex>
 #include <string>
 
 #include "app/editor_adjustment_types.hpp"
@@ -33,9 +32,9 @@ struct EditorEditOutcome {
   std::string              message;
 };
 
-/// Owns the adjustment snapshot and provisional/settled edit state. Receives
-/// the active history guard as a value handle from the facade; does not own
-/// session identity or guards.
+/// Owns the adjustment snapshot and provisional/settled edit state. All
+/// methods run during queue reduction; the type deliberately has no mutation
+/// mutex and never calls a live pipeline executor.
 class EditorSessionEditController final {
  public:
   struct Dependencies {
@@ -83,7 +82,6 @@ class EditorSessionEditController final {
 
  private:
   struct Dependencies deps_;
-  mutable std::mutex  mutex_;
   EditorRenderAdjustmentSnapshot adjustment_snapshot_{};
 };
 

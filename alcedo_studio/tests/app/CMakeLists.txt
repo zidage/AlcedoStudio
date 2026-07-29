@@ -5,7 +5,7 @@ include("${ALCEDO_TEST_ROOT}/cmake/AlcedoTestRegistration.cmake")
 add_executable(EditorAdjustmentPipelineTest ${ALCEDO_TEST_ROOT}/app/editor_adjustment_pipeline_test.cpp)
 target_include_directories(EditorAdjustmentPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorAdjustmentPipelineTest
-    PRIVATE GTest::gtest_main EditorAdjustmentPipeline Operators EditPipeline JSON)
+    PRIVATE GTest::gtest_main EditorAdjustmentPipeline Operators EditPipeline JSON ThreadPool)
 gtest_discover_tests(EditorAdjustmentPipelineTest TEST_PREFIX "EditorAdjustmentPipelineTest.")
 alcedo_register_test_target(EditorAdjustmentPipelineTest app)
 

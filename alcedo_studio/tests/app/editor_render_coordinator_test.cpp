@@ -702,14 +702,15 @@ TEST_F(EditorRenderCoordinatorTest, BurstOfReplaceableIntentsKeepsNewestInteract
   ASSERT_TRUE(coordinator_->has_inflight());
 
   std::uint64_t last_pending_id = 0;
-  for (int i = 0; i < 6; ++i) {
+  constexpr int  kPreviewBurst  = 100;
+  for (int i = 0; i < kPreviewBurst; ++i) {
     auto intent = MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal);
     intent.replacement_key = "interactive";  // same key → replace prior pending
     const auto result      = coordinator_->Submit(intent);
     ASSERT_EQ(result.kind, EditorRenderResultKind::RequestAccepted);
     last_pending_id = result.request_id;
   }
-  // Six bursts but only one pending entry — the newest — survives.
+  // One hundred preview updates but only one pending entry — the newest — survives.
   EXPECT_EQ(coordinator_->pending_count(), 1u);
 
   int replaced = 0;
@@ -718,7 +719,7 @@ TEST_F(EditorRenderCoordinatorTest, BurstOfReplaceableIntentsKeepsNewestInteract
       ++replaced;
     }
   }
-  EXPECT_EQ(replaced, 5);
+  EXPECT_EQ(replaced, kPreviewBurst - 1);
 
   // Complete the in-flight first frame; the newest interactive state is scheduled.
   const auto inflight_id = coordinator_->last_scheduled_request_id();

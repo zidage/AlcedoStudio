@@ -13,7 +13,6 @@
 #include <algorithm>
 #include <array>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
@@ -429,6 +428,8 @@ auto AdjustmentTransferController::PrepareCopy(uint elementId) -> QVariantMap {
     QVariantList version_rows;
     QVariantList active_rows;
     version_rows.reserve(static_cast<qsizetype>(versions.size()));
+    const auto* source_item = library_->FindAlbumItem(static_cast<sl_element_id_t>(elementId));
+    const auto  source_image_id = source_item != nullptr ? source_item->image_id : 0;
     for (const auto& version : versions) {
       graph.SetActiveVersionId(version.version_id);
       std::string rebuild_error;
@@ -437,14 +438,20 @@ auto AdjustmentTransferController::PrepareCopy(uint elementId) -> QVariantMap {
                                                        : std::move(rebuild_error));
       }
 
+      std::string snapshot_error;
+      auto        snapshot = pipeline_service->LoadPipelineSnapshot(
+          static_cast<sl_element_id_t>(elementId), source_image_id, &snapshot_error);
+      if (!snapshot || !snapshot->executor_) {
+        throw std::runtime_error(snapshot_error.empty() ? "Failed to snapshot source Version"
+                                                         : std::move(snapshot_error));
+      }
+
       QVariantList rows;
       rows.reserve(static_cast<qsizetype>(kItems.size()));
-      {
-        std::unique_lock<std::mutex> render_guard(guard->pipeline_->GetRenderLock());
-        for (const auto& spec : kItems) {
-          rows.push_back(RowFor(*guard->pipeline_, spec, spec.checked_by_default));
-        }
+      for (const auto& spec : kItems) {
+        rows.push_back(RowFor(*snapshot->executor_, spec, spec.checked_by_default));
       }
+      pipeline_service->ReleasePipelineSnapshot(std::move(snapshot));
       const bool active = version.version_id == prior_version_id;
       if (active) {
         active_rows = rows;
@@ -565,22 +572,30 @@ auto AdjustmentTransferController::CopyVersion(uint elementId, const QString& ve
 
     AdjustmentTransferPackage package;
     QVariantList              summary;
-    {
-      std::unique_lock<std::mutex> render_guard(guard->pipeline_->GetRenderLock());
-      for (const auto* spec : specs) {
-        const bool enabled = OperatorEnabledFor(*guard->pipeline_, *spec);
-        const auto params  = TransferParamsFor(*guard->pipeline_, *spec);
-        package.operators_.push_back({
-            .stage_         = spec->stage,
-            .operator_type_ = spec->op_type,
-            .enabled_       = enabled,
-            .merge_params_  = spec->merge_params,
-            .params_        = params,
-        });
-        summary.push_back(SummaryRow(
-            *spec, ValueFor(*spec, OperatorParamsFor(*guard->pipeline_, *spec), enabled)));
-      }
+    const auto* source_item = library_->FindAlbumItem(static_cast<sl_element_id_t>(elementId));
+    const auto  source_image_id = source_item != nullptr ? source_item->image_id : 0;
+    std::string snapshot_error;
+    auto        snapshot = pipeline_service->LoadPipelineSnapshot(
+        static_cast<sl_element_id_t>(elementId), source_image_id, &snapshot_error);
+    if (!snapshot || !snapshot->executor_) {
+      throw std::runtime_error(snapshot_error.empty() ? "Failed to snapshot source Version"
+                                                       : std::move(snapshot_error));
     }
+    for (const auto* spec : specs) {
+      const bool enabled = OperatorEnabledFor(*snapshot->executor_, *spec);
+      const auto params  = TransferParamsFor(*snapshot->executor_, *spec);
+      package.operators_.push_back({
+          .stage_         = spec->stage,
+          .operator_type_ = spec->op_type,
+          .enabled_       = enabled,
+          .merge_params_  = spec->merge_params,
+          .params_        = params,
+      });
+      const auto summary_value =
+          ValueFor(*spec, OperatorParamsFor(*snapshot->executor_, *spec), enabled);
+      summary.push_back(SummaryRow(*spec, summary_value));
+    }
+    pipeline_service->ReleasePipelineSnapshot(std::move(snapshot));
 
     graph.SetActiveVersionId(prior_version_id);
     std::string restore_error;

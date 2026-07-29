@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "app/adjustment_transfer_types.hpp"
+#include "app/editor_adjustment_types.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/commit_types.hpp"
@@ -62,6 +63,11 @@ class AdjustmentTransferService final {
   /// active Version is set to the new Version. The serialized pipeline state is stored on
   /// ImageEditState.
   [[nodiscard]] static auto PasteAsRootRelativeVersion(CommitGraph&         graph,
+                                                       const AdjustmentTransferPackage& package,
+                                                       std::string version_display_name)
+      -> AdjustmentPasteResult;
+
+  [[nodiscard]] static auto PasteAsRootRelativeVersion(CommitGraph&         graph,
                                                        PipelineMgmtService& pipeline_service,
                                                        sl_element_id_t      element_id,
                                                        const AdjustmentTransferPackage& package,
@@ -79,6 +85,13 @@ class AdjustmentTransferService final {
                                           std::string incoming_version_display_name)
       -> AdjustmentMergePreview;
 
+  /// Pure merge preparation against a queue-owned immutable adjustment snapshot. This overload
+  /// never loads or locks a live pipeline executor.
+  [[nodiscard]] static auto InitiateMerge(
+      CommitGraph& graph, const AdjustmentTransferPackage& package,
+      const EditorRenderAdjustmentSnapshot& current_snapshot,
+      std::string incoming_version_display_name) -> AdjustmentMergePreview;
+
   /// Complete a merge after the UI has provided resolutions for every conflicting field.
   /// Creates a two-parent merge commit (first = current Version head, second = incoming branch
   /// head) with the resolved field delta and advances the active Version to the merge commit.
@@ -87,6 +100,10 @@ class AdjustmentTransferService final {
                                           const AdjustmentMergePreview&                 preview,
                                           const std::vector<AdjustmentMergeResolution>& resolutions)
       -> AdjustmentMergeResult;
+
+  [[nodiscard]] static auto CompleteMerge(
+      CommitGraph& graph, const AdjustmentMergePreview& preview,
+      const std::vector<AdjustmentMergeResolution>& resolutions) -> AdjustmentMergeResult;
 
   /// Discard the incoming branch created by InitiateMerge. No merge commit is created and the
   /// active Version is not moved. The incoming commits remain in the graph as unreachable

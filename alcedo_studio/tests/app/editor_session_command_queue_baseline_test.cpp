@@ -309,15 +309,14 @@ TEST_F(EditorSessionCommandQueueBaselineTest, StaleFirstFrameCannotEnableEditing
 
 /// Invariant: Undo on the command thread never waits on the executor render
 /// mutex. While a render worker owns the executor, Undo must return without
-/// blocking. The current Undo path acquires the render lock inside the history
-/// port, so it blocks until the worker releases it. Detected with a bounded
-/// timeout that reports the unfinished operation.
+/// blocking. The history reduction and worker gate are separate; a bounded
+/// timeout reports any unfinished operation.
 TEST_F(EditorSessionCommandQueueBaselineTest,
        UndoWhileRenderWorkerOwnsExecutorDoesNotBlockCommandThread) {
   openInteractive(10, 20);  // image A, interactive
 
-  // Point the history port at a shared render lock so Undo reproduces the
-  // GUI-side render-lock acquisition.
+  // Hold a shared worker gate. The CQ2 history port intentionally does not
+  // acquire this gate while reducing Undo.
   std::mutex render_lock;
   history_->render_lock = &render_lock;
 
@@ -335,7 +334,7 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   const bool                   blocked = (status != std::future_status::ready);
   EXPECT_FALSE(blocked) << "Undo blocked on the executor render lock (unfinished op: Undo)";
 
-  // Release the worker hold so the blocked command can finish and the async
+  // Release the worker hold so the worker simulation can finish and the async
   // thread joins cleanly regardless of pass/fail.
   worker_holds.unlock();
   (void)fut.get();
@@ -343,8 +342,7 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
 }
 
 /// Invariant: Merge completion on the command thread never waits on the
-/// executor render mutex. The current CompleteMerge path rebuilds the pipeline
-/// under the render lock, so it blocks while a render worker owns the executor.
+/// executor render mutex while the worker owns it.
 TEST_F(EditorSessionCommandQueueBaselineTest,
        MergeWhileRenderWorkerOwnsExecutorDoesNotBlockCommandThread) {
   openInteractive(10, 20);  // image A, interactive

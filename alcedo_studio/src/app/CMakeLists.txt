@@ -202,6 +202,7 @@ def_library(PipelineMgmtService
 def_library(AdjustmentTransferService
     SOURCES "${ALCEDO_APP_ROOT}/adjustment_transfer_service.cpp"
     PUBLIC_DEPS PipelineMgmtService EditPipeline
+    PRIVATE_DEPS EditorAdjustmentPipeline
 )
 
 def_library(EditHistoryMgmtService

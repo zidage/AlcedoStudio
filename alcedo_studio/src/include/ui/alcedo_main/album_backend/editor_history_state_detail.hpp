@@ -26,16 +26,16 @@ namespace alcedo::ui {
 
 class EditorSessionPipelinePort;
 
-/// Per-image live history state owned by the history state unit. Access is
-/// serialized through the contained mutex. Every internal unit receives an
-/// explicit shared_ptr<HistoryWorkingState> and locks the mutex before reading
-/// or mutating graph/executor/snapshot fields.
+/// Per-image history state owned by the queue-thread history unit. The command
+/// queue is the sole mutation owner for graph, redo, pending-before, and
+/// committed-snapshot fields. The pipeline guard is only a worker hand-off
+/// identity here; no history reducer accesses its live executor.
 struct HistoryWorkingState {
-  std::mutex mutex;
   std::shared_ptr<alcedo::PipelineGuard> pipeline_guard;
   std::shared_ptr<alcedo::MiniGitJournal> journal;
   std::unique_ptr<alcedo::MiniGitWorkingHistory> history;
   std::unordered_map<std::string, alcedo::EditorAdjustmentOperatorState> pending_before;
+  alcedo::EditorRenderAdjustmentSnapshot root_snapshot;
   alcedo::EditorRenderAdjustmentSnapshot committed_snapshot;
   bool recovered_head = false;
 };

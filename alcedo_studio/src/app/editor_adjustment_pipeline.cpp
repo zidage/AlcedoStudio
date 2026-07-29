@@ -117,10 +117,8 @@ auto ApplyPatch(CPUPipelineExecutor& executor, const EditorAdjustmentPatch& patc
     }
     return false;
   }
-  if (patch.params_json.empty()) {
-    return true;
-  }
-  const auto params = nlohmann::json::parse(patch.params_json);
+  const auto params = patch.params_json.empty() ? nlohmann::json::object()
+                                               : nlohmann::json::parse(patch.params_json);
   if (!params.is_object()) {
     if (error) {
       *error = "Editor adjustment params must be a JSON object";
@@ -130,7 +128,11 @@ auto ApplyPatch(CPUPipelineExecutor& executor, const EditorAdjustmentPatch& patc
   auto& stage   = executor.GetStage(spec->stage_name);
   auto& globals = executor.GetGlobalParams();
   stage.SetOperator(spec->operator_type, params, globals);
-  stage.EnableOperator(spec->operator_type, EmbeddedEnabled(params), globals);
+  const bool enabled = params.contains("enabled") ||
+                               (params.size() == 1 && params.begin().value().is_object())
+                           ? EmbeddedEnabled(params)
+                           : patch.enabled;
+  stage.EnableOperator(spec->operator_type, enabled, globals);
   return true;
 }
 

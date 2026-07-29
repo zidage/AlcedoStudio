@@ -22,6 +22,9 @@ struct EditorAdjustmentPatch {
   std::string params_json;
   /// True when the input sequence has settled (quality ladder); false while dragging.
   bool settled = false;
+  /// Enabled state captured with the immutable adjustment value. Interactive callers that do not
+  /// provide a separate enabled flag keep the default and may encode it inside params_json.
+  bool enabled = true;
 
   auto operator==(const EditorAdjustmentPatch& other) const -> bool = default;
 };

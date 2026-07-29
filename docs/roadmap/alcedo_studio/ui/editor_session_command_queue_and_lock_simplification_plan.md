@@ -2,9 +2,8 @@
 
 Date: 2026-07-29
 
-Status: in progress. CQ0 complete — deterministic failing evidence captured. CQ1 complete —
-single-thread command queue owns all session mutation; the CQ0 failing suite is now the 12-test
-CQ1 acceptance suite. CQ2 unblocked.
+Status: CQ2 complete — pure history snapshots, worker-only executor application, and narrowed
+pipeline cache locking verified on 2026-07-29. CQ3 unblocked.
 
 Primary owner: Alcedo Studio editor session and history architecture.
 
@@ -595,7 +594,8 @@ churn inside the diff, no semantic change). Tests: acceptance suite 471 LOC, har
 
 ## Phase CQ2 — Remove GUI render-lock waits and narrow history ownership
 
-Status: blocked by CQ1.
+Status: complete — command-side history reduction no longer reads or mutates the live executor;
+the scoped QML/controller/session paths do not acquire `GetRenderLock()`.
 
 ### Purpose
 
@@ -672,9 +672,128 @@ No path may hold two of these at the same time.
 - lifecycle and edit controller recursive or broad mutation mutexes are removed;
 - history correctness can be tested without constructing a live render executor.
 
+### Phase CQ2 completion record (2026-07-29)
+
+**Status:** complete for the editor-session and album-controller paths. The command-side reducer now
+owns immutable graph and adjustment state; executor mutation is confined to the render worker or
+pipeline-service worker boundary.
+
+**Implementation delivered:**
+
+- `EditorHistoryMutation`, `EditorHistoryTransfer`, `EditorHistoryVersionRefs`, and
+  `EditorHistoryCheckpoint` now use pure snapshot reducers plus Mini-Git prepare/publish steps.
+  Undo, Redo, head movement, checkout, Paste, Merge, and save capture do not acquire the live
+  executor render mutex.
+- `EditorRenderAdjustmentSnapshot` is complete across the 22 supported fields. Missing or
+  unsupported fields fail through `IsCompleteAdjustmentSnapshot` and
+  `ReadCommittedAdjustmentState` before journal or graph publication.
+- The immutable candidate is published together with the Mini-Git transition on the queue-owned
+  history path. `EditorSessionRenderSchedulerPort::TryProducePipelineFrame` is the worker-side
+  handoff and applies that candidate while it owns the executor render mutex.
+- Save capture derives materialization and serialized pipeline parameters from immutable graph,
+  head, chain, root, and adjustment state. Pipeline cache metadata locks are released before
+  storage, DuckDB, render, and reconstruction work.
+- The edit-controller and history-working-state mutation mutexes were removed. The album
+  adjustment-transfer controller now reads source data through an independent pipeline snapshot,
+  so it also has no direct render-lock acquisition.
+
+**Primary success call chains:**
+
+- Edit: `EditorHistoryMutation::CommitAdjustment` →
+  `ApplyCommittedPayloadToSnapshot` → `PrepareAppendEdit` → `PublishPreparedEdit` → committed
+  snapshot publication → `EditorSessionRenderSchedulerPort::TryProducePipelineFrame` →
+  `ApplyEditorAdjustmentSnapshot` under the worker render gate.
+- Undo/Redo/head move: `PrepareUndo` / `PrepareRedo` / `PrepareMoveHeadToCommit` →
+  `ApplyPreparedHeadMoveToSnapshot` → one Mini-Git publication → immutable target snapshot →
+  render request.
+- Paste/Merge/checkout: pure transfer or version-ref reducer → `SnapshotAtHead` → graph
+  persistence when required → render request with the resulting snapshot.
+- Save: `CaptureSaveCheckpoint` → immutable graph/head/chain/adjustment materialization →
+  checkpoint store; serialized parameters are generated from the snapshot rather than sampled from
+  the command-side live executor.
+- Cache: `PipelineMgmtService` cache metadata lookup/update → cache mutex release → storage,
+  DuckDB, render, or reconstruction operation.
+
+**Failure and preservation paths:**
+
+- Unsupported fields fail before `PrepareAppendEdit`, leaving commit count and journal bytes
+  unchanged (`UnsupportedAdjustmentFieldFailsBeforeMiniGitPublication`).
+- Pure head-move application failures return before publication and restore the prior head, redo
+  suffix, snapshot, and journal state (`HeadMoveApplyFailurePreservesHeadRedoPipelineSnapshotAndJournal`).
+- Render-worker failure is reported through the render completion result; it does not call history
+  mutation. The coordinator rejection/failure tests and the pure head-move preservation test cover
+  the separation between the render result and published history.
+
+**Changed files:**
+
+- Production: `alcedo_studio/src/app/CMakeLists.txt`,
+  `alcedo_studio/src/app/adjustment_transfer_service.cpp`,
+  `alcedo_studio/src/app/editor_adjustment_pipeline.cpp`,
+  `alcedo_studio/src/app/editor_session_edit_controller.cpp`,
+  `alcedo_studio/src/app/pipeline_service.cpp`,
+  `alcedo_studio/src/include/app/adjustment_transfer_service.hpp`,
+  `alcedo_studio/src/include/app/editor_adjustment_types.hpp`,
+  `alcedo_studio/src/include/app/editor_session_edit_controller.hpp`.
+- Album backend: `alcedo_studio/src/include/ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp`,
+  `alcedo_studio/src/include/ui/alcedo_main/album_backend/editor_history_state_detail.hpp`,
+  `alcedo_studio/src/ui/alcedo_main/album_backend/adjustment_transfer_controller.cpp`,
+  `alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_checkpoint.cpp`,
+  `alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_mutation.cpp`,
+  `alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_projection.cpp`,
+  `alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_shared_helpers.cpp`,
+  `alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_state_detail.cpp`,
+  `alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_transfer.cpp`,
+  `alcedo_studio/src/ui/alcedo_main/album_backend/editor_history_version_refs.cpp`.
+- Tests and target wiring: `alcedo_studio/tests/app/CMakeLists.txt`,
+  `alcedo_studio/tests/app/editor_render_coordinator_test.cpp`,
+  `alcedo_studio/tests/app/editor_session_command_queue_baseline_test.cpp`,
+  `alcedo_studio/tests/edit/history/editor_session_history_port_test.cpp`,
+  `alcedo_studio/tests/support/editor_session_command_queue_test_support.hpp`.
+
+**Test commands and results:**
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target AlbumBackendLib --parallel 4
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSessionHistoryPortTest --parallel 4
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorRenderCoordinatorTest --parallel 4
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSessionCommandQueueBaselineTest --parallel 4
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target PipelineServiceTest --parallel 4
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target AdjustmentTransferServiceMiniGitTest --parallel 4
+```
+
+Direct runtime results from `build/debug`:
+
+- `EditorSessionHistoryPortTest`: 20/20 passed, including pure replay without constructing a
+  render executor, complete-field initialization, held-render-lock capture, unsupported-field
+  rejection, and head-move preservation.
+- `EditorRenderCoordinatorTest`: 29/29 passed, including the 100-preview replacement burst.
+- `EditorSessionCommandQueueBaselineTest`: 12/12 passed.
+- `PipelineServiceTest`: 23/23 passed; 2 explicitly disabled tests remain disabled by the target.
+- `AdjustmentTransferServiceMiniGitTest`: 13/13 passed.
+- Aggregate: 97/97 executed tests passed across the five direct suites.
+
+`git diff --check` passed. A changed-diff scan found no project-authored uses of the repository
+banned terms. A scoped `GetRenderLock()` scan found no acquisition in the album backend
+controller/history files or `editor_session*` command files.
+
+**Qualification limits:** CTest discovery remains blocked by the pre-existing
+`WorkspaceShellTest_runtime/WorkspaceShellTest.exe` result-3 failure, so the affected binaries
+were run directly. `EditorAdjustmentPipelineTest` links after its missing `ThreadPool` target
+dependency was added, but its post-build runtime-DLL copy step still fails for the pre-existing
+`cudademosaicnetentry.dll`, `demosaicnet.dll`, and `rawprocessorop.dll` inputs. ThreadSanitizer was
+not run because this verification environment is the MSVC configuration; a supported non-MSVC
+run remains a platform qualification item. Legacy direct-executor transfer-service overloads
+and the older QWidget editor path remain compatibility adapters outside the session reducer and
+are handed to CQ5 cleanup.
+
+**LOC note:** 23 implementation and test files changed, 1,344 insertions and 963 deletions; the
+roadmap record is an additional documentation change. The largest diffs are the pure history
+helper/reducer split and the pipeline-service cache-scope narrowing; they remain separate by
+responsibility and no new file approaches the repository's 1,000-LOC split threshold.
+
 ## Phase CQ3 — Publish one session snapshot and one action-availability source
 
-Status: blocked by CQ2.
+Status: unblocked — CQ2 complete.
 
 ### Purpose
 
@@ -889,7 +1008,7 @@ cannot be safe while history correctness still depends on the live render execut
 
 - [x] CQ0 records deterministic failing evidence.
 - [x] CQ1 serializes all session mutations and removes inline completion re-entry.
-- [ ] CQ2 removes command-thread render-lock waits.
+- [x] CQ2 removes command-thread render-lock waits.
 - [ ] CQ3 publishes one session snapshot and one editor action source.
 - [ ] CQ4 gives Paste and Merge one durable publication path.
 - [ ] CQ5 removes transitional code and qualifies the production sequence.

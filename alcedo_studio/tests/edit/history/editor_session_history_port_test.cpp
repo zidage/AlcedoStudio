@@ -10,8 +10,10 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <thread>
 
 #include "app/editor_adjustment_pipeline.hpp"
@@ -22,6 +24,7 @@
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_commit_presentation.hpp"
+#include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -85,6 +88,37 @@ class EditorSessionHistoryPortTest : public ::testing::Test {
   std::shared_ptr<EditorSessionPipelinePort> pipeline_;
   EditorSessionHistoryPort                   history_;
 };
+
+TEST(EditorHistoryPureReducerTest, ReplaysHeadWithoutConstructingRenderExecutor) {
+  auto graph = alcedo::CommitGraph::CreateEmpty(43);
+  auto root_snapshot = MakeEmptyCompleteAdjustmentSnapshot();
+  const auto spec = alcedo::ResolveEditorAdjustmentField("exposure");
+  ASSERT_TRUE(spec.has_value());
+
+  alcedo::OrdinaryEditPayload payload;
+  payload.operator_type = spec->operator_type;
+  payload.stage_name = spec->stage_name;
+  payload.field_name = "$operator_params";
+  payload.before_value = nlohmann::json::object();
+  payload.after_value = nlohmann::json{{"exposure", 0.75}};
+  payload.before_enabled = true;
+  payload.after_enabled = true;
+
+  auto expected = root_snapshot;
+  std::string error;
+  ASSERT_TRUE(ApplyCommittedPayloadToSnapshot(&expected, payload, true, &error)) << error;
+
+  const auto commit = alcedo::EditCommit::MakeEdit(graph.GetRootId(), std::nullopt, payload);
+  ASSERT_TRUE(graph.InsertCommit(commit));
+  graph.MoveWorkingHead(graph.GetActiveVersionId(), commit.GetCommitHash());
+
+  alcedo::EditorRenderAdjustmentSnapshot actual;
+  ASSERT_TRUE(SnapshotAtHead(root_snapshot, graph, commit.GetCommitHash(), &actual, &error))
+      << error;
+  EXPECT_EQ(PatchValue(actual, "exposure"), PatchValue(expected, "exposure"));
+  EXPECT_EQ(actual.patches.size(), kEditorSnapshotFields.size());
+  EXPECT_TRUE(IsCompleteAdjustmentSnapshot(actual, &error)) << error;
+}
 
 TEST_F(EditorSessionHistoryPortTest, SettledAdjustmentCreatesOneCommitAndUndoRedoMovesHead) {
   std::string error;
@@ -167,14 +201,20 @@ TEST_F(EditorSessionHistoryPortTest,
 
   ASSERT_TRUE(history_.Undo(handle, &error)) << error;
   EXPECT_EQ(guard_->working_head_commit_hash_, current_head);
+  alcedo::EditorRenderAdjustmentSnapshot undo_snapshot;
+  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &undo_snapshot, &error)) << error;
+  EXPECT_EQ(PatchValue(undo_snapshot, "tint"), R"({"tint":2.0})");
   alcedo::EditorAdjustmentOperatorState tint_state;
   ASSERT_TRUE(
       alcedo::ReadEditorAdjustmentOperatorState(*guard_->pipeline_, "tint", &tint_state, &error))
       << error;
-  EXPECT_DOUBLE_EQ(tint_state.params.at("tint").get<double>(), 2.0);
+  EXPECT_DOUBLE_EQ(tint_state.params.at("tint").get<double>(), 10.0);
 
   ASSERT_TRUE(history_.Redo(handle, &error)) << error;
   EXPECT_EQ(guard_->working_head_commit_hash_, merge_head);
+  alcedo::EditorRenderAdjustmentSnapshot redo_snapshot;
+  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &redo_snapshot, &error)) << error;
+  EXPECT_EQ(PatchValue(redo_snapshot, "tint"), R"({"tint":10.0})");
   ASSERT_TRUE(
       alcedo::ReadEditorAdjustmentOperatorState(*guard_->pipeline_, "tint", &tint_state, &error))
       << error;
@@ -248,6 +288,83 @@ TEST_F(EditorSessionHistoryPortTest,
   }
   EXPECT_TRUE(has_sat);
   EXPECT_TRUE(has_vib);
+}
+
+TEST_F(EditorSessionHistoryPortTest,
+       InitialAdjustmentSnapshotContainsEverySupportedFieldBeforeAnyRender) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+
+  alcedo::EditorRenderAdjustmentSnapshot snapshot;
+  ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &snapshot, &error)) << error;
+
+  const std::set<std::string> expected_fields = {
+      "exposure",     "contrast",  "white",       "black",      "shadows",
+      "highlights",   "curve",     "saturation",  "vibrance",   "tint",
+      "hls",           "color_wheel", "lut",        "clarity",    "sharpen",
+      "odt",           "film_grain", "halation",   "crop_rotate", "raw_decode",
+      "lens_calib",   "color_temp"};
+  std::set<std::string> actual_fields;
+  for (const auto& patch : snapshot.patches) {
+    actual_fields.insert(patch.field_key);
+    EXPECT_FALSE(patch.params_json.empty());
+  }
+  EXPECT_EQ(actual_fields, expected_fields);
+}
+
+TEST_F(EditorSessionHistoryPortTest,
+       UnsupportedAdjustmentFieldFailsBeforeMiniGitPublication) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+  const auto commit_count_before = guard_->commit_graph_->CommitCount();
+
+  const alcedo::EditorAdjustmentPatch unsupported{"not_a_supported_adjustment", R"({})", false};
+  EXPECT_FALSE(history_.CaptureAdjustmentBeforePreview(handle, unsupported, &error));
+  EXPECT_FALSE(error.empty());
+  EXPECT_EQ(guard_->commit_graph_->CommitCount(), commit_count_before);
+  EXPECT_FALSE(guard_->working_head_commit_hash_.has_value());
+
+  alcedo::MiniGitJournal journal(journal_path_);
+  std::string            journal_error;
+  ASSERT_TRUE(journal.Load(&journal_error)) << journal_error;
+  EXPECT_TRUE(journal.records().empty());
+}
+
+TEST_F(EditorSessionHistoryPortTest,
+       SaveCaptureReturnsWhilePipelineRenderLockIsHeld) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+
+  std::atomic<bool> worker_ready{false};
+  std::atomic<bool> release_worker{false};
+  std::thread       worker([&] {
+    std::unique_lock<std::mutex> held(guard_->pipeline_->GetRenderLock());
+    worker_ready.store(true);
+    while (!release_worker.load()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  });
+  const auto ready_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  while (!worker_ready.load() && std::chrono::steady_clock::now() < ready_deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  ASSERT_TRUE(worker_ready.load());
+
+  auto capture_future = std::async(std::launch::async, [&] {
+    std::string capture_error;
+    return history_.CaptureSaveCheckpoint(handle, &capture_error);
+  });
+  EXPECT_EQ(capture_future.wait_for(std::chrono::milliseconds(250)), std::future_status::ready)
+      << "save capture waited on the worker render lock";
+
+  release_worker.store(true);
+  if (worker.joinable()) {
+    worker.join();
+  }
+  ASSERT_TRUE(capture_future.get());
 }
 
 TEST_F(EditorSessionHistoryPortTest,

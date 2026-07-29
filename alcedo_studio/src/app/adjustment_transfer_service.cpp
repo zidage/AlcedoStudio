@@ -13,6 +13,7 @@
 #include <string_view>
 #include <utility>
 
+#include "app/editor_adjustment_pipeline.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 
 namespace alcedo {
@@ -543,6 +544,33 @@ auto MergeConflictFieldKey(const AdjustmentTransferEntry& entry) -> std::string 
   return key;
 }
 
+auto ReadSnapshotField(const EditorRenderAdjustmentSnapshot& snapshot, const std::string& field_key,
+                       nlohmann::json* params, bool* enabled, std::string* error) -> bool {
+  if (!ResolveEditorAdjustmentField(field_key).has_value()) {
+    if (error) *error = "Unsupported editor adjustment field: " + field_key;
+    return false;
+  }
+  const auto found = std::find_if(
+      snapshot.patches.begin(), snapshot.patches.end(), [&](const auto& patch) {
+        return patch.field_key == field_key;
+      });
+  if (found == snapshot.patches.end()) {
+    if (error) *error = "Committed adjustment snapshot is missing field: " + field_key;
+    return false;
+  }
+  try {
+    if (params != nullptr) {
+      *params = found->params_json.empty() ? nlohmann::json::object()
+                                           : nlohmann::json::parse(found->params_json);
+    }
+    if (enabled != nullptr) *enabled = found->enabled;
+    return true;
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+}
+
 }  // namespace
 
 auto AdjustmentTransferService::BuildRootRelativeCommits(const AdjustmentTransferPackage& package,
@@ -579,9 +607,8 @@ auto AdjustmentTransferService::BuildRootRelativeCommits(const AdjustmentTransfe
 }
 
 auto AdjustmentTransferService::PasteAsRootRelativeVersion(
-    CommitGraph& graph, [[maybe_unused]] PipelineMgmtService& pipeline_service,
-    [[maybe_unused]] sl_element_id_t element_id, const AdjustmentTransferPackage& package,
-    std::string version_display_name) -> AdjustmentPasteResult {
+    CommitGraph& graph, const AdjustmentTransferPackage& package, std::string version_display_name)
+    -> AdjustmentPasteResult {
   AdjustmentPasteResult result;
   if (package.Empty()) {
     result.error = "Adjustment transfer package is empty";
@@ -610,6 +637,13 @@ auto AdjustmentTransferService::PasteAsRootRelativeVersion(
   result.new_version_id = new_version_id;
   result.new_head       = new_head;
   return result;
+}
+
+auto AdjustmentTransferService::PasteAsRootRelativeVersion(
+    CommitGraph& graph, [[maybe_unused]] PipelineMgmtService& pipeline_service,
+    [[maybe_unused]] sl_element_id_t element_id, const AdjustmentTransferPackage& package,
+    std::string version_display_name) -> AdjustmentPasteResult {
+  return PasteAsRootRelativeVersion(graph, package, std::move(version_display_name));
 }
 
 auto AdjustmentTransferService::InitiateMerge(CommitGraph&                     graph,
@@ -700,9 +734,70 @@ auto AdjustmentTransferService::InitiateMerge(CommitGraph&                     g
   return preview;
 }
 
+auto AdjustmentTransferService::InitiateMerge(
+    CommitGraph& graph, const AdjustmentTransferPackage& package,
+    const EditorRenderAdjustmentSnapshot& current_snapshot,
+    std::string incoming_version_display_name) -> AdjustmentMergePreview {
+  AdjustmentMergePreview preview;
+  if (package.Empty()) {
+    preview.error = "Adjustment transfer package is empty";
+    return preview;
+  }
+  if (current_snapshot.patches.empty()) {
+    preview.error = "Committed adjustment snapshot is empty";
+    return preview;
+  }
+
+  auto incoming_commits = BuildRootRelativeCommits(package, graph.GetRootId());
+  if (incoming_commits.empty()) {
+    preview.error = "No valid adjustments in merge package";
+    return preview;
+  }
+  for (const auto& commit : incoming_commits) {
+    (void)graph.InsertCommit(commit);
+  }
+  preview.incoming_head = incoming_commits.back().GetCommitHash();
+  preview.incoming_version_id = graph.CreateVersionRefAtHead(
+      UniqueVersionDisplayNameForGraph(graph, incoming_version_display_name, "Merged Adjustments"),
+      preview.incoming_head);
+
+  for (const auto& entry : package.operators_) {
+    if (entry.stage_ == PipelineStageName::Stage_Count ||
+        entry.operator_type_ == OperatorType::UNKNOWN || entry.operator_type_ == OperatorType::RESIZE) {
+      continue;
+    }
+    const auto field_key = EditorAdjustmentFieldKey(entry.stage_, entry.operator_type_);
+    if (!field_key.has_value()) {
+      preview.error = "Adjustment transfer field is not supported by the editor snapshot";
+      return preview;
+    }
+    nlohmann::json current_value;
+    bool current_enabled = true;
+    if (!ReadSnapshotField(current_snapshot, *field_key, &current_value, &current_enabled,
+                           &preview.error)) {
+      return preview;
+    }
+    nlohmann::json incoming_value = entry.params_;
+    if (entry.merge_params_) {
+      incoming_value = current_value;
+      MergeJsonObjectMiniGit(incoming_value, entry.params_);
+    }
+    if (current_value != incoming_value || current_enabled != entry.enabled_) {
+      AdjustmentMergeConflict conflict;
+      conflict.stage          = entry.stage_;
+      conflict.operator_type = entry.operator_type_;
+      conflict.field_key     = MergeConflictFieldKey(entry);
+      conflict.current_value  = current_value;
+      conflict.incoming_value = std::move(incoming_value);
+      preview.conflicts.push_back(std::move(conflict));
+    }
+  }
+  preview.has_conflicts = !preview.conflicts.empty();
+  return preview;
+}
+
 auto AdjustmentTransferService::CompleteMerge(
-    CommitGraph& graph, [[maybe_unused]] PipelineMgmtService& pipeline_service,
-    const AdjustmentMergePreview&                 preview,
+    CommitGraph& graph, const AdjustmentMergePreview& preview,
     const std::vector<AdjustmentMergeResolution>& resolutions) -> AdjustmentMergeResult {
   AdjustmentMergeResult result;
   if (!preview.error.empty()) {
@@ -773,6 +868,13 @@ auto AdjustmentTransferService::CompleteMerge(
   result.active_version_id = graph.GetActiveVersionId();
   result.merge_commit_hash = merge_commit.GetCommitHash();
   return result;
+}
+
+auto AdjustmentTransferService::CompleteMerge(
+    CommitGraph& graph, [[maybe_unused]] PipelineMgmtService& pipeline_service,
+    const AdjustmentMergePreview& preview,
+    const std::vector<AdjustmentMergeResolution>& resolutions) -> AdjustmentMergeResult {
+  return CompleteMerge(graph, preview, resolutions);
 }
 
 void AdjustmentTransferService::CancelMerge(CommitGraph& graph, AdjustmentMergePreview& preview) {

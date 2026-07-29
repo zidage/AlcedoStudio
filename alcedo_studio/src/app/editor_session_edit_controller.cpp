@@ -18,7 +18,6 @@ auto EditorSessionEditController::HandlePatch(EditorAdjustmentPatch patch, bool 
                                               const EditorHistoryGuardHandle& guard,
                                               const EditorSessionIdentity&    identity)
     -> EditorEditOutcome {
-  std::scoped_lock lock(mutex_);
   EditorEditOutcome outcome;
   outcome.identity = identity;
 
@@ -79,7 +78,6 @@ auto EditorSessionEditController::HandleUndoRedo(bool undo,
                                                  const EditorHistoryGuardHandle& guard,
                                                  const EditorSessionIdentity&    identity)
     -> EditorEditOutcome {
-  std::scoped_lock lock(mutex_);
   EditorEditOutcome outcome;
   outcome.identity = identity;
 
@@ -116,7 +114,6 @@ auto EditorSessionEditController::HandleMoveHeadToCommit(const commit_hash_t& ta
                                                          const EditorHistoryGuardHandle& guard,
                                                          const EditorSessionIdentity& identity)
     -> EditorEditOutcome {
-  std::scoped_lock lock(mutex_);
   EditorEditOutcome outcome;
   outcome.identity = identity;
 
@@ -151,7 +148,6 @@ auto EditorSessionEditController::HandleDiscard(const EditorHistoryGuardHandle& 
                                                 const EditorSessionIdentity&    identity,
                                                 EditorSessionState              current_state)
     -> EditorEditOutcome {
-  std::scoped_lock lock(mutex_);
   EditorEditOutcome outcome;
   outcome.identity = identity;
 
@@ -200,18 +196,15 @@ auto EditorSessionEditController::HandleDiscard(const EditorHistoryGuardHandle& 
 
 auto EditorSessionEditController::adjustment_snapshot() const
     -> EditorRenderAdjustmentSnapshot {
-  std::scoped_lock lock(mutex_);
   return adjustment_snapshot_;
 }
 
 void EditorSessionEditController::set_adjustment_snapshot(
     EditorRenderAdjustmentSnapshot snapshot) {
-  std::scoped_lock lock(mutex_);
   adjustment_snapshot_ = std::move(snapshot);
 }
 
 void EditorSessionEditController::ClearSnapshot() {
-  std::scoped_lock lock(mutex_);
   adjustment_snapshot_ = {};
 }
 

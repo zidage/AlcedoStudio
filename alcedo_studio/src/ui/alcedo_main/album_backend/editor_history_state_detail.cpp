@@ -41,8 +41,8 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
     return nullptr;
   }
   auto guard = pipeline_port->EnsureLoaded(element_id, error);
-  if (!guard || !guard->pipeline_ || !guard->commit_graph_) {
-    if (error && error->empty()) *error = "Editor Mini-Git pipeline state is unavailable";
+  if (!guard || !guard->commit_graph_) {
+    if (error && error->empty()) *error = "Editor Mini-Git history graph is unavailable";
     return nullptr;
   }
 
@@ -62,17 +62,27 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
   auto state = std::make_shared<HistoryWorkingState>();
   state->pipeline_guard = guard;
   state->journal = journal;
-  if (!InitializeCommittedSnapshotFromPipeline(*guard, &state->committed_snapshot, error)) {
+  const auto& image_state = guard->commit_graph_->GetImageEditState();
+  if (image_state.serialized_pipeline_state.has_value() &&
+      image_state.serialized_pipeline_state->is_object() &&
+      image_state.serialized_pipeline_state->contains("pipeline_params")) {
+    if (!MakeAdjustmentSnapshotFromPipelineParams(
+            image_state.serialized_pipeline_state->at("pipeline_params"),
+            &state->committed_snapshot, error)) {
+      return nullptr;
+    }
+  } else {
+    state->committed_snapshot = MakeEmptyCompleteAdjustmentSnapshot();
+  }
+  if (!RootSnapshotFromMaterialized(
+          state->committed_snapshot, *guard->commit_graph_,
+          image_state.materialized_head_commit_hash, &state->root_snapshot, error)) {
     return nullptr;
   }
   auto replay_graph = *guard->commit_graph_;
-  auto validated_graph = replay_graph;
   const auto journal_records = journal->records();
-  if (!alcedo::MiniGitWorkingHistory::Replay(validated_graph, journal_records, error)) {
-    return nullptr;
-  }
   for (const auto& record : journal_records) {
-    if (!ApplyRecoveredRecord(*guard, &state->committed_snapshot, &replay_graph, record, error)) {
+    if (!ApplyRecoveredRecordToSnapshot(&state->committed_snapshot, &replay_graph, record, error)) {
       return nullptr;
     }
   }
@@ -82,7 +92,6 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
       guard->commit_graph_->ChainHashForHead(guard->working_head_commit_hash_);
   guard->dirty_ = !journal_records.empty();
   state->recovered_head = !journal_records.empty();
-  if (!journal_records.empty()) guard->pipeline_->SetExecutionStages();
   state->history =
       std::make_unique<alcedo::MiniGitWorkingHistory>(guard->commit_graph_, journal);
 
@@ -111,7 +120,6 @@ auto EditorHistoryState::HasUnmaterializedChanges(sl_element_id_t element_id, st
     -> bool {
   auto state = EnsureWorkingState(element_id, error);
   if (!state) return false;
-  std::scoped_lock state_lock(state->mutex);
   if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;

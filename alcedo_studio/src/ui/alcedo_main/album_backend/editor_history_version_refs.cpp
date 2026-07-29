@@ -5,7 +5,6 @@
 #include "ui/alcedo_main/album_backend/editor_history_version_refs.hpp"
 
 #include <ctime>
-#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -15,14 +14,10 @@
 #include "edit/history/mini_git_working_history.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_state_detail.hpp"
-#include "ui/alcedo_main/album_backend/editor_session_pipeline_port.hpp"
 
 namespace alcedo::ui {
 namespace {
 
-/// Captured live tuple restored when a named-ref transition fails after any
-/// intermediate mutation. Redo is a first-class value so SelectVersion cannot
-/// erase the prior suffix without an explicit restore.
 struct NamedRefPriorState {
   alcedo::CommitGraph graph;
   alcedo::MiniGitWorkingSelection selection;
@@ -31,6 +26,7 @@ struct NamedRefPriorState {
   bool dirty = false;
   bool serialized = false;
   alcedo::EditorRenderAdjustmentSnapshot snapshot;
+  alcedo::EditorRenderAdjustmentSnapshot root_snapshot;
   std::unordered_map<std::string, alcedo::EditorAdjustmentOperatorState> pending;
   bool recovered = false;
 };
@@ -44,18 +40,21 @@ auto CaptureNamedRefPrior(HistoryWorkingState& state) -> NamedRefPriorState {
   prior.dirty = state.pipeline_guard->dirty_;
   prior.serialized = state.pipeline_guard->serialized_state_needs_writeback_;
   prior.snapshot = state.committed_snapshot;
+  prior.root_snapshot = state.root_snapshot;
   prior.pending = state.pending_before;
   prior.recovered = state.recovered_head;
   return prior;
 }
 
-void RestoreNamedRefPrior(HistoryWorkingState& state, alcedo::PipelineMgmtService& pipeline_service,
-                          const NamedRefPriorState& prior) {
-  auto& graph = *state.pipeline_guard->commit_graph_;
-  RestoreGraphAndPipeline(graph, prior.graph, pipeline_service, state.pipeline_guard, prior.head,
-                          prior.chain, prior.dirty, prior.serialized);
+void RestoreNamedRefPrior(HistoryWorkingState& state, const NamedRefPriorState& prior) {
+  *state.pipeline_guard->commit_graph_ = prior.graph;
   state.history->PublishWorkingSelection(prior.selection);
+  state.pipeline_guard->working_head_commit_hash_ = prior.head;
+  state.pipeline_guard->transaction_chain_hash_ = prior.chain;
+  state.pipeline_guard->dirty_ = prior.dirty;
+  state.pipeline_guard->serialized_state_needs_writeback_ = prior.serialized;
   state.committed_snapshot = prior.snapshot;
+  state.root_snapshot = prior.root_snapshot;
   state.pending_before = prior.pending;
   state.recovered_head = prior.recovered;
 }
@@ -64,8 +63,6 @@ void PublishNamedRefSuccess(HistoryWorkingState& state,
                             alcedo::EditorRenderAdjustmentSnapshot next_snapshot) {
   state.pipeline_guard->working_head_commit_hash_ = state.history->working_head();
   state.pipeline_guard->transaction_chain_hash_ = state.history->transaction_chain_hash();
-  // PersistEditorHistoryState already materializes the durable tuple; a just-created
-  // Version has no new uncommitted edit, so clear dirty/writeback.
   state.pipeline_guard->dirty_ = false;
   state.pipeline_guard->serialized_state_needs_writeback_ = false;
   state.pending_before.clear();
@@ -82,17 +79,6 @@ auto EditorHistoryVersionRefs::CreateRootVersionAndCheckout(
     alcedo::version_ref_id_t* version_id, std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  auto pipeline_port = state_.PipelinePort();
-  if (!pipeline_port) {
-    if (error) *error = "Editor pipeline port is unavailable for root Version creation";
-    return false;
-  }
-  auto pipeline_service = pipeline_port->PipelineService();
-  if (!pipeline_service) {
-    if (error) *error = "Pipeline service is unavailable for root Version creation";
-    return false;
-  }
-  std::scoped_lock state_lock(state->mutex);
   if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
@@ -100,43 +86,32 @@ auto EditorHistoryVersionRefs::CreateRootVersionAndCheckout(
   auto& graph = *state->pipeline_guard->commit_graph_;
   const auto prior = CaptureNamedRefPrior(*state);
   const auto expected_materialized = prior.graph.GetImageEditState();
-
   alcedo::version_ref_id_t new_id{};
   try {
     new_id = graph.CreateVersionRefAtRoot(UniqueVersionName(graph, std::move(display_name)));
+    graph.SetActiveVersionId(new_id);
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
     return false;
   }
-
-  std::string rebuild_error;
-  if (!pipeline_port->CheckoutVersion(guard.element_id, new_id, &rebuild_error)) {
-    RestoreNamedRefPrior(*state, *pipeline_service, prior);
-    if (error) *error = rebuild_error;
+  if (!state->history->SelectVersion(new_id, error)) {
+    RestoreNamedRefPrior(*state, prior);
     return false;
   }
-
-  std::string select_error;
-  if (!state->history->SelectVersion(new_id, &select_error)) {
-    RestoreNamedRefPrior(*state, *pipeline_service, prior);
-    if (error) *error = select_error;
-    return false;
-  }
-
   alcedo::EditorRenderAdjustmentSnapshot next_snapshot;
-  if (!ReadPipelineSnapshot(*state->pipeline_guard, &next_snapshot, error)) {
-    RestoreNamedRefPrior(*state, *pipeline_service, prior);
+  if (!SnapshotAtHead(state->root_snapshot, graph, std::nullopt, &next_snapshot, error)) {
+    RestoreNamedRefPrior(*state, prior);
     return false;
   }
-
-  std::string persistence_error;
-  if (!pipeline_service->PersistEditorHistoryState(state->pipeline_guard, expected_materialized,
-                                                   &persistence_error)) {
-    RestoreNamedRefPrior(*state, *pipeline_service, prior);
-    if (error) *error = persistence_error;
-    return false;
+  if (auto pipeline_service = state_.PipelineService()) {
+    std::string persistence_error;
+    if (!pipeline_service->PersistEditorHistoryState(state->pipeline_guard, expected_materialized,
+                                                     &persistence_error)) {
+      RestoreNamedRefPrior(*state, prior);
+      if (error) *error = persistence_error;
+      return false;
+    }
   }
-
   if (version_id) *version_id = new_id;
   PublishNamedRefSuccess(*state, std::move(next_snapshot));
   return true;
@@ -147,17 +122,6 @@ auto EditorHistoryVersionRefs::BranchFromCommitAndCheckout(
     std::string display_name, alcedo::version_ref_id_t* version_id, std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  auto pipeline_port = state_.PipelinePort();
-  if (!pipeline_port) {
-    if (error) *error = "Editor pipeline port is unavailable for branch creation";
-    return false;
-  }
-  auto pipeline_service = pipeline_port->PipelineService();
-  if (!pipeline_service) {
-    if (error) *error = "Pipeline service is unavailable for branch creation";
-    return false;
-  }
-  std::scoped_lock state_lock(state->mutex);
   if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_ || !state->history) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
@@ -167,47 +131,35 @@ auto EditorHistoryVersionRefs::BranchFromCommitAndCheckout(
     if (error) *error = "Branch target commit does not exist in the editor history";
     return false;
   }
-
   const auto prior = CaptureNamedRefPrior(*state);
   const auto expected_materialized = prior.graph.GetImageEditState();
-
   alcedo::version_ref_id_t new_id{};
   try {
     new_id = graph.CreateVersionRefAtHead(UniqueVersionName(graph, std::move(display_name)),
                                           commit_id);
+    graph.SetActiveVersionId(new_id);
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
     return false;
   }
-
-  std::string rebuild_error;
-  if (!pipeline_port->CheckoutVersion(guard.element_id, new_id, &rebuild_error)) {
-    RestoreNamedRefPrior(*state, *pipeline_service, prior);
-    if (error) *error = rebuild_error;
+  if (!state->history->SelectVersion(new_id, error)) {
+    RestoreNamedRefPrior(*state, prior);
     return false;
   }
-
-  std::string select_error;
-  if (!state->history->SelectVersion(new_id, &select_error)) {
-    RestoreNamedRefPrior(*state, *pipeline_service, prior);
-    if (error) *error = select_error;
-    return false;
-  }
-
   alcedo::EditorRenderAdjustmentSnapshot next_snapshot;
-  if (!ReadPipelineSnapshot(*state->pipeline_guard, &next_snapshot, error)) {
-    RestoreNamedRefPrior(*state, *pipeline_service, prior);
+  if (!SnapshotAtHead(state->root_snapshot, graph, commit_id, &next_snapshot, error)) {
+    RestoreNamedRefPrior(*state, prior);
     return false;
   }
-
-  std::string persistence_error;
-  if (!pipeline_service->PersistEditorHistoryState(state->pipeline_guard, expected_materialized,
-                                                   &persistence_error)) {
-    RestoreNamedRefPrior(*state, *pipeline_service, prior);
-    if (error) *error = persistence_error;
-    return false;
+  if (auto pipeline_service = state_.PipelineService()) {
+    std::string persistence_error;
+    if (!pipeline_service->PersistEditorHistoryState(state->pipeline_guard, expected_materialized,
+                                                     &persistence_error)) {
+      RestoreNamedRefPrior(*state, prior);
+      if (error) *error = persistence_error;
+      return false;
+    }
   }
-
   if (version_id) *version_id = new_id;
   PublishNamedRefSuccess(*state, std::move(next_snapshot));
   return true;
@@ -219,7 +171,6 @@ auto EditorHistoryVersionRefs::RenameVersion(const alcedo::EditorHistoryGuardHan
     -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  std::scoped_lock state_lock(state->mutex);
   if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
@@ -227,8 +178,7 @@ auto EditorHistoryVersionRefs::RenameVersion(const alcedo::EditorHistoryGuardHan
   auto& graph = *state->pipeline_guard->commit_graph_;
   try {
     auto& ref = graph.GetVersionRef(version_id);
-    const auto name = UniqueVersionName(graph, std::move(display_name), &version_id);
-    ref.display_name = name;
+    ref.display_name = UniqueVersionName(graph, std::move(display_name), &version_id);
     ref.updated_at = std::time(nullptr);
     state->pipeline_guard->dirty_ = true;
     state->pipeline_guard->working_head_commit_hash_ = graph.GetActiveVersionRef().head_commit_hash;
@@ -248,15 +198,12 @@ auto EditorHistoryVersionRefs::RemoveVersion(const alcedo::EditorHistoryGuardHan
                                              std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
   if (!state) return false;
-  std::scoped_lock state_lock(state->mutex);
   if (!state->pipeline_guard || !state->pipeline_guard->commit_graph_) {
     if (error) *error = "Editor history graph is unavailable";
     return false;
   }
   if (!state->pipeline_guard->commit_graph_->RemoveVersionRef(version_id)) {
-    if (error) {
-      *error = "The active Version or the final remaining Version cannot be removed";
-    }
+    if (error) *error = "The active Version or the final remaining Version cannot be removed";
     return false;
   }
   state->pipeline_guard->dirty_ = true;
