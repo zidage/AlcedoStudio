@@ -57,15 +57,12 @@ Item {
     property int _foldDuration: appTheme.motionFoldOpenMs
     readonly property real dockHeight: handleHeight
                                        + (expandedHeight - handleHeight) * dockExpandProgress
-    readonly property color colPanel: theme ? theme.colGlassPanel : "#1C1C1D"
-    readonly property color colStroke: theme ? theme.colGlassStroke : Qt.rgba(1, 1, 1, 0.08)
-    readonly property color colText: theme ? theme.colText : "#F5F1EA"
-    readonly property color colMuted: theme ? theme.colTextMuted : "#AAA59D"
-    readonly property color colAccent: theme ? theme.colAccentPrimary : "#457B9D"
-    readonly property color colHover: theme ? theme.colHover : Qt.rgba(1, 1, 1, 0.07)
-    readonly property color colCardSurface: theme ? theme.colCardSurface : "#161719"
-    readonly property color colCardBorder: theme ? theme.colCardBorder : Qt.rgba(1, 1, 1, 0.08)
-    readonly property int panelRadius: theme ? theme.panelRadius : 12
+    readonly property color colText: appTheme.textColor
+    readonly property color colMuted: appTheme.textMutedColor
+    readonly property color colHover: appTheme.buttonHoveredFillColor
+    readonly property color colCardSurface: appTheme.cardSurfaceColor
+    readonly property color colCardBorder: appTheme.cardBorderColor
+    readonly property int panelRadius: appTheme.panelRadius
 
     function storeFilmstripScroll() {
         if (!_restoringScroll && editorSession && filmstripListView) {
@@ -351,7 +348,7 @@ Item {
                     Layout.alignment: Qt.AlignVCenter
                     Layout.maximumWidth: 180
                     text: root.selectionDisabledReason
-                    color: root.colAccent
+                    color: root.colMuted
                     font.pixelSize: appTheme.fontSizeCaption
                     elide: Text.ElideRight
                 }
@@ -471,8 +468,12 @@ Item {
                                                                    ? liveThumbErrorText
                                                                    : qsTr("Source file was moved or deleted")
 
-                    width: Math.max(appTheme.spaceXl * 6, height * 1.55)
                     height: ListView.view ? ListView.view.height : 1
+                    readonly property real fileNameLabelHeight: appTheme.lineHeightCaption
+                                                                  + appTheme.spaceXs
+                    readonly property real thumbnailAreaHeight: Math.max(
+                        1, height - fileNameLabelHeight - appTheme.spaceXs * 3)
+                    width: Math.max(appTheme.spaceXl * 6, thumbnailAreaHeight * 1.55)
                     Accessible.role: Accessible.ListItem
                     Accessible.name: fileName.length > 0 ? fileName
                                                          : qsTr("Image %1").arg(index + 1)
@@ -527,122 +528,131 @@ Item {
                         objectName: "editorFilmstripTileSurface"
                         anchors.fill: parent
                         radius: appTheme.controlRadiusSmall
-                        color: thumbnailMouse.containsMouse
-                               ? appTheme.hoverColor
-                               : (thumbnailDelegate.isSelected
-                                  ? appTheme.selectedTintColor : appTheme.cardSurfaceColor)
+                        color: thumbnailDelegate.isSelected
+                               ? appTheme.editorListSelectedFillColor
+                               : (thumbnailMouse.containsMouse
+                                  ? appTheme.buttonHoveredFillColor : appTheme.cardSurfaceColor)
                         border.width: thumbnailDelegate.isSelected ? 2 : 1
                         border.color: thumbnailDelegate.isSelected
-                                     ? appTheme.accentColor : appTheme.cardBorderColor
+                                     ? appTheme.editorListSelectedInkColor : appTheme.cardBorderColor
 
-                        Rectangle {
+                        Column {
+                            id: tileContent
                             anchors.fill: parent
                             anchors.margins: appTheme.spaceXs
-                            radius: appTheme.controlRadiusSmall
-                            color: appTheme.bgBaseColor
-                            border.width: 1
-                            border.color: appTheme.dividerColor
-
-                            Image {
-                                id: thumbnailImage
-                                anchors.fill: parent
-                                anchors.margins: appTheme.spaceXs
-                                source: thumbnailDelegate.liveThumbUrl
-                                sourceSize.width: root.filmstripThumbnailMaxEdge
-                                sourceSize.height: root.filmstripThumbnailMaxEdge
-                                asynchronous: true
-                                fillMode: Image.PreserveAspectFit
-                                visible: thumbnailDelegate.thumbnailReady
-                            }
-
-                            BusyIndicator {
-                                anchors.centerIn: parent
-                                width: appTheme.iconOpticalSize
-                                height: appTheme.iconOpticalSize
-                                visible: thumbnailDelegate.liveThumbLoading
-                                running: visible
-                            }
-
-                            Label {
-                                anchors.centerIn: parent
-                                width: parent.width - appTheme.spaceLg
-                                text: thumbnailDelegate.thumbnailProblemState
-                                      ? thumbnailDelegate.thumbnailProblemText
-                                      : qsTr("No thumbnail")
-                                visible: !thumbnailDelegate.thumbnailReady
-                                         && !thumbnailDelegate.liveThumbLoading
-                                color: thumbnailDelegate.thumbnailProblemState
-                                       ? appTheme.dangerColor : appTheme.textMutedColor
-                                font.pixelSize: appTheme.fontSizeCaption
-                                horizontalAlignment: Text.AlignHCenter
-                                wrapMode: Text.WordWrap
-                                maximumLineCount: 2
-                                elide: Text.ElideRight
-                            }
-                        }
-
-                        Rectangle {
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.bottom: parent.bottom
-                            height: Math.max(appTheme.spaceLg, appTheme.fontSizeBody
-                                             + appTheme.spaceXs)
-                            color: appTheme.bgDeepColor
-                            opacity: 0.92
-                            visible: thumbnailDelegate.fileName.length > 0
-
-                            Label {
-                                anchors.fill: parent
-                                anchors.leftMargin: appTheme.spaceSm
-                                anchors.rightMargin: appTheme.spaceSm
-                                text: thumbnailDelegate.fileName
-                                color: appTheme.textColor
-                                font.pixelSize: appTheme.fontSizeCaption
-                                elide: Text.ElideRight
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                        }
-
-                        Row {
-                            anchors.left: parent.left
-                            anchors.top: parent.top
-                            anchors.margins: appTheme.spaceSm
                             spacing: appTheme.spaceXs
-                            visible: thumbnailDelegate.isSelected
-                                     && (root.saving || root.renderBusy)
 
                             Rectangle {
-                                objectName: "editorFilmstripSavingBadge"
-                                visible: root.saving
-                                width: savingLabel.implicitWidth + appTheme.spaceSm
-                                height: savingLabel.implicitHeight + appTheme.spaceXs
-                                radius: appTheme.badgeRadius
-                                color: appTheme.accentSecondaryColor
-                                Label {
-                                    id: savingLabel
+                                id: thumbnailFrame
+                                objectName: "editorFilmstripThumbnailFrame"
+                                width: parent.width
+                                height: thumbnailDelegate.thumbnailAreaHeight
+                                radius: appTheme.controlRadiusSmall
+                                color: appTheme.bgBaseColor
+                                border.width: 1
+                                border.color: thumbnailDelegate.isSelected
+                                             ? appTheme.editorListSelectedInkColor
+                                             : appTheme.dividerColor
+
+                                Image {
+                                    id: thumbnailImage
+                                    anchors.fill: parent
+                                    anchors.margins: appTheme.spaceXs
+                                    source: thumbnailDelegate.liveThumbUrl
+                                    sourceSize.width: root.filmstripThumbnailMaxEdge
+                                    sourceSize.height: root.filmstripThumbnailMaxEdge
+                                    asynchronous: true
+                                    fillMode: Image.PreserveAspectFit
+                                    visible: thumbnailDelegate.thumbnailReady
+                                }
+
+                                BusyIndicator {
                                     anchors.centerIn: parent
-                                    text: qsTr("Saving")
-                                    color: appTheme.textColor
+                                    width: appTheme.iconOpticalSize
+                                    height: appTheme.iconOpticalSize
+                                    visible: thumbnailDelegate.liveThumbLoading
+                                    running: visible
+                                }
+
+                                Label {
+                                    anchors.centerIn: parent
+                                    width: Math.max(1, parent.width - appTheme.spaceLg)
+                                    text: thumbnailDelegate.thumbnailProblemState
+                                          ? thumbnailDelegate.thumbnailProblemText
+                                          : qsTr("No thumbnail")
+                                    visible: !thumbnailDelegate.thumbnailReady
+                                             && !thumbnailDelegate.liveThumbLoading
+                                    color: thumbnailDelegate.thumbnailProblemState
+                                           ? appTheme.dangerColor : appTheme.textMutedColor
                                     font.pixelSize: appTheme.fontSizeCaption
-                                    font.weight: appTheme.fontWeightStrong
+                                    horizontalAlignment: Text.AlignHCenter
+                                    wrapMode: Text.WordWrap
+                                    maximumLineCount: 2
+                                    elide: Text.ElideRight
+                                }
+
+                                Row {
+                                    anchors.left: parent.left
+                                    anchors.top: parent.top
+                                    anchors.margins: appTheme.spaceSm
+                                    spacing: appTheme.spaceXs
+                                    visible: thumbnailDelegate.isSelected
+                                             && (root.saving || root.renderBusy)
+
+                                    Rectangle {
+                                        objectName: "editorFilmstripSavingBadge"
+                                        visible: root.saving
+                                        width: savingLabel.implicitWidth + appTheme.spaceSm
+                                        height: savingLabel.implicitHeight + appTheme.spaceXs
+                                        radius: appTheme.badgeRadius
+                                        color: appTheme.editorListSelectedInkColor
+                                        Label {
+                                            id: savingLabel
+                                            anchors.centerIn: parent
+                                            text: qsTr("Saving")
+                                            color: appTheme.editorListSelectedFillColor
+                                            font.pixelSize: appTheme.fontSizeCaption
+                                            font.weight: appTheme.fontWeightStrong
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        objectName: "editorFilmstripRenderBadge"
+                                        visible: root.renderBusy
+                                        width: renderLabel.implicitWidth + appTheme.spaceSm
+                                        height: renderLabel.implicitHeight + appTheme.spaceXs
+                                        radius: appTheme.badgeRadius
+                                        color: appTheme.editorListSelectedInkColor
+                                        Label {
+                                            id: renderLabel
+                                            anchors.centerIn: parent
+                                            text: qsTr("Rendering")
+                                            color: appTheme.editorListSelectedFillColor
+                                            font.pixelSize: appTheme.fontSizeCaption
+                                            font.weight: appTheme.fontWeightStrong
+                                        }
+                                    }
                                 }
                             }
 
-                            Rectangle {
-                                objectName: "editorFilmstripRenderBadge"
-                                visible: root.renderBusy
-                                width: renderLabel.implicitWidth + appTheme.spaceSm
-                                height: renderLabel.implicitHeight + appTheme.spaceXs
-                                radius: appTheme.badgeRadius
-                                color: appTheme.selectedTintColor
-                                Label {
-                                    id: renderLabel
-                                    anchors.centerIn: parent
-                                    text: qsTr("Rendering")
-                                    color: appTheme.textColor
-                                    font.pixelSize: appTheme.fontSizeCaption
-                                    font.weight: appTheme.fontWeightStrong
-                                }
+                            Label {
+                                id: fileNameLabel
+                                objectName: "editorFilmstripFileNameLabel"
+                                width: parent.width
+                                height: thumbnailDelegate.fileNameLabelHeight
+                                text: thumbnailDelegate.fileName.length > 0
+                                      ? thumbnailDelegate.fileName
+                                      : qsTr("Image %1").arg(thumbnailDelegate.index + 1)
+                                color: thumbnailDelegate.isSelected
+                                       ? appTheme.editorListSelectedInkColor
+                                       : appTheme.textMutedColor
+                                font.pixelSize: appTheme.fontSizeCaption
+                                font.weight: thumbnailDelegate.isSelected
+                                             ? appTheme.fontWeightStrong
+                                             : appTheme.fontWeightRegular
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideMiddle
                             }
                         }
 
@@ -651,7 +661,9 @@ Item {
                             radius: appTheme.controlRadiusSmall
                             color: "transparent"
                             border.width: 2
-                            border.color: appTheme.accentSecondaryColor
+                            border.color: thumbnailDelegate.isSelected
+                                         ? appTheme.editorListSelectedInkColor
+                                         : appTheme.editorListSelectedFillColor
                             visible: thumbnailDelegate.hasFocusFrame
                         }
 

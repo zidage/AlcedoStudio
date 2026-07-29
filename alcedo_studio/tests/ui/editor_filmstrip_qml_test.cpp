@@ -458,6 +458,42 @@ TEST(EditorFilmstripQmlTest, SharedModelRoutesKeyboardSelectionAndUpdatesCurrent
   EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), 1);
 }
 
+TEST(EditorFilmstripQmlTest, FileNameSitsBelowThumbnailWithMonochromeSelectedTile) {
+  FilmstripQmlHarness harness;
+  ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
+  ASSERT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
+
+  auto* list = harness.list();
+  ASSERT_NE(list, nullptr);
+  QTRY_COMPARE_WITH_TIMEOUT(list->property("count").toInt(), 8, 2000);
+
+  QQuickItem* selected_tile = nullptr;
+  ASSERT_TRUE(QMetaObject::invokeMethod(
+      list, "itemAtIndex", Qt::DirectConnection, Q_RETURN_ARG(QQuickItem*, selected_tile),
+      Q_ARG(int, 0)));
+  ASSERT_NE(selected_tile, nullptr);
+
+  const auto surfaces = selected_tile->findChildren<QObject*>(
+      QStringLiteral("editorFilmstripTileSurface"));
+  const auto frames = selected_tile->findChildren<QObject*>(
+      QStringLiteral("editorFilmstripThumbnailFrame"));
+  const auto labels = selected_tile->findChildren<QObject*>(
+      QStringLiteral("editorFilmstripFileNameLabel"));
+  ASSERT_EQ(surfaces.size(), 1);
+  ASSERT_EQ(frames.size(), 1);
+  ASSERT_EQ(labels.size(), 1);
+
+  auto* frame = qobject_cast<QQuickItem*>(frames.front());
+  auto* label = qobject_cast<QQuickItem*>(labels.front());
+  ASSERT_NE(frame, nullptr);
+  ASSERT_NE(label, nullptr);
+  EXPECT_EQ(labels.front()->property("text").toString(), QStringLiteral("film_0.arw"));
+  EXPECT_GT(label->y(), frame->y());
+  EXPECT_GT(label->height(), 0.0);
+  EXPECT_EQ(surfaces.front()->property("color").value<QColor>(),
+            AppTheme::Instance().editorListSelectedFillColor());
+}
+
 TEST(EditorFilmstripQmlTest, CollapseKeepsThumbnailPinsAndRestoresHorizontalScroll) {
   FilmstripQmlHarness harness;
   ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
