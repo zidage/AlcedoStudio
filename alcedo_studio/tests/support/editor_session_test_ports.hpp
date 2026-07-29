@@ -59,7 +59,7 @@ class FakeEditorPipelinePort final : public IEditorPipelinePort {
 
 /// Fake history port covering acquire/release, edit commit, undo/redo, snapshot,
 /// and immutable save-checkpoint capture.
-class FakeEditorHistoryPort final : public IEditorHistoryPort {
+class FakeEditorHistoryPort : public IEditorHistoryPort {
  public:
   bool fail_acquire   = false;
   bool fail_commit    = false;
@@ -242,7 +242,7 @@ class FakeEditorTaskPort final : public IEditorTaskPort {
 };
 
 /// Fake journal writer port with optional async commit and barrier failures.
-class FakeEditorJournalPort final : public IEditorJournalPort {
+class FakeEditorJournalPort : public IEditorJournalPort {
  public:
   bool                        fail_barrier      = false;
   bool                        fail_commit_start = false;

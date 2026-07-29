@@ -2,7 +2,7 @@
 
 Date: 2026-07-29
 
-Status: proposed.
+Status: proposed. CQ0 complete — deterministic failing evidence captured; CQ1 unblocked.
 
 Primary owner: Alcedo Studio editor session and history architecture.
 
@@ -264,7 +264,7 @@ flags, package state, and interaction-policy flags independently.
 
 ## Phase CQ0 — Freeze current behavior with failing evidence
 
-Status: not started.
+Status: complete — deterministic failing evidence captured (8 of 10 tests reproduce current inline-completion, render-lock-blocking, and split-snapshot behavior; 2 pin existing guards CQ1/CQ3 must preserve).
 
 ### Purpose
 
@@ -304,9 +304,97 @@ stack.
 - No test relies on sleeps for ordering; the manual executor controls every step.
 - Baseline results and relevant call chains are recorded in this phase section before CQ1 starts.
 
+##### Phase CQ0 completion record (2026-07-29)
+
+**Status:** complete — deterministic failing evidence captured for the current editor-session facade.
+
+**Baseline verified against the implementation:** the current user-call-chain / lock-inventory
+table (above) matches the code. Confirmed reproduction sites:
+
+- inline save-completion re-entry: `EditorSessionNavigationController::RequestOpenOrSwitch`
+  (`editor_session_navigation_controller.cpp:78,92-105`) calls `SealAndStartSave`
+  (`:345`), whose `save_service_.Start` callback runs `OnCheckpointFinished`
+  (`:192`) **on the same stack** when the journal port invokes its callback inline
+  (`editor_save_checkpoint_service.cpp:108,128` →
+  `editor_session_journal_writer_port.cpp:111`). The navigation `mutex_` is a
+  `std::recursive_mutex` (`editor_session_navigation_controller.hpp:214`) precisely
+  so this re-entry can re-lock it.
+- GUI-side render-lock wait: `EditorSessionEditController::HandleUndoRedo` /
+  `HandleMoveHeadToCommit` / `HandleDiscard` call the history port, whose
+  production impl reaches `ApplyPreparedHeadMovePipeline`
+  (`editor_history_shared_helpers.cpp:340,350`) and `PipelineMgmtService::CheckoutVersion`
+  / `RebuildActiveEditorPipeline` (`pipeline_service.cpp:795,805,886,893`) and
+  `CaptureSaveCheckpoint` (`editor_history_checkpoint.cpp:41`) — all blocking on
+  `CPUPipelineExecutor::GetRenderLock()` (`pipeline_cpu.hpp:84`).
+- split snapshot / multi-terminal: one synchronous `Switch` publishes
+  `SaveStarted`, the inline save-completion result, and `SaveFinished` across
+  several `NotifyChange` calls (`editor_session_service.cpp:111-118` /
+  `Open`/`Switch` synchronous branches).
+
+**Primary success call chain (current, to be replaced in CQ1):**
+
+```text
+QML -> EditorSessionController -> EditorSessionService::Switch
+  -> EditorSessionNavigationController::RequestOpenOrSwitch (recursive_mutex held)
+  -> SealAndStartSave -> EditorSaveCheckpointService::Start
+  -> journal->CommitJournalAsync (inline callback) -> HandleJournalCommit
+  -> checkpoint_store->MaterializeAsync (inline) -> HandleMaterialization -> FinishSave
+  -> OnCheckpointFinished (re-enters navigation on the start stack)
+  -> lifecycle.ReleaseAfterCheckpoint / ContinueToTarget / RouteInitialRender
+  -> NotifyCompletion -> EditorSessionService::Emit (x3) before Switch returns
+```
+
+**Primary failure call chain reproduced (render-lock blocking):**
+
+```text
+QML Undo -> EditorSessionService::Undo -> EditorSessionEditController::HandleUndoRedo
+  -> IEditorHistoryPort::Undo -> EditorHistoryMutation::Undo
+  -> ApplyPreparedHeadMovePipeline -> CPUPipelineExecutor::GetRenderLock() BLOCKS
+  while a scheduler worker holds the lock (pipeline_scheduler.cpp:495)
+  -> command thread stalls; all UI actions appear disabled
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `SynchronousJournalResultIsProcessedAfterInitiatingCommandReturns` | `EditorSessionCommandQueueBaselineTest` | FAIL (2 save-completion results ran inline before `Switch` returned) |
+| `RapidImageSelectionKeepsRunningTargetAndReplacesOnlyUnstartedSelection` | `EditorSessionCommandQueueBaselineTest` | FAIL (second selection `Rejected`, not queued/replacing) |
+| `StaleSaveCompletionCannotReleaseTheCurrentImageGuards` | `EditorSessionCommandQueueBaselineTest` | PASS (current async-path generation correlation holds; the synchronous-inline unconditional-accept at `navigation_controller.cpp:198-207` is the residual window CQ1 removes) |
+| `StaleFirstFrameCannotEnableEditingForAnotherImage` | `EditorSessionCommandQueueBaselineTest` | PASS (render controller filters stale frames by generation/identity; guard pinned for CQ1/CQ3) |
+| `UndoWhileRenderWorkerOwnsExecutorDoesNotBlockCommandThread` | `EditorSessionCommandQueueBaselineTest` | FAIL (Undo blocked on the render lock; bounded 200 ms timeout reports the unfinished op) |
+| `MergeWhileRenderWorkerOwnsExecutorDoesNotBlockCommandThread` | `EditorSessionCommandQueueBaselineTest` | FAIL (CompleteMerge blocked on the render lock; bounded timeout reports the unfinished op) |
+| `DirtyJournalPasteQueuesSaveBeforeCreatingTheNewVersion` | `EditorSessionCommandQueueBaselineTest` | FAIL (order observed `version_created` then `save_started`; target is save-first) |
+| `DirtyJournalMergeQueuesSaveBeforeCreatingTheMergeCommit` | `EditorSessionCommandQueueBaselineTest` | FAIL (order observed `merge_committed` then `save_started`; target is save-first) |
+| `OneSnapshotRevisionContainsMatchingIdentityStateAndAvailability` | `EditorSessionCommandQueueBaselineTest` | FAIL (one `Switch` published 10 change notifications with >1 distinct state/identity — split revision) |
+| `OneAcceptedCommandPublishesExactlyOneTerminalResult` | `EditorSessionCommandQueueBaselineTest` | FAIL (one `Switch` published 4 terminal results) |
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSessionCommandQueueBaselineTest --parallel 4` (builds);
+`build/debug/alcedo_studio/tests/app/EditorSessionCommandQueueBaselineTest_runtime/EditorSessionCommandQueueBaselineTest.exe` (runs).
+Suite totals: **2/10 PASS, 8/10 FAIL** (CQ0 expects failing evidence; the 8 failures are the intended baseline).
+Regression check: `EditorSessionNavigationControllerTest` 23/23, `EditorSessionEditControllerTest` 8/8, `EditorSessionLifecycleTest` 18/18, `EditorSessionServiceFacadeTest` 4/4 still PASS after the test-support change (two fakes de-`final`-ed for subclassing).
+
+**Checklist / exit condition:** all four exit criteria met — 8 tests reproduce current inline completion (tests 1), render-lock blocking (tests 5, 6), and split-snapshot behavior (tests 7, 8, 9, 10); every blocking test uses a bounded 200 ms timeout and names the unfinished operation; no test sleeps for ordering (the manual executor + controllable ports drive every step); baseline results and call chains recorded above.
+
+**Test support added (CQ0):**
+
+- `tests/support/editor_session_command_queue_test_support.hpp` — `ManualCommandExecutor` (single-thread manual queue with `post`/`drain_one`/`drain_all`), `SessionResultRecorder` (result/change observer with an inline-completion sentinel), `ControllableEditorHistoryPort` (render-lock-gated + dirty-journal + event-log), `OrderRecordingJournalPort` (records `save_started`).
+- `tests/app/editor_session_command_queue_baseline_test.cpp` — the 10 named tests driving the real `EditorSessionService` facade and real `EditorRenderCoordinator` through the controllable ports.
+- `tests/support/editor_session_test_ports.hpp` — `FakeEditorHistoryPort` and `FakeEditorJournalPort` de-`final`-ed so the controllable ports can subclass them.
+- `tests/app/CMakeLists.txt` — `EditorSessionCommandQueueBaselineTest` target registered (label `editor_session`).
+
+**LOC note (grill-code-review):** new test support ~270 LOC header, ~440 LOC test file; no production code changed. Files are single-responsibility (one manual executor + recorder + controllable ports; one baseline-test fixture). No file near the 1000-LOC split threshold.
+
+**Remaining gaps / hand-off to CQ1:**
+
+- The synchronous-inline unconditional-accept at `navigation_controller.cpp:198-207` (correlation skipped when `pending.ticket.request_id == 0`) is the residual stale-completion window that test 3 cannot reproduce deterministically with single-threaded seams; CQ1 removes the inline path entirely, closing it. The 8 failing tests become the CQ1 acceptance suite.
+- CQ0 did not add a controllable render **scheduler** port (frame lifecycle is driven directly through `EditorRenderCoordinator::Notify*`, which is sufficient for CQ0). If CQ2/CQ5 need to defer render completion from the test thread, add a `ControllableSchedulerPort` then.
+- `OneSnapshotRevision…` and `OneAcceptedCommand…` assert the post-CQ3 single-snapshot / single-terminal invariants; they will only turn green once CQ1 (command ownership) and CQ3 (single snapshot) land. They are kept as CQ0 evidence because the split is already observable today at the facade boundary.
+
+
 ## Phase CQ1 — Introduce the single-thread command queue
 
-Status: blocked by CQ0.
+Status: ready (CQ0 failing evidence captured).
 
 ### Purpose
 
@@ -663,7 +751,7 @@ cannot be safe while history correctness still depends on the live render execut
 
 ## Completion checklist
 
-- [ ] CQ0 records deterministic failing evidence.
+- [x] CQ0 records deterministic failing evidence.
 - [ ] CQ1 serializes all session mutations and removes inline completion re-entry.
 - [ ] CQ2 removes command-thread render-lock waits.
 - [ ] CQ3 publishes one session snapshot and one editor action source.

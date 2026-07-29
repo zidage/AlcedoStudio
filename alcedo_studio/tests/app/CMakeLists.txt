@@ -203,6 +203,20 @@ gtest_discover_tests(EditorSessionServiceFacadeTest
     PROPERTIES LABELS "ci_core_flow;editor_session")
 alcedo_register_test_target(EditorSessionServiceFacadeTest app ci_core)
 
+# CQ0: editor-session command-queue baseline (failing-evidence) tests. Drives
+# the real EditorSessionService facade through controllable ports and the real
+# EditorRenderCoordinator. The shared support header is header-only.
+add_executable(EditorSessionCommandQueueBaselineTest
+    ${ALCEDO_TEST_ROOT}/app/editor_session_command_queue_baseline_test.cpp)
+target_include_directories(EditorSessionCommandQueueBaselineTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorSessionCommandQueueBaselineTest
+    EditorSessionService xxHash JSON ${ALCEDO_TEST_OPENCV_MIN_DEPS} GTest::gtest_main)
+gtest_discover_tests(EditorSessionCommandQueueBaselineTest
+    TEST_PREFIX "EditorSessionCommandQueueBaselineTest."
+    PROPERTIES LABELS "editor_session")
+alcedo_register_test_target(EditorSessionCommandQueueBaselineTest app)
+
 add_executable(EditorSessionControllerPhase5ATest
     ${ALCEDO_TEST_ROOT}/ui/editor_session_controller_phase5a_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
