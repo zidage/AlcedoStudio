@@ -595,6 +595,8 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryTransactionsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorVersionsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeDialog.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeChoiceButton.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeConflictCard.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentStack.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorScopePanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorTonePanel.qml"

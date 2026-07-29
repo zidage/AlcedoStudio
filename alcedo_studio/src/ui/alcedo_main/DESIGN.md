@@ -91,6 +91,8 @@ and notify via `ThemeChanged`.
 | **Button pressed fill** | **`buttonPressedFillColor`** | **Opaque pressed-state fill** (= hover well) |
 | **Button selected fill** | **`buttonSelectedFillColor`** | **Opaque selected-state fill** (= pressed / hover well) |
 | **Disabled surface** | **`disabledSurfaceColor`** | **Reserved muted shell token** (not used for editor side-panel shells) |
+| **Merge current** | **`mergeCurrentColor` / `mergeCurrentFillColor`** | **Git red for Current values, labels, borders, and selected wells** |
+| **Merge incoming** | **`mergeIncomingColor` / `mergeIncomingFillColor`** | **Git green for Incoming values, labels, borders, and selected wells** |
 | **List selected fill** | **`editorListSelectedFillColor`** | **Monochrome light well for dense catalog rows** (LUT browser, inverted selection) |
 | **List selected ink** | **`editorListSelectedInkColor`** | **Text / icon ink on the light selected well** (= `bgBaseColor`) |
 | **List favorite idle** | **`editorListFavoriteIdleColor`** | **Unstarred glyph on sunken (dark) rows** |
@@ -196,7 +198,7 @@ the two side columns read as one family.
 | `editorSidePanelWidth` | 320 | Preferred width: adjustment stack + History/Versions expanded panel |
 | `editorSidePanelWidthMin` | 260 | Adjustment stack minimum (narrow-window floor) |
 | `editorSidePanelWidthMax` | 460 | Adjustment stack maximum |
-| `editorMergeDialogWidth` | 560 | Merge conflict resolution dialog |
+| `editorMergeDialogWidth` | 960 | Merge conflict resolution dialog with Current / Incoming / Merged columns |
 | `editorScopeHeight` | 192 | Histogram / waveform slot preferred height |
 | `editorScopeHeightMin` | 160 | Histogram / waveform slot minimum height |
 

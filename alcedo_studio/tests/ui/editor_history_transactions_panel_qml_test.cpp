@@ -121,12 +121,27 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest, PasteAndMergeUseVisibleActionsAndR
   ASSERT_NE(dialog, nullptr);
   ASSERT_TRUE(dialog->property("visible").toBool());
 
-  QQuickItem* choice = nullptr;
-  QTRY_VERIFY_WITH_TIMEOUT((choice = Find(QStringLiteral("editorMergeConflictChoice"))) != nullptr,
-                           1000);
-  Click(window_, choice);
-  QTest::keyClick(window_, Qt::Key_Down);
-  QTest::keyClick(window_, Qt::Key_Return);
+  auto* complete = Find(QStringLiteral("editorMergeAcceptButton"));
+  ASSERT_NE(complete, nullptr);
+  EXPECT_FALSE(complete->isEnabled());
+
+  auto* merged = Find(QStringLiteral("editorMergeResolvedValue"));
+  ASSERT_NE(merged, nullptr);
+  EXPECT_EQ(merged->property("text").toString(),
+            QStringLiteral("Choose Current or Incoming"));
+
+  Click(window_, Find(QStringLiteral("editorMergeUseAllCurrentButton")));
+  EXPECT_TRUE(complete->isEnabled());
+  EXPECT_EQ(merged->property("text").toString(), QStringLiteral("0"));
+
+  Click(window_, Find(QStringLiteral("editorMergeUseAllIncomingButton")));
+  EXPECT_EQ(merged->property("text").toString(), QStringLiteral("1"));
+
+  Click(window_, Find(QStringLiteral("editorMergeCurrentChoiceButton")));
+  EXPECT_EQ(merged->property("text").toString(), QStringLiteral("0"));
+
+  Click(window_, Find(QStringLiteral("editorMergeConflictChoice")));
+  EXPECT_EQ(merged->property("text").toString(), QStringLiteral("1"));
   ProcessEvents();
 
   Click(window_, Find(QStringLiteral("editorMergeAcceptButton")));
