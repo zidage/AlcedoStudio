@@ -276,6 +276,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                           SyncRawDecodeCapabilities();
   void                           ApplyOpenLocal(uint elementId, uint imageId);
   void                           ApplyCloseLocal();
+  void                           ReconcilePendingPresentationTarget();
   void                           SyncViewportIdentity();
   void                           InstallBackendNotifier();
   /// Apply a publisher event to QML properties and emit HistoryOperationFinished.
@@ -305,6 +306,12 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   uint                           last_image_id_             = 0;
   qulonglong                     session_generation_        = 0;
   alcedo::EditorSessionState     session_state_             = alcedo::EditorSessionState::NoImage;
+  // A→B saves asynchronously while the backend still reports A/Saving. Keep
+  // the viewport stamped for B during that interval so B's first frame is not
+  // rejected as stale before the backend publishes B's acquired identity.
+  uint                           pending_presentation_element_id_ = 0;
+  uint                           pending_presentation_image_id_   = 0;
+  qulonglong                     pending_presentation_generation_ = 0;
   bool                           filmstrip_collapsed_       = false;
   double                         filmstrip_expanded_height_ = 128.0;
   double                         filmstrip_scroll_position_ = 0.0;

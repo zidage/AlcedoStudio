@@ -42,6 +42,9 @@ auto FieldSpec(const std::string& field_key) -> std::optional<EditorAdjustmentFi
   if (field_key == "vibrance") {
     return EditorAdjustmentFieldSpec{PipelineStageName::Color_Adjustment, OperatorType::VIBRANCE};
   }
+  if (field_key == "tint") {
+    return EditorAdjustmentFieldSpec{PipelineStageName::Color_Adjustment, OperatorType::TINT};
+  }
   if (field_key == "hls" || field_key == "HLS") {
     return EditorAdjustmentFieldSpec{PipelineStageName::Color_Adjustment, OperatorType::HLS};
   }
@@ -153,6 +156,7 @@ auto EditorAdjustmentFieldKey(PipelineStageName stage_name, OperatorType operato
   if (matches(PipelineStageName::Basic_Adjustment, OperatorType::CURVE)) return "curve";
   if (matches(PipelineStageName::Color_Adjustment, OperatorType::SATURATION)) return "saturation";
   if (matches(PipelineStageName::Color_Adjustment, OperatorType::VIBRANCE)) return "vibrance";
+  if (matches(PipelineStageName::Color_Adjustment, OperatorType::TINT)) return "tint";
   if (matches(PipelineStageName::Color_Adjustment, OperatorType::HLS)) return "hls";
   if (matches(PipelineStageName::Color_Adjustment, OperatorType::COLOR_WHEEL)) return "color_wheel";
   if (matches(PipelineStageName::Color_Adjustment, OperatorType::LMT)) return "lut";

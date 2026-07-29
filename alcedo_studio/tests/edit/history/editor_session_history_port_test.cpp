@@ -102,6 +102,86 @@ TEST_F(EditorSessionHistoryPortTest, SettledAdjustmentCreatesOneCommitAndUndoRed
 }
 
 TEST_F(EditorSessionHistoryPortTest,
+       UndoRedoAcrossTwoParentTintMergeRestoresFirstParentAndResolvedValues) {
+  const auto                  root_id        = guard_->commit_graph_->GetRootId();
+  const auto                  active_version = guard_->commit_graph_->GetActiveVersionId();
+
+  alcedo::OrdinaryEditPayload current_payload;
+  current_payload.operator_type  = alcedo::OperatorType::TINT;
+  current_payload.stage_name     = alcedo::PipelineStageName::Color_Adjustment;
+  current_payload.field_name     = "$operator_params";
+  current_payload.before_value   = nlohmann::json{{"tint", 0.0}};
+  current_payload.after_value    = nlohmann::json{{"tint", 2.0}};
+  current_payload.before_enabled = true;
+  current_payload.after_enabled  = true;
+  const auto current_commit =
+      alcedo::EditCommit::MakeEdit(root_id, std::nullopt, std::move(current_payload));
+  const auto current_head = current_commit.GetCommitHash();
+  ASSERT_TRUE(guard_->commit_graph_->InsertCommit(current_commit));
+  guard_->commit_graph_->MoveWorkingHead(active_version, current_head);
+  guard_->working_head_commit_hash_ = current_head;
+  guard_->transaction_chain_hash_   = guard_->commit_graph_->ChainHashForHead(current_head);
+  {
+    std::unique_lock<std::mutex> render_lock(guard_->pipeline_->GetRenderLock());
+    auto& stage   = guard_->pipeline_->GetStage(alcedo::PipelineStageName::Color_Adjustment);
+    auto& globals = guard_->pipeline_->GetGlobalParams();
+    stage.SetOperator(alcedo::OperatorType::TINT, nlohmann::json{{"tint", 2.0}}, globals);
+    stage.EnableOperator(alcedo::OperatorType::TINT, true, globals);
+  }
+
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+
+  alcedo::OrdinaryEditPayload incoming_payload;
+  incoming_payload.operator_type  = alcedo::OperatorType::TINT;
+  incoming_payload.stage_name     = alcedo::PipelineStageName::Color_Adjustment;
+  incoming_payload.field_name     = "$operator_params";
+  incoming_payload.before_value   = nlohmann::json{{"tint", 0.0}};
+  incoming_payload.after_value    = nlohmann::json{{"tint", 10.0}};
+  incoming_payload.before_enabled = true;
+  incoming_payload.after_enabled  = true;
+  const auto incoming_commit =
+      alcedo::EditCommit::MakeEdit(root_id, std::nullopt, std::move(incoming_payload));
+  const auto incoming_head = incoming_commit.GetCommitHash();
+  ASSERT_TRUE(guard_->commit_graph_->InsertCommit(incoming_commit));
+
+  alcedo::MergeEditPayload merge_payload;
+  merge_payload.fields.push_back(alcedo::MergeFieldDelta{
+      alcedo::OperatorType::TINT, alcedo::PipelineStageName::Color_Adjustment, "$operator_params",
+      nlohmann::json{{"tint", 10.0}}, true});
+  const auto merge_commit =
+      alcedo::EditCommit::MakeMerge(root_id, current_head, incoming_head, std::move(merge_payload));
+  const auto merge_head = merge_commit.GetCommitHash();
+  ASSERT_TRUE(guard_->commit_graph_->InsertCommit(merge_commit));
+  guard_->commit_graph_->MoveWorkingHead(active_version, merge_head);
+  guard_->working_head_commit_hash_ = merge_head;
+  guard_->transaction_chain_hash_   = guard_->commit_graph_->ChainHashForHead(merge_head);
+  {
+    std::unique_lock<std::mutex> render_lock(guard_->pipeline_->GetRenderLock());
+    auto& stage   = guard_->pipeline_->GetStage(alcedo::PipelineStageName::Color_Adjustment);
+    auto& globals = guard_->pipeline_->GetGlobalParams();
+    stage.SetOperator(alcedo::OperatorType::TINT, nlohmann::json{{"tint", 10.0}}, globals);
+    stage.EnableOperator(alcedo::OperatorType::TINT, true, globals);
+  }
+
+  ASSERT_TRUE(history_.Undo(handle, &error)) << error;
+  EXPECT_EQ(guard_->working_head_commit_hash_, current_head);
+  alcedo::EditorAdjustmentOperatorState tint_state;
+  ASSERT_TRUE(
+      alcedo::ReadEditorAdjustmentOperatorState(*guard_->pipeline_, "tint", &tint_state, &error))
+      << error;
+  EXPECT_DOUBLE_EQ(tint_state.params.at("tint").get<double>(), 2.0);
+
+  ASSERT_TRUE(history_.Redo(handle, &error)) << error;
+  EXPECT_EQ(guard_->working_head_commit_hash_, merge_head);
+  ASSERT_TRUE(
+      alcedo::ReadEditorAdjustmentOperatorState(*guard_->pipeline_, "tint", &tint_state, &error))
+      << error;
+  EXPECT_DOUBLE_EQ(tint_state.params.at("tint").get<double>(), 10.0);
+}
+
+TEST_F(EditorSessionHistoryPortTest,
        CaptureAndCommitDoNotBlockGuiWhilePipelineRenderLockHeld) {
   // Multi-slider hang repro: worker holds GetRenderLock() for a long Apply
   // (and may wait on the GUI for present). Capture/Commit on the "GUI" thread

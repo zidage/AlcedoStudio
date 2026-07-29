@@ -27,7 +27,7 @@ namespace alcedo::ui {
 
 /// Stable field names shared by the editor models and the adjustment-transfer /
 /// history services.
-extern const std::array<std::string_view, 21> kEditorSnapshotFields;
+extern const std::array<std::string_view, 22> kEditorSnapshotFields;
 
 /// Upsert a committed adjustment patch into the snapshot map.
 void UpsertCommittedSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,

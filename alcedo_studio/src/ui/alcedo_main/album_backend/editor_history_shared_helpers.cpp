@@ -17,11 +17,11 @@
 
 namespace alcedo::ui {
 
-const std::array<std::string_view, 21> kEditorSnapshotFields = {
+const std::array<std::string_view, 22> kEditorSnapshotFields = {
     "exposure",   "contrast",   "white",     "black",      "shadows",     "highlights",
-    "curve",      "saturation", "vibrance",  "hls",        "color_wheel", "lut",
-    "clarity",    "sharpen",    "odt",       "film_grain", "halation",    "crop_rotate",
-    "raw_decode", "lens_calib", "color_temp"};
+    "curve",      "saturation", "vibrance",  "tint",       "hls",         "color_wheel",
+    "lut",        "clarity",    "sharpen",   "odt",        "film_grain",  "halation",
+    "crop_rotate", "raw_decode", "lens_calib", "color_temp"};
 
 void UpsertCommittedSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
                              const std::string& field_key, const nlohmann::json& params) {

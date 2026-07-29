@@ -21,6 +21,7 @@ use their own top-level category.
 
 - [AI Sidecar Frontend Plan](alcedo_studio/ui/ai_sidecar_frontend_plan.md)
 - [Background Tasks and Declarative UI State Plan](alcedo_studio/ui/background_tasks_ui_state_plan.md)
+- [Editor Session Command Queue and Lock Simplification Plan](alcedo_studio/ui/editor_session_command_queue_and_lock_simplification_plan.md)
 - [QML Editor and Qt RHI Unified Workspace Refactor Plan](alcedo_studio/ui/qml_editor_rhi_unified_workspace_plan.md)
 
 ## External website

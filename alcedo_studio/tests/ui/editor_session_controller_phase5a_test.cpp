@@ -28,6 +28,7 @@
 #include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
 #include "ui/alcedo_main/album_backend/workspace_router.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
+#include "ui/editor_rhi/editor_viewport_item.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -47,6 +48,9 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   int                   presentation_width  = 0;
   int                   presentation_height = 0;
   std::string           last_error_;
+  bool                  async_switch_              = false;
+  sl_element_id_t       pending_switch_element_id_ = 0;
+  image_id_t            pending_switch_image_id_   = 0;
 
   auto                  state() const -> EditorSessionState override { return state_; }
   auto                  identity() const -> EditorSessionIdentity override { return identity_; }
@@ -87,7 +91,40 @@ class FakeSessionBackend final : public IEditorSessionBackend {
 
   auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override {
     ++switch_count;
+    if (async_switch_) {
+      if (state_ == EditorSessionState::Saving && pending_switch_element_id_ != 0) {
+        EditorSessionResult result;
+        result.kind     = EditorSessionResultKind::Rejected;
+        result.state    = state_;
+        result.identity = identity_;
+        NotifyChange();
+        return result;
+      }
+      pending_switch_element_id_ = element_id;
+      pending_switch_image_id_   = image_id;
+      state_                     = EditorSessionState::Saving;
+      EditorSessionResult result;
+      result.kind     = EditorSessionResultKind::SaveStarted;
+      result.state    = state_;
+      result.identity = identity_;
+      NotifyChange();
+      return result;
+    }
     return Open(element_id, image_id);
+  }
+
+  void CompletePendingSwitch() {
+    ASSERT_NE(pending_switch_element_id_, 0u);
+    ASSERT_NE(pending_switch_image_id_, 0u);
+    ++identity_.session_generation;
+    identity_.element_id        = pending_switch_element_id_;
+    identity_.image_id          = pending_switch_image_id_;
+    identity_.render_generation = identity_.session_generation;
+    identity_.view_generation   = 1;
+    pending_switch_element_id_  = 0;
+    pending_switch_image_id_    = 0;
+    state_                      = EditorSessionState::Switching;
+    NotifyChange();
   }
 
   auto Close(bool persist_changes) -> EditorSessionResult override {
@@ -350,6 +387,47 @@ TEST(EditorSessionControllerPhase5ATest, WorkspaceSwitchesImagesWithoutClosingTh
   EXPECT_EQ(backend.close_count, 1);
   EXPECT_TRUE(backend.last_close_persist);
   EXPECT_EQ(router.workspace(), QStringLiteral("library"));
+}
+
+TEST(EditorSessionControllerPhase5ATest,
+     AsyncImageSwitchKeepsViewportStampedForTargetUntilFirstFrameEnablesEditing) {
+  FakeSessionBackend             backend;
+  EditorSessionController        controller(nullptr, &backend);
+  editor_rhi::EditorViewportItem viewport;
+  controller.bindPresentationViewport(&viewport);
+
+  controller.Open(1, 2);
+  backend.SimulateFirstFramePresented();
+  ASSERT_TRUE(controller.can_edit());
+  ASSERT_EQ(viewport.imageIdentity(), 2u);
+  ASSERT_EQ(viewport.imageGeneration(), 1u);
+
+  backend.async_switch_ = true;
+  controller.Open(3, 4);
+
+  ASSERT_EQ(controller.session_state(), EditorSessionState::Saving);
+  EXPECT_FALSE(controller.can_edit());
+  EXPECT_EQ(viewport.imageIdentity(), 4u);
+  EXPECT_EQ(viewport.imageGeneration(), 2u);
+  EXPECT_EQ(controller.scope_controller()->image_identity(), 4u);
+  EXPECT_EQ(controller.scope_controller()->image_generation(), 2u);
+
+  controller.Open(5, 6);
+  EXPECT_EQ(viewport.imageIdentity(), 4u);
+  EXPECT_EQ(viewport.imageGeneration(), 2u);
+  EXPECT_EQ(controller.scope_controller()->image_identity(), 4u);
+  EXPECT_EQ(controller.scope_controller()->image_generation(), 2u);
+
+  backend.CompletePendingSwitch();
+  EXPECT_EQ(controller.session_state(), EditorSessionState::Switching);
+  EXPECT_EQ(controller.element_id(), 3u);
+  EXPECT_EQ(controller.image_id(), 4u);
+  EXPECT_EQ(viewport.imageIdentity(), 4u);
+  EXPECT_EQ(viewport.imageGeneration(), 2u);
+
+  backend.SimulateFirstFramePresented();
+  EXPECT_EQ(controller.session_state(), EditorSessionState::Interactive);
+  EXPECT_TRUE(controller.can_edit());
 }
 
 TEST(EditorSessionControllerPhase5ATest, FinalizeAndShutdownKeepLifecycleInTheBackend) {
