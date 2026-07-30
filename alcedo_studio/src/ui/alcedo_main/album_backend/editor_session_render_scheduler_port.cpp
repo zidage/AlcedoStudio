@@ -309,7 +309,12 @@ void EditorSessionRenderSchedulerPort::ExecuteJob(Job job) {
 
   if (test_producer) {
     ok        = test_producer(sink, job.request);
-    submitted = ok && (!direct_sink || direct_sink->submitted_frame_count() > submitted_before);
+    // A test producer owns the frame-submission seam.  Offscreen QML sinks do
+    // not expose a native submitted-frame counter even after NotifyFrameReady,
+    // so use its result as the explicit submission acknowledgement.  Native
+    // RHI tests still return false when resource mapping or the device copy
+    // fails, preserving their failure signal.
+    submitted = ok;
     if (!ok) error = "Test frame producer failed";
   } else {
     ok        = TryProducePipelineFrame(job.request, sink, &error);

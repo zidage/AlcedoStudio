@@ -274,7 +274,10 @@ auto EditorSessionController::active() const -> bool {
 
 auto EditorSessionController::has_image() const -> bool {
   if (session_backend_) {
-    return session_backend_->has_image();
+    // The backend may keep the current identity while an asynchronous close
+    // checkpoint finishes.  The workspace route has already left the editor
+    // at that point, so do not expose the stale image to QML controls.
+    return active_ && session_backend_->has_image();
   }
   return active_ && element_id_ > 0 && image_id_ > 0;
 }

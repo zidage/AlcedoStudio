@@ -27,6 +27,7 @@
 #include "opencl/opencl_context.hpp"
 #endif
 
+#include <chrono>
 #include <cmath>
 #include <filesystem>
 #include <memory>
@@ -91,6 +92,57 @@ class ScopedIniSettings {
 auto CenterOfItem(QQuickItem* item) -> QPoint {
   const QPointF scene = item->mapToScene(QPointF(item->width() * 0.5, item->height() * 0.5));
   return scene.toPoint();
+}
+
+auto WorkspaceRawImagePaths(std::size_t count) -> std::vector<std::filesystem::path> {
+  const auto path = std::filesystem::path(TEST_IMG_PATH) / "raw" / "om1.dng";
+  if (!std::filesystem::is_regular_file(path)) {
+    return {};
+  }
+  return std::vector<std::filesystem::path>(count, path);
+}
+
+auto WaitForInteractiveImage(ApplicationModuleHost& host, EditorSessionController* session,
+                             uint elementId, uint imageId, int timeoutMs = 30000) -> bool {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (auto* scheduler = host.editor_session_scheduler();
+        scheduler != nullptr && session != nullptr) {
+      const auto request_id   = scheduler->pending_present_request_id();
+      const auto identity_key = session->viewport_identity_key().split(QLatin1Char(':'));
+      if (request_id != 0 && identity_key.size() >= 2) {
+        scheduler->NotifyPresentationAcknowledged(request_id, identity_key.at(1).toULongLong(),
+                                                  identity_key.at(0).toULongLong());
+      }
+    }
+    if (session != nullptr && session->element_id() == elementId &&
+        session->image_id() == imageId && session->can_edit()) {
+      return true;
+    }
+    ProcessEvents(100);
+  }
+  return session != nullptr && session->element_id() == elementId &&
+         session->image_id() == imageId && session->can_edit();
+}
+
+auto InstallTestFrameProducer(ApplicationModuleHost& host) -> bool {
+  auto* render_scheduler = host.editor_session_scheduler();
+  if (render_scheduler == nullptr) {
+    return false;
+  }
+  render_scheduler->SetTestFrameProducer(
+      [](alcedo::IFrameSink* sink, const alcedo::EditorRenderRequest&) {
+        if (sink == nullptr) {
+          return false;
+        }
+        const auto mapping = sink->MapResourceForWrite(alcedo::FrameMemoryDomain::HostVisible);
+        if (mapping) {
+          sink->UnmapResource();
+        }
+        sink->NotifyFrameReady();
+        return true;
+      });
+  return true;
 }
 
 void SeedLibraryThumbnails(ApplicationModuleHost& host, int count, int content_height_hint = 0) {
@@ -481,8 +533,10 @@ TEST_F(WorkspaceShellTests, DeferredThumbnailReleasesFlushWhenLibraryDestroyedDu
   auto* grid = loaded->window->findChild<QObject*>(QStringLiteral("libraryThumbnailGridView"));
   ASSERT_NE(grid, nullptr);
 
-  constexpr uint kElementId = 1000;
-  constexpr uint kImageId   = 2000;
+  // Keep the explicit pin outside the four seeded delegate keys so the test
+  // measures the deferred release itself instead of combining two references.
+  constexpr uint kElementId = 9000;
+  constexpr uint kImageId   = 9000;
   constexpr uint kMaxEdge   = 512;
   loaded->host.library()->SetThumbnailVisible(kElementId, kImageId, true, kMaxEdge);
   ASSERT_TRUE(loaded->host.library()->thumbs().IsThumbnailPinned(kElementId));
@@ -568,31 +622,45 @@ TEST_F(WorkspaceShellTests, RealQmlEntrypointsDriveRoutingFocusAndFilmstripHeigh
 
 TEST_F(WorkspaceShellTests, PresentationViewportBindingSurvivesImageSwitchAToBToA) {
   ASSERT_TRUE(QCoreApplication::instance());
-  auto loaded = LoadMainWindow();
+  const auto raw_paths = WorkspaceRawImagePaths(2);
+  if (raw_paths.empty()) {
+    GTEST_SKIP() << "RAW fixture om1.dng is required for an interactive viewport session";
+  }
+  const auto seeded = CreateSeededPackedProject(temp_dir_, raw_paths);
+  ASSERT_TRUE(seeded.has_value());
+  ASSERT_EQ(seeded->images_.size(), 2u);
+
+  auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
+  ASSERT_TRUE(InstallTestFrameProducer(loaded->host));
 
   auto* session = loaded->host.editor_session();
   auto* router  = loaded->host.workspace_router();
   ASSERT_NE(session, nullptr);
   ASSERT_NE(router, nullptr);
 
-  router->OpenEditor(10, 100);
-  ProcessEvents(60);
+  const auto image_a = seeded->images_.at(0);
+  const auto image_b = seeded->images_.at(1);
+  router->OpenEditor(static_cast<uint>(image_a.file_id_), static_cast<uint>(image_a.image_id_));
+  ASSERT_TRUE(WaitForInteractiveImage(loaded->host, session, static_cast<uint>(image_a.file_id_),
+                                      static_cast<uint>(image_a.image_id_)));
   EXPECT_TRUE(session->presentation_viewport_bound());
   auto* viewport_a =
       qobject_cast<editor_rhi::EditorViewportItem*>(session->presentation_viewport());
   ASSERT_NE(viewport_a, nullptr);
   auto* sink_a = session->presentation_frame_sink();
   ASSERT_NE(sink_a, nullptr);
-  EXPECT_EQ(sink_a, viewport_a->frameSink());
+  ASSERT_NE(session->scope_controller(), nullptr);
+  EXPECT_EQ(sink_a, session->scope_controller()->frame_sink());
   const auto gen_a = viewport_a->imageGeneration();
   EXPECT_EQ(viewport_a->imageGeneration(), gen_a);
-  EXPECT_EQ(viewport_a->imageIdentity(), 100ull);
+  EXPECT_EQ(viewport_a->imageIdentity(), image_a.image_id_);
 
   // A → B inside the same editor workspace (no Loader teardown).
-  router->OpenEditor(20, 200);
-  ProcessEvents(60);
+  router->OpenEditor(static_cast<uint>(image_b.file_id_), static_cast<uint>(image_b.image_id_));
+  ASSERT_TRUE(WaitForInteractiveImage(loaded->host, session, static_cast<uint>(image_b.file_id_),
+                                      static_cast<uint>(image_b.image_id_)));
   EXPECT_TRUE(session->presentation_viewport_bound())
       << "image switch must not drop the presentation binding";
   auto* viewport_b =
@@ -603,17 +671,18 @@ TEST_F(WorkspaceShellTests, PresentationViewportBindingSurvivesImageSwitchAToBTo
   ASSERT_NE(sink_b, nullptr);
   EXPECT_EQ(sink_b, sink_a);
   EXPECT_GT(viewport_b->imageGeneration(), gen_a);
-  EXPECT_EQ(viewport_b->imageIdentity(), 200ull);
+  EXPECT_EQ(viewport_b->imageIdentity(), image_b.image_id_);
 
   // B → A: generation advances again; late frames from first A are rejected.
   const auto gen_b = viewport_b->imageGeneration();
-  router->OpenEditor(10, 100);
-  ProcessEvents(60);
+  router->OpenEditor(static_cast<uint>(image_a.file_id_), static_cast<uint>(image_a.image_id_));
+  ASSERT_TRUE(WaitForInteractiveImage(loaded->host, session, static_cast<uint>(image_a.file_id_),
+                                      static_cast<uint>(image_a.image_id_)));
   EXPECT_TRUE(session->presentation_viewport_bound());
   EXPECT_EQ(session->presentation_viewport(), viewport_a);
   EXPECT_EQ(session->presentation_frame_sink(), sink_a);
   EXPECT_GT(viewport_a->imageGeneration(), gen_b);
-  EXPECT_EQ(viewport_a->imageIdentity(), 100ull);
+  EXPECT_EQ(viewport_a->imageIdentity(), image_a.image_id_);
 
   // Leaving the editor workspace unbinds on viewport destruction.
   router->OpenLibrary();
@@ -816,12 +885,24 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
 
 TEST_F(WorkspaceShellTests, EditorViewportReceivesRealPointerAndWheelEvents) {
   ASSERT_TRUE(QCoreApplication::instance());
-  auto loaded = LoadMainWindow();
+  const auto raw_paths = WorkspaceRawImagePaths(1);
+  if (raw_paths.empty()) {
+    GTEST_SKIP() << "RAW fixture om1.dng is required for viewport input";
+  }
+  const auto seeded = CreateSeededPackedProject(temp_dir_, raw_paths);
+  ASSERT_TRUE(seeded.has_value());
+
+  auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
+  ASSERT_TRUE(InstallTestFrameProducer(loaded->host));
 
-  loaded->host.workspace_router()->OpenEditor(3, 30);
-  ProcessEvents(80);
+  const auto image = seeded->images_.front();
+  loaded->host.workspace_router()->OpenEditor(static_cast<uint>(image.file_id_),
+                                              static_cast<uint>(image.image_id_));
+  ASSERT_TRUE(WaitForInteractiveImage(loaded->host, loaded->host.editor_session(),
+                                      static_cast<uint>(image.file_id_),
+                                      static_cast<uint>(image.image_id_)));
 
   auto* interaction = loaded->window->findChild<editor_rhi::EditorInteractionController*>(
       QStringLiteral("editorInteractionController"));
@@ -1176,7 +1257,11 @@ TEST_F(WorkspaceShellTests, EditorNavButtonRestoresLastEditedImageAcrossLibraryR
 
 TEST_F(WorkspaceShellTests, DeletingCurrentEditorImageDropsEditorToEmptyState) {
   ASSERT_TRUE(QCoreApplication::instance());
-  const auto seeded = CreateSeededPackedProject(temp_dir_);
+  const auto raw_paths = WorkspaceRawImagePaths(1);
+  if (raw_paths.empty()) {
+    GTEST_SKIP() << "RAW fixture om1.dng is required for deleting an interactive image";
+  }
+  const auto seeded = CreateSeededPackedProject(temp_dir_, raw_paths);
   ASSERT_TRUE(seeded.has_value());
   const auto file_id  = static_cast<uint>(seeded->file_id_);
   const auto image_id = static_cast<uint>(seeded->image_id_);
@@ -1184,6 +1269,7 @@ TEST_F(WorkspaceShellTests, DeletingCurrentEditorImageDropsEditorToEmptyState) {
   auto       loaded   = LoadMainWindowWithPackedProject(seeded->packed_path_);
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
+  ASSERT_TRUE(InstallTestFrameProducer(loaded->host));
   ProcessEvents(80);
 
   auto* router  = loaded->host.workspace_router();
@@ -1193,7 +1279,7 @@ TEST_F(WorkspaceShellTests, DeletingCurrentEditorImageDropsEditorToEmptyState) {
 
   // Edit the seeded image; Open records it as the last-edited image.
   router->OpenEditor(file_id, image_id);
-  ProcessEvents(80);
+  ASSERT_TRUE(WaitForInteractiveImage(loaded->host, session, file_id, image_id));
   ASSERT_EQ(router->workspace(), QStringLiteral("editor"));
   ASSERT_TRUE(session->active());
   ASSERT_TRUE(session->has_image());
@@ -1208,7 +1294,10 @@ TEST_F(WorkspaceShellTests, DeletingCurrentEditorImageDropsEditorToEmptyState) {
   targets.push_back(
       QVariantMap{{QStringLiteral("elementId"), file_id}, {QStringLiteral("imageId"), image_id}});
   ASSERT_TRUE(loaded->window->setProperty("pendingDeleteTargets", QVariant::fromValue(targets)));
-  ASSERT_TRUE(QMetaObject::invokeMethod(loaded->window, "runDeleteTargets"));
+  auto* image_actions =
+      loaded->window->findChild<QObject*>(QStringLiteral("imageActionsController"));
+  ASSERT_NE(image_actions, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(image_actions, "runDeleteTargets"));
   ProcessEvents(500);
 
   // Editor stays selected, drops to the empty state, and forgets the image.
@@ -1442,15 +1531,26 @@ TEST_F(WorkspaceShellTests, EditorDesktopOrderIsHistoryCenterAdjustments) {
 
 TEST_F(WorkspaceShellTests, HistoryAndVersionsOpenSwitchAndCollapseFromLeftNavbar) {
   ASSERT_TRUE(QCoreApplication::instance());
-  auto loaded = LoadMainWindow();
+  const auto raw_paths = WorkspaceRawImagePaths(1);
+  if (raw_paths.empty()) {
+    GTEST_SKIP() << "RAW fixture om1.dng is required for the history rail";
+  }
+  const auto seeded = CreateSeededPackedProject(temp_dir_, raw_paths);
+  ASSERT_TRUE(seeded.has_value());
+
+  auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
-
-  loaded->host.workspace_router()->OpenEditor(0, 0);
-  ProcessEvents(80);
+  ASSERT_TRUE(InstallTestFrameProducer(loaded->host));
 
   auto* session = loaded->host.editor_session();
   ASSERT_NE(session, nullptr);
+  const auto image = seeded->images_.front();
+  loaded->host.workspace_router()->OpenEditor(static_cast<uint>(image.file_id_),
+                                              static_cast<uint>(image.image_id_));
+  ASSERT_TRUE(WaitForInteractiveImage(loaded->host, loaded->host.editor_session(),
+                                      static_cast<uint>(image.file_id_),
+                                      static_cast<uint>(image.image_id_)));
   EXPECT_TRUE(session->history_panel_page().isEmpty());
 
   auto* history_btn =
@@ -1503,8 +1603,11 @@ TEST_F(WorkspaceShellTests, HistoryAndVersionsOpenSwitchAndCollapseFromLeftNavba
   EXPECT_EQ(session->history_panel_page(), QStringLiteral("history"));
   loaded->host.workspace_router()->OpenLibrary();
   ProcessEvents(40);
-  loaded->host.workspace_router()->OpenEditor(0, 0);
-  ProcessEvents(80);
+  loaded->host.workspace_router()->OpenEditor(static_cast<uint>(image.file_id_),
+                                              static_cast<uint>(image.image_id_));
+  ASSERT_TRUE(WaitForInteractiveImage(loaded->host, loaded->host.editor_session(),
+                                      static_cast<uint>(image.file_id_),
+                                      static_cast<uint>(image.image_id_)));
   EXPECT_EQ(session->history_panel_page(), QStringLiteral("history"));
   auto* panel_after =
       loaded->window->findChild<QQuickItem*>(QStringLiteral("editorHistoryVersionsPanel"));
@@ -1526,15 +1629,26 @@ TEST_F(WorkspaceShellTests, AdjustmentPanelsSwitchAndSurviveWorkspaceRoundTrip) 
     settings.sync();
   }
 
-  auto loaded = LoadMainWindow();
+  const auto raw_paths = WorkspaceRawImagePaths(1);
+  if (raw_paths.empty()) {
+    GTEST_SKIP() << "RAW fixture om1.dng is required for adjustment panel navigation";
+  }
+  const auto seeded = CreateSeededPackedProject(temp_dir_, raw_paths);
+  ASSERT_TRUE(seeded.has_value());
+
+  auto loaded = LoadMainWindowWithPackedProject(seeded->packed_path_);
   ASSERT_NE(loaded, nullptr);
   ASSERT_NE(loaded->window, nullptr);
-
-  loaded->host.workspace_router()->OpenEditor(1, 1);
-  ProcessEvents(80);
+  ASSERT_TRUE(InstallTestFrameProducer(loaded->host));
 
   auto* session = loaded->host.editor_session();
   ASSERT_NE(session, nullptr);
+  const auto image = seeded->images_.front();
+  loaded->host.workspace_router()->OpenEditor(static_cast<uint>(image.file_id_),
+                                              static_cast<uint>(image.image_id_));
+  ASSERT_TRUE(WaitForInteractiveImage(loaded->host, loaded->host.editor_session(),
+                                      static_cast<uint>(image.file_id_),
+                                      static_cast<uint>(image.image_id_)));
   EXPECT_EQ(session->active_adjustment_panel(), QStringLiteral("tone"));
 
   // Order matches EditorAdjustmentStack navbar + StackLayout indices:
@@ -1567,8 +1681,11 @@ TEST_F(WorkspaceShellTests, AdjustmentPanelsSwitchAndSurviveWorkspaceRoundTrip) 
 
   loaded->host.workspace_router()->OpenLibrary();
   ProcessEvents(40);
-  loaded->host.workspace_router()->OpenEditor(2, 2);
-  ProcessEvents(80);
+  loaded->host.workspace_router()->OpenEditor(static_cast<uint>(image.file_id_),
+                                              static_cast<uint>(image.image_id_));
+  ASSERT_TRUE(WaitForInteractiveImage(loaded->host, loaded->host.editor_session(),
+                                      static_cast<uint>(image.file_id_),
+                                      static_cast<uint>(image.image_id_)));
   EXPECT_EQ(loaded->host.editor_session()->active_adjustment_panel(), QStringLiteral("geometry"));
 
   auto* stack =

@@ -20,6 +20,8 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
@@ -36,6 +38,11 @@ struct SeededProject {
   std::filesystem::path packed_path_{};
   sl_element_id_t       file_id_  = 0;
   image_id_t            image_id_ = 0;
+  struct ImageKey {
+    sl_element_id_t file_id_  = 0;
+    image_id_t      image_id_ = 0;
+  };
+  std::vector<ImageKey> images_{};
 };
 
 /// Pump the event loop until the import finishes (or timeout). Used by tests that
@@ -73,43 +80,60 @@ inline auto FindFolderId(const QVariantList& folders, const QString& name) -> ui
   return 0;
 }
 
-/// Build a packed project with one synthetic DNG image (no real pixels, no GPU).
-/// Returns the packed path and the image's element/file + image ids on success.
-inline auto CreateSeededPackedProject(const std::filesystem::path& tempDir)
+/// Build a packed project with one synthetic DNG image (no real pixels, no GPU),
+/// or with the supplied RAW files when editor interaction is required.
+/// Returns the packed path and the image element/file + image ids on success.
+inline auto CreateSeededPackedProject(
+    const std::filesystem::path&              tempDir,
+    const std::vector<std::filesystem::path>& sourceImagePaths = {})
     -> std::optional<SeededProject> {
   const auto db_path     = tempDir / "album_delete_seed.db";
   const auto meta_path   = tempDir / "album_delete_seed.json";
   const auto packed_path = tempDir / "album_delete_seed.alcd";
 
   auto project = std::make_shared<ProjectService>(db_path, meta_path, ProjectOpenMode::kCreateNew);
-  auto image_handle = project->GetImagePoolService()->CreateAndReturnPinnedEmpty();
-  if (!image_handle) {
-    return std::nullopt;
+  const std::size_t image_count = sourceImagePaths.empty() ? 1 : sourceImagePaths.size();
+  std::vector<SeededProject::ImageKey> image_keys;
+  image_keys.reserve(image_count);
+
+  for (std::size_t index = 0; index < image_count; ++index) {
+    if (!sourceImagePaths.empty() && !std::filesystem::is_regular_file(sourceImagePaths[index])) {
+      return std::nullopt;
+    }
+
+    auto image_handle = project->GetImagePoolService()->CreateAndReturnPinnedEmpty();
+    if (!image_handle) {
+      return std::nullopt;
+    }
+
+    auto image = image_handle.Get();
+    if (sourceImagePaths.empty()) {
+      image->image_path_ = tempDir / "album-delete.dng";
+      image->image_name_ = L"album-delete.dng";
+    } else {
+      image->image_path_ = sourceImagePaths[index];
+      image->image_name_ = L"workspace-image-" + std::to_wstring(index) + L".dng";
+    }
+    image->image_type_ = ImageType::DNG;
+
+    ExifDisplayMetaData metadata;
+    metadata.model_         = "Synthetic Album Camera";
+    metadata.lens_          = "Synthetic 50mm";
+    metadata.date_time_str_ = "2026-05-25 10:00:00";
+    image->SetExifDisplayMetaData(std::move(metadata));
+
+    auto file = project->GetSleeveService()->Write<std::shared_ptr<SleeveFile>>(
+        [image](FileSystem& fs) -> std::shared_ptr<SleeveFile> {
+          auto created       = fs.CreateFileInLibrary(image->image_name_);
+          created->image_id_ = image->image_id_;
+          return created;
+        });
+    if (!file.second.success_ || !file.first) {
+      return std::nullopt;
+    }
+
+    image_keys.push_back(SeededProject::ImageKey{file.first->element_id_, image->image_id_});
   }
-
-  auto image         = image_handle.Get();
-  image->image_path_ = tempDir / "album-delete.dng";
-  image->image_name_ = L"album-delete.dng";
-  image->image_type_ = ImageType::DNG;
-
-  ExifDisplayMetaData metadata;
-  metadata.model_         = "Synthetic Album Camera";
-  metadata.lens_          = "Synthetic 50mm";
-  metadata.date_time_str_ = "2026-05-25 10:00:00";
-  image->SetExifDisplayMetaData(std::move(metadata));
-
-  auto file = project->GetSleeveService()->Write<std::shared_ptr<SleeveFile>>(
-      [image](FileSystem& fs) -> std::shared_ptr<SleeveFile> {
-        auto created       = fs.CreateFileInLibrary(image->image_name_);
-        created->image_id_ = image->image_id_;
-        return created;
-      });
-  if (!file.second.success_ || !file.first) {
-    return std::nullopt;
-  }
-
-  const sl_element_id_t file_id  = file.first->element_id_;
-  const image_id_t      image_id = image->image_id_;
 
   const auto image_sync = project->GetImagePoolService()->SyncWithStorage();
   if (!image_sync.failed_images_.empty()) {
@@ -132,7 +156,8 @@ inline auto CreateSeededPackedProject(const std::filesystem::path& tempDir)
     return std::nullopt;
   }
 
-  return SeededProject{packed_path, file_id, image_id};
+  return SeededProject{packed_path, image_keys.front().file_id_, image_keys.front().image_id_,
+                       std::move(image_keys)};
 }
 
 /// Load a packed .alcd project into @p backend and wait for ServiceReady.

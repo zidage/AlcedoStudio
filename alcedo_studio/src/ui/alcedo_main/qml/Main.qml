@@ -140,6 +140,7 @@ ApplicationWindow {
 
     ImageActionsController {
         id: imageActionsController
+        objectName: "imageActionsController"
         host: root
     }
     property alias projectLaunchPending: projectLaunchController.projectLaunchPending
