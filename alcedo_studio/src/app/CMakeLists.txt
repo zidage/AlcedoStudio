@@ -330,6 +330,13 @@ def_library(EditorSessionService
                  EditorSessionEditController EditorSessionCommandQueue EditorActionPolicy
 )
 
+# Facade consumers (tests/UI) include session headers that pull metal_image.hpp
+# under HAVE_METAL. Private session-controller deps do not propagate metal-cpp
+# include dirs, so expose them on the facade itself.
+if(ALCEDO_METAL_ENABLED)
+    target_link_libraries(EditorSessionService PUBLIC alcedo::metal_cpp)
+endif()
+
 def_library(ImportService
     SOURCES "${ALCEDO_APP_ROOT}/import_service.cpp"
     PUBLIC_DEPS SleeveManager ImageWriter ImagePoolService FSService
