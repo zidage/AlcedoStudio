@@ -4,16 +4,15 @@
 
 #include "ui/editor_rhi/direct_frame_sink.hpp"
 
+#include <QDebug>
+#include <QMetaObject>
+#include <QThread>
+#include <utility>
+
 #include "ui/edit_viewer/edit_viewer_surface.hpp"
 #include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 #include "ui/editor_rhi/lease_target_adapters.hpp"
-
-#include <QDebug>
-#include <QMetaObject>
-#include <QThread>
-
-#include <utility>
 #include "utils/diagnostics/app_logging.hpp"
 
 using alcedo::diag::editorPresentLog;
@@ -51,22 +50,22 @@ void DirectFrameSink::ClearMappedSlot() {
   if (has_mapped_slot_ && item_ && item_->present_queue()) {
     item_->present_queue()->AbandonWrite(mapped_slot_index_);
   }
-  has_mapped_slot_ = false;
+  has_mapped_slot_         = false;
   unmapped_pending_submit_ = false;
-  mapped_slot_index_ = -1;
-  prepared_slot_index_ = -1;
+  mapped_slot_index_       = -1;
+  prepared_slot_index_     = -1;
 }
 
 auto DirectFrameSink::MakeSizeRequestLocked() const -> DirectPresentQueue::SizeRequest {
   DirectPresentQueue::SizeRequest request;
-  request.width = width_;
-  request.height = height_;
-  request.preferred_slot = prepared_slot_index_;
+  request.width            = width_;
+  request.height           = height_;
+  request.preferred_slot   = prepared_slot_index_;
   request.image_generation = item_ ? item_->imageGeneration() : 0;
-  request.image_identity = item_ ? item_->imageIdentity() : 0;
+  request.image_identity   = item_ ? item_->imageIdentity() : 0;
   if (pending_preview_metadata_valid_) {
     request.layer_generation = pending_preview_metadata_.preview_generation;
-    request.frame_role = pending_preview_metadata_.frame_role;
+    request.frame_role       = pending_preview_metadata_.frame_role;
   }
   return request;
 }
@@ -75,16 +74,16 @@ auto DirectFrameSink::ReserveWritableSlot(int width, int height) -> std::optiona
   if (!item_ || !item_->present_queue() || width <= 0 || height <= 0) {
     return std::nullopt;
   }
-  auto* queue = item_->present_queue().get();
+  auto*      queue            = item_->present_queue().get();
   const auto image_generation = item_->imageGeneration();
-  const auto image_identity = item_->imageIdentity();
+  const auto image_identity   = item_->imageIdentity();
 
-  auto prepare = queue->PrepareWrite(width, height, image_generation, image_identity);
+  auto       prepare = queue->PrepareWrite(width, height, image_generation, image_identity);
 
   DirectPresentQueue::SizeRequest request;
   {
     std::lock_guard lock(mutex_);
-    width_ = width;
+    width_  = width;
     height_ = height;
     request = MakeSizeRequestLocked();
     if (prepare.ok && prepare.slot_index >= 0) {
@@ -111,15 +110,18 @@ auto DirectFrameSink::ReserveWritableSlot(int width, int height) -> std::optiona
   }
   queue->NoteSizeRequest(request);
   item_->requestPresentUpdate();
-  qCDebug(editorPresentLog, "[EditorPresent] producer waiting for native target %dx%d image=%llu generation=%llu",
-        width, height, static_cast<unsigned long long>(image_identity),
-        static_cast<unsigned long long>(image_generation));
+  qCDebug(editorPresentLog,
+          "[EditorPresent] producer waiting for native target %dx%d image=%llu generation=%llu",
+          width, height, static_cast<unsigned long long>(image_identity),
+          static_cast<unsigned long long>(image_generation));
   auto slot = queue->WaitForWritableSlot(request);
   if (!slot.has_value()) {
-    qCWarning(editorPresentLog, "[EditorPresent] native target handshake failed %dx%d", width, height);
+    qCWarning(editorPresentLog, "[EditorPresent] native target handshake failed %dx%d", width,
+              height);
     return std::nullopt;
   }
-  qCDebug(editorPresentLog, "[EditorPresent] producer acquired native target %dx%d slot=%d", width, height, *slot);
+  qCDebug(editorPresentLog, "[EditorPresent] producer acquired native target %dx%d slot=%d", width,
+          height, *slot);
   return slot;
 }
 
@@ -128,9 +130,9 @@ void DirectFrameSink::EnsureSize(int width, int height) {
     return;
   }
   const std::uint64_t image_generation = item_->imageGeneration();
-  const std::uint64_t image_identity = item_->imageIdentity();
-  const bool metal_present = IsMetalPresentPath();
-  bool emit_target_size = false;
+  const std::uint64_t image_identity   = item_->imageIdentity();
+  const bool          metal_present    = IsMetalPresentPath();
+  bool                emit_target_size = false;
   {
     std::lock_guard lock(mutex_);
     if (has_mapped_slot_) {
@@ -150,8 +152,7 @@ void DirectFrameSink::EnsureSize(int width, int height) {
       const FramePresentationMode mode = pending_presentation_mode_valid_
                                              ? pending_presentation_mode_
                                              : FramePresentationMode::FullFrame;
-      is_render_reference =
-          IsRenderReferenceFrame(mode, pending_preview_metadata_.frame_role);
+      is_render_reference = IsRenderReferenceFrame(mode, pending_preview_metadata_.frame_role);
     }
     // Metal zero-copy: production EnsureSize uses the presentation *viewport*
     // size, not the pipeline MTLTexture size. Emitting that as the render
@@ -167,15 +168,14 @@ void DirectFrameSink::EnsureSize(int width, int height) {
       height_ = height;
     }
     last_sized_image_generation_ = image_generation;
-    last_sized_image_identity_ = image_identity;
+    last_sized_image_identity_   = image_identity;
   }
 
   if (emit_target_size) {
     // Pipeline workers are off-thread; unit tests and GUI-thread callers can
     // receive the geometry signal synchronously.
-    const auto connection = (item_->thread() == QThread::currentThread())
-                                ? Qt::DirectConnection
-                                : Qt::QueuedConnection;
+    const auto connection =
+        (item_->thread() == QThread::currentThread()) ? Qt::DirectConnection : Qt::QueuedConnection;
     QMetaObject::invokeMethod(
         item_, [item = item_, width, height] { emit item->targetSizeRequested(width, height); },
         connection);
@@ -189,28 +189,27 @@ void DirectFrameSink::EnsureSize(int width, int height) {
     return;
   }
 
-  auto slot = ReserveWritableSlot(width, height);
+  auto            slot = ReserveWritableSlot(width, height);
   std::lock_guard lock(mutex_);
   prepared_slot_index_ = slot.value_or(-1);
 }
 
-auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain)
-    -> FrameWriteMapping {
+auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain) -> FrameWriteMapping {
   if (!item_ || !item_->present_queue()) {
     return {};
   }
 
-  int width = 0;
-  int height = 0;
+  int width      = 0;
+  int height     = 0;
   int slot_index = -1;
   {
     std::lock_guard lock(mutex_);
     if (has_mapped_slot_ || width_ <= 0 || height_ <= 0) {
       return {};
     }
-    width = width_;
-    height = height_;
-    slot_index = prepared_slot_index_;
+    width                = width_;
+    height               = height_;
+    slot_index           = prepared_slot_index_;
     prepared_slot_index_ = -1;
   }
 
@@ -229,7 +228,7 @@ auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain)
       return {};
     }
     slot_index = *reserved;
-    begun = item_->present_queue()->BeginWrite(slot_index);
+    begun      = item_->present_queue()->BeginWrite(slot_index);
     if (!begun.has_value() || !begun->native.valid()) {
       return {};
     }
@@ -237,15 +236,15 @@ auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain)
 
   // Synthetic lease for shared OpenCL acquire helpers.
   WritableTargetLease lease;
-  lease.backend = begun->native.backend;
-  lease.handle_kind = begun->native.handle_kind;
-  lease.writable_kind = begun->native.writable_kind;
-  lease.dimensions = {begun->width, begun->height};
-  lease.native_handle = begun->native.native_handle;
+  lease.backend           = begun->native.backend;
+  lease.handle_kind       = begun->native.handle_kind;
+  lease.writable_kind     = begun->native.writable_kind;
+  lease.dimensions        = {begun->width, begun->height};
+  lease.native_handle     = begun->native.native_handle;
   lease.writable_resource = begun->native.writable_resource;
-  lease.sync_object = begun->native.sync_object;
-  lease.sync_value = begun->native.sync_value;
-  lease.lifetime_token = std::make_shared<LeaseLifetimeToken>();
+  lease.sync_object       = begun->native.sync_object;
+  lease.sync_value        = begun->native.sync_value;
+  lease.lifetime_token    = std::make_shared<LeaseLifetimeToken>();
 
   if (!ProducerAcquireWritable(lease)) {
     item_->present_queue()->AbandonWrite(slot_index);
@@ -253,8 +252,8 @@ auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain)
   }
 
   FrameWriteMapping mapping{};
-  mapping.row_bytes = static_cast<size_t>(begun->width) * sizeof(float) * 4ULL;
-  mapping.pixel_format = FramePixelFormat::RGBA32F;
+  mapping.row_bytes     = static_cast<size_t>(begun->width) * sizeof(float) * 4ULL;
+  mapping.pixel_format  = FramePixelFormat::RGBA32F;
   mapping.native_object = begun->native.native_handle;
 
   if (begun->native.writable_kind == LeaseWritableResourceKind::CudaArray) {
@@ -264,9 +263,9 @@ auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain)
       item_->present_queue()->AbandonWrite(slot_index);
       return {};
     }
-    mapping.image_array = reinterpret_cast<void*>(begun->native.writable_resource);
+    mapping.image_array   = reinterpret_cast<void*>(begun->native.writable_resource);
     mapping.memory_domain = FrameMemoryDomain::CudaDevice;
-    mapping.target_type = FrameWriteTargetType::CudaArray;
+    mapping.target_type   = FrameWriteTargetType::CudaArray;
   } else if (begun->native.writable_kind == LeaseWritableResourceKind::OpenClImage) {
     if (preferred_domain != FrameMemoryDomain::OpenClDevice &&
         preferred_domain != FrameMemoryDomain::HostVisible) {
@@ -274,9 +273,9 @@ auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain)
       item_->present_queue()->AbandonWrite(slot_index);
       return {};
     }
-    mapping.data = reinterpret_cast<void*>(begun->native.writable_resource);
+    mapping.data          = reinterpret_cast<void*>(begun->native.writable_resource);
     mapping.memory_domain = FrameMemoryDomain::OpenClDevice;
-    mapping.target_type = FrameWriteTargetType::OpenClImage;
+    mapping.target_type   = FrameWriteTargetType::OpenClImage;
   } else {
     (void)ProducerReleaseWritable(lease);
     item_->present_queue()->AbandonWrite(slot_index);
@@ -284,8 +283,8 @@ auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain)
   }
 
   std::lock_guard lock(mutex_);
-  mapped_slot_index_ = slot_index;
-  has_mapped_slot_ = true;
+  mapped_slot_index_       = slot_index;
+  has_mapped_slot_         = true;
   unmapped_pending_submit_ = false;
   return mapping;
 }
@@ -303,15 +302,15 @@ void DirectFrameSink::UnmapResource() {
   auto snap = item_->present_queue()->SlotAt(slot_index);
   if (snap.has_value()) {
     WritableTargetLease lease;
-    lease.backend = snap->native.backend;
-    lease.handle_kind = snap->native.handle_kind;
-    lease.writable_kind = snap->native.writable_kind;
-    lease.dimensions = {snap->width, snap->height};
-    lease.native_handle = snap->native.native_handle;
+    lease.backend           = snap->native.backend;
+    lease.handle_kind       = snap->native.handle_kind;
+    lease.writable_kind     = snap->native.writable_kind;
+    lease.dimensions        = {snap->width, snap->height};
+    lease.native_handle     = snap->native.native_handle;
     lease.writable_resource = snap->native.writable_resource;
-    lease.sync_object = snap->native.sync_object;
-    lease.sync_value = snap->native.sync_value;
-    lease.lifetime_token = std::make_shared<LeaseLifetimeToken>();
+    lease.sync_object       = snap->native.sync_object;
+    lease.sync_value        = snap->native.sync_value;
+    lease.lifetime_token    = std::make_shared<LeaseLifetimeToken>();
     (void)ProducerReleaseWritable(lease);
     // CUDA's producer already synchronizes its dedicated render stream before
     // UnmapResource. A second cudaDeviceSynchronize here stalls on unrelated
@@ -329,9 +328,9 @@ void DirectFrameSink::UnmapResource() {
 }
 
 void DirectFrameSink::NotifyFrameReady() {
-  int slot_index = -1;
-  FramePresentationMode mode = FramePresentationMode::FullFrame;
-  FramePreviewMetadata metadata{};
+  int                   slot_index = -1;
+  FramePresentationMode mode       = FramePresentationMode::FullFrame;
+  FramePreviewMetadata  metadata{};
   {
     std::lock_guard lock(mutex_);
     if (!has_mapped_slot_ || !unmapped_pending_submit_) {
@@ -339,26 +338,27 @@ void DirectFrameSink::NotifyFrameReady() {
     }
     slot_index = mapped_slot_index_;
     if (pending_presentation_mode_valid_) {
-      mode = pending_presentation_mode_;
+      mode                             = pending_presentation_mode_;
       pending_presentation_mode_valid_ = false;
     }
     if (pending_preview_metadata_valid_) {
-      metadata = pending_preview_metadata_;
+      metadata                        = pending_preview_metadata_;
       pending_preview_metadata_valid_ = false;
     }
-    has_mapped_slot_ = false;
+    has_mapped_slot_         = false;
     unmapped_pending_submit_ = false;
-    mapped_slot_index_ = -1;
+    mapped_slot_index_       = -1;
     ++submitted_frame_count_;
   }
   if (!item_ || !item_->present_queue() || slot_index < 0) {
     return;
   }
   item_->present_queue()->NotifyReady(slot_index, mode, metadata);
-  qCDebug(editorPresentLog, "[EditorPresent] submitted frame request=%llu image=%llu generation=%llu slot=%d",
-        static_cast<unsigned long long>(metadata.presentation_request_id),
-        static_cast<unsigned long long>(item_->imageIdentity()),
-        static_cast<unsigned long long>(item_->imageGeneration()), slot_index);
+  qCDebug(editorPresentLog,
+          "[EditorPresent] submitted frame request=%llu image=%llu generation=%llu slot=%d",
+          static_cast<unsigned long long>(metadata.presentation_request_id),
+          static_cast<unsigned long long>(item_->imageIdentity()),
+          static_cast<unsigned long long>(item_->imageGeneration()), slot_index);
   item_->requestPresentUpdate();
 }
 
@@ -373,79 +373,83 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
     return;
   }
   if (!IsMetalPresentPath()) {
-    qCWarning(editorPresentLog, "[EditorPresent] SubmitMetalFrame ignored: active backend is not Metal");
+    qCWarning(editorPresentLog,
+              "[EditorPresent] SubmitMetalFrame ignored: active backend is not Metal");
     return;
   }
+  // The CAMetalLayer belongs to the complete QML window, not to this item.
+  // Forward the producer's exact output encoding to the GUI-thread owner
+  // before requesting composition.
+  item_->setDisplayConfig(frame.display_config);
 
   ImportedGpuFrame imported;
-  imported.width = frame.width;
-  imported.height = frame.height;
-  imported.texture_handle = frame.texture_handle;
-  imported.native_layout = 0;
-  imported.owner = frame.owner;
-  imported.presentation_mode = frame.presentation_mode;
-  imported.preview_metadata = frame.preview_metadata;
-  imported.image_generation = item_->imageGeneration();
-  imported.image_identity = item_->imageIdentity();
+  imported.width                      = frame.width;
+  imported.height                     = frame.height;
+  imported.texture_handle             = frame.texture_handle;
+  imported.native_layout              = 0;
+  imported.owner                      = frame.owner;
+  imported.presentation_mode          = frame.presentation_mode;
+  imported.preview_metadata           = frame.preview_metadata;
+  imported.image_generation           = item_->imageGeneration();
+  imported.image_identity             = item_->imageIdentity();
 
-  std::uint64_t request_id = 0;
-  bool emit_render_reference = false;
-  int ref_w = 0;
-  int ref_h = 0;
+  std::uint64_t request_id            = 0;
+  bool          emit_render_reference = false;
+  int           ref_w                 = 0;
+  int           ref_h                 = 0;
   {
     std::lock_guard lock(mutex_);
     // Prefer the session-stamped role/ROI/request id over pipeline defaults.
     if (pending_presentation_mode_valid_) {
-      imported.presentation_mode = pending_presentation_mode_;
+      imported.presentation_mode       = pending_presentation_mode_;
       pending_presentation_mode_valid_ = false;
     }
     if (pending_preview_metadata_valid_) {
-      imported.preview_metadata = pending_preview_metadata_;
+      imported.preview_metadata       = pending_preview_metadata_;
       pending_preview_metadata_valid_ = false;
     }
-    request_id = imported.preview_metadata.presentation_request_id;
+    request_id        = imported.preview_metadata.presentation_request_id;
     imported.sequence = ++imported_sequence_;
-    const auto layer = LayerIndexForRole(imported.preview_metadata.frame_role);
+    const auto layer  = LayerIndexForRole(imported.preview_metadata.frame_role);
     if (pending_imported_[layer].has_value()) {
-      qCDebug(editorPresentLog, "[EditorPresent] superseding pending Metal import role=%d request=%llu",
-            static_cast<int>(imported.preview_metadata.frame_role),
-            static_cast<unsigned long long>(
-                pending_imported_[layer]->preview_metadata.presentation_request_id));
+      qCDebug(editorPresentLog,
+              "[EditorPresent] superseding pending Metal import role=%d request=%llu",
+              static_cast<int>(imported.preview_metadata.frame_role),
+              static_cast<unsigned long long>(
+                  pending_imported_[layer]->preview_metadata.presentation_request_id));
     }
     pending_imported_[layer] = imported;
     ++submitted_frame_count_;
 
     // Match QtEditViewer::RefreshFrameDerivedState: only full-frame textures
     // redefine crop/zoom render-reference geometry. Detail/Roi sizes must not.
-    if (IsRenderReferenceFrame(imported.presentation_mode,
-                               imported.preview_metadata.frame_role)) {
+    if (IsRenderReferenceFrame(imported.presentation_mode, imported.preview_metadata.frame_role)) {
       const bool geometry_changed = width_ != frame.width || height_ != frame.height;
-      width_  = frame.width;
-      height_ = frame.height;
+      width_                      = frame.width;
+      height_                     = frame.height;
       if (geometry_changed) {
         emit_render_reference = true;
-        ref_w = frame.width;
-        ref_h = frame.height;
+        ref_w                 = frame.width;
+        ref_h                 = frame.height;
       }
     }
   }
 
-  qCDebug(editorPresentLog, "[EditorPresent] queued Metal import request=%llu image=%llu generation=%llu size=%dx%d "
-        "handle=%llu (zero-copy)",
-        static_cast<unsigned long long>(request_id),
-        static_cast<unsigned long long>(item_->imageIdentity()),
-        static_cast<unsigned long long>(item_->imageGeneration()), frame.width, frame.height,
-        static_cast<unsigned long long>(frame.texture_handle));
+  qCDebug(editorPresentLog,
+          "[EditorPresent] queued Metal import request=%llu image=%llu generation=%llu size=%dx%d "
+          "handle=%llu (zero-copy)",
+          static_cast<unsigned long long>(request_id),
+          static_cast<unsigned long long>(item_->imageIdentity()),
+          static_cast<unsigned long long>(item_->imageGeneration()), frame.width, frame.height,
+          static_cast<unsigned long long>(frame.texture_handle));
 
   if (emit_render_reference) {
     // Publish the real MTLTexture size as the interaction render reference
     // (not the presentation viewport size from EnsureSize).
-    const auto connection = (item_->thread() == QThread::currentThread())
-                                ? Qt::DirectConnection
-                                : Qt::QueuedConnection;
+    const auto connection =
+        (item_->thread() == QThread::currentThread()) ? Qt::DirectConnection : Qt::QueuedConnection;
     QMetaObject::invokeMethod(
-        item_,
-        [item = item_, ref_w, ref_h] { emit item->targetSizeRequested(ref_w, ref_h); },
+        item_, [item = item_, ref_w, ref_h] { emit item->targetSizeRequested(ref_w, ref_h); },
         connection);
   }
   item_->requestPresentUpdate();
@@ -459,7 +463,7 @@ void DirectFrameSink::SubmitFinalDisplayFrame(const FinalDisplayFrameView&) {
 auto DirectFrameSink::DrainPendingImportedFrames(std::uint64_t image_generation,
                                                  std::uint64_t image_identity)
     -> std::vector<ImportedGpuFrame> {
-  std::lock_guard lock(mutex_);
+  std::lock_guard               lock(mutex_);
   std::vector<ImportedGpuFrame> out;
   out.reserve(pending_imported_.size());
   for (auto& slot : pending_imported_) {
@@ -507,13 +511,13 @@ auto DirectFrameSink::GetViewportRenderRegion() const -> std::optional<ViewportR
 
 void DirectFrameSink::SetNextFramePresentationMode(FramePresentationMode mode) {
   std::lock_guard lock(mutex_);
-  pending_presentation_mode_ = mode;
+  pending_presentation_mode_       = mode;
   pending_presentation_mode_valid_ = true;
 }
 
 void DirectFrameSink::SetNextFramePreviewMetadata(const FramePreviewMetadata& metadata) {
   std::lock_guard lock(mutex_);
-  pending_preview_metadata_ = metadata;
+  pending_preview_metadata_       = metadata;
   pending_preview_metadata_valid_ = true;
 }
 
@@ -534,9 +538,9 @@ void DirectFrameSink::SetFirstFrameCompositionCallback(FirstFrameCompositionCall
 
 void DirectFrameSink::NotifyPrimaryFrameComposed(const DirectPresentQueue::ReadyFrame& frame) {
   FirstFrameCompositionCallback callback;
-  const auto request_id = frame.slot.preview_metadata.presentation_request_id;
-  const auto image_generation = frame.slot.image_generation;
-  const auto image_identity = frame.slot.image_identity;
+  const auto                    request_id = frame.slot.preview_metadata.presentation_request_id;
+  const auto                    image_generation = frame.slot.image_generation;
+  const auto                    image_identity   = frame.slot.image_identity;
   {
     std::lock_guard lock(mutex_);
     callback = first_frame_composition_;

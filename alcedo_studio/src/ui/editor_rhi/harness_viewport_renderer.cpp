@@ -4,13 +4,14 @@
 
 #include "ui/editor_rhi/harness_viewport_renderer.hpp"
 
-#include "ui/editor_rhi/native_resource_counters.hpp"
+#include <QtGui/rhi/qrhi_platform.h>
 
 #include <QFile>
 #include <QOpenGLContext>
 #include <QOpenGLExtraFunctions>
 #include <QOpenGLFunctions>
-#include <QtGui/rhi/qrhi_platform.h>
+
+#include "ui/editor_rhi/native_resource_counters.hpp"
 
 #ifndef GL_RGBA32F
 #define GL_RGBA32F 0x8814
@@ -22,15 +23,20 @@
 #include <algorithm>
 #include <cstring>
 
+#if defined(__APPLE__) && defined(HAVE_METAL)
+#import <Metal/Metal.h>
+#endif
+
 #if defined(HAVE_OPENCL)
+#include <CL/cl_gl.h>
+
 #include "opencl/opencl_context.hpp"
 #include "opencl/opencl_runtime.hpp"
-#include <CL/cl_gl.h>
 #endif
 
 #if defined(_WIN32) && defined(HAVE_CUDA)
-#include "ui/editor_rhi/cuda_adapter_discovery.hpp"
 #include "ui/edit_viewer/d3d_cuda_interop_utils.hpp"
+#include "ui/editor_rhi/cuda_adapter_discovery.hpp"
 #endif
 
 namespace alcedo::editor_rhi {
@@ -38,7 +44,7 @@ namespace {
 
 constexpr const char* kVertexShaderResource   = ":/shaders/editor_rhi/harness_image.vert.qsb";
 constexpr const char* kFragmentShaderResource = ":/shaders/editor_rhi/harness_image.frag.qsb";
-constexpr size_t      kRgba32fPixelBytes      = sizeof(float) * 4U;
+[[maybe_unused]] constexpr size_t kRgba32fPixelBytes = sizeof(float) * 4U;
 
 struct Vertex {
   float x, y, u, v;
@@ -67,8 +73,8 @@ void DestroyRhi(T*& resource) {
 HarnessViewportRenderer::HarnessViewportRenderer() = default;
 
 HarnessViewportRenderer::~HarnessViewportRenderer() {
-  releaseSharedTarget();
   releasePipelineResources();
+  releaseSharedTarget();
 }
 
 void HarnessViewportRenderer::releasePipelineResources() {
@@ -108,6 +114,12 @@ void HarnessViewportRenderer::releaseSharedTarget() {
     }
   }
 #endif
+#if defined(__APPLE__) && defined(HAVE_METAL)
+  if (present_.metal_texture_owner) {
+    present_.metal_texture_owner.reset();
+    NativeResourceCounters::Instance().OnDestroySharedTexture();
+  }
+#endif
 #if defined(HAVE_OPENCL)
   if (present_.opencl_image) {
     clReleaseMemObject(present_.opencl_image);
@@ -134,6 +146,13 @@ void HarnessViewportRenderer::initialize(QRhiCommandBuffer* /*cb*/) {
   QRhi* r = rhi();
   if (!r) {
     return;
+  }
+  if (observed_rhi_ != r) {
+    // Native imports and their producer textures are device-specific. Destroy
+    // the QRhi wrapper first, then release the producer owner.
+    releasePipelineResources();
+    releaseSharedTarget();
+    observed_rhi_ = r;
   }
 
 #if defined(_WIN32) && defined(HAVE_CUDA)
@@ -175,8 +194,8 @@ void HarnessViewportRenderer::synchronize(QQuickRhiItem* item) {
   request_readback_ = item_->request_readback_;
 
   if (item_->invalidate_request_.exchange(false)) {
-    releaseSharedTarget();
     releasePipelineResources();
+    releaseSharedTarget();
   }
 }
 
@@ -237,9 +256,9 @@ auto HarnessViewportRenderer::ensureSharedTarget(int width, int height) -> bool 
       return false;
     }
 
-    const unsigned long long handle_size =
-        static_cast<unsigned long long>(width) * static_cast<unsigned long long>(height) *
-        static_cast<unsigned long long>(kRgba32fPixelBytes);
+    const unsigned long long handle_size = static_cast<unsigned long long>(width) *
+                                           static_cast<unsigned long long>(height) *
+                                           static_cast<unsigned long long>(kRgba32fPixelBytes);
     const cudaExternalMemoryHandleDesc handle_desc = MakeDedicatedCudaExternalMemoryHandleDesc(
         present_.shared_handle, cudaExternalMemoryHandleTypeD3D11Resource, handle_size);
     if (cudaImportExternalMemory(&present_.external_memory, &handle_desc) != cudaSuccess) {
@@ -257,9 +276,8 @@ auto HarnessViewportRenderer::ensureSharedTarget(int width, int height) -> bool 
     array_desc.extent     = cudaExtent{static_cast<size_t>(width), static_cast<size_t>(height), 0};
     array_desc.flags      = cudaArrayColorAttachment;
     array_desc.numLevels  = 1;
-    if (cudaExternalMemoryGetMappedMipmappedArray(&present_.mipmapped_array,
-                                                  present_.external_memory, &array_desc) !=
-        cudaSuccess) {
+    if (cudaExternalMemoryGetMappedMipmappedArray(
+            &present_.mipmapped_array, present_.external_memory, &array_desc) != cudaSuccess) {
       releaseSharedTarget();
       return false;
     }
@@ -336,8 +354,56 @@ auto HarnessViewportRenderer::ensureSharedTarget(int width, int height) -> bool 
 #endif
   }
 
+#if defined(__APPLE__) && defined(HAVE_METAL)
+  if (backend_ == EditorBackend::Metal) {
+    QRhi* r = rhi();
+    if (!r || r->backend() != QRhi::Metal) {
+      if (item_) {
+        item_->setLastError(QStringLiteral("Qt Quick Metal device is unavailable"));
+      }
+      return false;
+    }
+    const auto*   native = static_cast<const QRhiMetalNativeHandles*>(r->nativeHandles());
+    id<MTLDevice> device = native ? (__bridge id<MTLDevice>)native->dev : nil;
+    if (!device) {
+      if (item_) {
+        item_->setLastError(QStringLiteral("QRhi Metal device handle is unavailable"));
+      }
+      return false;
+    }
+
+    MTLTextureDescriptor* desc =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Float
+                                                           width:static_cast<NSUInteger>(width)
+                                                          height:static_cast<NSUInteger>(height)
+                                                       mipmapped:NO];
+    desc.usage             = MTLTextureUsageShaderRead;
+    desc.storageMode       = MTLStorageModeShared;
+    id<MTLTexture> texture = [device newTextureWithDescriptor:desc];
+    if (!texture) {
+      if (item_) {
+        item_->setLastError(QStringLiteral("failed to allocate shared Metal texture"));
+      }
+      return false;
+    }
+
+    // newTextureWithDescriptor returns +1 under this non-ARC translation
+    // unit. The shared owner transfers that retain and balances it with
+    // CFRelease after the QRhi wrapper is gone.
+    void* retained_texture       = (__bridge void*)texture;
+    present_.metal_texture_owner = std::shared_ptr<const void>(
+        retained_texture, [](const void* ptr) { CFRelease(const_cast<void*>(ptr)); });
+    present_.texture_handle = reinterpret_cast<std::uintptr_t>(retained_texture);
+    present_.width          = width;
+    present_.height         = height;
+    present_.lifetime_token = std::make_shared<LeaseLifetimeToken>();
+    NativeResourceCounters::Instance().OnCreateSharedTexture();
+    return true;
+  }
+#endif
+
   if (item_) {
-    item_->setLastError(QStringLiteral("Metal shared-texture path is Phase 8; not implemented"));
+    item_->setLastError(QStringLiteral("selected shared-texture backend is unavailable"));
   }
   return false;
 }
@@ -355,10 +421,10 @@ auto HarnessViewportRenderer::fillSharedTargetWithFixture() -> bool {
     if (!BindCudaDeviceOnCurrentThread(cuda_device_, "fillSharedTargetWithFixture")) {
       return false;
     }
-    const size_t row_bytes = expected_.row_bytes();
-    const cudaError_t err  = cudaMemcpy2DToArray(
-        present_.image_array, 0, 0, expected_.data(), row_bytes, row_bytes,
-        static_cast<size_t>(expected_.height), cudaMemcpyHostToDevice);
+    const size_t      row_bytes = expected_.row_bytes();
+    const cudaError_t err =
+        cudaMemcpy2DToArray(present_.image_array, 0, 0, expected_.data(), row_bytes, row_bytes,
+                            static_cast<size_t>(expected_.height), cudaMemcpyHostToDevice);
     if (err != cudaSuccess) {
       if (item_) {
         item_->setLastError(
@@ -379,12 +445,10 @@ auto HarnessViewportRenderer::fillSharedTargetWithFixture() -> bool {
       return false;
     }
     cl_command_queue queue = OpenClContext::Instance().Queue();
-    cl_int           error = clEnqueueAcquireGLObjects(queue, 1, &present_.opencl_image, 0,
-                                                       nullptr, nullptr);
+    cl_int error = clEnqueueAcquireGLObjects(queue, 1, &present_.opencl_image, 0, nullptr, nullptr);
     if (error != CL_SUCCESS) {
       if (item_) {
-        item_->setLastError(
-            QStringLiteral("clEnqueueAcquireGLObjects failed: %1").arg(error));
+        item_->setLastError(QStringLiteral("clEnqueueAcquireGLObjects failed: %1").arg(error));
       }
       return false;
     }
@@ -403,8 +467,7 @@ auto HarnessViewportRenderer::fillSharedTargetWithFixture() -> bool {
     error = clEnqueueReleaseGLObjects(queue, 1, &present_.opencl_image, 0, nullptr, nullptr);
     if (error != CL_SUCCESS) {
       if (item_) {
-        item_->setLastError(
-            QStringLiteral("clEnqueueReleaseGLObjects failed: %1").arg(error));
+        item_->setLastError(QStringLiteral("clEnqueueReleaseGLObjects failed: %1").arg(error));
       }
       return false;
     }
@@ -417,6 +480,24 @@ auto HarnessViewportRenderer::fillSharedTargetWithFixture() -> bool {
     return false;
 #endif
   }
+#if defined(__APPLE__) && defined(HAVE_METAL)
+  if (backend_ == EditorBackend::Metal) {
+    id<MTLTexture> texture =
+        present_.metal_texture_owner
+            ? (__bridge id<MTLTexture>)const_cast<void*>(present_.metal_texture_owner.get())
+            : nil;
+    if (!texture) {
+      return false;
+    }
+    const MTLRegion region = MTLRegionMake2D(0, 0, static_cast<NSUInteger>(expected_.width),
+                                             static_cast<NSUInteger>(expected_.height));
+    [texture replaceRegion:region
+               mipmapLevel:0
+                 withBytes:expected_.data()
+               bytesPerRow:expected_.row_bytes()];
+    return true;
+  }
+#endif
   return false;
 }
 
@@ -426,7 +507,8 @@ auto HarnessViewportRenderer::ensureImportedTexture() -> bool {
     return false;
   }
 
-  if (imported_texture_ && imported_texture_->pixelSize() == QSize(present_.width, present_.height)) {
+  if (imported_texture_ &&
+      imported_texture_->pixelSize() == QSize(present_.width, present_.height)) {
     // recreate if handle changed
   }
 
@@ -438,8 +520,7 @@ auto HarnessViewportRenderer::ensureImportedTexture() -> bool {
 
   imported_texture_ =
       r->newTexture(QRhiTexture::RGBA32F, QSize(present_.width, present_.height), 1);
-  if (!imported_texture_->createFrom(
-          {static_cast<quint64>(present_.texture_handle), 0})) {
+  if (!imported_texture_->createFrom({static_cast<quint64>(present_.texture_handle), 0})) {
     if (item_) {
       item_->setLastError(QStringLiteral("QRhiTexture::createFrom failed for native handle"));
     }
@@ -486,9 +567,8 @@ auto HarnessViewportRenderer::ensureDrawPipeline(QRhiRenderTarget* rt) -> bool {
 
   if (!srb_) {
     srb_ = r->newShaderResourceBindings();
-    srb_->setBindings(
-        {QRhiShaderResourceBinding::sampledTexture(0, QRhiShaderResourceBinding::FragmentStage,
-                                                   imported_texture_, sampler_)});
+    srb_->setBindings({QRhiShaderResourceBinding::sampledTexture(
+        0, QRhiShaderResourceBinding::FragmentStage, imported_texture_, sampler_)});
     if (!srb_->create()) {
       DestroyRhi(srb_);
       return false;
@@ -530,7 +610,7 @@ void HarnessViewportRenderer::requestReadbackIfNeeded(QRhiCommandBuffer* cb) {
 
   QRhiReadbackDescription desc(color);
   QRhiReadbackResult*     result = new QRhiReadbackResult;
-  result->completed = [this, result]() {
+  result->completed              = [this, result]() {
     if (!item_ || result->data.isEmpty()) {
       delete result;
       return;
@@ -542,8 +622,7 @@ void HarnessViewportRenderer::requestReadbackIfNeeded(QRhiCommandBuffer* cb) {
         static_cast<std::size_t>(image.width) * static_cast<std::size_t>(image.height);
     image.pixels.resize(pixel_count);
     const auto expected_bytes = pixel_count * sizeof(Rgba32fPixel);
-    const auto copy_bytes =
-        std::min(expected_bytes, static_cast<std::size_t>(result->data.size()));
+    const auto copy_bytes = std::min(expected_bytes, static_cast<std::size_t>(result->data.size()));
     std::memcpy(image.data(), result->data.constData(), copy_bytes);
     item_->publishReadback(std::move(image));
     readback_done_ = true;
@@ -564,10 +643,8 @@ void HarnessViewportRenderer::render(QRhiCommandBuffer* cb) {
   }
 
   const QSize pixel_size = rt->pixelSize();
-  const int   width =
-      expected_.width > 0 ? expected_.width : std::max(1, pixel_size.width());
-  const int height =
-      expected_.height > 0 ? expected_.height : std::max(1, pixel_size.height());
+  const int   width      = expected_.width > 0 ? expected_.width : std::max(1, pixel_size.width());
+  const int   height = expected_.height > 0 ? expected_.height : std::max(1, pixel_size.height());
 
   if (!ensureSharedTarget(width, height)) {
     item_->setPresentationOk(false);
@@ -595,19 +672,16 @@ void HarnessViewportRenderer::render(QRhiCommandBuffer* cb) {
   completed_lease_.target.native_handle = present_.texture_handle;
   completed_lease_.target.writable_resource =
 #if defined(_WIN32) && defined(HAVE_CUDA)
-      backend_ == EditorBackend::Cuda
-          ? reinterpret_cast<std::uintptr_t>(present_.image_array)
-          :
+      backend_ == EditorBackend::Cuda ? reinterpret_cast<std::uintptr_t>(present_.image_array) :
 #endif
 #if defined(HAVE_OPENCL)
-      backend_ == EditorBackend::OpenCl
-          ? reinterpret_cast<std::uintptr_t>(present_.opencl_image)
-          :
+      backend_ == EditorBackend::OpenCl ? reinterpret_cast<std::uintptr_t>(present_.opencl_image)
+                                        :
 #endif
-          present_.texture_handle;
+                                        present_.texture_handle;
   completed_lease_.target.lifetime_token = present_.lifetime_token;
-  completed_lease_.generation           = completed_lease_.target.generation;
-  completed_lease_.producer_complete    = true;
+  completed_lease_.generation            = completed_lease_.target.generation;
+  completed_lease_.producer_complete     = true;
 
   if (!ensureImportedTexture() || !ensureDrawPipeline(rt)) {
     item_->setPresentationOk(false);
@@ -620,9 +694,9 @@ void HarnessViewportRenderer::render(QRhiCommandBuffer* cb) {
   // UV: OpenGL import is bottom-up in RHI sampling space for GL textures; D3D11
   // is top-down. Flip V for OpenCL/OpenGL so pre-composition readback matches
   // the host fixture row order used by MaxAbsPixelError.
-  const bool flip_v = (backend_ == EditorBackend::OpenCl);
-  const float v0    = flip_v ? 0.0f : 1.0f;
-  const float v1    = flip_v ? 1.0f : 0.0f;
+  const bool   flip_v   = (backend_ == EditorBackend::OpenCl);
+  const float  v0       = flip_v ? 0.0f : 1.0f;
+  const float  v1       = flip_v ? 1.0f : 0.0f;
   const Vertex kVerts[] = {
       {-1.0f, -1.0f, 0.0f, v0},
       {1.0f, -1.0f, 1.0f, v0},
@@ -646,10 +720,10 @@ void HarnessViewportRenderer::render(QRhiCommandBuffer* cb) {
 
   // Dual-sided release bookkeeping: producer already complete; renderer complete after draw.
   LeaseReleaseState release;
-  release.target_generation  = completed_lease_.generation.target_generation;
-  release.producer_complete  = true;
-  release.renderer_complete  = true;
-  release.lifetime_token     = present_.lifetime_token;
+  release.target_generation = completed_lease_.generation.target_generation;
+  release.producer_complete = true;
+  release.renderer_complete = true;
+  release.lifetime_token    = present_.lifetime_token;
   (void)release.can_destroy();  // target remains for subsequent frames until teardown
 
   item_->setPresentationOk(true);

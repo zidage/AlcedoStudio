@@ -49,7 +49,7 @@ struct EditorStartupResult {
 // QQuickGraphicsDevice::fromAdapter on the first QQuickWindow.
 // On OpenCL: bootstraps a shareable OpenGL context topology and initializes OpenCL
 // with GL sharing when available.
-// On Metal: selects Metal API (macOS only); full feasibility is Phase 8.
+// On Metal: selects the Phase 9-qualified Metal API and shared-texture path.
 [[nodiscard]] auto ApplyEditorBackendBeforeWindow(EditorBackend backend) -> EditorStartupResult;
 
 // Apply QQuickWindow::setGraphicsApi and optional QQuickGraphicsDevice adapter binding.
