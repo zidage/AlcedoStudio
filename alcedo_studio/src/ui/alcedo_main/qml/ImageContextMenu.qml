@@ -3,6 +3,7 @@ import QtQuick.Controls
 
 Menu {
     id: root
+    objectName: "imageContextMenu"
     property var actions: []
     property int currentRating: 0
     property bool ratingEnabled: false
@@ -64,6 +65,9 @@ Menu {
         model: root.actions
         delegate: MenuItem {
             readonly property var actionData: modelData
+            objectName: actionData && actionData.id
+                        ? "imageContextAction_" + String(actionData.id)
+                        : ""
             text: actionData && actionData.label ? actionData.label : ""
             enabled: !(actionData && actionData.enabled === false)
             onTriggered: root.actionRequested(actionData && actionData.id ? actionData.id : "")

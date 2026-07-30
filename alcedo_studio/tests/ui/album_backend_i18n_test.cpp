@@ -11,26 +11,26 @@
 namespace alcedo::ui::test {
 namespace {
 
-using AlbumBackendI18nTests = AlbumBackendTestFixture;
+using ApplicationModuleHostI18nTests = ApplicationModuleHostTestFixture;
 
-TEST_F(AlbumBackendI18nTests, InitialLocalizedStrings_AreAvailable) {
-  AlbumBackend backend;
+TEST_F(ApplicationModuleHostI18nTests, InitialLocalizedStrings_AreAvailable) {
+  ApplicationModuleHost backend;
 
-  EXPECT_FALSE(backend.ServiceMessage().isEmpty());
-  EXPECT_FALSE(backend.TaskStatus().isEmpty());
-  EXPECT_FALSE(backend.ExportStatus().isEmpty());
-  EXPECT_FALSE(backend.EditorStatus().isEmpty());
+  EXPECT_FALSE(backend.project()->ServiceMessage().isEmpty());
+  EXPECT_FALSE(backend.project()->TaskStatus().isEmpty());
+  EXPECT_FALSE(backend.import_export()->ExportStatus().isEmpty());
+  EXPECT_FALSE(backend.editor()->EditorStatus().isEmpty());
 }
 
-TEST_F(AlbumBackendI18nTests, TranslationNotifier_RefreshesObservableStateSignals) {
-  AlbumBackend backend;
+TEST_F(ApplicationModuleHostI18nTests, TranslationNotifier_RefreshesObservableStateSignals) {
+  ApplicationModuleHost backend;
 
-  QSignalSpy service_spy(&backend, &AlbumBackend::ServiceStateChanged);
-  QSignalSpy task_spy(&backend, &AlbumBackend::TaskStateChanged);
-  QSignalSpy import_spy(&backend, &AlbumBackend::ImportStateChanged);
-  QSignalSpy export_spy(&backend, &AlbumBackend::ExportStateChanged);
-  QSignalSpy editor_spy(&backend, &AlbumBackend::EditorStateChanged);
-  QSignalSpy project_spy(&backend, &AlbumBackend::ProjectLoadStateChanged);
+  QSignalSpy service_spy(backend.project(), &ProjectModule::ServiceStateChanged);
+  QSignalSpy task_spy(backend.project(), &ProjectModule::TaskStateChanged);
+  QSignalSpy import_spy(backend.import_export(), &ImportExportHandler::ImportStateChanged);
+  QSignalSpy export_spy(backend.import_export(), &ImportExportHandler::ExportStateChanged);
+  QSignalSpy editor_spy(backend.editor(), &EditorController::EditorStateChanged);
+  QSignalSpy project_spy(backend.project(), &ProjectModule::ProjectLoadStateChanged);
 
   i18n::TranslationNotifier::Instance().NotifyLanguageChanged();
   ProcessEvents(100);

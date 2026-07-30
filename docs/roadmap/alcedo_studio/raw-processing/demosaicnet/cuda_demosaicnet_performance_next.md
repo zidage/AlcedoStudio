@@ -63,7 +63,7 @@ before another convolution-algorithm rewrite.
 
 ## 3. Non-negotiable constraints
 
-- FP32 math and current CC 6.0+ CUDA compatibility remain the product contract.
+- FP32 math and current CC 6.0+ CUDA compatibility remain product requirements.
 - Product output, CFA phase, valid-convolution geometry, first-writer overlap,
   HLR behavior, and exported student goldens must remain unchanged.
 - One product stream and one product workspace remain the default.
@@ -338,7 +338,7 @@ Larger tiles reduce job count, repeated border work, CPU launch traffic, and
 pack/unpack/ROI overhead. They are tested only after P1 makes their workspace
 cost practical.
 
-### 6.1 Geometry contract
+### 6.1 Geometry invariants
 
 Generalize the student tile policy without changing the model topology:
 
@@ -550,7 +550,7 @@ Implementation landed (correctness-complete; product default off):
 - Fallback: null stream, profiler active, capture/runtime failure, or
   `ALCEDO_DEMOASICNET_DISABLE_CUDA_GRAPH`
 - `NeuralDemosaicOptions::enable_cuda_graph` **default false** after retention fail
-- Tests force `enable_cuda_graph = true` for P3 contracts
+- Tests force `enable_cuda_graph = true` for P3 requirements
 
 Commands:
 
@@ -639,7 +639,7 @@ not receive a separate cold-state rescue result.
 
 Common constraints for P4-A through P4-D:
 
-- retain the in-tree hard-coded model and FP32 numerical contract;
+- retain the in-tree hard-coded model and FP32 numerical behavior;
 - no cuDNN, TensorRT, ONNX Runtime, TF32, FP16, BF16, WMMA, or Tensor Core path;
 - no per-forward weight transform, `cudaMalloc`, or workspace growth after warm-up;
 - retain Bayer and X-Trans correctness, CFA phase, owned-ROI, crop, and orientation;
@@ -1224,7 +1224,7 @@ Artifacts:
 
 ### 8.5 Required P4 correctness coverage
 
-After P5, correctness must cover only shipping contracts, not deleted
+After P5, correctness must cover only shipping behavior, not deleted
 c
 
 - Bayer and X-Trans persistent-NHWC forwards match their exported FP32 goldens;
@@ -1313,7 +1313,7 @@ unqualified product name is encouraged after old overloads are removed):
   `DemosaicNetResidual1x1Nhwc`, and
   `DemosaicNetUnpackCropConcatNhwc`;
 - `FusedPostOutputNhwcToHwc`;
-- `PackReflectPaddedCfaTile`, the fixed student `BuildTileJobs` contract,
+- `PackReflectPaddedCfaTile`, the fixed student `BuildTileJobs` behavior,
   `WorkspacePool`, lazy model cache, profiler ranges, async enqueue APIs, and
   synchronous convenience wrappers.
 

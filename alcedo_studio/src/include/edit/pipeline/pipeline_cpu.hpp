@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -166,5 +167,11 @@ class CPUPipelineExecutor : public PipelineExecutor {
   void ReleaseAllGPUResources();
 
   [[nodiscard]] auto DebugGetMergedStageScratchBytes() const -> size_t;
+
+  /// Stable identity of the merged GPU stage. Changes only when the stage is
+  /// (re)created — which also recreates the LLF highlight/shadow reference
+  /// cache. Used by tests to assert re-attaching a frame sink does not wipe
+  /// the cross-frame LLF mask cache (the 42ed19b CanReuseReferenceForRoi path).
+  [[nodiscard]] auto DebugGetMergedStageIdentity() const -> std::uintptr_t;
 };
 };  // namespace alcedo

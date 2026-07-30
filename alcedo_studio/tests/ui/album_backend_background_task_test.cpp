@@ -14,7 +14,7 @@
 namespace alcedo::ui::test {
 namespace {
 
-using AlbumBackendBackgroundTaskTests = AlbumBackendTestFixture;
+using ApplicationModuleHostBackgroundTaskTests = ApplicationModuleHostTestFixture;
 
 auto MakeSnapshot(BackgroundTaskKind kind = BackgroundTaskKind::ImageAnalysis)
     -> BackgroundTaskSnapshot {
@@ -27,7 +27,7 @@ auto MakeSnapshot(BackgroundTaskKind kind = BackgroundTaskKind::ImageAnalysis)
   return s;
 }
 
-TEST_F(AlbumBackendBackgroundTaskTests, RegisterTask_PopulatesReads) {
+TEST_F(ApplicationModuleHostBackgroundTaskTests, RegisterTask_PopulatesReads) {
   BackgroundTaskController controller;
   QSignalSpy              spy(&controller, &BackgroundTaskController::TasksChanged);
 
@@ -48,7 +48,7 @@ TEST_F(AlbumBackendBackgroundTaskTests, RegisterTask_PopulatesReads) {
   EXPECT_GE(spy.count(), 1);
 }
 
-TEST_F(AlbumBackendBackgroundTaskTests, UpdateTask_ReflectsProgress) {
+TEST_F(ApplicationModuleHostBackgroundTaskTests, UpdateTask_ReflectsProgress) {
   BackgroundTaskController controller;
   const QString            id = controller.RegisterTask(MakeSnapshot());
   QSignalSpy               spy(&controller, &BackgroundTaskController::TasksChanged);
@@ -61,7 +61,7 @@ TEST_F(AlbumBackendBackgroundTaskTests, UpdateTask_ReflectsProgress) {
   EXPECT_EQ(task.value("progressPercent").toInt(), 42);
 }
 
-TEST_F(AlbumBackendBackgroundTaskTests, UpdateTask_OnUnknownIdIsNoOp) {
+TEST_F(ApplicationModuleHostBackgroundTaskTests, UpdateTask_OnUnknownIdIsNoOp) {
   BackgroundTaskController controller;
   controller.RegisterTask(MakeSnapshot());
   QSignalSpy spy(&controller, &BackgroundTaskController::TasksChanged);
@@ -69,7 +69,7 @@ TEST_F(AlbumBackendBackgroundTaskTests, UpdateTask_OnUnknownIdIsNoOp) {
   EXPECT_EQ(spy.count(), 0);
 }
 
-TEST_F(AlbumBackendBackgroundTaskTests, FinishTask_SetsTerminalState) {
+TEST_F(ApplicationModuleHostBackgroundTaskTests, FinishTask_SetsTerminalState) {
   BackgroundTaskController controller;
   const QString            id = controller.RegisterTask(MakeSnapshot());
   controller.FinishTask(id, BackgroundTaskState::Succeeded, QStringLiteral("done"));
@@ -80,7 +80,7 @@ TEST_F(AlbumBackendBackgroundTaskTests, FinishTask_SetsTerminalState) {
   EXPECT_EQ(task.value("detail").toString(), QStringLiteral("done"));
 }
 
-TEST_F(AlbumBackendBackgroundTaskTests, FinishTask_FailedAndCanceledStates) {
+TEST_F(ApplicationModuleHostBackgroundTaskTests, FinishTask_FailedAndCanceledStates) {
   BackgroundTaskController controller;
   const QString            a = controller.RegisterTask(MakeSnapshot());
   controller.FinishTask(a, BackgroundTaskState::Failed);
@@ -93,7 +93,7 @@ TEST_F(AlbumBackendBackgroundTaskTests, FinishTask_FailedAndCanceledStates) {
             QStringLiteral("canceled"));
 }
 
-TEST_F(AlbumBackendBackgroundTaskTests, CancelTask_InvokesCallbackExactlyOnce) {
+TEST_F(ApplicationModuleHostBackgroundTaskTests, CancelTask_InvokesCallbackExactlyOnce) {
   BackgroundTaskController controller;
   int                       cancel_count = 0;
   const QString             id = controller.RegisterTask(MakeSnapshot(), [&] { ++cancel_count; });
@@ -105,7 +105,7 @@ TEST_F(AlbumBackendBackgroundTaskTests, CancelTask_InvokesCallbackExactlyOnce) {
   EXPECT_EQ(cancel_count, 1);
 }
 
-TEST_F(AlbumBackendBackgroundTaskTests, CancelTask_OnFinishedTaskIsNoOp) {
+TEST_F(ApplicationModuleHostBackgroundTaskTests, CancelTask_OnFinishedTaskIsNoOp) {
   BackgroundTaskController controller;
   int                       cancel_count = 0;
   const QString             id = controller.RegisterTask(MakeSnapshot(), [&] { ++cancel_count; });
@@ -114,7 +114,7 @@ TEST_F(AlbumBackendBackgroundTaskTests, CancelTask_OnFinishedTaskIsNoOp) {
   EXPECT_EQ(cancel_count, 0);
 }
 
-TEST_F(AlbumBackendBackgroundTaskTests, CancelTask_OnNonCancelableTaskIsNoOp) {
+TEST_F(ApplicationModuleHostBackgroundTaskTests, CancelTask_OnNonCancelableTaskIsNoOp) {
   BackgroundTaskController controller;
   int                       cancel_count = 0;
   auto                      s = MakeSnapshot();
@@ -124,7 +124,7 @@ TEST_F(AlbumBackendBackgroundTaskTests, CancelTask_OnNonCancelableTaskIsNoOp) {
   EXPECT_EQ(cancel_count, 0);
 }
 
-TEST_F(AlbumBackendBackgroundTaskTests, CancelAll_InvokesEveryActiveCancelableOnce) {
+TEST_F(ApplicationModuleHostBackgroundTaskTests, CancelAll_InvokesEveryActiveCancelableOnce) {
   BackgroundTaskController controller;
   int                       a = 0, b = 0;
   controller.RegisterTask(MakeSnapshot(), [&] { ++a; });
@@ -142,7 +142,7 @@ TEST_F(AlbumBackendBackgroundTaskTests, CancelAll_InvokesEveryActiveCancelableOn
   EXPECT_EQ(a, 1);
 }
 
-TEST_F(AlbumBackendBackgroundTaskTests, HasBlockingShutdownTasks_OnlyForActiveCancelAndWait) {
+TEST_F(ApplicationModuleHostBackgroundTaskTests, HasBlockingShutdownTasks_OnlyForActiveCancelAndWait) {
   BackgroundTaskController controller;
   EXPECT_FALSE(controller.HasBlockingShutdownTasks());
 
@@ -159,7 +159,7 @@ TEST_F(AlbumBackendBackgroundTaskTests, HasBlockingShutdownTasks_OnlyForActiveCa
   EXPECT_TRUE(controller.HasBlockingShutdownTasks());
 }
 
-TEST_F(AlbumBackendBackgroundTaskTests, PrimaryTask_PrefersActiveThenLastFinished) {
+TEST_F(ApplicationModuleHostBackgroundTaskTests, PrimaryTask_PrefersActiveThenLastFinished) {
   BackgroundTaskController controller;
   const QString            finished = controller.RegisterTask(MakeSnapshot());
   controller.FinishTask(finished, BackgroundTaskState::Succeeded);
@@ -171,7 +171,7 @@ TEST_F(AlbumBackendBackgroundTaskTests, PrimaryTask_PrefersActiveThenLastFinishe
   EXPECT_EQ(controller.PrimaryTask().value("id").toString(), active);
 }
 
-TEST_F(AlbumBackendBackgroundTaskTests, PruneFinished_KeepsAtMostCap) {
+TEST_F(ApplicationModuleHostBackgroundTaskTests, PruneFinished_KeepsAtMostCap) {
   BackgroundTaskController controller;
   // Register and finish more than the retention cap (8) tasks one at a time;
   // the oldest finished tasks are pruned so the recent list stays bounded.
@@ -183,7 +183,7 @@ TEST_F(AlbumBackendBackgroundTaskTests, PruneFinished_KeepsAtMostCap) {
   EXPECT_EQ(controller.RunningCount(), 0);
 }
 
-TEST_F(AlbumBackendBackgroundTaskTests, EmptyController_HasNoPrimary) {
+TEST_F(ApplicationModuleHostBackgroundTaskTests, EmptyController_HasNoPrimary) {
   BackgroundTaskController controller;
   EXPECT_EQ(controller.RunningCount(), 0);
   EXPECT_TRUE(controller.PrimaryTask().isEmpty());

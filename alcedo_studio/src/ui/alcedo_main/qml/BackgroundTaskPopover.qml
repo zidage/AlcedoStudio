@@ -8,7 +8,7 @@ import QtQuick.Controls.Material
 import QtQuick.Layouts
 
 // Popover listing all active + recent background tasks from
-// `albumBackend.backgroundTaskController`. Opened by `BackgroundTaskBar`.
+// `appModules.backgroundTasks`. Opened by `BackgroundTaskBar`.
 // Each row shows a status dot, title, detail, a progress bar, and a Cancel
 // button when the task is still cancelable. Non-modal; closes on
 // Escape/outside-click.
@@ -139,7 +139,7 @@ Popup {
                     }
 
                     Button {
-                        visible: modelData.cancelable
+                        visible: modelData.cancelable === true
                                 && (modelData.state === "running" || modelData.state === "queued")
                         text: qsTr("Cancel")
                         flat: true
@@ -178,8 +178,8 @@ Popup {
         if (kind === "semanticGeneration") return qsTr("Semantic Labels")
         if (kind === "modelActivation") return qsTr("Model Activation")
         if (kind === "modelDownload") return qsTr("Model Download")
+        if (kind === "editorSave") return qsTr("Editor Save")
         if (kind === "import") return qsTr("Import")
-        if (kind === "export") return qsTr("Export")
         return ""
     }
 }

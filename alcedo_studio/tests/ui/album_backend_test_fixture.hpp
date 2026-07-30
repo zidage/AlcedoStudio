@@ -3,7 +3,7 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 /// @file album_backend_test_fixture.hpp
-/// @brief Shared test fixture for AlbumBackend UI unit tests.
+/// @brief Shared test fixture for ApplicationModuleHost UI unit tests.
 ///
 /// Provides temp project creation, Qt event-loop helpers, and image collection
 /// utilities.  Designed for GoogleTest + QSignalSpy; a custom main() must
@@ -29,7 +29,14 @@
 
 #include "edit/operators/operator_registeration.hpp"
 #include "type/supported_file_type.hpp"
-#include "ui/alcedo_main/album_backend/album_backend.hpp"
+#include "ui/alcedo_main/album_backend/application_module_host.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
+#include "ui/alcedo_main/album_backend/folder_controller.hpp"
+#include "ui/alcedo_main/album_backend/image_controller.hpp"
+#include "ui/alcedo_main/album_backend/stats_engine.hpp"
+#include "ui/alcedo_main/album_backend/import_export.hpp"
+#include "ui/alcedo_main/album_backend/editor_controller.hpp"
 #include "utils/clock/time_provider.hpp"
 #include "utils/profiler/profiler.hpp"
 
@@ -107,7 +114,7 @@ inline auto HasRawTestImages(const std::string& subdir) -> bool {
   return !CollectRawTestImages(subdir, 1).empty();
 }
 
-/// Convert a filesystem path to a QString suitable for AlbumBackend methods.
+/// Convert a filesystem path to a QString suitable for ApplicationModuleHost methods.
 inline auto PathToQString(const std::filesystem::path& p) -> QString {
 #ifdef _WIN32
   return QString::fromStdWString(p.wstring());
@@ -131,11 +138,11 @@ inline auto PathsToQStringList(const std::vector<std::filesystem::path>& paths)
 // Fixture
 // ---------------------------------------------------------------------------
 
-/// Base fixture for all AlbumBackend tests.
+/// Base fixture for all ApplicationModuleHost tests.
 ///
 /// Creates an isolated temp directory per test, initialises global singletons
 /// (operator registry, Exiv2, clock), and cleans up on tear-down.
-class AlbumBackendTestFixture : public ::testing::Test {
+class ApplicationModuleHostTestFixture : public ::testing::Test {
  protected:
   std::filesystem::path temp_dir_;   ///< Per-test temp directory.
   std::filesystem::path db_path_;    ///< Temp DB file path.
@@ -173,11 +180,11 @@ class AlbumBackendTestFixture : public ::testing::Test {
 
   /// Create a new packed project inside the temp directory, wait for
   /// ProjectChanged, and return true if the backend became serviceReady.
-  bool CreateTestProject(AlbumBackend& backend,
+  bool CreateTestProject(ApplicationModuleHost& backend,
                          const QString& name = "ui_test_project") {
-    QSignalSpy spy(&backend, &AlbumBackend::ProjectChanged);
+    QSignalSpy spy(backend.project(), &ProjectModule::ProjectChanged);
     const bool ok =
-        backend.CreateProjectInFolderNamed(PathToQString(temp_dir_), name);
+        backend.project()->CreateProjectInFolderNamed(PathToQString(temp_dir_), name);
     if (!ok) return false;
 
     // The project loading is async — wait for LoadProject + pipeline init
@@ -185,7 +192,7 @@ class AlbumBackendTestFixture : public ::testing::Test {
     WaitForSignal(spy, 15000);
     // Process remaining queued events (stats rebuild, etc.)
     ProcessEvents(500);
-    return backend.ServiceReady();
+    return backend.project()->ServiceReady();
   }
 };
 

@@ -83,6 +83,16 @@ class CompositeScopeAnalyzer final : public IScopeAnalyzer {
       }
     }
   }
+  auto StageFrame(const FinalDisplayFrameView& frame, const ScopeRequest& request)
+      -> FinalDisplayFrameView override {
+    FinalDisplayFrameView staged = frame;
+    for (const auto& analyzer : analyzers_) {
+      if (analyzer) {
+        staged = analyzer->StageFrame(staged, request);
+      }
+    }
+    return staged;
+  }
 
  private:
   std::vector<std::shared_ptr<IScopeAnalyzer>> analyzers_;
@@ -178,9 +188,11 @@ auto NormalizeWaveformToUnitRange(const std::vector<float>& rgba, int width, int
     return data;
   }
 
-  float max_value = 0.0f;
-  for (float value : rgba) {
-    max_value = std::max(max_value, value);
+  float        max_value   = 0.0f;
+  const size_t pixel_count = static_cast<size_t>(width) * static_cast<size_t>(height);
+  for (size_t pixel = 0; pixel < pixel_count; ++pixel) {
+    const size_t index = pixel * 4U;
+    max_value          = std::max({max_value, rgba[index], rgba[index + 1U], rgba[index + 2U]});
   }
   if (max_value <= std::numeric_limits<float>::epsilon()) {
     max_value = 1.0f;
@@ -250,7 +262,10 @@ auto CreateDefaultScopeAnalyzer() -> std::shared_ptr<IScopeAnalyzer> {
 
 auto ReadScopeRenderSnapshot(const ScopeOutputSet& output) -> ScopeRenderSnapshot {
   ScopeRenderSnapshot snapshot;
-  snapshot.generation = output.generation;
+  snapshot.generation         = output.generation;
+  snapshot.image_identity     = output.image_identity;
+  snapshot.image_generation   = output.image_generation;
+  snapshot.display_generation = output.display_generation;
 
 #ifdef HAVE_CUDA
   if (output.histogram_valid && output.histogram_buffer &&

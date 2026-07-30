@@ -1,0 +1,211 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+#pragma once
+
+#include <cstdint>
+#include <optional>
+#include <string>
+
+#include "app/editor_adjustment_types.hpp"
+#include "app/editor_render_intent.hpp"
+#include "type/type.hpp"
+
+namespace alcedo {
+
+/// Explicit editor-session lifecycle states (Phase 5A).
+/// UI shell observes these; it never drives pipeline scheduling directly.
+///
+/// `RetainedImageFailure` is a non-fatal failure state introduced by Phase 7A
+/// repair: a save or Version-checkpoint failed, but the prior image identity,
+/// guards, and last presented frame are still valid. `hasImage` stays true so
+/// the viewport keeps showing the retained frame instead of the empty-editor
+/// placeholder. Recovery actions (Retry Save, Discard and Continue, Cancel)
+/// resolve back to Interactive, Saving, or the pending target.
+enum class EditorSessionState : std::uint8_t {
+  NoImage = 0,
+  Acquiring,
+  Loading,
+  Interactive,
+  Saving,
+  Switching,
+  RetainedImageFailure,
+  Failed,
+  ShuttingDown,
+};
+
+/// Typed session intents submitted by the QML facade or internal recovery paths.
+enum class EditorSessionIntentKind : std::uint8_t {
+  Open = 0,
+  Switch,
+  Close,
+  Patch,
+  CommitAdjustment,
+  Undo,
+  Redo,
+  Discard,
+  // Phase 5D: pure viewport/geometry view change (zoom, pan, resize, crop/
+  // rotation, ROI). Carries the render reason in EditorSessionIntent::view_reason;
+  // the coordinator decides reuse vs. InteractivePrimary vs. DetailPatch.
+  ViewChange,
+  Shutdown,
+};
+
+/// Outcomes published by EditorSessionService for UI and tests.
+enum class EditorSessionResultKind : std::uint8_t {
+  Accepted = 0,
+  StateChanged,
+  ImageReady,
+  RenderRouted,
+  SaveStarted,
+  SaveFinished,
+  Failed,
+  Rejected,
+};
+
+/// Public session identity carries durable domain ids only. Worker correlation
+/// uses scoped request ids (`ImageLoadRequestId`, `EditorRenderRequestId`, …);
+/// session/render/view generation counters are not part of this model.
+struct EditorSessionIdentity {
+  sl_element_id_t element_id = 0;
+  image_id_t      image_id   = 0;
+};
+
+struct EditorSessionIntent {
+  EditorSessionIntentKind             kind       = EditorSessionIntentKind::Open;
+  sl_element_id_t                     element_id = 0;
+  image_id_t                          image_id   = 0;
+  /// Full adjustment patch for Patch / CommitAdjustment (field + params).
+  EditorAdjustmentPatch               patch{};
+  /// Optional full snapshot when the producer already has one.
+  EditorRenderAdjustmentSnapshot      adjustment{};
+  /// ViewChange reason (zoom/pan/resize/crop-rotation/ROI). Ignored for other
+  /// intent kinds. Phase 5D.
+  EditorRenderReason                  view_reason = EditorRenderReason::ZoomPan;
+  /// ViewChange requested region (the visible viewport ROI). Attached to the
+  /// render intent for DetailRefresh so the request carries its requested
+  /// region (Phase 5D D5). Nullopt for full-frame view changes.
+  std::optional<ViewportRenderRegion> view_region{std::nullopt};
+  /// Optional human-readable failure/context payload for tests and diagnostics.
+  std::string                         note{};
+  /// Close persists by default. False means discard the current unflushed edit.
+  bool                                persist_changes = true;
+
+  /// Convenience: field key only (maps into patch.field_key).
+  [[nodiscard]] auto patch_key() const -> const std::string& { return patch.field_key; }
+};
+
+struct EditorSessionResult {
+  EditorSessionResultKind kind  = EditorSessionResultKind::Accepted;
+  EditorSessionState      state = EditorSessionState::NoImage;
+  EditorSessionIdentity   identity{};
+  /// Command that caused this result. Zero is reserved for uncorrelated
+  /// diagnostics and legacy callers.
+  std::uint64_t           operation_id      = 0;
+  std::uint64_t           render_request_id = 0;
+  /// Background task id for SaveStarted / SaveFinished pairing.
+  std::uint64_t           task_id           = 0;
+  std::string             message;
+};
+
+/// Stage of a user-initiated history / Version operation as it crosses the
+/// async save-checkpoint boundary. Non-terminal stages may repeat; exactly one
+/// terminal event is published per allocated `operation_id`.
+enum class HistoryOperationStage : std::uint8_t {
+  Requested = 0,
+  Saving,
+  Completed,
+};
+
+/// Correlated operation event published at the session/QML boundary.
+///
+/// One user action allocates one `operation_id`. Zero or more non-terminal
+/// events may follow (typically `Saving` / `SaveStarted`). Exactly one terminal
+/// event is published for success, rejection, failure, cancellation, retry, or
+/// discard. Stale completions are ignored by matching `operation_id` with the
+/// checkpoint `task_id` when both are known.
+struct HistoryOperationEvent {
+  std::uint64_t           operation_id = 0;
+  /// Stable action key shared with QML (`createRootVersion`, `branchFromCommit`,
+  /// `checkoutVersion`, `renameVersion`, `removeVersion`, `undo`, `redo`,
+  /// `moveHeadToCommit`, `retrySave`, `discardAndContinue`,
+  /// `cancelPendingNavigation`).
+  std::string             action;
+  HistoryOperationStage   stage              = HistoryOperationStage::Requested;
+  bool                    terminal           = false;
+  EditorSessionResultKind result_kind        = EditorSessionResultKind::Accepted;
+  EditorSessionState      state              = EditorSessionState::NoImage;
+  sl_element_id_t         element_id         = 0;
+  image_id_t              image_id           = 0;
+  std::uint64_t           checkpoint_task_id = 0;
+  std::uint64_t           render_request_id  = 0;
+  /// Selected Version / commit hex identity when the action carries one.
+  std::string             selected_id;
+  std::string             message;
+};
+
+/// True when a session result kind ends a history/Version operation for UI.
+[[nodiscard]] inline auto EditorSessionResultIsTerminal(EditorSessionResultKind kind) -> bool {
+  switch (kind) {
+    case EditorSessionResultKind::SaveStarted:
+      return false;
+    case EditorSessionResultKind::Accepted:
+    case EditorSessionResultKind::StateChanged:
+    case EditorSessionResultKind::ImageReady:
+    case EditorSessionResultKind::RenderRouted:
+    case EditorSessionResultKind::SaveFinished:
+    case EditorSessionResultKind::Failed:
+    case EditorSessionResultKind::Rejected:
+      return true;
+  }
+  return true;
+}
+
+/// True when the result marks a failed or rejected history/Version outcome.
+[[nodiscard]] inline auto EditorSessionResultIsFailure(EditorSessionResultKind kind) -> bool {
+  return kind == EditorSessionResultKind::Failed || kind == EditorSessionResultKind::Rejected;
+}
+
+[[nodiscard]] inline auto EditorSessionStateName(EditorSessionState state) -> const char* {
+  switch (state) {
+    case EditorSessionState::NoImage:
+      return "NoImage";
+    case EditorSessionState::Acquiring:
+      return "Acquiring";
+    case EditorSessionState::Loading:
+      return "Loading";
+    case EditorSessionState::Interactive:
+      return "Interactive";
+    case EditorSessionState::Saving:
+      return "Saving";
+    case EditorSessionState::Switching:
+      return "Switching";
+    case EditorSessionState::RetainedImageFailure:
+      return "RetainedImageFailure";
+    case EditorSessionState::Failed:
+      return "Failed";
+    case EditorSessionState::ShuttingDown:
+      return "ShuttingDown";
+  }
+  return "Unknown";
+}
+
+[[nodiscard]] inline auto EditorSessionHasImage(EditorSessionState state) -> bool {
+  switch (state) {
+    case EditorSessionState::Acquiring:
+    case EditorSessionState::Loading:
+    case EditorSessionState::Interactive:
+    case EditorSessionState::Saving:
+    case EditorSessionState::Switching:
+    case EditorSessionState::RetainedImageFailure:
+      return true;
+    case EditorSessionState::NoImage:
+    case EditorSessionState::Failed:
+    case EditorSessionState::ShuttingDown:
+      return false;
+  }
+  return false;
+}
+
+}  // namespace alcedo

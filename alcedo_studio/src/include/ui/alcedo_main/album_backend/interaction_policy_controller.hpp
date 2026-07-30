@@ -23,9 +23,9 @@ namespace alcedo::ui {
 /// and the pending delete / analysis target lists) and exposes both Q_INVOKABLE
 /// one-shot queries and cached Q_PROPERTY booleans for `enabled:` bindings.
 ///
-/// Like `BackgroundTaskController`, this is a standalone QObject with no
-/// `AlbumBackend` dependency so it is unit-testable with just a
-/// `BackgroundTaskController` (tests register snapshots with `locks_` directly).
+/// Like `BackgroundTaskController`, this is a standalone QObject with no host
+/// dependency so it is unit-testable with just a `BackgroundTaskController`
+/// (tests register snapshots with `locks_` directly).
 ///
 /// Threading: all register/query activity happens on the UI thread
 /// (`BackgroundTaskController::TasksChanged` is emitted there and the QML inputs
@@ -76,6 +76,17 @@ class InteractionPolicyController final : public QObject {
   Q_PROPERTY(bool canChangeSearchFieldFilters READ CanChangeSearchFieldFilters NOTIFY
                  PolicyChanged)
   Q_PROPERTY(QString searchFieldFiltersReason READ SearchFieldFiltersReason NOTIFY PolicyChanged)
+  // Phase 6C-5: editor navigation gates while a global save checkpoint holds locks.
+  Q_PROPERTY(bool canSelectEditorImage READ CanSelectEditorImage NOTIFY PolicyChanged)
+  Q_PROPERTY(QString selectEditorImageReason READ SelectEditorImageReason NOTIFY PolicyChanged)
+  Q_PROPERTY(bool canSwitchWorkspace READ CanSwitchWorkspace NOTIFY PolicyChanged)
+  Q_PROPERTY(QString switchWorkspaceReason READ SwitchWorkspaceReason NOTIFY PolicyChanged)
+  Q_PROPERTY(bool canCheckoutVersion READ CanCheckoutVersion NOTIFY PolicyChanged)
+  Q_PROPERTY(QString checkoutVersionReason READ CheckoutVersionReason NOTIFY PolicyChanged)
+  Q_PROPERTY(bool canPasteAdjustments READ CanPasteAdjustments NOTIFY PolicyChanged)
+  Q_PROPERTY(QString pasteAdjustmentsReason READ PasteAdjustmentsReason NOTIFY PolicyChanged)
+  Q_PROPERTY(bool canMergeAdjustments READ CanMergeAdjustments NOTIFY PolicyChanged)
+  Q_PROPERTY(QString mergeAdjustmentsReason READ MergeAdjustmentsReason NOTIFY PolicyChanged)
 
  public:
   explicit InteractionPolicyController(BackgroundTaskController* registry = nullptr,
@@ -106,6 +117,16 @@ class InteractionPolicyController final : public QObject {
   bool    CanChangeImageAnalysisProvider() const;
   bool    CanChangeSearchFieldFilters() const;
   QString SearchFieldFiltersReason() const;
+  bool    CanSelectEditorImage() const;
+  QString SelectEditorImageReason() const;
+  bool    CanSwitchWorkspace() const;
+  QString SwitchWorkspaceReason() const;
+  bool    CanCheckoutVersion() const;
+  QString CheckoutVersionReason() const;
+  bool    CanPasteAdjustments() const;
+  QString PasteAdjustmentsReason() const;
+  bool    CanMergeAdjustments() const;
+  QString MergeAdjustmentsReason() const;
 
   // ── Q_INVOKABLE one-shot queries (return {allowed, reason, blockingTaskIds}) ─
   // Named `Evaluate*` (not `Can*`) so they do not collide with the no-arg
@@ -120,6 +141,11 @@ class InteractionPolicyController final : public QObject {
   Q_INVOKABLE QVariantMap EvaluateRunSemanticGeneration() const;
   Q_INVOKABLE QVariantMap EvaluateChangeModelDownloadSettings() const;
   Q_INVOKABLE QVariantMap EvaluateChangeImageAnalysisProvider() const;
+  Q_INVOKABLE QVariantMap EvaluateSelectEditorImage() const;
+  Q_INVOKABLE QVariantMap EvaluateSwitchWorkspace() const;
+  Q_INVOKABLE QVariantMap EvaluateCheckoutVersion() const;
+  Q_INVOKABLE QVariantMap EvaluatePasteAdjustments() const;
+  Q_INVOKABLE QVariantMap EvaluateMergeAdjustments() const;
 
  signals:
   void PolicyChanged();

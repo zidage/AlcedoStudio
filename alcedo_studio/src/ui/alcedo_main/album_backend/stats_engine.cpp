@@ -11,7 +11,12 @@
 #include <vector>
 
 #include "storage/controller/semantic/semantic_label_config.hpp"
-#include "ui/alcedo_main/album_backend/album_backend.hpp"
+#include "ui/alcedo_main/album_backend/stats_engine.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
+#include "ui/alcedo_main/album_backend/folder_controller.hpp"
+#include "ui/alcedo_main/album_backend/search_controller.hpp"
+#include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 
 namespace alcedo::ui {
@@ -94,18 +99,38 @@ void AppendRecommendationRows(QVariantList& out, const QVariantList& buckets,
 }
 }  // namespace
 
-StatsEngine::StatsEngine(AlbumBackend& backend) : backend_(backend) {}
+StatsEngine::StatsEngine(ProjectModule* project, LibraryModule* library,
+                         FolderController* folders, QObject* parent)
+    : QObject(parent), project_(project), library_(library), folders_(folders) {}
+
+void StatsEngine::BindCollaborators(SearchController* search,
+                                    SemanticGenerationController* semantic) {
+  search_ = search;
+  semantic_ = semantic;
+}
+
+void StatsEngine::ToggleStatsFilter(const QString& category, const QString& label) {
+  ToggleFilter(category, label);
+  RebuildThumbnailView();
+  emit StatsFilterChanged();
+}
+
+void StatsEngine::ClearStatsFilter() {
+  ClearFilters();
+  RebuildThumbnailView();
+  emit StatsFilterChanged();
+}
 
 void StatsEngine::RebuildThumbnailView() {
-  backend_.LoadThumbnailWindow(BuildStatsFilterWhere(), true);
+  library_->LoadThumbnailWindow(BuildStatsFilterWhere(), true);
 }
 
 bool StatsEngine::LoadMoreThumbnailView() {
-  return backend_.LoadThumbnailWindow(BuildStatsFilterWhere(), false);
+  return library_->LoadThumbnailWindow(BuildStatsFilterWhere(), false);
 }
 
 void StatsEngine::RefreshStats() {
-  auto proj = backend_.project_handler_.project();
+  auto proj = project_->handler().project();
   if (!proj) {
     date_stats_.clear();
     camera_stats_.clear();
@@ -113,18 +138,18 @@ void StatsEngine::RefreshStats() {
     label_stats_.clear();
     rating_stats_.clear();
     total_photo_count_ = 0;
-    emit backend_.StatsChanged();
+    emit StatsChanged();
     return;
   }
 
   auto filter_service = proj->GetSleeveFilterService();
   if (!filter_service) {
-    emit backend_.StatsChanged();
+    emit StatsChanged();
     return;
   }
 
   try {
-    const auto folder_id = backend_.folder_ctrl_.CurrentFolderElementId();
+    const auto folder_id = folders_->CurrentFolderElementId();
     if (!folder_id.has_value()) {
       date_stats_.clear();
       camera_stats_.clear();
@@ -132,11 +157,11 @@ void StatsEngine::RefreshStats() {
       label_stats_.clear();
       rating_stats_.clear();
       total_photo_count_ = 0;
-      emit backend_.StatsChanged();
+      emit StatsChanged();
       return;
     }
 
-    const auto& active_search_filter_where = backend_.search_.ActiveSearchFilterWhere();
+    const auto& active_search_filter_where = search_->ActiveSearchFilterWhere();
     const auto  stats                      = filter_service->BuildFolderStats(
         folder_id.value(),
         active_search_filter_where.has_value()
@@ -156,7 +181,7 @@ void StatsEngine::RefreshStats() {
     // Keep previous stats if service query failed.
   }
 
-  emit backend_.StatsChanged();
+  emit StatsChanged();
 }
 
 auto StatsEngine::FormatPhotoInfo(int shown, int total) const -> QString {
@@ -271,7 +296,7 @@ auto StatsEngine::BuildStatsFilterWhere() const -> std::optional<std::wstring> {
   }
 
   if (!filter_label_.isEmpty()) {
-    const auto active_model_key = backend_.semantic_generation_.ActiveModelKey();
+    const auto active_model_key = semantic_ ? semantic_->ActiveModelKey() : std::string{};
     if (active_model_key.empty()) {
       conditions.push_back(L"(1 = 0)");
     } else {

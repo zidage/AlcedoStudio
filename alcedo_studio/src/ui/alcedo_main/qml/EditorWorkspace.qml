@@ -1,0 +1,733 @@
+import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+import Alcedo.Main 1.0
+
+// Unified editor workspace shell. The viewport is a QQuickRhiItem-backed
+// presentation surface; the surrounding shell remains QML-owned.
+Item {
+    id: root
+    objectName: "editorWorkspace"
+
+    property var theme: null
+    property var workspaceRouter: appModules.workspaceRouter
+    property var editorSession: appModules.editorSession
+    property var interactionPolicy: appModules.interactionPolicy
+    property Item blurSource: null
+
+    readonly property color colPanel: theme ? theme.colGlassPanel : "#1C1C1D"
+    readonly property color colStroke: theme ? theme.colGlassStroke : Qt.rgba(1, 1, 1, 0.08)
+    readonly property color colText: theme ? theme.colText : "#F5F1EA"
+    readonly property color colMuted: theme ? theme.colTextMuted : "#AAA59D"
+    readonly property color colAccent: theme ? theme.colAccentPrimary : "#457B9D"
+    readonly property color colBg: theme ? theme.colBgCanvas : "#111214"
+    readonly property color colDeep: theme ? theme.colBgDeep : "#0C0D0F"
+    readonly property color colHover: theme ? theme.colHover : Qt.rgba(1, 1, 1, 0.07)
+    // Card surface family — shared with the Library grid (see DESIGN.md). The
+    // viewport placeholder resolves here so it matches the editor card family.
+    readonly property color colCardSurface: theme ? theme.colCardSurface : "#161719"
+    readonly property color colCardBorder: theme ? theme.colCardBorder : Qt.rgba(1, 1, 1, 0.08)
+    readonly property int panelRadius: theme ? theme.panelRadius : 12
+    readonly property int controlRadius: theme ? theme.controlRadius : 10
+    readonly property string headlineFont: theme ? theme.headlineFontFamily : appTheme.headlineFontFamily
+    // The session backend may finish closing after the router has entered the
+    // explicit empty-editor route; require both sources to agree before
+    // exposing image-only controls or presentation state.
+    readonly property bool hasImage: editorSession
+                                     && editorSession.hasImage
+                                     && focusedElementId > 0
+                                     && focusedImageId > 0
+    readonly property bool recoveryPending: !!(editorSession
+                                               && editorSession.actions
+                                               && (editorSession.actions.canRetrySave
+                                                   || editorSession.actions.canDiscardAndContinue
+                                                   || editorSession.actions.canCancelPendingNavigation))
+    readonly property bool editorControlsEnabled: !!(root.hasImage
+                                                     && editorSession
+                                                     && editorSession.actions
+                                                     && editorSession.actions.canEdit)
+    readonly property var renderDiagnostics: editorSession ? editorSession.renderDiagnostics : ({})
+    readonly property string inflightRenderReason: renderDiagnostics.inflightReason || ""
+    readonly property bool adjustmentRenderBusy: editorSession
+                                                 && editorSession.renderBusy
+                                                 && (inflightRenderReason === "InteractiveAdjustment"
+                                                     || inflightRenderReason === "SettledAdjustment")
+    readonly property int focusedElementId: workspaceRouter ? Number(workspaceRouter.elementId) : 0
+    readonly property int focusedImageId: workspaceRouter ? Number(workspaceRouter.imageId) : 0
+
+    // Focus order: viewport → side panels → filmstrip handle. Returning to the
+    // library is owned by the shared main-window navigation, not by an
+    // editor-local control.
+    Component.onCompleted: {
+        if (!hasImage) {
+            emptyStatePrompt.forceActiveFocus()
+        } else {
+            viewportSlot.forceActiveFocus()
+        }
+    }
+
+    // Explicit minimum center viewport width. Side panels never swap places
+    // under a narrow window; the center column holds this floor instead.
+    readonly property int minimumViewportWidth: 360
+
+    ColumnLayout {
+        anchors.fill: parent
+        spacing: appTheme.spaceMd
+
+        // ── Main editor body ────────────────────────────────────────────
+        // Desktop order (non-negotiable): History/Versions left, viewport
+        // center, scopes + adjustment stack right.
+        RowLayout {
+            id: editorDesktopRow
+            objectName: "editorDesktopRow"
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            spacing: appTheme.spaceMd
+
+            // Left: History / Versions rail (+ expandable panel beside rail).
+            // objectName is set inside the component (editorHistoryVersionsRail).
+            EditorHistoryVersionsRail {
+                id: historyVersionsRail
+                Layout.fillHeight: true
+                theme: root.theme
+                editorSession: root.editorSession
+                interactionPolicy: root.interactionPolicy
+                adjustmentTransfer: appModules.adjustmentTransfer
+                recoveryPending: root.recoveryPending
+                blurSource: root.blurSource
+            }
+
+            // Center column: viewport + filmstrip
+            ColumnLayout {
+                id: centerColumn
+                objectName: "editorCenterColumn"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Layout.minimumWidth: root.minimumViewportWidth
+                spacing: appTheme.spaceMd
+
+                Rectangle {
+                    id: viewportSlot
+                    objectName: "editorViewportSlot"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    radius: root.panelRadius
+                    color: root.colCardSurface
+                    border.width: 1
+                    border.color: root.colCardBorder
+                    clip: true
+                    activeFocusOnTab: true
+                    focus: true
+                    Accessible.role: Accessible.Canvas
+                    Accessible.name: qsTr("Editor viewport")
+                    Accessible.description: root.hasImage
+                                            ? qsTr("Image viewport")
+                                            : qsTr("Empty viewport")
+
+                    // No-image empty state — centered localized prompt.
+                    Column {
+                        id: emptyStatePrompt
+                        objectName: "editorEmptyState"
+                        anchors.centerIn: parent
+                        width: Math.min(parent.width - 48, 420)
+                        spacing: appTheme.spaceMd
+                        visible: !root.hasImage
+                        activeFocusOnTab: true
+                        Accessible.role: Accessible.StaticText
+                        Accessible.name: qsTr("Select an image to edit")
+
+                        Label {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            text: qsTr("Select an image to edit")
+                            font.family: root.headlineFont
+                            font.pixelSize: appTheme.fontSizeHeadline
+                            font.weight: appTheme.fontWeightHeading
+                            color: root.colText
+                            horizontalAlignment: Text.AlignHCenter
+                        }
+                        Label {
+                            width: parent.width
+                            wrapMode: Text.WordWrap
+                            horizontalAlignment: Text.AlignHCenter
+                            text: qsTr("Open an image from the library, or keep this workspace ready for search results.")
+                            color: root.colMuted
+                            font.pixelSize: appTheme.fontSizeTitle
+                        }
+                    }
+
+                    // Interaction owns zoom/pan/crop state. The RHI viewport only
+                    // presents photograph layers; overlays are a separate QSG item.
+                    EditorInteractionController {
+                        id: editorInteraction
+                        objectName: "editorInteractionController"
+                        interactionEnabled: root.editorControlsEnabled
+                    }
+
+                    EditorViewportItem {
+                        id: editorViewportItem
+                        objectName: "editorViewportItem"
+                        anchors.fill: parent
+                        visible: root.hasImage
+                        // imageIdentity is the durable DB id; imageGeneration is stamped
+                        // from EditorSessionController::SyncViewportIdentity on the GUI thread.
+                        imageIdentity: root.focusedImageId
+                        Accessible.role: Accessible.Canvas
+                        Accessible.name: qsTr("Image viewport")
+
+                        Component.onCompleted: {
+                            viewportSlot.ensurePresentationBinding()
+                            if (root.editorSession) {
+                                root.editorSession.bindInteractionController(editorInteraction)
+                            }
+                            viewportSlot.requestImageGeometrySync()
+                        }
+                        Component.onDestruction: {
+                            if (root.editorSession) {
+                                root.editorSession.bindInteractionController(null)
+                                root.editorSession.unbindPresentationViewport()
+                            }
+                        }
+
+                        // Pipeline frame size → render reference for crop/zoom math.
+                        // DirectFrameSink only emits this for render-reference frames
+                        // (InteractivePrimary / QualityBase full frames). DetailPatch
+                        // ROI sizes must not rewrite reference geometry or the high-res
+                        // zoom patch fails SameRoi / viewport coverage.
+                        // Use setRenderReferenceSize (not force): reconcile only when
+                        // the size actually changes. Force-applying on every settled
+                        // frame re-clamps pan/zoom and was causing FIT snaps after
+                        // detail/quality handoff. Image switches clear ref via
+                        // resetPresentationStateForNewImage before the first frame.
+                        onTargetSizeRequested: function (w, h) {
+                            if (w > 0 && h > 0) {
+                                // The source-size query can race the first
+                                // pipeline frame. The render-reference frame
+                                // still carries the correct aspect, so use it
+                                // as a temporary image-size fallback and let
+                                // the metadata query replace it when ready.
+                                if (editorInteraction.imageWidth <= 0
+                                        || editorInteraction.imageHeight <= 0) {
+                                    editorInteraction.setImageSize(w, h)
+                                }
+                                editorInteraction.setRenderReferenceSize(w, h)
+                                viewportSlot.requestImageGeometrySync()
+                            }
+                        }
+                    }
+
+                    EditorOverlayItem {
+                        id: editorOverlayItem
+                        objectName: "editorOverlayItem"
+                        anchors.fill: parent
+                        visible: root.hasImage
+                        interaction: editorInteraction
+                        // Overlay must sit above the photograph and receive no
+                        // exclusive mouse grab — handlers below own input.
+                        z: 2
+                    }
+
+                    // Spinner / status remain ordinary QML (not baked into the RHI pass).
+                    Label {
+                        objectName: "editorViewportStatus"
+                        anchors.centerIn: parent
+                        visible: root.hasImage && !editorViewportItem.presentationAvailable
+                        text: qsTr("Preparing image viewport")
+                        color: root.colMuted
+                        font.pixelSize: appTheme.fontSizeSection
+                        z: 3
+                    }
+
+                    // Phase 5D: render-coordinator busy indicator. Visible only
+                    // after the viewport is presenting and the coordinator has
+                    // in-flight/pending work (interactive drag, settled quality
+                    // pass, or detail patch). Bound to EditorSessionController.
+                    // renderBusy, which reflects coordinator diagnostics — never
+                    // a pipeline task object (D6).
+                    BusyIndicator {
+                        objectName: "editorRenderBusyIndicator"
+                        anchors.centerIn: parent
+                        visible: root.hasImage
+                                && editorViewportItem.presentationAvailable
+                                && root.editorSession
+                                && root.editorSession.renderBusy
+                                && !root.adjustmentRenderBusy
+                        running: visible
+                        z: 3
+                    }
+
+                    BusyIndicator {
+                        objectName: "editorAdjustmentRenderBusyIndicator"
+                        anchors.top: parent.top
+                        anchors.right: parent.right
+                        anchors.margins: appTheme.spaceSm
+                        width: 18
+                        height: 18
+                        visible: root.hasImage
+                                 && editorViewportItem.presentationAvailable
+                                 && root.adjustmentRenderBusy
+                        running: visible
+                        z: 3
+                    }
+
+                    // Crop rotation label (text overlay, not QSG).
+                    Rectangle {
+                        id: cropAngleBadge
+                        objectName: "editorCropAngleBadge"
+                        visible: root.hasImage
+                                 && editorInteraction.cropOverlayVisible
+                                 && editorInteraction.overlayGeometryValid
+                        x: Math.min(Math.max(0, editorInteraction.rotateHandleItemPos.x + 10),
+                                    Math.max(0, parent.width - width - 4))
+                        y: Math.min(Math.max(0, editorInteraction.rotateHandleItemPos.y - height * 0.5),
+                                    Math.max(0, parent.height - height - 4))
+                        width: cropAngleLabel.implicitWidth + 14
+                        height: cropAngleLabel.implicitHeight + 10
+                        radius: appTheme.badgeRadius
+                        color: Qt.rgba(18 / 255, 18 / 255, 18 / 255, 210 / 255)
+                        z: 4
+
+                        Label {
+                            id: cropAngleLabel
+                            anchors.centerIn: parent
+                            text: qsTr("%1°").arg(editorInteraction.rotationLabelDegrees.toFixed(1))
+                            color: Qt.rgba(1, 1, 1, 0.96)
+                            font.pixelSize: appTheme.fontSizeBody
+                            font.family: appTheme.dataFontFamily
+                        }
+                    }
+
+                    // Zoom readout (status chrome). True zoom: 100% = 1:1 (one
+                    // source-image pixel per screen pixel), derived from the full
+                    // image and viewport — independent of the 2K preview cap. At
+                    // fit (zoom field 1.0) the readout shows "FIT" instead of a %.
+                    Label {
+                        objectName: "editorZoomReadout"
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        anchors.margins: 10
+                        visible: root.hasImage
+                        text: editorInteraction.zoom > 1.0001
+                              ? qsTr("%1%").arg(Math.round(editorInteraction.trueZoom * 100))
+                              : qsTr("FIT")
+                        color: root.colMuted
+                        font.pixelSize: appTheme.fontSizeBody
+                        font.weight: appTheme.fontWeightStrong
+                        z: 4
+                    }
+
+                    // Pointer handlers call the typed interaction surface. They do
+                    // not own crop math or view transform state.
+                    HoverHandler {
+                        id: viewportHover
+                        enabled: root.editorControlsEnabled
+                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus
+                        // HoverHandler owns the platform cursor (Item has no cursorShape).
+                        cursorShape: editorInteraction.hasCustomCursor
+                                     ? editorInteraction.cursorShape
+                                     : Qt.ArrowCursor
+                        onPointChanged: {
+                            if (viewportHover.hovered) {
+                                editorInteraction.handleHoverMove(point.position.x, point.position.y)
+                            }
+                        }
+                    }
+
+                    // PointHandler records the true press position (no drag-distance
+                    // threshold). DragHandler would only activate after the system
+                    // drag distance, which lost crop-corner hit tests and click-zoom.
+                    PointHandler {
+                        id: viewportPointer
+                        enabled: root.editorControlsEnabled
+                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.TouchScreen | PointerDevice.Stylus
+                        acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+                        property int _activeButton: Qt.LeftButton
+                        property bool _pressed: false
+                        onActiveChanged: {
+                            if (active) {
+                                _pressed = true
+                                _activeButton = (point.pressedButtons & Qt.MiddleButton)
+                                        ? Qt.MiddleButton : Qt.LeftButton
+                                editorInteraction.handlePress(
+                                            point.position.x, point.position.y, _activeButton)
+                            } else if (_pressed) {
+                                editorInteraction.handleRelease(
+                                            point.position.x, point.position.y, _activeButton)
+                                _pressed = false
+                            }
+                        }
+                        onPointChanged: {
+                            if (active) {
+                                editorInteraction.handleMove(
+                                            point.position.x, point.position.y,
+                                            point.pressedButtons)
+                            }
+                        }
+                    }
+
+                    // Phase 5D: a dedicated DragHandler is the reliable move
+                    // source for pan (and crop-drag) while zoomed. The double-
+                    // tap TapHandler below holds the left-button exclusive grab
+                    // from press until release, which starves the PointHandler's
+                    // passive grab of drag move events — so a left-button drag
+                    // never pans (it falls through to the single-click zoom
+                    // toggle on release). Middle button has no competing
+                    // TapHandler so it already panned; the DragHandler is a
+                    // harmless no-op there (handleMove is idempotent for a
+                    // repeated position). The DragHandler takes the grab at the
+                    // drag threshold and reports centroid moves to the same
+                    // handleMove entry point; target:null so it never moves an
+                    // item (the interaction controller owns the view transform).
+                    // Enabled with an image in both crop-off (pan) and crop-on
+                    // (crop-drag) modes: the controller's handleMove routes to
+                    // crop first, so a crop-handle drag still moves the crop and
+                    // a plain drag still pans.
+                    DragHandler {
+                        id: viewportPanDrag
+                        enabled: root.editorControlsEnabled
+                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.TouchScreen | PointerDevice.Stylus
+                        acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+                        target: null
+                        onTranslationChanged: {
+                            if (active) {
+                                editorInteraction.handleMove(
+                                            centroid.position.x, centroid.position.y,
+                                            centroid.pressedButtons)
+                            }
+                        }
+                    }
+
+                    WheelHandler {
+                        id: viewportWheel
+                        enabled: root.editorControlsEnabled
+                        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                        onWheel: function (event) {
+                            var synthesized = event.pixelDelta.x !== 0 || event.pixelDelta.y !== 0
+                            editorInteraction.handleWheel(
+                                        event.x, event.y,
+                                        event.angleDelta.y,
+                                        event.pixelDelta.x, event.pixelDelta.y,
+                                        event.modifiers,
+                                        synthesized)
+                            event.accepted = true
+                        }
+                    }
+
+                    PinchHandler {
+                        id: viewportPinch
+                        enabled: root.editorControlsEnabled
+                        target: null
+                        // Absolute mapping from pinch start. PinchHandler.scale is
+                        // cumulative for the active pinch and resets to 1.0 when a
+                        // new pinch begins. Incremental lastScale ratios mis-handle
+                        // that reset (scale→1 with lastScale still at the previous
+                        // prior pinch's end value) and apply a large negative step that
+                        // snaps zoom to FIT. Cmd+scroll does not use this path.
+                        property real _baseZoom: 1.0
+                        property real _baseScale: 1.0
+                        property bool _pinchLive: false
+                        onActiveChanged: {
+                            if (active) {
+                                _baseZoom = editorInteraction.zoom
+                                // Sync to whatever scale is now (usually 1.0 at start;
+                                // never assume without reading the property).
+                                _baseScale = Math.max(scale, 1e-6)
+                                _pinchLive = true
+                            } else {
+                                _pinchLive = false
+                            }
+                        }
+                        onScaleChanged: {
+                            if (!active || !_pinchLive) {
+                                return
+                            }
+                            var safeBase = Math.max(_baseScale, 1e-6)
+                            var factor = scale / safeBase
+                            // Scale re-baselined during the pinch (Qt reset to ~1.0 while we
+                            // still held a larger base): re-anchor instead of applying
+                            // a catastrophic zoom-out (factor ≈ 1/previousEndScale).
+                            if (factor < 0.55 && Math.abs(scale - 1.0) < 0.08 && safeBase > 1.05) {
+                                _baseZoom = editorInteraction.zoom
+                                _baseScale = Math.max(scale, 1e-6)
+                                return
+                            }
+                            var targetZoom = _baseZoom * factor
+                            editorInteraction.handlePinchTo(
+                                        centroid.position.x, centroid.position.y, targetZoom)
+                        }
+                    }
+
+                    // Phase 5D: TapHandler.gesturePolicy uses DragThreshold so a left-button drag
+                    // (now owned by viewportPanDrag above) cancels the tap instead
+                    // of being held as a would-be double-tap. A clean double-click
+                    // (two clicks without a drag) still fires onDoubleTapped and
+                    // toggles the zoom; only drags are excluded, which is what
+                    // separates pan from double-click-zoom.
+                    TapHandler {
+                        id: viewportDoubleTap
+                        enabled: root.editorControlsEnabled
+                        acceptedButtons: Qt.LeftButton
+                        gesturePolicy: TapHandler.DragThreshold
+                        onDoubleTapped: function (eventPoint) {
+                            editorInteraction.handleDoubleTap(
+                                        eventPoint.position.x, eventPoint.position.y)
+                        }
+                    }
+
+                    // Invisible focus/input owner for keyboard shortcuts (Phase 6G).
+                    Item {
+                        id: viewportInteractionLayer
+                        objectName: "editorViewportInteractionLayer"
+                        anchors.fill: parent
+                        visible: root.hasImage
+                        focus: root.hasImage
+                        activeFocusOnTab: true
+                        z: 5
+
+                        Keys.onPressed: function (event) {
+                            if (!root.editorControlsEnabled) {
+                                return
+                            }
+                            if (event.key === Qt.Key_0 || event.key === Qt.Key_Home) {
+                                editorInteraction.resetView()
+                                event.accepted = true
+                            } else if (event.key === Qt.Key_1) {
+                                // 1:1 (actual pixels). Pro-editor convention.
+                                editorInteraction.zoomToActualPixels()
+                                event.accepted = true
+                            } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                                // Geometry confirm: bake draft crop and return to Tone.
+                                if (typeof adjustmentStack.confirmGeometryAndReturnToTone === "function"
+                                        && adjustmentStack.confirmGeometryAndReturnToTone()) {
+                                    event.accepted = true
+                                }
+                            }
+                        }
+
+                        onVisibleChanged: {
+                            if (!visible) {
+                                editorInteraction.handleLeave()
+                            }
+                        }
+                    }
+
+                    function currentDevicePixelRatio() {
+                        var win = viewportSlot.Window.window
+                        if (!win) {
+                            return 1.0
+                        }
+                        // QWindow has no devicePixelRatioChanged in Qt 6.9.3.
+                        // Prefer the window's current screen; fall back to the property.
+                        if (win.screen) {
+                            return win.screen.devicePixelRatio
+                        }
+                        return win.devicePixelRatio
+                    }
+
+                    function ensurePresentationBinding() {
+                        // Rebind on every open while the same viewport lives so
+                        // Finalize→Open image switches keep presentationViewportBound.
+                        if (root.editorSession && editorViewportItem) {
+                            root.editorSession.bindPresentationViewport(editorViewportItem)
+                        }
+                    }
+
+                    function syncViewportMetrics() {
+                        // setViewportMetrics emits viewStateChanged → single push.
+                        editorInteraction.setViewportMetrics(
+                                    viewportSlot.width, viewportSlot.height,
+                                    currentDevicePixelRatio())
+                        if (root.editorSession) {
+                            var dpr = currentDevicePixelRatio()
+                            root.editorSession.updatePresentationTargetSize(
+                                        Math.max(1, Math.round(viewportSlot.width * dpr)),
+                                        Math.max(1, Math.round(viewportSlot.height * dpr)))
+                        }
+                    }
+
+                    function resetAndSyncForImageSession() {
+                        ensurePresentationBinding()
+                        if (!root.hasImage) {
+                            editorInteraction.resetPresentationStateForNewImage()
+                            editorInteraction.setImageSize(0, 0)
+                            editorInteraction.setRenderReferenceSize(0, 0)
+                            imageGeometryRetryTimer.stop()
+                            return
+                        }
+                        // Drop previous image crop/ROI/mode before applying new geometry.
+                        editorInteraction.resetPresentationStateForNewImage()
+                        requestImageGeometrySync()
+                    }
+
+                    function syncImageGeometry() {
+                        if (!root.hasImage) {
+                            editorInteraction.setImageSize(0, 0)
+                            editorInteraction.setRenderReferenceSize(0, 0)
+                            return false
+                        }
+                        if (!appModules || !appModules.images) {
+                            return false
+                        }
+                        var size = appModules.images.GetImagePixelSize(
+                                    root.focusedElementId, root.focusedImageId)
+                        if (size && size.success && size.width > 0 && size.height > 0) {
+                            editorInteraction.setImageSize(size.width, size.height)
+                            // Until a pipeline frame arrives (TargetSizeRequested), use
+                            // source size so crop/zoom math is not zero-sized.
+                            if (editorInteraction.renderReferenceWidth <= 0 ||
+                                    editorInteraction.renderReferenceHeight <= 0) {
+                                editorInteraction.setRenderReferenceSize(size.width, size.height)
+                            }
+                            return true
+                        }
+                        return false
+                    }
+
+                    function requestImageGeometrySync() {
+                        viewportSlot.imageGeometryRetryCount = 0
+                        if (syncImageGeometry() || !root.hasImage) {
+                            imageGeometryRetryTimer.stop()
+                            return
+                        }
+                        imageGeometryRetryTimer.start()
+                    }
+
+                    property int imageGeometryRetryCount: 0
+                    Timer {
+                        id: imageGeometryRetryTimer
+                        interval: 100
+                        repeat: true
+                        onTriggered: {
+                            if (viewportSlot.syncImageGeometry() || !root.hasImage
+                                    || viewportSlot.imageGeometryRetryCount >= 50) {
+                                stop()
+                                return
+                            }
+                            viewportSlot.imageGeometryRetryCount += 1
+                        }
+                    }
+
+                    function pushViewToViewport() {
+                        // Full ViewerViewState (zoom/pan, region cache, interactive /
+                        // detail flags) — not just three floats — so DirectFrameSink
+                        // ROI requests track the controller after zoom and pan.
+                        editorInteraction.applyViewStateToViewport(editorViewportItem)
+                    }
+
+                    Connections {
+                        target: editorInteraction
+                        // Single full-state notification; do not also listen to
+                        // viewChanged (emitViewAndOverlay fires both).
+                        function onViewStateChanged() {
+                            viewportSlot.pushViewToViewport()
+                        }
+                    }
+
+                    // EditorSessionController signals are PascalCase (StateChanged).
+                    // Connections function handlers only match camelCase signal names, so
+                    // watch NOTIFY-backed properties instead of onStateChanged handlers.
+                    property string sessionIdentityKey: {
+                        if (!root.editorSession) {
+                            return ""
+                        }
+                        return root.editorSession.viewportIdentityKey
+                    }
+
+                    // Binding the viewport can notify the session immediately;
+                    // defer the reset until the current property evaluation ends.
+                    Timer {
+                        id: sessionResetTimer
+                        interval: 0
+                        repeat: false
+                        onTriggered: {
+                            if (viewportSlot.sessionIdentityKey.length > 0) {
+                                viewportSlot.resetAndSyncForImageSession()
+                            }
+                        }
+                    }
+
+                    onSessionIdentityKeyChanged: {
+                        if (sessionIdentityKey.length > 0) {
+                            sessionResetTimer.restart()
+                        }
+                    }
+
+                    property bool presentationBound: root.editorSession
+                                                    ? root.editorSession.presentationViewportBound
+                                                    : false
+                    onPresentationBoundChanged: {
+                        if (presentationBound) {
+                            pushViewToViewport()
+                        }
+                    }
+
+                    // Qt 6.9.3: QQuickWindow has no devicePixelRatioChanged.
+                    // QScreen.devicePixelRatio uses physicalDotsPerInchChanged as NOTIFY.
+                    property var trackedScreen: null
+                    property real trackedScreenDpr: trackedScreen ? trackedScreen.devicePixelRatio : 1.0
+                    onTrackedScreenDprChanged: syncViewportMetrics()
+
+                    function refreshTrackedScreen() {
+                        var win = viewportSlot.Window.window
+                        trackedScreen = (win && win.screen) ? win.screen : null
+                    }
+
+                    Connections {
+                        target: viewportSlot.Window.window
+                        ignoreUnknownSignals: true
+                        function onScreenChanged() {
+                            viewportSlot.refreshTrackedScreen()
+                            viewportSlot.syncViewportMetrics()
+                        }
+                    }
+
+                    Component.onCompleted: {
+                        refreshTrackedScreen()
+                        syncViewportMetrics()
+                        ensurePresentationBinding()
+                        requestImageGeometrySync()
+                    }
+                    onWidthChanged: syncViewportMetrics()
+                    onHeightChanged: syncViewportMetrics()
+                }
+
+                EditorFilmstrip {
+                    id: editorFilmstrip
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: editorFilmstrip.dockHeight
+                    theme: root.theme
+                    editorSession: root.editorSession
+                    interactionPolicy: root.interactionPolicy
+                }
+            }
+
+            // Right: histogram/waveform + adjustment navbar + panel stack.
+            EditorAdjustmentStack {
+                id: adjustmentStack
+                Layout.fillHeight: true
+                theme: root.theme
+                editorSession: root.editorSession
+                interaction: editorInteraction
+                controlsEnabled: root.editorControlsEnabled
+            }
+        }
+
+        EditorSaveRecoveryBar {
+            id: editorSaveRecoveryBar
+            objectName: "editorSaveRecoveryBar"
+            editorSession: root.editorSession
+        }
+    }
+
+    // Geometry confirm (legacy Enter / numpad Enter). Lives on the workspace so
+    // it still works when focus is on the right panel rather than the viewport.
+    Shortcut {
+        sequences: [ "Return", "Enter" ]
+        enabled: root.editorControlsEnabled
+                 && root.editorSession
+                 && String(root.editorSession.activeAdjustmentPanel || "") === "geometry"
+        onActivated: {
+            if (typeof adjustmentStack.confirmGeometryAndReturnToTone === "function")
+                adjustmentStack.confirmGeometryAndReturnToTone()
+        }
+    }
+}

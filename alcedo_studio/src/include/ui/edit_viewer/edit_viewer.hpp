@@ -121,7 +121,7 @@ class QtEditViewer : public QWidget, public alcedo::IFrameSink {
   void                    UpdateOverlay();
   void                    PaintOverlay(QWidget& widget);
   void                    HandleOverlayWheel(QWheelEvent* event);
-  void                    HandleOverlayNativeGesture(QNativeGestureEvent* event);
+  void                    HandleOverlayNativeInput(QNativeGestureEvent* event);
   void                    HandleOverlayMousePress(QMouseEvent* event);
   void                    HandleOverlayMouseMove(QMouseEvent* event);
   void                    HandleOverlayMouseRelease(QMouseEvent* event);

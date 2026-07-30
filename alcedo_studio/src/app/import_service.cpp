@@ -145,8 +145,12 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
       job->metadata_tasks_submitted_.fetch_add(1);
     }
 
+    const auto element_id               = sleeve_file->element_id_;
+    const auto root_pipeline_initializer = root_pipeline_initializer_;
+
     // Submit the metadata extraction task to thread pool
-    thread_pool_.Submit([image_handler_ptr, progress_ptr, job, import_log]() {
+    thread_pool_.Submit([image_handler_ptr, progress_ptr, job, import_log, element_id,
+                         root_pipeline_initializer]() {
       auto image_ptr = image_handler_ptr ? image_handler_ptr->Get() : nullptr;
       if (!image_ptr) {
         progress_ptr->failed_.fetch_add(1);
@@ -163,6 +167,9 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
       // Extract metadata
       try {
         MetadataExtractor::ExtractEXIF_ToImage(image_ptr->image_path_, *image_ptr);
+        if (root_pipeline_initializer) {
+          root_pipeline_initializer(element_id, image_ptr);
+        }
         if (import_log) {
           import_log->MarkMetadataSuccess(image_ptr->image_id_);
         }

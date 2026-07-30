@@ -847,9 +847,9 @@ TEST_F(SemanticGenerationServiceTest, UsesRealThumbnailServiceAndBatchesMockEmbe
   }
 
   auto pipeline_service  = std::make_shared<PipelineMgmtService>(project.GetStorageService());
-  auto history_service   = std::make_shared<EditHistoryMgmtService>(project.GetStorageService());
   auto thumbnail_service = std::make_shared<ThumbnailService>(
-      project.GetSleeveService(), project.GetImagePoolService(), pipeline_service, history_service,
+      project.GetSleeveService(), project.GetImagePoolService(), pipeline_service,
+      project.GetStorageService(),
       project.GetProjectUUID());
 
   auto thumbnails = std::make_shared<CountingRealThumbnailProvider>(thumbnail_service);
@@ -1267,9 +1267,9 @@ TEST_F(SemanticGenerationServiceTest, GeneratesLabelsForRecursiveCameraSampleDat
   }
 
   auto pipeline_service  = std::make_shared<PipelineMgmtService>(project.GetStorageService());
-  auto history_service   = std::make_shared<EditHistoryMgmtService>(project.GetStorageService());
   auto thumbnail_service = std::make_shared<ThumbnailService>(
-      project.GetSleeveService(), project.GetImagePoolService(), pipeline_service, history_service,
+      project.GetSleeveService(), project.GetImagePoolService(), pipeline_service,
+      project.GetStorageService(),
       project.GetProjectUUID());
   auto thumbnails = std::make_shared<CountingRealThumbnailProvider>(thumbnail_service);
   auto embedder   = std::make_shared<Routed512EmbeddingClient>(std::move(routes));

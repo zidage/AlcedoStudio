@@ -11,6 +11,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLocale>
+#include <QPointer>
 #include <QSettings>
 #include <QUrl>
 #include <algorithm>
@@ -23,7 +24,8 @@
 #include <utility>
 
 #include "app/model_asset_catalog.hpp"
-#include "ui/alcedo_main/album_backend/album_backend.hpp"
+#include "ui/alcedo_main/album_backend/model_download_controller.hpp"
+#include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 #include "ui/alcedo_main/album_backend/background_task_controller.hpp"
 
 namespace alcedo::ui {
@@ -448,11 +450,13 @@ auto LoadLocalResolvedModelManifestForActivation(const QString& profileId,
 
 }  // namespace detail
 
-ModelDownloadController::ModelDownloadController(AlbumBackend& backend, QObject* parent)
-    : QObject(parent), backend_(backend) {
+ModelDownloadController::ModelDownloadController(alcedo::ModelDownloadService& service,
+                                                 BackgroundTaskController* background_tasks,
+                                                 QObject* parent)
+    : QObject(parent), service_(service), background_tasks_(background_tasks) {
   model_download_status_text_ = PL_TEXT("Model status has not been checked.");
 
-  connect(&backend_.model_download_service_, &alcedo::ModelDownloadService::ProgressChanged, this,
+  connect(&service_, &alcedo::ModelDownloadService::ProgressChanged, this,
           [this](const alcedo::ModelDownloadProgress& progress) {
             model_download_progress_       = DownloadProgressPercent(progress);
             model_download_phase_          = QString::fromStdString(progress.phase);
@@ -471,13 +475,13 @@ ModelDownloadController::ModelDownloadController(AlbumBackend& backend, QObject*
                                   : PL_TEXT("%1 (%2%)", message, model_download_progress_);
             emit StateChanged();
             if (!background_task_id_.isEmpty()) {
-              backend_.background_task_.UpdateTask(background_task_id_,
+              background_tasks_->UpdateTask(background_task_id_,
                                                     model_download_status_text_.Render(),
                                                     model_download_bytes_label_,
                                                     model_download_progress_);
             }
           });
-  connect(&backend_.model_download_service_, &alcedo::ModelDownloadService::Finished, this,
+  connect(&service_, &alcedo::ModelDownloadService::Finished, this,
           [this](bool ok, const QString& error) {
             model_download_running_ = false;
             // The cancel path sets phase "cancelled" before the worker emits
@@ -511,7 +515,7 @@ ModelDownloadController::ModelDownloadController(AlbumBackend& backend, QObject*
                   was_canceled ? BackgroundTaskState::Canceled
                                : (ok ? BackgroundTaskState::Succeeded
                                      : BackgroundTaskState::Failed);
-              backend_.background_task_.FinishTask(background_task_id_, final_state,
+              background_tasks_->FinishTask(background_task_id_, final_state,
                                                     model_download_status_text_.Render());
               background_task_id_.clear();
             }
@@ -776,7 +780,7 @@ auto ModelDownloadController::RegisterBackgroundTask() -> QString {
       InteractionCapability::ChangeSemanticModel, 0,
       PL_TEXT("A model download is running; change the model after it finishes.").Render()});
   QPointer<ModelDownloadController> self(this);
-  return backend_.background_task_.RegisterTask(snapshot, [self]() {
+  return background_tasks_->RegisterTask(snapshot, [self]() {
     if (self) {
       self->CancelSelectedModelDownload();
     }
@@ -784,13 +788,13 @@ auto ModelDownloadController::RegisterBackgroundTask() -> QString {
 }
 
 void ModelDownloadController::StartSelectedModelDownload() {
-  if (model_download_running_ || backend_.model_download_service_.IsRunning()) {
+  if (model_download_running_ || service_.IsRunning()) {
     return;
   }
 
   const auto profile_id = SelectedModelProfileId();
   const auto endpoint   = EffectiveModelEndpoint().toStdString();
-  const bool started    = backend_.model_download_service_.StartDownload(
+  const bool started    = service_.StartDownload(
       profile_id.toStdString(), QStringToPath(ModelDownloadDirectory()), endpoint);
   if (!started) {
     model_download_status_text_ = PL_TEXT("Model download failed to start.");
@@ -823,10 +827,10 @@ void ModelDownloadController::StartSelectedModelDownload() {
 }
 
 void ModelDownloadController::CancelSelectedModelDownload() {
-  if (!model_download_running_ && !backend_.model_download_service_.IsRunning()) {
+  if (!model_download_running_ && !service_.IsRunning()) {
     return;
   }
-  if (!backend_.model_download_service_.IsRunning()) {
+  if (!service_.IsRunning()) {
     // No active worker will emit Finished; clear local state immediately.
     model_download_running_     = false;
     model_download_progress_    = 0;
@@ -840,19 +844,19 @@ void ModelDownloadController::CancelSelectedModelDownload() {
     download_speed_primed_ = false;
     model_download_status_text_ = PL_TEXT("Model download cancelled.");
     if (!background_task_id_.isEmpty()) {
-      backend_.background_task_.FinishTask(background_task_id_, BackgroundTaskState::Canceled,
+      background_tasks_->FinishTask(background_task_id_, BackgroundTaskState::Canceled,
                                             model_download_status_text_.Render());
       background_task_id_.clear();
     }
     emit StateChanged();
     return;
   }
-  backend_.model_download_service_.CancelDownload();
+  service_.CancelDownload();
   model_download_phase_       = QStringLiteral("cancelled");
   model_download_current_file_.clear();
   model_download_status_text_ = PL_TEXT("Cancelling model download...");
   if (!background_task_id_.isEmpty()) {
-    backend_.background_task_.UpdateTaskState(background_task_id_,
+    background_tasks_->UpdateTaskState(background_task_id_,
                                                 BackgroundTaskState::Canceling);
   }
   emit StateChanged();

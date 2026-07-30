@@ -5,18 +5,26 @@
 #include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
 
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
+#include <QJsonValue>
 #include <algorithm>
 #include <array>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
 #include <unordered_set>
 #include <vector>
 
 #include "edit/operators/utils/color_utils.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
-#include "ui/alcedo_main/album_backend/album_backend.hpp"
+#include "ui/alcedo_main/album_backend/adjustment_transfer_controller.hpp"
+#include "ui/alcedo_main/album_backend/editor_session_controller.hpp"
+#include "ui/alcedo_main/album_backend/import_export.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/i18n.hpp"
 
 namespace alcedo::ui {
@@ -94,6 +102,47 @@ auto SuccessResult(const QString& message = {}) -> QVariantMap {
   if (!message.isEmpty()) {
     result.insert("message", message);
   }
+  return result;
+}
+
+auto SessionResultMap(const alcedo::EditorSessionResult& result) -> QVariantMap {
+  const bool success = result.kind != alcedo::EditorSessionResultKind::Rejected &&
+                       result.kind != alcedo::EditorSessionResultKind::Failed;
+  return {{"success", success},
+          {"message", QString::fromStdString(result.message)},
+          {"kind", static_cast<int>(result.kind)}};
+}
+
+auto JsonToVariant(const nlohmann::json& value) -> QVariant {
+  const auto document = QJsonDocument::fromJson(QByteArray::fromStdString(value.dump()));
+  if (document.isObject() || document.isArray()) return document.toVariant();
+  if (value.is_boolean()) return value.get<bool>();
+  if (value.is_number()) return value.get<double>();
+  if (value.is_string()) return QString::fromStdString(value.get<std::string>());
+  return {};
+}
+
+auto PreviewMap(const alcedo::AdjustmentMergePreview& preview) -> QVariantMap {
+  QVariantList conflicts;
+  conflicts.reserve(static_cast<qsizetype>(preview.conflicts.size()));
+  for (const auto& conflict : preview.conflicts) {
+    conflicts.push_back(QVariantMap{
+        {"fieldKey", QString::fromStdString(conflict.field_key)},
+        {"currentValue", JsonToVariant(conflict.current_value)},
+        {"incomingValue", JsonToVariant(conflict.incoming_value)},
+        {"currentEnabled", true},
+        {"incomingEnabled", true},
+    });
+  }
+  QVariantMap result{
+      {"success", preview.error.empty()},
+      {"hasConflicts", preview.has_conflicts},
+      {"conflicts", conflicts},
+      {"incomingVersionId", QString::fromStdString(preview.incoming_version_id.ToString())},
+      {"incomingHead", preview.incoming_head != alcedo::commit_hash_t{}
+                           ? QString::fromStdString(preview.incoming_head.ToString())
+                           : QString{}}};
+  if (!preview.error.empty()) result.insert("message", QString::fromStdString(preview.error));
   return result;
 }
 
@@ -324,11 +373,14 @@ auto MakeTargetIds(const std::vector<ExportTarget>& targets) -> std::vector<sl_e
 
 }  // namespace
 
-AdjustmentTransferController::AdjustmentTransferController(AlbumBackend& backend)
-    : backend_(backend) {}
+AdjustmentTransferController::AdjustmentTransferController(ProjectModule*       project,
+                                                           LibraryModule*       library,
+                                                           ImportExportHandler* import_export,
+                                                           QObject*             parent)
+    : QObject(parent), project_(project), library_(library), import_export_(import_export) {}
 
 auto AdjustmentTransferController::PrepareCopy(uint elementId) -> QVariantMap {
-  auto pipeline_service = backend_.project_handler_.pipeline_service();
+  auto pipeline_service = project_->handler().pipeline_service();
   if (!pipeline_service) {
     return ErrorResult(Tr("Pipeline service is unavailable."));
   }
@@ -337,29 +389,111 @@ auto AdjustmentTransferController::PrepareCopy(uint elementId) -> QVariantMap {
   }
 
   std::shared_ptr<PipelineGuard> guard;
+  std::optional<CommitGraph>     graph_before_inspection;
+  head_commit_hash_t             head_before_inspection = std::nullopt;
+  transaction_chain_hash_t       chain_before_inspection{};
+  bool                           dirty_before_inspection      = false;
+  bool                           serialized_before_inspection = false;
   try {
-    guard = pipeline_service->LoadPipeline(static_cast<sl_element_id_t>(elementId));
-    if (!guard || !guard->pipeline_) {
+    guard = pipeline_service->LoadEditorPipeline(static_cast<sl_element_id_t>(elementId));
+    if (!guard || !guard->pipeline_ || !guard->commit_graph_) {
       return ErrorResult(Tr("Pipeline was not available."));
     }
 
-    QVariantList rows;
-    rows.reserve(static_cast<qsizetype>(kItems.size()));
-    {
-      std::unique_lock<std::mutex> render_guard(guard->pipeline_->GetRenderLock());
-      for (const auto& spec : kItems) {
-        rows.push_back(RowFor(*guard->pipeline_, spec, spec.checked_by_default));
-      }
+    auto& graph                  = *guard->commit_graph_;
+    graph_before_inspection      = graph;
+    const auto prior_version_id  = graph.GetActiveVersionId();
+    const auto prior_head        = guard->working_head_commit_hash_;
+    const auto prior_chain       = guard->transaction_chain_hash_;
+    const bool prior_dirty       = guard->dirty_;
+    const bool prior_serialized  = guard->serialized_state_needs_writeback_;
+    head_before_inspection       = prior_head;
+    chain_before_inspection      = prior_chain;
+    dirty_before_inspection      = prior_dirty;
+    serialized_before_inspection = prior_serialized;
+
+    std::vector<VersionRef> versions;
+    versions.reserve(graph.GetAllVersionRefs().size());
+    for (const auto& [id, version] : graph.GetAllVersionRefs()) {
+      (void)id;
+      versions.push_back(version);
     }
+    std::ranges::sort(versions, [](const VersionRef& left, const VersionRef& right) {
+      if (left.created_at != right.created_at) {
+        return left.created_at < right.created_at;
+      }
+      return left.version_id.ToString() < right.version_id.ToString();
+    });
+
+    QVariantList version_rows;
+    QVariantList active_rows;
+    version_rows.reserve(static_cast<qsizetype>(versions.size()));
+    const auto* source_item = library_->FindAlbumItem(static_cast<sl_element_id_t>(elementId));
+    const auto  source_image_id = source_item != nullptr ? source_item->image_id : 0;
+    for (const auto& version : versions) {
+      graph.SetActiveVersionId(version.version_id);
+      std::string rebuild_error;
+      if (!pipeline_service->RebuildActiveEditorPipeline(guard, &rebuild_error)) {
+        throw std::runtime_error(rebuild_error.empty() ? "Failed to inspect source Version"
+                                                       : std::move(rebuild_error));
+      }
+
+      std::string snapshot_error;
+      auto        snapshot = pipeline_service->LoadPipelineSnapshot(
+          static_cast<sl_element_id_t>(elementId), source_image_id, &snapshot_error);
+      if (!snapshot || !snapshot->executor_) {
+        throw std::runtime_error(snapshot_error.empty() ? "Failed to snapshot source Version"
+                                                         : std::move(snapshot_error));
+      }
+
+      QVariantList rows;
+      rows.reserve(static_cast<qsizetype>(kItems.size()));
+      for (const auto& spec : kItems) {
+        rows.push_back(RowFor(*snapshot->executor_, spec, spec.checked_by_default));
+      }
+      pipeline_service->ReleasePipelineSnapshot(std::move(snapshot));
+      const bool active = version.version_id == prior_version_id;
+      if (active) {
+        active_rows = rows;
+      }
+      version_rows.push_back(
+          QVariantMap{{"versionId", QString::fromStdString(version.version_id.ToString())},
+                      {"displayName", QString::fromStdString(version.display_name)},
+                      {"updatedAt", static_cast<qlonglong>(version.updated_at)},
+                      {"active", active},
+                      {"items", rows}});
+    }
+
+    graph.SetActiveVersionId(prior_version_id);
+    std::string restore_error;
+    if (!pipeline_service->RebuildActiveEditorPipeline(guard, &restore_error)) {
+      throw std::runtime_error(restore_error.empty() ? "Failed to restore active source Version"
+                                                     : std::move(restore_error));
+    }
+    guard->working_head_commit_hash_         = prior_head;
+    guard->transaction_chain_hash_           = prior_chain;
+    guard->dirty_                            = prior_dirty;
+    guard->serialized_state_needs_writeback_ = prior_serialized;
     pipeline_service->SavePipeline(guard);
 
     QVariantMap result = SuccessResult();
-    const auto* item   = backend_.FindAlbumItem(static_cast<sl_element_id_t>(elementId));
+    const auto* item   = library_->FindAlbumItem(static_cast<sl_element_id_t>(elementId));
     result.insert("sourceTitle", TitleForItem(item, static_cast<sl_element_id_t>(elementId)));
-    result.insert("items", rows);
+    result.insert("activeVersionId", QString::fromStdString(prior_version_id.ToString()));
+    result.insert("versions", version_rows);
+    result.insert("items", active_rows);
     return result;
   } catch (...) {
     if (guard) {
+      if (graph_before_inspection.has_value() && guard->commit_graph_) {
+        *guard->commit_graph_ = *graph_before_inspection;
+        std::string ignored_error;
+        (void)pipeline_service->RebuildActiveEditorPipeline(guard, &ignored_error);
+        guard->working_head_commit_hash_         = head_before_inspection;
+        guard->transaction_chain_hash_           = chain_before_inspection;
+        guard->dirty_                            = dirty_before_inspection;
+        guard->serialized_state_needs_writeback_ = serialized_before_inspection;
+      }
       pipeline_service->SavePipeline(guard);
     }
     return ErrorResult(CurrentExceptionText("Failed to prepare adjustment copy."));
@@ -368,7 +502,12 @@ auto AdjustmentTransferController::PrepareCopy(uint elementId) -> QVariantMap {
 
 auto AdjustmentTransferController::Copy(uint elementId, const QVariantList& selectedKeys)
     -> QVariantMap {
-  auto pipeline_service = backend_.project_handler_.pipeline_service();
+  return CopyVersion(elementId, {}, selectedKeys);
+}
+
+auto AdjustmentTransferController::CopyVersion(uint elementId, const QString& versionId,
+                                               const QVariantList& selectedKeys) -> QVariantMap {
+  auto pipeline_service = project_->handler().pipeline_service();
   if (!pipeline_service) {
     return ErrorResult(Tr("Pipeline service is unavailable."));
   }
@@ -396,35 +535,83 @@ auto AdjustmentTransferController::Copy(uint elementId, const QVariantList& sele
   }
 
   std::shared_ptr<PipelineGuard> guard;
+  std::optional<CommitGraph>     graph_before_inspection;
+  head_commit_hash_t             head_before_inspection = std::nullopt;
+  transaction_chain_hash_t       chain_before_inspection{};
+  bool                           dirty_before_inspection      = false;
+  bool                           serialized_before_inspection = false;
   try {
-    guard = pipeline_service->LoadPipeline(static_cast<sl_element_id_t>(elementId));
-    if (!guard || !guard->pipeline_) {
+    guard = pipeline_service->LoadEditorPipeline(static_cast<sl_element_id_t>(elementId));
+    if (!guard || !guard->pipeline_ || !guard->commit_graph_) {
       return ErrorResult(Tr("Pipeline was not available."));
+    }
+
+    auto& graph                  = *guard->commit_graph_;
+    graph_before_inspection      = graph;
+    const auto prior_version_id  = graph.GetActiveVersionId();
+    const auto prior_head        = guard->working_head_commit_hash_;
+    const auto prior_chain       = guard->transaction_chain_hash_;
+    const bool prior_dirty       = guard->dirty_;
+    const bool prior_serialized  = guard->serialized_state_needs_writeback_;
+    head_before_inspection       = prior_head;
+    chain_before_inspection      = prior_chain;
+    dirty_before_inspection      = prior_dirty;
+    serialized_before_inspection = prior_serialized;
+
+    auto selected_version_id     = prior_version_id;
+    if (!versionId.trimmed().isEmpty()) {
+      selected_version_id = version_ref_id_t::FromString(versionId.toStdString());
+      (void)graph.GetVersionRef(selected_version_id);
+    }
+    graph.SetActiveVersionId(selected_version_id);
+    std::string rebuild_error;
+    if (!pipeline_service->RebuildActiveEditorPipeline(guard, &rebuild_error)) {
+      throw std::runtime_error(rebuild_error.empty() ? "Failed to read selected source Version"
+                                                     : std::move(rebuild_error));
     }
 
     AdjustmentTransferPackage package;
     QVariantList              summary;
-    {
-      std::unique_lock<std::mutex> render_guard(guard->pipeline_->GetRenderLock());
-      for (const auto* spec : specs) {
-        const bool enabled = OperatorEnabledFor(*guard->pipeline_, *spec);
-        const auto params  = TransferParamsFor(*guard->pipeline_, *spec);
-        package.operators_.push_back({
-            .stage_         = spec->stage,
-            .operator_type_ = spec->op_type,
-            .enabled_       = enabled,
-            .merge_params_  = spec->merge_params,
-            .params_        = params,
-        });
-        summary.push_back(SummaryRow(
-            *spec, ValueFor(*spec, OperatorParamsFor(*guard->pipeline_, *spec), enabled)));
-      }
+    const auto* source_item = library_->FindAlbumItem(static_cast<sl_element_id_t>(elementId));
+    const auto  source_image_id = source_item != nullptr ? source_item->image_id : 0;
+    std::string snapshot_error;
+    auto        snapshot = pipeline_service->LoadPipelineSnapshot(
+        static_cast<sl_element_id_t>(elementId), source_image_id, &snapshot_error);
+    if (!snapshot || !snapshot->executor_) {
+      throw std::runtime_error(snapshot_error.empty() ? "Failed to snapshot source Version"
+                                                       : std::move(snapshot_error));
     }
+    for (const auto* spec : specs) {
+      const bool enabled = OperatorEnabledFor(*snapshot->executor_, *spec);
+      const auto params  = TransferParamsFor(*snapshot->executor_, *spec);
+      package.operators_.push_back({
+          .stage_         = spec->stage,
+          .operator_type_ = spec->op_type,
+          .enabled_       = enabled,
+          .merge_params_  = spec->merge_params,
+          .params_        = params,
+      });
+      const auto summary_value =
+          ValueFor(*spec, OperatorParamsFor(*snapshot->executor_, *spec), enabled);
+      summary.push_back(SummaryRow(*spec, summary_value));
+    }
+    pipeline_service->ReleasePipelineSnapshot(std::move(snapshot));
+
+    graph.SetActiveVersionId(prior_version_id);
+    std::string restore_error;
+    if (!pipeline_service->RebuildActiveEditorPipeline(guard, &restore_error)) {
+      throw std::runtime_error(restore_error.empty() ? "Failed to restore active source Version"
+                                                     : std::move(restore_error));
+    }
+    guard->working_head_commit_hash_         = prior_head;
+    guard->transaction_chain_hash_           = prior_chain;
+    guard->dirty_                            = prior_dirty;
+    guard->serialized_state_needs_writeback_ = prior_serialized;
     pipeline_service->SavePipeline(guard);
 
     copied_package_      = std::move(package);
     copied_summary_      = std::move(summary);
-    const auto* item     = backend_.FindAlbumItem(static_cast<sl_element_id_t>(elementId));
+    const auto* item     = library_->FindAlbumItem(static_cast<sl_element_id_t>(elementId));
     copied_source_title_ = TitleForItem(item, static_cast<sl_element_id_t>(elementId));
     emit        PackageChanged();
 
@@ -434,6 +621,15 @@ auto AdjustmentTransferController::Copy(uint elementId, const QVariantList& sele
     return result;
   } catch (...) {
     if (guard) {
+      if (graph_before_inspection.has_value() && guard->commit_graph_) {
+        *guard->commit_graph_ = *graph_before_inspection;
+        std::string ignored_error;
+        (void)pipeline_service->RebuildActiveEditorPipeline(guard, &ignored_error);
+        guard->working_head_commit_hash_         = head_before_inspection;
+        guard->transaction_chain_hash_           = chain_before_inspection;
+        guard->dirty_                            = dirty_before_inspection;
+        guard->serialized_state_needs_writeback_ = serialized_before_inspection;
+      }
       pipeline_service->SavePipeline(guard);
     }
     return ErrorResult(CurrentExceptionText("Failed to copy adjustments."));
@@ -446,85 +642,250 @@ auto AdjustmentTransferController::Paste(const QVariantList& targetEntries, cons
     return ErrorResult(Tr("No copied adjustments."));
   }
 
-  auto pipeline_service = backend_.project_handler_.pipeline_service();
+  auto pipeline_service = project_->handler().pipeline_service();
   if (!pipeline_service) {
     return ErrorResult(Tr("Pipeline service is unavailable."));
   }
-  auto history_service = backend_.project_handler_.history_service();
-  if (!history_service) {
-    return ErrorResult(Tr("Edit history service is unavailable."));
-  }
 
-  const auto targets = backend_.import_export_.CollectExportTargets(targetEntries);
+  const auto targets = import_export_->CollectExportTargets(targetEntries);
   const auto ids     = MakeTargetIds(targets);
   if (ids.empty()) {
     return ErrorResult(Tr("No target images selected."));
   }
 
-  try {
-    const bool merge_strategy = strategy != QStringLiteral("paste");
-    const auto result         = AdjustmentTransferService::Apply(
-        *pipeline_service, *history_service, ids, *copied_package_,
-        (merge_strategy ? Tr("Merged Adjustments") : Tr("Pasted Adjustments")).toStdString(),
-        merge_strategy ? AdjustmentVersionApplyMode::kMerge : AdjustmentVersionApplyMode::kPaste);
-    auto thumbnail_service = backend_.project_handler_.thumbnail_service();
-    bool hdr_metadata_dirty = false;
-    for (sl_element_id_t element_id : result.applied_ids_) {
-      const auto*      item     = backend_.FindAlbumItem(element_id);
-      const image_id_t image_id = item != nullptr ? item->image_id : 0;
-      if (image_id != 0) {
-        try {
+  const bool merge_strategy = strategy != QStringLiteral("paste");
+
+  // Paste is root-relative. Merge requires a per-field resolution request and
+  // therefore cannot silently substitute the obsolete transaction-array path.
+  if (!merge_strategy) {
+    return PasteViaMiniGit(ids, *pipeline_service);
+  }
+  return ErrorResult(Tr("Merge requires per-field conflict resolutions."));
+}
+
+auto AdjustmentTransferController::PasteIntoEditor(QObject* editorSession) -> QVariantMap {
+  if (!copied_package_.has_value()) return ErrorResult(Tr("No copied adjustments."));
+  auto* session = qobject_cast<EditorSessionController*>(editorSession);
+  if (!session) return ErrorResult(Tr("Editor session is unavailable."));
+  return SessionResultMap(
+      session->PasteAdjustmentPackage(*copied_package_, Tr("Pasted Adjustments")));
+}
+
+auto AdjustmentTransferController::BeginMergeIntoEditor(QObject* editorSession) -> QVariantMap {
+  if (!copied_package_.has_value()) return ErrorResult(Tr("No copied adjustments."));
+  auto* session = qobject_cast<EditorSessionController*>(editorSession);
+  if (!session) return ErrorResult(Tr("Editor session is unavailable."));
+  AdjustmentMergePreview preview;
+  const auto             result = session->BeginMergeAdjustmentPackage(*copied_package_, &preview);
+  auto                   map    = SessionResultMap(result);
+  if (map.value("success").toBool()) {
+    const auto preview_map = PreviewMap(preview);
+    for (auto it = preview_map.cbegin(); it != preview_map.cend(); ++it)
+      map.insert(it.key(), it.value());
+  }
+  return map;
+}
+
+auto AdjustmentTransferController::CompleteMergeIntoEditor(QObject*            editorSession,
+                                                           const QVariantList& resolutions)
+    -> QVariantMap {
+  auto* session = qobject_cast<EditorSessionController*>(editorSession);
+  if (!session) return ErrorResult(Tr("Editor session is unavailable."));
+  std::vector<AdjustmentMergeResolution> typed_resolutions;
+  typed_resolutions.reserve(static_cast<std::size_t>(resolutions.size()));
+  for (const auto& value : resolutions) {
+    const auto map       = value.toMap();
+    const auto field_key = map.value("fieldKey").toString().trimmed();
+    if (field_key.isEmpty()) continue;
+    AdjustmentMergeResolution resolution;
+    resolution.field_key        = field_key.toStdString();
+    resolution.resolved_enabled = map.value("resolvedEnabled", true).toBool();
+    const auto resolved_value   = map.value("resolvedValue");
+    const auto qvalue           = QJsonValue::fromVariant(resolved_value);
+    if (qvalue.isObject() || qvalue.isArray()) {
+      const auto document =
+          qvalue.isObject() ? QJsonDocument(qvalue.toObject()) : QJsonDocument(qvalue.toArray());
+      resolution.resolved_value =
+          nlohmann::json::parse(document.toJson(QJsonDocument::Compact).toStdString());
+    } else if (qvalue.isBool()) {
+      resolution.resolved_value = qvalue.toBool();
+    } else if (qvalue.isDouble()) {
+      resolution.resolved_value = qvalue.toDouble();
+    } else if (qvalue.isString()) {
+      resolution.resolved_value = qvalue.toString().toStdString();
+    } else {
+      resolution.resolved_value = nullptr;
+    }
+    typed_resolutions.push_back(std::move(resolution));
+  }
+  return SessionResultMap(session->CompleteMergeAdjustments(typed_resolutions));
+}
+
+auto AdjustmentTransferController::CancelMergeIntoEditor(QObject* editorSession) -> QVariantMap {
+  auto* session = qobject_cast<EditorSessionController*>(editorSession);
+  if (!session) return ErrorResult(Tr("Editor session is unavailable."));
+  return SessionResultMap(session->CancelMergeAdjustments());
+}
+
+auto AdjustmentTransferController::PasteViaMiniGit(const std::vector<sl_element_id_t>& ids,
+                                                   PipelineMgmtService& pipeline_service)
+    -> QVariantMap {
+  AdjustmentApplyResult result;
+  for (sl_element_id_t element_id : ids) {
+    if (element_id == 0) {
+      continue;
+    }
+
+    std::shared_ptr<PipelineGuard> guard;
+    try {
+      guard = pipeline_service.LoadEditorPipeline(element_id);
+    } catch (const std::exception& e) {
+      result.failures_.push_back({element_id, e.what()});
+      continue;
+    }
+    if (!guard || !guard->pipeline_) {
+      result.failures_.push_back({element_id, "Pipeline was not available."});
+      continue;
+    }
+
+    // Use the commit graph attached to the pipeline guard.
+    CommitGraph* graph = nullptr;
+    if (guard->commit_graph_) {
+      graph = guard->commit_graph_.get();
+    }
+
+    if (graph == nullptr) {
+      result.failures_.push_back({element_id, "Mini-Git graph was not available for paste."});
+      pipeline_service.SavePipeline(guard);
+      continue;
+    }
+
+    // A root-relative Paste creates both immutable commits and a named Version.
+    // That transition cannot be represented by the edit/head-move journal, so
+    // publish it through the same guarded graph materialization used by named
+    // Version operations.
+    const auto graph_before_paste = *graph;
+    const auto prior_head         = guard->working_head_commit_hash_;
+    const auto prior_chain        = guard->transaction_chain_hash_;
+    const bool prior_dirty        = guard->dirty_;
+    const bool prior_serialized   = guard->serialized_state_needs_writeback_;
+    auto       restore_prior      = [&] {
+      *graph = graph_before_paste;
+      std::string ignored_error;
+      (void)pipeline_service.RebuildActiveEditorPipeline(guard, &ignored_error);
+      guard->working_head_commit_hash_         = prior_head;
+      guard->transaction_chain_hash_           = prior_chain;
+      guard->dirty_                            = prior_dirty;
+      guard->serialized_state_needs_writeback_ = prior_serialized;
+    };
+    try {
+      auto paste_result = AdjustmentTransferService::PasteAsRootRelativeVersion(
+          *graph, pipeline_service, element_id, *copied_package_,
+          Tr("Pasted Adjustments").toStdString());
+      if (paste_result.pasted) {
+        std::string rebuild_error;
+        if (!pipeline_service.RebuildActiveEditorPipeline(guard, &rebuild_error)) {
+          restore_prior();
+          result.failures_.push_back({element_id, rebuild_error.empty()
+                                                      ? "Failed to rebuild pasted pipeline"
+                                                      : std::move(rebuild_error)});
+        } else {
+          guard->working_head_commit_hash_         = paste_result.new_head;
+          guard->transaction_chain_hash_           = graph->ChainHashForHead(paste_result.new_head);
+          guard->serialized_state_needs_writeback_ = true;
+          std::string persistence_error;
+          if (!pipeline_service.PersistEditorHistoryState(
+                  guard, graph_before_paste.GetImageEditState(), &persistence_error)) {
+            restore_prior();
+            result.failures_.push_back({element_id, persistence_error.empty()
+                                                        ? "Failed to persist pasted Version"
+                                                        : std::move(persistence_error)});
+          } else {
+            guard->dirty_ = false;
+            result.applied_ids_.push_back(element_id);
+          }
+        }
+      } else {
+        restore_prior();
+        result.failures_.push_back({element_id, paste_result.error});
+      }
+    } catch (const std::exception& e) {
+      restore_prior();
+      result.failures_.push_back({element_id, e.what()});
+    }
+    pipeline_service.SavePipeline(guard);
+  }
+
+  pipeline_service.Sync();
+  PostProcessApplyResult(result, false);
+
+  QVariantList failures;
+  for (const auto& failure : result.failures_) {
+    failures.push_back(QVariantMap{{"elementId", static_cast<uint>(failure.file_id_)},
+                                   {"message", QString::fromStdString(failure.message_)}});
+  }
+
+  QVariantMap response;
+  if (result.applied_ids_.empty() && !result.failures_.empty()) {
+    response = ErrorResult(QString::fromStdString(result.failures_.front().message_));
+  } else if (!result.failures_.empty()) {
+    response = SuccessResult(Tr("Adjustments pasted with some failures."));
+  } else {
+    response = SuccessResult(Tr("Adjustments pasted."));
+  }
+  response.insert("appliedCount", static_cast<int>(result.applied_ids_.size()));
+  response.insert("unchangedCount", static_cast<int>(result.unchanged_ids_.size()));
+  response.insert("failureCount", static_cast<int>(result.failures_.size()));
+  response.insert("failures", failures);
+  return response;
+}
+
+void AdjustmentTransferController::PostProcessApplyResult(const AdjustmentApplyResult& result,
+                                                          bool /*merge_strategy*/) {
+  auto thumbnail_service  = project_->handler().thumbnail_service();
+  bool hdr_metadata_dirty = false;
+  for (sl_element_id_t element_id : result.applied_ids_) {
+    const auto*      item     = library_->FindAlbumItem(element_id);
+    const image_id_t image_id = item != nullptr ? item->image_id : 0;
+    if (image_id != 0) {
+      try {
+        auto pipeline_service = project_->handler().pipeline_service();
+        if (pipeline_service) {
           auto guard = pipeline_service->LoadPipeline(element_id);
           if (guard && guard->pipeline_) {
-            const bool is_hdr = IsHdrExportEotf(
-                guard->pipeline_->GetGlobalParams().to_output_params_.eotf_);
+            const bool is_hdr =
+                IsHdrExportEotf(guard->pipeline_->GetGlobalParams().to_output_params_.eotf_);
             pipeline_service->SavePipeline(guard);
-            backend_.PersistImageHdrFlag(element_id, image_id, is_hdr);
+            library_->PersistImageHdrFlag(element_id, image_id, is_hdr);
             hdr_metadata_dirty = true;
           }
-        } catch (...) {
         }
-      }
-      if (thumbnail_service) {
-        try {
-          thumbnail_service->InvalidateThumbnail(element_id);
-        } catch (...) {
-        }
-      }
-      if (image_id != 0) {
-        if (!backend_.thumb_.RefreshCurrentThumbnail(element_id, image_id)) {
-          backend_.thumb_.UpdateThumbnailState(element_id, QString(), false, false);
-        }
+      } catch (...) {
       }
     }
-    if (hdr_metadata_dirty) {
-      if (auto project = backend_.project_handler_.project()) {
-        try {
-          project->GetImagePoolService()->SyncWithStorage();
-          QString ignored_error;
-          if (backend_.project_handler_.PersistCurrentProjectState()) {
-            (void)backend_.project_handler_.PackageCurrentProjectFiles(&ignored_error);
-          }
-        } catch (...) {
-        }
+    if (thumbnail_service) {
+      try {
+        thumbnail_service->InvalidateThumbnail(element_id);
+      } catch (...) {
       }
     }
-
-    QVariantList failures;
-    for (const auto& failure : result.failures_) {
-      failures.push_back(QVariantMap{{"elementId", static_cast<uint>(failure.file_id_)},
-                                     {"message", QString::fromStdString(failure.message_)}});
+    if (image_id != 0) {
+      if (!library_->thumbs().RefreshCurrentThumbnail(element_id, image_id)) {
+        library_->thumbs().UpdateThumbnailState(element_id, QString(), false, false);
+      }
     }
-
-    QVariantMap response =
-        SuccessResult(merge_strategy ? Tr("Adjustments merged.") : Tr("Adjustments pasted."));
-    response.insert("appliedCount", static_cast<int>(result.applied_ids_.size()));
-    response.insert("unchangedCount", static_cast<int>(result.unchanged_ids_.size()));
-    response.insert("failureCount", static_cast<int>(result.failures_.size()));
-    response.insert("failures", failures);
-    return response;
-  } catch (...) {
-    return ErrorResult(CurrentExceptionText("Failed to paste adjustments."));
+  }
+  if (hdr_metadata_dirty) {
+    if (auto project = project_->handler().project()) {
+      try {
+        project->GetImagePoolService()->SyncWithStorage();
+        QString ignored_error;
+        if (project_->handler().PersistCurrentProjectState()) {
+          (void)project_->handler().PackageCurrentProjectFiles(&ignored_error);
+        }
+      } catch (...) {
+      }
+    }
   }
 }
 

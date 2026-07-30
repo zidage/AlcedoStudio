@@ -264,6 +264,46 @@ QString InteractionPolicyController::SearchFieldFiltersReason() const {
   return {};
 }
 
+bool InteractionPolicyController::CanSelectEditorImage() const {
+  return EvalGlobal(InteractionCapability::SelectEditorImage).allowed_;
+}
+
+QString InteractionPolicyController::SelectEditorImageReason() const {
+  return EvalGlobal(InteractionCapability::SelectEditorImage).reason_;
+}
+
+bool InteractionPolicyController::CanSwitchWorkspace() const {
+  return EvalGlobal(InteractionCapability::SwitchWorkspace).allowed_;
+}
+
+QString InteractionPolicyController::SwitchWorkspaceReason() const {
+  return EvalGlobal(InteractionCapability::SwitchWorkspace).reason_;
+}
+
+bool InteractionPolicyController::CanCheckoutVersion() const {
+  return EvalGlobal(InteractionCapability::CheckoutVersion).allowed_;
+}
+
+QString InteractionPolicyController::CheckoutVersionReason() const {
+  return EvalGlobal(InteractionCapability::CheckoutVersion).reason_;
+}
+
+bool InteractionPolicyController::CanPasteAdjustments() const {
+  return EvalGlobal(InteractionCapability::PasteAdjustments).allowed_;
+}
+
+QString InteractionPolicyController::PasteAdjustmentsReason() const {
+  return EvalGlobal(InteractionCapability::PasteAdjustments).reason_;
+}
+
+bool InteractionPolicyController::CanMergeAdjustments() const {
+  return EvalGlobal(InteractionCapability::MergeAdjustments).allowed_;
+}
+
+QString InteractionPolicyController::MergeAdjustmentsReason() const {
+  return EvalGlobal(InteractionCapability::MergeAdjustments).reason_;
+}
+
 // ── Q_INVOKABLE one-shot queries (full {allowed, reason, blockingTaskIds} map) ─
 QVariantMap InteractionPolicyController::EvaluateEditImageDescription(uint elementId) const {
   return ToVariantMap(Eval(InteractionCapability::EditImageDescription, elementId));
@@ -300,6 +340,26 @@ QVariantMap InteractionPolicyController::EvaluateChangeModelDownloadSettings() c
 
 QVariantMap InteractionPolicyController::EvaluateChangeImageAnalysisProvider() const {
   return ToVariantMap(EvalGlobal(InteractionCapability::ChangeImageAnalysisProvider));
+}
+
+QVariantMap InteractionPolicyController::EvaluateSelectEditorImage() const {
+  return ToVariantMap(EvalGlobal(InteractionCapability::SelectEditorImage));
+}
+
+QVariantMap InteractionPolicyController::EvaluateSwitchWorkspace() const {
+  return ToVariantMap(EvalGlobal(InteractionCapability::SwitchWorkspace));
+}
+
+QVariantMap InteractionPolicyController::EvaluateCheckoutVersion() const {
+  return ToVariantMap(EvalGlobal(InteractionCapability::CheckoutVersion));
+}
+
+QVariantMap InteractionPolicyController::EvaluatePasteAdjustments() const {
+  return ToVariantMap(EvalGlobal(InteractionCapability::PasteAdjustments));
+}
+
+QVariantMap InteractionPolicyController::EvaluateMergeAdjustments() const {
+  return ToVariantMap(EvalGlobal(InteractionCapability::MergeAdjustments));
 }
 
 }  // namespace alcedo::ui

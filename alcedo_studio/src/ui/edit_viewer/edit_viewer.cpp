@@ -170,7 +170,7 @@ class EditViewerOverlayWidget final : public QWidget {
  protected:
   bool event(QEvent* event) override {
     if (event->type() == QEvent::NativeGesture) {
-      owner_.HandleOverlayNativeGesture(static_cast<QNativeGestureEvent*>(event));
+      owner_.HandleOverlayNativeInput(static_cast<QNativeGestureEvent*>(event));
       return true;
     }
     return QWidget::event(event);
@@ -278,7 +278,7 @@ void QtEditViewer::SetCropToolEnabled(bool enabled) {
   }
   viewer_state_.SetCropToolEnabled(enabled);
   if (!enabled) {
-    crop_interaction_controller_.Cancel();
+    crop_interaction_controller_.Cancel(viewer_state_);
   }
   const auto result =
       view_transform_controller_.HandleCropToolEnabledChanged(viewer_state_, enabled);
@@ -747,7 +747,7 @@ void QtEditViewer::HandleOverlayWheel(QWheelEvent* event) {
   event->accept();
 }
 
-void QtEditViewer::HandleOverlayNativeGesture(QNativeGestureEvent* event) {
+void QtEditViewer::HandleOverlayNativeInput(QNativeGestureEvent* event) {
   if (event->gestureType() == Qt::ZoomNativeGesture) {
     StopZoomAnimation();
     const float value = static_cast<float>(event->value());

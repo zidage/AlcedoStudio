@@ -43,10 +43,39 @@ class DBController {
       "CREATE TABLE ComboFolder (combo_id BIGINT, folder_id BIGINT);"
       "CREATE TABLE Filter (combo_id BIGINT, type INTEGER, data JSON);"
       "CREATE TABLE EditHistory (file_id BIGINT PRIMARY KEY, history JSON);"
-      "CREATE TABLE Version (hash BIGINT PRIMARY KEY, history_id BIGINT, parent_hash BIGINT, "
-      "content "
-      "JSON);"
-      "CREATE TABLE PipelineParam(file_id BIGINT PRIMARY KEY, param_json JSON);";
+      "CREATE TABLE PipelineParam(file_id BIGINT PRIMARY KEY, param_json JSON);"
+      // Mini-Git commit graph: immutable commits, Version refs, and per-image edit state.
+      "CREATE TABLE EditCommit ("
+      "commit_hash VARCHAR PRIMARY KEY,"
+      "root_id VARCHAR NOT NULL,"
+      "first_parent_hash VARCHAR,"
+      "second_parent_hash VARCHAR,"
+      "created_at_ns UBIGINT NOT NULL,"
+      "kind INTEGER NOT NULL,"
+      "edit_payload JSON NOT NULL);"
+      "CREATE INDEX idx_edit_commit_first_parent ON EditCommit(first_parent_hash);"
+      "CREATE INDEX idx_edit_commit_second_parent ON EditCommit(second_parent_hash);"
+      "CREATE INDEX idx_edit_commit_root ON EditCommit(root_id);"
+      "CREATE TABLE VersionRef ("
+      "version_id VARCHAR PRIMARY KEY,"
+      "element_id BIGINT NOT NULL,"
+      "display_name VARCHAR NOT NULL,"
+      "head_commit_hash VARCHAR,"
+      "created_at_unix BIGINT NOT NULL,"
+      "updated_at_unix BIGINT NOT NULL);"
+      "CREATE INDEX idx_version_ref_element ON VersionRef(element_id);"
+      "CREATE TABLE ImageEditState ("
+      "element_id BIGINT PRIMARY KEY,"
+      "root_id VARCHAR NOT NULL,"
+      "active_version_id VARCHAR NOT NULL,"
+      "materialized_head_commit_hash VARCHAR,"
+      "materialized_transaction_chain_hash VARCHAR NOT NULL,"
+      "serialized_pipeline_state JSON,"
+      "project_schema_version INTEGER NOT NULL);"
+      "CREATE TABLE PipelineRoot ("
+      "root_id VARCHAR PRIMARY KEY,"
+      "element_id BIGINT UNIQUE NOT NULL,"
+      "serialized_pipeline_state JSON NOT NULL);";
 
   constexpr static const char* semantic_table_query =
       "CREATE TABLE IF NOT EXISTS SemanticModel ("
@@ -143,6 +172,53 @@ class DBController {
   // inserts and re-stamped on each upsert, so it doubles as last-write time. Rating is
   // NOT part of full-text search: it is stored here only, and the search-document
   // builder (sleeve_filter_service) intentionally reads the understanding table alone.
+  // Editor recovery metadata for atomic history/pipeline materialization.
+  // CREATE IF NOT EXISTS so existing project databases gain the table in place.
+  constexpr static const char* editor_recovery_metadata_table_query =
+      "CREATE TABLE IF NOT EXISTS EditorRecoveryMetadata ("
+      "file_id BIGINT PRIMARY KEY,"
+      "version_id VARCHAR NOT NULL DEFAULT '',"
+      "journal_generation UBIGINT NOT NULL DEFAULT 0,"
+      "materialized_operation_sequence UBIGINT NOT NULL DEFAULT 0,"
+      "transaction_chain_hash VARCHAR NOT NULL DEFAULT '',"
+      "pipeline_parameter_hash VARCHAR NOT NULL DEFAULT '');";
+
+  // Mini-Git commit-graph tables. CREATE IF NOT EXISTS keeps the existing-DB open path
+  // aligned with fresh projects; incompatible older project packages are rejected by
+  // project_file_version before history is loaded.
+  constexpr static const char* commit_graph_table_query =
+      "CREATE TABLE IF NOT EXISTS EditCommit ("
+      "commit_hash VARCHAR PRIMARY KEY,"
+      "root_id VARCHAR NOT NULL,"
+      "first_parent_hash VARCHAR,"
+      "second_parent_hash VARCHAR,"
+      "created_at_ns UBIGINT NOT NULL,"
+      "kind INTEGER NOT NULL,"
+      "edit_payload JSON NOT NULL);"
+      "CREATE INDEX IF NOT EXISTS idx_edit_commit_first_parent ON EditCommit(first_parent_hash);"
+      "CREATE INDEX IF NOT EXISTS idx_edit_commit_second_parent ON EditCommit(second_parent_hash);"
+      "CREATE INDEX IF NOT EXISTS idx_edit_commit_root ON EditCommit(root_id);"
+      "CREATE TABLE IF NOT EXISTS VersionRef ("
+      "version_id VARCHAR PRIMARY KEY,"
+      "element_id BIGINT NOT NULL,"
+      "display_name VARCHAR NOT NULL,"
+      "head_commit_hash VARCHAR,"
+      "created_at_unix BIGINT NOT NULL,"
+      "updated_at_unix BIGINT NOT NULL);"
+      "CREATE INDEX IF NOT EXISTS idx_version_ref_element ON VersionRef(element_id);"
+      "CREATE TABLE IF NOT EXISTS ImageEditState ("
+      "element_id BIGINT PRIMARY KEY,"
+      "root_id VARCHAR NOT NULL,"
+      "active_version_id VARCHAR NOT NULL,"
+      "materialized_head_commit_hash VARCHAR,"
+      "materialized_transaction_chain_hash VARCHAR NOT NULL,"
+      "serialized_pipeline_state JSON,"
+      "project_schema_version INTEGER NOT NULL);"
+      "CREATE TABLE IF NOT EXISTS PipelineRoot ("
+      "root_id VARCHAR PRIMARY KEY,"
+      "element_id BIGINT UNIQUE NOT NULL,"
+      "serialized_pipeline_state JSON NOT NULL);";
+
   constexpr static const char* ai_annotation_table_query =
       "CREATE TABLE IF NOT EXISTS AiImageUnderstanding ("
       "file_id BIGINT NOT NULL,"

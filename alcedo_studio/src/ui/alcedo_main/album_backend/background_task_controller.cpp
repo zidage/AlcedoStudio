@@ -211,6 +211,8 @@ auto BackgroundTaskController::KindToString(BackgroundTaskKind kind) -> QString 
       return QStringLiteral("import");
     case BackgroundTaskKind::Export:
       return QStringLiteral("export");
+    case BackgroundTaskKind::EditorSave:
+      return QStringLiteral("editorSave");
   }
   return QStringLiteral("unknown");
 }
@@ -270,6 +272,16 @@ auto BackgroundTaskController::CapabilityToString(InteractionCapability capabili
       return QStringLiteral("deleteImages");
     case InteractionCapability::CloseProject:
       return QStringLiteral("closeProject");
+    case InteractionCapability::SelectEditorImage:
+      return QStringLiteral("selectEditorImage");
+    case InteractionCapability::SwitchWorkspace:
+      return QStringLiteral("switchWorkspace");
+    case InteractionCapability::CheckoutVersion:
+      return QStringLiteral("checkoutVersion");
+    case InteractionCapability::PasteAdjustments:
+      return QStringLiteral("pasteAdjustments");
+    case InteractionCapability::MergeAdjustments:
+      return QStringLiteral("mergeAdjustments");
   }
   return QStringLiteral("unknown");
 }

@@ -7,7 +7,7 @@ use their own top-level category.
 ## Alcedo Studio — AI
 
 - [AI Sidecar Backend Integration Plan](alcedo_studio/ai/ai_sidecar_backend_plan.md)
-- [AI Sidecar Phase 0 Requirements](alcedo_studio/ai/ai_sidecar_phase0_contract.md)
+- [AI Sidecar Phase 0 Requirements](alcedo_studio/ai/ai_sidecar_phase0_requirements.md)
 - [Semantic Generation and Search Integration Plan](alcedo_studio/ai/semantic_generation_search_plan.md)
 
 ## Alcedo Studio — RAW processing and DemosaicNet
@@ -21,6 +21,8 @@ use their own top-level category.
 
 - [AI Sidecar Frontend Plan](alcedo_studio/ui/ai_sidecar_frontend_plan.md)
 - [Background Tasks and Declarative UI State Plan](alcedo_studio/ui/background_tasks_ui_state_plan.md)
+- [Editor Session Command Queue and Lock Simplification Plan](alcedo_studio/ui/editor_session_command_queue_and_lock_simplification_plan.md)
+- [QML Editor and Qt RHI Unified Workspace Refactor Plan](alcedo_studio/ui/qml_editor_rhi_unified_workspace_plan.md)
 
 ## External website
 
@@ -33,6 +35,10 @@ use their own top-level category.
 
 ## Placement rules
 
+- Use exact engineering terms such as interface, API, schema, protocol, invariant, behavior
+  specification, acceptance criterion, compatibility requirement, or performance target. The
+  generic English noun formed by `c` + `ontract` (including its plural and casing variants) is not
+  allowed in roadmap prose, headings, link labels, or filenames.
 - Choose a plain product-area folder such as `ai`, `raw-processing`, or `ui`.
 - Add a topic folder when several closely related plans need to stay together.
 - Keep tightly related plans together so relative links remain short and stable.

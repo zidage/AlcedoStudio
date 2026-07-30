@@ -21,6 +21,7 @@
 #include "app/pipeline_service.hpp"
 #include "app/render_service.hpp"
 #include "app/thumbnail_disk_cache_service.hpp"
+#include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
 #include "concurrency/thread_pool.hpp"
 #include "json.hpp"
 #include "renderer/pipeline_task.hpp"
@@ -158,7 +159,7 @@ struct ThumbnailService::State {
   std::shared_ptr<SleeveServiceImpl>             sleeve_service_     = nullptr;
   std::shared_ptr<ImagePoolService>              image_pool_service_ = nullptr;
   std::shared_ptr<PipelineMgmtService>           pipeline_service_   = nullptr;
-  std::shared_ptr<EditHistoryMgmtService>        history_service_    = nullptr;
+  std::shared_ptr<StorageService>                 storage_service_    = nullptr;
   std::string                                    project_uuid_;
   std::unique_ptr<ThumbnailDiskCacheService>     disk_cache_service_;
   ThreadPool                                     disk_read_thread_pool_;
@@ -187,17 +188,17 @@ struct ThumbnailService::State {
   State(std::shared_ptr<SleeveServiceImpl>      sleeve_service,
         std::shared_ptr<ImagePoolService>       image_pool_service,
         std::shared_ptr<PipelineMgmtService>    pipeline_service,
-        std::shared_ptr<EditHistoryMgmtService> history_service, std::string project_uuid,
+        std::shared_ptr<StorageService>          storage_service, std::string project_uuid,
         std::filesystem::path thumbnail_cache_root)
       : sleeve_service_(std::move(sleeve_service)),
         image_pool_service_(std::move(image_pool_service)),
         pipeline_service_(std::move(pipeline_service)),
-        history_service_(std::move(history_service)),
+        storage_service_(std::move(storage_service)),
         project_uuid_(std::move(project_uuid)),
         disk_read_thread_pool_(2),
         thumbnail_cache_(default_cache_size_) {
     pipeline_scheduler_ = RenderService::GetThumbnailOrExportScheduler();
-    if (history_service_ && !project_uuid_.empty()) {
+    if (storage_service_ && !project_uuid_.empty()) {
       if (thumbnail_cache_root.empty()) {
         disk_cache_service_ = std::make_unique<ThumbnailDiskCacheService>();
       } else {
@@ -245,40 +246,26 @@ struct ThumbnailService::State {
   }
 
   auto ReadCurrentVersionHash(sl_element_id_t id) -> std::string {
-    if (sleeve_service_) {
+    if (storage_service_) {
       try {
-        auto hash = sleeve_service_->Read<std::string>([id](FileSystem& fs) -> std::string {
-          auto element = fs.Get(id);
-          auto file    = std::dynamic_pointer_cast<SleeveFile>(element);
-          if (!file || !file->GetEditHistory()) {
-            return {};
-          }
-          return file->GetEditHistory()->GetActiveVersionHash().ToString();
-        });
-        if (!hash.empty()) {
-          return hash;
+        auto               db_guard = storage_service_->GetDBController().GetConnectionGuard();
+        auto               db_lock  = db_guard.Lock();
+        CommitGraphService graph_service(db_guard.conn_);
+        const auto         graph = graph_service.LoadGraph(id);
+        if (graph.has_value()) {
+          const auto head = graph->GetActiveVersionRef().head_commit_hash;
+          return head.has_value() ? head->ToString() : graph->GetRootId().ToString();
         }
       } catch (...) {
       }
     }
-
-    if (history_service_) {
-      try {
-        auto history_guard = history_service_->LoadHistory(id);
-        if (history_guard && history_guard->history_) {
-          return history_guard->history_->GetActiveVersionHash().ToString();
-        }
-      } catch (...) {
-      }
-    }
-
     return {};
   }
 
   auto BuildDiskCacheKey(sl_element_id_t id, ThumbnailResolution resolution,
                          ThumbnailDiskCachePurpose purpose)
       -> std::optional<ThumbnailDiskCacheKey> {
-    if (!disk_cache_service_ || !history_service_ || project_uuid_.empty()) {
+    if (!disk_cache_service_ || !storage_service_ || project_uuid_.empty()) {
       return std::nullopt;
     }
 
@@ -308,11 +295,11 @@ struct ThumbnailService::State {
 ThumbnailService::ThumbnailService(std::shared_ptr<SleeveServiceImpl>      sleeve_service,
                                    std::shared_ptr<ImagePoolService>       image_pool_service,
                                    std::shared_ptr<PipelineMgmtService>    pipeline_service,
-                                   std::shared_ptr<EditHistoryMgmtService> history_service,
+                                   std::shared_ptr<StorageService>          storage_service,
                                    const std::string&                      project_uuid,
                                    const std::filesystem::path&            thumbnail_cache_root)
     : state_(std::make_shared<State>(std::move(sleeve_service), std::move(image_pool_service),
-                                     std::move(pipeline_service), std::move(history_service),
+                                     std::move(pipeline_service), std::move(storage_service),
                                      project_uuid, thumbnail_cache_root)) {}
 
 void ThumbnailService::GetThumbnail(sl_element_id_t id, image_id_t image_id,
@@ -569,7 +556,7 @@ void ThumbnailService::GetThumbnailDetailed(sl_element_id_t id, image_id_t image
           st->thumbnail_cache_data_[cache_key] = guard;
 
           // Enqueue write to disk cache asynchronously.
-          if (st->disk_cache_service_ && st->history_service_) {
+          if (st->disk_cache_service_ && st->storage_service_) {
             try {
               const auto disk_key = st->BuildDiskCacheKey(id, cache_key.resolution,
                                                           ThumbnailDiskCachePurpose::kThumbnail);

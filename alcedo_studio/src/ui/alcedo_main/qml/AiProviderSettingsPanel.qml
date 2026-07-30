@@ -8,8 +8,8 @@ import "util"
 SwipeView {
     id: panel
 
-    property var profileController: null       // albumBackend.aiProviderProfileController
-    property var analysisController: null      // albumBackend.imageAnalysisController
+    property var profileController: null       // appModules.aiProviderProfiles
+    property var analysisController: null      // appModules.imageAnalysis
     property var interactionPolicy: null
     property color primaryAccent: "#457B9D"
     property color secondaryAccent: "#9FC7D8"
@@ -666,7 +666,8 @@ SwipeView {
                                 Layout.preferredHeight: 38
                                 danger: true
                                 text: qsTr("Disconnect")
-                                enabled: panel.editProfile.credentialAvailable && panel.canChangeProvider
+                                enabled: panel.editProfile.credentialAvailable === true
+                                         && panel.canChangeProvider
                                 onClicked: {
                                     panel.profileController.DeleteApiKey(panel.editingProfileId)
                                     panel.messageRequested(qsTr("Codex OAuth disconnected"))
@@ -735,7 +736,8 @@ SwipeView {
                                 Layout.preferredHeight: 38
                                 danger: true
                                 text: qsTr("Delete Key")
-                                enabled: panel.editProfile.credentialAvailable && panel.canChangeProvider
+                                enabled: panel.editProfile.credentialAvailable === true
+                                         && panel.canChangeProvider
                                 onClicked: {
                                     panel.profileController.DeleteApiKey(panel.editingProfileId)
                                     panel.messageRequested(qsTr("API key deleted"))

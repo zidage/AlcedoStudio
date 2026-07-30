@@ -350,7 +350,7 @@ HTTP call.
 - `image_rating.score`: subjective or product-policy scoring. Outputs one or more numeric scores
   such as keeper score, aesthetic score, technical quality, or curation priority, plus short reasons.
   Rating is not full-text search content by default; it should drive sort/filter/recommendation
-  workflows only after the product contract is clear.
+  workflows only after the product behavior is clear.
 - Shared plumbing is fine: both tasks may use the same credential handle, HTTP client, provider
   adapter, image rendition selection, timeout, cancellation, and redaction path.
 - Storage should keep `task_id` / `prompt_profile_id` / provider / model identity with each result
@@ -398,7 +398,7 @@ This layer should live beside, not inside, task-specific protobuf files. For exa
 - `proto/image_analysis.proto` or `proto/image_understanding.proto` adds typed image
   understanding and rating task messages; `task_id` distinguishes searchable understanding from
   subjective rating.
-- Future task protobufs can be added without changing existing task contracts.
+- Future task protobufs can be added without changing existing task schemas.
 
 ## Mandatory Phase Rule
 
@@ -414,7 +414,7 @@ The self-review conclusion must be written in the phase handoff or PR notes usin
 Do not advance to the next phase if phase tests are failing or if the review conclusion contains
 an unresolved high-priority correctness, credential-handling, persistence, or compatibility issue.
 
-## Phase 0 - Contract Inventory And Gates
+## Phase 0 - Interface Inventory And Gates
 
 Goal: freeze the compatibility boundary before adding new services.
 
@@ -479,7 +479,7 @@ Tests:
 
 - `AiSidecarRuntimeServiceTest` (renamed from `SemanticRuntimeServiceTest` in Phase 2).
 - Fake runtime tests for startup args, readiness, crash handling, hung stop, and capability query.
-- Manual smoke if the sidecar command-line contract changes.
+- Manual smoke if the sidecar command-line interface changes.
 
 Self-review focus:
 
@@ -556,8 +556,8 @@ Self-review focus:
 ## Phase 5 - Remote Image Analysis MVP
 
 Goal: add the first non-CLIP remote AI task over Rust HTTPS, with OpenRouter and Volcengine Ark /
-火山方舟 as the two built-in remote providers. Image understanding and image rating are separate task
-contracts even if a provider request can return both.
+火山方舟 as the two built-in remote providers. Image understanding and image rating are separate
+tasks even if a provider request can return both.
 
 ### Phase 5a - Provider Config Loader And Registry
 
@@ -593,7 +593,7 @@ Review focus:
 
 ### Phase 5b - Image Analysis Protobuf And Alcedo Task Schemas
 
-Goal: freeze Alcedo's provider-independent result contracts before writing HTTP provider code.
+Goal: freeze Alcedo's provider-independent result schemas before writing HTTP provider code.
 
 Deliverables:
 
@@ -617,7 +617,7 @@ Review focus:
 
 - Check that rating and understanding cannot overwrite each other because they carry distinct
   `task_id`s and result identities.
-- Check that provider-specific raw JSON is not exposed as the public task contract.
+- Check that provider-specific raw JSON is not exposed as the public task schema.
 
 ### Phase 5c - OpenRouter And Volcengine Ark Drivers
 
@@ -688,7 +688,7 @@ Pre-execution decisions (2026-06-25):
 - Do not make LibRaw embedded thumbnails the Phase 5d source path. They are attractive because they
   are cheap and already compressed in many RAW files, but using them as the first implementation would
   bypass the current thumbnail/render cache semantics, vary by camera/file, and force `ThumbnailService`
-  ownership changes before the remote-analysis contract is proven. Keep embedded thumbnails as a later
+  ownership changes before the remote-analysis path is proven. Keep embedded thumbnails as a later
   optimization behind an explicit rendition source such as `embedded_preview`, not as the MVP path.
 - Phase 5d uses the existing `ThumbnailService`/thumbnail provider boundary with
   `ThumbnailResolution::k1024` as the default remote-analysis rendition. The service should request a
@@ -710,7 +710,7 @@ Pre-execution decisions (2026-06-25):
   dimensions); internally it may use an OIIO memory sink if the linked OIIO version supports it, or a
   scoped temporary file + readback fallback if that is the stable Windows/MSVC path. That fallback must
   stay hidden inside the encoder helper and must not leak temp files on cancellation/failure.
-- Update the image-analysis wire contract/comment so `image_format_hint` covers encoded hints such as
+- Update the image-analysis wire schema/comment so `image_format_hint` covers encoded hints such as
   `image/jpeg;max_edge=1024` or `image/png;max_edge=1024`. The old `rgba8:WxH` wording belongs to the
   semantic embedding RPC only.
 - Keep remote API concurrency at 1 for Phase 5d. Providers differ on paid-call concurrency/rate limits,
@@ -752,7 +752,7 @@ Review focus:
 - Check that the host controls which image rendition is sent and records that rendition in result
   metadata.
 - Check that Phase 5d did not refactor `ThumbnailService` or introduce a LibRaw embedded-thumbnail fast
-  path before the encoded-rendition contract is proven.
+  path before the encoded-rendition path is proven.
 - Check that encoded remote-analysis payloads and raw CLIP embedding payloads remain separate code
   paths.
 - Check that the JPEG/PNG upload encoder uses OpenImageIO as the primary codec path and does not
@@ -898,7 +898,7 @@ the code-owned JSON Schema the driver validates + normalizes before returning
 (`IMAGE_UNDERSTANDING_SCHEMA` / `IMAGE_RATING_SCHEMA` in
 `rust/puerh_mind/src/service/image_analysis.rs`): `caption` + `tags` required
 (understanding), `rating` + `rubric_id` required (rating), `rating` an integer in
-1..5 with NO `confidence` (Phase 5f rating-contract change; understanding still
+1..5 with NO `confidence` (Phase 5f rating-schema change; understanding still
 carries `confidence` in 0..1).
 
 `image_understanding.describe` body (`AlcedoImageUnderstanding`):
@@ -960,9 +960,9 @@ Structured-output rule:
   input or schema/tool-use support. Discovered models therefore start unverified
   (`supports_vision=false`, `supports_structured_output=false`, `live_confirmed=false`) until a
   validation smoke proves the selected model accepts the exact Phase 6 image+structured-output
-  contract.
+  schema.
 
-### Phase 6a - Compatible Provider Presets And Config Contract
+### Phase 6a - Compatible Provider Presets And Config Schema
 
 Deliverables:
 
@@ -1104,7 +1104,7 @@ Reflection on the current shape:
   embedding, credential vault, cancellation, image description, rating, and model discovery. Adding
   one task means editing one god interface, one god implementation, and one god test fake.
 - DTO conversion is hidden in anonymous `ToXxx(...)` functions instead of being attached to the DTO
-  contract. That makes mapper coverage hard to target and makes call sites depend on whatever file
+  type definition. That makes mapper coverage hard to target and makes call sites depend on whatever file
   happens to include the generated protobuf headers.
 - `AiSidecarRuntimeService` currently preserves old call shapes by offering ready-guarded forwarding
   methods for every sidecar API. That keeps the old boundary alive and makes the runtime service a
@@ -1145,7 +1145,7 @@ The CMake target should be `SidecarClient`, with `SemanticProto` and `AiProto` a
 dependencies. App services may include `sidecar_client/*.hpp`; only files under
 `src/sidecar_client` should include generated `*.pb.h` / `*.grpc.pb.h` headers after the cutover.
 
-DTO/protobuf conversion contract:
+DTO/protobuf conversion rules:
 
 - Introduce a small CRTP-style helper in `sidecar_client/proto_dto.hpp`. DTOs declare their protobuf
   counterpart and expose static/self conversion, for example:
@@ -1173,11 +1173,11 @@ Client surface after cutover:
 - `RuntimeControlClient` owns `Ping`, `GetRuntimeStatus`, `ListCapabilities`, and `CancelTask`.
 - `CredentialClient` owns `RegisterCredential` and `RevokeCredential`.
 - `ModelManagerClient` owns model profile/install/validate/delete/download/status/cancel RPCs that
-  are actually exposed by the sidecar contract.
+  are actually exposed by the sidecar API.
 - `SemanticEmbeddingClient` owns current semantic embedding RPCs and `GetModelInfo`. The production
   app path should use the current versioned/batch protocol directly. Remove the runtime-service
   v2-to-v1 fallback path; an old sidecar returning `UNIMPLEMENTED` should fail with a clear protocol
-  error instead of silently switching wire contracts.
+  error instead of silently switching wire protocols.
 - `ImageAnalysisClient` owns `DescribeImage`, `ScoreImage`, and `ListModels`.
 - Tests that need fakes fake the narrow module interface they use, not the entire sidecar runtime.
 
@@ -1609,7 +1609,7 @@ Deliverables:
   smoke wiring. OpenRouter may remain only as a user-created compatible config or a clearly isolated
   developer fixture if a test still needs the request shape.
 - Remove `openrouter_chat` as a product-facing driver id once `openai_chat_compatible` covers the
-  same request/response contract. Keep OpenRouter-only routing knobs behind optional config fields
+  same request/response schema. Keep OpenRouter-only routing knobs behind optional config fields
   consumed by the generic driver only when explicitly set.
 - Remove unused reserved provider families from product code paths (`volcengine_ark_chat`,
   `generic_json_http`, or any other unimplemented placeholder) unless a concrete live endpoint and
@@ -1620,7 +1620,7 @@ Deliverables:
   Anthropic-compatible reference until Opencode is confirmed.
 - Do not fallback across protocol families. If a selected preset is `anthropic_messages`, a failed
   call must not retry as `openai_chat_compatible`; if a selected preset is OpenAI-compatible, it must
-  not retry as Anthropic Messages. The selected preset is the contract.
+  not retry as Anthropic Messages. The selected preset defines the protocol.
 - Do not fallback from schema-enforced structured output to free-form JSON prompting, response
   healing, provider auto-routing that ignores schema parameters, or a different model id. Surface a
   clear capability/configuration error instead.
@@ -1806,7 +1806,7 @@ provider credentials are available.
 Status: complete. Semantic embedding now runs over the shared AI control surface
 (`alcedo.ai.AiRequestHeader` / `AiResponseHeader`) via additive v2 RPCs, with v1 kept as an automatic
 fallback. v1 RPCs, batching, request-id-to-file-id mapping, model-info validation, embedding
-dimensions, model keys, and persistence are all unchanged (Phase 0 contract section 2.3 honored: v2 is
+dimensions, model keys, and persistence are all unchanged (Phase 0 requirement in section 2.3 is honored: v2 is
 added as new methods, v1 is frozen).
 
 Implemented (file-by-file, per the plan):
@@ -2014,12 +2014,12 @@ dead-code warning (its only call site was the old guard).
 
 ## Phase 5b - Completion & Self-Review
 
-Status: complete. Alcedo's provider-independent result contracts for `image_understanding.describe`
+Status: complete. Alcedo's provider-independent result schemas for `image_understanding.describe`
 and `image_rating.score` are frozen as typed proto messages plus code-owned JSON Schemas. The two
-tasks are distinct contracts - distinct `task_id`s, distinct result message types
+tasks have distinct schemas - distinct `task_id`s, distinct result message types
 (`ImageUnderstandingResult` vs `ImageRatingResult`), distinct RPCs (`DescribeImage` vs `ScoreImage`) -
 so a rating result can never overwrite or be reinterpreted as an understanding result (Phase 5b review
-focus). Provider-specific raw JSON is never the public contract: the (5c) driver validates and
+focus). Provider-specific raw JSON is never the public schema: the (5c) driver validates and
 normalizes provider output against the code-owned schemas and returns these typed fields. The mock
 provider returns valid typed results without HTTP. The service owns the control-plane concerns the
 provider should not - credential resolution against the vault, request timeout, cooperative
@@ -2080,14 +2080,14 @@ inner text is dropped by `provider_error_to_header` (only a fixed string is plac
 not leaked in the header. No image bytes, base64, or prompt payloads are placed in headers. The service
 never writes to DuckDB - C++ owns DB writes (relevant to 5f, not 5b).
 
-Distinct-contract / fail-closed invariants (Phase 5b review focus):
+Distinct-schema / fail-closed invariants (Phase 5b review focus):
 
 - `DescribeImage` returns `ImageUnderstandingResult` (caption / tags / scene); `ScoreImage` returns
   `ImageRatingResult` (scores / rubric_id / rubric_version / reasons). Distinct `task_id`s on the
   request header; the response header echoes the same `task_id`. A rating result cannot overwrite an
   understanding result and vice versa.
-- Provider-specific raw JSON is never the public contract: the code-owned JSON Schemas and the proto
-  typed fields are the contract; the (5c) driver validates + normalizes provider output against them.
+- Provider-specific raw JSON is never the public schema: the code-owned JSON Schemas and the proto
+  typed fields define the schema; the (5c) driver validates + normalizes provider output against them.
 - A schema-validation failure returns a typed error header with `result = None` (no active annotation) -
   `describe_image_schema_validation_failure_returns_provider_error` proves this.
 
@@ -2176,7 +2176,7 @@ header call site. No secret, image base64, prompt, or raw provider body travels 
 logs, or error strings. The mock provider remains the default; the real providers are merged into the
 provider map at startup and only selected when a request names their `provider_id`.
 
-Contract change (threading the credential): `ImageAnalysisProvider::describe_image` / `score_image`
+Interface change (threading the credential): `ImageAnalysisProvider::describe_image` / `score_image`
 now take `credential: Option<&SecretString>`. The service (`server/image_analysis.rs`) gained
 `resolve_credential_secret` - `Ok(None)` when the provider does not require a credential,
 `Ok(Some(secret))` when the handle resolves, or a failure-header triple on `MISSING_CREDENTIAL` /
@@ -2315,7 +2315,7 @@ Test results:
   because `.env.test` ships with empty values. They have NOT been executed against the real provider APIs
   yet - pending the user-supplied credentials. This is the explicit handoff: the user fills `.env.test`
   and hands it back; the smokes then run against the real endpoints and assert the parsed outcome
-  validates against the code-owned contract.
+  validates against the code-owned schema.
 
 Deferred to Phase 5d / 5e / 5f / 5g:
 
@@ -2430,7 +2430,7 @@ Live Coding Plan smoke result (executed 2026-06-25, PASSED):
 
 - After the env-file fix below, `cargo test live_volcengine_ark_coding -- --nocapture` ran against the real
   Coding Plan endpoint and PASSED - both `describe_image` and `score_image` succeeded and the parsed
-  outcomes validated against the code-owned Alcedo contract. Sample describe output: caption "A smooth
+  outcomes validated against the code-owned Alcedo schema. Sample describe output: caption "A smooth
   diagonal gradient transitioning from dark green in the bottom-left to bright pink in the top-right.",
   tags ["gradient","abstract","green","pink","background","smooth","color transition"], scene "abstract
   gradient background", confidence 0.98, usage {input_tokens 1901, output_tokens 130}; sample score: 2
@@ -2462,7 +2462,7 @@ Review conclusion: none (no shipped-code bugs found - the two test failures from
 expected count-assertion updates, not logic bugs, and are fixed; the driver compiles clean with no new
 warnings and all 16 mock tests pass on the first run; the env-gated live Coding Plan smoke was executed
 against the real Coding Plan endpoint on 2026-06-25 and PASSED - both describe and score returned valid
-outcomes that validate against the code-owned contract); risk accepted: (1) the Coding Plan usage-policy
+outcomes that validate against the code-owned schema); risk accepted: (1) the Coding Plan usage-policy
 caveat - `/api/coding/*` is intended for AI coding tools, so using this driver as an OpenClaw-style
 coding-tool backend is low-risk and aligned with the plan's purpose; the remaining caution is routing
 non-coding PRODUCTION Alcedo image analysis through `volcengine_ark_coding`, which stays an operator
@@ -2640,7 +2640,7 @@ best-effort calls `CancelTask` on this job's in-flight `request_id` (only while 
 so a queued job's cancel never touches another job's RPC). A canceled queued job exits without
 ever calling the provider (`CancelQueuedJobDoesNotStartProviderCall`).
 
-Distinct contracts: `DescribeImage` -> `ImageUnderstandingResult`, `ScoreImage` ->
+Distinct schemas: `DescribeImage` -> `ImageUnderstandingResult`, `ScoreImage` ->
 `ImageRatingResult`, with distinct task_ids (`"image_understanding.describe"` vs
 `"image_rating.score"`); a rating result can never overwrite an understanding result (the
 `ImageAnalysisItemResult` carries both but only the task-matching one is filled).
@@ -2809,7 +2809,7 @@ Invariants (Phase 5e review focus):
   the prefill queue only overlaps LOCAL prep; `gate->AcquireAndPublish` still gates
   the remote call. `TwoJobsSharingGateSerializeRpcsWithPrefill` proves two jobs
   sharing one gate serialize (B makes 0 remote calls while A holds the slot); the
-  gate's contract changed only in that acquire + request_id publish are now atomic
+  gate's behavior changed only in that acquire + request_id publish are now atomic
   (5e review follow-up), which does not affect serialization.
 - Cancellation cannot cancel another job's in-flight request, cannot issue a paid
   provider RPC after a cancel that sent no CancelTask, and cannot leave the gate or
@@ -2999,7 +2999,7 @@ over `AiImageUnderstanding` only, and the `AiImageRating` columns never enter it
 All serialization/deserialization goes through the duckorm layer
 (`insert_or_replace`, `select`, `remove`) — no raw INSERT/SELECT is written for
 the AI tables. Deleting files removes both understanding and rating rows via the
-existing element-deletion cascade. The remote rating contract (user-requested
+existing element-deletion cascade. The remote rating schema (user-requested
 Task #1) is changed to a 1..5 integer with no confidence. A bonus env-gated
 live run proves both the describe (with search attribution) and the rating (1..5
 integer, no confidence) paths end-to-end against a real LLM. No product UI /
@@ -3027,7 +3027,7 @@ Implemented (file-by-file, per the plan):
   requires `file_id != 0`, non-empty task/provider/model, and `rating in [1,5]` —
   a rating of 0 ("unset") is rejected so a scored image is never confused with an
   unrated one (`UnsetRatingNotPersisted`). The EXIF-standard `Rating` (0..5,
-  0 = unrated) in `metadata.hpp` is a separate contract and is untouched.
+  0 = unrated) in `metadata.hpp` is a separate data rule and is untouched.
 - `alcedo_studio/src/storage/controller/ai/ai_storage_controller.cpp` +
   `alcedo_studio/src/include/storage/controller/ai/ai_storage_controller.hpp` -
   NEW ORM controller. Field arrays via `FIELD_AS`
@@ -3085,18 +3085,18 @@ Implemented (file-by-file, per the plan):
   `alcedo_studio/src/app/ai_sidecar_runtime_service.cpp` (Task #2) - the C++
   rating DTO `ImageAnalysisRatingResult` carries int `rating`, `rubric_id`,
   `rubric_version`, `reasons` and NO `confidence` (the header comment documents
-  the Phase 5f contract change and contrasts it with
+  the Phase 5f schema change and contrasts it with
   `ImageAnalysisUnderstandingResult`, which still reports the describe-task
   `confidence`). `ToImageRatingResult` maps `ScoreImageResponse` -> DTO via
   `result.rating = body.rating()` (comment: "1..=5 integer star rating (Phase 5f
-  contract); 0 = unset"), `rubric_id`, `rubric_version`; it maps no confidence,
+  schema); 0 = unset"), `rubric_id`, `rubric_version`; it maps no confidence,
   unlike the describe mapper which reads `body.confidence()`. The regenerated
   AiProto `ScoreImageResponse` (int32 `rating`, `rubric_id`, `rubric_version`,
   `reasons`; no confidence) mirrors this.
 - `alcedo_studio/src/app/image_analysis_service.cpp` - threads `rubric_id` into
   the `ScoreImage` request and assembles the rating result (the score task's
   `ok`/`rendition`/`error` are taken from the rating result, never the
-  understanding result, so the two contracts stay distinct).
+  understanding result, so the two schemas stay distinct).
 - `alcedo_studio/tests/storage/ai_storage_controller_test.cpp` - NEW 11
   `AiStorageControllerTest` cases (the plan-required storage tests):
   `UpsertAndRetrieveUnderstanding` (full identity + content + confidence +
@@ -3126,7 +3126,7 @@ Implemented (file-by-file, per the plan):
   search). These are always-run deterministic coverage, not env-gated.
 - `alcedo_studio/tests/app/image_analysis_live_smoke_test.cpp` - the env-gated
   live smoke is extended with a NEW `RatesOneImageFromPackedProject` (validates
-  Task #1's 1..5 integer contract end-to-end) and the existing
+  Task #1's 1..5 integer rating rule end-to-end) and the existing
   `DescribesOneImageFromPackedProject` is strengthened: after the live describe,
   the result is persisted via `AiStorageController.UpsertUnderstanding` and read
   back with `GetActiveUnderstanding` (round-trip assertions on caption/scene/
@@ -3197,9 +3197,9 @@ inserted as UINT32, matching the element-id convention. Because the cleanup is b
 (`ElementDeletionCascadesAiRows`), a re-import under a new image id cannot
 resurrect an old AI annotation — the old rows are gone with the old element.
 
-Rating contract (user-requested Task #1): the software already has an
+Rating schema (user-requested Task #1): the software already has an
 EXIF-standard `Rating` (0..5 stars, 0 = unrated, integer) in `metadata.hpp`,
-which is unchanged. The REMOTE LLM rating is a separate contract: the prompt/
+which is unchanged. The REMOTE LLM rating uses a separate schema: the prompt/
 response schema now requires a 1..5 integer and confidence is NOT output. Rust
 `ScoreOutcome` has no `confidence`; `IMAGE_RATING_SCHEMA` constrains `rating` to
 `integer` `minimum 1 maximum 5` with `required = ["rating", "rubric_id"]`;
@@ -3213,7 +3213,7 @@ non-empty reasons and no confidence field.
 Bonus live run (Phase 5g-adjacent): the env-gated live smoke now runs BOTH a real
 describe and a real score end-to-end against the packed `.alcd` project, through
 the full C++ -> sidecar -> HTTP-provider path, with the rebuilt release
-`alcedo_mind.exe` (Task #1's contract change). The key is read from `.env.test`
+`alcedo_mind.exe` (Task #1's schema change). The key is read from `.env.test`
 and registered into the sidecar vault; the secret is never in process args,
 `AiSidecarRuntimeOptions`, logs, or the persisted rows (redact-checked absent
 from every result/persisted field).
@@ -3258,9 +3258,9 @@ Test results:
   new, all passed), 19 `ImageAnalysisServiceTest`, 2 `ImageAnalysisLiveSmokeTest`
   (both Skipped — the live env vars are not set in the ctest shell; run
   individually below).
-- Rust (Task #1 contract change): `cargo test --release -- --skip live_smoke`
+- Rust (Task #1 schema change): `cargo test --release -- --skip live_smoke`
   (the offline suite): 187/187 green (`0 failed`; 3 filtered out = the env-gated
-  live smokes). The rating-contract tests pass
+  live smokes). The rating-schema tests pass
   (`validator_rejects_blank_tag_string_and_out_of_range_rating`,
   `out_of_range_rating_maps_to_schema_validation`,
   `parses_rating_accepts_float_rating_as_integer`,
@@ -3299,7 +3299,7 @@ Deferred to Phase 5g / 6:
 Build note for the next handoff: rebuild the release sidecar binary after any
 Rust image-analysis change (`cargo build --release --bin alcedo_mind` in
 `rust/puerh_mind`) — a stale binary returns UNIMPLEMENTED for
-`DescribeImage`/`ScoreImage` and would not carry the Task #1 rating-contract
+`DescribeImage`/`ScoreImage` and would not carry the Task #1 rating-schema
 change. Run MSVC builds through the PowerShell tool (not Bash), and build
 affected test targets explicitly before ctest. For an offline cargo run with
 `.env.test` present, use `cargo test -- --skip live_smoke` so the env-gated live
@@ -3500,7 +3500,7 @@ Opencode-style mock-server tests proving the driver accepts the Opencode base UR
 code-owned Alcedo task schemas (config selects protocol/endpoint only — it owns no
 prompt text, response schema, or business fields). An endpoint that ignores
 `response_format` / tool-use and returns non-JSON prose, or returns JSON that
-violates the code-owned contract, maps to `ProviderError::SchemaValidation` so the
+violates the code-owned schema, maps to `ProviderError::SchemaValidation` so the
 service creates no active annotation (the explicit "unsupported structured output"
 fail-closed path).
 
@@ -3517,7 +3517,7 @@ Implemented (file-by-file, per the plan):
   Opencode preset shape: bearer auth with NO attribution/routing for Opencode,
   `response_format: json_schema` + image data URI, understanding/rating parse +
   usage capture, 429 transient / 500-retry / 4xx-no-retry mapping, the explicit
-  ignored-`response_format` fail-closed path, contract-violation fail-closed,
+  ignored-`response_format` fail-closed path, schema-violation fail-closed,
   missing-credential, header-based provider-request-id capture, and the
   current_thread-runtime no-leak redaction test.
 - `rust/puerh_mind/src/service/providers/openrouter.rs` - reduced to a module doc
@@ -3574,7 +3574,7 @@ Invariants (Phase 6b review focus):
 - No active annotation on unsupported structured output: the explicit fail-closed
   path is pinned by `ignored_response_format_produces_no_active_annotation`
   (OpenAI-compatible: 200 with prose content → `SchemaValidation`),
-  `json_violating_contract_maps_to_schema_validation` (valid JSON, empty caption),
+  the schema-validation case for valid JSON with an empty caption,
   `opencode_missing_tool_use_maps_to_schema_validation` (Anthropic: 200 with only
   a text block), and the existing `missing_tool_use`/`wrong_tool_name` Coding Plan
   tests. `ensure_structured_output` still fails closed before any HTTP call when
@@ -3742,7 +3742,7 @@ Accepted risk / deferred:
   yet persist/merge them into a generated user provider config. That merge point
   is intentionally left for the Phase 6d/6f settings and live-validation flow.
 - AlbumBackend/QML exposure of provider settings, credential save/delete buttons,
-  and validate-connection UI remain Phase 6d. The backend contract is ready for
+  and validate-connection UI remain Phase 6d. The backend API is ready for
   that wiring.
 
 ## Phase 6d - Completion & Self-Review

@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.impl
 import QtQuick.Layouts
-import QtQuick.Effects
 
 // Dedicated icon-only square button — kept separate from DialogActionButton
 // (a text button) so the two styles don't share sizing/padding logic.
@@ -14,14 +14,20 @@ import QtQuick.Effects
 // Two color schemes via `kind`: "accent" (primary action) and "normal"
 // (secondary). Each falls back to the app theme color when its *Color
 // override is left transparent, so callers can match a local palette.
+//
+// Icon tint uses ColorImage — the same engine behind Button.icon.color
+// (Main.qml workspace switch, LibraryWorkspace, etc.). MultiEffect
+// colorization does not recolor monochrome stroke SVGs reliably; the old
+// solid-rect alpha mask did recolor but thickened AA edges.
 Item {
     id: control
 
-    property real buttonSize: 40
+    // Defaults follow DESIGN.md structural geometry; callers may still override.
+    property real buttonSize: appTheme.iconButtonHitSizeCompact
     property real buttonWidth: buttonSize
     property real buttonHeight: buttonSize
-    property int buttonRadius: 10
-    property int iconSize: 16
+    property int buttonRadius: appTheme.controlRadius
+    property int iconSize: appTheme.iconOpticalSizeCompact
     property string iconSrc: ""
     property string kind: "normal"           // "accent" | "normal"
     property color accentColor: "transparent"   // override; transparent => appTheme.accentColor
@@ -76,33 +82,18 @@ Item {
         border.color: control.borderColor
     }
 
-    // Use the SVG only as an alpha mask. This makes currentColor-based SVGs
-    // pick up appTheme.iconColor reliably instead of depending on SVG color
-    // inheritance inside Qt's Image renderer.
-    Image {
-        id: iconMask
+    ColorImage {
         anchors.centerIn: parent
-        visible: false
+        width: control.iconSize
+        height: control.iconSize
         source: control.iconSrc
         sourceSize.width: control.iconSize
         sourceSize.height: control.iconSize
-        width: control.iconSize
-        height: control.iconSize
         fillMode: Image.Pad
-        layer.enabled: true
-    }
-
-    Rectangle {
-        anchors.centerIn: parent
-        width: control.iconSize
-        height: control.iconSize
-        color: control.enabled ? control.iconColor : appTheme.textMutedColor
+        smooth: true
         visible: control.iconSrc.length > 0
-        layer.enabled: true
-        layer.effect: MultiEffect {
-            maskEnabled: true
-            maskSource: iconMask
-        }
+        color: control.enabled ? control.iconColor : appTheme.textMutedColor
+        opacity: control.enabled ? 1.0 : 0.55
     }
 
     MouseArea {

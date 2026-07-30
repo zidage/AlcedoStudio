@@ -7,13 +7,13 @@
 namespace alcedo::ui::test {
 namespace {
 
-using ImageDetailsTests = AlbumBackendTestFixture;
+using ImageDetailsTests = ApplicationModuleHostTestFixture;
 
-void WaitForImportFinished(AlbumBackend& backend, int timeoutMs = 30000) {
-  QSignalSpy spy(&backend, &AlbumBackend::ImportStateChanged);
+void WaitForImportFinished(ApplicationModuleHost& backend, int timeoutMs = 30000) {
+  QSignalSpy spy(backend.import_export(), &ImportExportHandler::ImportStateChanged);
   const int  step    = 200;
   int        elapsed = 0;
-  while (backend.ImportRunning() && elapsed < timeoutMs) {
+  while (backend.import_export()->ImportRunning() && elapsed < timeoutMs) {
     spy.wait(step);
     elapsed += step;
   }
@@ -41,7 +41,7 @@ auto FindRow(const QVariantList& rows, const QString& label) -> QVariantMap {
 }
 
 TEST_F(ImageDetailsTests, GetImageDetails_ReturnsStructuredExifSummary) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend, "image_details"));
 
   auto images = CollectRawTestImages("airplane", 1);
@@ -49,15 +49,15 @@ TEST_F(ImageDetailsTests, GetImageDetails_ReturnsStructuredExifSummary) {
     GTEST_SKIP() << "No RAW images available in raw/airplane/";
   }
 
-  backend.StartImport(PathsToQStringList(images));
+  backend.import_export()->StartImport(PathsToQStringList(images));
   WaitForImportFinished(backend);
-  ASSERT_FALSE(backend.Thumbnails().isEmpty());
+  ASSERT_FALSE(backend.library()->Thumbnails().isEmpty());
 
-  const QVariantMap first     = backend.Thumbnails().front().toMap();
+  const QVariantMap first     = backend.library()->Thumbnails().front().toMap();
   const uint        elementId = first.value("elementId").toUInt();
   const uint        imageId   = first.value("imageId").toUInt();
 
-  const QVariantMap result = backend.GetImageDetails(elementId, imageId);
+  const QVariantMap result = backend.images()->GetImageDetails(elementId, imageId);
   ASSERT_TRUE(result.value("success").toBool());
   EXPECT_FALSE(result.value("title").toString().isEmpty());
 
@@ -77,18 +77,18 @@ TEST_F(ImageDetailsTests, GetImageDetails_ReturnsStructuredExifSummary) {
 }
 
 TEST_F(ImageDetailsTests, GetImageDetails_RejectsInvalidIds) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
   ASSERT_TRUE(CreateTestProject(backend, "image_details_invalid_ids"));
 
-  const QVariantMap result = backend.GetImageDetails(0, 0);
+  const QVariantMap result = backend.images()->GetImageDetails(0, 0);
   EXPECT_FALSE(result.value("success").toBool());
   EXPECT_FALSE(result.value("message").toString().isEmpty());
 }
 
 TEST_F(ImageDetailsTests, GetImageDetails_FailsWithoutLoadedProject) {
-  AlbumBackend backend;
+  ApplicationModuleHost backend;
 
-  const QVariantMap result = backend.GetImageDetails(1, 1);
+  const QVariantMap result = backend.images()->GetImageDetails(1, 1);
   EXPECT_FALSE(result.value("success").toBool());
   EXPECT_FALSE(result.value("message").toString().isEmpty());
 }

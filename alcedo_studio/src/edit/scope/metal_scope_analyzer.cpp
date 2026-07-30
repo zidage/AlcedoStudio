@@ -141,6 +141,9 @@ struct ScopeSlot {
   int                                                             waveform_width  = 0;
   int                                                             waveform_height = 0;
   uint64_t                                                        generation      = 0;
+  uint64_t                                                        image_identity  = 0;
+  uint64_t                                                        image_generation = 0;
+  uint64_t                                                        display_generation = 0;
 
   void ResetResources() {
     input_image.reset();
@@ -151,6 +154,9 @@ struct ScopeSlot {
     waveform_width  = 0;
     waveform_height = 0;
     generation      = 0;
+    image_identity  = 0;
+    image_generation = 0;
+    display_generation = 0;
   }
 };
 
@@ -195,6 +201,9 @@ class MetalScopeAnalyzerImpl final : public IScopeAnalyzer {
 
     slot->input_image = std::move(input_image);
     EnsureSlotStorage(*slot, request);
+    slot->image_identity     = frame.image_identity;
+    slot->image_generation   = frame.image_generation;
+    slot->display_generation = frame.display_generation;
 
     auto command_buffer = MakeCommandBuffer();
     const ScopeAnalysisParams params{
@@ -274,6 +283,9 @@ class MetalScopeAnalyzerImpl final : public IScopeAnalyzer {
     output.histogram_bins  = latest_slot->histogram_bins;
     output.waveform_width  = latest_slot->waveform_width;
     output.waveform_height = latest_slot->waveform_height;
+    output.image_identity     = latest_slot->image_identity;
+    output.image_generation   = latest_slot->image_generation;
+    output.display_generation = latest_slot->display_generation;
 
     if (latest_slot->histogram) {
       output.histogram_buffer.backend    = GpuBackend::Metal;

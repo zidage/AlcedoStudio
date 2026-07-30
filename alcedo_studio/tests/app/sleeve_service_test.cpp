@@ -88,8 +88,9 @@ auto ReadExposure(const std::shared_ptr<PipelineGuard>& pipeline_guard) -> float
 
 }  // namespace
 
-TEST(ProjectVersionTests, MembershipSchemaBumpRejectsPreviousProjectVersion) {
+TEST(ProjectVersionTests, MiniGitSchemaBumpRejectsPreviousProjectVersion) {
   EXPECT_TRUE(project_pack::ProjectVersionIsSupported(project_pack::kProjectFileVersion));
+  EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.2.5"));
   EXPECT_FALSE(project_pack::ProjectVersionIsSupported("0.2.4"));
 }
 

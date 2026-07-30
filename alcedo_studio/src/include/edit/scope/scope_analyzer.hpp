@@ -60,6 +60,12 @@ struct FinalDisplayFrameView {
   AnalysisDomain       domain         = AnalysisDomain::DisplayEncoded;
   GpuSignalHandle      ready_signal   = {};
   uint64_t             frame_id       = 0;
+  // Identity of the image/session that owns the GPU image.
+  uint64_t             image_identity   = 0;
+  uint64_t             image_generation = 0;
+  // Render generation of the final display frame, distinct from the analyzer
+  // output generation below.
+  uint64_t             display_generation = 0;
 
   explicit             operator bool() const { return image && width > 0 && height > 0; }
 };
@@ -100,6 +106,9 @@ struct ScopeOutputSet {
   bool                  vectorscope_valid  = false;
   bool                  chromaticity_valid = false;
   uint64_t              generation         = 0;
+  uint64_t              image_identity    = 0;
+  uint64_t              image_generation  = 0;
+  uint64_t              display_generation = 0;
 };
 
 struct ScopeHistogramRenderData {
@@ -124,6 +133,9 @@ struct ScopeRenderSnapshot {
   ScopeHistogramRenderData histogram  = {};
   ScopeWaveformRenderData  waveform   = {};
   uint64_t                 generation = 0;
+  uint64_t                 image_identity    = 0;
+  uint64_t                 image_generation  = 0;
+  uint64_t                 display_generation = 0;
 };
 
 class IScopeAnalyzer {
@@ -137,6 +149,20 @@ class IScopeAnalyzer {
   virtual void ResizeResources(const ScopeRequest& request)                                 = 0;
 
   virtual void ReleaseResources()                                                           = 0;
+
+  /// Synchronously stage a stable, analyzer-owned copy of the final display
+  /// frame's GPU input on the render thread, while the pipeline source is
+  /// still valid. Returns a FinalDisplayFrameView backed by analyzer-owned
+  /// memory plus a readiness signal the analyzer's own execution stream can
+  /// wait on; the deferred SubmitFrame later analyzes that staged frame
+  /// without touching the pipeline's reused scratch buffers or stream.
+  /// Backends whose source is already stable (or tests that do not need
+  /// staging) keep the default, which returns the frame unchanged.
+  virtual auto StageFrame(const FinalDisplayFrameView& frame, const ScopeRequest& request)
+      -> FinalDisplayFrameView {
+    (void)request;
+    return frame;
+  }
 };
 
 class IFinalDisplayFrameProvider {

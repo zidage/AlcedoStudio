@@ -21,17 +21,20 @@
 
 namespace alcedo::ui {
 
-class AlbumBackend;
 class BackgroundTaskController;
+class ImageController;
+class ProjectDbWriteBarrier;
+class ProjectModule;
+class SemanticGenerationController;
+class StatsEngine;
 
 /// Phase 6d — the runtime seams `ImageAnalysisController` needs, as an interface
 /// so the controller is unit-testable without a live project / sidecar.
 ///
 /// The production implementation (`AlbumImageAnalysisEnvironment`, in the .cpp)
-/// resolves these lazily from `AlbumBackend`'s open project at call time, exactly
-/// as `SemanticGenerationController` does at
-/// `semantic_generation_controller.cpp:762–830`. Tests pass a fake that returns
-/// fake thumbnail/client/credential-store seams and a shared gate.
+/// resolves these lazily from the open project's services at call time, exactly
+/// as `SemanticGenerationController` does. Tests pass a fake that returns fake
+/// thumbnail/client/credential-store seams and a shared gate.
 class IImageAnalysisEnvironment {
  public:
   virtual ~IImageAnalysisEnvironment()                                                    = default;
@@ -70,11 +73,10 @@ class IImageAnalysisEnvironment {
 ///
 /// Mirrors the cleanly-factored QObject sub-controller pattern
 /// (`SemanticGenerationController`, `ModelDownloadController`): own hpp/cpp under
-/// `album_backend/`, surfaced to QML as a `Q_PROPERTY(QObject* ... CONSTANT)` on
-/// `AlbumBackend`. The controller is deliberately NOT inlined into
-/// `album_backend.cpp` — it is a standalone module. It is constructable with an
-/// `IImageAnalysisEnvironment` + `AiProviderProfileController*` so it has no direct
-/// `AlbumBackend` dependency and is unit-testable with fakes.
+/// `album_backend/`, surfaced to QML as `appModules.imageAnalysis`. It is
+/// constructable with an `IImageAnalysisEnvironment` +
+/// `AiProviderProfileController*` so it has no host dependency and is
+/// unit-testable with fakes.
 ///
 /// The controller owns NO database writes (persistence + search refresh is Phase
 /// 6e). A cancelled or failed remote call therefore cannot upsert an active
@@ -206,15 +208,17 @@ class ImageAnalysisController final : public QObject {
   int                                        canceled_             = 0;
 };
 
-/// Factory for the production environment. Defined in the .cpp (the concrete
-/// `AlbumImageAnalysisEnvironment` is an implementation detail); `AlbumBackend`
-/// calls this from its member-init list to construct `ImageAnalysisController`.
-std::shared_ptr<IImageAnalysisEnvironment> MakeAlbumImageAnalysisEnvironment(AlbumBackend& backend);
+/// Production environment: resolves runtime seams from ProjectModule / semantic
+/// generation / AI profiles / gate at call time (no host dependency).
+std::shared_ptr<IImageAnalysisEnvironment> MakeAlbumImageAnalysisEnvironment(
+    ProjectModule* project, SemanticGenerationController* semantic,
+    alcedo::AiProviderProfileController* profiles,
+    std::shared_ptr<alcedo::ImageAnalysisInFlightGate> gate);
 
-/// Factory for the production Phase 7a sink (`AlbumImageAnalysisSink`, defined in
-/// `album_backend.cpp`). Delegates to `AiStorageController`, `ImageController`, and
-/// `StatsEngine`. `AlbumBackend` calls this from its member-init list to construct
-/// `ImageAnalysisController`.
-std::shared_ptr<IImageAnalysisSink>        MakeAlbumImageAnalysisSink(AlbumBackend& backend);
+/// Production Phase 7a sink. Delegates to AiStorageController, ImageController,
+/// and StatsEngine. Queues writes behind ProjectDbWriteBarrier when held.
+std::shared_ptr<IImageAnalysisSink> MakeAlbumImageAnalysisSink(
+    ProjectModule* project, ImageController* images, StatsEngine* stats,
+    ProjectDbWriteBarrier* barrier);
 
 }  // namespace alcedo::ui

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <QObject>
 #include <QVariantList>
 #include <filesystem>
 #include <optional>
@@ -15,12 +16,26 @@
 
 namespace alcedo::ui {
 
-class AlbumBackend;
+class ImportExportHandler;
+class LibraryModule;
+class ProjectModule;
+class SearchController;
+class StatsEngine;
+class IUiStatusSink;
 
 /// Owns lazy folder-tree state and handles folder CRUD operations.
-class FolderController {
+class FolderController final : public QObject {
+  Q_OBJECT
+  Q_PROPERTY(QVariantList folders READ Folders NOTIFY FoldersChanged)
+  Q_PROPERTY(uint currentFolderId READ CurrentFolderId NOTIFY FolderSelectionChanged)
+  Q_PROPERTY(QString currentFolderPath READ CurrentFolderPath NOTIFY FolderSelectionChanged)
+
  public:
-  explicit FolderController(AlbumBackend& backend);
+  FolderController(ProjectModule* project, LibraryModule* library, IUiStatusSink* status,
+                   QObject* parent = nullptr);
+
+  void BindCollaborators(StatsEngine* stats, SearchController* search,
+                         ImportExportHandler* import_export);
 
   void               ReloadTree(const std::filesystem::path& preferredFolderPath);
   void               RebuildFolderView();
@@ -29,15 +44,21 @@ class FolderController {
   [[nodiscard]] auto CurrentFolderElementId() const -> std::optional<sl_element_id_t>;
   [[nodiscard]] auto FolderElementIdForUiId(uint folderUiId) const
       -> std::optional<sl_element_id_t>;
-  void               SelectFolder(uint folderUiId);
-  void               CreateFolder(const QString& folderName);
-  void               DeleteFolder(uint folderUiId);
 
+  Q_INVOKABLE void SelectFolder(uint folderUiId);
+  Q_INVOKABLE void CreateFolder(const QString& folderName);
+  Q_INVOKABLE void DeleteFolder(uint folderUiId);
+
+  [[nodiscard]] auto Folders() const -> QVariantList { return folders_; }
   [[nodiscard]] auto folders() const -> const QVariantList& { return folders_; }
+  [[nodiscard]] auto CurrentFolderId() const -> uint {
+    return static_cast<uint>(current_folder_ui_id_);
+  }
   [[nodiscard]] auto current_folder_id() const -> uint32_t { return current_folder_ui_id_; }
   [[nodiscard]] auto current_folder_path() const -> const std::filesystem::path& {
     return current_folder_path_;
   }
+  [[nodiscard]] auto CurrentFolderPath() const -> QString { return current_folder_path_text_; }
   [[nodiscard]] auto current_folder_path_text() const -> const QString& {
     return current_folder_path_text_;
   }
@@ -47,6 +68,11 @@ class FolderController {
   }
 
   void ClearState();
+
+ signals:
+  void FoldersChanged();
+  void FolderSelectionChanged();
+  void folderSelectionChanged();
 
  private:
   struct FolderNodeState {
@@ -70,7 +96,12 @@ class FolderController {
   [[nodiscard]] auto EnsureNode(const std::filesystem::path& folderPath,
                                 const file_name_t& folderName, int depth) -> FolderNodeState&;
 
-  AlbumBackend&      backend_;
+  ProjectModule*        project_       = nullptr;
+  LibraryModule*        library_       = nullptr;
+  IUiStatusSink*        status_        = nullptr;
+  StatsEngine*          stats_         = nullptr;
+  SearchController*     search_        = nullptr;
+  ImportExportHandler*  import_export_ = nullptr;
 
   std::unordered_map<std::wstring, FolderNodeState>           nodes_by_path_{};
   std::unordered_map<std::wstring, std::vector<std::wstring>> child_keys_by_path_{};

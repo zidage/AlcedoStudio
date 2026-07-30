@@ -4,7 +4,11 @@
 
 #include "ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
 
-#include "ui/alcedo_main/album_backend/album_backend.hpp"
+#include "ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "ui/alcedo_main/album_backend/import_export.hpp"
+#include "ui/alcedo_main/album_backend/semantic_generation_controller.hpp"
+#include "ui/alcedo_main/album_backend/ui_status_sink.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 
 #include <QCoreApplication>
@@ -101,7 +105,21 @@ auto FileNameForRecoveryItem(const NikonHeRecoveryItem& item) -> QString {
 
 }  // namespace
 
-NikonHeRecoveryController::NikonHeRecoveryController(AlbumBackend& backend) : backend_(backend) {}
+NikonHeRecoveryController::NikonHeRecoveryController(ProjectModule* project,
+                                                     ImageController* images,
+                                                     IUiStatusSink* status,
+                                                     QObject* parent)
+    : QObject(parent), project_(project), images_(images), status_(status) {}
+
+void NikonHeRecoveryController::BindCollaborators(ImportExportHandler* import_export,
+                                                  SemanticGenerationController* semantic) {
+  import_export_ = import_export;
+  semantic_ = semantic;
+}
+
+void NikonHeRecoveryController::BrowseNikonHeConverter() { BrowseConverter(); }
+void NikonHeRecoveryController::StartNikonHeConversion() { StartConversion(); }
+void NikonHeRecoveryController::ExitNikonHeRecovery() { ExitRecovery(); }
 
 void NikonHeRecoveryController::BeginRecovery(
     const std::vector<ImportLogEntry>& unsupported_entries,
@@ -218,11 +236,11 @@ void NikonHeRecoveryController::StartConversion() {
   }
   process_->setArguments(arguments);
 
-  QObject::connect(process_.get(), &QProcess::finished, &backend_,
+  QObject::connect(process_.get(), &QProcess::finished, this,
                    [this](int exit_code, QProcess::ExitStatus exit_status) {
                      HandleConverterFinished(exit_code, static_cast<int>(exit_status));
                    });
-  QObject::connect(process_.get(), &QProcess::errorOccurred, &backend_,
+  QObject::connect(process_.get(), &QProcess::errorOccurred, this,
                    [this](QProcess::ProcessError) {
                      if (!process_) {
                        return;
@@ -324,7 +342,7 @@ auto NikonHeRecoveryController::unsupported_files() const -> QVariantList {
 }
 
 void NikonHeRecoveryController::NotifyStateChanged() {
-  emit backend_.NikonHeRecoveryStateChanged();
+  emit NikonHeRecoveryStateChanged();
 }
 
 void NikonHeRecoveryController::SetPhase(const NikonHeRecoveryPhase phase,
@@ -337,15 +355,15 @@ void NikonHeRecoveryController::SetPhase(const NikonHeRecoveryPhase phase,
           phase == NikonHeRecoveryPhase::VALIDATING_DNG ||
           phase == NikonHeRecoveryPhase::REMOVING_PROJECT_ITEMS ||
           phase == NikonHeRecoveryPhase::REIMPORTING_DNG;
-  backend_.SetTaskState(status, progress, false);
+  status_->SetTaskState(status, progress, false);
   NotifyStateChanged();
 }
 
 void NikonHeRecoveryController::FinishAndClose(const i18n::LocalizedText& status,
                                                const int                  progress) {
-  backend_.SetTaskState(status, progress, false);
-  backend_.SetServiceMessageForCurrentProject(status);
-  backend_.ScheduleIdleTaskStateReset(2200);
+  status_->SetTaskState(status, progress, false);
+  status_->SetServiceMessage(status);
+  status_->ScheduleIdleTaskStateReset(2200);
   ClearState();
 }
 
@@ -360,7 +378,7 @@ void NikonHeRecoveryController::ClearState() {
   active_      = false;
   busy_        = false;
   NotifyStateChanged();
-  backend_.ResumeQueuedSemanticGenerationWorkflow();
+  if (semantic_) { semantic_->ResumeQueuedWorkflow(); };
 }
 
 void NikonHeRecoveryController::HandleConverterFinished(const int exit_code, const int exit_status) {
@@ -457,7 +475,7 @@ void NikonHeRecoveryController::RemoveUnsupportedEntriesAndContinue(
   SetPhase(NikonHeRecoveryPhase::REMOVING_PROJECT_ITEMS,
            PL_TEXT("Removing unsupported Nikon HE items from the project..."), 75);
 
-  const auto delete_result = backend_.image_ctrl_.DeleteTargets(BuildDeleteTargets());
+  const auto delete_result = images_->DeleteTargets(BuildDeleteTargets());
 
   if (!converted_paths.empty()) {
     SetPhase(NikonHeRecoveryPhase::REIMPORTING_DNG,
@@ -466,9 +484,9 @@ void NikonHeRecoveryController::RemoveUnsupportedEntriesAndContinue(
              85);
     busy_ = true;
     NotifyStateChanged();
-    backend_.import_export_.SetImportTarget(import_target_folder_id_,
+    import_export_->SetImportTarget(import_target_folder_id_,
                                             import_target_folder_path_);
-    backend_.import_export_.StartImportPaths(converted_paths, true);
+    import_export_->StartImportPaths(converted_paths, true);
     return;
   }
 

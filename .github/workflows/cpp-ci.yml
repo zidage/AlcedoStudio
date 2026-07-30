@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "23 19 * * 2,5"
   workflow_dispatch:
 
 permissions:
@@ -77,3 +79,12 @@ jobs:
 
       - name: Test
         run: ctest --preset macos_arm_metal_ci --output-on-failure
+
+      - name: Run scheduled editor WAL fuzz seeds
+        if: github.event_name == 'schedule'
+        env:
+          ALCEDO_EDITOR_JOURNAL_FUZZ_SEED_BASE: ${{ github.run_id }}
+        run: >-
+          build/macos-arm-metal-ci/alcedo_studio/tests/EditorJournalFuzzFrameworkTest
+          --gtest_also_run_disabled_tests
+          --gtest_filter=EditorJournalFuzzFrameworkTest.DISABLED_FreshBoundedSeedsRecoverCurrentWal

@@ -8,12 +8,11 @@ Dialog {
     id: dialog
     font.family: appTheme.uiFontFamily
 
-    property var backend
-    readonly property var searchController: backend ? backend.searchController : null
-    readonly property var interactionPolicyController: backend ? backend.interactionPolicyController : null
+    property var searchController: null
+    property var interactionPolicyController: null
     // Gate driven by InteractionPolicyController: when natural-language search is
     // on, the field-filter checkboxes are disabled (mutual exclusion). Defaults
-    // to enabled when the controller is unavailable (e.g. null backend in tests).
+    // to enabled when the controller is unavailable (e.g. in isolated tests).
     readonly property bool searchFieldFiltersEnabled: interactionPolicyController
         ? interactionPolicyController.canChangeSearchFieldFilters
         : true
@@ -424,7 +423,7 @@ Dialog {
     }
 
     function applyBroadSearch() {
-        if (!backend) {
+        if (!searchController) {
             return
         }
         searchController.ApplyFuzzySearch(searchField.text)
@@ -553,7 +552,10 @@ Dialog {
         }
     }
 
-    background: Item {}
+    background: Rectangle {
+        radius: 0
+        color: "transparent"
+    }
 
     contentItem: Item {
         implicitWidth: dialog.width

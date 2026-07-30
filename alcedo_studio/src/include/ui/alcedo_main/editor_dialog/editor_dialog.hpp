@@ -20,6 +20,12 @@ auto OpenEditorDialog(std::shared_ptr<ImagePoolService>       image_pool,
                       std::shared_ptr<EditHistoryGuard> history_guard, sl_element_id_t element_id,
                       image_id_t image_id, QWidget* parent = nullptr) -> bool;
 
+// Test-only call counters. Production builds leave these as no-ops via weak
+// defaults; the test stub implements them so workspace tests can assert the
+// legacy modal path was never entered.
+void ResetOpenEditorDialogCallCount();
+auto OpenEditorDialogCallCount() -> int;
+
 }  // namespace alcedo::ui
 
 #ifdef ALCEDO_EDITOR_DIALOG_INTERNAL

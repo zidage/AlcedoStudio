@@ -538,7 +538,7 @@ class BayerDemosaicNet : public NnWeightModule<BayerDemosaicNet> {
 class XTransDemosaicNet : public NnWeightModule<XTransDemosaicNet> { ... };
 ```
 
-**`LoadWeightsImpl` contract (per derived module):**
+**`LoadWeightsImpl` requirements (per derived module):**
 
 1. Require every key listed in §2.1 or §2.2 with exact F32 shapes.
 2. Reject missing / extra-critical / wrong-shape tensors with a clear error
@@ -547,7 +547,7 @@ class XTransDemosaicNet : public NnWeightModule<XTransDemosaicNet> { ... };
 4. **Never** resize the graph, change depth/width, or allocate a “layer list”
    from the file. If the file does not match the hard-coded module, load fails.
 
-**`Forward` contract:** straight-line code calling `cuda::nn` ops in the order
+**`Forward` behavior:** straight-line code calling `cuda::nn` ops in the order
 of §2.1 / §2.2—same spirit as writing out RCD stages. No interpreter loop over
 a runtime graph IR.
 
@@ -970,7 +970,7 @@ knowledge. `MlOpsTest` green.
 
 **Scope boundary:** DemosaicNet as a **RAW-owned, hard-coded demosaic NN**.
 Uses Phase 1–4 ops + DTO. Product GpuMat wiring landed in Phase 6a; this phase
-owns the modules, cache, and golden / shape contracts.
+owns the modules, cache, and golden / shape requirements.
 
 **Done:**
 
@@ -1234,10 +1234,10 @@ Fixtures:
 
 #### 6c — Neural Engine tiling via existing CUDA tile path  ⏳ (after 6b)
 
-> Historical teacher contract: this section describes the Phase 6c path that
+> Historical teacher behavior: this section describes the Phase 6c path that
 > landed before the student exports replaced the bundled weights. Phase 8 keeps
 > the same `BuildTileJobs` / `ProcessCudaTiled` ownership but supersedes the
-> `inner_size + halo` policy with the student input/output/pad/step contract.
+> `inner_size + halo` policy with the student input/output/pad/step rules.
 > In particular, do not carry `halo=31` into Bayer student full-frame padding or
 > `step=1024` into X-Trans student tiling.
 
@@ -1373,9 +1373,9 @@ valid/output crop, the period-aligned virtual reflect pad, the global CFA-align
 crop, and the final sensor/default crop are four different coordinate changes;
 they must not be collapsed into one `source_border` integer. Throughput work
 starts only after both student forwards match their exported goldens and the
-tiled assembly matches the handoff contract without seams or uncovered pixels.
+tiled assembly matches the handoff requirements without seams or uncovered pixels.
 
-#### 8.0 Performance contract
+#### 8.0 Performance targets
 
 ##### Primary fixtures
 
@@ -1506,7 +1506,7 @@ Build command:
 cmd /c scripts\msvc_env.cmd --build --preset win_release --target DemosaicNetPerfHarness --parallel 4
 ```
 
-#### 8.2 Authoritative student contracts (land first)
+#### 8.2 Authoritative student interfaces (land first)
 
 The source of truth is the checked-in handoff, not the old teacher constants:
 
@@ -1527,7 +1527,7 @@ student 1086→1024 and 1048→1024 `.pt` fixtures into the test-data format (or
 explicit external-data test target if repository size policy rejects them), and
 verify every file/manifest SHA-256 from the export reports.
 
-| Contract | Bayer student | X-Trans student |
+| Requirement | Bayer student | X-Trans student |
 |----------|---------------|-----------------|
 | Architecture | `bayer_s24_d8` | `xtrans_p2_s32_d4` |
 | Width / trunk depth | 24 / 8 | 32 / 4 |
@@ -1675,7 +1675,7 @@ ToLinearRef
   -> HLR / inverse cam-mul / orientation / RGBA once
 ```
 
-##### Geometry contract
+##### Geometry invariants
 
 Replace `BuildNeuralEngineDecodeCropRect(..., source_border, shift_x, shift_y)`
 with an explicit coordinate description, for example:
@@ -1849,7 +1849,7 @@ Implementation order:
 
 - Both exported student goldens, `MlOpsTest`, Bayer/X-Trans full-RAW geometry,
   CFA phase, seam/ownership, HLR, and allocation-generation tests remain green.
-- Numerical behavior remains the existing FP32 contract; any tolerance change
+- Numerical behavior remains the existing FP32 requirements; any tolerance change
   requires a separate quality decision and is not part of 8G.
 - Retain a kernel candidate only with a >=5% full-frame p50 win on at least one
   variant and no regression on the other variant that dispatches it. Report
@@ -1877,7 +1877,7 @@ low-arithmetic-intensity 1x1 layers with disproportionate latency:
 The retained `Conv2d1x1SmallCoutKernel<3|12>` assigns one spatial position to
 each thread, reads each Cin value once, and accumulates the exact Cout values in
 registers. It uses scalar FP32 FMA only, allocates no workspace, preserves NCHW
-and OIHW layouts, and keeps the CC 6.0+ contract.
+and OIHW layouts, and keeps the CC 6.0+ compatibility requirement.
 
 Measured Release medians at the product tile shapes:
 
@@ -2010,7 +2010,7 @@ Stopping rules:
 The change is intentionally split so topology, tile geometry, and performance
 work do not land as one unreviewable patch:
 
-1. **8A — Student module contract:** ✅ hard-code both student forwards, validate
+1. **8A — Student module interface:** ✅ hard-code both student forwards, validate
    bundled metadata/checksums/fixed weights, update workspace estimates, and
    pass exported goldens. No product routing change.
 2. **8B — Shared tile policy:** ✅ generalize `CudaTileJob/BuildTileJobs`, add
@@ -2179,7 +2179,7 @@ context.
 - RAW product / tiling tests: **`CudaRawOpsTest`** and related targets under
   `alcedo_studio/tests/raw/` (fixtures in
   `tests/resources/sample_images/raw/camera/...`).
-- **No “smoke” tests.** Every test name and comment must state the contract
+- **No “smoke” tests.** Every test name and comment must state the behavior
   (see `Agents.md` test-naming ban). Prefer real camera RAW over synthetic CFA
   when the claim is “works on real RAW.”
 - Build:

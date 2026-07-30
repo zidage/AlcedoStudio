@@ -88,7 +88,10 @@ struct ScopeSlot {
   std::shared_ptr<scope::cuda_detail::CudaLinearImageResource>  input_image    = {};
   std::shared_ptr<scope::cuda_detail::CudaDeviceBufferResource> histogram      = {};
   std::shared_ptr<scope::cuda_detail::CudaLinearImageResource>  waveform       = {};
-  cudaEvent_t                                                   input_ready    = nullptr;
+  // Shared with the staged FinalDisplayFrameView's GpuSignalHandle so the
+  // readiness event outlives the analyzer slot while the tap still holds the
+  // staged frame. Carries this slot's index for deferred SubmitFrame lookup.
+  std::shared_ptr<scope::cuda_detail::CudaEventHandleResource>  input_ready    = {};
   cudaEvent_t                                                   analysis_done  = nullptr;
   int                                                           input_width    = 0;
   int                                                           input_height   = 0;
@@ -96,14 +99,27 @@ struct ScopeSlot {
   int                                                           waveform_width = 0;
   int                                                           waveform_height = 0;
   uint64_t                                                      generation     = 0;
+  uint64_t                                                      image_identity = 0;
+  uint64_t                                                      image_generation = 0;
+  uint64_t                                                      display_generation = 0;
 
-  void EnsureEvents() {
-    if (!input_ready) {
-      cudaEventCreateWithFlags(&input_ready, cudaEventDisableTiming);
-    }
+  // Idle: free for staging. Staged: StageFrame copied input and recorded
+  // input_ready; awaiting SubmitFrame. Dispatched: SubmitFrame dispatched
+  // analysis; awaiting analysis_done before reuse.
+  enum class Phase { Idle, Staged, Dispatched };
+  Phase phase = Phase::Idle;
+
+  void EnsureAnalysisDoneEvent() {
     if (!analysis_done) {
       cudaEventCreateWithFlags(&analysis_done, cudaEventDisableTiming);
       cudaEventRecord(analysis_done, nullptr);
+    }
+  }
+
+  void EnsureInputReadyEvent() {
+    if (!input_ready) {
+      input_ready = std::make_shared<scope::cuda_detail::CudaEventHandleResource>();
+      cudaEventCreateWithFlags(&input_ready->event, cudaEventDisableTiming);
     }
   }
 
@@ -111,20 +127,21 @@ struct ScopeSlot {
     input_image.reset();
     histogram.reset();
     waveform.reset();
+    input_ready.reset();
     input_width = 0;
     input_height = 0;
     histogram_bins = 0;
     waveform_width = 0;
     waveform_height = 0;
     generation = 0;
+    image_identity = 0;
+    image_generation = 0;
+    display_generation = 0;
+    phase = Phase::Idle;
   }
 
   void Release() {
     ResetResources();
-    if (input_ready) {
-      cudaEventDestroy(input_ready);
-      input_ready = nullptr;
-    }
     if (analysis_done) {
       cudaEventDestroy(analysis_done);
       analysis_done = nullptr;
@@ -147,61 +164,131 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
     }
 
     for (auto& slot : slots_) {
-      slot.EnsureEvents();
+      slot.EnsureAnalysisDoneEvent();
     }
   }
 
   ~CudaScopeAnalyzerImpl() override { ReleaseResources(); }
 
-  void SubmitFrame(const FinalDisplayFrameView& frame, const ScopeRequest& request) override {
-    if (!frame || frame.image.backend != GpuBackend::Cuda || request.enabled_mask == 0U) {
-      return;
+  // Make an analyzer-owned copy of the pipeline's final display frame on the
+  // render thread, while the pipeline source (result_ptr / stream) is still
+  // valid. Returns a stable FinalDisplayFrameView backed by the owned slot
+  // buffer and a readiness event; the deferred SubmitFrame later analyzes it
+  // without touching the pipeline's reused scratch buffers or stream.
+  auto StageFrame(const FinalDisplayFrameView& frame, const ScopeRequest& request)
+      -> FinalDisplayFrameView override {
+    // Pass through frames this analyzer does not own so a composite analyzer
+    // can hand them to the matching backend without clobbering them.
+    if (!frame || frame.image.backend != GpuBackend::Cuda) {
+      return frame;
     }
-
-    const auto now = std::chrono::steady_clock::now();
-    const int target_fps = std::max(0, request.target_fps);
-    if (target_fps > 0 && last_submit_time_.time_since_epoch().count() != 0) {
-      const auto min_interval = std::chrono::milliseconds(1000 / target_fps);
-      if ((now - last_submit_time_) < min_interval) {
-        return;
-      }
+    if (request.enabled_mask == 0U) {
+      return {};
     }
 
     auto* image_resource =
         static_cast<scope::cuda_detail::CudaLinearImageResource*>(frame.image.resource.get());
-    auto* signal_resource =
-        static_cast<scope::cuda_detail::CudaStreamSignalResource*>(frame.ready_signal.resource.get());
-    if (!image_resource || !signal_resource || !image_resource->device_ptr || !signal_resource->stream) {
+    auto* signal_resource = static_cast<scope::cuda_detail::CudaStreamSignalResource*>(
+        frame.ready_signal.resource.get());
+    if (!image_resource || !signal_resource || !image_resource->device_ptr ||
+        !signal_resource->stream) {
+      return {};
+    }
+
+    // Throttle staging to the scope target FPS; the render thread may run
+    // faster and the deferred poll only consumes ~target_fps frames anyway.
+    const auto now        = std::chrono::steady_clock::now();
+    const int  target_fps = std::max(0, request.target_fps);
+    if (target_fps > 0 && last_stage_time_.time_since_epoch().count() != 0) {
+      const auto min_interval = std::chrono::milliseconds(1000 / target_fps);
+      if ((now - last_stage_time_) < min_interval) {
+        return {};
+      }
+    }
+
+    const int frame_width  = ClampPositive(frame.width, image_resource->width);
+    const int frame_height = ClampPositive(frame.height, image_resource->height);
+    if (frame_width <= 0 || frame_height <= 0) {
+      return {};
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    ReclaimCompletedSlots();
+    ScopeSlot* slot = AcquireIdleSlot();
+    if (!slot) {
+      return {};
+    }
+
+    EnsureSlotStorage(*slot, frame_width, frame_height, request);
+    slot->EnsureInputReadyEvent();
+    slot->input_ready->slot_index = static_cast<int>(slot - &slots_[0]);
+
+    const size_t input_row_bytes = static_cast<size_t>(frame_width) * sizeof(float4);
+    const auto   copy_status     = cudaMemcpy2DAsync(
+        slot->input_image->device_ptr, slot->input_image->row_bytes, image_resource->device_ptr,
+        image_resource->row_bytes, input_row_bytes, static_cast<size_t>(frame_height),
+        cudaMemcpyDeviceToDevice, signal_resource->stream);
+    if (copy_status != cudaSuccess) {
+      slot->phase = ScopeSlot::Phase::Idle;
+      return {};
+    }
+    cudaEventRecord(slot->input_ready->event, signal_resource->stream);
+
+    slot->image_identity     = frame.image_identity;
+    slot->image_generation   = frame.image_generation;
+    slot->display_generation = frame.display_generation;
+    slot->generation         = next_generation_++;
+    slot->phase              = ScopeSlot::Phase::Staged;
+    last_stage_time_         = now;
+    current_request_         = request;
+
+    FinalDisplayFrameView staged = frame;
+    staged.image = SharedGpuImageHandle{GpuBackend::Cuda, slot->input_image, frame_width,
+                                         frame_height, slot->input_image->row_bytes,
+                                         FramePixelFormat::RGBA32F};
+    staged.ready_signal = GpuSignalHandle{GpuBackend::Cuda, slot->input_ready};
+    staged.width  = frame_width;
+    staged.height = frame_height;
+    return staged;
+  }
+
+  void SubmitFrame(const FinalDisplayFrameView& frame, const ScopeRequest& request) override {
+    if (!frame || frame.image.backend != GpuBackend::Cuda || request.enabled_mask == 0U ||
+        !analysis_stream_) {
+      return;
+    }
+    auto* event_resource = static_cast<scope::cuda_detail::CudaEventHandleResource*>(
+        frame.ready_signal.resource.get());
+    auto* image_resource =
+        static_cast<scope::cuda_detail::CudaLinearImageResource*>(frame.image.resource.get());
+    if (!event_resource || event_resource->slot_index < 0 || !image_resource ||
+        !image_resource->device_ptr) {
       return;
     }
 
     std::lock_guard<std::mutex> lock(mutex_);
-    ScopeSlot* slot = AcquireAvailableSlot();
-    if (!slot) {
+    if (event_resource->slot_index >= static_cast<int>(slots_.size())) {
+      return;
+    }
+    ScopeSlot& slot = slots_[event_resource->slot_index];
+    // Only analyze a frame still staged for this slot with the matching
+    // readiness event. A newer staging that reused the slot produced a fresh
+    // event, so a stale in-flight task bails without reading overwritten data.
+    if (slot.phase != ScopeSlot::Phase::Staged || slot.input_ready.get() != event_resource) {
       return;
     }
 
     const int frame_width  = ClampPositive(frame.width, image_resource->width);
     const int frame_height = ClampPositive(frame.height, image_resource->height);
-    EnsureSlotStorage(*slot, frame_width, frame_height, request);
+    EnsureSlotStorage(slot, frame_width, frame_height, request);
 
-    const size_t input_row_bytes = static_cast<size_t>(frame_width) * sizeof(float4);
-    const auto copy_status = cudaMemcpy2DAsync(
-        slot->input_image->device_ptr, slot->input_image->row_bytes, image_resource->device_ptr,
-        image_resource->row_bytes, input_row_bytes, static_cast<size_t>(frame_height),
-        cudaMemcpyDeviceToDevice, signal_resource->stream);
-    if (copy_status != cudaSuccess) {
-      return;
+    cudaStreamWaitEvent(analysis_stream_, slot.input_ready->event, 0);
+    if (slot.histogram && HasScopeEnabled(request, ScopeType::Histogram)) {
+      cudaMemsetAsync(slot.histogram->device_ptr, 0, slot.histogram->size_bytes, analysis_stream_);
     }
-    cudaEventRecord(slot->input_ready, signal_resource->stream);
-
-    cudaStreamWaitEvent(analysis_stream_, slot->input_ready, 0);
-    if (slot->histogram && HasScopeEnabled(request, ScopeType::Histogram)) {
-      cudaMemsetAsync(slot->histogram->device_ptr, 0, slot->histogram->size_bytes, analysis_stream_);
-    }
-    if (slot->waveform && HasScopeEnabled(request, ScopeType::Waveform)) {
-      cudaMemsetAsync(slot->waveform->device_ptr, 0,
-                      static_cast<size_t>(slot->waveform_height) * slot->waveform->row_bytes,
+    if (slot.waveform && HasScopeEnabled(request, ScopeType::Waveform)) {
+      cudaMemsetAsync(slot.waveform->device_ptr, 0,
+                      static_cast<size_t>(slot.waveform_height) * slot.waveform->row_bytes,
                       analysis_stream_);
     }
 
@@ -211,25 +298,24 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
                         (frame_height + sample_step * block_dim.y - 1) /
                             (sample_step * block_dim.y));
 
-    if (slot->histogram && HasScopeEnabled(request, ScopeType::Histogram)) {
+    if (slot.histogram && HasScopeEnabled(request, ScopeType::Histogram)) {
       AccumulateHistogramKernel<<<grid_dim, block_dim, 0, analysis_stream_>>>(
-          static_cast<const float4*>(slot->input_image->device_ptr),
-          slot->input_image->row_bytes / sizeof(float4), frame_width, frame_height, sample_step,
-          slot->histogram_bins, static_cast<uint32_t*>(slot->histogram->device_ptr));
+          static_cast<const float4*>(slot.input_image->device_ptr),
+          slot.input_image->row_bytes / sizeof(float4), frame_width, frame_height, sample_step,
+          slot.histogram_bins, static_cast<uint32_t*>(slot.histogram->device_ptr));
     }
 
-    if (slot->waveform && HasScopeEnabled(request, ScopeType::Waveform)) {
+    if (slot.waveform && HasScopeEnabled(request, ScopeType::Waveform)) {
       AccumulateWaveformKernel<<<grid_dim, block_dim, 0, analysis_stream_>>>(
-          static_cast<const float4*>(slot->input_image->device_ptr),
-          slot->input_image->row_bytes / sizeof(float4), frame_width, frame_height, sample_step,
-          static_cast<float4*>(slot->waveform->device_ptr), slot->waveform->row_bytes / sizeof(float4),
-          slot->waveform_width, slot->waveform_height);
+          static_cast<const float4*>(slot.input_image->device_ptr),
+          slot.input_image->row_bytes / sizeof(float4), frame_width, frame_height, sample_step,
+          static_cast<float4*>(slot.waveform->device_ptr), slot.waveform->row_bytes / sizeof(float4),
+          slot.waveform_width, slot.waveform_height);
     }
 
-    slot->generation = next_generation_++;
-    cudaEventRecord(slot->analysis_done, analysis_stream_);
-    current_request_  = request;
-    last_submit_time_ = now;
+    cudaEventRecord(slot.analysis_done, analysis_stream_);
+    slot.phase         = ScopeSlot::Phase::Dispatched;
+    current_request_   = request;
   }
 
   auto GetLatestOutput() -> ScopeOutputSet override {
@@ -237,7 +323,7 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
 
     ScopeSlot* latest_slot = nullptr;
     for (auto& slot : slots_) {
-      if (slot.generation == 0 || !slot.analysis_done) {
+      if (slot.phase != ScopeSlot::Phase::Dispatched || !slot.analysis_done) {
         continue;
       }
       if (cudaEventQuery(slot.analysis_done) != cudaSuccess) {
@@ -253,10 +339,13 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
     }
 
     ScopeOutputSet output;
-    output.generation     = latest_slot->generation;
+    output.generation      = latest_slot->generation;
     output.histogram_bins = latest_slot->histogram_bins;
     output.waveform_width = latest_slot->waveform_width;
     output.waveform_height = latest_slot->waveform_height;
+    output.image_identity     = latest_slot->image_identity;
+    output.image_generation   = latest_slot->image_generation;
+    output.display_generation = latest_slot->display_generation;
 
     if (latest_slot->histogram) {
       output.histogram_buffer.backend    = GpuBackend::Cuda;
@@ -304,10 +393,21 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
   }
 
  private:
-  auto AcquireAvailableSlot() -> ScopeSlot* {
+  void ReclaimCompletedSlots() {
+    // Caller holds mutex_.
     for (auto& slot : slots_) {
-      slot.EnsureEvents();
-      if (cudaEventQuery(slot.analysis_done) == cudaSuccess) {
+      slot.EnsureAnalysisDoneEvent();
+      if (slot.phase == ScopeSlot::Phase::Dispatched && slot.analysis_done &&
+          cudaEventQuery(slot.analysis_done) == cudaSuccess) {
+        slot.phase = ScopeSlot::Phase::Idle;
+      }
+    }
+  }
+
+  auto AcquireIdleSlot() -> ScopeSlot* {
+    for (auto& slot : slots_) {
+      slot.EnsureAnalysisDoneEvent();
+      if (slot.phase == ScopeSlot::Phase::Idle) {
         return &slot;
       }
     }
@@ -373,7 +473,7 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
   std::array<ScopeSlot, kScopeSlotCount>        slots_{};
   cudaStream_t                                  analysis_stream_ = nullptr;
   ScopeRequest                                  current_request_{};
-  std::chrono::steady_clock::time_point         last_submit_time_{};
+  std::chrono::steady_clock::time_point         last_stage_time_{};
   uint64_t                                      next_generation_ = 1;
   std::mutex                                    mutex_{};
 };

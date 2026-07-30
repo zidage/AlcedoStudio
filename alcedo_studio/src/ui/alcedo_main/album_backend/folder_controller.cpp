@@ -6,7 +6,13 @@
 
 #include <algorithm>
 
-#include "ui/alcedo_main/album_backend/album_backend.hpp"
+#include "ui/alcedo_main/album_backend/folder_controller.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
+#include "ui/alcedo_main/album_backend/stats_engine.hpp"
+#include "ui/alcedo_main/album_backend/search_controller.hpp"
+#include "ui/alcedo_main/album_backend/import_export.hpp"
+#include "ui/alcedo_main/album_backend/ui_status_sink.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 #include "utils/string/convert.hpp"
 
@@ -16,9 +22,18 @@ namespace alcedo::ui {
   i18n::MakeLocalizedText(ALCEDO_I18N_CONTEXT, \
                           QT_TRANSLATE_NOOP(ALCEDO_I18N_CONTEXT, text) __VA_OPT__(, ) __VA_ARGS__)
 
-FolderController::FolderController(AlbumBackend& backend) : backend_(backend) {
+FolderController::FolderController(ProjectModule* project, LibraryModule* library,
+                                   IUiStatusSink* status, QObject* parent)
+    : QObject(parent), project_(project), library_(library), status_(status) {
   current_folder_path_      = album_util::RootFsPath();
   current_folder_path_text_ = album_util::RootPathText();
+}
+
+void FolderController::BindCollaborators(StatsEngine* stats, SearchController* search,
+                                         ImportExportHandler* import_export) {
+  stats_         = stats;
+  search_        = search;
+  import_export_ = import_export;
 }
 
 auto FolderController::PathKey(const std::filesystem::path& path) const -> std::wstring {
@@ -81,7 +96,7 @@ auto FolderController::EnsureNode(const std::filesystem::path& folderPath,
 
 void FolderController::LoadChildren(const std::filesystem::path& parentPath) {
   std::cout << "[LOG] FolderController: Loading Child for: " << parentPath.string() << std::endl;
-  auto proj = backend_.project_handler_.project();
+  auto proj = project_->handler().project();
   if (!proj) {
     return;
   }
@@ -201,7 +216,7 @@ void FolderController::RebuildFolderView() {
   }
 
   folders_ = std::move(next);
-  emit backend_.FoldersChanged();
+  emit FoldersChanged();
 }
 
 auto FolderController::TryGetPathForUiId(uint folderUiId) const
@@ -241,8 +256,8 @@ void FolderController::ApplyFolderSelection(uint folderUiId, bool emitSignal) {
   RebuildFolderView();
 
   if (emitSignal || id_changed || path_changed || text_changed) {
-    emit backend_.FolderSelectionChanged();
-    emit backend_.folderSelectionChanged();
+    emit FolderSelectionChanged();
+    emit folderSelectionChanged();
   }
 }
 
@@ -251,7 +266,7 @@ auto FolderController::CurrentFolderFsPath() const -> std::filesystem::path {
 }
 
 auto FolderController::CurrentFolderElementId() const -> std::optional<sl_element_id_t> {
-  auto proj = backend_.project_handler_.project();
+  auto proj = project_->handler().project();
   if (!proj) {
     return std::nullopt;
   }
@@ -278,7 +293,7 @@ auto FolderController::FolderElementIdForUiId(uint folderUiId) const
   if (!path_opt.has_value()) {
     return std::nullopt;
   }
-  auto proj = backend_.project_handler_.project();
+  auto proj = project_->handler().project();
   if (!proj) {
     return std::nullopt;
   }
@@ -315,58 +330,58 @@ void FolderController::ReloadTree(const std::filesystem::path& preferredFolderPa
 }
 
 void FolderController::SelectFolder(uint folderUiId) {
-  auto& ph = backend_.project_handler_;
+  auto& ph = project_->handler();
   if (ph.project_loading() || !ph.project()) {
     return;
   }
 
   ApplyFolderSelection(folderUiId, true);
-  backend_.stats_.ClearFilters();
-  backend_.search_.ClearSearchState(false);
-  backend_.ReloadCurrentFolder();
-  emit backend_.StatsFilterChanged();
-  emit backend_.search_.SearchStateChanged();
+  if (stats_) stats_->ClearFilters();
+  if (search_) search_->ClearSearchState(false);
+  library_->ReloadCurrentFolder();
+  if (stats_) emit stats_->StatsFilterChanged();
+  if (search_) emit search_->SearchStateChanged();
 }
 
 void FolderController::CreateFolder(const QString& folderName) {
-  auto& ph = backend_.project_handler_;
+  auto& ph = project_->handler();
   if (ph.project_loading()) {
-    backend_.SetTaskState(PL_TEXT("Project is loading. Please wait."), 0, false);
+    status_->SetTaskState(PL_TEXT("Project is loading. Please wait."), 0, false);
     return;
   }
   if (!ph.project()) {
-    backend_.SetTaskState(PL_TEXT("No project is loaded."), 0, false);
+    status_->SetTaskState(PL_TEXT("No project is loaded."), 0, false);
     return;
   }
-  auto& ie = backend_.import_export_;
-  if (ie.current_import_job() && !ie.current_import_job()->IsCancelationAcked()) {
-    backend_.SetTaskState(PL_TEXT("Cannot create folder while import is running."), 0, false);
+  auto* ie = import_export_;
+  if (ie && ie->current_import_job() && !ie->current_import_job()->IsCancelationAcked()) {
+    status_->SetTaskState(PL_TEXT("Cannot create folder while import is running."), 0, false);
     return;
   }
-  if (ie.export_inflight()) {
-    backend_.SetTaskState(PL_TEXT("Cannot create folder while export is running."), 0, false);
+  if (ie && ie->export_inflight()) {
+    status_->SetTaskState(PL_TEXT("Cannot create folder while export is running."), 0, false);
     return;
   }
 
   const QString trimmed = folderName.trimmed();
   if (trimmed.isEmpty()) {
-    backend_.SetTaskState(PL_TEXT("Folder name cannot be empty."), 0, false);
+    status_->SetTaskState(PL_TEXT("Folder name cannot be empty."), 0, false);
     return;
   }
   if (trimmed.contains('/') || trimmed.contains('\\')) {
-    backend_.SetTaskState(PL_TEXT("Folder name cannot contain '/' or '\\'."), 0, false);
+    status_->SetTaskState(PL_TEXT("Folder name cannot contain '/' or '\\'."), 0, false);
     return;
   }
 
   auto browse = ph.project()->GetAlbumBrowseService();
   if (!browse) {
-    backend_.SetTaskState(PL_TEXT("Folder service is unavailable."), 0, false);
+    status_->SetTaskState(PL_TEXT("Folder service is unavailable."), 0, false);
     return;
   }
 
   const auto created = browse->CreateFolder(current_folder_path_, trimmed.toStdWString());
   if (!created.has_value()) {
-    backend_.SetTaskState(PL_TEXT("Failed to create folder."), 0, false);
+    status_->SetTaskState(PL_TEXT("Failed to create folder."), 0, false);
     return;
   }
 
@@ -383,40 +398,40 @@ void FolderController::CreateFolder(const QString& folderName) {
     save_ok = false;
   }
 
-  backend_.ReloadFolderTree(current_folder_path_);
+  library_->ReloadFolderTree(current_folder_path_);
 
   auto msg = PL_TEXT("Created folder %1", album_util::WStringToQString(created->folder_name_));
   if (!save_ok) {
     msg = PL_TEXT("%1 Project state save failed.", msg.Render());
   }
-  backend_.SetServiceMessageForCurrentProject(msg);
-  backend_.SetTaskState(msg, 100, false);
-  backend_.ScheduleIdleTaskStateReset(1200);
+  status_->SetServiceMessage(msg);
+  status_->SetTaskState(msg, 100, false);
+  status_->ScheduleIdleTaskStateReset(1200);
 }
 
 void FolderController::DeleteFolder(uint folderUiId) {
-  auto& ph = backend_.project_handler_;
+  auto& ph = project_->handler();
   if (ph.project_loading()) {
-    backend_.SetTaskState(PL_TEXT("Project is loading. Please wait."), 0, false);
+    status_->SetTaskState(PL_TEXT("Project is loading. Please wait."), 0, false);
     return;
   }
   if (!ph.project()) {
-    backend_.SetTaskState(PL_TEXT("No project is loaded."), 0, false);
+    status_->SetTaskState(PL_TEXT("No project is loaded."), 0, false);
     return;
   }
-  auto& ie = backend_.import_export_;
-  if (ie.current_import_job() && !ie.current_import_job()->IsCancelationAcked()) {
-    backend_.SetTaskState(PL_TEXT("Cannot delete folder while import is running."), 0, false);
+  auto* ie = import_export_;
+  if (ie && ie->current_import_job() && !ie->current_import_job()->IsCancelationAcked()) {
+    status_->SetTaskState(PL_TEXT("Cannot delete folder while import is running."), 0, false);
     return;
   }
-  if (ie.export_inflight()) {
-    backend_.SetTaskState(PL_TEXT("Cannot delete folder while export is running."), 0, false);
+  if (ie && ie->export_inflight()) {
+    status_->SetTaskState(PL_TEXT("Cannot delete folder while export is running."), 0, false);
     return;
   }
 
   const auto path_opt = TryGetPathForUiId(folderUiId);
   if (!path_opt.has_value() || path_opt.value() == album_util::RootFsPath()) {
-    backend_.SetTaskState(PL_TEXT("Root folder cannot be deleted."), 0, false);
+    status_->SetTaskState(PL_TEXT("Root folder cannot be deleted."), 0, false);
     return;
   }
 
@@ -426,7 +441,7 @@ void FolderController::DeleteFolder(uint folderUiId) {
 
   auto browse = ph.project()->GetAlbumBrowseService();
   if (!browse || !browse->DeleteFolder(folder_path)) {
-    backend_.SetTaskState(PL_TEXT("Failed to delete folder."), 0, false);
+    status_->SetTaskState(PL_TEXT("Failed to delete folder."), 0, false);
     return;
   }
 
@@ -443,18 +458,18 @@ void FolderController::DeleteFolder(uint folderUiId) {
     save_ok = false;
   }
 
-  backend_.ReloadFolderTree(fallback_path);
-  backend_.stats_.ClearFilters();
-  backend_.ReloadCurrentFolder();
-  emit backend_.StatsFilterChanged();
+  library_->ReloadFolderTree(fallback_path);
+  if (stats_) stats_->ClearFilters();
+  library_->ReloadCurrentFolder();
+  if (stats_) emit stats_->StatsFilterChanged();
 
   auto msg = PL_TEXT("Folder deleted.");
   if (!save_ok) {
     msg = PL_TEXT("%1 Project state save failed.", msg.Render());
   }
-  backend_.SetServiceMessageForCurrentProject(msg);
-  backend_.SetTaskState(msg, 100, false);
-  backend_.ScheduleIdleTaskStateReset(1200);
+  status_->SetServiceMessage(msg);
+  status_->SetTaskState(msg, 100, false);
+  status_->ScheduleIdleTaskStateReset(1200);
 }
 
 void FolderController::ClearState() {

@@ -4,16 +4,18 @@
 
 #include "ui/alcedo_main/album_backend/editor_controller.hpp"
 
-#include "ui/alcedo_main/album_backend/album_backend.hpp"
+#include "ui/alcedo_main/album_backend/editor_controller.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
+#include "ui/alcedo_main/album_backend/library_module.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 
 #include "app/pipeline_service.hpp"
+#include "app/editor_raw_decode_capabilities.hpp"
+#include "app/render_service.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "io/image/image_loader.hpp"
 #include "edit/operators/utils/color_utils.hpp"
-#include "ui/alcedo_main/editor_dialog/editor_dialog.hpp"
 
-#include <QApplication>
 #include <QCoreApplication>
 
 #include <chrono>
@@ -47,6 +49,27 @@ auto IsHdrExportEotf(const ColorUtils::EOTF eotf) -> bool {
   return eotf == ColorUtils::EOTF::ST2084 || eotf == ColorUtils::EOTF::HLG;
 }
 
+auto ToRawDecodeCapabilitiesMap(const raw_decode::Capabilities& capabilities) -> QVariantMap {
+  QVariantList method_values;
+  for (const auto& value : capabilities.method_values) {
+    method_values.push_back(QString::fromStdString(value));
+  }
+
+  QVariantMap result;
+  result.insert(QStringLiteral("rawSource"), capabilities.raw_source);
+  result.insert(QStringLiteral("available"), capabilities.available);
+  result.insert(QStringLiteral("metadataAvailable"), capabilities.metadata_available);
+  result.insert(QStringLiteral("neuralEngineAvailable"),
+                capabilities.neural_engine_available);
+  result.insert(QStringLiteral("highlightsAvailable"), capabilities.highlights_available);
+  result.insert(QStringLiteral("unavailableReason"),
+                QString::fromStdString(capabilities.unavailable_reason));
+  result.insert(QStringLiteral("methodValues"), method_values);
+  result.insert(QStringLiteral("rawDefaultParamsJson"),
+                QString::fromStdString(pipeline_defaults::MakeDefaultRawDecodeParams().dump()));
+  return result;
+}
+
 }  // namespace
 
 #define PL_TEXT(text, ...)                                                    \
@@ -54,23 +77,59 @@ auto IsHdrExportEotf(const ColorUtils::EOTF eotf) -> bool {
                           QT_TRANSLATE_NOOP(ALCEDO_I18N_CONTEXT, text)      \
                               __VA_OPT__(, ) __VA_ARGS__)
 
-EditorController::EditorController(AlbumBackend& backend) : backend_(backend) {
+EditorController::EditorController(ProjectModule* project, LibraryModule* library, QObject* parent)
+    : QObject(parent), project_(project), library_(library) {
   editor_status_text_ = PL_TEXT("Select a photo to edit.");
 }
 
-void EditorController::OpenEditor(sl_element_id_t elementId, image_id_t imageId) {
-  if (backend_.project_handler_.project_loading()) {
+auto EditorController::RawDecodeCapabilitiesForImage(image_id_t image_id) const -> QVariantMap {
+  auto unavailable = [](const char* reason) {
+    auto result = ToRawDecodeCapabilitiesMap(
+        raw_decode::FromImageMetadata(ImageType::DEFAULT, false));
+    result.insert(QStringLiteral("unavailableReason"), QString::fromUtf8(reason));
+    return result;
+  };
+
+  if (image_id == 0 || project_ == nullptr) {
+    return unavailable("Select a RAW image to enable RAW Decode.");
+  }
+
+  const auto project = project_->handler().project();
+  if (!project) {
+    return unavailable("The project is not ready for RAW Decode.");
+  }
+
+  try {
+    const auto image_pool = project->GetImagePoolService();
+    if (!image_pool) {
+      return unavailable("The image service is unavailable.");
+    }
+    const auto image = image_pool->Read<std::shared_ptr<Image>>(
+        image_id, [](const std::shared_ptr<Image>& value) { return value; });
+    if (!image) {
+      return unavailable("The selected image is unavailable.");
+    }
+
+    const bool has_context = image->HasRawColorContext();
+    return ToRawDecodeCapabilitiesMap(
+        raw_decode::FromImageMetadata(image->image_type_, image->image_path_, has_context));
+  } catch (const std::exception&) {
+    return unavailable("RAW metadata could not be read for this image.");
+  }
+}
+
+void EditorController::OpenEditor(uint elementId, uint imageId) {
+  if (project_->handler().project_loading()) {
     editor_status_text_ = PL_TEXT("Project is loading. Please wait.");
-    emit backend_.EditorStateChanged();
+    emit EditorStateChanged();
     return;
   }
 
-  const auto& psvc = backend_.project_handler_.pipeline_service();
-  auto  proj = backend_.project_handler_.project();
-  const auto& hsvc = backend_.project_handler_.history_service();
-  if (!psvc || !proj || !hsvc) {
+  const auto& psvc = project_->handler().pipeline_service();
+  auto        proj = project_->handler().project();
+  if (!psvc || !proj) {
     editor_status_text_ = PL_TEXT("Editor service is unavailable.");
-    emit backend_.EditorStateChanged();
+    emit EditorStateChanged();
     return;
   }
 
@@ -81,76 +140,42 @@ void EditorController::OpenEditor(sl_element_id_t elementId, image_id_t imageId)
   FinalizeEditorSession(true);
 
   try {
-    auto pipeline_guard = psvc->LoadPipeline(elementId);
-    if (!pipeline_guard || !pipeline_guard->pipeline_) {
+    editor_pipeline_guard_ = psvc->LoadEditorPipeline(elementId);
+    if (!editor_pipeline_guard_ || !editor_pipeline_guard_->pipeline_) {
       throw std::runtime_error("Pipeline is unavailable.");
-    }
-
-    auto history_guard = hsvc->LoadHistory(elementId);
-    if (!history_guard || !history_guard->history_) {
-      throw std::runtime_error("History is unavailable.");
     }
 
     editor_element_id_ = elementId;
     editor_image_id_   = imageId;
 
-    if (const auto* item = backend_.FindAlbumItem(elementId); item) {
+    if (const auto* item = library_->FindAlbumItem(elementId); item) {
       editor_title_text_ = PL_TEXT("Editing %1", item->file_name);
     } else {
       editor_title_text_ = PL_TEXT("Editing %1", PL_TEXT("image #%1", imageId).Render());
     }
+    if (!LoadEditorStateFromPipeline()) {
+      throw std::runtime_error("Failed to read editor pipeline state.");
+    }
+    editor_initial_state_ = editor_state_;
+    SetupEditorPipeline();
+    editor_scheduler_ = RenderService::GetPreviewScheduler();
+
     editor_status_text_ = PL_TEXT("Opening editor...");
     editor_active_ = true;
     editor_busy_   = false;
-    emit backend_.EditorStateChanged();
-
-    const bool opened = OpenEditorDialog(proj->GetImagePoolService(), pipeline_guard, hsvc,
-                                         history_guard, elementId, imageId,
-                                         QApplication::activeWindow());
-
-    if (!opened) {
-      editor_status_text_ = PL_TEXT("This build does not include the editor backend yet.");
-    } else {
-      psvc->SavePipeline(pipeline_guard);
-      psvc->Sync();
-      hsvc->SaveHistory(history_guard);
-      hsvc->Sync();
-      backend_.PersistImageHdrFlag(
-          elementId, imageId,
-          IsHdrExportEotf(pipeline_guard->pipeline_->GetGlobalParams().to_output_params_.eotf_));
-      proj->GetImagePoolService()->SyncWithStorage();
-      QString ignored_error;
-      if (backend_.project_handler_.PersistCurrentProjectState()) {
-        (void)backend_.project_handler_.PackageCurrentProjectFiles(&ignored_error);
-      }
-
-      const auto& tsvc = backend_.project_handler_.thumbnail_service();
-      if (tsvc) {
-        try {
-          tsvc->InvalidateThumbnail(elementId);
-        } catch (...) {
-        }
-        if (!backend_.thumb_.RefreshCurrentThumbnail(elementId, imageId)) {
-          backend_.thumb_.UpdateThumbnailState(elementId, QString(), false, false);
-        }
-      }
-
-      editor_status_text_ = PL_TEXT("Editor closed. Changes saved.");
-    }
+    emit EditorStateChanged();
+    QueueEditorRender(RenderType::FAST_PREVIEW);
   } catch (const std::exception& e) {
+    editor_pipeline_guard_.reset();
+    editor_base_task_ = PipelineTask{};
     editor_status_text_ = PL_TEXT("Failed to open editor: %1", QString::fromUtf8(e.what()));
+    editor_active_     = false;
+    editor_busy_       = false;
+    editor_element_id_ = 0;
+    editor_image_id_   = 0;
+    editor_title_text_ = {};
+    emit EditorStateChanged();
   }
-
-  if (!editor_preview_url_.isEmpty()) {
-    editor_preview_url_.clear();
-    emit backend_.EditorPreviewChanged();
-  }
-  editor_active_     = false;
-  editor_busy_       = false;
-  editor_element_id_ = 0;
-  editor_image_id_   = 0;
-  editor_title_text_ = {};
-  emit backend_.EditorStateChanged();
 }
 
 void EditorController::CloseEditor() {
@@ -161,7 +186,7 @@ void EditorController::ResetEditorAdjustments() {
   if (!editor_active_) return;
   editor_state_     = editor_initial_state_;
   editor_lut_index_ = LutIndexForPath(editor_state_.lut_path_);
-  emit backend_.EditorStateChanged();
+  emit EditorStateChanged();
   QueueEditorRender(RenderType::FULL_RES_PREVIEW);
 }
 
@@ -178,7 +203,7 @@ void EditorController::SetEditorLutIndex(int index) {
   if (editor_lut_index_ == index) return;
   editor_lut_index_       = index;
   editor_state_.lut_path_ = editor_lut_paths_[static_cast<size_t>(index)];
-  emit backend_.EditorStateChanged();
+  emit EditorStateChanged();
   QueueEditorRender(RenderType::FAST_PREVIEW);
 }
 
@@ -347,7 +372,7 @@ auto EditorController::LoadEditorStateFromPipeline() -> bool {
 }
 
 void EditorController::SetupEditorPipeline() {
-  auto proj = backend_.project_handler_.project();
+  auto proj = project_->handler().project();
   if (!editor_pipeline_guard_ || !editor_pipeline_guard_->pipeline_ || !proj) {
     throw std::runtime_error("Editor services are unavailable.");
   }
@@ -426,7 +451,7 @@ void EditorController::QueueEditorRender(RenderType renderType) {
 
   if (!editor_busy_) {
     editor_busy_ = true;
-    emit backend_.EditorStateChanged();
+    emit EditorStateChanged();
   }
 
   if (!editor_render_inflight_) {
@@ -448,7 +473,7 @@ void EditorController::StartNextEditorRender() {
   } catch (...) {
     editor_status_text_ = PL_TEXT("Failed to apply editor pipeline state.");
     editor_busy_   = false;
-    emit backend_.EditorStateChanged();
+    emit EditorStateChanged();
     return;
   }
 
@@ -465,7 +490,7 @@ void EditorController::StartNextEditorRender() {
 
   editor_render_inflight_ = true;
   editor_status_text_     = PL_TEXT("Rendering preview...");
-  emit backend_.EditorStateChanged();
+  emit EditorStateChanged();
 
   editor_scheduler_->ScheduleTask(std::move(task));
   editor_render_future_ = std::move(future);
@@ -508,7 +533,7 @@ void EditorController::PollEditorRender() {
   }
 
   editor_busy_ = false;
-  emit backend_.EditorStateChanged();
+  emit EditorStateChanged();
 
   if (editor_poll_timer_ && editor_poll_timer_->isActive()) {
     editor_poll_timer_->stop();
@@ -517,10 +542,9 @@ void EditorController::PollEditorRender() {
 
 void EditorController::EnsureEditorPollTimer() {
   if (editor_poll_timer_) return;
-  editor_poll_timer_ = new QTimer(&backend_);
+  editor_poll_timer_ = new QTimer(this);
   editor_poll_timer_->setInterval(16);
-  QObject::connect(editor_poll_timer_, &QTimer::timeout, &backend_,
-                   [this]() { PollEditorRender(); });
+  QObject::connect(editor_poll_timer_, &QTimer::timeout, this, [this]() { PollEditorRender(); });
 }
 
 void EditorController::FinalizeEditorSession(bool persistChanges) {
@@ -549,7 +573,7 @@ void EditorController::FinalizeEditorSession(bool persistChanges) {
   const auto finishedElement = editor_element_id_;
   const auto finishedImage   = editor_image_id_;
 
-  const auto& psvc = backend_.project_handler_.pipeline_service();
+  const auto& psvc = project_->handler().pipeline_service();
   bool        update_hdr_flag = false;
   bool        is_hdr_export   = false;
   if (psvc) {
@@ -571,29 +595,29 @@ void EditorController::FinalizeEditorSession(bool persistChanges) {
     }
   }
 
-  auto proj = backend_.project_handler_.project();
+  auto proj = project_->handler().project();
   if (persistChanges && proj) {
     try {
       if (update_hdr_flag) {
-        backend_.PersistImageHdrFlag(finishedElement, finishedImage, is_hdr_export);
+        library_->PersistImageHdrFlag(finishedElement, finishedImage, is_hdr_export);
       }
       proj->GetImagePoolService()->SyncWithStorage();
       QString ignored_error;
-      if (backend_.project_handler_.PersistCurrentProjectState()) {
-        (void)backend_.project_handler_.PackageCurrentProjectFiles(&ignored_error);
+      if (project_->handler().PersistCurrentProjectState()) {
+        (void)project_->handler().PackageCurrentProjectFiles(&ignored_error);
       }
     } catch (...) {
     }
   }
 
-  const auto& tsvc = backend_.project_handler_.thumbnail_service();
+  const auto& tsvc = project_->handler().thumbnail_service();
   if (persistChanges && tsvc && finishedElement != 0 && finishedImage != 0) {
     try {
       tsvc->InvalidateThumbnail(finishedElement);
     } catch (...) {
     }
-    if (!backend_.thumb_.RefreshCurrentThumbnail(finishedElement, finishedImage)) {
-      backend_.thumb_.UpdateThumbnailState(finishedElement, QString(), false, false);
+    if (!library_->thumbs().RefreshCurrentThumbnail(finishedElement, finishedImage)) {
+      library_->thumbs().UpdateThumbnailState(finishedElement, QString(), false, false);
     }
   }
 
@@ -607,9 +631,9 @@ void EditorController::FinalizeEditorSession(bool persistChanges) {
   editor_status_text_ = persistChanges ? PL_TEXT("Edits saved.") : PL_TEXT("Editor closed.");
   if (!editor_preview_url_.isEmpty()) {
     editor_preview_url_.clear();
-    emit backend_.EditorPreviewChanged();
+    emit EditorPreviewChanged();
   }
-  emit backend_.EditorStateChanged();
+  emit EditorStateChanged();
 }
 
 auto EditorController::UpdateEditorPreviewFromBuffer(
@@ -635,7 +659,7 @@ auto EditorController::UpdateEditorPreviewFromBuffer(
 
   if (editor_preview_url_ != dataUrl) {
     editor_preview_url_ = dataUrl;
-    emit backend_.EditorPreviewChanged();
+    emit EditorPreviewChanged();
   }
   return true;
 }
@@ -646,7 +670,7 @@ void EditorController::SetEditorAdjustment(float& field, double value,
   const float clamped = ClampToRange(value, minValue, maxValue);
   if (NearlyEqual(field, clamped)) return;
   field = clamped;
-  emit backend_.EditorStateChanged();
+  emit EditorStateChanged();
   QueueEditorRender(RenderType::FAST_PREVIEW);
 }
 

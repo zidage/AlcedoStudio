@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -12,10 +13,12 @@
 #include <vector>
 
 #include "edit/history/edit_history.hpp"
+#include "edit/history/editor_journal_recovery.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_filter/filter_combo.hpp"
 #include "storage/controller/controller_types.hpp"
+#include "storage/mapper/sleeve/edit_history/recovery_metadata_mapper.hpp"
 #include "storage/service/pipeline/pipeline_service.hpp"
 #include "storage/service/sleeve/edit_history/history_service.hpp"
 #include "storage/service/sleeve/element/element_id_service.hpp"
@@ -68,6 +71,7 @@ class ElementController {
   EditHistoryService history_service_;
   PipelineService    pipeline_service_;
   EditHistoryService edit_history_service_;
+  std::function<void()> materialize_pre_commit_hook_{};
 
   // Insert the element row plus its child rows (file binding / folder content /
   // edit history). Does not touch sync_flag_ and does not manage a transaction, so
@@ -141,6 +145,25 @@ class ElementController {
                                  const std::shared_ptr<EditHistory> history) -> void;
   auto RemoveEditHistoryByFileId(const sl_element_id_t file_id) -> void;
   auto RemoveEditHistoriesByFileIds(std::span<const sl_element_id_t> file_ids) -> void;
+
+  /// Atomically update active Version history, active pipeline params, and
+  /// recovery metadata on this controller's connection. Editor materialization
+  /// and Version publication must use this path instead of separate
+  /// SaveHistory()/SavePipeline() calls.
+  auto MaterializeEditorState(const std::shared_ptr<EditHistory>& history,
+                              const std::shared_ptr<CPUPipelineExecutor>& pipeline,
+                              const EditorRecoveryMetadata& recovery_metadata,
+                              std::string* error = nullptr) -> bool;
+
+  auto GetEditorRecoveryMetadata(sl_element_id_t file_id) -> std::optional<EditorRecoveryMetadata>;
+
+  /// Test-only seam: a hook invoked after the history, pipeline, and recovery
+  /// metadata writes inside `MaterializeEditorState` but before the transaction
+  /// commits. Throwing from the hook forces a rollback so tests can prove all
+  /// three writes roll back together. Production leaves it unset.
+  void SetMaterializePreCommitHook(std::function<void()> hook) {
+    materialize_pre_commit_hook_ = std::move(hook);
+  }
 
   auto GetEditHistoryService() -> std::shared_ptr<EditHistoryService>;
 

@@ -19,6 +19,7 @@
 #include "sleeve/sleeve_element/sleeve_folder.hpp"
 #include "storage/controller/ai/ai_storage_controller.hpp"
 #include "storage/mapper/duckorm/duckdb_orm.hpp"
+#include "type/hash_type.hpp"
 #include "type/type.hpp"
 #include "utils/string/convert.hpp"
 
@@ -117,7 +118,8 @@ auto JoinIds(std::span<const sl_element_id_t> ids) -> std::string {
   return out;
 }
 
-void DeleteSemanticAndAiRowsForFiles(duckdb_connection conn, std::span<const sl_element_id_t> file_ids) {
+void DeleteSemanticAndAiRowsForFiles(duckdb_connection                conn,
+                                     std::span<const sl_element_id_t> file_ids) {
   if (file_ids.empty()) {
     return;
   }
@@ -587,6 +589,113 @@ auto ElementController::RemoveEditHistoriesByFileIds(std::span<const sl_element_
     -> void {
   auto db_lock = guard_.Lock();
   history_service_.RemoveByIds(file_ids);
+}
+
+namespace {
+auto ToRecoveryMapperParams(const EditorRecoveryMetadata& metadata)
+    -> EditorRecoveryMetadataMapperParams {
+  EditorRecoveryMetadataMapperParams params;
+  params.file_id                         = metadata.element_id;
+  params.version_id                      = std::make_unique<std::string>(metadata.version_id.ToString());
+  params.journal_generation              = metadata.journal_generation;
+  params.materialized_operation_sequence = metadata.materialized_operation_sequence;
+  params.transaction_chain_hash =
+      std::make_unique<std::string>(metadata.transaction_chain_hash.ToString());
+  params.pipeline_parameter_hash =
+      std::make_unique<std::string>(metadata.pipeline_parameter_hash.ToString());
+  return params;
+}
+
+auto FromRecoveryMapperParams(EditorRecoveryMetadataMapperParams&& params)
+    -> EditorRecoveryMetadata {
+  EditorRecoveryMetadata metadata;
+  metadata.element_id = params.file_id;
+  if (params.version_id && !params.version_id->empty()) {
+    metadata.version_id = Hash128::FromString(*params.version_id);
+  }
+  metadata.journal_generation              = params.journal_generation;
+  metadata.materialized_operation_sequence = params.materialized_operation_sequence;
+  if (params.transaction_chain_hash && !params.transaction_chain_hash->empty()) {
+    metadata.transaction_chain_hash = Hash128::FromString(*params.transaction_chain_hash);
+  }
+  if (params.pipeline_parameter_hash && !params.pipeline_parameter_hash->empty()) {
+    metadata.pipeline_parameter_hash = Hash128::FromString(*params.pipeline_parameter_hash);
+  }
+  return metadata;
+}
+}  // namespace
+
+auto ElementController::MaterializeEditorState(const std::shared_ptr<EditHistory>&         history,
+    const std::shared_ptr<CPUPipelineExecutor>& pipeline,
+                                               const EditorRecoveryMetadata& recovery_metadata,
+                                               std::string*                  error) -> bool {
+  if (!history || !pipeline) {
+    if (error) {
+      *error = "MaterializeEditorState requires history and pipeline";
+    }
+    return false;
+  }
+  if (history->GetBoundImage() != recovery_metadata.element_id ||
+      pipeline->GetBoundFile() != recovery_metadata.element_id) {
+    if (error) {
+      *error = "MaterializeEditorState identity mismatch";
+    }
+    return false;
+  }
+
+  auto db_lock = guard_.Lock();
+  try {
+    if (duckorm::begin_transaction(guard_.conn_) != DuckDBSuccess) {
+      if (error) {
+        *error = "failed to begin editor materialize transaction";
+      }
+      return false;
+    }
+    try {
+      history_service_.UpdateEditHistory(history);
+      pipeline_service_.UpdatePipelineParamByFileId(recovery_metadata.element_id, pipeline);
+      EditorRecoveryMetadataMapper mapper(guard_.conn_);
+      mapper.Update(recovery_metadata.element_id, ToRecoveryMapperParams(recovery_metadata));
+      if (materialize_pre_commit_hook_) {
+        // Test seam: throw here to prove the three writes roll back together.
+        materialize_pre_commit_hook_();
+      }
+      if (duckorm::commit_transaction(guard_.conn_) != DuckDBSuccess) {
+        duckorm::rollback_transaction(guard_.conn_);
+        if (error) {
+          *error = "failed to commit editor materialize transaction";
+        }
+        return false;
+      }
+    } catch (const std::exception& ex) {
+      duckorm::rollback_transaction(guard_.conn_);
+      if (error) {
+        *error = ex.what();
+      }
+      return false;
+    }
+  } catch (const std::exception& ex) {
+    if (error) {
+      *error = ex.what();
+    }
+    return false;
+  }
+  return true;
+}
+
+auto ElementController::GetEditorRecoveryMetadata(sl_element_id_t file_id)
+    -> std::optional<EditorRecoveryMetadata> {
+  auto db_lock = guard_.Lock();
+  EditorRecoveryMetadataMapper mapper(guard_.conn_);
+  auto rows = mapper.Get(std::format("file_id={}", file_id).c_str());
+  if (rows.empty()) {
+    return std::nullopt;
+  }
+  if (rows.size() > 1) {
+    throw std::runtime_error("multiple EditorRecoveryMetadata rows for file_id " +
+                             std::to_string(file_id));
+  }
+  return FromRecoveryMapperParams(std::move(rows.front()));
 }
 
 };  // namespace alcedo

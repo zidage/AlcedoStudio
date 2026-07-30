@@ -16,7 +16,7 @@ namespace alcedo::ui {
 /// the count drops to zero the `on_release_` callback fires, which drains the
 /// `AnalysisResultWriteQueue` (see below).
 ///
-/// Threading: all Acquire/Release calls happen on the AlbumBackend thread
+/// Threading: all Acquire/Release calls happen on the UI/module-host thread
 /// (export start/finish and the analysis Finish callback are all marshalled
 /// there via `QMetaObject::invokeMethod QueuedConnection`), so the count needs
 /// no mutex. `Release()` when the count is already zero is a defensive no-op.

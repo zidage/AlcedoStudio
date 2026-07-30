@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <json.hpp>
 #include <string>
 
 namespace alcedo {
@@ -46,5 +47,12 @@ struct RawRuntimeColorContext {
   double            color_matrix_1_cct_      = 2856.0;
   double            color_matrix_2_cct_      = 6504.0;
 };
+
+/// Serialize the complete import-resolved RAW color and lens state.
+auto RawColorContextToJson(const RawRuntimeColorContext& context) -> nlohmann::json;
+
+/// Decode a previously serialized RAW color and lens state.
+/// Returns false when the JSON does not contain a usable RAW context.
+auto RawColorContextFromJson(const nlohmann::json& value, RawRuntimeColorContext& context) -> bool;
 
 }  // namespace alcedo

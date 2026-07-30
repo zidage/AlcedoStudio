@@ -11,7 +11,8 @@
 #include <thread>
 
 #include "app/project_package_service.hpp"
-#include "ui/alcedo_main/album_backend/album_backend.hpp"
+#include "image/image.hpp"
+#include "ui/alcedo_main/album_backend/project_module.hpp"
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 
 namespace alcedo::ui {
@@ -20,7 +21,7 @@ namespace alcedo::ui {
   i18n::MakeLocalizedText(ALCEDO_I18N_CONTEXT, QT_TRANSLATE_NOOP(ALCEDO_I18N_CONTEXT, text) \
                                                      __VA_OPT__(, ) __VA_ARGS__)
 
-ProjectHandler::ProjectHandler(AlbumBackend& backend) : backend_(backend) {}
+ProjectHandler::ProjectHandler(ProjectModule& project_module) : project_module_(project_module) {}
 
 bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
                                         const std::filesystem::path& metaPath,
@@ -29,48 +30,39 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
                                         const std::filesystem::path& workspaceDir,
                                         const std::filesystem::path& recentProjectPath) {
   if (project_loading_) {
-    backend_.SetServiceMessageForCurrentProject(PL_TEXT("A project load is already in progress."));
+    project_module_.SetServiceMessageForCurrentProject(PL_TEXT("A project load is already in progress."));
     return false;
   }
 
-  auto& ie = backend_.import_export_;
-  if (ie.current_import_job() && !ie.current_import_job()->IsCancelationAcked()) {
-    backend_.SetServiceMessageForCurrentProject(
-        PL_TEXT("Cannot switch project while an import is running."));
-    return false;
-  }
-  if (ie.export_inflight()) {
-    backend_.SetServiceMessageForCurrentProject(
-        PL_TEXT("Cannot switch project while export is running."));
+  const QString switch_block_reason = project_module_.ProjectSwitchBlockReason();
+  if (!switch_block_reason.isEmpty()) {
+    project_module_.SetServiceMessageForCurrentProject(PL_TEXT("%1", switch_block_reason));
     return false;
   }
 
-  if (backend_.editor_.editor_active()) {
-    backend_.editor_.FinalizeEditorSession(true);
-  }
+  project_module_.FinalizeEditorSession();
 
-  backend_.SetServiceMessageForCurrentProject((openMode == ProjectOpenMode::kCreateNew)
+  project_module_.SetServiceMessageForCurrentProject((openMode == ProjectOpenMode::kCreateNew)
                                                   ? PL_TEXT("Creating project...")
                                                   : PL_TEXT("Loading project..."));
   SetProjectLoadingState(true, (openMode == ProjectOpenMode::kCreateNew)
                                    ? PL_TEXT("Creating project...")
                                    : PL_TEXT("Loading project..."));
-  backend_.SetTaskState(PL_TEXT("Opening project..."), 0, false);
+  project_module_.SetTaskState(PL_TEXT("Opening project..."), 0, false);
 
   const auto request_id = ++project_load_request_id_;
-  const auto accelerator_preference = backend_.accelerator_preference_;
+  const auto accelerator_preference = project_module_.accelerator_preference();
 
   auto old_project   = project_;
   auto old_pipeline  = pipeline_service_;
-  auto old_history   = history_service_;
   auto old_thumbnail = thumbnail_service_;
   auto old_meta      = meta_path_;
   auto old_package   = project_package_path_;
   auto old_workspace = project_workspace_dir_;
 
-  QPointer<AlbumBackend> self(&backend_);
+  QPointer<ProjectModule> self(&project_module_);
   std::thread([self, request_id, old_project = std::move(old_project),
-               old_pipeline = std::move(old_pipeline), old_history = std::move(old_history),
+               old_pipeline = std::move(old_pipeline),
                old_thumbnail = std::move(old_thumbnail), old_meta = std::move(old_meta),
                old_package = std::move(old_package), old_workspace = std::move(old_workspace),
                dbPath, metaPath, packagePath, workspaceDir, recentProjectPath, openMode,
@@ -80,7 +72,6 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
       QString                                 error_{};
       std::shared_ptr<ProjectService>         project_{};
       std::shared_ptr<PipelineMgmtService>    pipeline_{};
-      std::shared_ptr<EditHistoryMgmtService> history_{};
       std::shared_ptr<ThumbnailService>       thumbnail_{};
       std::unique_ptr<ImportServiceImpl>      import_{};
       std::shared_ptr<ExportService>          export_{};
@@ -97,9 +88,6 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
     try {
       if (old_pipeline) {
         old_pipeline->Sync();
-      }
-      if (old_history) {
-        old_history->Sync();
       }
       if (old_thumbnail) {
         auto stats = old_thumbnail->GetDiskCacheStats();
@@ -144,12 +132,30 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
       result->project_   = std::make_shared<ProjectService>(dbPath, metaPath, openMode);
       result->pipeline_  = std::make_shared<PipelineMgmtService>(result->project_->GetStorageService());
       result->pipeline_->SetAcceleratorBackendPreference(accelerator_preference);
-      result->history_   = std::make_shared<EditHistoryMgmtService>(result->project_->GetStorageService());
       result->thumbnail_ = std::make_shared<ThumbnailService>(
           result->project_->GetSleeveService(), result->project_->GetImagePoolService(),
-          result->pipeline_, result->history_, result->project_->GetProjectUUID());
+          result->pipeline_, result->project_->GetStorageService(), result->project_->GetProjectUUID());
       result->import_ = std::make_unique<ImportServiceImpl>(
-          result->project_->GetSleeveService(), result->project_->GetImagePoolService());
+          result->project_->GetSleeveService(), result->project_->GetImagePoolService(),
+          [pipeline = result->pipeline_](sl_element_id_t element_id,
+                                         const std::shared_ptr<Image>& image) {
+            if (!pipeline) {
+              throw std::runtime_error("Pipeline service is unavailable during root creation");
+            }
+            auto guard = pipeline->LoadPipeline(element_id);
+            if (!guard || !guard->pipeline_) {
+              throw std::runtime_error("Pipeline is unavailable during root creation");
+            }
+            if (image && image->HasRawColorContext()) {
+              guard->pipeline_->InjectRawMetadata(image->GetRawColorContext());
+            }
+            pipeline->InitializeImageRoot(
+                guard, image && image->HasRawColorContext() ? &image->GetRawColorContext()
+                                                            : nullptr);
+            guard->dirty_ = true;
+            pipeline->SyncPipeline(element_id);
+            pipeline->SavePipeline(guard);
+          });
       result->export_ = std::make_shared<ExportService>(result->project_->GetSleeveService(),
                                                         result->project_->GetImagePoolService(),
                                                         result->pipeline_);
@@ -188,11 +194,11 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
     QMetaObject::invokeMethod(
         self,
         [self, request_id, result]() mutable {
-          if (!self || request_id != self->project_handler_.project_load_request_id_) {
+          if (!self || request_id != self->handler().project_load_request_id()) {
             return;
           }
 
-          auto& ph = self->project_handler_;
+          auto& ph = self->handler();
 
           if (!result->success_) {
             ph.SetProjectLoadingState(false, {});
@@ -205,7 +211,6 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
 
           ph.project_               = std::move(result->project_);
           ph.pipeline_service_      = std::move(result->pipeline_);
-          ph.history_service_       = std::move(result->history_);
           ph.thumbnail_service_     = std::move(result->thumbnail_);
           ph.import_service_        = std::move(result->import_);
           ph.export_service_        = std::move(result->export_);
@@ -218,14 +223,8 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
             (void)ph.project_->GetAiSidecarRuntimeService();
           }
 
-          const auto preferred_folder_path = self->folder_ctrl_.current_folder_path();
           ph.ClearProjectData();
-          self->import_export_.ResetExportState();
-          self->ReloadFolderTree(preferred_folder_path);
-          self->stats_.ClearFilters();
-          self->ReloadCurrentFolder();
-          self->semantic_generation_.RefreshSemanticState();
-          emit self->StatsFilterChanged();
+          self->HandleProjectOpened();
           self->SetTaskState(PL_TEXT("No background tasks"), 0, false);
 
           self->SetServiceState(
@@ -240,7 +239,6 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
                                           ? (!ph.project_package_path_.empty() ? ph.project_package_path_
                                                                                : ph.meta_path_)
                                           : result->recent_project_path_);
-          self->ApplyThumbnailDiskCacheSettingsToService();
           emit self->ProjectChanged();
           emit self->projectChanged();
           ph.SetProjectLoadingState(false, {});
@@ -266,8 +264,7 @@ bool ProjectHandler::PurgeUninstalledSemanticModels() {
   bool        changed = false;
   for (const auto& model : models) {
     const auto lookup = model.profile_id_.empty() ? model.model_id_ : model.profile_id_;
-    if (backend_.model_download_controller_.ShouldKeepSemanticModelData(
-            QString::fromStdString(lookup))) {
+    if (project_module_.ShouldKeepSemanticModelData(QString::fromStdString(lookup))) {
       continue;  // still installed (or unknown to the catalog) — keep its rows
     }
     // If this was the active model, deleting its SemanticModel row leaves no
@@ -285,9 +282,6 @@ bool ProjectHandler::PersistCurrentProjectState() {
   try {
     if (pipeline_service_) {
       pipeline_service_->Sync();
-    }
-    if (history_service_) {
-      history_service_->Sync();
     }
     if (thumbnail_service_) {
       auto stats = thumbnail_service_->GetDiskCacheStats();
@@ -349,24 +343,11 @@ void ProjectHandler::SetProjectLoadingState(bool loading, const i18n::LocalizedT
   }
   project_loading_              = loading;
   project_loading_message_text_ = next_message;
-  emit backend_.ProjectLoadStateChanged();
+  project_module_.NotifyProjectLoadStateChanged();
 }
 
 void ProjectHandler::ClearProjectData() {
-  backend_.thumb_.ReleaseVisibleThumbnailPins();
-
-  backend_.view_state_.all_images_.clear();
-  backend_.view_state_.total_count_ = 0;
-  backend_.thumbnail_model_.resetModel({}, 0);
-  backend_.folder_ctrl_.ClearState();
-  backend_.import_export_.ClearImportTarget();
-
-  emit backend_.ThumbnailsChanged();
-  emit backend_.thumbnailsChanged();
-  emit backend_.FoldersChanged();
-  emit backend_.FolderSelectionChanged();
-  emit backend_.folderSelectionChanged();
-  emit backend_.CountsChanged();
+  project_module_.ClearProjectUiState();
 }
 
 }  // namespace alcedo::ui

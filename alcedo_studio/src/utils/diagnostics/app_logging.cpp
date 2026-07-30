@@ -25,14 +25,36 @@ Q_LOGGING_CATEGORY(semanticLog, "alcedo.semantic")
 Q_LOGGING_CATEGORY(semanticRpcLog, "alcedo.semantic.rpc")
 Q_LOGGING_CATEGORY(semanticDbLog, "alcedo.semantic.db")
 Q_LOGGING_CATEGORY(editorLog, "alcedo.editor")
+Q_LOGGING_CATEGORY(editorPresentLog, "alcedo.editor.present")
 
 namespace {
+
+// Flush buffered info/debug writes once this many bytes accumulate. Keeps the
+// log durable in bounded batches instead of once per frame while preventing
+// unbounded buffering across a long interactive session.
+constexpr std::size_t kBufferedFlushThreshold = 1 << 16;  // 64 KiB
 
 std::mutex             g_log_lock;
 std::unique_ptr<QFile> g_log_file;
 QtMessageHandler      g_previous_handler = nullptr;
 QString               g_log_file_path;
 bool                  g_console_enabled = false;
+std::size_t           g_buffered_bytes   = 0;
+
+// Test-only counters. Guarded by g_log_lock. They count messages that actually
+// reach the handler (Qt suppresses disabled category/severity before dispatch).
+std::size_t g_present_messages   = 0;
+std::size_t g_info_debug_messages = 0;
+std::size_t g_immediate_flushes   = 0;
+std::size_t g_batch_flushes       = 0;
+
+auto IsPresentCategory(const char* category) -> bool {
+  return category != nullptr && std::string_view(category) == "alcedo.editor.present";
+}
+
+auto IsImmediateFlushType(QtMsgType type) -> bool {
+  return type == QtWarningMsg || type == QtCriticalMsg || type == QtFatalMsg;
+}
 
 auto MessageTypeName(QtMsgType type) -> const char* {
   switch (type) {
@@ -69,17 +91,39 @@ void ApplicationMessageHandler(QtMsgType type, const QMessageLogContext& context
   line += QLatin1Char('\n');
 
   const QByteArray bytes = line.toUtf8();
+  const bool       immediate = IsImmediateFlushType(type);
   {
     std::lock_guard lock(g_log_lock);
+    if (IsPresentCategory(context.category)) {
+      ++g_present_messages;
+    }
+    if (!immediate) {
+      ++g_info_debug_messages;
+    }
     if (g_log_file && g_log_file->isOpen()) {
       g_log_file->write(bytes);
-      g_log_file->flush();
+      if (immediate) {
+        g_log_file->flush();
+        ++g_immediate_flushes;
+        g_buffered_bytes = 0;
+      } else {
+        g_buffered_bytes += static_cast<std::size_t>(bytes.size());
+        if (g_buffered_bytes >= kBufferedFlushThreshold) {
+          g_log_file->flush();
+          ++g_batch_flushes;
+          g_buffered_bytes = 0;
+        }
+      }
     }
   }
 
   if (g_console_enabled) {
     std::fwrite(bytes.constData(), 1, static_cast<size_t>(bytes.size()), stderr);
-    std::fflush(stderr);
+    // Console output is opt-in (ALCEDO_LOG_CONSOLE); keep stderr responsive but
+    // do not fflush per info/debug line — the OS stream buffers it.
+    if (immediate) {
+      std::fflush(stderr);
+    }
   }
 
   if (type == QtFatalMsg) {
@@ -129,12 +173,14 @@ auto InitializeApplicationLogging(const QString& preferred_directory) -> QString
 
     g_log_file        = std::move(file);
     g_console_enabled = qEnvironmentVariableIntValue("ALCEDO_LOG_CONSOLE") != 0;
+    g_buffered_bytes  = 0;
 
     if (qEnvironmentVariableIsEmpty("QT_LOGGING_RULES")) {
       QLoggingCategory::setFilterRules(QStringLiteral(
           "*.debug=false\n"
           "qt.*.info=false\n"
           "alcedo.*.info=true\n"
+          "alcedo.editor.present.info=false\n"
           "alcedo.*.warning=true\n"));
     }
 
@@ -156,11 +202,31 @@ void ShutdownApplicationLogging() {
     g_log_file->close();
     g_log_file.reset();
   }
+  g_buffered_bytes = 0;
 }
 
 auto CurrentLogFilePath() -> QString {
   std::lock_guard lock(g_log_lock);
   return g_log_file_path;
+}
+
+auto DiagnosticCountersSnapshot() -> DiagnosticCounters {
+  std::lock_guard lock(g_log_lock);
+  return DiagnosticCounters{
+      .present_messages_written   = g_present_messages,
+      .info_debug_messages_written = g_info_debug_messages,
+      .immediate_flushes           = g_immediate_flushes,
+      .batch_flushes               = g_batch_flushes,
+  };
+}
+
+void ResetDiagnosticCountersForTesting() {
+  std::lock_guard lock(g_log_lock);
+  g_present_messages   = 0;
+  g_info_debug_messages = 0;
+  g_immediate_flushes   = 0;
+  g_batch_flushes       = 0;
+  g_buffered_bytes      = 0;
 }
 
 TraceScope::TraceScope(const QLoggingCategory& category, QString event, QString details)

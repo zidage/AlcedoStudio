@@ -45,6 +45,13 @@ class ViewTransformController {
 
   ViewTransformController() = default;
 
+  // Override the interactive zoom ceiling. The default (kMaxInteractiveZoom)
+  // keeps the legacy Qt Widgets editor and unit tests on their original 8x
+  // fit-relative cap. The QML editor sets a dynamic ceiling derived from a
+  // fixed *true-zoom* target (1:1 = 100%) so the zoom range is consistent across
+  // image sizes and viewport DPIs regardless of the 2K preview downsample.
+  void SetMaxZoom(float max_zoom) { max_zoom_ = max_zoom > kMinInteractiveZoom ? max_zoom : kMinInteractiveZoom; }
+
   auto HandleCtrlWheel(ViewerState& state, const ViewportWidgetInfo& widget_info,
                        const ViewportImageInfo& image_info, int wheel_delta,
                        const QPointF& anchor_widget_pos) -> ViewTransformResult;
@@ -52,6 +59,15 @@ class ViewTransformController {
   auto HandlePinchZoom(ViewerState& state, const ViewportWidgetInfo& widget_info,
                        const ViewportImageInfo& image_info, float zoom_delta,
                        const QPointF& anchor_widget_pos) -> ViewTransformResult;
+
+  // Absolute pinch target (preferred for Qt PinchHandler). PinchHandler.scale is
+  // cumulative from pinch start and resets to 1.0 between pinch sequences; applying
+  // incremental scale/lastScale ratios on that reset produces a large negative
+  // step that snaps the view to FIT. Callers should pass start_zoom * (scale /
+  // start_scale) instead.
+  auto HandlePinchZoomTo(ViewerState& state, const ViewportWidgetInfo& widget_info,
+                         const ViewportImageInfo& image_info, float target_zoom,
+                         const QPointF& anchor_widget_pos) -> ViewTransformResult;
 
   auto HandleWheelPan(ViewerState& state, const ViewportWidgetInfo& widget_info,
                       const ViewportImageInfo& image_info, const QPoint& pixel_delta)
@@ -75,6 +91,11 @@ class ViewTransformController {
 
   auto ResetView(ViewerState& state) -> ViewTransformResult;
   auto HandleCropToolEnabledChanged(ViewerState& state, bool enabled) -> ViewTransformResult;
+
+  // Drop a pending single-click zoom toggle (timer must be stopped by the caller).
+  // Pinch / wheel zoom must cancel an armed click-toggle so a trackpad press that
+  // preceded the pinch cannot later animate the view back toward FIT / 2x.
+  void CancelPendingClickToggle();
 
   auto ApplyAnimationProgress(ViewerState& state, const ViewportWidgetInfo& widget_info,
                               const ViewportImageInfo& image_info, float t)
@@ -110,6 +131,7 @@ class ViewTransformController {
   bool      suppress_next_click_release_toggle_ = false;
   bool      animation_active_          = false;
   ViewTransformAnimationState animation_state_{};
+  float     max_zoom_                  = kMaxInteractiveZoom;
 };
 
 }  // namespace alcedo

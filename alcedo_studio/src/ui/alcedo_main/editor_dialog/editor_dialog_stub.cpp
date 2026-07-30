@@ -6,6 +6,10 @@
 
 namespace alcedo::ui {
 
+void ResetOpenEditorDialogCallCount() {}
+
+auto OpenEditorDialogCallCount() -> int { return 0; }
+
 auto OpenEditorDialog(std::shared_ptr<ImagePoolService> /*image_pool*/,
                       std::shared_ptr<PipelineGuard> /*pipeline_guard*/,
                       std::shared_ptr<EditHistoryMgmtService> /*history_service*/,

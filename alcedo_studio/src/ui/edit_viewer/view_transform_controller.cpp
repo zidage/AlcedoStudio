@@ -27,14 +27,15 @@ auto ViewTransformController::HandleCtrlWheel(ViewerState& state,
       static_cast<float>(wheel_delta) / static_cast<float>(QWheelEvent::DefaultDeltasPerStep);
   const float target_zoom  =
       std::clamp(view_state.zoom * std::pow(kWheelZoomStep, steps), kMinInteractiveZoom,
-                 kMaxInteractiveZoom);
+                 max_zoom_);
   const QVector2D target_pan = ViewportMapper::ComputeAnchoredPan(
       anchor_widget_pos, widget_info, image_info, view_state.zoom, view_state.pan, target_zoom,
       view_state.pan);
 
   double_click_zoom_target_  = target_zoom;
-  double_click_zoom_in_next_ = false;
-  click_zoom_toggle_active_  = false;
+  // Next double-click toggles relative to the new level: out if zoomed, in if at fit.
+  double_click_zoom_in_next_ = target_zoom <= (kMinInteractiveZoom + 1.0e-4f);
+  CancelPendingClickToggle();
   StopAnimation();
   return ApplyViewTransform(state, widget_info, image_info, target_zoom, target_pan, true);
 }
@@ -54,16 +55,39 @@ auto ViewTransformController::HandlePinchZoom(ViewerState& state,
   // Qt docs: for ZoomNativeGesture, scale = scale * (1 + value)
   const float scale       = 1.0f + zoom_delta;
   const float target_zoom =
-      std::clamp(view_state.zoom * scale, kMinInteractiveZoom, kMaxInteractiveZoom);
+      std::clamp(view_state.zoom * scale, kMinInteractiveZoom, max_zoom_);
+  return HandlePinchZoomTo(state, widget_info, image_info, target_zoom, anchor_widget_pos);
+}
+
+auto ViewTransformController::HandlePinchZoomTo(ViewerState& state,
+                                                const ViewportWidgetInfo& widget_info,
+                                                const ViewportImageInfo& image_info,
+                                                float target_zoom,
+                                                const QPointF& anchor_widget_pos)
+    -> ViewTransformResult {
+  ViewTransformResult result;
+  result.consumed = true;
+
+  const auto  view_state = state.GetViewTransform();
+  const float clamped_zoom =
+      std::clamp(target_zoom, kMinInteractiveZoom, max_zoom_);
+  // Anchored against the *current* transform so intermediate absolute targets
+  // still keep the pinch centroid stable (same as incremental pinch).
   const QVector2D target_pan = ViewportMapper::ComputeAnchoredPan(
-      anchor_widget_pos, widget_info, image_info, view_state.zoom, view_state.pan, target_zoom,
+      anchor_widget_pos, widget_info, image_info, view_state.zoom, view_state.pan, clamped_zoom,
       view_state.pan);
 
-  double_click_zoom_target_  = target_zoom;
-  double_click_zoom_in_next_ = false;
-  click_zoom_toggle_active_  = false;
+  double_click_zoom_target_  = clamped_zoom;
+  // Next double-click toggles relative to the new level: out if zoomed, in if at fit.
+  double_click_zoom_in_next_ = clamped_zoom <= (kMinInteractiveZoom + 1.0e-4f);
+  CancelPendingClickToggle();
   StopAnimation();
-  return ApplyViewTransform(state, widget_info, image_info, target_zoom, target_pan, true);
+  return ApplyViewTransform(state, widget_info, image_info, clamped_zoom, target_pan, true);
+}
+
+void ViewTransformController::CancelPendingClickToggle() {
+  pending_click_toggle_     = false;
+  click_zoom_toggle_active_ = false;
 }
 
 auto ViewTransformController::HandleWheelPan(ViewerState& state,
@@ -76,9 +100,9 @@ auto ViewTransformController::HandleWheelPan(ViewerState& state,
     return result;
   }
 
-  const float dpr = std::max(widget_info.device_pixel_ratio, 1e-4f);
-  const float vw  = std::max(1.0f, static_cast<float>(widget_info.widget_width) * dpr);
-  const float vh  = std::max(1.0f, static_cast<float>(widget_info.widget_height) * dpr);
+  // Qt 6 wheel pixelDelta is device-independent; keep the same logical NDC scale as pan.
+  const float vw = std::max(1.0f, static_cast<float>(widget_info.widget_width));
+  const float vh = std::max(1.0f, static_cast<float>(widget_info.widget_height));
   QVector2D   ndc_delta(2.0f * static_cast<float>(pixel_delta.x()) / vw,
                         -2.0f * static_cast<float>(pixel_delta.y()) / vh);
 
@@ -131,11 +155,14 @@ auto ViewTransformController::HandlePanMove(ViewerState& state, const ViewportWi
     return result;
   }
 
-  const float dpr = std::max(widget_info.device_pixel_ratio, 1e-4f);
-  const float vw = std::max(1.0f, static_cast<float>(widget_info.widget_width) * dpr);
-  const float vh = std::max(1.0f, static_cast<float>(widget_info.widget_height) * dpr);
+  // Mouse/pointer deltas arrive in logical (device-independent) coordinates from both
+  // QWidget and QML. Normalize by logical viewport size so the same logical drag yields
+  // the same NDC pan at every devicePixelRatio. Absolute mapping multiplies both sides
+  // by DPR; deltas must not mix logical numerators with physical denominators.
+  const float vw = std::max(1.0f, static_cast<float>(widget_info.widget_width));
+  const float vh = std::max(1.0f, static_cast<float>(widget_info.widget_height));
   QVector2D   ndc_delta(2.0f * static_cast<float>(delta.x()) / vw,
-                      -2.0f * static_cast<float>(delta.y()) / vh);
+                        -2.0f * static_cast<float>(delta.y()) / vh);
 
   const auto view_state = state.GetViewTransform();
   return ApplyViewTransform(state, widget_info, image_info, view_state.zoom,
@@ -274,15 +301,24 @@ auto ViewTransformController::ApplyViewTransform(ViewerState& state,
                                                  const QVector2D& pan, bool emit_zoom_signal)
     -> ViewTransformResult {
   const auto clamped_pan = ViewportMapper::ClampPanForZoom(widget_info, image_info, zoom, pan,
-                                                           kMinInteractiveZoom, kMaxInteractiveZoom);
-  const float clamped_zoom = std::clamp(zoom, kMinInteractiveZoom, kMaxInteractiveZoom);
+                                                           kMinInteractiveZoom, max_zoom_);
+  const float clamped_zoom = std::clamp(zoom, kMinInteractiveZoom, max_zoom_);
   const auto  previous     = state.GetViewTransform();
   state.SetViewTransform(clamped_zoom, clamped_pan);
 
+  // Request a repaint only when the transform actually changed. A zoom input
+  // that clamps to the current limit (e.g. Ctrl+wheel zoom-in already at
+  // kMaxInteractiveZoom, or zoom-out already at fit) leaves zoom and pan
+  // unchanged; routing a DetailRefresh for that no-op drives the render
+  // coordinator busy and spins the BusyIndicator even though the view never
+  // moves. consumed stays true so the input event is still swallowed.
+  const bool zoom_changed = std::abs(previous.zoom - clamped_zoom) > 1e-5f;
+  const bool pan_changed  = (previous.pan - clamped_pan).lengthSquared() > 1e-8f;
+
   ViewTransformResult result;
   result.consumed        = true;
-  result.request_repaint = true;
-  if (emit_zoom_signal && std::abs(previous.zoom - clamped_zoom) > 1e-5f) {
+  result.request_repaint = zoom_changed || pan_changed;
+  if (emit_zoom_signal && zoom_changed) {
     result.emitted_zoom = clamped_zoom;
   }
   return result;
@@ -295,7 +331,7 @@ auto ViewTransformController::AnimateViewTo(ViewerState& state, const ViewportWi
     -> ViewTransformResult {
   const auto  view_state  = state.GetViewTransform();
   const float clamped_zoom =
-      std::clamp(target_zoom, kMinInteractiveZoom, kMaxInteractiveZoom);
+      std::clamp(target_zoom, kMinInteractiveZoom, max_zoom_);
   QVector2D target_pan = explicit_target_pan.value_or(view_state.pan);
   if (!explicit_target_pan.has_value() && anchor_widget_pos.has_value()) {
     target_pan = ViewportMapper::ComputeAnchoredPan(*anchor_widget_pos, widget_info, image_info,
@@ -303,7 +339,7 @@ auto ViewTransformController::AnimateViewTo(ViewerState& state, const ViewportWi
                                                     view_state.pan);
   }
   target_pan = ViewportMapper::ClampPanForZoom(widget_info, image_info, clamped_zoom, target_pan,
-                                               kMinInteractiveZoom, kMaxInteractiveZoom);
+                                               kMinInteractiveZoom, max_zoom_);
 
   if (std::abs(view_state.zoom - clamped_zoom) <= 1e-5f &&
       (view_state.pan - target_pan).lengthSquared() <= 1e-8f) {

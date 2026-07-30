@@ -62,7 +62,7 @@ ScrollView {
                     Item { Layout.fillWidth: true }
 
                     Label {
-                        text: albumBackend.totalPhotoCount
+                        text: appModules.stats.totalPhotoCount
                         color: root.textColor
                         font.family: appTheme.headlineFontFamily
                         font.pixelSize: 34
@@ -72,8 +72,8 @@ ScrollView {
                 }
 
                 Label {
-                    visible: albumBackend.filterInfo !== ""
-                    text: albumBackend.filterInfo
+                    visible: appModules.library.filterInfo !== ""
+                    text: appModules.library.filterInfo
                     color: root.mutedTextColor
                     font.family: appTheme.uiFontFamily
                     font.pixelSize: 11
@@ -97,38 +97,38 @@ ScrollView {
                 Layout.fillWidth: true
                 title: qsTr("By Capture Date")
                 accentColor: appTheme.toneSteel
-                model: albumBackend.dateStats
-                selectedLabel: albumBackend.statsFilterDate
+                model: appModules.stats.dateStats
+                selectedLabel: appModules.stats.statsFilterDate
                 displayMode: "grouped"
-                onBarClicked: function(label) { albumBackend.ToggleStatsFilter("date", label) }
+                onBarClicked: function(label) { appModules.stats.ToggleStatsFilter("date", label) }
             }
 
             StatsCard {
                 Layout.fillWidth: true
                 title: qsTr("By Camera Model")
                 accentColor: appTheme.toneGold
-                model: albumBackend.cameraStats
-                selectedLabel: albumBackend.statsFilterCamera
+                model: appModules.stats.cameraStats
+                selectedLabel: appModules.stats.statsFilterCamera
                 displayMode: "chips"
-                onBarClicked: function(label) { albumBackend.ToggleStatsFilter("camera", label) }
+                onBarClicked: function(label) { appModules.stats.ToggleStatsFilter("camera", label) }
             }
 
             StatsCard {
                 Layout.fillWidth: true
                 title: qsTr("By Labels")
                 accentColor: appTheme.toneSteel
-                model: albumBackend.labelStats
-                selectedLabel: albumBackend.statsFilterLabel
+                model: appModules.stats.labelStats
+                selectedLabel: appModules.stats.statsFilterLabel
                 displayMode: "chips"
-                onBarClicked: function(label) { albumBackend.ToggleStatsFilter("label", label) }
+                onBarClicked: function(label) { appModules.stats.ToggleStatsFilter("label", label) }
             }
 
             StarRatingFilter {
                 Layout.fillWidth: true
-                selectedRating: albumBackend.statsFilterRating
+                selectedRating: appModules.stats.statsFilterRating
                 accentColor: appTheme.toneGold
                 onStarClicked: function(rating) {
-                    albumBackend.ToggleStatsFilter("rating", rating);
+                    appModules.stats.ToggleStatsFilter("rating", rating);
                 }
             }
 
@@ -136,15 +136,15 @@ ScrollView {
                 Layout.fillWidth: true
                 title: qsTr("By Lens")
                 accentColor: appTheme.toneGold
-                model: albumBackend.lensStats
-                selectedLabel: albumBackend.statsFilterLens
+                model: appModules.stats.lensStats
+                selectedLabel: appModules.stats.statsFilterLens
                 displayMode: "dots"
-                onBarClicked: function(label) { albumBackend.ToggleStatsFilter("lens", label) }
+                onBarClicked: function(label) { appModules.stats.ToggleStatsFilter("lens", label) }
             }
 
             Item {
                 Layout.fillWidth: true
-                visible: albumBackend.searchController.activeSearchQuery.length > 0
+                visible: appModules.search.activeSearchQuery.length > 0
                 implicitHeight: searchFilterCard.implicitHeight
 
                 ColumnLayout {
@@ -200,7 +200,7 @@ ScrollView {
 
                                 Label {
                                     Layout.fillWidth: true
-                                    text: albumBackend.searchController.activeSearchQuery
+                                    text: appModules.search.activeSearchQuery
                                     color: root.mutedTextColor
                                     font.family: appTheme.dataFontFamily
                                     font.pixelSize: 11
@@ -216,7 +216,7 @@ ScrollView {
                                 text: "×"
                                 font.pixelSize: 18
                                 font.weight: 400
-                                onClicked: albumBackend.searchController.ClearFuzzySearch()
+                                onClicked: appModules.search.ClearFuzzySearch()
                                 background: Rectangle {
                                     radius: 6
                                     color: clearSearchButton.down

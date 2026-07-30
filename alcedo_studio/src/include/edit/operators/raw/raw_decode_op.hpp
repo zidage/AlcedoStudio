@@ -32,7 +32,10 @@ class RawDecodeOp : public OperatorBase<RawDecodeOp> {
 
   RawDecodeOp(const nlohmann::json& params);
 
-  void SetPrePopulatedContext(const RawRuntimeColorContext& ctx) { pre_populated_ctx_ = ctx; }
+  void SetPrePopulatedContext(const RawRuntimeColorContext& ctx) {
+    pre_populated_ctx_      = ctx;
+    latest_runtime_context_ = ctx;
+  }
   void SetCancelRequested(std::function<bool()> cancel_requested) {
     cancel_requested_ = std::move(cancel_requested);
   }

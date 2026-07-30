@@ -12,10 +12,10 @@
 #include <QFontDatabase>
 #include <QListWidget>
 #include <QPushButton>
+#include <QSettings>
 #include <QSpinBox>
 #include <QVariantMap>
 #include <QWidget>
-
 #include <algorithm>
 
 namespace alcedo::ui {
@@ -44,7 +44,17 @@ struct ThemeColors {
   QColor glass_panel;
   QColor glass_stroke;
   QColor overlay;
-  int panel_radius;
+  int    panel_radius;
+  // Phase 4D: opaque button-state fills, pre-computed from bg_panel + hover.
+  QColor button_idle_fill;
+  QColor button_hovered_fill;
+  QColor button_pressed_fill;
+  QColor button_selected_fill;
+  QColor disabled_surface;  // bg_panel blended toward bg_canvas (simulates 0.55 opacity)
+  QColor merge_current_color;
+  QColor merge_current_fill_color;
+  QColor merge_incoming_color;
+  QColor merge_incoming_fill_color;
 };
 
 auto BrandBlueBase() -> QColor { return QColor(104, 146, 185); }
@@ -54,72 +64,95 @@ auto BrandBluePressed() -> QColor { return QColor(86, 127, 165); }
 // Theme 0: Alcedo — layered matte surfaces, saffron/steel/teal CTA palette
 auto MakePuerhTheme() -> ThemeColors {
   return ThemeColors{
-      .tone_gold = BrandBlueBase(),               // primary brand blue / CTA
-      .tone_wine = QColor(0x8A, 0x3A, 0x3A),      // danger red
-      .tone_steel = BrandBluePressed(),           // pressed / deeper blue
-      .tone_graphite = QColor(0x11, 0x11, 0x11),
-      .tone_mist = QColor(0xE0, 0xE0, 0xE0),
-      .bg_canvas = QColor(0x12, 0x12, 0x12),      // floor — outermost surface
-      .bg_deep = QColor(0x2E, 0x2E, 0x2E),        // floating modals / popovers
-      .bg_base = QColor(0x24, 0x24, 0x24),        // interactive panels, inputs
-      .bg_panel = QColor(0x1A, 0x1A, 0x1A),       // primary workspaces
-      .text = QColor(0xE0, 0xE0, 0xE0),
-      .text_muted = QColor(0x88, 0x88, 0x88),
-      .icon = QColor(0xFF, 0xFF, 0xFF),
-      .accent_secondary = BrandBlueHover(),       // hover / secondary blue
-      .danger_tint = QColor(138, 58, 58, 80),
-      .selected_tint = QColor(104, 146, 185, 46),
-      .hover = QColor(0x26, 0x25, 0x25),
-      .divider = QColor(200, 200, 200, 16),
-      .glass_panel = QColor(0x1A, 0x1A, 0x1A),
-      .glass_stroke = QColor(200, 200, 200, 20),
-      .overlay = QColor(0x0A, 0x0A, 0x0A, 0xC8),
-      .panel_radius = 10,
+      .tone_gold            = BrandBlueBase(),           // primary brand blue / CTA
+      .tone_wine            = QColor(0x8A, 0x3A, 0x3A),  // danger red
+      .tone_steel           = BrandBluePressed(),        // pressed / deeper blue
+      .tone_graphite        = QColor(0x11, 0x11, 0x11),
+      .tone_mist            = QColor(0xE0, 0xE0, 0xE0),
+      .bg_canvas            = QColor(0x12, 0x12, 0x12),  // floor — outermost surface
+      .bg_deep              = QColor(0x2E, 0x2E, 0x2E),  // floating modals / popovers
+      .bg_base              = QColor(0x24, 0x24, 0x24),  // interactive panels, inputs
+      .bg_panel             = QColor(0x1A, 0x1A, 0x1A),  // primary workspaces
+      .text                 = QColor(0xE0, 0xE0, 0xE0),
+      .text_muted           = QColor(0x88, 0x88, 0x88),
+      .icon                 = QColor(0xFF, 0xFF, 0xFF),
+      .accent_secondary     = BrandBlueHover(),  // hover / secondary blue
+      .danger_tint          = QColor(138, 58, 58, 80),
+      .selected_tint        = QColor(104, 146, 185, 46),
+      .hover                = QColor(0x26, 0x25, 0x25),
+      .divider              = QColor(200, 200, 200, 16),
+      .glass_panel          = QColor(0x1A, 0x1A, 0x1A),
+      .glass_stroke         = QColor(200, 200, 200, 20),
+      .overlay              = QColor(0x0A, 0x0A, 0x0A, 0xC8),
+      .panel_radius         = 10,
+      // Phase 4D: opaque button fills. Idle matches the card/panel surface so
+      // icon chrome is quiet; hover/pressed/selected step to the hover well so
+      // selected actions read on both the card shell and the lighter base
+      // inset track (scope / adjustment nav).
+      .button_idle_fill     = QColor(0x1A, 0x1A, 0x1A),  // = bg_panel
+      .button_hovered_fill  = QColor(0x20, 0x20, 0x20),  // between panel and base
+      .button_pressed_fill  = QColor(0x26, 0x25, 0x25),  // = hover (engaged)
+      .button_selected_fill = QColor(0x26, 0x25, 0x25),  // = pressed / hover
+      .disabled_surface     = QColor(0x16, 0x16, 0x16),  // Blend(bg_panel, bg_canvas, 0.45)
+      .merge_current_color      = QColor(0xF8, 0x51, 0x49),  // Git red
+      .merge_current_fill_color = QColor(0x3A, 0x1D, 0x1F),  // opaque red well
+      .merge_incoming_color      = QColor(0x3F, 0xB9, 0x50),  // Git green
+      .merge_incoming_fill_color = QColor(0x1B, 0x39, 0x23),  // opaque green well
   };
 }
 
 // Theme 1: Classic (previous neutral theme)
 auto MakeClassicTheme() -> ThemeColors {
   return ThemeColors{
-      .tone_gold = QColor(0xFC, 0xC7, 0x04),
-      .tone_wine = QColor(0x8A, 0x05, 0x26),
-      .tone_steel = QColor(0x4A, 0x4A, 0x4A),
-      .tone_graphite = QColor(0x1A, 0x1A, 0x1A),
-      .tone_mist = QColor(0xE6, 0xE6, 0xE6),
-      .bg_canvas = QColor(0x0E, 0x0E, 0x0E),
-      .bg_deep = QColor(0x11, 0x11, 0x11),
-      .bg_base = QColor(0x17, 0x17, 0x17),
-      .bg_panel = QColor(0x22, 0x22, 0x22),
-      .text = QColor(0xD0, 0xD0, 0xD0),
-      .text_muted = QColor(0x88, 0x88, 0x88),
-      .icon = QColor(0xFF, 0xFF, 0xFF),
-      .accent_secondary = QColor(0xFC, 0xC7, 0x04),
-      .danger_tint = QColor(138, 5, 38, 82),
-      .selected_tint = QColor(252, 199, 4, 46),
-      .hover = QColor(0x2B, 0x2B, 0x2B),
-      .divider = QColor(230, 230, 230, 20),
-      .glass_panel = QColor(0x22, 0x22, 0x22),
-      .glass_stroke = QColor(230, 230, 230, 28),
-      .overlay = QColor(0x12, 0x12, 0x12, 0xC0),
-      .panel_radius = 8,
+      .tone_gold            = QColor(0xFC, 0xC7, 0x04),
+      .tone_wine            = QColor(0x8A, 0x05, 0x26),
+      .tone_steel           = QColor(0x4A, 0x4A, 0x4A),
+      .tone_graphite        = QColor(0x1A, 0x1A, 0x1A),
+      .tone_mist            = QColor(0xE6, 0xE6, 0xE6),
+      .bg_canvas            = QColor(0x0E, 0x0E, 0x0E),
+      .bg_deep              = QColor(0x11, 0x11, 0x11),
+      .bg_base              = QColor(0x17, 0x17, 0x17),
+      .bg_panel             = QColor(0x22, 0x22, 0x22),
+      .text                 = QColor(0xD0, 0xD0, 0xD0),
+      .text_muted           = QColor(0x88, 0x88, 0x88),
+      .icon                 = QColor(0xFF, 0xFF, 0xFF),
+      .accent_secondary     = QColor(0xFC, 0xC7, 0x04),
+      .danger_tint          = QColor(138, 5, 38, 82),
+      .selected_tint        = QColor(252, 199, 4, 46),
+      .hover                = QColor(0x2B, 0x2B, 0x2B),
+      .divider              = QColor(230, 230, 230, 20),
+      .glass_panel          = QColor(0x22, 0x22, 0x22),
+      .glass_stroke         = QColor(230, 230, 230, 28),
+      .overlay              = QColor(0x12, 0x12, 0x12, 0xC0),
+      .panel_radius         = 8,
+      // Phase 4D: opaque button fills — idle = panel; engaged = hover well.
+      .button_idle_fill     = QColor(0x22, 0x22, 0x22),  // = bg_panel
+      .button_hovered_fill  = QColor(0x27, 0x27, 0x27),  // between panel and hover
+      .button_pressed_fill  = QColor(0x2B, 0x2B, 0x2B),  // = hover
+      .button_selected_fill = QColor(0x2B, 0x2B, 0x2B),  // = pressed / hover
+      .disabled_surface     = QColor(0x19, 0x19, 0x19),  // Blend(bg_panel, bg_canvas, 0.45)
+      .merge_current_color      = QColor(0xF8, 0x51, 0x49),  // Git red
+      .merge_current_fill_color = QColor(0x3A, 0x1D, 0x1F),  // opaque red well
+      .merge_incoming_color      = QColor(0x3F, 0xB9, 0x50),  // Git green
+      .merge_incoming_fill_color = QColor(0x1B, 0x39, 0x23),  // opaque green well
   };
 }
 
 auto GetTheme(int index) -> const ThemeColors& {
-  static const ThemeColors kPuerhTheme = MakePuerhTheme();
+  static const ThemeColors kPuerhTheme   = MakePuerhTheme();
   static const ThemeColors kClassicTheme = MakeClassicTheme();
   return index == 1 ? kClassicTheme : kPuerhTheme;
 }
 
 struct FontFamilies {
   QString ui_latin = QStringLiteral("Inter");
-  QString ui_zh = QStringLiteral("Noto Sans SC");
+  QString ui_zh    = QStringLiteral("Noto Sans SC");
   QString ui_override;
-  QString ui_headline = QStringLiteral("Manrope");
-  QString ui_headline_zh = QStringLiteral("Noto Sans SC");
+  QString ui_headline             = QStringLiteral("Manrope");
+  QString ui_headline_zh          = QStringLiteral("Noto Sans SC");
   QString effective_language_code = QStringLiteral("en");
-  QString data = QStringLiteral("IBM Plex Sans");
-  QString mono = QStringLiteral("IBM Plex Sans");
+  QString data                    = QStringLiteral("IBM Plex Sans");
+  QString mono                    = QStringLiteral("DM Mono");
 };
 
 auto FontState() -> FontFamilies& {
@@ -252,9 +285,8 @@ void ApplyFamilySubstitutions(const QString& family, const QStringList& fallback
 
 void ApplyUiFontSubstitutions(const FontFamilies& families) {
   ApplyFamilySubstitutions(families.ui_latin, QStringList{families.ui_zh});
-  ApplyFamilySubstitutions(
-      families.ui_headline,
-      QStringList{families.ui_headline_zh, families.ui_zh, families.ui_latin});
+  ApplyFamilySubstitutions(families.ui_headline,
+                           QStringList{families.ui_headline_zh, families.ui_zh, families.ui_latin});
 }
 
 void ApplyDataFontSubstitutions(const FontFamilies& families) {
@@ -272,13 +304,9 @@ auto MakeFont(const QStringList& family_stack, qreal point_size, QFont::Weight w
   return font;
 }
 
-auto Hex(const QColor& color) -> QString {
-  return color.name(QColor::HexRgb);
-}
+auto Hex(const QColor& color) -> QString { return color.name(QColor::HexRgb); }
 
-auto Rgba(const QColor& color) -> QString {
-  return color.name(QColor::HexArgb);
-}
+auto Rgba(const QColor& color) -> QString { return color.name(QColor::HexArgb); }
 
 auto WithAlpha(const QColor& color, int alpha) -> QColor {
   QColor tinted(color);
@@ -287,8 +315,8 @@ auto WithAlpha(const QColor& color, int alpha) -> QColor {
 }
 
 auto Blend(const QColor& a, const QColor& b, qreal ratio) -> QColor {
-  const qreal t = std::clamp(ratio, 0.0, 1.0);
-  const auto lerp = [t](int lhs, int rhs) {
+  const qreal t    = std::clamp(ratio, 0.0, 1.0);
+  const auto  lerp = [t](int lhs, int rhs) {
     return static_cast<int>(std::lround(lhs + (rhs - lhs) * t));
   };
 
@@ -318,6 +346,11 @@ void AppTheme::RegisterFonts() {
                                         QStringLiteral("Noto Sans SC"));
   families.data =
       RegisterFontResource(QStringLiteral(":/fonts/main_IBM.ttf"), QStringLiteral("IBM Plex Sans"));
+  // Minigit / diagnostic monospace only (Versions commit ids, transaction
+  // timeline hashes and before/after lines). Do not use for general metrics —
+  // those stay on dataFontFamily (IBM Plex Sans).
+  families.mono = RegisterFontResource(QStringLiteral(":/fonts/data_DMMono.ttf"),
+                                       QStringLiteral("DM Mono"));
   // Chinese fallback for the Manrope headline font. The struct default is
   // "Noto Sans SC" (same family used for the rest of the UI's Chinese text);
   // we intentionally do NOT override it with the decorative Dinglie Song
@@ -328,7 +361,6 @@ void AppTheme::RegisterFonts() {
   if (!registered_headline.isEmpty()) {
     families.ui_headline = registered_headline;
   }
-  families.mono = families.data;
 
   ApplyUiFontSubstitutions(families);
   ApplyDataFontSubstitutions(families);
@@ -339,19 +371,17 @@ void AppTheme::RegisterFonts() {
 void AppTheme::SetEffectiveLanguageCode(const QString& code) {
   RegisterFonts();
 
-  auto& families = FontState();
-  const QString previous_family = ActiveUiFamily(families);
-  const bool previous_is_chinese = IsChineseLanguageCode(families.effective_language_code);
-  const QString normalized_code =
-      code.trimmed().isEmpty() ? QStringLiteral("en") : code.trimmed();
+  auto&         families            = FontState();
+  const QString previous_family     = ActiveUiFamily(families);
+  const bool    previous_is_chinese = IsChineseLanguageCode(families.effective_language_code);
+  const QString normalized_code = code.trimmed().isEmpty() ? QStringLiteral("en") : code.trimmed();
   families.effective_language_code = normalized_code;
-  const bool current_is_chinese = IsChineseLanguageCode(families.effective_language_code);
+  const bool current_is_chinese    = IsChineseLanguageCode(families.effective_language_code);
 
   ApplyUiFontSubstitutions(families);
   ApplyDataFontSubstitutions(families);
 
-  if (ActiveUiFamily(families) == previous_family &&
-      previous_is_chinese == current_is_chinese) {
+  if (ActiveUiFamily(families) == previous_family && previous_is_chinese == current_is_chinese) {
     return;
   }
 
@@ -376,9 +406,9 @@ auto AppTheme::TryRegisterUiFontOverride(const QString& path) -> bool {
     return false;
   }
 
-  auto& state = FontState();
+  auto&         state           = FontState();
   const QString previous_family = ActiveUiFamily(state);
-  state.ui_override = families.front();
+  state.ui_override             = families.front();
   if (ActiveUiFamily(state) != previous_family) {
     RefreshTopLevelWidgetFonts();
     emit Instance().UiFontFamilyChanged();
@@ -390,7 +420,7 @@ void AppTheme::ApplyApplicationFont(QApplication& app) {
   RegisterFonts();
 
   const auto& families = FontState();
-  QFont app_font = app.font();
+  QFont       app_font = app.font();
   app_font.setFamilies(UiFontStack(families));
   ConfigureTextRendering(app_font);
   app.setFont(app_font);
@@ -405,10 +435,10 @@ void AppTheme::ApplyApplicationFont() {
 
 auto AppTheme::Font(FontRole role) -> QFont {
   RegisterFonts();
-  const auto& families = FontState();
-  const QStringList ui_stack = UiFontStack(families);
+  const auto&       families       = FontState();
+  const QStringList ui_stack       = UiFontStack(families);
   const QStringList headline_stack = HeadlineFontStack(families);
-  const QStringList data_stack = DataFontStack(families);
+  const QStringList data_stack     = DataFontStack(families);
   const QStringList mono_stack{families.mono};
 
   switch (role) {
@@ -503,103 +533,107 @@ auto AppTheme::EditorPrimaryButtonStyle(bool include_disabled) -> QString {
   const QColor dark_text     = theme.bgCanvasColor();
   const QColor disabled_text = theme.textMutedColor();
   const QColor disabled_bg   = theme.bgBaseColor();
-  QString style =
-      QStringLiteral("QPushButton {"
-                     "  color: %1;"
-                     "  background: %2;"
-                     "  border: none;"
-                     "  border-radius: 10px;"
-                     "  padding: 0 14px;"
-                     "}"
-                     "QPushButton:hover {"
-                     "  background: %3;"
-                     "}"
-                     "QPushButton:pressed {"
-                     "  background: %4;"
-                     "}")
-          .arg(Hex(dark_text), Hex(accent), Hex(accent_hover), Hex(accent_press));
+  QString      style         = QStringLiteral(
+                      "QPushButton {"
+                                   "  color: %1;"
+                                   "  background: %2;"
+                                   "  border: none;"
+                                   "  border-radius: 10px;"
+                                   "  padding: 0 14px;"
+                                   "}"
+                                   "QPushButton:hover {"
+                                   "  background: %3;"
+                                   "}"
+                                   "QPushButton:pressed {"
+                                   "  background: %4;"
+                                   "}")
+                      .arg(Hex(dark_text), Hex(accent), Hex(accent_hover), Hex(accent_press));
   if (include_disabled) {
-    style += QStringLiteral("QPushButton:disabled {"
-                            "  color: %1;"
-                            "  background: %2;"
-                            "}")
+    style += QStringLiteral(
+                 "QPushButton:disabled {"
+                 "  color: %1;"
+                 "  background: %2;"
+                 "}")
                  .arg(Hex(disabled_text), Hex(disabled_bg));
   }
   return style;
 }
 
 auto AppTheme::EditorSecondaryButtonStyle() -> QString {
-  const auto&  theme   = AppTheme::Instance();
-  const QColor text    = theme.textColor();
-  const QColor bg      = theme.bgPanelColor();
-  const QColor hover   = theme.hoverColor();
-  const QColor border  = theme.glassStrokeColor();
-  return QStringLiteral("QPushButton {"
-                        "  color: %1;"
-                        "  background: %2;"
-                        "  border: 1px solid %3;"
-                        "  border-radius: 10px;"
-                        "  padding: 0 14px;"
-                        "}"
-                        "QPushButton:hover {"
-                        "  background: %4;"
-                        "  border-color: %5;"
-                        "}"
-                        "QPushButton:pressed {"
-                        "  background: %6;"
-                        "}")
+  const auto&  theme  = AppTheme::Instance();
+  const QColor text   = theme.textColor();
+  const QColor bg     = theme.bgPanelColor();
+  const QColor hover  = theme.hoverColor();
+  const QColor border = theme.glassStrokeColor();
+  return QStringLiteral(
+             "QPushButton {"
+             "  color: %1;"
+             "  background: %2;"
+             "  border: 1px solid %3;"
+             "  border-radius: 10px;"
+             "  padding: 0 14px;"
+             "}"
+             "QPushButton:hover {"
+             "  background: %4;"
+             "  border-color: %5;"
+             "}"
+             "QPushButton:pressed {"
+             "  background: %6;"
+             "}")
       .arg(Hex(text), Rgba(WithAlpha(bg, 224)), Rgba(border), Rgba(WithAlpha(hover, 245)),
            Rgba(WithAlpha(border, 176)), Rgba(WithAlpha(hover, 255)));
 }
 
 auto AppTheme::EditorPanelToggleStyle(bool active, bool is_first, bool is_last) -> QString {
-  const auto&  theme               = AppTheme::Instance();
-  const QString top_left_radius    = is_first ? QStringLiteral("10px") : QStringLiteral("0px");
-  const QString bottom_left_radius = is_first ? QStringLiteral("10px") : QStringLiteral("0px");
-  const QString top_right_radius   = is_last ? QStringLiteral("10px") : QStringLiteral("0px");
+  const auto&   theme               = AppTheme::Instance();
+  const QString top_left_radius     = is_first ? QStringLiteral("10px") : QStringLiteral("0px");
+  const QString bottom_left_radius  = is_first ? QStringLiteral("10px") : QStringLiteral("0px");
+  const QString top_right_radius    = is_last ? QStringLiteral("10px") : QStringLiteral("0px");
   const QString bottom_right_radius = is_last ? QStringLiteral("10px") : QStringLiteral("0px");
 
   if (active) {
-    return QStringLiteral("QPushButton {"
-                          "  color: %1;"
-                          "  background: %2;"
-                          "  border: 1px solid %3;"
-                          "  outline: none;"
-                          "  padding: 0px;"
-                          "  border-top-left-radius: %4;"
-                          "  border-bottom-left-radius: %5;"
-                          "  border-top-right-radius: %6;"
-                          "  border-bottom-right-radius: %7;"
-                          "}"
-                          "QPushButton:hover {"
-                          "  background: %8;"
-                          "  outline: none;"
-                          "}")
+    return QStringLiteral(
+               "QPushButton {"
+               "  color: %1;"
+               "  background: %2;"
+               "  border: 1px solid %3;"
+               "  outline: none;"
+               "  padding: 0px;"
+               "  border-top-left-radius: %4;"
+               "  border-bottom-left-radius: %5;"
+               "  border-top-right-radius: %6;"
+               "  border-bottom-right-radius: %7;"
+               "}"
+               "QPushButton:hover {"
+               "  background: %8;"
+               "  outline: none;"
+               "}")
         .arg(Hex(theme.bgCanvasColor()), Rgba(WithAlpha(theme.accentColor(), 224)),
              Rgba(WithAlpha(theme.accentSecondaryColor(), 112)), top_left_radius,
              bottom_left_radius, top_right_radius, bottom_right_radius,
              Rgba(WithAlpha(theme.accentSecondaryColor(), 255)));
   }
 
-  return QStringLiteral("QPushButton {"
-                        "  color: %1;"
-                        "  background: transparent;"
-                        "  border: 1px solid transparent;"
-                        "  outline: none;"
-                        "  padding: 0px;"
-                        "  border-top-left-radius: %2;"
-                        "  border-bottom-left-radius: %3;"
-                        "  border-top-right-radius: %4;"
-                        "  border-bottom-right-radius: %5;"
-                        "}"
-                        "QPushButton:hover {"
-                        "  background: %6;"
-                        "  outline: none;"
-                        "}"
-                        "QPushButton:pressed {"
-                        "  background: %7;"
-                        "  outline: none;"
-                        "}")
+  return QStringLiteral(
+             "QPushButton {"
+             "  color: %1;"
+             "  background: transparent;"
+             "  border: 1px solid transparent;"
+             "  outline: none;"
+             "  padding: 0px;"
+             "  border-top-left-radius: %2;"
+             "  border-bottom-left-radius: %3;"
+             "  border-top-right-radius: %4;"
+             "  border-bottom-right-radius: %5;"
+             "}"
+             "QPushButton:hover {"
+             "  background: %6;"
+             "  outline: none;"
+             "}"
+             "QPushButton:pressed {"
+             "  background: %7;"
+             "  outline: none;"
+             "}")
       .arg(Hex(theme.textColor()), top_left_radius, bottom_left_radius, top_right_radius,
            bottom_right_radius, Rgba(WithAlpha(theme.hoverColor(), 210)),
            Rgba(WithAlpha(theme.hoverColor(), 255)));
@@ -614,37 +648,38 @@ auto AppTheme::EditorMethodCardStyle(bool active) -> QString {
   const QColor text    = theme.textColor();
   const QColor divider = theme.dividerColor();
   if (active) {
-    return QStringLiteral("QPushButton {"
-                          "  color: %1;"
-                          "  background: %2;"
-                          "  border: 1px solid %3;"
-                          "  border-radius: 12px;"
-                          "  padding: 16px 20px;"
-                          "  text-align: left;"
-                          "}"
-                          "QPushButton:hover {"
-                          "  background: %4;"
-                          "}")
+    return QStringLiteral(
+               "QPushButton {"
+               "  color: %1;"
+               "  background: %2;"
+               "  border: 1px solid %3;"
+               "  border-radius: 12px;"
+               "  padding: 16px 20px;"
+               "  text-align: left;"
+               "}"
+               "QPushButton:hover {"
+               "  background: %4;"
+               "}")
         .arg(Hex(accent), Rgba(WithAlpha(bg, 240)), Rgba(WithAlpha(accent, 136)),
              Rgba(WithAlpha(hover, 255)));
   }
 
-  return QStringLiteral("QPushButton {"
-                        "  color: %1;"
-                        "  background: %2;"
-                        "  border: 1px solid %3;"
-                        "  border-radius: 12px;"
-                        "  padding: 16px 20px;"
-                        "  text-align: left;"
-                        "}"
-                        "QPushButton:hover {"
-                        "  border: 1px solid %4;"
-                        "  background: %5;"
-                        "  color: %6;"
-                        "}")
+  return QStringLiteral(
+             "QPushButton {"
+             "  color: %1;"
+             "  background: %2;"
+             "  border: 1px solid %3;"
+             "  border-radius: 12px;"
+             "  padding: 16px 20px;"
+             "  text-align: left;"
+             "}"
+             "QPushButton:hover {"
+             "  border: 1px solid %4;"
+             "  background: %5;"
+             "  color: %6;"
+             "}")
       .arg(Hex(muted), Rgba(WithAlpha(bg, 224)), Rgba(divider),
-           Rgba(WithAlpha(theme.glassStrokeColor(), 176)), Rgba(WithAlpha(hover, 245)),
-           Hex(text));
+           Rgba(WithAlpha(theme.glassStrokeColor(), 176)), Rgba(WithAlpha(hover, 245)), Hex(text));
 }
 
 auto AppTheme::EditorComboBoxStyle() -> QString {
@@ -654,35 +689,36 @@ auto AppTheme::EditorComboBoxStyle() -> QString {
   const QColor accent = theme.accentColor();
   const QColor hover  = theme.hoverColor();
   const QColor border = theme.glassStrokeColor();
-  return QStringLiteral("QComboBox {"
-                        "  background: %1;"
-                        "  color: %2;"
-                        "  border: 1px solid %3;"
-                        "  border-radius: 10px;"
-                        "  padding: 4px 8px;"
-                        "}"
-                        "QComboBox:hover {"
-                        "  border-color: %4;"
-                        "}"
-                        "QComboBox::drop-down {"
-                        "  border: 0px;"
-                        "  width: 24px;"
-                        "}"
-                        "QComboBox QAbstractItemView {"
-                        "  background: %1;"
-                        "  color: %2;"
-                        "  border: 1px solid %3;"
-                        "  selection-background-color: %5;"
-                        "  selection-color: %6;"
-                        "}"
-                        "QComboBox QAbstractItemView::item:hover {"
-                        "  background: %7;"
-                        "  color: %2;"
-                        "}"
-                        "QComboBox QAbstractItemView::item:selected {"
-                        "  background: %5;"
-                        "  color: %6;"
-                        "}")
+  return QStringLiteral(
+             "QComboBox {"
+             "  background: %1;"
+             "  color: %2;"
+             "  border: 1px solid %3;"
+             "  border-radius: 10px;"
+             "  padding: 4px 8px;"
+             "}"
+             "QComboBox:hover {"
+             "  border-color: %4;"
+             "}"
+             "QComboBox::drop-down {"
+             "  border: 0px;"
+             "  width: 24px;"
+             "}"
+             "QComboBox QAbstractItemView {"
+             "  background: %1;"
+             "  color: %2;"
+             "  border: 1px solid %3;"
+             "  selection-background-color: %5;"
+             "  selection-color: %6;"
+             "}"
+             "QComboBox QAbstractItemView::item:hover {"
+             "  background: %7;"
+             "  color: %2;"
+             "}"
+             "QComboBox QAbstractItemView::item:selected {"
+             "  background: %5;"
+             "  color: %6;"
+             "}")
       .arg(Rgba(WithAlpha(bg, 240)), Hex(text), Rgba(border), Rgba(WithAlpha(border, 196)),
            Hex(accent), Hex(theme.bgCanvasColor()), Rgba(WithAlpha(hover, 255)));
 }
@@ -693,22 +729,23 @@ auto AppTheme::EditorSpinBoxStyle() -> QString {
   const QColor text   = theme.textColor();
   const QColor border = theme.glassStrokeColor();
   const QColor accent = theme.accentColor();
-  return QStringLiteral("QSpinBox {"
-                        "  background: %1;"
-                        "  color: %2;"
-                        "  border: 1px solid %3;"
-                        "  border-radius: 8px;"
-                        "  padding: 4px 8px;"
-                        "}"
-                        "QSpinBox:hover {"
-                        "  border-color: %4;"
-                        "}"
-                        "QSpinBox:focus {"
-                        "  border: 1px solid %5;"
-                        "}"
-                        "QSpinBox::up-button, QSpinBox::down-button {"
-                        "  width: 0px;"
-                        "}")
+  return QStringLiteral(
+             "QSpinBox {"
+             "  background: %1;"
+             "  color: %2;"
+             "  border: 1px solid %3;"
+             "  border-radius: 8px;"
+             "  padding: 4px 8px;"
+             "}"
+             "QSpinBox:hover {"
+             "  border-color: %4;"
+             "}"
+             "QSpinBox:focus {"
+             "  border: 1px solid %5;"
+             "}"
+             "QSpinBox::up-button, QSpinBox::down-button {"
+             "  width: 0px;"
+             "}")
       .arg(Rgba(WithAlpha(bg, 240)), Hex(text), Rgba(border), Rgba(WithAlpha(border, 196)),
            Rgba(WithAlpha(accent, 224)));
 }
@@ -719,50 +756,53 @@ auto AppTheme::EditorCheckBoxStyle() -> QString {
   const QColor base   = theme.bgDeepColor();
   const QColor stroke = theme.glassStrokeColor();
   const QColor accent = theme.accentColor();
-  return QStringLiteral("QCheckBox {"
-                        "  color: %1;"
-                        "  spacing: 8px;"
-                        "}"
-                        "QCheckBox::indicator {"
-                        "  width: 16px;"
-                        "  height: 16px;"
-                        "}"
-                        "QCheckBox::indicator:unchecked {"
-                        "  background: %2;"
-                        "  border: 1px solid %3;"
-                        "  border-radius: 4px;"
-                        "}"
-                        "QCheckBox::indicator:checked {"
-                        "  background: %4;"
-                        "  border: 1px solid %4;"
-                        "  border-radius: 4px;"
-                        "}")
+  return QStringLiteral(
+             "QCheckBox {"
+             "  color: %1;"
+             "  spacing: 8px;"
+             "}"
+             "QCheckBox::indicator {"
+             "  width: 16px;"
+             "  height: 16px;"
+             "}"
+             "QCheckBox::indicator:unchecked {"
+             "  background: %2;"
+             "  border: 1px solid %3;"
+             "  border-radius: 4px;"
+             "}"
+             "QCheckBox::indicator:checked {"
+             "  background: %4;"
+             "  border: 1px solid %4;"
+             "  border-radius: 4px;"
+             "}")
       .arg(Hex(text), Rgba(WithAlpha(base, 232)), Rgba(stroke), Hex(accent));
 }
 
 auto AppTheme::EditorScrollAreaStyle() -> QString {
-  const auto& theme       = AppTheme::Instance();
+  const auto&   theme     = AppTheme::Instance();
   const QString bg_panel  = Hex(theme.bgPanelColor());
   const QString bg_canvas = Rgba(WithAlpha(theme.bgCanvasColor(), 170));
   const QString accent    = Hex(theme.accentColor());
 
-  return QStringLiteral("QScrollArea { background: %1; border: none; border-radius: 12px; }"
-                        "QScrollArea > QWidget, QScrollArea > QWidget > QWidget {"
-                        "  background: %1;"
-                        "  border-radius: 12px;"
-                        "}"
-                        "QScrollBar:vertical {"
-                        "  background: %2;"
-                        "  width: 10px;"
-                        "  margin: 2px;"
-                        "  border-radius: 5px;"
-                        "}"
-                        "QScrollBar::handle:vertical {"
-                        "  background: %3;"
-                        "  border-radius: 5px;"
-                        "}"
-                        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
-                        "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }")
+  return QStringLiteral(
+             "QScrollArea { background: %1; border: none; border-radius: 12px; }"
+             "QScrollArea > QWidget, QScrollArea > QWidget > QWidget {"
+             "  background: %1;"
+             "  border-radius: 12px;"
+             "}"
+             "QScrollBar:vertical {"
+             "  background: %2;"
+             "  width: 10px;"
+             "  margin: 2px;"
+             "  border-radius: 5px;"
+             "}"
+             "QScrollBar::handle:vertical {"
+             "  background: %3;"
+             "  border-radius: 5px;"
+             "}"
+             "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }"
+             "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: "
+             "transparent; }")
       .arg(bg_panel, bg_canvas, accent);
 }
 
@@ -770,94 +810,94 @@ auto AppTheme::EditorListWidgetStyle() -> QString {
   const auto&  theme  = AppTheme::Instance();
   const QColor bg     = theme.bgDeepColor();
   const QColor border = theme.dividerColor();
-  return QStringLiteral("QListWidget {"
-                        "  background: %1;"
-                        "  border: 1px solid %2;"
-                        "  border-radius: 10px;"
-                        "  padding: 8px;"
-                        "}"
-                        "QListWidget::item {"
-                        "  padding: 2px;"
-                        "}"
-                        "QListWidget::item:selected {"
-                        "  background: transparent;"
-                        "}"
-                        "QScrollBar:vertical {"
-                        "  background: transparent;"
-                        "  width: 6px;"
-                        "  margin: 4px 2px 4px 0;"
-                        "}"
-                        "QScrollBar::handle:vertical {"
-                        "  background: %3;"
-                        "  border-radius: 3px;"
-                        "  min-height: 24px;"
-                        "}"
-                        "QScrollBar::handle:vertical:hover,"
-                        "QScrollBar::handle:vertical:pressed {"
-                        "  background: %4;"
-                        "}"
-                        "QScrollBar::add-line:vertical,"
-                        "QScrollBar::sub-line:vertical {"
-                        "  height: 0px;"
-                        "}"
-                        "QScrollBar::add-page:vertical,"
-                        "QScrollBar::sub-page:vertical {"
-                        "  background: transparent;"
-                        "}")
+  return QStringLiteral(
+             "QListWidget {"
+             "  background: %1;"
+             "  border: 1px solid %2;"
+             "  border-radius: 10px;"
+             "  padding: 8px;"
+             "}"
+             "QListWidget::item {"
+             "  padding: 2px;"
+             "}"
+             "QListWidget::item:selected {"
+             "  background: transparent;"
+             "}"
+             "QScrollBar:vertical {"
+             "  background: transparent;"
+             "  width: 6px;"
+             "  margin: 4px 2px 4px 0;"
+             "}"
+             "QScrollBar::handle:vertical {"
+             "  background: %3;"
+             "  border-radius: 3px;"
+             "  min-height: 24px;"
+             "}"
+             "QScrollBar::handle:vertical:hover,"
+             "QScrollBar::handle:vertical:pressed {"
+             "  background: %4;"
+             "}"
+             "QScrollBar::add-line:vertical,"
+             "QScrollBar::sub-line:vertical {"
+             "  height: 0px;"
+             "}"
+             "QScrollBar::add-page:vertical,"
+             "QScrollBar::sub-page:vertical {"
+             "  background: transparent;"
+             "}")
       .arg(Rgba(WithAlpha(bg, 216)), Rgba(border), Rgba(WithAlpha(theme.textMutedColor(), 132)),
            Hex(theme.accentColor()));
 }
 
 auto AppTheme::EditorHistoryCardStyle() -> QString {
   const auto& theme = AppTheme::Instance();
-  return QStringLiteral("QFrame#HistoryCard {"
-                        "  background: transparent;"
-                        "  border: none;"
-                        "  border-radius: 8px;"
-                        "}"
-                        "QFrame#HistoryCard:hover {"
-                        "  background: %1;"
-                        "}"
-                        "QFrame#HistoryCard[selected=\"true\"] {"
-                        "  background: %2;"
-                        "}"
-                        "QFrame#HistoryCard[selected=\"true\"]:hover {"
-                        "  background: %2;"
-                        "}"
-                        "QFrame#HistoryCard[future=\"true\"] {"
-                        "  background: transparent;"
-                        "}"
-                        "QFrame#HistoryCard QFrame#HistoryTxIconTile {"
-                        "  background: %3;"
-                        "  border: none;"
-                        "  border-radius: 7px;"
-                        "}"
-                        "QFrame#HistoryCard QLabel#HistoryTxTitle {"
-                        "  color: %4;"
-                        "  background: transparent;"
-                        "}"
-                        "QFrame#HistoryCard QLabel#HistoryTxSubtitle {"
-                        "  color: %5;"
-                        "  background: transparent;"
-                        "}"
-                        "QFrame#HistoryCard[future=\"true\"] QLabel#HistoryTxTitle,"
-                        "QFrame#HistoryCard[future=\"true\"] QLabel#HistoryTxSubtitle {"
-                        "  color: %6;"
-                        "}")
-      .arg(Rgba(WithAlpha(theme.bgPanelColor(), 132)),
-           Rgba(WithAlpha(theme.bgPanelColor(), 118)),
-           Rgba(WithAlpha(theme.bgDeepColor(), 228)),
-           Hex(theme.textColor()),
-           Hex(theme.textMutedColor()),
-           Rgba(WithAlpha(theme.textMutedColor(), 132)));
+  return QStringLiteral(
+             "QFrame#HistoryCard {"
+             "  background: transparent;"
+             "  border: none;"
+             "  border-radius: 8px;"
+             "}"
+             "QFrame#HistoryCard:hover {"
+             "  background: %1;"
+             "}"
+             "QFrame#HistoryCard[selected=\"true\"] {"
+             "  background: %2;"
+             "}"
+             "QFrame#HistoryCard[selected=\"true\"]:hover {"
+             "  background: %2;"
+             "}"
+             "QFrame#HistoryCard[future=\"true\"] {"
+             "  background: transparent;"
+             "}"
+             "QFrame#HistoryCard QFrame#HistoryTxIconTile {"
+             "  background: %3;"
+             "  border: none;"
+             "  border-radius: 7px;"
+             "}"
+             "QFrame#HistoryCard QLabel#HistoryTxTitle {"
+             "  color: %4;"
+             "  background: transparent;"
+             "}"
+             "QFrame#HistoryCard QLabel#HistoryTxSubtitle {"
+             "  color: %5;"
+             "  background: transparent;"
+             "}"
+             "QFrame#HistoryCard[future=\"true\"] QLabel#HistoryTxTitle,"
+             "QFrame#HistoryCard[future=\"true\"] QLabel#HistoryTxSubtitle {"
+             "  color: %6;"
+             "}")
+      .arg(Rgba(WithAlpha(theme.bgPanelColor(), 132)), Rgba(WithAlpha(theme.bgPanelColor(), 118)),
+           Rgba(WithAlpha(theme.bgDeepColor(), 228)), Hex(theme.textColor()),
+           Hex(theme.textMutedColor()), Rgba(WithAlpha(theme.textMutedColor(), 132)));
 }
 
 auto AppTheme::EditorTransparentFrameStyle() -> QString {
-  return QStringLiteral("QFrame {"
-                        "  background: transparent;"
-                        "  border: none;"
-                        "  border-radius: 12px;"
-                        "}");
+  return QStringLiteral(
+      "QFrame {"
+      "  background: transparent;"
+      "  border: none;"
+      "  border-radius: 12px;"
+      "}");
 }
 
 auto AppTheme::EditorSliderTrackColor() -> QColor {
@@ -882,6 +922,60 @@ auto AppTheme::EditorSliderHandleColor() -> QColor { return QColor(0xF1, 0xEE, 0
 
 auto AppTheme::EditorSliderHandleBorderColor() -> QColor {
   return WithAlpha(AppTheme::Instance().bgCanvasColor(), 228);
+}
+
+// Monochrome inverted list selection: light bone well on sunken tracks
+// (same family as the historical LUT/Look #D8D4CD bar). Ink is the deep
+// base so title/secondary copy invert cleanly. Favorite stars use a light
+// muted idle on dark rows and the same ink (muted/full) on the selected
+// well so the glyph never disappears into the bar.
+auto AppTheme::editorListSelectedFillColor() const -> QColor {
+  // Warm bone, slightly lifted from handle white so selected rows read as a
+  // solid light slab rather than a cool slider accent.
+  return Blend(EditorSliderHandleColor(), QColor(0xD8, 0xD4, 0xCD), 0.55);
+}
+
+auto AppTheme::editorListSelectedInkColor() const -> QColor { return bgBaseColor(); }
+
+auto AppTheme::editorListFavoriteIdleColor() const -> QColor {
+  // Opaque stand-in for the former rgba(1,1,1,0.25) idle star on dark rows.
+  return Blend(bgBaseColor(), textColor(), 0.28);
+}
+
+auto AppTheme::editorListFavoriteActiveColor() const -> QColor {
+  // Gold accent when starred on the sunken (dark) track.
+  return accentColor();
+}
+
+auto AppTheme::editorListFavoriteIdleOnSelectedColor() const -> QColor {
+  // Inverted idle: muted ink on the light selected well.
+  return Blend(editorListSelectedFillColor(), editorListSelectedInkColor(), 0.38);
+}
+
+auto AppTheme::editorListFavoriteActiveOnSelectedColor() const -> QColor {
+  // Inverted active: full ink on the light well (true invert of light-on-dark).
+  // Keeps the star legible; gold-on-bone was too low-contrast for a selected row.
+  return editorListSelectedInkColor();
+}
+
+auto AppTheme::scopeGridColor() const -> QColor {
+  return Blend(bgDeepColor(), textMutedColor(), 0.32);
+}
+
+auto AppTheme::scopePlotBorderColor() const -> QColor {
+  return Blend(bgBaseColor(), textMutedColor(), 0.42);
+}
+
+auto AppTheme::scopeHistogramRedColor() const -> QColor {
+  return Blend(QColor(0xE2, 0x8A, 0x8A), textColor(), 0.18);
+}
+
+auto AppTheme::scopeHistogramGreenColor() const -> QColor {
+  return Blend(QColor(0xA8, 0xD6, 0x9B), textColor(), 0.18);
+}
+
+auto AppTheme::scopeHistogramBlueColor() const -> QColor {
+  return Blend(QColor(0x8E, 0xB9, 0xE5), textColor(), 0.18);
 }
 
 auto AppTheme::uiFontFamily() const -> QString {
@@ -914,7 +1008,9 @@ auto AppTheme::appVersion() const -> QString {
 auto AppTheme::toneGold() const -> QColor { return GetTheme(current_theme_index_).tone_gold; }
 auto AppTheme::toneWine() const -> QColor { return GetTheme(current_theme_index_).tone_wine; }
 auto AppTheme::toneSteel() const -> QColor { return GetTheme(current_theme_index_).tone_steel; }
-auto AppTheme::toneGraphite() const -> QColor { return GetTheme(current_theme_index_).tone_graphite; }
+auto AppTheme::toneGraphite() const -> QColor {
+  return GetTheme(current_theme_index_).tone_graphite;
+}
 auto AppTheme::toneMist() const -> QColor { return GetTheme(current_theme_index_).tone_mist; }
 
 auto AppTheme::bgCanvasColor() const -> QColor { return GetTheme(current_theme_index_).bg_canvas; }
@@ -922,19 +1018,126 @@ auto AppTheme::bgDeepColor() const -> QColor { return GetTheme(current_theme_ind
 auto AppTheme::bgBaseColor() const -> QColor { return GetTheme(current_theme_index_).bg_base; }
 auto AppTheme::bgPanelColor() const -> QColor { return GetTheme(current_theme_index_).bg_panel; }
 auto AppTheme::textColor() const -> QColor { return GetTheme(current_theme_index_).text; }
-auto AppTheme::textMutedColor() const -> QColor { return GetTheme(current_theme_index_).text_muted; }
+auto AppTheme::textMutedColor() const -> QColor {
+  return GetTheme(current_theme_index_).text_muted;
+}
 auto AppTheme::iconColor() const -> QColor { return GetTheme(current_theme_index_).icon; }
 auto AppTheme::accentColor() const -> QColor { return toneGold(); }
-auto AppTheme::accentSecondaryColor() const -> QColor { return GetTheme(current_theme_index_).accent_secondary; }
+auto AppTheme::accentSecondaryColor() const -> QColor {
+  return GetTheme(current_theme_index_).accent_secondary;
+}
 auto AppTheme::dangerColor() const -> QColor { return toneWine(); }
-auto AppTheme::dangerTintColor() const -> QColor { return GetTheme(current_theme_index_).danger_tint; }
-auto AppTheme::selectedTintColor() const -> QColor { return GetTheme(current_theme_index_).selected_tint; }
+auto AppTheme::dangerTintColor() const -> QColor {
+  return GetTheme(current_theme_index_).danger_tint;
+}
+auto AppTheme::selectedTintColor() const -> QColor {
+  return GetTheme(current_theme_index_).selected_tint;
+}
 auto AppTheme::hoverColor() const -> QColor { return GetTheme(current_theme_index_).hover; }
 auto AppTheme::dividerColor() const -> QColor { return GetTheme(current_theme_index_).divider; }
-auto AppTheme::glassPanelColor() const -> QColor { return GetTheme(current_theme_index_).glass_panel; }
-auto AppTheme::glassStrokeColor() const -> QColor { return GetTheme(current_theme_index_).glass_stroke; }
+auto AppTheme::glassPanelColor() const -> QColor {
+  return GetTheme(current_theme_index_).glass_panel;
+}
+auto AppTheme::glassStrokeColor() const -> QColor {
+  return GetTheme(current_theme_index_).glass_stroke;
+}
 auto AppTheme::overlayColor() const -> QColor { return GetTheme(current_theme_index_).overlay; }
 auto AppTheme::panelRadius() const -> int { return GetTheme(current_theme_index_).panel_radius; }
+
+// ── Design tokens — structural (theme-invariant) ───────────────────────────
+// Values are the canonical VI contract documented in DESIGN.md. Literal
+// getters keep a single source of truth shared by QML and (future) QWidget
+// consumers; do not duplicate these numbers in feature QML.
+auto AppTheme::controlRadius() const -> int { return 10; }
+auto AppTheme::controlRadiusSmall() const -> int { return 8; }
+auto AppTheme::badgeRadius() const -> int { return 6; }
+auto AppTheme::iconOpticalSize() const -> int { return 22; }
+auto AppTheme::iconOpticalSizeCompact() const -> int { return 18; }
+auto AppTheme::iconSourceSize() const -> int { return 24; }
+auto AppTheme::iconSourceSizeCompact() const -> int { return 20; }
+auto AppTheme::iconButtonHitSize() const -> int { return 44; }
+auto AppTheme::iconButtonHitSizeCompact() const -> int { return 40; }
+// Editor side-panel + scope sizing (DESIGN.md "Editor panel geometry"). Values
+// are logical px; Qt scales by DPR so they stay comfortable at 1.25/1.5/2.0.
+auto AppTheme::editorSidePanelWidth() const -> int { return 320; }
+auto AppTheme::editorSidePanelWidthMin() const -> int { return 260; }
+auto AppTheme::editorSidePanelWidthMax() const -> int { return 460; }
+auto AppTheme::editorMergeDialogWidth() const -> int { return 960; }
+auto AppTheme::editorScopeHeight() const -> int { return 192; }
+auto AppTheme::editorScopeHeightMin() const -> int { return 160; }
+auto AppTheme::lineHeightCaption() const -> int { return 14; }
+auto AppTheme::lineHeightBody() const -> int { return 16; }
+auto AppTheme::lineHeightTitle() const -> int { return 18; }
+auto AppTheme::lineHeightSection() const -> int { return 20; }
+auto AppTheme::lineHeightHeadline() const -> int { return 28; }
+auto AppTheme::spaceXs() const -> int { return 4; }
+auto AppTheme::spaceSm() const -> int { return 8; }
+auto AppTheme::spaceMd() const -> int { return 12; }
+auto AppTheme::spaceLg() const -> int { return 16; }
+auto AppTheme::spaceXl() const -> int { return 20; }
+auto AppTheme::motionFoldOpenMs() const -> int { return 200; }
+auto AppTheme::motionFoldCloseMs() const -> int { return 160; }
+auto AppTheme::motionFadeMs() const -> int { return 120; }
+
+auto AppTheme::reduceMotion() const -> bool {
+  if (!reduce_motion_loaded_) {
+    QSettings settings;
+    reduce_motion_        = settings.value(QStringLiteral("ui/reduceMotion"), false).toBool();
+    reduce_motion_loaded_ = true;
+  }
+  return reduce_motion_;
+}
+
+void AppTheme::setReduceMotion(bool enabled) {
+  if (reduce_motion_loaded_ && reduce_motion_ == enabled) {
+    return;
+  }
+  reduce_motion_        = enabled;
+  reduce_motion_loaded_ = true;
+  QSettings settings;
+  settings.setValue(QStringLiteral("ui/reduceMotion"), enabled);
+  settings.sync();
+  emit ReduceMotionChanged();
+}
+
+auto AppTheme::fontSizeCaption() const -> int { return 11; }
+auto AppTheme::fontSizeBody() const -> int { return 12; }
+auto AppTheme::fontSizeTitle() const -> int { return 13; }
+auto AppTheme::fontSizeSection() const -> int { return 14; }
+auto AppTheme::fontSizeHeadline() const -> int { return 22; }
+auto AppTheme::fontWeightRegular() const -> int { return 500; }
+auto AppTheme::fontWeightStrong() const -> int { return 600; }
+auto AppTheme::fontWeightHeading() const -> int { return 700; }
+
+auto AppTheme::cardSurfaceColor() const -> QColor { return bgPanelColor(); }
+auto AppTheme::cardBorderColor() const -> QColor { return dividerColor(); }
+auto AppTheme::buttonIdleFillColor() const -> QColor {
+  return GetTheme(current_theme_index_).button_idle_fill;
+}
+auto AppTheme::buttonHoveredFillColor() const -> QColor {
+  return GetTheme(current_theme_index_).button_hovered_fill;
+}
+auto AppTheme::buttonPressedFillColor() const -> QColor {
+  return GetTheme(current_theme_index_).button_pressed_fill;
+}
+auto AppTheme::buttonSelectedFillColor() const -> QColor {
+  return GetTheme(current_theme_index_).button_selected_fill;
+}
+auto AppTheme::disabledSurfaceColor() const -> QColor {
+  return GetTheme(current_theme_index_).disabled_surface;
+}
+auto AppTheme::mergeCurrentColor() const -> QColor {
+  return GetTheme(current_theme_index_).merge_current_color;
+}
+auto AppTheme::mergeCurrentFillColor() const -> QColor {
+  return GetTheme(current_theme_index_).merge_current_fill_color;
+}
+auto AppTheme::mergeIncomingColor() const -> QColor {
+  return GetTheme(current_theme_index_).merge_incoming_color;
+}
+auto AppTheme::mergeIncomingFillColor() const -> QColor {
+  return GetTheme(current_theme_index_).merge_incoming_fill_color;
+}
 
 auto AppTheme::currentThemeIndex() const -> int { return current_theme_index_; }
 

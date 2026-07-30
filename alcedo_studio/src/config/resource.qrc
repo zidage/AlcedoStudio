@@ -10,7 +10,11 @@
     <file>fonts/main_Manrope.ttf</file>
     <file>panel_icons/language.svg</file>
     <file>panel_icons/adjustments.svg</file>
+    <file>panel_icons/histogram.svg</file>
+    <file>panel_icons/waveform.svg</file>
     <file>panel_icons/palette.svg</file>
+    <file>panel_icons/versions.svg</file>
+    <file>panel_icons/reset.svg</file>
     <file>panel_icons/color-filter.svg</file>
     <file>panel_icons/crop.svg</file>
     <file>panel_icons/aperture.svg</file>
@@ -19,6 +23,8 @@
     <file>panel_icons/star.svg</file>
     <file>panel_icons/sparkles.svg</file>
     <file>panel_icons/git-branch.svg</file>
+    <file>panel_icons/branch-current.svg</file>
+    <file>panel_icons/fork-root.svg</file>
     <file>panel_icons/import.svg</file>
     <file>panel_icons/export.svg</file>
     <file>panel_icons/folder-open.svg</file>
@@ -38,6 +44,7 @@
     <file>panel_icons/plus.svg</file>
     <file>panel_icons/play.svg</file>
     <file>panel_icons/stop.svg</file>
+    <file>panel_icons/trash.svg</file>
     <file>panel_icons/retry.svg</file>
     <file>panel_icons/to_bg.svg</file>
     <file>panel_icons/collections-folder.svg</file>
