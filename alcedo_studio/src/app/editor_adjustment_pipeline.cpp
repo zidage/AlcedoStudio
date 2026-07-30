@@ -100,6 +100,21 @@ auto EmbeddedEnabled(const nlohmann::json& params) -> bool {
   return true;
 }
 
+void MergeJsonPatch(nlohmann::json& target, const nlohmann::json& patch) {
+  if (!target.is_object() || !patch.is_object()) {
+    target = patch;
+    return;
+  }
+
+  for (const auto& [key, value] : patch.items()) {
+    if (target.contains(key) && target[key].is_object() && value.is_object()) {
+      MergeJsonPatch(target[key], value);
+    } else {
+      target[key] = value;
+    }
+  }
+}
+
 auto LooksLikeFullPipelineParams(const nlohmann::json& params) -> bool {
   if (!params.is_object()) {
     return false;
@@ -117,21 +132,31 @@ auto ApplyPatch(CPUPipelineExecutor& executor, const EditorAdjustmentPatch& patc
     }
     return false;
   }
-  const auto params = patch.params_json.empty() ? nlohmann::json::object()
-                                               : nlohmann::json::parse(patch.params_json);
-  if (!params.is_object()) {
+  const auto patch_params = patch.params_json.empty() ? nlohmann::json::object()
+                                                      : nlohmann::json::parse(patch.params_json);
+  if (!patch_params.is_object()) {
     if (error) {
       *error = "Editor adjustment params must be a JSON object";
     }
     return false;
   }
+  auto  params  = patch_params;
   auto& stage   = executor.GetStage(spec->stage_name);
   auto& globals = executor.GetGlobalParams();
+  if (const auto current = stage.GetOperator(spec->operator_type);
+      current.has_value() && current.value() != nullptr && current.value()->op_) {
+    // Cumulative editor snapshots carry partial operator JSON. Complete it with the operator's
+    // canonical parameters before PipelineStage compares the values, so omitted runtime/input
+    // fields do not turn an unchanged operator into a cache invalidation.
+    auto canonical_params = current.value()->op_->GetParams();
+    MergeJsonPatch(canonical_params, params);
+    params = std::move(canonical_params);
+  }
   stage.SetOperator(spec->operator_type, params, globals);
-  const bool enabled = params.contains("enabled") ||
-                               (params.size() == 1 && params.begin().value().is_object())
-                           ? EmbeddedEnabled(params)
-                           : patch.enabled;
+  const bool has_embedded_enabled =
+      patch_params.contains("enabled") ||
+      (patch_params.size() == 1 && patch_params.begin().value().is_object());
+  const bool enabled = has_embedded_enabled ? EmbeddedEnabled(patch_params) : patch.enabled;
   stage.EnableOperator(spec->operator_type, enabled, globals);
   return true;
 }
