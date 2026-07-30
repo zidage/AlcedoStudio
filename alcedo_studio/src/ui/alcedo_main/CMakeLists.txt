@@ -597,6 +597,8 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorFilmstrip.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWorkspaceRail.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryTransactionsPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryTransactionEntry.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryCommitGraphNode.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorVersionsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeChoiceButton.qml"

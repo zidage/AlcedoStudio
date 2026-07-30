@@ -112,12 +112,19 @@ well. Type badges use a white chip (`editorSliderHandleColor`) on dark rows and
 invert to ink-on-bone when the row is selected. Do not reintroduce ad-hoc
 `#D8D4CD` / `Qt.rgba` star or badge colors in feature QML.
 
-**History/Versions outline selection:** the transaction timeline, named Version
-cards, and their persistent rail buttons keep `cardSurfaceColor` and use the
-primary text token as a quiet 1 px outline for the active item. They do not use
-the filled `editorListSelectedFillColor` well; that filled selection remains
-reserved for dense catalog rows such as LUT and is unchanged by the
-History/Versions refactor.
+**History/Versions outline selection:** the transaction timeline is a Git
+graph: flat rows sit directly on the sunken `bgBaseColor` well while a
+continuous 1 px `cardBorderColor` rail links state-driven node glyphs down the
+left gutter — small solid disc for applied edits, small hollow ring for undone
+(redo) rows, large hollow ring for the graph root and merge commits, and a
+large double ring (text-ink outline + inner dot) for the checked-out commit.
+Only the checked-out row carries a `cardSurfaceColor` fill with the quiet 1 px
+text-token outline; all other rows stay flat, showing at most a quiet
+`hoverColor` wash on hover for movable rows. Named Version cards and the
+persistent rail buttons keep the prior `cardSurfaceColor` + 1 px outline
+language. None of these surfaces use the filled `editorListSelectedFillColor`
+well; that filled selection remains reserved for dense catalog rows such as
+LUT and is unchanged by the History/Versions refactor.
 
 **List well inset (required):** the light selected bar must **not** flush the
 sunken track border. Use `spaceXs` as list track padding (`ListView` margins)
