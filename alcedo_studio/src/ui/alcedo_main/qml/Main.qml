@@ -259,6 +259,9 @@ ApplicationWindow {
         host: root
     }
 
+    // Shared blur target for modal dialogs (AppDialogs + editor-local overlays).
+    readonly property alias dialogBlurSource: mainContent
+
     Item {
         id: mainContent
         anchors.fill: parent

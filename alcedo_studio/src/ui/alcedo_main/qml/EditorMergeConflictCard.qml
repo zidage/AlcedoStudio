@@ -2,12 +2,13 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls.Basic
-import QtQuick.Controls.impl
 import QtQuick.Layouts
 
-// One merge conflict. The two candidate wells expose the parsed JSON fields;
-// the lower strip mirrors the exact value that will be committed.
-Rectangle {
+// One merge conflict as a three-column comparison: Current | Incoming | Merged.
+// The conflict row itself stays flat on the dialog surface; only the three
+// comparison panes are cards. Merge tint tokens color labels / value ink and
+// selected card borders.
+Item {
     id: root
 
     property var conflict: ({})
@@ -27,19 +28,11 @@ Rectangle {
                                          ? appTheme.mergeIncomingColor
                                          : choice === "current"
                                            ? appTheme.mergeCurrentColor : root.borderColor
-    readonly property color statusColor: root.resolved
-                                         ? root.mergedColor : appTheme.mergeCurrentColor
 
     signal choiceSelected(string choice)
 
     objectName: "editorMergeConflictRow"
-    implicitHeight: appTheme.spaceXl * 13
-    height: implicitHeight
-    radius: appTheme.controlRadius
-    color: root.surfaceColor
-    border.width: 1
-    border.color: root.borderColor
-    clip: true
+    implicitHeight: cardColumn.implicitHeight
 
     function formatFieldTitle(key) {
         var raw = String(key || "").split("/")[0].toLowerCase()
@@ -58,19 +51,6 @@ Rectangle {
         return raw.replace(/[_-]+/g, " ").replace(/\b\w/g, function(letter) {
             return letter.toUpperCase()
         })
-    }
-
-    function formatFieldMeta(key) {
-        var raw = String(key || "")
-        var parts = raw.split("/")
-        var stageIndex = parts.length > 1 ? Number(parts[1]) : -1
-        var stageNames = [qsTr("Image Loading"), qsTr("Geometry Adjustment"),
-                          qsTr("To Working Space"), qsTr("Basic Adjustment"),
-                          qsTr("Color Adjustment"), qsTr("Detail Adjustment"),
-                          qsTr("Output Transform")]
-        if (stageIndex >= 0 && stageIndex < stageNames.length)
-            return stageNames[stageIndex]
-        return qsTr("Adjustment parameter")
     }
 
     function formatValue(value) {
@@ -97,151 +77,78 @@ Rectangle {
         }
     }
 
-    function iconSource(key) {
-        var raw = String(key || "").split("/")[0].toLowerCase()
-        if (raw === "exposure")
-            return "qrc:/history_icons/sun-medium.svg"
-        if (raw === "contrast")
-            return "qrc:/history_icons/contrast.svg"
-        if (raw === "hls")
-            return "qrc:/history_icons/swatch-book.svg"
-        if (raw === "saturation" || raw === "vibrance")
-            return "qrc:/history_icons/droplets.svg"
-        if (raw === "color_temp")
-            return "qrc:/history_icons/thermometer.svg"
-        if (raw === "crop_rotate")
-            return "qrc:/history_icons/crop.svg"
-        if (raw === "odt" || raw === "cst")
-            return "qrc:/history_icons/monitor.svg"
-        return "qrc:/history_icons/sliders-horizontal.svg"
-    }
-
     ColumnLayout {
-        anchors.fill: parent
-        spacing: 0
+        id: cardColumn
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        spacing: appTheme.spaceMd
 
-        Rectangle {
+        // Card header: CONFLICT / RESOLVED badge + title only.
+        RowLayout {
+            id: conflictHeader
             objectName: "editorMergeConflictHeader"
             Layout.fillWidth: true
-            Layout.preferredHeight: appTheme.spaceXl * 2 + appTheme.spaceXs
-            color: root.surfaceColor
+            spacing: appTheme.spaceSm
 
-            RowLayout {
-                anchors.fill: parent
-                anchors.margins: appTheme.spaceSm
-                spacing: appTheme.spaceSm
+            Rectangle {
+                Layout.preferredWidth: conflictBadgeLabel.implicitWidth + appTheme.spaceMd
+                Layout.preferredHeight: appTheme.spaceXl + appTheme.spaceXs
+                radius: appTheme.badgeRadius
+                color: root.resolved
+                       ? appTheme.mergeIncomingFillColor : appTheme.mergeCurrentFillColor
+                border.width: 1
+                border.color: root.resolved
+                              ? appTheme.mergeIncomingColor : appTheme.mergeCurrentColor
 
-                Rectangle {
-                    Layout.preferredWidth: appTheme.iconButtonHitSizeCompact - appTheme.spaceSm
-                    Layout.preferredHeight: appTheme.iconButtonHitSizeCompact - appTheme.spaceSm
-                    radius: appTheme.controlRadiusSmall
-                    color: appTheme.bgBaseColor
-                    border.width: 1
-                    border.color: root.borderColor
-
-                    ColorImage {
-                        anchors.centerIn: parent
-                        width: appTheme.iconOpticalSizeCompact
-                        height: appTheme.iconOpticalSizeCompact
-                        source: root.iconSource(root.fieldKey)
-                        sourceSize.width: appTheme.iconSourceSizeCompact
-                        sourceSize.height: appTheme.iconSourceSizeCompact
-                        color: root.mutedColor
-                        fillMode: Image.PreserveAspectFit
-                    }
-                }
-
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 0
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: root.formatFieldTitle(root.fieldKey)
-                        color: root.textColor
-                        elide: Text.ElideRight
-                        font.family: appTheme.uiFontFamily
-                        font.pixelSize: appTheme.fontSizeTitle
-                        font.weight: appTheme.fontWeightStrong
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: root.formatFieldMeta(root.fieldKey)
-                              + "  ·  " + root.fieldKey
-                        color: root.mutedColor
-                        elide: Text.ElideRight
-                        font.family: appTheme.monoFontFamily
-                        font.pixelSize: appTheme.fontSizeCaption
-                    }
-                }
-
-                Rectangle {
-                    Layout.preferredWidth: statusLabel.implicitWidth + appTheme.spaceMd
-                    Layout.preferredHeight: appTheme.spaceXl + appTheme.spaceXs
-                    radius: appTheme.badgeRadius
+                Label {
+                    id: conflictBadgeLabel
+                    anchors.centerIn: parent
+                    text: root.resolved ? qsTr("RESOLVED") : qsTr("CONFLICT")
                     color: root.resolved
-                           ? appTheme.mergeIncomingFillColor : appTheme.mergeCurrentFillColor
-                    border.width: 1
-                    border.color: root.statusColor
-
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.leftMargin: appTheme.spaceSm
-                        anchors.rightMargin: appTheme.spaceSm
-                        spacing: appTheme.spaceXs
-
-                        Rectangle {
-                            Layout.preferredWidth: appTheme.spaceXs
-                            Layout.preferredHeight: appTheme.spaceXs
-                            radius: width / 2
-                            color: root.statusColor
-                        }
-
-                        Label {
-                            id: statusLabel
-                            text: root.resolved ? qsTr("Resolved") : qsTr("Conflict")
-                            color: root.statusColor
-                            font.family: appTheme.uiFontFamily
-                            font.pixelSize: appTheme.fontSizeCaption
-                            font.weight: appTheme.fontWeightStrong
-                        }
-                    }
+                           ? appTheme.mergeIncomingColor : appTheme.mergeCurrentColor
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeCaption
+                    font.weight: appTheme.fontWeightStrong
                 }
+            }
+
+            Label {
+                Layout.fillWidth: true
+                text: root.formatFieldTitle(root.fieldKey)
+                color: root.textColor
+                elide: Text.ElideRight
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeTitle
+                font.weight: appTheme.fontWeightStrong
             }
         }
 
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 1
-            color: root.borderColor
-        }
-
+        // Three equal comparison columns on the shared dialog surface.
         RowLayout {
             Layout.fillWidth: true
-            Layout.fillHeight: true
-            Layout.leftMargin: appTheme.spaceSm
-            Layout.rightMargin: appTheme.spaceSm
-            Layout.topMargin: appTheme.spaceSm
-            Layout.bottomMargin: appTheme.spaceSm
-            spacing: appTheme.spaceSm
+            spacing: appTheme.spaceMd
 
+            // CURRENT (OURS)
             Rectangle {
                 id: currentValueCard
                 objectName: "editorMergeCurrentValueCard"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                color: currentChoiceButton.selected
-                       ? appTheme.mergeCurrentFillColor : appTheme.bgBaseColor
+                implicitHeight: currentColumn.implicitHeight + appTheme.spaceSm * 2
+                color: appTheme.bgBaseColor
                 radius: appTheme.controlRadiusSmall
                 border.width: 1
                 border.color: currentChoiceButton.selected
                               ? appTheme.mergeCurrentColor : root.borderColor
 
                 ColumnLayout {
-                    anchors.fill: parent
+                    id: currentColumn
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
                     anchors.margins: appTheme.spaceSm
-                    spacing: appTheme.spaceXs
+                    spacing: appTheme.spaceSm
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -249,75 +156,60 @@ Rectangle {
 
                         Label {
                             Layout.fillWidth: true
-                            text: qsTr("CURRENT")
+                            text: qsTr("CURRENT (OURS)")
                             color: appTheme.mergeCurrentColor
+                            elide: Text.ElideRight
                             font.family: appTheme.uiFontFamily
                             font.pixelSize: appTheme.fontSizeCaption
                             font.weight: appTheme.fontWeightStrong
                         }
 
-                        Rectangle {
-                            Layout.preferredWidth: appTheme.spaceXl * 3
-                            Layout.preferredHeight: appTheme.spaceXl + appTheme.spaceXs
-                            radius: appTheme.badgeRadius
-                            color: appTheme.cardSurfaceColor
-                            border.width: 1
-                            border.color: root.borderColor
-
-                            Label {
-                                anchors.centerIn: parent
-                                text: qsTr("ours")
-                                color: root.mutedColor
-                                font.family: appTheme.monoFontFamily
-                                font.pixelSize: appTheme.fontSizeCaption
-                            }
+                        EditorMergeChoiceButton {
+                            id: currentChoiceButton
+                            objectName: "editorMergeCurrentChoiceButton"
+                            Layout.fillWidth: false
+                            Layout.preferredWidth: Math.max(implicitWidth, appTheme.spaceXl * 5)
+                            compact: true
+                            choiceKind: "current"
+                            selected: root.choice === "current"
+                            label: qsTr("Keep Current")
+                            accessibleLabel: qsTr("Use Current value for %1")
+                                              .arg(root.formatFieldTitle(root.fieldKey))
+                            onChoiceSelected: (selectedChoice) => root.choiceSelected(selectedChoice)
                         }
                     }
 
                     EditorMergeJsonValue {
                         Layout.fillWidth: true
-                        Layout.fillHeight: true
                         value: root.conflict.currentValue
                         textColor: root.textColor
                         mutedColor: root.mutedColor
-                        maxEntries: 3
-                    }
-
-                    EditorMergeChoiceButton {
-                        id: currentChoiceButton
-                        objectName: "editorMergeCurrentChoiceButton"
-                        choiceKind: "current"
-                        selected: root.choice === "current"
-                        label: qsTr("Keep Current")
-                        accessibleLabel: qsTr("Use Current value for %1")
-                                          .arg(root.formatFieldTitle(root.fieldKey))
-                        onChoiceSelected: (selectedChoice) => root.choiceSelected(selectedChoice)
+                        valueColor: appTheme.mergeCurrentColor
+                        maxEntries: 4
                     }
                 }
             }
 
-            Rectangle {
-                Layout.preferredWidth: 1
-                Layout.fillHeight: true
-                color: root.borderColor
-            }
-
+            // INCOMING (THEIRS)
             Rectangle {
                 id: incomingValueCard
                 objectName: "editorMergeIncomingValueCard"
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                color: incomingChoiceButton.selected
-                       ? appTheme.mergeIncomingFillColor : appTheme.bgBaseColor
+                implicitHeight: incomingColumn.implicitHeight + appTheme.spaceSm * 2
+                color: appTheme.bgBaseColor
                 radius: appTheme.controlRadiusSmall
                 border.width: 1
                 border.color: incomingChoiceButton.selected
                               ? appTheme.mergeIncomingColor : root.borderColor
 
                 ColumnLayout {
-                    anchors.fill: parent
+                    id: incomingColumn
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
                     anchors.margins: appTheme.spaceSm
-                    spacing: appTheme.spaceXs
+                    spacing: appTheme.spaceSm
 
                     RowLayout {
                         Layout.fillWidth: true
@@ -325,110 +217,116 @@ Rectangle {
 
                         Label {
                             Layout.fillWidth: true
-                            text: qsTr("INCOMING")
+                            text: qsTr("INCOMING (THEIRS)")
                             color: appTheme.mergeIncomingColor
+                            elide: Text.ElideRight
                             font.family: appTheme.uiFontFamily
                             font.pixelSize: appTheme.fontSizeCaption
                             font.weight: appTheme.fontWeightStrong
                         }
 
-                        Rectangle {
-                            Layout.preferredWidth: appTheme.spaceXl * 3
-                            Layout.preferredHeight: appTheme.spaceXl + appTheme.spaceXs
-                            radius: appTheme.badgeRadius
-                            color: appTheme.cardSurfaceColor
-                            border.width: 1
-                            border.color: root.borderColor
-
-                            Label {
-                                anchors.centerIn: parent
-                                text: qsTr("theirs")
-                                color: root.mutedColor
-                                font.family: appTheme.monoFontFamily
-                                font.pixelSize: appTheme.fontSizeCaption
-                            }
+                        EditorMergeChoiceButton {
+                            id: incomingChoiceButton
+                            objectName: "editorMergeConflictChoice"
+                            Layout.fillWidth: false
+                            Layout.preferredWidth: Math.max(implicitWidth, appTheme.spaceXl * 5)
+                            compact: true
+                            choiceKind: "incoming"
+                            selected: root.choice === "incoming"
+                            label: qsTr("Use Incoming")
+                            accessibleLabel: qsTr("Use Incoming value for %1")
+                                              .arg(root.formatFieldTitle(root.fieldKey))
+                            onChoiceSelected: (selectedChoice) => root.choiceSelected(selectedChoice)
                         }
                     }
 
                     EditorMergeJsonValue {
                         Layout.fillWidth: true
-                        Layout.fillHeight: true
                         value: root.conflict.incomingValue
                         textColor: root.textColor
                         mutedColor: root.mutedColor
-                        maxEntries: 3
-                    }
-
-                    EditorMergeChoiceButton {
-                        id: incomingChoiceButton
-                        objectName: "editorMergeConflictChoice"
-                        choiceKind: "incoming"
-                        selected: root.choice === "incoming"
-                        label: qsTr("Use Incoming")
-                        accessibleLabel: qsTr("Use Incoming value for %1")
-                                          .arg(root.formatFieldTitle(root.fieldKey))
-                        onChoiceSelected: (selectedChoice) => root.choiceSelected(selectedChoice)
+                        valueColor: appTheme.mergeIncomingColor
+                        maxEntries: 4
                     }
                 }
             }
-        }
 
-        Rectangle {
-            objectName: "editorMergeResolvedValueCard"
-            Layout.fillWidth: true
-            Layout.leftMargin: appTheme.spaceSm
-            Layout.rightMargin: appTheme.spaceSm
-            Layout.bottomMargin: appTheme.spaceSm
-            Layout.preferredHeight: appTheme.spaceXl * 3
-            color: root.resolved
-                   ? (root.choice === "current"
-                      ? appTheme.mergeCurrentFillColor : appTheme.mergeIncomingFillColor)
-                   : appTheme.bgBaseColor
-            radius: appTheme.controlRadiusSmall
-            border.width: 1
-            border.color: root.resolved ? root.mergedColor : root.borderColor
-
-            RowLayout {
-                anchors.fill: parent
-                anchors.leftMargin: appTheme.spaceSm
-                anchors.rightMargin: appTheme.spaceSm
-                spacing: appTheme.spaceSm
+            // MERGED (PREVIEW)
+            Rectangle {
+                id: resolvedValueCard
+                objectName: "editorMergeResolvedValueCard"
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                implicitHeight: mergedColumn.implicitHeight + appTheme.spaceSm * 2
+                color: appTheme.bgBaseColor
+                radius: appTheme.controlRadiusSmall
+                border.width: 1
+                border.color: root.resolved ? root.mergedColor : root.borderColor
 
                 ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 0
+                    id: mergedColumn
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.top: parent.top
+                    anchors.margins: appTheme.spaceSm
+                    spacing: appTheme.spaceSm
 
-                    Label {
+                    RowLayout {
                         Layout.fillWidth: true
-                        text: qsTr("MERGED RESULT")
-                        color: root.resolved ? root.mergedColor : root.mutedColor
-                        font.family: appTheme.uiFontFamily
-                        font.pixelSize: appTheme.fontSizeCaption
-                        font.weight: appTheme.fontWeightStrong
+                        spacing: appTheme.spaceXs
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: qsTr("MERGED (PREVIEW)")
+                            color: root.resolved ? root.mergedColor : root.mutedColor
+                            elide: Text.ElideRight
+                            font.family: appTheme.uiFontFamily
+                            font.pixelSize: appTheme.fontSizeCaption
+                            font.weight: appTheme.fontWeightStrong
+                        }
+
+                        Label {
+                            visible: !root.resolved
+                            text: qsTr("Pending Selection")
+                            color: root.mutedColor
+                            font.family: appTheme.uiFontFamily
+                            font.pixelSize: appTheme.fontSizeCaption
+                            font.weight: appTheme.fontWeightStrong
+                        }
                     }
 
+                    // Harness asserts this Label's text for pending / resolved
+                    // scalars. When resolved, JsonValue paints the structured
+                    // preview and this Label stays in-tree (opacity 0) so Find()
+                    // still reads the mirrored formatValue().
                     Label {
                         id: mergedValueLabel
                         objectName: "editorMergeResolvedValue"
                         Layout.fillWidth: true
+                        Layout.preferredHeight: root.resolved
+                                                ? 0 : appTheme.spaceXl * 4
+                        opacity: root.resolved ? 0 : 1
                         text: root.resolved
                               ? root.formatValue(root.mergedValue)
-                              : qsTr("Choose Current or Incoming")
-                        color: root.resolved ? root.textColor : root.mutedColor
-                        elide: Text.ElideRight
-                        font.family: appTheme.monoFontFamily
+                              : qsTr("Waiting for resolution...")
+                        color: root.mutedColor
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                        wrapMode: Text.WordWrap
+                        font.family: appTheme.uiFontFamily
                         font.pixelSize: appTheme.fontSizeBody
+                        clip: true
                     }
-                }
 
-                Label {
-                    Layout.preferredWidth: appTheme.spaceXl * 5
-                    text: root.resolved ? qsTr("Ready to commit") : qsTr("Pending")
-                    color: root.resolved ? root.mergedColor : root.mutedColor
-                    horizontalAlignment: Text.AlignRight
-                    font.family: appTheme.uiFontFamily
-                    font.pixelSize: appTheme.fontSizeCaption
-                    font.weight: appTheme.fontWeightStrong
+                    EditorMergeJsonValue {
+                        Layout.fillWidth: true
+                        visible: root.resolved
+                        value: root.mergedValue
+                        textColor: root.textColor
+                        mutedColor: root.mutedColor
+                        valueColor: root.mergedColor
+                        maxEntries: 4
+                    }
                 }
             }
         }

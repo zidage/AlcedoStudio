@@ -21,6 +21,7 @@ Item {
                                       ? appModules.adjustmentTransfer : null
     property bool recoveryPending: false
     property var historyModel: internalHistoryModel
+    property Item blurSource: null
 
     // Scroll offsets stored outside Loader-owned panel bodies.
     property real historyListContentY: 0
@@ -273,6 +274,7 @@ Item {
             editorSession: root.editorSession
             adjustmentTransfer: root.adjustmentTransfer
             historyModel: root.historyModel
+            blurSource: root.blurSource
             Component.onDestruction: {
                 // Capture final scroll if the rail still owns this page key.
                 if (root._lastBodyPage === "history" && listContentY !== undefined)

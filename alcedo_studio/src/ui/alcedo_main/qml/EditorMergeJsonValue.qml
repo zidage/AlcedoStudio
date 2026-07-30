@@ -14,6 +14,9 @@ Item {
     property var value: null
     property color textColor: appTheme.textColor
     property color mutedColor: appTheme.textMutedColor
+    // Optional tint for scalar values (merge Current / Incoming / Merged ink).
+    // When unset, values use textColor so non-merge callers stay monochrome.
+    property color valueColor: textColor
     property bool compact: false
     property int maxEntries: 6
 
@@ -134,7 +137,7 @@ Item {
                 Label {
                     Layout.fillWidth: true
                     text: jsonEntryRow.modelData.value
-                    color: root.textColor
+                    color: root.valueColor
                     elide: Text.ElideRight
                     verticalAlignment: Text.AlignVCenter
                     font.family: appTheme.monoFontFamily

@@ -2,10 +2,13 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Effects
 import QtQuick.Layouts
 
 // Merge conflict resolver. The transfer service supplies the two candidate
 // values; this component owns only the visible choices and preview state.
+// Layout: title + Cancel/Complete on one axis → scrollable conflict rows →
+// sticky Use All Current / Incoming aligned to those columns.
 Dialog {
     id: root
     objectName: "editorMergeDialog"
@@ -15,27 +18,77 @@ Dialog {
     property color mutedColor: appTheme.textMutedColor
     property color surfaceColor: appTheme.cardSurfaceColor
     property color borderColor: appTheme.cardBorderColor
+    property Item blurSource: null
+    property real cornerRadius: 0
     property int resolvedCount: 0
 
     readonly property int pendingCount: Math.max(0, conflicts.length - resolvedCount)
     readonly property bool allResolved: conflicts.length > 0
                                         && resolvedCount === conflicts.length
-    readonly property real resolvedRatio: conflicts.length > 0
-                                          ? resolvedCount / conflicts.length : 0
 
     signal mergeRequested(var resolutions)
     signal cancelled()
 
+    parent: Overlay.overlay
     modal: true
+    focus: true
     title: ""
-    width: appTheme.editorMergeDialogWidth
     padding: 0
+    closePolicy: Popup.CloseOnEscape
+    width: Math.min(parent ? parent.width - appTheme.spaceXl * 2
+                           : appTheme.editorMergeDialogWidth,
+                    appTheme.editorMergeDialogWidth)
+    x: parent ? Math.round((parent.width - width) / 2) : 0
+    y: parent ? Math.round((parent.height - height) / 2) : 0
+    footer: Item {
+        width: 1
+        height: 0
+    }
 
     background: Rectangle {
         radius: appTheme.panelRadius
         color: root.surfaceColor
         border.width: 1
         border.color: root.borderColor
+    }
+
+    Overlay.modal: Item {
+        anchors.fill: parent
+
+        Rectangle {
+            id: backdropMask
+            anchors.fill: parent
+            radius: root.cornerRadius
+            color: appTheme.textColor
+            visible: false
+            layer.enabled: true
+            layer.smooth: true
+        }
+
+        Item {
+            anchors.fill: parent
+            layer.enabled: true
+            layer.smooth: true
+            layer.effect: MultiEffect {
+                maskEnabled: root.cornerRadius > 0
+                maskSource: backdropMask
+            }
+
+            MultiEffect {
+                anchors.fill: parent
+                source: root.blurSource
+                blurEnabled: root.blurSource !== null
+                blur: 0.72
+                blurMax: 72
+                saturation: -0.24
+                brightness: -0.08
+            }
+
+            Rectangle {
+                anchors.fill: parent
+                color: appTheme.overlayColor
+            }
+        }
     }
 
     function countResolvedChoices() {
@@ -105,205 +158,121 @@ Dialog {
         id: contentLayout
         spacing: 0
 
-        Rectangle {
+        // Title + Cancel / Complete on one vertical center axis.
+        RowLayout {
+            id: headerRow
             objectName: "editorMergeHeader"
             Layout.fillWidth: true
-            Layout.preferredHeight: appTheme.spaceXl * 7
-            color: root.surfaceColor
-            radius: appTheme.panelRadius
-            clip: true
+            Layout.leftMargin: appTheme.spaceLg
+            Layout.rightMargin: appTheme.spaceLg
+            Layout.topMargin: appTheme.spaceLg
+            Layout.bottomMargin: appTheme.spaceMd
+            spacing: appTheme.spaceMd
 
-            ColumnLayout {
-                anchors.fill: parent
-                anchors.margins: appTheme.spaceLg
-                spacing: appTheme.spaceSm
+            Label {
+                Layout.fillWidth: true
+                Layout.alignment: Qt.AlignVCenter
+                text: qsTr("Merge Conflicts")
+                color: root.textColor
+                elide: Text.ElideRight
+                font.family: appTheme.uiFontFamily
+                font.pixelSize: appTheme.fontSizeHeadline
+                font.weight: appTheme.fontWeightHeading
+            }
 
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: appTheme.spaceSm
+            Button {
+                id: cancelButton
+                objectName: "editorMergeCancelButton"
+                Layout.alignment: Qt.AlignVCenter
+                Layout.preferredWidth: Math.max(implicitWidth, appTheme.spaceXl * 5)
+                Layout.preferredHeight: appTheme.spaceXl * 2
+                text: qsTr("Cancel")
+                hoverEnabled: true
+                activeFocusOnTab: true
+                Accessible.name: text
+                onClicked: root.reject()
 
-                    Rectangle {
-                        Layout.preferredWidth: appTheme.spaceSm
-                        Layout.preferredHeight: appTheme.spaceSm
-                        radius: width / 2
-                        color: appTheme.mergeCurrentColor
-                    }
-
-                    Label {
-                        Layout.fillWidth: true
-                        text: qsTr("ACTION REQUIRED")
-                        color: appTheme.mergeCurrentColor
-                        font.family: appTheme.uiFontFamily
-                        font.pixelSize: appTheme.fontSizeCaption
-                        font.weight: appTheme.fontWeightStrong
-                    }
-
-                    Label {
-                        text: qsTr("%1 conflicts").arg(root.conflicts.length)
-                        color: root.mutedColor
-                        font.family: appTheme.monoFontFamily
-                        font.pixelSize: appTheme.fontSizeCaption
-                    }
+                contentItem: Label {
+                    text: cancelButton.text
+                    color: cancelButton.hovered ? root.textColor : root.mutedColor
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeCaption
+                    font.weight: appTheme.fontWeightStrong
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
                 }
 
-                RowLayout {
-                    Layout.fillWidth: true
-                    spacing: appTheme.spaceMd
+                background: Rectangle {
+                    radius: appTheme.controlRadius
+                    color: cancelButton.down
+                           ? appTheme.buttonPressedFillColor
+                           : (cancelButton.hovered
+                              ? appTheme.buttonHoveredFillColor : "transparent")
+                    border.width: cancelButton.hovered ? 1 : 0
+                    border.color: root.borderColor
+                }
+            }
 
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: appTheme.spaceXs
+            Button {
+                id: completeButton
+                objectName: "editorMergeAcceptButton"
+                Layout.alignment: Qt.AlignVCenter
+                Layout.preferredWidth: Math.max(implicitWidth, appTheme.spaceXl * 7)
+                Layout.preferredHeight: appTheme.spaceXl * 2
+                enabled: root.allResolved
+                text: qsTr("Complete")
+                hoverEnabled: true
+                activeFocusOnTab: true
+                Accessible.name: text
+                onClicked: root.accept()
 
-                        Label {
-                            Layout.fillWidth: true
-                            text: qsTr("Merge Into Current Version")
-                            color: root.textColor
-                            font.family: appTheme.uiFontFamily
-                            font.pixelSize: appTheme.fontSizeHeadline
-                            font.weight: appTheme.fontWeightHeading
-                        }
+                contentItem: Label {
+                    text: completeButton.text
+                    color: completeButton.enabled
+                           ? appTheme.editorListSelectedInkColor : root.mutedColor
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeCaption
+                    font.weight: appTheme.fontWeightHeading
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    elide: Text.ElideRight
+                }
 
-                        Label {
-                            Layout.fillWidth: true
-                            text: qsTr("Choose a value for every conflicting parameter. The merged result is previewed below each comparison.")
-                            color: root.mutedColor
-                            wrapMode: Text.WordWrap
-                            maximumLineCount: 2
-                            elide: Text.ElideRight
-                            font.family: appTheme.uiFontFamily
-                            font.pixelSize: appTheme.fontSizeCaption
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.alignment: Qt.AlignVCenter
-                        spacing: appTheme.spaceXs
-
-                        Button {
-                            id: useAllCurrentButton
-                            objectName: "editorMergeUseAllCurrentButton"
-                            Layout.preferredWidth: appTheme.spaceXl * 7
-                            Layout.preferredHeight: appTheme.spaceXl * 2
-                            text: qsTr("Use All Current")
-                            hoverEnabled: true
-                            activeFocusOnTab: true
-                            Accessible.name: text
-                            onClicked: root.setAllChoices("current")
-
-                            contentItem: RowLayout {
-                                anchors.fill: parent
-                                anchors.leftMargin: appTheme.spaceSm
-                                anchors.rightMargin: appTheme.spaceSm
-                                spacing: appTheme.spaceXs
-
-                                Label {
-                                    text: "←"
-                                    color: appTheme.mergeCurrentColor
-                                    font.pixelSize: appTheme.fontSizeBody
-                                }
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: useAllCurrentButton.text
-                                    color: appTheme.mergeCurrentColor
-                                    font.family: appTheme.uiFontFamily
-                                    font.pixelSize: appTheme.fontSizeCaption
-                                    font.weight: appTheme.fontWeightStrong
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                    elide: Text.ElideRight
-                                }
-                            }
-
-                            background: Rectangle {
-                                radius: appTheme.controlRadius
-                                color: useAllCurrentButton.down
-                                       ? appTheme.buttonPressedFillColor
-                                       : (useAllCurrentButton.hovered
-                                          ? appTheme.buttonHoveredFillColor : root.surfaceColor)
-                                border.width: 1
-                                border.color: appTheme.mergeCurrentColor
-                            }
-                        }
-
-                        Button {
-                            id: useAllIncomingButton
-                            objectName: "editorMergeUseAllIncomingButton"
-                            Layout.preferredWidth: appTheme.spaceXl * 7
-                            Layout.preferredHeight: appTheme.spaceXl * 2
-                            text: qsTr("Use All Incoming")
-                            hoverEnabled: true
-                            activeFocusOnTab: true
-                            Accessible.name: text
-                            onClicked: root.setAllChoices("incoming")
-
-                            contentItem: RowLayout {
-                                anchors.fill: parent
-                                anchors.leftMargin: appTheme.spaceSm
-                                anchors.rightMargin: appTheme.spaceSm
-                                spacing: appTheme.spaceXs
-
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: useAllIncomingButton.text
-                                    color: appTheme.mergeIncomingColor
-                                    font.family: appTheme.uiFontFamily
-                                    font.pixelSize: appTheme.fontSizeCaption
-                                    font.weight: appTheme.fontWeightStrong
-                                    horizontalAlignment: Text.AlignHCenter
-                                    verticalAlignment: Text.AlignVCenter
-                                    elide: Text.ElideRight
-                                }
-
-                                Label {
-                                    text: "→"
-                                    color: appTheme.mergeIncomingColor
-                                    font.pixelSize: appTheme.fontSizeBody
-                                }
-                            }
-
-                            background: Rectangle {
-                                radius: appTheme.controlRadius
-                                color: useAllIncomingButton.down
-                                       ? appTheme.buttonPressedFillColor
-                                       : (useAllIncomingButton.hovered
-                                          ? appTheme.buttonHoveredFillColor : root.surfaceColor)
-                                border.width: 1
-                                border.color: appTheme.mergeIncomingColor
-                            }
-                        }
-                    }
+                background: Rectangle {
+                    radius: appTheme.controlRadius
+                    color: completeButton.enabled
+                           ? (completeButton.down
+                              ? appTheme.buttonPressedFillColor
+                              : (completeButton.hovered
+                                 ? appTheme.buttonHoveredFillColor
+                                 : appTheme.editorListSelectedFillColor))
+                           : appTheme.disabledSurfaceColor
+                    border.width: 1
+                    border.color: completeButton.enabled
+                                  ? appTheme.editorListSelectedFillColor : root.borderColor
                 }
             }
         }
 
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 1
-            color: root.borderColor
-        }
-
-        Rectangle {
+        // Scrollable conflict rows.
+        Item {
             objectName: "editorMergeConflictListWell"
             Layout.fillWidth: true
             Layout.preferredHeight: Math.min(Math.max(conflictList.contentHeight
-                                                       + appTheme.spaceMd,
-                                                       appTheme.spaceXl * 12),
-                                             appTheme.spaceXl * 24)
-            color: appTheme.bgBaseColor
-            radius: appTheme.controlRadius
-            border.width: 1
-            border.color: root.borderColor
+                                                       + appTheme.spaceSm,
+                                                       appTheme.spaceXl * 14),
+                                             appTheme.spaceXl * 28)
+            Layout.leftMargin: appTheme.spaceLg
+            Layout.rightMargin: appTheme.spaceLg
             clip: true
 
             ListView {
                 id: conflictList
                 objectName: "editorMergeConflictList"
                 anchors.fill: parent
-                anchors.margins: appTheme.spaceSm
                 clip: true
                 model: conflictChoices
-                spacing: appTheme.spaceMd
+                spacing: appTheme.spaceXl
                 boundsBehavior: Flickable.StopAtBounds
 
                 delegate: Item {
@@ -312,11 +281,11 @@ Dialog {
                     required property int index
 
                     width: ListView.view ? ListView.view.width : 0
-                    height: appTheme.spaceXl * 13
+                    height: conflictCard.implicitHeight
 
                     EditorMergeConflictCard {
                         id: conflictCard
-                        anchors.fill: parent
+                        width: parent.width
                         conflict: parent.conflict
                         choice: parent.choice
                         rowIndex: parent.index
@@ -339,128 +308,87 @@ Dialog {
                 }
             }
         }
-    }
 
-    footer: Rectangle {
-        objectName: "editorMergeFooter"
-        implicitHeight: appTheme.spaceXl * 3
-        color: root.surfaceColor
-        radius: appTheme.panelRadius
-        clip: true
-
-        Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: parent.top
-            height: 1
-            color: root.borderColor
-        }
-
+        // Sticky bulk actions — centered under the scrollable conflict list.
         RowLayout {
-            anchors.fill: parent
-            anchors.margins: appTheme.spaceLg
-            spacing: appTheme.spaceMd
+            id: bulkActionRow
+            objectName: "editorMergeBulkActionRow"
+            Layout.fillWidth: true
+            Layout.leftMargin: appTheme.spaceLg
+            Layout.rightMargin: appTheme.spaceLg
+            Layout.topMargin: appTheme.spaceMd
+            Layout.bottomMargin: appTheme.spaceLg
+            spacing: appTheme.spaceSm
+
+            Item { Layout.fillWidth: true }
 
             Button {
-                id: cancelButton
-                objectName: "editorMergeCancelButton"
-                Layout.preferredWidth: appTheme.spaceXl * 5
+                id: useAllCurrentButton
+                objectName: "editorMergeUseAllCurrentButton"
                 Layout.preferredHeight: appTheme.spaceXl * 2
-                text: qsTr("Cancel Merge")
+                text: qsTr("Use All Current")
                 hoverEnabled: true
                 activeFocusOnTab: true
                 Accessible.name: text
-                onClicked: root.reject()
+                onClicked: root.setAllChoices("current")
 
                 contentItem: Label {
-                    text: cancelButton.text
-                    color: cancelButton.hovered ? root.textColor : root.mutedColor
+                    text: useAllCurrentButton.text
+                    color: appTheme.mergeCurrentColor
                     font.family: appTheme.uiFontFamily
                     font.pixelSize: appTheme.fontSizeCaption
                     font.weight: appTheme.fontWeightStrong
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
+                    leftPadding: appTheme.spaceMd
+                    rightPadding: appTheme.spaceMd
                 }
 
                 background: Rectangle {
                     radius: appTheme.controlRadius
-                    color: cancelButton.down
+                    color: useAllCurrentButton.down
                            ? appTheme.buttonPressedFillColor
-                           : (cancelButton.hovered
-                              ? appTheme.buttonHoveredFillColor : root.surfaceColor)
+                           : (useAllCurrentButton.hovered
+                              ? appTheme.mergeCurrentFillColor : appTheme.bgBaseColor)
                     border.width: 1
-                    border.color: root.borderColor
+                    border.color: appTheme.mergeCurrentColor
+                }
+            }
+
+            Button {
+                id: useAllIncomingButton
+                objectName: "editorMergeUseAllIncomingButton"
+                Layout.preferredHeight: appTheme.spaceXl * 2
+                text: qsTr("Use All Incoming")
+                hoverEnabled: true
+                activeFocusOnTab: true
+                Accessible.name: text
+                onClicked: root.setAllChoices("incoming")
+
+                contentItem: Label {
+                    text: useAllIncomingButton.text
+                    color: appTheme.mergeIncomingColor
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeCaption
+                    font.weight: appTheme.fontWeightStrong
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
+                    leftPadding: appTheme.spaceMd
+                    rightPadding: appTheme.spaceMd
+                }
+
+                background: Rectangle {
+                    radius: appTheme.controlRadius
+                    color: useAllIncomingButton.down
+                           ? appTheme.buttonPressedFillColor
+                           : (useAllIncomingButton.hovered
+                              ? appTheme.mergeIncomingFillColor : appTheme.bgBaseColor)
+                    border.width: 1
+                    border.color: appTheme.mergeIncomingColor
                 }
             }
 
             Item { Layout.fillWidth: true }
-
-            ColumnLayout {
-                Layout.preferredWidth: appTheme.spaceXl * 9
-                Layout.alignment: Qt.AlignVCenter
-                spacing: appTheme.spaceXs
-
-                Label {
-                    objectName: "editorMergeStatusText"
-                    Layout.fillWidth: true
-                    text: root.allResolved
-                          ? qsTr("Ready to merge")
-                          : qsTr("%1 conflicts pending resolution").arg(root.pendingCount)
-                    color: root.allResolved ? appTheme.mergeIncomingColor : root.mutedColor
-                    horizontalAlignment: Text.AlignRight
-                    font.family: appTheme.uiFontFamily
-                    font.pixelSize: appTheme.fontSizeCaption
-                    font.weight: appTheme.fontWeightStrong
-                }
-
-                Rectangle {
-                    Layout.fillWidth: true
-                    Layout.preferredHeight: appTheme.spaceXs
-                    radius: height / 2
-                    color: appTheme.bgBaseColor
-
-                    Rectangle {
-                        width: parent.width * root.resolvedRatio
-                        height: parent.height
-                        radius: height / 2
-                        color: root.allResolved
-                               ? appTheme.mergeIncomingColor : appTheme.mergeCurrentColor
-                    }
-                }
-            }
-
-            Button {
-                id: completeButton
-                objectName: "editorMergeAcceptButton"
-                Layout.preferredWidth: appTheme.spaceXl * 7
-                Layout.preferredHeight: appTheme.spaceXl * 2
-                enabled: root.allResolved
-                text: qsTr("Complete Merge")
-                hoverEnabled: true
-                activeFocusOnTab: true
-                Accessible.name: text
-                onClicked: root.accept()
-
-                contentItem: Label {
-                    text: completeButton.text
-                    color: completeButton.enabled ? root.surfaceColor : root.mutedColor
-                    font.family: appTheme.uiFontFamily
-                    font.pixelSize: appTheme.fontSizeCaption
-                    font.weight: appTheme.fontWeightHeading
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                    elide: Text.ElideRight
-                }
-
-                background: Rectangle {
-                    radius: appTheme.controlRadius
-                    color: completeButton.enabled
-                           ? appTheme.mergeIncomingColor : appTheme.disabledSurfaceColor
-                    border.width: 1
-                    border.color: completeButton.enabled
-                                  ? appTheme.mergeIncomingColor : root.borderColor
-                }
-            }
         }
     }
 }

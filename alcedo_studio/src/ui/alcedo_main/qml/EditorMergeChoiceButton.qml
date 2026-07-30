@@ -2,12 +2,14 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
+// Compact choice control for merge column headers (Keep Current / Use Incoming).
 Button {
     id: root
 
     property string actionObjectName: ""
     property string choiceKind: "current"
     property bool selected: false
+    property bool compact: false
     property string label: ""
     property string accessibleLabel: label
     property color mutedColor: appTheme.textMutedColor
@@ -22,8 +24,11 @@ Button {
     signal choiceSelected(string choice)
 
     objectName: root.actionObjectName
-    Layout.fillWidth: true
-    Layout.preferredHeight: appTheme.spaceXl * 2
+    Layout.fillWidth: !root.compact
+    Layout.preferredHeight: root.compact
+                            ? appTheme.spaceXl + appTheme.spaceXs
+                            : appTheme.spaceXl * 2
+    implicitWidth: contentLabel.implicitWidth + appTheme.spaceMd * 2
     text: root.label
     hoverEnabled: true
     activeFocusOnTab: true
@@ -31,8 +36,10 @@ Button {
     onClicked: root.choiceSelected(root.choiceKind)
 
     contentItem: Label {
+        id: contentLabel
         text: root.text
-        color: root.selected ? root.choiceColor : root.mutedColor
+        color: root.selected ? root.choiceColor
+                             : (root.hovered ? appTheme.textColor : root.mutedColor)
         font.family: appTheme.uiFontFamily
         font.pixelSize: appTheme.fontSizeCaption
         font.weight: appTheme.fontWeightStrong
@@ -42,10 +49,10 @@ Button {
     }
 
     background: Rectangle {
-        radius: appTheme.controlRadius
+        radius: appTheme.controlRadiusSmall
         color: root.selected
                ? root.choiceFillColor
-               : (root.hovered ? appTheme.buttonHoveredFillColor : appTheme.bgBaseColor)
+               : (root.hovered ? appTheme.buttonHoveredFillColor : appTheme.cardSurfaceColor)
         border.width: 1
         border.color: root.selected ? root.choiceColor : appTheme.cardBorderColor
     }

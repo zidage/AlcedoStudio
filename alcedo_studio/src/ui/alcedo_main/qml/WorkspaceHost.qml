@@ -87,6 +87,7 @@ Item {
             theme: root.theme
             workspaceRouter: root.workspaceRouter
             editorSession: appModules.editorSession
+            blurSource: root.host ? root.host.dialogBlurSource : null
             Component.onCompleted: root.editorCreateCount += 1
             Component.onDestruction: root.editorDestroyCount += 1
         }

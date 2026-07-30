@@ -15,6 +15,7 @@ Item {
     property var adjustmentTransfer: null
     property var historyModel: null
     property string statusMessage: ""
+    property Item blurSource: null
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
     readonly property color colMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
@@ -53,6 +54,7 @@ Item {
         mutedColor: root.colMuted
         surfaceColor: root.colCardSurface
         borderColor: root.colCardBorder
+        blurSource: root.blurSource
         onMergeRequested: function(resolutions) {
             if (!root.adjustmentTransfer) {
                 root.statusMessage = qsTr("Adjustment transfer is unavailable")

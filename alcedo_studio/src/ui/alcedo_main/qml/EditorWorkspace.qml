@@ -13,6 +13,7 @@ Item {
     property var workspaceRouter: appModules.workspaceRouter
     property var editorSession: appModules.editorSession
     property var interactionPolicy: appModules.interactionPolicy
+    property Item blurSource: null
 
     readonly property color colPanel: theme ? theme.colGlassPanel : "#1C1C1D"
     readonly property color colStroke: theme ? theme.colGlassStroke : Qt.rgba(1, 1, 1, 0.08)
@@ -93,6 +94,7 @@ Item {
                 interactionPolicy: root.interactionPolicy
                 adjustmentTransfer: appModules.adjustmentTransfer
                 recoveryPending: root.recoveryPending
+                blurSource: root.blurSource
             }
 
             // Center column: viewport + filmstrip

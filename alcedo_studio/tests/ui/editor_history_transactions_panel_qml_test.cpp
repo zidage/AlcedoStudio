@@ -128,7 +128,7 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest, PasteAndMergeUseVisibleActionsAndR
   auto* merged = Find(QStringLiteral("editorMergeResolvedValue"));
   ASSERT_NE(merged, nullptr);
   EXPECT_EQ(merged->property("text").toString(),
-            QStringLiteral("Choose Current or Incoming"));
+            QStringLiteral("Waiting for resolution..."));
 
   Click(window_, Find(QStringLiteral("editorMergeUseAllCurrentButton")));
   EXPECT_TRUE(complete->isEnabled());
