@@ -963,10 +963,12 @@ auto EditorSessionController::render_diagnostics() const -> QVariantMap {
   out.insert(QStringLiteral("acceptedCount"), static_cast<qulonglong>(diag.accepted_count));
   out.insert(QStringLiteral("failedCount"), static_cast<qulonglong>(diag.failed_count));
   out.insert(QStringLiteral("presentedCount"), static_cast<qulonglong>(diag.presented_count));
-  out.insert(QStringLiteral("sessionGeneration"),
+  out.insert(QStringLiteral("imageLoadRequestId"),
              static_cast<qulonglong>(diag.image_load_request_id));
-  out.insert(QStringLiteral("renderGeneration"), static_cast<qulonglong>(diag.render_generation));
-  out.insert(QStringLiteral("viewGeneration"), static_cast<qulonglong>(diag.view_generation));
+  out.insert(QStringLiteral("renderRequestGeneration"),
+             static_cast<qulonglong>(diag.render_generation));
+  out.insert(QStringLiteral("viewRequestGeneration"),
+             static_cast<qulonglong>(diag.view_generation));
   out.insert(QStringLiteral("lastError"), QString::fromUtf8(diag.last_error.c_str()));
   out.insert(QStringLiteral("lastRejectionReason"),
              QString::fromUtf8(diag.last_rejection_reason.c_str()));

@@ -170,27 +170,6 @@ class IEditorHistoryPort {
     return false;
   }
 
-  virtual auto PasteAdjustments(const EditorHistoryGuardHandle& /*guard*/,
-                                const AdjustmentTransferPackage& /*package*/,
-                                std::string /*version_display_name*/,
-                                AdjustmentPasteResult* /*result*/, std::string* error) -> bool {
-    if (error != nullptr) *error = "Editor Paste is not supported by this history port";
-    return false;
-  }
-  virtual auto BeginMerge(const EditorHistoryGuardHandle& /*guard*/,
-                          const AdjustmentTransferPackage& /*package*/,
-                          std::string /*incoming_version_display_name*/,
-                          AdjustmentMergePreview* /*preview*/, std::string* error) -> bool {
-    if (error != nullptr) *error = "Editor Merge is not supported by this history port";
-    return false;
-  }
-  virtual auto CompleteMerge(const EditorHistoryGuardHandle& /*guard*/,
-                             const AdjustmentMergePreview& /*preview*/,
-                             const std::vector<AdjustmentMergeResolution>& /*resolutions*/,
-                             AdjustmentMergeResult* /*result*/, std::string* error) -> bool {
-    if (error != nullptr) *error = "Editor Merge is not supported by this history port";
-    return false;
-  }
   virtual auto CancelMerge(const EditorHistoryGuardHandle& /*guard*/,
                            const AdjustmentMergePreview& /*preview*/, std::string* error) -> bool {
     if (error != nullptr)
@@ -202,8 +181,7 @@ class IEditorHistoryPort {
   /// selection, journal, or adjustment snapshot. The candidate is retained by
   /// the history port until CaptureTransferSaveCheckpoint and
   /// PublishTransferCandidate complete, or DiscardTransferCandidate is called.
-  /// Default fakes retain the command inputs and defer the legacy mutation to
-  /// PublishTransferCandidate.
+  /// Default fakes retain the command inputs for later PublishTransferCandidate.
   virtual auto PreparePaste(const EditorHistoryGuardHandle& /*guard*/,
                             const AdjustmentTransferPackage& package,
                             std::string version_display_name,
@@ -222,17 +200,17 @@ class IEditorHistoryPort {
   /// Build a Merge preview and staged candidate without changing published
   /// history. The preview records its source package and first-parent facts so
   /// stale resolutions can be rejected before any durable work begins.
-  virtual auto PrepareMerge(const EditorHistoryGuardHandle& guard,
+  virtual auto PrepareMerge(const EditorHistoryGuardHandle& /*guard*/,
                             const AdjustmentTransferPackage& package,
-                            std::string incoming_version_display_name,
+                            std::string /*incoming_version_display_name*/,
                             AdjustmentMergePreview* preview,
                             EditorTransferCandidate* candidate, std::string* error) -> bool {
     if (candidate == nullptr) {
       if (error != nullptr) *error = "Merge candidate storage is required";
       return false;
     }
-    if (!BeginMerge(guard, package, std::move(incoming_version_display_name), preview, error)) {
-      return false;
+    if (preview != nullptr) {
+      *preview = {};
     }
     candidate->package = package;
     return true;
@@ -274,17 +252,18 @@ class IEditorHistoryPort {
   }
 
   /// Publish a previously captured candidate after its one durable write has
-  /// completed. The default adapter invokes the legacy synchronous port only
-  /// for test doubles; production ports replace the live graph atomically.
+  /// completed. Ports must replace the live graph atomically; there is no
+  /// synchronous one-shot Paste/Merge fallback.
   virtual auto PublishTransferCandidate(
-      const EditorHistoryGuardHandle& guard, const EditorTransferCandidate& candidate,
-      const AdjustmentMergePreview* preview,
-      const std::vector<AdjustmentMergeResolution>& resolutions, AdjustmentPasteResult* paste,
-      AdjustmentMergeResult* merge, std::string* error) -> bool {
-    if (preview != nullptr) {
-      return CompleteMerge(guard, *preview, resolutions, merge, error);
+      const EditorHistoryGuardHandle& /*guard*/, const EditorTransferCandidate& /*candidate*/,
+      const AdjustmentMergePreview* /*preview*/,
+      const std::vector<AdjustmentMergeResolution>& /*resolutions*/,
+      AdjustmentPasteResult* /*paste*/, AdjustmentMergeResult* /*merge*/,
+      std::string* error) -> bool {
+    if (error != nullptr) {
+      *error = "Transfer candidate publication is not supported by this history port";
     }
-    return PasteAdjustments(guard, candidate.package, candidate.display_name, paste, error);
+    return false;
   }
 
   /// Discard a staged candidate without changing published history.

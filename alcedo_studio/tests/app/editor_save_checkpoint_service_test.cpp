@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 
+#include "app/editor_session_command_queue.hpp"
 #include "support/editor_save_checkpoint_fixture.hpp"
 
 namespace alcedo {
@@ -269,6 +270,7 @@ TEST_F(EditorSaveCheckpointServiceTest, MissingCheckpointStoreFailsAfterDurableJ
   auto tasks            = std::make_shared<test::FakeEditorTaskPort>();
   auto coordinator      = std::make_shared<EditorSaveCheckpointCoordinator>();
   auto thumbnails       = std::make_shared<test::FakeEditorThumbnailPort>();
+  auto executor         = std::make_shared<EditorSessionManualCommandExecutor>();
   journal->async_commit = true;
 
   EditorSaveCheckpointService::Dependencies deps;
@@ -277,6 +279,7 @@ TEST_F(EditorSaveCheckpointServiceTest, MissingCheckpointStoreFailsAfterDurableJ
   deps.save_coordinator = coordinator;
   deps.checkpoint_store = nullptr;
   deps.thumbnails       = thumbnails;
+  deps.command_executor = executor;
   EditorSaveCheckpointService service(std::move(deps));
 
   bool                 done = false;
@@ -295,6 +298,7 @@ TEST_F(EditorSaveCheckpointServiceTest, MissingCheckpointStoreFailsAfterDurableJ
       });
   ASSERT_TRUE(ticket.valid());
   journal->CompleteCommit(true);
+  executor->DrainAll();
   EXPECT_TRUE(done);
   EXPECT_FALSE(result.checkpoint_completed);
   EXPECT_NE(result.error.find("store"), std::string::npos);
@@ -302,6 +306,7 @@ TEST_F(EditorSaveCheckpointServiceTest, MissingCheckpointStoreFailsAfterDurableJ
   EXPECT_FALSE(tasks->ended_success.front());
   EXPECT_EQ(thumbnails->refresh_count, 0);
   service.CancelAndWait();
+  executor->DrainAll();
   coordinator->Shutdown();
 }
 
@@ -322,6 +327,7 @@ TEST_F(EditorSaveCheckpointServiceTest, CapturePointerReachesCheckpointStoreWith
         result = r;
       });
   ASSERT_TRUE(ticket.valid());
+  fixture_.DrainCompletions();
   fixture_.CompleteJournalTruncate(true);
   EXPECT_EQ(fixture_.checkpoint_store().last_capture.get(), capture.get());
   fixture_.CompleteDatabaseWrite(true);

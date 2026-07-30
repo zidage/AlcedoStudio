@@ -13,7 +13,10 @@ Item {
     property var editorSession: null
 
     readonly property bool recoveryPending: !!(editorSession
-                                               && editorSession.hasPendingRecovery)
+                                               && editorSession.actions
+                                               && (editorSession.actions.canRetrySave
+                                                   || editorSession.actions.canDiscardAndContinue
+                                                   || editorSession.actions.canCancelPendingNavigation))
     readonly property string failureDetail: editorSession
                                             ? String(editorSession.lastError || "")
                                             : ""
@@ -70,6 +73,8 @@ Item {
                 objectName: "editorRecoveryRetryButton"
                 text: qsTr("Retry Save")
                 kind: "warning"
+                enabled: !!(root.editorSession && root.editorSession.actions
+                            && root.editorSession.actions.canRetrySave)
                 buttonWidth: appTheme.spaceXl * 5
                 buttonHeight: appTheme.spaceXl * 2 + appTheme.spaceSm
                 buttonRadius: appTheme.controlRadiusSmall
@@ -81,6 +86,8 @@ Item {
                 objectName: "editorRecoveryDiscardButton"
                 text: qsTr("Discard and Continue")
                 kind: "normal"
+                enabled: !!(root.editorSession && root.editorSession.actions
+                            && root.editorSession.actions.canDiscardAndContinue)
                 buttonWidth: appTheme.spaceXl * 9
                 buttonHeight: appTheme.spaceXl * 2 + appTheme.spaceSm
                 buttonRadius: appTheme.controlRadiusSmall
@@ -92,6 +99,8 @@ Item {
                 objectName: "editorRecoveryCancelButton"
                 text: qsTr("Cancel")
                 kind: "normal"
+                enabled: !!(root.editorSession && root.editorSession.actions
+                            && root.editorSession.actions.canCancelPendingNavigation)
                 buttonWidth: appTheme.spaceXl * 4
                 buttonHeight: appTheme.spaceXl * 2 + appTheme.spaceSm
                 buttonRadius: appTheme.controlRadiusSmall

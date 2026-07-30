@@ -93,7 +93,6 @@ enum class EditorSessionQueueState : std::uint8_t {
 /// before reduction; all other fields are immutable command input.
 struct EditorSessionCommand {
   EditorSessionOperationId                operation{};
-  std::uint64_t                           snapshot_revision = 0;
   EditorSessionCommandKind                kind              = EditorSessionCommandKind::OpenImage;
   sl_element_id_t                         element_id        = 0;
   image_id_t                              image_id          = 0;
@@ -107,6 +106,12 @@ struct EditorSessionCommand {
   std::string                             text;
   bool                                    persist_changes = true;
   std::shared_ptr<AdjustmentMergePreview> merge_preview;
+  /// Presentation binding for SetPresentationTarget / SetPresentationSize /
+  /// SetGeometryOverlay. Unused by other command kinds.
+  PresentationSinkId                      presentation_sink_id = 0;
+  int                                     presentation_width   = 0;
+  int                                     presentation_height  = 0;
+  bool                                    geometry_overlay_active = false;
 };
 
 /// Typed worker completion envelope. Payload-specific values are kept as

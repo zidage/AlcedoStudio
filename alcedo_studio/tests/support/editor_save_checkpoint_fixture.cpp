@@ -6,6 +6,8 @@
 
 #include <utility>
 
+#include "app/editor_session_command_queue.hpp"
+
 namespace alcedo::test {
 
 void EditorSaveCheckpointFixture::SetUp() {
@@ -15,25 +17,31 @@ void EditorSaveCheckpointFixture::SetUp() {
   thumbnails_       = std::make_shared<FakeEditorThumbnailPort>();
   history_          = std::make_shared<FakeEditorHistoryPort>();
   coordinator_      = std::make_shared<EditorSaveCheckpointCoordinator>();
+  command_executor_ = std::make_shared<EditorSessionManualCommandExecutor>();
 
   EditorSaveCheckpointService::Dependencies deps;
-  deps.journal          = journal_;
-  deps.checkpoint_store = checkpoint_store_;
-  deps.thumbnails       = thumbnails_;
-  deps.tasks            = tasks_;
-  deps.save_coordinator = coordinator_;
-  service_              = std::make_unique<EditorSaveCheckpointService>(std::move(deps));
+  deps.journal           = journal_;
+  deps.checkpoint_store  = checkpoint_store_;
+  deps.thumbnails        = thumbnails_;
+  deps.tasks             = tasks_;
+  deps.save_coordinator  = coordinator_;
+  deps.command_executor  = command_executor_;
+  service_               = std::make_unique<EditorSaveCheckpointService>(std::move(deps));
 }
 
 void EditorSaveCheckpointFixture::TearDown() {
   if (service_) {
     service_->CancelAndWait();
   }
+  if (command_executor_) {
+    command_executor_->DrainAll();
+  }
   if (coordinator_) {
     coordinator_->Shutdown();
   }
   service_.reset();
   coordinator_.reset();
+  command_executor_.reset();
   history_.reset();
   thumbnails_.reset();
   checkpoint_store_.reset();
@@ -47,6 +55,12 @@ auto EditorSaveCheckpointFixture::MakeCapture() const
     return nullptr;
   }
   return MakeOpaqueSaveCapture();
+}
+
+void EditorSaveCheckpointFixture::DrainCompletions() {
+  if (command_executor_) {
+    command_executor_->DrainAll();
+  }
 }
 
 auto EditorSaveCheckpointFixture::StartCheckpoint(sl_element_id_t         element_id,
@@ -73,7 +87,9 @@ auto EditorSaveCheckpointFixture::StartCheckpoint(sl_element_id_t         elemen
   request.image_load_request_id = ImageLoadRequestId{session_generation};
   request.capture            = MakeCapture();
   request.save_lock          = std::move(save_lock);
-  return service_->Start(std::move(request), std::move(completion));
+  auto ticket = service_->Start(std::move(request), std::move(completion));
+  DrainCompletions();
+  return ticket;
 }
 
 void EditorSaveCheckpointFixture::CompleteJournalTruncate(bool durable, std::string error) {
@@ -84,6 +100,7 @@ void EditorSaveCheckpointFixture::CompleteJournalTruncate(bool durable, std::str
     }
   }
   journal_->CompleteCommit(durable, std::move(error));
+  DrainCompletions();
 }
 
 void EditorSaveCheckpointFixture::CompleteDatabaseWrite(bool materialized, std::string error) {
@@ -94,12 +111,14 @@ void EditorSaveCheckpointFixture::CompleteDatabaseWrite(bool materialized, std::
     }
   }
   checkpoint_store_->CompleteMaterialization(materialized, std::move(error));
+  DrainCompletions();
 }
 
 void EditorSaveCheckpointFixture::CancelAndWait() {
   if (service_) {
     service_->CancelAndWait();
   }
+  DrainCompletions();
 }
 
 }  // namespace alcedo::test

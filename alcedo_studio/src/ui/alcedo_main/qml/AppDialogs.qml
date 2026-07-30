@@ -264,10 +264,10 @@ Item {
 
     DeleteConfirmDialog {
         id: deleteConfirmDialogObj
-        theme: host
-        host: host
+        theme: root.host
+        host: root.host
         blurSource: root.blurSource
-        onCancelled: host.pendingDeleteTargets = []
+        onCancelled: root.host.pendingDeleteTargets = []
         onConfirmed: root.imageActionsController.runDeleteTargets()
     }
 

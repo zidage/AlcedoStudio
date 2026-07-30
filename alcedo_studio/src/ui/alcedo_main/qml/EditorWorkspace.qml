@@ -37,8 +37,14 @@ Item {
                                      && focusedElementId > 0
                                      && focusedImageId > 0
     readonly property bool recoveryPending: !!(editorSession
-                                               && editorSession.hasPendingRecovery)
-    readonly property bool editorControlsEnabled: !!(root.hasImage && !root.recoveryPending)
+                                               && editorSession.actions
+                                               && (editorSession.actions.canRetrySave
+                                                   || editorSession.actions.canDiscardAndContinue
+                                                   || editorSession.actions.canCancelPendingNavigation))
+    readonly property bool editorControlsEnabled: !!(root.hasImage
+                                                     && editorSession
+                                                     && editorSession.actions
+                                                     && editorSession.actions.canEdit)
     readonly property var renderDiagnostics: editorSession ? editorSession.renderDiagnostics : ({})
     readonly property string inflightRenderReason: renderDiagnostics.inflightReason || ""
     readonly property bool adjustmentRenderBusy: editorSession

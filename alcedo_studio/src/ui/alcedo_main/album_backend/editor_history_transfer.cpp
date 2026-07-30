@@ -345,52 +345,6 @@ auto EditorHistoryTransfer::DiscardTransferCandidate(
   return true;
 }
 
-auto EditorHistoryTransfer::PasteAdjustments(const alcedo::EditorHistoryGuardHandle& guard,
-                                             const alcedo::AdjustmentTransferPackage& package,
-                                             std::string version_display_name,
-                                             alcedo::AdjustmentPasteResult* result,
-                                             std::string* error) -> bool {
-  alcedo::EditorTransferCandidate candidate;
-  if (!PreparePaste(guard, package, std::move(version_display_name), result, &candidate, error)) {
-    return false;
-  }
-  if (!PublishTransferCandidate(guard, candidate, nullptr, {}, result, nullptr, error)) {
-    (void)DiscardTransferCandidate(guard, candidate, nullptr);
-    return false;
-  }
-  return true;
-}
-
-auto EditorHistoryTransfer::BeginMerge(const alcedo::EditorHistoryGuardHandle& guard,
-                                       const alcedo::AdjustmentTransferPackage& package,
-                                       std::string incoming_version_display_name,
-                                       alcedo::AdjustmentMergePreview* preview,
-                                       std::string* error) -> bool {
-  alcedo::EditorTransferCandidate candidate;
-  return PrepareMerge(guard, package, std::move(incoming_version_display_name), preview,
-                      &candidate, error);
-}
-
-auto EditorHistoryTransfer::CompleteMerge(
-    const alcedo::EditorHistoryGuardHandle& guard,
-    const alcedo::AdjustmentMergePreview& preview,
-    const std::vector<alcedo::AdjustmentMergeResolution>& resolutions,
-    alcedo::AdjustmentMergeResult* result, std::string* error) -> bool {
-  auto state = state_.EnsureWorkingState(guard.element_id, error);
-  if (!state) return false;
-  auto candidate = FindCandidateForPreview(*state, preview, error);
-  if (!candidate.has_value()) return false;
-  if (!CompleteMergeCandidate(guard, preview, resolutions, &*candidate, result, error)) {
-    return false;
-  }
-  if (!PublishTransferCandidate(guard, *candidate, &preview, resolutions, nullptr, result,
-                                 error)) {
-    (void)DiscardTransferCandidate(guard, *candidate, nullptr);
-    return false;
-  }
-  return true;
-}
-
 auto EditorHistoryTransfer::CancelMerge(const alcedo::EditorHistoryGuardHandle& guard,
                                         const alcedo::AdjustmentMergePreview& preview,
                                         std::string* error) -> bool {

@@ -400,12 +400,13 @@ void EditorSaveCheckpointService::DeliverCompletion(SaveCheckpointCompletion com
   if (!completion) {
     return;
   }
-  if (deps_.command_executor) {
-    deps_.command_executor->Post([completion = std::move(completion),
-                                  result = std::move(result)]() mutable { completion(result); });
+  // CQ5: completions must never run on the service-start / worker stack. Unit
+  // tests inject a manual executor; production injects the session queue adapter.
+  if (!deps_.command_executor) {
     return;
   }
-  completion(result);
+  deps_.command_executor->Post([completion = std::move(completion),
+                                result = std::move(result)]() mutable { completion(result); });
 }
 
 auto EditorSaveCheckpointService::TakePendingSave(

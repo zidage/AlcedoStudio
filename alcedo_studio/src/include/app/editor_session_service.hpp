@@ -360,15 +360,9 @@ class EditorSessionService final : public IEditorSessionBackend {
   }
   void DrainCommandQueueForTests();
 
-  void SetPresentationSinkId(PresentationSinkId sink_id) override {
-    render_.SetPresentationSinkId(sink_id);
-    NotifyChange();
-  }
-  void SetPresentationSize(int width, int height) override {
-    render_.SetPresentationSize(width, height);
-    NotifyChange();
-  }
-  void SetGeometryOverlayActive(bool active) override { render_.SetGeometryOverlayActive(active); }
+  void SetPresentationSinkId(PresentationSinkId sink_id) override;
+  void SetPresentationSize(int width, int height) override;
+  void SetGeometryOverlayActive(bool active) override;
 
   auto Open(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;
   auto Switch(sl_element_id_t element_id, image_id_t image_id) -> EditorSessionResult override;

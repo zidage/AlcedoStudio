@@ -71,6 +71,7 @@ def_library(EditorRhiViewport
         Qt6::OpenGL
         Qt6::ShaderTools
         opencv_core
+    PRIVATE_DEPS AppDiagnostics
 )
 if(ALCEDO_CUDA_ENABLED)
     target_compile_definitions(EditorRhiViewport PUBLIC HAVE_CUDA)

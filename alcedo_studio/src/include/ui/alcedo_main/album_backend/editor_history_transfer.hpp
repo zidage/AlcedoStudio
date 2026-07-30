@@ -21,25 +21,7 @@ class EditorHistoryTransfer {
  public:
   explicit EditorHistoryTransfer(EditorHistoryState& state);
 
-  /// Apply one copied package through the editor's checked-out graph.
-  auto PasteAdjustments(const alcedo::EditorHistoryGuardHandle& guard,
-                        const alcedo::AdjustmentTransferPackage& package,
-                        std::string version_display_name, alcedo::AdjustmentPasteResult* result,
-                        std::string* error) -> bool;
-
-  /// Begin a merge with an incoming adjustment package.
-  auto BeginMerge(const alcedo::EditorHistoryGuardHandle& guard,
-                  const alcedo::AdjustmentTransferPackage& package,
-                  std::string incoming_version_display_name,
-                  alcedo::AdjustmentMergePreview* preview, std::string* error) -> bool;
-
-  /// Complete a merge with the given resolutions.
-  auto CompleteMerge(const alcedo::EditorHistoryGuardHandle& guard,
-                     const alcedo::AdjustmentMergePreview& preview,
-                     const std::vector<alcedo::AdjustmentMergeResolution>& resolutions,
-                     alcedo::AdjustmentMergeResult* result, std::string* error) -> bool;
-
-  /// Cancel an active merge.
+  /// Cancel an active merge preview / staged candidate.
   auto CancelMerge(const alcedo::EditorHistoryGuardHandle& guard,
                    const alcedo::AdjustmentMergePreview& preview, std::string* error) -> bool;
 

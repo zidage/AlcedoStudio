@@ -1636,6 +1636,69 @@ auto EditorSessionService::Shutdown() -> EditorSessionResult {
   return Emit(std::move(result));
 }
 
+void EditorSessionService::SetPresentationSinkId(PresentationSinkId sink_id) {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind                 = EditorSessionCommandKind::SetPresentationTarget;
+    command.presentation_sink_id = sink_id;
+    (void)SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      SetPresentationSinkId(queued.presentation_sink_id);
+      EditorSessionResult accepted;
+      accepted.kind     = EditorSessionResultKind::Accepted;
+      accepted.state    = lifecycle_.state();
+      accepted.identity = lifecycle_.identity();
+      accepted.message  = "Presentation sink updated";
+      // Presentation binding is not a history/operation terminal; notify only.
+      NotifyChange();
+      return accepted;
+    });
+    return;
+  }
+  render_.SetPresentationSinkId(sink_id);
+  NotifyChange();
+}
+
+void EditorSessionService::SetPresentationSize(int width, int height) {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind                = EditorSessionCommandKind::SetPresentationSize;
+    command.presentation_width  = width;
+    command.presentation_height = height;
+    (void)SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      SetPresentationSize(queued.presentation_width, queued.presentation_height);
+      EditorSessionResult accepted;
+      accepted.kind     = EditorSessionResultKind::Accepted;
+      accepted.state    = lifecycle_.state();
+      accepted.identity = lifecycle_.identity();
+      accepted.message  = "Presentation size updated";
+      NotifyChange();
+      return accepted;
+    });
+    return;
+  }
+  render_.SetPresentationSize(width, height);
+  NotifyChange();
+}
+
+void EditorSessionService::SetGeometryOverlayActive(bool active) {
+  if (!reducing_command_) {
+    EditorSessionCommand command;
+    command.kind                    = EditorSessionCommandKind::SetGeometryOverlay;
+    command.geometry_overlay_active = active;
+    (void)SubmitCommand(std::move(command), [this](const EditorSessionCommand& queued) {
+      SetGeometryOverlayActive(queued.geometry_overlay_active);
+      EditorSessionResult accepted;
+      accepted.kind     = EditorSessionResultKind::Accepted;
+      accepted.state    = lifecycle_.state();
+      accepted.identity = lifecycle_.identity();
+      accepted.message  = "Geometry overlay updated";
+      return accepted;
+    });
+    return;
+  }
+  render_.SetGeometryOverlayActive(active);
+}
+
 auto EditorSessionService::RequestViewChange(EditorRenderReason                  reason,
                                              std::optional<ViewportRenderRegion> region)
     -> EditorSessionResult {

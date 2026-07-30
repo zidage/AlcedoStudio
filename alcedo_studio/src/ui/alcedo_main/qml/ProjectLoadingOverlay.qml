@@ -4,6 +4,7 @@ import QtQuick.Layouts
 
 // Project loading overlay shown while a project is opening or launching.
 Item {
+    id: root
     property var theme: null
     property var host: null
     property Item blurSource: null

@@ -2,9 +2,8 @@
 
 Date: 2026-07-29
 
-Status: CQ4 complete — Paste and Merge now use one staged candidate, durable checkpoint,
-publication, and render path verified on 2026-07-29. CQ5 remains blocked for transitional
-path removal and full production qualification.
+Status: CQ5 complete — transitional presentation/transfer/save adapters removed and
+qualification evidence recorded on 2026-07-30. All CQ0-CQ5 checklist items are done.
 
 Primary owner: Alcedo Studio editor session and history architecture.
 
@@ -1249,7 +1248,9 @@ Residual gaps / hand-off to CQ5:
 
 ## Phase CQ5 — Remove transitional paths and qualify production behavior
 
-Status: blocked by CQ4.
+Status: complete — presentation commands reduce through the queue; one-shot Paste/Merge
+history wrappers and inline save completions are gone; QML editor enablement binds
+`editorSession.actions.*`; CQ5 qualification suite and CQ0-CQ4 regressions pass.
 
 ### Purpose
 
@@ -1312,6 +1313,109 @@ timing.
 - the completion record lists exact changed files, call chains, commands, pass/fail/skip totals,
   measurements, and remaining risks.
 
+##### Phase CQ5 completion record (2026-07-30)
+
+**Status:** complete — transitional presentation/transfer/save adapters removed; QML editor
+controls bind projected action decisions; qualification and CQ0-CQ4 regressions pass.
+
+**Primary success call chain:**
+
+```text
+QML bindPresentationViewport / Geometry panel
+  -> EditorSessionController
+  -> EditorSessionService::SetPresentationSinkId|Size|GeometryOverlay
+  -> SubmitCommand(SetPresentation*)
+  -> owner-thread render controller update
+  -> NotifyChange (no results_ terminal)
+
+QML Paste / Merge
+  -> SubmitCommand(ApplyPaste|CompleteMerge)
+  -> PreparePaste|CompleteMergeCandidate
+  -> one CaptureTransferSaveCheckpoint / materialization
+  -> PublishTransferCandidate
+  -> one RouteInitialRender
+
+QML enabled: editorSession.actions.canEdit / canRetrySave
+  -> EditorActionAvailabilityModel
+  -> EditorActionPolicy::EvaluateAll
+```
+
+**Primary failure call chain:**
+
+```text
+EditorSaveCheckpointService without command_executor
+  -> DeliverCompletion drops the completion (no inline session re-entry)
+  -> caller observes no terminal callback / invalid ticket on start failure
+
+Transfer materialization failure
+  -> posted SaveCheckpointFinished
+  -> DiscardTransferCandidate
+  -> RetainedImageFailure; published graph and render schedule unchanged
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `PresentationCommandsReduceThroughQueueWithoutDirectBypass` | `EditorSessionCq5QualificationTest` | PASS |
+| `DirtyPastePerformsOnePublicationAndOneFinalRender` | `EditorSessionCq5QualificationTest` | PASS |
+| `SaveCompletionWithoutExecutorIsDropped` | `EditorSessionCq5QualificationTest` | PASS |
+| `QmlAndPublicApiOmitBannedGenerationAndSnapshotRevisionTokens` | `EditorSessionCq5QualificationTest` | PASS |
+| `HistoryTransferOmitsOneShotPasteMergeWrappers` | `EditorSessionCq5QualificationTest` | PASS |
+| CQ0-CQ4 baseline (16) | `EditorSessionCommandQueueBaselineTest` | PASS 16/16 |
+| CQ3 policy (10) | `EditorSessionActionPolicyCq3Test` | PASS 10/10 |
+| Save checkpoint (14) | `EditorSaveCheckpointServiceTest` | PASS 14/14 |
+| History port (24) | `EditorSessionHistoryPortTest` | PASS 24/24 |
+| Navigation / lifecycle / edit / facade | session app suites | PASS 23+18+8+4 |
+
+Commands:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target EditorSessionCq5QualificationTest EditorSessionCommandQueueBaselineTest EditorSessionActionPolicyCq3Test EditorSaveCheckpointServiceTest EditorSessionHistoryPortTest EditorSessionNavigationControllerTest EditorSessionLifecycleTest EditorSessionEditControllerTest EditorSessionServiceFacadeTest --parallel 4
+build\debug\alcedo_studio\tests\app\EditorSessionCq5QualificationTest_runtime\EditorSessionCq5QualificationTest.exe
+build\debug\alcedo_studio\tests\app\EditorSessionCommandQueueBaselineTest_runtime\EditorSessionCommandQueueBaselineTest.exe
+build\debug\alcedo_studio\tests\app\EditorSessionActionPolicyCq3Test_runtime\EditorSessionActionPolicyCq3Test.exe
+build\debug\alcedo_studio\tests\app\EditorSaveCheckpointServiceTest_runtime\EditorSaveCheckpointServiceTest.exe
+build\debug\alcedo_studio\tests\ui\EditorSessionHistoryPortTest_runtime\EditorSessionHistoryPortTest.exe
+build\debug\alcedo_studio\tests\app\EditorSessionNavigationControllerTest_runtime\EditorSessionNavigationControllerTest.exe
+build\debug\alcedo_studio\tests\app\EditorSessionLifecycleTest_runtime\EditorSessionLifecycleTest.exe
+build\debug\alcedo_studio\tests\app\EditorSessionEditControllerTest_runtime\EditorSessionEditControllerTest.exe
+build\debug\alcedo_studio\tests\app\EditorSessionServiceFacadeTest_runtime\EditorSessionServiceFacadeTest.exe
+```
+
+Suite totals: **CQ5 5/5, baseline 16/16, CQ3 10/10, save 14/14, history 24/24, nav 23/23,
+lifecycle 18/18, edit 8/8, facade 4/4 = 122/122 PASS**. CTest discovery remains blocked by the
+pre-existing headless `WorkspaceShellTest` issue; binaries were run directly.
+
+**Checklist / exit condition:**
+
+- [x] Presentation sink/size/geometry commands reduce through the queue (no direct bypass).
+- [x] One-shot history-port Paste/Merge wrappers and default Publish→legacy adapter removed.
+- [x] Inline save-completion path without a command executor removed; fixtures inject a manual
+  executor and drain.
+- [x] Editor QML controls/recovery bind `editorSession.actions.*` (not `hasPendingRecovery` /
+  independent recovery mirrors).
+- [x] Public diagnostics omit `sessionGeneration` / `renderGeneration` / `viewGeneration` keys.
+- [x] CQ0-CQ4 suites pass without compatibility mode.
+- [x] CQ5 qualification suite covers presentation queue routing, dirty Paste publication, save
+  executor requirement, and static transitional-path bans.
+
+**LOC note (grill-code-review):** `editor_session_service.cpp` remains ~1786 LOC as the CQ1
+facade (presentation commands added; no new god-context split). New CQ5 test file ~222 LOC.
+Transfer header dropped to ~63 LOC after one-shot removal. No new file near the 1000-LOC split
+threshold besides the existing facade.
+
+**Remaining gaps:**
+
+- Full QML-shell/GPU e2e (`WorkspaceShellTest`, real first-frame under Qt executor) remains
+  environmentally blocked headless, as in CQ1-CQ4.
+- Album-library `PasteViaMiniGit` / `InteractionPolicy` paste gates remain product-level
+  batch-transfer adapters (outside the editor-session command owner), not editor CQ5 paths.
+- Internal worker request counters (`render_generation` / `view_generation` inside the render
+  controller) remain for request correlation; they are not public QML properties.
+- ThreadSanitizer and command-latency p95 measurements remain platform qualification items on a
+  supported non-MSVC configuration.
+
 ## Phase dependency order
 
 The order is mandatory:
@@ -1336,7 +1440,7 @@ either order before CQ5.
 - [x] CQ2 removes command-thread render-lock waits.
 - [x] CQ3 derives editor action decisions from command admission and removes session generations.
 - [x] CQ4 gives Paste and Merge one durable publication path.
-- [ ] CQ5 removes transitional code and qualifies the production sequence.
+- [x] CQ5 removes transitional code and qualifies the production sequence.
 
 The work is complete only when all boxes are checked and no editor-session behavior depends on
 callback timing, recursive locking, generation comparison, or independently sampled QML action

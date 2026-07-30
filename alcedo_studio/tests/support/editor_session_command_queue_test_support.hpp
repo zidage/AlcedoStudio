@@ -223,42 +223,53 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
     return FakeEditorHistoryPort::CheckoutVersion(guard, version_id, error);
   }
 
-  auto PasteAdjustments(const EditorHistoryGuardHandle& guard,
-                        const AdjustmentTransferPackage& /*package*/,
-                        std::string /*version_display_name*/, AdjustmentPasteResult* result,
-                        std::string* error) -> bool override {
-    record("version_created");
-    if (result != nullptr) {
-      result->pasted = true;
-    }
+  auto PreparePaste(const EditorHistoryGuardHandle& guard,
+                    const AdjustmentTransferPackage& /*package*/,
+                    std::string /*version_display_name*/, AdjustmentPasteResult* result,
+                    EditorTransferCandidate* candidate, std::string* error) -> bool override {
     (void)guard;
     (void)error;
+    if (candidate == nullptr) {
+      return false;
+    }
+    candidate->candidate_id = ++next_candidate_id_;
+    candidate->package      = {};
+    if (result != nullptr) {
+      *result = {};
+    }
     return true;
   }
 
-  auto BeginMerge(const EditorHistoryGuardHandle& guard,
-                  const AdjustmentTransferPackage& /*package*/,
-                  std::string /*incoming_version_display_name*/, AdjustmentMergePreview* preview,
-                  std::string* error) -> bool override {
+  auto PrepareMerge(const EditorHistoryGuardHandle& guard,
+                    const AdjustmentTransferPackage& /*package*/,
+                    std::string /*incoming_version_display_name*/,
+                    AdjustmentMergePreview* preview, EditorTransferCandidate* candidate,
+                    std::string* error) -> bool override {
     (void)guard;
     (void)error;
+    if (candidate == nullptr) {
+      return false;
+    }
+    candidate->candidate_id = ++next_candidate_id_;
     if (preview != nullptr) {
       preview->has_conflicts       = false;
       preview->incoming_version_id = Hash128{0x11111111ULL, 0x22222222ULL};
+      preview->preview_id          = MergePreviewId{1};
     }
     return true;
   }
 
-  auto CompleteMerge(const EditorHistoryGuardHandle& guard,
-                     const AdjustmentMergePreview& /*preview*/,
-                     const std::vector<AdjustmentMergeResolution>& /*resolutions*/,
-                     AdjustmentMergeResult* result, std::string* error) -> bool override {
-    record("merge_committed");
-    if (result != nullptr) {
-      result->merged = true;
-    }
+  auto CompleteMergeCandidate(
+      const EditorHistoryGuardHandle& guard, const AdjustmentMergePreview& /*preview*/,
+      const std::vector<AdjustmentMergeResolution>& /*resolutions*/,
+      EditorTransferCandidate* candidate, AdjustmentMergeResult* result,
+      std::string* error) -> bool override {
     (void)guard;
     (void)error;
+    (void)candidate;
+    if (result != nullptr) {
+      *result = {};
+    }
     return true;
   }
 
@@ -268,20 +279,31 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
   }
 
   auto PublishTransferCandidate(
-      const EditorHistoryGuardHandle& guard, const EditorTransferCandidate& candidate,
+      const EditorHistoryGuardHandle& guard, const EditorTransferCandidate& /*candidate*/,
       const AdjustmentMergePreview* preview,
-      const std::vector<AdjustmentMergeResolution>& resolutions, AdjustmentPasteResult* paste,
+      const std::vector<AdjustmentMergeResolution>& /*resolutions*/, AdjustmentPasteResult* paste,
       AdjustmentMergeResult* merge, std::string* error) -> bool override {
     ++transfer_publication_count;
-    const bool published = IEditorHistoryPort::PublishTransferCandidate(
-        guard, candidate, preview, resolutions, paste, merge, error);
-    if (published) {
-      dirty_journal = false;
+    (void)guard;
+    (void)error;
+    if (preview != nullptr) {
+      record("merge_committed");
+      if (merge != nullptr) {
+        merge->merged = true;
+      }
+    } else {
+      record("version_created");
+      if (paste != nullptr) {
+        paste->pasted = true;
+      }
     }
-    return published;
+    dirty_journal = false;
+    return true;
   }
 
  private:
+  std::uint64_t next_candidate_id_ = 0;
+
   void record(std::string event) {
     if (event_log != nullptr) {
       event_log->push_back(std::move(event));

@@ -83,18 +83,6 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
                      std::string* error) -> bool override;
   auto RemoveVersion(const alcedo::EditorHistoryGuardHandle& guard,
                      const alcedo::Hash128& version_id, std::string* error) -> bool override;
-  auto PasteAdjustments(const alcedo::EditorHistoryGuardHandle& guard,
-                        const alcedo::AdjustmentTransferPackage& package,
-                        std::string version_display_name, alcedo::AdjustmentPasteResult* result,
-                        std::string* error) -> bool override;
-  auto BeginMerge(const alcedo::EditorHistoryGuardHandle& guard,
-                  const alcedo::AdjustmentTransferPackage& package,
-                  std::string incoming_version_display_name,
-                  alcedo::AdjustmentMergePreview* preview, std::string* error) -> bool override;
-  auto CompleteMerge(const alcedo::EditorHistoryGuardHandle& guard,
-                     const alcedo::AdjustmentMergePreview& preview,
-                     const std::vector<alcedo::AdjustmentMergeResolution>& resolutions,
-                     alcedo::AdjustmentMergeResult* result, std::string* error) -> bool override;
   auto CancelMerge(const alcedo::EditorHistoryGuardHandle& guard,
                    const alcedo::AdjustmentMergePreview& preview, std::string* error)
       -> bool override;

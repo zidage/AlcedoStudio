@@ -16,6 +16,7 @@
 
 #include "app/editor_save_checkpoint_coordinator.hpp"
 #include "app/editor_save_checkpoint_service.hpp"
+#include "app/editor_session_command_queue.hpp"
 #include "support/editor_session_test_ports.hpp"
 
 namespace alcedo::test {
@@ -61,7 +62,13 @@ class EditorSaveCheckpointFixture {
   /// Stop accepting new callbacks and wait for in-flight save work to drain.
   void CancelAndWait();
 
+  /// Drain posted save completions on the injected command executor.
+  void DrainCompletions();
+
   [[nodiscard]] auto service() -> EditorSaveCheckpointService& { return *service_; }
+  [[nodiscard]] auto command_executor() -> EditorSessionManualCommandExecutor& {
+    return *command_executor_;
+  }
   [[nodiscard]] auto tasks() -> FakeEditorTaskPort& { return *tasks_; }
   [[nodiscard]] auto journal() -> FakeEditorJournalPort& { return *journal_; }
   [[nodiscard]] auto checkpoint_store() -> FakeEditorCheckpointStore& {
@@ -89,6 +96,7 @@ class EditorSaveCheckpointFixture {
   std::shared_ptr<FakeEditorThumbnailPort>           thumbnails_;
   std::shared_ptr<FakeEditorHistoryPort>             history_;
   std::shared_ptr<EditorSaveCheckpointCoordinator>   coordinator_;
+  std::shared_ptr<EditorSessionManualCommandExecutor> command_executor_;
   std::unique_ptr<EditorSaveCheckpointService>       service_;
 };
 

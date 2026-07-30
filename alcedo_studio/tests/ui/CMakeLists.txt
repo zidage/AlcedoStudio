@@ -1,6 +1,75 @@
 # Windows lensfun/duckdb runtime fixup for every EXECUTABLE in this directory.
 include("${ALCEDO_TEST_ROOT}/cmake/AlcedoTestRegistration.cmake")
 
+# Headless QApplication tests set QT_QPA_PLATFORM=offscreen. Isolated
+# *_runtime/ dirs only contain applocal DLLs, so QLibraryInfo resolves plugins to
+# <exe>/plugins (empty). Stamp the real Qt platforms path into every target in
+# this directory and deploy qoffscreen into each runtime as a fallback.
+get_filename_component(ALCEDO_QT_PLATFORMS_DIR
+  "${Qt6_DIR}/../../../plugins/platforms" ABSOLUTE)
+get_filename_component(ALCEDO_QT_QML_IMPORT_DIR
+  "${Qt6_DIR}/../../../qml" ABSOLUTE)
+if(NOT EXISTS "${ALCEDO_QT_PLATFORMS_DIR}")
+  message(WARNING
+    "alcedo ui tests: Qt platforms dir missing at ${ALCEDO_QT_PLATFORMS_DIR}; "
+    "WorkspaceShellTest and other offscreen QPA suites will exit 3 at startup.")
+endif()
+add_compile_definitions(
+  ALCEDO_QT_PLUGIN_PATH="${ALCEDO_QT_PLATFORMS_DIR}"
+  ALCEDO_QT_QML_IMPORT_PATH="${ALCEDO_QT_QML_IMPORT_DIR}"
+)
+
+function(alcedo_deploy_qt_offscreen_platform_plugin target_name)
+  if(NOT WIN32 OR NOT TARGET ${target_name})
+    return()
+  endif()
+  get_target_property(_done ${target_name} ALCEDO_QT_OFFSCREEN_PLUGIN_DEPLOYED)
+  if(_done)
+    return()
+  endif()
+  set_target_properties(${target_name} PROPERTIES ALCEDO_QT_OFFSCREEN_PLUGIN_DEPLOYED TRUE)
+
+  set(_debug_plugin "${ALCEDO_QT_PLATFORMS_DIR}/qoffscreend.dll")
+  set(_release_plugin "${ALCEDO_QT_PLATFORMS_DIR}/qoffscreen.dll")
+  if(NOT EXISTS "${_debug_plugin}" AND NOT EXISTS "${_release_plugin}")
+    return()
+  endif()
+
+  add_custom_command(TARGET ${target_name} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:${target_name}>/plugins/platforms"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<IF:$<CONFIG:Debug>,${_debug_plugin},${_release_plugin}>"
+            "$<TARGET_FILE_DIR:${target_name}>/plugins/platforms/"
+    COMMENT "Alcedo: deploy Qt offscreen platform plugin for ${target_name}"
+    VERBATIM)
+endfunction()
+
+function(alcedo_finalize_current_ui_test_qt_offscreen_plugins)
+  get_property(_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+  foreach(_t IN LISTS _targets)
+    if(TARGET "${_t}")
+      get_target_property(_type "${_t}" TYPE)
+      if(_type STREQUAL "EXECUTABLE")
+        alcedo_deploy_qt_offscreen_platform_plugin("${_t}")
+      endif()
+    endif()
+  endforeach()
+endfunction()
+
+cmake_language(DEFER CALL alcedo_finalize_current_ui_test_qt_offscreen_plugins)
+
+# Prefer PRE_TEST discovery for every UI gtest target. POST_BUILD discovery runs
+# each EXE at generate/test-list time; a single stale offscreen-plugin binary
+# (exit 3 / hang) blocks `ctest -N` for the whole ui/ tree.
+set(CMAKE_GTEST_DISCOVER_TESTS_DISCOVERY_MODE PRE_TEST)
+
+function(alcedo_ui_gtest_discover_tests target_name)
+  gtest_discover_tests(${target_name} ${ARGN}
+    DISCOVERY_MODE PRE_TEST
+    DISCOVERY_TIMEOUT 120)
+endfunction()
+
 # Macro to reduce boilerplate for UI test targets.
 macro(def_ui_test TARGET_NAME SOURCE_FILE)
     add_executable(${TARGET_NAME}
@@ -21,10 +90,10 @@ macro(def_ui_test TARGET_NAME SOURCE_FILE)
     )
     include(GoogleTest)
     if(NOT "${ARGN}" STREQUAL "")
-        gtest_discover_tests(${TARGET_NAME} TEST_PREFIX "${TARGET_NAME}."
+        alcedo_ui_gtest_discover_tests(${TARGET_NAME} TEST_PREFIX "${TARGET_NAME}."
             PROPERTIES LABELS ${ARGN})
     else()
-        gtest_discover_tests(${TARGET_NAME} TEST_PREFIX "${TARGET_NAME}.")
+        alcedo_ui_gtest_discover_tests(${TARGET_NAME} TEST_PREFIX "${TARGET_NAME}.")
     endif()
 endmacro()
 
@@ -60,7 +129,7 @@ set_target_properties(EditorSessionHistoryPortTest PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
   RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
   RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/alcedo_studio/tests")
-gtest_discover_tests(EditorSessionHistoryPortTest
+alcedo_ui_gtest_discover_tests(EditorSessionHistoryPortTest
   TEST_PREFIX "EditorSessionHistoryPortTest."
   PROPERTIES LABELS "editor_history;editor_session;ci_core_flow")
 # Lands in the shared tests/ dir; still overwrite vcpkg applocal lensfun there.
@@ -85,7 +154,7 @@ set_target_properties(EditorSessionCheckpointStoreTest PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
   RUNTIME_OUTPUT_DIRECTORY_DEBUG "${CMAKE_BINARY_DIR}/alcedo_studio/tests"
   RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_BINARY_DIR}/alcedo_studio/tests")
-gtest_discover_tests(EditorSessionCheckpointStoreTest
+alcedo_ui_gtest_discover_tests(EditorSessionCheckpointStoreTest
   TEST_PREFIX "EditorSessionCheckpointStoreTest."
   PROPERTIES LABELS "editor_history;editor_session;ci_core_flow")
 alcedo_register_test_target(EditorSessionCheckpointStoreTest ui)
@@ -97,7 +166,7 @@ target_include_directories(EditorSessionThumbnailPortTest PUBLIC ${ALCEDO_INCLUD
 target_link_libraries(EditorSessionThumbnailPortTest
   AlbumBackendLib
   GTest::gtest_main)
-gtest_discover_tests(EditorSessionThumbnailPortTest
+alcedo_ui_gtest_discover_tests(EditorSessionThumbnailPortTest
   TEST_PREFIX "EditorSessionThumbnailPortTest."
   PROPERTIES LABELS "editor_session")
 alcedo_register_test_target(EditorSessionThumbnailPortTest ui)
@@ -110,7 +179,7 @@ target_include_directories(EditorSessionJournalWriterPortTest PUBLIC ${ALCEDO_IN
 target_link_libraries(EditorSessionJournalWriterPortTest
   AlbumBackendLib
   GTest::gtest_main)
-gtest_discover_tests(EditorSessionJournalWriterPortTest
+alcedo_ui_gtest_discover_tests(EditorSessionJournalWriterPortTest
   TEST_PREFIX "EditorSessionJournalWriterPortTest."
   PROPERTIES LABELS "editor_session")
 alcedo_register_test_target(EditorSessionJournalWriterPortTest ui)
@@ -123,7 +192,7 @@ target_link_libraries(EditorSessionPipelinePortTest
   AlbumBackendLib
   EditHistory
   GTest::gtest_main)
-gtest_discover_tests(EditorSessionPipelinePortTest
+alcedo_ui_gtest_discover_tests(EditorSessionPipelinePortTest
   TEST_PREFIX "EditorSessionPipelinePortTest."
   PROPERTIES LABELS "editor_session")
 alcedo_register_test_target(EditorSessionPipelinePortTest ui)
@@ -134,7 +203,7 @@ target_include_directories(EditorSessionTaskPortTest PUBLIC ${ALCEDO_INCLUDE_DIR
 target_link_libraries(EditorSessionTaskPortTest
   AlbumBackendLib
   GTest::gtest_main)
-gtest_discover_tests(EditorSessionTaskPortTest
+alcedo_ui_gtest_discover_tests(EditorSessionTaskPortTest
   TEST_PREFIX "EditorSessionTaskPortTest."
   PROPERTIES LABELS "editor_session")
 alcedo_register_test_target(EditorSessionTaskPortTest ui)
@@ -145,7 +214,7 @@ target_include_directories(EditorSessionRenderSchedulerPortTest PUBLIC ${ALCEDO_
 target_link_libraries(EditorSessionRenderSchedulerPortTest
   AlbumBackendLib
   GTest::gtest_main)
-gtest_discover_tests(EditorSessionRenderSchedulerPortTest
+alcedo_ui_gtest_discover_tests(EditorSessionRenderSchedulerPortTest
   TEST_PREFIX "EditorSessionRenderSchedulerPortTest."
   PROPERTIES LABELS "editor_session")
 alcedo_register_test_target(EditorSessionRenderSchedulerPortTest ui)
@@ -201,7 +270,7 @@ target_link_libraries(EditorRhiContractsTest PRIVATE
     GTest::gtest_main
     Qt6::Core
 )
-gtest_discover_tests(EditorRhiContractsTest TEST_PREFIX "EditorRhiContractsTest.")
+alcedo_ui_gtest_discover_tests(EditorRhiContractsTest TEST_PREFIX "EditorRhiContractsTest.")
 alcedo_register_test_target(EditorRhiContractsTest ui)
 
 # Phase 0: maintained GPU presentation harness (manual / CI GPU workers).
@@ -291,7 +360,7 @@ target_link_libraries(GlobalSearchDialogQmlTest
 target_compile_definitions(GlobalSearchDialogQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(GlobalSearchDialogQmlTest TEST_PREFIX "GlobalSearchDialogQmlTest.")
+alcedo_ui_gtest_discover_tests(GlobalSearchDialogQmlTest TEST_PREFIX "GlobalSearchDialogQmlTest.")
 alcedo_register_test_target(GlobalSearchDialogQmlTest ui)
 
 add_executable(MainQmlWorkflowTest
@@ -322,7 +391,7 @@ target_link_libraries(MainQmlWorkflowTest
 target_compile_definitions(MainQmlWorkflowTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(MainQmlWorkflowTest TEST_PREFIX "MainQmlWorkflowTest.")
+alcedo_ui_gtest_discover_tests(MainQmlWorkflowTest TEST_PREFIX "MainQmlWorkflowTest.")
 alcedo_register_test_target(MainQmlWorkflowTest ui)
 
 # Phase 6C-5 Phase 6B: QML entry surfaces blocked during save and recovered after.
@@ -355,7 +424,7 @@ target_link_libraries(EditorCheckpointQmlIntegrationTest
 target_compile_definitions(EditorCheckpointQmlIntegrationTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(EditorCheckpointQmlIntegrationTest
+alcedo_ui_gtest_discover_tests(EditorCheckpointQmlIntegrationTest
     TEST_PREFIX "EditorCheckpointQmlIntegrationTest."
     PROPERTIES LABELS "workspace_qml;interaction_policy")
 alcedo_register_test_target(EditorCheckpointQmlIntegrationTest ui)
@@ -388,7 +457,7 @@ target_link_libraries(WorkspaceShellTest
 target_compile_definitions(WorkspaceShellTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(WorkspaceShellTest TEST_PREFIX "WorkspaceShellTest."
+alcedo_ui_gtest_discover_tests(WorkspaceShellTest TEST_PREFIX "WorkspaceShellTest."
   PROPERTIES LABELS "workspace_qml")
 alcedo_register_test_target(WorkspaceShellTest ui)
 
@@ -420,12 +489,9 @@ target_link_libraries(EditorFilmstripQmlTest
         Qt6::Widgets
 )
 target_compile_definitions(EditorFilmstripQmlTest
-    PRIVATE
-        ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
-        ALCEDO_QT_PLUGIN_PATH="${Qt6_DIR}/../../../plugins/platforms"
-        ALCEDO_QT_QML_IMPORT_PATH="${Qt6_DIR}/../../../qml"
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(EditorFilmstripQmlTest
+alcedo_ui_gtest_discover_tests(EditorFilmstripQmlTest
     TEST_PREFIX "EditorFilmstripQmlTest."
     PROPERTIES LABELS "workspace_qml;editor_filmstrip"
 )
@@ -451,7 +517,7 @@ target_link_libraries(EditorAdjustmentModelTest
     Qt6::Test
     Qt6::Widgets
 )
-gtest_discover_tests(EditorAdjustmentModelTest TEST_PREFIX "EditorAdjustmentModelTest.")
+alcedo_ui_gtest_discover_tests(EditorAdjustmentModelTest TEST_PREFIX "EditorAdjustmentModelTest.")
 alcedo_register_test_target(EditorAdjustmentModelTest ui)
 
 # Phase 6A: shared QML adjustment controls. Loads the controls from source via
@@ -484,7 +550,7 @@ target_link_libraries(EditorAdjustmentControlQmlTest
 target_compile_definitions(EditorAdjustmentControlQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(EditorAdjustmentControlQmlTest TEST_PREFIX "EditorAdjustmentControlQmlTest.")
+alcedo_ui_gtest_discover_tests(EditorAdjustmentControlQmlTest TEST_PREFIX "EditorAdjustmentControlQmlTest.")
 alcedo_register_test_target(EditorAdjustmentControlQmlTest ui)
 
 # Phase 7A / Phase 6: Versions panel (inline draft, outline selection, trash).
@@ -523,7 +589,7 @@ target_link_libraries(EditorVersionsPanelQmlTest
 target_compile_definitions(EditorVersionsPanelQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(EditorVersionsPanelQmlTest
+alcedo_ui_gtest_discover_tests(EditorVersionsPanelQmlTest
     TEST_PREFIX "EditorVersionsPanelQmlTest."
     PROPERTIES LABELS "workspace_qml;editor_history;editor_versions")
 alcedo_register_test_target(EditorVersionsPanelQmlTest ui)
@@ -554,7 +620,7 @@ target_link_libraries(EditorHistoryTransactionsPanelQmlTest
 target_compile_definitions(EditorHistoryTransactionsPanelQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(EditorHistoryTransactionsPanelQmlTest
+alcedo_ui_gtest_discover_tests(EditorHistoryTransactionsPanelQmlTest
     TEST_PREFIX "EditorHistoryTransactionsPanelQmlTest."
     PROPERTIES LABELS "workspace_qml;editor_history")
 alcedo_register_test_target(EditorHistoryTransactionsPanelQmlTest ui)
@@ -585,7 +651,7 @@ target_link_libraries(EditorHistoryVersionsRailLifecycleQmlTest
 target_compile_definitions(EditorHistoryVersionsRailLifecycleQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(EditorHistoryVersionsRailLifecycleQmlTest
+alcedo_ui_gtest_discover_tests(EditorHistoryVersionsRailLifecycleQmlTest
     TEST_PREFIX "EditorHistoryVersionsRailLifecycleQmlTest."
     PROPERTIES LABELS "workspace_qml;editor_history;editor_versions")
 alcedo_register_test_target(EditorHistoryVersionsRailLifecycleQmlTest ui)
@@ -606,7 +672,7 @@ target_link_libraries(EditorScopeControllerTest
         GTest::gtest
         Qt6::Core
 )
-gtest_discover_tests(EditorScopeControllerTest
+alcedo_ui_gtest_discover_tests(EditorScopeControllerTest
     TEST_PREFIX "EditorScopeControllerTest."
     PROPERTIES LABELS "workspace_qml;editor_scope")
 alcedo_register_test_target(EditorScopeControllerTest ui)
@@ -641,7 +707,7 @@ target_link_libraries(EditorAdjustmentSnapshotQmlTest
 target_compile_definitions(EditorAdjustmentSnapshotQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(EditorAdjustmentSnapshotQmlTest
+alcedo_ui_gtest_discover_tests(EditorAdjustmentSnapshotQmlTest
     TEST_PREFIX "EditorAdjustmentSnapshotQmlTest.")
 alcedo_register_test_target(EditorAdjustmentSnapshotQmlTest ui)
 
@@ -675,7 +741,7 @@ target_link_libraries(EditorDisplayTransformSnapshotQmlTest
 target_compile_definitions(EditorDisplayTransformSnapshotQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(EditorDisplayTransformSnapshotQmlTest
+alcedo_ui_gtest_discover_tests(EditorDisplayTransformSnapshotQmlTest
     TEST_PREFIX "EditorDisplayTransformSnapshotQmlTest.")
 alcedo_register_test_target(EditorDisplayTransformSnapshotQmlTest ui)
 
@@ -698,7 +764,7 @@ target_link_libraries(EditorGeometryMathTest
     Qt6::Test
     Qt6::Widgets
 )
-gtest_discover_tests(EditorGeometryMathTest TEST_PREFIX "EditorGeometryMathTest.")
+alcedo_ui_gtest_discover_tests(EditorGeometryMathTest TEST_PREFIX "EditorGeometryMathTest.")
 alcedo_register_test_target(EditorGeometryMathTest ui)
 
 # Phase 6F: Geometry panel snapshot, overlay synchronization, and patch shape.
@@ -730,7 +796,7 @@ target_link_libraries(EditorGeometryPanelQmlTest
 target_compile_definitions(EditorGeometryPanelQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(EditorGeometryPanelQmlTest
+alcedo_ui_gtest_discover_tests(EditorGeometryPanelQmlTest
     TEST_PREFIX "EditorGeometryPanelQmlTest."
     PROPERTIES LABELS "workspace_qml;geometry_panel")
 alcedo_register_test_target(EditorGeometryPanelQmlTest ui)
@@ -765,7 +831,7 @@ target_link_libraries(EditorRawDecodePanelQmlTest
 target_compile_definitions(EditorRawDecodePanelQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(EditorRawDecodePanelQmlTest
+alcedo_ui_gtest_discover_tests(EditorRawDecodePanelQmlTest
     TEST_PREFIX "EditorRawDecodePanelQmlTest."
     PROPERTIES LABELS "workspace_qml;raw_decode_panel")
 alcedo_register_test_target(EditorRawDecodePanelQmlTest ui)
@@ -786,7 +852,7 @@ target_link_libraries(EditorGeometryOverlayDraftRoutingTest
         Qt6::Gui
         Qt6::Test
 )
-gtest_discover_tests(EditorGeometryOverlayDraftRoutingTest
+alcedo_ui_gtest_discover_tests(EditorGeometryOverlayDraftRoutingTest
     TEST_PREFIX "EditorGeometryOverlayDraftRoutingTest."
     PROPERTIES LABELS "geometry_overlay;interaction")
 alcedo_register_test_target(EditorGeometryOverlayDraftRoutingTest ui)
@@ -823,7 +889,7 @@ target_link_libraries(EditorAdjustmentTransferRealProjectE2eTest
 target_compile_definitions(EditorAdjustmentTransferRealProjectE2eTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(EditorAdjustmentTransferRealProjectE2eTest
+alcedo_ui_gtest_discover_tests(EditorAdjustmentTransferRealProjectE2eTest
     TEST_PREFIX "EditorAdjustmentTransferRealProjectE2eTest."
     PROPERTIES LABELS "workspace_qml;real_project")
 alcedo_register_test_target(EditorAdjustmentTransferRealProjectE2eTest ui)
@@ -855,7 +921,7 @@ target_link_libraries(EditorWorkspaceNavigationQmlTest
 target_compile_definitions(EditorWorkspaceNavigationQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(EditorWorkspaceNavigationQmlTest
+alcedo_ui_gtest_discover_tests(EditorWorkspaceNavigationQmlTest
     TEST_PREFIX "EditorWorkspaceNavigationQmlTest."
     PROPERTIES LABELS "workspace_qml"
 )
@@ -886,7 +952,7 @@ target_link_libraries(EditorAdjustmentTransferActionsQmlTest
 target_compile_definitions(EditorAdjustmentTransferActionsQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(EditorAdjustmentTransferActionsQmlTest
+alcedo_ui_gtest_discover_tests(EditorAdjustmentTransferActionsQmlTest
     TEST_PREFIX "EditorAdjustmentTransferActionsQmlTest."
     PROPERTIES LABELS "workspace_qml"
 )
@@ -911,7 +977,7 @@ target_link_libraries(EditorToneCurveModelTest
     Qt6::Test
     Qt6::Widgets
 )
-gtest_discover_tests(EditorToneCurveModelTest TEST_PREFIX "EditorToneCurveModelTest.")
+alcedo_ui_gtest_discover_tests(EditorToneCurveModelTest TEST_PREFIX "EditorToneCurveModelTest.")
 alcedo_register_test_target(EditorToneCurveModelTest ui)
 
 # Phase 6B: pure tone-curve scene geometry (no QQuickWindow / GPU).
@@ -933,7 +999,7 @@ target_link_libraries(EditorToneCurveGeometryTest
     Qt6::Test
     Qt6::Widgets
 )
-gtest_discover_tests(EditorToneCurveGeometryTest TEST_PREFIX "EditorToneCurveGeometryTest.")
+alcedo_ui_gtest_discover_tests(EditorToneCurveGeometryTest TEST_PREFIX "EditorToneCurveGeometryTest.")
 alcedo_register_test_target(EditorToneCurveGeometryTest ui)
 
 # Phase 6D: Look panel typed models (WB / HSL / CDL / LUT) — no QML/GPU.
@@ -955,7 +1021,7 @@ target_link_libraries(EditorLookModelTest
     Qt6::Test
     Qt6::Widgets
 )
-gtest_discover_tests(EditorLookModelTest TEST_PREFIX "EditorLookModelTest.")
+alcedo_ui_gtest_discover_tests(EditorLookModelTest TEST_PREFIX "EditorLookModelTest.")
 alcedo_register_test_target(EditorLookModelTest ui)
 
 # Phase 6D: pure CDL trackball disc geometry (no QQuickWindow / GPU).
@@ -977,7 +1043,7 @@ target_link_libraries(EditorCdlTrackballGeometryTest
     Qt6::Test
     Qt6::Widgets
 )
-gtest_discover_tests(EditorCdlTrackballGeometryTest TEST_PREFIX "EditorCdlTrackballGeometryTest.")
+alcedo_ui_gtest_discover_tests(EditorCdlTrackballGeometryTest TEST_PREFIX "EditorCdlTrackballGeometryTest.")
 alcedo_register_test_target(EditorCdlTrackballGeometryTest ui)
 
 # LUT panel QML: selection scroll contract, favorites, filter, appTheme VI tokens.
@@ -1007,7 +1073,7 @@ target_compile_definitions(EditorLutPanelQmlTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
 set_target_properties(EditorLutPanelQmlTest PROPERTIES AUTOMOC ON)
-gtest_discover_tests(EditorLutPanelQmlTest
+alcedo_ui_gtest_discover_tests(EditorLutPanelQmlTest
     TEST_PREFIX "EditorLutPanelQmlTest."
     PROPERTIES LABELS "workspace_qml;lut_panel"
 )
@@ -1042,7 +1108,7 @@ target_link_libraries(EditorLookPanelInteractionTest
 target_compile_definitions(EditorLookPanelInteractionTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(EditorLookPanelInteractionTest
+alcedo_ui_gtest_discover_tests(EditorLookPanelInteractionTest
     TEST_PREFIX "EditorLookPanelInteractionTest."
     PROPERTIES LABELS "workspace_qml;look_panel"
 )
@@ -1167,7 +1233,7 @@ target_link_libraries(LanguageManagerTest
         Qt6::Core
         Qt6::Qml
 )
-gtest_discover_tests(LanguageManagerTest TEST_PREFIX "LanguageManagerTest.")
+alcedo_ui_gtest_discover_tests(LanguageManagerTest TEST_PREFIX "LanguageManagerTest.")
 alcedo_register_test_target(LanguageManagerTest ui)
 
 # Phase 6C-5 Phase 6C: production-style A-to-B integration test.
@@ -1200,7 +1266,7 @@ target_link_libraries(EditorCheckpointNavigationTest
 target_compile_definitions(EditorCheckpointNavigationTest
     PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
 )
-gtest_discover_tests(EditorCheckpointNavigationTest
+alcedo_ui_gtest_discover_tests(EditorCheckpointNavigationTest
     TEST_PREFIX "EditorCheckpointNavigationTest."
     PROPERTIES LABELS "workspace_qml;interaction_policy;integration")
 alcedo_register_test_target(EditorCheckpointNavigationTest ui)

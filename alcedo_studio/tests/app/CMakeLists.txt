@@ -233,6 +233,19 @@ gtest_discover_tests(EditorSessionActionPolicyCq3Test
     PROPERTIES LABELS "editor_session")
 alcedo_register_test_target(EditorSessionActionPolicyCq3Test app)
 
+# CQ5: remove transitional paths and qualify the production command sequence.
+add_executable(EditorSessionCq5QualificationTest
+    ${ALCEDO_TEST_ROOT}/app/editor_session_cq5_qualification_test.cpp)
+target_include_directories(EditorSessionCq5QualificationTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR} ${ALCEDO_TEST_DIR})
+target_link_libraries(EditorSessionCq5QualificationTest
+    EditorSessionService EditorSaveCheckpointService xxHash JSON
+    ${ALCEDO_TEST_OPENCV_MIN_DEPS} GTest::gtest_main)
+gtest_discover_tests(EditorSessionCq5QualificationTest
+    TEST_PREFIX "EditorSessionCq5QualificationTest."
+    PROPERTIES LABELS "editor_session")
+alcedo_register_test_target(EditorSessionCq5QualificationTest app)
+
 add_executable(EditorSessionControllerPhase5ATest
     ${ALCEDO_TEST_ROOT}/ui/editor_session_controller_phase5a_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/ui_test_main.cpp
