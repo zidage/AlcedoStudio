@@ -193,6 +193,10 @@ ApplicationWindow {
         appDialogs.openAdvancedAnalysisDialog()
     }
 
+    function openBackgroundTasksDialog() {
+        appDialogs.openBackgroundTasksDialog()
+    }
+
 
     function beginProjectLaunch(loadAction) {
         projectLaunchController.beginProjectLaunch(loadAction)
@@ -302,11 +306,6 @@ ApplicationWindow {
 
         BackgroundTaskBar {
             Layout.fillWidth: true
-            onTaskDetailsRequested: function(task) {
-                if (task && task.kind === "imageAnalysis") {
-                    appDialogs.advancedContentAnalysisDialog.openTaskDetails(task)
-                }
-            }
         }
     }
 

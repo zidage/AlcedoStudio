@@ -24,11 +24,17 @@ ColumnLayout {
             tabId: "advanced-analysis",
             label: qsTr("Advanced Content Analysis"),
             iconSource: "qrc:/panel_icons/flask.svg"
+        },
+        {
+            tabId: "background-tasks",
+            label: qsTr("Background Tasks"),
+            iconSource: "qrc:/panel_icons/clock-play.svg"
         }
     ]
     signal importRequested()
     signal searchRequested()
     signal advancedAnalysisRequested()
+    signal backgroundTasksRequested()
 
     function withAlpha(colorValue, alphaValue) {
         return Qt.rgba(colorValue.r, colorValue.g, colorValue.b, alphaValue)
@@ -230,6 +236,8 @@ ColumnLayout {
                                     panel.searchRequested()
                                 } else if (modelData.tabId === "advanced-analysis") {
                                     panel.advancedAnalysisRequested()
+                                } else if (modelData.tabId === "background-tasks") {
+                                    panel.backgroundTasksRequested()
                                 }
                             }
                         }

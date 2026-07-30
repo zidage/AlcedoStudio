@@ -80,6 +80,9 @@ and notify via `ThemeChanged`.
 | Accent secondary | `accentSecondaryColor` | Thumb border, Material primary |
 | Danger | `dangerColor` (`toneWine`) | Destructive emphasis |
 | Danger tint | `dangerTintColor` | Soft danger wells |
+| Background task finished | `backgroundTaskFinishedColor` | Green status lamp for completed/canceled work |
+| Background task working | `backgroundTaskWorkingColor` | Yellow status lamp for queued/running/canceling work |
+| Background task failed | `backgroundTaskFailedColor` | Red status lamp for failed work |
 | Selected tint | `selectedTintColor` | Library selected card wash |
 | Hover | `hoverColor` | Quiet hover wash |
 | Divider | `dividerColor` | Hairlines, card borders |
@@ -345,6 +348,7 @@ blocking. Session identity is never recreated by a fold.
 | `motionFoldOpenMs` | 200 | Opening fold (emphasized); also capsule thumb slide floor |
 | `motionFoldCloseMs` | 160 | Closing fold (slightly faster) |
 | `motionFadeMs` | 120 | Short fades — **LUT list selected well opacity** |
+| `backgroundTaskAutoCollapseMs` | 3000 | Time the task summary remains expanded after a task state changes |
 | Easing | `Easing.OutCubic` | Open/close and list selection fade |
 | `reduceMotion` | `QSettings("ui/reduceMotion")` | When true, all fold/fade/slide durations resolve to **0**; final state unchanged |
 

@@ -50,6 +50,7 @@ TEST_F(EditorHistoryVersionsRailLifecycleQmlTest,
   ProcessEvents();
 
   OpenVersionsPage();
+  QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorVersionsList")) != nullptr, 2000);
   auto* versions_list = Find(QStringLiteral("editorVersionsList"));
   ASSERT_NE(versions_list, nullptr);
   QTRY_VERIFY_WITH_TIMEOUT(

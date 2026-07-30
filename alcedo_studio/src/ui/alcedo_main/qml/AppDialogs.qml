@@ -9,7 +9,7 @@ import QtQuick.Dialogs
 // helpers, semanticGeneration, pending* state aliases); the controllers and
 // state objects are passed in as properties. Dialog ids use the *Obj suffix
 // and are re-exported through friendly-name aliases so Main, ShellSignals, and
-// the BackgroundTaskBar can reach them via `appDialogs.<name>`.
+// shared workspace entry points can reach them via `appDialogs.<name>`.
 Item {
     id: root
     property var host: null
@@ -31,6 +31,7 @@ Item {
     property alias deleteConfirmDialog: deleteConfirmDialogObj
     property alias welcomeDialog: welcomeDialogObj
     property alias globalSearchDialog: globalSearchDialogObj
+    property alias backgroundTasksDialog: backgroundTasksDialogObj
 
     FileDialog {
         id: importDialogObj
@@ -253,6 +254,17 @@ Item {
         }
     }
 
+    BackgroundTasksDialog {
+        id: backgroundTasksDialogObj
+        controller: appModules.backgroundTasks
+        blurSource: root.blurSource
+        cornerRadius: root.host ? root.host.windowCornerRadius : 0
+        onTaskDetailsRequested: function(task) {
+            if (task && task.kind === "imageAnalysis")
+                advancedContentAnalysisDialogObj.openTaskDetails(task)
+        }
+    }
+
     SemanticGenerationDialog {
         id: semanticGenerationDialogObj
         parent: Overlay.overlay
@@ -367,6 +379,7 @@ Item {
                || nikonHeRecoveryDialogObj.opened
                || semanticGenerationDialogObj.opened
                || advancedContentAnalysisDialogObj.opened
+               || backgroundTasksDialogObj.opened
                || deleteConfirmDialogObj.opened
                || welcomeDialogObj.opened
     }
@@ -382,5 +395,9 @@ Item {
         if (targets.length <= 0) {
             host.showSnackbar(qsTr("Select at least one image to analyze."))
         }
+    }
+
+    function openBackgroundTasksDialog() {
+        backgroundTasksDialogObj.open()
     }
 }
