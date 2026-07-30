@@ -10,6 +10,8 @@
 #include <QSettings>
 #include <QThread>
 #include <QtGlobal>
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 #include "app/editor_render_intent.hpp"
@@ -136,25 +138,24 @@ void EditorSessionController::InstallBackendNotifier() {
         },
         Qt::QueuedConnection);
   });
-  session_backend_->SetActionAvailabilityObserver([self](
-                                                      const alcedo::EditorActionAvailability&
-                                                          availability) {
-    if (!self) {
-      return;
-    }
-    if (QThread::currentThread() == self->thread()) {
-      self->actions_.Apply(availability);
-      return;
-    }
-    QMetaObject::invokeMethod(
-        self,
-        [self, availability] {
-          if (self) {
-            self->actions_.Apply(availability);
-          }
-        },
-        Qt::QueuedConnection);
-  });
+  session_backend_->SetActionAvailabilityObserver(
+      [self](const alcedo::EditorActionAvailability& availability) {
+        if (!self) {
+          return;
+        }
+        if (QThread::currentThread() == self->thread()) {
+          self->actions_.Apply(availability);
+          return;
+        }
+        QMetaObject::invokeMethod(
+            self,
+            [self, availability] {
+              if (self) {
+                self->actions_.Apply(availability);
+              }
+            },
+            Qt::QueuedConnection);
+      });
 }
 
 void EditorSessionController::SetSessionBackend(alcedo::IEditorSessionBackend* session_backend) {
@@ -182,7 +183,8 @@ void EditorSessionController::SetSessionBackend(alcedo::IEditorSessionBackend* s
   SyncRawDecodeCapabilities();
 }
 
-void EditorSessionController::SetInteractionPolicy(InteractionPolicyController* interaction_policy) {
+void EditorSessionController::SetInteractionPolicy(
+    InteractionPolicyController* interaction_policy) {
   if (interaction_policy_ == interaction_policy) {
     return;
   }
@@ -192,9 +194,9 @@ void EditorSessionController::SetInteractionPolicy(InteractionPolicyController* 
   }
   interaction_policy_ = interaction_policy;
   if (interaction_policy_) {
-    interaction_policy_connection_ = connect(
-        interaction_policy_, &InteractionPolicyController::PolicyChanged, this,
-        &EditorSessionController::SyncBackgroundActionRestrictions);
+    interaction_policy_connection_ =
+        connect(interaction_policy_, &InteractionPolicyController::PolicyChanged, this,
+                &EditorSessionController::SyncBackgroundActionRestrictions);
     SyncBackgroundActionRestrictions();
   }
 }
@@ -213,10 +215,10 @@ void EditorSessionController::SyncBackgroundActionRestrictions() {
   }
   alcedo::EditorBackgroundActionRestrictions restrictions;
   restrictions.blocks_select_image = !interaction_policy_->CanSelectEditorImage();
-  restrictions.blocks_paste          = !interaction_policy_->CanPasteAdjustments();
-  restrictions.blocks_merge          = !interaction_policy_->CanMergeAdjustments();
-  restrictions.blocks_checkout       = !interaction_policy_->CanCheckoutVersion();
-  restrictions.blocks_workspace      = !interaction_policy_->CanSwitchWorkspace();
+  restrictions.blocks_paste        = !interaction_policy_->CanPasteAdjustments();
+  restrictions.blocks_merge        = !interaction_policy_->CanMergeAdjustments();
+  restrictions.blocks_checkout     = !interaction_policy_->CanCheckoutVersion();
+  restrictions.blocks_workspace    = !interaction_policy_->CanSwitchWorkspace();
   session_backend_->SetBackgroundActionRestrictions(restrictions);
   ApplyActionAvailability();
 }
@@ -251,6 +253,7 @@ void EditorSessionController::OnBackendChanged() {
       emit AdjustmentSnapshotChanged();
     }
   }
+  SyncViewportDisplayConfig();
   emit       StateChanged();
   // Phase 7A R2: emit the dedicated history signal only when the backend's
   // monotonic history_revision advances. Render-busy, frame-ready, preview,
@@ -308,10 +311,7 @@ auto EditorSessionController::ImageLoadGeneration() const -> qulonglong {
 }
 
 auto EditorSessionController::viewport_identity_key() const -> QString {
-  return QStringLiteral("%1:%2:%3")
-      .arg(image_id())
-      .arg(ImageLoadGeneration())
-      .arg(active_ ? 1 : 0);
+  return QStringLiteral("%1:%2:%3").arg(image_id()).arg(ImageLoadGeneration()).arg(active_ ? 1 : 0);
 }
 
 auto EditorSessionController::session_state() const -> alcedo::EditorSessionState {
@@ -329,11 +329,12 @@ void EditorSessionController::SyncIdentityFromBackend() {
   if (!session_backend_) {
     return;
   }
-  const auto id       = session_backend_->identity();
-  element_id_         = id.element_id;
-  image_id_           = id.image_id;
-  session_generation_ = static_cast<qulonglong>(session_backend_->active_image_load_request().value);
-  session_state_      = session_backend_->state();
+  const auto id = session_backend_->identity();
+  element_id_   = id.element_id;
+  image_id_     = id.image_id;
+  session_generation_ =
+      static_cast<qulonglong>(session_backend_->active_image_load_request().value);
+  session_state_ = session_backend_->state();
   // active_ is workspace membership owned by Open/Close/Finalize, not by
   // backend NoImage vs Loading (empty editor remains active).
 }
@@ -435,10 +436,9 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
         }
       }
       if (!skip_prestamp) {
-        const qulonglong presentation_image_id = static_cast<qulonglong>(imageId);
-        const qulonglong presentation_generation =
-            static_cast<qulonglong>(session_backend_->active_image_load_request().value +
-                                    (same_image ? 0 : 1));
+        const qulonglong presentation_image_id   = static_cast<qulonglong>(imageId);
+        const qulonglong presentation_generation = static_cast<qulonglong>(
+            session_backend_->active_image_load_request().value + (same_image ? 0 : 1));
         if (scope_controller_) {
           scope_controller_->SetImageIdentity(presentation_image_id, presentation_generation);
         }
@@ -816,6 +816,7 @@ void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {
       scope_controller_->SetDownstreamSink(item->frameSink());
     }
     SyncViewportIdentity();
+    SyncViewportDisplayConfig();
     // Stamp a stable presentation sink identity for render intents (Phase 5A).
     if (session_backend_) {
       session_backend_->SetPresentationSinkId(
@@ -825,6 +826,35 @@ void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {
     scope_controller_->SetDownstreamSink(nullptr);
   }
   emit PresentationBindingChanged();
+}
+
+void EditorSessionController::SyncViewportDisplayConfig() {
+  auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
+  if (!item) {
+    return;
+  }
+
+  ViewerDisplayConfig config{};
+  const QVariantMap   wrapper = adjustment_snapshot_.value(QStringLiteral("odt")).toMap();
+  QVariantMap         odt     = wrapper.value(QStringLiteral("odt")).toMap();
+  if (odt.isEmpty()) {
+    odt = wrapper;
+  }
+
+  const QString space = odt.value(QStringLiteral("encoding_space")).toString();
+  if (!space.isEmpty()) {
+    config.encoding_space = ColorUtils::ColorSpaceFromString(space.toStdString());
+  }
+  const QString eotf = odt.value(QStringLiteral("encoding_eotf")).toString();
+  if (!eotf.isEmpty()) {
+    config.encoding_eotf = ColorUtils::EOTFFromString(eotf.toStdString());
+  }
+  bool        peak_ok = false;
+  const float peak    = odt.value(QStringLiteral("peak_luminance")).toFloat(&peak_ok);
+  if (peak_ok && std::isfinite(peak)) {
+    config.peak_luminance = std::clamp(peak, 100.0f, 10000.0f);
+  }
+  item->setDisplayConfig(config);
 }
 
 void EditorSessionController::updatePresentationTargetSize(int width, int height) {

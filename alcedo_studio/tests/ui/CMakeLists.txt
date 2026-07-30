@@ -70,6 +70,21 @@ function(alcedo_ui_gtest_discover_tests target_name)
     DISCOVERY_TIMEOUT 120)
 endfunction()
 
+if(APPLE AND ALCEDO_ENABLE_METAL)
+  add_executable(EditorWindowColorManagementTest
+      ${ALCEDO_TEST_ROOT}/ui/editor_window_color_management_test.mm)
+  target_include_directories(EditorWindowColorManagementTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(EditorWindowColorManagementTest
+      PRIVATE EditorRhiViewport GTest::gtest_main)
+  set_source_files_properties(
+      ${ALCEDO_TEST_ROOT}/ui/editor_window_color_management_test.mm
+      PROPERTIES LANGUAGE OBJCXX)
+  alcedo_ui_gtest_discover_tests(EditorWindowColorManagementTest
+      TEST_PREFIX "EditorWindowColorManagementTest."
+      PROPERTIES LABELS "editor_rhi;metal;display_output")
+  alcedo_register_test_target(EditorWindowColorManagementTest ui)
+endif()
+
 # Macro to reduce boilerplate for UI test targets.
 macro(def_ui_test TARGET_NAME SOURCE_FILE)
     add_executable(${TARGET_NAME}

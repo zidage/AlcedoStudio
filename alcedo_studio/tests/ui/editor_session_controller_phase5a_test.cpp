@@ -41,14 +41,14 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   EditorSessionIdentity identity_{};
   ImageLoadRequestId    image_load_request_{};
   std::uint64_t         next_image_load_request_ = 0;
-  PresentationSinkId    sink_id_            = 0;
-  int                   open_count          = 0;
-  int                   switch_count        = 0;
-  int                   close_count         = 0;
-  int                   shutdown_count      = 0;
-  bool                  last_close_persist  = true;
-  int                   presentation_width  = 0;
-  int                   presentation_height = 0;
+  PresentationSinkId    sink_id_                 = 0;
+  int                   open_count               = 0;
+  int                   switch_count             = 0;
+  int                   close_count              = 0;
+  int                   shutdown_count           = 0;
+  bool                  last_close_persist       = true;
+  int                   presentation_width       = 0;
+  int                   presentation_height      = 0;
   std::string           last_error_;
   bool                  async_switch_              = false;
   sl_element_id_t       pending_switch_element_id_ = 0;
@@ -56,10 +56,10 @@ class FakeSessionBackend final : public IEditorSessionBackend {
 
   auto                  state() const -> EditorSessionState override { return state_; }
   auto                  identity() const -> EditorSessionIdentity override { return identity_; }
-  [[nodiscard]] auto active_image_load_request() const -> ImageLoadRequestId override {
+  [[nodiscard]] auto    active_image_load_request() const -> ImageLoadRequestId override {
     return image_load_request_;
   }
-  auto                  active() const -> bool override {
+  auto active() const -> bool override {
     return state_ != EditorSessionState::NoImage && state_ != EditorSessionState::ShuttingDown;
   }
   auto has_image() const -> bool override {
@@ -122,9 +122,9 @@ class FakeSessionBackend final : public IEditorSessionBackend {
     image_load_request_        = ImageLoadRequestId{++next_image_load_request_};
     identity_.element_id       = pending_switch_element_id_;
     identity_.image_id         = pending_switch_image_id_;
-    pending_switch_element_id_  = 0;
-    pending_switch_image_id_    = 0;
-    state_                      = EditorSessionState::Switching;
+    pending_switch_element_id_ = 0;
+    pending_switch_image_id_   = 0;
+    state_                     = EditorSessionState::Switching;
     NotifyChange();
   }
 
@@ -207,7 +207,7 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   }
 
   // Test helper: simulate async Interactive transition from first frame.
-  void               SimulateFirstFramePresented() {
+  void SimulateFirstFramePresented() {
     state_ = EditorSessionState::Interactive;
     NotifyChange();
   }
@@ -870,6 +870,28 @@ TEST(EditorSessionControllerPhase5ATest, BackendSnapshotIsPublishedToController)
   EXPECT_TRUE(map.contains(QStringLiteral("contrast")));
 }
 
+TEST(EditorSessionControllerPhase5ATest,
+     DisplayTransformSnapshotConfiguresUnifiedViewportWindowOutput) {
+  FakeSessionBackend             backend;
+  EditorSessionController        controller(nullptr, &backend);
+  editor_rhi::EditorViewportItem viewport;
+  controller.bindPresentationViewport(&viewport);
+
+  EditorRenderAdjustmentSnapshot snap;
+  snap.patches = {EditorAdjustmentPatch{
+      "odt",
+      R"({"odt":{"encoding_space":"rec2020","encoding_eotf":"st2084","peak_luminance":1600.0}})",
+      true}};
+  backend.SetAdjustmentSnapshot(snap);
+  backend.NotifyWithoutStateChange();
+
+  const auto config = viewport.displayConfig();
+  EXPECT_EQ(config.encoding_space, ColorUtils::ColorSpace::REC2020);
+  EXPECT_EQ(config.encoding_eotf, ColorUtils::EOTF::ST2084);
+  EXPECT_FLOAT_EQ(config.peak_luminance, 1600.0f);
+  EXPECT_TRUE(viewport.extendedDynamicRangeRequested());
+}
+
 TEST(EditorSessionControllerPhase5ATest, SnapshotContentUpdatesOnChange) {
   FakeSessionBackend             backend;
   EditorSessionController        controller(nullptr, &backend);
@@ -891,10 +913,10 @@ TEST(EditorSessionControllerPhase5ATest, SnapshotContentUpdatesOnChange) {
 }
 
 TEST(EditorSessionControllerPhase5ATest, SameSnapshotDoesNotReemitSignal) {
-  FakeSessionBackend             backend;
-  EditorSessionController        controller(nullptr, &backend);
+  FakeSessionBackend      backend;
+  EditorSessionController controller(nullptr, &backend);
 
-  int signal_count = 0;
+  int                     signal_count = 0;
   QObject::connect(&controller, &EditorSessionController::AdjustmentSnapshotChanged,
                    [&] { ++signal_count; });
 
@@ -937,10 +959,10 @@ TEST(EditorSessionControllerPhase5ATest,
   // Repro: multi-slider handoff freezes when every interactive submitPatch
   // emits AdjustmentSnapshotChanged → QML loadFromSnapshot on the GUI stack.
   FakeSessionBackend backend;
-  backend.state_                       = EditorSessionState::Interactive;
-  backend.image_load_request_        = ImageLoadRequestId{1};
-  backend.identity_.element_id         = 1;
-  backend.identity_.image_id           = 2;
+  backend.state_               = EditorSessionState::Interactive;
+  backend.image_load_request_  = ImageLoadRequestId{1};
+  backend.identity_.element_id = 1;
+  backend.identity_.image_id   = 2;
   EditorSessionController controller(nullptr, &backend);
 
   int                     snapshot_signals = 0;
@@ -972,10 +994,10 @@ TEST(EditorSessionControllerPhase5ATest,
 
 TEST(EditorSessionControllerPhase5ATest, SettledSubmitPatchEmitsAdjustmentSnapshotChanged) {
   FakeSessionBackend backend;
-  backend.state_                       = EditorSessionState::Interactive;
-  backend.image_load_request_        = ImageLoadRequestId{1};
-  backend.identity_.element_id         = 1;
-  backend.identity_.image_id           = 2;
+  backend.state_               = EditorSessionState::Interactive;
+  backend.image_load_request_  = ImageLoadRequestId{1};
+  backend.identity_.element_id = 1;
+  backend.identity_.image_id   = 2;
   EditorSessionController controller(nullptr, &backend);
 
   int                     snapshot_signals = 0;

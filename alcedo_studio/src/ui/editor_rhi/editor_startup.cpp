@@ -4,6 +4,8 @@
 
 #include "ui/editor_rhi/editor_startup.hpp"
 
+#include <QtGui/rhi/qrhi.h>
+
 #include <QCoreApplication>
 #include <QGuiApplication>
 #include <QOffscreenSurface>
@@ -12,8 +14,6 @@
 #include <QQuickWindow>
 #include <QSGRendererInterface>
 #include <QSurfaceFormat>
-#include <QtGui/rhi/qrhi.h>
-
 #include <memory>
 #include <sstream>
 
@@ -22,8 +22,9 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <windows.h>
 #include <GL/gl.h>
+#include <windows.h>
+
 #include "opencl/opencl_runtime.hpp"
 #endif
 
@@ -109,8 +110,8 @@ auto ApplyEditorBackendBeforeWindow(EditorBackend backend) -> EditorStartupResul
   result.diagnostics.qt_graphics_api = QtGraphicsApiName(backend);
 
   if (!IsBackendSupportedOnThisPlatform(backend)) {
-    result.error = std::string("editor backend ") + ToString(backend) +
-                   " is not supported on this platform";
+    result.error =
+        std::string("editor backend ") + ToString(backend) + " is not supported on this platform";
     return result;
   }
   if (!IsBackendAvailableInThisBuild(backend)) {
@@ -126,22 +127,21 @@ auto ApplyEditorBackendBeforeWindow(EditorBackend backend) -> EditorStartupResul
 
       const auto discovery = DiscoverCudaAdapters();
       if (!discovery.ok || !discovery.preferred.has_value()) {
-        result.error = discovery.error.empty() ? "CUDA adapter discovery failed"
-                                               : discovery.error;
+        result.error = discovery.error.empty() ? "CUDA adapter discovery failed" : discovery.error;
         return result;
       }
       result.cuda_adapter = discovery.preferred;
 
-      const auto dxgi = FindDxgiAdapterForLuid(discovery.preferred->luid);
+      const auto dxgi     = FindDxgiAdapterForLuid(discovery.preferred->luid);
       if (!dxgi.has_value()) {
         result.error = "CUDA preferred device LUID has no matching DXGI adapter";
         return result;
       }
 
-      result.diagnostics.cuda_device_index  = discovery.preferred->device_index;
-      result.diagnostics.cuda_device_name   = discovery.preferred->name;
-      result.diagnostics.cuda_luid          = DescribeLuid(discovery.preferred->luid);
-      result.diagnostics.dxgi_luid          = DescribeLuid(dxgi->luid);
+      result.diagnostics.cuda_device_index   = discovery.preferred->device_index;
+      result.diagnostics.cuda_device_name    = discovery.preferred->name;
+      result.diagnostics.cuda_luid           = DescribeLuid(discovery.preferred->luid);
+      result.diagnostics.dxgi_luid           = DescribeLuid(dxgi->luid);
       result.diagnostics.adapter_description = dxgi->description;
       result.diagnostics.notes =
           "CUDA/D3D11 adapter LUID matched before first QQuickWindow; "
@@ -162,9 +162,8 @@ auto ApplyEditorBackendBeforeWindow(EditorBackend backend) -> EditorStartupResul
 
       auto& bootstrap = SharedOpenClGlBootstrap();
       if (!bootstrap.Initialize()) {
-        result.error = bootstrap.error().empty()
-                           ? "OpenCL/OpenGL sharing bootstrap failed"
-                           : bootstrap.error();
+        result.error = bootstrap.error().empty() ? "OpenCL/OpenGL sharing bootstrap failed"
+                                                 : bootstrap.error();
         return result;
       }
       result.diagnostics.opencl_gl_sharing = true;
@@ -182,7 +181,7 @@ auto ApplyEditorBackendBeforeWindow(EditorBackend backend) -> EditorStartupResul
 #if defined(__APPLE__) && defined(HAVE_METAL)
       QQuickWindow::setGraphicsApi(QSGRendererInterface::Metal);
       result.diagnostics.notes =
-          "Metal API selected; full interop feasibility is Phase 8 and is not claimed here";
+          "Metal API selected; shared-texture presentation qualified by the macOS RHI harness";
       result.ok = true;
       SetActiveEditorBackend(backend);
       return result;
