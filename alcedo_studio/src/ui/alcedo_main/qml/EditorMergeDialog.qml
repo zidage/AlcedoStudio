@@ -20,6 +20,8 @@ Dialog {
     readonly property int pendingCount: Math.max(0, conflicts.length - resolvedCount)
     readonly property bool allResolved: conflicts.length > 0
                                         && resolvedCount === conflicts.length
+    readonly property real resolvedRatio: conflicts.length > 0
+                                          ? resolvedCount / conflicts.length : 0
 
     signal mergeRequested(var resolutions)
     signal cancelled()
@@ -101,13 +103,15 @@ Dialog {
 
     contentItem: ColumnLayout {
         id: contentLayout
-        spacing: appTheme.spaceMd
+        spacing: 0
 
         Rectangle {
             objectName: "editorMergeHeader"
             Layout.fillWidth: true
             Layout.preferredHeight: appTheme.spaceXl * 7
             color: root.surfaceColor
+            radius: appTheme.panelRadius
+            clip: true
 
             ColumnLayout {
                 anchors.fill: parent
@@ -121,13 +125,13 @@ Dialog {
                     Rectangle {
                         Layout.preferredWidth: appTheme.spaceSm
                         Layout.preferredHeight: appTheme.spaceSm
-                        radius: appTheme.spaceSm / 2
+                        radius: width / 2
                         color: appTheme.mergeCurrentColor
                     }
 
                     Label {
                         Layout.fillWidth: true
-                        text: qsTr("Action Required")
+                        text: qsTr("ACTION REQUIRED")
                         color: appTheme.mergeCurrentColor
                         font.family: appTheme.uiFontFamily
                         font.pixelSize: appTheme.fontSizeCaption
@@ -161,9 +165,11 @@ Dialog {
 
                         Label {
                             Layout.fillWidth: true
-                            text: qsTr("Choose a value for every conflicting parameter. The Merged column previews what will be committed.")
+                            text: qsTr("Choose a value for every conflicting parameter. The merged result is previewed below each comparison.")
                             color: root.mutedColor
                             wrapMode: Text.WordWrap
+                            maximumLineCount: 2
+                            elide: Text.ElideRight
                             font.family: appTheme.uiFontFamily
                             font.pixelSize: appTheme.fontSizeCaption
                         }
@@ -184,21 +190,37 @@ Dialog {
                             Accessible.name: text
                             onClicked: root.setAllChoices("current")
 
-                            contentItem: Label {
-                                text: useAllCurrentButton.text
-                                color: appTheme.mergeCurrentColor
-                                font.family: appTheme.uiFontFamily
-                                font.pixelSize: appTheme.fontSizeCaption
-                                font.weight: appTheme.fontWeightStrong
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                                elide: Text.ElideRight
+                            contentItem: RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: appTheme.spaceSm
+                                anchors.rightMargin: appTheme.spaceSm
+                                spacing: appTheme.spaceXs
+
+                                Label {
+                                    text: "←"
+                                    color: appTheme.mergeCurrentColor
+                                    font.pixelSize: appTheme.fontSizeBody
+                                }
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: useAllCurrentButton.text
+                                    color: appTheme.mergeCurrentColor
+                                    font.family: appTheme.uiFontFamily
+                                    font.pixelSize: appTheme.fontSizeCaption
+                                    font.weight: appTheme.fontWeightStrong
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                    elide: Text.ElideRight
+                                }
                             }
 
                             background: Rectangle {
-                                radius: appTheme.controlRadiusSmall
-                                color: useAllCurrentButton.hovered
-                                       ? appTheme.buttonHoveredFillColor : root.surfaceColor
+                                radius: appTheme.controlRadius
+                                color: useAllCurrentButton.down
+                                       ? appTheme.buttonPressedFillColor
+                                       : (useAllCurrentButton.hovered
+                                          ? appTheme.buttonHoveredFillColor : root.surfaceColor)
                                 border.width: 1
                                 border.color: appTheme.mergeCurrentColor
                             }
@@ -215,21 +237,37 @@ Dialog {
                             Accessible.name: text
                             onClicked: root.setAllChoices("incoming")
 
-                            contentItem: Label {
-                                text: useAllIncomingButton.text
-                                color: appTheme.mergeIncomingColor
-                                font.family: appTheme.uiFontFamily
-                                font.pixelSize: appTheme.fontSizeCaption
-                                font.weight: appTheme.fontWeightStrong
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                                elide: Text.ElideRight
+                            contentItem: RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: appTheme.spaceSm
+                                anchors.rightMargin: appTheme.spaceSm
+                                spacing: appTheme.spaceXs
+
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: useAllIncomingButton.text
+                                    color: appTheme.mergeIncomingColor
+                                    font.family: appTheme.uiFontFamily
+                                    font.pixelSize: appTheme.fontSizeCaption
+                                    font.weight: appTheme.fontWeightStrong
+                                    horizontalAlignment: Text.AlignHCenter
+                                    verticalAlignment: Text.AlignVCenter
+                                    elide: Text.ElideRight
+                                }
+
+                                Label {
+                                    text: "→"
+                                    color: appTheme.mergeIncomingColor
+                                    font.pixelSize: appTheme.fontSizeBody
+                                }
                             }
 
                             background: Rectangle {
-                                radius: appTheme.controlRadiusSmall
-                                color: useAllIncomingButton.hovered
-                                       ? appTheme.buttonHoveredFillColor : root.surfaceColor
+                                radius: appTheme.controlRadius
+                                color: useAllIncomingButton.down
+                                       ? appTheme.buttonPressedFillColor
+                                       : (useAllIncomingButton.hovered
+                                          ? appTheme.buttonHoveredFillColor : root.surfaceColor)
                                 border.width: 1
                                 border.color: appTheme.mergeIncomingColor
                             }
@@ -245,54 +283,70 @@ Dialog {
             color: root.borderColor
         }
 
-        ListView {
-            id: conflictList
-            objectName: "editorMergeConflictList"
+        Rectangle {
+            objectName: "editorMergeConflictListWell"
             Layout.fillWidth: true
-            Layout.preferredHeight: Math.min(Math.max(contentHeight, appTheme.spaceXl * 10),
+            Layout.preferredHeight: Math.min(Math.max(conflictList.contentHeight
+                                                       + appTheme.spaceMd,
+                                                       appTheme.spaceXl * 12),
                                              appTheme.spaceXl * 24)
+            color: appTheme.bgBaseColor
+            radius: appTheme.controlRadius
+            border.width: 1
+            border.color: root.borderColor
             clip: true
-            model: conflictChoices
-            spacing: appTheme.spaceSm
-            boundsBehavior: Flickable.StopAtBounds
 
-            delegate: Item {
-                required property var conflict
-                required property string choice
-                required property int index
+            ListView {
+                id: conflictList
+                objectName: "editorMergeConflictList"
+                anchors.fill: parent
+                anchors.margins: appTheme.spaceSm
+                clip: true
+                model: conflictChoices
+                spacing: appTheme.spaceMd
+                boundsBehavior: Flickable.StopAtBounds
 
-                width: ListView.view ? ListView.view.width : 0
-                height: appTheme.spaceXl * 10
+                delegate: Item {
+                    required property var conflict
+                    required property string choice
+                    required property int index
 
-                EditorMergeConflictCard {
-                    id: conflictCard
-                    anchors.fill: parent
-                    conflict: parent.conflict
-                    choice: parent.choice
-                    rowIndex: parent.index
-                    textColor: root.textColor
-                    mutedColor: root.mutedColor
-                    surfaceColor: root.surfaceColor
-                    borderColor: root.borderColor
-                    onChoiceSelected: (selectedChoice) => root.setChoice(conflictCard.rowIndex,
-                                                                          selectedChoice)
+                    width: ListView.view ? ListView.view.width : 0
+                    height: appTheme.spaceXl * 13
+
+                    EditorMergeConflictCard {
+                        id: conflictCard
+                        anchors.fill: parent
+                        conflict: parent.conflict
+                        choice: parent.choice
+                        rowIndex: parent.index
+                        textColor: root.textColor
+                        mutedColor: root.mutedColor
+                        surfaceColor: root.surfaceColor
+                        borderColor: root.borderColor
+                        onChoiceSelected: (selectedChoice) => root.setChoice(conflictCard.rowIndex,
+                                                                              selectedChoice)
+                    }
                 }
-            }
 
-            Label {
-                anchors.centerIn: parent
-                visible: conflictChoices.count === 0
-                text: qsTr("No merge conflicts to resolve")
-                color: root.mutedColor
-                font.family: appTheme.uiFontFamily
-                font.pixelSize: appTheme.fontSizeBody
+                Label {
+                    anchors.centerIn: parent
+                    visible: conflictChoices.count === 0
+                    text: qsTr("No merge conflicts to resolve")
+                    color: root.mutedColor
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeBody
+                }
             }
         }
     }
 
     footer: Rectangle {
+        objectName: "editorMergeFooter"
         implicitHeight: appTheme.spaceXl * 3
         color: root.surfaceColor
+        radius: appTheme.panelRadius
+        clip: true
 
         Rectangle {
             anchors.left: parent.left
@@ -329,9 +383,11 @@ Dialog {
                 }
 
                 background: Rectangle {
-                    radius: appTheme.controlRadiusSmall
-                    color: cancelButton.hovered
-                           ? appTheme.buttonHoveredFillColor : root.surfaceColor
+                    radius: appTheme.controlRadius
+                    color: cancelButton.down
+                           ? appTheme.buttonPressedFillColor
+                           : (cancelButton.hovered
+                              ? appTheme.buttonHoveredFillColor : root.surfaceColor)
                     border.width: 1
                     border.color: root.borderColor
                 }
@@ -339,16 +395,38 @@ Dialog {
 
             Item { Layout.fillWidth: true }
 
-            Label {
-                objectName: "editorMergeStatusText"
-                text: root.allResolved
-                      ? qsTr("Ready to merge")
-                      : qsTr("%1 conflicts pending resolution").arg(root.pendingCount)
-                color: root.allResolved ? appTheme.mergeIncomingColor : root.mutedColor
-                font.family: appTheme.uiFontFamily
-                font.pixelSize: appTheme.fontSizeCaption
-                horizontalAlignment: Text.AlignRight
-                verticalAlignment: Text.AlignVCenter
+            ColumnLayout {
+                Layout.preferredWidth: appTheme.spaceXl * 9
+                Layout.alignment: Qt.AlignVCenter
+                spacing: appTheme.spaceXs
+
+                Label {
+                    objectName: "editorMergeStatusText"
+                    Layout.fillWidth: true
+                    text: root.allResolved
+                          ? qsTr("Ready to merge")
+                          : qsTr("%1 conflicts pending resolution").arg(root.pendingCount)
+                    color: root.allResolved ? appTheme.mergeIncomingColor : root.mutedColor
+                    horizontalAlignment: Text.AlignRight
+                    font.family: appTheme.uiFontFamily
+                    font.pixelSize: appTheme.fontSizeCaption
+                    font.weight: appTheme.fontWeightStrong
+                }
+
+                Rectangle {
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: appTheme.spaceXs
+                    radius: height / 2
+                    color: appTheme.bgBaseColor
+
+                    Rectangle {
+                        width: parent.width * root.resolvedRatio
+                        height: parent.height
+                        radius: height / 2
+                        color: root.allResolved
+                               ? appTheme.mergeIncomingColor : appTheme.mergeCurrentColor
+                    }
+                }
             }
 
             Button {
@@ -375,7 +453,7 @@ Dialog {
                 }
 
                 background: Rectangle {
-                    radius: appTheme.controlRadiusSmall
+                    radius: appTheme.controlRadius
                     color: completeButton.enabled
                            ? appTheme.mergeIncomingColor : appTheme.disabledSurfaceColor
                     border.width: 1

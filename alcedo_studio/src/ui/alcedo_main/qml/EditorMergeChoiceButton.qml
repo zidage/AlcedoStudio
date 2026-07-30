@@ -42,10 +42,10 @@ Button {
     }
 
     background: Rectangle {
-        radius: appTheme.controlRadiusSmall
+        radius: appTheme.controlRadius
         color: root.selected
                ? root.choiceFillColor
-               : (root.hovered ? appTheme.buttonHoveredFillColor : appTheme.cardSurfaceColor)
+               : (root.hovered ? appTheme.buttonHoveredFillColor : appTheme.bgBaseColor)
         border.width: 1
         border.color: root.selected ? root.choiceColor : appTheme.cardBorderColor
     }
