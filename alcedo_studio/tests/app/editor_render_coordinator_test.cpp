@@ -92,12 +92,13 @@ TEST_F(EditorRenderCoordinatorTest, AcceptsIntentAndSchedulesThroughSingleOwner)
   EXPECT_TRUE(coordinator_->has_inflight());
 }
 
-TEST_F(EditorRenderCoordinatorTest, RejectsStaleSessionGeneration) {
+TEST_F(EditorRenderCoordinatorTest, RejectsStaleImageLoadRequest) {
+  // MakeIntent's first generation arg stamps image_load_request_id; active is 1.
   const auto rejected = coordinator_->Submit(
       MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, /*session=*/2));
   EXPECT_EQ(rejected.kind, EditorRenderResultKind::Failed);
   EXPECT_TRUE(scheduler_->scheduled_.empty());
-  EXPECT_NE(rejected.message.find("session"), std::string::npos);
+  EXPECT_NE(rejected.message.find("image load request"), std::string::npos);
 }
 
 TEST_F(EditorRenderCoordinatorTest, ReplacesPendingWorkWithSameReplacementKey) {
@@ -775,7 +776,7 @@ TEST_F(EditorRenderCoordinatorTest, DiagnosticsTrackRejectReplaceCancelAndSubmit
     EXPECT_GE(diag.replaced_count, 1u);
     EXPECT_EQ(diag.image_load_request_id, 1u);
     EXPECT_FALSE(diag.last_rejection_reason.empty());
-    EXPECT_NE(diag.last_rejection_reason.find("session"), std::string::npos);
+    EXPECT_NE(diag.last_rejection_reason.find("image load request"), std::string::npos);
     ASSERT_TRUE(diag.last_rejected_render_reason.has_value());
     EXPECT_EQ(*diag.last_rejected_render_reason, EditorRenderReason::InteractiveAdjustment);
     EXPECT_GE(diag.accepted_count, 2u);
