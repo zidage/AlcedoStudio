@@ -71,28 +71,28 @@ Rectangle {
             Material.foreground: root.theme ? root.theme.colText : appTheme.textColor
             onClicked: fileMenu.open()
 
-            Menu {
+            AppContextMenu {
                 id: fileMenu
                 x: 0
                 y: fileMenuButton.height + 4
 
-                MenuItem {
+                AppMenuItem {
                     text: qsTr("Load Project")
                     enabled: root.host && !root.host.projectLaunchBusy && !appModules.project.acceleratorPreparing
                     onTriggered: root.host.beginProjectLaunch(function() {
                         return appModules.project.PromptAndLoadProject()
                     })
                 }
-                MenuItem {
+                AppMenuItem {
                     text: qsTr("Create Project")
                     enabled: root.host && !root.host.projectLaunchBusy && !appModules.project.acceleratorPreparing
                     onTriggered: root.host.beginProjectLaunch(function() {
                         return appModules.project.PromptAndCreateProject()
                     })
                 }
-                MenuSeparator {
+                AppMenuSeparator {
                 }
-                MenuItem {
+                AppMenuItem {
                     text: qsTr("Save Project")
                     enabled: root.host && root.host.backendInteractive
                     onTriggered: root.host.requestSaveProject()

@@ -140,11 +140,32 @@ Item {
         }
     }
 
+    // The editor filmstrip shares this menu; Discard appears only when the
+    // menu was opened from the filmstrip on the image currently loaded in the
+    // editor, and stays gated by the session's discard eligibility.
+    function filmstripDiscardActions() {
+        if (root.imageActionsController.menuOrigin !== "editor-filmstrip") {
+            return []
+        }
+        const session = appModules.editorSession
+        if (!session || session.hasImage !== true) {
+            return []
+        }
+        if (Number(host.pendingRatingTarget.elementId) !== Number(session.elementId)) {
+            return []
+        }
+        return [{
+            id: "discard-edit",
+            label: qsTr("Discard"),
+            enabled: session.canDiscardCurrentCommit === true
+        }]
+    }
+
     ImageContextMenu {
         id: imageContextMenuObj
         ratingEnabled: Number(host.pendingRatingTarget.imageId) > 0
         currentRating: Math.max(0, Math.min(5, Number(host.pendingRatingTarget.rating || 0)))
-        actions: [
+        actions: root.filmstripDiscardActions().concat([
             {
                 id: "copy-adjustments",
                 label: qsTr("Copy Adjustments"),
@@ -165,13 +186,20 @@ Item {
                 enabled: host.pendingDeleteTargets.length > 0
                           && appModules.interactionPolicy.canDeletePendingTargets
             }
-        ].concat(root.imageActionsController.albumTargetActions())
+        ]).concat(root.imageActionsController.albumTargetActions())
         onRatingRequested: function(rating) {
             imageContextMenuObj.close()
             root.imageActionsController.requestSetImageRating(rating)
         }
         onActionRequested: function(actionId) {
             imageContextMenuObj.close()
+            if (actionId === "discard-edit") {
+                if (appModules.editorSession
+                        && appModules.editorSession.canDiscardCurrentCommit === true) {
+                    appModules.editorSession.Discard()
+                }
+                return
+            }
             if (actionId === "copy-adjustments") {
                 root.imageActionsController.requestCopyAdjustments()
                 return

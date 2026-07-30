@@ -193,6 +193,7 @@ class FilmstripSession final : public QObject {
   Q_PROPERTY(bool renderBusy READ renderBusy WRITE setRenderBusy NOTIFY renderBusyChanged)
   Q_PROPERTY(bool canDiscardCurrentCommit READ canDiscardCurrentCommit WRITE
                  setCanDiscardCurrentCommit NOTIFY canDiscardCurrentCommitChanged)
+  Q_PROPERTY(QVariantMap actions READ actions CONSTANT)
 
  public:
   [[nodiscard]] bool filmstripCollapsed() const { return filmstrip_collapsed_; }
@@ -205,6 +206,9 @@ class FilmstripSession final : public QObject {
   [[nodiscard]] bool renderBusy() const { return render_busy_; }
   [[nodiscard]] bool canDiscardCurrentCommit() const { return can_discard_; }
   [[nodiscard]] int discardCount() const { return discard_count_; }
+  [[nodiscard]] QVariantMap actions() const {
+    return {{QStringLiteral("canSelectImage"), true}};
+  }
 
   void setFilmstripCollapsed(bool collapsed) {
     if (filmstrip_collapsed_ == collapsed) return;
@@ -352,6 +356,8 @@ ApplicationWindow {
     height: 160
     visible: true
 
+    property var menuRequests: []
+
     Loader {
         id: filmstripLoader
         objectName: "filmstripLoader"
@@ -364,6 +370,14 @@ ApplicationWindow {
             item.editorSession = appModules.editorSession
             item.interactionPolicy = appModules.interactionPolicy
             item.theme = null
+            item.contextMenuRequested.connect(function(menuItem, sceneX, sceneY) {
+                root.menuRequests.push({
+                    elementId: Number(menuItem.elementId),
+                    imageId: Number(menuItem.imageId),
+                    sceneX: Number(sceneX),
+                    sceneY: Number(sceneY)
+                })
+            })
         }
     }
 }
@@ -418,9 +432,8 @@ class FilmstripQmlHarness {
     return window_ ? window_->findChild<QQuickItem*>(QStringLiteral("editorFilmstripListView"))
                    : nullptr;
   }
-  [[nodiscard]] QObject* discardAction() const {
-    return window_ ? window_->findChild<QObject*>(QStringLiteral("editorFilmstripDiscardAction"))
-                   : nullptr;
+  [[nodiscard]] QVariantList menuRequests() const {
+    return window_ ? window_->property("menuRequests").toList() : QVariantList{};
   }
 
   FilmstripLibrary  library_;
@@ -533,7 +546,12 @@ TEST(EditorFilmstripQmlTest, CollapseKeepsThumbnailPinsAndRestoresHorizontalScro
   EXPECT_TRUE(filmstrip->property("saving").toBool());
 }
 
-TEST(EditorFilmstripQmlTest, CurrentImageMenuGatesDiscardAndShowsBusyBadges) {
+// The filmstrip no longer owns a local menu: right-click forwards a menu
+// request (clicked row + scene point) to Main, which opens the shared image
+// context menu. This test pins the emission contract, including that a
+// non-current row (row 1 while the session sits on row 0) still produces a
+// request targeted at that row.
+TEST(EditorFilmstripQmlTest, ContextMenuRequestCarriesClickedRowAndScenePoint) {
   FilmstripQmlHarness harness;
   ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
   ASSERT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
@@ -543,19 +561,35 @@ TEST(EditorFilmstripQmlTest, CurrentImageMenuGatesDiscardAndShowsBusyBadges) {
   QTRY_VERIFY_WITH_TIMEOUT(harness.list() != nullptr, 2000);
   QTRY_VERIFY_WITH_TIMEOUT(harness.library_.isPinned(1000), 2000);
 
-  ASSERT_TRUE(QMetaObject::invokeMethod(filmstrip, "openContextMenu",
-                                        Q_ARG(QVariant, QVariant(1))));
+  ASSERT_TRUE(QMetaObject::invokeMethod(filmstrip, "requestContextMenuForIndex",
+                                        Q_ARG(QVariant, QVariant(1)),
+                                        Q_ARG(QVariant, QVariant(96.0)),
+                                        Q_ARG(QVariant, QVariant(24.0))));
+  // Out-of-range rows must not emit a request.
+  ASSERT_TRUE(QMetaObject::invokeMethod(filmstrip, "requestContextMenuForIndex",
+                                        Q_ARG(QVariant, QVariant(99)),
+                                        Q_ARG(QVariant, QVariant(1.0)),
+                                        Q_ARG(QVariant, QVariant(1.0))));
   ProcessEvents();
-  auto* action = harness.discardAction();
-  ASSERT_NE(action, nullptr);
-  EXPECT_FALSE(action->property("enabled").toBool());
 
-  ASSERT_TRUE(QMetaObject::invokeMethod(filmstrip, "openContextMenu",
-                                        Q_ARG(QVariant, QVariant(0))));
-  ProcessEvents();
-  EXPECT_TRUE(action->property("enabled").toBool());
-  ASSERT_TRUE(QMetaObject::invokeMethod(filmstrip, "discardCurrentCommit"));
-  EXPECT_EQ(harness.session_.discardCount(), 1);
+  const QVariantList requests = harness.menuRequests();
+  ASSERT_EQ(requests.size(), 1);
+  const QVariantMap payload = requests.first().toMap();
+  EXPECT_EQ(payload.value(QStringLiteral("elementId")).toInt(), 1001);
+  EXPECT_EQ(payload.value(QStringLiteral("imageId")).toInt(), 2001);
+  EXPECT_DOUBLE_EQ(payload.value(QStringLiteral("sceneX")).toDouble(), 96.0);
+  EXPECT_DOUBLE_EQ(payload.value(QStringLiteral("sceneY")).toDouble(), 24.0);
+}
+
+TEST(EditorFilmstripQmlTest, SelectedTileShowsSavingAndRenderBadgesWhileSessionBusy) {
+  FilmstripQmlHarness harness;
+  ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
+  ASSERT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
+
+  auto* filmstrip = harness.filmstrip();
+  ASSERT_NE(filmstrip, nullptr);
+  QTRY_VERIFY_WITH_TIMEOUT(harness.list() != nullptr, 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(harness.library_.isPinned(1000), 2000);
 
   harness.session_.setCanDiscardCurrentCommit(false);
   harness.session_.setSessionState(QStringLiteral("Saving"));

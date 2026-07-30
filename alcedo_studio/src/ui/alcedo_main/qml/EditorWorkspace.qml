@@ -10,6 +10,7 @@ Item {
     objectName: "editorWorkspace"
 
     property var theme: null
+    property var host: null
     property var workspaceRouter: appModules.workspaceRouter
     property var editorSession: appModules.editorSession
     property var interactionPolicy: appModules.interactionPolicy
@@ -697,6 +698,11 @@ Item {
                     theme: root.theme
                     editorSession: root.editorSession
                     interactionPolicy: root.interactionPolicy
+                    onContextMenuRequested: function(item, sceneX, sceneY) {
+                        if (root.host && root.host.openEditorFilmstripContextMenu) {
+                            root.host.openEditorFilmstripContextMenu(item, sceneX, sceneY)
+                        }
+                    }
                 }
             }
 
