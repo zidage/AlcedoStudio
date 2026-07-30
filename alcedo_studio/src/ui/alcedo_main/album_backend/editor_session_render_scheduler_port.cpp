@@ -68,7 +68,7 @@ EditorSessionRenderSchedulerPort::EditorSessionRenderSchedulerPort(
     : pipeline_scheduler_(std::move(pipeline_scheduler)) {}
 
 EditorSessionRenderSchedulerPort::~EditorSessionRenderSchedulerPort() {
-  std::vector<std::jthread>                                           workers;
+  std::vector<std::thread>                                            workers;
   std::vector<std::shared_ptr<alcedo::EditorRenderCancellationToken>> cancellations;
   {
     std::scoped_lock lock(mutex_);
@@ -82,7 +82,9 @@ EditorSessionRenderSchedulerPort::~EditorSessionRenderSchedulerPort() {
     workers.swap(workers_);
   }
   for (const auto& cancellation : cancellations) cancellation->Cancel();
-  workers.clear();
+  for (auto& worker : workers) {
+    if (worker.joinable()) worker.join();
+  }
 }
 
 void EditorSessionRenderSchedulerPort::SetCoordinator(
@@ -148,7 +150,7 @@ auto EditorSessionRenderSchedulerPort::Schedule(const alcedo::EditorRenderReques
     auto             it = jobs_.find(job.job_id);
     if (it != jobs_.end()) it->second.running = true;
   }
-  std::jthread worker([this, job]() mutable {
+  std::thread worker([this, job]() mutable {
     try {
       ExecuteJob(job);
     } catch (const std::exception& ex) {
@@ -159,7 +161,7 @@ auto EditorSessionRenderSchedulerPort::Schedule(const alcedo::EditorRenderReques
       CompleteJob(job.request, false, false, "First-frame producer exception");
     }
   });
-  bool         cancel_started_worker = false;
+  bool cancel_started_worker = false;
   {
     std::scoped_lock lock(mutex_);
     if (shutting_down_) {
@@ -170,6 +172,7 @@ auto EditorSessionRenderSchedulerPort::Schedule(const alcedo::EditorRenderReques
   }
   if (cancel_started_worker) {
     if (job.request.intent.cancellation) job.request.intent.cancellation->Cancel();
+    if (worker.joinable()) worker.join();
     return 0;
   }
   return job.job_id;

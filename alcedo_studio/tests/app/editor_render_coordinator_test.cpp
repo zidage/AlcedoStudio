@@ -261,12 +261,12 @@ TEST_F(EditorRenderCoordinatorTest, ConcurrentSubmitReturnsWhileAnotherThreadIsB
     release_observer.wait(lock, [&] { return observer_can_return; });
   });
 
-  std::jthread first_submit([&] {
+  std::thread first_submit([&] {
     coordinator_->Submit(
         MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
   });
 
-  bool         entered = false;
+  bool entered = false;
   {
     std::unique_lock lock(observer_mutex);
     entered = observer_entered.wait_for(lock, std::chrono::seconds(2),
@@ -275,13 +275,13 @@ TEST_F(EditorRenderCoordinatorTest, ConcurrentSubmitReturnsWhileAnotherThreadIsB
   EXPECT_TRUE(entered);
 
   std::atomic<bool> second_returned = false;
-  std::jthread      second_submit([&] {
+  std::thread       second_submit([&] {
     coordinator_->Submit(
         MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
     second_returned.store(true, std::memory_order_release);
   });
 
-  const auto        deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
   while (!second_returned.load(std::memory_order_acquire) &&
          std::chrono::steady_clock::now() < deadline) {
     std::this_thread::yield();
@@ -293,6 +293,8 @@ TEST_F(EditorRenderCoordinatorTest, ConcurrentSubmitReturnsWhileAnotherThreadIsB
     observer_can_return = true;
   }
   release_observer.notify_one();
+  if (first_submit.joinable()) first_submit.join();
+  if (second_submit.joinable()) second_submit.join();
 }
 
 TEST_F(EditorRenderCoordinatorTest, ObserverExceptionDoesNotDisableLaterDelivery) {
