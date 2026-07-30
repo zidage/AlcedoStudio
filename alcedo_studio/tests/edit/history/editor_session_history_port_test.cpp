@@ -19,12 +19,15 @@
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_mini_git_materializer.hpp"
 #include "app/pipeline_service.hpp"
+#include "app/project_service.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
 #include "edit/operators/operator_registeration.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
+#include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_commit_presentation.hpp"
 #include "ui/alcedo_main/album_backend/editor_history_shared_helpers.hpp"
+#include "utils/clock/time_provider.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -1057,5 +1060,99 @@ TEST_F(EditorSessionHistoryPortTest, MoveAcrossMergeReconstructsResolvedFields) 
   EXPECT_EQ(PatchValue(resolved_snapshot, "exposure"), R"({"exposure":0.9})")
       << "moving forward across a merge must reconstruct the merge-resolved field values";
 }
+
+TEST(EditorSessionHistoryPortPersistTest,
+     CheckoutDefaultAfterPastePersistsWithoutLiveIdentityError) {
+  alcedo::TimeProvider::Refresh();
+  RegisterAllOperators();
+
+  const auto stamp =
+      std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+  const auto db_path =
+      std::filesystem::temp_directory_path() / ("paste_checkout_default_" + stamp + ".db");
+  const auto meta_path =
+      std::filesystem::temp_directory_path() / ("paste_checkout_default_" + stamp + ".json");
+  const auto journal_path =
+      std::filesystem::temp_directory_path() / ("paste_checkout_default_" + stamp + ".wal");
+  std::error_code ec;
+  std::filesystem::remove(db_path, ec);
+  std::filesystem::remove(meta_path, ec);
+  std::filesystem::remove(journal_path, ec);
+
+  constexpr sl_element_id_t element_id = 821;
+  alcedo::ProjectService project(db_path, meta_path, alcedo::ProjectOpenMode::kCreateNew);
+  auto pipeline_service =
+      std::make_shared<alcedo::PipelineMgmtService>(project.GetStorageService());
+
+  auto guard = pipeline_service->LoadEditorPipeline(element_id);
+  ASSERT_NE(guard, nullptr);
+  ASSERT_NE(guard->commit_graph_, nullptr);
+  const auto default_version_id = guard->commit_graph_->GetActiveVersionId();
+  EXPECT_EQ(guard->commit_graph_->GetVersionRef(default_version_id).display_name, "Default");
+
+  auto pipeline = std::make_shared<EditorSessionPipelinePort>();
+  pipeline->SetServices(EditorSessionPipelineServices{
+      [pipeline_service]() { return pipeline_service; },
+      [guard](sl_element_id_t) { return guard; }});
+
+  EditorSessionHistoryPort history;
+  history.SetServices(
+      EditorSessionHistoryPort::Services{[journal_path](sl_element_id_t) { return journal_path; }});
+  history.SetPipelinePort(pipeline);
+
+  std::string error;
+  const auto handle = history.Acquire(element_id, &error);
+  ASSERT_TRUE(handle.valid) << error;
+
+  alcedo::EditorRenderAdjustmentSnapshot baseline_snapshot;
+  ASSERT_TRUE(history.ReadAdjustmentSnapshot(handle, &baseline_snapshot, &error)) << error;
+
+  const auto package = MakeExposureTransferPackage(0.85);
+  alcedo::AdjustmentPasteResult paste_result;
+  alcedo::EditorTransferCandidate candidate;
+  ASSERT_TRUE(history.PreparePaste(handle, package, "Pasted Adjustments", &paste_result,
+                                   &candidate, &error))
+      << error;
+  ASSERT_TRUE(candidate.valid());
+
+  auto capture = history.CaptureTransferSaveCheckpoint(handle, candidate, &error);
+  ASSERT_TRUE(static_cast<bool>(capture)) << error;
+  {
+    auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto db_lock  = db_guard.Lock();
+    alcedo::CommitGraphService graph_service(db_guard.conn_);
+    graph_service.Materialize(capture->materialization);
+  }
+
+  ASSERT_TRUE(history.PublishTransferCandidate(handle, candidate, nullptr, {}, &paste_result,
+                                               nullptr, &error))
+      << error;
+  ASSERT_TRUE(paste_result.pasted);
+  EXPECT_NE(guard->commit_graph_->GetActiveVersionId(), default_version_id);
+  EXPECT_EQ(guard->commit_graph_->GetActiveVersionRef().display_name, "Pasted Adjustments");
+  ASSERT_TRUE(guard->working_head_commit_hash_.has_value());
+
+  alcedo::EditorRenderAdjustmentSnapshot pasted_snapshot;
+  ASSERT_TRUE(history.ReadAdjustmentSnapshot(handle, &pasted_snapshot, &error)) << error;
+  EXPECT_EQ(PatchValue(pasted_snapshot, "exposure"), R"({"exposure":0.85})");
+
+  // Regression: checkout Default after Paste must persist without
+  // "live history identity changed before editor history persistence".
+  ASSERT_TRUE(history.CheckoutVersion(handle, default_version_id, &error)) << error;
+  EXPECT_EQ(guard->commit_graph_->GetActiveVersionId(), default_version_id);
+  EXPECT_FALSE(guard->working_head_commit_hash_.has_value());
+
+  alcedo::EditorRenderAdjustmentSnapshot default_snapshot;
+  ASSERT_TRUE(history.ReadAdjustmentSnapshot(handle, &default_snapshot, &error)) << error;
+  EXPECT_EQ(PatchValue(default_snapshot, "exposure"), PatchValue(baseline_snapshot, "exposure"));
+
+  history.Release(handle);
+  pipeline_service->SavePipeline(guard);
+
+  std::filesystem::remove(db_path, ec);
+  std::filesystem::remove(meta_path, ec);
+  std::filesystem::remove(journal_path, ec);
+}
+
 }  // namespace
 }  // namespace alcedo::ui

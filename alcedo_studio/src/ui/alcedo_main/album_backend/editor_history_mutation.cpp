@@ -293,6 +293,12 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
     return false;
   }
 
+  // PersistEditorHistoryState requires the pipeline guard's working head/chain to match the
+  // live graph's active Version. Sync before persistence so checkout from a pasted (or any
+  // non-root) Version back to Default does not trip the live-identity guard.
+  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
+  state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
+
   alcedo::EditorRenderAdjustmentSnapshot next_snapshot;
   if (!SnapshotAtHead(state->root_snapshot, graph, graph.GetActiveVersionRef().head_commit_hash,
                       &next_snapshot, error)) {
@@ -312,8 +318,6 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
   }
 
   state->committed_snapshot = std::move(next_snapshot);
-  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
-  state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
   state->pipeline_guard->dirty_ = false;
   state->pipeline_guard->serialized_state_needs_writeback_ = false;
   state->pending_before.clear();

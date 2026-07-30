@@ -120,6 +120,7 @@ target_link_libraries(EditorSessionHistoryPortTest
   EditorAdjustmentPipeline
   EditorMiniGitMaterializer
   PipelineMgmtService
+  ProjectService
   EditHistory
   EditPipeline
   Operators

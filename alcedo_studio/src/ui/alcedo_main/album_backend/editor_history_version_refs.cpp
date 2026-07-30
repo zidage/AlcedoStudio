@@ -98,6 +98,9 @@ auto EditorHistoryVersionRefs::CreateRootVersionAndCheckout(
     RestoreNamedRefPrior(*state, prior);
     return false;
   }
+  // Match the pipeline guard identity to the newly active Version before persistence.
+  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
+  state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
   alcedo::EditorRenderAdjustmentSnapshot next_snapshot;
   if (!SnapshotAtHead(state->root_snapshot, graph, std::nullopt, &next_snapshot, error)) {
     RestoreNamedRefPrior(*state, prior);
@@ -146,6 +149,9 @@ auto EditorHistoryVersionRefs::BranchFromCommitAndCheckout(
     RestoreNamedRefPrior(*state, prior);
     return false;
   }
+  // Match the pipeline guard identity to the newly active Version before persistence.
+  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
+  state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
   alcedo::EditorRenderAdjustmentSnapshot next_snapshot;
   if (!SnapshotAtHead(state->root_snapshot, graph, commit_id, &next_snapshot, error)) {
     RestoreNamedRefPrior(*state, prior);
