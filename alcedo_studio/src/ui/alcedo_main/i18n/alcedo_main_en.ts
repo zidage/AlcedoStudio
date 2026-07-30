@@ -4,1415 +4,5046 @@
 <context>
     <name>AboutPage</name>
     <message>
+        <location filename="../qml/AboutPage.qml" line="+77"/>
+        <source>New to Alcedo Studio?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>The documentation website is the best place to learn how this software works — how to import, edit, and manage your photos, step by step. It is the tutorial for Alcedo Studio, and it is kept up to date with each release.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Open documentation</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>About</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
         <source>Alcedo Studio</source>
-        <translation type="obsolete">Alcedo Studio</translation>
+        <translation type="unfinished">Alcedo Studio</translation>
     </message>
     <message>
+        <location line="+9"/>
+        <source>An open-source RAW photo editor and digital asset management (DAM) project, built for a lightweight, high-performance, industry-compatible photography workflow.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Version</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
         <source>Unavailable</source>
-        <translation type="obsolete">Unavailable</translation>
+        <translation type="unfinished">Unavailable</translation>
     </message>
     <message>
+        <location line="+10"/>
+        <source>Copyright © 2026 Yurun Zi</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Licensed under GPL-3.0-only, with an additional permission under GPLv3 section 7 for combining and distributing the required NVIDIA CUDA components.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Links</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Documentation (tutorial)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>GitHub repository</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Acknowledgements</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Alcedo Studio builds on research, open-source implementations, and community data from the wider imaging ecosystem:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Film-emulation LUTs — JanLohse/spectral_film_lut</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Camera color matrices — AcademySoftwareFoundation/rawtoaces-data</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Highlight reconstruction — RawTherapee hilite_recon.cc</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>RCD demosaic — LuisSR/RCD-Demosaicing</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>OpenDRT — jedypod/open-display-transform</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>ACES 2.0 — aces-aswf/aces-core</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Film grain renderer — Newson, Faraj, Galerne, Delon (IPOL 2017)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>Third-party licenses</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>This software bundles open-source third-party libraries. Their licenses are reproduced in the third_party_licenses/ folder of the source tree; the summary below lists each library and its license.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+27"/>
         <source>Collapse</source>
-        <translation type="obsolete">Collapse</translation>
+        <translation type="unfinished">Collapse</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>View all %1 licenses</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>AcceleratorPreparationOverlay</name>
+    <message>
+        <location filename="../qml/AcceleratorPreparationOverlay.qml" line="+34"/>
+        <source>Preparing OpenCL</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Compiling kernels...</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>ActivateModelDialog</name>
+    <message>
+        <location filename="../qml/ActivateModelDialog.qml" line="+76"/>
+        <source>Set up an AI model to analyze images</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>This project doesn&apos;t have an AI model activated yet, so content labels can&apos;t be generated. Install and activate a model in Settings to enable automatic label generation for your images.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Not now</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Set up model</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>AdjustmentField</name>
+    <message>
+        <location filename="../qml/AdjustmentField.qml" line="+112"/>
+        <source>Out of range</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Invalid number</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>AdjustmentGroup</name>
+    <message>
+        <location filename="../qml/AdjustmentGroup.qml" line="+53"/>
+        <source>Reset %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Reset group</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>AdjustmentResetButton</name>
+    <message>
+        <location filename="../qml/AdjustmentResetButton.qml" line="+29"/>
+        <source>Reset %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Reset</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>AdjustmentSlider</name>
+    <message>
+        <location filename="../qml/AdjustmentSlider.qml" line="+257"/>
+        <source>Out of range</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Invalid number</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+42"/>
+        <source>Drag the handle to adjust %1. Double-click to reset.</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>AdjustmentTransferDialog</name>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="130"/>
+        <location filename="../qml/AdjustmentTransferDialog.qml" line="+132"/>
         <source>Other</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="173"/>
+        <location line="+43"/>
         <source>Imported</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="179"/>
+        <location line="+6"/>
         <source>Copy Adjustments</source>
         <translation>Copy Adjustments</translation>
     </message>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="179"/>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="184"/>
+        <location line="+0"/>
+        <location line="+5"/>
         <source>Paste Adjustments</source>
         <translation>Paste Adjustments</translation>
     </message>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="186"/>
+        <location line="+2"/>
         <source>Copy %1 Settings</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="287"/>
+        <location line="+107"/>
         <source>Close</source>
         <translation type="unfinished">Close</translation>
     </message>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="474"/>
+        <location line="+177"/>
         <source>Active · %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="365"/>
+        <location line="-107"/>
         <source>Source Versions</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="532"/>
+        <location line="+157"/>
         <source>Parameters to Copy</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="533"/>
+        <location line="+1"/>
         <source>Parameters to Paste</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="542"/>
+        <location line="+9"/>
         <source>Select All</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="571"/>
+        <location line="+29"/>
         <source>None</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="654"/>
+        <location line="+76"/>
         <source>%1 of %2 settings selected</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="656"/>
+        <location line="+2"/>
         <source>%1 settings · %2 target images</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="716"/>
+        <location line="+55"/>
         <source>%1 section</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="717"/>
+        <location line="+1"/>
         <source>Expanded</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="717"/>
+        <location line="+0"/>
         <source>Collapsed</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Choose the adjustments to copy from %1.</source>
-        <translation type="vanished">Choose the adjustments to copy from %1.</translation>
-    </message>
-    <message>
-        <source>Choose the adjustments to copy.</source>
-        <translation type="vanished">Choose the adjustments to copy.</translation>
-    </message>
-    <message>
-        <source>Apply these copied adjustments to %1 selected images?</source>
-        <translation type="vanished">Apply these copied adjustments to %1 selected images?</translation>
-    </message>
-    <message>
-        <source>Strategy</source>
-        <translation type="vanished">Strategy</translation>
-    </message>
-    <message>
-        <source>Merge</source>
-        <translation type="vanished">Merge</translation>
-    </message>
-    <message>
-        <source>Paste</source>
-        <translation type="vanished">Paste</translation>
-    </message>
-    <message>
-        <source>Merge creates a clean merged version from the target&apos;s current adjustments plus the copied adjustments, with copied values taking priority. Paste keeps the copied adjustments as new edit steps in a pasted version.</source>
-        <translation type="vanished">Merge creates a clean merged version from the target&apos;s current adjustments plus the copied adjustments, with copied values taking priority. Paste keeps the copied adjustments as new edit steps in a pasted version.</translation>
-    </message>
-    <message>
-        <source>%1 selected</source>
-        <translation type="vanished">%1 selected</translation>
-    </message>
-    <message>
-        <source>%1 adjustments</source>
-        <translation type="vanished">%1 adjustments</translation>
-    </message>
-    <message>
-        <source>Select all</source>
-        <translation type="vanished">Select all</translation>
-    </message>
-    <message>
-        <source>Unselect all</source>
-        <translation type="vanished">Unselect all</translation>
-    </message>
-    <message>
-        <location filename="../qml/AdjustmentTransferDialog.qml" line="669"/>
+        <location line="-42"/>
         <source>Cancel</source>
         <translation>Cancel</translation>
-    </message>
-    <message>
-        <source>No</source>
-        <translation type="vanished">No</translation>
-    </message>
-    <message>
-        <source>OK</source>
-        <translation type="vanished">OK</translation>
-    </message>
-    <message>
-        <source>Yes</source>
-        <translation type="vanished">Yes</translation>
     </message>
 </context>
 <context>
     <name>AdvancedContentAnalysisDialog</name>
     <message>
+        <location filename="../qml/AdvancedContentAnalysisDialog.qml" line="+74"/>
+        <source>No provider selected</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>No model selected</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Chinese</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>English</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Follow app language</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>评价严苛程度</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Rating strictness</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+227"/>
+        <source>Analysis</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+386"/>
         <source>Description</source>
-        <translation type="obsolete">Description</translation>
+        <translation type="unfinished">Description</translation>
     </message>
     <message>
+        <location line="-386"/>
+        <location line="+389"/>
         <source>Rating</source>
-        <translation type="obsolete">Rating</translation>
+        <translation type="unfinished">Rating</translation>
     </message>
     <message>
+        <location line="-373"/>
+        <source>provider status %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>error code %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>provider %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>model %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>request %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>No provider error message was returned.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Image %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1: %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>Open a project before running remote analysis.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Select at least one image to analyze.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Choose at least one analysis task.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+73"/>
+        <source>Canceled. Successful results already saved remain in place.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Finished with %1 successful item(s) and %2 failed item(s). First failure: %3</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Finished with %1 successful item(s) and %2 failed item(s).</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Analysis complete. Skipped %1 existing image(s).</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Analysis complete.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+105"/>
+        <source>Advanced Content Analysis</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>%1 selected image(s)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+72"/>
+        <source>Provider</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Model</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Output language</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>Tasks</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>Rating reason</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Overwrite</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Overwrite photo rating</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Overwrite rating reason</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Overwrite image description</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+92"/>
+        <source>Running %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
         <source>Finished</source>
-        <translation type="obsolete">Finished</translation>
+        <translation type="unfinished">Finished</translation>
     </message>
     <message>
+        <location line="+0"/>
+        <source>Ready</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>%1 / %2 image(s)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Usage: %1 token(s)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+29"/>
+        <source>Failure details</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>Results refresh the focused photo&apos;s Image inspector. Open the Image page to review and edit description, rating, and reasons.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>Protected by interaction locks; safe to continue in the background.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remote provider calls may incur cost.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Move task to background</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Analyze Selected</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
         <source>Cancel</source>
-        <translation type="obsolete">Cancel</translation>
+        <translation type="unfinished">Cancel</translation>
     </message>
     <message>
+        <location line="+8"/>
         <source>Done</source>
-        <translation type="obsolete">Done</translation>
+        <translation type="unfinished">Done</translation>
     </message>
 </context>
 <context>
     <name>AiProviderSettingsPanel</name>
     <message>
+        <location filename="../qml/AiProviderSettingsPanel.qml" line="+69"/>
+        <source>Codex login did not finish yet. Complete `codex login`, then use Codex Login again.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>Codex OAuth is connected. Open a project to refresh models.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>Loading Codex models...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>This build does not include Codex OAuth import. Rebuild Alcedo Studio.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Checking local Codex login...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <location line="+2"/>
+        <source>Codex OAuth connected. Loading models...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <location line="+378"/>
+        <source>Finish the current AI task before changing provider settings.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-374"/>
+        <source>The field value could not be saved.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+96"/>
+        <source>Follow app language</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>English</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>中文</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Output language</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+32"/>
+        <source>Provider settings</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <location line="+169"/>
+        <source>Add provider</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-111"/>
+        <source>ChatGPT / Codex OAuth</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>In use</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Use</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Edit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>No provider profiles</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Use the + button above to create one.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Choose a template to create a profile from.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+95"/>
+        <source>Provider</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+30"/>
+        <source>OpenAI OAuth</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Use Codex Login</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Open Login</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>This build does not include Codex login launch. Run `codex login` manually.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Codex login started. Complete the browser flow; models will load when login finishes.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Disconnect</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>Codex OAuth disconnected</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Codex OAuth connected</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No Codex OAuth credential imported</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>API key</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Paste API key</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Save Key</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>API key saved</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Delete Key</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>API key deleted</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Key saved</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No key saved</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Model</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Search models</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No matching models</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+22"/>
+        <source>Test &amp; Refresh</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>Advanced</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Display name</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Provider id</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Driver</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Base URL</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Endpoint</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Models endpoint</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Models response data pointer</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Auth type</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Credential slot</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Structured output</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Timeout ms</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Max image bytes</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Recommended rendition</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Duplicate</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <location line="+71"/>
+        <source>Delete</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-36"/>
+        <source>Delete provider</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Delete this provider profile?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Delete saved key</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
         <source>Cancel</source>
-        <translation type="obsolete">Cancel</translation>
+        <translation type="unfinished">Cancel</translation>
     </message>
 </context>
 <context>
     <name>AlbumExportDialog</name>
     <message>
+        <location filename="../qml/AlbumExportDialog.qml" line="+99"/>
+        <source>...(%1 more)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>Exporting</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
         <source>Done</source>
-        <translation type="obsolete">Done</translation>
+        <translation type="unfinished">Done</translation>
     </message>
     <message>
+        <location line="+2"/>
+        <source>Failed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Queued</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <location line="+2"/>
+        <location line="+3"/>
+        <location line="+7"/>
+        <source>8-bit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-10"/>
+        <location line="+4"/>
+        <location line="+4"/>
+        <source>16-bit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-3"/>
+        <location line="+3"/>
+        <source>32-bit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+73"/>
+        <source>Select Export Folder</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>Export Images</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Configure settings for current batch</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+66"/>
+        <source>Destination</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Select output directory...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Browse</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>Put in Subfolder</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Processed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+37"/>
+        <source>HDR Export Settings</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Ultra HDR</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>HDR quality</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>Encoding longest edge (px)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <source>Dithering</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+30"/>
+        <source>SDR Export Settings</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Image Format</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>JPEG</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>PNG</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>TIFF</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>WEBP</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>EXR</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Limit longest edge (px)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>No limit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>Quality</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>Bit Depth</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>PNG level</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>Compression</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>None</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LZW</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>ZIP</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+36"/>
+        <source>Export Queue</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Items</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Add Selected (%1)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Clear</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+81"/>
+        <source>HDR</source>
+        <translation type="unfinished">HDR</translation>
+    </message>
+    <message>
+        <location line="+30"/>
+        <source>Queue is empty</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>Export Progress</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+36"/>
         <source>Close</source>
-        <translation type="obsolete">Close</translation>
+        <translation type="unfinished">Close</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Cancel</source>
-        <translation type="obsolete">Cancel</translation>
+        <translation type="unfinished">Cancel</translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>Exporting...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Export 1 File</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Export %1 Files</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>AlbumInspectorPanel</name>
     <message>
+        <location filename="../qml/AlbumInspectorPanel.qml" line="+43"/>
         <source>LIBRARY OVERVIEW</source>
-        <translation type="vanished">LIBRARY OVERVIEW</translation>
+        <translation>LIBRARY OVERVIEW</translation>
     </message>
     <message>
+        <location line="+11"/>
         <source>Total Photos</source>
-        <translation type="vanished">Total Photos</translation>
+        <translation>Total Photos</translation>
     </message>
     <message>
+        <location line="+44"/>
         <source>By Capture Date</source>
-        <translation type="vanished">By Capture Date</translation>
+        <translation>By Capture Date</translation>
     </message>
     <message>
+        <location line="+10"/>
         <source>By Camera Model</source>
-        <translation type="vanished">By Camera Model</translation>
+        <translation>By Camera Model</translation>
     </message>
     <message>
+        <location line="+10"/>
         <source>By Labels</source>
-        <translation type="vanished">By Labels</translation>
+        <translation>By Labels</translation>
     </message>
     <message>
+        <location line="+19"/>
         <source>By Lens</source>
-        <translation type="vanished">By Lens</translation>
+        <translation>By Lens</translation>
     </message>
     <message>
+        <location line="+20"/>
         <source>SEARCH FILTER</source>
-        <translation type="vanished">SEARCH FILTER</translation>
+        <translation>SEARCH FILTER</translation>
     </message>
     <message>
+        <location line="+36"/>
         <source>Filtered by search</source>
-        <translation type="vanished">Filtered by search</translation>
+        <translation>Filtered by search</translation>
     </message>
 </context>
 <context>
     <name>Alcedo</name>
     <message>
-        <source>Natural language search is enabled — field filters are disabled.</source>
-        <translation type="vanished">Natural language search is enabled — field filters are disabled.</translation>
-    </message>
-    <message>
+        <location filename="../album_backend/image_controller.cpp" line="+52"/>
         <source>Capture</source>
-        <translation type="vanished">Capture</translation>
+        <translation>Capture</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Gear</source>
-        <translation type="vanished">Gear</translation>
+        <translation>Gear</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>Storage</source>
-        <translation type="vanished">Storage</translation>
+        <translation>Storage</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Original Size</source>
-        <translation type="vanished">Original Size</translation>
+        <translation>Original Size</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Original Aspect Ratio</source>
-        <translation type="vanished">Original Aspect Ratio</translation>
+        <translation>Original Aspect Ratio</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Captured At</source>
-        <translation type="vanished">Captured At</translation>
+        <translation>Captured At</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Camera Brand</source>
-        <translation type="vanished">Camera Brand</translation>
+        <translation>Camera Brand</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Camera Model</source>
-        <translation type="vanished">Camera Model</translation>
+        <translation>Camera Model</translation>
     </message>
     <message>
+        <location line="+11"/>
         <source>Open in file manager</source>
-        <translation type="vanished">Open in file manager</translation>
+        <translation>Open in file manager</translation>
     </message>
     <message>
+        <location line="-20"/>
         <source>(unnamed)</source>
-        <translation type="vanished">(unnamed)</translation>
+        <translation>(unnamed)</translation>
     </message>
     <message>
+        <location filename="../../../include/ui/alcedo_main/editor_dialog/editor_dialog.hpp" line="+250"/>
+        <source>Adjustments</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Tone</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Primary tonal shaping controls.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Contrast</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Highlights</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Shadows</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Whites</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Blacks</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Tone Curve</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Smooth tone curve mapped from input [0, 1] to output [0, 1].</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Left click/drag to shape. Right click a point to remove. Double click to reset.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Reset Curve</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Color</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Color balance and saturation.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Saturation</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>White Balance</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>As Shot</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Custom</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Color Temp</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Color Tint</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Color temperature/tint is unavailable for this image.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Detail</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Micro-contrast and sharpen controls.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Sharpen</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Clarity</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>LUT</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Browse and apply look-up tables.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>HSL / Color</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Per-hue lightness and chroma adjustments.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Hue Shift</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Lightness</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Chroma</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Hue Smoothness</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Color Wheels</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>CDL: Lift / Gamma / Gain with master offset.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Gamma</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Lift</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Gain</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Display Rendering Transform</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Display RT</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Encoding Space</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Encoding EOTF</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Peak Luminance</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Rendering Method</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Choose the transform family. Shared encoding settings stay above; method-specific settings stay preserved per method.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>ACES 2.0</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>OpenDRT</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Limiting Space</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Look Preset</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Tonescale Preset</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Creative White</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Geometry</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Crop &amp; Aspect Ratio</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Aspect</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Crop Rotation</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Angle</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Crop Offset</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>X</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Y</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Width</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Height</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Apply Crop</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Reset</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Pixels update on Apply. Double click any slider or the viewer to reset. Ctrl+R resets all geometry.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>RAW Decode</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Configure RAW decode options. These settings are shared with thumbnail rendering.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Enable Highlight Reconstruction</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Lens Calibration</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Enable correction and optionally override lens metadata with catalog entries.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Enable Lens Calibration</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location filename="../album_backend/image_controller.cpp" line="+10"/>
         <source>Lens Brand</source>
-        <translation type="vanished">Lens Brand</translation>
+        <translation>Lens Brand</translation>
     </message>
     <message>
+        <location line="+1"/>
+        <location filename="../album_backend/image_controller.cpp" line="+1"/>
         <source>Lens Model</source>
-        <translation type="vanished">Lens Model</translation>
+        <translation>Lens Model</translation>
     </message>
     <message>
+        <location line="+1"/>
+        <source>Edit History</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Position</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Undo Last</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Undo last transaction</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Current</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Returned to step %1 of %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No edits yet</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Versions</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>New Version</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Modified %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>CURRENT</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Rename version</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Version name</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Untitled</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No versions</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Rec.709</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>P3-D65</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>P3-D60</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>P3-DCI</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>XYZ</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Rec.2020</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>ProPhoto RGB</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Adobe RGB</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Standard</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Arriba</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Sylvan</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Colorful</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Aery</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Dystopic</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Umbra</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Use Look Preset</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Low Contrast</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Medium Contrast</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>High Contrast</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Arriba Tonescale</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Sylvan Tonescale</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Colorful Tonescale</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Aery Tonescale</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Dystopic Tonescale</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Umbra Tonescale</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Marvelous Tonscape</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Dagrinchi Tonegroan</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>D93</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-121"/>
+        <location filename="../album_backend/image_controller.cpp" line="-8"/>
         <source>Exposure</source>
-        <translation type="vanished">Exposure</translation>
+        <translation>Exposure</translation>
     </message>
     <message>
+        <location filename="../album_backend/image_controller.cpp" line="+9"/>
         <source>Aperture</source>
-        <translation type="vanished">Aperture</translation>
+        <translation>Aperture</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Shutter</source>
-        <translation type="vanished">Shutter</translation>
+        <translation>Shutter</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>ISO</source>
-        <translation type="vanished">ISO</translation>
+        <translation>ISO</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Focal Length</source>
-        <translation type="vanished">Focal Length</translation>
+        <translation>Focal Length</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>35mm Equivalent</source>
-        <translation type="vanished">35mm Equivalent</translation>
+        <translation>35mm Equivalent</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Focus Distance</source>
-        <translation type="vanished">Focus Distance</translation>
+        <translation>Focus Distance</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Rating</source>
-        <translation type="vanished">Rating</translation>
+        <translation>Rating</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Source Directory</source>
-        <translation type="vanished">Source Directory</translation>
+        <translation>Source Directory</translation>
     </message>
     <message>
-        <source>No valid image was selected.</source>
-        <translation type="vanished">No valid image was selected.</translation>
-    </message>
-    <message>
-        <source>Failed to load image details.</source>
-        <translation type="vanished">Failed to load image details.</translation>
-    </message>
-    <message>
-        <source>Source directory is unavailable.</source>
-        <translation type="vanished">Source directory is unavailable.</translation>
-    </message>
-    <message>
-        <source>Failed to open source directory.</source>
-        <translation type="vanished">Failed to open source directory.</translation>
-    </message>
-    <message>
-        <source>Executable Files (*.exe);;All Files (*)</source>
-        <translation type="vanished">Executable Files (*.exe);;All Files (*)</translation>
-    </message>
-    <message>
-        <source>These Nikon HE/HE* files need Adobe DNG Converter before they can be imported.</source>
-        <translation type="vanished">These Nikon HE/HE* files need Adobe DNG Converter before they can be imported.</translation>
-    </message>
-    <message>
-        <source>Select Adobe DNG Converter</source>
-        <translation type="vanished">Select Adobe DNG Converter</translation>
-    </message>
-    <message>
-        <source>Choose the Adobe DNG Converter executable to continue.</source>
-        <translation type="vanished">Choose the Adobe DNG Converter executable to continue.</translation>
-    </message>
-    <message>
-        <source>Adobe DNG Converter was not found. Choose a valid executable or exit.</source>
-        <translation type="vanished">Adobe DNG Converter was not found. Choose a valid executable or exit.</translation>
-    </message>
-    <message>
-        <source>Adobe DNG Converter was not found at /Applications/Adobe DNG Converter.app. Install it, exit this dialog, then reimport these Nikon HE/HE* files.</source>
-        <translation type="vanished">Adobe DNG Converter was not found at /Applications/Adobe DNG Converter.app. Install it, exit this dialog, then reimport these Nikon HE/HE* files.</translation>
-    </message>
-    <message>
-        <source>Adobe DNG Converter failed to start. Unsupported Nikon HE images were removed from the project.</source>
-        <translation type="vanished">Adobe DNG Converter failed to start. Unsupported Nikon HE images were removed from the project.</translation>
-    </message>
-    <message>
-        <source>Adobe DNG Converter failed to start (%1). Unsupported Nikon HE images were removed from the project.</source>
-        <translation type="vanished">Adobe DNG Converter failed to start (%1). Unsupported Nikon HE images were removed from the project.</translation>
-    </message>
-    <message>
-        <source>Running Adobe DNG Converter for %1 file(s)...</source>
-        <translation type="vanished">Running Adobe DNG Converter for %1 file(s)...</translation>
-    </message>
-    <message>
-        <source>Unsupported Nikon HE images were removed from the project. Source files were left untouched.</source>
-        <translation type="vanished">Unsupported Nikon HE images were removed from the project. Source files were left untouched.</translation>
-    </message>
-    <message>
-        <source>Reimporting converted DNG files... %1/%2 (failed %3)</source>
-        <translation type="vanished">Reimporting converted DNG files... %1/%2 (failed %3)</translation>
-    </message>
-    <message>
-        <source>Converted Nikon HE files were reimported: %1 imported, %2 failed.</source>
-        <translation type="vanished">Converted Nikon HE files were reimported: %1 imported, %2 failed.</translation>
-    </message>
-    <message>
-        <source>Review Unsupported Files</source>
-        <translation type="vanished">Review Unsupported Files</translation>
-    </message>
-    <message>
-        <source>Select Converter</source>
-        <translation type="vanished">Select Converter</translation>
-    </message>
-    <message>
-        <source>Running Converter</source>
-        <translation type="vanished">Running Converter</translation>
-    </message>
-    <message>
-        <source>Validating DNG</source>
-        <translation type="vanished">Validating DNG</translation>
-    </message>
-    <message>
-        <source>Removing Project Items</source>
-        <translation type="vanished">Removing Project Items</translation>
-    </message>
-    <message>
-        <source>Reimporting DNG</source>
-        <translation type="vanished">Reimporting DNG</translation>
-    </message>
-    <message>
-        <source>Finished</source>
-        <translation type="vanished">Finished</translation>
-    </message>
-    <message>
-        <source>Aborted</source>
-        <translation type="vanished">Aborted</translation>
-    </message>
-    <message>
-        <source>unknown error</source>
-        <translation type="vanished">unknown error</translation>
-    </message>
-    <message>
-        <source>Adobe DNG Converter failed (%1). Unsupported Nikon HE images were removed from the project.</source>
-        <translation type="vanished">Adobe DNG Converter failed (%1). Unsupported Nikon HE images were removed from the project.</translation>
-    </message>
-    <message>
-        <source>Validating converted DNG files...</source>
-        <translation type="vanished">Validating converted DNG files...</translation>
-    </message>
-    <message>
-        <source>Adobe DNG Converter finished, but no converted DNG files were found.</source>
-        <translation type="vanished">Adobe DNG Converter finished, but no converted DNG files were found.</translation>
-    </message>
-    <message>
-        <source>%1 file(s) were converted. Missing DNG output for: %2</source>
-        <translation type="vanished">%1 file(s) were converted. Missing DNG output for: %2</translation>
-    </message>
-    <message>
-        <source>Removing unsupported Nikon HE items from the project...</source>
-        <translation type="vanished">Removing unsupported Nikon HE items from the project...</translation>
-    </message>
-    <message>
-        <source>Reimporting %1 converted DNG file(s)...</source>
-        <translation type="vanished">Reimporting %1 converted DNG file(s)...</translation>
-    </message>
-    <message>
+        <location filename="../album_backend/project_module.cpp" line="+82"/>
         <source>CPU</source>
-        <translation type="vanished">CPU</translation>
+        <translation>CPU</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Auto</source>
-        <translation type="vanished">Auto</translation>
+        <translation>Auto</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Detected CUDA driver compatibility: %1.</source>
-        <translation type="vanished">Detected CUDA driver compatibility: %1.</translation>
+        <translation>Detected CUDA driver compatibility: %1.</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>No usable NVIDIA CUDA driver was detected.</source>
-        <translation type="vanished">No usable NVIDIA CUDA driver was detected.</translation>
+        <translation>No usable NVIDIA CUDA driver was detected.</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Failed to query the installed NVIDIA CUDA driver.</source>
-        <translation type="vanished">Failed to query the installed NVIDIA CUDA driver.</translation>
+        <translation>Failed to query the installed NVIDIA CUDA driver.</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>This machine has an NVIDIA graphics card, but it does not meet Alcedo&apos;s CUDA runtime requirements. CUDA requires an NVIDIA graphics driver with CUDA %1 or newer.
 
 %2
 
 Alcedo will use %3 instead.</source>
-        <translation type="vanished">This machine has an NVIDIA graphics card, but it does not meet Alcedo&apos;s CUDA runtime requirements. CUDA requires an NVIDIA graphics driver with CUDA %1 or newer.
+        <translation>This machine has an NVIDIA graphics card, but it does not meet Alcedo&apos;s CUDA runtime requirements. CUDA requires an NVIDIA graphics driver with CUDA %1 or newer.
 
 %2
 
 Alcedo will use %3 instead.</translation>
     </message>
     <message>
+        <location line="+4"/>
         <source>CUDA acceleration is not supported on this machine because no NVIDIA graphics card was detected.
 
 Alcedo will use %1 instead.</source>
-        <translation type="vanished">CUDA acceleration is not supported on this machine because no NVIDIA graphics card was detected.
+        <translation>CUDA acceleration is not supported on this machine because no NVIDIA graphics card was detected.
 
 Alcedo will use %1 instead.</translation>
     </message>
     <message>
+        <location line="+3"/>
         <source>Unknown accelerator backend.</source>
-        <translation type="vanished">Unknown accelerator backend.</translation>
+        <translation>Unknown accelerator backend.</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Selected accelerator backend is unavailable.</source>
-        <translation type="vanished">Selected accelerator backend is unavailable.</translation>
+        <translation>Selected accelerator backend is unavailable.</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Failed to switch accelerator backend: %1</source>
-        <translation type="vanished">Failed to switch accelerator backend: %1</translation>
+        <translation>Failed to switch accelerator backend: %1</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Failed to switch accelerator backend.</source>
-        <translation type="vanished">Failed to switch accelerator backend.</translation>
+        <translation>Failed to switch accelerator backend.</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Using %1 acceleration.</source>
-        <translation type="vanished">Using %1 acceleration.</translation>
+        <translation>Using %1 acceleration.</translation>
     </message>
     <message>
+        <location line="+1"/>
+        <source>Preparing OpenCL acceleration...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Compiling OpenCL kernels. This happens every launch.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>OpenCL acceleration is ready.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>OpenCL preparation failed: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../album_backend/image_controller.cpp" line="+2"/>
         <source>Camera</source>
-        <translation type="vanished">Camera</translation>
+        <translation>Camera</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Lens</source>
-        <translation type="vanished">Lens</translation>
+        <translation>Lens</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Aperture / Shutter</source>
-        <translation type="vanished">Aperture / Shutter</translation>
+        <translation>Aperture / Shutter</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Description</source>
-        <translation type="vanished">Description</translation>
+        <translation>Description</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Rating Reason</source>
-        <translation type="vanished">Rating Reason</translation>
+        <translation>Rating Reason</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>No AI description yet</source>
-        <translation type="vanished">No AI description yet</translation>
+        <translation>No AI description yet</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>No rating reason yet</source>
-        <translation type="vanished">No rating reason yet</translation>
+        <translation>No rating reason yet</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Manual edit</source>
-        <translation type="vanished">Manual edit</translation>
+        <translation>Manual edit</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Description cannot be empty.</source>
-        <translation type="vanished">Description cannot be empty.</translation>
+        <translation>Description cannot be empty.</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Rating reason cannot be empty.</source>
-        <translation type="vanished">Rating reason cannot be empty.</translation>
+        <translation>Rating reason cannot be empty.</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Description saved.</source>
-        <translation type="vanished">Description saved.</translation>
+        <translation>Description saved.</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Rating reason saved.</source>
-        <translation type="vanished">Rating reason saved.</translation>
+        <translation>Rating reason saved.</translation>
     </message>
     <message>
+        <location line="+1"/>
+        <source>Failed to save image description.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
         <source>Failed to save rating reason.</source>
-        <translation type="vanished">Failed to save rating reason.</translation>
-    </message>
-</context>
-<context>
-    <name>Alcedo.Main</name>
-    <message>
-        <source>Scope</source>
-        <translation type="vanished">Scope</translation>
-    </message>
-    <message>
-        <source>Histogram</source>
-        <translation type="vanished">Histogram</translation>
-    </message>
-    <message>
-        <source>Waveform</source>
-        <translation type="vanished">Waveform</translation>
-    </message>
-    <message>
-        <source>Waiting for histogram</source>
-        <translation type="vanished">Waiting for histogram</translation>
-    </message>
-    <message>
-        <source>Waiting for waveform</source>
-        <translation type="vanished">Waiting for waveform</translation>
+        <translation>Failed to save rating reason.</translation>
     </message>
 </context>
 <context>
     <name>AppDialogs</name>
     <message>
-        <source>Copy Adjustments</source>
-        <translation type="obsolete">Copy Adjustments</translation>
+        <location filename="../qml/AppDialogs.qml" line="+37"/>
+        <source>Select Images</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
+        <location line="+3"/>
+        <source>RAW Images (*.raw *.dng *.nef *.cr2 *.cr3 *.arw *.rw2 *.raf *.3fr *.fff)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>All Files (*)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+109"/>
+        <source>Copy Adjustments</source>
+        <translation type="unfinished">Copy Adjustments</translation>
+    </message>
+    <message>
+        <location line="+5"/>
         <source>Paste Adjustments</source>
-        <translation type="obsolete">Paste Adjustments</translation>
+        <translation type="unfinished">Paste Adjustments</translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Delete</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Remove from Album</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+194"/>
+        <source>Select at least one image to analyze.</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>BackgroundTaskBar</name>
     <message>
-        <source>Cancel</source>
-        <translation type="obsolete">Cancel</translation>
+        <location filename="../qml/BackgroundTaskBar.qml" line="+68"/>
+        <source>Background tasks</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
+        <location line="+45"/>
+        <source>Cancel</source>
+        <translation type="unfinished">Cancel</translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>AI Analysis</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Semantic Labels</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Model Activation</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Model Download</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Editor Save</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
         <source>Import</source>
-        <translation type="obsolete">Import</translation>
+        <translation type="unfinished">Import</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Export</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>BackgroundTaskPopover</name>
     <message>
+        <location filename="../qml/BackgroundTaskPopover.qml" line="+51"/>
+        <source>Background tasks</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+61"/>
+        <source>Task</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
         <source>Details</source>
-        <translation type="obsolete">Details</translation>
+        <translation type="unfinished">Details</translation>
     </message>
     <message>
+        <location line="+12"/>
         <source>Cancel</source>
-        <translation type="obsolete">Cancel</translation>
+        <translation type="unfinished">Cancel</translation>
     </message>
     <message>
+        <location line="+33"/>
+        <source>AI Analysis</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Semantic Labels</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Model Activation</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Model Download</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Editor Save</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
         <source>Import</source>
-        <translation type="obsolete">Import</translation>
+        <translation type="unfinished">Import</translation>
+    </message>
+</context>
+<context>
+    <name>CollapsibleSection</name>
+    <message>
+        <location filename="../qml/CollapsibleSection.qml" line="+114"/>
+        <source>Collapse %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Expand %1</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>CollectionsPanel</name>
     <message>
-        <source>Collections</source>
-        <translation type="vanished">Collections</translation>
-    </message>
-    <message>
+        <location filename="../qml/CollectionsPanel.qml" line="+20"/>
         <source>Search</source>
-        <translation type="vanished">Search</translation>
+        <translation>Search</translation>
     </message>
     <message>
+        <location line="+5"/>
+        <source>Advanced Content Analysis</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+32"/>
+        <source>全部图片</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+184"/>
+        <source>Open a project before running remote analysis.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Select one or more images for remote analysis.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
         <source>LOCAL FOLDERS</source>
-        <translation type="vanished">LOCAL FOLDERS</translation>
+        <translation>LOCAL FOLDERS</translation>
     </message>
     <message>
+        <location line="+62"/>
         <source>Sorted Z-A</source>
-        <translation type="vanished">Sorted Z-A</translation>
+        <translation>Sorted Z-A</translation>
     </message>
     <message>
+        <location line="+0"/>
         <source>Sorted A-Z</source>
-        <translation type="vanished">Sorted A-Z</translation>
+        <translation>Sorted A-Z</translation>
     </message>
     <message>
+        <location line="+51"/>
         <source>New collection</source>
-        <translation type="vanished">New collection</translation>
+        <translation>New collection</translation>
     </message>
     <message>
-        <source>New collection...</source>
-        <translation type="vanished">New collection...</translation>
+        <location line="+22"/>
+        <source>Collection Name</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Create</source>
-        <translation type="vanished">Create</translation>
-    </message>
-    <message>
+        <location line="+127"/>
         <source>No collections yet</source>
-        <translation type="vanished">No collections yet</translation>
+        <translation>No collections yet</translation>
     </message>
     <message>
+        <location line="+22"/>
         <source>Delete collection</source>
-        <translation type="vanished">Delete collection</translation>
+        <translation>Delete collection</translation>
     </message>
     <message>
+        <location line="+22"/>
         <source>Import</source>
-        <translation type="vanished">Import</translation>
+        <translation>Import</translation>
     </message>
 </context>
 <context>
     <name>DeleteConfirmDialog</name>
     <message>
+        <location filename="../qml/DeleteConfirmDialog.qml" line="+70"/>
+        <source>Confirm Deletion</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>%1
+Original source files on disk will be kept.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+14"/>
         <source>Cancel</source>
-        <translation type="obsolete">Cancel</translation>
+        <translation type="unfinished">Cancel</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Delete</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorAdjustmentStack</name>
+    <message>
+        <location filename="../qml/EditorAdjustmentStack.qml" line="+128"/>
+        <location line="+61"/>
+        <source>Look</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-60"/>
+        <location line="+62"/>
+        <source>LUT</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-61"/>
+        <location line="+63"/>
+        <source>Display Transform</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-62"/>
+        <location line="+65"/>
+        <source>Geometry</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-64"/>
+        <location line="+67"/>
+        <source>RAW Decode</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-66"/>
+        <location line="+54"/>
+        <source>Tone</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-48"/>
+        <source>Select an image to enable adjustments</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>No adjustments yet</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorDisplayTransformPanel</name>
+    <message>
+        <location filename="../qml/EditorDisplayTransformPanel.qml" line="+30"/>
+        <source>BT.1886</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+3"/>
+        <location line="+11"/>
+        <source>Gamma 2.2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-10"/>
+        <location line="+6"/>
+        <source>ST 2084 (PQ)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-3"/>
+        <source>Gamma 2.6</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>HLG</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+200"/>
+        <location line="+191"/>
+        <source>Method</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-189"/>
+        <location line="+108"/>
+        <source>ACES 2.0</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-107"/>
+        <source>OpenDRT</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Encoding Space</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+44"/>
+        <source>Rec.709</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-43"/>
+        <location line="+45"/>
+        <source>P3-D65</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-44"/>
+        <location line="+45"/>
+        <source>P3-D60</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-44"/>
+        <location line="+45"/>
+        <source>P3-DCI</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-44"/>
+        <source>XYZ</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+40"/>
+        <source>Rec.2020</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-29"/>
+        <source>Encoding EOTF</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Peak Luminance</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Limiting Space</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>ProPhoto RGB</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Adobe RGB</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Look</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Standard</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Arriba</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Sylvan</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Colorful</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Aery</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Dystopic</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Umbra</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <location line="+27"/>
+        <source>Custom</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-16"/>
+        <source>Tonescale</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+27"/>
+        <source>Use Look Preset</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-26"/>
+        <source>Low Contrast</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Medium Contrast</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>High Contrast</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Arriba Tonescale</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Sylvan Tonescale</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Colorful Tonescale</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Aery Tonescale</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Dystopic Tonescale</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Umbra Tonescale</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>ACES 1.x</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Marvelous Tonscape</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Dagrinchi Tonegroan</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Creative White</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>D93</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>D75</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>D65</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>D60</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>D55</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>D50</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+44"/>
+        <source>Display Transform</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+139"/>
+        <source>Color &amp; Encoding</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>EditorFilmstrip</name>
     <message>
+        <location filename="../qml/EditorFilmstrip.qml" line="+229"/>
+        <source>Editor filmstrip</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Collapsed filmstrip handle</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Expanded filmstrip dock</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>Expand filmstrip</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Collapse filmstrip</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Image %1 of %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+67"/>
+        <source>No images in filmstrip</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
         <source>%1 / %2</source>
-        <translation type="obsolete">%1 / %2</translation>
+        <translation type="unfinished">%1 / %2</translation>
+    </message>
+    <message>
+        <location line="+46"/>
+        <source>No images</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+86"/>
+        <source>Source file was moved or deleted</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <location line="+166"/>
+        <source>Image %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-164"/>
+        <source>Current image</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Open image</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+100"/>
+        <source>No thumbnail</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+30"/>
+        <source>Saving</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Rendering</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+79"/>
+        <source>Discard</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>EditorGeometryPanel</name>
     <message>
-        <source>Lens Brand</source>
-        <translation type="obsolete">Lens Brand</translation>
+        <location filename="../qml/EditorGeometryPanel.qml" line="+67"/>
+        <source>Auto (metadata)</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
+        <location line="+441"/>
+        <source>Crop X</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Crop Y</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Crop Width</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Crop Height</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Rotation</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Aspect Ratio</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Aspect Width</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Aspect Height</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Enable Lens Calibration</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Lens Brand</source>
+        <translation type="unfinished">Lens Brand</translation>
+    </message>
+    <message>
+        <location line="+9"/>
         <source>Lens Model</source>
-        <translation type="obsolete">Lens Model</translation>
+        <translation type="unfinished">Lens Model</translation>
+    </message>
+    <message>
+        <location line="+172"/>
+        <source>Geometry</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Source aspect %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Press Enter or switch panels to apply. Reset returns to a full-frame, unrotated crop.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Crop and Rotate</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+78"/>
+        <source>Reset crop and rotation</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Lens Calibration</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+51"/>
+        <source>Reset lens calibration</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>EditorHistoryTransactionsPanel</name>
     <message>
+        <location filename="../qml/EditorHistoryTransactionsPanel.qml" line="+60"/>
+        <source>Adjustment transfer is unavailable</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <location line="+28"/>
+        <source>Merge completed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-23"/>
+        <source>Merge cancelled</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Adjustments pasted</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Merge could not start</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Earlier</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Just now</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 min ago</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 hr ago</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 days ago</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Edit History</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Version: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Version: —</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>Undo edit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Redo edit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>Paste adjustments as a new Version</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Merge adjustments into this Version</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Recovered edits are available in this Version.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+191"/>
+        <source>Commit %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+47"/>
         <source>Merge</source>
-        <translation type="obsolete">Merge</translation>
+        <translation type="unfinished">Merge</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Adjustment</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+36"/>
+        <source>2nd %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>Resolved adjustments</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+19"/>
+        <source>No edit history yet</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorHistoryVersionsRail</name>
+    <message>
+        <location filename="../qml/EditorHistoryVersionsRail.qml" line="+36"/>
+        <source>Resolve the editor save first</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+164"/>
+        <source>Hide Edit History</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Show Edit History</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Hide Versions</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Show Versions</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorLookPanel</name>
+    <message>
+        <location filename="../qml/EditorLookPanel.qml" line="+210"/>
+        <source>Saturation</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Vibrance</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>Clarity</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Sharpen</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Film Grain</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Halation</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+320"/>
+        <source>Master</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+137"/>
+        <source>Look</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>White Balance</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>As Shot</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Custom</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>White balance is unavailable for this image.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
+        <source>Temperature</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Tint</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>Color</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+30"/>
+        <source>Selective Color</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Target Hue: %1°</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+31"/>
+        <source>Hue Shift</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Lightness</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Chroma</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Hue Smoothness</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Color Wheels</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Gamma</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Lift</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Gain</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Reset wheels</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Detail</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+29"/>
+        <source>Texture</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorMergeConflictCard</name>
+    <message>
+        <location filename="../qml/EditorMergeConflictCard.qml" line="+40"/>
+        <source>HSL</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Output Transform</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>RAW Decode</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Color Temperature</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Crop &amp; Rotate</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Adjustment</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <location line="+15"/>
+        <source>No value</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-13"/>
+        <source>On</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Off</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Empty</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>RESOLVED</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>CONFLICT</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+52"/>
+        <source>CURRENT (OURS)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Keep Current</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Use Current value for %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+44"/>
+        <source>INCOMING (THEIRS)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Use Incoming</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Use Incoming value for %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>MERGED (PREVIEW)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Pending Selection</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+21"/>
+        <source>Waiting for resolution...</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>EditorMergeDialog</name>
     <message>
-        <source>Cancel</source>
-        <translation type="obsolete">Cancel</translation>
+        <location filename="../qml/EditorMergeDialog.qml" line="+175"/>
+        <source>Merge Conflicts</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>OK</source>
-        <translation type="obsolete">OK</translation>
+        <location line="+14"/>
+        <source>Cancel</source>
+        <translation type="unfinished">Cancel</translation>
+    </message>
+    <message>
+        <location line="+34"/>
+        <source>Complete</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+81"/>
+        <source>No merge conflicts to resolve</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>Use All Current</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>Use All Incoming</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorMergeJsonValue</name>
+    <message>
+        <location filename="../qml/EditorMergeJsonValue.qml" line="+35"/>
+        <location line="+31"/>
+        <location line="+6"/>
+        <location line="+7"/>
+        <source>Value</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-36"/>
+        <source>null</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>On</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Off</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>Empty</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>No value</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+49"/>
+        <source>+%1 more fields</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorRawDecodePanel</name>
+    <message>
+        <location filename="../qml/EditorRawDecodePanel.qml" line="+55"/>
+        <source>Select an image to enable RAW Decode</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>RAW Decode is unavailable for this image.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>RAW metadata is unavailable; decoder defaults are active.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Legacy</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Neural Engine</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Default</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+106"/>
+        <location line="+20"/>
+        <source>RAW Decode</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+41"/>
+        <source>Method</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Enable Highlight Reconstruction</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>EditorSaveRecoveryBar</name>
     <message>
+        <location filename="../qml/EditorSaveRecoveryBar.qml" line="+49"/>
+        <source>Editor save needs attention</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Editor changes could not be saved.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Retry Save</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Discard and Continue</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
         <source>Cancel</source>
-        <translation type="obsolete">Cancel</translation>
+        <translation type="unfinished">Cancel</translation>
+    </message>
+</context>
+<context>
+    <name>EditorScopePanel</name>
+    <message>
+        <location filename="../qml/EditorScopePanel.qml" line="+84"/>
+        <source>Show histogram</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Show waveform</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+58"/>
+        <source>Reading display scope</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Select an image to view scopes</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>EditorTonePanel</name>
     <message>
+        <location filename="../qml/EditorTonePanel.qml" line="+135"/>
         <source>Exposure</source>
-        <translation type="obsolete">Exposure</translation>
+        <translation type="unfinished">Exposure</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Contrast</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Highlights</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Shadows</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Whites</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Blacks</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <location line="+133"/>
+        <source>Tone Curve</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-74"/>
+        <location line="+11"/>
+        <source>Tone</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+108"/>
+        <source>Left click/drag to shape. Right click a point to remove. Double click to reset.</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorVersionsPanel</name>
+    <message>
+        <location filename="../qml/EditorVersionsPanel.qml" line="+96"/>
+        <source>Version %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+46"/>
+        <source>Version operation failed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+66"/>
+        <source>Current version has no commit to branch from</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+94"/>
+        <source>Versions</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Branch from current commit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Fork new version from root</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <location line="+28"/>
+        <location line="+205"/>
+        <source>Rename Version</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-232"/>
+        <location line="+29"/>
+        <source>Branch from current</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-28"/>
+        <location line="+29"/>
+        <source>Fork from root</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-10"/>
+        <source>Version name</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+52"/>
+        <source>Accept Rename</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Accept branch from current</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Accept fork from root</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+24"/>
+        <location line="+168"/>
+        <source>Version checkout is unavailable</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-103"/>
+        <source>Active Version</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Named Version</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <source>Commit %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Commit image root</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+48"/>
+        <source>Remove Version</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>No versions yet</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorWorkspace</name>
+    <message>
+        <location filename="../qml/EditorWorkspace.qml" line="+122"/>
+        <source>Editor viewport</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+51"/>
+        <source>Image viewport</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-50"/>
+        <source>Empty viewport</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <location line="+4"/>
+        <source>Select an image to edit</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Open an image from the library, or keep this workspace ready for search results.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+82"/>
+        <source>Preparing image viewport</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+58"/>
+        <source>%1°</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>%1%</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>FIT</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>EditorWorkspaceNavigation</name>
+    <message>
+        <location filename="../qml/EditorWorkspaceNavigation.qml" line="+142"/>
+        <source>Library</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+35"/>
+        <source>Editor</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>ExportQueueState</name>
     <message>
+        <location filename="../qml/ExportQueueState.qml" line="+29"/>
+        <location line="+98"/>
         <source>(unnamed)</source>
-        <translation type="obsolete">(unnamed)</translation>
+        <translation type="unfinished">(unnamed)</translation>
     </message>
 </context>
 <context>
     <name>GlobalSearchDialog</name>
     <message>
+        <location filename="../qml/GlobalSearchDialog.qml" line="+878"/>
         <source>Suggestion</source>
-        <translation type="vanished">Suggestion</translation>
+        <translation>Suggestion</translation>
     </message>
     <message>
+        <location line="-228"/>
         <source>Search settings ▾</source>
-        <translation type="vanished">Search settings ▾</translation>
+        <translation>Search settings ▾</translation>
     </message>
     <message>
+        <location line="-418"/>
+        <source>%1 matches</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>0 of %1 matches</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+4"/>
+        <source>%1-%2 of %3 matches</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+377"/>
+        <source>Search photos, cameras, lenses, dates...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+66"/>
         <source>Search settings — choose which fields the search scans, or enable natural-language search</source>
-        <translation type="vanished">Search settings — choose which fields the search scans, or enable natural-language search</translation>
+        <translation>Search settings — choose which fields the search scans, or enable natural-language search</translation>
     </message>
     <message>
+        <location line="+5"/>
         <source>Search</source>
-        <translation type="obsolete">Search</translation>
+        <translation type="unfinished">Search</translation>
     </message>
     <message>
+        <location line="+64"/>
         <source>Search conditions</source>
-        <translation type="vanished">Search conditions</translation>
+        <translation>Search conditions</translation>
     </message>
     <message>
+        <location line="+19"/>
         <source>Filename</source>
-        <translation type="vanished">Filename</translation>
+        <translation>Filename</translation>
     </message>
     <message>
+        <location line="+15"/>
         <source>EXIF info</source>
-        <translation type="vanished">EXIF info</translation>
+        <translation>EXIF info</translation>
     </message>
     <message>
+        <location line="+15"/>
         <source>AI description</source>
-        <translation type="vanished">AI description</translation>
+        <translation>AI description</translation>
     </message>
     <message>
+        <location line="+15"/>
         <source>AI tags</source>
-        <translation type="vanished">AI tags</translation>
+        <translation>AI tags</translation>
     </message>
     <message>
+        <location line="+21"/>
         <source>Natural language search</source>
-        <translation type="vanished">Natural language search</translation>
+        <translation>Natural language search</translation>
     </message>
     <message>
+        <location line="+15"/>
         <source>Natural language search — use the CLIP model to search by meaning (Enter or Search button to run). Mutually exclusive with the field filters above.</source>
-        <translation type="vanished">Natural language search — use the CLIP model to search by meaning (Enter or Search button to run). Mutually exclusive with the field filters above.</translation>
+        <translation>Natural language search — use the CLIP model to search by meaning (Enter or Search button to run). Mutually exclusive with the field filters above.</translation>
     </message>
     <message>
+        <location line="+28"/>
+        <source>Results</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+29"/>
+        <source>Active: %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+39"/>
+        <source>No recent suggestions</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+55"/>
+        <source>Load previous</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
         <source>(unnamed)</source>
-        <translation type="obsolete">(unnamed)</translation>
+        <translation type="unfinished">(unnamed)</translation>
     </message>
     <message>
+        <location line="+1"/>
+        <source>%1  |  %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Rating %1/5</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+34"/>
+        <source>No matches</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+33"/>
+        <source>Load more</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+48"/>
+        <source>Source file is unavailable</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+140"/>
+        <source>Preview image failed to load</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+80"/>
+        <source>%1  -  %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-985"/>
         <source>Query is too long for natural language search</source>
-        <translation type="vanished">Query is too long for natural language search</translation>
+        <translation>Query is too long for natural language search</translation>
     </message>
     <message>
+        <location line="+4"/>
         <source>Natural language search is not available yet</source>
-        <translation type="vanished">Natural language search is not available yet</translation>
+        <translation>Natural language search is not available yet</translation>
     </message>
     <message>
+        <location line="+2"/>
         <source>Press Enter or click Search for natural language search</source>
-        <translation type="vanished">Press Enter or click Search for natural language search</translation>
+        <translation>Press Enter or click Search for natural language search</translation>
     </message>
 </context>
 <context>
     <name>ImageActionsController</name>
     <message>
+        <location filename="../qml/ImageActionsController.qml" line="+57"/>
+        <location line="+18"/>
+        <location line="+94"/>
+        <location line="+45"/>
+        <location line="+9"/>
         <source>(unnamed)</source>
-        <translation type="obsolete">(unnamed)</translation>
+        <translation type="unfinished">(unnamed)</translation>
     </message>
     <message>
+        <location line="-36"/>
         <source>Album</source>
-        <translation type="obsolete">Album</translation>
+        <translation type="unfinished">Album</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Add to %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+50"/>
+        <source>Delete this image from project?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remove this image from this album?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Delete %1 images from project?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Remove %1 images from this album?</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>ImageContextMenu</name>
     <message>
+        <location filename="../qml/ImageContextMenu.qml" line="+32"/>
         <source>Rating</source>
-        <translation type="obsolete">Rating</translation>
+        <translation type="unfinished">Rating</translation>
     </message>
     <message>
+        <location line="+4"/>
         <source>Unrated</source>
-        <translation type="obsolete">Unrated</translation>
+        <translation type="unfinished">Unrated</translation>
     </message>
 </context>
 <context>
     <name>ImageInspectorPanel</name>
     <message>
+        <location filename="../qml/ImageInspectorPanel.qml" line="+439"/>
         <source>No Image Focused</source>
-        <translation type="vanished">No Image Focused</translation>
+        <translation>No Image Focused</translation>
     </message>
     <message>
+        <location line="+12"/>
         <source>Focus a photo to inspect its camera, lens, exposure, description, and rating here.</source>
-        <translation type="vanished">Focus a photo to inspect its camera, lens, exposure, description, and rating here.</translation>
+        <translation>Focus a photo to inspect its camera, lens, exposure, description, and rating here.</translation>
     </message>
     <message>
-        <source>IMAGE</source>
-        <translation type="vanished">IMAGE</translation>
-    </message>
-    <message>
+        <location line="-429"/>
         <source>(unnamed)</source>
-        <translation type="vanished">(unnamed)</translation>
+        <translation>(unnamed)</translation>
     </message>
     <message>
+        <location line="+69"/>
+        <location line="+17"/>
         <source>RAW</source>
-        <translation type="vanished">RAW</translation>
+        <translation>RAW</translation>
     </message>
     <message>
+        <location line="+15"/>
         <source>HDR</source>
-        <translation type="vanished">HDR</translation>
+        <translation>HDR</translation>
     </message>
     <message>
+        <location line="+118"/>
         <source>-</source>
-        <translation type="vanished">-</translation>
+        <translation>-</translation>
     </message>
     <message>
+        <location line="+159"/>
         <source>%1 / 5</source>
-        <translation type="vanished">%1 / 5</translation>
+        <translation>%1 / 5</translation>
     </message>
     <message>
+        <location line="+0"/>
         <source>Unrated</source>
-        <translation type="vanished">Unrated</translation>
+        <translation>Unrated</translation>
     </message>
     <message>
+        <location line="+162"/>
         <source>Image actions</source>
-        <translation type="vanished">Image actions</translation>
+        <translation>Image actions</translation>
     </message>
     <message>
+        <location line="+43"/>
         <source>Exposure</source>
-        <translation type="vanished">Exposure</translation>
+        <translation>Exposure</translation>
     </message>
     <message>
+        <location line="+50"/>
         <source>Metadata</source>
-        <translation type="vanished">Metadata</translation>
+        <translation>Metadata</translation>
     </message>
     <message>
+        <location line="+51"/>
         <source>AI Description</source>
-        <translation type="vanished">AI Description</translation>
+        <translation>AI Description</translation>
     </message>
     <message>
+        <location line="+4"/>
         <source>No description yet.</source>
-        <translation type="vanished">No description yet.</translation>
+        <translation>No description yet.</translation>
     </message>
     <message>
+        <location line="+11"/>
         <source>AI Comment</source>
-        <translation type="vanished">AI Comment</translation>
+        <translation>AI Comment</translation>
     </message>
     <message>
+        <location line="+5"/>
         <source>No comment yet.</source>
-        <translation type="vanished">No comment yet.</translation>
+        <translation>No comment yet.</translation>
     </message>
     <message>
+        <location line="+17"/>
         <source>AI Rating</source>
-        <translation type="vanished">AI Rating</translation>
-    </message>
-    <message>
-        <source>Save description</source>
-        <translation type="vanished">Save description</translation>
-    </message>
-    <message>
-        <source>Edit description</source>
-        <translation type="vanished">Edit description</translation>
-    </message>
-    <message>
-        <source>Save rating reason</source>
-        <translation type="vanished">Save rating reason</translation>
-    </message>
-    <message>
-        <source>Edit rating reason</source>
-        <translation type="vanished">Edit rating reason</translation>
-    </message>
-    <message>
-        <source>No rating reason yet.</source>
-        <translation type="vanished">No rating reason yet.</translation>
+        <translation>AI Rating</translation>
     </message>
 </context>
 <context>
     <name>ImportProgressOverlay</name>
     <message>
-        <source>%1 / %2</source>
-        <translation type="obsolete">%1 / %2</translation>
+        <location filename="../qml/ImportProgressOverlay.qml" line="+35"/>
+        <source>Importing Photos</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
+        <location line="+22"/>
+        <source>%1 / %2</source>
+        <translation type="unfinished">%1 / %2</translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Preparing...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>%1 file(s) failed</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+9"/>
         <source>Cancel</source>
-        <translation type="obsolete">Cancel</translation>
+        <translation type="unfinished">Cancel</translation>
     </message>
 </context>
 <context>
     <name>InspectorPanel</name>
     <message>
+        <location filename="../qml/InspectorPanel.qml" line="+107"/>
         <source>Album</source>
-        <translation type="vanished">Album</translation>
+        <translation>Album</translation>
     </message>
     <message>
+        <location line="+7"/>
         <source>Image</source>
-        <translation type="vanished">Image</translation>
+        <translation>Image</translation>
+    </message>
+</context>
+<context>
+    <name>InspectorToggleButton</name>
+    <message>
+        <location filename="../qml/InspectorToggleButton.qml" line="+29"/>
+        <source>Collapse Inspector</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Expand Inspector</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>LUTPanel</name>
+    <message>
+        <location filename="../qml/LUTPanel.qml" line="+114"/>
+        <source>No LUTs found</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>1 LUT found</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source> LUTs found</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+305"/>
+        <source>LUT</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+63"/>
+        <source>Filter LUTs</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+36"/>
+        <source>Sort options</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>Sort by</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Name</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Modified time</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+65"/>
+        <source>Show all LUTs</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Show favorites only</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Refresh LUT catalog</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Open LUT folder</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>LanguageManager</name>
+    <message>
+        <location filename="../language_manager.cpp" line="+20"/>
+        <source>Follow System</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Simplified Chinese</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>English</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>LibraryWorkspace</name>
     <message>
+        <location filename="../qml/LibraryWorkspace.qml" line="+182"/>
+        <source>Browser</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+105"/>
+        <source>No Photos Yet</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Open or Create a Project</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Import your images for RAW adjustments.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Use File &gt; Load Project or File &gt; Create Project to choose .alcd files.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+7"/>
         <source>Load Project</source>
-        <translation type="obsolete">Load Project</translation>
+        <translation type="unfinished">Load Project</translation>
+    </message>
+    <message>
+        <location line="+66"/>
+        <source>Add to Queue</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+29"/>
+        <source>Export</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>Main</name>
     <message>
+        <location filename="../qml/Main.qml" line="+17"/>
         <source>Alcedo Studio</source>
-        <translation type="obsolete">Alcedo Studio</translation>
-    </message>
-    <message>
-        <source>(unnamed)</source>
-        <translation type="obsolete">(unnamed)</translation>
-    </message>
-    <message>
-        <source>Copy Adjustments</source>
-        <translation type="obsolete">Copy Adjustments</translation>
-    </message>
-    <message>
-        <source>Paste Adjustments</source>
-        <translation type="obsolete">Paste Adjustments</translation>
-    </message>
-    <message>
-        <source>Close</source>
-        <translation type="obsolete">Close</translation>
-    </message>
-    <message>
-        <source>Create Project</source>
-        <translation type="obsolete">Create Project</translation>
-    </message>
-    <message>
-        <source>Load Project</source>
-        <translation type="obsolete">Load Project</translation>
-    </message>
-    <message>
-        <source>Details</source>
-        <translation type="vanished">Details</translation>
+        <translation type="unfinished">Alcedo Studio</translation>
     </message>
 </context>
 <context>
     <name>NikonHeRecoveryDialog</name>
     <message>
-        <source>RECOVERY</source>
-        <translation type="vanished">RECOVERY</translation>
-    </message>
-    <message>
-        <source>Nikon HE / HE* RAW Needs Conversion</source>
-        <translation type="vanished">Nikon HE / HE* RAW Needs Conversion</translation>
-    </message>
-    <message>
-        <source>Alcedo Studio cannot decode these Nikon files with the built-in RAW pipeline. Convert them to DNG, then the import can continue.</source>
-        <translation type="vanished">Alcedo Studio cannot decode these Nikon files with the built-in RAW pipeline. Convert them to DNG, then the import can continue.</translation>
-    </message>
-    <message>
+        <location filename="../qml/NikonHeRecoveryDialog.qml" line="+55"/>
         <source>Unknown directory</source>
-        <translation type="vanished">Unknown directory</translation>
+        <translation>Unknown directory</translation>
     </message>
     <message>
+        <location line="+58"/>
         <source>Nikon High Efficiency RAW conversion required</source>
-        <translation type="vanished">Nikon High Efficiency RAW conversion required</translation>
+        <translation>Nikon High Efficiency RAW conversion required</translation>
     </message>
     <message>
+        <location line="+14"/>
         <source>Preparing recovery workflow...</source>
-        <translation type="vanished">Preparing recovery workflow...</translation>
+        <translation>Preparing recovery workflow...</translation>
     </message>
     <message>
+        <location line="+23"/>
         <source>Adobe DNG Converter executable</source>
-        <translation type="vanished">Adobe DNG Converter executable</translation>
+        <translation>Adobe DNG Converter executable</translation>
     </message>
     <message>
+        <location line="+30"/>
         <source>No converter selected</source>
-        <translation type="vanished">No converter selected</translation>
+        <translation>No converter selected</translation>
     </message>
     <message>
-        <source>Browse...</source>
-        <translation type="vanished">Browse...</translation>
-    </message>
-    <message>
+        <location line="+42"/>
         <source>Browse for Adobe DNG Converter</source>
-        <translation type="vanished">Browse for Adobe DNG Converter</translation>
+        <translation>Browse for Adobe DNG Converter</translation>
     </message>
     <message>
+        <location line="+16"/>
         <source>Loaded from default path</source>
-        <translation type="vanished">Loaded from default path</translation>
+        <translation>Loaded from default path</translation>
     </message>
     <message>
+        <location line="+18"/>
         <source>Affected files</source>
-        <translation type="vanished">Affected files</translation>
+        <translation>Affected files</translation>
     </message>
     <message>
+        <location line="+8"/>
         <source>(%1 items found)</source>
-        <translation type="vanished">(%1 items found)</translation>
+        <translation>(%1 items found)</translation>
     </message>
     <message>
+        <location line="+45"/>
         <source>Filename</source>
-        <translation type="vanished">Filename</translation>
+        <translation>Filename</translation>
     </message>
     <message>
+        <location line="+9"/>
         <source>Directory</source>
-        <translation type="vanished">Directory</translation>
+        <translation>Directory</translation>
     </message>
     <message>
+        <location line="+91"/>
         <source>%1 / %2 converted files reimported, %3 failed</source>
-        <translation type="vanished">%1 / %2 converted files reimported, %3 failed</translation>
+        <translation>%1 / %2 converted files reimported, %3 failed</translation>
     </message>
     <message>
-        <source>Remove from project</source>
-        <translation type="vanished">Remove from project</translation>
-    </message>
-    <message>
+        <location line="+35"/>
         <source>Cancel import</source>
-        <translation type="vanished">Cancel import</translation>
+        <translation>Cancel import</translation>
     </message>
     <message>
+        <location line="+27"/>
+        <location line="+2"/>
         <source>Convert to DNG &amp; Continue</source>
-        <translation type="vanished">Convert to DNG &amp; Continue</translation>
+        <translation>Convert to DNG &amp; Continue</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Choose converter &amp; Continue</source>
-        <translation type="vanished">Choose converter &amp; Continue</translation>
+        <translation>Choose converter &amp; Continue</translation>
     </message>
     <message>
-        <source>This step is still running. The dialog will update automatically when conversion finishes.</source>
-        <translation type="vanished">This step is still running. The dialog will update automatically when conversion finishes.</translation>
-    </message>
-    <message>
-        <source>%1 / %2 converted files reimported · %3 failed</source>
-        <translation type="vanished">%1 / %2 converted files reimported · %3 failed</translation>
-    </message>
-    <message>
-        <source>Affected Files</source>
-        <translation type="vanished">Affected Files</translation>
-    </message>
-    <message>
-        <source>%1 file(s) will be removed from the project and replaced by converted DNG files when available.</source>
-        <translation type="vanished">%1 file(s) will be removed from the project and replaced by converted DNG files when available.</translation>
-    </message>
-    <message>
-        <source>Converter</source>
-        <translation type="vanished">Converter</translation>
-    </message>
-    <message>
-        <source>On macOS, Alcedo Studio uses the system Adobe DNG Converter installation at /Applications/Adobe DNG Converter.app.</source>
-        <translation type="vanished">On macOS, Alcedo Studio uses the system Adobe DNG Converter installation at /Applications/Adobe DNG Converter.app.</translation>
-    </message>
-    <message>
-        <source>Adobe DNG Converter runs in the source folders and creates side-by-side DNG files. Original NEF files on disk will be kept.</source>
-        <translation type="vanished">Adobe DNG Converter runs in the source folders and creates side-by-side DNG files. Original NEF files on disk will be kept.</translation>
-    </message>
-    <message>
-        <source>Detected Converter Path</source>
-        <translation type="vanished">Detected Converter Path</translation>
-    </message>
-    <message>
-        <source>Executable Path</source>
-        <translation type="vanished">Executable Path</translation>
-    </message>
-    <message>
+        <location line="-295"/>
         <source>Adobe DNG Converter is not installed at /Applications/Adobe DNG Converter.app.</source>
-        <translation type="vanished">Adobe DNG Converter is not installed at /Applications/Adobe DNG Converter.app.</translation>
+        <translation>Adobe DNG Converter is not installed at /Applications/Adobe DNG Converter.app.</translation>
+    </message>
+</context>
+<context>
+    <name>ProjectLoadingOverlay</name>
+    <message>
+        <location filename="../qml/ProjectLoadingOverlay.qml" line="+35"/>
+        <source>Loading Project</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Not selected in this session.</source>
-        <translation type="vanished">Not selected in this session.</translation>
+        <location line="+25"/>
+        <source>Preparing library...</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>QObject</name>
+    <message>
+        <location filename="../album_backend/thumbnail_manager.cpp" line="+154"/>
+        <location line="+105"/>
+        <source>Source file was moved or deleted: %1</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Browse Converter...</source>
-        <translation type="vanished">Browse Converter...</translation>
+        <location line="+6"/>
+        <location filename="../album_backend/search_controller.cpp" line="+694"/>
+        <location line="+4"/>
+        <source>Thumbnail render returned no image.</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Exit removes the unsupported Nikon entries from the project only. Nothing in the source folders will be deleted.</source>
-        <translation type="vanished">Exit removes the unsupported Nikon entries from the project only. Nothing in the source folders will be deleted.</translation>
+        <location line="+35"/>
+        <source>Thumbnail render returned no image buffer.</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Exit And Remove From Project</source>
-        <translation type="vanished">Exit And Remove From Project</translation>
+        <location line="+14"/>
+        <source>Thumbnail CPU buffer could not be converted to an image.</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Convert To DNG And Continue</source>
-        <translation type="vanished">Convert To DNG And Continue</translation>
+        <location line="+3"/>
+        <source>Thumbnail render did not produce CPU image data.</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <source>Choose Converter And Continue</source>
-        <translation type="vanished">Choose Converter And Continue</translation>
+        <location line="+27"/>
+        <location filename="../album_backend/search_controller.cpp" line="+25"/>
+        <source>Thumbnail conversion produced no image.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location filename="../album_backend/editor_session_task_port.cpp" line="+44"/>
+        <source>Editor Save</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <location line="+7"/>
+        <source>Saving editor changes</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>SearchComboBox</name>
     <message>
+        <location filename="../qml/util/SearchComboBox.qml" line="+14"/>
         <source>Search</source>
-        <translation type="obsolete">Search</translation>
+        <translation type="unfinished">Search</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No matches</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>SelectionState</name>
     <message>
+        <location filename="../qml/SelectionState.qml" line="+29"/>
+        <location line="+22"/>
+        <location line="+20"/>
+        <location line="+10"/>
         <source>(unnamed)</source>
-        <translation type="obsolete">(unnamed)</translation>
+        <translation type="unfinished">(unnamed)</translation>
     </message>
 </context>
 <context>
     <name>SemanticGenerationDialog</name>
     <message>
-        <source>%1 / %2</source>
-        <translation type="obsolete">%1 / %2</translation>
+        <location filename="../qml/SemanticGenerationDialog.qml" line="+154"/>
+        <source>Generating semantic labels</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
+        <location line="+1"/>
+        <source>Use AI to analyze image content?</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Starting semantic generation...</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+30"/>
+        <source>%1 / %2</source>
+        <translation type="unfinished">%1 / %2</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Preparing</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>Elapsed %1 · ~%2 remaining</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Elapsed %1 · estimating…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Remember My Choice</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+47"/>
         <source>Cancel</source>
-        <translation type="obsolete">Cancel</translation>
+        <translation type="unfinished">Cancel</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Skip</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>Move task to background</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Generate</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>SemanticGenerationSettingsPanel</name>
     <message>
+        <location filename="../qml/SemanticGenerationSettingsPanel.qml" line="+40"/>
+        <source>No active model</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+160"/>
+        <source>Select Model Download Folder</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+34"/>
+        <source>AI content recognition</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Images</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>With labels</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+6"/>
+        <source>Need labels</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Generate labels only for images that do not have AI content labels.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
         <source>%1 / %2</source>
-        <translation type="obsolete">%1 / %2</translation>
+        <translation type="unfinished">%1 / %2</translation>
     </message>
     <message>
+        <location line="+13"/>
+        <source>Elapsed %1 · ~%2 remaining</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Elapsed %1 · estimating…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <location line="+281"/>
         <source>Cancel</source>
-        <translation type="obsolete">Cancel</translation>
+        <translation type="unfinished">Cancel</translation>
     </message>
     <message>
+        <location line="-281"/>
+        <source>Generate</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+44"/>
+        <source>Regenerate</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+38"/>
+        <source>Move task to background</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <location line="+11"/>
+        <source>Model</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+41"/>
+        <source>Download directory</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+71"/>
+        <source>Source</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+14"/>
+        <source>HF Mirror</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Hugging Face</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Sufy CDN</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Custom</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>https://example.com</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>Check</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
+        <source>Download</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Delete</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Activate</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+13"/>
         <source>Import</source>
-        <translation type="obsolete">Import</translation>
+        <translation type="unfinished">Import</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>是否生成标签</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Always</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Always Ask</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Always Skip</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+88"/>
+        <source>Activating…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Downloading %1%</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Active</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Activate to generate labels</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Not downloaded</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+94"/>
+        <source>Preparing model runtime…</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>File %1 / %2</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+50"/>
+        <source>↓ %1</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>SettingDialog</name>
     <message>
+        <location filename="../qml/SettingDialog.qml" line="+76"/>
         <source>Select Thumbnail Cache Folder</source>
-        <translation type="vanished">Select Thumbnail Cache Folder</translation>
+        <translation>Select Thumbnail Cache Folder</translation>
     </message>
     <message>
+        <location line="+46"/>
         <source>Unavailable</source>
-        <translation type="vanished">Unavailable</translation>
+        <translation>Unavailable</translation>
     </message>
     <message>
+        <location line="+10"/>
         <source>%1 / %2</source>
-        <translation type="vanished">%1 / %2</translation>
+        <translation>%1 / %2</translation>
     </message>
     <message>
+        <location line="+56"/>
         <source>Settings applied</source>
-        <translation type="vanished">Settings applied</translation>
+        <translation>Settings applied</translation>
     </message>
     <message>
+        <location line="+84"/>
         <source>Setting</source>
-        <translation type="vanished">Setting</translation>
+        <translation>Setting</translation>
     </message>
     <message>
+        <location line="-134"/>
+        <location line="+148"/>
+        <location line="+150"/>
         <source>Language</source>
-        <translation type="vanished">Language</translation>
+        <translation>Language</translation>
     </message>
     <message>
+        <location line="-295"/>
+        <location line="+146"/>
         <source>Theme and color</source>
-        <translation type="vanished">Theme and color</translation>
+        <translation>Theme and color</translation>
     </message>
     <message>
+        <location line="-143"/>
+        <location line="+144"/>
         <source>Cache</source>
-        <translation type="vanished">Cache</translation>
+        <translation>Cache</translation>
     </message>
     <message>
+        <location line="-141"/>
+        <location line="+142"/>
+        <source>Local Content Recognition</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-139"/>
+        <location line="+140"/>
+        <source>Advanced Content Analysis</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-138"/>
+        <location line="+139"/>
+        <source>About</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-134"/>
+        <source>本地 AI 功能运行在本机 AI 模型上，图片内容不会上传至云端。识别速度和可处理规模取决于你的 CPU、GPU、内存与磁盘性能。
+
+默认推荐使用 SigLIP2 模型：它是当前最均衡的选择，多语言语义理解更稳，适合大多数相册标注和自然语言搜索。
+
+本地模型特点：
+SigLIP2 B/32 256 Multilingual：默认推荐，多语言、质量稳定、适合长期使用。
+MobileCLIP2 S2 English：更轻更快，偏英文场景，适合低配电脑或快速试用。
+Jina CLIP v2 INT8 Multilingual：多语言，512px 输入，模型更大，适合需要更细图文语义的场景。
+SigLIP2 Base CoreML macOS：macOS 原生 CoreML 版本，适合 Apple Silicon 设备。
+
+CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义空间，因此可以理解“海边日落”“人像”“建筑细节”等自然语言概念，并用于生成标签和语义检索。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>高级内容识别会通过你配置的 Anthropic / OpenAI 兼容提供商，与指定 agent 交互来识别图像内容并进行评分。数据保留、隐私与合规政策请咨询你使用的 AI 提供商；Alcedo Studio 不会保留任何内容。
+
+这个设置界面的灵感来自 ccswitch，使用方式也类似。</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+265"/>
         <source>Application language</source>
-        <translation type="vanished">Application language</translation>
+        <translation>Application language</translation>
     </message>
     <message>
+        <location line="+49"/>
         <source>Workspace appearance</source>
-        <translation type="vanished">Workspace appearance</translation>
+        <translation>Workspace appearance</translation>
     </message>
     <message>
+        <location line="+11"/>
         <source>Theme</source>
-        <translation type="vanished">Theme</translation>
+        <translation>Theme</translation>
     </message>
     <message>
+        <location line="+38"/>
         <source>Current cache</source>
-        <translation type="vanished">Current cache</translation>
+        <translation>Current cache</translation>
     </message>
     <message>
+        <location line="+13"/>
         <source>Entries</source>
-        <translation type="vanished">Entries</translation>
+        <translation>Entries</translation>
     </message>
     <message>
+        <location line="+9"/>
         <source>Size</source>
-        <translation type="vanished">Size</translation>
+        <translation>Size</translation>
     </message>
     <message>
+        <location line="+9"/>
         <source>Hits / misses</source>
-        <translation type="vanished">Hits / misses</translation>
+        <translation>Hits / misses</translation>
     </message>
     <message>
+        <location line="+14"/>
         <source>Storage</source>
-        <translation type="vanished">Storage</translation>
+        <translation>Storage</translation>
     </message>
     <message>
+        <location line="+14"/>
         <source>Cache directory</source>
-        <translation type="vanished">Cache directory</translation>
+        <translation>Cache directory</translation>
     </message>
     <message>
+        <location line="+69"/>
         <source>Limits</source>
-        <translation type="vanished">Limits</translation>
+        <translation>Limits</translation>
     </message>
     <message>
+        <location line="+11"/>
         <source>Disk cache</source>
-        <translation type="vanished">Disk cache</translation>
+        <translation>Disk cache</translation>
     </message>
     <message>
+        <location line="+8"/>
         <source>Enabled</source>
-        <translation type="vanished">Enabled</translation>
+        <translation>Enabled</translation>
     </message>
     <message>
+        <location line="+0"/>
         <source>Disabled</source>
-        <translation type="vanished">Disabled</translation>
+        <translation>Disabled</translation>
     </message>
     <message>
+        <location line="+12"/>
         <source>Max entries</source>
-        <translation type="vanished">Max entries</translation>
+        <translation>Max entries</translation>
     </message>
     <message>
+        <location line="+23"/>
         <source>JPEG quality</source>
-        <translation type="vanished">JPEG quality</translation>
+        <translation>JPEG quality</translation>
     </message>
     <message>
+        <location line="+31"/>
         <source>Maintenance</source>
-        <translation type="vanished">Maintenance</translation>
+        <translation>Maintenance</translation>
     </message>
     <message>
+        <location line="+12"/>
         <source>Clear current project</source>
-        <translation type="vanished">Clear current project</translation>
+        <translation>Clear current project</translation>
     </message>
     <message>
+        <location line="+6"/>
         <source>Current project cache cleared</source>
-        <translation type="vanished">Current project cache cleared</translation>
+        <translation>Current project cache cleared</translation>
     </message>
     <message>
+        <location line="+7"/>
         <source>Clear all cache</source>
-        <translation type="vanished">Clear all cache</translation>
+        <translation>Clear all cache</translation>
     </message>
     <message>
+        <location line="+5"/>
         <source>All thumbnail cache cleared</source>
-        <translation type="vanished">All thumbnail cache cleared</translation>
+        <translation>All thumbnail cache cleared</translation>
     </message>
     <message>
+        <location line="+6"/>
         <source>Refresh</source>
-        <translation type="vanished">Refresh</translation>
+        <translation>Refresh</translation>
     </message>
     <message>
+        <location line="+111"/>
         <source>Done</source>
-        <translation type="vanished">Done</translation>
+        <translation>Done</translation>
+    </message>
+</context>
+<context>
+    <name>ShellSignals</name>
+    <message>
+        <location filename="../qml/ShellSignals.qml" line="+137"/>
+        <source>Imported %1 image(s).</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+23"/>
+        <source>Exported %1 image(s).</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>StarRatingFilter</name>
+    <message>
+        <location filename="../qml/StarRatingFilter.qml" line="+59"/>
+        <source>BY RATING</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>StatsCard</name>
+    <message>
+        <location filename="../qml/StatsCard.qml" line="+270"/>
+        <location line="+122"/>
+        <location line="+87"/>
+        <location line="+163"/>
+        <source>No data available</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="-287"/>
+        <source> more</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+27"/>
+        <source>Show less</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+274"/>
+        <source>Show less ▲</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Show all %1 ▼</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>ThumbnailGridView</name>
     <message>
+        <location filename="../qml/ThumbnailGridView.qml" line="+80"/>
+        <source>Black &amp; White</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Food &amp; Drink</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+583"/>
+        <location line="+24"/>
         <source>(unnamed)</source>
-        <translation type="obsolete">(unnamed)</translation>
+        <translation type="unfinished">(unnamed)</translation>
+    </message>
+    <message>
+        <location line="+95"/>
+        <source>Source file was moved or deleted</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+315"/>
+        <source>%1 | ISO %2 | f/%3</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+18"/>
+        <source>%1 | Rating %2/5 | %3</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 | Rating %2/5</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+25"/>
+        <source>HDR</source>
+        <translation type="unfinished">HDR</translation>
     </message>
 </context>
 <context>
     <name>TopToolbar</name>
     <message>
+        <location filename="../qml/TopToolbar.qml" line="+41"/>
         <source>Alcedo</source>
-        <translation type="obsolete">Alcedo</translation>
+        <translation type="unfinished">Alcedo</translation>
     </message>
     <message>
+        <location line="+2"/>
+        <source>Studio</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>File</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
         <source>Load Project</source>
-        <translation type="obsolete">Load Project</translation>
+        <translation type="unfinished">Load Project</translation>
     </message>
     <message>
+        <location line="+7"/>
         <source>Create Project</source>
-        <translation type="obsolete">Create Project</translation>
+        <translation type="unfinished">Create Project</translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Save Project</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+9"/>
+        <source>Settings</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>WelcomeDialog</name>
     <message>
+        <location filename="../qml/WelcomeDialog.qml" line="+179"/>
         <source>Opened recently</source>
-        <translation type="vanished">Opened recently</translation>
+        <translation>Opened recently</translation>
     </message>
     <message>
+        <location line="+5"/>
         <source>Opened just now</source>
-        <translation type="vanished">Opened just now</translation>
+        <translation>Opened just now</translation>
     </message>
     <message numerus="yes">
+        <location line="+3"/>
         <source>Opened %n minute(s) ago</source>
-        <translation type="vanished">
+        <translation>
             <numerusform>Opened %n minute ago</numerusform>
             <numerusform>Opened %n minutes ago</numerusform>
         </translation>
     </message>
     <message numerus="yes">
+        <location line="+5"/>
         <source>Opened %n hour(s) ago</source>
-        <translation type="vanished">
+        <translation>
             <numerusform>Opened %n hour ago</numerusform>
             <numerusform>Opened %n hours ago</numerusform>
         </translation>
     </message>
     <message>
+        <location line="+5"/>
         <source>Opened yesterday</source>
-        <translation type="vanished">Opened yesterday</translation>
+        <translation>Opened yesterday</translation>
     </message>
     <message numerus="yes">
+        <location line="+3"/>
+        <location line="+5"/>
         <source>Opened %n day(s) ago</source>
-        <translation type="vanished">
+        <translation>
             <numerusform>Opened %n day ago</numerusform>
             <numerusform>Opened %n days ago</numerusform>
         </translation>
     </message>
     <message>
+        <location line="-2"/>
         <source>Opened last week</source>
-        <translation type="vanished">Opened last week</translation>
+        <translation>Opened last week</translation>
     </message>
     <message>
-        <source>Alcedo Studio</source>
-        <translation type="vanished">Alcedo Studio</translation>
+        <location line="-157"/>
+        <location line="+18"/>
+        <source>Untitled Project</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
+        <location line="+14"/>
+        <source>Select Project Storage Location</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
         <source>CUDA unavailable</source>
-        <translation type="vanished">CUDA unavailable</translation>
+        <translation>CUDA unavailable</translation>
     </message>
     <message>
+        <location line="+218"/>
         <source>Alcedo</source>
-        <translation type="obsolete">Alcedo</translation>
+        <translation type="unfinished">Alcedo</translation>
     </message>
     <message>
+        <location line="+8"/>
+        <source>Studio</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+17"/>
         <source>Load Project</source>
-        <translation type="vanished">Load Project</translation>
+        <translation>Load Project</translation>
     </message>
     <message>
+        <location line="+66"/>
+        <location line="+544"/>
         <source>Create Project</source>
-        <translation type="vanished">Create Project</translation>
+        <translation>Create Project</translation>
     </message>
     <message>
+        <location line="-475"/>
         <source>Acceleration</source>
-        <translation type="vanished">Acceleration</translation>
+        <translation>Acceleration</translation>
     </message>
     <message>
+        <location line="+60"/>
         <source>Exit Application</source>
-        <translation type="vanished">Exit Application</translation>
+        <translation>Exit Application</translation>
     </message>
     <message>
+        <location line="+48"/>
         <source>Recent Projects</source>
-        <translation type="vanished">Recent Projects</translation>
+        <translation>Recent Projects</translation>
     </message>
     <message>
+        <location line="+14"/>
         <source>Collapse</source>
-        <translation type="vanished">Collapse</translation>
+        <translation>Collapse</translation>
     </message>
     <message>
+        <location line="+0"/>
         <source>View All</source>
-        <translation type="vanished">View All</translation>
+        <translation>View All</translation>
     </message>
     <message>
+        <location line="+23"/>
         <source>No recent projects yet</source>
-        <translation type="vanished">No recent projects yet</translation>
+        <translation>No recent projects yet</translation>
     </message>
     <message>
+        <location line="+8"/>
         <source>Projects you open or create here will appear in this list.</source>
-        <translation type="vanished">Projects you open or create here will appear in this list.</translation>
+        <translation>Projects you open or create here will appear in this list.</translation>
+    </message>
+    <message>
+        <location line="+142"/>
+        <source>New Project</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Configure your workspace settings.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+28"/>
+        <source>Project Name</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+35"/>
+        <source>Storage Location</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+26"/>
+        <source>Select a parent folder...</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
     <name>alcedo::ui::AppTheme</name>
     <message>
+        <location filename="../app_theme.cpp" line="+1157"/>
         <source>Alcedo</source>
-        <translation type="vanished">Alcedo</translation>
+        <translation>Alcedo</translation>
     </message>
     <message>
+        <location line="+1"/>
         <source>Classic</source>
-        <translation type="vanished">Classic</translation>
+        <translation>Classic</translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::EditorLensCatalogModel</name>
+    <message>
+        <location filename="../album_backend/editor_lens_catalog_model.cpp" line="+23"/>
+        <source>Lens catalog is unavailable</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 lens brands available</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>alcedo::ui::ProjectModule</name>
+    <message>
+        <location filename="../album_backend/project_module.cpp" line="+384"/>
+        <source>Select Project Package</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Packed Project (*.alcd);;All Files (*)</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Select Parent Folder for New Project</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Name New Project</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Project name</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 </TS>

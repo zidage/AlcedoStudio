@@ -27,22 +27,22 @@ Item {
 
     // ── EOTF option tables (mirror editor_dialog.hpp SupportedDisplayEotfOptions) ──
     readonly property var eotfOptionsRec709: [
-        { value: "bt1886", label: "BT.1886" },
-        { value: "gamma_2_2", label: "Gamma 2.2" }
+        { value: "bt1886", label: qsTr("BT.1886") },
+        { value: "gamma_2_2", label: qsTr("Gamma 2.2") }
     ]
     readonly property var eotfOptionsP3D65: [
-        { value: "gamma_2_2", label: "Gamma 2.2" },
-        { value: "st2084", label: "ST 2084 (PQ)" }
+        { value: "gamma_2_2", label: qsTr("Gamma 2.2") },
+        { value: "st2084", label: qsTr("ST 2084 (PQ)") }
     ]
     readonly property var eotfOptionsP3Theater: [
-        { value: "gamma_2_6", label: "Gamma 2.6" }
+        { value: "gamma_2_6", label: qsTr("Gamma 2.6") }
     ]
     readonly property var eotfOptionsRec2020: [
-        { value: "st2084", label: "ST 2084 (PQ)" },
-        { value: "hlg", label: "HLG" }
+        { value: "st2084", label: qsTr("ST 2084 (PQ)") },
+        { value: "hlg", label: qsTr("HLG") }
     ]
     readonly property var eotfOptionsDefault: [
-        { value: "gamma_2_2", label: "Gamma 2.2" }
+        { value: "gamma_2_2", label: qsTr("Gamma 2.2") }
     ]
 
     function eotfOptionsForSpace(spaceValue) {
@@ -241,8 +241,8 @@ Item {
         fieldKey: "odt"
         label: qsTr("Method")
         entries: [
-            { value: "aces_2_0", label: "ACES 2.0" },
-            { value: "open_drt", label: "OpenDRT" }
+            { value: "aces_2_0", label: qsTr("ACES 2.0") },
+            { value: "open_drt", label: qsTr("OpenDRT") }
         ]
         defaultIndex: 1  // open_drt
         submitter: root.editorSession
@@ -255,12 +255,12 @@ Item {
         fieldKey: "odt"
         label: qsTr("Encoding Space")
         entries: [
-            { value: "rec709", label: "Rec.709" },
-            { value: "p3_d65", label: "P3-D65" },
-            { value: "p3_d60", label: "P3-D60" },
-            { value: "p3_dci", label: "P3-DCI" },
-            { value: "xyz", label: "XYZ" },
-            { value: "rec2020", label: "Rec.2020" }
+            { value: "rec709", label: qsTr("Rec.709") },
+            { value: "p3_d65", label: qsTr("P3-D65") },
+            { value: "p3_d60", label: qsTr("P3-D60") },
+            { value: "p3_dci", label: qsTr("P3-DCI") },
+            { value: "xyz", label: qsTr("XYZ") },
+            { value: "rec2020", label: qsTr("Rec.2020") }
         ]
         defaultIndex: 0
         submitter: root.editorSession
@@ -299,13 +299,13 @@ Item {
         fieldKey: "odt"
         label: qsTr("Limiting Space")
         entries: [
-            { value: "rec709", label: "Rec.709" },
-            { value: "rec2020", label: "Rec.2020" },
-            { value: "p3_d65", label: "P3-D65" },
-            { value: "p3_d60", label: "P3-D60" },
-            { value: "p3_dci", label: "P3-DCI" },
-            { value: "prophoto", label: "ProPhoto RGB" },
-            { value: "adobe_rgb", label: "Adobe RGB" }
+            { value: "rec709", label: qsTr("Rec.709") },
+            { value: "rec2020", label: qsTr("Rec.2020") },
+            { value: "p3_d65", label: qsTr("P3-D65") },
+            { value: "p3_d60", label: qsTr("P3-D60") },
+            { value: "p3_dci", label: qsTr("P3-DCI") },
+            { value: "prophoto", label: qsTr("ProPhoto RGB") },
+            { value: "adobe_rgb", label: qsTr("Adobe RGB") }
         ]
         defaultIndex: 0
         submitter: root.editorSession
@@ -318,14 +318,14 @@ Item {
         fieldKey: "odt"
         label: qsTr("Look")
         entries: [
-            { value: "standard", label: "Standard" },
-            { value: "arriba", label: "Arriba" },
-            { value: "sylvan", label: "Sylvan" },
-            { value: "colorful", label: "Colorful" },
-            { value: "aery", label: "Aery" },
-            { value: "dystopic", label: "Dystopic" },
-            { value: "umbra", label: "Umbra" },
-            { value: "custom", label: "Custom" }
+            { value: "standard", label: qsTr("Standard") },
+            { value: "arriba", label: qsTr("Arriba") },
+            { value: "sylvan", label: qsTr("Sylvan") },
+            { value: "colorful", label: qsTr("Colorful") },
+            { value: "aery", label: qsTr("Aery") },
+            { value: "dystopic", label: qsTr("Dystopic") },
+            { value: "umbra", label: qsTr("Umbra") },
+            { value: "custom", label: qsTr("Custom") }
         ]
         defaultIndex: 0
         submitter: root.editorSession
@@ -338,21 +338,21 @@ Item {
         fieldKey: "odt"
         label: qsTr("Tonescale")
         entries: [
-            { value: "use_look_preset", label: "Use Look Preset" },
-            { value: "low_contrast", label: "Low Contrast" },
-            { value: "medium_contrast", label: "Medium Contrast" },
-            { value: "high_contrast", label: "High Contrast" },
-            { value: "arriba_tonescale", label: "Arriba Tonescale" },
-            { value: "sylvan_tonescale", label: "Sylvan Tonescale" },
-            { value: "colorful_tonescale", label: "Colorful Tonescale" },
-            { value: "aery_tonescale", label: "Aery Tonescale" },
-            { value: "dystopic_tonescale", label: "Dystopic Tonescale" },
-            { value: "umbra_tonescale", label: "Umbra Tonescale" },
-            { value: "aces_1_x", label: "ACES 1.x" },
-            { value: "aces_2_0", label: "ACES 2.0" },
-            { value: "marvelous_tonscape", label: "Marvelous Tonscape" },
-            { value: "dagrinchi_tonegroan", label: "Dagrinchi Tonegroan" },
-            { value: "custom", label: "Custom" }
+            { value: "use_look_preset", label: qsTr("Use Look Preset") },
+            { value: "low_contrast", label: qsTr("Low Contrast") },
+            { value: "medium_contrast", label: qsTr("Medium Contrast") },
+            { value: "high_contrast", label: qsTr("High Contrast") },
+            { value: "arriba_tonescale", label: qsTr("Arriba Tonescale") },
+            { value: "sylvan_tonescale", label: qsTr("Sylvan Tonescale") },
+            { value: "colorful_tonescale", label: qsTr("Colorful Tonescale") },
+            { value: "aery_tonescale", label: qsTr("Aery Tonescale") },
+            { value: "dystopic_tonescale", label: qsTr("Dystopic Tonescale") },
+            { value: "umbra_tonescale", label: qsTr("Umbra Tonescale") },
+            { value: "aces_1_x", label: qsTr("ACES 1.x") },
+            { value: "aces_2_0", label: qsTr("ACES 2.0") },
+            { value: "marvelous_tonscape", label: qsTr("Marvelous Tonscape") },
+            { value: "dagrinchi_tonegroan", label: qsTr("Dagrinchi Tonegroan") },
+            { value: "custom", label: qsTr("Custom") }
         ]
         defaultIndex: 0
         submitter: root.editorSession
@@ -365,13 +365,13 @@ Item {
         fieldKey: "odt"
         label: qsTr("Creative White")
         entries: [
-            { value: "use_look_preset", label: "Use Look Preset" },
-            { value: "d93", label: "D93" },
-            { value: "d75", label: "D75" },
-            { value: "d65", label: "D65" },
-            { value: "d60", label: "D60" },
-            { value: "d55", label: "D55" },
-            { value: "d50", label: "D50" }
+            { value: "use_look_preset", label: qsTr("Use Look Preset") },
+            { value: "d93", label: qsTr("D93") },
+            { value: "d75", label: qsTr("D75") },
+            { value: "d65", label: qsTr("D65") },
+            { value: "d60", label: qsTr("D60") },
+            { value: "d55", label: qsTr("D55") },
+            { value: "d50", label: qsTr("D50") }
         ]
         defaultIndex: 0
         submitter: root.editorSession

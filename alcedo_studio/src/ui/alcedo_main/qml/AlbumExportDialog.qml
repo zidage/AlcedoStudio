@@ -144,19 +144,19 @@ Dialog {
         switch (formatValue) {
         case "JPEG":
         case "WEBP":
-            return [{ text: "8-bit", value: 8 }]
+            return [{ text: qsTr("8-bit"), value: 8 }]
         case "PNG":
-            return [{ text: "8-bit", value: 8 }, { text: "16-bit", value: 16 }]
+            return [{ text: qsTr("8-bit"), value: 8 }, { text: qsTr("16-bit"), value: 16 }]
         case "TIFF":
             return [
-                { text: "8-bit",  value: 8  },
-                { text: "16-bit", value: 16 },
-                { text: "32-bit", value: 32 }
+                { text: qsTr("8-bit"),  value: 8  },
+                { text: qsTr("16-bit"), value: 16 },
+                { text: qsTr("32-bit"), value: 32 }
             ]
         case "EXR":
-            return [{ text: "16-bit", value: 16 }, { text: "32-bit", value: 32 }]
+            return [{ text: qsTr("16-bit"), value: 16 }, { text: qsTr("32-bit"), value: 32 }]
         default:
-            return [{ text: "8-bit", value: 8 }]
+            return [{ text: qsTr("8-bit"), value: 8 }]
         }
     }
 
@@ -379,7 +379,7 @@ Dialog {
                                 TextField {
                                     id: subfolderName
                                     visible: subfolderCheck.checked
-                                    text: "Processed"
+                                    text: qsTr("Processed")
                                     font.pixelSize: 12
                                     implicitWidth: 130
                                     enabled: !appModules.importExport.exportInFlight
@@ -538,11 +538,11 @@ Dialog {
                                         Layout.fillWidth: true
                                         enabled: !appModules.importExport.exportInFlight
                                         model: [
-                                            { text: "JPEG", value: "JPEG" },
-                                            { text: "PNG",  value: "PNG"  },
-                                            { text: "TIFF", value: "TIFF" },
-                                            { text: "WEBP", value: "WEBP" },
-                                            { text: "EXR",  value: "EXR"  }
+                                            { text: qsTr("JPEG"), value: "JPEG" },
+                                            { text: qsTr("PNG"),  value: "PNG"  },
+                                            { text: qsTr("TIFF"), value: "TIFF" },
+                                            { text: qsTr("WEBP"), value: "WEBP" },
+                                            { text: qsTr("EXR"),  value: "EXR"  }
                                         ]
                                         textRole: "text"
                                         valueRole: "value"
@@ -652,8 +652,8 @@ Dialog {
                                         id: exportTiffComp
                                         model: [
                                             { text: qsTr("None"), value: "NONE" },
-                                            { text: "LZW", value: "LZW" },
-                                            { text: "ZIP", value: "ZIP" }
+                                            { text: qsTr("LZW"), value: "LZW" },
+                                            { text: qsTr("ZIP"), value: "ZIP" }
                                         ]
                                         textRole: "text"
                                         valueRole: "value"
@@ -814,7 +814,7 @@ Dialog {
                                             Label {
                                                 id: hdrQueueTagText
                                                 anchors.centerIn: parent
-                                                text: "HDR"
+                                                text: qsTr("HDR")
                                                 color: "#F2C766"
                                                 font.family: root.dataFontFamily
                                                 font.pixelSize: 10

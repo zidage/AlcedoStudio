@@ -1139,7 +1139,7 @@ Item {
                     Label {
                         id: hdrGridTagText
                         anchors.centerIn: parent
-                        text: "HDR"
+                        text: qsTr("HDR")
                         color: "#F2C766"
                         font.family: appTheme.dataFontFamily
                         font.pixelSize: Math.max(8, root.metadataFontSize - 1)

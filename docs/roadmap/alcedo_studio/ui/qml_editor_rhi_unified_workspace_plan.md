@@ -1020,15 +1020,22 @@ Implementation closeout:
 - The library ListView mode was deleted entirely: `ThumbnailListView.qml` is gone, the
   `viewModeSwitch` grid/list capsule toggle was removed from `LibraryWorkspace.qml`, the `gridMode`
   property + machinery and the `libraryGridMode` / `libraryListContentY` shell properties were
-  dropped, and the content Loader always uses `gridComp` (grid-only). The `.ts` `ThumbnailListView`
-  context is left as harmless dead weight; no `lupdate` was run.
+  dropped, and the content Loader always uses `gridComp` (grid-only). The translation catalogs are
+  updated with `-no-obsolete`, so the removed `ThumbnailListView` context is not retained.
 - `EditorWorkspace.qml` no longer contains `editorBackToLibraryButton`, the empty-state “Back to
   Library” button, the `returnToLibrary()` function, or the redundant full-width editor toolbar card
   (the `editorToolbar` that showed `Editing` / `Editor` / `Element %1` / `No image selected`). The
   active workspace is shown by the shared capsule; the empty state still prompts “Select an image to
   edit”.
-- i18n: `alcedo_main_zh_CN.ts` `Main` context un-vanished `Library` (图库) and added `Editor` (编辑).
-  No `lupdate` run; `en.ts` left as-is (English source fallback).
+- i18n: `qt_add_translations` now receives the canonical `ALCEDO_MAIN_QML_FILES` list as explicit
+  `SOURCES`, alongside the C++ source targets. It exposes `alcedo_main_lupdate` and
+  `alcedo_main_lrelease` for the Qt Linguist workflow, uses relative locations, and removes stale
+  messages during extraction. The catalogs were regenerated from all current QML and C++ sources;
+  `alcedo_main_zh_CN.ts` contains a finished Chinese translation for every extracted message, while
+  English keeps the source text as its fallback. After changing QML strings, run:
+  `cmd /c scripts\msvc_env.cmd --build build/release-test --target alcedo_main_lupdate -j 4`, edit
+  the `.ts` file in Qt Linguist, then run the same command with `alcedo_main_lrelease` to produce the
+  embedded `.qm` files.
 - Tests (`workspace_shell_test.cpp`): `RealQmlEntrypointsDriveRoutingFocusAndFilmstripHeight` now
   returns to library via `libraryNavButton` and asserts `editorBackToLibraryButton` is gone. Six new
   tests cover mouse activation (with `isActive` active-state assertions), keyboard activation

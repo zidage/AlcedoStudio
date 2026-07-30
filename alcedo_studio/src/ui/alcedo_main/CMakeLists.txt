@@ -654,8 +654,21 @@ qt_add_translations(TARGETS alcedo_main
         alcedo_main
         AlbumBackendLib
         UiLocalization
+    # QML_FILES are embedded by qt_add_qml_module(), but are not guaranteed to
+    # be visible to lupdate through SOURCE_TARGETS when the module is changed
+    # without a full configure. Keep this list derived from the QML module list
+    # above so every user-visible qsTr() call is part of the normal update flow.
+    SOURCES
+        ${ALCEDO_MAIN_QML_FILES}
     TS_FILES
         ${ALCEDO_TRANSLATION_TS_FILES}
+    LUPDATE_TARGET
+        alcedo_main_lupdate
+    LRELEASE_TARGET
+        alcedo_main_lrelease
+    LUPDATE_OPTIONS
+        -no-obsolete
+        -locations relative
     RESOURCE_PREFIX
         "/i18n"
     QM_OUTPUT_DIRECTORY
