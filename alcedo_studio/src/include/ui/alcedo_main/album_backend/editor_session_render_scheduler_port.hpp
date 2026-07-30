@@ -107,7 +107,9 @@ class EditorSessionRenderSchedulerPort final
   std::unordered_map<std::uint64_t, Job>                 jobs_;
   std::unordered_map<std::uint64_t, PendingPresentation> pending_presentations_;
   std::vector<alcedo::EditorRenderRequest>               scheduled_;
-  std::vector<std::jthread>                              workers_;
+  // std::thread (not jthread): Apple libc++ on the CI deployment target still
+  // omits std::jthread even under -std=c++20. Destructor joins workers_ explicitly.
+  std::vector<std::thread>                               workers_;
   image_id_t                                             cached_input_image_id_ = 0;
   std::shared_ptr<alcedo::ImageBuffer>                   cached_input_;
   bool                                                   shutting_down_ = false;
