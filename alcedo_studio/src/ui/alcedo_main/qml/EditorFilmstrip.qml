@@ -30,14 +30,10 @@ Item {
                                     && (String(editorSession.sessionState) === "Saving"
                                         || String(editorSession.sessionState) === "Switching")
     readonly property bool renderBusy: editorSession ? Boolean(editorSession.renderBusy) : false
-    readonly property bool discardEligible: editorSession
-                                             ? Boolean(editorSession.canDiscardCurrentCommit)
-                                             : false
     readonly property int filmstripThumbnailMaxEdge: 512
     property int focusIndex: selectedIndex >= 0 ? selectedIndex : 0
     property bool _listHadFocus: false
     property bool _restoringScroll: false
-    property int contextMenuElementId: 0
     readonly property bool selectionEnabled: editorSession
                                              ? Boolean(editorSession.actions.canSelectImage)
                                              : (interactionPolicy
@@ -183,6 +179,7 @@ Item {
     signal collapseRequested()
     signal toggleRequested()
     signal imageActivated(int index)
+    signal contextMenuRequested(var item, real sceneX, real sceneY)
 
     function activateImage(index) {
         if (!selectionEnabled || !thumbnailModel || index < 0 || index >= totalCount) {
@@ -200,25 +197,36 @@ Item {
         root.imageActivated(index)
     }
 
-    function openContextMenu(index) {
+    // The filmstrip shares the Main-level image context menu with the Library
+    // grid: this component only resolves the clicked row into a menu item and
+    // forwards the request; all actions (rating, copy/paste, delete, albums,
+    // Discard on the current image) are assembled and wired by Main.
+    function contextMenuItemForIndex(index) {
         if (!thumbnailModel || index < 0 || index >= totalCount) {
-            return
+            return null
         }
         const row = thumbnailModel.getItemAt(index)
-        if (!row || Number(row.elementId) !== selectedElementId) {
-            return
+        if (!row || !row.elementId || Number(row.elementId) <= 0 || Number(row.imageId) <= 0) {
+            return null
         }
-        contextMenuElementId = Number(row.elementId)
-        filmstripMenu.open()
+        return {
+            elementId: Number(row.elementId),
+            fileId: Number(row.fileId || row.elementId),
+            imageId: Number(row.imageId),
+            folderId: Number(row.folderId || 0),
+            scopeType: row.scopeType ? String(row.scopeType) : "",
+            fileName: row.fileName ? row.fileName : qsTr("(unnamed)"),
+            rating: Number(row.rating),
+            isHdr: row.isHdr === true
+        }
     }
 
-    function discardCurrentCommit() {
-        if (contextMenuElementId !== selectedElementId || !discardEligible || !editorSession) {
+    function requestContextMenuForIndex(index, sceneX, sceneY) {
+        const item = contextMenuItemForIndex(index)
+        if (!item) {
             return
         }
-        if (editorSession.Discard) {
-            editorSession.Discard()
-        }
+        root.contextMenuRequested(item, sceneX, sceneY)
     }
 
     // Layout.preferredHeight binds to dockHeight so collapse releases vertical space
@@ -681,7 +689,8 @@ Item {
                                 if (mouse.button === Qt.LeftButton) {
                                     root.activateImage(thumbnailDelegate.index)
                                 } else if (mouse.button === Qt.RightButton) {
-                                    root.openContextMenu(thumbnailDelegate.index)
+                                    const p = thumbnailMouse.mapToItem(null, mouse.x, mouse.y)
+                                    root.requestContextMenuForIndex(thumbnailDelegate.index, p.x, p.y)
                                 }
                             }
                         }
@@ -704,16 +713,5 @@ Item {
             }
         }
 
-        Menu {
-            id: filmstripMenu
-            objectName: "editorFilmstripContextMenu"
-            MenuItem {
-                objectName: "editorFilmstripDiscardAction"
-                text: qsTr("Discard")
-                enabled: root.contextMenuElementId === root.selectedElementId
-                         && root.discardEligible
-                onTriggered: root.discardCurrentCommit()
-            }
-        }
     }
 }

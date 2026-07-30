@@ -1,7 +1,10 @@
 import QtQuick
 import QtQuick.Controls
 
-Menu {
+// Library / inspector right-click menu. Visuals come from the shared
+// AppContextMenu family (DESIGN.md "Context menus"); this file only owns the
+// Rating sub-menu and the dynamic action rows.
+AppContextMenu {
     id: root
     objectName: "imageContextMenu"
     property var actions: []
@@ -12,38 +15,32 @@ Menu {
 
     readonly property int dynamicActionOffset: 2
 
-    function openAt(sceneX, sceneY) {
-        x = Math.max(0, sceneX)
-        y = Math.max(0, sceneY)
-        open()
-    }
-
     function starText(value) {
         let text = ""
         const rating = Math.max(0, Math.min(5, Number(value)))
         for (let i = 1; i <= 5; ++i) {
-            text += i <= rating ? "\u2605" : "\u2606"
+            text += i <= rating ? "★" : "☆"
         }
         return text
     }
 
-    Menu {
+    AppContextMenu {
         id: ratingMenu
         title: qsTr("Rating")
         enabled: root.ratingEnabled
 
-        MenuItem {
+        AppMenuItem {
             text: qsTr("Unrated")
             checkable: true
             checked: root.currentRating === 0
             onTriggered: root.ratingRequested(0)
         }
 
-        MenuSeparator {}
+        AppMenuSeparator {}
 
         Instantiator {
             model: [1, 2, 3, 4, 5]
-            delegate: MenuItem {
+            delegate: AppMenuItem {
                 readonly property int ratingValue: Number(modelData)
                 text: root.starText(ratingValue)
                 checkable: true
@@ -59,11 +56,11 @@ Menu {
         }
     }
 
-    MenuSeparator {}
+    AppMenuSeparator {}
 
     Instantiator {
         model: root.actions
-        delegate: MenuItem {
+        delegate: AppMenuItem {
             readonly property var actionData: modelData
             objectName: actionData && actionData.id
                         ? "imageContextAction_" + String(actionData.id)

@@ -385,6 +385,30 @@ blocking. Session identity is never recreated by a fold.
 
 ---
 
+## Context menus
+
+All popup menus (Library grid right-click, editor filmstrip right-click,
+toolbar dropdowns) share one dark menu family — no per-site ad-hoc styling.
+
+| Role | Token |
+| --- | --- |
+| Menu surface | `bgBaseColor` (same dark well as editor dropdown popups) |
+| Menu outline | 1 px `dividerColor` hairline |
+| Menu shell radius | `panelRadius` |
+| Row hover / keyboard highlight | `hoverColor` wash, `controlRadiusSmall` radius |
+| Row text | `textColor`; disabled rows mute to `textMutedColor` |
+| Separator | 1 px `dividerColor`, `spaceXs` vertical air |
+| Menu padding | `spaceXs` (highlight wash stays inset from the shell edge) |
+| Row metrics | `spaceSm` horizontal / `spaceXs` vertical padding, `fontSizeBody` |
+| State gutter | Reserved `spaceLg` left column for check marks so rows share one text edge |
+| Open / close | `motionFadeMs` opacity fade, skipped under `reduceMotion` |
+
+Use `AppContextMenu` + `AppMenuItem` + `AppMenuSeparator` for every new menu;
+sub-menus declared as nested `AppContextMenu` with a `title` pick up the same
+row delegate and arrow affordance automatically.
+
+---
+
 ## Shared components
 
 | Component | Responsibility |
@@ -393,6 +417,9 @@ blocking. Session identity is never recreated by a fold.
 | `CollapsibleSection.qml` | Folding group shell with shared motion driver |
 | `DialogActionButton.qml` | Text dialog actions (height 46 reference) |
 | `IconButton.qml` | Legacy square icon control; defaults now follow tokens |
+| `AppContextMenu.qml` | Shared dark popup menu shell (`Menu` + `AppMenuItem` delegate, fade transition, `openAt`) |
+| `AppMenuItem.qml` | Shared dark menu row (state gutter, elided label, sub-menu arrow, hover wash) |
+| `AppMenuSeparator.qml` | Shared 1 px menu group divider |
 
 ---
 

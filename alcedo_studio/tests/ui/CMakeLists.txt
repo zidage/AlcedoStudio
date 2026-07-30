@@ -463,7 +463,8 @@ alcedo_ui_gtest_discover_tests(WorkspaceShellTest TEST_PREFIX "WorkspaceShellTes
 alcedo_register_test_target(WorkspaceShellTest ui)
 
 # Phase 7C: horizontal filmstrip model reuse, selection/focus, thumbnail pin
-# lifetime, collapse scroll preservation, busy badges, and current-image menu.
+# lifetime, collapse scroll preservation, busy badges, and context-menu
+# request forwarding to the shared Main-level image menu.
 add_executable(EditorFilmstripQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_filmstrip_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/editor_filmstrip_qml_test_main.cpp

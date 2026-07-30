@@ -214,6 +214,11 @@ ApplicationWindow {
         imageActionsController.openImageContextMenu(clickedItem, sceneX, sceneY)
     }
 
+    function openEditorFilmstripContextMenu(clickedItem, sceneX, sceneY) {
+        imageActionsController.openImageContextMenu(clickedItem, sceneX, sceneY,
+                                                    "editor-filmstrip")
+    }
+
     function requestSetFocusedImageRating(rating) {
         imageActionsController.requestSetFocusedImageRating(rating)
     }
