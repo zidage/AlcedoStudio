@@ -85,12 +85,13 @@ Item {
             Layout.fillHeight: true
             spacing: appTheme.spaceMd
 
-            // Left: History / Versions rail (+ expandable panel beside rail).
+            // Left: editor tool rail (+ expandable History / Versions panel).
             // objectName is set inside the component (editorHistoryVersionsRail).
-            EditorHistoryVersionsRail {
+            EditorWorkspaceRail {
                 id: historyVersionsRail
                 Layout.fillHeight: true
                 theme: root.theme
+                host: root.host
                 editorSession: root.editorSession
                 interactionPolicy: root.interactionPolicy
                 adjustmentTransfer: appModules.adjustmentTransfer

@@ -10,6 +10,7 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlError>
+#include <QFont>
 #include <QQuickStyle>
 #include <QQuickWindow>
 #include <QUrl>
@@ -80,6 +81,23 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   EXPECT_TRUE(window->isVisible());
   EXPECT_EQ(root->objectName(), QStringLiteral("mainWindow"));
 
+  auto* task_bar = root->findChild<QObject*>(QStringLiteral("backgroundTaskBar"));
+  ASSERT_NE(task_bar, nullptr);
+  EXPECT_FALSE(task_bar->property("layoutActive").toBool());
+  BackgroundTaskSnapshot task_snapshot;
+  task_snapshot.kind_             = BackgroundTaskKind::ImageAnalysis;
+  task_snapshot.state_            = BackgroundTaskState::Running;
+  task_snapshot.title_            = QStringLiteral("Analyzing");
+  task_snapshot.progress_percent_ = 25;
+  task_snapshot.shutdown_policy_  = BackgroundTaskShutdownPolicy::WaitForFinish;
+  const QString task_id           = host.background_tasks()->RegisterTask(task_snapshot);
+  ProcessEvents(50);
+  EXPECT_TRUE(task_bar->property("layoutActive").toBool());
+  host.background_tasks()->FinishTask(task_id, BackgroundTaskState::Succeeded);
+  ProcessEvents(AppTheme::Instance().backgroundTaskAutoCollapseMs() +
+                AppTheme::Instance().motionFoldOpenMs() + 100);
+  EXPECT_FALSE(task_bar->property("layoutActive").toBool());
+
   // Exercise the real project, folder, thumbnail, import, export, inspection,
   // search, settings, and editor-entry seams through their concrete modules.
   host.folders()->SelectFolder(0);
@@ -105,6 +123,7 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   EXPECT_EQ(workspace_host->property("activeWorkspace").toString(), QStringLiteral("editor"));
   EXPECT_NE(root->findChild<QObject*>(QStringLiteral("editorWorkspace")), nullptr);
   EXPECT_EQ(root->findChild<QObject*>(QStringLiteral("libraryWorkspace")), nullptr);
+  EXPECT_NE(root->findChild<QObject*>(QStringLiteral("editorBackgroundTasksRailButton")), nullptr);
 
   host.workspace_router()->OpenLibrary();
   ProcessEvents(50);
@@ -125,12 +144,67 @@ TEST_F(MainQmlWorkflowTests, ProductionWindowLoadsAndRoutesCoreWorkspaceActions)
   auto* collections = root->findChild<QObject*>(QStringLiteral("collectionsPanel"));
   auto* search = root->findChild<QObject*>(QStringLiteral("globalSearchDialog"));
   auto* analysis = root->findChild<QObject*>(QStringLiteral("advancedContentAnalysisDialog"));
+  auto* background_tasks_dialog =
+      root->findChild<QObject*>(QStringLiteral("backgroundTasksDialog"));
   ASSERT_NE(collections, nullptr);
   ASSERT_NE(search, nullptr);
   ASSERT_NE(analysis, nullptr);
+  ASSERT_NE(background_tasks_dialog, nullptr);
   EXPECT_EQ(collections->property("folderController").value<QObject*>(), host.folders());
   EXPECT_EQ(search->property("searchController").value<QObject*>(), host.search());
   EXPECT_EQ(analysis->property("imageController").value<QObject*>(), host.images());
+  EXPECT_EQ(background_tasks_dialog->property("controller").value<QObject*>(),
+            host.background_tasks());
+
+  for (int index = 0; index < 7; ++index) {
+    BackgroundTaskSnapshot completed_task;
+    completed_task.kind_             = BackgroundTaskKind::SemanticGeneration;
+    completed_task.state_            = BackgroundTaskState::Running;
+    completed_task.title_            = QStringLiteral("Completed task %1").arg(index);
+    completed_task.shutdown_policy_  = BackgroundTaskShutdownPolicy::WaitForFinish;
+    const QString completed_task_id =
+        host.background_tasks()->RegisterTask(completed_task);
+    host.background_tasks()->FinishTask(completed_task_id, BackgroundTaskState::Succeeded);
+  }
+  BackgroundTaskSnapshot refreshing_task;
+  refreshing_task.kind_             = BackgroundTaskKind::ModelDownload;
+  refreshing_task.state_            = BackgroundTaskState::Running;
+  refreshing_task.title_            = QStringLiteral("Refreshing task");
+  refreshing_task.progress_percent_ = 20;
+  refreshing_task.shutdown_policy_  = BackgroundTaskShutdownPolicy::WaitForFinish;
+  const QString refreshing_task_id =
+      host.background_tasks()->RegisterTask(refreshing_task);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(collections, "backgroundTasksRequested"));
+  ProcessEvents(50);
+  EXPECT_TRUE(background_tasks_dialog->property("opened").toBool());
+  EXPECT_NE(background_tasks_dialog->property("blurSource").value<QObject*>(), nullptr);
+
+  auto* background_tasks_title =
+      root->findChild<QObject*>(QStringLiteral("backgroundTasksDialogTitle"));
+  auto* background_tasks_list =
+      root->findChild<QObject*>(QStringLiteral("backgroundTasksList"));
+  ASSERT_TRUE(qml_warnings.empty())
+      << (qml_warnings.empty() ? std::string{} : qml_warnings.back().toString().toStdString());
+  ASSERT_NE(background_tasks_title, nullptr);
+  ASSERT_NE(background_tasks_list, nullptr);
+  EXPECT_EQ(background_tasks_title->property("font").value<QFont>().pixelSize(),
+            AppTheme::Instance().fontSizeHeadline());
+
+  ProcessEvents(200);
+  ASSERT_GT(background_tasks_list->property("contentHeight").toReal(),
+            background_tasks_list->property("height").toReal());
+  ASSERT_TRUE(background_tasks_list->setProperty("contentY", 100.0));
+  ProcessEvents(50);
+  const qreal task_content_y = background_tasks_list->property("contentY").toReal();
+  ASSERT_GT(task_content_y, 0.0);
+  host.background_tasks()->UpdateTask(refreshing_task_id, QStringLiteral("Refreshing task"),
+                                      QStringLiteral("Halfway"), 50);
+  ProcessEvents(50);
+  EXPECT_NEAR(background_tasks_list->property("contentY").toReal(), task_content_y, 1.0);
+  host.background_tasks()->FinishTask(refreshing_task_id, BackgroundTaskState::Succeeded);
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(background_tasks_dialog, "close"));
   EXPECT_TRUE(qml_warnings.empty()) << qml_warnings.front().toString().toStdString();
 }
 

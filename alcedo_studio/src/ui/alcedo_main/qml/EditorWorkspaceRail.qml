@@ -3,9 +3,9 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import Alcedo.Main 1.0
 
-// Persistent left rail for the editor's independent transaction and Version
-// panels. Only the active panel body is loaded; scroll offsets live on the rail
-// so Loader teardown/recreation restores the prior viewport (Phase 7A R6).
+// Persistent left rail for editor-wide tools plus the independent transaction
+// and Version panels. Only the active panel body is loaded; scroll offsets live
+// on the rail so Loader teardown/recreation restores the prior viewport.
 //
 // Fold motion: outer layout width snaps once (open or closed). Inner reveal is
 // transform-only (x) driven by panelOpenProgress — never per-frame Layout width
@@ -15,6 +15,7 @@ Item {
     objectName: "editorHistoryVersionsRail"
 
     property var theme: null
+    property var host: null
     property var editorSession: null
     property var interactionPolicy: null
     property var adjustmentTransfer: (typeof appModules !== "undefined" && appModules)
@@ -219,6 +220,22 @@ Item {
                 focusRingColor: root.colText
                 actionName: selected ? qsTr("Hide Versions") : qsTr("Show Versions")
                 onClicked: root.selectPage("versions")
+            }
+
+            IconActionButton {
+                id: backgroundTasksRailButton
+                objectName: "editorBackgroundTasksRailButton"
+                compact: true
+                enabled: root.host !== null
+                iconSrc: "qrc:/panel_icons/clock-play.svg"
+                iconColorDefault: root.colMuted
+                iconColorMuted: root.colMuted
+                fillIdle: root.colCardSurface
+                fillHover: appTheme.buttonHoveredFillColor
+                fillPressed: appTheme.buttonPressedFillColor
+                focusRingColor: root.colText
+                actionName: qsTr("Background Tasks")
+                onClicked: root.host.openBackgroundTasksDialog()
             }
         }
     }

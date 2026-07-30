@@ -520,7 +520,7 @@ inline auto QmlDirectory() -> QString {
 }
 
 inline auto RailUrl() -> QUrl {
-  return QUrl::fromLocalFile(QmlDirectory() + "/EditorHistoryVersionsRail.qml");
+  return QUrl::fromLocalFile(QmlDirectory() + "/EditorWorkspaceRail.qml");
 }
 
 inline auto RecoveryBarUrl() -> QUrl {

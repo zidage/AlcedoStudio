@@ -148,6 +148,7 @@ RowLayout {
         onImportRequested: host.importDialog.open()
         onSearchRequested: host.globalSearchDialog.openFromCollection()
         onAdvancedAnalysisRequested: host.openAdvancedAnalysisDialog()
+        onBackgroundTasksRequested: host.openBackgroundTasksDialog()
     }
 
     ColumnLayout {
