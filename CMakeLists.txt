@@ -340,7 +340,9 @@ target_include_directories(JSON INTERFACE "${CMAKE_SOURCE_DIR}/alcedo_studio/thi
 
 # Other libraries
 # OpenCV
-find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs calib3d highgui)
+# OpenCV 5 split calib3d into geometry/calib/stereo/ptcloud; Alcedo only needs
+# core image processing modules, so do not require the removed calib3d target.
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs highgui)
 
 # Eigen3
 find_package(Eigen3 CONFIG REQUIRED)

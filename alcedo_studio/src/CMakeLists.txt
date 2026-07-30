@@ -20,7 +20,6 @@ set(ALCEDO_OPENCV_IMAGE_DEPS
     opencv_core
     opencv_imgproc
     opencv_imgcodecs
-    opencv_calib3d
     opencv_highgui
 )
 
