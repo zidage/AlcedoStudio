@@ -44,5 +44,10 @@ class ColorTempOp : public OperatorBase<ColorTempOp> {
   void SetParams(const nlohmann::json& params) override;
   void SetGlobalParams(OperatorParams& params) const override;
   void EnableGlobalParams(OperatorParams& params, bool enable) override;
+
+  [[nodiscard]] auto DetectMergeConflict(const nlohmann::json& current,
+                                         const nlohmann::json& incoming) const -> bool override;
+  [[nodiscard]] auto MergeParams(const nlohmann::json& current, const nlohmann::json& incoming,
+                                 OperatorMergeChoice choice) const -> nlohmann::json override;
 };
 }  // namespace alcedo

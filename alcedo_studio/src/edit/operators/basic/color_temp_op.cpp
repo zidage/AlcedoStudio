@@ -800,24 +800,130 @@ void ColorTempOp::SetParams(const nlohmann::json& params) {
     custom_tint_ =
         static_cast<float>(ClampFinite(j["tint"].get<double>(), kCustomTintMin, kCustomTintMax));
   }
-  bool has_resolved_cct  = false;
-  bool has_resolved_tint = false;
+  // Image-local as-shot cache: only overwrite when the payload explicitly carries
+  // resolved_* keys. Missing keys must not fall back to custom_* — transfer packages
+  // intentionally strip as-shot CCT/Tint, and custom→as_shot must keep the target's
+  // as-shot baseline until ResolveRuntime refreshes it from RAW context.
   if (j.contains("resolved_cct")) {
     resolved_cct_ = static_cast<float>(
         ClampFinite(j["resolved_cct"].get<double>(), kCustomCCTMin, kCustomCCTMax));
-    has_resolved_cct = true;
   }
   if (j.contains("resolved_tint")) {
     resolved_tint_ = static_cast<float>(
         ClampFinite(j["resolved_tint"].get<double>(), kCustomTintMin, kCustomTintMax));
-    has_resolved_tint = true;
   }
-  if (!has_resolved_cct) {
-    resolved_cct_ = custom_cct_;
+}
+
+namespace {
+
+auto ColorTempInner(const nlohmann::json& params) -> nlohmann::json {
+  if (params.contains("color_temp") && params["color_temp"].is_object()) {
+    return params["color_temp"];
   }
-  if (!has_resolved_tint) {
-    resolved_tint_ = custom_tint_;
+  return nlohmann::json::object();
+}
+
+auto ColorTempModeFromParams(const nlohmann::json& params) -> ColorTempMode {
+  const auto inner = ColorTempInner(params);
+  if (!inner.contains("mode") || !inner["mode"].is_string()) {
+    return ColorTempMode::AS_SHOT;
   }
+  const auto mode = inner["mode"].get<std::string>();
+  if (mode == "custom") {
+    return ColorTempMode::CUSTOM;
+  }
+  return ColorTempMode::AS_SHOT;
+}
+
+auto ColorTempAsShotBaseline(const nlohmann::json& params, double& out_cct, double& out_tint)
+    -> void {
+  const auto inner = ColorTempInner(params);
+  // Prefer explicit resolved_* (as-shot cache). When the op was already as_shot,
+  // GetParams mirrors those into cct/tint as well.
+  if (inner.contains("resolved_cct") && inner["resolved_cct"].is_number()) {
+    out_cct = inner["resolved_cct"].get<double>();
+  } else if (inner.contains("cct") && inner["cct"].is_number() &&
+             ColorTempModeFromParams(params) == ColorTempMode::AS_SHOT) {
+    out_cct = inner["cct"].get<double>();
+  } else {
+    out_cct = 6500.0;
+  }
+  if (inner.contains("resolved_tint") && inner["resolved_tint"].is_number()) {
+    out_tint = inner["resolved_tint"].get<double>();
+  } else if (inner.contains("tint") && inner["tint"].is_number() &&
+             ColorTempModeFromParams(params) == ColorTempMode::AS_SHOT) {
+    out_tint = inner["tint"].get<double>();
+  } else {
+    out_tint = 0.0;
+  }
+}
+
+}  // namespace
+
+auto ColorTempOp::DetectMergeConflict(const nlohmann::json& current,
+                                      const nlohmann::json& incoming) const -> bool {
+  const auto current_mode  = ColorTempModeFromParams(current);
+  const auto incoming_mode = ColorTempModeFromParams(incoming);
+  // as_shot is portable intent only; image-local CCT/Tint must not force a conflict.
+  if (current_mode == ColorTempMode::AS_SHOT && incoming_mode == ColorTempMode::AS_SHOT) {
+    return false;
+  }
+  if (current_mode != incoming_mode) {
+    return true;
+  }
+  // Both custom: compare user-authored CCT/Tint only.
+  const auto cur = ColorTempInner(current);
+  const auto inc = ColorTempInner(incoming);
+  const double cur_cct  = cur.value("cct", 6500.0);
+  const double cur_tint = cur.value("tint", 0.0);
+  const double inc_cct  = inc.value("cct", 6500.0);
+  const double inc_tint = inc.value("tint", 0.0);
+  constexpr double kCctEps  = 0.5;
+  constexpr double kTintEps = 0.05;
+  return std::abs(cur_cct - inc_cct) > kCctEps || std::abs(cur_tint - inc_tint) > kTintEps;
+}
+
+auto ColorTempOp::MergeParams(const nlohmann::json& current, const nlohmann::json& incoming,
+                              OperatorMergeChoice choice) const -> nlohmann::json {
+  if (choice == OperatorMergeChoice::kKeepCurrent) {
+    return current;
+  }
+
+  const auto incoming_mode = ColorTempModeFromParams(incoming);
+  nlohmann::json result =
+      current.is_object() ? current : nlohmann::json{{std::string(script_name_), nlohmann::json::object()}};
+  if (!result.contains(std::string(script_name_)) || !result[std::string(script_name_)].is_object()) {
+    result[std::string(script_name_)] = nlohmann::json::object();
+  }
+  auto& out = result[std::string(script_name_)];
+
+  if (incoming_mode == ColorTempMode::AS_SHOT) {
+    double baseline_cct  = 6500.0;
+    double baseline_tint = 0.0;
+    ColorTempAsShotBaseline(current, baseline_cct, baseline_tint);
+    out["mode"]          = "as_shot";
+    out["cct"]           = baseline_cct;
+    out["tint"]          = baseline_tint;
+    out["resolved_cct"]  = baseline_cct;
+    out["resolved_tint"] = baseline_tint;
+    return result;
+  }
+
+  // Take custom values from incoming; keep current's as-shot baseline in resolved_*.
+  const auto inc = ColorTempInner(incoming);
+  double baseline_cct  = 6500.0;
+  double baseline_tint = 0.0;
+  ColorTempAsShotBaseline(current, baseline_cct, baseline_tint);
+  out["mode"] = "custom";
+  if (inc.contains("cct") && inc["cct"].is_number()) {
+    out["cct"] = inc["cct"];
+  }
+  if (inc.contains("tint") && inc["tint"].is_number()) {
+    out["tint"] = inc["tint"];
+  }
+  out["resolved_cct"]  = baseline_cct;
+  out["resolved_tint"] = baseline_tint;
+  return result;
 }
 
 void ColorTempOp::SetGlobalParams(OperatorParams& params) const {

@@ -75,17 +75,22 @@ struct AdjustmentApplyResult {
 };
 
 struct AdjustmentMergeConflict {
-  PipelineStageName stage         = PipelineStageName::Stage_Count;
-  OperatorType      operator_type = OperatorType::UNKNOWN;
+  PipelineStageName stage            = PipelineStageName::Stage_Count;
+  OperatorType      operator_type    = OperatorType::UNKNOWN;
   std::string       field_key;
   nlohmann::json    current_value;
   nlohmann::json    incoming_value;
+  bool              current_enabled  = true;
+  bool              incoming_enabled = true;
 };
 
 struct AdjustmentMergeResolution {
-  std::string    field_key;
-  nlohmann::json resolved_value   = nlohmann::json(nullptr);
-  bool           resolved_enabled = true;
+  std::string                         field_key;
+  /// Preferred when set. When nullopt, CompleteMerge infers choice by comparing
+  /// resolved_value to the conflict's current/incoming values.
+  std::optional<OperatorMergeChoice>  choice;
+  nlohmann::json                      resolved_value   = nlohmann::json(nullptr);
+  bool                                resolved_enabled = true;
 };
 
 struct AdjustmentMergePreview {
