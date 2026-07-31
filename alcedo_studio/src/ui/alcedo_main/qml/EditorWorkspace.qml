@@ -697,8 +697,21 @@ Item {
                     Layout.fillWidth: true
                     Layout.preferredHeight: editorFilmstrip.dockHeight
                     theme: root.theme
+                    host: root.host
                     editorSession: root.editorSession
                     interactionPolicy: root.interactionPolicy
+                    selectedImagesById: root.host ? root.host.selectedImagesById : ({})
+                    onImageSelectionChanged: function(elementId, imageId, fileName, isHdr, selected) {
+                        if (root.host && root.host.selectionState) {
+                            root.host.selectionState.setImageSelected(
+                                elementId, imageId, fileName, isHdr, selected)
+                        }
+                    }
+                    onReplaceSelection: function(items) {
+                        if (root.host && root.host.selectionState) {
+                            root.host.selectionState.replaceSelectedImages(items)
+                        }
+                    }
                     onContextMenuRequested: function(item, sceneX, sceneY) {
                         if (root.host && root.host.openEditorFilmstripContextMenu) {
                             root.host.openEditorFilmstripContextMenu(item, sceneX, sceneY)
