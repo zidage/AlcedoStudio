@@ -9,13 +9,13 @@
 ![C++](https://img.shields.io/badge/C++-20-blue)
 ![AI](https://img.shields.io/badge/AI-CLIP%20%2B%20VLM-ff6f00)
 
-**Alcedo Studio** is a next-generation RAW photo editor and library management system designed for photographers who demand absolute speed, complete privacy, and native AI capabilities. By replacing database bloat and cloud dependency with a high-performance GPU-accelerated pipeline and local-first AI models, Alcedo Studio delivers a fluid, secure, and professional editing workflow.
+**Alcedo Studio** is a RAW photo editor and photo library manager. Image processing runs on a GPU-accelerated pipeline. Tagging and search run locally on your machine, while the culling assist uses LLM APIs (OpenAI-compatible, Anthropic, or Volcengine Ark) that may be cloud-hosted. The library is stored in a single DuckDB-backed file next to your photos, so there is no separate catalog to migrate.
 
 ---
 
-## Screenshots and Demo
+## Screenshots
 
-The screenshots below reflect the v0.2.6-era interface of Alcedo Studio.
+The screenshots below show the v0.2.6-era interface of Alcedo Studio.
 
 <table>
   <colgroup>
@@ -25,47 +25,47 @@ The screenshots below reflect the v0.2.6-era interface of Alcedo Studio.
   <tbody>
     <tr>
       <td><img src="docs/screenshots/1-主界面.png" alt="Alcedo Studio library browser" width="100%" /></td>
-      <td><strong>Library Browser</strong> — Fast thumbnail grid, folder directory tree, active search facets, rating filters, and AI labels in a single workspace.</td>
+      <td><strong>Library Browser</strong> — The library browser combines a thumbnail grid, folder tree, search facets, rating filters, and AI labels in a single workspace.</td>
     </tr>
     <tr>
       <td><img src="docs/screenshots/7-高级筛选.png" alt="Advanced filtering and library overview" width="100%" /></td>
-      <td><strong>Advanced Filtering</strong> — Search, filter, and drill down through your library using EXIF data, custom ratings, and semantic keywords.</td>
+      <td><strong>Advanced Filtering</strong> — Filter the library by EXIF data, custom ratings, and semantic keywords.</td>
     </tr>
     <tr>
       <td><img src="docs/screenshots/8-AI内容识别.png" alt="AI content recognition settings" width="100%" /></td>
-      <td><strong>Local AI Vision Engine</strong> — Toggle and manage local CLIP and SigLIP models to run lightning-fast photo scanning with 100% data privacy.</td>
+      <td><strong>Local AI Vision Engine</strong> — Enable and manage local CLIP and SigLIP models. Scanning runs on your machine and the images do not leave it.</td>
     </tr>
     <tr>
       <td><img src="docs/screenshots/9-AI内容过滤.png" alt="AI semantic label filtering" width="100%" /></td>
-      <td><strong>Semantic Label Filters</strong> — Automatically generated AI tags are integrated directly into the filter panel as first-class library attributes.</td>
+      <td><strong>Semantic Label Filters</strong> — AI-generated tags appear in the filter panel as ordinary library attributes.</td>
     </tr>
     <tr>
       <td><img src="docs/screenshots/10-AI自然语言搜索.png" alt="AI natural-language search" width="100%" /></td>
-      <td><strong>Natural-Language Search</strong> — Describe a scene in plain English, and find the closest matches instantly using our local vector index.</td>
+      <td><strong>Natural-Language Search</strong> — Describe a scene in plain language; the local vector index returns the closest matches.</td>
     </tr>
     <tr>
       <td><img src="docs/screenshots/2-色彩科学.png" alt="ACES and OpenDRT color science" width="100%" /></td>
-      <td><strong>Professional Color Science</strong> — Output rendering using ACES 2.0 and OpenDRT with display color space and peak luminance controls.</td>
+      <td><strong>Color Science</strong> — Output rendering uses ACES 2.0 and OpenDRT, with display color space and peak luminance controls.</td>
     </tr>
     <tr>
       <td><img src="docs/screenshots/3-基础调整.png" alt="Basic and local tone adjustments" width="100%" /></td>
-      <td><strong>Real-Time Exposure & Tone</strong> — Fine-tune white balance, exposure, contrast, tone curves, and local highlights/shadows with live histogram feedback.</td>
+      <td><strong>Exposure & Tone</strong> — White balance, exposure, contrast, tone curves, and local highlights/shadows are adjusted with live histogram feedback.</td>
     </tr>
     <tr>
       <td><img src="docs/screenshots/4-高级色彩.png" alt="Advanced color controls" width="100%" /></td>
-      <td><strong>Creative Grading</strong> — Precise control over HSL adjustments, color wheel grading (Lift, Gamma, Gain), and real-time scopes.</td>
+      <td><strong>Creative Grading</strong> — HSL adjustments, color wheel grading (lift, gamma, gain), and real-time scopes.</td>
     </tr>
     <tr>
       <td><img src="docs/screenshots/5-几何调整.png" alt="Geometry and crop controls" width="100%" /></td>
-      <td><strong>Geometry & Perspective</strong> — Intuitive crop, rotation, perspective repair, and common aspect ratio templates.</td>
+      <td><strong>Geometry & Perspective</strong> — Crop, rotation, perspective correction, and common aspect ratio presets.</td>
     </tr>
     <tr>
       <td><img src="docs/screenshots/Portra 400.png" alt="Kodak Portra 400 film simulation" width="100%" /></td>
-      <td><strong>Film Simulation</strong> — Native support for curated Kodak, Fuji, and Agfa LUTs (.cube) designed for ACEScc/ACEScct workflows.</td>
+      <td><strong>Film Simulation</strong> — Curated Kodak, Fuji, and Agfa LUTs (.cube) for ACEScc/ACEScct workflows.</td>
     </tr>
     <tr>
       <td><img src="docs/screenshots/5-胶片颗粒与Halation模拟.png" alt="Film grain and halation controls" width="100%" /></td>
-      <td><strong>Analog Film Effects</strong> — Beautiful, mathematically realistic film grain and halation effects computed dynamically on GPU/CPU pipelines.</td>
+      <td><strong>Analog Film Effects</strong> — Film grain and halation are computed dynamically on the GPU/CPU pipeline.</td>
     </tr>
     <tr>
       <td><img src="docs/screenshots/6-导出界面.png" alt="Export settings" width="100%" /></td>
@@ -74,74 +74,96 @@ The screenshots below reflect the v0.2.6-era interface of Alcedo Studio.
   </tbody>
 </table>
 
-> Some demo RAW files used by the project are from [signatureedits](https://www.signatureedits.com/free-raw-photos/) 100% Free Raw Files.
+> Demo RAW files used by the project come from [signatureedits](https://www.signatureedits.com/free-raw-photos/).
 
 ---
 
 ## What Changed Since v0.2.3
 
-Following the v0.2.3 rebrand, subsequent cycles moved the project from prototype breadth to a practical, production-ready RAW editor and digital asset manager.
+Since the v0.2.3 rebrand, development has moved the project from a prototype toward a production-ready RAW editor and digital asset manager.
 
 | Release | Key Highlights |
 | --- | --- |
 | **v0.2.4** | GPU pipeline migrated to OpenCL; added OpenCL image containers, program management, lens calibration, perspective geometry, DNG warping, and scope analysis. Split editing UI into dedicated tool panels. Sleeve filesystem introduced collection grouping, pagination, star ratings, and global index search. |
-| **v0.2.5** | Overhauled local tone mapping (Highlights/Shadows) with LLF-style processing. Improved OKLCh/HLS color science. Added batch copy/paste adjustments, interactive geometry crop overlays, and UltraHDR gain-map export writers. |
-| **v0.2.6** | Integrated AI-native workspace: local semantic search, local CLIP/SigLIP background scanners, HNSW vector indexing, and asynchronous model down loaders. Added GPU/CPU film grain & halation simulation. Patched LibRaw to natively decode Nikon HE/HE* RAWs. |
+| **v0.2.5** | Reworked local tone mapping (Highlights/Shadows) with LLF-style processing. Updated OKLCh/HLS color science. Added batch copy/paste adjustments, interactive geometry crop overlays, and UltraHDR gain-map export writers. |
+| **v0.2.6** | Added the AI workspace: local semantic search, local CLIP/SigLIP background scanners, HNSW vector indexing, and asynchronous model downloaders. Added GPU/CPU film grain & halation simulation. Patched LibRaw to natively decode Nikon HE/HE* RAWs. |
 
 ---
 
-## Core Pillars
+## Core Features
 
-### 1. Studio-Grade 32-Bit Float, Dual Color Science & HDR Pipeline
-Editing is at the heart of Alcedo Studio. Quality, precision, and performance are never compromised, keeping your creative flow completely seamless.
-* **32-Bit Floating-Point Precision**: The entire pipeline from raw demosaicing using the high-fidelity **RCD algorithm** to highlight reconstruction operates in 32-bit float per channel, preserving every ounce of shadow and highlight detail.
-* **Dual Color Science**: Native integration of professional ACES 2.0 and OpenDRT output transforms with custom target color spaces, peak-luminance control, and EOTF mapping.
-* **True HDR & UltraHDR Workflow**: This is not a simulated post-processing filter that artificially brightens shadows and highlights. Alcedo Studio maps the full, uncompromised dynamic range captured by the RAW sensor directly to high-dynamic-range displays (HDR preview is macOS-only). Export standard-compliant **UltraHDR gain-map JPEGs** to faithfully reproduce the scene's original luminosity on modern HDR screens and social media.
-* **Multi-Backend GPU Speed**: Written natively for CUDA and OpenCL on Windows, and Metal on macOS. The engine delivers hundreds of frames per second on modern GPUs, making exposure and grading adjustments instantaneous.
+### 1. 32-Bit Float Pipeline, Dual Color Science, and HDR Output
+
+The processing pipeline works in 32-bit float. Demosaicing, adjustments, and output transforms all operate on float data, and the pipeline runs on the GPU where one is available.
+
+* **32-Bit Floating-Point Precision**: The pipeline, from raw demosaicing with the RCD algorithm through highlight reconstruction, operates in 32-bit float per channel to preserve shadow and highlight detail.
+* **Dual Color Science**: Output rendering uses ACES 2.0 and OpenDRT, with custom target color spaces, peak-luminance control, and EOTF mapping.
+* **HDR and UltraHDR Output**: HDR display output is not a post-processing effect. Alcedo Studio maps the dynamic range of the RAW file to HDR displays (HDR preview is macOS-only) and can export standard-compliant **UltraHDR gain-map JPEGs**, which reproduce the original luminance range on HDR screens.
+* **GPU Backends**: The pipeline is implemented natively for CUDA and OpenCL on Windows and for Metal on macOS. On modern GPUs, exposure and grading adjustments update in real time.
 
 ### 2. Native Nikon High-Efficiency (HE/HE*) Support
-High-Efficiency (`HE`) and High-Efficiency★ (`HE*`) RAW formats are still unsupported in mainstream upstream LibRaw. Instead of forcing you to waste time converting files to DNG, Alcedo Studio decodes them natively.
-* **Zero Conversion Bottleneck**: Import and edit highly-compressed RAW files directly from Nikon Z 8, Z 9, Z 6 III, Z f, and Z 50 II cameras.
-* **Patched LibRaw Integration**: Uses a custom-patched fork of LibRaw optimized for maximum decompression speed.
 
-### 3. Privacy-First, On-Device Semantic Search
-Stop hunting through folders and guessing filenames. Alcedo Studio includes a built-in local vector search engine powered by state-of-the-art vision models (CLIP / SigLIP) running entirely on your machine.
-* **Semantic Querying**: Type natural language descriptions like *"portrait at sunset by the ocean"* to search your library. Queries are converted to vector embeddings and ranked against your photos in milliseconds.
-* **100% Local and Private**: Zero images or queries leave your hard drive. No API keys are required for core library tagging and searching.
-* **Model Isolation**: Switch between different models (MobileCLIP2, SigLIP2, Jina CLIP v2, or macOS CoreML profiles) seamlessly. Labels generated by different models remain isolated to prevent tag pollution.
+Nikon's High-Efficiency (`HE`) and High-Efficiency★ (`HE*`) formats are not supported by upstream LibRaw. Alcedo Studio decodes them directly, so these files can be imported and edited without converting them to DNG first.
 
-### 4. Multi-Modal LLM Culling Assist & EXIF Metadata Writeback
-Let AI handle the tedious first pass of culling by acting as your aesthetic editor. Connect to standard APIs (OpenAI-compatible, Anthropic, or Volcengine Ark) to batch-analyze candidate photos.
-* **Detect Culling Pain Points**: The AI automatically flags technical and aesthetic issues such as **out-of-focus shots (missed focus), camera shake (motion blur), and poor composition** before you waste time editing them.
-* **1-5 Star Aesthetic Ratings**: Get clear reviews and ratings mapped based on your strictness settings. Star ratings are automatically written back to the standard EXIF metadata, making them readable in any other photo manager.
-* **Secure and Customized**: API keys are saved securely in your OS keychain, and adjustable strictness scales let you set the AI's critique standards from generous to highly critical.
+* **Direct Import**: Import and edit compressed RAW files from Nikon Z 8, Z 9, Z 6 III, Z f, and Z 50 II cameras.
+* **Patched LibRaw**: The project ships a custom-patched fork of LibRaw for decoding these formats.
 
-### 5. Portable, Single-File Project Management
-Forget the headache of migrating heavy database catalogs or dealing with corrupted library indices. Alcedo Studio uses a modern physical-first structure.
-* **Single `.alcd` File**: All edit history, version metadata, semantic tags, and organization folders are packaged into a single lightweight DuckDB-backed `.alcd` file located right inside your photo directory.
-* **Instant Portability**: Backing up, migrating, or syncing your library to an external drive or cloud storage is as simple as copying the folder containing the `.alcd` file.
-* **Decoupled Thumbnail Cache**: Disk-backed thumbnail cache and metadata reside independently, ensuring your project files stay tiny and clean.
+### 3. On-Device Semantic Search
+
+Alcedo Studio includes a local vector search engine. Vision models (CLIP / SigLIP) run on your machine and index the library without sending images anywhere.
+
+* **Semantic Queries**: Type a description such as *"portrait at sunset by the ocean"*. The query is converted to an embedding and ranked against the library locally.
+* **Local and Private**: Images and queries stay on your hard drive. No API keys are required for tagging and searching.
+* **Model Isolation**: Switch between models (MobileCLIP2, SigLIP2, Jina CLIP v2, or macOS CoreML profiles). Labels produced by different models are kept separate, so tags from one model do not mix with another's.
+
+### 4. LLM-Assisted Culling and EXIF Metadata Writeback
+
+The culling assist batch-analyzes candidate photos through standard APIs (OpenAI-compatible, Anthropic, or Volcengine Ark) before you start editing them.
+
+* **Issue Detection**: The analysis flags technical and aesthetic issues — missed focus, motion blur, and poor composition.
+* **1-5 Star Ratings**: Each photo receives a rating from 1 to 5 stars based on the configured strictness. Ratings are written back to standard EXIF metadata, so other photo managers can read them.
+* **Keys and Strictness**: API keys are stored in the OS keychain. A strictness setting controls how critical the analysis is.
+
+### 5. Single-File Project Management
+
+Projects use a physical-first layout: the library is described by a single file in the photo directory, and there is no separate catalog to migrate or rebuild.
+
+* **Single `.alcd` File**: All edit history, version metadata, semantic tags, and folder organization are stored in a DuckDB-backed `.alcd` file located in the photo directory.
+* **Portability**: Backing up or moving a library means copying the `.alcd` file.
+* **Separate Thumbnail Cache**: The disk-backed thumbnail cache and metadata are stored independently, so project files stay small.
 
 ---
 
 ## Additional Features
 
-### Non-Destructive Versioning (Edit History)
-* **Named Version Trees**: Experiment with multiple creative looks (e.g., high-contrast monochrome vs. soft pastel film simulation) using named versions without duplicating RAW files.
-* **Independent Undo/Redo Timeline**: Each version has its own history timeline. Revert to any state or clone editing recipes across multiple photos instantly.
-* **Under the Hood**: Uses a Git-like content-addressable log where state matches are computed via Merkle tree hashing. See the [Architecture Details](docs/technical/architecture_details.md) to learn how this works.
+### Non-Destructive Versioning (Mini-Git Edit History)
+
+Alcedo Studio does not modify the original RAW files. Edits for each photo are stored as a small Git-like commit graph in the project's `.alcd` file.
+
+* **Versions and Edit History**: The editor's left rail has two panels. **Versions** lists named branches for a photo (for example “High-contrast B&W” and “Warm film look”). **Edit History** shows the commit graph for the currently checked-out Version, with undo and redo.
+* **Branch management**: A Version is a named branch that points at a commit (or at the image root). Multiple Versions may share ancestry; shared commits are stored once.
+* **Commits**: When you release the slider, one immutable edit commit is recorded on the active Version. Undo and redo move the working head along that Version's graph.
+* **Branch, fork, paste, and merge**:
+  - **Branch from current** creates a new Version from the current head.
+  - **Fork from root** creates a new Version from the image's import baseline.
+  - **Paste adjustments** creates a new Version on the target photo from another photo's adjustments, so you can try the other photo's look without changing the existing Version.
+  - **Merge adjustments** folds another photo's adjustments into the Version you are already using — useful when you want to keep local work (crop, exposure, and so on) and still take color or style from elsewhere. Conflicting fields are resolved in a preview dialog; the result is one merge commit.
+* **Write-ahead log (WAL)**: Finalized edits are first appended to a per-image recovery journal (a write-ahead log). Before switching photos, checking out another Version, leaving the editor, or shutting down, that journal is materialized into DuckDB so the live pipeline, panel state, and stored project agree.
+
+> How to use the **Versions** and **Edit History** panels: [user guide](https://zidage.github.io/AlcedoStudio_docs/en/docs/getting-started/edit-history-and-versions).  
+> Commit graph, journal, and storage layout: [developer documentation](https://zidage.github.io/AlcedoStudio_docs/en/docs/developer/edit-history-architecture).
 
 ### RAW Processing & Styling
-* **High-Fidelity Demosaicing**: Native **RCD demosaic algorithm** implementation ensures clean, artifact-free RAW decoding with sharp details.
-* **Styling & Film Emulation**: Curated spectral film LUTs (CUBE formats) optimized for ACEScc/ACEScct, paired with an advanced GPU-backed film grain and halation simulation engine.
+* **Demosaicing**: The RCD demosaic algorithm produces clean, artifact-free RAW decoding with sharp detail.
+* **Styling & Film Emulation**: Curated spectral film LUTs (CUBE format) tuned for ACEScc/ACEScct, with GPU-backed film grain and halation simulation.
 
 ### Export Workflow
-* **Flexible formats**: Batch export to JPEG, PNG, TIFF, and WebP, supporting 8/16/32-bit depths.
-* **UltraHDR & HDR Gain-Maps**: Fully supports exporting gain-map JPEGs for high-dynamic-range display on modern platforms (e.g., mobile devices and HDR screens).
-* **Metadata & ICC Options**: Control metadata striping and embed target ICC profiles per batch.
+* **Flexible formats**: Batch export to JPEG, PNG, TIFF, and WebP, at 8/16/32-bit depths.
+* **UltraHDR & HDR Gain-Maps**: Export gain-map JPEGs for HDR display on modern platforms (for example, mobile devices and HDR screens).
+* **Metadata & ICC Options**: Control metadata stripping and embed ICC profiles per batch.
 
 > [!TIP]
-> To read more about the technical details including virtual folder databases, performance stats, and rendering pipeline, check our [Architecture Details](docs/technical/architecture_details.md) document.
+> For edit history and versioning, see the [Alcedo Studio documentation site](https://zidage.github.io/AlcedoStudio_docs/docs/intro).
 
 ---
 
@@ -160,7 +182,7 @@ Alcedo Studio imports all major RAW formats through a patched fork of [LibRaw](h
 
 See the full format list in [docs/supported_raw_formats.md](docs/supported_raw_formats.md) and the camera list in [docs/supported_cameras.md](docs/supported_cameras.md).
 
-### Exclusive Nikon HE / HE\* support
+### Nikon HE / HE\* support
 Nikon High-Efficiency (`HE`) and High-Efficiency★ (`HE*`) NEFs are still unsupported in upstream LibRaw 0.22. Alcedo Studio ships a patched LibRaw fork that decodes these files directly — no conversion to DNG required. Validated cameras include:
 - Nikon Z 8
 - Nikon Z 9
@@ -174,7 +196,7 @@ The decoder lives in the project's LibRaw fork: **https://github.com/zidage/LibR
 
 ## System Requirements
 
-- **Windows**: Windows 10/11 x64. CUDA-capable NVIDIA GPU (minimum compute capability 6.0 / 10-series, recommended 7.0+ / 20-series) with 6GB+ VRAM for optimal 40MP+ RAW performance. OpenCL fallback available for non-NVIDIA GPUs.
+- **Windows**: Windows 10/11 x64. CUDA-capable NVIDIA GPU (minimum compute capability 6.0 / 10-series, recommended 7.0+ / 20-series) with 6GB+ VRAM for 40MP+ RAW files. OpenCL fallback available for non-NVIDIA GPUs.
 - **macOS**: Apple Silicon Mac (M1/M2/M3/M4 series) running native Metal execution paths.
 - **Memory**: Minimum 8GB system RAM (16GB+ recommended for large libraries).
 - **Disk Space**: 500MB free disk space for installation; 60MB+ package footprint.

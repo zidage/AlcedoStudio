@@ -128,10 +128,22 @@
 
 ## 更多核心功能
 
-### 无损版本管理（编辑历史）
-* **多命名版本分支**：为同一张照片创建不同的创意分支（例如“高反差黑白” vs “暖调胶片模拟”），无需复制 RAW 源文件，轻松进行多版本比较。
-* **独立的撤销/重做时间线**：每个版本分支拥有自己专属的修改日志。你可以随时在操作记录上挪动播放游标，或者一键将修图配方克隆到其他照片。
-* **底层机制**：基于类似 Git 的内容寻址架构，采用 Merkle 树哈希根来识别编辑状态的唯一性。详情见 [底层架构细节说明](docs/technical/architecture_details.md)。
+### 无损版本管理（Mini-Git 编辑历史）
+
+Alcedo Studio 不会修改原始 RAW 文件。每张照片的编辑记录以类似 Git 的小型提交图保存在项目的 `.alcd` 文件中。
+
+* **Versions 与 Edit History**：编辑器左侧栏有两个面板。**Versions** 列出同一张照片上的命名分支（例如「高反差黑白」与「暖调胶片」）。**Edit History** 显示当前正在使用的 Version 上的提交图，并提供撤销与重做。
+* **分支管理**：一个 Version 是指向某个提交（或图像根）的命名分支。多个 Version 可以共享祖先；共享的提交只存储一份。
+* **提交**：松开滑块时，会在当前 Version 上记录一条不可变的编辑提交。撤销与重做在该 Version 的提交图上移动工作头。
+* **分支、分叉、粘贴与合并**：
+  - **Branch from current** 从当前 head 创建新的 Version。
+  - **Fork from root** 从导入后的图像根创建新的 Version。
+  - **Paste adjustments** 在目标照片上根据另一张照片的调整**新建 Version**，方便整套试用，而不覆盖你已有的 Version。
+  - **Merge adjustments** 把另一张照片的调整合进**当前正在使用的 Version**——适合本地已有裁切、曝光等修改，又想沿用别处的色彩或风格。两边都改过的字段在预览对话框里选择；确认后写入一条合并提交。
+* **预写日志（WAL）**：已确认的编辑先追加到每张照片的恢复日志（write-ahead log）。在切换照片、改用其他 Version、离开编辑器或退出应用之前，该日志会物化写入 DuckDB，使实时流水线、参数面板与项目存储保持一致。
+
+> **Versions** 与 **Edit History** 面板的用法见 [用户指南](https://zidage.github.io/AlcedoStudio_docs/docs/getting-started/edit-history-and-versions)。  
+> 提交图、恢复日志与存储结构见 [开发者文档](https://zidage.github.io/AlcedoStudio_docs/docs/developer/edit-history-architecture)。
 
 ### RAW 处理与风格化
 * **高保真去马赛克**：原生内置 **RCD demosaic 算法**，提供精细、清晰的 RAW 文件解码并有效抑制伪影。
@@ -143,7 +155,7 @@
 * **元数据及 ICC 配置文件**：可自由控制 EXIF/IPTC 信息的剥离或保留，并为每批导出任务嵌入专属的 ICC 颜色配置文件。
 
 > [!TIP]
-> 想要了解更硬核的 Sleeve 虚拟文件系统数据库设计、内存三级 LRU 缓存指标（如 786 张 42MP RAW 下 767MB DRAM 的测试数据）及 GPU 多后端渲染架构，请参阅专门维护的 [底层架构细节说明](docs/technical/architecture_details.md)。
+> 编辑历史与版本管理请参阅 [Alcedo Studio 文档站](https://zidage.github.io/AlcedoStudio_docs/docs/intro)。
 
 ---
 
