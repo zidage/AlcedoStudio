@@ -187,6 +187,11 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
     return input;
   }
 
+  // The RAW decode backend follows the resolved runtime preference on every
+  // render; a stage op replaced by direct SetOperator writes can never drift
+  // the decode away from the user's backend setting.
+  ApplyRuntimeRawDecodeBackend();
+
   std::vector<std::string> executor_steps;
   std::vector<std::string> stage_profiles;
   auto*                    first_stage = exec_stages_.front();
@@ -296,7 +301,7 @@ CPUPipelineExecutor::SetPreviewMode(bool) {
 void CPUPipelineExecutor::SetExecutionStages() {
   ResolveAcceleratorBackend();
   ApplyAcceleratorBackendToStages();
-  SyncRawDecodeBackendToAccelerator();
+  ApplyRuntimeRawDecodeBackend();
 
   exec_stages_.clear();
   frame_sink_ = nullptr;
@@ -346,23 +351,22 @@ void CPUPipelineExecutor::ApplyAcceleratorBackendToStages() {
   }
 }
 
-void CPUPipelineExecutor::SyncRawDecodeBackendToAccelerator() {
+void CPUPipelineExecutor::ApplyRuntimeRawDecodeBackend() {
+  // The accelerator backend is a runtime property of this process: it comes
+  // only from the user's backend setting (resolved_accelerator_backend_) and is
+  // pushed directly into the RAW decode op. Persisted operator params can
+  // never carry or override it.
   auto& raw_stage = stages_[static_cast<int>(PipelineStageName::Image_Loading)];
   auto  entry     = raw_stage.GetOperator(OperatorType::RAW_DECODE);
   if (!entry.has_value() || !entry.value() || !entry.value()->op_) {
     return;
   }
 
-  nlohmann::json params = entry.value()->op_->GetParams();
-  if (!params.contains("raw") || !params["raw"].is_object()) {
-    params["raw"] = nlohmann::json::object();
+  auto* raw_op = dynamic_cast<RawDecodeOp*>(entry.value()->op_.get());
+  if (!raw_op) {
+    return;
   }
-
-  auto& raw          = params["raw"];
-  raw["gpu_backend"] = std::string(AcceleratorBackendPreferenceToString(accelerator_preference_));
-  raw["cuda"]        = accelerator_preference_ == AcceleratorBackendPreference::CUDA;
-  raw["opencl"]      = accelerator_preference_ == AcceleratorBackendPreference::OpenCL;
-  raw_stage.SetOperator(OperatorType::RAW_DECODE, params);
+  raw_op->SetRuntimeGpuBackend(resolved_accelerator_backend_);
   SyncRawDecodeRuntimeControls();
 }
 
@@ -390,12 +394,16 @@ void CPUPipelineExecutor::SetAcceleratorBackendPreference(
   const auto resolved_backend = alcedo::ResolveAcceleratorBackend(preference);
   if (accelerator_preference_ == preference &&
       resolved_accelerator_backend_ == resolved_backend) {
+    // A replaced RAW decode op (e.g. after direct stage writes) must still
+    // follow the active runtime backend; re-apply even when nothing else
+    // changed.
+    ApplyRuntimeRawDecodeBackend();
     return;
   }
 
   accelerator_preference_          = preference;
   resolved_accelerator_backend_    = resolved_backend;
-  SyncRawDecodeBackendToAccelerator();
+  ApplyRuntimeRawDecodeBackend();
 
   const auto previous_frame_sink = frame_sink_;
   ResetExecutionStages();
@@ -469,6 +477,11 @@ void CPUPipelineExecutor::ImportPipelineParams(const nlohmann::json& j) {
       stage.MergeStageParams(stage_json, global_params_);
     }
   }
+  // The accelerator backend is a runtime property of this process, not part of
+  // the persisted edit state. Re-apply the active runtime backend to the RAW
+  // decode so a backend switch takes effect on every load, snapshot, and
+  // recovery, regardless of what the stored params contain.
+  ApplyRuntimeRawDecodeBackend();
   SetExecutionStages();
 }
 
@@ -604,11 +617,9 @@ void CPUPipelineExecutor::SetTemplateParams() {
   // Set some common parameters for template pipelines
   auto&          raw_stage     = GetStage(PipelineStageName::Image_Loading);
   auto&          global_params = GetGlobalParams();
+  // Template raw params deliberately carry no accelerator backend: the backend
+  // is pushed at runtime via ApplyRuntimeRawDecodeBackend.
   nlohmann::json decode_params = pipeline_defaults::MakeDefaultRawDecodeParams();
-  decode_params["raw"]["gpu_backend"] =
-      std::string(AcceleratorBackendPreferenceToString(accelerator_preference_));
-  decode_params["raw"]["cuda"]   = accelerator_preference_ == AcceleratorBackendPreference::CUDA;
-  decode_params["raw"]["opencl"] = accelerator_preference_ == AcceleratorBackendPreference::OpenCL;
   raw_stage.SetOperator(OperatorType::RAW_DECODE, decode_params);
 
   nlohmann::json lens_params = pipeline_defaults::MakeDefaultLensCalibParams();

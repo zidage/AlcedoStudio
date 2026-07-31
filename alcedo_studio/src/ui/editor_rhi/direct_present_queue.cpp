@@ -12,8 +12,8 @@ namespace {
 auto SameSizeRequest(const DirectPresentQueue::SizeRequest& lhs,
                      const DirectPresentQueue::SizeRequest& rhs) -> bool {
   return lhs.width == rhs.width && lhs.height == rhs.height &&
-         lhs.image_generation == rhs.image_generation &&
-         lhs.image_identity == rhs.image_identity && lhs.frame_role == rhs.frame_role;
+         lhs.image_generation == rhs.image_generation && lhs.image_identity == rhs.image_identity &&
+         lhs.frame_role == rhs.frame_role;
 }
 
 }  // namespace
@@ -67,17 +67,17 @@ auto DirectPresentQueue::SnapshotLocked(int index) const -> SlotSnapshot {
   if (!IsValidSlot(index)) {
     return snap;
   }
-  const auto& slot = slots_[static_cast<std::size_t>(index)];
-  snap.index = index;
-  snap.state = slot.state;
-  snap.width = slot.width;
-  snap.height = slot.height;
-  snap.native = slot.native;
+  const auto& slot       = slots_[static_cast<std::size_t>(index)];
+  snap.index             = index;
+  snap.state             = slot.state;
+  snap.width             = slot.width;
+  snap.height            = slot.height;
+  snap.native            = slot.native;
   snap.presentation_mode = slot.presentation_mode;
-  snap.preview_metadata = slot.preview_metadata;
-  snap.image_generation = slot.image_generation;
-  snap.image_identity = slot.image_identity;
-  snap.sequence = slot.sequence;
+  snap.preview_metadata  = slot.preview_metadata;
+  snap.image_generation  = slot.image_generation;
+  snap.image_identity    = slot.image_identity;
+  snap.sequence          = slot.sequence;
   return snap;
 }
 
@@ -102,16 +102,16 @@ void DirectPresentQueue::RecycleSlotLocked(int index, bool queue_native_release)
   if (queue_native_release && slot.native.valid()) {
     release_queue_.push_back(slot.native);
   }
-  slot.state = SlotState::Available;
+  slot.state             = SlotState::Available;
   slot.presentation_mode = FramePresentationMode::FullFrame;
-  slot.preview_metadata = {};
-  slot.sequence = 0;
+  slot.preview_metadata  = {};
+  slot.sequence          = 0;
   if (queue_native_release) {
-    slot.native = {};
-    slot.width = 0;
-    slot.height = 0;
+    slot.native           = {};
+    slot.width            = 0;
+    slot.height           = 0;
     slot.image_generation = 0;
-    slot.image_identity = 0;
+    slot.image_identity   = 0;
   }
   if (mapped_slot_idx_ == index) {
     mapped_slot_idx_ = -1;
@@ -121,22 +121,22 @@ void DirectPresentQueue::RecycleSlotLocked(int index, bool queue_native_release)
 auto DirectPresentQueue::SelectWriteSlotLocked(int width, int height) -> PrepareResult {
   std::array<DirectPresentSlotInfo, kSlotCount> infos{};
   for (int i = 0; i < kSlotCount; ++i) {
-    const auto& slot = slots_[static_cast<std::size_t>(i)];
+    const auto& slot                   = slots_[static_cast<std::size_t>(i)];
     infos[static_cast<std::size_t>(i)] = DirectPresentSlotInfo{
         slot.width, slot.height, slot.native.valid(), SlotUnavailableLocked(i)};
   }
   const auto selection =
       SelectDirectPresentWriteSlotGeneric(infos.data(), infos.size(), write_idx_, width, height);
   PrepareResult result;
-  result.slot_index = selection.slot_index;
+  result.slot_index  = selection.slot_index;
   result.need_create = selection.need_create;
-  result.ok = IsValidSlot(selection.slot_index) &&
+  result.ok          = IsValidSlot(selection.slot_index) &&
               (!infos[static_cast<std::size_t>(selection.slot_index)].unavailable ||
                !selection.need_create);
   if (!result.ok && IsValidSlot(selection.slot_index) &&
       infos[static_cast<std::size_t>(selection.slot_index)].unavailable && selection.need_create) {
     // All slots busy and none reusable — producer must wait for recycle.
-    result.ok = false;
+    result.ok          = false;
     result.need_create = true;
   } else if (IsValidSlot(selection.slot_index)) {
     result.ok = true;
@@ -144,8 +144,8 @@ auto DirectPresentQueue::SelectWriteSlotLocked(int width, int height) -> Prepare
   return result;
 }
 
-auto DirectPresentQueue::MatchesSizeRequestLocked(const SizeRequest& request,
-                                                  int slot_index) const -> bool {
+auto DirectPresentQueue::MatchesSizeRequestLocked(const SizeRequest& request, int slot_index) const
+    -> bool {
   if (!IsValidSlot(slot_index) || !request.valid()) {
     return false;
   }
@@ -171,7 +171,7 @@ auto DirectPresentQueue::PrepareWrite(int width, int height, std::uint64_t image
   if (!result.need_create && slot.native.valid() && slot.width == width && slot.height == height) {
     // Reusable exact-size target: stamp session identity for stale rejection.
     slot.image_generation = image_generation;
-    slot.image_identity = image_identity;
+    slot.image_identity   = image_identity;
   } else {
     result.need_create = true;
   }
@@ -205,17 +205,32 @@ void DirectPresentQueue::FailSizeRequest(const SizeRequest& request) {
 }
 
 auto DirectPresentQueue::DrainSizeRequests() -> std::vector<SizeRequest> {
-  std::lock_guard lock(mutex_);
+  std::lock_guard          lock(mutex_);
   std::vector<SizeRequest> out(pending_requests_.begin(), pending_requests_.end());
   pending_requests_.clear();
   return out;
 }
 
+auto DirectPresentQueue::WaitUntilConsumerAvailable(std::chrono::milliseconds timeout) -> bool {
+  std::unique_lock lock(mutex_);
+  if (!wake_.wait_for(lock, timeout, [&] { return shutdown_ || consumer_available_; })) {
+    return false;
+  }
+  return consumer_available_ && !shutdown_;
+}
+
 auto DirectPresentQueue::WaitForWritableSlot(const SizeRequest& request) -> std::optional<int> {
   std::unique_lock lock(mutex_);
+  // Keep waiting while the consumer is offline: the first editor frame often
+  // lands before synchronize() has flipped consumer_available. Treat suspend /
+  // shutdown as terminal, not a silent success that returns nullopt without a
+  // size request having been fulfilled.
   wake_.wait(lock, [&] {
-    if (shutdown_ || !consumer_available_) {
+    if (shutdown_) {
       return true;
+    }
+    if (!consumer_available_) {
+      return false;
     }
     if (image_generation_ != 0 && request.image_generation != 0 &&
         image_generation_ != request.image_generation) {
@@ -249,11 +264,10 @@ auto DirectPresentQueue::WaitForWritableSlot(const SizeRequest& request) -> std:
       image_identity_ != request.image_identity) {
     return std::nullopt;
   }
-  failed_requests_.erase(std::remove_if(failed_requests_.begin(), failed_requests_.end(),
-                                        [&](const SizeRequest& failed) {
-                                          return SameSizeRequest(failed, request);
-                                        }),
-                         failed_requests_.end());
+  failed_requests_.erase(
+      std::remove_if(failed_requests_.begin(), failed_requests_.end(),
+                     [&](const SizeRequest& failed) { return SameSizeRequest(failed, request); }),
+      failed_requests_.end());
   for (int i = 0; i < kSlotCount; ++i) {
     if (MatchesSizeRequestLocked(request, i)) {
       write_idx_ = i;
@@ -275,21 +289,20 @@ auto DirectPresentQueue::PublishCreatedSlot(int slot_index, int width, int heigh
     // Do not clobber a live write/read.
     return false;
   }
-  if (slot.native.valid() &&
-      (slot.native.native_handle != native.native_handle || slot.width != width ||
-       slot.height != height)) {
+  if (slot.native.valid() && (slot.native.native_handle != native.native_handle ||
+                              slot.width != width || slot.height != height)) {
     release_queue_.push_back(slot.native);
   }
-  slot.state = SlotState::Available;
-  slot.width = width;
-  slot.height = height;
-  slot.native = native;
-  slot.image_generation = image_generation;
-  slot.image_identity = image_identity;
+  slot.state             = SlotState::Available;
+  slot.width             = width;
+  slot.height            = height;
+  slot.native            = native;
+  slot.image_generation  = image_generation;
+  slot.image_identity    = image_identity;
   slot.presentation_mode = FramePresentationMode::FullFrame;
-  slot.preview_metadata = {};
-  slot.sequence = 0;
-  write_idx_ = slot_index;
+  slot.preview_metadata  = {};
+  slot.sequence          = 0;
+  write_idx_             = slot_index;
   wake_.notify_all();
   return true;
 }
@@ -303,7 +316,7 @@ auto DirectPresentQueue::BeginWrite(int slot_index) -> std::optional<SlotSnapsho
   if (slot.state != SlotState::Available || !slot.native.valid()) {
     return std::nullopt;
   }
-  slot.state = SlotState::ProducerWriting;
+  slot.state       = SlotState::ProducerWriting;
   mapped_slot_idx_ = slot_index;
   return SnapshotLocked(slot_index);
 }
@@ -348,8 +361,7 @@ void DirectPresentQueue::NotifyReady(int slot_index, FramePresentationMode mode,
     wake_.notify_all();
     return;
   }
-  if (image_identity_ != 0 && slot.image_identity != 0 &&
-      slot.image_identity != image_identity_) {
+  if (image_identity_ != 0 && slot.image_identity != 0 && slot.image_identity != image_identity_) {
     ++dropped_stale_frame_count_;
     RecycleSlotLocked(slot_index, false);
     wake_.notify_all();
@@ -369,10 +381,10 @@ void DirectPresentQueue::NotifyReady(int slot_index, FramePresentationMode mode,
     }
   }
 
-  slot.state = SlotState::Ready;
+  slot.state             = SlotState::Ready;
   slot.presentation_mode = mode;
-  slot.preview_metadata = metadata;
-  slot.sequence = ++sequence_;
+  slot.preview_metadata  = metadata;
+  slot.sequence          = ++sequence_;
   if (mapped_slot_idx_ == slot_index) {
     mapped_slot_idx_ = -1;
   }
@@ -395,10 +407,10 @@ auto DirectPresentQueue::ConsumeNewestReady(FrameRole layer, std::uint64_t image
                                             std::uint64_t image_identity)
     -> std::optional<ReadyFrame> {
   std::lock_guard lock(mutex_);
-  int best = -1;
-  std::uint64_t best_preview = 0;
-  std::uint64_t best_detail = 0;
-  std::uint64_t best_sequence = 0;
+  int             best          = -1;
+  std::uint64_t   best_preview  = 0;
+  std::uint64_t   best_detail   = 0;
+  std::uint64_t   best_sequence = 0;
   for (int i = 0; i < kSlotCount; ++i) {
     const auto& slot = slots_[static_cast<std::size_t>(i)];
     if (slot.state != SlotState::Ready || !slot.native.valid()) {
@@ -411,8 +423,7 @@ auto DirectPresentQueue::ConsumeNewestReady(FrameRole layer, std::uint64_t image
         slot.image_generation != image_generation) {
       continue;
     }
-    if (image_identity != 0 && slot.image_identity != 0 &&
-        slot.image_identity != image_identity) {
+    if (image_identity != 0 && slot.image_identity != 0 && slot.image_identity != image_identity) {
       continue;
     }
     const bool better =
@@ -421,9 +432,9 @@ auto DirectPresentQueue::ConsumeNewestReady(FrameRole layer, std::uint64_t image
          (slot.preview_metadata.detail_serial > best_detail ||
           (slot.preview_metadata.detail_serial == best_detail && slot.sequence > best_sequence)));
     if (better) {
-      best = i;
-      best_preview = slot.preview_metadata.preview_generation;
-      best_detail = slot.preview_metadata.detail_serial;
+      best          = i;
+      best_preview  = slot.preview_metadata.preview_generation;
+      best_detail   = slot.preview_metadata.detail_serial;
       best_sequence = slot.sequence;
     }
   }
@@ -445,7 +456,7 @@ auto DirectPresentQueue::ConsumeNewestReady(FrameRole layer, std::uint64_t image
 
   auto& chosen = slots_[static_cast<std::size_t>(best)];
   chosen.state = SlotState::RendererReading;
-  active_idx_ = best;
+  active_idx_  = best;
   ReadyFrame frame;
   frame.slot = SnapshotLocked(best);
   return frame;
@@ -472,23 +483,21 @@ auto DirectPresentQueue::AcknowledgeFirstComposition(std::uint64_t request_id,
   if (request_id == 0 || image_generation == 0) {
     return false;
   }
-  if (first_composition_emitted_ &&
-      first_composition_image_generation_ == image_generation) {
+  if (first_composition_emitted_ && first_composition_image_generation_ == image_generation) {
     return false;
   }
   if (image_identity_ != 0 && image_identity != 0 && image_identity_ != image_identity) {
     return false;
   }
-  first_composition_emitted_ = true;
+  first_composition_emitted_          = true;
   first_composition_image_generation_ = image_generation;
-  last_composed_image_generation_ = image_generation;
-  last_composed_request_id_ = request_id;
+  last_composed_image_generation_     = image_generation;
+  last_composed_request_id_           = request_id;
   // composed_frame_count is owned by NoteFrameComposed (every drawn primary).
   return true;
 }
 
-void DirectPresentQueue::NoteFrameComposed(std::uint64_t request_id,
-                                           std::uint64_t image_generation,
+void DirectPresentQueue::NoteFrameComposed(std::uint64_t request_id, std::uint64_t image_generation,
                                            std::uint64_t image_identity) {
   std::lock_guard lock(mutex_);
   last_composed_image_generation_ = image_generation;
@@ -529,17 +538,17 @@ void DirectPresentQueue::InvalidateTargetsLocked(bool bump_target_generation) {
   pending_requests_.clear();
   failed_requests_.clear();
   mapped_slot_idx_ = -1;
-  active_idx_ = 0;
-  write_idx_ = 1;
+  active_idx_      = 0;
+  write_idx_       = 1;
   wake_.notify_all();
 }
 
 void DirectPresentQueue::InvalidateImageGeneration(std::uint64_t image_generation,
                                                    std::uint64_t image_identity) {
   std::lock_guard lock(mutex_);
-  image_generation_ = image_generation;
-  image_identity_ = image_identity;
-  first_composition_emitted_ = false;
+  image_generation_                   = image_generation;
+  image_identity_                     = image_identity;
+  first_composition_emitted_          = false;
   first_composition_image_generation_ = 0;
   // Drop ready/available content from the previous session; keep producer writes
   // until they abandon so Map cannot hang forever without a wake.
@@ -553,12 +562,12 @@ void DirectPresentQueue::InvalidateImageGeneration(std::uint64_t image_generatio
         slot.state == SlotState::Available) {
       // Keep native capacity; clear ready content and session stamp.
       if (slot.state == SlotState::Ready || slot.state == SlotState::RendererReading) {
-        slot.state = SlotState::Available;
+        slot.state            = SlotState::Available;
         slot.preview_metadata = {};
-        slot.sequence = 0;
+        slot.sequence         = 0;
       }
       slot.image_generation = image_generation;
-      slot.image_identity = image_identity;
+      slot.image_identity   = image_identity;
     }
   }
   pending_requests_.clear();
@@ -573,13 +582,13 @@ void DirectPresentQueue::InvalidateTargetGeneration() {
 
 void DirectPresentQueue::Shutdown() {
   std::lock_guard lock(mutex_);
-  shutdown_ = true;
+  shutdown_           = true;
   consumer_available_ = false;
   InvalidateTargetsLocked(false);
 }
 
 auto DirectPresentQueue::DrainReleasedNatives() -> std::vector<SlotNative> {
-  std::lock_guard lock(mutex_);
+  std::lock_guard         lock(mutex_);
   std::vector<SlotNative> out(release_queue_.begin(), release_queue_.end());
   release_queue_.clear();
   return out;
@@ -602,16 +611,16 @@ auto DirectPresentQueue::CurrentImageIdentity() const -> std::uint64_t {
 
 auto DirectPresentQueue::DiagnosticsSnapshot() const -> Diagnostics {
   std::lock_guard lock(mutex_);
-  Diagnostics diag;
-  diag.backend = backend_;
-  diag.target_generation = target_generation_;
-  diag.image_generation = image_generation_;
-  diag.image_identity = image_identity_;
+  Diagnostics     diag;
+  diag.backend                        = backend_;
+  diag.target_generation              = target_generation_;
+  diag.image_generation               = image_generation_;
+  diag.image_identity                 = image_identity_;
   diag.last_composed_image_generation = last_composed_image_generation_;
-  diag.last_composed_request_id = last_composed_request_id_;
-  diag.composed_frame_count = composed_frame_count_;
-  diag.dropped_stale_frame_count = dropped_stale_frame_count_;
-  diag.consumer_available = consumer_available_ && !shutdown_;
+  diag.last_composed_request_id       = last_composed_request_id_;
+  diag.composed_frame_count           = composed_frame_count_;
+  diag.dropped_stale_frame_count      = dropped_stale_frame_count_;
+  diag.consumer_available             = consumer_available_ && !shutdown_;
   for (const auto& slot : slots_) {
     if (slot.native.valid()) {
       ++diag.live_target_count;

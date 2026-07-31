@@ -820,6 +820,8 @@ void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {
     SyncViewportIdentity();
     SyncViewportDisplayConfig();
     // Stamp a stable presentation sink identity for render intents (Phase 5A).
+    // DirectFrameSink owns the short scene-graph startup wait when this binding
+    // precedes QQuickRhiItem::synchronize().
     if (session_backend_) {
       session_backend_->SetPresentationSinkId(
           static_cast<alcedo::PresentationSinkId>(reinterpret_cast<std::uintptr_t>(item)));

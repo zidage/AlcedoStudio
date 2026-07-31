@@ -5,6 +5,7 @@
 #include "ui/editor_rhi/editor_viewport_renderer.hpp"
 
 #include "ui/editor_rhi/direct_frame_sink.hpp"
+#include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 
 #include <QDebug>
@@ -206,14 +207,40 @@ void EditorViewportRenderer::initialize(QRhiCommandBuffer* /*command_buffer*/) {
   // before render() could fulfill it, leaving the viewport permanently black.
   if (rhi_ != next_rhi) {
     releaseResources();
-    rhi_     = next_rhi;
-    backend_ = BackendForRhi(rhi_);
+    rhi_ = next_rhi;
+    // Process-wide backend selected in main() is authoritative. Deriving only
+    // from QRhi can silently flip CUDA↔OpenCL when setGraphicsApi did not take
+    // effect, which produces host_upload frames and a black viewport.
+    const auto active = ActiveEditorBackend();
+    const auto from_rhi = BackendForRhi(rhi_);
+    backend_ = active;
     adapter_ = MakeLeaseTargetAdapter(backend_);
-    qCDebug(editorPresentLog, "[EditorPresent] render thread initialized backend=%s", ToString(backend_));
+    if (active != from_rhi) {
+      qCWarning(editorPresentLog,
+                "[EditorPresent] RHI/backend mismatch: active=%s rhi_inferred=%s rhi_api=%d. "
+                "Present will use active=%s; OpenCL requires OpenGL QRhi.",
+                ToString(active), ToString(from_rhi), static_cast<int>(rhi_->backend()),
+                ToString(active));
+      target_error_ =
+          std::string("RHI/backend mismatch: active=") + ToString(active) +
+          " rhi=" + ToString(from_rhi);
+    }
+    if (backend_ == EditorBackend::OpenCl && rhi_->backend() != QRhi::OpenGLES2) {
+      qCWarning(editorPresentLog,
+                "[EditorPresent] OpenCL present selected but Qt RHI is not OpenGL (api=%d). "
+                "Native targets cannot be created; frames fall back to empty host_upload.",
+                static_cast<int>(rhi_->backend()));
+      target_error_ = "OpenCL present requires OpenGL QRhi; graphics API selection failed";
+    }
+    qCWarning(editorPresentLog, "[EditorPresent] render thread initialized backend=%s rhi_api=%d",
+              ToString(backend_), static_cast<int>(rhi_->backend()));
     if (item_) {
       item_->setBackendName(QString::fromUtf8(ToString(backend_)));
-      item_->setStatusText(QStringLiteral("render thread initialized (%1)")
-                               .arg(QString::fromUtf8(QtGraphicsApiName(backend_))));
+      item_->setStatusText(
+          target_error_.empty()
+              ? QStringLiteral("render thread initialized (%1)")
+                    .arg(QString::fromUtf8(QtGraphicsApiName(backend_)))
+              : QString::fromStdString(target_error_));
     }
   }
   content_dirty_ = true;

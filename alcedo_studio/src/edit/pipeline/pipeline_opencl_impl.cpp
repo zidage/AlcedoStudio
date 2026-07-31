@@ -185,6 +185,11 @@ auto TrySubmitOpenClFrameToSink(opencl::OpenClImage& image, IFrameSink& frame_si
   frame_sink.EnsureSize(image.Width(), image.Height());
   const FrameWriteMapping mapping = frame_sink.MapResourceForWrite(FrameMemoryDomain::OpenClDevice);
   if (!mapping) {
+    // DirectFrameSink already logs the concrete handshake / domain reason.
+    // host_upload after this is a no-op on the production QML path.
+    std::cerr << "[OpenCL Pipeline] direct present mapping failed " << image.Width() << "x"
+              << image.Height()
+              << " (present will report host_upload; production sink has no host path)\n";
     return false;
   }
 
@@ -192,6 +197,9 @@ auto TrySubmitOpenClFrameToSink(opencl::OpenClImage& image, IFrameSink& frame_si
   if (mapping.pixel_format != FramePixelFormat::RGBA32F ||
       mapping.memory_domain != FrameMemoryDomain::OpenClDevice ||
       mapping.target_type != FrameWriteTargetType::OpenClImage || mapping.data == nullptr) {
+    std::cerr << "[OpenCL Pipeline] direct present mapping has wrong type "
+              << "domain=" << static_cast<int>(mapping.memory_domain)
+              << " target=" << static_cast<int>(mapping.target_type) << "\n";
     unmap();
     return false;
   }

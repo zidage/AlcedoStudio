@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "edit/operators/operator_registeration.hpp"
+#include "edit/operators/raw/raw_decode_op.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "edit/pipeline/pipeline_stage.hpp"
 #include "image/image.hpp"
@@ -911,6 +912,67 @@ TEST_F(PipelineFrameSinkTest, SinkIsNotRestoredIfNeverDetached) {
 
   EXPECT_TRUE(caught);
   EXPECT_EQ(exec->GetFrameSink(), nullptr);
+}
+
+// The accelerator backend is a runtime property of the process (the user's
+// backend setting), never part of the persisted edit state. Stored params that
+// carry an old backend (e.g. "cuda" saved when the state was created) must not
+// drive the decode: an OpenCL session must decode with OpenCL even when the
+// imported state was saved under CUDA.
+auto RawDecodeBackendOf(CPUPipelineExecutor& exec) -> RawGpuBackend {
+  auto entry =
+      exec.GetStage(PipelineStageName::Image_Loading).GetOperator(OperatorType::RAW_DECODE);
+  if (!entry.has_value() || !entry.value() || !entry.value()->op_) {
+    return RawGpuBackend::CPU;
+  }
+  auto* raw_op = dynamic_cast<RawDecodeOp*>(entry.value()->op_.get());
+  return raw_op ? raw_op->params_.gpu_backend_ : RawGpuBackend::CPU;
+}
+
+TEST_F(PipelineFrameSinkTest, ImportedRawBackendCannotOverrideRuntimePreference) {
+  auto exec = std::make_shared<CPUPipelineExecutor>();
+  exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
+  EXPECT_EQ(RawDecodeBackendOf(*exec), RawGpuBackend::CPU);
+
+  // Params never carry the backend: exported state has no backend key.
+  // Exported stage state is nested as stage name -> {script_name -> {…}}.
+  const nlohmann::json exported = exec->ExportPipelineParams();
+  const nlohmann::json raw_params =
+      exported.value("Image_Loading", nlohmann::json::object())
+          .value("Image_Loading", nlohmann::json::object())
+          .value("raw_decode", nlohmann::json::object())
+          .value("params", nlohmann::json::object())
+          .value("raw", nlohmann::json::object());
+  EXPECT_FALSE(raw_params.contains("gpu_backend"));
+
+  // A state saved under a different backend (CUDA) must not change the decode.
+  nlohmann::json stored = exported;
+  stored["Image_Loading"]["Image_Loading"]["raw_decode"]["params"]["raw"]["gpu_backend"] =
+      "cuda";
+  exec->ImportPipelineParams(stored);
+
+  EXPECT_EQ(RawDecodeBackendOf(*exec), RawGpuBackend::CPU);
+}
+
+TEST_F(PipelineFrameSinkTest, RawBackendParamsAreInertAndRuntimePreferenceWins) {
+  auto exec = std::make_shared<CPUPipelineExecutor>();
+  exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CPU);
+
+  // Direct param writes with backend keys must not move the decode: the keys
+  // are ignored by SetParams.
+  auto&          raw_stage = exec->GetStage(PipelineStageName::Image_Loading);
+  nlohmann::json stale_params;
+  stale_params["raw"] = {{"gpu_backend", "cuda"}};
+  raw_stage.SetOperator(OperatorType::RAW_DECODE, stale_params);
+  EXPECT_EQ(RawDecodeBackendOf(*exec), RawGpuBackend::CPU);
+
+  // The runtime preference drives the decode; switching it moves the op.
+  try {
+    exec->SetAcceleratorBackendPreference(AcceleratorBackendPreference::CUDA);
+  } catch (const std::exception& e) {
+    GTEST_SKIP() << "CUDA backend unavailable: " << e.what();
+  }
+  EXPECT_EQ(RawDecodeBackendOf(*exec), RawGpuBackend::CUDA);
 }
 
 }  // namespace alcedo

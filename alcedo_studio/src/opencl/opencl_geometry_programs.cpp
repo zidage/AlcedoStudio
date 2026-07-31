@@ -23,13 +23,13 @@ void RegisterOpenClGeometryPrograms() {
                     .name                = OpenCL::Geometry::kGeometryProgramName,
                     .source_paths        = {ALCEDO_OPENCL_GEOMETRY_UTILS_CL},
                     .build_options       = "-cl-std=CL1.2",
-                    .required_at_startup = false,
+                    .required_at_startup = true,
                 },
                 OpenClProgramDescriptor{
                     .name                = OpenCL::Geometry::kLensCalibProgramName,
                     .source_paths        = {ALCEDO_OPENCL_EDIT_GEOMETRY_LENS_CALIB_CL},
                     .build_options       = "-cl-std=CL1.2",
-                    .required_at_startup = false,
+                    .required_at_startup = true,
                 },
             },
     });

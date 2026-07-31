@@ -209,6 +209,7 @@ the two side columns read as one family.
 | `editorSidePanelWidthMin` | 260 | Adjustment stack minimum (narrow-window floor) |
 | `editorSidePanelWidthMax` | 460 | Adjustment stack maximum |
 | `editorMergeDialogWidth` | 960 | Merge conflict resolution dialog — top action bar + three-column Current / Incoming / Merged cards |
+| `acceleratorRestartDialogWidth` | 520 | Compact restart-required dialog shown after changing the acceleration backend |
 | `editorScopeHeight` | 192 | Histogram / waveform slot preferred height |
 | `editorScopeHeightMin` | 160 | Histogram / waveform slot minimum height |
 

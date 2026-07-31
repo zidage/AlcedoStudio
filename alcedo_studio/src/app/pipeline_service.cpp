@@ -1156,10 +1156,12 @@ auto PipelineMgmtService::LoadPipelineSnapshot(sl_element_id_t id, image_id_t im
   }
 
   // Build the independent snapshot executor. SetAcceleratorBackendPreference
-  // before ImportPipelineParams so the import's final SetExecutionStages() is the
-  // last stage-build call and the imported params win. ResetTransientPreviewState
-  // mirrors LoadPipeline's normalization of cached executors; it touches only
-  // transient render state, not serialized operator params.
+  // runs before ImportPipelineParams so the import's final SetExecutionStages()
+  // is the last stage-build call; ImportPipelineParams itself re-aligns the RAW
+  // decode backend to the runtime preference, so a backend saved in the stored
+  // state never leaks into snapshot renders. ResetTransientPreviewState mirrors
+  // LoadPipeline's normalization of cached executors; it touches only transient
+  // render state, not serialized operator params.
   std::shared_ptr<CPUPipelineExecutor> snap_exec;
   try {
     snap_exec = std::make_shared<CPUPipelineExecutor>();

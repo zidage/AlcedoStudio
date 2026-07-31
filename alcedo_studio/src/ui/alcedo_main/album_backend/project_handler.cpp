@@ -132,6 +132,8 @@ bool ProjectHandler::InitializeServices(const std::filesystem::path& dbPath,
       result->project_   = std::make_shared<ProjectService>(dbPath, metaPath, openMode);
       result->pipeline_  = std::make_shared<PipelineMgmtService>(result->project_->GetStorageService());
       result->pipeline_->SetAcceleratorBackendPreference(accelerator_preference);
+      qInfo("pipeline.accelerator backend=%s source=active-editor-backend",
+            AcceleratorBackendPreferenceToString(accelerator_preference).data());
       result->thumbnail_ = std::make_shared<ThumbnailService>(
           result->project_->GetSleeveService(), result->project_->GetImagePoolService(),
           result->pipeline_, result->project_->GetStorageService(), result->project_->GetProjectUUID());

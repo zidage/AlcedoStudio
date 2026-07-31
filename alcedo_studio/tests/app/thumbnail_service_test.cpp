@@ -900,9 +900,10 @@ TEST_F(ThumbnailServiceTests, MetalGeometryPipelineThumbnailStillRenders) {
   auto& loading_stage  = exec->GetStage(PipelineStageName::Image_Loading);
   auto& geometry_stage = exec->GetStage(PipelineStageName::Geometry_Adjustment);
 
+  // The decode backend is a runtime property of the pipeline (resolved from
+  // the accelerator preference); the params must not carry it.
   nlohmann::json raw_params = pipeline_defaults::MakeDefaultRawDecodeParams();
-  raw_params["raw"]["gpu_backend"] = "gpu";
-  raw_params["raw"]["backend"]     = "alcedo";
+  raw_params["raw"]["backend"] = "alcedo";
   loading_stage.SetOperator(OperatorType::RAW_DECODE, raw_params);
 
   nlohmann::json crop_params = pipeline_defaults::MakeDefaultCropRotateParams();

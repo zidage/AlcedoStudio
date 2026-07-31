@@ -7,6 +7,7 @@
 #include <QDebug>
 #include <QMetaObject>
 #include <QThread>
+#include <chrono>
 #include <utility>
 
 #include "ui/edit_viewer/edit_viewer_surface.hpp"
@@ -97,19 +98,33 @@ auto DirectFrameSink::ReserveWritableSlot(int width, int height) -> std::optiona
 
   // Legacy BlockingQueuedConnection resize equivalent for QQuickRhiItem:
   // note the exact size, kick the scene-graph thread, wait for explicit result.
-  // When the consumer is not available (no exposed window / tests without a
-  // scene graph), do not block — geometry notification has already been queued.
-  // Qt Quick can only advance synchronization/render after the GUI event
-  // handler returns. A GUI-thread producer must therefore request allocation
-  // and retry later; waiting here would block the very frame that creates it.
+  // GUI-thread producers must not block — Qt Quick only advances the scene
+  // graph after the GUI event handler returns.
   const bool gui_thread_caller = item_->thread() == QThread::currentThread();
-  if (gui_thread_caller || !queue->DiagnosticsSnapshot().consumer_available) {
+  if (gui_thread_caller) {
     queue->NoteSizeRequest(request);
     item_->requestPresentUpdate();
     return std::nullopt;
   }
+
   queue->NoteSizeRequest(request);
   item_->requestPresentUpdate();
+
+  if (!queue->DiagnosticsSnapshot().consumer_available) {
+    qCDebug(editorPresentLog,
+            "[EditorPresent] producer waiting for consumer %dx%d image=%llu generation=%llu", width,
+            height, static_cast<unsigned long long>(image_identity),
+            static_cast<unsigned long long>(image_generation));
+    constexpr auto kSceneGraphStartupTimeout = std::chrono::seconds(5);
+    if (!queue->WaitUntilConsumerAvailable(kSceneGraphStartupTimeout)) {
+      qCWarning(editorPresentLog,
+                "[EditorPresent] native target handshake timed out %dx%d waiting for the "
+                "scene-graph consumer",
+                width, height);
+      return std::nullopt;
+    }
+  }
+
   qCDebug(editorPresentLog,
           "[EditorPresent] producer waiting for native target %dx%d image=%llu generation=%llu",
           width, height, static_cast<unsigned long long>(image_identity),
@@ -120,8 +135,9 @@ auto DirectFrameSink::ReserveWritableSlot(int width, int height) -> std::optiona
               height);
     return std::nullopt;
   }
-  qCDebug(editorPresentLog, "[EditorPresent] producer acquired native target %dx%d slot=%d", width,
-          height, *slot);
+  qCInfo(editorPresentLog,
+         "[EditorPresent] producer acquired native target %dx%d slot=%d backend=%s", width, height,
+         *slot, ToString(queue->backend()));
   return slot;
 }
 
@@ -196,6 +212,7 @@ void DirectFrameSink::EnsureSize(int width, int height) {
 
 auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain) -> FrameWriteMapping {
   if (!item_ || !item_->present_queue()) {
+    qCWarning(editorPresentLog, "[EditorPresent] MapResourceForWrite: no item/present_queue");
     return {};
   }
 
@@ -205,6 +222,9 @@ auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain) ->
   {
     std::lock_guard lock(mutex_);
     if (has_mapped_slot_ || width_ <= 0 || height_ <= 0) {
+      qCWarning(editorPresentLog,
+                "[EditorPresent] MapResourceForWrite: invalid state mapped=%d size=%dx%d",
+                has_mapped_slot_ ? 1 : 0, width_, height_);
       return {};
     }
     width                = width_;
@@ -216,6 +236,11 @@ auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain) ->
   if (slot_index < 0) {
     auto reserved = ReserveWritableSlot(width, height);
     if (!reserved.has_value()) {
+      qCWarning(editorPresentLog,
+                "[EditorPresent] MapResourceForWrite: no writable slot %dx%d domain=%d "
+                "active_backend=%s queue_backend=%s",
+                width, height, static_cast<int>(preferred_domain), ToString(ActiveEditorBackend()),
+                ToString(item_->present_queue()->backend()));
       return {};
     }
     slot_index = *reserved;
@@ -225,11 +250,17 @@ auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain) ->
   if (!begun.has_value() || !begun->native.valid()) {
     auto reserved = ReserveWritableSlot(width, height);
     if (!reserved.has_value()) {
+      qCWarning(editorPresentLog,
+                "[EditorPresent] MapResourceForWrite: BeginWrite/reserve failed slot=%d %dx%d",
+                slot_index, width, height);
       return {};
     }
     slot_index = *reserved;
     begun      = item_->present_queue()->BeginWrite(slot_index);
     if (!begun.has_value() || !begun->native.valid()) {
+      qCWarning(editorPresentLog,
+                "[EditorPresent] MapResourceForWrite: BeginWrite failed after reserve slot=%d",
+                slot_index);
       return {};
     }
   }
@@ -247,6 +278,9 @@ auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain) ->
   lease.lifetime_token    = std::make_shared<LeaseLifetimeToken>();
 
   if (!ProducerAcquireWritable(lease)) {
+    qCWarning(editorPresentLog,
+              "[EditorPresent] MapResourceForWrite: ProducerAcquireWritable failed kind=%d",
+              static_cast<int>(lease.writable_kind));
     item_->present_queue()->AbandonWrite(slot_index);
     return {};
   }
@@ -259,6 +293,10 @@ auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain) ->
   if (begun->native.writable_kind == LeaseWritableResourceKind::CudaArray) {
     if (preferred_domain != FrameMemoryDomain::CudaDevice &&
         preferred_domain != FrameMemoryDomain::HostVisible) {
+      qCWarning(editorPresentLog,
+                "[EditorPresent] MapResourceForWrite: domain mismatch (slot=CudaArray, "
+                "preferred=%d) — pipeline backend and Qt RHI/present backend disagree",
+                static_cast<int>(preferred_domain));
       (void)ProducerReleaseWritable(lease);
       item_->present_queue()->AbandonWrite(slot_index);
       return {};
@@ -269,6 +307,10 @@ auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain) ->
   } else if (begun->native.writable_kind == LeaseWritableResourceKind::OpenClImage) {
     if (preferred_domain != FrameMemoryDomain::OpenClDevice &&
         preferred_domain != FrameMemoryDomain::HostVisible) {
+      qCWarning(editorPresentLog,
+                "[EditorPresent] MapResourceForWrite: domain mismatch (slot=OpenClImage, "
+                "preferred=%d)",
+                static_cast<int>(preferred_domain));
       (void)ProducerReleaseWritable(lease);
       item_->present_queue()->AbandonWrite(slot_index);
       return {};
@@ -277,6 +319,8 @@ auto DirectFrameSink::MapResourceForWrite(FrameMemoryDomain preferred_domain) ->
     mapping.memory_domain = FrameMemoryDomain::OpenClDevice;
     mapping.target_type   = FrameWriteTargetType::OpenClImage;
   } else {
+    qCWarning(editorPresentLog, "[EditorPresent] MapResourceForWrite: unsupported writable_kind=%d",
+              static_cast<int>(begun->native.writable_kind));
     (void)ProducerReleaseWritable(lease);
     item_->present_queue()->AbandonWrite(slot_index);
     return {};
@@ -553,6 +597,13 @@ void DirectFrameSink::NotifyPrimaryFrameComposed(const DirectPresentQueue::Ready
   // Session first-frame service: exactly one composition confirmation.
   if (item_->present_queue()->AcknowledgeFirstComposition(request_id, image_generation,
                                                           image_identity)) {
+    qCInfo(editorPresentLog,
+           "[EditorPresent] first frame composed request=%llu image=%llu generation=%llu "
+           "backend=%s",
+           static_cast<unsigned long long>(request_id),
+           static_cast<unsigned long long>(image_identity),
+           static_cast<unsigned long long>(image_generation),
+           ToString(item_->present_queue()->backend()));
     if (callback) {
       callback(request_id, image_generation, image_identity);
     }

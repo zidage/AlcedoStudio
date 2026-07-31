@@ -95,10 +95,9 @@ Item {
     function buildDefaultRawParams() {
         var params = {
             raw: {
-                gpu_backend: "cpu",
+                // No accelerator backend: the decode backend is a runtime
+                // property of the pipeline (user setting), not an edit param.
                 method: "default",
-                cuda: false,
-                opencl: false,
                 highlights_reconstruct: true,
                 use_camera_wb: true,
                 user_wb: 7600.0,

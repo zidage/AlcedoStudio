@@ -56,7 +56,7 @@ class CPUPipelineExecutor : public PipelineExecutor {
   void                             SetTemplateParams();
   void                             ResolveAcceleratorBackend();
   void                             ApplyAcceleratorBackendToStages();
-  void                             SyncRawDecodeBackendToAccelerator();
+  void                             ApplyRuntimeRawDecodeBackend();
   void                             SyncRawDecodeRuntimeControls();
 
  public:

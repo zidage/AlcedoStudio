@@ -138,11 +138,16 @@ auto IsBackendAvailableInThisBuild(EditorBackend backend) -> bool {
 }
 
 auto DefaultEditorBackendForPlatform() -> std::optional<EditorBackend> {
+  // Routing follows the user's explicit selection (CLI > QSettings). This
+  // default only applies before any selection exists. On Windows, OpenCL is
+  // the baseline accelerator: it is the only viable backend on machines
+  // without an NVIDIA GPU, and it works on NVIDIA machines too, so prefer it
+  // over CUDA whenever the build carries it.
 #if defined(_WIN32)
-#if defined(HAVE_CUDA)
-  return EditorBackend::Cuda;
-#elif defined(HAVE_OPENCL)
+#if defined(HAVE_OPENCL)
   return EditorBackend::OpenCl;
+#elif defined(HAVE_CUDA)
+  return EditorBackend::Cuda;
 #else
   return std::nullopt;
 #endif

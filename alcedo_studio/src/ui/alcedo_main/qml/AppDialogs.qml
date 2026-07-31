@@ -349,6 +349,8 @@ Item {
         onAcceleratorRequested: function(backend) {
             if (!appModules.project.SetAcceleratorBackend(backend)) {
                 host.showSnackbar(appModules.project.serviceMessage)
+            } else if (welcomeDialogObj.acceleratorBackendAtLaunch !== backend) {
+                welcomeDialogObj.showAcceleratorRestartDialog(backend)
             }
         }
         onAcceleratorWarningAcknowledged: appModules.project.AcknowledgeAcceleratorWarning()
