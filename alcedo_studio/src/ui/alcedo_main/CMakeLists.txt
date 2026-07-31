@@ -595,6 +595,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorSaveRecoveryBar.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentTransferActions.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorFilmstrip.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorFilmstripThumbnailCard.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWorkspaceRail.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryTransactionsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryTransactionEntry.qml"
