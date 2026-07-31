@@ -49,7 +49,6 @@ enum class EditorSessionCommandKind : std::uint8_t {
   BranchVersion,
   RenameVersion,
   RemoveVersion,
-  PreparePaste,
   ApplyPaste,
   BeginMerge,
   CompleteMerge,

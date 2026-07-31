@@ -202,7 +202,6 @@ auto EditorActionPolicy::ActionForCommand(EditorSessionCommandKind kind)
       return EditorAction::RenameVersion;
     case EditorSessionCommandKind::RemoveVersion:
       return EditorAction::RemoveVersion;
-    case EditorSessionCommandKind::PreparePaste:
     case EditorSessionCommandKind::ApplyPaste:
       return EditorAction::ApplyPaste;
     case EditorSessionCommandKind::BeginMerge:

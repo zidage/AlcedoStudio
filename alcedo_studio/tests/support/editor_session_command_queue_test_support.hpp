@@ -174,8 +174,8 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
   /// current image). The CQ1 target saves such a journal before creating a
   /// new Version or merge commit.
   bool                      dirty_journal = false;
-  /// Number of staged transfer candidates that reached the one publication
-  /// step. CQ4 expects exactly one publication per accepted Paste/Merge.
+  /// Legacy counter retained so baseline tests can assert the shadow-candidate
+  /// publication path is never entered (always remains 0 after live paste/merge).
   int                       transfer_publication_count = 0;
   /// History facts projected into EditorActionInputs for CQ3 availability.
   bool                      force_can_undo = false;
@@ -221,23 +221,6 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
   auto CheckoutVersion(const EditorHistoryGuardHandle& guard, const Hash128& version_id,
                        std::string* error) -> bool override {
     return FakeEditorHistoryPort::CheckoutVersion(guard, version_id, error);
-  }
-
-  auto PreparePaste(const EditorHistoryGuardHandle& guard,
-                    const AdjustmentTransferPackage& /*package*/,
-                    std::string /*version_display_name*/, AdjustmentPasteResult* result,
-                    EditorTransferCandidate* candidate, std::string* error) -> bool override {
-    (void)guard;
-    (void)error;
-    if (candidate == nullptr) {
-      return false;
-    }
-    candidate->candidate_id = ++next_candidate_id_;
-    candidate->package      = {};
-    if (result != nullptr) {
-      *result = {};
-    }
-    return true;
   }
 
   auto PasteLiveRootRelativeVersion(const EditorHistoryGuardHandle& guard,
@@ -296,70 +279,12 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
     return true;
   }
 
-  auto PrepareMerge(const EditorHistoryGuardHandle& guard,
-                    const AdjustmentTransferPackage& /*package*/,
-                    std::string /*incoming_version_display_name*/,
-                    AdjustmentMergePreview* preview, EditorTransferCandidate* candidate,
-                    std::string* error) -> bool override {
-    (void)guard;
-    (void)error;
-    if (candidate == nullptr) {
-      return false;
-    }
-    candidate->candidate_id = ++next_candidate_id_;
-    if (preview != nullptr) {
-      preview->has_conflicts       = false;
-      preview->incoming_version_id = Hash128{0x11111111ULL, 0x22222222ULL};
-      preview->preview_id          = MergePreviewId{1};
-    }
-    return true;
-  }
-
-  auto CompleteMergeCandidate(
-      const EditorHistoryGuardHandle& guard, const AdjustmentMergePreview& /*preview*/,
-      const std::vector<AdjustmentMergeResolution>& /*resolutions*/,
-      EditorTransferCandidate* candidate, AdjustmentMergeResult* result,
-      std::string* error) -> bool override {
-    (void)guard;
-    (void)error;
-    (void)candidate;
-    if (result != nullptr) {
-      *result = {};
-    }
-    return true;
-  }
-
   auto CaptureSaveCheckpoint(const EditorHistoryGuardHandle& guard, std::string* error)
       -> std::shared_ptr<const EditorMiniGitSaveCapture> override {
     return FakeEditorHistoryPort::CaptureSaveCheckpoint(guard, error);
   }
 
-  auto PublishTransferCandidate(
-      const EditorHistoryGuardHandle& guard, const EditorTransferCandidate& /*candidate*/,
-      const AdjustmentMergePreview* preview,
-      const std::vector<AdjustmentMergeResolution>& /*resolutions*/, AdjustmentPasteResult* paste,
-      AdjustmentMergeResult* merge, std::string* error) -> bool override {
-    ++transfer_publication_count;
-    (void)guard;
-    (void)error;
-    if (preview != nullptr) {
-      record("merge_committed");
-      if (merge != nullptr) {
-        merge->merged = true;
-      }
-    } else {
-      record("version_created");
-      if (paste != nullptr) {
-        paste->pasted = true;
-      }
-    }
-    dirty_journal = false;
-    return true;
-  }
-
  private:
-  std::uint64_t next_candidate_id_ = 0;
-
   void record(std::string event) {
     if (event_log != nullptr) {
       event_log->push_back(std::move(event));

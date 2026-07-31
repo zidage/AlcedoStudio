@@ -526,12 +526,8 @@ auto EditorSessionService::CancelPendingMergeForNavigation(std::string* error) -
     if (error) *error = "Cannot discard the pending editor merge without a history guard";
     return false;
   }
-  if (pending_transfer_publication_.has_value()) {
-    if (error) *error = "Cannot navigate while editor Merge publication is in progress";
-    return false;
-  }
   // Live merge preview does not stage a shadow graph; clear session state only.
-  pending_merge_candidate_.reset();
+  pending_merge_package_.reset();
   pending_merge_preview_.reset();
   active_merge_preview_id_.reset();
   ReleaseLeasesByKind(EditorOperationLeaseKind::MergePreview);
@@ -735,14 +731,10 @@ auto EditorSessionService::BeginMerge(const AdjustmentTransferPackage& package,
   const bool has_conflicts = next_preview.has_conflicts;
   const auto preview_id = MergePreviewId{next_merge_preview_id_.value++};
   next_preview.preview_id = preview_id;
-  // Retain the package for CompleteLiveMerge; no shadow graph candidate is staged.
-  EditorTransferCandidate package_holder;
-  package_holder.candidate_id = preview_id.value == 0 ? 1 : preview_id.value;
-  package_holder.preview_id   = preview_id;
-  package_holder.package      = package;
-  pending_merge_preview_      = std::make_unique<AdjustmentMergePreview>(std::move(next_preview));
-  pending_merge_candidate_    = std::move(package_holder);
-  active_merge_preview_id_    = preview_id;
+  // Retain the package for CompleteLiveMerge; no shadow graph is staged.
+  pending_merge_preview_   = std::make_unique<AdjustmentMergePreview>(std::move(next_preview));
+  pending_merge_package_   = package;
+  active_merge_preview_id_ = preview_id;
   AcquireLease(EditorOperationLeaseKind::MergePreview, current_operation_id_,
                lifecycle_.identity().element_id, lifecycle_.identity().image_id,
                lifecycle_.active_image_load_request(), "Merge preview is active");
@@ -771,23 +763,22 @@ auto EditorSessionService::CompleteMerge(const std::vector<AdjustmentMergeResolu
   if (!pending_merge_preview_) {
     return Reject("No merge is awaiting resolution");
   }
-  if (!pending_merge_candidate_.has_value()) {
+  if (!pending_merge_package_.has_value()) {
     return Reject("Merge package is unavailable");
   }
   if (!active_merge_preview_id_.has_value() ||
-      pending_merge_preview_->preview_id != *active_merge_preview_id_ ||
-      pending_merge_candidate_->preview_id != *active_merge_preview_id_) {
+      pending_merge_preview_->preview_id != *active_merge_preview_id_) {
     return Reject("Merge preview is stale");
   }
   std::string error;
   AdjustmentMergeResult merge_result;
   if (!dependencies_.history->CompleteLiveMerge(
-          lifecycle_.history_guard(), pending_merge_candidate_->package, *pending_merge_preview_,
+          lifecycle_.history_guard(), *pending_merge_package_, *pending_merge_preview_,
           resolutions, &merge_result, &error)) {
     return Reject(error.empty() ? "Merge could not be completed" : std::move(error));
   }
   ReleaseLeasesByKind(EditorOperationLeaseKind::MergePreview);
-  pending_merge_candidate_.reset();
+  pending_merge_package_.reset();
   pending_merge_preview_.reset();
   active_merge_preview_id_.reset();
 
@@ -824,11 +815,8 @@ auto EditorSessionService::CancelMerge() -> EditorSessionResult {
   if (!pending_merge_preview_) {
     return Reject("No merge is awaiting resolution");
   }
-  if (pending_transfer_publication_.has_value()) {
-    return Reject("Merge publication is in progress");
-  }
   // BeginLiveMerge does not mutate graph/pipeline; cancel is a session-state clear only.
-  pending_merge_candidate_.reset();
+  pending_merge_package_.reset();
   pending_merge_preview_.reset();
   active_merge_preview_id_.reset();
   ReleaseLeasesByKind(EditorOperationLeaseKind::MergePreview);
@@ -925,144 +913,14 @@ auto EditorSessionService::StartHistoryCheckpointSave() -> EditorSessionResult {
   return Emit(std::move(started));
 }
 
-auto EditorSessionService::StartTransferPublication(
-    EditorSessionCommandKind kind, EditorTransferCandidate candidate,
-    std::shared_ptr<AdjustmentMergePreview> preview,
-    std::vector<AdjustmentMergeResolution> resolutions, std::string success_message)
-    -> EditorSessionResult {
-  pending_transfer_publication_ = PendingTransferPublication{
-      kind, std::move(candidate), std::move(preview), std::move(resolutions),
-      std::move(success_message)};
-
-  const auto discard_pending = [this] {
-    if (pending_transfer_publication_.has_value() && dependencies_.history &&
-        lifecycle_.has_history_guard()) {
-      std::string discard_error;
-      (void)dependencies_.history->DiscardTransferCandidate(
-          lifecycle_.history_guard(), pending_transfer_publication_->candidate, &discard_error);
-    }
-    const bool merge = pending_transfer_publication_.has_value() &&
-                       pending_transfer_publication_->kind ==
-                           EditorSessionCommandKind::CompleteMerge;
-    pending_transfer_publication_.reset();
-    if (merge) {
-      pending_merge_candidate_.reset();
-      pending_merge_preview_.reset();
-      active_merge_preview_id_.reset();
-      ReleaseLeasesByKind(EditorOperationLeaseKind::MergePreview);
-    }
-    ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
-    ReleaseLeasesByKind(EditorOperationLeaseKind::MergeMaterialization);
-  };
-
-  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
-    discard_pending();
-    return Reject("Editor history is unavailable");
-  }
-  if (navigation_.has_pending_action() || save_service_.active()) {
-    discard_pending();
-    return Reject("Editor save checkpoint is in progress");
-  }
-
-  const auto identity = lifecycle_.identity();
-  if (dependencies_.journal) {
-    std::string finalize_error;
-    if (!dependencies_.journal->FinalizeEdit(identity.element_id,
-                                             lifecycle_.active_image_load_request().value,
-                                             &finalize_error)) {
-      discard_pending();
-      return Reject(finalize_error.empty() ? "Editor command could not be finalized"
-                                           : std::move(finalize_error));
-    }
-  }
-
-  auto save_lock = save_service_.TryAcquireSaveLock(identity.element_id);
-  if (!save_lock.owns_lock()) {
-    discard_pending();
-    return Reject("Another editor save checkpoint is in progress");
-  }
-
-  std::string capture_error;
-  auto        capture = dependencies_.history->CaptureTransferSaveCheckpoint(
-      lifecycle_.history_guard(), pending_transfer_publication_->candidate, &capture_error);
-  if (!capture || !capture_error.empty()) {
-    discard_pending();
-    return Reject(capture_error.empty() ? "Editor transfer capture failed"
-                                        : std::move(capture_error));
-  }
-
-  SaveCheckpointRequest request;
-  request.element_id = identity.element_id;
-  request.operation_id = current_operation_id_;
-  request.image_load_request_id = lifecycle_.active_image_load_request();
-  request.capture = std::move(capture);
-  if (request.capture->has_journal_range()) {
-    request.last_journal_sequence = request.capture->last_journal_sequence;
-  }
-  request.save_lock = std::move(save_lock);
-  lifecycle_.BeginCheckpoint();
-  AcquireLease(EditorOperationLeaseKind::SaveCheckpoint, current_operation_id_, identity.element_id,
-               identity.image_id, lifecycle_.active_image_load_request(),
-               "Editor transfer publication is in progress");
-  const auto ticket = save_service_.Start(
-      std::move(request), [this](const SaveCheckpointResult& result) mutable {
-        EditorSessionCompletion completion;
-        completion.kind = EditorSessionCompletionKind::SaveCheckpointFinished;
-        completion.request_id = result.request_id;
-        completion.operation.command_id = result.operation_id;
-        completion.image_load_request = result.image_load_request_id;
-        completion.task_id = result.task_id;
-        completion.success = result.checkpoint_completed;
-        completion.last_journal_sequence = result.last_journal_sequence;
-        completion.message = result.error;
-        PostCompletion(std::move(completion));
-      });
-  if (!ticket.valid()) {
-    lifecycle_.KeepCurrentAfterCheckpointFailure("Editor transfer publication could not start");
-    discard_pending();
-    ReleaseLeasesByKind(EditorOperationLeaseKind::SaveCheckpoint);
-    return Reject("Editor transfer publication could not start");
-  }
-
-  EditorSessionResult started;
-  started.kind = EditorSessionResultKind::SaveStarted;
-  started.state = lifecycle_.state();
-  started.identity = lifecycle_.identity();
-  started.task_id = ticket.task_id;
-  started.message = "Publishing editor transfer";
-  return Emit(std::move(started));
-}
-
 void EditorSessionService::HandleSaveCheckpointCompletion(
     const EditorSessionCompletion& completion) {
-  const auto discard_pending_transfer = [this] {
-    if (pending_transfer_publication_.has_value() && dependencies_.history &&
-        lifecycle_.has_history_guard()) {
-      std::string discard_error;
-      (void)dependencies_.history->DiscardTransferCandidate(
-          lifecycle_.history_guard(), pending_transfer_publication_->candidate, &discard_error);
-    }
-    const bool merge = pending_transfer_publication_.has_value() &&
-                       pending_transfer_publication_->kind ==
-                           EditorSessionCommandKind::CompleteMerge;
-    pending_transfer_publication_.reset();
-    if (merge) {
-      pending_merge_candidate_.reset();
-      pending_merge_preview_.reset();
-      active_merge_preview_id_.reset();
-      ReleaseLeasesByKind(EditorOperationLeaseKind::MergePreview);
-    }
-    ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
-    ReleaseLeasesByKind(EditorOperationLeaseKind::MergeMaterialization);
-  };
-
   // Shutdown cancels every in-flight checkpoint (CancelAndWait posts a
   // cancelled result). Handle that before load-request correlation: BeginShutdown
   // clears the active load id, and the cancellation must still publish one
   // terminal outcome without re-entering a recoverable failure state.
   if (lifecycle_.state() == EditorSessionState::ShuttingDown) {
     pending_history_checkpoint_.reset();
-    discard_pending_transfer();
     ReleaseLeaseByCommandId(completion.operation.command_id);
     ReleaseLeasesByKind(EditorOperationLeaseKind::SaveCheckpoint);
     ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
@@ -1079,24 +937,19 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
   }
 
   // Stale completions from a previous image-load request are ignored without
-  // touching the published snapshot; the retained transfer, if any, dies with
-  // the load that created it.
+  // touching the published snapshot.
   if (completion.image_load_request.valid() &&
       completion.image_load_request != lifecycle_.active_image_load_request()) {
     pending_history_checkpoint_.reset();
-    discard_pending_transfer();
     return;
   }
 
   if (!completion.success) {
-    const bool had_retained_transfer = pending_transfer_publication_.has_value();
     pending_history_checkpoint_.reset();
-    discard_pending_transfer();
+    ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
+    ReleaseLeasesByKind(EditorOperationLeaseKind::MergeMaterialization);
     lifecycle_.KeepCurrentAfterCheckpointFailure(
-        completion.message.empty()
-            ? (had_retained_transfer ? "Editor save checkpoint failed before the pending transfer"
-                                     : "Editor save checkpoint failed")
-            : completion.message);
+        completion.message.empty() ? "Editor save checkpoint failed" : completion.message);
     AcquireLease(EditorOperationLeaseKind::FailureRecovery, completion.operation.command_id,
                  lifecycle_.identity().element_id, lifecycle_.identity().image_id,
                  lifecycle_.active_image_load_request(), "Resolve the save failure to continue");
@@ -1119,89 +972,8 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
   lifecycle_.CompleteCheckpoint();
   ReleaseLeaseByCommandId(completion.operation.command_id);
 
-  if (pending_transfer_publication_.has_value()) {
-    auto transfer = std::move(*pending_transfer_publication_);
-    pending_transfer_publication_.reset();
-    AdjustmentPasteResult paste_result;
-    AdjustmentMergeResult merge_result;
-    std::string publish_error;
-    const bool published =
-        dependencies_.history != nullptr && lifecycle_.has_history_guard() &&
-        dependencies_.history->PublishTransferCandidate(
-            lifecycle_.history_guard(), transfer.candidate, transfer.preview.get(),
-            transfer.merge_resolutions, &paste_result, &merge_result, &publish_error);
-    if (!published) {
-      if (dependencies_.history != nullptr && lifecycle_.has_history_guard()) {
-        std::string discard_error;
-        (void)dependencies_.history->DiscardTransferCandidate(
-            lifecycle_.history_guard(), transfer.candidate, &discard_error);
-      }
-      if (transfer.kind == EditorSessionCommandKind::CompleteMerge) {
-        pending_merge_candidate_.reset();
-        pending_merge_preview_.reset();
-        active_merge_preview_id_.reset();
-      }
-      ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
-      ReleaseLeasesByKind(EditorOperationLeaseKind::MergeMaterialization);
-      lifecycle_.KeepCurrentAfterCheckpointFailure(
-          publish_error.empty() ? "Editor transfer publication failed" : publish_error);
-      AcquireLease(EditorOperationLeaseKind::FailureRecovery, completion.operation.command_id,
-                   lifecycle_.identity().element_id, lifecycle_.identity().image_id,
-                   lifecycle_.active_image_load_request(),
-                   "Resolve the transfer publication failure");
-      EditorSessionResult failed;
-      failed.kind = EditorSessionResultKind::Failed;
-      failed.state = lifecycle_.state();
-      failed.identity = lifecycle_.identity();
-      failed.task_id = completion.task_id;
-      failed.message = lifecycle_.last_error();
-      BumpHistoryRevision();
-      Emit(std::move(failed));
-      return;
-    }
-    if (transfer.kind == EditorSessionCommandKind::CompleteMerge) {
-      pending_merge_candidate_.reset();
-      pending_merge_preview_.reset();
-      active_merge_preview_id_.reset();
-    }
-    ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
-    ReleaseLeasesByKind(EditorOperationLeaseKind::MergeMaterialization);
-    BumpHistoryRevision();
-
-    EditorSessionResult published_result;
-    published_result.identity = lifecycle_.identity();
-    published_result.state = lifecycle_.state();
-    published_result.task_id = completion.task_id;
-    EditorRenderAdjustmentSnapshot snapshot;
-    std::string snapshot_error;
-    if (!dependencies_.history->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &snapshot,
-                                                        &snapshot_error)) {
-      lifecycle_.Fail(snapshot_error.empty() ? "Failed to publish editor transfer snapshot"
-                                             : snapshot_error);
-      published_result.kind = EditorSessionResultKind::Failed;
-      published_result.state = lifecycle_.state();
-      published_result.message = lifecycle_.last_error();
-      Emit(std::move(published_result));
-      return;
-    }
-    edit_.set_adjustment_snapshot(std::move(snapshot));
-    render_.AdvanceContentGeneration();
-    EditorRenderCommand command;
-    command.reason = EditorRenderReason::InitialFrame;
-    command.operation_id = current_operation_id_;
-    command.adjustment = edit_.adjustment_snapshot();
-    render_.RouteInitialRender(command, lifecycle_.identity(),
-                               lifecycle_.active_image_load_request());
-    published_result.kind = EditorSessionResultKind::RenderRouted;
-    published_result.render_request_id = render_.first_frame_request_id();
-    published_result.message = transfer.success_message;
-    Emit(std::move(published_result));
-    return;
-  }
-
   // The checkpoint materialized the active head to DuckDB without advancing
-  // the in-memory materialized tuple. Mirror it for ordinary history saves;
-  // transfer publication already installed its final candidate graph.
+  // the in-memory materialized tuple. Mirror it for ordinary history saves.
   if (dependencies_.history != nullptr && lifecycle_.has_history_guard()) {
     std::string sync_error;
     (void)dependencies_.history->SyncMaterializedStateAfterCheckpoint(lifecycle_.history_guard(),

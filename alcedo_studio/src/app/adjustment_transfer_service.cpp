@@ -12,12 +12,10 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 
 #include "app/editor_adjustment_pipeline.hpp"
-#include "edit/operators/basic/color_temp_op.hpp"
-#include "edit/operators/geometry/lens_calib_op.hpp"
-#include "edit/operators/operator_factory.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "type/hash_type.hpp"
 
@@ -555,48 +553,6 @@ auto MergeConflictFieldKey(const AdjustmentTransferEntry& entry) -> std::string 
   return key;
 }
 
-/// Probe operator used only for merge policy (DetectMergeConflict / MergeParams).
-/// Known operators that override merge semantics are constructed directly so policy
-/// does not depend on factory registration order. Others use the factory when
-/// available, otherwise default full-JSON compare / wholesale pick.
-auto MakeMergePolicyProbe(OperatorType op_type) -> std::shared_ptr<IOperatorBase> {
-  switch (op_type) {
-    case OperatorType::COLOR_TEMP:
-      return std::make_shared<ColorTempOp>();
-    case OperatorType::LENS_CALIBRATION:
-      return std::make_shared<LensCalibOp>();
-    default:
-      break;
-  }
-  if (auto probe = OperatorFactory::Instance().Create(op_type)) {
-    return probe;
-  }
-  struct DefaultMergePolicy final : IOperatorBase {
-    void Apply(std::shared_ptr<ImageBuffer>) override {}
-    void ApplyGPU(std::shared_ptr<ImageBuffer>) override {}
-    auto GetParams() const -> nlohmann::json override { return nlohmann::json::object(); }
-    void SetParams(const nlohmann::json&) override {}
-    void SetGlobalParams(OperatorParams&) const override {}
-    void EnableGlobalParams(OperatorParams&, bool) override {}
-    auto GetScriptName() const -> std::string override { return {}; }
-    auto GetPriorityLevel() const -> PriorityLevel override { return 0; }
-    auto GetStage() const -> PipelineStageName override { return PipelineStageName::Stage_Count; }
-    auto GetOperatorType() const -> OperatorType override { return OperatorType::UNKNOWN; }
-  };
-  return std::make_shared<DefaultMergePolicy>();
-}
-
-auto ParamsHaveMergeConflict(OperatorType op_type, const nlohmann::json& current,
-                             const nlohmann::json& incoming) -> bool {
-  return MakeMergePolicyProbe(op_type)->DetectMergeConflict(current, incoming);
-}
-
-auto ResolveMergedParams(OperatorType op_type, const nlohmann::json& current,
-                         const nlohmann::json& incoming, OperatorMergeChoice choice)
-    -> nlohmann::json {
-  return MakeMergePolicyProbe(op_type)->MergeParams(current, incoming, choice);
-}
-
 auto InferMergeChoice(const AdjustmentMergeResolution& resolution,
                       const AdjustmentMergeConflict& conflict) -> OperatorMergeChoice {
   if (resolution.choice.has_value()) {
@@ -606,33 +562,6 @@ auto InferMergeChoice(const AdjustmentMergeResolution& resolution,
     return OperatorMergeChoice::kTakeIncoming;
   }
   return OperatorMergeChoice::kKeepCurrent;
-}
-
-auto ReadSnapshotField(const EditorRenderAdjustmentSnapshot& snapshot, const std::string& field_key,
-                       nlohmann::json* params, bool* enabled, std::string* error) -> bool {
-  if (!ResolveEditorAdjustmentField(field_key).has_value()) {
-    if (error) *error = "Unsupported editor adjustment field: " + field_key;
-    return false;
-  }
-  const auto found = std::find_if(
-      snapshot.patches.begin(), snapshot.patches.end(), [&](const auto& patch) {
-        return patch.field_key == field_key;
-      });
-  if (found == snapshot.patches.end()) {
-    if (error) *error = "Committed adjustment snapshot is missing field: " + field_key;
-    return false;
-  }
-  try {
-    if (params != nullptr) {
-      *params = found->params_json.empty() ? nlohmann::json::object()
-                                           : nlohmann::json::parse(found->params_json);
-    }
-    if (enabled != nullptr) *enabled = found->enabled;
-    return true;
-  } catch (const std::exception& ex) {
-    if (error) *error = ex.what();
-    return false;
-  }
 }
 
 }  // namespace
@@ -782,9 +711,14 @@ auto AdjustmentTransferService::InitiateMerge(CommitGraph&                     g
         MergeJsonObjectMiniGit(incoming_value, entry.params_);
       }
 
-      // Operator owns portable-intent conflict policy (image-local fields ignored).
-      const bool params_conflict =
-          ParamsHaveMergeConflict(entry.operator_type_, current_value, incoming_value);
+      // Live op owns portable-intent conflict policy (image-local fields ignored).
+      bool params_conflict = false;
+      if (has_current) {
+        params_conflict =
+            current.value()->op_->DetectMergeConflict(current_value, incoming_value);
+      } else {
+        params_conflict = !incoming_value.is_null();
+      }
       if (params_conflict || current_enabled != entry.enabled_) {
         AdjustmentMergeConflict conflict;
         conflict.stage             = entry.stage_;
@@ -804,76 +738,9 @@ auto AdjustmentTransferService::InitiateMerge(CommitGraph&                     g
   return preview;
 }
 
-auto AdjustmentTransferService::InitiateMerge(
-    CommitGraph& graph, const AdjustmentTransferPackage& package,
-    const EditorRenderAdjustmentSnapshot& current_snapshot,
-    std::string incoming_version_display_name) -> AdjustmentMergePreview {
-  AdjustmentMergePreview preview;
-  if (package.Empty()) {
-    preview.error = "Adjustment transfer package is empty";
-    return preview;
-  }
-  if (current_snapshot.patches.empty()) {
-    preview.error = "Committed adjustment snapshot is empty";
-    return preview;
-  }
-  preview.first_parent_head          = graph.GetActiveVersionRef().head_commit_hash;
-  preview.source_package_fingerprint = PackageFingerprint(package);
-
-  auto incoming_commits = BuildRootRelativeCommits(package, graph.GetRootId());
-  if (incoming_commits.empty()) {
-    preview.error = "No valid adjustments in merge package";
-    return preview;
-  }
-  for (const auto& commit : incoming_commits) {
-    (void)graph.InsertCommit(commit);
-  }
-  preview.incoming_head = incoming_commits.back().GetCommitHash();
-  preview.incoming_version_id = graph.CreateVersionRefAtHead(
-      UniqueVersionDisplayNameForGraph(graph, incoming_version_display_name, "Merged Adjustments"),
-      preview.incoming_head);
-
-  for (const auto& entry : package.operators_) {
-    if (entry.stage_ == PipelineStageName::Stage_Count ||
-        entry.operator_type_ == OperatorType::UNKNOWN || entry.operator_type_ == OperatorType::RESIZE) {
-      continue;
-    }
-    const auto field_key = EditorAdjustmentFieldKey(entry.stage_, entry.operator_type_);
-    if (!field_key.has_value()) {
-      preview.error = "Adjustment transfer field is not supported by the editor snapshot";
-      return preview;
-    }
-    nlohmann::json current_value;
-    bool current_enabled = true;
-    if (!ReadSnapshotField(current_snapshot, *field_key, &current_value, &current_enabled,
-                           &preview.error)) {
-      return preview;
-    }
-    nlohmann::json incoming_value = entry.params_;
-    if (entry.merge_params_) {
-      incoming_value = current_value;
-      MergeJsonObjectMiniGit(incoming_value, entry.params_);
-    }
-    const bool params_conflict =
-        ParamsHaveMergeConflict(entry.operator_type_, current_value, incoming_value);
-    if (params_conflict || current_enabled != entry.enabled_) {
-      AdjustmentMergeConflict conflict;
-      conflict.stage            = entry.stage_;
-      conflict.operator_type    = entry.operator_type_;
-      conflict.field_key        = MergeConflictFieldKey(entry);
-      conflict.current_value    = current_value;
-      conflict.incoming_value   = std::move(incoming_value);
-      conflict.current_enabled  = current_enabled;
-      conflict.incoming_enabled = entry.enabled_;
-      preview.conflicts.push_back(std::move(conflict));
-    }
-  }
-  preview.has_conflicts = !preview.conflicts.empty();
-  return preview;
-}
-
 auto AdjustmentTransferService::CompleteMerge(
-    CommitGraph& graph, const AdjustmentMergePreview& preview,
+    CommitGraph& graph, PipelineMgmtService& pipeline_service, sl_element_id_t element_id,
+    const AdjustmentMergePreview& preview,
     const std::vector<AdjustmentMergeResolution>& resolutions) -> AdjustmentMergeResult {
   AdjustmentMergeResult result;
   if (!preview.error.empty()) {
@@ -885,42 +752,66 @@ auto AdjustmentTransferService::CompleteMerge(
     return result;
   }
 
-  // Build the MergeEditPayload from the resolutions.
+  std::shared_ptr<PipelineGuard> guard;
+  try {
+    guard = pipeline_service.LoadPipeline(element_id);
+  } catch (const std::exception& e) {
+    result.error = std::string("Failed to load pipeline for merge complete: ") + e.what();
+    return result;
+  }
+  if (!guard || !guard->pipeline_) {
+    result.error = "Pipeline was not available for merge complete";
+    return result;
+  }
+
+  // Build the MergeEditPayload from the resolutions using live op MergeParams.
   MergeEditPayload                merge_payload;
   std::unordered_set<std::string> resolved_keys;
 
-  for (const auto& resolution : resolutions) {
-    if (!resolved_keys.insert(resolution.field_key).second) {
-      continue;  // Skip duplicate resolutions.
-    }
-
-    // Find the matching conflict to get stage and operator type.
-    const AdjustmentMergeConflict* conflict = nullptr;
-    for (const auto& c : preview.conflicts) {
-      if (c.field_key == resolution.field_key) {
-        conflict = &c;
-        break;
+  {
+    std::unique_lock<std::mutex> render_guard(guard->pipeline_->GetRenderLock());
+    for (const auto& resolution : resolutions) {
+      if (!resolved_keys.insert(resolution.field_key).second) {
+        continue;  // Skip duplicate resolutions.
       }
-    }
-    if (conflict == nullptr) {
-      continue;  // Resolution for unknown field, skip.
-    }
 
-    const auto choice = InferMergeChoice(resolution, *conflict);
-    MergeFieldDelta delta;
-    delta.operator_type = conflict->operator_type;
-    delta.stage_name    = conflict->stage;
-    delta.field_name    = "$operator_params";
-    delta.before_value  = conflict->current_value;
-    delta.before_enabled = conflict->current_enabled;
-    // Operator rehydrates image-local fields when taking a stripped incoming payload.
-    delta.resolved_value = ResolveMergedParams(conflict->operator_type, conflict->current_value,
-                                               conflict->incoming_value, choice);
-    delta.resolved_enabled = choice == OperatorMergeChoice::kTakeIncoming
-                                 ? conflict->incoming_enabled
-                                 : conflict->current_enabled;
-    merge_payload.fields.push_back(std::move(delta));
+      const AdjustmentMergeConflict* conflict = nullptr;
+      for (const auto& c : preview.conflicts) {
+        if (c.field_key == resolution.field_key) {
+          conflict = &c;
+          break;
+        }
+      }
+      if (conflict == nullptr) {
+        continue;  // Resolution for unknown field, skip.
+      }
+
+      const auto choice = InferMergeChoice(resolution, *conflict);
+      auto&      stage  = guard->pipeline_->GetStage(conflict->stage);
+      const auto current = stage.GetOperator(conflict->operator_type);
+      nlohmann::json resolved_value = conflict->current_value;
+      if (current.has_value() && current.value() != nullptr && current.value()->op_ != nullptr) {
+        resolved_value = current.value()->op_->MergeParams(conflict->current_value,
+                                                           conflict->incoming_value, choice);
+      } else if (choice == OperatorMergeChoice::kTakeIncoming) {
+        resolved_value = conflict->incoming_value;
+      }
+
+      MergeFieldDelta delta;
+      delta.operator_type    = conflict->operator_type;
+      delta.stage_name       = conflict->stage;
+      delta.field_name       = "$operator_params";
+      delta.before_value     = conflict->current_value;
+      delta.before_enabled   = conflict->current_enabled;
+      delta.resolved_value   = std::move(resolved_value);
+      delta.resolved_enabled = choice == OperatorMergeChoice::kTakeIncoming
+                                   ? conflict->incoming_enabled
+                                   : conflict->current_enabled;
+      merge_payload.fields.push_back(std::move(delta));
+    }
   }
+
+  pipeline_service.SavePipeline(guard);
 
   if (preview.has_conflicts && merge_payload.fields.size() != preview.conflicts.size()) {
     result.error = "Not all merge conflicts were resolved";
@@ -951,13 +842,6 @@ auto AdjustmentTransferService::CompleteMerge(
   result.active_version_id = graph.GetActiveVersionId();
   result.merge_commit_hash = merge_commit.GetCommitHash();
   return result;
-}
-
-auto AdjustmentTransferService::CompleteMerge(
-    CommitGraph& graph, [[maybe_unused]] PipelineMgmtService& pipeline_service,
-    const AdjustmentMergePreview& preview,
-    const std::vector<AdjustmentMergeResolution>& resolutions) -> AdjustmentMergeResult {
-  return CompleteMerge(graph, preview, resolutions);
 }
 
 void AdjustmentTransferService::CancelMerge(CommitGraph& graph, AdjustmentMergePreview& preview) {

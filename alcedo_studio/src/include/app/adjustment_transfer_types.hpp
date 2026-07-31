@@ -34,21 +34,6 @@ struct AdjustmentTransferPackage {
   [[nodiscard]] auto                   Empty() const -> bool { return operators_.empty(); }
 };
 
-/// Immutable queue message naming a transfer candidate staged outside the
-/// published editor history. The history port owns the candidate graph and
-/// releases it after publication or explicit discard.
-struct EditorTransferCandidate {
-  std::uint64_t                  candidate_id = 0;
-  /// For Merge, the queue-owned opaque preview identity carried with the
-  /// candidate. Paste candidates leave this at its default value.
-  MergePreviewId                 preview_id{};
-  AdjustmentTransferPackage      package;
-  std::string                    display_name;
-  EditorRenderAdjustmentSnapshot adjustment_snapshot;
-
-  [[nodiscard]] auto valid() const -> bool { return candidate_id != 0; }
-};
-
 struct AdjustmentTransferSelection {
   bool                                  include_geometry_                          = true;
   bool                                  include_tone_                              = true;

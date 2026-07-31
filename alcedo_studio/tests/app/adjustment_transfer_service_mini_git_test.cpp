@@ -215,8 +215,8 @@ TEST_F(AdjustmentTransferPasteMergeTest, CompleteMergeFailsWithUnresolvedConflic
 
   // CompleteMerge with empty resolutions should fail.
   std::vector<AdjustmentMergeResolution> empty_resolutions;
-  auto result = AdjustmentTransferService::CompleteMerge(*graph, *pipeline_service_, preview,
-                                                         empty_resolutions);
+  auto result = AdjustmentTransferService::CompleteMerge(
+      *graph, *pipeline_service_, element_id, preview, empty_resolutions);
   EXPECT_FALSE(result.merged);
   EXPECT_FALSE(result.error.empty());
 
@@ -251,8 +251,8 @@ TEST_F(AdjustmentTransferPasteMergeTest, CompleteMergeCreatesTwoParentCommitWith
       .resolved_enabled = true,
   });
 
-  auto result =
-      AdjustmentTransferService::CompleteMerge(*graph, *pipeline_service_, preview, resolutions);
+  auto result = AdjustmentTransferService::CompleteMerge(
+      *graph, *pipeline_service_, element_id, preview, resolutions);
   ASSERT_TRUE(result.merged) << result.error;
 
   // Verify the merge commit.
@@ -363,8 +363,8 @@ TEST_F(AdjustmentTransferPasteMergeTest, CompleteMergeWithErroredPreviewRejectsI
   errored_preview.error = "Simulated initiation failure";
 
   std::vector<AdjustmentMergeResolution> resolutions;
-  auto result = AdjustmentTransferService::CompleteMerge(*graph, *pipeline_service_,
-                                                         errored_preview, resolutions);
+  auto result = AdjustmentTransferService::CompleteMerge(
+      *graph, *pipeline_service_, element_id, errored_preview, resolutions);
   EXPECT_FALSE(result.merged);
   EXPECT_FALSE(result.error.empty());
 }
@@ -423,8 +423,8 @@ TEST_F(AdjustmentTransferPasteMergeTest, MergeCommitAppearsInFirstParentChain) {
       .resolved_value   = preview.conflicts[0].incoming_value,
       .resolved_enabled = true,
   });
-  auto result =
-      AdjustmentTransferService::CompleteMerge(*graph, *pipeline_service_, preview, resolutions);
+  auto result = AdjustmentTransferService::CompleteMerge(
+      *graph, *pipeline_service_, element_id, preview, resolutions);
   ASSERT_TRUE(result.merged);
 
   // The merge commit must be in the first-parent chain.
@@ -534,8 +534,7 @@ TEST(LensCalibOpMergePolicyTest, TakeIncomingKeepsTargetImageLocalMeta) {
 
 TEST_F(AdjustmentTransferPasteMergeTest,
        InitiateMergeColorTempBothAsShotHasNoConflictDespiteStrippedIncoming) {
-  // Live editor path uses BeginLiveMerge for conflict detection against the live
-  // pipeline; InitiateMerge remains the AdjustmentTransferService probe used here.
+  // Service-level InitiateMerge detects conflicts on live pipeline operators.
   const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
   auto*      graph      = project_.graph(element_id).get();
 
@@ -614,8 +613,8 @@ TEST_F(AdjustmentTransferPasteMergeTest,
       .resolved_value    = preview.conflicts[0].incoming_value,
       .resolved_enabled  = true,
   });
-  auto result =
-      AdjustmentTransferService::CompleteMerge(*graph, *pipeline_service_, preview, resolutions);
+  auto result = AdjustmentTransferService::CompleteMerge(
+      *graph, *pipeline_service_, element_id, preview, resolutions);
   ASSERT_TRUE(result.merged) << result.error;
 
   const auto& merge_commit = graph->GetCommit(result.merge_commit_hash);

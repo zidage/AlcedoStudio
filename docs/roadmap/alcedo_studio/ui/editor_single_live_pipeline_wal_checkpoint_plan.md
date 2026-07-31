@@ -1,7 +1,7 @@
 # Editor Single Live Pipeline + WAL + Checkpoint Simplification Plan
 
 Date: 2026-07-31  
-Status: WU1–WU5 complete; WU6–WU7 remaining  
+Status: WU1–WU6 complete; WU7 remaining (grill evidence package)  
 Branch context: follows interim operator merge-policy work on `feature/pre_v28_fix`
 
 Related documents (historical; this plan **supersedes** their transfer-candidate / dual-snapshot
@@ -309,7 +309,7 @@ Suite totals: n/a (docs)
 
 **LOC note (grill-code-review):** docs + local inventory only
 
-**Remaining gaps:** production call sites remain until WU3/WU6 deletions; inventory tracks them
+**Remaining gaps:** none (WU6 deleted leftover shadow transfer call sites)
 
 ### Work unit 2 — Live pipeline paste
 
@@ -404,7 +404,7 @@ Suite totals: HistoryPort 28/28; CQ baseline 16/16; CQ5 5/5
 
 **LOC note (grill-code-review):** `editor_history_transfer.cpp` grew live paste/cancel (~250 LOC added); still one transfer responsibility file. Session paste path shortened (no shadow publish).
 
-**Remaining gaps:** `PreparePaste` / `HistoryTransferCandidate` remain for **merge** until WU3/WU6; paste production session path no longer constructs paste shadow graphs. Cancel after paste with a dirty pre-paste WAL truncates the whole journal (acceptable when paste follows a flushed journal).
+**Remaining gaps:** none for shadow APIs (WU6 deleted). Cancel after paste with a dirty pre-paste WAL truncates the whole journal (acceptable when paste follows a flushed journal).
 
 ### Work unit 3 — Live pipeline merge
 
@@ -510,7 +510,7 @@ Suite totals: HistoryPort 33/33; CQ baseline 16/16; MiniGit transfer 21/21
 
 **LOC note (grill-code-review):** `editor_history_transfer.cpp` added Begin/Complete live merge; `MergeFieldDelta` schema extended; session merge path mirrors paste checkpoint (no `PublishTransferCandidate`)
 
-**Remaining gaps:** shadow `PrepareMerge` / `HistoryTransferCandidate` APIs remain until WU6 deletion; `InitiateMerge` snapshot overload still exists for legacy tests
+**Remaining gaps:** none for shadow APIs (WU6 deleted). `LensPortableOnlyConflictIgnoresStrippedMetaOnLivePipeline` landed in WU6 residual closure.
 
 ### Work unit 4 — Stop JSON mutation state machine for ordinary edits
 
@@ -634,11 +634,11 @@ build\debug\alcedo_studio\tests\app\PipelineServiceTest_runtime\PipelineServiceT
 
 Suite totals: filtered PipelineService 3/3; HistoryPort includes WAL attach test (33/33)
 
-**Checklist / exit condition:** 5.1–5.3 evidenced; 5.4 `LoadRejectsOrQuarantinesIncompatibleWal` relies on fail-closed `EnsureWorkingState` (no dedicated named test yet)
+**Checklist / exit condition:** 5.1–5.3 evidenced; 5.4 closed in WU6 residual (`LoadRejectsOrQuarantinesIncompatibleWal`)
 
 **LOC note (grill-code-review):** helper `CheckpointMatchesLogicalHead` in `pipeline_service`; WAL compare wired in `editor_history_state_detail.cpp`
 
-**Remaining gaps:** dedicated incompatible-WAL quarantine assertion test deferred; WU6 still deletes leftover shadow transfer APIs
+**Remaining gaps:** none (WU6 closed incompatible-WAL named test + shadow API deletion)
 
 ### Work unit 6 — Delete dead code + dual APIs
 
@@ -650,6 +650,71 @@ Suite totals: filtered PipelineService 3/3; HistoryPort includes WAL attach test
    `shadow` candidate graph.
 5. Update/remove tests under `tests/edit/history/*transfer*`, `tests/app/adjustment_transfer*`,
    UI e2e if they assert candidate IDs.
+
+##### Work unit 6 completion record (2026-08-01)
+
+**Status:** complete — shadow transfer types/APIs deleted; snapshot `InitiateMerge` + `MakeMergePolicyProbe` removed; residual WAL/lens tests closed
+
+**Primary success call chain:**
+
+```text
+session PasteAdjustments / BeginMerge / CompleteMerge
+  -> history.PasteLiveRootRelativeVersion | BeginLiveMerge | CompleteLiveMerge
+       live CommitGraph + WAL + live pipeline SetOperator/MergeParams
+  -> StartHistoryCheckpoint (ordinary capture/materialize; no PublishTransferCandidate)
+  -> render route on checkpoint success
+```
+
+**Primary failure call chain:**
+
+```text
+incompatible WAL on open
+  -> ApplyRecoveredRecordToSnapshot / MiniGitWorkingHistory::Replay fails
+  -> EnsureWorkingState returns null
+  -> Acquire fails with explicit error (no silent discard)
+
+CompleteLiveMerge with stale first_parent_head / package fingerprint mismatch
+  -> reject; RestoreLivePastePrior; live pipeline + graph unchanged
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Shadow symbols absent in production (`rg` CLEAN) | inventory | PASS |
+| CQ5 static ban: no `PreparePaste` / `PublishTransferCandidate` / `HistoryTransferCandidate` | `EditorSessionCq5QualificationTest` | PASS |
+| Live paste/merge session ordering (no shadow publish) | `EditorSessionCommandQueueBaselineTest` | PASS (16/16) |
+| Service-level merge policy on live ops | `AdjustmentTransferServiceMiniGitTest` | PASS (21/21) |
+| `LoadRejectsOrQuarantinesIncompatibleWal` | `EditorSessionHistoryPortTest` | PASS |
+| `LensPortableOnlyConflictIgnoresStrippedMetaOnLivePipeline` | `EditorSessionHistoryPortTest` | PASS |
+| Prior live paste/merge/WAL suite | `EditorSessionHistoryPortTest` | PASS (35/35) |
+| Checkpoint load suite | `PipelineServiceTest` | PASS (25/25) |
+
+Commands:
+
+```bat
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target AdjustmentTransferServiceMiniGitTest EditorSessionHistoryPortTest EditorSessionCommandQueueBaselineTest EditorSessionCq5QualificationTest PipelineServiceTest
+build\debug\alcedo_studio\tests\app\AdjustmentTransferServiceMiniGitTest_runtime\AdjustmentTransferServiceMiniGitTest.exe
+build\debug\alcedo_studio\tests\ui\EditorSessionHistoryPortTest_runtime\EditorSessionHistoryPortTest.exe
+build\debug\alcedo_studio\tests\app\EditorSessionCommandQueueBaselineTest_runtime\EditorSessionCommandQueueBaselineTest.exe
+build\debug\alcedo_studio\tests\app\EditorSessionCq5QualificationTest_runtime\EditorSessionCq5QualificationTest.exe
+build\debug\alcedo_studio\tests\app\PipelineServiceTest_runtime\PipelineServiceTest.exe
+```
+
+Suite totals: MiniGit 21/21; HistoryPort 35/35; CQ baseline 16/16; CQ5 5/5; PipelineService 25/25
+
+**Checklist / exit condition:** all WU6 boxes checked; prior residual gaps closed (WAL quarantine named test; Lens live portable-only; shadow API deletion)
+
+**LOC note (grill-code-review):**
+
+| File | LOC after |
+| --- | --- |
+| `editor_history_transfer.cpp` | ~568 (shadow path removed; was ~889) |
+| `editor_session_service.cpp` | ~1668 (StartTransferPublication + publish branch removed) |
+| `adjustment_transfer_service.cpp` | ~858 (snapshot InitiateMerge + MakeMergePolicyProbe removed) |
+| `editor_session_ports.hpp` | ~463 |
+
+**Residual gaps:** none for WU1–WU6 acceptance. WU7 grill evidence package (matrix CSV + paste/merge call-chain doc under `build/tmp/`) remains.
 
 ### Work unit 7 — Grill evidence package
 
