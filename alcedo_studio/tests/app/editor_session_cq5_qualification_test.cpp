@@ -243,8 +243,11 @@ TEST(EditorSessionCq5StaticApiBan, HistoryTransferOmitsOneShotPasteMergeWrappers
   EXPECT_EQ(contents.find("auto BeginMerge("), std::string::npos);
   EXPECT_EQ(contents.find("auto CompleteMerge("), std::string::npos);
   EXPECT_NE(contents.find("PasteLiveRootRelativeVersion("), std::string::npos);
-  EXPECT_NE(contents.find("PreparePaste("), std::string::npos);
-  EXPECT_NE(contents.find("PublishTransferCandidate("), std::string::npos);
+  EXPECT_NE(contents.find("BeginLiveMerge("), std::string::npos);
+  EXPECT_NE(contents.find("CompleteLiveMerge("), std::string::npos);
+  EXPECT_EQ(contents.find("PreparePaste("), std::string::npos);
+  EXPECT_EQ(contents.find("PublishTransferCandidate("), std::string::npos);
+  EXPECT_EQ(contents.find("HistoryTransferCandidate"), std::string::npos);
 }
 
 }  // namespace

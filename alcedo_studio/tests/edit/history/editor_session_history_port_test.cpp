@@ -1518,5 +1518,138 @@ TEST(EditorSessionHistoryPortProjectTest,
   std::filesystem::remove(journal_path, ec);
 }
 
+/// Incompatible WAL must fail closed: EnsureWorkingState / Acquire reject load
+/// rather than silently discarding records or applying a broken prefix.
+TEST(EditorSessionHistoryPortProjectTest, LoadRejectsOrQuarantinesIncompatibleWal) {
+  RegisterAllOperators();
+  const auto stamp =
+      std::to_string(std::chrono::high_resolution_clock::now().time_since_epoch().count());
+  const auto db_path =
+      std::filesystem::temp_directory_path() / ("wal_incompatible_" + stamp + ".db");
+  const auto meta_path =
+      std::filesystem::temp_directory_path() / ("wal_incompatible_" + stamp + ".json");
+  const auto journal_path =
+      std::filesystem::temp_directory_path() / ("wal_incompatible_" + stamp + ".wal");
+  std::error_code ec;
+  std::filesystem::remove(db_path, ec);
+  std::filesystem::remove(meta_path, ec);
+  std::filesystem::remove(journal_path, ec);
+
+  constexpr sl_element_id_t element_id = 824;
+
+  {
+    alcedo::ProjectService project(db_path, meta_path, alcedo::ProjectOpenMode::kCreateNew);
+    auto pipeline_service =
+        std::make_shared<alcedo::PipelineMgmtService>(project.GetStorageService());
+    auto guard = pipeline_service->LoadEditorPipeline(element_id);
+    ASSERT_NE(guard, nullptr);
+    project.SaveProject(meta_path);
+  }
+
+  // Inject a journal edit whose parent is unknown — cannot extend logical head.
+  {
+    alcedo::MiniGitJournal journal(journal_path);
+    alcedo::OrdinaryEditPayload payload;
+    payload.operator_type  = alcedo::OperatorType::EXPOSURE;
+    payload.stage_name     = alcedo::PipelineStageName::Basic_Adjustment;
+    payload.field_name     = "$operator_params";
+    payload.before_value   = nlohmann::json(nullptr);
+    payload.before_enabled = false;
+    payload.after_value    = nlohmann::json{{"exposure", 9.9}};
+    payload.after_enabled  = true;
+    const auto orphan_parent =
+        alcedo::commit_hash_t{0xDEADBEEFDEADBEEFULL, 0xCAFEBABECAFEBABEULL};
+    auto edit = alcedo::EditCommit::MakeEdit(alcedo::root_id_t{}, orphan_parent, std::move(payload));
+    alcedo::MiniGitJournalRecord record;
+    record.kind                   = alcedo::MiniGitJournalRecordKind::kEditCommit;
+    record.expected_source_head   = orphan_parent;
+    record.edit_commit            = std::move(edit);
+    record.target_head            = record.edit_commit->GetCommitHash();
+    std::string journal_error;
+    ASSERT_TRUE(journal.Append(record, &journal_error)) << journal_error;
+  }
+
+  {
+    alcedo::ProjectService project(db_path, meta_path, alcedo::ProjectOpenMode::kLoadExisting);
+    auto pipeline_service =
+        std::make_shared<alcedo::PipelineMgmtService>(project.GetStorageService());
+    auto guard = pipeline_service->LoadEditorPipeline(element_id);
+    ASSERT_NE(guard, nullptr);
+    auto pipeline = std::make_shared<EditorSessionPipelinePort>();
+    pipeline->SetServices(EditorSessionPipelineServices{
+        [pipeline_service]() { return pipeline_service; },
+        [guard](sl_element_id_t) { return guard; }});
+
+    EditorSessionHistoryPort history;
+    history.SetServices(EditorSessionHistoryPort::Services{
+        [journal_path](sl_element_id_t) { return journal_path; }});
+    history.SetPipelinePort(pipeline);
+
+    std::string error;
+    const auto handle = history.Acquire(element_id, &error);
+    EXPECT_FALSE(handle.valid)
+        << "incompatible WAL must fail closed; Acquire should not succeed silently";
+    EXPECT_FALSE(error.empty()) << "failure must surface an explicit recovery error";
+  }
+
+  std::filesystem::remove(db_path, ec);
+  std::filesystem::remove(meta_path, ec);
+  std::filesystem::remove(journal_path, ec);
+}
+
+/// Lens portable-only conflict policy on the live pipeline: image-local meta
+/// on the target does not conflict with a package that carries the same portable
+/// correction intent but omits EXIF / profile identity keys (transfer capture shape).
+TEST_F(EditorSessionHistoryPortTest,
+       LensPortableOnlyConflictIgnoresStrippedMetaOnLivePipeline) {
+  std::string error;
+  const auto  handle = history_.Acquire(42, &error);
+  ASSERT_TRUE(handle.valid) << error;
+
+  nlohmann::json live_params;
+  {
+    std::unique_lock<std::mutex> lock(guard_->pipeline_->GetRenderLock());
+    auto& stage = guard_->pipeline_->GetStage(alcedo::PipelineStageName::Geometry_Adjustment);
+    const nlohmann::json full_lens = {
+        {"lens_calib",
+         {{"enabled", true},
+          {"apply_distortion", true},
+          {"cam_maker", "Canon"},
+          {"cam_model", "EOS R5"},
+          {"lens_model", "RF 24-70"}}}};
+    stage.SetOperator(alcedo::OperatorType::LENS_CALIBRATION, full_lens,
+                      guard_->pipeline_->GetGlobalParams());
+    const auto current = stage.GetOperator(alcedo::OperatorType::LENS_CALIBRATION);
+    ASSERT_TRUE(current.has_value() && current.value() != nullptr &&
+                current.value()->op_ != nullptr);
+    live_params = current.value()->op_->GetParams();
+  }
+  ASSERT_TRUE(live_params.contains("lens_calib") && live_params["lens_calib"].is_object());
+
+  // Transfer capture strips image-local keys only; portable correction intent remains.
+  nlohmann::json stripped = live_params;
+  for (const auto* key :
+       {"cam_maker", "cam_model", "lens_maker", "lens_model", "focal_length_mm",
+        "aperture_f_number", "distance_m", "focal_35mm_mm", "crop_factor_hint",
+        "lens_profile_db_path"}) {
+    stripped["lens_calib"].erase(key);
+  }
+
+  alcedo::AdjustmentTransferPackage package;
+  package.operators_.push_back({
+      .stage_         = alcedo::PipelineStageName::Geometry_Adjustment,
+      .operator_type_ = alcedo::OperatorType::LENS_CALIBRATION,
+      .enabled_       = true,
+      .merge_params_  = false,
+      .params_        = std::move(stripped),
+  });
+
+  alcedo::AdjustmentMergePreview preview;
+  ASSERT_TRUE(history_.BeginLiveMerge(handle, package, &preview, &error)) << error;
+  EXPECT_FALSE(preview.has_conflicts)
+      << "portable-only fields match; image-local meta on target must not conflict";
+  EXPECT_TRUE(preview.conflicts.empty());
+}
+
 }  // namespace
 }  // namespace alcedo::ui

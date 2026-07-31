@@ -78,36 +78,25 @@ class AdjustmentTransferService final {
                                                        std::string version_display_name)
       -> AdjustmentPasteResult;
 
-  /// Build an incoming root-relative branch and detect per-field conflicts between the current
-  /// active Version head and the incoming branch head. The incoming commits are inserted into
-  /// the graph and a temporary Version ref is created for the branch.
-  /// On return, has_conflicts indicates whether the UI must resolve fields before
-  /// CompleteMerge can be called.
+  /// Build an incoming root-relative branch and detect per-field conflicts against the live
+  /// pipeline operators (`DetectMergeConflict` on real op instances). Incoming commits are
+  /// inserted into the graph and a temporary Version ref is created for ancestry; production
+  /// editor merge uses `BeginLiveMerge` / `CompleteLiveMerge` instead and does not call this.
+  /// @return Preview with `has_conflicts` when the UI must resolve fields before CompleteMerge.
   [[nodiscard]] static auto InitiateMerge(CommitGraph& graph, PipelineMgmtService& pipeline_service,
                                           sl_element_id_t                  element_id,
                                           const AdjustmentTransferPackage& package,
                                           std::string incoming_version_display_name)
       -> AdjustmentMergePreview;
 
-  /// Pure merge preparation against a queue-owned immutable adjustment snapshot. This overload
-  /// never loads or locks a live pipeline executor.
-  [[nodiscard]] static auto InitiateMerge(
-      CommitGraph& graph, const AdjustmentTransferPackage& package,
-      const EditorRenderAdjustmentSnapshot& current_snapshot,
-      std::string incoming_version_display_name) -> AdjustmentMergePreview;
-
   /// Complete a merge after the UI has provided resolutions for every conflicting field.
-  /// Creates a two-parent merge commit (first = current Version head, second = incoming branch
-  /// head) with the resolved field delta and advances the active Version to the merge commit.
-  /// The incoming branch Version ref is retained for ancestry; it is not removed.
+  /// Resolves params via live pipeline operators (`MergeParams`), creates a two-parent merge
+  /// commit, advances the active Version, and removes the temporary incoming Version ref.
   [[nodiscard]] static auto CompleteMerge(CommitGraph& graph, PipelineMgmtService& pipeline_service,
+                                          sl_element_id_t                  element_id,
                                           const AdjustmentMergePreview&                 preview,
                                           const std::vector<AdjustmentMergeResolution>& resolutions)
       -> AdjustmentMergeResult;
-
-  [[nodiscard]] static auto CompleteMerge(
-      CommitGraph& graph, const AdjustmentMergePreview& preview,
-      const std::vector<AdjustmentMergeResolution>& resolutions) -> AdjustmentMergeResult;
 
   /// Discard the incoming branch created by InitiateMerge. No merge commit is created and the
   /// active Version is not moved. The incoming commits remain in the graph as unreachable
