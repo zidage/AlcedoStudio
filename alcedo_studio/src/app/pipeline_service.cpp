@@ -583,6 +583,7 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
     }
 
     if (!accepted_serialized_state) {
+      ++editor_pipeline_history_rebuild_count_;
       std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
       RebuildPipelineFromRoot(*pipeline->pipeline_, *graph, *root_state, accelerator_preference_);
       pipeline->serialized_state_needs_writeback_ = true;
@@ -1196,4 +1197,19 @@ void PipelineMgmtService::ReleasePipelineSnapshot(std::shared_ptr<PipelineSnapsh
     // Best-effort cleanup; the shared_ptr drops naturally regardless.
   }
 }
+
+auto CheckpointMatchesLogicalHead(const ImageEditState& state, head_commit_hash_t logical_head,
+                                  const transaction_chain_hash_t& logical_chain) -> bool {
+  if (state.serialized_pipeline_state.has_value()) {
+    const auto stored = DecodeSerializedPipelineState(*state.serialized_pipeline_state);
+    if (!stored.has_value()) {
+      return false;
+    }
+    return stored->root_id == state.root_id && stored->head_commit_hash == logical_head &&
+           stored->transaction_chain_hash == logical_chain;
+  }
+  return state.materialized_head_commit_hash == logical_head &&
+         state.materialized_transaction_chain_hash == logical_chain;
+}
+
 }  // namespace alcedo

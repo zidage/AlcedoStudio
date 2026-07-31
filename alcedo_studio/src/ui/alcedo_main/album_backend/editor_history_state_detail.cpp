@@ -95,6 +95,23 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
   state->history =
       std::make_unique<alcedo::MiniGitWorkingHistory>(guard->commit_graph_, journal);
 
+  // Algorithm D: after WAL attach, compare checkpoint identity to logical head.
+  // LoadEditorPipeline may have imported a stale checkpoint for the materialized
+  // head; when WAL extends the head, history wins and the live executor must
+  // follow the derived adjustment snapshot.
+  const auto& post_wal_state = guard->commit_graph_->GetImageEditState();
+  if (!alcedo::CheckpointMatchesLogicalHead(post_wal_state, guard->working_head_commit_hash_,
+                                            guard->transaction_chain_hash_)) {
+    if (guard->pipeline_) {
+      std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
+      if (!alcedo::ApplyEditorAdjustmentSnapshot(*guard->pipeline_, state->committed_snapshot,
+                                                 error)) {
+        return nullptr;
+      }
+    }
+    guard->serialized_state_needs_writeback_ = true;
+  }
+
   std::scoped_lock lock(mutex_);
   const auto [it, inserted] = working_states_.emplace(element_id, state);
   return inserted ? state : it->second;

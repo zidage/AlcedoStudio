@@ -5,8 +5,10 @@
 #include "ui/alcedo_main/album_backend/editor_history_mutation.hpp"
 
 #include <ctime>
+#include <mutex>
 #include <utility>
 
+#include "app/editor_adjustment_pipeline.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
@@ -24,6 +26,9 @@ auto EditorHistoryMutation::CaptureAdjustmentBeforePreview(
   if (!state) return false;
   if (state->pending_before.contains(patch.field_key)) return true;
 
+  // Before-values for the WAL come from the derived committed snapshot, not the
+  // live executor: interactive preview may have already moved the pipeline, and
+  // GetParams float round-trips must not redefine the previous committed edit.
   alcedo::EditorAdjustmentOperatorState before;
   if (!ReadCommittedAdjustmentState(state->committed_snapshot, patch.field_key, &before, error)) {
     return false;
@@ -76,8 +81,18 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
     payload.after_enabled = after_params.at("enabled").get<bool>();
   }
 
-  // Prepare the immutable target before publishing the journal/head transition. The render
-  // scheduler receives this candidate later and is the only owner allowed to touch the executor.
+  // Live pipeline is the mutation target; committed_snapshot is derived afterwards.
+  if (state->pipeline_guard->pipeline_) {
+    alcedo::EditorAdjustmentOperatorState after_state;
+    after_state.params  = payload.after_value;
+    after_state.enabled = payload.after_enabled;
+    std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
+    if (!alcedo::ApplyEditorAdjustmentOperatorState(*state->pipeline_guard->pipeline_, *spec,
+                                                    after_state, error)) {
+      return false;
+    }
+  }
+
   auto candidate = state->committed_snapshot;
   if (!ApplyCommittedPayloadToSnapshot(&candidate, payload, true, error)) return false;
   const auto prepared = state->history->PrepareAppendEdit(payload);
@@ -100,6 +115,18 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
   return true;
 }
 
+namespace {
+
+auto ApplyDerivedSnapshotToLivePipeline(HistoryWorkingState& state,
+                                        const alcedo::EditorRenderAdjustmentSnapshot& snapshot,
+                                        std::string* error) -> bool {
+  if (!state.pipeline_guard || !state.pipeline_guard->pipeline_) return true;
+  std::unique_lock<std::mutex> render_lock(state.pipeline_guard->pipeline_->GetRenderLock());
+  return alcedo::ApplyEditorAdjustmentSnapshot(*state.pipeline_guard->pipeline_, snapshot, error);
+}
+
+}  // namespace
+
 auto EditorHistoryMutation::Undo(const alcedo::EditorHistoryGuardHandle& guard,
                                  std::string* error) -> bool {
   auto state = state_.EnsureWorkingState(guard.element_id, error);
@@ -119,6 +146,7 @@ auto EditorHistoryMutation::Undo(const alcedo::EditorHistoryGuardHandle& guard,
                                        error)) {
     return false;
   }
+  if (!ApplyDerivedSnapshotToLivePipeline(*state, candidate, error)) return false;
   const auto published = state->history->PublishPreparedHeadMove(prepared);
   if (!published.moved) {
     if (error) *error = published.error.empty() ? "mini-Git undo publish failed" : published.error;
@@ -152,6 +180,7 @@ auto EditorHistoryMutation::Redo(const alcedo::EditorHistoryGuardHandle& guard,
                                        error)) {
     return false;
   }
+  if (!ApplyDerivedSnapshotToLivePipeline(*state, candidate, error)) return false;
   const auto published = state->history->PublishPreparedHeadMove(prepared);
   if (!published.moved) {
     if (error) *error = published.error.empty() ? "mini-Git redo publish failed" : published.error;
@@ -186,6 +215,7 @@ auto EditorHistoryMutation::MoveHeadToCommit(const alcedo::EditorHistoryGuardHan
                                        error)) {
     return false;
   }
+  if (!ApplyDerivedSnapshotToLivePipeline(*state, candidate, error)) return false;
   const auto published = state->history->PublishPreparedHeadMove(prepared);
   if (!published.moved) {
     if (error) {
@@ -237,6 +267,8 @@ auto EditorHistoryMutation::DiscardUnmaterializedChanges(
     }
     state->committed_snapshot = std::move(candidate);
   }
+
+  if (!ApplyDerivedSnapshotToLivePipeline(*state, state->committed_snapshot, error)) return false;
 
   if (state->journal && !state->journal->TruncateMaterialized(error)) return false;
   state->history->PublishWorkingSelection({});
@@ -315,6 +347,11 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
       if (error) *error = persistence_error;
       return false;
     }
+  }
+
+  if (!ApplyDerivedSnapshotToLivePipeline(*state, next_snapshot, error)) {
+    restore_prior();
+    return false;
   }
 
   state->committed_snapshot = std::move(next_snapshot);

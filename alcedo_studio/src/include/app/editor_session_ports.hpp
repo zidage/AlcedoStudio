@@ -177,11 +177,72 @@ class IEditorHistoryPort {
     return false;
   }
 
+  /// Paste onto the live CommitGraph and WAL, then apply package operators to
+  /// the live pipeline. Default fake records success without mutating state.
+  virtual auto PasteLiveRootRelativeVersion(const EditorHistoryGuardHandle& /*guard*/,
+                                            const AdjustmentTransferPackage& package,
+                                            std::string version_display_name,
+                                            AdjustmentPasteResult* result, std::string* error)
+      -> bool {
+    if (result == nullptr) {
+      if (error != nullptr) *error = "Paste result storage is required";
+      return false;
+    }
+    if (package.Empty()) {
+      if (error != nullptr) *error = "Adjustment transfer package is empty";
+      return false;
+    }
+    result->pasted = true;
+    result->prior_version_id = {};
+    result->new_version_id = Hash128{0xA57E000000000001ULL, 0xA57E000000000002ULL};
+    (void)version_display_name;
+    return true;
+  }
+
+  /// Cancel a live paste by restoring the prior Version and removing the paste Version.
+  virtual auto CancelLivePaste(const EditorHistoryGuardHandle& /*guard*/,
+                               const version_ref_id_t& /*prior_version_id*/,
+                               const version_ref_id_t& /*paste_version_id*/,
+                               std::string* /*error*/) -> bool {
+    return true;
+  }
+
+  /// Detect merge conflicts from the live pipeline without mutating the graph.
+  virtual auto BeginLiveMerge(const EditorHistoryGuardHandle& /*guard*/,
+                              const AdjustmentTransferPackage& package,
+                              AdjustmentMergePreview* preview, std::string* error) -> bool {
+    if (preview == nullptr) {
+      if (error != nullptr) *error = "Merge preview storage is required";
+      return false;
+    }
+    if (package.Empty()) {
+      if (error != nullptr) *error = "Adjustment transfer package is empty";
+      return false;
+    }
+    *preview = {};
+    return true;
+  }
+
+  /// Apply merge resolutions to the live pipeline and append one merge commit + WAL.
+  virtual auto CompleteLiveMerge(
+      const EditorHistoryGuardHandle& /*guard*/, const AdjustmentTransferPackage& /*package*/,
+      const AdjustmentMergePreview& /*preview*/,
+      const std::vector<AdjustmentMergeResolution>& /*resolutions*/, AdjustmentMergeResult* result,
+      std::string* error) -> bool {
+    if (result == nullptr) {
+      if (error != nullptr) *error = "Merge result storage is required";
+      return false;
+    }
+    result->merged = true;
+    return true;
+  }
+
   /// Build a Paste candidate without changing the published graph, Version
   /// selection, journal, or adjustment snapshot. The candidate is retained by
   /// the history port until CaptureTransferSaveCheckpoint and
   /// PublishTransferCandidate complete, or DiscardTransferCandidate is called.
   /// Default fakes retain the command inputs for later PublishTransferCandidate.
+  /// @deprecated Prefer PasteLiveRootRelativeVersion for production paste.
   virtual auto PreparePaste(const EditorHistoryGuardHandle& /*guard*/,
                             const AdjustmentTransferPackage& package,
                             std::string version_display_name,

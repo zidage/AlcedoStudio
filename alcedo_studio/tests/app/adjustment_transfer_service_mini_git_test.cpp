@@ -534,6 +534,8 @@ TEST(LensCalibOpMergePolicyTest, TakeIncomingKeepsTargetImageLocalMeta) {
 
 TEST_F(AdjustmentTransferPasteMergeTest,
        InitiateMergeColorTempBothAsShotHasNoConflictDespiteStrippedIncoming) {
+  // Live editor path uses BeginLiveMerge for conflict detection against the live
+  // pipeline; InitiateMerge remains the AdjustmentTransferService probe used here.
   const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
   auto*      graph      = project_.graph(element_id).get();
 
@@ -619,6 +621,8 @@ TEST_F(AdjustmentTransferPasteMergeTest,
   const auto& merge_commit = graph->GetCommit(result.merge_commit_hash);
   const auto  payload      = MergeEditPayload::FromJSON(merge_commit.GetPayloadJSON());
   ASSERT_EQ(payload.fields.size(), 1u);
+  EXPECT_EQ(payload.fields[0].before_value, preview.conflicts[0].current_value);
+  EXPECT_EQ(payload.fields[0].before_enabled, preview.conflicts[0].current_enabled);
   const auto& resolved = payload.fields[0].resolved_value["color_temp"];
   EXPECT_EQ(resolved.value("mode", std::string{}), "as_shot");
   EXPECT_DOUBLE_EQ(resolved.value("resolved_cct", 0.0), 4550.0);

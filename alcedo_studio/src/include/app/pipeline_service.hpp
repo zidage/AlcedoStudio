@@ -71,6 +71,8 @@ class PipelineMgmtService final {
 
   AcceleratorBackendPreference accelerator_preference_ = AcceleratorBackendPreference::Auto;
 
+  std::uint64_t editor_pipeline_history_rebuild_count_ = 0;
+
   void                         HandleEviction(sl_element_id_t evicted_id);
 
  public:
@@ -98,6 +100,15 @@ class PipelineMgmtService final {
   /// Thumbnail and export callers must continue to use LoadPipeline so they do not repeat this
   /// editor-only history validation.
   auto               LoadEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
+
+  /// Test/instrumentation counter: increments each time LoadEditorPipeline rebuilds from
+  /// first-parent history instead of importing the serialized checkpoint.
+  [[nodiscard]] auto EditorPipelineHistoryRebuildCount() const -> std::uint64_t {
+    return editor_pipeline_history_rebuild_count_;
+  }
+  void ResetEditorPipelineHistoryRebuildCountForTesting() {
+    editor_pipeline_history_rebuild_count_ = 0;
+  }
 
   /// Persist the current metadata-resolved pipeline as the immutable root for a newly imported
   /// image. Calling this again for an image that already has a root verifies and loads that root;
@@ -158,4 +169,18 @@ class PipelineMgmtService final {
   // shared_ptr then drops naturally. Not a storage write. No-op if null.
   void ReleasePipelineSnapshot(std::shared_ptr<PipelineSnapshot> snapshot);
 };
+
+/// Identity pair stored with a serialized pipeline checkpoint.
+struct PipelineCheckpointIdentity {
+  head_commit_hash_t       head  = std::nullopt;
+  transaction_chain_hash_t chain{};
+};
+
+/// True when `state`'s serialized checkpoint (or materialized tuple when no
+/// serialized blob is present) matches the logical head after WAL attach.
+[[nodiscard]] auto CheckpointMatchesLogicalHead(const ImageEditState& state,
+                                                head_commit_hash_t logical_head,
+                                                const transaction_chain_hash_t& logical_chain)
+    -> bool;
+
 }  // namespace alcedo

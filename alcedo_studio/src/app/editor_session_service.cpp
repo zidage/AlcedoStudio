@@ -530,12 +530,7 @@ auto EditorSessionService::CancelPendingMergeForNavigation(std::string* error) -
     if (error) *error = "Cannot navigate while editor Merge publication is in progress";
     return false;
   }
-  if (pending_merge_candidate_.has_value() &&
-      !dependencies_.history->DiscardTransferCandidate(lifecycle_.history_guard(),
-                                                       *pending_merge_candidate_, error)) {
-    if (error && error->empty()) *error = "Failed to discard the pending editor merge";
-    return false;
-  }
+  // Live merge preview does not stage a shadow graph; clear session state only.
   pending_merge_candidate_.reset();
   pending_merge_preview_.reset();
   active_merge_preview_id_.reset();
@@ -677,19 +672,32 @@ auto EditorSessionService::PasteAdjustments(const AdjustmentTransferPackage& pac
   if (lifecycle_.state() != EditorSessionState::Interactive || !dependencies_.history) {
     return Reject("Paste requires an interactive session");
   }
-  EditorTransferCandidate candidate;
   AdjustmentPasteResult paste_result;
   std::string           error;
-  if (!dependencies_.history->PreparePaste(lifecycle_.history_guard(), package,
-                                            std::move(version_display_name), &paste_result,
-                                            &candidate, &error)) {
-    return Reject(error.empty() ? "Editor Paste preparation failed" : std::move(error));
+  if (!dependencies_.history->PasteLiveRootRelativeVersion(
+          lifecycle_.history_guard(), package, std::move(version_display_name), &paste_result,
+          &error)) {
+    return Reject(error.empty() ? "Editor Paste failed" : std::move(error));
   }
+
+  EditorRenderAdjustmentSnapshot snapshot;
+  std::string                    snapshot_error;
+  if (!dependencies_.history->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &snapshot,
+                                                     &snapshot_error)) {
+    return Fail(snapshot_error.empty() ? "Failed to read snapshot after Paste"
+                                       : std::move(snapshot_error));
+  }
+  edit_.set_adjustment_snapshot(std::move(snapshot));
+  BumpHistoryRevision();
   AcquireLease(EditorOperationLeaseKind::PasteMaterialization, current_operation_id_,
                lifecycle_.identity().element_id, lifecycle_.identity().image_id,
                lifecycle_.active_image_load_request(), "Paste publication is in progress");
-  return StartTransferPublication(EditorSessionCommandKind::ApplyPaste, std::move(candidate),
-                                  nullptr, {}, "Adjustments pasted");
+  auto started = StartHistoryCheckpoint("Adjustments pasted", true);
+  if (started.kind == EditorSessionResultKind::Rejected ||
+      started.kind == EditorSessionResultKind::Failed) {
+    ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
+  }
+  return started;
 }
 
 auto EditorSessionService::BeginMerge(const AdjustmentTransferPackage& package,
@@ -719,24 +727,26 @@ auto EditorSessionService::BeginMerge(const AdjustmentTransferPackage& package,
     return Reject("Merge preview storage is required");
   }
   AdjustmentMergePreview next_preview;
-  EditorTransferCandidate candidate;
-  std::string             error;
-  if (!dependencies_.history->PrepareMerge(lifecycle_.history_guard(), package,
-                                            "Incoming Adjustments", &next_preview, &candidate,
-                                            &error)) {
+  std::string            error;
+  if (!dependencies_.history->BeginLiveMerge(lifecycle_.history_guard(), package, &next_preview,
+                                             &error)) {
     return Reject(error.empty() ? "Editor Merge failed to start" : std::move(error));
   }
   const bool has_conflicts = next_preview.has_conflicts;
   const auto preview_id = MergePreviewId{next_merge_preview_id_.value++};
   next_preview.preview_id = preview_id;
-  candidate.preview_id = preview_id;
-  pending_merge_preview_   = std::make_unique<AdjustmentMergePreview>(std::move(next_preview));
-  pending_merge_candidate_  = std::move(candidate);
-  active_merge_preview_id_  = preview_id;
-  AcquireLease(EditorOperationLeaseKind::MergePreview, current_operation_id_, lifecycle_.identity().element_id,
-               lifecycle_.identity().image_id, lifecycle_.active_image_load_request(),
-               "Merge preview is active");
-  *preview                 = *pending_merge_preview_;
+  // Retain the package for CompleteLiveMerge; no shadow graph candidate is staged.
+  EditorTransferCandidate package_holder;
+  package_holder.candidate_id = preview_id.value == 0 ? 1 : preview_id.value;
+  package_holder.preview_id   = preview_id;
+  package_holder.package      = package;
+  pending_merge_preview_      = std::make_unique<AdjustmentMergePreview>(std::move(next_preview));
+  pending_merge_candidate_    = std::move(package_holder);
+  active_merge_preview_id_    = preview_id;
+  AcquireLease(EditorOperationLeaseKind::MergePreview, current_operation_id_,
+               lifecycle_.identity().element_id, lifecycle_.identity().image_id,
+               lifecycle_.active_image_load_request(), "Merge preview is active");
+  *preview                = *pending_merge_preview_;
   EditorSessionResult result;
   result.kind     = EditorSessionResultKind::Accepted;
   result.state    = lifecycle_.state();
@@ -762,7 +772,7 @@ auto EditorSessionService::CompleteMerge(const std::vector<AdjustmentMergeResolu
     return Reject("No merge is awaiting resolution");
   }
   if (!pending_merge_candidate_.has_value()) {
-    return Reject("Merge candidate is unavailable");
+    return Reject("Merge package is unavailable");
   }
   if (!active_merge_preview_id_.has_value() ||
       pending_merge_preview_->preview_id != *active_merge_preview_id_ ||
@@ -770,33 +780,35 @@ auto EditorSessionService::CompleteMerge(const std::vector<AdjustmentMergeResolu
     return Reject("Merge preview is stale");
   }
   std::string error;
-  if (!dependencies_.history->ValidateMergeCandidate(lifecycle_.history_guard(),
-                                                      *pending_merge_preview_,
-                                                      *pending_merge_candidate_, &error)) {
-    return Reject(error.empty() ? "Merge preview is stale" : std::move(error));
-  }
   AdjustmentMergeResult merge_result;
-  auto candidate = *pending_merge_candidate_;
-  if (!dependencies_.history->CompleteMergeCandidate(
-          lifecycle_.history_guard(), *pending_merge_preview_, resolutions, &candidate,
-          &merge_result, &error)) {
+  if (!dependencies_.history->CompleteLiveMerge(
+          lifecycle_.history_guard(), pending_merge_candidate_->package, *pending_merge_preview_,
+          resolutions, &merge_result, &error)) {
     return Reject(error.empty() ? "Merge could not be completed" : std::move(error));
   }
   ReleaseLeasesByKind(EditorOperationLeaseKind::MergePreview);
+  pending_merge_candidate_.reset();
+  pending_merge_preview_.reset();
+  active_merge_preview_id_.reset();
+
+  EditorRenderAdjustmentSnapshot snapshot;
+  std::string                    snapshot_error;
+  if (!dependencies_.history->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &snapshot,
+                                                     &snapshot_error)) {
+    return Fail(snapshot_error.empty() ? "Failed to read snapshot after Merge"
+                                       : std::move(snapshot_error));
+  }
+  edit_.set_adjustment_snapshot(std::move(snapshot));
+  BumpHistoryRevision();
   AcquireLease(EditorOperationLeaseKind::MergeMaterialization, current_operation_id_,
                lifecycle_.identity().element_id, lifecycle_.identity().image_id,
                lifecycle_.active_image_load_request(), "Merge publication is in progress");
-  pending_transfer_publication_ = PendingTransferPublication{
-      EditorSessionCommandKind::CompleteMerge,
-      std::move(candidate),
-      std::make_shared<AdjustmentMergePreview>(*pending_merge_preview_),
-      resolutions,
-      "Adjustments merged"};
-  return StartTransferPublication(EditorSessionCommandKind::CompleteMerge,
-                                  pending_transfer_publication_->candidate,
-                                  pending_transfer_publication_->preview,
-                                  pending_transfer_publication_->merge_resolutions,
-                                  pending_transfer_publication_->success_message);
+  auto started = StartHistoryCheckpoint("Adjustments merged", true);
+  if (started.kind == EditorSessionResultKind::Rejected ||
+      started.kind == EditorSessionResultKind::Failed) {
+    ReleaseLeasesByKind(EditorOperationLeaseKind::MergeMaterialization);
+  }
+  return started;
 }
 
 auto EditorSessionService::CancelMerge() -> EditorSessionResult {
@@ -815,12 +827,7 @@ auto EditorSessionService::CancelMerge() -> EditorSessionResult {
   if (pending_transfer_publication_.has_value()) {
     return Reject("Merge publication is in progress");
   }
-  std::string error;
-  if (pending_merge_candidate_.has_value() &&
-      !dependencies_.history->DiscardTransferCandidate(lifecycle_.history_guard(),
-                                                       *pending_merge_candidate_, &error)) {
-    return Reject(error.empty() ? "Merge cancellation failed" : std::move(error));
-  }
+  // BeginLiveMerge does not mutate graph/pipeline; cancel is a session-state clear only.
   pending_merge_candidate_.reset();
   pending_merge_preview_.reset();
   active_merge_preview_id_.reset();
@@ -1206,6 +1213,8 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
   }
   const auto marker = std::move(*pending_history_checkpoint_);
   pending_history_checkpoint_.reset();
+  ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
+  ReleaseLeasesByKind(EditorOperationLeaseKind::MergeMaterialization);
 
   EditorSessionResult published;
   published.identity = lifecycle_.identity();

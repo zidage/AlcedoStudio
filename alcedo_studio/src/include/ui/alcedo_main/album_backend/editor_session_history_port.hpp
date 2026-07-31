@@ -86,6 +86,25 @@ class EditorSessionHistoryPort final : public alcedo::IEditorHistoryPort {
   auto CancelMerge(const alcedo::EditorHistoryGuardHandle& guard,
                    const alcedo::AdjustmentMergePreview& preview, std::string* error)
       -> bool override;
+  auto PasteLiveRootRelativeVersion(const alcedo::EditorHistoryGuardHandle& guard,
+                                    const alcedo::AdjustmentTransferPackage& package,
+                                    std::string version_display_name,
+                                    alcedo::AdjustmentPasteResult* result, std::string* error)
+      -> bool override;
+  auto CancelLivePaste(const alcedo::EditorHistoryGuardHandle& guard,
+                       const alcedo::version_ref_id_t& prior_version_id,
+                       const alcedo::version_ref_id_t& paste_version_id, std::string* error)
+      -> bool override;
+  auto BeginLiveMerge(const alcedo::EditorHistoryGuardHandle& guard,
+                      const alcedo::AdjustmentTransferPackage& package,
+                      alcedo::AdjustmentMergePreview* preview, std::string* error)
+      -> bool override;
+  auto CompleteLiveMerge(const alcedo::EditorHistoryGuardHandle& guard,
+                         const alcedo::AdjustmentTransferPackage& package,
+                         const alcedo::AdjustmentMergePreview& preview,
+                         const std::vector<alcedo::AdjustmentMergeResolution>& resolutions,
+                         alcedo::AdjustmentMergeResult* result, std::string* error)
+      -> bool override;
   auto PreparePaste(const alcedo::EditorHistoryGuardHandle& guard,
                     const alcedo::AdjustmentTransferPackage& package,
                     std::string version_display_name, alcedo::AdjustmentPasteResult* result,
