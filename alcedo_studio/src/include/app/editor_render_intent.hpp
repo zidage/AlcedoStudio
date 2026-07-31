@@ -236,6 +236,33 @@ struct EditorRenderResult {
   return reason == EditorRenderReason::ZoomPan || reason == EditorRenderReason::Resize;
 }
 
+/// Whether prepare may call ApplyEditorAdjustmentSnapshot for this reason.
+///
+/// Pipeline operators are updated incrementally when a field changes
+/// (SetOperator + SetGlobalParams). Replaying a full adjustment snapshot every
+/// frame is only correct for content-bearing renders (open, edit, undo, crop
+/// commit). View-dependent work (Detail ROI, scope ROI, pure zoom/pan/resize)
+/// must only retarget Geometry render params (RESIZE ROI / user crop) so
+/// Image Loading caches such as RAW_DECODE stay warm.
+[[nodiscard]] inline auto ReasonAppliesAdjustmentSnapshot(EditorRenderReason reason) -> bool {
+  switch (reason) {
+    case EditorRenderReason::ZoomPan:
+    case EditorRenderReason::Resize:
+    case EditorRenderReason::DetailRefresh:
+    case EditorRenderReason::ScopeRefresh:
+      return false;
+    case EditorRenderReason::InitialFrame:
+    case EditorRenderReason::InteractiveAdjustment:
+    case EditorRenderReason::SettledAdjustment:
+    case EditorRenderReason::UndoRedo:
+    case EditorRenderReason::ImageSwitch:
+    case EditorRenderReason::Retry:
+    case EditorRenderReason::CropRotate:
+      return true;
+  }
+  return true;
+}
+
 /// Scope reads image content, so view-only re-sampling and view-dependent ROI
 /// refreshes retain the last content frame instead of replacing the scope input.
 [[nodiscard]] inline auto ScopeUpdateAllowedForReason(EditorRenderReason reason) -> bool {

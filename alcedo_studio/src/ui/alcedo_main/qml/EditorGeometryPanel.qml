@@ -415,20 +415,17 @@ Item {
             return
         if (root.inputActive)
             return
-        var normalizedSnapshot = snapshot
-        try {
-            normalizedSnapshot = JSON.parse(JSON.stringify(snapshot))
-        } catch (error) {
-            normalizedSnapshot = snapshot
-        }
+        // Read-only projection of crop/lens entries — do not deep-clone the full
+        // adjustment map (settled tone/look echo used to JSON.stringify the whole
+        // snapshot on every fan-out). Nested loaders only read their field keys.
         if (!root.aspectEntries.length) {
             root.aspectEntries = root.buildAspectEntries()
             aspectModel.entries = root.aspectEntries
         }
         if (!root.lensBrandEntries.length)
             root.refreshLensBrandEntries()
-        root.loadCropSnapshot(normalizedSnapshot)
-        root.loadLensSnapshot(normalizedSnapshot)
+        root.loadCropSnapshot(snapshot)
+        root.loadLensSnapshot(snapshot)
         root.draftDirty = false
         if (root.panelActive)
             root.syncToInteraction()

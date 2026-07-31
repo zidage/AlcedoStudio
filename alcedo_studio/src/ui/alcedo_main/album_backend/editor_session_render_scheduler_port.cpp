@@ -421,23 +421,37 @@ auto EditorSessionRenderSchedulerPort::TryProducePipelineFrame(
     task.options_.is_callback_                                         = false;
     task.options_.is_seq_callback_                                     = false;
     task.options_.is_blocking_                                         = true;
-    task.prepare_with_render_lock_ = [snapshot              = request.intent.adjustment, sink,
-                                      geometry_overlay_only = request.intent.geometry_overlay_only](
-                                         alcedo::PipelineTask& locked_task) {
-      auto locked_exec = locked_task.pipeline_executor_;
-      if (!locked_exec) return false;
-      std::string apply_error;
-      if (!alcedo::ApplyEditorAdjustmentSnapshot(*locked_exec, snapshot, &apply_error)) {
-        throw std::runtime_error(apply_error.empty() ? "Failed to apply editor adjustment"
-                                                     : apply_error);
-      }
-      if (geometry_overlay_only) {
-        alcedo::DisableEditorGeometryOperatorForOverlay(*locked_exec);
-      }
-      controllers::EnsureLoadingOperatorDefaults(locked_exec);
-      controllers::AttachExecutionStages(locked_exec, sink);
-      return true;
-    };
+    // Content renders install operator params (SetOperator + SetGlobalParams).
+    // View-dependent ROI/detail/scope frames only retarget Geometry via
+    // SetExecutorRenderParams (RESIZE ROI); replaying the full adjustment
+    // snapshot every pan/zoom would thrash Image Loading (RAW_DECODE) cache.
+    const bool apply_adjustment =
+        alcedo::ReasonAppliesAdjustmentSnapshot(request.intent.reason);
+    task.prepare_with_render_lock_ =
+        [snapshot              = request.intent.adjustment, sink,
+         geometry_overlay_only = request.intent.geometry_overlay_only,
+         apply_adjustment](alcedo::PipelineTask& locked_task) {
+          auto locked_exec = locked_task.pipeline_executor_;
+          if (!locked_exec) return false;
+          if (apply_adjustment) {
+            std::string apply_error;
+            if (!alcedo::ApplyEditorAdjustmentSnapshot(*locked_exec, snapshot, &apply_error)) {
+              throw std::runtime_error(apply_error.empty() ? "Failed to apply editor adjustment"
+                                                           : apply_error);
+            }
+            // Never touch Image Loading defaults on tone/color slider frames —
+            // EnsureLoadingOperatorDefaults can SetOperator(RAW_DECODE) and
+            // wipe the demosaic cache even when the edit only moved exposure.
+            if (alcedo::SnapshotTouchesImageLoading(snapshot)) {
+              controllers::EnsureLoadingOperatorDefaults(locked_exec);
+            }
+          }
+          if (geometry_overlay_only) {
+            alcedo::DisableEditorGeometryOperatorForOverlay(*locked_exec);
+          }
+          controllers::AttachExecutionStages(locked_exec, sink);
+          return true;
+        };
     auto promise = std::make_shared<std::promise<std::shared_ptr<alcedo::ImageBuffer>>>();
     auto future  = promise->get_future();
     task.result_ = promise;

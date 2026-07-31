@@ -65,6 +65,23 @@ TEST_F(EditorAdjustmentPipelineTest, LatestSnapshotCanUpdateExistingFieldAgain) 
                   1.25f);
 }
 
+TEST_F(EditorAdjustmentPipelineTest, SnapshotTouchesImageLoadingDetectsRawAndFullPipeline) {
+  EditorRenderAdjustmentSnapshot tone_only;
+  tone_only.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":0.5})", false}};
+  EXPECT_FALSE(SnapshotTouchesImageLoading(tone_only));
+
+  EditorRenderAdjustmentSnapshot raw_patch;
+  raw_patch.patches = {EditorAdjustmentPatch{"raw_decode", R"({"raw":{"method":"default"}})", true}};
+  EXPECT_TRUE(SnapshotTouchesImageLoading(raw_patch));
+
+  EditorRenderAdjustmentSnapshot full;
+  full.params_json = R"({"Image Loading":{},"Basic Adjustment":{}})";
+  EXPECT_TRUE(SnapshotTouchesImageLoading(full));
+}
+
+// Content-path regression: re-applying an unchanged Image Loading operator must
+// not clear stage cache. View/detail/scope renders must not call this API at
+// all (see ReasonAppliesAdjustmentSnapshot); if they do, RAW_DECODE misses.
 TEST_F(EditorAdjustmentPipelineTest,
        PreservesLensCalibrationCacheWhenCumulativeSnapshotReappliesLensPatch) {
   CPUPipelineExecutor executor(true);

@@ -171,6 +171,7 @@ Item {
     Component.onCompleted: {
         wireEnabled()
         applyDeclaredDefaults()
+        // Bootstrap when the stack has not yet projected.
         loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
     }
     onEditorSessionChanged: {
