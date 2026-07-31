@@ -141,6 +141,7 @@ Dialog {
             var useIncoming = choice.choice === "incoming"
             resolutions.push({
                 fieldKey: conflict.fieldKey,
+                choice: choice.choice,
                 resolvedValue: useIncoming ? conflict.incomingValue : conflict.currentValue,
                 resolvedEnabled: useIncoming
                                   ? Boolean(conflict.incomingEnabled)

@@ -130,8 +130,8 @@ auto PreviewMap(const alcedo::AdjustmentMergePreview& preview) -> QVariantMap {
         {"fieldKey", QString::fromStdString(conflict.field_key)},
         {"currentValue", JsonToVariant(conflict.current_value)},
         {"incomingValue", JsonToVariant(conflict.incoming_value)},
-        {"currentEnabled", true},
-        {"incomingEnabled", true},
+        {"currentEnabled", conflict.current_enabled},
+        {"incomingEnabled", conflict.incoming_enabled},
     });
   }
   QVariantMap result{
@@ -700,8 +700,14 @@ auto AdjustmentTransferController::CompleteMergeIntoEditor(QObject*            e
     AdjustmentMergeResolution resolution;
     resolution.field_key        = field_key.toStdString();
     resolution.resolved_enabled = map.value("resolvedEnabled", true).toBool();
-    const auto resolved_value   = map.value("resolvedValue");
-    const auto qvalue           = QJsonValue::fromVariant(resolved_value);
+    const auto choice_text      = map.value("choice").toString().trimmed().toLower();
+    if (choice_text == QStringLiteral("incoming")) {
+      resolution.choice = OperatorMergeChoice::kTakeIncoming;
+    } else if (choice_text == QStringLiteral("current")) {
+      resolution.choice = OperatorMergeChoice::kKeepCurrent;
+    }
+    const auto resolved_value = map.value("resolvedValue");
+    const auto qvalue         = QJsonValue::fromVariant(resolved_value);
     if (qvalue.isObject() || qvalue.isArray()) {
       const auto document =
           qvalue.isObject() ? QJsonDocument(qvalue.toObject()) : QJsonDocument(qvalue.toArray());

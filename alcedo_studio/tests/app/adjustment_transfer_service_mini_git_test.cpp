@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <mutex>
 #include <string>
 
 #include "app/adjustment_transfer_service.hpp"
@@ -13,7 +14,10 @@
 #include "edit/history/commit_types.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/version_ref.hpp"
+#include "edit/operators/basic/color_temp_op.hpp"
+#include "edit/operators/geometry/lens_calib_op.hpp"
 #include "edit/operators/op_base.hpp"
+#include "edit/pipeline/pipeline_cpu.hpp"
 #include "support/editor_mini_git_project_fixture.hpp"
 
 namespace alcedo {
@@ -433,6 +437,194 @@ TEST_F(AdjustmentTransferPasteMergeTest, MergeCommitAppearsInFirstParentChain) {
     }
   }
   EXPECT_TRUE(found_merge);
+}
+
+// ============================================================================
+// Operator-owned merge policy (color_temp / lens_calib)
+// ============================================================================
+
+TEST(ColorTempOpMergePolicyTest, BothAsShotDoesNotConflictEvenWhenCctDiffers) {
+  ColorTempOp op;
+  const nlohmann::json current = {
+      {"color_temp",
+       {{"mode", "as_shot"}, {"cct", 5200.0}, {"tint", -3.0}, {"resolved_cct", 5200.0},
+        {"resolved_tint", -3.0}}}};
+  const nlohmann::json incoming = {{"color_temp", {{"mode", "as_shot"}}}};
+  EXPECT_FALSE(op.DetectMergeConflict(current, incoming));
+}
+
+TEST(ColorTempOpMergePolicyTest, CustomVersusAsShotConflicts) {
+  ColorTempOp op;
+  const nlohmann::json current = {
+      {"color_temp",
+       {{"mode", "custom"}, {"cct", 7000.0}, {"tint", 10.0}, {"resolved_cct", 5200.0},
+        {"resolved_tint", -3.0}}}};
+  const nlohmann::json incoming = {{"color_temp", {{"mode", "as_shot"}}}};
+  EXPECT_TRUE(op.DetectMergeConflict(current, incoming));
+}
+
+TEST(ColorTempOpMergePolicyTest, TakeIncomingAsShotPreservesCurrentAsShotBaseline) {
+  ColorTempOp op;
+  const nlohmann::json current = {
+      {"color_temp",
+       {{"mode", "custom"}, {"cct", 7000.0}, {"tint", 10.0}, {"resolved_cct", 5200.0},
+        {"resolved_tint", -3.0}}}};
+  const nlohmann::json incoming = {{"color_temp", {{"mode", "as_shot"}}}};
+  const auto merged =
+      op.MergeParams(current, incoming, OperatorMergeChoice::kTakeIncoming);
+  ASSERT_TRUE(merged.contains("color_temp"));
+  const auto& ct = merged["color_temp"];
+  EXPECT_EQ(ct.value("mode", std::string{}), "as_shot");
+  EXPECT_DOUBLE_EQ(ct.value("resolved_cct", 0.0), 5200.0);
+  EXPECT_DOUBLE_EQ(ct.value("resolved_tint", 0.0), -3.0);
+  EXPECT_DOUBLE_EQ(ct.value("cct", 0.0), 5200.0);
+  EXPECT_DOUBLE_EQ(ct.value("tint", 0.0), -3.0);
+}
+
+TEST(ColorTempOpMergePolicyTest, SetParamsAsShotWithoutResolvedKeepsExistingResolved) {
+  ColorTempOp op;
+  op.SetParams({{"color_temp",
+                 {{"mode", "custom"},
+                  {"cct", 7000.0},
+                  {"tint", 12.0},
+                  {"resolved_cct", 4800.0},
+                  {"resolved_tint", -5.0}}}});
+  op.SetParams({{"color_temp", {{"mode", "as_shot"}}}});
+  const auto params = op.GetParams()["color_temp"];
+  EXPECT_EQ(params.value("mode", std::string{}), "as_shot");
+  EXPECT_DOUBLE_EQ(params.value("resolved_cct", 0.0), 4800.0);
+  EXPECT_DOUBLE_EQ(params.value("resolved_tint", 0.0), -5.0);
+  // GetParams projects resolved into cct/tint while mode is as_shot.
+  EXPECT_DOUBLE_EQ(params.value("cct", 0.0), 4800.0);
+  EXPECT_DOUBLE_EQ(params.value("tint", 0.0), -5.0);
+}
+
+TEST(LensCalibOpMergePolicyTest, ImageLocalMetaDoesNotForceConflictWhenPortableMatches) {
+  LensCalibOp op;
+  const nlohmann::json current = {
+      {"lens_calib",
+       {{"enabled", true},
+        {"apply_distortion", true},
+        {"cam_maker", "Canon"},
+        {"cam_model", "EOS R5"},
+        {"lens_model", "RF 24-70"}}}};
+  const nlohmann::json incoming = {
+      {"lens_calib", {{"enabled", true}, {"apply_distortion", true}}}};
+  EXPECT_FALSE(op.DetectMergeConflict(current, incoming));
+}
+
+TEST(LensCalibOpMergePolicyTest, TakeIncomingKeepsTargetImageLocalMeta) {
+  LensCalibOp op;
+  const nlohmann::json current = {
+      {"lens_calib",
+       {{"enabled", false},
+        {"apply_distortion", true},
+        {"cam_maker", "Nikon"},
+        {"lens_model", "Target Lens"}}}};
+  const nlohmann::json incoming = {
+      {"lens_calib", {{"enabled", true}, {"apply_distortion", false}}}};
+  const auto merged =
+      op.MergeParams(current, incoming, OperatorMergeChoice::kTakeIncoming);
+  const auto& lc = merged["lens_calib"];
+  EXPECT_TRUE(lc.value("enabled", false));
+  EXPECT_FALSE(lc.value("apply_distortion", true));
+  EXPECT_EQ(lc.value("cam_maker", std::string{}), "Nikon");
+  EXPECT_EQ(lc.value("lens_model", std::string{}), "Target Lens");
+}
+
+TEST_F(AdjustmentTransferPasteMergeTest,
+       InitiateMergeColorTempBothAsShotHasNoConflictDespiteStrippedIncoming) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+  auto*      graph      = project_.graph(element_id).get();
+
+  auto guard = pipeline_service_->LoadPipeline(element_id);
+  ASSERT_TRUE(guard && guard->pipeline_);
+  {
+    std::unique_lock<std::mutex> lock(guard->pipeline_->GetRenderLock());
+    auto&                        to_ws = guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
+    const nlohmann::json full_as_shot = {
+        {"color_temp",
+         {{"mode", "as_shot"},
+          {"cct", 5123.0},
+          {"tint", -7.5},
+          {"resolved_cct", 5123.0},
+          {"resolved_tint", -7.5}}}};
+    to_ws.SetOperator(OperatorType::COLOR_TEMP, full_as_shot, guard->pipeline_->GetGlobalParams());
+  }
+  pipeline_service_->SavePipeline(guard);
+
+  AdjustmentTransferPackage package;
+  package.operators_.push_back({
+      .stage_         = PipelineStageName::To_WorkingSpace,
+      .operator_type_ = OperatorType::COLOR_TEMP,
+      .enabled_       = true,
+      .merge_params_  = false,
+      .params_        = {{"color_temp", {{"mode", "as_shot"}}}},
+  });
+
+  auto preview = AdjustmentTransferService::InitiateMerge(*graph, *pipeline_service_, element_id,
+                                                          package, "Merge WB");
+  ASSERT_TRUE(preview.error.empty()) << preview.error;
+  EXPECT_FALSE(preview.has_conflicts);
+  EXPECT_TRUE(preview.conflicts.empty());
+}
+
+TEST_F(AdjustmentTransferPasteMergeTest,
+       CompleteMergeTakeIncomingAsShotKeepsTargetResolvedBaseline) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+  auto*      graph      = project_.graph(element_id).get();
+
+  auto guard = pipeline_service_->LoadPipeline(element_id);
+  ASSERT_TRUE(guard && guard->pipeline_);
+  {
+    std::unique_lock<std::mutex> lock(guard->pipeline_->GetRenderLock());
+    auto&                        to_ws = guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
+    const nlohmann::json custom = {
+        {"color_temp",
+         {{"mode", "custom"},
+          {"cct", 7000.0},
+          {"tint", 15.0},
+          {"resolved_cct", 4550.0},
+          {"resolved_tint", -2.0}}}};
+    to_ws.SetOperator(OperatorType::COLOR_TEMP, custom, guard->pipeline_->GetGlobalParams());
+  }
+  pipeline_service_->SavePipeline(guard);
+
+  AdjustmentTransferPackage package;
+  package.operators_.push_back({
+      .stage_         = PipelineStageName::To_WorkingSpace,
+      .operator_type_ = OperatorType::COLOR_TEMP,
+      .enabled_       = true,
+      .merge_params_  = false,
+      .params_        = {{"color_temp", {{"mode", "as_shot"}}}},
+  });
+
+  auto preview = AdjustmentTransferService::InitiateMerge(*graph, *pipeline_service_, element_id,
+                                                          package, "Merge WB Custom");
+  ASSERT_TRUE(preview.error.empty()) << preview.error;
+  ASSERT_TRUE(preview.has_conflicts);
+  ASSERT_EQ(preview.conflicts.size(), 1u);
+
+  std::vector<AdjustmentMergeResolution> resolutions;
+  resolutions.push_back({
+      .field_key         = preview.conflicts[0].field_key,
+      .choice            = OperatorMergeChoice::kTakeIncoming,
+      .resolved_value    = preview.conflicts[0].incoming_value,
+      .resolved_enabled  = true,
+  });
+  auto result =
+      AdjustmentTransferService::CompleteMerge(*graph, *pipeline_service_, preview, resolutions);
+  ASSERT_TRUE(result.merged) << result.error;
+
+  const auto& merge_commit = graph->GetCommit(result.merge_commit_hash);
+  const auto  payload      = MergeEditPayload::FromJSON(merge_commit.GetPayloadJSON());
+  ASSERT_EQ(payload.fields.size(), 1u);
+  const auto& resolved = payload.fields[0].resolved_value["color_temp"];
+  EXPECT_EQ(resolved.value("mode", std::string{}), "as_shot");
+  EXPECT_DOUBLE_EQ(resolved.value("resolved_cct", 0.0), 4550.0);
+  EXPECT_DOUBLE_EQ(resolved.value("resolved_tint", 0.0), -2.0);
+  EXPECT_DOUBLE_EQ(resolved.value("cct", 0.0), 4550.0);
+  EXPECT_DOUBLE_EQ(resolved.value("tint", 0.0), -2.0);
 }
 }  // namespace
 }  // namespace alcedo

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -14,6 +15,9 @@
 #include <utility>
 
 #include "app/editor_adjustment_pipeline.hpp"
+#include "edit/operators/basic/color_temp_op.hpp"
+#include "edit/operators/geometry/lens_calib_op.hpp"
+#include "edit/operators/operator_factory.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 #include "type/hash_type.hpp"
 
@@ -551,6 +555,59 @@ auto MergeConflictFieldKey(const AdjustmentTransferEntry& entry) -> std::string 
   return key;
 }
 
+/// Probe operator used only for merge policy (DetectMergeConflict / MergeParams).
+/// Known operators that override merge semantics are constructed directly so policy
+/// does not depend on factory registration order. Others use the factory when
+/// available, otherwise default full-JSON compare / wholesale pick.
+auto MakeMergePolicyProbe(OperatorType op_type) -> std::shared_ptr<IOperatorBase> {
+  switch (op_type) {
+    case OperatorType::COLOR_TEMP:
+      return std::make_shared<ColorTempOp>();
+    case OperatorType::LENS_CALIBRATION:
+      return std::make_shared<LensCalibOp>();
+    default:
+      break;
+  }
+  if (auto probe = OperatorFactory::Instance().Create(op_type)) {
+    return probe;
+  }
+  struct DefaultMergePolicy final : IOperatorBase {
+    void Apply(std::shared_ptr<ImageBuffer>) override {}
+    void ApplyGPU(std::shared_ptr<ImageBuffer>) override {}
+    auto GetParams() const -> nlohmann::json override { return nlohmann::json::object(); }
+    void SetParams(const nlohmann::json&) override {}
+    void SetGlobalParams(OperatorParams&) const override {}
+    void EnableGlobalParams(OperatorParams&, bool) override {}
+    auto GetScriptName() const -> std::string override { return {}; }
+    auto GetPriorityLevel() const -> PriorityLevel override { return 0; }
+    auto GetStage() const -> PipelineStageName override { return PipelineStageName::Stage_Count; }
+    auto GetOperatorType() const -> OperatorType override { return OperatorType::UNKNOWN; }
+  };
+  return std::make_shared<DefaultMergePolicy>();
+}
+
+auto ParamsHaveMergeConflict(OperatorType op_type, const nlohmann::json& current,
+                             const nlohmann::json& incoming) -> bool {
+  return MakeMergePolicyProbe(op_type)->DetectMergeConflict(current, incoming);
+}
+
+auto ResolveMergedParams(OperatorType op_type, const nlohmann::json& current,
+                         const nlohmann::json& incoming, OperatorMergeChoice choice)
+    -> nlohmann::json {
+  return MakeMergePolicyProbe(op_type)->MergeParams(current, incoming, choice);
+}
+
+auto InferMergeChoice(const AdjustmentMergeResolution& resolution,
+                      const AdjustmentMergeConflict& conflict) -> OperatorMergeChoice {
+  if (resolution.choice.has_value()) {
+    return *resolution.choice;
+  }
+  if (resolution.resolved_value == conflict.incoming_value) {
+    return OperatorMergeChoice::kTakeIncoming;
+  }
+  return OperatorMergeChoice::kKeepCurrent;
+}
+
 auto ReadSnapshotField(const EditorRenderAdjustmentSnapshot& snapshot, const std::string& field_key,
                        nlohmann::json* params, bool* enabled, std::string* error) -> bool {
   if (!ResolveEditorAdjustmentField(field_key).has_value()) {
@@ -725,14 +782,18 @@ auto AdjustmentTransferService::InitiateMerge(CommitGraph&                     g
         MergeJsonObjectMiniGit(incoming_value, entry.params_);
       }
 
-      // Conflict: value or enabled state differs.
-      if (current_value != incoming_value || current_enabled != entry.enabled_) {
+      // Operator owns portable-intent conflict policy (image-local fields ignored).
+      const bool params_conflict =
+          ParamsHaveMergeConflict(entry.operator_type_, current_value, incoming_value);
+      if (params_conflict || current_enabled != entry.enabled_) {
         AdjustmentMergeConflict conflict;
-        conflict.stage          = entry.stage_;
-        conflict.operator_type  = entry.operator_type_;
-        conflict.field_key      = MergeConflictFieldKey(entry);
-        conflict.current_value  = std::move(current_value);
-        conflict.incoming_value = std::move(incoming_value);
+        conflict.stage             = entry.stage_;
+        conflict.operator_type     = entry.operator_type_;
+        conflict.field_key         = MergeConflictFieldKey(entry);
+        conflict.current_value     = std::move(current_value);
+        conflict.incoming_value    = std::move(incoming_value);
+        conflict.current_enabled   = current_enabled;
+        conflict.incoming_enabled  = entry.enabled_;
         preview.conflicts.push_back(std::move(conflict));
       }
     }
@@ -793,13 +854,17 @@ auto AdjustmentTransferService::InitiateMerge(
       incoming_value = current_value;
       MergeJsonObjectMiniGit(incoming_value, entry.params_);
     }
-    if (current_value != incoming_value || current_enabled != entry.enabled_) {
+    const bool params_conflict =
+        ParamsHaveMergeConflict(entry.operator_type_, current_value, incoming_value);
+    if (params_conflict || current_enabled != entry.enabled_) {
       AdjustmentMergeConflict conflict;
-      conflict.stage          = entry.stage_;
-      conflict.operator_type = entry.operator_type_;
-      conflict.field_key     = MergeConflictFieldKey(entry);
-      conflict.current_value  = current_value;
-      conflict.incoming_value = std::move(incoming_value);
+      conflict.stage            = entry.stage_;
+      conflict.operator_type    = entry.operator_type_;
+      conflict.field_key        = MergeConflictFieldKey(entry);
+      conflict.current_value    = current_value;
+      conflict.incoming_value   = std::move(incoming_value);
+      conflict.current_enabled  = current_enabled;
+      conflict.incoming_enabled = entry.enabled_;
       preview.conflicts.push_back(std::move(conflict));
     }
   }
@@ -841,12 +906,17 @@ auto AdjustmentTransferService::CompleteMerge(
       continue;  // Resolution for unknown field, skip.
     }
 
+    const auto choice = InferMergeChoice(resolution, *conflict);
     MergeFieldDelta delta;
-    delta.operator_type    = conflict->operator_type;
-    delta.stage_name       = conflict->stage;
-    delta.field_name       = "$operator_params";
-    delta.resolved_value   = resolution.resolved_value;
-    delta.resolved_enabled = resolution.resolved_enabled;
+    delta.operator_type = conflict->operator_type;
+    delta.stage_name    = conflict->stage;
+    delta.field_name    = "$operator_params";
+    // Operator rehydrates image-local fields when taking a stripped incoming payload.
+    delta.resolved_value = ResolveMergedParams(conflict->operator_type, conflict->current_value,
+                                               conflict->incoming_value, choice);
+    delta.resolved_enabled = choice == OperatorMergeChoice::kTakeIncoming
+                                 ? conflict->incoming_enabled
+                                 : conflict->current_enabled;
     merge_payload.fields.push_back(std::move(delta));
   }
 
