@@ -588,6 +588,24 @@ TEST_F(EditorRenderCoordinatorTest, IsTheOnlySchedulerCallerThroughSubmitPort) {
 // ---------------------------------------------------------------------------
 // Phase 5D per-reason coordinator decisions (D2 reuse-vs-render, A1).
 
+TEST(EditorRenderIntentPolicyTest, ViewDependentReasonsDoNotReplayAdjustmentSnapshot) {
+  // Operator params are applied incrementally on content change. Detail ROI /
+  // scope ROI / pure view transforms must not re-ApplyEditorAdjustmentSnapshot
+  // (that path thrash-invalidates Image Loading / RAW_DECODE).
+  EXPECT_FALSE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::ZoomPan));
+  EXPECT_FALSE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::Resize));
+  EXPECT_FALSE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::DetailRefresh));
+  EXPECT_FALSE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::ScopeRefresh));
+
+  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::InitialFrame));
+  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::InteractiveAdjustment));
+  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::SettledAdjustment));
+  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::UndoRedo));
+  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::ImageSwitch));
+  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::Retry));
+  EXPECT_TRUE(ReasonAppliesAdjustmentSnapshot(EditorRenderReason::CropRotate));
+}
+
 TEST_F(EditorRenderCoordinatorTest, ZoomPanIntentIsReusedWithoutScheduling) {
   // A pure zoom/pan transform reuses the current full frame; the renderer
   // re-samples it through synchronize(). No pipeline task is scheduled.

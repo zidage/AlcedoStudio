@@ -65,11 +65,22 @@ auto EditorSessionEditController::HandlePatch(EditorAdjustmentPatch patch, bool 
     adjustment_snapshot_.fingerprint += current.field_key;
   }
 
+  // Session state keeps the cumulative snapshot (for UI / open recovery). The
+  // render intent must only carry the field being edited: replaying a full
+  // history snapshot (raw_decode + every tone op) on each slider tick would
+  // thrash Image Loading and defeat stage caches. Open/undo still stamp the
+  // full snapshot via set_adjustment_snapshot + RouteInitialRender.
+  EditorRenderAdjustmentSnapshot render_delta;
+  render_delta.snapshot_generation = adjustment_snapshot_.snapshot_generation;
+  render_delta.fingerprint         = patch.field_key;
+  render_delta.params_json         = patch.params_json;
+  render_delta.patches             = {patch};
+
   outcome.kind          = EditorEditOutcome::Kind::RenderRouted;
   outcome.reason        = settled ? EditorRenderReason::SettledAdjustment
                                   : EditorRenderReason::InteractiveAdjustment;
   outcome.render_command.reason     = outcome.reason;
-  outcome.render_command.adjustment = adjustment_snapshot_;
+  outcome.render_command.adjustment = std::move(render_delta);
   outcome.render_command.policy     = EditorRenderSupersessionPolicy::PreserveInflightFullFrame;
   return outcome;
 }

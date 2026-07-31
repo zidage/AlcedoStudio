@@ -60,6 +60,10 @@ TEST_F(EditorSessionEditControllerTest, InteractiveAndSettledPatchUseOneHistoryC
   EXPECT_EQ(r1.reason, EditorRenderReason::InteractiveAdjustment);
   EXPECT_EQ(history_->capture_count, 1);
   EXPECT_EQ(history_->commit_count, 0);
+  // Render intent carries only the edited field — not a full history snapshot.
+  ASSERT_EQ(r1.render_command.adjustment.patches.size(), 1u);
+  EXPECT_EQ(r1.render_command.adjustment.patches.front().field_key, "exposure");
+  EXPECT_EQ(r1.render_command.adjustment.fingerprint, "exposure");
 
   patch.settled = true;
   auto r2       = edit_->HandlePatch(patch, true, guard(), identity());
@@ -69,6 +73,35 @@ TEST_F(EditorSessionEditControllerTest, InteractiveAndSettledPatchUseOneHistoryC
   EXPECT_EQ(history_->commit_count, 1);
   EXPECT_EQ(history_->last_committed_patch.field_key, "exposure");
   EXPECT_TRUE(history_->last_committed_patch.settled);
+  ASSERT_EQ(r2.render_command.adjustment.patches.size(), 1u);
+  EXPECT_EQ(r2.render_command.adjustment.patches.front().field_key, "exposure");
+}
+
+TEST_F(EditorSessionEditControllerTest,
+       RenderIntentCarriesOnlyEditedFieldAfterFullSessionSnapshot) {
+  // After open, session state may hold every field (raw_decode, odt, …). A
+  // subsequent slider tick must not stamp that full set onto the render intent.
+  EditorRenderAdjustmentSnapshot full;
+  full.patches = {
+      EditorAdjustmentPatch{"raw_decode", R"({"raw":{"method":"default"}})", true},
+      EditorAdjustmentPatch{"lens_calib", R"({"lens_calib":{"enabled":true}})", true},
+      EditorAdjustmentPatch{"exposure", R"({"exposure":0.0})", true},
+      EditorAdjustmentPatch{"contrast", R"({"contrast":0.0})", true},
+  };
+  full.fingerprint = "raw_decode|lens_calib|exposure|contrast";
+  edit_->set_adjustment_snapshot(std::move(full));
+
+  EditorAdjustmentPatch patch;
+  patch.field_key   = "exposure";
+  patch.params_json = R"({"exposure":1.25})";
+  const auto result = edit_->HandlePatch(patch, false, guard(), identity());
+  ASSERT_EQ(result.kind, EditorEditOutcome::Kind::RenderRouted);
+  ASSERT_EQ(result.render_command.adjustment.patches.size(), 1u);
+  EXPECT_EQ(result.render_command.adjustment.patches.front().field_key, "exposure");
+  EXPECT_EQ(result.render_command.adjustment.patches.front().params_json, R"({"exposure":1.25})");
+  EXPECT_EQ(result.render_command.adjustment.fingerprint, "exposure");
+  // Cumulative session snapshot still tracks prior fields + the edit.
+  EXPECT_GE(edit_->adjustment_snapshot().patches.size(), 4u);
 }
 
 TEST_F(EditorSessionEditControllerTest, SettledCommitFailureReturnsRejected) {

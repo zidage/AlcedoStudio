@@ -246,6 +246,32 @@ auto ApplyEditorAdjustmentOperatorState(CPUPipelineExecutor&                 exe
   }
 }
 
+auto SnapshotTouchesImageLoading(const EditorRenderAdjustmentSnapshot& snapshot) -> bool {
+  for (const auto& patch : snapshot.patches) {
+    if (patch.field_key == "raw_decode" || patch.field_key == "lens_calib") {
+      return true;
+    }
+  }
+  if (snapshot.params_json.empty()) {
+    return false;
+  }
+  try {
+    const auto params = nlohmann::json::parse(snapshot.params_json);
+    if (LooksLikeFullPipelineParams(params)) {
+      return true;
+    }
+    if (params.contains("raw") || params.contains("lens_calib")) {
+      return true;
+    }
+    if (snapshot.fingerprint == "raw_decode" || snapshot.fingerprint == "lens_calib") {
+      return true;
+    }
+  } catch (const std::exception&) {
+    // Malformed JSON is handled by ApplyEditorAdjustmentSnapshot.
+  }
+  return false;
+}
+
 auto ApplyEditorAdjustmentSnapshot(CPUPipelineExecutor&                  executor,
                                    const EditorRenderAdjustmentSnapshot& snapshot,
                                    std::string*                          error) -> bool {

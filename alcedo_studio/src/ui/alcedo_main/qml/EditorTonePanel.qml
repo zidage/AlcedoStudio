@@ -54,6 +54,8 @@ Item {
         whitesModel.value = whitesModel.defaultValue
         blacksModel.value = blacksModel.defaultValue
         wireEnabled()
+        // Bootstrap when the stack has not yet projected (tests / late session).
+        // Equal values no-op if the stack already applied the same snapshot.
         loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
     }
 

@@ -188,7 +188,16 @@ Item {
         root._handleDragging = false
     }
 
-    onModelChanged: syncField()
+    function syncSliderFromModel() {
+        if (!root.model || root._handleDragging)
+            return
+        slider.value = root.model.value
+    }
+
+    onModelChanged: {
+        syncField()
+        syncSliderFromModel()
+    }
 
     ColumnLayout {
         id: sliderColumn
@@ -284,7 +293,9 @@ Item {
             snapMode: Slider.SnapAlways
             live: true
             touchDragThreshold: 0
-            value: root.model ? root.model.value : 0
+            // No permanent binding to model.value: drag assigns slider.value and
+            // would break a binding. Model → UI is owned by Connections + sync.
+            value: 0
             activeFocusOnTab: true
             padding: 0
             leftPadding: 0
@@ -299,6 +310,8 @@ Item {
             Accessible.description: root.model
                 ? qsTr("Drag the handle to adjust %1. Double-click to reset.").arg(root.model.label)
                 : ""
+
+            Component.onCompleted: root.syncSliderFromModel()
 
             Keys.onLeftPressed: function (event) {
                 if (root.model) {
@@ -423,11 +436,7 @@ Item {
 
             Connections {
                 target: root.model
-                function onValueChanged() {
-                    if (!root._handleDragging && root.model) {
-                        slider.value = root.model.value
-                    }
-                }
+                function onValueChanged() { root.syncSliderFromModel() }
             }
         }
     }

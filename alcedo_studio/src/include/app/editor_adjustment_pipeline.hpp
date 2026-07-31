@@ -46,9 +46,24 @@ auto ApplyEditorAdjustmentOperatorState(CPUPipelineExecutor&                 exe
 /// Applies one render request's adjustment state to an executor. The caller
 /// must hold executor.GetRenderLock() so the state and resulting frame belong
 /// to the same render generation.
+///
+/// Call only for content-bearing renders (see ReasonAppliesAdjustmentSnapshot).
+/// Do not call on Detail ROI / scope ROI / pure view transforms — those must
+/// only retarget Geometry render params so Image Loading (RAW_DECODE) stays
+/// cached across pan/zoom frames.
+///
+/// Slider / field edits should stamp only the changed field patch(es) onto the
+/// intent (not a full history snapshot). Replaying raw_decode/lens_calib on
+/// every exposure drag thrash-invalidates the Image Loading stage cache.
 auto ApplyEditorAdjustmentSnapshot(CPUPipelineExecutor&                  executor,
                                    const EditorRenderAdjustmentSnapshot& snapshot,
                                    std::string*                          error) -> bool;
+
+/// True when applying this snapshot may touch Image Loading (RAW_DECODE /
+/// LENS_CALIBRATION) or rebuild the full pipeline. Used to gate loading-stage
+/// default ensure and similar work off the slider hot path.
+[[nodiscard]] auto SnapshotTouchesImageLoading(const EditorRenderAdjustmentSnapshot& snapshot)
+    -> bool;
 
 /// Disable the geometry operator for an overlay editing preview while keeping
 /// its parameters installed on the executor for the next full render.
