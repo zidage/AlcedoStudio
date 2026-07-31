@@ -156,8 +156,13 @@ auto ApplyEditorBackendBeforeWindow(EditorBackend backend) -> EditorStartupResul
     }
     case EditorBackend::OpenCl: {
 #if defined(Q_OS_WIN) && defined(HAVE_OPENCL)
-      // Share contexts must be enabled before any QOpenGLContext is created.
-      QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
+      // The composition root must enable sharing before constructing the
+      // application. Reapplying this attribute here is too late and produces a
+      // misleading Qt warning even when the pre-application setup was correct.
+      if (!QCoreApplication::testAttribute(Qt::AA_ShareOpenGLContexts)) {
+        result.error = "OpenCL backend requires Qt::AA_ShareOpenGLContexts before QGuiApplication";
+        return result;
+      }
       QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
 
       auto& bootstrap = SharedOpenClGlBootstrap();

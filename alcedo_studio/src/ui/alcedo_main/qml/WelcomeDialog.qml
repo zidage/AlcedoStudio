@@ -25,6 +25,7 @@ Dialog {
     property var acceleratorOptions: []
     property int currentLanguageIndex: 0
     property string currentAcceleratorBackend: ""
+    property string acceleratorBackendAtLaunch: ""
     property string acceleratorWarning: ""
     property bool acceleratorWarningShown: false
     property string serviceMessage: ""
@@ -60,6 +61,10 @@ Dialog {
             showAllRecent = false
             currentPage = 0
             pager.currentIndex = 0
+            if (acceleratorBackendAtLaunch.length === 0
+                    && currentAcceleratorBackend.length > 0) {
+                acceleratorBackendAtLaunch = currentAcceleratorBackend
+            }
             if (projectName.length === 0) {
                 projectName = qsTr("Untitled Project")
             }
@@ -153,6 +158,12 @@ Dialog {
         }
     }
 
+    AcceleratorRestartDialog {
+        id: acceleratorRestartDialog
+        blurSource: dialog.blurSource
+        onRestartRequested: dialog.exitRequested()
+    }
+
     function acceleratorIndexForValue(value) {
         for (let i = 0; i < acceleratorOptions.length; ++i) {
             if (acceleratorOptions[i].value === value) {
@@ -160,6 +171,20 @@ Dialog {
             }
         }
         return acceleratorOptions.length > 0 ? 0 : -1
+    }
+
+    function acceleratorLabelForValue(value) {
+        for (let i = 0; i < acceleratorOptions.length; ++i) {
+            if (acceleratorOptions[i].value === value) {
+                return String(acceleratorOptions[i].label || value)
+            }
+        }
+        return String(value)
+    }
+
+    function showAcceleratorRestartDialog(value) {
+        acceleratorRestartDialog.backendLabel = acceleratorLabelForValue(value)
+        acceleratorRestartDialog.open()
     }
 
     function maybeShowAcceleratorWarning() {

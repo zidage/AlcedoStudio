@@ -23,7 +23,7 @@ void RegisterOpenClScopePrograms() {
                     .name                = OpenCL::Scope::kScopeProgramName,
                     .source_paths        = {ALCEDO_OPENCL_SCOPE_ANALYZER_CL},
                     .build_options       = "-cl-std=CL1.2",
-                    .required_at_startup = false,
+                    .required_at_startup = true,
                 },
             },
     });

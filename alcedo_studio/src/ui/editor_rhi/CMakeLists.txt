@@ -93,7 +93,11 @@ if(ALCEDO_CUDA_ENABLED)
 endif()
 if(ALCEDO_OPENCL_ENABLED)
     target_compile_definitions(EditorRhiViewport PUBLIC HAVE_OPENCL)
-    target_link_libraries(EditorRhiViewport PUBLIC OpenClContext OpenCL::OpenCL)
+    # OpenClProgramLibrary owns runtime init, program registration, and warm-up.
+    # Linking only OpenClContext left editor_startup able to call
+    # TryInitializeOpenClRuntime via transitive deps, but production warm-up /
+    # registration must share the same static library as raw/edit GetProgram.
+    target_link_libraries(EditorRhiViewport PUBLIC OpenClProgramLibrary OpenCL::OpenCL)
 endif()
 if(ALCEDO_METAL_ENABLED)
     target_compile_definitions(EditorRhiViewport PUBLIC HAVE_METAL)

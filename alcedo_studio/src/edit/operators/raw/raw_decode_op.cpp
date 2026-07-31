@@ -82,23 +82,25 @@ void AppendLibRawUnpackRouteLog(DeferredCpuLog& log, LibRaw& raw_processor) {
   log.Add("RAW CPU unpack_route=libraw");
 }
 
-auto RawGpuBackendToString(RawGpuBackend backend) -> const char* {
-  switch (backend) {
-    case RawGpuBackend::CUDA:
-      return "cuda";
-    case RawGpuBackend::Metal:
-      return "metal";
-    case RawGpuBackend::OpenCL:
-      return "opencl";
-    case RawGpuBackend::GPU:
-      return "gpu";
-    case RawGpuBackend::CPU:
-    default:
-      return "cpu";
-  }
-}
-
 }  // namespace
+
+void RawDecodeOp::SetRuntimeGpuBackend(const GpuBackendKind backend) {
+  switch (backend) {
+    case GpuBackendKind::None:
+      params_.gpu_backend_ = RawGpuBackend::CPU;
+      return;
+    case GpuBackendKind::CUDA:
+      params_.gpu_backend_ = RawGpuBackend::CUDA;
+      return;
+    case GpuBackendKind::OpenCL:
+      params_.gpu_backend_ = RawGpuBackend::OpenCL;
+      return;
+    case GpuBackendKind::Metal:
+      params_.gpu_backend_ = RawGpuBackend::Metal;
+      return;
+  }
+  params_.gpu_backend_ = RawGpuBackend::CPU;
+}
 
 RawDecodeOp::RawDecodeOp(const nlohmann::json& params) { SetParams(params); }
 
@@ -227,18 +229,10 @@ auto RawDecodeOp::GetParams() const -> nlohmann::json {
   nlohmann::json params;
   nlohmann::json inner;
 
-  inner["gpu_backend"] = RawGpuBackendToString(params_.gpu_backend_);
+  // The accelerator backend is deliberately NOT part of the params: it is a
+  // runtime property owned by the pipeline (user backend setting), so it must
+  // never be persisted into the edit state.
   inner["method"]      = RawDemosaicMethodToString(params_.demosaic_method_);
-  inner["cuda"]        = false;
-#ifdef HAVE_CUDA
-  inner["cuda"] =
-      (params_.gpu_backend_ == RawGpuBackend::GPU || params_.gpu_backend_ == RawGpuBackend::CUDA);
-#endif
-  inner["opencl"] = false;
-#ifdef HAVE_OPENCL
-  inner["opencl"] =
-      (params_.gpu_backend_ == RawGpuBackend::GPU || params_.gpu_backend_ == RawGpuBackend::OpenCL);
-#endif
   inner["highlights_reconstruct"] = params_.highlights_reconstruct_;
   inner["use_camera_wb"]          = params_.use_camera_wb_;
   inner["user_wb"]                = params_.user_wb_;
@@ -260,26 +254,9 @@ void RawDecodeOp::SetParams(const nlohmann::json& params) {
   } else {
     return;
   }
-  if (inner.contains("gpu_backend") && inner["gpu_backend"].is_string()) {
-    const std::string backend = inner["gpu_backend"].get<std::string>();
-    if (backend == "cpu") {
-      params_.gpu_backend_ = RawGpuBackend::CPU;
-    } else if (backend == "gpu" || backend == "auto") {
-      params_.gpu_backend_ = RawGpuBackend::GPU;
-    } else if (backend == "cuda") {
-      params_.gpu_backend_ = RawGpuBackend::CUDA;
-    } else if (backend == "metal") {
-      params_.gpu_backend_ = RawGpuBackend::Metal;
-    } else if (backend == "opencl") {
-      params_.gpu_backend_ = RawGpuBackend::OpenCL;
-    } else {
-      throw std::runtime_error("RawDecodeOp: Unknown gpu_backend " + backend);
-    }
-  } else if (inner.contains("cuda")) {
-    params_.gpu_backend_ = inner["cuda"].get<bool>() ? RawGpuBackend::CUDA : RawGpuBackend::CPU;
-  } else if (inner.contains("opencl")) {
-    params_.gpu_backend_ = inner["opencl"].get<bool>() ? RawGpuBackend::OpenCL : RawGpuBackend::CPU;
-  }
+  // Backend keys in stored params (gpu_backend/cuda/opencl) are ignored: the
+  // accelerator backend comes only from the runtime preference pushed by the
+  // pipeline executor via SetRuntimeGpuBackend.
   if (inner.contains("highlights_reconstruct"))
     params_.highlights_reconstruct_ = inner["highlights_reconstruct"].get<bool>();
   if (inner.contains("method")) {

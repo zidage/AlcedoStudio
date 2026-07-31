@@ -70,6 +70,7 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   [[nodiscard]] auto accelerator_preference() const -> AcceleratorBackendPreference {
     return accelerator_preference_;
   }
+  void SetRuntimeAcceleratorPreference(AcceleratorBackendPreference preference);
   // ── Q_PROPERTY getters ─────────────────────────────────────────────────
   bool         ServiceReady() const { return service_ready_; }
   QString      ServiceMessage() const { return service_message_text_.Render(); }
@@ -116,7 +117,6 @@ class ProjectModule final : public QObject, public IUiStatusSink {
   void LoadRecentProjectsFromSettings();
   void RegisterRecentProject(const std::filesystem::path& projectPath);
   void RemoveRecentProject(const std::filesystem::path& projectPath);
-  void ApplyAcceleratorPreferenceToServices();
   void NotifyProjectLoadStateChanged();
   void HandleProjectOpened();
   void ClearProjectUiState();

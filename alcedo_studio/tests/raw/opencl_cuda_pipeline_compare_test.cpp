@@ -109,22 +109,23 @@ auto ReadFileToBuffer(const std::filesystem::path& path) -> std::vector<std::uin
   return buffer;
 }
 
-auto MakeRawDecodeParams(RawGpuBackend backend) -> nlohmann::json {
-  const char*    backend_name = backend == RawGpuBackend::CUDA ? "cuda" : "opencl";
+auto MakeRawDecodeParams() -> nlohmann::json {
+  // The decode backend is a runtime property, never a param: it is pushed on
+  // the op via SetRuntimeGpuBackend, like the pipeline executor does.
   nlohmann::json params;
-  params["raw"] = {{"gpu_backend", backend_name},
-                   {"highlights_reconstruct", true},
+  params["raw"] = {{"highlights_reconstruct", true},
                    {"use_camera_wb", true},
                    {"backend", "alcedo"},
                    {"decode_res", static_cast<int>(DecodeRes::FULL)}};
   return params;
 }
 
-auto DecodeRawFrame(const std::filesystem::path& raw_path, RawGpuBackend backend,
+auto DecodeRawFrame(const std::filesystem::path& raw_path,
                     GpuBackendKind expected_backend) -> DecodedFrame {
   auto        input = std::make_shared<ImageBuffer>(ReadFileToBuffer(raw_path));
 
-  RawDecodeOp raw_decode_op(MakeRawDecodeParams(backend));
+  RawDecodeOp raw_decode_op(MakeRawDecodeParams());
+  raw_decode_op.SetRuntimeGpuBackend(expected_backend);
   const auto  start = ProfileClock::now();
   raw_decode_op.Apply(input);
   const double decode_ms = ElapsedMs(start);
@@ -304,9 +305,8 @@ TEST(OpenClCudaPipelineCompare, RawLensAndSchedulerGeometryStatesMatch) {
     GTEST_SKIP() << "RAW fixture not found: " << raw_path.string();
   }
 
-  DecodedFrame cuda_decoded = DecodeRawFrame(raw_path, RawGpuBackend::CUDA, GpuBackendKind::CUDA);
-  DecodedFrame opencl_decoded =
-      DecodeRawFrame(raw_path, RawGpuBackend::OpenCL, GpuBackendKind::OpenCL);
+  DecodedFrame cuda_decoded = DecodeRawFrame(raw_path, GpuBackendKind::CUDA);
+  DecodedFrame opencl_decoded = DecodeRawFrame(raw_path, GpuBackendKind::OpenCL);
 
   ASSERT_EQ(cuda_decoded.buffer->GetGPUWidth(), opencl_decoded.buffer->GetGPUWidth());
   ASSERT_EQ(cuda_decoded.buffer->GetGPUHeight(), opencl_decoded.buffer->GetGPUHeight());

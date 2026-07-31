@@ -26,6 +26,7 @@
 #include <json.hpp>
 
 #include "app/model_asset_catalog.hpp"
+#include "app/pipeline_service.hpp"
 #include "app/project_package_backend.hpp"
 #include "app/project_service.hpp"
 #include "sleeve/storage_service.hpp"
@@ -110,6 +111,26 @@ TEST_F(ProjectTests, ServiceState_InitiallyNotReady) {
   ApplicationModuleHost backend;
   EXPECT_FALSE(backend.project()->ServiceReady());
   EXPECT_FALSE(backend.project()->ServiceMessage().isEmpty());
+}
+
+TEST_F(ProjectTests, RuntimeAcceleratorPreferenceUsesActiveEditorBackend) {
+  ApplicationModuleHost backend;
+  backend.project()->SetRuntimeAcceleratorPreference(AcceleratorBackendPreference::OpenCL);
+  QSignalSpy project_spy(backend.project(), &ProjectModule::ProjectChanged);
+
+  EXPECT_EQ(backend.project()->accelerator_preference(),
+            AcceleratorBackendPreference::OpenCL);
+  EXPECT_EQ(backend.project()->AcceleratorBackend(), QStringLiteral("opencl"));
+
+  ASSERT_TRUE(
+      backend.project()->CreateProjectInFolderNamed(PathToQString(temp_dir_), "opencl_project"));
+  WaitForSignal(project_spy, 15000);
+  ASSERT_TRUE(WaitForProjectLoadToFinish(backend));
+
+  const auto pipeline_service = backend.project()->handler().pipeline_service();
+  ASSERT_NE(pipeline_service, nullptr);
+  EXPECT_EQ(pipeline_service->GetAcceleratorBackendPreference(),
+            AcceleratorBackendPreference::OpenCL);
 }
 
 // ── Create project — happy path ────────────────────────────────────────────

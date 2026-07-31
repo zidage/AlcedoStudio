@@ -32,7 +32,7 @@ void RegisterOpenClEditPipelinePrograms() {
                             ALCEDO_OPENCL_EDIT_PIPELINE_FUSED_PARAMS_VALIDATION_CL,
                         },
                     .build_options       = "-cl-std=CL1.2",
-                    .required_at_startup = false,
+                    .required_at_startup = true,
                 },
                 OpenClProgramDescriptor{
                     .name = OpenCL::Pipeline::kDetailProgramName,
@@ -49,7 +49,7 @@ void RegisterOpenClEditPipelinePrograms() {
                             ALCEDO_OPENCL_EDIT_PIPELINE_DETAIL_CL,
                         },
                     .build_options       = "-cl-std=CL1.2",
-                    .required_at_startup = false,
+                    .required_at_startup = true,
                 },
             },
     });

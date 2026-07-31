@@ -9,6 +9,7 @@
 
 #include "decoders/processor/raw_processor.hpp"
 #include "edit/operators/op_base.hpp"
+#include "image/gpu_backend.hpp"
 
 namespace alcedo {
 
@@ -39,6 +40,13 @@ class RawDecodeOp : public OperatorBase<RawDecodeOp> {
   void SetCancelRequested(std::function<bool()> cancel_requested) {
     cancel_requested_ = std::move(cancel_requested);
   }
+
+  // The accelerator backend is a runtime property of the process (from the
+  // user's backend setting), never part of the persisted operator params.
+  // The pipeline executor pushes its resolved backend here before every
+  // render; SetParams deliberately ignores backend keys so stored state can
+  // never drive the decode.
+  void SetRuntimeGpuBackend(GpuBackendKind backend);
 
   void Apply(std::shared_ptr<ImageBuffer> input) override;
   void ApplyGPU(std::shared_ptr<ImageBuffer> input) override;
