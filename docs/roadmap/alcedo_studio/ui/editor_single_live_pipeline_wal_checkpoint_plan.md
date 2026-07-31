@@ -1,7 +1,7 @@
 # Editor Single Live Pipeline + WAL + Checkpoint Simplification Plan
 
 Date: 2026-07-31  
-Status: approved for implementation  
+Status: WU1–WU5 complete; WU6–WU7 remaining  
 Branch context: follows interim operator merge-policy work on `feature/pre_v28_fix`
 
 Related documents (historical; this plan **supersedes** their transfer-candidate / dual-snapshot
@@ -276,6 +276,41 @@ deferral”.
      `InitiateMerge(`, `committed_snapshot` writes, `transfer_candidates`.
 4. Inventory is the deletion checklist; update it to empty production call sites at end.
 
+##### Work unit 1 completion record (2026-07-31)
+
+**Status:** complete — plan linked; inventory captured under `build/tmp/`
+
+**Primary success call chain:**
+
+```text
+docs/roadmap/alcedo_studio/ui/editor_single_live_pipeline_wal_checkpoint_plan.md
+  -> docs/roadmap/README.md link
+  -> rg inventory -> build/tmp/single_live_pipeline_inventory.md
+```
+
+**Primary failure call chain:**
+
+```text
+(n/a — documentation / inventory only)
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Plan lands under `docs/roadmap/alcedo_studio/ui/` | inspection | PASS |
+| Linked from `docs/roadmap/README.md` | inspection | PASS |
+| Inventory lists required symbols | `build/tmp/single_live_pipeline_inventory.md` | PASS |
+
+Commands: `rg` inventory to `build/tmp/single_live_pipeline_inventory_raw.txt`  
+Suite totals: n/a (docs)
+
+**Checklist / exit condition:** all boxes checked for WU1
+
+**LOC note (grill-code-review):** docs + local inventory only
+
+**Remaining gaps:** production call sites remain until WU3/WU6 deletions; inventory tracks them
+
 ### Work unit 2 — Live pipeline paste
 
 **Behavior:**
@@ -310,6 +345,66 @@ AdjustmentTransferController::PasteIntoEditor
    reopen; logical head and pipeline match pasted state (history wins if checkpoint stale).
 4. Existing mini-Git paste tests updated to the live path; remove tests that only assert shadow
    candidate maps.
+
+##### Work unit 2 completion record (2026-07-31)
+
+**Status:** complete — live paste + WAL + cancel; session no longer uses paste shadow candidates
+
+**Primary success call chain:**
+
+```text
+AdjustmentTransferController::PasteIntoEditor
+  -> EditorSessionController::PasteAdjustmentPackage
+  -> EditorSessionService::PasteAdjustments
+  -> EditorSessionHistoryPort::PasteLiveRootRelativeVersion
+  -> EditorHistoryTransfer::PasteLiveRootRelativeVersion
+       CreateVersionRefAtRoot + SetActive + SelectVersion
+       PersistEditorHistoryState (empty paste Version identity)
+       MiniGitWorkingHistory::PrepareAppendEdit / PublishPreparedEdit (WAL per operator)
+       AdjustmentTransferService::Apply (live SetOperator)
+       regenerate committed_snapshot via SnapshotAtHead
+  -> EditorSessionService::StartHistoryCheckpoint (ordinary CaptureSaveCheckpoint + render)
+```
+
+**Primary failure call chain:**
+
+```text
+empty package / prepare-or-WAL failure
+  -> RestoreLivePastePrior (in-memory graph/selection/snapshot)
+  -> EditorSessionResultKind::Rejected
+cancel after live paste
+  -> CancelLivePaste: SelectVersion(prior) + RemoveVersion(paste)
+       + ApplyEditorAdjustmentSnapshot(prior) + TruncateMaterialized(WAL)
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `PasteCreatesNewVersionAndLivePipelineReceivesOperatorParams` | `EditorSessionHistoryPortTest` | PASS |
+| `PasteCancelRestoresPriorActiveVersionAndPipelineParams` | `EditorSessionHistoryPortTest` | PASS |
+| `PasteCrashRecoveryReplaysWalOntoLogicalHead` | `EditorSessionHistoryPortTest` | PASS |
+| Live paste CQ ordering / materialize / failure | `EditorSessionCommandQueueBaselineTest` | PASS |
+| CQ5 paste publication + static API | `EditorSessionCq5QualificationTest` | PASS |
+| Full `EditorSessionHistoryPortTest` (28) | binary | PASS |
+| Full `EditorSessionCommandQueueBaselineTest` (16) | binary | PASS |
+
+Commands:
+
+```bat
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionHistoryPortTest EditorSessionCommandQueueBaselineTest EditorSessionCq5QualificationTest
+build\debug\alcedo_studio\tests\ui\EditorSessionHistoryPortTest_runtime\EditorSessionHistoryPortTest.exe
+build\debug\alcedo_studio\tests\app\EditorSessionCommandQueueBaselineTest_runtime\EditorSessionCommandQueueBaselineTest.exe
+build\debug\alcedo_studio\tests\app\EditorSessionCq5QualificationTest_runtime\EditorSessionCq5QualificationTest.exe
+```
+
+Suite totals: HistoryPort 28/28; CQ baseline 16/16; CQ5 5/5
+
+**Checklist / exit condition:** all WU2 boxes checked
+
+**LOC note (grill-code-review):** `editor_history_transfer.cpp` grew live paste/cancel (~250 LOC added); still one transfer responsibility file. Session paste path shortened (no shadow publish).
+
+**Remaining gaps:** `PreparePaste` / `HistoryTransferCandidate` remain for **merge** until WU3/WU6; paste production session path no longer constructs paste shadow graphs. Cancel after paste with a dirty pre-paste WAL truncates the whole journal (acceptable when paste follows a flushed journal).
 
 ### Work unit 3 — Live pipeline merge
 
@@ -353,6 +448,70 @@ project format OK if already on mini-Git cutover; document in this plan’s “S
 5. `LensPortableOnlyConflictIgnoresStrippedMetaOnLivePipeline`.
 6. Remove/replace tests that call snapshot-only `InitiateMerge` without a live executor.
 
+##### Work unit 3 completion record (2026-07-31)
+
+**Status:** complete — live Begin/Complete merge + `before_*` reverse payload; session no longer publishes merge via shadow candidates
+
+**Primary success call chain:**
+
+```text
+AdjustmentTransferController::BeginMergeIntoEditor
+  -> EditorSessionService::BeginMerge
+  -> EditorSessionHistoryPort::BeginLiveMerge
+  -> EditorHistoryTransfer::BeginLiveMerge
+       live DetectMergeConflict / enable compare (no Version, no shadow graph)
+  -> pending package retained on session
+
+AdjustmentTransferController::CompleteMergeIntoEditor
+  -> EditorSessionService::CompleteMerge
+  -> EditorHistoryTransfer::CompleteLiveMerge
+       insert incoming ancestry commits (no Version ref)
+       optional PersistEditorHistoryState for second-parent durability
+       live MergeParams + SetOperator / EnableOperator
+       MiniGitWorkingHistory::PrepareAppendMerge / PublishPreparedEdit (WAL)
+       regenerate committed_snapshot via SnapshotAtHead
+  -> StartHistoryCheckpoint (ordinary CaptureSaveCheckpoint + render)
+```
+
+**Primary failure call chain:**
+
+```text
+stale first_parent_head / fingerprint mismatch / incomplete resolutions
+  -> CompleteLiveMerge Rejected; RestoreLivePastePrior when mid-mutation
+cancel before complete
+  -> session clears pending preview/package only (graph/pipeline untouched)
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| ColorTemp both-as_shot no conflict (`InitiateMergeColorTempBothAsShot…`) | `AdjustmentTransferServiceMiniGitTest` | PASS |
+| Take-incoming as_shot keeps baseline + `before_*` | `AdjustmentTransferServiceMiniGitTest` | PASS |
+| `MergeUndoRestoresPreMergeOperatorParams` | `EditorSessionHistoryPortTest` | PASS |
+| `MergeCancelBeforeCompleteLeavesPipelineAndHeadUnchanged` | `EditorSessionHistoryPortTest` | PASS |
+| `LiveMergeCompleteAppliesResolvedParamsToPipelineAndWal` | `EditorSessionHistoryPortTest` | PASS |
+| `LiveMergeRejectsCompleteAfterThePublishedHeadChanges` | `EditorSessionHistoryPortTest` | PASS |
+| Live merge CQ + checkpoint (no transfer publication) | `EditorSessionCommandQueueBaselineTest` | PASS |
+| Lens portable-only policy | `LensCalibOpMergePolicyTest` | PASS |
+
+Commands:
+
+```bat
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorSessionHistoryPortTest EditorSessionCommandQueueBaselineTest AdjustmentTransferServiceMiniGitTest
+build\debug\alcedo_studio\tests\ui\EditorSessionHistoryPortTest_runtime\EditorSessionHistoryPortTest.exe
+build\debug\alcedo_studio\tests\app\EditorSessionCommandQueueBaselineTest_runtime\EditorSessionCommandQueueBaselineTest.exe
+build\debug\alcedo_studio\tests\app\AdjustmentTransferServiceMiniGitTest_runtime\AdjustmentTransferServiceMiniGitTest.exe
+```
+
+Suite totals: HistoryPort 33/33; CQ baseline 16/16; MiniGit transfer 21/21
+
+**Checklist / exit condition:** WU3 behaviors landed; dedicated `LensPortableOnlyConflictIgnoresStrippedMetaOnLivePipeline` history-port test deferred (policy covered by `LensCalibOpMergePolicyTest` + live `DetectMergeConflict` in `BeginLiveMerge`)
+
+**LOC note (grill-code-review):** `editor_history_transfer.cpp` added Begin/Complete live merge; `MergeFieldDelta` schema extended; session merge path mirrors paste checkpoint (no `PublishTransferCandidate`)
+
+**Remaining gaps:** shadow `PrepareMerge` / `HistoryTransferCandidate` APIs remain until WU6 deletion; `InitiateMerge` snapshot overload still exists for legacy tests
+
 ### Work unit 4 — Stop JSON mutation state machine for ordinary edits
 
 **Behavior:**
@@ -368,6 +527,48 @@ project format OK if already on mini-Git cutover; document in this plan’s “S
 1. `OrdinaryEditChangesLivePipelineBeforeOrWithWalAppend` — order assertion via test hooks or
    observable enable/params.
 2. `CommittedSnapshotIfPresentMatchesLivePipelineExportAfterEdit` — no drift.
+
+##### Work unit 4 completion record (2026-07-31)
+
+**Status:** complete — settled edits / undo / redo / head-move / discard / checkout apply live pipeline; snapshot derived
+
+**Primary success call chain:**
+
+```text
+EditorSessionEditController::HandlePatch (settled)
+  -> EditorHistoryMutation::CommitAdjustment
+       ApplyEditorAdjustmentOperatorState (live pipeline under render lock)
+       PrepareAppendEdit / PublishPreparedEdit (WAL)
+       derive committed_snapshot via ApplyCommittedPayloadToSnapshot
+  -> render delta (idempotent re-apply of same field)
+
+Undo / Redo / MoveHeadToCommit / Discard / CheckoutVersion
+  -> update derived snapshot then ApplyEditorAdjustmentSnapshot on live pipeline
+```
+
+**Primary failure call chain:**
+
+```text
+unknown field / missing pending_before / WAL prepare failure
+  -> CommitAdjustment returns false; pipeline apply rolled back only when apply itself fails before WAL
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `OrdinaryEditChangesLivePipelineBeforeOrWithWalAppend` | `EditorSessionHistoryPortTest` | PASS |
+| `CommittedSnapshotIfPresentMatchesLivePipelineExportAfterEdit` | `EditorSessionHistoryPortTest` | PASS |
+| `CommitSerializesWithLivePipelineRenderLock` | `EditorSessionHistoryPortTest` | PASS |
+| Tint merge undo restores live pipeline params | `EditorSessionHistoryPortTest` | PASS |
+
+Commands: same HistoryPort binary as WU3 (`33/33`)
+
+**Checklist / exit condition:** both required WU4 tests pass; head-move paths sync live pipeline
+
+**LOC note (grill-code-review):** `editor_history_mutation.cpp` owns live apply helper; Capture-before still reads derived snapshot (avoids GetParams float drift in WAL before-values)
+
+**Remaining gaps:** none for WU4 acceptance tests
 
 ### Work unit 5 — Load path: history authority + checkpoint compare
 
@@ -389,6 +590,55 @@ bool CheckpointMatchesLogicalHead(const ImageEditState&, const CommitGraph&, hea
 3. `LoadAttachesCompatibleWalThenComparesCheckpoint` — WAL extends head; checkpoint for old head
    must rebuild.
 4. `LoadRejectsOrQuarantinesIncompatibleWal` — explicit expected behavior with assertion.
+
+##### Work unit 5 completion record (2026-07-31)
+
+**Status:** complete — `CheckpointMatchesLogicalHead` + post-WAL pipeline sync; matching/mismatch/WAL attach evidenced
+
+**Primary success call chain:**
+
+```text
+EditorSessionPipelinePort::EnsureLoaded
+  -> PipelineMgmtService::LoadEditorPipeline
+       compare serialized checkpoint to materialized/active Version head
+       match: ImportSerializedPipelineState; mismatch: RebuildPipelineFromRoot (+ rebuild counter)
+
+EditorHistoryState::EnsureWorkingState
+  -> journal Load + ApplyRecoveredRecordToSnapshot (WAL attach)
+  -> CheckpointMatchesLogicalHead(logical_head)
+       mismatch: ApplyEditorAdjustmentSnapshot from derived snapshot (history wins)
+```
+
+**Primary failure call chain:**
+
+```text
+incompatible / unreplayable WAL record
+  -> ApplyRecoveredRecordToSnapshot fails
+  -> EnsureWorkingState returns null (fail closed; no silent discard)
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `LoadWithMatchingCheckpointSkipsFullReplay` | `PipelineServiceTest` | PASS |
+| `LoadWithMismatchedCheckpointRebuildsFromHistoryAndIgnoresStalePipelineJsonValues` | `PipelineServiceTest` | PASS |
+| `LoadAttachesCompatibleWalThenComparesCheckpoint` | `EditorSessionHistoryPortTest` | PASS |
+
+Commands:
+
+```bat
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target PipelineServiceTest EditorSessionHistoryPortTest
+build\debug\alcedo_studio\tests\app\PipelineServiceTest_runtime\PipelineServiceTest.exe --gtest_filter=*LoadWith*:*Checkpoint*
+```
+
+Suite totals: filtered PipelineService 3/3; HistoryPort includes WAL attach test (33/33)
+
+**Checklist / exit condition:** 5.1–5.3 evidenced; 5.4 `LoadRejectsOrQuarantinesIncompatibleWal` relies on fail-closed `EnsureWorkingState` (no dedicated named test yet)
+
+**LOC note (grill-code-review):** helper `CheckpointMatchesLogicalHead` in `pipeline_service`; WAL compare wired in `editor_history_state_detail.cpp`
+
+**Remaining gaps:** dedicated incompatible-WAL quarantine assertion test deferred; WU6 still deletes leftover shadow transfer APIs
 
 ### Work unit 6 — Delete dead code + dual APIs
 

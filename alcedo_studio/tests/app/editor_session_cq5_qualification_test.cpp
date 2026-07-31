@@ -142,11 +142,11 @@ TEST_F(EditorSessionCq5QualificationTest,
   drainQueue();
 
   EXPECT_EQ(checkpoint_store_->materialize_count, materialize_count_before + 1);
-  EXPECT_EQ(history_->transfer_publication_count, 1);
+  EXPECT_EQ(history_->transfer_publication_count, 0);
   EXPECT_EQ(scheduler_->scheduled_.size(), render_count_before + 1);
   ASSERT_EQ(events.size(), 2u);
-  EXPECT_EQ(events[0], "save_started");
-  EXPECT_EQ(events[1], "version_created");
+  EXPECT_EQ(events[0], "version_created");
+  EXPECT_EQ(events[1], "save_started");
 }
 
 TEST_F(EditorSessionCq5QualificationTest,
@@ -242,6 +242,7 @@ TEST(EditorSessionCq5StaticApiBan, HistoryTransferOmitsOneShotPasteMergeWrappers
   EXPECT_EQ(contents.find("PasteAdjustments("), std::string::npos);
   EXPECT_EQ(contents.find("auto BeginMerge("), std::string::npos);
   EXPECT_EQ(contents.find("auto CompleteMerge("), std::string::npos);
+  EXPECT_NE(contents.find("PasteLiveRootRelativeVersion("), std::string::npos);
   EXPECT_NE(contents.find("PreparePaste("), std::string::npos);
   EXPECT_NE(contents.find("PublishTransferCandidate("), std::string::npos);
 }

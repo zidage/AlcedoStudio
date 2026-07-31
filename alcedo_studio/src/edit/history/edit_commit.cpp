@@ -201,25 +201,30 @@ auto MergeFieldDelta::CanonicalJSON() const -> nlohmann::json {
   return nlohmann::json{{"operator_type", OperatorTypeToInt(operator_type)},
                         {"stage_name", StageNameToInt(stage_name)},
                         {"field_name", field_name},
+                        {"before_value", before_value},
+                        {"before_enabled", before_enabled},
                         {"resolved_value", resolved_value},
                         {"resolved_enabled", resolved_enabled}};
 }
 
 auto MergeFieldDelta::FromJSON(const nlohmann::json& j) -> MergeFieldDelta {
-  RequireExactObjectKeys(
-      j, {"operator_type", "stage_name", "field_name", "resolved_value", "resolved_enabled"},
-      "MergeFieldDelta");
+  RequireExactObjectKeys(j,
+                         {"operator_type", "stage_name", "field_name", "before_value",
+                          "before_enabled", "resolved_value", "resolved_enabled"},
+                         "MergeFieldDelta");
   if (!j.at("field_name").is_string()) {
     throw std::runtime_error("MergeFieldDelta: field_name must be a string");
   }
-  if (!j.at("resolved_enabled").is_boolean()) {
-    throw std::runtime_error("MergeFieldDelta: resolved_enabled must be a boolean");
+  if (!j.at("before_enabled").is_boolean() || !j.at("resolved_enabled").is_boolean()) {
+    throw std::runtime_error("MergeFieldDelta: enabled flags must be booleans");
   }
 
   MergeFieldDelta field;
   field.operator_type    = ParseOperatorType(j.at("operator_type"));
   field.stage_name       = ParsePipelineStageName(j.at("stage_name"));
   field.field_name       = j.at("field_name").get<std::string>();
+  field.before_value     = j.at("before_value");
+  field.before_enabled   = j.at("before_enabled").get<bool>();
   field.resolved_value   = j.at("resolved_value");
   field.resolved_enabled = j.at("resolved_enabled").get<bool>();
   return field;

@@ -118,6 +118,9 @@ struct AdjustmentMergeResult {
 struct AdjustmentPasteResult {
   bool             pasted = false;
   version_ref_id_t new_version_id{};
+  /// Active Version observed before the paste Version was created. Cancel paste
+  /// restores this Version and rebuilds the live pipeline to its head.
+  version_ref_id_t prior_version_id{};
   commit_hash_t    new_head{};
   std::string      error;
 };

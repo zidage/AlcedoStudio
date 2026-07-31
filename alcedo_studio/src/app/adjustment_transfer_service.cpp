@@ -911,6 +911,8 @@ auto AdjustmentTransferService::CompleteMerge(
     delta.operator_type = conflict->operator_type;
     delta.stage_name    = conflict->stage;
     delta.field_name    = "$operator_params";
+    delta.before_value  = conflict->current_value;
+    delta.before_enabled = conflict->current_enabled;
     // Operator rehydrates image-local fields when taking a stripped incoming payload.
     delta.resolved_value = ResolveMergedParams(conflict->operator_type, conflict->current_value,
                                                conflict->incoming_value, choice);

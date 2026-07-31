@@ -25,7 +25,40 @@ class EditorHistoryTransfer {
   auto CancelMerge(const alcedo::EditorHistoryGuardHandle& guard,
                    const alcedo::AdjustmentMergePreview& preview, std::string* error) -> bool;
 
+  /// Paste onto the live CommitGraph + WAL, then apply operators to the live
+  /// pipeline executor. No shadow `HistoryTransferCandidate` graph is created.
+  /// @param result On success carries new Version / head and `prior_version_id`
+  ///   for CancelLivePaste.
+  /// @pre Caller owns the editor session command queue for this element.
+  auto PasteLiveRootRelativeVersion(const alcedo::EditorHistoryGuardHandle& guard,
+                                    const alcedo::AdjustmentTransferPackage& package,
+                                    std::string version_display_name,
+                                    alcedo::AdjustmentPasteResult* result, std::string* error)
+      -> bool;
+
+  /// Restore `prior_version_id`, remove the unused paste Version, and reinstall
+  /// prior operator params on the live executor.
+  auto CancelLivePaste(const alcedo::EditorHistoryGuardHandle& guard,
+                       const alcedo::version_ref_id_t& prior_version_id,
+                       const alcedo::version_ref_id_t& paste_version_id, std::string* error)
+      -> bool;
+
+  /// Detect merge conflicts from the live pipeline without mutating the graph.
+  /// Does not create a shadow Version or `HistoryTransferCandidate`.
+  auto BeginLiveMerge(const alcedo::EditorHistoryGuardHandle& guard,
+                      const alcedo::AdjustmentTransferPackage& package,
+                      alcedo::AdjustmentMergePreview* preview, std::string* error) -> bool;
+
+  /// Apply merge resolutions to the live pipeline, append one merge commit + WAL,
+  /// and regenerate the derived adjustment snapshot.
+  auto CompleteLiveMerge(const alcedo::EditorHistoryGuardHandle& guard,
+                         const alcedo::AdjustmentTransferPackage& package,
+                         const alcedo::AdjustmentMergePreview& preview,
+                         const std::vector<alcedo::AdjustmentMergeResolution>& resolutions,
+                         alcedo::AdjustmentMergeResult* result, std::string* error) -> bool;
+
   /// Stage a Paste candidate without changing published history.
+  /// @deprecated Prefer PasteLiveRootRelativeVersion; retained until merge rewrite (WU3/WU6).
   auto PreparePaste(const alcedo::EditorHistoryGuardHandle& guard,
                     const alcedo::AdjustmentTransferPackage& package,
                     std::string version_display_name, alcedo::AdjustmentPasteResult* result,

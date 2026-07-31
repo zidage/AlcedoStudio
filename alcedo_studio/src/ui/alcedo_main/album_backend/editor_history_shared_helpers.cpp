@@ -457,9 +457,9 @@ auto ApplyHistoryCommitToSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapsh
       if (use_after_value) {
         state.params  = field.resolved_value;
         state.enabled = field.resolved_enabled;
-      } else if (!ResolveSnapshotFieldAtHead(graph, commit.GetFirstParentHash(), field.operator_type,
-                                             field.stage_name, &state, error)) {
-        return false;
+      } else {
+        state.params  = field.before_value;
+        state.enabled = field.before_enabled;
       }
       const auto field_key = alcedo::EditorAdjustmentFieldKey(field.stage_name, field.operator_type);
       if (!field_key.has_value()) {

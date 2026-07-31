@@ -689,6 +689,24 @@ TEST_F(PipelineServiceTests, EditorLoadUsesMatchingSerializedStateWithoutReconst
   reopened.SavePipeline(loaded);
 }
 
+TEST_F(PipelineServiceTests, LoadWithMatchingCheckpointSkipsFullReplay) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService first(project.GetStorageService());
+
+  auto initial = first.LoadEditorPipeline(731);
+  ASSERT_NE(initial, nullptr);
+  first.SavePipeline(initial);
+
+  PipelineMgmtService reopened(project.GetStorageService());
+  reopened.ResetEditorPipelineHistoryRebuildCountForTesting();
+  auto loaded = reopened.LoadEditorPipeline(731);
+  ASSERT_NE(loaded, nullptr);
+  EXPECT_EQ(reopened.EditorPipelineHistoryRebuildCount(), 0u)
+      << "matching checkpoint identity must import serialized state without history rebuild";
+  EXPECT_FALSE(loaded->serialized_state_needs_writeback_);
+  reopened.SavePipeline(loaded);
+}
+
 TEST_F(PipelineServiceTests,
        PersistEditorHistoryStateWritesNewActiveVersionBeforeEditorReopen) {
   ProjectService      project(db_path_, meta_path_);
@@ -819,6 +837,55 @@ TEST_F(PipelineServiceTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
                                                ["exposure"]["params"]["exposure"],
             2.0f);
   after_writeback.SavePipeline(matched);
+}
+
+TEST_F(PipelineServiceTests,
+       LoadWithMismatchedCheckpointRebuildsFromHistoryAndIgnoresStalePipelineJsonValues) {
+  ProjectService      project(db_path_, meta_path_);
+  PipelineMgmtService first(project.GetStorageService());
+
+  auto initial = first.LoadEditorPipeline(732);
+  ASSERT_NE(initial, nullptr);
+  first.SavePipeline(initial);
+
+  commit_hash_t expected_head{};
+  {
+    auto db_guard = project.GetStorageService()->GetDBController().GetConnectionGuard();
+    auto db_lock  = db_guard.Lock();
+    CommitGraphService graph_service(db_guard.conn_);
+    auto graph = graph_service.LoadGraph(732);
+    ASSERT_TRUE(graph.has_value());
+
+    OrdinaryEditPayload payload;
+    payload.operator_type   = OperatorType::EXPOSURE;
+    payload.stage_name      = PipelineStageName::Basic_Adjustment;
+    payload.field_name      = "exposure";
+    payload.before_value    = 0.0f;
+    payload.after_value     = 3.25f;
+    payload.before_enabled  = true;
+    payload.after_enabled   = true;
+    auto commit = EditCommit::MakeEdit(graph->GetRootId(), std::nullopt, std::move(payload));
+    expected_head = commit.GetCommitHash();
+    ASSERT_TRUE(graph->InsertCommit(std::move(commit)));
+    graph->MoveWorkingHead(graph->GetActiveVersionId(), expected_head);
+
+    // Deliberately wrong params under a non-matching checkpoint identity.
+    graph_service.Materialize(graph->CaptureMaterializationWithSerializedPipelineState(
+        nlohmann::json{{"legacy", true},
+                       {"stale_exposure", 0.0f}}));
+  }
+
+  PipelineMgmtService reopened(project.GetStorageService());
+  reopened.ResetEditorPipelineHistoryRebuildCountForTesting();
+  auto rebuilt = reopened.LoadEditorPipeline(732);
+  ASSERT_NE(rebuilt, nullptr);
+  EXPECT_EQ(reopened.EditorPipelineHistoryRebuildCount(), 1u);
+  EXPECT_EQ(rebuilt->working_head_commit_hash_, expected_head);
+  EXPECT_EQ(rebuilt->pipeline_->ExportPipelineParams()["Basic Adjustment"]["Basic Adjustment"]
+                                          ["exposure"]["params"]["exposure"],
+            3.25f)
+      << "rebuild must follow history, not stale checkpoint JSON values";
+  reopened.SavePipeline(rebuilt);
 }
 
 TEST_F(PipelineServiceTests,

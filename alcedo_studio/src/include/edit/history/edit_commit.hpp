@@ -42,11 +42,16 @@ struct OrdinaryEditPayload {
 
 /**
  * @brief One UI-resolved field in a merge payload.
+ *
+ * `before_*` stores the live first-parent operator state so undo can reverse without
+ * replaying the second parent or re-deriving values from the transfer package.
  */
 struct MergeFieldDelta {
   OperatorType      operator_type = OperatorType::UNKNOWN;
   PipelineStageName stage_name    = PipelineStageName::Basic_Adjustment;
   std::string       field_name;
+  nlohmann::json    before_value     = nlohmann::json(nullptr);
+  bool              before_enabled   = false;
   nlohmann::json    resolved_value   = nlohmann::json(nullptr);
   bool              resolved_enabled = true;
 

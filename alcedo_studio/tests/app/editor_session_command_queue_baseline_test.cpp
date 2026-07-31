@@ -357,7 +357,7 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   service_->SetCopiedPackageAvailable(true);
 
   AdjustmentMergePreview preview;
-  ASSERT_EQ(service_->BeginMerge(AdjustmentTransferPackage{}, &preview).kind,
+  ASSERT_EQ(service_->BeginMerge(MakeExposureTransferPackage(1.0), &preview).kind,
             EditorSessionResultKind::Accepted);
 
   std::mutex render_lock;
@@ -380,15 +380,12 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   EXPECT_EQ(returned.load(), 1);
 }
 
-/// Invariant: when the current image has a dirty journal, Paste queues a save
-/// checkpoint BEFORE creating the new Version (one durable publication). The
-/// pre-CQ1 facade creates the Version first (history->PasteAdjustments) and
-/// then starts the save checkpoint, so the order is [version_created,
-/// save_started] instead of [save_started, version_created]. The queued
-/// facade retains the Paste command, flushes the journal, and continues the
-/// transfer when the posted save completion reduces.
+/// Invariant: live paste mutates the Version immediately, then queues one
+/// ordinary history checkpoint for WAL materialization. Prior CQ4 retained a
+/// shadow candidate until after save; the single-live-pipeline path creates the
+/// Version first so operator apply and WAL share the live graph.
 TEST_F(EditorSessionCommandQueueBaselineTest,
-       DirtyJournalPasteQueuesSaveBeforeCreatingTheNewVersion) {
+       LivePasteCreatesVersionThenQueuesHistoryCheckpoint) {
   openInteractive(10, 20);  // image A, interactive
   service_->SetCopiedPackageAvailable(true);
 
@@ -400,55 +397,15 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   checkpoint_store_->async_materialize = false;
 
   const auto result = service_->PasteAdjustments(AdjustmentTransferPackage{}, "Pasted Version");
-  EXPECT_EQ(result.kind, EditorSessionResultKind::SaveStarted)
-      << "dirty journal Paste must start the flush checkpoint before the transfer";
-  // The flush completion is posted to the queue; reducing it resumes the
-  // retained Paste on the clean journal.
-  drainQueue();
-
-  // Target order: save first, then version creation.
-  ASSERT_GE(events.size(), 2u) << "Paste must produce a save and a version creation";
-  EXPECT_EQ(events[0], "save_started")
-      << "dirty journal Paste must queue a save before creating the new Version";
-  EXPECT_EQ(events[1], "version_created");
+  EXPECT_EQ(result.kind, EditorSessionResultKind::Rejected)
+      << "empty package must reject before Version creation";
+  // Non-empty package path is covered by LivePasteMaterializesOneCheckpointAndOneFinalRender.
 }
 
-/// Invariant: when the current image has a dirty journal, Merge queues a save
-/// checkpoint BEFORE creating the merge commit. The pre-CQ1 facade commits the
-/// merge first and then starts the save, so the order is [merge_committed,
-/// save_started].
+/// Live paste: one Version creation, one ordinary save capture/materialization,
+/// and one final render route. No shadow PublishTransferCandidate.
 TEST_F(EditorSessionCommandQueueBaselineTest,
-       DirtyJournalMergeQueuesSaveBeforeCreatingTheMergeCommit) {
-  openInteractive(10, 20);  // image A, interactive
-  service_->SetCopiedPackageAvailable(true);
-
-  AdjustmentMergePreview preview;
-  ASSERT_EQ(service_->BeginMerge(AdjustmentTransferPackage{}, &preview).kind,
-            EditorSessionResultKind::Accepted);
-
-  std::vector<std::string> events;
-  history_->event_log                  = &events;
-  journal_->event_log                  = &events;
-  history_->dirty_journal              = true;
-  journal_->async_commit               = false;
-  checkpoint_store_->async_materialize = false;
-
-  const auto result                    = service_->CompleteMerge({});
-  EXPECT_EQ(result.kind, EditorSessionResultKind::SaveStarted)
-      << "dirty journal Merge must start the flush checkpoint before the transfer";
-  drainQueue();
-
-  ASSERT_GE(events.size(), 2u) << "Merge must produce a save and a merge commit";
-  EXPECT_EQ(events[0], "save_started")
-      << "dirty journal Merge must queue a save before creating the merge commit";
-  EXPECT_EQ(events[1], "merge_committed");
-}
-
-/// CQ4: Paste is staged before publication. One accepted transfer owns one
-/// save capture, one checkpoint materialization, one candidate publication,
-/// and one final render route.
-TEST_F(EditorSessionCommandQueueBaselineTest,
-       DirtyPastePublishesOneCandidateAndOneFinalRender) {
+       LivePasteMaterializesOneCheckpointAndOneFinalRender) {
   openInteractive(10, 20);  // image A, interactive
   service_->SetCopiedPackageAvailable(true);
 
@@ -471,19 +428,49 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
 
   EXPECT_EQ(history_->checkpoint_capture_count, capture_count_before + 1);
   EXPECT_EQ(checkpoint_store_->materialize_count, materialize_count_before + 1);
-  EXPECT_EQ(history_->transfer_publication_count, 1);
+  EXPECT_EQ(history_->transfer_publication_count, 0);
   EXPECT_EQ(scheduler_->scheduled_.size(), render_count_before + 1);
   EXPECT_EQ(recorder_->terminal_count(), terminal_count_before + 1);
   EXPECT_FALSE(history_->dirty_journal);
   ASSERT_EQ(events.size(), 2u);
-  EXPECT_EQ(events[0], "save_started");
-  EXPECT_EQ(events[1], "version_created");
+  EXPECT_EQ(events[0], "version_created");
+  EXPECT_EQ(events[1], "save_started");
 }
 
-/// CQ4: Merge resolution is applied to the staged candidate and becomes
-/// visible only after the same single durable checkpoint/publication path.
+/// Invariant: live merge mutates the Version immediately (CompleteLiveMerge), then
+/// queues one ordinary history checkpoint for WAL materialization — same ordering
+/// as live paste (mutate first, then StartHistoryCheckpoint).
 TEST_F(EditorSessionCommandQueueBaselineTest,
-       DirtyMergePublishesOneCandidateAndOneFinalRender) {
+       DirtyJournalMergeCompletesLiveThenQueuesHistoryCheckpoint) {
+  openInteractive(10, 20);  // image A, interactive
+  service_->SetCopiedPackageAvailable(true);
+
+  AdjustmentMergePreview preview;
+  ASSERT_EQ(service_->BeginMerge(MakeExposureTransferPackage(1.0), &preview).kind,
+            EditorSessionResultKind::Accepted);
+
+  std::vector<std::string> events;
+  history_->event_log                  = &events;
+  journal_->event_log                  = &events;
+  history_->dirty_journal              = true;
+  journal_->async_commit               = false;
+  checkpoint_store_->async_materialize = false;
+
+  const auto result                    = service_->CompleteMerge({});
+  EXPECT_EQ(result.kind, EditorSessionResultKind::SaveStarted)
+      << "live Merge must start the history checkpoint after CompleteLiveMerge";
+  drainQueue();
+
+  ASSERT_GE(events.size(), 2u) << "Merge must produce a merge commit and a save";
+  EXPECT_EQ(events[0], "merge_committed")
+      << "CompleteLiveMerge must run before the ordinary history checkpoint";
+  EXPECT_EQ(events[1], "save_started");
+}
+
+/// Live merge: CompleteLiveMerge then one ordinary save capture/materialization
+/// and one final render route. No shadow PublishTransferCandidate.
+TEST_F(EditorSessionCommandQueueBaselineTest,
+       LiveMergeMaterializesOneCheckpointAndOneFinalRender) {
   openInteractive(10, 20);  // image A, interactive
   service_->SetCopiedPackageAvailable(true);
 
@@ -509,19 +496,19 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
 
   EXPECT_EQ(history_->checkpoint_capture_count, capture_count_before + 1);
   EXPECT_EQ(checkpoint_store_->materialize_count, materialize_count_before + 1);
-  EXPECT_EQ(history_->transfer_publication_count, 1);
+  EXPECT_EQ(history_->transfer_publication_count, 0);
   EXPECT_EQ(scheduler_->scheduled_.size(), render_count_before + 1);
   EXPECT_EQ(recorder_->terminal_count(), terminal_count_before + 1);
   EXPECT_FALSE(history_->dirty_journal);
   ASSERT_EQ(events.size(), 2u);
-  EXPECT_EQ(events[0], "save_started");
-  EXPECT_EQ(events[1], "merge_committed");
+  EXPECT_EQ(events[0], "merge_committed");
+  EXPECT_EQ(events[1], "save_started");
 }
 
-/// CQ4: a checkpoint/materialization failure discards the staged candidate and
-/// leaves the published state and render schedule untouched.
+/// Live paste mutates history before the ordinary checkpoint. A materialization
+/// failure keeps the live paste dirty and blocks the final render route.
 TEST_F(EditorSessionCommandQueueBaselineTest,
-       TransferMaterializationFailureRetainsPublishedStateAndRenderSchedule) {
+       LivePasteMaterializationFailureKeepsDirtyPasteAndSkipsFinalRender) {
   openInteractive(10, 20);  // image A, interactive
   service_->SetCopiedPackageAvailable(true);
 
@@ -548,14 +535,15 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   EXPECT_EQ(recorder_->terminal_count(), terminal_count_before + 1);
   EXPECT_EQ(service_->state(), EditorSessionState::RetainedImageFailure);
   EXPECT_TRUE(history_->dirty_journal);
-  ASSERT_EQ(events.size(), 1u);
-  EXPECT_EQ(events[0], "save_started");
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[0], "version_created");
+  EXPECT_EQ(events[1], "save_started");
 }
 
-/// CQ4: a failed immutable capture is rejected before the checkpoint store is
-/// invoked, so the staged transfer cannot create a partial Version or render.
+/// Live paste applies before capture. A failed ordinary capture rejects after
+/// Version creation and does not invoke the checkpoint store.
 TEST_F(EditorSessionCommandQueueBaselineTest,
-       TransferCaptureFailureRetainsPublishedStateAndRenderSchedule) {
+       LivePasteCaptureFailureRejectsAfterVersionCreation) {
   openInteractive(10, 20);  // image A, interactive
   service_->SetCopiedPackageAvailable(true);
   history_->fail_capture = true;
@@ -657,7 +645,8 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   // Start a history checkpoint whose save cannot finish on its own.
   journal_->async_commit               = true;
   checkpoint_store_->async_materialize = true;
-  const auto paste = service_->PasteAdjustments(AdjustmentTransferPackage{}, "Pasted Version");
+  const auto paste =
+      service_->PasteAdjustments(MakeExposureTransferPackage(0.5), "Pasted Version");
   ASSERT_EQ(paste.kind, EditorSessionResultKind::SaveStarted);
 
   const auto terminal_before = recorder_->terminal_count();
