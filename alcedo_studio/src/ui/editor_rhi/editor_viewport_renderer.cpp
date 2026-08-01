@@ -636,12 +636,12 @@ auto EditorViewportRenderer::selectedPrimaryLayer() const -> const LayerState* {
   if (!interactive.valid) {
     return &quality;
   }
-  if (interactive.preview_metadata.preview_generation >
-      quality.preview_metadata.preview_generation) {
+  if (interactive.preview_metadata.presentation_request_id >
+      quality.preview_metadata.presentation_request_id) {
     return &interactive;
   }
-  if (interactive.preview_metadata.preview_generation ==
-          quality.preview_metadata.preview_generation &&
+  if (interactive.preview_metadata.presentation_request_id ==
+          quality.preview_metadata.presentation_request_id &&
       view_state_.prefer_interactive_primary) {
     const auto current_roi = BuildNormalizedRoi(view_state_.snapshot.viewport_render_region_cache);
     if (!current_roi.has_value() ||
@@ -692,12 +692,12 @@ auto EditorViewportRenderer::hasVisibleDetailPatch() const -> bool {
   // to a full-frame InteractivePrimary so a DetailPatch can land before the
   // settled quality pass finishes (common after open + immediate zoom).
   const LayerState* base = nullptr;
-  if (quality.valid && quality.preview_metadata.preview_generation ==
-                           detail.preview_metadata.preview_generation) {
+  if (quality.valid && quality.preview_metadata.presentation_request_id ==
+                           detail.preview_metadata.presentation_request_id) {
     base = &quality;
   } else if (interactive.valid &&
-             interactive.preview_metadata.preview_generation ==
-                 detail.preview_metadata.preview_generation &&
+             interactive.preview_metadata.presentation_request_id ==
+                 detail.preview_metadata.presentation_request_id &&
              interactive.presentation_mode != FramePresentationMode::RoiFrame) {
     base = &interactive;
   }

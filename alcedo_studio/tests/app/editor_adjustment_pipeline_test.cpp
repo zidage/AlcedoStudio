@@ -65,7 +65,7 @@ TEST_F(EditorAdjustmentPipelineTest, LatestSnapshotCanUpdateExistingFieldAgain) 
                   1.25f);
 }
 
-TEST_F(EditorAdjustmentPipelineTest, SnapshotTouchesImageLoadingDetectsRawAndFullPipeline) {
+TEST_F(EditorAdjustmentPipelineTest, SnapshotTouchesImageLoadingDetectsRawPatch) {
   EditorRenderAdjustmentSnapshot tone_only;
   tone_only.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":0.5})", false}};
   EXPECT_FALSE(SnapshotTouchesImageLoading(tone_only));
@@ -73,10 +73,6 @@ TEST_F(EditorAdjustmentPipelineTest, SnapshotTouchesImageLoadingDetectsRawAndFul
   EditorRenderAdjustmentSnapshot raw_patch;
   raw_patch.patches = {EditorAdjustmentPatch{"raw_decode", R"({"raw":{"method":"default"}})", true}};
   EXPECT_TRUE(SnapshotTouchesImageLoading(raw_patch));
-
-  EditorRenderAdjustmentSnapshot full;
-  full.params_json = R"({"Image Loading":{},"Basic Adjustment":{}})";
-  EXPECT_TRUE(SnapshotTouchesImageLoading(full));
 }
 
 // Content-path regression: re-applying an unchanged Image Loading operator must

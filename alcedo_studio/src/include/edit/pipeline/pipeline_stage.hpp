@@ -192,6 +192,10 @@ class PipelineStage {
 
   void SetFrameSink(IFrameSink* frame_sink) { gpu_executor_.SetFrameSink(frame_sink); }
 
+  void SetBoundFrameSubmission(const FrameCompletionSubmission& submission) {
+    gpu_executor_.SetBoundFrameSubmission(submission);
+  }
+
   void SetInputImage(std::shared_ptr<ImageBuffer>);
 
   void SetForceCPUOutput(bool force) { force_cpu_output_ = force; }

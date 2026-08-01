@@ -258,8 +258,7 @@ auto SubmitFixtureFrame(EditorViewportItem* item, const HarnessFixtureImage& fix
   meta.frame_role = FrameRoleForLeaseLayer(layer);
   meta.preview_generation = preview;
   meta.presentation_request_id = preview;
-  sink->SetNextFramePreviewMetadata(meta);
-  sink->SetNextFramePresentationMode(alcedo::FramePresentationMode::FullFrame);
+  sink->BindFrameSubmission({meta, alcedo::FramePresentationMode::FullFrame});
   sink->EnsureSize(fixture.width, fixture.height);
 
   const auto domain = alcedo::editor_rhi::ActiveEditorBackend() == EditorBackend::OpenCl
@@ -303,7 +302,7 @@ auto SubmitFixtureFrame(EditorViewportItem* item, const HarnessFixtureImage& fix
         static_cast<unsigned long long>(preview));
     return false;
   }
-  sink->NotifyFrameReady();
+  sink->NotifyFrameReady({meta, alcedo::FramePresentationMode::FullFrame});
   return true;
 }
 

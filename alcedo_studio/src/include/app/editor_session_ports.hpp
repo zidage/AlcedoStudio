@@ -404,11 +404,9 @@ struct EditorRenderCoordinatorDiagnostics {
   std::size_t                       replaced_count  = 0;
   std::size_t                       cancelled_count = 0;
   std::string                       last_error;
-  /// Phase 5E: stamps the coordinator currently accepts.
+  /// Phase 5E: image-load request the coordinator currently accepts.
   std::uint64_t                     image_load_request_id = 0;
-  std::uint64_t                     render_generation  = 0;
-  std::uint64_t                     view_generation    = 0;
-  /// Last request that was rejected at Submit (generation/token/scheduler).
+  /// Last request that was rejected at Submit (image load/token/scheduler).
   std::string                       last_rejection_reason;
   std::optional<EditorRenderReason> last_rejected_render_reason{};
   /// Last intent that reached FrameSubmitted (native slot ready for composition).
@@ -420,11 +418,6 @@ struct EditorRenderCoordinatorDiagnostics {
   std::size_t                       presented_count = 0;
 };
 
-enum class EditorRenderSupersessionPolicy : std::uint8_t {
-  CancelObsolete = 0,
-  PreserveInflightFullFrame,
-};
-
 /// Immutable render command. Built by the facade or edit controller and passed
 /// to the render controller; the render controller does not read adjustment
 /// state from any other component.
@@ -432,7 +425,6 @@ struct EditorRenderCommand {
   EditorRenderReason                  reason       = EditorRenderReason::InitialFrame;
   std::uint64_t                       operation_id = 0;
   EditorRenderAdjustmentSnapshot      adjustment{};
-  EditorRenderSupersessionPolicy      policy = EditorRenderSupersessionPolicy::CancelObsolete;
   std::optional<ViewportRenderRegion> view_region;
 };
 
@@ -449,10 +441,9 @@ class IEditorRenderSubmitPort {
   virtual void CancelSessionAndWait(std::uint64_t session_generation) {
     CancelSession(session_generation);
   }
-  virtual void SetActiveGenerations(
-      std::uint64_t session_generation, std::uint64_t render_generation,
-      std::uint64_t                  view_generation,
-      EditorRenderSupersessionPolicy policy = EditorRenderSupersessionPolicy::CancelObsolete) = 0;
+  /// Stamps the active image-load request and cancels pending/in-flight work for
+  /// other image-load requests.
+  virtual void SetActiveImageLoadRequest(std::uint64_t image_load_request_id) = 0;
   /// Phase 5D diagnostics. Default impls report an idle coordinator so test
   /// fakes that do not override them stay QML-idle.
   [[nodiscard]] virtual auto diagnostics() const -> EditorRenderCoordinatorDiagnostics {

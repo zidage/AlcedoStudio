@@ -170,6 +170,15 @@ target_link_libraries(PipelineFrameSinkTest PRIVATE GTest::gtest_main Operators 
 gtest_discover_tests(PipelineFrameSinkTest TEST_PREFIX "PipelineFrameSinkTest.")
 alcedo_register_test_target(PipelineFrameSinkTest edit)
 
+add_executable(PipelineSchedulerRequestIdTest
+    ${ALCEDO_TEST_ROOT}/renderer/pipeline_scheduler_request_id_test.cpp)
+target_include_directories(PipelineSchedulerRequestIdTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(PipelineSchedulerRequestIdTest PRIVATE GTest::gtest_main Operators EditPipeline
+                                                    PipelineScheduler EditorRhiViewport
+                                                    ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+gtest_discover_tests(PipelineSchedulerRequestIdTest TEST_PREFIX "PipelineSchedulerRequestIdTest.")
+alcedo_register_test_target(PipelineSchedulerRequestIdTest edit)
+
 # Version hash: deterministic parameter hashing.
 add_executable(VersionHashTest ${ALCEDO_TEST_ROOT}/edit/history/version_hash_test.cpp)
 target_include_directories(VersionHashTest PUBLIC ${ALCEDO_INCLUDE_DIR})

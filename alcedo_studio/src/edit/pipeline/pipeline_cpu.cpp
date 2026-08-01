@@ -642,18 +642,19 @@ void CPUPipelineExecutor::AttachFrameSink(IFrameSink* frame_sink) {
   }
 }
 
-void CPUPipelineExecutor::SetNextFramePresentationMode(FramePresentationMode mode) const {
-  if (!frame_sink_) {
-    return;
+void CPUPipelineExecutor::BindFrameSubmission(const FramePreviewMetadata& metadata,
+                                              FramePresentationMode       mode) {
+  bound_frame_submission_ = {metadata, mode};
+  if (frame_sink_) {
+    frame_sink_->BindFrameSubmission(bound_frame_submission_);
   }
-  frame_sink_->SetNextFramePresentationMode(mode);
+  if (!exec_stages_.empty()) {
+    exec_stages_.back()->SetBoundFrameSubmission(bound_frame_submission_);
+  }
 }
 
-void CPUPipelineExecutor::SetNextFramePreviewMetadata(const FramePreviewMetadata& metadata) const {
-  if (!frame_sink_) {
-    return;
-  }
-  frame_sink_->SetNextFramePreviewMetadata(metadata);
+auto CPUPipelineExecutor::BoundFrameSubmission() const -> FrameCompletionSubmission {
+  return bound_frame_submission_;
 }
 
 void CPUPipelineExecutor::RegisterAllOperators() {

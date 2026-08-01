@@ -800,8 +800,7 @@ TEST(EditorOverlayInteractionTest, DetailPatchEnsureSizeDoesNotRewriteRenderRefe
   alcedo::FramePreviewMetadata quality_meta{};
   quality_meta.frame_role         = alcedo::FrameRole::QualityBase;
   quality_meta.preview_generation = 1;
-  sink->SetNextFramePreviewMetadata(quality_meta);
-  sink->SetNextFramePresentationMode(alcedo::FramePresentationMode::ViewportTransformed);
+  sink->BindFrameSubmission({quality_meta, alcedo::FramePresentationMode::ViewportTransformed});
   sink->EnsureSize(2048, 1536);
   // CUDA/OpenCL: EnsureSize of a shared write target publishes render-ref size.
   // Metal zero-copy: EnsureSize is presentation-viewport bookkeeping only;
@@ -828,8 +827,7 @@ TEST(EditorOverlayInteractionTest, DetailPatchEnsureSizeDoesNotRewriteRenderRefe
   detail_meta.frame_role         = alcedo::FrameRole::DetailPatch;
   detail_meta.preview_generation = 1;
   detail_meta.source_roi_norm    = {.x = 0.25f, .y = 0.2f, .width = 0.5f, .height = 0.4f};
-  sink->SetNextFramePreviewMetadata(detail_meta);
-  sink->SetNextFramePresentationMode(alcedo::FramePresentationMode::ViewportTransformed);
+  sink->BindFrameSubmission({detail_meta, alcedo::FramePresentationMode::ViewportTransformed});
   sink->EnsureSize(1600, 900);
 
   // Must not emit targetSizeRequested — render reference stays full-frame.

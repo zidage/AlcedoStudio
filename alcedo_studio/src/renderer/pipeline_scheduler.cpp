@@ -172,13 +172,12 @@ auto RenderFrameRoleId(FrameRole role) -> int {
   return OperatorParams::kRenderFrameRoleInteractivePrimary;
 }
 
-void SetNextFrameMetadata(const std::shared_ptr<CPUPipelineExecutor>& pipeline_executor,
+void ApplyRenderFrameRole(const std::shared_ptr<CPUPipelineExecutor>& pipeline_executor,
                           const FramePreviewMetadata&                 metadata) {
   if (!pipeline_executor) {
     return;
   }
   pipeline_executor->GetGlobalParams().render_frame_role_ = RenderFrameRoleId(metadata.frame_role);
-  pipeline_executor->SetNextFramePreviewMetadata(metadata);
 }
 
 auto LoadViewportRegion(const std::shared_ptr<CPUPipelineExecutor>& pipeline_executor,
@@ -230,6 +229,7 @@ void PipelineTask::SetExecutorRenderParams() {
   }
 
   FramePreviewMetadata frame_metadata = desc.frame_metadata_;
+  FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
 
   if (requested_render_type == RenderType::FAST_PREVIEW) {
     frame_metadata.frame_role    = FrameRole::InteractivePrimary;
@@ -237,12 +237,11 @@ void PipelineTask::SetExecutorRenderParams() {
                                    region_scale_x >= (1.0f - kFullFrameRegionEpsilon) &&
                                    region_scale_y >= (1.0f - kFullFrameRegionEpsilon);
     if (rotation_active_fast_preview || full_frame_region) {
-      // Rotation preview should use a downsampled full frame so viewport coordinates
-      // stay aligned with the rotated result.
-      pipeline_executor_->SetNextFramePresentationMode(FramePresentationMode::ViewportTransformed);
+      presentation_mode = FramePresentationMode::ViewportTransformed;
       pipeline_executor_->GetGlobalParams().render_hs_can_seed_reference_ = true;
       frame_metadata.source_roi_norm                                      = {};
-      SetNextFrameMetadata(pipeline_executor_, frame_metadata);
+      ApplyRenderFrameRole(pipeline_executor_, frame_metadata);
+      pipeline_executor_->BindFrameSubmission(frame_metadata, presentation_mode);
       pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Bilinear);
       pipeline_executor_->SetRenderRegion(0, 0, 1.0f, 1.0f);
       pipeline_executor_->SetForceCPUOutput(false);
@@ -252,14 +251,12 @@ void PipelineTask::SetExecutorRenderParams() {
       return;
     }
 
-    pipeline_executor_->SetNextFramePresentationMode(FramePresentationMode::RoiFrame);
+    presentation_mode = FramePresentationMode::RoiFrame;
     frame_metadata = MetadataFromRegion(frame_metadata, viewport_region, region_x, region_y,
                                         region_scale_x, region_scale_y);
-    // Incidental zoom ROI frames do not replace scope input. A mode switch is
-    // explicit, so its current FIT/ROI frame is accepted just like the
-    // deprecated QWidget request path.
     frame_metadata.scope_update_allowed = frame_metadata.scope_refresh_requested;
-    SetNextFrameMetadata(pipeline_executor_, frame_metadata);
+    ApplyRenderFrameRole(pipeline_executor_, frame_metadata);
+    pipeline_executor_->BindFrameSubmission(frame_metadata, presentation_mode);
     pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Bilinear);
     pipeline_executor_->SetRenderRegion(region_x, region_y, region_scale_x, region_scale_y,
                                         region_reference_width, region_reference_height);
@@ -273,9 +270,10 @@ void PipelineTask::SetExecutorRenderParams() {
   if (requested_render_type == RenderType::QUALITY_BASE_PREVIEW) {
     frame_metadata.frame_role      = FrameRole::QualityBase;
     frame_metadata.source_roi_norm = {};
-    pipeline_executor_->SetNextFramePresentationMode(FramePresentationMode::ViewportTransformed);
+    presentation_mode              = FramePresentationMode::ViewportTransformed;
     pipeline_executor_->GetGlobalParams().render_hs_can_seed_reference_ = true;
-    SetNextFrameMetadata(pipeline_executor_, frame_metadata);
+    ApplyRenderFrameRole(pipeline_executor_, frame_metadata);
+    pipeline_executor_->BindFrameSubmission(frame_metadata, presentation_mode);
     pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Area);
     pipeline_executor_->SetRenderRegion(0, 0, 1.0f, 1.0f);
     pipeline_executor_->SetRenderRes(false, kQualityBasePreviewMaxLongEdge);
@@ -290,8 +288,9 @@ void PipelineTask::SetExecutorRenderParams() {
                                     : FrameRole::QualityBase;
     frame_metadata = MetadataFromRegion(frame_metadata, viewport_region, region_x, region_y,
                                         region_scale_x, region_scale_y);
-    pipeline_executor_->SetNextFramePresentationMode(FramePresentationMode::ViewportTransformed);
-    SetNextFrameMetadata(pipeline_executor_, frame_metadata);
+    presentation_mode = FramePresentationMode::ViewportTransformed;
+    ApplyRenderFrameRole(pipeline_executor_, frame_metadata);
+    pipeline_executor_->BindFrameSubmission(frame_metadata, presentation_mode);
     pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Area);
     pipeline_executor_->SetRenderRegion(region_x, region_y, region_scale_x, region_scale_y,
                                         region_reference_width, region_reference_height);
@@ -307,8 +306,9 @@ void PipelineTask::SetExecutorRenderParams() {
     return;
   }
   if (requested_render_type == RenderType::THUMBNAIL) {
-    pipeline_executor_->SetNextFramePresentationMode(FramePresentationMode::ViewportTransformed);
-    SetNextFrameMetadata(pipeline_executor_, frame_metadata);
+    presentation_mode = FramePresentationMode::ViewportTransformed;
+    ApplyRenderFrameRole(pipeline_executor_, frame_metadata);
+    pipeline_executor_->BindFrameSubmission(frame_metadata, presentation_mode);
     pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Bilinear);
     pipeline_executor_->SetRenderRegion(0, 0, 1.0f);
     pipeline_executor_->SetForceCPUOutput(true);
@@ -318,9 +318,10 @@ void PipelineTask::SetExecutorRenderParams() {
     return;
   }
   if (requested_render_type == RenderType::FULL_RES_PREVIEW) {
-    pipeline_executor_->SetNextFramePresentationMode(FramePresentationMode::ViewportTransformed);
+    presentation_mode = FramePresentationMode::ViewportTransformed;
     pipeline_executor_->GetGlobalParams().render_hs_can_seed_reference_ = true;
-    SetNextFrameMetadata(pipeline_executor_, frame_metadata);
+    ApplyRenderFrameRole(pipeline_executor_, frame_metadata);
+    pipeline_executor_->BindFrameSubmission(frame_metadata, presentation_mode);
     pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Area);
     pipeline_executor_->SetRenderRegion(0, 0, 1.0f);
     pipeline_executor_->SetRenderRes(false, kFullResPreviewMaxLongEdge);
@@ -332,8 +333,9 @@ void PipelineTask::SetExecutorRenderParams() {
   if (requested_render_type == RenderType::FULL_RES_EXPORT) {
     pipeline_executor_->GetGlobalParams().render_hs_preserve_source_detail_ = true;
     pipeline_executor_->GetGlobalParams().render_hs_can_seed_reference_     = true;
-    pipeline_executor_->SetNextFramePresentationMode(FramePresentationMode::ViewportTransformed);
-    SetNextFrameMetadata(pipeline_executor_, frame_metadata);
+    presentation_mode = FramePresentationMode::ViewportTransformed;
+    ApplyRenderFrameRole(pipeline_executor_, frame_metadata);
+    pipeline_executor_->BindFrameSubmission(frame_metadata, presentation_mode);
     pipeline_executor_->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Area);
     pipeline_executor_->SetRenderRegion(0, 0, 1.0f);
     pipeline_executor_->SetRenderRes(true);
@@ -378,10 +380,39 @@ PipelineScheduler::PipelineScheduler() : thread_pool_(1) {}
 
 PipelineScheduler::PipelineScheduler(size_t thread_count) : thread_pool_(thread_count) {}
 
-void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
+auto PipelineScheduler::IsStaleForSink(IFrameSink* sink, std::uint64_t request_id) -> bool {
+  if (!sink || request_id == 0) {
+    return false;
+  }
   std::lock_guard<std::mutex> lock(scheduler_lock_);
-  task.task_id_ = id_generator_.GenerateID();
-  thread_pool_.Submit([task = std::move(task)]() mutable {
+  const auto                  it = latest_submitted_request_id_.find(sink);
+  if (it == latest_submitted_request_id_.end()) {
+    return false;
+  }
+  return request_id < it->second;
+}
+
+void PipelineScheduler::MarkSinkApplyStarted(IFrameSink* sink, std::uint64_t request_id) {
+  if (!sink || request_id == 0) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(scheduler_lock_);
+  auto&                       latest = latest_submitted_request_id_[sink];
+  latest                             = std::max(latest, request_id);
+}
+
+void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
+  {
+    std::lock_guard<std::mutex> lock(scheduler_lock_);
+    task.task_id_ = id_generator_.GenerateID();
+    if (task.request_id_ == 0) {
+      task.request_id_ = next_request_id_++;
+    } else {
+      next_request_id_ = std::max(next_request_id_, task.request_id_ + 1);
+    }
+    task.options_.render_desc_.frame_metadata_.presentation_request_id = task.request_id_;
+  }
+  thread_pool_.Submit([this, task = std::move(task)]() mutable {
     const auto set_blocking_value = [&task](std::shared_ptr<ImageBuffer> value) {
       if (!task.options_.is_blocking_ || !task.result_) {
         return;
@@ -532,6 +563,17 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
               task.pipeline_executor_->AttachFrameSink(saved_frame_sink);
             }
           };
+
+          IFrameSink* output_sink = nullptr;
+          if (task.pipeline_executor_) {
+            output_sink = task.pipeline_executor_->GetFrameSink();
+          }
+          if (IsStaleForSink(output_sink, task.request_id_)) {
+            notify_thumbnail_failure_callbacks();
+            set_blocking_value(nullptr);
+            return;
+          }
+
           // RAII: restore one-shot render params (decode/resize/ROI/force-cpu/cache)
           // and the editor frame sink on every exit path (success, cancel, exception).
           auto render_params_guard = std::unique_ptr<void, std::function<void(void*)>>(
@@ -553,6 +595,15 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
             return;
           }
 
+          if (IsStaleForSink(output_sink, task.request_id_)) {
+            apply_state_transition_after_render();
+            notify_thumbnail_failure_callbacks();
+            set_blocking_value(nullptr);
+            return;
+          }
+
+          MarkSinkApplyStarted(output_sink, task.request_id_);
+
           auto result         = task.pipeline_executor_->Apply(task.input_);
           bool result_has_cpu = false;
           if (result && result->cpu_data_valid_) {
@@ -565,6 +616,15 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
           const bool require_gpu_valid = (render_desc.render_type_ != RenderType::THUMBNAIL);
           const bool result_valid_for_copy =
               result && result_has_cpu && (!require_gpu_valid || result->gpu_data_valid_);
+
+          if (IsStaleForSink(output_sink, task.request_id_)) {
+            apply_state_transition_after_render();
+            if (render_desc.render_type_ == RenderType::THUMBNAIL) {
+              notify_thumbnail_failure_callbacks();
+            }
+            set_blocking_value(nullptr);
+            return;
+          }
 
           if (render_desc.render_type_ == RenderType::FAST_PREVIEW ||
               render_desc.render_type_ == RenderType::QUALITY_BASE_PREVIEW ||

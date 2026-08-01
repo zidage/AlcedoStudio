@@ -93,8 +93,8 @@ void FinalDisplayFrameTapSink::SetFrameIdentity(uint64_t image_identity,
   if (image_identity_ != image_identity || image_generation_ != image_generation) {
     current_frame_          = {};
     scope_frame_            = {};
-    pending_metadata_       = {};
-    pending_metadata_valid_ = false;
+    bound_submission_       = {};
+    bound_submission_valid_ = false;
   }
   image_identity_   = image_identity;
   image_generation_ = image_generation;
@@ -152,9 +152,15 @@ void FinalDisplayFrameTapSink::UnmapResource() {
   }
 }
 
-void FinalDisplayFrameTapSink::NotifyFrameReady() {
+void FinalDisplayFrameTapSink::BindFrameSubmission(const FrameCompletionSubmission& submission) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  bound_submission_       = submission;
+  bound_submission_valid_ = true;
+}
+
+void FinalDisplayFrameTapSink::NotifyFrameReady(const FrameCompletionSubmission& submission) {
   if (auto* sink = downstream_sink()) {
-    sink->NotifyFrameReady();
+    sink->NotifyFrameReady(submission);
   }
 }
 
@@ -180,14 +186,15 @@ void FinalDisplayFrameTapSink::SubmitFinalDisplayFrame(const FinalDisplayFrameVi
   bool                  deferred             = false;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (pending_metadata_valid_) {
-      if (pending_metadata_.image_identity != 0 || pending_metadata_.image_generation != 0) {
-        stamped_frame.image_identity   = pending_metadata_.image_identity;
-        stamped_frame.image_generation = pending_metadata_.image_generation;
+    if (bound_submission_valid_) {
+      if (bound_submission_.metadata.image_identity != 0 ||
+          bound_submission_.metadata.image_generation != 0) {
+        stamped_frame.image_identity   = bound_submission_.metadata.image_identity;
+        stamped_frame.image_generation = bound_submission_.metadata.image_generation;
       }
-      stamped_frame.display_generation = pending_metadata_.preview_generation;
-      scope_update_allowed             = pending_metadata_.scope_update_allowed;
-      pending_metadata_valid_          = false;
+      stamped_frame.display_generation = bound_submission_.metadata.presentation_request_id;
+      scope_update_allowed             = bound_submission_.metadata.scope_update_allowed;
+      bound_submission_valid_          = false;
     }
     if (stamped_frame.image_identity == 0 && image_identity_ != 0) {
       stamped_frame.image_identity = image_identity_;
@@ -255,23 +262,6 @@ auto FinalDisplayFrameTapSink::GetViewportRenderRegion() const
     return sink->GetViewportRenderRegion();
   }
   return std::nullopt;
-}
-
-void FinalDisplayFrameTapSink::SetNextFramePresentationMode(FramePresentationMode mode) {
-  if (auto* sink = downstream_sink()) {
-    sink->SetNextFramePresentationMode(mode);
-  }
-}
-
-void FinalDisplayFrameTapSink::SetNextFramePreviewMetadata(const FramePreviewMetadata& metadata) {
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    pending_metadata_       = metadata;
-    pending_metadata_valid_ = true;
-  }
-  if (auto* sink = downstream_sink()) {
-    sink->SetNextFramePreviewMetadata(metadata);
-  }
 }
 
 auto FinalDisplayFrameTapSink::GetViewerSurface() -> IEditViewerSurface* {

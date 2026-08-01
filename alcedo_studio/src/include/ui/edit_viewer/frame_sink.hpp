@@ -62,6 +62,11 @@ enum class FramePresentationMode {
   RoiFrame,
 };
 
+struct FrameCompletionSubmission {
+  FramePreviewMetadata  metadata{};
+  FramePresentationMode mode = FramePresentationMode::FullFrame;
+};
+
 enum class FramePixelFormat {
   RGBA32F,
 };
@@ -147,7 +152,13 @@ class IFrameSink {
 
   virtual void UnmapResource()                                                                 = 0;
 
-  virtual void NotifyFrameReady()                                                              = 0;
+  virtual void NotifyFrameReady(const FrameCompletionSubmission& submission)                     = 0;
+
+  // Binds the submission stamped for the in-flight Apply(). Production sinks
+  // use this for EnsureSize/render-reference decisions before NotifyFrameReady.
+  virtual void BindFrameSubmission(const FrameCompletionSubmission& submission) {
+    (void)submission;
+  }
 
   virtual void SubmitHostFrame(const ViewerFrame&) {}
 #ifdef HAVE_METAL
@@ -163,10 +174,6 @@ class IFrameSink {
   virtual auto GetViewportRenderRegion() const -> std::optional<ViewportRenderRegion> {
     return std::nullopt;
   }
-
-  // Sets how the next presented frame should be displayed.
-  virtual void SetNextFramePresentationMode(FramePresentationMode) {}
-  virtual void SetNextFramePreviewMetadata(const FramePreviewMetadata&) {}
 
   // Exposes the presentation surface when a sink is backed by a live viewer.
   virtual auto GetViewerSurface() -> IEditViewerSurface* { return nullptr; }

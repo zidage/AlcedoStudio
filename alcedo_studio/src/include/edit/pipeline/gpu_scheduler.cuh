@@ -48,6 +48,7 @@ class GPU_KernelLauncher {
   ViewerDisplayConfig                        display_config_{};
 
   IFrameSink*                                frame_sink_ = nullptr;
+  FrameCompletionSubmission                    bound_frame_submission_{};
 
   // Lightweight FPS reporter (per launcher instance). Prints a single updating
   // line in the CLI, throttled to avoid spamming.
@@ -181,6 +182,10 @@ class GPU_KernelLauncher {
   }
 
   void SetFrameSink(IFrameSink* frame_sink) { frame_sink_ = frame_sink; }
+
+  void SetBoundFrameSubmission(const FrameCompletionSubmission& submission) {
+    bound_frame_submission_ = submission;
+  }
 
   void Execute() {
     const auto exec_start              = std::chrono::steady_clock::now();
@@ -338,7 +343,7 @@ class GPU_KernelLauncher {
         }
 
         frame_sink_->UnmapResource();
-        frame_sink_->NotifyFrameReady();
+        frame_sink_->NotifyFrameReady(bound_frame_submission_);
 
         // FPS/frametime reporting
         const auto   exec_end = std::chrono::steady_clock::now();

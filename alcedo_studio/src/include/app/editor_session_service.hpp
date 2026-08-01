@@ -343,9 +343,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto first_frame_request_id() const -> std::uint64_t {
     return render_.first_frame_request_id();
   }
-  [[nodiscard]] auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot override {
-    return edit_.adjustment_snapshot();
-  }
+  [[nodiscard]] auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot override;
   [[nodiscard]] auto history_revision() const -> std::uint64_t override {
     return history_revision_.load(std::memory_order_acquire);
   }

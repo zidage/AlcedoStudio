@@ -44,25 +44,12 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
 
   void SetResultObserver(ResultObserver observer);
 
-  /// Active image-load / content / view stamps. Older pending intents are removed.
-  /// Interactive adjustment bursts may preserve an already-running full frame
-  /// so FAST_PREVIEW can finish while the newest pending request is coalesced.
-  void SetActiveGenerations(std::uint64_t image_load_request_id, std::uint64_t render_generation,
-                            std::uint64_t view_generation,
-                            EditorRenderSupersessionPolicy policy =
-                                EditorRenderSupersessionPolicy::CancelObsolete) override;
+  /// Active image-load request. Older pending intents for other loads are removed.
+  void SetActiveImageLoadRequest(std::uint64_t image_load_request_id) override;
 
   [[nodiscard]] auto image_load_request_id() const -> std::uint64_t {
     std::scoped_lock lock(mutex_);
     return active_image_load_request_id_;
-  }
-  [[nodiscard]] auto render_generation() const -> std::uint64_t {
-    std::scoped_lock lock(mutex_);
-    return render_generation_;
-  }
-  [[nodiscard]] auto view_generation() const -> std::uint64_t {
-    std::scoped_lock lock(mutex_);
-    return view_generation_;
   }
 
   auto Submit(const EditorRenderIntent& intent) -> EditorRenderResult override;
@@ -111,8 +98,6 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
     diag.cancelled_count              = cancelled_count_;
     diag.last_error                   = last_error_;
     diag.image_load_request_id        = active_image_load_request_id_;
-    diag.render_generation            = render_generation_;
-    diag.view_generation              = view_generation_;
     diag.last_rejection_reason        = last_rejection_reason_;
     diag.last_rejected_render_reason  = last_rejected_render_reason_;
     diag.last_submitted_frame_role    = last_submitted_frame_role_;
@@ -136,11 +121,10 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
 
   auto AcceptOrReject(const EditorRenderIntent& intent, std::string* message) const -> bool;
   void ReplacePendingWithKey(const std::string& key, std::uint64_t except_request_id);
-  /// Cancel obsolete pending/in-flight work under mutex_. Returns a scheduler
-  /// job id that must be cancelled only after releasing mutex_ (token callbacks
-  /// re-enter CancelRequest).
-  auto CancelObsoleteForActiveGenerations(EditorRenderSupersessionPolicy policy)
-      -> std::uint64_t;
+  /// Cancel pending/in-flight work whose image_load_request_id does not match
+  /// active_image_load_request_id_. Returns a scheduler job id that must be
+  /// cancelled only after releasing mutex_ (token callbacks re-enter CancelRequest).
+  auto CancelObsoleteForImageLoadMismatch() -> std::uint64_t;
   [[nodiscard]] auto IsObsolete(const EditorRenderIntent& intent) const -> bool;
   void               Emit(EditorRenderResult result);
   void               DeliverPendingResults();
@@ -153,8 +137,6 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   std::shared_ptr<IEditorPipelineSchedulerPort> scheduler_;
   ResultObserver                                observer_;
   std::uint64_t                                 active_image_load_request_id_ = 0;
-  std::uint64_t                                 render_generation_         = 0;
-  std::uint64_t                                 view_generation_           = 0;
   std::uint64_t                                 next_request_id_           = 1;
   std::uint64_t                                 last_scheduled_request_id_ = 0;
   std::deque<PendingEntry>                      pending_;

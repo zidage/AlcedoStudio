@@ -120,14 +120,6 @@ void MergeJsonPatch(nlohmann::json& target, const nlohmann::json& patch) {
   }
 }
 
-auto LooksLikeFullPipelineParams(const nlohmann::json& params) -> bool {
-  if (!params.is_object()) {
-    return false;
-  }
-  return params.contains("Image Loading") || params.contains("Basic Adjustment") ||
-         params.contains("Color Adjustment") || params.contains("Output Transform");
-}
-
 auto ApplyPatch(CPUPipelineExecutor& executor, const EditorAdjustmentPatch& patch,
                 std::string* error) -> bool {
   const auto spec = FieldSpec(patch.field_key);
@@ -150,9 +142,9 @@ auto ApplyPatch(CPUPipelineExecutor& executor, const EditorAdjustmentPatch& patc
   auto& globals = executor.GetGlobalParams();
   if (const auto current = stage.GetOperator(spec->operator_type);
       current.has_value() && current.value() != nullptr && current.value()->op_) {
-    // Cumulative editor snapshots carry partial operator JSON. Complete it with the operator's
-    // canonical parameters before PipelineStage compares the values, so omitted runtime/input
-    // fields do not turn an unchanged operator into a cache invalidation.
+    // Partial operator JSON is completed with canonical parameters before
+    // PipelineStage compares values, so omitted runtime/input fields do not
+    // turn an unchanged operator into a cache invalidation.
     auto canonical_params = current.value()->op_->GetParams();
     MergeJsonPatch(canonical_params, params);
     params = std::move(canonical_params);
@@ -257,87 +249,17 @@ auto SnapshotTouchesImageLoading(const EditorRenderAdjustmentSnapshot& snapshot)
       return true;
     }
   }
-  if (snapshot.params_json.empty()) {
-    return false;
-  }
-  try {
-    const auto params = nlohmann::json::parse(snapshot.params_json);
-    if (LooksLikeFullPipelineParams(params)) {
-      return true;
-    }
-    if (params.contains("raw") || params.contains("lens_calib")) {
-      return true;
-    }
-    if (snapshot.fingerprint == "raw_decode" || snapshot.fingerprint == "lens_calib") {
-      return true;
-    }
-  } catch (const std::exception&) {
-    // Malformed JSON is handled by ApplyEditorAdjustmentSnapshot.
-  }
   return false;
-}
-
-/// True when the snapshot carries one entry for every known editor field. Full
-/// history reinstalls must **replace** operator params; deep-merging with the
-/// live executor would keep the previous Version's values whenever a field is
-/// serialized as an empty object (the root/default history projection).
-auto LooksLikeCompleteEditorSnapshot(const EditorRenderAdjustmentSnapshot& snapshot) -> bool {
-  // Must stay in sync with kEditorSnapshotFields in editor_history_shared_helpers.
-  constexpr std::size_t kExpectedFieldCount = 22;
-  if (snapshot.patches.size() != kExpectedFieldCount) return false;
-  for (const auto& patch : snapshot.patches) {
-    if (!FieldSpec(patch.field_key).has_value()) return false;
-  }
-  return true;
 }
 
 auto ApplyEditorAdjustmentSnapshot(CPUPipelineExecutor&                  executor,
                                    const EditorRenderAdjustmentSnapshot& snapshot,
                                    std::string*                          error) -> bool {
   try {
-    if (!snapshot.patches.empty()) {
-      const bool full_replace = LooksLikeCompleteEditorSnapshot(snapshot);
-      for (const auto& patch : snapshot.patches) {
-        if (full_replace) {
-          const auto spec = FieldSpec(patch.field_key);
-          if (!spec.has_value()) {
-            if (error) *error = "Unknown editor adjustment field: " + patch.field_key;
-            return false;
-          }
-          EditorAdjustmentOperatorState state;
-          try {
-            state.params = patch.params_json.empty() ? nlohmann::json::object()
-                                                    : nlohmann::json::parse(patch.params_json);
-          } catch (const std::exception& ex) {
-            if (error) *error = ex.what();
-            return false;
-          }
-          if (!state.params.is_object()) {
-            if (error) *error = "Editor adjustment params must be a JSON object";
-            return false;
-          }
-          state.enabled = patch.enabled;
-          if (!ApplyEditorAdjustmentOperatorState(executor, *spec, state, error)) {
-            return false;
-          }
-        } else if (!ApplyPatch(executor, patch, error)) {
-          return false;
-        }
+    for (const auto& patch : snapshot.patches) {
+      if (!ApplyPatch(executor, patch, error)) {
+        return false;
       }
-      return true;
-    }
-    if (snapshot.params_json.empty()) {
-      return true;
-    }
-
-    const auto params = nlohmann::json::parse(snapshot.params_json);
-    if (LooksLikeFullPipelineParams(params)) {
-      executor.ImportPipelineParams(params);
-      return true;
-    }
-    if (FieldSpec(snapshot.fingerprint).has_value()) {
-      return ApplyPatch(
-          executor, EditorAdjustmentPatch{snapshot.fingerprint, snapshot.params_json, true}, error);
     }
     return true;
   } catch (const std::exception& ex) {

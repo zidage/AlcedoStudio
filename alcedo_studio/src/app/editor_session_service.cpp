@@ -57,7 +57,7 @@ EditorSessionService::EditorSessionService(Dependencies dependencies)
           }}),
       edit_(
           EditorSessionEditController::Dependencies{dependencies_.history, dependencies_.journal}),
-      navigation_(lifecycle_, save_service_, render_, edit_, dependencies_.journal.get(),
+      navigation_(lifecycle_, save_service_, render_, dependencies_.journal.get(),
                   dependencies_.checkpoint_store.get(), dependencies_.history.get(),
                   &navigation_state_) {
   navigation_.SetCompletionNotifier([this](const NavigationCompletion& completion) {
@@ -520,6 +520,20 @@ auto EditorSessionService::history_snapshot() -> EditorHistorySnapshot {
   return snapshot;
 }
 
+auto EditorSessionService::adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot {
+  if (!dependencies_.history || !lifecycle_.has_history_guard()) {
+    return {};
+  }
+  EditorRenderAdjustmentSnapshot snapshot;
+  std::string                    error;
+  auto& history = *dependencies_.history;
+  if (!const_cast<IEditorHistoryPort&>(history).ReadAdjustmentSnapshot(
+          lifecycle_.history_guard(), &snapshot, &error)) {
+    return {};
+  }
+  return snapshot;
+}
+
 auto EditorSessionService::CancelPendingMergeForNavigation(std::string* error) -> bool {
   if (!pending_merge_preview_) return true;
   if (!dependencies_.history || !lifecycle_.has_history_guard()) {
@@ -676,14 +690,6 @@ auto EditorSessionService::PasteAdjustments(const AdjustmentTransferPackage& pac
     return Reject(error.empty() ? "Editor Paste failed" : std::move(error));
   }
 
-  EditorRenderAdjustmentSnapshot snapshot;
-  std::string                    snapshot_error;
-  if (!dependencies_.history->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &snapshot,
-                                                     &snapshot_error)) {
-    return Fail(snapshot_error.empty() ? "Failed to read snapshot after Paste"
-                                       : std::move(snapshot_error));
-  }
-  edit_.set_adjustment_snapshot(std::move(snapshot));
   BumpHistoryRevision();
   AcquireLease(EditorOperationLeaseKind::PasteMaterialization, current_operation_id_,
                lifecycle_.identity().element_id, lifecycle_.identity().image_id,
@@ -782,14 +788,6 @@ auto EditorSessionService::CompleteMerge(const std::vector<AdjustmentMergeResolu
   pending_merge_preview_.reset();
   active_merge_preview_id_.reset();
 
-  EditorRenderAdjustmentSnapshot snapshot;
-  std::string                    snapshot_error;
-  if (!dependencies_.history->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &snapshot,
-                                                     &snapshot_error)) {
-    return Fail(snapshot_error.empty() ? "Failed to read snapshot after Merge"
-                                       : std::move(snapshot_error));
-  }
-  edit_.set_adjustment_snapshot(std::move(snapshot));
   BumpHistoryRevision();
   AcquireLease(EditorOperationLeaseKind::MergeMaterialization, current_operation_id_,
                lifecycle_.identity().element_id, lifecycle_.identity().image_id,
@@ -993,24 +991,9 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
   published.state    = lifecycle_.state();
   published.task_id  = completion.task_id;
   if (marker.route_render) {
-    EditorRenderAdjustmentSnapshot snapshot;
-    std::string                    snapshot_error;
-    if (!dependencies_.history->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &snapshot,
-                                                       &snapshot_error)) {
-      lifecycle_.Fail(snapshot_error.empty() ? "Failed to publish editor history snapshot"
-                                             : snapshot_error);
-      published.kind    = EditorSessionResultKind::Failed;
-      published.state   = lifecycle_.state();
-      published.message = lifecycle_.last_error();
-      Emit(std::move(published));
-      return;
-    }
-    edit_.set_adjustment_snapshot(std::move(snapshot));
-    render_.AdvanceContentGeneration();
     EditorRenderCommand command;
     command.reason       = EditorRenderReason::InitialFrame;
     command.operation_id = current_operation_id_;
-    command.adjustment   = edit_.adjustment_snapshot();
     render_.RouteInitialRender(command, lifecycle_.identity(),
                                lifecycle_.active_image_load_request());
     published.kind              = EditorSessionResultKind::RenderRouted;
@@ -1173,7 +1156,6 @@ auto EditorSessionService::Patch(EditorAdjustmentPatch patch) -> EditorSessionRe
   if (outcome.kind == EditorEditOutcome::Kind::Rejected) {
     return Reject(outcome.message);
   }
-  render_.AdvanceContentGeneration();
   const auto route_identity           = lifecycle_.identity();
   const auto load_request             = lifecycle_.active_image_load_request();
   outcome.render_command.operation_id = current_operation_id_;
@@ -1207,7 +1189,6 @@ auto EditorSessionService::CommitAdjustment(EditorAdjustmentPatch patch) -> Edit
   if (outcome.kind == EditorEditOutcome::Kind::Rejected) {
     return Reject(outcome.message);
   }
-  render_.AdvanceContentGeneration();
   const auto route_identity           = lifecycle_.identity();
   const auto load_request             = lifecycle_.active_image_load_request();
   outcome.render_command.operation_id = current_operation_id_;
@@ -1253,7 +1234,6 @@ auto EditorSessionService::Undo() -> EditorSessionResult {
   if (outcome.kind == EditorEditOutcome::Kind::Failed) {
     return Reject(outcome.message);
   }
-  render_.AdvanceContentGeneration();
   const auto undo_identity            = lifecycle_.identity();
   const auto load_request             = lifecycle_.active_image_load_request();
   outcome.render_command.operation_id = current_operation_id_;
@@ -1286,7 +1266,6 @@ auto EditorSessionService::Redo() -> EditorSessionResult {
   if (outcome.kind == EditorEditOutcome::Kind::Failed) {
     return Reject(outcome.message);
   }
-  render_.AdvanceContentGeneration();
   const auto redo_identity            = lifecycle_.identity();
   const auto load_request             = lifecycle_.active_image_load_request();
   outcome.render_command.operation_id = current_operation_id_;
@@ -1321,7 +1300,6 @@ auto EditorSessionService::MoveHeadToCommit(const commit_hash_t& commit_id) -> E
   if (outcome.kind == EditorEditOutcome::Kind::Failed) {
     return Reject(outcome.message);
   }
-  render_.AdvanceContentGeneration();
   const auto move_identity            = lifecycle_.identity();
   const auto load_request             = lifecycle_.active_image_load_request();
   outcome.render_command.operation_id = current_operation_id_;
@@ -1359,7 +1337,6 @@ auto EditorSessionService::Discard() -> EditorSessionResult {
   if (outcome.kind == EditorEditOutcome::Kind::Failed) {
     return Reject(outcome.message);
   }
-  render_.AdvanceContentGeneration();
   if (state == EditorSessionState::Failed) {
     lifecycle_.BeginRetryFromDiscard();
   }
@@ -1495,15 +1472,7 @@ auto EditorSessionService::RequestViewChange(EditorRenderReason                 
   EditorRenderCommand command;
   command.operation_id = current_operation_id_;
   command.reason       = reason;
-  command.adjustment   = edit_.adjustment_snapshot();
   command.view_region  = std::move(region);
-  // Advance the appropriate generation before routing to the render
-  // controller. The render controller no longer mutates lifecycle.
-  if (reason == EditorRenderReason::CropRotate) {
-    render_.AdvanceContentGeneration();
-  } else {
-    render_.AdvanceViewGeneration();
-  }
   const auto view_identity  = lifecycle_.identity();
   const auto view_state     = lifecycle_.state();
   const auto load_request   = lifecycle_.active_image_load_request();

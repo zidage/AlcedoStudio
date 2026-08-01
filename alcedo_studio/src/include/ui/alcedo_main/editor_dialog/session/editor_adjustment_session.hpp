@@ -30,7 +30,7 @@ class EditorAdjustmentSession {
   struct Callbacks {
     std::function<void()> schedule_quality_preview;
     std::function<void()> schedule_detail_preview_from_viewport;
-    std::function<void()> advance_preview_generation;
+    std::function<void()> invalidate_content_preview;
     std::function<void()> update_version_ui;
     std::function<void()> mark_full_frame_preview_after_geometry_commit;
   };

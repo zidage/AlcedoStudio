@@ -408,8 +408,7 @@ auto DirectPresentQueue::ConsumeNewestReady(FrameRole layer, std::uint64_t image
     -> std::optional<ReadyFrame> {
   std::lock_guard lock(mutex_);
   int             best          = -1;
-  std::uint64_t   best_preview  = 0;
-  std::uint64_t   best_detail   = 0;
+  std::uint64_t   best_request  = 0;
   std::uint64_t   best_sequence = 0;
   for (int i = 0; i < kSlotCount; ++i) {
     const auto& slot = slots_[static_cast<std::size_t>(i)];
@@ -426,15 +425,12 @@ auto DirectPresentQueue::ConsumeNewestReady(FrameRole layer, std::uint64_t image
     if (image_identity != 0 && slot.image_identity != 0 && slot.image_identity != image_identity) {
       continue;
     }
-    const bool better =
-        best < 0 || slot.preview_metadata.preview_generation > best_preview ||
-        (slot.preview_metadata.preview_generation == best_preview &&
-         (slot.preview_metadata.detail_serial > best_detail ||
-          (slot.preview_metadata.detail_serial == best_detail && slot.sequence > best_sequence)));
+    const auto request_id = slot.preview_metadata.presentation_request_id;
+    const bool better     = best < 0 || request_id > best_request ||
+                        (request_id == best_request && slot.sequence > best_sequence);
     if (better) {
-      best          = i;
-      best_preview  = slot.preview_metadata.preview_generation;
-      best_detail   = slot.preview_metadata.detail_serial;
+      best         = i;
+      best_request = request_id;
       best_sequence = slot.sequence;
     }
   }

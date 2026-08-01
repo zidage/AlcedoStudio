@@ -49,7 +49,7 @@ class EditorRenderCoordinator {
 
   EditorRenderCoordinator(Dependencies dependencies, Callbacks callbacks);
 
-  void AdvancePreviewGeneration();
+  void InvalidateContentPreviewState();
   void InvalidateDetailPreviewState();
   auto BuildPreviewMetadata(RenderType render_type) const -> FramePreviewMetadata;
   auto IsDetailPreviewGeometryFallbackActive() const -> bool;
@@ -71,9 +71,8 @@ class EditorRenderCoordinator {
   void EnqueueRenderRequest(const AdjustmentState&      snapshot,
                             const FramePreviewMetadata& frame_metadata, bool apply_state,
                             bool use_viewport_region = true);
-  void RequestRender(bool use_viewport_region = true, bool bump_preview_generation = true);
-  void RequestRenderWithoutApplyingState(bool use_viewport_region     = true,
-                                         bool bump_preview_generation = false);
+  void RequestRender(bool use_viewport_region = true);
+  void RequestRenderWithoutApplyingState(bool use_viewport_region = false);
 
   void EnsurePollTimer();
   void PollInflight();
@@ -106,9 +105,8 @@ class EditorRenderCoordinator {
   std::optional<PendingRenderRequest>                      pending_detail_render_request_{};
 
   std::chrono::steady_clock::time_point                    last_fast_preview_submit_time_{};
-  std::uint64_t                                            preview_generation_ = 0;
   std::uint64_t                                            detail_serial_      = 0;
-  std::uint64_t latest_quality_base_generation_ready_                          = 0;
+  bool                                                     quality_base_ready_ = false;
 };
 
 }  // namespace alcedo::ui

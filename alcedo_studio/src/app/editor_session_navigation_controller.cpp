@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "app/editor_mini_git_materializer.hpp"
-#include "app/editor_session_edit_controller.hpp"
 #include "app/editor_session_lifecycle.hpp"
 #include "app/editor_session_render_controller.hpp"
 
@@ -15,13 +14,12 @@ namespace alcedo {
 
 EditorSessionNavigationController::EditorSessionNavigationController(
     EditorSessionLifecycle& lifecycle, EditorSaveCheckpointService& save_service,
-    EditorSessionRenderController& render, EditorSessionEditController& edit,
-    IEditorJournalPort* journal, IEditorCheckpointStore* checkpoint_store,
-    IEditorHistoryPort* history, EditorSessionNavigationState* state)
+    EditorSessionRenderController& render, IEditorJournalPort* journal,
+    IEditorCheckpointStore* checkpoint_store, IEditorHistoryPort* history,
+    EditorSessionNavigationState* state)
     : lifecycle_(lifecycle),
       save_service_(save_service),
       render_(render),
-      edit_(edit),
       journal_(journal),
       checkpoint_store_(checkpoint_store),
       history_(history),
@@ -190,7 +188,6 @@ auto EditorSessionNavigationController::RequestClose(bool persist_changes) -> Na
   render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
   lifecycle_.ReleaseGuards();
   lifecycle_.CompleteClose();
-  edit_.ClearSnapshot();
   render_.ResetForNewImage();
   outcome.completed_synchronously = true;
   outcome.message = persist_changes ? "Editor session closed" : "Editor changes discarded";
@@ -399,20 +396,6 @@ void EditorSessionNavigationController::ContinueToTarget(sl_element_id_t element
     return;
   }
 
-  EditorRenderAdjustmentSnapshot history_snapshot;
-  if (history_ != nullptr &&
-      !history_->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &history_snapshot, &error)) {
-    lifecycle_.ReleaseGuards();
-    lifecycle_.Fail(error);
-    return;
-  }
-  if (!history_snapshot.params_json.empty() || !history_snapshot.patches.empty() ||
-      !history_snapshot.fingerprint.empty()) {
-    edit_.set_adjustment_snapshot(std::move(history_snapshot));
-  } else {
-    edit_.ClearSnapshot();
-  }
-
   lifecycle_.MarkImageReady();
   render_.ResetForNewImage();
   render_.MarkImageAcquired();
@@ -420,13 +403,11 @@ void EditorSessionNavigationController::ContinueToTarget(sl_element_id_t element
   EditorRenderCommand command;
   command.operation_id = operation_id_;
   command.reason = is_switch ? EditorRenderReason::ImageSwitch : EditorRenderReason::InitialFrame;
-  command.adjustment = edit_.adjustment_snapshot();
   render_.RouteInitialRender(command, lifecycle_.identity(), lifecycle_.active_image_load_request());
 }
 
 void EditorSessionNavigationController::ContinueToClose(bool persist_changes) {
   lifecycle_.CompleteClose();
-  edit_.ClearSnapshot();
   render_.ResetForNewImage();
   (void)persist_changes;
 }
@@ -516,33 +497,14 @@ auto EditorSessionNavigationController::ContinueCheckoutVersion(const version_re
     return false;
   }
 
-  EditorRenderAdjustmentSnapshot history_snapshot;
-  if (!history_->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &history_snapshot,
-                                        &local_error)) {
-    if (error)
-      *error = local_error.empty() ? "Failed to read snapshot after Version checkout" : local_error;
-    return false;
-  }
-  if (!history_snapshot.params_json.empty() || !history_snapshot.patches.empty() ||
-      !history_snapshot.fingerprint.empty()) {
-    edit_.set_adjustment_snapshot(std::move(history_snapshot));
-  } else {
-    edit_.ClearSnapshot();
-  }
-
-  // Stay Interactive on the same image. Advance content generation only — do
-  // NOT ResetForNewImage (that zeroes content_generation_ back to 1 and cancels
-  // the advance, so full-frame presentation keeps the previous Version's frame
-  // until a view-dependent ROI refresh). Match Undo / MoveHeadToCommit.
+  // Stay Interactive on the same image. Match Undo / MoveHeadToCommit.
   if (lifecycle_.state() != EditorSessionState::Interactive) {
     lifecycle_.MarkImageReady();
   }
-  render_.AdvanceContentGeneration();
 
   EditorRenderCommand command;
   command.operation_id = operation_id_;
   command.reason       = EditorRenderReason::InitialFrame;
-  command.adjustment   = edit_.adjustment_snapshot();
   render_.RouteInitialRender(command, lifecycle_.identity(), lifecycle_.active_image_load_request());
   return true;
 }
@@ -562,31 +524,13 @@ auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string  d
     return false;
   }
 
-  EditorRenderAdjustmentSnapshot history_snapshot;
-  if (!history_->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &history_snapshot,
-                                        &local_error)) {
-    if (error)
-      *error =
-          local_error.empty() ? "Failed to read snapshot after root Version creation" : local_error;
-    return false;
-  }
-  if (!history_snapshot.params_json.empty() || !history_snapshot.patches.empty() ||
-      !history_snapshot.fingerprint.empty()) {
-    edit_.set_adjustment_snapshot(std::move(history_snapshot));
-  } else {
-    edit_.ClearSnapshot();
-  }
-
   if (lifecycle_.state() != EditorSessionState::Interactive) {
     lifecycle_.MarkImageReady();
   }
-  // Same generation advance as checkout / Undo (no ResetForNewImage).
-  render_.AdvanceContentGeneration();
 
   EditorRenderCommand command;
   command.operation_id = operation_id_;
   command.reason       = EditorRenderReason::InitialFrame;
-  command.adjustment   = edit_.adjustment_snapshot();
   render_.RouteInitialRender(command, lifecycle_.identity(), lifecycle_.active_image_load_request());
   return true;
 }
@@ -608,29 +552,13 @@ auto EditorSessionNavigationController::ContinueBranchFromCommit(const commit_ha
     return false;
   }
 
-  EditorRenderAdjustmentSnapshot history_snapshot;
-  if (!history_->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &history_snapshot,
-                                        &local_error)) {
-    if (error)
-      *error = local_error.empty() ? "Failed to read snapshot after branch creation" : local_error;
-    return false;
-  }
-  if (!history_snapshot.params_json.empty() || !history_snapshot.patches.empty() ||
-      !history_snapshot.fingerprint.empty()) {
-    edit_.set_adjustment_snapshot(std::move(history_snapshot));
-  } else {
-    edit_.ClearSnapshot();
-  }
-
   if (lifecycle_.state() != EditorSessionState::Interactive) {
     lifecycle_.MarkImageReady();
   }
-  render_.AdvanceContentGeneration();
 
   EditorRenderCommand command;
   command.operation_id = operation_id_;
   command.reason       = EditorRenderReason::InitialFrame;
-  command.adjustment   = edit_.adjustment_snapshot();
   render_.RouteInitialRender(command, lifecycle_.identity(), lifecycle_.active_image_load_request());
   return true;
 }
@@ -745,7 +673,6 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
     render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
     lifecycle_.ReleaseGuards();
     lifecycle_.CompleteClose();
-    edit_.ClearSnapshot();
     render_.ResetForNewImage();
     outcome.completed_synchronously = true;
     outcome.message                 = "Editor changes discarded";
@@ -804,7 +731,6 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
   // SwitchImage: release the current image and acquire the target.
   render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
   lifecycle_.ReleaseGuards();
-  edit_.ClearSnapshot();
   ContinueToTarget(recovery.element_id, recovery.image_id, recovery.is_switch);
   outcome.completed_synchronously = true;
   outcome.message                 = "Discarded and switched image";

@@ -43,16 +43,14 @@ class MockFrameSink final : public IFrameSink {
 
   void UnmapResource() override { unmap_resource_calls_++; }
 
-  void NotifyFrameReady() override { notify_frame_ready_calls_++; }
-
-  void SetNextFramePresentationMode(FramePresentationMode mode) override {
-    presentation_mode_calls_++;
-    last_mode_ = mode;
+  void NotifyFrameReady(const FrameCompletionSubmission& submission) override {
+    notify_frame_ready_calls_++;
+    last_submission_ = submission;
   }
 
-  void SetNextFramePreviewMetadata(const FramePreviewMetadata& metadata) override {
-    preview_metadata_calls_++;
-    last_metadata_ = metadata;
+  void BindFrameSubmission(const FrameCompletionSubmission& submission) override {
+    bind_submission_calls_++;
+    last_bound_submission_ = submission;
   }
 
   auto GetViewportRenderRegion() const -> std::optional<ViewportRenderRegion> override {
@@ -70,13 +68,10 @@ class MockFrameSink final : public IFrameSink {
   int                                 notify_frame_ready_calls_     = 0;
   mutable int                         viewport_render_region_calls_ = 0;
 
-  // These are the methods that thumbnail tasks must NOT call into the editor
-  // sink.  Track them so tests can enforce the acceptance criterion.
-  int                                 presentation_mode_calls_      = 0;
-  int                                 preview_metadata_calls_       = 0;
+  int                                 bind_submission_calls_        = 0;
 
-  FramePresentationMode               last_mode_{FramePresentationMode::FullFrame};
-  FramePreviewMetadata                last_metadata_{};
+  FrameCompletionSubmission           last_submission_{};
+  FrameCompletionSubmission           last_bound_submission_{};
   std::optional<ViewportRenderRegion> viewport_render_region_{};
 
  private:
@@ -152,19 +147,24 @@ TEST_F(PipelineFrameSinkTest, ReattachingFrameSinkPreservesMergedStage) {
   EXPECT_NE(identity_after_reset, identity_after_build);
 }
 
-TEST_F(PipelineFrameSinkTest, SetNextFramePresentationModeIsNoOpWhenSinkIsDetached) {
+TEST_F(PipelineFrameSinkTest, BindFrameSubmissionIsNoOpWhenSinkIsDetached) {
   auto exec = std::make_shared<CPUPipelineExecutor>();
 
-  // No crash, no side-effect expected.
-  EXPECT_NO_THROW(exec->SetNextFramePresentationMode(FramePresentationMode::ViewportTransformed));
+  EXPECT_NO_THROW(exec->BindFrameSubmission(FramePreviewMetadata{},
+                                            FramePresentationMode::ViewportTransformed));
 }
 
-TEST_F(PipelineFrameSinkTest, SetNextFramePreviewMetadataIsNoOpWhenSinkIsDetached) {
-  auto                 exec = std::make_shared<CPUPipelineExecutor>();
-  FramePreviewMetadata metadata{};
-  metadata.frame_role = FrameRole::QualityBase;
+TEST_F(PipelineFrameSinkTest, BindFrameSubmissionForwardsToAttachedSink) {
+  auto exec = std::make_shared<CPUPipelineExecutor>();
+  MockFrameSink sink;
+  exec->SetExecutionStages(&sink);
 
-  EXPECT_NO_THROW(exec->SetNextFramePreviewMetadata(metadata));
+  FramePreviewMetadata metadata{};
+  metadata.presentation_request_id = 42;
+  exec->BindFrameSubmission(metadata, FramePresentationMode::RoiFrame);
+  EXPECT_EQ(sink.bind_submission_calls_, 1);
+  EXPECT_EQ(sink.last_bound_submission_.metadata.presentation_request_id, 42u);
+  EXPECT_EQ(sink.last_bound_submission_.mode, FramePresentationMode::RoiFrame);
 }
 
 TEST_F(PipelineFrameSinkTest, GetViewportRenderRegionReturnsNulloptWhenSinkIsDetached) {
@@ -329,11 +329,11 @@ TEST_F(PipelineFrameSinkTest, ActiveCudaHighlightShadowKeepsDetailRoiPreviewAsPa
   task.SetExecutorRenderParams();
 
   EXPECT_GT(sink.viewport_render_region_calls_, 0);
-  EXPECT_EQ(sink.last_metadata_.frame_role, FrameRole::DetailPatch);
-  EXPECT_NEAR(sink.last_metadata_.source_roi_norm.x, 0.15f, 1.0e-5f);
-  EXPECT_NEAR(sink.last_metadata_.source_roi_norm.y, 0.1125f, 1.0e-5f);
-  EXPECT_NEAR(sink.last_metadata_.source_roi_norm.width, 0.2f, 1.0e-5f);
-  EXPECT_NEAR(sink.last_metadata_.source_roi_norm.height, 0.2f, 1.0e-5f);
+  EXPECT_EQ(sink.last_bound_submission_.metadata.frame_role, FrameRole::DetailPatch);
+  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.x, 0.15f, 1.0e-5f);
+  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.y, 0.1125f, 1.0e-5f);
+  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.width, 0.2f, 1.0e-5f);
+  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.height, 0.2f, 1.0e-5f);
 
   const auto resize_entry =
       exec->GetStage(PipelineStageName::Geometry_Adjustment).GetOperator(OperatorType::RESIZE);
@@ -383,13 +383,13 @@ TEST_F(PipelineFrameSinkTest, ActiveCudaHighlightShadowKeepsFastPreviewAsRoiFram
   task.SetExecutorRenderParams();
 
   EXPECT_GT(sink.viewport_render_region_calls_, 0);
-  EXPECT_EQ(sink.last_mode_, FramePresentationMode::RoiFrame);
-  EXPECT_EQ(sink.last_metadata_.frame_role, FrameRole::InteractivePrimary);
-  EXPECT_FALSE(sink.last_metadata_.scope_update_allowed);
-  EXPECT_NEAR(sink.last_metadata_.source_roi_norm.x, 0.12f, 1.0e-5f);
-  EXPECT_NEAR(sink.last_metadata_.source_roi_norm.y, 0.13333334f, 1.0e-5f);
-  EXPECT_NEAR(sink.last_metadata_.source_roi_norm.width, 0.3f, 1.0e-5f);
-  EXPECT_NEAR(sink.last_metadata_.source_roi_norm.height, 0.25f, 1.0e-5f);
+  EXPECT_EQ(sink.last_bound_submission_.mode, FramePresentationMode::RoiFrame);
+  EXPECT_EQ(sink.last_bound_submission_.metadata.frame_role, FrameRole::InteractivePrimary);
+  EXPECT_FALSE(sink.last_bound_submission_.metadata.scope_update_allowed);
+  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.x, 0.12f, 1.0e-5f);
+  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.y, 0.13333334f, 1.0e-5f);
+  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.width, 0.3f, 1.0e-5f);
+  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.height, 0.25f, 1.0e-5f);
 
   const auto resize_entry =
       exec->GetStage(PipelineStageName::Geometry_Adjustment).GetOperator(OperatorType::RESIZE);
@@ -438,9 +438,9 @@ TEST_F(PipelineFrameSinkTest, ScopeRefreshFastPreviewAllowsCurrentRoiAsScopeInpu
 
   task.SetExecutorRenderParams();
 
-  EXPECT_EQ(sink.last_mode_, FramePresentationMode::RoiFrame);
-  EXPECT_TRUE(sink.last_metadata_.scope_update_allowed);
-  EXPECT_TRUE(sink.last_metadata_.scope_refresh_requested);
+  EXPECT_EQ(sink.last_bound_submission_.mode, FramePresentationMode::RoiFrame);
+  EXPECT_TRUE(sink.last_bound_submission_.metadata.scope_update_allowed);
+  EXPECT_TRUE(sink.last_bound_submission_.metadata.scope_refresh_requested);
 }
 
 TEST_F(PipelineFrameSinkTest, RenderSourceCacheKeyUsesStableImageIdentityBeforeBufferPointer) {
@@ -559,9 +559,9 @@ TEST_F(PipelineFrameSinkTest, AttachFrameSinkSetsPointerWithoutRebuildingStages)
 
   // Verify the sink delegates work — the tail stage should forward
   // presentation metadata to the attached sink.
-  exec->SetNextFramePresentationMode(FramePresentationMode::RoiFrame);
-  EXPECT_EQ(sink.presentation_mode_calls_, 1);
-  EXPECT_EQ(sink.last_mode_, FramePresentationMode::RoiFrame);
+  exec->BindFrameSubmission({}, FramePresentationMode::RoiFrame);
+  EXPECT_EQ(sink.bind_submission_calls_, 1);
+  EXPECT_EQ(sink.last_bound_submission_.mode, FramePresentationMode::RoiFrame);
 }
 
 TEST_F(PipelineFrameSinkTest, AttachDetachRoundTripWithoutStageRebuild) {
@@ -591,8 +591,8 @@ TEST_F(PipelineFrameSinkTest, AttachDetachRoundTripWithoutStageRebuild) {
   }
   EXPECT_EQ(exec->GetFrameSink(), &sink);
 
-  exec->SetNextFramePreviewMetadata(FramePreviewMetadata{});
-  EXPECT_EQ(sink.preview_metadata_calls_, 1);
+  exec->BindFrameSubmission(FramePreviewMetadata{}, FramePresentationMode::FullFrame);
+  EXPECT_EQ(sink.bind_submission_calls_, 1);
 }
 
 TEST_F(PipelineFrameSinkTest, DetachThenAttachPreservesSinkCalls) {
@@ -602,27 +602,25 @@ TEST_F(PipelineFrameSinkTest, DetachThenAttachPreservesSinkCalls) {
   MockFrameSink sink;
 
   exec->SetExecutionStages(&sink);
-  exec->SetNextFramePresentationMode(FramePresentationMode::FullFrame);
-  EXPECT_EQ(sink.presentation_mode_calls_, 1);
+  exec->BindFrameSubmission({}, FramePresentationMode::FullFrame);
+  EXPECT_EQ(sink.bind_submission_calls_, 1);
 
   {
     std::unique_lock<std::mutex> lock(exec->GetRenderLock());
     exec->DetachFrameSink();
   }
 
-  // While detached, calls are no-ops.
-  exec->SetNextFramePresentationMode(FramePresentationMode::RoiFrame);
-  EXPECT_EQ(sink.presentation_mode_calls_, 1);  // unchanged
+  exec->BindFrameSubmission({}, FramePresentationMode::RoiFrame);
+  EXPECT_EQ(sink.bind_submission_calls_, 1);
 
   {
     std::unique_lock<std::mutex> lock(exec->GetRenderLock());
     exec->AttachFrameSink(&sink);
   }
 
-  // After re-attach, calls go through again.
-  exec->SetNextFramePresentationMode(FramePresentationMode::RoiFrame);
-  EXPECT_EQ(sink.presentation_mode_calls_, 2);
-  EXPECT_EQ(sink.last_mode_, FramePresentationMode::RoiFrame);
+  exec->BindFrameSubmission({}, FramePresentationMode::RoiFrame);
+  EXPECT_EQ(sink.bind_submission_calls_, 2);
+  EXPECT_EQ(sink.last_bound_submission_.mode, FramePresentationMode::RoiFrame);
 }
 
 // =========================================================================
@@ -719,9 +717,7 @@ TEST_F(PipelineFrameSinkTest, ConcurrentDetachAndRenderLockIsDeadlockFree) {
       {
         std::unique_lock<std::mutex> lock(exec->GetRenderLock());
         // Simulate the render path's use of frame sink methods.
-        exec->SetNextFramePresentationMode(FramePresentationMode::ViewportTransformed);
-        FramePreviewMetadata metadata{};
-        exec->SetNextFramePreviewMetadata(metadata);
+        exec->BindFrameSubmission(FramePreviewMetadata{}, FramePresentationMode::ViewportTransformed);
         (void)exec->GetViewportRenderRegion();
       }
       ops.fetch_add(1);
@@ -776,7 +772,7 @@ TEST_F(PipelineFrameSinkTest, ConcurrentImportPipelineParamsAndRenderIsDeadlockF
     while (!stop.load()) {
       {
         std::unique_lock<std::mutex> lock(exec->GetRenderLock());
-        exec->SetNextFramePresentationMode(FramePresentationMode::ViewportTransformed);
+        exec->BindFrameSubmission({}, FramePresentationMode::ViewportTransformed);
       }
       ops.fetch_add(1);
       std::this_thread::yield();
@@ -845,8 +841,8 @@ TEST_F(PipelineFrameSinkTest, SinkIsRestoredAfterExceptionDuringRender) {
   EXPECT_EQ(exec->GetFrameSink(), &sink);
 
   // And the sink is still functional.
-  exec->SetNextFramePresentationMode(FramePresentationMode::FullFrame);
-  EXPECT_EQ(sink.presentation_mode_calls_, 1);
+  exec->BindFrameSubmission({}, FramePresentationMode::FullFrame);
+  EXPECT_EQ(sink.bind_submission_calls_, 1);
 }
 
 TEST_F(PipelineFrameSinkTest, SinkIsRestoredAfterExceptionBeforeRender) {

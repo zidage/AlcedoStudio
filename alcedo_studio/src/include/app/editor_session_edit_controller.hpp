@@ -32,9 +32,10 @@ struct EditorEditOutcome {
   std::string              message;
 };
 
-/// Owns the adjustment snapshot and provisional/settled edit state. All
-/// methods run during queue reduction; the type deliberately has no mutation
-/// mutex and never calls a live pipeline executor.
+/// Owns provisional/settled edit routing. All methods run during queue
+/// reduction; the type deliberately has no mutation mutex and never calls a live
+/// pipeline executor. Committed adjustment state lives in history and the live
+/// pipeline — not in this controller.
 class EditorSessionEditController final {
  public:
   struct Dependencies {
@@ -46,43 +47,30 @@ class EditorSessionEditController final {
 
   /// Apply an interactive (settled=false) or settled (settled=true) adjustment
   /// patch. Captures the before-preview state, commits settled patches to
-  /// history, updates the adjustment snapshot, and returns a render command
-  /// for the facade to submit.
+  /// history, and returns a render command carrying only the current field patch.
   auto HandlePatch(EditorAdjustmentPatch patch, bool settled,
                    const EditorHistoryGuardHandle& guard,
                    const EditorSessionIdentity& identity) -> EditorEditOutcome;
 
-  /// Undo or redo the last history operation. Reads the snapshot from history
-  /// and returns a render command.
+  /// Undo or redo the last history operation. History rebuilds the live pipeline;
+  /// the render command carries no adjustment replay.
   auto HandleUndoRedo(bool undo, const EditorHistoryGuardHandle& guard,
                       const EditorSessionIdentity& identity) -> EditorEditOutcome;
 
   /// Move the working head to an explicit commit in one operation (Phase 7A
-  /// P1). The history port applies the traversed before/after deltas; this
-  /// reads the resulting snapshot and returns one render command.
+  /// P1). The history port applies the traversed before/after deltas; the render
+  /// command carries no adjustment replay.
   auto HandleMoveHeadToCommit(const commit_hash_t& target, const EditorHistoryGuardHandle& guard,
                               const EditorSessionIdentity& identity) -> EditorEditOutcome;
 
-  /// Discard unflushed edits and restore the history snapshot. Returns a render
-  /// command with Retry (from Failed) or SettledAdjustment (from Interactive).
+  /// Discard unflushed edits. Returns a render command with Retry (from Failed)
+  /// or SettledAdjustment (from Interactive); adjustment replay is empty.
   auto HandleDiscard(const EditorHistoryGuardHandle& guard,
                      const EditorSessionIdentity& identity,
                      EditorSessionState current_state) -> EditorEditOutcome;
 
-  /// Read-only snapshot of the current adjustment state.
-  [[nodiscard]] auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot;
-
-  /// Set the adjustment snapshot from an external source (e.g. history read
-  /// during open/switch). Used by the navigation controller when loading a new
-  /// image.
-  void set_adjustment_snapshot(EditorRenderAdjustmentSnapshot snapshot);
-
-  /// Clear the adjustment snapshot. Used when switching images or closing.
-  void ClearSnapshot();
-
  private:
   struct Dependencies deps_;
-  EditorRenderAdjustmentSnapshot adjustment_snapshot_{};
 };
 
 }  // namespace alcedo

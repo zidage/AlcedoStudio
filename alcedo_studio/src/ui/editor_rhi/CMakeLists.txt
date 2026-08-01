@@ -5,12 +5,10 @@ set(ALCEDO_EDITOR_RHI_ROOT "${ALCEDO_SRC_ROOT}/ui/editor_rhi")
 set(EDITOR_RHI_CONTRACT_SRCS
     "${ALCEDO_EDITOR_RHI_ROOT}/editor_backend.cpp"
     "${ALCEDO_EDITOR_RHI_ROOT}/frame_presentation_lease.cpp"
-    "${ALCEDO_EDITOR_RHI_ROOT}/frame_presentation_broker.cpp"
     "${ALCEDO_EDITOR_RHI_ROOT}/native_resource_counters.cpp"
     "${ALCEDO_EDITOR_RHI_ROOT}/harness_fixtures.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/editor_backend.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/frame_presentation_lease.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/frame_presentation_broker.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/native_resource_counters.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/harness_fixtures.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/editor_startup.hpp"

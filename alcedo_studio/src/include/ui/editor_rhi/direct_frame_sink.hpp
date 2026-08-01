@@ -63,7 +63,8 @@ class DirectFrameSink final : public alcedo::IFrameSink {
   auto MapResourceForWrite(FrameMemoryDomain preferred_domain = FrameMemoryDomain::CudaDevice)
       -> FrameWriteMapping override;
   void UnmapResource() override;
-  void NotifyFrameReady() override;
+  void NotifyFrameReady(const FrameCompletionSubmission& submission) override;
+  void BindFrameSubmission(const FrameCompletionSubmission& submission) override;
   void SubmitHostFrame(const ViewerFrame&) override;
 #ifdef HAVE_METAL
   void SubmitMetalFrame(const ViewerMetalFrame& frame) override;
@@ -74,8 +75,6 @@ class DirectFrameSink final : public alcedo::IFrameSink {
   [[nodiscard]] int GetHeight() const override;
   [[nodiscard]] auto GetViewportRenderRegion() const
       -> std::optional<ViewportRenderRegion> override;
-  void SetNextFramePresentationMode(FramePresentationMode mode) override;
-  void SetNextFramePreviewMetadata(const FramePreviewMetadata& metadata) override;
 
   void SetViewState(const ViewerViewState& state);
   void SetFirstFrameCompositionCallback(FirstFrameCompositionCallback callback);
@@ -91,6 +90,7 @@ class DirectFrameSink final : public alcedo::IFrameSink {
   void ClearPendingImportedFrames();
   [[nodiscard]] auto HasWritableTargetForNextFrame() const -> bool;
   [[nodiscard]] auto submitted_frame_count() const -> std::uint64_t;
+  [[nodiscard]] auto latest_accepted_request_id() const -> std::uint64_t;
   [[nodiscard]] auto ViewState() const -> ViewerViewState;
   void ClearMappedSlot();
 
@@ -99,6 +99,7 @@ class DirectFrameSink final : public alcedo::IFrameSink {
   auto ReserveWritableSlot(int width, int height) -> std::optional<int>;
   [[nodiscard]] auto IsMetalPresentPath() const -> bool;
   static auto LayerIndexForRole(FrameRole role) -> std::size_t;
+  [[nodiscard]] auto AcceptSubmissionRequestId(std::uint64_t request_id) -> bool;
 
   EditorViewportItem* item_ = nullptr;
   mutable std::mutex mutex_;
@@ -110,10 +111,9 @@ class DirectFrameSink final : public alcedo::IFrameSink {
   bool unmapped_pending_submit_ = false;
   int mapped_slot_index_ = -1;
   int prepared_slot_index_ = -1;
-  FramePresentationMode pending_presentation_mode_ = FramePresentationMode::FullFrame;
-  bool pending_presentation_mode_valid_ = false;
-  FramePreviewMetadata pending_preview_metadata_{};
-  bool pending_preview_metadata_valid_ = false;
+  FrameCompletionSubmission bound_submission_{};
+  bool bound_submission_valid_ = false;
+  std::uint64_t latest_accepted_request_id_ = 0;
   // Latest pending import per FrameRole (Interactive / Quality / Detail).
   std::array<std::optional<ImportedGpuFrame>, 3> pending_imported_{};
   std::uint64_t imported_sequence_ = 0;

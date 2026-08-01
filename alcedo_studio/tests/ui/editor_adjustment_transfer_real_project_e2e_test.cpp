@@ -127,7 +127,7 @@ TEST_F(MainQmlTestFixture, RealPackedProjectCopyPasteReloadsToneSnapshot) {
         if (mapping) {
           sink->UnmapResource();
         }
-        sink->NotifyFrameReady();
+        sink->NotifyFrameReady(alcedo::FrameCompletionSubmission{});
         return true;
       });
 

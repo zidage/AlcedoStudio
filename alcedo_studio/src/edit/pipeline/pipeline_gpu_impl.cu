@@ -50,6 +50,10 @@ class CUDA_GPUPipeline final : public GPUPipelineImpl {
 
   void SetFrameSink(IFrameSink* frame_sink) override { launcher_.SetFrameSink(frame_sink); }
 
+  void SetBoundFrameSubmission(const FrameCompletionSubmission& submission) override {
+    launcher_.SetBoundFrameSubmission(submission);
+  }
+
   void Execute(std::shared_ptr<ImageBuffer> output_img) override {
     launcher_.SetOutputImage(output_img);
     launcher_.Execute();

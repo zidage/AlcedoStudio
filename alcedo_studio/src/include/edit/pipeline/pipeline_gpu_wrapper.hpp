@@ -9,6 +9,7 @@
 
 #include "edit/operators/op_base.hpp"
 #include "image/gpu_backend.hpp"
+#include "ui/edit_viewer/frame_sink.hpp"
 
 namespace alcedo {
 class ImageBuffer;
@@ -21,6 +22,7 @@ class GPUPipelineImpl {
   virtual void SetInputImage(std::shared_ptr<ImageBuffer> input_image) = 0;
   virtual void SetParams(OperatorParams& params)                        = 0;
   virtual void SetFrameSink(IFrameSink* frame_sink)                    = 0;
+  virtual void SetBoundFrameSubmission(const FrameCompletionSubmission& /*submission*/) {}
   virtual void Execute(std::shared_ptr<ImageBuffer> output)            = 0;
   virtual void ReleaseScratchBuffers() {}
   virtual void ReleaseResources()                                      = 0;
@@ -41,6 +43,8 @@ class GPUPipelineWrapper {
   void SetParams(OperatorParams& params);
 
   void SetFrameSink(IFrameSink* frame_sink);
+
+  void SetBoundFrameSubmission(const FrameCompletionSubmission& submission);
 
   void Execute(std::shared_ptr<ImageBuffer> output);
 

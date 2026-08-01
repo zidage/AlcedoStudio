@@ -48,6 +48,7 @@ class CPUPipelineExecutor : public PipelineExecutor {
   std::vector<PipelineStage*>      exec_stages_;
   std::unique_ptr<PipelineStage>   merged_stages_;
   IFrameSink*                      frame_sink_      = nullptr;
+  FrameCompletionSubmission        bound_frame_submission_{};
 
   void                             ResetStages();
 
@@ -102,8 +103,8 @@ class CPUPipelineExecutor : public PipelineExecutor {
   auto GetFrameSink() const -> IFrameSink* { return frame_sink_; }
 
   auto GetViewportRenderRegion() const -> std::optional<ViewportRenderRegion>;
-  void SetNextFramePresentationMode(FramePresentationMode mode) const;
-  void SetNextFramePreviewMetadata(const FramePreviewMetadata& metadata) const;
+  void BindFrameSubmission(const FramePreviewMetadata& metadata, FramePresentationMode mode);
+  [[nodiscard]] auto BoundFrameSubmission() const -> FrameCompletionSubmission;
 
   auto GetGlobalParams() -> OperatorParams& override { return global_params_; }
 

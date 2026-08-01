@@ -1001,7 +1001,7 @@ TEST_F(ThumbnailServiceTests, ThumbnailRenderUsesInjectedRawMetadataForDng) {
   direct_exec->SetBoundFile(element_id);
   direct_exec->SetExecutionStages();
   direct_exec->InjectRawMetadata(image_desc->GetRawColorContext());
-  direct_exec->SetNextFramePresentationMode(FramePresentationMode::ViewportTransformed);
+  direct_exec->BindFrameSubmission({}, FramePresentationMode::ViewportTransformed);
   direct_exec->SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm::Bilinear);
   direct_exec->SetRenderRegion(0, 0, 1.0f);
   direct_exec->SetForceCPUOutput(true);

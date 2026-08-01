@@ -139,7 +139,7 @@ auto InstallTestFrameProducer(ApplicationModuleHost& host) -> bool {
         if (mapping) {
           sink->UnmapResource();
         }
-        sink->NotifyFrameReady();
+        sink->NotifyFrameReady(alcedo::FrameCompletionSubmission{});
         return true;
       });
   return true;
@@ -723,9 +723,8 @@ TEST_F(WorkspaceShellTests, ProductionFrameSinkAcceptsThreeLayerFrameSubmissions
     meta.frame_role         = roles[i];
     meta.preview_generation = static_cast<std::uint64_t>(i + 1);
     meta.detail_serial      = static_cast<std::uint64_t>(i + 10);
-    sink->SetNextFramePreviewMetadata(meta);
-    sink->SetNextFramePresentationMode(i == 0 ? FramePresentationMode::RoiFrame
-                                              : FramePresentationMode::FullFrame);
+    sink->BindFrameSubmission(
+        {meta, i == 0 ? FramePresentationMode::RoiFrame : FramePresentationMode::FullFrame});
     EXPECT_EQ(session->presentation_frame_sink(), sink);
   }
 

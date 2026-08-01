@@ -40,12 +40,14 @@ void EditorSessionNavigationFixture::SetUp() {
   EditorSessionRenderController::Dependencies render_deps{render_submit_,
                                                           [](const EditorRenderEvent&) {}};
   render_ = std::make_unique<EditorSessionRenderController>(std::move(render_deps));
+  render_->SetPresentationSinkId(1);
+  render_->SetPresentationSize(1920, 1080);
 
   EditorSessionEditController::Dependencies edit_deps{history_, journal_};
   edit_ = std::make_unique<EditorSessionEditController>(std::move(edit_deps));
 
   nav_  = std::make_unique<EditorSessionNavigationController>(
-      *lifecycle_, *save_service_, *render_, *edit_, journal_.get(), checkpoint_store_.get(),
+      *lifecycle_, *save_service_, *render_, journal_.get(), checkpoint_store_.get(),
       history_.get());
 }
 
