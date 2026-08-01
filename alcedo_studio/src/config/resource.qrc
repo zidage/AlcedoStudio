@@ -1,6 +1,7 @@
 <RCC>
   <qresource prefix="/">
     <file>ICON/alcedo_icon.png</file>
+    <file>ICON/alcedo_icon.ico</file>
     <file>fonts/main_Inter.ttf</file>
     <file>fonts/main_Inter_italic.ttf</file>
     <file>fonts/main_IBM.ttf</file>

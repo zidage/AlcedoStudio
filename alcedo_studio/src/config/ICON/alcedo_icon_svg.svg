@@ -1,0 +1,40 @@
+<svg version="1.1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="100%" height="100%">
+  <defs>
+    <!-- 比 O 外圈更大的分隔圆；r=240 时会刚好切到 R 的斜腿 -->
+    <mask id="separate-o-r" maskUnits="userSpaceOnUse">
+      <rect x="0" y="0" width="1024" height="1024" fill="white"/>
+      <circle cx="380" cy="510" r="240" fill="black"/>
+    </mask>
+  </defs>
+
+  <!-- 1. 左侧完整闭合的 O 形同心圆环 -->
+  <path fill-rule="evenodd" fill="#000000" d="
+    M 380,285
+    A 225,225 0 1,0 380,735
+    A 225,225 0 1,0 380,285
+    Z
+
+    M 380,360
+    A 150,150 0 1,0 380,660
+    A 150,150 0 1,0 380,360
+    Z
+  " />
+
+  <!-- 2. 右上 R 的上半部分：通过 mask 与 O 拉开距离 -->
+  <path mask="url(#separate-o-r)" fill-rule="evenodd" fill="#000000" d="
+    M 380,285
+    H 747.5
+    A 117.5,117.5 0 0,1 747.5,520
+    H 380
+    Z
+
+    M 380,360
+    H 747.5
+    A 42.5,42.5 0 0,1 747.5,445
+    H 380
+    Z
+  " />
+
+  <!-- 3. 右下斜腿：同样应用 mask，让分隔圆刚好切到这里 -->
+  <polygon mask="url(#separate-o-r)" fill="#000000" points="620,520 710,520 855,739 765,739" />
+</svg>
