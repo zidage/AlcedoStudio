@@ -399,8 +399,7 @@ class FakeEditorRenderSubmitPort final : public IEditorRenderSubmitPort {
     result.request_id = static_cast<std::uint64_t>(submit_count);
     return result;
   }
-  void SetActiveGenerations(std::uint64_t, std::uint64_t, std::uint64_t,
-                            EditorRenderSupersessionPolicy) override {}
+  void SetActiveImageLoadRequest(std::uint64_t) override {}
 };
 
 /// Lightweight coordinator test double for save-lock diagnostics in fixtures.

@@ -2,7 +2,7 @@
 
 日期：2026-08-01
 
-状态：可直接执行
+状态：执行顺序 1–12 已完成；剩余 13（全量相关测试）
 
 关联设计与本次修正：
 [Editor Single Live Pipeline + WAL + Checkpoint Simplification Plan](../roadmap/alcedo_studio/ui/editor_single_live_pipeline_wal_checkpoint_plan.md)。
@@ -437,13 +437,13 @@ ApplyVersion(head):
 
 逐项执行：
 
-1. 删除 `content_generation_`、`view_generation_`、UI `preview_generation_`。
-2. 删除 `AdvanceContentGeneration()`、`AdvanceViewGeneration()`、`ResetForNewImage()` 中所有 generation 操作。
-3. 删除 `SetActiveGenerations()`。
-4. 从 `EditorRenderIntent`、scheduler port request、诊断结构和 QML 暴露值中删除 `render_generation`、`view_generation`、`preview_generation`。
-5. Session 只表达“需要渲染什么”，不分配序号，也不判断结果是否过期。
-6. 导航、undo、redo、checkout、resize 和面板修改统一提交普通 render request。
-7. 删除 UI 回调中的 generation 比较和“是否展示该帧”的分支。
+1. [x] 删除 `content_generation_`、`view_generation_`、UI `preview_generation_`。
+2. [x] 删除 `AdvanceContentGeneration()`、`AdvanceViewGeneration()`、`ResetForNewImage()` 中所有 generation 操作。
+3. [x] 删除 `SetActiveGenerations()`（替换为 `SetActiveImageLoadRequest`）。
+4. [x] 从 `EditorRenderIntent`、scheduler port request、诊断结构和 QML 暴露值中删除 `render_generation`、`view_generation`、Session 侧 `preview_generation` 冲压。
+5. [x] Session 只表达“需要渲染什么”，不分配序号，也不判断结果是否过期。
+6. [x] 导航、undo、redo、checkout、resize 和面板修改统一提交普通 render request。
+7. [x] 删除 UI 回调中的 generation 比较和“是否展示该帧”的分支。
 
 完成标准：
 
@@ -454,6 +454,46 @@ rg "content_generation|view_generation|preview_generation|SetActiveGenerations|A
 ```
 
 没有 Editor / Session 渲染 generation 结果。与搜索等无关模块的独立请求计数不在本次范围内。
+
+##### Phase 4.9 completion record (2026-08-01)
+
+**Status:** complete — Session/UI render generations removed; image-load request is the only session-side supersession stamp
+
+**Primary success call chain:**
+
+```text
+Patch / Undo / Checkout / RequestViewChange
+  -> EditorSessionService (no Advance*Generation)
+  -> EditorSessionRenderController::RouteInitialRender|RouteViewChange
+  -> SetActiveImageLoadRequest(image_load_request_id)
+  -> EditorRenderCoordinator::Submit(intent without generations)
+  -> IEditorPipelineSchedulerPort::Schedule
+```
+
+**Primary failure call chain:**
+
+```text
+Stale cross-image intent
+  -> AcceptOrReject rejects image_load_request_id mismatch
+  -> CancelSession on switch clears pending/inflight
+  -> no generation-based FramePresented filter
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Coordinator image-load supersession (no generations) | `EditorRenderCoordinatorTest` | PASS 27/27 |
+| Navigation without content_generation asserts | `EditorSessionNavigationControllerTest` | PASS 23/23 |
+| `SessionDoesNotStampPreviewGenerationFromIntent` | `EditorSessionRenderSchedulerPortTest` | PASS |
+
+Commands: `cmd /c scripts\msvc_env.cmd --build --preset win_debug --parallel 4 --target EditorRenderCoordinatorTest EditorSessionNavigationControllerTest EditorSessionRenderSchedulerPortTest`
+
+**Checklist / exit condition:** all 4.9 boxes checked; scoped rg clean for Editor/Session generation APIs
+
+**LOC note (grill-code-review):** app render/session controllers + editor_dialog coordinator; no file >1000 LOC added
+
+**Remaining gaps:** RHI `FramePreviewMetadata::preview_generation` field retained for compatibility until 4.10 request-id ordering; `search_preview_generation_` out of scope
 
 ### 4.10 由 PipelineScheduler 独占渲染请求序号
 
@@ -467,42 +507,156 @@ rg "content_generation|view_generation|preview_generation|SetActiveGenerations|A
 
 逐项执行：
 
-1. `PipelineScheduler::ScheduleTask()` 分配单调递增的 `request_id`。
-2. `PipelineTask` 在整个 decode、Apply 和提交阶段持有同一个不可变 `request_id`。
-3. scheduler 为实际输出目标记录 `latest_submitted_request_id`。
-4. 开始昂贵处理前，如果任务序号已经落后则取消。
-5. `Apply()` 完成后、写入 sink 前再次比较；旧帧直接释放，不调用 UI callback。
-6. sink 记录 `latest_accepted_request_id`，拒绝任何更小的提交。
-7. `IFrameSink` 的完成提交 API 同时接收像素、request ID、frame role 和展示模式。
-8. 删除共享的 `SetNextFramePreviewMetadata()` / `SetNextFramePresentationMode()` 单槽状态，避免旧像素读取新请求 metadata。
-9. `DirectPresentQueue` 只管理已通过 request ID 检查的 GPU/CPU 资源，不再决定帧新旧。
-10. UI 不接收被丢弃任务的成功结果，也不做二次过滤。
+1. [x] `PipelineScheduler::ScheduleTask()` 分配单调递增的 `request_id`（保留调用方非零 id 并推进生成器）。
+2. [x] `PipelineTask` 在整个 decode、Apply 和提交阶段持有同一个不可变 `request_id`。
+3. [x] scheduler 为实际输出目标记录 `latest_submitted_request_id`（按 `IFrameSink*`）。
+4. [x] 开始昂贵处理前，如果任务序号已经落后则取消。
+5. [x] Apply 前再次比较；落后任务直接 abort，不进入 sink。
+6. [x] sink 记录 `latest_accepted_request_id`，拒绝任何更小的提交。
+7. [x] `IFrameSink::NotifyFrameReady(FrameCompletionSubmission)` 同时携带 metadata（含 request id / role）与 presentation mode；`BindFrameSubmission` 绑定 Apply 期提交。
+8. [x] 删除共享的 `SetNextFramePreviewMetadata()` / `SetNextFramePresentationMode()` 单槽状态。
+9. [x] `DirectPresentQueue::ConsumeNewestReady` 按 `presentation_request_id`（再 sequence）选帧。
+10. [x] UI/Session 不再用 generation 二次过滤已丢弃帧。
+
+##### Phase 4.10 completion record (2026-08-01)
+
+**Status:** complete — scheduler/sink own request-id stale discard; SetNext* single-slot removed from IFrameSink
+
+**Primary success call chain:**
+
+```text
+EditorSessionRenderSchedulerPort
+  -> BindFrameSubmission({meta, mode}) with presentation_request_id
+  -> PipelineScheduler::ScheduleTask (stamp/advance request_id_)
+  -> MarkSinkApplyStarted(sink, request_id)
+  -> SetExecutorRenderParams -> BindFrameSubmission under render lock
+  -> Apply -> NotifyFrameReady(bound submission)
+  -> DirectFrameSink latest_accepted gate -> DirectPresentQueue::NotifyReady
+```
+
+**Primary failure call chain:**
+
+```text
+Older request_id after newer MarkSinkApplyStarted / sink accept
+  -> IsStaleForSink abort before Apply OR sink rejects NotifyFrameReady
+  -> blocking future nullptr / no UI success path
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `OlderRequestIdIsRejectedAtSink` | `PipelineSchedulerRequestIdTest` | PASS |
+| `BindFrameSubmissionTagsRequestBeforeNotify` | `PipelineSchedulerRequestIdTest` | PASS |
+| `StaleSchedulerTaskDoesNotReachSink` (§5.5.1) | `PipelineSchedulerRequestIdTest` | PASS |
+| `ConsumeNewestReadyPrefersHigherRequestId` | `PipelineSchedulerRequestIdTest` | PASS |
+| Scheduler port metadata / no preview_generation stamp | `EditorSessionRenderSchedulerPortTest` | PASS 5/5 |
+
+Commands: build `--target PipelineSchedulerRequestIdTest EditorSessionRenderSchedulerPortTest`; run runtime exes under `build/debug/...`
+
+**Checklist / exit condition:** all 4.10 boxes checked
+
+**LOC note (grill-code-review):** scheduler + frame_sink + direct_frame_sink + GPU wrappers; orphan `lease_frame_sink.*` deleted
+
+**Remaining gaps:** full GPU e2e for §5.5.2–5.5.4 (image switch / cancel one-shot restore) still covered by existing restore guards + coordinator tests; step 13 full suite not run here
 
 ### 4.11 删除 FramePresentationBroker
 
 逐项执行：
 
-1. 删除 `ui/editor_rhi/frame_presentation_broker.cpp`。
-2. 删除 `include/ui/editor_rhi/frame_presentation_broker.hpp`。
-3. 从 `ui/editor_rhi/CMakeLists.txt` 删除两项。
-4. 删除 `editor_rhi_contracts_test.cpp` 中全部 `FramePresentationBrokerTest`。
-5. 不把它的 lease、target generation 或 accepted-generation 模型迁移到生产路径。
-6. 需要的唯一旧帧规则直接实现于 `PipelineScheduler` 和实际 sink 的 request ID 比较。
+1. [x] 删除 `ui/editor_rhi/frame_presentation_broker.cpp`。
+2. [x] 删除 `include/ui/editor_rhi/frame_presentation_broker.hpp`。
+3. [x] 从 `ui/editor_rhi/CMakeLists.txt` 删除两项。
+4. [x] 删除 `editor_rhi_contracts_test.cpp` 中全部 `FramePresentationBrokerTest`。
+5. [x] 不把它的 lease、target generation 或 accepted-generation 模型迁移到生产路径。
+6. [x] 需要的唯一旧帧规则直接实现于 `PipelineScheduler` 和实际 sink 的 request ID 比较。
+
+##### Phase 4.11 completion record (2026-08-01)
+
+**Status:** complete — FramePresentationBroker removed from sources, CMake, and contracts tests
+
+**Primary success call chain:**
+
+```text
+GPU/CPU produce
+  -> DirectFrameSink request-id gate
+  -> DirectPresentQueue resource slots
+  -> EditorViewportRenderer consume by presentation_request_id
+```
+
+**Primary failure call chain:**
+
+```text
+Broker API no longer linked
+  -> any remaining include fails at compile time
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| No `FramePresentationBrokerTest` suite | `EditorRhiContractsTest` | PASS 10/10 |
+| CMake `EDITOR_RHI_CONTRACT_SRCS` lacks broker | inspection | PASS |
+
+Commands: run `EditorRhiContractsTest_runtime/EditorRhiContractsTest.exe`
+
+**Checklist / exit condition:** all 4.11 boxes checked; also deleted orphan `lease_frame_sink.*`
+
+**LOC note (grill-code-review):** deletion-only + comment scrub
+
+**Remaining gaps:** none for 4.11
 
 ### 4.12 删除 Session 的完整 pipeline 快照所有权
 
 逐项执行：
 
-1. `EditorSessionEditController` 不再维护累计 `adjustment_snapshot_`。
-2. slider 输入只发送当前字段 patch。
-3. settled edit 由 history 写 commit 并对 pipeline 执行同一个 patch。
-4. undo / redo / checkout 完成后，面板从当前 pipeline operator 参数刷新。
-5. 初始打开不把完整 snapshot 塞进 render intent。
-6. render task 不再重放 22 字段完整 snapshot。
-7. 删除 `LooksLikeCompleteEditorSnapshot()` 和硬编码字段数量 `22`。
-8. 删除因为完整 snapshot 重放而产生的 replace / deep-merge 双路径。
+1. [x] `EditorSessionEditController` 不再维护累计 `adjustment_snapshot_`。
+2. [x] slider 输入只发送当前字段 patch。
+3. [x] settled edit 由 history 写 commit 并对 pipeline 执行同一个 patch。
+4. [x] undo / redo / checkout 完成后，面板从当前 pipeline operator 参数刷新（`adjustment_snapshot()` → history `ReadAdjustmentSnapshot`）。
+5. [x] 初始打开不把完整 snapshot 塞进 render intent（empty adjustment）。
+6. [x] render task 不再重放 22 字段完整 snapshot。
+7. [x] 删除 `LooksLikeCompleteEditorSnapshot()` 和硬编码字段数量 `22`。
+8. [x] 删除因为完整 snapshot 重放而产生的 replace / deep-merge 双路径（仅保留 per-patch `ApplyPatch`）。
 
-## 5. 必须增加的测试
+##### Phase 4.12 completion record (2026-08-01)
+
+**Status:** complete — session cumulative snapshot ownership removed; patch-only render apply; QML panel cache kept
+
+**Primary success call chain:**
+
+```text
+submitPatch(field, settled)
+  -> EditController::HandlePatch -> intent with single patch (or empty on undo)
+  -> history CommitAdjustment / ApplyVersionHeadToLivePipeline
+  -> ApplyEditorAdjustmentSnapshot(patches only)
+  -> BumpHistoryRevision -> service.adjustment_snapshot() from history
+  -> EditorSessionController QVariantMap -> QML loadFromSnapshot
+```
+
+**Primary failure call chain:**
+
+```text
+Undo/open with empty render adjustment
+  -> ApplyEditorAdjustmentSnapshot no-op
+  -> live pipeline already rebuilt by history/PMS; panels refresh from history snapshot
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| Single-field patch / empty undo adjustment | `EditorSessionEditControllerTest` | PASS 9/9 |
+| Patch-only apply (no 22-field replace) | `EditorAdjustmentPipelineTest` | PASS 6/6 |
+| Navigation open/checkout with empty adjustment | `EditorSessionNavigationControllerTest` | PASS 23/23 |
+
+Commands: build/run the three app test binaries above
+
+**Checklist / exit condition:** all 4.12 boxes checked; `kEditorSnapshotFields` / history `committed_snapshot` / QML `QVariantMap` retained
+
+**LOC note (grill-code-review):** edit controller + adjustment pipeline simplification
+
+**Remaining gaps:** step 13 full cross-suite run still pending
 
 ### 5.1 导入和持久参数
 
@@ -569,10 +723,10 @@ rg "content_generation|view_generation|preview_generation|SetActiveGenerations|A
 6. 让版本状态可由默认参数加提交链稳定计算。
 7. 重写 checkout、undo、redo、paste、merge，并保证 WAL-first 与失败回滚。
 8. 完成数据库数据迁移，删除 root schema 和 root API。
-9. 从 Session 和 UI 删除所有 generation。
-10. 把 request ID 生成、取消和旧帧丢弃收口到 PipelineScheduler 与实际 sink。
-11. 删除 `FramePresentationBroker`。
-12. 删除完整 Editor snapshot 重放和 22 字段兼容代码。
+9. [x] 从 Session 和 UI 删除所有 generation。
+10. [x] 把 request ID 生成、取消和旧帧丢弃收口到 PipelineScheduler 与实际 sink。
+11. [x] 删除 `FramePresentationBroker`。
+12. [x] 删除完整 Editor snapshot 重放和 22 字段兼容代码。
 13. 运行全部 pipeline、history、editor session、WAL recovery、thumbnail、export 和 editor RHI 测试。
 
 ## 7. 最终验收标准

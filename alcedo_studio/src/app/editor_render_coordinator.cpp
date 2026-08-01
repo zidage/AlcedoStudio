@@ -29,23 +29,10 @@ void EditorRenderCoordinator::SetResultObserver(ResultObserver observer) {
 }
 
 auto EditorRenderCoordinator::IsObsolete(const EditorRenderIntent& intent) const -> bool {
-  if (intent.image_load_request_id.value != active_image_load_request_id_ ||
-      intent.render_generation != render_generation_) {
-    return true;
-  }
-  // Phase 5D: a view-generation advance (zoom/pan/resize/ROI) only obsoletes
-  // view-dependent DetailPatch work. Full-frame renders (InteractivePrimary /
-  // QualityBase) are view-independent — the renderer re-samples them under the
-  // new view — so a zoom must NOT cancel a pending QualityBase. Only a
-  // content-changing render-generation advance cancels full-frame work.
-  if (intent.view_generation != view_generation_) {
-    return intent.frame_role == FrameRole::DetailPatch;
-  }
-  return false;
+  return intent.image_load_request_id.value != active_image_load_request_id_;
 }
 
-auto EditorRenderCoordinator::CancelObsoleteForActiveGenerations(
-    EditorRenderSupersessionPolicy policy) -> std::uint64_t {
+auto EditorRenderCoordinator::CancelObsoleteForImageLoadMismatch() -> std::uint64_t {
   // Returns any in-flight scheduler job id that must be cancelled AFTER the
   // coordinator mutex is released. Production Cancel invokes the request token
   // callback, which re-enters CancelRequest and would deadlock if called while
@@ -57,7 +44,7 @@ auto EditorRenderCoordinator::CancelObsoleteForActiveGenerations(
       cancelled.kind       = EditorRenderResultKind::Cancelled;
       cancelled.request_id = it->request.request_id;
       cancelled.intent     = it->request.intent;
-      cancelled.message    = "Cancelled: obsolete generation";
+      cancelled.message    = "Cancelled: obsolete image load request";
       Emit(std::move(cancelled));
       terminal_request_ids_.insert(it->request.request_id);
       it = pending_.erase(it);
@@ -65,19 +52,14 @@ auto EditorRenderCoordinator::CancelObsoleteForActiveGenerations(
       ++it;
     }
   }
-  const bool preserve_inflight_full_frame =
-      inflight_ && policy == EditorRenderSupersessionPolicy::PreserveInflightFullFrame &&
-      inflight_->request.intent.image_load_request_id.value == active_image_load_request_id_ &&
-      inflight_->request.intent.view_generation == view_generation_ &&
-      inflight_->request.intent.frame_role != FrameRole::DetailPatch;
-  if (inflight_ && IsObsolete(inflight_->request.intent) && !preserve_inflight_full_frame) {
+  if (inflight_ && IsObsolete(inflight_->request.intent)) {
     scheduler_job_to_cancel        = inflight_->scheduler_job_id;
     const std::uint64_t request_id = inflight_->request.request_id;
     EditorRenderResult  cancelled;
     cancelled.kind       = EditorRenderResultKind::Cancelled;
     cancelled.request_id = request_id;
     cancelled.intent     = inflight_->request.intent;
-    cancelled.message    = "Cancelled in-flight: obsolete generation";
+    cancelled.message    = "Cancelled in-flight: obsolete image load request";
     Emit(std::move(cancelled));
     terminal_request_ids_.insert(request_id);
     inflight_.reset();
@@ -86,17 +68,15 @@ auto EditorRenderCoordinator::CancelObsoleteForActiveGenerations(
   return scheduler_job_to_cancel;
 }
 
-void EditorRenderCoordinator::SetActiveGenerations(std::uint64_t image_load_request_id,
-                                                   std::uint64_t render_generation,
-                                                   std::uint64_t view_generation,
-                                                   EditorRenderSupersessionPolicy policy) {
+void EditorRenderCoordinator::SetActiveImageLoadRequest(std::uint64_t image_load_request_id) {
   std::uint64_t scheduler_job_to_cancel = 0;
   {
     std::scoped_lock lock(mutex_);
+    if (active_image_load_request_id_ == image_load_request_id) {
+      return;
+    }
     active_image_load_request_id_ = image_load_request_id;
-    render_generation_      = render_generation;
-    view_generation_        = view_generation;
-    scheduler_job_to_cancel = CancelObsoleteForActiveGenerations(policy);
+    scheduler_job_to_cancel       = CancelObsoleteForImageLoadMismatch();
   }
   // Token cancel callbacks re-enter CancelRequest; never hold mutex_ here.
   if (scheduler_ && scheduler_job_to_cancel != 0) {
@@ -110,18 +90,6 @@ auto EditorRenderCoordinator::AcceptOrReject(const EditorRenderIntent& intent,
   if (intent.image_load_request_id.value != active_image_load_request_id_) {
     if (message) {
       *message = "Rejected: image load request mismatch";
-    }
-    return false;
-  }
-  if (intent.render_generation != render_generation_) {
-    if (message) {
-      *message = "Rejected: render generation mismatch";
-    }
-    return false;
-  }
-  if (intent.view_generation != view_generation_) {
-    if (message) {
-      *message = "Rejected: view generation mismatch";
     }
     return false;
   }
@@ -480,7 +448,7 @@ void EditorRenderCoordinator::ScheduleNext() {
       cancelled.kind       = EditorRenderResultKind::Cancelled;
       cancelled.request_id = it->request.request_id;
       cancelled.intent     = it->request.intent;
-      cancelled.message    = "Cancelled: obsolete generation before schedule";
+      cancelled.message    = "Cancelled: obsolete image load request before schedule";
       Emit(std::move(cancelled));
       terminal_request_ids_.insert(it->request.request_id);
       it = pending_.erase(it);

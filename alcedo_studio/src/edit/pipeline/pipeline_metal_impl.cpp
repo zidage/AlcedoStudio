@@ -292,6 +292,7 @@ class MetalGPUPipeline final : public GPUPipelineImpl,
   std::shared_ptr<ImageBuffer>    input_img_;
   OperatorParams*                 cpu_params_   = nullptr;
   IFrameSink*                     frame_sink_   = nullptr;
+  FrameCompletionSubmission       bound_frame_submission_{};
   FusedOperatorParams             fused_params_ = {};
   metal::MetalFusedResources      resources_    = {};
   metal_detail::MetalKernelHandle fused_pipeline_{
@@ -527,6 +528,10 @@ class MetalGPUPipeline final : public GPUPipelineImpl,
 
   void SetFrameSink(IFrameSink* frame_sink) override { frame_sink_ = frame_sink; }
 
+  void SetBoundFrameSubmission(const FrameCompletionSubmission& submission) override {
+    bound_frame_submission_ = submission;
+  }
+
   void Execute(std::shared_ptr<ImageBuffer> output_img) override {
     if (!cpu_params_) {
       throw std::runtime_error("Metal fused pipeline: parameters were not set.");
@@ -565,7 +570,7 @@ class MetalGPUPipeline final : public GPUPipelineImpl,
           static_cast<int>(result.Width()), static_cast<int>(result.Height()),
           reinterpret_cast<std::uintptr_t>(final_image_resource->texture.get()),
           std::shared_ptr<const void>(final_image_resource, final_image_resource->texture.get()),
-          display_config, FramePresentationMode::FullFrame});
+          display_config, bound_frame_submission_.mode, bound_frame_submission_.metadata});
 #else
       cv::Mat host_image;
       result.Download(host_image);

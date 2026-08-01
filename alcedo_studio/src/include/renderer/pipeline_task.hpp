@@ -66,6 +66,9 @@ struct PipelineTask {
 
   TaskOptions                                       options_;
 
+  // Monotonic render request identity. Immutable after ScheduleTask stamps it.
+  std::uint64_t                                     request_id_ = 0;
+
   void                                              SetExecutorRenderParams();
   void                                              ResetPreviewRenderParams();
   void                                              ResetThumbnailRenderParams();

@@ -26,7 +26,20 @@ class RecordingFrameSink final : public alcedo::IFrameSink {
 
   void               UnmapResource() override {}
 
-  void               NotifyFrameReady() override { ++ready_count_; }
+  void NotifyFrameReady(const alcedo::FrameCompletionSubmission& submission) override {
+    // Empty Notify from a test producer keeps BindFrameSubmission metadata so
+    // request-id / scope flags stamped by the scheduler port remain observable.
+    if (submission.metadata.presentation_request_id != 0 ||
+        submission.metadata.scope_refresh_requested || !submission.metadata.scope_update_allowed ||
+        submission.metadata.frame_role != alcedo::FrameRole::InteractivePrimary) {
+      last_submission = submission;
+    }
+    ++ready_count_;
+  }
+
+  void BindFrameSubmission(const alcedo::FrameCompletionSubmission& submission) override {
+    last_submission = submission;
+  }
 
   [[nodiscard]] auto GetWidth() const -> int override { return width_; }
   [[nodiscard]] auto GetHeight() const -> int override { return height_; }
@@ -37,11 +50,7 @@ class RecordingFrameSink final : public alcedo::IFrameSink {
   [[nodiscard]] auto width() const -> int { return width_; }
   [[nodiscard]] auto height() const -> int { return height_; }
 
-  void SetNextFramePreviewMetadata(const alcedo::FramePreviewMetadata& metadata) override {
-    last_metadata = metadata;
-  }
-
-  alcedo::FramePreviewMetadata last_metadata{};
+  alcedo::FrameCompletionSubmission last_submission{};
 
  private:
   std::atomic<int> ready_count_ = 0;
@@ -56,8 +65,6 @@ auto MakeRequest(std::uint64_t request_id, std::uint64_t image_load_request)
   request.intent.element_id              = 22;
   request.intent.image_id                = 11;
   request.intent.image_load_request_id   = alcedo::ImageLoadRequestId{image_load_request};
-  request.intent.render_generation       = image_load_request;
-  request.intent.view_generation         = 1;
   request.intent.reason             = alcedo::EditorRenderReason::InitialFrame;
   request.intent.quality            = alcedo::EditorRenderQuality::Interactive;
   request.intent.frame_role         = alcedo::FrameRole::InteractivePrimary;
@@ -76,7 +83,7 @@ TEST(EditorSessionRenderSchedulerPortTest,
       [&producer_count](alcedo::IFrameSink* frame_sink, const alcedo::EditorRenderRequest&) {
         if (!frame_sink) return false;
         ++producer_count;
-        frame_sink->NotifyFrameReady();
+        frame_sink->NotifyFrameReady(alcedo::FrameCompletionSubmission{});
         return true;
       });
 
@@ -102,7 +109,7 @@ TEST(EditorSessionRenderSchedulerPortTest, ViewDrivenReasonsDisableScopeFrameRep
   scheduler->SetTestFrameProducer(
       [](alcedo::IFrameSink* frame_sink, const alcedo::EditorRenderRequest&) {
         if (!frame_sink) return false;
-        frame_sink->NotifyFrameReady();
+        frame_sink->NotifyFrameReady(alcedo::FrameCompletionSubmission{});
         return true;
       });
 
@@ -114,7 +121,7 @@ TEST(EditorSessionRenderSchedulerPortTest, ViewDrivenReasonsDisableScopeFrameRep
     request.intent.reason = view_reasons[index];
     ASSERT_NE(scheduler->Schedule(request), 0u);
     scheduler->WaitForSessionIdle(20 + index);
-    EXPECT_FALSE(sink.last_metadata.scope_update_allowed);
+    EXPECT_FALSE(sink.last_submission.metadata.scope_update_allowed);
   }
 }
 
@@ -125,19 +132,38 @@ TEST(EditorSessionRenderSchedulerPortTest, ScopeRefreshMarksFrameAsRequestedScop
   scheduler->SetTestFrameProducer(
       [](alcedo::IFrameSink* frame_sink, const alcedo::EditorRenderRequest&) {
         if (!frame_sink) return false;
-        frame_sink->NotifyFrameReady();
+        frame_sink->NotifyFrameReady(alcedo::FrameCompletionSubmission{});
         return true;
       });
 
   auto request                   = MakeRequest(72, 32);
   request.intent.reason          = alcedo::EditorRenderReason::ScopeRefresh;
-  request.intent.view_generation = 77;
   ASSERT_NE(scheduler->Schedule(request), 0u);
   scheduler->WaitForSessionIdle(32);
 
-  EXPECT_TRUE(sink.last_metadata.scope_update_allowed);
-  EXPECT_TRUE(sink.last_metadata.scope_refresh_requested);
-  EXPECT_EQ(sink.last_metadata.preview_generation, request.intent.view_generation);
+  EXPECT_TRUE(sink.last_submission.metadata.scope_update_allowed);
+  EXPECT_TRUE(sink.last_submission.metadata.scope_refresh_requested);
+  EXPECT_EQ(sink.last_submission.metadata.preview_generation, 0u);
+  EXPECT_EQ(sink.last_submission.metadata.presentation_request_id, request.request_id);
+}
+
+TEST(EditorSessionRenderSchedulerPortTest, SessionDoesNotStampPreviewGenerationFromIntent) {
+  auto               scheduler = std::make_shared<EditorSessionRenderSchedulerPort>();
+  RecordingFrameSink sink;
+  scheduler->SetSinkResolver([&sink] { return static_cast<alcedo::IFrameSink*>(&sink); });
+  scheduler->SetTestFrameProducer(
+      [](alcedo::IFrameSink* frame_sink, const alcedo::EditorRenderRequest&) {
+        if (!frame_sink) return false;
+        frame_sink->NotifyFrameReady(alcedo::FrameCompletionSubmission{});
+        return true;
+      });
+
+  auto request = MakeRequest(88, 41);
+  ASSERT_NE(scheduler->Schedule(request), 0u);
+  scheduler->WaitForSessionIdle(41);
+
+  EXPECT_EQ(sink.last_submission.metadata.preview_generation, 0u);
+  EXPECT_EQ(sink.last_submission.metadata.presentation_request_id, request.request_id);
 }
 
 TEST(EditorSessionRenderSchedulerPortTest, CancelledSyntheticRequestLeavesSessionIdle) {

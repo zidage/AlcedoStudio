@@ -40,9 +40,6 @@ auto FrameRoleToPreviewMetadata(const alcedo::EditorRenderIntent& intent)
     -> alcedo::FramePreviewMetadata {
   alcedo::FramePreviewMetadata meta;
   meta.frame_role              = intent.frame_role;
-  meta.preview_generation      = intent.reason == alcedo::EditorRenderReason::ScopeRefresh
-                                     ? intent.view_generation
-                                     : intent.render_generation;
   meta.detail_serial           = 0;
   meta.image_identity          = static_cast<std::uint64_t>(intent.image_id);
   meta.image_generation        = intent.image_load_request_id.value;
@@ -286,10 +283,14 @@ void EditorSessionRenderSchedulerPort::ExecuteJob(Job job) {
 
   alcedo::FramePreviewMetadata meta = FrameRoleToPreviewMetadata(job.request.intent);
   meta.presentation_request_id      = job.request.request_id;
-  sink->SetNextFramePreviewMetadata(meta);
-  sink->SetNextFramePresentationMode(job.request.intent.frame_role == alcedo::FrameRole::DetailPatch
-                                         ? alcedo::FramePresentationMode::ViewportTransformed
-                                         : alcedo::FramePresentationMode::FullFrame);
+  const alcedo::FramePresentationMode mode =
+      job.request.intent.frame_role == alcedo::FrameRole::DetailPatch
+          ? alcedo::FramePresentationMode::ViewportTransformed
+          : alcedo::FramePresentationMode::FullFrame;
+  // Bind before produce so test producers and pipeline Apply share the same
+  // request-id / scope metadata. PipelineTask::SetExecutorRenderParams may
+  // refine ROI fields under the render lock later.
+  sink->BindFrameSubmission(alcedo::FrameCompletionSubmission{meta, mode});
   sink->EnsureSize(std::max(1, job.request.intent.requested_width),
                    std::max(1, job.request.intent.requested_height));
 
@@ -333,22 +334,20 @@ void EditorSessionRenderSchedulerPort::ExecuteJob(Job job) {
     std::scoped_lock lock(mutex_);
     auto             it = jobs_.find(job.job_id);
     if (it != jobs_.end() && it->second.cancelled) {
-      jobs_.erase(it);
-      jobs_changed_.notify_all();
-      pending_presentations_.erase(job.request.request_id);
       cancelled_during_execution = true;
-    } else {
-      if (!ok || !submitted) pending_presentations_.erase(job.request.request_id);
-      jobs_.erase(job.job_id);
-      jobs_changed_.notify_all();
+      pending_presentations_.erase(job.request.request_id);
+    } else if (!ok || !submitted) {
+      pending_presentations_.erase(job.request.request_id);
     }
   }
   if (cancelled_during_execution) {
     CompleteJob(job.request, false, false, "Cancelled during execution");
+    RemoveJob(job.job_id);
     return;
   }
   CompleteJob(job.request, ok, submitted,
               error.empty() ? (ok ? "Render completed" : "Render failed") : error);
+  RemoveJob(job.job_id);
 }
 
 auto EditorSessionRenderSchedulerPort::TryProducePipelineFrame(
@@ -418,6 +417,7 @@ auto EditorSessionRenderSchedulerPort::TryProducePipelineFrame(
         request.intent.reason == alcedo::EditorRenderReason::ScopeRefresh;
     task.options_.render_desc_.frame_metadata_ = FrameRoleToPreviewMetadata(request.intent);
     task.options_.render_desc_.frame_metadata_.presentation_request_id = request.request_id;
+    task.request_id_                                                 = request.request_id;
     task.options_.is_callback_                                         = false;
     task.options_.is_seq_callback_                                     = false;
     task.options_.is_blocking_                                         = true;

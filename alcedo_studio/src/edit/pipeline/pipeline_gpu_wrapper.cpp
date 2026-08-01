@@ -29,6 +29,8 @@ class UnavailableGPUPipeline final : public GPUPipelineImpl {
 
   void SetFrameSink(IFrameSink*) override {}
 
+  void SetBoundFrameSubmission(const FrameCompletionSubmission&) override {}
+
   void Execute(std::shared_ptr<ImageBuffer>) override {
     throw std::runtime_error("GPU backend unavailable: compiled GPU pipeline implementation is missing.");
   }
@@ -96,6 +98,10 @@ void GPUPipelineWrapper::SetInputImage(std::shared_ptr<ImageBuffer> input_image)
 void GPUPipelineWrapper::SetParams(OperatorParams& params) { impl_->SetParams(params); }
 
 void GPUPipelineWrapper::SetFrameSink(IFrameSink* frame_sink) { impl_->SetFrameSink(frame_sink); }
+
+void GPUPipelineWrapper::SetBoundFrameSubmission(const FrameCompletionSubmission& submission) {
+  impl_->SetBoundFrameSubmission(submission);
+}
 
 void GPUPipelineWrapper::Execute(std::shared_ptr<ImageBuffer> output) {
   impl_->Execute(std::move(output));

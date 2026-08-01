@@ -106,10 +106,9 @@ EditorDialog::EditorDialog(std::shared_ptr<ImagePoolService>       image_pool,
                 committed_state_ = state_;
                 SyncControlsFromState();
                 if (render_coordinator_) {
-                  render_coordinator_->AdvancePreviewGeneration();
+                  render_coordinator_->InvalidateContentPreviewState();
                   render_coordinator_->RequestRenderWithoutApplyingState(
-                      /*use_viewport_region=*/false,
-                      /*bump_preview_generation=*/false);
+                      /*use_viewport_region=*/false);
                   render_coordinator_->TriggerQualityPreviewRenderFromPipeline();
                 }
                 return true;
@@ -182,10 +181,10 @@ EditorDialog::EditorDialog(std::shared_ptr<ImagePoolService>       image_pool,
                   render_coordinator_->MaybeScheduleDetailPreviewRenderFromViewport();
                 }
               },
-          .advance_preview_generation =
+          .invalidate_content_preview =
               [this]() {
                 if (render_coordinator_) {
-                  render_coordinator_->AdvancePreviewGeneration();
+                  render_coordinator_->InvalidateContentPreviewState();
                 }
               },
           .update_version_ui =
@@ -272,8 +271,7 @@ EditorDialog::EditorDialog(std::shared_ptr<ImagePoolService>       image_pool,
   if (scope_panel_) {
     scope_panel_->SetNeedsRenderCallback([this]() {
       if (render_coordinator_) {
-        render_coordinator_->RequestRender(/*use_viewport_region=*/true,
-                                           /*bump_preview_generation=*/false);
+        render_coordinator_->RequestRender(/*use_viewport_region=*/true);
       }
     });
   }
@@ -312,7 +310,7 @@ EditorDialog::EditorDialog(std::shared_ptr<ImagePoolService>       image_pool,
   // Load a 4K quality base preview first; scheduler transitions back to fast-preview baseline.
   QTimer::singleShot(0, this, [this]() {
     if (render_coordinator_) {
-      render_coordinator_->AdvancePreviewGeneration();
+      render_coordinator_->InvalidateContentPreviewState();
       render_coordinator_->TriggerQualityPreviewRenderFromPipeline();
     }
   });
@@ -734,8 +732,7 @@ void EditorDialog::BuildRawDecodePanel() {
       .request_render =
           [this]() {
             if (render_coordinator_) {
-              render_coordinator_->RequestRender(/*use_viewport_region=*/true,
-                                                 /*bump_preview_generation=*/false);
+              render_coordinator_->RequestRender(/*use_viewport_region=*/true);
             }
           },
       .load_from_pipeline =

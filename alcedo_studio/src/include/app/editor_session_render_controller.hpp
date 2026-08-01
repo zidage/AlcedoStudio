@@ -116,13 +116,6 @@ class EditorSessionRenderController final {
   /// Cancel the active render session for one image-load request.
   void               CancelSessionAndWait(ImageLoadRequestId image_load_request);
 
-  /// Advance the content stamp used for coordinator supersession after edits.
-  void               AdvanceContentGeneration();
-  /// Advance the view stamp used to obsolete DetailPatch work.
-  void               AdvanceViewGeneration();
-  [[nodiscard]] auto content_generation() const -> std::uint64_t;
-  [[nodiscard]] auto view_generation() const -> std::uint64_t;
-
  private:
   /// Build a fully-stamped render intent from the command and identity.
   /// Returns nullopt when the identity does not represent an active image.
@@ -161,15 +154,11 @@ class EditorSessionRenderController final {
   std::optional<EditorRenderReason> pending_initial_reason_;
   std::uint64_t                     pending_operation_id_ = 0;
   EditorRenderAdjustmentSnapshot    pending_initial_adjustment_;
-  EditorRenderSupersessionPolicy    pending_initial_policy_ =
-      EditorRenderSupersessionPolicy::CancelObsolete;
   /// Identity at the time the first frame was routed. Used to correlate the
   /// first-frame complete→submit→present gate and to emit the
   /// FirstFramePresented event with the correct identity snapshot.
   EditorSessionIdentity                                pending_session_identity_{};
   ImageLoadRequestId                                   pending_image_load_request_{};
-  std::uint64_t                                        content_generation_ = 0;
-  std::uint64_t                                        view_generation_    = 1;
   bool                                                 last_notified_render_busy_ = false;
   std::optional<std::chrono::steady_clock::time_point> first_frame_route_time_{};
   double                                               first_frame_time_ms_ = -1.0;

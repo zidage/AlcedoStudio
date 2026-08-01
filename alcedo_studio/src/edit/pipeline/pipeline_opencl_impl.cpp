@@ -181,7 +181,8 @@ void CheckOpenClFrameCopy(cl_int error, const char* operation) {
   }
 }
 
-auto TrySubmitOpenClFrameToSink(opencl::OpenClImage& image, IFrameSink& frame_sink) -> bool {
+auto TrySubmitOpenClFrameToSink(opencl::OpenClImage& image, IFrameSink& frame_sink,
+                                const FrameCompletionSubmission& submission) -> bool {
   frame_sink.EnsureSize(image.Width(), image.Height());
   const FrameWriteMapping mapping = frame_sink.MapResourceForWrite(FrameMemoryDomain::OpenClDevice);
   if (!mapping) {
@@ -218,7 +219,7 @@ auto TrySubmitOpenClFrameToSink(opencl::OpenClImage& image, IFrameSink& frame_si
 
   frame_sink.UnmapResource();
   CheckOpenClFrameCopy(clFinish(context.Queue()), "clFinish after OpenGL frame copy");
-  frame_sink.NotifyFrameReady();
+  frame_sink.NotifyFrameReady(submission);
   return true;
 }
 
@@ -269,6 +270,7 @@ class OpenCLGPUPipeline final : public GPUPipelineImpl,
   std::shared_ptr<ImageBuffer>           input_img_;
   OperatorParams*                        cpu_params_   = nullptr;
   IFrameSink*                            frame_sink_   = nullptr;
+  FrameCompletionSubmission              bound_frame_submission_{};
   FusedOperatorParams                    fused_params_ = {};
   OpenCL::Pipeline::OpenClFusedResources resources_    = {};
 
@@ -576,6 +578,10 @@ class OpenCLGPUPipeline final : public GPUPipelineImpl,
 
   void SetFrameSink(IFrameSink* frame_sink) override { frame_sink_ = frame_sink; }
 
+  void SetBoundFrameSubmission(const FrameCompletionSubmission& submission) override {
+    bound_frame_submission_ = submission;
+  }
+
   void Execute(std::shared_ptr<ImageBuffer> output_img) override {
     using ProfileClock    = std::chrono::steady_clock;
     const auto exec_start = ProfileClock::now();
@@ -663,7 +669,7 @@ class OpenCLGPUPipeline final : public GPUPipelineImpl,
 
     if (frame_sink_) {
       const ViewerDisplayConfig display_config = ResolveViewerDisplayConfig(*cpu_params_);
-      submitted_gpu_frame = TrySubmitOpenClFrameToSink(*detail_src, *frame_sink_);
+      submitted_gpu_frame = TrySubmitOpenClFrameToSink(*detail_src, *frame_sink_, bound_frame_submission_);
       if (!submitted_gpu_frame) {
         cv::Mat host_image;
         {

@@ -210,8 +210,8 @@ auto EditorAdjustmentSession::Commit(const AdjustmentCommit& commit) -> CommitRe
     callbacks_.update_version_ui();
   }
 
-  if (callbacks_.advance_preview_generation) {
-    callbacks_.advance_preview_generation();
+  if (callbacks_.invalidate_content_preview) {
+    callbacks_.invalidate_content_preview();
   }
   ScheduleQualityPreview();
 

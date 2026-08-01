@@ -13,7 +13,7 @@
 
 namespace alcedo::editor_rhi {
 
-// Backend-neutral presentation lease protocol used by FramePresentationBroker
+// Backend-neutral presentation lease protocol used by DirectPresentQueue
 // (Phase 2+) and exercised by EditorRhiHarness / production EditorViewportItem.
 //
 // Lifecycle:
@@ -46,7 +46,7 @@ enum class LeaseWritableResourceKind : std::uint8_t {
   MetalTexture,  // same as presentation handle for Metal
 };
 
-// The broker keeps these layer identities independent from the edit-viewer
+// DirectPresentQueue keeps these layer identities independent from the edit-viewer
 // implementation so a future Metal adapter can use the same protocol.
 enum class LeaseFrameLayer : std::uint8_t {
   InteractivePrimary = 0,

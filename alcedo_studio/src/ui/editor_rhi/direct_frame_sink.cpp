@@ -57,6 +57,17 @@ void DirectFrameSink::ClearMappedSlot() {
   prepared_slot_index_     = -1;
 }
 
+auto DirectFrameSink::AcceptSubmissionRequestId(std::uint64_t request_id) -> bool {
+  if (request_id == 0) {
+    return true;
+  }
+  if (request_id < latest_accepted_request_id_) {
+    return false;
+  }
+  latest_accepted_request_id_ = std::max(latest_accepted_request_id_, request_id);
+  return true;
+}
+
 auto DirectFrameSink::MakeSizeRequestLocked() const -> DirectPresentQueue::SizeRequest {
   DirectPresentQueue::SizeRequest request;
   request.width            = width_;
@@ -64,9 +75,9 @@ auto DirectFrameSink::MakeSizeRequestLocked() const -> DirectPresentQueue::SizeR
   request.preferred_slot   = prepared_slot_index_;
   request.image_generation = item_ ? item_->imageGeneration() : 0;
   request.image_identity   = item_ ? item_->imageIdentity() : 0;
-  if (pending_preview_metadata_valid_) {
-    request.layer_generation = pending_preview_metadata_.preview_generation;
-    request.frame_role       = pending_preview_metadata_.frame_role;
+  if (bound_submission_valid_) {
+    request.layer_generation = bound_submission_.metadata.presentation_request_id;
+    request.frame_role       = bound_submission_.metadata.frame_role;
   }
   return request;
 }
@@ -164,11 +175,9 @@ void DirectFrameSink::EnsureSize(int width, int height) {
     // pan, and SameRoi matching — the high-res detail patch then fails to cover
     // the view.
     bool is_render_reference = true;
-    if (pending_preview_metadata_valid_) {
-      const FramePresentationMode mode = pending_presentation_mode_valid_
-                                             ? pending_presentation_mode_
-                                             : FramePresentationMode::FullFrame;
-      is_render_reference = IsRenderReferenceFrame(mode, pending_preview_metadata_.frame_role);
+    if (bound_submission_valid_) {
+      is_render_reference =
+          IsRenderReferenceFrame(bound_submission_.mode, bound_submission_.metadata.frame_role);
     }
     // Metal zero-copy: production EnsureSize uses the presentation *viewport*
     // size, not the pipeline MTLTexture size. Emitting that as the render
@@ -371,27 +380,32 @@ void DirectFrameSink::UnmapResource() {
   unmapped_pending_submit_ = true;
 }
 
-void DirectFrameSink::NotifyFrameReady() {
+void DirectFrameSink::BindFrameSubmission(const FrameCompletionSubmission& submission) {
+  std::lock_guard lock(mutex_);
+  bound_submission_       = submission;
+  bound_submission_valid_ = true;
+}
+
+void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submission) {
   int                   slot_index = -1;
-  FramePresentationMode mode       = FramePresentationMode::FullFrame;
-  FramePreviewMetadata  metadata{};
+  FramePresentationMode mode       = submission.mode;
+  FramePreviewMetadata  metadata   = submission.metadata;
   {
     std::lock_guard lock(mutex_);
     if (!has_mapped_slot_ || !unmapped_pending_submit_) {
       return;
     }
+    if (!AcceptSubmissionRequestId(metadata.presentation_request_id)) {
+      has_mapped_slot_         = false;
+      unmapped_pending_submit_ = false;
+      mapped_slot_index_       = -1;
+      return;
+    }
     slot_index = mapped_slot_index_;
-    if (pending_presentation_mode_valid_) {
-      mode                             = pending_presentation_mode_;
-      pending_presentation_mode_valid_ = false;
-    }
-    if (pending_preview_metadata_valid_) {
-      metadata                        = pending_preview_metadata_;
-      pending_preview_metadata_valid_ = false;
-    }
     has_mapped_slot_         = false;
     unmapped_pending_submit_ = false;
     mapped_slot_index_       = -1;
+    bound_submission_valid_  = false;
     ++submitted_frame_count_;
   }
   if (!item_ || !item_->present_queue() || slot_index < 0) {
@@ -427,15 +441,15 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
   item_->setDisplayConfig(frame.display_config);
 
   ImportedGpuFrame imported;
-  imported.width                      = frame.width;
-  imported.height                     = frame.height;
-  imported.texture_handle             = frame.texture_handle;
-  imported.native_layout              = 0;
-  imported.owner                      = frame.owner;
-  imported.presentation_mode          = frame.presentation_mode;
-  imported.preview_metadata           = frame.preview_metadata;
-  imported.image_generation           = item_->imageGeneration();
-  imported.image_identity             = item_->imageIdentity();
+  imported.width             = frame.width;
+  imported.height            = frame.height;
+  imported.texture_handle    = frame.texture_handle;
+  imported.native_layout     = 0;
+  imported.owner             = frame.owner;
+  imported.presentation_mode = frame.presentation_mode;
+  imported.preview_metadata  = frame.preview_metadata;
+  imported.image_generation  = item_->imageGeneration();
+  imported.image_identity    = item_->imageIdentity();
 
   std::uint64_t request_id            = 0;
   bool          emit_render_reference = false;
@@ -443,14 +457,8 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
   int           ref_h                 = 0;
   {
     std::lock_guard lock(mutex_);
-    // Prefer the session-stamped role/ROI/request id over pipeline defaults.
-    if (pending_presentation_mode_valid_) {
-      imported.presentation_mode       = pending_presentation_mode_;
-      pending_presentation_mode_valid_ = false;
-    }
-    if (pending_preview_metadata_valid_) {
-      imported.preview_metadata       = pending_preview_metadata_;
-      pending_preview_metadata_valid_ = false;
+    if (!AcceptSubmissionRequestId(imported.preview_metadata.presentation_request_id)) {
+      return;
     }
     request_id        = imported.preview_metadata.presentation_request_id;
     imported.sequence = ++imported_sequence_;
@@ -553,18 +561,6 @@ auto DirectFrameSink::GetViewportRenderRegion() const -> std::optional<ViewportR
   return view_state_.snapshot.viewport_render_region_cache;
 }
 
-void DirectFrameSink::SetNextFramePresentationMode(FramePresentationMode mode) {
-  std::lock_guard lock(mutex_);
-  pending_presentation_mode_       = mode;
-  pending_presentation_mode_valid_ = true;
-}
-
-void DirectFrameSink::SetNextFramePreviewMetadata(const FramePreviewMetadata& metadata) {
-  std::lock_guard lock(mutex_);
-  pending_preview_metadata_       = metadata;
-  pending_preview_metadata_valid_ = true;
-}
-
 auto DirectFrameSink::ViewState() const -> ViewerViewState {
   std::lock_guard lock(mutex_);
   return view_state_;
@@ -632,6 +628,11 @@ auto DirectFrameSink::HasWritableTargetForNextFrame() const -> bool {
 auto DirectFrameSink::submitted_frame_count() const -> std::uint64_t {
   std::lock_guard lock(mutex_);
   return submitted_frame_count_;
+}
+
+auto DirectFrameSink::latest_accepted_request_id() const -> std::uint64_t {
+  std::lock_guard lock(mutex_);
+  return latest_accepted_request_id_;
 }
 
 }  // namespace alcedo::editor_rhi

@@ -43,14 +43,11 @@ class RecordingScheduler final : public IEditorPipelineSchedulerPort {
 };
 
 auto MakeIntent(EditorRenderQuality quality, EditorRenderPriority priority,
-                std::uint64_t session_gen = 1, std::uint64_t render_gen = 1,
-                std::uint64_t view_gen = 1) -> EditorRenderIntent {
+                std::uint64_t session_gen = 1) -> EditorRenderIntent {
   EditorRenderIntent intent;
   intent.element_id         = 10;
   intent.image_id           = 20;
   intent.image_load_request_id = ImageLoadRequestId{session_gen};
-  intent.render_generation  = render_gen;
-  intent.view_generation    = view_gen;
   intent.quality            = quality;
   intent.priority           = priority;
   intent.frame_role         = FrameRoleForQuality(quality);
@@ -64,9 +61,8 @@ auto MakeIntent(EditorRenderQuality quality, EditorRenderPriority priority,
 // sets frame_role/replacement_key like a service-produced intent.
 auto MakeViewIntent(EditorRenderReason reason, EditorRenderQuality quality,
                     EditorRenderPriority priority = EditorRenderPriority::Normal,
-                    std::uint64_t session_gen = 1, std::uint64_t render_gen = 1,
-                    std::uint64_t view_gen = 1) -> EditorRenderIntent {
-  EditorRenderIntent intent = MakeIntent(quality, priority, session_gen, render_gen, view_gen);
+                    std::uint64_t session_gen = 1) -> EditorRenderIntent {
+  EditorRenderIntent intent = MakeIntent(quality, priority, session_gen);
   intent.reason             = reason;
   return intent;
 }
@@ -76,7 +72,7 @@ class EditorRenderCoordinatorTest : public ::testing::Test {
   void SetUp() override {
     scheduler_   = std::make_shared<RecordingScheduler>();
     coordinator_ = std::make_unique<EditorRenderCoordinator>(scheduler_);
-    coordinator_->SetActiveGenerations(1, 1, 1);
+    coordinator_->SetActiveImageLoadRequest(1);
   }
 
   std::shared_ptr<RecordingScheduler>      scheduler_;
@@ -318,7 +314,7 @@ TEST(EditorRenderCoordinatorLifetimeTest, LateTokenCancellationIgnoresDestroyedC
   auto token     = std::make_shared<EditorRenderCancellationToken>();
   {
     EditorRenderCoordinator coordinator(scheduler);
-    coordinator.SetActiveGenerations(1, 1, 1);
+    coordinator.SetActiveImageLoadRequest(1);
     auto intent = MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal);
     intent.cancellation = token;
     ASSERT_EQ(coordinator.Submit(intent).kind, EditorRenderResultKind::RequestAccepted);
@@ -417,16 +413,15 @@ TEST_F(EditorRenderCoordinatorTest, CancelInflightStartsUnrelatedPendingRequest)
 }
 
 TEST_F(EditorRenderCoordinatorTest,
-       SetActiveGenerationsCancelsObsoletePendingAndInflightRenderGen) {
+       SetActiveImageLoadRequestCancelsObsoletePendingAndInflight) {
   const auto inflight = coordinator_->Submit(
-      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1, 1, 1));
-  auto pending = MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal, 1, 1, 1);
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1));
+  auto pending = MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal, 1);
   coordinator_->Submit(pending);
   EXPECT_TRUE(coordinator_->has_inflight());
   EXPECT_EQ(coordinator_->pending_count(), 1u);
 
-  // Advance render generation — both obsolete requests must be cancelled.
-  coordinator_->SetActiveGenerations(1, 2, 1);
+  coordinator_->SetActiveImageLoadRequest(2);
   EXPECT_FALSE(coordinator_->has_inflight());
   EXPECT_EQ(coordinator_->pending_count(), 0u);
   EXPECT_FALSE(scheduler_->cancelled_.empty());
@@ -439,117 +434,12 @@ TEST_F(EditorRenderCoordinatorTest,
   }
   EXPECT_GE(cancelled, 2);
 
-  // New request with current render gen is accepted and scheduled.
+  coordinator_->SetActiveImageLoadRequest(2);
   const auto next = coordinator_->Submit(
-      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1, 2, 1));
+      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 2));
   EXPECT_EQ(next.kind, EditorRenderResultKind::RequestAccepted);
   EXPECT_TRUE(coordinator_->has_inflight());
   EXPECT_EQ(inflight.kind, EditorRenderResultKind::RequestAccepted);
-}
-
-TEST_F(EditorRenderCoordinatorTest,
-       AdjustmentBurstKeepsRunningFastFrameAndSchedulesOnlyLatestPendingValue) {
-  const auto first = coordinator_->Submit(
-      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1, 1, 1));
-  ASSERT_TRUE(coordinator_->has_inflight());
-
-  coordinator_->SetActiveGenerations(
-      1, 2, 1, EditorRenderSupersessionPolicy::PreserveInflightFullFrame);
-  EXPECT_TRUE(coordinator_->has_inflight());
-  EXPECT_TRUE(scheduler_->cancelled_.empty());
-
-  const auto middle = coordinator_->Submit(
-      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1, 2, 1));
-  ASSERT_EQ(coordinator_->pending_count(), 1u);
-
-  coordinator_->SetActiveGenerations(
-      1, 3, 1, EditorRenderSupersessionPolicy::PreserveInflightFullFrame);
-  const auto latest = coordinator_->Submit(
-      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1, 3, 1));
-  ASSERT_EQ(coordinator_->pending_count(), 1u);
-  EXPECT_TRUE(scheduler_->cancelled_.empty());
-
-  coordinator_->NotifySchedulerCompleted(first.request_id, true);
-
-  ASSERT_EQ(scheduler_->scheduled_.size(), 2u);
-  EXPECT_EQ(scheduler_->scheduled_.back().request_id, latest.request_id);
-  EXPECT_NE(scheduler_->scheduled_.back().request_id, middle.request_id);
-}
-
-TEST_F(EditorRenderCoordinatorTest, ViewGenerationAdvanceCancelsOnlyDetailPatch) {
-  // Phase 5D D2: a view-generation advance (zoom/pan/resize/ROI) only obsoletes
-  // view-dependent DetailPatch work. Full-frame renders (InteractivePrimary /
-  // QualityBase) are view-independent — the renderer re-samples them under the
-  // new view — so a zoom must NOT cancel an in-flight or pending full-frame.
-  const auto interactive = coordinator_->Submit(
-      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1, 1, 1));
-  ASSERT_TRUE(coordinator_->has_inflight());
-  const auto detail = coordinator_->Submit(
-      MakeIntent(EditorRenderQuality::Detail, EditorRenderPriority::Low, 1, 1, 1));
-  ASSERT_EQ(coordinator_->pending_count(), 1u);
-
-  coordinator_->SetActiveGenerations(1, 1, 2);
-
-  // The interactive full-frame in-flight survives; only the DetailPatch pending
-  // is cancelled.
-  EXPECT_TRUE(coordinator_->has_inflight());
-  EXPECT_EQ(coordinator_->pending_count(), 0u);
-
-  bool detail_cancelled      = false;
-  bool interactive_cancelled = false;
-  for (const auto& r : coordinator_->results()) {
-    if (r.kind != EditorRenderResultKind::Cancelled) {
-      continue;
-    }
-    if (r.request_id == detail.request_id) {
-      detail_cancelled = true;
-    }
-    if (r.request_id == interactive.request_id) {
-      interactive_cancelled = true;
-    }
-  }
-  EXPECT_TRUE(detail_cancelled);
-  EXPECT_FALSE(interactive_cancelled);
-}
-
-TEST_F(EditorRenderCoordinatorTest, ViewGenerationAdvanceKeepsFullFramePendingCancelsOnlyDetail) {
-  // DetailPatch in-flight; QualityBase + InteractivePrimary pending (both full
-  // frame). A view-generation advance cancels the in-flight DetailPatch but
-  // keeps both full-frame pending entries so the viewport re-samples them under
-  // the new view (Phase 5D D2).
-  const auto detail = coordinator_->Submit(
-      MakeIntent(EditorRenderQuality::Detail, EditorRenderPriority::Low, 1, 1, 1));
-  ASSERT_TRUE(coordinator_->has_inflight());
-  const auto quality = coordinator_->Submit(
-      MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::Normal, 1, 1, 1));
-  const auto interactive = coordinator_->Submit(
-      MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal, 1, 1, 1));
-  ASSERT_EQ(coordinator_->pending_count(), 2u);
-
-  coordinator_->SetActiveGenerations(1, 1, 2);
-
-  // The in-flight DetailPatch is cancelled; ScheduleNext then promotes the
-  // higher-role full-frame (InteractivePrimary, role 3) to in-flight, leaving
-  // the QualityBase pending. Both full-frames survive (one in-flight, one
-  // pending); neither is cancelled.
-  EXPECT_TRUE(coordinator_->has_inflight());     // detail cancelled; full-frame promoted
-  EXPECT_EQ(coordinator_->pending_count(), 1u);  // one full-frame pending, one in-flight
-
-  bool detail_cancelled     = false;
-  int  full_frame_cancelled = 0;
-  for (const auto& r : coordinator_->results()) {
-    if (r.kind != EditorRenderResultKind::Cancelled) {
-      continue;
-    }
-    if (r.request_id == detail.request_id) {
-      detail_cancelled = true;
-    }
-    if (r.request_id == quality.request_id || r.request_id == interactive.request_id) {
-      ++full_frame_cancelled;
-    }
-  }
-  EXPECT_TRUE(detail_cancelled);
-  EXPECT_EQ(full_frame_cancelled, 0);
 }
 
 TEST_F(EditorRenderCoordinatorTest, SubmitDoesNotMutateStoredIntentAfterAccept) {
@@ -578,7 +468,7 @@ TEST_F(EditorRenderCoordinatorTest, SubmitDoesNotMutateStoredIntentAfterAccept) 
 
 TEST_F(EditorRenderCoordinatorTest, IsTheOnlySchedulerCallerThroughSubmitPort) {
   IEditorRenderSubmitPort* port = coordinator_.get();
-  port->SetActiveGenerations(1, 1, 1);
+  port->SetActiveImageLoadRequest(1);
   const auto result =
       port->Submit(MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
   EXPECT_EQ(result.kind, EditorRenderResultKind::RequestAccepted);
@@ -645,7 +535,7 @@ TEST_F(EditorRenderCoordinatorTest, DetailRefreshSchedulesDetailPatch) {
 // CancelRequest. That path must not run under the coordinator mutex or a
 // zoom-driven view-generation advance deadlocks and no further DetailPatch
 // work (or any pipeline request) is ever scheduled.
-TEST_F(EditorRenderCoordinatorTest, ViewGenerationCancelDoesNotDeadlockOnTokenReentry) {
+TEST_F(EditorRenderCoordinatorTest, ImageLoadCancelDoesNotDeadlockOnTokenReentry) {
   class ReentrantCancelScheduler final : public IEditorPipelineSchedulerPort {
    public:
     auto Schedule(const EditorRenderRequest& request) -> std::uint64_t override {
@@ -671,7 +561,7 @@ TEST_F(EditorRenderCoordinatorTest, ViewGenerationCancelDoesNotDeadlockOnTokenRe
 
   auto reentrant = std::make_shared<ReentrantCancelScheduler>();
   auto coord     = std::make_unique<EditorRenderCoordinator>(reentrant);
-  coord->SetActiveGenerations(1, 1, 1);
+  coord->SetActiveImageLoadRequest(1);
 
   auto first = MakeViewIntent(EditorRenderReason::DetailRefresh, EditorRenderQuality::Detail);
   first.cancellation  = std::make_shared<EditorRenderCancellationToken>();
@@ -685,13 +575,10 @@ TEST_F(EditorRenderCoordinatorTest, ViewGenerationCancelDoesNotDeadlockOnTokenRe
     }
   });
 
-  // Zoom/pan advances view generation while a DetailPatch is in-flight. This
-  // used to deadlock: CancelObsolete → scheduler Cancel → token callback →
-  // CancelRequest under the same mutex.
-  coord->SetActiveGenerations(1, 1, 2);
+  coord->SetActiveImageLoadRequest(2);
 
   auto second = MakeViewIntent(EditorRenderReason::DetailRefresh, EditorRenderQuality::Detail,
-                               EditorRenderPriority::Normal, 1, 1, 2);
+                               EditorRenderPriority::Normal, 2);
   second.cancellation = std::make_shared<EditorRenderCancellationToken>();
   const auto next     = coord->Submit(second);
   EXPECT_EQ(next.kind, EditorRenderResultKind::RequestAccepted);

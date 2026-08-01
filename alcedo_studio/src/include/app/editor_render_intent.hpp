@@ -127,10 +127,6 @@ struct EditorRenderIntent {
   image_id_t                                     image_id           = 0;
   std::uint64_t                                  operation_id       = 0;
   ImageLoadRequestId                             image_load_request_id{};
-  /// Content-changing edits advance this stamp for coordinator supersession.
-  std::uint64_t                                  render_generation  = 0;
-  /// View-only changes advance this stamp; obsoletes DetailPatch work only.
-  std::uint64_t                                  view_generation    = 0;
   EditorRenderReason                             reason = EditorRenderReason::InitialFrame;
   EditorRenderAdjustmentSnapshot                 adjustment{};
   std::optional<ViewportRenderRegion>            view_region;

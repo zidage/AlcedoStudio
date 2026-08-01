@@ -306,7 +306,7 @@ def_library(EditorAdjustmentPipeline
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_adjustment_pipeline.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_adjustment_pipeline.hpp"
-    PUBLIC_DEPS EditPipeline JSON
+    PUBLIC_DEPS EditPipeline EditHistory JSON
 )
 
 def_library(EditorSessionService

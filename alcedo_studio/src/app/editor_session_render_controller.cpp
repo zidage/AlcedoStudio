@@ -31,9 +31,8 @@ void EditorSessionRenderController::SetPresentationSinkId(PresentationSinkId sin
     }
     if (pending_initial_reason_.has_value()) {
       pending_command.reason       = *pending_initial_reason_;
-      pending_command.operation_id = pending_operation_id_;
-      pending_command.adjustment   = pending_initial_adjustment_;
-      pending_command.policy       = pending_initial_policy_;
+    pending_command.operation_id = pending_operation_id_;
+    pending_command.adjustment   = pending_initial_adjustment_;
       pending_identity             = pending_session_identity_;
       pending_load_request         = pending_image_load_request_;
       has_pending                  = true;
@@ -55,9 +54,8 @@ void EditorSessionRenderController::SetPresentationSize(int width, int height) {
     presentation_height_ = std::max(0, height);
     if (pending_initial_reason_.has_value()) {
       pending_command.reason       = *pending_initial_reason_;
-      pending_command.operation_id = pending_operation_id_;
-      pending_command.adjustment   = pending_initial_adjustment_;
-      pending_command.policy       = pending_initial_policy_;
+    pending_command.operation_id = pending_operation_id_;
+    pending_command.adjustment   = pending_initial_adjustment_;
       pending_identity             = pending_session_identity_;
       pending_load_request         = pending_image_load_request_;
       has_pending                  = true;
@@ -80,15 +78,6 @@ auto EditorSessionRenderController::MakeRenderIntent(const EditorRenderCommand& 
   intent.image_id              = identity.image_id;
   intent.operation_id          = command.operation_id;
   intent.image_load_request_id = image_load_request;
-  std::uint64_t content_gen = 0;
-  std::uint64_t view_gen    = 0;
-  {
-    std::scoped_lock lock(mutex_);
-    content_gen = content_generation_;
-    view_gen    = view_generation_;
-  }
-  intent.render_generation = content_gen;
-  intent.view_generation   = view_gen;
   intent.reason                = command.reason;
   intent.quality               = DefaultQualityForReason(command.reason);
   intent.priority              = DefaultPriorityForReason(command.reason);
@@ -108,26 +97,6 @@ void EditorSessionRenderController::SetGeometryOverlayActive(bool active) {
   geometry_overlay_active_.store(active, std::memory_order_release);
 }
 
-void EditorSessionRenderController::AdvanceContentGeneration() {
-  std::scoped_lock lock(mutex_);
-  ++content_generation_;
-}
-
-void EditorSessionRenderController::AdvanceViewGeneration() {
-  std::scoped_lock lock(mutex_);
-  ++view_generation_;
-}
-
-auto EditorSessionRenderController::content_generation() const -> std::uint64_t {
-  std::scoped_lock lock(mutex_);
-  return content_generation_;
-}
-
-auto EditorSessionRenderController::view_generation() const -> std::uint64_t {
-  std::scoped_lock lock(mutex_);
-  return view_generation_;
-}
-
 auto EditorSessionRenderController::RouteInitialRender(const EditorRenderCommand&   command,
                                                        const EditorSessionIdentity& identity,
                                                        ImageLoadRequestId           image_load_request)
@@ -137,7 +106,6 @@ auto EditorSessionRenderController::RouteInitialRender(const EditorRenderCommand
     pending_initial_reason_     = command.reason;
     pending_operation_id_       = command.operation_id;
     pending_initial_adjustment_ = command.adjustment;
-    pending_initial_policy_     = command.policy;
     pending_session_identity_   = identity;
     pending_image_load_request_ = image_load_request;
     return 0;
@@ -149,8 +117,7 @@ auto EditorSessionRenderController::RouteInitialRender(const EditorRenderCommand
   if (!intent) {
     return 0;
   }
-  deps_.render->SetActiveGenerations(image_load_request.value, content_generation_, view_generation_,
-                                     command.policy);
+  deps_.render->SetActiveImageLoadRequest(image_load_request.value);
   const EditorRenderResult routed = deps_.render->Submit(*intent);
   if (routed.kind == EditorRenderResultKind::RequestAccepted) {
     if (command.reason == EditorRenderReason::InitialFrame ||
@@ -205,7 +172,7 @@ auto EditorSessionRenderController::RouteViewChange(const EditorRenderCommand&  
   }
 
   if (deps_.render) {
-    deps_.render->SetActiveGenerations(image_load_request.value, content_generation_, view_generation_);
+    deps_.render->SetActiveImageLoadRequest(image_load_request.value);
   }
 
   auto intent_opt = MakeRenderIntent(command, identity, image_load_request);
@@ -308,14 +275,6 @@ void EditorSessionRenderController::NotifyRenderResult(
     return;
   }
 
-  if (render_result.kind == EditorRenderResultKind::FramePresented &&
-      render_result.request_id != quality_base_request_id_) {
-    if (render_result.intent.render_generation != content_generation_ ||
-        render_result.intent.view_generation != view_generation_) {
-      return;
-    }
-  }
-
   const bool busy          = CoordinatorBusy();
   bool       should_notify = false;
   {
@@ -379,8 +338,6 @@ void EditorSessionRenderController::ResetForNewImage() {
   pending_initial_adjustment_ = {};
   pending_session_identity_   = {};
   pending_image_load_request_ = {};
-  content_generation_         = 1;
-  view_generation_            = 1;
   first_frame_route_time_.reset();
   first_frame_time_ms_ = -1.0;
 }
@@ -438,7 +395,7 @@ void EditorSessionRenderController::TryEnterInteractiveFromFirstFrame(
     intent->priority        = EditorRenderPriority::Normal;
     intent->replacement_key = DefaultReplacementKey(EditorRenderQuality::Quality);
     FillRenderIntentDefaults(*intent);
-    deps_.render->SetActiveGenerations(load_request.value, content_generation_, view_generation_);
+    deps_.render->SetActiveImageLoadRequest(load_request.value);
     const auto qb_routed = deps_.render->Submit(*intent);
     if (qb_routed.kind == EditorRenderResultKind::RequestAccepted) {
       std::scoped_lock lock(mutex_);

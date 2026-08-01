@@ -20,7 +20,6 @@ namespace alcedo {
 
 class EditorSessionLifecycle;
 class EditorSessionRenderController;
-class EditorSessionEditController;
 class IEditorJournalPort;
 class IEditorCheckpointStore;
 class IEditorHistoryPort;
@@ -104,10 +103,9 @@ struct NavigationCompletion {
 using NavigationCompletionNotifier = std::function<void(const NavigationCompletion&)>;
 
 /// Owns the pending A-to-B/close navigation orchestration. The controller
-/// calls EditorSessionLifecycle, EditorSaveCheckpointService,
-/// EditorSessionRenderController, and EditorSessionEditController through their
-/// public APIs; it never accesses their fields or mutexes. There are no lambda
-/// backdoors to parent-class methods.
+/// calls EditorSessionLifecycle, EditorSaveCheckpointService, and
+/// EditorSessionRenderController through their public APIs; it never accesses
+/// their fields or mutexes. There are no lambda backdoors to parent-class methods.
 class EditorSessionNavigationController final {
  public:
   /// Sealing instructions for the current image. Built by the navigation
@@ -121,9 +119,9 @@ class EditorSessionNavigationController final {
 
   explicit EditorSessionNavigationController(
       EditorSessionLifecycle& lifecycle, EditorSaveCheckpointService& save_service,
-      EditorSessionRenderController& render, EditorSessionEditController& edit,
-      IEditorJournalPort* journal, IEditorCheckpointStore* checkpoint_store,
-      IEditorHistoryPort* history, EditorSessionNavigationState* state = nullptr);
+      EditorSessionRenderController& render, IEditorJournalPort* journal,
+      IEditorCheckpointStore* checkpoint_store, IEditorHistoryPort* history,
+      EditorSessionNavigationState* state = nullptr);
 
   /// Stamp the operation currently being reduced onto saves and render work.
   void SetOperationId(std::uint64_t operation_id);
@@ -157,9 +155,8 @@ class EditorSessionNavigationController final {
 
   /// Resume the pending navigation after a save checkpoint completed. Called
   /// by the facade when the save service invokes its completion callback. On
-  /// success, releases the prior image's guards, loads the adjustment snapshot
-  /// for the target, and starts the first-frame render. On failure, keeps the
-  /// prior image and discards the pending action.
+  /// success, releases the prior image's guards, and starts the first-frame
+  /// render. On failure, keeps the prior image and discards the pending action.
   void               OnCheckpointFinished(const SaveCheckpointResult& result);
 
   /// True when a navigation action is pending (a save checkpoint is in
@@ -196,8 +193,8 @@ class EditorSessionNavigationController final {
   /// Seal the current image: finalize edit, capture checkpoint, start save.
   /// Returns a valid ticket on success.
   auto SealAndStartSave(bool persist_changes, bool start_background_save) -> CheckpointTicket;
-  /// Continue to the target image after a successful save. Acquires guards,
-  /// loads the adjustment snapshot, starts the first-frame render.
+  /// Continue to the target image after a successful save. Acquires guards and
+  /// starts the first-frame render.
   void ContinueToTarget(sl_element_id_t element_id, image_id_t image_id, bool is_switch);
   /// Continue to a close after a successful save.
   void ContinueToClose(bool persist_changes);
@@ -230,7 +227,6 @@ class EditorSessionNavigationController final {
   EditorSessionLifecycle&        lifecycle_;
   EditorSaveCheckpointService&   save_service_;
   EditorSessionRenderController& render_;
-  EditorSessionEditController&   edit_;
   IEditorJournalPort*            journal_;
   IEditorCheckpointStore*        checkpoint_store_;
   IEditorHistoryPort*            history_;
