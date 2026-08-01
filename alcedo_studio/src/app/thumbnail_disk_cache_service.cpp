@@ -769,6 +769,8 @@ void ThumbnailDiskCacheService::FlushMetadata() {
           file << j.dump(2);
         }
       }
+      // Windows rename fails when the destination already exists; replace atomically.
+      std::filesystem::remove(state_->metadata_file_path_, ec);
       std::filesystem::rename(tmp_path, state_->metadata_file_path_, ec);
     }
   }
@@ -804,6 +806,7 @@ void ThumbnailDiskCacheService::FlushMetadata() {
           file << global.dump(2);
         }
       }
+      std::filesystem::remove(state_->global_metadata_path_, ec);
       std::filesystem::rename(tmp_path, state_->global_metadata_path_, ec);
     }
   }

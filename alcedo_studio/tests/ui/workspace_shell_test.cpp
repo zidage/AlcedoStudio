@@ -802,7 +802,19 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
     if (!copied) {
       return false;
     }
-    sink->NotifyFrameReady();
+    alcedo::FramePreviewMetadata metadata{};
+    metadata.frame_role              = request.intent.frame_role;
+    metadata.image_identity          = static_cast<std::uint64_t>(request.intent.image_id);
+    metadata.image_generation        = request.intent.image_load_request_id.value;
+    metadata.presentation_request_id = request.request_id;
+    metadata.scope_update_allowed   = alcedo::ScopeUpdateAllowedForReason(request.intent.reason);
+    metadata.scope_refresh_requested =
+        request.intent.reason == alcedo::EditorRenderReason::ScopeRefresh;
+    const auto presentation_mode =
+        request.intent.frame_role == alcedo::FrameRole::DetailPatch
+            ? alcedo::FramePresentationMode::ViewportTransformed
+            : alcedo::FramePresentationMode::FullFrame;
+    sink->NotifyFrameReady({metadata, presentation_mode});
     written_frame_count.fetch_add(1, std::memory_order_release);
     return true;
   });

@@ -14,9 +14,11 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <thread>
 
+#include "json.hpp"
 #include "app/editor_adjustment_pipeline.hpp"
 #include "app/editor_mini_git_materializer.hpp"
 #include "app/pipeline_service.hpp"
@@ -61,6 +63,23 @@ auto PatchValue(const alcedo::EditorRenderAdjustmentSnapshot& snapshot, const st
     if (patch.field_key == field) return patch.params_json;
   }
   return {};
+}
+
+auto ReadJsonNumber(const std::string& serialized, const std::string& key)
+    -> std::optional<double> {
+  if (serialized.empty()) {
+    return std::nullopt;
+  }
+  try {
+    return nlohmann::json::parse(serialized).at(key).get<double>();
+  } catch (const nlohmann::json::exception&) {
+    return std::nullopt;
+  }
+}
+
+auto PatchNumber(const alcedo::EditorRenderAdjustmentSnapshot& snapshot,
+                 const std::string& field) -> std::optional<double> {
+  return ReadJsonNumber(PatchValue(snapshot, field), field);
 }
 
 auto MakeExposureTransferPackage(double exposure) -> alcedo::AdjustmentTransferPackage {
@@ -914,8 +933,12 @@ TEST_F(EditorSessionHistoryPortTest, HistoryProjectionPublishesDisplayNameBefore
   const auto& head = snapshot.commits.front();
   EXPECT_EQ(head.field_key, "exposure");
   EXPECT_EQ(head.position, alcedo::EditorHistoryTimelinePosition::Current);
-  EXPECT_NE(head.before_value_json.find("0.35"), std::string::npos);
-  EXPECT_NE(head.after_value_json.find("0.46"), std::string::npos);
+  const auto before_exposure = ReadJsonNumber(head.before_value_json, "exposure");
+  const auto after_exposure  = ReadJsonNumber(head.after_value_json, "exposure");
+  ASSERT_TRUE(before_exposure.has_value());
+  ASSERT_TRUE(after_exposure.has_value());
+  EXPECT_NEAR(*before_exposure, 0.35, 1e-6);
+  EXPECT_NEAR(*after_exposure, 0.46, 1e-6);
 
   const auto pres = PresentEditorHistoryCommit(head.field_key, head.before_value_json,
                                                head.after_value_json, head.before_enabled,
@@ -1008,7 +1031,9 @@ TEST_F(EditorSessionHistoryPortTest,
   EXPECT_EQ(backward_counts.applied, 0u);
   alcedo::EditorRenderAdjustmentSnapshot backward_snapshot;
   ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &backward_snapshot, &error)) << error;
-  EXPECT_EQ(PatchValue(backward_snapshot, "exposure"), R"({"exposure":0.35})");
+  const auto backward_exposure = PatchNumber(backward_snapshot, "exposure");
+  ASSERT_TRUE(backward_exposure.has_value());
+  EXPECT_NEAR(*backward_exposure, 0.35, 1e-6);
 
   // Forward multi-step: head -> saturation in one operation, consuming the suffix.
   ASSERT_TRUE(history_.MoveHeadToCommit(handle, saturation_id, &error)) << error;
@@ -1021,8 +1046,12 @@ TEST_F(EditorSessionHistoryPortTest,
   EXPECT_EQ(forward_counts.applied, 2u);
   alcedo::EditorRenderAdjustmentSnapshot forward_snapshot;
   ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &forward_snapshot, &error)) << error;
-  EXPECT_EQ(PatchValue(forward_snapshot, "saturation"), R"({"saturation":8.0})");
-  EXPECT_EQ(PatchValue(forward_snapshot, "contrast"), R"({"contrast":12.0})");
+  const auto forward_saturation = PatchNumber(forward_snapshot, "saturation");
+  const auto forward_contrast   = PatchNumber(forward_snapshot, "contrast");
+  ASSERT_TRUE(forward_saturation.has_value());
+  ASSERT_TRUE(forward_contrast.has_value());
+  EXPECT_NEAR(*forward_saturation, 8.0, 1e-6);
+  EXPECT_NEAR(*forward_contrast, 12.0, 1e-6);
 }
 
 TEST(EditorHistoryCommitPresentationTest, FormatsNumericBooleanPathEnumAndCompoundAdjustments) {
@@ -1221,12 +1250,16 @@ TEST_F(EditorSessionHistoryPortTest, MoveAcrossMergeReconstructsResolvedFields) 
   ASSERT_TRUE(history_.MoveHeadToCommit(handle, c1, &error)) << error;
   alcedo::EditorRenderAdjustmentSnapshot baseline_snapshot;
   ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &baseline_snapshot, &error)) << error;
-  EXPECT_EQ(PatchValue(baseline_snapshot, "exposure"), R"({"exposure":0.5})");
+  const auto baseline_exposure = PatchNumber(baseline_snapshot, "exposure");
+  ASSERT_TRUE(baseline_exposure.has_value());
+  EXPECT_NEAR(*baseline_exposure, 0.5, 1e-6);
 
   ASSERT_TRUE(history_.MoveHeadToCommit(handle, merge_hash, &error)) << error;
   alcedo::EditorRenderAdjustmentSnapshot resolved_snapshot;
   ASSERT_TRUE(history_.ReadAdjustmentSnapshot(handle, &resolved_snapshot, &error)) << error;
-  EXPECT_EQ(PatchValue(resolved_snapshot, "exposure"), R"({"exposure":0.9})")
+  const auto resolved_exposure = PatchNumber(resolved_snapshot, "exposure");
+  ASSERT_TRUE(resolved_exposure.has_value());
+  EXPECT_NEAR(*resolved_exposure, 0.9, 1e-6)
       << "moving forward across a merge must reconstruct the merge-resolved field values";
 }
 

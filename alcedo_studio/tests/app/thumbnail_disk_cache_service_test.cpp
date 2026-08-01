@@ -77,6 +77,18 @@ class ThumbnailDiskCacheServiceTest : public ::testing::Test {
     return service.GetStats().total_entries == expected_count;
   }
 
+  static bool WaitForMetadataFile(const std::filesystem::path& metadata_path,
+                                  std::chrono::milliseconds    timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+      if (std::filesystem::exists(metadata_path)) {
+        return true;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    return std::filesystem::exists(metadata_path);
+  }
+
   std::filesystem::path temp_dir_;
 };
 
@@ -937,7 +949,8 @@ TEST_F(ThumbnailDiskCacheServiceTest, SetCacheRootWhileInitializedReopensOnNewRo
   }
   ASSERT_TRUE(WaitForEntryCount(service, 1, std::chrono::seconds(2)));
   EXPECT_TRUE(service.Lookup(key_b));
-  EXPECT_TRUE(std::filesystem::exists(root_b / "move-root-project" / "cache_metadata.json"));
+  ASSERT_TRUE(WaitForMetadataFile(root_b / "move-root-project" / "cache_metadata.json",
+                                  std::chrono::seconds(3)));
 
   service.Shutdown();
 

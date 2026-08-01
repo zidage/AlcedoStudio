@@ -103,8 +103,7 @@ void EditorDialog::SetActiveControlPanel(ControlPanelKind panel) {
     }
     if (render_coordinator_) {
       render_coordinator_->RequestRender(
-          frame_manager_.UseViewportRegionForPanelChange(previous_panel, panel),
-          geometry_transition);
+          frame_manager_.UseViewportRegionForPanelChange(previous_panel, panel));
       render_coordinator_->ScheduleQualityPreviewRenderFromPipeline();
     }
   }

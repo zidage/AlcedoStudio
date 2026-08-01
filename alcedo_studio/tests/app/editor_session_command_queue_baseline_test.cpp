@@ -416,7 +416,8 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   journal_->async_commit               = false;
   checkpoint_store_->async_materialize = false;
 
-  const auto render_count_before       = scheduler_->scheduled_.size();
+  const auto accepted_render_count_before =
+      runtime_->coordinator->diagnostics().accepted_count;
   const auto capture_count_before      = history_->checkpoint_capture_count;
   const auto materialize_count_before  = checkpoint_store_->materialize_count;
   const auto terminal_count_before    = recorder_->terminal_count();
@@ -429,7 +430,8 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   EXPECT_EQ(history_->checkpoint_capture_count, capture_count_before + 1);
   EXPECT_EQ(checkpoint_store_->materialize_count, materialize_count_before + 1);
   EXPECT_EQ(history_->transfer_publication_count, 0);
-  EXPECT_EQ(scheduler_->scheduled_.size(), render_count_before + 1);
+  EXPECT_EQ(runtime_->coordinator->diagnostics().accepted_count,
+            accepted_render_count_before + 1);
   EXPECT_EQ(recorder_->terminal_count(), terminal_count_before + 1);
   EXPECT_FALSE(history_->dirty_journal);
   ASSERT_EQ(events.size(), 2u);
@@ -485,7 +487,8 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   journal_->async_commit               = false;
   checkpoint_store_->async_materialize = false;
 
-  const auto render_count_before      = scheduler_->scheduled_.size();
+  const auto accepted_render_count_before =
+      runtime_->coordinator->diagnostics().accepted_count;
   const auto capture_count_before     = history_->checkpoint_capture_count;
   const auto materialize_count_before = checkpoint_store_->materialize_count;
   const auto terminal_count_before    = recorder_->terminal_count();
@@ -497,7 +500,8 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   EXPECT_EQ(history_->checkpoint_capture_count, capture_count_before + 1);
   EXPECT_EQ(checkpoint_store_->materialize_count, materialize_count_before + 1);
   EXPECT_EQ(history_->transfer_publication_count, 0);
-  EXPECT_EQ(scheduler_->scheduled_.size(), render_count_before + 1);
+  EXPECT_EQ(runtime_->coordinator->diagnostics().accepted_count,
+            accepted_render_count_before + 1);
   EXPECT_EQ(recorder_->terminal_count(), terminal_count_before + 1);
   EXPECT_FALSE(history_->dirty_journal);
   ASSERT_EQ(events.size(), 2u);
