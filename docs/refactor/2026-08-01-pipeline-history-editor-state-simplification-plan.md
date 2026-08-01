@@ -4,6 +4,12 @@
 
 状态：可直接执行
 
+关联设计与本次修正：
+[Editor Single Live Pipeline + WAL + Checkpoint Simplification Plan](../roadmap/alcedo_studio/ui/editor_single_live_pipeline_wal_checkpoint_plan.md)。
+本文件对该方案补充“无持久 root、无 UI/session generation”后的最终执行要求；同时以
+第 2.4 节修正其中“正常保存从 WAL materialize commits 到 DuckDB”的旧描述。正常保存只清空
+已经被唯一 history 和 PMS 状态覆盖的 WAL，不从 WAL 回写任何状态。执行时以本文件为准。
+
 ## 1. 不可更改的设计结论
 
 本修复严格遵守以下边界，不保留兼容性的第二套状态体系：
@@ -16,6 +22,9 @@
 6. `FramePresentationBroker` 保持废弃，并从源码、构建清单和测试中删除。
 7. 不允许从 live executor 反向填充 history 基线；所有 `SeedImageLocalBaselineFromLivePipeline` 相关代码必须删除。
 8. 不新增长期驻留的 runtime context、root snapshot、session snapshot 或其他状态副本。
+9. WAL 必须保留，但只负责崩溃恢复；正常保存不从 WAL 生成 DB 写入。
+10. 禁止为 WAL 验证、paste、merge 或恢复复制 shadow `CommitGraph`。
+11. slider 拖动和其他 interactive preview 不写 WAL、不创建 commit、不移动 HEAD。
 
 ## 2. 唯一状态来源
 
@@ -59,6 +68,94 @@ CPU、CUDA、Metal 和 OpenCL 使用的矩阵、系数与缓存键，由 operato
 - 没有相关参数变化时直接复用缓存。
 - 不在每帧开始时重复注入同一份 RAW 元数据。
 
+### 2.4 WAL、History 与 Checkpoint
+
+WAL 不是第二份 history，也不是正常持久化的数据源。它只记录会成为 history 事实的操作，
+并覆盖以下窗口：WAL 已经落盘，
+但对应的内存 history commit、live pipeline 参数和 DuckDB checkpoint 尚未全部持久化。
+
+interactive preview 使用独立的无日志路径：
+
+```text
+Slider press / first preview:
+  -> history 只在内存中记住该字段拖动前的 committed before
+
+Slider move:
+  -> SetOperator(preview value) on live pipeline
+  -> submit render request
+  -> no WAL
+  -> no commit
+  -> no HEAD move
+
+Slider cancel:
+  -> SetOperator(committed before)
+  -> no WAL
+  -> no commit
+
+Slider release / settled:
+  -> before = 拖动开始前的 committed value
+  -> after = 最终值
+  -> before == after 时直接结束，不写 WAL
+  -> before != after 时才进入 WAL-first settled edit 路径
+  -> WAL append 失败时立即 SetOperator(before) 并重新渲染
+```
+
+离散控件选择、reset、paste、merge、undo、redo 和 checkout 会改变 history，因此进入 WAL-first
+路径。纯 hover、slider move、viewport resize、pan、zoom、scope refresh 和质量补帧都不写 WAL。
+
+settled edit 严格使用以下顺序：
+
+```text
+1. 使用 interactive preview 开始前捕获的 committed before；离散提交才直接从 live pipeline 读取 before。
+2. 生成包含 parent、before、after 和 Version/head move 的 WAL record。
+3. append + flush WAL；失败则本次编辑不得进入 history 或 pipeline。
+4. 将同一份 edit payload commit 到唯一内存 history 实例。
+5. 通过 SetOperator / SetParams / enable 修改唯一 live pipeline。
+6. 请求渲染。
+```
+
+slider preview 已经把最终值临时放进 live pipeline，因此第 3 步失败时必须显式恢复 before；
+第 5 步是把相同 after 确认为 settled 状态，可以安全地幂等应用。history commit 或 settled
+`SetOperator` 失败时同样恢复 before，并撤销本次尚未进入正常保存范围的 WAL 尾记录。
+
+正常保存严格使用以下顺序：
+
+```text
+1. History 按自己的正常保存 API 把内存 commits、Version 和 HEAD 写入 DuckDB。
+2. PipelineMgmtService 按自己的正常保存 API 把 live pipeline JSON 写成 checkpoint。
+3. 核对 DB HEAD、checkpoint HEAD 和内存 logical HEAD 一致。
+4. 清空整个 WAL。
+```
+
+第 4 步只是丢弃日志。禁止在正常保存时解析 WAL，然后把 WAL records 再插入 commit 表、
+再移动一次 HEAD、再应用一次 operator 或再生成一份 pipeline JSON。
+
+如果 history 或 pipeline checkpoint 任一保存失败，WAL 必须保持原样。只有两边持久化成功并且
+HEAD 一致后才能清空。WAL append 成功但内存 commit 或 `SetOperator` 失败时，只撤销本次尚未
+对用户生效的 WAL 尾记录；不得清空此前仍负责恢复的记录。
+
+history 实例尚未建立时不得清空 WAL。history 实例建立本身也不触发 WAL-to-DB fold；只有该实例
+已经包含对应 commits、live pipeline 已经包含对应参数、两者通过正常保存 API 成功落库并核对
+HEAD 后，才直接丢弃整个 WAL。
+
+启动恢复使用以下顺序：
+
+```text
+1. 从 DuckDB 加载唯一 history 实例、active Version / HEAD 和 pipeline checkpoint。
+2. WAL 为空：直接使用 DB 状态。
+3. WAL 非空：完整解码记录，但不创建 shadow graph。
+4. 检查 WAL 首记录能否接在 DB HEAD 后面，并检查后续 parent hash 连续。
+5. WAL 已全部包含在 DB HEAD 中：说明崩溃发生在 DB 成功、清 WAL 之前，直接清空 WAL。
+6. WAL 是 DB HEAD 的连续扩展：把缺失 records commit 到唯一 history 实例，
+   并通过 operator API 重放到唯一 live pipeline。
+7. 使用 History 和 PipelineMgmtService 的正常保存 API 持久化恢复结果。
+8. 核对成功后清空 WAL。
+9. WAL 无法连接：保持 DB 和 live pipeline 不变，隔离 WAL 并返回明确恢复错误。
+```
+
+恢复时允许先做纯记录链检查；禁止用 `replay_graph = current_graph`、shadow graph、
+`committed_snapshot` reducer 或第二个长期 pipeline 来“试运行”。
+
 ## 3. 目标调用链
 
 ```text
@@ -78,11 +175,32 @@ Editor open
   -> 不创建 root snapshot
   -> 不从 live pipeline 填充 history
 
-Edit
-  -> UI 提交单字段 patch
-  -> history 记录 before / after
-  -> SetOperator
+Interactive preview
+  -> UI 提交 preview patch
+  -> 唯一 live pipeline SetOperator
   -> 提交 render request
+  -> 不写 WAL，不创建 commit
+
+Settled edit
+  -> UI 提交最终单字段 patch
+  -> before/after 相同则结束
+  -> WAL append + flush
+  -> 唯一 history 实例 commit before / after
+  -> 唯一 live pipeline SetOperator
+  -> 提交 render request
+
+Normal save
+  -> history 正常写 commits / Version / HEAD
+  -> PMS 正常写 pipeline checkpoint
+  -> 核对 HEAD
+  -> 丢弃整个 WAL，不从 WAL 回写任何状态
+
+Crash recovery
+  -> 加载 DB history / HEAD / checkpoint
+  -> 验证非空 WAL 是否与 DB HEAD 连续
+  -> 只把 DB 缺失的连续 records 恢复到唯一 history 和 live pipeline
+  -> 通过正常保存 API 持久化
+  -> 成功后清空 WAL
 
 Version checkout
   -> 保存失败回滚所需的当前 pipeline JSON
@@ -218,7 +336,43 @@ rg "SeedImageLocalBaselineFromLivePipeline|KeepsSeededAsShot" alcedo_studio
 7. 删除 `PipelineScheduler` 中逐任务 `InjectRawMetadata()`。
 8. 删除仅为逐帧 metadata 注入服务的 dirty 标记和缓存失效逻辑。
 
-### 4.6 用默认参数计算版本状态
+### 4.6 保留 WAL，删除 WAL 影子状态机
+
+修改：
+
+- `edit/history/editor_journal_writer.*`
+- `edit/history/editor_journal_recovery.*`
+- `app/editor_mini_git_journal_fold.*`
+- `app/editor_history_materializer.*`
+- `ui/alcedo_main/album_backend/editor_history_state_detail.cpp`
+- `ui/alcedo_main/album_backend/editor_history_mutation.cpp`
+- `ui/alcedo_main/album_backend/editor_history_transfer.cpp`
+
+逐项执行：
+
+1. 保留 WAL 文件、顺序 record、完整性校验、append、flush、尾记录撤销、清空和隔离能力。
+2. 每个 settled edit、离散控件提交、undo/redo head move、checkout、paste 和 merge 都必须先写 WAL。
+3. interactive slider move、viewport 变化、scope refresh 和纯 render request 禁止写 WAL。
+4. settled 前后的值相同时禁止创建 WAL record 或空 commit。
+5. WAL payload 与随后传给 history commit / head move 的 payload 必须是同一份值，不得各自重算。
+6. history 实例可用后，操作直接进入唯一 live history；WAL 不维护另一份 graph 状态。
+7. 正常 checkpoint 删除“从 WAL fold 出 materialization 再写 DuckDB”的路径。
+8. 正常 checkpoint 调用 history 自己的保存 API和 PMS 自己的保存 API；成功后直接清空 WAL。
+9. 删除正常路径上的 `EditorMiniGitJournalFold`、`ApplyRecoveredRecordToSnapshot` 和
+   `replay_graph = *guard->commit_graph_`。
+10. 启动时只有在 WAL 非空的情况下进入恢复逻辑。
+11. 恢复前先对 record hash、parent hash、element、Version 和操作顺序做完整检查。
+12. 恢复直接作用于唯一 history 实例和唯一 live pipeline，不创建 shadow graph。
+13. DB 已包含 WAL 全部 commits 时直接清空 WAL，不重复写 DB 或重复应用 operator。
+14. DB 只包含连续前缀时，仅恢复缺失后缀。
+15. 无法连接或内容损坏时隔离文件、返回错误，不能静默丢弃或部分应用。
+16. WAL 内部可以保留文件 record sequence 用于完整性检查；它不是 UI/session generation，
+    也不能参与帧展示判断。
+
+完成标准：正常 save/checkpoint 调用链中不存在 WAL decode、WAL-to-DB commit materialize、
+shadow graph 或 snapshot reducer；WAL decode 只存在于启动恢复和诊断工具。
+
+### 4.7 用默认参数计算版本状态
 
 删除：
 
@@ -251,7 +405,7 @@ ApplyVersion(head):
 5. checkout 成功后一次性持久化 active Version 和当前 pipeline JSON。
 6. checkout 任一步失败，live pipeline、active Version 和数据库必须全部保持原状态。
 
-### 4.7 重写 paste 和 merge
+### 4.8 重写 paste 和 merge
 
 逐项执行：
 
@@ -263,9 +417,11 @@ ApplyVersion(head):
 6. merge 的共同基线由默认参数加共同祖先提交计算，不读取 root snapshot。
 7. 冲突只比较用户编辑字段。
 8. 所有输入和冲突选择先验证完整，再修改 live pipeline。
-9. 任一 `SetOperator`、WAL 或数据库写入失败，恢复 prior pipeline JSON 和 prior active Version。
+9. paste / merge 先追加 WAL，再对唯一 history 和 live pipeline 应用同一 payload。
+10. WAL append、`SetOperator`、history 或数据库写入任一失败时，恢复 prior pipeline JSON 和
+    prior active Version；已落盘但尚未生效的 WAL 尾记录必须撤销。
 
-### 4.8 从 UI 和 Editor Session 删除所有 generation
+### 4.9 从 UI 和 Editor Session 删除所有 generation
 
 修改：
 
@@ -299,7 +455,7 @@ rg "content_generation|view_generation|preview_generation|SetActiveGenerations|A
 
 没有 Editor / Session 渲染 generation 结果。与搜索等无关模块的独立请求计数不在本次范围内。
 
-### 4.9 由 PipelineScheduler 独占渲染请求序号
+### 4.10 由 PipelineScheduler 独占渲染请求序号
 
 修改：
 
@@ -322,7 +478,7 @@ rg "content_generation|view_generation|preview_generation|SetActiveGenerations|A
 9. `DirectPresentQueue` 只管理已通过 request ID 检查的 GPU/CPU 资源，不再决定帧新旧。
 10. UI 不接收被丢弃任务的成功结果，也不做二次过滤。
 
-### 4.10 删除 FramePresentationBroker
+### 4.11 删除 FramePresentationBroker
 
 逐项执行：
 
@@ -333,7 +489,7 @@ rg "content_generation|view_generation|preview_generation|SetActiveGenerations|A
 5. 不把它的 lease、target generation 或 accepted-generation 模型迁移到生产路径。
 6. 需要的唯一旧帧规则直接实现于 `PipelineScheduler` 和实际 sink 的 request ID 比较。
 
-### 4.11 删除 Session 的完整 pipeline 快照所有权
+### 4.12 删除 Session 的完整 pipeline 快照所有权
 
 逐项执行：
 
@@ -370,7 +526,23 @@ rg "content_generation|view_generation|preview_generation|SetActiveGenerations|A
 3. merge 共同基线由默认参数和共同祖先提交计算。
 4. 冲突验证失败时 live pipeline 零变化。
 
-### 5.4 渲染请求序号
+### 5.4 WAL 正常清理与崩溃恢复
+
+1. settled WAL append 失败时恢复 committed before；history head、最终 pipeline 状态和最终 UI 状态均不接受该编辑。
+2. WAL 成功、history/pipeline 已修改但 DB 尚未保存时崩溃，重启能从连续 records 恢复。
+3. history DB 保存成功但 pipeline checkpoint 尚未成功时，WAL 保留；重启按 history 修复 pipeline。
+4. history 和 pipeline DB 保存成功、WAL 尚未清空时崩溃，重启识别 records 已被覆盖并直接清空。
+5. 正常 save 不从 WAL 向 commit 表插入记录，不从 WAL 移动 Version HEAD，也不重放 operator。
+6. WAL 只有连续前缀已在 DB 时，只恢复缺失后缀。
+7. parent hash 断裂、element 不匹配、Version 不匹配或损坏 record 会隔离 WAL，且 live state 零变化。
+8. paste、merge、undo、redo 和 checkout 使用与普通 edit 相同的 WAL-first 顺序。
+9. 恢复路径不复制 `CommitGraph`，不构建 `committed_snapshot`，不创建第二个长期 pipeline。
+10. 连续一百次 slider move 不改变 WAL 长度、history head 或 commit 数量。
+11. slider release 只为最终 before/after 写一个 WAL record 和一个 commit。
+12. slider cancel 和最终值未变化都不写 WAL。
+13. viewport resize、pan、zoom、scope refresh 和质量补帧不写 WAL。
+
+### 5.5 渲染请求序号
 
 1. request 2 先完成后，request 1 即使晚到也不能进入 sink。
 2. request 1 已进入 Apply、request 2 随后提交时，request 1 的像素不能被标记为 request 2。
@@ -378,7 +550,7 @@ rg "content_generation|view_generation|preview_generation|SetActiveGenerations|A
 4. 切换图片后，旧图片任务不能向当前 sink 提交。
 5. UI 和 Session 测试不再设置、推进或比较任何 generation。
 
-### 5.5 删除项
+### 5.6 删除项
 
 1. 构建清单中不存在 `FramePresentationBroker`。
 2. 第一方代码不存在 `SeedImageLocalBaselineFromLivePipeline`。
@@ -392,14 +564,16 @@ rg "content_generation|view_generation|preview_generation|SetActiveGenerations|A
 1. 删除 Seed 补丁。
 2. 让 import 直接写全 operator 固有参数。
 3. 删除 scheduler 的逐帧 RAW metadata 注入。
-4. 让版本状态可由默认参数加提交链稳定计算。
-5. 重写 checkout、undo、redo、paste、merge，并保证失败回滚。
-6. 完成数据库数据迁移，删除 root schema 和 root API。
-7. 从 Session 和 UI 删除所有 generation。
-8. 把 request ID 生成、取消和旧帧丢弃收口到 PipelineScheduler 与实际 sink。
-9. 删除 `FramePresentationBroker`。
-10. 删除完整 Editor snapshot 重放和 22 字段兼容代码。
-11. 运行全部 pipeline、history、editor session、thumbnail、export 和 editor RHI 测试。
+4. 把 WAL 收口成 WAL-first append、正常保存后清空、启动时才恢复的单一路径。
+5. 删除 WAL shadow graph、snapshot fold 和正常 WAL-to-DB materialization。
+6. 让版本状态可由默认参数加提交链稳定计算。
+7. 重写 checkout、undo、redo、paste、merge，并保证 WAL-first 与失败回滚。
+8. 完成数据库数据迁移，删除 root schema 和 root API。
+9. 从 Session 和 UI 删除所有 generation。
+10. 把 request ID 生成、取消和旧帧丢弃收口到 PipelineScheduler 与实际 sink。
+11. 删除 `FramePresentationBroker`。
+12. 删除完整 Editor snapshot 重放和 22 字段兼容代码。
+13. 运行全部 pipeline、history、editor session、WAL recovery、thumbnail、export 和 editor RHI 测试。
 
 ## 7. 最终验收标准
 
@@ -409,6 +583,11 @@ rg "content_generation|view_generation|preview_generation|SetActiveGenerations|A
 - 图片固有参数在导入时写入，此后渲染不再补写。
 - 默认状态能够计算，不存在持久 root。
 - checkout、merge 和 paste 不依赖 root snapshot。
+- WAL 在每次内存 edit/head move 前完成 append + flush。
+- interactive preview 不写 WAL；一次 slider 拖动最多在 release 时产生一个 WAL record。
+- 正常保存由 history 和 PMS 写自己的 DB 状态，随后清空 WAL；正常保存不从 WAL 回写任何状态。
+- 启动只恢复能与 DB HEAD 连续的 WAL 缺失后缀。
+- WAL 恢复不复制 graph、不维护 snapshot reducer、不创建第二个长期 pipeline。
 - UI 和 Session 不维护任何渲染 generation。
 - 渲染请求序号完全由渲染侧维护。
 - 旧帧在进入 UI 前被丢弃。
