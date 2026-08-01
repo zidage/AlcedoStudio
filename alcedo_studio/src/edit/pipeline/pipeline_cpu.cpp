@@ -552,18 +552,73 @@ void CPUPipelineExecutor::SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm
 void CPUPipelineExecutor::SetDecodeRes(DecodeRes res) {
   decode_res_ = res;
 
-  // TODO: Abstraction leak, need better design later
+  // decode_res is a one-shot render parameter. Install it on the live op for this
+  // Apply only; RawDecodeOp::GetParams deliberately omits it from durable export.
   auto& raw_stage = GetStage(PipelineStageName::Image_Loading);
-  auto  raw_param = raw_stage.GetOperator(OperatorType::RAW_DECODE).value()->ExportOperatorParams();
-  auto& params = raw_param["params"];
-  if (!params.contains("raw") || !params["raw"].is_object()) {
-    params["raw"] = nlohmann::json::object();
+  auto  entry     = raw_stage.GetOperator(OperatorType::RAW_DECODE);
+  if (!entry.has_value() || !entry.value() || !entry.value()->op_) {
+    SyncRawDecodeRuntimeControls();
+    return;
   }
-  if (params["raw"].value("decode_res", -1) != static_cast<int>(res)) {
+  auto* raw_op = dynamic_cast<RawDecodeOp*>(entry.value()->op_.get());
+  if (raw_op) {
+    raw_op->params_.decode_res_ = res;
+  } else {
+    auto  raw_param = entry.value()->ExportOperatorParams();
+    auto& params    = raw_param["params"];
+    if (!params.contains("raw") || !params["raw"].is_object()) {
+      params["raw"] = nlohmann::json::object();
+    }
     params["raw"]["decode_res"] = static_cast<int>(res);
     raw_stage.SetOperator(OperatorType::RAW_DECODE, raw_param["params"]);
   }
   SyncRawDecodeRuntimeControls();
+}
+
+auto CPUPipelineExecutor::CaptureOneShotRenderParams() const -> OneShotRenderParamsSnapshot {
+  OneShotRenderParamsSnapshot snapshot;
+  snapshot.decode_res_       = decode_res_;
+  snapshot.render_params_    = render_params_;
+  snapshot.force_cpu_output_ = force_cpu_output_;
+  snapshot.enable_cache_     = enable_cache_;
+  return snapshot;
+}
+
+void CPUPipelineExecutor::RestoreOneShotRenderParams(const OneShotRenderParamsSnapshot& snapshot) {
+  force_cpu_output_ = snapshot.force_cpu_output_;
+  if (enable_cache_ != snapshot.enable_cache_) {
+    // SetEnableCache rebuilds stage cache flags; only call when the value changes.
+    SetEnableCache(snapshot.enable_cache_);
+  }
+  render_params_ = snapshot.render_params_;
+  stages_[static_cast<int>(PipelineStageName::Geometry_Adjustment)].SetOperator(
+      OperatorType::RESIZE, render_params_);
+
+  if (render_params_.contains("resize") && render_params_["resize"].is_object()) {
+    const auto& resize_params              = render_params_["resize"];
+    global_params_.render_roi_enabled_     = resize_params.value("enable_roi", false);
+    if (resize_params.contains("roi") && resize_params["roi"].is_object()) {
+      const auto& roi                          = resize_params["roi"];
+      global_params_.render_roi_x_             = roi.value("x", 0);
+      global_params_.render_roi_y_             = roi.value("y", 0);
+      global_params_.render_roi_scale_x_       = roi.value("resize_factor_x", 1.0f);
+      global_params_.render_roi_scale_y_       = roi.value("resize_factor_y", 1.0f);
+      global_params_.render_roi_reference_width_ =
+          roi.value("reference_width", 0);
+      global_params_.render_roi_reference_height_ =
+          roi.value("reference_height", 0);
+    } else {
+      global_params_.render_roi_x_               = 0;
+      global_params_.render_roi_y_               = 0;
+      global_params_.render_roi_scale_x_         = 1.0f;
+      global_params_.render_roi_scale_y_         = 1.0f;
+      global_params_.render_roi_reference_width_ = 0;
+      global_params_.render_roi_reference_height_ = 0;
+    }
+  }
+
+  SetDecodeRes(snapshot.decode_res_);
+  SetCancelRequested(nullptr);
 }
 
 auto CPUPipelineExecutor::GetViewportRenderRegion() const -> std::optional<ViewportRenderRegion> {
@@ -629,7 +684,11 @@ void CPUPipelineExecutor::SetTemplateParams() {
 
   nlohmann::json color_temp_params;
   auto&          to_ws_stage = GetStage(PipelineStageName::To_WorkingSpace);
-  color_temp_params["color_temp"] = {{"mode", "as_shot"}, {"cct", 6500.0f}, {"tint", 0.0f}};
+  color_temp_params["color_temp"] = {{"mode", "as_shot"},
+                                     {"custom_cct", 6500.0f},
+                                     {"custom_tint", 0.0f},
+                                     {"as_shot_cct", 6500.0f},
+                                     {"as_shot_tint", 0.0f}};
   to_ws_stage.SetOperator(OperatorType::COLOR_TEMP, color_temp_params, global_params);
 
   nlohmann::json output_params;
@@ -651,13 +710,15 @@ void CPUPipelineExecutor::InitDefaultPipeline() {
 void CPUPipelineExecutor::InjectRawMetadata(const RawRuntimeColorContext& ctx) {
   global_params_.PopulateRawMetadata(ctx);
 
-  // Also propagate to RawDecodeOp so it uses the pre-populated context.
+  // Install image-local inherent RAW context on the decode operator so later
+  // GetParams/SetGlobalParams/Apply use the same durable state without a
+  // separate per-frame inject. Prefer writing full operator params at import.
   auto& stage = stages_[static_cast<int>(PipelineStageName::Image_Loading)];
   auto  entry = stage.GetOperator(OperatorType::RAW_DECODE);
   if (entry.has_value()) {
     auto* raw_op = dynamic_cast<RawDecodeOp*>(entry.value()->op_.get());
     if (raw_op) {
-      raw_op->SetPrePopulatedContext(ctx);
+      raw_op->SetInherentRawContext(ctx);
     }
   }
 

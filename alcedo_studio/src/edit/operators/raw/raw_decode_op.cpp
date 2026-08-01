@@ -129,7 +129,6 @@ void RawDecodeOp::Apply(std::shared_ptr<ImageBuffer> input) {
   raw_processor->imgdata.params.output_bps      = 16;
   raw_processor->imgdata.rawparams.use_rawspeed = 1;
   ImageBuffer output;
-  latest_runtime_context_ = {};
   const auto dng_metadata =
       dng::ExtractMetadata(std::span<const uint8_t>(buffer.data(), buffer.size()));
 
@@ -142,9 +141,9 @@ void RawDecodeOp::Apply(std::shared_ptr<ImageBuffer> input) {
       AppendLibRawUnpackRouteLog(deferred_log, *raw_processor);
       throw_if_cancelled();
 
-      // Use pre-populated context injected before rendering; fall back to
+      // Prefer image-local inherent context written at import; fall back to
       // extracting directly from the open LibRaw instance.
-      RawRuntimeColorContext ctx = pre_populated_ctx_;
+      RawRuntimeColorContext ctx = inherent_raw_context_;
       if (!ctx.valid_) {
         MetadataExtractor::PopulateRuntimeContextFromOpenLibRaw(*raw_processor, ctx);
       }
@@ -160,7 +159,7 @@ void RawDecodeOp::Apply(std::shared_ptr<ImageBuffer> input) {
       AppendProfileMs(deferred_log, "RAW CPU processor.Process",
                       ProfileClock::now() - process_start);
       throw_if_cancelled();
-      latest_runtime_context_ = processor.GetRuntimeColorContext();
+      inherent_raw_context_ = processor.GetRuntimeColorContext();
       raw_processor->recycle();
       break;
     }
@@ -179,8 +178,7 @@ void RawDecodeOp::Apply(std::shared_ptr<ImageBuffer> input) {
       AppendLibRawUnpackRouteLog(deferred_log, *raw_processor);
       throw_if_cancelled();
 
-      // Use pre-populated context or extract from LibRaw.
-      RawRuntimeColorContext ctx = pre_populated_ctx_;
+      RawRuntimeColorContext ctx = inherent_raw_context_;
       if (!ctx.valid_) {
         MetadataExtractor::PopulateRuntimeContextFromOpenLibRaw(*raw_processor, ctx);
       }
@@ -208,8 +206,8 @@ void RawDecodeOp::Apply(std::shared_ptr<ImageBuffer> input) {
       cv::cvtColor(result_rgb, result_rgba, cv::COLOR_RGB2RGBA);
 
       output                                          = ImageBuffer(std::move(result_rgba));
-      latest_runtime_context_                         = ctx;
-      latest_runtime_context_.output_in_camera_space_ = false;
+      inherent_raw_context_                           = ctx;
+      inherent_raw_context_.output_in_camera_space_   = false;
       raw_processor->dcraw_clear_mem(img);
       raw_processor->recycle();
       break;
@@ -232,14 +230,24 @@ auto RawDecodeOp::GetParams() const -> nlohmann::json {
   // The accelerator backend is deliberately NOT part of the params: it is a
   // runtime property owned by the pipeline (user backend setting), so it must
   // never be persisted into the edit state.
-  inner["method"]      = RawDemosaicMethodToString(params_.demosaic_method_);
+  // decode_res is a one-shot render parameter and must not appear in durable export.
+  inner["method"]                 = RawDemosaicMethodToString(params_.demosaic_method_);
   inner["highlights_reconstruct"] = params_.highlights_reconstruct_;
   inner["use_camera_wb"]          = params_.use_camera_wb_;
   inner["user_wb"]                = params_.user_wb_;
   inner["backend"]                = (backend_ == RawProcessBackend::ALCEDO) ? "alcedo" : "libraw";
-  inner["decode_res"]             = static_cast<int>(params_.decode_res_);
 
-  params["raw"]                   = inner;
+  // Persist image-local RAW color/lens metadata so reload works without InjectRawMetadata.
+  if (inherent_raw_context_.valid_ || inherent_raw_context_.color_matrices_valid_ ||
+      inherent_raw_context_.forward_matrices_valid_ || !inherent_raw_context_.camera_make_.empty() ||
+      !inherent_raw_context_.camera_model_.empty()) {
+    const auto context_json = RawColorContextToJson(inherent_raw_context_);
+    for (auto it = context_json.begin(); it != context_json.end(); ++it) {
+      inner[it.key()] = it.value();
+    }
+  }
+
+  params["raw"] = std::move(inner);
   return params;
 }
 
@@ -276,57 +284,73 @@ void RawDecodeOp::SetParams(const nlohmann::json& params) {
     else
       throw std::runtime_error("RawDecodeOp: Unknown backend " + backend);
   }
+  // One-shot decode resolution may still be installed via SetParams for a single Apply.
   if (inner.contains("decode_res"))
     params_.decode_res_ = static_cast<DecodeRes>(inner["decode_res"].get<int>());
+
+  RawRuntimeColorContext loaded_context;
+  if (RawColorContextFromJson(inner, loaded_context)) {
+    inherent_raw_context_ = std::move(loaded_context);
+  }
 }
 
 void RawDecodeOp::SetGlobalParams(OperatorParams& params) const {
-  params.raw_runtime_valid_      = latest_runtime_context_.valid_;
-  params.raw_decode_input_space_ = latest_runtime_context_.output_in_camera_space_
-                                       ? RawDecodeInputSpace::CAMERA
-                                       : RawDecodeInputSpace::AP0;
+  const auto& ctx = inherent_raw_context_;
+
+  const bool inherent_changed =
+      params.raw_runtime_valid_ != ctx.valid_ || params.raw_camera_make_ != ctx.camera_make_ ||
+      params.raw_camera_model_ != ctx.camera_model_ ||
+      params.raw_color_matrices_valid_ != ctx.color_matrices_valid_ ||
+      params.raw_forward_matrices_valid_ != ctx.forward_matrices_valid_ ||
+      params.raw_as_shot_neutral_valid_ != ctx.as_shot_neutral_valid_ ||
+      params.raw_lens_make_ != ctx.lens_make_ || params.raw_lens_model_ != ctx.lens_model_;
+
+  params.raw_runtime_valid_      = ctx.valid_;
+  params.raw_decode_input_space_ =
+      ctx.output_in_camera_space_ ? RawDecodeInputSpace::CAMERA : RawDecodeInputSpace::AP0;
 
   for (int i = 0; i < 3; ++i) {
-    params.raw_cam_mul_[i] = latest_runtime_context_.cam_mul_[i];
-    params.raw_pre_mul_[i] = latest_runtime_context_.pre_mul_[i];
+    params.raw_cam_mul_[i] = ctx.cam_mul_[i];
+    params.raw_pre_mul_[i] = ctx.pre_mul_[i];
   }
 
   for (int i = 0; i < 9; ++i) {
-    params.raw_cam_xyz_[i] = latest_runtime_context_.cam_xyz_[i];
-    params.raw_rgb_cam_[i] = latest_runtime_context_.rgb_cam_[i];
+    params.raw_cam_xyz_[i] = ctx.cam_xyz_[i];
+    params.raw_rgb_cam_[i] = ctx.rgb_cam_[i];
   }
 
-  params.raw_camera_make_          = latest_runtime_context_.camera_make_;
-  params.raw_camera_model_         = latest_runtime_context_.camera_model_;
-  params.raw_color_matrices_valid_ = latest_runtime_context_.color_matrices_valid_;
+  params.raw_camera_make_          = ctx.camera_make_;
+  params.raw_camera_model_         = ctx.camera_model_;
+  params.raw_color_matrices_valid_ = ctx.color_matrices_valid_;
   for (int i = 0; i < 9; ++i) {
-    params.raw_color_matrix_1_[i]   = latest_runtime_context_.color_matrix_1_[i];
-    params.raw_color_matrix_2_[i]   = latest_runtime_context_.color_matrix_2_[i];
-    params.raw_forward_matrix_1_[i] = latest_runtime_context_.forward_matrix_1_[i];
-    params.raw_forward_matrix_2_[i] = latest_runtime_context_.forward_matrix_2_[i];
+    params.raw_color_matrix_1_[i]   = ctx.color_matrix_1_[i];
+    params.raw_color_matrix_2_[i]   = ctx.color_matrix_2_[i];
+    params.raw_forward_matrix_1_[i] = ctx.forward_matrix_1_[i];
+    params.raw_forward_matrix_2_[i] = ctx.forward_matrix_2_[i];
   }
-  params.raw_forward_matrices_valid_ = latest_runtime_context_.forward_matrices_valid_;
-  params.raw_as_shot_neutral_valid_  = latest_runtime_context_.as_shot_neutral_valid_;
+  params.raw_forward_matrices_valid_ = ctx.forward_matrices_valid_;
+  params.raw_as_shot_neutral_valid_  = ctx.as_shot_neutral_valid_;
   for (int i = 0; i < 3; ++i) {
-    params.raw_as_shot_neutral_[i] = latest_runtime_context_.as_shot_neutral_[i];
+    params.raw_as_shot_neutral_[i] = ctx.as_shot_neutral_[i];
   }
-  params.raw_calibration_illuminants_valid_ =
-      latest_runtime_context_.calibration_illuminants_valid_;
-  params.raw_color_matrix_1_cct_           = latest_runtime_context_.color_matrix_1_cct_;
-  params.raw_color_matrix_2_cct_           = latest_runtime_context_.color_matrix_2_cct_;
-  params.raw_lens_metadata_valid_          = latest_runtime_context_.lens_metadata_valid_;
-  params.raw_lens_make_                    = latest_runtime_context_.lens_make_;
-  params.raw_lens_model_                   = latest_runtime_context_.lens_model_;
-  params.raw_lens_focal_mm_                = latest_runtime_context_.focal_length_mm_;
-  params.raw_lens_aperture_f_              = latest_runtime_context_.aperture_f_number_;
-  params.raw_lens_focus_distance_m_        = latest_runtime_context_.focus_distance_m_;
-  params.raw_lens_focal_35mm_              = latest_runtime_context_.focal_35mm_mm_;
-  params.raw_lens_crop_factor_hint_        = latest_runtime_context_.crop_factor_hint_;
-  params.raw_dng_warp_rectilinear_present_ = latest_runtime_context_.dng_warp_rectilinear_present_;
-  params.raw_dng_warp_rectilinear_applied_ = latest_runtime_context_.dng_warp_rectilinear_applied_;
+  params.raw_calibration_illuminants_valid_ = ctx.calibration_illuminants_valid_;
+  params.raw_color_matrix_1_cct_            = ctx.color_matrix_1_cct_;
+  params.raw_color_matrix_2_cct_            = ctx.color_matrix_2_cct_;
+  params.raw_lens_metadata_valid_           = ctx.lens_metadata_valid_;
+  params.raw_lens_make_                     = ctx.lens_make_;
+  params.raw_lens_model_                    = ctx.lens_model_;
+  params.raw_lens_focal_mm_                 = ctx.focal_length_mm_;
+  params.raw_lens_aperture_f_               = ctx.aperture_f_number_;
+  params.raw_lens_focus_distance_m_         = ctx.focus_distance_m_;
+  params.raw_lens_focal_35mm_               = ctx.focal_35mm_mm_;
+  params.raw_lens_crop_factor_hint_         = ctx.crop_factor_hint_;
+  params.raw_dng_warp_rectilinear_present_  = ctx.dng_warp_rectilinear_present_;
+  params.raw_dng_warp_rectilinear_applied_  = ctx.dng_warp_rectilinear_applied_;
 
-  params.lens_calib_runtime_dirty_         = true;
-  params.color_temp_runtime_dirty_         = true;
+  if (inherent_changed) {
+    params.lens_calib_runtime_dirty_ = true;
+    params.color_temp_runtime_dirty_ = true;
+  }
 }
 
 void RawDecodeOp::EnableGlobalParams(OperatorParams&, bool) {

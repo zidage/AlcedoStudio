@@ -5,7 +5,11 @@
 #include "ui/alcedo_main/album_backend/editor_history_state_detail.hpp"
 
 #include <ctime>
+#include <mutex>
+#include <utility>
+#include <vector>
 
+#include "app/editor_adjustment_pipeline.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
@@ -79,26 +83,131 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
           image_state.materialized_head_commit_hash, &state->root_snapshot, error)) {
     return nullptr;
   }
-  auto replay_graph = *guard->commit_graph_;
+
+  // Attach WAL against the unique history instance — no shadow CommitGraph copy,
+  // no ApplyRecoveredRecordToSnapshot reducer.
   const auto journal_records = journal->records();
-  for (const auto& record : journal_records) {
-    if (!ApplyRecoveredRecordToSnapshot(&state->committed_snapshot, &replay_graph, record, error)) {
+  if (journal_records.empty()) {
+    guard->dirty_ = false;
+    state->recovered_head = false;
+  } else {
+    const auto alignment = alcedo::MiniGitWorkingHistory::AlignJournalWithStoredHead(
+        *guard->commit_graph_, journal_records);
+    if (!alignment.accepted || alignment.broken) {
+      std::string isolate_error;
+      (void)alcedo::MiniGitJournal::IsolateJournalFile(journal->path(), &isolate_error);
+      if (error) {
+        *error = alignment.error.empty()
+                     ? "Mini-Git journal cannot be recovered against stored history"
+                     : alignment.error;
+      }
       return nullptr;
     }
+
+    if (alignment.fully_covered) {
+      // Crash after durable save, before WAL clear: discard leftover log only.
+      if (!journal->TruncateMaterialized(error)) return nullptr;
+      guard->dirty_ = false;
+      state->recovered_head = false;
+    } else {
+      // Contiguous missing suffix: apply into unique graph + live pipeline.
+      const auto prior_graph = *guard->commit_graph_;
+      const auto prior_head  = guard->working_head_commit_hash_;
+      const auto prior_chain = guard->transaction_chain_hash_;
+      const auto prior_snap  = state->committed_snapshot;
+      const bool prior_dirty = guard->dirty_;
+      const auto expected_materialized = prior_graph.GetImageEditState();
+
+      std::vector<alcedo::MiniGitJournalRecord> missing(
+          journal_records.begin() +
+              static_cast<std::ptrdiff_t>(alignment.missing_from_index),
+          journal_records.end());
+
+      std::string replay_error;
+      if (!alcedo::MiniGitWorkingHistory::Replay(*guard->commit_graph_, missing, &replay_error)) {
+        *guard->commit_graph_ = prior_graph;
+        if (error) *error = replay_error;
+        std::string isolate_error;
+        (void)alcedo::MiniGitJournal::IsolateJournalFile(journal->path(), &isolate_error);
+        return nullptr;
+      }
+
+      alcedo::EditorRenderAdjustmentSnapshot derived;
+      if (!SnapshotAtHead(state->root_snapshot, *guard->commit_graph_,
+                          guard->commit_graph_->GetActiveVersionRef().head_commit_hash, &derived,
+                          error)) {
+        *guard->commit_graph_ = prior_graph;
+        return nullptr;
+      }
+
+      if (guard->pipeline_) {
+        std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
+        if (!alcedo::ApplyEditorAdjustmentSnapshot(*guard->pipeline_, derived, error)) {
+          *guard->commit_graph_ = prior_graph;
+          return nullptr;
+        }
+      }
+
+      state->committed_snapshot = std::move(derived);
+      guard->working_head_commit_hash_ =
+          guard->commit_graph_->GetActiveVersionRef().head_commit_hash;
+      guard->transaction_chain_hash_ =
+          guard->commit_graph_->ChainHashForHead(guard->working_head_commit_hash_);
+      guard->dirty_ = true;
+      guard->serialized_state_needs_writeback_ = true;
+      state->recovered_head = true;
+
+      // Normal save APIs for recovery result: history persist + pipeline checkpoint.
+      if (auto pipeline_service = PipelineService()) {
+        std::string persist_error;
+        if (!pipeline_service->PersistEditorHistoryState(guard, expected_materialized,
+                                                         &persist_error)) {
+          // Keep recovered memory/live state; leave WAL for retry.
+          if (error) *error = persist_error;
+        } else {
+          if (guard->pipeline_) {
+            try {
+              pipeline_service->SavePipeline(guard);
+            } catch (const std::exception& ex) {
+              if (error) *error = ex.what();
+              // Leave WAL intact when pipeline checkpoint fails.
+              goto attach_history;
+            } catch (...) {
+              if (error) *error = "Recovered pipeline checkpoint save failed";
+              goto attach_history;
+            }
+          }
+          if (!journal->TruncateMaterialized(error)) {
+            *guard->commit_graph_ = prior_graph;
+            guard->working_head_commit_hash_ = prior_head;
+            guard->transaction_chain_hash_ = prior_chain;
+            guard->dirty_ = prior_dirty;
+            state->committed_snapshot = prior_snap;
+            return nullptr;
+          }
+          guard->dirty_ = false;
+          guard->serialized_state_needs_writeback_ = false;
+          state->recovered_head = false;
+          try {
+            guard->commit_graph_->MaterializeActiveHeadInMemory();
+          } catch (const std::exception& ex) {
+            if (error) *error = ex.what();
+            return nullptr;
+          }
+        }
+      }
+    }
   }
-  *guard->commit_graph_ = std::move(replay_graph);
+
+attach_history:
   guard->working_head_commit_hash_ = guard->commit_graph_->GetActiveVersionRef().head_commit_hash;
   guard->transaction_chain_hash_ =
       guard->commit_graph_->ChainHashForHead(guard->working_head_commit_hash_);
-  guard->dirty_ = !journal_records.empty();
-  state->recovered_head = !journal_records.empty();
   state->history =
       std::make_unique<alcedo::MiniGitWorkingHistory>(guard->commit_graph_, journal);
 
-  // Algorithm D: after WAL attach, compare checkpoint identity to logical head.
-  // LoadEditorPipeline may have imported a stale checkpoint for the materialized
-  // head; when WAL extends the head, history wins and the live executor must
-  // follow the derived adjustment snapshot.
+  // After WAL attach, if checkpoint identity still disagrees with logical head,
+  // install the derived adjustment snapshot on the unique live executor.
   const auto& post_wal_state = guard->commit_graph_->GetImageEditState();
   if (!alcedo::CheckpointMatchesLogicalHead(post_wal_state, guard->working_head_commit_hash_,
                                             guard->transaction_chain_hash_)) {

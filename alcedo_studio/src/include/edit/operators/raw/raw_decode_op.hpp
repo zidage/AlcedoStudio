@@ -25,18 +25,16 @@ class RawDecodeOp : public OperatorBase<RawDecodeOp> {
 
   RawParams                          params_;
   RawProcessBackend                  backend_ = RawProcessBackend::ALCEDO;
-  RawRuntimeColorContext             latest_runtime_context_;
-  RawRuntimeColorContext             pre_populated_ctx_;
+  /// Image-local RAW color/lens metadata persisted in operator params and used for
+  /// decode + SetGlobalParams without a separate per-frame inject path.
+  RawRuntimeColorContext             inherent_raw_context_;
   std::function<bool()>              cancel_requested_;
 
   RawDecodeOp() = delete;
 
   RawDecodeOp(const nlohmann::json& params);
 
-  void SetPrePopulatedContext(const RawRuntimeColorContext& ctx) {
-    pre_populated_ctx_      = ctx;
-    latest_runtime_context_ = ctx;
-  }
+  void SetInherentRawContext(const RawRuntimeColorContext& ctx) { inherent_raw_context_ = ctx; }
   void SetCancelRequested(std::function<bool()> cancel_requested) {
     cancel_requested_ = std::move(cancel_requested);
   }

@@ -218,9 +218,13 @@ auto SanitizeColorTemperatureParams(nlohmann::json                     params,
   auto& inner = params["color_temp"];
   inner.erase("resolved_cct");
   inner.erase("resolved_tint");
+  inner.erase("as_shot_cct");
+  inner.erase("as_shot_tint");
   if (inner.value("mode", std::string{}) == "as_shot") {
     inner.erase("cct");
     inner.erase("tint");
+    inner.erase("custom_cct");
+    inner.erase("custom_tint");
   }
   return params;
 }

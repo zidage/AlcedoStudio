@@ -5,6 +5,7 @@
 #include "edit/history/mini_git_working_history.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -385,6 +386,47 @@ auto MiniGitJournal::TruncateMaterialized(std::string* error) -> bool {
   return false;
 }
 
+auto MiniGitJournal::RevokeLastRecord(std::string* error) -> bool {
+  std::scoped_lock lock(mutex_);
+  try {
+    if (records_.empty()) {
+      SetError(error, "mini-Git journal has no record to revoke");
+      return false;
+    }
+    records_.pop_back();
+    return RewriteFileUnlocked(error);
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
+  } catch (...) {
+    SetError(error, "mini-Git journal tail revoke failed");
+  }
+  return false;
+}
+
+auto MiniGitJournal::IsolateJournalFile(const std::filesystem::path& path, std::string* error)
+    -> bool {
+  try {
+    if (path.empty() || !std::filesystem::exists(path)) {
+      return true;
+    }
+    const auto stamp =
+        std::to_string(std::chrono::system_clock::now().time_since_epoch().count());
+    const auto isolated = path.string() + ".isolated." + stamp;
+    std::error_code ec;
+    std::filesystem::rename(path, isolated, ec);
+    if (ec) {
+      SetError(error, "mini-Git journal isolate failed: " + ec.message());
+      return false;
+    }
+    return true;
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
+  } catch (...) {
+    SetError(error, "mini-Git journal isolate failed");
+  }
+  return false;
+}
+
 MiniGitWorkingHistory::MiniGitWorkingHistory(std::shared_ptr<CommitGraph>             graph,
                                              std::shared_ptr<IMiniGitJournalAppender> journal)
     : graph_(std::move(graph)), journal_(std::move(journal)) {
@@ -489,11 +531,50 @@ auto MiniGitWorkingHistory::PublishPreparedEdit(const MiniGitPreparedEdit& prepa
     result.committed = true;
     result.commit    = prepared.commit;
   } catch (const std::exception& e) {
-    // A journaled record that cannot be reflected in the working graph is a
-    // corruption-level condition. Do not claim the live working head advanced.
+    // WAL is durable but the unique history instance did not advance. Revoke only
+    // this tail record so earlier recovery records remain valid.
+    if (auto* durable = dynamic_cast<MiniGitJournal*>(journal_.get())) {
+      std::string revoke_error;
+      (void)durable->RevokeLastRecord(&revoke_error);
+    }
     result.error = e.what();
   }
   return result;
+}
+
+auto MiniGitWorkingHistory::AbandonPublishedEdit(const MiniGitPreparedEdit& prepared,
+                                                 MiniGitWorkingSelection prior_selection,
+                                                 std::string* error) -> bool {
+  if (!prepared.ready) {
+    SetError(error, "mini-Git edit is not prepared");
+    return false;
+  }
+  try {
+    if (working_head() == prepared.commit.GetCommitHash()) {
+      graph_->MoveWorkingHead(graph_->GetActiveVersionId(),
+                              prepared.journal_record.expected_source_head);
+      const auto unreachable = graph_->ListUnreachableCommitHashes();
+      std::vector<commit_hash_t> to_erase;
+      for (const auto& hash : unreachable) {
+        if (hash == prepared.commit.GetCommitHash()) {
+          to_erase.push_back(hash);
+        }
+      }
+      if (!to_erase.empty()) {
+        graph_->EraseUnreachableCommits(to_erase);
+      }
+    }
+    redo_stack_ = std::move(prior_selection.redo_suffix);
+    if (auto* durable = dynamic_cast<MiniGitJournal*>(journal_.get())) {
+      if (!durable->RevokeLastRecord(error)) {
+        return false;
+      }
+    }
+    return true;
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
+  }
+  return false;
 }
 
 auto MiniGitWorkingHistory::AppendEdit(OrdinaryEditPayload payload) -> MiniGitEditAppendResult {
@@ -686,9 +767,38 @@ auto MiniGitWorkingHistory::PublishPreparedHeadMove(const MiniGitPreparedHeadMov
     result.selected_commit   = prepared.selected_commit;
     result.traversed_commits = prepared.traversed_commits;
   } catch (const std::exception& e) {
+    if (auto* durable = dynamic_cast<MiniGitJournal*>(journal_.get())) {
+      std::string revoke_error;
+      (void)durable->RevokeLastRecord(&revoke_error);
+    }
     result.error = e.what();
   }
   return result;
+}
+
+auto MiniGitWorkingHistory::AbandonPublishedHeadMove(const MiniGitPreparedHeadMove& prepared,
+                                                     MiniGitWorkingSelection prior_selection,
+                                                     std::string* error) -> bool {
+  if (!prepared.ready || prepared.is_noop) {
+    SetError(error, "mini-Git head move is not prepared");
+    return false;
+  }
+  try {
+    if (working_head() == prepared.target_head) {
+      graph_->MoveWorkingHead(graph_->GetActiveVersionId(),
+                              prepared.journal_record.expected_source_head);
+    }
+    redo_stack_ = std::move(prior_selection.redo_suffix);
+    if (auto* durable = dynamic_cast<MiniGitJournal*>(journal_.get())) {
+      if (!durable->RevokeLastRecord(error)) {
+        return false;
+      }
+    }
+    return true;
+  } catch (const std::exception& e) {
+    SetError(error, e.what());
+  }
+  return false;
 }
 
 auto MiniGitWorkingHistory::Undo() -> MiniGitHeadMoveResult {
@@ -737,34 +847,35 @@ auto MiniGitWorkingHistory::Replay(CommitGraph&                             grap
   return true;
 }
 
-auto MiniGitWorkingHistory::ReplaySkippingMaterializedPrefix(
-    CommitGraph& graph, const std::vector<MiniGitJournalRecord>& records,
-    std::size_t* applied_from_index, std::string* error) -> bool {
+auto MiniGitWorkingHistory::AlignJournalWithStoredHead(
+    const CommitGraph& graph, const std::vector<MiniGitJournalRecord>& records)
+    -> JournalAlignment {
+  JournalAlignment alignment;
   if (records.empty()) {
-    if (applied_from_index != nullptr) {
-      *applied_from_index = 0;
-    }
-    return true;
+    alignment.accepted      = true;
+    alignment.fully_covered = true;
+    return alignment;
   }
 
   const auto stored_head  = graph.GetActiveVersionRef().head_commit_hash;
   const auto stored_chain = graph.ChainHashForHead(stored_head);
 
-  // A normal save starts at the durable head. When a process stops after the
-  // DuckDB transaction but before truncation, the journal starts earlier and
-  // may also contain edits appended after the checkpoint capture. Find the
-  // longest durable prefix whose final head is the stored head, then replay
-  // only the remaining suffix.
+  // Contiguous parent/chain links across the entire durable journal.
+  for (std::size_t index = 1; index < records.size(); ++index) {
+    const auto& record = records[index];
+    if (record.expected_source_head != records[index - 1].target_head ||
+        record.expected_source_chain_hash != records[index - 1].target_chain_hash) {
+      alignment.broken = true;
+      alignment.error  = "mini-Git journal records are not a contiguous head sequence";
+      return alignment;
+    }
+  }
+
+  // Longest prefix whose target matches the durable head and whose commits are
+  // already present (crash after DB commit before WAL clear).
   std::size_t durable_prefix_size = 0;
   for (std::size_t index = 0; index < records.size(); ++index) {
     const auto& record = records[index];
-    if (index != 0 &&
-        (record.expected_source_head != records[index - 1].target_head ||
-         record.expected_source_chain_hash != records[index - 1].target_chain_hash)) {
-      SetError(error, "mini-Git journal records are not a contiguous head sequence");
-      return false;
-    }
-
     if (record.kind == MiniGitJournalRecordKind::kEditCommit) {
       if (!record.edit_commit.has_value() ||
           graph.FindCommit(record.edit_commit->GetCommitHash()) == nullptr) {
@@ -774,27 +885,69 @@ auto MiniGitWorkingHistory::ReplaySkippingMaterializedPrefix(
       if (record.target_head.has_value() && graph.FindCommit(*record.target_head) == nullptr) {
         break;
       }
+    } else {
+      alignment.broken = true;
+      alignment.error  = "mini-Git journal record has an unknown kind";
+      return alignment;
     }
-
     if (record.target_head == stored_head && record.target_chain_hash == stored_chain) {
       durable_prefix_size = index + 1;
     }
   }
 
-  if (durable_prefix_size == 0 &&
-      (records.front().expected_source_head != stored_head ||
-       records.front().expected_source_chain_hash != stored_chain)) {
-    SetError(error,
-             "mini-Git journal cannot be aligned with the stored materialized head for recovery");
-    return false;
+  if (durable_prefix_size == records.size()) {
+    alignment.accepted           = true;
+    alignment.fully_covered      = true;
+    alignment.missing_from_index = records.size();
+    return alignment;
   }
 
-  if (applied_from_index != nullptr) {
-    *applied_from_index = durable_prefix_size;
+  if (durable_prefix_size == 0) {
+    if (records.front().expected_source_head != stored_head ||
+        records.front().expected_source_chain_hash != stored_chain) {
+      alignment.broken = true;
+      alignment.error =
+          "mini-Git journal cannot be aligned with the stored history head for recovery";
+      return alignment;
+    }
   }
-  return Replay(graph, std::vector<MiniGitJournalRecord>(
-                           records.begin() + static_cast<std::ptrdiff_t>(durable_prefix_size),
-                           records.end()),
+
+  // Remaining suffix must connect from durable head (or last covered record).
+  const auto& first_missing = records[durable_prefix_size];
+  if (durable_prefix_size == 0) {
+    if (first_missing.expected_source_head != stored_head ||
+        first_missing.expected_source_chain_hash != stored_chain) {
+      alignment.broken = true;
+      alignment.error =
+          "mini-Git journal missing suffix does not continue the stored history head";
+      return alignment;
+    }
+  }
+
+  alignment.accepted             = true;
+  alignment.contiguous_extension = true;
+  alignment.missing_from_index   = durable_prefix_size;
+  return alignment;
+}
+
+auto MiniGitWorkingHistory::ReplaySkippingMaterializedPrefix(
+    CommitGraph& graph, const std::vector<MiniGitJournalRecord>& records,
+    std::size_t* applied_from_index, std::string* error) -> bool {
+  const auto alignment = AlignJournalWithStoredHead(graph, records);
+  if (!alignment.accepted) {
+    SetError(error, alignment.error);
+    return false;
+  }
+  if (applied_from_index != nullptr) {
+    *applied_from_index = alignment.missing_from_index;
+  }
+  if (alignment.fully_covered || alignment.missing_from_index >= records.size()) {
+    return true;
+  }
+  return Replay(graph,
+                std::vector<MiniGitJournalRecord>(
+                    records.begin() + static_cast<std::ptrdiff_t>(alignment.missing_from_index),
+                    records.end()),
                 error);
 }
 

@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 
 #include "image/image_buffer.hpp"
@@ -519,13 +520,11 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
                 task.pipeline_executor_->DetachFrameSink();
               }
             }
+          }
 
-            // Refresh the executor from the Image's pre-extracted raw metadata so that
-            // downstream operators (ColorTemp, LensCalib) resolve eagerly and RawDecodeOp
-            // uses the same persisted DNG/runtime metadata instead of re-parsing from LibRaw.
-            if (task.input_desc_ && task.input_desc_->HasRawColorContext()) {
-              task.pipeline_executor_->InjectRawMetadata(task.input_desc_->GetRawColorContext());
-            }
+          std::optional<CPUPipelineExecutor::OneShotRenderParamsSnapshot> prior_one_shot;
+          if (task.pipeline_executor_) {
+            prior_one_shot = task.pipeline_executor_->CaptureOneShotRenderParams();
           }
 
           const auto restore_frame_sink = [&]() {
@@ -533,15 +532,21 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
               task.pipeline_executor_->AttachFrameSink(saved_frame_sink);
             }
           };
-          // RAII guard ensures the editor frame sink is restored on every exit
-          // path, including exceptions thrown after detaching.
-          // Uses a non-null sentinel so unique_ptr's destructor invokes the deleter.
-          auto sink_guard = std::unique_ptr<void, std::function<void(void*)>>(
-              reinterpret_cast<void*>(1), [&restore_frame_sink](void*) { restore_frame_sink(); });
+          // RAII: restore one-shot render params (decode/resize/ROI/force-cpu/cache)
+          // and the editor frame sink on every exit path (success, cancel, exception).
+          auto render_params_guard = std::unique_ptr<void, std::function<void(void*)>>(
+              reinterpret_cast<void*>(1),
+              [&task, &prior_one_shot, &restore_frame_sink](void*) {
+                if (prior_one_shot.has_value() && task.pipeline_executor_) {
+                  task.pipeline_executor_->RestoreOneShotRenderParams(*prior_one_shot);
+                }
+                restore_frame_sink();
+              });
 
           task.SetExecutorRenderParams();
 
           if (task_cancelled()) {
+            // Guard restores one-shot params; still clear scratch/buffers by type.
             apply_state_transition_after_render();
             notify_thumbnail_failure_callbacks();
             set_blocking_value(nullptr);

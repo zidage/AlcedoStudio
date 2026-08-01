@@ -73,7 +73,11 @@ void EnsureDefaultColorTemp(CPUPipelineExecutor& exec) {
 
   nlohmann::json color_temp_params;
   color_temp_params["color_temp"] = {
-      {"mode", mode}, {"cct", cct}, {"tint", tint}, {"resolved_cct", cct}, {"resolved_tint", tint},
+      {"mode", mode},
+      {"custom_cct", cct},
+      {"custom_tint", tint},
+      {"as_shot_cct", cct},
+      {"as_shot_tint", tint},
   };
   to_ws_stage.SetOperator(OperatorType::COLOR_TEMP, color_temp_params, global_params);
 }

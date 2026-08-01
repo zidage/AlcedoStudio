@@ -88,10 +88,10 @@ TEST(EditorLookModelTest, ColorTempDefaultParamsMatchOperatorShape) {
   ASSERT_TRUE(root.contains(QStringLiteral("color_temp")));
   const auto ct = root.value(QStringLiteral("color_temp")).toObject();
   EXPECT_EQ(ct.value(QStringLiteral("mode")).toString(), QStringLiteral("as_shot"));
-  EXPECT_TRUE(ct.contains(QStringLiteral("cct")));
-  EXPECT_TRUE(ct.contains(QStringLiteral("tint")));
-  EXPECT_TRUE(ct.contains(QStringLiteral("resolved_cct")));
-  EXPECT_TRUE(ct.contains(QStringLiteral("resolved_tint")));
+  EXPECT_TRUE(ct.contains(QStringLiteral("custom_cct")));
+  EXPECT_TRUE(ct.contains(QStringLiteral("custom_tint")));
+  EXPECT_TRUE(ct.contains(QStringLiteral("as_shot_cct")));
+  EXPECT_TRUE(ct.contains(QStringLiteral("as_shot_tint")));
   EXPECT_TRUE(sub.calls.empty());
 }
 

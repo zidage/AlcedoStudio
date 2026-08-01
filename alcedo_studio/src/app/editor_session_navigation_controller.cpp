@@ -530,16 +530,14 @@ auto EditorSessionNavigationController::ContinueCheckoutVersion(const version_re
     edit_.ClearSnapshot();
   }
 
-  // Stay Interactive on the same image. Advance render generation so the
-  // coordinator cannot treat the post-checkout frame as a reuse of the prior
-  // head (same pattern as Undo / MoveHeadToCommit). Then route a first frame
-  // for the new Version head without releasing pipeline ownership.
+  // Stay Interactive on the same image. Advance content generation only — do
+  // NOT ResetForNewImage (that zeroes content_generation_ back to 1 and cancels
+  // the advance, so full-frame presentation keeps the previous Version's frame
+  // until a view-dependent ROI refresh). Match Undo / MoveHeadToCommit.
   if (lifecycle_.state() != EditorSessionState::Interactive) {
     lifecycle_.MarkImageReady();
   }
   render_.AdvanceContentGeneration();
-  render_.ResetForNewImage();
-  render_.MarkImageAcquired();
 
   EditorRenderCommand command;
   command.operation_id = operation_id_;
@@ -582,11 +580,8 @@ auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string  d
   if (lifecycle_.state() != EditorSessionState::Interactive) {
     lifecycle_.MarkImageReady();
   }
-  // Same generation advance as checkout: the new root Version must paint even
-  // when the open image identity is unchanged.
+  // Same generation advance as checkout / Undo (no ResetForNewImage).
   render_.AdvanceContentGeneration();
-  render_.ResetForNewImage();
-  render_.MarkImageAcquired();
 
   EditorRenderCommand command;
   command.operation_id = operation_id_;
@@ -631,8 +626,6 @@ auto EditorSessionNavigationController::ContinueBranchFromCommit(const commit_ha
     lifecycle_.MarkImageReady();
   }
   render_.AdvanceContentGeneration();
-  render_.ResetForNewImage();
-  render_.MarkImageAcquired();
 
   EditorRenderCommand command;
   command.operation_id = operation_id_;

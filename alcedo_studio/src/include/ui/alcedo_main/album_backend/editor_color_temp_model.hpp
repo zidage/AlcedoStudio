@@ -10,8 +10,8 @@ namespace alcedo::ui {
 
 /// Phase 6D white-balance model. Owns As Shot / Custom mode, CCT, and tint.
 /// Submits operator-shaped params through `IEditorAdjustmentSubmitter`:
-///   {"color_temp":{"mode":"as_shot"|"custom","cct":…,"tint":…,
-///                  "resolved_cct":…,"resolved_tint":…}}
+///   {"color_temp":{"mode":"as_shot"|"custom","custom_cct":…,"custom_tint":…,
+///                  "as_shot_cct":…,"as_shot_tint":…}}
 /// Editing CCT or tint promotes mode to Custom. Reset restores As Shot.
 /// Load setters do not submit.
 class EditorColorTempModel : public EditorAdjustmentModelBase {
