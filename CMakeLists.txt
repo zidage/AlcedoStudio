@@ -1541,6 +1541,12 @@ if(APPLE AND ALCEDO_MACOS_BUNDLE)
     # Include the .app bundle at the top level of the ZIP so the user
     # extracts it and finds the app bundle directly.
     set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
+    # Package / DMG volume icon (same brand mark as the .app bundle).
+    set(_alcedo_macos_pkg_icns
+        "${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/ICON/alcedo_icon.icns")
+    if(EXISTS "${_alcedo_macos_pkg_icns}")
+        set(CPACK_PACKAGE_ICON "${_alcedo_macos_pkg_icns}")
+    endif()
 elseif(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
     # ------------------------------------------------------------------
     # Windows installer packaging (WIX and/or NSIS)
