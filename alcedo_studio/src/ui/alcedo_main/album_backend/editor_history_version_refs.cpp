@@ -9,6 +9,9 @@
 #include <unordered_map>
 #include <utility>
 
+#include <mutex>
+
+#include "app/editor_adjustment_pipeline.hpp"
 #include "app/pipeline_service.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
@@ -59,15 +62,41 @@ void RestoreNamedRefPrior(HistoryWorkingState& state, const NamedRefPriorState& 
   state.recovered_head = prior.recovered;
 }
 
-void PublishNamedRefSuccess(HistoryWorkingState& state,
-                            alcedo::EditorRenderAdjustmentSnapshot next_snapshot) {
+auto ApplyNamedRefHeadToLivePipeline(HistoryWorkingState& state,
+                                     const alcedo::head_commit_hash_t& head,
+                                     std::string* error) -> bool {
+  if (!state.pipeline_guard || !state.pipeline_guard->pipeline_ ||
+      !state.pipeline_guard->commit_graph_) {
+    return true;
+  }
+  std::unique_lock<std::mutex> render_lock(state.pipeline_guard->pipeline_->GetRenderLock());
+  return alcedo::ApplyVersionHeadToLivePipeline(*state.pipeline_guard->pipeline_,
+                                                *state.pipeline_guard->commit_graph_, head, error);
+}
+
+auto RefreshNamedRefSnapshotFromLive(HistoryWorkingState& state, std::string* error) -> bool {
+  if (!state.pipeline_guard || !state.pipeline_guard->pipeline_) {
+    if (error) *error = "Live pipeline unavailable while refreshing named-ref snapshot";
+    return false;
+  }
+  try {
+    std::unique_lock<std::mutex> render_lock(state.pipeline_guard->pipeline_->GetRenderLock());
+    const auto params = state.pipeline_guard->pipeline_->ExportPipelineParams();
+    render_lock.unlock();
+    return MakeAdjustmentSnapshotFromPipelineParams(params, &state.committed_snapshot, error);
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+}
+
+void PublishNamedRefSuccess(HistoryWorkingState& state) {
   state.pipeline_guard->working_head_commit_hash_ = state.history->working_head();
   state.pipeline_guard->transaction_chain_hash_ = state.history->transaction_chain_hash();
   state.pipeline_guard->dirty_ = false;
   state.pipeline_guard->serialized_state_needs_writeback_ = false;
   state.pending_before.clear();
   state.recovered_head = false;
-  state.committed_snapshot = std::move(next_snapshot);
 }
 
 }  // namespace
@@ -101,8 +130,12 @@ auto EditorHistoryVersionRefs::CreateRootVersionAndCheckout(
   // Match the pipeline guard identity to the newly active Version before persistence.
   state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
   state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
-  alcedo::EditorRenderAdjustmentSnapshot next_snapshot;
-  if (!SnapshotAtHead(state->root_snapshot, graph, std::nullopt, &next_snapshot, error)) {
+  // Create-root Version points at defaults-only head (nullopt).
+  if (!ApplyNamedRefHeadToLivePipeline(*state, std::nullopt, error)) {
+    RestoreNamedRefPrior(*state, prior);
+    return false;
+  }
+  if (!RefreshNamedRefSnapshotFromLive(*state, error)) {
     RestoreNamedRefPrior(*state, prior);
     return false;
   }
@@ -116,7 +149,7 @@ auto EditorHistoryVersionRefs::CreateRootVersionAndCheckout(
     }
   }
   if (version_id) *version_id = new_id;
-  PublishNamedRefSuccess(*state, std::move(next_snapshot));
+  PublishNamedRefSuccess(*state);
   return true;
 }
 
@@ -152,8 +185,11 @@ auto EditorHistoryVersionRefs::BranchFromCommitAndCheckout(
   // Match the pipeline guard identity to the newly active Version before persistence.
   state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
   state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
-  alcedo::EditorRenderAdjustmentSnapshot next_snapshot;
-  if (!SnapshotAtHead(state->root_snapshot, graph, commit_id, &next_snapshot, error)) {
+  if (!ApplyNamedRefHeadToLivePipeline(*state, commit_id, error)) {
+    RestoreNamedRefPrior(*state, prior);
+    return false;
+  }
+  if (!RefreshNamedRefSnapshotFromLive(*state, error)) {
     RestoreNamedRefPrior(*state, prior);
     return false;
   }
@@ -167,7 +203,7 @@ auto EditorHistoryVersionRefs::BranchFromCommitAndCheckout(
     }
   }
   if (version_id) *version_id = new_id;
-  PublishNamedRefSuccess(*state, std::move(next_snapshot));
+  PublishNamedRefSuccess(*state);
   return true;
 }
 

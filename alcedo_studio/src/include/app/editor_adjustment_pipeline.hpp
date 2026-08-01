@@ -9,11 +9,14 @@
 #include <string>
 
 #include "app/editor_adjustment_types.hpp"
+#include "edit/history/commit_types.hpp"
 #include "edit/operators/op_base.hpp"
 
 namespace alcedo {
 
+class CommitGraph;
 class CPUPipelineExecutor;
+class EditCommit;
 
 struct EditorAdjustmentFieldSpec {
   PipelineStageName stage_name    = PipelineStageName::Stage_Count;
@@ -68,5 +71,47 @@ auto ApplyEditorAdjustmentSnapshot(CPUPipelineExecutor&                  executo
 /// Disable the geometry operator for an overlay editing preview while keeping
 /// its parameters installed on the executor for the next full render.
 void DisableEditorGeometryOperatorForOverlay(CPUPipelineExecutor& executor);
+
+/**
+ * @brief Install default editable operator params while preserving image-local keys.
+ *
+ * Image-local keys (RAW inherent context, as-shot white balance cache, lens EXIF
+ * identity) stay on the live pipeline. User-editable keys reset from
+ * `default_pipeline_params.hpp`. Caller must hold the executor render lock.
+ *
+ * @return false when a SetOperator fails; @p error receives the reason.
+ */
+auto ResetEditableOperatorsToDefaultsPreservingImageLocal(CPUPipelineExecutor& executor,
+                                                          std::string*         error) -> bool;
+
+/**
+ * @brief Rebuild live pipeline operator state for a history head.
+ *
+ * Algorithm (plan §4.7):
+ * 1. Capture prior ExportPipelineParams for failure rollback.
+ * 2. Reset editable operators to defaults (preserve image-local keys).
+ * 3. Apply first-parent chain commit after-values via SetOperator.
+ * 4. SetExecutionStages once.
+ * 5. On any failure, ImportPipelineParams(prior) and return false.
+ *
+ * Caller must hold the executor render lock. Does not touch Version refs, WAL,
+ * or DuckDB.
+ *
+ * @param executor Live pipeline to mutate.
+ * @param graph    Commit graph that owns @p head.
+ * @param head     Target first-parent head (nullopt = defaults only).
+ * @param error    Optional failure message.
+ */
+auto ApplyVersionHeadToLivePipeline(CPUPipelineExecutor&      executor, const CommitGraph& graph,
+                                    const head_commit_hash_t& head, std::string* error) -> bool;
+
+/**
+ * @brief Apply one ordinary or merge commit's after (or before) values to the live pipeline.
+ *
+ * Used by undo (before) and redo (after). Caller holds the render lock.
+ */
+auto ApplyHistoryCommitToLivePipeline(CPUPipelineExecutor& executor, const CommitGraph& graph,
+                                      const EditCommit& commit, bool use_after_value,
+                                      std::string* error) -> bool;
 
 }  // namespace alcedo

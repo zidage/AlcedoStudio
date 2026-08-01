@@ -8,9 +8,9 @@
 #include <utility>
 
 #include "app/editor_mini_git_commit_writer.hpp"
-#include "app/editor_mini_git_journal_fold.hpp"
 #include "app/editor_mini_git_journal_recovery.hpp"
 #include "app/editor_save_checkpoint_coordinator.hpp"
+#include "edit/history/mini_git_working_history.hpp"
 #include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
 
 namespace alcedo {
@@ -22,9 +22,9 @@ void SetError(std::string* error, std::string message) {
   }
 }
 
-/// Reject captures whose identity or sequence range is inconsistent before any
-/// DuckDB write. Empty journals must not claim a sequence range; non-empty
-/// journals must list contiguous records matching first/last.
+/// Reject captures whose identity is inconsistent before any DuckDB write.
+/// Journal records may be present for diagnostics; normal save never folds them
+/// into DuckDB — history + pipeline already live in capture.materialization.
 auto ValidateSaveCapture(const EditorMiniGitSaveCapture& capture, std::string* error) -> bool {
   if (capture.element_id == 0) {
     SetError(error, "mini-Git materialize requires an element id");
@@ -40,6 +40,15 @@ auto ValidateSaveCapture(const EditorMiniGitSaveCapture& capture, std::string* e
   }
   if (capture.version_id != capture.materialization.image_state.active_version_id) {
     SetError(error, "mini-Git capture version id does not match materialization state");
+    return false;
+  }
+  if (capture.materialization.image_state.materialized_head_commit_hash != capture.working_head) {
+    SetError(error, "mini-Git capture working head does not match materialization head");
+    return false;
+  }
+  if (capture.materialization.image_state.materialized_transaction_chain_hash !=
+      capture.transaction_chain_hash) {
+    SetError(error, "mini-Git capture chain hash does not match materialization chain");
     return false;
   }
 
@@ -80,21 +89,12 @@ auto ValidateSaveCapture(const EditorMiniGitSaveCapture& capture, std::string* e
   return true;
 }
 
-/// Truncate only the captured inclusive sequence range on the journal path so
-/// any post-capture append remains durable for the next checkpoint.
-auto TruncateCapturedJournalRange(const EditorMiniGitSaveCapture& capture, std::string* error)
-    -> bool {
-  if (!capture.has_journal_range()) {
-    return true;
-  }
+/// Clear the entire WAL after history + pipeline checkpoint both succeed.
+auto ClearEntireJournal(const EditorMiniGitSaveCapture& capture, std::string* error) -> bool {
   if (capture.journal_path.empty()) {
     return true;
   }
-  MiniGitJournal journal(capture.journal_path);
-  if (!journal.Load(error)) {
-    return false;
-  }
-  return journal.TruncateThroughSequence(*capture.last_journal_sequence, error);
+  return EditorMiniGitJournalRecovery::TruncateJournalFile(capture.journal_path, error);
 }
 
 }  // namespace
@@ -133,8 +133,6 @@ auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capt
                                             std::string* error) -> EditorMiniGitMaterializeResult {
   // Precondition: the project-owned SaveCheckpointLock is already held by
   // EditorSaveCheckpointService (or a focused test that serializes access).
-  // Do not re-acquire here — a second AcquireBlocking would deadlock on the
-  // same coordinator while the service still owns the lock.
   EditorMiniGitMaterializeResult result;
   if (!ValidateSaveCapture(capture, error)) {
     result.error = error != nullptr ? *error : "invalid capture";
@@ -149,7 +147,7 @@ auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capt
     return result;
   }
 
-  bool head_moved = !capture.journal_records.empty();
+  bool head_moved = false;
 
   try {
     auto               db_guard = storage_->GetDBController().GetConnectionGuard();
@@ -157,60 +155,45 @@ auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capt
     CommitGraphService graph_service(db_guard.conn_);
     auto               stored_graph = graph_service.LoadGraph(capture.element_id);
 
-    if (!stored_graph.has_value()) {
-      // First durable materialization for this image: write the live capture.
-      auto write_result = writer_->Write(capture.materialization, error);
-      if (!write_result.accepted) {
-        result.error = write_result.error;
-        return result;
-      }
-      head_moved = !capture.journal_records.empty();
-    } else {
-      auto       folded      = *stored_graph;
-      const auto prior_head  = folded.GetActiveVersionRef().head_commit_hash;
-      const auto prior_chain = folded.ChainHashForHead(prior_head);
-
-      if (capture.journal_records.empty()) {
-        // Saving with no journal changes succeeds without moving the Version head.
-        if (prior_head != capture.working_head || prior_chain != capture.transaction_chain_hash) {
-          SetError(error,
-                   "empty mini-Git journal but live head/hash disagree with materialized state");
-          result.error = error != nullptr ? *error : "head mismatch on empty journal";
-          return result;
-        }
-        auto materialization                                            = capture.materialization;
-        materialization.image_state.materialized_head_commit_hash       = prior_head;
-        materialization.image_state.materialized_transaction_chain_hash = prior_chain;
-        // Keep Version refs at the stored heads; only refresh serialized state.
-        auto write_result = writer_->Write(materialization, error);
-        if (!write_result.accepted) {
-          result.error = write_result.error;
-          return result;
-        }
-        head_moved = false;
-      } else {
-        // Pure journal fold — no pipeline replay or mutation.
-        auto fold_result = EditorMiniGitJournalFold::Fold(folded, capture.journal_records, error);
-        if (!fold_result.accepted) {
-          result.error = fold_result.error;
-          return result;
-        }
-        const auto folded_head  = folded.GetActiveVersionRef().head_commit_hash;
-        const auto folded_chain = folded.ChainHashForHead(folded_head);
-        if (folded_head != capture.working_head || folded_chain != capture.transaction_chain_hash) {
-          SetError(error, "mini-Git journal fold does not match the captured pipeline head/hash");
-          result.error = error != nullptr ? *error : "journal fold mismatch";
-          return result;
-        }
-        head_moved =
-            prior_head != capture.working_head || prior_chain != capture.transaction_chain_hash;
-        auto write_result = writer_->Write(capture.materialization, error);
-        if (!write_result.accepted) {
-          result.error = write_result.error;
-          return result;
-        }
-      }
+    head_commit_hash_t       prior_head  = std::nullopt;
+    transaction_chain_hash_t prior_chain{};
+    if (stored_graph.has_value()) {
+      prior_head  = stored_graph->GetActiveVersionRef().head_commit_hash;
+      prior_chain = stored_graph->ChainHashForHead(prior_head);
     }
+
+    // Normal save: persist the unique in-memory history + pipeline checkpoint.
+    // Never decode WAL records into DuckDB commits — capture.materialization is
+    // already the complete durable snapshot of the unique history instance.
+    auto write_result = writer_->Write(capture.materialization, error);
+    if (!write_result.accepted) {
+      result.error = write_result.error;
+      return result;
+    }
+
+    // Verify DB HEAD == capture memory logical HEAD after write.
+    auto reloaded = graph_service.LoadGraph(capture.element_id);
+    if (!reloaded.has_value()) {
+      SetError(error, "mini-Git materialize could not reload history after write");
+      result.error = error != nullptr ? *error : "reload failed after write";
+      return result;
+    }
+    const auto db_head  = reloaded->GetActiveVersionRef().head_commit_hash;
+    const auto db_chain = reloaded->ChainHashForHead(db_head);
+    if (db_head != capture.working_head || db_chain != capture.transaction_chain_hash) {
+      SetError(error, "mini-Git materialize DB HEAD does not match memory logical HEAD");
+      result.error = error != nullptr ? *error : "HEAD mismatch after write";
+      return result;
+    }
+    const auto& image_state = reloaded->GetImageEditState();
+    if (image_state.materialized_head_commit_hash != capture.working_head ||
+        image_state.materialized_transaction_chain_hash != capture.transaction_chain_hash) {
+      SetError(error, "mini-Git materialize checkpoint HEAD does not match memory logical HEAD");
+      result.error = error != nullptr ? *error : "checkpoint HEAD mismatch";
+      return result;
+    }
+
+    head_moved = prior_head != capture.working_head || prior_chain != capture.transaction_chain_hash;
   } catch (const std::exception& e) {
     SetError(error, e.what());
     result.error = e.what();
@@ -221,18 +204,15 @@ auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capt
     return result;
   }
 
-  // DuckDB transaction committed successfully.
+  // DuckDB history + pipeline checkpoint committed successfully.
   result.accepted           = true;
   result.database_committed = true;
   result.head_moved         = head_moved;
 
-  // Truncate only the captured sequence prefix after DuckDB success.
-  // Distinguish between DB-committed (safe) and fully materialized (journal
-  // also truncated). Failure here means recovery will skip the redundant
-  // prefix on the next open.
+  // Clear the entire WAL only after both history and pipeline checkpoint succeed.
+  // On failure leave WAL intact for recovery.
   bool truncation_succeeded = false;
-  if (capture.has_journal_range() && !capture.journal_path.empty()) {
-    // Pre-truncation hook: simulate failure to open the journal.
+  if (!capture.journal_path.empty()) {
     if (truncation_hook_ != nullptr) {
       std::string hook_error;
       if (!truncation_hook_->OnBeforeTruncate(capture.journal_path, &hook_error)) {
@@ -245,14 +225,13 @@ auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capt
     }
 
     std::string truncate_error;
-    truncation_succeeded = TruncateCapturedJournalRange(capture, &truncate_error);
+    truncation_succeeded = ClearEntireJournal(capture, &truncate_error);
     if (!truncation_succeeded) {
       if (error != nullptr && error->empty()) {
         *error = truncate_error;
       }
     }
 
-    // Post-truncation hook: simulate flush failure.
     if (truncation_succeeded && truncation_hook_ != nullptr) {
       std::string hook_error;
       if (!truncation_hook_->OnAfterTruncate(capture.journal_path, &hook_error)) {
@@ -265,7 +244,6 @@ auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capt
       }
     }
   } else {
-    // Empty journal or no journal path: nothing to truncate.
     truncation_succeeded = true;
   }
 

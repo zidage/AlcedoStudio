@@ -102,12 +102,6 @@ auto ApplyPreparedHeadMoveToSnapshot(alcedo::EditorRenderAdjustmentSnapshot* sna
                                      const alcedo::MiniGitPreparedHeadMove& prepared,
                                      std::string* error) -> bool;
 
-/// Apply one journal record to a snapshot and the replay graph's current working selection.
-auto ApplyRecoveredRecordToSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
-                                    alcedo::CommitGraph* replay_graph,
-                                    const alcedo::MiniGitJournalRecord& record,
-                                    std::string* error) -> bool;
-
 /// Rebuild an immutable snapshot from a root snapshot and a first-parent head.
 auto SnapshotAtHead(const alcedo::EditorRenderAdjustmentSnapshot& root_snapshot,
                     const alcedo::CommitGraph& graph, const alcedo::head_commit_hash_t& head,

@@ -95,10 +95,10 @@ TEST_F(AdjustmentTransferServiceTest, DefaultCaptureTransfersUserAdjustmentsOnly
       .SetOperator(OperatorType::COLOR_TEMP,
                    {{"color_temp",
                      {{"mode", "as_shot"},
-                      {"cct", 4300.0f},
-                      {"tint", 15.0f},
-                      {"resolved_cct", 4300.0f},
-                      {"resolved_tint", 15.0f}}}},
+                      {"custom_cct", 4300.0f},
+                      {"custom_tint", 15.0f},
+                      {"as_shot_cct", 4300.0f},
+                      {"as_shot_tint", 15.0f}}}},
                    source_global);
 
   auto& loading                               = source.GetStage(PipelineStageName::Image_Loading);
@@ -125,8 +125,12 @@ TEST_F(AdjustmentTransferServiceTest, DefaultCaptureTransfersUserAdjustmentsOnly
       const auto& color_temp = entry["params"]["color_temp"];
       EXPECT_FALSE(color_temp.contains("resolved_cct"));
       EXPECT_FALSE(color_temp.contains("resolved_tint"));
+      EXPECT_FALSE(color_temp.contains("as_shot_cct"));
+      EXPECT_FALSE(color_temp.contains("as_shot_tint"));
       EXPECT_FALSE(color_temp.contains("cct"));
       EXPECT_FALSE(color_temp.contains("tint"));
+      EXPECT_FALSE(color_temp.contains("custom_cct"));
+      EXPECT_FALSE(color_temp.contains("custom_tint"));
     }
   }
 
@@ -148,7 +152,7 @@ TEST_F(AdjustmentTransferServiceTest, DefaultCaptureTransfersUserAdjustmentsOnly
   const auto target_color_temp =
       OperatorParamsFor(target, PipelineStageName::To_WorkingSpace, OperatorType::COLOR_TEMP);
   EXPECT_EQ(target_color_temp["color_temp"]["mode"], "as_shot");
-  EXPECT_NE(target_color_temp["color_temp"].value("resolved_cct", 0.0), 4300.0);
+  EXPECT_NE(target_color_temp["color_temp"].value("as_shot_cct", 0.0), 4300.0);
 }
 
 TEST_F(AdjustmentTransferServiceTest, ImportsExternalJsonWithStableOperatorNames) {

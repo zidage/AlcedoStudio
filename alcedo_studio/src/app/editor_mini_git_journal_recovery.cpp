@@ -7,8 +7,7 @@
 #include <fstream>
 #include <utility>
 
-#include "app/editor_mini_git_commit_writer.hpp"
-#include "app/editor_mini_git_journal_fold.hpp"
+#include "edit/history/mini_git_working_history.hpp"
 #include "storage/service/sleeve/edit_history/commit_graph_service.hpp"
 
 namespace alcedo {
@@ -36,11 +35,19 @@ EditorMiniGitJournalRecovery::EditorMiniGitJournalRecovery(std::shared_ptr<Stora
 auto EditorMiniGitJournalRecovery::Recover(sl_element_id_t              element_id,
                                            const std::filesystem::path& journal_path,
                                            std::string*                 error) -> RecoveryResult {
+  // Startup recovery without a live pipeline: validate WAL continuity against
+  // durable history, clear fully-covered leftover WAL, leave contiguous missing
+  // suffixes for EnsureWorkingState (unique history + live operator apply), and
+  // isolate broken journals. Never fold WAL into DuckDB and never create a
+  // shadow CommitGraph.
   RecoveryResult result;
 
   MiniGitJournal journal(journal_path);
   if (!journal.Load(error)) {
     result.error = error != nullptr ? *error : "journal load failed";
+    // Corrupt on-disk log: isolate so a later open does not re-read it silently.
+    std::string isolate_error;
+    (void)MiniGitJournal::IsolateJournalFile(journal_path, &isolate_error);
     return result;
   }
 
@@ -58,43 +65,43 @@ auto EditorMiniGitJournalRecovery::Recover(sl_element_id_t              element_
     if (!stored_graph.has_value()) {
       SetError(error, "mini-Git recovery requires a durable commit graph");
       result.error = error != nullptr ? *error : "missing graph";
+      std::string isolate_error;
+      (void)MiniGitJournal::IsolateJournalFile(journal_path, &isolate_error);
       return result;
     }
 
-    auto       graph       = *stored_graph;
-    const auto prior_head  = graph.GetActiveVersionRef().head_commit_hash;
-    const auto prior_chain = graph.ChainHashForHead(prior_head);
-
-    auto       fold_result = EditorMiniGitJournalFold::Fold(graph, journal.records(), error);
-    if (!fold_result.accepted) {
-      result.error = fold_result.error;
+    const auto alignment =
+        MiniGitWorkingHistory::AlignJournalWithStoredHead(*stored_graph, journal.records());
+    if (!alignment.accepted || alignment.broken) {
+      SetError(error, alignment.error.empty()
+                          ? "mini-Git journal cannot be recovered against stored history"
+                          : alignment.error);
+      result.error = error != nullptr ? *error : "journal recovery rejected";
+      std::string isolate_error;
+      (void)MiniGitJournal::IsolateJournalFile(journal_path, &isolate_error);
       return result;
     }
 
-    const auto folded_head  = graph.GetActiveVersionRef().head_commit_hash;
-    const auto folded_chain = graph.ChainHashForHead(folded_head);
-
-    if (prior_head == folded_head && prior_chain == folded_chain) {
-      // Already fully materialized — only truncate leftover journal bytes.
+    if (alignment.fully_covered) {
+      // Crash after DB success, before WAL clear: discard leftover log only.
       std::string truncate_error;
-      (void)TruncateJournalFile(journal_path, &truncate_error);
+      if (!TruncateJournalFile(journal_path, &truncate_error)) {
+        SetError(error, truncate_error.empty() ? "failed to clear fully-covered WAL"
+                                               : truncate_error);
+        result.error = error != nullptr ? *error : "WAL clear failed";
+        return result;
+      }
       result.accepted     = true;
       result.materialized = false;
       return result;
     }
 
-    // Recovery without a live pipeline: keep the previous serialized state.
-    auto materialization = graph.CaptureMaterializationWithSerializedPipelineState(
-        graph.GetImageEditState().serialized_pipeline_state);
-
-    EditorMiniGitCommitWriter writer(storage_);
-    auto                      write_result = writer.Write(materialization, error);
-    if (!write_result.accepted) {
-      result.error = write_result.error;
-      return result;
-    }
-
-    result.materialized = true;
+    // Contiguous missing suffix: leave WAL intact. EnsureWorkingState applies
+    // missing records to the unique history instance and live pipeline, then
+    // runs the normal save path and clears WAL.
+    result.accepted     = true;
+    result.materialized = false;
+    return result;
   } catch (const std::exception& e) {
     SetError(error, e.what());
     result.error = e.what();
@@ -104,12 +111,6 @@ auto EditorMiniGitJournalRecovery::Recover(sl_element_id_t              element_
     result.error = error != nullptr ? *error : "recovery failed";
     return result;
   }
-
-  std::string truncate_error;
-  (void)TruncateJournalFile(journal_path, &truncate_error);
-
-  result.accepted = true;
-  return result;
 }
 
 // ── Static helpers ──────────────────────────────────────────────────────────

@@ -130,16 +130,26 @@ class CPUPipelineExecutor : public PipelineExecutor {
   void SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm algorithm) override;
   void SetDecodeRes(DecodeRes res);
 
+  /// Snapshot of one-shot render parameters that must not leak across Apply calls.
+  struct OneShotRenderParamsSnapshot {
+    DecodeRes      decode_res_      = DecodeRes::FULL;
+    nlohmann::json render_params_   = {};
+    bool           force_cpu_output_ = false;
+    bool           enable_cache_     = true;
+  };
+
+  [[nodiscard]] auto CaptureOneShotRenderParams() const -> OneShotRenderParamsSnapshot;
+  void               RestoreOneShotRenderParams(const OneShotRenderParamsSnapshot& snapshot);
+
   void RegisterAllOperators();
   void ResetToCleanBaselineAdjustments();
 
   void InitDefaultPipeline();
 
   /**
-   * @brief Inject pre-extracted raw metadata into the pipeline.
-   *        Populates global params so that downstream operators (ColorTemp, LensCalib)
-   *        can resolve eagerly, and sets the pre-populated context on RawDecodeOp
-   *        so it skips re-extraction at decode time.
+   * @brief Install image-local raw metadata into the pipeline (transition path).
+   *        Prefer writing inherent RAW params into RawDecodeOp at import so that
+   *        reload and render no longer require a per-frame inject.
    */
   void InjectRawMetadata(const RawRuntimeColorContext& ctx);
 

@@ -16,6 +16,92 @@
 #include "ui/alcedo_main/album_backend/editor_history_state_detail.hpp"
 
 namespace alcedo::ui {
+namespace {
+
+/// Refresh committed_snapshot from the live pipeline after a successful history mutation.
+/// Prefer live ExportPipelineParams over root_snapshot + SnapshotAtHead (plan §4.7).
+auto RefreshCommittedSnapshotFromLive(HistoryWorkingState& state, std::string* error) -> bool {
+  if (!state.pipeline_guard || !state.pipeline_guard->pipeline_) {
+    if (error) *error = "Live pipeline unavailable while refreshing committed snapshot";
+    return false;
+  }
+  try {
+    std::unique_lock<std::mutex> render_lock(state.pipeline_guard->pipeline_->GetRenderLock());
+    const auto params = state.pipeline_guard->pipeline_->ExportPipelineParams();
+    render_lock.unlock();
+    return MakeAdjustmentSnapshotFromPipelineParams(params, &state.committed_snapshot, error);
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+}
+
+/// WAL-first head move: publish journal + unique history head, then rebuild the
+/// unique live pipeline from defaults + first-parent chain (plan §4.7). On live
+/// apply failure, revoke the WAL tail and restore the prior head.
+auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState& state,
+                                         const alcedo::MiniGitPreparedHeadMove& prepared,
+                                         std::string* error) -> bool {
+  const auto prior_selection = state.history->WorkingSelection();
+  nlohmann::json prior_pipeline;
+  if (state.pipeline_guard && state.pipeline_guard->pipeline_) {
+    try {
+      std::unique_lock<std::mutex> render_lock(state.pipeline_guard->pipeline_->GetRenderLock());
+      prior_pipeline = state.pipeline_guard->pipeline_->ExportPipelineParams();
+    } catch (const std::exception& ex) {
+      if (error) *error = ex.what();
+      return false;
+    }
+  }
+
+  const auto published = state.history->PublishPreparedHeadMove(prepared);
+  if (!published.moved) {
+    if (error) {
+      *error = published.error.empty() ? "mini-Git head-move publish failed" : published.error;
+    }
+    return false;
+  }
+
+  if (state.pipeline_guard && state.pipeline_guard->pipeline_ && state.pipeline_guard->commit_graph_) {
+    std::unique_lock<std::mutex> render_lock(state.pipeline_guard->pipeline_->GetRenderLock());
+    if (!alcedo::ApplyVersionHeadToLivePipeline(*state.pipeline_guard->pipeline_,
+                                                *state.pipeline_guard->commit_graph_,
+                                                prepared.target_head, error)) {
+      render_lock.unlock();
+      std::string abandon_error;
+      (void)state.history->AbandonPublishedHeadMove(prepared, prior_selection, &abandon_error);
+      try {
+        std::unique_lock<std::mutex> restore_lock(state.pipeline_guard->pipeline_->GetRenderLock());
+        state.pipeline_guard->pipeline_->ImportPipelineParams(prior_pipeline);
+        state.pipeline_guard->pipeline_->SetExecutionStages();
+      } catch (...) {
+      }
+      return false;
+    }
+  }
+
+  if (!RefreshCommittedSnapshotFromLive(state, error)) {
+    std::string abandon_error;
+    (void)state.history->AbandonPublishedHeadMove(prepared, prior_selection, &abandon_error);
+    try {
+      if (state.pipeline_guard && state.pipeline_guard->pipeline_) {
+        std::unique_lock<std::mutex> restore_lock(state.pipeline_guard->pipeline_->GetRenderLock());
+        state.pipeline_guard->pipeline_->ImportPipelineParams(prior_pipeline);
+        state.pipeline_guard->pipeline_->SetExecutionStages();
+      }
+    } catch (...) {
+    }
+    return false;
+  }
+  state.pipeline_guard->dirty_ = true;
+  state.pipeline_guard->working_head_commit_hash_ = state.history->working_head();
+  state.pipeline_guard->transaction_chain_hash_ = state.history->transaction_chain_hash();
+  state.pending_before.clear();
+  state.recovered_head = false;
+  return true;
+}
+
+}  // namespace
 
 EditorHistoryMutation::EditorHistoryMutation(EditorHistoryState& state) : state_(state) {}
 
@@ -81,8 +167,43 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
     payload.after_enabled = after_params.at("enabled").get<bool>();
   }
 
-  // Live pipeline is the only mutation target. committed_snapshot is regenerated
-  // from the first-parent chain after WAL publish (history projection only).
+  // before == after: end without WAL, commit, or HEAD move.
+  if (payload.before_value == payload.after_value &&
+      payload.before_enabled == payload.after_enabled) {
+    state->pending_before.erase(before);
+    return true;
+  }
+
+  auto restore_before_on_live = [&] {
+    if (!state->pipeline_guard->pipeline_) return;
+    alcedo::EditorAdjustmentOperatorState before_state;
+    before_state.params  = payload.before_value;
+    before_state.enabled = payload.before_enabled;
+    std::string restore_error;
+    std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
+    (void)alcedo::ApplyEditorAdjustmentOperatorState(*state->pipeline_guard->pipeline_, *spec,
+                                                     before_state, &restore_error);
+  };
+
+  // WAL-first settled edit: prepare → WAL+history publish → live SetOperator(after).
+  // Interactive preview may already have applied after on the live pipeline; WAL
+  // failure must restore before. History or SetOperator failure revokes the WAL
+  // tail and restores before without clearing earlier recovery records.
+  const auto prepared = state->history->PrepareAppendEdit(payload);
+  if (!prepared.ready) {
+    if (error) *error = prepared.error;
+    restore_before_on_live();
+    return false;
+  }
+
+  const auto prior_selection = state->history->WorkingSelection();
+  const auto append = state->history->PublishPreparedEdit(prepared);
+  if (!append.committed) {
+    if (error) *error = append.error;
+    restore_before_on_live();
+    return false;
+  }
+
   if (state->pipeline_guard->pipeline_) {
     alcedo::EditorAdjustmentOperatorState after_state;
     after_state.params  = payload.after_value;
@@ -90,27 +211,20 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
     std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
     if (!alcedo::ApplyEditorAdjustmentOperatorState(*state->pipeline_guard->pipeline_, *spec,
                                                     after_state, error)) {
+      render_lock.unlock();
+      std::string abandon_error;
+      (void)state->history->AbandonPublishedEdit(prepared, prior_selection, &abandon_error);
+      restore_before_on_live();
       return false;
     }
   }
 
-  const auto prepared = state->history->PrepareAppendEdit(payload);
-  if (!prepared.ready) {
-    if (error) *error = prepared.error;
+  if (!RefreshCommittedSnapshotFromLive(*state, error)) {
+    std::string abandon_error;
+    (void)state->history->AbandonPublishedEdit(prepared, prior_selection, &abandon_error);
+    restore_before_on_live();
     return false;
   }
-  const auto append = state->history->PublishPreparedEdit(prepared);
-  if (!append.committed) {
-    if (error) *error = append.error;
-    return false;
-  }
-
-  alcedo::EditorRenderAdjustmentSnapshot derived;
-  if (!SnapshotAtHead(state->root_snapshot, *state->pipeline_guard->commit_graph_,
-                      state->history->working_head(), &derived, error)) {
-    return false;
-  }
-  state->committed_snapshot = std::move(derived);
   state->pipeline_guard->dirty_ = true;
   state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
   state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
@@ -118,46 +232,6 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
   state->recovered_head = false;
   return true;
 }
-
-namespace {
-
-auto ApplyDerivedSnapshotToLivePipeline(HistoryWorkingState& state,
-                                        const alcedo::EditorRenderAdjustmentSnapshot& snapshot,
-                                        std::string* error) -> bool {
-  if (!state.pipeline_guard || !state.pipeline_guard->pipeline_) return true;
-  std::unique_lock<std::mutex> render_lock(state.pipeline_guard->pipeline_->GetRenderLock());
-  return alcedo::ApplyEditorAdjustmentSnapshot(*state.pipeline_guard->pipeline_, snapshot, error);
-}
-
-/// Rebuild params at the prepared head from history, install on the live
-/// pipeline, then publish the head move. committed_snapshot is assigned only
-/// after a successful publish (derived read model, not a parallel edit target).
-auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState& state,
-                                         const alcedo::MiniGitPreparedHeadMove& prepared,
-                                         std::string* error) -> bool {
-  alcedo::EditorRenderAdjustmentSnapshot derived;
-  if (!SnapshotAtHead(state.root_snapshot, *state.pipeline_guard->commit_graph_, prepared.target_head,
-                      &derived, error)) {
-    return false;
-  }
-  if (!ApplyDerivedSnapshotToLivePipeline(state, derived, error)) return false;
-  const auto published = state.history->PublishPreparedHeadMove(prepared);
-  if (!published.moved) {
-    if (error) {
-      *error = published.error.empty() ? "mini-Git head-move publish failed" : published.error;
-    }
-    return false;
-  }
-  state.committed_snapshot = std::move(derived);
-  state.pipeline_guard->dirty_ = true;
-  state.pipeline_guard->working_head_commit_hash_ = state.history->working_head();
-  state.pipeline_guard->transaction_chain_hash_ = state.history->transaction_chain_hash();
-  state.pending_before.clear();
-  state.recovered_head = false;
-  return true;
-}
-
-}  // namespace
 
 auto EditorHistoryMutation::Undo(const alcedo::EditorHistoryGuardHandle& guard,
                                  std::string* error) -> bool {
@@ -242,13 +316,15 @@ auto EditorHistoryMutation::DiscardUnmaterializedChanges(
     }
   }
 
-  alcedo::EditorRenderAdjustmentSnapshot derived;
-  if (!SnapshotAtHead(state->root_snapshot, *state->pipeline_guard->commit_graph_,
-                      state->history->working_head(), &derived, error)) {
-    return false;
+  if (state->pipeline_guard->pipeline_) {
+    std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
+    if (!alcedo::ApplyVersionHeadToLivePipeline(*state->pipeline_guard->pipeline_,
+                                                *state->pipeline_guard->commit_graph_,
+                                                state->history->working_head(), error)) {
+      return false;
+    }
   }
-  if (!ApplyDerivedSnapshotToLivePipeline(*state, derived, error)) return false;
-  state->committed_snapshot = std::move(derived);
+  if (!RefreshCommittedSnapshotFromLive(*state, error)) return false;
 
   if (state->journal && !state->journal->TruncateMaterialized(error)) return false;
   state->history->PublishWorkingSelection({});
@@ -311,9 +387,35 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
   state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
   state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
 
-  alcedo::EditorRenderAdjustmentSnapshot next_snapshot;
-  if (!SnapshotAtHead(state->root_snapshot, graph, graph.GetActiveVersionRef().head_commit_hash,
-                      &next_snapshot, error)) {
+  nlohmann::json prior_pipeline;
+  if (state->pipeline_guard->pipeline_) {
+    try {
+      std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
+      prior_pipeline = state->pipeline_guard->pipeline_->ExportPipelineParams();
+      if (!alcedo::ApplyVersionHeadToLivePipeline(
+              *state->pipeline_guard->pipeline_, graph,
+              graph.GetActiveVersionRef().head_commit_hash, error)) {
+        state->pipeline_guard->pipeline_->ImportPipelineParams(prior_pipeline);
+        state->pipeline_guard->pipeline_->SetExecutionStages();
+        restore_prior();
+        return false;
+      }
+    } catch (const std::exception& ex) {
+      if (error) *error = ex.what();
+      restore_prior();
+      return false;
+    }
+  }
+
+  if (!RefreshCommittedSnapshotFromLive(*state, error)) {
+    try {
+      if (state->pipeline_guard->pipeline_) {
+        std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
+        state->pipeline_guard->pipeline_->ImportPipelineParams(prior_pipeline);
+        state->pipeline_guard->pipeline_->SetExecutionStages();
+      }
+    } catch (...) {
+    }
     restore_prior();
     return false;
   }
@@ -323,18 +425,20 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
     if (!pipeline_service->PersistEditorHistoryState(state->pipeline_guard,
                                                      graph_before.GetImageEditState(),
                                                      &persistence_error)) {
+      try {
+        if (state->pipeline_guard->pipeline_) {
+          std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
+          state->pipeline_guard->pipeline_->ImportPipelineParams(prior_pipeline);
+          state->pipeline_guard->pipeline_->SetExecutionStages();
+        }
+      } catch (...) {
+      }
       restore_prior();
       if (error) *error = persistence_error;
       return false;
     }
   }
 
-  if (!ApplyDerivedSnapshotToLivePipeline(*state, next_snapshot, error)) {
-    restore_prior();
-    return false;
-  }
-
-  state->committed_snapshot = std::move(next_snapshot);
   state->pipeline_guard->dirty_ = false;
   state->pipeline_guard->serialized_state_needs_writeback_ = false;
   state->pending_before.clear();

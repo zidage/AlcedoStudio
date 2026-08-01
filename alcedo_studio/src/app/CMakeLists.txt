@@ -293,13 +293,12 @@ def_library(EditorMiniGitCommitWriter
 def_library(EditorMiniGitJournalRecovery
     SOURCES "${ALCEDO_APP_ROOT}/editor_mini_git_journal_recovery.cpp"
     PUBLIC_DEPS EditHistory StorageService
-    PRIVATE_DEPS EditorMiniGitJournalFold EditorMiniGitCommitWriter
 )
 
 def_library(EditorMiniGitMaterializer
     SOURCES "${ALCEDO_APP_ROOT}/editor_mini_git_materializer.cpp"
     PUBLIC_DEPS ProjectService EditHistory StorageService
-    PRIVATE_DEPS EditorSaveCheckpointCoordinator EditorMiniGitJournalFold
+    PRIVATE_DEPS EditorSaveCheckpointCoordinator
                  EditorMiniGitCommitWriter EditorMiniGitJournalRecovery
 )
 

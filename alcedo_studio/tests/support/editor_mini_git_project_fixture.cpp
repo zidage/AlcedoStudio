@@ -199,12 +199,11 @@ auto EditorMiniGitProjectFixture::MaterializeUnderSaveLock(const EditorMiniGitSa
     return result;
   }
   auto result = materializer_->Materialize(capture, error);
-  // Match production: after durable truncate by path, drop the same prefix from
-  // the live MiniGitJournal so same-session captures stay consistent.
-  if (result.accepted && result.materialized && capture.has_journal_range()) {
+  // Match production: after durable full WAL clear, drop the live MiniGitJournal
+  // so same-session captures stay consistent with the on-disk file.
+  if (result.accepted && result.materialized) {
     std::string discard_error;
-    if (!RuntimeFor(capture.element_id)
-             .journal->TruncateThroughSequence(*capture.last_journal_sequence, &discard_error)) {
+    if (!RuntimeFor(capture.element_id).journal->TruncateMaterialized(&discard_error)) {
       if (error != nullptr && error->empty()) {
         *error = discard_error;
       }

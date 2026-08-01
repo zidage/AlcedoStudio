@@ -46,7 +46,73 @@ if(DEFINED ALCEDO_RUNTIME_EXECUTABLE AND EXISTS "${ALCEDO_RUNTIME_EXECUTABLE}")
   endforeach()
 
   if(_alcedo_unresolved_runtime_dlls)
-    list(JOIN _alcedo_unresolved_runtime_dlls "\n  " _alcedo_unresolved_text)
-    message(FATAL_ERROR "Unresolved linked runtime DLLs:\n  ${_alcedo_unresolved_text}")
+    # Thin unit tests may import first-party CUDA product DLLs without those
+    # output dirs being in DIRECTORIES (adding them can conflict on opencl.dll).
+    # Resolve only the remaining names under the build tree, then re-check.
+    get_filename_component(_alcedo_exe_dir "${ALCEDO_RUNTIME_EXECUTABLE}" DIRECTORY)
+    # Climb toward the CMake build root: .../tests/<domain>/<name>_runtime -> build root
+    set(_alcedo_build_probe "${_alcedo_exe_dir}")
+    set(_alcedo_build_root "")
+    foreach(_alcedo_i RANGE 0 8)
+      if(EXISTS "${_alcedo_build_probe}/CMakeCache.txt")
+        set(_alcedo_build_root "${_alcedo_build_probe}")
+        break()
+      endif()
+      get_filename_component(_alcedo_build_probe "${_alcedo_build_probe}" DIRECTORY)
+    endforeach()
+
+    set(_alcedo_still_unresolved "")
+    set(_alcedo_resolved_any FALSE)
+    foreach(_alcedo_missing IN LISTS _alcedo_unresolved_runtime_dlls)
+      get_filename_component(_alcedo_missing_name "${_alcedo_missing}" NAME)
+      set(_alcedo_found "")
+      if(NOT "${_alcedo_build_root}" STREQUAL "")
+        file(GLOB_RECURSE _alcedo_candidates
+          LIST_DIRECTORIES false
+          "${_alcedo_build_root}/alcedo_studio/src/*/${_alcedo_missing_name}"
+        )
+        if(_alcedo_candidates)
+          list(GET _alcedo_candidates 0 _alcedo_found)
+        endif()
+      endif()
+      if(NOT "${_alcedo_found}" STREQUAL "" AND EXISTS "${_alcedo_found}")
+        file(COPY_FILE
+          "${_alcedo_found}"
+          "${ALCEDO_RUNTIME_DEST}/${_alcedo_missing_name}"
+          ONLY_IF_DIFFERENT
+        )
+        set(_alcedo_resolved_any TRUE)
+      else()
+        list(APPEND _alcedo_still_unresolved "${_alcedo_missing}")
+      endif()
+    endforeach()
+
+    # Product CUDA DLLs (DemosaicNet, CudaDemosaicNetEntry) import CudaUtils but
+    # thin tests do not always list it as a direct PE dependency of the EXE.
+    if(_alcedo_resolved_any AND NOT "${_alcedo_build_root}" STREQUAL "")
+      foreach(_alcedo_extra IN ITEMS CudaUtils.dll)
+        if(NOT EXISTS "${ALCEDO_RUNTIME_DEST}/${_alcedo_extra}")
+          file(GLOB_RECURSE _alcedo_extra_candidates
+            LIST_DIRECTORIES false
+            "${_alcedo_build_root}/alcedo_studio/src/*/${_alcedo_extra}"
+          )
+          if(_alcedo_extra_candidates)
+            list(GET _alcedo_extra_candidates 0 _alcedo_extra_found)
+            if(EXISTS "${_alcedo_extra_found}")
+              file(COPY_FILE
+                "${_alcedo_extra_found}"
+                "${ALCEDO_RUNTIME_DEST}/${_alcedo_extra}"
+                ONLY_IF_DIFFERENT
+              )
+            endif()
+          endif()
+        endif()
+      endforeach()
+    endif()
+
+    if(_alcedo_still_unresolved)
+      list(JOIN _alcedo_still_unresolved "\n  " _alcedo_unresolved_text)
+      message(FATAL_ERROR "Unresolved linked runtime DLLs:\n  ${_alcedo_unresolved_text}")
+    endif()
   endif()
 endif()

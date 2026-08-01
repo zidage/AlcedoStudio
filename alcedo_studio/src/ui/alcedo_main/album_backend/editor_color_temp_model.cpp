@@ -305,14 +305,11 @@ void EditorColorTempModel::submitSettled() { submitNow(buildParamsJson(), true);
 auto EditorColorTempModel::buildParamsJson() const -> QString {
   QJsonObject color_temp;
   color_temp.insert(QStringLiteral("mode"), ModeString(modeIndex_));
-  color_temp.insert(QStringLiteral("cct"), ClampCct(cct_));
-  color_temp.insert(QStringLiteral("tint"), ClampTint(tint_));
-  // Resolved values track the currently displayed pair so recovery reloads
-  // the same As Shot / Custom presentation.
-  color_temp.insert(QStringLiteral("resolved_cct"),
-                    modeIndex_ == 0 ? ClampCct(asShotCct_) : ClampCct(cct_));
-  color_temp.insert(QStringLiteral("resolved_tint"),
-                    modeIndex_ == 0 ? ClampTint(asShotTint_) : ClampTint(tint_));
+  color_temp.insert(QStringLiteral("custom_cct"), ClampCct(cct_));
+  color_temp.insert(QStringLiteral("custom_tint"), ClampTint(tint_));
+  // Image-local as-shot baseline is always the cached as-shot pair.
+  color_temp.insert(QStringLiteral("as_shot_cct"), ClampCct(asShotCct_));
+  color_temp.insert(QStringLiteral("as_shot_tint"), ClampTint(asShotTint_));
   QJsonObject root;
   root.insert(QStringLiteral("color_temp"), color_temp);
   return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));

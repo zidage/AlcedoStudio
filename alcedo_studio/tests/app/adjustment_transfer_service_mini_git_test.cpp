@@ -290,8 +290,11 @@ TEST(ColorTempOpMergePolicyTest, BothAsShotDoesNotConflictEvenWhenCctDiffers) {
   ColorTempOp op;
   const nlohmann::json current = {
       {"color_temp",
-       {{"mode", "as_shot"}, {"cct", 5200.0}, {"tint", -3.0}, {"resolved_cct", 5200.0},
-        {"resolved_tint", -3.0}}}};
+       {{"mode", "as_shot"},
+        {"custom_cct", 5200.0},
+        {"custom_tint", -3.0},
+        {"as_shot_cct", 5200.0},
+        {"as_shot_tint", -3.0}}}};
   const nlohmann::json incoming = {{"color_temp", {{"mode", "as_shot"}}}};
   EXPECT_FALSE(op.DetectMergeConflict(current, incoming));
 }
@@ -300,8 +303,11 @@ TEST(ColorTempOpMergePolicyTest, CustomVersusAsShotConflicts) {
   ColorTempOp op;
   const nlohmann::json current = {
       {"color_temp",
-       {{"mode", "custom"}, {"cct", 7000.0}, {"tint", 10.0}, {"resolved_cct", 5200.0},
-        {"resolved_tint", -3.0}}}};
+       {{"mode", "custom"},
+        {"custom_cct", 7000.0},
+        {"custom_tint", 10.0},
+        {"as_shot_cct", 5200.0},
+        {"as_shot_tint", -3.0}}}};
   const nlohmann::json incoming = {{"color_temp", {{"mode", "as_shot"}}}};
   EXPECT_TRUE(op.DetectMergeConflict(current, incoming));
 }
@@ -310,21 +316,41 @@ TEST(ColorTempOpMergePolicyTest, TakeIncomingAsShotPreservesCurrentAsShotBaselin
   ColorTempOp op;
   const nlohmann::json current = {
       {"color_temp",
-       {{"mode", "custom"}, {"cct", 7000.0}, {"tint", 10.0}, {"resolved_cct", 5200.0},
-        {"resolved_tint", -3.0}}}};
+       {{"mode", "custom"},
+        {"custom_cct", 7000.0},
+        {"custom_tint", 10.0},
+        {"as_shot_cct", 5200.0},
+        {"as_shot_tint", -3.0}}}};
   const nlohmann::json incoming = {{"color_temp", {{"mode", "as_shot"}}}};
   const auto merged =
       op.MergeParams(current, incoming, OperatorMergeChoice::kTakeIncoming);
   ASSERT_TRUE(merged.contains("color_temp"));
   const auto& ct = merged["color_temp"];
   EXPECT_EQ(ct.value("mode", std::string{}), "as_shot");
-  EXPECT_DOUBLE_EQ(ct.value("resolved_cct", 0.0), 5200.0);
-  EXPECT_DOUBLE_EQ(ct.value("resolved_tint", 0.0), -3.0);
-  EXPECT_DOUBLE_EQ(ct.value("cct", 0.0), 5200.0);
-  EXPECT_DOUBLE_EQ(ct.value("tint", 0.0), -3.0);
+  EXPECT_DOUBLE_EQ(ct.value("as_shot_cct", 0.0), 5200.0);
+  EXPECT_DOUBLE_EQ(ct.value("as_shot_tint", 0.0), -3.0);
+  EXPECT_DOUBLE_EQ(ct.value("custom_cct", 0.0), 7000.0);
+  EXPECT_DOUBLE_EQ(ct.value("custom_tint", 0.0), 10.0);
 }
 
-TEST(ColorTempOpMergePolicyTest, SetParamsAsShotWithoutResolvedKeepsExistingResolved) {
+TEST(ColorTempOpMergePolicyTest, SetParamsAsShotWithoutAsShotKeysKeepsExistingAsShot) {
+  ColorTempOp op;
+  op.SetParams({{"color_temp",
+                 {{"mode", "custom"},
+                  {"custom_cct", 7000.0},
+                  {"custom_tint", 12.0},
+                  {"as_shot_cct", 4800.0},
+                  {"as_shot_tint", -5.0}}}});
+  op.SetParams({{"color_temp", {{"mode", "as_shot"}}}});
+  const auto params = op.GetParams()["color_temp"];
+  EXPECT_EQ(params.value("mode", std::string{}), "as_shot");
+  EXPECT_DOUBLE_EQ(params.value("as_shot_cct", 0.0), 4800.0);
+  EXPECT_DOUBLE_EQ(params.value("as_shot_tint", 0.0), -5.0);
+  EXPECT_DOUBLE_EQ(params.value("custom_cct", 0.0), 7000.0);
+  EXPECT_DOUBLE_EQ(params.value("custom_tint", 0.0), 12.0);
+}
+
+TEST(ColorTempOpMergePolicyTest, SetParamsAcceptsLegacyResolvedAndCctKeys) {
   ColorTempOp op;
   op.SetParams({{"color_temp",
                  {{"mode", "custom"},
@@ -332,14 +358,11 @@ TEST(ColorTempOpMergePolicyTest, SetParamsAsShotWithoutResolvedKeepsExistingReso
                   {"tint", 12.0},
                   {"resolved_cct", 4800.0},
                   {"resolved_tint", -5.0}}}});
-  op.SetParams({{"color_temp", {{"mode", "as_shot"}}}});
   const auto params = op.GetParams()["color_temp"];
-  EXPECT_EQ(params.value("mode", std::string{}), "as_shot");
-  EXPECT_DOUBLE_EQ(params.value("resolved_cct", 0.0), 4800.0);
-  EXPECT_DOUBLE_EQ(params.value("resolved_tint", 0.0), -5.0);
-  // GetParams projects resolved into cct/tint while mode is as_shot.
-  EXPECT_DOUBLE_EQ(params.value("cct", 0.0), 4800.0);
-  EXPECT_DOUBLE_EQ(params.value("tint", 0.0), -5.0);
+  EXPECT_DOUBLE_EQ(params.value("custom_cct", 0.0), 7000.0);
+  EXPECT_DOUBLE_EQ(params.value("custom_tint", 0.0), 12.0);
+  EXPECT_DOUBLE_EQ(params.value("as_shot_cct", 0.0), 4800.0);
+  EXPECT_DOUBLE_EQ(params.value("as_shot_tint", 0.0), -5.0);
 }
 
 TEST(LensCalibOpMergePolicyTest, ImageLocalMetaDoesNotForceConflictWhenPortableMatches) {
@@ -389,10 +412,10 @@ TEST_F(AdjustmentTransferPasteMergeTest,
     const nlohmann::json full_as_shot = {
         {"color_temp",
          {{"mode", "as_shot"},
-          {"cct", 5123.0},
-          {"tint", -7.5},
-          {"resolved_cct", 5123.0},
-          {"resolved_tint", -7.5}}}};
+          {"custom_cct", 5123.0},
+          {"custom_tint", -7.5},
+          {"as_shot_cct", 5123.0},
+          {"as_shot_tint", -7.5}}}};
     to_ws.SetOperator(OperatorType::COLOR_TEMP, full_as_shot, guard->pipeline_->GetGlobalParams());
     const auto current = to_ws.GetOperator(OperatorType::COLOR_TEMP);
     ASSERT_TRUE(current.has_value() && current.value() && current.value()->op_);
@@ -416,10 +439,10 @@ TEST_F(AdjustmentTransferPasteMergeTest,
     const nlohmann::json custom = {
         {"color_temp",
          {{"mode", "custom"},
-          {"cct", 7000.0},
-          {"tint", 15.0},
-          {"resolved_cct", 4550.0},
-          {"resolved_tint", -2.0}}}};
+          {"custom_cct", 7000.0},
+          {"custom_tint", 15.0},
+          {"as_shot_cct", 4550.0},
+          {"as_shot_tint", -2.0}}}};
     to_ws.SetOperator(OperatorType::COLOR_TEMP, custom, guard->pipeline_->GetGlobalParams());
     const auto current = to_ws.GetOperator(OperatorType::COLOR_TEMP);
     ASSERT_TRUE(current.has_value() && current.value() && current.value()->op_);
@@ -433,10 +456,8 @@ TEST_F(AdjustmentTransferPasteMergeTest,
 
   const auto& ct = resolved["color_temp"];
   EXPECT_EQ(ct.value("mode", std::string{}), "as_shot");
-  EXPECT_DOUBLE_EQ(ct.value("resolved_cct", 0.0), 4550.0);
-  EXPECT_DOUBLE_EQ(ct.value("resolved_tint", 0.0), -2.0);
-  EXPECT_DOUBLE_EQ(ct.value("cct", 0.0), 4550.0);
-  EXPECT_DOUBLE_EQ(ct.value("tint", 0.0), -2.0);
+  EXPECT_DOUBLE_EQ(ct.value("as_shot_cct", 0.0), 4550.0);
+  EXPECT_DOUBLE_EQ(ct.value("as_shot_tint", 0.0), -2.0);
 }
 }  // namespace
 }  // namespace alcedo

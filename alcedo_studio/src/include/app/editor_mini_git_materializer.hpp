@@ -23,18 +23,16 @@ namespace alcedo {
 
 class EditorSaveCheckpointCoordinator;
 
-/// Immutable capture taken at save-checkpoint start from the live pipeline
-/// snapshot. Materialization never rebuilds or mutates a pipeline executor; it
-/// only validates the journal fold against these values and writes DuckDB.
+/// Immutable capture taken at save-checkpoint start from the unique live history
+/// and pipeline. Normal materialization never folds WAL records into DuckDB; it
+/// persists the already-built materialization, verifies HEAD agreement, then
+/// clears the entire WAL.
 ///
 /// Owner/lifetime: built by the save path on the caller/GUI thread while the
 /// project-owned SaveCheckpointLock is held and the journal mutex is held for
 /// the Snapshot() copy, then moved into the worker request. journal_records is
-/// the exact inclusive sequence range being saved; an edit finalized after
-/// capture must not appear in this range and must not be removed by truncating
-/// through last_journal_sequence. On any failure the captured bytes and range
-/// remain on disk for retry. journal_records.empty() means there is no sequence
-/// range and no journal fold work — no separate flag is required.
+/// diagnostic/sequence metadata only for normal save — it is not a second
+/// history source. On any failure the WAL remains on disk for recovery.
 struct EditorMiniGitSaveCapture {
   sl_element_id_t                   element_id         = 0;
   std::uint64_t                     session_generation = 0;
@@ -43,7 +41,7 @@ struct EditorMiniGitSaveCapture {
   head_commit_hash_t                working_head = std::nullopt;
   transaction_chain_hash_t          transaction_chain_hash{};
   /// Full capture of commits + Version refs + ImageEditState with serialized
-  /// pipeline state. Built from the live CommitGraph without a second executor.
+  /// pipeline state. Built from the unique live CommitGraph.
   CommitGraphMaterialization        materialization{};
   std::vector<MiniGitJournalRecord> journal_records;
   std::filesystem::path             journal_path;
@@ -64,17 +62,18 @@ struct EditorMiniGitSaveCapture {
 /// - accepted: the capture was structurally valid and reached the DuckDB write
 ///   step. False means validation rejected before any durable write.
 /// - database_committed: the DuckDB transaction committed successfully. True
-///   does not guarantee the journal was truncated; check materialized for that.
-/// - materialized: full checkpoint completed — database committed AND journal
-///   truncated. False after DuckDB success means recovery is needed.
-/// - head_moved: the checked-out Version head advanced (false for an empty
-///   journal or a no-op recovery that only truncated leftover bytes).
+///   does not guarantee the journal was cleared; check materialized for that.
+/// - materialized: full checkpoint completed — database committed AND WAL
+///   cleared. False after DuckDB success means recovery is needed.
+/// - head_moved: the checked-out Version head advanced relative to the prior
+///   durable head (false for an empty journal or a no-op recovery that only
+///   cleared leftover bytes).
 /// - error: human-readable failure detail when accepted/database_committed is false.
 struct EditorMiniGitMaterializeResult {
   bool        accepted            = false;
   bool        database_committed  = false;
   bool        materialized        = false;
-  /// False when the journal was empty and the Version head was not rewritten.
+  /// False when the Version head was not rewritten relative to the prior DB head.
   bool        head_moved          = false;
   std::string error;
 };
@@ -101,11 +100,12 @@ class IJournalTruncationHook {
   }
 };
 
-/// Thin facade for mini-Git journal materialization. Composes
-/// EditorMiniGitJournalFold (pure algorithm), EditorMiniGitCommitWriter
-/// (DuckDB transaction), and EditorMiniGitJournalRecovery (recovery +
-/// truncation). This class owns no mutable state beyond its dependencies;
-/// the three composed types own their own state.
+/// Thin facade for mini-Git normal save and crash-window recovery.
+/// Normal Materialize writes capture.materialization (history + pipeline
+/// checkpoint), verifies HEAD, then clears the entire WAL. It never folds WAL
+/// records into DuckDB. RecoverAndMaterialize validates non-empty WAL against
+/// DB HEAD; fully-covered WAL is cleared; contiguous missing suffixes are left
+/// for EnsureWorkingState to apply on the unique history + live pipeline.
 ///
 /// Thread context: call Materialize from the save worker while the
 /// project-owned SaveCheckpointLock is already held by
@@ -120,28 +120,24 @@ class EditorMiniGitMaterializer final {
   EditorMiniGitMaterializer(std::shared_ptr<StorageService>                  storage,
                             std::shared_ptr<EditorSaveCheckpointCoordinator> coordinator);
 
-  /// Validate the journal fold against the capture and write commits, Version
-  /// head, serialized pipeline state, and recovery metadata in one DuckDB
-  /// transaction. Truncates the saved journal prefix only after DuckDB success.
+  /// Persist history commits/Version/HEAD and the pipeline JSON checkpoint from
+  /// the capture, verify DB HEAD == checkpoint HEAD == memory logical HEAD, then
+  /// clear the entire WAL. Does not decode or fold WAL records into DuckDB.
   ///
   /// Caller thread: the save worker. Precondition: the project-owned
-  /// SaveCheckpointLock for capture.element_id is already held by the save
-  /// orchestrator (this method does not acquire it). On return the journal file
-  /// is truncated iff materialized is true; on any failure the journal is left
-  /// untouched and usable for retry or recovery. No pipeline executor is
-  /// replayed or mutated.
+  /// SaveCheckpointLock for capture.element_id is already held. On return the
+  /// journal file is cleared iff materialized is true; on any failure the
+  /// journal is left untouched.
   auto Materialize(const EditorMiniGitSaveCapture& capture, std::string* error = nullptr)
       -> EditorMiniGitMaterializeResult;
 
-  /// Recover from the DB-commit / truncate crash window: load the DuckDB graph,
-  /// skip the already-materialized journal prefix, fold remaining records,
-  /// materialize, then truncate. Never inserts a commit twice.
+  /// Crash-window recovery against DB HEAD for a non-empty WAL: fully covered
+  /// logs are cleared; contiguous missing suffixes are accepted for later
+  /// application on the unique history + live pipeline; broken logs are
+  /// isolated and rejected.
   ///
   /// Caller thread: editor open / recovery path. Acquires the project-owned
-  /// save lock with AcquireBlocking and holds it until return. On shutdown the
-  /// lock is not granted and recovery fails without mutating DuckDB or the
-  /// journal. On success the journal file is truncated iff materialized is
-  /// true; on failure the journal is left intact.
+  /// save lock with AcquireBlocking and holds it until return.
   auto RecoverAndMaterialize(sl_element_id_t element_id, const std::filesystem::path& journal_path,
                              std::string* error = nullptr) -> EditorMiniGitMaterializeResult;
 
