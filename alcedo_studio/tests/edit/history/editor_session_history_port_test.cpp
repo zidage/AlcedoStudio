@@ -529,7 +529,6 @@ TEST_F(EditorSessionHistoryPortTest,
   ASSERT_TRUE(paste_result.pasted);
   auto capture = history_.CaptureSaveCheckpoint(handle, &error);
   ASSERT_TRUE(static_cast<bool>(capture)) << error;
-  EXPECT_FALSE(capture->candidate_publication);
   EXPECT_FALSE(capture->journal_records.empty());
   // Simulate successful materialize: truncate the WAL so reopen only loads the
   // captured graph (journal fold already reflected in materialization commits).
@@ -1091,28 +1090,18 @@ TEST_F(EditorSessionHistoryPortTest,
   const auto c1 = *guard_->working_head_commit_hash_;
   ASSERT_TRUE(guard_->commit_graph_->FindCommit(c1) != nullptr);
 
-  // Insert an in-graph commit whose payload does not map to any QML editor field.
-  // MoveHeadToCommit across it must therefore fail ApplyCommittedPayload. The
-  // current defect appends the head-move journal record and advances the graph
-  // head before the apply is known to succeed, so the failed move leaves the
-  // head/redo/journal mutated.
-  // Insert an in-graph ordinary commit whose (stage, operator) pair does not
-  // map to any QML editor field (EXPOSURE belongs to Basic_Adjustment, not
-  // To_WorkingSpace). MoveHeadToCommit across it therefore fails
-  // ApplyCommittedPayload at field-key resolution. The current defect appends
-  // the head-move journal record and advances the graph head before the apply
-  // is known to succeed, so the failed move leaves head/redo/journal mutated.
+  // Insert an ordinary commit whose (stage, operator) pair does not map to any
+  // QML editor field (EXPOSURE belongs to Basic_Adjustment, not To_WorkingSpace).
   alcedo::OrdinaryEditPayload bad_payload;
   bad_payload.operator_type  = alcedo::OperatorType::EXPOSURE;
   bad_payload.stage_name     = alcedo::PipelineStageName::To_WorkingSpace;
-  bad_payload.field_name      = "bogus_field";
-  bad_payload.after_value     = nlohmann::json::parse(R"({"exposure":0.0})");
-  bad_payload.after_enabled   = true;
+  bad_payload.field_name     = "bogus_field";
+  bad_payload.after_value    = nlohmann::json::parse(R"({"exposure":0.0})");
+  bad_payload.after_enabled  = true;
   auto bad_commit = alcedo::EditCommit::MakeEdit(guard_->commit_graph_->GetRootId(), c1,
                                                  std::move(bad_payload));
   bad_commit.FinalizeHash();
   ASSERT_TRUE(guard_->commit_graph_->InsertCommit(std::move(bad_commit)));
-  const auto active_version = guard_->commit_graph_->GetActiveVersionId();
   alcedo::head_commit_hash_t bad_head = std::nullopt;
   for (const auto& [hash, commit] : guard_->commit_graph_->GetAllCommits()) {
     if (commit.GetKind() == alcedo::EditCommitKind::kEdit &&
@@ -1124,7 +1113,15 @@ TEST_F(EditorSessionHistoryPortTest,
     }
   }
   ASSERT_TRUE(bad_head.has_value()) << "could not locate the inserted bogus commit";
+
+  // Place the working head on the bad commit so a backward move to c1 can put
+  // it on the redo suffix. SnapshotAtHead(c1) succeeds (history rebuild skips
+  // the unmappable tip). Redo back onto the bad tip must then fail.
+  const auto active_version = guard_->commit_graph_->GetActiveVersionId();
   guard_->commit_graph_->MoveWorkingHead(active_version, bad_head);
+  guard_->working_head_commit_hash_ = bad_head;
+  ASSERT_TRUE(history_.MoveHeadToCommit(handle, c1, &error)) << error;
+  EXPECT_EQ(guard_->commit_graph_->GetActiveVersionRef().head_commit_hash, c1);
 
   const auto journal_records_before = [&] {
     alcedo::MiniGitJournal j(journal_path_);
@@ -1133,12 +1130,11 @@ TEST_F(EditorSessionHistoryPortTest,
     return j.records().size();
   }();
 
-  // The move across the bogus commit must fail and leave the full working-state
-  // tuple unchanged (R4 prepared-transition target).
-  EXPECT_FALSE(history_.MoveHeadToCommit(handle, c1, &error))
-      << "a head move across an unmappable commit must fail";
+  // Forward onto the unmappable commit must fail before publish (R4 prepared transition).
+  EXPECT_FALSE(history_.MoveHeadToCommit(handle, *bad_head, &error))
+      << "a head move onto an unmappable commit must fail";
 
-  EXPECT_EQ(guard_->commit_graph_->GetActiveVersionRef().head_commit_hash, bad_head)
+  EXPECT_EQ(guard_->commit_graph_->GetActiveVersionRef().head_commit_hash, c1)
       << "a failed head move must not advance the graph head";
 
   alcedo::EditorHistorySnapshot snapshot;
@@ -1148,7 +1144,7 @@ TEST_F(EditorSessionHistoryPortTest,
       [](const alcedo::EditorHistoryCommit& row) {
         return row.position == alcedo::EditorHistoryTimelinePosition::Future;
       });
-  EXPECT_EQ(future_rows, 0) << "a failed head move must not push a redo suffix";
+  EXPECT_EQ(future_rows, 1) << "failed redo must leave the unmappable tip on the redo suffix";
 
   const auto journal_records_after = [&] {
     alcedo::MiniGitJournal j(journal_path_);

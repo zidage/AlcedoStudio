@@ -152,10 +152,10 @@ struct MiniGitWorkingSelection {
 
 /// Prepared local head move that has not yet touched the journal, graph, or redo.
 ///
-/// Callers must apply every payload in `traversed_commits` (ordinary and merge)
-/// to a candidate pipeline/snapshot first. Only after that validation succeeds
-/// may they call PublishPreparedHeadMove, which appends one journal record and
-/// performs a no-fail swap of head + redo.
+/// Callers must install the target params on the **live** pipeline first
+/// (typically by rebuilding from root + first-parent chain to `target_head`).
+/// Only after that validation succeeds may they call PublishPreparedHeadMove,
+/// which appends one journal record and performs a no-fail swap of head + redo.
 struct MiniGitPreparedHeadMove {
   bool                       ready = false;
   bool                       is_noop = false;

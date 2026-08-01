@@ -81,7 +81,8 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
     payload.after_enabled = after_params.at("enabled").get<bool>();
   }
 
-  // Live pipeline is the mutation target; committed_snapshot is derived afterwards.
+  // Live pipeline is the only mutation target. committed_snapshot is regenerated
+  // from the first-parent chain after WAL publish (history projection only).
   if (state->pipeline_guard->pipeline_) {
     alcedo::EditorAdjustmentOperatorState after_state;
     after_state.params  = payload.after_value;
@@ -93,8 +94,6 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
     }
   }
 
-  auto candidate = state->committed_snapshot;
-  if (!ApplyCommittedPayloadToSnapshot(&candidate, payload, true, error)) return false;
   const auto prepared = state->history->PrepareAppendEdit(payload);
   if (!prepared.ready) {
     if (error) *error = prepared.error;
@@ -106,7 +105,12 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
     return false;
   }
 
-  state->committed_snapshot = std::move(candidate);
+  alcedo::EditorRenderAdjustmentSnapshot derived;
+  if (!SnapshotAtHead(state->root_snapshot, *state->pipeline_guard->commit_graph_,
+                      state->history->working_head(), &derived, error)) {
+    return false;
+  }
+  state->committed_snapshot = std::move(derived);
   state->pipeline_guard->dirty_ = true;
   state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
   state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
@@ -125,6 +129,34 @@ auto ApplyDerivedSnapshotToLivePipeline(HistoryWorkingState& state,
   return alcedo::ApplyEditorAdjustmentSnapshot(*state.pipeline_guard->pipeline_, snapshot, error);
 }
 
+/// Rebuild params at the prepared head from history, install on the live
+/// pipeline, then publish the head move. committed_snapshot is assigned only
+/// after a successful publish (derived read model, not a parallel edit target).
+auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState& state,
+                                         const alcedo::MiniGitPreparedHeadMove& prepared,
+                                         std::string* error) -> bool {
+  alcedo::EditorRenderAdjustmentSnapshot derived;
+  if (!SnapshotAtHead(state.root_snapshot, *state.pipeline_guard->commit_graph_, prepared.target_head,
+                      &derived, error)) {
+    return false;
+  }
+  if (!ApplyDerivedSnapshotToLivePipeline(state, derived, error)) return false;
+  const auto published = state.history->PublishPreparedHeadMove(prepared);
+  if (!published.moved) {
+    if (error) {
+      *error = published.error.empty() ? "mini-Git head-move publish failed" : published.error;
+    }
+    return false;
+  }
+  state.committed_snapshot = std::move(derived);
+  state.pipeline_guard->dirty_ = true;
+  state.pipeline_guard->working_head_commit_hash_ = state.history->working_head();
+  state.pipeline_guard->transaction_chain_hash_ = state.history->transaction_chain_hash();
+  state.pending_before.clear();
+  state.recovered_head = false;
+  return true;
+}
+
 }  // namespace
 
 auto EditorHistoryMutation::Undo(const alcedo::EditorHistoryGuardHandle& guard,
@@ -141,24 +173,7 @@ auto EditorHistoryMutation::Undo(const alcedo::EditorHistoryGuardHandle& guard,
     return false;
   }
   if (prepared.is_noop) return true;
-  auto candidate = state->committed_snapshot;
-  if (!ApplyPreparedHeadMoveToSnapshot(&candidate, *state->pipeline_guard->commit_graph_, prepared,
-                                       error)) {
-    return false;
-  }
-  if (!ApplyDerivedSnapshotToLivePipeline(*state, candidate, error)) return false;
-  const auto published = state->history->PublishPreparedHeadMove(prepared);
-  if (!published.moved) {
-    if (error) *error = published.error.empty() ? "mini-Git undo publish failed" : published.error;
-    return false;
-  }
-  state->committed_snapshot = std::move(candidate);
-  state->pipeline_guard->dirty_ = true;
-  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
-  state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
-  state->pending_before.clear();
-  state->recovered_head = false;
-  return true;
+  return ApplyPreparedHeadMoveOnLivePipeline(*state, prepared, error);
 }
 
 auto EditorHistoryMutation::Redo(const alcedo::EditorHistoryGuardHandle& guard,
@@ -175,24 +190,7 @@ auto EditorHistoryMutation::Redo(const alcedo::EditorHistoryGuardHandle& guard,
     return false;
   }
   if (prepared.is_noop) return true;
-  auto candidate = state->committed_snapshot;
-  if (!ApplyPreparedHeadMoveToSnapshot(&candidate, *state->pipeline_guard->commit_graph_, prepared,
-                                       error)) {
-    return false;
-  }
-  if (!ApplyDerivedSnapshotToLivePipeline(*state, candidate, error)) return false;
-  const auto published = state->history->PublishPreparedHeadMove(prepared);
-  if (!published.moved) {
-    if (error) *error = published.error.empty() ? "mini-Git redo publish failed" : published.error;
-    return false;
-  }
-  state->committed_snapshot = std::move(candidate);
-  state->pipeline_guard->dirty_ = true;
-  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
-  state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
-  state->pending_before.clear();
-  state->recovered_head = false;
-  return true;
+  return ApplyPreparedHeadMoveOnLivePipeline(*state, prepared, error);
 }
 
 auto EditorHistoryMutation::MoveHeadToCommit(const alcedo::EditorHistoryGuardHandle& guard,
@@ -210,26 +208,7 @@ auto EditorHistoryMutation::MoveHeadToCommit(const alcedo::EditorHistoryGuardHan
     return false;
   }
   if (prepared.is_noop) return true;
-  auto candidate = state->committed_snapshot;
-  if (!ApplyPreparedHeadMoveToSnapshot(&candidate, *state->pipeline_guard->commit_graph_, prepared,
-                                       error)) {
-    return false;
-  }
-  if (!ApplyDerivedSnapshotToLivePipeline(*state, candidate, error)) return false;
-  const auto published = state->history->PublishPreparedHeadMove(prepared);
-  if (!published.moved) {
-    if (error) {
-      *error = published.error.empty() ? "mini-Git head-move publish failed" : published.error;
-    }
-    return false;
-  }
-  state->committed_snapshot = std::move(candidate);
-  state->pipeline_guard->dirty_ = true;
-  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
-  state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
-  state->pending_before.clear();
-  state->recovered_head = false;
-  return true;
+  return ApplyPreparedHeadMoveOnLivePipeline(*state, prepared, error);
 }
 
 auto EditorHistoryMutation::DiscardUnmaterializedChanges(
@@ -255,20 +234,21 @@ auto EditorHistoryMutation::DiscardUnmaterializedChanges(
       if (error) *error = "Materialized history head could not be restored";
       return false;
     }
-    auto candidate = state->committed_snapshot;
-    if (!ApplyPreparedHeadMoveToSnapshot(&candidate, *state->pipeline_guard->commit_graph_,
-                                         prepared, error)) {
-      return false;
-    }
+    // Publish head moves first; live params + derived snapshot refresh once below.
     const auto published = state->history->PublishPreparedHeadMove(prepared);
     if (!published.moved) {
       if (error) *error = published.error.empty() ? "Discard head restore failed" : published.error;
       return false;
     }
-    state->committed_snapshot = std::move(candidate);
   }
 
-  if (!ApplyDerivedSnapshotToLivePipeline(*state, state->committed_snapshot, error)) return false;
+  alcedo::EditorRenderAdjustmentSnapshot derived;
+  if (!SnapshotAtHead(state->root_snapshot, *state->pipeline_guard->commit_graph_,
+                      state->history->working_head(), &derived, error)) {
+    return false;
+  }
+  if (!ApplyDerivedSnapshotToLivePipeline(*state, derived, error)) return false;
+  state->committed_snapshot = std::move(derived);
 
   if (state->journal && !state->journal->TruncateMaterialized(error)) return false;
   state->history->PublishWorkingSelection({});

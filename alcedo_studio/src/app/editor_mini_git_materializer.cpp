@@ -43,11 +43,6 @@ auto ValidateSaveCapture(const EditorMiniGitSaveCapture& capture, std::string* e
     return false;
   }
 
-  if (capture.candidate_publication && capture.base_active_version_id == version_ref_id_t{}) {
-    SetError(error, "candidate publication is missing its base Version identity");
-    return false;
-  }
-
   if (capture.journal_records.empty()) {
     if (capture.first_journal_sequence.has_value() || capture.last_journal_sequence.has_value()) {
       SetError(error, "empty mini-Git journal must not claim a sequence range");
@@ -175,49 +170,7 @@ auto EditorMiniGitMaterializer::Materialize(const EditorMiniGitSaveCapture& capt
       const auto prior_head  = folded.GetActiveVersionRef().head_commit_hash;
       const auto prior_chain = folded.ChainHashForHead(prior_head);
 
-      if (capture.candidate_publication) {
-        const auto& stored_state = stored_graph->GetImageEditState();
-        if (stored_state.active_version_id != capture.base_active_version_id ||
-            stored_state.materialized_head_commit_hash != capture.base_materialized_head ||
-            stored_state.materialized_transaction_chain_hash !=
-                capture.base_materialized_transaction_chain_hash) {
-          SetError(error, "candidate publication base no longer matches materialized history");
-          result.error = error != nullptr ? *error : "stale candidate publication";
-          return result;
-        }
-
-        if (capture.journal_records.empty()) {
-          if (capture.base_working_head != prior_head ||
-              capture.base_working_transaction_chain_hash != prior_chain) {
-            SetError(error, "candidate publication working base disagrees with materialized history");
-            result.error = error != nullptr ? *error : "candidate working base mismatch";
-            return result;
-          }
-        } else {
-          auto candidate_folded = *stored_graph;
-          auto fold_result =
-              EditorMiniGitJournalFold::Fold(candidate_folded, capture.journal_records, error);
-          if (!fold_result.accepted) {
-            result.error = fold_result.error;
-            return result;
-          }
-          const auto folded_head = candidate_folded.GetActiveVersionRef().head_commit_hash;
-          const auto folded_chain = candidate_folded.ChainHashForHead(folded_head);
-          if (folded_head != capture.base_working_head ||
-              folded_chain != capture.base_working_transaction_chain_hash) {
-            SetError(error, "candidate publication journal fold does not match its working base");
-            result.error = error != nullptr ? *error : "candidate journal fold mismatch";
-            return result;
-          }
-        }
-        head_moved = prior_head != capture.working_head || prior_chain != capture.transaction_chain_hash ||
-                     stored_state.active_version_id != capture.version_id;
-        auto write_result = writer_->Write(capture.materialization, error);
-        if (!write_result.accepted) {
-          result.error = write_result.error;
-          return result;
-        }
-      } else if (capture.journal_records.empty()) {
+      if (capture.journal_records.empty()) {
         // Saving with no journal changes succeeds without moving the Version head.
         if (prior_head != capture.working_head || prior_chain != capture.transaction_chain_hash) {
           SetError(error,
