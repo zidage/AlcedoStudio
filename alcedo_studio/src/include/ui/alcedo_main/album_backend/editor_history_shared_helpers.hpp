@@ -94,7 +94,9 @@ auto ApplyHistoryCommitToSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapsh
                                   const alcedo::EditCommit& commit, bool use_after_value,
                                   std::string* error) -> bool;
 
-/// Apply all traversed commits from a prepared head move to a candidate snapshot.
+/// Pure history projection: apply all traversed commits from a prepared head
+/// move onto a snapshot copy. Production mutation paths use `SnapshotAtHead` +
+/// live pipeline install instead; this helper remains for recovery/tests.
 auto ApplyPreparedHeadMoveToSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
                                      const alcedo::CommitGraph& graph,
                                      const alcedo::MiniGitPreparedHeadMove& prepared,

@@ -51,18 +51,6 @@ struct EditorMiniGitSaveCapture {
   /// when journal_records is empty; both set when non-empty.
   std::optional<std::uint64_t>      first_journal_sequence;
   std::optional<std::uint64_t>      last_journal_sequence;
-  /// True when this capture is the final publication of a staged Paste or
-  /// Merge candidate. The journal records still describe the current working
-  /// prefix, while materialization contains the candidate graph that must be
-  /// written in the same DuckDB transaction.
-  bool                              candidate_publication = false;
-  /// Working state and durable tuple observed before the candidate was built.
-  /// Materialization rejects a stale candidate before writing anything.
-  version_ref_id_t                  base_active_version_id{};
-  head_commit_hash_t                base_working_head = std::nullopt;
-  transaction_chain_hash_t          base_working_transaction_chain_hash{};
-  head_commit_hash_t                base_materialized_head = std::nullopt;
-  transaction_chain_hash_t           base_materialized_transaction_chain_hash{};
 
   /// @return true when first/last form a non-empty inclusive sequence range.
   [[nodiscard]] auto has_journal_range() const -> bool {

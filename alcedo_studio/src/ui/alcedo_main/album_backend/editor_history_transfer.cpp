@@ -86,6 +86,9 @@ void RestoreLivePastePrior(HistoryWorkingState& state, const LivePastePriorState
   state.recovered_head = prior.recovered;
 }
 
+/// Append paste package entries to the live CommitGraph + WAL only. Do not
+/// mutate committed_snapshot here; the caller regenerates it from history after
+/// applying the package to the live pipeline.
 auto AppendPackageEntriesToLiveHistory(HistoryWorkingState& state,
                                        const alcedo::AdjustmentTransferPackage& package,
                                        std::string* error) -> bool {
@@ -103,10 +106,6 @@ auto AppendPackageEntriesToLiveHistory(HistoryWorkingState& state,
     payload.before_enabled = false;
     payload.after_value = entry.params_;
     payload.after_enabled = entry.enabled_;
-    auto candidate = state.committed_snapshot;
-    if (!ApplyCommittedPayloadToSnapshot(&candidate, payload, true, error)) {
-      return false;
-    }
     const auto prepared = state.history->PrepareAppendEdit(std::move(payload));
     if (!prepared.ready) {
       return SetError(error, prepared.error.empty() ? "Paste edit prepare failed" : prepared.error);
@@ -115,7 +114,6 @@ auto AppendPackageEntriesToLiveHistory(HistoryWorkingState& state,
     if (!appended.committed) {
       return SetError(error, appended.error.empty() ? "Paste WAL append failed" : appended.error);
     }
-    state.committed_snapshot = std::move(candidate);
   }
   return true;
 }

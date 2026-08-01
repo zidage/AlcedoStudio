@@ -1,7 +1,7 @@
 # Editor Single Live Pipeline + WAL + Checkpoint Simplification Plan
 
 Date: 2026-07-31  
-Status: WU1–WU6 complete; WU7 remaining (grill evidence package)  
+Status: WU1–WU6 complete; residual foot-binding clearance complete (2026-08-01); WU7 remaining (grill evidence package)  
 Branch context: follows interim operator merge-policy work on `feature/pre_v28_fix`
 
 Related documents (historical; this plan **supersedes** their transfer-candidate / dual-snapshot
@@ -714,7 +714,40 @@ Suite totals: MiniGit 21/21; HistoryPort 35/35; CQ baseline 16/16; CQ5 5/5; Pipe
 | `adjustment_transfer_service.cpp` | ~858 (snapshot InitiateMerge + MakeMergePolicyProbe removed) |
 | `editor_session_ports.hpp` | ~463 |
 
-**Residual gaps:** none for WU1–WU6 acceptance. WU7 grill evidence package (matrix CSV + paste/merge call-chain doc under `build/tmp/`) remains.
+**Residual gaps (closed 2026-08-01 residual clearance):** service-level `InitiateMerge`/`CompleteMerge`/`CancelMerge` (temp Version path); `candidate_publication` + base_* fields on `EditorMiniGitSaveCapture`; head-move/edit snapshot dual-write via `ApplyPreparedHeadMoveToSnapshot` / mid-paste `ApplyCommittedPayloadToSnapshot`.
+
+### Residual clearance — delete remaining foot-binding (2026-08-01)
+
+**Status:** complete
+
+**Deleted / collapsed:**
+
+| Residual | Action |
+| --- | --- |
+| `AdjustmentTransferService::InitiateMerge` / `CompleteMerge` / `CancelMerge` | Removed from API + impl; tests use live op policy + manual two-parent merge commit shape |
+| `EditorMiniGitSaveCapture::candidate_publication` + `base_*` | Removed; materializer only has empty-journal / journal-fold paths |
+| Ordinary edit / undo / redo / head-move / discard snapshot machine | Live pipeline first (or head publish then one derive); `committed_snapshot` regenerated only via `SnapshotAtHead` |
+| Paste mid-loop snapshot upsert | WAL append only; one `SnapshotAtHead` after live `Apply` |
+
+**Primary success call chain (post-clearance):**
+
+```text
+CommitAdjustment
+  -> ApplyEditorAdjustmentOperatorState (live)
+  -> PublishPreparedEdit (WAL)
+  -> SnapshotAtHead -> committed_snapshot (derived only)
+
+Undo / Redo / MoveHeadToCommit
+  -> SnapshotAtHead(target_head) -> ApplyEditorAdjustmentSnapshot (live)
+  -> PublishPreparedHeadMove
+  -> committed_snapshot = derived
+
+CaptureSaveCheckpoint
+  -> MakePipelineParamsFromSnapshot(committed_snapshot)  // history projection, not dual edit target
+  -> no candidate_publication fields
+```
+
+**Grep ban additions:** `InitiateMerge(`, `candidate_publication`, `base_active_version_id` must be absent from production sources.
 
 ### Work unit 7 — Grill evidence package
 

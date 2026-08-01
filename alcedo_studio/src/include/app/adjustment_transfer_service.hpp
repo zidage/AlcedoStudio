@@ -78,30 +78,9 @@ class AdjustmentTransferService final {
                                                        std::string version_display_name)
       -> AdjustmentPasteResult;
 
-  /// Build an incoming root-relative branch and detect per-field conflicts against the live
-  /// pipeline operators (`DetectMergeConflict` on real op instances). Incoming commits are
-  /// inserted into the graph and a temporary Version ref is created for ancestry; production
-  /// editor merge uses `BeginLiveMerge` / `CompleteLiveMerge` instead and does not call this.
-  /// @return Preview with `has_conflicts` when the UI must resolve fields before CompleteMerge.
-  [[nodiscard]] static auto InitiateMerge(CommitGraph& graph, PipelineMgmtService& pipeline_service,
-                                          sl_element_id_t                  element_id,
-                                          const AdjustmentTransferPackage& package,
-                                          std::string incoming_version_display_name)
-      -> AdjustmentMergePreview;
-
-  /// Complete a merge after the UI has provided resolutions for every conflicting field.
-  /// Resolves params via live pipeline operators (`MergeParams`), creates a two-parent merge
-  /// commit, advances the active Version, and removes the temporary incoming Version ref.
-  [[nodiscard]] static auto CompleteMerge(CommitGraph& graph, PipelineMgmtService& pipeline_service,
-                                          sl_element_id_t                  element_id,
-                                          const AdjustmentMergePreview&                 preview,
-                                          const std::vector<AdjustmentMergeResolution>& resolutions)
-      -> AdjustmentMergeResult;
-
-  /// Discard the incoming branch created by InitiateMerge. No merge commit is created and the
-  /// active Version is not moved. The incoming commits remain in the graph as unreachable
-  /// objects that will be collected on clean project exit.
-  static void CancelMerge(CommitGraph& graph, AdjustmentMergePreview& preview);
+  // Editor merge lives on the session live path only:
+  // `EditorHistoryTransfer::BeginLiveMerge` / `CompleteLiveMerge`. Do not reintroduce a
+  // service-level InitiateMerge that stages temporary Version refs or shadow graphs.
 };
 
 }  // namespace alcedo
