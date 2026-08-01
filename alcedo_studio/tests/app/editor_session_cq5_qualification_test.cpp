@@ -134,7 +134,8 @@ TEST_F(EditorSessionCq5QualificationTest,
   journal_->async_commit               = false;
   checkpoint_store_->async_materialize = false;
 
-  const auto render_count_before      = scheduler_->scheduled_.size();
+  const auto accepted_render_count_before =
+      runtime_->coordinator->diagnostics().accepted_count;
   const auto materialize_count_before = checkpoint_store_->materialize_count;
   const auto result =
       service_->PasteAdjustments(MakeExposureTransferPackage(0.5), "Pasted Version");
@@ -143,7 +144,8 @@ TEST_F(EditorSessionCq5QualificationTest,
 
   EXPECT_EQ(checkpoint_store_->materialize_count, materialize_count_before + 1);
   EXPECT_EQ(history_->transfer_publication_count, 0);
-  EXPECT_EQ(scheduler_->scheduled_.size(), render_count_before + 1);
+  EXPECT_EQ(runtime_->coordinator->diagnostics().accepted_count,
+            accepted_render_count_before + 1);
   ASSERT_EQ(events.size(), 2u);
   EXPECT_EQ(events[0], "version_created");
   EXPECT_EQ(events[1], "save_started");
@@ -234,8 +236,9 @@ TEST(EditorSessionCq5StaticApiBan,
 
 TEST(EditorSessionCq5StaticApiBan, HistoryTransferOmitsOneShotPasteMergeWrappers) {
   namespace fs = std::filesystem;
+  const fs::path alcedo_root = fs::path(__FILE__).parent_path().parent_path().parent_path();
   const fs::path transfer_hpp =
-      fs::path("alcedo_studio/src/include/ui/alcedo_main/album_backend/editor_history_transfer.hpp");
+      alcedo_root / "src/include/ui/alcedo_main/album_backend/editor_history_transfer.hpp";
   ASSERT_TRUE(fs::exists(transfer_hpp));
   std::ifstream in(transfer_hpp);
   std::string   contents((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
