@@ -35,17 +35,18 @@ Item {
         return text
     }
 
+    // Borderless card shell (matches ThumbnailGridView delegate): the card has no
+    // outline of its own; the thumbnailFrame is the only frame, and selection is
+    // carried by the fill plus the frame's ink border.
     Rectangle {
         id: tile
         objectName: "editorFilmstripTileSurface"
         anchors.fill: parent
-        radius: appTheme.controlRadiusSmall
+        radius: appTheme.panelRadius
         color: root.selected
                ? appTheme.editorListSelectedFillColor
                : (root.hovered ? appTheme.buttonHoveredFillColor : appTheme.cardSurfaceColor)
-        border.width: root.selected ? 2 : 1
-        border.color: root.selected
-                     ? appTheme.editorListSelectedInkColor : appTheme.cardBorderColor
+        Behavior on color { ColorAnimation { duration: 120 } }
 
         Column {
             id: tileContent
