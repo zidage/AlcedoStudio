@@ -525,6 +525,10 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
           return;
         }
         if (task.input_) {
+          // render_lock_ is sole live-pipeline ownership for the full task:
+          // configure + Apply + present handoff. History / structural rebuild
+          // queues on this lock (owner thread pumps events while waiting so
+          // present slot waits can complete without dropping ownership).
           std::unique_lock<std::mutex> render_lock;
           auto&                        render_desc      = task.options_.render_desc_;
           IFrameSink*                  saved_frame_sink = nullptr;

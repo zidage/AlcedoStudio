@@ -440,6 +440,7 @@ void CPUPipelineExecutor::SetExecutionStages(IFrameSink* frame_sink) {
 }
 
 void CPUPipelineExecutor::ResetExecutionStages() {
+  // Caller must hold render_lock_ (sole live-pipeline ownership).
   frame_sink_ = nullptr;
   for (auto& stage : stages_) {
     stage.ResetDependents();
@@ -466,6 +467,7 @@ auto CPUPipelineExecutor::ExportPipelineParams() const -> nlohmann::json {
 }
 
 void CPUPipelineExecutor::ImportPipelineParams(const nlohmann::json& j) {
+  // Caller must hold render_lock_ (sole live-pipeline ownership).
   ResetExecutionStages();
   ResetStages();
   SetTemplateParams();

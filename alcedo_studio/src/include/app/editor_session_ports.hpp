@@ -441,6 +441,11 @@ class IEditorRenderSubmitPort {
   virtual void CancelSessionAndWait(std::uint64_t session_generation) {
     CancelSession(session_generation);
   }
+  /// Wait until pending/in-flight renders for this image-load request finish.
+  /// Does not cancel — used when the next owner-thread op (history rebuild)
+  /// should simply queue behind the current frame. Default is a no-op for
+  /// fakes that never run real workers.
+  virtual void WaitForSessionIdle(std::uint64_t /*session_generation*/) {}
   /// Stamps the active image-load request and cancels pending/in-flight work for
   /// other image-load requests.
   virtual void SetActiveImageLoadRequest(std::uint64_t image_load_request_id) = 0;

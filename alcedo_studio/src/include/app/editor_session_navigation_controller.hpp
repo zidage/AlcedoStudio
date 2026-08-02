@@ -65,6 +65,10 @@ struct EditorSessionNavigationState {
   /// pending_action once the running save completes and the prior image is
   /// acquired. Only SwitchImage selections queue here.
   std::optional<PendingEditorAction> pending_next_target;
+  /// History needs live-pipeline ownership (render_lock_) after save, but the
+  /// GUI must not block on render. When the worker still owns the pipeline,
+  /// stash the Version op here and finish it on the next render-idle edge.
+  std::optional<PendingEditorAction> deferred_pipeline_ownership;
 };
 
 /// Outcome of a navigation request. The facade uses this to publish the
@@ -188,6 +192,11 @@ class EditorSessionNavigationController final {
   /// Phase 7A: cancel the pending navigation and resume Interactive on the
   /// retained image. No data loss: the image stays published.
   void               CancelPendingNavigation();
+
+  /// Resume a Version op that was deferred because render still owned the live
+  /// pipeline. Called from the owner thread when the render queue goes idle.
+  /// GUI never waits for render; history simply runs when ownership is free.
+  void               TryResumeDeferredPipelineOwnership();
 
  private:
   /// Seal the current image: finalize edit, capture checkpoint, start save.

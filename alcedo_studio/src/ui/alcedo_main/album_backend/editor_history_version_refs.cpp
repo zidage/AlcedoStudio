@@ -63,7 +63,7 @@ auto ApplyNamedRefHeadToLivePipeline(HistoryWorkingState& state,
       !state.pipeline_guard->commit_graph_) {
     return true;
   }
-  std::unique_lock<std::mutex> render_lock(state.pipeline_guard->pipeline_->GetRenderLock());
+  auto render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
   return alcedo::ApplyVersionHeadToLivePipeline(*state.pipeline_guard->pipeline_,
                                                 *state.pipeline_guard->commit_graph_, head, error);
 }

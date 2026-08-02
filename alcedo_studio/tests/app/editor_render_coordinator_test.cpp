@@ -180,6 +180,28 @@ TEST_F(EditorRenderCoordinatorTest, CancelSessionAndWaitJoinsTheMatchingSchedule
   EXPECT_FALSE(coordinator_->has_inflight());
 }
 
+TEST_F(EditorRenderCoordinatorTest, WaitForSessionIdleDropsPendingButDoesNotCancelInflight) {
+  // Interactive is in-flight; Quality sits pending. History queues behind the
+  // current frame: pending is superseded, inflight is not cancelled.
+  coordinator_->Submit(MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
+  coordinator_->Submit(MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::High));
+  EXPECT_TRUE(coordinator_->has_inflight());
+  EXPECT_EQ(coordinator_->pending_count(), 1u);
+  const auto inflight_id = coordinator_->last_scheduled_request_id();
+
+  coordinator_->WaitForSessionIdle(1);
+
+  EXPECT_TRUE(scheduler_->cancelled_.empty());
+  ASSERT_FALSE(scheduler_->waited_sessions_.empty());
+  EXPECT_EQ(scheduler_->waited_sessions_.front(), 1u);
+  EXPECT_TRUE(coordinator_->has_inflight());
+  EXPECT_EQ(coordinator_->pending_count(), 0u);
+
+  coordinator_->NotifySchedulerCompleted(inflight_id, true);
+  EXPECT_FALSE(coordinator_->has_inflight());
+  EXPECT_EQ(coordinator_->pending_count(), 0u);
+}
+
 TEST_F(EditorRenderCoordinatorTest, CancellationTokenPreventsSchedule) {
   coordinator_->Submit(MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
   auto intent         = MakeIntent(EditorRenderQuality::Quality, EditorRenderPriority::High);

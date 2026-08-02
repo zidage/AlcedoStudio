@@ -4,7 +4,10 @@
 
 #include "ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp"
 
+#include <QCoreApplication>
+#include <QEventLoop>
 #include <QString>
+#include <QThread>
 
 #include <algorithm>
 #include <chrono>
@@ -217,13 +220,33 @@ void EditorSessionRenderSchedulerPort::Cancel(std::uint64_t scheduler_job_id) {
 }
 
 void EditorSessionRenderSchedulerPort::WaitForSessionIdle(std::uint64_t session_epoch) {
-  std::unique_lock lock(mutex_);
-  jobs_changed_.wait(lock, [&] {
+  // Owner/GUI thread may call this while a worker is in present handoff. Present
+  // posts QueuedConnection updates to this thread; a bare condvar wait would
+  // starve those events. Timed wait + processEvents lets slot create/recycle
+  // complete without cancelling the frame.
+  const auto idle = [this, session_epoch] {
     const auto belongs_to_session = [session_epoch](const std::optional<Job>& job) {
       return job && job->request.intent.image_load_request_id.value == session_epoch;
     };
     return !belongs_to_session(queued_job_) && !belongs_to_session(running_job_);
-  });
+  };
+
+  for (;;) {
+    {
+      std::unique_lock lock(mutex_);
+      if (idle()) {
+        return;
+      }
+      jobs_changed_.wait_for(lock, std::chrono::milliseconds(16), idle);
+      if (idle()) {
+        return;
+      }
+    }
+    if (QCoreApplication::instance() != nullptr &&
+        QThread::currentThread() == QCoreApplication::instance()->thread()) {
+      QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 16);
+    }
+  }
 }
 
 auto EditorSessionRenderSchedulerPort::last_scheduled() const

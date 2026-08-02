@@ -16,6 +16,15 @@
 
 namespace alcedo::ui {
 
+auto LockLivePipeline(alcedo::CPUPipelineExecutor& executor) -> std::unique_lock<std::mutex> {
+  // Sole live-pipeline ownership. History waits here for render to release the
+  // lock after the full frame (configure + Apply + present). Do not call this
+  // from the GUI thread while that thread is still required for present — the
+  // session defers Version ops until render is idle so the GUI never blocks on
+  // render, only history queues for ownership.
+  return std::unique_lock<std::mutex>(executor.GetRenderLock());
+}
+
 const std::array<std::string_view, 22> kEditorSnapshotFields = {
     "exposure",   "contrast",   "white",     "black",      "shadows",     "highlights",
     "curve",      "saturation", "vibrance",  "tint",       "hls",         "color_wheel",

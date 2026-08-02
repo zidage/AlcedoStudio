@@ -45,6 +45,10 @@ struct PipelineGuard {
   std::shared_ptr<CPUPipelineExecutor> pipeline_;
   sl_element_id_t                      id_;
   bool                                 dirty_     = false;
+  /// Cache pin only: LoadPipeline / SavePipeline refcount so LRU eviction and
+  /// "unpinned → re-init stages" do not drop a live editor/export guard.
+  /// Live-pipeline *mutation* ownership is CPUPipelineExecutor::render_lock_
+  /// (held for the full render task including present); pin_count_ is not that.
   bool                                 pinned_    = false;
   size_t                               pin_count_ = 0;
 

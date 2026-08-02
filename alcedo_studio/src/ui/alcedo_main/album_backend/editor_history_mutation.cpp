@@ -47,8 +47,9 @@ auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState& state,
   nlohmann::json prior_pipeline;
   if (state.pipeline_guard && state.pipeline_guard->pipeline_) {
     try {
-      std::unique_lock<std::mutex> render_lock(state.pipeline_guard->pipeline_->GetRenderLock());
-      prior_pipeline = state.pipeline_guard->pipeline_->ExportPipelineParams();
+      // Structural head move: wait out Apply (incl. present) before locking.
+      auto render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
+      prior_pipeline   = state.pipeline_guard->pipeline_->ExportPipelineParams();
     } catch (const std::exception& ex) {
       if (error) *error = ex.what();
       return false;
@@ -64,7 +65,7 @@ auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState& state,
   }
 
   if (state.pipeline_guard && state.pipeline_guard->pipeline_ && state.pipeline_guard->commit_graph_) {
-    std::unique_lock<std::mutex> render_lock(state.pipeline_guard->pipeline_->GetRenderLock());
+    auto render_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
     if (!alcedo::ApplyVersionHeadToLivePipeline(*state.pipeline_guard->pipeline_,
                                                 *state.pipeline_guard->commit_graph_,
                                                 prepared.target_head, error)) {
@@ -72,7 +73,7 @@ auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState& state,
       std::string abandon_error;
       (void)state.history->AbandonPublishedHeadMove(prepared, prior_selection, &abandon_error);
       try {
-        std::unique_lock<std::mutex> restore_lock(state.pipeline_guard->pipeline_->GetRenderLock());
+        auto restore_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
         state.pipeline_guard->pipeline_->ImportPipelineParams(prior_pipeline);
         state.pipeline_guard->pipeline_->SetExecutionStages();
       } catch (...) {
@@ -86,7 +87,7 @@ auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState& state,
     (void)state.history->AbandonPublishedHeadMove(prepared, prior_selection, &abandon_error);
     try {
       if (state.pipeline_guard && state.pipeline_guard->pipeline_) {
-        std::unique_lock<std::mutex> restore_lock(state.pipeline_guard->pipeline_->GetRenderLock());
+        auto restore_lock = LockLivePipeline(*state.pipeline_guard->pipeline_);
         state.pipeline_guard->pipeline_->ImportPipelineParams(prior_pipeline);
         state.pipeline_guard->pipeline_->SetExecutionStages();
       }
@@ -314,7 +315,7 @@ auto EditorHistoryMutation::DiscardUnmaterializedChanges(
   }
 
   if (state->pipeline_guard->pipeline_) {
-    std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
+    auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
     if (!alcedo::ApplyVersionHeadToLivePipeline(*state->pipeline_guard->pipeline_,
                                                 *state->pipeline_guard->commit_graph_,
                                                 state->history->working_head(), error)) {
@@ -378,8 +379,10 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
   nlohmann::json prior_pipeline;
   if (state->pipeline_guard->pipeline_) {
     try {
-      std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
-      prior_pipeline = state->pipeline_guard->pipeline_->ExportPipelineParams();
+      // Sole ownership: queue on render_lock until the current frame (incl.
+      // present) releases the live pipeline, then rebuild under that lock.
+      auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
+      prior_pipeline   = state->pipeline_guard->pipeline_->ExportPipelineParams();
       if (!alcedo::ApplyVersionHeadToLivePipeline(
               *state->pipeline_guard->pipeline_, graph,
               graph.GetActiveVersionRef().head_commit_hash, error)) {
@@ -398,7 +401,7 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
   if (!RefreshCommittedSnapshotFromLive(*state, error)) {
     try {
       if (state->pipeline_guard->pipeline_) {
-        std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
+        auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
         state->pipeline_guard->pipeline_->ImportPipelineParams(prior_pipeline);
         state->pipeline_guard->pipeline_->SetExecutionStages();
       }
@@ -415,7 +418,7 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
                                                      &persistence_error)) {
       try {
         if (state->pipeline_guard->pipeline_) {
-          std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
+          auto render_lock = LockLivePipeline(*state->pipeline_guard->pipeline_);
           state->pipeline_guard->pipeline_->ImportPipelineParams(prior_pipeline);
           state->pipeline_guard->pipeline_->SetExecutionStages();
         }
