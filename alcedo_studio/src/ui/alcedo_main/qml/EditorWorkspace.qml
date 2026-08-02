@@ -181,7 +181,6 @@ Item {
                             if (root.editorSession) {
                                 root.editorSession.bindInteractionController(editorInteraction)
                             }
-                            viewportSlot.requestImageGeometrySync()
                         }
                         Component.onDestruction: {
                             if (root.editorSession) {
@@ -202,17 +201,13 @@ Item {
                         // resetPresentationStateForNewImage before the first frame.
                         onTargetSizeRequested: function (w, h) {
                             if (w > 0 && h > 0) {
-                                // The source-size query can race the first
-                                // pipeline frame. The render-reference frame
-                                // still carries the correct aspect, so use it
-                                // as a temporary image-size fallback and let
-                                // the metadata query replace it when ready.
+                                // The crop operator snapshot normally provides source size.
+                                // Keep the first full frame as a fallback for legacy pipelines.
                                 if (editorInteraction.imageWidth <= 0
                                         || editorInteraction.imageHeight <= 0) {
                                     editorInteraction.setImageSize(w, h)
                                 }
                                 editorInteraction.setRenderReferenceSize(w, h)
-                                viewportSlot.requestImageGeometrySync()
                             }
                         }
                     }
@@ -561,60 +556,11 @@ Item {
                             editorInteraction.resetPresentationStateForNewImage()
                             editorInteraction.setImageSize(0, 0)
                             editorInteraction.setRenderReferenceSize(0, 0)
-                            imageGeometryRetryTimer.stop()
                             return
                         }
                         // Drop previous image crop/ROI/mode before applying new geometry.
                         editorInteraction.resetPresentationStateForNewImage()
-                        requestImageGeometrySync()
-                    }
-
-                    function syncImageGeometry() {
-                        if (!root.hasImage) {
-                            editorInteraction.setImageSize(0, 0)
-                            editorInteraction.setRenderReferenceSize(0, 0)
-                            return false
-                        }
-                        if (!appModules || !appModules.images) {
-                            return false
-                        }
-                        var size = appModules.images.GetImagePixelSize(
-                                    root.focusedElementId, root.focusedImageId)
-                        if (size && size.success && size.width > 0 && size.height > 0) {
-                            editorInteraction.setImageSize(size.width, size.height)
-                            // Until a pipeline frame arrives (TargetSizeRequested), use
-                            // source size so crop/zoom math is not zero-sized.
-                            if (editorInteraction.renderReferenceWidth <= 0 ||
-                                    editorInteraction.renderReferenceHeight <= 0) {
-                                editorInteraction.setRenderReferenceSize(size.width, size.height)
-                            }
-                            return true
-                        }
-                        return false
-                    }
-
-                    function requestImageGeometrySync() {
-                        viewportSlot.imageGeometryRetryCount = 0
-                        if (syncImageGeometry() || !root.hasImage) {
-                            imageGeometryRetryTimer.stop()
-                            return
-                        }
-                        imageGeometryRetryTimer.start()
-                    }
-
-                    property int imageGeometryRetryCount: 0
-                    Timer {
-                        id: imageGeometryRetryTimer
-                        interval: 100
-                        repeat: true
-                        onTriggered: {
-                            if (viewportSlot.syncImageGeometry() || !root.hasImage
-                                    || viewportSlot.imageGeometryRetryCount >= 50) {
-                                stop()
-                                return
-                            }
-                            viewportSlot.imageGeometryRetryCount += 1
-                        }
+                        editorInteraction.setImageSize(0, 0)
                     }
 
                     function pushViewToViewport() {
@@ -695,7 +641,6 @@ Item {
                         refreshTrackedScreen()
                         syncViewportMetrics()
                         ensurePresentationBinding()
-                        requestImageGeometrySync()
                     }
                     onWidthChanged: syncViewportMetrics()
                     onHeightChanged: syncViewportMetrics()

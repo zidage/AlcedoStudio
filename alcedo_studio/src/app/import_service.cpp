@@ -34,6 +34,17 @@ auto IsRootImportDestination(const image_path_t& dest) -> bool {
 void AssembleImportPipelineParams(CPUPipelineExecutor& exec, const Image& image) {
   auto& global_params = exec.GetGlobalParams();
 
+  auto& geometry_stage = exec.GetStage(PipelineStageName::Geometry_Adjustment);
+  nlohmann::json crop_params = pipeline_defaults::MakeDefaultCropRotateParams();
+  if (const auto crop_entry = geometry_stage.GetOperator(OperatorType::CROP_ROTATE);
+      crop_entry.has_value() && crop_entry.value() && crop_entry.value()->op_) {
+    crop_params = crop_entry.value()->op_->GetParams();
+  }
+  auto& source_size = crop_params["crop_rotate"]["source_size"];
+  source_size["width"]  = image.exif_display_.width_;
+  source_size["height"] = image.exif_display_.height_;
+  geometry_stage.SetOperator(OperatorType::CROP_ROTATE, crop_params, global_params);
+
   if (image.HasRawColorContext()) {
     const auto& ctx = image.GetRawColorContext();
     auto&       loading_stage = exec.GetStage(PipelineStageName::Image_Loading);

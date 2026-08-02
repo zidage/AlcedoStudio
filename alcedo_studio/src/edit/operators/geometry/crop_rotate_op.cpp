@@ -550,7 +550,8 @@ auto CropRotateOp::GetParams() const -> nlohmann::json {
          {{"x", crop_rect_.x_}, {"y", crop_rect_.y_}, {"w", crop_rect_.w_}, {"h", crop_rect_.h_}}},
         {"expand_to_fit", expand_to_fit_},
         {"aspect_ratio_preset", aspect_ratio_preset_},
-        {"aspect_ratio", {{"width", aspect_ratio_width_}, {"height", aspect_ratio_height_}}}}}};
+        {"aspect_ratio", {{"width", aspect_ratio_width_}, {"height", aspect_ratio_height_}}},
+        {"source_size", {{"width", source_width_}, {"height", source_height_}}}}}};
 }
 
 void CropRotateOp::SetParams(const nlohmann::json& params) {
@@ -562,6 +563,8 @@ void CropRotateOp::SetParams(const nlohmann::json& params) {
   aspect_ratio_preset_ = "free";
   aspect_ratio_width_  = 1.0f;
   aspect_ratio_height_ = 1.0f;
+  source_width_        = 0;
+  source_height_       = 0;
 
   if (!params.contains(script_name_) || !params[script_name_].is_object()) {
     return;
@@ -586,6 +589,11 @@ void CropRotateOp::SetParams(const nlohmann::json& params) {
     const auto& aspect   = inner["aspect_ratio"];
     aspect_ratio_width_  = aspect.value("width", aspect_ratio_width_);
     aspect_ratio_height_ = aspect.value("height", aspect_ratio_height_);
+  }
+  if (inner.contains("source_size") && inner["source_size"].is_object()) {
+    const auto& source = inner["source_size"];
+    source_width_      = source.value("width", source_width_);
+    source_height_     = source.value("height", source_height_);
   }
 
   angle_degrees_ = NormalizeAngleDegrees(angle_degrees_);

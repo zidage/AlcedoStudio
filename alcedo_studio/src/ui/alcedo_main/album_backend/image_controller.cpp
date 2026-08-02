@@ -1028,65 +1028,6 @@ auto ImageController::GetImageDetails(uint elementId, uint imageId) -> QVariantM
   }
 }
 
-auto ImageController::GetImagePixelSize(uint elementId, uint imageId) -> QVariantMap {
-  QVariantMap result{{"success", false},
-                     {"width", 0},
-                     {"height", 0},
-                     {"message", QString{}}};
-
-  auto& ph = project_->handler();
-  if (ph.project_loading() || !ph.project()) {
-    return result;
-  }
-
-  image_id_t  resolved_image_id   = static_cast<image_id_t>(imageId);
-  const auto  resolved_element_id = static_cast<sl_element_id_t>(elementId);
-  const auto* item =
-      resolved_element_id != 0 ? library_->FindAlbumItem(resolved_element_id) : nullptr;
-  if (resolved_image_id == 0 && item) {
-    resolved_image_id = item->image_id;
-  }
-  if (resolved_image_id == 0) {
-    return result;
-  }
-
-  auto image_pool = ph.project()->GetImagePoolService();
-  if (!image_pool) {
-    return result;
-  }
-
-  try {
-    return image_pool->Read<QVariantMap>(
-        resolved_image_id, [](const std::shared_ptr<Image>& image) {
-          QVariantMap out{{"success", false}, {"width", 0}, {"height", 0}, {"message", QString{}}};
-          if (!image) {
-            return out;
-          }
-          const json metadata = ParseExifDisplayJson(image);
-          int width = static_cast<int>(JsonUnsignedOrZero(metadata, "ImageWidth"));
-          int height = static_cast<int>(JsonUnsignedOrZero(metadata, "ImageHeight"));
-          // Prefer buffer dimensions when EXIF is missing (common for some RAWs until decode).
-          if ((width <= 0 || height <= 0) && image->has_full_img_.load() &&
-              image->image_data_.cpu_data_valid_) {
-            const cv::Mat& cpu = image->image_data_.GetCPUData();
-            if (!cpu.empty()) {
-              width = cpu.cols;
-              height = cpu.rows;
-            }
-          }
-          if (width <= 0 || height <= 0) {
-            return out;
-          }
-          out["success"] = true;
-          out["width"] = width;
-          out["height"] = height;
-          return out;
-        });
-  } catch (...) {
-    return result;
-  }
-}
-
 auto ImageController::GetFocusedImageInspection(uint elementId, uint imageId) -> QVariantMap {
   QVariantMap result{{"success", false},
                      {"message", QString{}},

@@ -447,8 +447,8 @@ __kernel void edit_pipeline_hs_apply_adjusted_l_from_reference_rgba32f(
     return;
   }
 
-  const float reference_width = (float)max(params->render_roi_reference_width_, width);
-  const float reference_height = (float)max(params->render_roi_reference_height_, height);
+  const float reference_width = (float)max(params->render_roi_reference_width_, 1);
+  const float reference_height = (float)max(params->render_roi_reference_height_, 1);
   const float roi_origin_x =
       (params->render_roi_enabled_ != 0u) ? (float)params->render_roi_x_ : 0.0f;
   const float roi_origin_y =

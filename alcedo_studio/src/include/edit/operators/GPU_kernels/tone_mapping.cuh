@@ -527,9 +527,9 @@ __global__ void HsApplyAdjustedDeltaLFromReferenceKernel(
   if (x >= width || y >= height) return;
 
   const float reference_width =
-      static_cast<float>(max(params.render_roi_reference_width_, width));
+      static_cast<float>(max(params.render_roi_reference_width_, 1));
   const float reference_height =
-      static_cast<float>(max(params.render_roi_reference_height_, height));
+      static_cast<float>(max(params.render_roi_reference_height_, 1));
   const float roi_origin_x =
       params.render_roi_enabled_ ? static_cast<float>(params.render_roi_x_) : 0.0f;
   const float roi_origin_y =

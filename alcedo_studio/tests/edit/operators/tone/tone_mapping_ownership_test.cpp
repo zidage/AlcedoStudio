@@ -65,3 +65,26 @@ TEST(ToneMappingOwnershipTest, MetalLocalToneHelpersLiveInToneMappingShader) {
   ExpectContains(tone_mapping, "metal_hs_apply_reference_curve");
   ExpectContains(tone_mapping, "GPU_HighlightShadowLocalToneOpKernel");
 }
+
+TEST(ToneMappingOwnershipTest, RoiMaskMappingKeepsReferenceExtentWhenPatchIsLarger) {
+  const auto cuda =
+      ReadSourceFile(SourcePath("include/edit/operators/GPU_kernels/tone_mapping.cuh"));
+  const auto opencl =
+      ReadSourceFile(SourcePath("edit/pipeline/opencl_shader/edit_pipeline_detail.cl"));
+  const auto metal = ReadSourceFile(SourcePath("edit/pipeline/metal_shader/fused_pipeline.metal"));
+
+  ExpectContains(cuda, "max(params.render_roi_reference_width_, 1)");
+  ExpectContains(cuda, "max(params.render_roi_reference_height_, 1)");
+  ExpectNotContains(cuda, "max(params.render_roi_reference_width_, width)");
+  ExpectNotContains(cuda, "max(params.render_roi_reference_height_, height)");
+
+  ExpectContains(opencl, "max(params->render_roi_reference_width_, 1)");
+  ExpectContains(opencl, "max(params->render_roi_reference_height_, 1)");
+  ExpectNotContains(opencl, "max(params->render_roi_reference_width_, width)");
+  ExpectNotContains(opencl, "max(params->render_roi_reference_height_, height)");
+
+  ExpectContains(metal, "max(fused_params.render_roi_reference_width_, 1)");
+  ExpectContains(metal, "max(fused_params.render_roi_reference_height_, 1)");
+  ExpectNotContains(metal, "max(fused_params.render_roi_reference_width_, params.width_)");
+  ExpectNotContains(metal, "max(fused_params.render_roi_reference_height_, params.height_)");
+}

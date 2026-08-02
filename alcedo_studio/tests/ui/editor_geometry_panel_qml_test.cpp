@@ -96,10 +96,20 @@ class FakeGeometryInteraction final : public QObject {
   [[nodiscard]] auto metricAspect() const -> float { return metric_aspect_; }
   [[nodiscard]] auto cropToolEnabled() const -> bool { return crop_tool_enabled_; }
   [[nodiscard]] auto cropOverlayVisible() const -> bool { return crop_overlay_visible_; }
+  [[nodiscard]] auto imageWidth() const -> int { return image_width_; }
+  [[nodiscard]] auto imageHeight() const -> int { return image_height_; }
 
   Q_INVOKABLE void   setMetricAspectForTest(float aspect) {
     metric_aspect_ = aspect;
     emit cropChanged();
+  }
+  Q_INVOKABLE void setImageSize(int width, int height) {
+    image_width_  = width;
+    image_height_ = height;
+    if (width > 0 && height > 0) {
+      metric_aspect_ = static_cast<float>(width) / static_cast<float>(height);
+      emit cropChanged();
+    }
   }
   Q_INVOKABLE void setCropToolEnabled(bool enabled) { crop_tool_enabled_ = enabled; }
   Q_INVOKABLE void setCropOverlayVisible(bool visible) { crop_overlay_visible_ = visible; }
@@ -153,6 +163,8 @@ class FakeGeometryInteraction final : public QObject {
   bool   crop_overlay_visible_        = false;
   bool   view_change_routing_enabled_ = true;
   int    view_change_count_           = 0;
+  int    image_width_                 = 0;
+  int    image_height_                = 0;
 };
 
 auto QmlDirectory() -> QString {
@@ -165,7 +177,8 @@ auto AdjustmentStackUrl() -> QUrl {
 }
 
 auto MakeSnapshot(const QString& preset, double x, double y, double width, double height,
-                  double angle, const QString& maker, const QString& model) -> QVariantMap {
+                  double angle, const QString& maker, const QString& model, int source_width = 6000,
+                  int source_height = 4000) -> QVariantMap {
   QVariantMap cropRect;
   cropRect.insert(QStringLiteral("x"), x);
   cropRect.insert(QStringLiteral("y"), y);
@@ -184,6 +197,9 @@ auto MakeSnapshot(const QString& preset, double x, double y, double width, doubl
   crop.insert(QStringLiteral("expand_to_fit"), false);
   crop.insert(QStringLiteral("aspect_ratio_preset"), preset);
   crop.insert(QStringLiteral("aspect_ratio"), aspect);
+  crop.insert(QStringLiteral("source_size"),
+              QVariantMap{{QStringLiteral("width"), source_width},
+                          {QStringLiteral("height"), source_height}});
   QVariantMap cropWrapper;
   cropWrapper.insert(QStringLiteral("crop_rotate"), crop);
 
@@ -352,6 +368,10 @@ TEST(EditorGeometryPanelQmlTest, SnapshotProjectsCropLensAndDoesNotSubmit) {
   EXPECT_NEAR(wModel->property("value").toDouble(), 0.7, 1e-6);
   EXPECT_DOUBLE_EQ(rotation->property("value").toDouble(), 12.5);
   EXPECT_EQ(aspect->property("currentValue").toString(), QStringLiteral("ratio_16_9"));
+  EXPECT_EQ(geometryPanel->property("sourceImageWidth").toInt(), 6000);
+  EXPECT_EQ(geometryPanel->property("sourceImageHeight").toInt(), 4000);
+  EXPECT_EQ(interaction.imageWidth(), 6000);
+  EXPECT_EQ(interaction.imageHeight(), 4000);
   EXPECT_FALSE(lens->property("value").toBool());
   EXPECT_EQ(brand->property("currentValue").toString(), QStringLiteral("Unknown Maker"));
   EXPECT_EQ(model->property("currentValue").toString(), QStringLiteral("Unknown Model"));
@@ -360,7 +380,8 @@ TEST(EditorGeometryPanelQmlTest, SnapshotProjectsCropLensAndDoesNotSubmit) {
 }
 
 TEST(EditorGeometryPanelQmlTest, SliderEditIsDraftOnlyUntilConfirmPendingCrop) {
-  GeometrySession         session;
+  GeometrySession         session(MakeSnapshot(QStringLiteral("free"), 0.0, 0.0, 1.0, 1.0, 0.0,
+                                               QStringLiteral(""), QStringLiteral(""), 2731, 4096));
   FakeGeometryInteraction interaction;
   AdjustmentStackHarness  harness(&session, &interaction);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
@@ -394,6 +415,9 @@ TEST(EditorGeometryPanelQmlTest, SliderEditIsDraftOnlyUntilConfirmPendingCrop) {
       0.25);
   EXPECT_TRUE(crop.contains(QStringLiteral("angle_degrees")));
   EXPECT_TRUE(crop.contains(QStringLiteral("aspect_ratio_preset")));
+  const auto source_size = crop.value(QStringLiteral("source_size")).toObject();
+  EXPECT_EQ(source_size.value(QStringLiteral("width")).toInt(), 2731);
+  EXPECT_EQ(source_size.value(QStringLiteral("height")).toInt(), 4096);
 }
 
 TEST(EditorGeometryPanelQmlTest, OverlayDragIsDraftOnlyAndConfirmSubmitsOneSettledPatch) {
@@ -443,12 +467,15 @@ TEST(EditorGeometryPanelQmlTest, SelectingAspectPresetResizesDraftWithoutPipelin
 }
 
 TEST(EditorGeometryPanelQmlTest, SelectingLandscapePresetOrientsCropForPortraitImage) {
-  GeometrySession         session;
+  GeometrySession         session(MakeSnapshot(QStringLiteral("free"), 0.0, 0.0, 1.0, 1.0, 0.0,
+                                               QStringLiteral(""), QStringLiteral(""), 3000, 4000));
   FakeGeometryInteraction interaction;
-  AdjustmentStackHarness  harness(&session, &interaction);
+  interaction.setMetricAspectForTest(1.5F);
+  AdjustmentStackHarness harness(&session, &interaction);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
-  interaction.setMetricAspectForTest(0.75F);
+  EXPECT_EQ(interaction.imageWidth(), 3000);
+  EXPECT_EQ(interaction.imageHeight(), 4000);
   auto* aspect = harness.findObject<QObject>(QStringLiteral("geometryAspectModel"));
   ASSERT_NE(aspect, nullptr);
   ASSERT_TRUE(QMetaObject::invokeMethod(aspect, "selectIndex", Q_ARG(int, 4)));

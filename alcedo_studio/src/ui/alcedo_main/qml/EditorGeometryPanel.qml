@@ -21,6 +21,8 @@ Item {
     property var aspectEntries: []
     property var lensBrandEntries: []
     property var lensModelEntries: []
+    property int sourceImageWidth: 0
+    property int sourceImageHeight: 0
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
     readonly property color colMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
@@ -30,6 +32,8 @@ Item {
     readonly property color colHover: theme ? theme.colHover : appTheme.hoverColor
     readonly property bool canUseGeometry: root.controlsEnabled && root.interaction !== null
     readonly property double imageAspect: {
+        if (root.sourceImageWidth > 0 && root.sourceImageHeight > 0)
+            return root.sourceImageWidth / root.sourceImageHeight
         if (!root.interaction)
             return 1.0
         const value = Number(root.interaction.metricAspect)
@@ -242,6 +246,10 @@ Item {
                 aspect_ratio: {
                     width: Number(aspectWidthModel.value),
                     height: Number(aspectHeightModel.value)
+                },
+                source_size: {
+                    width: root.sourceImageWidth,
+                    height: root.sourceImageHeight
                 }
             }
         }
@@ -351,12 +359,23 @@ Item {
         const entry = raw && raw["crop_rotate"] !== undefined ? raw["crop_rotate"] : raw
         root.restoring = true
         if (!entry) {
+            root.sourceImageWidth = 0
+            root.sourceImageHeight = 0
             root.resetCropModels()
             root.restoring = false
             return
         }
 
         const rect = entry["crop_rect"] || {}
+        const sourceSize = entry["source_size"] || {}
+        const sourceWidth = Number(sourceSize["width"] !== undefined ? sourceSize["width"] : 0)
+        const sourceHeight = Number(sourceSize["height"] !== undefined ? sourceSize["height"] : 0)
+        root.sourceImageWidth = isFinite(sourceWidth) && sourceWidth > 0 ? Math.round(sourceWidth) : 0
+        root.sourceImageHeight = isFinite(sourceHeight) && sourceHeight > 0 ? Math.round(sourceHeight) : 0
+        if (root.interaction && root.sourceImageWidth > 0 && root.sourceImageHeight > 0
+                && typeof root.interaction.setImageSize === "function") {
+            root.interaction.setImageSize(root.sourceImageWidth, root.sourceImageHeight)
+        }
         cropXModel.value = Number(rect["x"] !== undefined ? rect["x"] : 0.0)
         cropYModel.value = Number(rect["y"] !== undefined ? rect["y"] : 0.0)
         cropWidthModel.value = Number(rect["w"] !== undefined ? rect["w"] : 1.0)
