@@ -37,15 +37,10 @@ auto EditorHistoryCheckpoint::CaptureSaveCheckpoint(
   const auto journal_snapshot = state->journal->Snapshot();
 
   // Single live identity: CommitGraph active Version head is the only logical head.
-  // Align the pipeline-guard cache, build one materialization, then derive every
-  // capture field from that materialization. Do not read working_head from a
-  // second source — that dual-read is what produced
-  // "capture working head does not match materialization head".
+  // Build one materialization from the graph, then project capture fields from it.
   auto& graph = *state->pipeline_guard->commit_graph_;
   const auto logical_head  = graph.GetActiveVersionRef().head_commit_hash;
   const auto logical_chain = graph.ChainHashForHead(logical_head);
-  state->pipeline_guard->working_head_commit_hash_ = logical_head;
-  state->pipeline_guard->transaction_chain_hash_   = logical_chain;
 
   const auto pipeline_params = MakePipelineParamsFromSnapshot(state->committed_snapshot, error);
   if (!pipeline_params.has_value()) return nullptr;

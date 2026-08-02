@@ -65,6 +65,10 @@ struct MergeFieldDelta {
  * @brief Complete merge payload: the full field delta transforming first-parent pipeline state
  * into the merge result. Reconstruction applies this payload; it does not re-run conflict UI.
  *
+ * Applying a merge to the live pipeline may call SetOperator / enable once per field. That is
+ * only parameter-table mutation. History still records **one** merge commit and folds
+ * transaction_chain_hash **once** when the tip advances to that commit.
+ *
  * Field deltas are stored and hashed in identity-sorted order. Duplicate field identities are
  * rejected. Ordered parent hashes remain significant for the commit hash and are not part of this
  * payload.
@@ -164,14 +168,15 @@ class CommitClock {
 /// Canonical little-endian hash input for the root chain: H(chain_format_version, root_id).
 auto RootChainHashInput(const root_id_t& root_id) -> std::vector<std::uint8_t>;
 
-/// Root chain hash before any commits.
+/// Root chain label before any commits (params at root with no first-parent commits applied).
 auto ComputeRootChainHash(const root_id_t& root_id) -> transaction_chain_hash_t;
 
 /// Canonical little-endian fold input: H(previous_chain_hash, commit_hash).
 auto TransactionChainFoldInput(const transaction_chain_hash_t& previous,
                                const commit_hash_t& commit_hash) -> std::vector<std::uint8_t>;
 
-/// Fold one commit into the chain.
+/// Fold **one commit** into the chain hash. Call once when history head advances to that
+/// commit — never once per SetOperator. Merge commits still fold exactly once.
 auto FoldTransactionChainHash(const transaction_chain_hash_t& previous,
                               const commit_hash_t& commit_hash) -> transaction_chain_hash_t;
 

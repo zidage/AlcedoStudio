@@ -49,10 +49,8 @@ EditorHistoryTransfer::EditorHistoryTransfer(EditorHistoryState& state) : state_
 namespace {
 
 struct LivePastePriorState {
-  alcedo::CommitGraph graph;
+  alcedo::CommitGraph graph;  // includes logical head on active Version
   alcedo::MiniGitWorkingSelection selection;
-  alcedo::head_commit_hash_t head = std::nullopt;
-  alcedo::transaction_chain_hash_t chain{};
   bool dirty = false;
   bool serialized = false;
   alcedo::EditorRenderAdjustmentSnapshot snapshot;
@@ -64,8 +62,6 @@ auto CaptureLivePastePrior(HistoryWorkingState& state) -> LivePastePriorState {
   LivePastePriorState prior;
   prior.graph = *state.pipeline_guard->commit_graph_;
   prior.selection = state.history->WorkingSelection();
-  prior.head = state.pipeline_guard->working_head_commit_hash_;
-  prior.chain = state.pipeline_guard->transaction_chain_hash_;
   prior.dirty = state.pipeline_guard->dirty_;
   prior.serialized = state.pipeline_guard->serialized_state_needs_writeback_;
   prior.snapshot = state.committed_snapshot;
@@ -77,8 +73,6 @@ auto CaptureLivePastePrior(HistoryWorkingState& state) -> LivePastePriorState {
 void RestoreLivePastePrior(HistoryWorkingState& state, const LivePastePriorState& prior) {
   *state.pipeline_guard->commit_graph_ = prior.graph;
   state.history->PublishWorkingSelection(prior.selection);
-  state.pipeline_guard->working_head_commit_hash_ = prior.head;
-  state.pipeline_guard->transaction_chain_hash_ = prior.chain;
   state.pipeline_guard->dirty_ = prior.dirty;
   state.pipeline_guard->serialized_state_needs_writeback_ = prior.serialized;
   state.committed_snapshot = prior.snapshot;
@@ -154,8 +148,6 @@ auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
     RestoreLivePastePrior(*state, prior);
     return false;
   }
-  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
-  state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
 
   // Persist the empty paste Version so crash recovery can Replay WAL onto it
   // before the next ordinary DuckDB journal materialization.
@@ -188,8 +180,6 @@ auto EditorHistoryTransfer::PasteLiveRootRelativeVersion(
     return false;
   }
   state->committed_snapshot = std::move(next_snapshot);
-  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
-  state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
   state->pipeline_guard->dirty_ = true;
   state->pipeline_guard->serialized_state_needs_writeback_ = true;
   state->recovered_head = false;
@@ -220,8 +210,6 @@ auto EditorHistoryTransfer::CancelLivePaste(const alcedo::EditorHistoryGuardHand
   auto& graph = *state->pipeline_guard->commit_graph_;
   const auto graph_before = graph;
   const auto prior_select = state->history->WorkingSelection();
-  const auto prior_head = state->pipeline_guard->working_head_commit_hash_;
-  const auto prior_chain = state->pipeline_guard->transaction_chain_hash_;
   const bool prior_dirty = state->pipeline_guard->dirty_;
   const bool prior_serialized = state->pipeline_guard->serialized_state_needs_writeback_;
   const auto prior_snapshot = state->committed_snapshot;
@@ -229,10 +217,9 @@ auto EditorHistoryTransfer::CancelLivePaste(const alcedo::EditorHistoryGuardHand
   const bool prior_recovered = state->recovered_head;
 
   auto restore_working = [&] {
+    // Restoring the graph restores logical head; no separate head field on the guard.
     graph = graph_before;
     state->history->PublishWorkingSelection(prior_select);
-    state->pipeline_guard->working_head_commit_hash_ = prior_head;
-    state->pipeline_guard->transaction_chain_hash_ = prior_chain;
     state->pipeline_guard->dirty_ = prior_dirty;
     state->pipeline_guard->serialized_state_needs_writeback_ = prior_serialized;
     state->committed_snapshot = prior_snapshot;
@@ -249,8 +236,6 @@ auto EditorHistoryTransfer::CancelLivePaste(const alcedo::EditorHistoryGuardHand
     restore_working();
     return false;
   }
-  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
-  state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
 
   alcedo::EditorRenderAdjustmentSnapshot restored_snapshot;
   if (!SnapshotAtHead(state->root_snapshot, graph, graph.GetActiveVersionRef().head_commit_hash,
@@ -471,6 +456,9 @@ auto EditorHistoryTransfer::CompleteLiveMerge(
     }
   }
 
+  // Live parameter-table apply: one SetOperator/enable per resolved field. These intermediate
+  // mutations do not advance history or fold transaction_chain_hash. Below, PrepareAppendMerge +
+  // PublishPreparedEdit record a single merge commit and fold the chain hash once.
   alcedo::MergeEditPayload merge_payload;
   std::unordered_set<std::string> resolved_keys;
   {
@@ -542,8 +530,6 @@ auto EditorHistoryTransfer::CompleteLiveMerge(
     return false;
   }
   state->committed_snapshot = std::move(next_snapshot);
-  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
-  state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
   state->pipeline_guard->dirty_ = true;
   state->pipeline_guard->serialized_state_needs_writeback_ = true;
   state->pending_before.clear();

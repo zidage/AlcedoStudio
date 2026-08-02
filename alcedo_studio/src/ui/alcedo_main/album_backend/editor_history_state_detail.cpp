@@ -112,10 +112,7 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
     } else {
       // Contiguous missing suffix: apply into unique graph + live pipeline.
       const auto prior_graph = *guard->commit_graph_;
-      const auto prior_head  = guard->working_head_commit_hash_;
-      const auto prior_chain = guard->transaction_chain_hash_;
       const auto prior_snap  = state->committed_snapshot;
-      const bool prior_dirty = guard->dirty_;
       const auto expected_materialized = prior_graph.GetImageEditState();
 
       std::vector<alcedo::MiniGitJournalRecord> missing(
@@ -149,10 +146,6 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
       }
 
       state->committed_snapshot = std::move(derived);
-      guard->working_head_commit_hash_ =
-          guard->commit_graph_->GetActiveVersionRef().head_commit_hash;
-      guard->transaction_chain_hash_ =
-          guard->commit_graph_->ChainHashForHead(guard->working_head_commit_hash_);
       guard->dirty_ = true;
       guard->serialized_state_needs_writeback_ = true;
       state->recovered_head = true;
@@ -179,9 +172,6 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
           }
           if (!journal->TruncateMaterialized(error)) {
             *guard->commit_graph_ = prior_graph;
-            guard->working_head_commit_hash_ = prior_head;
-            guard->transaction_chain_hash_ = prior_chain;
-            guard->dirty_ = prior_dirty;
             state->committed_snapshot = prior_snap;
             return nullptr;
           }
@@ -200,17 +190,14 @@ auto EditorHistoryState::EnsureWorkingState(sl_element_id_t element_id, std::str
   }
 
 attach_history:
-  guard->working_head_commit_hash_ = guard->commit_graph_->GetActiveVersionRef().head_commit_hash;
-  guard->transaction_chain_hash_ =
-      guard->commit_graph_->ChainHashForHead(guard->working_head_commit_hash_);
   state->history =
       std::make_unique<alcedo::MiniGitWorkingHistory>(guard->commit_graph_, journal);
 
   // After WAL attach, if checkpoint identity still disagrees with logical head,
   // install the derived adjustment snapshot on the unique live executor.
   const auto& post_wal_state = guard->commit_graph_->GetImageEditState();
-  if (!alcedo::CheckpointMatchesLogicalHead(post_wal_state, guard->working_head_commit_hash_,
-                                            guard->transaction_chain_hash_)) {
+  if (!alcedo::CheckpointMatchesLogicalHead(post_wal_state, guard->working_head_commit_hash(),
+                                            guard->transaction_chain_hash())) {
     if (guard->pipeline_) {
       std::unique_lock<std::mutex> render_lock(guard->pipeline_->GetRenderLock());
       if (!alcedo::ApplyEditorAdjustmentSnapshot(*guard->pipeline_, state->committed_snapshot,

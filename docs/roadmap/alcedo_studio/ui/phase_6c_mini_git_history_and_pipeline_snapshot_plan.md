@@ -9,10 +9,21 @@ and Phase 7 (final evidence checklist) are complete. Phase 6C-7 panel state publ
 complete. Phase 6C-8 Paste, Merge, and history integration is complete. Phase 6C-9 Recovery,
 thumbnail, and destructive-cutover qualification is complete for the active QML editor path.
 
+**Identity supersession (2026-08-02):** For pipeline vs history **head / chain-hash / checkpoint**
+semantics, the binding document is
+[Editor Single Live Pipeline + WAL + Checkpoint](editor_single_live_pipeline_wal_checkpoint_plan.md)
+section **Final locked identity model**. In particular: HEAD is owned only by edit history
+(`CommitGraph` / `VersionRef`); the live pipeline is a parameter table; `transaction_chain_hash`
+advances **once per commit** (merge may perform many `SetOperator` calls first); checkpoint
+`(head, chain, params)` is a fast-path label, not a second live head. Older Phase 6C wording that
+assigns `working_head_commit_hash` / chain fold to a “live pipeline snapshot” as if it were a
+second tip cache is **historical** and must not guide new code.
+
 Related documents:
 
 - [QML Editor and Qt RHI Unified Workspace Refactor Plan](qml_editor_rhi_unified_workspace_plan.md)
 - [Editor History Durability and Version Transfer Design](editor_history_durability_and_version_transfer_design.md)
+- [Editor Single Live Pipeline + WAL + Checkpoint Simplification Plan](editor_single_live_pipeline_wal_checkpoint_plan.md) (**identity authority**)
 
 This document is the authoritative Phase 6C plan. It replaces the array-and-cursor `Version` model,
 the `WorkingVersion` timeline model, `RewriteTimeline`, image-scoped overlapping saves, and the old
@@ -147,6 +158,12 @@ incoming root-relative branch.
 
 ### 3. Pipeline and Version use the same incremental chain hash
 
+> **Note (2026-08-02):** Steps that say “advance the live pipeline snapshot’s working head / fold
+> its chain” are restated under the final model as: advance **CommitGraph active Version head** and
+> fold **history-owned** `transaction_chain_hash` once per commit. Pipeline params may be mutated
+> separately via `SetOperator` (including many times for one merge) without their own head field.
+> See [Final locked identity model](editor_single_live_pipeline_wal_checkpoint_plan.md#final-locked-identity-model-binding).
+
 The root receives a stable `root_id` when import metadata has produced the immutable base pipeline.
 The hash does not serialize the live pipeline or hash its params JSON.
 
@@ -159,20 +176,23 @@ On pointer release:
 
 1. Build and hash the edit commit.
 2. Append the complete commit plus expected previous and resulting chain hashes to the journal.
-3. Advance the live pipeline snapshot's `working_head_commit_hash`.
-4. Fold the live pipeline snapshot's `transaction_chain_hash` once.
+3. Advance the **CommitGraph** active Version working head to that commit.
+4. Fold `transaction_chain_hash` **once** for that commit (history-owned label; checkpoint may store
+   the same pair with exported params later).
 
 Undo and Redo append head-move records containing the expected source head, target head, and target
-chain hash. The live pipeline restores the chain hash associated with that existing target; a
-reverse hash operation is never attempted.
+chain hash. History restores the chain hash associated with that existing target; a reverse hash
+operation is never attempted. Live params are restored to match the target tip (rebuild or reverse
+apply), not by inventing a pipeline-side head cache.
 
 During materialization, the save path starts from the stored materialized head/hash, validates each
 new commit or head move in journal order, and obtains the final working head/hash. That result must
-equal the captured pipeline head/hash. This simulates the same history operations that already
-changed the live pipeline without hashing runtime pipeline state.
+equal the captured history tip and chain. This simulates the same history operations that already
+advanced the graph without hashing runtime pipeline state.
 
 For a merge, the second parent participates in `commit_hash`; the incremental fold still advances
-from the current first-parent chain hash exactly once.
+from the current first-parent chain hash exactly once (even if many `SetOperator` calls applied the
+final parameter table).
 
 ### 4. The base pipeline is immutable
 

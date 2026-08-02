@@ -24,6 +24,7 @@ use their own top-level category.
 - [Editor Session Command Queue and Lock Simplification Plan](alcedo_studio/ui/editor_session_command_queue_and_lock_simplification_plan.md)
 - [QML Editor and Qt RHI Unified Workspace Refactor Plan](alcedo_studio/ui/qml_editor_rhi_unified_workspace_plan.md)
 - [Editor Single Live Pipeline + WAL + Checkpoint Simplification Plan](alcedo_studio/ui/editor_single_live_pipeline_wal_checkpoint_plan.md)
+  (includes **Final locked identity model**: history owns HEAD; pipeline = params table; chain hash unit = one commit)
 
 ## External website
 

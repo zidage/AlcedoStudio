@@ -11,6 +11,9 @@ Versions are **not** Git commits and should not read like branches in a DAG. A n
 
 Internally, snapshots/materialized params remain backend caches only. They exist so the editor can restore state without replaying every transaction, but the UI should not expose “snapshot” as a first-class user concept.
 
+Backend identity (binding): edit history owns HEAD; the live pipeline is a parameter table; chain hash advances once per commit (not per operator write). Full freeze:
+`docs/roadmap/alcedo_studio/ui/editor_single_live_pipeline_wal_checkpoint_plan.md` → **Final locked identity model**, and `commit_types.hpp`.
+
 ## Confirmed interaction rules
 
 - The primary user goal is to **jump back to an earlier edit quickly**.

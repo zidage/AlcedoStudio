@@ -670,8 +670,8 @@ TEST_F(PipelineServiceTests, EditorLoadUsesMatchingSerializedStateWithoutReconst
   ASSERT_NE(initial, nullptr);
   ASSERT_NE(initial->pipeline_, nullptr);
   EXPECT_NE(initial->root_id_, Hash128{});
-  EXPECT_FALSE(initial->working_head_commit_hash_.has_value());
-  EXPECT_EQ(initial->transaction_chain_hash_, ComputeRootChainHash(initial->root_id_));
+  EXPECT_FALSE(initial->working_head_commit_hash().has_value());
+  EXPECT_EQ(initial->transaction_chain_hash(), ComputeRootChainHash(initial->root_id_));
   EXPECT_FALSE(initial->serialized_state_needs_writeback_);
   const auto expected_params = initial->pipeline_->ExportPipelineParams();
   first.SavePipeline(initial);
@@ -682,8 +682,8 @@ TEST_F(PipelineServiceTests, EditorLoadUsesMatchingSerializedStateWithoutReconst
   auto                loaded = reopened.LoadEditorPipeline(701);
   ASSERT_NE(loaded, nullptr);
   EXPECT_EQ(loaded->root_id_, initial->root_id_);
-  EXPECT_EQ(loaded->working_head_commit_hash_, std::nullopt);
-  EXPECT_EQ(loaded->transaction_chain_hash_, ComputeRootChainHash(initial->root_id_));
+  EXPECT_EQ(loaded->working_head_commit_hash(), std::nullopt);
+  EXPECT_EQ(loaded->transaction_chain_hash(), ComputeRootChainHash(initial->root_id_));
   EXPECT_FALSE(loaded->serialized_state_needs_writeback_);
   EXPECT_EQ(loaded->pipeline_->ExportPipelineParams(), expected_params);
   reopened.SavePipeline(loaded);
@@ -719,9 +719,6 @@ TEST_F(PipelineServiceTests,
 
   const auto new_version = guard->commit_graph_->CreateVersionRefAtRoot("Root Version");
   guard->commit_graph_->SetActiveVersionId(new_version);
-  guard->working_head_commit_hash_ = std::nullopt;
-  guard->transaction_chain_hash_ =
-      guard->commit_graph_->ChainHashForHead(guard->working_head_commit_hash_);
   guard->serialized_state_needs_writeback_ = true;
 
   std::string error;
@@ -748,7 +745,7 @@ TEST_F(PipelineServiceTests,
   ASSERT_NE(reopened, nullptr);
   ASSERT_NE(reopened->commit_graph_, nullptr);
   EXPECT_EQ(reopened->commit_graph_->GetActiveVersionId(), new_version);
-  EXPECT_EQ(reopened->working_head_commit_hash_, std::nullopt);
+  EXPECT_EQ(reopened->working_head_commit_hash(), std::nullopt);
   reopened_service.SavePipeline(reopened);
 }
 
@@ -819,8 +816,8 @@ TEST_F(PipelineServiceTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
   auto                rebuilt = reopened.LoadEditorPipeline(702);
   ASSERT_NE(rebuilt, nullptr);
   EXPECT_EQ(rebuilt->root_id_, root_id);
-  EXPECT_EQ(rebuilt->working_head_commit_hash_, expected_head);
-  EXPECT_EQ(rebuilt->transaction_chain_hash_, expected_chain);
+  EXPECT_EQ(rebuilt->working_head_commit_hash(), expected_head);
+  EXPECT_EQ(rebuilt->transaction_chain_hash(), expected_chain);
   EXPECT_TRUE(rebuilt->serialized_state_needs_writeback_);
   EXPECT_EQ(rebuilt->pipeline_->ExportPipelineParams()["Basic Adjustment"]["Basic Adjustment"]
                                           ["exposure"]["params"]["exposure"],
@@ -831,8 +828,8 @@ TEST_F(PipelineServiceTests, StaleSerializedStateRebuildsAndIsWrittenBack) {
   auto                matched = after_writeback.LoadEditorPipeline(702);
   ASSERT_NE(matched, nullptr);
   EXPECT_FALSE(matched->serialized_state_needs_writeback_);
-  EXPECT_EQ(matched->working_head_commit_hash_, expected_head);
-  EXPECT_EQ(matched->transaction_chain_hash_, expected_chain);
+  EXPECT_EQ(matched->working_head_commit_hash(), expected_head);
+  EXPECT_EQ(matched->transaction_chain_hash(), expected_chain);
   EXPECT_EQ(matched->pipeline_->ExportPipelineParams()["Basic Adjustment"]["Basic Adjustment"]
                                                ["exposure"]["params"]["exposure"],
             2.0f);
@@ -880,7 +877,7 @@ TEST_F(PipelineServiceTests,
   auto rebuilt = reopened.LoadEditorPipeline(732);
   ASSERT_NE(rebuilt, nullptr);
   EXPECT_EQ(reopened.EditorPipelineHistoryRebuildCount(), 1u);
-  EXPECT_EQ(rebuilt->working_head_commit_hash_, expected_head);
+  EXPECT_EQ(rebuilt->working_head_commit_hash(), expected_head);
   EXPECT_EQ(rebuilt->pipeline_->ExportPipelineParams()["Basic Adjustment"]["Basic Adjustment"]
                                           ["exposure"]["params"]["exposure"],
             3.25f)
@@ -912,8 +909,6 @@ TEST_F(PipelineServiceTests,
   ASSERT_TRUE(local->commit_graph_->InsertCommit(std::move(local_commit)));
   local->commit_graph_->MoveWorkingHead(local_version, local_head);
   local->commit_graph_->SetActiveVersionId(local_version);
-  local->working_head_commit_hash_ = local_head;
-  local->transaction_chain_hash_   = local->commit_graph_->ChainHashForHead(local_head);
   local->serialized_state_needs_writeback_ = true;
 
   commit_hash_t remote_head{};
@@ -980,8 +975,6 @@ TEST_F(PipelineServiceTests,
   const auto new_head = edit.GetCommitHash();
   ASSERT_TRUE(guard->commit_graph_->InsertCommit(std::move(edit)));
   guard->commit_graph_->MoveWorkingHead(guard->commit_graph_->GetActiveVersionId(), new_head);
-  guard->working_head_commit_hash_ = new_head;
-  guard->transaction_chain_hash_   = guard->commit_graph_->ChainHashForHead(new_head);
 
   // Simulate the save checkpoint: it writes the active head to DuckDB but, like the
   // production checkpoint path, does NOT call ApplyMaterializedState, so the in-memory
@@ -1015,7 +1008,7 @@ TEST_F(PipelineServiceTests,
   EXPECT_EQ(guard->commit_graph_->GetImageEditState().materialized_head_commit_hash,
             new_head);
   EXPECT_EQ(guard->commit_graph_->GetImageEditState().materialized_transaction_chain_hash,
-            guard->transaction_chain_hash_);
+            guard->transaction_chain_hash());
 
   // The PersistEditorHistoryState guard now sees DuckDB == expected and accepts the
   // durable tuple. Without the sync it throws "persisted history changed before editor

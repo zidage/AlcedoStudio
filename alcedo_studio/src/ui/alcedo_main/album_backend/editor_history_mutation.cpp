@@ -94,8 +94,6 @@ auto ApplyPreparedHeadMoveOnLivePipeline(HistoryWorkingState& state,
     return false;
   }
   state.pipeline_guard->dirty_ = true;
-  state.pipeline_guard->working_head_commit_hash_ = state.history->working_head();
-  state.pipeline_guard->transaction_chain_hash_ = state.history->transaction_chain_hash();
   state.pending_before.clear();
   state.recovered_head = false;
   return true;
@@ -226,8 +224,6 @@ auto EditorHistoryMutation::CommitAdjustment(const alcedo::EditorHistoryGuardHan
     return false;
   }
   state->pipeline_guard->dirty_ = true;
-  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
-  state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
   state->pending_before.erase(before);
   state->recovered_head = false;
   return true;
@@ -329,8 +325,6 @@ auto EditorHistoryMutation::DiscardUnmaterializedChanges(
   if (state->journal && !state->journal->TruncateMaterialized(error)) return false;
   state->history->PublishWorkingSelection({});
   state->pipeline_guard->dirty_ = false;
-  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
-  state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
   state->pipeline_guard->serialized_state_needs_writeback_ = false;
   state->pending_before.clear();
   state->recovered_head = false;
@@ -350,8 +344,6 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
   auto& graph              = *state->pipeline_guard->commit_graph_;
   const auto graph_before  = graph;
   const auto prior_select = state->history->WorkingSelection();
-  const auto prior_head   = state->pipeline_guard->working_head_commit_hash_;
-  const auto prior_chain  = state->pipeline_guard->transaction_chain_hash_;
   const bool prior_dirty  = state->pipeline_guard->dirty_;
   const bool prior_serialized = state->pipeline_guard->serialized_state_needs_writeback_;
   const auto prior_snapshot = state->committed_snapshot;
@@ -359,10 +351,9 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
   const bool prior_recovered = state->recovered_head;
 
   auto restore_prior = [&] {
+    // Graph restore rewinds logical head; no separate head field on the guard.
     graph = graph_before;
     state->history->PublishWorkingSelection(prior_select);
-    state->pipeline_guard->working_head_commit_hash_ = prior_head;
-    state->pipeline_guard->transaction_chain_hash_ = prior_chain;
     state->pipeline_guard->dirty_ = prior_dirty;
     state->pipeline_guard->serialized_state_needs_writeback_ = prior_serialized;
     state->committed_snapshot = prior_snapshot;
@@ -381,11 +372,7 @@ auto EditorHistoryMutation::CheckoutVersion(const alcedo::EditorHistoryGuardHand
     return false;
   }
 
-  // PersistEditorHistoryState requires the pipeline guard's working head/chain to match the
-  // live graph's active Version. Sync before persistence so checkout from a pasted (or any
-  // non-root) Version back to Default does not trip the live-identity guard.
-  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
-  state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
+  // Logical head is graph.GetActiveVersionRef().head after SelectVersion above.
 
   nlohmann::json prior_pipeline;
   if (state->pipeline_guard->pipeline_) {
