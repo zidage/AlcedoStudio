@@ -13,8 +13,6 @@
 #include <mutex>
 #include <optional>
 #include <string>
-#include <syncstream>
-
 #include "image/image_buffer.hpp"
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_task.hpp"
@@ -296,16 +294,6 @@ void PipelineTask::SetExecutorRenderParams() {
                                     : FrameRole::QualityBase;
     frame_metadata = MetadataFromRegion(frame_metadata, viewport_region, region_x, region_y,
                                         region_scale_x, region_scale_y);
-    std::osyncstream(std::cout)
-        << "[ROI_TRACE][pipeline-config] request=" << frame_metadata.presentation_request_id
-        << " output_role="
-        << (frame_metadata.frame_role == FrameRole::DetailPatch ? "detail" : "quality")
-        << " region_px=" << region_x << ',' << region_y << " scale=" << region_scale_x << ','
-        << region_scale_y << " reference=" << region_reference_width << 'x'
-        << region_reference_height << " target_long_edge=" << ViewportTargetLongEdge(viewport_region)
-        << " roi_norm=" << frame_metadata.source_roi_norm.x << ','
-        << frame_metadata.source_roi_norm.y << ',' << frame_metadata.source_roi_norm.width << ','
-        << frame_metadata.source_roi_norm.height << std::endl;
     presentation_mode = FramePresentationMode::ViewportTransformed;
     ApplyRenderFrameRole(pipeline_executor_, frame_metadata);
     pipeline_executor_->BindFrameSubmission(frame_metadata, presentation_mode);

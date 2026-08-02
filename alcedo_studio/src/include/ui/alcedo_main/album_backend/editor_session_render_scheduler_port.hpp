@@ -62,7 +62,7 @@ class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSch
   /// Cancel one scheduled render job.
   void Cancel(std::uint64_t scheduler_job_id) override;
   /// Wait until all jobs for one session generation have finished.
-  void WaitForSessionIdle(std::uint64_t session_generation) override;
+  void WaitForSessionIdle(std::uint64_t session_epoch) override;
   /// Return a test-visible copy of scheduled requests.
   [[nodiscard]] auto last_scheduled() const -> std::vector<alcedo::EditorRenderRequest>;
 

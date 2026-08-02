@@ -88,16 +88,16 @@ void FinalDisplayFrameTapSink::SetScopeAnalysisDeferred(bool deferred) {
 }
 
 void FinalDisplayFrameTapSink::SetFrameIdentity(uint64_t image_identity,
-                                                uint64_t image_generation) {
+                                                uint64_t session_epoch) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (image_identity_ != image_identity || image_generation_ != image_generation) {
+  if (image_identity_ != image_identity || session_epoch_ != session_epoch) {
     current_frame_          = {};
     scope_frame_            = {};
     bound_submission_       = {};
     bound_submission_valid_ = false;
   }
   image_identity_   = image_identity;
-  image_generation_ = image_generation;
+  session_epoch_ = session_epoch;
 }
 
 auto FinalDisplayFrameTapSink::GetScopeRequest() const -> ScopeRequest {
@@ -199,9 +199,9 @@ void FinalDisplayFrameTapSink::SubmitFinalDisplayFrame(const FinalDisplayFrameVi
     std::lock_guard<std::mutex> lock(mutex_);
     if (bound_submission_valid_) {
       if (bound_submission_.metadata.image_identity != 0 ||
-          bound_submission_.metadata.image_generation != 0) {
+          bound_submission_.metadata.session_epoch != 0) {
         stamped_frame.image_identity   = bound_submission_.metadata.image_identity;
-        stamped_frame.image_generation = bound_submission_.metadata.image_generation;
+        stamped_frame.session_epoch = bound_submission_.metadata.session_epoch;
       }
       stamped_frame.display_generation =
           bound_submission_.metadata.presentation_request_id != 0
@@ -213,8 +213,8 @@ void FinalDisplayFrameTapSink::SubmitFinalDisplayFrame(const FinalDisplayFrameVi
     if (stamped_frame.image_identity == 0 && image_identity_ != 0) {
       stamped_frame.image_identity = image_identity_;
     }
-    if (stamped_frame.image_generation == 0 && image_generation_ != 0) {
-      stamped_frame.image_generation = image_generation_;
+    if (stamped_frame.session_epoch == 0 && session_epoch_ != 0) {
+      stamped_frame.session_epoch = session_epoch_;
     }
     if (stamped_frame.frame_id == 0) {
       stamped_frame.frame_id = stamped_frame.display_generation != 0

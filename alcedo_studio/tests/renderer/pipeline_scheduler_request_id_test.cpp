@@ -186,7 +186,7 @@ TEST(DirectPresentQueueRequestIdTest, ConsumeNewestReadyPrefersHigherRequestId) 
 
   DirectPresentQueue queue(EditorBackend::Cuda);
   queue.SetConsumerAvailable(true);
-  queue.InvalidateImageGeneration(1, 10);
+  queue.InvalidateSessionEpoch(1, 10);
 
   const auto publish_ready = [&](std::uintptr_t handle, std::uint64_t request_id) {
     constexpr int width    = 64;

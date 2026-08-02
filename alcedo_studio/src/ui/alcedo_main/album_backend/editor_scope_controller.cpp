@@ -96,15 +96,15 @@ void EditorScopeController::SetDownstreamSink(alcedo::IFrameSink* sink) {
 auto EditorScopeController::frame_sink() const -> alcedo::IFrameSink* { return frame_tap_.get(); }
 
 void EditorScopeController::SetImageIdentity(qulonglong image_identity,
-                                             qulonglong image_generation) {
+                                             qulonglong session_epoch) {
   const auto next_identity   = static_cast<std::uint64_t>(image_identity);
-  const auto next_generation = static_cast<std::uint64_t>(image_generation);
-  if (image_identity_ == next_identity && image_generation_ == next_generation) {
+  const auto next_generation = static_cast<std::uint64_t>(session_epoch);
+  if (image_identity_ == next_identity && session_epoch_ == next_generation) {
     return;
   }
   image_identity_   = next_identity;
-  image_generation_ = next_generation;
-  frame_tap_->SetFrameIdentity(image_identity_, image_generation_);
+  session_epoch_ = next_generation;
+  frame_tap_->SetFrameIdentity(image_identity_, session_epoch_);
   if (image_identity_ == 0 && visual_active_) {
     set_visual_active(false);
   }
@@ -130,7 +130,7 @@ auto EditorScopeController::refreshSnapshotNow() -> bool {
   const auto output = analyzer_->GetLatestOutput();
   if (output.generation == 0 ||
       (image_identity_ != 0 && output.image_identity != image_identity_) ||
-      (image_generation_ != 0 && output.image_generation != image_generation_)) {
+      (session_epoch_ != 0 && output.session_epoch != session_epoch_)) {
     return false;
   }
 
@@ -138,7 +138,7 @@ auto EditorScopeController::refreshSnapshotNow() -> bool {
   if (!next_snapshot.histogram.valid && !next_snapshot.waveform.valid) {
     return false;
   }
-  return publishSnapshot(std::move(next_snapshot), image_identity_, image_generation_,
+  return publishSnapshot(std::move(next_snapshot), image_identity_, session_epoch_,
                          request_revision_);
 }
 
@@ -156,7 +156,7 @@ void EditorScopeController::scheduleSnapshotRefresh() {
   }
 
   const auto expected_image_identity   = image_identity_;
-  const auto expected_image_generation = image_generation_;
+  const auto expected_session_epoch = session_epoch_;
   const auto expected_request_revision = request_revision_;
   const auto request                   = request_;
   const bool submit_new_frame =
@@ -169,7 +169,7 @@ void EditorScopeController::scheduleSnapshotRefresh() {
   const auto                      refresh_in_flight = refresh_in_flight_;
   QPointer<EditorScopeController> receiver(this);
   scope_pool_.start([analyzer, scope_frame, request, submit_new_frame, expected_image_identity,
-                     expected_image_generation, expected_request_revision, refresh_in_flight,
+                     expected_session_epoch, expected_request_revision, refresh_in_flight,
                      receiver]() {
     alcedo::ScopeRenderSnapshot next_snapshot;
     try {
@@ -194,13 +194,13 @@ void EditorScopeController::scheduleSnapshotRefresh() {
     const bool queued = QMetaObject::invokeMethod(
         receiver.data(),
         [receiver, next_snapshot = std::move(next_snapshot), expected_image_identity,
-         expected_image_generation, expected_request_revision, refresh_in_flight]() mutable {
+         expected_session_epoch, expected_request_revision, refresh_in_flight]() mutable {
           refresh_in_flight->store(false);
           if (!receiver || next_snapshot.generation == 0) {
             return;
           }
           (void)receiver->publishSnapshot(std::move(next_snapshot), expected_image_identity,
-                                          expected_image_generation, expected_request_revision);
+                                          expected_session_epoch, expected_request_revision);
         },
         Qt::QueuedConnection);
     if (!queued) {
@@ -211,17 +211,17 @@ void EditorScopeController::scheduleSnapshotRefresh() {
 
 auto EditorScopeController::publishSnapshot(alcedo::ScopeRenderSnapshot next_snapshot,
                                             std::uint64_t               expected_image_identity,
-                                            std::uint64_t               expected_image_generation,
+                                            std::uint64_t               expected_session_epoch,
                                             std::uint64_t expected_request_revision) -> bool {
   if (!visual_active_ || expected_request_revision != request_revision_ ||
       expected_image_identity != image_identity_ ||
-      expected_image_generation != image_generation_) {
+      expected_session_epoch != session_epoch_) {
     return false;
   }
   if (next_snapshot.generation == 0 ||
       (next_snapshot.image_identity != 0 && next_snapshot.image_identity != image_identity_) ||
-      (next_snapshot.image_generation != 0 &&
-       next_snapshot.image_generation != image_generation_)) {
+      (next_snapshot.session_epoch != 0 &&
+       next_snapshot.session_epoch != session_epoch_)) {
     return false;
   }
   if (!next_snapshot.histogram.valid && !next_snapshot.waveform.valid) {
@@ -233,7 +233,7 @@ auto EditorScopeController::publishSnapshot(alcedo::ScopeRenderSnapshot next_sna
   // rather than dropping every result that isn't the very latest render.
   if (next_snapshot.generation == snapshot_.generation &&
       next_snapshot.image_identity == snapshot_.image_identity &&
-      next_snapshot.image_generation == snapshot_.image_generation &&
+      next_snapshot.session_epoch == snapshot_.session_epoch &&
       next_snapshot.display_generation == snapshot_.display_generation) {
     return false;
   }

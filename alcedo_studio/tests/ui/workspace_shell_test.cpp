@@ -644,8 +644,8 @@ TEST_F(WorkspaceShellTests, PresentationViewportBindingSurvivesImageSwitchAToBTo
   ASSERT_NE(sink_a, nullptr);
   ASSERT_NE(session->scope_controller(), nullptr);
   EXPECT_EQ(sink_a, session->scope_controller()->frame_sink());
-  const auto gen_a = viewport_a->imageGeneration();
-  EXPECT_EQ(viewport_a->imageGeneration(), gen_a);
+  const auto gen_a = viewport_a->sessionEpoch();
+  EXPECT_EQ(viewport_a->sessionEpoch(), gen_a);
   EXPECT_EQ(viewport_a->imageIdentity(), image_a.image_id_);
 
   // A → B inside the same editor workspace (no Loader teardown).
@@ -661,18 +661,18 @@ TEST_F(WorkspaceShellTests, PresentationViewportBindingSurvivesImageSwitchAToBTo
   auto* sink_b = session->presentation_frame_sink();
   ASSERT_NE(sink_b, nullptr);
   EXPECT_EQ(sink_b, sink_a);
-  EXPECT_GT(viewport_b->imageGeneration(), gen_a);
+  EXPECT_GT(viewport_b->sessionEpoch(), gen_a);
   EXPECT_EQ(viewport_b->imageIdentity(), image_b.image_id_);
 
   // B → A: generation advances again; late frames from first A are rejected.
-  const auto gen_b = viewport_b->imageGeneration();
+  const auto gen_b = viewport_b->sessionEpoch();
   router->OpenEditor(static_cast<uint>(image_a.file_id_), static_cast<uint>(image_a.image_id_));
   ASSERT_TRUE(WaitForInteractiveImage(loaded->host, session, static_cast<uint>(image_a.file_id_),
                                       static_cast<uint>(image_a.image_id_)));
   EXPECT_TRUE(session->presentation_viewport_bound());
   EXPECT_EQ(session->presentation_viewport(), viewport_a);
   EXPECT_EQ(session->presentation_frame_sink(), sink_a);
-  EXPECT_GT(viewport_a->imageGeneration(), gen_b);
+  EXPECT_GT(viewport_a->sessionEpoch(), gen_b);
   EXPECT_EQ(viewport_a->imageIdentity(), image_a.image_id_);
 
   // Leaving the editor workspace unbinds on viewport destruction.
@@ -790,7 +790,7 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
     alcedo::FramePreviewMetadata metadata{};
     metadata.frame_role              = request.intent.frame_role;
     metadata.image_identity          = static_cast<std::uint64_t>(request.intent.image_id);
-    metadata.image_generation        = request.intent.image_load_request_id.value;
+    metadata.session_epoch        = request.intent.image_load_request_id.value;
     metadata.presentation_request_id = request.request_id;
     metadata.scope_update_allowed   = alcedo::ScopeUpdateAllowedForReason(request.intent.reason);
     metadata.scope_refresh_requested =
@@ -818,7 +818,7 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
   auto* viewport = qobject_cast<editor_rhi::EditorViewportItem*>(session->presentation_viewport());
   ASSERT_NE(viewport, nullptr);
   EXPECT_EQ(viewport->imageIdentity(), 70ull);
-  EXPECT_GT(viewport->imageGeneration(), 0ull);
+  EXPECT_GT(viewport->sessionEpoch(), 0ull);
   ASSERT_EQ(loaded->host.editor_session_service()->state(), alcedo::EditorSessionState::Interactive)
       << loaded->host.editor_session_service()->last_error()
       << " backend=" << viewport->backendName().toStdString()
@@ -826,7 +826,7 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
       << " available=" << viewport->presentationAvailable()
       << " live=" << viewport->liveTargetCount();
   EXPECT_GT(written_frame_count.load(std::memory_order_acquire), 0);
-  EXPECT_EQ(viewport->lastPresentedImageGeneration(), viewport->imageGeneration());
+  EXPECT_EQ(viewport->lastPresentedSessionEpoch(), viewport->sessionEpoch());
   EXPECT_EQ(viewport->lastPresentedRequestId(),
             loaded->host.editor_session_service()->first_frame_request_id());
 
@@ -863,17 +863,17 @@ TEST_F(WorkspaceShellTests, ProductionFirstFramePathWritesAndSubmitsRealFrameDat
       << "Interactive adjustment did not compose until pointer release";
 
   // A→B→A: late frame from the first A session must not replace the current A.
-  const auto gen_a1 = viewport->imageGeneration();
+  const auto gen_a1 = viewport->sessionEpoch();
   loaded->host.workspace_router()->OpenEditor(8, 80);
   ProcessEvents(60);
-  const auto gen_b = viewport->imageGeneration();
+  const auto gen_b = viewport->sessionEpoch();
   EXPECT_GT(gen_b, gen_a1);
   loaded->host.workspace_router()->OpenEditor(7, 70);
   ProcessEvents(60);
-  const auto gen_a2 = viewport->imageGeneration();
+  const auto gen_a2 = viewport->sessionEpoch();
   EXPECT_GT(gen_a2, gen_b);
   EXPECT_EQ(viewport->imageIdentity(), 70ull);
-  EXPECT_EQ(viewport->imageGeneration(), gen_a2);
+  EXPECT_EQ(viewport->sessionEpoch(), gen_a2);
 
   EXPECT_TRUE(loaded->qml_warnings.empty())
       << loaded->qml_warnings.front().toString().toStdString();

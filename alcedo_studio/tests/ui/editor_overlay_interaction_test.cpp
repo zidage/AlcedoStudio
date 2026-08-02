@@ -700,7 +700,7 @@ TEST(EditorOverlayInteractionTest, ResetPresentationStateClearsCropRoiAndMode) {
 TEST(EditorOverlayInteractionTest, EqualOutputSizeImageSwitchResyncsRenderReference) {
   EditorViewportItem viewport;
   viewport.setImageIdentity(10);
-  viewport.setImageGeneration(1);
+  viewport.setSessionEpoch(1);
 
   int target_size_signals = 0;
   int last_w              = 0;
@@ -730,7 +730,7 @@ TEST(EditorOverlayInteractionTest, EqualOutputSizeImageSwitchResyncsRenderRefere
 
   // Switch to image B: different source size, same requested output size.
   viewport.setImageIdentity(20);
-  viewport.setImageGeneration(2);
+  viewport.setSessionEpoch(2);
   controller.resetPresentationStateForNewImage();
   controller.setImageSize(6000, 4000);
   // Interim source-size fallback (production QML path).
@@ -798,7 +798,7 @@ TEST(EditorOverlayInteractionTest, RenderReferenceChangeNeverFeedsBackIntoDetail
 TEST(EditorOverlayInteractionTest, DetailPatchEnsureSizeDoesNotRewriteRenderReference) {
   EditorViewportItem viewport;
   viewport.setImageIdentity(42);
-  viewport.setImageGeneration(1);
+  viewport.setSessionEpoch(1);
 
   int target_size_signals = 0;
   int last_w              = 0;
@@ -875,7 +875,7 @@ TEST(EditorOverlayInteractionTest, DetailPatchEnsureSizeDoesNotRewriteRenderRefe
 
 TEST(EditorOverlayInteractionTest, ReleasingStaleDetailSlotUnblocksReplacementDetailTarget) {
   DirectPresentQueue queue(EditorBackend::Cuda);
-  queue.InvalidateImageGeneration(1, 42);
+  queue.InvalidateSessionEpoch(1, 42);
   queue.SetConsumerAvailable(true);
 
   const auto occupy_layer = [&](FrameRole role, std::uintptr_t handle) {
@@ -943,7 +943,7 @@ TEST(EditorOverlayInteractionTest, ViewTransformPushDoesNotInvalidateDirectPrese
     DirectPresentQueue::SizeRequest req;
     req.width            = 64;
     req.height           = 48;
-    req.image_generation = 1;
+    req.session_epoch = 1;
     req.image_identity   = 1;
     viewport.present_queue()->NoteSizeRequest(req);
     viewport.present_queue()->InvalidateTargetGeneration();

@@ -70,11 +70,11 @@ struct LeaseDimensions {
 };
 
 // Immutable identity for one presentation target generation.
-// image_identity is the durable DB image id; image_generation is a monotonic
-// session counter that advances on every open/switch (including A→B→A).
+// image_identity is the durable DB image id; session_epoch is the presentation
+// stamp of ImageLoadRequestId for this open/switch (including A→B→A).
 struct TargetGeneration {
   std::uint64_t target_generation = 0;
-  std::uint64_t image_generation  = 0;
+  std::uint64_t session_epoch     = 0;
   std::uint64_t layer_generation  = 0;
   std::uint64_t image_identity    = 0;
 };
@@ -85,10 +85,10 @@ struct WritableTargetRequest {
   LeaseFrameLayer    layer = LeaseFrameLayer::InteractivePrimary;
   LeaseDimensions    dimensions{};
   std::uint64_t      layer_generation = 0;
-  std::uint64_t      image_generation = 0;
+  std::uint64_t      session_epoch = 0;
   std::uint64_t      image_identity   = 0;
 
-  [[nodiscard]] auto valid() const -> bool { return dimensions.valid() && image_generation != 0; }
+  [[nodiscard]] auto valid() const -> bool { return dimensions.valid() && session_epoch != 0; }
 };
 
 // Dual-sided lifetime token. Native resources are destroyed only when both
@@ -157,7 +157,7 @@ struct CompletedFrameLease {
   [[nodiscard]] auto    valid() const -> bool {
     return target.valid() && producer_complete &&
            generation.target_generation == target.generation.target_generation &&
-           generation.image_generation == target.generation.image_generation &&
+           generation.session_epoch == target.generation.session_epoch &&
            generation.image_identity == target.generation.image_identity &&
            (target.generation.layer_generation == 0 ||
             generation.layer_generation == target.generation.layer_generation) &&

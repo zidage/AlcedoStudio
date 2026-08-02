@@ -76,7 +76,7 @@ EditorSessionController::EditorSessionController(EditorController*              
     session_backend_->RequestViewChange(alcedo::EditorRenderReason::ScopeRefresh,
                                         std::move(region));
   });
-  scope_controller_->SetImageIdentity(image_id(), ImageLoadGeneration());
+  scope_controller_->SetImageIdentity(image_id(), SessionEpoch());
   LoadFilmstripUiPrefs();
   LoadDesktopUiPrefs();
   if (session_backend_) {
@@ -180,7 +180,7 @@ void EditorSessionController::SetSessionBackend(alcedo::IEditorSessionBackend* s
     actions_.Apply({});
   }
   if (scope_controller_) {
-    scope_controller_->SetImageIdentity(image_id(), ImageLoadGeneration());
+    scope_controller_->SetImageIdentity(image_id(), SessionEpoch());
   }
   SyncRawDecodeCapabilities();
 }
@@ -305,7 +305,7 @@ auto EditorSessionController::image_id() const -> uint {
   return image_id_;
 }
 
-auto EditorSessionController::ImageLoadGeneration() const -> qulonglong {
+auto EditorSessionController::SessionEpoch() const -> qulonglong {
   if (session_backend_) {
     return static_cast<qulonglong>(session_backend_->active_image_load_request().value);
   }
@@ -313,7 +313,7 @@ auto EditorSessionController::ImageLoadGeneration() const -> qulonglong {
 }
 
 auto EditorSessionController::viewport_identity_key() const -> QString {
-  return QStringLiteral("%1:%2:%3").arg(image_id()).arg(ImageLoadGeneration()).arg(active_ ? 1 : 0);
+  return QStringLiteral("%1:%2:%3").arg(image_id()).arg(SessionEpoch()).arg(active_ ? 1 : 0);
 }
 
 auto EditorSessionController::session_state() const -> alcedo::EditorSessionState {
@@ -379,7 +379,7 @@ void EditorSessionController::ApplyCloseLocal() {
 
 void EditorSessionController::SyncViewportIdentity() {
   qulonglong target_image_id   = static_cast<qulonglong>(image_id());
-  qulonglong target_generation = ImageLoadGeneration();
+  qulonglong target_generation = SessionEpoch();
   if (session_backend_) {
     if (const auto pending = session_backend_->pending_presentation_target()) {
       target_image_id   = static_cast<qulonglong>(pending->image_id);
@@ -388,9 +388,9 @@ void EditorSessionController::SyncViewportIdentity() {
       // Preserve the Open() pre-stamp until the backend publishes a pending target.
       if (auto* item =
               qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
-        if (item->imageGeneration() > target_generation) {
+        if (item->sessionEpoch() > target_generation) {
           target_image_id   = item->imageIdentity();
-          target_generation = item->imageGeneration();
+          target_generation = item->sessionEpoch();
         }
       }
     }
@@ -404,7 +404,7 @@ void EditorSessionController::SyncViewportIdentity() {
         (has_image() || (session_backend_ && session_backend_->pending_presentation_target()));
     if (presentation_active) {
       item->setImageIdentity(target_image_id);
-      item->setImageGeneration(target_generation);
+      item->setSessionEpoch(target_generation);
     }
   }
 }
@@ -433,7 +433,7 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
         if (auto* item =
                 qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
           skip_prestamp =
-              item->imageGeneration() >
+              item->sessionEpoch() >
               static_cast<qulonglong>(session_backend_->active_image_load_request().value);
         }
       }
@@ -447,7 +447,7 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
         if (auto* item =
                 qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
           item->setImageIdentity(presentation_image_id);
-          item->setImageGeneration(presentation_generation);
+          item->setSessionEpoch(presentation_generation);
         }
       }
     }

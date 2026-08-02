@@ -100,7 +100,7 @@ struct ScopeSlot {
   int                                                           waveform_height = 0;
   uint64_t                                                      generation     = 0;
   uint64_t                                                      image_identity = 0;
-  uint64_t                                                      image_generation = 0;
+  uint64_t                                                      session_epoch = 0;
   uint64_t                                                      display_generation = 0;
 
   // Idle: free for staging. Staged: StageFrame copied input and recorded
@@ -135,7 +135,7 @@ struct ScopeSlot {
     waveform_height = 0;
     generation = 0;
     image_identity = 0;
-    image_generation = 0;
+    session_epoch = 0;
     display_generation = 0;
     phase = Phase::Idle;
   }
@@ -235,7 +235,7 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
     cudaEventRecord(slot->input_ready->event, signal_resource->stream);
 
     slot->image_identity     = frame.image_identity;
-    slot->image_generation   = frame.image_generation;
+    slot->session_epoch   = frame.session_epoch;
     slot->display_generation = frame.display_generation;
     slot->generation         = next_generation_++;
     slot->phase              = ScopeSlot::Phase::Staged;
@@ -344,7 +344,7 @@ class CudaScopeAnalyzerImpl final : public IScopeAnalyzer {
     output.waveform_width = latest_slot->waveform_width;
     output.waveform_height = latest_slot->waveform_height;
     output.image_identity     = latest_slot->image_identity;
-    output.image_generation   = latest_slot->image_generation;
+    output.session_epoch   = latest_slot->session_epoch;
     output.display_generation = latest_slot->display_generation;
 
     if (latest_slot->histogram) {

@@ -286,7 +286,7 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     InstallBackendNotifier();
   void                     ApplyActionAvailability();
   void                     SyncBackgroundActionRestrictions();
-  [[nodiscard]] qulonglong ImageLoadGeneration() const;
+  [[nodiscard]] qulonglong SessionEpoch() const;
   /// Apply a publisher event to QML properties and emit HistoryOperationFinished.
   void ApplyPublishedHistory(const EditorHistoryOperationPublisher::Published& published);
   /// Reject at the controller boundary without calling the backend.

@@ -91,8 +91,8 @@ auto EditorViewportItem::targetGeneration() const -> qulonglong {
   return present_queue_->DiagnosticsSnapshot().target_generation;
 }
 
-auto EditorViewportItem::lastPresentedImageGeneration() const -> qulonglong {
-  return present_queue_->DiagnosticsSnapshot().last_composed_image_generation;
+auto EditorViewportItem::lastPresentedSessionEpoch() const -> qulonglong {
+  return present_queue_->DiagnosticsSnapshot().last_composed_session_epoch;
 }
 
 auto EditorViewportItem::lastPresentedRequestId() const -> qulonglong {
@@ -159,26 +159,26 @@ void EditorViewportItem::setImageIdentity(qulonglong identity) {
   emit ImageIdentityChanged();
 }
 
-void EditorViewportItem::setImageGeneration(qulonglong generation) {
-  const auto previous = image_generation_.exchange(generation, std::memory_order_acq_rel);
-  if (previous == generation) {
+void EditorViewportItem::setSessionEpoch(qulonglong epoch) {
+  const auto previous = session_epoch_.exchange(epoch, std::memory_order_acq_rel);
+  if (previous == epoch) {
     return;
   }
-  present_queue_->InvalidateImageGeneration(generation, imageIdentity());
-  emit ImageGenerationChanged();
+  present_queue_->InvalidateSessionEpoch(epoch, imageIdentity());
+  emit SessionEpochChanged();
   notifyDiagnosticsChanged();
   requestPresentUpdate();
 }
 
 void EditorViewportItem::beginImageSession(qulonglong imageIdentity) {
   setImageIdentity(imageIdentity);
-  const auto next = image_generation_.load(std::memory_order_acquire) + 1;
-  image_generation_.store(next, std::memory_order_release);
-  present_queue_->InvalidateImageGeneration(next, imageIdentity);
+  const auto next = session_epoch_.load(std::memory_order_acquire) + 1;
+  session_epoch_.store(next, std::memory_order_release);
+  present_queue_->InvalidateSessionEpoch(next, imageIdentity);
   if (frame_sink_) {
     frame_sink_->ClearPendingImportedFrames();
   }
-  emit ImageGenerationChanged();
+  emit SessionEpochChanged();
   notifyDiagnosticsChanged();
   requestPresentUpdate();
 }
@@ -223,7 +223,7 @@ void EditorViewportItem::requestRendererInvalidation() {
 }
 
 void EditorViewportItem::cancelPendingFrames() {
-  present_queue_->InvalidateImageGeneration(imageGeneration(), imageIdentity());
+  present_queue_->InvalidateSessionEpoch(sessionEpoch(), imageIdentity());
   if (frame_sink_) {
     frame_sink_->ClearPendingImportedFrames();
   }
@@ -280,9 +280,9 @@ auto EditorViewportItem::createRenderer() -> QQuickRhiItemRenderer* {
   // Renderer destruction must not shut down the present queue; the item keeps
   // it for scene-graph recreation.
   qCDebug(editorPresentLog,
-          "[EditorPresent] creating QQuickRhiItem renderer image=%llu generation=%llu",
+          "[EditorPresent] creating QQuickRhiItem renderer image=%llu epoch=%llu",
           static_cast<unsigned long long>(imageIdentity()),
-          static_cast<unsigned long long>(imageGeneration()));
+          static_cast<unsigned long long>(sessionEpoch()));
   return new EditorViewportRenderer();
 }
 
@@ -402,13 +402,13 @@ void EditorViewportItem::notifyDiagnosticsChanged() {
   const auto diag                  = present_queue_->DiagnosticsSnapshot();
   const bool available             = diag.consumer_available;
   const auto target_gen            = diag.target_generation;
-  const auto presented_image_gen   = diag.last_composed_image_generation;
+  const auto presented_image_gen   = diag.last_composed_session_epoch;
   const auto presented_request_id  = diag.last_composed_request_id;
   const auto presented_frame_count = diag.composed_frame_count;
   const auto dropped               = diag.dropped_stale_frame_count;
   const int  live                  = static_cast<int>(diag.live_target_count);
   if (available == last_diagnostics_available_ && target_gen == last_diag_target_gen_ &&
-      presented_image_gen == last_diag_presented_image_gen_ &&
+      presented_image_gen == last_diag_presented_session_epoch_ &&
       presented_request_id == last_diag_presented_request_id_ &&
       presented_frame_count == last_diag_presented_frame_count_ && dropped == last_diag_dropped_ &&
       live == last_diag_live_targets_) {
@@ -416,7 +416,7 @@ void EditorViewportItem::notifyDiagnosticsChanged() {
   }
   last_diagnostics_available_      = available;
   last_diag_target_gen_            = target_gen;
-  last_diag_presented_image_gen_   = presented_image_gen;
+  last_diag_presented_session_epoch_   = presented_image_gen;
   last_diag_presented_request_id_  = presented_request_id;
   last_diag_presented_frame_count_ = presented_frame_count;
   last_diag_dropped_               = dropped;

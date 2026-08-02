@@ -411,7 +411,7 @@ TEST(EditorSessionControllerPhase5ATest,
   backend.SimulateFirstFrameReady();
   ASSERT_TRUE(controller.can_edit());
   ASSERT_EQ(viewport.imageIdentity(), 2u);
-  ASSERT_EQ(viewport.imageGeneration(), 1u);
+  ASSERT_EQ(viewport.sessionEpoch(), 1u);
 
   backend.async_switch_ = true;
   controller.Open(3, 4);
@@ -419,22 +419,22 @@ TEST(EditorSessionControllerPhase5ATest,
   ASSERT_EQ(controller.session_state(), EditorSessionState::Saving);
   EXPECT_FALSE(controller.can_edit());
   EXPECT_EQ(viewport.imageIdentity(), 4u);
-  EXPECT_EQ(viewport.imageGeneration(), 2u);
+  EXPECT_EQ(viewport.sessionEpoch(), 2u);
   EXPECT_EQ(controller.scope_controller()->image_identity(), 4u);
-  EXPECT_EQ(controller.scope_controller()->image_generation(), 2u);
+  EXPECT_EQ(controller.scope_controller()->session_epoch(), 2u);
 
   controller.Open(5, 6);
   EXPECT_EQ(viewport.imageIdentity(), 4u);
-  EXPECT_EQ(viewport.imageGeneration(), 2u);
+  EXPECT_EQ(viewport.sessionEpoch(), 2u);
   EXPECT_EQ(controller.scope_controller()->image_identity(), 4u);
-  EXPECT_EQ(controller.scope_controller()->image_generation(), 2u);
+  EXPECT_EQ(controller.scope_controller()->session_epoch(), 2u);
 
   backend.CompletePendingSwitch();
   EXPECT_EQ(controller.session_state(), EditorSessionState::Switching);
   EXPECT_EQ(controller.element_id(), 3u);
   EXPECT_EQ(controller.image_id(), 4u);
   EXPECT_EQ(viewport.imageIdentity(), 4u);
-  EXPECT_EQ(viewport.imageGeneration(), 2u);
+  EXPECT_EQ(viewport.sessionEpoch(), 2u);
 
   backend.SimulateFirstFrameReady();
   EXPECT_EQ(controller.session_state(), EditorSessionState::Interactive);
