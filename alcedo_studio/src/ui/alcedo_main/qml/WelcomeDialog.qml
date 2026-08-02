@@ -22,10 +22,7 @@ Dialog {
     property Item blurSource: null
     property var recentProjects: []
     property var languageOptions: []
-    property var acceleratorOptions: []
     property int currentLanguageIndex: 0
-    property string currentAcceleratorBackend: ""
-    property string acceleratorBackendAtLaunch: ""
     property string acceleratorWarning: ""
     property bool acceleratorWarningShown: false
     property string serviceMessage: ""
@@ -52,7 +49,6 @@ Dialog {
     signal createRequested(string projectName, string storageLocation)
     signal exitRequested()
     signal languageRequested(string languageCode)
-    signal acceleratorRequested(string backend)
     signal acceleratorWarningAcknowledged()
     signal recentProjectRequested(string projectPath)
 
@@ -61,10 +57,6 @@ Dialog {
             showAllRecent = false
             currentPage = 0
             pager.currentIndex = 0
-            if (acceleratorBackendAtLaunch.length === 0
-                    && currentAcceleratorBackend.length > 0) {
-                acceleratorBackendAtLaunch = currentAcceleratorBackend
-            }
             if (projectName.length === 0) {
                 projectName = qsTr("Untitled Project")
             }
@@ -156,35 +148,6 @@ Dialog {
             font.pixelSize: 14
             lineHeight: 1.2
         }
-    }
-
-    AcceleratorRestartDialog {
-        id: acceleratorRestartDialog
-        blurSource: dialog.blurSource
-        onRestartRequested: dialog.exitRequested()
-    }
-
-    function acceleratorIndexForValue(value) {
-        for (let i = 0; i < acceleratorOptions.length; ++i) {
-            if (acceleratorOptions[i].value === value) {
-                return i
-            }
-        }
-        return acceleratorOptions.length > 0 ? 0 : -1
-    }
-
-    function acceleratorLabelForValue(value) {
-        for (let i = 0; i < acceleratorOptions.length; ++i) {
-            if (acceleratorOptions[i].value === value) {
-                return String(acceleratorOptions[i].label || value)
-            }
-        }
-        return String(value)
-    }
-
-    function showAcceleratorRestartDialog(value) {
-        acceleratorRestartDialog.backendLabel = acceleratorLabelForValue(value)
-        acceleratorRestartDialog.open()
     }
 
     function maybeShowAcceleratorWarning() {
@@ -480,42 +443,6 @@ Dialog {
                                     font.family: dialog.font.family
                                     font.pixelSize: 13
                                     lineHeight: 1.2
-                                }
-
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 8
-                                    visible: dialog.acceleratorOptions.length > 0
-
-                                    Label {
-                                        Layout.fillWidth: true
-                                        text: qsTr("Acceleration")
-                                        color: dialog.mutedTextColor
-                                        font.family: dialog.font.family
-                                        font.pixelSize: 12
-                                        font.weight: 700
-                                    }
-
-                                    ComboBox {
-                                        id: acceleratorCombo
-                                        Layout.fillWidth: true
-                                        Layout.preferredHeight: 42
-                                        model: dialog.acceleratorOptions
-                                        textRole: "label"
-                                        valueRole: "value"
-                                        currentIndex: dialog.acceleratorIndexForValue(
-                                                          dialog.currentAcceleratorBackend)
-                                        font.family: dialog.font.family
-                                        font.pixelSize: 14
-                                        onActivated: function(index) {
-                                            const item = dialog.acceleratorOptions[index]
-                                            if (item) {
-                                                dialog.acceleratorRequested(item.value)
-                                            }
-                                        }
-                                        Material.background: Qt.rgba(dialog.panelColor.r, dialog.panelColor.g, dialog.panelColor.b, 0.92)
-                                        Material.foreground: dialog.textColor
-                                    }
                                 }
 
                                 Item {

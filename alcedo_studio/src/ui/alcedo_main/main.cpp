@@ -168,7 +168,7 @@ int main(int argc, char* argv[]) {
 
   // Priority matches the old manual override model:
   //   1) --editor-backend (debug/force, same as before)
-  //   2) QSettings gpu/acceleratorBackend (Welcome selection)
+  //   2) QSettings gpu/acceleratorBackend (Settings → Acceleration)
   //   3) platform default
   const auto backend_parse = alcedo::editor_rhi::ParseEditorBackendArgs(argc, argv);
   if (backend_parse.present && !backend_parse.error.empty()) {

@@ -4658,6 +4658,22 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <source>Acceleration</source>
+        <translation>Acceleration</translation>
+    </message>
+    <message>
+        <source>Image processing backend</source>
+        <translation>Image processing backend</translation>
+    </message>
+    <message>
+        <source>Backend</source>
+        <translation>Backend</translation>
+    </message>
+    <message>
+        <source>Restart Alcedo yourself to apply this backend change.</source>
+        <translation>Restart Alcedo yourself to apply this backend change.</translation>
+    </message>
+    <message>
         <location line="-134"/>
         <source>本地 AI 功能运行在本机 AI 模型上，图片内容不会上传至云端。识别速度和可处理规模取决于你的 CPU、GPU、内存与磁盘性能。
 

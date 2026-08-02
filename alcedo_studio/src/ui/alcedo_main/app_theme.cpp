@@ -1072,7 +1072,6 @@ auto AppTheme::editorSidePanelWidth() const -> int { return 320; }
 auto AppTheme::editorSidePanelWidthMin() const -> int { return 260; }
 auto AppTheme::editorSidePanelWidthMax() const -> int { return 460; }
 auto AppTheme::editorMergeDialogWidth() const -> int { return 960; }
-auto AppTheme::acceleratorRestartDialogWidth() const -> int { return 520; }
 auto AppTheme::editorScopeHeight() const -> int { return 192; }
 auto AppTheme::editorScopeHeightMin() const -> int { return 160; }
 auto AppTheme::lineHeightCaption() const -> int { return 14; }
