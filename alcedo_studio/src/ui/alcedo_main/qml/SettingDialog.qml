@@ -44,9 +44,13 @@ Dialog {
     property int pendingCacheMaxEntries: appModules.library.thumbnailDiskCacheMaxEntries
     property int pendingCacheJpegQuality: appModules.library.thumbnailDiskCacheJpegQuality
     property string pendingSemanticImportPreference: appModules.semanticGeneration.importPreference
+    property string pendingAcceleratorBackend: appModules.project.acceleratorBackend
     property string cacheStatsSnapshot: ""
     property int requestedCategory: 0
     readonly property bool canCompleteSettings: appModules.interactionPolicy.canRunSemanticGeneration
+    readonly property bool acceleratorRestartHintVisible:
+        pendingAcceleratorBackend.length > 0
+        && pendingAcceleratorBackend !== appModules.project.acceleratorBackend
 
     signal messageRequested(string message)
     signal semanticGenerationBackgroundRequested()
@@ -85,7 +89,18 @@ Dialog {
         pendingCacheMaxEntries = appModules.library.thumbnailDiskCacheMaxEntries
         pendingCacheJpegQuality = appModules.library.thumbnailDiskCacheJpegQuality
         pendingSemanticImportPreference = appModules.semanticGeneration.importPreference
+        pendingAcceleratorBackend = appModules.project.acceleratorBackend
         refreshCacheStats()
+    }
+
+    function acceleratorIndexForValue(value) {
+        const options = appModules.project.acceleratorOptions
+        for (let i = 0; i < options.length; ++i) {
+            if (options[i].value === value) {
+                return i
+            }
+        }
+        return options.length > 0 ? 0 : -1
     }
 
     function refreshCacheStats() {
@@ -149,6 +164,9 @@ Dialog {
         if (currentCategory === 4) {
             return qsTr("Advanced Content Analysis")
         }
+        if (currentCategory === 5) {
+            return qsTr("Acceleration")
+        }
         return qsTr("About")
     }
 
@@ -183,6 +201,12 @@ Dialog {
         }
         if (appModules.semanticGeneration.importPreference !== pendingSemanticImportPreference) {
             appModules.semanticGeneration.SetImportPreference(pendingSemanticImportPreference)
+        }
+        if (appModules.project.acceleratorBackend !== pendingAcceleratorBackend) {
+            if (!appModules.project.SetAcceleratorBackend(pendingAcceleratorBackend)) {
+                messageRequested(appModules.project.serviceMessage)
+                return
+            }
         }
         refreshCacheStats()
         messageRequested(qsTr("Settings applied"))
@@ -288,6 +312,7 @@ Dialog {
                                     { label: qsTr("Cache"), icon: "qrc:/panel_icons/box.svg" },
                                     { label: qsTr("Local Content Recognition"), icon: "qrc:/panel_icons/search.svg" },
                                     { label: qsTr("Advanced Content Analysis"), icon: "qrc:/panel_icons/flask.svg" },
+                                    { label: qsTr("Acceleration"), icon: "qrc:/panel_icons/cpu.svg" },
                                     { label: qsTr("About"), icon: "qrc:/panel_icons/aperture.svg" }
                                 ]
 
@@ -839,6 +864,91 @@ Dialog {
                                 dialog.messageRequested(message)
                             }
                         }
+
+                        ScrollView {
+                            id: accelerationScroll
+                            contentWidth: availableWidth
+                            clip: true
+
+                            ColumnLayout {
+                                width: accelerationScroll.availableWidth
+                                spacing: 18
+
+                                SettingsSection {
+                                    Layout.fillWidth: true
+                                    Layout.topMargin: 26
+                                    Layout.leftMargin: 34
+                                    Layout.rightMargin: 34
+                                    Layout.bottomMargin: 26
+                                    title: qsTr("Image processing backend")
+                                    textColor: dialog.textColor
+                                    mutedTextColor: dialog.mutedTextColor
+                                    dividerColor: dialog.dividerColor
+
+                                    ColumnLayout {
+                                        Layout.fillWidth: true
+                                        spacing: 10
+
+                                        RowLayout {
+                                            Layout.fillWidth: true
+                                            spacing: 16
+
+                                            Label {
+                                                Layout.preferredWidth: 160
+                                                text: qsTr("Backend")
+                                                color: dialog.textColor
+                                                font.pixelSize: 15
+                                                font.weight: 600
+                                            }
+
+                                            ComboBox {
+                                                id: acceleratorCombo
+                                                Layout.fillWidth: true
+                                                Layout.preferredHeight: 44
+                                                model: appModules.project.acceleratorOptions
+                                                textRole: "label"
+                                                valueRole: "value"
+                                                enabled: appModules.project.acceleratorOptions.length > 0
+                                                currentIndex: dialog.acceleratorIndexForValue(
+                                                                  dialog.pendingAcceleratorBackend)
+                                                onActivated: function(index) {
+                                                    const options = appModules.project.acceleratorOptions
+                                                    if (index >= 0 && index < options.length) {
+                                                        dialog.pendingAcceleratorBackend =
+                                                            String(options[index].value || "")
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            Layout.leftMargin: 176
+                                            visible: dialog.acceleratorRestartHintVisible
+                                            text: qsTr("Restart Alcedo yourself to apply this backend change.")
+                                            wrapMode: Text.WordWrap
+                                            color: dialog.mutedTextColor
+                                            font.pixelSize: 12
+                                            font.weight: 500
+                                            lineHeight: 1.25
+                                        }
+
+                                        Label {
+                                            Layout.fillWidth: true
+                                            Layout.leftMargin: 176
+                                            visible: appModules.project.acceleratorWarning.length > 0
+                                            text: appModules.project.acceleratorWarning
+                                            wrapMode: Text.WordWrap
+                                            color: dialog.dangerColor
+                                            font.pixelSize: 12
+                                            font.weight: 500
+                                            lineHeight: 1.25
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         ScrollView {
                             id: aboutScroll
                             contentWidth: availableWidth

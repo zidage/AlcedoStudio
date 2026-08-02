@@ -590,7 +590,6 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentTransferDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SettingDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WelcomeDialog.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/AcceleratorRestartDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/NikonHeRecoveryDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SemanticGenerationDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdvancedContentAnalysisDialog.qml"

@@ -4802,6 +4802,22 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <source>Advanced Content Analysis</source>
         <translation>高级内容分析</translation>
     </message>
+    <message>
+        <source>Acceleration</source>
+        <translation>加速</translation>
+    </message>
+    <message>
+        <source>Image processing backend</source>
+        <translation>图像处理后端</translation>
+    </message>
+    <message>
+        <source>Backend</source>
+        <translation>后端</translation>
+    </message>
+    <message>
+        <source>Restart Alcedo yourself to apply this backend change.</source>
+        <translation>请自行重启 Alcedo，以使此后端更改生效。</translation>
+    </message>
 </context>
 <context>
     <name>ShellSignals</name>

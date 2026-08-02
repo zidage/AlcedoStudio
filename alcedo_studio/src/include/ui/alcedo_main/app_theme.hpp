@@ -78,7 +78,6 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int editorSidePanelWidthMin READ editorSidePanelWidthMin CONSTANT)
   Q_PROPERTY(int editorSidePanelWidthMax READ editorSidePanelWidthMax CONSTANT)
   Q_PROPERTY(int editorMergeDialogWidth READ editorMergeDialogWidth CONSTANT)
-  Q_PROPERTY(int acceleratorRestartDialogWidth READ acceleratorRestartDialogWidth CONSTANT)
   Q_PROPERTY(int editorScopeHeight READ editorScopeHeight CONSTANT)
   Q_PROPERTY(int editorScopeHeightMin READ editorScopeHeightMin CONSTANT)
   // Line heights (px) for QML Label lineHeight when using fixed pixel sizes.
@@ -249,7 +248,6 @@ class AppTheme final : public QObject {
   auto        editorSidePanelWidthMin() const -> int;
   auto        editorSidePanelWidthMax() const -> int;
   auto        editorMergeDialogWidth() const -> int;
-  auto        acceleratorRestartDialogWidth() const -> int;
   auto        editorScopeHeight() const -> int;
   auto        editorScopeHeightMin() const -> int;
   auto        lineHeightCaption() const -> int;

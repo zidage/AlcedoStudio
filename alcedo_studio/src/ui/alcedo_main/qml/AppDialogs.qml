@@ -318,9 +318,7 @@ Item {
         cornerRadius: host.windowCornerRadius
         recentProjects: appModules.project.recentProjects
         languageOptions: host.languageOptions
-        acceleratorOptions: appModules.project.acceleratorOptions
         currentLanguageIndex: host.languageIndexForCode(languageManager.currentLanguageCode)
-        currentAcceleratorBackend: appModules.project.acceleratorBackend
         acceleratorWarning: appModules.project.acceleratorWarning
         serviceMessage: appModules.project.serviceMessage
         headlineFontFamily: host.headlineFontFamily
@@ -345,13 +343,6 @@ Item {
         onExitRequested: Qt.quit()
         onLanguageRequested: function(languageCode) {
             languageManager.setLanguage(languageCode)
-        }
-        onAcceleratorRequested: function(backend) {
-            if (!appModules.project.SetAcceleratorBackend(backend)) {
-                host.showSnackbar(appModules.project.serviceMessage)
-            } else if (welcomeDialogObj.acceleratorBackendAtLaunch !== backend) {
-                welcomeDialogObj.showAcceleratorRestartDialog(backend)
-            }
         }
         onAcceleratorWarningAcknowledged: appModules.project.AcknowledgeAcceleratorWarning()
         onRecentProjectRequested: function(projectPath) {
