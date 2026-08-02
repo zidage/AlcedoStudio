@@ -999,7 +999,7 @@ auto EditorSessionController::render_diagnostics() const -> QVariantMap {
   out.insert(QStringLiteral("cancelledCount"), static_cast<qulonglong>(diag.cancelled_count));
   out.insert(QStringLiteral("acceptedCount"), static_cast<qulonglong>(diag.accepted_count));
   out.insert(QStringLiteral("failedCount"), static_cast<qulonglong>(diag.failed_count));
-  out.insert(QStringLiteral("presentedCount"), static_cast<qulonglong>(diag.presented_count));
+  out.insert(QStringLiteral("readyCount"), static_cast<qulonglong>(diag.ready_count));
   out.insert(QStringLiteral("imageLoadRequestId"),
              static_cast<qulonglong>(diag.image_load_request_id));
   out.insert(QStringLiteral("lastError"), QString::fromUtf8(diag.last_error.c_str()));
@@ -1013,13 +1013,13 @@ auto EditorSessionController::render_diagnostics() const -> QVariantMap {
     out.insert(QStringLiteral("lastRejectedRenderReason"),
                QString::fromUtf8(ReasonName(*diag.last_rejected_render_reason)));
   }
-  if (diag.last_submitted_frame_role) {
-    out.insert(QStringLiteral("lastSubmittedFrameRole"),
-               QString::fromUtf8(FrameRoleName(*diag.last_submitted_frame_role)));
+  if (diag.last_ready_frame_role) {
+    out.insert(QStringLiteral("lastReadyFrameRole"),
+               QString::fromUtf8(FrameRoleName(*diag.last_ready_frame_role)));
   }
-  if (diag.last_submitted_render_reason) {
-    out.insert(QStringLiteral("lastSubmittedRenderReason"),
-               QString::fromUtf8(ReasonName(*diag.last_submitted_render_reason)));
+  if (diag.last_ready_render_reason) {
+    out.insert(QStringLiteral("lastReadyRenderReason"),
+               QString::fromUtf8(ReasonName(*diag.last_ready_render_reason)));
   }
   out.insert(QStringLiteral("firstFrameTimeMs"), first_frame_time_ms());
   return out;

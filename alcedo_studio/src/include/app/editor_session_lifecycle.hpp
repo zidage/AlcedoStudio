@@ -65,7 +65,7 @@ class EditorSessionLifecycle final {
   auto               AcquireGuards(std::string* error) -> bool;
 
   /// Mark the image ready after guards succeed. Stays in Loading until the
-  /// first frame is presented. Returns the identity snapshot for event
+  /// first frame is ready. Returns the identity snapshot for event
   /// publication.
   auto               MarkImageReady() -> EditorSessionIdentity;
 
@@ -91,9 +91,9 @@ class EditorSessionLifecycle final {
   /// and transition to ShuttingDown.
   void               BeginShutdown();
 
-  /// Mark the first frame presented and transition to Interactive. Returns
+  /// Mark the first frame ready and transition to Interactive. Returns
   /// the identity snapshot if the transition happened, nullopt otherwise.
-  auto               MarkFirstFramePresented() -> std::optional<EditorSessionIdentity>;
+  auto               MarkFirstFrameReady() -> std::optional<EditorSessionIdentity>;
 
   /// Retry from Failed or RetainedImageFailure after a discard: transition to
   /// Loading so the pending target can re-acquire. From RetainedImageFailure

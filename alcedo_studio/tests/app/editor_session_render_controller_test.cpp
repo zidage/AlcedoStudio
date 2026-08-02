@@ -74,15 +74,11 @@ class EditorSessionRenderControllerTest : public ::testing::Test {
     ASSERT_FALSE(sched->scheduled().empty());
     const auto request_id = sched->scheduled().front().request_id;
     coordinator_->NotifySchedulerCompleted(request_id, true);
-    coordinator_->NotifyFrameSubmitted(request_id);
-    coordinator_->NotifyFramePresented(request_id);
     // The render controller auto-routes QualityBase after first frame.
     // Drive it to completion for subsequent tests.
     if (sched->scheduled().size() > 1u) {
       const auto quality_request_id = sched->scheduled().back().request_id;
       coordinator_->NotifySchedulerCompleted(quality_request_id, true);
-      coordinator_->NotifyFrameSubmitted(quality_request_id);
-      coordinator_->NotifyFramePresented(quality_request_id);
     }
   }
 
@@ -113,14 +109,14 @@ TEST_F(EditorSessionRenderControllerTest, GeometryOverlayFlagIsStampedOnRenderIn
   EXPECT_TRUE(sched->scheduled().front().intent.geometry_overlay_only);
 }
 
-TEST_F(EditorSessionRenderControllerTest, FirstFramePresentationEmitsEvent) {
+TEST_F(EditorSessionRenderControllerTest, FirstReadyFrameEntersInteractiveState) {
   OpenImage();
   EXPECT_LT(render_->first_frame_time_ms(), 0.0);
   PresentFirstFrame();
   EXPECT_GE(render_->first_frame_time_ms(), 0.0);
   bool saw_first_frame = false;
   for (const auto& event : events_) {
-    if (event.kind == EditorRenderEventKind::FirstFramePresented) {
+    if (event.kind == EditorRenderEventKind::FirstFrameReady) {
       saw_first_frame = true;
       EXPECT_EQ(event.state, EditorSessionState::Interactive);
     }
@@ -140,8 +136,7 @@ TEST_F(EditorSessionRenderControllerTest, QualityBaseFollowsInteractivePrimaryFi
 TEST_F(EditorSessionRenderControllerTest, ViewChangeZoomPanIsReusedInInteractive) {
   OpenImage();
   PresentFirstFrame();
-  // Transition lifecycle to Interactive via MarkFirstFramePresented.
-  lifecycle_->MarkFirstFramePresented();
+  lifecycle_->MarkFirstFrameReady();
   auto*               sched = dynamic_cast<EditorSessionBootstrapSchedulerPort*>(scheduler_.get());
   const auto          scheduled_before = sched->scheduled().size();
 
@@ -158,7 +153,7 @@ TEST_F(EditorSessionRenderControllerTest, ViewChangeZoomPanIsReusedInInteractive
 TEST_F(EditorSessionRenderControllerTest, ViewChangeDetailRefreshSchedulesDetailPatch) {
   OpenImage();
   PresentFirstFrame();
-  lifecycle_->MarkFirstFramePresented();
+  lifecycle_->MarkFirstFrameReady();
   auto*               sched = dynamic_cast<EditorSessionBootstrapSchedulerPort*>(scheduler_.get());
 
   EditorRenderCommand command;
@@ -187,6 +182,51 @@ TEST_F(EditorSessionRenderControllerTest, ViewChangeDetailRefreshSchedulesDetail
   EXPECT_EQ(scheduled.view_region->x_, 7);
 }
 
+TEST_F(EditorSessionRenderControllerTest, DetailRefreshWaitsForQualityBaseAndKeepsNewestRegion) {
+  OpenImage();
+  auto* sched = dynamic_cast<EditorSessionBootstrapSchedulerPort*>(scheduler_.get());
+  ASSERT_NE(sched, nullptr);
+  ASSERT_EQ(sched->scheduled().size(), 1u);
+
+  const auto first_request_id = sched->scheduled().front().request_id;
+  coordinator_->NotifySchedulerCompleted(first_request_id, true);
+  lifecycle_->MarkFirstFrameReady();
+  ASSERT_EQ(sched->scheduled().size(), 2u);
+  ASSERT_EQ(sched->scheduled().back().intent.frame_role, FrameRole::QualityBase);
+  const auto quality_request_id = sched->scheduled().back().request_id;
+
+  EditorRenderCommand first_detail;
+  first_detail.reason = EditorRenderReason::DetailRefresh;
+  ViewportRenderRegion first_region{};
+  first_region.x_          = 10;
+  first_detail.view_region = first_region;
+  const auto first_event =
+      render_->RouteViewChange(first_detail, lifecycle_->identity(),
+                               lifecycle_->active_image_load_request(),
+                               EditorSessionState::Interactive);
+  EXPECT_EQ(first_event.kind, EditorRenderEventKind::RenderReused);
+  EXPECT_EQ(sched->scheduled().size(), 2u);
+
+  EditorRenderCommand final_detail;
+  final_detail.reason = EditorRenderReason::DetailRefresh;
+  ViewportRenderRegion final_region{};
+  final_region.x_          = 20;
+  final_detail.view_region = final_region;
+  const auto final_event =
+      render_->RouteViewChange(final_detail, lifecycle_->identity(),
+                               lifecycle_->active_image_load_request(),
+                               EditorSessionState::Interactive);
+  EXPECT_EQ(final_event.kind, EditorRenderEventKind::RenderReused);
+  EXPECT_EQ(sched->scheduled().size(), 2u);
+
+  coordinator_->NotifySchedulerCompleted(quality_request_id, true);
+  ASSERT_EQ(sched->scheduled().size(), 3u);
+  const auto& detail_intent = sched->scheduled().back().intent;
+  EXPECT_EQ(detail_intent.frame_role, FrameRole::DetailPatch);
+  ASSERT_TRUE(detail_intent.view_region.has_value());
+  EXPECT_EQ(detail_intent.view_region->x_, 20);
+}
+
 TEST_F(EditorSessionRenderControllerTest, ViewChangeRejectedWhenNotInteractive) {
   EditorRenderCommand command;
   command.reason = EditorRenderReason::ZoomPan;
@@ -200,7 +240,7 @@ TEST_F(EditorSessionRenderControllerTest, ViewChangeRejectedWhenNotInteractive) 
 TEST_F(EditorSessionRenderControllerTest, RenderBusyTransitionsAroundViewChange) {
   OpenImage();
   PresentFirstFrame();
-  lifecycle_->MarkFirstFramePresented();
+  lifecycle_->MarkFirstFrameReady();
   EXPECT_FALSE(render_->render_busy());
 
   EditorRenderCommand command;
@@ -266,8 +306,6 @@ TEST_F(EditorSessionRenderControllerTest, QualityBaseCarriesSameAdjustmentAfterF
   auto*      sched         = dynamic_cast<EditorSessionBootstrapSchedulerPort*>(scheduler_.get());
   const auto ff_request_id = sched->scheduled().front().request_id;
   coordinator_->NotifySchedulerCompleted(ff_request_id, true);
-  coordinator_->NotifyFrameSubmitted(ff_request_id);
-  coordinator_->NotifyFramePresented(ff_request_id);
 
   // The QualityBase follow-up should carry the same adjustment.
   ASSERT_GE(sched->scheduled().size(), 2u);
@@ -290,7 +328,7 @@ TEST_F(EditorSessionRenderControllerTest, StaleSessionGenerationResultDoesNotAdv
   // Construct a render result referencing the stale identity.
   EditorRenderResult stale_result;
   stale_result.request_id                = ff_id;
-  stale_result.kind                      = EditorRenderResultKind::RenderCompleted;
+  stale_result.kind                      = EditorRenderResultKind::FrameReady;
   stale_result.intent.image_load_request_id = ImageLoadRequestId{99};
   stale_result.intent.image_id           = lifecycle_->identity().image_id;
   stale_result.intent.element_id         = lifecycle_->identity().element_id;
@@ -299,17 +337,8 @@ TEST_F(EditorSessionRenderControllerTest, StaleSessionGenerationResultDoesNotAdv
   render_->NotifyRenderResult(stale_result, lifecycle_->identity(),
                               lifecycle_->active_image_load_request(),
                               EditorSessionState::Loading);
-  stale_result.kind = EditorRenderResultKind::FrameSubmitted;
-  render_->NotifyRenderResult(stale_result, lifecycle_->identity(),
-                              lifecycle_->active_image_load_request(),
-                              EditorSessionState::Loading);
-  stale_result.kind = EditorRenderResultKind::FramePresented;
-  render_->NotifyRenderResult(stale_result, lifecycle_->identity(),
-                              lifecycle_->active_image_load_request(),
-                              EditorSessionState::Loading);
-
   EXPECT_TRUE(std::none_of(events_.begin(), events_.end(), [](const EditorRenderEvent& event) {
-    return event.kind == EditorRenderEventKind::FirstFramePresented;
+    return event.kind == EditorRenderEventKind::FirstFrameReady;
   }));
   EXPECT_EQ(coordinator_->diagnostics().accepted_count, accepted_before);
 }

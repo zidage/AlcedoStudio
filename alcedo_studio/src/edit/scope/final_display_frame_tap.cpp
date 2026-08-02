@@ -153,9 +153,20 @@ void FinalDisplayFrameTapSink::UnmapResource() {
 }
 
 void FinalDisplayFrameTapSink::BindFrameSubmission(const FrameCompletionSubmission& submission) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  bound_submission_       = submission;
-  bound_submission_valid_ = true;
+  IFrameSink* downstream = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    bound_submission_       = submission;
+    bound_submission_valid_ = true;
+    downstream              = downstream_sink_;
+  }
+  // The tap decorates the presentation sink; it must not terminate submission
+  // metadata propagation. DirectFrameSink needs the request id, frame role and
+  // presentation mode before EnsureSize/MapResourceForWrite so DetailPatch
+  // allocation cannot be mistaken for a full-frame render reference.
+  if (downstream) {
+    downstream->BindFrameSubmission(submission);
+  }
 }
 
 void FinalDisplayFrameTapSink::NotifyFrameReady(const FrameCompletionSubmission& submission) {
@@ -192,7 +203,10 @@ void FinalDisplayFrameTapSink::SubmitFinalDisplayFrame(const FinalDisplayFrameVi
         stamped_frame.image_identity   = bound_submission_.metadata.image_identity;
         stamped_frame.image_generation = bound_submission_.metadata.image_generation;
       }
-      stamped_frame.display_generation = bound_submission_.metadata.presentation_request_id;
+      stamped_frame.display_generation =
+          bound_submission_.metadata.presentation_request_id != 0
+              ? bound_submission_.metadata.presentation_request_id
+              : bound_submission_.metadata.preview_generation;
       scope_update_allowed             = bound_submission_.metadata.scope_update_allowed;
       bound_submission_valid_          = false;
     }

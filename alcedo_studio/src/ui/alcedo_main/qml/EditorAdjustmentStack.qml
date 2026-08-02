@@ -112,12 +112,9 @@ Item {
         if (!editorSession) {
             return
         }
-        // Leaving Geometry must commit the draft crop before the session turns
-        // off geometry_overlay_only and requests the bake refresh.
-        if (root.activePanel === "geometry" && String(panel).toLowerCase() !== "geometry") {
-            if (typeof geometryPanel.confirmPendingCrop === "function")
-                geometryPanel.confirmPendingCrop()
-        }
+        // GeometryPanel commits from onPanelActiveChanged after the controller
+        // queues the overlay-off refresh. Its final Quality frame therefore owns
+        // the newest request id and cannot be masked by that refresh.
         editorSession.activeAdjustmentPanel = panel
     }
 

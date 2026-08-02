@@ -8,6 +8,8 @@
 #include <QMetaObject>
 #include <QThread>
 #include <chrono>
+#include <iostream>
+#include <syncstream>
 #include <utility>
 
 #include "ui/edit_viewer/edit_viewer_surface.hpp"
@@ -160,6 +162,8 @@ void DirectFrameSink::EnsureSize(int width, int height) {
   const std::uint64_t image_identity   = item_->imageIdentity();
   const bool          metal_present    = IsMetalPresentPath();
   bool                emit_target_size = false;
+  std::uint64_t       request_id       = 0;
+  FrameRole           frame_role       = FrameRole::InteractivePrimary;
   {
     std::lock_guard lock(mutex_);
     if (has_mapped_slot_) {
@@ -178,6 +182,8 @@ void DirectFrameSink::EnsureSize(int width, int height) {
     if (bound_submission_valid_) {
       is_render_reference =
           IsRenderReferenceFrame(bound_submission_.mode, bound_submission_.metadata.frame_role);
+      request_id = bound_submission_.metadata.presentation_request_id;
+      frame_role = bound_submission_.metadata.frame_role;
     }
     // Metal zero-copy: production EnsureSize uses the presentation *viewport*
     // size, not the pipeline MTLTexture size. Emitting that as the render
@@ -197,6 +203,10 @@ void DirectFrameSink::EnsureSize(int width, int height) {
   }
 
   if (emit_target_size) {
+    std::osyncstream(std::cout)
+        << "[ROI_TRACE][render-reference-size] request=" << request_id
+        << " role=" << static_cast<int>(frame_role) << " size=" << width << 'x' << height
+        << " image=" << image_identity << " image_generation=" << image_generation << std::endl;
     // Pipeline workers are off-thread; unit tests and GUI-thread callers can
     // receive the geometry signal synchronously.
     const auto connection =
@@ -393,9 +403,20 @@ void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submissi
   {
     std::lock_guard lock(mutex_);
     if (!has_mapped_slot_ || !unmapped_pending_submit_) {
+      if (metadata.frame_role == FrameRole::DetailPatch) {
+        std::osyncstream(std::cout)
+            << "[ROI_TRACE][sink-drop] request=" << metadata.presentation_request_id
+            << " reason=not-mapped-or-not-unmapped mapped=" << has_mapped_slot_
+            << " unmap_pending=" << unmapped_pending_submit_ << std::endl;
+      }
       return;
     }
     if (!AcceptSubmissionRequestId(metadata.presentation_request_id)) {
+      if (metadata.frame_role == FrameRole::DetailPatch) {
+        std::osyncstream(std::cout)
+            << "[ROI_TRACE][sink-drop] request=" << metadata.presentation_request_id
+            << " reason=stale-request-id" << std::endl;
+      }
       has_mapped_slot_         = false;
       unmapped_pending_submit_ = false;
       mapped_slot_index_       = -1;
@@ -409,7 +430,20 @@ void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submissi
     ++submitted_frame_count_;
   }
   if (!item_ || !item_->present_queue() || slot_index < 0) {
+    if (metadata.frame_role == FrameRole::DetailPatch) {
+      std::osyncstream(std::cout)
+          << "[ROI_TRACE][sink-drop] request=" << metadata.presentation_request_id
+          << " reason=no-item-queue-or-slot slot=" << slot_index << std::endl;
+    }
     return;
+  }
+  if (metadata.frame_role == FrameRole::DetailPatch) {
+    std::osyncstream(std::cout)
+        << "[ROI_TRACE][sink-notify-ready] request=" << metadata.presentation_request_id
+        << " image=" << item_->imageIdentity() << " image_generation=" << item_->imageGeneration()
+        << " slot=" << slot_index << " roi_norm=" << metadata.source_roi_norm.x << ','
+        << metadata.source_roi_norm.y << ',' << metadata.source_roi_norm.width << ','
+        << metadata.source_roi_norm.height << std::endl;
   }
   item_->present_queue()->NotifyReady(slot_index, mode, metadata);
   qCDebug(editorPresentLog,
@@ -569,42 +603,6 @@ auto DirectFrameSink::ViewState() const -> ViewerViewState {
 void DirectFrameSink::SetViewState(const ViewerViewState& state) {
   std::lock_guard lock(mutex_);
   view_state_ = state;
-}
-
-void DirectFrameSink::SetFirstFrameCompositionCallback(FirstFrameCompositionCallback callback) {
-  std::lock_guard lock(mutex_);
-  first_frame_composition_ = std::move(callback);
-}
-
-void DirectFrameSink::NotifyPrimaryFrameComposed(const DirectPresentQueue::ReadyFrame& frame) {
-  FirstFrameCompositionCallback callback;
-  const auto                    request_id = frame.slot.preview_metadata.presentation_request_id;
-  const auto                    image_generation = frame.slot.image_generation;
-  const auto                    image_identity   = frame.slot.image_identity;
-  {
-    std::lock_guard lock(mutex_);
-    callback = first_frame_composition_;
-  }
-  if (!item_ || !item_->present_queue()) {
-    return;
-  }
-  // Diagnostics: every composed primary frame is counted.
-  item_->present_queue()->NoteFrameComposed(request_id, image_generation, image_identity);
-  // Session first-frame service: exactly one composition confirmation.
-  if (item_->present_queue()->AcknowledgeFirstComposition(request_id, image_generation,
-                                                          image_identity)) {
-    qCInfo(editorPresentLog,
-           "[EditorPresent] first frame composed request=%llu image=%llu generation=%llu "
-           "backend=%s",
-           static_cast<unsigned long long>(request_id),
-           static_cast<unsigned long long>(image_identity),
-           static_cast<unsigned long long>(image_generation),
-           ToString(item_->present_queue()->backend()));
-    if (callback) {
-      callback(request_id, image_generation, image_identity);
-    }
-  }
-  item_->notifyDiagnosticsChanged();
 }
 
 auto DirectFrameSink::HasWritableTargetForNextFrame() const -> bool {

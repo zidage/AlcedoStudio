@@ -56,16 +56,19 @@ class GeometrySession final : public QObject, public IEditorAdjustmentSubmitter 
       return;
     }
     active_panel_ = panel;
+    actions.push_back(QStringLiteral("panel:") + panel);
     emit activeAdjustmentPanelChanged();
   }
   [[nodiscard]] auto canEdit() const -> bool override { return can_edit_; }
 
   Q_INVOKABLE bool   submitPatch(QString fieldKey, QString paramsJson, bool settled) override {
+    actions.push_back(QStringLiteral("submit:") + fieldKey);
     calls.push_back({std::move(fieldKey), std::move(paramsJson), settled});
     return can_edit_;
   }
 
   std::vector<Call> calls;
+  QStringList       actions;
 
  signals:
   void adjustmentSnapshotChanged();
@@ -94,9 +97,13 @@ class FakeGeometryInteraction final : public QObject {
   [[nodiscard]] auto cropToolEnabled() const -> bool { return crop_tool_enabled_; }
   [[nodiscard]] auto cropOverlayVisible() const -> bool { return crop_overlay_visible_; }
 
-  Q_INVOKABLE void   setCropToolEnabled(bool enabled) { crop_tool_enabled_ = enabled; }
-  Q_INVOKABLE void   setCropOverlayVisible(bool visible) { crop_overlay_visible_ = visible; }
-  Q_INVOKABLE void   setCropAspectLock(bool enabled, float aspectRatio) {
+  Q_INVOKABLE void   setMetricAspectForTest(float aspect) {
+    metric_aspect_ = aspect;
+    emit cropChanged();
+  }
+  Q_INVOKABLE void setCropToolEnabled(bool enabled) { crop_tool_enabled_ = enabled; }
+  Q_INVOKABLE void setCropOverlayVisible(bool visible) { crop_overlay_visible_ = visible; }
+  Q_INVOKABLE void setCropAspectLock(bool enabled, float aspectRatio) {
     aspect_locked_ = enabled;
     aspect_ratio_  = aspectRatio;
     emit cropChanged();
@@ -281,10 +288,9 @@ TEST(EditorGeometryPanelQmlTest, GeometryPanelExposesTypedModelsAndEnablesOverla
 }
 
 TEST(EditorGeometryPanelQmlTest, PanelEnterSyncDoesNotRouteDuplicateCropViewChanges) {
-  GeometrySession session(
-      MakeSnapshot(QStringLiteral("ratio_16_9"), 0.2, 0.25, 0.5, 0.4, 8.0,
-                   QStringLiteral(""), QStringLiteral("")),
-      2);
+  GeometrySession session(MakeSnapshot(QStringLiteral("ratio_16_9"), 0.2, 0.25, 0.5, 0.4, 8.0,
+                                       QStringLiteral(""), QStringLiteral("")),
+                          2);
   FakeGeometryInteraction interaction;
   AdjustmentStackHarness  harness(&session, &interaction);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
@@ -436,7 +442,24 @@ TEST(EditorGeometryPanelQmlTest, SelectingAspectPresetResizesDraftWithoutPipelin
   EXPECT_TRUE(session.calls.empty());
 }
 
-TEST(EditorGeometryPanelQmlTest, ConfirmAndReturnToToneCommitsThenSelectsTone) {
+TEST(EditorGeometryPanelQmlTest, SelectingLandscapePresetOrientsCropForPortraitImage) {
+  GeometrySession         session;
+  FakeGeometryInteraction interaction;
+  AdjustmentStackHarness  harness(&session, &interaction);
+  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
+
+  interaction.setMetricAspectForTest(0.75F);
+  auto* aspect = harness.findObject<QObject>(QStringLiteral("geometryAspectModel"));
+  ASSERT_NE(aspect, nullptr);
+  ASSERT_TRUE(QMetaObject::invokeMethod(aspect, "selectIndex", Q_ARG(int, 4)));
+
+  const QRectF rect = interaction.cropRectNormalized();
+  EXPECT_NEAR((rect.width() / rect.height()) * interaction.metricAspect(), 9.0 / 16.0, 1e-4);
+  EXPECT_NEAR(rect.center().x(), 0.5, 1e-4);
+  EXPECT_TRUE(session.calls.empty());
+}
+
+TEST(EditorGeometryPanelQmlTest, ConfirmAndReturnToToneQueuesPanelRefreshBeforeFinalCrop) {
   GeometrySession         session;
   FakeGeometryInteraction interaction;
   AdjustmentStackHarness  harness(&session, &interaction);
@@ -458,18 +481,21 @@ TEST(EditorGeometryPanelQmlTest, ConfirmAndReturnToToneCommitsThenSelectsTone) {
   ASSERT_EQ(session.calls.size(), 1u);
   EXPECT_TRUE(session.calls.back().settled);
   EXPECT_EQ(session.activeAdjustmentPanel(), QStringLiteral("tone"));
+  ASSERT_EQ(session.actions.size(), 2);
+  EXPECT_EQ(session.actions.at(0), QStringLiteral("panel:tone"));
+  EXPECT_EQ(session.actions.at(1), QStringLiteral("submit:crop_rotate"));
   EXPECT_FALSE(geometryPanel->property("draftDirty").toBool());
   EXPECT_FALSE(interaction.cropToolEnabled());
   EXPECT_FALSE(interaction.cropOverlayVisible());
 }
 
-TEST(EditorGeometryPanelQmlTest, LeavingGeometryViaSelectPanelCommitsDraftBeforePanelChange) {
+TEST(EditorGeometryPanelQmlTest, LeavingGeometryQueuesPanelRefreshBeforeFinalCrop) {
   GeometrySession         session;
   FakeGeometryInteraction interaction;
   AdjustmentStackHarness  harness(&session, &interaction);
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
 
-  auto* stack = harness.root();
+  auto* stack  = harness.root();
   auto* xModel = harness.findObject<QObject>(QStringLiteral("geometryCropXModel"));
   ASSERT_NE(xModel, nullptr);
   xModel->setProperty("value", 0.18);
@@ -482,6 +508,9 @@ TEST(EditorGeometryPanelQmlTest, LeavingGeometryViaSelectPanelCommitsDraftBefore
   EXPECT_TRUE(session.calls.back().settled);
   EXPECT_EQ(session.calls.back().field_key, QStringLiteral("crop_rotate"));
   EXPECT_EQ(session.activeAdjustmentPanel(), QStringLiteral("look"));
+  ASSERT_EQ(session.actions.size(), 2);
+  EXPECT_EQ(session.actions.at(0), QStringLiteral("panel:look"));
+  EXPECT_EQ(session.actions.at(1), QStringLiteral("submit:crop_rotate"));
   EXPECT_FALSE(interaction.cropOverlayVisible());
 }
 

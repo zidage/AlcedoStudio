@@ -34,7 +34,7 @@ class EditorSessionEditControllerTest : public ::testing::Test {
     ASSERT_TRUE(lifecycle_->BeginAcquire(1, 2, false, nullptr, &error)) << error;
     ASSERT_TRUE(lifecycle_->AcquireGuards(&error)) << error;
     lifecycle_->MarkImageReady();
-    lifecycle_->MarkFirstFramePresented();
+    lifecycle_->MarkFirstFrameReady();
 
     EditorSessionEditController::Dependencies edit_deps{history_, journal_};
     edit_ = std::make_unique<EditorSessionEditController>(std::move(edit_deps));

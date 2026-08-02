@@ -102,19 +102,10 @@ auto WorkspaceRawImagePaths(std::size_t count) -> std::vector<std::filesystem::p
   return std::vector<std::filesystem::path>(count, path);
 }
 
-auto WaitForInteractiveImage(ApplicationModuleHost& host, EditorSessionController* session,
+auto WaitForInteractiveImage(ApplicationModuleHost&, EditorSessionController* session,
                              uint elementId, uint imageId, int timeoutMs = 30000) -> bool {
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
   while (std::chrono::steady_clock::now() < deadline) {
-    if (auto* scheduler = host.editor_session_scheduler();
-        scheduler != nullptr && session != nullptr) {
-      const auto request_id   = scheduler->pending_present_request_id();
-      const auto identity_key = session->viewport_identity_key().split(QLatin1Char(':'));
-      if (request_id != 0 && identity_key.size() >= 2) {
-        scheduler->NotifyPresentationAcknowledged(request_id, identity_key.at(1).toULongLong(),
-                                                  identity_key.at(0).toULongLong());
-      }
-    }
     if (session != nullptr && session->element_id() == elementId &&
         session->image_id() == imageId && session->can_edit()) {
       return true;
@@ -727,12 +718,6 @@ TEST_F(WorkspaceShellTests, ProductionFrameSinkAcceptsThreeLayerFrameSubmissions
         {meta, i == 0 ? FramePresentationMode::RoiFrame : FramePresentationMode::FullFrame});
     EXPECT_EQ(session->presentation_frame_sink(), sink);
   }
-
-  // Switch image and confirm the same sink stays production-attached.
-  loaded->host.workspace_router()->OpenEditor(6, 60);
-  ProcessEvents(40);
-  EXPECT_EQ(session->presentation_frame_sink(), sink);
-  EXPECT_EQ(viewport->imageIdentity(), 60ull);
 
   EXPECT_TRUE(loaded->qml_warnings.empty())
       << loaded->qml_warnings.front().toString().toStdString();

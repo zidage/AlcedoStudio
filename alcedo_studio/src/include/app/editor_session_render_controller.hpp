@@ -22,7 +22,7 @@ namespace alcedo {
 /// Typed render events returned by the render controller to the facade. The
 /// facade maps these to EditorSessionResult values and publishes them.
 enum class EditorRenderEventKind : std::uint8_t {
-  FirstFramePresented = 0,
+  FirstFrameReady = 0,
   RenderFailed,
   RenderRouted,
   RenderReused,
@@ -38,14 +38,11 @@ struct EditorRenderEvent {
   EditorSessionIdentity identity{};
   EditorRenderReason    reason = EditorRenderReason::ZoomPan;
   std::string           message;
-  /// When FirstFramePresented, the identity at the time of presentation.
-  /// The facade uses this to transition lifecycle to Interactive.
-  EditorSessionIdentity presented_identity{};
 };
 
 /// Owns the render and first-frame state for the focused editor session.
 /// Manages the presentation sink/dimensions, first-frame and quality-base
-/// request IDs, the complete→submit→present gate, pending initial render
+/// request IDs, the single FrameReady gate, pending initial render
 /// routing, render-busy notification, and first-frame timing. Receives
 /// immutable EditorRenderCommand values; never reads another component's
 /// mutable state.
@@ -92,8 +89,8 @@ class EditorSessionRenderController final {
   /// The current first-frame request id. Zero when no first frame is pending.
   [[nodiscard]] auto first_frame_request_id() const -> std::uint64_t;
 
-  /// Wall time from open/switch first-frame route to first presentation, in
-  /// milliseconds. Negative when no first frame has been presented.
+  /// Wall time from open/switch first-frame route until the sink publishes the
+  /// first Ready frame. Negative while no frame is ready.
   [[nodiscard]] auto first_frame_time_ms() const -> double;
 
   /// Aggregate coordinator busy state.
@@ -110,7 +107,7 @@ class EditorSessionRenderController final {
   void               ResetForNewImage();
 
   /// Mark the image as acquired after guards succeed. Stays in Loading until
-  /// the first frame is presented.
+  /// the first frame is ready.
   void               MarkImageAcquired();
 
   /// Cancel the active render session for one image-load request.
@@ -123,7 +120,7 @@ class EditorSessionRenderController final {
                                       const EditorSessionIdentity& identity,
                                       ImageLoadRequestId           image_load_request) const
       -> std::optional<EditorRenderIntent>;
-  /// Emit a FirstFramePresented event when all first-frame conditions are met.
+  /// Emit a FirstFrameReady event when image acquisition and rendering finish.
   /// The facade applies the Interactive lifecycle transition in its handler.
   void                TryEnterInteractiveFromFirstFrame(const EditorSessionIdentity& identity);
   /// Check if a render result matches the active first-frame request and the
@@ -139,6 +136,12 @@ class EditorSessionRenderController final {
   /// Emit a render event to the facade.
   void                EmitEvent(EditorRenderEvent event);
 
+  struct PendingDetailRender {
+    EditorRenderCommand   command{};
+    EditorSessionIdentity identity{};
+    ImageLoadRequestId    image_load_request{};
+  };
+
   struct Dependencies deps_;
   mutable std::recursive_mutex      mutex_;
   PresentationSinkId                presentation_sink_id_    = 0;
@@ -147,16 +150,15 @@ class EditorSessionRenderController final {
   std::uint64_t                     first_frame_request_id_  = 0;
   std::uint64_t                     quality_base_request_id_ = 0;
   bool                              image_acquired_          = false;
-  bool                              first_frame_completed_   = false;
-  bool                              first_frame_submitted_   = false;
-  bool                              first_frame_presented_   = false;
+  bool                              first_frame_ready_       = false;
   bool                              quality_base_routed_     = false;
+  bool                              quality_base_ready_      = false;
+  std::optional<PendingDetailRender> pending_detail_render_{};
   std::optional<EditorRenderReason> pending_initial_reason_;
   std::uint64_t                     pending_operation_id_ = 0;
   EditorRenderAdjustmentSnapshot    pending_initial_adjustment_;
   /// Identity at the time the first frame was routed. Used to correlate the
-  /// first-frame complete→submit→present gate and to emit the
-  /// FirstFramePresented event with the correct identity snapshot.
+  /// first-frame Ready event with the correct identity snapshot.
   EditorSessionIdentity                                pending_session_identity_{};
   ImageLoadRequestId                                   pending_image_load_request_{};
   bool                                                 last_notified_render_busy_ = false;

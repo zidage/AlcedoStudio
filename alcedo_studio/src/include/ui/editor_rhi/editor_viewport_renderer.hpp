@@ -96,6 +96,8 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
   // base: QualityBase preferred, else full-frame InteractivePrimary.
   [[nodiscard]] auto detailPatchAspectOk(const LayerState& detail,
                                          const LayerState& base) const -> bool;
+  void traceDetailDecision(const char* decision, const LayerState* detail, const LayerState* base,
+                           const std::optional<FrameRoiRect>& current_roi) const;
   void recreateShaderResources(QRhiTexture* primary, QRhiTexture* detail);
   void publishDiagnosticsIfChanged();
 
@@ -125,6 +127,12 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
   bool static_upload_pending_ = false;
   bool content_dirty_ = false;
   std::string target_error_;
+  // Stdout ROI tracing is transition-based so a rejected patch does not print
+  // once per scene-graph frame and create a second performance problem.
+  mutable std::string   last_detail_trace_decision_;
+  mutable std::uint64_t last_detail_trace_request_id_ = 0;
+  mutable bool          last_detail_trace_has_roi_     = false;
+  mutable FrameRoiRect  last_detail_trace_roi_{};
 };
 
 }  // namespace alcedo::editor_rhi

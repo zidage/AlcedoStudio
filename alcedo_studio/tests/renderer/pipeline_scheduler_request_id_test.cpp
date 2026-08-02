@@ -145,7 +145,7 @@ TEST(PipelineSchedulerRequestIdTest, StaleSchedulerTaskDoesNotReachSink) {
     task.options_.render_desc_.frame_metadata_.presentation_request_id = request_id;
     task.options_.is_blocking_                                     = true;
     task.result_ = std::make_shared<std::promise<std::shared_ptr<ImageBuffer>>>();
-    task.prepare_with_render_lock_ = [&](PipelineTask& locked_task) {
+    task.configure_under_render_lock_ = [&](PipelineTask& locked_task) {
       locked_task.pipeline_executor_->AttachFrameSink(&sink);
       locked_task.options_.render_desc_.frame_metadata_.presentation_request_id = request_id;
       return true;

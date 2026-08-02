@@ -159,9 +159,11 @@ TEST_F(EditorRenderCoordinatorTest, CancelSessionDropsPendingAndInflight) {
   EXPECT_EQ(coordinator_->pending_count(), 1u);
 
   coordinator_->CancelSession(1);
-  EXPECT_FALSE(coordinator_->has_inflight());
+  EXPECT_TRUE(coordinator_->has_inflight());
   EXPECT_EQ(coordinator_->pending_count(), 0u);
   EXPECT_FALSE(scheduler_->cancelled_.empty());
+  coordinator_->NotifySchedulerCompleted(a.request_id, false, "cancelled");
+  EXPECT_FALSE(coordinator_->has_inflight());
   EXPECT_EQ(a.kind, EditorRenderResultKind::RequestAccepted);
 }
 
@@ -173,6 +175,8 @@ TEST_F(EditorRenderCoordinatorTest, CancelSessionAndWaitJoinsTheMatchingSchedule
   ASSERT_EQ(scheduler_->cancelled_.size(), 1u);
   ASSERT_EQ(scheduler_->waited_sessions_.size(), 1u);
   EXPECT_EQ(scheduler_->waited_sessions_.front(), 1u);
+  coordinator_->NotifySchedulerCompleted(coordinator_->last_scheduled_request_id(), false,
+                                         "cancelled");
   EXPECT_FALSE(coordinator_->has_inflight());
 }
 
@@ -206,8 +210,8 @@ TEST_F(EditorRenderCoordinatorTest, CancellationTokenStopsAnInflightRequestAndSt
   ASSERT_EQ(coordinator_->pending_count(), 1u);
 
   inflight_intent.cancellation->Cancel();
+  coordinator_->NotifySchedulerCompleted(inflight.request_id, false, "cancelled");
 
-  ASSERT_EQ(scheduler_->cancelled_.size(), 1u);
   EXPECT_TRUE(coordinator_->has_inflight());
   EXPECT_EQ(coordinator_->last_scheduled_request_id(), pending_result.request_id);
   EXPECT_EQ(coordinator_->pending_count(), 0u);
@@ -239,6 +243,7 @@ TEST_F(EditorRenderCoordinatorTest, ObserverRunsAfterQueueStateIsStable) {
 
   EXPECT_TRUE(observer_cancelled);
   ASSERT_EQ(scheduler_->cancelled_.size(), 1u);
+  coordinator_->NotifySchedulerCompleted(inflight.request_id, false, "cancelled");
   EXPECT_TRUE(coordinator_->has_inflight());
   EXPECT_EQ(coordinator_->last_scheduled_request_id(), accepted.request_id);
   EXPECT_EQ(coordinator_->pending_count(), 0u);
@@ -324,12 +329,10 @@ TEST(EditorRenderCoordinatorLifetimeTest, LateTokenCancellationIgnoresDestroyedC
   SUCCEED();
 }
 
-TEST_F(EditorRenderCoordinatorTest, ReportsFramePresentationSeparateFromRenderCompletion) {
+TEST_F(EditorRenderCoordinatorTest, BlockingCompletionPublishesOneFrameReadyResult) {
   const auto accepted = coordinator_->Submit(
       MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
   coordinator_->NotifySchedulerCompleted(accepted.request_id, true);
-  coordinator_->NotifyFrameSubmitted(accepted.request_id);
-  coordinator_->NotifyFramePresented(accepted.request_id);
 
   std::vector<EditorRenderResultKind> kinds;
   for (const auto& r : coordinator_->results()) {
@@ -337,45 +340,26 @@ TEST_F(EditorRenderCoordinatorTest, ReportsFramePresentationSeparateFromRenderCo
       kinds.push_back(r.kind);
     }
   }
-  ASSERT_GE(kinds.size(), 4u);
+  ASSERT_EQ(kinds.size(), 3u);
   EXPECT_EQ(kinds[0], EditorRenderResultKind::RequestAccepted);
   EXPECT_EQ(kinds[1], EditorRenderResultKind::RenderStarted);
-  EXPECT_EQ(kinds[2], EditorRenderResultKind::RenderCompleted);
-  EXPECT_EQ(kinds[3], EditorRenderResultKind::FrameSubmitted);
-  EXPECT_EQ(kinds[4], EditorRenderResultKind::FramePresented);
+  EXPECT_EQ(kinds[2], EditorRenderResultKind::FrameReady);
 }
 
-TEST_F(EditorRenderCoordinatorTest, RejectsPresentedWithoutSubmittedAndIgnoresDuplicates) {
+TEST_F(EditorRenderCoordinatorTest, IgnoresDuplicateBlockingCompletion) {
   const auto accepted = coordinator_->Submit(
       MakeIntent(EditorRenderQuality::Interactive, EditorRenderPriority::Normal));
   coordinator_->NotifySchedulerCompleted(accepted.request_id, true);
+  coordinator_->NotifySchedulerCompleted(accepted.request_id, true);
 
-  // Presented without submitted must be ignored.
-  coordinator_->NotifyFramePresented(accepted.request_id);
-  for (const auto& r : coordinator_->results()) {
-    EXPECT_NE(r.kind, EditorRenderResultKind::FramePresented);
-  }
-
-  coordinator_->NotifyFrameSubmitted(accepted.request_id);
-  coordinator_->NotifyFramePresented(accepted.request_id);
-  coordinator_->NotifyFrameSubmitted(accepted.request_id);
-  coordinator_->NotifyFramePresented(accepted.request_id);
-
-  int submitted = 0;
-  int presented = 0;
+  int ready = 0;
   for (const auto& r : coordinator_->results()) {
     if (r.request_id != accepted.request_id) {
       continue;
     }
-    if (r.kind == EditorRenderResultKind::FrameSubmitted) {
-      ++submitted;
-    }
-    if (r.kind == EditorRenderResultKind::FramePresented) {
-      ++presented;
-    }
+    if (r.kind == EditorRenderResultKind::FrameReady) ++ready;
   }
-  EXPECT_EQ(submitted, 1);
-  EXPECT_EQ(presented, 1);
+  EXPECT_EQ(ready, 1);
 }
 
 TEST_F(EditorRenderCoordinatorTest, CancelInflightStartsUnrelatedPendingRequest) {
@@ -390,8 +374,10 @@ TEST_F(EditorRenderCoordinatorTest, CancelInflightStartsUnrelatedPendingRequest)
 
   EXPECT_TRUE(coordinator_->CancelRequest(inflight.request_id));
   EXPECT_FALSE(scheduler_->cancelled_.empty());
-  // Unrelated pending quality request must start immediately.
+  // The next request starts only after the blocking call actually exits.
   EXPECT_TRUE(coordinator_->has_inflight());
+  EXPECT_EQ(coordinator_->last_scheduled_request_id(), inflight.request_id);
+  coordinator_->NotifySchedulerCompleted(inflight.request_id, false, "cancelled");
   EXPECT_EQ(coordinator_->last_scheduled_request_id(), pending_result.request_id);
   EXPECT_EQ(coordinator_->pending_count(), 0u);
 
@@ -407,7 +393,7 @@ TEST_F(EditorRenderCoordinatorTest, CancelInflightStartsUnrelatedPendingRequest)
   coordinator_->NotifySchedulerCompleted(inflight.request_id, true);
   for (const auto& r : coordinator_->results()) {
     if (r.request_id == inflight.request_id) {
-      EXPECT_NE(r.kind, EditorRenderResultKind::RenderCompleted);
+      EXPECT_NE(r.kind, EditorRenderResultKind::FrameReady);
     }
   }
 }
@@ -422,9 +408,11 @@ TEST_F(EditorRenderCoordinatorTest,
   EXPECT_EQ(coordinator_->pending_count(), 1u);
 
   coordinator_->SetActiveImageLoadRequest(2);
-  EXPECT_FALSE(coordinator_->has_inflight());
+  EXPECT_TRUE(coordinator_->has_inflight());
   EXPECT_EQ(coordinator_->pending_count(), 0u);
   EXPECT_FALSE(scheduler_->cancelled_.empty());
+  coordinator_->NotifySchedulerCompleted(inflight.request_id, false, "cancelled");
+  EXPECT_FALSE(coordinator_->has_inflight());
 
   int cancelled = 0;
   for (const auto& r : coordinator_->results()) {
@@ -531,11 +519,7 @@ TEST_F(EditorRenderCoordinatorTest, DetailRefreshSchedulesDetailPatch) {
   EXPECT_TRUE(coordinator_->has_inflight());
 }
 
-// Production Cancel fires the request token callback, which re-enters
-// CancelRequest. That path must not run under the coordinator mutex or a
-// zoom-driven view-generation advance deadlocks and no further DetailPatch
-// work (or any pipeline request) is ever scheduled.
-TEST_F(EditorRenderCoordinatorTest, ImageLoadCancelDoesNotDeadlockOnTokenReentry) {
+TEST_F(EditorRenderCoordinatorTest, ImageLoadCancelWaitsForBlockingRequestBeforeNextWork) {
   class ReentrantCancelScheduler final : public IEditorPipelineSchedulerPort {
    public:
     auto Schedule(const EditorRenderRequest& request) -> std::uint64_t override {
@@ -547,8 +531,6 @@ TEST_F(EditorRenderCoordinatorTest, ImageLoadCancelDoesNotDeadlockOnTokenReentry
       cancelled_.push_back(job_id);
       auto it = tokens_.find(job_id);
       if (it != tokens_.end() && it->second) {
-        // Mirrors EditorSessionRenderSchedulerPort::Cancel: token Cancel
-        // invokes the coordinator's CancelRequest re-entry path.
         it->second->Cancel();
       }
     }
@@ -568,14 +550,9 @@ TEST_F(EditorRenderCoordinatorTest, ImageLoadCancelDoesNotDeadlockOnTokenReentry
   const auto accepted = coord->Submit(first);
   ASSERT_EQ(accepted.kind, EditorRenderResultKind::RequestAccepted);
   ASSERT_TRUE(coord->has_inflight());
-  // Install the same cancel bridge production uses after ScheduleNext.
-  first.cancellation->SetCancelCallback([c = coord.get(), id = accepted.request_id] {
-    if (c) {
-      c->CancelRequest(id);
-    }
-  });
-
   coord->SetActiveImageLoadRequest(2);
+  EXPECT_TRUE(coord->has_inflight());
+  coord->NotifySchedulerCompleted(accepted.request_id, false, "cancelled");
 
   auto second = MakeViewIntent(EditorRenderReason::DetailRefresh, EditorRenderQuality::Detail,
                                EditorRenderPriority::Normal, 2);
@@ -657,7 +634,7 @@ TEST_F(EditorRenderCoordinatorTest, InteractiveNotBlockedBehindOutdatedDetail) {
   EXPECT_NE(scheduler_->scheduled_.back().request_id, detail.request_id);
 }
 
-TEST_F(EditorRenderCoordinatorTest, DiagnosticsTrackRejectReplaceCancelAndSubmit) {
+TEST_F(EditorRenderCoordinatorTest, DiagnosticsTrackRejectReplaceCancelAndReadyFrame) {
   // Phase 5E: diagnostics must explain why work was requested, replaced,
   // cancelled, presented, or rejected without exposing pipeline task objects.
   auto rejected = coordinator_->Submit(
@@ -689,17 +666,18 @@ TEST_F(EditorRenderCoordinatorTest, DiagnosticsTrackRejectReplaceCancelAndSubmit
   }
 
   coordinator_->NotifySchedulerCompleted(first.request_id, true);
-  coordinator_->NotifyFrameSubmitted(first.request_id);
   {
     const auto diag = coordinator_->diagnostics();
-    ASSERT_TRUE(diag.last_submitted_frame_role.has_value());
-    EXPECT_EQ(*diag.last_submitted_frame_role, FrameRole::InteractivePrimary);
-    ASSERT_TRUE(diag.last_submitted_render_reason.has_value());
-    EXPECT_EQ(*diag.last_submitted_render_reason, EditorRenderReason::InteractiveAdjustment);
+    ASSERT_TRUE(diag.last_ready_frame_role.has_value());
+    EXPECT_EQ(*diag.last_ready_frame_role, FrameRole::InteractivePrimary);
+    ASSERT_TRUE(diag.last_ready_render_reason.has_value());
+    EXPECT_EQ(*diag.last_ready_render_reason, EditorRenderReason::InteractiveAdjustment);
   }
 
   // Cancel remaining pending/in-flight work from the replacement burst.
   coordinator_->CancelSession(1);
+  coordinator_->NotifySchedulerCompleted(coordinator_->last_scheduled_request_id(), false,
+                                         "cancelled");
   {
     const auto diag = coordinator_->diagnostics();
     EXPECT_FALSE(diag.has_inflight);

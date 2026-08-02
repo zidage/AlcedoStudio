@@ -29,13 +29,6 @@ class EditorViewportItem;
 // imports via QRhiTexture::createFrom (no host staging).
 class DirectFrameSink final : public alcedo::IFrameSink {
  public:
-  // One-shot first-frame Qt Quick composition confirmation for the active
-  // image session. Not emitted for superseded interactive frames, QualityBase,
-  // or DetailPatch.
-  using FirstFrameCompositionCallback =
-      std::function<void(std::uint64_t request_id, std::uint64_t image_generation,
-                         std::uint64_t image_identity)>;
-
   // Zero-copy GPU present payload for backends that publish their own texture
   // (Metal). Lifetime is held by `owner` until the renderer releases the layer.
   struct ImportedGpuFrame {
@@ -77,10 +70,6 @@ class DirectFrameSink final : public alcedo::IFrameSink {
       -> std::optional<ViewportRenderRegion> override;
 
   void SetViewState(const ViewerViewState& state);
-  void SetFirstFrameCompositionCallback(FirstFrameCompositionCallback callback);
-  // Called by the renderer after a compatible primary frame is drawn into a
-  // Qt Quick window frame. Emits the session first-composition event at most once.
-  void NotifyPrimaryFrameComposed(const DirectPresentQueue::ReadyFrame& frame);
   // Drain newest pending zero-copy imports for the active image session.
   // One entry per frame role; older undisplayed frames for that role are dropped.
   [[nodiscard]] auto DrainPendingImportedFrames(std::uint64_t image_generation,
@@ -118,7 +107,6 @@ class DirectFrameSink final : public alcedo::IFrameSink {
   std::array<std::optional<ImportedGpuFrame>, 3> pending_imported_{};
   std::uint64_t imported_sequence_ = 0;
   ViewerViewState view_state_{};
-  FirstFrameCompositionCallback first_frame_composition_;
   std::uint64_t submitted_frame_count_ = 0;
 };
 

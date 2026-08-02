@@ -772,6 +772,26 @@ TEST(EditorOverlayInteractionTest, ForceRenderReferenceSizeReappliesEqualDimensi
   EXPECT_EQ(controller.renderReferenceHeight(), 384);
 }
 
+TEST(EditorOverlayInteractionTest, RenderReferenceChangeNeverFeedsBackIntoDetailRendering) {
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  ConfigureImage(controller, 4000, 3000);
+  controller.zoomToActualPixels();
+  ASSERT_GT(controller.zoom(), 1.0f + 1.0e-4f);
+
+  QSignalSpy change_spy(&controller, &EditorInteractionController::viewChangeReported);
+  ASSERT_TRUE(change_spy.isValid());
+
+  // Render-reference geometry is output from the presentation pipeline. It may
+  // update coordinate mapping, but it must never become a new pipeline input;
+  // otherwise DetailPatch completion creates a self-sustaining render loop.
+  controller.setRenderReferenceSize(2000, 1500);
+  EXPECT_EQ(change_spy.count(), 0);
+  QTest::qWait(200);
+  QCoreApplication::processEvents();
+  EXPECT_EQ(change_spy.count(), 0);
+}
+
 // DetailPatch ROI EnsureSize must not rewrite render-reference geometry. If it
 // does, zoom/pan math and SameRoi matching break and the high-res detail patch
 // no longer covers the viewport after double-click zoom.

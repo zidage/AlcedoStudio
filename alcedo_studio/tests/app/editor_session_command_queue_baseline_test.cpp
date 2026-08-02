@@ -112,10 +112,7 @@ class EditorSessionCommandQueueBaselineTest : public ::testing::Test {
         << "openInteractive did not reach Interactive";
   }
 
-  /// Drive the active first-frame request through complete->submit->present.
-  /// Each coordinator notification posts a render completion to the command
-  /// queue; the queue is drained between stages so the render controller's
-  /// complete->submit->present gate advances in order.
+  /// Complete the first ready frame and the automatically queued QualityBase.
   void presentFirstFrame() {
     // Run any posted save/render completions that route the first frame (a
     // save-bounded switch routes the first frame only after its checkpoint
@@ -127,10 +124,11 @@ class EditorSessionCommandQueueBaselineTest : public ::testing::Test {
     }
     runtime_->coordinator->NotifySchedulerCompleted(rid, true);
     drainQueue();
-    runtime_->coordinator->NotifyFrameSubmitted(rid);
-    drainQueue();
-    runtime_->coordinator->NotifyFramePresented(rid);
-    drainQueue();
+    const auto quality_rid = runtime_->coordinator->last_scheduled_request_id();
+    if (quality_rid != rid) {
+      runtime_->coordinator->NotifySchedulerCompleted(quality_rid, true);
+      drainQueue();
+    }
   }
 
   /// Run all command/completion work posted to the session queue.
@@ -283,7 +281,7 @@ TEST_F(EditorSessionCommandQueueBaselineTest,
   EXPECT_NE(service_->state(), EditorSessionState::Saving);
 }
 
-/// Invariant: a first frame presented for a generation that no longer matches
+/// Invariant: a ready frame for an image load that no longer matches
 /// the active session cannot enable editing for another image. The render
 /// controller filters results by session_generation/image/element; this test
 /// pins that guard so CQ1/CQ3 keep it once completion is queue-mediated.
@@ -303,7 +301,7 @@ TEST_F(EditorSessionCommandQueueBaselineTest, StaleFirstFrameCannotEnableEditing
   // coordinator's result observer path. It must not regress identity to A.
   const auto         rid_b = service_->first_frame_request_id();
   EditorRenderResult stale;
-  stale.kind                      = EditorRenderResultKind::FramePresented;
+  stale.kind                      = EditorRenderResultKind::FrameReady;
   stale.request_id                = rid_b;
   stale.intent.image_load_request_id = load_a;  // stale load request for A
   stale.intent.element_id         = 10;

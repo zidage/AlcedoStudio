@@ -409,13 +409,13 @@ struct EditorRenderCoordinatorDiagnostics {
   /// Last request that was rejected at Submit (image load/token/scheduler).
   std::string                       last_rejection_reason;
   std::optional<EditorRenderReason> last_rejected_render_reason{};
-  /// Last intent that reached FrameSubmitted (native slot ready for composition).
-  std::optional<FrameRole>          last_submitted_frame_role{};
-  std::optional<EditorRenderReason> last_submitted_render_reason{};
+  /// Last intent whose blocking render published a frame ready for composition.
+  std::optional<FrameRole>          last_ready_frame_role{};
+  std::optional<EditorRenderReason> last_ready_render_reason{};
   /// Monotonic counters of terminal outcomes for tests/diagnostics.
   std::size_t                       accepted_count  = 0;
   std::size_t                       failed_count    = 0;
-  std::size_t                       presented_count = 0;
+  std::size_t                       ready_count     = 0;
 };
 
 /// Immutable render command. Built by the facade or edit controller and passed

@@ -73,8 +73,7 @@ auto MakeRequest(std::uint64_t request_id, std::uint64_t image_load_request)
   return request;
 }
 
-TEST(EditorSessionRenderSchedulerPortTest,
-     TestProducerSubmitsFrameAndAcknowledgementUsesImageIdentity) {
+TEST(EditorSessionRenderSchedulerPortTest, TestProducerPublishesOneReadyFrame) {
   auto               scheduler = std::make_shared<EditorSessionRenderSchedulerPort>();
   RecordingFrameSink sink;
   std::atomic<int>   producer_count = 0;
@@ -94,12 +93,6 @@ TEST(EditorSessionRenderSchedulerPortTest,
   EXPECT_EQ(sink.ready_count(), 1);
   EXPECT_EQ(sink.width(), 320);
   EXPECT_EQ(sink.height(), 180);
-  EXPECT_EQ(scheduler->pending_present_request_id(), 33u);
-
-  scheduler->NotifyPresentationAcknowledged(33, 7, 99);
-  EXPECT_EQ(scheduler->pending_present_request_id(), 33u);
-  scheduler->NotifyPresentationAcknowledged(33, 7, 11);
-  EXPECT_EQ(scheduler->pending_present_request_id(), 0u);
 }
 
 TEST(EditorSessionRenderSchedulerPortTest, ViewDrivenReasonsDisableScopeFrameReplacement) {
@@ -166,17 +159,14 @@ TEST(EditorSessionRenderSchedulerPortTest, SessionDoesNotStampPreviewGenerationF
   EXPECT_EQ(sink.last_submission.metadata.presentation_request_id, request.request_id);
 }
 
-TEST(EditorSessionRenderSchedulerPortTest, CancelledSyntheticRequestLeavesSessionIdle) {
+TEST(EditorSessionRenderSchedulerPortTest, RequestWithoutFrameSourceIsRejected) {
   EditorSessionRenderSchedulerPort scheduler;
   const auto                       request = MakeRequest(44, 8);
 
   const auto                       job_id  = scheduler.Schedule(request);
-  ASSERT_NE(job_id, 0u);
-  ASSERT_EQ(scheduler.last_scheduled().size(), 1u);
-
-  scheduler.Cancel(job_id);
+  EXPECT_EQ(job_id, 0u);
+  EXPECT_TRUE(scheduler.last_scheduled().empty());
   scheduler.WaitForSessionIdle(8);
-  EXPECT_EQ(scheduler.pending_present_request_id(), 0u);
 }
 
 }  // namespace
