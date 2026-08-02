@@ -1,14 +1,106 @@
 # Editor Single Live Pipeline + WAL + Checkpoint Simplification Plan
 
 Date: 2026-07-31  
-Status: WU1–WU6 complete; residual foot-binding clearance complete (2026-08-01); WU7 remaining (grill evidence package)  
+Updated: 2026-08-02 (final locked identity model)  
+Status: WU1–WU6 complete; residual foot-binding clearance complete (2026-08-01); identity model locked 2026-08-02; WU7 remaining (grill evidence package)  
 Branch context: follows interim operator merge-policy work on `feature/pre_v28_fix`
 
 Related documents (historical; this plan **supersedes** their transfer-candidate / dual-snapshot
-mutation model where they conflict):
+mutation model **and** any dual-pipeline-head / “same head after Version switch” wording where they
+conflict). **Authoritative identity semantics for new code and reviews are in
+[Final locked identity model](#final-locked-identity-model-binding) below.**
 
 - [Phase 6C Mini-Git History and Pipeline Snapshot Plan](phase_6c_mini_git_history_and_pipeline_snapshot_plan.md)
 - [Editor History Durability and Version Transfer Design](editor_history_durability_and_version_transfer_design.md)
+- Code mirrors: `alcedo_studio/src/include/edit/history/commit_types.hpp` (header block),
+  `PipelineGuard` in `pipeline_service.hpp`
+
+## Final locked identity model (binding)
+
+This section is the product-owner final freeze for pipeline vs edit-history identity. Prefer it
+over earlier “working_head on pipeline”, dual head cache, or heal-as-design language in Phase 6C /
+7A / handoff docs.
+
+### Roles
+
+| Piece | Role | Owns HEAD? | Owns params? |
+|-------|------|------------|--------------|
+| **CommitGraph / VersionRef** | Edit history: commits, Version tips, first-parent chain | **Yes** — sole source of tip | No |
+| **Live pipeline (executor)** | Parameter table + execution/cache | **No** | **Yes** (live) |
+| **Serialized pipeline JSON (checkpoint)** | Fast-restore blob of params **labeled** with history tip | No (label only) | Yes (snapshot of table) |
+| **WAL / mini-Git journal** | Recovery log until DuckDB materialization | Records head-moves; not a second product tip | No |
+
+**Head lives only in edit history.** Pipeline is a “parameter table.” Convenience accessors on
+`PipelineGuard` that read head/chain are **reads of the active Version**, not independent caches.
+Never reintroduce a parallel `working_head` field on the guard that can drift from the graph.
+
+**“One head source of truth” does not mean “the tip stays the same after Version change.”**
+Switching Version **must** change the tip when the target Version’s head differs. “One head”
+means **one place that knows the tip** (history), not a constant tip value.
+
+### Chain hash unit = one commit
+
+```text
+root_chain_hash = H(chain_format_version, root_id)
+next_chain_hash = H(previous_chain_hash, commit_hash)   # exactly once per commit on the chain
+```
+
+- `transaction_chain_hash` labels **which first-parent history tip** a parameter table claims to
+  match. It is **not** a content hash of the params JSON, and **not** folded on every
+  `SetOperator`.
+- Ordinary edit: one commit → one fold when history head advances.
+- **Merge:** one merge commit may change many operators. Live apply may call `SetOperator` /
+  enable **many times** to reach the final table. Those intermediate applies do **not** each
+  advance chain hash. When history records that **one** merge commit and moves the tip, fold
+  **once**.
+- Head-move (undo/redo): move tip to an existing commit; set chain to `ChainHashForHead(target)`
+  (no reverse-hash arithmetic).
+
+### Load / reuse fast path
+
+```text
+1. Load history; logical_head = active Version tip (after successful WAL attach if any).
+2. logical_chain = ChainHashForHead(logical_head).
+3. Load checkpoint (params + stored head/chain label), if present.
+4. If checkpoint.root_id matches and (stored head, chain) == (logical_head, logical_chain):
+     import params into live pipeline  →  skip first-parent SetOperator replay.
+   Else:
+     rebuild live pipeline from immutable root + first-parent commits to logical_head
+     (history wins); mark checkpoint for write-back on next save.
+```
+
+Checkpoint identity is a **label next to the table**, not a second live head.
+
+### Commit-time sequence (ordinary edit or merge)
+
+```text
+1. Mutate live parameter table via edit functions (0..N SetOperator / SetParams / enable).
+2. Build commit payload that describes the final delta (merge may list many fields).
+3. Append WAL + advance CommitGraph working head to that one commit.
+4. Fold transaction_chain_hash once for that commit (or restore chain on head-move).
+5. Later materialization / PMS save: export params + store (head, chain, params) as checkpoint.
+```
+
+Do **not** maintain a second editable field-table or shadow graph that can diverge from the live
+pipeline. Do **not** treat pipeline JSON as more authoritative than history tip.
+
+### Forbidden reintroductions
+
+- Dual head caches (graph tip vs guard-owned `working_head_*` storage that can disagree).
+- Folding or comparing chain hash on a per-`SetOperator` basis as an identity unit.
+- Interpreting “same head” as “Version switch must keep the same tip hash.”
+- Heal-as-design that silently overwrites history tip from a stale pipeline-side head field.
+
+### Code anchors
+
+- Types + prose: `commit_types.hpp`
+- Guard / load / checkpoint: `pipeline_service.hpp`, `pipeline_service.cpp`
+  (`LoadEditorPipeline`, `MakeSerializedPipelineState`, `CheckpointMatchesLogicalHead`)
+- Graph ownership: `commit_graph.hpp`
+- Fold unit: `FoldTransactionChainHash` in `edit_commit.hpp`
+- Merge multi-`SetOperator` then one commit: `editor_history_transfer.cpp` (live merge apply)
+
+---
 
 ## Outcome (one shot)
 
@@ -82,9 +174,9 @@ never reimplement as_shot / lens meta rules on bare JSON in services.
 | **Version / HEAD** | Named ref + `head_commit_hash`; active Version is the user’s checked-out line. |
 | **Checkpoint** | Serialized operator params (and related identity hashes) stored in DuckDB for fast restore. |
 | **Logical head** | Active Version head **after** any successfully attached WAL prefix. Authority for “what edits exist”. |
-| **Checkpoint identity** | Hash or pair `(materialized_head_commit_hash, materialized_transaction_chain_hash)` (or equivalent) stored with the checkpoint. Must match logical head for the fast path. |
-| **Ordinary edit commit** | Single-parent commit with before/after for one field (or `$operator_params`). |
-| **Merge commit** | Commit that records **which fields changed** and enough data to restore previous values (same reverse model as ordinary edits). Second parent may remain for ancestry; first-parent chain is the only pipeline replay path. |
+| **Checkpoint identity** | Label pair `(head_commit_hash, transaction_chain_hash)` stored **with** checkpoint params. Tags which history tip those params claim. Must match logical head for the fast path. Not a pipeline-owned tip. |
+| **Ordinary edit commit** | Single-parent commit with before/after for one field (or `$operator_params`). One commit ⇒ one chain-hash fold. |
+| **Merge commit** | One commit that may list many field deltas; live apply may use multiple `SetOperator` calls; still **one** chain-hash fold when the tip advances. Second parent may remain for ancestry; first-parent chain is the only pipeline replay path. |
 | **Paste Version** | New Version whose commits are root-relative applications of a transfer package; cancel = do not keep that Version active / remove it per product rules. |
 
 Forbidden product language for new code and this plan’s acceptance criteria: do not introduce
@@ -179,14 +271,15 @@ When autosave / image switch / version switch / orderly shutdown requires durabi
      before = live GetParams (+ enable)
      after  = op.MergeParams(current, incoming, choice)  // or current if keep
      Apply after to live pipeline via SetOperator / SetParams / enable
-   Append **one** merge commit (or one ordinary commit per field — pick ONE scheme and use it
-   everywhere; preferred: single merge commit with MergeEditPayload listing each field’s
-   before/after or resolved value + previous value for reverse) on the **live** graph first parent
-   = current head. Incoming ancestry: either (a) no second parent if product drops lineage, or
+     // ↑ parameter-table only; does NOT fold chain hash per call
+   Append **one** merge commit with MergeEditPayload listing each field’s before/after
+   (or resolved value + previous value for reverse) on the **live** graph; first parent
+   = current head. Fold transaction_chain_hash **once** with that commit.
+   Incoming ancestry: either (a) no second parent if product drops lineage, or
    (b) insert package commits as unreachable ancestry objects / second parent without a
    user-visible Version row. **Do not** CreateVersionRef for a temporary “Merged Adjustments”
    branch that the user must clean up.
-4. WAL append for that merge commit.
+4. WAL append for that merge commit (same one commit / one fold).
 5. Undo merge: head-move to first parent + restore each listed field to before on live pipeline
    (or rebuild pipeline to parent head — both acceptable if tests prove equality; prefer explicit
    reverse apply for speed).

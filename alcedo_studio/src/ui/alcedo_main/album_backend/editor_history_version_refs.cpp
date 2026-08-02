@@ -22,10 +22,8 @@ namespace alcedo::ui {
 namespace {
 
 struct NamedRefPriorState {
-  alcedo::CommitGraph graph;
+  alcedo::CommitGraph graph;  // includes logical head on active Version
   alcedo::MiniGitWorkingSelection selection;
-  alcedo::head_commit_hash_t head = std::nullopt;
-  alcedo::transaction_chain_hash_t chain{};
   bool dirty = false;
   bool serialized = false;
   alcedo::EditorRenderAdjustmentSnapshot snapshot;
@@ -38,8 +36,6 @@ auto CaptureNamedRefPrior(HistoryWorkingState& state) -> NamedRefPriorState {
   NamedRefPriorState prior;
   prior.graph = *state.pipeline_guard->commit_graph_;
   prior.selection = state.history->WorkingSelection();
-  prior.head = state.pipeline_guard->working_head_commit_hash_;
-  prior.chain = state.pipeline_guard->transaction_chain_hash_;
   prior.dirty = state.pipeline_guard->dirty_;
   prior.serialized = state.pipeline_guard->serialized_state_needs_writeback_;
   prior.snapshot = state.committed_snapshot;
@@ -52,8 +48,6 @@ auto CaptureNamedRefPrior(HistoryWorkingState& state) -> NamedRefPriorState {
 void RestoreNamedRefPrior(HistoryWorkingState& state, const NamedRefPriorState& prior) {
   *state.pipeline_guard->commit_graph_ = prior.graph;
   state.history->PublishWorkingSelection(prior.selection);
-  state.pipeline_guard->working_head_commit_hash_ = prior.head;
-  state.pipeline_guard->transaction_chain_hash_ = prior.chain;
   state.pipeline_guard->dirty_ = prior.dirty;
   state.pipeline_guard->serialized_state_needs_writeback_ = prior.serialized;
   state.committed_snapshot = prior.snapshot;
@@ -91,8 +85,6 @@ auto RefreshNamedRefSnapshotFromLive(HistoryWorkingState& state, std::string* er
 }
 
 void PublishNamedRefSuccess(HistoryWorkingState& state) {
-  state.pipeline_guard->working_head_commit_hash_ = state.history->working_head();
-  state.pipeline_guard->transaction_chain_hash_ = state.history->transaction_chain_hash();
   state.pipeline_guard->dirty_ = false;
   state.pipeline_guard->serialized_state_needs_writeback_ = false;
   state.pending_before.clear();
@@ -127,10 +119,7 @@ auto EditorHistoryVersionRefs::CreateRootVersionAndCheckout(
     RestoreNamedRefPrior(*state, prior);
     return false;
   }
-  // Match the pipeline guard identity to the newly active Version before persistence.
-  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
-  state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
-  // Create-root Version points at defaults-only head (nullopt).
+  // Graph active Version is already the new root Version (logical head = nullopt).
   if (!ApplyNamedRefHeadToLivePipeline(*state, std::nullopt, error)) {
     RestoreNamedRefPrior(*state, prior);
     return false;
@@ -182,9 +171,7 @@ auto EditorHistoryVersionRefs::BranchFromCommitAndCheckout(
     RestoreNamedRefPrior(*state, prior);
     return false;
   }
-  // Match the pipeline guard identity to the newly active Version before persistence.
-  state->pipeline_guard->working_head_commit_hash_ = state->history->working_head();
-  state->pipeline_guard->transaction_chain_hash_ = state->history->transaction_chain_hash();
+  // Graph active Version is already the new branch; apply that head to live pipeline.
   if (!ApplyNamedRefHeadToLivePipeline(*state, commit_id, error)) {
     RestoreNamedRefPrior(*state, prior);
     return false;
@@ -223,9 +210,6 @@ auto EditorHistoryVersionRefs::RenameVersion(const alcedo::EditorHistoryGuardHan
     ref.display_name = UniqueVersionName(graph, std::move(display_name), &version_id);
     ref.updated_at = std::time(nullptr);
     state->pipeline_guard->dirty_ = true;
-    state->pipeline_guard->working_head_commit_hash_ = graph.GetActiveVersionRef().head_commit_hash;
-    state->pipeline_guard->transaction_chain_hash_ =
-        graph.ChainHashForHead(state->pipeline_guard->working_head_commit_hash_);
     state->pipeline_guard->serialized_state_needs_writeback_ = true;
     state->recovered_head = false;
     return true;
@@ -249,11 +233,6 @@ auto EditorHistoryVersionRefs::RemoveVersion(const alcedo::EditorHistoryGuardHan
     return false;
   }
   state->pipeline_guard->dirty_ = true;
-  state->pipeline_guard->working_head_commit_hash_ =
-      state->pipeline_guard->commit_graph_->GetActiveVersionRef().head_commit_hash;
-  state->pipeline_guard->transaction_chain_hash_ =
-      state->pipeline_guard->commit_graph_->ChainHashForHead(
-          state->pipeline_guard->working_head_commit_hash_);
   state->pipeline_guard->serialized_state_needs_writeback_ = true;
   state->recovered_head = false;
   return true;

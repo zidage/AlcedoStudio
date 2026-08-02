@@ -37,12 +37,16 @@ struct CommitGraphMaterialization {
 /**
  * @brief In-memory immutable commit graph plus Version refs for one image.
  *
+ * Sole owner of history HEAD for the image. Pipeline params never store a competing tip.
+ * See commit_types.hpp "Pipeline vs edit-history identity".
+ *
  * Commit objects are stored once by hash. Multiple Version refs may share one head and
  * ancestry without duplicating rows. Production edits advance only a working head here;
  * materialized state advances later through an explicit checkpoint capture.
  *
  * Working heads live on VersionRef. ImageEditState.materialized_* advances only via an explicit
- * materialization capture, never by MoveWorkingHead alone.
+ * materialization capture, never by MoveWorkingHead alone. Chain hash for any tip is
+ * ChainHashForHead (one fold per commit on the first-parent path).
  */
 class CommitGraph {
  public:
@@ -116,6 +120,8 @@ class CommitGraph {
   /// pass unreachable commits; reachable deletions throw.
   void               EraseUnreachableCommits(const std::vector<commit_hash_t>& hashes);
 
+  /// First-parent chain fold for `head`. Unit of fold is one commit (merge = one fold even
+  /// when many operators change). Deterministic; does not hash live pipeline params.
   auto ChainHashForHead(const head_commit_hash_t& head) const -> transaction_chain_hash_t;
   auto ChainHashForVersion(const version_ref_id_t& version_id) const -> transaction_chain_hash_t;
 

@@ -172,13 +172,15 @@ struct DecodedRootPipelineState {
   std::optional<RawRuntimeColorContext> raw_color_context;
 };
 
+// Checkpoint blob: parameter table + history tip label (head, chain). The head/chain fields
+// tag which CommitGraph tip these params claim to match; they are not a second live head.
 auto MakeSerializedPipelineState(const PipelineGuard& guard, const nlohmann::json& pipeline_params)
     -> nlohmann::json {
   return nlohmann::json{
       {kSerializedPipelineStateFormatKey, kSerializedPipelineStateFormatVersion},
       {kSerializedPipelineStateRootKey, guard.root_id_.ToString()},
-      {kSerializedPipelineStateHeadKey, HeadCommitHashToStorage(guard.working_head_commit_hash_)},
-      {kSerializedPipelineStateChainKey, guard.transaction_chain_hash_.ToString()},
+      {kSerializedPipelineStateHeadKey, HeadCommitHashToStorage(guard.working_head_commit_hash())},
+      {kSerializedPipelineStateChainKey, guard.transaction_chain_hash().ToString()},
       {kSerializedPipelineStateParamsKey, pipeline_params}};
 }
 
@@ -240,8 +242,6 @@ auto DecodeRootPipelineState(const nlohmann::json& encoded)
 
 void SetPipelineHistoryState(PipelineGuard& guard, const CommitGraph& graph) {
   guard.root_id_                          = graph.GetRootId();
-  guard.working_head_commit_hash_         = graph.GetActiveVersionRef().head_commit_hash;
-  guard.transaction_chain_hash_           = graph.ChainHashForHead(guard.working_head_commit_hash_);
   guard.serialized_state_needs_writeback_ = false;
   guard.commit_graph_                     = std::make_shared<CommitGraph>(graph);
 }
@@ -562,6 +562,8 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
       }
     }
 
+    // History tip is sole authority. Checkpoint (params + head/chain label) is a fast path:
+    // if the label matches the active Version tip, import params and skip first-parent replay.
     SetPipelineHistoryState(*pipeline, *graph);
     const auto& state         = graph->GetImageEditState();
     const auto  expected_head = graph->GetActiveVersionRef().head_commit_hash;
@@ -579,8 +581,7 @@ auto PipelineMgmtService::LoadEditorPipeline(sl_element_id_t id) -> std::shared_
           pipeline->pipeline_->SetExecutionStages();
           accepted_serialized_state = true;
         } catch (...) {
-          // Serialized state that cannot build an executor is stale. Rebuild from immutable
-          // history below and write the corrected state when the guard is returned.
+          // Checkpoint params cannot build an executor. Rebuild from history; write back later.
           accepted_serialized_state = false;
         }
       }
@@ -644,16 +645,11 @@ void PipelineMgmtService::SavePipeline(std::shared_ptr<PipelineGuard> pipeline) 
       // different writer cannot be silently replaced by this serialized pipeline state.
       const auto& graph = pipeline->commit_graph_ ? *pipeline->commit_graph_ : *stored_graph;
 
-      // Graph active Version is the only logical head. Heal the pipeline-guard
-      // cache; do not fail writeback on cache drift alone.
-      const auto logical_head  = graph.GetActiveVersionRef().head_commit_hash;
-      const auto logical_chain = graph.ChainHashForHead(logical_head);
+      // Logical head is only the live CommitGraph active Version.
       if (graph.GetElementId() != pipeline->id_ || graph.GetRootId() != pipeline->root_id_) {
         throw std::runtime_error(
             "PipelineMgmtService: live history identity changed before serialized state writeback");
       }
-      pipeline->working_head_commit_hash_ = logical_head;
-      pipeline->transaction_chain_hash_   = logical_chain;
 
       const auto& stored_state = stored_graph->GetImageEditState();
       const auto& graph_state  = graph.GetImageEditState();
@@ -757,19 +753,12 @@ auto PipelineMgmtService::PersistEditorHistoryState(
           "PipelineMgmtService: persisted history changed before editor history persistence");
     }
 
-    // Logical head authority is the live CommitGraph active Version only.
-    // pipeline_guard working_head_* is a cache: heal drift instead of failing with
-    // "live history identity changed" after a concurrent head update path left the
-    // cache one step behind the graph.
-    auto&      graph         = *pipeline->commit_graph_;
-    const auto logical_head  = graph.GetActiveVersionRef().head_commit_hash;
-    const auto logical_chain = graph.ChainHashForHead(logical_head);
+    // Logical head is only the live CommitGraph active Version (no guard cache).
+    auto& graph = *pipeline->commit_graph_;
     if (graph.GetElementId() != pipeline->id_ || graph.GetRootId() != pipeline->root_id_) {
       throw std::runtime_error(
           "PipelineMgmtService: live history identity changed before editor history persistence");
     }
-    pipeline->working_head_commit_hash_ = logical_head;
-    pipeline->transaction_chain_hash_   = logical_chain;
 
     const auto materialization = graph.CaptureMaterializationClearingSerializedPipelineState();
     graph_service.Materialize(materialization);
@@ -797,10 +786,7 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
   auto& graph = *pipeline->commit_graph_;
   const auto prior_version_id = graph.GetActiveVersionId();
   if (prior_version_id == version_id) {
-    // Already on the requested Version: refresh head/chain and succeed without rebuild.
-    pipeline->working_head_commit_hash_ = graph.GetActiveVersionRef().head_commit_hash;
-    pipeline->transaction_chain_hash_ =
-        graph.ChainHashForHead(pipeline->working_head_commit_hash_);
+    // Already on the requested Version: logical head is the graph active head.
     return true;
   }
 
@@ -837,22 +823,18 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
   }
 
   // Snapshot the live executor so a failed rebuild can restore the prior pipeline.
+  // Logical head lives only on the graph: restore SetActiveVersionId on failure.
   nlohmann::json prior_params;
   {
     std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
     prior_params = pipeline->pipeline_->ExportPipelineParams();
   }
-  const auto prior_head  = pipeline->working_head_commit_hash_;
-  const auto prior_chain = pipeline->transaction_chain_hash_;
 
   graph.SetActiveVersionId(version_id);
 
   try {
     std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
     RebuildPipelineFromRoot(*pipeline->pipeline_, graph, root_state, accelerator_preference_);
-    pipeline->working_head_commit_hash_ = graph.GetActiveVersionRef().head_commit_hash;
-    pipeline->transaction_chain_hash_ =
-        graph.ChainHashForHead(pipeline->working_head_commit_hash_);
     pipeline->serialized_state_needs_writeback_ = true;
     pipeline->dirty_                            = true;
     return true;
@@ -864,8 +846,6 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
       ImportSerializedPipelineState(*pipeline->pipeline_, prior_params, root_state.raw_color_context,
                                     accelerator_preference_);
       pipeline->pipeline_->SetExecutionStages();
-      pipeline->working_head_commit_hash_ = prior_head;
-      pipeline->transaction_chain_hash_   = prior_chain;
     } catch (...) {
       // Best-effort restore; still report the original checkout failure.
     }
@@ -880,8 +860,6 @@ auto PipelineMgmtService::CheckoutVersion(const std::shared_ptr<PipelineGuard>& 
       ImportSerializedPipelineState(*pipeline->pipeline_, prior_params, root_state.raw_color_context,
                                     accelerator_preference_);
       pipeline->pipeline_->SetExecutionStages();
-      pipeline->working_head_commit_hash_ = prior_head;
-      pipeline->transaction_chain_hash_   = prior_chain;
     } catch (...) {
     }
     if (error != nullptr) {
@@ -931,15 +909,10 @@ auto PipelineMgmtService::RebuildActiveEditorPipeline(
     std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
     prior_params = pipeline->pipeline_->ExportPipelineParams();
   }
-  const auto prior_head  = pipeline->working_head_commit_hash_;
-  const auto prior_chain = pipeline->transaction_chain_hash_;
 
   try {
     std::unique_lock<std::mutex> render_lock(pipeline->pipeline_->GetRenderLock());
     RebuildPipelineFromRoot(*pipeline->pipeline_, graph, root_state, accelerator_preference_);
-    pipeline->working_head_commit_hash_ = graph.GetActiveVersionRef().head_commit_hash;
-    pipeline->transaction_chain_hash_ =
-        graph.ChainHashForHead(pipeline->working_head_commit_hash_);
     pipeline->serialized_state_needs_writeback_ = true;
     pipeline->dirty_                            = true;
     return true;
@@ -949,8 +922,6 @@ auto PipelineMgmtService::RebuildActiveEditorPipeline(
       ImportSerializedPipelineState(*pipeline->pipeline_, prior_params, root_state.raw_color_context,
                                     accelerator_preference_);
       pipeline->pipeline_->SetExecutionStages();
-      pipeline->working_head_commit_hash_ = prior_head;
-      pipeline->transaction_chain_hash_   = prior_chain;
     } catch (...) {
     }
     if (error != nullptr) {
@@ -963,8 +934,6 @@ auto PipelineMgmtService::RebuildActiveEditorPipeline(
       ImportSerializedPipelineState(*pipeline->pipeline_, prior_params, root_state.raw_color_context,
                                     accelerator_preference_);
       pipeline->pipeline_->SetExecutionStages();
-      pipeline->working_head_commit_hash_ = prior_head;
-      pipeline->transaction_chain_hash_   = prior_chain;
     } catch (...) {
     }
     if (error != nullptr) {
