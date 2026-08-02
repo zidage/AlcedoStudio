@@ -249,20 +249,24 @@ TEST(EditorScopeControllerTest,
   tap.SetScopeActive(true);
   FramePreviewMetadata metadata;
   metadata.preview_generation = 23;
+  metadata.presentation_request_id = 249;
+  metadata.frame_role              = FrameRole::DetailPatch;
   metadata.image_identity     = 91;
   metadata.image_generation   = 7;
-  tap.BindFrameSubmission({metadata, FramePresentationMode::FullFrame});
+  tap.BindFrameSubmission({metadata, FramePresentationMode::ViewportTransformed});
   tap.SubmitFinalDisplayFrame(MakeFrame());
 
   ASSERT_EQ(analyzer->submitted_frames.size(), 1U);
   const auto& submitted = analyzer->submitted_frames.front();
   EXPECT_EQ(submitted.image_identity, 91U);
   EXPECT_EQ(submitted.image_generation, 7U);
-  EXPECT_EQ(submitted.display_generation, 23U);
-  EXPECT_EQ(submitted.frame_id, 23U);
+  EXPECT_EQ(submitted.display_generation, 249U);
+  EXPECT_EQ(submitted.frame_id, 249U);
   EXPECT_EQ(downstream.metadata_count, 1);
   EXPECT_EQ(downstream.last_metadata.image_identity, 91U);
   EXPECT_EQ(downstream.last_metadata.image_generation, 7U);
+  EXPECT_EQ(downstream.last_metadata.presentation_request_id, 249U);
+  EXPECT_EQ(downstream.last_metadata.frame_role, FrameRole::DetailPatch);
   EXPECT_TRUE(downstream.last_metadata.scope_update_allowed);
 }
 

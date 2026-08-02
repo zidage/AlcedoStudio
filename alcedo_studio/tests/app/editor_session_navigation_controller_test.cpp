@@ -157,7 +157,7 @@ TEST_F(EditorSessionNavigationControllerTest, SaveFailureRetryThenSwitchAcquires
   EXPECT_TRUE(retry.waiting_for_checkpoint);
   EXPECT_FALSE(fixture_.nav().has_pending_recovery());
   fixture_.CompleteCheckpoint();
-  fixture_.lifecycle().MarkFirstFramePresented();
+  fixture_.lifecycle().MarkFirstFrameReady();
 
   EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::Interactive);
   EXPECT_TRUE(fixture_.lifecycle().has_image());
@@ -178,7 +178,7 @@ TEST_F(EditorSessionNavigationControllerTest,
 
   const auto discard = fixture_.nav().DiscardAndContinueAfterFailure();
   EXPECT_TRUE(discard.completed_synchronously);
-  fixture_.lifecycle().MarkFirstFramePresented();
+  fixture_.lifecycle().MarkFirstFrameReady();
   EXPECT_EQ(fixture_.journal().discard_count, 1);
   EXPECT_EQ(fixture_.lifecycle().state(), EditorSessionState::Interactive);
   EXPECT_TRUE(fixture_.lifecycle().has_image());

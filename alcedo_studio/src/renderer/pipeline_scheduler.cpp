@@ -8,10 +8,12 @@
 #include <cmath>
 #include <exception>
 #include <functional>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <syncstream>
 
 #include "image/image_buffer.hpp"
 #include "io/image/image_loader.hpp"
@@ -181,9 +183,14 @@ void ApplyRenderFrameRole(const std::shared_ptr<CPUPipelineExecutor>& pipeline_e
 }
 
 auto LoadViewportRegion(const std::shared_ptr<CPUPipelineExecutor>& pipeline_executor,
-                        bool should_use_viewport_region) -> std::optional<ViewportRenderRegion> {
+                        bool should_use_viewport_region,
+                        const std::optional<ViewportRenderRegion>& requested_region)
+    -> std::optional<ViewportRenderRegion> {
   if (!pipeline_executor || !should_use_viewport_region) {
     return std::nullopt;
+  }
+  if (requested_region) {
+    return requested_region;
   }
   return pipeline_executor->GetViewportRenderRegion();
 }
@@ -217,8 +224,9 @@ void PipelineTask::SetExecutorRenderParams() {
   const bool viewport_region_render  = (requested_render_type == RenderType::FAST_PREVIEW ||
                                        requested_render_type == RenderType::DETAIL_ROI_PREVIEW) &&
                                       desc.use_viewport_region_;
-  const auto viewport_region = LoadViewportRegion(
-      pipeline_executor_, viewport_region_render && !rotation_active_fast_preview);
+  const auto viewport_region =
+      LoadViewportRegion(pipeline_executor_, viewport_region_render && !rotation_active_fast_preview,
+                         desc.viewport_region_);
   if (viewport_region.has_value()) {
     region_x                = viewport_region->x_;
     region_y                = viewport_region->y_;
@@ -288,6 +296,16 @@ void PipelineTask::SetExecutorRenderParams() {
                                     : FrameRole::QualityBase;
     frame_metadata = MetadataFromRegion(frame_metadata, viewport_region, region_x, region_y,
                                         region_scale_x, region_scale_y);
+    std::osyncstream(std::cout)
+        << "[ROI_TRACE][pipeline-config] request=" << frame_metadata.presentation_request_id
+        << " output_role="
+        << (frame_metadata.frame_role == FrameRole::DetailPatch ? "detail" : "quality")
+        << " region_px=" << region_x << ',' << region_y << " scale=" << region_scale_x << ','
+        << region_scale_y << " reference=" << region_reference_width << 'x'
+        << region_reference_height << " target_long_edge=" << ViewportTargetLongEdge(viewport_region)
+        << " roi_norm=" << frame_metadata.source_roi_norm.x << ','
+        << frame_metadata.source_roi_norm.y << ',' << frame_metadata.source_roi_norm.width << ','
+        << frame_metadata.source_roi_norm.height << std::endl;
     presentation_mode = FramePresentationMode::ViewportTransformed;
     ApplyRenderFrameRole(pipeline_executor_, frame_metadata);
     pipeline_executor_->BindFrameSubmission(frame_metadata, presentation_mode);
@@ -526,10 +544,10 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
           if (task.pipeline_executor_) {
             render_lock = std::unique_lock<std::mutex>(task.pipeline_executor_->GetRenderLock());
 
-            if (task.prepare_with_render_lock_) {
+            if (task.configure_under_render_lock_) {
               bool prepared = false;
               try {
-                prepared = (*task.prepare_with_render_lock_)(task);
+                prepared = (*task.configure_under_render_lock_)(task);
               } catch (...) {
                 notify_thumbnail_failure_callbacks();
                 set_blocking_exception();
@@ -596,6 +614,7 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
           }
 
           if (IsStaleForSink(output_sink, task.request_id_)) {
+            std::cout << "PipelineScheduler: Stale for sink detected!\n";
             apply_state_transition_after_render();
             notify_thumbnail_failure_callbacks();
             set_blocking_value(nullptr);
@@ -618,6 +637,7 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
               result && result_has_cpu && (!require_gpu_valid || result->gpu_data_valid_);
 
           if (IsStaleForSink(output_sink, task.request_id_)) {
+            std::cout << "PipelineScheduler: Stale for sink detected!\n";
             apply_state_transition_after_render();
             if (render_desc.render_type_ == RenderType::THUMBNAIL) {
               notify_thumbnail_failure_callbacks();

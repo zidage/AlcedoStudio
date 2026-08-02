@@ -175,6 +175,11 @@ class EditorInteractionController : public QObject {
   // Absolute pinch target zoom (fit-relative field). QML PinchHandler should
   // compute startZoom * (scale / startScale) and call this each scale update.
   Q_INVOKABLE void handlePinchTo(qreal x, qreal y, qreal targetZoom);
+  // Marks the lifetime of a Qt Quick wheel/pinch input sequence. While active,
+  // view changes only re-sample the current base; one final DetailRefresh is
+  // emitted when the sequence ends.
+  Q_INVOKABLE void beginViewInputSequence();
+  Q_INVOKABLE void finishViewInputSequence();
   Q_INVOKABLE void handleLeave();
   Q_INVOKABLE void resetView();
   // Snap to 1:1 (true zoom = 1.0, one image pixel per screen pixel), centered.
@@ -276,6 +281,10 @@ class EditorInteractionController : public QObject {
   // initial tick where zoom is still at fit. All zoomed view transforms use the
   // settled timer so DetailRefresh is scheduled once, not per interaction tick.
   bool                           suppress_view_change_routing_ = false;
+  bool                           pointer_pan_active_            = false;
+  bool                           pointer_pan_changed_           = false;
+  bool                           view_input_sequence_active_    = false;
+  bool                           view_input_sequence_changed_   = false;
   bool                           detail_roi_visible_           = false;
   QRectF                         detail_roi_uv_{0.0, 0.0, 1.0, 1.0};
   bool                           interaction_enabled_ = true;

@@ -402,6 +402,13 @@ Item {
                         id: viewportWheel
                         enabled: root.editorControlsEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                        onActiveChanged: {
+                            if (active) {
+                                editorInteraction.beginViewInputSequence()
+                            } else {
+                                editorInteraction.finishViewInputSequence()
+                            }
+                        }
                         onWheel: function (event) {
                             var synthesized = event.pixelDelta.x !== 0 || event.pixelDelta.y !== 0
                             editorInteraction.handleWheel(
@@ -429,6 +436,7 @@ Item {
                         property bool _pinchLive: false
                         onActiveChanged: {
                             if (active) {
+                                editorInteraction.beginViewInputSequence()
                                 _baseZoom = editorInteraction.zoom
                                 // Sync to whatever scale is now (usually 1.0 at start;
                                 // never assume without reading the property).
@@ -436,6 +444,7 @@ Item {
                                 _pinchLive = true
                             } else {
                                 _pinchLive = false
+                                editorInteraction.finishViewInputSequence()
                             }
                         }
                         onScaleChanged: {

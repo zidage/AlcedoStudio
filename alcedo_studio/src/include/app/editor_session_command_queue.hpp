@@ -68,8 +68,6 @@ enum class EditorSessionCompletionKind : std::uint8_t {
   JournalCommitFinished,
   MaterializationFinished,
   RenderResult,
-  FrameSubmitted,
-  FramePresented,
   ThumbnailRefreshFinished,
   PipelineSnapshotBuilt,
   WorkerRequestFailed,

@@ -295,6 +295,60 @@ TEST_F(PipelineFrameSinkTest, DetailRoiPreviewUsesViewportTargetPixelsAsMaxEdge)
   EXPECT_EQ(roi.value("reference_height", 0), 4000);
 }
 
+TEST_F(PipelineFrameSinkTest, DetailRoiPreviewUsesFrozenRequestRegionInsteadOfChangedSinkRegion) {
+  auto          exec = std::make_shared<CPUPipelineExecutor>();
+  MockFrameSink sink;
+  exec->SetExecutionStages(&sink);
+
+  // Simulate the view moving after the session request was accepted but before
+  // the blocking pipeline task acquired the executor render lock.
+  sink.viewport_render_region_ = ViewportRenderRegion{
+      .x_                = 404,
+      .y_                = 428,
+      .scale_x_          = 0.17f,
+      .scale_y_          = 0.17f,
+      .reference_width_  = 903,
+      .reference_height_ = 1351,
+      .target_width_     = 903,
+      .target_height_    = 1351,
+  };
+  const ViewportRenderRegion requested_region{
+      .x_                = 316,
+      .y_                = 428,
+      .scale_x_          = 0.491694f,
+      .scale_y_          = 0.170244f,
+      .reference_width_  = 903,
+      .reference_height_ = 1351,
+      .target_width_     = 3008,
+      .target_height_    = 1558,
+  };
+
+  PipelineTask task;
+  task.pipeline_executor_                         = exec;
+  task.options_.render_desc_.render_type_         = RenderType::DETAIL_ROI_PREVIEW;
+  task.options_.render_desc_.use_viewport_region_ = true;
+  task.options_.render_desc_.viewport_region_     = requested_region;
+  task.SetExecutorRenderParams();
+
+  EXPECT_EQ(sink.viewport_render_region_calls_, 0);
+  EXPECT_EQ(sink.last_bound_submission_.metadata.frame_role, FrameRole::DetailPatch);
+  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.x, 316.0f / 903.0f,
+              1.0e-5f);
+  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.y, 428.0f / 1351.0f,
+              1.0e-5f);
+  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.width, 0.491694f, 1.0e-5f);
+  EXPECT_NEAR(sink.last_bound_submission_.metadata.source_roi_norm.height, 0.170244f, 1.0e-5f);
+
+  const auto resize_entry =
+      exec->GetStage(PipelineStageName::Geometry_Adjustment).GetOperator(OperatorType::RESIZE);
+  ASSERT_TRUE(resize_entry.has_value());
+  ASSERT_NE(resize_entry.value(), nullptr);
+  ASSERT_NE(resize_entry.value()->op_, nullptr);
+  const auto params = resize_entry.value()->op_->GetParams();
+  ASSERT_TRUE(params.contains("resize"));
+  EXPECT_EQ(params["resize"].value("maximum_edge", 0), 3008);
+}
+
 TEST_F(PipelineFrameSinkTest, ActiveCudaHighlightShadowKeepsDetailRoiPreviewAsPatch) {
   auto          exec = std::make_shared<CPUPipelineExecutor>();
   MockFrameSink sink;

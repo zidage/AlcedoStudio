@@ -16,7 +16,9 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <iostream>
 #include <limits>
+#include <syncstream>
 
 #include "ui/edit_viewer/viewport_mapper.hpp"
 #include "ui/editor_rhi/native_resource_counters.hpp"
@@ -311,6 +313,21 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
     // that replacement.
     if (detail.valid && (!next_view.allow_detail_patch || !next_roi.has_value() ||
                          !SameRoi(detail.preview_metadata.source_roi_norm, *next_roi))) {
+      std::osyncstream out(std::cout);
+      out << "[ROI_TRACE][renderer-release] request="
+          << detail.preview_metadata.presentation_request_id
+          << " reason=view-state-changed allow=" << next_view.allow_detail_patch
+          << " current_roi=";
+      if (next_roi) {
+        out << next_roi->x << ',' << next_roi->y << ',' << next_roi->width << ','
+            << next_roi->height;
+      } else {
+        out << "none";
+      }
+      out << " patch_roi=" << detail.preview_metadata.source_roi_norm.x << ','
+          << detail.preview_metadata.source_roi_norm.y << ','
+          << detail.preview_metadata.source_roi_norm.width << ','
+          << detail.preview_metadata.source_roi_norm.height << std::endl;
       releaseLayer(detail);
     }
   }
@@ -497,7 +514,14 @@ void EditorViewportRenderer::consumeDirectFrames() {
           static_cast<unsigned long long>(frame->slot.preview_metadata.presentation_request_id),
           static_cast<unsigned long long>(frame->slot.image_identity),
           static_cast<unsigned long long>(frame->slot.image_generation), frame->slot.width,
-          frame->slot.height);
+           frame->slot.height);
+    if (role == FrameRole::DetailPatch) {
+      std::osyncstream(std::cout)
+          << "[ROI_TRACE][renderer-import-begin] request="
+          << frame->slot.preview_metadata.presentation_request_id
+          << " slot=" << frame->slot.index << " size=" << frame->slot.width << 'x'
+          << frame->slot.height << " native=" << frame->slot.native.native_handle << std::endl;
+    }
 
     auto& layer = layers_[layerIndex(layerForRole(role))];
     releaseLayer(layer);
@@ -511,6 +535,13 @@ void EditorViewportRenderer::consumeDirectFrames() {
                static_cast<unsigned long long>(frame->slot.native.native_handle));
       destroyResource(texture);
       present_queue_->CompleteRendererRead(frame->slot.index);
+      if (role == FrameRole::DetailPatch) {
+        std::osyncstream(std::cout)
+            << "[ROI_TRACE][renderer-drop] request="
+            << frame->slot.preview_metadata.presentation_request_id
+            << " reason=qrhi-import-failed native=" << frame->slot.native.native_handle
+            << std::endl;
+      }
       if (item_) {
         item_->setStatusText(QStringLiteral("failed to import a completed native frame"));
       }
@@ -532,6 +563,12 @@ void EditorViewportRenderer::consumeDirectFrames() {
     layer.imported_owner.reset();
     layer.imported_native_handle = frame->slot.native.native_handle;
     content_dirty_ = true;
+    if (role == FrameRole::DetailPatch) {
+      std::osyncstream(std::cout)
+          << "[ROI_TRACE][renderer-imported] request="
+          << layer.preview_metadata.presentation_request_id << " slot=" << layer.slot_index
+          << " size=" << layer.width << 'x' << layer.height << std::endl;
+    }
     if (item_) {
       item_->setStatusText(QStringLiteral("imported frame role=%1 gen=%2")
                                .arg(static_cast<int>(role))
@@ -556,7 +593,13 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
           static_cast<unsigned long long>(frame.preview_metadata.presentation_request_id),
           static_cast<unsigned long long>(frame.image_identity),
           static_cast<unsigned long long>(frame.image_generation), frame.width, frame.height,
-          static_cast<unsigned long long>(frame.texture_handle));
+           static_cast<unsigned long long>(frame.texture_handle));
+    if (role == FrameRole::DetailPatch) {
+      std::osyncstream(std::cout)
+          << "[ROI_TRACE][renderer-metal-import-begin] request="
+          << frame.preview_metadata.presentation_request_id << " size=" << frame.width << 'x'
+          << frame.height << " native=" << frame.texture_handle << std::endl;
+    }
 
     auto& layer = layers_[layerIndex(layerForRole(role))];
     // Same native object already bound for this layer: keep QRhi wrapper, refresh
@@ -576,6 +619,12 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
       layer.ready_frame.slot.sequence = frame.sequence;
       layer.texture->setNativeLayout(frame.native_layout);
       content_dirty_ = true;
+      if (role == FrameRole::DetailPatch) {
+        std::osyncstream(std::cout)
+            << "[ROI_TRACE][renderer-metal-reused] request="
+            << layer.preview_metadata.presentation_request_id << " size=" << layer.width << 'x'
+            << layer.height << std::endl;
+      }
       continue;
     }
 
@@ -589,6 +638,12 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
                static_cast<unsigned long long>(frame.preview_metadata.presentation_request_id),
                static_cast<unsigned long long>(frame.texture_handle));
       destroyResource(texture);
+      if (role == FrameRole::DetailPatch) {
+        std::osyncstream(std::cout)
+            << "[ROI_TRACE][renderer-drop] request="
+            << frame.preview_metadata.presentation_request_id
+            << " reason=metal-qrhi-import-failed native=" << frame.texture_handle << std::endl;
+      }
       if (item_) {
         item_->setStatusText(QStringLiteral("failed to import Metal frame (zero-copy)"));
       }
@@ -616,6 +671,12 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
     layer.ready_frame.slot.sequence = frame.sequence;
     NativeResourceCounters::Instance().OnCreateImportedQRhiTexture();
     content_dirty_ = true;
+    if (role == FrameRole::DetailPatch) {
+      std::osyncstream(std::cout)
+          << "[ROI_TRACE][renderer-metal-imported] request="
+          << layer.preview_metadata.presentation_request_id << " size=" << layer.width << 'x'
+          << layer.height << std::endl;
+    }
     if (item_) {
       item_->setStatusText(QStringLiteral("imported Metal frame role=%1 gen=%2")
                                .arg(static_cast<int>(role))
@@ -667,6 +728,49 @@ auto EditorViewportRenderer::detailPatchAspectOk(const LayerState& detail,
   return std::abs(detail_aspect - expected_aspect) <= 0.15f * std::max(expected_aspect, 1.0e-3f);
 }
 
+void EditorViewportRenderer::traceDetailDecision(
+    const char* decision, const LayerState* detail, const LayerState* base,
+    const std::optional<FrameRoiRect>& current_roi) const {
+  const std::uint64_t request_id = detail ? detail->preview_metadata.presentation_request_id : 0;
+  const bool          has_roi    = detail && current_roi.has_value();
+  const bool roi_changed = has_roi != last_detail_trace_has_roi_ ||
+                           (has_roi && !SameRoi(*current_roi, last_detail_trace_roi_));
+  if (last_detail_trace_decision_ == decision &&
+      last_detail_trace_request_id_ == request_id && !roi_changed) {
+    return;
+  }
+  last_detail_trace_decision_   = decision;
+  last_detail_trace_request_id_ = request_id;
+  last_detail_trace_has_roi_    = has_roi;
+  if (has_roi) last_detail_trace_roi_ = *current_roi;
+
+  const auto& quality = layers_[layerIndex(LayerId::QualityBase)];
+  const auto& interactive = layers_[layerIndex(LayerId::InteractivePrimary)];
+  std::osyncstream out(std::cout);
+  out << "[ROI_TRACE][renderer-decision] decision=" << decision
+      << " detail_request=" << request_id << " detail_valid=" << (detail && detail->valid)
+      << " quality_request="
+      << (quality.valid ? quality.preview_metadata.presentation_request_id : 0)
+      << " interactive_request="
+      << (interactive.valid ? interactive.preview_metadata.presentation_request_id : 0)
+      << " base_request=" << (base ? base->preview_metadata.presentation_request_id : 0)
+      << " image=" << image_identity_ << " image_generation=" << image_generation_;
+  if (detail) {
+    out << " patch_size=" << detail->width << 'x' << detail->height << " patch_roi="
+        << detail->preview_metadata.source_roi_norm.x << ','
+        << detail->preview_metadata.source_roi_norm.y << ','
+        << detail->preview_metadata.source_roi_norm.width << ','
+        << detail->preview_metadata.source_roi_norm.height;
+  }
+  if (current_roi) {
+    out << " current_roi=" << current_roi->x << ',' << current_roi->y << ','
+        << current_roi->width << ',' << current_roi->height;
+  } else {
+    out << " current_roi=none";
+  }
+  out << std::endl;
+}
+
 auto EditorViewportRenderer::hasVisibleDetailPatch() const -> bool {
   // Phase 5D: the QML editor route does not use the legacy expected-detail
   // token handshake (EditorRenderCoordinator never calls a SetExpectedDetail
@@ -680,33 +784,52 @@ auto EditorViewportRenderer::hasVisibleDetailPatch() const -> bool {
   // current viewport. That is sufficient — the token fields remain on
   // ViewerViewState only for the legacy QWidget viewer's own check.
   if (!view_state_.allow_detail_patch) {
+    traceDetailDecision("detail-disabled", nullptr, nullptr, std::nullopt);
     return false;
   }
   const auto& quality = layers_[layerIndex(LayerId::QualityBase)];
   const auto& interactive = layers_[layerIndex(LayerId::InteractivePrimary)];
   const auto& detail = layers_[layerIndex(LayerId::DetailPatch)];
   if (!detail.valid) {
+    traceDetailDecision("no-detail-layer", nullptr, nullptr, std::nullopt);
     return false;
   }
-  // Prefer QualityBase as the full-frame aspect/generation reference. Fall back
-  // to a full-frame InteractivePrimary so a DetailPatch can land before the
-  // settled quality pass finishes (common after open + immediate zoom).
+  // Base and detail are separate render requests, so their request IDs cannot
+  // be equal. Reject only a detail older than the currently selected primary;
+  // otherwise composite it over the same-image full-frame quality/interactive
+  // layer already filtered by ConsumeNewestReady.
+  const auto* newest_primary = selectedPrimaryLayer();
+  if (newest_primary && newest_primary->preview_metadata.presentation_request_id >
+                            detail.preview_metadata.presentation_request_id) {
+    const auto current_roi = BuildNormalizedRoi(view_state_.snapshot.viewport_render_region_cache);
+    traceDetailDecision("detail-older-than-primary", &detail, newest_primary, current_roi);
+    return false;
+  }
+
+  // Prefer QualityBase as the full-frame reference. Fall back to a full-frame
+  // InteractivePrimary while the settled quality pass is not available.
   const LayerState* base = nullptr;
-  if (quality.valid && quality.preview_metadata.presentation_request_id ==
-                           detail.preview_metadata.presentation_request_id) {
+  if (quality.valid) {
     base = &quality;
-  } else if (interactive.valid &&
-             interactive.preview_metadata.presentation_request_id ==
-                 detail.preview_metadata.presentation_request_id &&
-             interactive.presentation_mode != FramePresentationMode::RoiFrame) {
+  } else if (interactive.valid && interactive.presentation_mode != FramePresentationMode::RoiFrame) {
     base = &interactive;
   }
-  if (!base || !detailPatchAspectOk(detail, *base)) {
+  if (!base /*|| !detailPatchAspectOk(detail, *base)*/) {
+    const auto current_roi = BuildNormalizedRoi(view_state_.snapshot.viewport_render_region_cache);
+    traceDetailDecision("no-full-frame-base", &detail, nullptr, current_roi);
     return false;
   }
   const auto current_roi = BuildNormalizedRoi(view_state_.snapshot.viewport_render_region_cache);
-  return current_roi.has_value() &&
-         SameRoi(detail.preview_metadata.source_roi_norm, *current_roi);
+  if (!current_roi) {
+    traceDetailDecision("current-roi-missing", &detail, base, current_roi);
+    return false;
+  }
+  if (!SameRoi(detail.preview_metadata.source_roi_norm, *current_roi)) {
+    traceDetailDecision("roi-mismatch", &detail, base, current_roi);
+    return false;
+  }
+  traceDetailDecision("visible", &detail, base, current_roi);
+  return true;
 }
 
 auto EditorViewportRenderer::selectedDetailLayer() const -> const LayerState* {
@@ -840,11 +963,12 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
   }
   command_buffer->endPass();
 
-  // Composition confirmation only after the selected primary was encoded into
-  // this Qt Quick window frame. Covers both DirectPresentQueue slots (CUDA /
-  // OpenCL) and zero-copy Metal imports (slot_index == -1).
-  if (drew_primary && item_->frameSink()) {
-    item_->frameSink()->NotifyPrimaryFrameComposed(primary_layer->ready_frame);
+  // Composition metrics are renderer-owned diagnostics. They do not feed back
+  // into request scheduling; FrameReady already completed the blocking job.
+  if (drew_primary && item_->present_queue()) {
+    const auto& slot = primary_layer->ready_frame.slot;
+    item_->present_queue()->NoteFrameComposed(slot.preview_metadata.presentation_request_id,
+                                              slot.image_generation, slot.image_identity);
   }
 
   releaseQueuedNatives();

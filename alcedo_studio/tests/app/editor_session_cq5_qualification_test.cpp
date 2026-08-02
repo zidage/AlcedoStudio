@@ -86,10 +86,11 @@ class EditorSessionCq5QualificationTest : public ::testing::Test {
     }
     runtime_->coordinator->NotifySchedulerCompleted(rid, true);
     drainQueue();
-    runtime_->coordinator->NotifyFrameSubmitted(rid);
-    drainQueue();
-    runtime_->coordinator->NotifyFramePresented(rid);
-    drainQueue();
+    const auto quality_rid = runtime_->coordinator->last_scheduled_request_id();
+    if (quality_rid != rid) {
+      runtime_->coordinator->NotifySchedulerCompleted(quality_rid, true);
+      drainQueue();
+    }
   }
 
   void openInteractive(sl_element_id_t eid = 10, image_id_t iid = 20) {

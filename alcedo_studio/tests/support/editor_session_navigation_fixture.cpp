@@ -88,7 +88,7 @@ void EditorSessionNavigationFixture::OpenA() {
     throw std::runtime_error("OpenA AcquireGuards failed: " + error);
   }
   lifecycle_->MarkImageReady();
-  lifecycle_->MarkFirstFramePresented();
+  lifecycle_->MarkFirstFrameReady();
 }
 
 auto EditorSessionNavigationFixture::RequestSwitchToB() -> NavigationOutcome {

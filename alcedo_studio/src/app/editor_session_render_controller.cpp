@@ -5,6 +5,7 @@
 #include "app/editor_session_render_controller.hpp"
 
 #include <algorithm>
+#include <iostream>
 #include <utility>
 
 namespace alcedo {
@@ -120,16 +121,22 @@ auto EditorSessionRenderController::RouteInitialRender(const EditorRenderCommand
   deps_.render->SetActiveImageLoadRequest(image_load_request.value);
   const EditorRenderResult routed = deps_.render->Submit(*intent);
   if (routed.kind == EditorRenderResultKind::RequestAccepted) {
+    if (intent->frame_role == FrameRole::QualityBase) {
+      std::scoped_lock lock(mutex_);
+      quality_base_routed_     = true;
+      quality_base_ready_      = false;
+      quality_base_request_id_ = routed.request_id;
+    }
     if (command.reason == EditorRenderReason::InitialFrame ||
         command.reason == EditorRenderReason::ImageSwitch ||
         command.reason == EditorRenderReason::Retry) {
       std::scoped_lock lock(mutex_);
       first_frame_request_id_     = routed.request_id;
-      first_frame_completed_      = false;
-      first_frame_submitted_      = false;
-      first_frame_presented_      = false;
+      first_frame_ready_          = false;
       quality_base_routed_        = false;
+      quality_base_ready_         = false;
       quality_base_request_id_    = 0;
+      pending_detail_render_.reset();
       first_frame_route_time_     = std::chrono::steady_clock::now();
       first_frame_time_ms_        = -1.0;
       pending_session_identity_   = identity;
@@ -159,7 +166,7 @@ auto EditorSessionRenderController::RouteViewChange(const EditorRenderCommand&  
   EditorRenderEvent event;
   const bool        detail_from_visible_loading_frame =
       command.reason == EditorRenderReason::DetailRefresh && state == EditorSessionState::Loading &&
-      image_acquired_ && first_frame_completed_ && first_frame_submitted_;
+      image_acquired_ && first_frame_ready_;
   if (state != EditorSessionState::Interactive && !detail_from_visible_loading_frame) {
     event.kind    = EditorRenderEventKind::RenderRejected;
     event.message = "View change requires an interactive session";
@@ -169,6 +176,33 @@ auto EditorSessionRenderController::RouteViewChange(const EditorRenderCommand&  
     event.kind    = EditorRenderEventKind::RenderRejected;
     event.message = "View change requires an open image";
     return event;
+  }
+
+  // A detail patch is a refinement of the current QualityBase. Never enqueue
+  // it ahead of that base: doing so both wastes pipeline work and can produce a
+  // patch whose content generation has no matching full-frame layer. Keep only
+  // the newest stable viewport request and submit it when QualityBase is ready.
+  if (command.reason == EditorRenderReason::DetailRefresh) {
+    std::scoped_lock lock(mutex_);
+    if (!quality_base_ready_) {
+      pending_detail_render_ = PendingDetailRender{command, identity, image_load_request};
+      std::cout << "[ROI_TRACE][detail-deferred] image=" << identity.image_id
+                << " image_load_request=" << image_load_request.value
+                << " quality_base_request=" << quality_base_request_id_;
+      if (command.view_region.has_value()) {
+        const auto& region = *command.view_region;
+        std::cout << " region_px=" << region.x_ << ',' << region.y_
+                  << " scale=" << region.scale_x_ << ',' << region.scale_y_;
+      }
+      std::cout << '\n';
+      event.kind              = EditorRenderEventKind::RenderReused;
+      event.state             = state;
+      event.identity          = identity;
+      event.operation_id      = command.operation_id;
+      event.reason            = command.reason;
+      event.message           = "Detail refresh deferred until QualityBase is ready";
+      return event;
+    }
   }
 
   if (deps_.render) {
@@ -243,24 +277,15 @@ void EditorSessionRenderController::NotifyRenderResult(
   }
 
   if (MatchesActiveFirstFrame(render_result, identity, image_load_request)) {
-    if (render_result.kind == EditorRenderResultKind::RenderCompleted) {
-      std::scoped_lock lock(mutex_);
-      first_frame_completed_ = true;
-    } else if (render_result.kind == EditorRenderResultKind::FrameSubmitted) {
-      std::scoped_lock lock(mutex_);
-      if (!first_frame_completed_) {
-        return;
-      }
-      first_frame_submitted_ = true;
-    } else if (render_result.kind == EditorRenderResultKind::FramePresented) {
+    if (render_result.kind == EditorRenderResultKind::FrameReady) {
       bool                  should_try_interactive = false;
       EditorSessionIdentity first_frame_identity;
       {
         std::scoped_lock lock(mutex_);
-        if (!first_frame_completed_ || !first_frame_submitted_ || first_frame_presented_) {
+        if (first_frame_ready_) {
           return;
         }
-        first_frame_presented_ = true;
+        first_frame_ready_ = true;
         if (first_frame_route_time_.has_value()) {
           const auto elapsed   = std::chrono::steady_clock::now() - *first_frame_route_time_;
           first_frame_time_ms_ = std::chrono::duration<double, std::milli>(elapsed).count();
@@ -273,6 +298,33 @@ void EditorSessionRenderController::NotifyRenderResult(
       }
     }
     return;
+  }
+
+  std::optional<PendingDetailRender> pending_detail;
+  {
+    std::scoped_lock lock(mutex_);
+    const bool matches_quality_base =
+        quality_base_request_id_ != 0 &&
+        render_result.request_id == quality_base_request_id_ &&
+        render_result.intent.frame_role == FrameRole::QualityBase &&
+        identity.element_id == pending_session_identity_.element_id &&
+        identity.image_id == pending_session_identity_.image_id &&
+        image_load_request == pending_image_load_request_;
+    if (matches_quality_base && render_result.kind == EditorRenderResultKind::FrameReady) {
+      quality_base_ready_ = true;
+      pending_detail      = std::move(pending_detail_render_);
+      pending_detail_render_.reset();
+      std::cout << "[ROI_TRACE][quality-base-ready] request=" << render_result.request_id
+                << " image=" << identity.image_id
+                << " pending_detail=" << (pending_detail.has_value() ? 1 : 0) << '\n';
+    }
+  }
+  if (pending_detail.has_value()) {
+    const auto routed = RouteViewChange(pending_detail->command, pending_detail->identity,
+                                        pending_detail->image_load_request, state);
+    std::cout << "[ROI_TRACE][detail-after-base] quality_base_request="
+              << render_result.request_id << " detail_request=" << routed.request_id
+              << " outcome=" << static_cast<int>(routed.kind) << '\n';
   }
 
   const bool busy          = CoordinatorBusy();
@@ -329,10 +381,10 @@ void EditorSessionRenderController::ResetForNewImage() {
   first_frame_request_id_  = 0;
   quality_base_request_id_ = 0;
   image_acquired_          = false;
-  first_frame_completed_   = false;
-  first_frame_submitted_   = false;
-  first_frame_presented_   = false;
+  first_frame_ready_       = false;
   quality_base_routed_     = false;
+  quality_base_ready_      = false;
+  pending_detail_render_.reset();
   pending_initial_reason_.reset();
   pending_operation_id_       = 0;
   pending_initial_adjustment_ = {};
@@ -359,8 +411,7 @@ void EditorSessionRenderController::TryEnterInteractiveFromFirstFrame(
   ImageLoadRequestId load_request;
   {
     std::scoped_lock lock(mutex_);
-    if (!image_acquired_ || !first_frame_completed_ || !first_frame_submitted_ ||
-        !first_frame_presented_) {
+    if (!image_acquired_ || !first_frame_ready_) {
       return;
     }
     ready         = true;
@@ -370,12 +421,11 @@ void EditorSessionRenderController::TryEnterInteractiveFromFirstFrame(
     return;
   }
   EditorRenderEvent event;
-  event.kind               = EditorRenderEventKind::FirstFramePresented;
+  event.kind               = EditorRenderEventKind::FirstFrameReady;
   event.operation_id       = pending_operation_id_;
   event.state              = EditorSessionState::Interactive;
   event.identity           = identity;
-  event.presented_identity = identity;
-  event.message            = "First frame presented";
+  event.message            = "First frame ready";
   EmitEvent(std::move(event));
 
   {
@@ -400,6 +450,7 @@ void EditorSessionRenderController::TryEnterInteractiveFromFirstFrame(
     if (qb_routed.kind == EditorRenderResultKind::RequestAccepted) {
       std::scoped_lock lock(mutex_);
       quality_base_routed_     = true;
+      quality_base_ready_      = false;
       quality_base_request_id_ = qb_routed.request_id;
     }
   }

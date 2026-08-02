@@ -414,7 +414,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// Accept an asynchronous image-acquisition completion for the active
   /// session generation. Stale generations and states outside image loading
   /// are ignored. A failed acquisition releases guards and publishes failure;
-  /// success keeps the session loading until its first frame is presented.
+  /// success keeps the session loading until its first frame is ready.
   void NotifyImageAcquired(ImageLoadRequestId image_load_request, bool success,
                            std::string message = {});
   void NotifyRenderResult(const EditorRenderResult& render_result);

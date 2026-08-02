@@ -5,6 +5,8 @@
 #include "ui/editor_rhi/direct_present_queue.hpp"
 
 #include <algorithm>
+#include <iostream>
+#include <syncstream>
 
 namespace alcedo::editor_rhi {
 namespace {
@@ -341,27 +343,55 @@ void DirectPresentQueue::NotifyReady(int slot_index, FramePresentationMode mode,
                                      const FramePreviewMetadata& metadata) {
   std::lock_guard lock(mutex_);
   if (!IsValidSlot(slot_index)) {
+    if (metadata.frame_role == FrameRole::DetailPatch) {
+      std::osyncstream(std::cout)
+          << "[ROI_TRACE][queue-drop] request=" << metadata.presentation_request_id
+          << " reason=invalid-slot slot=" << slot_index << std::endl;
+    }
     return;
   }
   auto& slot = slots_[static_cast<std::size_t>(slot_index)];
   // EndWrite may already have cleared mapped_slot_idx while leaving the slot
   // in ProducerWriting until this handoff.
   if (slot.state != SlotState::ProducerWriting) {
+    if (metadata.frame_role == FrameRole::DetailPatch) {
+      std::osyncstream(std::cout)
+          << "[ROI_TRACE][queue-drop] request=" << metadata.presentation_request_id
+          << " reason=slot-not-producer-writing slot=" << slot_index
+          << " state=" << static_cast<int>(slot.state) << std::endl;
+    }
     return;
   }
   if (!slot.native.valid()) {
+    if (metadata.frame_role == FrameRole::DetailPatch) {
+      std::osyncstream(std::cout)
+          << "[ROI_TRACE][queue-drop] request=" << metadata.presentation_request_id
+          << " reason=invalid-native slot=" << slot_index << std::endl;
+    }
     RecycleSlotLocked(slot_index, false);
     return;
   }
   // Stale session rejection.
   if (image_generation_ != 0 && slot.image_generation != 0 &&
       slot.image_generation != image_generation_) {
+    if (metadata.frame_role == FrameRole::DetailPatch) {
+      std::osyncstream(std::cout)
+          << "[ROI_TRACE][queue-drop] request=" << metadata.presentation_request_id
+          << " reason=image-generation-mismatch slot_generation=" << slot.image_generation
+          << " queue_generation=" << image_generation_ << std::endl;
+    }
     ++dropped_stale_frame_count_;
     RecycleSlotLocked(slot_index, false);
     wake_.notify_all();
     return;
   }
   if (image_identity_ != 0 && slot.image_identity != 0 && slot.image_identity != image_identity_) {
+    if (metadata.frame_role == FrameRole::DetailPatch) {
+      std::osyncstream(std::cout)
+          << "[ROI_TRACE][queue-drop] request=" << metadata.presentation_request_id
+          << " reason=image-identity-mismatch slot_image=" << slot.image_identity
+          << " queue_image=" << image_identity_ << std::endl;
+    }
     ++dropped_stale_frame_count_;
     RecycleSlotLocked(slot_index, false);
     wake_.notify_all();
@@ -376,6 +406,13 @@ void DirectPresentQueue::NotifyReady(int slot_index, FramePresentationMode mode,
     auto& other = slots_[static_cast<std::size_t>(i)];
     if (other.state == SlotState::Ready &&
         other.preview_metadata.frame_role == metadata.frame_role) {
+      if (metadata.frame_role == FrameRole::DetailPatch) {
+        std::osyncstream(std::cout)
+            << "[ROI_TRACE][queue-supersede] old_request="
+            << other.preview_metadata.presentation_request_id
+            << " new_request=" << metadata.presentation_request_id << " old_slot=" << i
+            << " new_slot=" << slot_index << std::endl;
+      }
       ++dropped_stale_frame_count_;
       RecycleSlotLocked(i, false);
     }
@@ -385,6 +422,15 @@ void DirectPresentQueue::NotifyReady(int slot_index, FramePresentationMode mode,
   slot.presentation_mode = mode;
   slot.preview_metadata  = metadata;
   slot.sequence          = ++sequence_;
+  if (metadata.frame_role == FrameRole::DetailPatch) {
+    std::osyncstream(std::cout)
+        << "[ROI_TRACE][queue-ready] request=" << metadata.presentation_request_id
+        << " slot=" << slot_index << " sequence=" << slot.sequence << " size=" << slot.width << 'x'
+        << slot.height << " image=" << slot.image_identity
+        << " image_generation=" << slot.image_generation << " roi_norm="
+        << metadata.source_roi_norm.x << ',' << metadata.source_roi_norm.y << ','
+        << metadata.source_roi_norm.width << ',' << metadata.source_roi_norm.height << std::endl;
+  }
   if (mapped_slot_idx_ == slot_index) {
     mapped_slot_idx_ = -1;
   }
@@ -453,6 +499,17 @@ auto DirectPresentQueue::ConsumeNewestReady(FrameRole layer, std::uint64_t image
   auto& chosen = slots_[static_cast<std::size_t>(best)];
   chosen.state = SlotState::RendererReading;
   active_idx_  = best;
+  if (layer == FrameRole::DetailPatch) {
+    std::osyncstream(std::cout)
+        << "[ROI_TRACE][queue-consume] request="
+        << chosen.preview_metadata.presentation_request_id << " slot=" << best
+        << " sequence=" << chosen.sequence << " size=" << chosen.width << 'x' << chosen.height
+        << " image=" << chosen.image_identity << " image_generation=" << chosen.image_generation
+        << " roi_norm=" << chosen.preview_metadata.source_roi_norm.x << ','
+        << chosen.preview_metadata.source_roi_norm.y << ','
+        << chosen.preview_metadata.source_roi_norm.width << ','
+        << chosen.preview_metadata.source_roi_norm.height << std::endl;
+  }
   ReadyFrame frame;
   frame.slot = SnapshotLocked(best);
   return frame;
@@ -470,27 +527,6 @@ void DirectPresentQueue::CompleteRendererRead(int slot_index) {
   // Keep the native resource; slot returns to Available for reuse at same size.
   RecycleSlotLocked(slot_index, false);
   wake_.notify_all();
-}
-
-auto DirectPresentQueue::AcknowledgeFirstComposition(std::uint64_t request_id,
-                                                     std::uint64_t image_generation,
-                                                     std::uint64_t image_identity) -> bool {
-  std::lock_guard lock(mutex_);
-  if (request_id == 0 || image_generation == 0) {
-    return false;
-  }
-  if (first_composition_emitted_ && first_composition_image_generation_ == image_generation) {
-    return false;
-  }
-  if (image_identity_ != 0 && image_identity != 0 && image_identity_ != image_identity) {
-    return false;
-  }
-  first_composition_emitted_          = true;
-  first_composition_image_generation_ = image_generation;
-  last_composed_image_generation_     = image_generation;
-  last_composed_request_id_           = request_id;
-  // composed_frame_count is owned by NoteFrameComposed (every drawn primary).
-  return true;
 }
 
 void DirectPresentQueue::NoteFrameComposed(std::uint64_t request_id, std::uint64_t image_generation,
@@ -544,8 +580,6 @@ void DirectPresentQueue::InvalidateImageGeneration(std::uint64_t image_generatio
   std::lock_guard lock(mutex_);
   image_generation_                   = image_generation;
   image_identity_                     = image_identity;
-  first_composition_emitted_          = false;
-  first_composition_image_generation_ = 0;
   // Drop ready/available content from the previous session; keep producer writes
   // until they abandon so Map cannot hang forever without a wake.
   for (int i = 0; i < kSlotCount; ++i) {

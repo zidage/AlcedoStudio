@@ -158,8 +158,6 @@ class DirectPresentQueue final {
   // One-shot Qt Quick window composition event for the first compatible frame
   // of the current image session. Returns true only the first successful call
   // for that image generation.
-  auto AcknowledgeFirstComposition(std::uint64_t request_id, std::uint64_t image_generation,
-                                   std::uint64_t image_identity) -> bool;
   // Diagnostic: every composed primary frame increments composed_frame_count.
   void NoteFrameComposed(std::uint64_t request_id, std::uint64_t image_generation,
                          std::uint64_t image_identity);
@@ -218,8 +216,6 @@ class DirectPresentQueue final {
   std::uint64_t                last_composed_request_id_           = 0;
   std::uint64_t                composed_frame_count_               = 0;
   std::uint64_t                dropped_stale_frame_count_          = 0;
-  std::uint64_t                first_composition_image_generation_ = 0;
-  bool                         first_composition_emitted_          = false;
   int                          write_idx_                          = 1;
   int                          active_idx_                         = 0;
   int                          mapped_slot_idx_                    = -1;

@@ -209,11 +209,11 @@ void EditorSessionService::HandleRenderEvent(const EditorRenderEvent& event) {
   EditorSessionResult result;
   result.operation_id = event.operation_id;
   switch (event.kind) {
-    case EditorRenderEventKind::FirstFramePresented: {
+    case EditorRenderEventKind::FirstFrameReady: {
       ReleaseLeasesByKind(EditorOperationLeaseKind::ImageLoad);
       ReleaseLeasesByKind(EditorOperationLeaseKind::ImageSwitch);
       ClearPendingPresentationTarget();
-      const auto entered = lifecycle_.MarkFirstFramePresented();
+      const auto entered = lifecycle_.MarkFirstFrameReady();
       if (entered.has_value()) {
         result.kind     = EditorSessionResultKind::ImageReady;
         result.state    = EditorSessionState::Interactive;

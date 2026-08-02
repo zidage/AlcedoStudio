@@ -31,7 +31,7 @@ class EditorSessionLifecycleTest : public ::testing::Test {
     ASSERT_TRUE(lifecycle_->BeginAcquire(eid, iid, false, nullptr, &error)) << error;
     ASSERT_TRUE(lifecycle_->AcquireGuards(&error)) << error;
     lifecycle_->MarkImageReady();
-    lifecycle_->MarkFirstFramePresented();
+    lifecycle_->MarkFirstFrameReady();
   }
 
   std::shared_ptr<test::FakeEditorPipelinePort> pipeline_;

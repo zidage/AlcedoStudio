@@ -191,6 +191,21 @@ auto ResolveAspectRatio(CropAspectPreset preset, float aspect_width, float aspec
   return std::nullopt;
 }
 
+auto OrientPresetAspectToSource(CropAspectPreset preset, float aspect_ratio, int width, int height)
+    -> float {
+  if (preset == CropAspectPreset::Free || preset == CropAspectPreset::Custom || width <= 0 ||
+      height <= 0 || std::abs(aspect_ratio - 1.0f) <= kCropEpsilon) {
+    return aspect_ratio;
+  }
+
+  const bool source_portrait = width < height;
+  const bool preset_portrait = aspect_ratio < 1.0f;
+  if (source_portrait != preset_portrait) {
+    return 1.0f / std::max(aspect_ratio, kCropEpsilon);
+  }
+  return aspect_ratio;
+}
+
 auto FitAspectRectInsideBounds(NormalizedCropRect rect, int width, int height, float aspect_ratio)
     -> NormalizedCropRect {
   rect = ClampCropRect(rect);
@@ -348,7 +363,8 @@ auto ResolveRuntimeCropRect(const NormalizedCropRect& rect, int width, int heigh
   if (!ratio.has_value()) {
     return ClampCropRect(rect);
   }
-  return FitAspectRectInsideBounds(rect, width, height, *ratio);
+  return FitAspectRectInsideBounds(rect, width, height,
+                                   OrientPresetAspectToSource(preset, *ratio, width, height));
 }
 }  // namespace
 

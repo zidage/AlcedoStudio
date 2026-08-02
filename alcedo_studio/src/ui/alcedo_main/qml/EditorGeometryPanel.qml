@@ -124,7 +124,17 @@ Item {
         if (aspectModel.currentValue === "custom")
             return geometryMath.aspectRatio(aspectWidthModel.value, aspectHeightModel.value)
         const ratio = geometryMath.presetRatio(aspectModel.currentValue)
-        return ratio.length >= 2 ? Number(ratio[0]) / Math.max(Number(ratio[1]), 0.0001) : 1.0
+        if (ratio.length < 2)
+            return 1.0
+
+        let value = Number(ratio[0]) / Math.max(Number(ratio[1]), 0.0001)
+        // Fixed presets describe an unoriented frame shape. Match that shape to
+        // the source image so 16:9 becomes 9:16 for a portrait photograph.
+        const sourcePortrait = root.imageAspect < 1.0
+        const presetPortrait = value < 1.0
+        if (Math.abs(value - 1.0) > 0.0001 && sourcePortrait !== presetPortrait)
+            value = 1.0 / Math.max(value, 0.0001)
+        return value
     }
 
     function hasLockedAspect() {
@@ -193,8 +203,9 @@ Item {
     }
 
     /// Commit the in-panel crop/rotate draft into the pipeline once. Safe to call
-    /// repeatedly: a clean draft is a no-op. Must run before leaving Geometry so
-    /// the panel-switch CropRotate refresh sees the new adjustment snapshot.
+    /// repeatedly: a clean draft is a no-op. When leaving Geometry this runs from
+    /// onPanelActiveChanged, after the overlay-off refresh has received its lower
+    /// request id, so the final Quality frame cannot be hidden by a stale frame.
     function confirmPendingCrop() {
         if (!root.draftDirty)
             return false
@@ -206,7 +217,6 @@ Item {
 
     /// Enter / numpad Enter: apply draft crop and return to Tone (legacy shortcut).
     function confirmAndReturnToTone() {
-        root.confirmPendingCrop()
         if (root.editorSession)
             root.editorSession.activeAdjustmentPanel = "tone"
     }
@@ -484,8 +494,8 @@ Item {
         if (root.panelActive) {
             root.enterGeometryTool()
         } else {
-            // Fallback if panel is deactivated without selectPanel/Enter (direct
-            // property write). selectPanel commits first so this is usually a no-op.
+            // The session has already disabled geometry_overlay_only and queued
+            // its lower-id refresh. Commit now so the final crop owns the newest id.
             root.confirmPendingCrop()
             root.leaveGeometryTool()
         }

@@ -207,7 +207,7 @@ class FakeSessionBackend final : public IEditorSessionBackend {
   }
 
   // Test helper: simulate async Interactive transition from first frame.
-  void SimulateFirstFramePresented() {
+  void SimulateFirstFrameReady() {
     state_ = EditorSessionState::Interactive;
     NotifyChange();
   }
@@ -408,7 +408,7 @@ TEST(EditorSessionControllerPhase5ATest,
   controller.bindPresentationViewport(&viewport);
 
   controller.Open(1, 2);
-  backend.SimulateFirstFramePresented();
+  backend.SimulateFirstFrameReady();
   ASSERT_TRUE(controller.can_edit());
   ASSERT_EQ(viewport.imageIdentity(), 2u);
   ASSERT_EQ(viewport.imageGeneration(), 1u);
@@ -436,7 +436,7 @@ TEST(EditorSessionControllerPhase5ATest,
   EXPECT_EQ(viewport.imageIdentity(), 4u);
   EXPECT_EQ(viewport.imageGeneration(), 2u);
 
-  backend.SimulateFirstFramePresented();
+  backend.SimulateFirstFrameReady();
   EXPECT_EQ(controller.session_state(), EditorSessionState::Interactive);
   EXPECT_TRUE(controller.can_edit());
 }
@@ -499,7 +499,7 @@ TEST(EditorSessionControllerPhase5ATest, ScopeSwitchRoutesScopeRefreshThroughBac
   FakeSessionBackend      backend;
   EditorSessionController controller(nullptr, &backend);
   controller.Open(7, 8);
-  backend.SimulateFirstFramePresented();
+  backend.SimulateFirstFrameReady();
   ASSERT_TRUE(controller.has_image());
 
   controller.scope_controller()->set_active_view(1);
@@ -567,7 +567,7 @@ TEST(EditorSessionControllerPhase5ATest,
   EditorSessionController controller(nullptr, &backend);
 
   controller.Open(7, 8);
-  backend.SimulateFirstFramePresented();
+  backend.SimulateFirstFrameReady();
   ASSERT_EQ(backend.state(), EditorSessionState::Interactive);
 
   backend.view_change_recorded = false;
@@ -612,7 +612,7 @@ TEST(EditorSessionControllerPhase5ATest, AsyncBackendChangeEmitsStateChangedToQm
   const int after_open = state_signals;
   EXPECT_EQ(controller.session_state(), EditorSessionState::Loading);
 
-  backend.SimulateFirstFramePresented();
+  backend.SimulateFirstFrameReady();
   EXPECT_GT(state_signals, after_open);
   EXPECT_EQ(controller.session_state(), EditorSessionState::Interactive);
   EXPECT_EQ(controller.session_state_name(), QStringLiteral("Interactive"));
@@ -671,10 +671,6 @@ TEST(EditorSessionControllerPhase5ATest, RuntimeCoordinatorPresentationUpdatesCo
   // queue; drain between stages so the complete->submit->present gate
   // advances in order.
   runtime->coordinator->NotifySchedulerCompleted(request_id, true);
-  runtime->service->DrainCommandQueueForTests();
-  runtime->coordinator->NotifyFrameSubmitted(request_id);
-  runtime->service->DrainCommandQueueForTests();
-  runtime->coordinator->NotifyFramePresented(request_id);
   runtime->service->DrainCommandQueueForTests();
 
   EXPECT_EQ(controller.session_state(), EditorSessionState::Interactive);
@@ -1134,7 +1130,7 @@ TEST(EditorSessionControllerPhase5ATest, RenderBusyAndFrameCompletionDoNotRefres
   QObject::connect(&model, &EditorHistoryModel::StateChanged, [&] { ++model_refreshes; });
 
   // Settle the session to Interactive (first-frame presented) before measuring.
-  backend.SimulateFirstFramePresented();
+  backend.SimulateFirstFrameReady();
   history_signals                 = 0;
   model_refreshes                 = 0;
   backend.history_snapshot_count_ = 0;

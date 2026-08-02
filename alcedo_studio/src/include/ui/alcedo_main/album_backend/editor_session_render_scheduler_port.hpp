@@ -9,9 +9,9 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
 #include "app/editor_render_coordinator.hpp"
@@ -36,16 +36,14 @@ struct EditorSessionSchedulerServices {
   std::function<std::shared_ptr<alcedo::ImagePoolService>()> image_pool;
 };
 
-/// Owns render jobs, presentation acknowledgements, and worker lifetime for
-/// the editor session. It is the only session port that invokes PipelineTask.
-class EditorSessionRenderSchedulerPort final
-    : public alcedo::IEditorPipelineSchedulerPort,
-      public std::enable_shared_from_this<EditorSessionRenderSchedulerPort> {
+/// Runs the coordinator's single queued request on one persistent worker.
+/// The blocking PipelineTask call ends when its sink has published a ready frame.
+class EditorSessionRenderSchedulerPort final : public alcedo::IEditorPipelineSchedulerPort {
  public:
   /// Construct the scheduler port around the application pipeline scheduler.
   explicit EditorSessionRenderSchedulerPort(
       std::shared_ptr<alcedo::PipelineScheduler> pipeline_scheduler = nullptr);
-  /// Cancel jobs and join all scheduler workers.
+  /// Cancel queued/running work and join the worker.
   ~EditorSessionRenderSchedulerPort() override;
 
   /// Set the coordinator that receives render lifecycle outcomes.
@@ -65,35 +63,23 @@ class EditorSessionRenderSchedulerPort final
   void Cancel(std::uint64_t scheduler_job_id) override;
   /// Wait until all jobs for one session generation have finished.
   void WaitForSessionIdle(std::uint64_t session_generation) override;
-  /// Record that the presentation sink accepted one frame.
-  void NotifyPresentationAcknowledged(std::uint64_t request_id, std::uint64_t image_generation,
-                                      std::uint64_t image_identity);
-
   /// Return a test-visible copy of scheduled requests.
   [[nodiscard]] auto last_scheduled() const -> std::vector<alcedo::EditorRenderRequest>;
-  /// Return the request currently awaiting presentation acknowledgement.
-  [[nodiscard]] auto pending_present_request_id() const -> std::uint64_t;
 
  private:
   struct Job {
     std::uint64_t               job_id = 0;
     alcedo::EditorRenderRequest request{};
     bool                        cancelled = false;
-    bool                        running   = false;
-  };
-  struct PendingPresentation {
-    std::uint64_t image_generation = 0;
-    std::uint64_t image_identity   = 0;
-    bool          frame_submitted  = false;
-    bool          acknowledged     = false;
   };
 
+  void WorkerLoop();
+  [[nodiscard]] auto CanProduceFrame(const alcedo::EditorRenderRequest& request) const -> bool;
   void ExecuteJob(Job job);
   auto TryProducePipelineFrame(const alcedo::EditorRenderRequest& request, alcedo::IFrameSink* sink,
                                std::string* error) -> bool;
-  void CompleteJob(const alcedo::EditorRenderRequest& request, bool success, bool frame_submitted,
-                   std::string message);
-  void RemoveJob(std::uint64_t job_id);
+  void CompleteJob(const alcedo::EditorRenderRequest& request, bool success, std::string message);
+  [[nodiscard]] auto IsCancelled(std::uint64_t job_id) const -> bool;
 
   std::shared_ptr<alcedo::PipelineScheduler>             pipeline_scheduler_;
   std::weak_ptr<alcedo::EditorRenderCoordinator>         coordinator_;
@@ -102,14 +88,15 @@ class EditorSessionRenderSchedulerPort final
   EditorSessionSchedulerServices                         services_{};
   EditorSessionTestFrameProducer                         test_producer_;
   mutable std::mutex                                     mutex_;
+  std::condition_variable                                work_available_;
   std::condition_variable                                jobs_changed_;
   std::uint64_t                                          next_job_id_ = 0;
-  std::unordered_map<std::uint64_t, Job>                 jobs_;
-  std::unordered_map<std::uint64_t, PendingPresentation> pending_presentations_;
+  std::optional<Job>                                     queued_job_;
+  std::optional<Job>                                     running_job_;
   std::vector<alcedo::EditorRenderRequest>               scheduled_;
-  // std::thread (not jthread): Apple libc++ on the CI deployment target still
-  // omits std::jthread even under -std=c++20. Destructor joins workers_ explicitly.
-  std::vector<std::thread>                               workers_;
+  // One persistent worker is the sole bridge from UI requests to the blocking
+  // PipelineScheduler call.
+  std::thread                                            worker_;
   image_id_t                                             cached_input_image_id_ = 0;
   std::shared_ptr<alcedo::ImageBuffer>                   cached_input_;
   bool                                                   shutting_down_ = false;
