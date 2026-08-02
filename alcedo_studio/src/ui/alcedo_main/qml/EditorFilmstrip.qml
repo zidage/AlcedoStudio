@@ -328,8 +328,10 @@ Item {
         if (activate) {
             root.activateImage(index)
         } else {
+            // Selection from this filmstrip must not move contentX. Only
+            // cross-view requests (Library → applyFilmstripScrollTarget) may
+            // scroll the strip so the peer can find the new image.
             root.notifyImageInteraction(item, index)
-            filmstripListView.positionViewAtIndex(index, ListView.Contain)
         }
     }
 
@@ -419,12 +421,13 @@ Item {
         }
     }
     onSelectedIndexChanged: {
+        // Update focus/label only. Do not scroll: open/selection from this
+        // strip (or keyboard) must leave contentX alone. Library-originated
+        // reveals go through applyFilmstripScrollTarget instead.
         refreshCurrentFileName()
         if (selectedIndex >= 0) {
             focusIndex = selectedIndex
-            revealIndexAtBeginning(selectedIndex)
         }
-        scheduleScrollRestore()
     }
     onTotalCountChanged: {
         refreshCurrentFileName()
@@ -441,10 +444,9 @@ Item {
         dockExpandProgress = collapsed ? 0 : 1
         _motionArmed = true
         refreshCurrentFileName()
+        // Prefer an explicit Library reveal target; otherwise the list restores
+        // the saved contentX (no jump to selected as leftmost).
         applyFilmstripScrollTarget()
-        if (selectedIndex >= 0) {
-            revealIndexAtBeginning(selectedIndex)
-        }
     }
     Behavior on dockExpandProgress {
         enabled: root._motionArmed && !root.foldManualDrive

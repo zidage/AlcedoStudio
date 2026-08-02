@@ -590,6 +590,46 @@ TEST(EditorFilmstripQmlTest, CollapseKeepsThumbnailPinsAndRestoresHorizontalScro
   EXPECT_TRUE(filmstrip->property("saving").toBool());
 }
 
+// Selecting / opening an image from the filmstrip must not reset contentX so
+// the selected tile becomes the leftmost item. Cross-view reveals (Library →
+// filmstrip) still use applyFilmstripScrollTarget separately.
+TEST(EditorFilmstripQmlTest, LocalSelectionKeepsHorizontalScrollUnchanged) {
+  FilmstripQmlHarness harness;
+  ASSERT_NE(harness.window_, nullptr) << harness.warnings_.join('\n').toStdString();
+  ASSERT_TRUE(harness.warnings_.isEmpty()) << harness.warnings_.join('\n').toStdString();
+
+  auto* filmstrip = harness.filmstrip();
+  auto* list      = harness.list();
+  ASSERT_NE(filmstrip, nullptr);
+  ASSERT_NE(list, nullptr);
+  QTRY_COMPARE_WITH_TIMEOUT(list->property("count").toInt(), 8, 2000);
+  QTRY_VERIFY_WITH_TIMEOUT(list->property("contentWidth").toReal() > list->width() + 160.0, 2000);
+
+  list->setProperty("contentX", 160.0);
+  ProcessEvents();
+  const double content_x_before = list->property("contentX").toReal();
+  EXPECT_NEAR(content_x_before, 160.0, 2.0);
+
+  list->forceActiveFocus();
+  ProcessEvents();
+  QTest::keyClick(harness.window_, Qt::Key_Right);
+  ProcessEvents();
+  QTest::keyClick(harness.window_, Qt::Key_Return);
+  ProcessEvents();
+
+  EXPECT_EQ(harness.router_.openCount(), 1);
+  EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), 1);
+  EXPECT_NEAR(list->property("contentX").toReal(), content_x_before, 2.0);
+
+  // Direct session selection change (same path as openEditor) also must not
+  // pin the new row to ListView.Beginning.
+  harness.session_.setElementId(1005);
+  harness.session_.setImageId(2005);
+  ProcessEvents();
+  EXPECT_EQ(filmstrip->property("selectedIndex").toInt(), 5);
+  EXPECT_NEAR(list->property("contentX").toReal(), content_x_before, 2.0);
+}
+
 // The filmstrip no longer owns a local menu: right-click forwards a menu
 // request (clicked row + scene point) to Main, which opens the shared image
 // context menu. This test pins the emission contract, including that a
