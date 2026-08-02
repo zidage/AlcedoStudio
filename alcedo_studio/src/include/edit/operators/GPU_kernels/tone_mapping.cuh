@@ -959,6 +959,16 @@ struct GPU_HighlightShadowLocalToneStage {
     const bool reference_result_cache_valid =
         reference_source_cache_valid && output_levels_[0] != nullptr &&
         cached_key_ == reference_cache_key;
+    if (roi_frame_with_source_reference) {
+      std::printf(
+          "[ROI_TRACE][llf-reference-sample] patch=%dx%d reference=%dx%d origin=%d,%d "
+          "scale=%.7f,%.7f mask=%dx%d mask_frame=%dx%d cache_valid=%d\n",
+          width, height, params.render_roi_reference_width_, params.render_roi_reference_height_,
+          params.render_roi_x_, params.render_roi_y_, params.render_roi_scale_x_,
+          params.render_roi_scale_y_, cached_width_, cached_height_, cached_frame_width_,
+          cached_frame_height_, reference_source_cache_valid ? 1 : 0);
+      std::fflush(stdout);
+    }
     const int current_reference_long_edge =
         max(current_reference_dims.width, current_reference_dims.height);
     const int cached_reference_long_edge = max(cached_width_, cached_height_);

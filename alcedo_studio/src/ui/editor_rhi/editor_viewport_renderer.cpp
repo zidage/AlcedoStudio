@@ -755,6 +755,18 @@ void EditorViewportRenderer::traceDetailDecision(
       << (interactive.valid ? interactive.preview_metadata.presentation_request_id : 0)
       << " base_request=" << (base ? base->preview_metadata.presentation_request_id : 0)
       << " image=" << image_identity_ << " image_generation=" << image_generation_;
+  const auto* selected_primary = selectedPrimaryLayer();
+  if (selected_primary) {
+    out << " selected_primary_size=" << selected_primary->width << 'x' << selected_primary->height
+        << " selected_primary_mode=" << static_cast<int>(selected_primary->presentation_mode);
+  } else {
+    out << " selected_primary_size=none";
+  }
+  if (base) {
+    out << " base_size=" << base->width << 'x' << base->height;
+  } else {
+    out << " base_size=none";
+  }
   if (detail) {
     out << " patch_size=" << detail->width << 'x' << detail->height << " patch_roi="
         << detail->preview_metadata.source_roi_norm.x << ','

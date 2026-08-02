@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <iostream>
 #include <stdexcept>
+#include <syncstream>
 #include <utility>
 
 #include "edit/operators/op_base.hpp"
@@ -114,6 +116,14 @@ auto BuildResizePlan(int w, int h, bool enable_scale, int maximum_edge, bool ena
       plan.roi_rect.height == h && !plan.needs_resize) {
     plan.noop = true;
   }
+
+  std::osyncstream(std::cout)
+      << "[ROI_TRACE][resize-roi-plan] input=" << w << 'x' << h << " reference="
+      << roi.reference_width_ << 'x' << roi.reference_height_ << " requested_px=" << roi.x_ << ','
+      << roi.y_ << " requested_scale=" << roi_factor_x << ',' << roi_factor_y << " actual_px="
+      << plan.roi_rect.x << ',' << plan.roi_rect.y << ',' << plan.roi_rect.width << ','
+      << plan.roi_rect.height << " output=" << plan.output_size.width << 'x'
+      << plan.output_size.height << std::endl;
 
   return plan;
 }
