@@ -253,6 +253,10 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
     lifecycle_.CompleteCheckpoint();
     std::string checkout_error;
     if (ContinueCheckoutVersion(pending.version_id, &checkout_error)) {
+      if (state_->deferred_pipeline_ownership.has_value()) {
+        // History is queued behind render ownership; GUI is not blocked.
+        return;
+      }
       NotifyCompletion(true, false, "Checked out Version", pending.ticket);
     } else {
       // Phase 7A repair: the save succeeded and the history port fails closed,
@@ -268,6 +272,9 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
     lifecycle_.CompleteCheckpoint();
     std::string create_error;
     if (ContinueCreateRootVersion(std::move(pending.display_name), &create_error)) {
+      if (state_->deferred_pipeline_ownership.has_value()) {
+        return;
+      }
       NotifyCompletion(true, false, "Created root Version", pending.ticket);
     } else {
       RetainPendingFailure(pending,
@@ -280,6 +287,9 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
     std::string branch_error;
     if (ContinueBranchFromCommit(pending.branch_commit, std::move(pending.display_name),
                                  &branch_error)) {
+      if (state_->deferred_pipeline_ownership.has_value()) {
+        return;
+      }
       NotifyCompletion(true, false, "Branched from commit", pending.ticket);
     } else {
       RetainPendingFailure(pending,
@@ -494,11 +504,18 @@ auto EditorSessionNavigationController::ContinueCheckoutVersion(const version_re
     return false;
   }
 
-  // SealAndStartSave cancelled renders before the async checkpoint, but view /
-  // quality work can re-submit during the save window. Checkout holds the live
-  // pipeline render lock for first-parent rebuild; an in-flight worker that also
-  // needs the GUI (present handshake) deadlocks with renderBusy stuck true.
-  render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
+  // History needs live-pipeline ownership; the GUI must not wait for render.
+  // If the worker still owns render_lock_, stash the op and finish on the next
+  // render-idle edge (TryResumeDeferredPipelineOwnership).
+  if (render_.render_busy()) {
+    PendingEditorAction deferred;
+    deferred.kind       = PendingEditorActionKind::CheckoutVersion;
+    deferred.version_id = version_id;
+    deferred.ticket     = state_->pending_action.has_value() ? state_->pending_action->ticket
+                                                            : CheckpointTicket{};
+    state_->deferred_pipeline_ownership = deferred;
+    return true;
+  }
 
   std::string local_error;
   if (!history_->CheckoutVersion(lifecycle_.history_guard(), version_id, &local_error)) {
@@ -528,9 +545,15 @@ auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string  d
     return false;
   }
 
-  // Same race as ContinueCheckoutVersion: drain session renders before taking
-  // the live pipeline render lock for named-ref checkout rebuild.
-  render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
+  if (render_.render_busy()) {
+    PendingEditorAction deferred;
+    deferred.kind         = PendingEditorActionKind::CreateRootVersionAndCheckout;
+    deferred.display_name = std::move(display_name);
+    deferred.ticket       = state_->pending_action.has_value() ? state_->pending_action->ticket
+                                                              : CheckpointTicket{};
+    state_->deferred_pipeline_ownership = deferred;
+    return true;
+  }
 
   version_ref_id_t new_version_id;
   std::string      local_error;
@@ -559,9 +582,16 @@ auto EditorSessionNavigationController::ContinueBranchFromCommit(const commit_ha
     return false;
   }
 
-  // Same race as ContinueCheckoutVersion: drain session renders before taking
-  // the live pipeline render lock for named-ref checkout rebuild.
-  render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
+  if (render_.render_busy()) {
+    PendingEditorAction deferred;
+    deferred.kind          = PendingEditorActionKind::BranchFromCommitAndCheckout;
+    deferred.branch_commit = commit_id;
+    deferred.display_name  = std::move(display_name);
+    deferred.ticket        = state_->pending_action.has_value() ? state_->pending_action->ticket
+                                                               : CheckpointTicket{};
+    state_->deferred_pipeline_ownership = deferred;
+    return true;
+  }
 
   version_ref_id_t new_version_id;
   std::string      local_error;
@@ -762,10 +792,56 @@ void EditorSessionNavigationController::CancelPendingNavigation() {
   AssertOwnerThread();
   state_->pending_recovery.reset();
   state_->pending_next_target.reset();
+  state_->deferred_pipeline_ownership.reset();
   if (lifecycle_.state() == EditorSessionState::RetainedImageFailure) {
     lifecycle_.ResumeInteractiveAfterFailure();
   }
   NotifyCompletion(true, false, "Pending navigation cancelled", {});
+}
+
+void EditorSessionNavigationController::TryResumeDeferredPipelineOwnership() {
+  AssertOwnerThread();
+  if (!state_->deferred_pipeline_ownership.has_value()) {
+    return;
+  }
+  // History waits for pipeline ownership; only run once render is idle so the
+  // GUI never blocks on render_lock_ while present still needs this thread.
+  if (render_.render_busy()) {
+    return;
+  }
+
+  const auto deferred = *state_->deferred_pipeline_ownership;
+  state_->deferred_pipeline_ownership.reset();
+
+  std::string error;
+  bool        ok = false;
+  std::string success_message;
+  switch (deferred.kind) {
+    case PendingEditorActionKind::CheckoutVersion:
+      ok              = ContinueCheckoutVersion(deferred.version_id, &error);
+      success_message = "Checked out Version";
+      break;
+    case PendingEditorActionKind::CreateRootVersionAndCheckout:
+      ok              = ContinueCreateRootVersion(deferred.display_name, &error);
+      success_message = "Created root Version";
+      break;
+    case PendingEditorActionKind::BranchFromCommitAndCheckout:
+      ok = ContinueBranchFromCommit(deferred.branch_commit, deferred.display_name, &error);
+      success_message = "Branched from commit";
+      break;
+    default:
+      return;
+  }
+
+  // Continue* may re-defer if a new frame started; leave completion for later.
+  if (state_->deferred_pipeline_ownership.has_value()) {
+    return;
+  }
+  if (ok) {
+    NotifyCompletion(true, false, std::move(success_message), deferred.ticket);
+  } else {
+    RetainPendingFailure(deferred, error.empty() ? "Deferred Version operation failed" : error);
+  }
 }
 
 auto EditorSessionNavigationController::RequestCreateRootVersion(std::string display_name)

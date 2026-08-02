@@ -56,6 +56,10 @@ class EditorRenderCoordinator final : public IEditorRenderSubmitPort {
   /// Cancel every pending/in-flight request for an image-load request (image switch).
   void CancelSession(std::uint64_t image_load_request_id) override;
   void CancelSessionAndWait(std::uint64_t image_load_request_id) override;
+  /// Queue behind the in-flight frame: drop not-yet-started pending for this
+  /// session, then wait for the running job (and its present handoff) to finish.
+  /// Does not cancel work already in Apply/present.
+  void WaitForSessionIdle(std::uint64_t image_load_request_id) override;
 
   /// Cancel one request by id (token or explicit). Starts the next runnable request.
   auto CancelRequest(std::uint64_t request_id) -> bool;

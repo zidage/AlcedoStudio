@@ -1540,6 +1540,11 @@ void EditorSessionService::NotifyRenderResult(const EditorRenderResult& render_r
     BeginPublication();
     render_.NotifyRenderResult(completion.render_result, lifecycle_.identity(),
                                lifecycle_.active_image_load_request(), lifecycle_.state());
+    // History may be queued for live-pipeline ownership; resume when idle.
+    // The GUI never blocks waiting for render — only history waits (by queue).
+    if (!render_.render_busy()) {
+      navigation_.TryResumeDeferredPipelineOwnership();
+    }
     EndPublication();
     reducing_command_     = previous_reducing;
     current_operation_id_ = previous_operation;

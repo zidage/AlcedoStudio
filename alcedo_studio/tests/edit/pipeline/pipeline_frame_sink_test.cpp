@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -745,6 +746,30 @@ TEST_F(PipelineFrameSinkTest, SetAcceleratorBackendPreservesFrameSink) {
 // =========================================================================
 // Thread-safety tests
 // =========================================================================
+
+TEST_F(PipelineFrameSinkTest, HistoryQueuesBehindRenderOwnershipOfLivePipeline) {
+  // render_lock_ is sole live-pipeline ownership for the full frame. History
+  // must wait until render releases it — not race under a second occupancy bit.
+  auto                     exec = std::make_shared<CPUPipelineExecutor>();
+  std::unique_lock<std::mutex> worker_lock(exec->GetRenderLock());
+  EXPECT_TRUE(worker_lock.owns_lock());
+
+  std::atomic<bool> owner_acquired{false};
+  std::thread       owner([&] {
+    std::unique_lock<std::mutex> owner_lock(exec->GetRenderLock());
+    owner_acquired.store(true);
+  });
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  EXPECT_FALSE(owner_acquired.load());
+
+  worker_lock.unlock();
+  for (int i = 0; i < 50 && !owner_acquired.load(); ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  EXPECT_TRUE(owner_acquired.load());
+  owner.join();
+}
 
 TEST_F(PipelineFrameSinkTest, ConcurrentDetachAndRenderLockIsDeadlockFree) {
   // Multiple threads repeatedly acquiring render_lock_ for detach/render

@@ -112,6 +112,9 @@ class EditorSessionRenderController final {
 
   /// Cancel the active render session for one image-load request.
   void               CancelSessionAndWait(ImageLoadRequestId image_load_request);
+  /// Wait for the active session's renders to finish (no cancel). History head
+  /// moves queue behind the current frame instead of racing it.
+  void               WaitForSessionIdle(ImageLoadRequestId image_load_request);
 
  private:
   /// Build a fully-stamped render intent from the command and identity.

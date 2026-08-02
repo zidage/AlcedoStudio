@@ -121,6 +121,11 @@ auto DirectFrameSink::ReserveWritableSlot(int width, int height) -> std::optiona
   queue->NoteSizeRequest(request);
   item_->requestPresentUpdate();
 
+  // Keep render_lock held for the whole frame (configure + GPU + present).
+  // Live-pipeline ownership is that single lock: history waits for it (and
+  // pumps owner events while waiting so this slot handshake can complete).
+  // Do not drop ownership during WaitForWritableSlot — that reopens rebuild
+  // races without a second occupancy layer.
   if (!queue->DiagnosticsSnapshot().consumer_available) {
     qCDebug(editorPresentLog,
             "[EditorPresent] producer waiting for consumer %dx%d image=%llu epoch=%llu", width,

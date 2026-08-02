@@ -26,8 +26,10 @@ class CPUPipelineExecutor : public PipelineExecutor {
   bool                                                                        enable_cache_  = true;
   std::array<PipelineStage, static_cast<int>(PipelineStageName::Stage_Count)> stages_;
 
-  // The executor state (render params, stage cache, decode mode) is mutable and not thread-safe.
-  // Serialize concurrent scheduler tasks that target the same executor instance.
+  // Sole ownership of the live pipeline for one frame of work: whoever holds
+  // this lock may configure, Apply (including present slot wait), or rebuild
+  // stages. Render holds it for the whole task; history waits for it. Do not
+  // introduce a second occupancy counter — that is the same ownership question.
   std::mutex                                                                  render_lock_;
 
   OperatorParams                                                              global_params_;

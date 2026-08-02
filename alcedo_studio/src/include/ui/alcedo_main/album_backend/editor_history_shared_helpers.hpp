@@ -19,12 +19,19 @@
 #include "edit/history/mini_git_working_history.hpp"
 #include "json.hpp"
 
+#include <mutex>
+
 namespace alcedo {
 struct MiniGitJournalRecord;
 class CPUPipelineExecutor;
 }  // namespace alcedo
 
 namespace alcedo::ui {
+
+/// Acquire sole live-pipeline ownership (`render_lock_`). History waits for
+/// render to finish the current frame. The GUI must not block on this: session
+/// code defers Version ops until render is idle, then takes the lock (free).
+auto LockLivePipeline(alcedo::CPUPipelineExecutor& executor) -> std::unique_lock<std::mutex>;
 
 /// Stable field names shared by the editor models and the adjustment-transfer /
 /// history services.
