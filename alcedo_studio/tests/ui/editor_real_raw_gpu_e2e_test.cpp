@@ -329,8 +329,8 @@ TEST_F(EditorRealRawGpuE2eTest,
 
     const auto first_frame_ready = [&] {
       return host.editor_session_service()->state() == EditorSessionState::Interactive &&
-             viewport->lastPresentedImageGeneration() ==
-                 viewport->imageGeneration() &&
+             viewport->lastPresentedSessionEpoch() ==
+                 viewport->sessionEpoch() &&
              viewport->lastPresentedRequestId() != 0 &&
              viewport->lastPresentedRequestId() != previous_request_id;
     };
@@ -348,7 +348,7 @@ TEST_F(EditorRealRawGpuE2eTest,
         << viewport->statusText().toStdString() << " available="
         << viewport->presentationAvailable() << " live=" << viewport->liveTargetCount()
         << " targetGen=" << viewport->targetGeneration() << " imageGen="
-        << viewport->imageGeneration() << " item=" << viewport->width() << 'x'
+        << viewport->sessionEpoch() << " item=" << viewport->width() << 'x'
         << viewport->height() << " requested=" << (last_intent ? last_intent->requested_width : 0)
         << 'x' << (last_intent ? last_intent->requested_height : 0)
         << " windowExposed=" << window->isExposed() << " itemVisible=" << viewport->isVisible()
@@ -390,7 +390,7 @@ TEST_F(EditorRealRawGpuE2eTest,
           << " liveTargets=" << viewport->liveTargetCount();
     }
 
-    EXPECT_EQ(viewport->lastPresentedImageGeneration(), viewport->imageGeneration());
+    EXPECT_EQ(viewport->lastPresentedSessionEpoch(), viewport->sessionEpoch());
     EXPECT_EQ(viewport->imageIdentity(), key.image_id);
     EXPECT_GT(viewport->liveTargetCount(), 0);
     EXPECT_TRUE(viewport->presentationAvailable());

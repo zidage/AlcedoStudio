@@ -21,7 +21,7 @@ class FinalDisplayFrameTapSink final : public IFrameSink, public IFinalDisplayFr
   void               SetScopeRequest(const ScopeRequest& request);
   void               SetScopeActive(bool active);
   void               SetScopeAnalysisDeferred(bool deferred);
-  void               SetFrameIdentity(uint64_t image_identity, uint64_t image_generation);
+  void               SetFrameIdentity(uint64_t image_identity, uint64_t session_epoch);
   auto               GetScopeRequest() const -> ScopeRequest;
   auto               SubmitCurrentDisplayFrameToScope() -> bool;
 
@@ -59,7 +59,7 @@ class FinalDisplayFrameTapSink final : public IFrameSink, public IFinalDisplayFr
   bool                            scope_active_            = false;
   bool                            scope_analysis_deferred_ = false;
   uint64_t                        image_identity_          = 0;
-  uint64_t                        image_generation_        = 0;
+  uint64_t                        session_epoch_        = 0;
   uint64_t                        next_frame_id_           = 1;
 };
 

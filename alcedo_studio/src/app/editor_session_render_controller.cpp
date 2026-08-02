@@ -5,7 +5,6 @@
 #include "app/editor_session_render_controller.hpp"
 
 #include <algorithm>
-#include <iostream>
 #include <utility>
 
 namespace alcedo {
@@ -186,15 +185,6 @@ auto EditorSessionRenderController::RouteViewChange(const EditorRenderCommand&  
     std::scoped_lock lock(mutex_);
     if (!quality_base_ready_) {
       pending_detail_render_ = PendingDetailRender{command, identity, image_load_request};
-      std::cout << "[ROI_TRACE][detail-deferred] image=" << identity.image_id
-                << " image_load_request=" << image_load_request.value
-                << " quality_base_request=" << quality_base_request_id_;
-      if (command.view_region.has_value()) {
-        const auto& region = *command.view_region;
-        std::cout << " region_px=" << region.x_ << ',' << region.y_
-                  << " scale=" << region.scale_x_ << ',' << region.scale_y_;
-      }
-      std::cout << '\n';
       event.kind              = EditorRenderEventKind::RenderReused;
       event.state             = state;
       event.identity          = identity;
@@ -314,17 +304,11 @@ void EditorSessionRenderController::NotifyRenderResult(
       quality_base_ready_ = true;
       pending_detail      = std::move(pending_detail_render_);
       pending_detail_render_.reset();
-      std::cout << "[ROI_TRACE][quality-base-ready] request=" << render_result.request_id
-                << " image=" << identity.image_id
-                << " pending_detail=" << (pending_detail.has_value() ? 1 : 0) << '\n';
     }
   }
   if (pending_detail.has_value()) {
-    const auto routed = RouteViewChange(pending_detail->command, pending_detail->identity,
-                                        pending_detail->image_load_request, state);
-    std::cout << "[ROI_TRACE][detail-after-base] quality_base_request="
-              << render_result.request_id << " detail_request=" << routed.request_id
-              << " outcome=" << static_cast<int>(routed.kind) << '\n';
+    (void)RouteViewChange(pending_detail->command, pending_detail->identity,
+                          pending_detail->image_load_request, state);
   }
 
   const bool busy          = CoordinatorBusy();

@@ -8,8 +8,6 @@
 #include <QMetaObject>
 #include <QThread>
 #include <chrono>
-#include <iostream>
-#include <syncstream>
 #include <utility>
 
 #include "ui/edit_viewer/edit_viewer_surface.hpp"
@@ -75,7 +73,7 @@ auto DirectFrameSink::MakeSizeRequestLocked() const -> DirectPresentQueue::SizeR
   request.width            = width_;
   request.height           = height_;
   request.preferred_slot   = prepared_slot_index_;
-  request.image_generation = item_ ? item_->imageGeneration() : 0;
+  request.session_epoch = item_ ? item_->sessionEpoch() : 0;
   request.image_identity   = item_ ? item_->imageIdentity() : 0;
   if (bound_submission_valid_) {
     request.layer_generation = bound_submission_.metadata.presentation_request_id;
@@ -89,10 +87,10 @@ auto DirectFrameSink::ReserveWritableSlot(int width, int height) -> std::optiona
     return std::nullopt;
   }
   auto*      queue            = item_->present_queue().get();
-  const auto image_generation = item_->imageGeneration();
+  const auto session_epoch = item_->sessionEpoch();
   const auto image_identity   = item_->imageIdentity();
 
-  auto       prepare = queue->PrepareWrite(width, height, image_generation, image_identity);
+  auto       prepare = queue->PrepareWrite(width, height, session_epoch, image_identity);
 
   DirectPresentQueue::SizeRequest request;
   {
@@ -125,9 +123,9 @@ auto DirectFrameSink::ReserveWritableSlot(int width, int height) -> std::optiona
 
   if (!queue->DiagnosticsSnapshot().consumer_available) {
     qCDebug(editorPresentLog,
-            "[EditorPresent] producer waiting for consumer %dx%d image=%llu generation=%llu", width,
+            "[EditorPresent] producer waiting for consumer %dx%d image=%llu epoch=%llu", width,
             height, static_cast<unsigned long long>(image_identity),
-            static_cast<unsigned long long>(image_generation));
+            static_cast<unsigned long long>(session_epoch));
     constexpr auto kSceneGraphStartupTimeout = std::chrono::seconds(5);
     if (!queue->WaitUntilConsumerAvailable(kSceneGraphStartupTimeout)) {
       qCWarning(editorPresentLog,
@@ -139,9 +137,9 @@ auto DirectFrameSink::ReserveWritableSlot(int width, int height) -> std::optiona
   }
 
   qCDebug(editorPresentLog,
-          "[EditorPresent] producer waiting for native target %dx%d image=%llu generation=%llu",
+          "[EditorPresent] producer waiting for native target %dx%d image=%llu epoch=%llu",
           width, height, static_cast<unsigned long long>(image_identity),
-          static_cast<unsigned long long>(image_generation));
+          static_cast<unsigned long long>(session_epoch));
   auto slot = queue->WaitForWritableSlot(request);
   if (!slot.has_value()) {
     qCWarning(editorPresentLog, "[EditorPresent] native target handshake failed %dx%d", width,
@@ -158,7 +156,7 @@ void DirectFrameSink::EnsureSize(int width, int height) {
   if (width <= 0 || height <= 0 || !item_) {
     return;
   }
-  const std::uint64_t image_generation = item_->imageGeneration();
+  const std::uint64_t session_epoch = item_->sessionEpoch();
   const std::uint64_t image_identity   = item_->imageIdentity();
   const bool          metal_present    = IsMetalPresentPath();
   bool                emit_target_size = false;
@@ -170,7 +168,7 @@ void DirectFrameSink::EnsureSize(int width, int height) {
       return;
     }
     const bool geometry_changed = width_ != width || height_ != height ||
-                                  last_sized_image_generation_ != image_generation ||
+                                  last_sized_session_epoch_ != session_epoch ||
                                   last_sized_image_identity_ != image_identity;
     // Match QtEditViewer::IsRenderReferenceFrame: DetailPatch / RoiFrame sizes
     // reserve write slots but must not rewrite interaction render-reference
@@ -198,15 +196,15 @@ void DirectFrameSink::EnsureSize(int width, int height) {
       width_  = width;
       height_ = height;
     }
-    last_sized_image_generation_ = image_generation;
+    last_sized_session_epoch_ = session_epoch;
     last_sized_image_identity_   = image_identity;
   }
 
   if (emit_target_size) {
-    std::osyncstream(std::cout)
+    qCDebug(editorPresentLog)
         << "[ROI_TRACE][render-reference-size] request=" << request_id
         << " role=" << static_cast<int>(frame_role) << " size=" << width << 'x' << height
-        << " image=" << image_identity << " image_generation=" << image_generation << std::endl;
+        << " image=" << image_identity << " session_epoch=" << session_epoch;
     // Pipeline workers are off-thread; unit tests and GUI-thread callers can
     // receive the geometry signal synchronously.
     const auto connection =
@@ -404,18 +402,18 @@ void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submissi
     std::lock_guard lock(mutex_);
     if (!has_mapped_slot_ || !unmapped_pending_submit_) {
       if (metadata.frame_role == FrameRole::DetailPatch) {
-        std::osyncstream(std::cout)
-            << "[ROI_TRACE][sink-drop] request=" << metadata.presentation_request_id
+        qCDebug(editorPresentLog)
+        << "[ROI_TRACE][sink-drop] request=" << metadata.presentation_request_id
             << " reason=not-mapped-or-not-unmapped mapped=" << has_mapped_slot_
-            << " unmap_pending=" << unmapped_pending_submit_ << std::endl;
+            << " unmap_pending=" << unmapped_pending_submit_;
       }
       return;
     }
     if (!AcceptSubmissionRequestId(metadata.presentation_request_id)) {
       if (metadata.frame_role == FrameRole::DetailPatch) {
-        std::osyncstream(std::cout)
-            << "[ROI_TRACE][sink-drop] request=" << metadata.presentation_request_id
-            << " reason=stale-request-id" << std::endl;
+        qCDebug(editorPresentLog)
+        << "[ROI_TRACE][sink-drop] request=" << metadata.presentation_request_id
+            << " reason=stale-request-id";
       }
       has_mapped_slot_         = false;
       unmapped_pending_submit_ = false;
@@ -431,26 +429,26 @@ void DirectFrameSink::NotifyFrameReady(const FrameCompletionSubmission& submissi
   }
   if (!item_ || !item_->present_queue() || slot_index < 0) {
     if (metadata.frame_role == FrameRole::DetailPatch) {
-      std::osyncstream(std::cout)
-          << "[ROI_TRACE][sink-drop] request=" << metadata.presentation_request_id
-          << " reason=no-item-queue-or-slot slot=" << slot_index << std::endl;
+      qCDebug(editorPresentLog)
+        << "[ROI_TRACE][sink-drop] request=" << metadata.presentation_request_id
+          << " reason=no-item-queue-or-slot slot=" << slot_index;
     }
     return;
   }
   if (metadata.frame_role == FrameRole::DetailPatch) {
-    std::osyncstream(std::cout)
+    qCDebug(editorPresentLog)
         << "[ROI_TRACE][sink-notify-ready] request=" << metadata.presentation_request_id
-        << " image=" << item_->imageIdentity() << " image_generation=" << item_->imageGeneration()
+        << " image=" << item_->imageIdentity() << " session_epoch=" << item_->sessionEpoch()
         << " slot=" << slot_index << " roi_norm=" << metadata.source_roi_norm.x << ','
         << metadata.source_roi_norm.y << ',' << metadata.source_roi_norm.width << ','
-        << metadata.source_roi_norm.height << std::endl;
+        << metadata.source_roi_norm.height;
   }
   item_->present_queue()->NotifyReady(slot_index, mode, metadata);
   qCDebug(editorPresentLog,
-          "[EditorPresent] submitted frame request=%llu image=%llu generation=%llu slot=%d",
+          "[EditorPresent] submitted frame request=%llu image=%llu epoch=%llu slot=%d",
           static_cast<unsigned long long>(metadata.presentation_request_id),
           static_cast<unsigned long long>(item_->imageIdentity()),
-          static_cast<unsigned long long>(item_->imageGeneration()), slot_index);
+          static_cast<unsigned long long>(item_->sessionEpoch()), slot_index);
   item_->requestPresentUpdate();
 }
 
@@ -482,7 +480,7 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
   imported.owner             = frame.owner;
   imported.presentation_mode = frame.presentation_mode;
   imported.preview_metadata  = frame.preview_metadata;
-  imported.image_generation  = item_->imageGeneration();
+  imported.session_epoch  = item_->sessionEpoch();
   imported.image_identity    = item_->imageIdentity();
 
   std::uint64_t request_id            = 0;
@@ -522,11 +520,11 @@ void DirectFrameSink::SubmitMetalFrame(const ViewerMetalFrame& frame) {
   }
 
   qCDebug(editorPresentLog,
-          "[EditorPresent] queued Metal import request=%llu image=%llu generation=%llu size=%dx%d "
+          "[EditorPresent] queued Metal import request=%llu image=%llu epoch=%llu size=%dx%d "
           "handle=%llu (zero-copy)",
           static_cast<unsigned long long>(request_id),
           static_cast<unsigned long long>(item_->imageIdentity()),
-          static_cast<unsigned long long>(item_->imageGeneration()), frame.width, frame.height,
+          static_cast<unsigned long long>(item_->sessionEpoch()), frame.width, frame.height,
           static_cast<unsigned long long>(frame.texture_handle));
 
   if (emit_render_reference) {
@@ -546,7 +544,7 @@ void DirectFrameSink::SubmitFinalDisplayFrame(const FinalDisplayFrameView&) {
   // Scope taps remain responsible for analyzer paths; presentation is direct GPU only.
 }
 
-auto DirectFrameSink::DrainPendingImportedFrames(std::uint64_t image_generation,
+auto DirectFrameSink::DrainPendingImportedFrames(std::uint64_t session_epoch,
                                                  std::uint64_t image_identity)
     -> std::vector<ImportedGpuFrame> {
   std::lock_guard               lock(mutex_);
@@ -557,8 +555,8 @@ auto DirectFrameSink::DrainPendingImportedFrames(std::uint64_t image_generation,
       slot.reset();
       continue;
     }
-    if (image_generation != 0 && slot->image_generation != 0 &&
-        slot->image_generation != image_generation) {
+    if (session_epoch != 0 && slot->session_epoch != 0 &&
+        slot->session_epoch != session_epoch) {
       slot.reset();
       continue;
     }
@@ -619,7 +617,7 @@ auto DirectFrameSink::HasWritableTargetForNextFrame() const -> bool {
     return false;
   }
   std::lock_guard lock(mutex_);
-  return item_->present_queue()->HasWritableSlot(width_, height_, item_->imageGeneration(),
+  return item_->present_queue()->HasWritableSlot(width_, height_, item_->sessionEpoch(),
                                                  item_->imageIdentity());
 }
 

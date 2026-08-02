@@ -110,7 +110,7 @@ class EditorViewportRenderer final : public QQuickRhiItemRenderer {
   std::array<LayerState, 3> layers_{};
   EditorBackend backend_ = EditorBackend::Cuda;
   std::uint64_t target_generation_ = 0;
-  std::uint64_t image_generation_ = 0;
+  std::uint64_t session_epoch_ = 0;
   std::uint64_t image_identity_ = 0;
   QRhi* rhi_ = nullptr;
   QRhiRenderTarget* render_target_ = nullptr;

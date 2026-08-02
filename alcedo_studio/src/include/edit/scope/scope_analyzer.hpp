@@ -62,7 +62,7 @@ struct FinalDisplayFrameView {
   uint64_t             frame_id       = 0;
   // Identity of the image/session that owns the GPU image.
   uint64_t             image_identity   = 0;
-  uint64_t             image_generation = 0;
+  uint64_t             session_epoch = 0;
   // Render generation of the final display frame, distinct from the analyzer
   // output generation below.
   uint64_t             display_generation = 0;
@@ -107,7 +107,7 @@ struct ScopeOutputSet {
   bool                  chromaticity_valid = false;
   uint64_t              generation         = 0;
   uint64_t              image_identity    = 0;
-  uint64_t              image_generation  = 0;
+  uint64_t              session_epoch  = 0;
   uint64_t              display_generation = 0;
 };
 
@@ -134,7 +134,7 @@ struct ScopeRenderSnapshot {
   ScopeWaveformRenderData  waveform   = {};
   uint64_t                 generation = 0;
   uint64_t                 image_identity    = 0;
-  uint64_t                 image_generation  = 0;
+  uint64_t                 session_epoch  = 0;
   uint64_t                 display_generation = 0;
 };
 

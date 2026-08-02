@@ -31,14 +31,15 @@ class DirectFrameSink;
 class EditorViewportItem : public QQuickRhiItem {
   Q_OBJECT
   Q_PROPERTY(QString backendName READ backendName NOTIFY DiagnosticsChanged)
-  // Durable image id (DB). Distinct from imageGeneration (session counter).
+  // Durable image id (DB). Distinct from sessionEpoch (ImageLoadRequestId stamp).
   Q_PROPERTY(qulonglong imageIdentity READ imageIdentity WRITE setImageIdentity NOTIFY
                  ImageIdentityChanged)
-  // Monotonic session generation; advances on every open/switch including A→B→A.
-  Q_PROPERTY(qulonglong imageGeneration READ imageGeneration WRITE setImageGeneration NOTIFY
-                 ImageGenerationChanged)
+  // Presentation stamp of the active ImageLoadRequestId; set by the session
+  // controller on every open/switch including A→B→A.
+  Q_PROPERTY(qulonglong sessionEpoch READ sessionEpoch WRITE setSessionEpoch NOTIFY
+                 SessionEpochChanged)
   Q_PROPERTY(qulonglong targetGeneration READ targetGeneration NOTIFY DiagnosticsChanged)
-  Q_PROPERTY(qulonglong lastPresentedImageGeneration READ lastPresentedImageGeneration NOTIFY
+  Q_PROPERTY(qulonglong lastPresentedSessionEpoch READ lastPresentedSessionEpoch NOTIFY
                  DiagnosticsChanged)
   Q_PROPERTY(
       qulonglong lastPresentedRequestId READ lastPresentedRequestId NOTIFY DiagnosticsChanged)
@@ -60,11 +61,11 @@ class EditorViewportItem : public QQuickRhiItem {
   [[nodiscard]] auto imageIdentity() const -> qulonglong {
     return image_identity_.load(std::memory_order_acquire);
   }
-  [[nodiscard]] auto imageGeneration() const -> qulonglong {
-    return image_generation_.load(std::memory_order_acquire);
+  [[nodiscard]] auto sessionEpoch() const -> qulonglong {
+    return session_epoch_.load(std::memory_order_acquire);
   }
   [[nodiscard]] auto targetGeneration() const -> qulonglong;
-  [[nodiscard]] auto lastPresentedImageGeneration() const -> qulonglong;
+  [[nodiscard]] auto lastPresentedSessionEpoch() const -> qulonglong;
   [[nodiscard]] auto lastPresentedRequestId() const -> qulonglong;
   [[nodiscard]] auto presentedFrameCount() const -> qulonglong;
   [[nodiscard]] auto droppedStaleFrameCount() const -> qulonglong;
@@ -78,12 +79,13 @@ class EditorViewportItem : public QQuickRhiItem {
   }
 
   void               setImageIdentity(qulonglong identity);
-  void               setImageGeneration(qulonglong generation);
+  void               setSessionEpoch(qulonglong epoch);
   // Whole-window display state for the unified QML scene. The session
   // controller supplies the adjustment snapshot immediately; Metal frames
   // repeat the exact producer configuration when they arrive.
   void               setDisplayConfig(const ViewerDisplayConfig& config);
-  // Atomically advances session generation for a new focus (A→B or A→A reopen).
+  // Harness helper: set identity and bump a local session_epoch. Production
+  // uses setSessionEpoch(image_load_request_id) from the session controller.
   Q_INVOKABLE void   beginImageSession(qulonglong imageIdentity);
 
   void               setViewState(const ViewerViewState& state);
@@ -129,7 +131,7 @@ class EditorViewportItem : public QQuickRhiItem {
  signals:
   void DiagnosticsChanged();
   void ImageIdentityChanged();
-  void ImageGenerationChanged();
+  void SessionEpochChanged();
   void StatusChanged();
   void DisplayConfigChanged();
   // camelCase for QML handler onTargetSizeRequested.
@@ -167,7 +169,7 @@ class EditorViewportItem : public QQuickRhiItem {
   QString                             backend_name_ = QStringLiteral("uninitialized");
   QString                    status_text_ = QStringLiteral("waiting for a compatible frame");
   std::atomic<qulonglong>    image_identity_{0};
-  std::atomic<qulonglong>    image_generation_{0};
+  std::atomic<qulonglong>    session_epoch_{0};
   std::atomic<int>           view_state_push_count_{0};
   std::atomic<bool>          presentation_requested_{false};
   std::atomic<bool>          adjustment_frame_requested_{false};
@@ -180,7 +182,7 @@ class EditorViewportItem : public QQuickRhiItem {
   std::atomic<bool>          window_color_space_applied_{false};
   bool                       last_diagnostics_available_      = false;
   qulonglong                 last_diag_target_gen_            = 0;
-  qulonglong                 last_diag_presented_image_gen_   = 0;
+  qulonglong                 last_diag_presented_session_epoch_   = 0;
   qulonglong                 last_diag_presented_request_id_  = 0;
   qulonglong                 last_diag_presented_frame_count_ = 0;
   qulonglong                 last_diag_dropped_               = 0;

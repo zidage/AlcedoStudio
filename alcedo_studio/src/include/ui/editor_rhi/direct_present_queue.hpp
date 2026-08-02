@@ -46,13 +46,13 @@ class DirectPresentQueue final {
     int                width            = 0;
     int                height           = 0;
     int                preferred_slot   = -1;
-    std::uint64_t      image_generation = 0;
+    std::uint64_t      session_epoch = 0;
     std::uint64_t      image_identity   = 0;
     std::uint64_t      layer_generation = 0;
     FrameRole          frame_role       = FrameRole::InteractivePrimary;
 
     [[nodiscard]] auto valid() const -> bool {
-      return width > 0 && height > 0 && image_generation != 0;
+      return width > 0 && height > 0 && session_epoch != 0;
     }
   };
 
@@ -82,7 +82,7 @@ class DirectPresentQueue final {
     SlotNative            native{};
     FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
     FramePreviewMetadata  preview_metadata{};
-    std::uint64_t         image_generation = 0;
+    std::uint64_t         session_epoch = 0;
     std::uint64_t         image_identity   = 0;
     std::uint64_t         sequence         = 0;
   };
@@ -94,9 +94,9 @@ class DirectPresentQueue final {
   struct Diagnostics {
     EditorBackend backend                        = EditorBackend::Cuda;
     std::uint64_t target_generation              = 0;
-    std::uint64_t image_generation               = 0;
+    std::uint64_t session_epoch               = 0;
     std::uint64_t image_identity                 = 0;
-    std::uint64_t last_composed_image_generation = 0;
+    std::uint64_t last_composed_session_epoch = 0;
     std::uint64_t last_composed_request_id       = 0;
     std::uint64_t composed_frame_count           = 0;
     std::uint64_t dropped_stale_frame_count      = 0;
@@ -120,7 +120,7 @@ class DirectPresentQueue final {
   // Producer: select a write slot (legacy SelectDirectPresentWriteSlot rules).
   // Does not block. When need_create is true, the producer must NoteSizeRequest
   // and WaitForWritableSlot after requesting a render-thread update.
-  [[nodiscard]] auto PrepareWrite(int width, int height, std::uint64_t image_generation,
+  [[nodiscard]] auto PrepareWrite(int width, int height, std::uint64_t session_epoch,
                                   std::uint64_t image_identity) -> PrepareResult;
 
   void               NoteSizeRequest(const SizeRequest& request);
@@ -138,7 +138,7 @@ class DirectPresentQueue final {
 
   // Render thread publishes a fully created native into a selected slot.
   auto               PublishCreatedSlot(int slot_index, int width, int height, SlotNative native,
-                                        std::uint64_t image_generation, std::uint64_t image_identity) -> bool;
+                                        std::uint64_t session_epoch, std::uint64_t image_identity) -> bool;
 
   // Producer write lifecycle (mutex held across Map until Unmap, matching the
   // old surface lock that spans map→write→unmap).
@@ -150,20 +150,18 @@ class DirectPresentQueue final {
 
   // Render-thread consumption. Newest compatible ready frame wins per layer;
   // older undisplayed ready frames for that layer are superseded and recycled.
-  [[nodiscard]] auto ConsumeNewestReady(FrameRole layer, std::uint64_t image_generation,
+  [[nodiscard]] auto ConsumeNewestReady(FrameRole layer, std::uint64_t session_epoch,
                                         std::uint64_t image_identity) -> std::optional<ReadyFrame>;
   // After QRhi no longer samples the slot (layer replaced or renderer teardown).
   void               CompleteRendererRead(int slot_index);
 
-  // One-shot Qt Quick window composition event for the first compatible frame
-  // of the current image session. Returns true only the first successful call
-  // for that image generation.
-  // Diagnostic: every composed primary frame increments composed_frame_count.
-  void NoteFrameComposed(std::uint64_t request_id, std::uint64_t image_generation,
+  // Diagnostic: every composed primary frame increments composed_frame_count
+  // and records the active session_epoch / request_id.
+  void NoteFrameComposed(std::uint64_t request_id, std::uint64_t session_epoch,
                          std::uint64_t image_identity);
 
   void SetConsumerAvailable(bool available);
-  void InvalidateImageGeneration(std::uint64_t image_generation, std::uint64_t image_identity = 0);
+  void InvalidateSessionEpoch(std::uint64_t session_epoch, std::uint64_t image_identity = 0);
   void InvalidateTargetGeneration();
   void Shutdown();
 
@@ -172,11 +170,11 @@ class DirectPresentQueue final {
   [[nodiscard]] auto DrainReleasedNatives() -> std::vector<SlotNative>;
 
   [[nodiscard]] auto CurrentTargetGeneration() const -> std::uint64_t;
-  [[nodiscard]] auto CurrentImageGeneration() const -> std::uint64_t;
+  [[nodiscard]] auto CurrentSessionEpoch() const -> std::uint64_t;
   [[nodiscard]] auto CurrentImageIdentity() const -> std::uint64_t;
   [[nodiscard]] auto DiagnosticsSnapshot() const -> Diagnostics;
   [[nodiscard]] auto SlotAt(int index) const -> std::optional<SlotSnapshot>;
-  [[nodiscard]] auto HasWritableSlot(int width, int height, std::uint64_t image_generation,
+  [[nodiscard]] auto HasWritableSlot(int width, int height, std::uint64_t session_epoch,
                                      std::uint64_t image_identity) const -> bool;
 
  private:
@@ -187,7 +185,7 @@ class DirectPresentQueue final {
     SlotNative            native{};
     FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
     FramePreviewMetadata  preview_metadata{};
-    std::uint64_t         image_generation = 0;
+    std::uint64_t         session_epoch = 0;
     std::uint64_t         image_identity   = 0;
     std::uint64_t         sequence         = 0;
   };
@@ -209,10 +207,10 @@ class DirectPresentQueue final {
   bool                         consumer_available_                 = false;
   bool                         shutdown_                           = false;
   std::uint64_t                target_generation_                  = 0;
-  std::uint64_t                image_generation_                   = 0;
+  std::uint64_t                session_epoch_                   = 0;
   std::uint64_t                image_identity_                     = 0;
   std::uint64_t                sequence_                           = 0;
-  std::uint64_t                last_composed_image_generation_     = 0;
+  std::uint64_t                last_composed_session_epoch_     = 0;
   std::uint64_t                last_composed_request_id_           = 0;
   std::uint64_t                composed_frame_count_               = 0;
   std::uint64_t                dropped_stale_frame_count_          = 0;

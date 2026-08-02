@@ -40,7 +40,7 @@ class DirectFrameSink final : public alcedo::IFrameSink {
     FramePresentationMode presentation_mode = FramePresentationMode::FullFrame;
     FramePreviewMetadata preview_metadata{};
     std::shared_ptr<const void> owner{};
-    std::uint64_t image_generation = 0;
+    std::uint64_t session_epoch = 0;
     std::uint64_t image_identity = 0;
     std::uint64_t sequence = 0;
 
@@ -72,7 +72,7 @@ class DirectFrameSink final : public alcedo::IFrameSink {
   void SetViewState(const ViewerViewState& state);
   // Drain newest pending zero-copy imports for the active image session.
   // One entry per frame role; older undisplayed frames for that role are dropped.
-  [[nodiscard]] auto DrainPendingImportedFrames(std::uint64_t image_generation,
+  [[nodiscard]] auto DrainPendingImportedFrames(std::uint64_t session_epoch,
                                                 std::uint64_t image_identity)
       -> std::vector<ImportedGpuFrame>;
   // Drop all pending imports (image switch / renderer teardown).
@@ -94,7 +94,7 @@ class DirectFrameSink final : public alcedo::IFrameSink {
   mutable std::mutex mutex_;
   int width_ = 0;
   int height_ = 0;
-  std::uint64_t last_sized_image_generation_ = 0;
+  std::uint64_t last_sized_session_epoch_ = 0;
   std::uint64_t last_sized_image_identity_ = 0;
   bool has_mapped_slot_ = false;
   bool unmapped_pending_submit_ = false;

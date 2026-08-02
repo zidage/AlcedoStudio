@@ -113,7 +113,7 @@ class UnsupportedLeaseTargetAdapter final : public ILeaseTargetAdapter {
 [[nodiscard]] auto MakeLeaseTargetAdapter(EditorBackend backend)
     -> std::unique_ptr<ILeaseTargetAdapter>;
 
-// Shared helpers used by LeaseFrameSink (pipeline worker) without owning the
+// Shared helpers used by DirectFrameSink (pipeline worker) without owning the
 // adapter instance. These look up resources from lease fields only.
 [[nodiscard]] auto ProducerAcquireWritable(const WritableTargetLease& lease) -> bool;
 [[nodiscard]] auto ProducerReleaseWritable(const WritableTargetLease& lease) -> bool;

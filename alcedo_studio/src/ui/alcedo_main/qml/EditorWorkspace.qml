@@ -170,7 +170,7 @@ Item {
                         objectName: "editorViewportItem"
                         anchors.fill: parent
                         visible: root.hasImage
-                        // imageIdentity is the durable DB id; imageGeneration is stamped
+                        // imageIdentity is the durable DB id; sessionEpoch is stamped
                         // from EditorSessionController::SyncViewportIdentity on the GUI thread.
                         imageIdentity: root.focusedImageId
                         Accessible.role: Accessible.Canvas

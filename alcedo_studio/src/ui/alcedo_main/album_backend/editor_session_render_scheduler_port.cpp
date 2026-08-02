@@ -4,12 +4,12 @@
 
 #include "ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp"
 
+#include <QString>
+
 #include <algorithm>
 #include <chrono>
 #include <future>
-#include <iostream>
 #include <stdexcept>
-#include <syncstream>
 #include <utility>
 
 #include "app/editor_adjustment_pipeline.hpp"
@@ -20,8 +20,11 @@
 #include "renderer/pipeline_task.hpp"
 #include "ui/alcedo_main/editor_dialog/controllers/image_controller.hpp"
 #include "ui/alcedo_main/editor_dialog/controllers/pipeline_controller.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
+using alcedo::diag::editorPresentLog;
+
 namespace {
 
 auto RenderTypeForIntent(const alcedo::EditorRenderIntent& intent) -> alcedo::RenderType {
@@ -42,7 +45,7 @@ auto FrameRoleToPreviewMetadata(const alcedo::EditorRenderIntent& intent)
   meta.frame_role              = intent.frame_role;
   meta.detail_serial           = 0;
   meta.image_identity          = static_cast<std::uint64_t>(intent.image_id);
-  meta.image_generation        = intent.image_load_request_id.value;
+  meta.session_epoch        = intent.image_load_request_id.value;
   meta.scope_update_allowed    = alcedo::ScopeUpdateAllowedForReason(intent.reason);
   meta.scope_refresh_requested = intent.reason == alcedo::EditorRenderReason::ScopeRefresh;
   return meta;
@@ -50,23 +53,40 @@ auto FrameRoleToPreviewMetadata(const alcedo::EditorRenderIntent& intent)
 
 void TraceDetailRequest(const char* stage, const alcedo::EditorRenderRequest& request,
                         const char* outcome = "", long long elapsed_ms = -1) {
-  if (request.intent.frame_role != alcedo::FrameRole::DetailPatch) return;
-  std::osyncstream out(std::cout);
-  out << "[ROI_TRACE][" << stage << "] request=" << request.request_id
-      << " image=" << request.intent.image_id
-      << " image_generation=" << request.intent.image_load_request_id.value
-      << " requested=" << request.intent.requested_width << 'x' << request.intent.requested_height;
+  if (request.intent.frame_role != alcedo::FrameRole::DetailPatch) {
+    return;
+  }
+  if (!editorPresentLog().isDebugEnabled()) {
+    return;
+  }
+  QString msg = QStringLiteral("[ROI_TRACE][%1] request=%2 image=%3 session_epoch=%4 requested=%5x%6")
+                    .arg(QLatin1String(stage))
+                    .arg(request.request_id)
+                    .arg(request.intent.image_id)
+                    .arg(request.intent.image_load_request_id.value)
+                    .arg(request.intent.requested_width)
+                    .arg(request.intent.requested_height);
   if (request.intent.view_region) {
     const auto& roi = *request.intent.view_region;
-    out << " region_px=" << roi.x_ << ',' << roi.y_ << " scale=" << roi.scale_x_ << ','
-        << roi.scale_y_ << " reference=" << roi.reference_width_ << 'x' << roi.reference_height_
-        << " target=" << roi.target_width_ << 'x' << roi.target_height_;
+    msg += QStringLiteral(" region_px=%1,%2 scale=%3,%4 reference=%5x%6 target=%7x%8")
+               .arg(roi.x_)
+               .arg(roi.y_)
+               .arg(roi.scale_x_)
+               .arg(roi.scale_y_)
+               .arg(roi.reference_width_)
+               .arg(roi.reference_height_)
+               .arg(roi.target_width_)
+               .arg(roi.target_height_);
   } else {
-    out << " region=none";
+    msg += QStringLiteral(" region=none");
   }
-  if (outcome && *outcome) out << " outcome=" << outcome;
-  if (elapsed_ms >= 0) out << " elapsed_ms=" << elapsed_ms;
-  out << std::endl;
+  if (outcome && *outcome) {
+    msg += QStringLiteral(" outcome=%1").arg(QLatin1String(outcome));
+  }
+  if (elapsed_ms >= 0) {
+    msg += QStringLiteral(" elapsed_ms=%1").arg(elapsed_ms);
+  }
+  qCDebug(editorPresentLog).noquote() << msg;
 }
 
 }  // namespace
@@ -196,11 +216,11 @@ void EditorSessionRenderSchedulerPort::Cancel(std::uint64_t scheduler_job_id) {
   }
 }
 
-void EditorSessionRenderSchedulerPort::WaitForSessionIdle(std::uint64_t session_generation) {
+void EditorSessionRenderSchedulerPort::WaitForSessionIdle(std::uint64_t session_epoch) {
   std::unique_lock lock(mutex_);
   jobs_changed_.wait(lock, [&] {
-    const auto belongs_to_session = [session_generation](const std::optional<Job>& job) {
-      return job && job->request.intent.image_load_request_id.value == session_generation;
+    const auto belongs_to_session = [session_epoch](const std::optional<Job>& job) {
+      return job && job->request.intent.image_load_request_id.value == session_epoch;
     };
     return !belongs_to_session(queued_job_) && !belongs_to_session(running_job_);
   });

@@ -26,7 +26,7 @@ class IEditorPipelineSchedulerPort {
   /// Returns a scheduler-side job id, or 0 on immediate failure.
   virtual auto Schedule(const EditorRenderRequest& request) -> std::uint64_t = 0;
   virtual void Cancel(std::uint64_t scheduler_job_id)                        = 0;
-  virtual void WaitForSessionIdle(std::uint64_t /*session_generation*/) {}
+  virtual void WaitForSessionIdle(std::uint64_t /*session_epoch*/) {}
 };
 
 /// Application-layer owner of the editor render request queue.
