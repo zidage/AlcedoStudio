@@ -644,14 +644,16 @@ void PipelineMgmtService::SavePipeline(std::shared_ptr<PipelineGuard> pipeline) 
       // different writer cannot be silently replaced by this serialized pipeline state.
       const auto& graph = pipeline->commit_graph_ ? *pipeline->commit_graph_ : *stored_graph;
 
-      const auto expected_head  = graph.GetActiveVersionRef().head_commit_hash;
-      const auto expected_chain = graph.ChainHashForHead(expected_head);
-      if (graph.GetElementId() != pipeline->id_ || graph.GetRootId() != pipeline->root_id_ ||
-           expected_head != pipeline->working_head_commit_hash_ ||
-           expected_chain != pipeline->transaction_chain_hash_) {
+      // Graph active Version is the only logical head. Heal the pipeline-guard
+      // cache; do not fail writeback on cache drift alone.
+      const auto logical_head  = graph.GetActiveVersionRef().head_commit_hash;
+      const auto logical_chain = graph.ChainHashForHead(logical_head);
+      if (graph.GetElementId() != pipeline->id_ || graph.GetRootId() != pipeline->root_id_) {
         throw std::runtime_error(
             "PipelineMgmtService: live history identity changed before serialized state writeback");
       }
+      pipeline->working_head_commit_hash_ = logical_head;
+      pipeline->transaction_chain_hash_   = logical_chain;
 
       const auto& stored_state = stored_graph->GetImageEditState();
       const auto& graph_state  = graph.GetImageEditState();
@@ -755,15 +757,19 @@ auto PipelineMgmtService::PersistEditorHistoryState(
           "PipelineMgmtService: persisted history changed before editor history persistence");
     }
 
-    const auto& graph = *pipeline->commit_graph_;
-    const auto  expected_head  = graph.GetActiveVersionRef().head_commit_hash;
-    const auto  expected_chain = graph.ChainHashForHead(expected_head);
-    if (graph.GetElementId() != pipeline->id_ || graph.GetRootId() != pipeline->root_id_ ||
-        expected_head != pipeline->working_head_commit_hash_ ||
-        expected_chain != pipeline->transaction_chain_hash_) {
+    // Logical head authority is the live CommitGraph active Version only.
+    // pipeline_guard working_head_* is a cache: heal drift instead of failing with
+    // "live history identity changed" after a concurrent head update path left the
+    // cache one step behind the graph.
+    auto&      graph         = *pipeline->commit_graph_;
+    const auto logical_head  = graph.GetActiveVersionRef().head_commit_hash;
+    const auto logical_chain = graph.ChainHashForHead(logical_head);
+    if (graph.GetElementId() != pipeline->id_ || graph.GetRootId() != pipeline->root_id_) {
       throw std::runtime_error(
           "PipelineMgmtService: live history identity changed before editor history persistence");
     }
+    pipeline->working_head_commit_hash_ = logical_head;
+    pipeline->transaction_chain_hash_   = logical_chain;
 
     const auto materialization = graph.CaptureMaterializationClearingSerializedPipelineState();
     graph_service.Materialize(materialization);

@@ -972,10 +972,26 @@ void EditorSessionService::HandleSaveCheckpointCompletion(
 
   // The checkpoint materialized the active head to DuckDB without advancing
   // the in-memory materialized tuple. Mirror it for ordinary history saves.
+  // Fail closed so a later version/checkout Persist does not see DuckDB ahead of
+  // in-memory ImageEditState and report "persisted history changed".
   if (dependencies_.history != nullptr && lifecycle_.has_history_guard()) {
     std::string sync_error;
-    (void)dependencies_.history->SyncMaterializedStateAfterCheckpoint(lifecycle_.history_guard(),
-                                                                      &sync_error);
+    if (!dependencies_.history->SyncMaterializedStateAfterCheckpoint(lifecycle_.history_guard(),
+                                                                     &sync_error)) {
+      pending_history_checkpoint_.reset();
+      ReleaseLeasesByKind(EditorOperationLeaseKind::PasteMaterialization);
+      ReleaseLeasesByKind(EditorOperationLeaseKind::MergeMaterialization);
+      EditorSessionResult failed;
+      failed.kind     = EditorSessionResultKind::Failed;
+      failed.state    = lifecycle_.state();
+      failed.identity = lifecycle_.identity();
+      failed.task_id  = completion.task_id;
+      failed.message  = sync_error.empty() ? "Failed to sync materialized state after checkpoint"
+                                           : std::move(sync_error);
+      BumpHistoryRevision();
+      Emit(std::move(failed));
+      return;
+    }
   }
 
   if (!pending_history_checkpoint_.has_value()) {
