@@ -494,6 +494,12 @@ auto EditorSessionNavigationController::ContinueCheckoutVersion(const version_re
     return false;
   }
 
+  // SealAndStartSave cancelled renders before the async checkpoint, but view /
+  // quality work can re-submit during the save window. Checkout holds the live
+  // pipeline render lock for first-parent rebuild; an in-flight worker that also
+  // needs the GUI (present handshake) deadlocks with renderBusy stuck true.
+  render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
+
   std::string local_error;
   if (!history_->CheckoutVersion(lifecycle_.history_guard(), version_id, &local_error)) {
     // Phase 7A repair: do NOT call lifecycle_.Fail(). The history port fails
@@ -522,6 +528,10 @@ auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string  d
     return false;
   }
 
+  // Same race as ContinueCheckoutVersion: drain session renders before taking
+  // the live pipeline render lock for named-ref checkout rebuild.
+  render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
+
   version_ref_id_t new_version_id;
   std::string      local_error;
   if (!history_->CreateRootVersionAndCheckout(lifecycle_.history_guard(), std::move(display_name),
@@ -548,6 +558,10 @@ auto EditorSessionNavigationController::ContinueBranchFromCommit(const commit_ha
     if (error) *error = "Branch creation lost the history guard after save";
     return false;
   }
+
+  // Same race as ContinueCheckoutVersion: drain session renders before taking
+  // the live pipeline render lock for named-ref checkout rebuild.
+  render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
 
   version_ref_id_t new_version_id;
   std::string      local_error;

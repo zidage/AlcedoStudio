@@ -12,6 +12,7 @@
 #include "app/editor_adjustment_pipeline.hpp"
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
+#include "edit/pipeline/pipeline_cpu.hpp"
 
 namespace alcedo::ui {
 
@@ -178,6 +179,38 @@ auto MakeAdjustmentSnapshotFromPipelineParams(
       UpsertCommittedSnapshot(snapshot, std::string(field_key), params, enabled);
     }
     snapshot->params_json = pipeline_params.dump();
+    return IsCompleteAdjustmentSnapshot(*snapshot, error);
+  } catch (const std::exception& ex) {
+    if (error) *error = ex.what();
+    return false;
+  }
+}
+
+auto MakeAdjustmentSnapshotFromLivePipeline(alcedo::CPUPipelineExecutor& executor,
+                                            alcedo::EditorRenderAdjustmentSnapshot* snapshot,
+                                            std::string* error) -> bool {
+  if (snapshot == nullptr) {
+    if (error) *error = "Adjustment snapshot output is null";
+    return false;
+  }
+  try {
+    *snapshot = MakeEmptyCompleteAdjustmentSnapshot();
+    for (const auto field_key_view : kEditorSnapshotFields) {
+      const std::string field_key(field_key_view);
+      alcedo::EditorAdjustmentOperatorState state;
+      std::string local_error;
+      if (!alcedo::ReadEditorAdjustmentOperatorState(executor, field_key, &state, &local_error)) {
+        if (error) *error = local_error;
+        return false;
+      }
+      // Missing operator → empty params / disabled; still keep the field slot.
+      UpsertCommittedSnapshot(snapshot, field_key,
+                              state.params.is_null() ? nlohmann::json::object() : state.params,
+                              state.enabled);
+    }
+    // Full pipeline export remains available for checkpoint serialization that
+    // still expects a stage document; panel load paths should use field GetParams.
+    snapshot->params_json = executor.ExportPipelineParams().dump();
     return IsCompleteAdjustmentSnapshot(*snapshot, error);
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
