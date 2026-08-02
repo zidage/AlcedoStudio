@@ -92,7 +92,8 @@ inline auto MakeDefaultCropRotateParams() -> nlohmann::json {
             {"crop_rect", {{"x", 0.0f}, {"y", 0.0f}, {"w", 1.0f}, {"h", 1.0f}}},
             {"expand_to_fit", true},
             {"aspect_ratio_preset", "free"},
-            {"aspect_ratio", {{"width", 1.0f}, {"height", 1.0f}}}}}};
+            {"aspect_ratio", {{"width", 1.0f}, {"height", 1.0f}}},
+            {"source_size", {{"width", 0U}, {"height", 0U}}}}}};
 }
 
 inline auto MakeCleanBaselineAdjustableParams() -> nlohmann::json {

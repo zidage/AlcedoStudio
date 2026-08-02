@@ -246,6 +246,13 @@ auto SanitizeLensCalibrationParams(nlohmann::json                     params,
   return params;
 }
 
+auto SanitizeCropRotateParams(nlohmann::json params) -> nlohmann::json {
+  if (params.contains("crop_rotate") && params["crop_rotate"].is_object()) {
+    params["crop_rotate"].erase("source_size");
+  }
+  return params;
+}
+
 auto SanitizeParams(OperatorType op_type, nlohmann::json params,
                     const AdjustmentTransferSelection& selection) -> nlohmann::json {
   switch (op_type) {
@@ -253,6 +260,8 @@ auto SanitizeParams(OperatorType op_type, nlohmann::json params,
       return SanitizeColorTemperatureParams(std::move(params), selection);
     case OperatorType::LENS_CALIBRATION:
       return SanitizeLensCalibrationParams(std::move(params), selection);
+    case OperatorType::CROP_ROTATE:
+      return SanitizeCropRotateParams(std::move(params));
     default:
       return params;
   }
@@ -408,6 +417,14 @@ auto AdjustmentTransferService::Apply(PipelineExecutor&                target,
       if (op.merge_params_) {
         effective_params = current.value()->op_->GetParams();
         MergeJsonObject(effective_params, op.params_);
+      }
+      if (op.operator_type_ == OperatorType::CROP_ROTATE) {
+        const auto current_params = current.value()->op_->GetParams();
+        if (current_params.contains("crop_rotate") &&
+            current_params["crop_rotate"].contains("source_size")) {
+          effective_params["crop_rotate"]["source_size"] =
+              current_params["crop_rotate"]["source_size"];
+        }
       }
       entry_changed = current.value()->enable_ != op.enabled_ ||
                       current.value()->op_->GetParams() != effective_params;

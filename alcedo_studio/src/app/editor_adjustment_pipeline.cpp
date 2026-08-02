@@ -280,6 +280,9 @@ namespace {
 
 /// Keys that must survive a defaults reset for image-local identity / as-shot baseline.
 auto IsImageLocalParamKey(std::string_view field_key, std::string_view key) -> bool {
+  if (field_key == "crop_rotate") {
+    return key == "source_size";
+  }
   if (field_key == "raw_decode") {
     // Persisted inherent RAW context (plan §4.4 / §4.7). decode_res is one-shot and
     // is not preserved as "user edit" either — defaults omit it.
@@ -342,6 +345,12 @@ auto MergePreservingImageLocal(const nlohmann::json& current_params,
     auto& target_inner = result["lens_calib"];
     if (!target_inner.is_object()) target_inner = nlohmann::json::object();
     merge_objects(target_inner, ExtractInnerObject(current_params, "lens_calib"));
+    return result;
+  }
+  if (field_key == "crop_rotate") {
+    auto& target_inner = result["crop_rotate"];
+    if (!target_inner.is_object()) target_inner = nlohmann::json::object();
+    merge_objects(target_inner, ExtractInnerObject(current_params, "crop_rotate"));
     return result;
   }
 

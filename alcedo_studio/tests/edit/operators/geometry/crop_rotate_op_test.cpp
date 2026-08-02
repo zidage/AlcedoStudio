@@ -32,6 +32,19 @@ TEST(CropRotateOpTests, DefaultFreeRoundTripPreservesFreeAspect) {
   EXPECT_EQ(exported["crop_rotate"]["aspect_ratio_preset"], "free");
   EXPECT_FLOAT_EQ(exported["crop_rotate"]["aspect_ratio"]["width"].get<float>(), 1.0f);
   EXPECT_FLOAT_EQ(exported["crop_rotate"]["aspect_ratio"]["height"].get<float>(), 1.0f);
+  EXPECT_EQ(exported["crop_rotate"]["source_size"]["width"], 0U);
+  EXPECT_EQ(exported["crop_rotate"]["source_size"]["height"], 0U);
+}
+
+TEST(CropRotateOpTests, SourceSizeRoundTripPreservesPipelineImageGeometry) {
+  nlohmann::json params                = pipeline_defaults::MakeDefaultCropRotateParams();
+  params["crop_rotate"]["source_size"] = {{"width", 2731U}, {"height", 4096U}};
+
+  CropRotateOp op(params);
+  const auto   exported = op.GetParams();
+
+  EXPECT_EQ(exported["crop_rotate"]["source_size"]["width"], 2731U);
+  EXPECT_EQ(exported["crop_rotate"]["source_size"]["height"], 4096U);
 }
 
 TEST(CropRotateOpTests, PresetRoundTripPreservesPresetAndNumericRatio) {
