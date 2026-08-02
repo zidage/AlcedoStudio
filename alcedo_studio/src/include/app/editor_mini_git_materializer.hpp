@@ -28,6 +28,13 @@ class EditorSaveCheckpointCoordinator;
 /// persists the already-built materialization, verifies HEAD agreement, then
 /// clears the entire WAL.
 ///
+/// Identity model (single source): `materialization` is built once from the live
+/// CommitGraph active Version (logical head). `working_head`,
+/// `transaction_chain_hash`, `version_id`, `root_id`, and `element_id` are
+/// projections of that materialization — not independent second reads. This
+/// matches the single-live-pipeline simplification: one logical head, no dual
+/// head bookkeeping that can disagree at validation time.
+///
 /// Owner/lifetime: built by the save path on the caller/GUI thread while the
 /// project-owned SaveCheckpointLock is held and the journal mutex is held for
 /// the Snapshot() copy, then moved into the worker request. journal_records is
@@ -38,10 +45,11 @@ struct EditorMiniGitSaveCapture {
   std::uint64_t                     session_generation = 0;
   version_ref_id_t                  version_id{};
   root_id_t                         root_id{};
+  /// Logical head — must equal materialization.image_state.materialized_head_commit_hash.
   head_commit_hash_t                working_head = std::nullopt;
   transaction_chain_hash_t          transaction_chain_hash{};
   /// Full capture of commits + Version refs + ImageEditState with serialized
-  /// pipeline state. Built from the unique live CommitGraph.
+  /// pipeline state. Built from the unique live CommitGraph; authority for head.
   CommitGraphMaterialization        materialization{};
   std::vector<MiniGitJournalRecord> journal_records;
   std::filesystem::path             journal_path;

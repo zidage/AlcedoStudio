@@ -36,30 +36,41 @@ auto EditorHistoryCheckpoint::CaptureSaveCheckpoint(
 
   const auto journal_snapshot = state->journal->Snapshot();
 
-  alcedo::EditorMiniGitSaveCapture capture;
-  capture.element_id = guard.element_id;
-  capture.version_id = state->pipeline_guard->commit_graph_->GetActiveVersionId();
-  capture.root_id = state->pipeline_guard->root_id_;
-  capture.working_head = state->history->working_head();
-  capture.transaction_chain_hash = state->history->transaction_chain_hash();
-  capture.journal_records = journal_snapshot.records;
-  capture.journal_path = state->journal->path();
-  capture.first_journal_sequence = journal_snapshot.first_sequence;
-  capture.last_journal_sequence = journal_snapshot.last_sequence;
+  // Single live identity: CommitGraph active Version head is the only logical head.
+  // Align the pipeline-guard cache, build one materialization, then derive every
+  // capture field from that materialization. Do not read working_head from a
+  // second source — that dual-read is what produced
+  // "capture working head does not match materialization head".
+  auto& graph = *state->pipeline_guard->commit_graph_;
+  const auto logical_head  = graph.GetActiveVersionRef().head_commit_hash;
+  const auto logical_chain = graph.ChainHashForHead(logical_head);
+  state->pipeline_guard->working_head_commit_hash_ = logical_head;
+  state->pipeline_guard->transaction_chain_hash_   = logical_chain;
 
   const auto pipeline_params = MakePipelineParamsFromSnapshot(state->committed_snapshot, error);
   if (!pipeline_params.has_value()) return nullptr;
   const auto serialized = alcedo::MakeEditorSerializedPipelineState(
-      state->pipeline_guard->root_id_, capture.working_head, capture.transaction_chain_hash,
-      *pipeline_params);
+      state->pipeline_guard->root_id_, logical_head, logical_chain, *pipeline_params);
+
+  alcedo::EditorMiniGitSaveCapture capture;
+  capture.journal_records        = journal_snapshot.records;
+  capture.journal_path           = state->journal->path();
+  capture.first_journal_sequence = journal_snapshot.first_sequence;
+  capture.last_journal_sequence  = journal_snapshot.last_sequence;
   try {
     capture.materialization =
-        state->pipeline_guard->commit_graph_->CaptureMaterializationWithSerializedPipelineState(
-            serialized);
+        graph.CaptureMaterializationWithSerializedPipelineState(serialized);
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
     return nullptr;
   }
+  // Top-level identity fields are projections of materialization only.
+  capture.element_id             = capture.materialization.image_state.element_id;
+  capture.version_id             = capture.materialization.image_state.active_version_id;
+  capture.root_id                = capture.materialization.image_state.root_id;
+  capture.working_head           = capture.materialization.image_state.materialized_head_commit_hash;
+  capture.transaction_chain_hash =
+      capture.materialization.image_state.materialized_transaction_chain_hash;
   return std::make_shared<const alcedo::EditorMiniGitSaveCapture>(std::move(capture));
 }
 

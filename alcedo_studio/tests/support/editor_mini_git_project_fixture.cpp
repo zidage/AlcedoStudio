@@ -91,23 +91,28 @@ auto EditorMiniGitProjectFixture::AppendExposureEdit(sl_element_id_t element_id,
 
 auto EditorMiniGitProjectFixture::CaptureWorkingState(sl_element_id_t element_id, float exposure)
     -> EditorMiniGitSaveCapture {
-  auto&                    runtime  = RuntimeFor(element_id);
-  const auto               snapshot = runtime.journal->Snapshot();
+  auto&      runtime  = RuntimeFor(element_id);
+  const auto snapshot = runtime.journal->Snapshot();
+  // Match production CaptureSaveCheckpoint: one materialization, then project
+  // top-level identity fields from it (no independent working_head read).
+  const auto logical_head  = runtime.graph->GetActiveVersionRef().head_commit_hash;
+  const auto logical_chain = runtime.graph->ChainHashForHead(logical_head);
+  const auto serialized    = MakeEditorSerializedPipelineState(
+      runtime.graph->GetRootId(), logical_head, logical_chain,
+      nlohmann::json{{"exposure", exposure}});
   EditorMiniGitSaveCapture capture;
-  capture.element_id             = element_id;
-  capture.version_id             = runtime.graph->GetActiveVersionId();
-  capture.root_id                = runtime.graph->GetRootId();
-  capture.working_head           = runtime.history->working_head();
-  capture.transaction_chain_hash = runtime.history->transaction_chain_hash();
   capture.journal_records        = snapshot.records;
   capture.journal_path           = runtime.journal_path;
   capture.first_journal_sequence = snapshot.first_sequence;
   capture.last_journal_sequence  = snapshot.last_sequence;
-  const auto serialized          = MakeEditorSerializedPipelineState(
-      runtime.graph->GetRootId(), capture.working_head, capture.transaction_chain_hash,
-      nlohmann::json{{"exposure", exposure}});
   capture.materialization =
       runtime.graph->CaptureMaterializationWithSerializedPipelineState(serialized);
+  capture.element_id             = capture.materialization.image_state.element_id;
+  capture.version_id             = capture.materialization.image_state.active_version_id;
+  capture.root_id                = capture.materialization.image_state.root_id;
+  capture.working_head           = capture.materialization.image_state.materialized_head_commit_hash;
+  capture.transaction_chain_hash =
+      capture.materialization.image_state.materialized_transaction_chain_hash;
   return capture;
 }
 
