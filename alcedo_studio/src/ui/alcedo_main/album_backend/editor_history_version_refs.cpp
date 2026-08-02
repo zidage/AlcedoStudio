@@ -75,9 +75,8 @@ auto RefreshNamedRefSnapshotFromLive(HistoryWorkingState& state, std::string* er
   }
   try {
     std::unique_lock<std::mutex> render_lock(state.pipeline_guard->pipeline_->GetRenderLock());
-    const auto params = state.pipeline_guard->pipeline_->ExportPipelineParams();
-    render_lock.unlock();
-    return MakeAdjustmentSnapshotFromPipelineParams(params, &state.committed_snapshot, error);
+    return MakeAdjustmentSnapshotFromLivePipeline(*state.pipeline_guard->pipeline_,
+                                                  &state.committed_snapshot, error);
   } catch (const std::exception& ex) {
     if (error) *error = ex.what();
     return false;

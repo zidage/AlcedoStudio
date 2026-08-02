@@ -116,7 +116,46 @@ TEST(EditorLookModelTest, ColorTempCctDragPromotesToCustomAndSettlesOnce) {
 
   const auto ct = ParseObject(sub.lastSettledParams()).value(QStringLiteral("color_temp")).toObject();
   EXPECT_EQ(ct.value(QStringLiteral("mode")).toString(), QStringLiteral("custom"));
-  EXPECT_NEAR(ct.value(QStringLiteral("cct")).toDouble(), 6400.0, 1e-3);
+  EXPECT_NEAR(ct.value(QStringLiteral("custom_cct")).toDouble(), 6400.0, 1e-3);
+  EXPECT_NEAR(ct.value(QStringLiteral("as_shot_cct")).toDouble(), 5600.0, 1e-3);
+}
+
+TEST(EditorLookModelTest, ColorTempLoadFromOperatorParamsUsesGetParamsKeys) {
+  RecordingSubmitter sub;
+  EditorColorTempModel model;
+  model.setSubmitter(&sub);
+
+  QVariantMap inner;
+  inner.insert(QStringLiteral("mode"), QStringLiteral("as_shot"));
+  inner.insert(QStringLiteral("custom_cct"), 4500.0);
+  inner.insert(QStringLiteral("custom_tint"), 20.0);
+  inner.insert(QStringLiteral("as_shot_cct"), 5200.0);
+  inner.insert(QStringLiteral("as_shot_tint"), -8.0);
+  QVariantMap root;
+  root.insert(QStringLiteral("color_temp"), inner);
+
+  model.loadFromOperatorParams(root);
+  EXPECT_TRUE(sub.calls.empty());
+  EXPECT_EQ(model.modeIndex(), 0);
+  EXPECT_NEAR(model.cct(), 5200.0, 1e-3);
+  EXPECT_NEAR(model.tint(), -8.0, 1e-3);
+  EXPECT_NEAR(model.asShotCct(), 5200.0, 1e-3);
+  EXPECT_NEAR(model.asShotTint(), -8.0, 1e-3);
+
+  // Custom mode must show custom_* while keeping as-shot baseline.
+  inner.insert(QStringLiteral("mode"), QStringLiteral("custom"));
+  root.insert(QStringLiteral("color_temp"), inner);
+  model.loadFromOperatorParams(root);
+  EXPECT_EQ(model.modeIndex(), 1);
+  EXPECT_NEAR(model.cct(), 4500.0, 1e-3);
+  EXPECT_NEAR(model.tint(), 20.0, 1e-3);
+  EXPECT_NEAR(model.asShotCct(), 5200.0, 1e-3);
+  EXPECT_NEAR(model.asShotTint(), -8.0, 1e-3);
+
+  // Switching back to as_shot without moving sliders must re-display as-shot.
+  model.selectMode(0);
+  EXPECT_NEAR(model.cct(), 5200.0, 1e-3);
+  EXPECT_NEAR(model.tint(), -8.0, 1e-3);
 }
 
 TEST(EditorLookModelTest, ColorTempResetRestoresAsShotAndCommits) {

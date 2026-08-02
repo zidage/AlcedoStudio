@@ -140,19 +140,11 @@ Item {
         // snapshot echo (EditorAdjustmentStack onAdjustmentSnapshotChanged).
         if (colorTempModel.dragActive)
             return
-        const entry = snapshot.color_temp
-        const ct = entry.color_temp !== undefined ? entry.color_temp : entry
-        if (!ct)
-            return
-        const mode = ct.mode !== undefined ? String(ct.mode) : "as_shot"
-        const cct = Number(ct.cct !== undefined ? ct.cct : 6500)
-        const tint = Number(ct.tint !== undefined ? ct.tint : 0)
-        const supported = ct.supported !== undefined ? !!ct.supported : true
-        colorTempModel.loadFromParams(mode, cct, tint, supported)
-        if (ct.resolved_cct !== undefined)
-            colorTempModel.asShotCct = Number(ct.resolved_cct)
-        if (ct.resolved_tint !== undefined)
-            colorTempModel.asShotTint = Number(ct.resolved_tint)
+        // Snapshot field is ColorTempOp::GetParams shape (via live GetOperator).
+        // C++ owns key mapping: mode, custom_*, as_shot_* (+ legacy aliases).
+        // Do not re-interpret cct/tint defaults here — that silently loads 6500/0
+        // when only custom_*/as_shot_* are present and breaks as_shot ↔ custom.
+        colorTempModel.loadFromOperatorParams(snapshot.color_temp)
     }
 
     function loadHlsFromSnapshot(snapshot) {

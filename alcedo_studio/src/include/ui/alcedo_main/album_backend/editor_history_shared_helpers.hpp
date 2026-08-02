@@ -21,6 +21,7 @@
 
 namespace alcedo {
 struct MiniGitJournalRecord;
+class CPUPipelineExecutor;
 }  // namespace alcedo
 
 namespace alcedo::ui {
@@ -43,6 +44,13 @@ auto MakeEmptyCompleteAdjustmentSnapshot() -> alcedo::EditorRenderAdjustmentSnap
 auto MakeAdjustmentSnapshotFromPipelineParams(
     const nlohmann::json& pipeline_params, alcedo::EditorRenderAdjustmentSnapshot* snapshot,
     std::string* error) -> bool;
+
+/// Build the committed adjustment snapshot by reading each field through live
+/// GetOperator / GetParams (not by re-parsing ExportPipelineParams stage JSON).
+/// Caller must hold the executor render lock.
+auto MakeAdjustmentSnapshotFromLivePipeline(alcedo::CPUPipelineExecutor& executor,
+                                            alcedo::EditorRenderAdjustmentSnapshot* snapshot,
+                                            std::string* error) -> bool;
 
 /// Convert a complete committed snapshot into the serialized pipeline document
 /// stored by one Mini-Git save capture. The conversion is pure and validates
