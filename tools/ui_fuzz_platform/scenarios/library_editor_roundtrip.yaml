@@ -1,7 +1,7 @@
-name: library_to_editor_exposure
+name: library_editor_roundtrip
 start: workspace_ready
 defaults:
-  expectTimeoutMs: 8000
+  expectTimeoutMs: 10000
 nodes:
   workspace_ready:
     op:
@@ -9,10 +9,6 @@ nodes:
       target: workspaceHost
       property: visible
       eq: true
-    expect:
-      - target: workspaceHost
-        property: visible
-        eq: true
     next:
       - to: open_first_image
         weight: 1
@@ -25,21 +21,8 @@ nodes:
         property: visible
         eq: true
     next:
-      - to: drag_exposure_slider
-        weight: 2
       - to: back_to_library
         weight: 1
-  drag_exposure_slider:
-    op:
-      action: drag
-      target: toneExposureSlider
-      fromNx: 0.2
-      toNx: 0.8
-      steps: 10
-    expect:
-      - target: toneExposureSlider
-        property: visible
-        eq: true
   back_to_library:
     op:
       action: click
@@ -48,3 +31,20 @@ nodes:
       - target: libraryWorkspace
         property: visible
         eq: true
+    next:
+      - to: reenter_editor
+        weight: 1
+  reenter_editor:
+    op:
+      action: click
+      target: editorNavButton
+    expect:
+      - target: editorWorkspace
+        property: visible
+        eq: true
+    next:
+      - to: capture_editor
+        weight: 1
+  capture_editor:
+    op:
+      action: screenshot

@@ -148,29 +148,6 @@
     </message>
 </context>
 <context>
-    <name>ActivateModelDialog</name>
-    <message>
-        <location filename="../qml/ActivateModelDialog.qml" line="+76"/>
-        <source>Set up an AI model to analyze images</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>This project doesn&apos;t have an AI model activated yet, so content labels can&apos;t be generated. Install and activate a model in Settings to enable automatic label generation for your images.</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+20"/>
-        <source>Not now</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Set up model</source>
-        <translation type="unfinished"></translation>
-    </message>
-</context>
-<context>
     <name>AdjustmentField</name>
     <message>
         <location filename="../qml/AdjustmentField.qml" line="+112"/>

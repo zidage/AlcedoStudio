@@ -219,12 +219,7 @@ void SemanticGenerationController::BindCollaborators(NikonHeRecoveryController* 
 }
 
 bool SemanticGenerationController::PromptVisible() const {
-  return prompt_pending_ && !activate_prompt_pending_ && !running_ &&
-         !(nikon_ && nikon_->is_active());
-}
-
-bool SemanticGenerationController::ActivatePromptVisible() const {
-  return activate_prompt_pending_ && !running_;
+  return prompt_pending_ && !running_ && !(nikon_ && nikon_->is_active());
 }
 
 void SemanticGenerationController::StartPendingGeneration(bool forceRegenerate) {
@@ -237,15 +232,6 @@ void SemanticGenerationController::SkipPendingGeneration(bool rememberChoice) {
   }
   ClearPrompt();
   status_text_ = PL_TEXT("Semantic generation skipped.");
-  emit StateChanged();
-}
-
-void SemanticGenerationController::DismissActivatePrompt() {
-  activate_prompt_pending_ = false;
-  // The queued import batch is dropped: if the user later generates from the
-  // Settings panel, its "Generate" action covers all unlabeled images in the
-  // album, including the just-imported ones.
-  ClearPrompt();
   emit StateChanged();
 }
 
@@ -705,10 +691,9 @@ void SemanticGenerationController::ResumeQueuedWorkflow() {
                                        .value(QLatin1String(kSemanticGenerationImportPreferenceKey),
                                               QLatin1String(kSemanticPreferenceAsk))
                                        .toString());
-  // "never" suppresses both the generate prompt and the activate-model prompt —
-  // users who opt out of AI features never see either.
+  // "never" suppresses the generate prompt — users who opt out of AI features
+  // never see it.
   if (preference == QLatin1String(kSemanticPreferenceNever)) {
-    activate_prompt_pending_ = false;
     ClearPrompt();
     // QueuePrompt already emitted StateChanged while prompt_pending_ was true,
     // which synchronously opened the dialog. Re-emit so the QML binding
@@ -717,15 +702,16 @@ void SemanticGenerationController::ResumeQueuedWorkflow() {
     emit StateChanged();
     return;
   }
-  // A fresh project (no model registered) can't generate labels yet. Route to
-  // the activate-model dialog instead, for both "ask" and "always" — "always"
-  // can only take effect once a model exists.
+  // A fresh project (no model registered) can't generate labels yet. Drop the
+  // import batch silently — users install/activate a model in Settings when
+  // they want labels; album Generate covers unlabeled images later.
   if (IsFreshProject()) {
-    activate_prompt_pending_ = true;
+    ClearPrompt();
+    status_text_ = PL_TEXT(
+        "No AI model activated — open Settings to install one before generating labels.");
     emit StateChanged();
     return;
   }
-  activate_prompt_pending_ = false;
   if (preference == QLatin1String(kSemanticPreferenceAlways)) {
     StartPendingGeneration(false);
     return;

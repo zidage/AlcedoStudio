@@ -599,7 +599,6 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/IconActionButton.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SlidingIconNav.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/CollapsibleSection.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/ActivateModelDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SemanticGenerationSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AiProviderSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SeveritySegmentedSlider.qml"

@@ -1,0 +1,75 @@
+name: editor_tone_sliders
+start: workspace_ready
+defaults:
+  expectTimeoutMs: 10000
+nodes:
+  workspace_ready:
+    op:
+      action: wait
+      target: workspaceHost
+      property: visible
+      eq: true
+    next:
+      - to: open_first_image
+        weight: 1
+  open_first_image:
+    op:
+      action: doubleClick
+      target: thumbnailGridView_firstCard
+    expect:
+      - target: editorWorkspace
+        property: visible
+        eq: true
+      - target: editorAdjustmentPanel_tone
+        property: visible
+        eq: true
+    next:
+      - to: drag_exposure
+        weight: 1
+  drag_exposure:
+    op:
+      action: drag
+      target: toneExposureSlider
+      fromNx: 0.35
+      toNx: 0.75
+      steps: 12
+    expect:
+      - target: toneExposureSlider
+        property: visible
+        eq: true
+    next:
+      - to: drag_contrast
+        weight: 1
+  drag_contrast:
+    op:
+      action: drag
+      target: toneContrastSlider
+      fromNx: 0.4
+      toNx: 0.7
+      steps: 10
+    next:
+      - to: drag_shadows
+        weight: 1
+  drag_shadows:
+    op:
+      action: drag
+      target: toneShadowsSlider
+      fromNx: 0.3
+      toNx: 0.65
+      steps: 10
+    next:
+      - to: drag_highlights
+        weight: 1
+  drag_highlights:
+    op:
+      action: drag
+      target: toneHighlightsSlider
+      fromNx: 0.55
+      toNx: 0.25
+      steps: 10
+    next:
+      - to: capture_tone
+        weight: 1
+  capture_tone:
+    op:
+      action: screenshot

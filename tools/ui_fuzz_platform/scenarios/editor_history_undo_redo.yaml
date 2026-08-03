@@ -1,0 +1,84 @@
+name: editor_history_undo_redo
+start: workspace_ready
+defaults:
+  expectTimeoutMs: 12000
+nodes:
+  workspace_ready:
+    op:
+      action: wait
+      target: workspaceHost
+      property: visible
+      eq: true
+    next:
+      - to: open_first_image
+        weight: 1
+  open_first_image:
+    op:
+      action: doubleClick
+      target: thumbnailGridView_firstCard
+    expect:
+      - target: editorWorkspace
+        property: visible
+        eq: true
+    next:
+      - to: drag_exposure
+        weight: 1
+  drag_exposure:
+    op:
+      action: drag
+      target: toneExposureSlider
+      fromNx: 0.25
+      toNx: 0.8
+      steps: 14
+    next:
+      - to: settle_edit
+        weight: 1
+  settle_edit:
+    op:
+      action: waitMs
+      ms: 1500
+    next:
+      - to: open_history_rail
+        weight: 1
+  open_history_rail:
+    op:
+      action: click
+      target: editorHistoryRailButton
+    expect:
+      - target: editorHistoryVersionsPanel
+        property: visible
+        eq: true
+      - target: editorHistoryUndoButton
+        property: enabled
+        eq: true
+        timeoutMs: 15000
+    next:
+      - to: undo_edit
+        weight: 1
+  undo_edit:
+    op:
+      action: click
+      target: editorHistoryUndoButton
+    expect:
+      - target: editorHistoryRedoButton
+        property: enabled
+        eq: true
+        timeoutMs: 10000
+    next:
+      - to: redo_edit
+        weight: 1
+  redo_edit:
+    op:
+      action: click
+      target: editorHistoryRedoButton
+    expect:
+      - target: editorHistoryUndoButton
+        property: enabled
+        eq: true
+        timeoutMs: 10000
+    next:
+      - to: capture_history
+        weight: 1
+  capture_history:
+    op:
+      action: screenshot
