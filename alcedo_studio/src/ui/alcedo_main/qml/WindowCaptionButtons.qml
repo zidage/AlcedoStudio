@@ -6,6 +6,7 @@ import QtQuick.Layouts
 // components are rejected by qmlcachegen (see InspectorPanel.qml).
 Row {
     id: root
+    objectName: "windowCaptionButtons"
     property var theme: null
     property var host: null
     Layout.preferredHeight: 56

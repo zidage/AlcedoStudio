@@ -699,6 +699,14 @@ target_link_libraries(alcedo_main PRIVATE AlcedoMainQml AlcedoMainQmlplugin)
 
 set(ALCEDO_TEST_HOST_SOURCES
     "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/main.cpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/probe_json.cpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/probe_json.hpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/probe_item_tree.cpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/probe_item_tree.hpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/probe_input_injector.cpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/probe_input_injector.hpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/probe_property_wait.cpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/probe_property_wait.hpp"
     "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/test_probe.cpp"
     "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/test_probe.hpp"
     "${ALCEDO_UI_SHELL_ROOT}/application_module_qml_types.cpp"

@@ -6,6 +6,7 @@ import QtQuick.Layouts
 // caller so it can survive Loader teardown.
 Rectangle {
     id: root
+    objectName: "slidingIconNav"
 
     property var items: []
     property string currentKey: ""

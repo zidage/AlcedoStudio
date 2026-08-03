@@ -4,67 +4,29 @@
 
 #include "test_probe.hpp"
 
-#include <QColor>
-#include <QJsonArray>
+#include "probe_json.hpp"
+
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QMetaProperty>
 #include <QQmlApplicationEngine>
-#include <QQmlProperty>
-#include <QQuickItem>
 #include <QQuickWindow>
 #include <QThread>
-#include <QUrl>
-#include <functional>
 
 namespace alcedo::ui {
-namespace {
-
-auto JsonPath(const QStringList& path) -> QJsonArray {
-  QJsonArray result;
-  for (const QString& part : path) {
-    result.append(part);
-  }
-  return result;
-}
-
-auto JsonObjectForRequest(const QJsonObject& request) -> QJsonObject {
-  QJsonObject response;
-  if (request.contains(QStringLiteral("id"))) {
-    response.insert(QStringLiteral("id"), request.value(QStringLiteral("id")));
-  }
-  return response;
-}
-
-auto SceneRectForItem(QQuickItem* item) -> QRectF {
-  if (item == nullptr) {
-    return {};
-  }
-  if (item->window() != nullptr) {
-    return item->mapRectToScene(item->boundingRect());
-  }
-  return item->boundingRect();
-}
-
-auto ErrorResponse(const QJsonObject& request, const QString& code, const QString& message)
-    -> QJsonObject {
-  QJsonObject response = JsonObjectForRequest(request);
-  response.insert(QStringLiteral("ok"), false);
-  QJsonObject error;
-  error.insert(QStringLiteral("code"), code);
-  error.insert(QStringLiteral("message"), message);
-  response.insert(QStringLiteral("error"), error);
-  return response;
-}
-
-}  // namespace
 
 TestProbe::TestProbe(QQmlApplicationEngine* engine, QQuickWindow* window, QObject* parent)
-    : QObject(parent), engine_(engine), window_(window), server_(this), heartbeat_timer_(this) {
+    : QObject(parent),
+      window_(window),
+      tree_(engine, window),
+      input_(&tree_, window),
+      wait_(&tree_, this),
+      server_(this),
+      heartbeat_timer_(this) {
   heartbeat_timer_.setInterval(250);
   heartbeat_timer_.setTimerType(Qt::PreciseTimer);
   connect(&server_, &QLocalServer::newConnection, this, &TestProbe::HandleNewConnection);
   connect(&heartbeat_timer_, &QTimer::timeout, this, &TestProbe::EmitHeartbeat);
+  connect(&wait_, &ProbePropertyWait::ReplyReady, this, &TestProbe::ForwardWaitReply);
 }
 
 bool TestProbe::Start(const QString& socketName, QString* error) {
@@ -145,7 +107,14 @@ void TestProbe::HandleReadyRead() {
                 QStringLiteral("Each probe request must be one JSON object per line."));
       continue;
     }
-    SendJson(HandleRequest(document.object()));
+
+    const QJsonObject request = document.object();
+    const QString     method  = request.value(QStringLiteral("method")).toString().trimmed();
+    if (method == QStringLiteral("wait")) {
+      wait_.Begin(request);
+      continue;
+    }
+    SendJson(HandleRequest(request));
   }
 }
 
@@ -154,6 +123,7 @@ void TestProbe::HandleSocketDisconnected() {
   if (socket == nullptr || socket != client_) {
     return;
   }
+  wait_.Cancel();
   client_.clear();
   socket->deleteLater();
 }
@@ -168,6 +138,10 @@ void TestProbe::EmitHeartbeat() {
   event.insert(QStringLiteral("guiThread"), QThread::currentThread() == thread());
   event.insert(QStringLiteral("ready"), ready_);
   SendJson(event);
+}
+
+void TestProbe::ForwardWaitReply(const QJsonObject& response) {
+  SendJson(response);
 }
 
 void TestProbe::SendJson(const QJsonObject& object) {
@@ -189,8 +163,8 @@ void TestProbe::SendReadyEvent() {
   SendJson(event);
 }
 
-void TestProbe::SendError(const QJsonValue& requestId, const QString& code,
-                          const QString& message) {
+void TestProbe::SendError(const QJsonValue& requestId, const QString& code, const QString& message,
+                          const QJsonObject& extra) {
   QJsonObject response;
   if (!requestId.isUndefined()) {
     response.insert(QStringLiteral("id"), requestId);
@@ -199,18 +173,17 @@ void TestProbe::SendError(const QJsonValue& requestId, const QString& code,
   QJsonObject error;
   error.insert(QStringLiteral("code"), code);
   error.insert(QStringLiteral("message"), message);
+  for (auto it = extra.constBegin(); it != extra.constEnd(); ++it) {
+    error.insert(it.key(), it.value());
+  }
   response.insert(QStringLiteral("error"), error);
   SendJson(response);
-}
-
-auto TestProbe::BaseResponse(const QJsonObject& request) const -> QJsonObject {
-  return JsonObjectForRequest(request);
 }
 
 auto TestProbe::HandleRequest(const QJsonObject& request) -> QJsonObject {
   const QString method = request.value(QStringLiteral("method")).toString().trimmed();
   if (method == QStringLiteral("ping")) {
-    QJsonObject response = BaseResponse(request);
+    QJsonObject response = probe_json::BaseResponse(request);
     response.insert(QStringLiteral("ok"), true);
     QJsonObject result;
     result.insert(QStringLiteral("status"), QStringLiteral("ok"));
@@ -222,26 +195,27 @@ auto TestProbe::HandleRequest(const QJsonObject& request) -> QJsonObject {
   }
 
   if (method == QStringLiteral("snapshot")) {
-    QJsonObject response = BaseResponse(request);
+    QJsonObject response = probe_json::BaseResponse(request);
     response.insert(QStringLiteral("ok"), true);
-    response.insert(QStringLiteral("result"), Snapshot());
+    response.insert(QStringLiteral("result"), tree_.Snapshot());
     return response;
   }
 
   if (method == QStringLiteral("find")) {
     const QString target = request.value(QStringLiteral("target")).toString().trimmed();
-    const auto    match  = FindTarget(target);
+    const auto    match  = tree_.FindTarget(target);
     if (!match.has_value()) {
-      return ErrorResponse(request, QStringLiteral("target_not_found"),
-                           QStringLiteral("No live QML item matched '%1'.").arg(target));
+      return probe_json::ErrorResponse(
+          request, QStringLiteral("target_not_found"),
+          QStringLiteral("No live QML item matched '%1'.").arg(target));
     }
 
-    QJsonObject response = BaseResponse(request);
+    QJsonObject response = probe_json::BaseResponse(request);
     response.insert(QStringLiteral("ok"), true);
     QJsonObject result;
     result.insert(QStringLiteral("found"), true);
-    result.insert(QStringLiteral("element"), SummarizeItem(match->item, match->path));
-    result.insert(QStringLiteral("path"), JsonPath(match->path));
+    result.insert(QStringLiteral("element"), tree_.SummarizeItem(match->item, match->path));
+    result.insert(QStringLiteral("path"), probe_json::JsonPath(match->path));
     response.insert(QStringLiteral("result"), result);
     return response;
   }
@@ -257,221 +231,61 @@ auto TestProbe::HandleRequest(const QJsonObject& request) -> QJsonObject {
       }
     }
     if (target.isEmpty() || property.isEmpty()) {
-      return ErrorResponse(request, QStringLiteral("invalid_read_target"),
-                           QStringLiteral("read requires an item and property."));
+      return probe_json::ErrorResponse(request, QStringLiteral("invalid_read_target"),
+                                       QStringLiteral("read requires an item and property."));
     }
 
-    const auto match = FindTarget(target);
+    const auto match = tree_.FindTarget(target);
     if (!match.has_value()) {
-      return ErrorResponse(request, QStringLiteral("target_not_found"),
-                           QStringLiteral("No live QML item matched '%1'.").arg(target));
+      return probe_json::ErrorResponse(
+          request, QStringLiteral("target_not_found"),
+          QStringLiteral("No live QML item matched '%1'.").arg(target));
     }
 
-    QVariant value;
-    if (property == QStringLiteral("visible")) {
-      value = match->item->isVisible();
-    } else if (property == QStringLiteral("enabled")) {
-      value = match->item->isEnabled();
-    } else if (property == QStringLiteral("activeFocus")) {
-      value = match->item->hasActiveFocus();
-    } else {
-      const QQmlProperty qml_property(match->item, property);
-      if (!qml_property.isValid()) {
-        return ErrorResponse(
-            request, QStringLiteral("property_not_found"),
-            QStringLiteral("Item '%1' has no readable property '%2'.").arg(target, property));
-      }
-      value = qml_property.read();
+    const auto value = tree_.ReadItemProperty(match->item, property);
+    if (!value.has_value()) {
+      return probe_json::ErrorResponse(
+          request, QStringLiteral("property_not_found"),
+          QStringLiteral("Item '%1' has no readable property '%2'.").arg(target, property));
     }
 
-    QJsonObject response = BaseResponse(request);
+    QJsonObject response = probe_json::BaseResponse(request);
     response.insert(QStringLiteral("ok"), true);
     QJsonObject result;
     result.insert(QStringLiteral("target"), target);
     result.insert(QStringLiteral("property"), property);
-    result.insert(QStringLiteral("value"), VariantToJson(value));
+    result.insert(QStringLiteral("value"), probe_json::VariantToJson(*value));
     response.insert(QStringLiteral("result"), result);
     return response;
   }
 
-  return ErrorResponse(request, QStringLiteral("unsupported_method"),
-                       QStringLiteral("Supported methods are snapshot, find, read, and ping."));
-}
-
-auto TestProbe::Snapshot() const -> QJsonObject {
-  QJsonObject result;
-  result.insert(QStringLiteral("engineLoaded"),
-                engine_ != nullptr && !engine_->rootObjects().isEmpty());
-  result.insert(QStringLiteral("windowTitle"), window_ != nullptr ? window_->title() : QString());
-  result.insert(QStringLiteral("windowVisible"), window_ != nullptr && window_->isVisible());
-
-  QJsonArray elements;
-  if (window_ != nullptr && window_->contentItem() != nullptr) {
-    const std::function<void(QQuickItem*, const QStringList&)> append_items =
-        [&append_items, &elements, this](QQuickItem* item, const QStringList& parent_path) {
-          if (item == nullptr) {
-            return;
-          }
-          QStringList   path = parent_path;
-          const QString name = TargetName(item);
-          if (!name.isEmpty()) {
-            path.append(name);
-          }
-          elements.append(SummarizeItem(item, path));
-          for (QQuickItem* child : item->childItems()) {
-            append_items(child, path);
-          }
-        };
-    append_items(window_->contentItem(), {});
+  if (method == QStringLiteral("click")) {
+    return input_.HandleClick(request, ProbeInputInjector::ClickKind::Single);
   }
-  result.insert(QStringLiteral("elements"), elements);
-  return result;
-}
-
-auto TestProbe::FindTarget(const QString& target) const -> std::optional<TargetMatch> {
-  if (target.isEmpty() || window_ == nullptr || window_->contentItem() == nullptr) {
-    return std::nullopt;
+  if (method == QStringLiteral("doubleClick")) {
+    return input_.HandleClick(request, ProbeInputInjector::ClickKind::Double);
+  }
+  if (method == QStringLiteral("rightClick")) {
+    return input_.HandleClick(request, ProbeInputInjector::ClickKind::Right);
+  }
+  if (method == QStringLiteral("key")) {
+    return input_.HandleKey(request);
+  }
+  if (method == QStringLiteral("typeText")) {
+    return input_.HandleTypeText(request);
+  }
+  if (method == QStringLiteral("drag")) {
+    return input_.HandleDrag(request);
+  }
+  if (method == QStringLiteral("screenshot")) {
+    return input_.HandleScreenshot(request);
   }
 
-  const std::function<std::optional<TargetMatch>(QQuickItem*, const QStringList&)> find_item =
-      [&find_item, &target](QQuickItem*        item,
-                            const QStringList& parent_path) -> std::optional<TargetMatch> {
-    if (item == nullptr) {
-      return std::nullopt;
-    }
-    QStringList   path = parent_path;
-    const QString name = TestProbe::TargetName(item);
-    if (!name.isEmpty()) {
-      path.append(name);
-    }
-    if (item->objectName() == target || TestProbe::TestId(item) == target ||
-        path.join('.') == target) {
-      return TargetMatch{item, path};
-    }
-    for (QQuickItem* child : item->childItems()) {
-      if (const auto found = find_item(child, path); found.has_value()) {
-        return found;
-      }
-    }
-    return std::nullopt;
-  };
-
-  return find_item(window_->contentItem(), {});
-}
-
-auto TestProbe::SummarizeItem(QQuickItem* item, const QStringList& path) const -> QJsonObject {
-  QJsonObject result;
-  if (item == nullptr) {
-    return result;
-  }
-
-  const QString target_name = TargetName(item);
-  if (!target_name.isEmpty()) {
-    result.insert(QStringLiteral("id"), target_name);
-  }
-  const QString test_id = TestId(item);
-  if (!test_id.isEmpty()) {
-    result.insert(QStringLiteral("testId"), test_id);
-  }
-  result.insert(QStringLiteral("objectName"), item->objectName());
-  result.insert(QStringLiteral("type"), QString::fromLatin1(item->metaObject()->className()));
-  result.insert(QStringLiteral("visible"), item->isVisible());
-  result.insert(QStringLiteral("enabled"), item->isEnabled());
-  result.insert(QStringLiteral("activeFocus"), item->hasActiveFocus());
-  result.insert(QStringLiteral("path"), JsonPath(path));
-
-  const QRectF scene_rect = SceneRectForItem(item);
-  QJsonObject  rect;
-  rect.insert(QStringLiteral("x"), scene_rect.x());
-  rect.insert(QStringLiteral("y"), scene_rect.y());
-  rect.insert(QStringLiteral("width"), scene_rect.width());
-  rect.insert(QStringLiteral("height"), scene_rect.height());
-  result.insert(QStringLiteral("sceneRect"), rect);
-
-  for (const char* property_name : {"text", "checked", "currentIndex", "value"}) {
-    const QVariant value = item->property(property_name);
-    if (value.isValid()) {
-      result.insert(QString::fromLatin1(property_name), VariantToJson(value));
-    }
-  }
-  return result;
-}
-
-auto TestProbe::VariantToJson(const QVariant& value) -> QJsonValue {
-  if (!value.isValid() || value.isNull()) {
-    return QJsonValue(QJsonValue::Null);
-  }
-
-  switch (value.typeId()) {
-    case QMetaType::Bool:
-      return QJsonValue(value.toBool());
-    case QMetaType::Int:
-    case QMetaType::Short:
-    case QMetaType::Char16:
-    case QMetaType::Char32:
-      return QJsonValue(value.toInt());
-    case QMetaType::UInt:
-    case QMetaType::UShort:
-    case QMetaType::UChar:
-      return QJsonValue(static_cast<qint64>(value.toUInt()));
-    case QMetaType::LongLong:
-      return QJsonValue(value.toLongLong());
-    case QMetaType::ULongLong:
-      return QJsonValue(static_cast<qint64>(value.toULongLong()));
-    case QMetaType::Float:
-    case QMetaType::Double:
-      return QJsonValue(value.toDouble());
-    case QMetaType::QString:
-      return QJsonValue(value.toString());
-    case QMetaType::QByteArray:
-      return QJsonValue(QString::fromUtf8(value.toByteArray()));
-    case QMetaType::QUrl:
-      return QJsonValue(value.toUrl().toString());
-    case QMetaType::QColor:
-      return QJsonValue(value.value<QColor>().name(QColor::HexArgb));
-    case QMetaType::QStringList: {
-      QJsonArray result;
-      for (const QString& entry : value.toStringList()) {
-        result.append(entry);
-      }
-      return result;
-    }
-    case QMetaType::QVariantList: {
-      QJsonArray result;
-      for (const QVariant& entry : value.toList()) {
-        result.append(VariantToJson(entry));
-      }
-      return result;
-    }
-    case QMetaType::QVariantMap: {
-      QJsonObject       result;
-      const QVariantMap map = value.toMap();
-      for (auto it = map.cbegin(); it != map.cend(); ++it) {
-        result.insert(it.key(), VariantToJson(it.value()));
-      }
-      return result;
-    }
-    default:
-      return QJsonValue(value.toString());
-  }
-}
-
-auto TestProbe::TargetName(QQuickItem* item) -> QString {
-  if (item == nullptr) {
-    return {};
-  }
-  if (!item->objectName().isEmpty()) {
-    return item->objectName();
-  }
-  return TestId(item);
-}
-
-auto TestProbe::TestId(QQuickItem* item) -> QString {
-  if (item == nullptr) {
-    return {};
-  }
-  const QVariant value = item->property("testId");
-  return value.isValid() ? value.toString() : QString();
+  return probe_json::ErrorResponse(
+      request, QStringLiteral("unsupported_method"),
+      QStringLiteral(
+          "Supported methods are snapshot, find, read, click, doubleClick, rightClick, key, "
+          "typeText, drag, wait, screenshot, and ping."));
 }
 
 }  // namespace alcedo::ui

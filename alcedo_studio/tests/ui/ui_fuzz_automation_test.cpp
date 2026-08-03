@@ -21,9 +21,11 @@
 #include <QUuid>
 #include <filesystem>
 #include <optional>
+#include <vector>
 
 #include "test_probe.hpp"
 #include "ui/album_backend_test_fixture.hpp"
+#include "ui/alcedo_main/album_backend/album_types.hpp"
 #include "ui/alcedo_main/album_backend/application_module_host.hpp"
 #include "ui/alcedo_main/album_backend/import_export.hpp"
 #include "ui/alcedo_main/album_backend/project_module.hpp"
@@ -116,7 +118,27 @@ class ProbeClient final {
 };
 
 auto UniqueSocketName() -> QString {
-  return QStringLiteral("alcedo_phase0_%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+  return QStringLiteral("alcedo_phase1_%1").arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+}
+
+void SeedLibraryThumbnails(alcedo::ui::ApplicationModuleHost& host, int count) {
+  std::vector<alcedo::ui::AlbumItem> items;
+  items.reserve(static_cast<size_t>(count));
+  for (int i = 0; i < count; ++i) {
+    alcedo::ui::AlbumItem item;
+    item.element_id     = static_cast<sl_element_id_t>(1000 + i);
+    item.image_id       = static_cast<image_id_t>(2000 + i);
+    item.file_id        = static_cast<sl_element_id_t>(3000 + i);
+    item.file_name      = QStringLiteral("test_%1.arw").arg(i);
+    item.extension      = QStringLiteral("arw");
+    item.thumb_data_url = QString();
+    items.push_back(item);
+  }
+  host.library()->view_state().all_images_  = items;
+  host.library()->view_state().total_count_ = items.size();
+  host.library()->model().resetModel(items, items.size());
+  host.library()->NotifyThumbnailsChanged();
+  host.library()->NotifyCountsChanged();
 }
 
 class UiFuzzAutomationFixture : public alcedo::ui::test::ApplicationModuleHostTestFixture {
@@ -325,4 +347,156 @@ TEST(UiFuzzAutomation, TestProbeReportsStaleTargetAfterDialogDestroyed) {
   EXPECT_EQ(
       stale->value(QStringLiteral("error")).toObject().value(QStringLiteral("code")).toString(),
       QStringLiteral("target_not_found"));
+}
+
+TEST_F(UiFuzzAutomationFixture, InputClickActivatesNavButtonAndSwitchesWorkspace) {
+  ASSERT_TRUE(LoadAutomationWindow());
+  ASSERT_TRUE(CreateTestProject(host_));
+  ASSERT_TRUE(host_.project()->ServiceReady());
+  SeedLibraryThumbnails(host_, 4);
+  alcedo::ui::test::ProcessEvents(80);
+
+  alcedo::ui::TestProbe probe(&engine_, window_);
+  const QString         socket_name = UniqueSocketName();
+  QString               probe_error;
+  ASSERT_TRUE(probe.Start(socket_name, &probe_error)) << probe_error.toStdString();
+
+  ProbeClient client;
+  ASSERT_TRUE(client.Connect(socket_name));
+  probe.MarkReady();
+  ASSERT_TRUE(client.WaitForEvent(QStringLiteral("ready")));
+
+  ASSERT_TRUE(client.SendRequest(
+      1, QStringLiteral("click"),
+      {{QStringLiteral("target"), QStringLiteral("libraryNavButton")}}));
+  const auto library_click = client.WaitForResponse(1);
+  ASSERT_TRUE(library_click.has_value());
+  ASSERT_TRUE(library_click->value(QStringLiteral("ok")).toBool());
+  alcedo::ui::test::ProcessEvents(50);
+
+  ASSERT_TRUE(client.SendRequest(
+      2, QStringLiteral("read"),
+      {{QStringLiteral("target"), QStringLiteral("libraryWorkspace")},
+       {QStringLiteral("property"), QStringLiteral("visible")}}));
+  const auto library_visible = client.WaitForResponse(2);
+  ASSERT_TRUE(library_visible.has_value());
+  ASSERT_TRUE(library_visible->value(QStringLiteral("ok")).toBool());
+  EXPECT_TRUE(library_visible->value(QStringLiteral("result"))
+                  .toObject()
+                  .value(QStringLiteral("value"))
+                  .toBool());
+
+  ASSERT_TRUE(client.SendRequest(
+      3, QStringLiteral("find"),
+      {{QStringLiteral("target"), QStringLiteral("thumbnailGridView_firstCard")}}));
+  const auto first_card = client.WaitForResponse(3);
+  ASSERT_TRUE(first_card.has_value());
+  ASSERT_TRUE(first_card->value(QStringLiteral("ok")).toBool())
+      << first_card->value(QStringLiteral("error"))
+             .toObject()
+             .value(QStringLiteral("message"))
+             .toString()
+             .toStdString();
+
+  ASSERT_TRUE(client.SendRequest(
+      4, QStringLiteral("doubleClick"),
+      {{QStringLiteral("target"), QStringLiteral("thumbnailGridView_firstCard")}}));
+  const auto open_editor = client.WaitForResponse(4);
+  ASSERT_TRUE(open_editor.has_value());
+  ASSERT_TRUE(open_editor->value(QStringLiteral("ok")).toBool())
+      << open_editor->value(QStringLiteral("error"))
+             .toObject()
+             .value(QStringLiteral("message"))
+             .toString()
+             .toStdString();
+  alcedo::ui::test::ProcessEvents(80);
+
+  EXPECT_EQ(host_.workspace_router()->workspace(), QStringLiteral("editor"));
+
+  ASSERT_TRUE(client.SendRequest(
+      5, QStringLiteral("wait"),
+      {{QStringLiteral("target"), QStringLiteral("editorWorkspace")},
+       {QStringLiteral("property"), QStringLiteral("visible")},
+       {QStringLiteral("eq"), true},
+       {QStringLiteral("timeoutMs"), 5000}}));
+  const auto editor_visible = client.WaitForResponse(5, 6000);
+  ASSERT_TRUE(editor_visible.has_value());
+  ASSERT_TRUE(editor_visible->value(QStringLiteral("ok")).toBool());
+  EXPECT_TRUE(editor_visible->value(QStringLiteral("actual")).toBool());
+}
+
+TEST(UiFuzzAutomation, InputClickRejectsElementCoveredByModalOverlay) {
+  QQuickWindow window;
+  window.setWidth(400);
+  window.setHeight(300);
+  window.show();
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+
+  auto* button = new QQuickItem(window.contentItem());
+  button->setObjectName(QStringLiteral("coveredActionButton"));
+  button->setX(40);
+  button->setY(40);
+  button->setWidth(120);
+  button->setHeight(40);
+
+  auto* overlay = new QQuickItem(window.contentItem());
+  overlay->setObjectName(QStringLiteral("testModalOverlay"));
+  overlay->setProperty("modal", true);
+  overlay->setZ(100);
+  overlay->setWidth(400);
+  overlay->setHeight(300);
+
+  alcedo::ui::TestProbe probe(nullptr, &window);
+  const QString         socket_name = UniqueSocketName();
+  QString               probe_error;
+  ASSERT_TRUE(probe.Start(socket_name, &probe_error)) << probe_error.toStdString();
+  ProbeClient client;
+  ASSERT_TRUE(client.Connect(socket_name));
+  probe.MarkReady();
+  ASSERT_TRUE(client.WaitForEvent(QStringLiteral("ready")));
+
+  ASSERT_TRUE(client.SendRequest(
+      1, QStringLiteral("click"),
+      {{QStringLiteral("target"), QStringLiteral("coveredActionButton")}}));
+  const auto rejected = client.WaitForResponse(1);
+  ASSERT_TRUE(rejected.has_value());
+  EXPECT_FALSE(rejected->value(QStringLiteral("ok")).toBool());
+  EXPECT_EQ(
+      rejected->value(QStringLiteral("error")).toObject().value(QStringLiteral("code")).toString(),
+      QStringLiteral("target_covered"));
+}
+
+TEST(UiFuzzAutomation, TestProbeWaitForPropertyTimeoutReportsLastObservedValue) {
+  QQuickWindow window;
+  window.setWidth(320);
+  window.setHeight(240);
+  auto* status = new QQuickItem(window.contentItem());
+  status->setObjectName(QStringLiteral("importStatus"));
+  status->setProperty("text", QStringLiteral("Running"));
+  status->setWidth(100);
+  status->setHeight(24);
+  window.show();
+  QCoreApplication::processEvents(QEventLoop::AllEvents, 100);
+
+  alcedo::ui::TestProbe probe(nullptr, &window);
+  const QString         socket_name = UniqueSocketName();
+  QString               probe_error;
+  ASSERT_TRUE(probe.Start(socket_name, &probe_error)) << probe_error.toStdString();
+  ProbeClient client;
+  ASSERT_TRUE(client.Connect(socket_name));
+  probe.MarkReady();
+  ASSERT_TRUE(client.WaitForEvent(QStringLiteral("ready")));
+
+  ASSERT_TRUE(client.SendRequest(
+      1, QStringLiteral("wait"),
+      {{QStringLiteral("target"), QStringLiteral("importStatus")},
+       {QStringLiteral("property"), QStringLiteral("text")},
+       {QStringLiteral("eq"), QStringLiteral("Finished")},
+       {QStringLiteral("timeoutMs"), 200}}));
+  const auto timed_out = client.WaitForResponse(1, 2000);
+  ASSERT_TRUE(timed_out.has_value());
+  EXPECT_FALSE(timed_out->value(QStringLiteral("ok")).toBool());
+  const QJsonObject error = timed_out->value(QStringLiteral("error")).toObject();
+  EXPECT_EQ(error.value(QStringLiteral("code")).toString(), QStringLiteral("wait_timeout"));
+  EXPECT_EQ(error.value(QStringLiteral("actual")).toString(), QStringLiteral("Running"));
 }

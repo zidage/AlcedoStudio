@@ -8,8 +8,7 @@ Affected areas: `alcedo_studio/src/ui/alcedo_main` (objectName coverage, automat
 CMake target graph (new executable), `tools/` (new top-level directory), `alcedo_studio/tests`
 (named GoogleTest coverage for the test host).
 
-Status: Phase 0 complete on 2026-08-03; revised the same day to replace the embedded WebSocket
-automation server with a thin in-process TestProbe behind QLocalSocket. Phase 1 is pending.
+Status: Phase 0–1 complete on 2026-08-03; Phase 2 (YAML DSL and runner core) is pending.
 
 ## Problem
 
@@ -343,6 +342,70 @@ all three Phase 0 tests.
 - Tests: `InputClickActivatesNavButtonAndSwitchesWorkspace`,
   `InputClickRejectsElementCoveredByModalOverlay`,
   `TestProbeWaitForPropertyTimeoutReportsLastObservedValue`.
+
+##### Phase 1 completion record (2026-08-03)
+
+**Status:** complete — real-path mouse/key injection, wait-with-timeout, screenshot, modal
+coverage rejection, and objectName coverage for nav/toolbar/thumbnail/editor surfaces are in place
+and covered by executed tests.
+
+**Primary success call chain:**
+
+```text
+runner JSON Lines click/doubleClick
+  -> TestProbe::HandleClick
+  -> FindTarget(objectName) on live QQuickItem tree
+  -> ValidateClickable (visible/enabled/not modal-covered)
+  -> QMouseEvent press/release(/dblclick) via QQuickWindow dispatch
+  -> IconActionButton/Button/MouseArea real handlers
+  -> WorkspaceRouter / openEditor side effects
+  -> wait/read editorWorkspace.visible == true
+```
+
+**Primary failure call chain:**
+
+```text
+click on target under modal overlay
+  -> TopmostItemAt + IsModalOverlayAncestor
+  -> target_covered error (no event injection)
+wait matcher never satisfied
+  -> notify/poll EvaluatePendingWait keeps last_actual
+  -> wait_timeout error with actual = last observed value
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+|---|---|---|
+| `InputClickActivatesNavButtonAndSwitchesWorkspace` | `UiFuzzAutomationTest.exe` | PASS — libraryNavButton click kept library visible; doubleClick on `thumbnailGridView_firstCard` opened editor; wait confirmed `editorWorkspace.visible` |
+| `InputClickRejectsElementCoveredByModalOverlay` | `UiFuzzAutomationTest.exe` | PASS — click under `modal: true` overlay returned `target_covered` |
+| `TestProbeWaitForPropertyTimeoutReportsLastObservedValue` | `UiFuzzAutomationTest.exe` | PASS — wrong wait timed out with `actual: "Running"` |
+| Phase 0 regression | `UiFuzzAutomationTest.exe` | PASS — all 3 Phase 0 tests still green |
+| `alcedo_studio_test_host` build | `win_debug` | PASS — host linked with extended TestProbe |
+
+Commands executed:
+
+```text
+cmd /c scripts\msvc_env.cmd --build --preset win_debug --target alcedo_studio_test_host UiFuzzAutomationTest --parallel 4
+$env:QT_QPA_PLATFORM='offscreen'; .\UiFuzzAutomationTest.exe --gtest_filter='*InputClick*:*WaitForProperty*'
+$env:QT_QPA_PLATFORM='offscreen'; .\UiFuzzAutomationTest.exe
+```
+
+Suite totals: 6/6 UiFuzzAutomationTest passed (3 Phase 1 + 3 Phase 0).
+
+**Checklist / exit condition:** complete — position-based injection, covered/invisible/disabled
+rejection, wait with notify+poll and last-observed timeout reporting, objectName audit additions,
+and the three required tests are evidenced above.
+
+**LOC note (grill-code-review):** split after Phase 1 into responsibility-owned modules —
+`probe_json` (stateless helpers), `ProbeItemTree` (observation), `ProbeInputInjector` (input +
+screenshot), `ProbePropertyWait` (async wait state), `TestProbe` (IPC facade). No single probe
+source exceeds ~400 LOC. `ui_fuzz_automation_test.cpp` remains ~500.
+
+**Remaining gaps:** YAML DSL, runner, and web dashboard remain Phase 2–3. Invisible/disabled
+rejection paths are implemented in `ValidateClickable` but are not covered by dedicated named tests
+yet (only modal-covered is named). Key/typeText/drag/screenshot are wired in the probe IPC surface
+without separate Phase 1 named tests (screenshot/drag become critical in Phase 2 failure bundles).
 
 ### Phase 2 — YAML DSL and runner core (platform, headless)
 
