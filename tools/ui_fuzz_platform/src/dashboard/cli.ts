@@ -27,6 +27,9 @@ async function main(): Promise<void> {
   const host = process.env.HOST ?? "127.0.0.1";
   const port = Number.parseInt(process.env.PORT ?? "3030", 10);
   const dev = process.env.NODE_ENV !== "production";
+  // Default to development so next.config.mjs picks the dev-only distDir;
+  // `next build` forces NODE_ENV=production itself.
+  process.env.NODE_ENV = process.env.NODE_ENV ?? "development";
   const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
   const dbPath = defaultResultDbPath();
   const resultStore = new ResultStore(dbPath);
