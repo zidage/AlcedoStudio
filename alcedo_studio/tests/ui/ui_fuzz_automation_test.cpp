@@ -349,7 +349,7 @@ TEST(UiFuzzAutomation, TestProbeReportsStaleTargetAfterDialogDestroyed) {
       QStringLiteral("target_not_found"));
 }
 
-TEST_F(UiFuzzAutomationFixture, InputClickActivatesNavButtonAndSwitchesWorkspace) {
+TEST_F(UiFuzzAutomationFixture, InputClickReturnsFromEditorToLibrary) {
   ASSERT_TRUE(LoadAutomationWindow());
   ASSERT_TRUE(CreateTestProject(host_));
   ASSERT_TRUE(host_.project()->ServiceReady());
@@ -423,6 +423,27 @@ TEST_F(UiFuzzAutomationFixture, InputClickActivatesNavButtonAndSwitchesWorkspace
   ASSERT_TRUE(editor_visible.has_value());
   ASSERT_TRUE(editor_visible->value(QStringLiteral("ok")).toBool());
   EXPECT_TRUE(editor_visible->value(QStringLiteral("actual")).toBool());
+
+  ASSERT_TRUE(client.SendRequest(
+      6, QStringLiteral("click"),
+      {{QStringLiteral("target"), QStringLiteral("libraryNavButton")}}));
+  const auto return_to_library = client.WaitForResponse(6);
+  ASSERT_TRUE(return_to_library.has_value());
+  ASSERT_TRUE(return_to_library->value(QStringLiteral("ok")).toBool());
+  alcedo::ui::test::ProcessEvents(80);
+
+  EXPECT_EQ(host_.workspace_router()->workspace(), QStringLiteral("library"));
+
+  ASSERT_TRUE(client.SendRequest(
+      7, QStringLiteral("wait"),
+      {{QStringLiteral("target"), QStringLiteral("libraryWorkspace")},
+       {QStringLiteral("property"), QStringLiteral("visible")},
+       {QStringLiteral("eq"), true},
+       {QStringLiteral("timeoutMs"), 5000}}));
+  const auto library_visible_again = client.WaitForResponse(7, 6000);
+  ASSERT_TRUE(library_visible_again.has_value());
+  ASSERT_TRUE(library_visible_again->value(QStringLiteral("ok")).toBool());
+  EXPECT_TRUE(library_visible_again->value(QStringLiteral("actual")).toBool());
 }
 
 TEST(UiFuzzAutomation, InputClickRejectsElementCoveredByModalOverlay) {

@@ -21,6 +21,16 @@ nodes:
         property: visible
         eq: true
     next:
+      - to: wait_for_tone_nav
+        weight: 1
+  wait_for_tone_nav:
+    op:
+      action: wait
+      target: editorAdjustmentNav_tone
+      property: enabled
+      eq: true
+      timeoutMs: 30000
+    next:
       - to: switch_to_tone
         weight: 1
   switch_to_tone:
@@ -32,39 +42,55 @@ nodes:
         property: visible
         eq: true
     next:
-      - to: drag_exposure
+      - to: focus_exposure
         weight: 1
-  drag_exposure:
+  focus_exposure:
     op:
-      action: drag
+      action: click
       target: toneExposureSlider
-      fromNx: 0.35
-      toNx: 0.75
-      steps: 12
-    expect:
-      - target: toneExposureSlider
-        property: visible
-        eq: true
     next:
-      - to: drag_contrast
+      - to: increase_exposure
         weight: 1
-  drag_contrast:
+  increase_exposure:
     op:
-      action: drag
+      # Qt.Key_Right. AdjustmentSlider debounces this into one settled edit.
+      action: key
+      key: 16777236
+    next:
+      - to: settle_exposure
+        weight: 1
+  settle_exposure:
+    op:
+      action: waitMs
+      ms: 750
+    next:
+      - to: focus_contrast
+        weight: 1
+  focus_contrast:
+    op:
+      action: click
       target: toneContrastSlider
-      fromNx: 0.4
-      toNx: 0.7
-      steps: 10
     next:
-      - to: drag_shadows
+      - to: increase_contrast
         weight: 1
-  drag_shadows:
+  increase_contrast:
     op:
-      action: drag
-      target: toneShadowsSlider
-      fromNx: 0.3
-      toNx: 0.65
-      steps: 10
+      action: key
+      key: 16777236
+    next:
+      - to: settle_contrast
+        weight: 1
+  settle_contrast:
+    op:
+      action: waitMs
+      ms: 750
+    next:
+      - to: focus_highlights
+        weight: 1
+  focus_highlights:
+    op:
+      action: click
+      target: toneHighlightsSlider
     next:
       - to: drag_highlights
         weight: 1
@@ -72,9 +98,38 @@ nodes:
     op:
       action: drag
       target: toneHighlightsSlider
-      fromNx: 0.55
-      toNx: 0.25
+      fromNx: 0.5
+      toNx: 0.35
+      ny: 0.7
       steps: 10
+    next:
+      - to: settle_highlights
+        weight: 1
+  settle_highlights:
+    op:
+      action: waitMs
+      ms: 750
+    next:
+      - to: focus_shadows
+        weight: 1
+  focus_shadows:
+    op:
+      action: click
+      target: toneShadowsSlider
+    next:
+      - to: increase_shadows
+        weight: 1
+  increase_shadows:
+    op:
+      action: key
+      key: 16777236
+    next:
+      - to: settle_shadows
+        weight: 1
+  settle_shadows:
+    op:
+      action: waitMs
+      ms: 1000
     next:
       - to: capture_tone
         weight: 1

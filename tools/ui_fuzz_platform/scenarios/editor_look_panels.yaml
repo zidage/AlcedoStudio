@@ -21,6 +21,16 @@ nodes:
         property: visible
         eq: true
     next:
+      - to: wait_for_look_nav
+        weight: 1
+  wait_for_look_nav:
+    op:
+      action: wait
+      target: editorAdjustmentNav_look
+      property: enabled
+      eq: true
+      timeoutMs: 30000
+    next:
       - to: open_look_panel
         weight: 1
   open_look_panel:
@@ -32,35 +42,53 @@ nodes:
         property: visible
         eq: true
     next:
-      - to: drag_cct
+      - to: focus_saturation
         weight: 1
-  drag_cct:
+  focus_saturation:
     op:
-      action: drag
-      target: lookCctSlider
-      fromNx: 0.3
-      toNx: 0.7
-      steps: 10
-    next:
-      - to: drag_saturation
-        weight: 1
-  drag_saturation:
-    op:
-      action: drag
+      action: click
       target: lookSaturationSlider
-      fromNx: 0.4
-      toNx: 0.75
-      steps: 10
     next:
-      - to: drag_vibrance
+      - to: increase_saturation
         weight: 1
-  drag_vibrance:
+  increase_saturation:
     op:
-      action: drag
+      # Qt.Key_Right; uses AdjustmentSlider's real keyboard edit path without
+      # batching live pointer updates inside one probe request.
+      action: key
+      key: 16777236
+    next:
+      - to: settle_saturation
+        weight: 1
+  settle_saturation:
+    op:
+      action: waitMs
+      ms: 750
+    next:
+      - to: focus_vibrance
+        weight: 1
+  focus_vibrance:
+    op:
+      action: click
       target: lookVibranceSlider
-      fromNx: 0.35
-      toNx: 0.7
-      steps: 10
+    next:
+      - to: decrease_vibrance
+        weight: 1
+  decrease_vibrance:
+    op:
+      # Qt.Key_Left.
+      action: key
+      key: 16777234
+    next:
+      - to: wait_for_library_nav
+        weight: 1
+  wait_for_library_nav:
+    op:
+      action: wait
+      target: libraryNavButton
+      property: enabled
+      eq: true
+      timeoutMs: 15000
     next:
       - to: back_to_library
         weight: 1
