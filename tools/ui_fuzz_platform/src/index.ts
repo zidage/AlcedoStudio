@@ -21,4 +21,7 @@ export * from "./run.js";
 export * from "./process-tree.js";
 export * from "./run-events.js";
 export * from "./process-manager.js";
+export * from "./result-store.js";
+export * from "./replay.js";
+export * from "./paths.js";
 export * from "./dashboard/http-server.js";

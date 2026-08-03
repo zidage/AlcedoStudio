@@ -7,6 +7,9 @@
  * {@link runScenario}, streams live log/heartbeat/step events to subscribers,
  * and on stop kills the entire host process tree so no orphans remain.
  *
+ * Completed runs are archived into the optional {@link ResultStore} (Phase 4)
+ * so the results browser and replay-by-seed can load seed, steps, and log tail.
+ *
  * One manager instance is expected per dashboard server process. Concurrent
  * multi-run fuzzing is Phase 6+ scope.
  */
@@ -27,6 +30,7 @@ import { runScenario, type RunProgressHooks, type RunResult } from "./run.js";
 import { DEFAULT_RUN_CONFIG, type Op, type RunConfig } from "./scenario.js";
 import type { HostHandle } from "./host-process.js";
 import type { StepRecord } from "./walker.js";
+import type { ResultStore } from "./result-store.js";
 
 /** Optional overrides used by tests to spawn a fake host instead of a Qt binary. */
 export interface ProcessManagerOptions {
@@ -34,6 +38,8 @@ export interface ProcessManagerOptions {
   readonly hostCommandOverride?: readonly string[];
   /** Injectable clock for elapsed-time snapshots. */
   readonly clock?: () => number;
+  /** When set, finished runs (including stop) are archived for the results browser. */
+  readonly resultStore?: ResultStore;
 }
 
 /**
@@ -47,10 +53,16 @@ export class ProcessManager extends EventEmitter {
   private abortController: AbortController | undefined;
   private runPromise: Promise<void> | undefined;
   private readonly clock: () => number;
+  private activeParentRunId: string | undefined;
 
   constructor(private readonly options: ProcessManagerOptions = {}) {
     super();
     this.clock = options.clock ?? (() => Date.now());
+  }
+
+  /** Result store used for archival, when configured. */
+  get resultStore(): ResultStore | undefined {
+    return this.options.resultStore;
   }
 
   /** Current run snapshot (safe to serialize to JSON for GET /api/runs/active). */
@@ -67,6 +79,9 @@ export class ProcessManager extends EventEmitter {
   /**
    * Starts a managed run. Rejects when another run is already active.
    * Returns the assigned `runId` once the session has entered `starting`.
+   *
+   * When `request.parentRunId` is set, the archived row links to the original
+   * failure so replay provenance is visible in the results browser.
    */
   async start(request: StartRunRequest): Promise<string> {
     if (this.isBusy()) {
@@ -89,6 +104,7 @@ export class ProcessManager extends EventEmitter {
     this.abortRequested = false;
     this.abortController = new AbortController();
     this.host = undefined;
+    this.activeParentRunId = request.parentRunId;
     this.snapshot = idleSnapshot({
       status: "starting",
       runId,
@@ -99,6 +115,8 @@ export class ProcessManager extends EventEmitter {
       livenessThresholdMs,
       startedAt,
       elapsedMs: 0,
+      persistedRunId: null,
+      parentRunId: request.parentRunId ?? null,
     });
     this.emitEvent({ type: "status", snapshot: this.getSnapshot() });
 
@@ -204,9 +222,9 @@ export class ProcessManager extends EventEmitter {
       const result = await runScenario(scenario, config, hooks);
       if (this.abortRequested && result.verdict !== "pass") {
         // Forced kill often surfaces as crash/correctness; keep operator reason.
-        this.finish(result, "Run stopped by operator.");
+        this.finish(result, config, scenarioPath, "Run stopped by operator.");
       } else {
-        this.finish(result);
+        this.finish(result, config, scenarioPath);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -273,21 +291,66 @@ export class ProcessManager extends EventEmitter {
     };
   }
 
-  private finish(result: RunResult, overrideReason?: string): void {
+  private finish(
+    result: RunResult,
+    config: RunConfig,
+    scenarioPath: string,
+    overrideReason?: string,
+  ): void {
     this.host = undefined;
+    const failureReason = overrideReason ?? result.failure?.reason ?? null;
+    const archivedResult =
+      overrideReason !== undefined && result.failure !== undefined
+        ? {
+            ...result,
+            failure: { ...result.failure, reason: overrideReason },
+          }
+        : overrideReason !== undefined
+          ? {
+              ...result,
+              failure: {
+                kind: "op" as const,
+                nodeId: result.steps.at(-1)?.nodeId ?? scenarioPath,
+                reason: overrideReason,
+              },
+            }
+          : result;
+
+    let persistedRunId: string | null = null;
+    const store = this.options.resultStore;
+    if (store !== undefined) {
+      try {
+        persistedRunId = store.archiveRun({
+          result: archivedResult,
+          config,
+          scenarioPath,
+          runId: this.snapshot.runId ?? undefined,
+          parentRunId: this.activeParentRunId,
+          logTail: result.logTail,
+          treeSnapshot: result.treeSnapshot,
+          screenshotPath: result.bundle?.screenshotPath,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        this.patchSnapshot({ error: `Failed to archive run: ${message}` });
+      }
+    }
+
     this.patchSnapshot({
       status: "finished",
       hostPid: null,
       probeSocket: result.probeSocket ?? this.snapshot.probeSocket,
       verdict: result.verdict,
-      failureReason: overrideReason ?? result.failure?.reason ?? null,
+      failureReason,
       stepCounter: result.steps.length,
       currentNodeId: result.steps.at(-1)?.nodeId ?? this.snapshot.currentNodeId,
       currentOp: (result.steps.at(-1)?.op as Op | undefined) ?? this.snapshot.currentOp,
       heartbeatAlive: false,
+      persistedRunId,
+      parentRunId: this.activeParentRunId ?? null,
     });
     const snapshot = this.getSnapshot();
-    this.emitEvent({ type: "finished", result, snapshot });
+    this.emitEvent({ type: "finished", result: archivedResult, snapshot });
     this.emitEvent({ type: "status", snapshot });
   }
 

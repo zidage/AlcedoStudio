@@ -3,27 +3,35 @@
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
 /**
- * HTTP + WebSocket surface for the Phase 3 dashboard. The Next.js UI talks to
- * these routes; the Qt host is never reached from the browser directly.
+ * HTTP + WebSocket surface for the dashboard. The Next.js UI talks to these
+ * routes; the Qt host is never reached from the browser directly.
  *
  * Routes:
  * - GET  /api/health
  * - GET  /api/runs/active          -> ActiveRunSnapshot
  * - POST /api/runs/start           -> { runId }
  * - POST /api/runs/stop            -> ActiveRunSnapshot
+ * - GET  /api/runs                 -> StoredRun[]
+ * - GET  /api/runs/:id             -> StoredRunDetail
+ * - POST /api/runs/:id/replay      -> { runId } (starts managed replay)
  * - WS   /ws/runs                  -> RunManagerEvent JSON frames
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import { ProcessManager } from "../process-manager.js";
+import { defaultResultDbPath } from "../paths.js";
+import { ResultStore } from "../result-store.js";
 import type { RunManagerEvent, StartRunRequest } from "../run-events.js";
 
 export interface DashboardServerOptions {
   readonly host?: string;
   readonly port?: number;
   readonly manager?: ProcessManager;
+  /** When omitted and manager has no store, opens {@link defaultResultDbPath}. */
+  readonly resultStore?: ResultStore;
   /** Optional Next.js request handler; when omitted, unknown paths return 404. */
   readonly nextHandler?: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>;
 }
@@ -31,6 +39,7 @@ export interface DashboardServerOptions {
 export interface DashboardServer {
   readonly server: Server;
   readonly manager: ProcessManager;
+  readonly resultStore: ResultStore | undefined;
   readonly port: number;
   readonly host: string;
   close(): Promise<void>;
@@ -43,11 +52,26 @@ export interface DashboardServer {
 export async function startDashboardServer(options: DashboardServerOptions = {}): Promise<DashboardServer> {
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? 0;
-  const manager = options.manager ?? new ProcessManager();
+
+  let ownedStore = false;
+  let resultStore = options.resultStore ?? options.manager?.resultStore;
+  if (resultStore === undefined && options.manager === undefined) {
+    resultStore = new ResultStore(defaultResultDbPath());
+    ownedStore = true;
+  }
+
+  const manager =
+    options.manager ??
+    new ProcessManager({
+      resultStore,
+    });
+
+  // Prefer the manager's store when both exist so archive and query share one DB.
+  const store = manager.resultStore ?? resultStore;
   const nextHandler = options.nextHandler;
 
   const server = createServer((req, res) => {
-    void handleHttp(req, res, manager, nextHandler);
+    void handleHttp(req, res, manager, store, nextHandler);
   });
 
   const wss = new WebSocketServer({ server, path: "/ws/runs" });
@@ -80,6 +104,7 @@ export async function startDashboardServer(options: DashboardServerOptions = {})
   return {
     server,
     manager,
+    resultStore: store,
     port: address.port,
     host,
     async close() {
@@ -92,6 +117,9 @@ export async function startDashboardServer(options: DashboardServerOptions = {})
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });
+      if (ownedStore && store !== undefined) {
+        store.close();
+      }
     },
   };
 }
@@ -100,6 +128,7 @@ async function handleHttp(
   req: IncomingMessage,
   res: ServerResponse,
   manager: ProcessManager,
+  store: ResultStore | undefined,
   nextHandler: DashboardServerOptions["nextHandler"],
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
@@ -125,6 +154,90 @@ async function handleHttp(
     if (req.method === "POST" && url.pathname === "/api/runs/stop") {
       const snapshot = await manager.stop();
       sendJson(res, 200, snapshot);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/runs") {
+      if (store === undefined) {
+        sendJson(res, 503, { error: "Result store is not configured." });
+        return;
+      }
+      const limit = Number.parseInt(url.searchParams.get("limit") ?? "100", 10);
+      sendJson(res, 200, { runs: store.listRuns(Number.isFinite(limit) ? limit : 100) });
+      return;
+    }
+
+    const runDetailMatch = /^\/api\/runs\/([^/]+)$/.exec(url.pathname);
+    if (req.method === "GET" && runDetailMatch !== null) {
+      if (store === undefined) {
+        sendJson(res, 503, { error: "Result store is not configured." });
+        return;
+      }
+      const runId = decodeURIComponent(runDetailMatch[1]!);
+      if (runId === "active") {
+        sendJson(res, 200, manager.getSnapshot());
+        return;
+      }
+      const detail = store.getRunDetail(runId);
+      if (detail === undefined) {
+        sendJson(res, 404, { error: `Run not found: ${runId}` });
+        return;
+      }
+      sendJson(res, 200, detail);
+      return;
+    }
+
+    const replayMatch = /^\/api\/runs\/([^/]+)\/replay$/.exec(url.pathname);
+    if (req.method === "POST" && replayMatch !== null) {
+      if (store === undefined) {
+        sendJson(res, 503, { error: "Result store is not configured." });
+        return;
+      }
+      const originalRunId = decodeURIComponent(replayMatch[1]!);
+      const original = store.getRun(originalRunId);
+      if (original === undefined) {
+        sendJson(res, 404, { error: `Run not found: ${originalRunId}` });
+        return;
+      }
+      if (original.scenarioPath === null || original.scenarioPath.length === 0) {
+        sendJson(res, 400, { error: "Run has no scenario_path; cannot replay." });
+        return;
+      }
+
+      const body = (await readJson(req)) as Partial<StartRunRequest>;
+      const hostPath =
+        typeof body.hostPath === "string" && body.hostPath.length > 0
+          ? body.hostPath
+          : original.config.hostPath;
+      if (hostPath === undefined || hostPath.length === 0) {
+        sendJson(res, 400, {
+          error: "hostPath is required for replay when the original run did not store one.",
+        });
+        return;
+      }
+
+      const runId = await manager.start({
+        scenarioPath: original.scenarioPath,
+        hostPath,
+        projectPath: body.projectPath ?? original.config.projectPath,
+        importDir: body.importDir ?? original.config.importDir,
+        seed: original.seed,
+        maxSteps: original.config.maxSteps,
+        maxDurationMs: original.config.maxDurationMs,
+        livenessThresholdMs: original.config.livenessThresholdMs,
+        startupTimeoutMs: original.config.startupTimeoutMs,
+        reuseProject: body.reuseProject ?? original.config.reuseProject,
+        outDir:
+          body.outDir ??
+          join("build", "tmp", "ui_fuzz_platform", `replay-${originalRunId}-${Date.now()}`),
+        parentRunId: originalRunId,
+      });
+      sendJson(res, 202, {
+        runId,
+        parentRunId: originalRunId,
+        seed: original.seed,
+        snapshot: manager.getSnapshot(),
+      });
       return;
     }
 

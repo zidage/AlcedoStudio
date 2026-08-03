@@ -38,7 +38,9 @@ import {
   HeartOutlined,
   PauseCircleOutlined,
   PlayCircleOutlined,
+  UnorderedListOutlined,
 } from "@ant-design/icons";
+import Link from "next/link";
 
 import { fetchActiveRun, runsWebSocketUrl, startRun, stopRun } from "../../lib/api";
 import type { ActiveRunSnapshot, DashboardWsEvent, LogLine, StartRunFormValues } from "../../lib/types";
@@ -173,6 +175,9 @@ export default function ActiveRunPage(): React.ReactElement {
       }
       extra={
         <Space>
+          <Link href="/runs">
+            <Button icon={<UnorderedListOutlined />}>Results</Button>
+          </Link>
           <Button
             type="primary"
             icon={<PlayCircleOutlined />}
@@ -285,6 +290,14 @@ export default function ActiveRunPage(): React.ReactElement {
               <Typography.Paragraph style={{ marginTop: 16 }}>
                 Verdict: <Tag>{current.verdict}</Tag>
                 {current.failureReason ? ` — ${current.failureReason}` : null}
+                {current.persistedRunId ? (
+                  <>
+                    {" "}
+                    <Link href={`/runs/${encodeURIComponent(current.persistedRunId)}`}>
+                      View archived run
+                    </Link>
+                  </>
+                ) : null}
               </Typography.Paragraph>
             ) : null}
             {current?.error ? (

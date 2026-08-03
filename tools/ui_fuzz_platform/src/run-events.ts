@@ -40,6 +40,10 @@ export interface ActiveRunSnapshot {
   readonly verdict: Verdict | null;
   readonly failureReason: string | null;
   readonly error: string | null;
+  /** SQLite run id after archival (Phase 4); null while running or when store unset. */
+  readonly persistedRunId: string | null;
+  /** When this session is a replay, the original failure run id. */
+  readonly parentRunId: string | null;
 }
 
 /** Discriminated union streamed to browser clients. */
@@ -64,6 +68,8 @@ export interface StartRunRequest {
   readonly startupTimeoutMs?: number;
   readonly reuseProject?: boolean;
   readonly outDir?: string;
+  /** When set, the archived run records this as `parent_run_id` (replay provenance). */
+  readonly parentRunId?: string;
 }
 
 /** Builds the idle snapshot shown when no run is active. */
@@ -89,6 +95,8 @@ export function idleSnapshot(partial?: Partial<ActiveRunSnapshot>): ActiveRunSna
     verdict: null,
     failureReason: null,
     error: null,
+    persistedRunId: null,
+    parentRunId: null,
     ...partial,
   };
 }
