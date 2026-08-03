@@ -1,0 +1,32 @@
+{
+  "name": "ui-fuzz-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Headless runner core for the Alcedo Studio UI fuzz automation platform: YAML scenario DSL, QLocalSocket probe client, sequential DAG walk, and failure-bundle capture.",
+  "type": "module",
+  "bin": {
+    "fuzz": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "fuzz": "tsx src/cli.ts",
+    "fuzz:build": "node dist/cli.js",
+    "typecheck": "tsc -p tsconfig.build.json --noEmit"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

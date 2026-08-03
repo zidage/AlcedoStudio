@@ -8,7 +8,7 @@ Affected areas: `alcedo_studio/src/ui/alcedo_main` (objectName coverage, automat
 CMake target graph (new executable), `tools/` (new top-level directory), `alcedo_studio/tests`
 (named GoogleTest coverage for the test host).
 
-Status: Phase 0–1 complete on 2026-08-03; Phase 2 (YAML DSL and runner core) is pending.
+Status: Phase 0–2 complete on 2026-08-03; Phase 3 (Dashboard MVP) is pending.
 
 ## Problem
 
@@ -415,6 +415,76 @@ without separate Phase 1 named tests (screenshot/drag become critical in Phase 2
 - Acceptance: a hand-written scenario "open project -> import -> open first image -> drag
   exposure slider" passes end-to-end; an intentionally wrong expect fails and the failure bundle
   contains the operation history, log tail, and screenshot.
+
+##### Phase 2 completion record (2026-08-03)
+
+**Status:** complete — the YAML DSL, JSON Schema validator, loader, QLocalSocket JSON Lines client, sequential walker, expect engine, failure-bundle capture, and `fuzz` CLI are implemented in `tools/ui_fuzz_platform/` and verified against both a fake Node test host (deterministic Vitest suite) and the real Qt `alcedo_studio_test_host`.
+
+**Primary success call chain:**
+
+```text
+pnpm fuzz run scenarios/library_to_editor_exposure.yaml --host <alcedo_studio_test_host.exe> --project <scratch> --import <raw dir>
+  -> spawnHost: child_process spawn, parse PROBE_SOCKET=<name> from stdout
+  -> connectProbe: QLocalSocket (Windows named pipe \\.\pipe\<name>) JSON Lines client
+  -> awaitReady: probe "ready" event (project open + import settled)
+  -> LivenessWatchdog: GUI-thread heartbeat gap watch (250 ms cadence, 5000 ms threshold)
+  -> walk: resolve node -> compileOp -> probe click/doubleClick/drag/wait -> compileExpect -> probe wait
+  -> first next edge in declaration order (weights parsed, unused; seeded walk is Phase 6)
+  -> terminal node -> verdict pass
+```
+
+**Primary failure call chain:**
+
+```text
+expect never holds
+  -> compileExpect -> probe wait -> probe wait_timeout reply (carries last observed value)
+  -> walker records ExpectResult{ok:false, actual:<last observed>} -> verdict correctness
+  -> runScenario captureBundle: probe snapshot + screenshot (best-effort)
+  -> captureFailureBundle: operations.json + log_tail.txt + screenshot.png + tree_snapshot.json + failure.json + run.json
+wrong op target (target_not_found / target_covered)
+  -> probe error reply -> walker opOk false -> verdict correctness -> failure bundle
+host exit before ready / heartbeat gap > threshold
+  -> runScenario verdict crash / deadlock -> failure bundle (screenshot best-effort)
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| YAML schema + JSON Schema validation (11) | `pnpm test` — schema.test.ts | PASS — accepts valid; rejects unknown action, missing/duplicate matcher, dangling start/next ref, bad weight |
+| Loader + normalization (8) | `pnpm test` — loader.test.ts | PASS — flattens inline matchers, applies default timeout, preserves node insertion order |
+| Expect engine + op compiler (15) | `pnpm test` — expect-engine.test.ts | PASS — compileExpect matchers/timeouts/truthy; compileOp all actions; waitMs → undefined |
+| Liveness watchdog (4) | `pnpm test` — liveness.test.ts | PASS — fires once after threshold, resets on heartbeat, deterministic via fake timers |
+| Failure-bundle capture (4) | `pnpm test` — failure-bundle.test.ts | PASS — writes operations/log_tail/failure/run + screenshot; truncates tail to KiB |
+| Probe client over real named pipe (5) | `pnpm test` — probe-client.test.ts | PASS — id round-trip, event routing, split-packet reassembly, timeout, connect retry |
+| Walker vs fake probe (8) | `pnpm test` — walker.test.ts | PASS — linear pass, first-edge order, op/expect failure, waitMs sleep, maxSteps, unknown successor |
+| Fake Node test host end-to-end (2) | `pnpm test` — run.integration.test.ts | PASS — acceptance scenario passes (3 steps); wrong expect fails with bundle |
+| Real Qt host acceptance scenario | `dist/cli.js` vs `alcedo_studio_test_host.exe` | PASS — Verdict: pass, 3 steps (workspace_ready → open_first_image → drag_exposure_slider) |
+| Real Qt host wrong-expect bundle | `dist/cli.js` vs `alcedo_studio_test_host.exe` | PASS — Verdict: correctness; bundle has operations.json, log_tail.txt, screenshot.png, tree_snapshot.json |
+
+Commands executed:
+
+```text
+cd tools/ui_fuzz_platform
+corepack pnpm install --no-frozen-lockfile      # esbuild build approved via pnpm-workspace.yaml
+corepack pnpm test                               # 57/57 Vitest passed
+corepack pnpm build                              # tsc -p tsconfig.build.json -> dist/cli.js (bin)
+# Real Qt host (native Windows platform; offscreen lacks the OpenCL/GL context the host editor backend needs):
+corepack pnpm fuzz run scenarios/library_to_editor_exposure.yaml \
+  --host build/debug/alcedo_studio/src/alcedo_studio_test_host.exe \
+  --project <scratch dir> --import alcedo_studio/tests/resources/sample_images/raw/camera/ricoh \
+  --startup 120000 --max-duration 120000        # -> Verdict: pass, Steps: 3
+corepack pnpm fuzz run scenarios/wrong_expect_fails.yaml --host <exe> --project <scratch> --import <ricoh> ...
+                                                 # -> Verdict: correctness; bundle with operation history, log tail, screenshot, tree snapshot
+```
+
+Suite totals: 57/57 Vitest passed (8 test files); plus 2 real Qt host runs (1 pass, 1 correctness with bundle).
+
+**Checklist / exit condition:** complete — YAML schema + JSON Schema validation, loader, QLocalSocket JSON Lines client, sequential walk (weights parsed but unused), expect engine compiling to probe `wait`, failure bundle capture (operation history + log tail + screenshot), and CLI entry `pnpm fuzz run <file>` are all implemented and evidenced above. The acceptance scenario passes end-to-end against the real Qt host, and an intentionally wrong expect fails with a complete bundle.
+
+**LOC note (grill-code-review):** `tools/ui_fuzz_platform` adds ~3.25k LOC — src 2015 (13 modules, largest `walker.ts` 253), test 1197 (8 files + `test/helpers/fake-host.mjs`), scenarios 35. Modules split by responsibility with owned state: `protocol` (wire types), `scenario` (domain), `schema` (validation), `loader` (parse + normalize), `expect-engine` (DSL→probe compile), `probe-client` (socket + pending-reply map), `host-process` (spawn + bounded log buffer), `liveness` (watchdog), `walker` (walk state machine), `failure-bundle` (artifact capture), `run` (orchestrator facade), `cli` (entry). No source file exceeds ~250 LOC; no split needed.
+
+**Remaining gaps:** SQLite persistence, results browser, and replay-by-seed are Phase 4 (the runner writes the failure bundle to disk only). Seeded weighted random walk, deadlock/crash verdict hardening, and per-run coverage counters are Phase 6 (Phase 2 walks edges in declaration order with weights parsed but unused). The real-host run requires the native Windows platform on this machine — the offscreen QPA plugin cannot create the OpenGL context the host's editor backend (OpenCL sharing) needs, so offscreen headless execution of the Qt host is an environment limitation, not a Phase 2 defect; the deterministic fake-host Vitest suite covers the runner core without Qt.
 
 ### Phase 3 — Dashboard MVP
 

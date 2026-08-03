@@ -1,0 +1,27 @@
+name: library_to_editor_exposure
+start: workspace_ready
+defaults:
+  expectTimeoutMs: 8000
+nodes:
+  workspace_ready:
+    op: { action: wait, target: workspaceHost, property: visible, eq: true }
+    expect:
+      - { target: workspaceHost, property: visible, eq: true }
+    next:
+      - { to: open_first_image, weight: 1 }
+  open_first_image:
+    op: { action: doubleClick, target: thumbnailGridView_firstCard }
+    expect:
+      - { target: editorWorkspace, property: visible, eq: true }
+    next:
+      - { to: drag_exposure_slider, weight: 2 }
+      - { to: back_to_library, weight: 1 }
+  drag_exposure_slider:
+    op: { action: drag, target: toneExposureSlider, fromNx: 0.2, toNx: 0.8, steps: 10 }
+    expect:
+      - { target: toneExposureSlider, property: visible, eq: true }
+    next: []
+  back_to_library:
+    op: { action: click, target: libraryNavButton }
+    expect:
+      - { target: libraryWorkspace, property: visible, eq: true }
