@@ -416,9 +416,10 @@ endif()
 
 set(ALCEDO_MAIN_SOURCES
     "${ALCEDO_UI_SHELL_ROOT}/main.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/application_module_qml_types.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/app_theme.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/shortcut_registry.cpp"
-    "${ALCEDO_SRC_ROOT}/config/resource.qrc"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/application_module_qml_types.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/app_theme.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/i18n.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/language_manager.hpp"
@@ -661,16 +662,93 @@ foreach(ALCEDO_MAIN_QML_FILE IN LISTS ALCEDO_MAIN_QML_FILES ALCEDO_MAIN_QML_RESO
     )
 endforeach()
 
-qt_add_qml_module(alcedo_main
+add_library(AlcedoMainQml STATIC
+    "${ALCEDO_SRC_ROOT}/config/resource.qrc"
+)
+target_include_directories(AlcedoMainQml PUBLIC "${ALCEDO_INCLUDE_ROOT}")
+target_link_libraries(AlcedoMainQml
+    PUBLIC
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickDialogs2
+        Qt6::QuickEffects
+        Qt6::Svg
+)
+
+set(QT_QML_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+qt_add_qml_module(AlcedoMainQml
     URI Alcedo.Main
     VERSION 1.0
     ${ALCEDO_MAIN_QML_MODULE_OPTIONS}
     QML_FILES ${ALCEDO_MAIN_QML_FILES}
     RESOURCES ${ALCEDO_MAIN_QML_RESOURCES}
 )
-set_target_properties(alcedo_main PROPERTIES
+set_target_properties(AlcedoMainQml PROPERTIES
     QT_QMLCACHEGEN_ARGUMENTS "--only-bytecode"
+    QT_QML_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/Alcedo/Main"
 )
+
+if(COMMAND qt_finalize_target)
+    qt_finalize_target(AlcedoMainQml)
+endif()
+
+target_link_libraries(alcedo_main PRIVATE AlcedoMainQml AlcedoMainQmlplugin)
+
+set(ALCEDO_TEST_HOST_SOURCES
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/main.cpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/test_probe.cpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/test_probe.hpp"
+    "${ALCEDO_UI_SHELL_ROOT}/application_module_qml_types.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/application_module_qml_types.hpp"
+    "${ALCEDO_UI_SHELL_ROOT}/app_theme.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/app_theme.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/i18n.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/language_manager.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/utils/cuda/cuda_driver_requirements.hpp"
+)
+add_executable(alcedo_studio_test_host ${ALCEDO_TEST_HOST_SOURCES})
+set_target_properties(alcedo_studio_test_host PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${ALCEDO_BINARY_ROOT}"
+)
+target_include_directories(alcedo_studio_test_host
+    PRIVATE
+        "${ALCEDO_INCLUDE_ROOT}"
+        "${ALCEDO_UI_ROOT}/alcedo_studio_test_host"
+        "${ALCEDO_UI_SHELL_ROOT}"
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend"
+)
+target_link_libraries(alcedo_studio_test_host
+    PRIVATE
+        AlbumBackendLib
+        AlcedoMainQml
+        AlcedoMainQmlplugin
+        UiLocalization
+        Qt6::Quick
+        Qt6::Qml
+        Qt6::QuickControls2
+        Qt6::QuickDialogs2
+        Qt6::Widgets
+        Qt6::Network
+        Qt6::Svg
+        Qt6::QuickEffects
+)
+if(WIN32 AND ALCEDO_OPENCL_ENABLED)
+    target_link_libraries(alcedo_studio_test_host PRIVATE OpenGL::GL)
+endif()
+alcedo_copy_linked_runtime_dlls(alcedo_studio_test_host)
+if(COMMAND qt_finalize_target)
+    qt_finalize_target(alcedo_studio_test_host)
+elseif(COMMAND qt_finalize_executable)
+    qt_finalize_executable(alcedo_studio_test_host)
+endif()
+if(COMMAND qt_import_qml_plugins)
+    qt_import_qml_plugins(alcedo_main)
+    qt_import_qml_plugins(alcedo_studio_test_host)
+endif()
+
 if(APPLE)
     set_target_properties(alcedo_main PROPERTIES
         MACOSX_BUNDLE ${ALCEDO_MACOS_BUNDLE}
