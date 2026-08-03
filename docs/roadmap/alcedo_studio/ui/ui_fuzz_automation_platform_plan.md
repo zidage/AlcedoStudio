@@ -8,7 +8,7 @@ Affected areas: `alcedo_studio/src/ui/alcedo_main` (objectName coverage, automat
 CMake target graph (new executable), `tools/` (new top-level directory), `alcedo_studio/tests`
 (named GoogleTest coverage for the test host).
 
-Status: Phase 0–3 complete on 2026-08-03; Phase 4 (Persistence, results browser, replay) is pending.
+Status: Phase 0–4 complete on 2026-08-03; Phase 5 (Flow editor and QML scanner) is pending.
 
 ## Problem
 
@@ -567,6 +567,77 @@ e2e against a real Qt host is manual (`pnpm dashboard` + form paths), not automa
 - SQLite schema, results pages, replay-by-seed.
 - Acceptance: a failed run row holds seed + full operation list + log tail; replay reproduces
   the identical step sequence (verified by comparing `steps` rows).
+
+##### Phase 4 completion record (2026-08-03)
+
+**Status:** complete — SQLite result store (`better-sqlite3`), results browser
+(`/runs`, `/runs/[id]`), CLI + dashboard replay-by-seed with step-sequence comparison.
+
+**Primary success call chain:**
+
+```text
+runScenario / ProcessManager.finish
+  -> ResultStore.archiveRun (runs + steps; failures on non-pass)
+  -> SQLite data/results.sqlite
+  -> GET /api/runs | GET /api/runs/:id
+  -> /runs ProTable | /runs/[id] steps + log tail
+```
+
+**Primary failure / replay call chain:**
+
+```text
+POST /api/runs/:id/replay  (or `fuzz replay <run-id>`)
+  -> load original seed + scenario_path + config
+  -> ProcessManager.start (parentRunId) | replayRun()
+  -> runScenario (same seed)
+  -> archive replay row (parent_run_id)
+  -> compare steps fingerprints (seq, nodeId, action, target)
+  -> sequencesMatch === true
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `ResultStorePersistsFailedRunWithSeedOperationsAndLogTail` | `pnpm test` — result-store.test.ts | PASS |
+| `ResultStoreListsAndLoadsRunDetail` | `pnpm test` — result-store.test.ts | PASS |
+| `ReplayBySeedReproducesIdenticalStepSequence` | `pnpm test` — replay.test.ts | PASS |
+| `ReplayFailedRunKeepsSeedAndOperationListInBothRows` | `pnpm test` — replay.test.ts | PASS |
+| `DashboardApiPersistsFailedRunAndServesDetailWithLogTail` | `pnpm test` — result-api.test.ts | PASS |
+| `DashboardApiReplayStartsManagedRunWithSameSeed` | `pnpm test` — result-api.test.ts | PASS |
+| Phase 0–3 regression | `pnpm test` | PASS — 68/68 |
+| Runner + Next.js production build | `pnpm build:runner` + `pnpm build:web` | PASS — `/runs`, `/runs/[id]`, `/runs/active` |
+
+Commands:
+
+```text
+cd tools/ui_fuzz_platform
+corepack pnpm install
+corepack pnpm test
+corepack pnpm build:runner
+corepack pnpm build:web
+# Dev dashboard: corepack pnpm dashboard   # http://127.0.0.1:3030/runs
+# CLI archive + replay:
+#   corepack pnpm fuzz run scenarios/wrong_expect_fails.yaml --host ... --db data/results.sqlite
+#   corepack pnpm fuzz replay <run-id> --db data/results.sqlite
+```
+
+Suite totals: 68/68 Vitest passed (13 files).
+
+**Checklist / exit condition:** complete — SQLite schema
+(`runs` / `steps` / `failures`), failed row holds seed + full operation list + log tail,
+results pages list and detail with Replay seed, replay reproduces identical step sequence
+(verified by comparing `steps` fingerprints / rows).
+
+**LOC note (grill-code-review):** largest Phase 4 additions — `result-store.ts` ~406,
+`process-manager.ts` ~345, `http-server.ts` ~246, `cli.ts` ~259, `app/runs/[id]/page.tsx`
+~260, `app/runs/page.tsx` ~125, `replay.ts` ~110. No file exceeds ~410 LOC; store /
+replay / HTTP / UI stay separate modules.
+
+**Remaining gaps:** Flow editor and QML scanner remain Phase 5. Seeded weighted random walk
+and deadlock/crash hardening remain Phase 6 (Phase 2/4 still walk edges in declaration order;
+seed is stored and replayed for provenance, weights still unused for edge selection).
+Browser e2e against a real Qt host remains manual.
 
 ### Phase 5 — Flow editor and QML scanner
 

@@ -30,6 +30,8 @@ export interface ActiveRunSnapshot {
   verdict: string | null;
   failureReason: string | null;
   error: string | null;
+  persistedRunId: string | null;
+  parentRunId: string | null;
 }
 
 export interface StartRunFormValues {
@@ -58,3 +60,46 @@ export type DashboardWsEvent =
   | { type: "stepStart"; nodeId: string; op: { action: string; target?: string }; seq: number; at: number }
   | { type: "stepEnd"; step: unknown; at: number }
   | { type: "finished"; result: unknown; snapshot: ActiveRunSnapshot };
+
+/** Archived run header from GET /api/runs. */
+export interface StoredRunSummary {
+  id: string;
+  seed: number;
+  scenario: string;
+  scenarioPath: string | null;
+  startedAt: number;
+  endedAt: number;
+  verdict: string;
+  config: Record<string, unknown>;
+  parentRunId: string | null;
+  outDir: string | null;
+  failureReason: string | null;
+}
+
+export interface StoredStep {
+  id: number;
+  runId: string;
+  seq: number;
+  nodeId: string;
+  op: { action?: string; target?: string; [key: string]: unknown };
+  expectResults: unknown;
+  startedAt: number;
+  endedAt: number;
+  opOk: boolean;
+}
+
+export interface StoredFailure {
+  runId: string;
+  kind: string;
+  detail: unknown;
+  opHistory: unknown;
+  logTail: string;
+  treeSnapshot: unknown | null;
+  screenshotPath: string | null;
+}
+
+export interface StoredRunDetail {
+  run: StoredRunSummary;
+  steps: StoredStep[];
+  failure: StoredFailure | null;
+}

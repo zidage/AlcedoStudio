@@ -53,6 +53,13 @@ export interface RunResult {
   readonly bundle?: FailureBundle;
   readonly probeSocket?: string;
   readonly exitCode?: number | null;
+  /**
+   * Last N KiB of Qt stdout/stderr for SQLite failure rows and results browser.
+   * Empty string on pass or when the host produced no output.
+   */
+  readonly logTail: string;
+  /** Last tree snapshot captured into the failure bundle, when available. */
+  readonly treeSnapshot?: unknown;
 }
 
 /**
@@ -109,6 +116,8 @@ export async function runScenario(
       bundle: result.bundle,
       probeSocket: host.probeSocket,
       exitCode: result.exitCode,
+      logTail: result.logTail,
+      treeSnapshot: result.treeSnapshot,
     };
   } finally {
     probe?.close();
@@ -122,6 +131,8 @@ interface DriveResult {
   failure?: { kind: "op" | "expect"; nodeId: string; reason: string };
   bundle?: FailureBundle;
   exitCode?: number | null;
+  logTail: string;
+  treeSnapshot?: unknown;
 }
 
 async function driveWalk(
@@ -201,11 +212,24 @@ async function driveWalk(
     };
   }
 
+  const logLines = host.logs.text().split("\n");
+  const logTail = extractLogTail(logLines, FAILURE_LOG_TAIL_KIB);
+
   const skipBundle = hooks.signal?.aborted === true || verdict === "pass";
-  const bundle = skipBundle
-    ? undefined
-    : await captureBundle(scenario, config, host, probe, result, verdict, failure);
-  return { verdict, walkResult: result, failure, bundle, exitCode };
+  if (skipBundle) {
+    return { verdict, walkResult: result, failure, exitCode, logTail };
+  }
+
+  const captured = await captureBundle(scenario, config, host, probe, result, verdict, failure, logLines);
+  return {
+    verdict,
+    walkResult: result,
+    failure,
+    bundle: captured.bundle,
+    exitCode,
+    logTail,
+    treeSnapshot: captured.treeSnapshot,
+  };
 }
 
 async function captureBundle(
@@ -216,7 +240,8 @@ async function captureBundle(
   walkResult: WalkResult,
   verdict: Verdict,
   failure: { kind: "op" | "expect"; nodeId: string; reason: string } | undefined,
-): Promise<FailureBundle | undefined> {
+  logLines: readonly string[],
+): Promise<{ bundle: FailureBundle; treeSnapshot?: unknown }> {
   let treeSnapshot: unknown;
   let screenshotPng: Buffer | undefined;
   try {
@@ -237,8 +262,7 @@ async function captureBundle(
     // Screenshot is best-effort; absence is recorded in the bundle.
   }
 
-  const logLines = host.logs.text().split("\n");
-  return captureFailureBundle({
+  const bundle = await captureFailureBundle({
     outDir: config.outDir,
     scenarioName: scenario.name,
     seed: config.seed,
@@ -251,6 +275,21 @@ async function captureBundle(
     treeSnapshot,
     config,
   });
+  return { bundle, treeSnapshot };
+}
+
+/** Returns the last `kib` KiB of log lines joined by newlines. */
+export function extractLogTail(lines: readonly string[], kib: number): string {
+  const maxBytes = kib * 1024;
+  const kept: string[] = [];
+  let bytes = 0;
+  for (let index = lines.length - 1; index >= 0; index--) {
+    const line = lines[index]!;
+    bytes += line.length + 1;
+    kept.unshift(line);
+    if (bytes >= maxBytes) break;
+  }
+  return kept.join("\n");
 }
 
 /** Waits for the probe `ready` event, resolving `true` on receipt or `false` on timeout. */

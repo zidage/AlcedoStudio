@@ -12,6 +12,9 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { ProcessManager } from "../process-manager.js";
+import { defaultResultDbPath } from "../paths.js";
+import { ResultStore } from "../result-store.js";
 import { startDashboardServer } from "./http-server.js";
 
 const require = createRequire(import.meta.url);
@@ -25,6 +28,9 @@ async function main(): Promise<void> {
   const port = Number.parseInt(process.env.PORT ?? "3030", 10);
   const dev = process.env.NODE_ENV !== "production";
   const rootDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const dbPath = defaultResultDbPath();
+  const resultStore = new ResultStore(dbPath);
+  const manager = new ProcessManager({ resultStore });
 
   const app = next({ dev, hostname: host, port, dir: rootDir });
   await app.prepare();
@@ -33,14 +39,19 @@ async function main(): Promise<void> {
   const dashboard = await startDashboardServer({
     host,
     port,
+    manager,
+    resultStore,
     nextHandler: (req, res) => handle(req, res),
   });
 
   process.stdout.write(`UI fuzz dashboard listening on http://${dashboard.host}:${dashboard.port}\n`);
   process.stdout.write(`WebSocket stream: ws://${dashboard.host}:${dashboard.port}/ws/runs\n`);
+  process.stdout.write(`Result store: ${dbPath}\n`);
+  process.stdout.write(`Results browser: http://${dashboard.host}:${dashboard.port}/runs\n`);
 
   const shutdown = async () => {
     await dashboard.close();
+    resultStore.close();
     process.exit(0);
   };
   process.on("SIGINT", () => void shutdown());
