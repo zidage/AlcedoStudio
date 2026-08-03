@@ -17,6 +17,7 @@ import {
   ProCard,
   ProForm,
   ProFormDigit,
+  ProFormItem,
   ProFormSwitch,
   ProFormText,
 } from "@ant-design/pro-components";
@@ -42,6 +43,7 @@ import {
 } from "@ant-design/icons";
 import Link from "next/link";
 
+import { PathBrowseInput } from "../../components/PathBrowseInput";
 import { fetchActiveRun, runsWebSocketUrl, startRun, stopRun } from "../../lib/api";
 import type { ActiveRunSnapshot, DashboardWsEvent, LogLine, StartRunFormValues } from "../../lib/types";
 
@@ -227,14 +229,32 @@ export default function ActiveRunPage(): React.ReactElement {
                 rules={[{ required: true, message: "Scenario path is required" }]}
                 placeholder="scenarios/library_to_editor_exposure.yaml"
               />
-              <ProFormText
+              <ProFormItem
                 name="hostPath"
                 label="Test host executable"
                 rules={[{ required: true, message: "Host path is required" }]}
-                placeholder="build/debug/alcedo_studio/src/alcedo_studio_test_host.exe"
-              />
-              <ProFormText name="projectPath" label="Project path" placeholder="Scratch project directory" />
-              <ProFormText name="importDir" label="Import directory" placeholder="RAW sample tree" />
+              >
+                <PathBrowseInput
+                  selectionMode="file"
+                  executableOnly
+                  browseTitle="Select test host executable"
+                  placeholder="Browse to alcedo_studio_test_host.exe"
+                />
+              </ProFormItem>
+              <ProFormItem name="projectPath" label="Project path">
+                <PathBrowseInput
+                  selectionMode="directory"
+                  browseTitle="Select project directory"
+                  placeholder="Scratch project directory"
+                />
+              </ProFormItem>
+              <ProFormItem name="importDir" label="Import directory">
+                <PathBrowseInput
+                  selectionMode="directory"
+                  browseTitle="Select import directory"
+                  placeholder="RAW sample tree"
+                />
+              </ProFormItem>
               <ProFormDigit name="seed" label="Seed" min={0} fieldProps={{ precision: 0 }} />
               <ProFormDigit name="maxSteps" label="Max steps" min={1} fieldProps={{ precision: 0 }} />
               <ProFormDigit

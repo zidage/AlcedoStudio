@@ -23,7 +23,6 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   App as AntdApp,
   Button,
-  Input,
   Space,
   Tag,
   Typography,
@@ -31,6 +30,7 @@ import {
 } from "antd";
 import { ArrowLeftOutlined, RedoOutlined } from "@ant-design/icons";
 
+import { PathBrowseInput } from "../../components/PathBrowseInput";
 import { fetchRunDetail, replayRun } from "../../lib/api";
 import type { StoredStep } from "../../lib/types";
 
@@ -203,13 +203,14 @@ export default function RunDetailPage(): React.ReactElement {
               Re-executes the scenario with the same seed ({run.seed}). The runner records a new
               run row linked via parent_run_id; compare step sequences on the new detail page.
             </Typography.Paragraph>
-            <Form layout="inline" onFinish={() => replayMutation.mutate()}>
+            <Form layout="vertical" onFinish={() => replayMutation.mutate()}>
               <Form.Item label="Host path override">
-                <Input
-                  style={{ width: 420 }}
+                <PathBrowseInput
+                  executableOnly
+                  browseTitle="Select test host executable"
                   placeholder="Optional if original config stored hostPath"
                   value={hostPath}
-                  onChange={(event) => setHostPath(event.target.value)}
+                  onChange={setHostPath}
                 />
               </Form.Item>
               <Form.Item>

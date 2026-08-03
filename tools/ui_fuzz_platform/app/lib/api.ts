@@ -4,6 +4,7 @@
 
 import type {
   ActiveRunSnapshot,
+  FsBrowseResult,
   QmlCatalog,
   StalenessReport,
   StartRunFormValues,
@@ -19,6 +20,35 @@ export async function fetchActiveRun(): Promise<ActiveRunSnapshot> {
     throw new Error(`Failed to load active run (${response.status})`);
   }
   return (await response.json()) as ActiveRunSnapshot;
+}
+
+/**
+ * Lists a server-local directory for path pickers. Omit `path` to start at the
+ * preferred browse root; pass `path: ""` for OS drive roots on Windows.
+ */
+export async function browseFs(options: {
+  path?: string;
+  extensions?: string[];
+  executableOnly?: boolean;
+} = {}): Promise<FsBrowseResult> {
+  const params = new URLSearchParams();
+  if (options.path !== undefined) {
+    params.set("path", options.path);
+  }
+  if (options.executableOnly) {
+    params.set("executable", "1");
+  } else if (options.extensions !== undefined && options.extensions.length > 0) {
+    params.set("extensions", options.extensions.join(","));
+  }
+  const query = params.toString();
+  const response = await fetch(`/api/fs/browse${query.length > 0 ? `?${query}` : ""}`, {
+    cache: "no-store",
+  });
+  const body = (await response.json()) as FsBrowseResult & { error?: string };
+  if (!response.ok) {
+    throw new Error(body.error ?? `Browse failed (${response.status})`);
+  }
+  return body;
 }
 
 export async function startRun(values: StartRunFormValues): Promise<{ runId: string }> {

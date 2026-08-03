@@ -104,6 +104,24 @@ export interface StoredRunDetail {
   failure: StoredFailure | null;
 }
 
+/** One row from GET /api/fs/browse. */
+export type FsEntryKind = "file" | "directory" | "drive";
+
+export interface FsBrowseEntry {
+  name: string;
+  path: string;
+  kind: FsEntryKind;
+  size: number | null;
+  selectable: boolean;
+}
+
+export interface FsBrowseResult {
+  path: string;
+  parent: string | null;
+  platform: string;
+  entries: FsBrowseEntry[];
+}
+
 /** One scanned `objectName` binding from the QML catalog. */
 export interface CatalogEntry {
   objectName: string | null;
