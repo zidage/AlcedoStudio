@@ -8,7 +8,7 @@ Affected areas: `alcedo_studio/src/ui/alcedo_main` (objectName coverage, automat
 CMake target graph (new executable), `tools/` (new top-level directory), `alcedo_studio/tests`
 (named GoogleTest coverage for the test host).
 
-Status: Phase 0–2 complete on 2026-08-03; Phase 3 (Dashboard MVP) is pending.
+Status: Phase 0–3 complete on 2026-08-03; Phase 4 (Persistence, results browser, replay) is pending.
 
 ## Problem
 
@@ -35,7 +35,7 @@ Decisions locked with the owner on 2026-08-03:
 | Element identification | `objectName` as the stable test id (the `data-testid` analogy); optional `property string testId` convention for namespaced ids such as `project.import`. QML-local `id`s are never used as locators — they are invisible from C++ by design |
 | Static QML scan role | Candidate action catalog only. Runtime truth is always the live `QQuickItem` tree: Loaders, delegates, conditional instantiation, popups, and state-dependent visibility make static structure unreliable as an execution source |
 | Log capture | The runner spawns the test host and reads its stdout/stderr pipes directly; Qt logs never pass through the probe |
-| Web stack | Next.js + React, single app: API routes manage the child process, browser-facing WebSocket streams live logs, dashboard, flow editor, DB access |
+| Web stack | Next.js + React for the platform shell; dashboard UI uses Ant Design Pro v6 design system (antd 6 + `@ant-design/pro-components` v3 + React Query + cssVar), not hand-drawn chrome ([ant-design-pro#11734](https://github.com/ant-design/ant-design-pro/issues/11734)) |
 | Scenario script format | YAML DSL; human-writable, flow-editor round-trip, JSON Schema validation |
 | v1 assertion surface | (a) QML element property assertions via the probe; (b) process liveness: heartbeat gap = deadlock, process exit = crash, per-expect timeout = failure. Log-pattern matching and DuckDB project-state assertions are deferred to v2 |
 | Result store | SQLite, single file under the platform data directory, archived per run |
@@ -493,6 +493,74 @@ Suite totals: 57/57 Vitest passed (8 test files); plus 2 real Qt host runs (1 pa
   elapsed display, heartbeat indicator.
 - Acceptance: dashboard starts and stops the host; logs stream live; killing the run tears down
   the child process tree with no orphan.
+- UI: Ant Design Pro v6 components only (antd 6 + ProComponents v3 + React Query); no custom
+  visual design beyond Pro/antd tokens ([ant-design-pro#11734](https://github.com/ant-design/ant-design-pro/issues/11734)).
+
+##### Phase 3 completion record (2026-08-03)
+
+**Status:** complete — Next.js dashboard at `/runs/active` uses Ant Design Pro v6 (antd 6,
+`@ant-design/pro-components` 3.1.14-6, React Query, cssVar). ProcessManager owns start/stop with
+process-tree kill, live log/heartbeat/step events over WebSocket, and run controls
+(seed / max steps / max duration / liveness).
+
+**Primary success call chain:**
+
+```text
+browser /runs/active (ProForm Start)
+  -> POST /api/runs/start
+  -> ProcessManager.start
+  -> runScenario + spawnHost (parse PROBE_SOCKET)
+  -> connectProbe / await ready
+  -> walk (onStepStart/onStepEnd) + onLog / onHeartbeat
+  -> WS /ws/runs -> ProCard live status + Qt log List
+```
+
+**Primary failure call chain:**
+
+```text
+browser Stop (or operator abort)
+  -> POST /api/runs/stop
+  -> AbortController.abort (interrupts waitMs)
+  -> killProcessTree(hostPid) via taskkill /T /F (Windows) or process-group SIGKILL
+  -> host + descendants exit; snapshot status=finished; no orphan PID
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `KillProcessTreeTerminatesParentAndLeafWithNoOrphan` | `pnpm test` — process-tree.test.ts | PASS |
+| `ProcessManagerStartsRunStreamsLogsAndHeartbeatsThenFinishes` | `pnpm test` — process-manager.test.ts | PASS |
+| `ProcessManagerStopKillsHostProcessTreeWithNoOrphan` | `pnpm test` — process-manager.test.ts | PASS |
+| `DashboardApiStartsStopsAndStreamsLiveLogsOverWebSocket` | `pnpm test` — process-manager.test.ts | PASS |
+| Phase 2 regression | `pnpm test` | PASS — 57 prior + 4 Phase 3 = 61/61 |
+| Next.js production build | `pnpm build:web` | PASS — `/runs/active` route built |
+
+Commands:
+
+```text
+cd tools/ui_fuzz_platform
+corepack pnpm install --no-frozen-lockfile
+corepack pnpm test
+corepack pnpm build:runner
+corepack pnpm build:web
+# Dev dashboard: corepack pnpm dashboard   # http://127.0.0.1:3030/runs/active
+```
+
+Suite totals: 61/61 Vitest passed (10 files).
+
+**Checklist / exit condition:** complete — Next.js scaffold, process manager with PROBE_SOCKET
+parse + tree kill, live log streaming, run controls, current-op/step/elapsed, heartbeat
+indicator, start/stop with no orphan, Ant Design Pro v6 UI (no hand-drawn chrome).
+
+**LOC note (grill-code-review):** largest Phase 3 additions — `app/runs/active/page.tsx` ~307,
+`process-manager.ts` ~280, `dashboard/http-server.ts` ~141, `process-tree.ts` ~50,
+`run-events.ts` ~87. Walker/run grew for abort + progress hooks; no file exceeds ~310 LOC.
+
+**Remaining gaps:** SQLite persistence, results browser, and replay-by-seed remain Phase 4.
+Flow editor / QML scanner remain Phase 5. Seeded weighted fuzz remains Phase 6. The dashboard
+dev entry is `pnpm dashboard` (custom Node server wrapping Next + `/api` + `/ws/runs`); browser
+e2e against a real Qt host is manual (`pnpm dashboard` + form paths), not automated in Phase 3.
 
 ### Phase 4 — Persistence, results browser, replay
 

@@ -185,6 +185,8 @@ function handleRequest(socket, req) {
 const server = createServer((socket) => {
   socket.setEncoding("utf8");
   send(socket, { event: "ready", windowVisible: true, windowTitle: "Fake Host" });
+  heartbeatCounter += 1;
+  send(socket, { event: "heartbeat", counter: heartbeatCounter, guiTimeMs: 0, guiThread: true, ready: true });
   const heartbeat = setInterval(() => {
     heartbeatCounter += 1;
     send(socket, { event: "heartbeat", counter: heartbeatCounter, guiTimeMs: 0, guiThread: true, ready: true });
@@ -210,6 +212,7 @@ const server = createServer((socket) => {
 
 server.listen(pipePath, () => {
   process.stdout.write(`PROBE_SOCKET=${socketName}\n`);
+  process.stdout.write(`FAKE_HOST_LISTENING pid=${process.pid}\n`);
 });
 
 process.stdin.resume();

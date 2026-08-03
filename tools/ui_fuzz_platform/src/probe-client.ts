@@ -116,7 +116,7 @@ export class ProbeClient extends EventEmitter {
     this.socket.setEncoding("utf8");
     this.socket.on("data", (chunk: string) => this.handleData(chunk));
     this.socket.on("close", () => this.handleClose());
-    this.socket.on("error", (error: Error) => this.emit("error", error));
+    this.socket.on("error", (error: Error) => this.handleSocketError(error));
   }
 
   /** Subscribes to a probe-client event. */
@@ -138,8 +138,14 @@ export class ProbeClient extends EventEmitter {
       }
     }, timeoutMs);
     this.pending.set(id, { resolve, reject, timer });
-    if (!this.socket.write(line)) {
-      this.socket.once("drain", () => undefined);
+    try {
+      if (!this.socket.write(line)) {
+        this.socket.once("drain", () => undefined);
+      }
+    } catch (error) {
+      clearTimeout(timer);
+      this.pending.delete(id);
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
     }
     return promise;
   }
@@ -197,5 +203,17 @@ export class ProbeClient extends EventEmitter {
     }
     this.pending.clear();
     this.emit("disconnect");
+  }
+
+  private handleSocketError(error: Error): void {
+    // Reject in-flight requests so callers don't hang; emit for observers.
+    for (const [, pending] of this.pending) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pending.clear();
+    if (this.listenerCount("error") > 0) {
+      this.emit("error", error);
+    }
   }
 }

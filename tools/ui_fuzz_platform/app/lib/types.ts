@@ -1,0 +1,60 @@
+//  Copyright 2026 Yurun Zi
+//  SPDX-License-Identifier: GPL-3.0-only
+//  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
+
+/** Client-side mirror of ActiveRunSnapshot from the runner core. */
+export type RunSessionStatus = "idle" | "starting" | "running" | "stopping" | "finished";
+
+export interface ActiveRunSnapshot {
+  status: RunSessionStatus;
+  runId: string | null;
+  scenarioPath: string | null;
+  scenarioName: string | null;
+  seed: number;
+  maxSteps: number;
+  maxDurationMs: number;
+  livenessThresholdMs: number;
+  currentNodeId: string | null;
+  currentOp: { action: string; target?: string } | null;
+  stepCounter: number;
+  startedAt: number | null;
+  elapsedMs: number;
+  heartbeat: {
+    counter: number;
+    guiTimeMs: number;
+    lastSeenAt: number;
+  } | null;
+  heartbeatAlive: boolean;
+  hostPid: number | null;
+  probeSocket: string | null;
+  verdict: string | null;
+  failureReason: string | null;
+  error: string | null;
+}
+
+export interface StartRunFormValues {
+  scenarioPath: string;
+  hostPath: string;
+  projectPath?: string;
+  importDir?: string;
+  seed: number;
+  maxSteps: number;
+  maxDurationMs: number;
+  livenessThresholdMs: number;
+  reuseProject: boolean;
+}
+
+export interface LogLine {
+  key: string;
+  line: string;
+  stream: "stdout" | "stderr";
+  at: number;
+}
+
+export type DashboardWsEvent =
+  | { type: "status"; snapshot: ActiveRunSnapshot }
+  | { type: "log"; line: string; stream: "stdout" | "stderr"; at: number }
+  | { type: "heartbeat"; counter: number; guiTimeMs: number; at: number }
+  | { type: "stepStart"; nodeId: string; op: { action: string; target?: string }; seq: number; at: number }
+  | { type: "stepEnd"; step: unknown; at: number }
+  | { type: "finished"; result: unknown; snapshot: ActiveRunSnapshot };

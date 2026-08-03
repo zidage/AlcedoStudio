@@ -19,11 +19,27 @@ import { captureFailureBundle, type FailureBundle } from "./failure-bundle.js";
 import { spawnHost, type HostHandle } from "./host-process.js";
 import { LivenessWatchdog } from "./liveness.js";
 import type { ProbeEvent } from "./protocol.js";
-import type { RunConfig, Scenario } from "./scenario.js";
+import type { Op, RunConfig, Scenario } from "./scenario.js";
 import { walk, type StepRecord, type Verdict, type WalkResult } from "./walker.js";
 
 /** Size of the Qt log tail kept in the failure bundle, in KiB. */
 export const FAILURE_LOG_TAIL_KIB = 64;
+
+/** Live progress hooks used by the Phase 3 process manager / dashboard. */
+export interface RunProgressHooks {
+  /** When aborted, the walker stops promptly (including mid-`waitMs`). */
+  readonly signal?: AbortSignal;
+  /** Called once the host has printed `PROBE_SOCKET=` and the handle is ready. */
+  readonly onHostReady?: (host: HostHandle) => void;
+  /** Forwarded child log lines (stdout/stderr). */
+  readonly onLog?: (line: string, stream: "stdout" | "stderr") => void;
+  /** Forwarded probe heartbeat events. */
+  readonly onHeartbeat?: (counter: number, guiTimeMs: number) => void;
+  /** Fired when a walk node begins. */
+  readonly onStepStart?: (info: { readonly nodeId: string; readonly op: Op; readonly seq: number }) => void;
+  /** Fired after each completed walk step. */
+  readonly onStepEnd?: (step: StepRecord) => void;
+}
 
 /** The outcome of a full run. */
 export interface RunResult {
@@ -44,7 +60,11 @@ export interface RunResult {
  *
  * @throws when the host cannot start or never signals `ready`.
  */
-export async function runScenario(scenario: Scenario, config: RunConfig): Promise<RunResult> {
+export async function runScenario(
+  scenario: Scenario,
+  config: RunConfig,
+  hooks: RunProgressHooks = {},
+): Promise<RunResult> {
   const startedAt = Date.now();
   const host = await spawnHost({
     hostPath: config.hostPath ?? "",
@@ -53,17 +73,31 @@ export async function runScenario(scenario: Scenario, config: RunConfig): Promis
     importDir: config.importDir,
     reuseProject: config.reuseProject,
     startupTimeoutMs: config.startupTimeoutMs,
+    onLog: hooks.onLog,
   });
+  hooks.onHostReady?.(host);
 
   let probe: ProbeClient | undefined;
   try {
     probe = await connectProbe(host.probeSocket, config.startupTimeoutMs);
+
+    // Attach heartbeat forwarding before awaiting ready so early heartbeats are not lost.
+    const earlyHeartbeatListener = (event: ProbeEvent) => {
+      if (event.event === "heartbeat") {
+        const counter = typeof event.counter === "number" ? event.counter : 0;
+        const guiTimeMs = typeof event.guiTimeMs === "number" ? event.guiTimeMs : 0;
+        hooks.onHeartbeat?.(counter, guiTimeMs);
+      }
+    };
+    probe.on("event", earlyHeartbeatListener);
+
     const ready = await awaitReady(probe, config.startupTimeoutMs);
     if (!ready) {
+      probe.off("event", earlyHeartbeatListener);
       throw new Error(`Test host did not emit 'ready' within ${config.startupTimeoutMs} ms.`);
     }
 
-    const result = await driveWalk(scenario, config, host, probe);
+    const result = await driveWalk(scenario, config, host, probe, hooks, earlyHeartbeatListener);
     return {
       scenarioName: scenario.name,
       seed: config.seed,
@@ -95,6 +129,8 @@ async function driveWalk(
   config: RunConfig,
   host: HostHandle,
   probe: ProbeClient,
+  hooks: RunProgressHooks,
+  earlyHeartbeatListener: (event: ProbeEvent) => void,
 ): Promise<DriveResult> {
   let deadlockDetected = false;
   let exitCode: number | null | undefined;
@@ -103,8 +139,15 @@ async function driveWalk(
     deadlockDetected = true;
     probe.close();
   });
+  // Replace the early-only listener with one that also feeds the watchdog.
+  probe.off("event", earlyHeartbeatListener);
   const eventListener = (event: ProbeEvent) => {
-    if (event.event === "heartbeat") watchdog.observeHeartbeat();
+    if (event.event === "heartbeat") {
+      const counter = typeof event.counter === "number" ? event.counter : 0;
+      const guiTimeMs = typeof event.guiTimeMs === "number" ? event.guiTimeMs : 0;
+      watchdog.observeHeartbeat();
+      hooks.onHeartbeat?.(counter, guiTimeMs);
+    }
   };
   probe.on("event", eventListener);
 
@@ -122,6 +165,9 @@ async function driveWalk(
     walkResult = await walk(scenario, probe, {
       maxSteps: config.maxSteps,
       maxDurationMs: config.maxDurationMs,
+      signal: hooks.signal,
+      onStepStart: hooks.onStepStart,
+      onStepEnd: hooks.onStepEnd,
     });
   } finally {
     watchdog.stop();
@@ -132,7 +178,14 @@ async function driveWalk(
   const result = walkResult!;
   let verdict = result.verdict;
   let failure = result.failure;
-  if (deadlockDetected) {
+  if (hooks.signal?.aborted) {
+    verdict = "correctness";
+    failure = {
+      kind: "op",
+      nodeId: result.steps.at(-1)?.nodeId ?? scenario.start,
+      reason: "Run aborted by operator.",
+    };
+  } else if (deadlockDetected) {
     verdict = "deadlock";
     failure = {
       kind: "op",
@@ -148,7 +201,10 @@ async function driveWalk(
     };
   }
 
-  const bundle = verdict === "pass" ? undefined : await captureBundle(scenario, config, host, probe, result, verdict, failure);
+  const skipBundle = hooks.signal?.aborted === true || verdict === "pass";
+  const bundle = skipBundle
+    ? undefined
+    : await captureBundle(scenario, config, host, probe, result, verdict, failure);
   return { verdict, walkResult: result, failure, bundle, exitCode };
 }
 
