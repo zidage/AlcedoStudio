@@ -148,29 +148,6 @@
     </message>
 </context>
 <context>
-    <name>ActivateModelDialog</name>
-    <message>
-        <location filename="../qml/ActivateModelDialog.qml" line="+76"/>
-        <source>Set up an AI model to analyze images</source>
-        <translation>设置用于分析图像的 AI 模型</translation>
-    </message>
-    <message>
-        <location line="+10"/>
-        <source>This project doesn&apos;t have an AI model activated yet, so content labels can&apos;t be generated. Install and activate a model in Settings to enable automatic label generation for your images.</source>
-        <translation>此项目尚未激活 AI 模型，因此无法生成内容标签。请在设置中安装并激活模型，以启用图像自动标注。</translation>
-    </message>
-    <message>
-        <location line="+20"/>
-        <source>Not now</source>
-        <translation>暂不</translation>
-    </message>
-    <message>
-        <location line="+7"/>
-        <source>Set up model</source>
-        <translation>设置模型</translation>
-    </message>
-</context>
-<context>
     <name>AdjustmentField</name>
     <message>
         <location filename="../qml/AdjustmentField.qml" line="+112"/>

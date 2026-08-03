@@ -5,6 +5,7 @@ import QtQuick.Effects
 
 Popup {
     id: root
+    objectName: "semanticGenerationDialog"
     font.family: appTheme.uiFontFamily
     modal: true
     focus: true
@@ -274,6 +275,7 @@ Popup {
             Item { Layout.fillWidth: true }
 
             AiButton {
+                objectName: "semanticGenerationDialogSkipButton"
                 Layout.preferredWidth: 142
                 text: root.showingGeneration ? qsTr("Cancel") : qsTr("Skip")
                 primary: false

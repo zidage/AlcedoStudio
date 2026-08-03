@@ -28,7 +28,6 @@ Item {
     property alias nikonHeRecoveryDialog: nikonHeRecoveryDialogObj
     property alias advancedContentAnalysisDialog: advancedContentAnalysisDialogObj
     property alias semanticGenerationDialog: semanticGenerationDialogObj
-    property alias activateModelDialog: activateModelDialogObj
     property alias deleteConfirmDialog: deleteConfirmDialogObj
     property alias welcomeDialog: welcomeDialogObj
     property alias globalSearchDialog: globalSearchDialogObj
@@ -289,18 +288,6 @@ Item {
             host.semanticGeneration.SkipPendingGeneration(rememberChoice)
         }
         onCancelRequested: host.semanticGeneration.CancelGeneration()
-    }
-
-    ActivateModelDialog {
-        id: activateModelDialogObj
-        parent: Overlay.overlay
-        backgroundSource: root.blurSource
-        promptVisible: host.semanticGeneration.activatePromptVisible
-        onOpenSettingsRequested: {
-            host.semanticGeneration.DismissActivatePrompt()
-            root.openSettingsDialog(3) // 3 == "Local Content Recognition" (model install/activate)
-        }
-        onDismissed: host.semanticGeneration.DismissActivatePrompt()
     }
 
     DeleteConfirmDialog {

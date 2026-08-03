@@ -18,8 +18,8 @@ import {
   ProForm,
   ProFormDigit,
   ProFormItem,
+  ProFormSelect,
   ProFormSwitch,
-  ProFormText,
 } from "@ant-design/pro-components";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -36,6 +36,8 @@ import {
   App as AntdApp,
 } from "antd";
 import {
+  CheckCircleOutlined,
+  CloseCircleOutlined,
   HeartOutlined,
   PauseCircleOutlined,
   PlayCircleOutlined,
@@ -44,10 +46,55 @@ import {
 import Link from "next/link";
 
 import { PathBrowseInput } from "../../components/PathBrowseInput";
-import { fetchActiveRun, runsWebSocketUrl, startRun, stopRun } from "../../lib/api";
+import {
+  fetchActiveRun,
+  fetchWorkflows,
+  runsWebSocketUrl,
+  startRun,
+  stopRun,
+} from "../../lib/api";
 import type { ActiveRunSnapshot, DashboardWsEvent, LogLine, StartRunFormValues } from "../../lib/types";
 
 const MAX_LOG_LINES = 500;
+const RUN_PATHS_STORAGE_KEY = "ui-fuzz-dashboard-run-paths";
+
+const LOG_FONT =
+  "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
+
+interface StoredRunPaths {
+  hostPath?: string;
+  projectPath?: string;
+  importDir?: string;
+  scenarioPath?: string;
+}
+
+function loadStoredRunPaths(): StoredRunPaths {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  try {
+    const raw = window.localStorage.getItem(RUN_PATHS_STORAGE_KEY);
+    if (raw === null || raw.length === 0) {
+      return {};
+    }
+    const parsed = JSON.parse(raw) as StoredRunPaths;
+    return {
+      hostPath: typeof parsed.hostPath === "string" ? parsed.hostPath : undefined,
+      projectPath: typeof parsed.projectPath === "string" ? parsed.projectPath : undefined,
+      importDir: typeof parsed.importDir === "string" ? parsed.importDir : undefined,
+      scenarioPath: typeof parsed.scenarioPath === "string" ? parsed.scenarioPath : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+function saveStoredRunPaths(paths: StoredRunPaths): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(RUN_PATHS_STORAGE_KEY, JSON.stringify(paths));
+}
 
 function statusColor(status: ActiveRunSnapshot["status"]): string {
   switch (status) {
@@ -60,6 +107,34 @@ function statusColor(status: ActiveRunSnapshot["status"]): string {
       return "default";
     default:
       return "default";
+  }
+}
+
+function verdictColor(verdict: string | null | undefined): string {
+  switch (verdict) {
+    case "pass":
+      return "success";
+    case "correctness":
+      return "warning";
+    case "deadlock":
+    case "crash":
+      return "error";
+    default:
+      return "default";
+  }
+}
+
+function verdictValueColor(verdict: string | null | undefined): string | undefined {
+  switch (verdict) {
+    case "pass":
+      return "#389e0d";
+    case "correctness":
+      return "#d48806";
+    case "deadlock":
+    case "crash":
+      return "#cf1322";
+    default:
+      return undefined;
   }
 }
 
@@ -76,7 +151,9 @@ export default function ActiveRunPage(): React.ReactElement {
   const formRef = useRef<ProFormInstance<StartRunFormValues> | undefined>(undefined);
   const [snapshot, setSnapshot] = useState<ActiveRunSnapshot | null>(null);
   const [logs, setLogs] = useState<LogLine[]>([]);
+  const [storedPaths] = useState<StoredRunPaths>(() => loadStoredRunPaths());
   const logSeq = useRef(0);
+  const logScrollRef = useRef<HTMLDivElement | null>(null);
 
   const activeQuery = useQuery({
     queryKey: ["runs", "active"],
@@ -85,6 +162,11 @@ export default function ActiveRunPage(): React.ReactElement {
       const status = query.state.data?.status;
       return status === "running" || status === "starting" || status === "stopping" ? 2000 : false;
     },
+  });
+
+  const workflowsQuery = useQuery({
+    queryKey: ["workflows", "list"],
+    queryFn: fetchWorkflows,
   });
 
   useEffect(() => {
@@ -101,6 +183,14 @@ export default function ActiveRunPage(): React.ReactElement {
       return next.length > MAX_LOG_LINES ? next.slice(next.length - MAX_LOG_LINES) : next;
     });
   }, []);
+
+  useEffect(() => {
+    const el = logScrollRef.current;
+    if (el === null) {
+      return;
+    }
+    el.scrollTop = el.scrollHeight;
+  }, [logs]);
 
   useEffect(() => {
     const socket = new WebSocket(runsWebSocketUrl());
@@ -123,9 +213,15 @@ export default function ActiveRunPage(): React.ReactElement {
 
   const startMutation = useMutation({
     mutationFn: startRun,
-    onSuccess: () => {
+    onSuccess: (_data, values) => {
       message.success("Run started");
       setLogs([]);
+      saveStoredRunPaths({
+        hostPath: values.hostPath,
+        projectPath: values.projectPath ?? "",
+        importDir: values.importDir ?? "",
+        scenarioPath: values.scenarioPath,
+      });
       void queryClient.invalidateQueries({ queryKey: ["runs", "active"] });
     },
     onError: (error: Error) => message.error(error.message),
@@ -147,33 +243,89 @@ export default function ActiveRunPage(): React.ReactElement {
     current?.status === "running" ||
     current?.status === "stopping";
 
+  const workflowOptions = useMemo(() => {
+    const workflows = workflowsQuery.data ?? [];
+    return workflows.map((workflow) => {
+      const label =
+        workflow.scenarioName !== null && workflow.scenarioName.length > 0
+          ? `${workflow.name} — ${workflow.scenarioName}`
+          : workflow.name;
+      return {
+        value: workflow.path,
+        label,
+        disabled: workflow.errors !== null,
+      };
+    });
+  }, [workflowsQuery.data]);
+
+  const defaultScenarioPath = useMemo(() => {
+    if (current?.scenarioPath) {
+      return current.scenarioPath;
+    }
+    if (storedPaths.scenarioPath) {
+      return storedPaths.scenarioPath;
+    }
+    const firstValid = (workflowsQuery.data ?? []).find((workflow) => workflow.errors === null);
+    return firstValid?.path ?? "";
+  }, [current?.scenarioPath, storedPaths.scenarioPath, workflowsQuery.data]);
+
   const initialValues = useMemo<StartRunFormValues>(
     () => ({
-      scenarioPath: current?.scenarioPath ?? "scenarios/library_to_editor_exposure.yaml",
-      hostPath: "",
-      projectPath: "",
-      importDir: "",
+      scenarioPath: defaultScenarioPath,
+      hostPath: storedPaths.hostPath ?? "",
+      projectPath: storedPaths.projectPath ?? "",
+      importDir: storedPaths.importDir ?? "",
       seed: current?.seed ?? 0,
       maxSteps: current?.maxSteps ?? 1000,
       maxDurationMs: current?.maxDurationMs ?? 300_000,
       livenessThresholdMs: current?.livenessThresholdMs ?? 5000,
       reuseProject: false,
     }),
-    [current],
+    [current, defaultScenarioPath, storedPaths],
   );
+
+  // Keep the scenario field filled once the workflow list arrives (first paint
+  // may have an empty options list / empty default).
+  useEffect(() => {
+    if (busy || defaultScenarioPath.length === 0) {
+      return;
+    }
+    const currentValue = formRef.current?.getFieldValue("scenarioPath") as string | undefined;
+    if (currentValue === undefined || currentValue.length === 0) {
+      formRef.current?.setFieldValue("scenarioPath", defaultScenarioPath);
+    }
+  }, [busy, defaultScenarioPath]);
 
   const currentOpLabel = current?.currentOp
     ? `${current.currentOp.action}${current.currentOp.target ? ` → ${current.currentOp.target}` : ""}`
     : "—";
+
+  const resultLabel = current?.verdict
+    ? current.verdict.toUpperCase()
+    : busy
+      ? "IN PROGRESS"
+      : "—";
 
   return (
     <PageContainer
       title="Active Run"
       subTitle="Alcedo UI Fuzz Automation"
       tags={
-        current ? (
-          <Tag color={statusColor(current.status)}>{current.status.toUpperCase()}</Tag>
-        ) : undefined
+        <Space size={4}>
+          {current ? (
+            <Tag color={statusColor(current.status)}>{current.status.toUpperCase()}</Tag>
+          ) : null}
+          {current?.verdict ? (
+            <Tag
+              color={verdictColor(current.verdict)}
+              icon={
+                current.verdict === "pass" ? <CheckCircleOutlined /> : <CloseCircleOutlined />
+              }
+            >
+              {current.verdict.toUpperCase()}
+            </Tag>
+          ) : null}
+        </Space>
       }
       extra={
         <Space>
@@ -215,6 +367,14 @@ export default function ActiveRunPage(): React.ReactElement {
               submitter={false}
               disabled={busy}
               initialValues={initialValues}
+              onValuesChange={(_, values) => {
+                saveStoredRunPaths({
+                  hostPath: values.hostPath ?? "",
+                  projectPath: values.projectPath ?? "",
+                  importDir: values.importDir ?? "",
+                  scenarioPath: values.scenarioPath ?? "",
+                });
+              }}
               onFinish={async (values) => {
                 await startMutation.mutateAsync({
                   ...values,
@@ -223,11 +383,31 @@ export default function ActiveRunPage(): React.ReactElement {
                 });
               }}
             >
-              <ProFormText
+              <ProFormSelect
                 name="scenarioPath"
                 label="Scenario YAML"
-                rules={[{ required: true, message: "Scenario path is required" }]}
-                placeholder="scenarios/library_to_editor_exposure.yaml"
+                options={workflowOptions}
+                showSearch
+                rules={[{ required: true, message: "Select a workflow" }]}
+                fieldProps={{
+                  optionFilterProp: "label",
+                  placeholder: workflowsQuery.isLoading
+                    ? "Loading workflows…"
+                    : "Search workflows…",
+                  loading: workflowsQuery.isLoading,
+                  allowClear: false,
+                }}
+                extra={
+                  workflowsQuery.error ? (
+                    <Typography.Text type="danger">
+                      {(workflowsQuery.error as Error).message}
+                    </Typography.Text>
+                  ) : (
+                    <Typography.Text type="secondary">
+                      Same files as the Workflows page; invalid YAML is disabled.
+                    </Typography.Text>
+                  )
+                }
               />
               <ProFormItem
                 name="hostPath"
@@ -277,14 +457,28 @@ export default function ActiveRunPage(): React.ReactElement {
         <Col xs={24} lg={14}>
           <ProCard title="Live status" variant="outlined" style={{ marginBottom: 16 }}>
             <Row gutter={16}>
-              <Col span={8}>
+              <Col span={6}>
                 <Statistic title="Current operation" value={currentOpLabel} />
               </Col>
-              <Col span={8}>
+              <Col span={6}>
                 <Statistic title="Step" value={current?.stepCounter ?? 0} />
               </Col>
-              <Col span={8}>
+              <Col span={6}>
                 <Statistic title="Elapsed" value={formatElapsed(current?.elapsedMs ?? 0)} />
+              </Col>
+              <Col span={6}>
+                <Statistic
+                  title="Workflow result"
+                  value={resultLabel}
+                  valueStyle={{ color: verdictValueColor(current?.verdict), fontSize: 20 }}
+                  prefix={
+                    current?.verdict === "pass" ? (
+                      <CheckCircleOutlined />
+                    ) : current?.verdict ? (
+                      <CloseCircleOutlined />
+                    ) : undefined
+                  }
+                />
               </Col>
             </Row>
             <Row gutter={16} style={{ marginTop: 24 }}>
@@ -313,8 +507,20 @@ export default function ActiveRunPage(): React.ReactElement {
               </Col>
             </Row>
             {current?.verdict ? (
-              <Typography.Paragraph style={{ marginTop: 16 }}>
-                Verdict: <Tag>{current.verdict}</Tag>
+              <Typography.Paragraph style={{ marginTop: 16, marginBottom: 0 }}>
+                Verdict:{" "}
+                <Tag
+                  color={verdictColor(current.verdict)}
+                  icon={
+                    current.verdict === "pass" ? (
+                      <CheckCircleOutlined />
+                    ) : (
+                      <CloseCircleOutlined />
+                    )
+                  }
+                >
+                  {current.verdict}
+                </Tag>
                 {current.failureReason ? ` — ${current.failureReason}` : null}
                 {current.persistedRunId ? (
                   <>
@@ -341,22 +547,29 @@ export default function ActiveRunPage(): React.ReactElement {
             {logs.length === 0 ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Waiting for host stdout/stderr" />
             ) : (
-              <List
-                size="small"
-                dataSource={[...logs].reverse()}
+              <div
+                ref={logScrollRef}
                 style={{
                   maxHeight: 420,
                   overflow: "auto",
-                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                  fontFamily: LOG_FONT,
                 }}
-                renderItem={(item) => (
-                  <List.Item style={{ padding: "4px 0" }}>
-                    <Typography.Text type={item.stream === "stderr" ? "danger" : undefined}>
-                      [{item.stream}] {item.line}
-                    </Typography.Text>
-                  </List.Item>
-                )}
-              />
+              >
+                <List
+                  size="small"
+                  dataSource={logs}
+                  renderItem={(item) => (
+                    <List.Item style={{ padding: "4px 0", fontFamily: LOG_FONT }}>
+                      <Typography.Text
+                        type={item.stream === "stderr" ? "danger" : undefined}
+                        style={{ fontFamily: LOG_FONT, fontSize: 12 }}
+                      >
+                        [{item.stream}] {item.line}
+                      </Typography.Text>
+                    </List.Item>
+                  )}
+                />
+              </div>
             )}
           </ProCard>
         </Col>

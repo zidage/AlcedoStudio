@@ -1,0 +1,74 @@
+name: editor_look_panels
+start: workspace_ready
+defaults:
+  expectTimeoutMs: 10000
+nodes:
+  workspace_ready:
+    op:
+      action: wait
+      target: workspaceHost
+      property: visible
+      eq: true
+    next:
+      - to: open_first_image
+        weight: 1
+  open_first_image:
+    op:
+      action: doubleClick
+      target: thumbnailGridView_firstCard
+    expect:
+      - target: editorWorkspace
+        property: visible
+        eq: true
+    next:
+      - to: open_look_panel
+        weight: 1
+  open_look_panel:
+    op:
+      action: click
+      target: editorAdjustmentNav_look
+    expect:
+      - target: editorAdjustmentPanel_look
+        property: visible
+        eq: true
+    next:
+      - to: drag_cct
+        weight: 1
+  drag_cct:
+    op:
+      action: drag
+      target: lookCctSlider
+      fromNx: 0.3
+      toNx: 0.7
+      steps: 10
+    next:
+      - to: drag_saturation
+        weight: 1
+  drag_saturation:
+    op:
+      action: drag
+      target: lookSaturationSlider
+      fromNx: 0.4
+      toNx: 0.75
+      steps: 10
+    next:
+      - to: drag_vibrance
+        weight: 1
+  drag_vibrance:
+    op:
+      action: drag
+      target: lookVibranceSlider
+      fromNx: 0.35
+      toNx: 0.7
+      steps: 10
+    next:
+      - to: back_to_library
+        weight: 1
+  back_to_library:
+    op:
+      action: click
+      target: libraryNavButton
+    expect:
+      - target: libraryWorkspace
+        property: visible
+        eq: true
