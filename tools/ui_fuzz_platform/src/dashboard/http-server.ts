@@ -8,6 +8,7 @@
  *
  * Routes:
  * - GET  /api/health
+ * - GET  /api/fs/browse            -> directory listing for path pickers
  * - GET  /api/runs/active          -> ActiveRunSnapshot
  * - GET  /api/runs/active/snapshot -> live probe snapshot (409 when idle)
  * - POST /api/runs/start           -> { runId }
@@ -30,6 +31,7 @@ import { dirname, join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 
 import { diffCatalogAgainstSnapshot, type StalenessReport } from "../catalog-staleness.js";
+import { browseDirectory, defaultBrowseRoot } from "../fs-browser.js";
 import { ProcessManager } from "../process-manager.js";
 import {
   defaultCatalogPath,
@@ -162,6 +164,34 @@ async function handleHttp(
   try {
     if (req.method === "GET" && url.pathname === "/api/health") {
       sendJson(res, 200, { ok: true });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/fs/browse") {
+      const hasPath = url.searchParams.has("path");
+      const requested = url.searchParams.get("path") ?? "";
+      const extensionsRaw = url.searchParams.get("extensions") ?? "";
+      const extensions = extensionsRaw
+        .split(",")
+        .map((part) => part.trim())
+        .filter((part) => part.length > 0);
+      const executableOnly = url.searchParams.get("executable") === "1";
+      try {
+        // Absent path → preferred start folder; explicit empty path → OS roots (drives on win32).
+        const path = hasPath ? requested : await defaultBrowseRoot();
+        sendJson(
+          res,
+          200,
+          await browseDirectory({
+            path,
+            extensions: executableOnly ? undefined : extensions,
+            executableOnly,
+          }),
+        );
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        const status = code === "ENOENT" || code === "ENOTDIR" ? 404 : 400;
+        sendJson(res, status, { error: (error as Error).message });
+      }
       return;
     }
     if (req.method === "GET" && url.pathname === "/api/runs/active") {
