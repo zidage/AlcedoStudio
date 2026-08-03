@@ -31,6 +31,10 @@ auto TryInitializeOpenClRuntime(const OpenClInitializationOptions& options) -> b
 }
 
 void WarmUpOpenClRuntime() {
+  // Registration is idempotent. Re-run it here so warm-up remains correct even
+  // when the only OpenCL entry was context bootstrap, or when a host forgot to
+  // call InitializeOpenClRuntime before compiling kernels.
+  RegisterOpenClBackendPrograms();
   // Only programs marked required_at_startup are compiled during warm-up.
   // Optional Neural (DemosaicNet) programs stay lazy until first explicit use.
   OpenClProgramLibrary::Instance().WarmUpRequiredPrograms();

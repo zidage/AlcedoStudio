@@ -8,6 +8,7 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <optional>
 
 #include "edit/operators/op_kernel.hpp"
 #include "edit/pipeline/pipeline.hpp"
@@ -35,6 +36,9 @@ struct RenderDesc {
   float                scale_factor_x_      = 1.0f;
   float                scale_factor_y_      = 1.0f;
   bool                 use_viewport_region_ = true;
+  // Session renders freeze the viewport region when the request is submitted.
+  // Legacy callers leave this empty and retain the live sink fallback.
+  std::optional<ViewportRenderRegion> viewport_region_;
   FramePreviewMetadata frame_metadata_      = {};
   uint32_t             max_edge_            = 1024;       // max edge for thumbnail/export resize
   DecodeRes            decode_res_ = DecodeRes::QUARTER;  // RAW decode resolution for thumbnails
@@ -59,12 +63,15 @@ struct PipelineTask {
   std::optional<std::function<void(ImageBuffer&, uint32_t)>>
                                                     seq_callback_;  // used for callback tasks
   std::optional<std::function<bool(PipelineTask&)>> prepare_;
-  // Runs after PipelineScheduler acquires pipeline_executor_->GetRenderLock().
-  // Use for request-specific executor mutations that must be atomic with Apply().
-  std::optional<std::function<bool(PipelineTask&)>> prepare_with_render_lock_;
+  // Request-specific executor configuration performed under the same render
+  // lock as Apply(). This is the only safe place to mutate a shared executor.
+  std::optional<std::function<bool(PipelineTask&)>> configure_under_render_lock_;
   std::function<bool()>                             cancel_requested_;
 
   TaskOptions                                       options_;
+
+  // Monotonic render request identity. Immutable after ScheduleTask stamps it.
+  std::uint64_t                                     request_id_ = 0;
 
   void                                              SetExecutorRenderParams();
   void                                              ResetPreviewRenderParams();

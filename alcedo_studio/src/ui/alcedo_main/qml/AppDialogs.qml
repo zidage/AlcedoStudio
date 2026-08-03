@@ -9,7 +9,7 @@ import QtQuick.Dialogs
 // helpers, semanticGeneration, pending* state aliases); the controllers and
 // state objects are passed in as properties. Dialog ids use the *Obj suffix
 // and are re-exported through friendly-name aliases so Main, ShellSignals, and
-// the BackgroundTaskBar can reach them via `appDialogs.<name>`.
+// shared workspace entry points can reach them via `appDialogs.<name>`.
 Item {
     id: root
     property var host: null
@@ -31,6 +31,7 @@ Item {
     property alias deleteConfirmDialog: deleteConfirmDialogObj
     property alias welcomeDialog: welcomeDialogObj
     property alias globalSearchDialog: globalSearchDialogObj
+    property alias backgroundTasksDialog: backgroundTasksDialogObj
 
     FileDialog {
         id: importDialogObj
@@ -140,11 +141,32 @@ Item {
         }
     }
 
+    // The editor filmstrip shares this menu; Discard appears only when the
+    // menu was opened from the filmstrip on the image currently loaded in the
+    // editor, and stays gated by the session's discard eligibility.
+    function filmstripDiscardActions() {
+        if (root.imageActionsController.menuOrigin !== "editor-filmstrip") {
+            return []
+        }
+        const session = appModules.editorSession
+        if (!session || session.hasImage !== true) {
+            return []
+        }
+        if (Number(host.pendingRatingTarget.elementId) !== Number(session.elementId)) {
+            return []
+        }
+        return [{
+            id: "discard-edit",
+            label: qsTr("Discard"),
+            enabled: session.canDiscardCurrentCommit === true
+        }]
+    }
+
     ImageContextMenu {
         id: imageContextMenuObj
         ratingEnabled: Number(host.pendingRatingTarget.imageId) > 0
         currentRating: Math.max(0, Math.min(5, Number(host.pendingRatingTarget.rating || 0)))
-        actions: [
+        actions: root.filmstripDiscardActions().concat([
             {
                 id: "copy-adjustments",
                 label: qsTr("Copy Adjustments"),
@@ -165,13 +187,20 @@ Item {
                 enabled: host.pendingDeleteTargets.length > 0
                           && appModules.interactionPolicy.canDeletePendingTargets
             }
-        ].concat(root.imageActionsController.albumTargetActions())
+        ]).concat(root.imageActionsController.albumTargetActions())
         onRatingRequested: function(rating) {
             imageContextMenuObj.close()
             root.imageActionsController.requestSetImageRating(rating)
         }
         onActionRequested: function(actionId) {
             imageContextMenuObj.close()
+            if (actionId === "discard-edit") {
+                if (appModules.editorSession
+                        && appModules.editorSession.canDiscardCurrentCommit === true) {
+                    appModules.editorSession.Discard()
+                }
+                return
+            }
             if (actionId === "copy-adjustments") {
                 root.imageActionsController.requestCopyAdjustments()
                 return
@@ -222,6 +251,17 @@ Item {
         backendInteractive: host.backendInteractive
         onMessageRequested: function(message) {
             host.showSnackbar(message)
+        }
+    }
+
+    BackgroundTasksDialog {
+        id: backgroundTasksDialogObj
+        controller: appModules.backgroundTasks
+        blurSource: root.blurSource
+        cornerRadius: root.host ? root.host.windowCornerRadius : 0
+        onTaskDetailsRequested: function(task) {
+            if (task && task.kind === "imageAnalysis")
+                advancedContentAnalysisDialogObj.openTaskDetails(task)
         }
     }
 
@@ -278,9 +318,7 @@ Item {
         cornerRadius: host.windowCornerRadius
         recentProjects: appModules.project.recentProjects
         languageOptions: host.languageOptions
-        acceleratorOptions: appModules.project.acceleratorOptions
         currentLanguageIndex: host.languageIndexForCode(languageManager.currentLanguageCode)
-        currentAcceleratorBackend: appModules.project.acceleratorBackend
         acceleratorWarning: appModules.project.acceleratorWarning
         serviceMessage: appModules.project.serviceMessage
         headlineFontFamily: host.headlineFontFamily
@@ -305,11 +343,6 @@ Item {
         onExitRequested: Qt.quit()
         onLanguageRequested: function(languageCode) {
             languageManager.setLanguage(languageCode)
-        }
-        onAcceleratorRequested: function(backend) {
-            if (!appModules.project.SetAcceleratorBackend(backend)) {
-                host.showSnackbar(appModules.project.serviceMessage)
-            }
         }
         onAcceleratorWarningAcknowledged: appModules.project.AcknowledgeAcceleratorWarning()
         onRecentProjectRequested: function(projectPath) {
@@ -339,6 +372,7 @@ Item {
                || nikonHeRecoveryDialogObj.opened
                || semanticGenerationDialogObj.opened
                || advancedContentAnalysisDialogObj.opened
+               || backgroundTasksDialogObj.opened
                || deleteConfirmDialogObj.opened
                || welcomeDialogObj.opened
     }
@@ -354,5 +388,9 @@ Item {
         if (targets.length <= 0) {
             host.showSnackbar(qsTr("Select at least one image to analyze."))
         }
+    }
+
+    function openBackgroundTasksDialog() {
+        backgroundTasksDialogObj.open()
     }
 }

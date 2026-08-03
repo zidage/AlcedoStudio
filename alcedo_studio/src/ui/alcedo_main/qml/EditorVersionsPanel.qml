@@ -29,6 +29,9 @@ Item {
     property string draftMode: ""
     property string draftVersionId: ""
     property string draftOriginalText: ""
+    // Name accepted on the last submit; used to detect model-projected success
+    // when a terminal HistoryOperationFinished is delayed or missed.
+    property string draftSubmittedName: ""
     property bool draftSubmitPending: false
     // Correlated operation id for the in-flight create/rename. Only the matching
     // terminal HistoryOperationFinished may close or fail this draft (R4).
@@ -40,6 +43,10 @@ Item {
     // the image root. "Branch from current" is disabled while this is empty.
     readonly property string activeVersionHeadCommit:
         root.historyModel ? String(root.historyModel.activeVersionHeadCommit || "") : ""
+    readonly property string activeVersionDisplayName:
+        root.historyModel ? String(root.historyModel.activeVersionDisplayName || "") : ""
+    readonly property string activeVersionId:
+        root.historyModel ? String(root.historyModel.activeVersionId || "") : ""
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
     readonly property color colMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
@@ -80,6 +87,16 @@ Item {
         root.restoreListScroll()
     }
 
+    function clearDraftFields() {
+        root.draftMode = ""
+        root.draftVersionId = ""
+        root.draftOriginalText = ""
+        root.draftSubmittedName = ""
+        root.draftPendingOperationId = null
+        root.draftError = ""
+        versionNameField.text = ""
+    }
+
     function openCreateVersion(mode) {
         if (!root.historyModel || root.draftSubmitPending)
             return
@@ -92,6 +109,7 @@ Item {
         root.draftMode = mode
         root.draftVersionId = ""
         root.draftError = ""
+        root.draftSubmittedName = ""
         root.draftPendingOperationId = null
         root.draftOriginalText = qsTr("Version %1").arg(root.historyModel.versions.count + 1)
         versionNameField.text = root.draftOriginalText
@@ -105,6 +123,7 @@ Item {
         root.draftMode = "rename"
         root.draftVersionId = versionId
         root.draftError = ""
+        root.draftSubmittedName = ""
         root.draftPendingOperationId = null
         root.draftOriginalText = displayName
         versionNameField.text = displayName
@@ -116,23 +135,14 @@ Item {
         if (root.draftSubmitPending)
             return
         root.draftVisible = false
-        root.draftMode = ""
-        root.draftVersionId = ""
-        root.draftOriginalText = ""
-        root.draftPendingOperationId = null
-        root.draftError = ""
-        versionNameField.text = ""
+        root.draftSubmitPending = false
+        root.clearDraftFields()
     }
 
     function closeDraftAfterSuccess() {
         root.draftSubmitPending = false
         root.draftVisible = false
-        root.draftMode = ""
-        root.draftVersionId = ""
-        root.draftOriginalText = ""
-        root.draftPendingOperationId = null
-        root.draftError = ""
-        versionNameField.text = ""
+        root.clearDraftFields()
         root.restoreListScroll()
     }
 
@@ -140,6 +150,10 @@ Item {
         root.draftSubmitPending = false
         root.draftPendingOperationId = null
         root.draftError = String(message || qsTr("Version operation failed"))
+        // Re-show the naming row if SaveStarted already hid it.
+        root.draftVisible = true
+        if (root.draftSubmittedName.length > 0)
+            versionNameField.text = root.draftSubmittedName
         root.restoreListScroll()
         draftFocusTimer.restart()
     }
@@ -147,6 +161,24 @@ Item {
     function isVersionDraftAction(action) {
         return action === "createRootVersion" || action === "renameVersion"
                || action === "branchFromCommit"
+    }
+
+    // True when the projected history already shows the submitted create/branch
+    // checkout or active rename. Used when terminal HistoryOperationFinished is
+    // delayed/missed so the naming row and mutation locks cannot stick open.
+    function historyModelReflectsDraftSuccess() {
+        if (!root.historyModel || root.draftSubmittedName.length === 0)
+            return false
+        var activeName = root.activeVersionDisplayName.trim()
+        if (activeName !== root.draftSubmittedName)
+            return false
+        if (root.draftMode === "rename") {
+            if (root.draftVersionId.length === 0)
+                return true
+            return root.activeVersionId === root.draftVersionId
+        }
+        // forkRoot / branchHead always check out the new Version on success.
+        return true
     }
 
     // Apply the latest correlated history result to the inline draft. Create and
@@ -159,16 +191,21 @@ Item {
         var action = String(result.action || "")
         if (!root.isVersionDraftAction(action))
             return false
+        // String compare: QVariantMap may surface operationId as double/string.
         if (root.draftPendingOperationId !== null
                 && result.operationId !== undefined
-                && Number(result.operationId) !== Number(root.draftPendingOperationId))
+                && String(result.operationId) !== String(root.draftPendingOperationId))
             return false
         var kind = Number(result.kind !== undefined ? result.kind : -1)
         var terminal = result.terminal === true
-        // SaveStarted = 4. Keep the field until a terminal event for this op.
+        // SaveStarted = 4. Hide the naming row while the checkpoint runs, but
+        // keep draftSubmitPending until a terminal event or model success so
+        // duplicate submits stay blocked. Version checkout remains gated by the
+        // save-checkpoint lease until the backend releases it.
         if (!terminal && kind === 4) {
             if (result.operationId !== undefined)
                 root.draftPendingOperationId = result.operationId
+            root.draftVisible = false
             root.restoreListScroll()
             return true
         }
@@ -179,6 +216,16 @@ Item {
         // Terminal success (Accepted / RenderRouted / SaveFinished / …).
         root.closeDraftAfterSuccess()
         return true
+    }
+
+    // Terminal result first; if still pending, accept a model projection that
+    // already shows the submitted Version (create/branch/active rename).
+    function tryClosePendingDraft() {
+        if (!root.draftSubmitPending)
+            return
+        root.applyHistoryResultToDraft()
+        if (root.draftSubmitPending && root.historyModelReflectsDraftSuccess())
+            root.closeDraftAfterSuccess()
     }
 
     function commitDraft(requireChanged) {
@@ -194,8 +241,9 @@ Item {
             return
         }
 
-        // Pending-save lock: keep the field, block duplicate submit.
+        // Pending-save lock: block duplicate submit until terminal/model success.
         root.draftSubmitPending = true
+        root.draftSubmittedName = name
         root.draftError = ""
         root.draftPendingOperationId = null
         root.captureListScroll()
@@ -213,16 +261,21 @@ Item {
     }
 
     function finishDraftAfterSubmit() {
-        // Synchronous paths finish immediately. Async SaveStarted keeps the
-        // field open with draftSubmitPending until HistoryOperationFinished.
+        // Synchronous paths finish immediately. Async SaveStarted hides the
+        // naming row but keeps draftSubmitPending until terminal/model success.
         if (!root.editorSession) {
             root.closeDraftAfterSuccess()
             return
         }
-        if (root.applyHistoryResultToDraft())
+        if (root.applyHistoryResultToDraft()) {
+            // Model may already project the new Version on the same stack.
+            if (root.draftSubmitPending && root.historyModelReflectsDraftSuccess())
+                root.closeDraftAfterSuccess()
             return
+        }
         // Unrelated history result: release the submit lock but keep the draft.
         root.draftSubmitPending = false
+        root.draftSubmittedName = ""
         root.restoreListScroll()
     }
 
@@ -257,16 +310,23 @@ Item {
         target: root.editorSession
         ignoreUnknownSignals: true
         function onHistoryOperationFinished() {
-            root.applyHistoryResultToDraft()
+            root.tryClosePendingDraft()
         }
-        // Fallback: when the model projects a new active Version after create
-        // (HistoryChanged) while the draft is still pending a terminal event,
-        // re-read lastHistoryResult so a missed signal cannot leave the naming
-        // row and mutation locks stuck open.
+        // Fallback when a terminal event is missed: re-evaluate lastHistoryResult
+        // and the projected Version list so the naming row cannot stick open.
         function onHistoryChanged() {
-            if (!root.draftSubmitPending)
-                return
-            root.applyHistoryResultToDraft()
+            root.tryClosePendingDraft()
+        }
+    }
+
+    // historyModel.StateChanged fires after the list projection applies, which
+    // can be after editorSession.HistoryChanged listeners run — so model
+    // reflection must also listen here.
+    Connections {
+        target: root.historyModel
+        ignoreUnknownSignals: true
+        function onStateChanged() {
+            root.tryClosePendingDraft()
         }
     }
 
@@ -534,8 +594,10 @@ Item {
                     MouseArea {
                         anchors.fill: parent
                         z: 0
+                        // Do not gate checkout on draftSubmitPending: a stuck
+                        // pending bit after async create must not freeze the list.
+                        // Save-checkpoint leases already disable canCheckoutVersion.
                         enabled: root.versionCheckoutEnabled && !versionActive
-                                 && !root.draftSubmitPending
                         onClicked: root.checkoutVersionPreservingScroll(versionId)
                     }
 
@@ -604,7 +666,6 @@ Item {
                                      && root.historyModel && root.historyModel.versions.count > 1
                                      && root.editorSession
                                      && root.editorSession.actions.canRemoveVersion
-                                     && !root.draftSubmitPending
                             iconSrc: "qrc:/panel_icons/trash.svg"
                             iconColorDefault: root.colText
                             iconColorMuted: root.colMuted

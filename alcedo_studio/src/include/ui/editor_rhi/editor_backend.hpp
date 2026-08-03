@@ -40,7 +40,7 @@ struct EditorBackendParseResult {
 [[nodiscard]] auto DefaultEditorBackendForPlatform() -> std::optional<EditorBackend>;
 
 // Process-wide backend selected by ApplyEditorBackendBeforeWindow / production
-// main. EditorViewportItem and FramePresentationBroker must use this value so
+// main. EditorViewportItem and DirectPresentQueue must use this value so
 // the lease pool matches the active QRhi and pipeline backend.
 void SetActiveEditorBackend(EditorBackend backend);
 [[nodiscard]] auto ActiveEditorBackend() -> EditorBackend;

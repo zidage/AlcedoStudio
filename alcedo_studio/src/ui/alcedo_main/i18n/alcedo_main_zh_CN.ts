@@ -2036,7 +2036,7 @@ Alcedo 将改用 %1。</translation>
 <context>
     <name>AppDialogs</name>
     <message>
-        <location filename="../qml/AppDialogs.qml" line="+37"/>
+        <location filename="../qml/AppDialogs.qml" line="+38"/>
         <source>Select Images</source>
         <translation>选择图像</translation>
     </message>
@@ -2051,7 +2051,12 @@ Alcedo 将改用 %1。</translation>
         <translation>所有文件 (*)</translation>
     </message>
     <message>
-        <location line="+109"/>
+        <location line="+118"/>
+        <source>Discard</source>
+        <translation type="unfinished">放弃</translation>
+    </message>
+    <message>
+        <location line="+12"/>
         <source>Copy Adjustments</source>
         <translation>复制调整</translation>
     </message>
@@ -2071,7 +2076,7 @@ Alcedo 将改用 %1。</translation>
         <translation>从相册移除</translation>
     </message>
     <message>
-        <location line="+194"/>
+        <location line="+211"/>
         <source>Select at least one image to analyze.</source>
         <translation>请至少选择一张图像进行分析。</translation>
     </message>
@@ -2079,17 +2084,7 @@ Alcedo 将改用 %1。</translation>
 <context>
     <name>BackgroundTaskBar</name>
     <message>
-        <location filename="../qml/BackgroundTaskBar.qml" line="+68"/>
-        <source>Background tasks</source>
-        <translation>后台任务</translation>
-    </message>
-    <message>
-        <location line="+45"/>
-        <source>Cancel</source>
-        <translation>取消</translation>
-    </message>
-    <message>
-        <location line="+21"/>
+        <location filename="../qml/BackgroundTaskBar.qml" line="+62"/>
         <source>AI Analysis</source>
         <translation>AI 分析</translation>
     </message>
@@ -2123,58 +2118,130 @@ Alcedo 将改用 %1。</translation>
         <source>Export</source>
         <translation>导出</translation>
     </message>
-</context>
-<context>
-    <name>BackgroundTaskPopover</name>
     <message>
-        <location filename="../qml/BackgroundTaskPopover.qml" line="+51"/>
-        <source>Background tasks</source>
+        <location line="+1"/>
+        <location line="+5"/>
+        <source>Background Tasks</source>
         <translation>后台任务</translation>
     </message>
     <message>
-        <location line="+61"/>
-        <source>Task</source>
-        <translation>任务</translation>
+        <location line="+3"/>
+        <location line="+1"/>
+        <source>%1 · %2</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+20"/>
-        <source>Details</source>
-        <translation>详细信息</translation>
+        <location line="+94"/>
+        <source>+%1</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
+    <name>BackgroundTasksDialog</name>
+    <message>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <source>Failed</source>
+        <translation>失败</translation>
     </message>
     <message>
-        <location line="+12"/>
-        <source>Cancel</source>
-        <translation>取消</translation>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <source>Working</source>
+        <translation>正在处理</translation>
     </message>
     <message>
-        <location line="+33"/>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <source>Finished</source>
+        <translation>已完成</translation>
+    </message>
+    <message>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
         <source>AI Analysis</source>
         <translation>AI 分析</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
         <source>Semantic Labels</source>
         <translation>语义标签</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
         <source>Model Activation</source>
         <translation>模型激活</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
         <source>Model Download</source>
         <translation>模型下载</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
         <source>Editor Save</source>
         <translation>编辑器保存</translation>
     </message>
     <message>
-        <location line="+1"/>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
         <source>Import</source>
         <translation>导入</translation>
+    </message>
+    <message>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <source>Export</source>
+        <translation>导出</translation>
+    </message>
+    <message>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <source>Task</source>
+        <translation>任务</translation>
+    </message>
+    <message>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <source>No active work</source>
+        <translation>暂无进行中的任务</translation>
+    </message>
+    <message>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <source>%1 total · %2 working</source>
+        <translation>共 %1 项 · %2 项进行中</translation>
+    </message>
+    <message>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <source>%1 total</source>
+        <translation>共 %1 项</translation>
+    </message>
+    <message>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <source>%1%</source>
+        <translation>%1%</translation>
+    </message>
+    <message>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <source>Background Tasks</source>
+        <translation>后台任务</translation>
+    </message>
+    <message>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <source>Close</source>
+        <translation>关闭</translation>
+    </message>
+    <message>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <source>Details</source>
+        <translation>详细信息</translation>
+    </message>
+    <message>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <source>No background tasks yet</source>
+        <translation>暂无后台任务</translation>
+    </message>
+    <message>
+        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <source>Imports, exports, model work, and AI jobs will appear here.</source>
+        <translation>导入、导出、模型与 AI 任务会显示在这里。</translation>
     </message>
 </context>
 <context>
@@ -2198,7 +2265,12 @@ Alcedo 将改用 %1。</translation>
         <translation>搜索</translation>
     </message>
     <message>
-        <location line="+232"/>
+        <location line="+10"/>
+        <source>Background Tasks</source>
+        <translation>后台任务</translation>
+    </message>
+    <message>
+        <location line="+230"/>
         <source>LOCAL FOLDERS</source>
         <translation>本地文件夹</translation>
     </message>
@@ -2238,17 +2310,17 @@ Alcedo 将改用 %1。</translation>
         <translation>导入</translation>
     </message>
     <message>
-        <location line="-533"/>
+        <location line="-541"/>
         <source>Advanced Content Analysis</source>
         <translation>高级内容分析</translation>
     </message>
     <message>
-        <location line="+32"/>
+        <location line="+38"/>
         <source>全部图片</source>
         <translation>全部图片</translation>
     </message>
     <message>
-        <location line="+184"/>
+        <location line="+186"/>
         <source>Open a project before running remote analysis.</source>
         <translation>运行远程分析前请先打开项目。</translation>
     </message>
@@ -2610,7 +2682,12 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorFilmstrip</name>
     <message>
-        <location filename="../qml/EditorFilmstrip.qml" line="+229"/>
+        <location filename="../qml/EditorFilmstrip.qml" line="+218"/>
+        <source>(unnamed)</source>
+        <translation type="unfinished">（未命名）</translation>
+    </message>
+    <message>
+        <location line="+19"/>
         <source>Editor filmstrip</source>
         <translation>编辑器胶片带</translation>
     </message>
@@ -2689,11 +2766,6 @@ Original source files on disk will be kept.</source>
         <location line="+17"/>
         <source>Rendering</source>
         <translation>正在渲染</translation>
-    </message>
-    <message>
-        <location line="+79"/>
-        <source>Discard</source>
-        <translation>放弃</translation>
     </message>
 </context>
 <context>
@@ -2916,34 +2988,6 @@ Original source files on disk will be kept.</source>
         <location line="+19"/>
         <source>No edit history yet</source>
         <translation>尚无编辑历史</translation>
-    </message>
-</context>
-<context>
-    <name>EditorHistoryVersionsRail</name>
-    <message>
-        <location filename="../qml/EditorHistoryVersionsRail.qml" line="+36"/>
-        <source>Resolve the editor save first</source>
-        <translation>请先处理编辑器保存</translation>
-    </message>
-    <message>
-        <location line="+164"/>
-        <source>Hide Edit History</source>
-        <translation>隐藏编辑历史</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Show Edit History</source>
-        <translation>显示编辑历史</translation>
-    </message>
-    <message>
-        <location line="+20"/>
-        <source>Hide Versions</source>
-        <translation>隐藏版本</translation>
-    </message>
-    <message>
-        <location line="+0"/>
-        <source>Show Versions</source>
-        <translation>显示版本</translation>
     </message>
 </context>
 <context>
@@ -3533,7 +3577,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorWorkspace</name>
     <message>
-        <location filename="../qml/EditorWorkspace.qml" line="+122"/>
+        <location filename="../qml/EditorWorkspace.qml" line="+124"/>
         <source>Editor viewport</source>
         <translation>编辑器视口</translation>
     </message>
@@ -3591,6 +3635,39 @@ Original source files on disk will be kept.</source>
         <location line="+35"/>
         <source>Editor</source>
         <translation>编辑</translation>
+    </message>
+</context>
+<context>
+    <name>EditorWorkspaceRail</name>
+    <message>
+        <location filename="../qml/EditorWorkspaceRail.qml" line="+37"/>
+        <source>Resolve the editor save first</source>
+        <translation type="unfinished">请先处理编辑器保存</translation>
+    </message>
+    <message>
+        <location line="+164"/>
+        <source>Hide Edit History</source>
+        <translation type="unfinished">隐藏编辑历史</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Show Edit History</source>
+        <translation type="unfinished">显示编辑历史</translation>
+    </message>
+    <message>
+        <location line="+20"/>
+        <source>Hide Versions</source>
+        <translation type="unfinished">隐藏版本</translation>
+    </message>
+    <message>
+        <location line="+0"/>
+        <source>Show Versions</source>
+        <translation type="unfinished">显示版本</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Background Tasks</source>
+        <translation>后台任务</translation>
     </message>
 </context>
 <context>
@@ -3758,16 +3835,16 @@ Original source files on disk will be kept.</source>
 <context>
     <name>ImageActionsController</name>
     <message>
-        <location filename="../qml/ImageActionsController.qml" line="+57"/>
+        <location filename="../qml/ImageActionsController.qml" line="+61"/>
         <location line="+18"/>
-        <location line="+94"/>
-        <location line="+45"/>
+        <location line="+88"/>
+        <location line="+58"/>
         <location line="+9"/>
         <source>(unnamed)</source>
         <translation>（未命名）</translation>
     </message>
     <message>
-        <location line="-36"/>
+        <location line="-39"/>
         <source>Album</source>
         <translation>相册</translation>
     </message>
@@ -3777,7 +3854,7 @@ Original source files on disk will be kept.</source>
         <translation>添加到 %1</translation>
     </message>
     <message>
-        <location line="+50"/>
+        <location line="+53"/>
         <source>Delete this image from project?</source>
         <translation>从项目中删除这张图像？</translation>
     </message>
@@ -3800,7 +3877,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>ImageContextMenu</name>
     <message>
-        <location filename="../qml/ImageContextMenu.qml" line="+32"/>
+        <location filename="../qml/ImageContextMenu.qml" line="+29"/>
         <source>Rating</source>
         <translation>评分</translation>
     </message>
@@ -4037,7 +4114,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>LibraryWorkspace</name>
     <message>
-        <location filename="../qml/LibraryWorkspace.qml" line="+182"/>
+        <location filename="../qml/LibraryWorkspace.qml" line="+183"/>
         <source>Browser</source>
         <translation>浏览</translation>
     </message>
@@ -4725,6 +4802,22 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <source>Advanced Content Analysis</source>
         <translation>高级内容分析</translation>
     </message>
+    <message>
+        <source>Acceleration</source>
+        <translation>加速</translation>
+    </message>
+    <message>
+        <source>Image processing backend</source>
+        <translation>图像处理后端</translation>
+    </message>
+    <message>
+        <source>Backend</source>
+        <translation>后端</translation>
+    </message>
+    <message>
+        <source>Restart Alcedo yourself to apply this backend change.</source>
+        <translation>请自行重启 Alcedo，以使此后端更改生效。</translation>
+    </message>
 </context>
 <context>
     <name>ShellSignals</name>
@@ -5005,7 +5098,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>alcedo::ui::AppTheme</name>
     <message>
-        <location filename="../app_theme.cpp" line="+1157"/>
+        <location filename="../app_theme.cpp" line="+1165"/>
         <source>Alcedo</source>
         <translation>Alcedo</translation>
     </message>

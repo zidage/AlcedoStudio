@@ -55,14 +55,14 @@ class RecordingSink final : public IFrameSink {
 
   auto MapResourceForWrite(FrameMemoryDomain) -> FrameWriteMapping override { return {}; }
   void UnmapResource() override {}
-  void NotifyFrameReady() override {}
-  int  GetWidth() const override { return width_; }
-  int  GetHeight() const override { return height_; }
-
-  void SetNextFramePreviewMetadata(const FramePreviewMetadata& metadata) override {
-    last_metadata = metadata;
+  void NotifyFrameReady(const FrameCompletionSubmission&) override {}
+  void BindFrameSubmission(const FrameCompletionSubmission& submission) override {
+    last_metadata = submission.metadata;
     ++metadata_count;
   }
+
+  int GetWidth() const override { return width_; }
+  int GetHeight() const override { return height_; }
 
   FramePreviewMetadata last_metadata{};
   int                  metadata_count = 0;
@@ -181,7 +181,7 @@ class SequencedAnalyzer final : public IScopeAnalyzer {
     std::lock_guard<std::mutex> lock(mutex_);
     pending_output_.generation         = ++next_gen_;
     pending_output_.image_identity     = frame.image_identity;
-    pending_output_.image_generation   = frame.image_generation;
+    pending_output_.session_epoch   = frame.session_epoch;
     pending_output_.display_generation = frame.display_generation;
     call_log_.push_back("submit");
     submitted_gens_.push_back(pending_output_.generation);
@@ -224,12 +224,12 @@ auto MarkerValue(const std::shared_ptr<void>& resource) -> int {
 }
 
 auto MakeValidSnapshot(std::uint64_t generation, std::uint64_t image_identity,
-                       std::uint64_t image_generation, std::uint64_t display_generation)
+                       std::uint64_t session_epoch, std::uint64_t display_generation)
     -> alcedo::ScopeRenderSnapshot {
   alcedo::ScopeRenderSnapshot snapshot;
   snapshot.generation         = generation;
   snapshot.image_identity     = image_identity;
-  snapshot.image_generation   = image_generation;
+  snapshot.session_epoch   = session_epoch;
   snapshot.display_generation = display_generation;
   snapshot.histogram.bins     = 4;
   snapshot.histogram.rgb      = {0.10f, 0.25f, 0.50f, 0.75f};
@@ -249,20 +249,24 @@ TEST(EditorScopeControllerTest,
   tap.SetScopeActive(true);
   FramePreviewMetadata metadata;
   metadata.preview_generation = 23;
+  metadata.presentation_request_id = 249;
+  metadata.frame_role              = FrameRole::DetailPatch;
   metadata.image_identity     = 91;
-  metadata.image_generation   = 7;
-  tap.SetNextFramePreviewMetadata(metadata);
+  metadata.session_epoch   = 7;
+  tap.BindFrameSubmission({metadata, FramePresentationMode::ViewportTransformed});
   tap.SubmitFinalDisplayFrame(MakeFrame());
 
   ASSERT_EQ(analyzer->submitted_frames.size(), 1U);
   const auto& submitted = analyzer->submitted_frames.front();
   EXPECT_EQ(submitted.image_identity, 91U);
-  EXPECT_EQ(submitted.image_generation, 7U);
-  EXPECT_EQ(submitted.display_generation, 23U);
-  EXPECT_EQ(submitted.frame_id, 23U);
+  EXPECT_EQ(submitted.session_epoch, 7U);
+  EXPECT_EQ(submitted.display_generation, 249U);
+  EXPECT_EQ(submitted.frame_id, 249U);
   EXPECT_EQ(downstream.metadata_count, 1);
   EXPECT_EQ(downstream.last_metadata.image_identity, 91U);
-  EXPECT_EQ(downstream.last_metadata.image_generation, 7U);
+  EXPECT_EQ(downstream.last_metadata.session_epoch, 7U);
+  EXPECT_EQ(downstream.last_metadata.presentation_request_id, 249U);
+  EXPECT_EQ(downstream.last_metadata.frame_role, FrameRole::DetailPatch);
   EXPECT_TRUE(downstream.last_metadata.scope_update_allowed);
 }
 
@@ -275,15 +279,15 @@ TEST(EditorScopeControllerTest, ViewOnlyFrameKeepsTheLastContentFrameForScope) {
   FramePreviewMetadata content_metadata;
   content_metadata.preview_generation = 10;
   content_metadata.image_identity     = 18;
-  content_metadata.image_generation   = 4;
-  tap.SetNextFramePreviewMetadata(content_metadata);
+  content_metadata.session_epoch   = 4;
+  tap.BindFrameSubmission({content_metadata, FramePresentationMode::FullFrame});
   tap.SubmitFinalDisplayFrame(MakeFrame());
   ASSERT_EQ(analyzer->submitted_frames.size(), 1U);
 
   FramePreviewMetadata view_metadata = content_metadata;
   view_metadata.preview_generation   = 11;
   view_metadata.scope_update_allowed = false;
-  tap.SetNextFramePreviewMetadata(view_metadata);
+  tap.BindFrameSubmission({view_metadata, FramePresentationMode::FullFrame});
   tap.SubmitFinalDisplayFrame(MakeFrame());
 
   EXPECT_EQ(tap.GetCurrentDisplayFrameView().display_generation, 11U);
@@ -312,8 +316,8 @@ TEST(EditorScopeControllerTest, SwitchingPlotRetainsAndResubmitsTheStagedFullFra
   FramePreviewMetadata metadata;
   metadata.preview_generation = 10;
   metadata.image_identity     = 18;
-  metadata.image_generation   = 4;
-  tap.SetNextFramePreviewMetadata(metadata);
+  metadata.session_epoch   = 4;
+  tap.BindFrameSubmission({metadata, FramePresentationMode::FullFrame});
   tap.SubmitFinalDisplayFrame(MakeFrame());
   ASSERT_TRUE(tap.GetCurrentScopeFrameView());
 
@@ -338,15 +342,15 @@ TEST(EditorScopeControllerTest, HiddenScopeStopsAnalysisAndResumesWithTheMostRec
   FramePreviewMetadata first_metadata;
   first_metadata.preview_generation = 10;
   first_metadata.image_identity     = 18;
-  first_metadata.image_generation   = 4;
-  tap.SetNextFramePreviewMetadata(first_metadata);
+  first_metadata.session_epoch   = 4;
+  tap.BindFrameSubmission({first_metadata, FramePresentationMode::FullFrame});
   tap.SubmitFinalDisplayFrame(MakeFrame());
   ASSERT_EQ(analyzer->submitted_frames.size(), 1U);
 
   tap.SetScopeActive(false);
   FramePreviewMetadata hidden_metadata = first_metadata;
   hidden_metadata.preview_generation   = 11;
-  tap.SetNextFramePreviewMetadata(hidden_metadata);
+  tap.BindFrameSubmission({hidden_metadata, FramePresentationMode::FullFrame});
   tap.SubmitFinalDisplayFrame(MakeFrame());
   EXPECT_EQ(analyzer->submitted_frames.size(), 1U);
   EXPECT_EQ(analyzer->release_count, 0);
@@ -365,8 +369,8 @@ TEST(EditorScopeControllerTest, ImageIdentityChangeDropsPendingFrameMetadata) {
   FramePreviewMetadata stale_metadata;
   stale_metadata.preview_generation = 10;
   stale_metadata.image_identity     = 18;
-  stale_metadata.image_generation   = 4;
-  tap.SetNextFramePreviewMetadata(stale_metadata);
+  stale_metadata.session_epoch   = 4;
+  tap.BindFrameSubmission({stale_metadata, FramePresentationMode::FullFrame});
 
   tap.SetFrameIdentity(27, 5);
   tap.SubmitFinalDisplayFrame(MakeFrame());
@@ -374,7 +378,7 @@ TEST(EditorScopeControllerTest, ImageIdentityChangeDropsPendingFrameMetadata) {
   ASSERT_EQ(analyzer->submitted_frames.size(), 1U);
   const auto& submitted = analyzer->submitted_frames.front();
   EXPECT_EQ(submitted.image_identity, 27U);
-  EXPECT_EQ(submitted.image_generation, 5U);
+  EXPECT_EQ(submitted.session_epoch, 5U);
   EXPECT_EQ(submitted.display_generation, 0U);
 }
 
@@ -403,8 +407,8 @@ TEST(EditorScopeControllerTest, UnifiedScopeSubmissionIsDeferredUntilPolling) {
   FramePreviewMetadata metadata;
   metadata.preview_generation = 30;
   metadata.image_identity     = 42;
-  metadata.image_generation   = 3;
-  tap->SetNextFramePreviewMetadata(metadata);
+  metadata.session_epoch   = 3;
+  tap->BindFrameSubmission({metadata, FramePresentationMode::FullFrame});
   tap->SubmitFinalDisplayFrame(MakeFrame());
   EXPECT_EQ(analyzer->submitted_count.load(std::memory_order_relaxed), 0);
 
@@ -429,19 +433,19 @@ TEST(EditorScopeControllerTest, PriorImageOutputIsRejectedAfterSessionIdentityCh
   FramePreviewMetadata metadata;
   metadata.preview_generation = 30;
   metadata.image_identity     = 42;
-  metadata.image_generation   = 3;
-  tap->SetNextFramePreviewMetadata(metadata);
+  metadata.session_epoch   = 3;
+  tap->BindFrameSubmission({metadata, FramePresentationMode::FullFrame});
   tap->SubmitFinalDisplayFrame(MakeFrame());
 
   analyzer->latest_output.generation         = 9;
   analyzer->latest_output.image_identity     = 42;
-  analyzer->latest_output.image_generation   = 3;
+  analyzer->latest_output.session_epoch   = 3;
   analyzer->latest_output.display_generation = 30;
   controller.SetImageIdentity(99, 4);
   EXPECT_FALSE(controller.refreshSnapshot());
   EXPECT_FALSE(controller.has_snapshot());
   EXPECT_EQ(controller.image_identity(), 99U);
-  EXPECT_EQ(controller.image_generation(), 4U);
+  EXPECT_EQ(controller.session_epoch(), 4U);
 }
 
 TEST(EditorScopeControllerTest, EmptyScopeOutputIsRejectedWhileCurrentImageRemainsOpen) {
@@ -455,13 +459,13 @@ TEST(EditorScopeControllerTest, EmptyScopeOutputIsRejectedWhileCurrentImageRemai
   FramePreviewMetadata metadata;
   metadata.preview_generation = 30;
   metadata.image_identity     = 42;
-  metadata.image_generation   = 3;
-  tap->SetNextFramePreviewMetadata(metadata);
+  metadata.session_epoch   = 3;
+  tap->BindFrameSubmission({metadata, FramePresentationMode::FullFrame});
   tap->SubmitFinalDisplayFrame(MakeFrame());
 
   analyzer->latest_output.generation         = 9;
   analyzer->latest_output.image_identity     = 42;
-  analyzer->latest_output.image_generation   = 3;
+  analyzer->latest_output.session_epoch   = 3;
   analyzer->latest_output.display_generation = 29;
   EXPECT_FALSE(controller.refreshSnapshot());
   EXPECT_FALSE(controller.has_snapshot());
@@ -477,8 +481,8 @@ class EditorScopeControllerTestPeer {
       : controller_(controller) {}
 
   auto PublishSnapshot(const alcedo::ScopeRenderSnapshot& snapshot, std::uint64_t image_identity,
-                       std::uint64_t image_generation, std::uint64_t request_revision) -> bool {
-    return controller_.publishSnapshot(snapshot, image_identity, image_generation,
+                       std::uint64_t session_epoch, std::uint64_t request_revision) -> bool {
+    return controller_.publishSnapshot(snapshot, image_identity, session_epoch,
                                        request_revision);
   }
 
@@ -498,28 +502,28 @@ TEST(EditorScopeControllerTest, SwitchingToUncomputedWaveformPublishesWaveformCo
   FramePreviewMetadata metadata;
   metadata.preview_generation = 30;
   metadata.image_identity     = 42;
-  metadata.image_generation   = 3;
-  tap->SetNextFramePreviewMetadata(metadata);
+  metadata.session_epoch   = 3;
+  tap->BindFrameSubmission({metadata, FramePresentationMode::FullFrame});
   tap->SubmitFinalDisplayFrame(MakeFrame());
 
   QObject::connect(&controller, &EditorScopeController::FrameRequested, &controller, [&]() {
     FramePreviewMetadata refreshed_metadata = metadata;
     refreshed_metadata.preview_generation   = 31;
-    tap->SetNextFramePreviewMetadata(refreshed_metadata);
+    tap->BindFrameSubmission({refreshed_metadata, FramePresentationMode::FullFrame});
     tap->SubmitFinalDisplayFrame(MakeFrame());
   });
   analyzer->on_submit = [&peer](const FinalDisplayFrameView& frame, const ScopeRequest& request) {
     if ((request.enabled_mask & static_cast<uint32_t>(ScopeType::Waveform)) == 0U) {
       return;
     }
-    auto waveform            = MakeValidSnapshot(10, frame.image_identity, frame.image_generation,
+    auto waveform            = MakeValidSnapshot(10, frame.image_identity, frame.session_epoch,
                                                  frame.display_generation);
     waveform.histogram       = {};
     waveform.waveform.width  = 2;
     waveform.waveform.height = 2;
     waveform.waveform.rgba   = {0.1f, 0.2f, 0.3f, 0.4f};
     waveform.waveform.valid  = true;
-    (void)peer.PublishSnapshot(waveform, frame.image_identity, frame.image_generation, 1);
+    (void)peer.PublishSnapshot(waveform, frame.image_identity, frame.session_epoch, 1);
   };
 
   controller.set_active_view(1);
@@ -567,8 +571,8 @@ TEST(EditorScopeControllerTest, DeferredScopeAnalyzesStagedFrameNotPipelineSourc
   FramePreviewMetadata metadata;
   metadata.preview_generation = 10;
   metadata.image_identity     = 18;
-  metadata.image_generation   = 4;
-  tap.SetNextFramePreviewMetadata(metadata);
+  metadata.session_epoch   = 4;
+  tap.BindFrameSubmission({metadata, FramePresentationMode::FullFrame});
   tap.SubmitFinalDisplayFrame(MakeFrame());  // MakeFrame() carries marker int(1)
 
   // StageFrame ran synchronously on the render thread with the pipeline source.
@@ -625,8 +629,8 @@ TEST(EditorScopeControllerTest, RefreshCollectsLatestCompletedBeforeSubmittingNe
     FramePreviewMetadata metadata;
     metadata.preview_generation = display_gen;
     metadata.image_identity     = 18;
-    metadata.image_generation   = 4;
-    tap->SetNextFramePreviewMetadata(metadata);
+    metadata.session_epoch   = 4;
+    tap->BindFrameSubmission({metadata, FramePresentationMode::FullFrame});
     tap->SubmitFinalDisplayFrame(MakeFrame());
   };
 
@@ -665,8 +669,8 @@ TEST(EditorScopeControllerTest, ScopeWorkerDrainsBeforeSessionRelease) {
   FramePreviewMetadata metadata;
   metadata.preview_generation = 30;
   metadata.image_identity     = 42;
-  metadata.image_generation   = 3;
-  tap->SetNextFramePreviewMetadata(metadata);
+  metadata.session_epoch   = 3;
+  tap->BindFrameSubmission({metadata, FramePresentationMode::FullFrame});
   tap->SubmitFinalDisplayFrame(MakeFrame());
 
   // Start the poll timer; the worker posts to the dedicated pool and blocks

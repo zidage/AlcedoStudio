@@ -340,7 +340,9 @@ target_include_directories(JSON INTERFACE "${CMAKE_SOURCE_DIR}/alcedo_studio/thi
 
 # Other libraries
 # OpenCV
-find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs calib3d highgui)
+# OpenCV 5 split calib3d into geometry/calib/stereo/ptcloud; Alcedo only needs
+# core image processing modules, so do not require the removed calib3d target.
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs highgui)
 
 # Eigen3
 find_package(Eigen3 CONFIG REQUIRED)
@@ -1539,6 +1541,12 @@ if(APPLE AND ALCEDO_MACOS_BUNDLE)
     # Include the .app bundle at the top level of the ZIP so the user
     # extracts it and finds the app bundle directly.
     set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
+    # Package / DMG volume icon (same brand mark as the .app bundle).
+    set(_alcedo_macos_pkg_icns
+        "${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/ICON/alcedo_icon.icns")
+    if(EXISTS "${_alcedo_macos_pkg_icns}")
+        set(CPACK_PACKAGE_ICON "${_alcedo_macos_pkg_icns}")
+    endif()
 elseif(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
     # ------------------------------------------------------------------
     # Windows installer packaging (WIX and/or NSIS)

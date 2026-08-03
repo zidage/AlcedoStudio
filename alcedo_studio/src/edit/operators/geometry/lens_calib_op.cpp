@@ -17,6 +17,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #if defined(_WIN32)
@@ -780,6 +781,8 @@ void LensCalibOp::SetParams(const nlohmann::json& params) {
   target_projection_             = inner.value("target_projection", target_projection_);
   low_precision_preview_         = inner.value("low_precision_preview", low_precision_preview_);
 
+  // Image-local EXIF/runtime metadata: keep existing values when the transfer
+  // package omits them (SanitizeLens strips these keys on capture).
   input_meta_.cam_maker_         = inner.value("cam_maker", input_meta_.cam_maker_);
   input_meta_.cam_model_         = inner.value("cam_model", input_meta_.cam_model_);
   input_meta_.lens_maker_        = inner.value("lens_maker", input_meta_.lens_maker_);
@@ -801,6 +804,62 @@ void LensCalibOp::SetParams(const nlohmann::json& params) {
   }
   has_resolved_params_ = false;
   resolved_input_meta_ = {};
+}
+
+namespace {
+
+auto LensCalibInner(const nlohmann::json& params) -> nlohmann::json {
+  if (params.contains("lens_calib") && params["lens_calib"].is_object()) {
+    return params["lens_calib"];
+  }
+  return nlohmann::json::object();
+}
+
+auto IsLensImageLocalKey(std::string_view key) -> bool {
+  return key == "cam_maker" || key == "cam_model" || key == "lens_maker" || key == "lens_model" ||
+         key == "focal_length_mm" || key == "aperture_f_number" || key == "distance_m" ||
+         key == "focal_35mm_mm" || key == "crop_factor_hint" || key == "lens_profile_db_path";
+}
+
+auto LensPortableParams(const nlohmann::json& params) -> nlohmann::json {
+  const auto inner = LensCalibInner(params);
+  nlohmann::json portable = nlohmann::json::object();
+  for (const auto& [key, value] : inner.items()) {
+    if (!IsLensImageLocalKey(key)) {
+      portable[key] = value;
+    }
+  }
+  return portable;
+}
+
+}  // namespace
+
+auto LensCalibOp::DetectMergeConflict(const nlohmann::json& current,
+                                      const nlohmann::json& incoming) const -> bool {
+  // Only portable correction intent participates in merge conflicts. EXIF /
+  // profile paths stay with the target image and must not force a conflict.
+  return LensPortableParams(current) != LensPortableParams(incoming);
+}
+
+auto LensCalibOp::MergeParams(const nlohmann::json& current, const nlohmann::json& incoming,
+                              OperatorMergeChoice choice) const -> nlohmann::json {
+  if (choice == OperatorMergeChoice::kKeepCurrent) {
+    return current;
+  }
+
+  nlohmann::json result =
+      current.is_object() ? current : nlohmann::json{{std::string(script_name_), nlohmann::json::object()}};
+  if (!result.contains(std::string(script_name_)) || !result[std::string(script_name_)].is_object()) {
+    result[std::string(script_name_)] = nlohmann::json::object();
+  }
+  auto& out = result[std::string(script_name_)];
+  const auto inc = LensCalibInner(incoming);
+  for (const auto& [key, value] : inc.items()) {
+    if (!IsLensImageLocalKey(key)) {
+      out[key] = value;
+    }
+  }
+  return result;
 }
 
 auto LensCalibOp::BuildRuntimeCacheKey(const OperatorParams& params) const -> uint64_t {

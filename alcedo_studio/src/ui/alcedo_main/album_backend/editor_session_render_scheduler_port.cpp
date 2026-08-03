@@ -4,24 +4,30 @@
 
 #include "ui/alcedo_main/album_backend/editor_session_render_scheduler_port.hpp"
 
-#include <QMetaObject>
+#include <QCoreApplication>
+#include <QEventLoop>
+#include <QString>
+#include <QThread>
+
 #include <algorithm>
+#include <chrono>
 #include <future>
 #include <stdexcept>
 #include <utility>
 
 #include "app/editor_adjustment_pipeline.hpp"
 #include "edit/frame_presentation_types.hpp"
-#include "edit/scope/final_display_frame_tap.hpp"
 #include "image/image.hpp"
 #include "image/image_buffer.hpp"
 #include "io/image/image_loader.hpp"
 #include "renderer/pipeline_task.hpp"
 #include "ui/alcedo_main/editor_dialog/controllers/image_controller.hpp"
 #include "ui/alcedo_main/editor_dialog/controllers/pipeline_controller.hpp"
-#include "ui/editor_rhi/direct_frame_sink.hpp"
+#include "utils/diagnostics/app_logging.hpp"
 
 namespace alcedo::ui {
+using alcedo::diag::editorPresentLog;
+
 namespace {
 
 auto RenderTypeForIntent(const alcedo::EditorRenderIntent& intent) -> alcedo::RenderType {
@@ -40,49 +46,79 @@ auto FrameRoleToPreviewMetadata(const alcedo::EditorRenderIntent& intent)
     -> alcedo::FramePreviewMetadata {
   alcedo::FramePreviewMetadata meta;
   meta.frame_role              = intent.frame_role;
-  meta.preview_generation      = intent.reason == alcedo::EditorRenderReason::ScopeRefresh
-                                     ? intent.view_generation
-                                     : intent.render_generation;
   meta.detail_serial           = 0;
   meta.image_identity          = static_cast<std::uint64_t>(intent.image_id);
-  meta.image_generation        = intent.image_load_request_id.value;
+  meta.session_epoch        = intent.image_load_request_id.value;
   meta.scope_update_allowed    = alcedo::ScopeUpdateAllowedForReason(intent.reason);
   meta.scope_refresh_requested = intent.reason == alcedo::EditorRenderReason::ScopeRefresh;
   return meta;
 }
 
-auto DirectSinkFor(alcedo::IFrameSink* sink) -> alcedo::editor_rhi::DirectFrameSink* {
-  if (auto* direct_sink = dynamic_cast<alcedo::editor_rhi::DirectFrameSink*>(sink)) {
-    return direct_sink;
+void TraceDetailRequest(const char* stage, const alcedo::EditorRenderRequest& request,
+                        const char* outcome = "", long long elapsed_ms = -1) {
+  if (request.intent.frame_role != alcedo::FrameRole::DetailPatch) {
+    return;
   }
-  if (auto* tap = dynamic_cast<alcedo::FinalDisplayFrameTapSink*>(sink)) {
-    return dynamic_cast<alcedo::editor_rhi::DirectFrameSink*>(tap->downstream_sink());
+  if (!editorPresentLog().isDebugEnabled()) {
+    return;
   }
-  return nullptr;
+  QString msg = QStringLiteral("[ROI_TRACE][%1] request=%2 image=%3 session_epoch=%4 requested=%5x%6")
+                    .arg(QLatin1String(stage))
+                    .arg(request.request_id)
+                    .arg(request.intent.image_id)
+                    .arg(request.intent.image_load_request_id.value)
+                    .arg(request.intent.requested_width)
+                    .arg(request.intent.requested_height);
+  if (request.intent.view_region) {
+    const auto& roi = *request.intent.view_region;
+    msg += QStringLiteral(" region_px=%1,%2 scale=%3,%4 reference=%5x%6 target=%7x%8")
+               .arg(roi.x_)
+               .arg(roi.y_)
+               .arg(roi.scale_x_)
+               .arg(roi.scale_y_)
+               .arg(roi.reference_width_)
+               .arg(roi.reference_height_)
+               .arg(roi.target_width_)
+               .arg(roi.target_height_);
+  } else {
+    msg += QStringLiteral(" region=none");
+  }
+  if (outcome && *outcome) {
+    msg += QStringLiteral(" outcome=%1").arg(QLatin1String(outcome));
+  }
+  if (elapsed_ms >= 0) {
+    msg += QStringLiteral(" elapsed_ms=%1").arg(elapsed_ms);
+  }
+  qCDebug(editorPresentLog).noquote() << msg;
 }
 
 }  // namespace
 
 EditorSessionRenderSchedulerPort::EditorSessionRenderSchedulerPort(
     std::shared_ptr<alcedo::PipelineScheduler> pipeline_scheduler)
-    : pipeline_scheduler_(std::move(pipeline_scheduler)) {}
+    : pipeline_scheduler_(std::move(pipeline_scheduler)),
+      worker_([this] { WorkerLoop(); }) {}
 
 EditorSessionRenderSchedulerPort::~EditorSessionRenderSchedulerPort() {
-  std::vector<std::jthread>                                           workers;
-  std::vector<std::shared_ptr<alcedo::EditorRenderCancellationToken>> cancellations;
+  std::shared_ptr<alcedo::EditorRenderCancellationToken> queued_cancellation;
+  std::shared_ptr<alcedo::EditorRenderCancellationToken> running_cancellation;
   {
     std::scoped_lock lock(mutex_);
     shutting_down_ = true;
-    for (auto& entry : jobs_) {
-      auto& job     = entry.second;
-      job.cancelled = true;
-      if (job.request.intent.cancellation) cancellations.push_back(job.request.intent.cancellation);
+    if (queued_job_) {
+      queued_job_->cancelled = true;
+      queued_cancellation    = queued_job_->request.intent.cancellation;
+    }
+    if (running_job_) {
+      running_job_->cancelled = true;
+      running_cancellation    = running_job_->request.intent.cancellation;
     }
     sink_resolver_ = {};
-    workers.swap(workers_);
   }
-  for (const auto& cancellation : cancellations) cancellation->Cancel();
-  workers.clear();
+  if (queued_cancellation) queued_cancellation->Cancel();
+  if (running_cancellation) running_cancellation->Cancel();
+  work_available_.notify_all();
+  if (worker_.joinable()) worker_.join();
 }
 
 void EditorSessionRenderSchedulerPort::SetCoordinator(
@@ -115,118 +151,102 @@ void EditorSessionRenderSchedulerPort::SetTestFrameProducer(
 
 auto EditorSessionRenderSchedulerPort::Schedule(const alcedo::EditorRenderRequest& request)
     -> std::uint64_t {
-  Job  job;
-  bool has_producer = false;
-  {
-    std::scoped_lock lock(mutex_);
-    if (shutting_down_) return 0;
-    job.job_id        = ++next_job_id_;
-    job.request       = request;
-    jobs_[job.job_id] = job;
-    scheduled_.push_back(request);
-    if (test_producer_) {
-      has_producer = true;
-    } else if (services_.image_pool) {
-      try {
-        if (auto pool = services_.image_pool()) {
-          const auto image = pool->Read<std::shared_ptr<alcedo::Image>>(
-              request.intent.image_id,
-              [](const std::shared_ptr<alcedo::Image>& value) { return value; });
-          has_producer = static_cast<bool>(image) && !image->image_path_.empty();
-        }
-      } catch (...) {
-        has_producer = false;
-      }
-    }
-  }
-  // Synthetic IDs stay in flight for the shell route until a real sink/image
-  // is available, preserving the loading state without fake success.
-  if (!has_producer) return job.job_id;
-
-  {
-    std::scoped_lock lock(mutex_);
-    auto             it = jobs_.find(job.job_id);
-    if (it != jobs_.end()) it->second.running = true;
-  }
-  std::jthread worker([this, job]() mutable {
-    try {
-      ExecuteJob(job);
-    } catch (const std::exception& ex) {
-      RemoveJob(job.job_id);
-      CompleteJob(job.request, false, false, ex.what());
-    } catch (...) {
-      RemoveJob(job.job_id);
-      CompleteJob(job.request, false, false, "First-frame producer exception");
-    }
-  });
-  bool         cancel_started_worker = false;
-  {
-    std::scoped_lock lock(mutex_);
-    if (shutting_down_) {
-      cancel_started_worker = true;
-    } else {
-      workers_.push_back(std::move(worker));
-    }
-  }
-  if (cancel_started_worker) {
-    if (job.request.intent.cancellation) job.request.intent.cancellation->Cancel();
+  if (!CanProduceFrame(request)) {
+    TraceDetailRequest("scheduler-reject", request, "no-frame-source");
     return 0;
   }
+  std::scoped_lock lock(mutex_);
+  // The coordinator owns the request queue and never schedules a second job
+  // until the first blocking execution completes.
+  if (shutting_down_ || queued_job_ || running_job_) {
+    TraceDetailRequest("scheduler-reject", request, "worker-busy-or-shutdown");
+    return 0;
+  }
+  Job job;
+  job.job_id  = ++next_job_id_;
+  job.request = request;
+  queued_job_ = job;
+  scheduled_.push_back(request);
+  TraceDetailRequest("scheduler-queued", request);
+  work_available_.notify_one();
   return job.job_id;
+}
+
+auto EditorSessionRenderSchedulerPort::CanProduceFrame(
+    const alcedo::EditorRenderRequest& request) const -> bool {
+  EditorSessionTestFrameProducer test_producer;
+  std::function<std::shared_ptr<alcedo::ImagePoolService>()> image_pool;
+  {
+    std::scoped_lock lock(mutex_);
+    test_producer = test_producer_;
+    image_pool    = services_.image_pool;
+  }
+  if (test_producer) return true;
+  if (!image_pool) return false;
+  try {
+    const auto pool = image_pool();
+    if (!pool) return false;
+    const auto image = pool->Read<std::shared_ptr<alcedo::Image>>(
+        request.intent.image_id,
+        [](const std::shared_ptr<alcedo::Image>& value) { return value; });
+    return image && !image->image_path_.empty();
+  } catch (...) {
+    return false;
+  }
 }
 
 void EditorSessionRenderSchedulerPort::Cancel(std::uint64_t scheduler_job_id) {
   std::shared_ptr<alcedo::EditorRenderCancellationToken> cancellation;
+  std::optional<alcedo::EditorRenderRequest>              cancelled_before_start;
   {
     std::scoped_lock lock(mutex_);
-    auto             it = jobs_.find(scheduler_job_id);
-    if (it == jobs_.end()) return;
-    it->second.cancelled = true;
-    cancellation         = it->second.request.intent.cancellation;
-    pending_presentations_.erase(it->second.request.request_id);
-    if (!it->second.running) {
-      jobs_.erase(it);
+    if (queued_job_ && queued_job_->job_id == scheduler_job_id) {
+      queued_job_->cancelled = true;
+      cancellation          = queued_job_->request.intent.cancellation;
+      cancelled_before_start = queued_job_->request;
+      queued_job_.reset();
       jobs_changed_.notify_all();
+    } else if (running_job_ && running_job_->job_id == scheduler_job_id) {
+      running_job_->cancelled = true;
+      cancellation           = running_job_->request.intent.cancellation;
+    } else {
+      return;
     }
   }
   if (cancellation) cancellation->Cancel();
+  if (cancelled_before_start) {
+    CompleteJob(*cancelled_before_start, false, "Cancelled before execution");
+  }
 }
 
-void EditorSessionRenderSchedulerPort::WaitForSessionIdle(std::uint64_t session_generation) {
-  std::unique_lock lock(mutex_);
-  jobs_changed_.wait(lock, [&] {
-    return std::none_of(jobs_.begin(), jobs_.end(), [&](const auto& entry) {
-      return entry.second.request.intent.image_load_request_id.value == session_generation;
-    });
-  });
-}
+void EditorSessionRenderSchedulerPort::WaitForSessionIdle(std::uint64_t session_epoch) {
+  // Owner/GUI thread may call this while a worker is in present handoff. Present
+  // posts QueuedConnection updates to this thread; a bare condvar wait would
+  // starve those events. Timed wait + processEvents lets slot create/recycle
+  // complete without cancelling the frame.
+  const auto idle = [this, session_epoch] {
+    const auto belongs_to_session = [session_epoch](const std::optional<Job>& job) {
+      return job && job->request.intent.image_load_request_id.value == session_epoch;
+    };
+    return !belongs_to_session(queued_job_) && !belongs_to_session(running_job_);
+  };
 
-void EditorSessionRenderSchedulerPort::RemoveJob(std::uint64_t job_id) {
-  std::scoped_lock lock(mutex_);
-  jobs_.erase(job_id);
-  jobs_changed_.notify_all();
-}
-
-void EditorSessionRenderSchedulerPort::NotifyPresentationAcknowledged(
-    std::uint64_t request_id, std::uint64_t image_generation, std::uint64_t image_identity) {
-  bool                                             notify = false;
-  std::shared_ptr<alcedo::EditorRenderCoordinator> coordinator;
-  {
-    std::scoped_lock lock(mutex_);
-    auto             it = pending_presentations_.find(request_id);
-    if (it == pending_presentations_.end()) return;
-    if (it->second.image_generation != image_generation ||
-        it->second.image_identity != image_identity) {
-      return;
+  for (;;) {
+    {
+      std::unique_lock lock(mutex_);
+      if (idle()) {
+        return;
+      }
+      jobs_changed_.wait_for(lock, std::chrono::milliseconds(16), idle);
+      if (idle()) {
+        return;
+      }
     }
-    it->second.acknowledged = true;
-    if (it->second.frame_submitted) {
-      notify = true;
-      pending_presentations_.erase(it);
-      coordinator = coordinator_.lock();
+    if (QCoreApplication::instance() != nullptr &&
+        QThread::currentThread() == QCoreApplication::instance()->thread()) {
+      QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents, 16);
     }
   }
-  if (notify && coordinator) coordinator->NotifyFramePresented(request_id);
 }
 
 auto EditorSessionRenderSchedulerPort::last_scheduled() const
@@ -235,26 +255,57 @@ auto EditorSessionRenderSchedulerPort::last_scheduled() const
   return scheduled_;
 }
 
-auto EditorSessionRenderSchedulerPort::pending_present_request_id() const -> std::uint64_t {
+auto EditorSessionRenderSchedulerPort::IsCancelled(std::uint64_t job_id) const -> bool {
   std::scoped_lock lock(mutex_);
-  return pending_presentations_.empty() ? 0 : pending_presentations_.begin()->first;
+  if (shutting_down_) return true;
+  if (!running_job_ || running_job_->job_id != job_id) return false;
+  return running_job_->cancelled ||
+         (running_job_->request.intent.cancellation &&
+          running_job_->request.intent.cancellation->IsCancelled());
+}
+
+void EditorSessionRenderSchedulerPort::WorkerLoop() {
+  for (;;) {
+    Job job;
+    {
+      std::unique_lock lock(mutex_);
+      work_available_.wait(lock, [this] { return shutting_down_ || queued_job_.has_value(); });
+      if (shutting_down_ && !queued_job_) return;
+      job = std::move(*queued_job_);
+      queued_job_.reset();
+      running_job_ = job;
+    }
+
+    bool        success = false;
+    std::string message;
+    TraceDetailRequest("worker-begin", job.request);
+    const auto worker_started = std::chrono::steady_clock::now();
+    try {
+      ExecuteJob(job);
+      success = !IsCancelled(job.job_id);
+      message = success ? "Frame ready" : "Cancelled during execution";
+    } catch (const std::exception& ex) {
+      message = ex.what();
+    } catch (...) {
+      message = "Frame producer exception";
+    }
+    const auto worker_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                    std::chrono::steady_clock::now() - worker_started)
+                                    .count();
+    TraceDetailRequest("worker-end", job.request, success ? "frame-ready" : message.c_str(),
+                       worker_elapsed);
+
+    {
+      std::scoped_lock lock(mutex_);
+      if (running_job_ && running_job_->job_id == job.job_id) running_job_.reset();
+      jobs_changed_.notify_all();
+    }
+    CompleteJob(job.request, success, std::move(message));
+  }
 }
 
 void EditorSessionRenderSchedulerPort::ExecuteJob(Job job) {
-  bool cancelled_before_execution = false;
-  {
-    std::scoped_lock lock(mutex_);
-    auto             it = jobs_.find(job.job_id);
-    if (it != jobs_.end() && it->second.cancelled) {
-      jobs_.erase(it);
-      jobs_changed_.notify_all();
-      cancelled_before_execution = true;
-    }
-  }
-  if (cancelled_before_execution) {
-    CompleteJob(job.request, false, false, "Cancelled before execution");
-    return;
-  }
+  if (IsCancelled(job.job_id)) return;
 
   alcedo::IFrameSink*            sink = nullptr;
   EditorSessionFrameSinkResolver resolver;
@@ -265,87 +316,35 @@ void EditorSessionRenderSchedulerPort::ExecuteJob(Job job) {
     test_producer = test_producer_;
   }
   if (resolver) sink = resolver();
-  if (!sink) {
-    RemoveJob(job.job_id);
-    CompleteJob(job.request, false, false, "No presentation frame sink bound");
-    return;
-  }
-
-  if (auto* direct_sink = DirectSinkFor(sink)) {
-    direct_sink->SetFirstFrameCompositionCallback(
-        [weak = weak_from_this()](std::uint64_t request_id, std::uint64_t image_generation,
-                                  std::uint64_t image_identity) {
-          if (const auto self = weak.lock()) {
-            self->NotifyPresentationAcknowledged(request_id, image_generation, image_identity);
-          }
-        });
-  }
+  if (!sink) throw std::runtime_error("No presentation frame sink bound");
 
   alcedo::FramePreviewMetadata meta = FrameRoleToPreviewMetadata(job.request.intent);
   meta.presentation_request_id      = job.request.request_id;
-  sink->SetNextFramePreviewMetadata(meta);
-  sink->SetNextFramePresentationMode(job.request.intent.frame_role == alcedo::FrameRole::DetailPatch
-                                         ? alcedo::FramePresentationMode::ViewportTransformed
-                                         : alcedo::FramePresentationMode::FullFrame);
-  sink->EnsureSize(std::max(1, job.request.intent.requested_width),
-                   std::max(1, job.request.intent.requested_height));
+  const alcedo::FramePresentationMode mode =
+      job.request.intent.frame_role == alcedo::FrameRole::DetailPatch
+          ? alcedo::FramePresentationMode::ViewportTransformed
+          : alcedo::FramePresentationMode::FullFrame;
+  // Bind before produce so test producers and pipeline Apply share the same
+  // request-id / scope metadata. PipelineTask::SetExecutorRenderParams may
+  // refine ROI fields under the render lock later.
+  sink->BindFrameSubmission(alcedo::FrameCompletionSubmission{meta, mode});
 
-  auto*       direct_sink      = DirectSinkFor(sink);
-  const auto  submitted_before = direct_sink ? direct_sink->submitted_frame_count() : 0;
   std::string error;
-  bool        submitted = false;
   bool        ok        = false;
-  const auto  reason    = job.request.intent.reason;
-  const bool  track_first_composition =
-      job.request.intent.frame_role == alcedo::FrameRole::InteractivePrimary &&
-      (reason == alcedo::EditorRenderReason::InitialFrame ||
-       reason == alcedo::EditorRenderReason::ImageSwitch ||
-       reason == alcedo::EditorRenderReason::Retry);
-  if (track_first_composition) {
-    std::scoped_lock lock(mutex_);
-    pending_presentations_[job.request.request_id] = PendingPresentation{
-        job.request.intent.image_load_request_id.value, job.request.intent.image_id, false, false};
-  }
 
   if (test_producer) {
-    ok        = test_producer(sink, job.request);
-    // A test producer owns the frame-submission seam.  Offscreen QML sinks do
-    // not expose a native submitted-frame counter even after NotifyFrameReady,
-    // so use its result as the explicit submission acknowledgement.  Native
-    // RHI tests still return false when resource mapping or the device copy
-    // fails, preserving their failure signal.
-    submitted = ok;
+    // Test producers do not execute a pipeline stage that knows the real output
+    // dimensions, so preserve their explicit target setup. Production CUDA,
+    // OpenCL and Metal paths publish the actual output themselves; pre-sizing
+    // them with viewport dimensions rewrites render-reference geometry twice.
+    sink->EnsureSize(std::max(1, job.request.intent.requested_width),
+                     std::max(1, job.request.intent.requested_height));
+    ok = test_producer(sink, job.request);
     if (!ok) error = "Test frame producer failed";
   } else {
-    ok        = TryProducePipelineFrame(job.request, sink, &error);
-    submitted = ok && (!direct_sink || direct_sink->submitted_frame_count() > submitted_before);
-    if (ok && !submitted) {
-      ok    = false;
-      error = "Pipeline completed without submitting a native presentation frame";
-    }
+    ok = TryProducePipelineFrame(job.request, sink, &error);
   }
-
-  bool cancelled_during_execution = false;
-  {
-    std::scoped_lock lock(mutex_);
-    auto             it = jobs_.find(job.job_id);
-    if (it != jobs_.end() && it->second.cancelled) {
-      jobs_.erase(it);
-      jobs_changed_.notify_all();
-      pending_presentations_.erase(job.request.request_id);
-      cancelled_during_execution = true;
-    } else {
-      if (!ok || !submitted) pending_presentations_.erase(job.request.request_id);
-      jobs_.erase(job.job_id);
-      jobs_changed_.notify_all();
-    }
-  }
-  if (cancelled_during_execution) {
-    CompleteJob(job.request, false, false, "Cancelled during execution");
-    return;
-  }
-  CompleteJob(job.request, ok, submitted,
-              error.empty() ? (ok ? "Render completed" : "Render failed") : error);
+  if (!ok) throw std::runtime_error(error.empty() ? "Render failed" : error);
 }
 
 auto EditorSessionRenderSchedulerPort::TryProducePipelineFrame(
@@ -382,6 +381,8 @@ auto EditorSessionRenderSchedulerPort::TryProducePipelineFrame(
   }
 
   try {
+    TraceDetailRequest("pipeline-submit", request);
+    const auto pipeline_started = std::chrono::steady_clock::now();
     auto                           exec = guard->pipeline_;
     std::shared_ptr<alcedo::Image> image_desc;
     try {
@@ -413,28 +414,44 @@ auto EditorSessionRenderSchedulerPort::TryProducePipelineFrame(
     task.options_.render_desc_.use_viewport_region_ =
         request.intent.quality == alcedo::EditorRenderQuality::Detail ||
         request.intent.reason == alcedo::EditorRenderReason::ScopeRefresh;
+    task.options_.render_desc_.viewport_region_ = request.intent.view_region;
     task.options_.render_desc_.frame_metadata_ = FrameRoleToPreviewMetadata(request.intent);
     task.options_.render_desc_.frame_metadata_.presentation_request_id = request.request_id;
+    task.request_id_                                                 = request.request_id;
     task.options_.is_callback_                                         = false;
     task.options_.is_seq_callback_                                     = false;
     task.options_.is_blocking_                                         = true;
-    task.prepare_with_render_lock_ = [snapshot              = request.intent.adjustment, sink,
-                                      geometry_overlay_only = request.intent.geometry_overlay_only](
-                                         alcedo::PipelineTask& locked_task) {
-      auto locked_exec = locked_task.pipeline_executor_;
-      if (!locked_exec) return false;
-      std::string apply_error;
-      if (!alcedo::ApplyEditorAdjustmentSnapshot(*locked_exec, snapshot, &apply_error)) {
-        throw std::runtime_error(apply_error.empty() ? "Failed to apply editor adjustment"
-                                                     : apply_error);
-      }
-      if (geometry_overlay_only) {
-        alcedo::DisableEditorGeometryOperatorForOverlay(*locked_exec);
-      }
-      controllers::EnsureLoadingOperatorDefaults(locked_exec);
-      controllers::AttachExecutionStages(locked_exec, sink);
-      return true;
-    };
+    // Content renders install operator params (SetOperator + SetGlobalParams).
+    // View-dependent ROI/detail/scope frames only retarget Geometry via
+    // SetExecutorRenderParams (RESIZE ROI); replaying the full adjustment
+    // snapshot every pan/zoom would thrash Image Loading (RAW_DECODE) cache.
+    const bool apply_adjustment =
+        alcedo::ReasonAppliesAdjustmentSnapshot(request.intent.reason);
+    task.configure_under_render_lock_ =
+        [snapshot              = request.intent.adjustment, sink,
+         geometry_overlay_only = request.intent.geometry_overlay_only,
+         apply_adjustment](alcedo::PipelineTask& locked_task) {
+          auto locked_exec = locked_task.pipeline_executor_;
+          if (!locked_exec) return false;
+          if (apply_adjustment) {
+            std::string apply_error;
+            if (!alcedo::ApplyEditorAdjustmentSnapshot(*locked_exec, snapshot, &apply_error)) {
+              throw std::runtime_error(apply_error.empty() ? "Failed to apply editor adjustment"
+                                                           : apply_error);
+            }
+            // Never touch Image Loading defaults on tone/color slider frames —
+            // EnsureLoadingOperatorDefaults can SetOperator(RAW_DECODE) and
+            // wipe the demosaic cache even when the edit only moved exposure.
+            if (alcedo::SnapshotTouchesImageLoading(snapshot)) {
+              controllers::EnsureLoadingOperatorDefaults(locked_exec);
+            }
+          }
+          if (geometry_overlay_only) {
+            alcedo::DisableEditorGeometryOperatorForOverlay(*locked_exec);
+          }
+          controllers::AttachExecutionStages(locked_exec, sink);
+          return true;
+        };
     auto promise = std::make_shared<std::promise<std::shared_ptr<alcedo::ImageBuffer>>>();
     auto future  = promise->get_future();
     task.result_ = promise;
@@ -445,12 +462,18 @@ auto EditorSessionRenderSchedulerPort::TryProducePipelineFrame(
     }
     scheduler->ScheduleTask(std::move(task));
     const auto result = future.get();
+    const auto pipeline_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                      std::chrono::steady_clock::now() - pipeline_started)
+                                      .count();
     if (!result) {
+      TraceDetailRequest("pipeline-return", request, "empty-result", pipeline_elapsed);
       if (error) *error = "Pipeline returned an empty result";
       return false;
     }
+    TraceDetailRequest("pipeline-return", request, "success", pipeline_elapsed);
     return true;
   } catch (const std::exception& ex) {
+    TraceDetailRequest("pipeline-exception", request, ex.what());
     if (error) *error = ex.what();
   } catch (...) {
     if (error) *error = "Pipeline render failed";
@@ -459,30 +482,14 @@ auto EditorSessionRenderSchedulerPort::TryProducePipelineFrame(
 }
 
 void EditorSessionRenderSchedulerPort::CompleteJob(const alcedo::EditorRenderRequest& request,
-                                                   bool success, bool frame_submitted,
-                                                   std::string message) {
+                                                   bool success, std::string message) {
   std::shared_ptr<alcedo::EditorRenderCoordinator> coordinator;
-  bool                                             acknowledged = false;
   {
     std::scoped_lock lock(mutex_);
     coordinator = coordinator_.lock();
-    if (!success || !frame_submitted) {
-      pending_presentations_.erase(request.request_id);
-    } else {
-      auto it = pending_presentations_.find(request.request_id);
-      if (it != pending_presentations_.end()) {
-        it->second.frame_submitted = true;
-        acknowledged               = it->second.acknowledged;
-        if (acknowledged) pending_presentations_.erase(it);
-      }
-    }
   }
   if (!coordinator) return;
   coordinator->NotifySchedulerCompleted(request.request_id, success, std::move(message));
-  if (success && frame_submitted) {
-    coordinator->NotifyFrameSubmitted(request.request_id);
-    if (acknowledged) coordinator->NotifyFramePresented(request.request_id);
-  }
 }
 
 }  // namespace alcedo::ui

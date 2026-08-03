@@ -6,9 +6,7 @@
 
 #include <atomic>
 #include <cstdint>
-#include <functional>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <string>
 
@@ -56,15 +54,15 @@ enum class EditorRenderPriority : std::uint8_t {
 enum class EditorRenderResultKind : std::uint8_t {
   RequestAccepted = 0,
   RenderStarted,
-  RenderCompleted,
-  FrameSubmitted,
-  FramePresented,
+  // The blocking pipeline call finished and the sink published a Ready frame.
+  // Qt Quick composition is deliberately outside the request scheduler.
+  FrameReady,
   Replaced,
   Cancelled,
   Failed,
   // The coordinator accepted the view change but did not schedule a pipeline
   // task: the existing full frame is reused (renderer re-samples via the
-  // item-to-renderer synchronize() path). Phase 5D reuse-vs-render decision.
+  // item-to-renderer synchronize() path).
   Reused,
 };
 
@@ -77,60 +75,21 @@ using PresentationSinkId = std::uint64_t;
 struct EditorRenderCancellationToken {
   std::atomic<bool> cancelled{false};
 
-  void              Cancel() {
-    if (cancelled.exchange(true, std::memory_order_acq_rel)) {
-      return;
-    }
-    std::function<void()> callback;
-    {
-      std::scoped_lock lock(callback_mutex);
-      if (!callback_delivered && on_cancel) {
-        callback_delivered = true;
-        callback           = on_cancel;
-      }
-    }
-    if (callback) {
-      callback();
-    }
-  }
+  void Cancel() { cancelled.store(true, std::memory_order_release); }
   [[nodiscard]] auto IsCancelled() const -> bool {
     return cancelled.load(std::memory_order_acquire);
   }
-
-  void SetCancelCallback(std::function<void()> callback) {
-    std::function<void()> callback_to_run;
-    {
-      std::scoped_lock lock(callback_mutex);
-      on_cancel = std::move(callback);
-      if (cancelled.load(std::memory_order_acquire) && !callback_delivered && on_cancel) {
-        callback_delivered = true;
-        callback_to_run    = on_cancel;
-      }
-    }
-    if (callback_to_run) {
-      callback_to_run();
-    }
-  }
-
- private:
-  mutable std::mutex    callback_mutex;
-  std::function<void()> on_cancel;
-  bool                  callback_delivered = false;
 };
 
 /// Render intent accepted only by EditorRenderCoordinator.
 ///
 /// Producers fill defaults before Submit. After Submit accepts the request the
-/// coordinator does not mutate the stored intent (Phase 5A-Fix immutability).
+/// coordinator does not mutate the stored intent.
 struct EditorRenderIntent {
   sl_element_id_t                                element_id         = 0;
   image_id_t                                     image_id           = 0;
   std::uint64_t                                  operation_id       = 0;
   ImageLoadRequestId                             image_load_request_id{};
-  /// Content-changing edits advance this stamp for coordinator supersession.
-  std::uint64_t                                  render_generation  = 0;
-  /// View-only changes advance this stamp; obsoletes DetailPatch work only.
-  std::uint64_t                                  view_generation    = 0;
   EditorRenderReason                             reason = EditorRenderReason::InitialFrame;
   EditorRenderAdjustmentSnapshot                 adjustment{};
   std::optional<ViewportRenderRegion>            view_region;
@@ -228,12 +187,39 @@ struct EditorRenderResult {
   return EditorRenderQuality::Interactive;
 }
 
-/// Phase 5D: a pure view-transform change (zoom/pan/resize) reuses the current
+/// A pure view-transform change (zoom/pan/resize) reuses the current
 /// full frame — the renderer re-samples it through synchronize(). The
 /// coordinator drops these intents without scheduling a pipeline task. Only
 /// content-changing or detail-refresh reasons produce a render.
 [[nodiscard]] inline auto ReasonReusesCurrentFrame(EditorRenderReason reason) -> bool {
   return reason == EditorRenderReason::ZoomPan || reason == EditorRenderReason::Resize;
+}
+
+/// Whether frame configuration applies the full adjustment snapshot.
+///
+/// Pipeline operators are updated incrementally when a field changes
+/// (SetOperator + SetGlobalParams). Replaying a full adjustment snapshot every
+/// frame is only correct for content-bearing renders (open, edit, undo, crop
+/// commit). View-dependent work (Detail ROI, scope ROI, pure zoom/pan/resize)
+/// must only retarget Geometry render params (RESIZE ROI / user crop) so
+/// Image Loading caches such as RAW_DECODE stay warm.
+[[nodiscard]] inline auto ReasonAppliesAdjustmentSnapshot(EditorRenderReason reason) -> bool {
+  switch (reason) {
+    case EditorRenderReason::ZoomPan:
+    case EditorRenderReason::Resize:
+    case EditorRenderReason::DetailRefresh:
+    case EditorRenderReason::ScopeRefresh:
+      return false;
+    case EditorRenderReason::InitialFrame:
+    case EditorRenderReason::InteractiveAdjustment:
+    case EditorRenderReason::SettledAdjustment:
+    case EditorRenderReason::UndoRedo:
+    case EditorRenderReason::ImageSwitch:
+    case EditorRenderReason::Retry:
+    case EditorRenderReason::CropRotate:
+      return true;
+  }
+  return true;
 }
 
 /// Scope reads image content, so view-only re-sampling and view-dependent ROI

@@ -67,10 +67,11 @@ class EditorSessionActionPolicyCq3Test : public ::testing::Test {
     }
     runtime_->coordinator->NotifySchedulerCompleted(rid, true);
     drainQueue();
-    runtime_->coordinator->NotifyFrameSubmitted(rid);
-    drainQueue();
-    runtime_->coordinator->NotifyFramePresented(rid);
-    drainQueue();
+    const auto quality_rid = runtime_->coordinator->last_scheduled_request_id();
+    if (quality_rid != rid) {
+      runtime_->coordinator->NotifySchedulerCompleted(quality_rid, true);
+      drainQueue();
+    }
   }
 
   void openInteractive(sl_element_id_t eid = 10, image_id_t iid = 20) {
@@ -193,7 +194,7 @@ TEST_F(EditorSessionActionPolicyCq3Test, StaleRenderRequestCannotPresentAFrameOr
   ASSERT_EQ(service_->state(), EditorSessionState::Interactive);
 
   EditorRenderResult stale;
-  stale.kind       = EditorRenderResultKind::FramePresented;
+  stale.kind       = EditorRenderResultKind::FrameReady;
   stale.request_id = 999999;
   stale.intent.element_id            = 10;
   stale.intent.image_id              = 20;
@@ -229,7 +230,7 @@ TEST_F(EditorSessionActionPolicyCq3Test,
 
   // A stale first-A render request must not change identity or state.
   EditorRenderResult stale_a;
-  stale_a.kind                       = EditorRenderResultKind::FramePresented;
+  stale_a.kind                       = EditorRenderResultKind::FrameReady;
   stale_a.request_id                 = 1;
   stale_a.intent.element_id          = 10;
   stale_a.intent.image_id            = 20;

@@ -15,20 +15,10 @@ inline constexpr float kCleanBaselineSaturation       = 30.0f;
 inline constexpr bool  kCleanBaselineLensCalibEnabled = false;
 
 inline auto            MakeDefaultRawDecodeParams() -> nlohmann::json {
+  // No accelerator backend here: the backend is a runtime property driven by
+  // the user's setting, never a persisted operator param.
   nlohmann::json decode_params;
-  decode_params["raw"]["gpu_backend"] = "cpu";
-  decode_params["raw"]["method"]      = "default";
-#if defined(HAVE_CUDA) || defined(HAVE_METAL) || defined(HAVE_OPENCL)
-  decode_params["raw"]["gpu_backend"] = "gpu";
-#endif
-  decode_params["raw"]["cuda"] = false;
-#ifdef HAVE_CUDA
-  decode_params["raw"]["cuda"] = true;
-#endif
-  decode_params["raw"]["opencl"] = false;
-#ifdef HAVE_OPENCL
-  decode_params["raw"]["opencl"] = true;
-#endif
+  decode_params["raw"]["method"]                  = "default";
   decode_params["raw"]["highlights_reconstruct"] = true;
   decode_params["raw"]["use_camera_wb"]          = true;
   decode_params["raw"]["user_wb"]                = 7600.0f;
@@ -102,7 +92,8 @@ inline auto MakeDefaultCropRotateParams() -> nlohmann::json {
             {"crop_rect", {{"x", 0.0f}, {"y", 0.0f}, {"w", 1.0f}, {"h", 1.0f}}},
             {"expand_to_fit", true},
             {"aspect_ratio_preset", "free"},
-            {"aspect_ratio", {{"width", 1.0f}, {"height", 1.0f}}}}}};
+            {"aspect_ratio", {{"width", 1.0f}, {"height", 1.0f}}},
+            {"source_size", {{"width", 0U}, {"height", 0U}}}}}};
 }
 
 inline auto MakeCleanBaselineAdjustableParams() -> nlohmann::json {

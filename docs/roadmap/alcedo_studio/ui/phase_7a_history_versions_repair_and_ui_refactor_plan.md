@@ -21,6 +21,9 @@ Baseline commits:
 Related documents:
 
 - [Phase 6C Mini-Git History and Pipeline Snapshot Plan](phase_6c_mini_git_history_and_pipeline_snapshot_plan.md)
+- [Editor Single Live Pipeline + WAL + Checkpoint Simplification Plan](editor_single_live_pipeline_wal_checkpoint_plan.md)
+  (**binding identity model** for head / chain hash / checkpoint — do not reintroduce dual pipeline
+  heads from older 7A wording)
 - [QML Editor and Qt RHI Unified Workspace Refactor Plan](qml_editor_rhi_unified_workspace_plan.md)
 - [Alcedo Studio QML Visual Identity](../../../../alcedo_studio/src/ui/alcedo_main/DESIGN.md)
 
@@ -1125,8 +1128,9 @@ EditorSessionHistoryPort::MoveHeadToCommit
        -> ApplyHistoryCommit for each ordinary/merge payload
   -> MiniGitWorkingHistory::PublishPreparedHeadMove
        -> journal Append (one head-move record)
-       -> MoveWorkingHead + PublishWorkingSelection (no-fail swap)
-  -> update PipelineGuard head/chain/dirty + committed_snapshot
+       -> MoveWorkingHead on CommitGraph + PublishWorkingSelection (no-fail swap)
+  -> refresh dirty/writeback + committed_snapshot from history tip
+     (PipelineGuard has no independent head/chain fields; tip is CommitGraph only)
 ```
 
 **Primary failure call chain (unmappable commit in traversal):**

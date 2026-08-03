@@ -34,7 +34,7 @@ class EditorScopeController final : public QObject {
       bool visualActive READ visual_active WRITE set_visual_active NOTIFY VisualActiveChanged)
   Q_PROPERTY(int activeView READ active_view WRITE set_active_view NOTIFY ActiveViewChanged)
   Q_PROPERTY(qulonglong imageIdentity READ image_identity NOTIFY SnapshotChanged)
-  Q_PROPERTY(qulonglong imageGeneration READ image_generation NOTIFY SnapshotChanged)
+  Q_PROPERTY(qulonglong sessionEpoch READ session_epoch NOTIFY SnapshotChanged)
   Q_PROPERTY(qulonglong displayGeneration READ display_generation NOTIFY SnapshotChanged)
   Q_PROPERTY(qulonglong scopeGeneration READ scope_generation NOTIFY SnapshotChanged)
   Q_PROPERTY(bool hasSnapshot READ has_snapshot NOTIFY SnapshotChanged)
@@ -52,8 +52,8 @@ class EditorScopeController final : public QObject {
   [[nodiscard]] auto image_identity() const -> qulonglong {
     return static_cast<qulonglong>(image_identity_);
   }
-  [[nodiscard]] auto image_generation() const -> qulonglong {
-    return static_cast<qulonglong>(image_generation_);
+  [[nodiscard]] auto session_epoch() const -> qulonglong {
+    return static_cast<qulonglong>(session_epoch_);
   }
   [[nodiscard]] auto display_generation() const -> qulonglong {
     return static_cast<qulonglong>(snapshot_.display_generation);
@@ -65,7 +65,7 @@ class EditorScopeController final : public QObject {
 
   void               SetDownstreamSink(alcedo::IFrameSink* sink);
   [[nodiscard]] auto frame_sink() const -> alcedo::IFrameSink*;
-  void               SetImageIdentity(qulonglong image_identity, qulonglong image_generation);
+  void               SetImageIdentity(qulonglong image_identity, qulonglong session_epoch);
 
   /// Return a copied snapshot for the QSG item; the analyzer output handles
   /// never cross into QML or remain borrowed by the scene graph.
@@ -93,7 +93,7 @@ class EditorScopeController final : public QObject {
   void scheduleSnapshotRefresh();
   auto refreshSnapshotNow() -> bool;
   auto publishSnapshot(alcedo::ScopeRenderSnapshot snapshot, std::uint64_t expected_image_identity,
-                       std::uint64_t expected_image_generation,
+                       std::uint64_t expected_session_epoch,
                        std::uint64_t expected_request_revision) -> bool;
   [[nodiscard]] auto snapshot_view() const -> const alcedo::ScopeRenderSnapshot& {
     return snapshot_;
@@ -110,7 +110,7 @@ class EditorScopeController final : public QObject {
   QThreadPool                                       scope_pool_;
   alcedo::ScopeRenderSnapshot                       snapshot_{};
   std::uint64_t                                     image_identity_                    = 0;
-  std::uint64_t                                     image_generation_                  = 0;
+  std::uint64_t                                     session_epoch_                  = 0;
   int                                               active_view_                       = 0;
   bool                                              visual_active_                     = false;
   std::uint64_t                                     request_revision_                  = 0;

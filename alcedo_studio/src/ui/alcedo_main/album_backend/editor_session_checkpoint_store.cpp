@@ -12,13 +12,15 @@
 namespace alcedo::ui {
 
 EditorSessionCheckpointStore::~EditorSessionCheckpointStore() {
-  std::vector<std::jthread> workers;
+  std::vector<std::thread> workers;
   {
     std::scoped_lock lock(mutex_);
     shutting_down_ = true;
     workers.swap(workers_);
   }
-  workers.clear();
+  for (auto& worker : workers) {
+    if (worker.joinable()) worker.join();
+  }
 }
 
 void EditorSessionCheckpointStore::SetServices(Services services) {

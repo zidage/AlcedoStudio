@@ -700,7 +700,7 @@ TEST(EditorOverlayInteractionTest, ResetPresentationStateClearsCropRoiAndMode) {
 TEST(EditorOverlayInteractionTest, EqualOutputSizeImageSwitchResyncsRenderReference) {
   EditorViewportItem viewport;
   viewport.setImageIdentity(10);
-  viewport.setImageGeneration(1);
+  viewport.setSessionEpoch(1);
 
   int target_size_signals = 0;
   int last_w              = 0;
@@ -730,7 +730,7 @@ TEST(EditorOverlayInteractionTest, EqualOutputSizeImageSwitchResyncsRenderRefere
 
   // Switch to image B: different source size, same requested output size.
   viewport.setImageIdentity(20);
-  viewport.setImageGeneration(2);
+  viewport.setSessionEpoch(2);
   controller.resetPresentationStateForNewImage();
   controller.setImageSize(6000, 4000);
   // Interim source-size fallback (production QML path).
@@ -772,13 +772,33 @@ TEST(EditorOverlayInteractionTest, ForceRenderReferenceSizeReappliesEqualDimensi
   EXPECT_EQ(controller.renderReferenceHeight(), 384);
 }
 
+TEST(EditorOverlayInteractionTest, RenderReferenceChangeNeverFeedsBackIntoDetailRendering) {
+  EditorInteractionController controller;
+  controller.setViewportMetrics(800, 600, 1.0);
+  ConfigureImage(controller, 4000, 3000);
+  controller.zoomToActualPixels();
+  ASSERT_GT(controller.zoom(), 1.0f + 1.0e-4f);
+
+  QSignalSpy change_spy(&controller, &EditorInteractionController::viewChangeReported);
+  ASSERT_TRUE(change_spy.isValid());
+
+  // Render-reference geometry is output from the presentation pipeline. It may
+  // update coordinate mapping, but it must never become a new pipeline input;
+  // otherwise DetailPatch completion creates a self-sustaining render loop.
+  controller.setRenderReferenceSize(2000, 1500);
+  EXPECT_EQ(change_spy.count(), 0);
+  QTest::qWait(200);
+  QCoreApplication::processEvents();
+  EXPECT_EQ(change_spy.count(), 0);
+}
+
 // DetailPatch ROI EnsureSize must not rewrite render-reference geometry. If it
 // does, zoom/pan math and SameRoi matching break and the high-res detail patch
 // no longer covers the viewport after double-click zoom.
 TEST(EditorOverlayInteractionTest, DetailPatchEnsureSizeDoesNotRewriteRenderReference) {
   EditorViewportItem viewport;
   viewport.setImageIdentity(42);
-  viewport.setImageGeneration(1);
+  viewport.setSessionEpoch(1);
 
   int target_size_signals = 0;
   int last_w              = 0;
@@ -800,8 +820,7 @@ TEST(EditorOverlayInteractionTest, DetailPatchEnsureSizeDoesNotRewriteRenderRefe
   alcedo::FramePreviewMetadata quality_meta{};
   quality_meta.frame_role         = alcedo::FrameRole::QualityBase;
   quality_meta.preview_generation = 1;
-  sink->SetNextFramePreviewMetadata(quality_meta);
-  sink->SetNextFramePresentationMode(alcedo::FramePresentationMode::ViewportTransformed);
+  sink->BindFrameSubmission({quality_meta, alcedo::FramePresentationMode::ViewportTransformed});
   sink->EnsureSize(2048, 1536);
   // CUDA/OpenCL: EnsureSize of a shared write target publishes render-ref size.
   // Metal zero-copy: EnsureSize is presentation-viewport bookkeeping only;
@@ -828,8 +847,7 @@ TEST(EditorOverlayInteractionTest, DetailPatchEnsureSizeDoesNotRewriteRenderRefe
   detail_meta.frame_role         = alcedo::FrameRole::DetailPatch;
   detail_meta.preview_generation = 1;
   detail_meta.source_roi_norm    = {.x = 0.25f, .y = 0.2f, .width = 0.5f, .height = 0.4f};
-  sink->SetNextFramePreviewMetadata(detail_meta);
-  sink->SetNextFramePresentationMode(alcedo::FramePresentationMode::ViewportTransformed);
+  sink->BindFrameSubmission({detail_meta, alcedo::FramePresentationMode::ViewportTransformed});
   sink->EnsureSize(1600, 900);
 
   // Must not emit targetSizeRequested — render reference stays full-frame.
@@ -857,7 +875,7 @@ TEST(EditorOverlayInteractionTest, DetailPatchEnsureSizeDoesNotRewriteRenderRefe
 
 TEST(EditorOverlayInteractionTest, ReleasingStaleDetailSlotUnblocksReplacementDetailTarget) {
   DirectPresentQueue queue(EditorBackend::Cuda);
-  queue.InvalidateImageGeneration(1, 42);
+  queue.InvalidateSessionEpoch(1, 42);
   queue.SetConsumerAvailable(true);
 
   const auto occupy_layer = [&](FrameRole role, std::uintptr_t handle) {
@@ -925,7 +943,7 @@ TEST(EditorOverlayInteractionTest, ViewTransformPushDoesNotInvalidateDirectPrese
     DirectPresentQueue::SizeRequest req;
     req.width            = 64;
     req.height           = 48;
-    req.image_generation = 1;
+    req.session_epoch = 1;
     req.image_identity   = 1;
     viewport.present_queue()->NoteSizeRequest(req);
     viewport.present_queue()->InvalidateTargetGeneration();

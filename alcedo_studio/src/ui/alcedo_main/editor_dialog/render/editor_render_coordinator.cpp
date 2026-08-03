@@ -22,10 +22,9 @@ constexpr float kDetailPreviewZoomEpsilon = 1.0e-4f;
 EditorRenderCoordinator::EditorRenderCoordinator(Dependencies dependencies, Callbacks callbacks)
     : dependencies_(std::move(dependencies)), callbacks_(std::move(callbacks)) {}
 
-void EditorRenderCoordinator::AdvancePreviewGeneration() {
-  ++preview_generation_;
-  detail_serial_                        = 0;
-  latest_quality_base_generation_ready_ = 0;
+void EditorRenderCoordinator::InvalidateContentPreviewState() {
+  quality_base_ready_                      = false;
+  detail_serial_                           = 0;
   pending_fast_preview_request_.reset();
   pending_quality_base_render_request_.reset();
   detail_preview_waiting_for_quality_base_ = false;
@@ -52,7 +51,6 @@ void EditorRenderCoordinator::InvalidateDetailPreviewState() {
 auto EditorRenderCoordinator::BuildPreviewMetadata(RenderType render_type) const
     -> FramePreviewMetadata {
   FramePreviewMetadata metadata{};
-  metadata.preview_generation = preview_generation_;
   switch (render_type) {
     case RenderType::FAST_PREVIEW:
       metadata.frame_role = FrameRole::InteractivePrimary;
@@ -107,7 +105,7 @@ auto EditorRenderCoordinator::CanScheduleDetailPreview() const -> bool {
   if (!WantsDetailPreviewFromViewport()) {
     return false;
   }
-  return preview_generation_ != 0 && latest_quality_base_generation_ready_ == preview_generation_;
+  return quality_base_ready_;
 }
 
 void EditorRenderCoordinator::MaybeScheduleDetailPreviewRenderFromViewport() {
@@ -198,13 +196,9 @@ void EditorRenderCoordinator::EnqueueRenderRequest(const AdjustmentState&      s
   }
 }
 
-void EditorRenderCoordinator::RequestRender(bool use_viewport_region,
-                                            bool bump_preview_generation) {
+void EditorRenderCoordinator::RequestRender(bool use_viewport_region) {
   if (!dependencies_.state) {
     return;
-  }
-  if (bump_preview_generation) {
-    AdvancePreviewGeneration();
   }
 
   AdjustmentState snapshot = *dependencies_.state;
@@ -213,13 +207,9 @@ void EditorRenderCoordinator::RequestRender(bool use_viewport_region,
                        /*apply_state=*/true, use_viewport_region);
 }
 
-void EditorRenderCoordinator::RequestRenderWithoutApplyingState(bool use_viewport_region,
-                                                                bool bump_preview_generation) {
+void EditorRenderCoordinator::RequestRenderWithoutApplyingState(bool use_viewport_region) {
   if (!dependencies_.state) {
     return;
-  }
-  if (bump_preview_generation) {
-    AdvancePreviewGeneration();
   }
 
   AdjustmentState snapshot = *dependencies_.state;
@@ -339,9 +329,8 @@ void EditorRenderCoordinator::OnRenderFinished(bool render_succeeded) {
   }
 
   if (render_succeeded && finished_request.has_value() &&
-      finished_request->state_.type_ == RenderType::QUALITY_BASE_PREVIEW &&
-      finished_request->frame_metadata_.preview_generation == preview_generation_) {
-    latest_quality_base_generation_ready_ = preview_generation_;
+      finished_request->state_.type_ == RenderType::QUALITY_BASE_PREVIEW) {
+    quality_base_ready_ = true;
     if (callbacks_.clear_full_frame_preview_after_geometry_commit) {
       callbacks_.clear_full_frame_preview_after_geometry_commit();
     }
@@ -351,11 +340,9 @@ void EditorRenderCoordinator::OnRenderFinished(bool render_succeeded) {
   }
 
   if (render_succeeded && finished_request.has_value() &&
-      finished_request->state_.type_ == RenderType::DETAIL_ROI_PREVIEW &&
-      finished_request->frame_metadata_.preview_generation == preview_generation_) {
+      finished_request->state_.type_ == RenderType::DETAIL_ROI_PREVIEW) {
     if (auto* viewer = CurrentViewer()) {
-      viewer->SetExpectedDetailToken(finished_request->frame_metadata_.preview_generation,
-                                     finished_request->frame_metadata_.detail_serial);
+      viewer->SetExpectedDetailToken(0, finished_request->frame_metadata_.detail_serial);
     }
   }
 

@@ -15,6 +15,7 @@
 #include "app/pipeline_service.hpp"
 #include "app/project_service.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
+#include "edit/pipeline/pipeline_accelerator.hpp"
 #ifdef HAVE_METAL
 #include "image/metal_image.hpp"
 #endif
@@ -35,6 +36,23 @@ auto MetalAvailable() -> bool {
 #else
   return false;
 #endif
+}
+
+// The thumbnail suite is backend-agnostic: it exercises thumbnail lifecycle
+// and re-request behavior, not accelerator throughput. Pin an explicit backend
+// BEFORE the project pipeline captures the module preference so runs are
+// deterministic and do not depend on first-use OpenCL kernel compilation
+// latency (which can exceed the suite's wait windows). CUDA is used when the
+// runtime supports it (the suite's historical default); otherwise the module's
+// configured default stands.
+void PinAcceleratorBeforeProjectOpen(ApplicationModuleHost& backend) {
+  try {
+    if (alcedo::ResolveAcceleratorBackend(AcceleratorBackendPreference::CUDA) ==
+        GpuBackendKind::CUDA) {
+      backend.project()->SetRuntimeAcceleratorPreference(AcceleratorBackendPreference::CUDA);
+    }
+  } catch (...) {
+  }
 }
 
 void WaitForImportFinished(ApplicationModuleHost& backend, int timeoutMs = 30000) {
@@ -196,9 +214,10 @@ TEST_F(ThumbnailTests, MetalThumbnailGridLifecycleWithGeometryOperatorsProducesD
   auto& loading_stage  = exec->GetStage(PipelineStageName::Image_Loading);
   auto& geometry_stage = exec->GetStage(PipelineStageName::Geometry_Adjustment);
 
+  // The decode backend is a runtime property of the pipeline (resolved from
+  // the accelerator preference); the params must not carry it.
   nlohmann::json raw_params = pipeline_defaults::MakeDefaultRawDecodeParams();
-  raw_params["raw"]["gpu_backend"] = "gpu";
-  raw_params["raw"]["backend"]     = "alcedo";
+  raw_params["raw"]["backend"] = "alcedo";
   loading_stage.SetOperator(OperatorType::RAW_DECODE, raw_params);
 
   nlohmann::json crop_params = pipeline_defaults::MakeDefaultCropRotateParams();
@@ -251,6 +270,7 @@ TEST_F(ThumbnailTests, MetalThumbnailGridLifecycleWithGeometryOperatorsProducesD
 
 TEST_F(ThumbnailTests, MissingSourceThumbnailStopsLoadingAndSetsMissingFlag) {
   ApplicationModuleHost backend;
+  PinAcceleratorBeforeProjectOpen(backend);
   ASSERT_TRUE(CreateTestProject(backend));
 
   auto images = CollectRawTestImages("airplane", 1);
@@ -305,6 +325,7 @@ TEST_F(ThumbnailTests, MissingSourceThumbnailStopsLoadingAndSetsMissingFlag) {
 
 TEST_F(ThumbnailTests, VisibleThumbnailRerequestsWhenMaxEdgeChanges) {
   ApplicationModuleHost backend;
+  PinAcceleratorBeforeProjectOpen(backend);
   ASSERT_TRUE(CreateTestProject(backend));
 
   auto images = CollectRawTestImages("airplane", 1);

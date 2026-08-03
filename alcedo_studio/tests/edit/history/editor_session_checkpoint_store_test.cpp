@@ -79,21 +79,23 @@ class EditorSessionCheckpointStoreTest : public ::testing::Test {
     if (!history.AppendEdit(MakeExposurePayload(0.0f, 1.25f)).committed) {
       throw std::runtime_error("failed to append test capture");
     }
-    const auto                       snapshot = journal->Snapshot();
+    const auto snapshot      = journal->Snapshot();
+    const auto logical_head  = graph_->GetActiveVersionRef().head_commit_hash;
+    const auto logical_chain = graph_->ChainHashForHead(logical_head);
+    const auto serialized    = alcedo::MakeEditorSerializedPipelineState(
+        graph_->GetRootId(), logical_head, logical_chain, nlohmann::json{{"exposure", 1.25f}});
     alcedo::EditorMiniGitSaveCapture capture;
-    capture.element_id             = element_id_;
-    capture.version_id             = graph_->GetActiveVersionId();
-    capture.root_id                = graph_->GetRootId();
-    capture.working_head           = history.working_head();
-    capture.transaction_chain_hash = history.transaction_chain_hash();
     capture.journal_records        = snapshot.records;
     capture.journal_path           = journal_path_;
     capture.first_journal_sequence = snapshot.first_sequence;
     capture.last_journal_sequence  = snapshot.last_sequence;
-    const auto serialized          = alcedo::MakeEditorSerializedPipelineState(
-        graph_->GetRootId(), capture.working_head, capture.transaction_chain_hash,
-        nlohmann::json{{"exposure", 1.25f}});
     capture.materialization = graph_->CaptureMaterializationWithSerializedPipelineState(serialized);
+    capture.element_id      = capture.materialization.image_state.element_id;
+    capture.version_id      = capture.materialization.image_state.active_version_id;
+    capture.root_id         = capture.materialization.image_state.root_id;
+    capture.working_head    = capture.materialization.image_state.materialized_head_commit_hash;
+    capture.transaction_chain_hash =
+        capture.materialization.image_state.materialized_transaction_chain_hash;
     return capture;
   }
 

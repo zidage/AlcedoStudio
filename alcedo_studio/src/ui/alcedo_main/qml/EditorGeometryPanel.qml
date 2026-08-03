@@ -21,6 +21,8 @@ Item {
     property var aspectEntries: []
     property var lensBrandEntries: []
     property var lensModelEntries: []
+    property int sourceImageWidth: 0
+    property int sourceImageHeight: 0
 
     readonly property color colText: theme ? theme.colText : appTheme.textColor
     readonly property color colMuted: theme ? theme.colTextMuted : appTheme.textMutedColor
@@ -30,6 +32,8 @@ Item {
     readonly property color colHover: theme ? theme.colHover : appTheme.hoverColor
     readonly property bool canUseGeometry: root.controlsEnabled && root.interaction !== null
     readonly property double imageAspect: {
+        if (root.sourceImageWidth > 0 && root.sourceImageHeight > 0)
+            return root.sourceImageWidth / root.sourceImageHeight
         if (!root.interaction)
             return 1.0
         const value = Number(root.interaction.metricAspect)
@@ -124,7 +128,17 @@ Item {
         if (aspectModel.currentValue === "custom")
             return geometryMath.aspectRatio(aspectWidthModel.value, aspectHeightModel.value)
         const ratio = geometryMath.presetRatio(aspectModel.currentValue)
-        return ratio.length >= 2 ? Number(ratio[0]) / Math.max(Number(ratio[1]), 0.0001) : 1.0
+        if (ratio.length < 2)
+            return 1.0
+
+        let value = Number(ratio[0]) / Math.max(Number(ratio[1]), 0.0001)
+        // Fixed presets describe an unoriented frame shape. Match that shape to
+        // the source image so 16:9 becomes 9:16 for a portrait photograph.
+        const sourcePortrait = root.imageAspect < 1.0
+        const presetPortrait = value < 1.0
+        if (Math.abs(value - 1.0) > 0.0001 && sourcePortrait !== presetPortrait)
+            value = 1.0 / Math.max(value, 0.0001)
+        return value
     }
 
     function hasLockedAspect() {
@@ -193,8 +207,9 @@ Item {
     }
 
     /// Commit the in-panel crop/rotate draft into the pipeline once. Safe to call
-    /// repeatedly: a clean draft is a no-op. Must run before leaving Geometry so
-    /// the panel-switch CropRotate refresh sees the new adjustment snapshot.
+    /// repeatedly: a clean draft is a no-op. When leaving Geometry this runs from
+    /// onPanelActiveChanged, after the overlay-off refresh has received its lower
+    /// request id, so the final Quality frame cannot be hidden by a stale frame.
     function confirmPendingCrop() {
         if (!root.draftDirty)
             return false
@@ -206,7 +221,6 @@ Item {
 
     /// Enter / numpad Enter: apply draft crop and return to Tone (legacy shortcut).
     function confirmAndReturnToTone() {
-        root.confirmPendingCrop()
         if (root.editorSession)
             root.editorSession.activeAdjustmentPanel = "tone"
     }
@@ -232,6 +246,10 @@ Item {
                 aspect_ratio: {
                     width: Number(aspectWidthModel.value),
                     height: Number(aspectHeightModel.value)
+                },
+                source_size: {
+                    width: root.sourceImageWidth,
+                    height: root.sourceImageHeight
                 }
             }
         }
@@ -341,12 +359,23 @@ Item {
         const entry = raw && raw["crop_rotate"] !== undefined ? raw["crop_rotate"] : raw
         root.restoring = true
         if (!entry) {
+            root.sourceImageWidth = 0
+            root.sourceImageHeight = 0
             root.resetCropModels()
             root.restoring = false
             return
         }
 
         const rect = entry["crop_rect"] || {}
+        const sourceSize = entry["source_size"] || {}
+        const sourceWidth = Number(sourceSize["width"] !== undefined ? sourceSize["width"] : 0)
+        const sourceHeight = Number(sourceSize["height"] !== undefined ? sourceSize["height"] : 0)
+        root.sourceImageWidth = isFinite(sourceWidth) && sourceWidth > 0 ? Math.round(sourceWidth) : 0
+        root.sourceImageHeight = isFinite(sourceHeight) && sourceHeight > 0 ? Math.round(sourceHeight) : 0
+        if (root.interaction && root.sourceImageWidth > 0 && root.sourceImageHeight > 0
+                && typeof root.interaction.setImageSize === "function") {
+            root.interaction.setImageSize(root.sourceImageWidth, root.sourceImageHeight)
+        }
         cropXModel.value = Number(rect["x"] !== undefined ? rect["x"] : 0.0)
         cropYModel.value = Number(rect["y"] !== undefined ? rect["y"] : 0.0)
         cropWidthModel.value = Number(rect["w"] !== undefined ? rect["w"] : 1.0)
@@ -415,20 +444,17 @@ Item {
             return
         if (root.inputActive)
             return
-        var normalizedSnapshot = snapshot
-        try {
-            normalizedSnapshot = JSON.parse(JSON.stringify(snapshot))
-        } catch (error) {
-            normalizedSnapshot = snapshot
-        }
+        // Read-only projection of crop/lens entries — do not deep-clone the full
+        // adjustment map (settled tone/look echo used to JSON.stringify the whole
+        // snapshot on every fan-out). Nested loaders only read their field keys.
         if (!root.aspectEntries.length) {
             root.aspectEntries = root.buildAspectEntries()
             aspectModel.entries = root.aspectEntries
         }
         if (!root.lensBrandEntries.length)
             root.refreshLensBrandEntries()
-        root.loadCropSnapshot(normalizedSnapshot)
-        root.loadLensSnapshot(normalizedSnapshot)
+        root.loadCropSnapshot(snapshot)
+        root.loadLensSnapshot(snapshot)
         root.draftDirty = false
         if (root.panelActive)
             root.syncToInteraction()
@@ -487,8 +513,8 @@ Item {
         if (root.panelActive) {
             root.enterGeometryTool()
         } else {
-            // Fallback if panel is deactivated without selectPanel/Enter (direct
-            // property write). selectPanel commits first so this is usually a no-op.
+            // The session has already disabled geometry_overlay_only and queued
+            // its lower-id refresh. Commit now so the final crop owns the newest id.
             root.confirmPendingCrop()
             root.leaveGeometryTool()
         }

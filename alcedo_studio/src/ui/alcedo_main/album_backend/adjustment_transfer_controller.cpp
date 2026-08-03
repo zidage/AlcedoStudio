@@ -130,8 +130,8 @@ auto PreviewMap(const alcedo::AdjustmentMergePreview& preview) -> QVariantMap {
         {"fieldKey", QString::fromStdString(conflict.field_key)},
         {"currentValue", JsonToVariant(conflict.current_value)},
         {"incomingValue", JsonToVariant(conflict.incoming_value)},
-        {"currentEnabled", true},
-        {"incomingEnabled", true},
+        {"currentEnabled", conflict.current_enabled},
+        {"incomingEnabled", conflict.incoming_enabled},
     });
   }
   QVariantMap result{
@@ -293,9 +293,13 @@ void SanitizeColorTemp(nlohmann::json& params) {
   auto& inner = params["color_temp"];
   inner.erase("resolved_cct");
   inner.erase("resolved_tint");
+  inner.erase("as_shot_cct");
+  inner.erase("as_shot_tint");
   if (inner.value("mode", std::string{}) == "as_shot") {
     inner.erase("cct");
     inner.erase("tint");
+    inner.erase("custom_cct");
+    inner.erase("custom_tint");
   }
 }
 
@@ -403,8 +407,8 @@ auto AdjustmentTransferController::PrepareCopy(uint elementId) -> QVariantMap {
     auto& graph                  = *guard->commit_graph_;
     graph_before_inspection      = graph;
     const auto prior_version_id  = graph.GetActiveVersionId();
-    const auto prior_head        = guard->working_head_commit_hash_;
-    const auto prior_chain       = guard->transaction_chain_hash_;
+    const auto prior_head        = guard->working_head_commit_hash();
+    const auto prior_chain       = guard->transaction_chain_hash();
     const bool prior_dirty       = guard->dirty_;
     const bool prior_serialized  = guard->serialized_state_needs_writeback_;
     head_before_inspection       = prior_head;
@@ -470,9 +474,6 @@ auto AdjustmentTransferController::PrepareCopy(uint elementId) -> QVariantMap {
       throw std::runtime_error(restore_error.empty() ? "Failed to restore active source Version"
                                                      : std::move(restore_error));
     }
-    guard->working_head_commit_hash_         = prior_head;
-    guard->transaction_chain_hash_           = prior_chain;
-    guard->dirty_                            = prior_dirty;
     guard->serialized_state_needs_writeback_ = prior_serialized;
     pipeline_service->SavePipeline(guard);
 
@@ -489,8 +490,6 @@ auto AdjustmentTransferController::PrepareCopy(uint elementId) -> QVariantMap {
         *guard->commit_graph_ = *graph_before_inspection;
         std::string ignored_error;
         (void)pipeline_service->RebuildActiveEditorPipeline(guard, &ignored_error);
-        guard->working_head_commit_hash_         = head_before_inspection;
-        guard->transaction_chain_hash_           = chain_before_inspection;
         guard->dirty_                            = dirty_before_inspection;
         guard->serialized_state_needs_writeback_ = serialized_before_inspection;
       }
@@ -549,8 +548,8 @@ auto AdjustmentTransferController::CopyVersion(uint elementId, const QString& ve
     auto& graph                  = *guard->commit_graph_;
     graph_before_inspection      = graph;
     const auto prior_version_id  = graph.GetActiveVersionId();
-    const auto prior_head        = guard->working_head_commit_hash_;
-    const auto prior_chain       = guard->transaction_chain_hash_;
+    const auto prior_head        = guard->working_head_commit_hash();
+    const auto prior_chain       = guard->transaction_chain_hash();
     const bool prior_dirty       = guard->dirty_;
     const bool prior_serialized  = guard->serialized_state_needs_writeback_;
     head_before_inspection       = prior_head;
@@ -603,9 +602,6 @@ auto AdjustmentTransferController::CopyVersion(uint elementId, const QString& ve
       throw std::runtime_error(restore_error.empty() ? "Failed to restore active source Version"
                                                      : std::move(restore_error));
     }
-    guard->working_head_commit_hash_         = prior_head;
-    guard->transaction_chain_hash_           = prior_chain;
-    guard->dirty_                            = prior_dirty;
     guard->serialized_state_needs_writeback_ = prior_serialized;
     pipeline_service->SavePipeline(guard);
 
@@ -625,8 +621,6 @@ auto AdjustmentTransferController::CopyVersion(uint elementId, const QString& ve
         *guard->commit_graph_ = *graph_before_inspection;
         std::string ignored_error;
         (void)pipeline_service->RebuildActiveEditorPipeline(guard, &ignored_error);
-        guard->working_head_commit_hash_         = head_before_inspection;
-        guard->transaction_chain_hash_           = chain_before_inspection;
         guard->dirty_                            = dirty_before_inspection;
         guard->serialized_state_needs_writeback_ = serialized_before_inspection;
       }
@@ -700,8 +694,14 @@ auto AdjustmentTransferController::CompleteMergeIntoEditor(QObject*            e
     AdjustmentMergeResolution resolution;
     resolution.field_key        = field_key.toStdString();
     resolution.resolved_enabled = map.value("resolvedEnabled", true).toBool();
-    const auto resolved_value   = map.value("resolvedValue");
-    const auto qvalue           = QJsonValue::fromVariant(resolved_value);
+    const auto choice_text      = map.value("choice").toString().trimmed().toLower();
+    if (choice_text == QStringLiteral("incoming")) {
+      resolution.choice = OperatorMergeChoice::kTakeIncoming;
+    } else if (choice_text == QStringLiteral("current")) {
+      resolution.choice = OperatorMergeChoice::kKeepCurrent;
+    }
+    const auto resolved_value = map.value("resolvedValue");
+    const auto qvalue         = QJsonValue::fromVariant(resolved_value);
     if (qvalue.isObject() || qvalue.isArray()) {
       const auto document =
           qvalue.isObject() ? QJsonDocument(qvalue.toObject()) : QJsonDocument(qvalue.toArray());
@@ -765,17 +765,14 @@ auto AdjustmentTransferController::PasteViaMiniGit(const std::vector<sl_element_
     // publish it through the same guarded graph materialization used by named
     // Version operations.
     const auto graph_before_paste = *graph;
-    const auto prior_head         = guard->working_head_commit_hash_;
-    const auto prior_chain        = guard->transaction_chain_hash_;
+    const auto prior_head         = guard->working_head_commit_hash();
+    const auto prior_chain        = guard->transaction_chain_hash();
     const bool prior_dirty        = guard->dirty_;
     const bool prior_serialized   = guard->serialized_state_needs_writeback_;
     auto       restore_prior      = [&] {
       *graph = graph_before_paste;
       std::string ignored_error;
       (void)pipeline_service.RebuildActiveEditorPipeline(guard, &ignored_error);
-      guard->working_head_commit_hash_         = prior_head;
-      guard->transaction_chain_hash_           = prior_chain;
-      guard->dirty_                            = prior_dirty;
       guard->serialized_state_needs_writeback_ = prior_serialized;
     };
     try {
@@ -790,8 +787,6 @@ auto AdjustmentTransferController::PasteViaMiniGit(const std::vector<sl_element_
                                                       ? "Failed to rebuild pasted pipeline"
                                                       : std::move(rebuild_error)});
         } else {
-          guard->working_head_commit_hash_         = paste_result.new_head;
-          guard->transaction_chain_hash_           = graph->ChainHashForHead(paste_result.new_head);
           guard->serialized_state_needs_writeback_ = true;
           std::string persistence_error;
           if (!pipeline_service.PersistEditorHistoryState(

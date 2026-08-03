@@ -134,11 +134,10 @@ auto CenterInWindow(QQuickItem* item) -> QPoint {
 }
 
 auto RawParams(double userWb, const QString& method, bool highlights) -> QVariantMap {
+  // The accelerator backend is a runtime property of the pipeline (user
+  // setting), never an edit param; fixtures must not carry it.
   QVariantMap raw;
-  raw.insert(QStringLiteral("gpu_backend"), QStringLiteral("cuda"));
   raw.insert(QStringLiteral("method"), method);
-  raw.insert(QStringLiteral("cuda"), true);
-  raw.insert(QStringLiteral("opencl"), false);
   raw.insert(QStringLiteral("highlights_reconstruct"), highlights);
   raw.insert(QStringLiteral("use_camera_wb"), false);
   raw.insert(QStringLiteral("user_wb"), userWb);
@@ -166,7 +165,7 @@ auto Capabilities(bool available, QVariantList methodValues, bool metadata_avail
       {QStringLiteral("methodValues"), std::move(methodValues)},
       {QStringLiteral("rawDefaultParamsJson"),
        QStringLiteral(
-           R"({"raw":{"gpu_backend":"cuda","method":"default","cuda":true,"opencl":false,"highlights_reconstruct":true,"use_camera_wb":true,"user_wb":7600.0,"backend":"alcedo","decode_res":"full"}})")},
+           R"({"raw":{"method":"default","highlights_reconstruct":true,"use_camera_wb":true,"user_wb":7600.0,"backend":"alcedo","decode_res":"full"}})")},
   };
 }
 
@@ -350,8 +349,10 @@ TEST(EditorRawDecodePanelQmlTest, UserChangesSubmitCompleteRawOperatorParams) {
                                     .toObject();
   EXPECT_EQ(raw_after_method.value(QStringLiteral("method")).toString(),
             QStringLiteral("neural_engine"));
-  EXPECT_EQ(raw_after_method.value(QStringLiteral("gpu_backend")).toString(),
-            QStringLiteral("cuda"));
+  // The accelerator backend is never part of the edit params.
+  EXPECT_FALSE(raw_after_method.contains(QStringLiteral("gpu_backend")));
+  EXPECT_FALSE(raw_after_method.contains(QStringLiteral("cuda")));
+  EXPECT_FALSE(raw_after_method.contains(QStringLiteral("opencl")));
   EXPECT_TRUE(raw_after_method.contains(QStringLiteral("decode_res")));
   EXPECT_FALSE(raw_after_method.value(QStringLiteral("use_camera_wb")).toBool());
   EXPECT_DOUBLE_EQ(raw_after_method.value(QStringLiteral("user_wb")).toDouble(), 5120.0);

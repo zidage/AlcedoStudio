@@ -14,6 +14,8 @@
 #include <qqml.h>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QSGRendererInterface>
+#include <QSettings>
 #include <QString>
 #include <QtGlobal>
 
@@ -34,6 +36,12 @@
 #include "utils/clock/time_provider.hpp"
 
 namespace {
+
+constexpr auto kAcceleratorBackendSettingsKey = "gpu/acceleratorBackend";
+// Hard-coded so pre-QApplication reads hit the same registry/ini path ProjectModule
+// writes after QApplication exists. Do not rely on QSettings{} alone before QApp.
+constexpr auto kSettingsOrganization = "Alcedo";
+constexpr auto kSettingsApplication  = "Alcedo";
 
 void RegisterApplicationModuleTypes() {
   qmlRegisterUncreatableType<alcedo::ui::ProjectModule>(
@@ -94,6 +102,54 @@ auto FindArgValue(int argc, char** argv, std::string_view option_name)
   return std::nullopt;
 }
 
+// Same semantics as --editor-backend: accept only cuda|opencl|metal tokens that
+// this build can host. "auto"/"cpu" are pipeline preferences, not RHI backends.
+auto ParseStoredEditorBackendToken(const QString& raw)
+    -> std::optional<alcedo::editor_rhi::EditorBackend> {
+  const QString stored_value = raw.trimmed().toLower();
+  if (stored_value.isEmpty()) {
+    return std::nullopt;
+  }
+  const QByteArray encoded_value = stored_value.toUtf8();
+  const auto parsed = alcedo::editor_rhi::ParseEditorBackendToken(
+      std::string_view(encoded_value.constData(), static_cast<size_t>(encoded_value.size())));
+  if (!parsed.has_value()) {
+    qWarning("Ignoring unsupported saved accelerator backend: %s", encoded_value.constData());
+    return std::nullopt;
+  }
+  if (!alcedo::editor_rhi::IsBackendAvailableInThisBuild(*parsed)) {
+    qWarning("Saved accelerator backend is unavailable in this build: %s",
+             alcedo::editor_rhi::ToString(*parsed));
+    return std::nullopt;
+  }
+  return parsed;
+}
+
+// Explicit org/app so this works before QApplication (and matches ProjectModule writes).
+auto ReadConfiguredEditorBackend() -> std::optional<alcedo::editor_rhi::EditorBackend> {
+  const QSettings settings(QSettings::NativeFormat, QSettings::UserScope,
+                           QLatin1String(kSettingsOrganization),
+                           QLatin1String(kSettingsApplication));
+  const QString stored_value =
+      settings.value(QLatin1String(kAcceleratorBackendSettingsKey)).toString();
+  qInfo("editor.backend.settings key=%s value=\"%s\" file=%s", kAcceleratorBackendSettingsKey,
+        qPrintable(stored_value), qPrintable(settings.fileName()));
+  return ParseStoredEditorBackendToken(stored_value);
+}
+
+auto ToAcceleratorPreference(alcedo::editor_rhi::EditorBackend backend)
+    -> alcedo::AcceleratorBackendPreference {
+  switch (backend) {
+    case alcedo::editor_rhi::EditorBackend::Cuda:
+      return alcedo::AcceleratorBackendPreference::CUDA;
+    case alcedo::editor_rhi::EditorBackend::OpenCl:
+      return alcedo::AcceleratorBackendPreference::OpenCL;
+    case alcedo::editor_rhi::EditorBackend::Metal:
+      return alcedo::AcceleratorBackendPreference::Metal;
+  }
+  return alcedo::AcceleratorBackendPreference::CPU;
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -105,9 +161,15 @@ int main(int argc, char* argv[]) {
       Qt::HighDpiScaleFactorRoundingPolicy::PassThrough);
 #endif
 
-  // Parse --editor-backend before QApplication so ShareOpenGLContexts can be set
-  // when OpenCL is selected. Backend application runs after QApplication exists.
-  // const auto backend_parse = alcedo::editor_rhi::ParseEditorBackendArgs(argc, argv);
+  // Keep the same org/app identity ProjectModule uses after QApplication exists.
+  QCoreApplication::setOrganizationName(QStringLiteral("Alcedo"));
+  QCoreApplication::setOrganizationDomain(QStringLiteral("alcedo.app"));
+  QCoreApplication::setApplicationName(QStringLiteral("Alcedo"));
+
+  // Priority matches the old manual override model:
+  //   1) --editor-backend (debug/force, same as before)
+  //   2) QSettings gpu/acceleratorBackend (Settings → Acceleration)
+  //   3) platform default
   const auto backend_parse = alcedo::editor_rhi::ParseEditorBackendArgs(argc, argv);
   if (backend_parse.present && !backend_parse.error.empty()) {
     qCritical("Invalid --editor-backend: %s", backend_parse.error.c_str());
@@ -115,28 +177,38 @@ int main(int argc, char* argv[]) {
   }
 
   alcedo::editor_rhi::EditorBackend editor_backend;
+  const char*                      backend_source = "default";
   if (backend_parse.backend.has_value()) {
     editor_backend = *backend_parse.backend;
+    backend_source = "cli";
+  } else if (const auto configured = ReadConfiguredEditorBackend(); configured.has_value()) {
+    editor_backend = *configured;
+    backend_source = "settings";
   } else if (const auto def = alcedo::editor_rhi::DefaultEditorBackendForPlatform()) {
     editor_backend = *def;
+    backend_source = "default";
   } else {
     qCritical("No editor backend available for this platform/build");
     return 1;
   }
 
+  // Graphics API must be locked before QApplication creates any RHI/window
+  // scaffolding. ApplyEditorBackendBeforeWindow repeats the same selection after
+  // QApp for adapter init; doing both keeps OpenCL from silently landing on D3D11.
   if (editor_backend == alcedo::editor_rhi::EditorBackend::OpenCl) {
     QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts);
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::OpenGL);
+  } else if (editor_backend == alcedo::editor_rhi::EditorBackend::Cuda) {
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::Direct3D11);
+  } else if (editor_backend == alcedo::editor_rhi::EditorBackend::Metal) {
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::Metal);
   }
-
 
   alcedo::TimeProvider::Refresh();
   alcedo::RegisterAllOperators();
   Exiv2::LogMsg::setLevel(Exiv2::LogMsg::Level::error);
 
   QApplication app(argc, argv);
-  QCoreApplication::setOrganizationName(QStringLiteral("Alcedo"));
-  QCoreApplication::setOrganizationDomain(QStringLiteral("alcedo.app"));
-  QCoreApplication::setApplicationName(QStringLiteral("Alcedo"));
   const QString log_path = alcedo::diag::InitializeApplicationLogging();
   qCInfo(alcedo::diag::appLog).noquote()
       << QStringLiteral("app.start log_path=%1").arg(log_path);
@@ -151,14 +223,31 @@ int main(int argc, char* argv[]) {
     return 1;
   }
   qCInfo(alcedo::diag::appLog).noquote()
-      << QStringLiteral("editor.backend=%1 qt_api=%2 adapter=%3")
+      << QStringLiteral("editor.backend=%1 source=%2 qt_api=%3 adapter=%4")
              .arg(QString::fromStdString(startup.diagnostics.backend_name),
+                  QString::fromUtf8(backend_source),
                   QString::fromStdString(startup.diagnostics.qt_graphics_api),
                   QString::fromStdString(startup.diagnostics.adapter_description.empty()
                                              ? startup.diagnostics.notes
                                              : startup.diagnostics.adapter_description));
 
-  app.setWindowIcon(QIcon(QStringLiteral(":/ICON/alcedo_icon.png")));
+  // Platform window / taskbar / Dock fallback icon.
+  // Windows: multi-res ICO (Explorer taskbar + Alt-Tab). EXE also embeds the
+  // same ICO via alcedo_main.rc.
+  // macOS: PNG master; the .app Dock icon comes from Contents/Resources
+  // alcedo_icon.icns (MACOSX_BUNDLE_ICON_FILE). setWindowIcon still covers
+  // non-bundle runs and window chrome.
+  {
+#if defined(Q_OS_WIN)
+    QIcon app_icon(QStringLiteral(":/ICON/alcedo_icon.ico"));
+    if (app_icon.isNull()) {
+      app_icon = QIcon(QStringLiteral(":/ICON/alcedo_icon.png"));
+    }
+#else
+    QIcon app_icon(QStringLiteral(":/ICON/alcedo_icon.png"));
+#endif
+    app.setWindowIcon(app_icon);
+  }
   {
     QFont default_font = app.font();
     default_font.setStyleStrategy(QFont::PreferAntialias);
@@ -185,6 +274,8 @@ int main(int argc, char* argv[]) {
   QQuickStyle::setStyle("Basic");
 
   alcedo::ui::ApplicationModuleHost app_modules;
+  app_modules.project()->SetRuntimeAcceleratorPreference(
+      ToAcceleratorPreference(editor_backend));
   RegisterApplicationModuleTypes();
   alcedo::editor_rhi::RegisterEditorViewportQmlTypes();
 

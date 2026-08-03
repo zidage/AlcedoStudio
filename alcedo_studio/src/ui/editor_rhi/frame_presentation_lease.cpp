@@ -14,7 +14,7 @@ auto DescribeLease(const WritableTargetLease& lease) -> std::string {
       << " handle=" << ToString(lease.handle_kind)
       << " writable=" << ToString(lease.writable_kind) << " size=" << lease.dimensions.width
       << "x" << lease.dimensions.height << " target_gen=" << lease.generation.target_generation
-      << " image_gen=" << lease.generation.image_generation
+      << " session_epoch=" << lease.generation.session_epoch
       << " image_id=" << lease.generation.image_identity
       << " layer_gen=" << lease.generation.layer_generation << " layer=" << ToString(lease.layer)
       << " native=0x" << std::hex << lease.native_handle << " writable_res=0x"

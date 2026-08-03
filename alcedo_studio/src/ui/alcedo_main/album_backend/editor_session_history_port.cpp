@@ -145,68 +145,41 @@ auto EditorSessionHistoryPort::CancelMerge(const alcedo::EditorHistoryGuardHandl
   return transfer_->CancelMerge(guard, preview, error);
 }
 
-auto EditorSessionHistoryPort::PreparePaste(
+auto EditorSessionHistoryPort::PasteLiveRootRelativeVersion(
     const alcedo::EditorHistoryGuardHandle& guard,
     const alcedo::AdjustmentTransferPackage& package, std::string version_display_name,
-    alcedo::AdjustmentPasteResult* result, alcedo::EditorTransferCandidate* candidate,
-    std::string* error) -> bool {
-  return transfer_->PreparePaste(guard, package, std::move(version_display_name), result,
-                                 candidate, error);
+    alcedo::AdjustmentPasteResult* result, std::string* error) -> bool {
+  return transfer_->PasteLiveRootRelativeVersion(guard, package, std::move(version_display_name),
+                                                 result, error);
 }
 
-auto EditorSessionHistoryPort::PrepareMerge(
-    const alcedo::EditorHistoryGuardHandle& guard,
-    const alcedo::AdjustmentTransferPackage& package, std::string incoming_version_display_name,
-    alcedo::AdjustmentMergePreview* preview, alcedo::EditorTransferCandidate* candidate,
-    std::string* error) -> bool {
-  return transfer_->PrepareMerge(guard, package, std::move(incoming_version_display_name), preview,
-                                 candidate, error);
+auto EditorSessionHistoryPort::CancelLivePaste(const alcedo::EditorHistoryGuardHandle& guard,
+                                               const alcedo::version_ref_id_t& prior_version_id,
+                                               const alcedo::version_ref_id_t& paste_version_id,
+                                               std::string* error) -> bool {
+  return transfer_->CancelLivePaste(guard, prior_version_id, paste_version_id, error);
 }
 
-auto EditorSessionHistoryPort::ValidateMergeCandidate(
-    const alcedo::EditorHistoryGuardHandle& guard,
-    const alcedo::AdjustmentMergePreview& preview,
-    const alcedo::EditorTransferCandidate& candidate, std::string* error) -> bool {
-  return transfer_->ValidateMergeCandidate(guard, preview, candidate, error);
+auto EditorSessionHistoryPort::BeginLiveMerge(const alcedo::EditorHistoryGuardHandle& guard,
+                                              const alcedo::AdjustmentTransferPackage& package,
+                                              alcedo::AdjustmentMergePreview* preview,
+                                              std::string* error) -> bool {
+  return transfer_->BeginLiveMerge(guard, package, preview, error);
 }
 
-auto EditorSessionHistoryPort::CompleteMergeCandidate(
+auto EditorSessionHistoryPort::CompleteLiveMerge(
     const alcedo::EditorHistoryGuardHandle& guard,
+    const alcedo::AdjustmentTransferPackage& package,
     const alcedo::AdjustmentMergePreview& preview,
     const std::vector<alcedo::AdjustmentMergeResolution>& resolutions,
-    alcedo::EditorTransferCandidate* candidate, alcedo::AdjustmentMergeResult* result,
-    std::string* error) -> bool {
-  return transfer_->CompleteMergeCandidate(guard, preview, resolutions, candidate, result, error);
+    alcedo::AdjustmentMergeResult* result, std::string* error) -> bool {
+  return transfer_->CompleteLiveMerge(guard, package, preview, resolutions, result, error);
 }
 
 auto EditorSessionHistoryPort::ReadAdjustmentSnapshot(
     const alcedo::EditorHistoryGuardHandle& guard, alcedo::EditorRenderAdjustmentSnapshot* snapshot,
     std::string* error) -> bool {
   return projection_->ReadAdjustmentSnapshot(guard, snapshot, error);
-}
-
-auto EditorSessionHistoryPort::CaptureTransferSaveCheckpoint(
-    const alcedo::EditorHistoryGuardHandle& guard,
-    const alcedo::EditorTransferCandidate& candidate, std::string* error)
-    -> std::shared_ptr<const alcedo::EditorMiniGitSaveCapture> {
-  return transfer_->CaptureTransferSaveCheckpoint(guard, candidate, error);
-}
-
-auto EditorSessionHistoryPort::PublishTransferCandidate(
-    const alcedo::EditorHistoryGuardHandle& guard,
-    const alcedo::EditorTransferCandidate& candidate,
-    const alcedo::AdjustmentMergePreview* preview,
-    const std::vector<alcedo::AdjustmentMergeResolution>& resolutions,
-    alcedo::AdjustmentPasteResult* paste, alcedo::AdjustmentMergeResult* merge,
-    std::string* error) -> bool {
-  return transfer_->PublishTransferCandidate(guard, candidate, preview, resolutions, paste, merge,
-                                             error);
-}
-
-auto EditorSessionHistoryPort::DiscardTransferCandidate(
-    const alcedo::EditorHistoryGuardHandle& guard,
-    const alcedo::EditorTransferCandidate& candidate, std::string* error) -> bool {
-  return transfer_->DiscardTransferCandidate(guard, candidate, error);
 }
 
 auto EditorSessionHistoryPort::CaptureSaveCheckpoint(const alcedo::EditorHistoryGuardHandle& guard,

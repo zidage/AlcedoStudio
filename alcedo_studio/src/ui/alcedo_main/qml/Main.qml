@@ -153,12 +153,30 @@ ApplicationWindow {
         host: root
     }
 
+    // Shared workspace scroll state survives Loader teardown when routing between
+    // Library and Editor. The aliases keep the existing diagnostic/property names
+    // while exposing one global vertical and horizontal position.
+    property real globalContentY: 0
+    property real globalContentX: 0
+    property alias contentY: root.globalContentY
+    property alias contentX: root.globalContentX
+
     // Library workspace UI state survives Loader teardown when routing to the editor.
     // LibraryWorkspace reads these on create and writes them back on destroy.
     property bool libraryInspectorVisible: true
     property real libraryInspectorWidth: 300
     property int libraryGridZoomLevel: 4
-    property real libraryGridContentY: 0
+    property alias libraryGridContentY: root.globalContentY
+    property alias editorFilmstripContentX: root.globalContentX
+
+    // Cross-workspace reveal requests are consumed by the next live view. The
+    // monotonically increasing IDs also handle selecting the same image twice.
+    property int libraryScrollTargetElementId: 0
+    property int libraryScrollTargetIndex: -1
+    property int libraryScrollRequestId: 0
+    property int filmstripScrollTargetElementId: 0
+    property int filmstripScrollTargetIndex: -1
+    property int filmstripScrollRequestId: 0
 
 
     Component.onCompleted: {
@@ -193,6 +211,10 @@ ApplicationWindow {
         appDialogs.openAdvancedAnalysisDialog()
     }
 
+    function openBackgroundTasksDialog() {
+        appDialogs.openBackgroundTasksDialog()
+    }
+
 
     function beginProjectLaunch(loadAction) {
         projectLaunchController.beginProjectLaunch(loadAction)
@@ -210,8 +232,53 @@ ApplicationWindow {
         imageActionsController.setFocusedImage(item)
     }
 
+    function selectAllCurrentAlbum() {
+        imageActionsController.selectAllCurrentAlbum()
+    }
+
+    function requestLibraryScrollToElement(elementId, index) {
+        const target = Number(elementId || 0)
+        if (target <= 0) {
+            return
+        }
+        libraryScrollTargetElementId = target
+        libraryScrollTargetIndex = index === undefined ? -1 : Number(index)
+        libraryScrollRequestId += 1
+    }
+
+    function clearLibraryScrollTarget(elementId) {
+        if (Number(elementId || 0) !== Number(libraryScrollTargetElementId)) {
+            return
+        }
+        libraryScrollTargetElementId = 0
+        libraryScrollTargetIndex = -1
+    }
+
+    function requestFilmstripScrollToElement(elementId, index) {
+        const target = Number(elementId || 0)
+        if (target <= 0) {
+            return
+        }
+        filmstripScrollTargetElementId = target
+        filmstripScrollTargetIndex = index === undefined ? -1 : Number(index)
+        filmstripScrollRequestId += 1
+    }
+
+    function clearFilmstripScrollTarget(elementId) {
+        if (Number(elementId || 0) !== Number(filmstripScrollTargetElementId)) {
+            return
+        }
+        filmstripScrollTargetElementId = 0
+        filmstripScrollTargetIndex = -1
+    }
+
     function openImageContextMenu(clickedItem, sceneX, sceneY) {
         imageActionsController.openImageContextMenu(clickedItem, sceneX, sceneY)
+    }
+
+    function openEditorFilmstripContextMenu(clickedItem, sceneX, sceneY) {
+        imageActionsController.openImageContextMenu(clickedItem, sceneX, sceneY,
+                                                    "editor-filmstrip")
     }
 
     function requestSetFocusedImageRating(rating) {
@@ -297,11 +364,6 @@ ApplicationWindow {
 
         BackgroundTaskBar {
             Layout.fillWidth: true
-            onTaskDetailsRequested: function(task) {
-                if (task && task.kind === "imageAnalysis") {
-                    appDialogs.advancedContentAnalysisDialog.openTaskDetails(task)
-                }
-            }
         }
     }
 
@@ -339,7 +401,7 @@ ApplicationWindow {
     Shortcut {
         sequence: StandardKey.SelectAll
         enabled: root.backendInteractive && !appDialogs.anyDialogOpened()
-        onActivated: imageActionsController.selectAllCurrentAlbum()
+        onActivated: root.selectAllCurrentAlbum()
     }
 
     // ── Accelerator preparation overlay ───────────────────────────────

@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <mutex>
 #include <string>
 
 #include "app/adjustment_transfer_service.hpp"
@@ -13,7 +14,10 @@
 #include "edit/history/commit_types.hpp"
 #include "edit/history/edit_commit.hpp"
 #include "edit/history/version_ref.hpp"
+#include "edit/operators/basic/color_temp_op.hpp"
+#include "edit/operators/geometry/lens_calib_op.hpp"
 #include "edit/operators/op_base.hpp"
+#include "edit/pipeline/pipeline_cpu.hpp"
 #include "support/editor_mini_git_project_fixture.hpp"
 
 namespace alcedo {
@@ -152,79 +156,13 @@ TEST_F(AdjustmentTransferPasteMergeTest, PasteWithEmptyPackageReturnsError) {
 }
 
 // ============================================================================
-// Merge
+// Merge commit graph shape (no service-level InitiateMerge / temp Version)
 // ============================================================================
 
-/// InitiateMerge detects conflicts when the incoming package differs from the
-/// current pipeline state.
-TEST_F(AdjustmentTransferPasteMergeTest, InitiateMergeDetectsConflictsWhenValuesDiffer) {
-  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
-  auto*      graph      = project_.graph(element_id).get();
-
-  // Append an exposure edit: before=0.0, after=1.0.
-  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.0f));
-  EXPECT_EQ(graph->CommitCount(), 1u);
-
-  // Initiate a merge with a different exposure value.
-  auto pkg     = MakeExposurePackage(2.0f);
-  auto preview = AdjustmentTransferService::InitiateMerge(*graph, *pipeline_service_, element_id,
-                                                          pkg, "Merge Exposure");
-
-  ASSERT_TRUE(preview.error.empty()) << preview.error;
-  // The current pipeline has exposure=1.0, incoming has exposure=2.0 — conflict expected.
-  EXPECT_TRUE(preview.has_conflicts);
-  EXPECT_EQ(preview.conflicts.size(), 1u);
-  EXPECT_EQ(preview.conflicts[0].operator_type, OperatorType::EXPOSURE);
-}
-
-/// InitiateMerge detects no conflicts when the incoming package matches the
-/// current pipeline state.
-TEST_F(AdjustmentTransferPasteMergeTest, InitiateMergeDetectsNoConflictsWhenValuesMatch) {
-  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
-  auto*      graph      = project_.graph(element_id).get();
-
-  // Append an exposure edit: before=0.0, after=1.5.
-  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.5f));
-
-  // Initiate a merge with the same exposure value.
-  auto pkg     = MakeExposurePackage(1.5f);
-  auto preview = AdjustmentTransferService::InitiateMerge(*graph, *pipeline_service_, element_id,
-                                                          pkg, "Merge Exposure");
-
-  ASSERT_TRUE(preview.error.empty()) << preview.error;
-  EXPECT_FALSE(preview.has_conflicts);
-  EXPECT_TRUE(preview.conflicts.empty());
-}
-
-/// CompleteMerge fails when there are unresolved conflicts.
-TEST_F(AdjustmentTransferPasteMergeTest, CompleteMergeFailsWithUnresolvedConflicts) {
-  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
-  auto*      graph      = project_.graph(element_id).get();
-
-  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.0f));
-  const auto head_before = graph->GetActiveVersionRef().head_commit_hash;
-
-  auto       pkg         = MakeExposurePackage(2.0f);
-  auto preview = AdjustmentTransferService::InitiateMerge(*graph, *pipeline_service_, element_id,
-                                                          pkg, "Merge Exposure");
-  ASSERT_TRUE(preview.has_conflicts);
-
-  // CompleteMerge with empty resolutions should fail.
-  std::vector<AdjustmentMergeResolution> empty_resolutions;
-  auto result = AdjustmentTransferService::CompleteMerge(*graph, *pipeline_service_, preview,
-                                                         empty_resolutions);
-  EXPECT_FALSE(result.merged);
-  EXPECT_FALSE(result.error.empty());
-
-  // The active Version head must NOT have moved.
-  EXPECT_EQ(graph->GetActiveVersionRef().head_commit_hash, head_before);
-  // Commit count: the original edit (1) + the incoming branch commit(s) inserted by InitiateMerge.
-  // CompleteMerge failing should not add a merge commit on top.
-  EXPECT_EQ(graph->CommitCount(), 2u);
-}
-
-/// CompleteMerge creates a two-parent merge commit after all conflicts are resolved.
-TEST_F(AdjustmentTransferPasteMergeTest, CompleteMergeCreatesTwoParentCommitWithResolvedValues) {
+/// Insert incoming ancestry commits without a temporary Version ref, then create a
+/// two-parent merge on the active Version. Editor merge production path is
+/// BeginLiveMerge/CompleteLiveMerge; this covers the CommitGraph payload shape.
+TEST_F(AdjustmentTransferPasteMergeTest, TwoParentMergeCommitUsesIncomingAncestryWithoutTempVersion) {
   const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
   auto*      graph      = project_.graph(element_id).get();
 
@@ -232,72 +170,43 @@ TEST_F(AdjustmentTransferPasteMergeTest, CompleteMergeCreatesTwoParentCommitWith
   const auto current_head = graph->GetActiveVersionRef().head_commit_hash;
   ASSERT_TRUE(current_head.has_value());
   const auto version_id_before = graph->GetActiveVersionId();
+  const auto version_count_before = graph->GetAllVersionRefs().size();
 
-  auto       pkg               = MakeExposurePackage(2.0f);
-  auto preview = AdjustmentTransferService::InitiateMerge(*graph, *pipeline_service_, element_id,
-                                                          pkg, "Merge Exposure");
-  ASSERT_TRUE(preview.has_conflicts);
-  ASSERT_EQ(preview.conflicts.size(), 1u);
+  auto pkg              = MakeExposurePackage(2.0f);
+  auto incoming_commits = AdjustmentTransferService::BuildRootRelativeCommits(pkg, graph->GetRootId());
+  ASSERT_FALSE(incoming_commits.empty());
+  for (const auto& commit : incoming_commits) {
+    (void)graph->InsertCommit(commit);
+  }
+  const auto incoming_head = incoming_commits.back().GetCommitHash();
 
-  // Resolve with incoming value.
-  std::vector<AdjustmentMergeResolution> resolutions;
-  resolutions.push_back({
-      .field_key        = preview.conflicts[0].field_key,
-      .resolved_value   = preview.conflicts[0].incoming_value,
-      .resolved_enabled = true,
-  });
+  MergeEditPayload merge_payload;
+  MergeFieldDelta  delta;
+  delta.operator_type    = OperatorType::EXPOSURE;
+  delta.stage_name       = PipelineStageName::Basic_Adjustment;
+  delta.field_name       = "$operator_params";
+  delta.before_value     = {{"exposure", 1.0f}};
+  delta.before_enabled   = true;
+  delta.resolved_value   = {{"exposure", 2.0f}};
+  delta.resolved_enabled = true;
+  merge_payload.fields.push_back(std::move(delta));
 
-  auto result =
-      AdjustmentTransferService::CompleteMerge(*graph, *pipeline_service_, preview, resolutions);
-  ASSERT_TRUE(result.merged) << result.error;
+  const auto merge_commit =
+      EditCommit::MakeMerge(graph->GetRootId(), current_head, incoming_head, std::move(merge_payload));
+  (void)graph->InsertCommit(merge_commit);
+  graph->MoveWorkingHead(version_id_before, merge_commit.GetCommitHash());
 
-  // Verify the merge commit.
-  const auto  merge_hash   = result.merge_commit_hash;
-  const auto& merge_commit = graph->GetCommit(merge_hash);
+  EXPECT_EQ(graph->GetActiveVersionId(), version_id_before);
+  EXPECT_EQ(graph->GetActiveVersionRef().head_commit_hash, merge_commit.GetCommitHash());
+  EXPECT_EQ(graph->GetAllVersionRefs().size(), version_count_before);
   EXPECT_EQ(merge_commit.GetKind(), EditCommitKind::kMerge);
   EXPECT_EQ(merge_commit.GetFirstParentHash(), current_head);
-  EXPECT_EQ(merge_commit.GetSecondParentHash(), preview.incoming_head);
+  EXPECT_EQ(merge_commit.GetSecondParentHash(), incoming_head);
 
-  // The active Version advanced to the merge commit.
-  EXPECT_EQ(graph->GetActiveVersionId(), version_id_before);  // same Version ID
-  EXPECT_EQ(graph->GetActiveVersionRef().head_commit_hash, merge_hash);
-  EXPECT_THROW(graph->GetVersionRef(preview.incoming_version_id), std::runtime_error);
-
-  // The merge commit is in the first-parent chain.
-  auto chain = graph->FirstParentChain(merge_hash);
-  EXPECT_GE(chain.size(), 2u);  // root -> edit -> merge or root -> merge -> ...
-
-  // Both parents should be reachable in the graph.
+  auto chain = graph->FirstParentChain(merge_commit.GetCommitHash());
+  EXPECT_GE(chain.size(), 2u);
   EXPECT_NE(graph->FindCommit(*merge_commit.GetFirstParentHash()), nullptr);
   EXPECT_NE(graph->FindCommit(*merge_commit.GetSecondParentHash()), nullptr);
-}
-
-/// CancelMerge does not create a commit or move the active Version ref.
-TEST_F(AdjustmentTransferPasteMergeTest, CancelMergeLeavesNoCommitOrRefChange) {
-  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
-  auto*      graph      = project_.graph(element_id).get();
-
-  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.0f));
-  const auto head_before         = graph->GetActiveVersionRef().head_commit_hash;
-  const auto version_id_before   = graph->GetActiveVersionId();
-  const auto commit_count_before = graph->CommitCount();
-
-  auto       pkg                 = MakeContrastPackage(0.5f);
-  auto preview = AdjustmentTransferService::InitiateMerge(*graph, *pipeline_service_, element_id,
-                                                          pkg, "Merge Contrast");
-  ASSERT_TRUE(preview.error.empty()) << preview.error;
-
-  AdjustmentTransferService::CancelMerge(*graph, preview);
-
-  // No change to the active Version or head.
-  EXPECT_EQ(graph->GetActiveVersionId(), version_id_before);
-  EXPECT_EQ(graph->GetActiveVersionRef().head_commit_hash, head_before);
-
-  // The incoming branch commits are in the graph (they were inserted by InitiateMerge)
-  // but the active Version does not reference them.
-  // Commit count should have increased (incoming commits were inserted) but the
-  // active Version doesn't move.
-  EXPECT_GT(graph->CommitCount(), commit_count_before);
 }
 
 // ============================================================================
@@ -350,34 +259,6 @@ TEST_F(AdjustmentTransferPasteMergeTest, RepeatedPasteCreatesDistinctVersionRef)
   // different commit hashes.
 }
 
-/// CompleteMerge with an errored preview rejects the call immediately.
-TEST_F(AdjustmentTransferPasteMergeTest, CompleteMergeWithErroredPreviewRejectsImmediately) {
-  const auto             element_id = test::EditorMiniGitProjectFixture::kElementA;
-  auto*                  graph      = project_.graph(element_id).get();
-
-  AdjustmentMergePreview errored_preview;
-  errored_preview.error = "Simulated initiation failure";
-
-  std::vector<AdjustmentMergeResolution> resolutions;
-  auto result = AdjustmentTransferService::CompleteMerge(*graph, *pipeline_service_,
-                                                         errored_preview, resolutions);
-  EXPECT_FALSE(result.merged);
-  EXPECT_FALSE(result.error.empty());
-}
-
-/// InitiateMerge with an empty package returns an error without modifying the graph.
-TEST_F(AdjustmentTransferPasteMergeTest, InitiateMergeWithEmptyPackageReturnsError) {
-  const auto                element_id          = test::EditorMiniGitProjectFixture::kElementA;
-  auto*                     graph               = project_.graph(element_id).get();
-  const auto                commit_count_before = graph->CommitCount();
-
-  AdjustmentTransferPackage empty_pkg;
-  auto preview = AdjustmentTransferService::InitiateMerge(*graph, *pipeline_service_, element_id,
-                                                          empty_pkg, "Empty Merge");
-  EXPECT_FALSE(preview.error.empty());
-  EXPECT_EQ(graph->CommitCount(), commit_count_before);  // No commits inserted
-}
-
 /// Paste does not affect other Versions in the graph.
 TEST_F(AdjustmentTransferPasteMergeTest, PasteDoesNotAffectOtherVersions) {
   const auto element_id          = test::EditorMiniGitProjectFixture::kElementA;
@@ -401,38 +282,182 @@ TEST_F(AdjustmentTransferPasteMergeTest, PasteDoesNotAffectOtherVersions) {
   EXPECT_EQ(second_ref.version_id, second_version_id);
 }
 
-/// Merge commit appears in first-parent chain after creation.
-TEST_F(AdjustmentTransferPasteMergeTest, MergeCommitAppearsInFirstParentChain) {
+// ============================================================================
+// Operator-owned merge policy (color_temp / lens_calib)
+// ============================================================================
+
+TEST(ColorTempOpMergePolicyTest, BothAsShotDoesNotConflictEvenWhenCctDiffers) {
+  ColorTempOp op;
+  const nlohmann::json current = {
+      {"color_temp",
+       {{"mode", "as_shot"},
+        {"custom_cct", 5200.0},
+        {"custom_tint", -3.0},
+        {"as_shot_cct", 5200.0},
+        {"as_shot_tint", -3.0}}}};
+  const nlohmann::json incoming = {{"color_temp", {{"mode", "as_shot"}}}};
+  EXPECT_FALSE(op.DetectMergeConflict(current, incoming));
+}
+
+TEST(ColorTempOpMergePolicyTest, CustomVersusAsShotConflicts) {
+  ColorTempOp op;
+  const nlohmann::json current = {
+      {"color_temp",
+       {{"mode", "custom"},
+        {"custom_cct", 7000.0},
+        {"custom_tint", 10.0},
+        {"as_shot_cct", 5200.0},
+        {"as_shot_tint", -3.0}}}};
+  const nlohmann::json incoming = {{"color_temp", {{"mode", "as_shot"}}}};
+  EXPECT_TRUE(op.DetectMergeConflict(current, incoming));
+}
+
+TEST(ColorTempOpMergePolicyTest, TakeIncomingAsShotPreservesCurrentAsShotBaseline) {
+  ColorTempOp op;
+  const nlohmann::json current = {
+      {"color_temp",
+       {{"mode", "custom"},
+        {"custom_cct", 7000.0},
+        {"custom_tint", 10.0},
+        {"as_shot_cct", 5200.0},
+        {"as_shot_tint", -3.0}}}};
+  const nlohmann::json incoming = {{"color_temp", {{"mode", "as_shot"}}}};
+  const auto merged =
+      op.MergeParams(current, incoming, OperatorMergeChoice::kTakeIncoming);
+  ASSERT_TRUE(merged.contains("color_temp"));
+  const auto& ct = merged["color_temp"];
+  EXPECT_EQ(ct.value("mode", std::string{}), "as_shot");
+  EXPECT_DOUBLE_EQ(ct.value("as_shot_cct", 0.0), 5200.0);
+  EXPECT_DOUBLE_EQ(ct.value("as_shot_tint", 0.0), -3.0);
+  EXPECT_DOUBLE_EQ(ct.value("custom_cct", 0.0), 7000.0);
+  EXPECT_DOUBLE_EQ(ct.value("custom_tint", 0.0), 10.0);
+}
+
+TEST(ColorTempOpMergePolicyTest, SetParamsAsShotWithoutAsShotKeysKeepsExistingAsShot) {
+  ColorTempOp op;
+  op.SetParams({{"color_temp",
+                 {{"mode", "custom"},
+                  {"custom_cct", 7000.0},
+                  {"custom_tint", 12.0},
+                  {"as_shot_cct", 4800.0},
+                  {"as_shot_tint", -5.0}}}});
+  op.SetParams({{"color_temp", {{"mode", "as_shot"}}}});
+  const auto params = op.GetParams()["color_temp"];
+  EXPECT_EQ(params.value("mode", std::string{}), "as_shot");
+  EXPECT_DOUBLE_EQ(params.value("as_shot_cct", 0.0), 4800.0);
+  EXPECT_DOUBLE_EQ(params.value("as_shot_tint", 0.0), -5.0);
+  EXPECT_DOUBLE_EQ(params.value("custom_cct", 0.0), 7000.0);
+  EXPECT_DOUBLE_EQ(params.value("custom_tint", 0.0), 12.0);
+}
+
+TEST(ColorTempOpMergePolicyTest, SetParamsAcceptsLegacyResolvedAndCctKeys) {
+  ColorTempOp op;
+  op.SetParams({{"color_temp",
+                 {{"mode", "custom"},
+                  {"cct", 7000.0},
+                  {"tint", 12.0},
+                  {"resolved_cct", 4800.0},
+                  {"resolved_tint", -5.0}}}});
+  const auto params = op.GetParams()["color_temp"];
+  EXPECT_DOUBLE_EQ(params.value("custom_cct", 0.0), 7000.0);
+  EXPECT_DOUBLE_EQ(params.value("custom_tint", 0.0), 12.0);
+  EXPECT_DOUBLE_EQ(params.value("as_shot_cct", 0.0), 4800.0);
+  EXPECT_DOUBLE_EQ(params.value("as_shot_tint", 0.0), -5.0);
+}
+
+TEST(LensCalibOpMergePolicyTest, ImageLocalMetaDoesNotForceConflictWhenPortableMatches) {
+  LensCalibOp op;
+  const nlohmann::json current = {
+      {"lens_calib",
+       {{"enabled", true},
+        {"apply_distortion", true},
+        {"cam_maker", "Canon"},
+        {"cam_model", "EOS R5"},
+        {"lens_model", "RF 24-70"}}}};
+  const nlohmann::json incoming = {
+      {"lens_calib", {{"enabled", true}, {"apply_distortion", true}}}};
+  EXPECT_FALSE(op.DetectMergeConflict(current, incoming));
+}
+
+TEST(LensCalibOpMergePolicyTest, TakeIncomingKeepsTargetImageLocalMeta) {
+  LensCalibOp op;
+  const nlohmann::json current = {
+      {"lens_calib",
+       {{"enabled", false},
+        {"apply_distortion", true},
+        {"cam_maker", "Nikon"},
+        {"lens_model", "Target Lens"}}}};
+  const nlohmann::json incoming = {
+      {"lens_calib", {{"enabled", true}, {"apply_distortion", false}}}};
+  const auto merged =
+      op.MergeParams(current, incoming, OperatorMergeChoice::kTakeIncoming);
+  const auto& lc = merged["lens_calib"];
+  EXPECT_TRUE(lc.value("enabled", false));
+  EXPECT_FALSE(lc.value("apply_distortion", true));
+  EXPECT_EQ(lc.value("cam_maker", std::string{}), "Nikon");
+  EXPECT_EQ(lc.value("lens_model", std::string{}), "Target Lens");
+}
+
+TEST_F(AdjustmentTransferPasteMergeTest,
+       LivePipelineColorTempBothAsShotHasNoConflictDespiteStrippedIncoming) {
+  // Live operator DetectMergeConflict (same policy BeginLiveMerge uses).
   const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
-  auto*      graph      = project_.graph(element_id).get();
 
-  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.0f));
-
-  auto pkg     = MakeExposurePackage(2.0f);
-  auto preview = AdjustmentTransferService::InitiateMerge(*graph, *pipeline_service_, element_id,
-                                                          pkg, "Merge Chain Test");
-  ASSERT_TRUE(preview.has_conflicts);
-
-  std::vector<AdjustmentMergeResolution> resolutions;
-  resolutions.push_back({
-      .field_key        = preview.conflicts[0].field_key,
-      .resolved_value   = preview.conflicts[0].incoming_value,
-      .resolved_enabled = true,
-  });
-  auto result =
-      AdjustmentTransferService::CompleteMerge(*graph, *pipeline_service_, preview, resolutions);
-  ASSERT_TRUE(result.merged);
-
-  // The merge commit must be in the first-parent chain.
-  auto chain       = graph->FirstParentChain(graph->GetActiveVersionRef().head_commit_hash);
-  bool found_merge = false;
-  for (const auto& hash : chain) {
-    if (hash == result.merge_commit_hash) {
-      found_merge = true;
-      break;
-    }
+  auto guard = pipeline_service_->LoadPipeline(element_id);
+  ASSERT_TRUE(guard && guard->pipeline_);
+  nlohmann::json current_value;
+  {
+    std::unique_lock<std::mutex> lock(guard->pipeline_->GetRenderLock());
+    auto&                        to_ws = guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
+    const nlohmann::json full_as_shot = {
+        {"color_temp",
+         {{"mode", "as_shot"},
+          {"custom_cct", 5123.0},
+          {"custom_tint", -7.5},
+          {"as_shot_cct", 5123.0},
+          {"as_shot_tint", -7.5}}}};
+    to_ws.SetOperator(OperatorType::COLOR_TEMP, full_as_shot, guard->pipeline_->GetGlobalParams());
+    const auto current = to_ws.GetOperator(OperatorType::COLOR_TEMP);
+    ASSERT_TRUE(current.has_value() && current.value() && current.value()->op_);
+    current_value = current.value()->op_->GetParams();
+    EXPECT_FALSE(current.value()->op_->DetectMergeConflict(
+        current_value, nlohmann::json{{"color_temp", {{"mode", "as_shot"}}}}));
   }
-  EXPECT_TRUE(found_merge);
+  pipeline_service_->SavePipeline(guard);
+}
+
+TEST_F(AdjustmentTransferPasteMergeTest,
+       LivePipelineColorTempTakeIncomingAsShotKeepsTargetResolvedBaseline) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+
+  auto guard = pipeline_service_->LoadPipeline(element_id);
+  ASSERT_TRUE(guard && guard->pipeline_);
+  nlohmann::json resolved;
+  {
+    std::unique_lock<std::mutex> lock(guard->pipeline_->GetRenderLock());
+    auto&                        to_ws = guard->pipeline_->GetStage(PipelineStageName::To_WorkingSpace);
+    const nlohmann::json custom = {
+        {"color_temp",
+         {{"mode", "custom"},
+          {"custom_cct", 7000.0},
+          {"custom_tint", 15.0},
+          {"as_shot_cct", 4550.0},
+          {"as_shot_tint", -2.0}}}};
+    to_ws.SetOperator(OperatorType::COLOR_TEMP, custom, guard->pipeline_->GetGlobalParams());
+    const auto current = to_ws.GetOperator(OperatorType::COLOR_TEMP);
+    ASSERT_TRUE(current.has_value() && current.value() && current.value()->op_);
+    const auto current_value = current.value()->op_->GetParams();
+    const nlohmann::json incoming = {{"color_temp", {{"mode", "as_shot"}}}};
+    ASSERT_TRUE(current.value()->op_->DetectMergeConflict(current_value, incoming));
+    resolved = current.value()->op_->MergeParams(current_value, incoming,
+                                                 OperatorMergeChoice::kTakeIncoming);
+  }
+  pipeline_service_->SavePipeline(guard);
+
+  const auto& ct = resolved["color_temp"];
+  EXPECT_EQ(ct.value("mode", std::string{}), "as_shot");
+  EXPECT_DOUBLE_EQ(ct.value("as_shot_cct", 0.0), 4550.0);
+  EXPECT_DOUBLE_EQ(ct.value("as_shot_tint", 0.0), -2.0);
 }
 }  // namespace
 }  // namespace alcedo

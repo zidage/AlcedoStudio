@@ -4,15 +4,17 @@
 
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 
-#include <QMetaObject>
-#include <QQuickWindow>
-#include <QThread>
-#include <QVector2D>
 #include <QtQml/qqml.h>
 
+#include <QMetaObject>
+#include <QQuickWindow>
+#include <QScreen>
+#include <QThread>
+#include <QVector2D>
 #include <cmath>
 #include <mutex>
 
+#include "ui/edit_viewer/color_manager.hpp"
 #include "ui/editor_rhi/direct_frame_sink.hpp"
 #include "ui/editor_rhi/editor_interaction_controller.hpp"
 #include "ui/editor_rhi/editor_viewport_renderer.hpp"
@@ -44,8 +46,12 @@ EditorViewportItem::EditorViewportItem(QQuickItem* parent)
       // synchronize() is the render-thread acknowledgement that turns the
       // consumer back on. Merely becoming visible is not sufficient.
       resumePresentation();
+      applyDisplayConfig();
     } else {
       suspendPresentation();
+      // The CAMetalLayer is shared by the entire QML window. Leaving the
+      // editor or entering its empty state must restore ordinary SDR chrome.
+      resetWindowDisplayConfig();
     }
   });
   // Parent may already place this item in a window before windowChanged fires.
@@ -85,8 +91,8 @@ auto EditorViewportItem::targetGeneration() const -> qulonglong {
   return present_queue_->DiagnosticsSnapshot().target_generation;
 }
 
-auto EditorViewportItem::lastPresentedImageGeneration() const -> qulonglong {
-  return present_queue_->DiagnosticsSnapshot().last_composed_image_generation;
+auto EditorViewportItem::lastPresentedSessionEpoch() const -> qulonglong {
+  return present_queue_->DiagnosticsSnapshot().last_composed_session_epoch;
 }
 
 auto EditorViewportItem::lastPresentedRequestId() const -> qulonglong {
@@ -114,6 +120,37 @@ auto EditorViewportItem::statusText() const -> QString {
   return status_text_;
 }
 
+auto EditorViewportItem::displayConfig() const -> ViewerDisplayConfig {
+  std::lock_guard lock(mutex_);
+  return display_config_;
+}
+
+auto EditorViewportItem::extendedDynamicRangeRequested() const -> bool {
+  const auto config = displayConfig();
+  return config.encoding_eotf == ColorUtils::EOTF::ST2084 ||
+         config.encoding_eotf == ColorUtils::EOTF::HLG;
+}
+
+void EditorViewportItem::setDisplayConfig(const ViewerDisplayConfig& config) {
+  {
+    std::lock_guard lock(mutex_);
+    if (display_config_ == config) {
+      return;
+    }
+    display_config_ = config;
+  }
+  window_color_space_applied_.store(false, std::memory_order_release);
+  auto apply = [this] {
+    emit DisplayConfigChanged();
+    applyDisplayConfig();
+  };
+  if (thread() == QThread::currentThread()) {
+    apply();
+  } else {
+    QMetaObject::invokeMethod(this, std::move(apply), Qt::QueuedConnection);
+  }
+}
+
 void EditorViewportItem::setImageIdentity(qulonglong identity) {
   const auto previous = image_identity_.exchange(identity, std::memory_order_acq_rel);
   if (previous == identity) {
@@ -122,26 +159,26 @@ void EditorViewportItem::setImageIdentity(qulonglong identity) {
   emit ImageIdentityChanged();
 }
 
-void EditorViewportItem::setImageGeneration(qulonglong generation) {
-  const auto previous = image_generation_.exchange(generation, std::memory_order_acq_rel);
-  if (previous == generation) {
+void EditorViewportItem::setSessionEpoch(qulonglong epoch) {
+  const auto previous = session_epoch_.exchange(epoch, std::memory_order_acq_rel);
+  if (previous == epoch) {
     return;
   }
-  present_queue_->InvalidateImageGeneration(generation, imageIdentity());
-  emit ImageGenerationChanged();
+  present_queue_->InvalidateSessionEpoch(epoch, imageIdentity());
+  emit SessionEpochChanged();
   notifyDiagnosticsChanged();
   requestPresentUpdate();
 }
 
 void EditorViewportItem::beginImageSession(qulonglong imageIdentity) {
   setImageIdentity(imageIdentity);
-  const auto next = image_generation_.load(std::memory_order_acquire) + 1;
-  image_generation_.store(next, std::memory_order_release);
-  present_queue_->InvalidateImageGeneration(next, imageIdentity);
+  const auto next = session_epoch_.load(std::memory_order_acquire) + 1;
+  session_epoch_.store(next, std::memory_order_release);
+  present_queue_->InvalidateSessionEpoch(next, imageIdentity);
   if (frame_sink_) {
     frame_sink_->ClearPendingImportedFrames();
   }
-  emit ImageGenerationChanged();
+  emit SessionEpochChanged();
   notifyDiagnosticsChanged();
   requestPresentUpdate();
 }
@@ -162,15 +199,15 @@ void EditorViewportItem::setViewTransform(float zoom, float panX, float panY) {
   ViewerViewState copy;
   {
     std::lock_guard lock(mutex_);
-    auto& transform = view_state_.snapshot.view_transform;
+    auto&           transform = view_state_.snapshot.view_transform;
     if (std::abs(transform.zoom - zoom) <= 1.0e-6f &&
         std::abs(transform.pan.x() - panX) <= 1.0e-6f &&
         std::abs(transform.pan.y() - panY) <= 1.0e-6f) {
       return;
     }
     transform.zoom = zoom;
-    transform.pan = QVector2D(panX, panY);
-    copy = view_state_;
+    transform.pan  = QVector2D(panX, panY);
+    copy           = view_state_;
   }
   if (frame_sink_) {
     frame_sink_->SetViewState(copy);
@@ -186,7 +223,7 @@ void EditorViewportItem::requestRendererInvalidation() {
 }
 
 void EditorViewportItem::cancelPendingFrames() {
-  present_queue_->InvalidateImageGeneration(imageGeneration(), imageIdentity());
+  present_queue_->InvalidateSessionEpoch(sessionEpoch(), imageIdentity());
   if (frame_sink_) {
     frame_sink_->ClearPendingImportedFrames();
   }
@@ -204,9 +241,7 @@ void EditorViewportItem::resumePresentation() {
   requestPresentUpdate();
 }
 
-void EditorViewportItem::requestPresentUpdate() {
-  requestPresentUpdateOnGuiThread();
-}
+void EditorViewportItem::requestPresentUpdate() { requestPresentUpdateOnGuiThread(); }
 
 void EditorViewportItem::prepareForAdjustmentFrame() {
   adjustment_frame_requested_.store(true, std::memory_order_release);
@@ -244,9 +279,10 @@ void EditorViewportItem::requestPresentUpdateOnGuiThread() {
 auto EditorViewportItem::createRenderer() -> QQuickRhiItemRenderer* {
   // Renderer destruction must not shut down the present queue; the item keeps
   // it for scene-graph recreation.
-  qCDebug(editorPresentLog, "[EditorPresent] creating QQuickRhiItem renderer image=%llu generation=%llu",
-        static_cast<unsigned long long>(imageIdentity()),
-        static_cast<unsigned long long>(imageGeneration()));
+  qCDebug(editorPresentLog,
+          "[EditorPresent] creating QQuickRhiItem renderer image=%llu epoch=%llu",
+          static_cast<unsigned long long>(imageIdentity()),
+          static_cast<unsigned long long>(sessionEpoch()));
   return new EditorViewportRenderer();
 }
 
@@ -260,35 +296,79 @@ void EditorViewportItem::attachWindow(QQuickWindow* window) {
     suspendPresentation();
     return;
   }
-  window_visibility_connection_ =
-      connect(attached_window_, &QWindow::visibilityChanged, this,
-              [this](QWindow::Visibility visibility) {
-                if (visibility == QWindow::Hidden || visibility == QWindow::Minimized) {
-                  suspendPresentation();
-                } else {
-                  // The next synchronize() confirms that the renderer is live.
-                  resumePresentation();
-                }
-              });
+  window_visibility_connection_ = connect(
+      attached_window_, &QWindow::visibilityChanged, this, [this](QWindow::Visibility visibility) {
+        if (visibility == QWindow::Hidden || visibility == QWindow::Minimized) {
+          suspendPresentation();
+        } else {
+          // The next synchronize() confirms that the renderer is live.
+          resumePresentation();
+          applyDisplayConfig();
+        }
+      });
+  window_screen_connection_ =
+      connect(attached_window_, &QWindow::screenChanged, this, [this](QScreen*) {
+        window_color_space_applied_.store(false, std::memory_order_release);
+        applyDisplayConfig();
+      });
   // sceneGraphInvalidated is emitted on the render thread. Direct connection
   // is required so blocked producers are released before Qt destroys QRhi
   // resources; the queue operation itself is thread-safe.
   scene_graph_invalidated_connection_ = connect(
       attached_window_, &QQuickWindow::sceneGraphInvalidated, this,
       [queue = present_queue_] { queue->SetConsumerAvailable(false); }, Qt::DirectConnection);
-  scene_graph_initialized_connection_ =
-      connect(attached_window_, &QQuickWindow::sceneGraphInitialized, this,
-              [this] { refreshPresentationAvailability(); }, Qt::QueuedConnection);
+  scene_graph_initialized_connection_ = connect(
+      attached_window_, &QQuickWindow::sceneGraphInitialized, this,
+      [this] {
+        refreshPresentationAvailability();
+        applyDisplayConfig();
+      },
+      Qt::QueuedConnection);
+  applyDisplayConfig();
 }
 
-void EditorViewportItem::detachWindow() {
+void EditorViewportItem::detachWindow(bool reset_display) {
+  if (reset_display) {
+    resetWindowDisplayConfig();
+  }
   QObject::disconnect(window_visibility_connection_);
+  QObject::disconnect(window_screen_connection_);
   QObject::disconnect(scene_graph_invalidated_connection_);
   QObject::disconnect(scene_graph_initialized_connection_);
-  window_visibility_connection_ = {};
+  window_visibility_connection_       = {};
+  window_screen_connection_           = {};
   scene_graph_invalidated_connection_ = {};
   scene_graph_initialized_connection_ = {};
-  attached_window_ = nullptr;
+  attached_window_                    = nullptr;
+}
+
+void EditorViewportItem::applyDisplayConfig() {
+  if (!attached_window_ || !isVisible() || thread() != QThread::currentThread()) {
+    return;
+  }
+  const auto native_handle = reinterpret_cast<void*>(attached_window_->winId());
+  if (!native_handle) {
+    return;
+  }
+  const bool applied  = ColorManager::ApplyWindowColorSpace(native_handle, displayConfig());
+  const bool previous = window_color_space_applied_.exchange(applied, std::memory_order_acq_rel);
+  if (previous != applied) {
+    emit DisplayConfigChanged();
+  }
+}
+
+void EditorViewportItem::resetWindowDisplayConfig() {
+  if (!attached_window_ || thread() != QThread::currentThread()) {
+    return;
+  }
+  const auto native_handle = reinterpret_cast<void*>(attached_window_->winId());
+  if (native_handle) {
+    (void)ColorManager::ApplyWindowColorSpace(native_handle, ViewerDisplayConfig{});
+  }
+  const bool previous = window_color_space_applied_.exchange(false, std::memory_order_acq_rel);
+  if (previous) {
+    emit DisplayConfigChanged();
+  }
 }
 
 auto EditorViewportItem::viewStateSnapshot() const -> ViewerViewState {
@@ -319,28 +399,28 @@ void EditorViewportItem::setStatusText(const QString& text) {
 }
 
 void EditorViewportItem::notifyDiagnosticsChanged() {
-  const auto diag = present_queue_->DiagnosticsSnapshot();
-  const bool available = diag.consumer_available;
-  const auto target_gen = diag.target_generation;
-  const auto presented_image_gen = diag.last_composed_image_generation;
-  const auto presented_request_id = diag.last_composed_request_id;
+  const auto diag                  = present_queue_->DiagnosticsSnapshot();
+  const bool available             = diag.consumer_available;
+  const auto target_gen            = diag.target_generation;
+  const auto presented_image_gen   = diag.last_composed_session_epoch;
+  const auto presented_request_id  = diag.last_composed_request_id;
   const auto presented_frame_count = diag.composed_frame_count;
-  const auto dropped = diag.dropped_stale_frame_count;
-  const int live = static_cast<int>(diag.live_target_count);
+  const auto dropped               = diag.dropped_stale_frame_count;
+  const int  live                  = static_cast<int>(diag.live_target_count);
   if (available == last_diagnostics_available_ && target_gen == last_diag_target_gen_ &&
-      presented_image_gen == last_diag_presented_image_gen_ &&
+      presented_image_gen == last_diag_presented_session_epoch_ &&
       presented_request_id == last_diag_presented_request_id_ &&
-      presented_frame_count == last_diag_presented_frame_count_ &&
-      dropped == last_diag_dropped_ && live == last_diag_live_targets_) {
+      presented_frame_count == last_diag_presented_frame_count_ && dropped == last_diag_dropped_ &&
+      live == last_diag_live_targets_) {
     return;
   }
-  last_diagnostics_available_ = available;
-  last_diag_target_gen_ = target_gen;
-  last_diag_presented_image_gen_ = presented_image_gen;
-  last_diag_presented_request_id_ = presented_request_id;
+  last_diagnostics_available_      = available;
+  last_diag_target_gen_            = target_gen;
+  last_diag_presented_session_epoch_   = presented_image_gen;
+  last_diag_presented_request_id_  = presented_request_id;
   last_diag_presented_frame_count_ = presented_frame_count;
-  last_diag_dropped_ = dropped;
-  last_diag_live_targets_ = live;
+  last_diag_dropped_               = dropped;
+  last_diag_live_targets_          = live;
   QMetaObject::invokeMethod(this, [this] { emit DiagnosticsChanged(); }, Qt::QueuedConnection);
 }
 

@@ -38,6 +38,10 @@ class AppTheme final : public QObject {
   Q_PROPERTY(QColor accentSecondaryColor READ accentSecondaryColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor dangerColor READ dangerColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor dangerTintColor READ dangerTintColor NOTIFY ThemeChanged)
+  Q_PROPERTY(
+      QColor backgroundTaskFinishedColor READ backgroundTaskFinishedColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor backgroundTaskWorkingColor READ backgroundTaskWorkingColor NOTIFY ThemeChanged)
+  Q_PROPERTY(QColor backgroundTaskFailedColor READ backgroundTaskFailedColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor selectedTintColor READ selectedTintColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor hoverColor READ hoverColor NOTIFY ThemeChanged)
   Q_PROPERTY(QColor dividerColor READ dividerColor NOTIFY ThemeChanged)
@@ -90,6 +94,7 @@ class AppTheme final : public QObject {
   Q_PROPERTY(int motionFoldOpenMs READ motionFoldOpenMs CONSTANT)
   Q_PROPERTY(int motionFoldCloseMs READ motionFoldCloseMs CONSTANT)
   Q_PROPERTY(int motionFadeMs READ motionFadeMs CONSTANT)
+  Q_PROPERTY(int backgroundTaskAutoCollapseMs READ backgroundTaskAutoCollapseMs CONSTANT)
   Q_PROPERTY(bool reduceMotion READ reduceMotion WRITE setReduceMotion NOTIFY ReduceMotionChanged)
   Q_PROPERTY(int fontSizeCaption READ fontSizeCaption CONSTANT)
   Q_PROPERTY(int fontSizeBody READ fontSizeBody CONSTANT)
@@ -219,6 +224,9 @@ class AppTheme final : public QObject {
   auto        accentSecondaryColor() const -> QColor;
   auto        dangerColor() const -> QColor;
   auto        dangerTintColor() const -> QColor;
+  auto        backgroundTaskFinishedColor() const -> QColor;
+  auto        backgroundTaskWorkingColor() const -> QColor;
+  auto        backgroundTaskFailedColor() const -> QColor;
   auto        selectedTintColor() const -> QColor;
   auto        hoverColor() const -> QColor;
   auto        dividerColor() const -> QColor;
@@ -255,6 +263,7 @@ class AppTheme final : public QObject {
   auto        motionFoldOpenMs() const -> int;
   auto        motionFoldCloseMs() const -> int;
   auto        motionFadeMs() const -> int;
+  auto        backgroundTaskAutoCollapseMs() const -> int;
   auto        reduceMotion() const -> bool;
   void        setReduceMotion(bool enabled);
   auto        fontSizeCaption() const -> int;

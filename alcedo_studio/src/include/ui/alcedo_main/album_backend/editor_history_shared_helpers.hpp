@@ -19,11 +19,19 @@
 #include "edit/history/mini_git_working_history.hpp"
 #include "json.hpp"
 
+#include <mutex>
+
 namespace alcedo {
 struct MiniGitJournalRecord;
+class CPUPipelineExecutor;
 }  // namespace alcedo
 
 namespace alcedo::ui {
+
+/// Acquire sole live-pipeline ownership (`render_lock_`). History waits for
+/// render to finish the current frame. The GUI must not block on this: session
+/// code defers Version ops until render is idle, then takes the lock (free).
+auto LockLivePipeline(alcedo::CPUPipelineExecutor& executor) -> std::unique_lock<std::mutex>;
 
 /// Stable field names shared by the editor models and the adjustment-transfer /
 /// history services.
@@ -43,6 +51,13 @@ auto MakeEmptyCompleteAdjustmentSnapshot() -> alcedo::EditorRenderAdjustmentSnap
 auto MakeAdjustmentSnapshotFromPipelineParams(
     const nlohmann::json& pipeline_params, alcedo::EditorRenderAdjustmentSnapshot* snapshot,
     std::string* error) -> bool;
+
+/// Build the committed adjustment snapshot by reading each field through live
+/// GetOperator / GetParams (not by re-parsing ExportPipelineParams stage JSON).
+/// Caller must hold the executor render lock.
+auto MakeAdjustmentSnapshotFromLivePipeline(alcedo::CPUPipelineExecutor& executor,
+                                            alcedo::EditorRenderAdjustmentSnapshot* snapshot,
+                                            std::string* error) -> bool;
 
 /// Convert a complete committed snapshot into the serialized pipeline document
 /// stored by one Mini-Git save capture. The conversion is pure and validates
@@ -94,17 +109,13 @@ auto ApplyHistoryCommitToSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapsh
                                   const alcedo::EditCommit& commit, bool use_after_value,
                                   std::string* error) -> bool;
 
-/// Apply all traversed commits from a prepared head move to a candidate snapshot.
+/// Pure history projection: apply all traversed commits from a prepared head
+/// move onto a snapshot copy. Production mutation paths use `SnapshotAtHead` +
+/// live pipeline install instead; this helper remains for recovery/tests.
 auto ApplyPreparedHeadMoveToSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
                                      const alcedo::CommitGraph& graph,
                                      const alcedo::MiniGitPreparedHeadMove& prepared,
                                      std::string* error) -> bool;
-
-/// Apply one journal record to a snapshot and the replay graph's current working selection.
-auto ApplyRecoveredRecordToSnapshot(alcedo::EditorRenderAdjustmentSnapshot* snapshot,
-                                    alcedo::CommitGraph* replay_graph,
-                                    const alcedo::MiniGitJournalRecord& record,
-                                    std::string* error) -> bool;
 
 /// Rebuild an immutable snapshot from a root snapshot and a first-parent head.
 auto SnapshotAtHead(const alcedo::EditorRenderAdjustmentSnapshot& root_snapshot,

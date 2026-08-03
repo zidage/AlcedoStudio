@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "edit/operators/operator_registeration.hpp"
+#include "edit/operators/raw/raw_decode_op.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_stage.hpp"
 #include "image/image_buffer.hpp"
@@ -88,12 +89,20 @@ TEST(MetalRawStagePreview, DecodeStillLifeWithRawStageOnly) {
   OperatorParams global_params;
   PipelineStage  raw_stage(PipelineStageName::Image_Loading, false, false);
 
+  // The decode backend is a runtime property, not a param: push it directly
+  // into the op, exactly like CPUPipelineExecutor::ApplyRuntimeRawDecodeBackend
+  // does for pipeline-managed decodes.
   nlohmann::json decode_params                   = pipeline_defaults::MakeDefaultRawDecodeParams();
-  decode_params["raw"]["gpu_backend"]            = "gpu";
   decode_params["raw"]["backend"]                = "alcedo";
   decode_params["raw"]["highlights_reconstruct"] = false;
   decode_params["raw"]["decode_res"]             = static_cast<int>(DecodeRes::FULL);
   raw_stage.SetOperator(OperatorType::RAW_DECODE, decode_params, global_params);
+  auto raw_entry = raw_stage.GetOperator(OperatorType::RAW_DECODE);
+  ASSERT_TRUE(raw_entry.has_value());
+  ASSERT_NE(raw_entry.value()->op_, nullptr);
+  auto* raw_op = dynamic_cast<RawDecodeOp*>(raw_entry.value()->op_.get());
+  ASSERT_NE(raw_op, nullptr);
+  raw_op->SetRuntimeGpuBackend(GpuBackendKind::Metal);
 
   auto input = std::make_shared<ImageBuffer>(std::move(raw_bytes));
   raw_stage.SetInputImage(input);

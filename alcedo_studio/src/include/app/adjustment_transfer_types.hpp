@@ -34,21 +34,6 @@ struct AdjustmentTransferPackage {
   [[nodiscard]] auto                   Empty() const -> bool { return operators_.empty(); }
 };
 
-/// Immutable queue message naming a transfer candidate staged outside the
-/// published editor history. The history port owns the candidate graph and
-/// releases it after publication or explicit discard.
-struct EditorTransferCandidate {
-  std::uint64_t                  candidate_id = 0;
-  /// For Merge, the queue-owned opaque preview identity carried with the
-  /// candidate. Paste candidates leave this at its default value.
-  MergePreviewId                 preview_id{};
-  AdjustmentTransferPackage      package;
-  std::string                    display_name;
-  EditorRenderAdjustmentSnapshot adjustment_snapshot;
-
-  [[nodiscard]] auto valid() const -> bool { return candidate_id != 0; }
-};
-
 struct AdjustmentTransferSelection {
   bool                                  include_geometry_                          = true;
   bool                                  include_tone_                              = true;
@@ -75,17 +60,22 @@ struct AdjustmentApplyResult {
 };
 
 struct AdjustmentMergeConflict {
-  PipelineStageName stage         = PipelineStageName::Stage_Count;
-  OperatorType      operator_type = OperatorType::UNKNOWN;
+  PipelineStageName stage            = PipelineStageName::Stage_Count;
+  OperatorType      operator_type    = OperatorType::UNKNOWN;
   std::string       field_key;
   nlohmann::json    current_value;
   nlohmann::json    incoming_value;
+  bool              current_enabled  = true;
+  bool              incoming_enabled = true;
 };
 
 struct AdjustmentMergeResolution {
-  std::string    field_key;
-  nlohmann::json resolved_value   = nlohmann::json(nullptr);
-  bool           resolved_enabled = true;
+  std::string                         field_key;
+  /// Preferred when set. When nullopt, CompleteMerge infers choice by comparing
+  /// resolved_value to the conflict's current/incoming values.
+  std::optional<OperatorMergeChoice>  choice;
+  nlohmann::json                      resolved_value   = nlohmann::json(nullptr);
+  bool                                resolved_enabled = true;
 };
 
 struct AdjustmentMergePreview {
@@ -113,6 +103,9 @@ struct AdjustmentMergeResult {
 struct AdjustmentPasteResult {
   bool             pasted = false;
   version_ref_id_t new_version_id{};
+  /// Active Version observed before the paste Version was created. Cancel paste
+  /// restores this Version and rebuilds the live pipeline to its head.
+  version_ref_id_t prior_version_id{};
   commit_hash_t    new_head{};
   std::string      error;
 };

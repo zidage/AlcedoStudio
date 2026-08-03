@@ -5,18 +5,19 @@
 #include "ui/editor_rhi/editor_viewport_renderer.hpp"
 
 #include "ui/editor_rhi/direct_frame_sink.hpp"
+#include "ui/editor_rhi/editor_backend.hpp"
 #include "ui/editor_rhi/editor_viewport_item.hpp"
 
 #include <QDebug>
 #include <QFile>
 #include <QSize>
+#include <QString>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstring>
 #include <limits>
-
 #include "ui/edit_viewer/viewport_mapper.hpp"
 #include "ui/editor_rhi/native_resource_counters.hpp"
 
@@ -206,14 +207,40 @@ void EditorViewportRenderer::initialize(QRhiCommandBuffer* /*command_buffer*/) {
   // before render() could fulfill it, leaving the viewport permanently black.
   if (rhi_ != next_rhi) {
     releaseResources();
-    rhi_     = next_rhi;
-    backend_ = BackendForRhi(rhi_);
+    rhi_ = next_rhi;
+    // Process-wide backend selected in main() is authoritative. Deriving only
+    // from QRhi can silently flip CUDA↔OpenCL when setGraphicsApi did not take
+    // effect, which produces host_upload frames and a black viewport.
+    const auto active = ActiveEditorBackend();
+    const auto from_rhi = BackendForRhi(rhi_);
+    backend_ = active;
     adapter_ = MakeLeaseTargetAdapter(backend_);
-    qCDebug(editorPresentLog, "[EditorPresent] render thread initialized backend=%s", ToString(backend_));
+    if (active != from_rhi) {
+      qCWarning(editorPresentLog,
+                "[EditorPresent] RHI/backend mismatch: active=%s rhi_inferred=%s rhi_api=%d. "
+                "Present will use active=%s; OpenCL requires OpenGL QRhi.",
+                ToString(active), ToString(from_rhi), static_cast<int>(rhi_->backend()),
+                ToString(active));
+      target_error_ =
+          std::string("RHI/backend mismatch: active=") + ToString(active) +
+          " rhi=" + ToString(from_rhi);
+    }
+    if (backend_ == EditorBackend::OpenCl && rhi_->backend() != QRhi::OpenGLES2) {
+      qCWarning(editorPresentLog,
+                "[EditorPresent] OpenCL present selected but Qt RHI is not OpenGL (api=%d). "
+                "Native targets cannot be created; frames fall back to empty host_upload.",
+                static_cast<int>(rhi_->backend()));
+      target_error_ = "OpenCL present requires OpenGL QRhi; graphics API selection failed";
+    }
+    qCWarning(editorPresentLog, "[EditorPresent] render thread initialized backend=%s rhi_api=%d",
+              ToString(backend_), static_cast<int>(rhi_->backend()));
     if (item_) {
       item_->setBackendName(QString::fromUtf8(ToString(backend_)));
-      item_->setStatusText(QStringLiteral("render thread initialized (%1)")
-                               .arg(QString::fromUtf8(QtGraphicsApiName(backend_))));
+      item_->setStatusText(
+          target_error_.empty()
+              ? QStringLiteral("render thread initialized (%1)")
+                    .arg(QString::fromUtf8(QtGraphicsApiName(backend_)))
+              : QString::fromStdString(target_error_));
     }
   }
   content_dirty_ = true;
@@ -227,7 +254,7 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
   }
   if (present_queue_ != item_->present_queue()) {
     present_queue_     = item_->present_queue();
-    image_generation_  = 0;
+    session_epoch_  = 0;
     image_identity_    = 0;
     target_generation_ = 0;
     content_dirty_     = true;
@@ -235,9 +262,9 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
 
   present_queue_->SetConsumerAvailable(item_->presentationRequested());
 
-  const auto next_image_generation = item_->imageGeneration();
+  const auto next_session_epoch = item_->sessionEpoch();
   const auto next_image_identity   = item_->imageIdentity();
-  if (next_image_generation != image_generation_ || next_image_identity != image_identity_) {
+  if (next_session_epoch != session_epoch_ || next_image_identity != image_identity_) {
     for (auto& layer : layers_) {
       releaseLayer(layer);
     }
@@ -245,7 +272,7 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
     if (item_->frameSink()) {
       item_->frameSink()->ClearPendingImportedFrames();
     }
-    image_generation_ = next_image_generation;
+    session_epoch_ = next_session_epoch;
     image_identity_   = next_image_identity;
     content_dirty_    = true;
   }
@@ -273,7 +300,7 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
   }
 
   const auto next_view = item_->viewStateSnapshot();
-  if (next_image_generation == image_generation_ && next_image_identity == image_identity_) {
+  if (next_session_epoch == session_epoch_ && next_image_identity == image_identity_) {
     auto&      detail   = layers_[layerIndex(LayerId::DetailPatch)];
     const auto next_roi = BuildNormalizedRoi(next_view.snapshot.viewport_render_region_cache);
     // A consumed detail frame owns one of the queue's three slots until its
@@ -284,6 +311,29 @@ void EditorViewportRenderer::synchronize(QQuickRhiItem* item) {
     // that replacement.
     if (detail.valid && (!next_view.allow_detail_patch || !next_roi.has_value() ||
                          !SameRoi(detail.preview_metadata.source_roi_norm, *next_roi))) {
+      if (editorPresentLog().isDebugEnabled()) {
+        QString msg =
+            QStringLiteral(
+                "[ROI_TRACE][renderer-release] request=%1 reason=view-state-changed allow=%2 "
+                "current_roi=")
+                .arg(detail.preview_metadata.presentation_request_id)
+                .arg(next_view.allow_detail_patch ? 1 : 0);
+        if (next_roi) {
+          msg += QStringLiteral("%1,%2,%3,%4")
+                     .arg(next_roi->x)
+                     .arg(next_roi->y)
+                     .arg(next_roi->width)
+                     .arg(next_roi->height);
+        } else {
+          msg += QStringLiteral("none");
+        }
+        msg += QStringLiteral(" patch_roi=%1,%2,%3,%4")
+                   .arg(detail.preview_metadata.source_roi_norm.x)
+                   .arg(detail.preview_metadata.source_roi_norm.y)
+                   .arg(detail.preview_metadata.source_roi_norm.width)
+                   .arg(detail.preview_metadata.source_roi_norm.height);
+        qCDebug(editorPresentLog).noquote() << msg;
+      }
       releaseLayer(detail);
     }
   }
@@ -356,16 +406,16 @@ void EditorViewportRenderer::ensureStaticResources(QRhiRenderTarget*  render_tar
 }
 
 void EditorViewportRenderer::fulfillTargetRequests() {
-  if (!present_queue_ || !adapter_ || !rhi_ || image_generation_ == 0) {
+  if (!present_queue_ || !adapter_ || !rhi_ || session_epoch_ == 0) {
     return;
   }
   auto requests = present_queue_->DrainSizeRequests();
   if (requests.empty()) {
     return;
   }
-  qCDebug(editorPresentLog, "[EditorPresent] fulfilling %zu target request(s), image=%llu generation=%llu",
+  qCDebug(editorPresentLog, "[EditorPresent] fulfilling %zu target request(s), image=%llu epoch=%llu",
         requests.size(), static_cast<unsigned long long>(image_identity_),
-        static_cast<unsigned long long>(image_generation_));
+        static_cast<unsigned long long>(session_epoch_));
 
   if (target_generation_ == 0) {
     present_queue_->InvalidateTargetGeneration();
@@ -375,7 +425,7 @@ void EditorViewportRenderer::fulfillTargetRequests() {
   // Deduplicate exact sizes for this pass (one lazy allocation per size).
   std::vector<DirectPresentQueue::SizeRequest> unique;
   for (const auto& request : requests) {
-    if (!request.valid() || request.image_generation != image_generation_) {
+    if (!request.valid() || request.session_epoch != session_epoch_) {
       continue;
     }
     if (request.image_identity != 0 && request.image_identity != image_identity_) {
@@ -391,7 +441,7 @@ void EditorViewportRenderer::fulfillTargetRequests() {
 
   for (const auto& request : unique) {
     // Match the proven QRhiWidget path: allocate the selected slot lazily.
-    auto prepare = present_queue_->PrepareWrite(request.width, request.height, image_generation_,
+    auto prepare = present_queue_->PrepareWrite(request.width, request.height, session_epoch_,
                                                 image_identity_);
     int slot_index = prepare.slot_index;
     if (slot_index < 0) {
@@ -403,7 +453,7 @@ void EditorViewportRenderer::fulfillTargetRequests() {
       continue;
     }
 
-    TargetGeneration generation{target_generation_, image_generation_, request.layer_generation,
+    TargetGeneration generation{target_generation_, session_epoch_, request.layer_generation,
                                 image_identity_};
     auto lease = adapter_->CreateTarget(rhi_, QSize(request.width, request.height), generation,
                                         RoleToLeaseLayer(request.frame_role));
@@ -429,12 +479,12 @@ void EditorViewportRenderer::fulfillTargetRequests() {
     native.adapter_cookie = lease->native_handle;
 
     if (!present_queue_->PublishCreatedSlot(slot_index, request.width, request.height, native,
-                                            image_generation_, image_identity_)) {
+                                            session_epoch_, image_identity_)) {
       // Try another free slot index.
       bool published = false;
       for (int i = 0; i < DirectPresentQueue::kSlotCount; ++i) {
         if (present_queue_->PublishCreatedSlot(i, request.width, request.height, native,
-                                               image_generation_, image_identity_)) {
+                                               session_epoch_, image_identity_)) {
           published = true;
           break;
         }
@@ -462,15 +512,22 @@ void EditorViewportRenderer::consumeDirectFrames() {
   constexpr FrameRole roles[] = {FrameRole::InteractivePrimary, FrameRole::QualityBase,
                                  FrameRole::DetailPatch};
   for (const auto role : roles) {
-    auto frame = present_queue_->ConsumeNewestReady(role, image_generation_, image_identity_);
+    auto frame = present_queue_->ConsumeNewestReady(role, session_epoch_, image_identity_);
     if (!frame.has_value()) {
       continue;
     }
-    qCDebug(editorPresentLog, "[EditorPresent] consuming frame request=%llu image=%llu generation=%llu size=%dx%d",
+    qCDebug(editorPresentLog, "[EditorPresent] consuming frame request=%llu image=%llu epoch=%llu size=%dx%d",
           static_cast<unsigned long long>(frame->slot.preview_metadata.presentation_request_id),
           static_cast<unsigned long long>(frame->slot.image_identity),
-          static_cast<unsigned long long>(frame->slot.image_generation), frame->slot.width,
-          frame->slot.height);
+          static_cast<unsigned long long>(frame->slot.session_epoch), frame->slot.width,
+           frame->slot.height);
+    if (role == FrameRole::DetailPatch) {
+      qCDebug(editorPresentLog)
+        << "[ROI_TRACE][renderer-import-begin] request="
+          << frame->slot.preview_metadata.presentation_request_id
+          << " slot=" << frame->slot.index << " size=" << frame->slot.width << 'x'
+          << frame->slot.height << " native=" << frame->slot.native.native_handle;
+    }
 
     auto& layer = layers_[layerIndex(layerForRole(role))];
     releaseLayer(layer);
@@ -484,6 +541,12 @@ void EditorViewportRenderer::consumeDirectFrames() {
                static_cast<unsigned long long>(frame->slot.native.native_handle));
       destroyResource(texture);
       present_queue_->CompleteRendererRead(frame->slot.index);
+      if (role == FrameRole::DetailPatch) {
+        qCDebug(editorPresentLog)
+      << "[ROI_TRACE][renderer-drop] request="
+            << frame->slot.preview_metadata.presentation_request_id
+            << " reason=qrhi-import-failed native=" << frame->slot.native.native_handle;
+      }
       if (item_) {
         item_->setStatusText(QStringLiteral("failed to import a completed native frame"));
       }
@@ -505,6 +568,12 @@ void EditorViewportRenderer::consumeDirectFrames() {
     layer.imported_owner.reset();
     layer.imported_native_handle = frame->slot.native.native_handle;
     content_dirty_ = true;
+    if (role == FrameRole::DetailPatch) {
+      qCDebug(editorPresentLog)
+        << "[ROI_TRACE][renderer-imported] request="
+          << layer.preview_metadata.presentation_request_id << " slot=" << layer.slot_index
+          << " size=" << layer.width << 'x' << layer.height;
+    }
     if (item_) {
       item_->setStatusText(QStringLiteral("imported frame role=%1 gen=%2")
                                .arg(static_cast<int>(role))
@@ -518,18 +587,24 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
     return;
   }
   auto pending =
-      item_->frameSink()->DrainPendingImportedFrames(image_generation_, image_identity_);
+      item_->frameSink()->DrainPendingImportedFrames(session_epoch_, image_identity_);
   for (auto& frame : pending) {
     if (!frame.valid()) {
       continue;
     }
     const FrameRole role = frame.preview_metadata.frame_role;
-    qCDebug(editorPresentLog, "[EditorPresent] consuming Metal import request=%llu image=%llu generation=%llu "
+    qCDebug(editorPresentLog, "[EditorPresent] consuming Metal import request=%llu image=%llu epoch=%llu "
           "size=%dx%d handle=%llu",
           static_cast<unsigned long long>(frame.preview_metadata.presentation_request_id),
           static_cast<unsigned long long>(frame.image_identity),
-          static_cast<unsigned long long>(frame.image_generation), frame.width, frame.height,
-          static_cast<unsigned long long>(frame.texture_handle));
+          static_cast<unsigned long long>(frame.session_epoch), frame.width, frame.height,
+           static_cast<unsigned long long>(frame.texture_handle));
+    if (role == FrameRole::DetailPatch) {
+      qCDebug(editorPresentLog)
+        << "[ROI_TRACE][renderer-metal-import-begin] request="
+          << frame.preview_metadata.presentation_request_id << " size=" << frame.width << 'x'
+          << frame.height << " native=" << frame.texture_handle;
+    }
 
     auto& layer = layers_[layerIndex(layerForRole(role))];
     // Same native object already bound for this layer: keep QRhi wrapper, refresh
@@ -544,11 +619,17 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
       layer.ready_frame.slot.height = frame.height;
       layer.ready_frame.slot.presentation_mode = frame.presentation_mode;
       layer.ready_frame.slot.preview_metadata = frame.preview_metadata;
-      layer.ready_frame.slot.image_generation = frame.image_generation;
+      layer.ready_frame.slot.session_epoch = frame.session_epoch;
       layer.ready_frame.slot.image_identity = frame.image_identity;
       layer.ready_frame.slot.sequence = frame.sequence;
       layer.texture->setNativeLayout(frame.native_layout);
       content_dirty_ = true;
+      if (role == FrameRole::DetailPatch) {
+        qCDebug(editorPresentLog)
+        << "[ROI_TRACE][renderer-metal-reused] request="
+            << layer.preview_metadata.presentation_request_id << " size=" << layer.width << 'x'
+            << layer.height;
+      }
       continue;
     }
 
@@ -562,6 +643,12 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
                static_cast<unsigned long long>(frame.preview_metadata.presentation_request_id),
                static_cast<unsigned long long>(frame.texture_handle));
       destroyResource(texture);
+      if (role == FrameRole::DetailPatch) {
+        qCDebug(editorPresentLog)
+        << "[ROI_TRACE][renderer-drop] request="
+            << frame.preview_metadata.presentation_request_id
+            << " reason=metal-qrhi-import-failed native=" << frame.texture_handle;
+      }
       if (item_) {
         item_->setStatusText(QStringLiteral("failed to import Metal frame (zero-copy)"));
       }
@@ -584,11 +671,17 @@ void EditorViewportRenderer::consumeImportedGpuFrames() {
     layer.ready_frame.slot.height = frame.height;
     layer.ready_frame.slot.presentation_mode = frame.presentation_mode;
     layer.ready_frame.slot.preview_metadata = frame.preview_metadata;
-    layer.ready_frame.slot.image_generation = frame.image_generation;
+    layer.ready_frame.slot.session_epoch = frame.session_epoch;
     layer.ready_frame.slot.image_identity = frame.image_identity;
     layer.ready_frame.slot.sequence = frame.sequence;
     NativeResourceCounters::Instance().OnCreateImportedQRhiTexture();
     content_dirty_ = true;
+    if (role == FrameRole::DetailPatch) {
+      qCDebug(editorPresentLog)
+        << "[ROI_TRACE][renderer-metal-imported] request="
+          << layer.preview_metadata.presentation_request_id << " size=" << layer.width << 'x'
+          << layer.height;
+    }
     if (item_) {
       item_->setStatusText(QStringLiteral("imported Metal frame role=%1 gen=%2")
                                .arg(static_cast<int>(role))
@@ -609,12 +702,12 @@ auto EditorViewportRenderer::selectedPrimaryLayer() const -> const LayerState* {
   if (!interactive.valid) {
     return &quality;
   }
-  if (interactive.preview_metadata.preview_generation >
-      quality.preview_metadata.preview_generation) {
+  if (interactive.preview_metadata.presentation_request_id >
+      quality.preview_metadata.presentation_request_id) {
     return &interactive;
   }
-  if (interactive.preview_metadata.preview_generation ==
-          quality.preview_metadata.preview_generation &&
+  if (interactive.preview_metadata.presentation_request_id ==
+          quality.preview_metadata.presentation_request_id &&
       view_state_.prefer_interactive_primary) {
     const auto current_roi = BuildNormalizedRoi(view_state_.snapshot.viewport_render_region_cache);
     if (!current_roi.has_value() ||
@@ -640,6 +733,74 @@ auto EditorViewportRenderer::detailPatchAspectOk(const LayerState& detail,
   return std::abs(detail_aspect - expected_aspect) <= 0.15f * std::max(expected_aspect, 1.0e-3f);
 }
 
+void EditorViewportRenderer::traceDetailDecision(
+    const char* decision, const LayerState* detail, const LayerState* base,
+    const std::optional<FrameRoiRect>& current_roi) const {
+  const std::uint64_t request_id = detail ? detail->preview_metadata.presentation_request_id : 0;
+  const bool          has_roi    = detail && current_roi.has_value();
+  const bool roi_changed = has_roi != last_detail_trace_has_roi_ ||
+                           (has_roi && !SameRoi(*current_roi, last_detail_trace_roi_));
+  if (last_detail_trace_decision_ == decision &&
+      last_detail_trace_request_id_ == request_id && !roi_changed) {
+    return;
+  }
+  last_detail_trace_decision_   = decision;
+  last_detail_trace_request_id_ = request_id;
+  last_detail_trace_has_roi_    = has_roi;
+  if (has_roi) last_detail_trace_roi_ = *current_roi;
+
+  if (!editorPresentLog().isDebugEnabled()) {
+    return;
+  }
+  const auto& quality     = layers_[layerIndex(LayerId::QualityBase)];
+  const auto& interactive = layers_[layerIndex(LayerId::InteractivePrimary)];
+  QString     msg =
+      QStringLiteral(
+          "[ROI_TRACE][renderer-decision] decision=%1 detail_request=%2 detail_valid=%3 "
+          "quality_request=%4 interactive_request=%5 base_request=%6 image=%7 session_epoch=%8")
+          .arg(QLatin1String(decision))
+          .arg(request_id)
+          .arg((detail && detail->valid) ? 1 : 0)
+          .arg(quality.valid ? quality.preview_metadata.presentation_request_id : 0)
+          .arg(interactive.valid ? interactive.preview_metadata.presentation_request_id : 0)
+          .arg(base ? base->preview_metadata.presentation_request_id : 0)
+          .arg(image_identity_)
+          .arg(session_epoch_);
+  const auto* selected_primary = selectedPrimaryLayer();
+  if (selected_primary) {
+    msg += QStringLiteral(" selected_primary_size=%1x%2 selected_primary_mode=%3")
+               .arg(selected_primary->width)
+               .arg(selected_primary->height)
+               .arg(static_cast<int>(selected_primary->presentation_mode));
+  } else {
+    msg += QStringLiteral(" selected_primary_size=none");
+  }
+  if (base) {
+    msg += QStringLiteral(" base_size=%1x%2").arg(base->width).arg(base->height);
+  } else {
+    msg += QStringLiteral(" base_size=none");
+  }
+  if (detail) {
+    msg += QStringLiteral(" patch_size=%1x%2 patch_roi=%3,%4,%5,%6")
+               .arg(detail->width)
+               .arg(detail->height)
+               .arg(detail->preview_metadata.source_roi_norm.x)
+               .arg(detail->preview_metadata.source_roi_norm.y)
+               .arg(detail->preview_metadata.source_roi_norm.width)
+               .arg(detail->preview_metadata.source_roi_norm.height);
+  }
+  if (current_roi) {
+    msg += QStringLiteral(" current_roi=%1,%2,%3,%4")
+               .arg(current_roi->x)
+               .arg(current_roi->y)
+               .arg(current_roi->width)
+               .arg(current_roi->height);
+  } else {
+    msg += QStringLiteral(" current_roi=none");
+  }
+  qCDebug(editorPresentLog).noquote() << msg;
+}
+
 auto EditorViewportRenderer::hasVisibleDetailPatch() const -> bool {
   // Phase 5D: the QML editor route does not use the legacy expected-detail
   // token handshake (EditorRenderCoordinator never calls a SetExpectedDetail
@@ -653,33 +814,52 @@ auto EditorViewportRenderer::hasVisibleDetailPatch() const -> bool {
   // current viewport. That is sufficient — the token fields remain on
   // ViewerViewState only for the legacy QWidget viewer's own check.
   if (!view_state_.allow_detail_patch) {
+    traceDetailDecision("detail-disabled", nullptr, nullptr, std::nullopt);
     return false;
   }
   const auto& quality = layers_[layerIndex(LayerId::QualityBase)];
   const auto& interactive = layers_[layerIndex(LayerId::InteractivePrimary)];
   const auto& detail = layers_[layerIndex(LayerId::DetailPatch)];
   if (!detail.valid) {
+    traceDetailDecision("no-detail-layer", nullptr, nullptr, std::nullopt);
     return false;
   }
-  // Prefer QualityBase as the full-frame aspect/generation reference. Fall back
-  // to a full-frame InteractivePrimary so a DetailPatch can land before the
-  // settled quality pass finishes (common after open + immediate zoom).
+  // Base and detail are separate render requests, so their request IDs cannot
+  // be equal. Reject only a detail older than the currently selected primary;
+  // otherwise composite it over the same-image full-frame quality/interactive
+  // layer already filtered by ConsumeNewestReady.
+  const auto* newest_primary = selectedPrimaryLayer();
+  if (newest_primary && newest_primary->preview_metadata.presentation_request_id >
+                            detail.preview_metadata.presentation_request_id) {
+    const auto current_roi = BuildNormalizedRoi(view_state_.snapshot.viewport_render_region_cache);
+    traceDetailDecision("detail-older-than-primary", &detail, newest_primary, current_roi);
+    return false;
+  }
+
+  // Prefer QualityBase as the full-frame reference. Fall back to a full-frame
+  // InteractivePrimary while the settled quality pass is not available.
   const LayerState* base = nullptr;
-  if (quality.valid && quality.preview_metadata.preview_generation ==
-                           detail.preview_metadata.preview_generation) {
+  if (quality.valid) {
     base = &quality;
-  } else if (interactive.valid &&
-             interactive.preview_metadata.preview_generation ==
-                 detail.preview_metadata.preview_generation &&
-             interactive.presentation_mode != FramePresentationMode::RoiFrame) {
+  } else if (interactive.valid && interactive.presentation_mode != FramePresentationMode::RoiFrame) {
     base = &interactive;
   }
-  if (!base || !detailPatchAspectOk(detail, *base)) {
+  if (!base /*|| !detailPatchAspectOk(detail, *base)*/) {
+    const auto current_roi = BuildNormalizedRoi(view_state_.snapshot.viewport_render_region_cache);
+    traceDetailDecision("no-full-frame-base", &detail, nullptr, current_roi);
     return false;
   }
   const auto current_roi = BuildNormalizedRoi(view_state_.snapshot.viewport_render_region_cache);
-  return current_roi.has_value() &&
-         SameRoi(detail.preview_metadata.source_roi_norm, *current_roi);
+  if (!current_roi) {
+    traceDetailDecision("current-roi-missing", &detail, base, current_roi);
+    return false;
+  }
+  if (!SameRoi(detail.preview_metadata.source_roi_norm, *current_roi)) {
+    traceDetailDecision("roi-mismatch", &detail, base, current_roi);
+    return false;
+  }
+  traceDetailDecision("visible", &detail, base, current_roi);
+  return true;
 }
 
 auto EditorViewportRenderer::selectedDetailLayer() const -> const LayerState* {
@@ -813,11 +993,12 @@ void EditorViewportRenderer::render(QRhiCommandBuffer* command_buffer) {
   }
   command_buffer->endPass();
 
-  // Composition confirmation only after the selected primary was encoded into
-  // this Qt Quick window frame. Covers both DirectPresentQueue slots (CUDA /
-  // OpenCL) and zero-copy Metal imports (slot_index == -1).
-  if (drew_primary && item_->frameSink()) {
-    item_->frameSink()->NotifyPrimaryFrameComposed(primary_layer->ready_frame);
+  // Composition metrics are renderer-owned diagnostics. They do not feed back
+  // into request scheduling; FrameReady already completed the blocking job.
+  if (drew_primary && item_->present_queue()) {
+    const auto& slot = primary_layer->ready_frame.slot;
+    item_->present_queue()->NoteFrameComposed(slot.preview_metadata.presentation_request_id,
+                                              slot.session_epoch, slot.image_identity);
   }
 
   releaseQueuedNatives();

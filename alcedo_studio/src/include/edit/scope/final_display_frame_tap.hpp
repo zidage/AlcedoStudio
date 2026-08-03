@@ -21,7 +21,7 @@ class FinalDisplayFrameTapSink final : public IFrameSink, public IFinalDisplayFr
   void               SetScopeRequest(const ScopeRequest& request);
   void               SetScopeActive(bool active);
   void               SetScopeAnalysisDeferred(bool deferred);
-  void               SetFrameIdentity(uint64_t image_identity, uint64_t image_generation);
+  void               SetFrameIdentity(uint64_t image_identity, uint64_t session_epoch);
   auto               GetScopeRequest() const -> ScopeRequest;
   auto               SubmitCurrentDisplayFrameToScope() -> bool;
 
@@ -34,7 +34,8 @@ class FinalDisplayFrameTapSink final : public IFrameSink, public IFinalDisplayFr
   auto MapResourceForWrite(FrameMemoryDomain preferred_domain = FrameMemoryDomain::CudaDevice)
       -> FrameWriteMapping override;
   void UnmapResource() override;
-  void NotifyFrameReady() override;
+  void NotifyFrameReady(const FrameCompletionSubmission& submission) override;
+  void BindFrameSubmission(const FrameCompletionSubmission& submission) override;
   void SubmitHostFrame(const ViewerFrame& frame) override;
 #ifdef HAVE_METAL
   void SubmitMetalFrame(const ViewerMetalFrame& frame) override;
@@ -43,8 +44,6 @@ class FinalDisplayFrameTapSink final : public IFrameSink, public IFinalDisplayFr
   auto GetWidth() const -> int override;
   auto GetHeight() const -> int override;
   auto GetViewportRenderRegion() const -> std::optional<ViewportRenderRegion> override;
-  void SetNextFramePresentationMode(FramePresentationMode mode) override;
-  void SetNextFramePreviewMetadata(const FramePreviewMetadata& metadata) override;
   auto GetViewerSurface() -> IEditViewerSurface* override;
   auto GetViewerSurface() const -> const IEditViewerSurface* override;
 
@@ -55,12 +54,12 @@ class FinalDisplayFrameTapSink final : public IFrameSink, public IFinalDisplayFr
   FinalDisplayFrameView           current_frame_{};
   FinalDisplayFrameView           scope_frame_{};
   ScopeRequest                    scope_request_{};
-  FramePreviewMetadata            pending_metadata_{};
-  bool                            pending_metadata_valid_  = false;
+  FrameCompletionSubmission       bound_submission_{};
+  bool                            bound_submission_valid_ = false;
   bool                            scope_active_            = false;
   bool                            scope_analysis_deferred_ = false;
   uint64_t                        image_identity_          = 0;
-  uint64_t                        image_generation_        = 0;
+  uint64_t                        session_epoch_        = 0;
   uint64_t                        next_frame_id_           = 1;
 };
 

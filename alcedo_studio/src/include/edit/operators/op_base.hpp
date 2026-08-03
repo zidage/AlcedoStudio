@@ -420,6 +420,12 @@ struct OperatorParams {
   }
 };
 
+/// Choice used when applying a per-operator merge of current vs incoming params.
+enum class OperatorMergeChoice : std::uint8_t {
+  kKeepCurrent  = 0,
+  kTakeIncoming = 1,
+};
+
 class IOperatorBase {
  public:
   /**
@@ -460,6 +466,31 @@ class IOperatorBase {
   virtual auto GetStage() const -> PipelineStageName                   = 0;
 
   virtual auto GetOperatorType() const -> OperatorType                 = 0;
+
+  /**
+   * @brief Whether current and incoming params differ in portable user intent.
+   *
+   * Default: full JSON inequality. Operators with image-local / runtime fields
+   * (as-shot white balance, lens EXIF metadata, …) override so those fields do
+   * not force a merge conflict when intent matches.
+   */
+  [[nodiscard]] virtual auto DetectMergeConflict(const nlohmann::json& current,
+                                                 const nlohmann::json& incoming) const -> bool {
+    return current != incoming;
+  }
+
+  /**
+   * @brief Build the params object that should be written for a merge choice.
+   *
+   * Default: pick current or incoming wholesale. Operators that strip
+   * image-local fields on transfer override so TakeIncoming rehydrates those
+   * fields from current instead of wiping them.
+   */
+  [[nodiscard]] virtual auto MergeParams(const nlohmann::json& current,
+                                         const nlohmann::json& incoming,
+                                         OperatorMergeChoice choice) const -> nlohmann::json {
+    return choice == OperatorMergeChoice::kTakeIncoming ? incoming : current;
+  }
 
   // virtual auto ToKernel_Vec() const -> Kernel            = 0;
 

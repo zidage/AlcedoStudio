@@ -343,9 +343,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   [[nodiscard]] auto first_frame_request_id() const -> std::uint64_t {
     return render_.first_frame_request_id();
   }
-  [[nodiscard]] auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot override {
-    return edit_.adjustment_snapshot();
-  }
+  [[nodiscard]] auto adjustment_snapshot() const -> EditorRenderAdjustmentSnapshot override;
   [[nodiscard]] auto history_revision() const -> std::uint64_t override {
     return history_revision_.load(std::memory_order_acquire);
   }
@@ -416,7 +414,7 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// Accept an asynchronous image-acquisition completion for the active
   /// session generation. Stale generations and states outside image loading
   /// are ignored. A failed acquisition releases guards and publishes failure;
-  /// success keeps the session loading until its first frame is presented.
+  /// success keeps the session loading until its first frame is ready.
   void NotifyImageAcquired(ImageLoadRequestId image_load_request, bool success,
                            std::string message = {});
   void NotifyRenderResult(const EditorRenderResult& render_result);
@@ -465,14 +463,6 @@ class EditorSessionService final : public IEditorSessionBackend {
   /// save-service start whose result is posted back as SaveCheckpointFinished.
   /// Publishes SaveStarted (or Rejected/Failed) for the current operation.
   auto StartHistoryCheckpointSave() -> EditorSessionResult;
-  /// Capture and publish one staged Paste/Merge candidate through one durable
-  /// checkpoint. The candidate stays opaque to the session queue except for
-  /// its immutable inputs and final adjustment snapshot.
-  auto StartTransferPublication(EditorSessionCommandKind kind,
-                                EditorTransferCandidate candidate,
-                                std::shared_ptr<AdjustmentMergePreview> preview,
-                                std::vector<AdjustmentMergeResolution> resolutions,
-                                std::string success_message) -> EditorSessionResult;
   auto CancelPendingMergeForNavigation(std::string* error) -> bool;
   /// Increment the history revision so the controller emits one dedicated
   /// history signal on the next change notification. Call only at points where
@@ -487,15 +477,6 @@ class EditorSessionService final : public IEditorSessionBackend {
   struct PendingHistoryCheckpoint {
     bool        route_render = false;
     std::string success_message;
-  };
-
-  /// Queue-owned candidate waiting for its durable publication to finish.
-  struct PendingTransferPublication {
-    EditorSessionCommandKind                    kind = EditorSessionCommandKind::ApplyPaste;
-    EditorTransferCandidate                     candidate;
-    std::shared_ptr<AdjustmentMergePreview>     preview;
-    std::vector<AdjustmentMergeResolution>      merge_resolutions;
-    std::string                                 success_message;
   };
 
   Dependencies                            dependencies_;
@@ -513,11 +494,10 @@ class EditorSessionService final : public IEditorSessionBackend {
   std::vector<EditorSessionResult>        results_;
   mutable std::mutex                      results_mutex_;
   std::unique_ptr<AdjustmentMergePreview>          pending_merge_preview_;
-  std::optional<EditorTransferCandidate>           pending_merge_candidate_;
+  std::optional<AdjustmentTransferPackage>         pending_merge_package_;
   MergePreviewId                                   next_merge_preview_id_{1};
   std::optional<MergePreviewId>                    active_merge_preview_id_;
   std::optional<PendingHistoryCheckpoint>          pending_history_checkpoint_;
-  std::optional<PendingTransferPublication>        pending_transfer_publication_;
   std::vector<EditorOperationLease>       active_leases_;
   EditorActionAvailability                published_availability_{};
   ActionAvailabilityObserver              action_availability_observer_;

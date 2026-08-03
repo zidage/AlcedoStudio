@@ -119,10 +119,11 @@ auto ReadFileToBuffer(const std::filesystem::path& path) -> std::vector<std::uin
   return buffer;
 }
 
-auto MakeRawDecodeParams(RawGpuBackend backend) -> nlohmann::json {
+auto MakeRawDecodeParams() -> nlohmann::json {
+  // The decode backend is a runtime property, never a param: it is pushed on
+  // the op via SetRuntimeGpuBackend, like the pipeline executor does.
   nlohmann::json params;
-  params["raw"] = {{"gpu_backend", backend == RawGpuBackend::CUDA ? "cuda" : "opencl"},
-                   {"highlights_reconstruct", true},
+  params["raw"] = {{"highlights_reconstruct", true},
                    {"use_camera_wb", true},
                    {"backend", "alcedo"},
                    {"decode_res", static_cast<int>(DecodeRes::FULL)}};
@@ -131,7 +132,9 @@ auto MakeRawDecodeParams(RawGpuBackend backend) -> nlohmann::json {
 
 auto DecodeRawFrame(const std::filesystem::path& raw_path, RawGpuBackend backend) -> DecodedFrame {
   auto        input = std::make_shared<ImageBuffer>(ReadFileToBuffer(raw_path));
-  RawDecodeOp raw_decode_op(MakeRawDecodeParams(backend));
+  RawDecodeOp raw_decode_op(MakeRawDecodeParams());
+  raw_decode_op.SetRuntimeGpuBackend(backend == RawGpuBackend::CUDA ? GpuBackendKind::CUDA
+                                                                     : GpuBackendKind::OpenCL);
 
   const auto  start = ProfileClock::now();
   raw_decode_op.Apply(input);

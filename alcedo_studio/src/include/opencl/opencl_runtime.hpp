@@ -18,9 +18,10 @@ void PrepareOpenClRuntime(const OpenClInitializationOptions& options = {});
 void InitializeOpenClRuntime(const OpenClInitializationOptions& options = {});
 auto TryInitializeOpenClRuntime(const OpenClInitializationOptions& options = {}) -> bool;
 
-// Compiles only programs marked required_at_startup after the context is
-// initialized. Optional Neural (DemosaicNet) programs remain uncompiled until
-// first explicit OpenClProgramLibrary::GetProgram use.
+// Ensures builtin programs are registered, then compiles programs marked
+// required_at_startup. Safe to call after InitializeOpenClRuntime (or when the
+// context is already live from editor GL-sharing bootstrap). Optional Neural
+// (DemosaicNet) programs remain uncompiled until first explicit GetProgram use.
 void WarmUpOpenClRuntime();
 
 // Use for automatic fallback probing. Failure should not interrupt the caller's

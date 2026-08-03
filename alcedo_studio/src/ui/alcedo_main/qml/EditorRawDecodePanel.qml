@@ -95,10 +95,9 @@ Item {
     function buildDefaultRawParams() {
         var params = {
             raw: {
-                gpu_backend: "cpu",
+                // No accelerator backend: the decode backend is a runtime
+                // property of the pipeline (user setting), not an edit param.
                 method: "default",
-                cuda: false,
-                opencl: false,
                 highlights_reconstruct: true,
                 use_camera_wb: true,
                 user_wb: 7600.0,
@@ -141,15 +140,22 @@ Item {
     }
 
     function buildRawParams() {
-        var params = root.rawParams && root.rawParams.raw
+        // Pure builder: do not write root.rawParams during submit (avoids
+        // binding churn while the patch is already enqueued).
+        var base = root.rawParams && root.rawParams.raw
                 ? root.rawParams
                 : root.buildDefaultRawParams()
-        if (!params.raw)
-            params.raw = {}
-        params.raw.method = String(rawMethodModel.currentValue || "default")
-        params.raw.highlights_reconstruct = Boolean(rawHighlightsModel.value)
-        root.rawParams = params
-        return JSON.stringify(params)
+        var raw = {}
+        if (base.raw) {
+            var src = base.raw
+            for (var k in src) {
+                if (Object.prototype.hasOwnProperty.call(src, k))
+                    raw[k] = src[k]
+            }
+        }
+        raw.method = String(rawMethodModel.currentValue || "default")
+        raw.highlights_reconstruct = Boolean(rawHighlightsModel.value)
+        return JSON.stringify({ raw: raw })
     }
 
     function loadFromSnapshot(snapshot) {
@@ -258,6 +264,7 @@ Item {
     Connections {
         target: root.editorSession
         function onRawDecodeCapabilitiesChanged() {
+            // Capability maps are independent of AdjustmentSnapshotChanged.
             root.refreshMethodEntries()
             root.loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
         }

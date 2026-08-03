@@ -457,38 +457,69 @@ QmlImports = qml
 endif()
 
 if(APPLE)
+    # Brand icon pipeline (Windows + macOS):
+    #   scripts/build_app_icons.ps1  ->  cargo tauri icon
+    # writes config/ICON/alcedo_icon.{png,ico,icns}. Prefer the committed ICNS
+    # so Dock / Finder / DMG match the Windows mark without re-slicing on Apple
+    # hosts; fall back to sips+iconutil when the ICNS asset is missing.
     set(ALCEDO_MAIN_ICON_PNG "${ALCEDO_SRC_ROOT}/config/ICON/alcedo_icon.png")
+    set(ALCEDO_MAIN_ICON_ICNS_SRC "${ALCEDO_SRC_ROOT}/config/ICON/alcedo_icon.icns")
     set(ALCEDO_MAIN_ICONSET_DIR "${ALCEDO_BINARY_ROOT}/alcedo_icon.iconset")
     set(ALCEDO_MAIN_ICON_ICNS "${ALCEDO_BINARY_ROOT}/alcedo_icon.icns")
 
-    find_program(ALCEDO_SIPS_EXECUTABLE sips REQUIRED)
-    find_program(ALCEDO_ICONUTIL_EXECUTABLE iconutil REQUIRED)
+    if(EXISTS "${ALCEDO_MAIN_ICON_ICNS_SRC}")
+        add_custom_command(
+            OUTPUT "${ALCEDO_MAIN_ICON_ICNS}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ALCEDO_MAIN_ICON_ICNS_SRC}"
+                "${ALCEDO_MAIN_ICON_ICNS}"
+            DEPENDS "${ALCEDO_MAIN_ICON_ICNS_SRC}"
+            COMMENT "Staging macOS app icon from ${ALCEDO_MAIN_ICON_ICNS_SRC}"
+            VERBATIM
+        )
+    else()
+        find_program(ALCEDO_SIPS_EXECUTABLE sips REQUIRED)
+        find_program(ALCEDO_ICONUTIL_EXECUTABLE iconutil REQUIRED)
 
-    add_custom_command(
-        OUTPUT "${ALCEDO_MAIN_ICON_ICNS}"
-        COMMAND ${CMAKE_COMMAND} -E rm -rf "${ALCEDO_MAIN_ICONSET_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${ALCEDO_MAIN_ICONSET_DIR}"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 16 16 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_16x16.png"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 32 32 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_16x16@2x.png"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 32 32 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_32x32.png"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 64 64 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_32x32@2x.png"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 128 128 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_128x128.png"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 256 256 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_128x128@2x.png"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 256 256 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_256x256.png"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 512 512 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_256x256@2x.png"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 512 512 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_512x512.png"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 1024 1024 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_512x512@2x.png"
-        COMMAND ${ALCEDO_ICONUTIL_EXECUTABLE} -c icns "${ALCEDO_MAIN_ICONSET_DIR}" -o "${ALCEDO_MAIN_ICON_ICNS}"
-        DEPENDS "${ALCEDO_MAIN_ICON_PNG}"
-        COMMENT "Generating macOS app icon from ${ALCEDO_MAIN_ICON_PNG}"
-        VERBATIM
-    )
+        if(NOT EXISTS "${ALCEDO_MAIN_ICON_PNG}")
+            message(FATAL_ERROR
+                "macOS app icon missing. Expected ${ALCEDO_MAIN_ICON_ICNS_SRC} "
+                "or ${ALCEDO_MAIN_ICON_PNG}. Generate with: "
+                "powershell -File scripts/build_app_icons.ps1 "
+                "(or cargo tauri icon <source.png>).")
+        endif()
+
+        add_custom_command(
+            OUTPUT "${ALCEDO_MAIN_ICON_ICNS}"
+            COMMAND ${CMAKE_COMMAND} -E rm -rf "${ALCEDO_MAIN_ICONSET_DIR}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${ALCEDO_MAIN_ICONSET_DIR}"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 16 16 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_16x16.png"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 32 32 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_16x16@2x.png"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 32 32 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_32x32.png"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 64 64 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_32x32@2x.png"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 128 128 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_128x128.png"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 256 256 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_128x128@2x.png"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 256 256 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_256x256.png"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 512 512 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_256x256@2x.png"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 512 512 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_512x512.png"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 1024 1024 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_512x512@2x.png"
+            COMMAND ${ALCEDO_ICONUTIL_EXECUTABLE} -c icns "${ALCEDO_MAIN_ICONSET_DIR}" -o "${ALCEDO_MAIN_ICON_ICNS}"
+            DEPENDS "${ALCEDO_MAIN_ICON_PNG}"
+            COMMENT "Generating macOS app icon from ${ALCEDO_MAIN_ICON_PNG}"
+            VERBATIM
+        )
+    endif()
 
     add_custom_target(AlcedoStudioMainIcon DEPENDS "${ALCEDO_MAIN_ICON_ICNS}")
     add_dependencies(alcedo_main AlcedoStudioMainIcon)
-    set_source_files_properties("${ALCEDO_MAIN_ICON_ICNS}" PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+    set_source_files_properties("${ALCEDO_MAIN_ICON_ICNS}" PROPERTIES
+        MACOSX_PACKAGE_LOCATION "Resources"
+    )
     target_sources(alcedo_main PRIVATE "${ALCEDO_MAIN_ICON_ICNS}")
-    set_target_properties(alcedo_main PROPERTIES MACOSX_BUNDLE_ICON_FILE "alcedo_icon.icns")
+    # CFBundleIconFile — Finder, Dock, and Launchpad use this for the .app.
+    set_target_properties(alcedo_main PROPERTIES
+        MACOSX_BUNDLE_ICON_FILE "alcedo_icon.icns"
+    )
 endif()
 
 if(WIN32)
@@ -581,10 +612,13 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/GlobalSearchDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/StatsCard.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/StarRatingFilter.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AppContextMenu.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AppMenuItem.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AppMenuSeparator.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ImageContextMenu.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailGridView.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/BackgroundTaskBar.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/BackgroundTaskPopover.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/BackgroundTasksDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WorkspaceHost.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/LibraryWorkspace.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWorkspace.qml"
@@ -592,8 +626,11 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorSaveRecoveryBar.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentTransferActions.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorFilmstrip.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryVersionsRail.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorFilmstripThumbnailCard.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWorkspaceRail.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryTransactionsPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryTransactionEntry.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryCommitGraphNode.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorVersionsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeChoiceButton.qml"

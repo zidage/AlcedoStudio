@@ -48,6 +48,18 @@ auto IsFinitePositive(float value) -> bool {
   return std::isfinite(value) && value > 0.0f;
 }
 
+void SetDisplayDimensionsFromLibRaw(const LibRaw& raw_processor, ExifDisplayMetaData& display) {
+  uint32_t width  = static_cast<uint32_t>(raw_processor.imgdata.sizes.width);
+  uint32_t height = static_cast<uint32_t>(raw_processor.imgdata.sizes.height);
+  // RawProcessor rotates the decoded pixels for LibRaw flip 5/6. Persist the
+  // dimensions of that rotated output, not the unrotated sensor rectangle.
+  if (raw_processor.imgdata.sizes.flip == 5 || raw_processor.imgdata.sizes.flip == 6) {
+    std::swap(width, height);
+  }
+  if (width > 0) display.width_ = width;
+  if (height > 0) display.height_ = height;
+}
+
 auto TrimTrailingZeroPadded(const char* s, size_t max_len = 256) -> std::string {
   if (!s) return {};
   size_t len = std::min(std::strlen(s), max_len);
@@ -1155,12 +1167,7 @@ void PopulateDngMetadataHintFromOpenLibRaw(LibRaw& raw_processor, ExifDisplayMet
     }
   }
 
-  if (raw_processor.imgdata.sizes.width > 0) {
-    display.width_ = static_cast<uint32_t>(raw_processor.imgdata.sizes.width);
-  }
-  if (raw_processor.imgdata.sizes.height > 0) {
-    display.height_ = static_cast<uint32_t>(raw_processor.imgdata.sizes.height);
-  }
+  SetDisplayDimensionsFromLibRaw(raw_processor, display);
 
   const time_t ts = raw_processor.imgdata.other.timestamp;
   if (ts > 0) {
@@ -1366,8 +1373,7 @@ void PopulateDisplayMetadataFromLibRaw(LibRaw& raw_processor, const RawRuntimeCo
     }
   }
 
-  display.width_  = static_cast<uint32_t>(raw_processor.imgdata.sizes.width);
-  display.height_ = static_cast<uint32_t>(raw_processor.imgdata.sizes.height);
+  SetDisplayDimensionsFromLibRaw(raw_processor, display);
 
   // Timestamp
   const time_t ts = raw_processor.imgdata.other.timestamp;

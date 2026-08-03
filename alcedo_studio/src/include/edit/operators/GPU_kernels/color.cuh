@@ -7,6 +7,7 @@
 #pragma once
 
 #include <array>
+#include <cstdio>
 #include <vector>
 
 #include <cuda_runtime.h>

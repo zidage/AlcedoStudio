@@ -468,7 +468,6 @@ auto RawProcessor::ProcessGpu() -> ImageBuffer {
 }
 
 auto RawProcessor::Process() -> ImageBuffer {
-  const RawGpuBackend requested_gpu_backend = params_.gpu_backend_;
   input_kind_ = ClassifyRawInput(raw_data_, raw_processor_.imgdata.idata);
   runtime_color_context_.output_in_camera_space_ = false;
   gpu_input_downsample_passes_                   = 0;
@@ -499,21 +498,10 @@ auto RawProcessor::Process() -> ImageBuffer {
   }
 
   cfa_pattern_ = ReadLibRawCfaPattern(raw_processor_);
-#ifdef HAVE_CUDA
-  if (requested_gpu_backend == RawGpuBackend::GPU &&
-      detail::ResolveRawDemosaicMethod(params_, cfa_pattern_.kind) ==
-          RawDemosaicMethod::NeuralEngine) {
-    // Auto prefers CUDA Neural when available. Explicit OpenCL selection uses OpenCL Neural
-    // with same-backend Legacy soft-fail. CUDA Neural never falls back to OpenCL, and OpenCL
-    // Neural never falls back to CUDA.
-    try {
-      if (ResolveAcceleratorBackend(AcceleratorBackendPreference::CUDA) == GpuBackendKind::CUDA) {
-        params_.gpu_backend_ = RawGpuBackend::CUDA;
-      }
-    } catch (...) {
-    }
-  }
-#endif
+  // No implicit backend switching here: routing follows the pipeline preference
+  // resolved above. An unspecified (Auto) preference resolves through
+  // ResolveAcceleratorBackend exactly like any other; it never silently
+  // overrides an explicit user selection with another backend.
   if (cfa_pattern_.kind == RawCfaKind::Bayer2x2 && !IsClassic2x2Bayer(cfa_pattern_.bayer_pattern)) {
     throw std::runtime_error("RawProcessor: unsupported 2x2 CFA pattern " +
                              DescribeBayerPattern(cfa_pattern_.bayer_pattern) + ".");

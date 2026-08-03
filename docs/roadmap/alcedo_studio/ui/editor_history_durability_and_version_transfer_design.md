@@ -6,10 +6,14 @@ Status: historical design for the completed Phase 5F-5I implementation.
 
 Phase 6C supersedes this document's array-owned Version timeline, `WorkingVersion`, cursor,
 `RewriteTimeline`, image-scoped overlapping save, journal compaction, and Paste/Merge behavior. The
-authoritative replacement is
+authoritative replacement for the mini-Git data model is
 [Phase 6C Mini-Git History and Pipeline Snapshot Plan](phase_6c_mini_git_history_and_pipeline_snapshot_plan.md).
-This document remains as a record of the earlier recovery implementation and its failure analysis;
-it must not be used to define new history APIs or product behavior.
+For **pipeline vs history identity** (who owns HEAD, chain-hash unit = one commit, checkpoint as
+params label, merge multi-`SetOperator` then one fold), the binding document is
+[Editor Single Live Pipeline + WAL + Checkpoint](editor_single_live_pipeline_wal_checkpoint_plan.md)
+section **Final locked identity model**. This document remains as a record of the earlier recovery
+implementation and its failure analysis; it must not be used to define new history APIs or product
+behavior.
 
 Related roadmap:
 

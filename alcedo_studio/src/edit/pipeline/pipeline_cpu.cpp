@@ -187,6 +187,11 @@ auto CPUPipelineExecutor::Apply(std::shared_ptr<ImageBuffer> input)
     return input;
   }
 
+  // The RAW decode backend follows the resolved runtime preference on every
+  // render; a stage op replaced by direct SetOperator writes can never drift
+  // the decode away from the user's backend setting.
+  ApplyRuntimeRawDecodeBackend();
+
   std::vector<std::string> executor_steps;
   std::vector<std::string> stage_profiles;
   auto*                    first_stage = exec_stages_.front();
@@ -296,7 +301,7 @@ CPUPipelineExecutor::SetPreviewMode(bool) {
 void CPUPipelineExecutor::SetExecutionStages() {
   ResolveAcceleratorBackend();
   ApplyAcceleratorBackendToStages();
-  SyncRawDecodeBackendToAccelerator();
+  ApplyRuntimeRawDecodeBackend();
 
   exec_stages_.clear();
   frame_sink_ = nullptr;
@@ -346,23 +351,22 @@ void CPUPipelineExecutor::ApplyAcceleratorBackendToStages() {
   }
 }
 
-void CPUPipelineExecutor::SyncRawDecodeBackendToAccelerator() {
+void CPUPipelineExecutor::ApplyRuntimeRawDecodeBackend() {
+  // The accelerator backend is a runtime property of this process: it comes
+  // only from the user's backend setting (resolved_accelerator_backend_) and is
+  // pushed directly into the RAW decode op. Persisted operator params can
+  // never carry or override it.
   auto& raw_stage = stages_[static_cast<int>(PipelineStageName::Image_Loading)];
   auto  entry     = raw_stage.GetOperator(OperatorType::RAW_DECODE);
   if (!entry.has_value() || !entry.value() || !entry.value()->op_) {
     return;
   }
 
-  nlohmann::json params = entry.value()->op_->GetParams();
-  if (!params.contains("raw") || !params["raw"].is_object()) {
-    params["raw"] = nlohmann::json::object();
+  auto* raw_op = dynamic_cast<RawDecodeOp*>(entry.value()->op_.get());
+  if (!raw_op) {
+    return;
   }
-
-  auto& raw          = params["raw"];
-  raw["gpu_backend"] = std::string(AcceleratorBackendPreferenceToString(accelerator_preference_));
-  raw["cuda"]        = accelerator_preference_ == AcceleratorBackendPreference::CUDA;
-  raw["opencl"]      = accelerator_preference_ == AcceleratorBackendPreference::OpenCL;
-  raw_stage.SetOperator(OperatorType::RAW_DECODE, params);
+  raw_op->SetRuntimeGpuBackend(resolved_accelerator_backend_);
   SyncRawDecodeRuntimeControls();
 }
 
@@ -390,12 +394,16 @@ void CPUPipelineExecutor::SetAcceleratorBackendPreference(
   const auto resolved_backend = alcedo::ResolveAcceleratorBackend(preference);
   if (accelerator_preference_ == preference &&
       resolved_accelerator_backend_ == resolved_backend) {
+    // A replaced RAW decode op (e.g. after direct stage writes) must still
+    // follow the active runtime backend; re-apply even when nothing else
+    // changed.
+    ApplyRuntimeRawDecodeBackend();
     return;
   }
 
   accelerator_preference_          = preference;
   resolved_accelerator_backend_    = resolved_backend;
-  SyncRawDecodeBackendToAccelerator();
+  ApplyRuntimeRawDecodeBackend();
 
   const auto previous_frame_sink = frame_sink_;
   ResetExecutionStages();
@@ -432,6 +440,7 @@ void CPUPipelineExecutor::SetExecutionStages(IFrameSink* frame_sink) {
 }
 
 void CPUPipelineExecutor::ResetExecutionStages() {
+  // Caller must hold render_lock_ (sole live-pipeline ownership).
   frame_sink_ = nullptr;
   for (auto& stage : stages_) {
     stage.ResetDependents();
@@ -458,6 +467,7 @@ auto CPUPipelineExecutor::ExportPipelineParams() const -> nlohmann::json {
 }
 
 void CPUPipelineExecutor::ImportPipelineParams(const nlohmann::json& j) {
+  // Caller must hold render_lock_ (sole live-pipeline ownership).
   ResetExecutionStages();
   ResetStages();
   SetTemplateParams();
@@ -469,6 +479,11 @@ void CPUPipelineExecutor::ImportPipelineParams(const nlohmann::json& j) {
       stage.MergeStageParams(stage_json, global_params_);
     }
   }
+  // The accelerator backend is a runtime property of this process, not part of
+  // the persisted edit state. Re-apply the active runtime backend to the RAW
+  // decode so a backend switch takes effect on every load, snapshot, and
+  // recovery, regardless of what the stored params contain.
+  ApplyRuntimeRawDecodeBackend();
   SetExecutionStages();
 }
 
@@ -539,18 +554,73 @@ void CPUPipelineExecutor::SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm
 void CPUPipelineExecutor::SetDecodeRes(DecodeRes res) {
   decode_res_ = res;
 
-  // TODO: Abstraction leak, need better design later
+  // decode_res is a one-shot render parameter. Install it on the live op for this
+  // Apply only; RawDecodeOp::GetParams deliberately omits it from durable export.
   auto& raw_stage = GetStage(PipelineStageName::Image_Loading);
-  auto  raw_param = raw_stage.GetOperator(OperatorType::RAW_DECODE).value()->ExportOperatorParams();
-  auto& params = raw_param["params"];
-  if (!params.contains("raw") || !params["raw"].is_object()) {
-    params["raw"] = nlohmann::json::object();
+  auto  entry     = raw_stage.GetOperator(OperatorType::RAW_DECODE);
+  if (!entry.has_value() || !entry.value() || !entry.value()->op_) {
+    SyncRawDecodeRuntimeControls();
+    return;
   }
-  if (params["raw"].value("decode_res", -1) != static_cast<int>(res)) {
+  auto* raw_op = dynamic_cast<RawDecodeOp*>(entry.value()->op_.get());
+  if (raw_op) {
+    raw_op->params_.decode_res_ = res;
+  } else {
+    auto  raw_param = entry.value()->ExportOperatorParams();
+    auto& params    = raw_param["params"];
+    if (!params.contains("raw") || !params["raw"].is_object()) {
+      params["raw"] = nlohmann::json::object();
+    }
     params["raw"]["decode_res"] = static_cast<int>(res);
     raw_stage.SetOperator(OperatorType::RAW_DECODE, raw_param["params"]);
   }
   SyncRawDecodeRuntimeControls();
+}
+
+auto CPUPipelineExecutor::CaptureOneShotRenderParams() const -> OneShotRenderParamsSnapshot {
+  OneShotRenderParamsSnapshot snapshot;
+  snapshot.decode_res_       = decode_res_;
+  snapshot.render_params_    = render_params_;
+  snapshot.force_cpu_output_ = force_cpu_output_;
+  snapshot.enable_cache_     = enable_cache_;
+  return snapshot;
+}
+
+void CPUPipelineExecutor::RestoreOneShotRenderParams(const OneShotRenderParamsSnapshot& snapshot) {
+  force_cpu_output_ = snapshot.force_cpu_output_;
+  if (enable_cache_ != snapshot.enable_cache_) {
+    // SetEnableCache rebuilds stage cache flags; only call when the value changes.
+    SetEnableCache(snapshot.enable_cache_);
+  }
+  render_params_ = snapshot.render_params_;
+  stages_[static_cast<int>(PipelineStageName::Geometry_Adjustment)].SetOperator(
+      OperatorType::RESIZE, render_params_);
+
+  if (render_params_.contains("resize") && render_params_["resize"].is_object()) {
+    const auto& resize_params              = render_params_["resize"];
+    global_params_.render_roi_enabled_     = resize_params.value("enable_roi", false);
+    if (resize_params.contains("roi") && resize_params["roi"].is_object()) {
+      const auto& roi                          = resize_params["roi"];
+      global_params_.render_roi_x_             = roi.value("x", 0);
+      global_params_.render_roi_y_             = roi.value("y", 0);
+      global_params_.render_roi_scale_x_       = roi.value("resize_factor_x", 1.0f);
+      global_params_.render_roi_scale_y_       = roi.value("resize_factor_y", 1.0f);
+      global_params_.render_roi_reference_width_ =
+          roi.value("reference_width", 0);
+      global_params_.render_roi_reference_height_ =
+          roi.value("reference_height", 0);
+    } else {
+      global_params_.render_roi_x_               = 0;
+      global_params_.render_roi_y_               = 0;
+      global_params_.render_roi_scale_x_         = 1.0f;
+      global_params_.render_roi_scale_y_         = 1.0f;
+      global_params_.render_roi_reference_width_ = 0;
+      global_params_.render_roi_reference_height_ = 0;
+    }
+  }
+
+  SetDecodeRes(snapshot.decode_res_);
+  SetCancelRequested(nullptr);
 }
 
 auto CPUPipelineExecutor::GetViewportRenderRegion() const -> std::optional<ViewportRenderRegion> {
@@ -574,18 +644,19 @@ void CPUPipelineExecutor::AttachFrameSink(IFrameSink* frame_sink) {
   }
 }
 
-void CPUPipelineExecutor::SetNextFramePresentationMode(FramePresentationMode mode) const {
-  if (!frame_sink_) {
-    return;
+void CPUPipelineExecutor::BindFrameSubmission(const FramePreviewMetadata& metadata,
+                                              FramePresentationMode       mode) {
+  bound_frame_submission_ = {metadata, mode};
+  if (frame_sink_) {
+    frame_sink_->BindFrameSubmission(bound_frame_submission_);
   }
-  frame_sink_->SetNextFramePresentationMode(mode);
+  if (!exec_stages_.empty()) {
+    exec_stages_.back()->SetBoundFrameSubmission(bound_frame_submission_);
+  }
 }
 
-void CPUPipelineExecutor::SetNextFramePreviewMetadata(const FramePreviewMetadata& metadata) const {
-  if (!frame_sink_) {
-    return;
-  }
-  frame_sink_->SetNextFramePreviewMetadata(metadata);
+auto CPUPipelineExecutor::BoundFrameSubmission() const -> FrameCompletionSubmission {
+  return bound_frame_submission_;
 }
 
 void CPUPipelineExecutor::RegisterAllOperators() {
@@ -604,11 +675,9 @@ void CPUPipelineExecutor::SetTemplateParams() {
   // Set some common parameters for template pipelines
   auto&          raw_stage     = GetStage(PipelineStageName::Image_Loading);
   auto&          global_params = GetGlobalParams();
+  // Template raw params deliberately carry no accelerator backend: the backend
+  // is pushed at runtime via ApplyRuntimeRawDecodeBackend.
   nlohmann::json decode_params = pipeline_defaults::MakeDefaultRawDecodeParams();
-  decode_params["raw"]["gpu_backend"] =
-      std::string(AcceleratorBackendPreferenceToString(accelerator_preference_));
-  decode_params["raw"]["cuda"]   = accelerator_preference_ == AcceleratorBackendPreference::CUDA;
-  decode_params["raw"]["opencl"] = accelerator_preference_ == AcceleratorBackendPreference::OpenCL;
   raw_stage.SetOperator(OperatorType::RAW_DECODE, decode_params);
 
   nlohmann::json lens_params = pipeline_defaults::MakeDefaultLensCalibParams();
@@ -618,7 +687,11 @@ void CPUPipelineExecutor::SetTemplateParams() {
 
   nlohmann::json color_temp_params;
   auto&          to_ws_stage = GetStage(PipelineStageName::To_WorkingSpace);
-  color_temp_params["color_temp"] = {{"mode", "as_shot"}, {"cct", 6500.0f}, {"tint", 0.0f}};
+  color_temp_params["color_temp"] = {{"mode", "as_shot"},
+                                     {"custom_cct", 6500.0f},
+                                     {"custom_tint", 0.0f},
+                                     {"as_shot_cct", 6500.0f},
+                                     {"as_shot_tint", 0.0f}};
   to_ws_stage.SetOperator(OperatorType::COLOR_TEMP, color_temp_params, global_params);
 
   nlohmann::json output_params;
@@ -640,13 +713,15 @@ void CPUPipelineExecutor::InitDefaultPipeline() {
 void CPUPipelineExecutor::InjectRawMetadata(const RawRuntimeColorContext& ctx) {
   global_params_.PopulateRawMetadata(ctx);
 
-  // Also propagate to RawDecodeOp so it uses the pre-populated context.
+  // Install image-local inherent RAW context on the decode operator so later
+  // GetParams/SetGlobalParams/Apply use the same durable state without a
+  // separate per-frame inject. Prefer writing full operator params at import.
   auto& stage = stages_[static_cast<int>(PipelineStageName::Image_Loading)];
   auto  entry = stage.GetOperator(OperatorType::RAW_DECODE);
   if (entry.has_value()) {
     auto* raw_op = dynamic_cast<RawDecodeOp*>(entry.value()->op_.get());
     if (raw_op) {
-      raw_op->SetPrePopulatedContext(ctx);
+      raw_op->SetInherentRawContext(ctx);
     }
   }
 

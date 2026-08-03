@@ -19,7 +19,7 @@ auto MakeResult(EditorSessionResultKind kind, std::uint64_t task_id = 0,
   EditorSessionResult result;
   result.kind              = kind;
   result.state             = EditorSessionState::Interactive;
-  result.identity          = {42, 84, 1, 1, 1};
+  result.identity          = {42, 84};
   result.task_id           = task_id;
   result.render_request_id = 0;
   result.message           = std::move(message);
