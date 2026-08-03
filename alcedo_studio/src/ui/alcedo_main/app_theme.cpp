@@ -18,6 +18,13 @@
 #include <QWidget>
 #include <algorithm>
 
+// resource.qrc lives in the AlcedoMainQml static library. MSVC drops that
+// object unless something in the final executable references
+// qInitResources_resource(). Q_INIT_RESOURCE must sit outside any namespace.
+static void InitAlcedoBundledResources() {
+  Q_INIT_RESOURCE(resource);
+}
+
 namespace alcedo::ui {
 namespace {
 
@@ -343,6 +350,8 @@ void AppTheme::RegisterFonts() {
   if (FontsRegisteredFlag()) {
     return;
   }
+
+  InitAlcedoBundledResources();
 
   auto& families = FontState();
   families.ui_latin =

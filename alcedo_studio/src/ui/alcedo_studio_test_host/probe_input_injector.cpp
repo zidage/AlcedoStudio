@@ -6,6 +6,7 @@
 
 #include <QBuffer>
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QImage>
@@ -23,6 +24,13 @@ namespace alcedo::ui {
 namespace {
 
 constexpr int kDefaultDragSteps = 8;
+
+auto NextSyntheticInputTimestamp() -> quint64 {
+  static quint64 last_timestamp = 0;
+  const auto     wall_timestamp = static_cast<quint64>(QDateTime::currentMSecsSinceEpoch());
+  last_timestamp                = std::max(last_timestamp + 1, wall_timestamp);
+  return last_timestamp;
+}
 
 }  // namespace
 
@@ -241,7 +249,12 @@ void ProbeInputInjector::DeliverMouseClick(const QPointF& scene_pos, Qt::MouseBu
   auto send_mouse      = [this, local, global, scene_pos](QEvent::Type type, Qt::MouseButton btn,
                                                      Qt::MouseButtons buttons) {
     QMouseEvent event(type, local, scene_pos, global, btn, buttons, Qt::NoModifier);
+    event.setTimestamp(NextSyntheticInputTimestamp());
     QCoreApplication::sendEvent(window_, &event);
+    // QQuick Controls and pointer handlers complete their pressed/clicked
+    // transitions through queued polish and delivery work. Yield between the
+    // physical events instead of injecting an entire click in one GUI stack.
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 16);
   };
 
   send_mouse(QEvent::MouseMove, Qt::NoButton, Qt::NoButton);
@@ -256,8 +269,6 @@ void ProbeInputInjector::DeliverMouseClick(const QPointF& scene_pos, Qt::MouseBu
     send_mouse(QEvent::MouseButtonPress, button, button);
     send_mouse(QEvent::MouseButtonRelease, button, Qt::NoButton);
   }
-
-  QCoreApplication::processEvents(QEventLoop::AllEvents, 16);
 }
 
 void ProbeInputInjector::DeliverMouseDrag(const QPointF& from, const QPointF& to, int steps) {
@@ -269,26 +280,36 @@ void ProbeInputInjector::DeliverMouseDrag(const QPointF& from, const QPointF& to
   {
     QMouseEvent move(QEvent::MouseMove, from, from, to_global(from), Qt::NoButton, Qt::NoButton,
                      Qt::NoModifier);
+    move.setTimestamp(NextSyntheticInputTimestamp());
     QCoreApplication::sendEvent(window_, &move);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 16);
   }
   {
     QMouseEvent press(QEvent::MouseButtonPress, from, from, to_global(from), Qt::LeftButton,
                       Qt::LeftButton, Qt::NoModifier);
+    press.setTimestamp(NextSyntheticInputTimestamp());
     QCoreApplication::sendEvent(window_, &press);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 16);
   }
   for (int i = 1; i <= steps; ++i) {
     const qreal   t = static_cast<qreal>(i) / static_cast<qreal>(steps);
     const QPointF pos(from.x() + (to.x() - from.x()) * t, from.y() + (to.y() - from.y()) * t);
     QMouseEvent   move(QEvent::MouseMove, pos, pos, to_global(pos), Qt::NoButton, Qt::LeftButton,
                        Qt::NoModifier);
+    move.setTimestamp(NextSyntheticInputTimestamp());
     QCoreApplication::sendEvent(window_, &move);
+    // Live adjustments schedule scene-graph synchronization from each move.
+    // Let that synchronization run before the next patch so the render queue
+    // cannot fill while the GUI thread is still inside this probe request.
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 16);
   }
   {
     QMouseEvent release(QEvent::MouseButtonRelease, to, to, to_global(to), Qt::LeftButton,
                         Qt::NoButton, Qt::NoModifier);
+    release.setTimestamp(NextSyntheticInputTimestamp());
     QCoreApplication::sendEvent(window_, &release);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 16);
   }
-  QCoreApplication::processEvents(QEventLoop::AllEvents, 16);
 }
 
 void ProbeInputInjector::DeliverKey(int key, Qt::KeyboardModifiers modifiers, const QString& text) {
@@ -297,6 +318,8 @@ void ProbeInputInjector::DeliverKey(int key, Qt::KeyboardModifiers modifiers, co
   }
   QKeyEvent press(QEvent::KeyPress, key, modifiers, text);
   QKeyEvent release(QEvent::KeyRelease, key, modifiers, text);
+  press.setTimestamp(NextSyntheticInputTimestamp());
+  release.setTimestamp(NextSyntheticInputTimestamp());
   QCoreApplication::sendEvent(window_, &press);
   QCoreApplication::sendEvent(window_, &release);
   QCoreApplication::processEvents(QEventLoop::AllEvents, 16);

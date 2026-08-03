@@ -24,17 +24,6 @@ nodes:
         property: visible
         eq: true
     next:
-      - to: open_look
-        weight: 1
-  open_look:
-    op:
-      action: click
-      target: editorAdjustmentNav_look
-    expect:
-      - target: editorAdjustmentPanel_look
-        property: visible
-        eq: true
-    next:
       - to: open_lut
         weight: 1
   open_lut:

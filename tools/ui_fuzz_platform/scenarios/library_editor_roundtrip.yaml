@@ -21,6 +21,16 @@ nodes:
         property: visible
         eq: true
     next:
+      - to: wait_for_library_nav
+        weight: 1
+  wait_for_library_nav:
+    op:
+      action: wait
+      target: libraryNavButton
+      property: enabled
+      eq: true
+      timeoutMs: 15000
+    next:
       - to: back_to_library
         weight: 1
   back_to_library:
@@ -31,6 +41,16 @@ nodes:
       - target: libraryWorkspace
         property: visible
         eq: true
+    next:
+      - to: wait_for_editor_nav
+        weight: 1
+  wait_for_editor_nav:
+    op:
+      action: wait
+      target: editorNavButton
+      property: enabled
+      eq: true
+      timeoutMs: 15000
     next:
       - to: reenter_editor
         weight: 1
