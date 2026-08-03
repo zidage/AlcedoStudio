@@ -5,6 +5,7 @@ import QtQuick.Effects
 
 Item {
     id: root
+    objectName: "thumbnailGridView"
     clip: true
     readonly property color cardBg: appTheme.cardSurfaceColor
     readonly property color cardBgSelected: appTheme.selectedTintColor
@@ -754,6 +755,7 @@ Item {
 
     GridView {
         id: grid
+        objectName: "thumbnailGridView_grid"
         z: 0
         anchors.fill: parent
         model: appModules.library.thumbnailModel
@@ -778,6 +780,9 @@ Item {
 
         delegate: Rectangle {
             id: cardDelegate
+            // Stable automation ids: first card is the canonical open-editor target.
+            objectName: index === 0 ? "thumbnailGridView_firstCard"
+                                    : ("thumbnailGridView_card_" + index)
             required property int index
             required property int elementId
             required property int imageId
@@ -1189,6 +1194,7 @@ Item {
     // ── Interaction overlay ──
     MouseArea {
         id: overlay
+        objectName: "thumbnailGridView_inputOverlay"
         z: 20
         anchors.fill: parent
         hoverEnabled: true

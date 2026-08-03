@@ -122,6 +122,14 @@ add_executable(UiFuzzAutomationTest
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/application_module_qml_types.hpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
     ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_json.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_json.hpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_item_tree.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_item_tree.hpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_input_injector.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_input_injector.hpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_property_wait.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_property_wait.hpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/test_probe.cpp
     ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/test_probe.hpp
 )
@@ -160,7 +168,7 @@ if(COMMAND qt_import_qml_plugins)
 endif()
 alcedo_ui_gtest_discover_tests(UiFuzzAutomationTest
     TEST_PREFIX "UiFuzzAutomationTest."
-    PROPERTIES LABELS "automation;phase0" TIMEOUT 1800
+    PROPERTIES LABELS "automation;phase0;phase1" TIMEOUT 1800
 )
 alcedo_register_test_target(UiFuzzAutomationTest ui)
 
