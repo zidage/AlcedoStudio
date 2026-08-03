@@ -13,6 +13,7 @@ import QtQuick.Dialogs
 Item {
     id: root
     property var host: null
+    property bool automationMode: false
     property var imageActionsController: null
     property var selectionState: null
     property var exportQueueState: null
@@ -313,6 +314,7 @@ Item {
 
     WelcomeDialog {
         id: welcomeDialogObj
+        objectName: "welcomeDialog"
         z: 30
         blurSource: root.blurSource
         cornerRadius: host.windowCornerRadius

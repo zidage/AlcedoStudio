@@ -11,6 +11,7 @@ Item {
     id: root
     property var host: null
     property var welcomeDialog: null
+    property bool automationMode: false
 
     property bool projectLaunchPending: false
     property bool welcomeDismissedForLaunch: false
@@ -51,7 +52,9 @@ Item {
     // Called from the host's Component.onCompleted once welcomeDialog is wired.
     function start() {
         root.updateWelcomeDialogVisibility()
-        acceleratorPreparationStartTimer.start()
+        if (!root.automationMode) {
+            acceleratorPreparationStartTimer.start()
+        }
     }
 
     function showSnackbar(messageText) {
@@ -102,6 +105,7 @@ Item {
 
     function updateWelcomeDialogVisibility() {
         const shouldShowWelcome = !root.welcomeDismissedForLaunch
+                                  && !root.automationMode
                                   && !appModules.project.serviceReady
                                   && !appModules.project.projectLoading
         if (!root.welcomeDialog) {
