@@ -208,10 +208,12 @@ Item {
 
     MouseArea {
         id: pressArea
+        objectName: control.objectName.length > 0 ? control.objectName + "Input" : ""
         anchors.fill: parent
         hoverEnabled: true
         enabled: control.enabled
         cursorShape: control.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+        onPressed: control.forceActiveFocus(Qt.MouseFocusReason)
         onClicked: control.clicked()
     }
 
