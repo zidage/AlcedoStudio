@@ -178,6 +178,12 @@ export default function ActiveRunPage(): React.ReactElement {
           <Link href="/runs">
             <Button icon={<UnorderedListOutlined />}>Results</Button>
           </Link>
+          <Link href="/workflows">
+            <Button>Workflows</Button>
+          </Link>
+          <Link href="/catalog">
+            <Button>Catalog</Button>
+          </Link>
           <Button
             type="primary"
             icon={<PlayCircleOutlined />}

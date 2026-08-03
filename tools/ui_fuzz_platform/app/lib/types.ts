@@ -103,3 +103,51 @@ export interface StoredRunDetail {
   steps: StoredStep[];
   failure: StoredFailure | null;
 }
+
+/** One scanned `objectName` binding from the QML catalog. */
+export interface CatalogEntry {
+  objectName: string | null;
+  candidates: string[];
+  pattern: string | null;
+  dynamic: boolean;
+  expression: string;
+  component: string;
+  opKinds: string[];
+  source: string;
+  line: number;
+}
+
+export interface QmlCatalog {
+  root: string;
+  generatedAt: number;
+  filesScanned: number;
+  entries: CatalogEntry[];
+}
+
+export interface StalenessEntry {
+  entry: CatalogEntry;
+  status: "present" | "stale" | "dynamic";
+  matchedBy: string | null;
+}
+
+export interface StalenessReport {
+  entries: StalenessEntry[];
+  present: number;
+  stale: number;
+  dynamic: number;
+  unmatchedRuntimeNames: string[];
+}
+
+export interface WorkflowSummary {
+  name: string;
+  path: string;
+  scenarioName: string | null;
+  start: string | null;
+  errors: string[] | null;
+}
+
+export interface WorkflowDocument {
+  name: string;
+  path: string;
+  yaml: string;
+}

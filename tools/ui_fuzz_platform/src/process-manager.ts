@@ -29,6 +29,7 @@ import {
 import { runScenario, type RunProgressHooks, type RunResult } from "./run.js";
 import { DEFAULT_RUN_CONFIG, type Op, type RunConfig } from "./scenario.js";
 import type { HostHandle } from "./host-process.js";
+import type { ProbeClient } from "./probe-client.js";
 import type { StepRecord } from "./walker.js";
 import type { ResultStore } from "./result-store.js";
 
@@ -49,6 +50,7 @@ export interface ProcessManagerOptions {
 export class ProcessManager extends EventEmitter {
   private snapshot: ActiveRunSnapshot = idleSnapshot();
   private host: HostHandle | undefined;
+  private activeProbe: ProbeClient | undefined;
   private abortRequested = false;
   private abortController: AbortController | undefined;
   private runPromise: Promise<void> | undefined;
@@ -154,6 +156,7 @@ export class ProcessManager extends EventEmitter {
     const pid = this.host?.child.pid ?? this.snapshot.hostPid ?? undefined;
     killProcessTree(pid ?? undefined);
     this.host = undefined;
+    this.activeProbe = undefined;
 
     if (this.runPromise !== undefined) {
       try {
@@ -174,6 +177,24 @@ export class ProcessManager extends EventEmitter {
     }
 
     return this.getSnapshot();
+  }
+
+  /**
+   * Issues a `snapshot` request through the active run's probe channel so the
+   * catalog page can diff static QML scan output against the live item tree.
+   *
+   * @throws when no run is active or the probe has not connected yet.
+   */
+  async captureLiveSnapshot(timeoutMs = 10_000): Promise<unknown> {
+    const probe = this.activeProbe;
+    if (probe === undefined || !this.isBusy()) {
+      throw new Error("No active run with a connected probe; start a run to capture a live snapshot.");
+    }
+    const reply = await probe.request({ method: "snapshot" }, timeoutMs);
+    if (!reply.ok) {
+      throw new Error(reply.error?.message ?? "The probe rejected the snapshot request.");
+    }
+    return reply.result;
   }
 
   /**
@@ -255,6 +276,9 @@ export class ProcessManager extends EventEmitter {
           killProcessTree(host.child.pid);
         }
       },
+      onProbeConnected: (probe) => {
+        this.activeProbe = probe;
+      },
       onLog: (line, stream) => {
         const at = this.clock();
         this.emitEvent({ type: "log", line, stream, at });
@@ -298,6 +322,7 @@ export class ProcessManager extends EventEmitter {
     overrideReason?: string,
   ): void {
     this.host = undefined;
+    this.activeProbe = undefined;
     const failureReason = overrideReason ?? result.failure?.reason ?? null;
     const archivedResult =
       overrideReason !== undefined && result.failure !== undefined

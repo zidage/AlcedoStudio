@@ -8,7 +8,7 @@ Affected areas: `alcedo_studio/src/ui/alcedo_main` (objectName coverage, automat
 CMake target graph (new executable), `tools/` (new top-level directory), `alcedo_studio/tests`
 (named GoogleTest coverage for the test host).
 
-Status: Phase 0–4 complete on 2026-08-03; Phase 5 (Flow editor and QML scanner) is pending.
+Status: Phase 0–5 complete on 2026-08-03; Phase 6 (Seeded fuzzing and hardening) is pending.
 
 ## Problem
 
@@ -646,6 +646,69 @@ Browser e2e against a real Qt host remains manual.
   catalog page via `snapshot` diffing.
 - Acceptance: an editor-assembled workflow saves to schema-valid YAML identical in semantics to
   a hand-authored file; the runner executes it without edits.
+
+##### Phase 5 completion record (2026-08-03)
+
+**Status:** complete — QML scanner, catalog page with live staleness markers, React Flow
+editor with two-outlet operation nodes, and schema-gated workflow persistence are implemented
+in `tools/ui_fuzz_platform/`.
+
+**Primary success call chain (editor save):**
+
+```text
+/workflows list "Edit" / "New workflow"
+  -> /workflows/[name] editor page (FlowCanvas two-outlet op nodes + Inspector forms)
+  -> rfToModel(canvas) -> flowToScenario -> flowToYamlText (load-order indexes, defaults-aware)
+  -> PUT /api/workflows/:name (dashboard http-server)
+  -> WorkflowStore.save -> parseScenario (JSON Schema gate)
+  -> workflows/<name>.yaml written to disk
+```
+
+**Primary success call chain (catalog staleness):**
+
+```text
+/catalog page "Check live"
+  -> GET /api/runs/active/snapshot
+  -> ProcessManager.captureLiveSnapshot -> active ProbeClient.snapshot (QLocalSocket JSONL)
+  -> diffCatalogAgainstSnapshot(static scan of alcedo_main/qml, runtime names)
+  -> present / stale / dynamic-unresolved tags rendered per catalog row
+```
+
+**Primary failure call chain:**
+
+```text
+Editor save with schema violation or path-escaping name
+  -> WorkflowStore.save -> parseScenario throws ScenarioError / name guard rejects
+  -> http-server answers 400 with the error list; the file on disk is untouched
+```
+
+**What was proven (executed tests):**
+
+| Required name / criterion | Target / binary | Result |
+| --- | --- | --- |
+| `ScannerFindsAutomationTargetsAcrossRealAlcedoQmlTree` (+ 8 unit cases) | `test/qml-scanner.test.ts` | PASS |
+| `FlowRoundTripPreservesHandAuthoredScenarioSemantics` (+ 6 round-trip/graph cases) | `test/flow-graph.test.ts` | PASS |
+| `StalenessMarksLiteralEntryMissingFromSnapshotAsStale` (+ 4 diff cases) | `test/catalog-staleness.test.ts` | PASS |
+| `WorkflowApiSavesEditorYamlAndReloadsIdenticalSemantics` (+ 5 API cases) | `test/workflow-api.test.ts` | PASS |
+| `EditorAssembledWorkflowRunsUneditedThroughRunner` (acceptance) | `test/editor-acceptance.test.ts` | PASS |
+
+Commands: `corepack pnpm test`, `corepack pnpm typecheck`, `corepack pnpm build:web` in
+`tools/ui_fuzz_platform/`.
+Suite totals: 96/96 tests across 18 files; `tsc --noEmit` clean; `next build` clean (8 routes,
+including `/catalog`, `/workflows`, `/workflows/[name]`).
+
+**Checklist / exit condition:** all boxes checked — scanner over the real QML tree, two-outlet
+React Flow editor, lossless round-trip, runtime staleness via live snapshot diffing, and the
+runner executing an editor-produced workflow unedited are all covered by executed tests.
+
+**LOC note (grill-code-review):** new core modules ~1,110 LOC (`qml-scanner.ts` 349,
+`flow-graph.ts` 384, `scenario-parse.ts` 163, `catalog-staleness.ts` 116, `workflow-store.ts` 98;
+`loader.ts` shrank by ~160 as parsing moved into `scenario-parse.ts`); new editor/catalog UI
+~1,590 LOC across 6 files (largest `flow-canvas.tsx` 486, `inspector.tsx` 373); new tests
+~770 LOC. No file approaches the 1,000-LOC split threshold.
+
+**Remaining gaps:** none for Phase 5. Browser-driven e2e of the editor against a real Qt host
+remains manual; seeded weighted fuzz remains Phase 6 scope.
 
 ### Phase 6 — Seeded fuzzing and hardening
 
