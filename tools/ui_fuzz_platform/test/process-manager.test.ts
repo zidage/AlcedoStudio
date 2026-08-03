@@ -7,14 +7,21 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 
-import { startDashboardServer, type DashboardServer } from "../src/dashboard/http-server.js";
+import {
+  startDashboardServer,
+  type DashboardServer,
+} from "../src/dashboard/http-server.js";
 import { ProcessManager } from "../src/process-manager.js";
 import type { RunManagerEvent } from "../src/run-events.js";
 import { isProcessAlive } from "../src/process-tree.js";
 import { makeTempDir } from "./helpers/fixtures.js";
 
-const fakeHostPath = fileURLToPath(new URL("./helpers/fake-host.mjs", import.meta.url));
-const slowScenarioPath = fileURLToPath(new URL("./helpers/slow_walk.yaml", import.meta.url));
+const fakeHostPath = fileURLToPath(
+  new URL("./helpers/fake-host.mjs", import.meta.url),
+);
+const slowScenarioPath = fileURLToPath(
+  new URL("./helpers/slow_walk.yaml", import.meta.url),
+);
 const acceptanceScenarioPath = fileURLToPath(
   new URL("../scenarios/library_to_editor_exposure.yaml", import.meta.url),
 );
@@ -68,11 +75,15 @@ describe("ProcessManager", () => {
     });
 
     expect(runId.length).toBeGreaterThan(0);
-    await waitFor(() => manager.getSnapshot().status === "finished", 15_000, "finished status");
+    await waitFor(
+      () => manager.getSnapshot().status === "finished",
+      15_000,
+      "finished status",
+    );
 
     const snapshot = manager.getSnapshot();
     expect(snapshot.verdict).toBe("pass");
-    expect(snapshot.stepCounter).toBe(3);
+    expect(snapshot.stepCounter).toBe(4);
     expect(events.some((event) => event.type === "log")).toBe(true);
     expect(events.some((event) => event.type === "heartbeat")).toBe(true);
     expect(events.some((event) => event.type === "stepStart")).toBe(true);
@@ -95,7 +106,11 @@ describe("ProcessManager", () => {
       outDir: makeTempDir(),
     });
 
-    await waitFor(() => manager.getSnapshot().hostPid !== null, 10_000, "host pid");
+    await waitFor(
+      () => manager.getSnapshot().hostPid !== null,
+      10_000,
+      "host pid",
+    );
     const hostPid = manager.getSnapshot().hostPid!;
     expect(isProcessAlive(hostPid)).toBe(true);
 
@@ -122,7 +137,11 @@ describe("Dashboard HTTP/WS API", () => {
     const manager = new ProcessManager({
       hostCommandOverride: [process.execPath, fakeHostPath],
     });
-    dashboard = await startDashboardServer({ host: "127.0.0.1", port: 0, manager });
+    dashboard = await startDashboardServer({
+      host: "127.0.0.1",
+      port: 0,
+      manager,
+    });
 
     const wsEvents: RunManagerEvent[] = [];
     const socket = new WebSocket(`ws://127.0.0.1:${dashboard.port}/ws/runs`);
@@ -137,21 +156,24 @@ describe("Dashboard HTTP/WS API", () => {
     const health = await fetch(`http://127.0.0.1:${dashboard.port}/api/health`);
     expect(health.status).toBe(200);
 
-    const startResponse = await fetch(`http://127.0.0.1:${dashboard.port}/api/runs/start`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        scenarioPath: slowScenarioPath,
-        hostPath: "unused-when-override-set",
-        projectPath: makeTempDir(),
-        importDir: makeTempDir(),
-        seed: 9,
-        maxSteps: 10,
-        maxDurationMs: 60_000,
-        startupTimeoutMs: 10_000,
-        outDir: makeTempDir(),
-      }),
-    });
+    const startResponse = await fetch(
+      `http://127.0.0.1:${dashboard.port}/api/runs/start`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          scenarioPath: slowScenarioPath,
+          hostPath: "unused-when-override-set",
+          projectPath: makeTempDir(),
+          importDir: makeTempDir(),
+          seed: 9,
+          maxSteps: 10,
+          maxDurationMs: 60_000,
+          startupTimeoutMs: 10_000,
+          outDir: makeTempDir(),
+        }),
+      },
+    );
     expect(startResponse.status).toBe(202);
     const started = (await startResponse.json()) as { runId: string };
     expect(started.runId.length).toBeGreaterThan(0);
@@ -162,7 +184,9 @@ describe("Dashboard HTTP/WS API", () => {
       "websocket log event",
     );
     await waitFor(
-      () => manager.getSnapshot().status === "running" || manager.getSnapshot().hostPid !== null,
+      () =>
+        manager.getSnapshot().status === "running" ||
+        manager.getSnapshot().hostPid !== null,
       10_000,
       "running",
     );
@@ -170,9 +194,12 @@ describe("Dashboard HTTP/WS API", () => {
     const hostPid = manager.getSnapshot().hostPid;
     expect(hostPid).not.toBeNull();
 
-    const stopResponse = await fetch(`http://127.0.0.1:${dashboard.port}/api/runs/stop`, {
-      method: "POST",
-    });
+    const stopResponse = await fetch(
+      `http://127.0.0.1:${dashboard.port}/api/runs/stop`,
+      {
+        method: "POST",
+      },
+    );
     expect(stopResponse.status).toBe(200);
     const stopped = (await stopResponse.json()) as { status: string };
     expect(stopped.status).toBe("finished");
@@ -182,7 +209,9 @@ describe("Dashboard HTTP/WS API", () => {
       expect(isProcessAlive(hostPid)).toBe(false);
     }
 
-    const active = await fetch(`http://127.0.0.1:${dashboard.port}/api/runs/active`);
+    const active = await fetch(
+      `http://127.0.0.1:${dashboard.port}/api/runs/active`,
+    );
     expect(active.status).toBe(200);
     const snapshot = (await active.json()) as { status: string };
     expect(snapshot.status).toBe("finished");

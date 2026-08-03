@@ -20,6 +20,14 @@ nodes:
       - target: editorWorkspace
         property: visible
         eq: true
+    next:
+      - to: switch_to_tone
+        weight: 1
+  switch_to_tone:
+    op:
+      action: click
+      target: editorAdjustmentNav_tone
+    expect:
       - target: editorAdjustmentPanel_tone
         property: visible
         eq: true

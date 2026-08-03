@@ -10,9 +10,15 @@ import { describe, expect, it } from "vitest";
 import { parseScenario } from "../src/loader.js";
 import { runScenario } from "../src/run.js";
 import type { RunConfig } from "../src/scenario.js";
-import { ACCEPTANCE_SCENARIO_YAML, makeTempDir, WRONG_EXPECT_SCENARIO_YAML } from "./helpers/fixtures.js";
+import {
+  ACCEPTANCE_SCENARIO_YAML,
+  makeTempDir,
+  WRONG_EXPECT_SCENARIO_YAML,
+} from "./helpers/fixtures.js";
 
-const fakeHostPath = fileURLToPath(new URL("./helpers/fake-host.mjs", import.meta.url));
+const fakeHostPath = fileURLToPath(
+  new URL("./helpers/fake-host.mjs", import.meta.url),
+);
 
 /** A run config that spawns the fake Node test host instead of the Qt executable. */
 function fakeHostConfig(outDir: string): RunConfig {
@@ -39,6 +45,7 @@ describe("runScenario (fake test host over a real named pipe)", () => {
     expect(result.steps.map((step) => step.nodeId)).toEqual([
       "workspace_ready",
       "open_first_image",
+      "switch_to_tone",
       "drag_exposure_slider",
     ]);
     expect(result.probeSocket).toMatch(/^fake-host-/);
@@ -56,7 +63,9 @@ describe("runScenario (fake test host over a real named pipe)", () => {
     expect(bundle).toBeDefined();
     expect(bundle!.dir).toBe(outDir);
 
-    const operations = JSON.parse(await readFile(bundle!.operationsPath, "utf8"));
+    const operations = JSON.parse(
+      await readFile(bundle!.operationsPath, "utf8"),
+    );
     expect(operations).toHaveLength(1);
     expect(operations[0].expectResults[0].errorCode).toBe("wait_timeout");
     expect(operations[0].expectResults[0].actual).toBe("Ready");

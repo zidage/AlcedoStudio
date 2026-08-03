@@ -38,7 +38,10 @@ export function resolveExpectTimeoutMs(
  * The matcher key carries its expected value (omitted for `truthy`, which the
  * probe treats as a presence/truth check with no expected value).
  */
-export function compileExpect(expect: Expect, defaults: ScenarioDefaults): OutgoingRequest {
+export function compileExpect(
+  expect: Expect,
+  defaults: ScenarioDefaults,
+): OutgoingRequest {
   const timeoutMs = resolveExpectTimeoutMs(expect, defaults);
   const request: OutgoingRequest = {
     method: "wait",
@@ -54,7 +57,9 @@ export function compileExpect(expect: Expect, defaults: ScenarioDefaults): Outgo
 function requireString(op: Op, field: string): string {
   const value = op[field as keyof Op];
   if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Op action '${op.action}' requires a non-empty '${field}'.`);
+    throw new Error(
+      `Op action '${op.action}' requires a non-empty '${field}'.`,
+    );
   }
   return value;
 }
@@ -64,13 +69,36 @@ function requireString(op: Op, field: string): string {
 export function compileOp(op: Op): OutgoingRequest | undefined {
   switch (op.action) {
     case "click":
-      return { method: "click", target: requireString(op, "target") };
+      return {
+        method: "click",
+        target: requireString(op, "target"),
+        ...(op.readyTimeoutMs !== undefined && {
+          readyTimeoutMs: op.readyTimeoutMs,
+        }),
+      };
     case "doubleClick":
-      return { method: "doubleClick", target: requireString(op, "target") };
+      return {
+        method: "doubleClick",
+        target: requireString(op, "target"),
+        ...(op.readyTimeoutMs !== undefined && {
+          readyTimeoutMs: op.readyTimeoutMs,
+        }),
+      };
     case "rightClick":
-      return { method: "rightClick", target: requireString(op, "target") };
+      return {
+        method: "rightClick",
+        target: requireString(op, "target"),
+        ...(op.readyTimeoutMs !== undefined && {
+          readyTimeoutMs: op.readyTimeoutMs,
+        }),
+      };
     case "drag": {
-      const request: OutgoingRequest = { method: "drag", target: requireString(op, "target") };
+      const request: OutgoingRequest = {
+        method: "drag",
+        target: requireString(op, "target"),
+      };
+      if (op.readyTimeoutMs !== undefined)
+        request.readyTimeoutMs = op.readyTimeoutMs;
       if (op.fromNx !== undefined) request.fromNx = op.fromNx;
       if (op.toNx !== undefined) request.toNx = op.toNx;
       if (op.ny !== undefined) request.ny = op.ny;
@@ -78,7 +106,8 @@ export function compileOp(op: Op): OutgoingRequest | undefined {
       return request;
     }
     case "key": {
-      if (op.key === undefined) throw new Error("Op action 'key' requires an integer 'key'.");
+      if (op.key === undefined)
+        throw new Error("Op action 'key' requires an integer 'key'.");
       const request: OutgoingRequest = { method: "key", key: op.key };
       if (op.text !== undefined) request.text = op.text;
       if (op.ctrl) request.ctrl = true;
@@ -89,7 +118,8 @@ export function compileOp(op: Op): OutgoingRequest | undefined {
     case "typeText":
       return { method: "typeText", text: requireString(op, "text") };
     case "wait": {
-      if (op.matcher === undefined) throw new Error("Op action 'wait' requires a matcher.");
+      if (op.matcher === undefined)
+        throw new Error("Op action 'wait' requires a matcher.");
       const request: OutgoingRequest = {
         method: "wait",
         target: requireString(op, "target"),

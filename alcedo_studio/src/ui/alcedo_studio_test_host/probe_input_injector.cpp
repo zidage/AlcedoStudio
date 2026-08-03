@@ -4,18 +4,20 @@
 
 #include "probe_input_injector.hpp"
 
-#include "probe_item_tree.hpp"
-#include "probe_json.hpp"
-
 #include <QBuffer>
 #include <QCoreApplication>
+#include <QElapsedTimer>
 #include <QEventLoop>
 #include <QImage>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QQuickItem>
 #include <QQuickWindow>
+#include <QTimer>
 #include <algorithm>
+
+#include "probe_item_tree.hpp"
+#include "probe_json.hpp"
 
 namespace alcedo::ui {
 namespace {
@@ -33,22 +35,23 @@ auto ProbeInputInjector::HandleClick(const QJsonObject& request, ClickKind kind)
                                      QStringLiteral("Probe has no QQuickWindow."));
   }
   const QString target = request.value(QStringLiteral("target")).toString().trimmed();
-  const auto    match  = tree_->FindTarget(target);
-  if (!match.has_value()) {
+  const int     ready_timeout_ms =
+      std::max(0, request.value(QStringLiteral("readyTimeoutMs")).toInt(kDefaultReadyTimeoutMs));
+
+  QString     error_code;
+  QQuickItem* item = ResolveClickable(target, ready_timeout_ms, error_code);
+  if (item == nullptr) {
+    if (error_code == QStringLiteral("target_not_found")) {
+      return probe_json::ErrorResponse(
+          request, error_code, QStringLiteral("No live QML item matched '%1'.").arg(target));
+    }
     return probe_json::ErrorResponse(
-        request, QStringLiteral("target_not_found"),
-        QStringLiteral("No live QML item matched '%1'.").arg(target));
+        request, error_code,
+        QStringLiteral("Target '%1' rejected for %2.").arg(target, error_code));
   }
 
-  if (const auto rejection = ValidateClickable(match->item); rejection.has_value()) {
-    return probe_json::ErrorResponse(
-        request, *rejection,
-        QStringLiteral("Target '%1' rejected for %2.").arg(target, *rejection));
-  }
-
-  const QPointF scene_pos = SceneCenter(match->item);
-  const Qt::MouseButton button =
-      (kind == ClickKind::Right) ? Qt::RightButton : Qt::LeftButton;
+  const QPointF         scene_pos = SceneCenter(item);
+  const Qt::MouseButton button    = (kind == ClickKind::Right) ? Qt::RightButton : Qt::LeftButton;
   DeliverMouseClick(scene_pos, button, kind == ClickKind::Double);
   return probe_json::OkStatusResponse(request);
 }
@@ -63,7 +66,7 @@ auto ProbeInputInjector::HandleKey(const QJsonObject& request) -> QJsonObject {
     return probe_json::ErrorResponse(request, QStringLiteral("invalid_key"),
                                      QStringLiteral("key requires an integer Qt::Key value."));
   }
-  const QString text = request.value(QStringLiteral("text")).toString();
+  const QString         text      = request.value(QStringLiteral("text")).toString();
   Qt::KeyboardModifiers modifiers = Qt::NoModifier;
   if (request.value(QStringLiteral("ctrl")).toBool()) {
     modifiers |= Qt::ControlModifier;
@@ -100,32 +103,35 @@ auto ProbeInputInjector::HandleDrag(const QJsonObject& request) -> QJsonObject {
                                      QStringLiteral("Probe has no QQuickWindow."));
   }
   const QString target = request.value(QStringLiteral("target")).toString().trimmed();
-  const auto    match  = tree_->FindTarget(target);
-  if (!match.has_value()) {
+  const int     ready_timeout_ms =
+      std::max(0, request.value(QStringLiteral("readyTimeoutMs")).toInt(kDefaultReadyTimeoutMs));
+
+  QString     error_code;
+  QQuickItem* item = ResolveClickable(target, ready_timeout_ms, error_code);
+  if (item == nullptr) {
+    if (error_code == QStringLiteral("target_not_found")) {
+      return probe_json::ErrorResponse(
+          request, error_code, QStringLiteral("No live QML item matched '%1'.").arg(target));
+    }
     return probe_json::ErrorResponse(
-        request, QStringLiteral("target_not_found"),
-        QStringLiteral("No live QML item matched '%1'.").arg(target));
-  }
-  if (const auto rejection = ValidateClickable(match->item); rejection.has_value()) {
-    return probe_json::ErrorResponse(
-        request, *rejection,
-        QStringLiteral("Target '%1' rejected for %2.").arg(target, *rejection));
+        request, error_code,
+        QStringLiteral("Target '%1' rejected for %2.").arg(target, error_code));
   }
 
-  const QRectF bounds = match->item->boundingRect();
-  const qreal  from_nx =
-      request.contains(QStringLiteral("fromNx")) ? request.value(QStringLiteral("fromNx")).toDouble()
-                                                 : 0.1;
-  const qreal to_nx = request.contains(QStringLiteral("toNx"))
-                          ? request.value(QStringLiteral("toNx")).toDouble()
-                          : 0.9;
-  const qreal ny =
+  const QRectF bounds  = item->boundingRect();
+  const qreal  from_nx = request.contains(QStringLiteral("fromNx"))
+                             ? request.value(QStringLiteral("fromNx")).toDouble()
+                             : 0.1;
+  const qreal  to_nx   = request.contains(QStringLiteral("toNx"))
+                             ? request.value(QStringLiteral("toNx")).toDouble()
+                             : 0.9;
+  const qreal  ny =
       request.contains(QStringLiteral("ny")) ? request.value(QStringLiteral("ny")).toDouble() : 0.5;
-  const int steps = std::max(1, request.value(QStringLiteral("steps")).toInt(kDefaultDragSteps));
+  const int steps    = std::max(1, request.value(QStringLiteral("steps")).toInt(kDefaultDragSteps));
 
-  const QPointF from = match->item->mapToScene(
+  const QPointF from = item->mapToScene(
       QPointF(bounds.x() + bounds.width() * from_nx, bounds.y() + bounds.height() * ny));
-  const QPointF to = match->item->mapToScene(
+  const QPointF to = item->mapToScene(
       QPointF(bounds.x() + bounds.width() * to_nx, bounds.y() + bounds.height() * ny));
   DeliverMouseDrag(from, to, steps);
   return probe_json::OkStatusResponse(request);
@@ -146,9 +152,8 @@ auto ProbeInputInjector::HandleScreenshot(const QJsonObject& request) -> QJsonOb
   QBuffer    buffer(&png);
   buffer.open(QIODevice::WriteOnly);
   if (!image.save(&buffer, "PNG")) {
-    return probe_json::ErrorResponse(
-        request, QStringLiteral("screenshot_failed"),
-        QStringLiteral("Failed to encode grabWindow output as PNG."));
+    return probe_json::ErrorResponse(request, QStringLiteral("screenshot_failed"),
+                                     QStringLiteral("Failed to encode grabWindow output as PNG."));
   }
 
   QJsonObject response = probe_json::BaseResponse(request);
@@ -184,6 +189,43 @@ auto ProbeInputInjector::ValidateClickable(QQuickItem* item) const -> std::optio
   return std::nullopt;
 }
 
+auto ProbeInputInjector::ResolveClickable(const QString& target, int ready_timeout_ms,
+                                          QString& error_code) const -> QQuickItem* {
+  QElapsedTimer timer;
+  timer.start();
+  while (true) {
+    const auto match = tree_->FindTarget(target);
+    if (match.has_value()) {
+      const auto rejection = ValidateClickable(match->item);
+      if (!rejection.has_value()) {
+        error_code.clear();
+        return match->item;
+      }
+      error_code = *rejection;
+      // Only retry transient states: disabled, invisible, or not-yet-found.
+      // A covered target or missing window is not expected to self-resolve.
+      if (error_code != QStringLiteral("target_disabled") &&
+          error_code != QStringLiteral("target_invisible") &&
+          error_code != QStringLiteral("target_not_found")) {
+        return nullptr;
+      }
+    } else {
+      error_code = QStringLiteral("target_not_found");
+    }
+
+    if (timer.hasExpired(ready_timeout_ms)) {
+      return nullptr;
+    }
+
+    // Process events so QML bindings can update, then retry after a short
+    // interval. The nested event loop returns when the timer fires or another
+    // event quits it.
+    QEventLoop loop;
+    QTimer::singleShot(kReadyPollIntervalMs, &loop, &QEventLoop::quit);
+    loop.exec();
+  }
+}
+
 auto ProbeInputInjector::SceneCenter(QQuickItem* item) const -> QPointF {
   return item->mapToScene(item->boundingRect().center());
 }
@@ -196,7 +238,7 @@ void ProbeInputInjector::DeliverMouseClick(const QPointF& scene_pos, Qt::MouseBu
   const QPointF local  = scene_pos;
   const QPointF global = window_->mapToGlobal(scene_pos.toPoint());
 
-  auto send_mouse = [this, local, global, scene_pos](QEvent::Type type, Qt::MouseButton btn,
+  auto send_mouse      = [this, local, global, scene_pos](QEvent::Type type, Qt::MouseButton btn,
                                                      Qt::MouseButtons buttons) {
     QMouseEvent event(type, local, scene_pos, global, btn, buttons, Qt::NoModifier);
     QCoreApplication::sendEvent(window_, &event);
@@ -222,9 +264,7 @@ void ProbeInputInjector::DeliverMouseDrag(const QPointF& from, const QPointF& to
   if (window_ == nullptr) {
     return;
   }
-  auto to_global = [this](const QPointF& scene) {
-    return window_->mapToGlobal(scene.toPoint());
-  };
+  auto to_global = [this](const QPointF& scene) { return window_->mapToGlobal(scene.toPoint()); };
 
   {
     QMouseEvent move(QEvent::MouseMove, from, from, to_global(from), Qt::NoButton, Qt::NoButton,

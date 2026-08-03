@@ -45,7 +45,7 @@ describe("Flow graph round-trip", () => {
 
     expect([...restored.nodes.keys()]).toEqual([...scenario.nodes.keys()]);
     expect(restored.nodes.get("open_first_image")!.next).toEqual([
-      { to: "drag_exposure_slider", weight: 2 },
+      { to: "switch_to_tone", weight: 2 },
       { to: "back_to_library", weight: 1 },
     ]);
     expect(restored.nodes.get("workspace_ready")!.expect).toEqual(
@@ -88,7 +88,12 @@ describe("Flow graph round-trip", () => {
           id: expectNodeId("first", 0),
           owner: "first",
           position: { x: 300, y: 110 },
-          expect: { target: "libraryWorkspace", property: "visible", matcher: "eq", expected: true },
+          expect: {
+            target: "libraryWorkspace",
+            property: "visible",
+            matcher: "eq",
+            expected: true,
+          },
         },
         {
           kind: "op",
@@ -104,7 +109,13 @@ describe("Flow graph round-trip", () => {
           from: "first",
           to: expectNodeId("first", 0),
         },
-        { kind: "next", id: "first->second", from: "first", to: "second", weight: 3 },
+        {
+          kind: "next",
+          id: "first->second",
+          from: "first",
+          to: "second",
+          weight: 3,
+        },
       ],
     };
 
@@ -118,7 +129,9 @@ describe("Flow graph round-trip", () => {
         timeoutMs: 5000,
       },
     ]);
-    expect(scenario.nodes.get("first")!.next).toEqual([{ to: "second", weight: 3 }]);
+    expect(scenario.nodes.get("first")!.next).toEqual([
+      { to: "second", weight: 3 },
+    ]);
     expect(scenario.nodes.get("second")!.next).toBeUndefined();
 
     const yamlText = scenarioToYamlText(scenario);
@@ -134,7 +147,13 @@ describe("Flow graph round-trip", () => {
       ...canvas,
       edges: [
         ...canvas.edges,
-        { kind: "next", id: "back_to_library->ghost#0", from: "back_to_library", to: "ghost", weight: 1 },
+        {
+          kind: "next",
+          id: "back_to_library->ghost#0",
+          from: "back_to_library",
+          to: "ghost",
+          weight: 1,
+        },
       ],
     };
     expect(() => flowToScenario(broken)).toThrow(FlowGraphError);
@@ -147,13 +166,23 @@ describe("Flow graph round-trip", () => {
       startNodeId: "only",
       defaults: {},
       nodes: [
-        { kind: "op", id: "only", position: { x: 0, y: 0 }, op: { action: "waitMs", ms: 10 } },
+        {
+          kind: "op",
+          id: "only",
+          position: { x: 0, y: 0 },
+          op: { action: "waitMs", ms: 10 },
+        },
         {
           kind: "expect",
           id: expectNodeId("ghost", 0),
           owner: "ghost",
           position: { x: 300, y: 110 },
-          expect: { target: "x", property: "visible", matcher: "truthy", expected: true },
+          expect: {
+            target: "x",
+            property: "visible",
+            matcher: "truthy",
+            expected: true,
+          },
         },
       ],
       edges: [],

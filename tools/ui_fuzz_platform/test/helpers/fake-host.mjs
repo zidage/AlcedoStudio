@@ -46,6 +46,8 @@ const props = {
   editorWorkspace: { visible: false },
   editorSessionStatus: { text: "Running" },
   toneExposureSlider: { visible: true },
+  editorAdjustmentNav_tone: { visible: true },
+  editorAdjustmentPanel_tone: { visible: false },
 };
 
 let heartbeatCounter = 0;
@@ -135,6 +137,9 @@ function handleRequest(socket, req) {
       if (method === "doubleClick" && req.target === "thumbnailGridView_firstCard") {
         props.editorWorkspace.visible = true;
         props.editorSessionStatus.text = "Ready";
+      }
+      if (method === "click" && req.target === "editorAdjustmentNav_tone") {
+        props.editorAdjustmentPanel_tone.visible = true;
       }
       if (!props[req.target]) {
         errorReply(socket, id, "target_not_found", `No live QML item matched '${req.target}'.`);

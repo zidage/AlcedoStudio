@@ -53,6 +53,10 @@ export interface Op {
   ny?: number;
   steps?: number;
   ms?: number;
+  /// Click/drag readiness retry budget (ms). The probe waits up to this long
+  /// for the target to transition from disabled/invisible to clickable before
+  /// returning target_disabled. Defaults to 5000 on the probe side.
+  readyTimeoutMs?: number;
 }
 
 /** A post-op assertion compiled to a probe `wait` call. */

@@ -13,7 +13,13 @@ import yaml from "js-yaml";
 
 import { MATCHERS, type Matcher } from "./protocol.js";
 import { validateScenario } from "./schema.js";
-import type { Expect, Op, Scenario, ScenarioDefaults, ScenarioNode } from "./scenario.js";
+import type {
+  Expect,
+  Op,
+  Scenario,
+  ScenarioDefaults,
+  ScenarioNode,
+} from "./scenario.js";
 
 /** Thrown when a scenario file is malformed or fails validation. */
 export class ScenarioError extends Error {
@@ -45,6 +51,7 @@ interface RawOp {
   ny?: number;
   steps?: number;
   ms?: number;
+  readyTimeoutMs?: number;
   [key: string]: unknown;
 }
 
@@ -77,7 +84,9 @@ export function parseScenario(text: string): Scenario {
 
   const result = validateScenario(raw);
   if (!result.valid) {
-    throw new ScenarioError(`Invalid scenario:\n  - ${result.errors.join("\n  - ")}`);
+    throw new ScenarioError(
+      `Invalid scenario:\n  - ${result.errors.join("\n  - ")}`,
+    );
   }
 
   return normalize(raw as RawScenario);
@@ -125,6 +134,7 @@ function normalizeOp(raw: RawOp): Op {
   if (raw.ny !== undefined) op.ny = raw.ny;
   if (raw.steps !== undefined) op.steps = raw.steps;
   if (raw.ms !== undefined) op.ms = raw.ms;
+  if (raw.readyTimeoutMs !== undefined) op.readyTimeoutMs = raw.readyTimeoutMs;
   return op;
 }
 

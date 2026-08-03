@@ -20,7 +20,9 @@ import { runScenario } from "../src/run.js";
 import { DEFAULT_RUN_CONFIG } from "../src/scenario.js";
 import { makeTempDir } from "./helpers/fixtures.js";
 
-const fakeHostPath = fileURLToPath(new URL("./helpers/fake-host.mjs", import.meta.url));
+const fakeHostPath = fileURLToPath(
+  new URL("./helpers/fake-host.mjs", import.meta.url),
+);
 const acceptanceScenarioPath = fileURLToPath(
   new URL("../scenarios/library_to_editor_exposure.yaml", import.meta.url),
 );
@@ -59,6 +61,7 @@ describe("Editor-assembled workflow acceptance", () => {
     expect(result.steps.map((step) => step.nodeId)).toEqual([
       "workspace_ready",
       "open_first_image",
+      "switch_to_tone",
       "drag_exposure_slider",
     ]);
     expect(result.steps.every((step) => step.opOk)).toBe(true);
