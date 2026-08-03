@@ -74,12 +74,34 @@ export interface WalkConfig {
   readonly maxDurationMs: number;
   /** Injectable sleep for `waitMs` ops; defaults to real setTimeout. */
   readonly sleep?: (ms: number) => Promise<void>;
+  /** When aborted, the walk stops with a correctness failure. */
+  readonly signal?: AbortSignal;
+  /**
+   * Fired when a node walk begins (before the op) so the dashboard can show the
+   * current operation without waiting for the step to finish.
+   */
+  readonly onStepStart?: (info: { readonly nodeId: string; readonly op: Op; readonly seq: number }) => void;
+  /** Fired after each completed step record is appended. */
+  readonly onStepEnd?: (step: StepRecord) => void;
 }
 
-function defaultSleep(ms: number): Promise<void> {
-  const { promise, resolve } = Promise.withResolvers<void>();
-  setTimeout(resolve, ms);
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"));
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  const timer = setTimeout(() => {
+    signal?.removeEventListener("abort", onAbort);
+    resolve();
+  }, ms);
+  const onAbort = () => {
+    clearTimeout(timer);
+    reject(new DOMException("Aborted", "AbortError"));
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
   return promise;
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 /**
@@ -91,12 +113,19 @@ function defaultSleep(ms: number): Promise<void> {
  * not by the walker itself.
  */
 export async function walk(scenario: Scenario, probe: ProbePort, config: WalkConfig): Promise<WalkResult> {
-  const sleep = config.sleep ?? defaultSleep;
+  const sleep = (ms: number) => (config.sleep !== undefined ? config.sleep(ms) : defaultSleep(ms, config.signal));
   const startedAt = Date.now();
   const steps: StepRecord[] = [];
   let currentId = scenario.start;
 
   while (true) {
+    if (config.signal?.aborted) {
+      return failResult(steps, startedAt, {
+        nodeId: currentId,
+        kind: "op",
+        reason: "Run aborted by operator.",
+      });
+    }
     if (steps.length >= config.maxSteps) {
       return passResult(steps, startedAt);
     }
@@ -114,7 +143,20 @@ export async function walk(scenario: Scenario, probe: ProbePort, config: WalkCon
     }
 
     const stepStartedAt = Date.now();
-    const opOutcome = await dispatchOp(node.op, probe, sleep);
+    config.onStepStart?.({ nodeId: currentId, op: node.op, seq: steps.length + 1 });
+    let opOutcome: OpOutcome;
+    try {
+      opOutcome = await dispatchOp(node.op, probe, sleep);
+    } catch (error) {
+      if (isAbortError(error) || config.signal?.aborted) {
+        return failResult(steps, startedAt, {
+          nodeId: currentId,
+          kind: "op",
+          reason: "Run aborted by operator.",
+        });
+      }
+      throw error;
+    }
     if (!opOutcome.ok) {
       const step: StepRecord = {
         seq: steps.length + 1,
@@ -128,6 +170,7 @@ export async function walk(scenario: Scenario, probe: ProbePort, config: WalkCon
         endedAt: Date.now(),
       };
       steps.push(step);
+      config.onStepEnd?.(step);
       return failResult(steps, startedAt, {
         nodeId: currentId,
         kind: "op",
@@ -147,6 +190,7 @@ export async function walk(scenario: Scenario, probe: ProbePort, config: WalkCon
       endedAt: Date.now(),
     };
     steps.push(step);
+    config.onStepEnd?.(step);
 
     if (failingExpect >= 0) {
       const failed = expectResults[failingExpect]!;

@@ -13,6 +13,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 
+import { killProcessTree } from "./process-tree.js";
+
 /** Options for spawning a test host. */
 export interface HostSpawnOptions {
   readonly hostPath: string;
@@ -26,6 +28,8 @@ export interface HostSpawnOptions {
   readonly env?: NodeJS.ProcessEnv;
   /** Maximum wait for the `PROBE_SOCKET=` line on stdout before giving up. */
   readonly startupTimeoutMs?: number;
+  /** Called for every stdout/stderr line, including those before PROBE_SOCKET. */
+  readonly onLog?: (line: string, stream: "stdout" | "stderr") => void;
 }
 
 /** A live, supervised test host plus its captured log buffer. */
@@ -105,8 +109,13 @@ export function spawnHost(options: HostSpawnOptions): Promise<HostHandle> {
   const child = spawn(command[0]!, [...command.slice(1), ...args], {
     env: { ...process.env, ...options.env },
     stdio: ["ignore", "pipe", "pipe"],
+    // POSIX: new process group so killProcessTree can signal the whole tree via -pid.
+    detached: process.platform !== "win32",
   });
   const logs = new LogBuffer();
+  if (options.onLog !== undefined) {
+    logs.on("line", options.onLog);
+  }
 
   let exitCode: number | null = null;
   const { promise: exitPromise, resolve: exitResolve } = Promise.withResolvers<number | null>();
@@ -114,7 +123,7 @@ export function spawnHost(options: HostSpawnOptions): Promise<HostHandle> {
     child,
     probeSocket: "",
     logs,
-    kill: () => child.kill(),
+    kill: () => killProcessTree(child.pid),
     exited: () => exitPromise,
   };
 

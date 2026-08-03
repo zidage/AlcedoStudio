@@ -18,3 +18,7 @@ export * from "./liveness.js";
 export * from "./walker.js";
 export * from "./failure-bundle.js";
 export * from "./run.js";
+export * from "./process-tree.js";
+export * from "./run-events.js";
+export * from "./process-manager.js";
+export * from "./dashboard/http-server.js";
