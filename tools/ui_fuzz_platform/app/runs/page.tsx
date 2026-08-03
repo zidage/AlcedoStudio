@@ -106,6 +106,12 @@ export default function RunsListPage(): React.ReactElement {
           <Button icon={<ReloadOutlined />} onClick={() => void runsQuery.refetch()}>
             Refresh
           </Button>
+          <Link href="/workflows">
+            <Button>Workflows</Button>
+          </Link>
+          <Link href="/catalog">
+            <Button>Catalog</Button>
+          </Link>
           <Link href="/runs/active">
             <Button type="primary" icon={<PlayCircleOutlined />}>
               Active run

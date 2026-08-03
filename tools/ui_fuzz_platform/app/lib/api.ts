@@ -4,9 +4,13 @@
 
 import type {
   ActiveRunSnapshot,
+  QmlCatalog,
+  StalenessReport,
   StartRunFormValues,
   StoredRunDetail,
   StoredRunSummary,
+  WorkflowDocument,
+  WorkflowSummary,
 } from "./types";
 
 export async function fetchActiveRun(): Promise<ActiveRunSnapshot> {
@@ -91,4 +95,55 @@ export function runsWebSocketUrl(): string {
   if (typeof window === "undefined") return "ws://127.0.0.1/ws/runs";
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}/ws/runs`;
+}
+
+export async function fetchWorkflows(): Promise<WorkflowSummary[]> {
+  const response = await fetch("/api/workflows", { cache: "no-store" });
+  const body = (await response.json()) as { workflows?: WorkflowSummary[]; error?: string };
+  if (!response.ok) {
+    throw new Error(body.error ?? `Failed to list workflows (${response.status})`);
+  }
+  return body.workflows ?? [];
+}
+
+export async function fetchWorkflow(name: string): Promise<WorkflowDocument> {
+  const response = await fetch(`/api/workflows/${encodeURIComponent(name)}`, { cache: "no-store" });
+  const body = (await response.json()) as WorkflowDocument & { error?: string };
+  if (!response.ok) {
+    throw new Error(body.error ?? `Failed to load workflow (${response.status})`);
+  }
+  return body;
+}
+
+/** Saves editor YAML; the server validates against the scenario schema first. */
+export async function saveWorkflow(name: string, yaml: string): Promise<{ path: string }> {
+  const response = await fetch(`/api/workflows/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ yaml }),
+  });
+  const body = (await response.json()) as { path?: string; error?: string };
+  if (!response.ok) {
+    throw new Error(body.error ?? `Save failed (${response.status})`);
+  }
+  return { path: body.path! };
+}
+
+export async function fetchCatalog(): Promise<QmlCatalog> {
+  const response = await fetch("/api/catalog", { cache: "no-store" });
+  const body = (await response.json()) as QmlCatalog & { error?: string };
+  if (!response.ok) {
+    throw new Error(body.error ?? `Failed to scan QML catalog (${response.status})`);
+  }
+  return body;
+}
+
+/** Diffs the catalog against the live run's probe snapshot (409 when idle). */
+export async function fetchLiveStaleness(): Promise<{ report: StalenessReport }> {
+  const response = await fetch("/api/catalog/staleness", { cache: "no-store" });
+  const body = (await response.json()) as { report?: StalenessReport; error?: string };
+  if (!response.ok) {
+    throw new Error(body.error ?? `Live staleness check failed (${response.status})`);
+  }
+  return { report: body.report! };
 }

@@ -10,6 +10,7 @@
 export * from "./protocol.js";
 export * from "./scenario.js";
 export * from "./schema.js";
+export * from "./scenario-parse.js";
 export * from "./loader.js";
 export * from "./expect-engine.js";
 export * from "./probe-client.js";
@@ -24,4 +25,8 @@ export * from "./process-manager.js";
 export * from "./result-store.js";
 export * from "./replay.js";
 export * from "./paths.js";
+export * from "./qml-scanner.js";
+export * from "./catalog-staleness.js";
+export * from "./flow-graph.js";
+export * from "./workflow-store.js";
 export * from "./dashboard/http-server.js";

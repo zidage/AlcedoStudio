@@ -9,22 +9,39 @@
  * Routes:
  * - GET  /api/health
  * - GET  /api/runs/active          -> ActiveRunSnapshot
+ * - GET  /api/runs/active/snapshot -> live probe snapshot (409 when idle)
  * - POST /api/runs/start           -> { runId }
  * - POST /api/runs/stop            -> ActiveRunSnapshot
  * - GET  /api/runs                 -> StoredRun[]
  * - GET  /api/runs/:id             -> StoredRunDetail
  * - POST /api/runs/:id/replay      -> { runId } (starts managed replay)
+ * - GET  /api/workflows            -> WorkflowSummary[]
+ * - GET  /api/workflows/:name      -> WorkflowDocument (raw YAML)
+ * - PUT  /api/workflows/:name      -> validates + saves editor YAML (400 on errors)
+ * - GET  /api/catalog              -> QmlCatalog (rescans the QML root)
+ * - GET  /api/catalog/staleness    -> StalenessReport vs the live run (409 when idle)
+ * - POST /api/catalog/staleness    -> StalenessReport vs a posted probe snapshot
  * - WS   /ws/runs                  -> RunManagerEvent JSON frames
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { join } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 
+import { diffCatalogAgainstSnapshot, type StalenessReport } from "../catalog-staleness.js";
 import { ProcessManager } from "../process-manager.js";
-import { defaultResultDbPath } from "../paths.js";
+import {
+  defaultCatalogPath,
+  defaultQmlRootDir,
+  defaultResultDbPath,
+  defaultWorkflowsDir,
+} from "../paths.js";
+import { scanQmlDirectory, type QmlCatalog } from "../qml-scanner.js";
+import { ScenarioError } from "../scenario-parse.js";
 import { ResultStore } from "../result-store.js";
 import type { RunManagerEvent, StartRunRequest } from "../run-events.js";
+import { WorkflowStore } from "../workflow-store.js";
 
 export interface DashboardServerOptions {
   readonly host?: string;
@@ -32,6 +49,10 @@ export interface DashboardServerOptions {
   readonly manager?: ProcessManager;
   /** When omitted and manager has no store, opens {@link defaultResultDbPath}. */
   readonly resultStore?: ResultStore;
+  /** Workflow YAML directory; defaults to {@link defaultWorkflowsDir}. */
+  readonly workflowsDir?: string;
+  /** QML source root for the catalog scanner; defaults to {@link defaultQmlRootDir}. */
+  readonly qmlRootDir?: string;
   /** Optional Next.js request handler; when omitted, unknown paths return 404. */
   readonly nextHandler?: (req: IncomingMessage, res: ServerResponse) => void | Promise<void>;
 }
@@ -69,9 +90,12 @@ export async function startDashboardServer(options: DashboardServerOptions = {})
   // Prefer the manager's store when both exist so archive and query share one DB.
   const store = manager.resultStore ?? resultStore;
   const nextHandler = options.nextHandler;
+  const workflowStore = new WorkflowStore(options.workflowsDir ?? defaultWorkflowsDir());
+  const qmlRootDir = options.qmlRootDir ?? defaultQmlRootDir();
+  const catalogPath = defaultCatalogPath();
 
   const server = createServer((req, res) => {
-    void handleHttp(req, res, manager, store, nextHandler);
+    void handleHttp(req, res, manager, store, workflowStore, qmlRootDir, catalogPath, nextHandler);
   });
 
   const wss = new WebSocketServer({ server, path: "/ws/runs" });
@@ -129,6 +153,9 @@ async function handleHttp(
   res: ServerResponse,
   manager: ProcessManager,
   store: ResultStore | undefined,
+  workflowStore: WorkflowStore,
+  qmlRootDir: string,
+  catalogPath: string,
   nextHandler: DashboardServerOptions["nextHandler"],
 ): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
@@ -154,6 +181,81 @@ async function handleHttp(
     if (req.method === "POST" && url.pathname === "/api/runs/stop") {
       const snapshot = await manager.stop();
       sendJson(res, 200, snapshot);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/runs/active/snapshot") {
+      try {
+        const snapshot = await manager.captureLiveSnapshot();
+        sendJson(res, 200, { snapshot });
+      } catch (error) {
+        sendJson(res, 409, { error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/workflows") {
+      sendJson(res, 200, { workflows: await workflowStore.list() });
+      return;
+    }
+
+    const workflowMatch = /^\/api\/workflows\/([^/]+)$/.exec(url.pathname);
+    if (workflowMatch !== null) {
+      const name = decodeURIComponent(workflowMatch[1]!);
+      if (req.method === "GET") {
+        try {
+          sendJson(res, 200, await workflowStore.read(name));
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code === "ENOENT" ? 404 : 400;
+          sendJson(res, code, { error: (error as Error).message });
+        }
+        return;
+      }
+      if (req.method === "PUT") {
+        const body = (await readJson(req)) as { yaml?: unknown };
+        if (typeof body?.yaml !== "string" || body.yaml.trim().length === 0) {
+          sendJson(res, 400, { error: "Request body must carry the scenario YAML text in 'yaml'." });
+          return;
+        }
+        try {
+          const document = await workflowStore.save(name, body.yaml);
+          sendJson(res, 200, { ...document, validation: { valid: true, errors: [] } });
+        } catch (error) {
+          if (error instanceof ScenarioError) {
+            sendJson(res, 400, { error: error.message, validation: { valid: false } });
+          } else {
+            sendJson(res, 400, { error: (error as Error).message });
+          }
+        }
+        return;
+      }
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/catalog") {
+      const catalog = await scanAndPersistCatalog(qmlRootDir, catalogPath);
+      sendJson(res, 200, catalog);
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/catalog/staleness") {
+      try {
+        const snapshot = await manager.captureLiveSnapshot();
+        const catalog = await scanAndPersistCatalog(qmlRootDir, catalogPath);
+        sendJson(res, 200, stalenessPayload(catalog, snapshot));
+      } catch (error) {
+        sendJson(res, 409, { error: (error as Error).message });
+      }
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/catalog/staleness") {
+      const body = (await readJson(req)) as { snapshot?: unknown };
+      if (body?.snapshot === undefined) {
+        sendJson(res, 400, { error: "Request body must carry a probe snapshot result in 'snapshot'." });
+        return;
+      }
+      const catalog = await scanAndPersistCatalog(qmlRootDir, catalogPath);
+      sendJson(res, 200, stalenessPayload(catalog, body.snapshot));
       return;
     }
 
@@ -260,6 +362,26 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
     "cache-control": "no-store",
   });
   res.end(payload);
+}
+
+/** Rescans the QML root and persists the generated catalog artifact. */
+async function scanAndPersistCatalog(qmlRootDir: string, catalogPath: string): Promise<QmlCatalog> {
+  const catalog = await scanQmlDirectory(qmlRootDir);
+  await mkdir(dirname(catalogPath), { recursive: true });
+  await writeFile(catalogPath, JSON.stringify(catalog, null, 2), "utf8");
+  return catalog;
+}
+
+function stalenessPayload(catalog: QmlCatalog, snapshot: unknown): {
+  catalogRoot: string;
+  generatedAt: number;
+  report: StalenessReport;
+} {
+  return {
+    catalogRoot: catalog.root,
+    generatedAt: catalog.generatedAt,
+    report: diffCatalogAgainstSnapshot(catalog.entries, snapshot),
+  };
 }
 
 async function readJson(req: IncomingMessage): Promise<unknown> {

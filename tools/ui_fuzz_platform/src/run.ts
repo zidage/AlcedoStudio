@@ -31,6 +31,12 @@ export interface RunProgressHooks {
   readonly signal?: AbortSignal;
   /** Called once the host has printed `PROBE_SOCKET=` and the handle is ready. */
   readonly onHostReady?: (host: HostHandle) => void;
+  /**
+   * Called once the JSON Lines channel is connected. The dashboard stashes the
+   * client so read-only probe requests (live `snapshot` for catalog staleness)
+   * can interleave with the walk; the client is closed when the run ends.
+   */
+  readonly onProbeConnected?: (probe: ProbeClient) => void;
   /** Forwarded child log lines (stdout/stderr). */
   readonly onLog?: (line: string, stream: "stdout" | "stderr") => void;
   /** Forwarded probe heartbeat events. */
@@ -87,6 +93,7 @@ export async function runScenario(
   let probe: ProbeClient | undefined;
   try {
     probe = await connectProbe(host.probeSocket, config.startupTimeoutMs);
+    hooks.onProbeConnected?.(probe);
 
     // Attach heartbeat forwarding before awaiting ready so early heartbeats are not lost.
     const earlyHeartbeatListener = (event: ProbeEvent) => {
