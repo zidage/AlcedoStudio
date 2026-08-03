@@ -42,8 +42,14 @@ nodes:
     expect:
       - { target: editorWorkspace, property: visible, eq: true }
     next:
-      - { to: drag_exposure_slider, weight: 2 }
+      - { to: switch_to_tone, weight: 2 }
       - { to: back_to_library, weight: 1 }
+  switch_to_tone:
+    op: { action: click, target: editorAdjustmentNav_tone }
+    expect:
+      - { target: editorAdjustmentPanel_tone, property: visible, eq: true }
+    next:
+      - { to: drag_exposure_slider, weight: 1 }
   drag_exposure_slider:
     op: { action: drag, target: toneExposureSlider, fromNx: 0.2, toNx: 0.8, steps: 10 }
     expect:

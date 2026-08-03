@@ -18,7 +18,9 @@ import {
   WRONG_EXPECT_SCENARIO_YAML,
 } from "./helpers/fixtures.js";
 
-const fakeHostPath = fileURLToPath(new URL("./helpers/fake-host.mjs", import.meta.url));
+const fakeHostPath = fileURLToPath(
+  new URL("./helpers/fake-host.mjs", import.meta.url),
+);
 const acceptanceScenarioPath = fileURLToPath(
   new URL("../scenarios/library_to_editor_exposure.yaml", import.meta.url),
 );
@@ -82,6 +84,7 @@ describe("replay-by-seed", () => {
     expect(replay.replayFingerprints.map((step) => step.nodeId)).toEqual([
       "workspace_ready",
       "open_first_image",
+      "switch_to_tone",
       "drag_exposure_slider",
     ]);
 
@@ -115,7 +118,9 @@ describe("replay-by-seed", () => {
     expect(originalDetail!.run.seed).toBe(55);
     expect(originalDetail!.steps.length).toBeGreaterThan(0);
     // Log may be empty on a fast fail path; failure row must still exist with op history.
-    expect(originalDetail!.failure!.opHistory).toHaveLength(original.steps.length);
+    expect(originalDetail!.failure!.opHistory).toHaveLength(
+      original.steps.length,
+    );
 
     const replay = await replayRun({
       store,

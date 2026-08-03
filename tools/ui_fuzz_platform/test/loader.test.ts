@@ -16,6 +16,7 @@ describe("parseScenario", () => {
     expect([...scenario.nodes.keys()]).toEqual([
       "workspace_ready",
       "open_first_image",
+      "switch_to_tone",
       "drag_exposure_slider",
       "back_to_library",
     ]);
@@ -106,8 +107,10 @@ nodes:
   });
 
   it("throws ScenarioError listing validation errors for an unknown start node", () => {
-    expect(() => parseScenario("name: t\nstart: gone\nnodes:\n  a:\n    op: { action: click, target: b }\n    next: []\n")).toThrow(
-      /unknown node 'gone'/,
-    );
+    expect(() =>
+      parseScenario(
+        "name: t\nstart: gone\nnodes:\n  a:\n    op: { action: click, target: b }\n    next: []\n",
+      ),
+    ).toThrow(/unknown node 'gone'/);
   });
 });
