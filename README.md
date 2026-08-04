@@ -14,17 +14,10 @@
 **Alcedo Studio** is a RAW photo editor and photo library manager. Image processing runs on a GPU-accelerated pipeline. Tagging and search run locally on your machine, while the culling assist uses LLM APIs (OpenAI-compatible, Anthropic, or Volcengine Ark) that may be cloud-hosted. The library is stored in a single DuckDB-backed file next to your photos, so there is no separate catalog to migrate.
 
 ---
-<p align="center">
-<a href="https://github.com/user-attachments/assets/d70cd10d-2045-42f3-a67d-97ab3ef9874b">
-  <img src="docs/screenshots/showcase_1.png" alt="Alcedo Studio Demo 1" width="50%">
-</a>
-</p>
 
-<p align="center">
-<a href="https://github.com/user-attachments/assets/ae0d9773-220e-4901-90f6-1989f58b0462">
-  <img src="docs/screenshots/showcase_2.png" alt="Alcedo Studio Demo 2" width="50%">
-</a>
-</p>
+https://github.com/user-attachments/assets/d70cd10d-2045-42f3-a67d-97ab3ef9874b
+
+https://github.com/user-attachments/assets/ae0d9773-220e-4901-90f6-1989f58b0462
 
 
 ## Core Features
