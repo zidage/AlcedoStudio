@@ -212,6 +212,7 @@ RowLayout {
         backendInteractive: host.backendInteractive
         selectedCount: host.selectedCount
         onImportRequested: host.importDialog.open()
+        onImportFromFolderRequested: host.importFolderDialog.open()
         onSearchRequested: host.globalSearchDialog.openFromCollection()
         onAdvancedAnalysisRequested: host.openAdvancedAnalysisDialog()
         onBackgroundTasksRequested: host.openBackgroundTasksDialog()

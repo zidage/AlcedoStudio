@@ -59,6 +59,7 @@ class ImportExportHandler final : public QObject {
                          SemanticGenerationController* semantic);
 
   Q_INVOKABLE void StartImport(const QStringList& fileUrlsOrPaths);
+  Q_INVOKABLE QStringList CollectFolderFiles(const QString& folderUrlOrPath);
   Q_INVOKABLE void CancelImport();
   Q_INVOKABLE void StartExport(const QString& outputDirUrlOrPath);
   Q_INVOKABLE void StartExportWithOptions(const QString& outputDirUrlOrPath,

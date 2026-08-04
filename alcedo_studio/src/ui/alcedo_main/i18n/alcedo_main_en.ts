@@ -2043,22 +2043,27 @@ Alcedo will use %1 instead.</translation>
 <context>
     <name>AppDialogs</name>
     <message>
-        <location filename="../qml/AppDialogs.qml" line="+38"/>
+        <location filename="../qml/AppDialogs.qml" line="+39"/>
         <source>Select Images</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>RAW Images (*.raw *.dng *.nef *.cr2 *.cr3 *.arw *.rw2 *.raf *.3fr *.fff)</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+1"/>
+        <location line="+2"/>
         <source>All Files (*)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+118"/>
+        <location line="+12"/>
+        <source>Select Folder to Import</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>No files found in the selected folder.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+125"/>
         <source>Discard</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2083,7 +2088,7 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+195"/>
+        <location line="+196"/>
         <source>Select at least one image to analyze.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2282,7 +2287,7 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished">Background Tasks</translation>
     </message>
     <message>
-        <location line="+33"/>
+        <location line="+34"/>
         <source>全部图片</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2333,8 +2338,13 @@ Alcedo will use %1 instead.</translation>
     </message>
     <message>
         <location line="+22"/>
-        <source>Import</source>
-        <translation>Import</translation>
+        <source>Import From Folder</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+49"/>
+        <source>Import Images</source>
+        <translation type="unfinished"></translation>
     </message>
 </context>
 <context>
@@ -3709,6 +3719,29 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>FolderImportConfirmDialog</name>
+    <message>
+        <location filename="../qml/FolderImportConfirmDialog.qml" line="+88"/>
+        <source>Import From Folder</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>%1 file(s) found in:</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Cancel</source>
+        <translation type="unfinished">Cancel</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Import %1 File(s)</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>GlobalSearchDialog</name>
     <message>
         <location filename="../qml/GlobalSearchDialog.qml" line="+878"/>
@@ -4143,7 +4176,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>LibraryWorkspace</name>
     <message>
-        <location filename="../qml/LibraryWorkspace.qml" line="+249"/>
+        <location filename="../qml/LibraryWorkspace.qml" line="+250"/>
         <source>Browser</source>
         <translation type="unfinished"></translation>
     </message>

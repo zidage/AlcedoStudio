@@ -19,7 +19,6 @@
 #include "image/metadata_extractor.hpp"
 #include "sleeve/sleeve_element/sleeve_element.hpp"
 #include "sleeve/sleeve_filesystem.hpp"
-#include "type/supported_file_type.hpp"
 
 namespace alcedo {
 namespace {
@@ -182,8 +181,10 @@ auto ImportServiceImpl::ImportToFolder(const std::vector<image_path_t>& paths,
     if (job && job->IsCancelled()) {
       break;
     }
-    // Check image file type
-    if (!std::filesystem::is_regular_file(image_path) || !is_supported_file(image_path)) {
+    // Validate that the path is a regular file. File-type detection is deferred
+    // to metadata extraction (LibRaw first, then Exiv2 raster gate) — non-images
+    // are marked failed and cleaned up by SyncImports.
+    if (!std::filesystem::is_regular_file(image_path)) {
       progress_ptr->failed_.fetch_add(1);
       if (job && job->on_progress_) {
         job->on_progress_(*progress_ptr);

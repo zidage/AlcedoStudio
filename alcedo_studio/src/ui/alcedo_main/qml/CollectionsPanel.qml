@@ -32,6 +32,7 @@ ColumnLayout {
         }
     ]
     signal importRequested()
+    signal importFromFolderRequested()
     signal searchRequested()
     signal advancedAnalysisRequested()
     signal backgroundTasksRequested()
@@ -560,21 +561,21 @@ ColumnLayout {
     }
 
     Button {
-        id: importBtn
+        id: importFromFolderBtn
         Layout.fillWidth: true
-        Layout.preferredHeight: 52
-        text: qsTr("Import")
+        Layout.preferredHeight: 46
+        text: qsTr("Import From Folder")
         enabled: backendInteractive
-        icon.source: "qrc:/panel_icons/import.svg"
+        icon.source: "qrc:/panel_icons/folder-open.svg"
         icon.width: 16
         icon.height: 16
         icon.color: theme.colText
         display: AbstractButton.TextBesideIcon
         Material.foreground: theme.colText
-        onClicked: panel.importRequested()
+        onClicked: panel.importFromFolderRequested()
 
         background: Canvas {
-            opacity: importBtn.enabled ? 1.0 : 0.5
+            opacity: importFromFolderBtn.enabled ? 1.0 : 0.5
             property color gradStart: theme.colAccentPrimary
             property color gradEnd: theme.colAccentSecondary
             onGradStartChanged: requestPaint()
@@ -604,7 +605,43 @@ ColumnLayout {
             }
         }
 
-        scale: importBtn.hovered && enabled ? 1.03 : 1.0
+        scale: importFromFolderBtn.hovered && enabled ? 1.03 : 1.0
+        Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutCubic } }
+    }
+
+    Button {
+        id: importImagesBtn
+        Layout.fillWidth: true
+        Layout.preferredHeight: 42
+        text: qsTr("Import Images")
+        enabled: backendInteractive
+        icon.source: "qrc:/panel_icons/import.svg"
+        icon.width: 14
+        icon.height: 14
+        icon.color: theme.colText
+        display: AbstractButton.TextBesideIcon
+        Material.foreground: theme.colText
+        onClicked: panel.importRequested()
+
+        background: Rectangle {
+            radius: 8
+            opacity: importImagesBtn.enabled ? 1.0 : 0.5
+            color: {
+                if (!importImagesBtn.enabled) {
+                    return Qt.rgba(theme.colButtonSecondary.r, theme.colButtonSecondary.g,
+                                   theme.colButtonSecondary.b, 0.55)
+                }
+                if (importImagesBtn.pressed) {
+                    return Qt.darker(theme.colButtonSecondary, 1.14)
+                }
+                if (importImagesBtn.hovered) {
+                    return Qt.lighter(theme.colButtonSecondary, 1.08)
+                }
+                return theme.colButtonSecondary
+            }
+        }
+
+        scale: importImagesBtn.hovered && enabled ? 1.02 : 1.0
         Behavior on scale { NumberAnimation { duration: 100; easing.type: Easing.OutCubic } }
     }
 }

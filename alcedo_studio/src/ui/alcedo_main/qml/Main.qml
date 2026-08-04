@@ -306,6 +306,7 @@ ApplicationWindow {
     readonly property alias exportQueueState: exportQueueStateObj
     readonly property alias selectionState: selectionStateObj
     readonly property var importDialog: appDialogs.importDialog
+    readonly property var importFolderDialog: appDialogs.importFolderDialog
     readonly property var exportDialog: appDialogs.exportDialog
     readonly property var globalSearchDialog: appDialogs.globalSearchDialog
 

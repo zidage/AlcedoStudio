@@ -20,6 +20,7 @@ Item {
     property Item blurSource: null
 
     property alias importDialog: importDialogObj
+    property alias importFolderDialog: importFolderDialogObj
     property alias exportDialog: exportDialogObj
     property alias settingsDialog: settingsDialogObj
     property alias adjustmentTransferDialog: adjustmentTransferDialogObj
@@ -37,16 +38,38 @@ Item {
         id: importDialogObj
         title: qsTr("Select Images")
         fileMode: FileDialog.OpenFiles
-        nameFilters: [
-            qsTr("RAW Images (*.raw *.dng *.nef *.cr2 *.cr3 *.arw *.rw2 *.raf *.3fr *.fff)"),
-            qsTr("All Files (*)")
-        ]
+        nameFilters: [qsTr("All Files (*)")]
         onAccepted: {
             const files = []
             for (let i = 0; i < selectedFiles.length; ++i) {
                 files.push(selectedFiles[i].toString())
             }
             appModules.importExport.StartImport(files)
+        }
+    }
+
+    FolderDialog {
+        id: importFolderDialogObj
+        title: qsTr("Select Folder to Import")
+        onAccepted: {
+            const folderUrl = selectedFolder.toString()
+            const files = appModules.importExport.CollectFolderFiles(folderUrl)
+            if (!files || files.length === 0) {
+                host.showSnackbar(qsTr("No files found in the selected folder."))
+                return
+            }
+            folderImportConfirmDialogObj.openWith(folderUrl, files)
+        }
+    }
+
+    FolderImportConfirmDialog {
+        id: folderImportConfirmDialogObj
+        parent: Overlay.overlay
+        theme: host
+        host: host
+        blurSource: root.blurSource
+        onConfirmed: function(filePaths) {
+            appModules.importExport.StartImport(filePaths)
         }
     }
 
@@ -363,6 +386,7 @@ Item {
                || advancedContentAnalysisDialogObj.opened
                || backgroundTasksDialogObj.opened
                || deleteConfirmDialogObj.opened
+               || folderImportConfirmDialogObj.opened
                || welcomeDialogObj.opened
     }
 

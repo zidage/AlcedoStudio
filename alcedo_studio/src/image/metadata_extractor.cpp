@@ -24,7 +24,6 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "decoders/libraw_unpack_guard.hpp"
@@ -1390,16 +1389,6 @@ void PopulateDisplayMetadataFromLibRaw(LibRaw& raw_processor, const RawRuntimeCo
   }
 }
 
-/// Set of raw file extensions (lowercase).
-static const std::unordered_set<std::string> kRawExtensions = {
-    ".arw", ".cr2", ".cr3", ".nef", ".dng", ".raw", ".raf", ".3fr", ".rw2", ".fff"};
-
-auto IsRawExtension(const std::filesystem::path& path) -> bool {
-  std::string ext = path.extension().string();
-  std::transform(ext.begin(), ext.end(), ext.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return kRawExtensions.count(ext) > 0;
-}
 }  // namespace
 
 void MetadataExtractor::MergeMetadataHint(const ExifDisplayMetaData* metadata_hint,
@@ -1609,19 +1598,54 @@ auto MetadataExtractor::EXIFToJSON(const Exiv2::Image::UniquePtr& exif_data) -> 
   return exif_json;
 }
 
+/// Exiv2 can open metadata-only sidecars (XMP/XML) and some container types that
+/// are not importable raster images.  Folder import intentionally does not filter
+/// by extension, so this check is the content-based gate after LibRaw fails.
+auto IsImportableExiv2Raster(const Exiv2::Image& exiv_image) -> bool {
+  switch (exiv_image.imageType()) {
+    case Exiv2::ImageType::none:
+    case Exiv2::ImageType::xmp:
+    case Exiv2::ImageType::asf:
+    case Exiv2::ImageType::qtime:
+    case Exiv2::ImageType::riff:
+    case Exiv2::ImageType::mkv:
+      return false;
+    default:
+      break;
+  }
+  // Sidecars and non-image containers report 0x0; real raster/RAW Exiv2 readers
+  // populate dimensions from the primary IFD / image header.
+  return exiv_image.pixelWidth() > 0 && exiv_image.pixelHeight() > 0;
+}
+
 void MetadataExtractor::ExtractEXIF_ToImage(const image_path_t& image_path, Image& image) {
-  // For raw files, prefer the libraw-based extraction path which also provides
-  // RawRuntimeColorContext for pipeline operators.
-  if (IsRawExtension(image_path)) {
-    if (ExtractRawMetadata_ToImage(image_path, image)) {
-      return;
-    }
-    // Fall through to Exiv2 if libraw extraction fails.
+  // LibRaw is the authority on what constitutes a RAW image, regardless of
+  // file extension.  Try it first on every file; a successful open+unpack means
+  // the file is a supported RAW and the RawRuntimeColorContext is populated.
+  if (ExtractRawMetadata_ToImage(image_path, image)) {
+    return;
   }
 
-  auto exif_data = ExtractEXIF(image_path);
+  // LibRaw could not identify the file as RAW.  Fall back to Exiv2 for image
+  // formats that carry EXIF but are not RAW (e.g. TIFF/JPEG).  If Exiv2 also
+  // cannot read the file, it is not a supported image — throw so the import
+  // caller marks the placeholder as failed instead of importing empty metadata.
+  Exiv2::Image::UniquePtr exif_data;
+  try {
+    exif_data = ExtractEXIF(image_path);
+  } catch (const std::exception& e) {
+    throw MetadataExtractionError(ImportErrorCode::UNSUPPORTED_FORMAT, image_path,
+                                  std::string("No RAW or EXIF reader could open this file: ")
+                                      + e.what());
+  }
   if (!exif_data) {
-    return;
+    throw MetadataExtractionError(ImportErrorCode::UNSUPPORTED_FORMAT, image_path,
+                                  "No RAW or EXIF reader could open this file");
+  }
+  if (!IsImportableExiv2Raster(*exif_data)) {
+    throw MetadataExtractionError(
+        ImportErrorCode::UNSUPPORTED_FORMAT, image_path,
+        "File is not an importable raster image (metadata sidecar or non-image container)");
   }
   ExifDisplayMetaData display_metadata;
   if (!exif_data->exifData().empty()) {

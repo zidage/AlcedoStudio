@@ -9,13 +9,14 @@
 - **Startup GPU backend selection**: The accelerator (CUDA / OpenCL / Metal) is now picked once at startup and locked in, with the chooser moved to Settings; the CUDA pipeline was split into runtime DLLs and the OpenCL runtime is shared across them. (`729315c9`, `1c33a6fb`, `ce4cfabe`)
 - **macOS color management**: Restored display color management on the macOS editor path and present Metal frames zero-copy. (`3ba62cb5`, `ef0a384f`)
 - **New app icon**: Shipped a new application icon for Windows and macOS. (`5a77392a`)
+- **Folder recursive import**: Added an "Import From Folder" workflow that recursively scans a selected directory, collects every regular file, and shows a confirmation dialog listing what was found before importing. The collection panel now has two buttons — "Import From Folder" (recursive folder scan) and "Import Images" (individual file selection, the previous behavior).
 
 ### UI
 - **Editor polish**: Restyled the history panel as a git-graph timeline, redesigned the merge-conflict resolver, made filmstrip thumbnails borderless to match the library grid, shared dark context-menu controls and image actions with the editor filmstrip, deepened the theme greys, and polished the background-tasks UX. (`4c731753`, `0c9d63cb`, `a7b63449`, `2a1fe331`, `fc623e21`)
-- **Localization**: Restored the QML localization workflow for the new editor. (`98516636`)
+- **Import controls**: Split the single Import button into "Import From Folder" (recursive directory scan with a file-list confirmation dialog) and "Import Images" (individual file picker). Removed the RAW-extension name filter from the file picker so all files are selectable.
 
 ### Bug Fixes
-- **Highlight reconstruction edge speckle**: Fixed outlier pixels (dark/bright dots) along highlight–shadow boundaries in the CUDA, OpenCL, and Metal highlight-reconstruction operators. The clip decision is now a soft smoothstep transition over the top 5% below the clip level instead of a hard threshold, the neighbourhood reference average excludes censored (saturated) and non-finite samples, the global chrominance statistic uses a uniform 0.2·clip sampling-ring floor and is only trusted above 30 samples, and white-balance ratios are clamped to a sane band. OpenCL/Metal also skip the reference average for unclipped pixels and drop two unused mask planes.
+- **RAW file type detection by content, not extension**: Removed the hardcoded file-extension whitelist from the import path so cameras with extensions the whitelist missed (e.g. `.srw`, `.orf`, `.pef`) are no longer silently dropped. LibRaw now opens every candidate file during metadata extraction; files it cannot identify as RAW are marked as failed and cleaned up, rather than being rejected up front by a brittle extension check.
 - **JPEG export crash on Windows**: Fixed a crash when exporting JPEGs (an Exiv2 crash) by rewriting the APP1 metadata segment. (`181c9572`)
 - **macOS build with OpenCV 5**: Dropped an unused OpenCV `calib3d` dependency so the build configures again on Homebrew OpenCV 5, which split that module. (`54b690e6`)
 

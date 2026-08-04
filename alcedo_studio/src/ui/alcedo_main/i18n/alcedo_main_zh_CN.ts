@@ -2043,22 +2043,27 @@ Alcedo 将改用 %1。</translation>
 <context>
     <name>AppDialogs</name>
     <message>
-        <location filename="../qml/AppDialogs.qml" line="+38"/>
+        <location filename="../qml/AppDialogs.qml" line="+39"/>
         <source>Select Images</source>
         <translation>选择图像</translation>
     </message>
     <message>
-        <location line="+3"/>
-        <source>RAW Images (*.raw *.dng *.nef *.cr2 *.cr3 *.arw *.rw2 *.raf *.3fr *.fff)</source>
-        <translation>RAW 图像 (*.raw *.dng *.nef *.cr2 *.cr3 *.arw *.rw2 *.raf *.3fr *.fff)</translation>
-    </message>
-    <message>
-        <location line="+1"/>
+        <location line="+2"/>
         <source>All Files (*)</source>
         <translation>所有文件 (*)</translation>
     </message>
     <message>
-        <location line="+118"/>
+        <location line="+12"/>
+        <source>Select Folder to Import</source>
+        <translation>选择要导入的文件夹</translation>
+    </message>
+    <message>
+        <location line="+5"/>
+        <source>No files found in the selected folder.</source>
+        <translation>所选文件夹中未找到文件。</translation>
+    </message>
+    <message>
+        <location line="+125"/>
         <source>Discard</source>
         <translation type="unfinished">放弃</translation>
     </message>
@@ -2083,7 +2088,7 @@ Alcedo 将改用 %1。</translation>
         <translation>从相册移除</translation>
     </message>
     <message>
-        <location line="+195"/>
+        <location line="+196"/>
         <source>Select at least one image to analyze.</source>
         <translation>请至少选择一张图像进行分析。</translation>
     </message>
@@ -2277,7 +2282,7 @@ Alcedo 将改用 %1。</translation>
         <translation>后台任务</translation>
     </message>
     <message>
-        <location line="+230"/>
+        <location line="+231"/>
         <source>LOCAL FOLDERS</source>
         <translation>本地文件夹</translation>
     </message>
@@ -2313,16 +2318,21 @@ Alcedo 将改用 %1。</translation>
     </message>
     <message>
         <location line="+22"/>
-        <source>Import</source>
-        <translation>导入</translation>
+        <source>Import From Folder</source>
+        <translation>从文件夹导入</translation>
     </message>
     <message>
-        <location line="-541"/>
+        <location line="+49"/>
+        <source>Import Images</source>
+        <translation>导入图像</translation>
+    </message>
+    <message>
+        <location line="-591"/>
         <source>Advanced Content Analysis</source>
         <translation>高级内容分析</translation>
     </message>
     <message>
-        <location line="+38"/>
+        <location line="+39"/>
         <source>全部图片</source>
         <translation>全部图片</translation>
     </message>
@@ -3710,6 +3720,29 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>FolderImportConfirmDialog</name>
+    <message>
+        <location filename="../qml/FolderImportConfirmDialog.qml" line="+88"/>
+        <source>Import From Folder</source>
+        <translation>从文件夹导入</translation>
+    </message>
+    <message>
+        <location line="+10"/>
+        <source>%1 file(s) found in:</source>
+        <translation>在以下位置找到 %1 个文件：</translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <location line="+8"/>
+        <source>Import %1 File(s)</source>
+        <translation>导入 %1 个文件</translation>
+    </message>
+</context>
+<context>
     <name>GlobalSearchDialog</name>
     <message>
         <location filename="../qml/GlobalSearchDialog.qml" line="+878"/>
@@ -4144,7 +4177,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>LibraryWorkspace</name>
     <message>
-        <location filename="../qml/LibraryWorkspace.qml" line="+249"/>
+        <location filename="../qml/LibraryWorkspace.qml" line="+250"/>
         <source>Browser</source>
         <translation>浏览</translation>
     </message>

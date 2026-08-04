@@ -101,9 +101,7 @@ void ImportExportHandler::StartImport(const QStringList& fileUrlsOrPaths) {
     if (!std::filesystem::is_regular_file(pathOpt.value(), ec) || ec) {
       continue;
     }
-    if (!is_supported_file(pathOpt.value())) {
-      continue;
-    }
+
     const std::wstring key = pathOpt->wstring();
     if (!seen.insert(key).second) {
       continue;
@@ -112,10 +110,47 @@ void ImportExportHandler::StartImport(const QStringList& fileUrlsOrPaths) {
   }
 
   if (paths.empty()) {
-    status_->SetTaskState(PL_TEXT("No supported files selected."), 0, false);
+    status_->SetTaskState(PL_TEXT("No files selected."), 0, false);
     return;
   }
   StartImportResolvedPaths(std::move(paths), false);
+}
+
+QStringList ImportExportHandler::CollectFolderFiles(const QString& folderUrlOrPath) {
+  QStringList result;
+  const auto folder_opt = InputToPath(folderUrlOrPath);
+  if (!folder_opt.has_value()) {
+    return result;
+  }
+  std::error_code ec;
+  if (!std::filesystem::is_directory(folder_opt.value(), ec) || ec) {
+    return result;
+  }
+
+  std::vector<std::filesystem::path> files;
+  for (auto it = std::filesystem::recursive_directory_iterator(
+           folder_opt.value(), std::filesystem::directory_options::skip_permission_denied, ec);
+       it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+    if (ec) {
+      ec.clear();
+      continue;
+    }
+    std::error_code file_ec;
+    if (it->is_regular_file(file_ec) && !file_ec) {
+      files.push_back(it->path());
+    }
+  }
+
+  std::sort(files.begin(), files.end());
+  result.reserve(static_cast<int>(files.size()));
+  for (const auto& f : files) {
+#if defined(_WIN32)
+    result.append(QString::fromStdWString(f.wstring()));
+#else
+    result.append(QString::fromStdString(f.string()));
+#endif
+  }
+  return result;
 }
 
 void ImportExportHandler::StartImportPaths(const std::vector<image_path_t>& paths,
