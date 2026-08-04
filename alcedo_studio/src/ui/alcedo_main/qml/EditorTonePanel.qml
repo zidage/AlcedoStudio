@@ -216,6 +216,21 @@ Item {
         submitter: root.editorSession
     }
 
+    // Curve pointer drag must lock the parent Flickable the same way
+    // AdjustmentSlider / Look CDL do — otherwise vertical handle motion scrolls
+    // the tone panel instead of shaping the curve.
+    Connections {
+        target: curveModel
+        function onDragActiveChanged() {
+            if (!toneScroll)
+                return
+            if (curveModel.dragActive)
+                toneScroll.beginInputLock()
+            else
+                toneScroll.endInputLock()
+        }
+    }
+
     readonly property var toneModels: [
         exposureModel, contrastModel, highlightsModel,
         shadowsModel, whitesModel, blacksModel
