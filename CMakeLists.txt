@@ -9,7 +9,7 @@ endif()
 #set(CMAKE_CXX_COMPILER "clang++")
 # Compiler flags.
 
-project(alcedo VERSION 0.2.7 LANGUAGES C CXX)
+project(alcedo VERSION 0.2.8 LANGUAGES C CXX)
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build alcedo libraries as static by default." FORCE)
 

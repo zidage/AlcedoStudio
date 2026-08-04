@@ -1,4 +1,6 @@
-<img src="docs/header.jpg" alt="Alcedo Studio" width="100%"/>
+<p align="center">
+  <img src="docs/header.png" alt="Alcedo Studio" width="25%"/>
+</p>
 
 [Project website](https://aoraw.org/) | [项目网页](https://aoraw.org/zh-cn/)
 
@@ -12,83 +14,18 @@
 **Alcedo Studio** is a RAW photo editor and photo library manager. Image processing runs on a GPU-accelerated pipeline. Tagging and search run locally on your machine, while the culling assist uses LLM APIs (OpenAI-compatible, Anthropic, or Volcengine Ark) that may be cloud-hosted. The library is stored in a single DuckDB-backed file next to your photos, so there is no separate catalog to migrate.
 
 ---
+<p align="center">
+<a href="https://github.com/user-attachments/assets/d70cd10d-2045-42f3-a67d-97ab3ef9874b">
+  <img src="docs/screenshots/showcase_1.png" alt="Alcedo Studio Demo 1" width="50%">
+</a>
+</p>
 
-## Screenshots
+<p align="center">
+<a href="https://github.com/user-attachments/assets/ae0d9773-220e-4901-90f6-1989f58b0462">
+  <img src="docs/screenshots/showcase_2.png" alt="Alcedo Studio Demo 2" width="50%">
+</a>
+</p>
 
-The screenshots below show the v0.2.6-era interface of Alcedo Studio.
-
-<table>
-  <colgroup>
-    <col style="width: 76%" />
-    <col style="width: 24%" />
-  </colgroup>
-  <tbody>
-    <tr>
-      <td><img src="docs/screenshots/1-主界面.png" alt="Alcedo Studio library browser" width="100%" /></td>
-      <td><strong>Library Browser</strong> — The library browser combines a thumbnail grid, folder tree, search facets, rating filters, and AI labels in a single workspace.</td>
-    </tr>
-    <tr>
-      <td><img src="docs/screenshots/7-高级筛选.png" alt="Advanced filtering and library overview" width="100%" /></td>
-      <td><strong>Advanced Filtering</strong> — Filter the library by EXIF data, custom ratings, and semantic keywords.</td>
-    </tr>
-    <tr>
-      <td><img src="docs/screenshots/8-AI内容识别.png" alt="AI content recognition settings" width="100%" /></td>
-      <td><strong>Local AI Vision Engine</strong> — Enable and manage local CLIP and SigLIP models. Scanning runs on your machine and the images do not leave it.</td>
-    </tr>
-    <tr>
-      <td><img src="docs/screenshots/9-AI内容过滤.png" alt="AI semantic label filtering" width="100%" /></td>
-      <td><strong>Semantic Label Filters</strong> — AI-generated tags appear in the filter panel as ordinary library attributes.</td>
-    </tr>
-    <tr>
-      <td><img src="docs/screenshots/10-AI自然语言搜索.png" alt="AI natural-language search" width="100%" /></td>
-      <td><strong>Natural-Language Search</strong> — Describe a scene in plain language; the local vector index returns the closest matches.</td>
-    </tr>
-    <tr>
-      <td><img src="docs/screenshots/2-色彩科学.png" alt="ACES and OpenDRT color science" width="100%" /></td>
-      <td><strong>Color Science</strong> — Output rendering uses ACES 2.0 and OpenDRT, with display color space and peak luminance controls.</td>
-    </tr>
-    <tr>
-      <td><img src="docs/screenshots/3-基础调整.png" alt="Basic and local tone adjustments" width="100%" /></td>
-      <td><strong>Exposure & Tone</strong> — White balance, exposure, contrast, tone curves, and local highlights/shadows are adjusted with live histogram feedback.</td>
-    </tr>
-    <tr>
-      <td><img src="docs/screenshots/4-高级色彩.png" alt="Advanced color controls" width="100%" /></td>
-      <td><strong>Creative Grading</strong> — HSL adjustments, color wheel grading (lift, gamma, gain), and real-time scopes.</td>
-    </tr>
-    <tr>
-      <td><img src="docs/screenshots/5-几何调整.png" alt="Geometry and crop controls" width="100%" /></td>
-      <td><strong>Geometry & Perspective</strong> — Crop, rotation, perspective correction, and common aspect ratio presets.</td>
-    </tr>
-    <tr>
-      <td><img src="docs/screenshots/Portra 400.png" alt="Kodak Portra 400 film simulation" width="100%" /></td>
-      <td><strong>Film Simulation</strong> — Curated Kodak, Fuji, and Agfa LUTs (.cube) for ACEScc/ACEScct workflows.</td>
-    </tr>
-    <tr>
-      <td><img src="docs/screenshots/5-胶片颗粒与Halation模拟.png" alt="Film grain and halation controls" width="100%" /></td>
-      <td><strong>Analog Film Effects</strong> — Film grain and halation are computed dynamically on the GPU/CPU pipeline.</td>
-    </tr>
-    <tr>
-      <td><img src="docs/screenshots/6-导出界面.png" alt="Export settings" width="100%" /></td>
-      <td><strong>Advanced Export</strong> — Multi-format batch export, quality parameters, metadata handling, and UltraHDR gain-map embedding.</td>
-    </tr>
-  </tbody>
-</table>
-
-> Demo RAW files used by the project come from [signatureedits](https://www.signatureedits.com/free-raw-photos/).
-
----
-
-## What Changed Since v0.2.3
-
-Since the v0.2.3 rebrand, development has moved the project from a prototype toward a production-ready RAW editor and digital asset manager.
-
-| Release | Key Highlights |
-| --- | --- |
-| **v0.2.4** | GPU pipeline migrated to OpenCL; added OpenCL image containers, program management, lens calibration, perspective geometry, DNG warping, and scope analysis. Split editing UI into dedicated tool panels. Sleeve filesystem introduced collection grouping, pagination, star ratings, and global index search. |
-| **v0.2.5** | Reworked local tone mapping (Highlights/Shadows) with LLF-style processing. Updated OKLCh/HLS color science. Added batch copy/paste adjustments, interactive geometry crop overlays, and UltraHDR gain-map export writers. |
-| **v0.2.6** | Added the AI workspace: local semantic search, local CLIP/SigLIP background scanners, HNSW vector indexing, and asynchronous model downloaders. Added GPU/CPU film grain & halation simulation. Patched LibRaw to natively decode Nikon HE/HE* RAWs. |
-
----
 
 ## Core Features
 
