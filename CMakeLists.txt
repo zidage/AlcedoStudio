@@ -722,6 +722,25 @@ function(alcedo_install_duckdb_extensions destination)
     endif()
 endfunction()
 
+# Ship DemosaicNet weight files next to the executable under config/models/.
+# This is distinct from the per-user AI download cache at <exe>/model/, which
+# must never be packaged (see REMOVE_RECURSE of that directory on macOS).
+function(alcedo_install_demosaicnet_models config_dir destination)
+    set(_alcedo_demosaicnet_models "")
+    foreach(_alcedo_model_name IN ITEMS bayer.safetensors xtrans.safetensors)
+        set(_alcedo_model_path "${config_dir}/models/${_alcedo_model_name}")
+        if(EXISTS "${_alcedo_model_path}")
+            list(APPEND _alcedo_demosaicnet_models "${_alcedo_model_path}")
+        else()
+            message(WARNING
+                "[alcedo] DemosaicNet weight missing at configure time: ${_alcedo_model_path}")
+        endif()
+    endforeach()
+    if(_alcedo_demosaicnet_models)
+        install(FILES ${_alcedo_demosaicnet_models} DESTINATION "${destination}/config/models")
+    endif()
+endfunction()
+
 add_subdirectory(${CMAKE_SOURCE_DIR}/alcedo_studio/src/third_party)
 if(DEFINED ALCEDO_LENSFUN_LIBRARY_DIR AND NOT "${ALCEDO_LENSFUN_LIBRARY_DIR}" STREQUAL "")
     list(APPEND CMAKE_BUILD_RPATH "${ALCEDO_LENSFUN_LIBRARY_DIR}")
@@ -765,6 +784,7 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         install(DIRECTORY "${_config_dir}/icc/" DESTINATION "${_bundle_macos_dest}/config/icc")
         install(DIRECTORY "${_config_dir}/lens_calib/" DESTINATION "${_bundle_macos_dest}/config/lens_calib")
         install(DIRECTORY "${_config_dir}/nikon_lens/" DESTINATION "${_bundle_macos_dest}/config/nikon_lens")
+        alcedo_install_demosaicnet_models("${_config_dir}" "${_bundle_macos_dest}")
         alcedo_install_packaged_luts("${_config_dir}" "${_bundle_macos_dest}/LUTs")
         if(ALCEDO_OPENCL_ENABLED)
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/decoders/processor/operators/gpu/opencl_shader/"
@@ -881,6 +901,7 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         install(DIRECTORY "${_config_dir}/icc/" DESTINATION "${CMAKE_INSTALL_BINDIR}/config/icc")
         install(DIRECTORY "${_config_dir}/lens_calib/" DESTINATION "${CMAKE_INSTALL_BINDIR}/config/lens_calib")
         install(DIRECTORY "${_config_dir}/nikon_lens/" DESTINATION "${CMAKE_INSTALL_BINDIR}/config/nikon_lens")
+        alcedo_install_demosaicnet_models("${_config_dir}" "${CMAKE_INSTALL_BINDIR}")
 
         alcedo_install_packaged_luts("${_config_dir}" "${CMAKE_INSTALL_BINDIR}/LUTs")
         if(ALCEDO_OPENCL_ENABLED)
@@ -1552,9 +1573,15 @@ elseif(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
     # Windows installer packaging (WIX and/or NSIS)
     # ------------------------------------------------------------------
     set(CPACK_PACKAGE_NAME "Alcedo Studio")
-    set(CPACK_PACKAGE_VENDOR "Alcedo Studio Team")
+    set(CPACK_PACKAGE_VENDOR "Alcedo Studio")
     set(CPACK_PACKAGE_INSTALL_DIRECTORY "Alcedo Studio")
     set(CPACK_PACKAGE_FILE_NAME "AlcedoStudio-${PROJECT_VERSION}-Windows-${CMAKE_SYSTEM_PROCESSOR}")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+        "Alcedo Studio — RAW photo editor and digital asset manager")
+    set(CPACK_PACKAGE_DESCRIPTION
+        "Alcedo Studio is a RAW photo editor and digital asset management (DAM) application with GPU-accelerated processing, versioned edits, and a DuckDB-backed library. Development after v0.1.1 is licensed under GPL-3.0-only; see the included license agreement for details.")
+    set(CPACK_PACKAGE_HOMEPAGE_URL "https://alcedo.studio")
+    set(CPACK_PACKAGE_CONTACT "https://github.com/zidage/AlcedoStudio")
 
     set(_pkg_res_dir "${CMAKE_SOURCE_DIR}/packaging/windows")
     if(EXISTS "${_pkg_res_dir}/EULA_RTF.rtf")
@@ -1567,22 +1594,31 @@ elseif(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
     endif()
 
     # --- NSIS settings ------------------------------------------------
-    set(CPACK_NSIS_DISPLAY_NAME "Alcedo Studio v${PROJECT_VERSION}")
-    set(CPACK_NSIS_PACKAGE_NAME "Alcedo Studio v${PROJECT_VERSION}")
+    set(CPACK_NSIS_DISPLAY_NAME "Alcedo Studio ${PROJECT_VERSION}")
+    set(CPACK_NSIS_PACKAGE_NAME "Alcedo Studio")
     set(CPACK_NSIS_INSTALLED_ICON_NAME "bin\\\\alcedo_main.exe")
+    set(CPACK_NSIS_HELP_LINK "https://alcedo.studio")
+    set(CPACK_NSIS_URL_INFO_ABOUT "https://alcedo.studio")
+    set(CPACK_NSIS_CONTACT "https://github.com/zidage/AlcedoStudio")
     set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
     set(CPACK_NSIS_MODIFY_PATH OFF)
+    set(CPACK_NSIS_MUI_FINISHPAGE_RUN "alcedo_main.exe")
+    set(CPACK_NSIS_EXECUTABLES_DIRECTORY "bin")
+    set(CPACK_NSIS_MENU_LINKS
+        "https://alcedo.studio" "Alcedo Studio Website"
+        "https://zidage.github.io/AlcedoStudio_docs/" "Documentation"
+    )
 
     # Start-menu shortcut
     set(CPACK_NSIS_CREATE_ICONS_EXTRA
-        "CreateShortCut \\\"$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\Alcedo Studio.lnk\\\" \\\"$INSTDIR\\\\bin\\\\alcedo_main.exe\\\""
+        "CreateShortCut \\\"$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\Alcedo Studio.lnk\\\" \\\"$INSTDIR\\\\bin\\\\alcedo_main.exe\\\" \\\"\\\" \\\"$INSTDIR\\\\bin\\\\alcedo_main.exe\\\" 0"
     )
     set(CPACK_NSIS_DELETE_ICONS_EXTRA
         "Delete \\\"$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\Alcedo Studio.lnk\\\""
     )
     # Desktop shortcut
     set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS
-        "CreateShortCut \\\"$DESKTOP\\\\Alcedo Studio.lnk\\\" \\\"$INSTDIR\\\\bin\\\\alcedo_main.exe\\\""
+        "CreateShortCut \\\"$DESKTOP\\\\Alcedo Studio.lnk\\\" \\\"$INSTDIR\\\\bin\\\\alcedo_main.exe\\\" \\\"\\\" \\\"$INSTDIR\\\\bin\\\\alcedo_main.exe\\\" 0"
     )
     set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
         "Delete \\\"$DESKTOP\\\\Alcedo Studio.lnk\\\""
@@ -1592,6 +1628,9 @@ elseif(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
     set(CPACK_WIX_PROGRAM_MENU_FOLDER "Alcedo Studio")
     set(CPACK_WIX_CULTURES "zh-CN;en-US")
     set(CPACK_WIX_PROPERTY_ARPURLINFOABOUT "https://alcedo.studio")
+    set(CPACK_WIX_PROPERTY_ARPHELPLINK "https://zidage.github.io/AlcedoStudio_docs/")
+    set(CPACK_WIX_PROPERTY_ARPCOMMENTS
+        "RAW photo editor and digital asset manager")
     # Fixed upgrade GUID so subsequent installers replace the same product.
     set(CPACK_WIX_UPGRADE_GUID "0EF54FAE-B541-4077-BB2A-7EDB85133B8E")
 

@@ -84,6 +84,8 @@ required_files=(
   "${macos_dir}/fonts/main_Inter.ttf"
   "${macos_dir}/fonts/main_NotoSans_zh.ttf"
   "${macos_dir}/config/icc/rec709_gamma22.icc"
+  "${macos_dir}/config/models/bayer.safetensors"
+  "${macos_dir}/config/models/xtrans.safetensors"
   "${resources_dir}/duckdb_extensions/vss.duckdb_extension"
   "${resources_dir}/duckdb_extensions/fts.duckdb_extension"
   "${frameworks_dir}/QtCore.framework/QtCore"
@@ -112,6 +114,7 @@ if [[ "$skip_metal_assets" -eq 0 ]]; then
     highlight_reconstruct.metallib
     xtrans_interpolate.metallib
     cvt_ref_space.metallib
+    demosaicnet_io.metallib
   )
   for lib in "${metal_libs[@]}"; do
     assert_file "${metal_dir}/${lib}"

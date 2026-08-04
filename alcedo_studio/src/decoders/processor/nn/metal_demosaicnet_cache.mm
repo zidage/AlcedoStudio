@@ -10,7 +10,10 @@
 #include <cstdint>
 #include <cstdlib>
 #include <stdexcept>
+#include <string>
 #include <utility>
+
+#include <mach-o/dyld.h>
 
 #include "metal/metal_context.hpp"
 #include "nn/safetensors.hpp"
@@ -41,6 +44,19 @@ using Clock = std::chrono::steady_clock;
          fs::is_regular_file(dir / "xtrans.safetensors", ec);
 }
 
+[[nodiscard]] auto GetExecutableDir() -> fs::path {
+  uint32_t size = 0;
+  _NSGetExecutablePath(nullptr, &size);
+  if (size == 0) {
+    return {};
+  }
+  std::string buffer(size, '\0');
+  if (_NSGetExecutablePath(buffer.data(), &size) != 0) {
+    return {};
+  }
+  return fs::path(buffer).parent_path();
+}
+
 }  // namespace
 
 auto MetalDemosaicNetModelCache::Instance() -> MetalDemosaicNetModelCache& {
@@ -67,6 +83,19 @@ auto MetalDemosaicNetModelCache::ResolveModelDir(const MetalDemosaicNetLoadOptio
     }
   }
 #endif
+
+  const fs::path exe_dir = GetExecutableDir();
+  if (!exe_dir.empty()) {
+    const fs::path install_candidates[] = {
+        exe_dir / "config" / "models",
+        exe_dir / "models",
+    };
+    for (const fs::path& candidate : install_candidates) {
+      if (DirHasModels(candidate)) {
+        return candidate;
+      }
+    }
+  }
 
   const char* candidates[] = {
       "alcedo_studio/src/config/models",

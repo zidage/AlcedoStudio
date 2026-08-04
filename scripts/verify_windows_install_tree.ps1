@@ -61,7 +61,9 @@ $requiredFiles = @(
     'msvcp140.dll',
     'fonts\main_Inter.ttf',
     'fonts\main_NotoSans_zh.ttf',
-    'config\icc\rec709_gamma22.icc'
+    'config\icc\rec709_gamma22.icc',
+    'config\models\bayer.safetensors',
+    'config\models\xtrans.safetensors'
 )
 
 foreach ($file in $requiredFiles) {
@@ -71,7 +73,19 @@ foreach ($file in $requiredFiles) {
 Assert-AnyFile -Directory $binDir -Filter 'cudart64_*.dll'
 
 if (-not $SkipOpenCLAssetCheck) {
-    Assert-File (Join-Path $binDir 'OpenCL.dll')
+    # Alcedo first-party OpenCL runtime DLLs (SHARED when CUDA DLLs are enabled).
+    Assert-File (Join-Path $binDir 'OpenClContext.dll')
+    Assert-File (Join-Path $binDir 'OpenClProgramLibrary.dll')
+
+    # Khronos ICD loader: usually already installed by the GPU driver. Prefer the
+    # system copy when present; warn (do not fail) if the package also omitted it.
+    $bundledOpenClIcd = Join-Path $binDir 'OpenCL.dll'
+    $systemOpenClIcd = Join-Path $env:SystemRoot 'System32\OpenCL.dll'
+    if (-not (Test-Path -LiteralPath $bundledOpenClIcd -PathType Leaf) -and
+        -not (Test-Path -LiteralPath $systemOpenClIcd -PathType Leaf)) {
+        Write-Host "[alcedo] Warning: OpenCL.dll (Khronos ICD) not found in install tree or System32. OpenCL backends need a GPU driver ICD or a bundled loader." -ForegroundColor Yellow
+    }
+
     $openClFiles = @(
         'opencl\decoders\processor\operators\gpu\opencl_shader\raw_utils_opencl.cl',
         'opencl\decoders\processor\operators\gpu\opencl_shader\to_linear_ref.cl',
@@ -79,6 +93,8 @@ if (-not $SkipOpenCLAssetCheck) {
         'opencl\decoders\processor\operators\gpu\opencl_shader\highlight_reconstruct.cl',
         'opencl\decoders\processor\operators\gpu\opencl_shader\cvt_ref_space.cl',
         'opencl\decoders\processor\operators\gpu\opencl_shader\xtrans_interpolate.cl',
+        'opencl\decoders\processor\operators\gpu\opencl_shader\demosaicnet_conv.cl',
+        'opencl\decoders\processor\operators\gpu\opencl_shader\demosaicnet_structural.cl',
         'opencl\opencl\opencl_shader\prng.cl',
         'opencl\opencl\opencl_shader\geometry_utils.cl',
         'opencl\edit\pipeline\opencl_shader\film_grain.cl',

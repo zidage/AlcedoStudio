@@ -167,8 +167,14 @@ powershell -ExecutionPolicy Bypass -File scripts/package_windows.ps1 -BuildDir b
 Fallback manual packaging:
 ```powershell
 cmd /c scripts\msvc_env.cmd --install build/release --prefix build/install
+powershell -ExecutionPolicy Bypass -File scripts/verify_windows_install_tree.ps1 -InstallDir build/install
 cpack --config build/release/CPackConfig.cmake
 ```
+
+The install tree must include DemosaicNet weights under `bin/config/models/`, OpenCL
+shader sources under `bin/opencl/`, and (when OpenCL shared libraries are enabled)
+`OpenClContext.dll` / `OpenClProgramLibrary.dll`. The Khronos `OpenCL.dll` ICD loader
+is optional when the GPU driver already provides one.
 
 macOS:
 ```bash

@@ -8,10 +8,17 @@
 
 #include <cstdlib>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 #if defined(_MSC_VER)
 #include <stdlib.h>
+#endif
+
+#if defined(_WIN32)
+#include <windows.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
 #endif
 
 #include "nn/safetensors.hpp"
@@ -36,6 +43,37 @@ namespace fs = std::filesystem;
   std::error_code ec;
   return fs::is_regular_file(dir / "bayer.safetensors", ec) ||
          fs::is_regular_file(dir / "xtrans.safetensors", ec);
+}
+
+[[nodiscard]] auto GetExecutableDir() -> fs::path {
+#if defined(_WIN32)
+  std::wstring buffer(MAX_PATH, L'\0');
+  while (true) {
+    const DWORD copied =
+        GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+    if (copied == 0) {
+      return {};
+    }
+    if (copied < buffer.size()) {
+      buffer.resize(copied);
+      return fs::path(buffer).parent_path();
+    }
+    buffer.resize(buffer.size() * 2);
+  }
+#elif defined(__APPLE__)
+  uint32_t size = 0;
+  _NSGetExecutablePath(nullptr, &size);
+  if (size == 0) {
+    return {};
+  }
+  std::string buffer(size, '\0');
+  if (_NSGetExecutablePath(buffer.data(), &size) != 0) {
+    return {};
+  }
+  return fs::path(buffer).parent_path();
+#else
+  return {};
+#endif
 }
 
 }  // namespace
@@ -77,6 +115,19 @@ auto OpenClDemosaicNetModelCache::ResolveModelDir(const OpenClDemosaicNetLoadOpt
   }
 #endif
 
+  const fs::path exe_dir = GetExecutableDir();
+  if (!exe_dir.empty()) {
+    const fs::path install_candidates[] = {
+        exe_dir / "config" / "models",
+        exe_dir / "models",
+    };
+    for (const fs::path& candidate : install_candidates) {
+      if (DirHasModels(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
   const char* candidates[] = {
       "alcedo_studio/src/config/models",
       "../alcedo_studio/src/config/models",
@@ -84,7 +135,6 @@ auto OpenClDemosaicNetModelCache::ResolveModelDir(const OpenClDemosaicNetLoadOpt
       "../../../alcedo_studio/src/config/models",
       "src/config/models",
       "../src/config/models",
-      "D:/Projects/pu-erh_lab/alcedo_studio/src/config/models",
   };
   for (const char* c : candidates) {
     fs::path p(c);
