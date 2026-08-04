@@ -38,20 +38,6 @@ constexpr double kFilmstripExpandedHeightMin     = 128.0;
 constexpr double kFilmstripExpandedHeightMax     = 4096.0;
 constexpr double kFilmstripExpandedHeightDefault = 128.0;
 
-auto             EmptyRawDecodeCapabilities() -> QVariantMap {
-  return {
-      {QStringLiteral("rawSource"), false},
-      {QStringLiteral("available"), false},
-      {QStringLiteral("metadataAvailable"), false},
-      {QStringLiteral("neuralEngineAvailable"), false},
-      {QStringLiteral("highlightsAvailable"), false},
-      {QStringLiteral("unavailableReason"),
-                   QStringLiteral("Select a RAW image to enable RAW Decode.")},
-      {QStringLiteral("methodValues"), QVariantList{}},
-      {QStringLiteral("rawDefaultParamsJson"), QString{}},
-  };
-}
-
 }  // namespace
 
 EditorSessionController::EditorSessionController(EditorController* editor, QObject* parent)
@@ -86,7 +72,6 @@ EditorSessionController::EditorSessionController(EditorController*              
     ApplyActionAvailability();
   }
   InstallBackendNotifier();
-  SyncRawDecodeCapabilities();
 }
 
 EditorSessionController::~EditorSessionController() {
@@ -182,7 +167,6 @@ void EditorSessionController::SetSessionBackend(alcedo::IEditorSessionBackend* s
   if (scope_controller_) {
     scope_controller_->SetImageIdentity(image_id(), SessionEpoch());
   }
-  SyncRawDecodeCapabilities();
 }
 
 void EditorSessionController::SetInteractionPolicy(
@@ -238,7 +222,6 @@ void EditorSessionController::OnBackendChanged() {
     return;
   }
   SyncIdentityFromBackend();
-  SyncRawDecodeCapabilities();
   SyncViewportIdentity();
   ApplyActionAvailability();
 
@@ -339,16 +322,6 @@ void EditorSessionController::SyncIdentityFromBackend() {
   session_state_ = session_backend_->state();
   // active_ is workspace membership owned by Open/Close/Finalize, not by
   // backend NoImage vs Loading (empty editor remains active).
-}
-
-void EditorSessionController::SyncRawDecodeCapabilities() {
-  const QVariantMap next =
-      editor_ ? editor_->RawDecodeCapabilitiesForImage(image_id()) : EmptyRawDecodeCapabilities();
-  if (next == raw_decode_capabilities_) {
-    return;
-  }
-  raw_decode_capabilities_ = next;
-  emit RawDecodeCapabilitiesChanged();
 }
 
 void EditorSessionController::ApplyOpenLocal(uint elementId, uint imageId) {
@@ -474,7 +447,6 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
     ApplyOpenLocal(elementId, imageId);
   }
 
-  SyncRawDecodeCapabilities();
   SyncViewportIdentity();
   emit StateChanged();
 }
@@ -749,7 +721,6 @@ void EditorSessionController::Close() {
   } else {
     ApplyCloseLocal();
   }
-  SyncRawDecodeCapabilities();
   active_ = false;
   emit StateChanged();
 }
@@ -771,7 +742,6 @@ void EditorSessionController::Shutdown() {
     ApplyCloseLocal();
     session_state_ = alcedo::EditorSessionState::ShuttingDown;
   }
-  SyncRawDecodeCapabilities();
   active_ = false;
   emit StateChanged();
 }
@@ -791,7 +761,6 @@ void EditorSessionController::Finalize(bool persistChanges) {
     }
     session_backend_->Close(persistChanges);
     SyncIdentityFromBackend();
-    SyncRawDecodeCapabilities();
     active_ = false;
     emit StateChanged();
     return;

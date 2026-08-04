@@ -220,7 +220,6 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/import_export.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/nikon_he_recovery_types.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/app/editor_raw_decode_capabilities.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_action_availability_model.hpp"

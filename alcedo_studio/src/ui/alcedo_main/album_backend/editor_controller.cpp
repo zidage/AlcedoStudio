@@ -10,7 +10,6 @@
 #include "ui/alcedo_main/album_backend/path_utils.hpp"
 
 #include "app/pipeline_service.hpp"
-#include "app/editor_raw_decode_capabilities.hpp"
 #include "app/render_service.hpp"
 #include "edit/pipeline/default_pipeline_params.hpp"
 #include "io/image/image_loader.hpp"
@@ -49,27 +48,6 @@ auto IsHdrExportEotf(const ColorUtils::EOTF eotf) -> bool {
   return eotf == ColorUtils::EOTF::ST2084 || eotf == ColorUtils::EOTF::HLG;
 }
 
-auto ToRawDecodeCapabilitiesMap(const raw_decode::Capabilities& capabilities) -> QVariantMap {
-  QVariantList method_values;
-  for (const auto& value : capabilities.method_values) {
-    method_values.push_back(QString::fromStdString(value));
-  }
-
-  QVariantMap result;
-  result.insert(QStringLiteral("rawSource"), capabilities.raw_source);
-  result.insert(QStringLiteral("available"), capabilities.available);
-  result.insert(QStringLiteral("metadataAvailable"), capabilities.metadata_available);
-  result.insert(QStringLiteral("neuralEngineAvailable"),
-                capabilities.neural_engine_available);
-  result.insert(QStringLiteral("highlightsAvailable"), capabilities.highlights_available);
-  result.insert(QStringLiteral("unavailableReason"),
-                QString::fromStdString(capabilities.unavailable_reason));
-  result.insert(QStringLiteral("methodValues"), method_values);
-  result.insert(QStringLiteral("rawDefaultParamsJson"),
-                QString::fromStdString(pipeline_defaults::MakeDefaultRawDecodeParams().dump()));
-  return result;
-}
-
 }  // namespace
 
 #define PL_TEXT(text, ...)                                                    \
@@ -80,42 +58,6 @@ auto ToRawDecodeCapabilitiesMap(const raw_decode::Capabilities& capabilities) ->
 EditorController::EditorController(ProjectModule* project, LibraryModule* library, QObject* parent)
     : QObject(parent), project_(project), library_(library) {
   editor_status_text_ = PL_TEXT("Select a photo to edit.");
-}
-
-auto EditorController::RawDecodeCapabilitiesForImage(image_id_t image_id) const -> QVariantMap {
-  auto unavailable = [](const char* reason) {
-    auto result = ToRawDecodeCapabilitiesMap(
-        raw_decode::FromImageMetadata(ImageType::DEFAULT, false));
-    result.insert(QStringLiteral("unavailableReason"), QString::fromUtf8(reason));
-    return result;
-  };
-
-  if (image_id == 0 || project_ == nullptr) {
-    return unavailable("Select a RAW image to enable RAW Decode.");
-  }
-
-  const auto project = project_->handler().project();
-  if (!project) {
-    return unavailable("The project is not ready for RAW Decode.");
-  }
-
-  try {
-    const auto image_pool = project->GetImagePoolService();
-    if (!image_pool) {
-      return unavailable("The image service is unavailable.");
-    }
-    const auto image = image_pool->Read<std::shared_ptr<Image>>(
-        image_id, [](const std::shared_ptr<Image>& value) { return value; });
-    if (!image) {
-      return unavailable("The selected image is unavailable.");
-    }
-
-    const bool has_context = image->HasRawColorContext();
-    return ToRawDecodeCapabilitiesMap(
-        raw_decode::FromImageMetadata(image->image_type_, image->image_path_, has_context));
-  } catch (const std::exception&) {
-    return unavailable("RAW metadata could not be read for this image.");
-  }
 }
 
 void EditorController::OpenEditor(uint elementId, uint imageId) {

@@ -79,10 +79,6 @@ class EditorController final : public QObject {
   }
   [[nodiscard]] auto editor_element_id() const -> sl_element_id_t { return editor_element_id_; }
   [[nodiscard]] auto editor_image_id() const -> image_id_t { return editor_image_id_; }
-  /// Resolve the RAW Decode controls for the image currently owned by the
-  /// application project.  UI code receives the result through the session
-  /// facade; it does not inspect Image or pipeline state itself.
-  [[nodiscard]] auto RawDecodeCapabilitiesForImage(image_id_t image_id) const -> QVariantMap;
   [[nodiscard]] auto EditorTitle() const -> QString { return editor_title_text_.Render(); }
   [[nodiscard]] auto editor_title() const -> QString { return editor_title_text_.Render(); }
   [[nodiscard]] auto EditorStatus() const -> QString { return editor_status_text_.Render(); }

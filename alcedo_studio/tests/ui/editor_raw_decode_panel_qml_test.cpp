@@ -24,7 +24,6 @@
 #include <utility>
 #include <vector>
 
-#include "app/editor_raw_decode_capabilities.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 #include "ui/alcedo_main/album_backend/editor_adjustment_submitter.hpp"
 #include "ui/alcedo_main/app_theme.hpp"
@@ -39,8 +38,6 @@ class RawDecodeSession final : public QObject, public IEditorAdjustmentSubmitter
   Q_PROPERTY(quint64 snapshotRevision READ snapshotRevision NOTIFY adjustmentSnapshotChanged)
   Q_PROPERTY(QString activeAdjustmentPanel READ activeAdjustmentPanel WRITE setActiveAdjustmentPanel
                  NOTIFY activeAdjustmentPanelChanged)
-  Q_PROPERTY(QVariantMap rawDecodeCapabilities READ rawDecodeCapabilities NOTIFY
-                 rawDecodeCapabilitiesChanged)
 
  public:
   struct Call {
@@ -49,8 +46,8 @@ class RawDecodeSession final : public QObject, public IEditorAdjustmentSubmitter
     bool    settled = false;
   };
 
-  RawDecodeSession(QVariantMap snapshot, QVariantMap capabilities, QObject* parent = nullptr)
-      : QObject(parent), snapshot_(std::move(snapshot)), capabilities_(std::move(capabilities)) {}
+  explicit RawDecodeSession(QVariantMap snapshot, QObject* parent = nullptr)
+      : QObject(parent), snapshot_(std::move(snapshot)) {}
 
   [[nodiscard]] auto adjustmentSnapshot() const -> QVariantMap { return snapshot_; }
   [[nodiscard]] auto snapshotRevision() const -> quint64 { return snapshot_revision_; }
@@ -62,7 +59,6 @@ class RawDecodeSession final : public QObject, public IEditorAdjustmentSubmitter
     active_panel_ = panel;
     emit activeAdjustmentPanelChanged();
   }
-  [[nodiscard]] auto rawDecodeCapabilities() const -> QVariantMap { return capabilities_; }
   [[nodiscard]] auto canEdit() const -> bool override { return true; }
 
   bool               submitPatch(QString fieldKey, QString paramsJson, bool settled) override {
@@ -85,11 +81,7 @@ class RawDecodeSession final : public QObject, public IEditorAdjustmentSubmitter
 
   void ReconstructSavedVersion() { Publish(saved_version_); }
 
-  void SwitchImage(const QVariantMap& snapshot, const QVariantMap& capabilities) {
-    capabilities_ = capabilities;
-    emit rawDecodeCapabilitiesChanged();
-    Publish(snapshot);
-  }
+  void SwitchImage(const QVariantMap& snapshot) { Publish(snapshot); }
 
   void ReopenSavedImage() { Publish(saved_version_); }
 
@@ -104,11 +96,9 @@ class RawDecodeSession final : public QObject, public IEditorAdjustmentSubmitter
  signals:
   void adjustmentSnapshotChanged();
   void activeAdjustmentPanelChanged();
-  void rawDecodeCapabilitiesChanged();
 
  private:
   QVariantMap snapshot_;
-  QVariantMap capabilities_;
   QVariantMap saved_version_;
   quint64     snapshot_revision_ = 1;
   QString     active_panel_      = QStringLiteral("raw");
@@ -150,23 +140,6 @@ auto Snapshot(const QString& method, bool highlights) -> QVariantMap {
   QVariantMap snapshot;
   snapshot.insert(QStringLiteral("raw_decode"), RawParams(5120.0, method, highlights));
   return snapshot;
-}
-
-auto Capabilities(bool available, QVariantList methodValues, bool metadata_available = true)
-    -> QVariantMap {
-  return {
-      {QStringLiteral("rawSource"), true},
-      {QStringLiteral("available"), available},
-      {QStringLiteral("metadataAvailable"), metadata_available},
-      {QStringLiteral("neuralEngineAvailable"), available},
-      {QStringLiteral("highlightsAvailable"), available},
-      {QStringLiteral("unavailableReason"),
-       available ? QString{} : QStringLiteral("RAW metadata is unavailable for this image.")},
-      {QStringLiteral("methodValues"), std::move(methodValues)},
-      {QStringLiteral("rawDefaultParamsJson"),
-       QStringLiteral(
-           R"({"raw":{"method":"default","highlights_reconstruct":true,"use_camera_wb":true,"user_wb":7600.0,"backend":"alcedo","decode_res":"full"}})")},
-  };
 }
 
 class AdjustmentStackHarness {
@@ -250,36 +223,8 @@ auto SelectComboEntry(AdjustmentStackHarness& harness, const QString& objectName
 
 }  // namespace
 
-TEST(EditorRawDecodeCapabilitiesTest, RawMetadataControlsSupportedAndUnsupportedSources) {
-  const auto supported = raw_decode::FromImageMetadata(ImageType::ARW, true);
-  EXPECT_TRUE(supported.raw_source);
-  EXPECT_TRUE(supported.available);
-  EXPECT_TRUE(supported.highlights_available);
-  EXPECT_EQ(supported.method_values.front(), "default");
-
-  const auto raw_without_metadata = raw_decode::FromImageMetadata(ImageType::DNG, false);
-  EXPECT_TRUE(raw_without_metadata.raw_source);
-  EXPECT_TRUE(raw_without_metadata.available);
-  EXPECT_FALSE(raw_without_metadata.metadata_available);
-  EXPECT_FALSE(raw_without_metadata.method_values.empty());
-  EXPECT_TRUE(raw_without_metadata.highlights_available);
-
-  const auto imported_raw_without_type = raw_decode::FromImageMetadata(
-      ImageType::DEFAULT, std::filesystem::path("fixture.ARW"), false);
-  EXPECT_TRUE(imported_raw_without_type.raw_source);
-  EXPECT_TRUE(imported_raw_without_type.available);
-  EXPECT_FALSE(imported_raw_without_type.method_values.empty());
-
-  const auto non_raw = raw_decode::FromImageMetadata(ImageType::JPEG, true);
-  EXPECT_FALSE(non_raw.raw_source);
-  EXPECT_FALSE(non_raw.available);
-  EXPECT_FALSE(non_raw.method_values.size());
-}
-
-TEST(EditorRawDecodePanelQmlTest, UnsupportedRawFixtureDisablesControlsAndReportsReason) {
-  RawDecodeSession session(
-      Snapshot(QStringLiteral("legacy"), false),
-      Capabilities(false, {QStringLiteral("default"), QStringLiteral("legacy")}));
+TEST(EditorRawDecodePanelQmlTest, ControlsEnabledWhenImageSelected) {
+  RawDecodeSession       session(Snapshot(QStringLiteral("legacy"), false));
   AdjustmentStackHarness harness(&session);
 
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
@@ -290,50 +235,20 @@ TEST(EditorRawDecodePanelQmlTest, UnsupportedRawFixtureDisablesControlsAndReport
       harness.findObject<QObject>(QStringLiteral("editorAdjustmentGroupShell_geometry_lens"));
   ASSERT_NE(method_model, nullptr);
   ASSERT_NE(highlights, nullptr);
-  ASSERT_NE(status, nullptr);
   ASSERT_NE(geometry_lens, nullptr);
 
-  EXPECT_FALSE(method_model->property("enabled").toBool());
-  EXPECT_FALSE(
+  EXPECT_TRUE(method_model->property("enabled").toBool());
+  EXPECT_TRUE(
       highlights->findChild<QQuickItem*>(QStringLiteral("adjustmentToggleSwitch"))->isEnabled());
+  EXPECT_EQ(status, nullptr);
   EXPECT_EQ(harness.findObject<QObject>(QStringLiteral("editorAdjustmentGroupShell_raw_lens")),
             nullptr);
   EXPECT_EQ(harness.findObject<QObject>(QStringLiteral("rawLensEnabledModel")), nullptr);
   EXPECT_TRUE(geometry_lens->property("expanded").toBool());
-  EXPECT_EQ(status->property("text").toString(),
-            QStringLiteral("RAW metadata is unavailable for this image."));
-}
-
-TEST(EditorRawDecodePanelQmlTest, MissingRawMetadataKeepsDecoderControlsEnabled) {
-  RawDecodeSession session(
-      Snapshot(QStringLiteral("default"), true),
-      Capabilities(true, {QStringLiteral("default"), QStringLiteral("legacy")}, false));
-  AdjustmentStackHarness harness(&session);
-
-  ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
-  auto* method_model = harness.findObject<QObject>(QStringLiteral("rawDemosaicMethodModel"));
-  auto* highlights   = harness.findObject<QQuickItem>(QStringLiteral("rawHighlightsControl"));
-  auto* status       = harness.findObject<QObject>(QStringLiteral("rawDecodeStatus"));
-  ASSERT_NE(method_model, nullptr);
-  ASSERT_NE(highlights, nullptr);
-  ASSERT_NE(status, nullptr);
-
-  EXPECT_TRUE(method_model->property("enabled").toBool());
-  auto* highlight_switch =
-      highlights->findChild<QQuickItem*>(QStringLiteral("adjustmentToggleSwitch"));
-  ASSERT_NE(highlight_switch, nullptr);
-  EXPECT_TRUE(highlight_switch->isEnabled());
-  EXPECT_EQ(status->property("text").toString(),
-            QStringLiteral("RAW metadata is unavailable; decoder defaults are active."));
-  ASSERT_TRUE(SelectComboEntry(harness, QStringLiteral("rawDemosaicMethodCombo"), 1));
-  ASSERT_EQ(session.calls.size(), 1u);
-  EXPECT_EQ(session.calls.back().field_key, QStringLiteral("raw_decode"));
 }
 
 TEST(EditorRawDecodePanelQmlTest, UserChangesSubmitCompleteRawOperatorParams) {
-  RawDecodeSession       session(Snapshot(QStringLiteral("default"), true),
-                                 Capabilities(true, {QStringLiteral("default"), QStringLiteral("legacy"),
-                                                     QStringLiteral("neural_engine")}));
+  RawDecodeSession       session(Snapshot(QStringLiteral("default"), true));
   AdjustmentStackHarness harness(&session);
 
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
@@ -376,11 +291,9 @@ TEST(EditorRawDecodePanelQmlTest, UserChangesSubmitCompleteRawOperatorParams) {
 
 TEST(EditorRawDecodePanelQmlTest,
      SnapshotReplayVersionReconstructionImageSwitchAndReopenAreLoadOnly) {
-  const auto image_a      = Snapshot(QStringLiteral("legacy"), false);
-  const auto image_b      = Snapshot(QStringLiteral("default"), true);
-  const auto capabilities = Capabilities(
-      true, {QStringLiteral("default"), QStringLiteral("legacy"), QStringLiteral("neural_engine")});
-  RawDecodeSession       session(image_a, capabilities);
+  const auto image_a = Snapshot(QStringLiteral("legacy"), false);
+  const auto image_b = Snapshot(QStringLiteral("default"), true);
+  RawDecodeSession       session(image_a);
   AdjustmentStackHarness harness(&session);
 
   ASSERT_NE(harness.root(), nullptr) << harness.errors().toStdString();
@@ -399,7 +312,7 @@ TEST(EditorRawDecodePanelQmlTest,
   EXPECT_EQ(method->property("currentValue").toString(), QStringLiteral("legacy"));
   EXPECT_EQ(session.calls.size(), calls_after_replay);
 
-  session.SwitchImage(image_b, capabilities);
+  session.SwitchImage(image_b);
   ProcessEvents(100);
   EXPECT_EQ(method->property("currentValue").toString(), QStringLiteral("default"));
   EXPECT_TRUE(highlights->property("value").toBool());
@@ -411,7 +324,7 @@ TEST(EditorRawDecodePanelQmlTest,
   EXPECT_FALSE(highlights->property("value").toBool());
   EXPECT_EQ(session.calls.size(), calls_after_replay);
 
-  session.SwitchImage(image_b, capabilities);
+  session.SwitchImage(image_b);
   session.ReopenSavedImage();
   ProcessEvents(100);
   EXPECT_EQ(method->property("currentValue").toString(), QStringLiteral("legacy"));

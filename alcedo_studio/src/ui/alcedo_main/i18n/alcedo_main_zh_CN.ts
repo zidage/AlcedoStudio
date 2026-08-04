@@ -4991,11 +4991,6 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>Alcedo</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>Studio</source>
-        <translation>工作室</translation>
-    </message>
-    <message>
         <location line="+27"/>
         <source>File</source>
         <translation>文件</translation>

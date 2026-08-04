@@ -111,11 +111,6 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   /// Paste, and Merge. Panels load from this snapshot via loadFromSnapshot().
   Q_PROPERTY(
       QVariantMap adjustmentSnapshot READ adjustment_snapshot NOTIFY AdjustmentSnapshotChanged)
-  /// Read-only RAW panel capability map resolved by the application layer.
-  /// The panel consumes this map; it does not inspect image metadata or build
-  /// flags directly.
-  Q_PROPERTY(QVariantMap rawDecodeCapabilities READ raw_decode_capabilities NOTIFY
-                 RawDecodeCapabilitiesChanged)
   /// Phase 7A P1: typed result of the last history/Version operation, published
   /// at the QML boundary so the owning panel can show pending/success/error
   /// state instead of discarding the backend EditorSessionResult.
@@ -156,9 +151,6 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   [[nodiscard]] auto    adjustment_snapshot() const -> QVariantMap;
   [[nodiscard]] auto    history_snapshot() const -> alcedo::EditorHistorySnapshot;
   [[nodiscard]] auto    actions() -> EditorActionAvailabilityModel* { return &actions_; }
-  [[nodiscard]] auto    raw_decode_capabilities() const -> QVariantMap {
-    return raw_decode_capabilities_;
-  }
 
   [[nodiscard]] bool presentation_viewport_bound() const {
     return presentation_viewport_ != nullptr;
@@ -262,7 +254,6 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void HistoryChanged();
   // Phase 6C-7: emitted when the backend adjustment snapshot is published.
   void AdjustmentSnapshotChanged();
-  void RawDecodeCapabilitiesChanged();
   void ActionAvailabilityChanged();
 
   void FilmstripUiChanged();
@@ -278,7 +269,6 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   void                     LoadDesktopUiPrefs();
   void                     SaveDesktopUiPrefs() const;
   void                     SyncIdentityFromBackend();
-  void                     SyncRawDecodeCapabilities();
   void                     ApplyOpenLocal(uint elementId, uint imageId);
   void                     ApplyCloseLocal();
   void                     SyncViewportIdentity();
@@ -321,7 +311,6 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   double                          filmstrip_scroll_position_ = 0.0;
   // Phase 6C-7: cached adjustment snapshot for QML panel loading.
   mutable QVariantMap             adjustment_snapshot_;
-  QVariantMap                     raw_decode_capabilities_;
   /// When true, OnBackendChanged still refreshes the cached snapshot map but
   /// does not emit AdjustmentSnapshotChanged. Used for interactive submitPatch
   /// so pointer moves do not re-enter QML loadFromSnapshot on every tick.
