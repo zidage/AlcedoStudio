@@ -178,8 +178,23 @@ is optional when the GPU driver already provides one.
 
 macOS:
 ```bash
+# Preferred full pipeline (configure + install + verify + CPack DMG/ZIP):
+bash scripts/package_macos.sh
+# Or, after an existing macos_release configure:
 cmake --build --preset macos_package
 ```
+
+The macOS `.app` must be self-contained for a clean Apple Silicon Mac:
+
+| Payload | Bundle path | Notes |
+| --- | --- | --- |
+| DemosaicNet weights | `Contents/MacOS/config/models/{bayer,xtrans}.safetensors` | Required for Neural Engine demosaic; checked by `scripts/verify_macos_install_tree.sh` |
+| Metal libraries | `Contents/Resources/metallib/*.metallib` | Built with `xcrun metal` / `metallib` at build time (includes `demosaicnet_io.metallib`) |
+| DuckDB extensions | `Contents/Resources/duckdb_extensions/` | `vss` + `fts` |
+| Semantic sidecar | `Contents/MacOS/alcedo_mind` | Linked against system CoreML / Swift |
+| aria2c | `Contents/MacOS/aria2c` | Optional model downloads (not DemosaicNet weights) |
+
+Runtime resolution: Metal loads metallibs from the compile-time path first, then falls back to `Contents/Resources/metallib/` (see `ComputePipelineCache::ResolveMetallibPath`). DemosaicNet loads weights from `ALCEDO_DEMOASICNET_MODEL_DIR`, then `<exe>/config/models/`. Always re-run CMake configure after packaging-related CMake changes so install rules pick up new assets.
 
 ## 8) Frequently Used CMake Cache Options / 常用 CMake 缓存选项
 

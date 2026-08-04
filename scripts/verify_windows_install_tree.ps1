@@ -70,6 +70,22 @@ foreach ($file in $requiredFiles) {
     Assert-File (Join-Path $binDir $file)
 }
 
+function Assert-MinSize {
+    param(
+        [string]$Path,
+        [long]$MinBytes
+    )
+    Assert-File $Path
+    $size = (Get-Item -LiteralPath $Path).Length
+    if ($size -lt $MinBytes) {
+        throw "File too small ($size < $MinBytes bytes), likely incomplete: $Path"
+    }
+}
+
+# Real bayer/xtrans safetensors are ~130–160 KiB; LFS pointers are ~130 bytes.
+Assert-MinSize (Join-Path $binDir 'config\models\bayer.safetensors') 10240
+Assert-MinSize (Join-Path $binDir 'config\models\xtrans.safetensors') 10240
+
 Assert-AnyFile -Directory $binDir -Filter 'cudart64_*.dll'
 
 if (-not $SkipOpenCLAssetCheck) {

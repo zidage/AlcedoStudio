@@ -725,20 +725,44 @@ endfunction()
 # Ship DemosaicNet weight files next to the executable under config/models/.
 # This is distinct from the per-user AI download cache at <exe>/model/, which
 # must never be packaged (see REMOVE_RECURSE of that directory on macOS).
+# Missing weights are a hard configure/package error: Neural Engine demosaic
+# must work out of the box on clean user machines.
 function(alcedo_install_demosaicnet_models config_dir destination)
     set(_alcedo_demosaicnet_models "")
     foreach(_alcedo_model_name IN ITEMS bayer.safetensors xtrans.safetensors)
         set(_alcedo_model_path "${config_dir}/models/${_alcedo_model_name}")
-        if(EXISTS "${_alcedo_model_path}")
-            list(APPEND _alcedo_demosaicnet_models "${_alcedo_model_path}")
-        else()
-            message(WARNING
-                "[alcedo] DemosaicNet weight missing at configure time: ${_alcedo_model_path}")
+        if(NOT EXISTS "${_alcedo_model_path}")
+            message(FATAL_ERROR
+                "[alcedo] Required DemosaicNet weight missing: ${_alcedo_model_path}\n"
+                "  Expected checked-in files under alcedo_studio/src/config/models/ "
+                "(bayer.safetensors, xtrans.safetensors). Cannot package without them.")
         endif()
+        # Reject Git LFS pointer stubs and truncated checkouts (~130 bytes).
+        file(SIZE "${_alcedo_model_path}" _alcedo_model_size)
+        if(_alcedo_model_size LESS 10240)
+            message(FATAL_ERROR
+                "[alcedo] DemosaicNet weight looks incomplete (${_alcedo_model_size} bytes): "
+                "${_alcedo_model_path}\n"
+                "  Run `git lfs pull` if applicable, or restore the real safetensors blob.")
+        endif()
+        list(APPEND _alcedo_demosaicnet_models "${_alcedo_model_path}")
     endforeach()
-    if(_alcedo_demosaicnet_models)
-        install(FILES ${_alcedo_demosaicnet_models} DESTINATION "${destination}/config/models")
+    install(FILES ${_alcedo_demosaicnet_models} DESTINATION "${destination}/config/models")
+endfunction()
+
+# Install compiled .metallib assets. Paths are known at configure time; the
+# files themselves are produced during the build by Metal*Shaders custom
+# targets. install(FILES) fails at install time if any path is still missing.
+function(alcedo_install_metal_runtime_libs destination)
+    if(NOT ALCEDO_METAL_ENABLED)
+        return()
     endif()
+    if(NOT ALCEDO_METAL_RUNTIME_LIBS)
+        message(FATAL_ERROR
+            "[alcedo] ALCEDO_METAL_ENABLED but ALCEDO_METAL_RUNTIME_LIBS is empty. "
+            "Metal shaders were not registered for packaging.")
+    endif()
+    install(FILES ${ALCEDO_METAL_RUNTIME_LIBS} DESTINATION "${destination}")
 endfunction()
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/alcedo_studio/src/third_party)
@@ -798,11 +822,7 @@ if(TARGET ${ALCEDO_MAIN_BIN})
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/opencl/opencl_shader/"
                 DESTINATION "${_bundle_macos_dest}/opencl/opencl/opencl_shader")
         endif()
-        if(ALCEDO_METAL_ENABLED AND ALCEDO_METAL_RUNTIME_LIBS)
-            install(FILES ${ALCEDO_METAL_RUNTIME_LIBS}
-                DESTINATION "${_bundle_resources_dest}/metallib"
-            )
-        endif()
+        alcedo_install_metal_runtime_libs("${_bundle_resources_dest}/metallib")
         alcedo_install_duckdb_extensions("${_bundle_resources_dest}")
         if(ALCEDO_BUILD_SEMANTIC_SIDECAR AND ALCEDO_MIND_BINARY)
             install(CODE
@@ -938,10 +958,8 @@ if(TARGET ${ALCEDO_MAIN_BIN})
             )
         endif()
 
-        if(APPLE AND ALCEDO_METAL_ENABLED AND ALCEDO_METAL_RUNTIME_LIBS)
-            install(FILES ${ALCEDO_METAL_RUNTIME_LIBS}
-                DESTINATION "${CMAKE_INSTALL_BINDIR}/metallib"
-            )
+        if(APPLE)
+            alcedo_install_metal_runtime_libs("${CMAKE_INSTALL_BINDIR}/metallib")
         endif()
     endif()
 endif()

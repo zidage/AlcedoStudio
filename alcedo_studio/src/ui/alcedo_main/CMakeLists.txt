@@ -907,6 +907,22 @@ if(APPLE AND ALCEDO_METAL_ENABLED AND ALCEDO_METAL_RUNTIME_LIBS)
         set(_alcedo_metallib_runtime_dir "$<TARGET_FILE_DIR:alcedo_main>/metallib")
     endif()
 
+    # Ensure every packaged metallib is built before POST_BUILD copy, even when
+    # an intermediate static lib is not linked into a particular configuration.
+    add_dependencies(alcedo_main
+        MetalUtilsShaders
+        MetalGeometryUtilsShaders
+        LensCalibOpMetalShaders
+        EditPipelineMetalShaders
+        ScopeAnalyzerMetalShaders
+        MetalToLinearRefShaders
+        MetalDebayerRcdShaders
+        MetalHighlightReconstructShaders
+        MetalXTransInterpolateShaders
+        MetalCvtRefSpaceShaders
+        MetalDemosaicNetIoShaders
+    )
+
     add_custom_command(TARGET alcedo_main POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${_alcedo_metallib_runtime_dir}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -916,6 +932,29 @@ if(APPLE AND ALCEDO_METAL_ENABLED AND ALCEDO_METAL_RUNTIME_LIBS)
         VERBATIM
     )
 endif()
+
+# Ship DemosaicNet weights next to the executable for build-tree and installed
+# bundles. Runtime resolves config/models/{bayer,xtrans}.safetensors relative
+# to the executable (see Metal/OpenCL/CUDA demosaicnet caches).
+set(_alcedo_demosaicnet_model_src_dir "${ALCEDO_SRC_ROOT}/config/models")
+set(_alcedo_demosaicnet_model_files
+    "${_alcedo_demosaicnet_model_src_dir}/bayer.safetensors"
+    "${_alcedo_demosaicnet_model_src_dir}/xtrans.safetensors"
+)
+if(APPLE AND ALCEDO_MACOS_BUNDLE)
+    set(_alcedo_demosaicnet_model_dest_dir
+        "$<TARGET_BUNDLE_CONTENT_DIR:alcedo_main>/MacOS/config/models")
+else()
+    set(_alcedo_demosaicnet_model_dest_dir "$<TARGET_FILE_DIR:alcedo_main>/config/models")
+endif()
+add_custom_command(TARGET alcedo_main POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${_alcedo_demosaicnet_model_dest_dir}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${_alcedo_demosaicnet_model_files}
+        "${_alcedo_demosaicnet_model_dest_dir}"
+    COMMAND_EXPAND_LISTS
+    VERBATIM
+)
 
 if(WIN32 AND TARGET alcedo_lensfun)
     add_custom_command(TARGET alcedo_main POST_BUILD

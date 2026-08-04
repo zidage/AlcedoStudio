@@ -64,6 +64,19 @@ assert_executable() {
   [[ -x "$1" ]] || fail "required executable is not executable: $1"
 }
 
+# Reject Git LFS pointer stubs / truncated checkouts that would pass a bare
+# existence check but break Neural Engine demosaic on user machines.
+assert_min_size() {
+  local path="$1"
+  local min_bytes="$2"
+  assert_file "$path"
+  local size
+  size="$(wc -c <"$path" | tr -d ' ')"
+  if [[ "$size" -lt "$min_bytes" ]]; then
+    fail "file too small (${size} < ${min_bytes} bytes), likely incomplete: $path"
+  fi
+}
+
 assert_dir "$app_dir"
 assert_dir "$macos_dir"
 assert_dir "$resources_dir"
@@ -84,8 +97,6 @@ required_files=(
   "${macos_dir}/fonts/main_Inter.ttf"
   "${macos_dir}/fonts/main_NotoSans_zh.ttf"
   "${macos_dir}/config/icc/rec709_gamma22.icc"
-  "${macos_dir}/config/models/bayer.safetensors"
-  "${macos_dir}/config/models/xtrans.safetensors"
   "${resources_dir}/duckdb_extensions/vss.duckdb_extension"
   "${resources_dir}/duckdb_extensions/fts.duckdb_extension"
   "${frameworks_dir}/QtCore.framework/QtCore"
@@ -100,9 +111,15 @@ for file in "${required_files[@]}"; do
   assert_file "$file"
 done
 
+# DemosaicNet weights: required for Neural Engine demosaic out of the box.
+# Real bayer/xtrans safetensors are ~130–160 KiB; LFS pointers are ~130 bytes.
+assert_min_size "${macos_dir}/config/models/bayer.safetensors" 10240
+assert_min_size "${macos_dir}/config/models/xtrans.safetensors" 10240
+
 if [[ "$skip_metal_assets" -eq 0 ]]; then
   metal_dir="${resources_dir}/metallib"
   assert_dir "$metal_dir"
+  # Keep in sync with ALCEDO_METAL_RUNTIME_LIBS in alcedo_studio/src/metal/CMakeLists.txt
   metal_libs=(
     metal_convert.metallib
     geometry_utils.metallib
@@ -117,7 +134,8 @@ if [[ "$skip_metal_assets" -eq 0 ]]; then
     demosaicnet_io.metallib
   )
   for lib in "${metal_libs[@]}"; do
-    assert_file "${metal_dir}/${lib}"
+    # Empty/corrupt metallibs would still "exist"; require a non-trivial size.
+    assert_min_size "${metal_dir}/${lib}" 512
   done
 fi
 
