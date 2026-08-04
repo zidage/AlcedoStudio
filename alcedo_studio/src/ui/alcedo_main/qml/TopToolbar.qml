@@ -7,6 +7,7 @@ import QtQuick.Layouts
 // Inspector toggle, and frameless window caption buttons.
 Rectangle {
     id: root
+    objectName: "topToolbar"
     property var theme: null
     property var host: null
     Layout.fillWidth: true
@@ -66,33 +67,38 @@ Rectangle {
         // ── File menu ──
         Button {
             id: fileMenuButton
+            objectName: "fileMenuButton"
             text: qsTr("File")
             flat: true
             Material.foreground: root.theme ? root.theme.colText : appTheme.textColor
             onClicked: fileMenu.open()
 
-            Menu {
+            AppContextMenu {
                 id: fileMenu
+                objectName: "fileMenu"
                 x: 0
                 y: fileMenuButton.height + 4
 
-                MenuItem {
+                AppMenuItem {
+                    objectName: "fileMenuLoadProject"
                     text: qsTr("Load Project")
                     enabled: root.host && !root.host.projectLaunchBusy && !appModules.project.acceleratorPreparing
                     onTriggered: root.host.beginProjectLaunch(function() {
                         return appModules.project.PromptAndLoadProject()
                     })
                 }
-                MenuItem {
+                AppMenuItem {
+                    objectName: "fileMenuCreateProject"
                     text: qsTr("Create Project")
                     enabled: root.host && !root.host.projectLaunchBusy && !appModules.project.acceleratorPreparing
                     onTriggered: root.host.beginProjectLaunch(function() {
                         return appModules.project.PromptAndCreateProject()
                     })
                 }
-                MenuSeparator {
+                AppMenuSeparator {
                 }
-                MenuItem {
+                AppMenuItem {
+                    objectName: "fileMenuSaveProject"
                     text: qsTr("Save Project")
                     enabled: root.host && root.host.backendInteractive
                     onTriggered: root.host.requestSaveProject()
@@ -102,6 +108,7 @@ Rectangle {
 
         Button {
             id: settingsPopoutButton
+            objectName: "settingsPopoutButton"
             text: qsTr("Settings")
             flat: true
             Material.foreground: root.theme ? root.theme.colText : appTheme.textColor

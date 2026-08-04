@@ -22,25 +22,81 @@ constant uint kPlaneBaseB    = 2u;
 constant uint kPlaneDilatedR = 3u;
 constant uint kPlaneDilatedG = 4u;
 constant uint kPlaneDilatedB = 5u;
-constant uint kPlaneBaseMulti = 6u;
-constant uint kPlaneDilMulti  = 7u;
+// Reconstruction ramps in over the top (1 - kSoftClipLo) fraction below the clip level instead
+// of switching on exactly at the clip point. Shot/read noise makes pixels straddle a hard
+// threshold, which decorrelates neighbours and shows up as speckle at highlight edges.
+constant float kSoftClipLo = 0.95f;
 
 static inline float Cube(float value) { return value * value * value; }
 
-static inline float3 MaxRgb(float4 value) { return max(value.rgb, float3(0.0f)); }
+// A CMOS readout is a finite, non-negative electron count. Anything else (negative black-level
+// residue, NaN/Inf from an upstream artefact) is mapped to 0 so a single corrupt sample can
+// neither become a dark outlier nor poison the neighbourhood statistics.
+static inline float SanitizeChannel(float value) {
+  return isfinite(value) ? max(value, 0.0f) : 0.0f;
+}
 
-static inline int CountClippedChannels(float3 pixel, constant HighlightParams& params) {
-  int count = 0;
-  count += pixel.x >= params.clips[0] ? 1 : 0;
-  count += pixel.y >= params.clips[1] ? 1 : 0;
-  count += pixel.z >= params.clips[2] ? 1 : 0;
-  return count;
+static inline float3 MaxRgb(float4 value) {
+  return float3(SanitizeChannel(value.x), SanitizeChannel(value.y), SanitizeChannel(value.z));
+}
+
+static inline float SoftClipWeight(float value, float clip) {
+  const float lo = kSoftClipLo * clip;
+  const float t  = clamp((value - lo) / (clip - lo), 0.0f, 1.0f);
+  return t * t * (3.0f - 2.0f * t);
+}
+
+static inline float ReconstructChannel(float pixel, float ref, float chrominance, float weight) {
+  if (weight <= 0.0f) {
+    return pixel;
+  }
+  return pixel + weight * (max(pixel, ref + chrominance) - pixel);
+}
+
+// Accumulate one neighbourhood sample. A sample at/above the clip level is censored by the
+// sensor (the photosite has reached full well, so its readout only means ">= clip"), or is a
+// hot-pixel/demosaic outlier; either way it carries no usable level information and must not
+// move the mean at face value. Censored samples still feed the fallback used when a channel
+// has no uncensored sample left (e.g. inside a fully blown region). Non-finite samples are
+// dropped entirely.
+static inline void RefavgAccumulate(thread float* valid_sum, thread float* valid_cnt,
+                                    thread float* all_sum, thread float* all_cnt, float3 raw,
+                                    constant HighlightParams& params) {
+  if (isfinite(raw.x)) {
+    const float v = max(raw.x, 0.0f);
+    all_sum[0] += v;
+    all_cnt[0] += 1.0f;
+    if (v < params.clips[0]) {
+      valid_sum[0] += v;
+      valid_cnt[0] += 1.0f;
+    }
+  }
+  if (isfinite(raw.y)) {
+    const float v = max(raw.y, 0.0f);
+    all_sum[1] += v;
+    all_cnt[1] += 1.0f;
+    if (v < params.clips[1]) {
+      valid_sum[1] += v;
+      valid_cnt[1] += 1.0f;
+    }
+  }
+  if (isfinite(raw.z)) {
+    const float v = max(raw.z, 0.0f);
+    all_sum[2] += v;
+    all_cnt[2] += 1.0f;
+    if (v < params.clips[2]) {
+      valid_sum[2] += v;
+      valid_cnt[2] += 1.0f;
+    }
+  }
 }
 
 static inline float3 CalcRefavg(device const float4* input, int row, int col,
                                 constant HighlightParams& params) {
-  float mean[3] = {0.0f, 0.0f, 0.0f};
-  float cnt[3]  = {0.0f, 0.0f, 0.0f};
+  float valid_sum[3] = {0.0f, 0.0f, 0.0f};
+  float valid_cnt[3] = {0.0f, 0.0f, 0.0f};
+  float all_sum[3]   = {0.0f, 0.0f, 0.0f};
+  float all_cnt[3]   = {0.0f, 0.0f, 0.0f};
 
   const int dymin = max(0, row - 1);
   const int dxmin = max(0, col - 1);
@@ -49,19 +105,18 @@ static inline float3 CalcRefavg(device const float4* input, int row, int col,
 
   for (int dy = dymin; dy <= dymax; ++dy) {
     for (int dx = dxmin; dx <= dxmax; ++dx) {
-      const float3 sample =
-          MaxRgb(input[static_cast<uint>(dy) * params.stride + static_cast<uint>(dx)]);
-      mean[0] += sample.x;
-      mean[1] += sample.y;
-      mean[2] += sample.z;
-      cnt[0] += 1.0f;
-      cnt[1] += 1.0f;
-      cnt[2] += 1.0f;
+      RefavgAccumulate(valid_sum, valid_cnt, all_sum, all_cnt,
+                       input[static_cast<uint>(dy) * params.stride + static_cast<uint>(dx)].rgb,
+                       params);
     }
   }
 
+  float mean[3];
   for (uint c = 0; c < 3u; ++c) {
-    mean[c] = (cnt[c] > 0.0f) ? pow(mean[c] / cnt[c], 1.0f / 3.0f) : 0.0f;
+    const float m = (valid_cnt[c] > 0.0f) ? valid_sum[c] / valid_cnt[c]
+                    : (all_cnt[c] > 0.0f)   ? all_sum[c] / all_cnt[c]
+                                            : 0.0f;
+    mean[c] = pow(m, 1.0f / 3.0f);
   }
 
   return float3(Cube(0.5f * (mean[1] + mean[2])), Cube(0.5f * (mean[0] + mean[2])),
@@ -99,14 +154,12 @@ kernel void hlr_build_mask(device const float4* input [[buffer(0)]],
   const uint   index = gid.y * params.stride + gid.x;
   const uint   idx   = gid.y * params.width + gid.x;
   const float3 pixel = MaxRgb(input[index]);
-  const int    count = CountClippedChannels(pixel, params);
 
-  mask_buf[kPlaneBaseR * size + idx]    = pixel.x >= params.clips[0] ? 1 : 0;
-  mask_buf[kPlaneBaseG * size + idx]    = pixel.y >= params.clips[1] ? 1 : 0;
-  mask_buf[kPlaneBaseB * size + idx]    = pixel.z >= params.clips[2] ? 1 : 0;
-  mask_buf[kPlaneBaseMulti * size + idx] = count >= 2 ? 1 : 0;
+  mask_buf[kPlaneBaseR * size + idx] = pixel.x >= params.clips[0] ? 1 : 0;
+  mask_buf[kPlaneBaseG * size + idx] = pixel.y >= params.clips[1] ? 1 : 0;
+  mask_buf[kPlaneBaseB * size + idx] = pixel.z >= params.clips[2] ? 1 : 0;
 
-  if (count > 0) {
+  if (pixel.x >= params.clips[0] || pixel.y >= params.clips[1] || pixel.z >= params.clips[2]) {
     atomic_store_explicit(anyclipped, 1u, memory_order_relaxed);
   }
 }
@@ -130,9 +183,6 @@ kernel void hlr_dilate_mask(device const uchar* mask_buf [[buffer(0)]],
   dilated_mask_buf[kPlaneDilatedB * size + idx] =
       DilateMaskAt(mask_buf + kPlaneBaseB * size, params.width, params.height,
                    static_cast<int>(gid.y), static_cast<int>(gid.x), static_cast<int>(kDilateRadius));
-  dilated_mask_buf[kPlaneDilMulti * size + idx] =
-      DilateMaskAt(mask_buf + kPlaneBaseMulti * size, params.width, params.height,
-                   static_cast<int>(gid.y), static_cast<int>(gid.x), static_cast<int>(kDilateRadius));
 }
 
 kernel void hlr_chrominance_contrib(device const float4* input [[buffer(0)]],
@@ -149,25 +199,33 @@ kernel void hlr_chrominance_contrib(device const float4* input [[buffer(0)]],
   const uint   index = gid.y * params.stride + gid.x;
   const uint   idx   = gid.y * params.width + gid.x;
   const float3 pixel = MaxRgb(input[index]);
-  const float3 ref   = CalcRefavg(input, static_cast<int>(gid.y), static_cast<int>(gid.x), params);
+
+  const bool use_r = mask_buf[kPlaneDilatedR * size + idx] && pixel.x > params.clipdark[0] &&
+                     pixel.x < params.clips[0];
+  const bool use_g = mask_buf[kPlaneDilatedG * size + idx] && pixel.y > params.clipdark[1] &&
+                     pixel.y < params.clips[1];
+  const bool use_b = mask_buf[kPlaneDilatedB * size + idx] && pixel.z > params.clipdark[2] &&
+                     pixel.z < params.clips[2];
 
   float4 contrib_value = float4(0.0f);
   float4 count_value   = float4(0.0f);
 
-  if (mask_buf[kPlaneDilatedR * size + idx] && pixel.x > params.clipdark[0] &&
-      pixel.x < params.clips[0]) {
-    contrib_value.x = pixel.x - ref.x;
-    count_value.x   = 1.0f;
-  }
-  if (mask_buf[kPlaneDilatedG * size + idx] && pixel.y > params.clipdark[1] &&
-      pixel.y < params.clips[1]) {
-    contrib_value.y = pixel.y - ref.y;
-    count_value.y   = 1.0f;
-  }
-  if (mask_buf[kPlaneDilatedB * size + idx] && pixel.z > params.clipdark[2] &&
-      pixel.z < params.clips[2]) {
-    contrib_value.z = pixel.z - ref.z;
-    count_value.z   = 1.0f;
+  // refavg costs nine reads; only pay for it inside the chrominance ring.
+  if (use_r || use_g || use_b) {
+    const float3 ref =
+        CalcRefavg(input, static_cast<int>(gid.y), static_cast<int>(gid.x), params);
+    if (use_r) {
+      contrib_value.x = pixel.x - ref.x;
+      count_value.x   = 1.0f;
+    }
+    if (use_g) {
+      contrib_value.y = pixel.y - ref.y;
+      count_value.y   = 1.0f;
+    }
+    if (use_b) {
+      contrib_value.z = pixel.z - ref.z;
+      count_value.z   = 1.0f;
+    }
   }
 
   contrib[index] = contrib_value;
@@ -185,17 +243,18 @@ kernel void hlr_reconstruct(device const float4* input [[buffer(0)]],
   const uint  index = gid.y * params.stride + gid.x;
   const float4 input_pixel = input[index];
   const float3 pixel       = MaxRgb(input_pixel);
-  const float3 ref         = CalcRefavg(input, static_cast<int>(gid.y), static_cast<int>(gid.x), params);
+  const float3 weight      = float3(SoftClipWeight(pixel.x, params.clips[0]),
+                                    SoftClipWeight(pixel.y, params.clips[1]),
+                                    SoftClipWeight(pixel.z, params.clips[2]));
 
   float3 result = pixel;
-  if (pixel.x >= params.clips[0]) {
-    result.x = max(pixel.x, ref.x + params.chrominance[0]);
-  }
-  if (pixel.y >= params.clips[1]) {
-    result.y = max(pixel.y, ref.y + params.chrominance[1]);
-  }
-  if (pixel.z >= params.clips[2]) {
-    result.z = max(pixel.z, ref.z + params.chrominance[2]);
+  // refavg costs nine reads; unclipped pixels keep their value and never touch it.
+  if (weight.x > 0.0f || weight.y > 0.0f || weight.z > 0.0f) {
+    const float3 ref =
+        CalcRefavg(input, static_cast<int>(gid.y), static_cast<int>(gid.x), params);
+    result.x = ReconstructChannel(pixel.x, ref.x, params.chrominance[0], weight.x);
+    result.y = ReconstructChannel(pixel.y, ref.y, params.chrominance[1], weight.y);
+    result.z = ReconstructChannel(pixel.z, ref.z, params.chrominance[2], weight.z);
   }
 
   output[index] = float4(result, input_pixel.w);

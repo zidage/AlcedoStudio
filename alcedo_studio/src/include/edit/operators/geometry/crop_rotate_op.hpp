@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 #include "edit/operators/op_base.hpp"
@@ -27,6 +28,8 @@ class CropRotateOp : public OperatorBase<CropRotateOp> {
   std::string        aspect_ratio_preset_ = "free";
   float              aspect_ratio_width_  = 1.0f;
   float              aspect_ratio_height_ = 1.0f;
+  uint32_t           source_width_        = 0;
+  uint32_t           source_height_       = 0;
 
  public:
   static constexpr PriorityLevel     priority_level_    = 2;

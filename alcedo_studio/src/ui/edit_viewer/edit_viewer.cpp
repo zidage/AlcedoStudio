@@ -435,7 +435,7 @@ void QtEditViewer::UnmapResource() {
 #endif
 }
 
-void QtEditViewer::NotifyFrameReady() {
+void QtEditViewer::NotifyFrameReady(const FrameCompletionSubmission& submission) {
 #if defined(HAVE_CUDA) || defined(HAVE_OPENCL)
   if (render_target_surface_ && render_target_surface_->supportsDirectGpuPresent()) {
     render_target_surface_->notifyFrameReady();
@@ -443,23 +443,28 @@ void QtEditViewer::NotifyFrameReady() {
     return;
   }
 #ifdef HAVE_CUDA
+  frame_mailbox_.SetNextFramePresentationMode(submission.mode);
   frame_mailbox_.NotifyFrameReady();
   emit RequestUpdate();
 #endif
 #endif
+  (void)submission;
+}
+
+void QtEditViewer::BindFrameSubmission(const FrameCompletionSubmission& submission) {
+  std::lock_guard<std::mutex> lock(host_frame_mutex_);
+  bound_submission_       = submission;
+  bound_submission_valid_ = true;
 }
 
 void QtEditViewer::SubmitHostFrame(const ViewerFrame& frame) {
   {
     std::lock_guard<std::mutex> lock(host_frame_mutex_);
-    ViewerFrame                 submitted_frame = frame;
-    if (pending_presentation_mode_valid_) {
-      submitted_frame.presentation_mode = pending_presentation_mode_;
-      pending_presentation_mode_valid_  = false;
-    }
-    if (pending_preview_metadata_valid_) {
-      submitted_frame.preview_metadata = pending_preview_metadata_;
-      pending_preview_metadata_valid_  = false;
+    ViewerFrame submitted_frame = frame;
+    if (bound_submission_valid_) {
+      submitted_frame.presentation_mode = bound_submission_.mode;
+      submitted_frame.preview_metadata = bound_submission_.metadata;
+      bound_submission_valid_          = false;
     }
     pending_host_frame_ = std::move(submitted_frame);
 #ifdef HAVE_METAL
@@ -473,14 +478,11 @@ void QtEditViewer::SubmitHostFrame(const ViewerFrame& frame) {
 void QtEditViewer::SubmitMetalFrame(const ViewerMetalFrame& frame) {
   {
     std::lock_guard<std::mutex> lock(host_frame_mutex_);
-    ViewerMetalFrame            submitted_frame = frame;
-    if (pending_presentation_mode_valid_) {
-      submitted_frame.presentation_mode = pending_presentation_mode_;
-      pending_presentation_mode_valid_  = false;
-    }
-    if (pending_preview_metadata_valid_) {
-      submitted_frame.preview_metadata = pending_preview_metadata_;
-      pending_preview_metadata_valid_  = false;
+    ViewerMetalFrame submitted_frame = frame;
+    if (bound_submission_valid_) {
+      submitted_frame.presentation_mode = bound_submission_.mode;
+      submitted_frame.preview_metadata  = bound_submission_.metadata;
+      bound_submission_valid_           = false;
     }
     pending_metal_frame_ = std::move(submitted_frame);
     pending_host_frame_.reset();
@@ -533,35 +535,6 @@ auto QtEditViewer::GetHeight() const -> int {
 
 auto QtEditViewer::GetViewportRenderRegion() const -> std::optional<ViewportRenderRegion> {
   return viewer_state_.GetViewportRenderRegion();
-}
-
-void QtEditViewer::SetNextFramePresentationMode(FramePresentationMode mode) {
-#if defined(HAVE_CUDA) || defined(HAVE_OPENCL)
-  if (render_target_surface_ && render_target_surface_->supportsDirectGpuPresent()) {
-    render_target_surface_->setNextFramePresentationMode(mode);
-  }
-#ifdef ALCEDO_HAS_LEGACY_GL_VIEWER
-  if (HasLegacyGlSurface(surface_.get())) {
-    frame_mailbox_.SetNextFramePresentationMode(mode);
-  }
-#endif
-#endif
-  {
-    std::lock_guard<std::mutex> lock(host_frame_mutex_);
-    pending_presentation_mode_       = mode;
-    pending_presentation_mode_valid_ = true;
-  }
-}
-
-void QtEditViewer::SetNextFramePreviewMetadata(const FramePreviewMetadata& metadata) {
-#if defined(HAVE_CUDA) || defined(HAVE_OPENCL)
-  if (render_target_surface_ && render_target_surface_->supportsDirectGpuPresent()) {
-    render_target_surface_->setNextFramePreviewMetadata(metadata);
-  }
-#endif
-  std::lock_guard<std::mutex> lock(host_frame_mutex_);
-  pending_preview_metadata_       = metadata;
-  pending_preview_metadata_valid_ = true;
 }
 
 auto QtEditViewer::GetViewerSurface() -> IEditViewerSurface* { return surface_.get(); }

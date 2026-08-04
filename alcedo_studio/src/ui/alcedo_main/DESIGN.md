@@ -80,6 +80,9 @@ and notify via `ThemeChanged`.
 | Accent secondary | `accentSecondaryColor` | Thumb border, Material primary |
 | Danger | `dangerColor` (`toneWine`) | Destructive emphasis |
 | Danger tint | `dangerTintColor` | Soft danger wells |
+| Background task finished | `backgroundTaskFinishedColor` | Green status lamp for completed/canceled work |
+| Background task working | `backgroundTaskWorkingColor` | Yellow status lamp for queued/running/canceling work |
+| Background task failed | `backgroundTaskFailedColor` | Red status lamp for failed work |
 | Selected tint | `selectedTintColor` | Library selected card wash |
 | Hover | `hoverColor` | Quiet hover wash |
 | Divider | `dividerColor` | Hairlines, card borders |
@@ -109,12 +112,19 @@ well. Type badges use a white chip (`editorSliderHandleColor`) on dark rows and
 invert to ink-on-bone when the row is selected. Do not reintroduce ad-hoc
 `#D8D4CD` / `Qt.rgba` star or badge colors in feature QML.
 
-**History/Versions outline selection:** the transaction timeline, named Version
-cards, and their persistent rail buttons keep `cardSurfaceColor` and use the
-primary text token as a quiet 1 px outline for the active item. They do not use
-the filled `editorListSelectedFillColor` well; that filled selection remains
-reserved for dense catalog rows such as LUT and is unchanged by the
-History/Versions refactor.
+**History/Versions outline selection:** the transaction timeline is a Git
+graph: flat rows sit directly on the sunken `bgBaseColor` well while a
+continuous 1 px `cardBorderColor` rail links state-driven node glyphs down the
+left gutter — small solid disc for applied edits, small hollow ring for undone
+(redo) rows, large hollow ring for the graph root and merge commits, and a
+large double ring (text-ink outline + inner dot) for the checked-out commit.
+Only the checked-out row carries a `cardSurfaceColor` fill with the quiet 1 px
+text-token outline; all other rows stay flat, showing at most a quiet
+`hoverColor` wash on hover for movable rows. Named Version cards and the
+persistent rail buttons keep the prior `cardSurfaceColor` + 1 px outline
+language. None of these surfaces use the filled `editorListSelectedFillColor`
+well; that filled selection remains reserved for dense catalog rows such as
+LUT and is unchanged by the History/Versions refactor.
 
 **List well inset (required):** the light selected bar must **not** flush the
 sunken track border. Use `spaceXs` as list track padding (`ListView` margins)
@@ -210,6 +220,13 @@ Use All Current / Incoming sit below the list, horizontally centered. Conflict
 rows have no outer card chrome — only the three comparison panes are cards
 (`bgBaseColor`, quiet border; selected sides use merge-tint borders). Complete
 uses the monochrome selected fill.
+
+**Editor close confirm:** `EditorCloseConfirmDialog` uses the same blur +
+`overlayColor` modal shell and `DialogActionButton` actions (Cancel / Discard /
+Save). Save calls `workspaceRouter.openLibrary()` — the same Finalize(true) seal
+as switching to Library — then waits on `sessionState` (`Saving` / `Switching`,
+same gate as the filmstrip) until `NoImage` before quitting. Discard uses
+`Finalize(false)`.
 
 The History/Versions rail width (60 px) and rail-button hit (46 px) stay under
 Icon and action geometry; the rail width is not tokenized because it is locked to
@@ -345,6 +362,7 @@ blocking. Session identity is never recreated by a fold.
 | `motionFoldOpenMs` | 200 | Opening fold (emphasized); also capsule thumb slide floor |
 | `motionFoldCloseMs` | 160 | Closing fold (slightly faster) |
 | `motionFadeMs` | 120 | Short fades — **LUT list selected well opacity** |
+| `backgroundTaskAutoCollapseMs` | 3000 | Time the task summary remains expanded after a task state changes |
 | Easing | `Easing.OutCubic` | Open/close and list selection fade |
 | `reduceMotion` | `QSettings("ui/reduceMotion")` | When true, all fold/fade/slide durations resolve to **0**; final state unchanged |
 
@@ -385,6 +403,30 @@ blocking. Session identity is never recreated by a fold.
 
 ---
 
+## Context menus
+
+All popup menus (Library grid right-click, editor filmstrip right-click,
+toolbar dropdowns) share one dark menu family — no per-site ad-hoc styling.
+
+| Role | Token |
+| --- | --- |
+| Menu surface | `bgBaseColor` (same dark well as editor dropdown popups) |
+| Menu outline | 1 px `dividerColor` hairline |
+| Menu shell radius | `panelRadius` |
+| Row hover / keyboard highlight | `hoverColor` wash, `controlRadiusSmall` radius |
+| Row text | `textColor`; disabled rows mute to `textMutedColor` |
+| Separator | 1 px `dividerColor`, `spaceXs` vertical air |
+| Menu padding | `spaceXs` (highlight wash stays inset from the shell edge) |
+| Row metrics | `spaceSm` horizontal / `spaceXs` vertical padding, `fontSizeBody` |
+| State gutter | Reserved `spaceLg` left column for check marks so rows share one text edge |
+| Open / close | `motionFadeMs` opacity fade, skipped under `reduceMotion` |
+
+Use `AppContextMenu` + `AppMenuItem` + `AppMenuSeparator` for every new menu;
+sub-menus declared as nested `AppContextMenu` with a `title` pick up the same
+row delegate and arrow affordance automatically.
+
+---
+
 ## Shared components
 
 | Component | Responsibility |
@@ -393,6 +435,9 @@ blocking. Session identity is never recreated by a fold.
 | `CollapsibleSection.qml` | Folding group shell with shared motion driver |
 | `DialogActionButton.qml` | Text dialog actions (height 46 reference) |
 | `IconButton.qml` | Legacy square icon control; defaults now follow tokens |
+| `AppContextMenu.qml` | Shared dark popup menu shell (`Menu` + `AppMenuItem` delegate, fade transition, `openAt`) |
+| `AppMenuItem.qml` | Shared dark menu row (state gutter, elided label, sub-menu arrow, hover wash) |
+| `AppMenuSeparator.qml` | Shared 1 px menu group divider |
 
 ---
 

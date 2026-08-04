@@ -231,10 +231,11 @@ TEST_F(EditorHistoryTransactionsPanelQmlTest, EachTransactionCardShowsItsOwnComm
         << "hash line must show this commit's short id, not a shared head";
     EXPECT_EQ(hash_label->property("font").value<QFont>().family(),
               AppTheme::Instance().monoFontFamily());
-    // LUT-density row: body + caption + spaceSm.
+    // Git-graph row: title line + caption chip line + top/gap/chip air
+    // (EditorHistoryTransactionEntry owns the formula).
     EXPECT_EQ(delegate->height(),
-              AppTheme::Instance().lineHeightBody() + AppTheme::Instance().lineHeightCaption() +
-                  AppTheme::Instance().spaceSm());
+              AppTheme::Instance().lineHeightTitle() + AppTheme::Instance().lineHeightCaption() +
+                  AppTheme::Instance().spaceXs() * 3 + AppTheme::Instance().spaceSm());
     ++hashed_cards;
   }
   EXPECT_GE(hashed_cards, 1);

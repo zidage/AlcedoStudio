@@ -6,7 +6,7 @@ import Alcedo.Main 1.0
 // Right-side editor tools: histogram/waveform scope slot, adjustment navbar,
 // and stacked panel bodies for Tone / Look / LUT / Display Transform / Geometry /
 // RAW Decode.
-// section shell that proves the shared fold motion contract.
+//
 // Phase 4D: every surface, button fill, and disabled state uses opaque named
 // theme colors (alpha 255). No parent-shell opacity, withAlpha(…), Qt.rgba(…,
 // alpha), or "transparent" surface fills remain.
@@ -15,6 +15,10 @@ import Alcedo.Main 1.0
 // right column matches History/Versions, the viewport placeholder, and the
 // filmstrip. Disabled state mutes text/icons and disables controls — it does
 // not recolor the shell to a second panel tone.
+//
+// Snapshot loading: stack fans out on AdjustmentSnapshotChanged / session bind.
+// Child panels still bootstrap once on construction so first-frame projection
+// works if session is assigned before StackLayout children exist.
 Item {
     id: root
     objectName: "editorAdjustmentStack"
@@ -55,8 +59,12 @@ Item {
     Layout.maximumWidth: maximumPanelWidth
     Layout.fillHeight: true
 
-    // Phase 6C-7: last applied snapshot content key for idempotent reload.
-    property var lastAppliedSnapshot: null
+    // Counts successful fan-outs for tests/diagnostics. Content equality is
+    // gated by the controller: AdjustmentSnapshotChanged only fires when the
+    // cached map actually changes (interactive submit suppresses the emit).
+    // Do not JSON.stringify the full snapshot for idempotency — that freezes
+    // the GUI on large maps (curve/HLS/ODT/crop) every settled commit.
+    property int lastAppliedRevision: -1
 
     // LUT catalog model shared between EditorLookPanel and LUTPanel.
     EditorLutCatalogModel {
@@ -65,50 +73,48 @@ Item {
         submitter: root.editorSession
     }
 
-
     /// Load panel values from the editor session adjustment snapshot.
-    /// Idempotent: re-applying an equal snapshot map has no effect. Each panel
-    /// extracts its owned field keys from the snapshot map.
+    /// Fan-out only: each panel extracts its owned field keys. Panel loaders are
+    /// idempotent (equal values no-op), so a second apply from a panel bootstrap
+    /// path is cheap.
     function loadFromSnapshot(snapshot) {
-        if (!editorSession) return
-        if (snapshot === undefined || snapshot === null) return
-        const snapshotKey = JSON.stringify(snapshot)
-        if (root.lastAppliedSnapshot !== null && snapshotKey === root.lastAppliedSnapshot) return
-        root.lastAppliedSnapshot = snapshotKey
-        // Each panel owns its snapshot fields (Tone / Look / LUT). Do not
-        // special-case LUT only at the stack — that path is easy to skip on
-        // workspace re-entry and leaves the list without a selected row.
-        if (typeof tonePanel.loadFromSnapshot === "function") {
+        if (!editorSession)
+            return
+        if (snapshot === undefined || snapshot === null)
+            return
+        root.lastAppliedRevision += 1
+        if (typeof tonePanel.loadFromSnapshot === "function")
             tonePanel.loadFromSnapshot(snapshot)
-        }
-        if (typeof lookPanel.loadFromSnapshot === "function") {
+        if (typeof lookPanel.loadFromSnapshot === "function")
             lookPanel.loadFromSnapshot(snapshot)
-        }
-        if (typeof lutPanel.loadFromSnapshot === "function") {
+        if (typeof lutPanel.loadFromSnapshot === "function")
             lutPanel.loadFromSnapshot(snapshot)
-        }
-        if (typeof displayPanel.loadFromSnapshot === "function") {
+        if (typeof displayPanel.loadFromSnapshot === "function")
             displayPanel.loadFromSnapshot(snapshot)
-        }
-        if (typeof geometryPanel.loadFromSnapshot === "function") {
+        if (typeof geometryPanel.loadFromSnapshot === "function")
             geometryPanel.loadFromSnapshot(snapshot)
-        }
-        if (typeof rawPanel.loadFromSnapshot === "function") {
+        if (typeof rawPanel.loadFromSnapshot === "function")
             rawPanel.loadFromSnapshot(snapshot)
-        }
     }
 
+    /// Defer until child panels finish construction (createWithInitialProperties
+    /// can assign editorSession before StackLayout children exist).
+    function scheduleLoadFromSession() {
+        if (!root.editorSession)
+            return
+        Qt.callLater(function () {
+            if (root.editorSession)
+                root.loadFromSnapshot(root.editorSession.adjustmentSnapshot)
+        })
+    }
 
     function selectPanel(panel) {
         if (!editorSession) {
             return
         }
-        // Leaving Geometry must commit the draft crop before the session turns
-        // off geometry_overlay_only and requests the bake refresh.
-        if (root.activePanel === "geometry" && String(panel).toLowerCase() !== "geometry") {
-            if (typeof geometryPanel.confirmPendingCrop === "function")
-                geometryPanel.confirmPendingCrop()
-        }
+        // GeometryPanel commits from onPanelActiveChanged after the controller
+        // queues the overlay-off refresh. Its final Quality frame therefore owns
+        // the newest request id and cannot be masked by that refresh.
         editorSession.activeAdjustmentPanel = panel
     }
 
@@ -219,7 +225,6 @@ Item {
                     }
                 }
 
-                // Phase 6B: production Tone panel.
                 EditorTonePanel {
                     id: tonePanel
                     objectName: "editorAdjustmentPanel_tone"
@@ -246,56 +251,6 @@ Item {
                     controlsEnabled: root.controlsEnabled
                 }
 
-                component EmptyAdjustmentPage: Item {
-                    property string panelKey: "tone"
-
-                    ColumnLayout {
-                        anchors.fill: parent
-                        spacing: appTheme.spaceSm
-
-                        Label {
-                            Layout.fillWidth: true
-                            text: root.panelTitle(panelKey)
-                            color: root.colText
-                            font.pixelSize: appTheme.fontSizeTitle
-                            font.weight: appTheme.fontWeightHeading
-                        }
-
-                        // Shared fold reference for adjustment groups (Phase 4C).
-                        // Real controls replace the empty body in Phase 6.
-                        // Surface stays the card family; section border provides
-                        // hierarchy without a second panel tone.
-                        CollapsibleSection {
-                            id: groupShell
-                            objectName: "editorAdjustmentGroupShell_" + panelKey
-                            Layout.fillWidth: true
-                            title: root.panelTitle(panelKey)
-                            expanded: true
-                            controlsEnabled: root.controlsEnabled
-                            surfaceColor: root.colCardSurface
-                            disabledSurfaceColor: root.colCardSurface
-                            borderColor: root.colCardBorder
-                            textColor: root.colText
-                            mutedColor: root.colMuted
-                            hoverColor: theme ? theme.colHover : appTheme.hoverColor
-                            accentColor: root.colAccent
-                            bodyContentHeight: 96
-
-                            Label {
-                                anchors.centerIn: parent
-                                width: parent.width - 8
-                                wrapMode: Text.WordWrap
-                                horizontalAlignment: Text.AlignHCenter
-                                text: root.panelEmptyHint(panelKey)
-                                color: root.colMuted
-                                font.pixelSize: appTheme.fontSizeBody
-                            }
-                        }
-
-                        Item { Layout.fillHeight: true }
-                    }
-                }
-
                 EditorDisplayTransformPanel {
                     id: displayPanel
                     objectName: "editorAdjustmentPanel_display"
@@ -303,6 +258,7 @@ Item {
                     editorSession: root.editorSession
                     controlsEnabled: root.controlsEnabled
                 }
+
                 EditorGeometryPanel {
                     id: geometryPanel
                     objectName: "editorAdjustmentPanel_geometry"
@@ -312,6 +268,7 @@ Item {
                     controlsEnabled: root.controlsEnabled
                     panelActive: root.activePanel === "geometry"
                 }
+
                 EditorRawDecodePanel {
                     id: rawPanel
                     objectName: "editorAdjustmentPanel_raw"
@@ -323,28 +280,23 @@ Item {
         }
     }
 
-    // Phase 6C-7: auto-load panel state when the backend publishes a snapshot.
-    // Interactive submitPatch no longer emits this on every pointer move (session
-    // controller suppresses the echo). Settled / undo / image-switch still publish.
+    // Settled / undo / image-switch publish. Interactive submitPatch suppresses
+    // the emit so pointer moves do not re-enter this fan-out.
     Connections {
         target: root.editorSession
         function onAdjustmentSnapshotChanged() {
             root.loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
         }
     }
-    // Also load on initial binding when editorSession changes.
+    // Session rebind: reset apply counter and project after children are ready.
     onEditorSessionChanged: {
-        root.lastAppliedSnapshot = null
-        if (root.editorSession) {
-            root.loadFromSnapshot(root.editorSession.adjustmentSnapshot)
-        }
+        root.lastAppliedRevision = -1
+        root.scheduleLoadFromSession()
     }
     // createWithInitialProperties / first frame: session may already be set
-    // without a change signal. Match Tone/Look panels and always attempt load.
+    // without a change signal.
     Component.onCompleted: {
-        if (root.editorSession) {
-            root.lastAppliedSnapshot = null
-            root.loadFromSnapshot(root.editorSession.adjustmentSnapshot)
-        }
+        root.lastAppliedRevision = -1
+        root.scheduleLoadFromSession()
     }
 }

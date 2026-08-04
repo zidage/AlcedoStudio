@@ -30,7 +30,7 @@ endif()
 def_library(ImageWriter
     SOURCES "${ALCEDO_SRC_ROOT}/io/image/image_writer.cpp"
     PUBLIC_DEPS OpenImageIO::OpenImageIO ImageBuffer ExportIccProfileResolver
-    PRIVATE_DEPS ${ALCEDO_OPENCV_IMAGE_DEPS}
+    PRIVATE_DEPS ${ALCEDO_OPENCV_IMAGE_DEPS} StrConv
 )
 if(PUERHLAB_ULTRAHDR_AVAILABLE)
     target_link_libraries(ImageWriter PUBLIC UltraHdrWriter)

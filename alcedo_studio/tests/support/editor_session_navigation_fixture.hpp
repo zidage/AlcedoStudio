@@ -71,6 +71,7 @@ class EditorSessionNavigationFixture {
   [[nodiscard]] auto nav() -> EditorSessionNavigationController& { return *nav_; }
   [[nodiscard]] auto lifecycle() -> EditorSessionLifecycle& { return *lifecycle_; }
   [[nodiscard]] auto render() -> EditorSessionRenderController& { return *render_; }
+  [[nodiscard]] auto render_submit() -> FakeEditorRenderSubmitPort& { return *render_submit_; }
   [[nodiscard]] auto save_service() -> EditorSaveCheckpointService& { return *save_service_; }
   [[nodiscard]] auto pipeline() -> FakeEditorPipelinePort& { return pipeline_->inner; }
   [[nodiscard]] auto history() -> FakeEditorHistoryPort& { return history_->inner; }

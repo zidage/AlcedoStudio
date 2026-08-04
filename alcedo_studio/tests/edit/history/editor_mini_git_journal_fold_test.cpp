@@ -2,12 +2,15 @@
 //  SPDX-License-Identifier: GPL-3.0-only
 //  Additional permission under GPLv3 section 7 applies; see the LICENSE file.
 
-#include "app/editor_mini_git_journal_fold.hpp"
+/// Alignment and replay helpers that replaced production EditorMiniGitJournalFold.
+/// Normal save no longer folds WAL into DuckDB; these pure helpers support crash
+/// recovery classification and unique-history suffix application only.
 
 #include <gtest/gtest.h>
 
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "edit/history/commit_graph.hpp"
 #include "edit/history/mini_git_working_history.hpp"
@@ -29,127 +32,131 @@ auto MakeExposurePayload(float before, float after) -> OrdinaryEditPayload {
   return payload;
 }
 
-}  // namespace
-
-class EditorMiniGitJournalFoldTest : public ::testing::Test {
+class MiniGitJournalAlignmentTest : public ::testing::Test {
  protected:
   void SetUp() override {
     TimeProvider::Refresh();
     RegisterAllOperators();
-    graph_ = std::make_shared<CommitGraph>(CommitGraph::CreateEmpty(element_id_, "Default"));
+    graph_   = std::make_shared<CommitGraph>(CommitGraph::CreateEmpty(1, "Default"));
+    journal_ = std::make_shared<MiniGitJournal>();
+    history_ = std::make_unique<MiniGitWorkingHistory>(graph_, journal_);
   }
 
-  sl_element_id_t              element_id_ = 42;
-  std::shared_ptr<CommitGraph> graph_;
+  std::shared_ptr<CommitGraph>             graph_;
+  std::shared_ptr<MiniGitJournal>          journal_;
+  std::unique_ptr<MiniGitWorkingHistory>   history_;
 };
 
-TEST_F(EditorMiniGitJournalFoldTest, FoldEmptyRecordsReturnsAccepted) {
+TEST_F(MiniGitJournalAlignmentTest, EmptyRecordsAreFullyCovered) {
+  const auto alignment = MiniGitWorkingHistory::AlignJournalWithStoredHead(*graph_, {});
+  EXPECT_TRUE(alignment.accepted);
+  EXPECT_TRUE(alignment.fully_covered);
+  EXPECT_FALSE(alignment.broken);
+  EXPECT_FALSE(alignment.contiguous_extension);
+}
+
+TEST_F(MiniGitJournalAlignmentTest, JournalMatchingStoredHeadIsFullyCovered) {
+  ASSERT_TRUE(history_->AppendEdit(MakeExposurePayload(0.0f, 0.5f)).committed);
+  const auto records = journal_->records();
+  ASSERT_FALSE(records.empty());
+
+  const auto alignment = MiniGitWorkingHistory::AlignJournalWithStoredHead(*graph_, records);
+  ASSERT_TRUE(alignment.accepted) << alignment.error;
+  EXPECT_TRUE(alignment.fully_covered);
+  EXPECT_EQ(alignment.missing_from_index, records.size());
+}
+
+TEST_F(MiniGitJournalAlignmentTest, ContiguousMissingSuffixIsReportedAsExtension) {
+  ASSERT_TRUE(history_->AppendEdit(MakeExposurePayload(0.0f, 0.25f)).committed);
+  ASSERT_TRUE(history_->AppendEdit(MakeExposurePayload(0.25f, 0.5f)).committed);
+  const auto records = journal_->records();
+  ASSERT_EQ(records.size(), 2u);
+
+  // Durable graph has only the first commit (crash before second persisted).
+  auto durable = *graph_;
+  durable.MoveWorkingHead(durable.GetActiveVersionId(), records.front().target_head);
+  durable.EraseUnreachableCommits(durable.ListUnreachableCommitHashes());
+  ASSERT_EQ(durable.CommitCount(), 1u);
+
+  const auto alignment = MiniGitWorkingHistory::AlignJournalWithStoredHead(durable, records);
+  ASSERT_TRUE(alignment.accepted) << alignment.error;
+  EXPECT_TRUE(alignment.contiguous_extension);
+  EXPECT_FALSE(alignment.fully_covered);
+  EXPECT_EQ(alignment.missing_from_index, 1u);
+}
+
+TEST_F(MiniGitJournalAlignmentTest, BrokenParentChainIsRejected) {
+  ASSERT_TRUE(history_->AppendEdit(MakeExposurePayload(0.0f, 0.5f)).committed);
+  auto records = journal_->records();
+  ASSERT_EQ(records.size(), 1u);
+
+  // Second record claims a parent that does not match the first record's target.
+  MiniGitJournalRecord broken = records.front();
+  broken.sequence             = records.front().sequence + 1;
+  broken.expected_source_head = Hash128{0xbad, 0xc0de};
+  broken.expected_source_chain_hash = Hash128{0xdead, 0xbeef};
+  records.push_back(broken);
+
+  auto durable = *graph_;
+  durable.MoveWorkingHead(durable.GetActiveVersionId(), std::nullopt);
+  durable.EraseUnreachableCommits(durable.ListUnreachableCommitHashes());
+
+  const auto alignment = MiniGitWorkingHistory::AlignJournalWithStoredHead(durable, records);
+  EXPECT_TRUE(alignment.broken);
+  EXPECT_FALSE(alignment.accepted);
+}
+
+TEST_F(MiniGitJournalAlignmentTest, UnalignedFirstRecordIsBroken) {
+  ASSERT_TRUE(history_->AppendEdit(MakeExposurePayload(0.0f, 0.5f)).committed);
+  auto records = journal_->records();
+  ASSERT_FALSE(records.empty());
+  records.front().expected_source_head = Hash128{0xbad, 0x1};
+  records.front().expected_source_chain_hash = Hash128{0xbad, 0x2};
+
+  auto durable = *graph_;
+  durable.MoveWorkingHead(durable.GetActiveVersionId(), std::nullopt);
+  durable.EraseUnreachableCommits(durable.ListUnreachableCommitHashes());
+
+  const auto alignment = MiniGitWorkingHistory::AlignJournalWithStoredHead(durable, records);
+  EXPECT_TRUE(alignment.broken);
+  EXPECT_FALSE(alignment.accepted);
+}
+
+TEST_F(MiniGitJournalAlignmentTest, ReplaySkippingMaterializedPrefixAppliesOnlyMissingSuffix) {
+  ASSERT_TRUE(history_->AppendEdit(MakeExposurePayload(0.0f, 0.25f)).committed);
+  ASSERT_TRUE(history_->AppendEdit(MakeExposurePayload(0.25f, 0.5f)).committed);
+  const auto records = journal_->records();
+  ASSERT_EQ(records.size(), 2u);
+
+  auto only_first = *graph_;
+  only_first.MoveWorkingHead(only_first.GetActiveVersionId(), records.front().target_head);
+  only_first.EraseUnreachableCommits(only_first.ListUnreachableCommitHashes());
+  ASSERT_EQ(only_first.CommitCount(), 1u);
+
+  std::size_t applied_from = 0;
   std::string error;
-  auto        result = EditorMiniGitJournalFold::Fold(*graph_, {}, &error);
-  EXPECT_TRUE(result.accepted) << result.error;
+  ASSERT_TRUE(MiniGitWorkingHistory::ReplaySkippingMaterializedPrefix(only_first, records,
+                                                                      &applied_from, &error))
+      << error;
+  EXPECT_EQ(applied_from, 1u);
+  EXPECT_EQ(only_first.GetActiveVersionRef().head_commit_hash, records.back().target_head);
+  EXPECT_EQ(only_first.CommitCount(), 2u);
 }
 
-TEST_F(EditorMiniGitJournalFoldTest, FoldEditCommitAdvancesHeadAndChainHash) {
-  auto                  journal = std::make_shared<MiniGitJournal>();
-  MiniGitWorkingHistory history(graph_, journal);
-  const auto            prior_head = history.working_head();
-  ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 1.0f)).committed);
+TEST_F(MiniGitJournalAlignmentTest, StaleSourceHeadWritesNothingOnReplay) {
+  MiniGitJournalRecord stale;
+  stale.kind                       = MiniGitJournalRecordKind::kEditCommit;
+  stale.expected_source_head       = Hash128{0xdead, 0xbeef};
+  stale.expected_source_chain_hash = Hash128{0xcafe, 0xbabe};
+  stale.target_head                = Hash128{0x1, 0x2};
+  stale.target_chain_hash          = Hash128{0x3, 0x4};
 
-  // Build a fold graph from the original (unmodified) state, then fold the same
-  // records the working history just created.
-  auto        fold_graph = *graph_;
+  auto        target = *graph_;
   std::string error;
-  auto        result = EditorMiniGitJournalFold::Fold(fold_graph, journal->records(), &error);
-  ASSERT_TRUE(result.accepted) << result.error;
-  EXPECT_NE(fold_graph.GetActiveVersionRef().head_commit_hash, prior_head);
-  EXPECT_EQ(fold_graph.GetActiveVersionRef().head_commit_hash, history.working_head());
+  EXPECT_FALSE(MiniGitWorkingHistory::Replay(target, {stale}, &error));
+  EXPECT_EQ(target.CommitCount(), 0u);
+  EXPECT_FALSE(target.GetActiveVersionRef().head_commit_hash.has_value());
 }
 
-TEST_F(EditorMiniGitJournalFoldTest, FoldCorruptedRecordReturnsNotAccepted) {
-  std::vector<MiniGitJournalRecord> records;
-  MiniGitJournalRecord              record;
-  record.kind                 = MiniGitJournalRecordKind::kEditCommit;
-  record.expected_source_head = graph_->GetActiveVersionRef().head_commit_hash;
-  record.expected_source_chain_hash =
-      graph_->ChainHashForHead(graph_->GetActiveVersionRef().head_commit_hash);
-  // target_head is std::nullopt (root) but missing required commit data
-  record.target_head       = std::nullopt;
-  record.target_chain_hash = graph_->ChainHashForHead(std::nullopt);
-  record.edit_commit       = std::nullopt;  // Missing commit object
-  records.push_back(std::move(record));
-
-  std::string error;
-  auto        result = EditorMiniGitJournalFold::Fold(*graph_, records, &error);
-  EXPECT_FALSE(result.accepted);
-  EXPECT_FALSE(result.error.empty());
-}
-
-TEST_F(EditorMiniGitJournalFoldTest, FoldWithNullErrorDoesNotCrash) {
-  auto                  journal = std::make_shared<MiniGitJournal>();
-  MiniGitWorkingHistory history(graph_, journal);
-  ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 1.0f)).committed);
-
-  auto fold_graph = *graph_;
-  // Null error pointer must not crash.
-  auto result     = EditorMiniGitJournalFold::Fold(fold_graph, journal->records(), nullptr);
-  EXPECT_TRUE(result.accepted);
-}
-
-/// A journal record whose expected_source_head / chain hash does not match the
-/// fold graph head must reject without modifying that graph.
-///
-/// Important construction rule: fold against a graph that still sits at the
-/// pre-edit head. Folding a record whose target already matches a post-edit
-/// head is the crash-window recovery path (already-materialized prefix), not
-/// the forward stale-source rejection path.
-TEST_F(EditorMiniGitJournalFoldTest, StaleSourceHeadOrChainHashWritesNothing) {
-  // Snapshot the empty/root graph before any journal work.
-  auto       fold_graph    = *graph_;
-  const auto prior_head    = fold_graph.GetActiveVersionRef().head_commit_hash;
-  const auto prior_commits = fold_graph.CommitCount();
-
-  auto                  journal = std::make_shared<MiniGitJournal>();
-  MiniGitWorkingHistory history(graph_, journal);
-  ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 1.0f)).committed);
-  ASSERT_FALSE(journal->records().empty());
-
-  // Structurally valid edit payload, but source head/chain claim a state that
-  // never existed on fold_graph (still at root).
-  MiniGitJournalRecord stale_record = journal->records().front();
-  stale_record.expected_source_head       = Hash128{0xdead, 0xbeef};
-  stale_record.expected_source_chain_hash = Hash128{0xcafe, 0xbabe};
-
-  std::string error;
-  auto        result = EditorMiniGitJournalFold::Fold(fold_graph, {stale_record}, &error);
-  EXPECT_FALSE(result.accepted);
-  EXPECT_FALSE(result.error.empty());
-
-  // Graph must be unchanged.
-  EXPECT_EQ(fold_graph.GetActiveVersionRef().head_commit_hash, prior_head);
-  EXPECT_EQ(fold_graph.CommitCount(), prior_commits);
-}
-
-/// Two consecutive records that both claim the same source head must reject on
-/// the second application: the first advances the head, so the second is stale.
-/// Fold starts from the pre-edit graph so the first record is a true forward
-/// apply rather than an already-materialized recovery skip.
-TEST_F(EditorMiniGitJournalFoldTest, MalformedDuplicateOrOutOfOrderRecordWritesNothing) {
-  auto fold_graph = *graph_;  // Root / pre-edit snapshot.
-
-  auto                  journal = std::make_shared<MiniGitJournal>();
-  MiniGitWorkingHistory history(graph_, journal);
-  ASSERT_TRUE(history.AppendEdit(MakeExposurePayload(0.0f, 1.0f)).committed);
-  ASSERT_FALSE(journal->records().empty());
-
-  const auto& valid_record = journal->records().front();
-
-  // Same source head twice: first applies from root; second is out of order.
-  std::vector<MiniGitJournalRecord> records{valid_record, valid_record};
-
-  std::string error;
-  auto        result = EditorMiniGitJournalFold::Fold(fold_graph, records, &error);
-  EXPECT_FALSE(result.accepted);
-  EXPECT_FALSE(result.error.empty());
-}
-
+}  // namespace
 }  // namespace alcedo

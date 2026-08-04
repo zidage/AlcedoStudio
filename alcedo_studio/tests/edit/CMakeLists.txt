@@ -14,11 +14,10 @@ gtest_discover_tests(EditorHistoryMaterializerTest TEST_PREFIX "EditorHistoryMat
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(EditorHistoryMaterializerTest edit)
 
-# Phase 6C-5: pure journal fold algorithm tests (no database or file I/O).
+# WAL alignment / unique-history replay helpers (replaced production JournalFold).
 add_executable(EditorMiniGitJournalFoldTest ${ALCEDO_TEST_ROOT}/edit/history/editor_mini_git_journal_fold_test.cpp)
 target_include_directories(EditorMiniGitJournalFoldTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorMiniGitJournalFoldTest
-  EditorMiniGitJournalFold
   EditHistory
   GTest::gtest_main)
 gtest_discover_tests(EditorMiniGitJournalFoldTest TEST_PREFIX "EditorMiniGitJournalFoldTest."
@@ -42,12 +41,11 @@ gtest_discover_tests(EditorMiniGitCommitWriterTest TEST_PREFIX "EditorMiniGitCom
   PROPERTIES LABELS "ci_core_flow;edit;history;editor_history")
 alcedo_register_test_target(EditorMiniGitCommitWriterTest edit)
 
-# Phase 6C-5: journal recovery tests (load, detect materialized prefix, truncate).
+# Journal recovery: fully-covered clear, contiguous suffix leave, broken isolate.
 add_executable(EditorMiniGitJournalRecoveryTest ${ALCEDO_TEST_ROOT}/edit/history/editor_mini_git_journal_recovery_test.cpp)
 target_include_directories(EditorMiniGitJournalRecoveryTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorMiniGitJournalRecoveryTest
   EditorMiniGitJournalRecovery
-  EditorMiniGitJournalFold
   EditorMiniGitCommitWriter
   ProjectService
   EditHistory
@@ -143,6 +141,27 @@ gtest_discover_tests(CropRotateOpTest TEST_PREFIX "CropRotateOpTest."
   PROPERTIES LABELS "ci_core_flow")
 alcedo_register_test_target(CropRotateOpTest edit)
 
+# RAW decode durable params: inherent RawColorContext round-trip, omit decode_res.
+add_executable(RawDecodeOpParamsTest
+  ${ALCEDO_TEST_ROOT}/edit/operators/raw/raw_decode_op_params_test.cpp)
+target_include_directories(RawDecodeOpParamsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(RawDecodeOpParamsTest PRIVATE GTest::gtest_main Operators Image)
+gtest_discover_tests(RawDecodeOpParamsTest TEST_PREFIX "RawDecodeOpParamsTest."
+  PROPERTIES LABELS "ci_core_flow;edit;operators")
+alcedo_register_test_target(RawDecodeOpParamsTest edit)
+
+# ColorTemp durable params: as_shot_* vs custom_* keys and legacy aliases.
+add_executable(ColorTempOpParamsTest
+  ${ALCEDO_TEST_ROOT}/edit/operators/basic/color_temp_op_params_test.cpp)
+target_include_directories(ColorTempOpParamsTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(ColorTempOpParamsTest PRIVATE GTest::gtest_main Operators)
+# Skip post-build runtime DLL staging: this is a header/params unit test with no GPU path.
+set_target_properties(ColorTempOpParamsTest PROPERTIES RUNTIME_OUTPUT_DIRECTORY
+  "${CMAKE_CURRENT_BINARY_DIR}/ColorTempOpParamsTest_runtime")
+gtest_discover_tests(ColorTempOpParamsTest TEST_PREFIX "ColorTempOpParamsTest."
+  PROPERTIES LABELS "ci_core_flow;edit;operators")
+alcedo_register_test_target(ColorTempOpParamsTest edit)
+
 # Pipeline frame sink: CPU frame delivery contract.
 add_executable(PipelineFrameSinkTest ${ALCEDO_TEST_ROOT}/edit/pipeline/pipeline_frame_sink_test.cpp)
 target_include_directories(PipelineFrameSinkTest PUBLIC ${ALCEDO_INCLUDE_DIR})
@@ -150,6 +169,15 @@ target_link_libraries(PipelineFrameSinkTest PRIVATE GTest::gtest_main Operators 
                                                     PipelineScheduler ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 gtest_discover_tests(PipelineFrameSinkTest TEST_PREFIX "PipelineFrameSinkTest.")
 alcedo_register_test_target(PipelineFrameSinkTest edit)
+
+add_executable(PipelineSchedulerRequestIdTest
+    ${ALCEDO_TEST_ROOT}/renderer/pipeline_scheduler_request_id_test.cpp)
+target_include_directories(PipelineSchedulerRequestIdTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+target_link_libraries(PipelineSchedulerRequestIdTest PRIVATE GTest::gtest_main Operators EditPipeline
+                                                    PipelineScheduler EditorRhiViewport
+                                                    ${ALCEDO_TEST_OPENCV_MIN_DEPS})
+gtest_discover_tests(PipelineSchedulerRequestIdTest TEST_PREFIX "PipelineSchedulerRequestIdTest.")
+alcedo_register_test_target(PipelineSchedulerRequestIdTest edit)
 
 # Version hash: deterministic parameter hashing.
 add_executable(VersionHashTest ${ALCEDO_TEST_ROOT}/edit/history/version_hash_test.cpp)

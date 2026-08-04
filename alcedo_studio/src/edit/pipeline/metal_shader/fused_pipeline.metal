@@ -732,9 +732,9 @@ kernel void metal_hs_apply_adjusted_l_from_reference_rgba32f(
   }
 
   const float reference_width =
-      static_cast<float>(max(fused_params.render_roi_reference_width_, params.width_));
+      static_cast<float>(max(fused_params.render_roi_reference_width_, 1));
   const float reference_height =
-      static_cast<float>(max(fused_params.render_roi_reference_height_, params.height_));
+      static_cast<float>(max(fused_params.render_roi_reference_height_, 1));
   const float roi_origin_x =
       (fused_params.render_roi_enabled_ != 0u) ? static_cast<float>(fused_params.render_roi_x_)
                                                : 0.0f;

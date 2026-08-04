@@ -458,5 +458,68 @@ TEST_F(EditorVersionsPanelQmlTest, BranchFromCurrentButtonBranchesFromActiveHead
             QStringLiteral("branchFromCommit"));
   EXPECT_FALSE(controller_.last_history_failed());
 }
+
+TEST_F(EditorVersionsPanelQmlTest,
+       PendingCreateDraftClosesWhenHistoryModelProjectsSubmittedName) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenVersionsPage();
+  QTRY_VERIFY_WITH_TIMEOUT(Find(QStringLiteral("editorVersionsPageBody")) != nullptr, 2000);
+  auto* page = Find(QStringLiteral("editorVersionsPageBody"));
+  ASSERT_NE(page, nullptr);
+
+  // Project a new active Version first (backend path already completed).
+  controller_.CreateRootVersion(QStringLiteral("projectedlook"));
+  ProcessEvents();
+  QTRY_VERIFY_WITH_TIMEOUT(
+      controller_.history_snapshot().active_version_id == backend_.last_created_id(), 2000);
+  // Ensure the history model has projected the new active display name.
+  QTRY_VERIFY_WITH_TIMEOUT(
+      page->property("activeVersionDisplayName").toString() == QStringLiteral("projectedlook"),
+      2000);
+
+  // Simulate a stuck async draft whose correlated terminal event was missed:
+  // pending lock + naming row open, operation id does not match lastHistoryResult.
+  ASSERT_TRUE(page->setProperty("draftVisible", true));
+  ASSERT_TRUE(page->setProperty("draftSubmitPending", true));
+  ASSERT_TRUE(page->setProperty("draftMode", QStringLiteral("forkRoot")));
+  ASSERT_TRUE(page->setProperty("draftSubmittedName", QStringLiteral("projectedlook")));
+  ASSERT_TRUE(page->setProperty("draftPendingOperationId", QVariant::fromValue(qulonglong{99999})));
+  ProcessEvents();
+  EXPECT_TRUE(page->property("draftSubmitPending").toBool());
+  EXPECT_TRUE(page->property("draftVisible").toBool());
+
+  // Model reflection must close the draft even when operation ids do not match.
+  ASSERT_TRUE(QMetaObject::invokeMethod(page, "tryClosePendingDraft", Qt::DirectConnection));
+  ProcessEvents();
+  EXPECT_FALSE(page->property("draftSubmitPending").toBool());
+  EXPECT_FALSE(page->property("draftVisible").toBool());
+}
+
+TEST_F(EditorVersionsPanelQmlTest, CheckoutWorksWhileDraftSubmitPending) {
+  ASSERT_NE(window_, nullptr) << warnings_.join('\n').toStdString();
+  OpenVersionsPage();
+  QTRY_VERIFY_WITH_TIMEOUT(Cards().size() >= 2, 2000);
+
+  auto* page = Find(QStringLiteral("editorVersionsPageBody"));
+  ASSERT_NE(page, nullptr);
+  ASSERT_TRUE(page->setProperty("draftSubmitPending", true));
+  ProcessEvents();
+
+  QQuickItem* alternate_card = nullptr;
+  for (auto* card : Cards()) {
+    if (!card->property("versionActive").toBool()) {
+      alternate_card = card;
+      break;
+    }
+  }
+  ASSERT_NE(alternate_card, nullptr);
+  const QString alternate_id = alternate_card->property("versionId").toString();
+  ASSERT_FALSE(alternate_id.isEmpty());
+
+  Click(window_, alternate_card, QPointF(12.0, alternate_card->height() / 2.0));
+  ProcessEvents();
+  QTRY_VERIFY_WITH_TIMEOUT(backend_.checkout_count() == 1, 2000);
+  EXPECT_EQ(QString::fromStdString(backend_.last_checkout_id().ToString()), alternate_id);
+}
 }  // namespace
 }  // namespace alcedo::ui::test

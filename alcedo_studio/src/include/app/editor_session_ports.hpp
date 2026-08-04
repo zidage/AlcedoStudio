@@ -29,7 +29,6 @@ struct AdjustmentMergePreview;
 struct AdjustmentMergeResolution;
 struct AdjustmentMergeResult;
 struct AdjustmentPasteResult;
-struct EditorTransferCandidate;
 
 /// Narrow ports used by EditorSessionService. Production implementations wrap
 /// PipelineMgmtService, Mini-Git journal storage, thumbnail work, and background tasks.
@@ -177,99 +176,63 @@ class IEditorHistoryPort {
     return false;
   }
 
-  /// Build a Paste candidate without changing the published graph, Version
-  /// selection, journal, or adjustment snapshot. The candidate is retained by
-  /// the history port until CaptureTransferSaveCheckpoint and
-  /// PublishTransferCandidate complete, or DiscardTransferCandidate is called.
-  /// Default fakes retain the command inputs for later PublishTransferCandidate.
-  virtual auto PreparePaste(const EditorHistoryGuardHandle& /*guard*/,
-                            const AdjustmentTransferPackage& package,
-                            std::string version_display_name,
-                            AdjustmentPasteResult* result,
-                            EditorTransferCandidate* candidate, std::string* error) -> bool {
-    if (candidate == nullptr) {
-      if (error != nullptr) *error = "Paste candidate storage is required";
-      return false;
-    }
-    candidate->package      = package;
-    candidate->display_name = std::move(version_display_name);
-    if (result != nullptr) *result = {};
-    return true;
-  }
-
-  /// Build a Merge preview and staged candidate without changing published
-  /// history. The preview records its source package and first-parent facts so
-  /// stale resolutions can be rejected before any durable work begins.
-  virtual auto PrepareMerge(const EditorHistoryGuardHandle& /*guard*/,
-                            const AdjustmentTransferPackage& package,
-                            std::string /*incoming_version_display_name*/,
-                            AdjustmentMergePreview* preview,
-                            EditorTransferCandidate* candidate, std::string* error) -> bool {
-    if (candidate == nullptr) {
-      if (error != nullptr) *error = "Merge candidate storage is required";
-      return false;
-    }
-    if (preview != nullptr) {
-      *preview = {};
-    }
-    candidate->package = package;
-    return true;
-  }
-
-  /// Validate that the active history still matches the staged Merge preview.
-  /// This is side-effect free and runs before conflict resolutions are applied.
-  virtual auto ValidateMergeCandidate(const EditorHistoryGuardHandle& /*guard*/,
-                                      const AdjustmentMergePreview& /*preview*/,
-                                      const EditorTransferCandidate& /*candidate*/,
-                                      std::string* /*error*/) -> bool {
-    return true;
-  }
-
-  /// Apply Merge resolutions to the staged candidate graph only. Published
-  /// history and the live adjustment snapshot remain unchanged until
-  /// PublishTransferCandidate succeeds. Test adapters that retain only the
-  /// legacy port inputs defer their observable mutation to publication.
-  virtual auto CompleteMergeCandidate(
-      const EditorHistoryGuardHandle& /*guard*/, const AdjustmentMergePreview& /*preview*/,
-      const std::vector<AdjustmentMergeResolution>& /*resolutions*/,
-      EditorTransferCandidate* candidate, AdjustmentMergeResult* result, std::string* error)
+  /// Paste onto the live CommitGraph and WAL, then apply package operators to
+  /// the live pipeline. Default fake records success without mutating state.
+  virtual auto PasteLiveRootRelativeVersion(const EditorHistoryGuardHandle& /*guard*/,
+                                            const AdjustmentTransferPackage& package,
+                                            std::string version_display_name,
+                                            AdjustmentPasteResult* result, std::string* error)
       -> bool {
-    if (candidate == nullptr) {
-      if (error != nullptr) *error = "Merge candidate storage is required";
+    if (result == nullptr) {
+      if (error != nullptr) *error = "Paste result storage is required";
       return false;
     }
-    if (result != nullptr) *result = {};
+    if (package.Empty()) {
+      if (error != nullptr) *error = "Adjustment transfer package is empty";
+      return false;
+    }
+    result->pasted = true;
+    result->prior_version_id = {};
+    result->new_version_id = Hash128{0xA57E000000000001ULL, 0xA57E000000000002ULL};
+    (void)version_display_name;
     return true;
   }
 
-  /// Capture one durable publication containing the complete candidate graph,
-  /// final Version selection, final head, serialized pipeline state, and the
-  /// current journal prefix. It must not mutate published history.
-  virtual auto CaptureTransferSaveCheckpoint(
-      const EditorHistoryGuardHandle& guard, const EditorTransferCandidate& /*candidate*/,
-      std::string* error) -> std::shared_ptr<const EditorMiniGitSaveCapture> {
-    return CaptureSaveCheckpoint(guard, error);
+  /// Cancel a live paste by restoring the prior Version and removing the paste Version.
+  virtual auto CancelLivePaste(const EditorHistoryGuardHandle& /*guard*/,
+                               const version_ref_id_t& /*prior_version_id*/,
+                               const version_ref_id_t& /*paste_version_id*/,
+                               std::string* /*error*/) -> bool {
+    return true;
   }
 
-  /// Publish a previously captured candidate after its one durable write has
-  /// completed. Ports must replace the live graph atomically; there is no
-  /// synchronous one-shot Paste/Merge fallback.
-  virtual auto PublishTransferCandidate(
-      const EditorHistoryGuardHandle& /*guard*/, const EditorTransferCandidate& /*candidate*/,
-      const AdjustmentMergePreview* /*preview*/,
-      const std::vector<AdjustmentMergeResolution>& /*resolutions*/,
-      AdjustmentPasteResult* /*paste*/, AdjustmentMergeResult* /*merge*/,
-      std::string* error) -> bool {
-    if (error != nullptr) {
-      *error = "Transfer candidate publication is not supported by this history port";
+  /// Detect merge conflicts from the live pipeline without mutating the graph.
+  virtual auto BeginLiveMerge(const EditorHistoryGuardHandle& /*guard*/,
+                              const AdjustmentTransferPackage& package,
+                              AdjustmentMergePreview* preview, std::string* error) -> bool {
+    if (preview == nullptr) {
+      if (error != nullptr) *error = "Merge preview storage is required";
+      return false;
     }
-    return false;
+    if (package.Empty()) {
+      if (error != nullptr) *error = "Adjustment transfer package is empty";
+      return false;
+    }
+    *preview = {};
+    return true;
   }
 
-  /// Discard a staged candidate without changing published history.
-  virtual auto DiscardTransferCandidate(const EditorHistoryGuardHandle& /*guard*/,
-                                        const EditorTransferCandidate& /*candidate*/,
-                                        std::string* /*error*/) -> bool {
+  /// Apply merge resolutions to the live pipeline and append one merge commit + WAL.
+  virtual auto CompleteLiveMerge(
+      const EditorHistoryGuardHandle& /*guard*/, const AdjustmentTransferPackage& /*package*/,
+      const AdjustmentMergePreview& /*preview*/,
+      const std::vector<AdjustmentMergeResolution>& /*resolutions*/, AdjustmentMergeResult* result,
+      std::string* error) -> bool {
+    if (result == nullptr) {
+      if (error != nullptr) *error = "Merge result storage is required";
+      return false;
+    }
+    result->merged = true;
     return true;
   }
 
@@ -441,25 +404,18 @@ struct EditorRenderCoordinatorDiagnostics {
   std::size_t                       replaced_count  = 0;
   std::size_t                       cancelled_count = 0;
   std::string                       last_error;
-  /// Phase 5E: stamps the coordinator currently accepts.
+  /// Phase 5E: image-load request the coordinator currently accepts.
   std::uint64_t                     image_load_request_id = 0;
-  std::uint64_t                     render_generation  = 0;
-  std::uint64_t                     view_generation    = 0;
-  /// Last request that was rejected at Submit (generation/token/scheduler).
+  /// Last request that was rejected at Submit (image load/token/scheduler).
   std::string                       last_rejection_reason;
   std::optional<EditorRenderReason> last_rejected_render_reason{};
-  /// Last intent that reached FrameSubmitted (native slot ready for composition).
-  std::optional<FrameRole>          last_submitted_frame_role{};
-  std::optional<EditorRenderReason> last_submitted_render_reason{};
+  /// Last intent whose blocking render published a frame ready for composition.
+  std::optional<FrameRole>          last_ready_frame_role{};
+  std::optional<EditorRenderReason> last_ready_render_reason{};
   /// Monotonic counters of terminal outcomes for tests/diagnostics.
   std::size_t                       accepted_count  = 0;
   std::size_t                       failed_count    = 0;
-  std::size_t                       presented_count = 0;
-};
-
-enum class EditorRenderSupersessionPolicy : std::uint8_t {
-  CancelObsolete = 0,
-  PreserveInflightFullFrame,
+  std::size_t                       ready_count     = 0;
 };
 
 /// Immutable render command. Built by the facade or edit controller and passed
@@ -469,7 +425,6 @@ struct EditorRenderCommand {
   EditorRenderReason                  reason       = EditorRenderReason::InitialFrame;
   std::uint64_t                       operation_id = 0;
   EditorRenderAdjustmentSnapshot      adjustment{};
-  EditorRenderSupersessionPolicy      policy = EditorRenderSupersessionPolicy::CancelObsolete;
   std::optional<ViewportRenderRegion> view_region;
 };
 
@@ -486,10 +441,14 @@ class IEditorRenderSubmitPort {
   virtual void CancelSessionAndWait(std::uint64_t session_generation) {
     CancelSession(session_generation);
   }
-  virtual void SetActiveGenerations(
-      std::uint64_t session_generation, std::uint64_t render_generation,
-      std::uint64_t                  view_generation,
-      EditorRenderSupersessionPolicy policy = EditorRenderSupersessionPolicy::CancelObsolete) = 0;
+  /// Wait until pending/in-flight renders for this image-load request finish.
+  /// Does not cancel — used when the next owner-thread op (history rebuild)
+  /// should simply queue behind the current frame. Default is a no-op for
+  /// fakes that never run real workers.
+  virtual void WaitForSessionIdle(std::uint64_t /*session_generation*/) {}
+  /// Stamps the active image-load request and cancels pending/in-flight work for
+  /// other image-load requests.
+  virtual void SetActiveImageLoadRequest(std::uint64_t image_load_request_id) = 0;
   /// Phase 5D diagnostics. Default impls report an idle coordinator so test
   /// fakes that do not override them stay QML-idle.
   [[nodiscard]] virtual auto diagnostics() const -> EditorRenderCoordinatorDiagnostics {

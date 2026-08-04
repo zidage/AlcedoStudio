@@ -43,11 +43,10 @@ struct FramePreviewMetadata {
   // identity after the frame is sampled by a render pass.
   std::uint64_t presentation_request_id = 0;
   FrameRoiRect  source_roi_norm         = {};
-  // Session/image identity copied into final-display scope frames. Keeping
-  // these beside the render generation lets an analyzer reject a late frame
-  // even when the same durable image is opened again.
-  std::uint64_t image_generation        = 0;
-  std::uint64_t image_identity          = 0;
+  // Presentation stamp of ImageLoadRequestId for this open/switch. Scope and
+  // the present queue reject late frames when this epoch no longer matches.
+  std::uint64_t session_epoch  = 0;
+  std::uint64_t image_identity = 0;
   // View-only renders (zoom/pan, resize, and detail ROI refreshes) must not
   // replace the last content frame used by scope analysis.
   bool          scope_update_allowed    = true;
@@ -60,6 +59,11 @@ enum class FramePresentationMode {
   FullFrame,
   ViewportTransformed = FullFrame,
   RoiFrame,
+};
+
+struct FrameCompletionSubmission {
+  FramePreviewMetadata  metadata{};
+  FramePresentationMode mode = FramePresentationMode::FullFrame;
 };
 
 enum class FramePixelFormat {
@@ -147,7 +151,13 @@ class IFrameSink {
 
   virtual void UnmapResource()                                                                 = 0;
 
-  virtual void NotifyFrameReady()                                                              = 0;
+  virtual void NotifyFrameReady(const FrameCompletionSubmission& submission)                     = 0;
+
+  // Binds the submission stamped for the in-flight Apply(). Production sinks
+  // use this for EnsureSize/render-reference decisions before NotifyFrameReady.
+  virtual void BindFrameSubmission(const FrameCompletionSubmission& submission) {
+    (void)submission;
+  }
 
   virtual void SubmitHostFrame(const ViewerFrame&) {}
 #ifdef HAVE_METAL
@@ -163,10 +173,6 @@ class IFrameSink {
   virtual auto GetViewportRenderRegion() const -> std::optional<ViewportRenderRegion> {
     return std::nullopt;
   }
-
-  // Sets how the next presented frame should be displayed.
-  virtual void SetNextFramePresentationMode(FramePresentationMode) {}
-  virtual void SetNextFramePreviewMetadata(const FramePreviewMetadata&) {}
 
   // Exposes the presentation surface when a sink is backed by a live viewer.
   virtual auto GetViewerSurface() -> IEditViewerSurface* { return nullptr; }

@@ -103,47 +103,6 @@ auto MakeRgbPlateau(int rows, int cols, const cv::Rect& plateau, bool fully_clip
   return img;
 }
 
-auto MakePhasePatternPlateau(int rows, int cols, const cv::Rect& plateau) -> cv::Mat {
-  cv::Mat img = MakeRgbPlateau(rows, cols, plateau, false);
-  for (int y = plateau.y; y < plateau.y + plateau.height; ++y) {
-    cv::Vec3f* row = img.ptr<cv::Vec3f>(y);
-    for (int x = plateau.x; x < plateau.x + plateau.width; ++x) {
-      const int phase = ((y & 1) << 1) | (x & 1);
-      row[x][0] += 0.18f * static_cast<float>(phase);
-      row[x][1] += 0.08f * static_cast<float>(3 - phase);
-      row[x][2] += 0.02f * static_cast<float>(phase & 1);
-    }
-  }
-  return img;
-}
-
-auto PhaseSpread(const cv::Mat& image, const cv::Rect& roi, const int channel) -> float {
-  std::array<double, 4> sums = {0.0, 0.0, 0.0, 0.0};
-  std::array<int, 4>    cnts = {0, 0, 0, 0};
-
-  for (int y = roi.y; y < roi.y + roi.height; ++y) {
-    const cv::Vec3f* row = image.ptr<cv::Vec3f>(y);
-    for (int x = roi.x; x < roi.x + roi.width; ++x) {
-      const int phase = ((y & 1) << 1) | (x & 1);
-      sums[phase] += row[x][channel];
-      cnts[phase] += 1;
-    }
-  }
-
-  float min_mean = std::numeric_limits<float>::max();
-  float max_mean = std::numeric_limits<float>::lowest();
-  for (int i = 0; i < 4; ++i) {
-    if (cnts[i] == 0) {
-      continue;
-    }
-    const float mean = static_cast<float>(sums[i] / static_cast<double>(cnts[i]));
-    min_mean         = std::min(min_mean, mean);
-    max_mean         = std::max(max_mean, mean);
-  }
-
-  return max_mean - min_mean;
-}
-
 auto ChannelSpread(const cv::Vec3f& pixel) -> float {
   return std::max(pixel[0], std::max(pixel[1], pixel[2])) -
          std::min(pixel[0], std::min(pixel[1], pixel[2]));
@@ -165,6 +124,43 @@ auto MaxDifferenceOutsideRoi(const cv::Mat& before, const cv::Mat& after, const 
     }
   }
   return max_diff;
+}
+
+auto ChannelRange(const cv::Mat& image, const cv::Rect& roi, const int channel) -> float {
+  float min_value = std::numeric_limits<float>::max();
+  float max_value = std::numeric_limits<float>::lowest();
+  for (int y = roi.y; y < roi.y + roi.height; ++y) {
+    const cv::Vec3f* row = image.ptr<cv::Vec3f>(y);
+    for (int x = roi.x; x < roi.x + roi.width; ++x) {
+      min_value = std::min(min_value, row[x][channel]);
+      max_value = std::max(max_value, row[x][channel]);
+    }
+  }
+  return max_value - min_value;
+}
+
+void FillConstantRgb(cv::Mat& img, const float red, const float green, const float blue) {
+  for (int y = 0; y < img.rows; ++y) {
+    cv::Vec3f* row = img.ptr<cv::Vec3f>(y);
+    for (int x = 0; x < img.cols; ++x) {
+      row[x] = cv::Vec3f(red, green, blue);
+    }
+  }
+}
+
+auto CountNonFinite(const cv::Mat& image) -> int {
+  int count = 0;
+  for (int y = 0; y < image.rows; ++y) {
+    const cv::Vec3f* row = image.ptr<cv::Vec3f>(y);
+    for (int x = 0; x < image.cols; ++x) {
+      for (int c = 0; c < 3; ++c) {
+        if (!std::isfinite(row[x][c])) {
+          ++count;
+        }
+      }
+    }
+  }
+  return count;
 }
 
 }  // namespace
@@ -206,7 +202,7 @@ TEST(CudaRawOpsTest, Clamp01SupportsRgb) {
 #endif
 }
 
-TEST(CudaRawOpsTest, HighlightReconstructNeutralizesFullyClippedHighlights) {
+TEST(CudaRawOpsTest, HighlightReconstructReducesSpreadOfFullyClippedRegion) {
 #ifndef HAVE_CUDA
   GTEST_SKIP() << "CUDA is not enabled in this build.";
 #else
@@ -216,8 +212,8 @@ TEST(CudaRawOpsTest, HighlightReconstructNeutralizesFullyClippedHighlights) {
 
   LibRaw raw_processor;
   InitHighlightRawProcessor(raw_processor);
-  const cv::Rect   plateau(12, 10, 20, 18);
-  const cv::Mat    input = MakeRgbPlateau(40, 44, plateau, true);
+  const cv::Rect plateau(12, 10, 20, 18);
+  const cv::Mat  input = MakeRgbPlateau(40, 44, plateau, true);
 
   cv::cuda::GpuMat gpu(input);
   ASSERT_NO_THROW(CUDA::HighlightReconstruct(gpu, raw_processor));
@@ -226,44 +222,25 @@ TEST(CudaRawOpsTest, HighlightReconstructNeutralizesFullyClippedHighlights) {
   gpu.download(output);
   ASSERT_EQ(output.type(), CV_32FC3);
 
-  const cv::Vec3f center =
-      output.at<cv::Vec3f>(plateau.y + plateau.height / 2, plateau.x + plateau.width / 2);
-  EXPECT_LT(std::abs(center[0] - center[1]), 0.05f);
-  EXPECT_LT(std::abs(center[1] - center[2]), 0.05f);
-  EXPECT_LT(std::abs(center[0] - center[2]), 0.05f);
-#endif
-}
-
-TEST(CudaRawOpsTest, HighlightReconstructDesaturatesTwoChannelClip) {
-#ifndef HAVE_CUDA
-  GTEST_SKIP() << "CUDA is not enabled in this build.";
-#else
-  if (!EnsureCudaDevice()) {
-    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
-  }
-
-  LibRaw raw_processor;
-  InitHighlightRawProcessor(raw_processor);
-  const cv::Rect   plateau(10, 11, 22, 20);
-  const cv::Mat    input = MakeRgbPlateau(42, 46, plateau, false);
-
-  cv::cuda::GpuMat gpu(input);
-  ASSERT_NO_THROW(CUDA::HighlightReconstruct(gpu, raw_processor));
-
-  cv::Mat output;
-  gpu.download(output);
-
   const cv::Vec3f before =
       input.at<cv::Vec3f>(plateau.y + plateau.height / 2, plateau.x + plateau.width / 2);
   const cv::Vec3f after =
       output.at<cv::Vec3f>(plateau.y + plateau.height / 2, plateau.x + plateau.width / 2);
 
+  // A saturated photosite readout is a lower bound of the scene signal, so the opposed
+  // algorithm may only raise channels toward the opponent estimate, never lower them.
+  EXPECT_GE(after[0], before[0] - 1e-5f);
+  EXPECT_GE(after[1], before[1] - 1e-5f);
+  EXPECT_GE(after[2], before[2] - 1e-5f);
+  // The clipped green channel is pulled up toward the brighter red/blue opponent estimate,
+  // shrinking the overall spread of the blown pixel.
+  EXPECT_GT(after[1], before[1] + 0.2f);
   EXPECT_LT(ChannelSpread(after), ChannelSpread(before));
-  EXPECT_LT(std::abs(after[1] - after[2]), std::abs(before[1] - before[2]));
+  EXPECT_TRUE(std::isfinite(after[0]) && std::isfinite(after[1]) && std::isfinite(after[2]));
 #endif
 }
 
-TEST(CudaRawOpsTest, HighlightReconstructSuppressesPhaseLikePlateauPattern) {
+TEST(CudaRawOpsTest, HighlightReconstructRaisesClippedChannelTowardOpponentEstimate) {
 #ifndef HAVE_CUDA
   GTEST_SKIP() << "CUDA is not enabled in this build.";
 #else
@@ -273,10 +250,22 @@ TEST(CudaRawOpsTest, HighlightReconstructSuppressesPhaseLikePlateauPattern) {
 
   LibRaw raw_processor;
   InitHighlightRawProcessor(raw_processor);
-  const cv::Rect   plateau(12, 12, 24, 24);
-  const cv::Mat    input         = MakePhasePatternPlateau(48, 52, plateau);
 
-  const float      before_spread = PhaseSpread(input, plateau, 1);
+  // Two-zone scene: background sits mid-scale on every channel; the core is brighter on
+  // red/blue (still below their own clip levels) while its green channel saturates. The
+  // opponent estimate for green inside the core comes from the brighter red/blue, so green
+  // is raised toward it.
+  const int      rows = 40;
+  const int      cols = 40;
+  const cv::Rect core(12, 12, 16, 16);
+  cv::Mat        input(rows, cols, CV_32FC3);
+  FillConstantRgb(input, 1.2f, 0.95f, 1.0f);
+  for (int y = core.y; y < core.y + core.height; ++y) {
+    cv::Vec3f* row = input.ptr<cv::Vec3f>(y);
+    for (int x = core.x; x < core.x + core.width; ++x) {
+      row[x] = cv::Vec3f(2.0f, 1.0f, 1.5f);
+    }
+  }
 
   cv::cuda::GpuMat gpu(input);
   ASSERT_NO_THROW(CUDA::HighlightReconstruct(gpu, raw_processor));
@@ -284,8 +273,192 @@ TEST(CudaRawOpsTest, HighlightReconstructSuppressesPhaseLikePlateauPattern) {
   cv::Mat output;
   gpu.download(output);
 
-  const float after_spread = PhaseSpread(output, plateau, 1);
-  EXPECT_LT(after_spread, before_spread * 0.35f);
+  const cv::Vec3f before = input.at<cv::Vec3f>(20, 20);
+  const cv::Vec3f after  = output.at<cv::Vec3f>(20, 20);
+
+  // Red is below its soft-transition window and blue's opponent estimate stays below the
+  // measured value, so both channels keep their readout exactly.
+  EXPECT_NEAR(after[0], before[0], 1e-5f);
+  EXPECT_NEAR(after[2], before[2], 1e-5f);
+  // Clipped green is raised toward the red/blue opponent level, closing the green-blue gap.
+  EXPECT_GT(after[1], before[1] + 0.1f);
+  EXPECT_LT(std::abs(after[1] - after[2]), std::abs(before[1] - before[2]));
+#endif
+}
+
+TEST(CudaRawOpsTest, HighlightReconstructRemovesCheckerNoiseInsideFullyClippedRegion) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA is not enabled in this build.";
+#else
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
+  }
+
+  LibRaw raw_processor;
+  InitHighlightRawProcessor(raw_processor);
+
+  // Fully clipped plateau whose green channel carries a checkerboard pattern. Every interior
+  // 3x3 window sees only censored samples, so the rebuilt green channel falls back to the
+  // window mean plus the global chrominance: a spatially constant estimate that cannot
+  // follow the checker.
+  const int      rows = 44;
+  const int      cols = 44;
+  const cv::Rect plateau(10, 10, 24, 24);
+  cv::Mat        input(rows, cols, CV_32FC3);
+  FillConstantRgb(input, 1.5f, 0.8f, 0.9f);
+  for (int y = plateau.y; y < plateau.y + plateau.height; ++y) {
+    cv::Vec3f* row = input.ptr<cv::Vec3f>(y);
+    for (int x = plateau.x; x < plateau.x + plateau.width; ++x) {
+      row[x] = cv::Vec3f(2.5f, (x & 1) != 0 ? 1.06f : 1.0f, 1.6f);
+    }
+  }
+
+  const cv::Rect interior(plateau.x + 2, plateau.y + 2, plateau.width - 4,
+                          plateau.height - 4);
+  const float    before_range = ChannelRange(input, interior, 1);
+
+  cv::cuda::GpuMat gpu(input);
+  ASSERT_NO_THROW(CUDA::HighlightReconstruct(gpu, raw_processor));
+
+  cv::Mat output;
+  gpu.download(output);
+
+  const float after_range = ChannelRange(output, interior, 1);
+  EXPECT_LT(after_range, before_range * 0.25f);
+  EXPECT_LT(after_range, 0.025f);
+#endif
+}
+
+TEST(CudaRawOpsTest, HighlightReconstructTransitionsContinuouslyAcrossClipBoundary) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA is not enabled in this build.";
+#else
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
+  }
+
+  LibRaw raw_processor;
+  InitHighlightRawProcessor(raw_processor);
+
+  // The green channel ramps slowly through its clip level inside a bright red/blue core.
+  // With a hard clip decision the output would jump from the raw readout (~0.99) to the
+  // opponent estimate (~1.4) at the crossing column; the soft transition must instead
+  // blend smoothly, keeping every column-to-column step small.
+  const int      rows = 40;
+  const int      cols = 40;
+  const cv::Rect core(8, 10, 24, 20);
+  cv::Mat        input(rows, cols, CV_32FC3);
+  FillConstantRgb(input, 1.2f, 0.95f, 1.0f);
+  for (int y = core.y; y < core.y + core.height; ++y) {
+    cv::Vec3f* row = input.ptr<cv::Vec3f>(y);
+    for (int x = core.x; x < core.x + core.width; ++x) {
+      const float green =
+          0.94f + 0.06f * static_cast<float>(x - core.x) / static_cast<float>(core.width - 1);
+      row[x] = cv::Vec3f(2.0f, green, 1.5f);
+    }
+  }
+
+  cv::cuda::GpuMat gpu(input);
+  ASSERT_NO_THROW(CUDA::HighlightReconstruct(gpu, raw_processor));
+
+  cv::Mat output;
+  gpu.download(output);
+
+  const int sample_y = core.y + core.height / 2;
+  float     max_step = 0.0f;
+  float     prev     = output.at<cv::Vec3f>(sample_y, core.x + 2)[1];
+  for (int x = core.x + 3; x < core.x + core.width - 2; ++x) {
+    const float current = output.at<cv::Vec3f>(sample_y, x)[1];
+    max_step            = std::max(max_step, std::abs(current - prev));
+    prev                = current;
+  }
+
+  EXPECT_LT(max_step, 0.3f);
+  // The ramp ends above the clip level, so the last sampled column must be reconstructed
+  // toward the brighter red/blue opponent estimate rather than left at its readout.
+  EXPECT_GT(output.at<cv::Vec3f>(sample_y, core.x + core.width - 3)[1], 1.15f);
+#endif
+}
+
+TEST(CudaRawOpsTest, HighlightReconstructKeepsOutputFiniteAroundNonFinitePixels) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA is not enabled in this build.";
+#else
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
+  }
+
+  LibRaw raw_processor;
+  InitHighlightRawProcessor(raw_processor);
+  const cv::Rect plateau(12, 10, 20, 18);
+  const cv::Mat  clean = MakeRgbPlateau(40, 44, plateau, true);
+
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float inf = std::numeric_limits<float>::infinity();
+
+  cv::Mat corrupted                            = clean.clone();
+  corrupted.at<cv::Vec3f>(plateau.y, plateau.x) = cv::Vec3f(nan, 1.14f, 1.72f);
+  corrupted.at<cv::Vec3f>(plateau.y - 2, plateau.x) = cv::Vec3f(1.75f, nan, 0.86f);
+  corrupted.at<cv::Vec3f>(2, 2)                     = cv::Vec3f(1.75f, 0.8f, inf);
+
+  cv::cuda::GpuMat clean_gpu(clean);
+  ASSERT_NO_THROW(CUDA::HighlightReconstruct(clean_gpu, raw_processor));
+  cv::Mat clean_output;
+  clean_gpu.download(clean_output);
+
+  cv::cuda::GpuMat corrupted_gpu(corrupted);
+  ASSERT_NO_THROW(CUDA::HighlightReconstruct(corrupted_gpu, raw_processor));
+
+  cv::Mat output;
+  corrupted_gpu.download(output);
+
+  // Non-finite samples must be dropped from the neighbourhood and chrominance statistics
+  // instead of poisoning them, and the output may never contain NaN or Inf.
+  EXPECT_EQ(CountNonFinite(output), 0);
+
+  const int       cy = plateau.y + plateau.height / 2;
+  const int       cx = plateau.x + plateau.width / 2;
+  const cv::Vec3f clean_center     = clean_output.at<cv::Vec3f>(cy, cx);
+  const cv::Vec3f corrupted_center = output.at<cv::Vec3f>(cy, cx);
+  EXPECT_NEAR(corrupted_center[0], clean_center[0], 2e-2f);
+  EXPECT_NEAR(corrupted_center[1], clean_center[1], 2e-2f);
+  EXPECT_NEAR(corrupted_center[2], clean_center[2], 2e-2f);
+#endif
+}
+
+TEST(CudaRawOpsTest, HighlightReconstructIgnoresChrominanceBelowMinSampleCount) {
+#ifndef HAVE_CUDA
+  GTEST_SKIP() << "CUDA is not enabled in this build.";
+#else
+  if (!EnsureCudaDevice()) {
+    GTEST_SKIP() << "CUDA device is unavailable in this environment.";
+  }
+
+  LibRaw raw_processor;
+  InitHighlightRawProcessor(raw_processor);
+
+  // A single clipped pixel in the image corner dilates to a 4x4 ring of 15 samples, below
+  // the minimum trusted sample count, so the global chrominance correction must stay zero
+  // and the clipped green channel is rebuilt from the local opponent estimate alone.
+  const int rows = 40;
+  const int cols = 40;
+  cv::Mat   input(rows, cols, CV_32FC3);
+  FillConstantRgb(input, 1.5f, 0.8f, 0.9f);
+  input.at<cv::Vec3f>(0, 0) = cv::Vec3f(2.5f, 1.05f, 1.6f);
+
+  cv::cuda::GpuMat gpu(input);
+  ASSERT_NO_THROW(CUDA::HighlightReconstruct(gpu, raw_processor));
+
+  cv::Mat output;
+  gpu.download(output);
+
+  // refavg at the corner sees a 2x2 window: red 1.5 / green 0.8 / blue 0.9 from the valid
+  // background samples, so the green opponent estimate is
+  // ((cbrt(1.5) + cbrt(0.9)) / 2)^3 ~= 1.175 and red and blue stay at their readouts.
+  const cv::Vec3f result = output.at<cv::Vec3f>(0, 0);
+  EXPECT_NEAR(result[0], 2.5f, 1e-5f);
+  EXPECT_NEAR(result[1], 1.175f, 2e-2f);
+  EXPECT_NEAR(result[2], 1.6f, 1e-5f);
 #endif
 }
 

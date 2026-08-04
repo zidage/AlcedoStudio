@@ -174,8 +174,8 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
   /// current image). The CQ1 target saves such a journal before creating a
   /// new Version or merge commit.
   bool                      dirty_journal = false;
-  /// Number of staged transfer candidates that reached the one publication
-  /// step. CQ4 expects exactly one publication per accepted Paste/Merge.
+  /// Legacy counter retained so baseline tests can assert the shadow-candidate
+  /// publication path is never entered (always remains 0 after live paste/merge).
   int                       transfer_publication_count = 0;
   /// History facts projected into EditorActionInputs for CQ3 availability.
   bool                      force_can_undo = false;
@@ -223,52 +223,58 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
     return FakeEditorHistoryPort::CheckoutVersion(guard, version_id, error);
   }
 
-  auto PreparePaste(const EditorHistoryGuardHandle& guard,
-                    const AdjustmentTransferPackage& /*package*/,
-                    std::string /*version_display_name*/, AdjustmentPasteResult* result,
-                    EditorTransferCandidate* candidate, std::string* error) -> bool override {
+  auto PasteLiveRootRelativeVersion(const EditorHistoryGuardHandle& guard,
+                                    const AdjustmentTransferPackage& package,
+                                    std::string /*version_display_name*/,
+                                    AdjustmentPasteResult* result, std::string* error)
+      -> bool override {
     (void)guard;
-    (void)error;
-    if (candidate == nullptr) {
+    if (package.Empty()) {
+      if (error != nullptr) *error = "Adjustment transfer package is empty";
       return false;
     }
-    candidate->candidate_id = ++next_candidate_id_;
-    candidate->package      = {};
+    record("version_created");
+    dirty_journal = true;
     if (result != nullptr) {
-      *result = {};
+      result->pasted = true;
+      result->prior_version_id = Hash128{0x11111111ULL, 0x22222222ULL};
+      result->new_version_id = Hash128{0x33333333ULL, 0x44444444ULL};
     }
     return true;
   }
 
-  auto PrepareMerge(const EditorHistoryGuardHandle& guard,
-                    const AdjustmentTransferPackage& /*package*/,
-                    std::string /*incoming_version_display_name*/,
-                    AdjustmentMergePreview* preview, EditorTransferCandidate* candidate,
-                    std::string* error) -> bool override {
-    (void)guard;
-    (void)error;
-    if (candidate == nullptr) {
+  auto CancelLivePaste(const EditorHistoryGuardHandle& /*guard*/,
+                       const version_ref_id_t& /*prior_version_id*/,
+                       const version_ref_id_t& /*paste_version_id*/, std::string* /*error*/)
+      -> bool override {
+    record("paste_cancelled");
+    return true;
+  }
+
+  auto BeginLiveMerge(const EditorHistoryGuardHandle& /*guard*/,
+                      const AdjustmentTransferPackage& package, AdjustmentMergePreview* preview,
+                      std::string* error) -> bool override {
+    if (package.Empty()) {
+      if (error != nullptr) *error = "Adjustment transfer package is empty";
       return false;
     }
-    candidate->candidate_id = ++next_candidate_id_;
     if (preview != nullptr) {
-      preview->has_conflicts       = false;
-      preview->incoming_version_id = Hash128{0x11111111ULL, 0x22222222ULL};
-      preview->preview_id          = MergePreviewId{1};
+      *preview               = {};
+      preview->has_conflicts = false;
     }
     return true;
   }
 
-  auto CompleteMergeCandidate(
-      const EditorHistoryGuardHandle& guard, const AdjustmentMergePreview& /*preview*/,
-      const std::vector<AdjustmentMergeResolution>& /*resolutions*/,
-      EditorTransferCandidate* candidate, AdjustmentMergeResult* result,
-      std::string* error) -> bool override {
-    (void)guard;
+  auto CompleteLiveMerge(const EditorHistoryGuardHandle& /*guard*/,
+                         const AdjustmentTransferPackage& /*package*/,
+                         const AdjustmentMergePreview& /*preview*/,
+                         const std::vector<AdjustmentMergeResolution>& /*resolutions*/,
+                         AdjustmentMergeResult* result, std::string* error) -> bool override {
     (void)error;
-    (void)candidate;
+    record("merge_committed");
+    dirty_journal = true;
     if (result != nullptr) {
-      *result = {};
+      result->merged = true;
     }
     return true;
   }
@@ -278,32 +284,7 @@ class ControllableEditorHistoryPort : public FakeEditorHistoryPort {
     return FakeEditorHistoryPort::CaptureSaveCheckpoint(guard, error);
   }
 
-  auto PublishTransferCandidate(
-      const EditorHistoryGuardHandle& guard, const EditorTransferCandidate& /*candidate*/,
-      const AdjustmentMergePreview* preview,
-      const std::vector<AdjustmentMergeResolution>& /*resolutions*/, AdjustmentPasteResult* paste,
-      AdjustmentMergeResult* merge, std::string* error) -> bool override {
-    ++transfer_publication_count;
-    (void)guard;
-    (void)error;
-    if (preview != nullptr) {
-      record("merge_committed");
-      if (merge != nullptr) {
-        merge->merged = true;
-      }
-    } else {
-      record("version_created");
-      if (paste != nullptr) {
-        paste->pasted = true;
-      }
-    }
-    dirty_journal = false;
-    return true;
-  }
-
  private:
-  std::uint64_t next_candidate_id_ = 0;
-
   void record(std::string event) {
     if (event_log != nullptr) {
       event_log->push_back(std::move(event));

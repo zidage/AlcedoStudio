@@ -6,6 +6,7 @@
 
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QVariantMap>
 
 #include <algorithm>
 #include <cmath>
@@ -276,12 +277,85 @@ void EditorColorTempModel::loadFromParams(const QString& mode, double cct, doubl
   if (dragActive_) {
     return;
   }
-  supported_ = supported;
+  supported_  = supported;
+  modeIndex_  = ModeIndexFromString(mode);
+  // loadFromParams only has one display pair: treat it as the active mode values.
+  // When as_shot, also refresh the baseline; when custom, keep prior as-shot cache
+  // unless loadFromOperatorParams supplies explicit as_shot_*.
+  if (modeIndex_ == 0) {
+    asShotCct_  = ClampCct(cct);
+    asShotTint_ = ClampTint(tint);
+  }
+  cct_  = ClampCct(cct);
+  tint_ = ClampTint(tint);
+  emit supportedChanged();
+  emit modeIndexChanged();
+  emit asShotCctChanged();
+  emit asShotTintChanged();
+  emit cctChanged();
+  emit tintChanged();
+}
+
+void EditorColorTempModel::loadFromOperatorParams(const QVariantMap& params) {
+  if (dragActive_) {
+    return;
+  }
+  // Accept either the full GetParams root {"color_temp":{...}} or the inner object.
+  QVariantMap ct = params;
+  const auto nested = params.value(QStringLiteral("color_temp"));
+  if (nested.canConvert<QVariantMap>()) {
+    ct = nested.toMap();
+  }
+  if (ct.isEmpty()) {
+    return;
+  }
+
+  const QString mode =
+      ct.value(QStringLiteral("mode"), QStringLiteral("as_shot")).toString();
   modeIndex_ = ModeIndexFromString(mode);
-  asShotCct_ = ClampCct(modeIndex_ == 0 ? cct : asShotCct_);
-  asShotTint_ = ClampTint(modeIndex_ == 0 ? tint : asShotTint_);
-  cct_        = ClampCct(cct);
-  tint_       = ClampTint(tint);
+
+  // Image-local as-shot baseline (GetParams writes as_shot_*; accept resolved_* legacy).
+  auto read_double = [&](const QString& key, const QString& alt, double fallback) -> double {
+    if (ct.contains(key) && ct.value(key).isValid()) {
+      return ct.value(key).toDouble();
+    }
+    if (!alt.isEmpty() && ct.contains(alt) && ct.value(alt).isValid()) {
+      return ct.value(alt).toDouble();
+    }
+    return fallback;
+  };
+
+  const double as_shot_cct =
+      read_double(QStringLiteral("as_shot_cct"), QStringLiteral("resolved_cct"), asShotCct_);
+  const double as_shot_tint =
+      read_double(QStringLiteral("as_shot_tint"), QStringLiteral("resolved_tint"), asShotTint_);
+  asShotCct_  = ClampCct(as_shot_cct);
+  asShotTint_ = ClampTint(as_shot_tint);
+
+  // Display pair: custom mode shows custom_*; as_shot mode shows the baseline.
+  if (modeIndex_ == 1) {
+    const double custom_cct =
+        read_double(QStringLiteral("custom_cct"), QStringLiteral("cct"), cct_);
+    const double custom_tint =
+        read_double(QStringLiteral("custom_tint"), QStringLiteral("tint"), tint_);
+    cct_  = ClampCct(custom_cct);
+    tint_ = ClampTint(custom_tint);
+  } else {
+    // Legacy GetParams sometimes mirrored as-shot into cct/tint only.
+    const double display_cct =
+        read_double(QStringLiteral("as_shot_cct"), QStringLiteral("cct"), asShotCct_);
+    const double display_tint =
+        read_double(QStringLiteral("as_shot_tint"), QStringLiteral("tint"), asShotTint_);
+    cct_  = ClampCct(display_cct);
+    tint_ = ClampTint(display_tint);
+    asShotCct_  = cct_;
+    asShotTint_ = tint_;
+  }
+
+  if (ct.contains(QStringLiteral("supported"))) {
+    supported_ = ct.value(QStringLiteral("supported")).toBool();
+  }
+
   emit supportedChanged();
   emit modeIndexChanged();
   emit asShotCctChanged();
@@ -305,14 +379,11 @@ void EditorColorTempModel::submitSettled() { submitNow(buildParamsJson(), true);
 auto EditorColorTempModel::buildParamsJson() const -> QString {
   QJsonObject color_temp;
   color_temp.insert(QStringLiteral("mode"), ModeString(modeIndex_));
-  color_temp.insert(QStringLiteral("cct"), ClampCct(cct_));
-  color_temp.insert(QStringLiteral("tint"), ClampTint(tint_));
-  // Resolved values track the currently displayed pair so recovery reloads
-  // the same As Shot / Custom presentation.
-  color_temp.insert(QStringLiteral("resolved_cct"),
-                    modeIndex_ == 0 ? ClampCct(asShotCct_) : ClampCct(cct_));
-  color_temp.insert(QStringLiteral("resolved_tint"),
-                    modeIndex_ == 0 ? ClampTint(asShotTint_) : ClampTint(tint_));
+  color_temp.insert(QStringLiteral("custom_cct"), ClampCct(cct_));
+  color_temp.insert(QStringLiteral("custom_tint"), ClampTint(tint_));
+  // Image-local as-shot baseline is always the cached as-shot pair.
+  color_temp.insert(QStringLiteral("as_shot_cct"), ClampCct(asShotCct_));
+  color_temp.insert(QStringLiteral("as_shot_tint"), ClampTint(asShotTint_));
   QJsonObject root;
   root.insert(QStringLiteral("color_temp"), color_temp);
   return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));

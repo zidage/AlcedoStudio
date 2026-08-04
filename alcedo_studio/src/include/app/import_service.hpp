@@ -21,6 +21,7 @@
 
 namespace alcedo {
 class Image;
+class PipelineMgmtService;
 
 enum class ImportSortMode : uint8_t {
   NONE      = 0,
@@ -98,19 +99,13 @@ class ImportService {
 
 class ImportServiceImpl final : public ImportService {
  public:
-  using RootPipelineInitializer =
-      std::function<void(sl_element_id_t, const std::shared_ptr<Image>&)>;
-
   ImportServiceImpl() = delete;
   ImportServiceImpl(std::shared_ptr<SleeveServiceImpl> fs_service,
                     std::shared_ptr<ImagePoolService>  image_pool_service,
-                    RootPipelineInitializer root_pipeline_initializer = {})
+                    std::shared_ptr<PipelineMgmtService> pipeline_service = nullptr)
       : fs_service_(std::move(fs_service)),
         image_pool_service_(std::move(image_pool_service)),
-        root_pipeline_initializer_(std::move(root_pipeline_initializer)) {}
-  // ImportServiceImpl(std::shared_ptr<FileSystem>       fs,
-  // std::shared_ptr<ImagePoolManager> image_pool_manager)
-  // : fs_(fs), image_pool_manager_(image_pool_manager), fs_service_() {}
+        pipeline_service_(std::move(pipeline_service)) {}
 
   ~ImportServiceImpl() = default;
 
@@ -118,8 +113,10 @@ class ImportServiceImpl final : public ImportService {
 
   std::shared_ptr<ImagePoolService> image_pool_service_ = nullptr;
 
-  // Runs only after metadata extraction succeeds, when RAW color/lens inputs are available.
-  RootPipelineInitializer             root_pipeline_initializer_{};
+  /// Assembles and saves full operator params (including image-local RAW/lens/CCT)
+  /// after metadata extraction succeeds. Optional for unit tests that only exercise
+  /// placeholder creation.
+  std::shared_ptr<PipelineMgmtService> pipeline_service_ = nullptr;
 
   ThreadPool                            thread_pool_{8};
 

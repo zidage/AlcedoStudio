@@ -171,6 +171,7 @@ Item {
     Component.onCompleted: {
         wireEnabled()
         applyDeclaredDefaults()
+        // Bootstrap when the stack has not yet projected.
         loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
     }
     onEditorSessionChanged: {
@@ -389,12 +390,6 @@ Item {
     readonly property bool isOpenDrt: root.selectedMethodValue === "open_drt"
         || (root.selectedMethodValue.length === 0)
 
-    // Grill-locked density: medium segment (~48) = compact icon hit + spaceSm.
-    // Track inset = spaceXs so geometry is token-derived (no free literals).
-    readonly property int methodSegmentHeight: appTheme.iconButtonHitSizeCompact
-                                               + appTheme.spaceSm
-    readonly property int methodTrackInset: appTheme.spaceXs
-
     // Encoding space drives the EOTF option table (user select + snapshot load).
     Connections {
         target: encodingSpaceModel
@@ -437,78 +432,21 @@ Item {
             }
 
             // Shared sunk track; segments fillWidth so a resizable rail keeps
-            // equal halves without fixed pixel cards.
-            Rectangle {
-                id: methodTrack
+            // equal halves without fixed pixel cards. Selection aliases feed
+            // the value-led highlight so snapshot load and selectIndex both
+            // invalidate it (LUT selectedPath pattern).
+            SegmentedCardSwitcher {
                 objectName: "displayMethodTrack"
                 Layout.fillWidth: true
-                // Outer track: 48px segment + 2×3px inset.
-                Layout.preferredHeight: root.methodSegmentHeight + 2 * root.methodTrackInset
-                radius: appTheme.controlRadiusSmall
-                color: root.colBase
-                border.width: 1
-                border.color: root.colCardBorder
-                opacity: root.controlsEnabled ? 1.0 : 0.55
-
-                RowLayout {
-                    id: methodCardRow
-                    objectName: "displayMethodCardRow"
-                    anchors.fill: parent
-                    anchors.margins: root.methodTrackInset
-                    spacing: 2
-
-                    Repeater {
-                        model: methodModel.entries
-                        delegate: Rectangle {
-                            required property var modelData
-                            required property int index
-                            // Panel-level aliases so snapshot load / selectIndex
-                            // both invalidate the highlight (LUT selectedPath pattern).
-                            readonly property bool sel: {
-                                var _idx = root.selectedMethodIndex
-                                var _val = root.selectedMethodValue
-                                var entryVal = modelData && modelData.value !== undefined
-                                        ? String(modelData.value) : ""
-                                if (_val.length > 0 && entryVal.length > 0)
-                                    return entryVal === _val
-                                return _idx === index
-                            }
-                            readonly property bool hovered: methodSegMa.containsMouse
-
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            radius: Math.max(2, appTheme.controlRadiusSmall - 2)
-                            color: sel
-                                   ? appTheme.editorListSelectedFillColor
-                                   : (hovered && root.controlsEnabled ? root.colHover
-                                                                      : "transparent")
-                            border.width: 0
-
-                            Label {
-                                anchors.centerIn: parent
-                                width: parent.width - appTheme.spaceSm
-                                horizontalAlignment: Text.AlignHCenter
-                                text: modelData.label
-                                color: sel
-                                       ? appTheme.editorListSelectedInkColor
-                                       : root.colText
-                                font.pixelSize: appTheme.fontSizeBody
-                                font.weight: sel ? appTheme.fontWeightStrong
-                                                  : appTheme.fontWeightRegular
-                                elide: Text.ElideRight
-                            }
-
-                            MouseArea {
-                                id: methodSegMa
-                                anchors.fill: parent
-                                hoverEnabled: root.controlsEnabled
-                                cursorShape: Qt.PointingHandCursor
-                                enabled: root.controlsEnabled
-                                onClicked: methodModel.selectIndex(index)
-                            }
-                        }
-                    }
-                }
+                entries: methodModel.entries
+                currentIndex: root.selectedMethodIndex
+                currentValue: root.selectedMethodValue
+                enabled: root.controlsEnabled
+                trackColor: root.colBase
+                trackBorderColor: root.colCardBorder
+                textColor: root.colText
+                hoverColor: root.colHover
+                onSelected: function(index, value) { methodModel.selectIndex(index) }
             }
 
             // Method-specific params (inline under the track).

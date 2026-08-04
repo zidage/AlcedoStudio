@@ -5,6 +5,7 @@ import QtQuick.Effects
 
 Item {
     id: root
+    objectName: "thumbnailGridView"
     clip: true
     readonly property color cardBg: appTheme.cardSurfaceColor
     readonly property color cardBgSelected: appTheme.selectedTintColor
@@ -64,7 +65,7 @@ Item {
     signal imageSelectionChanged(int elementId, int imageId, string fileName, bool isHdr,
                                  bool selected)
     signal replaceSelection(var items)
-    signal imageFocused(var item)
+    signal imageFocused(var item, int index)
     signal contextMenuRequested(var item, real sceneX, real sceneY)
     signal zoomChanged(int zoomLevel)
 
@@ -284,12 +285,46 @@ Item {
     }
 
     // Exposed for library view-state restore across workspace Loader teardown.
+    readonly property real contentX: grid.contentX
     readonly property real contentY: grid.contentY
     function restoreContentY(y) {
         if (y === undefined || y === null) {
             return
         }
         grid.contentY = clampYForHeight(layoutContentHeight(), Number(y))
+    }
+
+    // Put the requested image at the first visible Library row. GridView's
+    // content height is estimated from the complete model count, so this stays
+    // correct while thumbnail pages are still being appended.
+    function scrollToIndexAtTop(index) {
+        const total = root.modelTotalCount()
+        if (total <= 0 || grid.width <= 0 || grid.height <= 0) {
+            return false
+        }
+
+        grid.forceLayout()
+        if (grid.cellHeight <= 0) {
+            return false
+        }
+
+        const columnsForZoom = root.effectiveColumnCount()
+        const totalRows = Math.max(1, Math.ceil(total / columnsForZoom))
+        const clampedIndex = Math.max(0, Math.min(total - 1, Number(index)))
+        const targetRow = Math.max(0, Math.min(totalRows - 1,
+                                              Math.floor(clampedIndex / columnsForZoom)))
+        const targetY = grid.originY + targetRow * grid.cellHeight
+        grid.contentY = root.clampYForHeight(root.layoutContentHeight(), targetY)
+        root.maybeLoadMoreThumbnails()
+        return true
+    }
+
+    function scrollToElementAtTop(elementId) {
+        if (!appModules.library || !appModules.library.thumbnailModel) {
+            return false
+        }
+        const index = appModules.library.thumbnailModel.rowByElementId(Number(elementId))
+        return index >= 0 ? root.scrollToIndexAtTop(index) : false
     }
 
     // Destroying the library mid-zoom must not leave deferred releases unprocessed;
@@ -720,6 +755,7 @@ Item {
 
     GridView {
         id: grid
+        objectName: "thumbnailGridView_grid"
         z: 0
         anchors.fill: parent
         model: appModules.library.thumbnailModel
@@ -744,6 +780,9 @@ Item {
 
         delegate: Rectangle {
             id: cardDelegate
+            // Stable automation ids: first card is the canonical open-editor target.
+            objectName: index === 0 ? "thumbnailGridView_firstCard"
+                                    : ("thumbnailGridView_card_" + index)
             required property int index
             required property int elementId
             required property int imageId
@@ -1155,6 +1194,7 @@ Item {
     // ── Interaction overlay ──
     MouseArea {
         id: overlay
+        objectName: "thumbnailGridView_inputOverlay"
         z: 20
         anchors.fill: parent
         hoverEnabled: true
@@ -1297,7 +1337,7 @@ Item {
                 if (idx >= 0) {
                     const item = root.selectionItemForIndex(idx)
                     if (item) {
-                        root.imageFocused(item)
+                        root.imageFocused(item, idx)
                         const scenePoint = overlay.mapToItem(null, mouse.x, mouse.y)
                         root.contextMenuRequested(item, scenePoint.x, scenePoint.y)
                     }
@@ -1323,7 +1363,7 @@ Item {
                 if (idx >= 0) {
                     const item = root.selectionItemForIndex(idx)
                     if (item) {
-                        root.imageFocused(item)
+                        root.imageFocused(item, idx)
                         if (mouse.modifiers & Qt.ShiftModifier) {
                             root.selectRangeToIndex(idx, mouse.modifiers & Qt.ControlModifier)
                         } else if (mouse.modifiers & Qt.ControlModifier) {
@@ -1349,7 +1389,7 @@ Item {
             if (idx >= 0) {
                 const item = root.selectionItemForIndex(idx)
                 if (item) {
-                    root.imageFocused(item)
+                    root.imageFocused(item, idx)
                     appModules.workspaceRouter.openEditor(item.elementId, item.imageId)
                 }
             }

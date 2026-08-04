@@ -320,14 +320,14 @@ auto ParamsForField(AdjustmentField field, const AdjustmentState& s, CPUPipeline
       return {
           {"color_temp",
            {{"mode", ColorTempModeToString(s.color_temp_mode_)},
-            {"cct", std::clamp(s.color_temp_custom_cct_, static_cast<float>(kCctMin),
-                               static_cast<float>(kCctMax))},
-            {"tint", std::clamp(s.color_temp_custom_tint_, static_cast<float>(kTintMin),
-                                static_cast<float>(kTintMax))},
-            {"resolved_cct", std::clamp(s.color_temp_resolved_cct_, static_cast<float>(kCctMin),
-                                        static_cast<float>(kCctMax))},
-            {"resolved_tint", std::clamp(s.color_temp_resolved_tint_, static_cast<float>(kTintMin),
-                                         static_cast<float>(kTintMax))}}}};
+            {"custom_cct", std::clamp(s.color_temp_custom_cct_, static_cast<float>(kCctMin),
+                                      static_cast<float>(kCctMax))},
+            {"custom_tint", std::clamp(s.color_temp_custom_tint_, static_cast<float>(kTintMin),
+                                       static_cast<float>(kTintMax))},
+            {"as_shot_cct", std::clamp(s.color_temp_resolved_cct_, static_cast<float>(kCctMin),
+                                       static_cast<float>(kCctMax))},
+            {"as_shot_tint", std::clamp(s.color_temp_resolved_tint_, static_cast<float>(kTintMin),
+                                        static_cast<float>(kTintMax))}}}};
     case AdjustmentField::Hls: {
       nlohmann::json hue_bins      = nlohmann::json::array();
       nlohmann::json hls_adj_table = nlohmann::json::array();
@@ -957,34 +957,42 @@ auto LoadStateFromPipeline(CPUPipelineExecutor& exec, const AdjustmentState& bas
     if (ct.contains("mode") && ct["mode"].is_string()) {
       loaded_state.color_temp_mode_ = ParseColorTempMode(ct["mode"].get<std::string>());
     }
-    if (ct.contains("cct")) {
+    if (ct.contains("custom_cct") || ct.contains("cct")) {
       try {
+        const float value = ct.contains("custom_cct") ? ct["custom_cct"].get<float>()
+                                                      : ct["cct"].get<float>();
         loaded_state.color_temp_custom_cct_ =
-            std::clamp(ct["cct"].get<float>(), static_cast<float>(color_temp::kCctMin),
+            std::clamp(value, static_cast<float>(color_temp::kCctMin),
                        static_cast<float>(color_temp::kCctMax));
       } catch (...) {
       }
     }
-    if (ct.contains("tint")) {
+    if (ct.contains("custom_tint") || ct.contains("tint")) {
       try {
+        const float value = ct.contains("custom_tint") ? ct["custom_tint"].get<float>()
+                                                       : ct["tint"].get<float>();
         loaded_state.color_temp_custom_tint_ =
-            std::clamp(ct["tint"].get<float>(), static_cast<float>(color_temp::kTintMin),
+            std::clamp(value, static_cast<float>(color_temp::kTintMin),
                        static_cast<float>(color_temp::kTintMax));
       } catch (...) {
       }
     }
-    if (ct.contains("resolved_cct")) {
+    if (ct.contains("as_shot_cct") || ct.contains("resolved_cct")) {
       try {
+        const float value = ct.contains("as_shot_cct") ? ct["as_shot_cct"].get<float>()
+                                                       : ct["resolved_cct"].get<float>();
         loaded_state.color_temp_resolved_cct_ =
-            std::clamp(ct["resolved_cct"].get<float>(), static_cast<float>(color_temp::kCctMin),
+            std::clamp(value, static_cast<float>(color_temp::kCctMin),
                        static_cast<float>(color_temp::kCctMax));
       } catch (...) {
       }
     }
-    if (ct.contains("resolved_tint")) {
+    if (ct.contains("as_shot_tint") || ct.contains("resolved_tint")) {
       try {
+        const float value = ct.contains("as_shot_tint") ? ct["as_shot_tint"].get<float>()
+                                                        : ct["resolved_tint"].get<float>();
         loaded_state.color_temp_resolved_tint_ =
-            std::clamp(ct["resolved_tint"].get<float>(), static_cast<float>(color_temp::kTintMin),
+            std::clamp(value, static_cast<float>(color_temp::kTintMin),
                        static_cast<float>(color_temp::kTintMax));
       } catch (...) {
       }

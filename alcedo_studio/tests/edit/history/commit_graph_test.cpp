@@ -215,6 +215,8 @@ TEST(CommitGraphReachability, MergeSecondParentRemainsReachableForGarbageCollect
   field.operator_type     = OperatorType::EXPOSURE;
   field.stage_name        = PipelineStageName::Basic_Adjustment;
   field.field_name        = "exposure";
+  field.before_value      = 1.0f;
+  field.before_enabled    = true;
   field.resolved_value    = 1.0f;
   field.resolved_enabled  = true;
   merge_payload.fields.push_back(field);
@@ -363,6 +365,8 @@ TEST(EditCommitHashing, ParentOrderChangesMergeCommitHash) {
   field.operator_type    = OperatorType::EXPOSURE;
   field.stage_name       = PipelineStageName::Basic_Adjustment;
   field.field_name       = "exposure";
+  field.before_value     = 1.0f;
+  field.before_enabled   = true;
   field.resolved_value   = 0.7f;
   field.resolved_enabled = true;
   merge_payload.fields.push_back(field);
@@ -384,6 +388,8 @@ TEST(EditCommitHashing, ReorderingEquivalentMergeFieldsDoesNotChangeHash) {
   exposure.operator_type    = OperatorType::EXPOSURE;
   exposure.stage_name       = PipelineStageName::Basic_Adjustment;
   exposure.field_name       = "exposure";
+  exposure.before_value     = 0.1f;
+  exposure.before_enabled   = true;
   exposure.resolved_value   = 0.3f;
   exposure.resolved_enabled = true;
 
@@ -391,6 +397,8 @@ TEST(EditCommitHashing, ReorderingEquivalentMergeFieldsDoesNotChangeHash) {
   contrast.operator_type    = OperatorType::CONTRAST;
   contrast.stage_name       = PipelineStageName::Basic_Adjustment;
   contrast.field_name       = "contrast";
+  contrast.before_value     = 0.2f;
+  contrast.before_enabled   = true;
   contrast.resolved_value   = 0.4f;
   contrast.resolved_enabled = true;
 
@@ -413,11 +421,14 @@ TEST(EditCommitHashing, ReorderingEquivalentMergeFieldsDoesNotChangeHash) {
 TEST(EditCommitHashing, DuplicateMergeFieldIdentityIsRejected) {
   MergeEditPayload payload;
   MergeFieldDelta  field;
-  field.operator_type  = OperatorType::EXPOSURE;
-  field.stage_name     = PipelineStageName::Basic_Adjustment;
-  field.field_name     = "exposure";
-  field.resolved_value = 1.0f;
-  payload.fields       = {field, field};
+  field.operator_type    = OperatorType::EXPOSURE;
+  field.stage_name       = PipelineStageName::Basic_Adjustment;
+  field.field_name       = "exposure";
+  field.before_value     = 0.0f;
+  field.before_enabled   = true;
+  field.resolved_value   = 1.0f;
+  field.resolved_enabled = true;
+  payload.fields         = {field, field};
   EXPECT_THROW(payload.CanonicalizeAndValidate(), std::runtime_error);
 }
 
@@ -461,12 +472,16 @@ TEST(EditCommitHashing, NonCanonicalOrExtraPayloadFieldsAreRejected) {
   exposure.operator_type    = OperatorType::EXPOSURE;
   exposure.stage_name       = PipelineStageName::Basic_Adjustment;
   exposure.field_name       = "exposure";
+  exposure.before_value     = 0.1f;
+  exposure.before_enabled   = true;
   exposure.resolved_value   = 0.3f;
   exposure.resolved_enabled = true;
   MergeFieldDelta contrast;
   contrast.operator_type    = OperatorType::CONTRAST;
   contrast.stage_name       = PipelineStageName::Basic_Adjustment;
   contrast.field_name       = "contrast";
+  contrast.before_value     = 0.2f;
+  contrast.before_enabled   = true;
   contrast.resolved_value   = 0.4f;
   contrast.resolved_enabled = true;
   MergeEditPayload ordered;

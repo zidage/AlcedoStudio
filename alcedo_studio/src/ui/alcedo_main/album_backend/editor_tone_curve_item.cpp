@@ -434,6 +434,9 @@ void EditorToneCurveItem::mousePressEvent(QMouseEvent* event) {
     dragging_                 = true;
     drag_origin_widget_       = pos;
     drag_origin_normalized_   = model_->controlPoints()[static_cast<size_t>(hit)];
+    // Keep the grab so a parent Flickable cannot steal vertical motion and
+    // scroll the tone panel while shaping the curve.
+    setKeepMouseGrab(true);
     event->accept();
     return;
   }
@@ -449,6 +452,7 @@ void EditorToneCurveItem::mousePressEvent(QMouseEvent* event) {
   if (dragging_) {
     drag_origin_widget_     = pos;
     drag_origin_normalized_ = model_->controlPoints()[static_cast<size_t>(inserted)];
+    setKeepMouseGrab(true);
   }
   event->accept();
 }
@@ -479,6 +483,7 @@ void EditorToneCurveItem::mouseReleaseEvent(QMouseEvent* event) {
     model_->finishDrag();
   }
   dragging_ = false;
+  setKeepMouseGrab(false);
   event->accept();
 }
 
@@ -490,6 +495,7 @@ void EditorToneCurveItem::mouseDoubleClickEvent(QMouseEvent* event) {
   if (event->button() == Qt::LeftButton) {
     model_->reset();
     dragging_ = false;
+    setKeepMouseGrab(false);
     event->accept();
     return;
   }

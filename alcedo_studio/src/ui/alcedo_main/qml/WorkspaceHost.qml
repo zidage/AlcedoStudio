@@ -85,6 +85,7 @@ Item {
         id: editorComponent
         EditorWorkspace {
             theme: root.theme
+            host: root.host
             workspaceRouter: root.workspaceRouter
             editorSession: appModules.editorSession
             blurSource: root.host ? root.host.dialogBlurSource : null

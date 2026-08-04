@@ -225,7 +225,7 @@ SwipeView {
     }
 
     // Blurred modal backdrop shared by the panel's dialogs — matches the
-    // MultiEffect + overlayColor used by SettingDialog / ActivateModelDialog.
+    // MultiEffect + overlayColor used by SettingDialog.
     component BlurOverlay: Item {
         anchors.fill: parent
 

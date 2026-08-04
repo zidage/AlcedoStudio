@@ -23,7 +23,18 @@ namespace alcedo {
 namespace CUDA {
 namespace {
 
-constexpr float kHilightMagic   = 0.987f;
+constexpr float kHilightMagic = 0.987f;
+// Lower bound of the chrominance sampling ring, as a fraction of the clip level. Matches
+// current darktable opposed. Darker samples inside the dilated ring sit on the shadow side of
+// highlight boundaries and only inject large negative outliers into the global statistic.
+constexpr float kChromaRingLo = 0.2f;
+// The reconstruction ramps in over the top (1 - kSoftClipLo) fraction below the clip level
+// instead of switching on exactly at the clip point. Shot/read noise makes pixels straddle a
+// hard threshold, which decorrelates neighbours and shows up as speckle at highlight edges.
+constexpr float kSoftClipLo = 0.95f;
+// Minimum ring sample count before the global chrominance is trusted. darktable uses >100 on
+// mosaiced and >30 on demosaiced data; this operator runs post-demosaic.
+constexpr float kMinChromaSamples = 30.0f;
 constexpr int   kDilateRadius   = 3;
 constexpr int   kStatsBlockX    = 32;
 constexpr int   kStatsBlockY    = 8;
@@ -91,8 +102,30 @@ __device__ __forceinline__ float3 ClampRgb(const float3& value) {
                      fminf(1.0f, fmaxf(0.0f, value.z)));
 }
 
+// A CMOS readout is a finite, non-negative electron count. Anything else (negative black-level
+// residue, NaN/Inf from an upstream artefact) is mapped to 0 so a single corrupt sample can
+// neither become a dark outlier nor poison the neighbourhood statistics.
+__device__ __forceinline__ float SanitizeChannel(const float value) {
+  return isfinite(value) ? fmaxf(0.0f, value) : 0.0f;
+}
+
 __device__ __forceinline__ float3 MaxRgb(const float3& value) {
-  return make_float3(fmaxf(0.0f, value.x), fmaxf(0.0f, value.y), fmaxf(0.0f, value.z));
+  return make_float3(SanitizeChannel(value.x), SanitizeChannel(value.y),
+                     SanitizeChannel(value.z));
+}
+
+__device__ __forceinline__ float SoftClipWeight(const float value, const float clip) {
+  const float lo = kSoftClipLo * clip;
+  const float t  = fminf(1.0f, fmaxf(0.0f, (value - lo) / (clip - lo)));
+  return t * t * (3.0f - 2.0f * t);
+}
+
+__device__ __forceinline__ float ReconstructChannel(const float pixel, const float ref,
+                                                    const float chrominance, const float weight) {
+  if (weight <= 0.0f) {
+    return pixel;
+  }
+  return pixel + weight * (fmaxf(pixel, ref + chrominance) - pixel);
 }
 
 __device__ __forceinline__ float3 LoadPlanarRgb(const cv::cuda::PtrStepSz<float> red,
@@ -122,10 +155,66 @@ __device__ __forceinline__ void StoreOrientedRgba(cv::cuda::PtrStepSz<float4> ou
   }
 }
 
+struct RefavgStats {
+  float valid_sum[3];
+  float valid_cnt[3];
+  float all_sum[3];
+  float all_cnt[3];
+};
+
+// Accumulate one neighbourhood sample. A sample at/above the clip level is censored by the
+// sensor (the photosite has reached full well, so its readout only means ">= clip"), or is a
+// hot-pixel/demosaic outlier; either way it carries no usable level information and must not
+// move the mean at face value. Censored samples still feed the fallback used when a channel
+// has no uncensored sample left (e.g. inside a fully blown region). Non-finite samples are
+// dropped entirely.
+__device__ __forceinline__ void RefavgAccumulate(RefavgStats& stats, const float3& raw,
+                                                 const float* clips) {
+  if (isfinite(raw.x)) {
+    const float v = fmaxf(0.0f, raw.x);
+    stats.all_sum[0] += v;
+    stats.all_cnt[0] += 1.0f;
+    if (v < clips[0]) {
+      stats.valid_sum[0] += v;
+      stats.valid_cnt[0] += 1.0f;
+    }
+  }
+  if (isfinite(raw.y)) {
+    const float v = fmaxf(0.0f, raw.y);
+    stats.all_sum[1] += v;
+    stats.all_cnt[1] += 1.0f;
+    if (v < clips[1]) {
+      stats.valid_sum[1] += v;
+      stats.valid_cnt[1] += 1.0f;
+    }
+  }
+  if (isfinite(raw.z)) {
+    const float v = fmaxf(0.0f, raw.z);
+    stats.all_sum[2] += v;
+    stats.all_cnt[2] += 1.0f;
+    if (v < clips[2]) {
+      stats.valid_sum[2] += v;
+      stats.valid_cnt[2] += 1.0f;
+    }
+  }
+}
+
+__device__ __forceinline__ float3 RefavgFinalize(const RefavgStats& stats) {
+  float mean[3];
+  for (int c = 0; c < 3; ++c) {
+    const float m = (stats.valid_cnt[c] > 0.0f) ? stats.valid_sum[c] / stats.valid_cnt[c]
+                    : (stats.all_cnt[c] > 0.0f) ? stats.all_sum[c] / stats.all_cnt[c]
+                                                : 0.0f;
+    mean[c] = cbrtf(m);
+  }
+
+  return make_float3(Cube(0.5f * (mean[1] + mean[2])), Cube(0.5f * (mean[0] + mean[2])),
+                     Cube(0.5f * (mean[0] + mean[1])));
+}
+
 __device__ __forceinline__ float3 CalcRefavg(const cv::cuda::PtrStepSz<float3> input, const int row,
-                                             const int col) {
-  float mean[3] = {0.0f, 0.0f, 0.0f};
-  float cnt[3]  = {0.0f, 0.0f, 0.0f};
+                                             const int col, const float* clips) {
+  RefavgStats stats = {};
 
   const int dymin = max(0, row - 1);
   const int dxmin = max(0, col - 1);
@@ -135,30 +224,19 @@ __device__ __forceinline__ float3 CalcRefavg(const cv::cuda::PtrStepSz<float3> i
   for (int dy = dymin; dy <= dymax; ++dy) {
     const float3* row_ptr = input.ptr(dy);
     for (int dx = dxmin; dx <= dxmax; ++dx) {
-      const float3 sample = MaxRgb(row_ptr[dx]);
-      mean[0] += sample.x;
-      mean[1] += sample.y;
-      mean[2] += sample.z;
-      cnt[0] += 1.0f;
-      cnt[1] += 1.0f;
-      cnt[2] += 1.0f;
+      RefavgAccumulate(stats, row_ptr[dx], clips);
     }
   }
 
-  for (int c = 0; c < 3; ++c) {
-    mean[c] = (cnt[c] > 0.0f) ? cbrtf(mean[c] / cnt[c]) : 0.0f;
-  }
-
-  return make_float3(Cube(0.5f * (mean[1] + mean[2])), Cube(0.5f * (mean[0] + mean[2])),
-                     Cube(0.5f * (mean[0] + mean[1])));
+  return RefavgFinalize(stats);
 }
 
 __device__ __forceinline__ float3 CalcRefavgPlanar(const cv::cuda::PtrStepSz<float> red,
                                                    const cv::cuda::PtrStepSz<float> green,
                                                    const cv::cuda::PtrStepSz<float> blue,
-                                                   const int row, const int col) {
-  float mean[3] = {0.0f, 0.0f, 0.0f};
-  float cnt[3]  = {0.0f, 0.0f, 0.0f};
+                                                   const int row, const int col,
+                                                   const float* clips) {
+  RefavgStats stats = {};
 
   const int dymin = max(0, row - 1);
   const int dxmin = max(0, col - 1);
@@ -167,38 +245,19 @@ __device__ __forceinline__ float3 CalcRefavgPlanar(const cv::cuda::PtrStepSz<flo
 
   for (int dy = dymin; dy <= dymax; ++dy) {
     for (int dx = dxmin; dx <= dxmax; ++dx) {
-      const float3 sample = MaxRgb(LoadPlanarRgb(red, green, blue, dy, dx));
-      mean[0] += sample.x;
-      mean[1] += sample.y;
-      mean[2] += sample.z;
-      cnt[0] += 1.0f;
-      cnt[1] += 1.0f;
-      cnt[2] += 1.0f;
+      RefavgAccumulate(stats, LoadPlanarRgb(red, green, blue, dy, dx), clips);
     }
   }
 
-  for (int c = 0; c < 3; ++c) {
-    mean[c] = (cnt[c] > 0.0f) ? cbrtf(mean[c] / cnt[c]) : 0.0f;
-  }
-
-  return make_float3(Cube(0.5f * (mean[1] + mean[2])), Cube(0.5f * (mean[0] + mean[2])),
-                     Cube(0.5f * (mean[0] + mean[1])));
-}
-
-__device__ __forceinline__ int CountClippedChannels(const float3& pixel, const float* clips) {
-  int count = 0;
-  count += pixel.x >= clips[0] ? 1 : 0;
-  count += pixel.y >= clips[1] ? 1 : 0;
-  count += pixel.z >= clips[2] ? 1 : 0;
-  return count;
+  return RefavgFinalize(stats);
 }
 
 template <typename Tile>
 __device__ __forceinline__ float3 CalcRefavgFromTile(const Tile& tile, const int row, const int col,
                                                      const int local_y, const int local_x,
-                                                     const int height, const int width) {
-  float mean[3] = {0.0f, 0.0f, 0.0f};
-  float cnt[3]  = {0.0f, 0.0f, 0.0f};
+                                                     const int height, const int width,
+                                                     const float* clips) {
+  RefavgStats stats = {};
 
   const int dy0 = max(-1, -row);
   const int dx0 = max(-1, -col);
@@ -207,22 +266,11 @@ __device__ __forceinline__ float3 CalcRefavgFromTile(const Tile& tile, const int
 
   for (int dy = dy0; dy <= dy1; ++dy) {
     for (int dx = dx0; dx <= dx1; ++dx) {
-      const float3 sample = tile[local_y + dy][local_x + dx];
-      mean[0] += sample.x;
-      mean[1] += sample.y;
-      mean[2] += sample.z;
-      cnt[0] += 1.0f;
-      cnt[1] += 1.0f;
-      cnt[2] += 1.0f;
+      RefavgAccumulate(stats, tile[local_y + dy][local_x + dx], clips);
     }
   }
 
-  for (int c = 0; c < 3; ++c) {
-    mean[c] = (cnt[c] > 0.0f) ? cbrtf(mean[c] / cnt[c]) : 0.0f;
-  }
-
-  return make_float3(Cube(0.5f * (mean[1] + mean[2])), Cube(0.5f * (mean[0] + mean[2])),
-                     Cube(0.5f * (mean[0] + mean[1])));
+  return RefavgFinalize(stats);
 }
 
 __global__ void Clamp01KernelGray(cv::cuda::PtrStep<float> img, const int width, const int height) {
@@ -322,8 +370,8 @@ __global__ void AccumulateHighlightStatsKernel(const cv::cuda::PtrStepSz<float3>
     const bool   use_b = dil_b != 0 && pixel.z > params.clipdark[2] && pixel.z < params.clips[2];
 
     if (use_r || use_g || use_b) {
-      const float3 ref =
-          CalcRefavgFromTile(tile_img, row, col, local_y, local_x, input.rows, input.cols);
+      const float3 ref = CalcRefavgFromTile(tile_img, row, col, local_y, local_x, input.rows,
+                                            input.cols, params.clips);
       if (use_r) {
         atomicAdd(&block_sums[0], pixel.x - ref.x);
         atomicAdd(&block_cnts[0], 1.0f);
@@ -428,8 +476,8 @@ __global__ void AccumulateHighlightStatsPlanarKernel(const cv::cuda::PtrStepSz<f
     const bool   use_b = dil_b != 0 && pixel.z > params.clipdark[2] && pixel.z < params.clips[2];
 
     if (use_r || use_g || use_b) {
-      const float3 ref =
-          CalcRefavgFromTile(tile_img, row, col, local_y, local_x, red.rows, red.cols);
+      const float3 ref = CalcRefavgFromTile(tile_img, row, col, local_y, local_x, red.rows,
+                                            red.cols, params.clips);
       if (use_r) {
         atomicAdd(&block_sums[0], pixel.x - ref.x);
         atomicAdd(&block_cnts[0], 1.0f);
@@ -465,27 +513,21 @@ __global__ void HighlightReconstructKernel(const cv::cuda::PtrStepSz<float3> inp
   }
 
   const float3 pixel = MaxRgb(input.ptr(row)[col]);
-  const int    count = CountClippedChannels(pixel, params.clips);
+  const float3 weight =
+      make_float3(SoftClipWeight(pixel.x, params.clips[0]), SoftClipWeight(pixel.y, params.clips[1]),
+                  SoftClipWeight(pixel.z, params.clips[2]));
 
-  if (count == 0) {
+  if (weight.x <= 0.0f && weight.y <= 0.0f && weight.z <= 0.0f) {
     output.ptr(row)[col] = pixel;
     return;
   }
 
-  float3       result = pixel;
-  const float3 ref    = CalcRefavg(input, row, col);
+  const float3 ref = CalcRefavg(input, row, col, params.clips);
 
-  if (pixel.x >= params.clips[0]) {
-    result.x = fmaxf(pixel.x, ref.x + params.chrominance[0]);
-  }
-  if (pixel.y >= params.clips[1]) {
-    result.y = fmaxf(pixel.y, ref.y + params.chrominance[1]);
-  }
-  if (pixel.z >= params.clips[2]) {
-    result.z = fmaxf(pixel.z, ref.z + params.chrominance[2]);
-  }
-
-  output.ptr(row)[col] = result;
+  output.ptr(row)[col] =
+      make_float3(ReconstructChannel(pixel.x, ref.x, params.chrominance[0], weight.x),
+                  ReconstructChannel(pixel.y, ref.y, params.chrominance[1], weight.y),
+                  ReconstructChannel(pixel.z, ref.z, params.chrominance[2], weight.z));
 }
 
 __global__ void ClampAndPackRGBAKernel(const cv::cuda::PtrStepSz<float3> input,
@@ -531,20 +573,17 @@ __global__ void HighlightReconstructAndPackRGBAKernel(const cv::cuda::PtrStepSz<
   }
 
   const float3 pixel = MaxRgb(input.ptr(row)[col]);
-  const int    count = CountClippedChannels(pixel, params.clips);
+  const float3 weight =
+      make_float3(SoftClipWeight(pixel.x, params.clips[0]), SoftClipWeight(pixel.y, params.clips[1]),
+                  SoftClipWeight(pixel.z, params.clips[2]));
 
   float3 result = pixel;
-  if (count != 0) {
-    const float3 ref = CalcRefavg(input, row, col);
-    if (pixel.x >= params.clips[0]) {
-      result.x = fmaxf(pixel.x, ref.x + params.chrominance[0]);
-    }
-    if (pixel.y >= params.clips[1]) {
-      result.y = fmaxf(pixel.y, ref.y + params.chrominance[1]);
-    }
-    if (pixel.z >= params.clips[2]) {
-      result.z = fmaxf(pixel.z, ref.z + params.chrominance[2]);
-    }
+  if (weight.x > 0.0f || weight.y > 0.0f || weight.z > 0.0f) {
+    const float3 ref = CalcRefavg(input, row, col, params.clips);
+    result =
+        make_float3(ReconstructChannel(pixel.x, ref.x, params.chrominance[0], weight.x),
+                    ReconstructChannel(pixel.y, ref.y, params.chrominance[1], weight.y),
+                    ReconstructChannel(pixel.z, ref.z, params.chrominance[2], weight.z));
   }
   StoreOrientedRgba(output, row, col, input.rows, input.cols,
                     make_float4(result.x * gain.x, result.y * gain.y, result.z * gain.z, 1.0f),
@@ -562,20 +601,17 @@ __global__ void HighlightReconstructAndPackRGBAPlanarKernel(
   }
 
   const float3 pixel = MaxRgb(LoadPlanarRgb(red, green, blue, row, col));
-  const int    count = CountClippedChannels(pixel, params.clips);
+  const float3 weight =
+      make_float3(SoftClipWeight(pixel.x, params.clips[0]), SoftClipWeight(pixel.y, params.clips[1]),
+                  SoftClipWeight(pixel.z, params.clips[2]));
 
   float3 result = pixel;
-  if (count != 0) {
-    const float3 ref = CalcRefavgPlanar(red, green, blue, row, col);
-    if (pixel.x >= params.clips[0]) {
-      result.x = fmaxf(pixel.x, ref.x + params.chrominance[0]);
-    }
-    if (pixel.y >= params.clips[1]) {
-      result.y = fmaxf(pixel.y, ref.y + params.chrominance[1]);
-    }
-    if (pixel.z >= params.clips[2]) {
-      result.z = fmaxf(pixel.z, ref.z + params.chrominance[2]);
-    }
+  if (weight.x > 0.0f || weight.y > 0.0f || weight.z > 0.0f) {
+    const float3 ref = CalcRefavgPlanar(red, green, blue, row, col, params.clips);
+    result =
+        make_float3(ReconstructChannel(pixel.x, ref.x, params.chrominance[0], weight.x),
+                    ReconstructChannel(pixel.y, ref.y, params.chrominance[1], weight.y),
+                    ReconstructChannel(pixel.z, ref.z, params.chrominance[2], weight.z));
   }
   StoreOrientedRgba(output, row, col, red.rows, red.cols,
                     make_float4(result.x * gain.x, result.y * gain.y, result.z * gain.z, 1.0f),
@@ -642,17 +678,28 @@ void HighlightWorkspace::Release() {
   result_.release();
 }
 
+// WB multipliers come from file metadata or the camera's as-shot estimate and can be zero,
+// negative, or non-finite on exotic files. Clamp the per-channel ratio to a sane band so a
+// broken multiplier can neither invert the clip order nor push a clip level far outside the
+// sensor's physical range.
+auto ChannelRatio(const float value, const float green) -> float {
+  if (!std::isfinite(value) || value <= 0.0f) {
+    return 1.0f;
+  }
+  return std::clamp(value / green, 0.25f, 4.0f);
+}
+
 auto BuildHighlightCorrection(LibRaw& raw_processor) -> HighlightCorrection {
   const float* cam_mul = raw_processor.imgdata.color.cam_mul;
-  const float  green   = std::max(cam_mul[1], 1e-6f);
+  const float  green   = std::isfinite(cam_mul[1]) && cam_mul[1] > 0.0f ? cam_mul[1] : 1.0f;
 
   HighlightCorrection correction;
-  correction.clips[0]    = kHilightMagic * (cam_mul[0] / green);
+  correction.clips[0]    = kHilightMagic * ChannelRatio(cam_mul[0], green);
   correction.clips[1]    = kHilightMagic;
-  correction.clips[2]    = kHilightMagic * (cam_mul[2] / green);
-  correction.clipdark[0] = 0.03f * correction.clips[0];
-  correction.clipdark[1] = 0.125f * correction.clips[1];
-  correction.clipdark[2] = 0.03f * correction.clips[2];
+  correction.clips[2]    = kHilightMagic * ChannelRatio(cam_mul[2], green);
+  correction.clipdark[0] = kChromaRingLo * correction.clips[0];
+  correction.clipdark[1] = kChromaRingLo * correction.clips[1];
+  correction.clipdark[2] = kChromaRingLo * correction.clips[2];
   return correction;
 }
 
@@ -666,8 +713,9 @@ void FinalizeHighlightCorrection(const HighlightAccumulation& accumulation,
 
   for (int c = 0; c < 3; ++c) {
     correction.chrominance[c] =
-        accumulation.cnts[c] > 0.0 ? static_cast<float>(accumulation.sums[c] / accumulation.cnts[c])
-                                    : 0.0f;
+        accumulation.cnts[c] > kMinChromaSamples
+            ? static_cast<float>(accumulation.sums[c] / accumulation.cnts[c])
+            : 0.0f;
   }
 }
 

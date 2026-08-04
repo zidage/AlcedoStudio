@@ -26,24 +26,56 @@
 
 namespace alcedo {
 
+/// Live editor handle: one pipeline executor (parameter table + run state) plus a
+/// pointer to the image's CommitGraph.
+///
+/// Binding identity model (see commit_types.hpp and the single-live-pipeline roadmap
+/// "Final locked identity model"):
+/// - pipeline_ is only the parameter table / executor. It does not own HEAD.
+/// - commit_graph_ is the sole owner of Version tips (working head).
+/// - working_head_commit_hash() / transaction_chain_hash() are convenience reads of
+///   the active Version tip and its first-parent chain fold. They are not independent
+///   caches; never write a parallel head field onto this guard.
+/// - On commit (including merge), history advances head once and folds chain hash once.
+///   Applying that commit to the table may call SetOperator many times; those calls are
+///   not separate chain-hash steps.
+/// - Serialized checkpoint identity is (head, chain, params). Load compares that label
+///   to the history tip; match skips first-parent replay.
 struct PipelineGuard {
   std::shared_ptr<CPUPipelineExecutor> pipeline_;
   sl_element_id_t                      id_;
   bool                                 dirty_     = false;
+  /// Cache pin only: LoadPipeline / SavePipeline refcount so LRU eviction and
+  /// "unpinned → re-init stages" do not drop a live editor/export guard.
+  /// Live-pipeline *mutation* ownership is CPUPipelineExecutor::render_lock_
+  /// (held for the full render task including present); pin_count_ is not that.
   bool                                 pinned_    = false;
   size_t                               pin_count_ = 0;
 
-  // The editor's live runtime snapshot. These values describe history only;
-  // executor stages, GPU resources, and render/cache state stay on pipeline_.
+  /// Immutable root id for this image's edit graph (history identity, not a tip).
   root_id_t                            root_id_{};
-  head_commit_hash_t                   working_head_commit_hash_ = std::nullopt;
-  transaction_chain_hash_t             transaction_chain_hash_{};
   bool                                 serialized_state_needs_writeback_ = false;
 
-  // The validated graph backing the focused editor pipeline. Its Version ref
-  // advances for journaled edits while ImageEditState.materialized_* remains
-  // at the last DuckDB checkpoint.
+  /// Sole live CommitGraph for this element. Active Version head is the only logical
+  /// working head. Advances: MoveWorkingHead / SetActiveVersionId / PublishPrepared*.
   std::shared_ptr<CommitGraph>         commit_graph_;
+
+  /// Active Version tip on commit_graph_ (history-owned). Empty graph → nullopt.
+  [[nodiscard]] auto working_head_commit_hash() const -> head_commit_hash_t {
+    if (!commit_graph_) {
+      return std::nullopt;
+    }
+    return commit_graph_->GetActiveVersionRef().head_commit_hash;
+  }
+
+  /// First-parent chain fold for the active tip. Same algorithm history uses when
+  /// recording commits; used as the checkpoint label next to exported params.
+  [[nodiscard]] auto transaction_chain_hash() const -> transaction_chain_hash_t {
+    if (!commit_graph_) {
+      return {};
+    }
+    return commit_graph_->ChainHashForHead(working_head_commit_hash());
+  }
 };
 
 // Phase 3: a read-only clone of a pipeline's params captured into an independent
@@ -71,6 +103,8 @@ class PipelineMgmtService final {
 
   AcceleratorBackendPreference accelerator_preference_ = AcceleratorBackendPreference::Auto;
 
+  std::uint64_t editor_pipeline_history_rebuild_count_ = 0;
+
   void                         HandleEviction(sl_element_id_t evicted_id);
 
  public:
@@ -92,12 +126,20 @@ class PipelineMgmtService final {
 
   auto               LoadPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
 
-  /// Load an editor pipeline and validate its serialized state against the immutable commit graph.
-  /// Matching state is imported directly. Stale state is rebuilt from the persisted root and
-  /// first-parent commits and written back when the guard is returned.
-  /// Thumbnail and export callers must continue to use LoadPipeline so they do not repeat this
-  /// editor-only history validation.
+  /// Load editor params for `id` using history tip as authority.
+  /// If checkpoint (params + head/chain label) matches active Version tip, import params
+  /// (skip first-parent replay). Otherwise rebuild from root + first-parent chain and mark
+  /// write-back. Thumbnail/export must use LoadPipeline (no editor history validation).
   auto               LoadEditorPipeline(sl_element_id_t id) -> std::shared_ptr<PipelineGuard>;
+
+  /// Test/instrumentation counter: increments each time LoadEditorPipeline rebuilds from
+  /// first-parent history instead of importing the serialized checkpoint.
+  [[nodiscard]] auto EditorPipelineHistoryRebuildCount() const -> std::uint64_t {
+    return editor_pipeline_history_rebuild_count_;
+  }
+  void ResetEditorPipelineHistoryRebuildCountForTesting() {
+    editor_pipeline_history_rebuild_count_ = 0;
+  }
 
   /// Persist the current metadata-resolved pipeline as the immutable root for a newly imported
   /// image. Calling this again for an image that already has a root verifies and loads that root;
@@ -105,23 +147,23 @@ class PipelineMgmtService final {
   void               InitializeImageRoot(const std::shared_ptr<PipelineGuard>& pipeline,
                                          const RawRuntimeColorContext*         raw_color_context = nullptr);
 
-  /// Switch the live editor pipeline to another Version on the same image.
+  /// Switch the live editor parameter table to another Version on the same image.
   ///
   /// Preconditions: `pipeline` is a loaded editor guard with a commit graph. The caller has already
   /// completed a save checkpoint so the working journal is empty for this image.
   ///
-  /// Behavior: sets the active Version, rebuilds the executor from the immutable root plus the
-  /// first-parent chain under the render lock, then updates working head and chain hash. On any
-  /// failure the prior Version remains active and the prior pipeline is restored — never publishes
-  /// a partially reconstructed pipeline.
+  /// Behavior: sets the active Version on the CommitGraph (history-owned head moves here), then
+  /// rebuilds the executor params from the immutable root plus the first-parent chain under the
+  /// render lock (or imports a matching checkpoint if present). On any failure the prior Version
+  /// remains active and the prior pipeline is restored — never publishes a partially reconstructed
+  /// pipeline. Does not invent a second head on the guard.
   ///
-  /// @return true when the Version and pipeline both match the checked-out head.
+  /// @return true when the Version tip and pipeline params both match the checked-out head.
   auto CheckoutVersion(const std::shared_ptr<PipelineGuard>& pipeline,
                        const version_ref_id_t& version_id, std::string* error = nullptr) -> bool;
 
-  /// Rebuild the executor from the immutable root and the first-parent chain of the
-  /// currently active Version. The caller may use this after changing the in-memory graph
-  /// before the graph is materialized.
+  /// Rebuild the executor params from the immutable root and the first-parent chain of the
+  /// currently active Version tip. Used when the checkpoint label does not match history.
   auto RebuildActiveEditorPipeline(const std::shared_ptr<PipelineGuard>& pipeline,
                                    std::string* error = nullptr) -> bool;
 
@@ -158,4 +200,19 @@ class PipelineMgmtService final {
   // shared_ptr then drops naturally. Not a storage write. No-op if null.
   void ReleasePipelineSnapshot(std::shared_ptr<PipelineSnapshot> snapshot);
 };
+
+/// Checkpoint label: which history tip the serialized params claim to match.
+/// Not a pipeline-owned head — only a tag stored next to the parameter table blob.
+struct PipelineCheckpointIdentity {
+  head_commit_hash_t       head  = std::nullopt;
+  transaction_chain_hash_t chain{};
+};
+
+/// True when the checkpoint label on `state` matches the history tip after WAL attach.
+/// Match ⇒ safe to import params without first-parent SetOperator replay.
+[[nodiscard]] auto CheckpointMatchesLogicalHead(const ImageEditState& state,
+                                                head_commit_hash_t logical_head,
+                                                const transaction_chain_hash_t& logical_chain)
+    -> bool;
+
 }  // namespace alcedo

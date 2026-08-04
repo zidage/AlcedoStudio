@@ -89,8 +89,21 @@ Item {
         host.libraryGridZoomLevel = gridZoomLevel
         const view = contentViewLoader.item
         if (view && view.contentY !== undefined) {
-            host.libraryGridContentY = view.contentY
+            if (host.contentY !== undefined) {
+                host.contentY = view.contentY
+            } else {
+                host.libraryGridContentY = view.contentY
+            }
         }
+    }
+
+    function hostContentY() {
+        if (!host) {
+            return 0
+        }
+        return host.contentY !== undefined
+                ? Number(host.contentY)
+                : Number(host.libraryGridContentY || 0)
     }
 
     function restoreScrollPosition() {
@@ -98,7 +111,46 @@ Item {
         if (!view || !host || !view.restoreContentY) {
             return
         }
-        view.restoreContentY(host.libraryGridContentY)
+        view.restoreContentY(root.hostContentY())
+        Qt.callLater(root.revealRequestedImage)
+    }
+
+    function revealRequestedImage() {
+        const view = contentViewLoader.item
+        if (!view || !host) {
+            return
+        }
+        const elementId = Number(host.libraryScrollTargetElementId || 0)
+        if (elementId <= 0) {
+            return
+        }
+
+        const requestedIndex = Number(host.libraryScrollTargetIndex)
+        let revealed = false
+        if (requestedIndex >= 0 && view.scrollToIndexAtTop) {
+            revealed = view.scrollToIndexAtTop(requestedIndex)
+        }
+        if (!revealed && view.scrollToElementAtTop) {
+            revealed = view.scrollToElementAtTop(elementId)
+        }
+        if (!revealed) {
+            return
+        }
+
+        if (host.clearLibraryScrollTarget) {
+            host.clearLibraryScrollTarget(elementId)
+        }
+        root.persistViewState()
+    }
+
+    function focusLibraryItem(item, index) {
+        if (!item || !host) {
+            return
+        }
+        host.setFocusedImage(item)
+        if (host.requestFilmstripScrollToElement) {
+            host.requestFilmstripScrollToElement(item.elementId, index)
+        }
     }
 
     onInspectorVisibleChanged: {
@@ -126,6 +178,20 @@ Item {
                 root.inspectorVisible = host.libraryInspectorVisible
             }
         }
+        function onLibraryScrollRequestIdChanged() {
+            Qt.callLater(root.revealRequestedImage)
+        }
+    }
+
+    Connections {
+        target: appModules.library.thumbnailModel
+        ignoreUnknownSignals: true
+        function onCountChanged() {
+            Qt.callLater(root.revealRequestedImage)
+        }
+        function onTotalCountChanged() {
+            Qt.callLater(root.revealRequestedImage)
+        }
     }
 
     Component.onCompleted: root.applyHostViewState()
@@ -146,8 +212,10 @@ RowLayout {
         backendInteractive: host.backendInteractive
         selectedCount: host.selectedCount
         onImportRequested: host.importDialog.open()
+        onImportFromFolderRequested: host.importFolderDialog.open()
         onSearchRequested: host.globalSearchDialog.openFromCollection()
         onAdvancedAnalysisRequested: host.openAdvancedAnalysisDialog()
+        onBackgroundTasksRequested: host.openBackgroundTasksDialog()
     }
 
     ColumnLayout {
@@ -495,7 +563,11 @@ RowLayout {
             onZoomLevelChanged: root.gridZoomLevel = zoomLevel
             onContentYChanged: {
                 if (host) {
-                    host.libraryGridContentY = contentY
+                    if (host.contentY !== undefined) {
+                        host.contentY = contentY
+                    } else {
+                        host.libraryGridContentY = contentY
+                    }
                 }
             }
             selectedImagesById: host.selectedImagesById
@@ -506,13 +578,15 @@ RowLayout {
             onReplaceSelection: function(items) {
                 host.selectionState.replaceSelectedImages(items)
                 if (items && items.length > 0) {
-                    host.setFocusedImage(items[0])
+                    const index = appModules.library.thumbnailModel.rowByElementId(
+                        Number(items[0].elementId))
+                    root.focusLibraryItem(items[0], index)
                 } else {
                     host.setFocusedImage(null)
                 }
             }
-            onImageFocused: function(item) {
-                host.setFocusedImage(item)
+            onImageFocused: function(item, index) {
+                root.focusLibraryItem(item, index)
             }
             onContextMenuRequested: function(item, sceneX, sceneY) {
                 host.openImageContextMenu(item, sceneX, sceneY)

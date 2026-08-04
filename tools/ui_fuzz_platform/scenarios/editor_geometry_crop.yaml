@@ -1,0 +1,62 @@
+name: editor_geometry_crop
+start: workspace_ready
+defaults:
+  expectTimeoutMs: 10000
+nodes:
+  workspace_ready:
+    op:
+      action: wait
+      target: workspaceHost
+      property: visible
+      eq: true
+    next:
+      - to: open_first_image
+        weight: 1
+  open_first_image:
+    op:
+      action: doubleClick
+      target: thumbnailGridView_firstCard
+    expect:
+      - target: editorWorkspace
+        property: visible
+        eq: true
+    next:
+      - to: open_geometry
+        weight: 1
+  open_geometry:
+    op:
+      action: click
+      target: editorAdjustmentNav_geometry
+    expect:
+      - target: editorAdjustmentPanel_geometry
+        property: visible
+        eq: true
+      - target: geometryRotationSlider
+        property: visible
+        eq: true
+    next:
+      - to: drag_rotation
+        weight: 1
+  drag_rotation:
+    op:
+      action: drag
+      target: geometryRotationSlider
+      fromNx: 0.5
+      toNx: 0.65
+      steps: 8
+    next:
+      - to: drag_crop_width
+        weight: 1
+  drag_crop_width:
+    op:
+      action: drag
+      target: geometryCropWidthSlider
+      fromNx: 0.7
+      toNx: 0.45
+      steps: 10
+    next:
+      - to: capture_geometry
+        weight: 1
+  capture_geometry:
+    op:
+      action: screenshot

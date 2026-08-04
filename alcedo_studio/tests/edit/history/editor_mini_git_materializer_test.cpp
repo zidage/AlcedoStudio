@@ -422,11 +422,11 @@ TEST_F(EditorMiniGitMaterializerTest,
 }
 
 /// A save can commit its captured prefix, stop before truncation, and then
-/// receive another edit. Recovery must keep the first commit once, materialize
-/// the later edit, and select the later head rather than rejecting the mixed
-/// journal or replaying the durable prefix.
+/// receive another edit. Cold RecoverAndMaterialize must keep the first commit
+/// once, leave the contiguous missing WAL suffix for live attach (unique history
+/// + live pipeline + normal save), and not fold the suffix into DuckDB.
 TEST_F(EditorMiniGitMaterializerTest,
-       RecoverySkipsDurableJournalPrefixAndMaterializesLaterHeadMoveAndEdit) {
+       RecoveryLeavesContiguousMissingSuffixForLiveAttachAfterDurablePrefix) {
   const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
   ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.0f));
   auto first_capture = project_.CaptureWorkingState(element_id, 1.0f);
@@ -441,20 +441,16 @@ TEST_F(EditorMiniGitMaterializerTest,
   project_.materializer().SetTruncationHook(nullptr);
 
   ASSERT_TRUE(project_.AppendExposureEdit(element_id, 1.0f, 2.0f));
-  const auto expected_head = project_.working_history(element_id).working_head();
-  ASSERT_TRUE(expected_head.has_value());
+  ASSERT_TRUE(project_.working_history(element_id).working_head().has_value());
 
   const auto recovered = project_.materializer().RecoverAndMaterialize(
       element_id, project_.journal_path(element_id), &error);
   ASSERT_TRUE(recovered.accepted) << error << " / " << recovered.error;
-  ASSERT_TRUE(recovered.materialized);
-  EXPECT_TRUE(recovered.head_moved);
-  EXPECT_EQ(project_.CountStoredCommits(element_id), 2u);
-
-  const auto stored = project_.LoadStoredGraph(element_id);
-  ASSERT_TRUE(stored.has_value());
-  EXPECT_EQ(stored->GetActiveVersionRef().head_commit_hash, expected_head);
-  EXPECT_TRUE(project_.ReadJournalRecords(element_id, &error).empty()) << error;
+  EXPECT_FALSE(recovered.materialized);
+  EXPECT_FALSE(recovered.head_moved);
+  // Only the durable prefix is in DuckDB; the second edit stays in WAL for live attach.
+  EXPECT_EQ(project_.CountStoredCommits(element_id), 1u);
+  EXPECT_FALSE(project_.ReadJournalRecords(element_id, &error).empty()) << error;
 }
 
 /// When the post-truncation (flush) hook fails, database_committed is true,

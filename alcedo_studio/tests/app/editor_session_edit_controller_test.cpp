@@ -34,7 +34,7 @@ class EditorSessionEditControllerTest : public ::testing::Test {
     ASSERT_TRUE(lifecycle_->BeginAcquire(1, 2, false, nullptr, &error)) << error;
     ASSERT_TRUE(lifecycle_->AcquireGuards(&error)) << error;
     lifecycle_->MarkImageReady();
-    lifecycle_->MarkFirstFramePresented();
+    lifecycle_->MarkFirstFrameReady();
 
     EditorSessionEditController::Dependencies edit_deps{history_, journal_};
     edit_ = std::make_unique<EditorSessionEditController>(std::move(edit_deps));
@@ -60,6 +60,9 @@ TEST_F(EditorSessionEditControllerTest, InteractiveAndSettledPatchUseOneHistoryC
   EXPECT_EQ(r1.reason, EditorRenderReason::InteractiveAdjustment);
   EXPECT_EQ(history_->capture_count, 1);
   EXPECT_EQ(history_->commit_count, 0);
+  ASSERT_EQ(r1.render_command.adjustment.patches.size(), 1u);
+  EXPECT_EQ(r1.render_command.adjustment.patches.front().field_key, "exposure");
+  EXPECT_EQ(r1.render_command.adjustment.fingerprint, "exposure");
 
   patch.settled = true;
   auto r2       = edit_->HandlePatch(patch, true, guard(), identity());
@@ -69,6 +72,20 @@ TEST_F(EditorSessionEditControllerTest, InteractiveAndSettledPatchUseOneHistoryC
   EXPECT_EQ(history_->commit_count, 1);
   EXPECT_EQ(history_->last_committed_patch.field_key, "exposure");
   EXPECT_TRUE(history_->last_committed_patch.settled);
+  ASSERT_EQ(r2.render_command.adjustment.patches.size(), 1u);
+  EXPECT_EQ(r2.render_command.adjustment.patches.front().field_key, "exposure");
+}
+
+TEST_F(EditorSessionEditControllerTest, InteractivePatchCarriesOnlyEditedField) {
+  EditorAdjustmentPatch patch;
+  patch.field_key   = "exposure";
+  patch.params_json = R"({"exposure":1.25})";
+  const auto result = edit_->HandlePatch(patch, false, guard(), identity());
+  ASSERT_EQ(result.kind, EditorEditOutcome::Kind::RenderRouted);
+  ASSERT_EQ(result.render_command.adjustment.patches.size(), 1u);
+  EXPECT_EQ(result.render_command.adjustment.patches.front().field_key, "exposure");
+  EXPECT_EQ(result.render_command.adjustment.patches.front().params_json, R"({"exposure":1.25})");
+  EXPECT_EQ(result.render_command.adjustment.fingerprint, "exposure");
 }
 
 TEST_F(EditorSessionEditControllerTest, SettledCommitFailureReturnsRejected) {
@@ -80,28 +97,31 @@ TEST_F(EditorSessionEditControllerTest, SettledCommitFailureReturnsRejected) {
   EXPECT_EQ(history_->commit_count, 1);
 }
 
-TEST_F(EditorSessionEditControllerTest, RepeatedInteractivePatchesKeepLatestValuePerField) {
+TEST_F(EditorSessionEditControllerTest, RepeatedInteractivePatchesOnlyStampLatestFieldOnRender) {
   EditorAdjustmentPatch patch;
   patch.field_key = "exposure";
   for (int value = 0; value < 50; ++value) {
     patch.params_json = std::string{"{\"exposure\":"} + std::to_string(value) + "}";
-    edit_->HandlePatch(patch, false, guard(), identity());
+    const auto routed = edit_->HandlePatch(patch, false, guard(), identity());
+    ASSERT_EQ(routed.kind, EditorEditOutcome::Kind::RenderRouted);
+    ASSERT_EQ(routed.render_command.adjustment.patches.size(), 1u);
+    EXPECT_EQ(routed.render_command.adjustment.patches.front().field_key, "exposure");
   }
-  const auto snapshot = edit_->adjustment_snapshot();
-  ASSERT_EQ(snapshot.patches.size(), 1u);
-  EXPECT_EQ(snapshot.patches.front().field_key, "exposure");
-  EXPECT_EQ(snapshot.patches.front().params_json, R"({"exposure":49})");
   EXPECT_EQ(history_->commit_count, 0);
 
   patch.settled = true;
-  edit_->HandlePatch(patch, true, guard(), identity());
+  const auto settled = edit_->HandlePatch(patch, true, guard(), identity());
+  ASSERT_EQ(settled.render_command.adjustment.patches.size(), 1u);
+  EXPECT_EQ(settled.render_command.adjustment.patches.front().params_json, R"({"exposure":49})");
   EXPECT_EQ(history_->commit_count, 1);
 }
 
-TEST_F(EditorSessionEditControllerTest, UndoAdvancesAndRoutes) {
+TEST_F(EditorSessionEditControllerTest, UndoAdvancesWithEmptyRenderAdjustment) {
   auto result = edit_->HandleUndoRedo(true, guard(), identity());
   EXPECT_EQ(result.kind, EditorEditOutcome::Kind::Accepted);
   EXPECT_EQ(history_->undo_count, 1);
+  EXPECT_TRUE(result.render_command.adjustment.patches.empty());
+  EXPECT_TRUE(result.render_command.adjustment.params_json.empty());
 }
 
 TEST_F(EditorSessionEditControllerTest, UndoFailureReturnsFailed) {
@@ -111,12 +131,11 @@ TEST_F(EditorSessionEditControllerTest, UndoFailureReturnsFailed) {
   EXPECT_EQ(result.message, "undo failed");
 }
 
-TEST_F(EditorSessionEditControllerTest, DiscardUsesJournalPortAndRestoresSnapshot) {
-  history_->current_snapshot.params_json = R"({"contrast":0.0})";
+TEST_F(EditorSessionEditControllerTest, DiscardUsesJournalPortAndLeavesRenderAdjustmentEmpty) {
   auto result = edit_->HandleDiscard(guard(), identity(), EditorSessionState::Interactive);
   EXPECT_EQ(result.kind, EditorEditOutcome::Kind::Accepted);
   EXPECT_EQ(journal_->discard_count, 1);
-  EXPECT_EQ(edit_->adjustment_snapshot().params_json, R"({"contrast":0.0})");
+  EXPECT_TRUE(result.render_command.adjustment.patches.empty());
 }
 
 TEST_F(EditorSessionEditControllerTest, PatchWithEmptyFieldKeyIsRejected) {

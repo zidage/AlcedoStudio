@@ -1,6 +1,7 @@
 <RCC>
   <qresource prefix="/">
     <file>ICON/alcedo_icon.png</file>
+    <file>ICON/alcedo_icon.ico</file>
     <file>fonts/main_Inter.ttf</file>
     <file>fonts/main_Inter_italic.ttf</file>
     <file>fonts/main_IBM.ttf</file>
@@ -14,6 +15,7 @@
     <file>panel_icons/waveform.svg</file>
     <file>panel_icons/palette.svg</file>
     <file>panel_icons/versions.svg</file>
+    <file>panel_icons/clock-play.svg</file>
     <file>panel_icons/reset.svg</file>
     <file>panel_icons/color-filter.svg</file>
     <file>panel_icons/crop.svg</file>
@@ -49,6 +51,8 @@
     <file>panel_icons/to_bg.svg</file>
     <file>panel_icons/collections-folder.svg</file>
     <file>panel_icons/box.svg</file>
+    <file>panel_icons/cpu.svg</file>
+    <file>panel_icons/close.svg</file>
     <file>history_icons/aperture.svg</file>
     <file>history_icons/arrow-right-left.svg</file>
     <file>history_icons/chart-spline.svg</file>

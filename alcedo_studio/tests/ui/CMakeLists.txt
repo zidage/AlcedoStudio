@@ -70,6 +70,21 @@ function(alcedo_ui_gtest_discover_tests target_name)
     DISCOVERY_TIMEOUT 120)
 endfunction()
 
+if(APPLE AND ALCEDO_ENABLE_METAL)
+  add_executable(EditorWindowColorManagementTest
+      ${ALCEDO_TEST_ROOT}/ui/editor_window_color_management_test.mm)
+  target_include_directories(EditorWindowColorManagementTest PUBLIC ${ALCEDO_INCLUDE_DIR})
+  target_link_libraries(EditorWindowColorManagementTest
+      PRIVATE EditorRhiViewport GTest::gtest_main)
+  set_source_files_properties(
+      ${ALCEDO_TEST_ROOT}/ui/editor_window_color_management_test.mm
+      PROPERTIES LANGUAGE OBJCXX)
+  alcedo_ui_gtest_discover_tests(EditorWindowColorManagementTest
+      TEST_PREFIX "EditorWindowColorManagementTest."
+      PROPERTIES LABELS "editor_rhi;metal;display_output")
+  alcedo_register_test_target(EditorWindowColorManagementTest ui)
+endif()
+
 # Macro to reduce boilerplate for UI test targets.
 macro(def_ui_test TARGET_NAME SOURCE_FILE)
     add_executable(${TARGET_NAME}
@@ -96,6 +111,66 @@ macro(def_ui_test TARGET_NAME SOURCE_FILE)
         alcedo_ui_gtest_discover_tests(${TARGET_NAME} TEST_PREFIX "${TARGET_NAME}.")
     endif()
 endmacro()
+
+# Phase 0: production Main.qml host suppression, recursive camera-tree import,
+# and the GUI-thread JSON Lines probe used by later automation phases.
+add_executable(UiFuzzAutomationTest
+    ${ALCEDO_TEST_ROOT}/ui/ui_fuzz_automation_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_TEST_ROOT}/ui/editor_dialog_stub.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/application_module_qml_types.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/application_module_qml_types.hpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_json.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_json.hpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_item_tree.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_item_tree.hpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_input_injector.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_input_injector.hpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_property_wait.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/probe_property_wait.hpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/test_probe.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host/test_probe.hpp
+)
+target_include_directories(UiFuzzAutomationTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR} ${ALCEDO_SRC_DIR}/ui/alcedo_studio_test_host
+)
+target_link_libraries(UiFuzzAutomationTest
+    PRIVATE
+        AlbumBackendLib
+        AlcedoMainQml
+        AlcedoMainQmlplugin
+        GTest::gtest
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickDialogs2
+        Qt6::QuickEffects
+        Qt6::Network
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(UiFuzzAutomationTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+if(COMMAND qt_finalize_target)
+    qt_finalize_target(UiFuzzAutomationTest)
+elseif(COMMAND qt_finalize_executable)
+    qt_finalize_executable(UiFuzzAutomationTest)
+endif()
+if(COMMAND qt_import_qml_plugins)
+    qt_import_qml_plugins(UiFuzzAutomationTest)
+endif()
+alcedo_ui_gtest_discover_tests(UiFuzzAutomationTest
+    TEST_PREFIX "UiFuzzAutomationTest."
+    PROPERTIES LABELS "automation;phase0;phase1" TIMEOUT 1800
+)
+alcedo_register_test_target(UiFuzzAutomationTest ui)
 
 
 # Editor session history owns Mini-Git working state and immutable captures.
@@ -463,7 +538,8 @@ alcedo_ui_gtest_discover_tests(WorkspaceShellTest TEST_PREFIX "WorkspaceShellTes
 alcedo_register_test_target(WorkspaceShellTest ui)
 
 # Phase 7C: horizontal filmstrip model reuse, selection/focus, thumbnail pin
-# lifetime, collapse scroll preservation, busy badges, and current-image menu.
+# lifetime, collapse scroll preservation, busy badges, and context-menu
+# request forwarding to the shared Main-level image menu.
 add_executable(EditorFilmstripQmlTest
     ${ALCEDO_TEST_ROOT}/ui/editor_filmstrip_qml_test.cpp
     ${ALCEDO_TEST_ROOT}/ui/editor_filmstrip_qml_test_main.cpp
@@ -958,6 +1034,41 @@ alcedo_ui_gtest_discover_tests(EditorAdjustmentTransferActionsQmlTest
     PROPERTIES LABELS "workspace_qml"
 )
 alcedo_register_test_target(EditorAdjustmentTransferActionsQmlTest ui)
+
+# Paste/Merge strategy switcher dialog: verifies the real AdjustmentTransferDialog
+# loads in paste mode, exposes the SegmentedCardSwitcher, toggles the merge
+# notice with pasteStrategy, and reflects the strategy on the accept button.
+add_executable(AdjustmentTransferDialogQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_transfer_dialog_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(AdjustmentTransferDialogQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(AdjustmentTransferDialogQmlTest
+    PRIVATE
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(AdjustmentTransferDialogQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(AdjustmentTransferDialogQmlTest
+    TEST_PREFIX "AdjustmentTransferDialogQmlTest."
+    PROPERTIES LABELS "workspace_qml"
+)
+alcedo_register_test_target(AdjustmentTransferDialogQmlTest ui)
 
 # Phase 6B: tone-curve model (pointer-drag behavior + operator params JSON).
 add_executable(EditorToneCurveModelTest

@@ -421,6 +421,8 @@ void EditorInteractionController::handlePress(qreal x, qreal y, int button) {
     const auto result = view_transform_controller_.HandlePanPress(
         crop_state.tool_enabled && crop_state.overlay_visible, pos.toPoint());
     if (result.consumed) {
+      pointer_pan_active_  = true;
+      pointer_pan_changed_ = false;
       applyViewTransformResult(result);
     }
   }
@@ -469,6 +471,14 @@ void EditorInteractionController::handleRelease(qreal x, qreal y, int button) {
       viewer_state_, crop_state.tool_enabled && crop_state.overlay_visible, qt_button, pos);
   if (result.consumed) {
     applyViewTransformResult(result);
+  }
+
+  const bool request_final_detail = pointer_pan_active_ && pointer_pan_changed_ &&
+                                    zoom() > 1.0f + 1.0e-4f;
+  pointer_pan_active_  = false;
+  pointer_pan_changed_ = false;
+  if (request_final_detail) {
+    scheduleViewChangeAfterInteractionSettles();
   }
 
   handleHoverMove(x, y);
@@ -546,6 +556,25 @@ void EditorInteractionController::handlePinchTo(qreal x, qreal y, qreal targetZo
       viewer_state_, widgetInfo(), interactionImageInfo(), static_cast<float>(targetZoom),
       QPointF(x, y));
   applyViewTransformResult(result);
+}
+
+void EditorInteractionController::beginViewInputSequence() {
+  view_input_sequence_active_  = true;
+  view_input_sequence_changed_ = false;
+  if (view_interaction_settle_timer_) {
+    view_interaction_settle_timer_->stop();
+  }
+}
+
+void EditorInteractionController::finishViewInputSequence() {
+  const bool request_final_detail = view_input_sequence_active_ &&
+                                    view_input_sequence_changed_ &&
+                                    zoom() > 1.0f + 1.0e-4f;
+  view_input_sequence_active_  = false;
+  view_input_sequence_changed_ = false;
+  if (request_final_detail) {
+    scheduleViewChangeAfterInteractionSettles();
+  }
 }
 
 void EditorInteractionController::handleLeave() { applyCursor(std::nullopt, true); }
@@ -769,7 +798,13 @@ void EditorInteractionController::applyViewTransformResult(const ViewTransformRe
     // queue of obsolete ROI tasks ahead of the final viewport. Re-sample the
     // full-frame base during interaction and request exactly the final ROI.
     if (suppress_view_change_routing_ || zoom() > 1.0f + 1.0e-4f) {
-      scheduleViewChangeAfterInteractionSettles();
+      if (pointer_pan_active_) {
+        pointer_pan_changed_ = true;
+      } else if (view_input_sequence_active_) {
+        view_input_sequence_changed_ = true;
+      } else {
+        scheduleViewChangeAfterInteractionSettles();
+      }
     } else {
       // Zoomed to fit: a pending DetailRefresh (armed while zoomed in) is for a
       // stale viewport, so cancel it and emit an immediate ZoomPan re-sample.

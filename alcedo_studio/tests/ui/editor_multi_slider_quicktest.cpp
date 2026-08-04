@@ -71,8 +71,6 @@ auto MakeGuard(sl_element_id_t element_id) -> std::shared_ptr<alcedo::PipelineGu
   guard->commit_graph_ =
       std::make_shared<alcedo::CommitGraph>(alcedo::CommitGraph::CreateEmpty(element_id));
   guard->root_id_                  = guard->commit_graph_->GetRootId();
-  guard->transaction_chain_hash_   = alcedo::ComputeRootChainHash(guard->root_id_);
-  guard->working_head_commit_hash_ = std::nullopt;
   return guard;
 }
 

@@ -130,7 +130,8 @@ endif()
 def_cuda_library(Operators
     SOURCES ${OPERATORS_SRCS}
     PUBLIC_DEPS ImageBuffer JSON OpenColorIO::OpenColorIO hwy::hwy lensfun::lensfun
-    PRIVATE_DEPS ${ALCEDO_OPENCV_IMAGE_DEPS} RawProcessor
+    # Image provides RawColorContextToJson/FromJson used by RawDecodeOp durable params.
+    PRIVATE_DEPS ${ALCEDO_OPENCV_IMAGE_DEPS} RawProcessor Image
 )
 if(ALCEDO_CUDA_ENABLED)
     set_target_properties(Operators PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)

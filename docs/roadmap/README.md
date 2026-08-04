@@ -23,6 +23,9 @@ use their own top-level category.
 - [Background Tasks and Declarative UI State Plan](alcedo_studio/ui/background_tasks_ui_state_plan.md)
 - [Editor Session Command Queue and Lock Simplification Plan](alcedo_studio/ui/editor_session_command_queue_and_lock_simplification_plan.md)
 - [QML Editor and Qt RHI Unified Workspace Refactor Plan](alcedo_studio/ui/qml_editor_rhi_unified_workspace_plan.md)
+- [Editor Single Live Pipeline + WAL + Checkpoint Simplification Plan](alcedo_studio/ui/editor_single_live_pipeline_wal_checkpoint_plan.md)
+  (includes **Final locked identity model**: history owns HEAD; pipeline = params table; chain hash unit = one commit)
+- [UI Fuzz Automation Platform Plan](alcedo_studio/ui/ui_fuzz_automation_platform_plan.md)
 
 ## External website
 

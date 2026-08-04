@@ -5,12 +5,10 @@ set(ALCEDO_EDITOR_RHI_ROOT "${ALCEDO_SRC_ROOT}/ui/editor_rhi")
 set(EDITOR_RHI_CONTRACT_SRCS
     "${ALCEDO_EDITOR_RHI_ROOT}/editor_backend.cpp"
     "${ALCEDO_EDITOR_RHI_ROOT}/frame_presentation_lease.cpp"
-    "${ALCEDO_EDITOR_RHI_ROOT}/frame_presentation_broker.cpp"
     "${ALCEDO_EDITOR_RHI_ROOT}/native_resource_counters.cpp"
     "${ALCEDO_EDITOR_RHI_ROOT}/harness_fixtures.cpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/editor_backend.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/frame_presentation_lease.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/frame_presentation_broker.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/native_resource_counters.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/harness_fixtures.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/editor_startup.hpp"
@@ -56,7 +54,21 @@ set(EDITOR_RHI_UNIFIED_VIEWPORT_SRCS
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/editor_viewport_renderer.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/editor_interaction_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/editor_rhi/editor_overlay_item.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/edit_viewer/color_manager.hpp"
 )
+if(APPLE)
+    list(APPEND EDITOR_RHI_UNIFIED_VIEWPORT_SRCS
+        "${ALCEDO_SRC_ROOT}/ui/edit_viewer/color_manager.mm"
+    )
+    set_source_files_properties(
+        "${ALCEDO_SRC_ROOT}/ui/edit_viewer/color_manager.mm"
+        PROPERTIES LANGUAGE OBJCXX
+    )
+else()
+    list(APPEND EDITOR_RHI_UNIFIED_VIEWPORT_SRCS
+        "${ALCEDO_SRC_ROOT}/ui/edit_viewer/color_manager.cpp"
+    )
+endif()
 
 def_library(EditorRhiViewport
     SOURCES ${EDITOR_RHI_UNIFIED_VIEWPORT_SRCS}
@@ -79,10 +91,21 @@ if(ALCEDO_CUDA_ENABLED)
 endif()
 if(ALCEDO_OPENCL_ENABLED)
     target_compile_definitions(EditorRhiViewport PUBLIC HAVE_OPENCL)
-    target_link_libraries(EditorRhiViewport PUBLIC OpenClContext OpenCL::OpenCL)
+    # OpenClProgramLibrary owns runtime init, program registration, and warm-up.
+    # Linking only OpenClContext left editor_startup able to call
+    # TryInitializeOpenClRuntime via transitive deps, but production warm-up /
+    # registration must share the same static library as raw/edit GetProgram.
+    target_link_libraries(EditorRhiViewport PUBLIC OpenClProgramLibrary OpenCL::OpenCL)
 endif()
 if(ALCEDO_METAL_ENABLED)
     target_compile_definitions(EditorRhiViewport PUBLIC HAVE_METAL)
+endif()
+if(APPLE)
+    target_link_libraries(EditorRhiViewport PRIVATE
+        "-framework AppKit"
+        "-framework QuartzCore"
+        "-framework CoreGraphics"
+    )
 endif()
 if(WIN32)
     target_link_libraries(EditorRhiViewport PRIVATE d3d11 dxgi opengl32)
@@ -118,6 +141,16 @@ def_library(EditorRhiHarnessLib
         Qt6::OpenGL
         Qt6::ShaderTools
 )
+if(APPLE)
+    set_source_files_properties(
+        "${ALCEDO_EDITOR_RHI_ROOT}/harness_viewport_renderer.cpp"
+        PROPERTIES LANGUAGE OBJCXX
+    )
+    target_link_libraries(EditorRhiHarnessLib PRIVATE
+        "-framework Metal"
+        "-framework Foundation"
+    )
+endif()
 if(ALCEDO_CUDA_ENABLED)
     target_compile_definitions(EditorRhiHarnessLib PUBLIC HAVE_CUDA)
     target_link_libraries(EditorRhiHarnessLib PUBLIC CUDA::cudart)

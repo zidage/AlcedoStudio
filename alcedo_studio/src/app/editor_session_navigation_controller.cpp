@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "app/editor_mini_git_materializer.hpp"
-#include "app/editor_session_edit_controller.hpp"
 #include "app/editor_session_lifecycle.hpp"
 #include "app/editor_session_render_controller.hpp"
 
@@ -15,13 +14,12 @@ namespace alcedo {
 
 EditorSessionNavigationController::EditorSessionNavigationController(
     EditorSessionLifecycle& lifecycle, EditorSaveCheckpointService& save_service,
-    EditorSessionRenderController& render, EditorSessionEditController& edit,
-    IEditorJournalPort* journal, IEditorCheckpointStore* checkpoint_store,
-    IEditorHistoryPort* history, EditorSessionNavigationState* state)
+    EditorSessionRenderController& render, IEditorJournalPort* journal,
+    IEditorCheckpointStore* checkpoint_store, IEditorHistoryPort* history,
+    EditorSessionNavigationState* state)
     : lifecycle_(lifecycle),
       save_service_(save_service),
       render_(render),
-      edit_(edit),
       journal_(journal),
       checkpoint_store_(checkpoint_store),
       history_(history),
@@ -190,7 +188,6 @@ auto EditorSessionNavigationController::RequestClose(bool persist_changes) -> Na
   render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
   lifecycle_.ReleaseGuards();
   lifecycle_.CompleteClose();
-  edit_.ClearSnapshot();
   render_.ResetForNewImage();
   outcome.completed_synchronously = true;
   outcome.message = persist_changes ? "Editor session closed" : "Editor changes discarded";
@@ -238,10 +235,16 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
   // The checkpoint materialized the active Version's working head to DuckDB but did
   // not advance the in-memory ImageEditState.materialized_*. Mirror the durable tuple
   // in memory so the upcoming Continue* version/checkout persistence guard accepts it
-  // instead of rejecting the durable state as stale.
+  // instead of rejecting the durable state as stale. Fail closed: continuing with a
+  // desynced in-memory tuple surfaces as "persisted history changed" mid-create.
   if (history_ != nullptr && lifecycle_.has_history_guard()) {
     std::string sync_error;
-    (void)history_->SyncMaterializedStateAfterCheckpoint(lifecycle_.history_guard(), &sync_error);
+    if (!history_->SyncMaterializedStateAfterCheckpoint(lifecycle_.history_guard(), &sync_error)) {
+      RetainPendingFailure(pending, sync_error.empty()
+                                        ? "Failed to sync materialized state after checkpoint"
+                                        : sync_error);
+      return;
+    }
   }
 
   if (pending.kind == PendingEditorActionKind::CheckoutVersion) {
@@ -250,6 +253,10 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
     lifecycle_.CompleteCheckpoint();
     std::string checkout_error;
     if (ContinueCheckoutVersion(pending.version_id, &checkout_error)) {
+      if (state_->deferred_pipeline_ownership.has_value()) {
+        // History is queued behind render ownership; GUI is not blocked.
+        return;
+      }
       NotifyCompletion(true, false, "Checked out Version", pending.ticket);
     } else {
       // Phase 7A repair: the save succeeded and the history port fails closed,
@@ -265,6 +272,9 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
     lifecycle_.CompleteCheckpoint();
     std::string create_error;
     if (ContinueCreateRootVersion(std::move(pending.display_name), &create_error)) {
+      if (state_->deferred_pipeline_ownership.has_value()) {
+        return;
+      }
       NotifyCompletion(true, false, "Created root Version", pending.ticket);
     } else {
       RetainPendingFailure(pending,
@@ -277,6 +287,9 @@ void EditorSessionNavigationController::OnCheckpointFinished(const SaveCheckpoin
     std::string branch_error;
     if (ContinueBranchFromCommit(pending.branch_commit, std::move(pending.display_name),
                                  &branch_error)) {
+      if (state_->deferred_pipeline_ownership.has_value()) {
+        return;
+      }
       NotifyCompletion(true, false, "Branched from commit", pending.ticket);
     } else {
       RetainPendingFailure(pending,
@@ -399,20 +412,6 @@ void EditorSessionNavigationController::ContinueToTarget(sl_element_id_t element
     return;
   }
 
-  EditorRenderAdjustmentSnapshot history_snapshot;
-  if (history_ != nullptr &&
-      !history_->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &history_snapshot, &error)) {
-    lifecycle_.ReleaseGuards();
-    lifecycle_.Fail(error);
-    return;
-  }
-  if (!history_snapshot.params_json.empty() || !history_snapshot.patches.empty() ||
-      !history_snapshot.fingerprint.empty()) {
-    edit_.set_adjustment_snapshot(std::move(history_snapshot));
-  } else {
-    edit_.ClearSnapshot();
-  }
-
   lifecycle_.MarkImageReady();
   render_.ResetForNewImage();
   render_.MarkImageAcquired();
@@ -420,13 +419,11 @@ void EditorSessionNavigationController::ContinueToTarget(sl_element_id_t element
   EditorRenderCommand command;
   command.operation_id = operation_id_;
   command.reason = is_switch ? EditorRenderReason::ImageSwitch : EditorRenderReason::InitialFrame;
-  command.adjustment = edit_.adjustment_snapshot();
   render_.RouteInitialRender(command, lifecycle_.identity(), lifecycle_.active_image_load_request());
 }
 
 void EditorSessionNavigationController::ContinueToClose(bool persist_changes) {
   lifecycle_.CompleteClose();
-  edit_.ClearSnapshot();
   render_.ResetForNewImage();
   (void)persist_changes;
 }
@@ -507,6 +504,19 @@ auto EditorSessionNavigationController::ContinueCheckoutVersion(const version_re
     return false;
   }
 
+  // History needs live-pipeline ownership; the GUI must not wait for render.
+  // If the worker still owns render_lock_, stash the op and finish on the next
+  // render-idle edge (TryResumeDeferredPipelineOwnership).
+  if (render_.render_busy()) {
+    PendingEditorAction deferred;
+    deferred.kind       = PendingEditorActionKind::CheckoutVersion;
+    deferred.version_id = version_id;
+    deferred.ticket     = state_->pending_action.has_value() ? state_->pending_action->ticket
+                                                            : CheckpointTicket{};
+    state_->deferred_pipeline_ownership = deferred;
+    return true;
+  }
+
   std::string local_error;
   if (!history_->CheckoutVersion(lifecycle_.history_guard(), version_id, &local_error)) {
     // Phase 7A repair: do NOT call lifecycle_.Fail(). The history port fails
@@ -516,35 +526,14 @@ auto EditorSessionNavigationController::ContinueCheckoutVersion(const version_re
     return false;
   }
 
-  EditorRenderAdjustmentSnapshot history_snapshot;
-  if (!history_->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &history_snapshot,
-                                        &local_error)) {
-    if (error)
-      *error = local_error.empty() ? "Failed to read snapshot after Version checkout" : local_error;
-    return false;
-  }
-  if (!history_snapshot.params_json.empty() || !history_snapshot.patches.empty() ||
-      !history_snapshot.fingerprint.empty()) {
-    edit_.set_adjustment_snapshot(std::move(history_snapshot));
-  } else {
-    edit_.ClearSnapshot();
-  }
-
-  // Stay Interactive on the same image. Advance render generation so the
-  // coordinator cannot treat the post-checkout frame as a reuse of the prior
-  // head (same pattern as Undo / MoveHeadToCommit). Then route a first frame
-  // for the new Version head without releasing pipeline ownership.
+  // Stay Interactive on the same image. Match Undo / MoveHeadToCommit.
   if (lifecycle_.state() != EditorSessionState::Interactive) {
     lifecycle_.MarkImageReady();
   }
-  render_.AdvanceContentGeneration();
-  render_.ResetForNewImage();
-  render_.MarkImageAcquired();
 
   EditorRenderCommand command;
   command.operation_id = operation_id_;
   command.reason       = EditorRenderReason::InitialFrame;
-  command.adjustment   = edit_.adjustment_snapshot();
   render_.RouteInitialRender(command, lifecycle_.identity(), lifecycle_.active_image_load_request());
   return true;
 }
@@ -556,6 +545,16 @@ auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string  d
     return false;
   }
 
+  if (render_.render_busy()) {
+    PendingEditorAction deferred;
+    deferred.kind         = PendingEditorActionKind::CreateRootVersionAndCheckout;
+    deferred.display_name = std::move(display_name);
+    deferred.ticket       = state_->pending_action.has_value() ? state_->pending_action->ticket
+                                                              : CheckpointTicket{};
+    state_->deferred_pipeline_ownership = deferred;
+    return true;
+  }
+
   version_ref_id_t new_version_id;
   std::string      local_error;
   if (!history_->CreateRootVersionAndCheckout(lifecycle_.history_guard(), std::move(display_name),
@@ -564,34 +563,13 @@ auto EditorSessionNavigationController::ContinueCreateRootVersion(std::string  d
     return false;
   }
 
-  EditorRenderAdjustmentSnapshot history_snapshot;
-  if (!history_->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &history_snapshot,
-                                        &local_error)) {
-    if (error)
-      *error =
-          local_error.empty() ? "Failed to read snapshot after root Version creation" : local_error;
-    return false;
-  }
-  if (!history_snapshot.params_json.empty() || !history_snapshot.patches.empty() ||
-      !history_snapshot.fingerprint.empty()) {
-    edit_.set_adjustment_snapshot(std::move(history_snapshot));
-  } else {
-    edit_.ClearSnapshot();
-  }
-
   if (lifecycle_.state() != EditorSessionState::Interactive) {
     lifecycle_.MarkImageReady();
   }
-  // Same generation advance as checkout: the new root Version must paint even
-  // when the open image identity is unchanged.
-  render_.AdvanceContentGeneration();
-  render_.ResetForNewImage();
-  render_.MarkImageAcquired();
 
   EditorRenderCommand command;
   command.operation_id = operation_id_;
   command.reason       = EditorRenderReason::InitialFrame;
-  command.adjustment   = edit_.adjustment_snapshot();
   render_.RouteInitialRender(command, lifecycle_.identity(), lifecycle_.active_image_load_request());
   return true;
 }
@@ -604,6 +582,17 @@ auto EditorSessionNavigationController::ContinueBranchFromCommit(const commit_ha
     return false;
   }
 
+  if (render_.render_busy()) {
+    PendingEditorAction deferred;
+    deferred.kind          = PendingEditorActionKind::BranchFromCommitAndCheckout;
+    deferred.branch_commit = commit_id;
+    deferred.display_name  = std::move(display_name);
+    deferred.ticket        = state_->pending_action.has_value() ? state_->pending_action->ticket
+                                                               : CheckpointTicket{};
+    state_->deferred_pipeline_ownership = deferred;
+    return true;
+  }
+
   version_ref_id_t new_version_id;
   std::string      local_error;
   if (!history_->BranchFromCommitAndCheckout(lifecycle_.history_guard(), commit_id,
@@ -613,31 +602,13 @@ auto EditorSessionNavigationController::ContinueBranchFromCommit(const commit_ha
     return false;
   }
 
-  EditorRenderAdjustmentSnapshot history_snapshot;
-  if (!history_->ReadAdjustmentSnapshot(lifecycle_.history_guard(), &history_snapshot,
-                                        &local_error)) {
-    if (error)
-      *error = local_error.empty() ? "Failed to read snapshot after branch creation" : local_error;
-    return false;
-  }
-  if (!history_snapshot.params_json.empty() || !history_snapshot.patches.empty() ||
-      !history_snapshot.fingerprint.empty()) {
-    edit_.set_adjustment_snapshot(std::move(history_snapshot));
-  } else {
-    edit_.ClearSnapshot();
-  }
-
   if (lifecycle_.state() != EditorSessionState::Interactive) {
     lifecycle_.MarkImageReady();
   }
-  render_.AdvanceContentGeneration();
-  render_.ResetForNewImage();
-  render_.MarkImageAcquired();
 
   EditorRenderCommand command;
   command.operation_id = operation_id_;
   command.reason       = EditorRenderReason::InitialFrame;
-  command.adjustment   = edit_.adjustment_snapshot();
   render_.RouteInitialRender(command, lifecycle_.identity(), lifecycle_.active_image_load_request());
   return true;
 }
@@ -752,7 +723,6 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
     render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
     lifecycle_.ReleaseGuards();
     lifecycle_.CompleteClose();
-    edit_.ClearSnapshot();
     render_.ResetForNewImage();
     outcome.completed_synchronously = true;
     outcome.message                 = "Editor changes discarded";
@@ -811,7 +781,6 @@ auto EditorSessionNavigationController::DiscardAndContinueAfterFailure() -> Navi
   // SwitchImage: release the current image and acquire the target.
   render_.CancelSessionAndWait(lifecycle_.active_image_load_request());
   lifecycle_.ReleaseGuards();
-  edit_.ClearSnapshot();
   ContinueToTarget(recovery.element_id, recovery.image_id, recovery.is_switch);
   outcome.completed_synchronously = true;
   outcome.message                 = "Discarded and switched image";
@@ -823,10 +792,56 @@ void EditorSessionNavigationController::CancelPendingNavigation() {
   AssertOwnerThread();
   state_->pending_recovery.reset();
   state_->pending_next_target.reset();
+  state_->deferred_pipeline_ownership.reset();
   if (lifecycle_.state() == EditorSessionState::RetainedImageFailure) {
     lifecycle_.ResumeInteractiveAfterFailure();
   }
   NotifyCompletion(true, false, "Pending navigation cancelled", {});
+}
+
+void EditorSessionNavigationController::TryResumeDeferredPipelineOwnership() {
+  AssertOwnerThread();
+  if (!state_->deferred_pipeline_ownership.has_value()) {
+    return;
+  }
+  // History waits for pipeline ownership; only run once render is idle so the
+  // GUI never blocks on render_lock_ while present still needs this thread.
+  if (render_.render_busy()) {
+    return;
+  }
+
+  const auto deferred = *state_->deferred_pipeline_ownership;
+  state_->deferred_pipeline_ownership.reset();
+
+  std::string error;
+  bool        ok = false;
+  std::string success_message;
+  switch (deferred.kind) {
+    case PendingEditorActionKind::CheckoutVersion:
+      ok              = ContinueCheckoutVersion(deferred.version_id, &error);
+      success_message = "Checked out Version";
+      break;
+    case PendingEditorActionKind::CreateRootVersionAndCheckout:
+      ok              = ContinueCreateRootVersion(deferred.display_name, &error);
+      success_message = "Created root Version";
+      break;
+    case PendingEditorActionKind::BranchFromCommitAndCheckout:
+      ok = ContinueBranchFromCommit(deferred.branch_commit, deferred.display_name, &error);
+      success_message = "Branched from commit";
+      break;
+    default:
+      return;
+  }
+
+  // Continue* may re-defer if a new frame started; leave completion for later.
+  if (state_->deferred_pipeline_ownership.has_value()) {
+    return;
+  }
+  if (ok) {
+    NotifyCompletion(true, false, std::move(success_message), deferred.ticket);
+  } else {
+    RetainPendingFailure(deferred, error.empty() ? "Deferred Version operation failed" : error);
+  }
 }
 
 auto EditorSessionNavigationController::RequestCreateRootVersion(std::string display_name)

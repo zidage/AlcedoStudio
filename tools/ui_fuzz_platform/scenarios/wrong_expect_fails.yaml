@@ -1,0 +1,10 @@
+name: wrong_expect_fails
+start: step_one
+defaults:
+  expectTimeoutMs: 500
+nodes:
+  step_one:
+    op: { action: doubleClick, target: thumbnailGridView_firstCard }
+    expect:
+      - { target: editorSessionStatus, property: text, eq: "Finished", timeoutMs: 400 }
+    next: []

@@ -293,13 +293,12 @@ def_library(EditorMiniGitCommitWriter
 def_library(EditorMiniGitJournalRecovery
     SOURCES "${ALCEDO_APP_ROOT}/editor_mini_git_journal_recovery.cpp"
     PUBLIC_DEPS EditHistory StorageService
-    PRIVATE_DEPS EditorMiniGitJournalFold EditorMiniGitCommitWriter
 )
 
 def_library(EditorMiniGitMaterializer
     SOURCES "${ALCEDO_APP_ROOT}/editor_mini_git_materializer.cpp"
     PUBLIC_DEPS ProjectService EditHistory StorageService
-    PRIVATE_DEPS EditorSaveCheckpointCoordinator EditorMiniGitJournalFold
+    PRIVATE_DEPS EditorSaveCheckpointCoordinator
                  EditorMiniGitCommitWriter EditorMiniGitJournalRecovery
 )
 
@@ -307,7 +306,7 @@ def_library(EditorAdjustmentPipeline
     SOURCES
         "${ALCEDO_APP_ROOT}/editor_adjustment_pipeline.cpp"
         "${ALCEDO_INCLUDE_ROOT}/app/editor_adjustment_pipeline.hpp"
-    PUBLIC_DEPS EditPipeline JSON
+    PUBLIC_DEPS EditPipeline EditHistory JSON
 )
 
 def_library(EditorSessionService
@@ -330,9 +329,18 @@ def_library(EditorSessionService
                  EditorSessionEditController EditorSessionCommandQueue EditorActionPolicy
 )
 
+# Facade consumers (tests/UI) include session headers that pull metal_image.hpp
+# under HAVE_METAL. Private session-controller deps do not propagate metal-cpp
+# include dirs, so expose them on the facade itself.
+if(ALCEDO_METAL_ENABLED)
+    target_link_libraries(EditorSessionService PUBLIC alcedo::metal_cpp)
+endif()
+
 def_library(ImportService
     SOURCES "${ALCEDO_APP_ROOT}/import_service.cpp"
-    PUBLIC_DEPS SleeveManager ImageWriter ImagePoolService FSService
+    # Import assembly calls LoadPipeline / SyncPipeline / InitializeImageRoot /
+    # SavePipeline on the optional PipelineMgmtService injected at construction.
+    PUBLIC_DEPS SleeveManager ImageWriter ImagePoolService FSService PipelineMgmtService
 )
 
 def_library(ThumbnailService

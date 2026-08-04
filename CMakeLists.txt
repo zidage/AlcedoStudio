@@ -9,7 +9,7 @@ endif()
 #set(CMAKE_CXX_COMPILER "clang++")
 # Compiler flags.
 
-project(alcedo VERSION 0.2.7 LANGUAGES C CXX)
+project(alcedo VERSION 0.2.8 LANGUAGES C CXX)
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build alcedo libraries as static by default." FORCE)
 
@@ -340,7 +340,9 @@ target_include_directories(JSON INTERFACE "${CMAKE_SOURCE_DIR}/alcedo_studio/thi
 
 # Other libraries
 # OpenCV
-find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs calib3d highgui)
+# OpenCV 5 split calib3d into geometry/calib/stereo/ptcloud; Alcedo only needs
+# core image processing modules, so do not require the removed calib3d target.
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs highgui)
 
 # Eigen3
 find_package(Eigen3 CONFIG REQUIRED)
@@ -720,6 +722,49 @@ function(alcedo_install_duckdb_extensions destination)
     endif()
 endfunction()
 
+# Ship DemosaicNet weight files next to the executable under config/models/.
+# This is distinct from the per-user AI download cache at <exe>/model/, which
+# must never be packaged (see REMOVE_RECURSE of that directory on macOS).
+# Missing weights are a hard configure/package error: Neural Engine demosaic
+# must work out of the box on clean user machines.
+function(alcedo_install_demosaicnet_models config_dir destination)
+    set(_alcedo_demosaicnet_models "")
+    foreach(_alcedo_model_name IN ITEMS bayer.safetensors xtrans.safetensors)
+        set(_alcedo_model_path "${config_dir}/models/${_alcedo_model_name}")
+        if(NOT EXISTS "${_alcedo_model_path}")
+            message(FATAL_ERROR
+                "[alcedo] Required DemosaicNet weight missing: ${_alcedo_model_path}\n"
+                "  Expected checked-in files under alcedo_studio/src/config/models/ "
+                "(bayer.safetensors, xtrans.safetensors). Cannot package without them.")
+        endif()
+        # Reject Git LFS pointer stubs and truncated checkouts (~130 bytes).
+        file(SIZE "${_alcedo_model_path}" _alcedo_model_size)
+        if(_alcedo_model_size LESS 10240)
+            message(FATAL_ERROR
+                "[alcedo] DemosaicNet weight looks incomplete (${_alcedo_model_size} bytes): "
+                "${_alcedo_model_path}\n"
+                "  Run `git lfs pull` if applicable, or restore the real safetensors blob.")
+        endif()
+        list(APPEND _alcedo_demosaicnet_models "${_alcedo_model_path}")
+    endforeach()
+    install(FILES ${_alcedo_demosaicnet_models} DESTINATION "${destination}/config/models")
+endfunction()
+
+# Install compiled .metallib assets. Paths are known at configure time; the
+# files themselves are produced during the build by Metal*Shaders custom
+# targets. install(FILES) fails at install time if any path is still missing.
+function(alcedo_install_metal_runtime_libs destination)
+    if(NOT ALCEDO_METAL_ENABLED)
+        return()
+    endif()
+    if(NOT ALCEDO_METAL_RUNTIME_LIBS)
+        message(FATAL_ERROR
+            "[alcedo] ALCEDO_METAL_ENABLED but ALCEDO_METAL_RUNTIME_LIBS is empty. "
+            "Metal shaders were not registered for packaging.")
+    endif()
+    install(FILES ${ALCEDO_METAL_RUNTIME_LIBS} DESTINATION "${destination}")
+endfunction()
+
 add_subdirectory(${CMAKE_SOURCE_DIR}/alcedo_studio/src/third_party)
 if(DEFINED ALCEDO_LENSFUN_LIBRARY_DIR AND NOT "${ALCEDO_LENSFUN_LIBRARY_DIR}" STREQUAL "")
     list(APPEND CMAKE_BUILD_RPATH "${ALCEDO_LENSFUN_LIBRARY_DIR}")
@@ -763,6 +808,7 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         install(DIRECTORY "${_config_dir}/icc/" DESTINATION "${_bundle_macos_dest}/config/icc")
         install(DIRECTORY "${_config_dir}/lens_calib/" DESTINATION "${_bundle_macos_dest}/config/lens_calib")
         install(DIRECTORY "${_config_dir}/nikon_lens/" DESTINATION "${_bundle_macos_dest}/config/nikon_lens")
+        alcedo_install_demosaicnet_models("${_config_dir}" "${_bundle_macos_dest}")
         alcedo_install_packaged_luts("${_config_dir}" "${_bundle_macos_dest}/LUTs")
         if(ALCEDO_OPENCL_ENABLED)
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/decoders/processor/operators/gpu/opencl_shader/"
@@ -776,11 +822,7 @@ if(TARGET ${ALCEDO_MAIN_BIN})
             install(DIRECTORY "${CMAKE_SOURCE_DIR}/alcedo_studio/src/opencl/opencl_shader/"
                 DESTINATION "${_bundle_macos_dest}/opencl/opencl/opencl_shader")
         endif()
-        if(ALCEDO_METAL_ENABLED AND ALCEDO_METAL_RUNTIME_LIBS)
-            install(FILES ${ALCEDO_METAL_RUNTIME_LIBS}
-                DESTINATION "${_bundle_resources_dest}/metallib"
-            )
-        endif()
+        alcedo_install_metal_runtime_libs("${_bundle_resources_dest}/metallib")
         alcedo_install_duckdb_extensions("${_bundle_resources_dest}")
         if(ALCEDO_BUILD_SEMANTIC_SIDECAR AND ALCEDO_MIND_BINARY)
             install(CODE
@@ -879,6 +921,7 @@ if(TARGET ${ALCEDO_MAIN_BIN})
         install(DIRECTORY "${_config_dir}/icc/" DESTINATION "${CMAKE_INSTALL_BINDIR}/config/icc")
         install(DIRECTORY "${_config_dir}/lens_calib/" DESTINATION "${CMAKE_INSTALL_BINDIR}/config/lens_calib")
         install(DIRECTORY "${_config_dir}/nikon_lens/" DESTINATION "${CMAKE_INSTALL_BINDIR}/config/nikon_lens")
+        alcedo_install_demosaicnet_models("${_config_dir}" "${CMAKE_INSTALL_BINDIR}")
 
         alcedo_install_packaged_luts("${_config_dir}" "${CMAKE_INSTALL_BINDIR}/LUTs")
         if(ALCEDO_OPENCL_ENABLED)
@@ -915,10 +958,8 @@ if(TARGET ${ALCEDO_MAIN_BIN})
             )
         endif()
 
-        if(APPLE AND ALCEDO_METAL_ENABLED AND ALCEDO_METAL_RUNTIME_LIBS)
-            install(FILES ${ALCEDO_METAL_RUNTIME_LIBS}
-                DESTINATION "${CMAKE_INSTALL_BINDIR}/metallib"
-            )
+        if(APPLE)
+            alcedo_install_metal_runtime_libs("${CMAKE_INSTALL_BINDIR}/metallib")
         endif()
     endif()
 endif()
@@ -1539,14 +1580,26 @@ if(APPLE AND ALCEDO_MACOS_BUNDLE)
     # Include the .app bundle at the top level of the ZIP so the user
     # extracts it and finds the app bundle directly.
     set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY OFF)
+    # Package / DMG volume icon (same brand mark as the .app bundle).
+    set(_alcedo_macos_pkg_icns
+        "${CMAKE_SOURCE_DIR}/alcedo_studio/src/config/ICON/alcedo_icon.icns")
+    if(EXISTS "${_alcedo_macos_pkg_icns}")
+        set(CPACK_PACKAGE_ICON "${_alcedo_macos_pkg_icns}")
+    endif()
 elseif(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
     # ------------------------------------------------------------------
     # Windows installer packaging (WIX and/or NSIS)
     # ------------------------------------------------------------------
     set(CPACK_PACKAGE_NAME "Alcedo Studio")
-    set(CPACK_PACKAGE_VENDOR "Alcedo Studio Team")
+    set(CPACK_PACKAGE_VENDOR "Alcedo Studio")
     set(CPACK_PACKAGE_INSTALL_DIRECTORY "Alcedo Studio")
     set(CPACK_PACKAGE_FILE_NAME "AlcedoStudio-${PROJECT_VERSION}-Windows-${CMAKE_SYSTEM_PROCESSOR}")
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+        "Alcedo Studio — RAW photo editor and digital asset manager")
+    set(CPACK_PACKAGE_DESCRIPTION
+        "Alcedo Studio is a RAW photo editor and digital asset management (DAM) application with GPU-accelerated processing, versioned edits, and a DuckDB-backed library. Development after v0.1.1 is licensed under GPL-3.0-only; see the included license agreement for details.")
+    set(CPACK_PACKAGE_HOMEPAGE_URL "https://alcedo.studio")
+    set(CPACK_PACKAGE_CONTACT "https://github.com/zidage/AlcedoStudio")
 
     set(_pkg_res_dir "${CMAKE_SOURCE_DIR}/packaging/windows")
     if(EXISTS "${_pkg_res_dir}/EULA_RTF.rtf")
@@ -1559,22 +1612,31 @@ elseif(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
     endif()
 
     # --- NSIS settings ------------------------------------------------
-    set(CPACK_NSIS_DISPLAY_NAME "Alcedo Studio v${PROJECT_VERSION}")
-    set(CPACK_NSIS_PACKAGE_NAME "Alcedo Studio v${PROJECT_VERSION}")
+    set(CPACK_NSIS_DISPLAY_NAME "Alcedo Studio ${PROJECT_VERSION}")
+    set(CPACK_NSIS_PACKAGE_NAME "Alcedo Studio")
     set(CPACK_NSIS_INSTALLED_ICON_NAME "bin\\\\alcedo_main.exe")
+    set(CPACK_NSIS_HELP_LINK "https://alcedo.studio")
+    set(CPACK_NSIS_URL_INFO_ABOUT "https://alcedo.studio")
+    set(CPACK_NSIS_CONTACT "https://github.com/zidage/AlcedoStudio")
     set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
     set(CPACK_NSIS_MODIFY_PATH OFF)
+    set(CPACK_NSIS_MUI_FINISHPAGE_RUN "alcedo_main.exe")
+    set(CPACK_NSIS_EXECUTABLES_DIRECTORY "bin")
+    set(CPACK_NSIS_MENU_LINKS
+        "https://alcedo.studio" "Alcedo Studio Website"
+        "https://zidage.github.io/AlcedoStudio_docs/" "Documentation"
+    )
 
     # Start-menu shortcut
     set(CPACK_NSIS_CREATE_ICONS_EXTRA
-        "CreateShortCut \\\"$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\Alcedo Studio.lnk\\\" \\\"$INSTDIR\\\\bin\\\\alcedo_main.exe\\\""
+        "CreateShortCut \\\"$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\Alcedo Studio.lnk\\\" \\\"$INSTDIR\\\\bin\\\\alcedo_main.exe\\\" \\\"\\\" \\\"$INSTDIR\\\\bin\\\\alcedo_main.exe\\\" 0"
     )
     set(CPACK_NSIS_DELETE_ICONS_EXTRA
         "Delete \\\"$SMPROGRAMS\\\\$STARTMENU_FOLDER\\\\Alcedo Studio.lnk\\\""
     )
     # Desktop shortcut
     set(CPACK_NSIS_EXTRA_INSTALL_COMMANDS
-        "CreateShortCut \\\"$DESKTOP\\\\Alcedo Studio.lnk\\\" \\\"$INSTDIR\\\\bin\\\\alcedo_main.exe\\\""
+        "CreateShortCut \\\"$DESKTOP\\\\Alcedo Studio.lnk\\\" \\\"$INSTDIR\\\\bin\\\\alcedo_main.exe\\\" \\\"\\\" \\\"$INSTDIR\\\\bin\\\\alcedo_main.exe\\\" 0"
     )
     set(CPACK_NSIS_EXTRA_UNINSTALL_COMMANDS
         "Delete \\\"$DESKTOP\\\\Alcedo Studio.lnk\\\""
@@ -1584,6 +1646,9 @@ elseif(WIN32 AND TARGET ${ALCEDO_MAIN_BIN})
     set(CPACK_WIX_PROGRAM_MENU_FOLDER "Alcedo Studio")
     set(CPACK_WIX_CULTURES "zh-CN;en-US")
     set(CPACK_WIX_PROPERTY_ARPURLINFOABOUT "https://alcedo.studio")
+    set(CPACK_WIX_PROPERTY_ARPHELPLINK "https://zidage.github.io/AlcedoStudio_docs/")
+    set(CPACK_WIX_PROPERTY_ARPCOMMENTS
+        "RAW photo editor and digital asset manager")
     # Fixed upgrade GUID so subsequent installers replace the same product.
     set(CPACK_WIX_UPGRADE_GUID "0EF54FAE-B541-4077-BB2A-7EDB85133B8E")
 

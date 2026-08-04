@@ -127,7 +127,7 @@ void EditorSessionLifecycle::BeginShutdown() {
   state_               = EditorSessionState::ShuttingDown;
 }
 
-auto EditorSessionLifecycle::MarkFirstFramePresented() -> std::optional<EditorSessionIdentity> {
+auto EditorSessionLifecycle::MarkFirstFrameReady() -> std::optional<EditorSessionIdentity> {
   AssertOwnerThread();
   if (state_ != EditorSessionState::Loading && state_ != EditorSessionState::Acquiring &&
       state_ != EditorSessionState::Switching) {

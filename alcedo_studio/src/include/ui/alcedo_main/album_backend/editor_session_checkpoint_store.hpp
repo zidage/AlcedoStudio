@@ -67,7 +67,9 @@ class EditorSessionCheckpointStore final : public alcedo::IEditorCheckpointStore
   mutable std::mutex                                 mutex_;
   std::shared_ptr<alcedo::EditorMiniGitMaterializer> materializer_;
   std::shared_ptr<alcedo::StorageService>            materializer_storage_;
-  std::vector<std::jthread>                          workers_;
+  // std::thread (not jthread): Apple libc++ on the CI deployment target still
+  // omits std::jthread even under -std=c++20. Destructor joins workers_ explicitly.
+  std::vector<std::thread>                           workers_;
   bool                                               shutting_down_ = false;
 };
 

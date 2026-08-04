@@ -54,6 +54,8 @@ Item {
         whitesModel.value = whitesModel.defaultValue
         blacksModel.value = blacksModel.defaultValue
         wireEnabled()
+        // Bootstrap when the stack has not yet projected (tests / late session).
+        // Equal values no-op if the stack already applied the same snapshot.
         loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
     }
 
@@ -212,6 +214,21 @@ Item {
         fieldKey: "curve"
         label: qsTr("Tone Curve")
         submitter: root.editorSession
+    }
+
+    // Curve pointer drag must lock the parent Flickable the same way
+    // AdjustmentSlider / Look CDL do — otherwise vertical handle motion scrolls
+    // the tone panel instead of shaping the curve.
+    Connections {
+        target: curveModel
+        function onDragActiveChanged() {
+            if (!toneScroll)
+                return
+            if (curveModel.dragActive)
+                toneScroll.beginInputLock()
+            else
+                toneScroll.endInputLock()
+        }
     }
 
     readonly property var toneModels: [

@@ -656,12 +656,16 @@ TEST_F(GlobalSearchDialogQmlTests, SemanticTypingShowsAwaitingSubmitAndLabelUses
 
   // A natural-language query with the toggle on must not run the semantic net
   // on typing: the preview stays empty and signals an explicit submit is needed.
+  // Importantly this must NOT enter the preview request pipeline (searchLoading).
   searchField->setProperty("text", QStringLiteral("sunset over the mountains"));
   ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "refreshPreview"));
-  ProcessEvents(200);
+  ProcessEvents(50);
   EXPECT_EQ(dialog->property("currentRoute").toString().toStdString(), "semantic");
   EXPECT_TRUE(dialog->property("results").toList().empty());
   EXPECT_FALSE(dialog->property("naturalLanguageStatusText").toString().isEmpty());
+  EXPECT_FALSE(dialog->property("searchLoading").toBool())
+      << "Semantic typing must not schedule SearchPreview / searchLoading.";
+  EXPECT_FALSE(dialog->property("naturalLanguagePreviewActive").toBool());
 
   // A label query still uses the ordinary path on typing even with the toggle on.
   searchField->setProperty("text", QStringLiteral("portrait"));
@@ -678,6 +682,84 @@ TEST_F(GlobalSearchDialogQmlTests, SemanticTypingShowsAwaitingSubmitAndLabelUses
   EXPECT_EQ(dialog->property("currentRoute").toString().toStdString(), "traditional");
 
   ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "close"));
+}
+
+TEST_F(GlobalSearchDialogQmlTests,
+       SemanticSubmitSurvivesPendingTypingDebounceAndLeavesAwaitingSubmit) {
+  // Regression: typing arms previewTimer (140ms). Enter/Search must stop that
+  // timer and run RequestSubmitSearch; otherwise a late refreshPreview bumps
+  // searchRequestGeneration and drops the sidecar SearchResponseReady payload.
+  auto* app = qobject_cast<QApplication*>(QCoreApplication::instance());
+  ASSERT_NE(app, nullptr);
+
+  QQuickStyle::setStyle(QStringLiteral("Material"));
+  AppTheme::RegisterFonts();
+  AppTheme::ApplyApplicationFont(*app);
+
+  ApplicationModuleHost backend;
+  ASSERT_TRUE(CreateTestProject(backend));
+
+  auto* searchController = backend.search();
+  ASSERT_NE(searchController, nullptr);
+  searchController->SetNaturalLanguageSearchEnabled(true);
+
+  QSignalSpy responseSpy(searchController, &SearchController::SearchResponseReady);
+
+  QQmlApplicationEngine engine;
+  engine.addImportPath(QStringLiteral("qrc:/"));
+  engine.rootContext()->setContextProperty(QStringLiteral("appModules"), &backend);
+  engine.rootContext()->setContextProperty(QStringLiteral("appTheme"), &AppTheme::Instance());
+  engine.rootContext()->setContextProperty(QStringLiteral("dialogSourceUrl"),
+                                           GlobalSearchDialogFileUrl());
+  engine.loadData(QByteArray{kHarnessQml},
+                  QUrl(QStringLiteral("file:///GlobalSearchDialogSemanticSubmitHarness.qml")));
+
+  ASSERT_FALSE(engine.rootObjects().empty()) << "QML harness failed to load.";
+  QObject* windowRoot = engine.rootObjects().front();
+  ASSERT_NE(windowRoot, nullptr);
+
+  QObject* dialog = nullptr;
+  ASSERT_TRUE(WaitUntil([&]() {
+    dialog = qvariant_cast<QObject*>(windowRoot->property("dialog"));
+    return dialog != nullptr;
+  }, 10000));
+  ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "openFromCollection"));
+  ASSERT_TRUE(WaitUntil([&]() { return dialog->property("visible").toBool(); }, 5000));
+
+  QObject* searchField = nullptr;
+  ASSERT_TRUE(WaitUntil([&]() {
+    searchField = FindSearchField(windowRoot);
+    return searchField != nullptr;
+  }, 5000));
+
+  const QString query = QStringLiteral("sunset over the mountains");
+  // Setting text restarts previewTimer via onTextChanged (instant-search debounce).
+  searchField->setProperty("text", query);
+  // Submit immediately while the typing debounce is still armed.
+  ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "handleSearchSubmit"));
+  EXPECT_TRUE(dialog->property("naturalLanguagePreviewActive").toBool())
+      << "Enter/Search must enter the semantic submit path, not stay on typing preview.";
+
+  ASSERT_TRUE(WaitUntil(
+      [&]() {
+        return responseSpy.count() > 0 && !dialog->property("searchLoading").toBool();
+      },
+      10000))
+      << "Semantic submit must deliver SearchResponseReady without being cancelled by "
+         "a pending previewTimer refreshPreview.";
+
+  EXPECT_TRUE(dialog->property("naturalLanguagePreviewActive").toBool());
+  EXPECT_EQ(dialog->property("currentRoute").toString().toStdString(), "semantic");
+  const auto status = dialog->property("naturalLanguageStatusText").toString();
+  EXPECT_FALSE(status.contains(QStringLiteral("Press Enter")))
+      << "After submit, UI must not remain on the awaiting-submit typing hint; status='"
+      << status.toStdString() << "'";
+  // Without an active model the provider surfaces unavailable — still proves submit ran.
+  EXPECT_TRUE(status.contains(QStringLiteral("not available")) ||
+              status.contains(QStringLiteral("unavailable")) || !status.isEmpty());
+
+  ASSERT_TRUE(QMetaObject::invokeMethod(dialog, "close"));
+  searchController->SetNaturalLanguageSearchEnabled(false);
 }
 
 // Regression: when natural-language search is enabled and the app is restarted,

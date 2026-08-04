@@ -15,7 +15,7 @@ add_executable(EditorGeometryOverlayPipelineTest
     ${ALCEDO_TEST_ROOT}/app/editor_geometry_overlay_pipeline_test.cpp)
 target_include_directories(EditorGeometryOverlayPipelineTest PUBLIC ${ALCEDO_INCLUDE_DIR})
 target_link_libraries(EditorGeometryOverlayPipelineTest
-    PRIVATE GTest::gtest_main EditorAdjustmentPipeline Operators EditPipeline JSON
+    PRIVATE GTest::gtest_main EditorAdjustmentPipeline Operators EditPipeline JSON ThreadPool
             ${ALCEDO_TEST_OPENCV_MIN_DEPS})
 gtest_discover_tests(EditorGeometryOverlayPipelineTest
     TEST_PREFIX "EditorGeometryOverlayPipelineTest."

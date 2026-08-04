@@ -54,6 +54,8 @@ Item {
     onControlsEnabledChanged: wireEnabled()
     Component.onCompleted: {
         wireEnabled()
+        // Bootstrap when the stack has not yet projected. Settled fan-out still
+        // owns ongoing echoes via EditorAdjustmentStack.
         loadFromSnapshot(root.editorSession ? root.editorSession.adjustmentSnapshot : null)
     }
 
@@ -93,6 +95,9 @@ Item {
     function loadNestedStrength(model, fieldKey, nestedKey, snapshot) {
         if (!model || !snapshot)
             return
+        // In-flight pointer drag owns the value; settled echo must not fight it.
+        if (model.dragActive)
+            return
         const entry = snapshot[fieldKey]
         if (entry === undefined)
             return
@@ -110,6 +115,8 @@ Item {
 
     function loadSharpenFromSnapshot(snapshot) {
         if (!snapshot)
+            return
+        if (sharpenModel.dragActive)
             return
         const entry = snapshot.sharpen
         if (entry === undefined)
@@ -133,23 +140,18 @@ Item {
         // snapshot echo (EditorAdjustmentStack onAdjustmentSnapshotChanged).
         if (colorTempModel.dragActive)
             return
-        const entry = snapshot.color_temp
-        const ct = entry.color_temp !== undefined ? entry.color_temp : entry
-        if (!ct)
-            return
-        const mode = ct.mode !== undefined ? String(ct.mode) : "as_shot"
-        const cct = Number(ct.cct !== undefined ? ct.cct : 6500)
-        const tint = Number(ct.tint !== undefined ? ct.tint : 0)
-        const supported = ct.supported !== undefined ? !!ct.supported : true
-        colorTempModel.loadFromParams(mode, cct, tint, supported)
-        if (ct.resolved_cct !== undefined)
-            colorTempModel.asShotCct = Number(ct.resolved_cct)
-        if (ct.resolved_tint !== undefined)
-            colorTempModel.asShotTint = Number(ct.resolved_tint)
+        // Snapshot field is ColorTempOp::GetParams shape (via live GetOperator).
+        // C++ owns key mapping: mode, custom_*, as_shot_* (+ legacy aliases).
+        // Do not re-interpret cct/tint defaults here — that silently loads 6500/0
+        // when only custom_*/as_shot_* are present and breaks as_shot ↔ custom.
+        colorTempModel.loadFromOperatorParams(snapshot.color_temp)
     }
 
     function loadHlsFromSnapshot(snapshot) {
         if (!snapshot || snapshot.hls === undefined && snapshot.HLS === undefined)
+            return
+        // Continuous HLS drag must not be aborted by a settled snapshot echo.
+        if (hlsModel.dragActive)
             return
         const entry = snapshot.hls !== undefined ? snapshot.hls : snapshot.HLS
         const hls = entry.HLS !== undefined ? entry.HLS : entry

@@ -4,14 +4,16 @@
 
 #pragma once
 
+#include <QVariantMap>
+
 #include "ui/alcedo_main/album_backend/editor_adjustment_models.hpp"
 
 namespace alcedo::ui {
 
 /// Phase 6D white-balance model. Owns As Shot / Custom mode, CCT, and tint.
 /// Submits operator-shaped params through `IEditorAdjustmentSubmitter`:
-///   {"color_temp":{"mode":"as_shot"|"custom","cct":…,"tint":…,
-///                  "resolved_cct":…,"resolved_tint":…}}
+///   {"color_temp":{"mode":"as_shot"|"custom","custom_cct":…,"custom_tint":…,
+///                  "as_shot_cct":…,"as_shot_tint":…}}
 /// Editing CCT or tint promotes mode to Custom. Reset restores As Shot.
 /// Load setters do not submit.
 class EditorColorTempModel : public EditorAdjustmentModelBase {
@@ -72,8 +74,14 @@ class EditorColorTempModel : public EditorAdjustmentModelBase {
   Q_INVOKABLE void reset();
   [[nodiscard]] Q_INVOKABLE QString paramsJson() const;
 
-  /// Snapshot load helper: mode string ("as_shot"/"custom"), CCT, tint, supported.
+  /// Snapshot load helper: mode string ("as_shot"/"custom"), display CCT/tint, supported.
+  /// Prefer loadFromOperatorParams when the payload is ColorTempOp::GetParams shape.
   Q_INVOKABLE void loadFromParams(const QString& mode, double cct, double tint, bool supported);
+
+  /// Load from ColorTempOp::GetParams() / SetOperator JSON (or the nested color_temp object).
+  /// Keys: mode, custom_cct, custom_tint, as_shot_cct, as_shot_tint (+ legacy aliases).
+  /// Does not submit. Ignores calls while a pointer drag is open.
+  Q_INVOKABLE void loadFromOperatorParams(const QVariantMap& params);
 
  signals:
   void modeIndexChanged();

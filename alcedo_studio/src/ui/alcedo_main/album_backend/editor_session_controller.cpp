@@ -10,6 +10,8 @@
 #include <QSettings>
 #include <QThread>
 #include <QtGlobal>
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 
 #include "app/editor_render_intent.hpp"
@@ -30,23 +32,11 @@ namespace {
 constexpr auto   kFilmstripCollapsedKey          = "editor/filmstripCollapsed";
 constexpr auto   kFilmstripExpandedHeightKey     = "editor/filmstripExpandedHeight";
 constexpr auto   kActiveAdjustmentPanelKey       = "editor/activeAdjustmentPanel";
-constexpr double kFilmstripExpandedHeightMin     = 72.0;
-constexpr double kFilmstripExpandedHeightMax     = 320.0;
+// Floor matches the default expanded dock (minimum scale = current proportion).
+// Ceiling is intentionally high: QML clamps live drag to ≤ 50% of the window.
+constexpr double kFilmstripExpandedHeightMin     = 128.0;
+constexpr double kFilmstripExpandedHeightMax     = 4096.0;
 constexpr double kFilmstripExpandedHeightDefault = 128.0;
-
-auto             EmptyRawDecodeCapabilities() -> QVariantMap {
-  return {
-      {QStringLiteral("rawSource"), false},
-      {QStringLiteral("available"), false},
-      {QStringLiteral("metadataAvailable"), false},
-      {QStringLiteral("neuralEngineAvailable"), false},
-      {QStringLiteral("highlightsAvailable"), false},
-      {QStringLiteral("unavailableReason"),
-                   QStringLiteral("Select a RAW image to enable RAW Decode.")},
-      {QStringLiteral("methodValues"), QVariantList{}},
-      {QStringLiteral("rawDefaultParamsJson"), QString{}},
-  };
-}
 
 }  // namespace
 
@@ -72,7 +62,7 @@ EditorSessionController::EditorSessionController(EditorController*              
     session_backend_->RequestViewChange(alcedo::EditorRenderReason::ScopeRefresh,
                                         std::move(region));
   });
-  scope_controller_->SetImageIdentity(image_id(), ImageLoadGeneration());
+  scope_controller_->SetImageIdentity(image_id(), SessionEpoch());
   LoadFilmstripUiPrefs();
   LoadDesktopUiPrefs();
   if (session_backend_) {
@@ -82,7 +72,6 @@ EditorSessionController::EditorSessionController(EditorController*              
     ApplyActionAvailability();
   }
   InstallBackendNotifier();
-  SyncRawDecodeCapabilities();
 }
 
 EditorSessionController::~EditorSessionController() {
@@ -136,25 +125,24 @@ void EditorSessionController::InstallBackendNotifier() {
         },
         Qt::QueuedConnection);
   });
-  session_backend_->SetActionAvailabilityObserver([self](
-                                                      const alcedo::EditorActionAvailability&
-                                                          availability) {
-    if (!self) {
-      return;
-    }
-    if (QThread::currentThread() == self->thread()) {
-      self->actions_.Apply(availability);
-      return;
-    }
-    QMetaObject::invokeMethod(
-        self,
-        [self, availability] {
-          if (self) {
-            self->actions_.Apply(availability);
-          }
-        },
-        Qt::QueuedConnection);
-  });
+  session_backend_->SetActionAvailabilityObserver(
+      [self](const alcedo::EditorActionAvailability& availability) {
+        if (!self) {
+          return;
+        }
+        if (QThread::currentThread() == self->thread()) {
+          self->actions_.Apply(availability);
+          return;
+        }
+        QMetaObject::invokeMethod(
+            self,
+            [self, availability] {
+              if (self) {
+                self->actions_.Apply(availability);
+              }
+            },
+            Qt::QueuedConnection);
+      });
 }
 
 void EditorSessionController::SetSessionBackend(alcedo::IEditorSessionBackend* session_backend) {
@@ -177,12 +165,12 @@ void EditorSessionController::SetSessionBackend(alcedo::IEditorSessionBackend* s
     actions_.Apply({});
   }
   if (scope_controller_) {
-    scope_controller_->SetImageIdentity(image_id(), ImageLoadGeneration());
+    scope_controller_->SetImageIdentity(image_id(), SessionEpoch());
   }
-  SyncRawDecodeCapabilities();
 }
 
-void EditorSessionController::SetInteractionPolicy(InteractionPolicyController* interaction_policy) {
+void EditorSessionController::SetInteractionPolicy(
+    InteractionPolicyController* interaction_policy) {
   if (interaction_policy_ == interaction_policy) {
     return;
   }
@@ -192,9 +180,9 @@ void EditorSessionController::SetInteractionPolicy(InteractionPolicyController* 
   }
   interaction_policy_ = interaction_policy;
   if (interaction_policy_) {
-    interaction_policy_connection_ = connect(
-        interaction_policy_, &InteractionPolicyController::PolicyChanged, this,
-        &EditorSessionController::SyncBackgroundActionRestrictions);
+    interaction_policy_connection_ =
+        connect(interaction_policy_, &InteractionPolicyController::PolicyChanged, this,
+                &EditorSessionController::SyncBackgroundActionRestrictions);
     SyncBackgroundActionRestrictions();
   }
 }
@@ -213,10 +201,10 @@ void EditorSessionController::SyncBackgroundActionRestrictions() {
   }
   alcedo::EditorBackgroundActionRestrictions restrictions;
   restrictions.blocks_select_image = !interaction_policy_->CanSelectEditorImage();
-  restrictions.blocks_paste          = !interaction_policy_->CanPasteAdjustments();
-  restrictions.blocks_merge          = !interaction_policy_->CanMergeAdjustments();
-  restrictions.blocks_checkout       = !interaction_policy_->CanCheckoutVersion();
-  restrictions.blocks_workspace      = !interaction_policy_->CanSwitchWorkspace();
+  restrictions.blocks_paste        = !interaction_policy_->CanPasteAdjustments();
+  restrictions.blocks_merge        = !interaction_policy_->CanMergeAdjustments();
+  restrictions.blocks_checkout     = !interaction_policy_->CanCheckoutVersion();
+  restrictions.blocks_workspace    = !interaction_policy_->CanSwitchWorkspace();
   session_backend_->SetBackgroundActionRestrictions(restrictions);
   ApplyActionAvailability();
 }
@@ -234,7 +222,6 @@ void EditorSessionController::OnBackendChanged() {
     return;
   }
   SyncIdentityFromBackend();
-  SyncRawDecodeCapabilities();
   SyncViewportIdentity();
   ApplyActionAvailability();
 
@@ -251,6 +238,7 @@ void EditorSessionController::OnBackendChanged() {
       emit AdjustmentSnapshotChanged();
     }
   }
+  SyncViewportDisplayConfig();
   emit       StateChanged();
   // Phase 7A R2: emit the dedicated history signal only when the backend's
   // monotonic history_revision advances. Render-busy, frame-ready, preview,
@@ -300,7 +288,7 @@ auto EditorSessionController::image_id() const -> uint {
   return image_id_;
 }
 
-auto EditorSessionController::ImageLoadGeneration() const -> qulonglong {
+auto EditorSessionController::SessionEpoch() const -> qulonglong {
   if (session_backend_) {
     return static_cast<qulonglong>(session_backend_->active_image_load_request().value);
   }
@@ -308,10 +296,7 @@ auto EditorSessionController::ImageLoadGeneration() const -> qulonglong {
 }
 
 auto EditorSessionController::viewport_identity_key() const -> QString {
-  return QStringLiteral("%1:%2:%3")
-      .arg(image_id())
-      .arg(ImageLoadGeneration())
-      .arg(active_ ? 1 : 0);
+  return QStringLiteral("%1:%2:%3").arg(image_id()).arg(SessionEpoch()).arg(active_ ? 1 : 0);
 }
 
 auto EditorSessionController::session_state() const -> alcedo::EditorSessionState {
@@ -329,23 +314,14 @@ void EditorSessionController::SyncIdentityFromBackend() {
   if (!session_backend_) {
     return;
   }
-  const auto id       = session_backend_->identity();
-  element_id_         = id.element_id;
-  image_id_           = id.image_id;
-  session_generation_ = static_cast<qulonglong>(session_backend_->active_image_load_request().value);
-  session_state_      = session_backend_->state();
+  const auto id = session_backend_->identity();
+  element_id_   = id.element_id;
+  image_id_     = id.image_id;
+  session_generation_ =
+      static_cast<qulonglong>(session_backend_->active_image_load_request().value);
+  session_state_ = session_backend_->state();
   // active_ is workspace membership owned by Open/Close/Finalize, not by
   // backend NoImage vs Loading (empty editor remains active).
-}
-
-void EditorSessionController::SyncRawDecodeCapabilities() {
-  const QVariantMap next =
-      editor_ ? editor_->RawDecodeCapabilitiesForImage(image_id()) : EmptyRawDecodeCapabilities();
-  if (next == raw_decode_capabilities_) {
-    return;
-  }
-  raw_decode_capabilities_ = next;
-  emit RawDecodeCapabilitiesChanged();
 }
 
 void EditorSessionController::ApplyOpenLocal(uint elementId, uint imageId) {
@@ -376,7 +352,7 @@ void EditorSessionController::ApplyCloseLocal() {
 
 void EditorSessionController::SyncViewportIdentity() {
   qulonglong target_image_id   = static_cast<qulonglong>(image_id());
-  qulonglong target_generation = ImageLoadGeneration();
+  qulonglong target_generation = SessionEpoch();
   if (session_backend_) {
     if (const auto pending = session_backend_->pending_presentation_target()) {
       target_image_id   = static_cast<qulonglong>(pending->image_id);
@@ -385,9 +361,9 @@ void EditorSessionController::SyncViewportIdentity() {
       // Preserve the Open() pre-stamp until the backend publishes a pending target.
       if (auto* item =
               qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
-        if (item->imageGeneration() > target_generation) {
+        if (item->sessionEpoch() > target_generation) {
           target_image_id   = item->imageIdentity();
-          target_generation = item->imageGeneration();
+          target_generation = item->sessionEpoch();
         }
       }
     }
@@ -401,7 +377,7 @@ void EditorSessionController::SyncViewportIdentity() {
         (has_image() || (session_backend_ && session_backend_->pending_presentation_target()));
     if (presentation_active) {
       item->setImageIdentity(target_image_id);
-      item->setImageGeneration(target_generation);
+      item->setSessionEpoch(target_generation);
     }
   }
 }
@@ -430,22 +406,21 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
         if (auto* item =
                 qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
           skip_prestamp =
-              item->imageGeneration() >
+              item->sessionEpoch() >
               static_cast<qulonglong>(session_backend_->active_image_load_request().value);
         }
       }
       if (!skip_prestamp) {
-        const qulonglong presentation_image_id = static_cast<qulonglong>(imageId);
-        const qulonglong presentation_generation =
-            static_cast<qulonglong>(session_backend_->active_image_load_request().value +
-                                    (same_image ? 0 : 1));
+        const qulonglong presentation_image_id   = static_cast<qulonglong>(imageId);
+        const qulonglong presentation_generation = static_cast<qulonglong>(
+            session_backend_->active_image_load_request().value + (same_image ? 0 : 1));
         if (scope_controller_) {
           scope_controller_->SetImageIdentity(presentation_image_id, presentation_generation);
         }
         if (auto* item =
                 qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
           item->setImageIdentity(presentation_image_id);
-          item->setImageGeneration(presentation_generation);
+          item->setSessionEpoch(presentation_generation);
         }
       }
     }
@@ -472,7 +447,6 @@ void EditorSessionController::Open(uint elementId, uint imageId) {
     ApplyOpenLocal(elementId, imageId);
   }
 
-  SyncRawDecodeCapabilities();
   SyncViewportIdentity();
   emit StateChanged();
 }
@@ -747,7 +721,6 @@ void EditorSessionController::Close() {
   } else {
     ApplyCloseLocal();
   }
-  SyncRawDecodeCapabilities();
   active_ = false;
   emit StateChanged();
 }
@@ -769,32 +742,43 @@ void EditorSessionController::Shutdown() {
     ApplyCloseLocal();
     session_state_ = alcedo::EditorSessionState::ShuttingDown;
   }
-  SyncRawDecodeCapabilities();
   active_ = false;
   emit StateChanged();
 }
 
 void EditorSessionController::Finalize(bool persistChanges) {
-  // Finalize closes the active image through the lifecycle owner. The QML
-  // viewport unbinds itself when the workspace visual tree is destroyed.
-  if (scope_controller_) {
-    scope_controller_->SetImageIdentity(0, 0);
+  // Same seal path as WorkspaceRouter::OpenLibrary / empty-editor Open(0,0).
+  // Do not suspend the presentation viewport before Close returns: SealAndStartSave
+  // calls CancelSessionAndWait and must let in-flight presents finish.
+  if (!session_backend_) {
+    if (scope_controller_) {
+      scope_controller_->SetImageIdentity(0, 0);
+      scope_controller_->Shutdown();
+    }
+    Close();
+    return;
   }
-  if (scope_controller_) {
-    scope_controller_->Shutdown();
+
+  const auto result = session_backend_->Close(persistChanges);
+  SyncIdentityFromBackend();
+
+  if (result.kind != alcedo::EditorSessionResultKind::Rejected) {
+    active_ = false;
   }
-  if (session_backend_) {
+
+  // Synchronous close can drop presentation now. Async SaveStarted keeps the
+  // viewport until the library route tears it down or NoImage arrives.
+  if (result.kind != alcedo::EditorSessionResultKind::Rejected &&
+      result.kind != alcedo::EditorSessionResultKind::SaveStarted) {
+    if (scope_controller_) {
+      scope_controller_->SetImageIdentity(0, 0);
+      scope_controller_->Shutdown();
+    }
     if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
       item->suspendPresentation();
     }
-    session_backend_->Close(persistChanges);
-    SyncIdentityFromBackend();
-    SyncRawDecodeCapabilities();
-    active_ = false;
-    emit StateChanged();
-    return;
   }
-  Close();
+  emit StateChanged();
 }
 
 void EditorSessionController::clearLastEditedImage() {
@@ -816,7 +800,10 @@ void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {
       scope_controller_->SetDownstreamSink(item->frameSink());
     }
     SyncViewportIdentity();
+    SyncViewportDisplayConfig();
     // Stamp a stable presentation sink identity for render intents (Phase 5A).
+    // DirectFrameSink owns the short scene-graph startup wait when this binding
+    // precedes QQuickRhiItem::synchronize().
     if (session_backend_) {
       session_backend_->SetPresentationSinkId(
           static_cast<alcedo::PresentationSinkId>(reinterpret_cast<std::uintptr_t>(item)));
@@ -825,6 +812,35 @@ void EditorSessionController::bindPresentationViewport(QObject* viewportItem) {
     scope_controller_->SetDownstreamSink(nullptr);
   }
   emit PresentationBindingChanged();
+}
+
+void EditorSessionController::SyncViewportDisplayConfig() {
+  auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data());
+  if (!item) {
+    return;
+  }
+
+  ViewerDisplayConfig config{};
+  const QVariantMap   wrapper = adjustment_snapshot_.value(QStringLiteral("odt")).toMap();
+  QVariantMap         odt     = wrapper.value(QStringLiteral("odt")).toMap();
+  if (odt.isEmpty()) {
+    odt = wrapper;
+  }
+
+  const QString space = odt.value(QStringLiteral("encoding_space")).toString();
+  if (!space.isEmpty()) {
+    config.encoding_space = ColorUtils::ColorSpaceFromString(space.toStdString());
+  }
+  const QString eotf = odt.value(QStringLiteral("encoding_eotf")).toString();
+  if (!eotf.isEmpty()) {
+    config.encoding_eotf = ColorUtils::EOTFFromString(eotf.toStdString());
+  }
+  bool        peak_ok = false;
+  const float peak    = odt.value(QStringLiteral("peak_luminance")).toFloat(&peak_ok);
+  if (peak_ok && std::isfinite(peak)) {
+    config.peak_luminance = std::clamp(peak, 100.0f, 10000.0f);
+  }
+  item->setDisplayConfig(config);
 }
 
 void EditorSessionController::updatePresentationTargetSize(int width, int height) {
@@ -965,13 +981,9 @@ auto EditorSessionController::render_diagnostics() const -> QVariantMap {
   out.insert(QStringLiteral("cancelledCount"), static_cast<qulonglong>(diag.cancelled_count));
   out.insert(QStringLiteral("acceptedCount"), static_cast<qulonglong>(diag.accepted_count));
   out.insert(QStringLiteral("failedCount"), static_cast<qulonglong>(diag.failed_count));
-  out.insert(QStringLiteral("presentedCount"), static_cast<qulonglong>(diag.presented_count));
+  out.insert(QStringLiteral("readyCount"), static_cast<qulonglong>(diag.ready_count));
   out.insert(QStringLiteral("imageLoadRequestId"),
              static_cast<qulonglong>(diag.image_load_request_id));
-  out.insert(QStringLiteral("renderRequestGeneration"),
-             static_cast<qulonglong>(diag.render_generation));
-  out.insert(QStringLiteral("viewRequestGeneration"),
-             static_cast<qulonglong>(diag.view_generation));
   out.insert(QStringLiteral("lastError"), QString::fromUtf8(diag.last_error.c_str()));
   out.insert(QStringLiteral("lastRejectionReason"),
              QString::fromUtf8(diag.last_rejection_reason.c_str()));
@@ -983,13 +995,13 @@ auto EditorSessionController::render_diagnostics() const -> QVariantMap {
     out.insert(QStringLiteral("lastRejectedRenderReason"),
                QString::fromUtf8(ReasonName(*diag.last_rejected_render_reason)));
   }
-  if (diag.last_submitted_frame_role) {
-    out.insert(QStringLiteral("lastSubmittedFrameRole"),
-               QString::fromUtf8(FrameRoleName(*diag.last_submitted_frame_role)));
+  if (diag.last_ready_frame_role) {
+    out.insert(QStringLiteral("lastReadyFrameRole"),
+               QString::fromUtf8(FrameRoleName(*diag.last_ready_frame_role)));
   }
-  if (diag.last_submitted_render_reason) {
-    out.insert(QStringLiteral("lastSubmittedRenderReason"),
-               QString::fromUtf8(ReasonName(*diag.last_submitted_render_reason)));
+  if (diag.last_ready_render_reason) {
+    out.insert(QStringLiteral("lastReadyRenderReason"),
+               QString::fromUtf8(ReasonName(*diag.last_ready_render_reason)));
   }
   out.insert(QStringLiteral("firstFrameTimeMs"), first_frame_time_ms());
   return out;

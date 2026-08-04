@@ -239,11 +239,65 @@ Dialog {
         return qsTr("%1-%2 of %3 matches").arg(first).arg(last).arg(searchTotal)
     }
 
+    function clearPreviewWindowState() {
+        previewThumbs = ({})
+        resultWindowStart = 0
+        lastWindowDropCount = 0
+        lastWindowPrependCount = 0
+        searchOffset = 0
+        searchTotal = 0
+        searchHasMore = false
+        searchHasPrevious = false
+        results = []
+    }
+
+    // Semantic queries must not enter the debounced preview pipeline. Typing only
+    // arms an explicit-submit hint; Enter / Search owns RequestSubmitSearch so a
+    // pending previewTimer cannot bump searchRequestGeneration and drop sidecar
+    // results.
+    function showSemanticAwaitingSubmit(query) {
+        previewTimer.stop()
+        searchRequestGeneration += 1
+        searchExecutionTimer.stop()
+        lastQuery = query
+        currentRoute = "semantic"
+        naturalLanguagePreviewActive = false
+        naturalLanguageStatusText = qsTr("Press Enter or click Search for natural language search")
+        searchLoading = false
+        pendingSearchKind = ""
+        activeSearchRequestId = 0
+        if (searchController) {
+            searchController.CancelSearchPreviewThumbnails()
+        }
+        clearPreviewWindowState()
+    }
+
     function refreshPreview() {
         if (!searchController) {
             return
         }
         const query = searchField.text.trim()
+        if (query.length === 0) {
+            previewTimer.stop()
+            searchRequestGeneration += 1
+            searchExecutionTimer.stop()
+            lastQuery = ""
+            naturalLanguagePreviewActive = false
+            naturalLanguageStatusText = ""
+            searchController.CancelSearchPreviewThumbnails()
+            clearPreviewWindowState()
+            currentRoute = "empty"
+            recommendations = searchController.SearchRecommendations(12)
+            searchLoading = false
+            return
+        }
+        // Natural-language mode: semantic route is submit-only. Do not schedule
+        // SearchPreview / searchLoading — that path races Enter/Search submits.
+        if (searchController.naturalLanguageSearchEnabled
+                && searchController.ClassifyQuery(query) === "semantic") {
+            showSemanticAwaitingSubmit(query)
+            return
+        }
         lastQuery = query
         naturalLanguagePreviewActive = false
         naturalLanguageStatusText = ""
@@ -256,15 +310,6 @@ Dialog {
         searchTotal = 0
         searchHasMore = false
         searchHasPrevious = false
-        if (query.length === 0) {
-            searchRequestGeneration += 1
-            searchExecutionTimer.stop()
-            currentRoute = "empty"
-            results = []
-            recommendations = searchController.SearchRecommendations(12)
-            searchLoading = false
-            return
-        }
         beginSearchRequest("preview", query, 0, resultPageSize, "replace")
     }
 
@@ -278,6 +323,10 @@ Dialog {
         if (query.length === 0) {
             return
         }
+        // Cancel any pending typing debounce before submit. Otherwise a late
+        // refreshPreview() invalidates the submit generation and discards the
+        // sidecar SearchResponseReady payload.
+        previewTimer.stop()
         if (searchController.naturalLanguageSearchEnabled
                 && searchController.ClassifyQuery(query) === "semantic") {
             runSemanticSubmit(0, "replace")
@@ -294,6 +343,7 @@ Dialog {
         if (query.length === 0) {
             return
         }
+        previewTimer.stop()
         lastQuery = query
         naturalLanguagePreviewActive = true
         naturalLanguageStatusText = ""

@@ -8,6 +8,11 @@ import QtQuick.Effects
 ApplicationWindow {
     id: root
     objectName: "mainWindow"
+    // The test host supplies this context property before loading QML. The
+    // typeof guard keeps source-loaded QML fixtures compatible with the
+    // production context, where the property is explicitly set to false.
+    readonly property bool automationModeEnabled: typeof automationMode === "boolean"
+                                                  && automationMode
     width: 1200
     height: 760
     minimumWidth: 960
@@ -151,6 +156,149 @@ ApplicationWindow {
     ProjectLaunchController {
         id: projectLaunchController
         host: root
+        automationMode: root.automationModeEnabled
+    }
+
+    // Shared workspace scroll state survives Loader teardown when routing between
+    // Library and Editor. The aliases keep the existing diagnostic/property names
+    // while exposing one global vertical and horizontal position.
+    property real globalContentY: 0
+    property real globalContentX: 0
+    property alias contentY: root.globalContentY
+    property alias contentX: root.globalContentX
+
+    // Application close gate: when the editor has an open image, caption/X and
+    // OS close are intercepted so the user can Save (Finalize true) or Discard
+    // (Finalize false) before the process exits. Async save must finish first —
+    // quitting during Saving aborts the checkpoint.
+    property bool allowApplicationClose: false
+    property bool waitingEditorCloseSave: false
+
+    function editorCloseNeedsConfirm() {
+        if (root.automationModeEnabled || root.allowApplicationClose) {
+            return false
+        }
+        if (root.waitingEditorCloseSave) {
+            return true
+        }
+        const router = appModules.workspaceRouter
+        if (!router || String(router.workspace || "") !== "editor") {
+            return false
+        }
+        const session = appModules.editorSession
+        return !!(session && session.hasImage === true)
+    }
+
+    function cancelEditorCloseConfirm() {
+        root.waitingEditorCloseSave = false
+        if (appDialogs.editorCloseConfirmDialog) {
+            appDialogs.editorCloseConfirmDialog.busy = false
+        }
+    }
+
+    function finishApplicationClose() {
+        root.waitingEditorCloseSave = false
+        root.allowApplicationClose = true
+        if (appDialogs.editorCloseConfirmDialog
+                && appDialogs.editorCloseConfirmDialog.opened) {
+            appDialogs.editorCloseConfirmDialog.close()
+        }
+        root.close()
+    }
+
+    function abortEditorCloseSave(messageText) {
+        root.waitingEditorCloseSave = false
+        if (appDialogs.editorCloseConfirmDialog) {
+            appDialogs.editorCloseConfirmDialog.busy = false
+            if (appDialogs.editorCloseConfirmDialog.opened) {
+                appDialogs.editorCloseConfirmDialog.close()
+            }
+        }
+        const detail = String(messageText || "")
+        root.showSnackbar(detail.length > 0
+                          ? detail
+                          : qsTr("Could not save edits. Resolve the save error, then quit again."))
+    }
+
+    function beginEditorCloseDiscard() {
+        const session = appModules.editorSession
+        if (session) {
+            if (session.hasPendingRecovery === true
+                    && session.actions
+                    && session.actions.canDiscardAndContinue === true) {
+                session.DiscardAndContinue()
+            } else {
+                session.Finalize(false)
+            }
+        }
+        root.finishApplicationClose()
+    }
+
+    function beginEditorCloseSave() {
+        // Same seal as switching to Library: WorkspaceRouter.openLibrary() →
+        // Finalize(true). Filmstrip image switches use the same Saving gate.
+        root.waitingEditorCloseSave = true
+        if (appDialogs.editorCloseConfirmDialog) {
+            appDialogs.editorCloseConfirmDialog.busy = true
+        }
+        if (appModules.workspaceRouter) {
+            appModules.workspaceRouter.openLibrary()
+        } else if (appModules.editorSession) {
+            appModules.editorSession.Finalize(true)
+        }
+        Qt.callLater(root.pollEditorCloseSave)
+    }
+
+    function pollEditorCloseSave() {
+        if (!root.waitingEditorCloseSave) {
+            return
+        }
+        const session = appModules.editorSession
+        if (!session) {
+            root.finishApplicationClose()
+            return
+        }
+        const state = String(session.sessionState || "")
+        // Same in-flight seal gate as EditorFilmstrip.
+        if (state === "Saving" || state === "Switching") {
+            return
+        }
+        if (session.hasPendingRecovery === true
+                || state === "RetainedImageFailure"
+                || state === "Failed") {
+            root.abortEditorCloseSave(session.lastError)
+            return
+        }
+        // Close completed (or sync no-op). Do not quit while still Interactive
+        // after a rejected seal — that would drop unsaved work.
+        if (state === "NoImage" || state === "ShuttingDown") {
+            root.finishApplicationClose()
+            return
+        }
+        root.abortEditorCloseSave(session.lastError)
+    }
+
+    Connections {
+        target: appModules.editorSession
+        enabled: root.waitingEditorCloseSave
+        function onStateChanged() {
+            root.pollEditorCloseSave()
+        }
+    }
+
+    onClosing: function(close) {
+        if (!root.editorCloseNeedsConfirm()) {
+            return
+        }
+        close.accepted = false
+        if (root.waitingEditorCloseSave) {
+            return
+        }
+        if (appDialogs.editorCloseConfirmDialog
+                && appDialogs.editorCloseConfirmDialog.opened) {
+            return
+        }
+        appDialogs.openEditorCloseConfirmDialog()
     }
 
     // Library workspace UI state survives Loader teardown when routing to the editor.
@@ -158,7 +306,17 @@ ApplicationWindow {
     property bool libraryInspectorVisible: true
     property real libraryInspectorWidth: 300
     property int libraryGridZoomLevel: 4
-    property real libraryGridContentY: 0
+    property alias libraryGridContentY: root.globalContentY
+    property alias editorFilmstripContentX: root.globalContentX
+
+    // Cross-workspace reveal requests are consumed by the next live view. The
+    // monotonically increasing IDs also handle selecting the same image twice.
+    property int libraryScrollTargetElementId: 0
+    property int libraryScrollTargetIndex: -1
+    property int libraryScrollRequestId: 0
+    property int filmstripScrollTargetElementId: 0
+    property int filmstripScrollTargetIndex: -1
+    property int filmstripScrollRequestId: 0
 
 
     Component.onCompleted: {
@@ -193,6 +351,10 @@ ApplicationWindow {
         appDialogs.openAdvancedAnalysisDialog()
     }
 
+    function openBackgroundTasksDialog() {
+        appDialogs.openBackgroundTasksDialog()
+    }
+
 
     function beginProjectLaunch(loadAction) {
         projectLaunchController.beginProjectLaunch(loadAction)
@@ -210,8 +372,53 @@ ApplicationWindow {
         imageActionsController.setFocusedImage(item)
     }
 
+    function selectAllCurrentAlbum() {
+        imageActionsController.selectAllCurrentAlbum()
+    }
+
+    function requestLibraryScrollToElement(elementId, index) {
+        const target = Number(elementId || 0)
+        if (target <= 0) {
+            return
+        }
+        libraryScrollTargetElementId = target
+        libraryScrollTargetIndex = index === undefined ? -1 : Number(index)
+        libraryScrollRequestId += 1
+    }
+
+    function clearLibraryScrollTarget(elementId) {
+        if (Number(elementId || 0) !== Number(libraryScrollTargetElementId)) {
+            return
+        }
+        libraryScrollTargetElementId = 0
+        libraryScrollTargetIndex = -1
+    }
+
+    function requestFilmstripScrollToElement(elementId, index) {
+        const target = Number(elementId || 0)
+        if (target <= 0) {
+            return
+        }
+        filmstripScrollTargetElementId = target
+        filmstripScrollTargetIndex = index === undefined ? -1 : Number(index)
+        filmstripScrollRequestId += 1
+    }
+
+    function clearFilmstripScrollTarget(elementId) {
+        if (Number(elementId || 0) !== Number(filmstripScrollTargetElementId)) {
+            return
+        }
+        filmstripScrollTargetElementId = 0
+        filmstripScrollTargetIndex = -1
+    }
+
     function openImageContextMenu(clickedItem, sceneX, sceneY) {
         imageActionsController.openImageContextMenu(clickedItem, sceneX, sceneY)
+    }
+
+    function openEditorFilmstripContextMenu(clickedItem, sceneX, sceneY) {
+        imageActionsController.openImageContextMenu(clickedItem, sceneX, sceneY,
+                                                    "editor-filmstrip")
     }
 
     function requestSetFocusedImageRating(rating) {
@@ -233,6 +440,7 @@ ApplicationWindow {
     readonly property alias exportQueueState: exportQueueStateObj
     readonly property alias selectionState: selectionStateObj
     readonly property var importDialog: appDialogs.importDialog
+    readonly property var importFolderDialog: appDialogs.importFolderDialog
     readonly property var exportDialog: appDialogs.exportDialog
     readonly property var globalSearchDialog: appDialogs.globalSearchDialog
 
@@ -247,6 +455,7 @@ ApplicationWindow {
     AppDialogs {
         id: appDialogs
         host: root
+        automationMode: root.automationModeEnabled
         imageActionsController: imageActionsController
         selectionState: selectionStateObj
         exportQueueState: exportQueueStateObj
@@ -297,11 +506,6 @@ ApplicationWindow {
 
         BackgroundTaskBar {
             Layout.fillWidth: true
-            onTaskDetailsRequested: function(task) {
-                if (task && task.kind === "imageAnalysis") {
-                    appDialogs.advancedContentAnalysisDialog.openTaskDetails(task)
-                }
-            }
         }
     }
 
@@ -339,7 +543,7 @@ ApplicationWindow {
     Shortcut {
         sequence: StandardKey.SelectAll
         enabled: root.backendInteractive && !appDialogs.anyDialogOpened()
-        onActivated: imageActionsController.selectAllCurrentAlbum()
+        onActivated: root.selectAllCurrentAlbum()
     }
 
     // ── Accelerator preparation overlay ───────────────────────────────

@@ -6,10 +6,13 @@
 
 #include <cmath>
 #include <filesystem>
+#include <fstream>
+#include <string>
 
 #include "edit/operators/basic/color_temp_op.hpp"
 #include "image/image.hpp"
 #include "image/metadata_extractor.hpp"
+#include "utils/import/import_error_code.hpp"
 
 namespace alcedo {
 namespace {
@@ -255,6 +258,49 @@ TEST(MetadataExtractorTest, SonyArwMakerNoteAsShotNeutralResolvesStableCct) {
   EXPECT_LT(params.color_temp_resolved_cct_, 4050.0f);
   EXPECT_GT(params.color_temp_resolved_tint_, -20.0f);
   EXPECT_LT(params.color_temp_resolved_tint_, 0.0f);
+}
+
+TEST(MetadataExtractorTest, XmpSidecarIsRejectedAsUnsupportedImportFormat) {
+  const auto dir = std::filesystem::temp_directory_path() / "alcedo_metadata_xmp_reject";
+  std::filesystem::create_directories(dir);
+  const auto xmp_path = dir / "sidecar.xmp";
+  const auto xml_path = dir / "sidecar.xml";
+
+  // Minimal packet Exiv2 recognizes as ImageType::xmp (metadata-only, 0x0).
+  constexpr const char* kXmpPacket =
+      "<?xpacket begin=\"\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>\n"
+      "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n"
+      " <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n"
+      "  <rdf:Description rdf:about=\"\"/>\n"
+      " </rdf:RDF>\n"
+      "</x:xmpmeta>\n"
+      "<?xpacket end=\"w\"?>\n";
+
+  {
+    std::ofstream out(xmp_path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(out.good());
+    out << kXmpPacket;
+    ASSERT_TRUE(out.good());
+  }
+  {
+    std::ofstream out(xml_path, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(out.good());
+    out << kXmpPacket;
+    ASSERT_TRUE(out.good());
+  }
+
+  for (const auto& path : {xmp_path, xml_path}) {
+    Image image(99, path, ImageType::DEFAULT);
+    try {
+      MetadataExtractor::ExtractEXIF_ToImage(path, image);
+      FAIL() << "Expected MetadataExtractionError for " << path.string();
+    } catch (const MetadataExtractionError& e) {
+      EXPECT_EQ(e.code(), ImportErrorCode::UNSUPPORTED_FORMAT) << path.string();
+    }
+  }
+
+  std::error_code ec;
+  std::filesystem::remove_all(dir, ec);
 }
 
 }  // namespace

@@ -220,7 +220,6 @@ add_library(AlbumBackendLib STATIC
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/import_export.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/nikon_he_recovery_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/nikon_he_recovery_types.hpp"
-    "${ALCEDO_INCLUDE_ROOT}/app/editor_raw_decode_capabilities.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_session_controller.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/album_backend/editor_action_availability_model.hpp"
@@ -416,9 +415,10 @@ endif()
 
 set(ALCEDO_MAIN_SOURCES
     "${ALCEDO_UI_SHELL_ROOT}/main.cpp"
+    "${ALCEDO_UI_SHELL_ROOT}/application_module_qml_types.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/app_theme.cpp"
     "${ALCEDO_UI_SHELL_ROOT}/shortcut_registry.cpp"
-    "${ALCEDO_SRC_ROOT}/config/resource.qrc"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/application_module_qml_types.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/app_theme.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/i18n.hpp"
     "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/language_manager.hpp"
@@ -457,38 +457,69 @@ QmlImports = qml
 endif()
 
 if(APPLE)
+    # Brand icon pipeline (Windows + macOS):
+    #   scripts/build_app_icons.ps1  ->  cargo tauri icon
+    # writes config/ICON/alcedo_icon.{png,ico,icns}. Prefer the committed ICNS
+    # so Dock / Finder / DMG match the Windows mark without re-slicing on Apple
+    # hosts; fall back to sips+iconutil when the ICNS asset is missing.
     set(ALCEDO_MAIN_ICON_PNG "${ALCEDO_SRC_ROOT}/config/ICON/alcedo_icon.png")
+    set(ALCEDO_MAIN_ICON_ICNS_SRC "${ALCEDO_SRC_ROOT}/config/ICON/alcedo_icon.icns")
     set(ALCEDO_MAIN_ICONSET_DIR "${ALCEDO_BINARY_ROOT}/alcedo_icon.iconset")
     set(ALCEDO_MAIN_ICON_ICNS "${ALCEDO_BINARY_ROOT}/alcedo_icon.icns")
 
-    find_program(ALCEDO_SIPS_EXECUTABLE sips REQUIRED)
-    find_program(ALCEDO_ICONUTIL_EXECUTABLE iconutil REQUIRED)
+    if(EXISTS "${ALCEDO_MAIN_ICON_ICNS_SRC}")
+        add_custom_command(
+            OUTPUT "${ALCEDO_MAIN_ICON_ICNS}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ALCEDO_MAIN_ICON_ICNS_SRC}"
+                "${ALCEDO_MAIN_ICON_ICNS}"
+            DEPENDS "${ALCEDO_MAIN_ICON_ICNS_SRC}"
+            COMMENT "Staging macOS app icon from ${ALCEDO_MAIN_ICON_ICNS_SRC}"
+            VERBATIM
+        )
+    else()
+        find_program(ALCEDO_SIPS_EXECUTABLE sips REQUIRED)
+        find_program(ALCEDO_ICONUTIL_EXECUTABLE iconutil REQUIRED)
 
-    add_custom_command(
-        OUTPUT "${ALCEDO_MAIN_ICON_ICNS}"
-        COMMAND ${CMAKE_COMMAND} -E rm -rf "${ALCEDO_MAIN_ICONSET_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${ALCEDO_MAIN_ICONSET_DIR}"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 16 16 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_16x16.png"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 32 32 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_16x16@2x.png"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 32 32 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_32x32.png"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 64 64 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_32x32@2x.png"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 128 128 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_128x128.png"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 256 256 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_128x128@2x.png"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 256 256 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_256x256.png"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 512 512 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_256x256@2x.png"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 512 512 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_512x512.png"
-        COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 1024 1024 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_512x512@2x.png"
-        COMMAND ${ALCEDO_ICONUTIL_EXECUTABLE} -c icns "${ALCEDO_MAIN_ICONSET_DIR}" -o "${ALCEDO_MAIN_ICON_ICNS}"
-        DEPENDS "${ALCEDO_MAIN_ICON_PNG}"
-        COMMENT "Generating macOS app icon from ${ALCEDO_MAIN_ICON_PNG}"
-        VERBATIM
-    )
+        if(NOT EXISTS "${ALCEDO_MAIN_ICON_PNG}")
+            message(FATAL_ERROR
+                "macOS app icon missing. Expected ${ALCEDO_MAIN_ICON_ICNS_SRC} "
+                "or ${ALCEDO_MAIN_ICON_PNG}. Generate with: "
+                "powershell -File scripts/build_app_icons.ps1 "
+                "(or cargo tauri icon <source.png>).")
+        endif()
+
+        add_custom_command(
+            OUTPUT "${ALCEDO_MAIN_ICON_ICNS}"
+            COMMAND ${CMAKE_COMMAND} -E rm -rf "${ALCEDO_MAIN_ICONSET_DIR}"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${ALCEDO_MAIN_ICONSET_DIR}"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 16 16 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_16x16.png"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 32 32 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_16x16@2x.png"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 32 32 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_32x32.png"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 64 64 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_32x32@2x.png"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 128 128 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_128x128.png"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 256 256 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_128x128@2x.png"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 256 256 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_256x256.png"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 512 512 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_256x256@2x.png"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 512 512 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_512x512.png"
+            COMMAND ${ALCEDO_SIPS_EXECUTABLE} -z 1024 1024 "${ALCEDO_MAIN_ICON_PNG}" --out "${ALCEDO_MAIN_ICONSET_DIR}/icon_512x512@2x.png"
+            COMMAND ${ALCEDO_ICONUTIL_EXECUTABLE} -c icns "${ALCEDO_MAIN_ICONSET_DIR}" -o "${ALCEDO_MAIN_ICON_ICNS}"
+            DEPENDS "${ALCEDO_MAIN_ICON_PNG}"
+            COMMENT "Generating macOS app icon from ${ALCEDO_MAIN_ICON_PNG}"
+            VERBATIM
+        )
+    endif()
 
     add_custom_target(AlcedoStudioMainIcon DEPENDS "${ALCEDO_MAIN_ICON_ICNS}")
     add_dependencies(alcedo_main AlcedoStudioMainIcon)
-    set_source_files_properties("${ALCEDO_MAIN_ICON_ICNS}" PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+    set_source_files_properties("${ALCEDO_MAIN_ICON_ICNS}" PROPERTIES
+        MACOSX_PACKAGE_LOCATION "Resources"
+    )
     target_sources(alcedo_main PRIVATE "${ALCEDO_MAIN_ICON_ICNS}")
-    set_target_properties(alcedo_main PROPERTIES MACOSX_BUNDLE_ICON_FILE "alcedo_icon.icns")
+    # CFBundleIconFile — Finder, Dock, and Launchpad use this for the .app.
+    set_target_properties(alcedo_main PROPERTIES
+        MACOSX_BUNDLE_ICON_FILE "alcedo_icon.icns"
+    )
 endif()
 
 if(WIN32)
@@ -554,6 +585,8 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/ProjectLaunchController.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ShellSignals.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AppDialogs.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/FolderImportConfirmDialog.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorCloseConfirmDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ExportQueueState.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AlbumExportDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentTransferDialog.qml"
@@ -567,7 +600,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/IconActionButton.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SlidingIconNav.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/CollapsibleSection.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/ActivateModelDialog.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/SegmentedCardSwitcher.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SemanticGenerationSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AiProviderSettingsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/SeveritySegmentedSlider.qml"
@@ -581,10 +614,13 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/GlobalSearchDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/StatsCard.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/StarRatingFilter.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AppContextMenu.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AppMenuItem.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/AppMenuSeparator.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ImageContextMenu.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ThumbnailGridView.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/BackgroundTaskBar.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/BackgroundTaskPopover.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/BackgroundTasksDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/WorkspaceHost.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/LibraryWorkspace.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWorkspace.qml"
@@ -592,8 +628,11 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorSaveRecoveryBar.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorAdjustmentTransferActions.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorFilmstrip.qml"
-    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryVersionsRail.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorFilmstripThumbnailCard.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorWorkspaceRail.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryTransactionsPanel.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryTransactionEntry.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorHistoryCommitGraphNode.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorVersionsPanel.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/EditorMergeChoiceButton.qml"
@@ -624,16 +663,101 @@ foreach(ALCEDO_MAIN_QML_FILE IN LISTS ALCEDO_MAIN_QML_FILES ALCEDO_MAIN_QML_RESO
     )
 endforeach()
 
-qt_add_qml_module(alcedo_main
+add_library(AlcedoMainQml STATIC
+    "${ALCEDO_SRC_ROOT}/config/resource.qrc"
+)
+target_include_directories(AlcedoMainQml PUBLIC "${ALCEDO_INCLUDE_ROOT}")
+target_link_libraries(AlcedoMainQml
+    PUBLIC
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickDialogs2
+        Qt6::QuickEffects
+        Qt6::Svg
+)
+
+set(QT_QML_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+qt_add_qml_module(AlcedoMainQml
     URI Alcedo.Main
     VERSION 1.0
     ${ALCEDO_MAIN_QML_MODULE_OPTIONS}
     QML_FILES ${ALCEDO_MAIN_QML_FILES}
     RESOURCES ${ALCEDO_MAIN_QML_RESOURCES}
 )
-set_target_properties(alcedo_main PROPERTIES
+set_target_properties(AlcedoMainQml PROPERTIES
     QT_QMLCACHEGEN_ARGUMENTS "--only-bytecode"
+    QT_QML_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/Alcedo/Main"
 )
+
+if(COMMAND qt_finalize_target)
+    qt_finalize_target(AlcedoMainQml)
+endif()
+
+target_link_libraries(alcedo_main PRIVATE AlcedoMainQml AlcedoMainQmlplugin)
+
+set(ALCEDO_TEST_HOST_SOURCES
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/main.cpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/probe_json.cpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/probe_json.hpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/probe_item_tree.cpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/probe_item_tree.hpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/probe_input_injector.cpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/probe_input_injector.hpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/probe_property_wait.cpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/probe_property_wait.hpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/test_probe.cpp"
+    "${ALCEDO_UI_ROOT}/alcedo_studio_test_host/test_probe.hpp"
+    "${ALCEDO_UI_SHELL_ROOT}/application_module_qml_types.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/application_module_qml_types.hpp"
+    "${ALCEDO_UI_SHELL_ROOT}/app_theme.cpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/app_theme.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/i18n.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/ui/alcedo_main/language_manager.hpp"
+    "${ALCEDO_INCLUDE_ROOT}/utils/cuda/cuda_driver_requirements.hpp"
+)
+add_executable(alcedo_studio_test_host ${ALCEDO_TEST_HOST_SOURCES})
+set_target_properties(alcedo_studio_test_host PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${ALCEDO_BINARY_ROOT}"
+)
+target_include_directories(alcedo_studio_test_host
+    PRIVATE
+        "${ALCEDO_INCLUDE_ROOT}"
+        "${ALCEDO_UI_ROOT}/alcedo_studio_test_host"
+        "${ALCEDO_UI_SHELL_ROOT}"
+        "${ALCEDO_UI_SHELL_ROOT}/album_backend"
+)
+target_link_libraries(alcedo_studio_test_host
+    PRIVATE
+        AlbumBackendLib
+        AlcedoMainQml
+        AlcedoMainQmlplugin
+        UiLocalization
+        Qt6::Quick
+        Qt6::Qml
+        Qt6::QuickControls2
+        Qt6::QuickDialogs2
+        Qt6::Widgets
+        Qt6::Network
+        Qt6::Svg
+        Qt6::QuickEffects
+)
+if(WIN32 AND ALCEDO_OPENCL_ENABLED)
+    target_link_libraries(alcedo_studio_test_host PRIVATE OpenGL::GL)
+endif()
+alcedo_copy_linked_runtime_dlls(alcedo_studio_test_host)
+if(COMMAND qt_finalize_target)
+    qt_finalize_target(alcedo_studio_test_host)
+elseif(COMMAND qt_finalize_executable)
+    qt_finalize_executable(alcedo_studio_test_host)
+endif()
+if(COMMAND qt_import_qml_plugins)
+    qt_import_qml_plugins(alcedo_main)
+    qt_import_qml_plugins(alcedo_studio_test_host)
+endif()
+
 if(APPLE)
     set_target_properties(alcedo_main PROPERTIES
         MACOSX_BUNDLE ${ALCEDO_MACOS_BUNDLE}
@@ -783,6 +907,22 @@ if(APPLE AND ALCEDO_METAL_ENABLED AND ALCEDO_METAL_RUNTIME_LIBS)
         set(_alcedo_metallib_runtime_dir "$<TARGET_FILE_DIR:alcedo_main>/metallib")
     endif()
 
+    # Ensure every packaged metallib is built before POST_BUILD copy, even when
+    # an intermediate static lib is not linked into a particular configuration.
+    add_dependencies(alcedo_main
+        MetalUtilsShaders
+        MetalGeometryUtilsShaders
+        LensCalibOpMetalShaders
+        EditPipelineMetalShaders
+        ScopeAnalyzerMetalShaders
+        MetalToLinearRefShaders
+        MetalDebayerRcdShaders
+        MetalHighlightReconstructShaders
+        MetalXTransInterpolateShaders
+        MetalCvtRefSpaceShaders
+        MetalDemosaicNetIoShaders
+    )
+
     add_custom_command(TARGET alcedo_main POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${_alcedo_metallib_runtime_dir}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -792,6 +932,29 @@ if(APPLE AND ALCEDO_METAL_ENABLED AND ALCEDO_METAL_RUNTIME_LIBS)
         VERBATIM
     )
 endif()
+
+# Ship DemosaicNet weights next to the executable for build-tree and installed
+# bundles. Runtime resolves config/models/{bayer,xtrans}.safetensors relative
+# to the executable (see Metal/OpenCL/CUDA demosaicnet caches).
+set(_alcedo_demosaicnet_model_src_dir "${ALCEDO_SRC_ROOT}/config/models")
+set(_alcedo_demosaicnet_model_files
+    "${_alcedo_demosaicnet_model_src_dir}/bayer.safetensors"
+    "${_alcedo_demosaicnet_model_src_dir}/xtrans.safetensors"
+)
+if(APPLE AND ALCEDO_MACOS_BUNDLE)
+    set(_alcedo_demosaicnet_model_dest_dir
+        "$<TARGET_BUNDLE_CONTENT_DIR:alcedo_main>/MacOS/config/models")
+else()
+    set(_alcedo_demosaicnet_model_dest_dir "$<TARGET_FILE_DIR:alcedo_main>/config/models")
+endif()
+add_custom_command(TARGET alcedo_main POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${_alcedo_demosaicnet_model_dest_dir}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${_alcedo_demosaicnet_model_files}
+        "${_alcedo_demosaicnet_model_dest_dir}"
+    COMMAND_EXPAND_LISTS
+    VERBATIM
+)
 
 if(WIN32 AND TARGET alcedo_lensfun)
     add_custom_command(TARGET alcedo_main POST_BUILD

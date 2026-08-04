@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import QtQuick.Window
 
 // Bottom filmstrip dock for EditorWorkspace.
 // Phase 7C: the editor filmstrip reuses the library thumbnail model while
@@ -11,11 +12,29 @@ Item {
     objectName: "editorFilmstrip"
 
     property var theme: null
+    property var host: null
     property var editorSession: null
     // InteractionPolicyController is the authoritative save-checkpoint gate.
     property var interactionPolicy: null
+    property var selectedImagesById: ({})
     property bool collapsed: editorSession ? editorSession.filmstripCollapsed : false
-    property real expandedHeight: editorSession ? editorSession.filmstripExpandedHeight : 128
+    // Minimum scale = current default dock proportion; live max = 50% of window.
+    readonly property real minExpandedHeight: 128
+    readonly property real hostWindowHeight: {
+        const win = Window.window
+        return win && win.height > 0 ? Number(win.height) : 0
+    }
+    readonly property real maxExpandedHeight: hostWindowHeight > 0
+            ? Math.max(minExpandedHeight, hostWindowHeight * 0.5)
+            : 4096
+    // Drag uses a local override so QSettings is not written on every pixel.
+    property real _dragExpandedHeight: -1
+    readonly property real expandedHeight: {
+        if (_dragExpandedHeight > 0)
+            return _dragExpandedHeight
+        const persisted = editorSession ? Number(editorSession.filmstripExpandedHeight) : minExpandedHeight
+        return root.clampExpandedHeight(persisted)
+    }
     readonly property var libraryModule: (typeof appModules !== "undefined" && appModules)
                                          ? appModules.library : null
     readonly property var thumbnailModel: libraryModule ? libraryModule.thumbnailModel : null
@@ -26,18 +45,19 @@ Item {
                                         ? thumbnailModel.rowByElementId(selectedElementId) : -1
     readonly property int currentIndex: selectedIndex >= 0 ? selectedIndex + 1 : 0
     readonly property int totalCount: thumbnailModel ? Number(thumbnailModel.count) : 0
+    property string currentFileName: ""
     readonly property bool saving: editorSession
                                     && (String(editorSession.sessionState) === "Saving"
                                         || String(editorSession.sessionState) === "Switching")
     readonly property bool renderBusy: editorSession ? Boolean(editorSession.renderBusy) : false
-    readonly property bool discardEligible: editorSession
-                                             ? Boolean(editorSession.canDiscardCurrentCommit)
-                                             : false
+    // Fixed decode edge — resize only scales card geometry; never re-requests thumbs.
     readonly property int filmstripThumbnailMaxEdge: 512
     property int focusIndex: selectedIndex >= 0 ? selectedIndex : 0
+    property int selectionAnchorIndex: -1
     property bool _listHadFocus: false
     property bool _restoringScroll: false
-    property int contextMenuElementId: 0
+    property int _pendingRevealIndex: -1
+    property bool _heightResizing: false
     readonly property bool selectionEnabled: editorSession
                                              ? Boolean(editorSession.actions.canSelectImage)
                                              : (interactionPolicy
@@ -67,19 +87,79 @@ Item {
     readonly property color colCardSurface: appTheme.cardSurfaceColor
     readonly property color colCardBorder: appTheme.cardBorderColor
     readonly property int panelRadius: appTheme.panelRadius
+    readonly property real contentX: filmstripListView ? filmstripListView.contentX : 0
 
-    function storeFilmstripScroll() {
-        if (!_restoringScroll && editorSession && filmstripListView) {
-            editorSession.filmstripScrollPosition = Math.max(0, filmstripListView.contentX)
+    function clampExpandedHeight(value) {
+        const lo = minExpandedHeight
+        const hi = Math.max(lo, maxExpandedHeight)
+        return Math.max(lo, Math.min(hi, Number(value)))
+    }
+
+    function setExpandedHeightLive(value) {
+        _dragExpandedHeight = root.clampExpandedHeight(value)
+    }
+
+    function commitExpandedHeight() {
+        const value = root.clampExpandedHeight(
+            _dragExpandedHeight > 0 ? _dragExpandedHeight : expandedHeight)
+        _dragExpandedHeight = -1
+        if (editorSession && editorSession.filmstripExpandedHeight !== undefined) {
+            editorSession.filmstripExpandedHeight = value
         }
     }
 
-    function restoreFilmstripScroll() {
-        if (!editorSession || !filmstripListView) {
+    function storeFilmstripScroll() {
+        if (_restoringScroll || !filmstripListView) {
             return
         }
+        const value = Math.max(0, filmstripListView.contentX)
+        if (host && host.contentX !== undefined) {
+            host.contentX = value
+        }
+        if (editorSession && editorSession.filmstripScrollPosition !== undefined) {
+            editorSession.filmstripScrollPosition = value
+        }
+    }
+
+    function savedFilmstripScroll() {
+        if (host && host.contentX !== undefined) {
+            return Number(host.contentX || 0)
+        }
+        return editorSession && editorSession.filmstripScrollPosition !== undefined
+                ? Number(editorSession.filmstripScrollPosition || 0)
+                : 0
+    }
+
+    function refreshCurrentFileName() {
+        let name = ""
+        if (thumbnailModel && selectedIndex >= 0 && thumbnailModel.getItemAt) {
+            const row = thumbnailModel.getItemAt(selectedIndex)
+            if (row && row.fileName) {
+                name = String(row.fileName)
+            }
+        }
+        currentFileName = name
+    }
+
+    function restoreFilmstripScroll() {
+        if (!filmstripListView) {
+            return
+        }
+
+        if (_pendingRevealIndex >= 0) {
+            if (_pendingRevealIndex >= filmstripListView.count) {
+                return
+            }
+            _restoringScroll = true
+            filmstripListView.positionViewAtIndex(_pendingRevealIndex, ListView.Beginning)
+            _restoringScroll = false
+            _pendingRevealIndex = -1
+            root.storeFilmstripScroll()
+            return
+        }
+
         const maxX = Math.max(0, filmstripListView.contentWidth - filmstripListView.width)
-        const savedX = Math.max(0, Number(editorSession.filmstripScrollPosition || 0))
+        const savedX = Math.max(0, root.savedFilmstripScroll())
         _restoringScroll = true
         filmstripListView.contentX = Math.min(savedX, maxX)
         _restoringScroll = false
@@ -87,6 +167,194 @@ Item {
 
     function scheduleScrollRestore() {
         scrollRestoreTimer.restart()
+    }
+
+    function revealIndexAtBeginning(index) {
+        const target = Number(index)
+        if (target < 0 || target >= totalCount) {
+            return
+        }
+        selectionAnchorIndex = target
+        _pendingRevealIndex = target
+        scheduleScrollRestore()
+    }
+
+    function applyFilmstripScrollTarget() {
+        if (!host || !thumbnailModel || host.filmstripScrollTargetElementId === undefined) {
+            return false
+        }
+        const elementId = Number(host.filmstripScrollTargetElementId || 0)
+        if (elementId <= 0) {
+            return false
+        }
+
+        let index = Number(host.filmstripScrollTargetIndex)
+        if (index < 0 && thumbnailModel.rowByElementId) {
+            index = thumbnailModel.rowByElementId(elementId)
+        }
+        if (index < 0 || index >= totalCount) {
+            return false
+        }
+
+        root.revealIndexAtBeginning(index)
+        if (host.clearFilmstripScrollTarget) {
+            host.clearFilmstripScrollTarget(elementId)
+        }
+        return true
+    }
+
+    function notifyImageInteraction(item, index) {
+        if (!item || !host) {
+            return
+        }
+        if (host.setFocusedImage) {
+            host.setFocusedImage(item)
+        }
+        if (host.requestLibraryScrollToElement) {
+            host.requestLibraryScrollToElement(Number(item.elementId), index)
+        }
+    }
+
+    function keyForElement(elementId) {
+        return String(Number(elementId))
+    }
+
+    function isImageSelected(elementId) {
+        return Object.prototype.hasOwnProperty.call(
+            selectedImagesById || ({}), keyForElement(elementId))
+    }
+
+    function selectionItemForIndex(index) {
+        if (!thumbnailModel || index < 0 || index >= totalCount) {
+            return null
+        }
+        const row = thumbnailModel.getItemAt(index)
+        if (!row || Number(row.elementId) <= 0 || Number(row.imageId) <= 0) {
+            return null
+        }
+        return {
+            elementId: Number(row.elementId),
+            fileId: Number(row.fileId || row.elementId),
+            imageId: Number(row.imageId),
+            folderId: Number(row.folderId || 0),
+            scopeType: row.scopeType ? String(row.scopeType) : "",
+            fileName: row.fileName ? row.fileName : qsTr("(unnamed)"),
+            rating: Number(row.rating || 0),
+            isHdr: row.isHdr === true
+        }
+    }
+
+    function selectionItemsForRange(firstIndex, lastIndex) {
+        const first = Math.min(firstIndex, lastIndex)
+        const last = Math.max(firstIndex, lastIndex)
+        let rows = []
+        if (thumbnailModel && thumbnailModel.getItemsInRange) {
+            rows = thumbnailModel.getItemsInRange(first, last)
+        } else {
+            for (let index = first; index <= last; ++index) {
+                const item = root.selectionItemForIndex(index)
+                if (item) {
+                    rows.push(item)
+                }
+            }
+        }
+        const items = []
+        for (let i = 0; i < rows.length; ++i) {
+            const row = rows[i]
+            if (!row || Number(row.elementId) <= 0 || Number(row.imageId) <= 0) {
+                continue
+            }
+            items.push({
+                elementId: Number(row.elementId),
+                fileId: Number(row.fileId || row.elementId),
+                imageId: Number(row.imageId),
+                folderId: Number(row.folderId || 0),
+                scopeType: row.scopeType ? String(row.scopeType) : "",
+                fileName: row.fileName ? row.fileName : qsTr("(unnamed)"),
+                rating: Number(row.rating || 0),
+                isHdr: row.isHdr === true
+            })
+        }
+        return items
+    }
+
+    function updateSelectionAnchor(index) {
+        if (index >= 0) {
+            selectionAnchorIndex = index
+        }
+    }
+
+    function selectRangeToIndex(index, additive) {
+        if (!selectionEnabled || index < 0) {
+            return
+        }
+        const anchor = selectionAnchorIndex >= 0 ? selectionAnchorIndex : index
+        if (libraryModule && libraryModule.LoadThumbnailsThroughIndex) {
+            libraryModule.LoadThumbnailsThroughIndex(Math.max(anchor, index))
+        }
+        const rangeItems = root.selectionItemsForRange(anchor, index)
+        if (additive) {
+            root.replaceSelection(Object.values(selectedImagesById || ({})).concat(rangeItems))
+        } else {
+            root.replaceSelection(rangeItems)
+        }
+        updateSelectionAnchor(index)
+    }
+
+    function handleIndexSelection(index, modifiers, activate) {
+        if (!selectionEnabled || index < 0 || index >= totalCount) {
+            return
+        }
+        const item = root.selectionItemForIndex(index)
+        if (!item) {
+            return
+        }
+
+        focusCurrentIndex(index)
+        filmstripListView.forceActiveFocus()
+        const shift = (modifiers & Qt.ShiftModifier) !== 0
+        const control = (modifiers & Qt.ControlModifier) !== 0
+        if (shift) {
+            root.selectRangeToIndex(index, control)
+        } else if (control) {
+            root.imageSelectionChanged(item.elementId, item.imageId, item.fileName,
+                                       item.isHdr === true, !root.isImageSelected(item.elementId))
+            root.updateSelectionAnchor(index)
+        } else {
+            root.replaceSelection([item])
+            root.updateSelectionAnchor(index)
+        }
+
+        if (activate) {
+            root.activateImage(index)
+        } else {
+            // Selection from this filmstrip must not move contentX. Only
+            // cross-view requests (Library → applyFilmstripScrollTarget) may
+            // scroll the strip so the peer can find the new image.
+            root.notifyImageInteraction(item, index)
+        }
+    }
+
+    function selectAllImages() {
+        if (!selectionEnabled) {
+            return
+        }
+        if (host && host.selectAllCurrentAlbum) {
+            host.selectAllCurrentAlbum()
+            return
+        }
+        const total = thumbnailModel
+                ? Number(thumbnailModel.totalCount || totalCount) : 0
+        if (total <= 0) {
+            root.replaceSelection([])
+            selectionAnchorIndex = -1
+            return
+        }
+        if (libraryModule && libraryModule.LoadThumbnailsThroughIndex) {
+            libraryModule.LoadThumbnailsThroughIndex(total - 1)
+        }
+        root.replaceSelection(root.selectionItemsForRange(0, total - 1))
+        selectionAnchorIndex = 0
     }
 
     function restoreFocusAfterFold() {
@@ -105,13 +373,12 @@ Item {
         focusIndex = Math.max(0, Math.min(totalCount - 1, index))
     }
 
-    function moveFocus(delta) {
+    function moveFocus(delta, modifiers) {
         if (totalCount <= 0) {
             return
         }
-        focusCurrentIndex(focusIndex + delta)
-        filmstripListView.forceActiveFocus()
-        filmstripListView.positionViewAtIndex(focusIndex, ListView.Contain)
+        const nextIndex = Math.max(0, Math.min(totalCount - 1, focusIndex + delta))
+        root.handleIndexSelection(nextIndex, modifiers || 0, false)
     }
 
     function activateFocused() {
@@ -131,6 +398,11 @@ Item {
     onCollapsedChanged: {
         if (collapsed) {
             _listHadFocus = filmstripListView ? filmstripListView.activeFocus : false
+            // Drop any in-flight resize so collapse geometry stays at handle height.
+            if (_heightResizing || _dragExpandedHeight > 0) {
+                commitExpandedHeight()
+                _heightResizing = false
+            }
         }
         _foldDuration = collapsed ? appTheme.motionFoldCloseMs : appTheme.motionFoldOpenMs
         if (!foldManualDrive) {
@@ -138,24 +410,43 @@ Item {
         }
         focusRestoreTimer.restart()
     }
+    onMaxExpandedHeightChanged: {
+        if (_heightResizing)
+            return
+        if (editorSession && editorSession.filmstripExpandedHeight !== undefined) {
+            const clamped = root.clampExpandedHeight(editorSession.filmstripExpandedHeight)
+            if (Math.abs(clamped - Number(editorSession.filmstripExpandedHeight)) > 0.5) {
+                editorSession.filmstripExpandedHeight = clamped
+            }
+        }
+    }
     onSelectedIndexChanged: {
+        // Update focus/label only. Do not scroll: open/selection from this
+        // strip (or keyboard) must leave contentX alone. Library-originated
+        // reveals go through applyFilmstripScrollTarget instead.
+        refreshCurrentFileName()
         if (selectedIndex >= 0) {
             focusIndex = selectedIndex
         }
-        scheduleScrollRestore()
     }
     onTotalCountChanged: {
+        refreshCurrentFileName()
         if (totalCount <= 0) {
             focusIndex = -1
         } else if (focusIndex < 0 || focusIndex >= totalCount) {
             focusIndex = Math.max(0, Math.min(totalCount - 1, selectedIndex))
         }
+        applyFilmstripScrollTarget()
         scheduleScrollRestore()
     }
     Component.onCompleted: {
         // Snap to the persisted collapse state on load (no open animation).
         dockExpandProgress = collapsed ? 0 : 1
         _motionArmed = true
+        refreshCurrentFileName()
+        // Prefer an explicit Library reveal target; otherwise the list restores
+        // the saved contentX (no jump to selected as leftmost).
+        applyFilmstripScrollTarget()
     }
     Behavior on dockExpandProgress {
         enabled: root._motionArmed && !root.foldManualDrive
@@ -179,10 +470,34 @@ Item {
         onTriggered: root.restoreFocusAfterFold()
     }
 
+    Connections {
+        target: root.host
+        ignoreUnknownSignals: true
+        function onFilmstripScrollRequestIdChanged() {
+            root.applyFilmstripScrollTarget()
+        }
+    }
+
+    Connections {
+        target: root.thumbnailModel
+        ignoreUnknownSignals: true
+        function onCountChanged() {
+            root.refreshCurrentFileName()
+            root.applyFilmstripScrollTarget()
+            root.scheduleScrollRestore()
+        }
+        function onDataChanged() { root.refreshCurrentFileName() }
+        function onModelReset() { root.refreshCurrentFileName() }
+    }
+
     signal expandRequested()
     signal collapseRequested()
     signal toggleRequested()
     signal imageActivated(int index)
+    signal imageSelectionChanged(int elementId, int imageId, string fileName, bool isHdr,
+                                 bool selected)
+    signal replaceSelection(var items)
+    signal contextMenuRequested(var item, real sceneX, real sceneY)
 
     function activateImage(index) {
         if (!selectionEnabled || !thumbnailModel || index < 0 || index >= totalCount) {
@@ -194,31 +509,43 @@ Item {
         }
         focusCurrentIndex(index)
         filmstripListView.forceActiveFocus()
+        root.notifyImageInteraction(root.selectionItemForIndex(index), index)
         if (workspaceRouter && workspaceRouter.openEditor) {
             workspaceRouter.openEditor(Number(row.elementId), Number(row.imageId))
         }
         root.imageActivated(index)
     }
 
-    function openContextMenu(index) {
+    // The filmstrip shares the Main-level image context menu with the Library
+    // grid: this component only resolves the clicked row into a menu item and
+    // forwards the request; all actions (rating, copy/paste, delete, albums,
+    // Discard on the current image) are assembled and wired by Main.
+    function contextMenuItemForIndex(index) {
         if (!thumbnailModel || index < 0 || index >= totalCount) {
-            return
+            return null
         }
         const row = thumbnailModel.getItemAt(index)
-        if (!row || Number(row.elementId) !== selectedElementId) {
-            return
+        if (!row || !row.elementId || Number(row.elementId) <= 0 || Number(row.imageId) <= 0) {
+            return null
         }
-        contextMenuElementId = Number(row.elementId)
-        filmstripMenu.open()
+        return {
+            elementId: Number(row.elementId),
+            fileId: Number(row.fileId || row.elementId),
+            imageId: Number(row.imageId),
+            folderId: Number(row.folderId || 0),
+            scopeType: row.scopeType ? String(row.scopeType) : "",
+            fileName: row.fileName ? row.fileName : qsTr("(unnamed)"),
+            rating: Number(row.rating),
+            isHdr: row.isHdr === true
+        }
     }
 
-    function discardCurrentCommit() {
-        if (contextMenuElementId !== selectedElementId || !discardEligible || !editorSession) {
+    function requestContextMenuForIndex(index, sceneX, sceneY) {
+        const item = contextMenuItemForIndex(index)
+        if (!item) {
             return
         }
-        if (editorSession.Discard) {
-            editorSession.Discard()
-        }
+        root.contextMenuRequested(item, sceneX, sceneY)
     }
 
     // Layout.preferredHeight binds to dockHeight so collapse releases vertical space
@@ -249,8 +576,14 @@ Item {
     }
 
     Rectangle {
+        id: filmstripShell
+        objectName: "editorFilmstripShell"
         anchors.fill: parent
+        // Stable panel silhouette — always all four corners at panelRadius.
+        // Do not couple radius to window active/focus; that looked like a bug
+        // (corners only visible while the app is unfocused).
         radius: root.panelRadius
+        antialiasing: true
         color: root.colCardSurface
         border.width: 1
         border.color: root.colCardBorder
@@ -258,6 +591,8 @@ Item {
 
         // Persistent focusable handle — remains keyboard- and pointer-accessible
         // when the dock is collapsed so the released height returns to the viewport.
+        // When expanded, vertical drag on this row resizes the dock; click still
+        // toggles collapse (drag threshold separates the two gestures).
         Item {
             id: collapseHandle
             objectName: "editorFilmstripHandle"
@@ -269,8 +604,9 @@ Item {
             activeFocusOnTab: true
             Accessible.role: Accessible.Button
             Accessible.name: root.collapsed ? qsTr("Expand filmstrip") : qsTr("Collapse filmstrip")
-            Accessible.description: qsTr("Image %1 of %2").arg(Math.max(0, root.currentIndex))
-                                                         .arg(Math.max(0, root.totalCount))
+            Accessible.description: root.currentFileName.length > 0
+                                    ? qsTr("Editing %1").arg(root.currentFileName)
+                                    : qsTr("No image selected")
             Accessible.onPressAction: root.toggleCollapsed()
 
             Keys.onPressed: function(event) {
@@ -288,7 +624,10 @@ Item {
             }
 
             Rectangle {
+                objectName: "editorFilmstripHandleFocusFill"
                 anchors.fill: parent
+                radius: root.panelRadius
+                antialiasing: true
                 color: handleMouse.containsMouse || collapseHandle.activeFocus
                        ? root.colHover
                        : "transparent"
@@ -338,7 +677,9 @@ Item {
                         if (root.totalCount <= 0) {
                             return qsTr("No images in filmstrip")
                         }
-                        return qsTr("%1 / %2").arg(Math.max(1, root.currentIndex)).arg(root.totalCount)
+                        return root.currentFileName.length > 0
+                                ? root.currentFileName
+                                : qsTr("Image %1").arg(Math.max(1, root.currentIndex))
                     }
                     color: root.colText
                     font.pixelSize: appTheme.fontSizeBody
@@ -360,10 +701,49 @@ Item {
 
             MouseArea {
                 id: handleMouse
+                objectName: "editorFilmstripResizeHandle"
                 anchors.fill: parent
                 hoverEnabled: true
-                cursorShape: Qt.PointingHandCursor
-                onClicked: root.toggleCollapsed()
+                preventStealing: true
+                cursorShape: root.collapsed
+                             ? Qt.PointingHandCursor
+                             : (root._heightResizing ? Qt.SizeVerCursor : Qt.SizeVerCursor)
+                property real pressGlobalY: 0
+                property real pressExpandedHeight: 0
+                readonly property real dragThreshold: 4
+
+                onPressed: function(mouse) {
+                    pressGlobalY = mapToGlobal(mouse.x, mouse.y).y
+                    pressExpandedHeight = root.expandedHeight
+                    root._heightResizing = false
+                }
+                onPositionChanged: function(mouse) {
+                    if (!pressed || root.collapsed)
+                        return
+                    const globalY = mapToGlobal(mouse.x, mouse.y).y
+                    const delta = pressGlobalY - globalY  // drag up ⇒ taller dock
+                    if (!root._heightResizing && Math.abs(delta) >= dragThreshold) {
+                        root._heightResizing = true
+                    }
+                    if (root._heightResizing) {
+                        root.setExpandedHeightLive(pressExpandedHeight + delta)
+                    }
+                }
+                onReleased: function(mouse) {
+                    if (root._heightResizing) {
+                        root.commitExpandedHeight()
+                        root._heightResizing = false
+                        return
+                    }
+                    root._heightResizing = false
+                    root.toggleCollapsed()
+                }
+                onCanceled: function() {
+                    if (root._heightResizing) {
+                        root.commitExpandedHeight()
+                    }
+                    root._heightResizing = false
+                }
             }
         }
 
@@ -416,20 +796,39 @@ Item {
                 onWidthChanged: root.scheduleScrollRestore()
                 onCountChanged: root.scheduleScrollRestore()
 
+                WheelHandler {
+                    id: filmstripWheelHandler
+                    target: null
+                    onWheel: function(wheel) {
+                        const delta = wheel.pixelDelta.x !== 0 ? wheel.pixelDelta.x
+                                : (wheel.angleDelta.x !== 0 ? wheel.angleDelta.x
+                                   : (wheel.pixelDelta.y !== 0
+                                      ? wheel.pixelDelta.y : wheel.angleDelta.y))
+                        const maxX = Math.max(0, filmstripListView.contentWidth
+                                                 - filmstripListView.width)
+                        filmstripListView.contentX = Math.max(
+                            0, Math.min(maxX, filmstripListView.contentX - delta))
+                        root.storeFilmstripScroll()
+                        wheel.accepted = true
+                    }
+                }
+
                 Keys.onPressed: function(event) {
-                    if (event.key === Qt.Key_Left) {
-                        root.moveFocus(-1)
+                    if (event.key === Qt.Key_A
+                            && (event.modifiers & Qt.ControlModifier)) {
+                        root.selectAllImages()
+                        event.accepted = true
+                    } else if (event.key === Qt.Key_Left) {
+                        root.moveFocus(-1, event.modifiers)
                         event.accepted = true
                     } else if (event.key === Qt.Key_Right) {
-                        root.moveFocus(1)
+                        root.moveFocus(1, event.modifiers)
                         event.accepted = true
                     } else if (event.key === Qt.Key_Home) {
-                        root.focusCurrentIndex(0)
-                        filmstripListView.positionViewAtIndex(root.focusIndex, ListView.Contain)
+                        root.handleIndexSelection(0, event.modifiers, false)
                         event.accepted = true
                     } else if (event.key === Qt.Key_End) {
-                        root.focusCurrentIndex(root.totalCount - 1)
-                        filmstripListView.positionViewAtIndex(root.focusIndex, ListView.Contain)
+                        root.handleIndexSelection(root.totalCount - 1, event.modifiers, false)
                         event.accepted = true
                     } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
                                || event.key === Qt.Key_Space) {
@@ -460,7 +859,10 @@ Item {
                     property int pinnedImageId: 0
                     property int pinnedMaxEdge: 0
 
-                    readonly property bool isSelected: Number(elementId) === root.selectedElementId
+                    readonly property bool isCurrentImage: Number(elementId) === root.selectedElementId
+                    readonly property bool isLibrarySelected: root.isImageSelected(elementId)
+                    readonly property bool isSelected: isCurrentImage || isLibrarySelected
+                    property int displayRating: 0
                     readonly property bool hasFocusFrame: root.focusIndex === index
                                                                && filmstripListView.activeFocus
                     readonly property bool thumbnailReady: liveThumbUrl.length > 0
@@ -474,16 +876,17 @@ Item {
 
                     height: ListView.view ? ListView.view.height : 1
                     readonly property real fileNameLabelHeight: appTheme.lineHeightCaption
-                                                                  + appTheme.spaceXs
                     readonly property real thumbnailAreaHeight: Math.max(
-                        1, height - fileNameLabelHeight - appTheme.spaceXs * 3)
-                    width: Math.max(appTheme.spaceXl * 6, thumbnailAreaHeight * 1.55)
+                        1, height - fileNameLabelHeight - appTheme.spaceXs * 2)
+                    width: Math.max(appTheme.spaceXl * 7, thumbnailAreaHeight * 1.55)
                     Accessible.role: Accessible.ListItem
                     Accessible.name: fileName.length > 0 ? fileName
                                                          : qsTr("Image %1").arg(index + 1)
-                    Accessible.description: isSelected
-                                            ? qsTr("Current image")
-                                            : qsTr("Open image")
+                    Accessible.description: (isCurrentImage
+                                             ? qsTr("Current image")
+                                             : (isLibrarySelected ? qsTr("Selected image")
+                                                                   : qsTr("Open image")))
+                                            + qsTr(" | Rating %1/5").arg(displayRating)
 
                     function releasePinnedThumbnail() {
                         if (pinnedElementId !== 0 && pinnedImageId !== 0 && root.libraryModule) {
@@ -493,6 +896,13 @@ Item {
                         pinnedElementId = 0
                         pinnedImageId = 0
                         pinnedMaxEdge = 0
+                    }
+
+                    function refreshRating() {
+                        const row = root.thumbnailModel && root.thumbnailModel.getItemAt
+                                ? root.thumbnailModel.getItemAt(index) : null
+                        const value = row && row.rating !== undefined ? Number(row.rating) : 0
+                        displayRating = value > 0 ? Math.min(5, Math.round(value)) : 0
                     }
 
                     function bindThumbnailLifetime() {
@@ -522,167 +932,56 @@ Item {
                     onThumbLoadingChanged: liveThumbLoading = thumbLoading
                     onThumbMissingSourceChanged: liveThumbMissingSource = thumbMissingSource
                     onThumbErrorTextChanged: liveThumbErrorText = thumbErrorText
-                    Component.onCompleted: bindThumbnailLifetime()
-                    onElementIdChanged: bindThumbnailLifetime()
-                    onImageIdChanged: bindThumbnailLifetime()
+                    Component.onCompleted: {
+                        bindThumbnailLifetime()
+                        refreshRating()
+                    }
+                    onElementIdChanged: {
+                        bindThumbnailLifetime()
+                        refreshRating()
+                    }
+                    onImageIdChanged: {
+                        bindThumbnailLifetime()
+                        refreshRating()
+                    }
                     Component.onDestruction: releaseThumbnailBinding()
 
-                    Rectangle {
-                        id: tile
-                        objectName: "editorFilmstripTileSurface"
+                    EditorFilmstripThumbnailCard {
+                        id: thumbnailCard
                         anchors.fill: parent
-                        radius: appTheme.controlRadiusSmall
-                        color: thumbnailDelegate.isSelected
-                               ? appTheme.editorListSelectedFillColor
-                               : (thumbnailMouse.containsMouse
-                                  ? appTheme.buttonHoveredFillColor : appTheme.cardSurfaceColor)
-                        border.width: thumbnailDelegate.isSelected ? 2 : 1
-                        border.color: thumbnailDelegate.isSelected
-                                     ? appTheme.editorListSelectedInkColor : appTheme.cardBorderColor
+                        fileName: thumbnailDelegate.fileName
+                        imageIndex: thumbnailDelegate.index
+                        liveThumbUrl: thumbnailDelegate.liveThumbUrl
+                        liveThumbLoading: thumbnailDelegate.liveThumbLoading
+                        thumbnailReady: thumbnailDelegate.thumbnailReady
+                        thumbnailProblemState: thumbnailDelegate.thumbnailProblemState
+                        thumbnailProblemText: thumbnailDelegate.thumbnailProblemText
+                        selected: thumbnailDelegate.isSelected
+                        hovered: thumbnailMouse.containsMouse
+                        hasFocusFrame: thumbnailDelegate.hasFocusFrame
+                        saving: root.saving
+                        renderBusy: root.renderBusy
+                        displayRating: thumbnailDelegate.displayRating
+                        thumbnailMaxEdge: root.filmstripThumbnailMaxEdge
+                    }
 
-                        Column {
-                            id: tileContent
-                            anchors.fill: parent
-                            anchors.margins: appTheme.spaceXs
-                            spacing: appTheme.spaceXs
-
-                            Rectangle {
-                                id: thumbnailFrame
-                                objectName: "editorFilmstripThumbnailFrame"
-                                width: parent.width
-                                height: thumbnailDelegate.thumbnailAreaHeight
-                                radius: appTheme.controlRadiusSmall
-                                color: appTheme.bgBaseColor
-                                border.width: 1
-                                border.color: thumbnailDelegate.isSelected
-                                             ? appTheme.editorListSelectedInkColor
-                                             : appTheme.dividerColor
-
-                                Image {
-                                    id: thumbnailImage
-                                    anchors.fill: parent
-                                    anchors.margins: appTheme.spaceXs
-                                    source: thumbnailDelegate.liveThumbUrl
-                                    sourceSize.width: root.filmstripThumbnailMaxEdge
-                                    sourceSize.height: root.filmstripThumbnailMaxEdge
-                                    asynchronous: true
-                                    fillMode: Image.PreserveAspectFit
-                                    visible: thumbnailDelegate.thumbnailReady
-                                }
-
-                                BusyIndicator {
-                                    anchors.centerIn: parent
-                                    width: appTheme.iconOpticalSize
-                                    height: appTheme.iconOpticalSize
-                                    visible: thumbnailDelegate.liveThumbLoading
-                                    running: visible
-                                }
-
-                                Label {
-                                    anchors.centerIn: parent
-                                    width: Math.max(1, parent.width - appTheme.spaceLg)
-                                    text: thumbnailDelegate.thumbnailProblemState
-                                          ? thumbnailDelegate.thumbnailProblemText
-                                          : qsTr("No thumbnail")
-                                    visible: !thumbnailDelegate.thumbnailReady
-                                             && !thumbnailDelegate.liveThumbLoading
-                                    color: thumbnailDelegate.thumbnailProblemState
-                                           ? appTheme.dangerColor : appTheme.textMutedColor
-                                    font.pixelSize: appTheme.fontSizeCaption
-                                    horizontalAlignment: Text.AlignHCenter
-                                    wrapMode: Text.WordWrap
-                                    maximumLineCount: 2
-                                    elide: Text.ElideRight
-                                }
-
-                                Row {
-                                    anchors.left: parent.left
-                                    anchors.top: parent.top
-                                    anchors.margins: appTheme.spaceSm
-                                    spacing: appTheme.spaceXs
-                                    visible: thumbnailDelegate.isSelected
-                                             && (root.saving || root.renderBusy)
-
-                                    Rectangle {
-                                        objectName: "editorFilmstripSavingBadge"
-                                        visible: root.saving
-                                        width: savingLabel.implicitWidth + appTheme.spaceSm
-                                        height: savingLabel.implicitHeight + appTheme.spaceXs
-                                        radius: appTheme.badgeRadius
-                                        color: appTheme.editorListSelectedInkColor
-                                        Label {
-                                            id: savingLabel
-                                            anchors.centerIn: parent
-                                            text: qsTr("Saving")
-                                            color: appTheme.editorListSelectedFillColor
-                                            font.pixelSize: appTheme.fontSizeCaption
-                                            font.weight: appTheme.fontWeightStrong
-                                        }
-                                    }
-
-                                    Rectangle {
-                                        objectName: "editorFilmstripRenderBadge"
-                                        visible: root.renderBusy
-                                        width: renderLabel.implicitWidth + appTheme.spaceSm
-                                        height: renderLabel.implicitHeight + appTheme.spaceXs
-                                        radius: appTheme.badgeRadius
-                                        color: appTheme.editorListSelectedInkColor
-                                        Label {
-                                            id: renderLabel
-                                            anchors.centerIn: parent
-                                            text: qsTr("Rendering")
-                                            color: appTheme.editorListSelectedFillColor
-                                            font.pixelSize: appTheme.fontSizeCaption
-                                            font.weight: appTheme.fontWeightStrong
-                                        }
-                                    }
-                                }
-                            }
-
-                            Label {
-                                id: fileNameLabel
-                                objectName: "editorFilmstripFileNameLabel"
-                                width: parent.width
-                                height: thumbnailDelegate.fileNameLabelHeight
-                                text: thumbnailDelegate.fileName.length > 0
-                                      ? thumbnailDelegate.fileName
-                                      : qsTr("Image %1").arg(thumbnailDelegate.index + 1)
-                                color: thumbnailDelegate.isSelected
-                                       ? appTheme.editorListSelectedInkColor
-                                       : appTheme.textMutedColor
-                                font.pixelSize: appTheme.fontSizeCaption
-                                font.weight: thumbnailDelegate.isSelected
-                                             ? appTheme.fontWeightStrong
-                                             : appTheme.fontWeightRegular
-                                horizontalAlignment: Text.AlignHCenter
-                                verticalAlignment: Text.AlignVCenter
-                                elide: Text.ElideMiddle
-                            }
-                        }
-
-                        Rectangle {
-                            anchors.fill: parent
-                            radius: appTheme.controlRadiusSmall
-                            color: "transparent"
-                            border.width: 2
-                            border.color: thumbnailDelegate.isSelected
-                                         ? appTheme.editorListSelectedInkColor
-                                         : appTheme.editorListSelectedFillColor
-                            visible: thumbnailDelegate.hasFocusFrame
-                        }
-
-                        MouseArea {
-                            id: thumbnailMouse
-                            anchors.fill: parent
-                            acceptedButtons: Qt.LeftButton | Qt.RightButton
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: function(mouse) {
-                                if (mouse.button === Qt.LeftButton) {
-                                    root.activateImage(thumbnailDelegate.index)
-                                } else if (mouse.button === Qt.RightButton) {
-                                    root.openContextMenu(thumbnailDelegate.index)
-                                }
+                    MouseArea {
+                        id: thumbnailMouse
+                        anchors.fill: parent
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: function(mouse) {
+                            if (mouse.button === Qt.LeftButton) {
+                                const hasSelectionModifier = (mouse.modifiers
+                                                               & (Qt.ShiftModifier
+                                                                  | Qt.ControlModifier)) !== 0
+                                root.handleIndexSelection(thumbnailDelegate.index,
+                                                          mouse.modifiers,
+                                                          !hasSelectionModifier)
+                            } else if (mouse.button === Qt.RightButton) {
+                                const p = thumbnailMouse.mapToItem(null, mouse.x, mouse.y)
+                                root.requestContextMenuForIndex(thumbnailDelegate.index, p.x, p.y)
                             }
                         }
                     }
@@ -700,20 +999,22 @@ Item {
                             }
                         }
                     }
+
+                    Connections {
+                        target: root.thumbnailModel
+                        ignoreUnknownSignals: true
+                        function onDataChanged(topLeft, bottomRight) {
+                            if (!topLeft || !bottomRight
+                                    || (topLeft.row <= thumbnailDelegate.index
+                                        && thumbnailDelegate.index <= bottomRight.row)) {
+                                thumbnailDelegate.refreshRating()
+                            }
+                        }
+                        function onModelReset() { thumbnailDelegate.refreshRating() }
+                    }
                 }
             }
         }
 
-        Menu {
-            id: filmstripMenu
-            objectName: "editorFilmstripContextMenu"
-            MenuItem {
-                objectName: "editorFilmstripDiscardAction"
-                text: qsTr("Discard")
-                enabled: root.contextMenuElementId === root.selectedElementId
-                         && root.discardEligible
-                onTriggered: root.discardCurrentCommit()
-            }
-        }
     }
 }

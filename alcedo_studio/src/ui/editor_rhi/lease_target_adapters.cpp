@@ -7,6 +7,7 @@
 #include <QtGui/rhi/qrhi.h>
 #include <QtGui/rhi/qrhi_platform.h>
 
+#include <QDebug>
 #include <algorithm>
 #include <memory>
 #include <utility>
@@ -520,8 +521,15 @@ auto ProducerAcquireWritable(const WritableTargetLease& lease) -> bool {
       return false;
     }
     auto* image = reinterpret_cast<cl_mem>(lease.writable_resource);
-    return clEnqueueAcquireGLObjects(OpenClContext::Instance().Queue(), 1, &image, 0, nullptr,
-                                     nullptr) == CL_SUCCESS;
+    const cl_int error =
+        clEnqueueAcquireGLObjects(OpenClContext::Instance().Queue(), 1, &image, 0, nullptr, nullptr);
+    if (error != CL_SUCCESS) {
+      qWarning("ProducerAcquireWritable: clEnqueueAcquireGLObjects failed: %d "
+               "(OpenCL/GL share group mismatch?)",
+               static_cast<int>(error));
+      return false;
+    }
+    return true;
 #else
     return false;
 #endif

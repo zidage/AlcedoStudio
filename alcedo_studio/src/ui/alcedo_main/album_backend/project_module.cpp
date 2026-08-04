@@ -100,6 +100,7 @@ class ThumbnailModelLoadingGuard {
     QT_TRANSLATE_NOOP("Alcedo", "Compiling OpenCL kernels. This happens every launch."),
     QT_TRANSLATE_NOOP("Alcedo", "OpenCL acceleration is ready."),
     QT_TRANSLATE_NOOP("Alcedo", "OpenCL preparation failed: %1"),
+    QT_TRANSLATE_NOOP("Alcedo", "The accelerator change will apply after Alcedo restarts."),
 };
 
 auto AcceleratorPreferenceKey(AcceleratorBackendPreference preference) -> QString {
@@ -224,6 +225,21 @@ ProjectModule::ProjectModule(QObject* parent)
 
 void ProjectModule::SetLifecycleHooks(ProjectLifecycleHooks hooks) {
   lifecycle_hooks_ = std::move(hooks);
+}
+
+void ProjectModule::SetRuntimeAcceleratorPreference(
+    const AcceleratorBackendPreference preference) {
+  // The RHI backend selected by main.cpp is the process-wide source of truth.
+  // QSettings is only the next-launch request and may differ when a command-line
+  // override is active or when settings changed during the previous process.
+  accelerator_preference_  = preference;
+  accelerator_backend_key_ = AcceleratorPreferenceKey(preference);
+  // OpenCL kernel registration/compile used to run when the user selected the
+  // backend (pre PR #72). Backend is now locked before QApplication; kick the
+  // same warm-up here so programs are registered and compiled even if QML never
+  // reaches ProjectLaunchController.start(). The QML timer remains a no-op once
+  // accelerator_prepare_started_ is set.
+  StartOpenClPreparationIfNeeded();
 }
 
 void ProjectModule::SetServiceMessage(const i18n::LocalizedText& message) {
@@ -398,25 +414,21 @@ void ProjectModule::RebuildAcceleratorOptions() {
     options.push_back(AcceleratorOption(AcceleratorBackendPreference::Metal));
   }
 #else
-  if (cuda_backend_available_) {
-    options.push_back(AcceleratorOption(AcceleratorBackendPreference::CUDA));
-  }
+  // OpenCL is the Windows baseline (the only viable backend on non-NVIDIA
+  // machines); it is the first option and the first-launch default. CUDA is
+  // offered only when the runtime actually supports it, and only as a
+  // user-selected alternative.
   if (opencl_backend_available_) {
     options.push_back(AcceleratorOption(AcceleratorBackendPreference::OpenCL));
+  }
+  if (cuda_backend_available_) {
+    options.push_back(AcceleratorOption(AcceleratorBackendPreference::CUDA));
   }
 #endif
   if (options.isEmpty()) {
     options.push_back(AcceleratorOption(AcceleratorBackendPreference::CPU));
   }
   accelerator_options_ = options;
-}
-
-
-void ProjectModule::ApplyAcceleratorPreferenceToServices() {
-  const auto& psvc = handler_.pipeline_service();
-  if (psvc) {
-    psvc->SetAcceleratorBackendPreference(accelerator_preference_);
-  }
 }
 
 
@@ -433,25 +445,20 @@ bool ProjectModule::SetAcceleratorBackend(const QString& backendKey) {
     return false;
   }
 
-  try {
-    (void)ResolveAcceleratorBackend(*preference);
-    accelerator_preference_  = *preference;
-    accelerator_backend_key_ = normalized_key;
-    QSettings{}.setValue(QLatin1String(kAcceleratorBackendKey), accelerator_backend_key_);
-    ApplyAcceleratorPreferenceToServices();
-    StartOpenClPreparationIfNeeded();
-  } catch (const std::exception& e) {
-    SetServiceMessageForCurrentProject(
-        PL_TEXT("Failed to switch accelerator backend: %1", QString::fromUtf8(e.what())));
-    return false;
-  } catch (...) {
-    SetServiceMessageForCurrentProject(PL_TEXT("Failed to switch accelerator backend."));
-    return false;
+  if (normalized_key == accelerator_backend_key_) {
+    return true;
   }
 
+  // The graphics API and frame presentation backend were selected before the
+  // first QQuickWindow. Keep the active pipeline unchanged and persist only the
+  // next-launch preference; main.cpp consumes it on the next process start.
+  accelerator_backend_key_ = normalized_key;
+  QSettings settings;
+  settings.setValue(QLatin1String(kAcceleratorBackendKey), accelerator_backend_key_);
+  settings.sync();
   emit AcceleratorStateChanged();
   SetServiceMessageForCurrentProject(
-      PL_TEXT("Using %1 acceleration.", AcceleratorPreferenceLabel(accelerator_preference_)));
+      PL_TEXT("The accelerator change will apply after Alcedo restarts."));
   return true;
 }
 

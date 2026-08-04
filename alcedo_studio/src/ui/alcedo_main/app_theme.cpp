@@ -18,6 +18,13 @@
 #include <QWidget>
 #include <algorithm>
 
+// resource.qrc lives in the AlcedoMainQml static library. MSVC drops that
+// object unless something in the final executable references
+// qInitResources_resource(). Q_INIT_RESOURCE must sit outside any namespace.
+static void InitAlcedoBundledResources() {
+  Q_INIT_RESOURCE(resource);
+}
+
 namespace alcedo::ui {
 namespace {
 
@@ -61,80 +68,86 @@ auto BrandBlueBase() -> QColor { return QColor(104, 146, 185); }
 auto BrandBlueHover() -> QColor { return QColor(118, 160, 199); }
 auto BrandBluePressed() -> QColor { return QColor(86, 127, 165); }
 
-// Theme 0: Alcedo — layered matte surfaces, saffron/steel/teal CTA palette
+// Theme 0: Alcedo — deep matte surfaces with tight steps (little lift between
+// canvas / panel / base / deep). The previous ladder peaked at bg_deep 0x2E and
+// read as a pale gray slab on modals and wells; keep the same roles but compress
+// the whole stack toward graphite.
 auto MakePuerhTheme() -> ThemeColors {
   return ThemeColors{
       .tone_gold            = BrandBlueBase(),           // primary brand blue / CTA
       .tone_wine            = QColor(0x8A, 0x3A, 0x3A),  // danger red
       .tone_steel           = BrandBluePressed(),        // pressed / deeper blue
-      .tone_graphite        = QColor(0x11, 0x11, 0x11),
+      .tone_graphite        = QColor(0x0C, 0x0C, 0x0C),
       .tone_mist            = QColor(0xE0, 0xE0, 0xE0),
-      .bg_canvas            = QColor(0x12, 0x12, 0x12),  // floor — outermost surface
-      .bg_deep              = QColor(0x2E, 0x2E, 0x2E),  // floating modals / popovers
-      .bg_base              = QColor(0x24, 0x24, 0x24),  // interactive panels, inputs
-      .bg_panel             = QColor(0x1A, 0x1A, 0x1A),  // primary workspaces
+      // Surface ladder (dark → lifted), ~4 RGB steps each:
+      // canvas 0x0C → panel 0x11 → base 0x16 → deep/hover 0x1A
+      .bg_canvas            = QColor(0x0C, 0x0C, 0x0C),  // floor — outermost surface
+      .bg_deep              = QColor(0x1A, 0x1A, 0x1A),  // floating modals / popovers
+      .bg_base              = QColor(0x16, 0x16, 0x16),  // sunken tracks, inputs
+      .bg_panel             = QColor(0x11, 0x11, 0x11),  // primary workspaces / cards
       .text                 = QColor(0xE0, 0xE0, 0xE0),
-      .text_muted           = QColor(0x88, 0x88, 0x88),
+      .text_muted           = QColor(0x7A, 0x7A, 0x7A),
       .icon                 = QColor(0xFF, 0xFF, 0xFF),
       .accent_secondary     = BrandBlueHover(),  // hover / secondary blue
       .danger_tint          = QColor(138, 58, 58, 80),
       .selected_tint        = QColor(104, 146, 185, 46),
-      .hover                = QColor(0x26, 0x25, 0x25),
-      .divider              = QColor(200, 200, 200, 16),
-      .glass_panel          = QColor(0x1A, 0x1A, 0x1A),
-      .glass_stroke         = QColor(200, 200, 200, 20),
-      .overlay              = QColor(0x0A, 0x0A, 0x0A, 0xC8),
+      .hover                = QColor(0x1A, 0x1A, 0x1A),
+      .divider              = QColor(200, 200, 200, 14),
+      .glass_panel          = QColor(0x11, 0x11, 0x11),
+      .glass_stroke         = QColor(200, 200, 200, 16),
+      .overlay              = QColor(0x06, 0x06, 0x06, 0xD0),
       .panel_radius         = 10,
       // Phase 4D: opaque button fills. Idle matches the card/panel surface so
-      // icon chrome is quiet; hover/pressed/selected step to the hover well so
-      // selected actions read on both the card shell and the lighter base
-      // inset track (scope / adjustment nav).
-      .button_idle_fill     = QColor(0x1A, 0x1A, 0x1A),  // = bg_panel
-      .button_hovered_fill  = QColor(0x20, 0x20, 0x20),  // between panel and base
-      .button_pressed_fill  = QColor(0x26, 0x25, 0x25),  // = hover (engaged)
-      .button_selected_fill = QColor(0x26, 0x25, 0x25),  // = pressed / hover
-      .disabled_surface     = QColor(0x16, 0x16, 0x16),  // Blend(bg_panel, bg_canvas, 0.45)
+      // icon chrome is quiet; hover/pressed/selected step only a few values so
+      // engaged chrome stays in the same deep family as the shell.
+      .button_idle_fill     = QColor(0x11, 0x11, 0x11),  // = bg_panel
+      .button_hovered_fill  = QColor(0x16, 0x16, 0x16),  // = bg_base
+      .button_pressed_fill  = QColor(0x1A, 0x1A, 0x1A),  // = hover / bg_deep
+      .button_selected_fill = QColor(0x1A, 0x1A, 0x1A),  // = pressed / hover
+      .disabled_surface     = QColor(0x0E, 0x0E, 0x0E),  // between panel and canvas
       .merge_current_color      = QColor(0xF8, 0x51, 0x49),  // Git red
-      .merge_current_fill_color = QColor(0x3A, 0x1D, 0x1F),  // opaque red well
+      .merge_current_fill_color = QColor(0x2A, 0x14, 0x16),  // deeper red well
       .merge_incoming_color      = QColor(0x3F, 0xB9, 0x50),  // Git green
-      .merge_incoming_fill_color = QColor(0x1B, 0x39, 0x23),  // opaque green well
+      .merge_incoming_fill_color = QColor(0x14, 0x28, 0x1A),  // deeper green well
   };
 }
 
-// Theme 1: Classic (previous neutral theme)
+// Theme 1: Classic — same deep, tight surface stack as Alcedo, gold accent.
+// Panel remains the raised card tone (slightly above base); hover no longer
+// climbs to mid-gray 0x2B.
 auto MakeClassicTheme() -> ThemeColors {
   return ThemeColors{
       .tone_gold            = QColor(0xFC, 0xC7, 0x04),
       .tone_wine            = QColor(0x8A, 0x05, 0x26),
-      .tone_steel           = QColor(0x4A, 0x4A, 0x4A),
-      .tone_graphite        = QColor(0x1A, 0x1A, 0x1A),
+      .tone_steel           = QColor(0x3A, 0x3A, 0x3A),
+      .tone_graphite        = QColor(0x0C, 0x0C, 0x0C),
       .tone_mist            = QColor(0xE6, 0xE6, 0xE6),
-      .bg_canvas            = QColor(0x0E, 0x0E, 0x0E),
-      .bg_deep              = QColor(0x11, 0x11, 0x11),
-      .bg_base              = QColor(0x17, 0x17, 0x17),
-      .bg_panel             = QColor(0x22, 0x22, 0x22),
+      .bg_canvas            = QColor(0x0A, 0x0A, 0x0A),
+      .bg_deep              = QColor(0x12, 0x12, 0x12),
+      .bg_base              = QColor(0x12, 0x12, 0x12),
+      .bg_panel             = QColor(0x16, 0x16, 0x16),
       .text                 = QColor(0xD0, 0xD0, 0xD0),
-      .text_muted           = QColor(0x88, 0x88, 0x88),
+      .text_muted           = QColor(0x7A, 0x7A, 0x7A),
       .icon                 = QColor(0xFF, 0xFF, 0xFF),
       .accent_secondary     = QColor(0xFC, 0xC7, 0x04),
       .danger_tint          = QColor(138, 5, 38, 82),
       .selected_tint        = QColor(252, 199, 4, 46),
-      .hover                = QColor(0x2B, 0x2B, 0x2B),
-      .divider              = QColor(230, 230, 230, 20),
-      .glass_panel          = QColor(0x22, 0x22, 0x22),
-      .glass_stroke         = QColor(230, 230, 230, 28),
-      .overlay              = QColor(0x12, 0x12, 0x12, 0xC0),
+      .hover                = QColor(0x1A, 0x1A, 0x1A),
+      .divider              = QColor(230, 230, 230, 14),
+      .glass_panel          = QColor(0x16, 0x16, 0x16),
+      .glass_stroke         = QColor(230, 230, 230, 18),
+      .overlay              = QColor(0x06, 0x06, 0x06, 0xD0),
       .panel_radius         = 8,
       // Phase 4D: opaque button fills — idle = panel; engaged = hover well.
-      .button_idle_fill     = QColor(0x22, 0x22, 0x22),  // = bg_panel
-      .button_hovered_fill  = QColor(0x27, 0x27, 0x27),  // between panel and hover
-      .button_pressed_fill  = QColor(0x2B, 0x2B, 0x2B),  // = hover
-      .button_selected_fill = QColor(0x2B, 0x2B, 0x2B),  // = pressed / hover
-      .disabled_surface     = QColor(0x19, 0x19, 0x19),  // Blend(bg_panel, bg_canvas, 0.45)
+      .button_idle_fill     = QColor(0x16, 0x16, 0x16),  // = bg_panel
+      .button_hovered_fill  = QColor(0x1A, 0x1A, 0x1A),  // = hover
+      .button_pressed_fill  = QColor(0x1A, 0x1A, 0x1A),  // = hover
+      .button_selected_fill = QColor(0x1A, 0x1A, 0x1A),  // = pressed / hover
+      .disabled_surface     = QColor(0x0E, 0x0E, 0x0E),  // between panel and canvas
       .merge_current_color      = QColor(0xF8, 0x51, 0x49),  // Git red
-      .merge_current_fill_color = QColor(0x3A, 0x1D, 0x1F),  // opaque red well
+      .merge_current_fill_color = QColor(0x2A, 0x14, 0x16),  // deeper red well
       .merge_incoming_color      = QColor(0x3F, 0xB9, 0x50),  // Git green
-      .merge_incoming_fill_color = QColor(0x1B, 0x39, 0x23),  // opaque green well
+      .merge_incoming_fill_color = QColor(0x14, 0x28, 0x1A),  // deeper green well
   };
 }
 
@@ -337,6 +350,8 @@ void AppTheme::RegisterFonts() {
   if (FontsRegisteredFlag()) {
     return;
   }
+
+  InitAlcedoBundledResources();
 
   auto& families = FontState();
   families.ui_latin =
@@ -1030,6 +1045,9 @@ auto AppTheme::dangerColor() const -> QColor { return toneWine(); }
 auto AppTheme::dangerTintColor() const -> QColor {
   return GetTheme(current_theme_index_).danger_tint;
 }
+auto AppTheme::backgroundTaskFinishedColor() const -> QColor { return QColor(0x3F, 0xB9, 0x50); }
+auto AppTheme::backgroundTaskWorkingColor() const -> QColor { return QColor(0xD2, 0xA8, 0x3A); }
+auto AppTheme::backgroundTaskFailedColor() const -> QColor { return dangerColor(); }
 auto AppTheme::selectedTintColor() const -> QColor {
   return GetTheme(current_theme_index_).selected_tint;
 }
@@ -1078,6 +1096,7 @@ auto AppTheme::spaceXl() const -> int { return 20; }
 auto AppTheme::motionFoldOpenMs() const -> int { return 200; }
 auto AppTheme::motionFoldCloseMs() const -> int { return 160; }
 auto AppTheme::motionFadeMs() const -> int { return 120; }
+auto AppTheme::backgroundTaskAutoCollapseMs() const -> int { return 3000; }
 
 auto AppTheme::reduceMotion() const -> bool {
   if (!reduce_motion_loaded_) {

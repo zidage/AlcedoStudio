@@ -9,16 +9,18 @@ import QtQuick.Dialogs
 // helpers, semanticGeneration, pending* state aliases); the controllers and
 // state objects are passed in as properties. Dialog ids use the *Obj suffix
 // and are re-exported through friendly-name aliases so Main, ShellSignals, and
-// the BackgroundTaskBar can reach them via `appDialogs.<name>`.
+// shared workspace entry points can reach them via `appDialogs.<name>`.
 Item {
     id: root
     property var host: null
+    property bool automationMode: false
     property var imageActionsController: null
     property var selectionState: null
     property var exportQueueState: null
     property Item blurSource: null
 
     property alias importDialog: importDialogObj
+    property alias importFolderDialog: importFolderDialogObj
     property alias exportDialog: exportDialogObj
     property alias settingsDialog: settingsDialogObj
     property alias adjustmentTransferDialog: adjustmentTransferDialogObj
@@ -27,25 +29,48 @@ Item {
     property alias nikonHeRecoveryDialog: nikonHeRecoveryDialogObj
     property alias advancedContentAnalysisDialog: advancedContentAnalysisDialogObj
     property alias semanticGenerationDialog: semanticGenerationDialogObj
-    property alias activateModelDialog: activateModelDialogObj
     property alias deleteConfirmDialog: deleteConfirmDialogObj
+    property alias editorCloseConfirmDialog: editorCloseConfirmDialogObj
     property alias welcomeDialog: welcomeDialogObj
     property alias globalSearchDialog: globalSearchDialogObj
+    property alias backgroundTasksDialog: backgroundTasksDialogObj
 
     FileDialog {
         id: importDialogObj
         title: qsTr("Select Images")
         fileMode: FileDialog.OpenFiles
-        nameFilters: [
-            qsTr("RAW Images (*.raw *.dng *.nef *.cr2 *.cr3 *.arw *.rw2 *.raf *.3fr *.fff)"),
-            qsTr("All Files (*)")
-        ]
+        nameFilters: [qsTr("All Files (*)")]
         onAccepted: {
             const files = []
             for (let i = 0; i < selectedFiles.length; ++i) {
                 files.push(selectedFiles[i].toString())
             }
             appModules.importExport.StartImport(files)
+        }
+    }
+
+    FolderDialog {
+        id: importFolderDialogObj
+        title: qsTr("Select Folder to Import")
+        onAccepted: {
+            const folderUrl = selectedFolder.toString()
+            const files = appModules.importExport.CollectFolderFiles(folderUrl)
+            if (!files || files.length === 0) {
+                host.showSnackbar(qsTr("No files found in the selected folder."))
+                return
+            }
+            folderImportConfirmDialogObj.openWith(folderUrl, files)
+        }
+    }
+
+    FolderImportConfirmDialog {
+        id: folderImportConfirmDialogObj
+        parent: Overlay.overlay
+        theme: host
+        host: host
+        blurSource: root.blurSource
+        onConfirmed: function(filePaths) {
+            appModules.importExport.StartImport(filePaths)
         }
     }
 
@@ -140,11 +165,32 @@ Item {
         }
     }
 
+    // The editor filmstrip shares this menu; Discard appears only when the
+    // menu was opened from the filmstrip on the image currently loaded in the
+    // editor, and stays gated by the session's discard eligibility.
+    function filmstripDiscardActions() {
+        if (root.imageActionsController.menuOrigin !== "editor-filmstrip") {
+            return []
+        }
+        const session = appModules.editorSession
+        if (!session || session.hasImage !== true) {
+            return []
+        }
+        if (Number(host.pendingRatingTarget.elementId) !== Number(session.elementId)) {
+            return []
+        }
+        return [{
+            id: "discard-edit",
+            label: qsTr("Discard"),
+            enabled: session.canDiscardCurrentCommit === true
+        }]
+    }
+
     ImageContextMenu {
         id: imageContextMenuObj
         ratingEnabled: Number(host.pendingRatingTarget.imageId) > 0
         currentRating: Math.max(0, Math.min(5, Number(host.pendingRatingTarget.rating || 0)))
-        actions: [
+        actions: root.filmstripDiscardActions().concat([
             {
                 id: "copy-adjustments",
                 label: qsTr("Copy Adjustments"),
@@ -165,13 +211,20 @@ Item {
                 enabled: host.pendingDeleteTargets.length > 0
                           && appModules.interactionPolicy.canDeletePendingTargets
             }
-        ].concat(root.imageActionsController.albumTargetActions())
+        ]).concat(root.imageActionsController.albumTargetActions())
         onRatingRequested: function(rating) {
             imageContextMenuObj.close()
             root.imageActionsController.requestSetImageRating(rating)
         }
         onActionRequested: function(actionId) {
             imageContextMenuObj.close()
+            if (actionId === "discard-edit") {
+                if (appModules.editorSession
+                        && appModules.editorSession.canDiscardCurrentCommit === true) {
+                    appModules.editorSession.Discard()
+                }
+                return
+            }
             if (actionId === "copy-adjustments") {
                 root.imageActionsController.requestCopyAdjustments()
                 return
@@ -225,6 +278,17 @@ Item {
         }
     }
 
+    BackgroundTasksDialog {
+        id: backgroundTasksDialogObj
+        controller: appModules.backgroundTasks
+        blurSource: root.blurSource
+        cornerRadius: root.host ? root.host.windowCornerRadius : 0
+        onTaskDetailsRequested: function(task) {
+            if (task && task.kind === "imageAnalysis")
+                advancedContentAnalysisDialogObj.openTaskDetails(task)
+        }
+    }
+
     SemanticGenerationDialog {
         id: semanticGenerationDialogObj
         parent: Overlay.overlay
@@ -250,18 +314,6 @@ Item {
         onCancelRequested: host.semanticGeneration.CancelGeneration()
     }
 
-    ActivateModelDialog {
-        id: activateModelDialogObj
-        parent: Overlay.overlay
-        backgroundSource: root.blurSource
-        promptVisible: host.semanticGeneration.activatePromptVisible
-        onOpenSettingsRequested: {
-            host.semanticGeneration.DismissActivatePrompt()
-            root.openSettingsDialog(3) // 3 == "Local Content Recognition" (model install/activate)
-        }
-        onDismissed: host.semanticGeneration.DismissActivatePrompt()
-    }
-
     DeleteConfirmDialog {
         id: deleteConfirmDialogObj
         theme: root.host
@@ -271,16 +323,26 @@ Item {
         onConfirmed: root.imageActionsController.runDeleteTargets()
     }
 
+    EditorCloseConfirmDialog {
+        id: editorCloseConfirmDialogObj
+        parent: Overlay.overlay
+        theme: root.host
+        host: root.host
+        blurSource: root.blurSource
+        onSaveRequested: root.host.beginEditorCloseSave()
+        onDiscardRequested: root.host.beginEditorCloseDiscard()
+        onCancelled: root.host.cancelEditorCloseConfirm()
+    }
+
     WelcomeDialog {
         id: welcomeDialogObj
+        objectName: "welcomeDialog"
         z: 30
         blurSource: root.blurSource
         cornerRadius: host.windowCornerRadius
         recentProjects: appModules.project.recentProjects
         languageOptions: host.languageOptions
-        acceleratorOptions: appModules.project.acceleratorOptions
         currentLanguageIndex: host.languageIndexForCode(languageManager.currentLanguageCode)
-        currentAcceleratorBackend: appModules.project.acceleratorBackend
         acceleratorWarning: appModules.project.acceleratorWarning
         serviceMessage: appModules.project.serviceMessage
         headlineFontFamily: host.headlineFontFamily
@@ -305,11 +367,6 @@ Item {
         onExitRequested: Qt.quit()
         onLanguageRequested: function(languageCode) {
             languageManager.setLanguage(languageCode)
-        }
-        onAcceleratorRequested: function(backend) {
-            if (!appModules.project.SetAcceleratorBackend(backend)) {
-                host.showSnackbar(appModules.project.serviceMessage)
-            }
         }
         onAcceleratorWarningAcknowledged: appModules.project.AcknowledgeAcceleratorWarning()
         onRecentProjectRequested: function(projectPath) {
@@ -339,8 +396,15 @@ Item {
                || nikonHeRecoveryDialogObj.opened
                || semanticGenerationDialogObj.opened
                || advancedContentAnalysisDialogObj.opened
+               || backgroundTasksDialogObj.opened
                || deleteConfirmDialogObj.opened
+               || folderImportConfirmDialogObj.opened
+               || editorCloseConfirmDialogObj.opened
                || welcomeDialogObj.opened
+    }
+
+    function openEditorCloseConfirmDialog() {
+        editorCloseConfirmDialogObj.openForClose()
     }
 
     function openSettingsDialog(category) {
@@ -354,5 +418,9 @@ Item {
         if (targets.length <= 0) {
             host.showSnackbar(qsTr("Select at least one image to analyze."))
         }
+    }
+
+    function openBackgroundTasksDialog() {
+        backgroundTasksDialogObj.open()
     }
 }

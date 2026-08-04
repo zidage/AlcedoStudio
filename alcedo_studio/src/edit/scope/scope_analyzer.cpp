@@ -264,7 +264,7 @@ auto ReadScopeRenderSnapshot(const ScopeOutputSet& output) -> ScopeRenderSnapsho
   ScopeRenderSnapshot snapshot;
   snapshot.generation         = output.generation;
   snapshot.image_identity     = output.image_identity;
-  snapshot.image_generation   = output.image_generation;
+  snapshot.session_epoch   = output.session_epoch;
   snapshot.display_generation = output.display_generation;
 
 #ifdef HAVE_CUDA

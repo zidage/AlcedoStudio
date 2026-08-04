@@ -155,6 +155,23 @@ alcedo_duckdb_fts_extension="$(resolve_duckdb_extension fts ALCEDO_DUCKDB_FTS_EX
 export ALCEDO_DUCKDB_VSS_EXTENSION="$alcedo_duckdb_vss_extension"
 export ALCEDO_DUCKDB_FTS_EXTENSION="$alcedo_duckdb_fts_extension"
 
+# Fail fast before a long configure/build if Neural Engine weights are missing.
+demosaicnet_models_dir="${repo_root}/alcedo_studio/src/config/models"
+for model in bayer.safetensors xtrans.safetensors; do
+  model_path="${demosaicnet_models_dir}/${model}"
+  if [[ ! -f "$model_path" ]]; then
+    echo "Required DemosaicNet weight missing: ${model_path}" >&2
+    echo "  These must be present so packaged apps can demosaic without a source tree." >&2
+    exit 1
+  fi
+  model_size="$(wc -c <"$model_path" | tr -d ' ')"
+  if [[ "$model_size" -lt 10240 ]]; then
+    echo "DemosaicNet weight looks incomplete (${model_size} bytes): ${model_path}" >&2
+    echo "  Restore the real safetensors blob before packaging." >&2
+    exit 1
+  fi
+done
+
 echo "========================================"
 echo "  Alcedo Studio macOS Packager"
 echo "========================================"

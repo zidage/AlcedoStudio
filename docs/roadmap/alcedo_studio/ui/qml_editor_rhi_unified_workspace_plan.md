@@ -4,7 +4,7 @@ Date: 2026-07-16
 
 Primary roadmap owner: `alcedo_studio/src/ui/alcedo_main`
 
-Last revised: 2026-07-29 after completing Phase 7C editor filmstrip integration.
+Last revised: 2026-07-30 after completing Phase 9 macOS Metal and EDR integration.
 
 Affected areas:
 
@@ -16,7 +16,7 @@ Affected areas:
 - Windows CUDA/D3D11 and OpenCL/OpenGL interoperability
 - macOS Metal presentation and EDR configuration
 
-Status: Phase 7C complete; remaining roadmap phases are planned. Product and architecture
+Status: Phase 9 complete; Phase 10 remains planned. Product and architecture
 decisions were locked in a grill session on 2026-07-16. This is a replacement plan, not an
 incremental compatibility plan. The final product has one QML editor architecture, no editor
 dialog, no QWidget viewer, no editor stub, and no runtime fallback renderer.
@@ -3011,9 +3011,9 @@ Acceptance:
 - No lifecycle case relies on a timeout, polling loop, CPU fallback, or a later UI event to escape a
   blocked native-target wait.
 
-### Phase 9 - macOS Metal and existing EDR feasibility qualification
+### Phase 9 - macOS Metal and existing EDR feasibility qualification (complete)
 
-This phase is intentionally delayed until the macOS development environment is available, and is the
+This phase was executed once the macOS development environment became available and is the
 mandatory gate immediately before the final render-host/cutover phase.
 
 Deliverables:
@@ -3041,6 +3041,22 @@ Acceptance:
   in SDR.
 - No Metal resource lifetime, threaded scene graph, DPR, window, or EDR blocker remains.
 - The full macOS parity matrix passes. Phase 10 cannot start and production cannot cut over otherwise.
+
+Completion evidence (2026-07-30):
+
+- `EditorRhiHarness` now allocates, fills, imports, samples, and reads back a shared
+  `MTLTexture` on the Qt Quick Metal device. Direct presentation, resize churn, hide/show,
+  minimize/restore, renderer recreation, and queued shutdown cases pass on Apple Silicon with
+  zero pixel error for the stored float fixtures.
+- `EditorViewportItem` owns the whole-window display configuration boundary. It applies the
+  session ODT snapshot before the first frame, accepts the exact configuration repeated by Metal
+  frames, retries after screen and scene-graph changes, and restores SDR when the viewport hides,
+  detaches, or is destroyed.
+- The existing `ColorManager` system-API path is linked into the unified RHI viewport and targets
+  the top-level QQuickWindow `CAMetalLayer`. Native tests verify Rec.2020 PQ, Display P3 HLG,
+  EDR metadata, hierarchy lookup, and complete SDR metadata/color-space reset.
+- The unified application, session-controller display-state test, native color-management tests,
+  and Metal lifecycle harness build and pass under the macOS Debug preset.
 
 ### Phase 10 - Application-owned HDR render host and hard cutover
 

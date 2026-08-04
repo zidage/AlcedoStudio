@@ -26,8 +26,10 @@ class CPUPipelineExecutor : public PipelineExecutor {
   bool                                                                        enable_cache_  = true;
   std::array<PipelineStage, static_cast<int>(PipelineStageName::Stage_Count)> stages_;
 
-  // The executor state (render params, stage cache, decode mode) is mutable and not thread-safe.
-  // Serialize concurrent scheduler tasks that target the same executor instance.
+  // Sole ownership of the live pipeline for one frame of work: whoever holds
+  // this lock may configure, Apply (including present slot wait), or rebuild
+  // stages. Render holds it for the whole task; history waits for it. Do not
+  // introduce a second occupancy counter — that is the same ownership question.
   std::mutex                                                                  render_lock_;
 
   OperatorParams                                                              global_params_;
@@ -48,6 +50,7 @@ class CPUPipelineExecutor : public PipelineExecutor {
   std::vector<PipelineStage*>      exec_stages_;
   std::unique_ptr<PipelineStage>   merged_stages_;
   IFrameSink*                      frame_sink_      = nullptr;
+  FrameCompletionSubmission        bound_frame_submission_{};
 
   void                             ResetStages();
 
@@ -56,7 +59,7 @@ class CPUPipelineExecutor : public PipelineExecutor {
   void                             SetTemplateParams();
   void                             ResolveAcceleratorBackend();
   void                             ApplyAcceleratorBackendToStages();
-  void                             SyncRawDecodeBackendToAccelerator();
+  void                             ApplyRuntimeRawDecodeBackend();
   void                             SyncRawDecodeRuntimeControls();
 
  public:
@@ -102,8 +105,8 @@ class CPUPipelineExecutor : public PipelineExecutor {
   auto GetFrameSink() const -> IFrameSink* { return frame_sink_; }
 
   auto GetViewportRenderRegion() const -> std::optional<ViewportRenderRegion>;
-  void SetNextFramePresentationMode(FramePresentationMode mode) const;
-  void SetNextFramePreviewMetadata(const FramePreviewMetadata& metadata) const;
+  void BindFrameSubmission(const FramePreviewMetadata& metadata, FramePresentationMode mode);
+  [[nodiscard]] auto BoundFrameSubmission() const -> FrameCompletionSubmission;
 
   auto GetGlobalParams() -> OperatorParams& override { return global_params_; }
 
@@ -130,16 +133,26 @@ class CPUPipelineExecutor : public PipelineExecutor {
   void SetResizeDownsampleAlgorithm(ResizeDownsampleAlgorithm algorithm) override;
   void SetDecodeRes(DecodeRes res);
 
+  /// Snapshot of one-shot render parameters that must not leak across Apply calls.
+  struct OneShotRenderParamsSnapshot {
+    DecodeRes      decode_res_      = DecodeRes::FULL;
+    nlohmann::json render_params_   = {};
+    bool           force_cpu_output_ = false;
+    bool           enable_cache_     = true;
+  };
+
+  [[nodiscard]] auto CaptureOneShotRenderParams() const -> OneShotRenderParamsSnapshot;
+  void               RestoreOneShotRenderParams(const OneShotRenderParamsSnapshot& snapshot);
+
   void RegisterAllOperators();
   void ResetToCleanBaselineAdjustments();
 
   void InitDefaultPipeline();
 
   /**
-   * @brief Inject pre-extracted raw metadata into the pipeline.
-   *        Populates global params so that downstream operators (ColorTemp, LensCalib)
-   *        can resolve eagerly, and sets the pre-populated context on RawDecodeOp
-   *        so it skips re-extraction at decode time.
+   * @brief Install image-local raw metadata into the pipeline (transition path).
+   *        Prefer writing inherent RAW params into RawDecodeOp at import so that
+   *        reload and render no longer require a per-frame inject.
    */
   void InjectRawMetadata(const RawRuntimeColorContext& ctx);
 

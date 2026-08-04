@@ -258,8 +258,7 @@ auto SubmitFixtureFrame(EditorViewportItem* item, const HarnessFixtureImage& fix
   meta.frame_role = FrameRoleForLeaseLayer(layer);
   meta.preview_generation = preview;
   meta.presentation_request_id = preview;
-  sink->SetNextFramePreviewMetadata(meta);
-  sink->SetNextFramePresentationMode(alcedo::FramePresentationMode::FullFrame);
+  sink->BindFrameSubmission({meta, alcedo::FramePresentationMode::FullFrame});
   sink->EnsureSize(fixture.width, fixture.height);
 
   const auto domain = alcedo::editor_rhi::ActiveEditorBackend() == EditorBackend::OpenCl
@@ -270,7 +269,7 @@ auto SubmitFixtureFrame(EditorViewportItem* item, const HarnessFixtureImage& fix
     item->requestPresentUpdate();
     Log("SubmitFixtureFrame: map failed live=%d gen=%llu id=%llu consumer=%d",
         item->liveTargetCount(),
-        static_cast<unsigned long long>(item->imageGeneration()),
+        static_cast<unsigned long long>(item->sessionEpoch()),
         static_cast<unsigned long long>(item->imageIdentity()),
         item->presentationAvailable() ? 1 : 0);
     return false;
@@ -303,7 +302,7 @@ auto SubmitFixtureFrame(EditorViewportItem* item, const HarnessFixtureImage& fix
         static_cast<unsigned long long>(preview));
     return false;
   }
-  sink->NotifyFrameReady();
+  sink->NotifyFrameReady({meta, alcedo::FramePresentationMode::FullFrame});
   return true;
 }
 
@@ -647,7 +646,7 @@ int main(int argc, char* argv[]) {
         ++continuous_ok;
         Log("EditorRhiHarness: production submit ok attempt=%d live=%d status=%s gen=%llu",
             submit_attempts, prod->liveTargetCount(), qPrintable(prod->statusText()),
-            static_cast<unsigned long long>(prod->lastPresentedImageGeneration()));
+            static_cast<unsigned long long>(prod->lastPresentedSessionEpoch()));
       }
       if (state.harness_case == HarnessCase::ProductionLeasePresentation && continuous_ok >= 1) {
         submit_timer->stop();
@@ -657,7 +656,7 @@ int main(int argc, char* argv[]) {
           Log("EditorRhiHarness: production check live=%d available=%d status=%s presented_gen=%llu",
               prod->liveTargetCount(), prod->presentationAvailable() ? 1 : 0,
               qPrintable(prod->statusText()),
-              static_cast<unsigned long long>(prod->lastPresentedImageGeneration()));
+              static_cast<unsigned long long>(prod->lastPresentedSessionEpoch()));
           // Lease path is successful when a completed frame was accepted and the
           // consumer remains available with a live pool. Presentation status is
           // preferred but not required if the render thread already held the frame.

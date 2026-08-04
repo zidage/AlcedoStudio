@@ -1,0 +1,102 @@
+name: editor_look_panels
+start: workspace_ready
+defaults:
+  expectTimeoutMs: 10000
+nodes:
+  workspace_ready:
+    op:
+      action: wait
+      target: workspaceHost
+      property: visible
+      eq: true
+    next:
+      - to: open_first_image
+        weight: 1
+  open_first_image:
+    op:
+      action: doubleClick
+      target: thumbnailGridView_firstCard
+    expect:
+      - target: editorWorkspace
+        property: visible
+        eq: true
+    next:
+      - to: wait_for_look_nav
+        weight: 1
+  wait_for_look_nav:
+    op:
+      action: wait
+      target: editorAdjustmentNav_look
+      property: enabled
+      eq: true
+      timeoutMs: 30000
+    next:
+      - to: open_look_panel
+        weight: 1
+  open_look_panel:
+    op:
+      action: click
+      target: editorAdjustmentNav_look
+    expect:
+      - target: editorAdjustmentPanel_look
+        property: visible
+        eq: true
+    next:
+      - to: focus_saturation
+        weight: 1
+  focus_saturation:
+    op:
+      action: click
+      target: lookSaturationSlider
+    next:
+      - to: increase_saturation
+        weight: 1
+  increase_saturation:
+    op:
+      # Qt.Key_Right; uses AdjustmentSlider's real keyboard edit path without
+      # batching live pointer updates inside one probe request.
+      action: key
+      key: 16777236
+    next:
+      - to: settle_saturation
+        weight: 1
+  settle_saturation:
+    op:
+      action: waitMs
+      ms: 750
+    next:
+      - to: focus_vibrance
+        weight: 1
+  focus_vibrance:
+    op:
+      action: click
+      target: lookVibranceSlider
+    next:
+      - to: decrease_vibrance
+        weight: 1
+  decrease_vibrance:
+    op:
+      # Qt.Key_Left.
+      action: key
+      key: 16777234
+    next:
+      - to: wait_for_library_nav
+        weight: 1
+  wait_for_library_nav:
+    op:
+      action: wait
+      target: libraryNavButton
+      property: enabled
+      eq: true
+      timeoutMs: 15000
+    next:
+      - to: back_to_library
+        weight: 1
+  back_to_library:
+    op:
+      action: click
+      target: libraryNavButton
+    expect:
+      - target: libraryWorkspace
+        property: visible
+        eq: true

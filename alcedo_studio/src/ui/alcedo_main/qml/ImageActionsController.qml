@@ -23,6 +23,10 @@ Item {
     property var pendingAdjustmentPasteTargets: []
     property var focusedImageTarget: ({})
     property var focusedImageInspection: ({ success: false, tiles: [] })
+    // Where the shared image menu was last opened from ("library" |
+    // "editor-filmstrip"). The editor filmstrip has no multi-selection surface,
+    // so its menu always targets exactly the clicked image.
+    property string menuOrigin: "library"
 
     // Push the focused image element id and the pending delete targets into the
     // interaction-policy controller so its cached Q_PROPERTYs (which the inspector
@@ -153,6 +157,17 @@ Item {
         selectionState.replaceSelectedImages(items)
     }
 
+    function singleTargetFor(item) {
+        return [{
+            elementId: Number(item.elementId),
+            fileId: Number(item.fileId || item.elementId),
+            imageId: Number(item.imageId),
+            folderId: Number(item.folderId || appModules.folders.currentFolderId),
+            scopeType: item.scopeType ? String(item.scopeType) : "",
+            fileName: item.fileName ? item.fileName : qsTr("(unnamed)")
+        }]
+    }
+
     function resolveDeleteTargets(clickedItem) {
         if (host.selectedCount > 0) {
             return Object.values(host.selectedImagesById)
@@ -160,14 +175,7 @@ Item {
         if (!clickedItem) {
             return []
         }
-        return [{
-            elementId: Number(clickedItem.elementId),
-            fileId: Number(clickedItem.fileId || clickedItem.elementId),
-            imageId: Number(clickedItem.imageId),
-            folderId: Number(clickedItem.folderId || appModules.folders.currentFolderId),
-            scopeType: clickedItem.scopeType ? String(clickedItem.scopeType) : "",
-            fileName: clickedItem.fileName ? clickedItem.fileName : qsTr("(unnamed)")
-        }]
+        return singleTargetFor(clickedItem)
     }
 
     function albumTargetActions() {
@@ -191,14 +199,17 @@ Item {
         return actions
     }
 
-    function openImageContextMenu(clickedItem, sceneX, sceneY) {
+    function openImageContextMenu(clickedItem, sceneX, sceneY, origin) {
         if (!host.backendInteractive) {
             return
         }
         if (!clickedItem) {
             return
         }
-        const targets = resolveDeleteTargets(clickedItem)
+        const fromFilmstrip = origin === "editor-filmstrip"
+        root.menuOrigin = fromFilmstrip ? "editor-filmstrip" : "library"
+        const targets = fromFilmstrip ? singleTargetFor(clickedItem)
+                                      : resolveDeleteTargets(clickedItem)
         if (!targets || targets.length === 0) {
             return
         }

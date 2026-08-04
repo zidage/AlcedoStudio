@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <opencv2/imgcodecs.hpp>
@@ -22,14 +23,14 @@
 #include <vector>
 
 #include "image/metadata.hpp"
+#include "utils/string/convert.hpp"
 
 namespace alcedo {
 namespace {
 OIIO_NAMESPACE_USING
 
 auto PathToUtf8(const std::filesystem::path& path) -> std::string {
-  auto u8 = path.u8string();
-  return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+  return conv::ToBytes(path.wstring());
 }
 
 auto RatingPercentFor(int rating) -> uint16_t {
@@ -300,27 +301,37 @@ void ApplyExportMetadataToOIIO(ImageSpec& spec,
   }
 
   const ExifDisplayMetaData& metadata = *export_metadata;
+  // Stamp both the Exif:* and bare names — JPEG writers across OIIO versions
+  // accept one or the other; the production path must not depend on Exiv2
+  // post-write (SEH on Windows MSVC).
   if (!metadata.make_.empty()) {
     spec.attribute("Exif:Make", metadata.make_);
+    spec.attribute("Make", metadata.make_);
   }
   if (!metadata.model_.empty()) {
     spec.attribute("Exif:Model", metadata.model_);
+    spec.attribute("Model", metadata.model_);
   }
   if (!metadata.lens_.empty()) {
     spec.attribute("Exif:LensModel", metadata.lens_);
+    spec.attribute("LensModel", metadata.lens_);
   }
   if (!metadata.lens_make_.empty()) {
     spec.attribute("Exif:LensMake", metadata.lens_make_);
+    spec.attribute("LensMake", metadata.lens_make_);
   }
   if (const auto exif_dt = ExifDateTimeString(metadata.date_time_str_); exif_dt.has_value()) {
     spec.attribute("Exif:DateTime", *exif_dt);
     spec.attribute("Exif:DateTimeOriginal", *exif_dt);
     spec.attribute("Exif:DateTimeDigitized", *exif_dt);
+    spec.attribute("DateTime", *exif_dt);
+    spec.attribute("DateTimeOriginal", *exif_dt);
   }
 
   const int normalized_rating = ExifDisplayMetaData::NormalizeRating(metadata.rating_);
   if (normalized_rating > 0) {
     spec.attribute("Exif:Rating", normalized_rating);
+    spec.attribute("Rating", normalized_rating);
     spec.attribute("Exif:RatingPercent", static_cast<int>(RatingPercentFor(normalized_rating)));
     spec.attribute("XMP:xmp:Rating", normalized_rating);
   }
@@ -493,6 +504,45 @@ auto WriteFileBytes(const std::filesystem::path& path, const std::vector<uint8_t
   return output.good();
 }
 
+/// Keep the file bytes alive for Exiv2 MemIo — path-based open is unreliable on
+/// Windows MSVC without a UTF-8 CRT code page, and can raise SEH instead of C++ exceptions.
+struct OwnedExivImage {
+  std::vector<uint8_t>    bytes;
+  Exiv2::Image::UniquePtr image;
+};
+
+auto OpenExivMem(const std::filesystem::path& path) -> OwnedExivImage {
+  OwnedExivImage owned;
+  owned.bytes = ReadFileBytes(path);
+  if (owned.bytes.empty()) {
+    return owned;
+  }
+  try {
+    owned.image = Exiv2::ImageFactory::open(owned.bytes.data(), owned.bytes.size());
+  } catch (...) {
+    owned.image.reset();
+  }
+  return owned;
+}
+
+auto PersistExivMem(OwnedExivImage& owned, const std::filesystem::path& path) -> bool {
+  if (!owned.image) {
+    return false;
+  }
+  owned.image->writeMetadata();
+  Exiv2::BasicIo& io = owned.image->io();
+  io.seek(0, Exiv2::BasicIo::beg);
+  const auto size = io.size();
+  if (size <= 0) {
+    return false;
+  }
+  std::vector<uint8_t> out(static_cast<size_t>(size));
+  if (io.read(out.data(), out.size()) != static_cast<size_t>(size)) {
+    return false;
+  }
+  return WriteFileBytes(path, out);
+}
+
 auto IsJpegBytes(const std::vector<uint8_t>& bytes) -> bool {
   return bytes.size() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xD8;
 }
@@ -506,27 +556,213 @@ auto IsExifApp1Segment(const std::vector<uint8_t>& bytes, size_t marker_pos,
          std::equal(std::begin(kExifPrefix), std::end(kExifPrefix), bytes.begin() + payload_pos);
 }
 
-auto BuildJpegExifPayload(const std::optional<ExifDisplayMetaData>& export_metadata)
+auto AppendU16LE(std::vector<uint8_t>& out, uint16_t value) -> void {
+  out.push_back(static_cast<uint8_t>(value & 0xFF));
+  out.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
+}
+
+auto AppendU32LE(std::vector<uint8_t>& out, uint32_t value) -> void {
+  out.push_back(static_cast<uint8_t>(value & 0xFF));
+  out.push_back(static_cast<uint8_t>((value >> 8) & 0xFF));
+  out.push_back(static_cast<uint8_t>((value >> 16) & 0xFF));
+  out.push_back(static_cast<uint8_t>((value >> 24) & 0xFF));
+}
+
+struct ExifIfdEntry {
+  uint16_t             tag   = 0;
+  uint16_t             type  = 0;  // 2=ASCII, 3=SHORT, 4=LONG, 5=RATIONAL
+  uint32_t             count = 1;
+  std::vector<uint8_t> inline_or_offset;  // 4-byte value/offset field contents when no overflow
+  std::vector<uint8_t> overflow;          // payload when larger than 4 bytes
+};
+
+auto MakeAsciiEntry(uint16_t tag, const std::string& text) -> ExifIfdEntry {
+  ExifIfdEntry entry;
+  entry.tag  = tag;
+  entry.type = 2;
+  std::vector<uint8_t> bytes(text.begin(), text.end());
+  bytes.push_back(0);
+  entry.count = static_cast<uint32_t>(bytes.size());
+  if (bytes.size() <= 4) {
+    entry.inline_or_offset = bytes;
+    entry.inline_or_offset.resize(4, 0);
+  } else {
+    entry.overflow = std::move(bytes);
+  }
+  return entry;
+}
+
+auto MakeShortEntry(uint16_t tag, uint16_t value) -> ExifIfdEntry {
+  ExifIfdEntry entry;
+  entry.tag   = tag;
+  entry.type  = 3;
+  entry.count = 1;
+  AppendU16LE(entry.inline_or_offset, value);
+  entry.inline_or_offset.resize(4, 0);
+  return entry;
+}
+
+auto MakeLongEntry(uint16_t tag, uint32_t value) -> ExifIfdEntry {
+  ExifIfdEntry entry;
+  entry.tag   = tag;
+  entry.type  = 4;
+  entry.count = 1;
+  AppendU32LE(entry.inline_or_offset, value);
+  return entry;
+}
+
+auto MakeRationalEntry(uint16_t tag, uint32_t numerator, uint32_t denominator) -> ExifIfdEntry {
+  ExifIfdEntry entry;
+  entry.tag   = tag;
+  entry.type  = 5;
+  entry.count = 1;
+  AppendU32LE(entry.overflow, numerator);
+  AppendU32LE(entry.overflow, denominator);
+  return entry;
+}
+
+auto EncodeIfd(std::vector<uint8_t>& tiff, const std::vector<ExifIfdEntry>& entries,
+               uint32_t next_ifd_offset) -> void {
+  AppendU16LE(tiff, static_cast<uint16_t>(entries.size()));
+  const size_t entries_pos = tiff.size();
+  tiff.resize(tiff.size() + entries.size() * 12u + 4u, 0);
+
+  for (size_t i = 0; i < entries.size(); ++i) {
+    const auto& entry = entries[i];
+    uint8_t*    slot  = tiff.data() + entries_pos + i * 12u;
+    slot[0]           = static_cast<uint8_t>(entry.tag & 0xFF);
+    slot[1]           = static_cast<uint8_t>((entry.tag >> 8) & 0xFF);
+    slot[2]           = static_cast<uint8_t>(entry.type & 0xFF);
+    slot[3]           = static_cast<uint8_t>((entry.type >> 8) & 0xFF);
+    slot[4]           = static_cast<uint8_t>(entry.count & 0xFF);
+    slot[5]           = static_cast<uint8_t>((entry.count >> 8) & 0xFF);
+    slot[6]           = static_cast<uint8_t>((entry.count >> 16) & 0xFF);
+    slot[7]           = static_cast<uint8_t>((entry.count >> 24) & 0xFF);
+
+    if (entry.overflow.empty()) {
+      for (size_t b = 0; b < entry.inline_or_offset.size() && b < 4; ++b) {
+        slot[8 + b] = entry.inline_or_offset[b];
+      }
+    } else {
+      const uint32_t offset = static_cast<uint32_t>(tiff.size());
+      slot[8]               = static_cast<uint8_t>(offset & 0xFF);
+      slot[9]               = static_cast<uint8_t>((offset >> 8) & 0xFF);
+      slot[10]              = static_cast<uint8_t>((offset >> 16) & 0xFF);
+      slot[11]              = static_cast<uint8_t>((offset >> 24) & 0xFF);
+      tiff.insert(tiff.end(), entry.overflow.begin(), entry.overflow.end());
+    }
+  }
+
+  uint8_t* next = tiff.data() + entries_pos + entries.size() * 12u;
+  next[0]       = static_cast<uint8_t>(next_ifd_offset & 0xFF);
+  next[1]       = static_cast<uint8_t>((next_ifd_offset >> 8) & 0xFF);
+  next[2]       = static_cast<uint8_t>((next_ifd_offset >> 16) & 0xFF);
+  next[3]       = static_cast<uint8_t>((next_ifd_offset >> 24) & 0xFF);
+}
+
+/// Build a JPEG APP1 Exif payload without Exiv2. Exiv2 encode/writeMetadata SEH
+/// on this Windows MSVC toolchain when given real camera metadata.
+auto BuildJpegExifPayloadNoExiv(const std::optional<ExifDisplayMetaData>& export_metadata)
     -> std::vector<uint8_t> {
-  try {
-    Exiv2::ExifData exif_data;
-    if (export_metadata.has_value() && HasMeaningfulExportMetadata(*export_metadata)) {
-      ApplyDisplayMetadataToExif(exif_data, *export_metadata);
-    }
-    if (exif_data.empty()) {
-      return {};
-    }
-
-    Exiv2::Blob      blob;
-    Exiv2::ExifParser::encode(blob, Exiv2::littleEndian, exif_data);
-
-    constexpr uint8_t kExifPrefix[] = {'E', 'x', 'i', 'f', 0, 0};
-    std::vector<uint8_t> payload(std::begin(kExifPrefix), std::end(kExifPrefix));
-    payload.insert(payload.end(), blob.begin(), blob.end());
-    return payload;
-  } catch (...) {
+  if (!export_metadata.has_value() || !HasMeaningfulExportMetadata(*export_metadata)) {
     return {};
   }
+  const auto& metadata = *export_metadata;
+
+  std::vector<ExifIfdEntry> exif_ifd;
+  if (const auto exif_dt = ExifDateTimeString(metadata.date_time_str_); exif_dt.has_value()) {
+    exif_ifd.push_back(MakeAsciiEntry(0x9003, *exif_dt));  // DateTimeOriginal
+    exif_ifd.push_back(MakeAsciiEntry(0x9004, *exif_dt));  // DateTimeDigitized
+  }
+  if (!metadata.lens_make_.empty()) {
+    exif_ifd.push_back(MakeAsciiEntry(0xA433, metadata.lens_make_));  // LensMake
+  }
+  if (!metadata.lens_.empty()) {
+    exif_ifd.push_back(MakeAsciiEntry(0xA434, metadata.lens_));  // LensModel
+  }
+  if (metadata.aperture_ > 0.0f) {
+    const auto rational = RationalFromFloat(metadata.aperture_, 100);
+    exif_ifd.push_back(MakeRationalEntry(0x829D, static_cast<uint32_t>(rational.first),
+                                         static_cast<uint32_t>(rational.second)));
+  }
+  if (metadata.focal_ > 0.0f) {
+    const auto rational = RationalFromFloat(metadata.focal_, 100);
+    exif_ifd.push_back(MakeRationalEntry(0x920A, static_cast<uint32_t>(rational.first),
+                                         static_cast<uint32_t>(rational.second)));
+  }
+  if (metadata.iso_ > 0) {
+    exif_ifd.push_back(MakeShortEntry(
+        0x8827, static_cast<uint16_t>(std::min<int>(metadata.iso_, 65535))));  // ISOSpeedRatings
+  }
+
+  std::vector<ExifIfdEntry> ifd0;
+  ifd0.push_back(MakeShortEntry(0x0112, 1));  // Orientation = upright
+  if (!metadata.make_.empty()) {
+    ifd0.push_back(MakeAsciiEntry(0x010F, metadata.make_));
+  }
+  if (!metadata.model_.empty()) {
+    ifd0.push_back(MakeAsciiEntry(0x0110, metadata.model_));
+  }
+  if (const auto exif_dt = ExifDateTimeString(metadata.date_time_str_); exif_dt.has_value()) {
+    ifd0.push_back(MakeAsciiEntry(0x0132, *exif_dt));  // DateTime
+  }
+  const int normalized_rating = ExifDisplayMetaData::NormalizeRating(metadata.rating_);
+  if (normalized_rating > 0) {
+    ifd0.push_back(MakeShortEntry(0x4746, static_cast<uint16_t>(normalized_rating)));  // Rating
+    ifd0.push_back(MakeShortEntry(0x4749, RatingPercentFor(normalized_rating)));  // RatingPercent
+  }
+
+  constexpr uint16_t kExifIfdTag = 0x8769;
+  const bool         need_exif_ifd = !exif_ifd.empty();
+  if (need_exif_ifd) {
+    ifd0.push_back(MakeLongEntry(kExifIfdTag, 0));  // patched below
+  }
+
+  std::sort(ifd0.begin(), ifd0.end(),
+            [](const ExifIfdEntry& a, const ExifIfdEntry& b) { return a.tag < b.tag; });
+  std::sort(exif_ifd.begin(), exif_ifd.end(),
+            [](const ExifIfdEntry& a, const ExifIfdEntry& b) { return a.tag < b.tag; });
+
+  std::vector<uint8_t> tiff;
+  tiff.push_back('I');
+  tiff.push_back('I');
+  AppendU16LE(tiff, 42);
+  AppendU32LE(tiff, 8);  // offset to IFD0
+
+  const size_t ifd0_start = tiff.size();
+  EncodeIfd(tiff, ifd0, 0);
+  if (need_exif_ifd) {
+    const uint32_t exif_ifd_offset = static_cast<uint32_t>(tiff.size());
+    EncodeIfd(tiff, exif_ifd, 0);
+    const uint16_t count =
+        static_cast<uint16_t>(tiff[ifd0_start] | (static_cast<uint16_t>(tiff[ifd0_start + 1]) << 8));
+    for (uint16_t i = 0; i < count; ++i) {
+      uint8_t*       slot = tiff.data() + ifd0_start + 2 + i * 12;
+      const uint16_t tag  = static_cast<uint16_t>(slot[0] | (static_cast<uint16_t>(slot[1]) << 8));
+      if (tag == kExifIfdTag) {
+        slot[8]  = static_cast<uint8_t>(exif_ifd_offset & 0xFF);
+        slot[9]  = static_cast<uint8_t>((exif_ifd_offset >> 8) & 0xFF);
+        slot[10] = static_cast<uint8_t>((exif_ifd_offset >> 16) & 0xFF);
+        slot[11] = static_cast<uint8_t>((exif_ifd_offset >> 24) & 0xFF);
+        break;
+      }
+    }
+  }
+
+  constexpr uint8_t kExifPrefix[] = {'E', 'x', 'i', 'f', 0, 0};
+  std::vector<uint8_t> payload(std::begin(kExifPrefix), std::end(kExifPrefix));
+  payload.insert(payload.end(), tiff.begin(), tiff.end());
+  if (payload.size() > 65533) {
+    return {};
+  }
+  return payload;
+}
+
+auto BuildJpegExifPayload(const std::optional<ExifDisplayMetaData>& export_metadata)
+    -> std::vector<uint8_t> {
+  // Prefer the Exiv2-free builder: Exiv2::ExifParser::encode SEHs on MSVC with
+  // real camera metadata and throws Invalid key '' for sparse ExifData.
+  return BuildJpegExifPayloadNoExiv(export_metadata);
 }
 
 auto ReplaceJpegExifSegment(const std::filesystem::path& export_path,
@@ -600,6 +836,12 @@ auto ReplaceJpegExifSegment(const std::filesystem::path& export_path,
   return WriteFileBytes(export_path, out);
 }
 
+auto IsJpegExportPath(const std::filesystem::path& path) -> bool {
+  const auto ext = path.extension().string();
+  return ext == ".jpg" || ext == ".JPG" || ext == ".jpeg" || ext == ".JPEG" || ext == ".jpe" ||
+         ext == ".JPE";
+}
+
 void ApplyExportMetadata(
     const std::filesystem::path& export_path,
     const std::optional<ExportColorProfileConfig>& color_profile,
@@ -613,70 +855,59 @@ void ApplyExportMetadata(
     return;
   }
 
-  bool icc_needs_repair = !icc_bytes.empty();
-  if (!icc_bytes.empty()) {
-    const std::vector<uint8_t> exif_payload = BuildJpegExifPayload(export_metadata);
-    if (ReplaceJpegExifSegment(export_path, exif_payload)) {
-      try {
-        auto image = Exiv2::ImageFactory::open(PathToUtf8(export_path));
-        if (image) {
-          image->readMetadata();
-          if (!icc_bytes.empty()) {
-            icc_needs_repair = !EmbeddedIccMatches(*image, icc_bytes);
-          }
-        }
-      } catch (...) {
+  // JPEG production path: reinforce EXIF via a hand-rolled APP1 rewrite.
+  // Do not call Exiv2 encode/writeMetadata — both have raised SEH (0xC0000005)
+  // on Windows MSVC after a successful pixel export, aborting ExportService.
+  if (IsJpegExportPath(export_path)) {
+    if (has_metadata) {
+      const std::vector<uint8_t> exif_payload = BuildJpegExifPayload(export_metadata);
+      if (!exif_payload.empty()) {
+        (void)ReplaceJpegExifSegment(export_path, exif_payload);
       }
-      if (icc_needs_repair) {
-        try {
-          auto image = Exiv2::ImageFactory::open(PathToUtf8(export_path));
-          if (!image) {
-            return;
-          }
-          image->readMetadata();
-          SetIccProfileBytes(*image, icc_bytes);
-          image->writeMetadata();
-        } catch (...) {
-        }
-      }
-      return;
     }
+    return;
   }
+
+  bool icc_needs_repair = !icc_bytes.empty();
 
   if (has_metadata || !icc_bytes.empty()) {
     try {
-      auto image = Exiv2::ImageFactory::open(PathToUtf8(export_path));
-      if (!image) {
+      auto owned = OpenExivMem(export_path);
+      if (!owned.image) {
         return;
       }
 
-      image->readMetadata();
+      owned.image->readMetadata();
       if (!icc_bytes.empty()) {
-        icc_needs_repair = !EmbeddedIccMatches(*image, icc_bytes);
+        icc_needs_repair = !EmbeddedIccMatches(*owned.image, icc_bytes);
       }
 
       try {
-        Exiv2::ExifData exif_data = image->exifData();
+        Exiv2::ExifData exif_data = owned.image->exifData();
         if (!icc_bytes.empty()) {
           RemoveConflictingExifColorTags(exif_data);
         }
         if (has_metadata) {
           ApplyDisplayMetadataToExif(exif_data, *export_metadata);
         }
-        image->setExifData(exif_data);
+        owned.image->setExifData(exif_data);
       } catch (...) {
       }
 
       if (has_metadata) {
         try {
-          Exiv2::XmpData xmp_data = image->xmpData();
+          Exiv2::XmpData xmp_data = owned.image->xmpData();
           ApplyDisplayMetadataToXmp(xmp_data, *export_metadata);
-          image->setXmpData(xmp_data);
+          owned.image->setXmpData(xmp_data);
         } catch (...) {
         }
       }
 
-      image->writeMetadata();
+      if (!icc_bytes.empty() && icc_needs_repair) {
+        SetIccProfileBytes(*owned.image, icc_bytes);
+        icc_needs_repair = false;
+      }
+      PersistExivMem(owned, export_path);
     } catch (...) {
       // Metadata injection is best-effort; pixel export should not fail for unsupported tags/formats.
     }
@@ -684,14 +915,13 @@ void ApplyExportMetadata(
 
   if (icc_needs_repair) {
     try {
-      auto image = Exiv2::ImageFactory::open(PathToUtf8(export_path));
-      if (!image) {
+      auto owned = OpenExivMem(export_path);
+      if (!owned.image) {
         return;
       }
-
-      image->readMetadata();
-      SetIccProfileBytes(*image, icc_bytes);
-      image->writeMetadata();
+      owned.image->readMetadata();
+      SetIccProfileBytes(*owned.image, icc_bytes);
+      PersistExivMem(owned, export_path);
     } catch (...) {
       // ICC repair is best-effort; OIIO may already have embedded the profile.
     }
@@ -758,7 +988,7 @@ auto TryWriteWithOpenImageIO(const image_path_t& src_path, const std::filesystem
 
 auto TryWriteWithOpenCV(const std::filesystem::path& export_path, const cv::Mat& rgba32f,
                         const ExportFormatOptions& options, std::string& out_error) -> bool {
-  const std::string dst        = export_path.string();
+  const std::string dst        = PathToUtf8(export_path);
 
   const bool        want_alpha = FormatSupportsAlpha(options.format_);
   const int         channels   = want_alpha ? 4 : 3;
@@ -863,7 +1093,10 @@ void ImageWriter::WriteImageToPath(const image_path_t&          src_path,
     throw std::runtime_error("ImageWriter: expected image data type CV_32FC4");
   }
 
-  cv::Mat     working = ResizeRGBA32F(src_rgba32f.clone(), options);
+  // Resize without an unconditional full-frame clone: FULL_RES_EXPORT buffers
+  // can be multi-hundred MB; cloning before downscale doubles peak memory.
+  cv::Mat working =
+      ShouldResize(options) ? ResizeRGBA32F(src_rgba32f, options) : src_rgba32f.clone();
 
   if (ShouldWriteUltraHdr(options, color_profile)) {
 #if defined(ALCEDO_HAS_ULTRAHDR)

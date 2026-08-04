@@ -1,0 +1,86 @@
+name: editor_adjustment_nav_tour
+start: workspace_ready
+defaults:
+  expectTimeoutMs: 10000
+nodes:
+  workspace_ready:
+    op:
+      action: wait
+      target: workspaceHost
+      property: visible
+      eq: true
+    next:
+      - to: open_first_image
+        weight: 1
+  open_first_image:
+    op:
+      action: doubleClick
+      target: thumbnailGridView_firstCard
+    expect:
+      - target: editorWorkspace
+        property: visible
+        eq: true
+      - target: editorAdjustmentNav
+        property: visible
+        eq: true
+    next:
+      - to: open_lut
+        weight: 1
+  open_lut:
+    op:
+      action: click
+      target: editorAdjustmentNav_lut
+    expect:
+      - target: editorAdjustmentPanel_lut
+        property: visible
+        eq: true
+    next:
+      - to: open_display
+        weight: 1
+  open_display:
+    op:
+      action: click
+      target: editorAdjustmentNav_display
+    expect:
+      - target: editorAdjustmentPanel_display
+        property: visible
+        eq: true
+    next:
+      - to: open_geometry
+        weight: 1
+  open_geometry:
+    op:
+      action: click
+      target: editorAdjustmentNav_geometry
+    expect:
+      - target: editorAdjustmentPanel_geometry
+        property: visible
+        eq: true
+    next:
+      - to: open_raw
+        weight: 1
+  open_raw:
+    op:
+      action: click
+      target: editorAdjustmentNav_raw
+    expect:
+      - target: editorAdjustmentPanel_raw
+        property: visible
+        eq: true
+    next:
+      - to: back_to_tone
+        weight: 1
+  back_to_tone:
+    op:
+      action: click
+      target: editorAdjustmentNav_tone
+    expect:
+      - target: editorAdjustmentPanel_tone
+        property: visible
+        eq: true
+    next:
+      - to: capture_panels
+        weight: 1
+  capture_panels:
+    op:
+      action: screenshot

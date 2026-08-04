@@ -9,6 +9,7 @@
 #include <string>
 
 #include "edit/operators/operator_registeration.hpp"
+#include "edit/pipeline/default_pipeline_params.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
 
 namespace alcedo {
@@ -62,6 +63,66 @@ TEST_F(EditorAdjustmentPipelineTest, LatestSnapshotCanUpdateExistingFieldAgain) 
   ASSERT_TRUE(exposure.has_value());
   EXPECT_FLOAT_EQ(exposure.value()->ExportOperatorParams()["params"]["exposure"].get<float>(),
                   1.25f);
+}
+
+TEST_F(EditorAdjustmentPipelineTest, SnapshotTouchesImageLoadingDetectsRawPatch) {
+  EditorRenderAdjustmentSnapshot tone_only;
+  tone_only.patches = {EditorAdjustmentPatch{"exposure", R"({"exposure":0.5})", false}};
+  EXPECT_FALSE(SnapshotTouchesImageLoading(tone_only));
+
+  EditorRenderAdjustmentSnapshot raw_patch;
+  raw_patch.patches = {EditorAdjustmentPatch{"raw_decode", R"({"raw":{"method":"default"}})", true}};
+  EXPECT_TRUE(SnapshotTouchesImageLoading(raw_patch));
+}
+
+// Content-path regression: re-applying an unchanged Image Loading operator must
+// not clear stage cache. View/detail/scope renders must not call this API at
+// all (see ReasonAppliesAdjustmentSnapshot); if they do, RAW_DECODE misses.
+TEST_F(EditorAdjustmentPipelineTest,
+       PreservesLensCalibrationCacheWhenCumulativeSnapshotReappliesLensPatch) {
+  CPUPipelineExecutor executor(true);
+  executor.ResetToCleanBaselineAdjustments();
+
+  auto lens_params                        = pipeline_defaults::MakeDefaultLensCalibParams();
+  lens_params["lens_calib"]["enabled"]    = true;
+  lens_params["lens_calib"]["lens_maker"] = "Nikon";
+  lens_params["lens_calib"]["lens_model"] = "Nikkor Test Lens";
+
+  EditorRenderAdjustmentSnapshot first;
+  first.patches = {
+      EditorAdjustmentPatch{"lens_calib", lens_params.dump(), false},
+      EditorAdjustmentPatch{"exposure", R"({"exposure":0.25})", false},
+  };
+
+  std::string error;
+  ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, first, &error)) << error;
+
+  auto& loading = executor.GetStage(PipelineStageName::Image_Loading);
+  ASSERT_TRUE(loading.GetOperator(OperatorType::LENS_CALIBRATION).has_value());
+  loading.SetOutputCacheValid(true);
+  const auto lens_before =
+      loading.GetOperator(OperatorType::LENS_CALIBRATION).value()->op_->GetParams();
+
+  EditorRenderAdjustmentSnapshot second;
+  second.patches = {
+      EditorAdjustmentPatch{"lens_calib", lens_params.dump(), false},
+      EditorAdjustmentPatch{"exposure", R"({"exposure":0.75})", false},
+  };
+  ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, second, &error)) << error;
+
+  EXPECT_TRUE(loading.CacheValid());
+  EXPECT_EQ(loading.GetOperator(OperatorType::LENS_CALIBRATION).value()->op_->GetParams(),
+            lens_before);
+
+  loading.SetOutputCacheValid(true);
+  auto changed_lens_params                        = lens_params;
+  changed_lens_params["lens_calib"]["lens_model"] = "Another Test Lens";
+  EditorRenderAdjustmentSnapshot changed;
+  changed.patches = {
+      EditorAdjustmentPatch{"lens_calib", changed_lens_params.dump(), false},
+  };
+  ASSERT_TRUE(ApplyEditorAdjustmentSnapshot(executor, changed, &error)) << error;
+  EXPECT_FALSE(loading.CacheValid());
 }
 
 TEST_F(EditorAdjustmentPipelineTest, RejectsUnknownFieldWithoutMutatingKnownOperators) {

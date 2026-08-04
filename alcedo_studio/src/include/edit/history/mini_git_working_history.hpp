@@ -91,12 +91,20 @@ class MiniGitJournal final : public IMiniGitJournalAppender {
   auto TruncateThroughSequence(std::uint64_t last_sequence, std::string* error) -> bool;
 
   /// Discard the entire journal (memory + file). Used when recovery proves the
-  /// whole file is already reflected by DuckDB. Prefer TruncateThroughSequence
-  /// for normal save checkpoints that must preserve post-capture edits.
+  /// whole file is already reflected by DuckDB, and after a successful normal
+  /// save that has already persisted history + pipeline checkpoint.
   auto TruncateMaterialized(std::string* error) -> bool;
 
-  /// Replace the in-memory record list after a successful fold that skipped an
-  /// already-materialized prefix (DB-commit / truncate crash window).
+  /// Drop only the newest durable record (memory + file rewrite). Used when WAL
+  /// append succeeded but the matching in-memory history publish or live
+  /// SetOperator failed; earlier recovery records stay intact.
+  auto RevokeLastRecord(std::string* error) -> bool;
+
+  /// Rename a non-empty journal path aside so a broken recovery log cannot be
+  /// reapplied. Missing or empty paths succeed without creating files.
+  static auto IsolateJournalFile(const std::filesystem::path& path, std::string* error) -> bool;
+
+  /// Replace the in-memory record list after recovery rewrites the durable journal.
   void SetRecords(std::vector<MiniGitJournalRecord> records);
 
   /// Copy of current records (locks the journal). Prefer Snapshot when the
@@ -152,10 +160,10 @@ struct MiniGitWorkingSelection {
 
 /// Prepared local head move that has not yet touched the journal, graph, or redo.
 ///
-/// Callers must apply every payload in `traversed_commits` (ordinary and merge)
-/// to a candidate pipeline/snapshot first. Only after that validation succeeds
-/// may they call PublishPreparedHeadMove, which appends one journal record and
-/// performs a no-fail swap of head + redo.
+/// Publish order is WAL-first: PublishPreparedHeadMove appends one journal record
+/// then swaps head + redo. Callers install the target params on the unique live
+/// pipeline only after a successful publish; on live apply failure they must
+/// abandon the published head move (revoke WAL tail + restore prior head).
 struct MiniGitPreparedHeadMove {
   bool                       ready = false;
   bool                       is_noop = false;
@@ -186,8 +194,8 @@ struct MiniGitPreparedEdit {
 /// It deliberately never updates ImageEditState.materialized_*; Phase 6C-5
 /// captures those values in one DuckDB materialization transaction.
 ///
-/// Local mutations follow prepare → (caller validates pipeline) → publish so a
-/// failed operator application never leaves the journal, head, or redo advanced.
+/// Local mutations follow prepare → WAL publish → live SetOperator. A failed
+/// live apply abandons the just-published journal tail and restores prior head.
 class MiniGitWorkingHistory final {
  public:
   MiniGitWorkingHistory(std::shared_ptr<CommitGraph>             graph,
@@ -219,6 +227,14 @@ class MiniGitWorkingHistory final {
   auto               PublishPreparedEdit(const MiniGitPreparedEdit& prepared)
       -> MiniGitEditAppendResult;
 
+  /// Reverse a just-published prepared edit: revoke the WAL tail, move the head
+  /// back to the expected source, erase the unreachable commit when possible, and
+  /// restore the prior redo selection. No-op when the prepared edit was never
+  /// published or the working head no longer matches the prepared target.
+  auto               AbandonPublishedEdit(const MiniGitPreparedEdit& prepared,
+                                          MiniGitWorkingSelection prior_selection,
+                                          std::string* error) -> bool;
+
   auto               AppendEdit(OrdinaryEditPayload payload) -> MiniGitEditAppendResult;
   /// Create a merge commit whose first parent is the current working head and whose second
   /// parent is the incoming branch head. The merge commit stores the resolved field delta
@@ -235,10 +251,16 @@ class MiniGitWorkingHistory final {
   /// Plan an explicit multi-step head move without mutating journal/graph/redo.
   [[nodiscard]] auto PrepareMoveHeadToCommit(const commit_hash_t& target) const
       -> MiniGitPreparedHeadMove;
-  /// Append one head-move journal record and swap head + redo. Must only be called
-  /// after the caller has applied every payload in `prepared.traversed_commits`.
+  /// Append one head-move journal record and swap head + redo (WAL-first). Callers
+  /// apply traversed commit payloads to the live pipeline after this returns moved.
   auto               PublishPreparedHeadMove(const MiniGitPreparedHeadMove& prepared)
       -> MiniGitHeadMoveResult;
+
+  /// Reverse a just-published prepared head move: revoke the WAL tail and restore
+  /// the prior working head + redo selection.
+  auto               AbandonPublishedHeadMove(const MiniGitPreparedHeadMove& prepared,
+                                              MiniGitWorkingSelection prior_selection,
+                                              std::string* error) -> bool;
 
   auto               Undo() -> MiniGitHeadMoveResult;
   auto               Redo() -> MiniGitHeadMoveResult;
@@ -263,17 +285,33 @@ class MiniGitWorkingHistory final {
   /// This does not reconstruct a pipeline; checkout owns that in Phase 6C-6.
   auto               SelectVersion(const version_ref_id_t& version_id, std::string* error) -> bool;
 
-  /// Replay a durable journal prefix against a graph loaded from DuckDB. The
-  /// final graph head is the recovered working head; callers may then rebuild
-  /// their live pipeline from that head. Redo is intentionally empty after a
-  /// restart because it is an in-memory convenience, not persisted state.
+  /// Replay a durable journal prefix against the unique history graph. The
+  /// final graph head is the recovered working head; callers then apply the same
+  /// missing records to the unique live pipeline via operator APIs. Redo is
+  /// intentionally empty after a restart because it is an in-memory convenience.
   static auto        Replay(CommitGraph& graph, const std::vector<MiniGitJournalRecord>& records,
                             std::string* error) -> bool;
 
+  /// Classify a loaded journal against the durable graph head without mutating
+  /// the graph. fully_covered means every record is already in DuckDB (clear WAL
+  /// only). contiguous_extension means records[missing_from_index..) are a valid
+  /// suffix to apply. broken means isolate the WAL and refuse recovery.
+  struct JournalAlignment {
+    bool        accepted             = false;
+    bool        fully_covered        = false;
+    bool        contiguous_extension = false;
+    bool        broken               = false;
+    std::size_t missing_from_index   = 0;
+    std::string error;
+  };
+  static auto AlignJournalWithStoredHead(const CommitGraph&                       graph,
+                                         const std::vector<MiniGitJournalRecord>& records)
+      -> JournalAlignment;
+
   /// Like Replay, but skips a leading prefix already reflected by the stored
-  /// materialized head (crash after DuckDB commit before journal truncation).
+  /// active head (crash after DuckDB commit before journal truncation).
   /// Returns the index of the first applied record (records.size() when all
-  /// were already materialized).
+  /// were already durable).
   static auto ReplaySkippingMaterializedPrefix(CommitGraph&                             graph,
                                                const std::vector<MiniGitJournalRecord>& records,
                                                std::size_t* applied_from_index,

@@ -10,6 +10,7 @@ Item {
     objectName: "editorWorkspace"
 
     property var theme: null
+    property var host: null
     property var workspaceRouter: appModules.workspaceRouter
     property var editorSession: appModules.editorSession
     property var interactionPolicy: appModules.interactionPolicy
@@ -84,12 +85,13 @@ Item {
             Layout.fillHeight: true
             spacing: appTheme.spaceMd
 
-            // Left: History / Versions rail (+ expandable panel beside rail).
+            // Left: editor tool rail (+ expandable History / Versions panel).
             // objectName is set inside the component (editorHistoryVersionsRail).
-            EditorHistoryVersionsRail {
+            EditorWorkspaceRail {
                 id: historyVersionsRail
                 Layout.fillHeight: true
                 theme: root.theme
+                host: root.host
                 editorSession: root.editorSession
                 interactionPolicy: root.interactionPolicy
                 adjustmentTransfer: appModules.adjustmentTransfer
@@ -168,7 +170,7 @@ Item {
                         objectName: "editorViewportItem"
                         anchors.fill: parent
                         visible: root.hasImage
-                        // imageIdentity is the durable DB id; imageGeneration is stamped
+                        // imageIdentity is the durable DB id; sessionEpoch is stamped
                         // from EditorSessionController::SyncViewportIdentity on the GUI thread.
                         imageIdentity: root.focusedImageId
                         Accessible.role: Accessible.Canvas
@@ -179,7 +181,6 @@ Item {
                             if (root.editorSession) {
                                 root.editorSession.bindInteractionController(editorInteraction)
                             }
-                            viewportSlot.requestImageGeometrySync()
                         }
                         Component.onDestruction: {
                             if (root.editorSession) {
@@ -200,17 +201,13 @@ Item {
                         // resetPresentationStateForNewImage before the first frame.
                         onTargetSizeRequested: function (w, h) {
                             if (w > 0 && h > 0) {
-                                // The source-size query can race the first
-                                // pipeline frame. The render-reference frame
-                                // still carries the correct aspect, so use it
-                                // as a temporary image-size fallback and let
-                                // the metadata query replace it when ready.
+                                // The crop operator snapshot normally provides source size.
+                                // Keep the first full frame as a fallback for legacy pipelines.
                                 if (editorInteraction.imageWidth <= 0
                                         || editorInteraction.imageHeight <= 0) {
                                     editorInteraction.setImageSize(w, h)
                                 }
                                 editorInteraction.setRenderReferenceSize(w, h)
-                                viewportSlot.requestImageGeometrySync()
                             }
                         }
                     }
@@ -400,6 +397,13 @@ Item {
                         id: viewportWheel
                         enabled: root.editorControlsEnabled
                         acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+                        onActiveChanged: {
+                            if (active) {
+                                editorInteraction.beginViewInputSequence()
+                            } else {
+                                editorInteraction.finishViewInputSequence()
+                            }
+                        }
                         onWheel: function (event) {
                             var synthesized = event.pixelDelta.x !== 0 || event.pixelDelta.y !== 0
                             editorInteraction.handleWheel(
@@ -427,6 +431,7 @@ Item {
                         property bool _pinchLive: false
                         onActiveChanged: {
                             if (active) {
+                                editorInteraction.beginViewInputSequence()
                                 _baseZoom = editorInteraction.zoom
                                 // Sync to whatever scale is now (usually 1.0 at start;
                                 // never assume without reading the property).
@@ -434,6 +439,7 @@ Item {
                                 _pinchLive = true
                             } else {
                                 _pinchLive = false
+                                editorInteraction.finishViewInputSequence()
                             }
                         }
                         onScaleChanged: {
@@ -550,60 +556,11 @@ Item {
                             editorInteraction.resetPresentationStateForNewImage()
                             editorInteraction.setImageSize(0, 0)
                             editorInteraction.setRenderReferenceSize(0, 0)
-                            imageGeometryRetryTimer.stop()
                             return
                         }
                         // Drop previous image crop/ROI/mode before applying new geometry.
                         editorInteraction.resetPresentationStateForNewImage()
-                        requestImageGeometrySync()
-                    }
-
-                    function syncImageGeometry() {
-                        if (!root.hasImage) {
-                            editorInteraction.setImageSize(0, 0)
-                            editorInteraction.setRenderReferenceSize(0, 0)
-                            return false
-                        }
-                        if (!appModules || !appModules.images) {
-                            return false
-                        }
-                        var size = appModules.images.GetImagePixelSize(
-                                    root.focusedElementId, root.focusedImageId)
-                        if (size && size.success && size.width > 0 && size.height > 0) {
-                            editorInteraction.setImageSize(size.width, size.height)
-                            // Until a pipeline frame arrives (TargetSizeRequested), use
-                            // source size so crop/zoom math is not zero-sized.
-                            if (editorInteraction.renderReferenceWidth <= 0 ||
-                                    editorInteraction.renderReferenceHeight <= 0) {
-                                editorInteraction.setRenderReferenceSize(size.width, size.height)
-                            }
-                            return true
-                        }
-                        return false
-                    }
-
-                    function requestImageGeometrySync() {
-                        viewportSlot.imageGeometryRetryCount = 0
-                        if (syncImageGeometry() || !root.hasImage) {
-                            imageGeometryRetryTimer.stop()
-                            return
-                        }
-                        imageGeometryRetryTimer.start()
-                    }
-
-                    property int imageGeometryRetryCount: 0
-                    Timer {
-                        id: imageGeometryRetryTimer
-                        interval: 100
-                        repeat: true
-                        onTriggered: {
-                            if (viewportSlot.syncImageGeometry() || !root.hasImage
-                                    || viewportSlot.imageGeometryRetryCount >= 50) {
-                                stop()
-                                return
-                            }
-                            viewportSlot.imageGeometryRetryCount += 1
-                        }
+                        editorInteraction.setImageSize(0, 0)
                     }
 
                     function pushViewToViewport() {
@@ -684,7 +641,6 @@ Item {
                         refreshTrackedScreen()
                         syncViewportMetrics()
                         ensurePresentationBinding()
-                        requestImageGeometrySync()
                     }
                     onWidthChanged: syncViewportMetrics()
                     onHeightChanged: syncViewportMetrics()
@@ -695,8 +651,26 @@ Item {
                     Layout.fillWidth: true
                     Layout.preferredHeight: editorFilmstrip.dockHeight
                     theme: root.theme
+                    host: root.host
                     editorSession: root.editorSession
                     interactionPolicy: root.interactionPolicy
+                    selectedImagesById: root.host ? root.host.selectedImagesById : ({})
+                    onImageSelectionChanged: function(elementId, imageId, fileName, isHdr, selected) {
+                        if (root.host && root.host.selectionState) {
+                            root.host.selectionState.setImageSelected(
+                                elementId, imageId, fileName, isHdr, selected)
+                        }
+                    }
+                    onReplaceSelection: function(items) {
+                        if (root.host && root.host.selectionState) {
+                            root.host.selectionState.replaceSelectedImages(items)
+                        }
+                    }
+                    onContextMenuRequested: function(item, sceneX, sceneY) {
+                        if (root.host && root.host.openEditorFilmstripContextMenu) {
+                            root.host.openEditorFilmstripContextMenu(item, sceneX, sceneY)
+                        }
+                    }
                 }
             }
 
