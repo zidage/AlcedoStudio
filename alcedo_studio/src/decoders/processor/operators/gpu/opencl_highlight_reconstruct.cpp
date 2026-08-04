@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -23,7 +24,25 @@ namespace OpenCL {
 namespace {
 
 constexpr float kHilightMagic = 0.987f;
-constexpr int   kMaskPlanes   = 8;
+// Lower bound of the chrominance sampling ring, as a fraction of the clip level. Matches
+// current darktable opposed. Darker samples inside the dilated ring sit on the shadow side of
+// highlight boundaries and only inject large negative outliers into the global statistic.
+constexpr float kChromaRingLo = 0.2f;
+// Minimum ring sample count before the global chrominance is trusted. darktable uses >100 on
+// mosaiced and >30 on demosaiced data; this operator runs post-demosaic.
+constexpr float kMinChromaSamples = 30.0f;
+constexpr int   kMaskPlanes       = 6;
+
+// WB multipliers come from file metadata or the camera's as-shot estimate and can be zero,
+// negative, or non-finite on exotic files. Clamp the per-channel ratio to a sane band so a
+// broken multiplier can neither invert the clip order nor push a clip level far outside the
+// sensor's physical range.
+auto ChannelRatio(const float value, const float green) -> float {
+  if (!std::isfinite(value) || value <= 0.0f) {
+    return 1.0f;
+  }
+  return std::clamp(value / green, 0.25f, 4.0f);
+}
 
 struct HighlightCorrectionParams {
   float    clips[4];
@@ -81,13 +100,13 @@ void HighlightReconstruct(opencl::OpenClImage& img, LibRaw& raw_processor) {
 
   HighlightCorrectionParams params = {};
   const float*              cam_mul = raw_processor.imgdata.color.cam_mul;
-  const float               green   = std::max(cam_mul[1], 1e-6f);
-  params.clips[0]                   = kHilightMagic * (cam_mul[0] / green);
-  params.clips[1]                   = kHilightMagic;
-  params.clips[2]                   = kHilightMagic * (cam_mul[2] / green);
-  params.clipdark[0]                = 0.03f * params.clips[0];
-  params.clipdark[1]                = 0.125f * params.clips[1];
-  params.clipdark[2]                = 0.03f * params.clips[2];
+  const float green = std::isfinite(cam_mul[1]) && cam_mul[1] > 0.0f ? cam_mul[1] : 1.0f;
+  params.clips[0]   = kHilightMagic * ChannelRatio(cam_mul[0], green);
+  params.clips[1]   = kHilightMagic;
+  params.clips[2]   = kHilightMagic * ChannelRatio(cam_mul[2], green);
+  params.clipdark[0] = kChromaRingLo * params.clips[0];
+  params.clipdark[1] = kChromaRingLo * params.clips[1];
+  params.clipdark[2] = kChromaRingLo * params.clips[2];
   params.width                      = width;
   params.height                     = height;
   params.stride                     = stride;
@@ -214,7 +233,7 @@ void HighlightReconstruct(opencl::OpenClImage& img, LibRaw& raw_processor) {
   CheckOpenCl(err, "clEnqueueReadBuffer(cnts)");
 
   for (int c = 0; c < 3; ++c) {
-    params.chrominance[c] = (cnts[c] > 0.0f) ? (sums[c] / cnts[c]) : 0.0f;
+    params.chrominance[c] = (cnts[c] > kMinChromaSamples) ? (sums[c] / cnts[c]) : 0.0f;
   }
 
   // Allocate output buffer.

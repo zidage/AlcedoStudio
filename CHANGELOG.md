@@ -15,6 +15,7 @@
 - **Localization**: Restored the QML localization workflow for the new editor. (`98516636`)
 
 ### Bug Fixes
+- **Highlight reconstruction edge speckle**: Fixed outlier pixels (dark/bright dots) along highlight–shadow boundaries in the CUDA, OpenCL, and Metal highlight-reconstruction operators. The clip decision is now a soft smoothstep transition over the top 5% below the clip level instead of a hard threshold, the neighbourhood reference average excludes censored (saturated) and non-finite samples, the global chrominance statistic uses a uniform 0.2·clip sampling-ring floor and is only trusted above 30 samples, and white-balance ratios are clamped to a sane band. OpenCL/Metal also skip the reference average for unclipped pixels and drop two unused mask planes.
 - **JPEG export crash on Windows**: Fixed a crash when exporting JPEGs (an Exiv2 crash) by rewriting the APP1 metadata segment. (`181c9572`)
 - **macOS build with OpenCV 5**: Dropped an unused OpenCV `calib3d` dependency so the build configures again on Homebrew OpenCV 5, which split that module. (`54b690e6`)
 
