@@ -221,6 +221,13 @@ rows have no outer card chrome — only the three comparison panes are cards
 (`bgBaseColor`, quiet border; selected sides use merge-tint borders). Complete
 uses the monochrome selected fill.
 
+**Editor close confirm:** `EditorCloseConfirmDialog` uses the same blur +
+`overlayColor` modal shell and `DialogActionButton` actions (Cancel / Discard /
+Save). Save calls `workspaceRouter.openLibrary()` — the same Finalize(true) seal
+as switching to Library — then waits on `sessionState` (`Saving` / `Switching`,
+same gate as the filmstrip) until `NoImage` before quitting. Discard uses
+`Finalize(false)`.
+
 The History/Versions rail width (60 px) and rail-button hit (46 px) stay under
 Icon and action geometry; the rail width is not tokenized because it is locked to
 the rail-button optical balance.

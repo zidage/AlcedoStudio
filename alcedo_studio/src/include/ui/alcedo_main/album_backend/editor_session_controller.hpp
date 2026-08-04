@@ -199,7 +199,12 @@ class EditorSessionController final : public QObject, public IEditorAdjustmentSu
   Q_INVOKABLE void   MoveHeadToCommit(const QString& commitId);
   Q_INVOKABLE void   Close();
   Q_INVOKABLE void   Shutdown();
-  void               Finalize(bool persistChanges);
+  /// Seal the active image via the same Close path as leaving the editor for
+  /// Library (`WorkspaceRouter::OpenLibrary`). persistChanges=true may leave
+  /// sessionState at Saving until the checkpoint finishes; callers that must
+  /// quit wait on StateChanged / sessionState like the filmstrip does.
+  /// persistChanges=false discards unflushed journal and closes immediately.
+  Q_INVOKABLE void   Finalize(bool persistChanges);
   // Forget the last-edited image so re-entering the editor does not resurrect a
   // deleted image or one from a prior project (Phase 4A-Fix).
   Q_INVOKABLE void   clearLastEditedImage();

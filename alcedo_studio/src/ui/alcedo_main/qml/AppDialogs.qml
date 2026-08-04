@@ -30,6 +30,7 @@ Item {
     property alias advancedContentAnalysisDialog: advancedContentAnalysisDialogObj
     property alias semanticGenerationDialog: semanticGenerationDialogObj
     property alias deleteConfirmDialog: deleteConfirmDialogObj
+    property alias editorCloseConfirmDialog: editorCloseConfirmDialogObj
     property alias welcomeDialog: welcomeDialogObj
     property alias globalSearchDialog: globalSearchDialogObj
     property alias backgroundTasksDialog: backgroundTasksDialogObj
@@ -322,6 +323,17 @@ Item {
         onConfirmed: root.imageActionsController.runDeleteTargets()
     }
 
+    EditorCloseConfirmDialog {
+        id: editorCloseConfirmDialogObj
+        parent: Overlay.overlay
+        theme: root.host
+        host: root.host
+        blurSource: root.blurSource
+        onSaveRequested: root.host.beginEditorCloseSave()
+        onDiscardRequested: root.host.beginEditorCloseDiscard()
+        onCancelled: root.host.cancelEditorCloseConfirm()
+    }
+
     WelcomeDialog {
         id: welcomeDialogObj
         objectName: "welcomeDialog"
@@ -387,7 +399,12 @@ Item {
                || backgroundTasksDialogObj.opened
                || deleteConfirmDialogObj.opened
                || folderImportConfirmDialogObj.opened
+               || editorCloseConfirmDialogObj.opened
                || welcomeDialogObj.opened
+    }
+
+    function openEditorCloseConfirmDialog() {
+        editorCloseConfirmDialogObj.openForClose()
     }
 
     function openSettingsDialog(category) {

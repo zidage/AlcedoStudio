@@ -2422,6 +2422,39 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>EditorCloseConfirmDialog</name>
+    <message>
+        <location filename="../qml/EditorCloseConfirmDialog.qml" line="+85"/>
+        <source>Unsaved Edits</source>
+        <translation>未保存的编辑</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Saving current edits…</source>
+        <translation>正在保存当前编辑…</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Save edits for the current image before quitting, or discard them.</source>
+        <translation>退出前请保存当前图像的编辑，或丢弃这些更改。</translation>
+    </message>
+    <message>
+        <location line="+15"/>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Discard</source>
+        <translation>放弃</translation>
+    </message>
+    <message>
+        <location line="+17"/>
+        <source>Save</source>
+        <translation>保存</translation>
+    </message>
+</context>
+<context>
     <name>EditorDisplayTransformPanel</name>
     <message>
         <location filename="../qml/EditorDisplayTransformPanel.qml" line="+30"/>
@@ -4223,6 +4256,11 @@ Original source files on disk will be kept.</source>
         <location filename="../qml/Main.qml" line="+22"/>
         <source>Alcedo Studio</source>
         <translation>Alcedo Studio</translation>
+    </message>
+    <message>
+        <location line="+198"/>
+        <source>Could not save edits. Resolve the save error, then quit again.</source>
+        <translation>无法保存编辑。请先解决保存错误，然后再退出。</translation>
     </message>
 </context>
 <context>

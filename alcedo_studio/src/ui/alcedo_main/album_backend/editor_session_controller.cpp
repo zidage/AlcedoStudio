@@ -747,25 +747,38 @@ void EditorSessionController::Shutdown() {
 }
 
 void EditorSessionController::Finalize(bool persistChanges) {
-  // Finalize closes the active image through the lifecycle owner. The QML
-  // viewport unbinds itself when the workspace visual tree is destroyed.
-  if (scope_controller_) {
-    scope_controller_->SetImageIdentity(0, 0);
+  // Same seal path as WorkspaceRouter::OpenLibrary / empty-editor Open(0,0).
+  // Do not suspend the presentation viewport before Close returns: SealAndStartSave
+  // calls CancelSessionAndWait and must let in-flight presents finish.
+  if (!session_backend_) {
+    if (scope_controller_) {
+      scope_controller_->SetImageIdentity(0, 0);
+      scope_controller_->Shutdown();
+    }
+    Close();
+    return;
   }
-  if (scope_controller_) {
-    scope_controller_->Shutdown();
+
+  const auto result = session_backend_->Close(persistChanges);
+  SyncIdentityFromBackend();
+
+  if (result.kind != alcedo::EditorSessionResultKind::Rejected) {
+    active_ = false;
   }
-  if (session_backend_) {
+
+  // Synchronous close can drop presentation now. Async SaveStarted keeps the
+  // viewport until the library route tears it down or NoImage arrives.
+  if (result.kind != alcedo::EditorSessionResultKind::Rejected &&
+      result.kind != alcedo::EditorSessionResultKind::SaveStarted) {
+    if (scope_controller_) {
+      scope_controller_->SetImageIdentity(0, 0);
+      scope_controller_->Shutdown();
+    }
     if (auto* item = qobject_cast<editor_rhi::EditorViewportItem*>(presentation_viewport_.data())) {
       item->suspendPresentation();
     }
-    session_backend_->Close(persistChanges);
-    SyncIdentityFromBackend();
-    active_ = false;
-    emit StateChanged();
-    return;
   }
-  Close();
+  emit StateChanged();
 }
 
 void EditorSessionController::clearLastEditedImage() {

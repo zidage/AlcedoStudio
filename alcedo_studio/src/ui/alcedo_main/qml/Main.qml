@@ -167,6 +167,140 @@ ApplicationWindow {
     property alias contentY: root.globalContentY
     property alias contentX: root.globalContentX
 
+    // Application close gate: when the editor has an open image, caption/X and
+    // OS close are intercepted so the user can Save (Finalize true) or Discard
+    // (Finalize false) before the process exits. Async save must finish first —
+    // quitting during Saving aborts the checkpoint.
+    property bool allowApplicationClose: false
+    property bool waitingEditorCloseSave: false
+
+    function editorCloseNeedsConfirm() {
+        if (root.automationModeEnabled || root.allowApplicationClose) {
+            return false
+        }
+        if (root.waitingEditorCloseSave) {
+            return true
+        }
+        const router = appModules.workspaceRouter
+        if (!router || String(router.workspace || "") !== "editor") {
+            return false
+        }
+        const session = appModules.editorSession
+        return !!(session && session.hasImage === true)
+    }
+
+    function cancelEditorCloseConfirm() {
+        root.waitingEditorCloseSave = false
+        if (appDialogs.editorCloseConfirmDialog) {
+            appDialogs.editorCloseConfirmDialog.busy = false
+        }
+    }
+
+    function finishApplicationClose() {
+        root.waitingEditorCloseSave = false
+        root.allowApplicationClose = true
+        if (appDialogs.editorCloseConfirmDialog
+                && appDialogs.editorCloseConfirmDialog.opened) {
+            appDialogs.editorCloseConfirmDialog.close()
+        }
+        root.close()
+    }
+
+    function abortEditorCloseSave(messageText) {
+        root.waitingEditorCloseSave = false
+        if (appDialogs.editorCloseConfirmDialog) {
+            appDialogs.editorCloseConfirmDialog.busy = false
+            if (appDialogs.editorCloseConfirmDialog.opened) {
+                appDialogs.editorCloseConfirmDialog.close()
+            }
+        }
+        const detail = String(messageText || "")
+        root.showSnackbar(detail.length > 0
+                          ? detail
+                          : qsTr("Could not save edits. Resolve the save error, then quit again."))
+    }
+
+    function beginEditorCloseDiscard() {
+        const session = appModules.editorSession
+        if (session) {
+            if (session.hasPendingRecovery === true
+                    && session.actions
+                    && session.actions.canDiscardAndContinue === true) {
+                session.DiscardAndContinue()
+            } else {
+                session.Finalize(false)
+            }
+        }
+        root.finishApplicationClose()
+    }
+
+    function beginEditorCloseSave() {
+        // Same seal as switching to Library: WorkspaceRouter.openLibrary() →
+        // Finalize(true). Filmstrip image switches use the same Saving gate.
+        root.waitingEditorCloseSave = true
+        if (appDialogs.editorCloseConfirmDialog) {
+            appDialogs.editorCloseConfirmDialog.busy = true
+        }
+        if (appModules.workspaceRouter) {
+            appModules.workspaceRouter.openLibrary()
+        } else if (appModules.editorSession) {
+            appModules.editorSession.Finalize(true)
+        }
+        Qt.callLater(root.pollEditorCloseSave)
+    }
+
+    function pollEditorCloseSave() {
+        if (!root.waitingEditorCloseSave) {
+            return
+        }
+        const session = appModules.editorSession
+        if (!session) {
+            root.finishApplicationClose()
+            return
+        }
+        const state = String(session.sessionState || "")
+        // Same in-flight seal gate as EditorFilmstrip.
+        if (state === "Saving" || state === "Switching") {
+            return
+        }
+        if (session.hasPendingRecovery === true
+                || state === "RetainedImageFailure"
+                || state === "Failed") {
+            root.abortEditorCloseSave(session.lastError)
+            return
+        }
+        // Close completed (or sync no-op). Do not quit while still Interactive
+        // after a rejected seal — that would drop unsaved work.
+        if (state === "NoImage" || state === "ShuttingDown") {
+            root.finishApplicationClose()
+            return
+        }
+        root.abortEditorCloseSave(session.lastError)
+    }
+
+    Connections {
+        target: appModules.editorSession
+        enabled: root.waitingEditorCloseSave
+        function onStateChanged() {
+            root.pollEditorCloseSave()
+        }
+    }
+
+    onClosing: function(close) {
+        if (!root.editorCloseNeedsConfirm()) {
+            return
+        }
+        close.accepted = false
+        if (root.waitingEditorCloseSave) {
+            return
+        }
+        if (appDialogs.editorCloseConfirmDialog
+                && appDialogs.editorCloseConfirmDialog.opened) {
+            return
+        }
+        appDialogs.openEditorCloseConfirmDialog()
+    }
+
     // Library workspace UI state survives Loader teardown when routing to the editor.
     // LibraryWorkspace reads these on create and writes them back on destroy.
     property bool libraryInspectorVisible: true

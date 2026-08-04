@@ -586,6 +586,7 @@ set(ALCEDO_MAIN_QML_FILES
     "${ALCEDO_UI_SHELL_ROOT}/qml/ShellSignals.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AppDialogs.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/FolderImportConfirmDialog.qml"
+    "${ALCEDO_UI_SHELL_ROOT}/qml/EditorCloseConfirmDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/ExportQueueState.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AlbumExportDialog.qml"
     "${ALCEDO_UI_SHELL_ROOT}/qml/AdjustmentTransferDialog.qml"
