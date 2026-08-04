@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.2.8] (edc738eb..b4e6fc4b) — 2026-07-09 ~ 2026-08-04
+
+### Features
+- **Neural-network demosaicing**: Added a neural-network RAW demosaic method on CUDA, OpenCL, and Metal, using a tiled engine and a smaller, faster model that runs in about 300 ms per image. (`7f71b11f`, `5126d486`, `9c27b3d6`, `fc8dcab2`, `153c09ba`, `83b779ff`, `d95e756e`)
+- **Unified single-window editor**: Replaced the old modal editor dialog with an editor that lives in the main window next to the library. The viewport renders through Qt RHI with zero-copy GPU presentation on every backend, with real-time preview, zoom and pan up to 16x, a crop/rotate overlay, and a bottom filmstrip that collapses out of the way. The Tone, Look, LUT, Display Transform, Geometry, and RAW Decode panels, plus scopes and the history/versions rail, were all rebuilt for the new window. (`56b92f43`, `d8069e9d`, `3a474475`, `130cf29b`, `ef0a384f`, `7d4ca660`, `792b16e4`, `3c72e0c5`, `71ba6fe6`, `d0cba60a`, `0944993b`, `f7bad872`, `784209e3`)
+- **Git-style edit history and autosave**: Replaced the linear history with a Git-like commit graph — each edit becomes an immutable commit, you can branch and check out versions, undo/redo walks the graph, and paste/merge create new branches with a conflict resolver. Edits autosave to a recovery journal and come back cleanly after a crash. (`801f6093`, `c492b517`, `fe4d8a70`, `a0761eff`, `5c12f636`, `3beaae99`, `2471ec83`, `b360cb49`, `b4e6fc4b`)
+- **Startup GPU backend selection**: The accelerator (CUDA / OpenCL / Metal) is now picked once at startup and locked in, with the chooser moved to Settings; the CUDA pipeline was split into runtime DLLs and the OpenCL runtime is shared across them. (`729315c9`, `1c33a6fb`, `ce4cfabe`)
+- **macOS color management**: Restored display color management on the macOS editor path and present Metal frames zero-copy. (`3ba62cb5`, `ef0a384f`)
+- **New app icon**: Shipped a new application icon for Windows and macOS. (`5a77392a`)
+
+### UI
+- **Editor polish**: Restyled the history panel as a git-graph timeline, redesigned the merge-conflict resolver, made filmstrip thumbnails borderless to match the library grid, shared dark context-menu controls and image actions with the editor filmstrip, deepened the theme greys, and polished the background-tasks UX. (`4c731753`, `0c9d63cb`, `a7b63449`, `2a1fe331`, `fc623e21`)
+- **Localization**: Restored the QML localization workflow for the new editor. (`98516636`)
+
+### Bug Fixes
+- **JPEG export crash on Windows**: Fixed a crash when exporting JPEGs (an Exiv2 crash) by rewriting the APP1 metadata segment. (`181c9572`)
+- **macOS build with OpenCV 5**: Dropped an unused OpenCV `calib3d` dependency so the build configures again on Homebrew OpenCV 5, which split that module. (`54b690e6`)
+
+### Documentation & Distribution
+- **README and website**: Rewrote the READMEs in a plain style, refreshed the website with RAW-editor screenshots and feature copy, and removed the old site. (`059585a2`, `4e70cc13`, `128896f6`, `58867300`)
+- **Release signing**: Set up R2 signing and synced release installers to R2 storage. (`4b020663`, `7296a433`)
+
 ## [0.2.7] (65f25b2..91008037) — 2026-06-24 ~ 2026-07-06
 
 ### Features
@@ -211,6 +233,28 @@
 ---
 
 # 更新日志
+
+## [0.2.8] (edc738eb..b4e6fc4b) — 2026-07-09 ~ 2026-08-04
+
+### 新功能
+- **神经网络去马赛克**：新增基于神经网络的 RAW 去马赛克方法，支持 CUDA、OpenCL 与 Metal，采用分块引擎与更小更快的模型，单张约 300 ms。(`7f71b11f`, `5126d486`, `9c27b3d6`, `fc8dcab2`, `153c09ba`, `83b779ff`, `d95e756e`)
+- **统一单窗口编辑器**：用主窗口内的编辑器取代旧的模态编辑对话框，与图库同处一个窗口。预览区通过 Qt RHI 在各后端零拷贝呈现，支持实时预览、最高 16 倍缩放与平移、裁切/旋转叠加层，以及可向下收起的底部胶片栏。色调、Look、LUT、显示变换、几何、RAW 解码等调整面板，以及示波器和历史/版本栏，均针对新窗口重新构建。(`56b92f43`, `d8069e9d`, `3a474475`, `130cf29b`, `ef0a384f`, `7d4ca660`, `792b16e4`, `3c72e0c5`, `71ba6fe6`, `d0cba60a`, `0944993b`, `f7bad872`, `784209e3`)
+- **Git 式编辑历史与自动保存**：用 Git 式提交图取代线性历史——每次编辑生成不可变提交，可分叉与切换版本，撤销/重做沿图行走，粘贴/合并创建新分支并提供冲突解决。编辑自动保存到恢复日志，崩溃后可干净还原。(`801f6093`, `c492b517`, `fe4d8a70`, `a0761eff`, `5c12f636`, `3beaae99`, `2471ec83`, `b360cb49`, `b4e6fc4b`)
+- **启动时选择 GPU 后端**：加速器（CUDA / OpenCL / Metal）改为启动时一次性选择并锁定，选择器移至设置；CUDA 流水线拆分为运行时 DLL，OpenCL 运行时在各 DLL 间共享。(`729315c9`, `1c33a6fb`, `ce4cfabe`)
+- **macOS 色彩管理**：在 macOS 编辑器路径上恢复显示色彩管理，并以零拷贝方式呈现 Metal 帧。(`3ba62cb5`, `ef0a384f`)
+- **新应用图标**：为 Windows 与 macOS 启用全新应用图标。(`5a77392a`)
+
+### 界面
+- **编辑器打磨**：将历史面板重制为 git-graph 时间线，重新设计合并冲突解决器，胶片栏缩略图改为无边框以匹配图库网格，将暗色上下文菜单控件与图片操作共享给编辑器胶片栏，加深主题灰度，并改进后台任务体验。(`4c731753`, `0c9d63cb`, `a7b63449`, `2a1fe331`, `fc623e21`)
+- **本地化**：为新编辑器恢复 QML 本地化流程。(`98516636`)
+
+### 缺陷修复
+- **Windows 导出 JPEG 崩溃**：修复导出 JPEG 时的崩溃（Exiv2 崩溃），改为重写 APP1 元数据段。(`181c9572`)
+- **macOS 适配 OpenCV 5**：移除未实际使用的 OpenCV `calib3d` 依赖，使构建在 Homebrew 的 OpenCV 5（该模块被拆分）下能再次完成配置。(`54b690e6`)
+
+### 文档与发布
+- **README 与网站**：以平实风格重写 README，为网站补充 RAW 编辑器截图与功能文案，并移除旧站。(`059585a2`, `4e70cc13`, `128896f6`, `58867300`)
+- **发布签名**：配置 R2 签名环境并将发布安装包同步至 R2 存储。(`4b020663`, `7296a433`)
 
 ## [0.2.7] (65f25b2..91008037) — 2026-06-24 ~ 2026-07-06
 
