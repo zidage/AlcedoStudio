@@ -1,0 +1,135 @@
+name: editor_history_undo_redo
+start: workspace_ready
+defaults:
+  expectTimeoutMs: 12000
+nodes:
+  workspace_ready:
+    op:
+      action: wait
+      target: workspaceHost
+      property: visible
+      eq: true
+    next:
+      - to: open_first_image
+        weight: 1
+  open_first_image:
+    op:
+      action: doubleClick
+      target: thumbnailGridView_firstCard
+    expect:
+      - target: editorWorkspace
+        property: visible
+        eq: true
+    next:
+      - to: wait_for_tone_nav
+        weight: 1
+  wait_for_tone_nav:
+    op:
+      action: wait
+      target: editorAdjustmentNav_tone
+      property: enabled
+      eq: true
+      timeoutMs: 30000
+    next:
+      - to: switch_to_tone
+        weight: 1
+  switch_to_tone:
+    op:
+      action: click
+      target: editorAdjustmentNav_tone
+    expect:
+      - target: editorAdjustmentPanel_tone
+        property: visible
+        eq: true
+    next:
+      - to: focus_exposure
+        weight: 1
+  focus_exposure:
+    op:
+      action: click
+      target: toneExposureSlider
+    next:
+      - to: increase_exposure
+        weight: 1
+  increase_exposure:
+    op:
+      # Qt.Key_Right. AdjustmentSlider applies the key through editValue and
+      # produces one debounced settled edit without batching pointer moves.
+      action: key
+      key: 16777236
+    next:
+      - to: settle_edit
+        weight: 1
+  settle_edit:
+    op:
+      action: waitMs
+      ms: 1000
+    next:
+      - to: open_history_rail
+        weight: 1
+  open_history_rail:
+    op:
+      action: click
+      target: editorHistoryRailButton
+    expect:
+      - target: editorHistoryVersionsPanel
+        property: visible
+        eq: true
+      - target: editorHistoryUndoButton
+        property: enabled
+        eq: true
+        timeoutMs: 15000
+    next:
+      - to: undo_edit
+        weight: 1
+  undo_edit:
+    op:
+      action: click
+      target: editorHistoryUndoButtonInput
+    next:
+      - to: settle_undo
+        weight: 1
+  settle_undo:
+    op:
+      action: waitMs
+      ms: 500
+    next:
+      - to: wait_for_redo
+        weight: 1
+  wait_for_redo:
+    op:
+      action: wait
+      target: editorHistoryRedoButton
+      property: enabled
+      eq: true
+      timeoutMs: 10000
+    next:
+      - to: redo_edit
+        weight: 1
+  redo_edit:
+    op:
+      action: click
+      target: editorHistoryRedoButtonInput
+    next:
+      - to: settle_redo
+        weight: 1
+  settle_redo:
+    op:
+      action: waitMs
+      ms: 500
+    next:
+      - to: wait_for_undo
+        weight: 1
+  wait_for_undo:
+    op:
+      action: wait
+      target: editorHistoryUndoButton
+      property: enabled
+      eq: true
+      timeoutMs: 10000
+    next:
+      - to: capture_history
+        weight: 1
+  capture_history:
+    op:
+      action: screenshot

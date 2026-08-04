@@ -32,7 +32,6 @@ class IUiStatusSink;
 class SemanticGenerationController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool promptVisible READ PromptVisible NOTIFY StateChanged)
-  Q_PROPERTY(bool activatePromptVisible READ ActivatePromptVisible NOTIFY StateChanged)
   Q_PROPERTY(bool running READ Running NOTIFY StateChanged)
   Q_PROPERTY(int pendingCount READ PendingCount NOTIFY StateChanged)
   Q_PROPERTY(int total READ Total NOTIFY StateChanged)
@@ -62,7 +61,6 @@ class SemanticGenerationController final : public QObject {
   void BindCollaborators(NikonHeRecoveryController* nikon);
 
   bool               PromptVisible() const;
-  bool               ActivatePromptVisible() const;
   bool               Running() const { return running_; }
   int                PendingCount() const { return static_cast<int>(pending_items_.size()); }
   int                Total() const { return total_; }
@@ -84,7 +82,6 @@ class SemanticGenerationController final : public QObject {
 
   Q_INVOKABLE void   StartPendingGeneration(bool forceRegenerate = false);
   Q_INVOKABLE void   SkipPendingGeneration(bool rememberChoice = false);
-  Q_INVOKABLE void   DismissActivatePrompt();
   Q_INVOKABLE void   SetImportPreference(const QString& preference);
   Q_INVOKABLE void   ActivateSelectedModel();
   Q_INVOKABLE void   CancelGeneration();
@@ -168,7 +165,6 @@ class SemanticGenerationController final : public QObject {
   bool                                   model_activation_running_ = false;
   bool                                   selected_model_active_    = false;
   bool                                   prompt_pending_           = false;
-  bool                                   activate_prompt_pending_  = false;
   bool                                   running_                  = false;
   // True when the user pressed Cancel during the interactive sidecar boot
   // (before job_ exists). The boot-failure path reads this to finish the

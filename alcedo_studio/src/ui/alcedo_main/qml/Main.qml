@@ -8,6 +8,11 @@ import QtQuick.Effects
 ApplicationWindow {
     id: root
     objectName: "mainWindow"
+    // The test host supplies this context property before loading QML. The
+    // typeof guard keeps source-loaded QML fixtures compatible with the
+    // production context, where the property is explicitly set to false.
+    readonly property bool automationModeEnabled: typeof automationMode === "boolean"
+                                                  && automationMode
     width: 1200
     height: 760
     minimumWidth: 960
@@ -151,6 +156,7 @@ ApplicationWindow {
     ProjectLaunchController {
         id: projectLaunchController
         host: root
+        automationMode: root.automationModeEnabled
     }
 
     // Shared workspace scroll state survives Loader teardown when routing between
@@ -314,6 +320,7 @@ ApplicationWindow {
     AppDialogs {
         id: appDialogs
         host: root
+        automationMode: root.automationModeEnabled
         imageActionsController: imageActionsController
         selectionState: selectionStateObj
         exportQueueState: exportQueueStateObj

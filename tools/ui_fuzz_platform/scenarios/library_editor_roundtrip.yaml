@@ -1,0 +1,70 @@
+name: library_editor_roundtrip
+start: workspace_ready
+defaults:
+  expectTimeoutMs: 10000
+nodes:
+  workspace_ready:
+    op:
+      action: wait
+      target: workspaceHost
+      property: visible
+      eq: true
+    next:
+      - to: open_first_image
+        weight: 1
+  open_first_image:
+    op:
+      action: doubleClick
+      target: thumbnailGridView_firstCard
+    expect:
+      - target: editorWorkspace
+        property: visible
+        eq: true
+    next:
+      - to: wait_for_library_nav
+        weight: 1
+  wait_for_library_nav:
+    op:
+      action: wait
+      target: libraryNavButton
+      property: enabled
+      eq: true
+      timeoutMs: 15000
+    next:
+      - to: back_to_library
+        weight: 1
+  back_to_library:
+    op:
+      action: click
+      target: libraryNavButton
+    expect:
+      - target: libraryWorkspace
+        property: visible
+        eq: true
+    next:
+      - to: wait_for_editor_nav
+        weight: 1
+  wait_for_editor_nav:
+    op:
+      action: wait
+      target: editorNavButton
+      property: enabled
+      eq: true
+      timeoutMs: 15000
+    next:
+      - to: reenter_editor
+        weight: 1
+  reenter_editor:
+    op:
+      action: click
+      target: editorNavButton
+    expect:
+      - target: editorWorkspace
+        property: visible
+        eq: true
+    next:
+      - to: capture_editor
+        weight: 1
+  capture_editor:
+    op:
+      action: screenshot

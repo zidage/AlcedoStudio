@@ -1,0 +1,7 @@
+name: slow_walk_for_stop
+start: pause
+defaults:
+  expectTimeoutMs: 8000
+nodes:
+  pause:
+    op: { action: waitMs, ms: 60000 }
