@@ -16,6 +16,7 @@
 - **Import controls**: Split the single Import button into "Import From Folder" (recursive directory scan with a file-list confirmation dialog) and "Import Images" (individual file picker). Removed the RAW-extension name filter from the file picker so all files are selectable.
 
 ### Bug Fixes
+- **Natural-language search submit vs typing debounce**: With Natural Language search enabled, semantic queries no longer run through the instant preview pipeline. Typing only shows an Enter/Search hint; pressing Enter or Search stops the typing debounce and runs `RequestSubmitSearch` so the AI sidecar can actually be started. A late preview refresh can no longer cancel an in-flight semantic submit.
 - **RAW file type detection by content, not extension**: Removed the hardcoded file-extension whitelist from the import path so cameras with extensions the whitelist missed (e.g. `.srw`, `.orf`, `.pef`) are no longer silently dropped. LibRaw now opens every candidate file during metadata extraction; files it cannot identify as RAW are marked as failed and cleaned up, rather than being rejected up front by a brittle extension check.
 - **JPEG export crash on Windows**: Fixed a crash when exporting JPEGs (an Exiv2 crash) by rewriting the APP1 metadata segment. (`181c9572`)
 - **macOS build with OpenCV 5**: Dropped an unused OpenCV `calib3d` dependency so the build configures again on Homebrew OpenCV 5, which split that module. (`54b690e6`)
