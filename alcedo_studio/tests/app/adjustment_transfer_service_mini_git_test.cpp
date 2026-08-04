@@ -210,6 +210,92 @@ TEST_F(AdjustmentTransferPasteMergeTest, TwoParentMergeCommitUsesIncomingAncestr
 }
 
 // ============================================================================
+// Batch merge (MergeIntoActiveVersion): all-incoming resolution on the
+// caller-owned graph + live pipeline, with no session WAL.
+// ============================================================================
+
+/// Batch merge advances the active Version head to a two-parent merge commit
+/// whose field delta resolves to the incoming value, without creating a new
+/// Version ref. Mirrors the editor merge shape but operates on the caller-owned
+/// graph + live pipeline.
+TEST_F(AdjustmentTransferPasteMergeTest,
+       MergeIntoActiveVersionAdvancesHeadWithAllIncomingResolution) {
+  const auto element_id  = test::EditorMiniGitProjectFixture::kElementA;
+  auto*      graph       = project_.graph(element_id).get();
+  ASSERT_NE(graph, nullptr);
+
+  // Current head: one exposure edit at +1.0.
+  ASSERT_TRUE(project_.AppendExposureEdit(element_id, 0.0f, 1.0f));
+  const auto current_head   = graph->GetActiveVersionRef().head_commit_hash;
+  const auto active_version = graph->GetActiveVersionId();
+  ASSERT_TRUE(current_head.has_value());
+  EXPECT_EQ(graph->CommitCount(), 1u);
+
+  // Live pipeline reflecting the current exposure so DetectMergeConflicts sees
+  // a current value and the operator can resolve via MergeParams.
+  CPUPipelineExecutor live_pipeline;
+  ASSERT_TRUE(AdjustmentTransferService::Apply(live_pipeline, MakeExposurePackage(1.0f)));
+
+  auto merge_result = AdjustmentTransferService::MergeIntoActiveVersion(
+      *graph, live_pipeline, MakeExposurePackage(2.0f));
+  ASSERT_TRUE(merge_result.pasted) << merge_result.error;
+
+  // Active Version is unchanged; its head advanced to the merge commit.
+  EXPECT_EQ(graph->GetActiveVersionId(), active_version);
+  EXPECT_EQ(merge_result.new_version_id, active_version);
+  EXPECT_EQ(graph->GetActiveVersionRef().head_commit_hash, merge_result.new_head);
+  // current + incoming ancestry + merge commit.
+  EXPECT_EQ(graph->CommitCount(), 3u);
+
+  const auto& merge_commit = graph->GetCommit(merge_result.new_head);
+  EXPECT_EQ(merge_commit.GetKind(), EditCommitKind::kMerge);
+  EXPECT_EQ(merge_commit.GetFirstParentHash(), current_head);
+
+  // Second parent is the incoming root-relative ancestry head: a root-parented
+  // commit (first parent nullopt) carrying the incoming exposure. Derived from
+  // the graph because BuildRootRelativeCommits timestamps make recompute differ.
+  const auto second_parent_opt = merge_commit.GetSecondParentHash();
+  ASSERT_TRUE(second_parent_opt.has_value());
+  const auto& incoming_commit = graph->GetCommit(*second_parent_opt);
+  EXPECT_EQ(incoming_commit.GetKind(), EditCommitKind::kEdit);
+  EXPECT_EQ(incoming_commit.GetFirstParentHash(), std::nullopt);
+  const auto incoming_payload = OrdinaryEditPayload::FromJSON(incoming_commit.GetPayloadJSON());
+  EXPECT_EQ(incoming_payload.operator_type, OperatorType::EXPOSURE);
+  EXPECT_EQ(incoming_payload.after_value["exposure"], 2.0f);
+
+  // The merge payload resolves the exposure field to the incoming value (+2.0)
+  // and records the target's current state (+1.0) for undo.
+  const auto payload = MergeEditPayload::FromJSON(merge_commit.GetPayloadJSON());
+  ASSERT_EQ(payload.fields.size(), 1u);
+  EXPECT_EQ(payload.fields[0].operator_type, OperatorType::EXPOSURE);
+  ASSERT_TRUE(payload.fields[0].resolved_value.contains("exposure"));
+  EXPECT_EQ(payload.fields[0].resolved_value["exposure"], 2.0f);
+  EXPECT_EQ(payload.fields[0].resolved_enabled, true);
+  ASSERT_TRUE(payload.fields[0].before_value.contains("exposure"));
+  EXPECT_EQ(payload.fields[0].before_value["exposure"], 1.0f);
+  EXPECT_EQ(payload.fields[0].before_enabled, true);
+
+  // First-parent chain reaches the merge commit and the prior current commit.
+  const auto chain = graph->FirstParentChain(merge_result.new_head);
+  EXPECT_GE(chain.size(), 2u);
+}
+
+/// MergeIntoActiveVersion rejects an empty package before touching the graph.
+TEST_F(AdjustmentTransferPasteMergeTest, MergeIntoActiveVersionRejectsEmptyPackage) {
+  const auto element_id = test::EditorMiniGitProjectFixture::kElementA;
+  auto*      graph      = project_.graph(element_id).get();
+
+  CPUPipelineExecutor live_pipeline;
+  auto result = AdjustmentTransferService::MergeIntoActiveVersion(*graph, live_pipeline,
+                                                                  AdjustmentTransferPackage{});
+  EXPECT_FALSE(result.pasted);
+  EXPECT_FALSE(result.error.empty());
+  // Graph untouched.
+  EXPECT_EQ(graph->GetActiveVersionId(), project_.graph(element_id)->GetActiveVersionId());
+}
+
+
+// ============================================================================
 // Robustness / edge case tests
 // ============================================================================
 

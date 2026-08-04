@@ -189,7 +189,7 @@
 <context>
     <name>AdjustmentSlider</name>
     <message>
-        <location filename="../qml/AdjustmentSlider.qml" line="+257"/>
+        <location filename="../qml/AdjustmentSlider.qml" line="+266"/>
         <source>Out of range</source>
         <translation type="unfinished"></translation>
     </message>
@@ -199,7 +199,7 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+42"/>
+        <location line="+44"/>
         <source>Drag the handle to adjust %1. Double-click to reset.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -223,7 +223,7 @@
     </message>
     <message>
         <location line="+0"/>
-        <location line="+5"/>
+        <location line="+6"/>
         <source>Paste Adjustments</source>
         <translation>Paste Adjustments</translation>
     </message>
@@ -248,7 +248,32 @@
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+157"/>
+        <location line="-180"/>
+        <source>Merge Adjustments</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+341"/>
+        <source>Transfer Strategy</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Paste</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Merge</source>
+        <translation type="unfinished">Merge</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Merge resolves every conflict by using the incoming values only. Per-field conflict resolution isn&apos;t available when transferring to multiple images.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+21"/>
         <source>Parameters to Copy</source>
         <translation type="unfinished"></translation>
     </message>
@@ -895,7 +920,7 @@
     <message>
         <location line="+2"/>
         <source>Failed</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Failed</translation>
     </message>
     <message>
         <location line="+2"/>
@@ -1940,6 +1965,11 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <location line="+1"/>
+        <source>The accelerator change will apply after Alcedo restarts.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <location filename="../album_backend/image_controller.cpp" line="+2"/>
         <source>Camera</source>
         <translation>Camera</translation>
@@ -2053,7 +2083,7 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+211"/>
+        <location line="+195"/>
         <source>Select at least one image to analyze.</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2061,29 +2091,29 @@ Alcedo will use %1 instead.</translation>
 <context>
     <name>BackgroundTaskBar</name>
     <message>
-        <location filename="../qml/BackgroundTaskBar.qml" line="+62"/>
+        <location filename="../qml/BackgroundTaskBar.qml" line="+64"/>
         <source>AI Analysis</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">AI Analysis</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Semantic Labels</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Semantic Labels</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Model Activation</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Model Activation</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Model Download</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Model Download</translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Editor Save</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Editor Save</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -2093,13 +2123,13 @@ Alcedo will use %1 instead.</translation>
     <message>
         <location line="+1"/>
         <source>Export</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Export</translation>
     </message>
     <message>
         <location line="+1"/>
         <location line="+5"/>
         <source>Background Tasks</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Background Tasks</translation>
     </message>
     <message>
         <location line="+3"/>
@@ -2108,7 +2138,7 @@ Alcedo will use %1 instead.</translation>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+94"/>
+        <location line="+102"/>
         <source>+%1</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2116,107 +2146,107 @@ Alcedo will use %1 instead.</translation>
 <context>
     <name>BackgroundTasksDialog</name>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location filename="../qml/BackgroundTasksDialog.qml" line="+80"/>
         <source>Failed</source>
         <translation type="unfinished">Failed</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+2"/>
         <source>Working</source>
         <translation type="unfinished">Working</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+1"/>
         <source>Finished</source>
         <translation type="unfinished">Finished</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+12"/>
         <source>AI Analysis</source>
         <translation type="unfinished">AI Analysis</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+1"/>
         <source>Semantic Labels</source>
         <translation type="unfinished">Semantic Labels</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+1"/>
         <source>Model Activation</source>
         <translation type="unfinished">Model Activation</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+1"/>
         <source>Model Download</source>
         <translation type="unfinished">Model Download</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+1"/>
         <source>Editor Save</source>
         <translation type="unfinished">Editor Save</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+1"/>
         <source>Import</source>
         <translation type="unfinished">Import</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+1"/>
         <source>Export</source>
         <translation type="unfinished">Export</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+1"/>
         <source>Task</source>
         <translation type="unfinished">Task</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+5"/>
         <source>No active work</source>
         <translation type="unfinished">No active work</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+2"/>
         <source>%1 total · %2 working</source>
         <translation type="unfinished">%1 total · %2 working</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+1"/>
         <source>%1 total</source>
         <translation type="unfinished">%1 total</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+9"/>
         <source>%1%</source>
         <translation type="unfinished">%1%</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+86"/>
         <source>Background Tasks</source>
         <translation type="unfinished">Background Tasks</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+30"/>
         <source>Close</source>
         <translation type="unfinished">Close</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+226"/>
         <source>Details</source>
         <translation type="unfinished">Details</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+40"/>
         <source>Cancel</source>
         <translation type="unfinished">Cancel</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+42"/>
         <source>No background tasks yet</source>
         <translation type="unfinished">No background tasks yet</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+11"/>
         <source>Imports, exports, model work, and AI jobs will appear here.</source>
         <translation type="unfinished">Imports, exports, model work, and AI jobs will appear here.</translation>
     </message>
@@ -2249,7 +2279,7 @@ Alcedo will use %1 instead.</translation>
     <message>
         <location line="+5"/>
         <source>Background Tasks</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Background Tasks</translation>
     </message>
     <message>
         <location line="+33"/>
@@ -2334,7 +2364,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorAdjustmentStack</name>
     <message>
-        <location filename="../qml/EditorAdjustmentStack.qml" line="+128"/>
+        <location filename="../qml/EditorAdjustmentStack.qml" line="+134"/>
         <location line="+61"/>
         <source>Look</source>
         <translation type="unfinished"></translation>
@@ -2411,13 +2441,13 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+200"/>
-        <location line="+191"/>
+        <location line="+201"/>
+        <location line="+185"/>
         <source>Method</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-189"/>
+        <location line="-183"/>
         <location line="+108"/>
         <source>ACES 2.0</source>
         <translation type="unfinished"></translation>
@@ -2645,12 +2675,12 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+44"/>
+        <location line="+38"/>
         <source>Display Transform</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+139"/>
+        <location line="+82"/>
         <source>Color &amp; Encoding</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2658,7 +2688,9 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorFilmstrip</name>
     <message>
-        <location filename="../qml/EditorFilmstrip.qml" line="+218"/>
+        <location filename="../qml/EditorFilmstrip.qml" line="+241"/>
+        <location line="+32"/>
+        <location line="+264"/>
         <source>(unnamed)</source>
         <translation type="unfinished">(unnamed)</translation>
     </message>
@@ -2678,7 +2710,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+39"/>
+        <location line="+47"/>
         <source>Expand filmstrip</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2688,39 +2720,49 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Image %1 of %2</source>
+        <location line="+283"/>
+        <source> | Rating %1/5</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+67"/>
+        <location line="-211"/>
         <source>No images in filmstrip</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>%1 / %2</source>
-        <translation type="unfinished">%1 / %2</translation>
-    </message>
-    <message>
-        <location line="+46"/>
+        <location line="+89"/>
         <source>No images</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+86"/>
+        <location line="+108"/>
         <source>Source file was moved or deleted</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+10"/>
-        <location line="+166"/>
+        <location line="-193"/>
+        <location line="+202"/>
         <source>Image %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-164"/>
+        <location line="-276"/>
+        <source>Editing %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No image selected</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+277"/>
         <source>Current image</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Selected image</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
@@ -2728,13 +2770,16 @@ Original source files on disk will be kept.</source>
         <source>Open image</source>
         <translation type="unfinished"></translation>
     </message>
+</context>
+<context>
+    <name>EditorFilmstripThumbnailCard</name>
     <message>
-        <location line="+100"/>
+        <location filename="../qml/EditorFilmstripThumbnailCard.qml" line="+92"/>
         <source>No thumbnail</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+30"/>
+        <location line="+28"/>
         <source>Saving</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2743,16 +2788,21 @@ Original source files on disk will be kept.</source>
         <source>Rendering</source>
         <translation type="unfinished"></translation>
     </message>
+    <message>
+        <location line="+43"/>
+        <source>Image %1</source>
+        <translation type="unfinished"></translation>
+    </message>
 </context>
 <context>
     <name>EditorGeometryPanel</name>
     <message>
-        <location filename="../qml/EditorGeometryPanel.qml" line="+67"/>
+        <location filename="../qml/EditorGeometryPanel.qml" line="+71"/>
         <source>Auto (metadata)</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+441"/>
+        <location line="+463"/>
         <source>Crop X</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2843,9 +2893,62 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>EditorHistoryTransactionEntry</name>
+    <message>
+        <location filename="../qml/EditorHistoryTransactionEntry.qml" line="+65"/>
+        <source>Earlier</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Just now</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 min ago</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 hr ago</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 days ago</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+55"/>
+        <source>Commit %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+40"/>
+        <source>Merge</source>
+        <translation type="unfinished">Merge</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Adjustment</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+47"/>
+        <source>2nd %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Resolved adjustments</source>
+        <translation type="unfinished"></translation>
+    </message>
+</context>
+<context>
     <name>EditorHistoryTransactionsPanel</name>
     <message>
-        <location filename="../qml/EditorHistoryTransactionsPanel.qml" line="+60"/>
+        <location filename="../qml/EditorHistoryTransactionsPanel.qml" line="+59"/>
         <source>Adjustment transfer is unavailable</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2871,32 +2974,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+13"/>
-        <source>Earlier</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>Just now</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>%1 min ago</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>%1 hr ago</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>%1 days ago</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+20"/>
+        <location line="+28"/>
         <source>Edit History</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2936,32 +3014,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+191"/>
-        <source>Commit %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+47"/>
-        <source>Merge</source>
-        <translation type="unfinished">Merge</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>Adjustment</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+36"/>
-        <source>2nd %1</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+21"/>
-        <source>Resolved adjustments</source>
-        <translation type="unfinished"></translation>
-    </message>
-    <message>
-        <location line="+19"/>
+        <location line="+108"/>
         <source>No edit history yet</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2969,7 +3022,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorLookPanel</name>
     <message>
-        <location filename="../qml/EditorLookPanel.qml" line="+210"/>
+        <location filename="../qml/EditorLookPanel.qml" line="+212"/>
         <source>Saturation</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3221,7 +3274,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorMergeDialog</name>
     <message>
-        <location filename="../qml/EditorMergeDialog.qml" line="+175"/>
+        <location filename="../qml/EditorMergeDialog.qml" line="+176"/>
         <source>Merge Conflicts</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3325,7 +3378,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+106"/>
+        <location line="+112"/>
         <location line="+20"/>
         <source>RAW Decode</source>
         <translation type="unfinished"></translation>
@@ -3395,7 +3448,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorTonePanel</name>
     <message>
-        <location filename="../qml/EditorTonePanel.qml" line="+135"/>
+        <location filename="../qml/EditorTonePanel.qml" line="+137"/>
         <source>Exposure</source>
         <translation type="unfinished">Exposure</translation>
     </message>
@@ -3445,22 +3498,22 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorVersionsPanel</name>
     <message>
-        <location filename="../qml/EditorVersionsPanel.qml" line="+96"/>
+        <location filename="../qml/EditorVersionsPanel.qml" line="+114"/>
         <source>Version %1</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+46"/>
+        <location line="+38"/>
         <source>Version operation failed</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+66"/>
+        <location line="+104"/>
         <source>Current version has no commit to branch from</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+94"/>
+        <location line="+106"/>
         <source>Versions</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3477,12 +3530,12 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="+25"/>
         <location line="+28"/>
-        <location line="+205"/>
+        <location line="+207"/>
         <source>Rename Version</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-232"/>
+        <location line="-234"/>
         <location line="+29"/>
         <source>Branch from current</source>
         <translation type="unfinished"></translation>
@@ -3515,12 +3568,12 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+24"/>
-        <location line="+168"/>
+        <location line="+169"/>
         <source>Version checkout is unavailable</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-103"/>
+        <location line="-104"/>
         <source>Active Version</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3530,7 +3583,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+38"/>
+        <location line="+40"/>
         <source>Commit %1</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3540,7 +3593,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+48"/>
+        <location line="+47"/>
         <source>Remove Version</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3580,7 +3633,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+82"/>
+        <location line="+77"/>
         <source>Preparing image viewport</source>
         <translation type="unfinished"></translation>
     </message>
@@ -3592,7 +3645,7 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="+18"/>
         <source>%1%</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">%1%</translation>
     </message>
     <message>
         <location line="+1"/>
@@ -3643,7 +3696,7 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="+16"/>
         <source>Background Tasks</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Background Tasks</translation>
     </message>
 </context>
 <context>
@@ -4090,7 +4143,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>LibraryWorkspace</name>
     <message>
-        <location filename="../qml/LibraryWorkspace.qml" line="+183"/>
+        <location filename="../qml/LibraryWorkspace.qml" line="+249"/>
         <source>Browser</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4127,13 +4180,13 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="+29"/>
         <source>Export</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Export</translation>
     </message>
 </context>
 <context>
     <name>Main</name>
     <message>
-        <location filename="../qml/Main.qml" line="+17"/>
+        <location filename="../qml/Main.qml" line="+22"/>
         <source>Alcedo Studio</source>
         <translation type="unfinished">Alcedo Studio</translation>
     </message>
@@ -4274,7 +4327,7 @@ Original source files on disk will be kept.</source>
     <message>
         <location filename="../album_backend/editor_session_task_port.cpp" line="+44"/>
         <source>Editor Save</source>
-        <translation type="unfinished"></translation>
+        <translation type="unfinished">Editor Save</translation>
     </message>
     <message>
         <location line="+2"/>
@@ -4310,7 +4363,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>SemanticGenerationDialog</name>
     <message>
-        <location filename="../qml/SemanticGenerationDialog.qml" line="+154"/>
+        <location filename="../qml/SemanticGenerationDialog.qml" line="+155"/>
         <source>Generating semantic labels</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4350,7 +4403,7 @@ Original source files on disk will be kept.</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+47"/>
+        <location line="+48"/>
         <source>Cancel</source>
         <translation type="unfinished">Cancel</translation>
     </message>
@@ -4573,12 +4626,12 @@ Original source files on disk will be kept.</source>
 <context>
     <name>SettingDialog</name>
     <message>
-        <location filename="../qml/SettingDialog.qml" line="+76"/>
+        <location filename="../qml/SettingDialog.qml" line="+80"/>
         <source>Select Thumbnail Cache Folder</source>
         <translation>Select Thumbnail Cache Folder</translation>
     </message>
     <message>
-        <location line="+46"/>
+        <location line="+57"/>
         <source>Unavailable</source>
         <translation>Unavailable</translation>
     </message>
@@ -4588,7 +4641,7 @@ Original source files on disk will be kept.</source>
         <translation>%1 / %2</translation>
     </message>
     <message>
-        <location line="+56"/>
+        <location line="+65"/>
         <source>Settings applied</source>
         <translation>Settings applied</translation>
     </message>
@@ -4598,60 +4651,65 @@ Original source files on disk will be kept.</source>
         <translation>Setting</translation>
     </message>
     <message>
-        <location line="-134"/>
-        <location line="+148"/>
-        <location line="+150"/>
+        <location line="-143"/>
+        <location line="+157"/>
+        <location line="+151"/>
         <source>Language</source>
         <translation>Language</translation>
     </message>
     <message>
-        <location line="-295"/>
-        <location line="+146"/>
+        <location line="-305"/>
+        <location line="+155"/>
         <source>Theme and color</source>
         <translation>Theme and color</translation>
     </message>
     <message>
-        <location line="-143"/>
-        <location line="+144"/>
+        <location line="-152"/>
+        <location line="+153"/>
         <source>Cache</source>
         <translation>Cache</translation>
     </message>
     <message>
-        <location line="-141"/>
-        <location line="+142"/>
+        <location line="-150"/>
+        <location line="+151"/>
         <source>Local Content Recognition</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-139"/>
-        <location line="+140"/>
+        <location line="-148"/>
+        <location line="+149"/>
         <source>Advanced Content Analysis</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="-138"/>
-        <location line="+139"/>
+        <location line="-144"/>
+        <location line="+146"/>
         <source>About</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
+        <location line="-148"/>
+        <location line="+147"/>
         <source>Acceleration</source>
         <translation>Acceleration</translation>
     </message>
     <message>
+        <location line="+568"/>
         <source>Image processing backend</source>
         <translation>Image processing backend</translation>
     </message>
     <message>
+        <location line="+15"/>
         <source>Backend</source>
         <translation>Backend</translation>
     </message>
     <message>
+        <location line="+30"/>
         <source>Restart Alcedo yourself to apply this backend change.</source>
         <translation>Restart Alcedo yourself to apply this backend change.</translation>
     </message>
     <message>
-        <location line="-134"/>
+        <location line="-753"/>
         <source>本地 AI 功能运行在本机 AI 模型上，图片内容不会上传至云端。识别速度和可处理规模取决于你的 CPU、GPU、内存与磁盘性能。
 
 默认推荐使用 SigLIP2 模型：它是当前最均衡的选择，多语言语义理解更稳，适合大多数相册标注和自然语言搜索。
@@ -4673,7 +4731,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+265"/>
+        <location line="+272"/>
         <source>Application language</source>
         <translation>Application language</translation>
     </message>
@@ -4778,7 +4836,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>Refresh</translation>
     </message>
     <message>
-        <location line="+111"/>
+        <location line="+196"/>
         <source>Done</source>
         <translation>Done</translation>
     </message>
@@ -4838,7 +4896,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>ThumbnailGridView</name>
     <message>
-        <location filename="../qml/ThumbnailGridView.qml" line="+80"/>
+        <location filename="../qml/ThumbnailGridView.qml" line="+81"/>
         <source>Black &amp; White</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4848,13 +4906,13 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+583"/>
+        <location line="+617"/>
         <location line="+24"/>
         <source>(unnamed)</source>
         <translation type="unfinished">(unnamed)</translation>
     </message>
     <message>
-        <location line="+95"/>
+        <location line="+99"/>
         <source>Source file was moved or deleted</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4882,7 +4940,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>TopToolbar</name>
     <message>
-        <location filename="../qml/TopToolbar.qml" line="+41"/>
+        <location filename="../qml/TopToolbar.qml" line="+42"/>
         <source>Alcedo</source>
         <translation type="unfinished">Alcedo</translation>
     </message>
@@ -4892,27 +4950,27 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+26"/>
+        <location line="+27"/>
         <source>File</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+13"/>
         <source>Load Project</source>
         <translation type="unfinished">Load Project</translation>
     </message>
     <message>
-        <location line="+7"/>
+        <location line="+8"/>
         <source>Create Project</source>
         <translation type="unfinished">Create Project</translation>
     </message>
     <message>
-        <location line="+9"/>
+        <location line="+10"/>
         <source>Save Project</source>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+9"/>
+        <location line="+10"/>
         <source>Settings</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4920,7 +4978,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>WelcomeDialog</name>
     <message>
-        <location filename="../qml/WelcomeDialog.qml" line="+179"/>
+        <location filename="../qml/WelcomeDialog.qml" line="+167"/>
         <source>Opened recently</source>
         <translation>Opened recently</translation>
     </message>
@@ -4965,8 +5023,8 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>Opened last week</translation>
     </message>
     <message>
-        <location line="-157"/>
-        <location line="+18"/>
+        <location line="-147"/>
+        <location line="+17"/>
         <source>Untitled Project</source>
         <translation type="unfinished"></translation>
     </message>
@@ -4981,7 +5039,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>CUDA unavailable</translation>
     </message>
     <message>
-        <location line="+218"/>
+        <location line="+209"/>
         <source>Alcedo</source>
         <translation type="unfinished">Alcedo</translation>
     </message>
@@ -4997,17 +5055,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
     <message>
         <location line="+66"/>
-        <location line="+544"/>
+        <location line="+508"/>
         <source>Create Project</source>
         <translation>Create Project</translation>
     </message>
     <message>
-        <location line="-475"/>
-        <source>Acceleration</source>
-        <translation>Acceleration</translation>
-    </message>
-    <message>
-        <location line="+60"/>
+        <location line="-415"/>
         <source>Exit Application</source>
         <translation>Exit Application</translation>
     </message>
@@ -5065,7 +5118,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>alcedo::ui::AppTheme</name>
     <message>
-        <location filename="../app_theme.cpp" line="+1165"/>
+        <location filename="../app_theme.cpp" line="+1176"/>
         <source>Alcedo</source>
         <translation>Alcedo</translation>
     </message>
@@ -5091,7 +5144,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>alcedo::ui::ProjectModule</name>
     <message>
-        <location filename="../album_backend/project_module.cpp" line="+384"/>
+        <location filename="../album_backend/project_module.cpp" line="+390"/>
         <source>Select Project Package</source>
         <translation type="unfinished"></translation>
     </message>

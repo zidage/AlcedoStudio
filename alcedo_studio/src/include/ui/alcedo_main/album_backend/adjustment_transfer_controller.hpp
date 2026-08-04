@@ -52,6 +52,12 @@ class AdjustmentTransferController final : public QObject {
   auto                    PasteViaMiniGit(const std::vector<sl_element_id_t>& ids,
                                           PipelineMgmtService&                pipeline_service) -> QVariantMap;
 
+  /// Merge adjustments into every target using the Mini-Git commit graph path.
+  /// Each target's active Version head advances to a two-parent merge commit
+  /// with every conflict resolved as "use all incoming".
+  auto MergeViaMiniGit(const std::vector<sl_element_id_t>& ids,
+                       PipelineMgmtService&                pipeline_service) -> QVariantMap;
+
   /// Shared post-apply processing: thumbnail invalidation, HDR metadata refresh,
   /// and project persistence.
   void PostProcessApplyResult(const AdjustmentApplyResult& result, bool merge_strategy);

@@ -12,7 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <utility>
+#include <unordered_set>
 
 #include "app/editor_adjustment_pipeline.hpp"
 #include "edit/pipeline/pipeline_cpu.hpp"
@@ -613,6 +613,184 @@ auto AdjustmentTransferService::PasteAsRootRelativeVersion(
     [[maybe_unused]] sl_element_id_t element_id, const AdjustmentTransferPackage& package,
     std::string version_display_name) -> AdjustmentPasteResult {
   return PasteAsRootRelativeVersion(graph, package, std::move(version_display_name));
+}
+
+namespace {
+
+void MergeJsonObjectDeep(nlohmann::json& target, const nlohmann::json& patch) {
+  if (!target.is_object() || !patch.is_object()) {
+    target = patch;
+    return;
+  }
+  for (const auto& [key, value] : patch.items()) {
+    if (target.contains(key) && target[key].is_object() && value.is_object()) {
+      MergeJsonObjectDeep(target[key], value);
+    } else {
+      target[key] = value;
+    }
+  }
+}
+
+}  // namespace
+
+auto AdjustmentTransferService::DetectMergeConflicts(
+    CPUPipelineExecutor& pipeline, const AdjustmentTransferPackage& package,
+    std::vector<AdjustmentMergeConflict>* conflicts, std::string* error) -> bool {
+  if (conflicts == nullptr) {
+    if (error != nullptr) *error = "Merge conflict output is required";
+    return false;
+  }
+  conflicts->clear();
+  for (const auto& entry : package.operators_) {
+    if (entry.stage_ == PipelineStageName::Stage_Count ||
+        entry.operator_type_ == OperatorType::UNKNOWN ||
+        entry.operator_type_ == OperatorType::RESIZE) {
+      continue;
+    }
+
+    auto&      stage   = pipeline.GetStage(entry.stage_);
+    const auto current = stage.GetOperator(entry.operator_type_);
+    const bool has_current =
+        current.has_value() && current.value() != nullptr && current.value()->op_ != nullptr;
+
+    nlohmann::json current_value   = nlohmann::json(nullptr);
+    bool           current_enabled = false;
+    if (has_current) {
+      current_value   = current.value()->op_->GetParams();
+      current_enabled = current.value()->enable_;
+    }
+
+    nlohmann::json incoming_value = entry.params_;
+    if (has_current && entry.merge_params_) {
+      incoming_value = current_value;
+      MergeJsonObjectDeep(incoming_value, entry.params_);
+    }
+
+    bool params_conflict = false;
+    if (has_current) {
+      params_conflict = current.value()->op_->DetectMergeConflict(current_value, incoming_value);
+    } else {
+      params_conflict = !incoming_value.is_null();
+    }
+    if (params_conflict || current_enabled != entry.enabled_) {
+      AdjustmentMergeConflict conflict;
+      conflict.stage         = entry.stage_;
+      conflict.operator_type = entry.operator_type_;
+      const auto script_key  = EditorAdjustmentFieldKey(entry.stage_, entry.operator_type_);
+      conflict.field_key     = (script_key.has_value() ? *script_key : std::string{"unknown"}) +
+                           "/" + std::to_string(static_cast<int>(entry.stage_));
+      conflict.current_value    = std::move(current_value);
+      conflict.incoming_value   = std::move(incoming_value);
+      conflict.current_enabled  = current_enabled;
+      conflict.incoming_enabled = entry.enabled_;
+      conflicts->push_back(std::move(conflict));
+    }
+  }
+  return true;
+}
+
+auto AdjustmentTransferService::InsertIncomingAncestryCommits(
+    CommitGraph& graph, const AdjustmentTransferPackage& package)
+    -> std::optional<commit_hash_t> {
+  auto incoming_commits = BuildRootRelativeCommits(package, graph.GetRootId());
+  if (incoming_commits.empty()) {
+    return std::nullopt;
+  }
+  for (const auto& commit : incoming_commits) {
+    (void)graph.InsertCommit(commit);
+  }
+  return incoming_commits.back().GetCommitHash();
+}
+
+auto AdjustmentTransferService::BuildMergeFieldDelta(
+    CPUPipelineExecutor& pipeline, const AdjustmentMergeConflict& conflict,
+    OperatorMergeChoice choice) -> MergeFieldDelta {
+  MergeFieldDelta delta;
+  delta.operator_type  = conflict.operator_type;
+  delta.stage_name     = conflict.stage;
+  delta.field_name     = "$operator_params";
+  delta.before_value   = conflict.current_value;
+  delta.before_enabled = conflict.current_enabled;
+
+  nlohmann::json resolved_value = conflict.current_value;
+  auto&          stage           = pipeline.GetStage(conflict.stage);
+  const auto     current_op      = stage.GetOperator(conflict.operator_type);
+  const bool     has_current =
+      current_op.has_value() && current_op.value() != nullptr && current_op.value()->op_ != nullptr;
+  if (has_current) {
+    resolved_value = current_op.value()->op_->MergeParams(conflict.current_value,
+                                                          conflict.incoming_value, choice);
+  } else if (choice == OperatorMergeChoice::kTakeIncoming) {
+    resolved_value = conflict.incoming_value;
+  }
+  delta.resolved_value   = std::move(resolved_value);
+  delta.resolved_enabled = choice == OperatorMergeChoice::kTakeIncoming
+                               ? conflict.incoming_enabled
+                               : conflict.current_enabled;
+  return delta;
+}
+
+auto AdjustmentTransferService::MergeIntoActiveVersion(
+    CommitGraph& graph, CPUPipelineExecutor& live_pipeline,
+    const AdjustmentTransferPackage& package) -> AdjustmentPasteResult {
+  AdjustmentPasteResult result;
+  if (package.Empty()) {
+    result.error = "Adjustment transfer package is empty";
+    return result;
+  }
+
+  const auto active_version_id = graph.GetActiveVersionId();
+  const auto current_head       = graph.GetActiveVersionRef().head_commit_hash;
+  result.prior_version_id   = active_version_id;
+
+  // Detect conflicts and build the merge payload under the render lock so
+  // operator MergeParams (color temp, lens calib, …) resolve against a stable
+  // current image-local state. Graph mutations happen after the lock releases.
+  std::vector<AdjustmentMergeConflict> conflicts;
+  MergeEditPayload                      merge_payload;
+  {
+    std::unique_lock<std::mutex> render_lock(live_pipeline.GetRenderLock());
+    std::string                   detect_error;
+    if (!DetectMergeConflicts(live_pipeline, package, &conflicts, &detect_error)) {
+      result.error = std::move(detect_error);
+      return result;
+    }
+    std::unordered_set<std::string> seen_keys;
+    for (const auto& conflict : conflicts) {
+      if (!seen_keys.insert(conflict.field_key).second) continue;
+      merge_payload.fields.push_back(
+          BuildMergeFieldDelta(live_pipeline, conflict, OperatorMergeChoice::kTakeIncoming));
+    }
+  }
+
+  // Insert incoming root-relative ancestry commits; the merge commit's second
+  // parent must already exist in the graph.
+  const auto incoming_head = InsertIncomingAncestryCommits(graph, package);
+  if (!incoming_head.has_value()) {
+    result.error = "No valid adjustments to merge";
+    return result;
+  }
+
+  EditCommit merge_commit;
+  try {
+    merge_commit = EditCommit::MakeMerge(graph.GetRootId(), current_head, *incoming_head,
+                                         std::move(merge_payload));
+  } catch (const std::exception& ex) {
+    result.error = ex.what();
+    return result;
+  }
+  (void)graph.InsertCommit(merge_commit);
+
+  // A merge advances the active Version's head to the two-parent merge commit
+  // (git-merge on the current branch). It does not create a new Version ref;
+  // the active Version keeps its identity and now carries the merge commit, so
+  // the target's prior edit history is preserved as the first parent.
+  graph.MoveWorkingHead(active_version_id, merge_commit.GetCommitHash());
+
+  result.pasted         = true;
+  result.new_version_id = active_version_id;
+  result.new_head       = merge_commit.GetCommitHash();
+  return result;
 }
 
 }  // namespace alcedo

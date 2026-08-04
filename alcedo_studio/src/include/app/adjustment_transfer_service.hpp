@@ -23,6 +23,8 @@
 
 namespace alcedo {
 
+class CPUPipelineExecutor;
+
 class AdjustmentTransferService final {
  public:
   AdjustmentTransferService() = delete;
@@ -78,9 +80,49 @@ class AdjustmentTransferService final {
                                                        std::string version_display_name)
       -> AdjustmentPasteResult;
 
-  // Editor merge lives on the session live path only:
-  // `EditorHistoryTransfer::BeginLiveMerge` / `CompleteLiveMerge`. Do not reintroduce a
-  // service-level InitiateMerge that stages temporary Version refs or shadow graphs.
+  // Shared merge core. The merge semantic logic (conflict detection, incoming
+  // ancestry insertion, field resolution via operator MergeParams) lives here
+  // and is reused by both the live editor merge
+  // (`EditorHistoryTransfer::BeginLiveMerge` / `CompleteLiveMerge`) and the
+  // batch merge below. Only the commit-insertion integration differs: the
+  // editor appends through the session WAL (`PrepareAppendMerge` /
+  // `PublishPreparedEdit`) and mutates the live pipeline; the batch inserts
+  // directly on the CommitGraph and rebuilds. Do not reintroduce a
+  // service-level InitiateMerge that stages temporary Version refs or shadow
+  // graphs — both entrypoints operate on a caller-owned graph.
+
+  /// Detect merge conflicts between a target's live pipeline and an incoming
+  /// package. Emits one conflict per incoming operator whose params or enabled
+  /// flag differ from the current state (or that the target does not yet have).
+  [[nodiscard]] static auto DetectMergeConflicts(
+      CPUPipelineExecutor& pipeline, const AdjustmentTransferPackage& package,
+      std::vector<AdjustmentMergeConflict>* conflicts, std::string* error = nullptr) -> bool;
+
+  /// Build and insert the incoming root-relative ancestry commits, returning
+  /// the incoming head the merge commit will name as its second parent. Returns
+  /// nullopt when the package has no valid adjustments.
+  [[nodiscard]] static auto InsertIncomingAncestryCommits(
+      CommitGraph& graph, const AdjustmentTransferPackage& package)
+      -> std::optional<commit_hash_t>;
+
+  /// Resolve one conflict into a MergeFieldDelta using the operator's
+  /// MergeParams so target image-local data the operator keeps (lens EXIF,
+  /// as-shot baseline) survives the merge. `choice` selects incoming/current.
+  [[nodiscard]] static auto BuildMergeFieldDelta(CPUPipelineExecutor&       pipeline,
+                                                  const AdjustmentMergeConflict& conflict,
+                                                  OperatorMergeChoice            choice)
+      -> MergeFieldDelta;
+
+  /// Batch merge: advance a target's active Version head to a two-parent merge
+  /// commit whose field deltas resolve every conflict as "use all incoming".
+  /// No new Version ref is created (git-merge on the current branch); the
+  /// active Version keeps its identity and carries the merge commit, preserving
+  /// the target's prior edit history as the first parent. The caller owns the
+  /// graph and the live pipeline (read for current values + MergeParams), then
+  /// rebuilds and persists the pipeline. Holds no session state.
+  [[nodiscard]] static auto MergeIntoActiveVersion(
+      CommitGraph& graph, CPUPipelineExecutor& live_pipeline,
+      const AdjustmentTransferPackage& package) -> AdjustmentPasteResult;
 };
 
 }  // namespace alcedo

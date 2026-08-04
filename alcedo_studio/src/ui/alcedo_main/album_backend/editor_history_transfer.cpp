@@ -28,20 +28,6 @@ auto SetError(std::string* error, std::string message) -> bool {
   return false;
 }
 
-void MergeJsonObjectDeep(nlohmann::json& target, const nlohmann::json& patch) {
-  if (!target.is_object() || !patch.is_object()) {
-    target = patch;
-    return;
-  }
-  for (const auto& [key, value] : patch.items()) {
-    if (target.contains(key) && target[key].is_object() && value.is_object()) {
-      MergeJsonObjectDeep(target[key], value);
-    } else {
-      target[key] = value;
-    }
-  }
-}
-
 }  // namespace
 
 EditorHistoryTransfer::EditorHistoryTransfer(EditorHistoryState& state) : state_(state) {}
@@ -287,63 +273,6 @@ auto EditorHistoryTransfer::CancelLivePaste(const alcedo::EditorHistoryGuardHand
 
 namespace {
 
-auto DetectLiveMergeConflicts(alcedo::CPUPipelineExecutor& pipeline,
-                              const alcedo::AdjustmentTransferPackage& package,
-                              std::vector<alcedo::AdjustmentMergeConflict>* conflicts,
-                              std::string* error) -> bool {
-  if (conflicts == nullptr) {
-    return SetError(error, "Merge conflict output is required");
-  }
-  conflicts->clear();
-  for (const auto& entry : package.operators_) {
-    if (entry.stage_ == alcedo::PipelineStageName::Stage_Count ||
-        entry.operator_type_ == alcedo::OperatorType::UNKNOWN ||
-        entry.operator_type_ == alcedo::OperatorType::RESIZE) {
-      continue;
-    }
-
-    auto&      stage   = pipeline.GetStage(entry.stage_);
-    const auto current = stage.GetOperator(entry.operator_type_);
-    const bool has_current =
-        current.has_value() && current.value() != nullptr && current.value()->op_ != nullptr;
-
-    nlohmann::json current_value   = nlohmann::json(nullptr);
-    bool           current_enabled = false;
-    if (has_current) {
-      current_value   = current.value()->op_->GetParams();
-      current_enabled = current.value()->enable_;
-    }
-
-    nlohmann::json incoming_value = entry.params_;
-    if (has_current && entry.merge_params_) {
-      incoming_value = current_value;
-      MergeJsonObjectDeep(incoming_value, entry.params_);
-    }
-
-    bool params_conflict = false;
-    if (has_current) {
-      params_conflict = current.value()->op_->DetectMergeConflict(current_value, incoming_value);
-    } else {
-      params_conflict = !incoming_value.is_null();
-    }
-    if (params_conflict || current_enabled != entry.enabled_) {
-      alcedo::AdjustmentMergeConflict conflict;
-      conflict.stage         = entry.stage_;
-      conflict.operator_type = entry.operator_type_;
-      // Match AdjustmentTransferService MergeConflictFieldKey: script_name/stage_int.
-      const auto script_key = alcedo::EditorAdjustmentFieldKey(entry.stage_, entry.operator_type_);
-      conflict.field_key     = (script_key.has_value() ? *script_key : std::string{"unknown"}) +
-                           "/" + std::to_string(static_cast<int>(entry.stage_));
-      conflict.current_value    = std::move(current_value);
-      conflict.incoming_value   = std::move(incoming_value);
-      conflict.current_enabled  = current_enabled;
-      conflict.incoming_enabled = entry.enabled_;
-      conflicts->push_back(std::move(conflict));
-    }
-  }
-  return true;
-}
-
 auto InferLiveMergeChoice(const alcedo::AdjustmentMergeResolution& resolution,
                           const alcedo::AdjustmentMergeConflict& conflict)
     -> alcedo::OperatorMergeChoice {
@@ -380,8 +309,8 @@ auto EditorHistoryTransfer::BeginLiveMerge(const alcedo::EditorHistoryGuardHandl
 
   {
     std::unique_lock<std::mutex> render_lock(state->pipeline_guard->pipeline_->GetRenderLock());
-    if (!DetectLiveMergeConflicts(*state->pipeline_guard->pipeline_, package, &preview->conflicts,
-                                  error)) {
+    if (!alcedo::AdjustmentTransferService::DetectMergeConflicts(
+            *state->pipeline_guard->pipeline_, package, &preview->conflicts, error)) {
       return false;
     }
   }
@@ -428,21 +357,21 @@ auto EditorHistoryTransfer::CompleteLiveMerge(
   const auto prior = CaptureLivePastePrior(*state);
   const auto expected_materialized = prior.graph.GetImageEditState();
 
-  // Insert incoming ancestry commits (no user-visible Version ref).
-  auto incoming_commits =
-      alcedo::AdjustmentTransferService::BuildRootRelativeCommits(package, graph.GetRootId());
-  if (incoming_commits.empty()) {
-    return SetError(error, "No valid adjustments in merge package");
-  }
+  // Insert incoming ancestry commits (no user-visible Version ref). Shared
+  // core: AdjustmentTransferService builds and inserts the root-relative chain.
+  alcedo::commit_hash_t incoming_head_value;
   try {
-    for (const auto& commit : incoming_commits) {
-      (void)graph.InsertCommit(commit);
+    auto incoming_head =
+        alcedo::AdjustmentTransferService::InsertIncomingAncestryCommits(graph, package);
+    if (!incoming_head.has_value()) {
+      return SetError(error, "No valid adjustments in merge package");
     }
+    incoming_head_value = *incoming_head;
   } catch (const std::exception& ex) {
     RestoreLivePastePrior(*state, prior);
     return SetError(error, ex.what());
   }
-  const auto incoming_head = incoming_commits.back().GetCommitHash();
+  const auto incoming_head = incoming_head_value;
 
   // Persist ancestry commits so WAL recovery of the merge commit can resolve the
   // second parent after a crash (materialized head remains pre-merge).
@@ -476,34 +405,19 @@ auto EditorHistoryTransfer::CompleteLiveMerge(
       if (conflict == nullptr) continue;
 
       const auto choice = InferLiveMergeChoice(resolution, *conflict);
-      auto&      stage  = pipeline.GetStage(conflict->stage);
-      const auto current = stage.GetOperator(conflict->operator_type);
-      nlohmann::json resolved_value = conflict->current_value;
-      if (current.has_value() && current.value() != nullptr && current.value()->op_ != nullptr) {
-        resolved_value = current.value()->op_->MergeParams(conflict->current_value,
-                                                           conflict->incoming_value, choice);
-      } else if (choice == alcedo::OperatorMergeChoice::kTakeIncoming) {
-        resolved_value = conflict->incoming_value;
-      }
-      const bool resolved_enabled = choice == alcedo::OperatorMergeChoice::kTakeIncoming
-                                        ? conflict->incoming_enabled
-                                        : conflict->current_enabled;
+      auto delta = alcedo::AdjustmentTransferService::BuildMergeFieldDelta(pipeline, *conflict,
+                                                                            choice);
+      merge_payload.fields.push_back(delta);
 
-      alcedo::MergeFieldDelta delta;
-      delta.operator_type    = conflict->operator_type;
-      delta.stage_name       = conflict->stage;
-      delta.field_name       = "$operator_params";
-      delta.before_value     = conflict->current_value;
-      delta.before_enabled   = conflict->current_enabled;
-      delta.resolved_value   = resolved_value;
-      delta.resolved_enabled = resolved_enabled;
-      merge_payload.fields.push_back(std::move(delta));
-
-      auto& globals = pipeline.GetGlobalParams();
-      if (!resolved_value.is_null() && resolved_value.is_object()) {
-        stage.SetOperator(conflict->operator_type, resolved_value, globals);
+      // Live parameter-table apply (session-specific): one SetOperator/enable per
+      // resolved field. These intermediate mutations do not advance history;
+      // PrepareAppendMerge + PublishPreparedEdit below record one merge commit.
+      auto&      stage   = pipeline.GetStage(conflict->stage);
+      auto&      globals = pipeline.GetGlobalParams();
+      if (!delta.resolved_value.is_null() && delta.resolved_value.is_object()) {
+        stage.SetOperator(conflict->operator_type, delta.resolved_value, globals);
       }
-      stage.EnableOperator(conflict->operator_type, resolved_enabled, globals);
+      stage.EnableOperator(conflict->operator_type, delta.resolved_enabled, globals);
     }
   }
 

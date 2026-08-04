@@ -49,16 +49,17 @@ QtObject {
         adjustmentTransferDialog.open()
     }
 
-    // Applies the root-relative paste path while its current policy gate allows
-    // it. Legacy Merge inputs are rejected until the per-field resolution UI
-    // exists.
+    // Applies the selected transfer strategy while its current policy gate
+    // allows it. "paste" creates a root-relative Version per target; "merge"
+    // creates a two-parent merge commit per target with every conflict resolved
+    // as "use all incoming" (no per-field conflict UI in a batch context).
     function applyPaste(strategy) {
         if (!adjustmentTransfer || !hasTargets) {
             return false
         }
 
         const selectedStrategy = String(strategy || "")
-        if (selectedStrategy !== "paste") {
+        if (selectedStrategy !== "paste" && selectedStrategy !== "merge") {
             return false
         }
         if (!pasteEnabled) {

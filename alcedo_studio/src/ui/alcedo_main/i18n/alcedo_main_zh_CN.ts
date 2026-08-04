@@ -189,7 +189,7 @@
 <context>
     <name>AdjustmentSlider</name>
     <message>
-        <location filename="../qml/AdjustmentSlider.qml" line="+257"/>
+        <location filename="../qml/AdjustmentSlider.qml" line="+266"/>
         <source>Out of range</source>
         <translation>超出范围</translation>
     </message>
@@ -199,7 +199,7 @@
         <translation>数字无效</translation>
     </message>
     <message>
-        <location line="+42"/>
+        <location line="+44"/>
         <source>Drag the handle to adjust %1. Double-click to reset.</source>
         <translation>拖动手柄调整 %1。双击可重置。</translation>
     </message>
@@ -223,7 +223,7 @@
     </message>
     <message>
         <location line="+0"/>
-        <location line="+5"/>
+        <location line="+6"/>
         <source>Paste Adjustments</source>
         <translation>粘贴调整</translation>
     </message>
@@ -248,7 +248,32 @@
         <translation>源版本</translation>
     </message>
     <message>
-        <location line="+157"/>
+        <location line="-180"/>
+        <source>Merge Adjustments</source>
+        <translation>合并调整</translation>
+    </message>
+    <message>
+        <location line="+341"/>
+        <source>Transfer Strategy</source>
+        <translation>传输策略</translation>
+    </message>
+    <message>
+        <location line="+11"/>
+        <source>Paste</source>
+        <translation>粘贴</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Merge</source>
+        <translation>合并</translation>
+    </message>
+    <message>
+        <location line="+12"/>
+        <source>Merge resolves every conflict by using the incoming values only. Per-field conflict resolution isn&apos;t available when transferring to multiple images.</source>
+        <translation>合并时一律以传入值解决所有冲突。批量传输到多张图像时不提供逐项冲突解决。</translation>
+    </message>
+    <message>
+        <location line="+21"/>
         <source>Parameters to Copy</source>
         <translation>要复制的参数</translation>
     </message>
@@ -1940,6 +1965,11 @@ Alcedo 将改用 %1。</translation>
         <translation>OpenCL 准备失败：%1</translation>
     </message>
     <message>
+        <location line="+1"/>
+        <source>The accelerator change will apply after Alcedo restarts.</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
         <location filename="../album_backend/image_controller.cpp" line="+18"/>
         <source>Camera</source>
         <translation>相机</translation>
@@ -2053,7 +2083,7 @@ Alcedo 将改用 %1。</translation>
         <translation>从相册移除</translation>
     </message>
     <message>
-        <location line="+211"/>
+        <location line="+195"/>
         <source>Select at least one image to analyze.</source>
         <translation>请至少选择一张图像进行分析。</translation>
     </message>
@@ -2061,7 +2091,7 @@ Alcedo 将改用 %1。</translation>
 <context>
     <name>BackgroundTaskBar</name>
     <message>
-        <location filename="../qml/BackgroundTaskBar.qml" line="+62"/>
+        <location filename="../qml/BackgroundTaskBar.qml" line="+64"/>
         <source>AI Analysis</source>
         <translation>AI 分析</translation>
     </message>
@@ -2108,7 +2138,7 @@ Alcedo 将改用 %1。</translation>
         <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+94"/>
+        <location line="+102"/>
         <source>+%1</source>
         <translation type="unfinished"></translation>
     </message>
@@ -2116,107 +2146,107 @@ Alcedo 将改用 %1。</translation>
 <context>
     <name>BackgroundTasksDialog</name>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location filename="../qml/BackgroundTasksDialog.qml" line="+80"/>
         <source>Failed</source>
         <translation>失败</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+2"/>
         <source>Working</source>
         <translation>正在处理</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+1"/>
         <source>Finished</source>
         <translation>已完成</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+12"/>
         <source>AI Analysis</source>
         <translation>AI 分析</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+1"/>
         <source>Semantic Labels</source>
         <translation>语义标签</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+1"/>
         <source>Model Activation</source>
         <translation>模型激活</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+1"/>
         <source>Model Download</source>
         <translation>模型下载</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+1"/>
         <source>Editor Save</source>
         <translation>编辑器保存</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+1"/>
         <source>Import</source>
         <translation>导入</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+1"/>
         <source>Export</source>
         <translation>导出</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+1"/>
         <source>Task</source>
         <translation>任务</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+5"/>
         <source>No active work</source>
         <translation>暂无进行中的任务</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+2"/>
         <source>%1 total · %2 working</source>
         <translation>共 %1 项 · %2 项进行中</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+1"/>
         <source>%1 total</source>
         <translation>共 %1 项</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+9"/>
         <source>%1%</source>
         <translation>%1%</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+86"/>
         <source>Background Tasks</source>
         <translation>后台任务</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+30"/>
         <source>Close</source>
         <translation>关闭</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+226"/>
         <source>Details</source>
         <translation>详细信息</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+40"/>
         <source>Cancel</source>
         <translation>取消</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+42"/>
         <source>No background tasks yet</source>
         <translation>暂无后台任务</translation>
     </message>
     <message>
-        <location filename="../qml/BackgroundTasksDialog.qml"/>
+        <location line="+11"/>
         <source>Imports, exports, model work, and AI jobs will appear here.</source>
         <translation>导入、导出、模型与 AI 任务会显示在这里。</translation>
     </message>
@@ -2335,7 +2365,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorAdjustmentStack</name>
     <message>
-        <location filename="../qml/EditorAdjustmentStack.qml" line="+128"/>
+        <location filename="../qml/EditorAdjustmentStack.qml" line="+134"/>
         <location line="+61"/>
         <source>Look</source>
         <translation>外观</translation>
@@ -2412,13 +2442,13 @@ Original source files on disk will be kept.</source>
         <translation>HLG</translation>
     </message>
     <message>
-        <location line="+200"/>
-        <location line="+191"/>
+        <location line="+201"/>
+        <location line="+185"/>
         <source>Method</source>
         <translation>方法</translation>
     </message>
     <message>
-        <location line="-189"/>
+        <location line="-183"/>
         <location line="+108"/>
         <source>ACES 2.0</source>
         <translation>ACES 2.0</translation>
@@ -2646,12 +2676,12 @@ Original source files on disk will be kept.</source>
         <translation>D50</translation>
     </message>
     <message>
-        <location line="+44"/>
+        <location line="+38"/>
         <source>Display Transform</source>
         <translation>显示变换</translation>
     </message>
     <message>
-        <location line="+139"/>
+        <location line="+82"/>
         <source>Color &amp; Encoding</source>
         <translation>颜色与编码</translation>
     </message>
@@ -2659,7 +2689,9 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorFilmstrip</name>
     <message>
-        <location filename="../qml/EditorFilmstrip.qml" line="+218"/>
+        <location filename="../qml/EditorFilmstrip.qml" line="+241"/>
+        <location line="+32"/>
+        <location line="+264"/>
         <source>(unnamed)</source>
         <translation type="unfinished">（未命名）</translation>
     </message>
@@ -2679,7 +2711,7 @@ Original source files on disk will be kept.</source>
         <translation>已展开胶片带停靠区</translation>
     </message>
     <message>
-        <location line="+39"/>
+        <location line="+47"/>
         <source>Expand filmstrip</source>
         <translation>展开胶片带</translation>
     </message>
@@ -2689,71 +2721,89 @@ Original source files on disk will be kept.</source>
         <translation>收起胶片带</translation>
     </message>
     <message>
-        <location line="+1"/>
-        <source>Image %1 of %2</source>
-        <translation>图像 %1 / %2</translation>
+        <location line="+283"/>
+        <source> | Rating %1/5</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
-        <location line="+67"/>
+        <location line="-211"/>
         <source>No images in filmstrip</source>
         <translation>胶片带中没有图像</translation>
     </message>
     <message>
-        <location line="+2"/>
-        <source>%1 / %2</source>
-        <translation>%1 / %2</translation>
-    </message>
-    <message>
-        <location line="+46"/>
+        <location line="+89"/>
         <source>No images</source>
         <translation>没有图像</translation>
     </message>
     <message>
-        <location line="+86"/>
+        <location line="+108"/>
         <source>Source file was moved or deleted</source>
         <translation>源文件已被移动或删除</translation>
     </message>
     <message>
-        <location line="+10"/>
-        <location line="+166"/>
+        <location line="-193"/>
+        <location line="+202"/>
         <source>Image %1</source>
         <translation>图像 %1</translation>
     </message>
     <message>
-        <location line="-164"/>
+        <location line="-276"/>
+        <source>Editing %1</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>No image selected</source>
+        <translation type="unfinished"></translation>
+    </message>
+    <message>
+        <location line="+277"/>
         <source>Current image</source>
         <translation>当前图像</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>Selected image</source>
+        <translation type="unfinished"></translation>
     </message>
     <message>
         <location line="+1"/>
         <source>Open image</source>
         <translation>打开图像</translation>
     </message>
+</context>
+<context>
+    <name>EditorFilmstripThumbnailCard</name>
     <message>
-        <location line="+100"/>
+        <location filename="../qml/EditorFilmstripThumbnailCard.qml" line="+92"/>
         <source>No thumbnail</source>
-        <translation>无缩略图</translation>
+        <translation type="unfinished">无缩略图</translation>
     </message>
     <message>
-        <location line="+30"/>
+        <location line="+28"/>
         <source>Saving</source>
-        <translation>正在保存</translation>
+        <translation type="unfinished">正在保存</translation>
     </message>
     <message>
         <location line="+17"/>
         <source>Rendering</source>
-        <translation>正在渲染</translation>
+        <translation type="unfinished">正在渲染</translation>
+    </message>
+    <message>
+        <location line="+43"/>
+        <source>Image %1</source>
+        <translation type="unfinished">图像 %1</translation>
     </message>
 </context>
 <context>
     <name>EditorGeometryPanel</name>
     <message>
-        <location filename="../qml/EditorGeometryPanel.qml" line="+67"/>
+        <location filename="../qml/EditorGeometryPanel.qml" line="+71"/>
         <source>Auto (metadata)</source>
         <translation>自动（元数据）</translation>
     </message>
     <message>
-        <location line="+441"/>
+        <location line="+463"/>
         <source>Crop X</source>
         <translation>裁剪 X</translation>
     </message>
@@ -2844,9 +2894,62 @@ Original source files on disk will be kept.</source>
     </message>
 </context>
 <context>
+    <name>EditorHistoryTransactionEntry</name>
+    <message>
+        <location filename="../qml/EditorHistoryTransactionEntry.qml" line="+65"/>
+        <source>Earlier</source>
+        <translation type="unfinished">较早</translation>
+    </message>
+    <message>
+        <location line="+3"/>
+        <source>Just now</source>
+        <translation type="unfinished">刚刚</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 min ago</source>
+        <translation type="unfinished">%1 分钟前</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 hr ago</source>
+        <translation type="unfinished">%1 小时前</translation>
+    </message>
+    <message>
+        <location line="+1"/>
+        <source>%1 days ago</source>
+        <translation type="unfinished">%1 天前</translation>
+    </message>
+    <message>
+        <location line="+55"/>
+        <source>Commit %1</source>
+        <translation type="unfinished">提交 %1</translation>
+    </message>
+    <message>
+        <location line="+40"/>
+        <source>Merge</source>
+        <translation type="unfinished">合并</translation>
+    </message>
+    <message>
+        <location line="+2"/>
+        <source>Adjustment</source>
+        <translation type="unfinished">调整</translation>
+    </message>
+    <message>
+        <location line="+47"/>
+        <source>2nd %1</source>
+        <translation type="unfinished">第 2 个 %1</translation>
+    </message>
+    <message>
+        <location line="+16"/>
+        <source>Resolved adjustments</source>
+        <translation type="unfinished">已解决的调整</translation>
+    </message>
+</context>
+<context>
     <name>EditorHistoryTransactionsPanel</name>
     <message>
-        <location filename="../qml/EditorHistoryTransactionsPanel.qml" line="+60"/>
+        <location filename="../qml/EditorHistoryTransactionsPanel.qml" line="+59"/>
         <source>Adjustment transfer is unavailable</source>
         <translation>调整传递不可用</translation>
     </message>
@@ -2872,32 +2975,7 @@ Original source files on disk will be kept.</source>
         <translation>无法开始合并</translation>
     </message>
     <message>
-        <location line="+13"/>
-        <source>Earlier</source>
-        <translation>较早</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>Just now</source>
-        <translation>刚刚</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>%1 min ago</source>
-        <translation>%1 分钟前</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>%1 hr ago</source>
-        <translation>%1 小时前</translation>
-    </message>
-    <message>
-        <location line="+1"/>
-        <source>%1 days ago</source>
-        <translation>%1 天前</translation>
-    </message>
-    <message>
-        <location line="+20"/>
+        <location line="+28"/>
         <source>Edit History</source>
         <translation>编辑历史</translation>
     </message>
@@ -2937,32 +3015,7 @@ Original source files on disk will be kept.</source>
         <translation>此版本中有可恢复的编辑。</translation>
     </message>
     <message>
-        <location line="+191"/>
-        <source>Commit %1</source>
-        <translation>提交 %1</translation>
-    </message>
-    <message>
-        <location line="+47"/>
-        <source>Merge</source>
-        <translation>合并</translation>
-    </message>
-    <message>
-        <location line="+3"/>
-        <source>Adjustment</source>
-        <translation>调整</translation>
-    </message>
-    <message>
-        <location line="+36"/>
-        <source>2nd %1</source>
-        <translation>第 2 个 %1</translation>
-    </message>
-    <message>
-        <location line="+21"/>
-        <source>Resolved adjustments</source>
-        <translation>已解决的调整</translation>
-    </message>
-    <message>
-        <location line="+19"/>
+        <location line="+108"/>
         <source>No edit history yet</source>
         <translation>尚无编辑历史</translation>
     </message>
@@ -2970,7 +3023,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorLookPanel</name>
     <message>
-        <location filename="../qml/EditorLookPanel.qml" line="+210"/>
+        <location filename="../qml/EditorLookPanel.qml" line="+212"/>
         <source>Saturation</source>
         <translation>饱和度</translation>
     </message>
@@ -3222,7 +3275,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorMergeDialog</name>
     <message>
-        <location filename="../qml/EditorMergeDialog.qml" line="+175"/>
+        <location filename="../qml/EditorMergeDialog.qml" line="+176"/>
         <source>Merge Conflicts</source>
         <translation>合并冲突</translation>
     </message>
@@ -3326,7 +3379,7 @@ Original source files on disk will be kept.</source>
         <translation>默认</translation>
     </message>
     <message>
-        <location line="+106"/>
+        <location line="+112"/>
         <location line="+20"/>
         <source>RAW Decode</source>
         <translation>RAW 解码</translation>
@@ -3396,7 +3449,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorTonePanel</name>
     <message>
-        <location filename="../qml/EditorTonePanel.qml" line="+135"/>
+        <location filename="../qml/EditorTonePanel.qml" line="+137"/>
         <source>Exposure</source>
         <translation>曝光</translation>
     </message>
@@ -3446,22 +3499,22 @@ Original source files on disk will be kept.</source>
 <context>
     <name>EditorVersionsPanel</name>
     <message>
-        <location filename="../qml/EditorVersionsPanel.qml" line="+96"/>
+        <location filename="../qml/EditorVersionsPanel.qml" line="+114"/>
         <source>Version %1</source>
         <translation>版本 %1</translation>
     </message>
     <message>
-        <location line="+46"/>
+        <location line="+38"/>
         <source>Version operation failed</source>
         <translation>版本操作失败</translation>
     </message>
     <message>
-        <location line="+66"/>
+        <location line="+104"/>
         <source>Current version has no commit to branch from</source>
         <translation>当前版本没有可用于创建分支的提交</translation>
     </message>
     <message>
-        <location line="+94"/>
+        <location line="+106"/>
         <source>Versions</source>
         <translation>版本</translation>
     </message>
@@ -3478,12 +3531,12 @@ Original source files on disk will be kept.</source>
     <message>
         <location line="+25"/>
         <location line="+28"/>
-        <location line="+205"/>
+        <location line="+207"/>
         <source>Rename Version</source>
         <translation>重命名版本</translation>
     </message>
     <message>
-        <location line="-232"/>
+        <location line="-234"/>
         <location line="+29"/>
         <source>Branch from current</source>
         <translation>从当前版本创建分支</translation>
@@ -3516,12 +3569,12 @@ Original source files on disk will be kept.</source>
     </message>
     <message>
         <location line="+24"/>
-        <location line="+168"/>
+        <location line="+169"/>
         <source>Version checkout is unavailable</source>
         <translation>无法进行版本检出</translation>
     </message>
     <message>
-        <location line="-103"/>
+        <location line="-104"/>
         <source>Active Version</source>
         <translation>当前版本</translation>
     </message>
@@ -3531,7 +3584,7 @@ Original source files on disk will be kept.</source>
         <translation>已命名版本</translation>
     </message>
     <message>
-        <location line="+38"/>
+        <location line="+40"/>
         <source>Commit %1</source>
         <translation>提交 %1</translation>
     </message>
@@ -3541,7 +3594,7 @@ Original source files on disk will be kept.</source>
         <translation>提交图像根节点</translation>
     </message>
     <message>
-        <location line="+48"/>
+        <location line="+47"/>
         <source>Remove Version</source>
         <translation>移除版本</translation>
     </message>
@@ -3581,7 +3634,7 @@ Original source files on disk will be kept.</source>
         <translation>从图库打开图像，或让此工作区保持就绪以接收搜索结果。</translation>
     </message>
     <message>
-        <location line="+82"/>
+        <location line="+77"/>
         <source>Preparing image viewport</source>
         <translation>正在准备图像视口</translation>
     </message>
@@ -4091,7 +4144,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>LibraryWorkspace</name>
     <message>
-        <location filename="../qml/LibraryWorkspace.qml" line="+183"/>
+        <location filename="../qml/LibraryWorkspace.qml" line="+249"/>
         <source>Browser</source>
         <translation>浏览</translation>
     </message>
@@ -4134,7 +4187,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>Main</name>
     <message>
-        <location filename="../qml/Main.qml" line="+17"/>
+        <location filename="../qml/Main.qml" line="+22"/>
         <source>Alcedo Studio</source>
         <translation>Alcedo Studio</translation>
     </message>
@@ -4311,7 +4364,7 @@ Original source files on disk will be kept.</source>
 <context>
     <name>SemanticGenerationDialog</name>
     <message>
-        <location filename="../qml/SemanticGenerationDialog.qml" line="+154"/>
+        <location filename="../qml/SemanticGenerationDialog.qml" line="+155"/>
         <source>Generating semantic labels</source>
         <translation>正在生成语义标签</translation>
     </message>
@@ -4351,7 +4404,7 @@ Original source files on disk will be kept.</source>
         <translation>记住我的选择</translation>
     </message>
     <message>
-        <location line="+47"/>
+        <location line="+48"/>
         <source>Cancel</source>
         <translation>取消</translation>
     </message>
@@ -4574,12 +4627,12 @@ Original source files on disk will be kept.</source>
 <context>
     <name>SettingDialog</name>
     <message>
-        <location filename="../qml/SettingDialog.qml" line="+76"/>
+        <location filename="../qml/SettingDialog.qml" line="+80"/>
         <source>Select Thumbnail Cache Folder</source>
         <translation>选择缩略图缓存文件夹</translation>
     </message>
     <message>
-        <location line="+46"/>
+        <location line="+57"/>
         <source>Unavailable</source>
         <translation>不可用</translation>
     </message>
@@ -4589,7 +4642,7 @@ Original source files on disk will be kept.</source>
         <translation>%1 / %2</translation>
     </message>
     <message>
-        <location line="+56"/>
+        <location line="+65"/>
         <source>Settings applied</source>
         <translation>设置已应用</translation>
     </message>
@@ -4599,26 +4652,26 @@ Original source files on disk will be kept.</source>
         <translation>设置</translation>
     </message>
     <message>
-        <location line="-134"/>
-        <location line="+148"/>
-        <location line="+150"/>
+        <location line="-143"/>
+        <location line="+157"/>
+        <location line="+151"/>
         <source>Language</source>
         <translation>语言</translation>
     </message>
     <message>
-        <location line="-295"/>
-        <location line="+146"/>
+        <location line="-305"/>
+        <location line="+155"/>
         <source>Theme and color</source>
         <translation>主题与颜色</translation>
     </message>
     <message>
-        <location line="-143"/>
-        <location line="+144"/>
+        <location line="-152"/>
+        <location line="+153"/>
         <source>Cache</source>
         <translation>缓存</translation>
     </message>
     <message>
-        <location line="-131"/>
+        <location line="-137"/>
         <source>本地 AI 功能运行在本机 AI 模型上，图片内容不会上传至云端。识别速度和可处理规模取决于你的 CPU、GPU、内存与磁盘性能。
 
 默认推荐使用 SigLIP2 模型：它是当前最均衡的选择，多语言语义理解更稳，适合大多数相册标注和自然语言搜索。
@@ -4652,7 +4705,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 这个设置界面的灵感来自 ccswitch，使用方式也类似。</translation>
     </message>
     <message>
-        <location line="+265"/>
+        <location line="+272"/>
         <source>Application language</source>
         <translation>应用语言</translation>
     </message>
@@ -4757,41 +4810,46 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>刷新</translation>
     </message>
     <message>
-        <location line="+111"/>
+        <location line="+196"/>
         <source>Done</source>
         <translation>完成</translation>
     </message>
     <message>
-        <location line="-731"/>
-        <location line="+139"/>
+        <location line="-823"/>
+        <location line="+146"/>
         <source>About</source>
         <translation>关于</translation>
     </message>
     <message>
-        <location line="-144"/>
-        <location line="+142"/>
+        <location line="-154"/>
+        <location line="+151"/>
         <source>Local Content Recognition</source>
         <translation>本地内容识别</translation>
     </message>
     <message>
-        <location line="-139"/>
-        <location line="+140"/>
+        <location line="-148"/>
+        <location line="+149"/>
         <source>Advanced Content Analysis</source>
         <translation>高级内容分析</translation>
     </message>
     <message>
+        <location line="-146"/>
+        <location line="+147"/>
         <source>Acceleration</source>
         <translation>加速</translation>
     </message>
     <message>
+        <location line="+568"/>
         <source>Image processing backend</source>
         <translation>图像处理后端</translation>
     </message>
     <message>
+        <location line="+15"/>
         <source>Backend</source>
         <translation>后端</translation>
     </message>
     <message>
+        <location line="+30"/>
         <source>Restart Alcedo yourself to apply this backend change.</source>
         <translation>请自行重启 Alcedo，以使此后端更改生效。</translation>
     </message>
@@ -4851,7 +4909,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>ThumbnailGridView</name>
     <message>
-        <location filename="../qml/ThumbnailGridView.qml" line="+80"/>
+        <location filename="../qml/ThumbnailGridView.qml" line="+81"/>
         <source>Black &amp; White</source>
         <translation>黑白</translation>
     </message>
@@ -4861,13 +4919,13 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>美食与饮品</translation>
     </message>
     <message>
-        <location line="+583"/>
+        <location line="+617"/>
         <location line="+24"/>
         <source>(unnamed)</source>
         <translation>（未命名）</translation>
     </message>
     <message>
-        <location line="+410"/>
+        <location line="+414"/>
         <source>%1 | ISO %2 | f/%3</source>
         <translation>%1 | ISO %2 | f/%3</translation>
     </message>
@@ -4895,7 +4953,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>TopToolbar</name>
     <message>
-        <location filename="../qml/TopToolbar.qml" line="+41"/>
+        <location filename="../qml/TopToolbar.qml" line="+42"/>
         <source>Alcedo</source>
         <translation>Alcedo</translation>
     </message>
@@ -4905,27 +4963,27 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>工作室</translation>
     </message>
     <message>
-        <location line="+26"/>
+        <location line="+27"/>
         <source>File</source>
         <translation>文件</translation>
     </message>
     <message>
-        <location line="+11"/>
+        <location line="+13"/>
         <source>Load Project</source>
         <translation>加载项目</translation>
     </message>
     <message>
-        <location line="+7"/>
+        <location line="+8"/>
         <source>Create Project</source>
         <translation>创建项目</translation>
     </message>
     <message>
-        <location line="+9"/>
+        <location line="+10"/>
         <source>Save Project</source>
         <translation>保存项目</translation>
     </message>
     <message>
-        <location line="+9"/>
+        <location line="+10"/>
         <source>Settings</source>
         <translation>设置</translation>
     </message>
@@ -4933,7 +4991,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>WelcomeDialog</name>
     <message>
-        <location filename="../qml/WelcomeDialog.qml" line="+179"/>
+        <location filename="../qml/WelcomeDialog.qml" line="+167"/>
         <source>Opened recently</source>
         <translation>最近打开</translation>
     </message>
@@ -4975,8 +5033,8 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>上周打开</translation>
     </message>
     <message>
-        <location line="-157"/>
-        <location line="+18"/>
+        <location line="-147"/>
+        <location line="+17"/>
         <source>Untitled Project</source>
         <translation>未命名项目</translation>
     </message>
@@ -4991,7 +5049,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
         <translation>CUDA 不可用</translation>
     </message>
     <message>
-        <location line="+218"/>
+        <location line="+209"/>
         <source>Alcedo</source>
         <translation>Alcedo</translation>
     </message>
@@ -5007,17 +5065,12 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
     </message>
     <message>
         <location line="+66"/>
-        <location line="+544"/>
+        <location line="+508"/>
         <source>Create Project</source>
         <translation>创建项目</translation>
     </message>
     <message>
-        <location line="-475"/>
-        <source>Acceleration</source>
-        <translation>加速</translation>
-    </message>
-    <message>
-        <location line="+60"/>
+        <location line="-415"/>
         <source>Exit Application</source>
         <translation>退出应用</translation>
     </message>
@@ -5075,7 +5128,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>alcedo::ui::AppTheme</name>
     <message>
-        <location filename="../app_theme.cpp" line="+1165"/>
+        <location filename="../app_theme.cpp" line="+1176"/>
         <source>Alcedo</source>
         <translation>Alcedo</translation>
     </message>
@@ -5101,7 +5154,7 @@ CLIP / SigLIP 这类视觉语言模型会把图像和文字映射到同一语义
 <context>
     <name>alcedo::ui::ProjectModule</name>
     <message>
-        <location filename="../album_backend/project_module.cpp" line="+384"/>
+        <location filename="../album_backend/project_module.cpp" line="+390"/>
         <source>Select Project Package</source>
         <translation>选择项目包</translation>
     </message>

@@ -1035,6 +1035,41 @@ alcedo_ui_gtest_discover_tests(EditorAdjustmentTransferActionsQmlTest
 )
 alcedo_register_test_target(EditorAdjustmentTransferActionsQmlTest ui)
 
+# Paste/Merge strategy switcher dialog: verifies the real AdjustmentTransferDialog
+# loads in paste mode, exposes the SegmentedCardSwitcher, toggles the merge
+# notice with pasteStrategy, and reflects the strategy on the accept button.
+add_executable(AdjustmentTransferDialogQmlTest
+    ${ALCEDO_TEST_ROOT}/ui/editor_adjustment_transfer_dialog_qml_test.cpp
+    ${ALCEDO_TEST_ROOT}/ui/widget_test_main.cpp
+    ${ALCEDO_SRC_DIR}/ui/alcedo_main/app_theme.cpp
+    ${ALCEDO_SRC_DIR}/include/ui/alcedo_main/app_theme.hpp
+    ${ALCEDO_SRC_DIR}/config/resource.qrc
+)
+target_include_directories(AdjustmentTransferDialogQmlTest
+    PUBLIC ${ALCEDO_INCLUDE_DIR}
+    PRIVATE ${ALCEDO_TEST_DIR}
+)
+target_link_libraries(AdjustmentTransferDialogQmlTest
+    PRIVATE
+        GTest::gtest
+        Qt6::Core
+        Qt6::Test
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::QuickEffects
+        Qt6::Svg
+        Qt6::Widgets
+)
+target_compile_definitions(AdjustmentTransferDialogQmlTest
+    PRIVATE ALCEDO_TEST_SRC_DIR="${ALCEDO_SRC_DIR}"
+)
+alcedo_ui_gtest_discover_tests(AdjustmentTransferDialogQmlTest
+    TEST_PREFIX "AdjustmentTransferDialogQmlTest."
+    PROPERTIES LABELS "workspace_qml"
+)
+alcedo_register_test_target(AdjustmentTransferDialogQmlTest ui)
+
 # Phase 6B: tone-curve model (pointer-drag behavior + operator params JSON).
 add_executable(EditorToneCurveModelTest
     ${ALCEDO_TEST_ROOT}/ui/editor_tone_curve_model_test.cpp
