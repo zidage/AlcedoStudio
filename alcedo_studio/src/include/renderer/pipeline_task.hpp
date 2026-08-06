@@ -67,6 +67,9 @@ struct PipelineTask {
   // lock as Apply(). This is the only safe place to mutate a shared executor.
   std::optional<std::function<bool(PipelineTask&)>> configure_under_render_lock_;
   std::function<bool()>                             cancel_requested_;
+  // Optional control-plane completion (preview + export). Invoked once on every
+  // terminal path so callers do not need a dedicated blocking worker thread.
+  std::function<void(bool success)>                 on_complete_;
 
   TaskOptions                                       options_;
 

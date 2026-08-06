@@ -407,6 +407,10 @@ void PipelineScheduler::MarkSinkApplyStarted(IFrameSink* sink, std::uint64_t req
   latest                             = std::max(latest, request_id);
 }
 
+void PipelineScheduler::ScheduleWork(std::function<void()> work) {
+  thread_pool_.Submit(std::move(work));
+}
+
 void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
   {
     std::lock_guard<std::mutex> lock(scheduler_lock_);
@@ -419,6 +423,20 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
     task.options_.render_desc_.frame_metadata_.presentation_request_id = task.request_id_;
   }
   thread_pool_.Submit([this, task = std::move(task)]() mutable {
+    bool completed = false;
+    const auto finish = [&task, &completed](bool success) {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      if (task.on_complete_) {
+        try {
+          task.on_complete_(success);
+        } catch (...) {
+        }
+      }
+    };
+
     const auto set_blocking_value = [&task](std::shared_ptr<ImageBuffer> value) {
       if (!task.options_.is_blocking_ || !task.result_) {
         return;
@@ -492,6 +510,7 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
         if (task_cancelled()) {
           notify_thumbnail_failure_callbacks();
           set_blocking_value(nullptr);
+          finish(false);
           return;
         }
         if (task.prepare_) {
@@ -501,17 +520,20 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
           } catch (...) {
             notify_thumbnail_failure_callbacks();
             set_blocking_exception();
+            finish(false);
             return;
           }
           if (!prepared) {
             notify_thumbnail_failure_callbacks();
             set_blocking_value(nullptr);
+            finish(false);
             return;
           }
         }
         if (task_cancelled()) {
           notify_thumbnail_failure_callbacks();
           set_blocking_value(nullptr);
+          finish(false);
           return;
         }
         if (task.input_desc_ && !task.input_) {
@@ -522,6 +544,7 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
         if (task_cancelled()) {
           notify_thumbnail_failure_callbacks();
           set_blocking_value(nullptr);
+          finish(false);
           return;
         }
         if (task.input_) {
@@ -543,11 +566,13 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
               } catch (...) {
                 notify_thumbnail_failure_callbacks();
                 set_blocking_exception();
+                finish(false);
                 return;
               }
               if (!prepared) {
                 notify_thumbnail_failure_callbacks();
                 set_blocking_value(nullptr);
+                finish(false);
                 return;
               }
             }
@@ -581,6 +606,7 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
           if (IsStaleForSink(output_sink, task.request_id_)) {
             notify_thumbnail_failure_callbacks();
             set_blocking_value(nullptr);
+            finish(false);
             return;
           }
 
@@ -602,6 +628,7 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
             apply_state_transition_after_render();
             notify_thumbnail_failure_callbacks();
             set_blocking_value(nullptr);
+            finish(false);
             return;
           }
 
@@ -610,6 +637,7 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
             apply_state_transition_after_render();
             notify_thumbnail_failure_callbacks();
             set_blocking_value(nullptr);
+            finish(false);
             return;
           }
 
@@ -635,6 +663,7 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
               notify_thumbnail_failure_callbacks();
             }
             set_blocking_value(nullptr);
+            finish(false);
             return;
           }
 
@@ -645,8 +674,10 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
             if (render_desc.render_type_ == RenderType::THUMBNAIL && !result_valid_for_copy) {
               notify_thumbnail_failure_callbacks();
             }
+            const bool ok = result != nullptr;
             set_blocking_value(result);
             apply_state_transition_after_render();
+            finish(ok);
             return;
           }
 
@@ -663,9 +694,11 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
           (*task.seq_callback_)(*result_copy, task.task_id_);
         }
         set_blocking_value(result_copy);
+        finish(true);
       } else {
         // In case of failure, set nullptr
         set_blocking_value(nullptr);
+        finish(false);
       }
     } catch (...) {
       try {
@@ -674,6 +707,7 @@ void PipelineScheduler::ScheduleTask(PipelineTask&& task) {
       }
       notify_thumbnail_failure_callbacks();
       set_blocking_exception();
+      finish(false);
     }
   });
 }
